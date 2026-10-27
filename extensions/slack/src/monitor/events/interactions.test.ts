@@ -18,30 +18,16 @@ import {
 } from "./interactions.test-support.js";
 
 const {
-  enqueueSessionEventMock,
-  captureSessionEventTargetMock,
+  enqueueSessionEventMock: enqueueEvent,
+  captureSessionEventTargetMock: captureTarget,
   ack,
   respond,
-  readSlackMessagesMock,
-  dispatchPluginInteractiveHandlerMock,
-  resolvePluginConversationBindingApprovalMock,
-  resolveApprovalOverGatewayMock,
-  resolveQuestionOverGatewayMock,
+  readSlackMessagesMock: readMessages,
+  dispatchPluginInteractiveHandlerMock: dispatchPlugin,
+  resolvePluginConversationBindingApprovalMock: resolveBinding,
+  resolveApprovalOverGatewayMock: resolveApproval,
+  resolveQuestionOverGatewayMock: resolveQuestion,
 } = getSlackInteractionMocks();
-
-type UnknownMock = { mock: { calls: unknown[][] } };
-
-function mockCallArg(mock: unknown, index: number, label: string, argIndex = 0): unknown {
-  const calls = (mock as UnknownMock).mock?.calls;
-  if (!Array.isArray(calls)) {
-    throw new Error(`Expected ${label} to be a mock`);
-  }
-  const call = calls.at(index);
-  if (!call) {
-    throw new Error(`Expected ${label} call ${index + 1}`);
-  }
-  return call[argIndex];
-}
 
 const requireRecord = createRequireRecord("object", "expected-label-capitalized");
 
@@ -62,7 +48,7 @@ function expectRecordFields(
 }
 
 function pluginDispatchCall(index = 0) {
-  const call = dispatchPluginInteractiveHandlerMock.mock.calls[index]?.[0];
+  const call = dispatchPlugin.mock.calls[index]?.[0];
   if (!call) {
     throw new Error("Expected plugin interactive dispatch");
   }
@@ -70,33 +56,23 @@ function pluginDispatchCall(index = 0) {
 }
 
 function slackInteractionPayload(callIndex = 0): Record<string, unknown> {
-  const eventText = mockCallArg(enqueueSessionEventMock, callIndex, "enqueueSystemEvent");
-  if (typeof eventText !== "string") {
-    throw new Error("Expected Slack interaction event text");
-  }
-  return JSON.parse(eventText.replace("Slack interaction: ", "")) as Record<string, unknown>;
+  return JSON.parse(enqueueSystemEventText(callIndex).replace("Slack interaction: ", ""));
 }
 
 function eventOptions() {
-  return requireRecord(
-    mockCallArg(enqueueSessionEventMock, 0, "enqueueSystemEvent", 1),
-    "event options",
-  );
+  return requireRecord(enqueueEvent.mock.calls[0]?.[1], "event options");
 }
 
 function enqueueSystemEventText(callIndex = 0): string {
-  const eventText = mockCallArg(enqueueSessionEventMock, callIndex, "enqueueSystemEvent");
+  const eventText = enqueueEvent.mock.calls[callIndex]?.[0];
   if (typeof eventText !== "string") {
     throw new Error("Expected Slack interaction event text");
   }
   return eventText;
 }
 
-function chatUpdateCall(app: { client: { chat: { update: unknown } } }, callIndex = 0) {
-  return requireRecord(
-    mockCallArg(app.client.chat.update, callIndex, "chat.update"),
-    "chat.update",
-  );
+function chatUpdateCall(app: ReturnType<typeof createContext>["app"], callIndex = 0) {
+  return requireRecord(app.client.chat.update.mock.calls[callIndex]?.[0], "chat.update");
 }
 
 function inputByActionId(
@@ -128,14 +104,40 @@ function viewBody(
 ) {
   return { user: { id: userId }, view, ...extra };
 }
+type View = Parameters<typeof viewBody>[0];
+function modalView(
+  view: View,
+  metadata: Record<string, unknown>,
+  values?: NonNullable<View["state"]>["values"],
+): View {
+  return {
+    ...view,
+    private_metadata: JSON.stringify(metadata),
+    ...(values ? { state: { values } } : {}),
+  };
+}
+function valueInput(type: string, value: unknown) {
+  return { type, value };
+}
+function option(text: string, value: string) {
+  return { text: plainText(text), value };
+}
+function replyButton(value: string, blockId = "exec_actions", label = "Allow once") {
+  return button("openclaw:reply_button", blockId, value, label);
+}
 function approvalButton(value: string, blockId = "exec_actions", label = "Allow once") {
   return button("openclaw:approval_button:1:1", blockId, value, label);
 }
 function expectPrivateReply(text: string) {
   expect(respond).toHaveBeenCalledWith({ text, response_type: "ephemeral" });
 }
+function expectNotCalled(...mocks: unknown[]) {
+  for (const mock of mocks) {
+    expect(mock).not.toHaveBeenCalled();
+  }
+}
 function expectApproval(cfg: unknown, overrides: Record<string, unknown> = {}) {
-  expect(resolveApprovalOverGatewayMock).toHaveBeenCalledWith({
+  expect(resolveApproval).toHaveBeenCalledWith({
     cfg,
     approvalId: "req-123",
     approvalKind: "exec",
@@ -170,7 +172,7 @@ function richText(...texts: string[]) {
   };
 }
 function currentMessage(blocks: unknown[]) {
-  readSlackMessagesMock.mockResolvedValueOnce({
+  readMessages.mockResolvedValueOnce({
     messages: [{ ts: "100.200", blocks }],
     hasMore: false,
   });
@@ -206,6 +208,10 @@ function withActions(context: ReturnType<typeof createContext>) {
       action: ActionArgs["action"],
       extra: Omit<ActionArgs, "ack" | "body" | "action"> = {},
     ) => context.getHandler()({ ack, body, action, ...extra }),
+    submit: (view: View, userId: string, extra: Parameters<typeof viewBody>[2] = {}) =>
+      context.getViewHandler()({ ack, body: viewBody(view, userId, extra) }),
+    close: (view: View, userId: string, extra: Parameters<typeof viewBody>[2] = {}) =>
+      context.getViewClosedHandler()({ ack, body: viewBody(view, userId, extra) }),
   };
 }
 
@@ -217,6 +223,12 @@ function execApprovalOptions() {
         slack: { execApprovals: { enabled: true, approvers: ["u123"], target: "both" } },
       },
     },
+  };
+}
+function mpimPolicy() {
+  return {
+    allowFrom: ["U_OWNER"],
+    resolveChannelName: async () => ({ name: "group-dm", type: "mpim" as const }),
   };
 }
 
@@ -260,7 +272,7 @@ describe("registerSlackInteractionEvents", () => {
       sessionKey: "agent:ops:slack:channel:C1",
       deliveryContext: { channel: "slack", to: "team:T9:user:U123", accountId: "default" },
     });
-    expect(captureSessionEventTargetMock).toHaveBeenCalledOnce();
+    expect(captureTarget).toHaveBeenCalledOnce();
   });
 
   it("routes message shortcuts with selected-message context", async () => {
@@ -341,7 +353,7 @@ describe("registerSlackInteractionEvents", () => {
     });
 
     expect(order).toEqual(["ack", "filter"]);
-    expect(enqueueSessionEventMock).not.toHaveBeenCalled();
+    expect(enqueueEvent).not.toHaveBeenCalled();
   });
 
   it("enforces DM policy for global shortcuts", async () => {
@@ -349,7 +361,7 @@ describe("registerSlackInteractionEvents", () => {
 
     await getShortcutHandler()({ ack, body: shortcutBody() });
 
-    expect(enqueueSessionEventMock).not.toHaveBeenCalled();
+    expect(enqueueEvent).not.toHaveBeenCalled();
   });
 
   it("enqueues structured events and updates button rows", async () => {
@@ -358,22 +370,22 @@ describe("registerSlackInteractionEvents", () => {
     });
     const trackEvent = vi.fn();
     registerSlackInteractionEvents({ ctx: ctx as never, trackEvent });
+    const untouched = () => [
+      { type: "divider" },
+      actions("deploy_row", [
+        {
+          type: "button",
+          action_id: "deploy_all_services",
+          text: plainText("Deploy all services"),
+        },
+      ]),
+    ];
 
     await act(
       actionBody(
         {
           text: "fallback",
-          blocks: [
-            { type: "divider" },
-            actions("deploy_row", [
-              {
-                type: "button",
-                action_id: "deploy_all_services",
-                text: plainText("Deploy all services"),
-              },
-            ]),
-            actions("verify_block", [control("openclaw:verify")]),
-          ],
+          blocks: [...untouched(), actions("verify_block", [control("openclaw:verify")])],
         },
         {
           threadTs: "100.100",
@@ -387,9 +399,8 @@ describe("registerSlackInteractionEvents", () => {
     );
 
     expect(ack).toHaveBeenCalled();
-    expect(enqueueSessionEventMock).toHaveBeenCalledTimes(1);
-    const eventText = mockCallArg(enqueueSessionEventMock, 0, "enqueueSystemEvent");
-    expect(typeof eventText === "string" && eventText.startsWith("Slack interaction: ")).toBe(true);
+    expect(enqueueEvent).toHaveBeenCalledTimes(1);
+    expect(enqueueSystemEventText().startsWith("Slack interaction: ")).toBe(true);
     const payload = slackInteractionPayload();
     expectRecordFields(payload, {
       actionId: "openclaw:verify",
@@ -416,17 +427,7 @@ describe("registerSlackInteractionEvents", () => {
     expectRecordFields(chatUpdateCall(app), {
       channel: "C1",
       ts: "100.200",
-      blocks: [
-        { type: "divider" },
-        actions("deploy_row", [
-          {
-            type: "button",
-            action_id: "deploy_all_services",
-            text: plainText("Deploy all services"),
-          },
-        ]),
-        confirmation(":white_check_mark: *Approve* selected by <@U123>"),
-      ],
+      blocks: [...untouched(), confirmation(":white_check_mark: *Approve* selected by <@U123>")],
     });
   });
 
@@ -455,7 +456,7 @@ describe("registerSlackInteractionEvents", () => {
   });
 
   it("passes false command auth to Slack plugin interactions for non-allowlisted senders", async () => {
-    dispatchPluginInteractiveHandlerMock.mockResolvedValueOnce({ ...pluginHandled });
+    dispatchPlugin.mockResolvedValueOnce({ ...pluginHandled });
     const { act } = setupInteractions({
       cfg: {
         commands: { allowFrom: { slack: ["U_OWNER"] } },
@@ -467,12 +468,7 @@ describe("registerSlackInteractionEvents", () => {
         userId: "U_ALLOWED",
         threadTs: "100.100",
       }),
-      {
-        type: "button",
-        action_id: "codex",
-        block_id: "codex_actions",
-        value: "approve:thread-1",
-      },
+      { ...control("codex"), block_id: "codex_actions", value: "approve:thread-1" },
     );
 
     const dispatchCall = pluginDispatchCall();
@@ -500,8 +496,8 @@ describe("registerSlackInteractionEvents", () => {
     );
 
     expect(ack).toHaveBeenCalled();
-    expect(dispatchPluginInteractiveHandlerMock).not.toHaveBeenCalled();
-    const eventText = mockCallArg(enqueueSessionEventMock, 0, "enqueueSystemEvent");
+    expect(dispatchPlugin).not.toHaveBeenCalled();
+    const eventText = enqueueSystemEventText();
     expect(eventText).toContain('"actionId":"openclaw:reply_button"');
     expectRecordFields(eventOptions(), {
       contextKey: "slack:interaction:C1:100.200:openclaw:reply_button:100.201",
@@ -524,7 +520,7 @@ describe("registerSlackInteractionEvents", () => {
   });
 
   it("keeps typed callback payloads opaque even when they resemble approval commands", async () => {
-    dispatchPluginInteractiveHandlerMock.mockResolvedValue({ ...pluginHandled });
+    dispatchPlugin.mockResolvedValue({ ...pluginHandled });
     const { act } = setupInteractions();
 
     await act(actionBody({ text: "Choose", blocks: [] }), {
@@ -534,41 +530,27 @@ describe("registerSlackInteractionEvents", () => {
       text: plainText("Choose"),
     });
 
-    expect(resolveApprovalOverGatewayMock).not.toHaveBeenCalled();
-    expectRecordFields(
-      requireRecord(
-        mockCallArg(dispatchPluginInteractiveHandlerMock, 0, "plugin interactive dispatcher"),
-        "plugin interactive dispatcher",
-      ),
-      { data: "/approve req-1 deny" },
-    );
-    expect(enqueueSessionEventMock).not.toHaveBeenCalled();
+    expect(resolveApproval).not.toHaveBeenCalled();
+    expect(pluginDispatchCall().data).toBe("/approve req-1 deny");
+    expect(enqueueEvent).not.toHaveBeenCalled();
   });
 
   it("uses unique interaction ids for repeated Slack actions on the same message", async () => {
-    dispatchPluginInteractiveHandlerMock.mockResolvedValue({
+    dispatchPlugin.mockResolvedValue({
       matched: true,
       handled: false,
       duplicate: false,
     });
     const { act } = setupInteractions();
 
-    await act(
-      actionBody(buttonMessage("codex_actions", "codex"), {
-        threadTs: "100.100",
-        trigger_id: "trigger-1",
-      }),
-      button("codex", "codex_actions", "approve:thread-1", "Approve"),
-    );
-    await act(
-      actionBody(buttonMessage("codex_actions", "codex"), {
-        threadTs: "100.100",
-        trigger_id: "trigger-2",
-      }),
-      button("codex", "codex_actions", "approve:thread-1", "Approve"),
-    );
+    for (const trigger_id of ["trigger-1", "trigger-2"]) {
+      await act(
+        actionBody(buttonMessage("codex_actions", "codex"), { threadTs: "100.100", trigger_id }),
+        button("codex", "codex_actions", "approve:thread-1", "Approve"),
+      );
+    }
 
-    expect(dispatchPluginInteractiveHandlerMock).toHaveBeenCalledTimes(2);
+    expect(dispatchPlugin).toHaveBeenCalledTimes(2);
     const firstCall = pluginDispatchCall(0);
     const secondCall = pluginDispatchCall(1);
     expect(firstCall.dedupeId).toContain(":trigger-1:");
@@ -577,9 +559,7 @@ describe("registerSlackInteractionEvents", () => {
   });
 
   it("resolves plugin binding approvals from shared interactive Slack actions", async () => {
-    resolvePluginConversationBindingApprovalMock.mockResolvedValueOnce(
-      approvedPluginBindingResult(),
-    );
+    resolveBinding.mockResolvedValueOnce(approvedPluginBindingResult());
     const { app, act } = setupInteractions();
 
     await act(
@@ -591,12 +571,12 @@ describe("registerSlackInteractionEvents", () => {
     );
 
     expect(ack).toHaveBeenCalled();
-    expect(resolvePluginConversationBindingApprovalMock).toHaveBeenCalledWith({
+    expect(resolveBinding).toHaveBeenCalledWith({
       approvalId: "approval-123",
       decision: "allow-once",
       senderId: "U123",
     });
-    expect(dispatchPluginInteractiveHandlerMock).not.toHaveBeenCalled();
+    expect(dispatchPlugin).not.toHaveBeenCalled();
     expectRecordFields(chatUpdateCall(app), {
       channel: "C1",
       ts: "100.200",
@@ -604,18 +584,15 @@ describe("registerSlackInteractionEvents", () => {
       blocks: [],
     });
     expectPrivateReply("Binding updated.");
-    expect(enqueueSessionEventMock).not.toHaveBeenCalled();
+    expect(enqueueEvent).not.toHaveBeenCalled();
   });
 
   it("resolves typed exec approvals from Slack-private action data", async () => {
+    const value =
+      'openclaw:approval:v1:{"approvalId":"plugin:looks-plugin","approvalKind":"exec","decision":"allow-once"}';
     currentMessage([
       actions("exec_actions", [
-        {
-          type: "button",
-          action_id: "openclaw:approval_button:1:1",
-          value:
-            'openclaw:approval:v1:{"approvalId":"plugin:looks-plugin","approvalKind":"exec","decision":"allow-once"}',
-        },
+        { ...control("openclaw:approval_button:1:1"), value },
         control("openclaw:reply_button"),
       ]),
     ]);
@@ -634,17 +611,13 @@ describe("registerSlackInteractionEvents", () => {
         },
         { threadTs: "100.100" },
       ),
-      approvalButton(
-        'openclaw:approval:v1:{"approvalId":"plugin:looks-plugin","approvalKind":"exec","decision":"allow-once"}',
-      ),
+      approvalButton(value),
       { respond },
     );
 
     expect(ack).toHaveBeenCalled();
     expectApproval(ctx.cfg, { approvalId: "plugin:looks-plugin" });
-    expect(resolvePluginConversationBindingApprovalMock).not.toHaveBeenCalled();
-    expect(dispatchPluginInteractiveHandlerMock).not.toHaveBeenCalled();
-    expect(enqueueSessionEventMock).not.toHaveBeenCalled();
+    expectNotCalled(resolveBinding, dispatchPlugin, enqueueEvent);
     expectRecordFields(chatUpdateCall(app), {
       channel: "C1",
       ts: "100.200",
@@ -665,7 +638,7 @@ describe("registerSlackInteractionEvents", () => {
     "registered approval handler reads $name after mocked resolution",
     async ({ current }) => {
       const approvalId = "system-agent:0d939e63-1c97-4b53-9c6f-6caae6d95bd0";
-      resolveApprovalOverGatewayMock.mockResolvedValueOnce({
+      resolveApproval.mockResolvedValueOnce({
         applied: true,
         approval: {
           status: "allowed",
@@ -674,7 +647,7 @@ describe("registerSlackInteractionEvents", () => {
         },
       });
       const header = section("OpenClaw change approval required", "openclaw_approval_header");
-      readSlackMessagesMock.mockResolvedValueOnce({
+      readMessages.mockResolvedValueOnce({
         messages:
           current === "missing"
             ? []
@@ -698,30 +671,18 @@ describe("registerSlackInteractionEvents", () => {
           },
           { threadTs: "100.100" },
         ),
-        {
-          type: "button",
-          action_id: "openclaw:approval_button:1:1",
-          block_id: "exec_actions",
-          value: encodeSlackApprovalAction({
+        approvalButton(
+          encodeSlackApprovalAction({
             type: "approval",
             approvalId,
             approvalKind: "system-agent",
             decision: "allow-once",
           }),
-          text: plainText("Allow once"),
-        },
+        ),
         { respond },
       );
-      expect(resolveApprovalOverGatewayMock).toHaveBeenCalledWith({
-        cfg: ctx.cfg,
-        approvalId,
-        approvalKind: "system-agent",
-        decision: "allow-once",
-        senderId: "U123",
-        channel: "slack",
-        accountId: "default",
-      });
-      expect(readSlackMessagesMock).toHaveBeenCalledExactlyOnceWith("C1", {
+      expectApproval(ctx.cfg, { approvalId, approvalKind: "system-agent" });
+      expect(readMessages).toHaveBeenCalledExactlyOnceWith("C1", {
         client: app.client,
         messageId: "100.200",
         threadId: "100.100",
@@ -750,7 +711,7 @@ describe("registerSlackInteractionEvents", () => {
       { respond },
     );
 
-    expect(resolveApprovalOverGatewayMock).not.toHaveBeenCalled();
+    expect(resolveApproval).not.toHaveBeenCalled();
     expectPrivateReply("You are not authorized to approve this request.");
   });
 
@@ -787,8 +748,8 @@ describe("registerSlackInteractionEvents", () => {
     await invoke("T11111111");
     await invoke("T22222222");
 
-    expect(readSlackMessagesMock).toHaveBeenCalledOnce();
-    expect(resolveApprovalOverGatewayMock).toHaveBeenCalledOnce();
+    expect(readMessages).toHaveBeenCalledOnce();
+    expect(resolveApproval).toHaveBeenCalledOnce();
     expectApproval(ctx.cfg, { approvalKind: "plugin", senderId: "team:T11111111:user:U123OWNER" });
     expectPrivateReply("You are not authorized to approve this request.");
   });
@@ -809,7 +770,7 @@ describe("registerSlackInteractionEvents", () => {
     );
 
     expect(ack).toHaveBeenCalledOnce();
-    expect(resolveQuestionOverGatewayMock).toHaveBeenCalledWith({
+    expect(resolveQuestion).toHaveBeenCalledWith({
       cfg: ctx.cfg,
       questionId,
       optionIndex: 1,
@@ -817,7 +778,7 @@ describe("registerSlackInteractionEvents", () => {
       clientDisplayName: "Slack question (default)",
     });
     expectPrivateReply("Answer submitted.");
-    expect(enqueueSessionEventMock).not.toHaveBeenCalled();
+    expect(enqueueEvent).not.toHaveBeenCalled();
   });
 
   it("cleans stale typed buttons and shows the canonical first-answer winner", async () => {
@@ -827,7 +788,7 @@ describe("registerSlackInteractionEvents", () => {
       ...approvalButtonBlocks("req-123", "exec", "allow-once"),
       ...approvalButtonBlocks("req-123", "exec", "deny"),
     ]);
-    resolveApprovalOverGatewayMock.mockResolvedValueOnce({
+    resolveApproval.mockResolvedValueOnce({
       applied: false,
       approval: { status: "denied", decision: "deny", presentation: { kind: "exec" } },
     });
@@ -859,7 +820,7 @@ describe("registerSlackInteractionEvents", () => {
       blocks: [section("*Already resolved: Denied*"), section("Command preview")],
     });
     expectPrivateReply("This approval was already resolved: Denied.");
-    expect(enqueueSessionEventMock).not.toHaveBeenCalled();
+    expect(enqueueEvent).not.toHaveBeenCalled();
   });
 
   it.each([
@@ -875,9 +836,7 @@ describe("registerSlackInteractionEvents", () => {
       currentMessage(approvalButtonBlocks("req-123", "exec", "allow-once"));
       app.client.chat.update.mockRejectedValueOnce(new Error("message update failed"));
     } else {
-      resolveApprovalOverGatewayMock.mockRejectedValueOnce(
-        new Error("unknown or expired approval id"),
-      );
+      resolveApproval.mockRejectedValueOnce(new Error("unknown or expired approval id"));
     }
     await act(
       actionBody({ text: "Exec approval required", blocks: [] }),
@@ -899,14 +858,12 @@ describe("registerSlackInteractionEvents", () => {
       { respond },
     );
 
-    expect(resolveApprovalOverGatewayMock).not.toHaveBeenCalled();
-    expect(app.client.chat.update).not.toHaveBeenCalled();
-    expect(enqueueSessionEventMock).not.toHaveBeenCalled();
+    expectNotCalled(resolveApproval, app.client.chat.update, enqueueEvent);
     expectPrivateReply("This approval action is invalid or expired.");
   });
 
   it("preserves legacy unprefixed fallback when the sender may approve either kind", async () => {
-    resolveApprovalOverGatewayMock
+    resolveApproval
       .mockRejectedValueOnce(new Error("unknown or expired approval id"))
       .mockResolvedValueOnce({
         applied: true,
@@ -919,12 +876,7 @@ describe("registerSlackInteractionEvents", () => {
         buttonMessage("plugin_actions", "openclaw:reply_button", "Plugin approval required"),
         { userId: "U123OWNER" },
       ),
-      button(
-        "openclaw:reply_button",
-        "plugin_actions",
-        "/approve req-legacy allow-once",
-        "Allow once",
-      ),
+      replyButton("/approve req-legacy allow-once", "plugin_actions"),
     );
 
     const expectedCommon = {
@@ -935,11 +887,11 @@ describe("registerSlackInteractionEvents", () => {
       channel: "slack",
       accountId: "default",
     };
-    expect(resolveApprovalOverGatewayMock).toHaveBeenNthCalledWith(1, {
+    expect(resolveApproval).toHaveBeenNthCalledWith(1, {
       ...expectedCommon,
       resolveMethod: "exec",
     });
-    expect(resolveApprovalOverGatewayMock).toHaveBeenNthCalledWith(2, {
+    expect(resolveApproval).toHaveBeenNthCalledWith(2, {
       ...expectedCommon,
       resolveMethod: "plugin",
     });
@@ -949,7 +901,7 @@ describe("registerSlackInteractionEvents", () => {
       text: "Plugin approval required",
       blocks: [],
     });
-    expect(enqueueSessionEventMock).not.toHaveBeenCalled();
+    expect(enqueueEvent).not.toHaveBeenCalled();
   });
 
   it("does not treat a plugin-looking legacy id as an owner signal", async () => {
@@ -960,17 +912,12 @@ describe("registerSlackInteractionEvents", () => {
         buttonMessage("plugin_actions", "openclaw:reply_button", "Plugin approval required"),
         { userId: "U999EXEC" },
       ),
-      button(
-        "openclaw:reply_button",
-        "plugin_actions",
-        "/approve plugin:req-123 allow-always",
-        "Always allow",
-      ),
+      replyButton("/approve plugin:req-123 allow-always", "plugin_actions", "Always allow"),
       { respond },
     );
 
     expect(ack).toHaveBeenCalled();
-    expect(resolveApprovalOverGatewayMock).toHaveBeenCalledWith({
+    expect(resolveApproval).toHaveBeenCalledWith({
       cfg: ctx.cfg,
       approvalId: "plugin:req-123",
       decision: "allow-always",
@@ -979,9 +926,7 @@ describe("registerSlackInteractionEvents", () => {
       channel: "slack",
       accountId: "default",
     });
-    expect(resolvePluginConversationBindingApprovalMock).not.toHaveBeenCalled();
-    expect(dispatchPluginInteractiveHandlerMock).not.toHaveBeenCalled();
-    expect(enqueueSessionEventMock).not.toHaveBeenCalled();
+    expectNotCalled(resolveBinding, dispatchPlugin, enqueueEvent);
     expectRecordFields(chatUpdateCall(app), {
       channel: "C1",
       ts: "100.200",
@@ -992,7 +937,7 @@ describe("registerSlackInteractionEvents", () => {
   });
 
   it("keeps exec approval buttons when gateway resolution fails", async () => {
-    resolveApprovalOverGatewayMock.mockRejectedValueOnce(new Error("gateway down"));
+    resolveApproval.mockRejectedValueOnce(new Error("gateway down"));
     const { app, act } = setupInteractions();
 
     await expect(
@@ -1000,19 +945,13 @@ describe("registerSlackInteractionEvents", () => {
         actionBody(
           buttonMessage("exec_actions", "openclaw:reply_button", "Exec approval required"),
         ),
-        button(
-          "openclaw:reply_button",
-          "exec_actions",
-          "/approve req-123 allow-once",
-          "Allow once",
-        ),
+        replyButton("/approve req-123 allow-once"),
       ),
     ).rejects.toThrow("gateway down");
 
     expect(ack).toHaveBeenCalled();
-    expect(resolveApprovalOverGatewayMock).toHaveBeenCalledTimes(1);
-    expect(app.client.chat.update).not.toHaveBeenCalled();
-    expect(enqueueSessionEventMock).not.toHaveBeenCalled();
+    expect(resolveApproval).toHaveBeenCalledTimes(1);
+    expectNotCalled(app.client.chat.update, enqueueEvent);
   });
 
   it("rejects unauthorized exec approval interactions without enqueueing them", async () => {
@@ -1026,13 +965,11 @@ describe("registerSlackInteractionEvents", () => {
 
     await act(
       actionBody(buttonMessage("exec_actions", "openclaw:reply_button", "Exec approval required")),
-      button("openclaw:reply_button", "exec_actions", "/approve req-123 allow-once", "Allow once"),
+      replyButton("/approve req-123 allow-once"),
       { respond },
     );
 
-    expect(resolveApprovalOverGatewayMock).not.toHaveBeenCalled();
-    expect(enqueueSessionEventMock).not.toHaveBeenCalled();
-    expect(app.client.chat.update).not.toHaveBeenCalled();
+    expectNotCalled(resolveApproval, enqueueEvent, app.client.chat.update);
     expectPrivateReply("You are not authorized to approve this request.");
   });
 
@@ -1048,9 +985,7 @@ describe("registerSlackInteractionEvents", () => {
     );
 
     expect(ack).toHaveBeenCalledTimes(1);
-    expect(enqueueSessionEventMock).not.toHaveBeenCalled();
-    expect(app.client.chat.update).not.toHaveBeenCalled();
-    expect(respond).not.toHaveBeenCalled();
+    expectNotCalled(enqueueEvent, app.client.chat.update, respond);
   });
 
   it.each([
@@ -1077,104 +1012,67 @@ describe("registerSlackInteractionEvents", () => {
         ),
       });
       expect(ack).toHaveBeenCalledTimes(acknowledged ? 1 : 0);
-      expect(enqueueSessionEventMock).not.toHaveBeenCalled();
-      expect(dispatchPluginInteractiveHandlerMock).not.toHaveBeenCalled();
+      expectNotCalled(enqueueEvent, dispatchPlugin);
     },
   );
 
   it.each([
-    {
-      name: "blocks channel block actions when sender is outside configured global allowFrom",
-      overrides: { allowFrom: ["U_OWNER"] },
-      senderId: "U_ATTACKER",
-      channelId: "C1",
-      timestamp: "250.251",
-      allowed: false,
-    },
-    {
-      name: "allows channel block actions when channel users allowlist authorizes the sender",
-      overrides: {
-        allowFrom: ["U_OWNER"],
-        channelsConfig: { C1: { users: ["U_ALLOWED"] } },
-      },
-      senderId: "U_ALLOWED",
-      channelId: "C1",
-      timestamp: "260.261",
-      allowed: true,
-    },
-    {
-      name: "blocks wildcard global allowFrom from bypassing configured channel users",
-      overrides: {
-        allowFrom: ["*"],
-        channelsConfig: { C1: { users: ["U_ALLOWED"] } },
-      },
-      senderId: "U_ATTACKER",
-      channelId: "C1",
-      timestamp: "270.271",
-      allowed: false,
-    },
-    {
-      name: "keeps channel block actions open when no allowlists are configured",
-      overrides: { allowFrom: [] },
-      senderId: "U_ANYONE",
-      channelId: "C1",
-      timestamp: "305.306",
-      allowed: true,
-    },
-    {
-      name: "blocks DM block actions when sender is not in allowFrom",
-      overrides: { dmPolicy: "allowlist" as const, allowFrom: ["U_OWNER"] },
-      senderId: "U_ATTACKER",
-      channelId: "D222",
-      timestamp: "301.302",
-      allowed: false,
-    },
-    {
-      name: "blocks MPIM block actions when sender is outside configured allowFrom",
-      overrides: {
-        allowFrom: ["U_OWNER"],
-        resolveChannelName: async () => ({ name: "group-dm", type: "mpim" as const }),
-      },
-      senderId: "U_ATTACKER",
-      channelId: "G_MPIM",
-      timestamp: "311.312",
-      allowed: false,
-    },
-    {
-      name: "allows MPIM block actions when sender is in configured allowFrom",
-      overrides: {
-        allowFrom: ["U_OWNER"],
-        resolveChannelName: async () => ({ name: "group-dm", type: "mpim" as const }),
-      },
-      senderId: "U_OWNER",
-      channelId: "G_MPIM",
-      timestamp: "313.314",
-      allowed: true,
-    },
-  ])("$name", async ({ overrides, senderId, channelId, timestamp, allowed }) => {
-    enqueueSessionEventMock.mockClear();
-    const { app, act } = setupInteractions(overrides);
+    ["global allowlist", { allowFrom: ["U_OWNER"] }, "U_ATTACKER", "C1", "250.251", false],
+    [
+      "channel allowlist",
+      { allowFrom: ["U_OWNER"], channelsConfig: { C1: { users: ["U_ALLOWED"] } } },
+      "U_ALLOWED",
+      "C1",
+      "260.261",
+      true,
+    ],
+    [
+      "channel allowlist overrides wildcard",
+      { allowFrom: ["*"], channelsConfig: { C1: { users: ["U_ALLOWED"] } } },
+      "U_ATTACKER",
+      "C1",
+      "270.271",
+      false,
+    ],
+    ["no allowlists", { allowFrom: [] }, "U_ANYONE", "C1", "305.306", true],
+    [
+      "DM allowlist",
+      { dmPolicy: "allowlist", allowFrom: ["U_OWNER"] },
+      "U_ATTACKER",
+      "D222",
+      "301.302",
+      false,
+    ],
+    ["MPIM denied", mpimPolicy(), "U_ATTACKER", "G_MPIM", "311.312", false],
+    ["MPIM allowed", mpimPolicy(), "U_OWNER", "G_MPIM", "313.314", true],
+  ] satisfies Array<
+    [string, Parameters<typeof createContext>[0], string, string, string, boolean]
+  >)(
+    "authorizes block actions: %s",
+    async (_name, overrides, senderId, channelId, timestamp, allowed) => {
+      enqueueEvent.mockClear();
+      const { app, act } = setupInteractions(overrides);
 
-    await act(
-      actionBody(
-        { blocks: [actions("verify_block", [])] },
-        { userId: senderId, channelId, ts: timestamp, container: false },
-      ),
-      { type: "button", action_id: "openclaw:verify", block_id: "verify_block" },
-      { respond },
-    );
+      await act(
+        actionBody(
+          { blocks: [actions("verify_block", [])] },
+          { userId: senderId, channelId, ts: timestamp, container: false },
+        ),
+        { type: "button", action_id: "openclaw:verify", block_id: "verify_block" },
+        { respond },
+      );
 
-    expect(ack).toHaveBeenCalled();
-    if (allowed) {
-      expect(enqueueSessionEventMock).toHaveBeenCalledTimes(1);
-      expect(app.client.chat.update).toHaveBeenCalledTimes(1);
-      expect(respond).not.toHaveBeenCalled();
-      return;
-    }
-    expect(enqueueSessionEventMock).not.toHaveBeenCalled();
-    expect(app.client.chat.update).not.toHaveBeenCalled();
-    expectPrivateReply("You are not authorized to use this control.");
-  });
+      expect(ack).toHaveBeenCalled();
+      if (allowed) {
+        expect(enqueueEvent).toHaveBeenCalledTimes(1);
+        expect(app.client.chat.update).toHaveBeenCalledTimes(1);
+        expect(respond).not.toHaveBeenCalled();
+        return;
+      }
+      expectNotCalled(enqueueEvent, app.client.chat.update);
+      expectPrivateReply("You are not authorized to use this control.");
+    },
+  );
 
   it("ignores malformed action payloads after ack and logs warning", async () => {
     const { app, act, runtimeLog } = setupInteractions();
@@ -1189,8 +1087,7 @@ describe("registerSlackInteractionEvents", () => {
     );
 
     expect(ack).toHaveBeenCalled();
-    expect(app.client.chat.update).not.toHaveBeenCalled();
-    expect(enqueueSessionEventMock).not.toHaveBeenCalled();
+    expectNotCalled(app.client.chat.update, enqueueEvent);
     expect(runtimeLog).toHaveBeenCalledWith(
       "slack:interaction malformed action payload channel=C1 user=U666",
     );
@@ -1307,7 +1204,7 @@ describe("registerSlackInteractionEvents", () => {
       senderId: "U111",
       threadTs: "222.111",
     });
-    expect(enqueueSessionEventMock).toHaveBeenCalledTimes(1);
+    expect(enqueueEvent).toHaveBeenCalledTimes(1);
     const payload = slackInteractionPayload();
     expectRecordFields(payload, {
       channelId: "C222",
@@ -1344,7 +1241,7 @@ describe("registerSlackInteractionEvents", () => {
     );
 
     expect(ack).toHaveBeenCalled();
-    expect(enqueueSessionEventMock).toHaveBeenCalledTimes(1);
+    expect(enqueueEvent).toHaveBeenCalledTimes(1);
     const payload = slackInteractionPayload();
     expect(payload.actionType).toBe("multi_conversations_select");
     expect(payload.selectedValues).toEqual([
@@ -1393,7 +1290,7 @@ describe("registerSlackInteractionEvents", () => {
     );
 
     expect(ack).toHaveBeenCalled();
-    expect(enqueueSessionEventMock).toHaveBeenCalledTimes(1);
+    expect(enqueueEvent).toHaveBeenCalledTimes(1);
     const payload = slackInteractionPayload();
     expectRecordFields(payload, {
       actionType: "workflow_button",
@@ -1415,30 +1312,23 @@ describe("registerSlackInteractionEvents", () => {
       ack,
       context: { teamId: "T1" },
       body: viewBody(
-        {
-          id: "V123",
-          callback_id: "openclaw:deploy_form",
-          root_view_id: "VROOT",
-          previous_view_id: "VPREV",
-          external_id: "deploy-ext-1",
-          hash: "view-hash-1",
-          private_metadata: JSON.stringify({
-            channelId: "D123",
-            channelType: "im",
-            userId: "U777",
-          }),
-          state: {
-            values: {
-              env_block: {
-                env_select: {
-                  type: "static_select",
-                  selected_option: { text: plainText("Production"), value: "prod" },
-                },
-              },
-              notes_block: { notes_input: { type: "plain_text_input", value: "ship now" } },
-            },
+        modalView(
+          {
+            id: "V123",
+            callback_id: "openclaw:deploy_form",
+            root_view_id: "VROOT",
+            previous_view_id: "VPREV",
+            external_id: "deploy-ext-1",
+            hash: "view-hash-1",
           },
-        },
+          { channelId: "D123", channelType: "im", userId: "U777" },
+          {
+            env_block: {
+              env_select: { type: "static_select", selected_option: option("Production", "prod") },
+            },
+            notes_block: { notes_input: valueInput("plain_text_input", "ship now") },
+          },
+        ),
         "U777",
         { team: { id: "T1" } },
       ),
@@ -1451,7 +1341,7 @@ describe("registerSlackInteractionEvents", () => {
       senderId: "U777",
       eventScope: expect.objectContaining({ teamId: "T1" }),
     });
-    expect(enqueueSessionEventMock).toHaveBeenCalledTimes(1);
+    expect(enqueueEvent).toHaveBeenCalledTimes(1);
     expect(eventOptions()).toMatchObject({
       sessionKey: "agent:ops:slack:channel:C1",
       deliveryContext: { channel: "slack", to: "team:T1:user:U777", accountId: "default" },
@@ -1480,23 +1370,14 @@ describe("registerSlackInteractionEvents", () => {
   });
 
   it("routes accepted view_closed events back to their authorized Slack channel", async () => {
-    const { getViewClosedHandler } = setupInteractions();
-
-    await getViewClosedHandler()({
-      ack,
-      body: viewBody(
-        {
-          id: "V777",
-          callback_id: "openclaw:deploy_form",
-          private_metadata: JSON.stringify({
-            channelId: "C777",
-            channelType: "channel",
-            userId: "U777",
-          }),
-        },
-        "U777",
+    const { close } = setupInteractions();
+    await close(
+      modalView(
+        { id: "V777", callback_id: "openclaw:deploy_form" },
+        { channelId: "C777", channelType: "channel", userId: "U777" },
       ),
-    });
+      "U777",
+    );
 
     expect(eventOptions()).toMatchObject({
       deliveryContext: { channel: "slack", to: "channel:C777", accountId: "default" },
@@ -1505,11 +1386,11 @@ describe("registerSlackInteractionEvents", () => {
       interactionType: "view_closed",
       isCleared: false,
     });
-    expect(captureSessionEventTargetMock).toHaveBeenCalledOnce();
+    expect(captureTarget).toHaveBeenCalledOnce();
   });
 
   it("dispatches plugin-owned modal submissions with full view state before compacting events", async () => {
-    dispatchPluginInteractiveHandlerMock.mockResolvedValueOnce({
+    dispatchPlugin.mockResolvedValueOnce({
       matched: true,
       handled: true,
       duplicate: false,
@@ -1517,37 +1398,28 @@ describe("registerSlackInteractionEvents", () => {
         systemEvent: { summary: "Contract form stored", reference: "contract-submission-123" },
       },
     });
-    const { ctx, getViewHandler } = setupInteractions();
+    const { ctx, submit } = setupInteractions();
     const values: Record<string, Record<string, Record<string, unknown>>> = {};
     for (let index = 0; index < 8; index += 1) {
       values[`field_block_${index}`] = {
-        [`field_${index}`]: {
-          type: "plain_text_input",
-          value: `value-${index}-${"x".repeat(500)}`,
-        },
+        [`field_${index}`]: valueInput("plain_text_input", `value-${index}-${"x".repeat(500)}`),
       };
     }
 
-    await getViewHandler()({
-      ack,
-      body: viewBody(
+    await submit(
+      modalView(
+        { id: "V777", callback_id: "contract_confirm_hearing" },
         {
-          id: "V777",
-          callback_id: "contract_confirm_hearing",
-          private_metadata: JSON.stringify({
-            channelId: "D777",
-            channelType: "im",
-            userId: "U777",
-            pluginInteractiveData: "dean.contract:confirm_hearing",
-          }),
-          state: {
-            values,
-          },
+          channelId: "D777",
+          channelType: "im",
+          userId: "U777",
+          pluginInteractiveData: "dean.contract:confirm_hearing",
         },
-        "U777",
-        { team: { id: "T1" }, trigger_id: "trigger-777" },
+        values,
       ),
-    });
+      "U777",
+      { team: { id: "T1" }, trigger_id: "trigger-777" },
+    );
 
     expect(ack).toHaveBeenCalled();
     const dispatchCall = pluginDispatchCall();
@@ -1584,7 +1456,7 @@ describe("registerSlackInteractionEvents", () => {
     expect(interaction.inputs).toHaveLength(8);
     expect(interaction.stateValues).toEqual(values);
 
-    expect(enqueueSessionEventMock).toHaveBeenCalledTimes(1);
+    expect(enqueueEvent).toHaveBeenCalledTimes(1);
     const eventText = enqueueSystemEventText();
     expect(eventText.length).toBeLessThanOrEqual(2400);
     const payload = slackInteractionPayload();
@@ -1599,24 +1471,16 @@ describe("registerSlackInteractionEvents", () => {
   });
 
   it("dispatches callback-id-only plugin modal submissions without agent routing metadata", async () => {
-    dispatchPluginInteractiveHandlerMock.mockResolvedValueOnce({ ...pluginHandled });
-    const { getViewHandler } = setupInteractions();
-
-    await getViewHandler()({
-      ack,
-      body: viewBody(
-        {
-          id: "V778",
-          callback_id: "openclaw:dean.contract:confirm_hearing",
-          state: {
-            values: {
-              contract: { name: { type: "plain_text_input", value: "Ari" } },
-            },
-          },
-        },
-        "U777",
-      ),
-    });
+    dispatchPlugin.mockResolvedValueOnce({ ...pluginHandled });
+    const { submit } = setupInteractions();
+    await submit(
+      {
+        id: "V778",
+        callback_id: "openclaw:dean.contract:confirm_hearing",
+        state: { values: { contract: { name: valueInput("plain_text_input", "Ari") } } },
+      },
+      "U777",
+    );
 
     expect(ack).toHaveBeenCalled();
     const dispatchCall = pluginDispatchCall();
@@ -1633,65 +1497,46 @@ describe("registerSlackInteractionEvents", () => {
       callbackId: "openclaw:dean.contract:confirm_hearing",
       viewId: "V778",
     });
-    expect(enqueueSessionEventMock).not.toHaveBeenCalled();
+    expect(enqueueEvent).not.toHaveBeenCalled();
   });
 
   it("blocks modal events when private metadata userId does not match submitter", async () => {
-    const { getViewHandler } = setupInteractions();
-
-    await getViewHandler()({
-      ack,
-      body: viewBody(
-        {
-          callback_id: "openclaw:deploy_form",
-          private_metadata: JSON.stringify({
-            channelId: "D123",
-            channelType: "im",
-            userId: "U111",
-          }),
-        },
-        "U222",
+    const { submit } = setupInteractions();
+    await submit(
+      modalView(
+        { callback_id: "openclaw:deploy_form" },
+        { channelId: "D123", channelType: "im", userId: "U111" },
       ),
-    });
+      "U222",
+    );
 
     expect(ack).toHaveBeenCalled();
-    expect(enqueueSessionEventMock).not.toHaveBeenCalled();
+    expect(enqueueEvent).not.toHaveBeenCalled();
   });
 
   it("captures typed modal number, email, URL, and rich text inputs", async () => {
-    const { getViewHandler } = setupInteractions({ allowFrom: [] });
-
-    await getViewHandler()({
-      ack,
-      body: viewBody(
+    const { submit } = setupInteractions({ allowFrom: [] });
+    await submit(
+      modalView(
+        { id: "V400", callback_id: "openclaw:routing_form" },
+        { userId: "U444" },
         {
-          id: "V400",
-          callback_id: "openclaw:routing_form",
-          private_metadata: JSON.stringify({ userId: "U444" }),
-          state: {
-            values: {
-              number_block: { number_input: { type: "number_input", value: "42.5" } },
-              email_block: {
-                email_input: { type: "email_text_input", value: "team@openclaw.ai" },
-              },
-              url_block: {
-                url_input: { type: "url_text_input", value: "https://docs.openclaw.ai" },
-              },
-              richtext_block: {
-                richtext_input: {
-                  type: "rich_text_input",
-                  rich_text_value: richText("  Ship this now\t", "with canary metrics  "),
-                },
-              },
+          number_block: { number_input: valueInput("number_input", "42.5") },
+          email_block: { email_input: valueInput("email_text_input", "team@openclaw.ai") },
+          url_block: { url_input: valueInput("url_text_input", "https://docs.openclaw.ai") },
+          richtext_block: {
+            richtext_input: {
+              type: "rich_text_input",
+              rich_text_value: richText("  Ship this now\t", "with canary metrics  "),
             },
           },
         },
-        "U444",
       ),
-    });
+      "U444",
+    );
 
     expect(ack).toHaveBeenCalled();
-    expect(enqueueSessionEventMock).toHaveBeenCalledTimes(1);
+    expect(enqueueEvent).toHaveBeenCalledTimes(1);
     const payload = slackInteractionPayload();
     const inputs = interactionInputs(payload);
     expectRecordFields(inputByActionId(inputs, "number_input"), {
@@ -1714,13 +1559,12 @@ describe("registerSlackInteractionEvents", () => {
   });
 
   it("captures modal close events and enqueues view closed event", async () => {
-    const { ctx, getViewClosedHandler, resolveSessionKey } = interactionContext();
+    const { ctx, close, resolveSessionKey } = interactionContext();
     const trackEvent = vi.fn();
     registerSlackInteractionEvents({ ctx: ctx as never, trackEvent });
 
-    await getViewClosedHandler()({
-      ack,
-      body: viewBody(
+    await close(
+      modalView(
         {
           id: "V900",
           callback_id: "openclaw:deploy_form",
@@ -1728,29 +1572,21 @@ describe("registerSlackInteractionEvents", () => {
           previous_view_id: "VPREV900",
           external_id: "deploy-ext-900",
           hash: "view-hash-900",
-          private_metadata: JSON.stringify({
-            sessionKey: "agent:main:slack:channel:C99",
-            userId: "U900",
-          }),
-          state: {
-            values: {
-              env_block: {
-                env_select: {
-                  type: "static_select",
-                  selected_option: { text: plainText("Canary"), value: "canary" },
-                },
-              },
-            },
+        },
+        { sessionKey: "agent:main:slack:channel:C99", userId: "U900" },
+        {
+          env_block: {
+            env_select: { type: "static_select", selected_option: option("Canary", "canary") },
           },
         },
-        "U900",
-        { team: { id: "T1" }, is_cleared: true },
       ),
-    });
+      "U900",
+      { team: { id: "T1" }, is_cleared: true },
+    );
 
     expect(ack).toHaveBeenCalled();
     expect(resolveSessionKey).not.toHaveBeenCalled();
-    expect(enqueueSessionEventMock).toHaveBeenCalledTimes(1);
+    expect(enqueueEvent).toHaveBeenCalledTimes(1);
     const options = eventOptions() as { sessionKey?: string };
     const payload = slackInteractionPayload();
     expectRecordFields(payload, {
@@ -1805,7 +1641,7 @@ describe("registerSlackInteractionEvents", () => {
   });
 
   it("sends a workspace-qualified reviewer for plugin buttons on workspace installs", async () => {
-    resolveApprovalOverGatewayMock.mockResolvedValueOnce({
+    resolveApproval.mockResolvedValueOnce({
       applied: true,
       approval: { status: "allowed", decision: "allow-once", presentation: { kind: "plugin" } },
     });
@@ -1837,7 +1673,7 @@ describe("registerSlackInteractionEvents", () => {
       { respond },
     );
 
-    expect(resolveApprovalOverGatewayMock).toHaveBeenCalledWith(
+    expect(resolveApproval).toHaveBeenCalledWith(
       expect.objectContaining({
         approvalId: "req-123",
         approvalKind: "plugin",
@@ -1868,16 +1704,13 @@ describe("registerSlackInteractionEvents", () => {
   ])("ignores $name Slack callbacks emitted for link-only reply buttons", async (testCase) => {
     const app = await clickLinkButton(testCase.actionId, testCase.value);
 
-    expect(resolveApprovalOverGatewayMock).not.toHaveBeenCalled();
-    expect(dispatchPluginInteractiveHandlerMock).not.toHaveBeenCalled();
-    expect(enqueueSessionEventMock).not.toHaveBeenCalled();
-    expect(app.client.chat.update).not.toHaveBeenCalled();
+    expectNotCalled(resolveApproval, dispatchPlugin, enqueueEvent, app.client.chat.update);
   });
 
   it("routes unrelated buttons that only share the session-link prefix", async () => {
     await clickLinkButton("openclaw:session_linked");
 
-    expect(dispatchPluginInteractiveHandlerMock).toHaveBeenCalled();
+    expect(dispatchPlugin).toHaveBeenCalled();
   });
 });
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */
