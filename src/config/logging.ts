@@ -1,5 +1,5 @@
 import fs from "node:fs";
-import { sanitizeTerminalText } from "../../packages/terminal-core/src/safe-text.js";
+import { terminalText } from "../../packages/terminal-core/src/safe-text.js";
 import { theme } from "../../packages/terminal-core/src/theme.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { displayPath } from "../utils.js";
@@ -15,7 +15,7 @@ type LogConfigUpdatedOptions = {
 export function formatConfigFilePath(
   path: string = resolveConfigPath(process.env, resolveStateDir()),
 ): string {
-  return sanitizeTerminalText(displayPath(path));
+  return displayPath(path);
 }
 
 /** Builds the config-updated log message, including backup detail only when it exists. */
@@ -24,7 +24,7 @@ export function formatConfigUpdatedMessage(
   opts: LogConfigUpdatedOptions = {},
 ): string {
   const displayConfigPath = theme.muted(formatConfigFilePath(path));
-  const suffix = opts.suffix ? ` ${opts.suffix}` : "";
+  const suffix = opts.suffix ? terminalText` ${opts.suffix}` : "";
   const backupPath = opts.backupPath === undefined ? `${path}.bak` : opts.backupPath;
   const lines = [`Updated config: ${displayConfigPath}${suffix}`];
   if (backupPath && fs.existsSync(backupPath)) {

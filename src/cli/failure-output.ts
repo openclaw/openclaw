@@ -1,5 +1,6 @@
 // Shared root CLI failure formatting with debug stack gating and recovery hints.
 import { isForegroundGatewayRunArgv } from "../../gateway-run-argv.mjs";
+import { terminalText } from "../../packages/terminal-core/src/safe-text.js";
 import { isInvalidConfigError } from "../config/io.invalid-config.js";
 import { isGatewayTransportError } from "../gateway/transport-error.js";
 import { getRootOptionAwareCommandPath } from "../infra/cli-root-options.js";
@@ -300,7 +301,13 @@ export function formatCliFailureLines(options: FormatCliFailureOptions): string[
         error.name === "StateDatabaseMaintenanceScopeError"),
   );
   const reason = (error: unknown) =>
-    `[openclaw] Reason: ${formatCliOperatorError(error, { argv, env })}`;
+    isInvalidConfigError(error) && typeof error.configPath === "string"
+      ? terminalText`[openclaw] Reason: Invalid config at ${formatErrorMessage(error.configPath)}:\n` +
+        (error.details ?? "")
+          .split("\n")
+          .map((line) => terminalText`${formatErrorMessage(line)}`)
+          .join("\n")
+      : terminalText`[openclaw] Reason: ${formatCliOperatorError(error, { argv, env })}`;
   if (!showDebugDetails && !showUpdateDiagnostics) {
     if (
       options.error instanceof UpdateSchemaRefusalError ||
@@ -335,7 +342,7 @@ export function formatCliFailureLines(options: FormatCliFailureOptions): string[
     lines.push("[openclaw] Stack:");
     for (const line of formatUncaughtError(options.error).split("\n")) {
       if (line.trim().length > 0) {
-        lines.push(`[openclaw] ${line}`);
+        lines.push(terminalText`[openclaw] ${line}`);
       }
     }
   }

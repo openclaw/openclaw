@@ -5,12 +5,7 @@ import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { buildWorkspaceSkillStatus } from "../skills/discovery/status.js";
 import { writeWorkspaceSkills } from "../skills/test-support/e2e-test-helpers.js";
 import { captureEnv } from "../test-utils/env.js";
-import {
-  formatSkillInfo,
-  formatSkillsCheck,
-  formatSkillsList,
-  formatSkillsWorkshopList,
-} from "./skills-cli.format.js";
+import { formatSkillInfo, formatSkillsCheck, formatSkillsList } from "./skills-cli.format.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterAll);
 describe("skills descriptor formatting", () => {
@@ -21,28 +16,7 @@ describe("skills descriptor formatting", () => {
   });
   afterAll(() => envSnapshot.restore());
 
-  it.each([
-    {
-      root: "/workshop/café\u001b]0;untrusted-title\u0007\u001b[31m\r\noperator-forged\tend\u009f/workshop-skills",
-      displayed: "/workshop/café\\r\\noperator-forged\\tend/workshop-skills",
-    },
-    {
-      root: "/workshop/ordinary-agent/workshop-skills",
-      displayed: "/workshop/ordinary-agent/workshop-skills",
-    },
-  ])("renders Workshop root paths as single-line text ($displayed)", ({ root, displayed }) => {
-    const result = { agentId: "main", mode: "off" as const, root, skills: [], archived: [] };
-
-    const output = formatSkillsWorkshopList(result);
-
-    expect(stripAnsi(output).split("\n")).toContain(`Root: ${displayed}`);
-    expect(stripAnsi(output).replaceAll("\n", "")).not.toMatch(/\p{Cc}/u);
-    expect(output).not.toContain("\u001b]0;untrusted-title");
-    expect(output).toContain("No learned skills.");
-    expect(result.root).toBe(root);
-  });
-
-  it("keeps C1 tab-separated descriptions in their table cell", async () => {
+  it("escapes descriptor controls before laying out table cells", async () => {
     const description = "left\x9b31\tmright\x9b0m";
     const workspaceDir = tempDirs.make("tab-spacing-");
     await writeWorkspaceSkills(workspaceDir, [
@@ -62,7 +36,7 @@ describe("skills descriptor formatting", () => {
     const row = stripAnsi(formatSkillsList(report, {}))
       .split("\n")
       .find((line) => line.includes("tab-spacing"));
-    expect(row?.split(/[|│]/u)[3]?.trim()).toBe("left right");
+    expect(row?.split(/[|│]/u)[3]?.trim()).toBe("left\\tright");
   });
 
   it("preserves description and path whitespace in skills JSON output", async () => {

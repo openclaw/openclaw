@@ -1,4 +1,5 @@
 import type { Command } from "commander";
+import { terminalText } from "../../packages/terminal-core/src/safe-text.js";
 import { isConfigReadFailure } from "../config/io.invalid-config.js";
 import { AUTO_MANAGED_CONFIG_META_PATHS } from "../config/io.meta.js";
 import { formatConfigIssueLines, normalizeConfigIssues } from "../config/issue-format.js";
@@ -256,7 +257,7 @@ export async function runConfigGet(opts: { path: string; json?: boolean; runtime
       writeRuntimeJson(runtime, formatCliJsonFailure(err));
       exitCliAfterOutput(runtime, 1);
     }
-    runtime.error(danger(formatErrorMessage(err)));
+    runtime.error(danger(terminalText`${formatErrorMessage(err)}`));
     exitCliAfterOutput(runtime, 1);
   }
 }
@@ -444,7 +445,7 @@ export function registerConfigCli(program: Command) {
         }
         writeRuntimeStdout(runtime, `${path}\n`);
       } catch (err) {
-        runtime.error(danger(formatErrorMessage(err)));
+        runtime.error(danger(terminalText`${formatErrorMessage(err)}`));
         exitCliAfterOutput(runtime, 1);
       }
     });
@@ -464,7 +465,7 @@ export function registerConfigCli(program: Command) {
           properties: { $schema: { type: "string" }, ...schema.properties },
         });
       } catch (err) {
-        runtime.error(danger(`Config schema error: ${formatErrorMessage(err)}`));
+        runtime.error(danger(terminalText`Config schema error: ${formatErrorMessage(err)}`));
         exitCliAfterOutput(runtime, 1);
       }
     });
@@ -561,7 +562,7 @@ export function registerConfigCli(program: Command) {
             0,
           );
         } else {
-          runtime.error(danger(`Config validation error: ${formatErrorMessage(err)}`));
+          runtime.error(danger(terminalText`Config validation error: ${formatErrorMessage(err)}`));
         }
         exitCliAfterOutput(runtime, 1);
       }

@@ -2,7 +2,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { isPathInside } from "@openclaw/fs-safe/path";
 import * as tar from "tar";
-import { sanitizeTerminalText } from "../../packages/terminal-core/src/safe-text.js";
+import { terminalText } from "../../packages/terminal-core/src/safe-text.js";
 import { readConfigFileSnapshot, resolveStateDir } from "../config/config.js";
 import { prepareRestoredClientCredentials } from "../infra/client-credential-restore.js";
 import { formatDiskSpaceBytes, tryReadDiskSpace } from "../infra/disk-space.js";
@@ -262,18 +262,16 @@ async function restorePostgresExports(
 
 function formatRestoreResult(result: BackupRestoreResult): string {
   return [
-    `Backup archive restored to staging: ${shortenHomePath(result.targetPath)}`,
-    `Verified archive: ${shortenHomePath(result.archivePath)}`,
-    `Archive root: ${result.archiveRoot}`,
-    `Archive entries restored: ${result.entryCount}`,
+    terminalText`Backup archive restored to staging: ${shortenHomePath(result.targetPath)}`,
+    terminalText`Verified archive: ${shortenHomePath(result.archivePath)}`,
+    terminalText`Archive root: ${result.archiveRoot}`,
+    terminalText`Archive entries restored: ${result.entryCount}`,
     "",
     "Rollback warnings:",
-    ...result.warnings.map((warning) => `- ${warning}`),
+    ...result.warnings.map((warning) => terminalText`- ${warning}`),
     "",
     "Activation is explicit: stop the Gateway, move the restored asset tree into place or point OPENCLAW_STATE_DIR at the restored state asset, then run `openclaw doctor`.",
-  ]
-    .map(sanitizeTerminalText)
-    .join("\n");
+  ].join("\n");
 }
 
 /** Verify first, then extract a whole backup archive into a fresh staging directory. */

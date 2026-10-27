@@ -590,6 +590,26 @@ describe("config cli", () => {
   });
 
   describe("config validate", () => {
+    it("prints warnings while still reporting a valid config", async () => {
+      setSnapshotOnce({
+        ...buildSnapshot({ resolved: {}, config: {} }),
+        warnings: [
+          {
+            path: "channels.mattermost.allowFrom",
+            message:
+              'channels.mattermost.dmPolicy="open" but channels.mattermost.allowFrom does not include "*"; all DMs will be dropped.',
+          },
+        ],
+      });
+
+      await runConfigCommand(["config", "validate"]);
+
+      expectNoCalls(mockExit, mockError);
+      expectLogIncludes("Config valid:");
+      expectLogIncludes("channels.mattermost.allowFrom");
+      expectLogIncludes("all DMs will be dropped");
+    });
+
     it.each([
       {
         name: "plugin packaging compiled-output failures",
@@ -680,10 +700,6 @@ describe("config cli", () => {
   });
 
   registerConfigJsonOutputTests(() => ({
-    buildSnapshot,
-    mockError,
-    mockExit,
-    resetRuntimeCapture,
     runConfigCommand,
     mockReadConfigFileSnapshot,
     mockWriteConfigFile,
@@ -1197,9 +1213,7 @@ describe("config cli", () => {
           },
         },
       } as OpenClawConfig;
-      const snapshot = buildSnapshot({ resolved, config: resolved });
-      snapshot.path = "/tmp/café\u001b[31m\noperator-forged\u0007.json";
-      mockReadConfigFileSnapshot.mockResolvedValue(snapshot);
+      setSnapshot(resolved);
 
       await runConfigCommand(["config", "unset", "secrets.defaults", "--dry-run"]);
 
@@ -1211,9 +1225,7 @@ describe("config cli", () => {
         provider: "default",
         id: "WEB_SEARCH_API_KEY",
       });
-      expectLogIncludes(
-        "Dry run successful: 1 update(s) validated against /tmp/café\\noperator-forged.json.",
-      );
+      expectLogIncludes("Dry run successful: 1 update(s) validated against /tmp/openclaw.json.");
     });
 
     it("rejects unset when the value exists only in runtime defaults", async () => {

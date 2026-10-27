@@ -1,3 +1,4 @@
+import { terminalText } from "../../../packages/terminal-core/src/safe-text.js";
 import {
   isDefaultInstallIdentity,
   resolveConfigPath,
@@ -612,8 +613,16 @@ export function renderPortDiagnosticsForCli({ port }: DaemonStatus, rpcOk?: bool
   return formatPortDiagnostics({
     port: port.port,
     status: port.status,
-    listeners: port.listeners,
-    hints: port.hints,
+    listeners: port.listeners.map((listener) => ({
+      ...listener,
+      user: listener.user ? terminalText`${listener.user}` : listener.user,
+      command: listener.command ? terminalText`${listener.command}` : listener.command,
+      commandLine: listener.commandLine
+        ? terminalText`${listener.commandLine}`
+        : listener.commandLine,
+      address: listener.address ? terminalText`${listener.address}` : listener.address,
+    })),
+    hints: port.hints.map((hint) => terminalText`${hint}`),
   });
 }
 

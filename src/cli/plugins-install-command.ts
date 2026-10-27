@@ -7,6 +7,7 @@ import type {
   PluginsInstallParams,
   PluginsInstallResult,
 } from "../../packages/gateway-protocol/src/schema/plugins.js";
+import { terminalText } from "../../packages/terminal-core/src/safe-text.js";
 import { theme } from "../../packages/terminal-core/src/theme.js";
 import { assertConfigWriteAllowedInCurrentMode, replaceConfigFile } from "../config/config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -42,7 +43,7 @@ import {
   withPluginLifecycleLease,
 } from "../plugins/plugin-lifecycle-lease.js";
 import { defaultRuntime, type RuntimeEnv } from "../runtime.js";
-import { shortenHomePath } from "../utils.js";
+import { displayPath } from "../utils.js";
 import { resolveClawHubInstallConfirmation } from "./clawhub-install-confirmation.js";
 import { resolveInstallPolicyWarningAcknowledgementCliOptions } from "./install-policy-warning-acknowledgement.js";
 import { confirmNonClawHubInstall } from "./non-clawhub-install-acknowledgement.js";
@@ -67,7 +68,7 @@ export async function runPluginInstallCommand(params: RunPluginInstallCommandPar
   const runtime = params.runtime ?? defaultRuntime;
   const preflight = await resolvePluginInstallPreflight(params);
   if (!preflight.ok) {
-    runtime.error(preflight.error);
+    runtime.error(terminalText`${preflight.error}`);
     return runtime.exit(1);
   }
   const { raw, opts, sourcePlan } = preflight;
@@ -111,7 +112,7 @@ export async function runPluginInstallCommand(params: RunPluginInstallCommandPar
       mode: preflight.installMode,
     };
     if (sourcePlan?.warning) {
-      runtime.log(theme.warn(sourcePlan.warning));
+      runtime.log(theme.warn(terminalText`${sourcePlan.warning}`));
     }
     result = await installPluginWithHookFallback({
       request: { ...request, ...(opts.enable === false ? { enable: false } : {}) },
@@ -235,7 +236,7 @@ export async function runPluginInstallCommand(params: RunPluginInstallCommandPar
       },
     });
   } catch (error) {
-    runtime.error(formatErrorMessage(error));
+    runtime.error(terminalText`${formatErrorMessage(error)}`);
     return runtime.exit(1);
   }
   if (!result.ok) {
@@ -243,7 +244,7 @@ export async function runPluginInstallCommand(params: RunPluginInstallCommandPar
       result.code !== CLAWHUB_INSTALL_ERROR_CODE.CLAWHUB_DOWNLOAD_BLOCKED ||
       !result.warning?.trim()
     ) {
-      runtime.error(result.error);
+      runtime.error(terminalText`${result.error}`);
     }
     return runtime.exit(1);
   }
@@ -282,8 +283,8 @@ async function attemptHookInstall(
       config: params.snapshot.config,
       mode: source.mode,
       logger: {
-        info: (message: string) => runtime.log(message),
-        warn: (message: string) => runtime.log(theme.warn(message)),
+        info: (message: string) => runtime.log(terminalText`${message}`),
+        warn: (message: string) => runtime.log(theme.warn(terminalText`${message}`)),
       },
       ...options,
     },
@@ -401,7 +402,7 @@ async function installHookPackLocal(
     if (source.source === "npm" && source.pin) {
       pinMessages.push(
         resolvedSpec
-          ? `Pinned npm install record to ${resolvedSpec}.`
+          ? terminalText`Pinned npm install record to ${resolvedSpec}.`
           : theme.warn("Could not resolve exact npm version for --pin; storing original npm spec."),
       );
     }
@@ -470,8 +471,8 @@ async function installHookPackLocal(
       await transaction.commit();
       runtime.log(
         linked
-          ? `Linked hook pack path: ${shortenHomePath(source.path)}`
-          : `Installed hook pack: ${result.hookPackId}`,
+          ? `Linked hook pack path: ${displayPath(source.path)}`
+          : terminalText`Installed hook pack: ${result.hookPackId}`,
       );
       runtime.log(
         "Hook install/link config can activate immediately in hybrid mode; code-only updates and reload mode off need a Gateway restart.",
@@ -500,7 +501,9 @@ async function installInspectedHookPack(
       probe.code !== HOOK_INSTALL_ERROR_CODE.EMPTY_OPENCLAW_HOOKS
     ) {
       (params.runtime ?? defaultRuntime).log(
-        theme.warn(`Hook-pack fallback skipped: package inspection failed: ${probe.error}`),
+        theme.warn(
+          terminalText`Hook-pack fallback skipped: package inspection failed: ${probe.error}`,
+        ),
       );
     }
     return undefined;
@@ -557,12 +560,12 @@ async function installPluginWithHookFallback(params: InstallParams): Promise<Ins
       }
       runtime.log(
         installRequest.source === "local" && installRequest.link
-          ? `Linked plugin path: ${shortenHomePath(installRequest.path)}`
-          : `Installed plugin: ${result.plugin.id}`,
+          ? `Linked plugin path: ${displayPath(installRequest.path)}`
+          : terminalText`Installed plugin: ${result.plugin.id}`,
       );
       runtime.log(
         result.application
-          ? `Applied in Gateway generation ${result.application.generation}.`
+          ? terminalText`Applied in Gateway generation ${result.application.generation}.`
           : "Saved for the next Gateway start.",
       );
       return { ok: true };

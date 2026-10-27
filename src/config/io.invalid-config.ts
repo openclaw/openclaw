@@ -3,6 +3,7 @@
  * All terminal-facing text is sanitized here so callers can reuse the same failure surface.
  */
 import { extractErrorCode } from "@openclaw/normalization-core/error-coercion";
+import { terminalText } from "../../packages/terminal-core/src/safe-text.js";
 import type { DedupeCache } from "../infra/dedupe.js";
 import { formatConfigIssueLines } from "./issue-format.js";
 import type { ConfigFileSnapshot, ConfigValidationIssue } from "./types.js";
@@ -31,6 +32,7 @@ export function formatInvalidConfigDetails(issues: ConfigValidationIssue[]): str
 
 type InvalidConfigError = Error & {
   code: "INVALID_CONFIG";
+  configPath?: string;
   details?: string;
   recovery?: "doctor" | "manual";
   diagnosticEmitted?: boolean;
@@ -46,6 +48,7 @@ export function createInvalidConfigError(
   return Object.assign(new Error(`Invalid config at ${configPath}:\n${details}`), {
     name: "InvalidConfigError",
     code: "INVALID_CONFIG" as const,
+    configPath,
     details,
     recovery: options.recovery ?? "doctor",
     diagnosticEmitted: false,
@@ -86,7 +89,7 @@ export function throwInvalidConfig(params: {
   // Dedupe the full diagnostic: a later invalid config at the same path may need a different repair.
   // Record only after logging succeeds so a failed logger cannot silence a subsequent attempt.
   if (!params.loggedConfigPaths.peek(error.message)) {
-    params.logger.error(error.message);
+    params.logger.error(terminalText`Invalid config at ${params.configPath}:\n` + details);
   }
   params.loggedConfigPaths.check(error.message);
   error.diagnosticEmitted = true;

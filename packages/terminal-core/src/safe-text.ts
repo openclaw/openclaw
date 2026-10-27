@@ -14,3 +14,19 @@ export function sanitizeTerminalText(input: string): string {
     control === "\r" ? "\\r" : control === "\n" ? "\\n" : control === "\t" ? "\\t" : "",
   );
 }
+
+/** Format human output before styling: literals own layout, values cannot supply controls. */
+export function terminalText(
+  literals: TemplateStringsArray,
+  ...values: (string | number | bigint | boolean | null | undefined)[]
+): string {
+  let result = "";
+  let index = 0;
+  for (const literal of literals) {
+    result += literal;
+    if (index < values.length) {
+      result += sanitizeTerminalText(String(values[index++]));
+    }
+  }
+  return result;
+}

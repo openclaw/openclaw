@@ -7,10 +7,7 @@ import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
-import {
-  hasTerminalControl,
-  sanitizeTerminalText,
-} from "../../packages/terminal-core/src/safe-text.js";
+import { hasTerminalControl, terminalText } from "../../packages/terminal-core/src/safe-text.js";
 import { resolveStateDir } from "../config/paths.js";
 import { isErrno } from "../infra/errors.js";
 import { decodeWindowsTextFileBuffer } from "../infra/windows-encoding.js";
@@ -493,9 +490,7 @@ export async function installCompletion(shell: string, yes: boolean, binName = "
         throw error;
       }
       if (!yes) {
-        console.warn(
-          `Profile not found at ${sanitizeTerminalText(profilePath)}. Creating a new one.`,
-        );
+        console.warn(terminalText`Profile not found at ${profilePath}. Creating a new one.`);
       }
       content = "";
     }
@@ -547,14 +542,14 @@ export async function installCompletion(shell: string, yes: boolean, binName = "
     }
     if (next === content) {
       if (!yes) {
-        console.log(`Completion already installed in ${sanitizeTerminalText(profilePath)}`);
+        console.log(terminalText`Completion already installed in ${profilePath}`);
       }
       return;
     }
 
     if (!yes) {
       const action = hadExisting ? "Updating" : "Installing";
-      console.log(`${action} completion in ${sanitizeTerminalText(profilePath)}...`);
+      console.log(terminalText`${action} completion in ${profilePath}...`);
     }
 
     await publishOutputFileAtomically({
