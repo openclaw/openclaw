@@ -8,6 +8,8 @@ import {
   resetAgentRunRegistryForTest,
 } from "../infra/agent-run-registry.js";
 import { createSessionRowProjectionContext } from "./session-row-projection-context.js";
+import * as records from "./session-row-projection-record.js";
+import { createSessionRowProjectionFixture } from "./session-row-projection.test-support.js";
 
 const contexts: ReturnType<typeof createSessionRowProjectionContext>[] = [];
 afterEach(() => {
@@ -129,7 +131,7 @@ it("patches list facts after keyed publications without rebuilding for progress-
     "terminal",
   );
   expect(context.current.subagentRuns.countActiveDescendantRuns(parent)).toBe(0);
-  expect(context.materializedRevisions.subagentRevision).toBe(initialRevision + 1);
+  expect(context.materializedRevisions.subagentRevision).toBe(initialRevision);
   expect(builds).toHaveBeenCalledTimes(1);
 
   subagentRuns.delete(run.runId);
@@ -142,4 +144,139 @@ it("patches list facts after keyed publications without rebuilding for progress-
   subagentRuns.clear();
   prepare(103);
   expect(builds).toHaveBeenCalledTimes(2);
+});
+
+it("refreshes only changed child-list and swarm owners, including old owners and retirement", () => {
+  const cfg = { agents: { entries: { main: {} } } };
+  const other = "agent:main:other-parent";
+  const unrelated = "agent:main:unrelated";
+  const swarm = "agent:main:swarm";
+  let run = createSubagentRunRecord({
+    runId: "scoped",
+    childSessionKey: child,
+    requesterSessionKey: parent,
+    requesterAgentId: "main",
+    swarmRequesterSessionKey: swarm,
+    groupId: "group",
+    collect: true,
+    createdAt: 1,
+    startedAt: 1,
+  });
+  subagentRuns.set(run.runId, run);
+  const { context } = fixture();
+  const projection = createSessionRowProjectionFixture({
+    cfg,
+    rowContext: context.current,
+    store: Object.fromEntries(
+      [child, parent, other, unrelated, swarm].map((key) => [
+        key,
+        { sessionId: key, updatedAt: 1 },
+      ]),
+    ),
+  });
+  const rows = new Map(
+    projection
+      .selectEntries()
+      .filter(records.ready)
+      .map((row) => [records.identity(row), row]),
+  );
+  const referenced = (ref: string) =>
+    [...rows.values()].find(
+      (row) => records.logicalSessionRowIdentity(row.agentId, row.key) === ref,
+    );
+  for (const row of rows.values()) {
+    row.parents = records.readSessionRowParents(row, row.entry, cfg, context.current, referenced);
+  }
+  const refreshed: string[] = [];
+  const readLinks = (row: records.Row) => {
+    refreshed.push(row.key);
+    return [...rows.values()]
+      .filter((candidate) =>
+        candidate.parents.has(records.logicalSessionRowIdentity(row.agentId, row.key)),
+      )
+      .map((candidate) => ({
+        key: candidate.key,
+        entry: candidate.entry,
+        agentId: candidate.agentId,
+        storePath: candidate.storeTarget.storePath,
+      }));
+  };
+  const present = () => {
+    for (const row of rows.values()) {
+      context.preparePresentation(row, readLinks);
+    }
+  };
+  const prepare = (epoch: number) =>
+    context.prepare(
+      epoch,
+      cfg,
+      ({ key }) => [...rows.values()].filter((row) => row.key === key),
+      (row) => {
+        if (records.ready(row)) {
+          rows.set(records.identity(row), row);
+        }
+      },
+      referenced,
+    );
+  const row = (key: string) => [...rows.values()].find((value) => value.key === key)!;
+  present();
+  refreshed.length = 0;
+  run = { ...run, collectorCompletion: { status: "done" } };
+  subagentRuns.set(run.runId, run);
+  subagentRuns.commitOwnership(run);
+  prepare(1);
+  present();
+  expect(refreshed).toEqual([swarm]);
+  expect(row(swarm).materialized.row.swarm?.groups[0]?.done).toBe(1);
+  expect(row(parent).materialized.source.childLinks?.map((link) => link.key)).toEqual([child]);
+
+  refreshed.length = 0;
+  run = { ...run, requesterSessionKey: other, swarmRequesterSessionKey: other };
+  subagentRuns.set(run.runId, run);
+  subagentRuns.commitOwnership(run);
+  prepare(2);
+  present();
+  expect(new Set(refreshed)).toEqual(new Set([parent, other, swarm]));
+  expect(row(parent).materialized.source.childLinks).toEqual([]);
+  expect(row(other).materialized.source.childLinks?.map((link) => link.key)).toEqual([child]);
+  expect(row(swarm).materialized.row.swarm).toBeUndefined();
+  expect(row(other).materialized.row.swarm?.groups[0]?.done).toBe(1);
+
+  refreshed.length = 0;
+  run = { ...run, controllerSessionKey: parent };
+  subagentRuns.set(run.runId, run);
+  subagentRuns.commitOwnership(run);
+  prepare(3);
+  present();
+  expect(new Set(refreshed)).toEqual(new Set([parent, other]));
+  expect(row(other).materialized.source.childLinks).toEqual([]);
+  expect(row(parent).materialized.source.childLinks?.map((link) => link.key)).toEqual([child]);
+
+  refreshed.length = 0;
+  subagentRuns.delete(run.runId);
+  subagentRuns.confirmRetirement(run);
+  prepare(4);
+  present();
+  expect(new Set(refreshed)).toEqual(new Set([parent, other]));
+  expect(row(parent).materialized.source.childLinks).toEqual([]);
+  expect(row(other).materialized.source.childLinks).toEqual([]);
+  expect(row(other).materialized.row.swarm).toBeUndefined();
+
+  subagentRuns.set(run.runId, run);
+  subagentRuns.commitOwnership(run);
+  prepare(5);
+  present();
+  subagentRuns.clear();
+  context.invalidate({ all: true, scope: "stores" });
+  prepare(6);
+  present();
+  expect(row(parent).materialized.source.childLinks).toEqual([]);
+  expect(row(other).materialized.row.swarm).toBeUndefined();
+
+  refreshed.length = 0;
+  context.invalidate({ all: true, scope: "config" });
+  prepare(7);
+  present();
+  expect(refreshed).toHaveLength(rows.size);
+  projection.dispose();
 });
