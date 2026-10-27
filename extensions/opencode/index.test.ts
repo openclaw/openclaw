@@ -21,7 +21,7 @@ import {
 } from "./provider-catalog.js";
 
 const requireRecord = createRequireRecord("record", "expected-label-record");
-const noAuth = () => ({ apiKey: undefined, mode: "none" as const, source: "none" });
+const noAuth = () => ({ apiKey: undefined, mode: "none", source: "none" }) as const;
 const blockFetch = () =>
   vi.spyOn(globalThis, "fetch").mockRejectedValue(new Error("unexpected fetch"));
 
@@ -241,7 +241,7 @@ describe("opencode provider plugin", () => {
       ["claude-opus-5", "anthropic-messages", "https://opencode.ai/zen"],
       ["gpt-5.6-sol", "openai-responses", "https://opencode.ai/zen/v1"],
       ["gemini-3.6-flash", "google-generative-ai", "https://opencode.ai/zen/v1"],
-    ]) {
+    ] as const) {
       expect(dynamicModel(id)).toMatchObject({ api, baseUrl });
     }
     expectSeedModels(manifest.modelCatalog.providers.opencode.models);
@@ -330,10 +330,11 @@ describe("opencode provider plugin", () => {
         Response.json(upstreamCatalog([{ id: modelId, npm: "@ai-sdk/anthropic" }])),
       );
     const { prepareDynamicModel } = await registerFixture();
+    const providerConfig = { baseUrl: "https://opencode.ai/zen/v1", models: [] };
 
     await expect(
       prepareDynamicModel(modelId, {
-        config: { models: { providers: { opencode: { baseUrl: "https://opencode.ai/zen/v1" } } } },
+        config: { models: { providers: { opencode: providerConfig } } },
       }),
     ).resolves.toMatchObject({
       id: modelId,
