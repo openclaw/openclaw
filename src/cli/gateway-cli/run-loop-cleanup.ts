@@ -9,86 +9,12 @@ import {
 import { formatErrorMessage } from "../../infra/errors.js";
 import { cleanupSnapshotOperations } from "../../infra/sqlite-readonly-location-cleanup.js";
 import type { SubsystemLogger } from "../../logging/subsystem.js";
+import { GRACEFUL_CANCEL_TIMEOUT_MS } from "../../process/supervisor/cancellation-policy.js";
 import { shutdownProcessSupervisor } from "../../process/supervisor/index.js";
 import { settlesWithin } from "../../shared/settle-within.js";
 import { flushGatewayLogsBeforeExit } from "./run-loop-exit.js";
 import type { GatewayShutdownFailure } from "./run-loop-terminal.js";
 import type { ShutdownHardExitWatchdog } from "./shutdown-hard-exit.js";
-
-/** Called only after settleFinalResources has joined every admitted cleanup owner. */
-export function finishGatewayRunCleanup(params: {
-  cleanup: Pick<ReturnType<typeof createGatewayRunCleanup>, "drained" | "failed">;
-  failures: unknown[];
-  loopFailure?: { error: unknown };
-  hostExitRequested: boolean;
-  hostExitCode: number;
-  terminalExitCode: number | undefined;
-  ownsProcessLifecycle: boolean | undefined;
-}): number {
-  const { cleanup, failures, loopFailure, hostExitRequested, hostExitCode, terminalExitCode } =
-    params;
-  if (loopFailure) {
-    failures.unshift(loopFailure.error);
-  }
-  const code = hostExitRequested && terminalExitCode === 0 ? hostExitCode : (terminalExitCode ?? 0);
-  // Foreground completion and process exit are not producer barriers. This follows
-  // canonical close, detached work, and retained cleanup, including failed joins.
-  finishDiagnosticsTimeline(
-    params.ownsProcessLifecycle === true &&
-      cleanup.drained &&
-      !cleanup.failed &&
-      failures.length === 0 &&
-      code === 0,
-  );
-  if (failures.length === 1) {
-    throw failures[0];
-  }
-  if (failures.length > 1) {
-    throw new AggregateError(failures, "Gateway loop and final resource cleanup failed", {
-      cause: failures[0],
-    });
-  }
-  // Cleanup failure promotes success, but cannot replace a supervisor-owned
-  // failure status that already selects its terminal recovery behavior.
-  return cleanup.failed && code === 0 ? 1 : code;
-}
-
-/** Retained handles require process exit even when final persistence reports a real failure. */
-export async function finishGatewayRun(params: {
-  code: number;
-  failed: boolean;
-  errors: unknown[];
-  ownsProcessLifecycle?: boolean;
-  resourcesRetained: boolean;
-  logger: Pick<SubsystemLogger, "error">;
-  flushLogs: () => Promise<boolean>;
-}): Promise<number> {
-  // A cleanup failure promotes success, preserving the supervisor's existing nonzero status.
-  let code = (params.failed || params.errors.length > 0) && params.code === 0 ? 1 : params.code;
-  if (params.resourcesRetained && params.ownsProcessLifecycle) {
-    for (const error of params.errors) {
-      params.logger.error(formatErrorMessage(error));
-    }
-    try {
-      await params.flushLogs();
-    } catch (error) {
-      code ||= 1;
-      params.logger.error(formatErrorMessage(error));
-    }
-    // Required writes/logs had their bounded grace. Keep the native watchdog
-    // as a fallback for Node's rare V8 exit deadlock.
-    return process.exit(code);
-  }
-  if (params.errors.length === 1) {
-    throw params.errors[0];
-  }
-  if (params.errors.length > 1) {
-    throw new AggregateError(params.errors, "Gateway loop and final resource cleanup failed", {
-      cause: params.errors[0],
-    });
-  }
-  return code;
-}
 
 /** Retains accepted cleanup, including native watchdog cancellation, until its real settlement. */
 export function createGatewayRunCleanup(
@@ -193,7 +119,10 @@ export function createGatewayRunCleanup(
       );
       return { step, error };
     },
-    async stopStartupOperations(owner: { drain: () => Promise<void> }, work?: Promise<unknown>) {
+    async stopStartupOperations(
+      owner: { drain: () => Promise<void>; cancelledWith: (error: unknown) => boolean },
+      work?: Promise<unknown>,
+    ) {
       let failure: { error: unknown } | undefined;
       try {
         await settleResource("restart.close.startup-operations", () => owner.drain(), 5_000);
@@ -201,34 +130,61 @@ export function createGatewayRunCleanup(
         failure = { error };
       }
       // A successful late handle is published before the startup promise settles.
-      await settleResource(
-        "restart.close.startup",
-        () =>
-          work?.then(
-            () => {},
-            () => {},
-          ),
-        5_000,
-      );
+      try {
+        await settleResource(
+          "restart.close.startup",
+          async () => {
+            try {
+              await work;
+            } catch (error) {
+              if (!owner.cancelledWith(error)) {
+                throw error;
+              }
+            }
+          },
+          5_000,
+        );
+      } catch (error) {
+        failure ??= { error };
+      }
       return failure;
     },
-    finish: (code: number, errors: unknown[]) =>
-      finishGatewayRun({
-        code,
-        errors,
-        failed: cleanupFailed,
-        resourcesRetained,
-        ownsProcessLifecycle,
-        logger,
-        flushLogs,
-      }),
+    finish(code: number, errors: unknown[]) {
+      // Final diagnostics follow the actual producer joins, including failed cleanup.
+      finishDiagnosticsTimeline(
+        ownsProcessLifecycle === true &&
+          processResourcesDrained &&
+          !resourcesRetained &&
+          !cleanupFailed &&
+          errors.length === 0 &&
+          code === 0,
+      );
+      if (errors.length === 1) {
+        throw errors[0];
+      }
+      if (errors.length > 1) {
+        throw new AggregateError(errors, "Gateway loop and final resource cleanup failed", {
+          cause: errors[0],
+        });
+      }
+      const exitCode = cleanupFailed && code === 0 ? 1 : code;
+      if (ownsProcessLifecycle) {
+        // Leaked handles remain the armed native watchdog's responsibility.
+        process.exitCode = exitCode;
+      }
+      return exitCode;
+    },
     async stopOwnedProcesses(): Promise<void> {
       if (!ownsProcessLifecycle) {
         return;
       }
       try {
         // Idle background commands outlive their agent loop, including retained runtimes.
-        await settleResource("process cleanup", shutdownProcessSupervisor, 3_000);
+        await settleResource(
+          "process cleanup",
+          shutdownProcessSupervisor,
+          GRACEFUL_CANCEL_TIMEOUT_MS + 1_000,
+        );
       } catch (error) {
         retainResources("process cleanup", formatErrorMessage(error));
       }

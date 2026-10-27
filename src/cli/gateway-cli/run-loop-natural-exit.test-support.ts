@@ -11,6 +11,7 @@ import {
   createRuntimeWithExitSignal,
   createSignaledStart,
   runGatewayLoop,
+  setPlatform,
   systemdReply,
   withLifecycleClock,
   waitForStart,
@@ -321,54 +322,52 @@ export function registerNaturalExitTests(waitForLoopTurn: () => Promise<void>) {
     },
   );
 
-  it.each(["close", "restart-startup"] as const)(
-    "does not report success when %s fails after a supervised zero-status deadline",
-    async (phase) => {
-      useSystemdSupervisor();
-      const failure = new Error("late owned cleanup failed");
-      const phaseGate = createLifecycleGate();
-      const drained = vi.fn();
-      const close = createCloseMock();
-      if (phase === "close") {
-        close.mockImplementationOnce(phaseGate.wait);
-      }
-      const initial = createSignaledStart(close);
-      const start = initial.start;
-      if (phase === "restart-startup") {
-        // Vitest reuses existing mocks; queue the implementation, not the mock itself.
-        const initialStart = start.getMockImplementation()!;
-        start.mockImplementationOnce(initialStart).mockImplementationOnce(async () => {
-          await phaseGate.wait();
-          return createGatewayServer(close);
-        });
-      }
-      const { runtime } = createRuntimeWithExitSignal();
-      await withIsolatedSignals(async ({ captureSignal }) => {
-        const loop = runGatewayLoop({ start, runtime, onProcessResourcesSettled: drained });
-        const outcome = loop.then(
-          (code) => ({ code }),
-          (error: unknown) => ({ error }),
-        );
-        await waitForStart(initial.started);
-        if (phase === "restart-startup") {
-          captureSignal("SIGUSR2")();
-          await phaseGate.entered;
-        }
-        await withPhaseClock(phaseGate, async () => {
-          captureSignal("SIGTERM")();
-          await advanceWithoutCalls(25_000, runtime.exit);
-          phaseGate.reject(failure);
-          await vi.advanceTimersByTimeAsync(0);
-          await expect(outcome).resolves.toEqual(
-            phase === "close" ? { code: 1 } : { error: failure },
-          );
-          expect(drained).toHaveBeenCalledExactlyOnceWith(
-            phase === "close" ? "retained" : "drained",
-          );
-        });
+  it.each([
+    { phase: "close", heldMs: 25_000, boundary: "after the supervisor deadline" },
+    { phase: "restart-startup", heldMs: 2_999, boundary: "within the startup cleanup grace" },
+  ] as const)("does not report success when $phase fails $boundary", async ({ phase, heldMs }) => {
+    useSystemdSupervisor();
+    const failure = new Error("late owned cleanup failed");
+    const phaseGate = createLifecycleGate();
+    const drained = vi.fn();
+    const close = createCloseMock();
+    if (phase === "close") {
+      close.mockImplementationOnce(phaseGate.wait);
+    }
+    const initial = createSignaledStart(close);
+    const start = initial.start;
+    if (phase === "restart-startup") {
+      // Vitest reuses existing mocks; queue the implementation, not the mock itself.
+      const initialStart = start.getMockImplementation()!;
+      start.mockImplementationOnce(initialStart).mockImplementationOnce(async () => {
+        await phaseGate.wait();
+        return createGatewayServer(close);
       });
-    },
-  );
+    }
+    const { runtime } = createRuntimeWithExitSignal();
+    await withIsolatedSignals(async ({ captureSignal }) => {
+      const loop = runGatewayLoop({ start, runtime, onProcessResourcesSettled: drained });
+      const outcome = loop.then(
+        (code) => ({ code }),
+        (error: unknown) => ({ error }),
+      );
+      await waitForStart(initial.started);
+      if (phase === "restart-startup") {
+        captureSignal("SIGUSR2")();
+        await phaseGate.entered;
+      }
+      await withPhaseClock(phaseGate, async () => {
+        captureSignal("SIGTERM")();
+        await advanceWithoutCalls(heldMs, runtime.exit);
+        phaseGate.reject(failure);
+        await vi.advanceTimersByTimeAsync(0);
+        await expect(outcome).resolves.toEqual(
+          phase === "close" ? { code: 1 } : { error: failure },
+        );
+        expect(drained).toHaveBeenCalledExactlyOnceWith(phase === "close" ? "retained" : "drained");
+      });
+    });
+  });
 
   it.each(["host-retirement", "restart-preparation", "begin-boot"] as const)(
     "does not acquire another generation after a terminal decision during %s",
@@ -419,4 +418,45 @@ export function registerNaturalExitTests(waitForLoopTurn: () => Promise<void>) {
       }
     },
   );
+
+  it("bounds launchd provider cleanup before the printed native stop deadline", async () => {
+    setPlatform("darwin");
+    process.env.OPENCLAW_LAUNCHD_LABEL = "ai.openclaw.gateway";
+    f.readLaunchdStopTimeout.mockResolvedValue({
+      stop: { timeoutMs: 30_000, source: "launchd system/ai.openclaw.gateway exit timeout" },
+    });
+    f.hasManagedProviderLocalServices.mockReturnValue(true);
+    const providerCleanup = createDeferredCore();
+    f.stopManagedProviderLocalServices.mockReturnValue(providerCleanup.promise);
+    const custody = vi.fn();
+    await f.withRunningGateway(
+      async ({ captureSignal, close, start, runtime, exited }) => {
+        await withLifecycleClock(async () => {
+          try {
+            captureSignal("SIGTERM")();
+            await vi.advanceTimersByTimeAsync(4_999);
+            expect(close).toHaveBeenCalledOnce();
+            expect(f.stopManagedProviderLocalServices).toHaveBeenCalledOnce();
+            expect(runtime.exit).not.toHaveBeenCalled();
+            await vi.advanceTimersByTimeAsync(1);
+            await expect(exited).resolves.toBe(0);
+            expect(start).toHaveBeenCalledOnce();
+            expect(custody).toHaveBeenCalledExactlyOnceWith("retained");
+            expect(f.gatewayLog.warn).toHaveBeenCalledWith(
+              "restart.close.provider-local-services: cleanup exceeded 5000ms; resources remain",
+            );
+            expect(f.writeDiagnosticStabilityBundleForFailureSync).not.toHaveBeenCalled();
+            expect(f.gatewayLog.info).toHaveBeenCalledWith(
+              "shutdown budget at shutdown: drain=15000ms shutdown=25000ms reserve=10000ms exitMargin=5000ms; source=launchd system/ai.openclaw.gateway exit timeout=30000ms",
+            );
+          } finally {
+            providerCleanup.resolve();
+            await vi.advanceTimersByTimeAsync(0);
+          }
+        });
+      },
+      false,
+      { onProcessResourcesSettled: custody },
+    );
+  });
 }

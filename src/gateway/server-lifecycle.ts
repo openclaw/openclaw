@@ -529,9 +529,14 @@ export async function prepareGatewayLifecycle(params: {
         resolveGatewayContext: runtime.resolvePluginGatewayContext,
         preparePluginRegistryClose: () => pluginRuntime.prepareClose(),
         persistRunningSessionsForRestart: async (signal) => {
+          const cfg = runtimeState.configReloader.getCommittedRuntimeConfig?.();
+          // Input admission stays closed until this instance's config owner is prepared.
+          if (!cfg) {
+            return;
+          }
           const { persistRunningSessionsForRestart } = await import("./session-restart-resume.js");
           await persistRunningSessionsForRestart({
-            cfg: getRuntimeConfig(),
+            cfg,
             signal,
           });
         },
@@ -639,7 +644,13 @@ export async function prepareGatewayLifecycle(params: {
     runClosePrelude,
     sealAndJoinRegisteredSidecarStops,
   };
-  const closeOnStartupFailure = async () => {
+  let startupFailureClose: Promise<void> | undefined;
+  const closeOnStartupFailure = () =>
+    (startupFailureClose ??= closeStartupFailure().catch((error: unknown) => {
+      startupFailureClose = undefined;
+      throw error;
+    }));
+  const closeStartupFailure = async () => {
     runtime.startupTrace.close();
     await runGatewayCloseSteps({
       owner: closeStepOwner,

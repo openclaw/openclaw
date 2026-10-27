@@ -7,6 +7,13 @@ import { buildPreparedCliRunContext } from "../agents/cli-runner.test-helpers.js
 import { createCliLiveSessionCapability } from "../agents/cli-runner/cli-live-session-registry.js";
 import { memorySessionActorOwners } from "../config/sessions/session-actor-memory-owner.js";
 import type { CliBackendLiveSessionHandle } from "../plugins/cli-backend.types.js";
+import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
+import { getActivePluginRegistry, setActivePluginRegistry } from "../plugins/runtime.js";
+import { PLUGIN_SERVICE_REPLACEMENT_STOP_TIMEOUT_MS } from "../plugins/services.js";
+import {
+  createServiceRegistration,
+  startPluginServices,
+} from "../plugins/services.test-support.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import type {
   createGatewayCloseTestHandlerFactory,
@@ -32,6 +39,82 @@ export function registerGatewayResourceRetirementTests(
     sharedStateLifecycle: ReadonlyMap<string, boolean>;
   },
 ): void {
+  it("joins cron cleanup that settles after its grace before retiring shared state", async () => {
+    vi.useFakeTimers();
+    const cronCleanup = createDeferredCore();
+    const stopAndDrain = vi.fn(() => cronCleanup.promise);
+    const close = createGatewayCloseHandler({
+      cron: { stop: vi.fn(), stopAndDrain },
+      lifecycleUnsub: () => cronCleanup.resolve(),
+    });
+    const closing = close({ reason: "late cron cleanup" });
+    try {
+      await vi.advanceTimersByTimeAsync(5_000);
+      const result = await closing;
+      expect(stopAndDrain).toHaveBeenCalledOnce();
+      expect(result.warnings).toContain("cron");
+      expect(sharedStateLifecycle.has("open")).toBe(false);
+    } finally {
+      cronCleanup.resolve();
+      await closing;
+    }
+  });
+  it("retains shared state after final plugin grace while cleanup stalls", async () => {
+    vi.useFakeTimers();
+    const cleanup = createDeferredCore();
+    const stop = vi.fn(() => cleanup.promise);
+    const registry = createEmptyPluginRegistry();
+    registry.services.push(
+      createServiceRegistration(
+        { id: "pending-cleanup", start() {}, stop },
+        { pluginId: "shutdown-test" },
+      ),
+    );
+    setActivePluginRegistry(registry);
+    const pluginServices = await startPluginServices({ registry, config: {} });
+    const strictStopping = pluginServices.stop({
+      strict: true,
+      deadlineAtMs: Date.now() + PLUGIN_SERVICE_REPLACEMENT_STOP_TIMEOUT_MS,
+    });
+    const strictFailure = strictStopping.catch((error: unknown) => error);
+    let closing: ReturnType<ReturnType<typeof createGatewayCloseHandler>> | undefined;
+
+    try {
+      await vi.advanceTimersByTimeAsync(PLUGIN_SERVICE_REPLACEMENT_STOP_TIMEOUT_MS);
+      expect(await strictFailure).toMatchObject({
+        errors: [expect.objectContaining({ message: expect.stringContaining("timed out") })],
+      });
+      expect(stop).toHaveBeenCalledOnce();
+
+      const clearSecretsRuntimeSnapshot = vi.fn();
+      const stopChannel = vi.fn(async () => {});
+      const close = createGatewayCloseHandler({
+        channelIds: ["discord"],
+        pluginServices,
+        clearSecretsRuntimeSnapshot,
+        stopChannel,
+      });
+      closing = close({ reason: "gateway restarting", restartExpectedMs: 1_500 });
+      const failure = closing.catch((error: unknown) => error);
+      await vi.advanceTimersByTimeAsync(5_000);
+      expect(sharedStateLifecycle.has("open")).toBe(true);
+      await vi.advanceTimersByTimeAsync(5_000);
+      expect(isGatewayCleanupRetainedError(await failure)).toBe(true);
+      expect(stopChannel).toHaveBeenCalledWith("discord");
+      expect(sharedStateLifecycle.has("open")).toBe(true);
+      expect(clearSecretsRuntimeSnapshot).not.toHaveBeenCalled();
+      expect(getActivePluginRegistry()).toBe(registry);
+      expect(stop).toHaveBeenCalledOnce();
+      cleanup.resolve();
+      await vi.advanceTimersByTimeAsync(0);
+      expect(sharedStateLifecycle.has("open")).toBe(true);
+      expect(clearSecretsRuntimeSnapshot).not.toHaveBeenCalled();
+    } finally {
+      cleanup.resolve();
+      await Promise.allSettled([strictStopping, closing]);
+    }
+  });
+
   it.each([
     { label: "bundle-mcp", dispose: mocks.disposeAllSessionMcpRuntimes },
     { label: "embedding-providers", dispose: mocks.drainRetainedEmbeddingProviders },

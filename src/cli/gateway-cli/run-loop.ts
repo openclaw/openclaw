@@ -622,13 +622,13 @@ export async function runGatewayLoop(params: {
     let hardExitWatchdog: ShutdownHardExitWatchdog | null = null;
     let shutdownFailure: ShutdownFailure | undefined;
     const armForceExitTimer = (forceExitMs: number) => {
-      forceExitMs = restartIntent?.requireFreshProcess
+      const deadlineMs = restartIntent?.requireFreshProcess
         ? Math.min(forceExitMs, 10_000)
         : forceExitMs;
       if (forceExitTimer || (updateSuccessor.waitingForStop && !getManagedUpdateOwner())) {
         return;
       }
-      shutdownDeadline = performance.now() + forceExitMs;
+      shutdownDeadline = performance.now() + deadlineMs;
       forceExitTimer = setTimeout(() => {
         const exitOk = budget.nativeStopBudget && !restartWithoutSupervisor && !shutdownFailure;
         gatewayLog.warn(
@@ -641,13 +641,13 @@ export async function runGatewayLoop(params: {
             shutdownFailure,
           ),
         );
-      }, forceExitMs);
+      }, deadlineMs);
       if (params.ownsProcessLifecycle === true) {
         // The process lease already retains unfinished cleanup. A future deadline must
         // not keep a failed-but-settled Gateway alive after that lease is released.
         forceExitTimer.unref();
         hardExitWatchdog = armShutdownHardExitWatchdog({
-          delayMs: forceExitMs + HARD_EXIT_WATCHDOG_GRACE_MS,
+          delayMs: deadlineMs + HARD_EXIT_WATCHDOG_GRACE_MS,
           onError: (error) => {
             gatewayLog.warn(
               `hard-exit watchdog failed; retaining main-thread shutdown timer: ${formatErrorMessage(error)}`,

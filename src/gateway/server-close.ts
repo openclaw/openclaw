@@ -20,6 +20,8 @@ import { hasRetainedPluginRuntimeCloseError } from "../plugins/runtime-close-err
 import type { createPluginRegistryOwner } from "../plugins/runtime.js";
 import { getCanonicalGatewayContextResolver } from "../plugins/runtime/gateway-request-scope.js";
 import type { PluginServicesHandle } from "../plugins/services.js";
+import { GRACEFUL_CANCEL_TIMEOUT_MS } from "../process/supervisor/cancellation-policy.js";
+import { shutdownProcessSupervisor } from "../process/supervisor/index.js";
 import { finalizeActiveDebugProxyCaptures } from "../proxy-capture/runtime-cleanup.js";
 import { AsyncWorkScope } from "../shared/async-work-scope.js";
 import { drainGlobalSingletonLifecycleState } from "../shared/global-singleton.js";
@@ -63,7 +65,7 @@ type ShutdownResult = {
   warnings: string[];
 };
 
-function createCloseSteps(reason: string, warnings: string[]) {
+function createCloseSteps(reason: string, warnings: string[], cleanupWork: AsyncWorkScope) {
   const retainedErrors: unknown[] = [];
   const measureCloseStep = async <T>(
     name: string,
@@ -77,14 +79,21 @@ function createCloseSteps(reason: string, warnings: string[]) {
     return await work;
   };
   const shutdownStep = async (name: string, fn: () => Promise<void> | void, phase = name) => {
-    try {
-      await measureCloseStep(phase, fn);
-    } catch (err: unknown) {
-      if (isGatewayCleanupRetainedError(err)) {
-        retainedErrors.push(err);
+    const work = cleanupWork.track(async () => {
+      try {
+        await measureGatewayCloseStep(`restart.close.${phase}`, fn, [["reason", reason]]);
+      } catch (err: unknown) {
+        if (isGatewayCleanupRetainedError(err)) {
+          retainedErrors.push(err);
+        }
+        const detail = err instanceof Error ? err.message : String(err);
+        shutdownLog.warn(`${name}: ${detail}`);
+        recordShutdownWarning(warnings, name);
       }
-      const detail = err instanceof Error ? err.message : String(err);
-      shutdownLog.warn(`${name}: ${detail}`);
+    });
+    if (!(await settlesWithin(work, RUNTIME_CLOSE_GRACE_MS))) {
+      // The final persistence barrier still owns this exact operation after its grace.
+      shutdownLog.warn(`${name}: resources remain after grace`);
       recordShutdownWarning(warnings, name);
     }
   };
@@ -230,7 +239,7 @@ export async function prepareGatewayClose(
   const restartExpectedMs = notice.restartExpectedMs ?? null;
   const restart = restartExpectedMs !== null;
   const cleanupWork = new AsyncWorkScope();
-  const { shutdownStep, retainedErrors } = createCloseSteps(reason, warnings);
+  const { shutdownStep, retainedErrors } = createCloseSteps(reason, warnings, cleanupWork);
   // Fence async session-state writes before the first awaited shutdown step.
   fenceSessionSuspensionWritesForGatewayShutdown();
 
@@ -315,20 +324,19 @@ export function completeGatewayClose(
 ): Promise<ShutdownResult> {
   // Cleanup belongs to shutdown, not the initiating RPC's drained connection scope.
   return preparation.cleanupWork.run(async () => {
-    let failed = false;
-    try {
-      return await closeGatewayResources(params, preparation);
-    } catch (error) {
-      failed = true;
-      throw error;
-    } finally {
-      if (
-        !(await settlesWithin(preparation.cleanupWork.drain(), RUNTIME_CLOSE_GRACE_MS)) &&
-        !failed
-      ) {
-        throw new GatewayShutdownCleanupRetainedError([]);
-      }
+    const result = await closeGatewayResources(params, preparation).then(
+      (value) => ({ ok: true as const, value }),
+      (error: unknown) => ({ ok: false as const, error }),
+    );
+    const drain = preparation.cleanupWork.drain();
+    if (!result.ok) {
+      // Resource close already gave retained work its grace; sealing keeps its custody.
+      throw result.error;
     }
+    if (!(await settlesWithin(drain, RUNTIME_CLOSE_GRACE_MS))) {
+      throw new GatewayShutdownCleanupRetainedError([]);
+    }
+    return result.value;
   });
 }
 
@@ -343,7 +351,7 @@ async function closeGatewayResources(
   const { reason } = notice;
   const restartExpectedMs = notice.restartExpectedMs ?? null;
   let mediaCleanupStopResult: MediaCleanupStopResult | undefined;
-  const resourceCleanupErrors: unknown[] = [...preparation.retainedErrors];
+  const resourceCleanupErrors: unknown[] = [];
   const recordResourceCleanupFailure = (error: unknown) => {
     if (hasRetainedPluginRuntimeCloseError(error)) {
       throw error;
@@ -351,7 +359,11 @@ async function closeGatewayResources(
     resourceCleanupErrors.push(error);
   };
   let closeFailure: { error: unknown } | undefined;
-  const { measureCloseStep, shutdownStep, retainedErrors } = createCloseSteps(reason, warnings);
+  const { measureCloseStep, shutdownStep, retainedErrors } = createCloseSteps(
+    reason,
+    warnings,
+    cleanupWork,
+  );
   const disposeRuntime = async (
     label:
       | "plugin-services"
@@ -546,112 +558,120 @@ async function closeGatewayResources(
     await disposeRuntime("embedding-providers", params.drainRetainedOpenAiEmbeddingProviders);
   } catch (error) {
     closeFailure = { error };
-  } finally {
-    try {
-      // Keep shared databases alive when a model, tool, or cleanup owner outlives
-      // its grace. Only a fresh process may restart that retained generation.
-      await measureCloseStep("cleanup-work", () => cleanupWork.runWhenIdle(() => {}));
-      if (resourceCleanupErrors.length) {
-        throw resourceCleanupErrors[0];
-      }
-      if (retainedErrors.length) {
-        throw new GatewayShutdownCleanupRetainedError([]);
-      }
-      if (closeFailure) {
-        throw closeFailure.error;
-      }
-      await measureCloseStep("worktree-run-end", params.drainWorktreeRunEnd);
-      await shutdownStep(
-        "provider-transport-dispatchers",
-        params.closeProviderTransportDispatcherPool,
+  }
+  try {
+    // Keep shared databases alive when a model, tool, or cleanup owner outlives
+    // its grace. Only a fresh process may restart that retained generation.
+    await measureCloseStep("cleanup-work", () => cleanupWork.runWhenIdle(() => {}));
+    if (resourceCleanupErrors.length) {
+      throw resourceCleanupErrors[0];
+    }
+    if (preparation.retainedErrors.length || retainedErrors.length) {
+      throw new GatewayShutdownCleanupRetainedError([
+        ...preparation.retainedErrors,
+        ...retainedErrors,
+      ]);
+    }
+    if (closeFailure) {
+      throw closeFailure.error;
+    }
+    await measureCloseStep("worktree-run-end", params.drainWorktreeRunEnd);
+    await shutdownStep(
+      "provider-transport-dispatchers",
+      params.closeProviderTransportDispatcherPool,
+    );
+    await measureCloseStep("request-entries", () => params.finishRequestEntries?.());
+    await measureCloseStep("media-cleanup-drains", waitForMediaCleanupDrainsToSettle);
+    await measureCloseStep("sdk-work", () => params.drainSdkWork?.());
+    const swarmOwner = getCanonicalGatewayContextResolver(params.resolveGatewayContext);
+    if (swarmOwner) {
+      await measureCloseStep("swarm-scheduler", () =>
+        closeSwarmScheduler(swarmOwner).catch(recordResourceCleanupFailure),
       );
-      await measureCloseStep("request-entries", () => params.finishRequestEntries?.());
-      await measureCloseStep("media-cleanup-drains", waitForMediaCleanupDrainsToSettle);
-      await measureCloseStep("sdk-work", () => params.drainSdkWork?.());
-      const swarmOwner = getCanonicalGatewayContextResolver(params.resolveGatewayContext);
-      if (swarmOwner) {
-        await measureCloseStep("swarm-scheduler", () =>
-          closeSwarmScheduler(swarmOwner).catch(recordResourceCleanupFailure),
-        );
-      }
-      await measureCloseStep("scheduler", () => params.stopScheduler());
-      const registryClose = await measureCloseStep(
-        "plugin-registry",
-        () =>
-          params.closePluginRegistry(async (retireRegistry) => {
-            // SDK cleanup can use prepared donors; release its claims before model or registry disposal.
-            await measureCloseStep("sdk-resources", () =>
-              params.closeSdkResources?.().catch(recordResourceCleanupFailure),
-            );
-            return measureCloseStep(
-              "plugin-metadata",
-              () =>
-                params.pluginMetadata.close(async (retire) => {
-                  await measureCloseStep("shared-swarm-scheduler", () =>
-                    closeSwarmScheduler().catch(recordResourceCleanupFailure),
-                  );
-                  await measureCloseStep("prepared-models", closePreparedModelRuntimeSnapshots);
+    }
+    await measureCloseStep("scheduler", () => params.stopScheduler());
+    const registryClose = await measureCloseStep(
+      "plugin-registry",
+      () =>
+        params.closePluginRegistry(async (retireRegistry) => {
+          // SDK cleanup can use prepared donors; release its claims before model or registry disposal.
+          await measureCloseStep("sdk-resources", () =>
+            params.closeSdkResources?.().catch(recordResourceCleanupFailure),
+          );
+          return measureCloseStep(
+            "plugin-metadata",
+            () =>
+              params.pluginMetadata.close(async (retire) => {
+                await measureCloseStep("shared-swarm-scheduler", () =>
+                  closeSwarmScheduler().catch(recordResourceCleanupFailure),
+                );
+                await measureCloseStep("prepared-models", closePreparedModelRuntimeSnapshots);
+                await measureCloseStep(
+                  "transcript-workers",
+                  closeSessionTranscriptReconcileWorkerPool,
+                );
+                await measureCloseStep("metadata-retirement", retire);
+                await measureCloseStep("retirement-cleanup", () =>
+                  cleanupWork.runWhenIdle(() => {}),
+                );
+                await measureCloseStep("incognito-sessions", () =>
+                  memorySessionActorOwners.reset(),
+                );
+                // Owned process trees get their normal TERM window before shared state retires.
+                await measureCloseStep(
+                  "process-supervisor",
+                  shutdownProcessSupervisor,
+                  GRACEFUL_CANCEL_TIMEOUT_MS + 1_000,
+                );
+                // Releasing agent leases still writes shared state; keep its owner alive until then.
+                await measureCloseStep("agent-databases", closeOpenClawAgentDatabasesAsync);
+                await measureCloseStep("debug-proxy", () =>
+                  finalizeActiveDebugProxyCaptures().catch(recordResourceCleanupFailure),
+                );
+                try {
                   await measureCloseStep(
-                    "transcript-workers",
-                    closeSessionTranscriptReconcileWorkerPool,
+                    "global-singletons",
+                    () =>
+                      drainGlobalSingletonLifecycleState(restart ? "restart" : "close", {
+                        retainSharedState: params.retainSharedState,
+                      }),
+                    PERSISTENCE_CLOSE_GRACE_MS,
                   );
-                  await measureCloseStep("metadata-retirement", retire);
-                  await measureCloseStep("retirement-cleanup", () =>
-                    cleanupWork.runWhenIdle(() => {}),
-                  );
-                  await measureCloseStep("incognito-sessions", () =>
-                    memorySessionActorOwners.reset(),
-                  );
-                  // Releasing agent leases still writes shared state; keep its owner alive until then.
-                  await measureCloseStep("agent-databases", closeOpenClawAgentDatabasesAsync);
-                  await measureCloseStep("debug-proxy", () =>
-                    finalizeActiveDebugProxyCaptures().catch(recordResourceCleanupFailure),
-                  );
+                } finally {
                   try {
-                    await measureCloseStep(
-                      "global-singletons",
-                      () =>
-                        drainGlobalSingletonLifecycleState(restart ? "restart" : "close", {
-                          retainSharedState: params.retainSharedState,
-                        }),
-                      PERSISTENCE_CLOSE_GRACE_MS,
-                    );
-                  } finally {
-                    try {
-                      params.clearSecretsRuntimeSnapshot?.();
-                    } catch {
-                      /* ignore */
-                    }
+                    params.clearSecretsRuntimeSnapshot?.();
+                  } catch {
+                    /* ignore */
                   }
-                }, retireRegistry),
-              REGISTRY_CLOSE_GRACE_MS,
-            );
-          }),
-        REGISTRY_CLOSE_GRACE_MS,
-      );
-      for (const error of registryClose.memoryErrors) {
-        shutdownLog.warn(`memory-managers: ${formatErrorMessage(error)}`);
-        recordShutdownWarning(warnings, "memory-managers");
+                }
+              }, retireRegistry),
+            REGISTRY_CLOSE_GRACE_MS,
+          );
+        }),
+      REGISTRY_CLOSE_GRACE_MS,
+    );
+    for (const error of registryClose.memoryErrors) {
+      shutdownLog.warn(`memory-managers: ${formatErrorMessage(error)}`);
+      recordShutdownWarning(warnings, "memory-managers");
+    }
+    for (const { pluginId, hookId, error } of registryClose.pluginFailures) {
+      recordShutdownWarning(warnings, `plugin/${pluginId}`);
+      const message = `Plugin ${pluginId} cleanup failed (${hookId}): ${formatErrorMessage(error)}`;
+      shutdownLog.warn(message);
+      // Retirement has joined admitted work; callback faults are diagnostic, unlike lost state.
+      if (hookId === "session-store") {
+        resourceCleanupErrors.push(new Error(message, { cause: error }));
       }
-      for (const { pluginId, hookId, error } of registryClose.pluginFailures) {
-        recordShutdownWarning(warnings, `plugin/${pluginId}`);
-        const message = `Plugin ${pluginId} cleanup failed (${hookId}): ${formatErrorMessage(error)}`;
-        shutdownLog.warn(message);
-        // Retirement has joined admitted work; callback faults are diagnostic, unlike lost state.
-        if (hookId === "session-store") {
-          resourceCleanupErrors.push(new Error(message, { cause: error }));
-        }
-      }
-    } catch (error) {
-      if (!resourceCleanupErrors.includes(error)) {
-        resourceCleanupErrors.push(error);
-      }
+    }
+  } catch (error) {
+    if (!resourceCleanupErrors.includes(error)) {
+      resourceCleanupErrors.push(error);
     }
   }
   if (closeFailure && !resourceCleanupErrors.includes(closeFailure.error)) {
     resourceCleanupErrors.unshift(closeFailure.error);
   }
-  resourceCleanupErrors.push(...retainedErrors);
+  resourceCleanupErrors.push(...preparation.retainedErrors, ...retainedErrors);
   const durationMs = Date.now() - start;
   if (resourceCleanupErrors.length > 0 || closeFailure) {
     shutdownLog.warn(

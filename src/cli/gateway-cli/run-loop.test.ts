@@ -447,7 +447,7 @@ describe("runGatewayLoop", () => {
         expect(mocks.clearRuntimeConfigSnapshot).toHaveBeenCalledTimes(2);
         expect(mocks.resetGatewaySuspendCoordinatorForLifecycleRestart).toHaveBeenCalledTimes(2);
         expect(mocks.resetGatewayRestartStateForInProcessRestart).toHaveBeenCalledTimes(2);
-        expect(mocks.abortActiveCronTaskRuns).toHaveBeenCalledTimes(3);
+        expect(mocks.abortActiveCronTaskRuns).toHaveBeenCalledTimes(4);
         expect(mocks.acquireGatewayLock).toHaveBeenCalledTimes(3);
         expectBefore(mocks.advanceCronActiveJobGeneration, mocks.abortActiveCronTaskRuns, 0, 1);
         expectBefore(mocks.abortActiveCronTaskRuns, closeFirst);
@@ -642,7 +642,7 @@ describe("runGatewayLoop", () => {
           // A duplicate signal cannot bypass the already admitted cleanup join.
           captureSignal(stopSignal)();
           if (scenario === "repaired-systemd") {
-            await vi.advanceTimersByTimeAsync(60_000);
+            await vi.advanceTimersByTimeAsync(2_999);
           }
           await flush();
           testLoop.expectUncalled(runtime.exit, completeBoot);
@@ -1226,43 +1226,6 @@ describe("runGatewayLoop", () => {
         restartKind: "full-process",
         reason: undefined,
         supervisorMode: "launchd",
-      });
-    });
-  });
-
-  it("bounds a launchd-supervised stop on the deadline the printed job reports", async () => {
-    testLoop.setPlatform("darwin");
-    process.env.OPENCLAW_LAUNCHD_LABEL = "ai.openclaw.gateway";
-    mocks.readLaunchdStopTimeout.mockResolvedValue({
-      stop: { timeoutMs: 30_000, source: "launchd system/ai.openclaw.gateway exit timeout" },
-    });
-    mocks.hasManagedProviderLocalServices.mockReturnValue(true);
-    const providerCleanup = createDeferredCore();
-    mocks.stopManagedProviderLocalServices.mockReturnValue(providerCleanup.promise);
-    await mocks.withRunningGateway(async ({ captureSignal, close, runtime }) => {
-      await testLoop.withLifecycleClock(async () => {
-        try {
-          captureSignal("SIGTERM")();
-          await vi.advanceTimersByTimeAsync(24_999);
-          expect(close).toHaveBeenCalledOnce();
-          expect(mocks.stopManagedProviderLocalServices).toHaveBeenCalledOnce();
-          expect(runtime.exit).not.toHaveBeenCalled();
-          await vi.advanceTimersByTimeAsync(1);
-          // launchd owns the status, not permission to abandon accepted cleanup.
-          expect(runtime.exit).not.toHaveBeenCalled();
-          providerCleanup.resolve();
-          await vi.advanceTimersByTimeAsync(0);
-          expect(runtime.exit).toHaveBeenCalledExactlyOnceWith(0);
-          expect(mocks.writeDiagnosticStabilityBundleForFailureSync).toHaveBeenCalledWith(
-            "gateway.stop_shutdown_timeout",
-            undefined,
-          );
-          expect(mocks.gatewayLog.info).toHaveBeenCalledWith(
-            "shutdown budget at shutdown: drain=15000ms shutdown=25000ms reserve=10000ms exitMargin=5000ms; source=launchd system/ai.openclaw.gateway exit timeout=30000ms",
-          );
-        } finally {
-          vi.clearAllTimers();
-        }
       });
     });
   });

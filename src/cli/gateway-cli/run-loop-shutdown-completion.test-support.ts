@@ -6,6 +6,7 @@ import { PassThrough } from "node:stream";
 import { expect, it, vi } from "vitest";
 import { createTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { LAUNCH_AGENT_EXIT_TIMEOUT_SECONDS } from "../../daemon/launchd-plist.js";
+import { GATEWAY_SHUTDOWN_TIMEOUT_MS } from "../../infra/gateway-shutdown-budget.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { expectCallCount } from "./run-loop-cleanup.test-support.js";
 import { registerTimedOutGatewayStopTests } from "./run-loop-stop-timeout.test-support.js";
@@ -16,6 +17,7 @@ import {
   expectUncalled,
   advanceWithoutCalls,
   setPlatform,
+  systemdReply,
   type UpdateRespawnFixtures,
 } from "./run-loop.test-support.js";
 
@@ -264,6 +266,7 @@ export function registerShutdownCompletionTests(f: UpdateRespawnFixtures): void 
   it("bounds abandoned cleanup after a zero-drain request and managed parking", async () => {
     process.env.OPENCLAW_SYSTEMD_UNIT = "openclaw-gateway.service";
     setPlatform("linux");
+    f.systemctl.mockResolvedValue(systemdReply());
     f.consumeGatewayRestartIntent.mockReturnValueOnce({
       force: true,
       waitMs: 0,
@@ -278,7 +281,7 @@ export function registerShutdownCompletionTests(f: UpdateRespawnFixtures): void 
       const cleanup = createDeferredCore();
       close.mockReturnValue(cleanup.promise);
       captureSignal("SIGUSR2")();
-      await vi.advanceTimersByTimeAsync(9_999);
+      await vi.advanceTimersByTimeAsync(24_999);
       expect(f.requestManagedServiceUpdateHandoffPark).toHaveBeenCalledWith(
         f.managedUpdateSuccessorOwner,
       );
@@ -306,10 +309,10 @@ export function registerShutdownCompletionTests(f: UpdateRespawnFixtures): void 
       f.flushLogger.mockReturnValueOnce(flushed.promise);
       try {
         captureSignal("SIGUSR2")();
-        await advanceWithoutCalls(2_999, runtime.exit);
+        await advanceWithoutCalls(999, runtime.exit);
         await vi.advanceTimersByTimeAsync(1);
         expect(f.gatewayLog.warn).toHaveBeenCalledWith(
-          "log flush did not settle within 3000ms; waiting for accepted writes",
+          "log flush did not settle within 1000ms; waiting for accepted writes",
         );
       } finally {
         flushed.resolve();
@@ -329,7 +332,7 @@ export function registerShutdownCompletionTests(f: UpdateRespawnFixtures): void 
       await vi.advanceTimersByTimeAsync(0);
       expectCallCount(1, close, f.armShutdownHardExitWatchdog);
       expectCallCount(0, runtime.exit, f.cancelShutdownHardExitWatchdog);
-      await vi.advanceTimersByTimeAsync(10_000);
+      await vi.advanceTimersByTimeAsync(GATEWAY_SHUTDOWN_TIMEOUT_MS);
       await expect(exited).resolves.toBe(1);
     }, true);
   });

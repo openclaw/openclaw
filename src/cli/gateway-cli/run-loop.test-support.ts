@@ -104,9 +104,14 @@ export async function runGatewayLoop({
   runtime: { exit: (code: number) => void };
 }): Promise<number> {
   const actual = await import("./run-loop.js");
-  const code = await actual.runGatewayLoop(params);
-  runtime.exit(code);
-  return code;
+  const previousExitCode = process.exitCode;
+  try {
+    const code = await actual.runGatewayLoop(params);
+    runtime.exit(code);
+    return code;
+  } finally {
+    process.exitCode = previousExitCode;
+  }
 }
 
 export function createRuntimeWithExitSignal(exitCallOrder?: string[]) {

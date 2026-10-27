@@ -15,7 +15,6 @@ import {
   setActivePluginRegistry,
 } from "../plugins/runtime.js";
 import { withPluginRuntimeGatewayContextResolver } from "../plugins/runtime/gateway-request-scope.js";
-import { PLUGIN_SERVICE_REPLACEMENT_STOP_TIMEOUT_MS } from "../plugins/services.js";
 import {
   createServiceRegistration,
   startPluginServices,
@@ -774,59 +773,6 @@ describe("createGatewayCloseHandler", () => {
     }
     expect(events).toEqual(["acp-sessions", "plugin-services", "channel:discord"]);
     expect(mocks.disposeAcpSessionManager).toHaveBeenCalledWith("gateway-shutdown");
-  });
-
-  it("retains shared state after final plugin grace while cleanup stalls", async () => {
-    vi.useFakeTimers();
-    const cleanup = createDeferredCore();
-    const stop = vi.fn(() => cleanup.promise);
-    const registry = createEmptyPluginRegistry();
-    registry.services.push(
-      createServiceRegistration(
-        { id: "pending-cleanup", start() {}, stop },
-        { pluginId: "shutdown-test" },
-      ),
-    );
-    setActivePluginRegistry(registry);
-    const pluginServices = await startPluginServices({ registry, config: {} });
-    const strictStopping = pluginServices.stop({
-      strict: true,
-      deadlineAtMs: Date.now() + PLUGIN_SERVICE_REPLACEMENT_STOP_TIMEOUT_MS,
-    });
-    const strictFailure = strictStopping.catch((error: unknown) => error);
-    let closing: ReturnType<ReturnType<typeof createGatewayCloseHandler>> | undefined;
-
-    try {
-      await vi.advanceTimersByTimeAsync(PLUGIN_SERVICE_REPLACEMENT_STOP_TIMEOUT_MS);
-      expect(await strictFailure).toMatchObject({
-        errors: [expect.objectContaining({ message: expect.stringContaining("timed out") })],
-      });
-      expect(stop).toHaveBeenCalledOnce();
-
-      const clearSecretsRuntimeSnapshot = vi.fn();
-      const deps = createGatewayCloseTestDeps({
-        channelIds: ["discord"],
-        pluginServices,
-        clearSecretsRuntimeSnapshot,
-      });
-      const close = closeGateway(deps);
-      closing = close({ reason: "gateway restarting", restartExpectedMs: 1_500 });
-      const failure = closing.catch((error: unknown) => error);
-      await vi.advanceTimersByTimeAsync(5_000);
-      expect(isGatewayCleanupRetainedError(await failure)).toBe(true);
-      expect(deps.stopChannel).toHaveBeenCalledWith("discord");
-      expect(sharedStateLifecycle.has("open")).toBe(true);
-      expect(clearSecretsRuntimeSnapshot).not.toHaveBeenCalled();
-      expect(getActivePluginRegistry()).toBe(registry);
-      expect(stop).toHaveBeenCalledOnce();
-      cleanup.resolve();
-      await vi.advanceTimersByTimeAsync(0);
-      expect(sharedStateLifecycle.has("open")).toBe(true);
-      expect(clearSecretsRuntimeSnapshot).not.toHaveBeenCalled();
-    } finally {
-      cleanup.resolve();
-      await Promise.allSettled([strictStopping, closing]);
-    }
   });
 
   it.each([

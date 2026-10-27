@@ -57,18 +57,12 @@ next reconciliation reloads the inventory and resumes worker maintenance without
 a Gateway restart. Closed stores stay closed during shutdown, and database
 replacement or corruption still requires recovery through the database owner.
 
-If work still ignores cancellation at the shutdown deadline under systemd or launchd,
-a native service stop or supervisor-owned restart logs
-the remaining work categories and pending owners (including command lanes and
-request origins), writes a diagnostic stability bundle, and exits
-with status `0`. It does not reuse that unfinished runtime for an in-process
-restart. This lets a requested stop finish cleanly and lets the service manager
-start a fresh Gateway for a restart.
-
 Bounded-grace leftovers from child cleanup, lifetime sidecars, or plugin runtime
-retention are logged and keep external stop/restart exit status `0`. Real
-persistence failures still report failure. A retained runtime is never reused for
-an in-process restart.
+retention are logged. The lifecycle returns with status `0` unless required
+persistence failed, and Node exits naturally after owned handles close. A retained
+runtime is never reused for an in-process restart. If leaked handles keep Node
+alive past the shutdown deadline, the native watchdog kills the process. That
+signal exit is accepted; the service manager starts a fresh Gateway.
 
 Admission-close logs name the shutdown trigger, for example `stop (SIGTERM)` or
 `restart (SIGUSR2: config reload: gateway.bind)`. Process failures retain their
