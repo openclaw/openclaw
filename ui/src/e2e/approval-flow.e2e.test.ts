@@ -1,6 +1,5 @@
 import type { Page } from "playwright";
 import { expect, it } from "vitest";
-import type { GatewaySessionRow } from "../api/types.ts";
 import { controlUiSessionUrl, installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { chatSessionListResponse } from "./chat-flow.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
@@ -45,17 +44,21 @@ async function openChat(options: Parameters<typeof installMockGateway>[1] = {}) 
 
 suite.define(() => {
   it("keeps approvals passive through detail review and queued decisions", async () => {
-    const sessions: GatewaySessionRow[] = [
-      { key: activeSessionKey, label: "Main", kind: "direct", updatedAt: 1_000 },
-      {
-        key: "agent:main:other",
-        label: "Review navigation",
-        kind: "direct",
-        updatedAt: 2_000,
-        worktree: { id: "review", branch: "review/navigation", repoRoot: "/projects/atlas" },
-        spawnedCwd: "/projects/atlas-review",
-      },
-    ];
+    const currentSession = {
+      key: activeSessionKey,
+      label: "Main",
+      kind: "direct",
+      updatedAt: 1_000,
+    };
+    const sourceSession = {
+      key: "agent:main:other",
+      label: "Review navigation",
+      kind: "direct",
+      updatedAt: 2_000,
+      worktree: { id: "review", branch: "review/navigation", repoRoot: "/projects/atlas" },
+      spawnedCwd: "/projects/atlas-review",
+    };
+    const sessions = [currentSession, sourceSession];
     const { page, gateway, request } = await openChat({ sessionKey: activeSessionKey, sessions });
     const initial = approval("approval-inline", "echo inline", 1_000);
     await gateway.emitGatewayEvent("exec.approval.requested", {
@@ -101,8 +104,8 @@ suite.define(() => {
     expect(await modal.locator(".exec-approval-title").textContent()).toContain(
       "Review navigation",
     );
-    const renamed = { ...sessions[1], label: "Review navigation updated", updatedAt: Date.now() };
-    await gateway.setSessionsListResponse(chatSessionListResponse([sessions[0], renamed]));
+    const renamed = { ...sourceSession, label: "Review navigation updated", updatedAt: Date.now() };
+    await gateway.setSessionsListResponse(chatSessionListResponse([currentSession, renamed]));
     await gateway.emitGatewayEvent("sessions.changed", { agentId: "main", reason: "update" });
     await expect
       .poll(() => modal.locator(".exec-approval-title").textContent(), { timeout: 15_000 })
