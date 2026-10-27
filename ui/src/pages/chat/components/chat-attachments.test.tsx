@@ -247,6 +247,37 @@ describe("chat attachment read failures", () => {
     });
   }
 
+  it.each([
+    [0, 1],
+    [1, 0],
+  ])(
+    "preserves admission order when read %i finishes before read %i and preview props lag",
+    async (first, second) => {
+      const files = [imageFile("first.png", "a"), imageFile("second.png", "b")];
+      StubFileReader.heldNames = new Set(files.map((file) => file.name));
+      const h = readFixture([], () => redraw());
+      const view = () => ({ ...h.props, attachments: [], readRevision: h.reads.revision });
+      const preview = mountSolid(AttachmentPreview, view());
+      const redraw = () => preview.update(view());
+      onTestFinished(preview.dispose);
+
+      h.append(files);
+      await vi.waitFor(() => expect(StubFileReader.heldReads).toHaveLength(2));
+      StubFileReader.heldReads[first]!();
+      await waitForSolid(() => expect(h.reads.pendingReads).toBe(1));
+      StubFileReader.heldReads[second]!();
+      await h.done.promise;
+      expect(h.attachments.map(({ fileName }) => fileName)).toEqual(["first.png", "second.png"]);
+      await waitForSolid(() =>
+        expect(
+          Array.from(preview.container.querySelectorAll(".chat-attachment-thumb img"), (image) =>
+            image.getAttribute("alt"),
+          ),
+        ).toEqual(["first.png", "second.png"]),
+      );
+    },
+  );
+
   it.each([false, true])(
     "retains published payload custody when remaining reads abort (presented=%s)",
     async (presented) => {
