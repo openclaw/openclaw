@@ -138,11 +138,10 @@ export type SessionLifecyclePlanningOperations = {
     output: LifecycleProjectionPreparation;
   };
   finish: {
-    input: LifecycleProjectionPreparation & {
+    input: Pick<LifecycleProjectionPreparation, "store" | "selected"> & {
       archiveDirectory: string;
-      upsertedEntries: ProjectedLifecycleMutation["upsertedEntries"];
     };
-    output: ProjectedLifecycleMutation;
+    output: ReturnType<typeof finishProjectedLifecycleRemovalPlans>;
   };
 };
 
@@ -205,7 +204,6 @@ export function bindSqliteWorkerBackend(
           input.archiveDirectory,
           input.store,
           input.selected,
-          input.upsertedEntries,
         );
       };
       // Without removals, bounded row reads share this worker without yielding.

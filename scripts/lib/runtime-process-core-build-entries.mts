@@ -1,6 +1,9 @@
 import { fileURLToPath } from "node:url";
 import { runtimeProcessEntrypoints } from "../../src/infra/runtime-process-entrypoints.ts";
-import { runtimeProcessScriptEntrypoints } from "../../src/infra/runtime-process-manifest.ts";
+import {
+  pluginRuntimeProcessManifest,
+  runtimeProcessScriptEntrypoints,
+} from "../../src/infra/runtime-process-manifest.ts";
 import { managedMemoryEntrypoint } from "./managed-memory-entrypoint.mts";
 import { managedWindowsJobEntrypoint } from "./managed-windows-job-entrypoint.mts";
 
@@ -49,6 +52,13 @@ const privateChunkRuntimeProcessEntrypoints = [
   runtimeProcessEntrypoints.gitOperations,
   runtimeProcessEntrypoints.cronStreamMatcher,
   runtimeProcessEntrypoints.fileToolPlanning,
+  {
+    ...pluginRuntimeProcessManifest.codexCatalogPage,
+    currentModuleUrl: new URL(
+      `../../${pluginRuntimeProcessManifest.codexCatalogPage.ownerSource}`,
+      import.meta.url,
+    ).href,
+  },
 ];
 
 // Keep small helper processes out of the shared runtime bundle.
