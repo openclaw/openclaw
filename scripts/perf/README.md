@@ -1,5 +1,44 @@
 # Team-shaped synthetic state
 
+## Cold archive eligibility (counts only)
+
+Run the same real-worker full/mixed maintenance fixture used by the integration
+suite, with native statement/row observation enabled only for this workload:
+
+```sh
+node scripts/perf/session-cold-storage-eligibility.mjs \
+  --expect-head "$(git rev-parse HEAD)" \
+  --output .openclaw/tmp/cold-eligibility-candidate
+```
+
+Use a new output directory and a reviewed, isolated checkout; pass the recorded
+full HEAD explicitly when comparing revisions. The runner never switches source.
+It records HEAD and SHA256 of the two owners, shared fixture, runner and preload,
+and refuses changed inputs after execution. It runs only the focused file through
+the canonical package test entrypoint (`pnpm test ... --maxWorkers=1`) under Node. Output includes the real test log,
+source guard, native counts, summary, and whole-command cost (not product latency).
+
+Acceptance, declared before measurement: one deterministic counts sample per arm,
+fresh wrapper/isolated synthetic database and files, fixture setup excluded. The
+public maintenance batch limit is fixed at 128: the full fixture must externalize
+128, archive 0, preserve every archive byte and hot-history snapshot. Eligibility
+SQL and metadata materialization must be zero in selection and mutation, while
+four admission/ownership reads remain. Mixed control must archive 1/externalize 1,
+retain explicitly referenced hot history, execute three eligibility reads in each
+consumer, and retain four admission reads. Setup/mixed positive controls reject
+an absent observer. Call-stack attribution is observation only, not product policy.
+
+Both baseline and candidate use these same fixture/observer/checker bytes against
+their respective production owners. The original base exits 1 at the zero-work
+assertion with selection=3/mutation=3 after both preservation tests pass; the
+candidate exits 0 with 0/0. To replay a base revision, apply only the workload/test
+files there, leaving its production owners unchanged. Do not point a current
+worker build at an older owner. Keep sources frozen for each invocation.
+
+This is opt-in counts proof, not a new normal-CI performance threshold or a
+Gateway/model, latency, CPU, allocation or incident-cause claim. No ABAB timing
+claim is made. Normal test execution does not install the native preload.
+
 ## Plugin policy reads
 
 `plugin-policy-read-measure.mjs` measures warm Codex config resolution and registered
