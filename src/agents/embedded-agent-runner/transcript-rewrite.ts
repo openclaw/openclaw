@@ -1,5 +1,6 @@
-/** Rewrites transcript entries by branching and re-appending the active suffix. */
 import { setImmediate as nextTurn } from "node:timers/promises";
+/** Rewrites transcript entries by branching and re-appending the active suffix. */
+import { isDeepStrictEqual } from "node:util";
 import { stripCompactionReplayCheckpoint } from "@openclaw/ai/transports";
 import {
   collectErrorGraphCandidates,
@@ -269,14 +270,16 @@ async function rewriteBranch(input: {
   };
 }
 
-/** True when the revision only gained entries after every previously observed one. */
+/** True when the revision only gained entries after an unchanged observed prefix. */
 function isAppendOnlyAdvance(
   previous: readonly SessionBranchEntry[],
   next: readonly SessionBranchEntry[],
 ): boolean {
   return (
     next.length > previous.length &&
-    previous.every((entry, index) => next[index]?.id === entry.id) &&
+    // Matching ids are not enough: a corrected message keeps its id and sequence, and
+    // replaying the original replacement over it would overwrite that correction.
+    previous.every((entry, index) => isDeepStrictEqual(next[index], entry)) &&
     // A concurrent reset or compaction replaces history instead of extending it.
     next
       .slice(previous.length)

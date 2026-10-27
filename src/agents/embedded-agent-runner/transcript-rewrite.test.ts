@@ -601,34 +601,55 @@ describe("rewriteTranscriptEntriesInSessionManager", () => {
     },
   );
 
-  it("keeps the rewrite guard when another writer resets the transcript", async () => {
-    const { directory, target } = await persistedTarget("concurrent-reset-rewrite");
-    const manager = SessionManager.open(target, directory);
-    const entryIds = appendMessages(manager, [
-      makeUserMessage("first", 1),
-      toolResult("exec", "before rewrite", 2),
-      assistant("tail", 3),
-    ]);
-    await waitForSessionTranscriptProjection(target);
-    const sibling = SessionManager.open(target, directory);
-    const prepare = manager.prepareTranscriptRewriteAsync.bind(manager);
-    let reset = false;
-    vi.spyOn(manager, "prepareTranscriptRewriteAsync").mockImplementation(async () => {
-      if (!reset) {
-        reset = true;
-        await sibling.appendResetBoundaryAsync("new");
-      }
-      return await prepare();
-    });
+  it.each(["corrected in place", "reset"] as const)(
+    "rejects a stale replacement when the observed prefix was %s before an append",
+    async (mutation) => {
+      const { directory, target } = await persistedTarget(`stale-prefix-${mutation.split(" ")[0]}`);
+      const manager = SessionManager.open(target, directory);
+      const entryIds = appendMessages(manager, [
+        makeUserMessage("first", 1),
+        toolResult("exec", "before rewrite", 2),
+        assistant("tail", 3),
+      ]);
+      await waitForSessionTranscriptProjection(target);
+      const prepare = manager.prepareTranscriptRewriteAsync.bind(manager);
+      let mutated = false;
+      vi.spyOn(manager, "prepareTranscriptRewriteAsync").mockImplementation(async () => {
+        const prepared = await prepare();
+        if (!mutated) {
+          mutated = true;
+          if (mutation === "reset") {
+            await manager.appendResetBoundaryAsync("new");
+          } else {
+            const events = await loadTranscriptEvents(target);
+            for (const event of events) {
+              if (isRecord(event) && event.id === entryIds[1]) {
+                event.message = toolResult("exec", "corrected first", 2);
+              }
+            }
+            replaceTranscriptEventsSync(target, events);
+            await manager.appendMessageAsync(makeUserMessage("in-flight input", 4));
+          }
+        }
+        return prepared;
+      });
 
-    await expect(
-      rewrite(
-        manager,
-        expectDefined(entryIds[1], "tool result entry id"),
-        toolResult("exec", "after rewrite", 2),
-      ),
-    ).rejects.toThrow("Session transcript changed before rewrite");
-  });
+      await expect(
+        rewrite(
+          manager,
+          expectDefined(entryIds[1], "tool result entry id"),
+          toolResult("exec", "stale replacement", 2),
+        ),
+      ).rejects.toThrow("Session transcript changed before rewrite");
+
+      const serialized = JSON.stringify(getBranchMessages(SessionManager.open(target, directory)));
+      expect(serialized).not.toContain("stale replacement");
+      if (mutation !== "reset") {
+        expect(serialized).toContain("corrected first");
+        expect(serialized).toContain("in-flight input");
+      }
+    },
+  );
 
   it.each([3, 1])(
     "preserves the selected logical parent across a rewrite (maxEvents=%s)",
