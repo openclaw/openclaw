@@ -316,6 +316,9 @@ function* assembleOpenClawCodingTools(
           },
           processDefaults: {
             scopeKey,
+            sessionKey: executionSessionKey,
+            agentId: executionAgentId,
+            sessionStore: options?.config?.session?.store,
           },
           recordToolPrepStage: options?.recordToolPrepStage,
         })

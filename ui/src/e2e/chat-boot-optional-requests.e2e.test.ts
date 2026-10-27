@@ -5,7 +5,6 @@ import { controlUiE2eBuiltModuleRequest } from "./control-ui-built-module.test-s
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
 const suite = createControlUiE2eSuite({ name: "Chat boot optional requests" });
-
 suite.define(() => {
   it("defers media, empty activity, login modules and hidden artwork until their surfaces are needed", async () => {
     await suite.withPage(
@@ -40,6 +39,7 @@ suite.define(() => {
         };
         const gateway = await installMockGateway(page, {
           sessionKey,
+          deviceToken: null, // Keep the rejection terminal while the login module loads.
           deferredMethods: ["connect"],
           historyMessages: [initialMessage],
         });

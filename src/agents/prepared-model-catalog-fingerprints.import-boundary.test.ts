@@ -21,7 +21,7 @@ it("loads catalog request boundaries without importing runtime preparation", asy
 import { registerHooks } from "node:module";
 registerHooks({
   resolve(specifier, context, nextResolve) {
-    if (specifier.includes("prepared-model-runtime.facts.") || specifier.includes("prepared-model-runtime.inbound-registry.")) {
+    if (specifier.includes("prepared-model-runtime.facts.") || specifier.includes("prepared-model-runtime.inbound-registry.") || specifier.includes("/harness/model-catalog.")) {
       throw new Error("Catalog fingerprint imported runtime preparation: " + specifier);
     }
     const resolved = nextResolve(specifier, context);

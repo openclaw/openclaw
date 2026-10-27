@@ -501,8 +501,6 @@ export class AppSidebarOwner extends AppSidebarSessionNavigationElement implemen
       );
       const toolbar = renderSessionListToolbar(this);
       const menus = this.sidebarMenus.render(this);
-      // Connection state changes in a fixed slot; reconnects must not resize the session list.
-      const statusVisible = () => this.gatewayStatus?.kind;
       return (
         <aside
           class="sidebar sidebar--rail"
@@ -565,14 +563,14 @@ export class AppSidebarOwner extends AppSidebarSessionNavigationElement implemen
                   {...{ className: "sidebar-session-error sidebar-session-catalog-error" }}
                 />
               </Show>
-            </div>
-            <div class="sidebar-shell__footer">
-              <div class="sidebar-shell__connection">
-                <Show when={statusVisible()}>
+              <Show when={this.gatewayStatus?.kind === "reconnecting"}>
+                <div class="sidebar-shell__connection">
                   <GatewayStatus {...this.gatewayStatus!} row />
-                </Show>
-              </div>
-              <Show when={this.devGitBranch}>
+                </div>
+              </Show>
+            </div>
+            <Show when={this.devGitBranch}>
+              <div class="sidebar-shell__footer">
                 <openclaw-tooltip prop:content={this.devGitBranch ?? undefined}>
                   <div class="sidebar-footer-branch">
                     <span class="sidebar-footer-branch__icon" aria-hidden="true">
@@ -581,8 +579,8 @@ export class AppSidebarOwner extends AppSidebarSessionNavigationElement implemen
                     <span class="sidebar-footer-branch__name">{this.devGitBranch}</span>
                   </div>
                 </openclaw-tooltip>
-              </Show>
-            </div>
+              </div>
+            </Show>
             <Show
               when={
                 this.context.theme.branding.communityLinks &&
