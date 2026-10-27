@@ -6,8 +6,12 @@ import "./server-context.chrome-test-harness.js";
 import { CDP_JSON_NEW_TIMEOUT_MS } from "./cdp-timeouts.js";
 import * as cdpHelpers from "./cdp.helpers.js";
 import * as cdp from "./cdp.js";
-import { BrowserTargetAmbiguousError } from "./errors.js";
+import { BrowserError, BrowserTargetAmbiguousError } from "./errors.js";
 import { InvalidBrowserNavigationUrlError } from "./navigation-guard.js";
+import {
+  CLOSE_TAB_VERIFY_POLL_MS,
+  CLOSE_TAB_VERIFY_WINDOW_MS,
+} from "./server-context.constants.js";
 import {
   createTestBrowserRouteContext,
   makeManagedTabsWithNew,
@@ -134,11 +138,18 @@ function listOnly(tabs: () => ReturnType<typeof page>[]) {
 }
 
 async function labeled() {
+  const closed = new Set<string>();
   const harness = setup(async (url) => {
     if (url.includes("/json/list")) {
-      return Response.json([page("ABCDEF123456"), page("ABC999")]);
+      return Response.json(
+        [page("ABCDEF123456"), page("ABC999")].filter((tab) => !closed.has(tab.id)),
+      );
     }
-    if (url.includes("/json/activate/") || url.includes("/json/close/")) {
+    if (url.includes("/json/close/")) {
+      closed.add(url.split("/json/close/")[1] ?? "");
+      return new Response();
+    }
+    if (url.includes("/json/activate/")) {
       return new Response();
     }
     throw new Error("unexpected fetch: " + url);
@@ -146,6 +157,32 @@ async function labeled() {
   await harness.openclaw.labelTab("ABCDEF123456", "docs");
   await harness.openclaw.labelTab("ABC999", "app");
   return harness;
+}
+
+// Chrome answers /json/close with 200 "Target is closing" when the close is only
+// requested. The target leaves /json/list after `listsBeforeGone` further reads.
+function closingTab(listsBeforeGone: number) {
+  let closeRequested = false;
+  let listsSinceClose = 0;
+  const harness = setup(async (url) => {
+    if (url.includes("/json/close/")) {
+      closeRequested = true;
+      return new Response("Target is closing");
+    }
+    if (url.includes("/json/list")) {
+      listsSinceClose += closeRequested ? 1 : 0;
+      return Response.json(
+        closeRequested && listsSinceClose > listsBeforeGone ? [] : [page("POPUP")],
+      );
+    }
+    throw new Error("unexpected fetch: " + url);
+  });
+  harness.runtime.lastTargetId = "POPUP";
+  return {
+    ...harness,
+    closeRequests: () =>
+      harness.fetchMock.mock.calls.filter(([url]) => String(url).includes("/json/close/")).length,
+  };
 }
 
 describe("browser tab selection and ownership", () => {
@@ -598,5 +635,87 @@ describe("browser tab selection and ownership", () => {
     await expect(close.openclaw.closeTab("ABC")).rejects.toBeInstanceOf(
       BrowserTargetAmbiguousError,
     );
+  });
+
+  it.each([
+    ["promptly", 0],
+    ["after Chrome finishes a slow close", 3],
+  ])(
+    "reports a close once the tab leaves the target list (%s)",
+    async (_label, listsBeforeGone) => {
+      vi.useFakeTimers();
+      const { openclaw, runtime, closeRequests } = closingTab(listsBeforeGone);
+
+      const closing = openclaw.closeTab("POPUP");
+      await vi.advanceTimersByTimeAsync(CLOSE_TAB_VERIFY_POLL_MS * listsBeforeGone);
+
+      await expect(closing).resolves.toBe("POPUP");
+
+      expect(closeRequests()).toBe(1);
+      expect(runtime.lastTargetId).toBeNull();
+    },
+  );
+
+  it("rejects, and keeps the sticky target, when the tab survives the close request", async () => {
+    vi.useFakeTimers();
+    const { openclaw, runtime, closeRequests } = closingTab(Number.POSITIVE_INFINITY);
+
+    const outcome = openclaw.closeTab("POPUP").then(
+      () => undefined,
+      (error: unknown) => error,
+    );
+    await vi.advanceTimersByTimeAsync(CLOSE_TAB_VERIFY_WINDOW_MS + CLOSE_TAB_VERIFY_POLL_MS);
+    const error = await outcome;
+
+    expect(error).toBeInstanceOf(BrowserError);
+    expect(error).toMatchObject({
+      message: expect.stringMatching(/POPUP.*still open/),
+      status: 500,
+    });
+    expect(closeRequests()).toBe(1);
+    expect(runtime.lastTargetId).toBe("POPUP");
+  });
+
+  it("stops verifying a close when the caller aborts", async () => {
+    vi.useFakeTimers();
+    const { openclaw, runtime } = closingTab(Number.POSITIVE_INFINITY);
+    const controller = new AbortController();
+
+    const outcome = openclaw.closeTab("POPUP", { signal: controller.signal }).then(
+      () => undefined,
+      (error: unknown) => error,
+    );
+    await vi.advanceTimersByTimeAsync(CLOSE_TAB_VERIFY_POLL_MS * 2);
+    controller.abort(new Error("close cancelled by caller"));
+    await vi.advanceTimersByTimeAsync(CLOSE_TAB_VERIFY_POLL_MS);
+
+    expect(await outcome).toMatchObject({
+      name: "AbortError",
+      cause: { message: "close cancelled by caller" },
+    });
+    expect(runtime.lastTargetId).toBe("POPUP");
+  });
+
+  it("rejects, and keeps the sticky target, when the tab list fails after the close request", async () => {
+    let closeRequested = false;
+    const { openclaw, runtime } = setup(async (url) => {
+      if (url.includes("/json/close/")) {
+        closeRequested = true;
+        return new Response("Target is closing");
+      }
+      if (url.includes("/json/list") && !closeRequested) {
+        return Response.json([page("POPUP")]);
+      }
+      return new Response("slow down", { status: 429 });
+    });
+    runtime.lastTargetId = "POPUP";
+
+    await expect(openclaw.closeTab("POPUP")).rejects.toMatchObject({
+      name: "BrowserError",
+      message: expect.stringMatching(
+        /tab POPUP may still be open.*rate limit.*before closing again/s,
+      ),
+    });
+    expect(runtime.lastTargetId).toBe("POPUP");
   });
 });
