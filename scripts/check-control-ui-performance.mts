@@ -66,10 +66,10 @@ const controlUiPerformanceBudgets = {
   // Route consolidation saves 4,189 B total CSS gzip while merging always-loaded
   // sheets. Approved 2026-10-22: 57,154 B plus the prior 53,400 / 52,337 headroom.
   largestCssGzipBytes: 58_315,
-  // CLS reservation costs 266 B gzip over main while all measured reloads stay <=0.02.
-  // The campaign permits this measured win; retain only 64 B of build variance.
-  totalCssGzipBytes: 307_769,
-  totalCssRawBytes: 1_597_581,
+  // Board chrome-only query containment removes WebKit's report-wide style flush.
+  // Retain 64 B of build variance over the measured CSS after its 27 B gzip growth.
+  totalCssGzipBytes: 307_846,
+  totalCssRawBytes: 1_597_807,
 } satisfies Record<string, number>;
 export const CONTROL_UI_PERFORMANCE_BUDGETS = Object.freeze(controlUiPerformanceBudgets);
 
