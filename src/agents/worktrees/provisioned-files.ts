@@ -32,7 +32,7 @@ async function copyProvisionedFile(params: {
   }
   const source = resolveGitPath(params.sourceRoot.rootReal, relativePath);
   const destination = resolveGitPath(params.destinationRoot.rootReal, relativePath);
-  const sourceStat = await lstatIfExists(source, "ENOENT");
+  const sourceStat = await fs.lstat(source).catch(() => undefined);
   if (!sourceStat?.isFile() || sourceStat.isSymbolicLink()) {
     return false;
   }

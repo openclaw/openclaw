@@ -210,16 +210,16 @@ describe("ManagedWorktreeService provisioned state", () => {
     expect(await fs.readFile(path.join(destination, ".env.local"), "utf8")).toBe(
       "destination-owned\n",
     );
-    // Copy-time inspection still propagates unreadable sources without a size pass.
-    const pathExistence = await import("../../infra/path-existence.js");
-    const lstat = pathExistence.lstatIfExists;
+    // Copy-time inspection keeps skipping sources that cannot be inspected.
+    stats.mockRestore();
+    const lstat = fs.lstat;
     const unreadable = Object.assign(new Error("synthetic unreadable source"), { code: "EACCES" });
-    vi.spyOn(pathExistence, "lstatIfExists").mockImplementation((target, missing) =>
+    vi.spyOn(fs, "lstat").mockImplementation((target, options) =>
       target === path.join(dependencies, "settings.local")
         ? Promise.reject(unreadable)
-        : lstat(target, missing),
+        : lstat(target, options),
     );
-    await expect(provisionIncludedFiles(repo, destination)).rejects.toBe(unreadable);
+    await expect(provisionIncludedFiles(repo, destination)).resolves.toEqual([]);
   });
 
   it.skipIf(process.platform === "win32")(
