@@ -10,7 +10,12 @@ import {
   startScribe,
   turnOffScribe,
 } from "./scribes-actions.js";
-import { scribeById, scribeLabel, type ScribeSetup } from "./scribes-catalog.js";
+import {
+  REVIEW_NIGHTLY_SCHEDULE,
+  scribeById,
+  scribeLabel,
+  type ScribeSetup,
+} from "./scribes-catalog.js";
 import {
   detectSources,
   loadRuns,
@@ -111,6 +116,12 @@ function optionsText(setup: ScribeSetup) {
       dreams: "Dreaming diary",
     };
     return options.sources.map((source) => names[source] ?? source).join(", ");
+  }
+  // A review setup without a schedule runs on the skill's weekly default.
+  if (setup.scribe === "unlinked-review") {
+    return "schedule" in options && options.schedule === REVIEW_NIGHTLY_SCHEDULE
+      ? "Nightly"
+      : "Weekly";
   }
   return "No options";
 }

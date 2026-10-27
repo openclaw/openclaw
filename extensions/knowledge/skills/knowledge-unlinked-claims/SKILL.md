@@ -1,6 +1,6 @@
 ---
 name: knowledge-unlinked-claims
-description: Review remembered Knowledge claims still unlinked after deterministic relinking. Assign subject pages, create pages for substantial missing subjects, retire exact duplicates and explicitly replaced claims, and fold durable outcomes into page State. Use for unlinked-claim cleanup or the Review unlinked claims scribe that follows Knowledge maintenance.
+description: Review remembered Knowledge claims still unlinked after deterministic relinking. Assign subject pages, create pages for substantial missing subjects, retire exact duplicates and explicitly replaced claims, and fold durable outcomes into page State. Use for unlinked-claim cleanup or the Review unlinked claims scribe.
 ---
 
 # Review unlinked claims
@@ -132,15 +132,15 @@ The **Review unlinked claims** scribe runs this review unattended. Its
 messages follow [scribe setup](references/scribe-setup.md) with id
 `unlinked-review`; it is always ongoing.
 
-- **Setup:** declare the automation with schedule `45 3 * * 0` (Sundays 03:45
-  in the received timezone). Maintenance queues this job, found by its
-  declaration key, after each nightly pass that leaves private claims unlinked
-  (unless `maintenance.reviewJobId` names another job); the weekly schedule only
-  catches what maintenance missed, without a daily turn that finds nothing.
-- **Scheduled run:** work through steps 1 to 6, and check the residue again
-  before stopping, since claims saved during the run are part of the same
-  backlog. With nothing to do, say so in one sentence. Otherwise give the
-  step 6 report. `summary` counts claims examined, linked, withdrawn and left.
+- **Setup:** declare the automation with the schedule in `options.schedule`,
+  in the received timezone. Without one, use `45 3 * * 0` (Sundays 03:45). The
+  owner picks weekly (`45 3 * * 0`) or nightly (`45 3 * * *`, after the
+  default 03:30 maintenance relink).
+- **Scheduled run:** run step 1. When the residue is empty, stop there and end
+  with `state: "on"` and a summary of zero claims examined. Otherwise work
+  through steps 2 to 6, and check the residue again before stopping, since
+  claims saved during the run are part of the same backlog. Give the step 6
+  report. `summary` counts claims examined, linked, withdrawn and left.
 
 The owner sets the scribe up by sending the setup message from a new
 conversation in their direct chat. Disable the automation to pause the review. Resetting or removing the scribe's conversation revokes its access;

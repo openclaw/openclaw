@@ -272,6 +272,12 @@ with `TypeError`. Values use the normal bridge JSON normalization. Each
 serialized value may use at most 256 KiB of encoded JSON, and all stored values
 together may use at most 1 MiB. Exceeding either limit rejects with `RangeError`
 and leaves the store unchanged. `await store(key, undefined)` deletes a key.
+Catch a capacity error by `error instanceof RangeError` or
+`error.code === "store_range"`, then store a summary or smaller value. If the
+total is full, delete unneeded keys before retrying the write. For larger data
+needed only in this reply, use `results.save(value)` instead. An uncaught
+capacity error reports `invalid_input`; it does not automatically replay the
+cell or commit that cell's pending writes.
 `await load(key)` returns `undefined` when missing and otherwise returns a
 detached copy; editing that copy does not change the saved value.
 

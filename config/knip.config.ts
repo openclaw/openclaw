@@ -144,6 +144,7 @@ const repositoryScriptEntries = [
   "scripts/perf/plugin-blob-registration-measure.ts!",
   "scripts/perf/session-reaction-quota-measure.ts!",
   // Maintained guides, source headers, and paired drivers invoke these roots by path.
+  "scripts/perf/audit-batch-write-measure.ts!",
   "scripts/perf/audit-context-write-measure.ts!",
   "scripts/perf/node-worker-journal-measure.ts!",
   "scripts/perf/orphan-recovery-observer.mjs!",
@@ -154,6 +155,7 @@ const repositoryScriptEntries = [
   "scripts/perf/session-row-index-measure.ts!",
   "scripts/perf/session-row-materialization-measure.ts!",
   "scripts/perf/session-row-refresh-measure.ts!",
+  "scripts/perf/session-row-consume-measure.ts!",
   "scripts/perf/session-row-lineage-measure.ts!",
   "scripts/perf/session-event-ancestors-measure.ts!",
   "scripts/perf/tool-result-hash-measure.ts!",
@@ -820,6 +822,19 @@ const repositoryScriptEntries = [
   "scripts/perf/plugin-scope-attribution-preload.mjs!",
   // The documented placement shutdown reproduction is invoked as a standalone CLI.
   "scripts/perf/worker-placement-reconcile-shutdown-measure.ts!",
+  // Their headers document these standalone measurement CLIs by path.
+  "scripts/perf/agent-db-inspection-close-measure.mjs!",
+  "scripts/perf/agent-prepare-write-measure.mjs!",
+  "scripts/perf/config-health-restart-measure.ts!",
+  "scripts/perf/connect-tail-measure.ts!",
+  "scripts/perf/device-token-snapshot-measure.ts!",
+  "scripts/perf/paired-row-encoding-measure.ts!",
+  "scripts/perf/session-actor-writer-append-measure.ts!",
+  "scripts/perf/session-cost-usage-cold-read.ts!",
+  "scripts/perf/worker-warm-floor-measure.mjs!",
+  "scripts/perf/worktree-branches-measure.ts!",
+  // connect-tail-measure.ts loads this diagnostics preload through --gateway-preload.
+  "scripts/perf/connect-tail-preload.mjs!",
   // The standalone build guide invokes this builder by path.
   "scripts/build-bun-standalone.mjs!",
   // Maintainers invoke the isolated macOS standalone Doctor proof by path.
@@ -889,8 +904,9 @@ const repositoryScriptEntries = [
   // The Docker custody shell copies the server and mounts the scenario by path.
   "scripts/e2e/lib/mcp-docker-custody/scenario.mjs!",
   "scripts/e2e/lib/mcp-docker-custody/server.cjs!",
-  // Muse Docker shells invoke auth directly and select deterministic/live by mode.
+  // Muse Docker shells invoke auth directly and select deterministic/consent/live by mode.
   "scripts/e2e/lib/muse-runtime/auth.mjs!",
+  "scripts/e2e/lib/muse-runtime/consent.mjs!",
   "scripts/e2e/lib/muse-runtime/deterministic.mjs!",
   "scripts/e2e/lib/muse-runtime/live.mjs!",
   // test:e2e:node-auto-update runs the installed-package proof against a frozen tarball.
@@ -951,6 +967,8 @@ const repositoryScriptEntries = [
   // The compiler below exposes the runner's inline Node imports.
   "scripts/e2e/lib/upgrade-survivor/run.sh!",
   "scripts/e2e/lib/upgrade-survivor/schema-expectation.mjs!",
+  // The upgrade-survivor runner invokes the session-share baseline and checks by path.
+  "scripts/e2e/lib/upgrade-survivor/session-share.mjs!",
   // update-restart-auth.sh installs this manager/launch adapter into the fixture bin directory.
   "scripts/e2e/lib/upgrade-survivor/systemd-fixture.mjs!",
   // The first-hop shell executes the packaged admission entry probe by path.
@@ -1706,6 +1724,10 @@ const config = {
     // production uses them through their owning module/controller.
     "ui/src/pages/chat/chat-state-refresh.{ts,tsx}": ["exports"],
     "ui/src/pages/chat/composer-persistence.{ts,tsx}": ["exports"],
+    // Focused head tests bind fake nodes; production binds through initializeControlUiDocumentHead.
+    "ui/src/app/control-ui-document-head.ts": ["exports"],
+    // Focused link tests build the resolver directly; production reaches it through projectSubagentStatus.
+    "ui/src/pages/chat/chat-subagent-wait.ts": ["exports"],
     // The presentation fixture and focused UI tests consume these seams;
     // the full-tree companion scan continues to audit their actual consumers.
     "ui/src/components/terminal/terminal-panel.ts": ["types"],

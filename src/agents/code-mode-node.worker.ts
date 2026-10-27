@@ -179,28 +179,9 @@ const initializeScript = compileController(
     (() => {
       const finish = globalThis.__openclawNodeFinish;
       delete globalThis.__openclawNodeFinish;
-      const stringify = JSON.stringify;
-      const string = String;
-      const encodeError = (error) => {
-        const bridgeCode = __openclawBridgeFailureCode(error) ?? null;
-        const diagnostic = (read, fallback) => {
-          try { return read(); } catch { return fallback; }
-        };
-        // Guest error properties may throw; recorded bridge identity must still reach finish.
-        const stack = diagnostic(() => error?.stack, "");
-        // Provenance records contain primitives and never inherit guest toJSON hooks.
-        return stringify({
-          __proto__: null,
-          bridgeCode,
-          name: diagnostic(() => string(error?.name ?? "Error"), "Error"),
-          message: diagnostic(() => string(error?.message ?? error), "Error"),
-          stack: typeof stack === "string" ? stack : "",
-        });
-      };
       Object.defineProperties(globalThis, {
-        __openclawNodeEncodeError: { value: encodeError },
         __openclawNodeObserveResult: { value: (result) => {
-          result.then(value => finish(true, value), error => finish(false, encodeError(error)));
+          result.then(value => finish(true, value), error => finish(false, __openclawEncodeError(error)));
         }},
       });
     })();
@@ -219,7 +200,7 @@ const rejectionScript = compileController(
   `(() => {
     const error = __openclawNodeRejection;
     delete globalThis.__openclawNodeRejection;
-    return __openclawNodeEncodeError(error);
+    return __openclawEncodeError(error);
   })()`,
 );
 
@@ -328,6 +309,7 @@ function createCell(
   context["__openclawHostOutput"] = (json: string) => current.progress.append(json);
   context["__openclawNodeInit"] = new TextDecoder().decode(input.initialization);
   context["__openclawNodeMaxPending"] = input.config.maxPendingToolCalls;
+  context["__openclawMaxOutputBytes"] = input.config.maxOutputBytes;
   context["__openclawNodeFinish"] = (ok: boolean, json: string) => {
     current.outcome = { ok, json };
   };

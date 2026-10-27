@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { locationParams, readLocation } from "./page-location.js";
 import {
+  defaultOptions,
   repairMessage,
   scribeById,
   scribeLabel,
@@ -66,8 +67,14 @@ describe("scribes catalog", () => {
     ).toContain(
       '{"scribe":"memory","mode":"once","options":{"sources":["memory-md","dreams"]},"timezone":"UTC","agentId":"main"}',
     );
-    expect(setupMessage(scribeSetup("unlinked-review", "ongoing", {}, "main", "UTC"))).toContain(
+    const review = setupMessage(
+      scribeSetup("unlinked-review", "ongoing", defaultOptions("unlinked-review"), "main", "UTC"),
+    );
+    expect(review).toContain(
       'Follow the "Scribe setup" section of the knowledge-unlinked-claims skill',
+    );
+    expect(review, "the review scribe defaults to weekly").toContain(
+      '{"scribe":"unlinked-review","mode":"ongoing","options":{"schedule":"45 3 * * 0"},"timezone":"UTC","agentId":"main"}',
     );
   });
 });
