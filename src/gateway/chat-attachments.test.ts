@@ -40,7 +40,6 @@ import {
   DEFAULT_WORKER_PENDING_BYTES,
   getWorkerComputeCapacity,
 } from "../infra/worker-task-capacity.js";
-import { resizeToJpeg } from "../media/image-ops.js";
 import {
   canonicalizePersistedUserMessageMedia,
   readPersistedMediaFacts,
@@ -95,50 +94,51 @@ function savedMedia(id: string, contentType: string, size: number) {
   return { id, path: `/media/inbound/${id}`, size, contentType };
 }
 
-function parseRpc(
-  message: string,
-  attachment: Parameters<typeof normalizeRpcAttachmentsToChatAttachments>[0],
-) {
-  return parseMessageWithAttachments(message, normalizeRpcAttachmentsToChatAttachments(attachment));
-}
+function boundedImageFixture(kind: string): Buffer {
+  const fixedHeaders: Record<string, string> = {
+    gif:
+      "47494638396120001000800000000000ffffff" +
+      "21f90400000000002c0000000001000100000202440100".repeat(2) +
+      "3b",
+    webp: "52494646b8d4010057454250565038200a0000000000009d012a20001000",
+    "webp-lossless": "52494646b8d40100574542505650384c0a0000002f1fc00300000000000000",
+    "webp-extended": "52494646b8d4010057454250565038580a000000000000001f00000f0000",
+  };
+  const exif = "ffe1002245786966000049492a0008000000010012010300010000000600000000000000";
+  // TIFF IFD offset 59,970 puts the orientation entry at APP1 byte 59,980.
+  const orientation =
+    kind === "jpeg-large-exif"
+      ? "ffe1ea6245786966000049492a0042ea0000" +
+        "00".repeat(59_962) +
+        exif.slice(36) +
+        "00".repeat(6)
+      : kind === "jpeg-rotated" || kind === "jpeg-fallback"
+        ? exif
+        : "";
+  // Five APP2 segments put SOF and EXIF beyond the 256KiB prefix cap.
+  const app2 = kind === "jpeg-fallback" ? ("ffe2ea62" + "00".repeat(60_000)).repeat(5) : "";
+  const frame = kind === "jpeg-progressive" ? "ffc2" : "ffc0";
+  const header = Buffer.from(
+    fixedHeaders[kind] ??
+      `ffd8${app2}${frame}000b080010002001011100${orientation}ffda0008010100003f00`,
+    "hex",
+  );
 
-function pngBase64OfBytes(bytes: number): string {
-  const pngHeader = PNG_1x1.slice(0, 64);
-  let base64Length = Math.ceil((bytes * 4) / 3);
-  base64Length += (4 - (base64Length % 4)) % 4;
-  return `${pngHeader}${"A".repeat(base64Length - pngHeader.length)}`;
+  return Buffer.concat([header, Buffer.alloc(Math.max(0, 120_000 - header.length))]);
 }
 
 function persist(
-  {
-    images,
-    offloadedRefs,
-  }: Pick<Awaited<ReturnType<typeof parseMessageWithAttachments>>, "images" | "offloadedRefs">,
+  media: Pick<Awaited<ReturnType<typeof parseMessageWithAttachments>>, "images" | "offloadedRefs">,
   options: Partial<
     Pick<Parameters<typeof persistInboundImagesForTranscript>[0], "log" | "assertCurrent">
   > = {},
 ) {
   return persistInboundImagesForTranscript({
-    images,
-    offloadedRefs,
+    ...media,
     log: { warn: vi.fn() },
     logContext: "chat.send",
     ...options,
   });
-}
-
-async function expectUnsupportedAttachmentReason(
-  attachments: ChatAttachment[],
-  opts: Parameters<typeof parseMessageWithAttachments>[2],
-  reason: UnsupportedAttachmentError["reason"],
-) {
-  const caught = await parseMessageWithAttachments("x", attachments, {
-    log: { warn: () => {} },
-    ...opts,
-  }).catch((err: unknown) => err);
-  expect(caught).toBeInstanceOf(UnsupportedAttachmentError);
-  expect(caught).toMatchObject({ name: "UnsupportedAttachmentError", reason });
-  expect(saveMediaBufferMock).not.toHaveBeenCalled();
 }
 
 beforeEach(() => {
@@ -183,13 +183,16 @@ describe("composer attachment origin", () => {
       saveMediaBufferMock.mockResolvedValueOnce(
         savedMedia("pasted-text-123.txt", "text/plain", bytes.length),
       );
-      const parsed = await parseRpc("Read this", [
+      const attachments = [
         { mimeType: "text/plain", fileName, origin, content: bytes.toString("base64") },
-      ]);
+      ];
+      const parsed = await parseMessageWithAttachments(
+        "Read this",
+        normalizeRpcAttachmentsToChatAttachments(attachments),
+      );
       const persisted = await persist(parsed);
       const message = buildPersistedUserTurnMessage({
         text: "Read this",
-        timestamp: 123,
         media: persisted.entries.map((entry) => entry.fact),
       });
       const canonical = canonicalizePersistedUserMessageMedia(message).message;
@@ -220,14 +223,31 @@ describe("persistInboundImagesForTranscript", () => {
     ["inline", 32, 16],
     ["worker", 32, 16],
     ["offloaded", 32, 16],
-    ["rotated", 16, 32],
     ["unreadable", undefined, undefined],
     ["mime-hint", 40, 30],
+    ["bounded-jpeg", 32, 16],
+    ["bounded-jpeg-progressive", 32, 16],
+    ["bounded-jpeg-rotated", 16, 32],
+    ["bounded-jpeg-large-exif", 16, 32],
+    ["jpeg-fallback", 16, 32],
+    ["bounded-gif", 32, 16],
+    ["bounded-webp", 32, 16],
+    ["bounded-webp-lossless", 32, 16],
+    ["bounded-webp-extended", 32, 16],
   ] as const)(
     "persists byte-authoritative dimensions for %s images",
     async (kind, width, height) => {
       let bytes = createNoisyPngBuffer(32, 16);
-      if (kind === "offloaded" || kind === "worker") {
+      const format = kind.startsWith("bounded-")
+        ? kind.slice(8).split("-")[0]
+        : kind === "jpeg-fallback"
+          ? "jpeg"
+          : "png";
+      const mimeType = `image/${format}`;
+      const fileName = `upload.${format}`;
+      if (format !== "png") {
+        bytes = boundedImageFixture(kind.replace("bounded-", ""));
+      } else if (kind === "offloaded" || kind === "worker") {
         bytes = Buffer.concat([bytes, Buffer.alloc(kind === "worker" ? 1_900_000 : 2_000_000)]);
       } else if (kind === "mime-hint") {
         // MIME sniffing misses this permissive JPEG header reader's late SOF.
@@ -236,22 +256,8 @@ describe("persistInboundImagesForTranscript", () => {
         bytes.set(Buffer.from("ffc0000b08001e0028", "hex"), 53);
       } else if (kind === "unreadable") {
         bytes = Buffer.from("89504e470d0a1a0a0000000000000000", "hex");
-      } else if (kind === "rotated") {
-        const jpeg = await resizeToJpeg({
-          buffer: bytes,
-          maxSide: 32,
-          quality: 92,
-          withoutEnlargement: true,
-        });
-        const orientation = Buffer.from(
-          "ffe1002245786966000049492a0008000000010012010300010000000600000000000000",
-          "hex",
-        );
-        bytes = Buffer.concat([jpeg.subarray(0, 2), orientation, jpeg.subarray(2)]);
       }
-      const mimeType = kind === "rotated" ? "image/jpeg" : "image/png";
-      const fileName = kind === "rotated" ? "portrait.jpg" : "upload.png";
-      const supplied = kind === "rotated" ? { width: 32, height: 16 } : { width: 999, height: 777 };
+      const supplied = { width: 999, height: 777 };
       const base64 = bytes.toString("base64");
       const from = vi.spyOn(Buffer, "from");
       const parsed = await parseMessageWithAttachments(
@@ -268,11 +274,15 @@ describe("persistInboundImagesForTranscript", () => {
       );
       const storage = kind === "offloaded" || kind === "unreadable" ? "offloaded" : "inline";
       expect(parsed.imageOrder).toEqual([storage]);
-      if (kind === "inline" || kind === "worker" || kind === "offloaded") {
-        expect(from.mock.calls.map((call) => call.slice(0, 2))).not.toContainEqual([
-          base64,
-          "base64",
-        ]);
+      if (
+        kind === "inline" ||
+        kind === "worker" ||
+        kind === "offloaded" ||
+        kind.startsWith("bounded-")
+      ) {
+        expect(
+          from.mock.calls.some(([value, encoding]) => value === base64 && encoding === "base64"),
+        ).toBe(false);
       }
       const persisted = await persist(parsed);
       const message = buildPersistedUserTurnMessage({
@@ -406,16 +416,31 @@ describe("parseMessageWithAttachments", () => {
 
 describe("parseMessageWithAttachments validation errors", () => {
   it.each([
-    { name: "an empty string", attachment: { content: "" } },
-    { name: "an empty typed array", attachment: { content: new Uint8Array(0) } },
-    { name: "an empty array buffer", attachment: { content: new ArrayBuffer(0) } },
-    {
-      name: "an empty nested base64 source",
-      attachment: { source: { type: "base64", media_type: "application/pdf", data: "" } },
-    },
-  ])("rejects normalized RPC attachments with $name", async ({ attachment }) => {
-    const normalized = normalizeRpcAttachmentsToChatAttachments([attachment]);
-    await expectUnsupportedAttachmentReason(normalized, {}, "empty-payload");
+    ["empty string", { content: "" }, {}, "empty-payload"],
+    ["empty typed array", { content: new Uint8Array(0) }, {}, "empty-payload"],
+    ["empty array buffer", { content: new ArrayBuffer(0) }, {}, "empty-payload"],
+    [
+      "empty source",
+      { source: { type: "base64", media_type: "application/pdf", data: "" } },
+      {},
+      "empty-payload",
+    ],
+    [
+      "ZIP disguised as PNG",
+      pngAttachment({ content: "UEsDBHppcC1hcmNoaXZlLWJ5dGVz" }),
+      { acceptNonImage: false },
+      "unsupported-non-image",
+    ],
+    ["inline images disabled", pngAttachment(), { supportsInlineImages: false }, "text-only-image"],
+  ] as const)("rejects %s without writing media", async (_name, attachment, options, reason) => {
+    const caught = await parseMessageWithAttachments(
+      "x",
+      normalizeRpcAttachmentsToChatAttachments([attachment]),
+      options,
+    ).catch((error: unknown) => error);
+    expect(caught).toBeInstanceOf(UnsupportedAttachmentError);
+    expect(caught).toMatchObject({ name: "UnsupportedAttachmentError", reason });
+    expect(saveMediaBufferMock).not.toHaveBeenCalled();
   });
 
   it("continues to omit RPC attachments without recognized content", () => {
@@ -427,23 +452,6 @@ describe("parseMessageWithAttachments validation errors", () => {
         { source: { type: "base64", media_type: "application/pdf", data: null } },
       ]),
     ).toEqual([]);
-  });
-
-  it("rejects generic-container payloads with image mime and image filename when acceptNonImage is false", async () => {
-    const zip = Buffer.from("PK\u0003\u0004zip-archive-bytes").toString("base64");
-    await expectUnsupportedAttachmentReason(
-      [pngAttachment({ fileName: "fake.png", content: zip })],
-      { acceptNonImage: false },
-      "unsupported-non-image",
-    );
-  });
-
-  it("throws UnsupportedAttachmentError on image when supportsInlineImages is false", async () => {
-    await expectUnsupportedAttachmentReason(
-      [pngAttachment()],
-      { supportsInlineImages: false },
-      "text-only-image",
-    );
   });
 
   it("passes through unchanged on text-only session with no attachments", async () => {
@@ -509,21 +517,6 @@ describe("parseMessageWithAttachments validation errors", () => {
   });
 });
 
-describe("advertised attachment policy matches enforcement", () => {
-  it("rejects images above the advertised maxImageBytes when the hydration cap is the smaller limit", async () => {
-    const policy = resolveChatAttachmentPolicy({ agents: { defaults: { mediaMaxMb: 20 } } });
-    expect(policy.maxImageBytes).toBe(MAX_IMAGE_BYTES);
-    await expect(
-      parseMessageWithAttachments(
-        "x",
-        [pngAttachment({ fileName: "big.png", content: pngBase64OfBytes(MAX_IMAGE_BYTES + 3) })],
-        { maxBytes: policy.maxBytes, log: { warn: () => {} } },
-      ),
-    ).rejects.toThrow(/image exceeds size limit/i);
-    expect(saveMediaBufferMock).not.toHaveBeenCalled();
-  });
-});
-
 describe("attachment validation", () => {
   it("reports compute saturation as retryable without writing media", async () => {
     const capacity = getWorkerComputeCapacity();
@@ -572,14 +565,27 @@ describe("attachment validation", () => {
     expect(deleteMediaBufferMock).toHaveBeenCalledWith(saved?.id, "inbound");
   });
 
-  it("rejects images over limit without decoding base64", async () => {
-    const fromSpy = vi.spyOn(Buffer, "from");
-    await expect(
-      parseMessageWithAttachments("x", [pngAttachment({ content: "A".repeat(10_000) })], {
-        maxBytes: 16,
-      }),
-    ).rejects.toThrow(/exceeds size limit/i);
-    const base64Calls = fromSpy.mock.calls.filter((args) => (args as unknown[])[1] === "base64");
-    expect(base64Calls).toHaveLength(0);
-  });
+  it.each(["image", "request"] as const)(
+    "enforces the %s byte ceiling before full decoding",
+    async (limit) => {
+      const policy = resolveChatAttachmentPolicy({ agents: { defaults: { mediaMaxMb: 20 } } });
+      expect(policy.maxImageBytes).toBe(MAX_IMAGE_BYTES);
+      const content =
+        limit === "image"
+          ? PNG_1x1.slice(0, 64) + "A".repeat(Math.ceil((MAX_IMAGE_BYTES + 3) / 3) * 4 - 64)
+          : "A".repeat(10_000);
+      const from = vi.spyOn(Buffer, "from");
+      await expect(
+        parseMessageWithAttachments("x", [pngAttachment({ content })], {
+          maxBytes: limit === "image" ? policy.maxBytes : 16,
+        }),
+      ).rejects.toThrow(limit === "image" ? /image exceeds size limit/i : /exceeds size limit/i);
+      const decodes = from.mock.calls.filter(([, encoding]) => encoding === "base64");
+      if (limit === "request") {
+        expect(decodes).toHaveLength(0);
+      }
+      expect(decodes.some(([value]) => value === content)).toBe(false);
+      expect(saveMediaBufferMock).not.toHaveBeenCalled();
+    },
+  );
 });
