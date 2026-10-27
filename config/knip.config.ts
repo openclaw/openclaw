@@ -456,6 +456,7 @@ const repositoryScriptEntries = [
   "scripts/perf/plugin-config-publication-measure.mjs!",
   "scripts/perf/plugin-metadata-frame-measure.ts!",
   "scripts/perf/plugin-sdk-defensive-measure.ts!",
+  "scripts/perf/plugin-session-action-measure.ts!",
   "scripts/perf/presence-delivery-measure.ts!",
   "scripts/perf/project-publication-fetch-measure.ts!",
   "scripts/perf/provider-rate-limit-http-retention.ts!",
