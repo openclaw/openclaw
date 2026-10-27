@@ -263,9 +263,9 @@ async function findSession(host: ScribeReader, agentId: string, scribe: ScribeDe
   return rows.find((row) => !row.archived) ?? rows[0];
 }
 
-/** All of this agent's scribe automations, keyed by declarationKey. */
+/** All of this agent's scribe automations, grouped by declarationKey. */
 async function findJobs(host: ScribeReader, agentId: string) {
-  const jobs = new Map<string, ScribeJob>();
+  const jobs = new Map<string, ScribeJob[]>();
   // A bounded walk: scribe jobs are a handful among the agent's automations.
   for (let offset: number | null = 0, page = 0; offset !== null && page < 10; page++) {
     const result: { jobs?: unknown[]; nextOffset?: number | null; hasMore?: boolean } =
@@ -278,7 +278,7 @@ async function findJobs(host: ScribeReader, agentId: string) {
         job.declarationKey.startsWith("knowledge:scribe:")
       ) {
         // SAFETY: a scheduler job row; the fields the view reads are optional or checked.
-        jobs.set(job.declarationKey, job as ScribeJob);
+        jobs.set(job.declarationKey, [...(jobs.get(job.declarationKey) ?? []), job as ScribeJob]);
       }
     }
     offset = result?.hasMore && typeof result.nextOffset === "number" ? result.nextOffset : null;
@@ -307,7 +307,12 @@ export async function loadScribes(host: ScribeReader, agentId: string): Promise<
   return Promise.all(
     SCRIBES.map(async (scribe, i) => {
       const session = sessions[i];
-      const job = jobs.get(scribeDeclarationKey(scribe.id));
+      // The key is unique per owner conversation: prefer the job that targets this scribe's own
+      // conversation; another one with the key still marks the scribe as set up somewhere.
+      const keyed = jobs.get(scribeDeclarationKey(scribe.id)) ?? [];
+      const job =
+        keyed.find((entry) => session && entry.sessionTarget === `session:${session.key}`) ??
+        keyed[0];
       const messages = session ? await readMessages(host, session, agentId) : [];
       const { result, index: resultIndex } = parseScribeResult(messages);
       const { setup, kind, index: setupIndex } = parseSetup(messages);

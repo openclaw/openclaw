@@ -271,6 +271,35 @@ describe("scribes state", () => {
     });
   });
 
+  it("picks the job that targets the scribe's own conversation", async () => {
+    const label = "Scribe · Learn from conversations";
+    const request = vi.fn(async (method: string, params?: Record<string, unknown>) => {
+      if (method === "cron.list") {
+        return {
+          jobs: [
+            {
+              ...job({ id: "old", enabled: false }),
+              declarationKey: "knowledge:scribe:conversations",
+              sessionTarget: "session:s-old",
+            },
+            {
+              ...job({ id: "mine" }),
+              declarationKey: "knowledge:scribe:conversations",
+              sessionTarget: "session:s-conv",
+            },
+          ],
+        };
+      }
+      if (method === "sessions.list") {
+        return { sessions: params?.label === label ? [{ key: "s-conv", label }] : [] };
+      }
+      return { messages: [] };
+    });
+    const snapshots = await loadScribes({ request } as never, "main");
+    const conversations = snapshots.find((snapshot) => snapshot.scribe.id === "conversations")!;
+    expect([conversations.job?.id, conversations.status]).toEqual(["mine", "on"]);
+  });
+
   it("detects conversation counts and MEMORY.md, omitting what it cannot read", async () => {
     const request = vi.fn(async (method: string, params?: Record<string, unknown>) => {
       if (method === "sessions.list") {
