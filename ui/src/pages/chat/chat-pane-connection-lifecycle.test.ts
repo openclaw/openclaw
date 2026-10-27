@@ -12,18 +12,19 @@ import type { SessionCapability } from "../../lib/sessions/index.ts";
 import { sessionsResult } from "../../lib/sessions/session-capability.test-support.ts";
 import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
 import { sessionMutationGatewayHello } from "../../test-helpers/gateway-methods.ts";
+import { mockDocumentVisibility as trackVisibility } from "../../test-helpers/mock-cleanup.ts";
 import { flush, waitForSolid } from "../../test-helpers/solid-settle.ts";
 import type { ChatHistoryResult } from "./chat-history-snapshot.ts";
 import { chatHistoryRequests } from "./chat-history-state.ts";
 import { applyChatAgentsList, loadChatHistory } from "./chat-history.ts";
 import { makeRequestMock, requestCalls } from "./chat-host.test-support.ts";
 import {
-  createSessionCapabilityFixture,
   createTestChatPane,
   connectPaneTestView,
   getPaneTestRuntime,
   type TestChatPane,
 } from "./chat-pane.test-support.ts";
+import { createSessionCapabilityFixture } from "./chat-session-capability.test-support.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
 import { retainSessionWorkspaceArtifacts } from "./components/chat-session-workspace-state.ts";
 import * as chatThread from "./components/chat-thread-interactions.ts";
@@ -161,15 +162,6 @@ function presentationPane() {
   return fixture;
 }
 
-function trackVisibility(initial: DocumentVisibilityState) {
-  let current = initial;
-  vi.spyOn(document, "visibilityState", "get").mockImplementation(() => current);
-  return (next: DocumentVisibilityState) => {
-    current = next;
-    document.dispatchEvent(new Event("visibilitychange"));
-  };
-}
-
 function disconnect(pane: TestChatPane) {
   pane.applyGatewaySnapshot({
     ...pane.context.gateway.snapshot,
@@ -209,7 +201,11 @@ describe("chat pane connection lifecycle", () => {
       sessionKey: h.state.sessionKey,
       connected: false,
       promise: Promise.resolve(),
-      adoptReadySnapshot: () => {
+      readReadyHistory: () => ({
+        deltaCursor: snapshot.deltaCursor,
+        historyState: snapshot.historyState,
+      }),
+      adoptReadySnapshot: async () => {
         applyChatCacheSnapshot(h.state, snapshot);
         cacheChatSessionSnapshot(
           h.state.chatMessagesBySession,
@@ -222,6 +218,7 @@ describe("chat pane connection lifecycle", () => {
     expect(h.state.chatMessages).toEqual([]);
     h.dispatchConnect();
     await h.requested;
+    expect(h.state.chatMessages).toEqual([]);
     expect(requestCalls(h.request, "sessions.messages.subscribe")[0]?.[1]).toMatchObject({
       initialHistory: { cursor: "warm-cursor", knownState: { commands: "commands-1" } },
     });

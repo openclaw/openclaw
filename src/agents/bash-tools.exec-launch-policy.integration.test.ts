@@ -33,10 +33,7 @@ vi.mock("../process/supervisor/index.js", () => ({
 }));
 vi.mock("../process/spawn-utils.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../process/spawn-utils.js")>();
-  return {
-    ...actual,
-    spawnAndWait: trackLaunch(actual.spawnAndWait),
-  };
+  return { ...actual, spawnAndWait: trackLaunch(actual.spawnAndWait) };
 });
 vi.mock("../process/terminal-pty.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../process/terminal-pty.js")>();
@@ -103,16 +100,12 @@ describe.runIf(process.platform !== "win32")("launch policy and construction aut
     }
   });
 
-  it.each([
-    ["Gateway child", "before"],
-    ["Gateway child", "after"],
-    ["Gateway retained child", "before"],
-    ["Gateway retained child", "after"],
-    ["Gateway PTY", "before"],
-    ["Gateway PTY", "after"],
-    ["Claude node", "before"],
-    ["Claude node", "after"],
-  ] as const)("applies %s policy revocation %s native launch", async (route, timing) => {
+  const routes = ["Gateway child", "Gateway retained child", "Gateway PTY", "Claude node"];
+  it.each(
+    routes.flatMap((route) =>
+      (["before", "after"] as const).map((timing) => [route, timing] as const),
+    ),
+  )("applies %s policy revocation %s native launch", async (route, timing) => {
     if (route === "Gateway retained child") {
       vi.stubEnv("OPENCLAW_SERVICE_MARKER", "launch-policy-fixture");
     }

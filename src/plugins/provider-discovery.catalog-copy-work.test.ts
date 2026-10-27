@@ -71,11 +71,19 @@ it("keeps first-match configured precedence and last-entry aggregate precedence"
     baseUrl: "https://last.example.invalid/v1",
     models: [model("shared-model", "Last entry")],
   };
-  const prepared = await prepareProviderStaticCatalog({
-    providers: [first, last].map((config, index) =>
-      staticProvider(provider, config, `Owner ${index}`),
-    ),
+  const providers = [first, last].map((config, index) =>
+    staticProvider(provider, config, `Owner ${index}`),
+  );
+  let traversals = 0;
+  const iterate = providers[Symbol.iterator].bind(providers);
+  Object.defineProperty(providers, Symbol.iterator, {
+    value: () => {
+      traversals++;
+      return iterate();
+    },
   });
+  const prepared = await prepareProviderStaticCatalog({ providers });
+  expect(traversals).toBe(1);
   const configured = reader.read(prepared, [{ provider, modelId: "shared-model" }]);
   expect(configured).toMatchObject([
     {

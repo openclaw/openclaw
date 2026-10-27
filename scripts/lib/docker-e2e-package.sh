@@ -358,6 +358,7 @@ docker_e2e_harness_mount_args() {
     -v "$harness_root/packages/normalization-core/package.json:/app/packages/normalization-core/package.json:ro"
     -v "$harness_root/packages/normalization-core/src:/app/packages/normalization-core/src:ro"
     -v "$harness_root/tsconfig.json:/app/tsconfig.json:ro"
+    -v "$harness_root/standalone-runtime-profile.mjs:/app/standalone-runtime-profile.mjs:ro"
     -v "$harness_root/test/e2e/qa-lab:/app/test/e2e/qa-lab:ro"
     -v "$harness_root/test/helpers:/app/test/helpers:ro"
     -v "$harness_root/scripts/prepublish-plugin-registry-artifact.mjs:/app/scripts/prepublish-plugin-registry-artifact.mjs:ro"

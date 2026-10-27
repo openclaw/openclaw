@@ -1,13 +1,13 @@
 import { performance } from "node:perf_hooks";
 import { isMainThread, threadId } from "node:worker_threads";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
-import { freezeJsonSnapshot } from "../../shared/immutable-data.js";
+import { freezeTrustedJsonSnapshot } from "../../shared/immutable-data.js";
 import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
 import { tryResolveCronJobEffectiveAgentId } from "../agent-id.js";
 import { resolveCronJobConfigRevision } from "../config-revision.js";
 import { resolveCronListSnapshotRevision } from "../list-snapshot-revision.js";
-import { readCronScratchSnapshot } from "../scratch-read.js";
-import { writeCronJobScratch } from "../scratch-store.js";
+import { readCronScratchSnapshotByKey } from "../scratch-read.js";
+import { writeCronJobScratchByKey } from "../scratch-store.js";
 import { getCronJobsStoreRevision, noteCronJobsStoreCommit } from "../store.js";
 import { CronJobsStoreChangedError } from "../store/save-error.js";
 import type { CronJob } from "../types.js";
@@ -23,7 +23,7 @@ import { locked } from "./locked.js";
 import { normalizeOptionalAgentId } from "./normalize.js";
 import { reloadProvisionedCronJobs } from "./ops-lifecycle.js";
 import { ensureLoadedForRead, resolveCurrentDefaultAgentId } from "./ops-shared.js";
-import type { CronServiceState } from "./state.js";
+import { prepareCronServiceStore, type CronServiceState } from "./state.js";
 import { captureCronJobMutationSource, ensureLoaded } from "./store.js";
 
 /** Called under the read lock, after loading passive or newly committed state. */
@@ -31,7 +31,7 @@ async function readSnapshot(
   state: CronServiceState,
 ): Promise<NonNullable<CronServiceState["readSnapshot"]>> {
   await ensureLoadedForRead(state);
-  const storeRevision = getCronJobsStoreRevision(state.deps.storePath);
+  const storeRevision = getCronJobsStoreRevision(state.deps.storeKey);
   const source = state.store?.jobs;
   const cached = state.schedulerStarted ? state.readSnapshot : undefined;
   if (cached?.storeRevision === storeRevision && cached.source === source) {
@@ -41,7 +41,9 @@ async function readSnapshot(
   return (state.readSnapshot = {
     storeRevision,
     source,
+    lists: [],
     readJobs: new WeakMap<CronJob, CronJob>(),
+    searchText: new WeakMap<CronJob, string>(),
     status: Object.freeze({
       enabled: state.deps.cronEnabled,
       triggersEnabled: state.deps.cronConfig?.triggers?.enabled !== false,
@@ -96,6 +98,10 @@ export async function readScratch(
   id: string,
   options?: { assertCurrent?: () => void; signal?: AbortSignal },
 ) {
+  const preparation = prepareCronServiceStore(state);
+  if (preparation) {
+    await preparation;
+  }
   const source = captureCronJobMutationSource(state);
   const callerCurrent = options?.assertCurrent;
   const signal = options?.signal;
@@ -111,8 +117,8 @@ export async function readScratch(
     assertCurrent();
     const job = findJobOrThrow(state, id);
     const revision = resolveCronJobConfigRevision(job);
-    const snapshot = await readCronScratchSnapshot(
-      state.deps.storePath,
+    const snapshot = await readCronScratchSnapshotByKey(
+      state.deps.storeKey,
       { kind: "job", jobId: id, createdAtMsFallback: job.createdAtMs },
       {},
       { context: source.context, assertCurrent, signal },
@@ -138,6 +144,10 @@ export async function writeScratch(
     commitGuard?: () => void;
   },
 ) {
+  const preparation = prepareCronServiceStore(state);
+  if (preparation) {
+    await preparation;
+  }
   const source = captureCronJobMutationSource(state);
   return await locked(state, async () => {
     source.assertCurrent();
@@ -145,9 +155,9 @@ export async function writeScratch(
     source.assertCurrent();
     const job = findJobOrThrow(state, id);
     const expectedRevision = resolveCronJobConfigRevision(job);
-    return await writeCronJobScratch(
+    return await writeCronJobScratchByKey(
       {
-        storePath: state.deps.storePath,
+        storeKey: state.deps.storeKey,
         jobId: id,
         content: params.content,
         expectedRevision: params.expectedRevision,
@@ -175,6 +185,7 @@ export async function writeScratch(
 }
 
 const SLOW_LIST_PAGE_MS = 1_000;
+const MAX_LIST_SNAPSHOTS = 4;
 
 /** Lists a filtered, sorted, bounded page of cron jobs for CLI/RPC callers. */
 export async function listPage(
@@ -232,15 +243,19 @@ export async function listPage(
             return false;
           }
           if (query) {
-            const haystack = normalizeLowercaseStringOrEmpty(
-              [
-                job.id,
-                job.name,
-                job.description ?? "",
-                job.agentId ?? "",
-                ...(job.displayName ? [job.displayName] : []),
-              ].join(" "),
-            );
+            let haystack = read.searchText.get(job);
+            if (haystack === undefined) {
+              haystack = normalizeLowercaseStringOrEmpty(
+                [
+                  job.id,
+                  job.name,
+                  job.description ?? "",
+                  job.agentId ?? "",
+                  ...(job.displayName ? [job.displayName] : []),
+                ].join(" "),
+              );
+              read.searchText.set(job, haystack);
+            }
             if (!haystack.includes(query)) {
               return false;
             }
@@ -248,16 +263,15 @@ export async function listPage(
           // In-process visibility must share the sorted snapshot and its revision.
           return !matchesJob || matchesJob(job);
         });
-        // Recheck visibility per request; passive readers still reload and repair.
-        // Empty visibility prepasses must not evict the prepared nonempty list.
-        let snapshot = read.list;
-        if (
-          !snapshot ||
-          snapshot.sortBy !== sortBy ||
-          snapshot.sortDir !== sortDir ||
-          snapshot.filteredJobs.length !== filtered.length ||
-          !snapshot.filteredJobs.every((job, index) => job === filtered[index])
-        ) {
+        // Recheck visibility before sharing work across interleaved list variants.
+        let snapshot = read.lists.find(
+          (candidate) =>
+            candidate.sortBy === sortBy &&
+            candidate.sortDir === sortDir &&
+            candidate.filteredJobs.length === filtered.length &&
+            candidate.filteredJobs.every((job, index) => job === filtered[index]),
+        );
+        if (!snapshot) {
           const jobs = sortCronJobs([...filtered], sortBy, sortDir);
           snapshot = {
             filteredJobs: filtered,
@@ -266,8 +280,12 @@ export async function listPage(
             jobs,
             snapshotRevision: resolveCronListSnapshotRevision(jobs),
           };
-          if (jobs.length > 0 || !read.list) {
-            read.list = snapshot;
+          // Empty visibility prepasses must not evict prepared nonempty lists.
+          if (jobs.length > 0 || read.lists.length === 0) {
+            read.lists.push(snapshot);
+            if (read.lists.length > MAX_LIST_SNAPSHOTS) {
+              read.lists.shift();
+            }
           }
         }
         const { jobs: sortedJobs, snapshotRevision } = snapshot;
@@ -278,7 +296,8 @@ export async function listPage(
         const jobs = sortedJobs.slice(offset, offset + limit).map((job) => {
           let frozenJob = read.readJobs.get(job);
           if (!frozenJob) {
-            frozenJob = freezeJsonSnapshot(structuredClone(job));
+            // The cron store decodes JSON and validates jobs before service publication.
+            frozenJob = freezeTrustedJsonSnapshot(structuredClone(job));
             read.readJobs.set(job, frozenJob);
           }
           return frozenJob;

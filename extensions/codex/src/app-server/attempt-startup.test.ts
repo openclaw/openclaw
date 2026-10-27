@@ -130,11 +130,7 @@ async function bindToRetiredLeasedOwner() {
     }
     throw new Error(`unexpected method: ${method}`);
   };
-  const owner = createCodexLifecycleHarness({
-    respond,
-    // Without an exact thread/closed receipt, handoff must wait for physical exit.
-    unsubscribe: () => ({ status: "notLoaded" }),
-  });
+  const owner = createCodexLifecycleHarness({ respond });
   const ownerExitCodesAtResume: Array<number | null> = [];
   const healthy = createCodexLifecycleHarness({
     persistedThreads: ["bound-thread"],
@@ -166,7 +162,8 @@ async function bindToRetiredLeasedOwner() {
       sessionKey: "agent:agent-1:session-1",
     }),
   ).toMatchObject({ threadId: bound.thread.threadId });
-  await owner.endTurn(bound.thread.threadId);
+  // Keep the native thread loaded: a passive notLoaded read would permit handoff
+  // before process exit, even without a thread/closed receipt.
   bound.turnRoute.release();
   bound.releaseSharedClientLease();
   const releaseOwnerPeer = retainSharedCodexAppServerClientIfCurrent(owner.client);

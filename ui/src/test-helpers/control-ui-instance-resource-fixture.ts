@@ -9,7 +9,7 @@ import type {
   ProjectionFixtureFacts,
 } from "./control-ui-projection-fixture-contract.ts";
 
-export type InstanceResourceFacts = ProjectionFixtureFacts & {
+type InstanceResourceFacts = ProjectionFixtureFacts & {
   nativeCheckpoints: InstanceNativeCheckpoint[];
   assertions: string[];
 };
@@ -44,7 +44,7 @@ export function instanceGateway(): ControlUiMockGateway {
   instanceAssert(gateway, "The native resource fixture requires the existing synthetic Gateway");
   return gateway as ControlUiMockGateway;
 }
-export function createInstanceContext(family: InstanceResourceFamily, instrumented: boolean) {
+function createInstanceContext(family: InstanceResourceFamily, instrumented: boolean) {
   instanceAssert(
     location.pathname.endsWith("/instance-resource-fixture.html"),
     "Use the isolated benchmark document; the normal shell would pre-own shared observers",

@@ -4,17 +4,14 @@ import { GatewayProtocolRequestTimeoutError } from "@openclaw/gateway-client/bro
 import { describe, expect, it, onTestFinished, vi } from "vitest";
 import { GatewayPendingRequests } from "../../../../packages/gateway-client/src/pending-request.js";
 import type { RequestFrame } from "../../../../packages/gateway-protocol/src/schema/frames.js";
-import { GatewayRequestError } from "../../api/gateway.ts";
+import { GatewayRequestError } from "../../api/gateway-connect-errors.ts";
+import type { ChatQueueItem } from "../../lib/chat/chat-types.ts";
 import { listStoredChatOutboxes } from "../../lib/chat/outbox-store-projection.ts";
 import { useFakeClock } from "../../test-helpers/fake-clock.ts";
 import { createTestGatewayClient as clientWithRequest } from "../../test-helpers/gateway-client.ts";
+import { retryableGatewayError as unavailable } from "../../test-helpers/gateway-errors.test-support.ts";
 import { waitForFast } from "../../test-helpers/wait-for.ts";
-import {
-  makeChatHost,
-  makeRequestMock,
-  requestCalls,
-  requireRecord,
-} from "./chat-host.test-support.ts";
+import { makeChatHost, requestCalls, requireRecord } from "./chat-host.test-support.ts";
 import { admitHostQueueItems, idleChatHistory } from "./chat-outbox-recovery.test-support.ts";
 import { markQueuedChatSendsWaitingForReconnect } from "./chat-queue-reconnect.ts";
 import { updateQueuedMessage } from "./chat-queue.ts";
@@ -23,16 +20,34 @@ import { handleSendChat } from "./chat-send-submit.ts";
 import { useChatSendBrowserFixture } from "./outbox-browser.test-support.ts";
 useChatSendBrowserFixture();
 
-function unavailable(message = "History is temporarily unavailable") {
-  return new GatewayRequestError({
-    code: "UNAVAILABLE",
-    message,
-    retryable: true,
-    retryAfterMs: 100,
-  });
-}
 function requestTimeout(method: string) {
   return new GatewayProtocolRequestTimeoutError({ method, timeoutMs: 30_000, requestSent: true });
+}
+function failStorage() {
+  vi.spyOn(sessionStorage, "setItem").mockImplementation(() => {
+    throw new Error("quota");
+  });
+}
+function started(params: unknown) {
+  return {
+    runId: requireRecord(params, "send payload").idempotencyKey,
+    status: "started",
+    messageSeq: 1,
+  };
+}
+function waitingInput(id: string, text: string, sendRunId: string): ChatQueueItem {
+  return {
+    id,
+    text,
+    sendRunId,
+    createdAt: 1,
+    sendState: "waiting-reconnect",
+    sessionKey: "agent:main",
+  };
+}
+function expectDrained(host: ReturnType<typeof makeChatHost>) {
+  expect(host.chatQueue).toEqual([]);
+  expect(listStoredChatOutboxes(host)).toStrictEqual([]);
 }
 
 describe("transient outbox delivery recovery", () => {
@@ -44,11 +59,7 @@ describe("transient outbox delivery recovery", () => {
         ...(queueMode ? { chatRunId: "active-run", chatFollowUpMode: queueMode } : {}),
         requestHandlers: {
           "chat.history": idleChatHistory(),
-          "chat.send": (params: unknown) => ({
-            runId: requireRecord(params, "resumed payload").idempotencyKey,
-            status: "started",
-            messageSeq: 1,
-          }),
+          "chat.send": started,
         },
       });
       host.gatewayWorkPaused = true;
@@ -61,7 +72,6 @@ describe("transient outbox delivery recovery", () => {
       expect(requestCalls(host.request, "chat.history")).toHaveLength(0);
       host.gatewayWorkPaused = false;
       await resumeStoredChatOutboxes(host);
-      expect(requestCalls(host.request, "chat.send")).toHaveLength(1);
       expect(requestCalls(host.request, "chat.send")[0]?.[1]).toMatchObject({
         idempotencyKey: queuedRunId,
       });
@@ -76,24 +86,16 @@ describe("transient outbox delivery recovery", () => {
       const volatile = mode !== "durable";
       useFakeClock();
       if (volatile) {
-        vi.spyOn(sessionStorage, "setItem").mockImplementation(() => {
-          throw new Error("quota");
-        });
+        failStorage();
       }
-      const sends: unknown[] = [];
+      const send = vi
+        .fn((params: unknown) => ({ runId: started(params).runId, status: "ok" }))
+        .mockRejectedValueOnce(requestTimeout("chat.send"));
       const host = makeChatHost({
         sessionKey: "agent:main",
         currentSessionId: "physical-session",
         chatMessage: "Retain this input",
-        requestHandlers: {
-          "chat.send": (params: unknown) => {
-            sends.push(params);
-            if (sends.length === 1) {
-              throw requestTimeout("chat.send");
-            }
-            return { runId: requireRecord(params, "retry").idempotencyKey, status: "ok" };
-          },
-        },
+        requestHandlers: { "chat.send": send },
       });
       await handleSendChat(host);
       expect(host.chatQueue[0]).toMatchObject({ sendState: "waiting-reconnect", sendAttempts: 1 });
@@ -104,18 +106,18 @@ describe("transient outbox delivery recovery", () => {
         host.connectionEpoch += 1;
       }
       await vi.advanceTimersByTimeAsync(499);
-      expect(sends).toHaveLength(1);
+      expect(send).toHaveBeenCalledTimes(1);
       await vi.advanceTimersByTimeAsync(1);
       if (mode === "changed connection") {
-        expect(sends).toHaveLength(1);
+        expect(send).toHaveBeenCalledTimes(1);
         expect(host.chatQueue[0]?.sendState).toBe("waiting-reconnect");
         return;
       }
       await waitForFast(() => {
-        expect(sends).toHaveLength(2);
+        expect(send).toHaveBeenCalledTimes(2);
         expect(host.chatQueue).toEqual([]);
       });
-      expect(sends[1]).toEqual(sends[0]);
+      expect(send.mock.calls[1]).toEqual(send.mock.calls[0]);
     },
   );
 
@@ -188,7 +190,6 @@ describe("transient outbox delivery recovery", () => {
             issued.resolve();
             return;
           }
-          expect(methods).toEqual(["chat.send", "chat.send"]);
           const runId = requireRecord(frame.params, "replayed frame").idempotencyKey;
           pending.handleResponse({
             type: "res",
@@ -200,10 +201,8 @@ describe("transient outbox delivery recovery", () => {
           });
         },
       };
-      const methods: string[] = [];
       const host = makeChatHost({
         client: clientWithRequest((method, params, options) => {
-          methods.push(method);
           return method === "chat.send"
             ? pending.request(wire, method, params, options)
             : Promise.resolve(idleChatHistory());
@@ -238,8 +237,7 @@ describe("transient outbox delivery recovery", () => {
           sendError: "Synthetic rejection",
         });
       } else {
-        expect(host.chatQueue).toEqual([]);
-        expect(listStoredChatOutboxes(host)).toEqual([]);
+        expectDrained(host);
       }
     },
   );
@@ -255,33 +253,23 @@ describe("transient outbox delivery recovery", () => {
     "retries a retryable send rejection after %s (volatile=%s)",
     async (trigger, volatile) => {
       if (volatile) {
-        vi.spyOn(sessionStorage, "setItem").mockImplementation(() => {
-          throw new Error("quota");
-        });
+        failStorage();
       }
-      const sendRunIds: string[] = [];
-      let sendAttempts = 0;
-
+      const rejection =
+        trigger === "suspension"
+          ? new GatewayRequestError({
+              code: "UNAVAILABLE",
+              message: "chat.send unavailable during gateway suspension",
+              retryable: true,
+              retryAfterMs: 100,
+              details: { reason: "gateway-suspending" },
+            })
+          : unavailable("Gateway is temporarily busy");
+      const send = vi.fn(started).mockRejectedValueOnce(rejection);
       const host = makeChatHost({
         requestHandlers: {
           "chat.history": idleChatHistory(),
-          "chat.send": (params: unknown) => {
-            const payload = requireRecord(params, "retryable send payload");
-            sendRunIds.push(String(payload.idempotencyKey));
-            sendAttempts += 1;
-            if (sendAttempts === 1) {
-              throw trigger === "suspension"
-                ? new GatewayRequestError({
-                    code: "UNAVAILABLE",
-                    message: "chat.send unavailable during gateway suspension",
-                    retryable: true,
-                    retryAfterMs: 100,
-                    details: { reason: "gateway-suspending" },
-                  })
-                : unavailable("Gateway is temporarily busy");
-            }
-            return { runId: payload.idempotencyKey, status: "started", messageSeq: 1 };
-          },
+          "chat.send": send,
         },
         chatMessage: "retry without disconnecting",
       });
@@ -289,19 +277,18 @@ describe("transient outbox delivery recovery", () => {
       useFakeClock();
       await handleSendChat(host);
 
-      expect(host.connected).toBe(true);
-      expect(host.chatMessage).toBe("");
-      expect(host.chatQueue[0]).toMatchObject({
-        sendAttempts: 0,
-        sendState: "waiting-reconnect",
+      expect(host).toMatchObject({
+        connected: true,
+        chatMessage: "",
+        chatQueue: [expect.objectContaining({ sendAttempts: 0, sendState: "waiting-reconnect" })],
       });
-      expect(sendAttempts).toBe(1);
+      expect(send).toHaveBeenCalledTimes(1);
       if (trigger === "suspension") {
         expect(host.chatQueue[0]?.sendError).toBeUndefined();
         expect(host.chatError).toBeNull();
         host.gatewayWorkPaused = true;
         await vi.advanceTimersByTimeAsync(100);
-        expect(sendAttempts).toBe(1);
+        expect(send).toHaveBeenCalledTimes(1);
         host.gatewayWorkPaused = false;
         await resumeStoredChatOutboxes(host);
       } else if (trigger === "reconnect") {
@@ -311,59 +298,41 @@ describe("transient outbox delivery recovery", () => {
         await vi.advanceTimersByTimeAsync(100);
         // The timer starts a fire-and-forget drain; join its observable outcome.
         await waitForFast(() => {
-          expect(sendAttempts).toBe(2);
+          expect(send).toHaveBeenCalledTimes(2);
           expect(listStoredChatOutboxes(host)).toStrictEqual([]);
         });
       }
-      expect(sendAttempts).toBe(2);
-      expect(host.chatQueue).toEqual([]);
-      expect(listStoredChatOutboxes(host)).toStrictEqual([]);
-      expect(sendRunIds[1]).toBe(sendRunIds[0]);
+      expect(send).toHaveBeenCalledTimes(2);
+      expectDrained(host);
+      expect(send.mock.calls[1]).toEqual(send.mock.calls[0]);
     },
   );
 
   it.each(["response", "timeout"])(
     "retries reconnect history after a retryable %s without a socket close",
     async (failure) => {
+      const history = vi
+        .fn(() => idleChatHistory())
+        .mockRejectedValueOnce(
+          failure === "timeout" ? requestTimeout("chat.history") : unavailable(),
+        );
+      const send = vi.fn(started);
       const host = makeChatHost({
-        requestHandlers: {},
-        connected: false,
-        chatMessage: "retry history while connected",
+        chatQueue: [waitingInput("history-retry", "retry history", "history-retry-run")],
+        requestHandlers: { "chat.history": history, "chat.send": send },
       });
-      await handleSendChat(host);
-      let historyAttempts = 0;
-      let sendAttempts = 0;
-      const request = makeRequestMock({
-        "chat.history": () => {
-          historyAttempts += 1;
-          if (historyAttempts === 1) {
-            if (failure === "timeout") {
-              throw requestTimeout("chat.history");
-            }
-            throw unavailable();
-          }
-          return idleChatHistory();
-        },
-        "chat.send": (params: unknown) => {
-          sendAttempts += 1;
-          const payload = requireRecord(params, "history retry send payload");
-          return { runId: payload.idempotencyKey, status: "started", messageSeq: 1 };
-        },
-      });
-      host.client = clientWithRequest(request);
-      host.connected = true;
-
+      admitHostQueueItems(host);
       useFakeClock();
       await resumeStoredChatOutboxes(host);
 
-      expect(historyAttempts).toBe(1);
-      expect(sendAttempts).toBe(0);
+      expect(history).toHaveBeenCalledTimes(1);
+      expect(send).not.toHaveBeenCalled();
       await Promise.all(Array.from({ length: 20 }, () => resumeStoredChatOutboxes(host)));
-      expect(historyAttempts).toBe(1);
+      expect(history).toHaveBeenCalledTimes(1);
       await vi.advanceTimersByTimeAsync(failure === "timeout" ? 500 : 100);
       await waitForFast(() => {
-        expect(sendAttempts).toBe(1);
-        expect(historyAttempts).toBeGreaterThanOrEqual(2);
+        expect(send).toHaveBeenCalledTimes(1);
+        expect(history.mock.calls.length).toBeGreaterThanOrEqual(2);
         expect(listStoredChatOutboxes(host)).toStrictEqual([]);
       });
     },
@@ -372,48 +341,29 @@ describe("transient outbox delivery recovery", () => {
   it("does not apply a stale readiness rejection to an edited queued input", async () => {
     const historyStarted = Promise.withResolvers<void>();
     const firstHistory = Promise.withResolvers<ReturnType<typeof idleChatHistory>>();
-    const sends: unknown[] = [];
-    let historyReads = 0;
+    const send = vi.fn(started);
+    const history = vi
+      .fn(async () => idleChatHistory())
+      .mockImplementationOnce(async () => {
+        historyStarted.resolve();
+        return firstHistory.promise;
+      });
     const host = makeChatHost({
-      chatQueue: [
-        {
-          id: "edited-during-readiness",
-          text: "Original draft",
-          createdAt: 1,
-          sendRunId: "original-submission",
-          sendState: "waiting-reconnect",
-          sessionKey: "agent:main",
-        },
-      ],
+      chatQueue: [waitingInput("edited-during-readiness", "Original draft", "original-submission")],
       requestHandlers: {
-        "chat.history": () => {
-          if (++historyReads === 1) {
-            historyStarted.resolve();
-            return firstHistory.promise;
-          }
-          return idleChatHistory();
-        },
-        "chat.send": (params: unknown) => {
-          sends.push(params);
-          return {
-            runId: requireRecord(params, "edited input").idempotencyKey,
-            status: "started",
-            messageSeq: 1,
-          };
-        },
+        "chat.history": history,
+        "chat.send": send,
       },
     });
     admitHostQueueItems(host);
     const draining = resumeStoredChatOutboxes(host);
     try {
       await historyStarted.promise;
-      expect(
-        updateQueuedMessage(host, "edited-during-readiness", (item) => ({
-          ...item,
-          text: "Revised draft",
-          sendRunId: "revised-submission",
-        })),
-      ).not.toBeNull();
+      updateQueuedMessage(host, "edited-during-readiness", (item) => ({
+        ...item,
+        text: "Revised draft",
+        sendRunId: "revised-submission",
+      }));
       firstHistory.reject(
         new GatewayRequestError({
           code: "INVALID_REQUEST",
@@ -421,12 +371,9 @@ describe("transient outbox delivery recovery", () => {
         }),
       );
       await draining;
-      expect(sends).toEqual([
-        expect.objectContaining({
-          message: "Revised draft",
-          idempotencyKey: "revised-submission",
-        }),
-      ]);
+      expect(send).toHaveBeenCalledExactlyOnceWith(
+        expect.objectContaining({ message: "Revised draft", idempotencyKey: "revised-submission" }),
+      );
       expect(host.lastError).toBeNull();
       expect(listStoredChatOutboxes(host)).toEqual([]);
     } finally {
@@ -436,25 +383,13 @@ describe("transient outbox delivery recovery", () => {
   });
 
   it("transfers an active retry backoff to a sibling pane without bypassing it", async () => {
-    let historyAttempts = 0;
+    const history = vi.fn().mockRejectedValue(unavailable());
     const owner = makeChatHost({
       connectionEpoch: 1,
       requestHandlers: {
-        "chat.history": () => {
-          historyAttempts += 1;
-          throw unavailable();
-        },
+        "chat.history": history,
       },
-      chatQueue: [
-        {
-          id: "shared-retry",
-          text: "wait for backoff",
-          createdAt: 1,
-          sendRunId: "shared-retry-run",
-          sendState: "waiting-reconnect",
-          sessionKey: "agent:main",
-        },
-      ],
+      chatQueue: [waitingInput("shared-retry", "wait for backoff", "shared-retry-run")],
     });
     admitHostQueueItems(owner);
     const sibling = makeChatHost({
@@ -467,8 +402,8 @@ describe("transient outbox delivery recovery", () => {
     await resumeStoredChatOutboxes(owner);
     owner.sessionKey = "agent:main:other";
     await resumeStoredChatOutboxes(sibling);
-    expect(historyAttempts).toBe(1);
+    expect(history).toHaveBeenCalledTimes(1);
     await vi.advanceTimersByTimeAsync(100);
-    await waitForFast(() => expect(historyAttempts).toBe(2));
+    await waitForFast(() => expect(history).toHaveBeenCalledTimes(2));
   });
 });

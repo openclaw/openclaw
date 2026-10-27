@@ -283,9 +283,17 @@ openclaw-session-owner-chip .viewer-avatar__initials {
   line-height: 1;
 }
 
+.session-css-icon {
+  display: inline-block;
+  width: 12px;
+  height: 12px;
+  flex: none;
+  background: currentColor;
+  mask: center / contain no-repeat;
+}
+
 .session-glyph__icon,
-.session-glyph__icon svg,
-.session-glyph__icon img {
+.session-glyph__icon > * {
   width: 16px;
   height: 16px;
 }
@@ -543,7 +551,6 @@ openclaw-session-owner-chip .viewer-avatar__initials {
 .btn--icon svg,
 .agent-select__chevron svg,
 .agent-select__avatar--icon svg,
-.session-row-badge svg,
 .session-action svg,
 .chat-queue__leading svg,
 .chat-queue__remove svg,
@@ -1062,8 +1069,9 @@ select.settings-select:not([multiple]) {
 }
 
 .field.checkbox {
-  grid-template-columns: auto 1fr;
+  grid-template-columns: auto minmax(0, 1fr);
   align-items: center;
+  overflow-wrap: anywhere;
 }
 
 .config-form .field.checkbox {
@@ -2834,12 +2842,6 @@ td.data-table-key-col {
 .session-row-badge--cloud[data-workspace-conflicts],
 .session-row-badge--cloud[data-disk-space-status="warning"] {
   color: var(--warn);
-}
-
-.session-row-badge svg {
-  width: 12px;
-  height: 12px;
-  stroke-width: 1.6px;
 }
 
 .session-row-actions {

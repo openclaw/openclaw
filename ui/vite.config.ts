@@ -571,40 +571,10 @@ export async function refreshControlUiBuildOutput(
   return deferredSize;
 }
 
-function controlUiBuildOutputPlugin(
-  buildInfo: ControlUiBuildInfo,
-  copiedInputs: Set<string>,
-): Plugin {
-  let publicDir: string | false = false;
+function controlUiPrecompressedAssetsPlugin(): Plugin {
   return {
-    name: "control-ui-build-output",
+    name: "control-ui-precompressed-assets",
     apply: "build",
-    configResolved(config) {
-      publicDir = (config.build.copyPublicDir && config.publicDir) || false;
-      for (const file of config.configFileDependencies) {
-        copiedInputs.add(file);
-      }
-    },
-    transformIndexHtml: {
-      order: "post",
-      handler(html) {
-        // Vite recreates the module entry tag from a fixed attribute set. Finalize every script
-        // after synthesis so Cloudflare Rocket Loader cannot defer the Control UI boot sequence.
-        const marked = html.replace(
-          /<script\b(?![^>]*\bdata-cfasync\s*=)/giu,
-          '<script data-cfasync="false"',
-        );
-        // index.html owns the critical frame. Download the sole entry sheet
-        // without blocking its paint; the inline loader and main.ts admit it.
-        const nonblocking = marked.replace(
-          /<link\b(?=[^>]*\brel="stylesheet")[^>]*>/gu,
-          (link) =>
-            link.replace('rel="stylesheet"', 'rel="preload" as="style"') +
-            link.replace(/>$/u, ' id="openclaw-boot-styles" media="print">'),
-        );
-        return controlUiBuildIdentityHtml(nonblocking, buildInfo);
-      },
-    },
     async writeBundle({ dir: buildOutDir }, bundle) {
       if (!buildOutDir) {
         this.error("Control UI build requires an output directory");
@@ -665,28 +635,73 @@ function controlUiBuildOutputPlugin(
         }
       }
       logger.info(`Control UI precompression complete: ${completed} assets (${sidecars} sidecars)`);
-      const inputs = [...new Set([...this.getModuleIds(), ...copiedInputs])]
-        .map((file) => file.split("?")[0])
-        .filter((file): file is string => Boolean(file && path.isAbsolute(file)))
-        .map((file) => path.relative(repoRoot, file).split(path.sep).join("/"))
-        .filter(
-          (file) =>
-            !file.startsWith("../") &&
-            !file.includes("node_modules/") &&
-            fs.statSync(path.join(repoRoot, file), { throwIfNoEntry: false })?.isFile(),
-        )
-        .toSorted();
-      fs.writeFileSync(path.join(buildOutDir, ".build-inputs.json"), JSON.stringify(inputs));
-      const bootAssets = collectControlUiBootAssets(bundle);
-      const deferred = await refreshControlUiBuildOutput(
-        buildOutDir,
-        buildInfo,
-        [...bootAssets.chat, ...bootAssets.new, ...bootAssets.login],
-        publicDir,
-      );
-      logger.info(
-        `Control UI deferred offline inventory: ${deferred.count} assets, ${deferred.rawBytes} B raw, ${deferred.gzipBytes} B gzip`,
-      );
+    },
+  };
+}
+
+function controlUiBuildOutputPlugin(
+  buildInfo: ControlUiBuildInfo,
+  copiedInputs: Set<string>,
+): Plugin {
+  let publicDir: string | false = false;
+  return {
+    name: "control-ui-build-output",
+    apply: "build",
+    configResolved(config) {
+      publicDir = (config.build.copyPublicDir && config.publicDir) || false;
+      for (const file of config.configFileDependencies) {
+        copiedInputs.add(file);
+      }
+    },
+    transformIndexHtml: {
+      order: "post",
+      handler(html) {
+        // Vite recreates the module entry tag from a fixed attribute set. Finalize every script
+        // after synthesis so Cloudflare Rocket Loader cannot defer the Control UI boot sequence.
+        const marked = html.replace(
+          /<script\b(?![^>]*\bdata-cfasync\s*=)/giu,
+          '<script data-cfasync="false"',
+        );
+        // index.html owns the critical frame. Download the sole entry sheet
+        // without blocking its paint; the inline loader and main.ts admit it.
+        const nonblocking = marked.replace(
+          /<link\b(?=[^>]*\brel="stylesheet")[^>]*>/gu,
+          (link) =>
+            link.replace('rel="stylesheet"', 'rel="preload" as="style"') +
+            link.replace(/>$/u, ' id="openclaw-boot-styles" media="print">'),
+        );
+        return controlUiBuildIdentityHtml(nonblocking, buildInfo);
+      },
+    },
+    writeBundle: {
+      sequential: true,
+      async handler({ dir: buildOutDir }, bundle) {
+        if (!buildOutDir) {
+          this.error("Control UI build requires an output directory");
+        }
+        const inputs = [...new Set([...this.getModuleIds(), ...copiedInputs])]
+          .map((file) => file.split("?")[0])
+          .filter((file): file is string => Boolean(file && path.isAbsolute(file)))
+          .map((file) => path.relative(repoRoot, file).split(path.sep).join("/"))
+          .filter(
+            (file) =>
+              !file.startsWith("../") &&
+              !file.includes("node_modules/") &&
+              fs.statSync(path.join(repoRoot, file), { throwIfNoEntry: false })?.isFile(),
+          )
+          .toSorted();
+        fs.writeFileSync(path.join(buildOutDir, ".build-inputs.json"), JSON.stringify(inputs));
+        const bootAssets = collectControlUiBootAssets(bundle);
+        const deferred = await refreshControlUiBuildOutput(
+          buildOutDir,
+          buildInfo,
+          [...bootAssets.chat, ...bootAssets.new, ...bootAssets.login],
+          publicDir,
+        );
+        this.environment.logger.info(
+          `Control UI deferred offline inventory: ${deferred.count} assets, ${deferred.rawBytes} B raw, ${deferred.gzipBytes} B gzip`,
+        );
+      },
     },
   };
 }
@@ -858,6 +873,7 @@ export default function controlUiViteConfig(
       controlUiPluginDistributionsPlugin(repoRoot, copiedInputs),
       controlUiBootPreloadsPlugin(),
       controlUiNavigationPreloadsPlugin(),
+      controlUiPrecompressedAssetsPlugin(),
       controlUiBuildOutputPlugin(buildInfo, copiedInputs),
       {
         name: "control-ui-dev-stubs",

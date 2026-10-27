@@ -273,6 +273,7 @@ describe("application shell pairing access", () => {
   });
 
   it("retains navigation chrome for unrelated shell updates and refreshes changed outboxes", async () => {
+    // No stylesheet is loaded: row estimates must settle before CSS is available.
     vi.useFakeTimers();
     const sessionKey = "agent:main:queued";
     const { shell, context, renderSidebar, container, overlaySnapshot, refresh } =

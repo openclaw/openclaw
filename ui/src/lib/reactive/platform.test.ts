@@ -1,6 +1,5 @@
-import { createEffect, createRoot, flush } from "solid-js";
+import { createRoot, flush } from "solid-js";
 import { afterEach, expect, it, onTestFinished, vi } from "vitest";
-import { waitForSolid } from "../../test-helpers/solid-settle.ts";
 import {
   createDocumentVisibility,
   createMediaQuery,
@@ -13,71 +12,17 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-it("tracks media changes until its owner is disposed", async () => {
-  const media = Object.assign(new EventTarget(), { matches: true });
-  vi.stubGlobal("matchMedia", () => media);
-  const values: boolean[] = [];
-  let matches!: () => boolean;
-  const dispose = createRoot((stop) => {
-    matches = createMediaQuery("(prefers-reduced-motion: reduce)");
-    createEffect(matches, (value) => {
-      values.push(value);
-    });
-    return stop;
-  });
-  onTestFinished(dispose);
-  await waitForSolid(() => expect(values.at(-1)).toBe(true));
-  media.matches = false;
-  media.dispatchEvent(new Event("change"));
-  flush();
-  expect(matches()).toBe(false);
-  dispose();
-  media.matches = true;
-  media.dispatchEvent(new Event("change"));
-  flush();
-  expect(matches()).toBe(false);
-  expect(values.at(-1)).toBe(false);
-});
+function owned<T>(create: () => T) {
+  const root = createRoot((dispose) => ({ value: create(), dispose }));
+  onTestFinished(root.dispose);
+  return root;
+}
 
-it.each([false, true])(
-  "uses the %s fallback when media queries are unavailable",
-  async (fallback) => {
-    vi.stubGlobal("matchMedia", undefined);
-    let matches!: () => boolean;
-    const dispose = createRoot((stop) => {
-      matches = createMediaQuery("(pointer: fine)", fallback);
-      return stop;
-    });
-    onTestFinished(dispose);
-    await waitForSolid(() => expect(matches()).toBe(fallback));
-  },
-);
-
-it("tracks document visibility until its owner is disposed", async () => {
-  let visibility: DocumentVisibilityState = "hidden";
-  vi.spyOn(document, "visibilityState", "get").mockImplementation(() => visibility);
-  let visible!: () => boolean;
-  const dispose = createRoot((stop) => {
-    visible = createDocumentVisibility();
-    return stop;
-  });
-  onTestFinished(dispose);
-  // Visibility can change between component creation and listener setup.
-  visibility = "visible";
-  await waitForSolid(() => expect(visible()).toBe(true));
-  visibility = "hidden";
-  document.dispatchEvent(new Event("visibilitychange"));
+it.each([false, true])("uses fallback %s without matchMedia", (fallback) => {
+  vi.stubGlobal("matchMedia", undefined);
+  const { value: matches } = owned(() => createMediaQuery("(pointer: fine)", fallback));
   flush();
-  await waitForSolid(() => expect(visible()).toBe(false));
-  visibility = "visible";
-  document.dispatchEvent(new Event("visibilitychange"));
-  flush();
-  expect(visible()).toBe(true);
-  dispose();
-  visibility = "hidden";
-  document.dispatchEvent(new Event("visibilitychange"));
-  flush();
-  expect(visible()).toBe(true);
+  expect(matches()).toBe(fallback);
 });
 
 it("shares exact media queries while preserving fallback and independent lifetimes", () => {
@@ -88,9 +33,8 @@ it("shares exact media queries while preserving fallback and independent lifetim
   const subscribe = vi.spyOn(reduced, "addEventListener");
   const unsubscribe = vi.spyOn(reduced, "removeEventListener");
   function reader(query: string, fallback: boolean) {
-    const root = createRoot((dispose) => ({ read: createMediaQuery(query, fallback), dispose }));
-    onTestFinished(root.dispose);
-    return root;
+    const { value: read, dispose } = owned(() => createMediaQuery(query, fallback));
+    return { read, dispose };
   }
   const first = reader("(prefers-reduced-motion: reduce)", false);
   const second = reader("(prefers-reduced-motion: reduce)", true);
@@ -109,6 +53,9 @@ it("shares exact media queries while preserving fallback and independent lifetim
   second.dispose();
   expect(unsubscribe).toHaveBeenCalledOnce();
   reduced.matches = true;
+  reduced.dispatchEvent(new Event("change"));
+  flush();
+  expect(second.read()).toBe(false);
   const replacement = reader("(prefers-reduced-motion: reduce)", false);
   flush();
   expect(replacement.read()).toBe(true);
@@ -116,39 +63,8 @@ it("shares exact media queries while preserving fallback and independent lifetim
   expect(subscribe).toHaveBeenCalledTimes(2);
 });
 
-it("shares visibility delivery without keeping disposed owners live", () => {
-  let state: DocumentVisibilityState = "visible";
-  vi.spyOn(document, "visibilityState", "get").mockImplementation(() => state);
-  const subscribe = vi.spyOn(document, "addEventListener");
-  const unsubscribe = vi.spyOn(document, "removeEventListener");
-  function reader() {
-    const root = createRoot((dispose) => ({ read: createDocumentVisibility(), dispose }));
-    onTestFinished(root.dispose);
-    return root;
-  }
-  const first = reader();
-  const second = reader();
-  state = "hidden";
-  flush();
-  expect([first.read(), second.read()]).toEqual([false, false]);
-  expect(subscribe.mock.calls.filter(([type]) => type === "visibilitychange")).toHaveLength(1);
-  first.dispose();
-  state = "visible";
-  document.dispatchEvent(new Event("visibilitychange"));
-  flush();
-  expect([first.read(), second.read()]).toEqual([false, true]);
-  expect(unsubscribe.mock.calls.filter(([type]) => type === "visibilitychange")).toHaveLength(0);
-  second.dispose();
-  expect(unsubscribe.mock.calls.filter(([type]) => type === "visibilitychange")).toHaveLength(1);
-  state = "hidden";
-  const replacement = reader();
-  flush();
-  expect(replacement.read()).toBe(false);
-  expect(subscribe.mock.calls.filter(([type]) => type === "visibilitychange")).toHaveLength(2);
-});
-
 it("shares synchronous visibility events with reactive readers and independent registrations", () => {
-  let state: DocumentVisibilityState = "visible";
+  let state: DocumentVisibilityState = "hidden";
   vi.spyOn(document, "visibilityState", "get").mockImplementation(() => state);
   const subscribe = vi.spyOn(document, "addEventListener");
   const unsubscribe = vi.spyOn(document, "removeEventListener");
@@ -156,17 +72,22 @@ it("shares synchronous visibility events with reactive readers and independent r
   const stops = Array.from({ length: 100 }, () => subscribeDocumentVisibility(document, notify));
   onTestFinished(() => stops.forEach((stop) => stop()));
   expect(notify).not.toHaveBeenCalled();
-  const reactive = createRoot((dispose) => ({ read: createDocumentVisibility(), dispose }));
-  onTestFinished(reactive.dispose);
+  const retired = owned(createDocumentVisibility);
+  const reactive = owned(createDocumentVisibility);
+  // Sample again at settlement, not only when the reader was created.
+  state = "visible";
   flush();
-  expect(reactive.read()).toBe(true);
+  expect(retired.value()).toBe(true);
+  expect(reactive.value()).toBe(true);
   expect(subscribe.mock.calls.filter(([type]) => type === "visibilitychange")).toHaveLength(1);
 
+  retired.dispose();
   state = "hidden";
   document.dispatchEvent(new Event("visibilitychange"));
   expect(notify.mock.calls).toEqual(Array.from({ length: 100 }, () => [false]));
   flush();
-  expect(reactive.read()).toBe(false);
+  expect(retired.value()).toBe(true);
+  expect(reactive.value()).toBe(false);
   notify.mockClear();
   stops.slice(0, 99).forEach((stop) => stop());
   reactive.dispose();
@@ -176,6 +97,14 @@ it("shares synchronous visibility events with reactive readers and independent r
   expect(notify).toHaveBeenCalledExactlyOnceWith(false);
   stops[99]!();
   expect(unsubscribe.mock.calls.filter(([type]) => type === "visibilitychange")).toHaveLength(1);
+  state = "visible";
+  document.dispatchEvent(new Event("visibilitychange"));
+  flush();
+  expect(reactive.value()).toBe(false);
+  const replacement = owned(createDocumentVisibility);
+  flush();
+  expect(replacement.value()).toBe(true);
+  expect(subscribe.mock.calls.filter(([type]) => type === "visibilitychange")).toHaveLength(2);
 });
 
 it("shares synchronous media reads without retaining an idle change listener", () => {
@@ -184,38 +113,27 @@ it("shares synchronous media reads without retaining an idle change listener", (
   vi.stubGlobal("matchMedia", matchMedia);
   const subscribe = vi.spyOn(media, "addEventListener");
   const unsubscribe = vi.spyOn(media, "removeEventListener");
-  const source = createRoot((dispose) => ({
-    ...createMediaQuerySource("(pointer: fine)"),
-    dispose,
-  }));
-  onTestFinished(source.dispose);
-  const reactive = createRoot((dispose) => ({
-    read: createMediaQuery("(pointer: fine)"),
-    dispose,
-  }));
-  onTestFinished(reactive.dispose);
-  expect([source.read(), reactive.read()]).toEqual([true, false]);
+  const source = owned(() => createMediaQuerySource("(pointer: fine)"));
+  const reactive = owned(() => createMediaQuery("(pointer: fine)"));
+  expect([source.value.read(), reactive.value()]).toEqual([true, false]);
   expect(matchMedia).toHaveBeenCalledOnce();
   expect(subscribe).not.toHaveBeenCalled();
   flush();
-  expect(reactive.read()).toBe(true);
+  expect(reactive.value()).toBe(true);
   expect(subscribe).toHaveBeenCalledOnce();
   media.matches = false;
   media.dispatchEvent(new Event("change"));
-  expect(source.read()).toBe(false);
+  expect(source.value.read()).toBe(false);
   flush();
-  expect(reactive.read()).toBe(false);
+  expect(reactive.value()).toBe(false);
   reactive.dispose();
   expect(unsubscribe).toHaveBeenCalledOnce();
   media.matches = true;
-  expect(source.read()).toBe(true);
+  expect(source.value.read()).toBe(true);
   expect(subscribe).toHaveBeenCalledOnce();
   source.dispose();
-  const replacement = createRoot((dispose) => {
-    expect(createMediaQuerySource("(pointer: fine)").read()).toBe(true);
-    return dispose;
-  });
-  onTestFinished(replacement);
+  const replacement = owned(() => createMediaQuerySource("(pointer: fine)"));
+  expect(replacement.value.read()).toBe(true);
   expect(matchMedia).toHaveBeenCalledTimes(2);
   expect(subscribe).toHaveBeenCalledOnce();
 });
@@ -225,20 +143,12 @@ it("keeps duplicate synchronous media subscriptions independent and releases the
   vi.stubGlobal("matchMedia", () => media);
   const subscribe = vi.spyOn(media, "addEventListener");
   const unsubscribe = vi.spyOn(media, "removeEventListener");
-  const first = createRoot((dispose) => ({
-    ...createMediaQuerySource("(pointer: fine)"),
-    dispose,
-  }));
-  const second = createRoot((dispose) => ({
-    ...createMediaQuerySource("(pointer: fine)"),
-    dispose,
-  }));
-  onTestFinished(first.dispose);
-  onTestFinished(second.dispose);
+  const first = owned(() => createMediaQuerySource("(pointer: fine)"));
+  const second = owned(() => createMediaQuerySource("(pointer: fine)"));
   const listener = vi.fn();
-  const stopFirst = first.subscribe(listener);
-  first.subscribe(listener);
-  second.subscribe(listener);
+  const stopFirst = first.value.subscribe(listener);
+  first.value.subscribe(listener);
+  second.value.subscribe(listener);
   expect(subscribe).toHaveBeenCalledOnce();
   media.matches = true;
   media.dispatchEvent(new Event("change"));
@@ -286,12 +196,8 @@ it("keeps media and visibility subscriptions scoped to their document", () => {
   const frame = reader();
   vi.stubGlobal("document", mainDocument);
   flush();
-  expect([main.media(), main.visible(), frame.media(), frame.visible()]).toEqual([
-    false,
-    true,
-    true,
-    false,
-  ]);
+  const values = [main.media(), main.visible(), frame.media(), frame.visible()];
+  expect(values).toEqual([false, true, true, false]);
   expect(mainQuery).toHaveBeenCalledOnce();
   expect(frameQuery).toHaveBeenCalledOnce();
   frameMedia.matches = false;

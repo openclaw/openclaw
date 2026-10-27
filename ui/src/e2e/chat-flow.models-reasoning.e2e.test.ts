@@ -154,7 +154,7 @@ suite.define(() => {
       models: generatedModels(12),
     });
 
-    await gateway.waitForRequest("chat.startup");
+    await gateway.waitForRequest("sessions.messages.subscribe");
 
     const controls = page.locator(".chat-composer-model-control");
     for (const picker of [

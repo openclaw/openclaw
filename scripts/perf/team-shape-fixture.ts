@@ -22,6 +22,7 @@ export function parseTeamShapeOptions(argv: string[]) {
       runs: { type: "string" },
       "settled-runs": { type: "boolean" },
       "team-stress": { type: "boolean" },
+      "auth-availability-storm": { type: "boolean" },
       approvals: { type: "string" },
       cron: { type: "string" },
       "cron-announce-last": { type: "boolean" },
@@ -34,6 +35,7 @@ export function parseTeamShapeOptions(argv: string[]) {
       "long-transcript-sessions": { type: "string" },
       "chat-startup-sessions": { type: "string" },
       "worktree-files": { type: "string" },
+      "worktree-local-origin": { type: "boolean" },
       "worktree-file-bytes": { type: "string" },
       "worktree-install-failure": { type: "boolean" },
       "worktree-cold-commits": { type: "string" },
@@ -113,6 +115,7 @@ export function parseTeamShapeOptions(argv: string[]) {
     (worktreeFiles > 0 ||
       worktreeColdCommits > 0 ||
       values["nested-repository"] ||
+      values["worktree-local-origin"] ||
       values["worktree-install-failure"]) &&
     projects === 0
   ) {
@@ -127,6 +130,7 @@ export function parseTeamShapeOptions(argv: string[]) {
     retainedRuns,
     settledRuns: values["settled-runs"] ?? false,
     teamStress: values["team-stress"] ?? false,
+    authAvailabilityStorm: values["auth-availability-storm"] ?? false,
     localPlacements,
     approvals: integer("approvals", 200),
     cronJobs,
@@ -139,6 +143,7 @@ export function parseTeamShapeOptions(argv: string[]) {
     longTranscriptSessions,
     chatStartupSessions,
     worktreeFiles,
+    worktreeLocalOrigin: values["worktree-local-origin"] ?? false,
     worktreeFileBytes,
     worktreeColdCommits,
     worktreeInstallFailure: values["worktree-install-failure"] ?? false,
@@ -235,6 +240,14 @@ export async function generateTeamShapeFixture(options: ReturnType<typeof parseT
     const state = stateDb.openOpenClawStateDatabase();
     let summary;
     try {
+      if (options.authAvailabilityStorm) {
+        const { upsertAuthProfileAsync } =
+          await import("../../src/agents/auth-profiles/profiles.js");
+        await upsertAuthProfileAsync({
+          profileId: "openai:auth-availability-storm",
+          credential: { type: "api_key", provider: "openai", key: "synthetic-availability-key" },
+        });
+      }
       const seeded = await seedTeamShapeSessions(options);
       const extras = await seedTeamShapeExtras({ ...options, sessions: seeded.sessions });
       agent.db.exec("PRAGMA wal_checkpoint(TRUNCATE)");

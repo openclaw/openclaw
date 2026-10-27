@@ -401,7 +401,6 @@ describe("startAgentRunExecution Gateway ownership", () => {
       expect(notices).toEqual([
         { reason: "create", accessChanges: expect.any(Number) },
         { reason: "send", accessChanges: 0 },
-        { reason: "agent.run.started", accessChanges: 0 },
         { reason: "agent.input.settled", accessChanges: 0 },
       ]);
       expect(notices[0]?.accessChanges).toBeGreaterThan(0);

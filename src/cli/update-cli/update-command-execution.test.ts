@@ -11,6 +11,7 @@ import type { OpenClawDatabaseSchemaPreflight } from "../../state/openclaw-datab
 import { withTestDir } from "../../test-helpers/temp-dir.js";
 import { withEnvAsync } from "../../test-utils/env.js";
 import { mockProcessPlatform } from "../../test-utils/vitest-spies.js";
+import { writeFixtureJson } from "../cli-fixtures.test-support.js";
 import { UpdatePreMutationError, type UpdateCommandOptions } from "./shared.js";
 import { registerExecutionFailureTests } from "./update-command-execution-failures.test-support.js";
 import { registerNativeAdmissionTests } from "./update-command-execution-native-admission.test-support.js";
@@ -270,10 +271,10 @@ describe("mutable update execution", () => {
 
   it("retains registry schema admission when staged metadata is missing", async () => {
     await withTestDir({ prefix: "openclaw-staged-schema-retention-" }, async (stage) => {
-      await fs.writeFile(
-        path.join(stage, "package.json"),
-        JSON.stringify({ name: "openclaw", version: "2026.9.2" }),
-      );
+      await writeFixtureJson(path.join(stage, "package.json"), {
+        name: "openclaw",
+        version: "2026.9.2",
+      });
       mocks.checkTargetSchemas.mockImplementation(async (versions) =>
         versions?.state === 15 ? schemaRefusal(15) : { incompatible: [], indeterminate: [] },
       );
@@ -299,16 +300,13 @@ describe("mutable update execution", () => {
     "keeps plugin availability advisory (incompatible=%s)",
     async (incompatible) =>
       withTestDir({ prefix: "plugin-admission-" }, async (installPath) => {
-        await fs.writeFile(
-          path.join(installPath, "package.json"),
-          JSON.stringify({
-            name: "@example/demo",
-            version: "1.0.0",
-            openclaw: incompatible
-              ? { install: { minHostVersion: ">=1.0.2" } }
-              : { compat: { pluginApi: ">=1.0.0" } },
-          }),
-        );
+        await writeFixtureJson(path.join(installPath, "package.json"), {
+          name: "@example/demo",
+          version: "1.0.0",
+          openclaw: incompatible
+            ? { install: { minHostVersion: ">=1.0.2" } }
+            : { compat: { pluginApi: ">=1.0.0" } },
+        });
         mocks.pluginRecords.mockResolvedValue({
           demo: { source: "npm", spec: "@example/demo@1.0.1", version: "1.0.0", installPath },
         });

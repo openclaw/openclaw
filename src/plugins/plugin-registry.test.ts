@@ -3,9 +3,13 @@ import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { freezeTrustedJsonSnapshot } from "../shared/immutable-data.js";
 import { closeStateDatabaseForTest } from "../test-utils/database-cleanup.js";
 import { recordPluginCandidateInstallOwner } from "./candidate-install-owner.js";
-import { makePluginMetadataIndex } from "./current-plugin-metadata.test-support.js";
+import {
+  makePluginMetadataIndex,
+  makePluginMetadataManifestRegistry,
+} from "./current-plugin-metadata.test-support.js";
 import type { PluginCandidate } from "./discovery.js";
 import { writePersistedInstalledPluginIndex } from "./installed-plugin-index-store-write.js";
 import {
@@ -13,6 +17,7 @@ import {
   type InstalledPluginIndex,
 } from "./installed-plugin-index.js";
 import { loadPluginLookUpTable } from "./plugin-lookup-table.js";
+import * as manifestIdNormalizer from "./plugin-manifest-id-normalizer.js";
 import { clearPluginMetadataLifecycleCaches } from "./plugin-metadata-lifecycle.js";
 import {
   createPluginRegistryIdNormalizer,
@@ -270,6 +275,64 @@ describe("plugin registry facade", () => {
     expect(listPluginContributionIds(withoutInstalledOwners)).toEqual([]);
     for (const matches of ["Demo", (id: string) => id === "Demo"]) {
       expect(resolvePluginContributionOwners({ ...withoutInstalledOwners, matches })).toEqual([]);
+    }
+  });
+
+  it("prepares aliases once per immutable inventory and manifest view", () => {
+    const build = vi.spyOn(manifestIdNormalizer, "createPluginManifestIdNormalizer");
+    const index = createIndex("installed-only");
+    freezeTrustedJsonSnapshot(index);
+    const first = makePluginMetadataManifestRegistry("first");
+    const second = makePluginMetadataManifestRegistry("second");
+    first.plugins[0]!.providers = ["shared-alias"];
+    second.plugins[0]!.providers = ["shared-alias"];
+    try {
+      for (let turn = 0; turn < 10; turn++) {
+        for (const [manifestRegistry, owner] of [
+          [first, "first"],
+          [second, "second"],
+        ] as const) {
+          expect(
+            normalizePluginsConfigWithRegistry(
+              {
+                allow: ["shared-alias", "INSTALLED-ONLY"],
+                entries: { [owner]: { enabled: turn % 2 === 0 } },
+              },
+              index,
+              { manifestRegistry },
+            ),
+          ).toMatchObject({
+            allow: [owner, "installed-only"],
+            entries: { [owner]: { enabled: turn % 2 === 0 } },
+          });
+        }
+      }
+      expect(build).toHaveBeenCalledTimes(2);
+
+      const replacement = createIndex("replacement");
+      freezeTrustedJsonSnapshot(replacement);
+      const normalizeReplacement = createPluginRegistryIdNormalizer(replacement, {
+        manifestRegistry: first,
+      });
+      expect(normalizeReplacement("INSTALLED-ONLY")).toBe("INSTALLED-ONLY");
+      expect(normalizeReplacement("REPLACEMENT")).toBe("replacement");
+      expect(build).toHaveBeenCalledTimes(3);
+
+      clearPluginMetadataLifecycleCaches();
+      createPluginRegistryIdNormalizer(index, { manifestRegistry: first });
+      expect(build).toHaveBeenCalledTimes(4);
+
+      const mutable = createIndex("before");
+      expect(createPluginRegistryIdNormalizer(mutable, { manifestRegistry: first })("BEFORE")).toBe(
+        "before",
+      );
+      mutable.plugins[0]!.pluginId = "after";
+      expect(createPluginRegistryIdNormalizer(mutable, { manifestRegistry: first })("AFTER")).toBe(
+        "after",
+      );
+      expect(build).toHaveBeenCalledTimes(6);
+    } finally {
+      build.mockRestore();
     }
   });
 

@@ -9,6 +9,7 @@ import {
 } from "../config/runtime-snapshot.js";
 import { replaceSessionEntry } from "../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { observePluginStateReads } from "../plugin-state/plugin-state-fixtures.test-support.js";
 import type { PluginDoctorStateMigration } from "../plugins/doctor-contract-module.js";
 import {
   closeOpenClawAgentDatabaseByPathAsync,
@@ -360,6 +361,44 @@ describe("Telegram registered SQLite offset repair", () => {
         return backup;
       });
   }
+  it(
+    "publishes repaired rows to an already warm keyed store",
+    inDoctorState(async ({ env }) => {
+      seed(openOpenClawStateDatabase({ env }).db);
+      const context = doctorContext(env, {
+        pluginId: "telegram",
+        repairAuthority: {
+          assertCurrent() {},
+          assertOwnedInTransaction(database) {
+            expect(database.isTransaction).toBe(true);
+          },
+        },
+      });
+      const store = context.openPluginStateKeyedStore({ namespace, maxEntries: 10 });
+      expect(await store.entries()).toHaveLength(2);
+      expect(await store.lookup("first")).toEqual(JSON.parse(firstOriginal.raw));
+      const observed = context.readPluginStateEntriesInKeyRange!(namespace, {
+        prefix: "",
+        limit: 10,
+      });
+      await context.repairPluginStateEntries!(
+        namespace,
+        observed.map((entry, index) => ({ entry, value: { repaired: index + 1 } })),
+      );
+
+      const dispatch = observePluginStateReads();
+      expect(await store.entries()).toEqual(
+        originals.map((entry, index) => ({
+          key: entry.key,
+          value: { repaired: index + 1 },
+          createdAt: entry.createdAt,
+          ...(entry.expiresAt === null ? {} : { expiresAt: entry.expiresAt }),
+        })),
+      );
+      expect(await store.lookup("first")).toEqual({ repaired: 1 });
+      expect(dispatch).not.toHaveBeenCalled();
+    }),
+  );
   it(
     "normalizes once with backup, without credentials",
     inDoctorState(async ({ env, stateDir }) => {

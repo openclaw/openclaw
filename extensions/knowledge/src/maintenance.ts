@@ -93,6 +93,12 @@ export class Maintenance {
     await this.arm(now);
   }
 
+  /** End this service lifetime: arm nothing more and wait for a pass in flight. */
+  async stop() {
+    this.scheduler = undefined;
+    await this.running;
+  }
+
   private async arm(after: number) {
     if (!this.scheduler || !this.cron || !this.active) {
       return;

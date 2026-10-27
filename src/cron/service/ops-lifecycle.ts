@@ -35,7 +35,7 @@ function subscribeStoreMutations(state: CronServiceState): void {
   const generation = state.lifecycleGeneration;
   mutationSubscriptions.set(
     state,
-    subscribeCronJobsStoreMutations(state.deps.storePath, () => {
+    subscribeCronJobsStoreMutations(state.deps.storeKey, () => {
       const refresh = async () => {
         await locked(state, () => reloadProvisionedCronJobs(state, generation));
         if (!state.stopped && state.lifecycleGeneration === generation && state.schedulerStarted) {

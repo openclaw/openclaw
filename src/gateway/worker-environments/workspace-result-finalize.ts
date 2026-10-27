@@ -55,9 +55,6 @@ import {
 import { workerWorkspaceResultRef } from "./workspace-result-staging.js";
 
 type ActiveWorkerPlacement = Extract<WorkerSessionPlacementRecord, { state: "active" }>;
-type RemoteExecEnvironmentService = Pick<WorkerEnvironmentService, "get" | "startTunnel"> &
-  Partial<Pick<WorkerEnvironmentService, "prepareComputer">>;
-
 type WorkspaceConflictReport = Required<WorkerWorkspaceResultConflict> & {
   summary: string;
 };
@@ -346,7 +343,8 @@ function appendWorkspaceConflict(
 }
 
 export async function executeRemoteExecTurn(params: {
-  environments: RemoteExecEnvironmentService;
+  environments: Pick<WorkerEnvironmentService, "get" | "startTunnel"> &
+    Partial<Pick<WorkerEnvironmentService, "prepareComputer">>;
   onHandoff: (custody?: { requiresTerminalReceipt: true }) => void;
   placement: ActiveWorkerPlacement;
   placements: WorkerSessionPlacementStore;

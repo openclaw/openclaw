@@ -86,7 +86,10 @@ export async function installClawPackages(
 /** Undo only plugin installs made by this in-flight Add, before its agent is published. */
 export async function rollbackStatelessClawPackages(
   packages: PersistedClawPackageRef[],
-  options: Pick<InstallClawPackagesOptions, "assertCurrent" | "env" | "path" | "runtime"> = {},
+  options: Pick<
+    InstallClawPackagesOptions,
+    "assertCurrent" | "prepareEffect" | "env" | "path" | "runtime"
+  > = {},
 ): Promise<string[]> {
   const errors: string[] = [];
   const runtime = options.runtime ?? defaultRuntime;
@@ -141,6 +144,10 @@ export async function rollbackStatelessClawPackages(
         beforePersistentApply: () => {
           activeLease.assertCurrent();
           options.assertCurrent?.();
+        },
+        beforePersistentEffect: async () => {
+          await options.prepareEffect?.();
+          await activeLease.assertOwned();
         },
         onWarning: (warning) => runtime.log(warning),
       };
@@ -205,6 +212,11 @@ async function installClawPackagesUnlocked(
         assertCurrent();
         options.assertForwardCurrent?.();
       };
+      const prepareEffect = async () => {
+        await options.prepareEffect?.();
+        await acquired.assertOwned();
+        assertForwardCurrent();
+      };
       if (pkg.kind === "skill") {
         const preflight = await preflightSkillFromClawHub({
           workspaceDir: plan.agent.workspace,
@@ -264,7 +276,7 @@ async function installClawPackagesUnlocked(
           independentOwner: false,
         });
         installedPackages.push(packageRef);
-        assertForwardCurrent();
+        await prepareEffect();
         const installed = await installSkillFromClawHub({
           workspaceDir: plan.agent.workspace,
           slug: pkg.ref,
@@ -272,6 +284,7 @@ async function installClawPackagesUnlocked(
           expectedIntegrity: pkg.integrity,
           clawManaged: true,
           beforePersistentApply: assertForwardCurrent,
+          beforePersistentEffect: prepareEffect,
           confirmInstall: (warning) => {
             assertCurrent();
             return warning === pkg.riskWarning;
@@ -411,7 +424,7 @@ async function installClawPackagesUnlocked(
             );
           }
         },
-        beforePersistentEffect: async () => assertForwardCurrent(),
+        beforePersistentEffect: prepareEffect,
         logger: createPluginInstallLogger(runtime),
         confirmInstall: async (warning) => {
           assertCurrent();

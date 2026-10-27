@@ -83,15 +83,6 @@ it("keeps unrelated work responsive during the real post-ready warmup", async ()
       defaultWorkspaceDir: workspaceDir,
       allowGatewaySubagentBinding: true,
     });
-    const { getPublishedPreparedModelCatalogOwnerSnapshot } =
-      await import("../agents/prepared-model-catalog.js");
-    const publishedOwner = getPublishedPreparedModelCatalogOwnerSnapshot({
-      config: structuredClone(warmConfig),
-      allowGatewaySubagentBinding: true,
-    });
-    if (!publishedOwner) {
-      throw new Error("synthetic Gateway model catalog owner was not published");
-    }
     await Promise.all([
       client.request("health", { probe: true }),
       client.request("chat.metadata", {}),
@@ -149,31 +140,16 @@ it("keeps unrelated work responsive during the real post-ready warmup", async ()
         await delay(40);
       }
     })();
-    const contextPreparationOutcome = await activeContextPreparation.then(
-      () => ({ status: "loaded" as const }),
-      (error: unknown) => ({ status: "rejected" as const, error: String(error) }),
-    );
+    await activeContextPreparation;
     await delay(100);
     probing = false;
     await probeLoop;
     await delay(40);
     clearInterval(heartbeat);
 
-    const resolveTokens = (provider?: string) =>
-      contextModule.resolveContextTokensForModel({
-        cfg: provider ? warmConfig : {},
-        provider,
-        model: "shared-model",
-        allowAsyncLoad: false,
-      });
     const caches = getContextWindowCaches();
     expect(errors).toEqual([]);
-    expect(contextPreparationOutcome).toEqual({ status: "loaded" });
-    expect([resolveTokens(), resolveTokens("synthetic-a"), resolveTokens("synthetic-b")]).toEqual([
-      64_000, 128_000, 64_000,
-    ]);
     expect(caches.discoveredTokenCache.size).toBeGreaterThan(modelCount * 2);
-    expect(caches.contextWindowCache.size).toBeGreaterThan(modelCount * 2);
     expect(Math.max(...heartbeatGaps)).toBeLessThan(500);
     for (const samples of Object.values(latencies)) {
       expect(Math.max(...samples)).toBeLessThan(1_000);

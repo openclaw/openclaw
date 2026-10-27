@@ -33,6 +33,7 @@ import {
   snapshotSessions,
   type SidebarSnapshotModel,
 } from "./sidebar-snapshot-model.ts";
+import { sessionIconMask } from "./solid/icon.tsx";
 import { installTitleTooltips } from "./tooltip-title.ts";
 
 const emptySnapshot: SidebarSnapshotModel = {
@@ -117,6 +118,18 @@ function mountObservedHost(
   mountSolid(() => view(observed.host), { container });
   return observed.update;
 }
+
+it("keeps named glyphs visible and updates their kind without replacing the leading slot", () => {
+  const { dom, session, setCurrent } = mountRow({ icon: "kanban" });
+  const glyph = dom.query(".session-glyph");
+  const art = dom.query<HTMLElement>(".session-glyph__icon .session-css-icon");
+  expect(art?.style.maskImage).toBe(sessionIconMask("kanban"));
+  setCurrent({ ...session, icon: "bot" });
+  flush();
+  expect(dom.query(".session-glyph__icon .session-css-icon")).toBe(art);
+  expect(art?.style.maskImage).toBe(sessionIconMask("bot"));
+  expect(dom.query(".session-glyph")).toBe(glyph);
+});
 
 it("restores only active dashboards in saved order after alphabetized built-in Pages", async () => {
   const { host, context, dom } = await createCachedHost();
@@ -220,7 +233,6 @@ it("keeps cached agent rows while the live roster settles", async () => {
   host.restoreSidebarSnapshot({
     ...emptySnapshot,
     mode: "roster",
-    sessions: saved,
     sections: [
       {
         id: "agent:main:recent",
@@ -325,8 +337,8 @@ it.each(["owner", "icon"] as const)(
     flush();
     const content = dom.query(".session-glyph__content")!;
     const artwork = content.firstElementChild;
-    const graphic = content.querySelector("svg");
-    const initialGraphic = graphic?.innerHTML;
+    const graphic = content.querySelector<HTMLElement>(".session-css-icon");
+    const initialGraphic = graphic?.style.maskImage;
     const archive = dom.query("[data-sidebar-session-archive]")!;
     const archiveIcon = archive.querySelector("svg");
     const row = dom.query(".sidebar-recent-session")!;
@@ -362,8 +374,8 @@ it.each(["owner", "icon"] as const)(
         "Ada renamed",
       );
     } else {
-      expect(content.querySelector("svg")).toBe(graphic);
-      expect(content.querySelector("svg")?.innerHTML).not.toBe(initialGraphic);
+      expect(content.querySelector(".session-css-icon")).toBe(graphic);
+      expect(graphic?.style.maskImage).not.toBe(initialGraphic);
     }
   },
 );
@@ -448,17 +460,49 @@ it("keeps the rendered preview slot after caching without restoring live run aut
   const [cached] = snapshotSessions([session], (row) => ({
     snapshotSubtitle: resolveSidebarSessionRowSubtitle(host, row),
   }));
-  host.sidebarSnapshot = parseSidebarSnapshot({ ...emptySnapshot, sessions: [cached] });
+  host.sidebarSnapshot = parseSidebarSnapshot({ ...emptySnapshot, pinnedSessions: [cached] });
   expect(host.sidebarSnapshot).not.toBeNull();
-  const restored = restoreSnapshotSession(host.sidebarSnapshot!.sessions[0]!, session.key);
+  const restored = restoreSnapshotSession(host.sidebarSnapshot!.pinnedSessions[0]!, session.key);
   setCurrent(restored);
   update();
   expect(dom.text(".sidebar-recent-session__subtitle")).toBe("The report is ready for review.");
   expect(dom.query(".sidebar-recent-session--single-line")).toBeNull();
+  host.releaseSidebarSnapshot();
+  update();
+  expect(dom.text(".sidebar-recent-session__subtitle")).toBe("The report is ready for review.");
   expect([restored.hasActiveRun, restored.attention]).toEqual([false, { kind: "none" }]);
   expect(
     dom.all("[data-sidebar-session-pin]:enabled, [data-sidebar-session-archive]:enabled"),
   ).toHaveLength(0);
+});
+
+it("keeps a restored pin's badges after roster handoff until its own descriptor replaces it", () => {
+  const { host, container, dom } = createHost("chip");
+  const saved = {
+    key: "agent:main:pin",
+    label: "Saved pin",
+    pinned: true,
+    isChild: false,
+    children: [],
+    state: {
+      hasApproval: true,
+      pullRequestCount: 3,
+      pullRequest: { numbers: [17], state: "open" as const },
+    },
+  };
+  host.restoreSidebarSnapshot({ ...emptySnapshot, pinnedSessions: [saved] });
+  const [current, setCurrent] = createSignal(restoreSnapshotSession(saved, saved.key));
+  const update = mountObservedHost(host, container, (observedHost) => (
+    <RecentSession host={observedHost} session={current()} />
+  ));
+  host.releaseSidebarSnapshot();
+  update();
+  expect(host.sidebarSnapshot).toBeNull();
+  expect(dom.all(".session-row-badge--approval")).toHaveLength(1);
+  expect(dom.text(".session-row-badge--pull-request")).toBe("3");
+  setCurrent(projectSidebarSession({ key: saved.key, label: "Current pin", pinned: true }));
+  update();
+  expect(dom.all(".session-row-badge")).toHaveLength(0);
 });
 
 it("keeps Users visible despite a cached legacy collapse preference", () => {

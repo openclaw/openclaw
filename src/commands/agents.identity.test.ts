@@ -210,6 +210,16 @@ describe("agents set-identity command", () => {
   });
 
   it.each([
+    [{ identityFile: " " }, "--identity-file must not be blank"],
+    [{ workspace: "\t" }, "--workspace must not be blank"],
+  ] as const)("rejects an explicitly blank path %j", async (options, message) => {
+    const { workspace } = await createIdentityWorkspace();
+    await writeIdentityFile(workspace, ["- Name: Fallback identity"]);
+    setAgents({ entries: { main: { workspace } } });
+    await expectIdentityCommandFailure({ agent: "main", ...options, json: true }, message);
+  });
+
+  it.each([
     { agent: "агент✨", name: "Ghost", json: true },
     { agent: "main", identityFile: "/missing/IDENTITY.md" },
   ])("rejects unknown agent $agent before reading or writing identity", async (options) => {

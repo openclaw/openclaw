@@ -30,12 +30,9 @@ vi.mock("./cli-credentials.js", () => ({
   readMiniMaxCliCredentialsCached: () => null,
 }));
 // mock-isolation: Usage-state fixtures own the seeded profiles; ambient provider discovery must not add credentials.
-vi.mock("../plugins/provider-external-auth-core.js", () => ({
-  createProviderExternalAuthResolver: () => ({
-    resolveExternalAuthProfilesWithPlugins: () => [],
-    withPreparedExternalAuthProfiles: async <T>(_params: unknown, run: () => Promise<T>) => run(),
-  }),
-}));
+vi.mock("../plugins/provider-external-auth-core.js", async () =>
+  (await import("../plugins/provider-external-auth.test-support.js")).createExternalAuthMock(),
+);
 
 const tempDirs = createTempDirTracker();
 afterAll(async () => {

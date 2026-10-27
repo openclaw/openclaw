@@ -195,11 +195,9 @@ suite.define(() => {
         sessions: [sessionRow("agent:main:mobile", "Mobile session", 8)],
       });
       await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:mobile"));
-      const filter = page.getByRole("button", { name: "Filter & sort", exact: true });
       const openMenu = async () => {
-        if (!(await filter.isVisible())) {
-          await page.getByRole("button", { name: "Expand sidebar", exact: true }).click();
-        }
+        await page.getByRole("button", { name: "Expand sidebar", exact: true }).click();
+        await waitForMobileSidebarDrawerOpen(page);
         return openSidebarMenu(page);
       };
       const menu = await openMenu();

@@ -68,11 +68,8 @@ export async function withCronGatewayState(
     const logger = createNoopLogger();
     const finishedJobs = new Map<string, ReturnType<typeof createDeferredCore<CronEvent>>>();
     const finished = (id: string) => {
-      let entry = finishedJobs.get(id);
-      if (!entry) {
-        entry = createDeferredCore<CronEvent>();
-        finishedJobs.set(id, entry);
-      }
+      const entry = finishedJobs.get(id) ?? createDeferredCore<CronEvent>();
+      finishedJobs.set(id, entry);
       return entry;
     };
     const runIsolatedAgentJob = vi.fn(async () => ({ status: "ok" as const }));

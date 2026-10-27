@@ -6,8 +6,8 @@ import { registerChatQuestionsEnglish } from "../../../i18n/locales/en-chat-ques
 import { registerChatSessionEnglish } from "../../../i18n/locales/en-chat-session.ts";
 import type { ChatQueueItem } from "../../../lib/chat/chat-types.ts";
 import type { DurableComposerDraftScope } from "../../../lib/chat/composer-draft-store.runtime.ts";
+import { isAssistantHeartbeatAckForDisplay } from "../../../lib/chat/heartbeat-display.ts";
 import { extractTextCached } from "../../../lib/chat/message-extract.ts";
-import { shouldHideAssistantChatMessage } from "../../../lib/chat/message-visibility.ts";
 import { showToast } from "../../../lib/toast.ts";
 import {
   isKeyedAssistantStreamFallbackMessage,
@@ -65,7 +65,7 @@ function terminalOutcome(message: unknown): "successful" | "settled" | null {
     (metadata?.mirrorOrigin !== "codex-app-server" &&
       (phase === "final_answer" || stopReason === "stop" || failed))
   ) {
-    return failed || phase === "commentary" || shouldHideAssistantChatMessage(message)
+    return failed || phase === "commentary" || isAssistantHeartbeatAckForDisplay(message)
       ? "settled"
       : "successful";
   }

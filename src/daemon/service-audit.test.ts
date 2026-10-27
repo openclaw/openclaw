@@ -100,13 +100,13 @@ it.each([undefined, "Cannot use SQLite library /opt/broken/libsqlite3.dylib: mis
   async (sqliteSelectionError) => {
     const sqliteVersion = sqliteSelectionError ? null : "3.51.2";
     resolveBunRuntimeInfoMock.mockResolvedValue({
-      ...runtimeInfo(sqliteSelectionError ? "1.4.3" : "1.4.0", sqliteVersion),
+      ...runtimeInfo(sqliteSelectionError ? "1.4.4" : "1.4.0", sqliteVersion),
       status: "unsupported",
       sqliteSelectionError,
     });
     const result = await auditBun();
     expectIssue(result, codes.gatewayRuntimeBun, {
-      message: expect.stringContaining("Bun 1.4.3+ with WAL-reset-safe node:sqlite is required"),
+      message: expect.stringContaining("Bun 1.4.4+ with WAL-reset-safe node:sqlite is required"),
       detail: sqliteSelectionError
         ? `/opt/homebrew/bin/bun: ${sqliteSelectionError}`
         : "/opt/homebrew/bin/bun",

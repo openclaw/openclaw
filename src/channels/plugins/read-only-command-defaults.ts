@@ -34,12 +34,6 @@ export function readOwnRecordValue(record: Record<string, unknown>, key: string)
   return record[key];
 }
 
-export function normalizeChannelCommandDefaults(
-  value: ChannelCommandDefaults | undefined,
-): ChannelCommandDefaults | undefined {
-  return normalizeManifestChannelCommandDefaults(value);
-}
-
 /**
  * Resolves command defaults from enabled installed plugin metadata without loading plugins.
  */
@@ -90,7 +84,9 @@ export function resolveReadOnlyChannelCommandDefaults(
       record.channelCatalogMeta?.id === normalizedChannelId
         ? record.channelCatalogMeta.commands
         : undefined;
-    const commands = normalizeChannelCommandDefaults(channelConfig?.commands ?? catalogCommands);
+    const commands = normalizeManifestChannelCommandDefaults(
+      channelConfig?.commands ?? catalogCommands,
+    );
     if (commands) {
       return commands;
     }

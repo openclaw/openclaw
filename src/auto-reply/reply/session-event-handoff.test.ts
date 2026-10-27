@@ -512,6 +512,23 @@ describe("session event target custody", () => {
       await expect(fs.stat(databasePath)).rejects.toMatchObject({ code: "ENOENT" });
     },
   );
+  it.for(["plugin", "tool_handoff"] as const)(
+    "refuses a keyed %s retry while its occurrence is pending",
+    async (source, { state: { env } }) => {
+      const target = await captureTarget("main", sessionKey, { env });
+      const contextKey = "tool-handoff:retry";
+      const pending = enqueueRequiredSystemEventEntry("Tool result", {
+        sessionKey,
+        contextKey,
+        deliveryContext: target.deliveryContext,
+      });
+      expect(() =>
+        enqueueEvent("Tool result", { ...eventScope, source, contextKey, expectedTarget: target }),
+      ).toThrow("an identical occurrence is already pending");
+      expect(peekSystemEventEntries(sessionKey)).toEqual([pending]);
+    },
+  );
+
   it("retains store, route and producer limits across lookup", async ({
     state: { env, path: fixturePath, storePath },
   }) => {

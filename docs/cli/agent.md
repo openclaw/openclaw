@@ -19,6 +19,8 @@ Pass at least one session selector: `--to`, `--session-key`, `--session-id`, or 
 
 When `--session-id` finds an existing session in an agent's storage partition, it retains that agent even if `session.store` uses one fixed JSON locator and the stored key is `global` or `unknown`.
 
+Configured idle and daily resets append a reset boundary while preserving the durable transcript ID, including through the Gateway `agent` method and `--local`. Earlier messages remain available for transcript recall and session-memory indexing. Local `--local --session-id` resume bypasses automatic expiry. The Gateway still applies its configured reset policy when an explicit matching ID is supplied.
+
 For Gateway-backed turns, the Gateway resolves `--session-id`, including when it runs on the same machine as the CLI. The CLI does not read session metadata before sending the request. If the ID does not exist, the Gateway creates a resumable session under the selected agent. This requires a Gateway advertising named-session creation support; update and restart an older Gateway before using this CLI's `--session-id`. The CLI checks support before sending the turn.
 
 A completed turn exits `0`. Error, timeout, and cancellation outcomes exit `1`, after any text or JSON result is written. A received `SIGINT` or `SIGTERM` instead preserves the signal-specific exit status described below.
@@ -49,7 +51,7 @@ When your tool policy enables `browser`, local browser control works without a G
 
 Use `--state-dir <dir>` to retain sessions and other run state. The directory must already exist and is never created or deleted by the command. A retained state directory requires exclusive ownership: exec refuses to start while a Gateway or another embedded writer owns it, then holds the state lock for the complete run. Omit `--state-dir` for isolated temporary state, or stop the Gateway first with `openclaw gateway stop`.
 
-When exec uses the ambient or a pinned config, installed plugins continue to resolve from the operator's ordinary plugin roots while sessions and other run state use the ephemeral directory. In those modes, `--state-dir` controls run state only; it is not required for configured providers, channels, or harnesses supplied by installed plugins.
+When exec uses the ambient or a pinned config, installed plugins continue to resolve from the operator's ordinary plugin roots while sessions and other run state use the ephemeral directory. Plugins that adopt the managed-resource root, including llama.cpp, also keep shared model caches and managed binaries on the operator root. In those modes, `--state-dir` controls run state only; it is not required for configured providers, channels, or harnesses supplied by installed plugins.
 
 For reproducible runs, pin the config instead of inheriting it. `--config <path>` runs against exactly that config file, read through the normal loader so JSON5 syntax and `$include` resolve relative to it; a missing or invalid file fails the run rather than falling back to defaults, as does an ambient config that exists but cannot be parsed. `--isolated` ignores the ambient config entirely and uses only the exec defaults above. Both are the right choice for CI, where inheriting operator state would make runs machine-dependent.
 

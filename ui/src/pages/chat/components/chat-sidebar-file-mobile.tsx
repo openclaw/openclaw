@@ -33,17 +33,6 @@ export type MobileFileMenuAction = {
 
 type MobileFileReadMode = Pick<FileHtmlPreviewControls, "source" | "onToggle">;
 
-export type SidebarFileMobileRailProps = {
-  name: string;
-  /** Full identity for the tooltip; never derive a local path from an artifact URL. */
-  identity: string;
-  back?: MobileFileBack;
-  menuActions?: readonly MobileFileMenuAction[];
-  attachment?: import("./chat-file-session-attachment.ts").FileSessionAttachment;
-  /** Native Download, attachment Copy, MCP or external-editor controls, as eligible. */
-  actions?: JSX.Element;
-};
-
 function MobileFileButton(props: {
   label: string;
   icon: IconName;
@@ -69,7 +58,16 @@ function MobileFileButton(props: {
 }
 
 /** Mount separately from the document so changing chrome never replaces its editor/player. */
-export function SidebarFileMobileRail(props: SidebarFileMobileRailProps) {
+export function SidebarFileMobileRail(props: {
+  name: string;
+  /** Full identity for the tooltip; never derive a local path from an artifact URL. */
+  identity: string;
+  back?: MobileFileBack;
+  menuActions?: readonly MobileFileMenuAction[];
+  attachment?: import("./chat-file-session-attachment.ts").FileSessionAttachment;
+  /** Native Download, attachment Copy, MCP or external-editor controls, as eligible. */
+  actions?: JSX.Element;
+}) {
   const id = createUniqueId();
   const actions = (): readonly MobileFileMenuAction[] => [
     ...(props.attachment
@@ -186,7 +184,7 @@ export function mobileFileTextMenuActions(options: {
   return actions;
 }
 
-export type SidebarFileMobileTextControlsProps = {
+export function SidebarFileMobileTextControls(props: {
   controls: FileViewControls;
   canEdit: boolean;
   /** Omit for code/plain text/CSV. Markdown and HTML share this two-mode contract. */
@@ -195,9 +193,7 @@ export type SidebarFileMobileTextControlsProps = {
   active: boolean;
   /** One owner operation clears matches/query and restores the prior mode and appropriate focus. */
   onCloseFind: (reason: MobileFileFindCloseReason) => void;
-};
-
-export function SidebarFileMobileTextControls(props: SidebarFileMobileTextControlsProps) {
+}) {
   let root!: HTMLDivElement;
   let find: HTMLDivElement | undefined;
   onSettled(() => {
@@ -349,15 +345,13 @@ export function SidebarFileMobileTextControls(props: SidebarFileMobileTextContro
   );
 }
 
-export type SidebarFileMobileImageControlsProps = {
+export function SidebarFileMobileImageControls(props: {
   name: string;
   /** Supplied only for an eligible path, with the native copy operation/feedback. */
   copyPath?: { onCopy: () => void; feedback?: FileCopyFeedback["path"] };
   /** Opens the existing image lightbox with its real image/gallery context. */
   onExpand: () => void;
-};
-
-export function SidebarFileMobileImageControls(props: SidebarFileMobileImageControlsProps) {
+}) {
   return (
     <div class="sidebar-file-mobile__floating">
       <div class="sidebar-file-mobile__capsule sidebar-file-mobile__image">

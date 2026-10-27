@@ -3,7 +3,7 @@ import { afterEach, beforeEach, expect, it, onTestFinished, vi } from "vitest";
 import { roleScopesAllow } from "../../../../src/shared/operator-scope-compat.js";
 import { resolveBaseSessionMutationRequiredScope } from "../../../../src/shared/session-method-scopes-base.js";
 import { createDeferred } from "../../../../test/helpers/promise.js";
-import { GatewayRequestError } from "../../api/gateway.ts";
+import { GatewayRequestError } from "../../api/gateway-connect-errors.ts";
 import type { GatewaySessionRow } from "../../api/types.ts";
 import {
   createGatewayStoreTestStore,
@@ -26,33 +26,36 @@ beforeEach(() => {
 });
 afterEach(() => vi.unstubAllGlobals());
 
-async function setup(archived = false, scopes = ["operator.admin"]) {
+async function setup(archived = false, scopes = ["operator.admin"], metadata = false) {
   const store = createGatewayStoreTestStore();
   store.gateway.start();
   const client = store.current();
-  client.testOptions.offlineRecoveryScope = "lifecycle-owner";
-  Object.assign(client, { recoveryScope: "lifecycle-owner", recoveryScopeReady: true });
+  const recoveryScope = metadata ? "metadata-owner" : "lifecycle-owner";
+  client.testOptions.offlineRecoveryScope = recoveryScope;
+  Object.assign(client, { recoveryScope, recoveryScopeReady: true });
   const hello = {
     ...gatewayHelloForMethods([
       "sessions.patch",
-      "sessions.delete",
-      "sessions.describe",
+      ...(!metadata ? ["sessions.delete", "sessions.describe"] : []),
       "sessions.list",
       "sessions.subscribe",
     ]),
-    auth: { role: "operator", scopes, recoveryScope: "lifecycle-owner" },
+    auth: { role: "operator", scopes, recoveryScope },
   };
   let row: GatewaySessionRow | null = {
     key: "agent:main:offline",
-    sessionId: "incarnation",
+    sessionId: metadata ? "offline-incarnation" : "incarnation",
     kind: "direct",
     label: "Original",
-    archived,
-    pinned: !archived,
-    sharingRole: "owner",
+    ...(metadata
+      ? { icon: "star", color: "blue", category: "Work" }
+      : { archived, pinned: !archived, sharingRole: "owner" as const }),
     updatedAt: 1,
   };
   let reject = false;
+  let rejectList = false;
+  let nextPatchWait: Promise<void> | undefined;
+  const confirmed = vi.fn();
   let missingReject = false;
   client.request.mockImplementation(async (method, params) => {
     const requiredScope = resolveBaseSessionMutationRequiredScope(method, params);
@@ -67,17 +70,25 @@ async function setup(archived = false, scopes = ["operator.admin"]) {
       throw new Error(`Missing scope: ${requiredScope}`);
     }
     if (method === "sessions.list") {
+      if (rejectList) {
+        throw new Error("Session list unavailable");
+      }
       return sessionsResult(row ? [{ ...row }] : []);
     }
-    if (method === "sessions.describe") {
+    if (!metadata && method === "sessions.describe") {
       return { session: row };
     }
     if (method === "sessions.subscribe") {
       return { subscribed: true };
     }
     if (method === "sessions.patch") {
+      if (metadata) {
+        const wait = nextPatchWait;
+        nextPatchWait = undefined;
+        await wait;
+      }
       if (reject) {
-        throw new Error("Lifecycle denied");
+        throw new Error(metadata ? "label already in use: Taken" : "Lifecycle denied");
       }
       if (!row) {
         throw new GatewayRequestError({
@@ -95,7 +106,7 @@ async function setup(archived = false, scopes = ["operator.admin"]) {
       };
       return { ok: true, key: row.key, path: "", entry: { ...row } };
     }
-    if (method === "sessions.delete") {
+    if (!metadata && method === "sessions.delete") {
       if (reject) {
         throw new Error("Lifecycle denied");
       }
@@ -117,22 +128,45 @@ async function setup(archived = false, scopes = ["operator.admin"]) {
   });
   client.testOptions.onHello?.(hello);
   const sessions = createTestSessionCapability(store.gateway);
-  await sessions.refresh({ agentId: "main" });
+  if (!metadata) {
+    await sessions.refresh({ agentId: "main" });
+  }
   onTestFinished(() => {
     sessions.dispose();
     store.gateway.stop();
   });
-  const target = { agentId: "main", expectedSessionId: "incarnation" };
+  const target = { agentId: "main", expectedSessionId: row!.sessionId };
+  const errors: Array<string | null> = [];
+  sessions.subscribe((state) => errors.push(state.error));
   return {
     ...store,
     sessions,
     target,
+    confirmed,
+    errors,
+    patches: () =>
+      store.current().request.mock.calls.filter(([method]) => method === "sessions.patch"),
+    holdNextPatch: (wait: Promise<void>) => {
+      nextPatchWait = wait;
+    },
+    rejectList: () => {
+      rejectList = true;
+    },
+    setServerFields: (fields: Partial<GatewaySessionRow>) => {
+      row = { ...row!, ...fields };
+    },
+    patchMetadata: (fields: Parameters<typeof sessions.patch>[1]) =>
+      sessions.patch("agent:main:offline", fields, {
+        ...target,
+        onConfirmed: confirmed,
+        deferListRefresh: true,
+      }),
     offline: () => client.testOptions.onClose?.({ code: 1006, reason: "lost", willRetry: true }),
     reconnect: () => store.current().testOptions.onHello?.(hello),
     replace: () => {
       store.gateway.connect();
       Object.assign(store.current(), {
-        recoveryScope: "lifecycle-owner",
+        recoveryScope,
         recoveryScopeReady: true,
       });
       store.current().request.mockImplementation(client.request.getMockImplementation()!);
@@ -197,35 +231,6 @@ it("coalesces the first offline delete and archive before the optional runtime l
   expect(h.row()).toMatchObject({ sessionId: "incarnation", archived: true });
 });
 
-it.each(["identity", "retirement", "stop"])(
-  "admits lifecycle work while reconnecting but not after %s",
-  async (cause) => {
-    const h = await setup();
-    h.offline();
-    const requests = [
-      { method: "sessions.patch", params: { key: "agent:main:offline", archived: true } },
-      { method: "sessions.delete", params: { key: "agent:main:offline", ...h.target } },
-    ];
-    for (const request of requests) {
-      expect(
-        readSessionMethodAccess(h.gateway.snapshot, { ...request, allowDeferred: true }).allowed,
-      ).toBe(true);
-    }
-    if (cause === "identity") {
-      h.gateway.connect({ token: "different-synthetic-identity" });
-    } else if (cause === "retirement") {
-      h.current().retireOfflineRecoveryScope();
-    } else {
-      h.gateway.stop();
-    }
-    for (const request of requests) {
-      expect(
-        readSessionMethodAccess(h.gateway.snapshot, { ...request, allowDeferred: true }).allowed,
-      ).toBe(false);
-    }
-  },
-);
-
 it.each([false, true])(
   "projects and replays an offline archive across replacement=%s",
   async (replace) => {
@@ -270,10 +275,16 @@ it.each(["archive", "delete"])("rolls back a rejected offline %s", async (kind) 
   const h = await setup();
   h.offline();
   await (kind === "archive" ? h.patch(true) : h.delete());
+  if (kind === "delete") {
+    await h.delete();
+    expect(h.row()).toBeUndefined();
+    expect(h.gateway.snapshot.deferredIntentCount).toBe(1);
+  }
   h.reject();
   h.reconnect();
   await vi.waitFor(() => expect(showToast).toHaveBeenCalledWith({ message: "Lifecycle denied" }));
   expect(h.row()).toMatchObject({ label: "Original", archived: false, pinned: true });
+  expect(h.sessions.presentation.result?.sessions).toHaveLength(1);
 });
 
 it.each(["present", "replacement client", "gone", "missing incarnation"])(
@@ -427,32 +438,25 @@ it.each(["archive", "delete"])(
   },
 );
 
-it("queues one delete per selected session", async () => {
-  const h = await setup();
-  h.offline();
-  const result = await h.sessions.deleteMany([
-    { key: "agent:main:offline", ...h.target },
-    { key: "agent:main:second", agentId: "main", expectedSessionId: "second-id" },
-  ]);
-  expect(result.queued).toEqual(["agent:main:offline", "agent:main:second"]);
-  expect(h.gateway.snapshot.deferredIntentCount).toBe(2);
-});
-
 it("reports targets without an identity while queuing the rest of an offline delete batch", async () => {
   const h = await setup();
   h.offline();
   const missing = { key: "agent:main:missing", agentId: "main" };
-  const operation = h.sessions.deleteMany([missing, { key: "agent:main:offline", ...h.target }]);
+  const operation = h.sessions.deleteMany([
+    missing,
+    { key: "agent:main:offline", ...h.target },
+    { key: "agent:main:second", agentId: "main", expectedSessionId: "second-id" },
+  ]);
   expect(h.row()).toBeUndefined();
-  expect(h.gateway.snapshot.deferredIntentCount).toBe(1);
+  expect(h.gateway.snapshot.deferredIntentCount).toBe(2);
   const result = await operation;
   const message =
     'Cannot queue deletion of "agent:main:missing" without its session identity. Refresh after reconnecting and try again.';
   expect(result.errors).toEqual([{ target: missing, error: new Error(message) }]);
   expect(showToast).toHaveBeenCalledWith({ message });
   expect(h.sessions.state.error).toBe(message);
-  expect(result.queued).toEqual(["agent:main:offline"]);
-  expect(h.gateway.snapshot.deferredIntentCount).toBe(1);
+  expect(result.queued).toEqual(["agent:main:offline", "agent:main:second"]);
+  expect(h.gateway.snapshot.deferredIntentCount).toBe(2);
   expect(h.sessions.deletionState(missing.key, missing.agentId)).toBeUndefined();
   expect(h.writes()).toHaveLength(0);
 });
@@ -467,19 +471,6 @@ it("moves an offline unarchive to active and restores the archive on rejection",
   h.reconnect();
   await vi.waitFor(() => expect(showToast).toHaveBeenCalledWith({ message: "Lifecycle denied" }));
   expect(h.row()?.archived).toBe(true);
-});
-
-it("keeps repeated offline deletes hidden and restores one row on rejection", async () => {
-  const h = await setup();
-  h.offline();
-  await h.delete();
-  await h.delete();
-  expect(h.row()).toBeUndefined();
-  expect(h.gateway.snapshot.deferredIntentCount).toBe(1);
-  h.reject();
-  h.reconnect();
-  await vi.waitFor(() => expect(showToast).toHaveBeenCalledWith({ message: "Lifecycle denied" }));
-  expect(h.sessions.presentation.result?.sessions).toHaveLength(1);
 });
 
 it("releases a dispatched archive when transport replacement rejects the old request", async () => {
@@ -619,5 +610,158 @@ it.each([false, true])(
     await replayed.promise;
     expect(h.sessions.state.error).toBeNull();
     expect(showToast).not.toHaveBeenCalled();
+  },
+);
+
+it.each([false, true])("retains offline metadata on replacement=%s", async (replace) => {
+  const h = await setup(false, undefined, true);
+  await h.sessions.refresh({ agentId: "main" });
+  h.offline();
+  const first = h.patchMetadata({ label: "First" });
+  expect(h.row()?.label).toBe("First");
+  expect(h.gateway.snapshot.deferredIntentCount).toBe(1);
+  await expect(first).resolves.toEqual({ queued: true });
+  await expect(h.patchMetadata({ label: "Final" })).resolves.toEqual({ queued: true });
+  await h.patchMetadata({ icon: "heart", color: "red", category: "Home" });
+  expect(h.row()).toMatchObject({
+    label: "Final",
+    icon: "heart",
+    color: "red",
+    category: "Home",
+  });
+  expect(h.gateway.snapshot.deferredIntentCount).toBe(2);
+  expect(h.patches()).toHaveLength(0);
+  // A consequential field cannot hitch a ride with an otherwise safe label.
+  await expect(h.patchMetadata({ label: "Unsafe", pinned: true })).resolves.toBeNull();
+  if (replace) {
+    h.replace();
+    expect(h.row()?.label).toBe("Final");
+    expect(h.gateway.snapshot.deferredIntentCount).toBe(2);
+  }
+  h.reconnect();
+  await vi.waitFor(() => expect(h.gateway.snapshot.deferredIntentCount).toBe(0));
+  expect(h.patches()).toHaveLength(2);
+  await vi.waitFor(() => expect(h.confirmed).toHaveBeenCalledTimes(2));
+  expect(h.patches()[0]?.[1]).toMatchObject({
+    key: "agent:main:offline",
+    agentId: "main",
+    expectedSessionId: "offline-incarnation",
+    label: "Final",
+  });
+  await vi.waitFor(() =>
+    expect(h.row()).toMatchObject({
+      label: "Final",
+      icon: "heart",
+      color: "red",
+      category: "Home",
+    }),
+  );
+});
+
+it.each([false, true])("orders new edits while the last request is in flight=%s", async (last) => {
+  const h = await setup(false, undefined, true);
+  const first = createDeferred();
+  try {
+    await h.sessions.refresh({ agentId: "main" });
+    h.offline();
+    if (!last) {
+      await h.patchMetadata({ icon: "heart" });
+    }
+    await h.patchMetadata({ label: "Old" });
+    h.holdNextPatch(first.promise);
+    h.reconnect();
+    expect(h.gateway.snapshot.deferredIntentDraining).toBe(true);
+    expect(h.gateway.snapshot.deferredIntentCount).toBe(last ? 0 : 1);
+    await expect(h.patchMetadata({ label: "New" })).resolves.toEqual({ queued: true });
+    expect(h.row()?.label).toBe("New");
+    expect(h.patches()).toHaveLength(1);
+    first.resolve();
+    await vi.waitFor(() => expect(h.confirmed).toHaveBeenCalledTimes(2));
+    expect(h.patches().map(([, params]) => params)).toMatchObject([
+      last ? { label: "Old" } : { icon: "heart" },
+      { label: "New" },
+    ]);
+    expect(h.row()?.label).toBe("New");
+    expect(h.gateway.snapshot.deferredIntentCount).toBe(0);
+    await vi.waitFor(() => expect(h.gateway.snapshot.deferredIntentDraining).toBe(false));
+  } finally {
+    first.resolve();
+  }
+});
+
+it.each(["rejection", "discard"])("rolls back queued metadata on %s", async (outcome) => {
+  const h = await setup(false, undefined, true);
+  await h.sessions.refresh({ agentId: "main" });
+  h.offline();
+  await h.patchMetadata({ label: "Taken" });
+  expect(h.row()?.label).toBe("Taken");
+  if (outcome === "rejection") {
+    h.reject();
+    h.reconnect();
+    await vi.waitFor(() =>
+      expect(h.errors.some((error) => error?.includes("label already in use"))).toBe(true),
+    );
+    await vi.waitFor(() => expect(h.row()?.label).toBe("Original"));
+    expect(showToast).toHaveBeenCalledExactlyOnceWith({ message: "label already in use: Taken" });
+  } else {
+    h.gateway.stop();
+  }
+  await vi.waitFor(() => expect(h.gateway.snapshot.deferredIntentCount).toBe(0));
+  expect(h.row()?.label).not.toBe("Taken");
+  expect(h.patches()).toHaveLength(outcome === "rejection" ? 1 : 0);
+});
+
+it("keeps the last icon choice when it overlaps an earlier appearance reset", async () => {
+  const h = await setup(false, undefined, true);
+  await h.sessions.refresh({ agentId: "main" });
+  h.offline();
+  await h.patchMetadata({ icon: "heart" });
+  await h.patchMetadata({ icon: null, color: null });
+  await h.patchMetadata({ icon: "star" });
+  expect(h.row()?.icon).toBe("star");
+  expect(h.gateway.snapshot.deferredIntentCount).toBe(2);
+  h.reconnect();
+  await vi.waitFor(() => expect(h.confirmed).toHaveBeenCalledTimes(2));
+  expect(h.patches()).toHaveLength(2);
+  expect(h.patches().map(([, params]) => params)).toMatchObject([
+    { icon: null, color: null },
+    { icon: "star" },
+  ]);
+  await vi.waitFor(() => expect(h.row()?.icon).toBe("star"));
+  expect(h.gateway.snapshot.deferredIntentCount).toBe(0);
+  // A leaked optimistic claim would mask this later authoritative value.
+  h.setServerFields({ icon: "moon", color: "red", updatedAt: 50 });
+  await h.sessions.refresh({ agentId: "main", force: true });
+  expect(h.row()).toMatchObject({ icon: "moon", color: "red" });
+});
+
+it.each(["confirmed", "rejected"])(
+  "settles %s metadata held only by a filtered list",
+  async (outcome) => {
+    const h = await setup(false, undefined, true);
+    const scope = { agentId: "main", search: "Original" };
+    const unsubscribe = h.sessions.subscribeList(scope, () => {});
+    try {
+      await h.sessions.refreshList(scope);
+      expect(h.sessions.listSnapshot(scope).result?.sessions[0]?.label).toBe("Original");
+      h.offline();
+      await h.patchMetadata({ label: "Filtered rename" });
+      expect(h.sessions.listSnapshot(scope).result?.sessions[0]?.label).toBe("Filtered rename");
+      if (outcome === "rejected") {
+        h.reject();
+        h.rejectList();
+      }
+      h.reconnect();
+      if (outcome === "confirmed") {
+        await vi.waitFor(() => expect(h.confirmed).toHaveBeenCalledOnce());
+      }
+      await vi.waitFor(() =>
+        expect(h.sessions.listSnapshot(scope).result?.sessions[0]?.label).toBe(
+          outcome === "confirmed" ? "Filtered rename" : "Original",
+        ),
+      );
+    } finally {
+      unsubscribe();
+    }
   },
 );

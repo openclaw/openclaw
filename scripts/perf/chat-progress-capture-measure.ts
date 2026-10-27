@@ -1,17 +1,36 @@
 // Synthetic progress capture through the replay owner; no transport or Gateway claim.
 // Run: node --import ./scripts/tsx.mjs scripts/perf/chat-progress-capture-measure.ts
 // Repeat with --allocations for a separate sampled pass; its CPU is not a timing gate.
+// --events 5000 --retained-tools 16 exercises interleaved retained histories.
+// --module <absolute-path> selects a frozen baseline owner with the same dependencies.
 // Use the same command on base and candidate; live load proof uses transcript-broadcast-measure.ts.
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import type { HeapProfiler } from "node:inspector";
 import { Session } from "node:inspector/promises";
+import { loadavg } from "node:os";
 import { performance } from "node:perf_hooks";
+import { pathToFileURL } from "node:url";
 import { parseArgs } from "node:util";
-import { updateChatRunProgressSnapshot } from "../../src/gateway/server-chat-progress-snapshot.js";
-
-const eventCount = 50_000;
-const { values } = parseArgs({ options: { allocations: { type: "boolean", default: false } } });
+const { values } = parseArgs({
+  options: {
+    allocations: { type: "boolean", default: false },
+    events: { type: "string", default: "50000" },
+    "retained-tools": { type: "string", default: "1" },
+    module: { type: "string" },
+  },
+});
+const eventCount = Number(values.events);
+const retainedTools = Number(values["retained-tools"]);
+assert(Number.isSafeInteger(eventCount) && eventCount > 0);
+assert(Number.isSafeInteger(retainedTools) && retainedTools > 0 && retainedTools <= 16);
+const {
+  updateChatRunProgressSnapshot,
+}: typeof import("../../src/gateway/server-chat-progress-snapshot.js") = await import(
+  values.module
+    ? pathToFileURL(values.module).href
+    : "../../src/gateway/server-chat-progress-snapshot.js"
+);
 const result = {
   content: Array.from({ length: 12 }, (_, index) => ({
     type: "text",
@@ -43,7 +62,12 @@ try {
             seq,
             ts: seq,
             stream: "tool",
-            data: { phase: "result", toolCallId: "read-1", name: "read", result },
+            data: {
+              phase: "result",
+              toolCallId: `read-${Math.floor((seq - 1) / snapshots.length) % retainedTools}`,
+              name: "read",
+              result,
+            },
           },
           mode,
         );
@@ -68,14 +92,22 @@ try {
         : undefined;
       const events = snapshots.flatMap((snapshot) => snapshot?.events ?? []);
       for (const snapshot of snapshots) {
-        assert.equal(snapshot?.events.length, 1);
-        assert.equal(snapshot.byteLength, Buffer.byteLength(JSON.stringify(snapshot.events[0])));
+        assert.equal(snapshot?.events.length, retainedTools);
+        assert.equal(
+          snapshot.byteLength,
+          snapshot.events.reduce(
+            (total, event) => total + Buffer.byteLength(JSON.stringify(event)),
+            0,
+          ),
+        );
       }
       console.log(
         JSON.stringify({
           mode,
           sample,
           eventCount,
+          retainedTools,
+          load: loadavg(),
           wallMs,
           cpuMs: (used.user + used.system) / 1000,
           allocatedBytes: allocation,

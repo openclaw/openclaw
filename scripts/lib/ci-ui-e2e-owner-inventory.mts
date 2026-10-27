@@ -1358,7 +1358,7 @@ const ownerWatches: readonly UiE2eOwnerWatch[] = [
     ],
   ),
   pageWatch(
-    "ui/src/e2e/new-session-page.cloud-startup.runtime-load.e2e.test.ts",
+    "ui/src/e2e/boot-module-boundaries.e2e.test.ts",
     ["chat", "config", "profile"],
     [
       "ui/src/components/modal-dialog.tsx",

@@ -10,6 +10,7 @@ import {
 } from "../../process/exec-result.js";
 import { createCommandResult } from "../../test-utils/npm-spec-install-test-helpers.js";
 import { withMockedPlatform } from "../../test-utils/vitest-spies.js";
+import { writeFixtureJson } from "../cli-fixtures.test-support.js";
 import {
   ensureGitCheckout,
   parseUpdateTimeoutMs,
@@ -93,17 +94,14 @@ it("refreshes standalone completion without a loose launcher", async () => {
   const runtime = path.join(base, "runtime");
   const executable = path.join(base, "openclaw");
   await fs.mkdir(runtime);
-  await fs.writeFile(
-    path.join(base, "manifest.json"),
-    JSON.stringify({
-      schemaVersion: 1,
-      mode: "jit",
-      executable: { path: "openclaw" },
-      runtime: { path: "runtime" },
-      openclaw: { version: "2026.10.15" },
-      bun: { version: "1.3.0" },
-    }),
-  );
+  await writeFixtureJson(path.join(base, "manifest.json"), {
+    schemaVersion: 1,
+    mode: "jit",
+    executable: { path: "openclaw" },
+    runtime: { path: "runtime" },
+    openclaw: { version: "2026.10.15" },
+    bun: { version: "1.3.0" },
+  });
 
   await expect(tryWriteCompletionCache(runtime, true, 500, executable)).resolves.toBe("completed");
   expect(runCommandWithTimeout).toHaveBeenCalledExactlyOnceWith(
@@ -190,11 +188,10 @@ it.runIf(process.platform !== "win32")(
     const packageRoot = path.join(base, "global", "v11", "install", "node_modules", "openclaw");
     await fs.mkdir(path.dirname(packageRoot), { recursive: true });
     await fs.mkdir(storeRoot, { recursive: true });
-    await fs.writeFile(
-      path.join(storeRoot, "package.json"),
-      JSON.stringify({ name: "openclaw", version: "1.0.0" }),
-      "utf8",
-    );
+    await writeFixtureJson(path.join(storeRoot, "package.json"), {
+      name: "openclaw",
+      version: "1.0.0",
+    });
     await fs.symlink(storeRoot, packageRoot, "dir");
 
     const previousArgv = [...process.argv];
@@ -542,14 +539,14 @@ it.each([
     let published = false;
     mockCompleteClone();
     const remove = fs.rm.bind(fs);
-    const cleanup = vi.spyOn(fs, "rm").mockImplementation((target, options) => {
+    using cleanup = vi.spyOn(fs, "rm").mockImplementation((target, options) => {
       if (cleanupFailure === "remove" && String(target) === retained) {
         return Promise.reject(Object.assign(new Error("cleanup denied"), { code: "EPERM" }));
       }
       return remove(target, options);
     });
     const lstat = fs.lstat.bind(fs);
-    const inspect = vi.spyOn(fs, "lstat").mockImplementation((...args) => {
+    using _ = vi.spyOn(fs, "lstat").mockImplementation((...args) => {
       if (
         cleanupFailure === "inspect" &&
         published &&
@@ -559,58 +556,54 @@ it.each([
       }
       return lstat(...args);
     });
-    try {
-      const update = checkout(checkoutDir, {
-        progress: { onStepComplete },
-        useStagedCheckout: async (_stagingDir, publish, _targetRoot, storageRoot) => {
-          retained = storageRoot;
-          await fs.writeFile(path.join(storageRoot, "build.marker"), "keep\n");
-          await publish();
-          published = true;
-          if (callbackFails) {
-            throw callbackError;
-          }
-        },
-      });
-      if (reportingUnknown) {
-        const error = await update.catch((cause: unknown) => cause);
-        expect(hasCommandProcessCleanupError(error)).toBe(true);
-        expect(collectNestedErrorCandidates(error)).toContain(reportingError);
+
+    const update = checkout(checkoutDir, {
+      progress: { onStepComplete },
+      useStagedCheckout: async (_stagingDir, publish, _targetRoot, storageRoot) => {
+        retained = storageRoot;
+        await fs.writeFile(path.join(storageRoot, "build.marker"), "keep\n");
+        await publish();
+        published = true;
         if (callbackFails) {
-          expect(collectNestedErrorCandidates(error)).toContain(callbackError);
-          expect(error).toMatchObject({ cause: callbackError });
-        } else {
-          expect(error).toBe(reportingError);
+          throw callbackError;
         }
-      } else if (callbackFails) {
-        await expect(update).rejects.toBe(callbackError);
+      },
+    });
+    if (reportingUnknown) {
+      const error = await update.catch((cause: unknown) => cause);
+      expect(hasCommandProcessCleanupError(error)).toBe(true);
+      expect(collectNestedErrorCandidates(error)).toContain(reportingError);
+      if (callbackFails) {
+        expect(collectNestedErrorCandidates(error)).toContain(callbackError);
+        expect(error).toMatchObject({ cause: callbackError });
       } else {
-        await expect(update).resolves.toMatchObject({
-          checkoutDir,
-          step: { exitCode: 0, warnings: [expect.stringContaining("cleanup denied")] },
-        });
+        expect(error).toBe(reportingError);
       }
-      await expectFile(checkoutDir, "checkout.marker", "complete\n");
-      await expectFile(retained, "build.marker", "keep\n");
-      if (cleanupFailure === "inspect") {
-        expect(cleanup).not.toHaveBeenCalledWith(retained, expect.anything());
-        expect(onStepComplete).toHaveBeenCalledWith(
-          expect.objectContaining({ command: "", stderrTail: "cleanup denied" }),
-        );
-      }
-      expect(onStepComplete).toHaveBeenCalledWith(
-        expect.objectContaining({
-          name: "git-clone-staging-cleanup",
-          advisory: {
-            kind: "recoverable-maintenance",
-            message: expect.stringContaining(retained),
-          },
-        }),
-      );
-    } finally {
-      inspect.mockRestore();
-      cleanup.mockRestore();
+    } else if (callbackFails) {
+      await expect(update).rejects.toBe(callbackError);
+    } else {
+      await expect(update).resolves.toMatchObject({
+        checkoutDir,
+        step: { exitCode: 0, warnings: [expect.stringContaining("cleanup denied")] },
+      });
     }
+    await expectFile(checkoutDir, "checkout.marker", "complete\n");
+    await expectFile(retained, "build.marker", "keep\n");
+    if (cleanupFailure === "inspect") {
+      expect(cleanup).not.toHaveBeenCalledWith(retained, expect.anything());
+      expect(onStepComplete).toHaveBeenCalledWith(
+        expect.objectContaining({ command: "", stderrTail: "cleanup denied" }),
+      );
+    }
+    expect(onStepComplete).toHaveBeenCalledWith(
+      expect.objectContaining({
+        name: "git-clone-staging-cleanup",
+        advisory: {
+          kind: "recoverable-maintenance",
+          message: expect.stringContaining(retained),
+        },
+      }),
+    );
   },
 );
 

@@ -57,6 +57,7 @@ import {
 } from "./agent-tools.ring-zero-context.js";
 import { isSchedulerSystemTurn, resolveTurnToolSurface } from "./agent-tools.turn-authority.js";
 import type { AnyAgentTool } from "./agent-tools.types.js";
+import { resolveAutomationsRunScope } from "./automations-run-scope.js";
 import { registerOneShotExecScopeCleanup } from "./bash-process-control.js";
 import { resolveProcessToolScopeKey } from "./bash-process-scope.js";
 import { listChannelAgentTools } from "./channel-tools.js";
@@ -102,6 +103,7 @@ import {
   TOOL_DESCRIBE_RAW_TOOL_NAME,
   TOOL_SEARCH_RAW_TOOL_NAME,
 } from "./tool-search.js";
+import { AUTOMATIONS_TOOL_NAME } from "./tools/automations-tool-name.js";
 import { replaceWithEffectiveCronCreatorToolAllowlist } from "./tools/cron-tool.js";
 import { prepareSessionPortalToolAccess } from "./tools/session-portal-target.js";
 
@@ -121,12 +123,8 @@ function* assembleOpenClawCodingTools(
   const sandbox = options?.sandbox?.enabled ? options.sandbox : undefined;
   const { isMemoryFlushRun, memoryFlush, memoryFlushWritePath } =
     resolveMemoryFlushToolSetup(options);
-  // Hook and join-intro turns run through the cron runner as "event" jobs; they
-  // get the same current-job automations scope as scheduled runs.
-  const cronSelfRemoveOnlyJobId =
-    (options?.trigger === "cron" || options?.trigger === "event") && options.jobId?.trim()
-      ? options.jobId.trim()
-      : undefined;
+  const automationsScope = resolveAutomationsRunScope(options);
+  const cronSelfRemoveOnlyJobId = automationsScope.selfJobId;
   // Prefer the already-resolved sandbox context policy. Recomputing from
   // sessionKey/config can lose the real sandbox agent when callers pass a
   // legacy alias like `main` instead of an agent session key.
@@ -323,17 +321,21 @@ function* assembleOpenClawCodingTools(
           recordToolPrepStage: options?.recordToolPrepStage,
         })
       : [];
-  const { sessionPortalTarget, ownerOnlyCoreToolDenylist, cronCreatorAuthorityResolver } =
-    prepareSessionPortalToolAccess({
-      sessionKey: executionSessionKey,
-      agentId: executionAgentId,
-      sessionId: options?.sessionId,
-      senderIsOwner: options?.senderIsOwner,
-      sandboxed: Boolean(sandbox),
-      runId: options?.runId,
-      cronSelfRemoveOnlyJobId,
-      automationReadOnly: options?.forceRestartSafeTools === true,
-    });
+  const sessionToolAccess = prepareSessionPortalToolAccess({
+    sessionKey: executionSessionKey,
+    agentId: executionAgentId,
+    sessionId: options?.sessionId,
+    senderIsOwner: options?.senderIsOwner,
+    sandboxed: Boolean(sandbox),
+    runId: options?.runId,
+    cronSelfRemoveOnlyJobId,
+    automationReadOnly: options?.forceRestartSafeTools === true,
+  });
+  const { sessionPortalTarget, cronCreatorAuthorityResolver } = sessionToolAccess;
+  // An ingress turn without a self scope gets no automations tool.
+  const ownerOnlyCoreToolDenylist = automationsScope.denied
+    ? [...sessionToolAccess.ownerOnlyCoreToolDenylist, AUTOMATIONS_TOOL_NAME]
+    : sessionToolAccess.ownerOnlyCoreToolDenylist;
   const pluginToolAllowlist = appendRuntimePluginToolGrant(
     capabilityProfile.policy.explicitToolAllowlist,
     runtimePluginToolGrant,

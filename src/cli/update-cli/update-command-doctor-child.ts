@@ -88,16 +88,6 @@ export async function inspectUpdateDoctorChildSupport(
   return capability === "pid-start-v1";
 }
 
-export type UpdateDoctorChildContext = {
-  runId: string;
-  executorFence: UpdateRecoveryFence;
-  requester?: Readonly<UpdateRequester>;
-  /** The parent mutation fence is suspended while its child owns effects. */
-  assertRequesterCurrent: () => void;
-  onStateHandoff?: () => void;
-  onProcessSettlement?: (step: UpdateStepResult) => void;
-};
-
 /** Both delegated and standalone update Doctors publish through the same result channel. */
 export async function runUpdateDoctorProcess(
   context: {
@@ -185,7 +175,15 @@ export async function runUpdateDoctorProcess(
 export async function withUpdateDoctorChild<T>(
   params: {
     root: string;
-    context: UpdateDoctorChildContext;
+    context: {
+      runId: string;
+      executorFence: UpdateRecoveryFence;
+      requester?: Readonly<UpdateRequester>;
+      /** The parent mutation fence is suspended while its child owns effects. */
+      assertRequesterCurrent: () => void;
+      onStateHandoff?: () => void;
+      onProcessSettlement?: (step: UpdateStepResult) => void;
+    };
     input: Omit<UpdateDoctorInput, "executor" | "runId" | "root" | "requester">;
   },
   operation: (

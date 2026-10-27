@@ -328,7 +328,7 @@ export function registerSubagentSweepCompletionRecoveryTests(ignoreRecovery: () 
     "keeps completion retries with the sweep's original Gateway %s",
     async (change) => {
       await vi.mocked(resolveSubagentRunOrphanReason).withImplementation(
-        () => null,
+        () => "missing-session-entry",
         async () => {
           ignoreRecovery();
           const gateway = { current: createMockGatewayRecoveryRuntime() };

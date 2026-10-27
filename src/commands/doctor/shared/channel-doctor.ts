@@ -32,15 +32,6 @@ export type ChannelDoctorEmptyAllowlistPolicyHooks = {
   extraWarningsForAccount: NonNullable<ChannelDoctorAdapter["collectEmptyAllowlistExtraWarnings"]>;
 } & Required<Pick<ChannelDoctorAdapter, "shouldSkipDefaultEmptyGroupAllowlistWarning">>;
 
-function collectConfiguredChannelIds(cfg: OpenClawConfig): string[] {
-  return listDoctorConfiguredChannelIds(cfg, {
-    configEntryPolicy: "enabled",
-    skipWhenPluginsDisabled: true,
-    excludeExplicitlyDisabled: true,
-    sort: "codepoint",
-  });
-}
-
 function isChannelDoctorBlockedByConfig(channelId: string, cfg: OpenClawConfig): boolean {
   if (cfg.plugins?.enabled === false) {
     return true;
@@ -96,7 +87,12 @@ function mergeDoctorAdapters(
 
 function listChannelDoctorEntries(
   context: ChannelDoctorLookupContext,
-  channelIds: readonly string[] = collectConfiguredChannelIds(context.cfg),
+  channelIds: readonly string[] = listDoctorConfiguredChannelIds(context.cfg, {
+    configEntryPolicy: "enabled",
+    skipWhenPluginsDisabled: true,
+    excludeExplicitlyDisabled: true,
+    sort: "codepoint",
+  }),
   readOnlyDoctorsById?: ReadonlyMap<string, ChannelDoctorAdapter | undefined>,
 ): ChannelDoctorEntry[] {
   const selectedIds = new Set(

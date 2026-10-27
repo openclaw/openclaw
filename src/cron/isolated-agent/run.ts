@@ -111,6 +111,7 @@ async function runCronIsolatedAgentTurnInTrace(
   const abortReason = () =>
     resolveCronAbortReasonText(abortSignal?.reason) ?? "cron: job execution timed out";
   const isFastTestEnv = isFastTestRuntimeEnv();
+  await using runtimeResources = new AsyncDisposableStack();
   let preparation: Awaited<ReturnType<typeof prepareCronRunContext>>;
   try {
     preparation = await prepareCronRunContext({
@@ -140,6 +141,21 @@ async function runCronIsolatedAgentTurnInTrace(
   async function runPreparedCronTurn(
     context: PreparedCronRunContext,
   ): Promise<RunCronAgentTurnResult> {
+    const preparedRuntimeLease = runtimeResources.use(context.preparedModelRuntimeLease);
+    if (context.runContinuationSession) {
+      // Native deletion drains the turn owner; release admission before cleanup and its runtime.
+      runtimeResources.defer(async () => {
+        try {
+          await withPluginRuntimeGenerationScope(preparedRuntimeLease.snapshot, () =>
+            removeCronRunContinuationSessionIfIdle(context.runSessionKey),
+          );
+        } catch (error) {
+          logWarn(
+            `[cron:${params.job.id}] Failed to remove unused run continuation: ${String(error)}`,
+          );
+        }
+      });
+    }
     const prepared = { context };
     using operatorLease = new DisposableStack();
     await using _ = {
@@ -147,7 +163,6 @@ async function runCronIsolatedAgentTurnInTrace(
         await prepared.context.workspaceLease?.release();
       },
     };
-    await using preparedRuntimeLease = prepared.context.preparedModelRuntimeLease;
     let leaseActive = true;
     // Accounting, delivery, and teardown use the same metadata as inference. Keep
     // the lease open until cleanup finishes, then fence detached borrowed work.
@@ -595,17 +610,6 @@ async function runCronIsolatedAgentTurnInTrace(
                       });
                     } finally {
                       prepared.context.sessionPreparationEffect.release();
-                    }
-                    if (prepared.context.runContinuationSession) {
-                      try {
-                        await removeCronRunContinuationSessionIfIdle(
-                          prepared.context.runSessionKey,
-                        );
-                      } catch (error) {
-                        logWarn(
-                          `[cron:${params.job.id}] Failed to remove unused run continuation: ${String(error)}`,
-                        );
-                      }
                     }
                   } finally {
                     // Only run-scoped browser identities end here; persistent targets keep tracked tabs.

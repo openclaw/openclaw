@@ -7,7 +7,7 @@ import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
 
 registerEnglishCatalog(registerChatComposerEnglish);
 
-export type ComposerAddServerDialogProps = {
+export function ComposerAddServerDialog(props: {
   open: boolean;
   busy: boolean;
   scope: "session" | "everywhere";
@@ -17,9 +17,7 @@ export type ComposerAddServerDialogProps = {
   onScopeChange: (scope: "session" | "everywhere") => void;
   onCancel: () => void;
   onSubmit: (form: McpServerForm) => void;
-};
-
-export function ComposerAddServerDialog(props: ComposerAddServerDialogProps) {
+}) {
   let nameInput!: HTMLInputElement;
   return (
     <Show when={props.open}>

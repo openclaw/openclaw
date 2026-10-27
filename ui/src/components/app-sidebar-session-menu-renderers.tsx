@@ -291,32 +291,6 @@ export function renderSidebarSessionSortMenuForMenus(
   );
   // The mobile sheet has no hover or room for flyouts: choices open as sheet pages.
   const sheet = () => isMobileNavLayout();
-  const segmented = <T extends string>(
-    id: string,
-    label: () => string,
-    value: () => T,
-    options: () => ReadonlyArray<{ value: T; label: string }>,
-    onChange: (value: T) => void,
-    inputRef?: (value: T, element: HTMLInputElement) => void,
-  ) => (
-    <div id={id} class="sidebar-session-menu-row sidebar-session-menu-row--segmented">
-      <span aria-hidden="true" title={label()}>
-        {label()}
-      </span>
-      <SettingsSegmented
-        value={value()}
-        inputRef={inputRef}
-        options={options().map((option) => ({
-          value: option.value,
-          label: option.label,
-          title: option.label,
-        }))}
-        ariaLabel={label()}
-        class="sidebar-session-menu-segmented"
-        onChange={onChange}
-      />
-    </div>
-  );
   const switchItem = (
     id: string,
     label: () => string,
@@ -384,23 +358,33 @@ export function renderSidebarSessionSortMenuForMenus(
                 </button>
               ) : undefined}
             </div>
-            {segmented(
-              "sidebar-sessions-status",
-              () => t("sessionsView.status"),
-              () => host.sessionsStatusFilter,
-              () =>
-                SIDEBAR_SESSION_STATUS_OPTIONS.map((value) => ({
-                  value,
-                  label: value === "active" ? t("common.active") : t(`sessionsView.${value}`),
-                })),
-              (statusFilter) => setSessionsStatusFilter(host.sessionOrganizer, statusFilter),
-              (value, element) => {
-                statusInputs.set(value, element);
-                if (value === "active") {
-                  defaultStatus = element;
+            <div
+              id="sidebar-sessions-status"
+              class="sidebar-session-menu-row sidebar-session-menu-row--segmented"
+            >
+              <span aria-hidden="true" title={t("sessionsView.status")}>
+                {t("sessionsView.status")}
+              </span>
+              <SettingsSegmented
+                value={host.sessionsStatusFilter}
+                inputRef={(value, element) => {
+                  statusInputs.set(value, element);
+                  if (value === "active") {
+                    defaultStatus = element;
+                  }
+                }}
+                options={SIDEBAR_SESSION_STATUS_OPTIONS.map((value) => {
+                  const label =
+                    value === "active" ? t("common.active") : t(`sessionsView.${value}`);
+                  return { value, label, title: label };
+                })}
+                ariaLabel={t("sessionsView.status")}
+                class="sidebar-session-menu-segmented"
+                onChange={(statusFilter) =>
+                  setSessionsStatusFilter(host.sessionOrganizer, statusFilter)
                 }
-              },
-            )}
+              />
+            </div>
             {switchItem(
               "sidebar-sessions-cron",
               () => t("sessionsView.showCronSessions"),

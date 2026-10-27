@@ -1,3 +1,4 @@
+import { serialize } from "node:v8";
 import { expect } from "vitest";
 import { awaitGateBeforeSettlement, createDeferred } from "../../../test/helpers/promise.js";
 import {
@@ -346,6 +347,56 @@ test("reads through the active writer around its queued mutation", async ({ stor
       });
     },
   );
+});
+
+test("writer entry replies omit unused sharing facts while plain readers retain them", async ({
+  store,
+}) => {
+  const { scope, options, sessionKey } = store;
+  store.replace({ skillsSnapshot: { prompt: "saved instructions", skills: [] } });
+  recordSessionParticipant(scope, {
+    identity: { type: "agent", id: "contributor" },
+    promptedAt: 20,
+  });
+  const read = () =>
+    withSessionEntryWorker(
+      options,
+      undefined,
+      () => {},
+      (execution, source) =>
+        execution.runExisting(source, (worker) =>
+          worker.execute({
+            type: "session.entry.readResult",
+            input: {
+              kind: "session-entry-read",
+              database: options,
+              scope: { ...scope, databaseAgentId: options.agentId },
+            },
+          }),
+        ),
+    );
+  const before = await read();
+  for (let index = 0; index < 16; index++) {
+    addSessionMember(scope, { identityId: `member-${index}`, addedBy: "owner", addedAt: 10 });
+  }
+  const after = await read();
+  expect(after?.entry).toMatchObject({
+    sessionId: "original",
+    skillsSnapshot: { prompt: "saved instructions", skills: [] },
+    participants: [{ identity: { type: "agent", id: "contributor" } }],
+  });
+  expect(after?.source).toEqual(before?.source);
+  expect(serialize(after).byteLength).toBe(serialize(before).byteLength);
+  await withSessionStoreReaderInWorker(scope, async ({ reader }) => {
+    const plain = await reader.readEntryResult({
+      scope: { ...scope, databaseAgentId: options.agentId },
+    });
+    expect(plain.ok && plain.value).toEqual(after?.entry);
+    expect(plain.facts?.members?.[sessionKey]).toHaveLength(16);
+    expect(plain.facts?.participantRecords?.[sessionKey]).toMatchObject([
+      { identity: { type: "agent", id: "contributor" }, contributionCount: 1 },
+    ]);
+  });
 });
 
 test("rejects an ordered read inside an active worker reservation", async ({ store }) => {

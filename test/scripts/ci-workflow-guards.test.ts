@@ -2513,6 +2513,72 @@ require("node:fs").writeFileSync("scheduler-restart", process.env.OPENCLAW_UPGRA
     },
   );
 
+  it("prepares the selected Control UI Gateway runtime before Vitest and stops on preparation failure", () => {
+    const step = requiredWorkflowStep(
+      readCiWorkflow().jobs["checks-ui-e2e"].steps,
+      "Test Control UI end-to-end",
+    );
+    const root = tempDirs.make("openclaw-ui-runtime-preparation-");
+    const bin = path.join(root, "bin");
+    const vitest = path.join(root, "node_modules/vitest");
+    const suite = "ui/src/e2e/stale-build-recovery.production.e2e.test.ts";
+    mkdirSync(bin);
+    mkdirSync(vitest, { recursive: true });
+    mkdirSync(path.dirname(path.join(root, suite)), { recursive: true });
+    writeFileSync(path.join(root, suite), "");
+    writeFileSync(
+      path.join(vitest, "package.json"),
+      JSON.stringify({ type: "module", exports: { "./node": "./node.js" } }),
+    );
+    writeFileSync(
+      path.join(vitest, "node.js"),
+      `export async function createVitest() {
+        return {
+          config: { sequence: { sequencer: class { async shard(files) { return files; } } } },
+          async globTestSpecifications() {
+            return process.env.SELECT_RUNTIME === "1" ? [{ moduleId: ${JSON.stringify(path.join(root, suite))} }] : [];
+          },
+          async close() {},
+        };
+      }`,
+    );
+    writeExecutable(path.join(bin, "node"), [
+      "#!/bin/sh",
+      'case "$1" in',
+      '  scripts/run-node.mjs) echo prepare >> "$EVENTS"; exit "${PREPARE_EXIT:-0}" ;;',
+      '  scripts/run-vitest.mjs) echo test >> "$EVENTS" ;;',
+      "  *) exit 1 ;;",
+      "esac",
+    ]);
+    const events = path.join(root, "events");
+    for (const [selected, exit, expected] of [
+      ["0", "0", "test\n"],
+      ["1", "0", "prepare\ntest\n"],
+      ["1", "7", "prepare\n"],
+    ]) {
+      writeFileSync(events, "");
+      // Actions invokes Bash with -e; retain that failure contract in the local harness.
+      const result = runWorkflowShellScript(
+        `set -e\n${expectDefined(step.run, "UI E2E command")}`,
+        {
+          cwd: root,
+          env: {
+            ...process.env,
+            PATH: `${bin}:${process.env.PATH ?? ""}`,
+            EVENTS: events,
+            SELECT_RUNTIME: selected,
+            PREPARE_EXIT: exit,
+            OPENCLAW_NODE_TEST_GROUPS_GZIP_BASE64: "",
+            VITEST_SHARD_INDEX: "1",
+            VITEST_SHARD_COUNT: "1",
+          },
+        },
+      );
+      expect(result.status, result.stdout + result.stderr).toBe(Number(exit));
+      expect(readFileSync(events, "utf8")).toBe(expected);
+    }
+  });
+
   it("resolves the pull request base and changed files from the shallow security checkout", () => {
     const securitySteps = readCiWorkflow().jobs["security-fast"].steps as WorkflowStep[];
     const checkoutIndex = securitySteps.findIndex((step) => step.name === "Checkout");
@@ -4300,45 +4366,6 @@ ${buildScript}`,
     }
   });
 
-  it("transfers the exact public browser runtime with hidden stamps and executable modes", async () => {
-    const { packBrowserRuntime, restoreBrowserRuntime } =
-      await import("../../scripts/ui-browser-runtime-artifact.mjs");
-    const root = tempDirs.make("browser-runtime-artifact-");
-    const source = path.join(root, "source");
-    const target = path.join(root, "target");
-    const archive = path.join(root, "archive");
-    const revision = "b".repeat(40);
-    const files = {
-      "dist/build-info.json": JSON.stringify({ commit: revision }),
-      "dist/.buildstamp": "completed",
-      "dist/extensions/browser/native-host-entry.js": "#!/usr/bin/env node\n",
-      "dist-runtime/extensions/browser/index.js": "export {};\n",
-      "packages/protocol/dist/index.js": "export {};\n",
-    };
-    for (const [file, content] of Object.entries(files)) {
-      mkdirSync(path.dirname(path.join(source, file)), { recursive: true });
-      writeFileSync(path.join(source, file), content);
-    }
-    mkdirSync(target);
-    chmodSync(path.join(source, "dist/extensions/browser/native-host-entry.js"), 0o755);
-    expect(() => packBrowserRuntime(source, archive, "c".repeat(40))).toThrow("selected checkout");
-    const digest = packBrowserRuntime(source, archive, revision);
-    expect(() => restoreBrowserRuntime(target, archive, revision, "0".repeat(64))).toThrow(
-      "changed in transit",
-    );
-    expect(existsSync(path.join(target, "dist"))).toBe(false);
-    restoreBrowserRuntime(target, archive, revision, digest);
-    for (const [file, content] of Object.entries(files)) {
-      expect(readFileSync(path.join(target, file), "utf8")).toBe(content);
-    }
-    expect(
-      statSync(path.join(target, "dist/extensions/browser/native-host-entry.js")).mode & 0o777,
-    ).toBe(0o755);
-    expect(() => restoreBrowserRuntime(target, archive, "c".repeat(40), digest)).toThrow(
-      "selected checkout",
-    );
-  });
-
   it("reuses the exact Linux runtime without installing or building every workspace", async () => {
     const workflow = readCiWorkflow();
     const steps = workflow.jobs["macos-swift"].steps;
@@ -5523,6 +5550,23 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
     assertControlUiE2eOwnership((prefix) => tempDirs.make(prefix), parser);
   });
 
+  it("restores shared build content while retaining private real-Gateway preparation", () => {
+    const job = readCiWorkflow().jobs["checks-ui-e2e-real-gateway"];
+    const setup = requiredWorkflowStep(job.steps, "Setup Node environment");
+    const build = requiredWorkflowStep(
+      job.steps,
+      "Build runtime and Control UI artifacts for real-Gateway tests",
+    );
+    expect(setup.with?.["build-all-cache-scope"]).toBe("full");
+    expect(job.needs).toEqual(["preflight"]);
+    expect(build.run).toBe("pnpm build");
+    expect(build.env?.OPENCLAW_BUILD_PRIVATE_QA).toBe("1");
+    expect(build.env?.OPENCLAW_RUN_NODE_SKIP_DTS_BUILD).toBe("1");
+    expect(job.steps.some((step: WorkflowStep) => step.name === "Save build-all cache")).toBe(
+      false,
+    );
+  });
+
   it.each([
     { frozen: false, prebuilt: true, childExit: 0, releaseTier: false },
     { frozen: false, prebuilt: true, childExit: 0, releaseTier: true },
@@ -5759,7 +5803,7 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
     expectIncludes(run, [
       'OPENCLAW_VITEST_FS_MODULE_CACHE_PATH="${RUNNER_TEMP}/vitest-module-cache/${name}"',
       "test/scripts/doctor-config-preflight-plugin-index.built-cli.e2e.test.ts",
-      "env OPENCLAW_E2E_USE_PREBUILT_DIST=1 OPENCLAW_VITEST_NO_OUTPUT_TIMEOUT_MS=660000 node scripts/run-vitest.mjs run",
+      "env OPENCLAW_VITEST_WORKER_CACHE=1 OPENCLAW_E2E_USE_PREBUILT_DIST=1 OPENCLAW_VITEST_NO_OUTPUT_TIMEOUT_MS=660000 node scripts/run-vitest.mjs run",
       "--config test/vitest/vitest.e2e.config.ts",
       "Selected target predates",
       "pnpm test:build:singleton",
@@ -5793,7 +5837,7 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
     expectIncludes(run.slice(tui, wait(tui, true)), [
       "src/tui/tui-pty-local.e2e.test.ts",
       "--testNamePattern",
-      "launches openclaw (chat as local mode|tui against a real Gateway) through a real PTY",
+      "launches openclaw chat as local mode through a real PTY",
     ]);
     const upload = requiredWorkflowStep(steps, "Upload Discord component attachment proof");
     expect(upload.with["if-no-files-found"]).toBe("error");
@@ -5831,6 +5875,11 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
       const step = readCiWorkflow().jobs["build-artifacts"].steps.find(
         (entry: WorkflowStep) => entry.name === "Verify built browser native host",
       );
+      expect(step.env).toMatchObject({
+        OPENCLAW_E2E_USE_PREBUILT_DIST: "1",
+        OPENCLAW_VITEST_WORKER_CACHE: "1",
+        OPENCLAW_VITEST_MAX_WORKERS: "1",
+      });
       const root = tempDirs.make("openclaw-frozen-browser-proof-report-");
       const file = "extensions/browser/src/browser/extension-install.native-host.e2e.test.ts";
       const report = {

@@ -3,6 +3,7 @@ import type { BrowserContextOptions, Locator, Page } from "playwright";
 import { expect as browserExpect } from "playwright/test";
 import { expect, it } from "vitest";
 import type { UsersListResult } from "../../../packages/gateway-protocol/src/schema/users.js";
+import { defaultControlUiFeatureMethods } from "../test-helpers/control-ui-e2e-defaults.ts";
 import {
   chatSessionListResponse,
   createChatFlowE2eSuite,
@@ -74,6 +75,49 @@ async function personPage(page: Page, scenario: Parameters<typeof installMockGat
     composer: page.locator(".agent-chat__composer-combobox textarea"),
   };
 }
+
+const welcomeText = "@josh invited you, @Sam.";
+/** The restricted role Visitor Access grants: session scopes, no people directory. */
+const guestWelcome = {
+  operatorScopes: ["operator.sessions.write"],
+  presenceUsers: [
+    {
+      self: true,
+      id: "profile-sam",
+      identity: { type: "profile" as const, id: "profile-sam" },
+      name: "Sam",
+    },
+  ],
+  featureMethods: [...defaultControlUiFeatureMethods, "users.mentionable"],
+  historyMessages: [
+    {
+      role: "assistant",
+      content: welcomeText,
+      timestamp: 1,
+      __openclaw: {
+        id: "welcome-message",
+        humanMentions: [
+          { profileId: "profile-josh", start: 0, end: 5 },
+          { profileId: "profile-sam", start: 19, end: 23 },
+        ],
+      },
+    },
+  ],
+  methodResponses: {
+    "users.mentionable": {
+      users: [
+        { profileId: "profile-joshua", displayName: "Joshua", online: false },
+        {
+          profileId: "profile-josh",
+          displayName: "Josh",
+          avatarUrl: "/api/users/profile-josh/avatar?v=4",
+          online: true,
+        },
+      ],
+      truncated: false,
+    },
+  },
+} satisfies Parameters<typeof installMockGateway>[1];
 
 async function alignMentions(page: Page, viewport: { scale: number; font: string }) {
   const avatarRequests: string[] = [];
@@ -360,6 +404,37 @@ suite.define(() => {
       await card.waitFor({ state: "detached" });
       await gateway.resolveDeferred("users.list", directory);
       expect(await card.count()).toBe(0);
+    }));
+
+  it("resolves a guest's mentions from the session roster without the people directory", () =>
+    withPage(async (page) => {
+      const avatarRequests: string[] = [];
+      await routeAvatars(page, avatarRequests);
+      const { gateway, reference, card, heading } = await personPage(page, guestWelcome);
+      await page.locator(".chat-bubble").filter({ hasText: welcomeText }).waitFor();
+      await browserExpect(reference).toHaveCount(2);
+      await reference.first().focus();
+      await browserExpect(heading).toHaveText("Josh");
+      await expect
+        .poll(() => card.locator("img").evaluate((img: HTMLImageElement) => img.naturalWidth))
+        .toBeGreaterThan(0);
+      expect(await card.textContent()).not.toContain("Could not load people");
+      const roster = await gateway.getRequests("users.mentionable");
+      expect(roster.map((request) => request.params)).toEqual([
+        { sessionKey: "agent:main:main", query: "josh" },
+      ]);
+      await reference.first().press("Escape");
+      await card.waitFor({ state: "detached" });
+
+      await reference.nth(1).focus();
+      await browserExpect(heading).toHaveText("Sam");
+      expect(await card.textContent()).not.toContain("Could not load people");
+      expect(await card.getByRole("link", { name: "View activity" }).count()).toBe(1);
+      await reference.nth(1).press("Escape");
+      await reference.first().focus();
+      await browserExpect(heading).toHaveText("Josh");
+      expect(await gateway.getRequests("users.mentionable")).toHaveLength(1);
+      expect(await gateway.getRequests("users.list")).toHaveLength(0);
     }));
 
   it("keeps missing identities unresolved without guessing from labels", () =>

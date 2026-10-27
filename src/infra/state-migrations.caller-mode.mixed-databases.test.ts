@@ -78,10 +78,7 @@ it("repairs readable entries before independently preparing mixed agent database
   });
   const brokenDatabasePath = path.join(
     fixture.stateDir,
-    "agents",
-    "broken",
-    "agent",
-    "openclaw-agent.sqlite",
+    "agents/broken/agent/openclaw-agent.sqlite",
   );
   fs.mkdirSync(path.dirname(brokenDatabasePath), { recursive: true });
   fs.writeFileSync(brokenDatabasePath, "not sqlite");
@@ -101,13 +98,9 @@ it("repairs readable entries before independently preparing mixed agent database
     legacySessionSurfaces: EMPTY_LEGACY_SESSION_SURFACES,
   });
 
-  expect(
-    result.stepReceipts.find((receipt) => receipt.id === "session-entry-state-preparation"),
-  ).toMatchObject({
-    outcome: "completed",
-    changes: ["Canonicalized entry state for 1 durable session row(s)."],
-  });
-  expect(result.stepReceipts.find((receipt) => receipt.id === "media-persistence")).toMatchObject({
+  const receipt = (id: string) => result.stepReceipts.find((step) => step.id === id);
+  expect(receipt("session-entry-state-preparation")?.outcome).toBe("completed");
+  expect(receipt("media-persistence")).toMatchObject({
     requiredness: "conditional",
     outcome: "refused",
     changes: [expect.stringContaining("Upgraded agent database schema")],

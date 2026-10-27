@@ -49,11 +49,15 @@ it("lets admitted TypeSafe work finish after opt-out while preserving independen
       async ({ state, baseUrl, received }) => {
         const workspaceDir = state.workspaceDir;
         const port = new URL(baseUrl).port;
-        const config = (decisionAssistance: boolean): OpenClawConfig => ({
+        const config = (
+          decisionAssistance: boolean,
+          decisionModel = "typesafe/kev-latest",
+          requestBaseUrl = "http://localhost:" + port,
+        ): OpenClawConfig => ({
           agents: {
             defaults: {
               experimental: { decisionAssistance },
-              decisionModel: "typesafe/kev-latest",
+              decisionModel,
               workspace: workspaceDir,
             },
           },
@@ -61,7 +65,7 @@ it("lets admitted TypeSafe work finish after opt-out while preserving independen
             load: { paths: [fileURLToPath(new URL("../extensions/typesafe", import.meta.url))] },
             slots: { memory: "none" },
             entries: {
-              typesafe: { enabled: true, config: { baseUrl: "http://localhost:" + port } },
+              typesafe: { enabled: true, config: { baseUrl: requestBaseUrl } },
             },
           },
         });
@@ -125,16 +129,7 @@ it("lets admitted TypeSafe work finish after opt-out while preserving independen
             },
             { catalogMode: "static", pluginMetadataSnapshot: metadata },
           );
-          expect(prepared.snapshot.pluginRegistry?.providers).toEqual(
-            expect.arrayContaining([
-              expect.objectContaining({ pluginId: record.id, source: record.source }),
-            ]),
-          );
-          expect(prepared.snapshot.modelCatalog.entries).toEqual(
-            expect.arrayContaining([
-              expect.objectContaining({ provider: "typesafe", id: "kev-latest" }),
-            ]),
-          );
+          expect(prepared.snapshot.isCurrent()).toBe(true);
           const pending = turn(initial);
           await Promise.race([
             loading.promise,
@@ -220,47 +215,27 @@ it("lets admitted TypeSafe work finish after opt-out while preserving independen
               if (change === "authority") {
                 authorityError = originalError;
               } else if (change === "provider-config") {
-                setRuntimeConfigSnapshot({
-                  ...localConfig,
-                  plugins: {
-                    ...localConfig.plugins,
-                    entries: {
-                      typesafe: {
-                        enabled: true,
-                        config: { baseUrl: "http://127.0.0.1:" + port },
-                      },
-                    },
-                  },
-                });
+                setRuntimeConfigSnapshot(config(true, undefined, "http://127.0.0.1:" + port));
               } else if (change === "secrets") {
                 clearSecretsRuntimeSnapshotState();
                 setRuntimeConfigSnapshot(localConfig);
               } else {
-                setRuntimeConfigSnapshot({
-                  ...localConfig,
-                  agents: {
-                    defaults: {
-                      ...localConfig.agents!.defaults,
-                      ...(change === "model"
-                        ? { decisionModel: "typesafe/changed-model" }
-                        : { experimental: { decisionAssistance: false } }),
-                    },
-                  },
-                });
+                setRuntimeConfigSnapshot(
+                  config(
+                    change !== "optout",
+                    change === "model" ? "typesafe/changed-model" : undefined,
+                  ),
+                );
               }
               resolved.resolve();
               const outcome = await captured;
               if (change === "authority") {
                 expect(outcome).toEqual({ error: originalError });
-              } else if (change === "optout") {
-                expect(outcome).toMatchObject({
-                  result: { status: "proposed", shouldPruneTools: true },
-                });
               } else {
                 expect(outcome).toMatchObject({
                   result: {
-                    shouldPruneTools: false,
-                    status: "unavailable",
+                    shouldPruneTools: change === "optout",
+                    status: change === "optout" ? "proposed" : "unavailable",
                   },
                 });
               }

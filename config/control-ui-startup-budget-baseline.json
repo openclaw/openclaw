@@ -1,5 +1,5 @@
 {
-  "startupJsGzipBytes": 271047,
-  "reason": "Per-instance observer/subscription sharing cuts provider script CPU 60.13% median and 61.79% p95, provider task time 15.06% and 13.94%, and retained Tooltip script CPU 92.50% and 92.51%. Same-host integrated 763ae526 to 8a6d6bcf stock builds measure startup 270647 to 271047 B gzip (+400 B), Chat +833 B and New Session +688 B; JS/CSS requests and CSS bytes are unchanged. Record the measured integrated startup value.",
-  "updatedAt": "2026-10-25"
+  "startupJsGzipBytes": 271181,
+  "reason": "Same-host main285 and Creation bfcd2db6 measure startup 271088 to 271181 B gzip (+93 B), with five JS requests and one CSS request unchanged. New Session falls from 768182 to 767606 B and 17 to 16 JS requests. Retain the previously measured model-open CPU and Claws warm-task wins, with their disclosed cold-tail caveats; fresh source-pinned runtime qualification is recorded in PR #184994. Ratchet to the actual measured head.",
+  "updatedAt": "2026-10-27"
 }

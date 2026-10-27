@@ -60,17 +60,15 @@ import {
   type ToolModelConfig,
 } from "./model-config.helpers.js";
 
-type TextToolAttempt = {
-  provider: string;
-  model: string;
-  error: string;
-};
-
 type TextToolResult = {
   text: string;
   provider: string;
   model: string;
-  attempts: TextToolAttempt[];
+  attempts: {
+    provider: string;
+    model: string;
+    error: string;
+  }[];
 };
 
 export const REMOTE_MEDIA_READ_IDLE_TIMEOUT_MS = 120_000;
@@ -109,11 +107,6 @@ type CapabilityProvider = {
 type CapabilityProviderSource =
   | readonly CapabilityProvider[]
   | (() => readonly CapabilityProvider[]);
-
-type GenerationCapabilityProviderKey =
-  | "imageGenerationProviders"
-  | "videoGenerationProviders"
-  | "musicGenerationProviders";
 
 /** @deprecated Only synchronous tool-constructor compatibility uses this path. */
 export function isCapabilityProviderConfigured<T extends CapabilityProvider>(params: {
@@ -286,7 +279,7 @@ export function hasGenerationToolAvailability(params: {
   authStore?: AuthProfileStore;
   modelConfig?: AgentModelConfig;
   providers?: CapabilityProviderSource;
-  providerKey: GenerationCapabilityProviderKey;
+  providerKey: "imageGenerationProviders" | "videoGenerationProviders" | "musicGenerationProviders";
 }): boolean {
   if (params.cfg?.plugins?.enabled === false) {
     return false;

@@ -414,6 +414,7 @@ suite.define(() => {
       const gateway = await installMockGateway(page, {
         assistantAgentId: "main",
         defaultAgentId: "main",
+        subscriptionInitialHistory: false,
         heldMethods: ["models.authStatus", "agent.identity.get"],
         // The selected agent's session metrics may not have arrived; its transcript
         // still identifies which provider's quota belongs in the popover.

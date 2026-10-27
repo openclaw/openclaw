@@ -230,3 +230,19 @@ describe("process-owned egress trust", () => {
     },
   );
 });
+
+describe("macOS service trust", () => {
+  it.each([undefined, "/etc/ssl/cert.pem"])(
+    "uses the system trust store, not the stale /etc/ssl/cert.pem (inherited %s)",
+    (inherited) => {
+      const env = { HOME: home, NODE_EXTRA_CA_CERTS: inherited };
+      for (const environment of [
+        buildServiceEnvironment({ env, platform: "darwin", port: 18789 }),
+        buildNodeServiceEnvironment({ env, platform: "darwin" }),
+      ]) {
+        expect(environment.NODE_USE_SYSTEM_CA).toBe("1");
+        expect(environment.NODE_EXTRA_CA_CERTS).toBeUndefined();
+      }
+    },
+  );
+});

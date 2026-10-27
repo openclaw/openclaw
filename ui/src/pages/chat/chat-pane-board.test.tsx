@@ -24,7 +24,11 @@ import { waitForSolid } from "../../test-helpers/solid-settle.ts";
 import { createStorageMock } from "../../test-helpers/storage.ts";
 import { projectChatFields } from "./chat-field-projection.ts";
 import { ChatPaneRuntime } from "./chat-pane-render.ts";
-import { createPaneTestHost, getPaneTestRuntime } from "./chat-pane-runtime.test-support.ts";
+import {
+  configureGatewayBoardPane,
+  createPaneTestHost,
+  getPaneTestRuntime,
+} from "./chat-pane-runtime.test-support.ts";
 import type { ResolvedBoardView } from "./chat-pane-shared.ts";
 import { ChatPaneStateOwner } from "./chat-pane-state-owner.ts";
 import { type ChatBoardPanel, ChatBoardResetConfirmation } from "./chat-pane-surfaces.tsx";
@@ -170,45 +174,8 @@ function createTestPane(
   return pane;
 }
 
-function createGatewayBoardPane(params: {
-  sessionKey: string;
-  methods?: readonly string[];
-  scopes?: readonly string[];
-  capabilities?: readonly string[];
-  lifecycleConnected?: boolean;
-}) {
-  const pane = createTestPane(undefined, params.sessionKey);
-  const snapshot = { sessionKey: params.sessionKey, revision: 1, tabs: [], widgets: [] };
-  const removeListener = vi.fn();
-  const request = vi.fn<
-    (
-      method: string,
-      params: { sessionKey: string; agentId?: string },
-    ) => Promise<BoardProvider["snapshot$"]["value"]>
-  >(async () => snapshot);
-  const addEventListener = vi.fn(() => removeListener);
-  const client = { request, addEventListener } as unknown as GatewayBrowserClient;
-  pane.state.sessionKey = params.sessionKey;
-  pane.state.client = client;
-  Reflect.set(pane, "boardProviderLifecycleConnected", params.lifecycleConnected ?? true);
-  pane.context = {
-    ...pane.context,
-    gateway: {
-      snapshot: {
-        client,
-        phase: "connected",
-        hello: {
-          ...(params.scopes ? { auth: { role: "operator", scopes: params.scopes } } : {}),
-          features: {
-            methods: params.methods ?? ["board.get"],
-            ...(params.capabilities ? { capabilities: params.capabilities } : {}),
-          },
-        },
-      },
-    },
-  } as unknown as ApplicationContext;
-  pane.context.connectionBootstrap.synchronize({ client, connected: true });
-  return { pane, snapshot, client, request, addEventListener, removeListener };
+function createGatewayBoardPane(params: Parameters<typeof configureGatewayBoardPane>[1]) {
+  return configureGatewayBoardPane(createTestPane(undefined, params.sessionKey), params);
 }
 
 function configureGatewayMainSession(pane: TestChatPane, defaultAgentId: string, mainKey: string) {
@@ -992,22 +959,16 @@ describe("chat pane board shell", () => {
   });
 
   it("enables MCP App pinning only when app-view and put methods are both advertised", () => {
-    const cases = [
-      { suffix: "put-only", methods: ["board.get", "board.widget.put"], expected: false },
-      { suffix: "view-only", methods: ["board.get", "board.widget.appView"], expected: false },
-      {
-        suffix: "complete",
-        methods: ["board.get", "board.widget.appView", "board.widget.put"],
-        expected: true,
-      },
-    ];
-
-    for (const testCase of cases) {
+    for (const [suffix, advertised, expected] of [
+      ["put-only", ["board.widget.put"], false],
+      ["view-only", ["board.widget.appView"], false],
+      ["complete", ["board.widget.appView", "board.widget.put"], true],
+    ] as const) {
       const { pane } = createGatewayBoardPane({
-        sessionKey: `agent:main:${testCase.suffix}`,
-        methods: testCase.methods,
+        sessionKey: `agent:main:${suffix}`,
+        methods: ["board.get", ...advertised],
       });
-      expect(pane.resolveBoardProvider().canPinMcpApps).toBe(testCase.expected);
+      expect(pane.resolveBoardProvider().canPinMcpApps).toBe(expected);
     }
   });
 
@@ -1079,17 +1040,43 @@ describe("chat pane board shell", () => {
     }
   });
 
-  it("grants board actions to a writer with approval scope", () => {
-    const { pane } = createGatewayBoardPane({
-      sessionKey: "agent:main:writer-with-approvals",
-      scopes: ["operator.read", "operator.write", "operator.approvals"],
-      methods: ["board.get", "board.widget.appView", "board.widget.put"],
-      capabilities: ["board-widget-put-canvas-doc"],
-    });
-    const provider = pane.resolveBoardProvider();
-    expect(provider.canMutate).toBe(true);
-    expect(provider.canGrant).toBe(true);
-    expect(provider.canPinWidgets).toBe(true);
-    expect(provider.canPinMcpApps).toBe(true);
-  });
+  it.each([
+    [["operator.read", "operator.write", "operator.approvals"], "owner", true, true, true],
+    [["operator.sessions.write"], "owner", true, false, false],
+    [["operator.sessions.write"], "viewer", false, false, false],
+    [["operator.sessions.read"], "owner", false, false, false],
+  ] as const)(
+    "presents board permissions for %j on a %s session",
+    async (scopes, sharingRole, canMutate, canGrant, canPinMcpApps) => {
+      const { pane } = createGatewayBoardPane({
+        sessionKey: "agent:main:writer-with-approvals",
+        scopes,
+        sharingRole,
+        methods: ["board.get", "board.update", "board.widget.appView", "board.widget.put"],
+        capabilities: ["board-widget-put-canvas-doc"],
+      });
+      const provider = pane.resolveBoardProvider();
+      try {
+        expect(pane.resolveBoardView().available).toBe(true);
+        await vi.waitFor(() => expect(provider.hasLoadedSnapshot).toBe(true));
+        expect(provider.canMutate).toBe(canMutate);
+        expect(provider.canGrant).toBe(canGrant);
+        expect(provider.canPinWidgets).toBe(canMutate);
+        expect(provider.canPinMcpApps).toBe(canPinMcpApps);
+        if (canMutate) {
+          await provider.applyOps([{ kind: "tab_create", tabId: "personal", title: "Personal" }]);
+        } else {
+          await expect(provider.applyOps([])).rejects.toThrow("unavailable");
+        }
+        if (scopes[0] === "operator.sessions.write" && sharingRole === "owner") {
+          pane.state.sessionsResult!.sessions[0]!.sharingRole = "viewer";
+          expect(pane.resolveBoardProvider()).toBe(provider);
+          expect(provider.canMutate).toBe(false);
+          await expect(provider.applyOps([])).rejects.toThrow("unavailable");
+        }
+      } finally {
+        releaseBoard(pane);
+      }
+    },
+  );
 });

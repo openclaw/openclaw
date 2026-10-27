@@ -83,6 +83,8 @@ export type QueuedAgentRunParams = {
   memberRoleIds?: string[];
   permissionMode?: SessionEntry["permissionMode"];
   sessionRoot?: string;
+  /** Spawn-time blind child: the rendered prompt omits its model, identity and workspace path. */
+  blindPrompt?: SessionEntry["blindPrompt"];
   /** Locks the selected model against hooks and fallbacks; does not imply native model ownership. */
   modelSelectionLocked?: boolean;
   authProfileIdSource?: "auto" | "user";

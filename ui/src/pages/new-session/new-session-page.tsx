@@ -376,6 +376,17 @@ function renderPageContent(host: PageHost) {
   );
   onSettled(() => {
     const document = host.ownerDocument;
+    // Model configuration does not need the deferred submission views.
+    const preloadOnIntent = (event: Event) => {
+      if (event.target instanceof Element && event.target.closest(".chat-composer-model-control")) {
+        return;
+      }
+      preloadStops.forEach((stop) => stop());
+      preloadSubmissionViews();
+    };
+    const preloadStops = (["pointerdown", "keydown"] as const).map((type) =>
+      listen(host, type, preloadOnIntent, true),
+    );
     const stops = [
       installChatComposerPickerDismissal(document),
       listen(
@@ -390,11 +401,7 @@ function renderPageContent(host: PageHost) {
         true,
       ),
       listen(document.defaultView!, "beforeunload", owner.flushDraft),
-      // Submit mounts the deferred preview and composer; fetch them on first
-      // intent so the page never flashes their loading fallbacks.
-      ...(["pointerdown", "keydown"] as const).map((type) =>
-        listen(host, type, preloadSubmissionViews, { capture: true, once: true }),
-      ),
+      ...preloadStops,
     ];
     return () => stops.forEach((stop) => stop());
   });

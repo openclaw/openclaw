@@ -14,7 +14,6 @@ import {
   Loading,
   Show,
 } from "solid-js";
-import type { UpdateScheduleState } from "../../api/types.ts";
 import {
   formatUpdateCampaignLabel,
   formatUpdateTargetLabel,
@@ -51,25 +50,6 @@ import {
 registerEnglishCatalog(registerUpdateActionsEnglish);
 
 registerEnglishCatalog(registerSettingsEnglish);
-
-function readUpdatesSettings(
-  configObject: Record<string, unknown>,
-  schedule: UpdateScheduleState | null,
-) {
-  const update = asConfigRecord(configObject.update);
-  const auto = asConfigRecord(update?.auto);
-  // Authored policy wins; a configless package install resolves its channel at the Gateway.
-  const channel =
-    UPDATES_CHANNELS.find((candidate) => candidate === update?.channel) ??
-    UPDATES_CHANNELS.find((candidate) => candidate === schedule?.channel) ??
-    "stable";
-  return {
-    channel,
-    autoEnabled:
-      typeof auto?.enabled === "boolean" ? auto.enabled : (schedule?.autoEnabled ?? false),
-    extendedStable: channel === "extended-stable",
-  };
-}
 
 function Timestamp(props: { timestampMs: number; nowMs?: number }) {
   const relative = () =>
@@ -251,7 +231,23 @@ function GatewayUpdates(props: UpdatesViewProps) {
     );
   };
   const runTarget = () => run()?.target.sha ?? run()?.target.version ?? run()?.target.tag;
-  const settings = () => readUpdatesSettings(props.configObject, props.update.updateSchedule);
+  const settings = () => {
+    const configObject = props.configObject;
+    const schedule = props.update.updateSchedule;
+    const update = asConfigRecord(configObject.update);
+    const auto = asConfigRecord(update?.auto);
+    // Authored policy wins; a configless package install resolves its channel at the Gateway.
+    const channel =
+      UPDATES_CHANNELS.find((candidate) => candidate === update?.channel) ??
+      UPDATES_CHANNELS.find((candidate) => candidate === schedule?.channel) ??
+      "stable";
+    return {
+      channel,
+      autoEnabled:
+        typeof auto?.enabled === "boolean" ? auto.enabled : (schedule?.autoEnabled ?? false),
+      extendedStable: channel === "extended-stable",
+    };
+  };
   const channelOptions = (): Array<{ value: UpdatesChannel; label: string }> => [
     { value: "stable", label: t("updates.channel.stable") },
     { value: "beta", label: t("updates.channel.beta") },

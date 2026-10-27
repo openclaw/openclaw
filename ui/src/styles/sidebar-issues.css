@@ -63,7 +63,7 @@
 
 .sidebar-issues-panel__heading-icon {
   display: inline-flex;
-  color: var(--muted);
+  color: var(--icon-decorative, var(--muted));
 }
 
 .sidebar-issues-panel__header-actions {
@@ -212,7 +212,7 @@
 .sidebar-issues-panel__empty-icon {
   display: inline-flex;
   margin-block-end: 12px;
-  color: var(--muted);
+  color: var(--icon-decorative, var(--muted));
 }
 
 .sidebar-issues-panel__empty-icon svg {
@@ -460,7 +460,7 @@ footer.sidebar-issues-panel__mentions-note {
   border: 0;
   border-radius: var(--radius-sm);
   background: transparent;
-  color: var(--muted);
+  color: var(--icon-interactive, var(--muted));
   cursor: var(--cursor-action);
   transition:
     background var(--duration-fast) ease,
@@ -482,7 +482,7 @@ footer.sidebar-issues-panel__mentions-note {
 .sidebar-issues-panel__chevron {
   display: inline-flex;
   flex: none;
-  color: var(--muted);
+  color: var(--icon-interactive, var(--muted));
   transition: transform var(--duration-fast) ease;
 }
 

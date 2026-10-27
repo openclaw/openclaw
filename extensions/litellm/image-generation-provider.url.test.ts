@@ -39,17 +39,16 @@ const generate = (cfg = config, overrides: Partial<ImageGenerationRequest> = {})
     cfg,
     ...overrides,
   });
-const imageResponse = (bytes: Uint8Array) =>
-  new Response(new Uint8Array(bytes), { headers: { "Content-Type": "image/png" } });
 const headersAt = (index: number) => new Headers(fetchMock.mock.calls[index]?.[1]?.headers);
+const credentialsAt = (index: number) =>
+  ["Authorization", "Cookie"].map((name) => headersAt(index).get(name));
 
 beforeEach(() => {
   images = [{ url: imageUrl, revised_prompt: "Synthetic square" }];
   redirect = undefined;
   downloadBytes = png;
   downloadElapsedMs = 0;
-  fetchMock.mockReset();
-  fetchMock.mockImplementation(async (_url, init) => {
+  fetchMock.mockReset().mockImplementation(async (_url, init) => {
     if (init?.method === "POST") {
       return Response.json({ data: images });
     }
@@ -58,7 +57,7 @@ beforeEach(() => {
     }
     return redirect
       ? new Response(null, { status: 302, headers: { Location: redirect } })
-      : imageResponse(downloadBytes);
+      : new Response(new Uint8Array(downloadBytes), { headers: { "Content-Type": "image/png" } });
   });
   vi.stubGlobal("fetch", fetchMock);
 });
@@ -69,32 +68,29 @@ afterEach(() => {
 });
 
 it.each([
-  [config, imageUrl, false],
   [config, imageUrl, true],
   [proxyConfig("https://api.example.com/v1"), "https://cdn.example.com/image.png", false],
   [proxyConfig(undefined, { allowPrivateNetwork: true }), privateUrl, false],
   [{ ...config, agents: { defaults: { mediaMaxMb: 1 / (1024 * 1024) } } }, imageUrl, false],
-] as const)("downloads %j URL %s (edit=%s) without credentials", async (cfg, url, edit) => {
-  images = [{ url, revised_prompt: "Synthetic square" }];
+] as const)("inlines %j URL %s in order (edit=%s) without credentials", async (cfg, url, edit) => {
+  images = [
+    { b64_json: png.toString("base64"), url: privateUrl, revised_prompt: "Inline" },
+    { url, revised_prompt: "URL" },
+  ];
   const result = await generate(cfg, {
     inputImages: edit ? [{ buffer: png, mimeType: "image/png" }] : undefined,
   });
-  expect(result.images).toEqual([
-    {
-      buffer: png,
-      mimeType: "image/png",
-      fileName: "image-1.png",
-      revisedPrompt: "Synthetic square",
-    },
+  expect(result.images).toMatchObject([
+    { buffer: png, revisedPrompt: "Inline" },
+    { buffer: png, revisedPrompt: "URL" },
   ]);
   expect(fetchMock).toHaveBeenCalledTimes(2);
-  expect(headersAt(0).get("Authorization")).toBe("Bearer fixture-provider-key");
-  expect(headersAt(0).get("Cookie")).toBe(
+  expect(credentialsAt(0)).toEqual([
+    "Bearer fixture-provider-key",
     cfg.models?.providers?.litellm?.request?.headers?.Cookie ?? null,
-  );
+  ]);
   expect(fetchMock.mock.calls[1]?.[0]).toBe(url);
-  expect(headersAt(1).has("Authorization")).toBe(false);
-  expect(headersAt(1).has("Cookie")).toBe(false);
+  expect(credentialsAt(1)).toEqual([null, null]);
 });
 
 it.each([
@@ -109,22 +105,6 @@ it.each([
   }
   await expect(generate()).rejects.toThrow(/private|blocked|internal/i);
   expect(fetchMock).toHaveBeenCalledTimes(requests);
-});
-
-it("preserves inline bytes and response order", async () => {
-  images = [
-    {
-      b64_json: png.toString("base64"),
-      url: "http://127.0.0.2/image.png",
-      revised_prompt: "Inline",
-    },
-    { url: imageUrl, revised_prompt: "URL" },
-  ];
-  expect((await generate()).images).toMatchObject([
-    { buffer: png, revisedPrompt: "Inline" },
-    { buffer: png, revisedPrompt: "URL" },
-  ]);
-  expect(fetchMock).toHaveBeenCalledTimes(2);
 });
 
 it("rejects downloads above the generated image download ceiling", async () => {

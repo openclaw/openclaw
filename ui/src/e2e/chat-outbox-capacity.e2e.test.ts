@@ -29,6 +29,15 @@ async function expectImages(images: Locator, count: number) {
     .toBe(true);
 }
 
+function expectExactImageBytes(actual: string[] | null, expected: string[]) {
+  assert(actual, "Expected attachment bytes");
+  expect(actual).toHaveLength(expected.length);
+  // Compare every byte without sending multi-megabyte Base64 diffs to the reporter.
+  expected.forEach((bytes, index) => {
+    expect(actual[index] === bytes, `Attachment ${index + 1} exact bytes`).toBe(true);
+  });
+}
+
 async function readImageBytes(images: Locator) {
   return images.evaluateAll((items) =>
     Promise.all(
@@ -175,7 +184,7 @@ suite.define(() => {
             const payload = (await readOutboxQueue(page))[0]?.attachmentPayload;
             assert(payload, "Expected admitted payload reference");
             expect(await countOutboxPayloads(page)).toBe(1);
-            expect(await readOutboxPayloadBytes(page, payload.key)).toEqual(expectedBytes);
+            expectExactImageBytes(await readOutboxPayloadBytes(page, payload.key), expectedBytes);
             expect(requests[0]?.params).toMatchObject({
               message,
               queueMode: "steer",
@@ -225,7 +234,7 @@ suite.define(() => {
               .locator(".chat-group.user", { hasText: message })
               .locator(".chat-message-image");
             await expectImages(deliveredImages, files.length);
-            expect(await readImageBytes(deliveredImages)).toEqual(expectedBytes);
+            expectExactImageBytes(await readImageBytes(deliveredImages), expectedBytes);
             await expect.poll(() => countOutboxPayloads(page)).toBe(0);
             await expectRequestCountStable(gateway, "chat.send", 1);
           } finally {

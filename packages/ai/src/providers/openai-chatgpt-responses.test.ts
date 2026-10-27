@@ -252,7 +252,7 @@ describe("streamOpenAICodexResponses transport", () => {
   });
 
   it.each([
-    [true, "off", undefined, undefined, undefined, undefined],
+    [true, "off", undefined, undefined, undefined, "none"],
     [false, "high", ["none", "high"], undefined, undefined, undefined],
   ] as const)(
     "resolves reasoning=%s request=%s supported=%j scalar=%s off=%s",

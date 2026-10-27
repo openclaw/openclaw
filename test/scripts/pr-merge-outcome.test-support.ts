@@ -19,6 +19,8 @@ type MergeObservation = {
   main?: string;
   pr?: Record<string, unknown>;
   advanceMain?: boolean;
+  advanceMainFrom?: string;
+  advanceMainAfterPolicy?: boolean;
   priorCi?: Partial<ReturnType<typeof createPriorCiFixtureState>>;
   restUnseenSuite?: string;
   advanceSeconds?: number;
@@ -306,7 +308,6 @@ export function createMergeOutcomeFixtureHarness() {
         head?: string;
         preparedHead?: string;
         artifact?: string;
-        artifactContents?: string;
         bodyPath?: string;
         receiptField?: "LOCAL_PREP_HEAD_SHA" | "PREP_HEAD_SHA";
       },
@@ -461,22 +462,23 @@ const advanceClock=(seconds)=>{
   const clock=process.env.FIXTURE_CLOCK;
   fs.writeFileSync(clock,String(Number(fs.readFileSync(clock,"utf8"))+seconds)+"\\n");
 };
-const advanceMain=()=>{
-  const parent=main();
-  const next=git(["--git-dir="+process.env.FIXTURE_REMOTE,"commit-tree",git(["--git-dir="+process.env.FIXTURE_REMOTE,"rev-parse",parent+"^{tree}"]),"-p",parent],"Remote advance\\n");
-  git(["--git-dir="+process.env.FIXTURE_REMOTE,"update-ref","refs/heads/main",next,parent]);
+const advanceMain=(parent=main())=>{
+  const previous=main();
+  const next=git(["--git-dir="+process.env.FIXTURE_REMOTE,"commit-tree",git(["--git-dir="+process.env.FIXTURE_REMOTE,"rev-parse",parent+"^{tree}"]),"-p",parent],"Remote advance "+(s.mainAdvances.length+1)+"\\n");
+  git(["--git-dir="+process.env.FIXTURE_REMOTE,"update-ref","refs/heads/main",next,previous]);
   s.mainAdvances.push(next);
 };
 const applyRestObservation=(next=s.restObservation)=>{
+  const deferred=next.advanceMainAfterPolicy?{advanceMain:true,advanceMainFrom:next.advanceMainFrom,afterPolicyRead:true}:null;
   if(next.main) git(["push","-q","--force","origin",next.main+":refs/heads/main"]);
   if(next.pr) Object.assign(s.pr,next.pr);
-  if(next.advanceMain) advanceMain();
+  if(next.advanceMain) advanceMain(next.advanceMainFrom);
   if(next.gates) s.gates=next.gates;
   if(next.restPolicy) s.restPolicy=next.restPolicy;
   if(next.priorCi) Object.assign(s.priorCi,next.priorCi);
   if(next.restUnseenSuite) s.restUnseenSuite=next.restUnseenSuite;
   if(next.advanceSeconds) advanceClock(next.advanceSeconds);
-  s.restObservationAppliedAt=s.restMainReads;s.restObservation=null;save();
+  s.restObservationAppliedAt=s.restMainReads;s.restObservation=deferred;save();
 };
 ${priorCiSecurityFixtureSource}
 if(securityResponse()) {
@@ -673,8 +675,7 @@ else if(args[0]==="pr"&&args[1]==="checks") {
   if(s.duringChecks?.preparedHead) git(["update-ref","refs/heads/pr-123-prep",s.duringChecks.preparedHead]);
   if(s.duringChecks?.artifact) {
     const path=process.env.FIXTURE_REPO+"/.worktrees/pr-123/.local/"+s.duringChecks.artifact;
-    if(typeof s.duringChecks.artifactContents==="string") fs.writeFileSync(path,s.duringChecks.artifactContents);
-    else fs.appendFileSync(path,"\\n# changed during checks\\n");
+    fs.appendFileSync(path,"\\n# changed during checks\\n");
   }
   if(s.duringChecks?.receiptField) { const receipt=process.env.FIXTURE_REPO+"/.worktrees/pr-123/.local/prep.env"; fs.writeFileSync(receipt,fs.readFileSync(receipt,"utf8").replace(new RegExp("^"+s.duringChecks.receiptField+"=.*$","m"),s.duringChecks.receiptField+"="+main())); }
   out([{name:s.requiredCheckName,bucket:s.gates,state:s.gates==="pass"?"SUCCESS":s.gates==="pending"?"PENDING":"FAILURE"},...(s.priorCi.otherCheck?[{name:s.priorCi.otherCheck,bucket:"fail",state:"FAILURE"}]:[])]);}

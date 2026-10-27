@@ -27,7 +27,11 @@ import {
   createRetainedNativeWorker,
 } from "./worker-native-lifecycle.js";
 import { resolveWorkerPoolSize, type WorkerPoolClass } from "./worker-pool-sizing.js";
-import { classifyWorkerRequest, trackWorkerRequest } from "./worker-request-diagnostics.js";
+import {
+  captureWorkerStartObserver,
+  classifyWorkerRequest,
+  trackWorkerRequest,
+} from "./worker-request-diagnostics.js";
 import { workerRequestKind } from "./worker-request-kind.js";
 import { getWorkerComputeCapacity } from "./worker-task-capacity.js";
 import { liveWorkerTaskPools } from "./worker-task-pool-registry.js";
@@ -154,10 +158,10 @@ export function createWorkerTaskHost(
     taskContextTransferList(context) {
       // SAFETY: The pool passes the context returned by this host's capture method.
       const captured = context as WorkerTaskContext;
-      return [
-        ...(captured.databaseAdmissionPort ? [captured.databaseAdmissionPort] : []),
-        ...postgresPoolTransferList(captured.postgresPool),
-      ];
+      const transfers = postgresPoolTransferList(captured.postgresPool);
+      return captured.databaseAdmissionPort
+        ? [captured.databaseAdmissionPort, ...transfers]
+        : transfers;
     },
     createTaskObserver(url) {
       const kind = workerRequestKind(url);
@@ -178,6 +182,7 @@ export function createWorkerTaskHost(
     },
     receiveMessage: receiveWorkerMemoryPort,
     observeResourceReply: () => recordWorkerMessage("resource", "from_worker"),
+    captureWorkerStartObserver,
     workerStarted(worker, pool) {
       if (owner.databaseAccess !== "read-only") {
         trackSqliteDatabaseAdmissionWorker(worker);

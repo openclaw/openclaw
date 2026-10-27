@@ -1,3 +1,4 @@
+import { serialize } from "node:v8";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { assert, expect, it, vi } from "vitest";
 import { renderAssistantRequestFailureCopy } from "../../agents/failover/assistant-request-failure-copy.js";
@@ -516,8 +517,8 @@ it("keeps concurrent commands in FIFO order across a rolled-back mutation", asyn
   });
 });
 
-it("installs the full append receipt and releases FIFO before retained follow-up work", async () => {
-  await withActor(async ({ actor, fault }) => {
+it("installs the full append receipt without empty reducer work and releases FIFO before follow-up", async () => {
+  await withActor(async ({ actor, fault, emptyReducerCommands }) => {
     const before = await actor.read(authority);
     fault.afterCommitted = async () => {
       expect((await actor.read(authority)).transcript.watermark.maxSeq).not.toBe(
@@ -548,6 +549,7 @@ it("installs the full append receipt and releases FIFO before retained follow-up
     const installed = actor.snapshot(authority);
     expect(installed).toEqual(result.receipt.postimage);
     expect(installed?.transcript.watermark.maxSeq).not.toBe(before.transcript.watermark.maxSeq);
+    expect(emptyReducerCommands).toEqual([]);
   });
 });
 
@@ -566,6 +568,35 @@ it("releases the writer queue across phase awaits and flushes reducers on an exc
     await expect(operation).rejects.toThrow("Provider failed");
     expect(actor.snapshot(authority)?.entry?.updatedAt).toBe(987);
     expect(commands).toEqual(["session.actor.read", "session.actor.patch"]);
+  });
+});
+
+it("restores only queued phase reducers after rollback and keeps explicit reducers last", async () => {
+  await withActor(async ({ actor, fault, readEntry }) => {
+    await actor.withPhase("turn", authority, async (phase) => {
+      phase.patch([{ kind: "group-intro", needsSystemIntro: true }]);
+      fault.transactionError = new Error("synthetic rollback");
+      const explicit = {
+        commandId: "rolled-back",
+        phaseId: "turn",
+        reducers: [{ kind: "group-intro" as const, needsSystemIntro: false }],
+      };
+      expect(await phase.actor.patch(explicit, authority)).toMatchObject({ kind: "rolled-back" });
+      expect(explicit.reducers).toEqual([{ kind: "group-intro", needsSystemIntro: false }]);
+      delete fault.transactionError;
+      const restored = await phase.actor.patch(
+        { commandId: "restored", phaseId: "turn", reducers: [] },
+        authority,
+      );
+      assert(restored.kind === "committed");
+      expect(restored.receipt.reducers).toHaveLength(1);
+      expect(readEntry()?.groupActivationNeedsSystemIntro).toBe(true);
+      phase.patch([{ kind: "group-intro", needsSystemIntro: true }]);
+      const ordered = await phase.actor.patch({ ...explicit, commandId: "ordered" }, authority);
+      assert(ordered.kind === "committed");
+      expect(ordered.receipt.reducers).toHaveLength(2);
+      expect(readEntry()?.groupActivationNeedsSystemIntro).toBe(false);
+    });
   });
 });
 
@@ -622,8 +653,7 @@ it("shares actor revisions and isolates explicit policy copies", async () => {
           if (copy.entry) {
             copy.entry.sessionId = "policy-mutated";
           }
-          copy.version = { epoch: "policy-mutated", sequence: -1 };
-          copy.dependencySessionIds.length = 0;
+          copy.target = { ...copy.target, sessionKey: "policy-mutated" };
         },
       },
     );
@@ -646,8 +676,9 @@ it("shares actor revisions and isolates explicit policy copies", async () => {
   });
 });
 
-it("admits tool appends once per transaction boundary without transferring transcript indexes", async () => {
-  await withActor(async ({ actor, admissions }) => {
+it("admits tool appends once per transaction boundary without transferring replica state", async () => {
+  await withActor(async ({ actor, admissions, seedTransferEntry }) => {
+    seedTransferEntry(32 * 1024);
     const initial = await actor.read(authority);
     const append = messageAppend(actor, initial.entry!.sessionId, {
       role: "toolResult",
@@ -665,17 +696,15 @@ it("admits tool appends once per transaction boundary without transferring trans
     expect(result.kind).toBe("committed");
     expect(admissions.map(({ stage }) => stage)).toEqual(["transaction", "commit"]);
     for (const request of admissions) {
-      expect(request.facts).toMatchObject({
-        publication: {
-          snapshot: { target: actor.target, entry: { sessionId: initial.entry!.sessionId } },
-        },
-      });
       const facts = isRecord(request.facts) ? request.facts.publication : undefined;
-      expect(
-        isRecord(facts) && isRecord(facts.snapshot) && Object.hasOwn(facts.snapshot, "transcript"),
-      ).toBe(false);
+      assert(isRecord(facts) && isRecord(facts.snapshot));
+      expect(facts.snapshot.target).toEqual(actor.target);
+      expect(serialize(facts.snapshot).byteLength).toBeLessThan(1024);
     }
     const committed = actor.snapshot(authority)!;
+    expect(committed.entry).toBe(initial.entry);
+    expect(Object.isFrozen(committed.entry)).toBe(true);
+    expect(Object.isFrozen(committed.entry?.skillsSnapshot)).toBe(true);
     expect(committed.transcript.version.rawSeq).toBeGreaterThan(
       initial.transcript.version.rawSeq ?? -1,
     );

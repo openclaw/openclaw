@@ -16,6 +16,7 @@ import {
 import * as gateway from "../../agents/tools/in-process-gateway.js";
 import { createScreenTool } from "../../agents/tools/screen-tool.js";
 import {
+  createPersonalToolParticipant as participant,
   callPersonalToolUiCommand as call,
   withPersonalToolTurn,
 } from "../../auto-reply/reply/personal-tool-turn.test-support.js";
@@ -45,15 +46,6 @@ function client(
       caps,
     },
   } as GatewayClient;
-}
-
-function participant(profileId: string, name: string) {
-  return {
-    profileId,
-    name,
-    senderId: `${profileId}-sender`,
-    gatewayUiCommandTarget: { connId: `${profileId}-tab`, profileId },
-  };
 }
 
 function captureScreenRequests(recipients: GatewayClient[]) {

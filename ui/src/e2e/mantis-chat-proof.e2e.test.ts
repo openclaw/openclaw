@@ -1,5 +1,5 @@
 // Control UI Mantis proof covers the focused web chat browser path.
-import { copyFile, mkdir, writeFile } from "node:fs/promises";
+import { mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 import type { BrowserContext, Page } from "playwright";
 import { expect, it } from "vitest";
@@ -37,9 +37,8 @@ async function saveResult(dir: string, details: Record<string, unknown>) {
 async function saveVideo(page: Page, context: BrowserContext, dir: string) {
   const video = page.video();
   await suite.closeBrowserContext(context);
-  const videoPath = await video?.path().catch(() => undefined);
-  if (videoPath) {
-    await copyFile(videoPath, path.join(dir, "web-ui-chat.webm"));
+  if (video) {
+    await video.saveAs(path.join(dir, "web-ui-chat.webm"));
   }
 }
 
@@ -96,12 +95,12 @@ suite.define(() => {
       await page.getByText("saved 875.3k tokens", { exact: true }).waitFor();
       await page.locator(".chat-working-indicator").waitFor();
       const workingLabel = page.locator(".chat-working-indicator__status > span:first-child");
-      expect(await workingLabel.textContent()).toBe("Waiting for turn to start…");
+      expect(await workingLabel.textContent()).toBe("Waiting for turn to start");
       expect(
         await page
           .locator(".chat-working-indicator__status > span:not(.sr-only)")
           .allTextContents(),
-      ).toEqual(["Waiting for turn to start…", "·"]);
+      ).toEqual(["Waiting for turn to start", "·"]);
       await expect.poll(() => gateway.getRequests("connect")).toHaveLength(1);
       // Keep each elapsed-time/heartbeat tick, without rendering every frame
       // between the one-second clock readings or suspending pending RPC replies.

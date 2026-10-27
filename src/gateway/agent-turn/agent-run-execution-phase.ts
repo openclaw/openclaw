@@ -569,17 +569,6 @@ async function executeAgentRun(
                     return;
                   }
                   params.io.emitExecutionStarted?.();
-                  if (params.resolvedSessionKey) {
-                    emitSessionsChanged(
-                      params.context,
-                      {
-                        sessionKey: params.resolvedSessionKey,
-                        agentId: params.agentId,
-                        reason: "agent.run.started",
-                      },
-                      { accessChanged: false },
-                    );
-                  }
                 },
                 onActiveModelSelected: createAgentRunModelSelectionHandler({
                   runId: params.runId,

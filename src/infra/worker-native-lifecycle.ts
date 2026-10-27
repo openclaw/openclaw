@@ -157,14 +157,13 @@ function nativeRuntime(source: NativeSource): NativeRuntime {
       observeWorkerMessage(reply, "from_worker", "lifecycle");
       handles.get(reply.id)?.receive(reply);
     };
+    const readControlMessage = () => receiveMessageOnPort(port1);
     const runtime: NativeRuntime = {
       databaseAdmissionCursor,
       handles,
       service() {
         for (;;) {
-          const next = runWithMainThreadTask("worker:control-decode", () =>
-            receiveMessageOnPort(port1),
-          );
+          const next = runWithMainThreadTask("worker:control-decode", readControlMessage);
           if (!next) {
             break;
           }
@@ -201,7 +200,7 @@ function nativeRuntime(source: NativeSource): NativeRuntime {
           throw runtime.failure;
         }
         const bytes = workerMessagePayloadBytes(message);
-        port1.postMessage(message, [...transfers]);
+        port1.postMessage(message, transfers);
         observeWorkerMessage(message, "to_worker", "lifecycle", bytes ?? null);
       },
       resourceBroker() {

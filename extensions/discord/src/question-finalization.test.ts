@@ -22,7 +22,7 @@ vi.mock("openclaw/plugin-sdk/question-gateway-runtime", async (importOriginal) =
 });
 vi.mock("./send.components.js", () => ({ editDiscordComponentMessage: hoisted.edit }));
 
-import { discordOutbound } from "./outbound-adapter.js";
+import { discordOutbound } from "./outbound-payload.js";
 
 describe("Discord question finalization", () => {
   it("removes action rows and appends terminal status", async () => {
