@@ -697,7 +697,7 @@ async function measure() {
       }
       await delay(startAt - Date.now());
     }
-    const results = [];
+    const results: Awaited<ReturnType<typeof sample>>[] = [];
     for (let index = 1; index <= samples; index++) {
       if (pollMs) {
         await delay(pollMs);
