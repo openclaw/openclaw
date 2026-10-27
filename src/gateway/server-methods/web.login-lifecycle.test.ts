@@ -2,18 +2,12 @@ import { once } from "node:events";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, expect, it, vi } from "vitest";
 import type { ChannelPlugin } from "../../channels/plugins/types.public.js";
-import { createSubsystemLogger, runtimeForLogger } from "../../logging/subsystem.js";
 import { createEmptyPluginRegistry } from "../../plugins/registry.js";
-import {
-  requireActivePluginChannelRegistry,
-  resetPluginRuntimeStateForTest,
-  setActivePluginRegistry,
-} from "../../plugins/runtime.js";
+import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../../plugins/runtime.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { createChannelTestPluginBase } from "../../test-utils/channel-plugins.js";
-import { createTestGatewayScheduler } from "../../test-utils/gateway-scheduler-clock.js";
-import { createGatewayRequestContext } from "../server-request-context.js";
-import { makeContextParams } from "../server-request-context.test-support.js";
+import { createTestChannelManager } from "../server-channels.test-support.js";
+import { createDirectChatContext } from "../server-chat.agent-events.test-helpers.js";
 import { webHandlers } from "./web.js";
 
 const ACCOUNTS = ["account-a", "account-b"];
@@ -22,20 +16,14 @@ afterEach(resetPluginRuntimeStateForTest);
 it.each([true, false])(
   "keeps account A running while account B pairs (connected=%s)",
   async (connected) => {
-    const { createChannelManager } = await import("../server-channels.js");
     const live = new Set<string>();
     const starts = new Map(ACCOUNTS.map((id) => [id, createDeferredCore()]));
-    const loginAccounts: Array<string | undefined> = [];
     const plugin: ChannelPlugin = {
       ...createChannelTestPluginBase({
         id: "whatsapp",
-        label: "WhatsApp",
         config: {
           listAccountIds: () => ACCOUNTS,
-          resolveAccount: (_cfg, accountId) => ({
-            accountId: accountId ?? "account-a",
-            enabled: true,
-          }),
+          resolveAccount: () => ({ enabled: true }),
         },
       }),
       gatewayMethods: ["web.login.start", "web.login.wait"],
@@ -49,11 +37,11 @@ it.each([true, false])(
           live.delete(accountId);
         },
         loginWithQrStart: async ({ accountId }) => {
-          loginAccounts.push(accountId);
+          expect(accountId).toBe("account-b");
           return { message: "scan", qrDataUrl: "data:image/png;base64,QQ==" };
         },
         loginWithQrWait: async ({ accountId }) => {
-          loginAccounts.push(accountId);
+          expect(accountId).toBe("account-b");
           return { connected, message: connected ? "linked" : "pairing timed out" };
         },
       },
@@ -62,25 +50,18 @@ it.each([true, false])(
     registry.channels.push({ pluginId: plugin.id, source: "test", plugin });
     setActivePluginRegistry(registry);
     const cfg = { channels: { whatsapp: { enabled: true } } };
-    const log = createSubsystemLogger("gateway/web-login-lifecycle-test");
-    const manager = createChannelManager({
+    const manager = createTestChannelManager({
       getRuntimeConfig: () => cfg,
-      getPluginRegistry: requireActivePluginChannelRegistry,
-      channelLogs: { whatsapp: log },
-      channelRuntimeEnvs: { whatsapp: runtimeForLogger(log) },
-      scheduler: createTestGatewayScheduler(),
+      channelIds: ["whatsapp"],
     });
-    const context = createGatewayRequestContext(
-      makeContextParams({
-        stopChannel: (channel, accountId) =>
-          manager.stopChannel(channel, accountId, { manual: true }),
-        startChannel: (channel, accountId) => manager.startChannel(channel, accountId),
-        getRuntimeSnapshot: () => manager.getRuntimeSnapshot(),
-      }),
-    );
-    context.getRuntimeConfig = () => cfg;
-    // Direct handler calls do not carry a request-scoped method registry.
-    delete context.getGatewayMethodRegistry;
+    const context = createDirectChatContext({
+      getRuntimeConfig: () => cfg,
+      isConfigReloadSettled: () => true,
+      stopChannel: (channel, accountId) =>
+        manager.stopChannel(channel, accountId, { manual: true }),
+      startChannel: (channel, accountId) => manager.startChannel(channel, accountId),
+      getRuntimeSnapshot: () => manager.getRuntimeSnapshot(),
+    });
     const invoke = async (method: "web.login.start" | "web.login.wait") => {
       const params = { accountId: "account-b" };
       const respond = vi.fn();
@@ -110,7 +91,6 @@ it.each([true, false])(
         await restored.promise;
       }
       expect([...live].toSorted()).toEqual(connected ? ACCOUNTS : ["account-a"]);
-      expect(loginAccounts).toEqual(["account-b", "account-b"]);
     } finally {
       await manager.stopChannel("whatsapp");
     }

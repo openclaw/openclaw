@@ -42,7 +42,6 @@ const model: SidebarSnapshotModel = {
   pageScopeId: null,
   pinnedSessions: [],
   entries: ["route:usage"],
-  sessions: [],
   sections: [],
   cards: [],
   collapsedAgentIds: [],

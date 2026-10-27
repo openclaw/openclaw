@@ -5,6 +5,7 @@ import {
   hasOrganizationTpmRateLimitEvidence,
   resolveRetryAfterMs,
 } from "../agents/failover/retry-evidence.js";
+import { AsyncContext } from "../shared/async-context.js";
 import { runInDetachedAsyncContext } from "../shared/detached-async-context.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import type { AssistantMessage, Model, SimpleStreamOptions } from "./types.js";
@@ -13,6 +14,7 @@ type Waiter = {
   order: number;
   priority: "interactive" | "background";
   maxRetryDelayMs: number;
+  retryDeadline?: number;
   gate: Gate;
   signal?: AbortSignal;
   abort: () => void;
@@ -39,6 +41,31 @@ const state = resolveGlobalSingleton(Symbol.for("openclaw.providerRateLimit"), (
 }));
 const { gates } = state;
 const admittedAccount = Symbol.for("openclaw.providerRateLimit.admittedAccount");
+const retryDeadlineContext = new AsyncContext<{ pendingUntil?: number }>(
+  Symbol.for("openclaw.providerRateLimit.retryDeadline"),
+);
+
+/** Limit the next admission wait, leaving useful responses and later tool turns alone. */
+export function withProviderRateLimitRetryDeadline<T>(
+  deadline: number | undefined,
+  run: () => T,
+): T {
+  return retryDeadlineContext.run(
+    deadline === undefined ? undefined : { pendingUntil: deadline },
+    run,
+  );
+}
+
+function retryDeadlineError() {
+  return new FailoverError(
+    "429 Shared organization token rate limit exceeded the same-model retry wait budget.",
+    {
+      reason: "rate_limit",
+      status: 429,
+      code: "rate_limit_exceeded",
+    },
+  );
+}
 
 function stopWaiting(waiter: Waiter) {
   try {
@@ -51,6 +78,14 @@ function stopWaiting(waiter: Waiter) {
 
 function notify(waiter: Waiter) {
   stopWaiting(waiter);
+  if (
+    waiter.retryDeadline !== undefined &&
+    Math.max(Date.now(), waiter.gate.retryAt, waiter.gate.nextAt) >= waiter.retryDeadline
+  ) {
+    waiter.gate.queue.splice(waiter.gate.queue.indexOf(waiter), 1);
+    finish(waiter, retryDeadlineError());
+    return;
+  }
   const floorMs = waiter.gate.retryAt - Date.now();
   if (waiter.maxRetryDelayMs > 0 && floorMs > waiter.maxRetryDelayMs) {
     waiter.gate.queue.splice(waiter.gate.queue.indexOf(waiter), 1);
@@ -87,11 +122,20 @@ function finish(waiter: Waiter, error?: unknown) {
 function schedule(gate: Gate) {
   clearTimeout(gate.timer);
   const admissionAt = Math.max(gate.retryAt, gate.nextAt);
-  const wakeAt = gate.queue.length ? Math.min(admissionAt, gate.expiresAt) : gate.expiresAt;
+  const deadline = Math.min(...gate.queue.map((waiter) => waiter.retryDeadline ?? Infinity));
+  const wakeAt = gate.queue.length
+    ? Math.min(admissionAt, gate.expiresAt, deadline)
+    : gate.expiresAt;
   // Shared recovery outlives the request that last adjusted its floor.
   gate.timer = runInDetachedAsyncContext(() =>
     setTimeout(
       () => {
+        for (const waiter of gate.queue.slice()) {
+          if (waiter.retryDeadline !== undefined && Date.now() >= waiter.retryDeadline) {
+            gate.queue.splice(gate.queue.indexOf(waiter), 1);
+            finish(waiter, retryDeadlineError());
+          }
+        }
         if (Date.now() >= gate.expiresAt) {
           for (const key of gate.keys) {
             gates.delete(key);
@@ -134,7 +178,7 @@ function merge(gate: Gate, other: Gate) {
 }
 
 function requestIdentity(
-  model: Pick<Model, "provider" | "baseUrl" | "headers">,
+  model: Pick<Model, "id" | "provider" | "baseUrl" | "headers">,
   options?: Pick<SimpleStreamOptions, "apiKey" | "headers">,
 ) {
   const headers = new Map(
@@ -142,7 +186,7 @@ function requestIdentity(
       ([name, value]) => [name.toLowerCase(), value] as const,
     ),
   );
-  const scope = sha256Hex(JSON.stringify([model.provider, model.baseUrl]));
+  const scope = sha256Hex(JSON.stringify([model.provider, model.baseUrl, model.id]));
   const organization = headers.get("openai-organization");
   const credential = headers.get("authorization") ?? options?.apiKey;
   // Explicit organization selection can put the same credential in different buckets.
@@ -154,19 +198,32 @@ function requestIdentity(
   return { scope, key };
 }
 
+/** Recent shared TPM exhaustion remains saturated through the gate's recovery window. */
+export function getProviderRateLimitState(
+  model: Pick<Model, "id" | "provider" | "baseUrl" | "headers">,
+  options?: Pick<SimpleStreamOptions, "apiKey" | "headers">,
+): { retryAt: number; expiresAt: number } | undefined {
+  const { key } = requestIdentity(model, options);
+  const gate = key ? gates.get(key) : undefined;
+  return gate && gate.expiresAt > Date.now()
+    ? { retryAt: Math.max(gate.retryAt, gate.nextAt), expiresAt: gate.expiresAt }
+    : undefined;
+}
+
 /** Coordinates known shared TPM exhaustion; the caller remains the sole retry owner. */
 export function createProviderRateLimitRequest<T extends SimpleStreamOptions>(
-  model: Pick<Model, "provider" | "baseUrl" | "headers">,
+  model: Pick<Model, "id" | "provider" | "baseUrl" | "headers">,
   options: T & { [admittedAccount]?: string },
 ) {
   const { scope, key } = requestIdentity(model, options);
   const signal = options?.signal;
   const inherited = key !== undefined && options?.[admittedAccount] === key;
+  const retryDeadline = retryDeadlineContext.getStore();
 
   return {
     // Delegating transports carry one admission to the physical request. A different
-    // account must enter its own gate; unrelated calls do not inherit ambient admission.
-    options: key ? { ...options, [admittedAccount]: key } : options,
+    // account or model must enter its own gate; unrelated calls do not inherit admission.
+    options: key && !inherited ? { ...options, [admittedAccount]: key } : options,
     async wait(
       onWait?: (retryAt: number) => () => void,
       priority: "interactive" | "background" = "background",
@@ -174,6 +231,9 @@ export function createProviderRateLimitRequest<T extends SimpleStreamOptions>(
       signal?.throwIfAborted();
       const gate = key && !inherited ? gates.get(key) : undefined;
       if (!gate) {
+        if (retryDeadline && !inherited) {
+          retryDeadline.pendingUntil = undefined;
+        }
         return;
       }
       await new Promise<void>((resolve, reject) => {
@@ -181,6 +241,7 @@ export function createProviderRateLimitRequest<T extends SimpleStreamOptions>(
           order: state.waiterOrder++,
           priority,
           maxRetryDelayMs: options.maxRetryDelayMs ?? 60_000,
+          retryDeadline: retryDeadline?.pendingUntil,
           gate,
           signal,
           resolve,
@@ -199,21 +260,17 @@ export function createProviderRateLimitRequest<T extends SimpleStreamOptions>(
         notify(waiter);
         schedule(gate);
       });
+      if (retryDeadline) {
+        retryDeadline.pendingUntil = undefined;
+      }
     },
     // Observation can outlive consumption; never capture request options or its signal.
-    observe: observeProviderRateLimit.bind(undefined, scope, key, inherited),
+    observe: key && !inherited ? observeProviderRateLimit.bind(undefined, scope, key) : undefined,
   };
 }
 
-function observeProviderRateLimit(
-  scope: string,
-  key: string | undefined,
-  inherited: boolean,
-  message: AssistantMessage,
-): void {
+function observeProviderRateLimit(scope: string, key: string, message: AssistantMessage): void {
   if (
-    !key ||
-    inherited ||
     message.stopReason !== "error" ||
     !hasOrganizationTpmRateLimitEvidence(message.errorMessage) ||
     message.retryAfterMs === null

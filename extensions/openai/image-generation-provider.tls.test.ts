@@ -13,6 +13,7 @@ import {
 } from "openclaw/plugin-sdk/test-env";
 import { afterAll, beforeAll, expect, it, vi } from "vitest";
 import { buildOpenAIImageGenerationProvider } from "./image-generation-provider.js";
+import { openAIImageConfig } from "./image-generation-provider.test-support.js";
 
 vi.mock("openclaw/plugin-sdk/provider-auth-runtime", async (importOriginal) => ({
   ...(await importOriginal<typeof import("openclaw/plugin-sdk/provider-auth-runtime")>()),
@@ -95,17 +96,15 @@ it.each(["same-origin", "cross-origin", "redirect"])("%s TLS identity", async (r
     route === "redirect" ? "/redirect" : "/image.png",
     route === "cross-origin" ? imageOrigin : providerOrigin,
   ).href;
-  const openai = {
-    baseUrl: `${providerOrigin}/v1`,
-    apiKey: "endpoint-key",
-    models: [],
-    request: { tls },
-  };
   const result = await provider.generateImage({
     provider: "openai",
     model: "gpt-image-2",
     prompt: "Synthetic image",
-    cfg: { models: { providers: { openai } } },
+    cfg: openAIImageConfig({
+      baseUrl: `${providerOrigin}/v1`,
+      apiKey: "endpoint-key",
+      request: { tls },
+    }),
     ssrfPolicy: { allowedOrigins: [providerOrigin, imageOrigin] },
   });
   expect(result.images[0]?.buffer).toEqual(png);

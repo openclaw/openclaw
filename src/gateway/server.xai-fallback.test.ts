@@ -16,6 +16,7 @@ import { getActivePluginRegistry } from "../plugins/runtime.js";
 import { captureEnv, setTestEnvValue } from "../test-utils/env.js";
 import { closeProvider, listenProvider } from "./gateway-provider-fixture.test-support.js";
 import { disconnectGatewayClient, startGatewayWithClient } from "./test-helpers.e2e.js";
+import { buildOpenAiResponsesTestModel } from "./test-openai-responses-model.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const primaryModel = "grok-4.6";
@@ -67,16 +68,7 @@ const scenarios = [
   ...rejections.keys(),
 ] as const;
 type Scenario = (typeof scenarios)[number];
-const model = (id: string) => ({
-  id,
-  name: id,
-  api: "openai-responses",
-  reasoning: false,
-  input: ["text"],
-  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-  contextWindow: 16_000,
-  maxTokens: 256,
-});
+const model = (id: string) => buildOpenAiResponsesTestModel(id, 16_000, 256);
 const encodeEvent = (value: unknown) => `data: ${JSON.stringify(value)}\n\n`;
 const responseMessage = (id: string, text: string) => ({
   type: "message",

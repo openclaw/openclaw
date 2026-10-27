@@ -26,7 +26,10 @@ import { mapColdLoadCpuProfile, summarizeCpuProfile } from "./lib/control-ui-col
 import {
   createScenarioFixture,
   interactionScenarios,
+  installInteractionNavigationPreloadObserver,
+  settleInteractionNavigationPreloads,
   settleSidebarBackgroundWork,
+  type InteractionNavigationPreloads,
   type InteractionEvidence,
   type InteractionSandbox,
 } from "./lib/control-ui-interaction-scenarios.ts";
@@ -71,6 +74,8 @@ const { values } = parseArgs({
     "selector-stats": { type: "boolean", default: false },
     theme: { type: "string", default: "light" },
     "thread-cpu-time": { type: "boolean", default: false },
+    "function-counts": { type: "boolean", default: false },
+    "graph-counts": { type: "boolean", default: false },
     "first-pair-screenshots": { type: "boolean", default: false },
     "invalidation-tracking": { type: "boolean", default: false },
     "resource-counts": { type: "boolean", default: false },
@@ -85,11 +90,17 @@ const { values } = parseArgs({
   },
 });
 const trace = values.trace || values["selector-stats"];
+if (values["graph-counts"] && (trace || values["function-counts"] || values["projection-counts"])) {
+  throw new Error("Run reactive graph counts separately from CPU/coverage instrumentation");
+}
 if (values["projection-counts"] && !values["projection-fixtures"]) {
   throw new Error("--projection-counts requires --projection-fixtures");
 }
 if (values["projection-counts"] && trace) {
   throw new Error("Run precise projection counts separately from CPU profiles/traces");
+}
+if (values["function-counts"] && trace) {
+  throw new Error("Run precise function counts separately from CPU profiles/traces");
 }
 if (values["projection-fixtures"] && values["resource-counts"]) {
   throw new Error("Run native resource counts separately from projection fixture measurements");
@@ -128,7 +139,7 @@ const scenarios = interactionScenarios.filter((step) => {
   }
   return selectedIds
     ? selectedIds.includes(step.id)
-    : !step.resourceOnly || values["resource-counts"];
+    : !step.explicitOnly && (!step.resourceOnly || values["resource-counts"]);
 });
 if (!scenarios.length || selectedIds?.some((id) => !scenarios.some((step) => step.id === id))) {
   throw new Error("Unknown or empty interaction steps");
@@ -359,11 +370,15 @@ type Result = {
   domBefore?: { nodes: number; menuItems: number; namedAnchors: number };
   domAfter?: { nodes: number; menuItems: number; namedAnchors: number };
   rowIdentity?: { initial: number; created: number; retained: number; final: number };
+  navigationPreloads?: InteractionNavigationPreloads;
   resourcesBefore?: ControlUiResourceCounts;
   resourcesAfter?: ControlUiResourceCounts;
   processWakeups?: ProcessWakeups;
   projectionFixture?: ProjectionFixtureFacts;
   projectionCoverageArtifact?: string;
+  functionCoverageArtifact?: string;
+  functionCoveragePreparationArtifact?: string;
+  reactiveGraphArtifact?: string;
   projectionScreenshotArtifact?: string;
   measurementClass?:
     | "production-interaction"
@@ -600,6 +615,12 @@ try {
           ? "CDP trace + 1ms CPU profiler (overhead included)"
           : "untraced CDP metrics",
         metricTimeDomain: values["thread-cpu-time"] ? "threadTicks" : "timeTicks",
+        functionCounts: values["function-counts"]
+          ? "Precise coverage starts before navigation and resets after preparation; diagnostic overhead, not timing evidence."
+          : false,
+        reactiveGraphCounts: values["graph-counts"]
+          ? "Observe-only Solid build; diagnostic counts, not production timing evidence."
+          : false,
         cpuThrottle,
         retainedHeap: values["retained-heap"]
           ? "Separate GC-controlled proof: collect before tracing and after action metrics/tracing; not a timing comparison."
@@ -764,6 +785,7 @@ try {
             // tsx preserves names in serialized fixture callbacks, as in the cold-load runner.
             await page.addInitScript("globalThis.__name = (fn) => fn");
             await page.addInitScript(() => performance.setResourceTimingBufferSize(2048));
+            await page.addInitScript(installInteractionNavigationPreloadObserver);
             // Random per-load pets can repaint continuously; measure the selected interaction.
             await page.addInitScript(
               ({ key, gatewayUrl }) => {
@@ -816,6 +838,12 @@ try {
           try {
             cdp = await context.newCDPSession(page);
             await cdp.send("Emulation.setCPUThrottlingRate", { rate: cpuThrottle });
+            if (values["function-counts"]) {
+              // Starting after warmup can miss calls in already optimized functions.
+              await cdp.send("Profiler.enable");
+              await cdp.send("Profiler.startPreciseCoverage", { callCount: true, detailed: true });
+              preciseCoverage = true;
+            }
             if (
               nativeVisibility &&
               (scenario.fixture?.boardFrameResources ||
@@ -844,29 +872,32 @@ try {
               owners: [],
             });
             const boardResponse = createProjectionBoardResponses();
+            const defaultRequestHandlers: Record<string, (params: unknown) => unknown> = {
+              ...(scenario.projectionFamily
+                ? {
+                    "board.get": (params: unknown) => {
+                      if (!isRecord(params)) {
+                        throw new Error("Expected board.get parameters");
+                      }
+                      return boardResponse(params);
+                    },
+                  }
+                : {}),
+              "sessions.list": (params: unknown) => {
+                if (!isRecord(params)) {
+                  throw new Error("Expected sessions.list query parameters");
+                }
+                return sessions.list(params).result;
+              },
+            };
             // Keep the same readiness contract with a timeout scaled for intentional throttling.
             const gateway = await installMockGateway(
               page,
               { ...fixture, awaitInitialRoster: false },
               {
                 requestHandlers: {
-                  ...(scenario.projectionFamily
-                    ? {
-                        "board.get": (params: unknown) => {
-                          if (!isRecord(params)) {
-                            throw new Error("Expected board.get parameters");
-                          }
-                          return boardResponse(params);
-                        },
-                      }
-                    : {}),
-                  "sessions.list": (params) => {
-                    if (!isRecord(params)) {
-                      throw new Error("Expected sessions.list query parameters");
-                    }
-                    return sessions.list(params).result;
-                  },
-                  ...scenario.createRequestHandlers?.(),
+                  ...defaultRequestHandlers,
+                  ...scenario.createRequestHandlers?.(defaultRequestHandlers),
                 },
               },
             );
@@ -883,13 +914,14 @@ try {
               await cdp.send("Network.setBypassServiceWorker", { bypass: false });
               await cdp.send("Network.disable");
             }
-            result.measurementClass = scenario.diagnostic
-              ? "diagnostic"
-              : scenario.projectionFamily
-                ? values["projection-counts"]
-                  ? "projection-counter"
-                  : "projection-cpu"
-                : "production-interaction";
+            result.measurementClass =
+              scenario.diagnostic || values["function-counts"] || values["graph-counts"]
+                ? "diagnostic"
+                : scenario.projectionFamily
+                  ? values["projection-counts"]
+                    ? "projection-counter"
+                    : "projection-cpu"
+                  : "production-interaction";
             if (scenario.projectionFamily) {
               result.projectionFixture = await prepareProjectionFixture(
                 page,
@@ -901,6 +933,9 @@ try {
                 await page.waitForFunction(() => window.openclawControlUi !== undefined);
                 await settleSidebarBackgroundWork(page);
               }
+            }
+            if (scenario.route !== "/instance-resource-fixture.html") {
+              result.navigationPreloads = await settleInteractionNavigationPreloads(page);
             }
             // Slow CPUs can still be loading boot modules after the first ready frame.
             await page.waitForLoadState("networkidle");
@@ -1076,12 +1111,28 @@ try {
               return { durations, observer };
             });
             const before = await metrics(cdp);
-            if (scenario.projectionFamily && values["projection-counts"]) {
+            if (values["function-counts"]) {
+              const artifact = `${artifactPrefix}.preparation-function-coverage.json`;
+              await writeFile(
+                path.join(artifactDir, artifact),
+                JSON.stringify(await cdp.send("Profiler.takePreciseCoverage")),
+              );
+              result.functionCoveragePreparationArtifact = artifact;
+            } else if (scenario.projectionFamily && values["projection-counts"]) {
               await cdp.send("Profiler.enable");
               await cdp.send("Profiler.startPreciseCoverage", { callCount: true, detailed: true });
               preciseCoverage = true;
             }
             await page.evaluate(() => performance.mark("interaction:start"));
+            if (values["graph-counts"]) {
+              await page.evaluate((label) => {
+                const graph = Reflect.get(window, "__openclawReactiveGraph");
+                if (!graph) {
+                  throw new Error("--graph-counts requires the explicit reactive graph build");
+                }
+                graph.start(label);
+              }, scenario.id);
+            }
             const start = performance.now();
             result.scenarioEvidence = (await scenario.run(page, gateway)) ?? undefined;
             if (scenario.visibility !== "hidden") {
@@ -1089,13 +1140,28 @@ try {
             }
             result.wallMs = performance.now() - start;
             await page.evaluate(() => performance.mark("interaction:end"));
+            if (values["graph-counts"]) {
+              const graph = await page.evaluate(() =>
+                Reflect.get(window, "__openclawReactiveGraph").stop(),
+              );
+              const artifact = `${artifactPrefix}.reactive-graph.json`;
+              await writeFile(path.join(artifactDir, artifact), JSON.stringify(graph, null, 2));
+              result.reactiveGraphArtifact = artifact;
+            }
             if (preciseCoverage) {
               const coverage = await cdp.send("Profiler.takePreciseCoverage");
               await cdp.send("Profiler.stopPreciseCoverage");
               preciseCoverage = false;
-              const artifact = `${artifactPrefix}.projection-coverage.json`;
-              await writeFile(path.join(artifactDir, artifact), JSON.stringify(coverage));
-              result.projectionCoverageArtifact = artifact;
+              if (values["function-counts"]) {
+                const artifact = `${artifactPrefix}.function-coverage.json`;
+                await writeFile(path.join(artifactDir, artifact), JSON.stringify(coverage));
+                result.functionCoverageArtifact = artifact;
+              }
+              if (scenario.projectionFamily && values["projection-counts"]) {
+                const artifact = `${artifactPrefix}.projection-coverage.json`;
+                await writeFile(path.join(artifactDir, artifact), JSON.stringify(coverage));
+                result.projectionCoverageArtifact = artifact;
+              }
             }
             const after = await metrics(cdp);
             if (processSession && result.rendererProcessMetrics?.before) {
@@ -1507,6 +1573,7 @@ const summary = viewports
             ).map((metric) => [
               metric,
               !diagnostic &&
+              !values["function-counts"] &&
               samples.length &&
               !values["projection-counts"] &&
               samples.every((row) => row[metric] !== undefined)

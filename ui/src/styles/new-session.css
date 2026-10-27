@@ -1018,12 +1018,6 @@ span.new-session-page__select {
    than the other while the chat composer stayed symmetric. */
 .new-session-page__composer .new-session-page__message {
   max-height: calc(10lh + var(--chat-box-inset) + var(--chat-box-inset));
-  scrollbar-width: thin;
-  scrollbar-color: color-mix(in srgb, var(--muted) 42%, transparent) transparent;
-}
-
-.new-session-page__composer .new-session-page__message::-webkit-scrollbar-thumb {
-  background: color-mix(in srgb, var(--muted) 42%, transparent);
 }
 
 .new-session-page__composer::after {
@@ -1366,19 +1360,6 @@ span.new-session-page__select {
 }
 
 @media (max-width: 560px) {
-  .agent-chat__input--mobile-toolbar .new-session-page__start-submit {
-    width: var(--chat-composer-send-size);
-    min-width: var(--chat-composer-send-size);
-    height: var(--chat-composer-send-size);
-    padding: var(--chat-mobile-row-action-padding);
-  }
-
-  .agent-chat__input--mobile-toolbar .new-session-page__start-submit > svg {
-    width: var(--chat-mobile-row-icon-size);
-    height: var(--chat-mobile-row-icon-size);
-    color: inherit;
-  }
-
   .new-session-page .agent-chat__welcome-clawd {
     margin-bottom: 0;
   }

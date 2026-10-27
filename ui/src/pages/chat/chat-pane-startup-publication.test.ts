@@ -7,61 +7,51 @@ import type { ApplicationPlacementStartupStatus } from "../../app/session-placem
 import { flush, waitForSolid } from "../../test-helpers/solid-settle.ts";
 import { createMountedPanes, refreshPane } from "./chat-pane-mounted.test-support.ts";
 
+const session = (key: string): GatewaySessionRow => ({
+  key: `agent:main:${key}`,
+  sessionId: key,
+  agentId: "main",
+  kind: "direct",
+  updatedAt: 1,
+});
+
 it("publishes placement status without admitting another transcript message", async () => {
-  const sessionKey = "agent:main:placement-publication";
-  const mounted = createMountedPanes([
-    {
-      key: sessionKey,
-      sessionId: "placement-session",
-      agentId: "main",
-      kind: "direct",
-      updatedAt: 1,
-    },
-  ]);
+  const row = session("placement-publication");
+  const sessionKey = row.key;
+  const mounted = createMountedPanes([row]);
   let status: ApplicationPlacementStartupStatus | null = null;
   const listeners = new Set<() => void>();
-  Object.assign(mounted.context, {
-    placementStartup: {
-      ...mounted.context.placementStartup,
-      get: () => status,
-      subscribe(listener: () => void) {
-        listeners.add(listener);
-        return () => listeners.delete(listener);
-      },
-    },
+  const publish = (next: ApplicationPlacementStartupStatus | null) => {
+    status = next;
+    listeners.forEach((listener) => listener());
+    flush();
+  };
+  vi.spyOn(mounted.context.placementStartup, "get").mockImplementation(() => status);
+  vi.spyOn(mounted.context.placementStartup, "subscribe").mockImplementation((listener) => {
+    listeners.add(listener);
+    return () => listeners.delete(listener);
   });
   const pane = mounted.mount(sessionKey);
   await refreshPane(pane);
   await waitForSolid(() => expect(pane.querySelector("textarea")).not.toBeNull());
-  expect(pane.state.chatMessages).toEqual([]);
 
-  status = {
+  publish({
     sessionKey,
     phase: "failed",
     startedAt: 1,
     error: "Synthetic placement startup failed",
-  };
-  listeners.forEach((listener) => listener());
-  flush();
+  });
   expect(pane.textContent).toContain("Synthetic placement startup failed");
   expect(pane.state.chatMessages).toEqual([]);
 
-  status = null;
-  listeners.forEach((listener) => listener());
-  flush();
+  publish(null);
   expect(pane.textContent).not.toContain("Synthetic placement startup failed");
 });
 
 it("retires a replayed first prompt already collected into loaded history after its duplicate ACK", async () => {
-  const sessionKey = "agent:main:collected-startup";
+  const row = session("collected-startup");
+  const sessionKey = row.key;
   const messageId = "collected-first-input";
-  const row: GatewaySessionRow = {
-    key: sessionKey,
-    sessionId: "collected-session",
-    agentId: "main",
-    kind: "direct",
-    updatedAt: 1,
-  };
   const aggregate = {
     role: "user",
     content: [{ type: "text", text: "Collected initial task and follow-up" }],
@@ -74,7 +64,7 @@ it("retires a replayed first prompt already collected into loaded history after 
   const history = (_method: string, params: unknown) => ({
     messages: [aggregate],
     sessionId: row.sessionId,
-    sessionInfo: row,
+    sessionInfo: { ...row, hasActiveRun: false },
     pendingInputs: { items: [], total: 0 },
     inputReceipts:
       params &&
@@ -85,22 +75,20 @@ it("retires a replayed first prompt already collected into loaded history after 
         ? [{ runId: messageId, state: "consumed", consumedByEventId: "aggregate-input" }]
         : [],
   });
+  const sent = createDeferred<{ runId: string; status: string }>();
+  const sending = createDeferred();
   const mounted = createMountedPanes([row], "main", undefined, {
     "chat.history": history,
     "chat.startup": history,
+    "chat.send": () => {
+      sending.resolve();
+      return sent.promise;
+    },
   });
   const pane = mounted.mount(sessionKey);
   await refreshPane(pane);
   expect(pane.state.chatMessages).toEqual([aggregate]);
   const client = mounted.context.gateway.snapshot.client!;
-  const sent = createDeferred<{ runId: string; status: string }>();
-  const request = client.request.bind(client);
-  const requestSpy = vi
-    .spyOn(client, "request")
-    .mockImplementation(
-      async <T>(...args: Parameters<typeof client.request>): Promise<T> =>
-        (await (args[0] === "chat.send" ? sent.promise : request(...args))) as T,
-    );
   mounted.context.placementStartup.start({
     recovery: {
       sessionKey,
@@ -117,17 +105,12 @@ it("retires a replayed first prompt already collected into loaded history after 
     mode: "recover",
     createdAt: 1,
   });
-  await vi.waitFor(() =>
-    expect(requestSpy).toHaveBeenCalledWith(
-      "chat.send",
-      expect.objectContaining({ idempotencyKey: messageId }),
-      expect.anything(),
-    ),
-  );
+  await sending.promise;
   sent.resolve({ runId: messageId, status: "ok" });
   await waitForSolid(() => {
     expect(mounted.context.placementStartup.get(sessionKey)).toBeNull();
     expect(pane.state.chatMessages).toEqual([aggregate]);
     expect(mounted.context.chatSubmissions.readInitial(sessionKey, client)?.pending).toBe(false);
+    expect(pane.state.chatRunId).toBeNull();
   });
 });

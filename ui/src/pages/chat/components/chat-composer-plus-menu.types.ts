@@ -2,7 +2,12 @@ import type { JSX } from "@solidjs/web";
 import type { ToolsEffectiveResult } from "../../../api/types.ts";
 import type { ApplicationNavigationOptions } from "../../../app/context.ts";
 import type { IconName } from "../../../components/solid/icon.tsx";
-import type { MenuEntry, MenuHandle, MenuItem } from "../../../components/solid/menu.tsx";
+import type {
+  MenuControls,
+  MenuEntry,
+  MenuHandle,
+  MenuItem,
+} from "../../../components/solid/menu.tsx";
 import type { McpServerSummary } from "../../../lib/config/mcp-servers.ts";
 import type { SessionToolOverrides } from "../../../lib/sessions/patch.ts";
 import type { ComposerLibraryProps } from "../composer-library-session.ts";
@@ -13,12 +18,13 @@ export type ChatComposerPlusMenuView =
   | "root"
   | "skills"
   | "connectors"
-  | `tools:${string}`
+  | "libraries"
   | `library:${string}`;
 
 export type ChatComposerMenuSkill = {
   key: string;
   name: string;
+  emoji?: string;
   enabled: boolean;
   baseEnabled: boolean;
   missingDeps?: boolean;
@@ -84,5 +90,6 @@ export type ChatComposerPlusMenuBodyProps = {
   view: ChatComposerPlusMenuView;
   readMenu: () => MenuHandle;
   onReady: (handlers: ChatComposerPlusMenuHandlers | undefined) => void;
+  controls: MenuControls;
   renderItems: (items: () => readonly MenuEntry[]) => JSX.Element;
 };

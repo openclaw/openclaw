@@ -24,8 +24,8 @@ import type { RealtimeVoiceBridgeSession } from "../../../talk/session-runtime.j
 import type { TalkEvent, TalkEventInput } from "../../../talk/talk-session-controller.js";
 import { abortChatRunById } from "../../chat-abort.js";
 import type { GatewayRequestContext } from "../../server-methods/shared-types.js";
-import type { TalkAgentConsultAuthority } from "../client-gateway-control.js";
 import type { TalkClientRunAuthority } from "../client-run-authority.js";
+import type { TalkAgentConsultAuthority } from "../client-tool-authority.js";
 import type { PreparedTalkSessionTarget } from "../session-target.types.js";
 import type { RelayToolCallLedger } from "./tool-call-ledger.js";
 

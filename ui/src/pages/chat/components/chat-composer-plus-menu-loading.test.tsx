@@ -118,7 +118,7 @@ it.each(["keyboard", "last", "pointer", "external", "closed", "reopened"] as con
         expect(document.activeElement).toBe(
           mode === "last"
             ? view.item("Updated toggle")
-            : view.getByRole("menuitem", { name: "Take photo", hidden: true }),
+            : view.getByRole("menuitem", { name: "Camera", hidden: true }),
         ),
       );
       view.item("Updated toggle").click();

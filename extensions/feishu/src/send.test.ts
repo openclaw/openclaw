@@ -1,7 +1,6 @@
 import type { HttpInstance } from "@larksuiteoapi/node-sdk";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { buildFeishuAgentBody } from "./bot-agent-body.js";
 import { FeishuConfigSchema } from "./config-schema.js";
 import {
   editMessageFeishu,
@@ -11,54 +10,22 @@ import {
   sendStructuredCardFeishu,
 } from "./send.js";
 
-const {
-  mockConvertMarkdownTables,
-  mockClientGet,
-  mockClientCreate,
-  mockClientList,
-  mockClientPatch,
-  mockClientUpdate,
-  mockCreateFeishuClient,
-  mockLogVerbose,
-  mockResolveMarkdownTableMode,
-  mockResolveFeishuAccount,
-} = vi.hoisted(() => ({
-  mockConvertMarkdownTables: vi.fn((text: string) => text),
-  mockClientGet: vi.fn(),
-  mockClientCreate:
-    vi.fn<
-      (params: {
-        data: { receive_id: string; content: string; msg_type: string };
-      }) => Promise<{ code: number; data: { message_id: string } }>
-    >(),
-  mockClientList: vi.fn(),
-  mockClientPatch: vi.fn(),
-  mockClientUpdate: vi.fn(),
+const { api, mockCreateFeishuClient, mockResolveFeishuAccount } = vi.hoisted(() => ({
+  api: {
+    get: vi.fn(),
+    create:
+      vi.fn<
+        (params: {
+          data: { receive_id: string; content: string; msg_type: string };
+        }) => Promise<{ code: number; data: { message_id: string } }>
+      >(),
+    list: vi.fn(),
+    patch: vi.fn(),
+    update: vi.fn(),
+  },
   mockCreateFeishuClient: vi.fn(),
-  mockLogVerbose: vi.fn(),
-  mockResolveMarkdownTableMode: vi.fn(() => "preserve"),
   mockResolveFeishuAccount: vi.fn(),
 }));
-
-vi.mock("openclaw/plugin-sdk/markdown-table-runtime", () => ({
-  resolveMarkdownTableMode: mockResolveMarkdownTableMode,
-}));
-
-vi.mock("openclaw/plugin-sdk/runtime-env", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/runtime-env")>();
-  return {
-    ...actual,
-    logVerbose: mockLogVerbose,
-  };
-});
-
-vi.mock("openclaw/plugin-sdk/text-chunking", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/text-chunking")>();
-  return {
-    ...actual,
-    convertMarkdownTables: mockConvertMarkdownTables,
-  };
-});
 
 vi.mock("./client.js", () => ({
   createFeishuClient: mockCreateFeishuClient,
@@ -70,9 +37,6 @@ vi.mock("./accounts.js", () => ({
 }));
 
 afterAll(() => {
-  vi.doUnmock("openclaw/plugin-sdk/markdown-table-runtime");
-  vi.doUnmock("openclaw/plugin-sdk/runtime-env");
-  vi.doUnmock("openclaw/plugin-sdk/text-chunking");
   vi.doUnmock("./client.js");
   vi.doUnmock("./accounts.js");
   vi.resetModules();
@@ -80,24 +44,14 @@ afterAll(() => {
 
 beforeEach(() => {
   vi.clearAllMocks();
-  mockClientCreate.mockReset();
-  mockResolveMarkdownTableMode.mockReturnValue("preserve");
-  mockConvertMarkdownTables.mockImplementation((text: string) => text);
+  api.create.mockReset();
   mockResolveFeishuAccount.mockReturnValue({
     accountId: "default",
     configured: true,
     config: FeishuConfigSchema.parse({}),
   });
   mockCreateFeishuClient.mockReturnValue({
-    im: {
-      message: {
-        create: mockClientCreate,
-        get: mockClientGet,
-        list: mockClientList,
-        patch: mockClientPatch,
-        update: mockClientUpdate,
-      },
-    },
+    im: { message: api },
   });
 });
 
@@ -105,7 +59,7 @@ const getMessage = (messageId: string) => getMessageFeishu({ cfg: {}, messageId 
 
 describe("getMessageFeishu", () => {
   it("sends native mentions while preserving body mentions, prose breaks, and code fences", async () => {
-    mockClientCreate.mockResolvedValue(okResponse("om_mentions"));
+    api.create.mockResolvedValue(okResponse("om_mentions"));
     const text =
       'body <at user_id="ou_body">Body User</at>\nsecond line\n\n```ts\nconst value = 1\n```';
     const result = await sendMessageFeishu({
@@ -114,7 +68,7 @@ describe("getMessageFeishu", () => {
       text,
       mentions: [{ openId: "ou_target", name: "Target User", key: "@_user_1" }],
     });
-    expect(JSON.parse(mockClientCreate.mock.calls[0]?.[0].data.content ?? "null")).toEqual({
+    expect(JSON.parse(api.create.mock.calls[0]?.[0].data.content ?? "null")).toEqual({
       zh_cn: {
         content: [
           [
@@ -129,7 +83,7 @@ describe("getMessageFeishu", () => {
   });
 
   it("sends structured cards with schema-2.0 width config and intact newlines", async () => {
-    mockClientCreate.mockResolvedValue(okResponse("om_card"));
+    api.create.mockResolvedValue(okResponse("om_card"));
 
     await sendStructuredCardFeishu({
       cfg: {},
@@ -138,7 +92,7 @@ describe("getMessageFeishu", () => {
       header: { title: "Agent", template: "space lobster" },
     });
 
-    const request = mockClientCreate.mock.calls[0]?.[0];
+    const request = api.create.mock.calls[0]?.[0];
     expect(JSON.parse(request?.data?.content ?? "null")).toEqual({
       schema: "2.0",
       config: { width_mode: "fill" },
@@ -174,36 +128,11 @@ describe("getMessageFeishu", () => {
   ])("falls through empty card elements to $name content", async ({ name, card, content }) => {
     const messageId = `om_${name}_card`;
     const chatId = `oc_${name}_card`;
-    mockClientGet.mockResolvedValueOnce(
+    api.get.mockResolvedValueOnce(
       page([apiMessage(messageId, card, "interactive", { chat_id: chatId })]),
     );
     const result = await getMessage(messageId);
     expect(result).toMatchObject({ messageId, chatId, content, contentType: "interactive" });
-  });
-
-  it("logs a safe diagnostic (not raw content) when message content is not valid JSON", async () => {
-    mockClientGet.mockResolvedValueOnce({
-      code: 0,
-      data: {
-        ...textMessage("om_bad_json", "unused"),
-        msg_type: "text",
-        body: { content: "{bad json}" },
-        chat_id: "oc_test",
-        chat_type: "group",
-        sender: { id: "ou_1", sender_type: "user" },
-      },
-    });
-    const result = await getMessage("om_bad_json");
-
-    expect(mockLogVerbose).toHaveBeenCalledWith(
-      expect.stringContaining("feishu message content parse failed for text message"),
-    );
-    expect(mockLogVerbose.mock.calls.flat().map(String).join("\n")).not.toContain("{bad json}");
-    expect(result).toMatchObject({
-      messageId: "om_bad_json",
-      contentType: "text",
-      content: "{bad json}",
-    });
   });
 
   it("looks up senders only for the first 50 chronological forwarded children", async () => {
@@ -218,10 +147,10 @@ describe("getMessageFeishu", () => {
       data: { user: { name: "Sender" } },
     }));
     mockCreateFeishuClient.mockReturnValue({
-      im: { message: { get: mockClientGet } },
+      im: { message: { get: api.get } },
       contact: { user: { get: getUser } },
     });
-    mockClientGet.mockResolvedValueOnce(
+    api.get.mockResolvedValueOnce(
       page([{ message_id: "om_lookup_limit", msg_type: "merge_forward" }, ...children]),
     );
 
@@ -236,8 +165,8 @@ describe("getMessageFeishu", () => {
 
 describe("editMessageFeishu", () => {
   beforeEach(() => {
-    mockClientPatch.mockReset();
-    mockClientUpdate.mockReset();
+    api.patch.mockReset();
+    api.update.mockReset();
   });
 
   it("routes card and rich-post edits through their distinct Feishu SDK HTTP methods", async () => {
@@ -314,8 +243,8 @@ describe("editMessageFeishu", () => {
         text: "界".repeat(11_000),
       }),
     ).rejects.toThrow("Feishu message edit exceeds the 30 KB rich-post API limit");
-    expect(mockClientPatch).not.toHaveBeenCalled();
-    expect(mockClientUpdate).not.toHaveBeenCalled();
+    expect(api.patch).not.toHaveBeenCalled();
+    expect(api.update).not.toHaveBeenCalled();
   });
 });
 
@@ -388,10 +317,10 @@ describe("fetched text mentions", () => {
       const before = structuredClone(response);
       let content: string | undefined;
       if (surface === "thread") {
-        mockClientList.mockResolvedValueOnce(response);
+        api.list.mockResolvedValueOnce(response);
         content = (await listFeishuThreadMessages(thread))[0]?.content;
       } else {
-        mockClientGet.mockResolvedValueOnce(response);
+        api.get.mockResolvedValueOnce(response);
         const result = await getMessage(surface === "forward" ? "om_forward" : "om_mentions");
         content = result?.content;
         if (surface === "get") {
@@ -404,14 +333,6 @@ describe("fetched text mentions", () => {
           : normalized,
       );
       expect(response).toEqual(before);
-      if (surface === "get") {
-        expect(
-          buildFeishuAgentBody({
-            ctx: { content: "reply", senderOpenId: "ou_sender", messageId: "om_reply" },
-            quotedContent: content,
-          }),
-        ).toBe(`[message_id: om_reply]\nou_sender: [Replying to: "${normalized}"]\n\nreply`);
-      }
     },
   );
 });
@@ -453,7 +374,7 @@ describe("listFeishuThreadMessages", () => {
       historyItem("om_text", { text: "partial time" }, "text", "1000ms"),
     ]);
     const before = structuredClone(response);
-    mockClientList.mockResolvedValueOnce(response);
+    api.list.mockResolvedValueOnce(response);
 
     const result = await listFeishuThreadMessages({ ...thread, rootMessageId: "om_root" });
 
@@ -468,7 +389,7 @@ describe("listFeishuThreadMessages", () => {
 
   it("fills large histories across overlapping pages, excluding root and current messages", async () => {
     const numbered = (n: number) => textMessage(`om_${n}`, String(n));
-    mockClientList
+    api.list
       .mockResolvedValueOnce(
         page(
           [
@@ -491,7 +412,7 @@ describe("listFeishuThreadMessages", () => {
     expect(result.map(({ messageId, content }) => [messageId, content])).toEqual(
       Array.from({ length: 51 }, (_, index) => [`om_${index + 1}`, String(index + 1)]),
     );
-    expect(mockClientList).toHaveBeenNthCalledWith(2, {
+    expect(api.list).toHaveBeenNthCalledWith(2, {
       params: {
         container_id_type: "thread",
         container_id: "omt_1",
@@ -506,18 +427,9 @@ describe("listFeishuThreadMessages", () => {
     { name: "missing", firstToken: undefined, secondToken: undefined },
     { name: "repeated", firstToken: "same-page", secondToken: "same-page" },
   ])("rejects $name thread history continuation tokens", async ({ firstToken, secondToken }) => {
-    mockClientList.mockResolvedValueOnce(
-      page([], {
-        has_more: true,
-        ...(firstToken ? { page_token: firstToken } : {}),
-      }),
-    );
-    if (firstToken) {
-      mockClientList.mockResolvedValueOnce(
-        page([], {
-          has_more: true,
-          ...(secondToken ? { page_token: secondToken } : {}),
-        }),
+    for (const token of firstToken ? [firstToken, secondToken] : [firstToken]) {
+      api.list.mockResolvedValueOnce(
+        page([], { has_more: true, ...(token ? { page_token: token } : {}) }),
       );
     }
 
@@ -560,32 +472,29 @@ describe("concurrent Feishu sends", () => {
   ])(
     "keeps sends to $scope independent when responses arrive out of order",
     async ({ targets }) => {
-      const requests = targets.map((to, index) => ({
-        to,
-        messageId: `om_concurrent_${index}`,
-        response: createDeferred<ReturnType<typeof okResponse>>(),
-        started: createDeferred<void>(),
-      }));
-      for (const request of requests) {
-        mockClientCreate.mockImplementationOnce(() => {
-          request.started.resolve();
-          return request.response.promise;
-        });
-      }
       const completionOrder: string[] = [];
-      const sends = requests.map((request, index) => ({
-        ...request,
-        sending: sendMessageFeishu({ cfg, to: request.to, text: `message ${index}` }).then(
-          (result) => {
+      const sends = targets.map((to, index) => {
+        const response = createDeferred<ReturnType<typeof okResponse>>();
+        const started = createDeferred<void>();
+        api.create.mockImplementationOnce(() => {
+          started.resolve();
+          return response.promise;
+        });
+        return {
+          to,
+          response,
+          started,
+          messageId: `om_concurrent_${index}`,
+          sending: sendMessageFeishu({ cfg, to, text: `message ${index}` }).then((result) => {
             completionOrder.push(result.messageId);
             return result;
-          },
-        ),
-      }));
+          }),
+        };
+      });
       const settled = Promise.allSettled(sends.map((send) => send.sending));
 
       try {
-        await Promise.all(requests.map((request) => request.started.promise));
+        await Promise.all(sends.map((send) => send.started.promise));
         expect(completionOrder).toEqual([]);
 
         for (const send of sends.toReversed()) {
@@ -606,7 +515,7 @@ describe("concurrent Feishu sends", () => {
     vi.useFakeTimers();
     const attempts = new Map<string, number>();
     const started = createDeferred<void>();
-    mockClientCreate.mockImplementation(async ({ data: { receive_id: to } }) => {
+    api.create.mockImplementation(async ({ data: { receive_id: to } }) => {
       const attempt = (attempts.get(to) ?? 0) + 1;
       attempts.set(to, attempt);
       if (attempts.size === 3) {

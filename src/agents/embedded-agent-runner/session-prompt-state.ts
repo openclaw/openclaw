@@ -37,6 +37,7 @@ type EmbeddedSessionPromptState = {
   systemPrompt?: SystemPromptSeries;
   pendingSystemPrompt?: SystemPromptSeries;
   systemPromptRouteKey?: string;
+  historyBoundary?: { count: number; id: string | null };
   toolSurface?: ToolSurface;
   pendingToolSurface?: ToolSurface;
   removedRuntimeContextKeys?: Set<string>;
@@ -121,6 +122,26 @@ function describeTool(tool: AnyAgentTool): ToolDefinition {
   return { name: tool.name, description: tool.description, parameters: tool.parameters };
 }
 
+function resolvePromptHistoryId(params: {
+  state: EmbeddedSessionPromptState;
+  entries: SessionEntry[];
+  historyBoundaryCount?: number;
+}): string | null {
+  // Bounded reloads can omit a compaction's payload without changing history.
+  // The manager's boundary count, not its visible window, invalidates this run's fact.
+  const previous = params.state.historyBoundary;
+  if (previous && previous.count === params.historyBoundaryCount) {
+    return previous.id;
+  }
+  const id =
+    params.entries.findLast((entry) => entry.type === "compaction" || entry.type === "reset")?.id ??
+    null;
+  if (params.historyBoundaryCount !== undefined) {
+    params.state.historyBoundary = { count: params.historyBoundaryCount, id };
+  }
+  return id;
+}
+
 function sameToolParameters(left: unknown, right: unknown): boolean {
   if (left === right) {
     return true;
@@ -144,11 +165,10 @@ export function prepareSessionToolSurface(params: {
   routeKey: string;
   toolPolicy: string;
   entries: SessionEntry[];
+  historyBoundaryCount?: number;
   tools: AnyAgentTool[];
 }): AnyAgentTool[] {
-  const historyId =
-    params.entries.findLast((entry) => entry.type === "compaction" || entry.type === "reset")?.id ??
-    null;
+  const historyId = resolvePromptHistoryId(params);
   const restored = (): ToolSurface | undefined => {
     const markerIndex = params.entries.findLastIndex(
       (entry) => entry.type === "custom" && entry.customType === "openclaw.system-prompt",
@@ -222,17 +242,18 @@ export function beginSessionSystemPrompt(params: {
   state: EmbeddedSessionPromptState;
   routeKey: string;
   enabled: boolean;
-  entries: SessionEntry[];
+  getEntries: () => SessionEntry[];
 }): boolean {
   params.state.pendingSystemPrompt = undefined;
+  params.state.historyBoundary = undefined;
   if (params.enabled) {
     return false;
   }
   params.state.systemPrompt = undefined;
   params.state.systemPromptRouteKey = params.routeKey;
-  const previous = params.entries.findLast(
-    (entry) => entry.type === "custom" && entry.customType === "openclaw.system-prompt",
-  );
+  const previous = params
+    .getEntries()
+    .findLast((entry) => entry.type === "custom" && entry.customType === "openclaw.system-prompt");
   return (
     previous?.type === "custom" &&
     isRecord(previous.data) &&
@@ -273,12 +294,11 @@ export function prepareSessionSystemPrompt(params: {
   routeKey: string;
   systemPrompt: string;
   entries: SessionEntry[];
+  historyBoundaryCount?: number;
 }) {
   const { permissionNotice, systemPrompt } = extractAttemptPermissionNotice(params.systemPrompt);
   const renderedPrefix = shareSystemPromptPrefix(systemPrompt);
-  const historyId =
-    params.entries.findLast((entry) => entry.type === "compaction" || entry.type === "reset")?.id ??
-    null;
+  const historyId = resolvePromptHistoryId(params);
   const markerIndex = params.entries.findLastIndex(
     (entry) => entry.type === "custom" && entry.customType === "openclaw.system-prompt",
   );

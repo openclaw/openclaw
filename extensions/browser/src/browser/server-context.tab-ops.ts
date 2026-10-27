@@ -130,26 +130,6 @@ async function readProfileTabLastUsedAt(profileName: string): Promise<Map<string
   return lastUsedByTarget;
 }
 
-/**
- * Orders eviction candidates for the managed tab cap. Chrome reports CDP
- * targets most-recently-activated first, so raw /json/list order is exactly
- * backwards for cleanup: slicing from the front closes the tabs other sessions
- * opened seconds ago while long-idle tabs survive. Untracked tabs (no recorded
- * session activity) evict first in reverse CDP order; tracked tabs follow in
- * ascending last-use order.
- */
-function orderManagedTabEvictionCandidates(
-  candidates: readonly BrowserTab[],
-  lastUsedByTarget: ReadonlyMap<string, number>,
-): BrowserTab[] {
-  return candidates
-    .toReversed()
-    .toSorted(
-      (left, right) =>
-        (lastUsedByTarget.get(left.targetId) ?? 0) - (lastUsedByTarget.get(right.targetId) ?? 0),
-    );
-}
-
 export function createProfileTabOps({ profile, state, runtime }: TabOpsDeps): ProfileTabOps {
   const cdpHttpBase = normalizeCdpHttpBaseForJsonEndpoints(profile.cdpUrl);
   const capabilities = getBrowserProfileCapabilities(profile);
@@ -311,7 +291,20 @@ export function createProfileTabOps({ profile, state, runtime }: TabOpsDeps): Pr
     );
     const excessCount = pageTabs.length - MANAGED_BROWSER_PAGE_TAB_LIMIT;
     const lastUsedByTarget = await readProfileTabLastUsedAt(profile.name);
-    const evictionOrder = orderManagedTabEvictionCandidates(candidates, lastUsedByTarget);
+    /**
+     * Orders eviction candidates for the managed tab cap. Chrome reports CDP
+     * targets most-recently-activated first, so raw /json/list order is exactly
+     * backwards for cleanup: slicing from the front closes the tabs other sessions
+     * opened seconds ago while long-idle tabs survive. Untracked tabs (no recorded
+     * session activity) evict first in reverse CDP order; tracked tabs follow in
+     * ascending last-use order.
+     */
+    const evictionOrder = candidates
+      .toReversed()
+      .toSorted(
+        (left, right) =>
+          (lastUsedByTarget.get(left.targetId) ?? 0) - (lastUsedByTarget.get(right.targetId) ?? 0),
+      );
     for (const tab of evictionOrder.slice(0, excessCount)) {
       options?.signal?.throwIfAborted();
       await dispatchBrowserTabClose(

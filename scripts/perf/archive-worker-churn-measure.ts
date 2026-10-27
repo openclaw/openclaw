@@ -263,7 +263,7 @@ try {
     storePath: database.path,
     archive: { ...archive, archive_blob: null },
   });
-  const records = codec.decodeSessionColdRecords(bytes, archive);
+  const records = Array.from(codec.decodeSessionColdRecords(bytes, archive));
   assert.deepEqual(
     records
       .filter((record) => record.kind === "event")

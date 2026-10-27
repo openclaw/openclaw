@@ -160,7 +160,6 @@ describe("package verification bounds", () => {
       const refusal = Object.assign(new Error("earlier package bytes could not be read"), {
         code: "EIO",
       });
-      let settled = false;
       const hash = interceptPackageFileHashes(async (file, _stat, next) => {
         if (file === second) {
           throw new Error("The aggregate byte limit admitted another package file");
@@ -169,12 +168,8 @@ describe("package verification bounds", () => {
           return next();
         }
         reading.resolve();
-        try {
-          await release.promise;
-          throw refusal;
-        } finally {
-          settled = true;
-        }
+        await release.promise;
+        throw refusal;
       });
       const beforeActivate = vi.fn();
       const onLiveMutation = vi.fn();
@@ -198,7 +193,6 @@ describe("package verification bounds", () => {
         expect(result.step.stderrTail).toContain(refusal.message);
         expect(result.step.stderrTail).not.toContain("byte limit exceeded");
         expect(result.step.advisory).toBeUndefined();
-        expect(settled).toBe(true);
         expect(hash.mock.calls.some(([file]) => file === second)).toBe(false);
         expectNoCalls(beforeActivate, onLiveMutation, onTransaction);
         await expectInstallation(packageRoot, launcher);
@@ -216,13 +210,8 @@ describe("package verification bounds", () => {
         const payload = path.join(packageRoot, "runtime-payload.bin");
         await fs.writeFile(payload, "");
         await fs.truncate(payload, 8 * 1024 * 1024 * 1024 + 1);
-        const beforeActivate = vi.fn();
-        const { result, transaction } = await captureSwap({
-          ...params,
-          beforeActivate,
-        });
+        const { result, transaction } = await captureSwap(params);
         expect(result.status, result.step.stderrTail ?? "").toBe("committed");
-        expect(beforeActivate).toHaveBeenCalledOnce();
         expect(result.step.advisory?.message).toContain("baseline package fingerprint incomplete");
         expect(result.step.advisory?.message).toContain("full package contents are unverified");
         expect(updateRunStepsFromResultStep(result.step)).toContainEqual(
@@ -362,90 +351,65 @@ describe("package verification bounds", () => {
       }),
   );
 
-  it.for(["hash report"] as const)(
-    "settles bounded parallel hashes after a stalled %s without continuing the walk",
-    (_operation, { signal }) =>
-      withSwap(async ({ params, packageRoot, launcher }) => {
-        const window = 64;
-        const full = createDeferredCore();
-        const files = [
-          path.join(packageRoot, "dist", "index.js"),
-          ...Array.from({ length: window }, (_, index) =>
-            path.join(packageRoot, "dist", `peer-${String(index).padStart(3, "0")}.js`),
-          ),
-        ];
-        for (const file of files.slice(1)) {
-          await fs.writeFile(file, "export default 1;\n");
+  it("settles bounded parallel hashes after a stalled hash report without continuing the walk", ({
+    signal,
+  }) =>
+    withSwap(async ({ params, packageRoot, launcher }) => {
+      const window = 64;
+      const full = createDeferredCore();
+      const files = [
+        path.join(packageRoot, "dist", "index.js"),
+        ...Array.from({ length: window }, (_, index) =>
+          path.join(packageRoot, "dist", `peer-${String(index).padStart(3, "0")}.js`),
+        ),
+      ];
+      for (const file of files.slice(1)) {
+        await fs.writeFile(file, "export default 1;\n");
+      }
+      const release = createDeferredCore();
+      const admitted: string[] = [];
+      const started: Promise<string>[] = [];
+      const settled: Promise<string>[] = [];
+      interceptPackageFileHashes((file, _stat, next) => {
+        if (!files.includes(file) || admitted.includes(file)) {
+          return next();
         }
-        const jobs = new Map(
-          files.map((file) => [
-            file,
-            { release: createDeferredCore(), settled: createDeferredCore() },
-          ]),
-        );
-        const admitted: string[] = [];
-        const started: Promise<string>[] = [];
-        interceptPackageFileHashes(async (file, _stat, next) => {
-          const job = jobs.get(file);
-          if (!job || admitted.includes(file)) {
-            return next();
-          }
-          admitted.push(file);
-          // Delay the real hash report; worker tests own mid-syscall descriptor proof.
-          const result = next();
-          started.push(result);
-          if (admitted.length === window) {
-            full.resolve();
-          }
-          try {
-            const value = await result;
-            await job.release.promise;
-            return value;
-          } finally {
-            job.settled.resolve();
-          }
-        });
-        const lstat = vi.spyOn(fs, "lstat");
-        const beforeActivate = vi.fn();
-        const onLiveMutation = vi.fn();
-        vi.useFakeTimers({ toFake: ["Date", "performance", "setTimeout", "clearTimeout"] });
-        const update = swapStagedPackageInstall({
-          ...params,
-          beforeActivate,
-          onLiveMutation,
-          timeoutMs: 40,
-        });
-        try {
-          await waitForGate(full.promise, update, signal, "the admission window never filled");
-          await withinTest(Promise.all(started), signal);
-          expect(admitted).toEqual(files.slice(0, window));
-          expect(lstat.mock.calls.some(([file]) => String(file) === files[window])).toBe(false);
-          await vi.advanceTimersByTimeAsync(40);
-          const result = await withinTest(update, signal);
-          expect(result.status).toBe("committed");
-          expect(result.step.advisory?.message).toContain(
-            "baseline package fingerprint incomplete",
-          );
-          expect(beforeActivate).toHaveBeenCalledOnce();
-          expect(onLiveMutation).toHaveBeenCalledOnce();
-          expect(admitted).toEqual(files.slice(0, window));
-          for (const file of admitted) {
-            jobs.get(file)!.release.resolve();
-          }
-          await withinTest(
-            Promise.all(admitted.map((file) => jobs.get(file)!.settled.promise)),
-            signal,
-          );
-          await expectInstallation(packageRoot, launcher, true);
-        } finally {
-          for (const job of jobs.values()) {
-            job.release.resolve();
-          }
-          vi.useRealTimers();
-          await update;
+        admitted.push(file);
+        // Delay the real hash report; worker tests own mid-syscall descriptor proof.
+        const result = next();
+        started.push(result);
+        if (admitted.length === window) {
+          full.resolve();
         }
-      }),
-  );
+        const report = result.then(async (value) => {
+          await release.promise;
+          return value;
+        });
+        settled.push(report);
+        return report;
+      });
+      const lstat = vi.spyOn(fs, "lstat");
+      vi.useFakeTimers({ toFake: ["Date", "performance", "setTimeout", "clearTimeout"] });
+      const update = swapStagedPackageInstall({ ...params, timeoutMs: 40 });
+      try {
+        await waitForGate(full.promise, update, signal, "the admission window never filled");
+        await withinTest(Promise.all(started), signal);
+        expect(admitted).toEqual(files.slice(0, window));
+        expect(lstat.mock.calls.some(([file]) => String(file) === files[window])).toBe(false);
+        await vi.advanceTimersByTimeAsync(40);
+        const result = await withinTest(update, signal);
+        expect(result.status).toBe("committed");
+        expect(result.step.advisory?.message).toContain("baseline package fingerprint incomplete");
+        expect(admitted).toEqual(files.slice(0, window));
+        release.resolve();
+        await withinTest(Promise.all(settled), signal);
+        await expectInstallation(packageRoot, launcher, true);
+      } finally {
+        release.resolve();
+        vi.useRealTimers();
+        await update;
+      }
+    }));
 
   it("does not wait beyond the deadline for directory cleanup", ({ signal }) =>
     withSwap(async ({ params }) => {

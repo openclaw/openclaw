@@ -5,6 +5,7 @@ import { selectChatLayoutAction } from "../test-helpers/chat-layout-menu.ts";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { requireRecord, requireString } from "./chat-flow.test-support.ts";
+import { readOutboxQueue } from "./chat-outbox-payloads.test-support.ts";
 import { openChatSidePanelType } from "./chat-side-panel.test-support.ts";
 import { controlUiE2eBuiltModuleRequest } from "./control-ui-built-module.test-support.ts";
 import {
@@ -182,7 +183,7 @@ suite.define(() => {
             ],
           });
           await gateway.emitGatewayEvent("sessions.changed", acceptedSession);
-          await page.locator(".chat-send-status").waitFor({ state: "detached" });
+          await expect.poll(async () => (await readOutboxQueue(page)).length).toBe(0);
           await main.fill("Queued correction");
           await page.getByRole("button", { name: "Queue message", exact: true }).click();
           const row = page.locator(".chat-queue__item", { hasText: "Queued correction" });

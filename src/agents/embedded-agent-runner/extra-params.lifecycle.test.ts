@@ -4,7 +4,7 @@ import { expect, it, vi } from "vitest";
 import { createOpenRouterSystemCacheWrapper } from "../../llm/providers/stream-wrappers/proxy.js";
 import type { Model, SimpleStreamOptions } from "../../llm/types.js";
 import { createAssistantMessageEventStream } from "../../llm/utils/event-stream.js";
-import { makeEmptyPluginMetadataOwners } from "../../plugins/current-plugin-metadata.test-support.js";
+import { makeEmptyPluginMetadataOwners } from "../../plugins/plugin-metadata-empty.test-support.js";
 import {
   attachModelProviderRuntimePluginHandle,
   type ProviderRuntimePluginHandle,

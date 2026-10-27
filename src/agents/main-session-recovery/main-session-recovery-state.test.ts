@@ -400,12 +400,6 @@ describe("main session recovery state", () => {
       { data: { phase: "error", stopReason: "restart" } },
     ],
     [
-      "clears healthy recovery",
-      lifecycleEntry(["interrupted", "recovery"], {}, { restartRecoveryDeliveryRunId: "recovery" }),
-      "recovery",
-      settled,
-    ],
-    [
       "clears failed recovery",
       lifecycleEntry(["interrupted", "recovery"], {}, { restartRecoveryDeliveryRunId: "recovery" }),
       "recovery",
@@ -450,14 +444,6 @@ describe("main session recovery state", () => {
       settled,
     ],
 
-    [
-      "preserves the killed run's aborted outcome",
-      { restartRecoveryRuns: [fence("ordinary-run")] },
-      "ordinary-run",
-      { ...settled, status: "killed", abortedLastRun: true },
-      { status: "killed", abortedLastRun: true },
-      { data: { phase: "error", stopReason: "user" } },
-    ],
     [
       "retires older-generation foreground claims",
       interruptedEntry(

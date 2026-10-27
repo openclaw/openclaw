@@ -8,14 +8,22 @@ import { getCliParentPid } from "../../cli-parent-lifetime.mjs";
 import { getFileLockProcessStartTime, isPidAlive } from "../shared/pid-alive.js";
 import { resolveOpenClawStateDirForDatabasePath } from "../state/openclaw-state-db.paths.js";
 import { readProcessMachineIdentity } from "./current-machine-identity.js";
+import { acquireFileLockSync } from "./file-lock-manager.js";
 import {
   classifyGatewayLockProcessNamespace,
+  describeGatewayLockHolder,
+  LockPayloadSchema,
   GatewayLockNamespaceError,
   parseGatewayLockPayload,
   readGatewayLockProcessNamespace,
   type LockPayload,
 } from "./gateway-lock-payload.js";
 import {
+  ensureOwnerDirectory,
+  type StateOwnerDirectoryIdentity,
+} from "./gateway-state-owner-directory.js";
+import {
+  GatewayStateOwnerContentionError,
   StateDatabaseAccessError,
   StateDatabaseAdmissionPendingError,
   StateDatabaseOfflineMaintenanceError,
@@ -132,4 +140,84 @@ export function defaultPayload(databasePath: string): LockPayload {
     ...(parentStartTime === null ? {} : { parentStartTime }),
     ...(startTime === null ? {} : { startTime }),
   };
+}
+
+export function acquireGatewayStateOwnerFile(
+  databasePath: string,
+  pathname: string,
+  payload: LockPayload,
+  busyTimeoutMs = 0,
+  createdDirectories?: StateOwnerDirectoryIdentity[],
+) {
+  const deadline = performance.now() + busyTimeoutMs;
+  ensureOwnerDirectory(path.dirname(pathname), createdDirectories);
+  const observed: { holder: LockPayload | null } = { holder: null };
+  const stale = ({ payload: value }: { payload: unknown }) => {
+    observed.holder = LockPayloadSchema.safeParse(value).data ?? null;
+    return isGatewayStateOwnerDefinitelyStale(observed.holder, pathname);
+  };
+  if (busyTimeoutMs > 0) {
+    try {
+      const previous = (observed.holder = parseGatewayLockPayload(
+        fs.readFileSync(pathname, "utf8"),
+      ));
+      if (
+        previous &&
+        !isGatewayStateOwnerDefinitelyStale(previous, pathname) &&
+        (previous.pid === process.pid ||
+          ((previous.role ?? "gateway") === "gateway" && isPidAlive(previous.pid)))
+      ) {
+        // A serving Gateway cannot lend schema authority. An unregistered local
+        // holder may need this host to service grants, so it cannot be waited on.
+        throw new GatewayStateOwnerContentionError(databasePath);
+      }
+    } catch (error) {
+      if (extractErrorCode(error) !== "ENOENT") {
+        throw error;
+      }
+    }
+  }
+  for (let retriedMissingParent = false; ;) {
+    try {
+      return acquireFileLockSync(pathname, {
+        lockPath: pathname,
+        retry:
+          busyTimeoutMs > 0
+            ? { factor: 1.25, minTimeout: 10, maxTimeout: 25, randomize: false }
+            : { retries: 0 },
+        timeoutMs: Math.max(0, Math.ceil(deadline - performance.now())),
+        staleMs: Infinity,
+        staleRecovery: "remove-if-unchanged",
+        reentrantOwner: payload.ownerId,
+        payload: () => payload,
+        // Reclamation validates foreign payloads; held custody compares exact bytes and token.
+        shouldReclaim: stale,
+        shouldRemoveStaleLock: stale,
+      });
+    } catch (error) {
+      const code = extractErrorCode(error);
+      if (code === "ENOENT" && !retriedMissingParent) {
+        // Final lease cleanup can remove the parent before exclusive creation.
+        // Recreate it once without extending the original contention budget.
+        retriedMissingParent = true;
+        ensureOwnerDirectory(path.dirname(pathname), createdDirectories);
+        continue;
+      }
+      if (code === "file_lock_timeout" || code === "file_lock_stale") {
+        const { holder } = observed;
+        const holderDetail = describeGatewayLockHolder(
+          holder ?? {},
+          pathname,
+          holder && isPidAlive(holder.pid) ? "live" : "unknown",
+        );
+        throw new GatewayStateOwnerContentionError(
+          databasePath,
+          error,
+          holderDetail,
+          holder ? { pid: holder.pid, role: holder.role } : undefined,
+        );
+      }
+      throw error;
+    }
+  }
 }

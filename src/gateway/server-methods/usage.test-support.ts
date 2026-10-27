@@ -3,7 +3,12 @@ import { expect, vi } from "vitest";
 import { persistSessionTranscriptTurn } from "../../config/sessions/session-accessor.js";
 import type { SessionEntry, SessionSystemPromptReport } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { foldUsageOverviewFamilies } from "../../infra/session-cost-usage-overview-load.js";
 import { createEmptyCostUsageTotals } from "../../infra/session-cost-usage-totals.js";
+import type {
+  loadSessionCostSummariesFromCache,
+  loadSessionUsageOverviewFromCache,
+} from "../../infra/session-cost-usage.js";
 import type { SessionCostSummary } from "../../infra/session-cost-usage.types.js";
 import type { AssistantMessage } from "../../llm/types.js";
 import { gatewayConnect, gatewayProfile } from "../server/client-fixtures.test-support.js";
@@ -76,6 +81,22 @@ export const freshUsageBatch = (summaries: Array<SessionCostSummary | null>) => 
     staleFiles: 0,
   },
 });
+
+/** Serve overview reads from a per-session summary fixture, folding each family's instances. */
+export async function overviewFromSessionSummaries(
+  params: Parameters<typeof loadSessionUsageOverviewFromCache>[0],
+  load: (
+    params: Parameters<typeof loadSessionCostSummariesFromCache>[0],
+  ) => ReturnType<typeof loadSessionCostSummariesFromCache>,
+): ReturnType<typeof loadSessionUsageOverviewFromCache> {
+  const { families, ...rest } = params;
+  const loaded = await load({ ...rest, sessions: families.flat() });
+  return foldUsageOverviewFamilies(families, {
+    ...loaded,
+    staleSessionFiles: [],
+    invalidRows: [],
+  });
+}
 
 export const usageMessage = (
   totalTokens: number,

@@ -1,5 +1,10 @@
 import { describe, expect, it, vi } from "vitest";
 import { createDeferred as deferred } from "../../../test/helpers/promise.js";
+import {
+  cacheChatSessionSnapshot,
+  createChatWidgetLayout,
+  type ChatMessageCache,
+} from "../pages/chat/session-message-cache.ts";
 import { createMcpBridgeFixture } from "../test-helpers/mcp-app-view-bridge.ts";
 import { waitForSolid } from "../test-helpers/solid-settle.ts";
 import { mountView } from "./mcp-app-view.test-support.ts";
@@ -8,11 +13,21 @@ const bridgeMocks = vi.hoisted(() => ({
   instances: [] as Array<Record<string, unknown>>,
   transports: [] as Array<Record<string, unknown>>,
   appModes: undefined as string[] | undefined,
+  earlyHeight: undefined as number | undefined,
 }));
 vi.mock("@modelcontextprotocol/ext-apps/app-bridge", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@modelcontextprotocol/ext-apps/app-bridge")>();
   const { createMcpAppBridgeMocks } = await import("./mcp-app-view-mocks.test-support.ts");
-  return { ...actual, ...createMcpAppBridgeMocks(bridgeMocks) };
+  const mocks = createMcpAppBridgeMocks(bridgeMocks);
+  class AppBridge extends mocks.AppBridge {
+    override async connect() {
+      if (bridgeMocks.earlyHeight !== undefined) {
+        this.onsizechange?.({ height: bridgeMocks.earlyHeight });
+      }
+      await super.connect();
+    }
+  }
+  return { ...actual, ...mocks, AppBridge };
 });
 const mountBridge = createMcpBridgeFixture(bridgeMocks);
 type BridgeFixture = Awaited<ReturnType<typeof mountBridge>>;
@@ -51,6 +66,47 @@ function stubAppResizeObservers() {
 }
 
 describe("mcp-app-view localization", () => {
+  it("reserves early sizes until a real report after app initialization", async () => {
+    const cache: ChatMessageCache = new Map();
+    const host = { assistantAgentId: "main" };
+    const target = { sessionKey: "agent:main:main" };
+    const row = 'row:v1:768:gutter:revision-1:"widget-row"';
+    cacheChatSessionSnapshot(cache, host, target, {
+      messages: [],
+      pagination: { hasMore: false },
+      sessionId: "session-1",
+      widgetHeights: { [row]: 700, "mcp:view-reservation": 600 },
+    });
+    const layout = createChatWidgetLayout()(cache, host, target);
+    const reports: unknown[] = [];
+    bridgeMocks.earlyHeight = 160;
+    try {
+      const { bridge, frame, unmount } = await mountBridge(
+        "view-reservation",
+        true,
+        true,
+        {},
+        {
+          onHeightChange: (height, settled) => {
+            const applied = layout.write("mcp:view-reservation", height, "widget-row", settled);
+            reports.push([height, settled, applied, layout.read(row)]);
+            return applied;
+          },
+        },
+      );
+      expect(reports).toEqual([[160, false, 600, 700]]);
+      expect(frame.style.height).toBe("600px");
+      expect(layout.read(row)).toBe(700);
+      bridge.onsizechange?.({ height: 160 });
+      expect(reports.at(-1)).toEqual([160, true, 160, undefined]);
+      expect(frame.style.height).toBe("160px");
+      expect(layout.read(row)).toBeUndefined();
+      unmount();
+    } finally {
+      bridgeMocks.earlyHeight = undefined;
+    }
+  });
+
   it("pushes live theme and container changes and cleans up their observers", async () => {
     const observers = stubAppResizeObservers();
     const resize = () => observers[0]!.deliver();
@@ -103,7 +159,7 @@ describe("mcp-app-view localization", () => {
     bridge.onsizechange?.({ height: 900 });
     expect(frame.style.height).toBe("900px");
     expect(view.querySelector<HTMLElement>(".mount")?.style.minHeight).toBe("900px");
-    expect(onHeightChange).toHaveBeenLastCalledWith(900);
+    expect(onHeightChange).toHaveBeenLastCalledWith(900, true);
     bridge.onsizechange?.({ height: Number.NaN });
     expect(frame.style.height).toBe("900px");
     expect(onHeightChange).toHaveBeenCalledTimes(1);

@@ -150,7 +150,6 @@ async function prepareOptionsSession(
     assertCurrent();
     return {
       readCurrent: () => {
-        assertCurrent();
         if (!active) {
           throw new GitHubPublicationSessionChangedError();
         }
@@ -218,15 +217,14 @@ export async function prepareGitHubPublicationOptionsRead(
             kind: "eligible",
             action: preparePersonalGitHubAction(options, signal),
           };
-  const preparedSession = await prepareOptionsSession(sessionKey, requestedAgentId, () => {
-    currentClient();
-  });
+  const preparedSession = await prepareOptionsSession(sessionKey, requestedAgentId, currentClient);
   try {
     const readSession = () => {
+      const current = currentClient();
       const loaded = preparedSession.readCurrent();
       const filter = createSessionListEntryFilter({
         cfg: options.context.getRuntimeConfig(),
-        client: currentClient(),
+        client: current,
       });
       return loaded.entry && filter?.(loaded.canonicalKey, loaded.entry) !== false
         ? {
@@ -257,11 +255,14 @@ export async function prepareGitHubPublicationOptionsRead(
     return {
       personal,
       session,
-      release: () => preparedSession.release(),
-      [Symbol.dispose]: () => preparedSession.release(),
+      release: preparedSession.release,
+      [Symbol.dispose]: preparedSession.release,
       sessionScoped: authority.sessionScope === "operator.sessions.read",
       currentSession: readCurrent,
-      currentSessionRead: preparedSession.readCurrent,
+      currentSessionRead: () => {
+        currentClient();
+        return preparedSession.readCurrent();
+      },
       // Callbacks may refresh live facts, but must not replace the response's archive snapshot.
       assertSessionUnchanged: (snapshot: ReturnType<typeof readCurrent>): void => {
         const current = readCurrent();

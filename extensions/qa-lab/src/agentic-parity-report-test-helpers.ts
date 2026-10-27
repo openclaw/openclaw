@@ -1,5 +1,28 @@
 import type { QaParitySuiteSummary } from "./agentic-parity-report.js";
 
+export function makeSingleRuntimeParitySummary(index: number, scenarioId?: string) {
+  const summary = makeRuntimeParitySummary();
+  const scenario = summary.scenarios[index];
+  if (!scenario?.runtimeParity) {
+    throw new Error("runtime parity fixture missing");
+  }
+  const entry = {
+    ...scenario,
+    name: scenarioId ?? scenario.name,
+    runtimeParity: {
+      ...scenario.runtimeParity,
+      scenarioId: scenarioId ?? scenario.runtimeParity.scenarioId,
+    },
+  };
+  const scenarios: [typeof entry] = [entry];
+  return {
+    ...summary,
+    scenarios,
+    counts: { total: 1, passed: 1, failed: 0 },
+    run: { ...summary.run, status: "completed" },
+  };
+}
+
 export function makeRuntimeParitySummary(): QaParitySuiteSummary {
   return {
     scenarios: [

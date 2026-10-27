@@ -31,6 +31,15 @@ isolate). Both values are in MiB and are sampled when the phase finishes, so
 service journals can attribute startup memory growth before readiness. They are
 point-in-time readings, not peak memory measurements.
 
+Before readiness, plugin load details are logged when loading and registration
+take at least 250 ms or start a pooled worker. `workersStarted` counts confirmed
+pool worker starts caused by that plugin's preparation, module evaluation, and registration;
+`workerScripts` breaks those starts down by script. Concurrent recovery work is
+excluded, as are unmanaged workers created directly by plugins. These are starts,
+not live-worker or retained-memory counts; background
+work that starts after the plugin's load detail is emitted is not included.
+`OPENCLAW_GATEWAY_STARTUP_TRACE=1` also logs the faster, worker-free plugin loads.
+
 Environment selection reports imports, config reading, recovery (including its
 config-health database read), guarding, and runtime-path pinning separately.
 These sub-phases appear during ordinary foreground Gateway startup without
@@ -433,6 +442,7 @@ These records do not contain message text or session identifiers. Nested phases
 can overlap; their sum is not the request duration. The
 [Prometheus exporter](/gateway/prometheus) records the same fixed phases for fast
 and slow sends when diagnostics are enabled.
+Message formatting is deferred until the one-second threshold is reached.
 
 Catalog lists additionally expose fixed request-stage observations through the
 existing diagnostic event stream and [Prometheus exporter](/gateway/prometheus#catalog-list-stages).

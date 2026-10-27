@@ -98,6 +98,8 @@ function applyObservedChatSessionRow(
 ): void {
   const selectedAgentId = resolveChatAgentId(state);
   if (!row) {
+    // The row owner retired this target even if a list already projected its successor.
+    retireSessionMutations();
     const result = state.sessionsResult;
     if (!result || state.sessionsResultAgentId !== selectedAgentId) {
       return;
@@ -110,7 +112,6 @@ function applyObservedChatSessionRow(
     if (sessions.length === result.sessions.length) {
       return;
     }
-    retireSessionMutations();
     state.sessionsResult = { ...result, sessions, count: sessions.length };
     return;
   }
@@ -595,7 +596,7 @@ export abstract class ChatPaneSessionObservation extends ChatPaneSessionCreation
               getChatSessionProjection(state).entries.some((entry) => !entry.pending))
           ) {
             // Row rebinding cannot transfer a predecessor's transcript or live work.
-            this.refreshHistory();
+            this.refreshHistory({ replaceSession: true });
             void resumeStoredChatOutboxes(state, event);
             return;
           }
@@ -624,7 +625,7 @@ export abstract class ChatPaneSessionObservation extends ChatPaneSessionCreation
         transcriptSessionId !== observation.sessionId
       ) {
         // A canonical read can admit the successor after its event was fenced.
-        this.refreshHistory();
+        this.refreshHistory({ replaceSession: true });
       }
     }
   }

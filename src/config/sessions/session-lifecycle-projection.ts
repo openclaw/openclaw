@@ -1,6 +1,8 @@
 import { randomUUID } from "node:crypto";
 import { runtimeProcessEntrypoints } from "../../infra/runtime-process-entrypoints.js";
 import { resolveRuntimeWorkerUrl } from "../../infra/runtime-worker-url.js";
+import { sqliteSessionIdWriteScope } from "../../infra/sqlite-database-admission.js";
+import type { RetainedWorkerTransactionAdmission } from "../../infra/sqlite-worker-operation-settlement.js";
 import { emitSessionLifecycleEvent } from "../../sessions/session-lifecycle-events.js";
 import type { OpenClawAgentDatabaseExecution } from "../../state/openclaw-agent-execution-contract.js";
 import { executeOpenClawAgentWorkerPublication } from "../../state/openclaw-agent-worker-store.js";
@@ -13,6 +15,7 @@ import type {
 } from "./session-accessor.sqlite-lifecycle-types.js";
 import { withSessionEntryWorker } from "./session-accessor.sqlite-replacement-worker.js";
 import type { SessionEntryCommitContext } from "./session-accessor.types.js";
+import { readSessionActorEntryFacts } from "./session-actor-replica.js";
 import { runSessionEntryWorkerOperation } from "./session-entry-patch.js";
 import type {
   SessionLifecycleProjectionCommit,
@@ -20,6 +23,7 @@ import type {
 } from "./session-lifecycle-projection.types.js";
 import type { SessionLifecyclePlanningOperations } from "./session-lifecycle-projection.worker.js";
 import { startSessionTranscriptIndexReconcile } from "./session-transcript-reconcile.js";
+import { collectSessionEntryLookupKeys } from "./store-entry.js";
 
 type SessionLifecyclePlanningOwner = {
   database: ReclamationDatabaseOptions;
@@ -67,13 +71,42 @@ export async function projectSessionEntryLifecycleMutationInWorker(
     upserts: readonly SessionEntryLifecycleUpsert[];
   },
 ) {
+  const upsert = params.upserts[0];
+  const sessionKey = upsert?.sessionKey.trim();
+  const identity = params.execution.fileIdentity;
+  const resident =
+    identity &&
+    sessionKey &&
+    !params.input.allowCanonicalRepair &&
+    params.input.removals.length === 0 &&
+    params.upserts.length === 1 &&
+    !upsert?.relatedSessionKeys?.length
+      ? readSessionActorEntryFacts({ database: identity, sessionKey })
+      : undefined;
+  const retained =
+    resident?.snapshots === "full" &&
+    resident.entry &&
+    (upsert?.relatedSessionKeys === undefined || !resident.entry.parentSessionKey)
+      ? resident
+      : undefined;
   const prepared = await runSessionLifecyclePlanningInWorker(params, "prepare", {
     ...params.input,
-    upserts: params.upserts.map(({ sessionKey, relatedSessionKeys }) => ({
-      sessionKey,
+    retainedEntry: retained && {
+      writeToken: retained.writeToken,
+      writeScopes: [
+        ...collectSessionEntryLookupKeys(sessionKey!),
+        ...retained.dependencySessionIds.map(sqliteSessionIdWriteScope),
+      ],
+    },
+    upserts: params.upserts.map(({ sessionKey: key, relatedSessionKeys }) => ({
+      sessionKey: key,
       ...(relatedSessionKeys !== undefined ? { relatedSessionKeys } : {}),
     })),
   });
+  if (prepared.reuseEntry) {
+    // The worker accepted this exact frozen preimage's receipt; builders still own their copies.
+    prepared.store[sessionKey!] = retained!.entry!;
+  }
   const upsertedEntries = await buildProjectedLifecycleUpserts(
     prepared.store,
     prepared.selected,
@@ -101,7 +134,10 @@ export function commitSessionLifecycleProjectionInWorker(params: {
   execution: OpenClawAgentDatabaseExecution;
   assertCurrent: () => void;
   assertPrepared: () => void;
-  assertCandidate: (candidate: SessionLifecycleProjectionCommitted) => void;
+  assertCandidate: (
+    candidate: SessionLifecycleProjectionCommitted,
+    operation: RetainedWorkerTransactionAdmission,
+  ) => void;
   onLifecycleCommitted?: () => void;
   afterCommitted?: (context: SessionEntryCommitContext) => Promise<void>;
 }) {

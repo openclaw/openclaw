@@ -15,6 +15,8 @@ import { truncateSqliteWal } from "./sqlite-wal-checkpoint.js";
 import { readMatchingUpdateDatabaseGeneration } from "./update-database-generations.js";
 
 export type UpdateDoctorMigrationCapture = {
+  /** Captured SQLite sources admitted by this Doctor session. */
+  openedSqlitePaths?: Set<string>;
   expected(pathname: string): string | null | undefined;
   assertCurrent(): void;
   accept(pathname: string, before: string | null, after: string | null): void;
@@ -197,6 +199,7 @@ export function runUpdateSqliteMigration<T>(
   }
   const { capture } = context;
   const expected = capture.expected(pathname);
+  const opened = capture.openedSqlitePaths?.has(pathname);
   if (typeof expected !== "string" && !(expected === null && options?.created)) {
     return operation();
   }
@@ -238,13 +241,14 @@ export function runUpdateSqliteMigration<T>(
         const before =
           expected === null
             ? null
-            : mode === "exclusive"
+            : opened || mode === "exclusive"
               ? readSqliteGeneration(pathname)
               : readMatchingUpdateDatabaseGeneration(pathname, expected);
         assertCurrent();
-        if (before === undefined || (mode === "exclusive" && before !== expected)) {
-          throw new Error("SQLite migration source changed after update capture.");
+        if (before === undefined || (!opened && mode === "exclusive" && before !== expected)) {
+          throw new Error(`SQLite migration source changed after update capture: ${pathname}`);
         }
+        capture.openedSqlitePaths?.add(pathname);
         if (before !== expected) {
           capture.accept(pathname, expected, before);
         }
@@ -276,7 +280,9 @@ export function runUpdateSqliteMigration<T>(
           return result;
         });
       } catch (error) {
-        capture.refuse("SQLite migration publication could not be verified.");
+        capture.refuse(
+          `SQLite migration publication could not be verified: ${formatErrorMessage(error)}`,
+        );
         throw error;
       }
     },
@@ -307,6 +313,7 @@ export function beginUpdateSqliteCompanion(db: DatabaseSync, pathname: string, c
     capture.refuse("Migration companion changed after update capture.");
     throw new Error("Database migration companion no longer matches its capture.");
   }
+  capture.openedSqlitePaths?.add(pathname);
   return {
     complete() {
       assertCurrent();

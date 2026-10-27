@@ -8,12 +8,9 @@ import { resolveSessionAgentId } from "../agents/agent-scope.js";
 import { resolveCliRuntimeCanonicalProvider } from "../agents/cli-backends.js";
 import { resolveContextTokensForModel } from "../agents/context.js";
 import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "../agents/defaults.js";
+import { findModelCatalogEntry, modelSupportsInput } from "../agents/model-catalog-lookup.js";
 import { selectModelCatalogRuntimeEntry } from "../agents/model-catalog-view.js";
-import {
-  findModelCatalogEntry,
-  type ModelCatalogEntry,
-  modelSupportsInput,
-} from "../agents/model-catalog.js";
+import type { ModelCatalogEntry } from "../agents/model-catalog.types.js";
 import { normalizeCatalogRouteBaseUrl } from "../agents/model-compat-catalog.js";
 import { resolveModelContextWindowProfile } from "../agents/model-context-window.js";
 import type { ModelRef } from "../agents/model-ref-shared.js";

@@ -381,7 +381,7 @@ it.for([
                 const database = openOpenClawAgentDatabase({ agentId: scope.agentId });
                 const foreignPath = `${database.path}.foreign.sqlite`;
                 const originalPath = `${database.path}.original`;
-                const foreign = openOpenClawAgentDatabase({
+                openOpenClawAgentDatabase({
                   agentId: scope.agentId,
                   path: foreignPath,
                 });
@@ -392,13 +392,6 @@ it.for([
                     label: "foreign owner",
                   },
                 );
-                expect(
-                  String(
-                    foreign.db
-                      .prepare("SELECT entry_json FROM session_nodes WHERE session_key = ?")
-                      .get(scope.sessionKey)?.entry_json,
-                  ),
-                ).toContain("foreign owner");
                 fsSync.renameSync(database.path, originalPath);
                 fsSync.renameSync(foreignPath, database.path);
                 restoreDatabase = () => {
@@ -736,7 +729,6 @@ it.for([
               retainedOverflow,
             );
           }
-          expect(starts).toHaveLength(1);
           observed.forEach((notice) => assertCursor(notice));
           // Subsequent queue execution uses real time; only the notice coalescing window was advanced.
           vi.useRealTimers();

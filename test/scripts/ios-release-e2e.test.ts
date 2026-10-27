@@ -31,6 +31,7 @@ const nativeMocks = vi.hoisted(() => ({
   install: vi.fn(),
   gateway: vi.fn(),
   rpc: vi.fn(),
+  headroom: vi.fn(),
 }));
 const commandsWith = (argument: string) =>
   nativeMocks.command.mock.calls
@@ -109,6 +110,10 @@ vi.mock("../../scripts/lib/ios-release-e2e-build.js", () => ({
 }));
 vi.mock("../../scripts/lib/ios-release-gateway.js", () => ({
   prepareIOSReleaseGateway: nativeMocks.install,
+}));
+vi.mock("../../scripts/lib/ios-simulator-headroom.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../scripts/lib/ios-simulator-headroom.js")>()),
+  waitForIOSSimulatorHeadroom: nativeMocks.headroom,
 }));
 vi.mock("../helpers/openclaw-test-instance.js", () => ({
   createOpenClawTestInstance: nativeMocks.gateway,
@@ -791,6 +796,8 @@ it.each([
   "build-unjoined",
   "build-exit",
   "boot-timeout",
+  "headroom-timeout",
+  "cancel-during-headroom",
   "gateway-start-failure",
   "setup-status-timeout",
   "setup-status-failure",
@@ -1373,6 +1380,21 @@ it.each([
   const progressSnapshots: string[] = [];
   let rejectedSlowProgress = false;
   const abort = new AbortController();
+  nativeMocks.headroom.mockImplementation(async () => {
+    if (scenario === "cancel-during-headroom") {
+      abort.abort();
+      throw Object.assign(new Error("cancelled"), { code: "ABORT_ERR" });
+    }
+    if (scenario !== "headroom-timeout") {
+      lifecycle.push("headroom-ready");
+    }
+    return {
+      status: scenario === "headroom-timeout" ? "timeout" : "ready",
+      elapsedMs: scenario === "headroom-timeout" ? 300_000 : 10_000,
+      samples: scenario === "headroom-timeout" ? 150 : 5,
+      idlePercent: scenario === "headroom-timeout" ? 0 : 80,
+    };
+  });
   const admission = createNativeDependencies({
     mode: "stock",
     targetSha: "1".repeat(40),
@@ -1729,6 +1751,8 @@ it.each([
     });
     const preparationFailures: Record<string, ReturnType<typeof preparationFailure>> = {
       "boot-timeout": preparationFailure("simulator-ready", "timeout"),
+      "headroom-timeout": preparationFailure("simulator-headroom", "timeout"),
+      "cancel-during-headroom": preparationFailure("simulator-headroom", "cancelled"),
       "gateway-start-failure": preparationFailure("gateway-start", "failed"),
       "setup-status-timeout": preparationFailure("setup-status", "timeout", {
         context: [
@@ -1895,7 +1919,8 @@ it.each([
       ["gateway-start", "boot-ready"],
       ["gateway-start", "setup-status"],
       ["setup-status-ready", "simulator-create"],
-      ["boot-ready", "setup-code"],
+      ["boot-ready", "headroom-ready"],
+      ["headroom-ready", "setup-code"],
       ["setup-code", "live-test"],
       ["gateway-cleanup", "reader-test"],
       ["mock-cleanup", "reader-test"],

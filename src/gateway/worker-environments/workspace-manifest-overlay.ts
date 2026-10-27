@@ -1,4 +1,4 @@
-import { changedPaths, hasPathAncestor, manifestNodes } from "./workspace-manifest-comparison.js";
+import { diffNodePaths, hasPathAncestor, manifestNodes } from "./workspace-manifest-comparison.js";
 import type {
   WorkerWorkspaceManifest,
   WorkerWorkspaceManifestEntry,
@@ -13,7 +13,7 @@ export function applyWorkspaceSourceOverlay(
   const sourceNodes = manifestNodes(source);
   const incomingNodes = manifestNodes(incoming);
   const nodes = manifestNodes(prepared);
-  const changed = changedPaths(source, incoming);
+  const changed = diffNodePaths(sourceNodes, incomingNodes);
   const replaced = new Set(
     [...changed].filter(
       (entryPath) =>

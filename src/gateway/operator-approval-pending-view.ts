@@ -29,7 +29,7 @@ export type PendingApprovalPage = {
   corrupt: { createdAtMs: number; id: string }[];
   cursor?: string;
 };
-export type PendingApprovalSelection = {
+type PendingApprovalSelection = {
   kind?: OperatorApprovalKind;
   sourceSessionKey?: string;
   audienceSessionKey?: string;

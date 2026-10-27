@@ -137,6 +137,7 @@ type PreparedTriggerRuntime = {
   ) => Promise<CronScriptMcpTools | undefined>;
   context: HookContext & { config: OpenClawConfig; agentId: string; sessionKey: string };
   pluginRegistry?: PluginRegistry;
+  scheduledToolPolicy: ScheduledToolPolicyContext | undefined;
 };
 
 type CronScriptInvocation = Parameters<NonNullable<CronServiceDeps["evaluateCronTrigger"]>>[0];
@@ -342,6 +343,7 @@ async function prepareTriggerRuntime(
         acquireMcpTools,
         context,
         ...(pluginRegistry ? { pluginRegistry } : {}),
+        scheduledToolPolicy,
         [Symbol.dispose]: () => sandbox?.[Symbol.dispose]?.(),
       };
     } catch (error) {
@@ -517,7 +519,7 @@ function createCronCodeModeRunner(deps: CronTriggerEvaluatorDeps) {
         jobId: params.job.id,
         deliveryAttemptFence: params.deliveryAttemptFence,
         toolsAllow: request.toolsAllow,
-        scheduledToolPolicy: request.scheduledToolPolicy,
+        scheduledToolPolicy: runtime.scheduledToolPolicy,
         channelRequester: resolveCronAuthenticatedChannelRequester(params.job),
         executionIdentity: params.executionIdentity,
         ingressBoundary: "cron.script",

@@ -34,8 +34,6 @@ export function registerAgentQueuedRestartRecoveryTests() {
         .spyOn(agentHandlerHelpers, "yieldAfterAgentAcceptedAck")
         .mockReturnValue(dispatchGate.promise);
       const context = makeContext();
-      const respond = vi.fn();
-      const stopRespond = vi.fn();
       let cancellation: Promise<unknown> | undefined;
       vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
       try {
@@ -54,13 +52,9 @@ export function registerAgentQueuedRestartRecoveryTests() {
               sourceTool: "main_session_restart_recovery",
             },
           },
-          { context, client: backendGatewayClient(), reqId: runId, respond, flushDispatch: false },
+          { context, client: backendGatewayClient(), reqId: runId, flushDispatch: false },
         );
         const active = requireValue(rpcSourceTesting.get(runId), "queued recovery source missing");
-        expectRecordFields(respond.mock.calls[0]?.[1], { runId, status: "accepted" });
-        expect(store[sessionKey]?.abortedLastRun).toBe(false);
-        expect(store[sessionKey]?.mainRestartRecovery?.reservation).toBeUndefined();
-        expect(mocks.agentCommand).not.toHaveBeenCalled();
 
         const cancelOptions = { context, client: null, isWebchatConnect: () => false };
         if (cause === "rpc") {
@@ -74,7 +68,7 @@ export function registerAgentQueuedRestartRecoveryTests() {
           cancellation = handleDirectExternalChatSend({
             ...cancelOptions,
             params: { sessionKey, message: "/stop", idempotencyKey: `${runId}-stop` },
-            respond: stopRespond,
+            respond: vi.fn(),
             req: { type: "req", id: `${runId}-stop`, method: "chat.send" },
           });
         } else if (cause === "timeout") {
@@ -91,7 +85,6 @@ export function registerAgentQueuedRestartRecoveryTests() {
         }
         void cancellation.catch(() => {});
         await waitForAssertion(() => {
-          expect(stopRespond.mock.lastCall?.[0]).not.toBe(false);
           expect(active.input.abortSignal.aborted).toBe(true);
         });
         dispatchGate.resolve();

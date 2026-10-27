@@ -269,23 +269,6 @@ export function createMSTeamsPollStoreState(params?: {
     }
   };
 
-  const registerPollVote = async (
-    pollId: string,
-    voterId: string,
-    selections: string[],
-    updatedAt: string,
-  ): Promise<void> => {
-    const bucket = selectMSTeamsPollVoteBucket(pollId, voterId);
-    const key = buildMSTeamsPollVoteBucketKey(pollId, bucket);
-    const existing = await voteBucketStore.lookup(key);
-    await voteBucketStore.register(key, {
-      pollId,
-      bucket,
-      votes: { ...existing?.votes, [voterId]: selections },
-      updatedAt,
-    });
-  };
-
   const prunePollStoreToLimit = async (): Promise<void> => {
     let voteRows: Map<string, PluginStateEntry<StoredMSTeamsPollVoteBucket>> | undefined;
     const deletePrunedPollVotes = async (pollId: string) => {
@@ -351,7 +334,17 @@ export function createMSTeamsPollStoreState(params?: {
       const updatedAt = new Date().toISOString();
       poll.updatedAt = updatedAt;
       await pollStore.register(pollKey, poll);
-      await registerPollVote(vote.pollId, vote.voterId, normalized, updatedAt);
+      const pollId = vote.pollId;
+      const voterId = vote.voterId;
+      const bucket = selectMSTeamsPollVoteBucket(pollId, voterId);
+      const key = buildMSTeamsPollVoteBucketKey(pollId, bucket);
+      const existing = await voteBucketStore.lookup(key);
+      await voteBucketStore.register(key, {
+        pollId,
+        bucket,
+        votes: { ...existing?.votes, [voterId]: normalized },
+        updatedAt,
+      });
       await prunePollStoreToLimit();
       return true;
     });

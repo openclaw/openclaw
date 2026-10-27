@@ -40,7 +40,7 @@ import { normalizeResponsesFailedEvent, ResponsesStreamFailure } from "./openai-
 import { encodeTextSignatureV1 } from "./openai-responses-replay-internal.js";
 import { normalizeOpenAIResponsesReasoningReplayItem } from "./openai-responses-replay.js";
 import { countToolCallTrailingWhitespace } from "./openai-responses-stream-errors.js";
-import { adaptResponsesStream } from "./openai-responses-stream-observer-internal.js";
+import { adaptResponsesStreamEvent } from "./openai-responses-stream-observer-internal.js";
 import {
   appendResponsesPendingTextDelta,
   createResponsesOutputTracker,
@@ -61,7 +61,7 @@ import type {
   ResponsesStreamOptions,
   ResponsesStreamOutputMessage,
 } from "./openai-responses-stream-types-internal.js";
-import { transportAbortError } from "./transport-stream-shared.js";
+import { iterateModelStream, transportAbortError } from "./transport-stream-shared.js";
 
 export type { OpenAIResponsesStreamEvent } from "./openai-responses-stream-types-internal.js";
 
@@ -292,7 +292,7 @@ export async function processResponsesStream<TApi extends Api>(
     };
   };
 
-  const guardedStream = adaptResponsesStream(
+  const guardedStream = iterateModelStream(
     withFirstStreamEventTimeout(openaiStream, {
       provider: model.provider,
       api: model.api,
@@ -306,7 +306,8 @@ export async function processResponsesStream<TApi extends Api>(
     options?.signal,
   );
   try {
-    for await (const event of guardedStream) {
+    for await (const rawEvent of guardedStream) {
+      const event = adaptResponsesStreamEvent(rawEvent);
       notifyLlmRequestActivity(
         options?.signal,
         outputs.observeEvent(event, outputSlots),

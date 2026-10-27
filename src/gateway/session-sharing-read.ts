@@ -75,7 +75,6 @@ export function canReceiveSessionEvent(params: {
     );
   }
   const sharing = params.prepared.sharing;
-  const hidesForeignSessions = sharing.sessionCap === "none";
   const authorId =
     event === "session.suggestion" && params.payload && typeof params.payload === "object"
       ? (params.payload as { suggestion?: { author?: { id?: unknown } } }).suggestion?.author?.id // SAFETY: publishSuggestion emits SessionSuggestionEvent; this only reads the optional author id.
@@ -90,7 +89,7 @@ export function canReceiveSessionEvent(params: {
     if (
       target.entry.incognito === true ||
       isIncognitoSessionKey(target.canonicalKey) ||
-      (hidesForeignSessions && !isCreator)
+      !sharing.canReadTarget(target)
     ) {
       return false;
     }
@@ -126,10 +125,18 @@ export function prepareSessionSharing(
       target,
       isMember ?? (prepared && Boolean(identity && prepared.isMember(target, identity.id))),
     );
+  const entryFilter = createSessionListEntryFilter(params, isCreator, { sessionCap });
   return {
+    identity,
     isCreator,
-    sessionCap: prepared?.sessionCap,
-    entryFilter: createSessionListEntryFilter(params, isCreator, { sessionCap }),
+    sessionCap,
+    entryFilter,
+    canReadTarget: (target: SessionSharingTarget) =>
+      entryFilter?.(
+        target.storeKey,
+        target.entry,
+        Boolean(identity && prepared?.isMember(target, identity.id)),
+      ) ?? true,
     roleForTarget,
     authorizeTarget: (target: SessionSharingTarget, role = roleForTarget(target)) =>
       authorizeSessionSharingTarget({ ...params, target }, { ...cap, role }),
@@ -381,30 +388,34 @@ export function prepareProjectedSessionSharing(params: {
       }
       let keys = revision && projectedSharingKeys.get(revision);
       const viewer = client ?? cfg;
-      const facts = revision && [
-        cfg,
-        getRuntimeConfigSnapshotMetadata(),
-        readGatewayAccessRevision(),
-        actor?.kind,
-        actor?.kind === "operator" ? actor.profileId : undefined,
-        identity?.id,
-        client?.authenticatedUserProfile?.profileId,
-        client?.authenticatedUserId,
-        Boolean(client?.authenticatedGitHubIdentitySync),
-        profile,
-        policy,
-        Boolean(cfg.gateway?.roles),
-        client?.connect.scopes !== undefined,
-        ...(client?.connect.scopes ?? []),
-      ];
+      const scopes = client?.connect.scopes;
       const previous = keys?.get(viewer);
+      const facts = previous?.facts;
+      // Compare live authority directly; only misses need a new fact snapshot.
       if (
         facts &&
-        previous &&
-        facts.length === previous.facts.length &&
-        facts.every((fact, i) => fact === previous.facts[i])
+        facts[0] === cfg &&
+        facts[1] === getRuntimeConfigSnapshotMetadata() &&
+        facts[2] === readGatewayAccessRevision() &&
+        facts[3] === actor?.kind &&
+        facts[4] === (actor?.kind === "operator" ? actor.profileId : undefined) &&
+        facts[5] === identity?.id &&
+        facts[6] === client?.authenticatedUserProfile?.profileId &&
+        facts[7] === client?.authenticatedUserId &&
+        facts[8] === Boolean(client?.authenticatedGitHubIdentitySync) &&
+        facts[9] === profile &&
+        facts[10] === policy &&
+        facts[11] === Boolean(cfg.gateway?.roles) &&
+        facts[12] === (scopes !== undefined) &&
+        facts.length === 13 + (scopes?.length ?? 0)
       ) {
-        return (cacheKey = previous.key);
+        let i = 0;
+        while (i < (scopes?.length ?? 0) && facts[13 + i] === scopes?.[i]) {
+          i++;
+        }
+        if (i === (scopes?.length ?? 0)) {
+          return (cacheKey = previous.key);
+        }
       }
       cacheKey = JSON.stringify([
         actor,
@@ -412,18 +423,35 @@ export function prepareProjectedSessionSharing(params: {
         client?.authenticatedUserProfile?.profileId,
         client?.authenticatedUserId,
         Boolean(client?.authenticatedGitHubIdentitySync),
-        client?.connect.scopes?.toSorted(),
+        scopes?.toSorted(),
         profile?.profileId,
-        profile && [...profile.aliases].toSorted(),
+        // oxlint-disable-next-line unicorn/no-array-sort -- The Set spread is a private array.
+        profile && [...profile.aliases].sort(),
         policy,
         Boolean(cfg.gateway?.roles),
       ]);
-      if (revision && facts) {
+      if (revision) {
+        const next: unknown[] = [
+          cfg,
+          getRuntimeConfigSnapshotMetadata(),
+          readGatewayAccessRevision(),
+          actor?.kind,
+          actor?.kind === "operator" ? actor.profileId : undefined,
+          identity?.id,
+          client?.authenticatedUserProfile?.profileId,
+          client?.authenticatedUserId,
+          Boolean(client?.authenticatedGitHubIdentitySync),
+          profile,
+          policy,
+          Boolean(cfg.gateway?.roles),
+          scopes !== undefined,
+        ];
         if (!keys) {
           keys = new WeakMap();
           projectedSharingKeys.set(revision, keys);
         }
-        keys.set(viewer, { facts, key: cacheKey });
+        // Concatenation retains an exact-sized snapshot instead of push's spare capacity.
+        keys.set(viewer, { facts: scopes?.length ? next.concat(scopes) : next, key: cacheKey });
       }
       return cacheKey;
     },
@@ -431,13 +459,16 @@ export function prepareProjectedSessionSharing(params: {
 }
 
 export function createSessionListEntryFilter(
-  params: Pick<SessionSharingRoleParams, "cfg" | "client">,
+  params: Pick<SessionSharingRoleParams, "cfg" | "client"> & {
+    membership?: ReadonlySet<string>;
+  },
   isCreator?: ReturnType<typeof prepareSessionCreatorProfile>,
   prepared?: { sessionCap: ReturnType<typeof operatorSessionCap> },
 ):
   | ((
       sessionKey: string | undefined,
       entry: Pick<SessionEntry, "createdActor" | "visibility" | "incognito">,
+      isMember?: boolean,
     ) => boolean)
   | undefined {
   const operatorActor = resolveGatewayOperatorRoleActor(params.client);
@@ -451,11 +482,18 @@ export function createSessionListEntryFilter(
   const sessionCap = prepared
     ? prepared.sessionCap
     : params.cfg && operatorSessionCap(params.client, params.cfg);
-  return createProfileSessionEntryFilter({ profileId: identity.id, sessionCap }, isCreator);
+  return createProfileSessionEntryFilter(
+    { profileId: identity.id, sessionCap, membership: params.membership },
+    isCreator,
+  );
 }
 
 export function createProfileSessionEntryFilter(
-  params: { profileId: string; sessionCap?: ReturnType<typeof operatorSessionCap> },
+  params: {
+    profileId: string;
+    sessionCap?: ReturnType<typeof operatorSessionCap>;
+    membership?: ReadonlySet<string>;
+  },
   isCreator?: ReturnType<typeof prepareSessionCreatorProfile>,
 ) {
   // Unprepared filters (notably preview) may survive yields and must read current aliases.
@@ -463,9 +501,13 @@ export function createProfileSessionEntryFilter(
   return (
     sessionKey: string | undefined,
     entry: Pick<SessionEntry, "createdActor" | "visibility" | "incognito">,
+    isMember = params.membership?.has(params.profileId),
   ) =>
     entry.incognito !== true &&
     !isIncognitoSessionKey(sessionKey) &&
     (creatorMatches(entry.createdActor) ||
-      (params.sessionCap !== "none" && resolveSessionVisibility(entry) !== "draft"));
+      (params.sessionCap !== "none" &&
+        // Projection callbacks may pass metadata as the third argument; only true grants membership.
+        (params.sessionCap !== "invited" || isMember === true) &&
+        resolveSessionVisibility(entry) !== "draft"));
 }

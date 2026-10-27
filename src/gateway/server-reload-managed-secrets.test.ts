@@ -319,6 +319,53 @@ describe("managed reload authored source", () => {
     await harness.reloader.stop();
   });
 
+  it("settles an unchanged activation write whose secrets are still unresolved", async () => {
+    // Setup recovery restores the running config; its write carries authored SecretRefs.
+    const config: OpenClawConfig = {
+      models: {
+        providers: {
+          fixture: {
+            baseUrl: "https://fixture.example.invalid/v1",
+            apiKey: { source: "env", provider: "default", id: "RELOAD_KEY" },
+            models: [],
+          },
+        },
+      },
+    };
+    const prepareSnapshot = (next: OpenClawConfig) =>
+      prepare(next, { RELOAD_KEY: "resolved-fixture-key" });
+    activateSecretsRuntimeSnapshotWithSource(await prepareSnapshot(config), config);
+    const handlers = createSecretHandlers(
+      createActivator({
+        prepareRuntimeSecretsSnapshot: ({ config: next }) => prepareSnapshot(next),
+      }),
+      prepareSnapshot,
+    );
+    vi.spyOn(skillsDiscovery, "refreshSkillsDiscovery").mockResolvedValue();
+    const { clock, scheduler } = createConfigReloadTestClock();
+    const harness = createReloaderHarness(async () => makeSnapshot({ config, hash: "running" }), {
+      scheduler,
+      initialConfig: config,
+      onHotReload: handlers.onHotReload,
+      onNoopConfigCommit: handlers.onHotReload,
+      onEffectiveConfigUnchanged: handlers.onEffectiveConfigUnchanged,
+    });
+    await harness.reloader.ready;
+    const application = createRuntimeConfigWriteApplication(undefined, { prepare: async () => {} });
+    const settled: string[] = [];
+    void application.result.then((status) => settled.push(status));
+    harness.emitWrite(
+      attachRuntimeConfigWriteApplication(makeWrite(config, "restored"), application),
+    );
+    await clock.advanceBy(0);
+
+    expect(settled).toEqual(["applied"]);
+    expect(getRuntimeConfigSnapshot()?.models?.providers?.fixture?.apiKey).toBe(
+      "resolved-fixture-key",
+    );
+    await harness.reloader.stop();
+  });
+
   it("publishes prepared secrets through a same-source watcher echo", async () => {
     const initialConfig: OpenClawConfig = { gateway: { port: 18789 } };
     const config: OpenClawConfig = { gateway: { port: 18790 } };

@@ -254,6 +254,10 @@ export class ShellOwner
         const next = selectShellRouteState(runtime.router.getState());
         if (!equalShellRouteState(this.routeState, next)) {
           this.shellNavigation.updateRouteState(next);
+        } else if (this.routeState.sessionUrlPending !== next.sessionUrlPending) {
+          // URL eligibility can settle without a route change. Do not replay recovery.
+          this.routeState = next;
+          this.shellNavigation.synchronizeSessionUrl();
         }
       };
       this.cleanups.push(runtime.router.subscribe(updateRoute));

@@ -10,7 +10,7 @@ import {
 } from "../../agents/admitted-run-context.js";
 import { resolveSessionAgentId } from "../../agents/agent-scope.js";
 import {
-  resolveConversationCapabilityProfile,
+  resolveConversationCapabilityPolicy,
   type ResolvedConversationCapabilityProfile,
 } from "../../agents/conversation-capability-profile.js";
 import { resolveConversationToolPolicies } from "../../agents/conversation-tool-policy-pipeline.js";
@@ -81,7 +81,7 @@ export function resolveReplyToolAuthorityContext(
   const execution = snapshot.run;
   const provider = route?.provider ?? execution.provider;
   const model = route?.model ?? execution.model;
-  const capabilityProfile = resolveConversationCapabilityProfile({
+  const policy = resolveConversationCapabilityPolicy({
     requesterOrigin: execution.requesterOrigin,
     config: execution.config,
     sessionId: execution.sessionId,
@@ -116,13 +116,13 @@ export function resolveReplyToolAuthorityContext(
     scheduledToolPolicy: execution.scheduledToolPolicy,
     runtimePluginToolGrant: execution.runtimePluginToolGrant,
   });
-  return { provider, model, capabilityProfile };
+  return { provider, model, capabilityProfile: { policy } };
 }
 
 /** Screen needs browser control; theme remains requester-scoped without it. */
 export function resolveReplyPersonalToolTargets(
   input: ReplyToolAuthorityInput,
-  preparedProfile: ResolvedConversationCapabilityProfile,
+  preparedProfile: Pick<ResolvedConversationCapabilityProfile, "policy">,
 ) {
   const target = input.run.gatewayUiCommandTarget;
   let policies: ReturnType<typeof resolveConversationToolPolicies> | undefined;

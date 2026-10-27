@@ -99,12 +99,17 @@ suite.define(() => {
     }
   });
 
-  it("recovers an empty group catalog after a transient load failure", async () => {
+  it("recovers an empty group catalog and creates another empty group", async () => {
     const context = await suite.browser.newContext(createControlUiE2eContextOptions());
     const page = await context.newPage();
     const gateway = await installMockGateway(page, {
       deferredMethods: ["sessions.groups.list"],
-      featureMethods: ["chat.metadata", "chat.startup", "sessions.groups.list"],
+      featureMethods: [
+        "chat.metadata",
+        "chat.startup",
+        "sessions.groups.list",
+        "sessions.groups.put",
+      ],
       methodResponses: {
         "sessions.list": sessionsListResponse([]),
       },
@@ -127,9 +132,24 @@ suite.define(() => {
           timeout: 10_000,
         })
         .toBe(2);
-      await page.locator('[data-session-section="category:Recovered group"]').waitFor({
+      const recoveredGroup = page.locator('[data-session-section="category:Recovered group"]');
+      await recoveredGroup.waitFor({ state: "visible" });
+
+      // A header-menu-created group stays visible before any session is saved.
+      await recoveredGroup.locator(".sidebar-recent-sessions__head").hover();
+      await recoveredGroup
+        .getByRole("button", { name: "Group options for Recovered group" })
+        .click();
+      await activateSelfRemovingControl(page.getByRole("menuitem", { name: "New group" }));
+      await submitInputDialog(page, "Second group");
+      await page.locator('[data-session-section="category:Second group"]').waitFor({
         state: "visible",
       });
+      const putRequest = await gateway.waitForRequest("sessions.groups.put");
+      expect(requireRecord(putRequest.params)).toMatchObject({
+        names: ["Recovered group", "Second group"],
+      });
+      await recoveredGroup.waitFor({ state: "visible" });
     } finally {
       await context.close();
     }
@@ -599,7 +619,10 @@ suite.define(() => {
       // Group by "None" flattens the category sections into the plain list. The
       // confirm left the pointer over the dialog rather than the sidebar; the
       // global toolbar remains available without revealing a section action.
-      const filterAndSortButton = page.getByRole("button", { name: "Filter & sort", exact: true });
+      const filterAndSortButton = page.getByRole("button", {
+        name: /^Filter & sort · /,
+        exact: true,
+      });
       await filterAndSortButton.click();
       await openSidebarMenu(page);
       const showAutomationSessions = page.getByRole("switch", {
@@ -847,7 +870,10 @@ suite.define(() => {
       await expect.poll(() => page.locator(".sidebar-recent-session").count()).toBe(11);
 
       const patchCountBeforeFlatDrag = (await gateway.getRequests("sessions.patch")).length;
-      const filterAndSortButton = page.getByRole("button", { name: "Filter & sort", exact: true });
+      const filterAndSortButton = page.getByRole("button", {
+        name: /^Filter & sort · /,
+        exact: true,
+      });
       await filterAndSortButton.click();
       await chooseSidebarMenuOption(page, "Group by", "None");
       await closeSidebarMenu(page);
@@ -856,48 +882,6 @@ suite.define(() => {
         .locator('.sidebar-recent-session[data-session-key="agent:main:session-1"]')
         .dragTo(flatSection);
       expect((await gateway.getRequests("sessions.patch")).length).toBe(patchCountBeforeFlatDrag);
-    } finally {
-      await context.close();
-    }
-  });
-
-  it("keeps a new empty group visible before the first saved session", async () => {
-    const context = await suite.browser.newContext(createControlUiE2eContextOptions());
-    const page = await context.newPage();
-    const gateway = await installMockGateway(page, {
-      methodResponses: {
-        "sessions.list": sessionsListResponse([]),
-      },
-      featureMethods: [
-        "chat.metadata",
-        "chat.startup",
-        "sessions.groups.list",
-        "sessions.groups.put",
-      ],
-      sessionKey: "agent:main:main",
-      // Stored-but-empty catalog groups stay visible as sections/move targets.
-      sessionGroups: ["First group"],
-    });
-
-    try {
-      await page.goto(`${suite.server.baseUrl}chat`);
-      await chooseSidebarMenuOption(page, "Status", "All");
-      await closeSidebarMenu(page);
-      const firstGroup = page.locator('[data-session-section="category:First group"]');
-      await firstGroup.waitFor({ state: "visible" });
-
-      // A header-menu-created group starts empty and still gets a section.
-      await firstGroup.locator(".sidebar-recent-sessions__head").hover();
-      await firstGroup.getByRole("button", { name: "Group options for First group" }).click();
-      await activateSelfRemovingControl(page.getByRole("menuitem", { name: "New group" }));
-      await submitInputDialog(page, "Second group");
-      await page.locator('[data-session-section="category:Second group"]').waitFor({
-        state: "visible",
-      });
-      const putRequest = await gateway.waitForRequest("sessions.groups.put");
-      expect(requireRecord(putRequest.params)).toMatchObject({
-        names: ["First group", "Second group"],
-      });
     } finally {
       await context.close();
     }

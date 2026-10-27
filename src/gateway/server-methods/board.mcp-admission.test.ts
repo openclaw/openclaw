@@ -2,6 +2,7 @@ import { Type } from "typebox";
 import { afterEach, expect, it, vi } from "vitest";
 import { GATEWAY_OWNER_PROFILE_ID } from "../../../packages/gateway-protocol/src/schema/users.js";
 import { awaitGateBeforeSettlement, withinTest } from "../../../test/helpers/promise.js";
+import { catalogTool } from "../../agents/agent-bundle-mcp-fixture.test-support.js";
 import type { SessionMcpRuntime } from "../../agents/agent-bundle-mcp-types.js";
 import { fetchMcpAppView, getMcpAppViewLease } from "../../agents/mcp-ui-resource.js";
 import { testing as mcpUiResourceTesting } from "../../agents/mcp-ui-resource.test-support.js";
@@ -159,13 +160,10 @@ it.for([
           generatedAt: 0,
           servers: {},
           tools: [
-            {
-              serverName: "server",
-              safeServerName: "server",
-              toolName: "refresh",
+            catalogTool("server", "refresh", {
               inputSchema: Type.Object({}),
               fallbackDescription: "synthetic refresh",
-            },
+            }),
           ],
         }),
         readResource: async () => ({

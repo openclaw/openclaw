@@ -26,11 +26,18 @@ export type MockGatewayRequest = {
   params?: unknown;
 };
 
+export type ControlUiMockGatewayInstallOptions = {
+  requestHandlers?: Record<string, (params: unknown) => unknown>;
+  /** Run probes after the mock WebSocket is installed, in the same init script. */
+  afterInitScript?: string;
+};
+
 export type MockGatewayRequestSelector = {
   method: string;
   match?: Record<string, unknown>;
   exactParams?: boolean;
 };
+type RequestMatch = Omit<MockGatewayRequestSelector, "method">;
 
 type MockSessionsListResponse = { sessions: unknown[]; [field: string]: unknown };
 
@@ -48,7 +55,7 @@ export type MockGatewayControls = {
    * `getRequests(method, match)` count as `after` to wait for the next request. */
   waitForRequest: (
     method: string,
-    options?: { after?: number; match?: Record<string, unknown>; exactParams?: boolean },
+    options?: RequestMatch & { after?: number },
   ) => Promise<MockGatewayRequest>;
 };
 
@@ -71,13 +78,9 @@ type GatewayMethods = {
   rejectDeferred: (
     method: string,
     error?: { code?: string; message?: string; details?: unknown; retryable?: boolean },
-    options?: { match?: Record<string, unknown>; exactParams?: boolean },
+    options?: RequestMatch,
   ) => void;
-  resolveDeferred: (
-    method: string,
-    payload?: unknown,
-    options?: { match?: Record<string, unknown>; exactParams?: boolean },
-  ) => void;
+  resolveDeferred: (method: string, payload?: unknown, options?: RequestMatch) => void;
   suspendLatest: () => void;
   setOnline: (online: boolean) => void;
   setGatewayBootId: (bootId: string) => void;

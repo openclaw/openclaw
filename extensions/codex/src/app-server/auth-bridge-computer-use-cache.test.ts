@@ -4,46 +4,33 @@ import { withTempDir } from "openclaw/plugin-sdk/test-env";
 import { expect, it, vi } from "vitest";
 import { resolveCodexAppServerHomeDir } from "./auth-start-options.js";
 import { reconcileCodexComputerUseStartArtifacts } from "./computer-use-artifacts.js";
+import { ensureCodexComputerUseSharedPluginCache } from "./computer-use-cache.js";
+import { ensureCodexManagedBundledMarketplace } from "./computer-use-marketplace.js";
 import type { CodexAppServerStartOptions } from "./config.js";
-import { resolveMacOSDesktopCodexAppPathCandidates } from "./desktop-app-paths.js";
 
-type MockDesktopCandidate = ReturnType<typeof resolveMacOSDesktopCodexAppPathCandidates>[number];
-const computerUseServiceMocks = vi.hoisted(() => ({
-  ensureCodexComputerUseSharedPluginCache: vi.fn<
-    (_params: { forceRefresh?: boolean }) => Promise<boolean>
-  >(async () => false),
-  ensureCodexManagedBundledMarketplace: vi.fn<(_params?: unknown) => Promise<string | undefined>>(
-    async () => undefined,
-  ),
+// mock-isolation: Artifact reconciliation must not install or inspect a real desktop service.
+vi.mock("./computer-use-service.js", () => ({
   ensureCodexComputerUseServiceApp: vi.fn<
     typeof import("./computer-use-service.js").ensureCodexComputerUseServiceApp
   >(async () => undefined),
-  resolveCodexManagedBundledMarketplaceSource: vi.fn<
-    (params: {
-      candidates?: readonly MockDesktopCandidate[];
-    }) => Promise<MockDesktopCandidate | undefined>
-  >(async (params) => params.candidates?.[0]),
   resolveCodexComputerUseServiceAppSourcePath: vi.fn<
     (params: { sourceAppCandidates?: readonly string[] }) => Promise<string | undefined>
   >(async (params) => params.sourceAppCandidates?.[0]),
 }));
 
-vi.mock("./computer-use-service.js", () => ({
-  ensureCodexComputerUseServiceApp: computerUseServiceMocks.ensureCodexComputerUseServiceApp,
-  resolveCodexComputerUseServiceAppSourcePath:
-    computerUseServiceMocks.resolveCodexComputerUseServiceAppSourcePath,
-}));
-
+// mock-isolation: The fixture supplies its own marketplace instead of modifying host plugins.
 vi.mock("./computer-use-marketplace.js", () => ({
-  ensureCodexManagedBundledMarketplace:
-    computerUseServiceMocks.ensureCodexManagedBundledMarketplace,
-  resolveCodexManagedBundledMarketplaceSource:
-    computerUseServiceMocks.resolveCodexManagedBundledMarketplaceSource,
+  ensureCodexManagedBundledMarketplace: vi.fn<typeof ensureCodexManagedBundledMarketplace>(
+    async () => undefined,
+  ),
+  resolveCodexManagedBundledMarketplaceSource: vi.fn<
+    typeof import("./computer-use-marketplace.js").resolveCodexManagedBundledMarketplaceSource
+  >(async (params) => params.candidates?.[0]),
 }));
 
+// mock-isolation: Observe cache preparation without writing the shared host cache.
 vi.mock("./computer-use-cache.js", () => ({
-  ensureCodexComputerUseSharedPluginCache:
-    computerUseServiceMocks.ensureCodexComputerUseSharedPluginCache,
+  ensureCodexComputerUseSharedPluginCache: vi.fn(async () => false),
 }));
 
 vi.mock("./desktop-app-paths.js", async (importOriginal) => {
@@ -85,7 +72,7 @@ it("review: keeps cache identity unchanged before effective native policy is ava
       path.join(home, "config.toml"),
       '[plugins."computer-use@openai-bundled"]\nenabled = false\n',
     );
-    computerUseServiceMocks.ensureCodexManagedBundledMarketplace.mockResolvedValueOnce(marketplace);
+    vi.mocked(ensureCodexManagedBundledMarketplace).mockResolvedValueOnce(marketplace);
     await reconcileCodexComputerUseStartArtifacts({
       startOptions,
       agentDir,
@@ -95,10 +82,10 @@ it("review: keeps cache identity unchanged before effective native policy is ava
         computerUse: { enabled: true, autoInstall: true, pluginCacheMode: "shared" },
       },
     });
-    expect(computerUseServiceMocks.ensureCodexManagedBundledMarketplace).toHaveBeenCalledWith(
+    expect(ensureCodexManagedBundledMarketplace).toHaveBeenCalledWith(
       expect.objectContaining({ desktopFingerprint: "fixture-desktop", forceRefresh: true }),
     );
-    expect(computerUseServiceMocks.ensureCodexComputerUseSharedPluginCache).toHaveBeenCalledWith(
+    expect(ensureCodexComputerUseSharedPluginCache).toHaveBeenCalledWith(
       expect.objectContaining({
         config: expect.objectContaining({
           pluginName: "computer-use",

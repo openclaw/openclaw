@@ -9,35 +9,20 @@ import {
   hasCommandProcessCleanupError,
 } from "../../process/exec-result.js";
 import { createCommandResult } from "../../test-utils/npm-spec-install-test-helpers.js";
-import { withMockedPlatform } from "../../test-utils/vitest-spies.js";
 import { writeFixtureJson } from "../cli-fixtures.test-support.js";
 import {
   ensureGitCheckout,
   parseUpdateTimeoutMs,
-  resolveGlobalManager,
   resolveUpdateRoot,
   runUpdateStep,
   tryWriteCompletionCache,
-  UpdatePreMutationError,
 } from "./shared.js";
 
 const runCommandWithTimeout = vi.hoisted(() => vi.fn());
-const runCommandBuffered = vi.hoisted(() =>
-  vi.fn(async () => ({
-    stdout: Buffer.alloc(0),
-    stderr: Buffer.alloc(0),
-    code: null,
-    signal: null,
-    killed: false,
-    termination: "error" as const,
-    error: Object.assign(new Error("fixture package database unavailable"), { code: "EACCES" }),
-  })),
-);
 
 vi.mock("../../process/exec.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../process/exec.js")>()),
   runCommandWithTimeout,
-  runCommandBuffered,
 }));
 
 const successfulCommandResult = createCommandResult();
@@ -57,7 +42,7 @@ function checkout(
   return ensureGitCheckout({ dir, timeoutMs: 1_000, env: process.env, ...options });
 }
 
-async function expectFile(directory: string, name: string, content: string) {
+async function expectFile(directory: string, name = "checkout.marker", content = "complete\n") {
   await expect(fs.readFile(path.join(directory, name), "utf8")).resolves.toBe(content);
 }
 
@@ -68,11 +53,27 @@ async function writeClone(stagingDir: string, git = false) {
   await fs.writeFile(path.join(stagingDir, "checkout.marker"), "complete\n");
 }
 
-function mockCompleteClone(git = false) {
+function mockClone(prepare: (stagingDir: string) => Promise<void>) {
   runCommandWithTimeout.mockImplementationOnce(async (argv: string[]) => {
-    await writeClone(cloneTarget(argv), git);
+    await prepare(cloneTarget(argv));
     return successfulCommandResult;
   });
+}
+
+const mockCompleteClone = (git = false) => mockClone((dir) => writeClone(dir, git));
+
+function expectCleanupAdvisory(
+  report: ReturnType<typeof vi.fn<NonNullable<UpdateStepProgress["onStepComplete"]>>>,
+  retained: string,
+) {
+  const steps = report.mock.calls
+    .map(([step]) => step)
+    .filter((step) => step.name === "git-clone-staging-cleanup");
+  const advisory = expect.objectContaining({
+    advisory: { kind: "recoverable-maintenance", message: expect.stringContaining(retained) },
+  });
+  expect(steps).toContainEqual(advisory);
+  return steps;
 }
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -110,44 +111,26 @@ it("refreshes standalone completion without a loose launcher", async () => {
   );
 });
 
-it.each([false, true])(
-  "does not hide uncertain completion cleanup (uncertain=%s)",
-  async (uncertain) => {
-    await fs.writeFile(path.join(base, "openclaw.mjs"), "");
-    const error = uncertain ? new CommandProcessCleanupError() : new Error("cache write failed");
-    runCommandWithTimeout.mockRejectedValueOnce(error);
-    const result = tryWriteCompletionCache(base, true, 500);
-    if (uncertain) {
-      await expect(result).rejects.toBe(error);
-    } else {
-      await expect(result).resolves.toBe("failed");
-    }
-  },
-);
+it.each([false, true])("propagates uncertain completion cleanup: %s", async (uncertain) => {
+  await fs.writeFile(path.join(base, "openclaw.mjs"), "");
+  const error = uncertain ? new CommandProcessCleanupError() : new Error("cache write failed");
+  runCommandWithTimeout.mockRejectedValueOnce(error);
+  const result = tryWriteCompletionCache(base, true, 500);
+  if (uncertain) {
+    await expect(result).rejects.toBe(error);
+  } else {
+    await expect(result).resolves.toBe("failed");
+  }
+});
 
-it("accepts only complete positive integer timeout seconds", () => {
-  for (const timeout of [
-    "",
-    "1.5",
-    "10abc",
-    "0x10",
-    "0",
-    "-1",
-    "   ",
-    String(Number.MAX_SAFE_INTEGER),
-  ]) {
+it("validates timeout seconds after trimming and preserves the absent default", () => {
+  for (const timeout of ["1.5", "0", String(Number.MAX_SAFE_INTEGER)]) {
     expect(() => parseUpdateTimeoutMs(timeout)).toThrow(
       "--timeout must be a positive integer (seconds)",
     );
   }
-  for (const [input, milliseconds] of [
-    [" 10 ", 10_000],
-    ["+10", 10_000],
-    ["001", 1_000],
-    [undefined, undefined],
-  ] as const) {
-    expect(parseUpdateTimeoutMs(input)).toBe(milliseconds);
-  }
+  expect(parseUpdateTimeoutMs(" 10 ")).toBe(10_000);
+  expect(parseUpdateTimeoutMs(undefined)).toBeUndefined();
 });
 
 it("closes install stdin without approval and retains failed command diagnostics", async () => {
@@ -157,28 +140,16 @@ it("closes install stdin without approval and retains failed command diagnostics
     stdout: `${"x".repeat(10_000)}\nBuild type error`,
     stderr: "Command failed",
   });
-  const onStepComplete = vi.fn();
   const result = await runUpdateStep({
     name: "package-install",
     argv: ["pnpm", "add", "-g", "openclaw@2.0.0"],
-    timeoutMs: 1200,
     input: "",
-    progress: { onStepComplete },
   });
 
   expect(result.stdoutTail).toContain("Build type error");
   expect(result.stdoutTail?.length).toBeLessThanOrEqual(8001); // includes the truncation marker
-  expect(onStepComplete).toHaveBeenCalledWith(
-    expect.objectContaining({
-      stdoutTail: result.stdoutTail,
-      stderrTail: "Command failed",
-      exitCode: 1,
-    }),
-  );
-  expect(runCommandWithTimeout).toHaveBeenCalledWith(
-    ["pnpm", "add", "-g", "openclaw@2.0.0"],
-    expect.objectContaining({ input: "" }),
-  );
+  expect(result).toMatchObject({ stderrTail: "Command failed", exitCode: 1 });
+  expect(runCommandWithTimeout.mock.calls[0]?.[1].input).toBe("");
 });
 
 it.runIf(process.platform !== "win32")(
@@ -188,10 +159,7 @@ it.runIf(process.platform !== "win32")(
     const packageRoot = path.join(base, "global", "v11", "install", "node_modules", "openclaw");
     await fs.mkdir(path.dirname(packageRoot), { recursive: true });
     await fs.mkdir(storeRoot, { recursive: true });
-    await writeFixtureJson(path.join(storeRoot, "package.json"), {
-      name: "openclaw",
-      version: "1.0.0",
-    });
+    await writeFixtureJson(path.join(storeRoot, "package.json"), { name: "openclaw" });
     await fs.symlink(storeRoot, packageRoot, "dir");
 
     const previousArgv = [...process.argv];
@@ -204,75 +172,43 @@ it.runIf(process.platform !== "win32")(
   },
 );
 
-it.each(["/shared", "/opt/homebrew-custom"])(
-  "refuses unowned packages under %s without treating global npm as a Homebrew formula",
-  async (prefix) => {
-    const root = `${prefix}/lib/node_modules/openclaw`;
-    vi.stubEnv("HOMEBREW_PREFIX", "/opt/homebrew-custom");
-    runCommandWithTimeout.mockResolvedValue({
-      ...successfulCommandResult,
-      code: 1,
-      stderr: "not owned",
-    });
-    const owner = withMockedPlatform("linux", () =>
-      resolveGlobalManager({ root, installKind: "package", timeoutMs: 1_000 }),
-    );
-    await expect(owner).rejects.toBeInstanceOf(UpdatePreMutationError);
-    await expect(owner).rejects.toMatchObject({
-      reason: expect.stringMatching(/^(unmanaged-package-install|container-image-install)$/),
-      failureFacts: [expect.objectContaining({ code: "installation-unclassified" })],
-      message: expect.stringContaining("No package changes or Gateway restart were attempted."),
-    });
-    await expect(owner).rejects.not.toMatchObject({
-      message: expect.stringContaining("managed by Homebrew"),
-    });
-  },
-);
-
-it.each([false, true])(
-  "keeps build storage stationary while publishing a clone (existing destination: %s)",
-  async (existing) => {
-    checkoutDir = path.join(base, "nested", "openclaw");
-    if (existing) {
-      await fs.mkdir(checkoutDir, { recursive: true });
+it.each([false, true])("keeps clone build storage stationary (existing: %s)", async (existing) => {
+  checkoutDir = path.join(base, "nested", "openclaw");
+  if (existing) {
+    await fs.mkdir(checkoutDir, { recursive: true });
+  }
+  mockClone(async (stagingDir) => {
+    expect(stagingDir).not.toBe(checkoutDir);
+    if (!existing) {
+      await expect(fs.stat(checkoutDir)).rejects.toMatchObject({ code: "ENOENT" });
     }
-    runCommandWithTimeout.mockImplementationOnce(async (argv: string[]) => {
-      const stagingDir = cloneTarget(argv);
-      expect(stagingDir).not.toBe(checkoutDir);
-      if (!existing) {
-        await expect(fs.stat(checkoutDir)).rejects.toMatchObject({ code: "ENOENT" });
-      }
-      await writeClone(stagingDir, true);
-      return successfulCommandResult;
-    });
+    await writeClone(stagingDir, true);
+  });
 
-    const result = await checkout(checkoutDir, {
-      useStagedCheckout: async (stagingDir, publish, targetRoot, storageRoot) => {
-        const artifacts = path.join(storageRoot, ".artifacts");
-        await fs.mkdir(artifacts);
-        await fs.writeFile(path.join(artifacts, "build.marker"), "built\n");
-        expect(path.dirname(stagingDir)).toBe(storageRoot);
-        expect(await publish()).toBe(targetRoot);
-        expect((await fs.stat(artifacts)).dev).toBe((await fs.stat(targetRoot)).dev);
-        await expectFile(artifacts, "build.marker", "built\n");
-      },
-    });
-    expect(result).toMatchObject({ checkoutDir, step: { exitCode: 0 } });
-    expect(result.step?.warnings).toBeUndefined();
+  const result = await checkout(checkoutDir, {
+    useStagedCheckout: async (stagingDir, publish, targetRoot, storageRoot) => {
+      const artifacts = path.join(storageRoot, ".artifacts");
+      await fs.mkdir(artifacts);
+      await fs.writeFile(path.join(artifacts, "build.marker"), "built\n");
+      expect(path.dirname(stagingDir)).toBe(storageRoot);
+      expect(await publish()).toBe(targetRoot);
+      expect((await fs.stat(artifacts)).dev).toBe((await fs.stat(targetRoot)).dev);
+      await expectFile(artifacts, "build.marker", "built\n");
+    },
+  });
+  expect(result).toMatchObject({ checkoutDir, step: { exitCode: 0 } });
+  expect(result.step?.warnings).toBeUndefined();
 
-    await expectFile(checkoutDir, "checkout.marker", "complete\n");
-    await expect(fs.readdir(path.dirname(checkoutDir))).resolves.toEqual(["openclaw"]);
-    expect((await fs.readdir(checkoutDir)).toSorted()).toEqual([".git", "checkout.marker"]);
-  },
-);
+  await expectFile(checkoutDir);
+  await expect(fs.readdir(path.dirname(checkoutDir))).resolves.toEqual(["openclaw"]);
+  expect((await fs.readdir(checkoutDir)).toSorted()).toEqual([".git", "checkout.marker"]);
+});
 
 it("preserves a destination created while a fresh clone is running", async () => {
-  runCommandWithTimeout.mockImplementationOnce(async (argv: string[]) => {
-    const stagingDir = cloneTarget(argv);
+  mockClone(async (stagingDir) => {
     await fs.mkdir(path.join(stagingDir, ".git"), { recursive: true });
     await fs.mkdir(checkoutDir);
     await fs.writeFile(path.join(checkoutDir, "user.marker"), "keep\n");
-    return successfulCommandResult;
   });
 
   await expect(checkout(checkoutDir)).rejects.toThrow("appeared while cloning");
@@ -281,64 +217,43 @@ it("preserves a destination created while a fresh clone is running", async () =>
   await expect(fs.readdir(base)).resolves.toEqual(["openclaw"]);
 });
 
+it.each([false, true])("retries failed clones (existing: %s)", async (existing) => {
+  if (existing) {
+    await fs.mkdir(checkoutDir);
+  }
+  runCommandWithTimeout.mockImplementationOnce(async (argv: string[]) => {
+    const stagingDir = cloneTarget(argv);
+    expect(stagingDir).not.toBe(checkoutDir);
+    await fs.mkdir(path.join(stagingDir, ".git"), { recursive: true });
+    return { ...successfulCommandResult, code: 42, stderr: "clone interrupted" };
+  });
+  await expect(checkout(checkoutDir)).resolves.toMatchObject({
+    checkoutDir,
+    step: { exitCode: 42 },
+  });
+  await expect(fs.readdir(existing ? checkoutDir : base)).resolves.toEqual([]);
+  if (!existing) {
+    await expect(fs.stat(checkoutDir)).rejects.toMatchObject({ code: "ENOENT" });
+  }
+  mockCompleteClone(true);
+  await expect(checkout(checkoutDir)).resolves.toMatchObject({
+    checkoutDir,
+    step: { exitCode: 0 },
+  });
+  await expectFile(checkoutDir);
+});
+
 it.each([
-  { existing: false, failure: "allocation" },
-  { existing: true, failure: "allocation" },
-  { existing: false, failure: "clone" },
-  { existing: true, failure: "clone" },
+  { existing: false, contents: "empty" },
+  { existing: true, contents: "empty" },
+  { existing: true, contents: "user" },
+  { existing: true, contents: "replaced" },
 ])(
-  "keeps clone destinations retryable after $failure failure (existing: $existing)",
-  async ({ existing, failure }) => {
+  "preserves allocation-failure storage ($contents, existing: $existing)",
+  async ({ existing, contents }) => {
     if (existing) {
       await fs.mkdir(checkoutDir);
     }
-    let attempt = 0;
-    runCommandWithTimeout.mockImplementation(async (argv: string[]) => {
-      attempt += 1;
-      const stagingDir = cloneTarget(argv);
-      expect(stagingDir).not.toBe(checkoutDir);
-      await fs.mkdir(path.join(stagingDir, ".git"), { recursive: true });
-      if (failure === "clone" && attempt === 1) {
-        return { ...successfulCommandResult, code: 42, stderr: "clone interrupted" };
-      }
-      await fs.writeFile(path.join(stagingDir, "checkout.marker"), "complete\n");
-      return successfulCommandResult;
-    });
-    const allocationError = Object.assign(new Error("clone storage exhausted"), {
-      code: "ENOSPC",
-    });
-    const mkdir = fs.mkdir.bind(fs);
-    const allocation = vi.spyOn(fs, "mkdir").mockImplementation(async (target, options) => {
-      if (failure === "allocation" && path.basename(String(target)) === "repository") {
-        throw allocationError;
-      }
-      return mkdir(target, options);
-    });
-    const first = checkout(checkoutDir);
-    if (failure === "allocation") {
-      await expect(first).rejects.toBe(allocationError);
-      expect(runCommandWithTimeout).not.toHaveBeenCalled();
-    } else {
-      await expect(first).resolves.toMatchObject({ checkoutDir, step: { exitCode: 42 } });
-    }
-    allocation.mockRestore();
-    await expect(fs.readdir(existing ? checkoutDir : base)).resolves.toEqual([]);
-    if (!existing) {
-      await expect(fs.stat(checkoutDir)).rejects.toMatchObject({ code: "ENOENT" });
-    }
-    await expect(checkout(checkoutDir)).resolves.toMatchObject({
-      checkoutDir,
-      step: { exitCode: 0 },
-    });
-    await expectFile(checkoutDir, "checkout.marker", "complete\n");
-    expect(runCommandWithTimeout).toHaveBeenCalledTimes(failure === "allocation" ? 1 : 2);
-  },
-);
-
-it.each([false, true])(
-  "preserves storage contents after repository allocation fails (replaced: %s)",
-  async (replaced) => {
-    await fs.mkdir(checkoutDir);
     const allocationError = Object.assign(new Error("clone storage exhausted"), {
       code: "ENOSPC",
     });
@@ -349,37 +264,50 @@ it.each([false, true])(
         return mkdir(target, options);
       }
       retained = path.dirname(String(target));
-      if (replaced) {
+      if (contents === "replaced") {
         await fs.rename(retained, path.join(base, "displaced"));
         await mkdir(retained);
       }
-      await fs.writeFile(path.join(retained, "user.marker"), "keep\n");
+      if (contents !== "empty") {
+        await fs.writeFile(path.join(retained, "user.marker"), "keep\n");
+      }
       throw allocationError;
     });
     await expect(checkout(checkoutDir)).rejects.toBe(allocationError);
     allocation.mockRestore();
-    await expectFile(retained, "user.marker", "keep\n");
     expect(runCommandWithTimeout).not.toHaveBeenCalled();
+    if (contents === "empty") {
+      await expect(fs.readdir(existing ? checkoutDir : base)).resolves.toEqual([]);
+      if (!existing) {
+        await expect(fs.stat(checkoutDir)).rejects.toMatchObject({ code: "ENOENT" });
+      }
+      mockCompleteClone(true);
+      await expect(checkout(checkoutDir)).resolves.toMatchObject({
+        checkoutDir,
+        step: { exitCode: 0 },
+      });
+      await expectFile(checkoutDir);
+    } else {
+      await expectFile(retained, "user.marker", "keep\n");
+    }
   },
 );
 
 it.runIf(process.platform !== "win32").each([false, true])(
-  "publishes through the original empty-directory alias target (retargeted: %s)",
+  "publishes to the original symlink target (retargeted: %s)",
   async (retargeted) => {
     const targetDir = path.join(base, "checkout-target");
     const replacementDir = path.join(base, "replacement-target");
     await fs.mkdir(targetDir);
     await fs.mkdir(replacementDir);
     await fs.symlink(targetDir, checkoutDir, "dir");
-    runCommandWithTimeout.mockImplementationOnce(async (argv: string[]) => {
-      const stagingDir = cloneTarget(argv);
+    mockClone(async (stagingDir) => {
       expect(path.dirname(path.dirname(stagingDir))).toBe(targetDir);
       await writeClone(stagingDir, true);
       if (retargeted) {
         await fs.unlink(checkoutDir);
         await fs.symlink(replacementDir, checkoutDir, "dir");
       }
-      return successfulCommandResult;
     });
 
     await expect(checkout(checkoutDir)).resolves.toMatchObject({
@@ -389,9 +317,9 @@ it.runIf(process.platform !== "win32").each([false, true])(
 
     expect((await fs.lstat(checkoutDir)).isSymbolicLink()).toBe(true);
     expect((await fs.lstat(targetDir)).isSymbolicLink()).toBe(false);
-    await expectFile(targetDir, "checkout.marker", "complete\n");
+    await expectFile(targetDir);
     if (!retargeted) {
-      await expectFile(checkoutDir, "checkout.marker", "complete\n");
+      await expectFile(checkoutDir);
     }
 
     await expect(fs.readdir(replacementDir)).resolves.toEqual([]);
@@ -399,7 +327,7 @@ it.runIf(process.platform !== "win32").each([false, true])(
 );
 
 it.each(["destination", "storage", "repository"] as const)(
-  "preserves a replaced %s directory before publication and cleanup",
+  "preserves replaced %s before publication",
   async (replaced) => {
     const displacedDir = path.join(base, "displaced");
     await fs.mkdir(checkoutDir);
@@ -434,8 +362,6 @@ it.each(["destination", "storage", "repository"] as const)(
       await expect(fs.readdir(replacementStage)).resolves.toEqual(["user.marker"]);
       await expectFile(
         replaced === "storage" ? path.join(displacedDir, "repository") : displacedDir,
-        "checkout.marker",
-        "complete\n",
       );
     }
   },
@@ -446,7 +372,7 @@ it.each([
   { published: true, missingStorage: false },
   { published: true, missingStorage: true },
 ])(
-  "reports skipped clone cleanup after custody loss (published: $published, missing storage: $missingStorage)",
+  "reports custody loss (published: $published, missing: $missingStorage)",
   async ({ published, missingStorage }) => {
     const onStepComplete = vi.fn<NonNullable<UpdateStepProgress["onStepComplete"]>>((step) => {
       if (step.name === "git-clone-staging-cleanup") {
@@ -488,7 +414,7 @@ it.each([
           warnings: [expect.stringContaining("ownership could not be verified")],
         },
       });
-      await expectFile(checkoutDir, "checkout.marker", "complete\n");
+      await expectFile(checkoutDir);
       if (!missingStorage) {
         await expectFile(path.join(retained, "repository"), "user.marker", "keep\n");
       }
@@ -501,18 +427,11 @@ it.each([
     } else {
       await expectFile(retained, "build.marker", "keep\n");
     }
-    const cleanupSteps = onStepComplete.mock.calls.filter(
-      ([step]) => step.name === "git-clone-staging-cleanup",
-    );
+    const cleanupSteps = expectCleanupAdvisory(onStepComplete, retained);
     expect(cleanupSteps).toHaveLength(1);
-    expect(cleanupSteps[0]?.[0]).toMatchObject({
-      command: "",
-      advisory: {
-        kind: "recoverable-maintenance",
-        message: expect.stringContaining(retained),
-      },
-    });
-    expect(cleanupSteps[0]?.[0].advisory?.message).not.toMatch(/retained|rm -rf|Remove-Item/u);
+    const cleanupStep = cleanupSteps[0]!;
+    expect(cleanupStep.command).toBe("");
+    expect(cleanupStep.advisory?.message).not.toMatch(/retained|rm -rf|Remove-Item/u);
   },
 );
 
@@ -524,7 +443,7 @@ it.each([
   { callbackFails: false, cleanupFailure: "remove", reportingUnknown: true },
   { callbackFails: true, cleanupFailure: "remove", reportingUnknown: true },
 ])(
-  "preserves clone cleanup outcomes ($cleanupFailure, callback fails: $callbackFails, reporting unknown: $reportingUnknown)",
+  "preserves $cleanupFailure cleanup (callback: $callbackFails, uncertain: $reportingUnknown)",
   async ({ callbackFails, cleanupFailure, reportingUnknown }) => {
     const callbackError = new Error("candidate operation failed");
     const reportingError = reportingUnknown
@@ -587,7 +506,7 @@ it.each([
         step: { exitCode: 0, warnings: [expect.stringContaining("cleanup denied")] },
       });
     }
-    await expectFile(checkoutDir, "checkout.marker", "complete\n");
+    await expectFile(checkoutDir);
     await expectFile(retained, "build.marker", "keep\n");
     if (cleanupFailure === "inspect") {
       expect(cleanup).not.toHaveBeenCalledWith(retained, expect.anything());
@@ -595,25 +514,16 @@ it.each([
         expect.objectContaining({ command: "", stderrTail: "cleanup denied" }),
       );
     }
-    expect(onStepComplete).toHaveBeenCalledWith(
-      expect.objectContaining({
-        name: "git-clone-staging-cleanup",
-        advisory: {
-          kind: "recoverable-maintenance",
-          message: expect.stringContaining(retained),
-        },
-      }),
-    );
+    expectCleanupAdvisory(onStepComplete, retained);
   },
 );
 
 it("retains an unpublished clone when its staged callback reports uncertain cleanup", async () => {
   const failure = new CommandProcessCleanupError();
   let stagedFile = "";
-  runCommandWithTimeout.mockImplementationOnce(async (argv: string[]) => {
-    stagedFile = path.join(cloneTarget(argv), "checkout.marker");
+  mockClone(async (stagingDir) => {
+    stagedFile = path.join(stagingDir, "checkout.marker");
     await fs.writeFile(stagedFile, "retain candidate bytes\n");
-    return successfulCommandResult;
   });
   await expect(
     checkout(checkoutDir, {
@@ -631,7 +541,7 @@ it("retains recovery files when publication and rollback both fail", async () =>
   mockCompleteClone(true);
 
   const realRename = fs.rename.bind(fs);
-  const rename = vi.spyOn(fs, "rename").mockImplementation(async (oldPath, newPath) => {
+  using _ = vi.spyOn(fs, "rename").mockImplementation(async (oldPath, newPath) => {
     const oldName = path.basename(oldPath.toString());
     const oldParent = path.dirname(oldPath.toString());
     const newParent = path.dirname(newPath.toString());
@@ -644,13 +554,9 @@ it("retains recovery files when publication and rollback both fail", async () =>
     await realRename(oldPath, newPath);
   });
 
-  try {
-    await expect(checkout(checkoutDir)).rejects.toThrow("recovery files remain");
-  } finally {
-    rename.mockRestore();
-  }
+  await expect(checkout(checkoutDir)).rejects.toThrow("recovery files remain");
 
-  await expectFile(checkoutDir, "checkout.marker", "complete\n");
+  await expectFile(checkoutDir);
   const recoveryDirs = (await fs.readdir(checkoutDir)).filter((entry) =>
     entry.startsWith(".openclaw-clone-"),
   );

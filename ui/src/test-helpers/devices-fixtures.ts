@@ -1,4 +1,5 @@
 import type { EnvironmentSummary, SystemInfoResult } from "@openclaw/gateway-protocol";
+import { createInitialDevicesState } from "../lib/nodes/page-operations.ts";
 import type { DevicesProps } from "../pages/devices/view.types.ts";
 
 export const deviceSystemInfo: SystemInfoResult = {
@@ -43,25 +44,20 @@ export const deviceDesktopEnvironments: EnvironmentSummary[] = [
 
 export function createDevicesViewProps(overrides: Partial<DevicesProps> = {}): DevicesProps {
   return {
-    connected: true,
+    ...createInitialDevicesState({ connected: true }),
     loading: false,
     configRead: { scope: () => undefined, value: () => undefined },
     execApprovalsRead: { scope: () => undefined, value: () => undefined },
     inventoryRead: () => undefined,
     inventoryScope: {},
     onReloadInventory: () => undefined,
-    nodes: [],
     presence: [],
     gatewayVersion: null,
     basePath: "",
-    lastError: null,
-    devicesLoading: false,
-    devicesError: null,
     devicesList: {
       pending: [],
       paired: [],
     },
-    devicesDeciding: [],
     canPairDevice: true,
     canManagePairing: true,
     canAdmin: true,
@@ -70,12 +66,6 @@ export function createDevicesViewProps(overrides: Partial<DevicesProps> = {}): D
     configSaving: false,
     configDirty: false,
     configFormMode: "form",
-    execApprovalsLoading: false,
-    execApprovalsSaving: false,
-    execApprovalsDirty: false,
-    execApprovalsSnapshot: null,
-    execApprovalsForm: null,
-    execApprovalsSelectedAgent: null,
     execApprovalsTarget: "gateway",
     execApprovalsTargetNodeId: null,
     onDevicePairSetupOpen: () => undefined,

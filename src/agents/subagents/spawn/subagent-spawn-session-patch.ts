@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { acquireSessionActorStorage } from "../../../config/sessions/session-actor-storage-acquisition.js";
 import {
-  acquireSessionActorStorage,
   runWithSessionActorStorage,
   type SessionActorStorageBinding,
 } from "../../../config/sessions/session-actor-storage-binding.js";
@@ -74,6 +74,7 @@ export async function createInitialSubagentSession(input: {
   gitContributorProfileId?: string;
   expectedParentSessionId?: string;
   assertActive?: SessionSourceAssertion;
+  signal?: AbortSignal;
   onCreated?: (session: InitialSubagentSession) => void;
   creationPolicy: Pick<Parameters<typeof buildSessionCreationStamp>[0], "actor" | "sandbox">;
   completionOwnerSessionKey: string;
@@ -251,6 +252,7 @@ export async function createInitialSubagentSession(input: {
               titleSource: buildDashboardSessionTitleSource({ message: params.worktree.task }),
               useRequestedTitleSelection: false,
               runSetupScript: false,
+              signal: params.signal,
               commitGuard: composeSessionSourceAssertion([params.assertActive]),
               onTitleError: (error) => console.warn("subagent worktree title failed", error),
               onTitleStateChanged: () =>

@@ -18,7 +18,7 @@ import {
   takePreparedPostgresBridge,
 } from "./bridge-prestart.js";
 import { takeIdlePostgresBridge, retainIdlePostgresBridge } from "./idle-bridges.js";
-import { recordPostgresPoolFailure } from "./pool.js";
+import { recordPostgresPoolFailure } from "./pool-state.js";
 import {
   decodePostgresError,
   decodePostgresRows,

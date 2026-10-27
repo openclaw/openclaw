@@ -5,7 +5,8 @@ import { mountSolid as mountStatefulSolid } from "../../../test-helpers/solid-re
 import { waitForSolid } from "../../../test-helpers/solid-settle.ts";
 import { projectChatSystemNotice } from "../chat-system-notice.ts";
 import { renderChatComposerNotices } from "../chat-view-notices.tsx";
-import { ChatNotice } from "./chat-divider.tsx";
+import { ChatNotice } from "./chat-notice-view.tsx";
+import { nativeRows } from "./chat-transcript-rows.ts";
 
 let container: HTMLDivElement;
 let noticeView: { update: (props: Parameters<typeof ChatNotice>[0]) => void } | undefined;
@@ -52,6 +53,14 @@ afterEach(async () => {
   vi.clearAllTimers();
   vi.useRealTimers();
   vi.unstubAllGlobals();
+});
+
+it("commits a cached failure summary with its transcript row", () => {
+  mountStatefulSolid(nativeRows.notice, { item: failure("Cached failure details") }, container);
+  expect(container.querySelector('[data-chat-row-key="failure"]')).not.toBeNull();
+  expect(container.querySelector(".chat-run-failure__summary")?.textContent).toBe(
+    "Cached failure details",
+  );
 });
 
 it("replaces the canonical failed run row with one line-icon notice and explicit actions", async () => {

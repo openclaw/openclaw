@@ -15,7 +15,7 @@ import { pathToFileURL } from "node:url";
 import { parseArgs } from "node:util";
 import { isMainThread, parentPort, Worker, workerData } from "node:worker_threads";
 import type { DatabaseEngineSelection } from "../../src/infra/database-engine/types.js";
-import type { PostgresPoolEndpoints } from "../../src/infra/postgres-sync/pool.js";
+import type { PostgresPoolEndpoints } from "../../src/infra/postgres-sync/pool-state.js";
 
 type Pool = typeof import("../../src/infra/postgres-sync/pool.js");
 type Counter = { threadId: number; count: Int32Array };

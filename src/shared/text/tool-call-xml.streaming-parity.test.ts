@@ -12,6 +12,7 @@ import { toolCallXmlTextFilter } from "./tool-call-xml.js";
 const call = '<tool_call>{"name":"read","arguments":{"path":"a.md"}}</tool_call>';
 const nestedCall =
   '<function_calls><invoke name="read"><parameter name="path">a.md</parameter></invoke></function_calls>';
+const imageReference = 'See ![`x: <invoke name="x">{"a":1}</invoke>`][ref] now.\n\nNext.\n\n';
 
 const documents = [
   ["complete call", `Before.\n${call}\nAfter.\n`],
@@ -44,49 +45,34 @@ const documents = [
 // XML payload or grant Markdown ownership without introducing another tag.
 const transitions = [
   ["XML removal exposes a partial parameter", ["<para<tool_call/>", "meter/>"]],
+  ["exposed generic closer", ["<div><parameter>x</parameter></<tool_call/>", "div>"]],
   [
-    "XML removal exposes an incomplete generic closer",
-    ["<div><parameter>x</parameter></<tool_call/>", "div>"],
-  ],
-  [
-    "XML removal exposes an image and a reference definition",
+    "exposed image/reference",
     ["!<tool_call/>[example `<parameter>x</parameter>`][ref]\n\n<tool_call/>[re", "f]: /u"],
   ],
-  [
-    "XML removal exposes a link title",
-    ['[a]<tool_call>{}</tool_call>(/ "title `<parameter/>` tail', '")'],
-  ],
+  ["exposed link title", ['[a]<tool_call>{}</tool_call>(/ "title `<parameter/>` tail', '")']],
   ["late code closer", ["Use `<parameter/>x", "`."]],
   ["partial JSON attributes", ["<tool_call> name=", '"exec" {"command":"ls"}']],
   ["partial bracket attributes", ['<function_calls> name="read_file" ', '[{"path":"a.md"}]']],
   ["quoted greater-than", ['Before </invoke note="a>b', '">After']],
-  [
-    "late image reference",
-    ['See ![`x: <invoke name="x">{"a":1}</invoke>`][ref] now.\n\nNext.\n\n', "[ref]: /u\n"],
-  ],
-  [
-    "split image reference",
-    ['See ![`x: <invoke name="x">{"a":1}</invoke>`][ref] now.\n\nNext.\n\n', "[re", "f]: /u\n"],
-  ],
+  ["late image reference", [imageReference, "[ref]: /u\n"]],
+  ["split image reference", [imageReference, "[re", "f]: /u\n"]],
 ] as const;
 
-const configurations: Array<{ name: string; filters: readonly TextFilter[] }> = [
-  {
-    name: "streaming XML",
-    filters: [toolCallXmlTextFilter({ stripFunctionResponseAfterPluralToolCalls: true }, true)],
-  },
-  {
-    name: "user-facing XML",
-    filters: [toolCallXmlTextFilter({ stripFunctionCallsXmlPayloads: true })],
-  },
-  {
-    name: "delivery composition",
-    filters: [
+const configurations: Array<[string, readonly TextFilter[]]> = [
+  [
+    "streaming XML",
+    [toolCallXmlTextFilter({ stripFunctionResponseAfterPluralToolCalls: true }, true)],
+  ],
+  ["user-facing XML", [toolCallXmlTextFilter({ stripFunctionCallsXmlPayloads: true })]],
+  [
+    "delivery composition",
+    [
       ...assistantVisibleTextFilters("final-answer-delivery", true),
       ...userFacingTextFilters(false, true),
       trimTextFilter("both", { preserveCodeIndentation: true }),
     ],
-  },
+  ],
 ];
 
 function expectCanonicalPrefixes(chunks: readonly string[], filters: readonly TextFilter[]) {
@@ -103,7 +89,7 @@ function expectCanonicalPrefixes(chunks: readonly string[], filters: readonly Te
   }
 }
 
-describe.each(configurations)("$name", ({ filters }) => {
+describe.each(configurations)("%s", (_configuration, filters) => {
   it.each(documents)("matches canonical output at every prefix: %s", (_name, source) => {
     for (const size of [1, 4]) {
       const chunks = Array.from({ length: Math.ceil(source.length / size) }, (_, index) =>

@@ -1,9 +1,13 @@
+import { scribeById } from "./scribes-catalog.js";
+
 /** Public Knowledge page state. The host owns URL encoding and browser history. */
 export type KnowledgeLocation = {
   agent: string;
   vault: string;
-  tab: "recent" | "browse" | "search" | "settings";
+  tab: "recent" | "browse" | "search" | "settings" | "scribes";
   record: string;
+  /** Scribe whose detail the Scribes tab shows; empty for the list. */
+  scribe: string;
   section: "stores" | "vocab" | "status" | "maintenance";
   kind: "page" | "claim" | "relationship";
   type: string;
@@ -42,7 +46,8 @@ export function readLocation(params: Readonly<Record<string, string>> = {}): Kno
   const view = params.view ?? "",
     origin = params.origin ?? "",
     timeField = params.timeField ?? "";
-  const tab = (["browse", "search", "settings"] as const).find((t) => t === view) ?? "recent";
+  const tab =
+    (["browse", "search", "settings", "scribes"] as const).find((t) => t === view) ?? "recent";
   const upperSequence = integer(params.upper),
     beforeSequence = integer(params.before);
   const offset = integer(params.offset, 500);
@@ -57,6 +62,7 @@ export function readLocation(params: Readonly<Record<string, string>> = {}): Kno
     vault: text(params.vault, 120),
     tab,
     record: text(params.record, 96),
+    scribe: tab === "scribes" && scribeById(params.scribe ?? "") ? params.scribe! : "",
     section:
       params.section === "vocab" || params.section === "status" || params.section === "maintenance"
         ? params.section
@@ -87,6 +93,7 @@ export function locationParams(state: KnowledgeLocation): Record<string, string>
       vault: state.vault,
       view: state.tab === "recent" ? "" : state.tab,
       record: state.record,
+      scribe: state.tab === "scribes" ? state.scribe : "",
       section: state.tab === "settings" && state.section !== "stores" ? state.section : "",
       kind: state.kind === "page" ? "" : state.kind,
       type: state.type,

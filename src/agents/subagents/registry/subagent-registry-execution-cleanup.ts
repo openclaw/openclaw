@@ -10,11 +10,13 @@ import {
   type RpcSourceRef,
 } from "../../../sessions/session-controller.rpc-sources.js";
 import { sessionTargetOwnersMatch } from "../../../sessions/session-controller.target.js";
+import { captureExecRequestCancellation } from "../../bash-process-control.js";
 import { resolveActiveEmbeddedRunOwnerByRunId } from "../../embedded-agent-runner/runs.js";
 import { retireRequesterFollowupAuthority } from "../requester-cron-authority.js";
 import { resolveSubagentChildAuthority } from "./subagent-child-owner-match.js";
 import type { SubagentKillSession } from "./subagent-control-session.js";
 import { getCurrentSubagentRunOwner, subagentRuns } from "./subagent-registry-memory.js";
+import { resolveControllerSessionKey } from "./subagent-registry-read-topology.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
 import { getSubagentRunRuntimeKey } from "./subagent-run-generation.js";
 
@@ -107,4 +109,47 @@ export function retireSubagentGatewayBinding(observed: SubagentRunRecord): void 
     }
   }
   clearGatewayContextResolver(entry);
+}
+
+function hasRetainedControllerExecution(entry: SubagentRunRecord): boolean {
+  const current = getCurrentSubagentRunOwner(subagentRuns, entry) ?? entry;
+  const runtimeKey = getSubagentRunRuntimeKey(current);
+  if (retiredExecutions.has(runtimeKey)) {
+    return retiredExecutions.get(runtimeKey) !== undefined;
+  }
+  const resolver = getGatewayContextResolver(current);
+  return resolver ? getRpcSourceForGateway(current.runId, resolver) !== undefined : false;
+}
+
+/** Capture controller topology once for a synchronous cancellation selection. */
+export function captureSubagentRetainedWork() {
+  const children = new Map<string, SubagentRunRecord[]>();
+  for (const entry of subagentRuns.values()) {
+    const key = resolveControllerSessionKey(entry);
+    const group = children.get(key) ?? [];
+    group.push(entry);
+    children.set(key, group);
+  }
+  const hasRetainedWork = (entry: SubagentRunRecord, visited = new Set<string>()): boolean => {
+    if (visited.has(entry.runId)) {
+      return false;
+    }
+    visited.add(entry.runId);
+    return (
+      entry.execution.status !== "terminal" ||
+      !entry.execution.endedAt ||
+      entry.pauseReason === "sessions_yield" ||
+      Boolean(entry.requesterSettleWake) ||
+      captureSubagentEmbeddedExecution(entry) !== undefined ||
+      hasRetainedControllerExecution(entry) ||
+      captureExecRequestCancellation({
+        runId: entry.runId,
+        sessionKey: entry.childSessionKey,
+        sessionId: entry.childSessionIdentity?.sessionId,
+        agentId: entry.childAgentId,
+      }).owners.length > 0 ||
+      (children.get(entry.childSessionKey) ?? []).some((child) => hasRetainedWork(child, visited))
+    );
+  };
+  return (entry: SubagentRunRecord) => hasRetainedWork(entry);
 }

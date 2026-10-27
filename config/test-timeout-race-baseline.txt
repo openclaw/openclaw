@@ -5,9 +5,6 @@
 packages/agent-core/src/agent-loop.async-tools.test.ts	1
 packages/ai/src/transports/openai-responses-client.continuation.test.ts	2
 packages/gateway-client/src/scope-upgrade.test.ts	2
-packages/memory-host-sdk/src/host/batch-upload.test.ts	3
-packages/memory-host-sdk/src/host/post-json.test.ts	3
-packages/memory-host-sdk/src/host/response-snippet.test.ts	3
 src/agents/agent-bundle-mcp-manager.pending-disposal.test.ts	1
 src/agents/agent-bundle-mcp-tools.materialize.test.ts	1
 src/agents/agent-tool-definition-adapter.test.ts	2
@@ -74,17 +71,13 @@ src/gateway/test-helpers.server-storage.test.ts	1
 src/gateway/worker-environments/node-worker-workspace-publication.test.ts	2
 src/gateway/worker-environments/node-workspace-transfer-revocation.test.ts	3
 src/infra/approval-handler-runtime.test.ts	1
-src/infra/http-body.response.test.ts	2
 src/infra/kysely-sync.test.ts	1
-src/infra/net/fetch-guard.ssrf.test.ts	1
-src/infra/net/provider-websocket.test.ts	1
 src/infra/push-apns-cancellation.test.ts	1
 src/infra/push-apns.test.ts	1
 src/infra/session-cost-usage-cache.worker.test.ts	5
 src/infra/state-migrations.workspace-setup-sandbox.test.ts	1
 src/meeting-bot/realtime-node-audio-transport.test.ts	1
 src/plugins/openai-compatible-embedding-provider.test.ts	2
-src/plugins/plugin-metadata-lifecycle.test.ts	1
 src/plugins/provider-self-hosted-discovery.test.ts	11
 src/plugins/runtime/runtime-agent.ingress.integration.test.ts	1
 src/process/command-queue.capacity-groups.test.ts	1
@@ -96,7 +89,6 @@ src/state/openclaw-database-preflight.lifecycle.test.ts	3
 src/state/openclaw-state-lease-existing.test.ts	1
 src/system-agent/setup-lifetime.test.ts	1
 src/tui/tui-pty-local-test-support.ts	1
-src/utils/run-with-concurrency.test.ts	1
 src/worker/worker.runtime.test.ts	1
 test/cli-message-authority.integration.test.ts	1
 test/codex-node-cancellation.integration.test.ts	1

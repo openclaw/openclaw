@@ -4,6 +4,7 @@ import { createComponent, createSignal, flush, merge, type Setter } from "solid-
 import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../../../../test/helpers/promise.js";
 import * as staleRecovery from "../../../app/stale-chunk-reload.ts";
+import { createGatewayHarness } from "../../../lib/session-pull-requests.test-support.ts";
 import { cleanupSolid, mountSolid } from "../../../test-helpers/mount-solid.ts";
 import { waitForSolid } from "../../../test-helpers/solid-settle.ts";
 import { pullRequest } from "./chat-pull-requests.test-support.ts";
@@ -13,6 +14,7 @@ describe("pull request renderer loading", () => {
   afterEach(() => {
     cleanupSolid();
     vi.doUnmock("./chat-pull-requests-content.tsx");
+    vi.doUnmock("./chat-ci-details.tsx");
     vi.restoreAllMocks();
     vi.unstubAllGlobals();
   });
@@ -26,6 +28,63 @@ describe("pull request renderer loading", () => {
     });
     return { ...view, update };
   }
+
+  it("loads CI on first open, stays idle if closed during loading, and retains the reopened owner", async () => {
+    const ready = createDeferred();
+    onTestFinished(() => ready.resolve());
+    let imports = 0;
+    // mock-isolation: hold only the panel transport; its real owner still admits every read.
+    vi.doMock("./chat-ci-details.tsx", async () => {
+      imports++;
+      await ready.promise;
+      return vi.importActual<typeof import("./chat-ci-details.tsx")>("./chat-ci-details.tsx");
+    });
+    const harness = createGatewayHarness();
+    harness.request.mockResolvedValue({
+      owner: "openclaw",
+      repo: "openclaw",
+      number: 103469,
+      headSha: "a".repeat(40),
+      status: "ready",
+      rateLimited: false,
+      checks: [],
+    });
+    const view = mount({
+      pullRequests: [pullRequest({ headSha: "a".repeat(40) })],
+      gateway: harness.gateway,
+      sessionKey: "agent:main:ci-loading",
+      status: "ready",
+      onDismiss: vi.fn(),
+    });
+    await waitForSolid(() =>
+      expect(view.container.querySelector(".chat-pr__checks")).not.toBeNull(),
+    );
+    const disclosure = view.container.querySelector<HTMLDetailsElement>(".chat-pr__checks")!;
+    expect(imports).toBe(0);
+    expect(view.container.querySelector("openclaw-chat-ci-details")).toBeNull();
+    disclosure.open = true;
+    disclosure.dispatchEvent(new Event("toggle"));
+    await waitForSolid(() => expect(imports).toBe(1));
+    disclosure.open = false;
+    disclosure.dispatchEvent(new Event("toggle"));
+    ready.resolve();
+    await waitForSolid(() =>
+      expect(view.container.querySelector("openclaw-chat-ci-details")).not.toBeNull(),
+    );
+    expect(harness.request).not.toHaveBeenCalled();
+    const owner = view.container.querySelector("openclaw-chat-ci-details");
+    disclosure.open = true;
+    disclosure.dispatchEvent(new Event("toggle"));
+    await waitForSolid(() => expect(view.container.querySelector(".chat-ci__jobs")).not.toBeNull());
+    await waitForSolid(() => expect(harness.request).toHaveBeenCalledOnce());
+    disclosure.open = false;
+    disclosure.dispatchEvent(new Event("toggle"));
+    disclosure.open = true;
+    disclosure.dispatchEvent(new Event("toggle"));
+    flush();
+    expect(view.container.querySelector("openclaw-chat-ci-details")).toBe(owner);
+    expect(imports).toBe(1);
+  });
 
   it("keeps an empty chat cold and presents current PR data after the first load", async () => {
     const ready = createDeferred();
@@ -62,6 +121,12 @@ describe("pull request renderer loading", () => {
       ),
     );
     const row = view.container.querySelector(".chat-pr");
+    const disclosure = row?.querySelector<HTMLDetailsElement>(".chat-pr__checks");
+    disclosure!.open = true;
+    disclosure!.dispatchEvent(new Event("toggle"));
+    await waitForSolid(() =>
+      expect(row?.querySelector("openclaw-chat-ci-automation")).not.toBeNull(),
+    );
     const automation = row?.querySelector("openclaw-chat-ci-automation");
     view.update({ ...initial, pullRequests: [{ ...current, title: "Refreshed work" }], onDismiss });
     flush();

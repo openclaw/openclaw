@@ -3,6 +3,7 @@ import path from "node:path";
 import { afterEach, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { createApplyPatchTool } from "./apply-patch.js";
+import { applyPatch, createMemoryPatchSandbox } from "./apply-patch.test-support.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
@@ -38,6 +39,36 @@ it.each([
     "@@\n It's done\n-old\n+new",
     "It’s done\nnew\n",
   ],
+  ...["\u2000", "\u2001"].map((space) => [
+    `internal U+${space.charCodeAt(0).toString(16)} quad space`,
+    `# wait${space}30 seconds\nold\n`,
+    "@@\n # wait 30 seconds\n-old\n+new\u2000value\u2001",
+    `# wait${space}30 seconds\nnew\u2000value\u2001\n`,
+  ]),
+  [
+    "EOF replacement with fuzzy context",
+    "head\nlast context  \nold\n",
+    "@@\n last context\n-old\n+new\n*** End of File",
+    "head\nlast context  \nnew\n",
+  ],
+  [
+    "multiple chunks with repeated context",
+    "anchor  \nold one\nmarker  \nanchor  \nold two\nmarker  \n",
+    "@@\n anchor\n-old one\n+new one\n marker\n@@\n anchor\n-old two\n+new two\n marker",
+    "anchor  \nnew one\nmarker  \nanchor  \nnew two\nmarker  \n",
+  ],
+  [
+    "tab context with CRLF replacement",
+    "\tcontext\r\nold\r\n",
+    "@@\n    context\n-old\n+new",
+    "\tcontext\r\nnew\r\n",
+  ],
+  [
+    "mixed endings with fuzzy context",
+    "before  \r\nold\nIt\u2019s after\r\n",
+    "@@\n before\n-old\n+new\n It's after",
+    "before  \r\nnew\nIt\u2019s after\r\n",
+  ],
   ["mixed endings outside hunk", "a\r\nb\nc\r\n", "@@\n-b\n+new", "a\r\nnew\nc\r\n"],
   ["mixed endings within hunk", "a\r\nb\r\nc\n", "@@\n a\n-b\n+new\n c", "a\r\nnew\r\nc\n"],
   ["UTF-8 BOM", "\uFEFFheading\nkeep\n", "@@\n-heading\n+title\n keep", "\uFEFFtitle\nkeep\n"],
@@ -49,7 +80,7 @@ it.each([
     "head\r\none\r\ntwo",
   ],
   ["unterminated final line deletion", "first\nlast", "@@\n first\n-last", "first\n"],
-  ["context insertion", "a\nanchor\nz\n", "@@ anchor\n+inserted", "a\nanchor\ninserted\nz\n"],
+  ["context insertion", "a\nanchor  \nz\n", "@@ anchor\n+inserted", "a\nanchor  \ninserted\nz\n"],
   ["source-coordinate insertions", "a\nb\nc\n", "@@ a\n+x\n@@ b\n+y", "a\nx\nb\ny\nc\n"],
   ["EOF insertion", "line1\n", "@@\n+line2\n*** End of File", "line1\nline2\n"],
   ["unterminated EOF insertion", "line1", "@@\n+line2\n*** End of File", "line1\nline2"],
@@ -68,6 +99,34 @@ it.each([
   ],
 ])("preserves update bytes: %s", async (_case, initial, changes, expected) => {
   expect(await runUpdate(initial, changes)).toBe(expected);
+});
+
+it.each([
+  ["update", ""],
+  ["same-path move", "*** Move to: ./source.txt\n"],
+])("preserves formatting without a write for a no-op %s", async (_case, move) => {
+  const patch = `*** Begin Patch\n*** Update File: source.txt\n${move}@@\n foo\n-bar\n+bar\n*** End Patch`;
+  for (const initial of ["foo\r\nbar\r\n", "foo\nbar"]) {
+    const memory = createMemoryPatchSandbox({ "source.txt": initial });
+
+    const result = await applyPatch(patch, memory.options);
+
+    expect(result.content).toEqual([{ type: "text", text: "No changes made to source.txt." }]);
+    expect(result.details.summary).toEqual({ added: [], modified: [], deleted: [] });
+    expect(memory.files.get("/sandbox/source.txt")).toBe(initial);
+    expect(memory.writeFile).not.toHaveBeenCalled();
+  }
+});
+
+it("applies a real deletion of the sole blank line", async () => {
+  const memory = createMemoryPatchSandbox({ "source.txt": "\n" });
+  const patch = "*** Begin Patch\n*** Update File: source.txt\n@@\n-\n*** End Patch";
+
+  const result = await applyPatch(patch, memory.options);
+
+  expect(result.details.summary.modified).toEqual(["source.txt"]);
+  expect(memory.files.get("/sandbox/source.txt")).toBe("");
+  expect(memory.writeFile).toHaveBeenCalledTimes(1);
 });
 
 it("applies a hunk larger than the engine's call argument limit", async () => {

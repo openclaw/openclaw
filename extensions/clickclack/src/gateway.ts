@@ -10,6 +10,7 @@ import { sleepWithAbort } from "openclaw/plugin-sdk/runtime-env";
 import { readStringField } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { safeParseJson, truncateCodePoints } from "openclaw/plugin-sdk/text-utility-runtime";
 import { rawDataToString } from "openclaw/plugin-sdk/webhook-ingress";
+import { startWebSocketKeepalive } from "openclaw/plugin-sdk/websocket-runtime";
 import { resolveClickClackInboundAccess } from "./access.js";
 import { resolveClickClackAccount } from "./accounts.js";
 import {
@@ -268,11 +269,13 @@ export async function startClickClackGatewayAccount(
         let loggedMessageFailure = false;
         let messageQueue = Promise.resolve();
         let removeAbortListener: (() => void) | undefined;
+        let stopKeepalive: (() => void) | undefined;
         const finishSocketCycle = () => {
           if (settled) {
             return;
           }
           settled = true;
+          stopKeepalive?.();
           removeAbortListener?.();
           removeAbortListener = undefined;
           resolve();
@@ -312,6 +315,16 @@ export async function startClickClackGatewayAccount(
         removeAbortListener = () => ctx.abortSignal.removeEventListener("abort", abort);
         socket.on("open", () => {
           ctx.setStatus(channelReadyPatch({ accountId: account.accountId }));
+          // A network path that dies without a FIN never emits close; the missed
+          // pong ends this cycle so the reconnect replays the backlog. Start on
+          // open: the helper stops for good if its first tick finds the socket
+          // still connecting.
+          stopKeepalive = startWebSocketKeepalive(socket, () => {
+            ctx.log?.warn?.(
+              `[${account.accountId}] ClickClack websocket heartbeat timed out; reconnecting`,
+            );
+            socket.terminate();
+          });
         });
         socket.on("message", (data) => {
           if (closing || settled) {

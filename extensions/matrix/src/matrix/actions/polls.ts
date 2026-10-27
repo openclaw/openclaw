@@ -18,55 +18,6 @@ function normalizeOptionIndexes(indexes: number[]): number[] {
   return uniqueValues(normalized);
 }
 
-function resolveSelectedAnswerIds(params: {
-  optionIds?: string[];
-  optionIndexes?: number[];
-  pollContent: PollStartContent;
-}): { answerIds: string[]; labels: string[]; maxSelections: number } {
-  const parsed = parsePollStart(params.pollContent);
-  if (!parsed) {
-    throw new Error("Matrix poll vote requires a valid poll start event.");
-  }
-
-  const selectedById = normalizeUniqueTrimmedStringList(params.optionIds);
-  const selectedByIndex = normalizeOptionIndexes(params.optionIndexes ?? []).map((index) => {
-    const answer = parsed.answers[index - 1];
-    if (!answer) {
-      throw new Error(
-        `Matrix poll option index ${index} is out of range for a poll with ${parsed.answers.length} options.`,
-      );
-    }
-    return answer.id;
-  });
-
-  const answerIds = normalizeUniqueTrimmedStringList([...selectedById, ...selectedByIndex]);
-  if (answerIds.length === 0) {
-    throw new Error("Matrix poll vote requires at least one poll option id or index.");
-  }
-  if (answerIds.length > parsed.maxSelections) {
-    throw new Error(
-      `Matrix poll allows at most ${parsed.maxSelections} selection${parsed.maxSelections === 1 ? "" : "s"}.`,
-    );
-  }
-
-  const answerMap = new Map(parsed.answers.map((answer) => [answer.id, answer.text] as const));
-  const labels = answerIds.map((answerId) => {
-    const label = answerMap.get(answerId);
-    if (!label) {
-      throw new Error(
-        `Matrix poll option id "${answerId}" is not valid for poll ${parsed.question}.`,
-      );
-    }
-    return label;
-  });
-
-  return {
-    answerIds,
-    labels,
-    maxSelections: parsed.maxSelections,
-  };
-}
-
 export async function voteMatrixPoll(
   roomId: string,
   pollId: string,
@@ -84,14 +35,49 @@ export async function voteMatrixPoll(
       throw new Error(`Event ${pollId} is not a Matrix poll start event.`);
     }
 
-    const { answerIds, labels, maxSelections } = resolveSelectedAnswerIds({
-      optionIds: [...(opts.optionIds ?? []), ...(opts.optionId ? [opts.optionId] : [])],
-      optionIndexes: [
-        ...(opts.optionIndexes ?? []),
-        ...(opts.optionIndex !== undefined ? [opts.optionIndex] : []),
-      ],
-      pollContent: pollEvent.content as PollStartContent,
+    const optionIds = [...(opts.optionIds ?? []), ...(opts.optionId ? [opts.optionId] : [])];
+    const optionIndexes = [
+      ...(opts.optionIndexes ?? []),
+      ...(opts.optionIndex !== undefined ? [opts.optionIndex] : []),
+    ];
+    const pollContent = pollEvent.content as PollStartContent;
+    const parsed = parsePollStart(pollContent);
+    if (!parsed) {
+      throw new Error("Matrix poll vote requires a valid poll start event.");
+    }
+
+    const selectedById = normalizeUniqueTrimmedStringList(optionIds);
+    const selectedByIndex = normalizeOptionIndexes(optionIndexes ?? []).map((index) => {
+      const answer = parsed.answers[index - 1];
+      if (!answer) {
+        throw new Error(
+          `Matrix poll option index ${index} is out of range for a poll with ${parsed.answers.length} options.`,
+        );
+      }
+      return answer.id;
     });
+
+    const answerIds = normalizeUniqueTrimmedStringList([...selectedById, ...selectedByIndex]);
+    if (answerIds.length === 0) {
+      throw new Error("Matrix poll vote requires at least one poll option id or index.");
+    }
+    if (answerIds.length > parsed.maxSelections) {
+      throw new Error(
+        `Matrix poll allows at most ${parsed.maxSelections} selection${parsed.maxSelections === 1 ? "" : "s"}.`,
+      );
+    }
+
+    const answerMap = new Map(parsed.answers.map((answer) => [answer.id, answer.text] as const));
+    const labels = answerIds.map((answerId) => {
+      const label = answerMap.get(answerId);
+      if (!label) {
+        throw new Error(
+          `Matrix poll option id "${answerId}" is not valid for poll ${parsed.question}.`,
+        );
+      }
+      return label;
+    });
+    const maxSelections = parsed.maxSelections;
 
     const content = buildPollResponseContent(pollId, answerIds);
     const eventId = await client.sendEvent(resolvedRoom, "m.poll.response", content);

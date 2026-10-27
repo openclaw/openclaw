@@ -4,6 +4,7 @@ import fs from "node:fs/promises";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import type { OAuthClientProvider } from "@modelcontextprotocol/client";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { readRequestText as readOAuthBody } from "../../test/helpers/gateway-integration-fixtures.js";
 import type { McpServerConfig } from "../config/types.mcp.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { handleMcpOAuthCallback } from "../gateway/mcp-oauth-callback.js";
@@ -87,14 +88,6 @@ async function persistRedirect(provider: OAuthClientProvider) {
 function sendOAuthJson(response: ServerResponse, body: unknown, status = 200): void {
   response.writeHead(status, { "content-type": "application/json" });
   response.end(JSON.stringify(body));
-}
-
-async function readOAuthBody(request: IncomingMessage): Promise<string> {
-  const chunks: Buffer[] = [];
-  for await (const chunk of request) {
-    chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
-  }
-  return Buffer.concat(chunks).toString("utf8");
 }
 
 async function startAuthorizationServer() {

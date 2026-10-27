@@ -222,6 +222,7 @@ export async function runEmbeddedAttemptPromptPhase(
     const promptContext = await prepareEmbeddedAttemptPromptContext({
       sessionVersion: sessionManager.getHeader()?.version,
       attempt,
+      systemPromptRuntimeContextFragments: prepared.systemPrompt.runtimeContextFragments,
       capabilityToolNames: prepared.toolCatalog.toolSearchRunPlan.capabilityToolNames,
       messages: activeSession.messages,
       prompt: promptAssembly,

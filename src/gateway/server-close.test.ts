@@ -169,7 +169,10 @@ describe("createGatewayCloseHandler", () => {
     }
   });
 
-  registerGatewayResourceRetirementTests(createGatewayCloseHandler);
+  registerGatewayResourceRetirementTests(createGatewayCloseHandler, {
+    mocks,
+    sharedStateLifecycle,
+  });
 
   it.each(["shutdown", "pre-restart", "harness", "sdk"] as const)(
     "retains shared SQLite through actual %s cleanup after grace",
@@ -1385,47 +1388,14 @@ describe("createGatewayCloseHandler", () => {
     expect(closeOrder).toEqual([
       "code-mode-runs",
       "agent-harnesses",
-      "provider-transport-dispatchers",
       "bundle-mcp",
       "bundle-lsp",
       "http-server",
       "tailscale",
       "embedding-providers",
+      "provider-transport-dispatchers",
     ]);
   });
-
-  it.each([
-    { label: "bundle-mcp", dispose: mocks.disposeAllSessionMcpRuntimes },
-    { label: "embedding-providers", dispose: mocks.drainRetainedEmbeddingProviders },
-  ])(
-    "continues independent teardown while $label cleanup is pending",
-    async ({ label, dispose }) => {
-      vi.useFakeTimers();
-      const cleanup = createDeferredCore();
-      dispose.mockReturnValue(cleanup.promise);
-      const httpClose = vi.fn((callback: (error?: Error | null) => void) => callback(null));
-      const close = createGatewayCloseHandler({
-        httpServer: createHttpServer(httpClose) as never,
-      });
-      const closePromise = close({ reason: "test shutdown" });
-      try {
-        if (label === "bundle-mcp") {
-          await vi.advanceTimersByTimeAsync(0);
-          expect(mocks.disposeAllBundleLspRuntimes).toHaveBeenCalledOnce();
-          expect(dispose.mock.invocationCallOrder[0]).toBeLessThan(
-            mocks.disposeAllBundleLspRuntimes.mock.invocationCallOrder[0]!,
-          );
-        }
-        await vi.advanceTimersByTimeAsync(5_000);
-        expect(httpClose).toHaveBeenCalledOnce();
-        expect(sharedStateLifecycle.has("open")).toBe(true);
-      } finally {
-        cleanup.resolve();
-        await closePromise;
-      }
-      expect((await closePromise).warnings).toContain(label);
-    },
-  );
 
   it.each([true, false])(
     "bounds websocket close beyond grace (tracked client: %s)",

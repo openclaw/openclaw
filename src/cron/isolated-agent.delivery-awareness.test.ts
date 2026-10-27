@@ -1,4 +1,5 @@
 import "./isolated-agent.mocks.js";
+import assert from "node:assert/strict";
 import path from "node:path";
 import { beforeAll, beforeEach, expect, it } from "vitest";
 import type { ReplyPayload } from "../auto-reply/types.js";
@@ -73,9 +74,7 @@ it("adds the exact run-session inspection link only to the final visible payload
   );
   expect(result).toMatchObject({ status: "ok", delivered: true });
   const sessionKey = result.sessionKey;
-  if (typeof sessionKey !== "string") {
-    throw new Error("expected a cron run session key");
-  }
+  assert(typeof sessionKey === "string", "expected a cron run session key");
   expect(sessionKey).toMatch(/^agent:main:cron:job-1:run:/);
   const finalText = `final cron summary\n[Inspect run](https://control.example/console/chat/main/${sessionKey.replace(/^agent:main:/, "").replaceAll(":", "/")})`;
   expect(deps.telegram).toHaveBeenNthCalledWith(1, "123", "first cron update", expect.any(Object));

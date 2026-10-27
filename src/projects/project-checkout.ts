@@ -8,7 +8,7 @@ import {
 } from "../state/openclaw-state-lease.js";
 
 const PROJECT_CHECKOUT_LEASE_MS = 30_000;
-export const PROJECT_CHECKOUT_WAIT_MS = 30_000;
+const PROJECT_CHECKOUT_WAIT_MS = 30_000;
 
 export class ProjectCheckoutError extends Error {
   override name = "ProjectCheckoutError";

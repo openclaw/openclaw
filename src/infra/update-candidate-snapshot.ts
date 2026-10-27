@@ -370,6 +370,13 @@ export async function prepareUpdateCandidateStateSnapshot(params: {
     });
     params.signal?.throwIfAborted();
     params.assertCurrent?.();
+    const sourceSelectors =
+      params.env.OPENCLAW_STATE_DIR?.trim() || params.env.OPENCLAW_CONFIG_PATH?.trim()
+        ? {
+            OPENCLAW_STATE_DIR: params.env.OPENCLAW_STATE_DIR,
+            OPENCLAW_CONFIG_PATH: params.env.OPENCLAW_CONFIG_PATH,
+          }
+        : { OPENCLAW_STATE_DIR: params.stateDir };
     let workerTermination = "exit";
     let budgetSignal: AbortSignal | undefined;
     const outcome = await withUpdateCandidateIoBudget(
@@ -411,6 +418,7 @@ export async function prepareUpdateCandidateStateSnapshot(params: {
                 HOME: params.env.HOME,
                 OPENCLAW_HOME: params.env.OPENCLAW_HOME,
                 USERPROFILE: params.env.USERPROFILE,
+                ...sourceSelectors,
                 OPENCLAW_AGENT_DIR: params.env.OPENCLAW_AGENT_DIR,
                 PI_CODING_AGENT_DIR: params.env.PI_CODING_AGENT_DIR,
                 OPENCLAW_BUNDLED_PLUGINS_DIR: params.env.OPENCLAW_BUNDLED_PLUGINS_DIR,

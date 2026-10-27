@@ -93,3 +93,33 @@ it("consumes complete CR frames before requesting more input", async () => {
     unsubscribe();
   }
 });
+
+it("assembles a fragmented large frame once while enforcing the pending limit", async () => {
+  const padding = "x".repeat(1024 * 1024);
+  const wire = `: ${padding}\n\n${frame()}`;
+  const parts = wire.match(/.{1,1024}/gs) ?? [];
+  const join = Array.prototype.join;
+  let joinedChars = 0;
+  const spy = vi.spyOn(Array.prototype, "join").mockImplementation(function (
+    this: unknown[],
+    separator,
+  ) {
+    for (const part of this) {
+      if (typeof part === "string") {
+        joinedChars += part.length;
+      }
+    }
+    return join.call(this, separator);
+  });
+  let result;
+  try {
+    result = await runResponse(chunks(parts));
+  } finally {
+    spy.mockRestore();
+  }
+  expect(result.stopReason).toBe("stop");
+  expect(
+    result.content.filter((block) => block.type === "text").map((block) => block.text),
+  ).toEqual(["Hello world"]);
+  expect(joinedChars).toBeLessThan(wire.length * 4);
+});

@@ -23,6 +23,7 @@ import {
   isGatewayWorkAdmissionClosed,
   runWithGatewayIndependentRootWorkAdmission,
 } from "../process/gateway-work-admission.js";
+import { sweepLocalWorkspaceManifests } from "./worker-environments/local-workspace-gc.js";
 
 type MaintenanceRequest = { jobId?: string; retryDeferred?: boolean };
 type MaintenanceOwner = {
@@ -164,6 +165,8 @@ export function startWorktreeMaintenance(params: {
                     batchStartedAt = scheduler.now();
                   },
                 });
+                assertCurrent();
+                await sweepLocalWorkspaceManifests({ signal: scheduler.signal, assertCurrent });
                 assertCurrent();
                 Object.assign(current, result);
                 params.onComplete(result);

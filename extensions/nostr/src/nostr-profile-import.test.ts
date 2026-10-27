@@ -21,9 +21,7 @@ vi.mock("nostr-tools", () => ({
       return { close: mockState.closeSubscription };
     }
 
-    close(relays: string[]) {
-      mockState.close(relays);
-    }
+    close = mockState.close;
   },
 }));
 
@@ -57,7 +55,6 @@ describe("nostr-profile-import", () => {
       createProfileEvent({ name: "arrived-first" }, "f", 20),
       createProfileEvent({ name: "canonical" }, "0", 20),
     );
-
     await expect(importProfile(relays)).resolves.toMatchObject({
       ok: true,
       profile: { name: "canonical" },
@@ -90,11 +87,7 @@ describe("nostr-profile-import", () => {
     ],
   ])("rejects invalid profile content: %j", async (content, error) => {
     respondWithEvents(createProfileEvent(content));
-    await expect(importProfile()).resolves.toMatchObject({
-      ok: false,
-      error,
-      sourceRelay: relay,
-    });
+    await expect(importProfile()).resolves.toMatchObject({ ok: false, error, sourceRelay: relay });
   });
 
   it("drops unknown fields and unsafe URLs from an otherwise valid profile", async () => {
@@ -106,7 +99,6 @@ describe("nostr-profile-import", () => {
         custom: "ignored",
       }),
     );
-
     const result = await importProfile();
     expect(result).toMatchObject({ ok: true, sourceRelay: relay });
     expect(result.profile).toStrictEqual({ name: "valid", website: "https://example.com" });
@@ -118,9 +110,8 @@ describe("nostr-profile-import", () => {
     expect(mergeProfiles(local, remote)).toStrictEqual(expected);
   });
   it("mergeProfiles fills undefined local fields from the imported profile", () => {
-    expect(mergeProfiles({ name: undefined, displayName: undefined }, imported)).toMatchObject({
-      name: imported.name,
-      displayName: imported.displayName,
-    });
+    expect(mergeProfiles({ name: undefined, displayName: undefined }, imported)).toMatchObject(
+      imported,
+    );
   });
 });

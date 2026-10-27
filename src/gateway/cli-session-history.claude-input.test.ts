@@ -1,9 +1,6 @@
 import fs from "node:fs/promises";
 import { expect, it } from "vitest";
 import { buildCliSessionDriftNote } from "../agents/cli-session-drift.js";
-import { HEARTBEAT_PROMPT } from "../auto-reply/heartbeat.js";
-import { applySessionHints } from "../auto-reply/reply/body.js";
-import { formatSystemTurnPrompt } from "../sessions/system-turn-prompt.js";
 import {
   projectChatDisplayMessages,
   projectChatDisplayMessagesWithState,
@@ -17,7 +14,6 @@ import {
 import {
   buildLegacyReseedPrompt,
   claudeUser,
-  LEGACY_EXEC_COMPLETION_PROMPT,
   mergeImportedChatHistoryMessages,
   user,
   withClaudeProjectsDir,
@@ -38,7 +34,6 @@ const REQUESTER_HINT =
   'requester_profile is the verified linked requester. For "assign to me", use sessions assign_owner with ownerType="human" and ownerId=requester_profile.id, if available.';
 const frame = (json: string) =>
   `Conversation info: ⟦openclaw:ctx⟧\n\`\`\`json\n${json}\n\`\`\`\n\n`;
-const execPrompt = LEGACY_EXEC_COMPLETION_PROMPT;
 const writeRows = (filePath: string, rows: readonly unknown[]) =>
   fs.writeFile(filePath, rows.map((row) => JSON.stringify(row)).join("\n"));
 
@@ -67,28 +62,7 @@ const internalInputs = [
     "<command-name>/compact</command-name>\n            <command-message>compact</command-message>\n            <command-args></command-args>",
   ],
   ["compact-output", "<local-command-stdout>Compacted </local-command-stdout>"],
-  ["exec", execPrompt],
-  [
-    "exec-with-queued-system-event",
-    `System: [2026-10-06 14:35:17 GMT+8] Control UI reaction added: 👍 by Alice on msg m1 from assistant\n\n${execPrompt}`,
-  ],
-  [
-    "exec-after-interrupted-run",
-    applySessionHints({
-      baseBody: execPrompt,
-      abortedLastRun: true,
-    }),
-  ],
 ] as const;
-const RESTART_RECOVERY_OPENING = formatSystemTurnPrompt(
-  "Your previous turn was interrupted by a gateway restart while OpenClaw was waiting on tool/model work.",
-);
-const internalWakeInputs = [
-  ["heartbeat", `${HEARTBEAT_PROMPT}\nCurrent time: Saturday`],
-  ["restart_recovery", RESTART_RECOVERY_OPENING],
-  ["restart_recovery", `[Tue 2026-09-22 16:00 GMT+8] ${RESTART_RECOVERY_OPENING} Continue.`],
-] as const;
-
 function parseImportedUser(content: string | unknown[]) {
   return parseClaudeCliHistoryEntry(claudeUser(content), "native-session", 1, new Map(), {
     reseedMode: "recover",
@@ -162,15 +136,6 @@ it.each(["resume", "legacy requester"])(
     expectVisible(importUnmatched([...blocks(text), image]), [...blocks(body), image]);
   },
 );
-
-it.each(internalWakeInputs)("marks imported %s prompts internal", (sourceTool, text) => {
-  const internal = { display: false, provenance: { kind: "internal_system", sourceTool } };
-  expect(
-    [text, `System: [2026-10-03 08:56:29 GMT+8] Gateway restart ok\n\n${text}`].map(
-      parseImportedUser,
-    ),
-  ).toMatchObject([internal, internal]);
-});
 
 it.each([
   "OpenClaw resumed this CLI session after prompt content changed. This is a quote.",

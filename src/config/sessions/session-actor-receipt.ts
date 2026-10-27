@@ -1,3 +1,4 @@
+import { isDeepStrictEqual } from "node:util";
 import type {
   SessionActorCommandContext,
   SessionActorHotState,
@@ -8,6 +9,111 @@ import type {
   SessionActorReducerOutcome,
 } from "./session-actor-contract.js";
 import type { PendingInputMutationReceipt } from "./session-pending-input-operations.types.js";
+
+export type SessionActorCommittedWireOutcome<Value> = Extract<
+  SessionActorOutcome<Value>,
+  { kind: "committed" }
+> & {
+  receipt: {
+    entryReference?: string;
+    entryDelta?: { values: [string, unknown][]; removed: string[] };
+    entryMetadataReferences?: number[];
+  };
+};
+
+/** The command retains this exact preimage until native settlement completes. */
+export function projectSessionActorCommittedOutcome<Value>(
+  outcome: Extract<SessionActorOutcome<Value>, { kind: "committed" }>,
+  reference: SessionActorHotState | undefined,
+): SessionActorCommittedWireOutcome<Value> {
+  const { receipt } = outcome;
+  // Turn/initialization results can also expose the entry; preserve their graph aliases.
+  const append =
+    receipt.phase === "appendTranscriptEvent" ||
+    (receipt.phase === "appendToolResult" && receipt.transcript.append !== undefined);
+  if (
+    (!append && receipt.phase !== "patch") ||
+    receipt.transcript.append?.initialEntry ||
+    !reference ||
+    (receipt.postimage.entry !== reference.entry &&
+      (receipt.phase !== "patch" || !receipt.postimage.entry || !reference.entry))
+  ) {
+    return outcome;
+  }
+  const entry = receipt.postimage.entry;
+  const base = reference.entry;
+  const entryDelta =
+    entry && base && entry !== base
+      ? {
+          values: Object.entries(entry).filter(
+            ([key, value]) =>
+              !Object.hasOwn(base, key) || !isDeepStrictEqual(value, Reflect.get(base, key)),
+          ),
+          removed: Object.keys(base).filter((key) => !Object.hasOwn(entry, key)),
+        }
+      : undefined;
+  // Metadata consumers need the same full entry, not a second wire copy.
+  let entryMetadataReferences: number[] | undefined;
+  const entryMetadata = receipt.entryMetadata?.map((metadata, index) => {
+    const key = receipt.postimage.target.sessionKey;
+    const fact = metadata.facts.get(key);
+    if (fact?.kind !== "postimage" || !entry || !isDeepStrictEqual(fact.value.fullEntry, entry)) {
+      return metadata;
+    }
+    (entryMetadataReferences ??= []).push(index);
+    return {
+      ...metadata,
+      facts: new Map(metadata.facts).set(key, {
+        ...fact,
+        value: { ...fact.value, fullEntry: undefined },
+      }),
+    };
+  });
+  return {
+    ...outcome,
+    receipt: {
+      ...receipt,
+      entryReference: reference.writeToken,
+      ...(entryDelta ? { entryDelta } : {}),
+      entryMetadata,
+      ...(entryMetadataReferences ? { entryMetadataReferences } : {}),
+      postimage: { ...receipt.postimage, entry: undefined },
+    },
+  };
+}
+
+export function restoreSessionActorCommittedOutcome<Value>(
+  outcome: SessionActorCommittedWireOutcome<Value>,
+  reference: SessionActorHotState | undefined,
+): Extract<SessionActorOutcome<Value>, { kind: "committed" }> {
+  const { receipt } = outcome;
+  if (receipt.entryReference !== undefined) {
+    if (!reference || receipt.entryReference !== reference.writeToken) {
+      throw new Error("Session actor receipt entry reference is unavailable");
+    }
+    // The replica owns this deeply frozen entry; settlement and observers only read it.
+    const delta = receipt.entryDelta;
+    const entry = delta
+      ? { ...reference.entry!, ...Object.fromEntries(delta.values) }
+      : reference.entry;
+    if (delta && entry) {
+      for (const key of delta.removed) {
+        Reflect.deleteProperty(entry, key);
+      }
+    }
+    receipt.postimage.entry = entry;
+    for (const index of receipt.entryMetadataReferences ?? []) {
+      const fact = receipt.entryMetadata![index]!.facts.get(receipt.postimage.target.sessionKey);
+      if (fact?.kind === "postimage") {
+        fact.value.fullEntry = entry;
+      }
+    }
+    delete receipt.entryReference;
+    delete receipt.entryDelta;
+    delete receipt.entryMetadataReferences;
+  }
+  return outcome;
+}
 
 function collectAppendedEvents(
   before: SessionActorHotState,

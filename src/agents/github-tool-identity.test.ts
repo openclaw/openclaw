@@ -375,7 +375,7 @@ describe("GitHub tool identity", () => {
     expect(JSON.stringify(status)).not.toContain("private diagnostics");
   });
 
-  it.each(["verification", "staging"] as const)(
+  it.each(["verification", "preparation", "staging"] as const)(
     "preserves the stable credential when refresh authority closes during %s",
     async (phase) => {
       vi.stubEnv("FS_SAFE_NATIVE_MODE", "off");
@@ -417,6 +417,12 @@ describe("GitHub tool identity", () => {
           profileDir,
           token: "replacement-credential",
           expectedAccountId: 202,
+          prepareEffect: async () => {
+            if (phase === "preparation") {
+              await Promise.resolve();
+              revoke();
+            }
+          },
           assertCurrent: () => {
             if (!authorized) {
               throw revoked;

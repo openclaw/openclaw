@@ -1,10 +1,8 @@
 import { resolveOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.paths.js";
 import { resolveStateDir } from "../state-dir.js";
 import { resolveSqliteScope, toDatabaseOptions } from "./session-accessor.sqlite-scope.js";
-import {
-  captureSessionActorStorageOwner,
-  withSessionActorStorage,
-} from "./session-actor-storage-binding.js";
+import { withSessionActorStorage } from "./session-actor-storage-acquisition.js";
+import { captureSessionActorStorageOwner } from "./session-actor-storage-binding.js";
 import type { SessionCollaborationScope } from "./session-collaboration-scope.js";
 import { withSessionStoreReaderInWorker } from "./session-entry-read-runtime.js";
 import type { SessionMembersSnapshot } from "./session-sharing-store.kernel.js";

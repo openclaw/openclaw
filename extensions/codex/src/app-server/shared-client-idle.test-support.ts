@@ -111,14 +111,7 @@ function createIdleLifecycleHarness() {
   const responses = {
     initialize: { userAgent: `codex-cli/${CODEX_APP_SERVER_VERSION}` },
     "model/list": {
-      data: [
-        {
-          ...createModelFixture("fixture-model"),
-          displayName: "Fixture",
-          description: "Fixture",
-          isDefault: true,
-        },
-      ],
+      data: [createModelFixture("fixture-model")],
     },
     "thread/unsubscribe": {},
   };

@@ -40,7 +40,6 @@ import { SANDBOX_GITHUB_CONFIG_DIR } from "./constants.js";
 import { resolveSandboxDockerUser } from "./docker-user.js";
 import { createSandboxFsBridge } from "./fs-bridge.js";
 import { toSandboxProvisioningError } from "./provisioning-error.js";
-import { readRegisteredSandboxRuntimeIds } from "./registry.js";
 import {
   resolveSandboxRuntimeStatus,
   resolveSandboxRuntimeStatusAsync,
@@ -161,7 +160,7 @@ async function ensureSandboxWorkspaceLayout(
     }
   }
   const syncedSkills = await syncSandboxSkillsToWorkspace();
-  await ensureReadOnlyWorkspaceSkillMountSources(
+  const createdSkillMountSources = await ensureReadOnlyWorkspaceSkillMountSources(
     {
       workspaceDir,
       agentWorkspaceDir,
@@ -171,6 +170,12 @@ async function ensureSandboxWorkspaceLayout(
     },
     assertCurrent,
   );
+  if (createdSkillMountSources && localWorkspace) {
+    // Finish producer-created layout before first use, so source admission does
+    // not mistake protected mount directories for unsaved guest work.
+    await localWorkspace.checkpoint();
+    assertCurrent?.();
+  }
 
   return {
     agentWorkspaceDir,
@@ -223,7 +228,6 @@ async function prepareSandboxWorkspaceSelection(
 ) {
   const { rawSessionKey, runtime } = resolved;
   params.assertCurrent?.();
-  operatorAuthority?.assertCurrent();
   const localWorkspace = params.config
     ? await (
         await import("./local-workspace.js")
@@ -237,12 +241,13 @@ async function prepareSandboxWorkspaceSelection(
         // Cleanup retains the workspace owner after execution authorization closes.
         assertCurrent: persistentExecution ? undefined : params.assertCurrent,
         assertHost: () => {
-          guard?.assertHost?.();
           if (persistentExecution) {
+            guard?.assertHost?.();
             return;
           }
           if (params.admittedRunContext) {
             operatorAuthority?.assertCurrent();
+            guard?.assertHost?.();
           } else {
             params.assertCurrent?.();
           }
@@ -316,7 +321,6 @@ async function resolveSandboxContextWithAuthority(
   const assertStateOwner = await captureSandboxStateOwner();
   const assertCallerCurrent = params.assertCurrent;
   const assertCurrent = () => {
-    assertStateOwner();
     assertCallerCurrent?.();
     operatorAuthority?.assertCurrent();
     assertStateOwner();
@@ -443,18 +447,12 @@ async function resolveSandboxContextWithAuthority(
             (readOnlyResourceMounts ??= []).push(githubMount);
           }
 
-          phases.mark("attempt.setup.sandbox.registry");
-          const registeredRuntimeIds = await readRegisteredSandboxRuntimeIds({
-            backendId: resolvedCfg.backend,
-            scopeKey,
-          });
           const provisionBackend = () => {
             ownedParams.assertCurrent?.();
             return createSandboxBackend(
               {
                 sessionKey: rawSessionKey,
                 scopeKey,
-                ...(registeredRuntimeIds.length > 0 ? { registeredRuntimeIds } : {}),
                 workspaceDir,
                 ...(localWorkspace
                   ? {

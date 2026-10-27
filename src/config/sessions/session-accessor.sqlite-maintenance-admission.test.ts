@@ -139,9 +139,9 @@ test("maintenance preparation yields to foreground writes and retains commit adm
       transport: { kind: "dedicated", channel: worker },
       operationId: 1,
       completion: "exit",
-      withWriteAdmission: async (run, admission) => {
+      withWriteAdmission: async (run, admission, operation) => {
         admissions.push(admission.admissionId);
-        await params.withWriteAdmission(run, admission);
+        await params.withWriteAdmission(run, admission, operation);
       },
       dispatch: () => worker.postMessage({ type: "start" }, []),
     }),

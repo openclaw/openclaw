@@ -522,6 +522,14 @@ row. See [Run history and reports](/cli/update#run-history-and-reports).
 Managed update leases use a separate machine-local `managed-update-handoffs.sqlite`
 database under the secure OpenClaw temporary directory. This owner must remain
 available while an update replaces an installation or changes its runtime state.
+The macOS Gateway LaunchAgent runs with its state's `tmp` as `TMPDIR`. For that
+managed `TMPDIR`, OpenClaw uses the operating system's per-user temporary directory
+(`getconf DARWIN_USER_TEMP_DIR`) instead, the directory terminal commands already
+use, so the Gateway, terminals, and every profile share one database. Any other
+explicit `TMPDIR` is still honored. Update admission also takes the installation
+in the database an earlier Gateway kept under its state's `tmp`, so that store's
+existing rules still decide when its custody has settled; `openclaw update repair`
+settles cancelled custody there.
 The update history above remains in the profile's shared state database.
 
 First creation exclusively creates a private file with one filesystem link.

@@ -3,6 +3,42 @@
   overflow: visible;
 }
 
+/* Account identity remains recognizable while a cold profile photo resolves. */
+.sidebar-identity-card .viewer-avatar.is-pending > img {
+  display: none;
+}
+
+.sidebar-identity-card .viewer-avatar.is-pending > .viewer-avatar__fallback {
+  display: grid;
+  visibility: visible;
+}
+
+.sidebar--rail .sidebar-shell__footer {
+  min-height: 0;
+}
+
+.sidebar--rail .sidebar-shell__content {
+  position: relative;
+}
+
+/* Reconnecting feedback floats over the list without reserving healthy-state space. */
+.sidebar--rail .sidebar-shell__connection {
+  position: absolute;
+  inset-inline: calc(-1 * var(--sidebar-pad-x));
+  bottom: 0;
+  padding: 4px var(--sidebar-pad-x);
+  border-block-start: 1px solid color-mix(in srgb, var(--border) 55%, transparent);
+  background: var(--sidebar-bg);
+}
+
+.sidebar-shell__connection > .gateway-status-tooltip {
+  display: flex;
+}
+
+.sidebar--rail .sidebar-shell__connection .gateway-status--row {
+  height: 28px;
+}
+
 .sidebar--rail .sidebar-shell {
   min-width: 0;
   overflow: hidden;
@@ -138,6 +174,10 @@
 
     &:is([aria-current="page"], [aria-pressed="true"], .nav-item--active) {
       --sidebar-rail-control-surface: var(--sidebar-rail-selected-surface);
+
+      &:is(.sidebar-rail__button, .nav-item) > :is(svg, .nav-item__icon) {
+        color: var(--accent);
+      }
     }
 
     &:is([aria-current="page"], [aria-pressed="true"], .nav-item--active):hover {
@@ -176,7 +216,7 @@
   justify-content: center;
   width: var(--sidebar-rail-control-size);
   padding-bottom: 8px;
-  border-bottom: 1px solid var(--border);
+  border-bottom: 1px solid var(--sidebar-rail-divider-color, var(--border));
 }
 
 .sidebar-rail__create .sidebar-new-session {
@@ -216,8 +256,7 @@
     .nav-item__icon > svg,
     .session-glyph__content,
     .session-glyph__icon,
-    .session-glyph__icon > svg,
-    .session-glyph__icon > img
+    .session-glyph__icon > *
   ) {
   width: var(--sidebar-rail-glyph-size);
   height: var(--sidebar-rail-glyph-size);
@@ -341,7 +380,7 @@
   background: var(--sidebar-rail-control-surface);
 }
 
-.sidebar-footer-bar__home .session-row-badge svg {
+.sidebar-footer-bar__home .session-row-badge > i {
   width: 10px;
   height: 10px;
 }
@@ -362,9 +401,11 @@
   user-select: none;
 }
 
-/* The entry, not its link, paints hover/current fills so the trailing pin sits
-   inside the same highlight. Inset shadows keep row heights unchanged. */
+/* Page entries paint around the link and pin. Session rows extend their own
+   surface across the pin slot so tags and multi-selection keep one owner. */
 .sidebar-pages__entry {
+  --sidebar-pages-pin-width: 28px;
+
   display: flex;
   align-items: center;
   border-radius: var(--radius-md);
@@ -379,19 +420,18 @@
   margin-block-start: 2px;
 }
 
-.sidebar-pages__entry:hover {
-  background: color-mix(in srgb, var(--bg-hover) 84%, transparent);
+.sidebar-pages__entry:has(.nav-item):where(:hover) {
+  background: var(--surface-hover);
   box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--border) 72%, transparent);
 }
 
 .sidebar-pages__entry:has(.nav-item--active) {
-  background: color-mix(in srgb, var(--accent-subtle) 88%, var(--bg-elevated) 12%);
-  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent) 16%, transparent);
+  background: var(--surface-selected);
+  box-shadow: inset 0 0 0 1px var(--navigation-selected-border);
 }
 
-.sidebar-pages__entry:has(.sidebar-recent-session--active) {
-  background: color-mix(in srgb, var(--text) 10%, transparent);
-  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent) 16%, transparent);
+.sidebar-pages__entry:has(.nav-item--active):hover {
+  background: var(--surface-selected-hover);
 }
 
 .sidebar-pages__entry .nav-item {
@@ -402,7 +442,7 @@
 .sidebar-pages__entry:hover
   :is(
     .nav-item:not(.nav-item--active),
-    .sidebar-recent-session:not(.sidebar-recent-session--active)
+    .sidebar-recent-session:not(.sidebar-recent-session--active, .sidebar-recent-session--selected)
   ) {
   color: var(--text);
 }
@@ -411,24 +451,34 @@
   opacity: 1;
 }
 
-.sidebar-pages__entry
-  .sidebar-recent-session:is(:hover, .sidebar-recent-session--active):not(
-    .sidebar-recent-session--selected
-  ) {
-  --session-row-bg: var(--session-row-tint, transparent);
-  --session-row-border: transparent;
-}
-
 .sidebar-pages__entry > .sidebar-zone-entry {
   flex: 1;
   min-width: 0;
+}
+
+.sidebar-pages__entry .sidebar-recent-session::after {
+  inset-inline-end: calc(-1px - var(--sidebar-pages-pin-width));
+}
+
+.sidebar-pages__entry:hover .sidebar-recent-session {
+  --session-row-bg: var(--session-row-hover-tint, var(--surface-hover));
+  --session-row-border: color-mix(in srgb, var(--border) 72%, transparent);
+}
+
+.sidebar-pages__entry:hover .sidebar-recent-session--active {
+  --session-row-bg: var(--surface-selected-hover);
+  --session-row-border: var(--navigation-selected-border);
+}
+
+.sidebar-pages__entry:hover .sidebar-recent-session--selected {
+  --session-row-bg: color-mix(in srgb, var(--accent) 14%, transparent);
 }
 
 .sidebar-pages__pin {
   display: flex;
   align-items: center;
   justify-content: center;
-  flex: 0 0 28px;
+  flex: 0 0 var(--sidebar-pages-pin-width, 28px);
   height: 28px;
   border: 0;
   border-radius: var(--radius-md);
@@ -443,7 +493,6 @@
 }
 
 .sidebar-pages__entry:hover .sidebar-pages__pin,
-.sidebar-online__row:hover .sidebar-pages__pin,
 .sidebar-pages__pin:focus-visible,
 .sidebar-pages__pin--pinned {
   opacity: 1;
@@ -624,6 +673,7 @@ html.openclaw-native-macos:not(.openclaw-native-web-chrome)
 }
 
 .sidebar-session-owner-filter .picker-select__trigger {
+  gap: 4px;
   min-height: 30px;
   padding: 4px 6px;
   border: 0;
@@ -646,6 +696,13 @@ html.openclaw-native-macos:not(.openclaw-native-web-chrome)
 .sidebar--rail .sidebar-session-toolbar__button {
   width: 28px;
   height: 28px;
+}
+
+.sidebar--rail .sidebar-session-toolbar__button.sidebar-session-sort {
+  width: auto;
+  max-width: 50%;
+  gap: 2px;
+  opacity: 1;
 }
 
 html.openclaw-native-web-chrome .shell:not(.shell--mobile-nav) .sidebar-panel-header {

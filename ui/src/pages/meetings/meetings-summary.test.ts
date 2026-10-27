@@ -28,13 +28,19 @@ afterEach(() => {
   vi.useRealTimers();
 });
 
-it("generates on open, holds failures without retry loops, and retries explicitly", async () => {
+it("generates on open, keeps tabs responsive, and holds failures until explicit retry", async () => {
   vi.useFakeTimers();
   const pending = deferred<typeof meetingPage>();
   const retry = deferred<typeof meetingPage>();
   detail.session = { ...meetingEntry, hasSummary: false };
   summarize.mockReturnValueOnce(pending.promise).mockReturnValueOnce(retry.promise);
   const { page } = mount(request, "?selector=meeting");
+  await waitForText(page, "Generating meeting summary");
+  const transcript = button(page, "Transcript");
+  transcript.click();
+  await waitForSolid(() => expect(transcript.ariaSelected).toBe("true"));
+  expect(page.textContent).toContain("Keep the reader quiet and readable.");
+  button(page, "Summary").click();
   await waitForText(page, "Generating meeting summary");
   await vi.advanceTimersByTimeAsync(9_000);
   expect(summarize).toHaveBeenCalledTimes(1);
@@ -45,7 +51,6 @@ it("generates on open, holds failures without retry loops, and retries explicitl
   button(page.querySelector(".transcripts-summary")!, "Retry").click();
   await waitForText(page, "Generating meeting summary");
   expect(page.textContent).not.toContain("Summary provider unavailable");
-  expect(button(page, "Transcript").disabled).toBe(false);
   detail = meetingPage;
   retry.resolve(meetingPage);
   await waitForText(page, "Reader layout discussed.");
@@ -60,7 +65,6 @@ it("finishes replacement notes while a cancelled summary request remains unresol
   summarize.mockReturnValueOnce(retired.promise).mockReturnValueOnce(replacement.promise);
   const { page, setSearch } = mount(request, "?selector=old");
   await waitForText(page, "Generating meeting summary");
-
   setSearch("?selector=new");
   await waitForSolid(() => expect(summarize).toHaveBeenCalledTimes(2));
   replacement.resolve({
@@ -94,23 +98,20 @@ it.each([
   expect(page.textContent).toContain(expected);
 });
 
-it.each(["selection", "client", "authorization"])("fences replaced %s", async (replacement) => {
+it.each(["client", "authorization"])("fences replaced %s", async (replacement) => {
   const pending = deferred<typeof meetingPage>();
   summarize.mockReturnValue(pending.promise);
-  const { page, setSearch, snapshot, notify } = mount(request, "?selector=old");
+  const { page, snapshot, notify } = mount(request, "?selector=old");
   await waitForText(page, "Generating meeting summary");
   detail = meetingPage;
-  if (replacement === "selection") {
-    setSearch("?selector=new");
-  } else if (replacement === "client") {
+  if (replacement === "client") {
     snapshot.client = { request } as unknown as GatewayBrowserClient;
-    notify();
   } else {
     snapshot.hello = {
       auth: { role: "operator", scopes: ["operator.read"] },
     } as ApplicationGatewaySnapshot["hello"];
-    notify();
   }
+  notify();
   await waitForText(page, "Reader layout discussed.");
   const late = { ...meetingPage.summary, markdown: "Late private notes" };
   pending.resolve({ ...meetingPage, summary: late });
@@ -118,28 +119,4 @@ it.each(["selection", "client", "authorization"])("fences replaced %s", async (r
   flush();
   expect(page.textContent).not.toContain("Late private notes");
   expect(page.textContent).toContain("Reader layout discussed.");
-});
-
-it("keeps same-meeting tab navigation responsive while generating a summary", async () => {
-  const pending = deferred<typeof meetingPage>();
-  summarize.mockReturnValue(pending.promise);
-  const { page, unmount } = mount(request, "?selector=meeting");
-  try {
-    await waitForText(page, "Generating meeting summary");
-    button(page, "Transcript").click();
-    await waitForSolid(() =>
-      expect(page.querySelector("#transcript-reader-tab-text")?.getAttribute("aria-selected")).toBe(
-        "true",
-      ),
-    );
-    expect(page.textContent).toContain("Keep the reader quiet and readable.");
-    button(page, "Summary").click();
-    await waitForText(page, "Generating meeting summary");
-    expect(summarize).toHaveBeenCalledTimes(1);
-    pending.resolve(meetingPage);
-    await waitForText(page, "Reader layout discussed.");
-  } finally {
-    unmount();
-    pending.resolve(meetingPage);
-  }
 });

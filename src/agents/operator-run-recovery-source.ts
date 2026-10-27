@@ -81,7 +81,8 @@ export function createRestartRecoveryOperatorSource(
       !(
         (params.inputProvenance.kind === "inter_session" ||
           (params.inputProvenance.kind === "internal_system" &&
-            params.inputProvenance.sourceTool === "session_goal_continue")) &&
+            (params.inputProvenance.sourceTool === "session_goal_continue" ||
+              params.inputProvenance.sourceTool === "tool_handoff"))) &&
         (params.requesterOrigin
           ? params.requesterOrigin.operatorProfileId === params.authority?.profileId
           : requesterSettle)

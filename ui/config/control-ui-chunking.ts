@@ -77,6 +77,16 @@ export function controlUiStableChunkName(id: string): string | undefined {
   const normalized = normalizeModuleId(id);
 
   switch (controlUiBootManifestKey(id)) {
+    case "ui/src/pages/chat/components/chat-ci-automation-control.tsx":
+    case "ui/src/pages/chat/components/chat-ci-automation.tsx":
+    case "ui/src/pages/chat/components/chat-ci-details.tsx":
+    case "ui/src/pages/chat/components/chat-ci-disclosure.ts":
+    case "ui/src/pages/chat/components/chat-ci-gateway-updates.ts":
+    case "ui/src/i18n/locales/en-chat-ci.ts":
+    case "ui/src/lib/session-pr-automation.ts":
+    case "ui/src/lib/session-pr-automation-spec.ts":
+      // Shared readers load with the first CI panel; row copy controls remain independent.
+      return "chat-ci-automation-control";
     case "ui/src/styles/agents.css":
     case "ui/src/styles/agent-emoji-picker.css":
     case "ui/src/styles/multi-select.css":
@@ -87,13 +97,24 @@ export function controlUiStableChunkName(id: string): string | undefined {
     case "ui/src/pages/chat/components/chat-details-environment-desktop.css":
       // Share styles without making Outputs import the Details renderer.
       return "chat-details-styles";
+    case "node_modules/@tanstack/virtual-core/dist/esm/index.js":
+    case "node_modules/@tanstack/virtual-core/dist/esm/lazy-measurements.js":
+    case "node_modules/@tanstack/virtual-core/dist/esm/utils.js":
+      return "virtual-core-runtime";
+    case "ui/src/pages/claws/creator-flow.ts":
+    case "ui/src/pages/claws/draft-navigation.ts":
+    case "ui/src/i18n/locales/en-agents-home.ts":
+      // Chat and the roster co-load both; Claws accepts the extra virtualizer bytes.
+      return "virtual-core-runtime";
+    case "src/shared/dedupe-by-key.ts":
+      // Config search shares this helper without loading optional session UI.
+      return "control-ui-boot-shared";
     case "ui/src/components/session-git-diff.tsx":
     case "ui/src/lib/sessions/usage.ts":
     case "src/shared/weak-owner-map.ts":
     case "src/shared/assistant-display-content.ts":
     case "src/shared/agent-run-status.ts":
     case "ui/src/app/assistant-media.ts":
-    case "src/shared/dedupe-by-key.ts":
     case "ui/src/lib/image-download.ts":
     case "ui/src/lib/download.ts":
     case "src/shared/markdown-code.ts":
@@ -111,7 +132,6 @@ export function controlUiStableChunkName(id: string): string | undefined {
     case "packages/gateway-client/src/session-subscriptions.ts":
     case "ui/src/pages/labs/labs-feature-state.ts":
     case "ui/src/pages/labs/claws-lab-feature.ts":
-    case "ui/src/i18n/locales/en-session-organization-shared.ts":
     case "ui/src/i18n/locales/en-session-skill-library.ts":
     case "ui/src/pages/plugins/detail-tabs.ts":
     case "ui/src/components/confirm-dialog.ts":
@@ -145,6 +165,8 @@ export function controlUiStableChunkName(id: string): string | undefined {
       // Shared catalogs and session parameters must not pull Chat into other routes.
       return "deferred-ui-support";
     case "ui/src/lib/page-request.ts":
+    case "ui/src/lib/worktrees/create-worktree.ts":
+    case "ui/src/pages/new-session/rejected-initial-turn.ts":
     case "ui/src/lib/model-catalog-reader.ts":
     case "ui/src/components/lobster-pet-contract.ts":
     case "ui/src/lib/mac-form-factor.ts":
@@ -223,6 +245,9 @@ export function controlUiStableChunkName(id: string): string | undefined {
     case "ui/src/lib/device-pair-setup.ts":
       // Pairing loads on interaction; the earlier boot capture must not pull it into either route.
       return "device-pair-setup-runtime";
+    case "ui/src/lib/channels/index.ts":
+      // Channel owners load on their first consumer, outside earlier shared boot captures.
+      return "channels-runtime";
     case "ui/src/pages/chat/talk/conversation.ts":
       return "talk-conversation-runtime";
     case "ui/src/pages/chat/chat-goal-operations.runtime.ts":
@@ -269,8 +294,8 @@ export function controlUiStableChunkName(id: string): string | undefined {
     case "ui/src/pages/chat/route-entry.ts":
       // Pending New Session previews must render while the Chat route entry waits.
       return "chat-route-entry";
-    case "ui/src/i18n/locales/en-chat-composer.ts":
-      // New Session shares composer copy; session copy stays with Chat's boot group.
+    case "ui/src/i18n/locales/en-session-organization-shared.ts":
+      // Settings, New Session, and Chat share this English copy.
       return "chat-english";
     case "ui/src/pages/devices/devices-page.tsx":
       return "devices-page";
@@ -300,10 +325,6 @@ export function controlUiStableChunkName(id: string): string | undefined {
     case "packages/gateway-protocol/src/schema/plugin-declared-surface-groups.ts":
       // Shared protocol readers must not pull the lazy Plugins page into chat.
       return "plugin-contracts-runtime";
-    case "ui/src/components/solid/copy-button.tsx":
-    case "ui/src/components/copy-button-state.ts":
-      // Login recovery also copies commands, before any Chat route can load.
-      return "copy-button-runtime";
     case "ui/src/components/login-gate-solid.tsx":
     case "ui/src/components/login-gate-feedback.ts":
     case "ui/src/i18n/locales/en-login.ts":
@@ -316,13 +337,11 @@ export function controlUiStableChunkName(id: string): string | undefined {
     case "ui/src/components/markdown.ts":
     case "ui/src/components/github-link-target.ts":
     case "ui/src/components/markdown-assistant-transcript.ts":
-    case "ui/src/components/markdown-audio-transcript.ts":
     case "ui/src/components/markdown-code-blocks.ts":
     case "ui/src/components/markdown-copy.ts":
     case "ui/src/components/markdown-details.ts":
     case "ui/src/components/markdown-file-links.ts":
     case "ui/src/components/markdown-github-refs.ts":
-    case "ui/src/components/markdown-hex-colors.ts":
     case "ui/src/components/markdown-human-mentions.ts":
     case "ui/src/components/markdown-icon.ts":
     case "ui/src/components/markdown-json.ts":
@@ -419,6 +438,14 @@ export function createControlUiCodeSplitting(options: { includeBootGroups?: bool
     includeDependenciesRecursively: false,
     groups: [
       {
+        name: "control-ui-connection",
+        test: (id: string) => controlUiBootManifestKey(id) === "ui/src/main.ts",
+        priority: 21,
+        // The connection must evaluate before the application. Do not let a
+        // shared dependency pull a later rendering group back into this entry.
+        includeDependenciesRecursively: true,
+      },
+      {
         name: (id: string) => controlUiStableChunkName(id) ?? null,
         test: (id: string) => controlUiStableChunkName(id) !== undefined,
         priority: 20,
@@ -444,6 +471,9 @@ export function createControlUiCodeSplitting(options: { includeBootGroups?: bool
                 modules.add("ui/src/plugins/control-ui-actions.ts");
                 // Both routes read deferred resources; share their existing boot partition.
                 modules.add("node_modules/@solidjs/signals/dist/prod/deferred.js");
+                // Chat and creation share the same identity-scoped preference owner.
+                modules.add("ui/src/pages/new-session/draft-preference-state.ts");
+                modules.add("ui/src/pages/new-session/preferences.ts");
                 // Opened person cards share labels with New Session, not its composer chunk.
                 modules.add("ui/src/lib/platform-label.ts");
                 // Placement and delivery share retries without importing either route's bundle.

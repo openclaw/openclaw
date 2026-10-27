@@ -294,6 +294,7 @@ async function runVoiceCallProof(options: ProducerOptions): Promise<string> {
     const fixture = await createFixturePlugin(options.repoRoot, fixtureRoot, receipts.endpoint);
     gateway = await gatewayOwner.start({
       repoRoot: options.repoRoot,
+      initializeCurrentRuntimeState: true,
       useRepoCli: true,
       providerBaseUrl: `${mock.baseUrl}/v1`,
       providerMode: "mock-openai",

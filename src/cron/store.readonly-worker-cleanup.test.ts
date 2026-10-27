@@ -12,8 +12,8 @@ import { resolveCronStoreKeyAsync } from "./store/paths.js";
 
 it.each(["worker", "snapshot"] as const)(
   "retains %s cleanup custody without losing a completed read",
-  async (failureStage) => {
-    await withCronStore(
+  (failureStage) =>
+    withCronStore(
       "cron-readonly-cleanup",
       async (state) => {
         await state.createDatabase();
@@ -83,12 +83,11 @@ it.each(["worker", "snapshot"] as const)(
         }
       },
       { XDG_CACHE_HOME: undefined },
-    );
-  },
+    ),
 );
 
-it("refuses new reader admission while canonical close is draining an earlier reader", async () => {
-  await withCronStore("cron-readonly-drain", async (state) => {
+it("refuses new reader admission while canonical close is draining an earlier reader", () =>
+  withCronStore("cron-readonly-drain", async (state) => {
     await state.createDatabase();
     await resolveCronStoreKeyAsync(state.storePath, state.env);
     const entered = createDeferred();
@@ -128,6 +127,5 @@ it("refuses new reader admission while canonical close is draining an earlier re
     }
     expect(await first).toMatchObject({ error: expect.any(Error) });
     expect((await state.read()).store.jobs).toEqual([]);
-  });
-});
+  }));
 import assert from "node:assert/strict";

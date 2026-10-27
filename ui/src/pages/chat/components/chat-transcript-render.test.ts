@@ -117,6 +117,31 @@ describe("chat transcript rendering", () => {
     resetTranscriptTestDom();
   });
 
+  it("keeps cached message context metadata until the live session replaces it", async () => {
+    const sessionKey = "agent:main:cached-meta";
+    const props = threadProps(
+      "cached-meta",
+      sessionKey,
+      [
+        {
+          role: "assistant",
+          content: "Cached reply with usage",
+          usage: { input: 20_000, output: 100 },
+          timestamp: 1_000,
+        },
+      ],
+      { transcriptMetadata: { key: sessionKey, kind: "direct", contextTokens: 100_000 } },
+    );
+    const { container, rerender } = await mountThread(props);
+    expect(container.querySelector(".msg-meta__ctx")?.textContent).toBe("20% ctx");
+    props.transcriptMetadata = undefined;
+    props.selectedSession = { key: sessionKey, kind: "direct", contextTokens: 200_000 };
+    rerender();
+    await waitForSolid(() =>
+      expect(container.querySelector(".msg-meta__ctx")?.textContent).toBe("10% ctx"),
+    );
+  });
+
   it.each([true, false])(
     "renders an inactive run without a terminal row (show tools=%s)",
     async (showTools) => {

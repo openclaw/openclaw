@@ -5,16 +5,19 @@ import { afterEach, expect, it } from "vitest";
 import { createDeferredCore } from "../shared/deferred.js";
 import { loadPluginRegistryHandle } from "./loader.js";
 import { resetPluginLoaderTestStateForTest } from "./loader.test-fixtures.js";
+import { createPluginCache, retirePluginCache } from "./plugin-cache.js";
 import { PluginInstance } from "./plugin-instance.js";
 import { createEmptyPluginRegistry } from "./registry-empty.js";
 import {
   capturePluginLifecycleAuthority as captureAuthority,
   capturePluginRegistryLifecycleEpoch as captureEpoch,
   capturePluginRegistryLifecycleSignal as captureSignal,
+  getPluginLoaderCacheState,
   isPluginRecordActive as isRecordActive,
   isPluginRegistryPreparing,
   isPluginRegistryLifecycleEpochActive as isEpochActive,
   markPluginRegistryActive as markActive,
+  listPluginCacheRetiringRegistries,
   markPluginRegistryRetired as markRetired,
   revokePluginRecord,
   withPluginRegistryPreparationScope,
@@ -255,3 +258,18 @@ it.each(["commit", "rollback"] as const)(
     expect(current.signal).toBe(retained.signal);
   },
 );
+
+it("lists only unpublished cached registries as retiring with their cache", async () => {
+  const cache = createPluginCache();
+  const published = callableRegistry("published");
+  markActive(published.registry);
+  const lazy = callableRegistry("lazy");
+  getPluginLoaderCacheState(cache).set("published", published.registry);
+  getPluginLoaderCacheState(cache).set("lazy", lazy.registry);
+  try {
+    expect(listPluginCacheRetiringRegistries(cache)).toEqual([lazy.registry]);
+  } finally {
+    await retirePluginCache(cache);
+  }
+  expect(published.call()).toBe("published");
+});

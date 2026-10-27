@@ -12,7 +12,11 @@ const assistant = (content: unknown[]) => ({ role: "assistant", content });
 const call = (type: string, id = "tool-1") => ({ type, id, name: "gateway", arguments: {} });
 const thinking = { type: "thinking", thinking: "internal", thinkingSignature: "sig_1" };
 const signed = () => [thinking, call("toolCall")];
-const omitted = assistant([text("[tool calls omitted]")]);
+const resultBlock = (value: string) => ({
+  type: "toolResult",
+  toolUseId: "tool-1",
+  content: [text(value)],
+});
 
 function checkToolTurn(content: unknown[], following: unknown[], expected: unknown[], fields = {}) {
   const wrap = (blocks: unknown[]) =>
@@ -38,17 +42,13 @@ it("merges Gemini assistant content with the latest usage and stop reason", () =
 
 it("preserves signed tool-result pairing across an injected assistant without merging", () => {
   const result = {
+    ...resultBlock("done"),
     role: "toolResult",
-    toolUseId: "tool-1",
     toolName: "gateway",
-    content: [text("done")],
     isError: false,
   };
   const source = { ...assistant(signed()), stopReason: "toolUse" };
-  const injected = {
-    ...assistant([text("Subagent completion delivered.")]),
-    stopReason: "stop",
-  };
+  const injected = { ...assistant([text("delivered")]), stopReason: "stop" };
   expect(
     validateAnthropicTurns(asMessages([user("Use tool"), source, injected, result]), {
       mergeConsecutiveTurns: false,
@@ -56,61 +56,44 @@ it("preserves signed tool-result pairing across an injected assistant without me
   ).toEqual([user("Use tool"), source, injected, result]);
 });
 
-it.each([true, false])(
-  "merges string users or backfills array-user timestamps (explicit=%s)",
-  (explicitTime) => {
-    const before = explicitTime ? { role: "user", content: "before" } : user("before");
-    const after = explicitTime
-      ? { role: "user", content: "after", timestamp: 2000 }
-      : user("after");
-    expect(validateAnthropicTurns(asMessages([{ ...before, timestamp: 1000 }, after]))).toEqual([
-      {
-        ...user([text("before"), text("after")]),
-        timestamp: explicitTime ? 2000 : 1000,
-      },
-    ]);
-  },
-);
-
-it("repairs dangling tool-only turns after abort", () => {
-  checkToolTurn([call("toolUse")], [user("Hello")], [], { stopReason: "aborted" });
+it("backfills merged array-user timestamps", () => {
+  expect(
+    validateAnthropicTurns(asMessages([{ ...user("before"), timestamp: 1000 }, user("after")])),
+  ).toEqual([{ ...user([text("before"), text("after")]), timestamp: 1000 }]);
 });
 
-it("prunes only unmatched sibling calls with user-embedded results", () => {
-  const following = user([
-    { type: "toolResult", toolUseId: "tool-1", content: [text("Result 1")] },
-    text("Thanks"),
-  ]);
-  checkToolTurn(
+const legacy = [call("functionCall"), text("Checking")];
+const omitted = [text("[tool calls omitted]")];
+it.each<[string, unknown[], unknown[], unknown[], Record<string, unknown>?]>([
+  ["aborted dangling call", [call("toolUse")], [user("Hello")], [], { stopReason: "aborted" }],
+  [
+    "unmatched sibling",
     [call("toolUse"), call("toolUse", "tool-2"), text("Done")],
-    [following],
+    [user([resultBlock("Result 1"), text("Thanks")])],
     [call("toolUse"), text("Done")],
-  );
-});
-
-it("matches legacy results across intermediate non-assistant turns", () => {
-  const following = [
-    user("waiting"),
-    { role: "tool", toolCallId: "tool-1", content: [text("data")] },
-    user("Continue"),
-  ];
-  const content = [call("functionCall"), text("Checking")];
-  checkToolTurn(content, following, content);
-});
-
-it.each(["embedded", "wrong-name"])("rejects signed pairing with %s results", (kind) => {
-  const embedded = kind === "embedded";
-  const content = embedded ? [thinking, call("toolUse")] : signed();
-  const following = embedded
-    ? [
-        {
-          role: "user",
-          content: [
-            { type: "toolResult", toolUseId: "tool-1", content: [text("ok")] },
-            text("Continue"),
-          ],
-        },
-      ]
-    : [textToolResult("tool-1", "exec", "wrong tool", { isError: false }), user("Continue")];
-  checkToolTurn(content, following, omitted.content);
+  ],
+  [
+    "legacy result after a user",
+    legacy,
+    [
+      user("waiting"),
+      { role: "tool", toolCallId: "tool-1", content: [text("data")] },
+      user("Continue"),
+    ],
+    legacy,
+  ],
+  [
+    "signed embedded result",
+    [thinking, call("toolUse")],
+    [user([resultBlock("ok"), text("Continue")])],
+    omitted,
+  ],
+  [
+    "signed wrong-name result",
+    signed(),
+    [textToolResult("tool-1", "exec", "wrong tool", { isError: false }), user("Continue")],
+    omitted,
+  ],
+])("repairs %s", (_name, content, following, expected, fields) => {
+  checkToolTurn(content, following, expected, fields);
 });

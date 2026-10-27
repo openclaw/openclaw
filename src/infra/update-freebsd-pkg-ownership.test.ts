@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
-import { createDeferred } from "../../test/helpers/promise.js";
+import { createDeferred, nextEventLoopTurn } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import * as exec from "../process/exec.js";
 import { pkgQueryResult as result } from "./update-freebsd-pkg-ownership.test-support.js";
@@ -140,9 +140,7 @@ it.each(["query", "path"] as const)(
     await inspectTwice(inspect);
     expectWarning(onWarning, "exhausted its shared 100 ms budget");
     // Observe any rejection orphaned by deadline admission.
-    await new Promise<void>((resolve) => {
-      setImmediate(resolve);
-    });
+    await nextEventLoopTurn();
     expect([
       query.mock.calls.length,
       lookup.mock.calls.length,

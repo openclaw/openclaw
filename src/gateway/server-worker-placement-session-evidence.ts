@@ -24,6 +24,7 @@ function resolvePlacementSessionIdentities(
 ): PlacementSessionIdentity[] {
   const requestedAgentId = normalizeAgentId(placement.agentId);
   const parsedKey = parseAgentSessionKey(placement.sessionKey);
+  const persistedAgentId = parsedKey ? normalizeAgentId(parsedKey.agentId) : requestedAgentId;
   const canonicalKey = resolveSessionStoreKey({
     cfg,
     sessionKey: placement.sessionKey,
@@ -32,13 +33,11 @@ function resolvePlacementSessionIdentities(
   const canonicalAgentId =
     canonicalKey === "global" || canonicalKey === "unknown" || !parsedKey
       ? requestedAgentId
-      : resolveSessionStoreAgentId(cfg, canonicalKey);
+      : canonicalKey === placement.sessionKey
+        ? persistedAgentId
+        : resolveSessionStoreAgentId(cfg, canonicalKey);
   const canonical = { placement, agentId: canonicalAgentId, sessionKey: canonicalKey };
-  if (!parsedKey) {
-    return [canonical];
-  }
-  const persistedAgentId = normalizeAgentId(parsedKey.agentId);
-  if (persistedAgentId === canonicalAgentId) {
+  if (!parsedKey || persistedAgentId === canonicalAgentId) {
     return [canonical];
   }
   // A deleted legacy owner can still hold the exact persisted placement row.

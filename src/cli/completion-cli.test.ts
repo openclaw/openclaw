@@ -198,7 +198,7 @@ _openclaw_root_completion
     expect(stdout).toContain(`--literal[${description}]`);
   });
 
-  itUnix("completes zsh short clusters in groups and leaves", async (ctx) => {
+  itUnix("completes zsh option values and short clusters in groups and leaves", async (ctx) => {
     const probe = runZsh("zmodload zsh/zpty");
     if (probe.error && "code" in probe.error && probe.error.code === "ENOENT") {
       ctx.skip();
@@ -210,6 +210,7 @@ _openclaw_root_completion
     registerAcpCli(program);
     const cases = [
       ["openclaw completion -ys f", "openclaw completion -ys fish"],
+      ["openclaw completion --shell=f", "openclaw completion --shell=fish"],
       ["openclaw completion -s f", "openclaw completion -s fish"],
       ["openclaw completion -yi --shell f", "openclaw completion -yi --shell fish"],
       ["openclaw acp -vv cl", "openclaw acp -vv client"],

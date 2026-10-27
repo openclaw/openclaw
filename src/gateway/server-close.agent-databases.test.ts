@@ -11,10 +11,8 @@ import { openContextEngineTurnOutboxWorkerStore } from "../agents/harness/contex
 import { isAgentRunRestartAbortReason } from "../agents/run-termination.js";
 import { admitReplyTurn } from "../auto-reply/reply/reply-turn-admission.js";
 import { runGatewayLoop } from "../cli/gateway-cli/run-loop.js";
-import {
-  mutateSessionGoal,
-  readSessionGoalOperationInDatabase,
-} from "../config/sessions/goals-operations.js";
+import { readSessionGoalOperationInDatabase } from "../config/sessions/goals-operation-receipts.js";
+import { mutateSessionGoal } from "../config/sessions/goals-operations.js";
 import { createSessionGoal } from "../config/sessions/goals.js";
 import { formatSqliteSessionFileMarker } from "../config/sessions/legacy-sqlite-marker.js";
 import {

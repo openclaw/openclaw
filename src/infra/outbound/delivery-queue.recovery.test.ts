@@ -1214,17 +1214,6 @@ describe("delivery-queue recovery", () => {
       gifPlayback: true,
       silent: true,
       gatewayClientScopes: ["operator.write"],
-      mirror: {
-        sessionKey: "agent:main:main",
-        expectedSessionId: "session-main",
-        text: "a",
-        mediaUrls: ["https://example.com/a.png"],
-        idempotencyKey: "channel-final:message-1",
-        deliveryMirror: {
-          kind: "channel-final",
-          sourceMessageId: "message-1",
-        },
-      },
       session: {
         key: "agent:main:main",
         agentId: "agent-main",
@@ -1239,6 +1228,8 @@ describe("delivery-queue recovery", () => {
     await recover({ deliver });
     const deliverInput = mockCallRecord(deliver);
     expect(deliverInput).toEqual(expect.objectContaining(storedOptions));
+    // Retained legacy mirror metadata never selects destination history on replay.
+    expect(deliverInput).not.toHaveProperty("mirror");
   });
   it("continues past high-backoff entries and recovers ready entries behind them", async () => {
     const now = Date.now();

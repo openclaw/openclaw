@@ -87,6 +87,7 @@ let chromiumLaunchOptions: ReturnType<typeof resolveChromiumLaunchOptions> | nul
 
 // The accessibility-tree suite remains Chromium-only until its CDP probe is replaced.
 const webkitTestFiles = [
+  "src/pages/usage/view-details.browser.test.tsx",
   "src/components/settings-ui.browser.test.tsx",
   "src/components/select-picker.behavior.browser.test.ts",
   "src/components/select-picker.browser.test.tsx",
@@ -96,6 +97,7 @@ const webkitTestFiles = [
   "src/components/agent-select-opening.browser.test.ts",
   "src/components/app-sidebar-agent-menu-scroll.browser.test.ts",
   "src/components/app-sidebar-rail-menus.browser.test.ts",
+  "src/components/app-sidebar-session-visibility.browser.test.ts",
   "src/components/agent-emoji-picker.browser.test.ts",
   "src/components/appearance-picker.browser.test.ts",
   "src/components/confirm-dialog.browser.test.ts",

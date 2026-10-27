@@ -53,6 +53,92 @@ test("search matches title punctuation and spacing before selecting the result w
   }
 });
 
+test.each(["München", "한국어"])("search finds both canonical forms of %s", (title) => {
+  const decomposedTitle = title.normalize("NFD");
+  const select = selection({
+    "agent:main:composed": entry("composed", 1, { displayName: title }),
+    "agent:main:decomposed": entry("decomposed", 2, { displayName: decomposedTitle }),
+    "agent:main:unrelated": entry("unrelated", 3, { displayName: "Unrelated discussion" }),
+  });
+  for (const search of [title, decomposedTitle]) {
+    expect(select({ search, limit: 2 }), search).toEqual([
+      "agent:main:decomposed",
+      "agent:main:composed",
+    ]);
+  }
+});
+
+test("search reuses each candidate's selected row owner", () => {
+  projection = createSessionRowProjectionFixture({
+    cfg,
+    agentId: "main",
+    store: {
+      "agent:main:parent": entry("parent", 1, { displayName: "Investigation parent" }),
+      "agent:main:subagent:child": entry("child", 2, {
+        label: "Investigation child",
+        spawnedBy: "agent:main:parent",
+        modelProvider: "openai",
+        model: "gpt-4.1",
+      }),
+    },
+  });
+  for (const search of ["investigation", "gpt-4.1", "zz-no-match"]) {
+    const prepared = prepareSessionRowSelection(projection, { search });
+    const getTarget = vi.fn(prepared.getTarget);
+    const result = filterAndSortSessionEntries({ ...prepared, getTarget });
+    expect(result.map(([key]) => key)).toEqual(
+      search === "investigation"
+        ? ["agent:main:subagent:child", "agent:main:parent"]
+        : search === "gpt-4.1"
+          ? ["agent:main:subagent:child"]
+          : [],
+    );
+    expect(getTarget).toHaveBeenCalledTimes(2);
+  }
+});
+
+test("model search reads full model facts only after the resolved identity misses", () => {
+  const modelConfig = {
+    ...cfg,
+    agents: { entries: { main: { model: "openai/gpt-4.1" } } },
+  };
+  setRuntimeConfigSnapshot(modelConfig);
+  projection = createSessionRowProjectionFixture({
+    cfg: modelConfig,
+    agentId: "main",
+    store: {
+      "agent:main:parent": entry("parent", 1, {
+        providerOverride: "anthropic",
+        modelOverride: "claude-sonnet-4",
+      }),
+      "agent:main:subagent:child": entry("child", 2, {
+        parentSessionKey: "agent:main:parent",
+        spawnedBy: "agent:main:parent",
+      }),
+    },
+  });
+  for (const [search, expected, factKeys] of [
+    ["gpt-4.1", ["agent:main:subagent:child"], ["agent:main:parent"]],
+    [
+      "claude-sonnet-4",
+      ["agent:main:subagent:child", "agent:main:parent"],
+      ["agent:main:subagent:child"],
+    ],
+    ["zz-no-match", [], []],
+  ] as const) {
+    const prepared = prepareSessionRowSelection(projection, { search });
+    const getModelFacts = vi.fn(prepared.getModelFacts);
+    const result = filterAndSortSessionEntries({ ...prepared, getModelFacts });
+    expect(
+      result.map(([key]) => key),
+      search,
+    ).toEqual(expected);
+    expect(getModelFacts.mock.calls.map(([key]) => key).toSorted(), search).toEqual(
+      [...factKeys].toSorted(),
+    );
+  }
+});
+
 test("ranks by real interaction without heartbeat or cron noise", () => {
   const now = Date.now();
   const select = selection(

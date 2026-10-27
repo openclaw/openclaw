@@ -101,7 +101,7 @@ it.each([false, true])(
     const kind = imagesOnly ? "photo" : "media";
     await waitForSolid(() => expect(host.querySelector(`[data-value="${kind}"]`)).not.toBeNull());
     const action = host.querySelector<HTMLButtonElement>(`[data-value="${kind}"]`)!;
-    expect(action.textContent).toBe(imagesOnly ? "Photo" : "Photos & videos");
+    expect(action.textContent).toBe(imagesOnly ? "Photo" : "Media");
     const picker = input(kind);
     const open = clickSpy(picker);
     action.click();

@@ -19,6 +19,17 @@ type GatewaySessionStoreView = {
 
 export type GatewaySessionStoreCache = Map<string, GatewaySessionStoreView>;
 
+/** Session keys are data; ordinary objects retain a V8 shape transition per key. */
+export function createGatewaySessionStore(
+  entries: readonly { sessionKey: string; entry: SessionEntry }[],
+): Record<string, SessionEntry> {
+  const store: Record<string, SessionEntry> = Object.create(null);
+  for (const { sessionKey, entry } of entries) {
+    store[sessionKey] = entry;
+  }
+  return store;
+}
+
 export type GatewaySessionStoreRead = {
   storePath: string;
   clone?: boolean;
@@ -106,7 +117,7 @@ function loadGatewaySessionLookupStore({
       },
     });
     return {
-      store: Object.fromEntries(entries.map(({ sessionKey, entry }) => [sessionKey, entry])),
+      store: createGatewaySessionStore(entries),
       ...(readSource ? { readSource } : {}),
       ...(capturedReadSource ? { capturedReadSource } : {}),
     };
@@ -115,7 +126,7 @@ function loadGatewaySessionLookupStore({
     ? listAccessorSessionEntriesReadOnly
     : listAccessorSessionEntries;
   return {
-    store: Object.fromEntries(
+    store: createGatewaySessionStore(
       listEntries({
         env: options.env,
         ...(agentId ? { agentId } : {}),
@@ -125,7 +136,7 @@ function loadGatewaySessionLookupStore({
           : {}),
         ...(options.readConsistency ? { readConsistency: options.readConsistency } : {}),
         storePath,
-      }).map(({ sessionKey, entry }) => [sessionKey, entry]),
+      }),
     ),
   };
 }

@@ -1,9 +1,8 @@
 /* @vitest-environment jsdom */
 
-import { createSignal } from "solid-js";
 import { beforeEach, expect, it, vi } from "vitest";
 import { i18n } from "../../i18n/index.ts";
-import { mountSolid } from "../../test-helpers/mount-solid.ts";
+import { mountSolid } from "../../test-helpers/solid-render.tsx";
 import { flush } from "../../test-helpers/solid-settle.ts";
 import { AboutView } from "./view.tsx";
 
@@ -13,10 +12,7 @@ const COMMIT = "0123456789abcdef0123456789abcdef01234567";
 const COMMIT_AT = "2026-07-10T11:22:33.000Z";
 const BUILT_AT = "2026-07-10T12:34:56.000Z";
 
-function render(
-  overrides: Partial<AboutProps> = {},
-  buildInfo: Partial<AboutProps["buildInfo"]> = {},
-) {
+function render(overrides: Partial<AboutProps> = {}, build: Partial<AboutProps["buildInfo"]> = {}) {
   const props: AboutProps = {
     buildInfo: {
       version: "2026.7.10",
@@ -27,7 +23,7 @@ function render(
       dirty: true,
       release: false,
       buildId: "test",
-      ...buildInfo,
+      ...build,
     },
     gatewayVersion: "2026.7.9",
     copyState: "idle",
@@ -36,18 +32,12 @@ function render(
     onPokeClawd: vi.fn(),
     ...overrides,
   };
-  let setProps!: (props: AboutProps) => void;
-  const { container } = mountSolid(() => {
-    const [state, setState] = createSignal(props);
-    setProps = setState;
-    return <AboutView {...state()} />;
-  });
-  flush();
+  const view = mountSolid(AboutView, props);
   return {
-    container,
-    query: container.querySelector.bind(container),
+    ...view,
+    query: view.container.querySelector.bind(view.container),
     props,
-    update: setProps,
+    update: (next: AboutProps) => view.update(next),
   };
 }
 
@@ -55,30 +45,19 @@ beforeEach(() => i18n.setLocale("en"));
 
 it("renders the hero, links, license, and Clawd's active wave", () => {
   const { query, props, update } = render({ clawdWaving: true });
-  const hero = query(".about-hero");
-  expect(hero?.querySelector(".about-hero__name")?.textContent).toBe("OpenClaw");
-  expect(hero?.querySelector(".about-hero__version")?.textContent).toBe("v2026.7.10");
-  expect(hero?.querySelector(".about-hero__clawd svg")).not.toBeNull();
+  expect(query(".about-hero .about-hero__name")?.textContent).toBe("OpenClaw");
+  expect(query(".about-hero .about-hero__version")?.textContent).toBe("v2026.7.10");
+  expect(query(".about-hero .about-hero__clawd svg")).not.toBeNull();
 
-  const clawd = hero?.querySelector<HTMLButtonElement>(".about-hero__clawd");
+  const clawd = query<HTMLButtonElement>(".about-hero .about-hero__clawd");
   expect(clawd?.getAttribute("aria-label")).toBe("Wave hello to Clawd");
   clawd?.click();
   expect(props.onPokeClawd).toHaveBeenCalledOnce();
   expect(query(".about-hero__clawd--wave")).not.toBeNull();
   update({ ...props, clawdWaving: false });
-  flush();
   expect(query(".about-hero__clawd--wave")).toBeNull();
 
-  const links = Array.from(hero?.querySelectorAll<HTMLAnchorElement>(".about-hero__link") ?? []);
-  expect(links.map((link) => link.getAttribute("href"))).toEqual([
-    "https://community.openclaw.ai/",
-    "https://openclaw.ai",
-    "https://docs.openclaw.ai",
-    "https://github.com/openclaw/openclaw",
-    "https://discord.gg/clawd",
-    "https://x.com/openclaw",
-    "https://docs.openclaw.ai/releases",
-  ]);
+  const links = Array.from(query(".about-hero")?.querySelectorAll<HTMLAnchorElement>("a") ?? []);
   expect(links.find((link) => link.textContent?.trim() === "Support")?.href).toBe(
     "https://community.openclaw.ai/",
   );
@@ -142,13 +121,7 @@ it("copies the full commit while announcing success accessibly", () => {
 it("states when artifact identity and Gateway version are unavailable", () => {
   const { container, query } = render(
     { gatewayVersion: null },
-    {
-      version: null,
-      commit: null,
-      commitAt: null,
-      builtAt: null,
-      branch: null,
-    },
+    { version: null, commit: null, commitAt: null, builtAt: null, branch: null },
   );
   expect(container.querySelectorAll(".settings-kv .muted")).toHaveLength(3);
   expect(query(".settings-row__value")?.textContent).toContain("Unavailable");

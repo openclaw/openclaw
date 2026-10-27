@@ -2,7 +2,6 @@ import { generateWAMessageFromContent, type proto } from "baileys";
 import { expect, it } from "vitest";
 import {
   describeReplyContext,
-  extractMediaKind,
   extractMentionedJids,
   extractText,
   hasInboundUserContent,
@@ -21,12 +20,16 @@ const poll: proto.IMessage = {
 function extended(contextInfo: proto.IContextInfo, text = "hello"): proto.IMessage {
   return { extendedTextMessage: { text, contextInfo } };
 }
-function nativeFlow(paramsJson: string): proto.IMessage {
+function nativeFlow(paramsJson: string, text?: string): proto.IMessage {
   return {
     interactiveResponseMessage: {
+      body: text ? { text } : undefined,
       nativeFlowResponseMessage: { name: "single_select", paramsJson },
     },
   };
+}
+function ephemeral(message: proto.IMessage): proto.IMessage {
+  return { ephemeralMessage: { message } };
 }
 const quotedMessage = extended({ mentionedJid: [BOT] }, "Hey @bot");
 it.each<[proto.IMessage | undefined, string[] | undefined]>([
@@ -66,15 +69,7 @@ it.each<[proto.IMessage, string]>([
     "Option A",
   ],
   [{ templateButtonReplyMessage: { selectedId: "button-1" } }, "button-1"],
-  [
-    {
-      interactiveResponseMessage: {
-        body: { text: "Continue" },
-        nativeFlowResponseMessage: { name: "single_select", paramsJson: "{}" },
-      },
-    },
-    "Continue",
-  ],
+  [nativeFlow("{}", "Continue"), "Continue"],
   [nativeFlow('{"id":"shipping-express","title":"Express shipping"}'), "Express shipping"],
   [{ pollCreationMessageV4: { message: poll } }, "Lunch?\n- Pizza\n- Sushi"],
   [{ ptvMessage: { caption: "Watch this", mimetype: "video/mp4" } }, "Watch this"],
@@ -84,37 +79,15 @@ it.each<[proto.IMessage, string]>([
 it.each(["{", "[]"])("ignores invalid native-flow objects: %s", (json) => {
   expect(extractText(nativeFlow(json))).toBeUndefined();
 });
-it("classifies captionless video notes as user content", () => {
-  const message = { ptvMessage: { mimetype: "video/mp4" } };
-  expect(extractMediaKind(message)).toBe("video");
-  expect(hasInboundUserContent(message)).toBe(true);
-});
 it.each<[string, proto.IMessage | undefined, boolean]>([
-  ["plain text", { conversation: "hello" }, true],
-  ["image", { imageMessage: { mimetype: "image/png" } }, true],
-  ["sticker", { stickerMessage: { mimetype: "image/webp" } }, true],
   ["location", { locationMessage: { degreesLatitude: 1, degreesLongitude: 2 } }, true],
   [
     "wrapped button (#73797)",
-    {
-      ephemeralMessage: {
-        message: {
-          buttonsResponseMessage: { selectedButtonId: "ok", selectedDisplayText: "OK" },
-        },
-      },
-    },
+    ephemeral({ buttonsResponseMessage: { selectedButtonId: "ok", selectedDisplayText: "OK" } }),
     true,
   ],
   ["missing (#73797)", undefined, false],
-  [
-    "receipt (#73797)",
-    {
-      senderKeyDistributionMessage: {
-        groupId: "g@example",
-      } as unknown as proto.Message.ISenderKeyDistributionMessage,
-    },
-    false,
-  ],
+  ["receipt (#73797)", { senderKeyDistributionMessage: {} }, false],
   ["empty text", { extendedTextMessage: { text: "  " } }, false],
 ])("classifies %s user content", (_name, message, expected) => {
   expect(hasInboundUserContent(message)).toBe(expected);

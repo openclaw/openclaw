@@ -16,9 +16,13 @@ function rowUnread(result: SessionsListResult | null): boolean {
 async function unreadHarness() {
   let listTs = 0;
   const response = createDeferred<unknown>();
+  const requestStarted = createDeferred();
   const server = { unread: true };
   const harness = sessionRpcHarness({
-    "sessions.patch": () => response.promise,
+    "sessions.patch": () => {
+      requestStarted.resolve();
+      return response.promise;
+    },
     "sessions.list": () =>
       sessionsResult(
         [
@@ -38,16 +42,18 @@ async function unreadHarness() {
     "sessions.subscribe": () => ({ subscribed: true }),
   });
   await harness.sessions.refresh({ force: true });
-  return { ...harness, response, server };
+  return { ...harness, requestStarted, response, server };
 }
 
 it("clears unread before the request settles and rolls a rejection back", async () => {
-  const { sessions, response } = await unreadHarness();
+  const { sessions, requestStarted, response } = await unreadHarness();
   const operation = sessions.patch(key, { unread: false }, { deferListRefresh: true });
+  const rejected = expect(operation).rejects.toThrow("read rejected");
   const unreadWhilePending = rowUnread(sessions.state.result);
 
+  await requestStarted.promise;
   response.reject(new Error("read rejected"));
-  await expect(operation).rejects.toThrow("read rejected");
+  await rejected;
   expect(unreadWhilePending).toBe(false);
   expect(rowUnread(sessions.state.result)).toBe(true);
 });

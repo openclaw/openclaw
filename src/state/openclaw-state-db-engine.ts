@@ -40,6 +40,10 @@ import { openTrackedStateDatabase } from "./openclaw-state-db-handle.js";
 import { withLegacyPublicationDraft } from "./openclaw-state-db-schema-v28-publication.js";
 import { withLegacyLocalWorkspaceManifests } from "./openclaw-state-db-schema-v31-workspace-manifests.js";
 import {
+  withLegacyLocalWorkspaceCas,
+  WORKSPACE_CAS_TABLES,
+} from "./openclaw-state-db-schema-v35-workspace-cas.js";
+import {
   admitStateSchemaFacts,
   PostgresSchemaAdmissionUnavailableError,
 } from "./openclaw-state-db-schema-version.js";
@@ -163,52 +167,6 @@ const statePostgresSchema = {
     };
   }),
 };
-const statePostgresSchemaV32 = {
-  postgres: withLegacyPostgresIndexOrdering(statePostgresSchema.postgres, "schema-nullability"),
-  postgresFragments: statePostgresSchema.postgresFragments.map((fragment) => ({
-    ...fragment,
-    sql: withLegacyPostgresIndexOrdering(fragment.sql, "schema-nullability"),
-  })),
-};
-const statePostgresSchemaV31 = {
-  postgres: withLegacyPostgresIndexOrdering(statePostgresSchemaV32.postgres),
-  postgresFragments: statePostgresSchemaV32.postgresFragments.map((fragment) => ({
-    ...fragment,
-    sql: withLegacyPostgresIndexOrdering(fragment.sql),
-  })),
-};
-const statePostgresSchemaV30 = {
-  postgres: withLegacyLocalWorkspaceManifests(statePostgresSchemaV31.postgres),
-  postgresFragments: statePostgresSchemaV31.postgresFragments.map((fragment) => ({
-    ...fragment,
-    tables: fragment.tables.filter((table) => table !== "local_workspace_manifest_nodes"),
-    sql: withLegacyLocalWorkspaceManifests(fragment.sql),
-  })),
-};
-// v28 owns the current publication columns and pre-cutover credential tables.
-const statePostgresSchemaV28 = {
-  ...statePostgresSchemaV30,
-  postgres: `${statePostgresSchemaV30.postgres}\n${runtime.clientCredentialSource.sql}`,
-};
-const statePostgresSchemaV27 = {
-  postgres: withLegacyPublicationDraft(statePostgresSchemaV28.postgres),
-  postgresFragments: statePostgresSchemaV28.postgresFragments.map((fragment) => ({
-    ...fragment,
-    sql: withLegacyPublicationDraft(fragment.sql),
-  })),
-};
-// v24-v26 share a PostgreSQL catalog; preserve their exact index definitions for admission.
-const statePostgresSchemaV26 = {
-  ...statePostgresSchemaV27,
-  postgres:
-    statePostgresSchemaV27.postgres.replace(
-      /CREATE INDEX "idx_state_leases_owner"[^;]*;/u,
-      runtime.preWriteIndexesV27Sql.state_leases,
-    ) +
-    runtime.preWriteIndexesV27Sql.skill_usage +
-    runtime.preWriteIndexesV27Sql.acp_replay_events,
-  postgresFragments: statePostgresSchemaV27.postgresFragments,
-};
 
 function statePostgresVersionSql(version: number): string {
   return `UPDATE schema_meta
@@ -223,12 +181,67 @@ function statePostgresVersionSql(version: number): string {
           SET value_json = EXCLUDED.value_json, updated_at_ms = EXCLUDED.updated_at_ms;`;
 }
 
-export const stateEngineSchema: StoreSchema = {
-  id: "state",
-  version: OPENCLAW_STATE_SCHEMA_VERSION,
-  sqlite: "",
-  ...statePostgresSchema,
-  postgresMigrations: [
+function createStatePostgresMigrations(): StoreSchema["postgresMigrations"] {
+  const statePostgresSchemaV33 = {
+    postgres: withLegacyLocalWorkspaceCas(statePostgresSchema.postgres),
+    postgresFragments: statePostgresSchema.postgresFragments.map((fragment) => ({
+      ...fragment,
+      tables: fragment.tables.filter(
+        (table) => !WORKSPACE_CAS_TABLES.some((name) => name === table),
+      ),
+      sql: withLegacyLocalWorkspaceCas(fragment.sql),
+    })),
+  };
+  const statePostgresSchemaV32 = {
+    postgres: withLegacyPostgresIndexOrdering(
+      statePostgresSchemaV33.postgres,
+      "schema-nullability",
+    ),
+    postgresFragments: statePostgresSchemaV33.postgresFragments.map((fragment) => ({
+      ...fragment,
+      sql: withLegacyPostgresIndexOrdering(fragment.sql, "schema-nullability"),
+    })),
+  };
+  const statePostgresSchemaV31 = {
+    postgres: withLegacyPostgresIndexOrdering(statePostgresSchemaV32.postgres),
+    postgresFragments: statePostgresSchemaV32.postgresFragments.map((fragment) => ({
+      ...fragment,
+      sql: withLegacyPostgresIndexOrdering(fragment.sql),
+    })),
+  };
+  const statePostgresSchemaV30 = {
+    postgres: withLegacyLocalWorkspaceManifests(statePostgresSchemaV31.postgres),
+    postgresFragments: statePostgresSchemaV31.postgresFragments.map((fragment) => ({
+      ...fragment,
+      tables: fragment.tables.filter((table) => table !== "local_workspace_manifest_nodes"),
+      sql: withLegacyLocalWorkspaceManifests(fragment.sql),
+    })),
+  };
+  // v28 owns the current publication columns and pre-cutover credential tables.
+  const statePostgresSchemaV28 = {
+    ...statePostgresSchemaV30,
+    postgres: `${statePostgresSchemaV30.postgres}\n${runtime.clientCredentialSource.sql}`,
+  };
+  const statePostgresSchemaV27 = {
+    postgres: withLegacyPublicationDraft(statePostgresSchemaV28.postgres),
+    postgresFragments: statePostgresSchemaV28.postgresFragments.map((fragment) => ({
+      ...fragment,
+      sql: withLegacyPublicationDraft(fragment.sql),
+    })),
+  };
+  // v24-v26 share a PostgreSQL catalog; preserve their exact index definitions for admission.
+  const statePostgresSchemaV26 = {
+    ...statePostgresSchemaV27,
+    postgres:
+      statePostgresSchemaV27.postgres.replace(
+        /CREATE INDEX "idx_state_leases_owner"[^;]*;/u,
+        runtime.preWriteIndexesV27Sql.state_leases,
+      ) +
+      runtime.preWriteIndexesV27Sql.skill_usage +
+      runtime.preWriteIndexesV27Sql.acp_replay_events,
+    postgresFragments: statePostgresSchemaV27.postgresFragments,
+  };
+  return [
     {
       version: 25,
       sql: runtime.operatorRecoveryV25Sql,
@@ -312,21 +325,48 @@ export const stateEngineSchema: StoreSchema = {
     {
       version: 33,
       fromSchema: statePostgresSchemaV32,
-      schema: statePostgresSchema,
+      schema: statePostgresSchemaV33,
       sql: `${postgresIndexOrderingMigration(
-        [runtime.eagerSql, ...runtime.fragments.map((fragment) => fragment.sql)].join("\n"),
+        [
+          statePostgresSchemaV33.postgres,
+          ...statePostgresSchemaV33.postgresFragments.map((fragment) => fragment.sql),
+        ].join("\n"),
         "schema-nullability",
       )}
         ${statePostgresVersionSql(33)}`,
     },
     {
       version: 34,
-      fromSchema: statePostgresSchema,
-      schema: statePostgresSchema,
+      fromSchema: statePostgresSchemaV33,
+      schema: statePostgresSchemaV33,
       // The state owner's beforeMigrate hook binds identity before this atomic version advance.
       sql: statePostgresVersionSql(34),
     },
-  ],
+    {
+      version: 35,
+      fromSchema: statePostgresSchemaV33,
+      schema: statePostgresSchema,
+      sql: `${runtime.workspaceCasV35Sql}\n${statePostgresVersionSql(35)}`,
+    },
+  ];
+}
+
+export const stateEngineSchema: StoreSchema = {
+  id: "state",
+  version: OPENCLAW_STATE_SCHEMA_VERSION,
+  sqlite: "",
+  ...statePostgresSchema,
+  get postgresMigrations() {
+    // SQLite workers never need historical PostgreSQL schemas. Materialize once on first use.
+    const value = createStatePostgresMigrations();
+    Object.defineProperty(this, "postgresMigrations", {
+      value,
+      enumerable: true,
+      configurable: true,
+      writable: true,
+    });
+    return value;
+  },
 };
 
 export function ensureStatePostgresFragment(db: PostgresSqlConnection, table: string): void {
@@ -346,8 +386,13 @@ export function ensureStatePostgresFragment(db: PostgresSqlConnection, table: st
     }
     throw new Error(`No PostgreSQL state fragment owns ${table}`);
   }
+  const fragmentTables = fragment.tables.filter(
+    (name) =>
+      facts.version >= 35 ||
+      !WORKSPACE_CAS_TABLES.some((migrationTable) => migrationTable === name),
+  );
   if (
-    fragment.tables.every((name) =>
+    fragmentTables.every((name) =>
       facts.catalog.some((fact) => fact.kind === "table" && fact.table === name),
     )
   ) {
@@ -369,15 +414,16 @@ export function ensureStatePostgresFragment(db: PostgresSqlConnection, table: st
     throw new Error("PostgreSQL state fragments require the owner's transaction");
   }
   invalidateLocalSqliteSchemaAdmissions(db);
+  const fragmentSql = facts.version < 35 ? withLegacyLocalWorkspaceCas(fragment.sql) : fragment.sql;
   // Lazy fragments can be created before Doctor upgrades a predecessor's index ordering.
   // sqlite-allow-raw: The schema owner installs a verified fragment under its transaction.
   db.exec(
     facts.version < 33
       ? withLegacyPostgresIndexOrdering(
-          fragment.sql,
+          fragmentSql,
           facts.version < 32 ? "sqlite" : "schema-nullability",
         )
-      : fragment.sql,
+      : fragmentSql,
   );
   admitPostgresPhysicalFacts({
     db,

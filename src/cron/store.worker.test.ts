@@ -22,7 +22,7 @@ import {
   noteCronJobsStoreCommit,
   saveCronJobsStore,
   saveCronJobsStoreChanges,
-  saveCronJobsStoreWithRevision,
+  saveCronJobsStoreWithRevisionByKey,
 } from "./store.js";
 import { expectPathMissing } from "./store.test-support.js";
 import { withCronStore } from "./store.worker.test-support.js";
@@ -788,7 +788,7 @@ it.each(["unchanged", "intervening", "evicted before reply", "evicted after repl
       }
     };
     const before = getCronJobsStoreRevision(storePath);
-    const save = saveCronJobsStoreWithRevision(storePath, { version: 1, jobs: [] });
+    const save = saveCronJobsStoreWithRevisionByKey(storePath, { version: 1, jobs: [] });
     await admitted.promise;
     if (change !== "unchanged") {
       noteCronJobsStoreCommit(storePath);

@@ -1,6 +1,7 @@
 import path from "node:path";
 import { runInNewContext } from "node:vm";
 import { expect, it } from "vitest";
+import { operatorRecoverySnapshotFixture } from "../../gateway/server/client-fixtures.test-support.js";
 import { execNodeEvalSync } from "../../test-utils/node-process.js";
 import { cloneEnvWithPlatformSemantics } from "../config-env-vars.js";
 import { createSessionHistoryWorkerReaders } from "./session-transcript-worker-readers.js";
@@ -39,23 +40,9 @@ function summaryEntry(sessionKey: string): InternalSessionEntry {
       version: 1,
       ...summary,
       sourceRunId: "synthetic-run",
-      snapshot: {
-        profileId: "synthetic-profile",
-        scopes: ["operator.read"],
-        assignedRole: null,
-        githubLogin: null,
-        grant: null,
-        aliasBindingIds: [],
-        authPolicy: {
-          generation: "",
-          grantGeneration: "synthetic-grant",
-          role: "operator",
-          authMethod: "token",
-        },
-        controlUiAdmin: false,
+      snapshot: operatorRecoverySnapshotFixture("synthetic-profile", "synthetic-grant", {
         localOperator: true,
-        sourceIngress: "internal",
-      },
+      }),
     },
   };
 }

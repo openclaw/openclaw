@@ -48,8 +48,7 @@ let failurePath: string | undefined;
 beforeAll(async () => {
   server = http.createServer((req, res) => {
     const json = (body: unknown, code = 200) => {
-      res.writeHead(code, { "content-type": "application/json" });
-      res.end(JSON.stringify(body));
+      res.writeHead(code, { "content-type": "application/json" }).end(JSON.stringify(body));
     };
     receivedAuthHeaders.push(req.headers.authorization);
     const url = new URL(req.url ?? "/", "http://127.0.0.1");

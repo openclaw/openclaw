@@ -23,7 +23,6 @@ import { resolveAuthProfileOrderWithMetadata } from "../../agents/auth-profiles/
 import { getScopedAuthProfileEnv } from "../../agents/auth-profiles/store.js";
 import { describeFailoverError } from "../../agents/failover-error.js";
 import { FAILOVER_PROBE_STATUS as PROBE_STATUS_BY_FAILOVER_REASON } from "../../agents/failover/probe-status.js";
-import type { FailoverReason } from "../../agents/failover/signal.js";
 import { isNonSecretApiKeyMarker } from "../../agents/model-auth-markers.js";
 import {
   hasSyntheticLocalProviderAuthConfig,
@@ -129,15 +128,6 @@ function buildNoModelProbeResult(target: AuthProbeTarget): AuthProbeResult {
   });
 }
 
-export type AuthProbeSummary = {
-  startedAt: number;
-  finishedAt: number;
-  durationMs: number;
-  totalTargets: number;
-  options: Omit<AuthProbeOptions, "includeDirectKeys">;
-  results: AuthProbeResult[];
-};
-
 export type AuthProbeOptions = {
   provider?: string;
   profileIds?: string[];
@@ -146,12 +136,6 @@ export type AuthProbeOptions = {
   concurrency: number;
   maxTokens: number;
 };
-
-export function mapFailoverReasonToProbeStatus(reason?: string | null): AuthProbeStatus {
-  return reason
-    ? (PROBE_STATUS_BY_FAILOVER_REASON[reason as FailoverReason] ?? "unknown")
-    : "unknown";
-}
 
 const ELIGIBILITY_PROBE_ERRORS = {
   expired: "token credentials are expired.",
@@ -640,7 +624,7 @@ export async function runAuthProbes(
     onProgress?: (update: { completed: number; total: number; label?: string }) => void;
     stateOwnership?: AuthProbeStateOwnership;
   },
-): Promise<AuthProbeSummary> {
+) {
   return await withAuthProbeStateOwnership(params.stateOwnership, async (abortSignal) => {
     const startedAt = Date.now();
     const plan = await buildProbeTargets(params);
@@ -777,7 +761,9 @@ export async function runAuthProbes(
             } catch (err) {
               const described = describeFailoverError(err);
               return buildResult(
-                mapFailoverReasonToProbeStatus(described.reason),
+                described.reason
+                  ? (PROBE_STATUS_BY_FAILOVER_REASON[described.reason] ?? "unknown")
+                  : "unknown",
                 redactAuthProbeError(described.message),
               );
             } finally {
@@ -825,7 +811,7 @@ export function sortProbeResults(results: AuthProbeResult[]): AuthProbeResult[] 
   });
 }
 
-export function describeProbeSummary(summary: AuthProbeSummary): string {
+export function describeProbeSummary(summary: Awaited<ReturnType<typeof runAuthProbes>>): string {
   if (summary.totalTargets === 0) {
     return "No check targets.";
   }

@@ -1,5 +1,6 @@
 import { beforeEach, afterEach, expect, it, vi } from "vitest";
 import { createWizardPrompter } from "../../test/helpers/wizard-prompter.js";
+import { resolveMemorySearchConfig } from "../agents/memory-search.js";
 import {
   configFor,
   configForProviders,
@@ -351,4 +352,138 @@ it("times out creation and closes a provider created after the deadline", async 
   await Promise.resolve();
   await Promise.resolve();
   expect(close).toHaveBeenCalledOnce();
+});
+
+it.each<{ label: string; search: NonNullable<NonNullable<OpenClawConfig["memory"]>["search"]> }>([
+  { label: "own key", search: { remote: { apiKey: "agent-owner-key" } } },
+  {
+    label: "own headers",
+    search: { remote: { headers: { Authorization: "Bearer agent-owner" } } },
+  },
+  { label: "own router", search: { remote: { baseUrl: "https://agent.example/v1" } } },
+  { label: "pinned provider", search: { provider: "remote-a" } },
+  { label: "disabled agent", search: { enabled: false, remote: { apiKey: "disabled-owner-key" } } },
+])(
+  "preserves the previous effective destination on provider switch: $label",
+  async ({ search }) => {
+    const config: OpenClawConfig = {
+      memory: {
+        search: {
+          provider: "remote-a",
+          model: "previous-model",
+          remote: {
+            baseUrl: "https://shared.example/v1",
+            apiKey: secretRef("PREVIOUS_EMBED_KEY"),
+            headers: { "X-Owner": "previous" },
+          },
+        },
+      },
+      agents: { entries: { worker: { memory: { search } }, plain: {} } },
+    };
+    const original = structuredClone(config);
+    const result = await runMemorySetupFlow(
+      config,
+      prompter({ selects: ["remote-b", "key"], texts: ["new-model", "new-owner-key"] }),
+    );
+    expect(config).toEqual(original);
+    expect(result.memory?.search).toMatchObject({
+      provider: "remote-b",
+      model: "new-model",
+      remote: { apiKey: "new-owner-key" },
+    });
+    const pinned = result.agents?.entries?.worker?.memory?.search;
+    expect(pinned).toMatchObject({
+      provider: "remote-a",
+      model: "previous-model",
+      remote: {
+        baseUrl: search.remote?.baseUrl ?? "https://shared.example/v1",
+        apiKey: search.remote?.apiKey ?? secretRef("PREVIOUS_EMBED_KEY"),
+        headers: search.remote?.headers ?? { "X-Owner": "previous" },
+      },
+    });
+    expect(pinned?.enabled).toBe(search.enabled);
+    expect(result.agents?.entries?.plain).toEqual({});
+    expect(resolveMemorySearchConfig(result, "plain")).toMatchObject({
+      provider: "remote-b",
+      remote: { apiKey: "new-owner-key" },
+    });
+    if (search.enabled !== false) {
+      expect(resolveMemorySearchConfig(result, "worker")).toMatchObject({
+        provider: "remote-a",
+        model: "previous-model",
+        remote: pinned?.remote,
+      });
+    }
+  },
+);
+
+it.each([false, true])(
+  "does not mutate agent overrides when a provider switch is not saved (probe failure: %s)",
+  async (failProbe) => {
+    mocks.get.mockImplementation((id) =>
+      adapter(id, embeddingProvider({ embed: vi.fn(async () => (failProbe ? [] : [0.1])) })),
+    );
+    const config: OpenClawConfig = {
+      ...memoryConfig({ provider: "remote-a", remote: { apiKey: secretRef("OLD_KEY") } }),
+      agents: { entries: { worker: { memory: { search: { remote: { apiKey: "agent-key" } } } } } },
+    };
+    const original = structuredClone(config);
+    expect(
+      await runMemorySetupFlow(
+        config,
+        prompter({ confirms: [true, false], selects: ["remote-b", "existing"] }),
+      ),
+    ).toBe(config);
+    expect(config).toEqual(original);
+  },
+);
+
+it("does not acquire the new shared key at an agent's previously unauthenticated router", async () => {
+  const config: OpenClawConfig = {
+    ...memoryConfig({
+      provider: "remote-a",
+      remote: { apiKey: "***", headers: { Authorization: "***" } },
+    }),
+    agents: {
+      entries: {
+        worker: {
+          memory: {
+            search: { provider: "remote-b", remote: { baseUrl: "https://agent.example/v1" } },
+          },
+        },
+      },
+    },
+  };
+  const before = resolveMemorySearchConfig(config, "worker");
+  expect(before?.remote?.apiKey).toBeUndefined();
+  const result = await runMemorySetupFlow(
+    config,
+    prompter({ selects: ["remote-b", "key"], texts: ["new-model", "new-owner-key"] }),
+  );
+  expect(result).not.toBe(config);
+  // Persist/reload the real candidate: undefined fields cannot protect against inheritance.
+  // eslint-disable-next-line unicorn/prefer-structured-clone -- Exercise JSON persistence, not an in-memory clone.
+  const reloaded: OpenClawConfig = JSON.parse(JSON.stringify(result));
+  expect(resolveMemorySearchConfig(reloaded, "worker")).toMatchObject({
+    provider: "remote-b",
+    model: "embed-default",
+    remote: { baseUrl: "https://agent.example/v1", apiKey: "", headers: {} },
+  });
+});
+
+it("pins the previous adapter default model and absence of a remote endpoint", async () => {
+  const config: OpenClawConfig = {
+    ...memoryConfig({ provider: "remote-a" }),
+    agents: { entries: { worker: { memory: { search: { remote: { apiKey: "***" } } } } } },
+  };
+  const result = await runMemorySetupFlow(
+    config,
+    prompter({ selects: ["remote-b", "key"], texts: ["new-model", "new-owner-key"] }),
+  );
+  expect(result).not.toBe(config);
+  expect(resolveMemorySearchConfig(result, "worker")).toMatchObject({
+    provider: "remote-a",
+    model: "embed-default",
+    remote: { baseUrl: "", apiKey: "***", headers: {} },
+  });
 });

@@ -169,7 +169,7 @@ suite.define(() => {
         .toMatchObject({ browserEnabledOverridden: false, tools: { profile: "full" } });
       await expect
         .poll(() => page.locator("openclaw-settings-save-indicator").textContent())
-        .toContain("Saved");
+        .toContain("Apply changes");
 
       expect((await page.reload())?.status()).toBe(200);
       await expectQuietDefault(settingsRow(page, "Browser enabled"));

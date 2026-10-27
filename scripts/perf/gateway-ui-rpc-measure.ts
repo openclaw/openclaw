@@ -81,6 +81,7 @@ const { values } = parseArgs({
     "remote-ingress": { type: "boolean", default: false },
     "no-counters": { type: "boolean", default: false },
     "cron-pages": { type: "boolean", default: false },
+    "cron-publication": { type: "boolean", default: false },
     providers: { type: "string", default: "10" },
     models: { type: "string", default: "100" },
     "history-key": { type: "string", default: "agent:main:team-shape-session-0" },
@@ -103,6 +104,7 @@ if (values.help) {
   --remote-ingress                 Paired token auth through trusted loopback proxy attribution; asserts compression.
   --no-counters                    Count JSON/socket operations only in separate first/counts samples.
   --cron-pages                     Measure 50-job Cron pages across 1,000 seeded jobs; defaults to and requires >=20 samples.
+  --cron-publication               Four publication cases; requires 1,000 --cron-announce-last jobs, 20 samples and --no-counters.
   --providers 10 --models 100       Synthetic config catalog: models per provider; no credentials.
   --history-key <key> --history-limit 80  Existing 2,000-message fixture; protocol pagination retained.
   --method <case>                  Repeatable case filter (case names appear in result JSON).
@@ -133,8 +135,16 @@ assert(
 );
 const port = parsePositiveInt(values.port, 41731, "--port");
 assert(port >= 40000 && port < 65535, "isolated ports must be 40000..65534");
-const samples = parsePositiveInt(values.samples, values["cron-pages"] ? 20 : 10, "--samples");
+const samples = parsePositiveInt(
+  values.samples,
+  values["cron-pages"] || values["cron-publication"] ? 20 : 10,
+  "--samples",
+);
 assert(!values["cron-pages"] || samples >= 20, "--cron-pages requires at least 20 samples");
+assert(
+  !values["cron-publication"] || (samples === 20 && values["no-counters"] && !values["cron-pages"]),
+  "--cron-publication requires 20 samples, --no-counters and no --cron-pages",
+);
 const warmup = parseNonNegativeInt(values.warmup, 2, "--warmup");
 const rttMs = parseNonNegativeInt(values["rtt-ms"], 0, "--rtt-ms");
 const remoteIngress = values["remote-ingress"];
@@ -182,6 +192,11 @@ assert(
 const fixture = rawFixture;
 const cronJobCount = Number(fixture.cronJobs);
 assert(!values["cron-pages"] || cronJobCount >= 1000, "--cron-pages requires at least 1,000 jobs");
+assert(
+  !values["cron-publication"] ||
+    (cronJobCount === 1000 && fixture.cronAnnounceLast === true && entry.endsWith("/src/entry.ts")),
+  "--cron-publication requires source mode and 1,000 --cron-announce-last jobs",
+);
 assert(existsSync(entry), `Gateway CLI entry missing: ${entry}`);
 mkdirSync(output, { recursive: false });
 const token = "synthetic-gateway-rpc-benchmark-token";
@@ -277,6 +292,17 @@ type Sample = {
   server: Metrics;
 };
 type Peer = ReturnType<typeof createGatewayWsClient>;
+type CronPublicationFixture = {
+  jobIds: string[];
+  sortedJobIds: string[];
+  sharedKey: string;
+  earlyKey: string;
+  lateKey: string;
+  contentSha256: string;
+};
+let cronPublicationFixture: CronPublicationFixture | undefined;
+const cronRequestLastEnd = new Map<string, number>();
+const cronPublicationPacing: Array<{ case: string; phase: string; gapMs: number }> = [];
 let child: ChildProcess | undefined;
 const peers = new Set<Peer>();
 const negotiatedExtensions = new Set<string>();
@@ -404,11 +430,25 @@ const rpcCases = [
     method: "cron.list",
     params: { includeDisabled: true, compact: true, limit: 50, sortBy: "name", sortDir: "desc" },
   },
+  ...(values["cron-publication"]
+    ? ["dense", "early", "late", "unscoped"].map((name) => ({
+        id: `cron.publication.${name}`,
+        method: "cron.list",
+        params: { includeDisabled: true, compact: true, includeDeliveryPreviews: false, limit: 50 },
+      }))
+    : []),
 ];
 const selected = rpcCases.filter((candidate) =>
   values.method?.length
     ? values.method.includes(candidate.id)
-    : candidate.id !== "controlUi.sessionPullRequests.subscribe.burst",
+    : values["cron-publication"]
+      ? candidate.id.startsWith("cron.publication.")
+      : candidate.id !== "controlUi.sessionPullRequests.subscribe.burst",
+);
+assert(
+  !values["cron-publication"] ||
+    selected.every((candidate) => candidate.id.startsWith("cron.publication.")),
+  "--cron-publication accepts only its four publication cases",
 );
 assert(
   selected.length &&
@@ -441,6 +481,7 @@ if (values.sync) {
             remoteIngress,
             noCounters: values["no-counters"],
             cronPages: values["cron-pages"],
+            cronPublication: values["cron-publication"],
             profile: values.profile,
             profileSamples,
             providerCount,
@@ -475,6 +516,26 @@ async function waitMarker(side: string, name: string) {
   }
 }
 function requestParams(candidate: (typeof rpcCases)[number], phase: string, round: number) {
+  if (candidate.id.startsWith("cron.publication.")) {
+    assert(cronPublicationFixture, "Cron publication fixture was not prepared");
+    const { sharedKey, earlyKey, lateKey } = cronPublicationFixture;
+    const sparse =
+      candidate.id === "cron.publication.early" || candidate.id === "cron.publication.late";
+    const sessionKey =
+      candidate.id === "cron.publication.dense"
+        ? sharedKey
+        : candidate.id === "cron.publication.early"
+          ? earlyKey
+          : candidate.id === "cron.publication.late"
+            ? lateKey
+            : undefined;
+    return {
+      ...candidate.params,
+      limit: !sparse && phase === "warmup" ? 1 : 50,
+      offset: sparse ? 0 : phase === "first" ? 1 : phase === "warmup" ? 2 : 50 * (round % 20),
+      ...(sessionKey ? { sessionKey, sessionAgentId: "main" } : {}),
+    };
+  }
   if (
     !values["cron-pages"] ||
     candidate.method !== "cron.list" ||
@@ -505,14 +566,26 @@ async function measureCase(
       await closePeer(pending.peer);
     }
   } else {
-    await measure(
-      candidate.id,
-      candidate.method,
-      requestParams(candidate, phase, round),
-      peer,
-      phase,
-    );
+    const params = requestParams(candidate, phase, round);
+    await paceCronPublication(candidate.id, phase, params);
+    await measure(candidate.id, candidate.method, params, peer, phase);
   }
+}
+async function paceCronPublication(id: string, phase: string, params: unknown) {
+  if (!id.startsWith("cron.publication.")) {
+    return;
+  }
+  const previous = cronRequestLastEnd.get(JSON.stringify(params));
+  if (previous === undefined) {
+    return;
+  }
+  let gapMs = performance.now() - previous;
+  while (gapMs < 1100) {
+    await delay(Math.ceil(1100 - gapMs));
+    gapMs = performance.now() - previous;
+  }
+  assert(gapMs >= 1100, "Repeated Cron request must outlive the shared-response TTL");
+  cronPublicationPacing.push({ case: id, phase, gapMs });
 }
 async function measurePrSubscribeBurst(id: string, phase: string) {
   const method = "controlUi.sessionPullRequests.subscribe";
@@ -613,7 +686,39 @@ async function measurePrSubscribeBurst(id: string, phase: string) {
     await Promise.all(connected.map(({ peer }) => closePeer(peer)));
   }
 }
-async function control(action: string, extra: Record<string, unknown> = {}): Promise<Metrics> {
+function finishCronPublication(id: string, params: unknown) {
+  if (id.startsWith("cron.publication.")) {
+    cronRequestLastEnd.set(JSON.stringify(params), performance.now());
+  }
+}
+function assertCronPublicationResponse(id: string, params: unknown, payload: unknown) {
+  if (!id.startsWith("cron.publication.")) {
+    return;
+  }
+  assert(cronPublicationFixture && isRecord(payload) && isRecord(params));
+  const { jobIds, sortedJobIds } = cronPublicationFixture;
+  const sparse = id === "cron.publication.early" || id === "cron.publication.late";
+  const expectedIds = sparse
+    ? [id === "cron.publication.early" ? jobIds[0] : jobIds.at(-1)]
+    : sortedJobIds.slice(Number(params.offset), Number(params.offset) + Number(params.limit));
+  assert.equal(payload.total, sparse ? 1 : 1000, `${id}: filtered total`);
+  assert.equal(payload.offset, params.offset, `${id}: page offset`);
+  assert.equal(payload.limit, params.limit, `${id}: page limit`);
+  const nextOffset = Number(params.offset) + expectedIds.length;
+  const hasMore = nextOffset < (sparse ? 1 : 1000);
+  assert.equal(payload.hasMore, hasMore, `${id}: hasMore`);
+  assert.equal(payload.nextOffset, hasMore ? nextOffset : null, `${id}: nextOffset`);
+  assert(Array.isArray(payload.jobs), `${id}: job array missing`);
+  assert.deepEqual(
+    payload.jobs.map((job: unknown) => (isRecord(job) ? job.id : undefined)),
+    expectedIds,
+    `${id}: exact returned job IDs/count`,
+  );
+}
+async function control<T = Metrics>(
+  action: string,
+  extra: Record<string, unknown> = {},
+): Promise<T> {
   assert(child?.connected, "Gateway IPC unavailable");
   const target = child;
   const id = randomUUID();
@@ -635,7 +740,7 @@ async function control(action: string, extra: Record<string, unknown> = {}): Pro
       if (typeof raw.error === "string") {
         reject(new Error(raw.error));
       } else {
-        resolve(raw.result as Metrics);
+        resolve(raw.result as T);
       }
     };
     const timer = setTimeout(() => {
@@ -768,6 +873,8 @@ async function measure(id: string, method: string, params: unknown, peer: Peer, 
   }
   const roundTripMs = performance.now() - started;
   const server = await control("end");
+  finishCronPublication(id, params);
+  const serializedPayload = JSON.stringify(response.payload ?? null);
   const syntheticModels =
     method === "models.list" && providerCount > 0 ? new Set<string>() : undefined;
   let syntheticModelCount = 0;
@@ -788,11 +895,9 @@ async function measure(id: string, method: string, params: unknown, peer: Peer, 
     phase,
     roundTripMs,
     ok: response.ok,
-    payloadBytes: Buffer.byteLength(JSON.stringify(response.payload ?? null)),
+    payloadBytes: Buffer.byteLength(serializedPayload),
     ...(syntheticModels ? { syntheticModelCount } : {}),
-    payloadSha256: createHash("sha256")
-      .update(JSON.stringify(response.payload ?? null))
-      .digest("hex"),
+    payloadSha256: createHash("sha256").update(serializedPayload).digest("hex"),
     requestParams: method === "cron.list" ? params : undefined,
     arrayCounts: isRecord(response.payload)
       ? Object.fromEntries(
@@ -805,6 +910,7 @@ async function measure(id: string, method: string, params: unknown, peer: Peer, 
     server,
   });
   assert(response.ok, `${id}: ${JSON.stringify(response.error)}`);
+  assertCronPublicationResponse(id, params, response.payload);
   if (method === "sessions.subscribe") {
     const list = isRecord(response.payload) ? response.payload.list : undefined;
     assert(
@@ -821,7 +927,7 @@ async function measure(id: string, method: string, params: unknown, peer: Peer, 
       `${id}: every synthetic provider/model pair must appear exactly once`,
     );
   }
-  if (method === "cron.list" && id !== "cron.list.enabled") {
+  if (method === "cron.list" && id !== "cron.list.enabled" && !id.startsWith("cron.publication.")) {
     const jobs = isRecord(response.payload) ? response.payload.jobs : undefined;
     const total = isRecord(response.payload) ? response.payload.total : undefined;
     const expectedLimit = isRecord(params) && typeof params.limit === "number" ? params.limit : 50;
@@ -1058,8 +1164,11 @@ function assertWatcherHealthy() {
 let failure: Error | undefined;
 let shutdown: Record<string, unknown> | undefined;
 try {
-  if (syncRoot && sideIndex > 0) {
-    await waitMarker(sides[sideIndex - 1]!, "setup");
+  if (syncRoot) {
+    // Give each ordered cold start its own setup timeout.
+    for (const predecessor of sides.slice(0, sideIndex)) {
+      await waitMarker(predecessor, "setup");
+    }
   }
   const stopPreload = new URL("../lib/gateway-bench-stop-preload.mjs", import.meta.url);
   stopPreload.searchParams.set("parentPid", String(process.pid));
@@ -1078,6 +1187,7 @@ try {
         OPENCLAW_STATE_DIR: root,
         TMPDIR: path.join(root, "tmp"),
         OPENCLAW_SKIP_CHANNELS: "1",
+        OPENCLAW_HANDSHAKE_TIMEOUT_MS: String(timeoutMs),
         NODE_DISABLE_COMPILE_CACHE: "1",
         TSX_TSCONFIG_PATH: path.join(checkout, "tsconfig.json"),
         OPENCLAW_PROFILE: `rpc-bench-${port}`,
@@ -1115,6 +1225,18 @@ try {
   const connected = await connectPeer();
   const hello = await connected.peer.request("connect", connected.params, timeoutMs);
   assert(hello.ok, `connect setup failed: ${JSON.stringify(hello.error)}`);
+  if (values["cron-publication"]) {
+    cronPublicationFixture = await control<CronPublicationFixture>("cron-publication-setup", {
+      storePath: path.join(root, "cron", "jobs.json"),
+    });
+    if (syncRoot) {
+      writeFileSync(
+        path.join(syncRoot, `${values.side}.cron-publication.json`),
+        JSON.stringify(cronPublicationFixture),
+        { flag: "wx" },
+      );
+    }
+  }
   for (let index = 0; index <= warmup; index++) {
     for (const candidate of selected) {
       await measureCase(candidate, index === 0 ? "first" : "warmup", connected.peer);
@@ -1130,7 +1252,9 @@ try {
   assertWatcherHealthy();
   marker("setup");
   if (syncRoot) {
-    await waitMarker("head", "setup");
+    for (const successor of sides.slice(sideIndex + 1)) {
+      await waitMarker(successor, "setup");
+    }
     const fingerprints = sides.map(
       (side) => JSON.parse(readFileSync(path.join(syncRoot!, `${side}.claim`), "utf8")).fingerprint,
     );
@@ -1138,6 +1262,15 @@ try {
       fingerprints.every((fingerprint) => fingerprint === fingerprints[0]),
       "Cohort workloads differ",
     );
+    if (cronPublicationFixture) {
+      for (const side of sides) {
+        assert.deepEqual(
+          JSON.parse(readFileSync(path.join(syncRoot, `${side}.cron-publication.json`), "utf8")),
+          cronPublicationFixture,
+          "Cron publication fixture contents/order differ across sides",
+        );
+      }
+    }
   }
   let cell = 0;
   for (let index = 0; index < samples; index++) {
@@ -1159,8 +1292,18 @@ try {
     await waitMarker("head", `cell-${cell - 1}`);
   }
   assertWatcherHealthy();
+  if (cronPublicationFixture) {
+    assert.deepEqual(
+      await control<CronPublicationFixture>("cron-publication-setup", {
+        storePath: path.join(root, "cron", "jobs.json"),
+      }),
+      cronPublicationFixture,
+      "Cron fixture changed during measurements",
+    );
+  }
   for (const candidate of selected) {
     if (values.profile) {
+      const cronResponses: Array<{ params: unknown; payload: unknown }> = [];
       await control("profile-start", { allocations: values.allocations });
       try {
         for (let index = 0; index < profileSamples; index++) {
@@ -1174,15 +1317,14 @@ try {
               await closePeer(pending.peer);
             }
           } else {
-            assert(
-              (
-                await connected.peer.request(
-                  candidate.method,
-                  requestParams(candidate, "profile", index),
-                  timeoutMs,
-                )
-              ).ok,
-            );
+            const params = requestParams(candidate, "profile", index);
+            await paceCronPublication(candidate.id, "profile", params);
+            const response = await connected.peer.request(candidate.method, params, timeoutMs);
+            finishCronPublication(candidate.id, params);
+            assert(response.ok);
+            if (candidate.id.startsWith("cron.publication.")) {
+              cronResponses.push({ params, payload: response.payload });
+            }
           }
         }
       } finally {
@@ -1193,6 +1335,9 @@ try {
             `${candidate.id}.${values.allocations ? "heapprofile" : "cpuprofile"}`,
           ),
         });
+      }
+      for (const { params, payload } of cronResponses) {
+        assertCronPublicationResponse(candidate.id, params, payload);
       }
     }
     console.log(`${candidate.id}: ${samples} warm samples complete`);
@@ -1233,6 +1378,8 @@ try {
       rttMs,
       remoteIngress,
       cronPages: values["cron-pages"],
+      cronPublication: cronPublicationFixture,
+      cronPublicationPacing,
       operationCounters: values["no-counters"]
         ? values["cron-pages"]
           ? "first-and-counts-only"

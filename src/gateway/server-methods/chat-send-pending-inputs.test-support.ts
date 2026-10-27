@@ -12,7 +12,7 @@ import {
   upsertSessionEntryCore,
 } from "../../config/sessions/session-accessor.js";
 import { memorySessionActorOwners } from "../../config/sessions/session-actor-memory-owner.js";
-import { withSessionActorStorage } from "../../config/sessions/session-actor-storage-binding.js";
+import { withSessionActorStorage } from "../../config/sessions/session-actor-storage-acquisition.js";
 import type { SessionCreatedActor } from "../../config/sessions/session-entry-provenance.js";
 import { SessionTranscriptProjectionUnavailableError } from "../../config/sessions/session-transcript-projection-error.js";
 import { loadOrCreateProcessDeviceIdentityAsync } from "../../infra/device-identity-async.js";

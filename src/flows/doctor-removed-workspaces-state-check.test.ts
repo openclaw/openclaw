@@ -36,13 +36,7 @@ it.each(["sqlite", "widgets-data"] as const)(
   async (kind) => {
     await fingerprint(kind);
     const findings = await detect();
-    expect(findings).toEqual([
-      expect.objectContaining({
-        checkId: "core/doctor/removed-workspaces-state",
-        path: staleDir,
-        severity: "warning",
-      }),
-    ]);
+    expect(findings).toMatchObject([{ path: staleDir, severity: "warning" }]);
     await expect(check.detect(context(), { paths: [join(root, "other")] })).resolves.toEqual([]);
     const effect = { dryRunSafe: false, kind: "state", target: staleDir };
     expect(await check.repair!({ ...context(), dryRun: true }, findings)).toMatchObject({
@@ -86,17 +80,12 @@ it.each(["retired directory", "symlink beneath state", "ancestor of state"])(
           : { defaults: { workspace } },
     };
     const findings = await detect(cfg);
-    expect(findings).toEqual([
-      expect.objectContaining({
-        message: expect.stringContaining("Automatic removal is disabled"),
-        path: staleDir,
-        severity: "warning",
-      }),
-    ]);
+    const warning = expect.stringContaining("Automatic removal is disabled");
+    expect(findings).toMatchObject([{ message: warning, path: staleDir, severity: "warning" }]);
     expect(await check.repair!(context(cfg), findings)).toMatchObject({
       status: "skipped",
       changes: [],
-      warnings: [expect.stringContaining("Automatic removal is disabled")],
+      warnings: [warning],
     });
     await expect(fs.stat(preserved)).resolves.toBeDefined();
   },

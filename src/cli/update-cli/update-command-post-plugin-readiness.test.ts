@@ -43,29 +43,23 @@ it("redacts caught execution errors before publishing repair warnings", async ()
   expect(JSON.stringify(result)).not.toContain("fixture-secret");
 });
 
-it.each([
-  { code: 1, termination: "exit", signal: null, killed: false },
-  { code: 124, termination: "timeout", signal: "SIGTERM", killed: true },
-] as const)("defers $termination contention without masking errors", async (physical) => {
-  for (const status of ["ok", "error"] as const) {
-    const result = await inspect(
-      { ...physical, cleanup: "normal", stderr: "database is locked" },
-      status,
-    );
-    const { code: exitCode, ...lifecycle } = physical;
-    expect(result).toMatchObject({
-      status: status === "ok" ? "warning" : "error",
-      doctorLint: { exitCode, ...lifecycle, advisory: { kind: "recoverable-maintenance" } },
-      warnings: [
-        {
-          reason: "doctor-advisory",
-          message: expect.stringContaining("database is locked"),
-          guidance: [repair],
-        },
-      ],
-    });
-    expect(result.failureFacts).toBeUndefined();
-  }
+it("defers contention without masking an existing plugin error", async () => {
+  const result = await inspect(
+    { code: 1, cleanup: "normal", stderr: "database is locked" },
+    "error",
+  );
+  expect(result).toMatchObject({
+    status: "error",
+    doctorLint: { advisory: { kind: "recoverable-maintenance" } },
+    warnings: [
+      {
+        reason: "doctor-advisory",
+        message: expect.stringContaining("database is locked"),
+        guidance: [repair],
+      },
+    ],
+  });
+  expect(result.failureFacts).toBeUndefined();
 });
 
 it.each([

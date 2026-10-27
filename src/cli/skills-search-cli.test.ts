@@ -29,49 +29,33 @@ async function runCommand(args: string[]) {
   await program.parseAsync(args, { from: "user" });
 }
 
-it.each([
-  [
-    "distinguishes duplicate slugs by owner",
-    [
-      skill({ installRef: "@demo-owner/calendar" }),
-      skill({ installRef: "@work-owner/calendar", displayName: "Team Calendar" }),
-    ],
-    ["@demo-owner/calendar  Calendar", "@work-owner/calendar  Team Calendar"],
-  ],
-  [
-    "keeps bare slugs when the owner is missing",
-    [{ slug: "legacy-calendar", displayName: "Legacy Calendar" }],
-    ["legacy-calendar  Legacy Calendar"],
-  ],
-  [
-    "labels skills.sh entries as unscanned",
-    [
-      skill({
-        slug: "weather",
-        installRef: "skills-sh:openclaw/skills/weather",
-        trustState: "not-scanned-by-clawhub",
-        displayName: "Weather",
-      }),
-    ],
-    ["skills-sh:openclaw/skills/weather  Weather  Not scanned by ClawHub"],
-  ],
-  [
-    "keeps multiline metadata on one terminal line",
-    [
-      skill({
-        slug: "oauth-helper",
-        installRef: "@demo-owner/oauth-helper",
-        displayName: "Oauth\nHelper",
-        summary: "Login.\nProviders.\n\nFeatures:\n- Confirm first",
-      }),
-    ],
-    ["@demo-owner/oauth-helper  Oauth Helper  Login. Providers. Features: - Confirm first"],
-  ],
-])("%s", async (_name, results, lines) => {
-  searchSkillsFromClawHubMock.mockResolvedValue(results);
+it("formats mixed search results with owner refs, trust labels and single-line metadata", async () => {
+  searchSkillsFromClawHubMock.mockResolvedValue([
+    skill({ installRef: "@demo-owner/calendar" }),
+    skill({ installRef: "@work-owner/calendar", displayName: "Team Calendar" }),
+    { slug: "legacy-calendar", displayName: "Legacy Calendar" },
+    skill({
+      slug: "weather",
+      installRef: "skills-sh:openclaw/skills/weather",
+      trustState: "not-scanned-by-clawhub",
+      displayName: "Weather",
+    }),
+    skill({
+      slug: "oauth-helper",
+      installRef: "@demo-owner/oauth-helper",
+      displayName: "Oauth\nHelper",
+      summary: "Login.\nProviders.\n\nFeatures:\n- Confirm first",
+    }),
+  ]);
   await runCommand(["skills", "search", "calendar"]);
   expect(searchSkillsFromClawHubMock).toHaveBeenCalledWith({ query: "calendar", limit: undefined });
-  expect(loggedLines()).toEqual(lines);
+  expect(loggedLines()).toEqual([
+    "@demo-owner/calendar  Calendar",
+    "@work-owner/calendar  Team Calendar",
+    "legacy-calendar  Legacy Calendar",
+    "skills-sh:openclaw/skills/weather  Weather  Not scanned by ClawHub",
+    "@demo-owner/oauth-helper  Oauth Helper  Login. Providers. Features: - Confirm first",
+  ]);
 });
 
 it("formats ClawHub skill versions without changing JSON output", async () => {

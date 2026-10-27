@@ -77,6 +77,7 @@ import {
   commitGatewayConfigWrite,
   didActiveSharedGatewayAuthChange,
   didSharedGatewayAuthChange,
+  respondConfigWriteApplicationOutcome,
   resolveGatewayConfigPath,
   resolveGatewayConfigRestartWriteResult,
   shouldAwaitGatewayConfigApplication,
@@ -573,25 +574,19 @@ async function commitConfigRestartWrite(params: {
       : {}),
     ...(!params.summary ? { config: redactConfigObject(writeResult.config, params.uiHints) } : {}),
   };
-  if (writeResult.application) {
-    const outcome = await writeResult.application;
-    if (outcome !== "applied") {
-      const message =
-        outcome === "applied-restart-required"
-          ? `${params.mode} persisted and updated the active Gateway, but a recovery restart is required; wait for the Gateway to restart, then run config.get to confirm the active revision`
-          : outcome === "restart-pending"
-            ? `${params.mode} persisted and was accepted for restart; wait for the Gateway to restart, then run config.get to confirm the active revision`
-            : `${params.mode} persisted but was not applied to the active Gateway (${outcome}); run config.get, then use config.apply to reapply the saved config or restart the Gateway`;
-      params.respond(
-        false,
-        undefined,
-        errorShape(ErrorCodes.UNAVAILABLE, message, {
-          details: { persistedConfig },
-        }),
-      );
-      writeResult.queueFollowUp();
-      return;
-    }
+  if (
+    writeResult.application &&
+    respondConfigWriteApplicationOutcome({
+      outcome: await writeResult.application,
+      mode: params.mode,
+      client: params.client,
+      respond: params.respond,
+      success: { ok: true, path: writeResult.path, ...persistedConfig, changedPaths },
+      persistedConfig,
+    })
+  ) {
+    writeResult.queueFollowUp();
+    return;
   }
   const noopReload = isNoopGatewayReloadPlan(
     buildGatewayReloadPlan(changedPaths, {

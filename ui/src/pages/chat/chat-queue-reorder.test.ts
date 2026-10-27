@@ -1,5 +1,6 @@
 /* @vitest-environment jsdom */
 import { afterEach, beforeEach, expect, it, onTestFinished, vi } from "vitest";
+import { makeBootRoster } from "../../app/bootstrap.test-support.ts";
 import { loadSettings } from "../../app/settings.ts";
 import type { ChatQueueItem } from "../../lib/chat/chat-types.ts";
 import { listStoredChatOutboxes } from "../../lib/chat/outbox-store-projection.ts";
@@ -15,12 +16,7 @@ import {
 } from "./composer-queue-persistence.ts";
 
 const SESSION_KEY = "agent:main";
-const agentsList = {
-  defaultId: "main",
-  mainKey: "main",
-  scope: "per-sender" as const,
-  agents: [{ id: "main" }],
-};
+const agentsList = makeBootRoster();
 const queued = (id: string, createdAt = 1_000): ChatQueueItem => ({ id, text: id, createdAt });
 const admission = (host: ReturnType<typeof makeChatHost>, agentId?: string) =>
   captureChatOutboxAdmission(host, host.sessionKey, agentId);

@@ -15,8 +15,8 @@ import { ensureProfileForEmail } from "../../state/user-profiles.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { createDirectChatContext } from "../server-chat.agent-events.test-helpers.js";
 import { sharingPolicyClient } from "../session-sharing.test-utils.js";
-import { coreGatewayHandlers } from "./core-handlers.js";
-import type { GatewayClient, RespondFn } from "./types.js";
+import { startSessionMutationRequest } from "./sessions-mutations.native-consent.test-support.js";
+import type { GatewayClient } from "./types.js";
 
 vi.mock("../../agents/model-runtime-choice.js", async (importOriginal) => ({
   ...(await importOriginal<typeof ModelRuntimeChoice>()),
@@ -73,41 +73,36 @@ it.each([
         };
       }
       const context = createDirectChatContext({ getRuntimeConfig: () => config });
-      context.readPreparedGatewayModelCatalog = async () => {
-        const catalog = await context.loadGatewayModelCatalogSnapshot();
-        return { entries: catalog.entries, routeVariants: catalog.routeVariants };
-      };
+      context.readPreparedGatewayModelCatalog = () => context.loadGatewayModelCatalogSnapshot();
       const key = `agent:main:dashboard:native-create-${admin}`;
-      const respond = vi.fn<RespondFn>();
       try {
-        await withPluginRuntimeGenerationScope(
+        const respond = await withPluginRuntimeGenerationScope(
           {
             // Runtime registration and selection use the same prepared plugin inventory.
             metadataSnapshot: createPluginMetadataSnapshotFixture({
               plugins: [
                 {
                   id: "acpx",
-                  enabledByDefault: true,
                   activation: { onAgentHarnesses: ["acp-opencode"] },
                 },
               ],
             }),
             pluginRegistry: requireActivePluginRegistry(),
           },
-          () =>
-            coreGatewayHandlers["sessions.create"]!({
-              req: { type: "req", id: "native-create", method: "sessions.create" },
-              params: {
+          async () => {
+            const request = startSessionMutationRequest(
+              "sessions.create",
+              {
                 key,
                 agentId: "main",
                 model: "acp-opencode/selected",
                 agentRuntime: "acp-opencode",
               },
-              client,
-              context,
-              respond,
-              isWebchatConnect: () => true,
-            }),
+              { client, context },
+            );
+            await request.running;
+            return request.respond;
+          },
         );
         expect(respond.mock.calls[0]?.[0], JSON.stringify(respond.mock.calls[0]?.[2])).toBe(true);
         const entry = loadSessionEntry({ agentId: "main", sessionKey: key });

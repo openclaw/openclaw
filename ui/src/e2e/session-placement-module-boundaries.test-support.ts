@@ -501,8 +501,25 @@ export function defineSessionPlacementModuleBoundaryTests(
         .getByRole("menuitem", { name: "Stop cloud worker…" });
       await stopWorker.waitFor();
       expect(await localSessionRow.locator(".session-row-badge--cloud").count()).toBe(0);
-      expect(await cloudPlacementBadge.locator("circle").count()).toBe(1);
-      expect(await cloudPlacementBadge.locator("rect").count()).toBe(0);
+      const placementArtwork = await cloudPlacementBadge
+        .locator(".session-css-icon")
+        .evaluate((element) => {
+          const mask = getComputedStyle(element).maskImage.match(
+            /data:image\/svg\+xml,([^"\s]+)"/u,
+          )?.[1];
+          if (!mask) {
+            throw new Error("Missing cloud placement artwork");
+          }
+          const artwork = new DOMParser().parseFromString(
+            decodeURIComponent(mask),
+            "image/svg+xml",
+          );
+          return {
+            circles: artwork.querySelectorAll("circle").length,
+            rectangles: artwork.querySelectorAll("rect").length,
+          };
+        });
+      expect(placementArtwork).toEqual({ circles: 1, rectangles: 0 });
       await stopWorker.click();
       await (await waitForConfirmModal(page)).getByRole("button", { name: "Stop worker" }).click();
       const reclaim = await gateway.waitForRequest("sessions.reclaim");

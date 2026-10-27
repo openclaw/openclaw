@@ -42,14 +42,6 @@ const reviewed = new Map([
     },
   ],
   [
-    "src/infra/client-credential-native-tokens.ts",
-    {
-      tier: "T3",
-      evidence:
-        "Only client-credential-operations.ts calls scoped-token claim/clear. Runtime operations enter client-credential.worker.ts; synchronous consumers are offline Doctor/CLI migration and verified restore.",
-    },
-  ],
-  [
     "src/infra/client-credential-operations.ts",
     {
       tier: "T3",
@@ -804,7 +796,7 @@ const reviewedOperations = new Map([
     ],
   ],
   [
-    "src/config/sessions/session-accessor.sqlite-entry.ts",
+    "src/config/sessions/session-accessor.sqlite-entry-replace.ts",
     [
       {
         tier: "W",
@@ -3505,6 +3497,7 @@ const workerModules = new Set([
   "src/state/user-background.store.ts", // Background read/write workers; preference validation and profile merge/link/GitHub-sync also run in shared-state workers.
   "src/gateway/worker-environments/local-workspace-store.kernel.ts", // Projection read/write workers and worktree retirement worker only.
   "src/gateway/worker-environments/local-workspace-manifest-scan.ts", // Only openclaw-state-read.worker.ts executes its row snapshot and filesystem scan; host imports are types.
+  "src/gateway/worker-environments/local-workspace-cas.kernel.ts", // Shared-state read/manifest workers traverse immutable content; local-workspace-store.worker.ts alone prepares, prunes, and sweeps it.
   "src/skills/library/import.kernel.ts", // Upload commands execute only in the shared-state writer.
   "src/skills/library/read.kernel.ts", // Only openclaw-state-read-operation-registry.ts imports this worker operation table.
   "src/skills/library/service.kernel.ts", // Library catalog and revision reads use the shared-state read registry.
@@ -3568,6 +3561,8 @@ const workerModules = new Set([
   "src/config/sessions/session-accessor.sqlite-transcript-binding.ts", // History worker transcript-binding reader only.
   "src/config/sessions/session-cold-storage-selection.ts", // Archive-worker preparation and cold-mutation kernels only.
   "src/config/sessions/session-cold-storage-worker.ts", // Archive-worker cold-mutate dispatcher only.
+  "src/config/sessions/session-cold-storage-read.worker.ts", // Transcript/history workers dispatch cold probes; verified-chunk reads stay in their read snapshots.
+  "src/config/sessions/session-transcript-hydration.worker.ts", // Only session-transcript-hydration-read.worker.ts dispatches hydration; cold records stream inside that worker.
   "src/config/sessions/session-membership-facts.ts", // Transcript worker session-membership-facts dispatcher only.
 
   "src/cron/store/run-history.kernel.ts", // Cron read worker and shared-state Cron dispatch own history SQL.
@@ -3646,6 +3641,10 @@ const exceptionModules = new Set([
   "src/infra/sqlite-staging-token.ts", // acquireSqliteStagingToken holds the private snapshot admission/retirement lock through native transactions.
 ]);
 const cliModules = new Map([
+  [
+    "scripts/perf/session-cold-selection.ts",
+    "Explicit developer-only benchmark of cold preparation and mutation on synthetic state; no runtime imports or Gateway callers",
+  ],
   [
     "src/claws/provenance-adopted.ts",
     "Only claws migrate/remove CLI one-shots call these writers via migrate.ts and lifecycle-adopted-removal.ts; no Gateway caller",

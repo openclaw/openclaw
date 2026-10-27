@@ -1,6 +1,7 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { Type } from "typebox";
 import { describe, expect, it, vi } from "vitest";
+import { getInternalToolExecutionPreparer } from "../../../../packages/agent-core/src/internal-hooks.js";
 import { runWithAgentToolExecutionContext } from "../../../../packages/agent-core/src/tool-execution-context.js";
 import { withTestTimeout } from "../../../../test/helpers/promise.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
@@ -27,7 +28,6 @@ import {
 } from "../../code-mode.js";
 import { runUntilCompleted } from "../../code-mode.test-support.js";
 import { createAgentHarnessPromptToolPolicy } from "../../harness/prompt-tool-policy.js";
-import { getInternalToolExecutionPreparer } from "../../runtime/internal-hooks.js";
 import { wrapToolDefinition } from "../../sessions/tools/tool-definition-wrapper.js";
 import { makeAgentAssistantMessage } from "../../test-helpers/agent-message-fixtures.js";
 import { createStubTool } from "../../test-helpers/agent-tool-stubs.js";

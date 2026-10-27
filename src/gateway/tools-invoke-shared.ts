@@ -27,7 +27,7 @@ import {
 } from "../channels/plugins/conversation-read-origin.js";
 import { isMessageToolSendActionName } from "../channels/plugins/message-action-names.js";
 import { getRuntimeConfig } from "../config/io.js";
-import { withSessionActorStorage } from "../config/sessions/session-actor-storage-binding.js";
+import { withSessionActorStorage } from "../config/sessions/session-actor-storage-acquisition.js";
 import { captureSessionEntryMetadataRead } from "../config/sessions/session-entry-source-authority.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";

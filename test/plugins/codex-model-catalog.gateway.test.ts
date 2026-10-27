@@ -15,14 +15,12 @@ import { getRuntimeConfig } from "../../src/config/config.js";
 import type { ModelProviderConfig } from "../../src/config/types.models.js";
 import type { OpenClawConfig } from "../../src/config/types.openclaw.js";
 import { waitForCatalogPublication } from "../../src/gateway/server-methods/models-auth-catalog.test-support.js";
-import {
-  listModels,
-  WITHOUT_OPENAI_ENV_AUTH,
-} from "../../src/gateway/server-methods/models-list-result.openai-routes.test-support.js";
+import { listModels } from "../../src/gateway/server-methods/models-list-result.openai-routes.test-support.js";
 import {
   disconnectGatewayClient,
   startGatewayWithClient,
 } from "../../src/gateway/test-helpers.e2e.js";
+import { WITHOUT_OPENAI_ENV_AUTH } from "../../src/gateway/test-helpers.env.js";
 import * as pluginModuleLoader from "../../src/plugins/plugin-module-loader-cache.js";
 import { withEnvAsync } from "../../src/test-utils/env.js";
 import { withOpenClawTestState } from "../../src/test-utils/openclaw-test-state.js";

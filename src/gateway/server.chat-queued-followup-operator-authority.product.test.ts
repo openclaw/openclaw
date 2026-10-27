@@ -26,7 +26,7 @@ import {
 } from "./gateway-provider-fixture.test-support.js";
 import type { OperatorScope } from "./operator-scopes.js";
 import { disconnectGatewayClient, startGatewayWithClient } from "./test-helpers.e2e.js";
-import { KERNEL_TEST_ENV } from "./test-helpers.env.js";
+import { kernelGatewayTestStateOptions } from "./test-helpers.env.js";
 import { buildMockOpenAiResponsesProvider } from "./test-openai-responses-model.js";
 
 it(
@@ -35,15 +35,7 @@ it(
   async ({ signal }) => {
     const waitForGate = (gate: PromiseLike<unknown>, work: PromiseLike<unknown>, message: string) =>
       withinTest(awaitGateBeforeSettlement(gate, work, message), signal);
-    const state = await createOpenClawTestState({
-      label: "queued-authority",
-      env: {
-        ...KERNEL_TEST_ENV,
-        VITEST: process.env.VITEST,
-        OPENCLAW_TEST_MINIMAL_GATEWAY: undefined,
-        OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
-      },
-    });
+    const state = await createOpenClawTestState(kernelGatewayTestStateOptions("queued-authority"));
     const firstReached = createDeferred();
     const releaseFirst = createDeferred();
     const toolReached = createDeferred();

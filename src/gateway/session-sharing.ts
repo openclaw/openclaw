@@ -17,7 +17,6 @@ import {
   resolveGatewayOperatorRoleActor,
 } from "./operator-role-policy.js";
 import type { SessionMutationAuthorization } from "./server-methods/types.js";
-import { isSessionCreatorProfile } from "./session-creator.js";
 import { isRequiredSessionTargetMethod, mayCreateSessionTarget } from "./session-method-policy.js";
 import { SessionMutationAuthorizationChangedError } from "./session-mutation-authorization-error.js";
 import { getSessionRowProjection } from "./session-row-projection-access.js";
@@ -172,9 +171,14 @@ export function resolveSessionMutationAuthorization(request: SessionMutationAuth
       const entryFilter = policy
         ? policy.entryFilter
         : createSessionListEntryFilter({ cfg, client: params.client });
-      return entryFilter?.(target.storeKey, target.entry) === false
-        ? hiddenSessionNotFound(target.canonicalKey)
-        : null;
+      const visible = policy
+        ? policy.canReadTarget(target)
+        : entryFilter?.(
+            target.storeKey,
+            target.entry,
+            resolveSessionSharingMembership(target, identity?.id, members, projection),
+          ) !== false;
+      return !visible ? hiddenSessionNotFound(target.canonicalKey) : null;
     }
     return policy
       ? authorizeSessionSharingTarget(
@@ -242,11 +246,17 @@ export function resolveSessionMutationAuthorization(request: SessionMutationAuth
       hidesForeignSessions &&
       target &&
       !(
-        preparedPolicy(getPolicyConfig())?.isCreator(target.entry.createdActor) ??
-        isSessionCreatorProfile(
-          target.entry.createdActor,
-          params.client?.authenticatedUserProfile?.profileId,
-        )
+        preparedPolicy(getPolicyConfig())?.canReadTarget(target) ??
+        createSessionListEntryFilter({ cfg: getPolicyConfig(), client: params.client })?.(
+          target.storeKey,
+          target.entry,
+          resolveSessionSharingMembership(
+            target,
+            sharingIdentity(params.client, resolveGatewayOperatorRoleActor(params.client))?.id,
+            undefined,
+            "projection" in resolved ? resolved.projection : undefined,
+          ),
+        ) !== false
       )
     ) {
       return { error: hiddenSessionNotFound(targetRef.sessionKey) };

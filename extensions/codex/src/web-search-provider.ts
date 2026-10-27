@@ -7,6 +7,7 @@ import { createCodexWebSearchProviderBase } from "./web-search-provider.shared.j
 const loadCodexWebSearchRuntime = createLazyRuntimeModule(
   () => import("./web-search-provider.runtime.js"),
 );
+const loadConfigParsing = createLazyRuntimeModule(() => import("./app-server/config-parsing.js"));
 
 const CodexWebSearchSchema = {
   type: "object",
@@ -39,7 +40,7 @@ export function createCodexWebSearchProvider(
         parameters: CodexWebSearchSchema,
         execute: async (args, executionContext) => {
           const { executeCodexWebSearchProviderTool } = await loadCodexWebSearchRuntime();
-          const { readCodexPluginConfig } = await import("./app-server/config-parsing.js");
+          const { readCodexPluginConfig } = await loadConfigParsing();
           return await executeCodexWebSearchProviderTool(ctx, args, executionContext, {
             pluginConfig: readCodexPluginConfig(
               options.resolvePluginConfig?.() ?? resolvePluginConfigObject(ctx.config, "codex"),

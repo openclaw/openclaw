@@ -1,7 +1,8 @@
-// Covers plugin discovery threading and concurrency behavior.
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type { PluginDiscoveryResult } from "./discovery.js";
 import * as installedPluginIndexRecordReader from "./installed-plugin-index-record-reader.js";
+import { createInstalledPluginIndexCandidate as createCandidate } from "./test-helpers/installed-plugin-index.js";
 
 const discoverOpenClawPluginsMock = vi.fn();
 
@@ -16,44 +17,45 @@ vi.mock("./discovery.js", async (importOriginal) => {
 const { loadPluginManifestRegistryCore } = await import("./manifest-registry.js");
 const { loadInstalledPluginIndexWithDiscovery } = await import("./installed-plugin-index.js");
 
-const emptyDiscovery: PluginDiscoveryResult = { candidates: [], diagnostics: [] };
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+const candidate = (id: string) =>
+  createCandidate(tempDirs.make("openclaw-discovery-input-"), { id });
 
-describe("discovery threading", () => {
-  beforeEach(() => {
-    discoverOpenClawPluginsMock.mockReset();
-    discoverOpenClawPluginsMock.mockReturnValue(emptyDiscovery);
-  });
+afterEach(() => vi.restoreAllMocks());
 
-  it("skips internal discoverOpenClawPlugins when discovery is supplied", () => {
-    loadPluginManifestRegistryCore({ discovery: emptyDiscovery });
-    expect(discoverOpenClawPluginsMock).not.toHaveBeenCalled();
+describe("plugin discovery inputs", () => {
+  beforeEach(() => discoverOpenClawPluginsMock.mockReset());
 
-    discoverOpenClawPluginsMock.mockClear();
-    loadInstalledPluginIndexWithDiscovery({ discovery: emptyDiscovery, installRecords: {} });
-    expect(discoverOpenClawPluginsMock).not.toHaveBeenCalled();
-  });
+  it.each(["manifest registry", "installed index"])(
+    "selects inputs for the %s without rescanning supplied inventory",
+    (consumer) => {
+      const loadIds = (params: Parameters<typeof loadPluginManifestRegistryCore>[0] = {}) => {
+        const input = { ...params, installRecords: {} };
+        return consumer === "manifest registry"
+          ? loadPluginManifestRegistryCore(input).plugins.map((plugin) => plugin.id)
+          : loadInstalledPluginIndexWithDiscovery(input).index.plugins.map(
+              (plugin) => plugin.pluginId,
+            );
+      };
+      const discovery: PluginDiscoveryResult = {
+        candidates: [candidate("captured")],
+        diagnostics: [],
+      };
+      discoverOpenClawPluginsMock.mockReturnValue({
+        candidates: [candidate("scanned")],
+        diagnostics: [],
+      });
 
-  it("calls discoverOpenClawPlugins when neither discovery nor candidates supplied", () => {
-    loadPluginManifestRegistryCore({});
-    expect(discoverOpenClawPluginsMock).toHaveBeenCalledTimes(1);
+      expect(loadIds()).toEqual(["scanned"]);
+      expect(discoverOpenClawPluginsMock).toHaveBeenCalledOnce();
+      discoverOpenClawPluginsMock.mockClear();
 
-    discoverOpenClawPluginsMock.mockClear();
-    loadInstalledPluginIndexWithDiscovery({ installRecords: {} });
-    expect(discoverOpenClawPluginsMock).toHaveBeenCalledTimes(1);
-  });
-
-  it("prefers explicit candidates over discovery when both are supplied", () => {
-    loadPluginManifestRegistryCore({ candidates: [], diagnostics: [], discovery: emptyDiscovery });
-    expect(discoverOpenClawPluginsMock).not.toHaveBeenCalled();
-
-    discoverOpenClawPluginsMock.mockClear();
-    loadInstalledPluginIndexWithDiscovery({
-      candidates: [],
-      discovery: emptyDiscovery,
-      installRecords: {},
-    });
-    expect(discoverOpenClawPluginsMock).not.toHaveBeenCalled();
-  });
+      expect(loadIds({ discovery })).toEqual(["captured"]);
+      expect(loadIds({ candidates: [candidate("explicit")], discovery })).toEqual(["explicit"]);
+      expect(loadIds({ candidates: [], discovery })).toEqual([]);
+      expect(discoverOpenClawPluginsMock).not.toHaveBeenCalled();
+    },
+  );
 
   it("preserves explicit candidate diagnostics without loading persisted install records", () => {
     const readInstallRecords = vi.spyOn(

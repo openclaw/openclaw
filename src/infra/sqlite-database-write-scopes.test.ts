@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   readSqliteDatabaseScopedWriteToken,
   readSqliteDatabasePendingScopedWriteToken,
@@ -16,79 +16,52 @@ import { hasSqliteWorkerOutcomeUnknown } from "./sqlite-worker-error.js";
 describe("scoped SQLite write receipts", () => {
   const { openDatabase } = useSqliteSchemaTestFixture();
 
-  it.each(["preparation", "reentrant", "constraint", "full"] as const)(
-    "retains receipts only for definite no-effect prepared failures: %s",
-    (failure) => {
-      const database = openDatabase(
-        "CREATE TABLE original(id INTEGER PRIMARY KEY, value BLOB); INSERT INTO original VALUES(1, NULL); PRAGMA max_page_count=3",
-      );
-      const before = readSqliteDatabaseScopedWriteToken(database, "entry");
-      const statement = database.prepare("INSERT INTO original VALUES (?, zeroblob(?))");
-      let installed = false;
-      let rolledBack = false;
-      let invalidated = false;
-      let observedError: unknown;
-      expect(() => {
-        try {
-          withSqlitePostCommitPublications(database, () =>
-            withSqliteDatabaseWriteScope(database, ["entry"], () =>
-              withSqlitePreparedNativeMutation(
-                database,
-                () => {
-                  stageSqliteTransactionState(database, {
-                    commit: () => {
-                      installed = true;
-                    },
-                    rollback: () => {
-                      rolledBack = true;
-                    },
-                    invalidate: () => {
-                      invalidated = true;
-                    },
-                  });
-                  if (failure === "preparation") {
-                    throw new Error("preparation rejected");
-                  }
-                  if (failure === "reentrant") {
-                    statement.run(3, 0);
-                  }
-                },
-                () =>
-                  statement.run(failure === "constraint" ? 1 : 2, failure === "full" ? 65536 : 0),
-              ),
-            ),
-          );
-        } catch (error) {
-          observedError = error;
-          throw error;
-        }
-      }).toThrow(
-        failure === "preparation"
-          ? "preparation rejected"
-          : failure === "reentrant"
-            ? "must execute exactly one data statement"
-            : failure === "constraint"
-              ? "UNIQUE constraint failed"
-              : "Prepared SQLite mutation outcome is unknown",
-      );
-      expect(installed).toBe(false);
-      expect(rolledBack).toBe(failure !== "full");
-      expect(invalidated).toBe(failure === "full");
-      expect(hasSqliteWorkerOutcomeUnknown(observedError)).toBe(failure === "full");
-      if (failure === "full") {
-        expect(observedError).toMatchObject({ cause: { message: "database or disk is full" } });
-      }
-      expect(database.prepare("SELECT id FROM original").all()).toEqual([{ id: 1 }]);
-      const after = readSqliteDatabaseScopedWriteToken(database, "entry");
-      if (failure === "full") {
-        expect(after).not.toBe(before);
-      } else {
-        expect(after).toBe(before);
-      }
-      withSqliteDatabaseWriteScope(database, ["entry"], () => statement.run(2, 0));
-      expect(readSqliteDatabaseScopedWriteToken(database, "entry")).not.toBe(after);
-    },
-  );
+  it.each([
+    ["preparation", "preparation rejected"],
+    ["reentrant", "must execute exactly one data statement"],
+    ["constraint", "UNIQUE constraint failed"],
+    ["full", "Prepared SQLite mutation outcome is unknown"],
+  ])("retains receipts only for definite no-effect prepared failures: %s", (failure, message) => {
+    const database = openDatabase(
+      "CREATE TABLE original(id INTEGER PRIMARY KEY, value BLOB); INSERT INTO original VALUES(1, NULL); PRAGMA max_page_count=3",
+    );
+    const before = readSqliteDatabaseScopedWriteToken(database, "entry");
+    const statement = database.prepare("INSERT INTO original VALUES (?, zeroblob(?))");
+    const callbacks = { commit: vi.fn(), rollback: vi.fn(), invalidate: vi.fn() };
+    const mutate = vi.fn(() =>
+      withSqlitePostCommitPublications(database, () =>
+        withSqliteDatabaseWriteScope(database, ["entry"], () =>
+          withSqlitePreparedNativeMutation(
+            database,
+            () => {
+              stageSqliteTransactionState(database, callbacks);
+              if (failure === "preparation") {
+                throw new Error("preparation rejected");
+              }
+              if (failure === "reentrant") {
+                statement.run(3, 0);
+              }
+            },
+            () => statement.run(failure === "constraint" ? 1 : 2, failure === "full" ? 65536 : 0),
+          ),
+        ),
+      ),
+    );
+    expect(mutate).toThrow(message);
+    const observedError: unknown = mutate.mock.results[0]?.value;
+    expect(callbacks.commit).not.toHaveBeenCalled();
+    expect(callbacks.rollback.mock.calls.length > 0).toBe(failure !== "full");
+    expect(callbacks.invalidate.mock.calls.length > 0).toBe(failure === "full");
+    expect(hasSqliteWorkerOutcomeUnknown(observedError)).toBe(failure === "full");
+    if (failure === "full") {
+      expect(observedError).toMatchObject({ cause: { message: "database or disk is full" } });
+    }
+    expect(database.prepare("SELECT id FROM original").all()).toEqual([{ id: 1 }]);
+    const after = readSqliteDatabaseScopedWriteToken(database, "entry");
+    expect(after === before).toBe(failure !== "full");
+    withSqliteDatabaseWriteScope(database, ["entry"], () => statement.run(2, 0));
+    expect(readSqliteDatabaseScopedWriteToken(database, "entry")).not.toBe(after);
+  });
 
   it("isolates scoped receipts while raw writes and native callbacks revoke incomplete coverage", () => {
     const database = openDatabase();

@@ -238,6 +238,7 @@ it("keeps native file navigation and selection while windowing a large leaf fold
   const filename = (index: number) => "docs/file-" + String(index).padStart(4, "0") + ".ts";
   const [revision, setRevision] = createSignal(0);
   const [fileCount, setFileCount] = createSignal(500);
+  const [fileOffset, setFileOffset] = createSignal(0);
   const [filter, setFilter] = createSignal<SessionWorkspaceProps["filter"]>("all");
   const [nestedFolder, setNestedFolder] = createSignal(false);
   const [expandedPaths, setExpandedPaths] = createSignal(["", "docs"]);
@@ -290,8 +291,10 @@ it("keeps native file navigation and selection while windowing a large leaf fold
             path: "docs",
             entries: [
               ...Array.from({ length: fileCount() }, (_, index) => ({
-                path: filename(index),
-                name: filename(index).split("/").at(-1)!,
+                path: filename(index + fileOffset()),
+                name: filename(index + fileOffset())
+                  .split("/")
+                  .at(-1)!,
                 kind: "file" as const,
                 sessionKind: index % 2 === 0 ? ("modified" as const) : ("read" as const),
               })),
@@ -466,5 +469,14 @@ it("keeps native file navigation and selection while windowing a large leaf fold
     const second = button(filename(1))!.getBoundingClientRect();
     expect(first.height).toBeGreaterThan(40);
     expect(second.top).toBeGreaterThanOrEqual(first.bottom);
+  });
+
+  // A same-size replacement must invalidate the old key-to-position mapping.
+  style.remove();
+  setFileOffset(500);
+  await waitForSolid(() => expect(button(filename(0))).toBeNull());
+  scroll().scrollTop = 50 * 28;
+  await waitForSolid(() => {
+    expect(button(filename(550))).not.toBeNull();
   });
 });

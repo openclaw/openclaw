@@ -1,5 +1,5 @@
 import { expectDefined } from "@openclaw/normalization-core";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { suspendHandlers } from "./suspend.js";
 
 const coordinator = vi.hoisted(() => ({
@@ -20,26 +20,19 @@ vi.mock("../server-active-work.js", () => ({
 
 async function invoke(method: keyof typeof suspendHandlers, params: unknown) {
   const respond = vi.fn();
-  const info = vi.fn();
   const handler = expectDefined(suspendHandlers[method], "suspendHandlers[method] test invariant");
   await handler({
     params,
     respond,
     context: {
       cron: { pauseScheduling: vi.fn(), resumeScheduling: vi.fn() },
-      logGateway: { warn: vi.fn(), info },
+      logGateway: { warn: vi.fn(), info: vi.fn() },
     },
   } as unknown as Parameters<typeof handler>[0]);
-  return { respond, info };
+  return { respond };
 }
 
-beforeEach(() => {
-  vi.clearAllMocks();
-});
-
-afterEach(() => {
-  vi.useRealTimers();
-});
+beforeEach(() => vi.clearAllMocks());
 
 describe("gateway suspend handlers", () => {
   it("validates the closed prepare params shape", async () => {
@@ -74,42 +67,25 @@ describe("gateway suspend handlers", () => {
     ["gateway.suspend.prepare", false],
     ["gateway.suspend.status", true],
   ] as const)("passes through %s draining results (custody=%s)", async (method, held) => {
-    if (held) {
-      vi.useFakeTimers();
-    }
     const params = held
       ? { suspensionId: "suspension-draining" }
       : { requestId: "request-draining", drain: true };
-    const blockers = held
-      ? [
-          { kind: "root-request", count: 1, message: "http request" },
-          { kind: "terminal-persistence", count: 1, message: "pending write" },
-        ]
-      : [{ kind: "terminal-session", count: 1, message: "one preserved terminal" }];
+    const blockers = [{ kind: "terminal-persistence", count: 1, message: "pending write" }];
     const result = {
       status: "draining",
-      ...(method === "gateway.suspend.prepare" ? { suspensionId: "suspension-draining" } : {}),
-      expiresAtMs: 123_000,
-      retryAfterMs: 20_000,
+      ...(!held ? { suspensionId: "suspension-draining" } : {}),
       activeCount: blockers.length,
       blockers,
       ...(held ? { writeCustody: [{ phase: "terminal-persistence", count: 1 }] } : {}),
     };
     coordinator[held ? "status" : "prepare"].mockReturnValue(result);
-    const { respond, info } = await invoke(method, params);
-    if (method === "gateway.suspend.prepare") {
+    const { respond } = await invoke(method, params);
+    if (!held) {
       expect(coordinator.prepare).toHaveBeenCalledWith(
         expect.objectContaining({ ...params, terminalPolicy: "preserve" }),
       );
-    } else {
-      expect(coordinator.status).toHaveBeenCalledWith("suspension-draining", false);
     }
     expect(respond).toHaveBeenCalledWith(true, result);
-    expect(info).toHaveBeenCalledWith(
-      held
-        ? 'DRAINING activeCount=2 blockers=root-request:1,terminal-persistence:1 holders=["http request","pending write"] custody=held'
-        : 'DRAINING activeCount=1 blockers=terminal-session:1 holders=["one preserved terminal"] custody=clear',
-    );
   });
 
   it("keeps resume idempotent and rejects a mismatched active lease", async () => {

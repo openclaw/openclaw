@@ -152,13 +152,13 @@ it("rejects picked Node on a Bun-only host before replacing the service", async 
     typeof import("./daemon-install-helpers.js")
   >("./daemon-install-helpers.js");
   const bunVersion = Object.getOwnPropertyDescriptor(process.versions, "bun");
-  Object.defineProperty(process.versions, "bun", { configurable: true, value: "1.4.3" });
+  Object.defineProperty(process.versions, "bun", { configurable: true, value: "1.4.4" });
   const discoverNode = vi
     .spyOn(runtimePaths, "resolvePreferredNodePath")
     .mockResolvedValue(undefined);
   const probeBun = vi
     .spyOn(runtimePaths, "resolveBunRuntimeInfo")
-    .mockResolvedValue(runtimeFixture("1.4.3", "3.53.4"));
+    .mockResolvedValue(runtimeFixture("1.4.4", "3.53.4"));
   reinstall();
   select.mockResolvedValueOnce("node");
   buildGatewayInstallPlan.mockImplementationOnce(realPlan);

@@ -281,12 +281,7 @@ export function registerCompletedRequestCustodySpawnCases(options: RequestCustod
       await collectFailure(failures, async () => {
         const invoke = await withExecRequestTurn(
           {
-            identity: {
-              runId: parentRunId,
-              sessionKey: parentSessionKey,
-              sessionId: "parent-session",
-              agentId: "main",
-            },
+            identity: parentRequestIdentity(parentRunId, parentSessionKey),
             owners,
           },
           async () =>
@@ -584,4 +579,8 @@ export function registerCompletedRequestCustodySpawnCases(options: RequestCustod
       options.throwBoundFailures(failures);
     },
   );
+}
+
+export function parentRequestIdentity(runId: string, sessionKey: string) {
+  return { runId, sessionKey, sessionId: "parent-session", agentId: "main" };
 }

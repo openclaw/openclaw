@@ -82,7 +82,7 @@ it.each([false, true])(
     const outboxValue = "outbox-value-".repeat(12_000);
     const chatValue = "chat-value-".repeat(50_000);
     const sources: Record<string, string> = {
-      [sidebar]: `globalThis.desktopBuildFixture.events.push("sidebar"); export const value = ${JSON.stringify(sidebarValue)};`,
+      [sidebar]: `import pluginStyle from ${JSON.stringify(local("plugin.css?url"))}; globalThis.desktopBuildFixture.pluginStyle = pluginStyle; globalThis.desktopBuildFixture.events.push("sidebar"); export const value = ${JSON.stringify(sidebarValue)};`,
       [outbox]: `globalThis.desktopBuildFixture.events.push("outbox"); export const value = ${JSON.stringify(outboxValue)};`,
       [chat]: `${hasComposer ? 'import "fixture:composer";' : ""} globalThis.desktopBuildFixture.events.push("chat"); export const value = ${JSON.stringify(chatValue)};`,
       [composer]: 'globalThis.desktopBuildFixture.events.push("composer");',
@@ -90,6 +90,7 @@ it.each([false, true])(
     };
     const files = {
       "package.json": '{"type":"module"}',
+      "plugin.css": ".plugin-view { color: red; }",
       "index.html":
         '<html><head></head><body><script type="module" src="./main.js"></script></body></html>',
       "main.js": `globalThis.desktopBuildFixture.loadSidebar = () => import("fixture:sidebar");

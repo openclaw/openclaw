@@ -276,10 +276,20 @@ a.oc-menu-item[href] {
   cursor: pointer;
 }
 
-.oc-menu-item:is(:hover, :focus-visible, [aria-expanded="true"]):not(:disabled):not(
+.oc-menu-item:is(:hover, :focus-visible):not(:disabled):not([aria-disabled="true"]) {
+  background: var(--surface-hover);
+}
+
+.oc-menu-item:is([aria-expanded="true"], [aria-checked="true"]):not(:disabled):not(
     [aria-disabled="true"]
   ) {
-  background: var(--bg-hover);
+  background: var(--surface-selected);
+}
+
+.oc-menu-item:is([aria-expanded="true"], [aria-checked="true"]):is(:hover, :focus-visible):not(
+    :disabled
+  ):not([aria-disabled="true"]) {
+  background: var(--surface-selected-hover);
 }
 
 .oc-menu-item:focus-visible {
@@ -356,14 +366,15 @@ a.oc-menu-item[href] {
   height: 1em;
 }
 
-/* Keyboard hints share one end rail, independent of optional checks and arrows.
-   Menus without either end with the row padding, mirroring the leading icon inset.
-   Nested submenus are separate .oc-menu surfaces, so each menu decides for itself. */
+/* Reserve an indicator rail only for checks or submenu rows with shortcuts.
+   An unrelated Help submenu must not indent an account menu's shortcut badges. */
 .oc-menu-item__details:has(.shortcut-kbd) {
+  margin-inline-start: auto;
+  padding-inline-start: 0.75em;
   padding-inline-end: 1.75em;
 }
 
-.oc-menu:not(:has(.oc-menu-item__check, .oc-menu-item__submenu-icon))
+.oc-menu:not(:has(.oc-menu-item__check, .oc-menu-item--submenu .shortcut-kbd))
   .oc-menu-item__details:has(.shortcut-kbd) {
   padding-inline-end: 0;
 }

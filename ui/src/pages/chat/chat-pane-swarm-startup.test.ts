@@ -2,6 +2,7 @@
 
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { expect, it, onTestFinished, vi } from "vitest";
+import { makeBootRoster } from "../../app/bootstrap.test-support.ts";
 import { createApplicationConfigCapability } from "../../app/config.ts";
 import { createApplicationPlacementStartup } from "../../app/session-placement-startup.ts";
 import { createRuntimeConfigCapability } from "../../lib/config/runtime-config-capability.ts";
@@ -19,12 +20,10 @@ it.each(
     vi.useFakeTimers();
     const parentAgents: unknown[] = [];
     const childParents: unknown[] = [];
-    const agents = {
-      defaultId: "main",
-      mainKey: "main",
-      scope: "global" as const,
+    const agents = makeBootRoster({
+      scope: "global",
       agents: [{ id: "main" }, { id: "research" }],
-    };
+    });
     const client = createTestGatewayClient(async (method, raw) => {
       const params = asOptionalRecord(raw);
       if (method === "sessions.describe" && params?.key === "global") {

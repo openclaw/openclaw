@@ -45,11 +45,15 @@ it("queues a borrowed foreground write while a cold Worker owns admission", asyn
         let inWriteAdmission: ReturnType<typeof AsyncLocalStorage.snapshot> | undefined;
         return originalWorker({
           ...params,
-          withWriteAdmission: (run, diagnostics) =>
-            params.withWriteAdmission((refusal) => {
-              inWriteAdmission = AsyncLocalStorage.snapshot();
-              return run(refusal);
-            }, diagnostics),
+          withWriteAdmission: (run, diagnostics, operation) =>
+            params.withWriteAdmission(
+              (refusal) => {
+                inWriteAdmission = AsyncLocalStorage.snapshot();
+                return run(refusal);
+              },
+              diagnostics,
+              operation,
+            ),
           onCommitRequest: () => {
             if (!inWriteAdmission) {
               throw new Error("Cold Worker requested commit without writer admission");

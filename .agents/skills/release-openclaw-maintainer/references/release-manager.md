@@ -86,9 +86,12 @@ they appeared in the initial prompt.
 
 ## Route hotfix opportunities once
 
-Maintain one cross-channel disposition row per canonical fix or dependent fix
-group, linking each owner's backport ledger. Pin a shared discovery scan so
-owners can reuse upstream investigation, while each checks its own baseline.
+Prefer one shared [hotfix ledger](hotfix-ledger-management.md) record per
+canonical fix or dependent fix group, with each owner's release assessment.
+Link those records when routing opportunities instead of maintaining a duplicate
+cross-channel decision table; use linked local evidence when access is unavailable.
+Pin a shared discovery scan so owners can reuse upstream investigation, while
+each checks its own baseline.
 Send to every active channel for assessment; “all channels” does not mean the
 same patch applies unchanged or must ship in every already-frozen candidate.
 

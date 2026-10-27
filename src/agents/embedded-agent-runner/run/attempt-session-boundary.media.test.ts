@@ -196,13 +196,14 @@ it("reuses frozen request projections while isolating image, replay, and retenti
 });
 
 it("recomputes mutable projections, including shallow-frozen sources and replacement edits", () => {
+  const protectedText = "<<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>>";
   for (const role of ["user", "custom"] as const) {
     const source = {
       role,
       customType: "note",
       display: false,
       content: [
-        { type: "text" as const, text: "unchanged" },
+        { type: "text" as const, text: protectedText },
         { type: "text" as const, text: "second block" },
       ],
       timestamp: 1,
@@ -221,8 +222,9 @@ it("recomputes mutable projections, including shallow-frozen sources and replace
     if (block.type !== "text") {
       throw new Error("Expected projected text");
     }
+    expect(block.text).toBe("[[OPENCLAW_INTERNAL_CONTEXT_BEGIN]]");
     block.text = "changed";
-    expect(source.content[0]!.text).toBe("unchanged");
+    expect(source.content[0]!.text).toBe(protectedText);
   }
   const custom = {
     role: "custom" as const,

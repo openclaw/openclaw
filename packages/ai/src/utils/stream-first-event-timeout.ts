@@ -91,21 +91,23 @@ export function withFirstStreamEventTimeout<T>(
       let timer: ReturnType<typeof setTimeout> | undefined;
       let completed = false;
       try {
-        const first = await new Promise<IteratorResult<T>>((resolve, reject) => {
-          timer = setTimeout(() => {
-            const timeoutError = createFirstStreamEventTimeoutError(timeoutContext);
-            timeoutContext.onTimeout?.(timeoutError);
-            reject(timeoutError);
-            timeoutContext.abort?.(timeoutError);
-          }, timeoutMs);
-          timer.unref?.();
-          iterator.next().then(resolve, reject);
-        }).finally(() => {
+        let next: IteratorResult<T>;
+        try {
+          next = await new Promise<IteratorResult<T>>((resolve, reject) => {
+            timer = setTimeout(() => {
+              const timeoutError = createFirstStreamEventTimeoutError(timeoutContext);
+              timeoutContext.onTimeout?.(timeoutError);
+              reject(timeoutError);
+              timeoutContext.abort?.(timeoutError);
+            }, timeoutMs);
+            timer.unref?.();
+            iterator.next().then(resolve, reject);
+          });
+        } finally {
           if (timer) {
             clearTimeout(timer);
           }
-        });
-        let next = first;
+        }
         while (!next.done) {
           yield next.value;
           next = await iterator.next();

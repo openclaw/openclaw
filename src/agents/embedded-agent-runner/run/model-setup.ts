@@ -22,7 +22,10 @@ import {
   readRunOperatorAuthority,
 } from "../../admitted-run-context.js";
 import { resolveSessionAgentIdsStrict } from "../../agent-scope.js";
-import { createNativeModelOwnedRuntimeModel } from "../../defaults.js";
+import {
+  createNativeModelOwnedRuntimeModel,
+  resolveNativeOwnedRuntimeModel,
+} from "../../defaults.js";
 import { FailoverError } from "../../failover-error.js";
 import { AgentHarnessPreflightError } from "../../harness/errors.js";
 import {
@@ -39,7 +42,6 @@ import {
   createModelCatalogSnapshotView,
   listModelCatalogObservedRoutes,
 } from "../../model-catalog-view.js";
-import type { ModelCatalogEntry } from "../../model-catalog.types.js";
 import { resolveModelCandidateChain } from "../../model-fallback-candidates.js";
 import type { ModelRef } from "../../model-selection.js";
 import {
@@ -374,17 +376,14 @@ export async function resolveEmbeddedRunModelSetup(params: {
 
   let catalog = params.preparedModelRuntime?.modelCatalog;
   let nativeCatalogFailure: { error: unknown } | undefined;
-  const ownsSelectedNativeModel = (entry: ModelCatalogEntry) =>
-    entry.provider === provider && entry.id === modelId && entry.nativeRuntime === agentHarness.id;
-  const hasSelectedNativeModel = () =>
-    catalog?.entries.some(ownsSelectedNativeModel) === true ||
-    catalog?.routeVariants.some(ownsSelectedNativeModel) === true;
+  const resolveNativeModel = () =>
+    resolveNativeOwnedRuntimeModel({ catalog, provider, modelId, runtimeId: agentHarness.id });
   if (
     !nativeSessionRuntime &&
     pluginHarnessOwnsTransport &&
     agentHarness.loadModelCatalog &&
     params.preparedModelRuntime?.loadNativeModelCatalog &&
-    !hasSelectedNativeModel()
+    !resolveNativeModel()
   ) {
     try {
       catalog = await params.preparedModelRuntime.loadNativeModelCatalog({
@@ -398,14 +397,17 @@ export async function resolveEmbeddedRunModelSetup(params: {
     runParams.abortSignal?.throwIfAborted();
     params.assertCurrent();
   }
-  const nativeModelOwned =
-    nativeSessionRuntime !== undefined || (pluginHarnessOwnsTransport && hasSelectedNativeModel());
+  const nativeModel =
+    nativeSessionRuntime !== undefined
+      ? createNativeModelOwnedRuntimeModel({ provider, modelId })
+      : resolveNativeModel();
+  const nativeModelOwned = nativeModel !== undefined;
   const modelConfigProvider = provider;
   let modelResolution;
   let observedRoutes: ProviderModelRouteSource[] | undefined;
-  if (nativeModelOwned) {
+  if (nativeModel) {
     modelResolution = {
-      model: createNativeModelOwnedRuntimeModel({ provider, modelId }),
+      model: nativeModel,
       ...createEmptyAgentDiscoveryStores(),
     };
     // Native capability rows omit transport; keep the picker routes captured for this turn.

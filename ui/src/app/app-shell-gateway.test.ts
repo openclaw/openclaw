@@ -22,6 +22,7 @@ import {
   holdProfileAppearanceRead,
   profileAppearanceReply,
 } from "./app-shell-gateway.test-support.ts";
+import { makeBootRoster } from "./bootstrap.test-support.ts";
 import { createGatewayMetadataObserver } from "./gateway-observers.ts";
 import { UI_NAVIGATION_PREFERENCE_KEYS } from "./server-prefs-state.ts";
 import { pushServerUiPrefs, resetServerUiPrefsSync } from "./server-prefs.ts";
@@ -256,12 +257,7 @@ describe("ShellGatewayOwner profile appearance integration", () => {
 
   it("loads current agent discovery when hello lands", async () => {
     const { context, host, owner, snapshot } = createProfileAppearanceGateway(null);
-    const agentsList = {
-      defaultId: "main",
-      mainKey: "main",
-      scope: "per-sender" as const,
-      agents: [{ id: "main" }],
-    };
+    const agentsList = makeBootRoster();
     const ensureList = vi.fn(async () => agentsList);
     Object.assign(context, {
       agents: { state: { agentsList: null }, ensureList },
