@@ -312,12 +312,20 @@ export class SessionLinkTitler {
       return cached.promise;
     }
     const client = this.client;
+    // Cached links can mount before connect; leave deferred lookups available for hello.
+    if (
+      !client ||
+      !canCallGatewayMethod(
+        this.context && { ...this.context.gateway.snapshot, client },
+        "sessions.resolve",
+        "operator.read",
+      )
+    ) {
+      return Promise.resolve(null);
+    }
     const entry: ReferenceEntry = {
       expiresAt: now + SUCCESS_CACHE_MS,
       promise: Promise.resolve().then(async () => {
-        if (!client) {
-          throw new Error("Session link resolution requires a connected Gateway");
-        }
         const result = await client.request<SessionsResolveResult>(
           "sessions.resolve",
           reference.params,

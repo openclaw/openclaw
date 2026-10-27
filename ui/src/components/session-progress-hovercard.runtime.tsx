@@ -501,8 +501,17 @@ function createSessionProgressHovercard(
       read: () => readCurrent(),
       subscribe: (sources, notify) => {
         refreshCurrent = notify;
+        let titleHello =
+          sources.gateway?.snapshot.phase === "connected" ? sources.gateway.snapshot.hello : null;
         const stops = [
-          sources.gateway?.subscribe(() => {
+          sources.gateway?.subscribe((snapshot) => {
+            const hello = snapshot.phase === "connected" ? snapshot.hello : null;
+            if (hello !== titleHello) {
+              titleHello = hello;
+              if (hello) {
+                sessionLinkTitler.refresh();
+              }
+            }
             gatewaySnapshotRevision += 1;
             notify();
           }),
