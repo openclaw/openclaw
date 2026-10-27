@@ -1,6 +1,8 @@
-# OpenClaw Design System
+# OpenClaw Control UI Design System
 
-OpenClaw's visual language is a **dark-first, glass-surface system** built around a deep charcoal base (`#0e1015`), a punchy signature red accent (`#ff5c5c`), and layered frosted-glass surfaces that create depth without solid panels. Motion is crisp and purposeful — fast micro-interactions (100ms) with spring-loaded expansions. All interactive elements meet WCAG 2.1 AA contrast requirements on dark backgrounds.
+This guide owns Control UI appearance and component guidance, not canonical OpenClaw or OpenClaw Foundation brand artwork. For branding work, follow the [root branding preflight](../../../AGENTS.md#read-when-relevant) and [live Carapace kit](https://github.com/openclaw/carapace/tree/main/brand-kit). Keep semantic tokens in [`src/styles/base.css`](../../src/styles/base.css), runtime characters/Lobsterdex and platform-icon contracts distinct; a kit update does not authorize replacing them.
+
+The Control UI's visual language is a **dark-first, glass-surface system** built around a deep charcoal base (`#0e1015`), a punchy signature red accent (`#ff5c5c`), and layered frosted-glass surfaces that create depth without solid panels. Motion is crisp and purposeful, with fast micro-interactions (100ms) and spring-loaded expansions. All interactive elements meet WCAG 2.1 AA contrast requirements on dark backgrounds.
 
 ## Contents
 
