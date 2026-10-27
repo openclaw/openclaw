@@ -72,12 +72,12 @@ test("bundled-runtime mutations belong only to local setup and confirmed runtime
   );
 });
 
-test("bundled runtime supports Linux, Windows, and macOS with Linux and macOS confirmation", () => {
+test("bundled runtime confirmation supports Linux, Windows, and macOS", () => {
   for (const module of ["bundled_runtime", "runtime_action"]) {
     assert.match(main, new RegExp(`^mod ${module};`, "m"));
   }
   assert.match(
     source("tray"),
-    /#\[cfg\(any\(target_os = "linux", target_os = "macos"\)\)\]\s*fn confirm_runtime_action\b/,
+    /#\[cfg\(any\(target_os = "linux", target_os = "windows", target_os = "macos"\)\)\]\s*fn confirm_runtime_action\b/,
   );
 });
