@@ -181,12 +181,16 @@ for (const scope of scopes) {
 }
 
 let latestReceipt: unknown;
-let latestDiagnostic: Record<string, number | boolean | undefined> | undefined;
+let latestDiagnostic: Parameters<AgentWorkerOperationContext["writeTransaction"]>[3];
 const admission = createSqliteWorkerOperationAdmission((_request, grant) => grant());
 const { port1, port2 } = new MessageChannel();
 const postMessage = port1.postMessage.bind(port1);
 port1.postMessage = (message, transferList) => {
-  postMessage(message, transferList);
+  if (Array.isArray(transferList)) {
+    postMessage(message, transferList);
+  } else {
+    postMessage(message, transferList);
+  }
   const received: unknown = receiveMessageOnPort(port2)?.message;
   assert(isRecord(received), "Missing native receipt/admission frame");
   if (received.kind === "native-commit" || received.kind === "native-settlement") {
