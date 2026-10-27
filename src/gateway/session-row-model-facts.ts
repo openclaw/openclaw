@@ -3,6 +3,7 @@ import { normalizeOptionalAgentRuntimeId } from "../agents/agent-runtime-id.js";
 import { DEFAULT_PROVIDER } from "../agents/defaults.js";
 import type { AgentHarnessSessionRuntimeOwnership } from "../agents/harness/types.js";
 import type { ModelCatalogEntry } from "../agents/model-catalog.js";
+import { normalizeStoredOverrideModel } from "../agents/model-selection-persisted.js";
 import { parseModelRef } from "../agents/model-selection.js";
 import { resolveSessionConfiguredDefault } from "../agents/session-model-ref.js";
 import type { SessionEntry } from "../config/sessions.js";
@@ -10,7 +11,6 @@ import { resolveSessionModelOverrideRouteResolution } from "../config/sessions/m
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveRuntimeCliBackends } from "../plugins/cli-backends.runtime.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.types.js";
-import { normalizeStoredOverrideModel } from "../sessions/stored-model-overrides.js";
 import { readPreparedGatewayModelMetadata } from "./server-model-catalog-view.js";
 import type { SessionListModelFactsLookup } from "./session-list-target.js";
 import type { Row } from "./session-row-projection-record.js";
