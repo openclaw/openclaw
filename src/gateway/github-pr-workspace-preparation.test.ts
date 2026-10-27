@@ -111,6 +111,8 @@ describe("existing PR preparation through the registered agent action", () => {
         guestHead: await f.guestGit("rev-parse", "HEAD"),
         guestIndex: await f.guestGit("write-tree"),
         guestStatus: await f.guestGit("status", "--porcelain"),
+        guestArtifact: await fs.readFile(path.join(f.projection, "artifact.txt"), "utf8"),
+        guestUntracked: await fs.readFile(path.join(f.projection, "untracked.txt"), "utf8"),
       });
       const beforeRepeat = await workspaceState();
       await closeOpenClawAgentDatabasesAsync();
@@ -135,7 +137,17 @@ describe("existing PR preparation through the registered agent action", () => {
       }
       expect(await f.guestGit("rev-parse", "HEAD")).toBe(continuedGuestHead);
       expect(await f.guestGit("symbolic-ref", "HEAD")).toBe(guestBranch);
-      await f.advanceHead({ "newer-pr.txt": "newer remote PR work\n" });
+      for (const advance of [false, true]) {
+        if (advance) {
+          await f.advanceHead({ "newer-pr.txt": "newer remote PR work\n" });
+        }
+        f.pr.base.ref = "another-base";
+        const beforeRetarget = await workspaceState();
+        await expect(f.invoke()).rejects.toThrow("base branch");
+        expect(await workspaceState()).toEqual(beforeRetarget);
+        expect(f.readSession().worktree?.githubPullRequest).toEqual(association);
+        f.pr.base.ref = "main";
+      }
       expect(await f.invoke()).toMatchObject({ status: "prepared", headCommit: f.pr.head.sha });
       const refreshedAssociation = f.readSession().worktree?.githubPullRequest;
       expect(refreshedAssociation?.preparedHeadCommit).toBe(f.pr.head.sha);

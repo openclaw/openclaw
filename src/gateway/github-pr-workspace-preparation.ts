@@ -256,11 +256,12 @@ export async function performSessionGitHubPreparation(
       (previous.host !== pullRequest.host ||
         previous.number !== pullRequest.number ||
         previous.base.repositoryId !== pullRequest.base.repositoryId ||
+        previous.base.branch !== pullRequest.base.branch ||
         previous.head.repositoryId !== pullRequest.head.repositoryId ||
         previous.head.branch !== pullRequest.head.branch)
     ) {
       throw new Error(
-        "This workspace already continues another PR or head branch. Its original association and saved work were preserved.",
+        "This workspace already continues another PR, base branch, or head branch. Its original association and saved work were preserved.",
       );
     }
     if (!previous) {

@@ -173,7 +173,8 @@ Ordinary temporary GitHub failures retain the same association's last verified
 status with a warning; a failed own-PR authorization clears it.
 
 Repeating a completed preparation of the same head preserves later edits without
-resetting or synchronizing source files. If the remote PR head has advanced,
+resetting or synchronizing source files. If the PR's original base branch changes,
+preparation refuses and preserves the original association and saved work. If the remote PR head has advanced,
 an explicit refresh with `prepare_pr` integrates that head and preserves subsequent
 guest work. Resolve returned `conflictPaths`, then repeat with
 `conflictsResolved: true` and `expectedHeadCommit` set to the returned `headCommit`.
