@@ -17,6 +17,7 @@ import type {
 
 const inventorySize = 1_000;
 const agentCount = 300;
+const agentAvatarSelector = "[data-agent-option] .agent-select__avatar";
 const toolGroupCount = 40;
 const toolsPerGroup = 25;
 const catalogPageSize = 100;
@@ -239,6 +240,47 @@ const fixture = {
   dataPage: "catalog" as const,
 };
 
+async function agentAvatarReferences(page: Page) {
+  return page.evaluateHandle(
+    (selector) => Array.from(document.querySelectorAll(selector), (avatar) => new WeakRef(avatar)),
+    agentAvatarSelector,
+  );
+}
+
+async function agentAvatarCounts(references: Awaited<ReturnType<typeof agentAvatarReferences>>) {
+  return references.evaluate((original) => {
+    const current = new Set(document.querySelectorAll("[data-agent-option] .agent-select__avatar"));
+    return {
+      agentAvatarsInitial: original.length,
+      agentAvatarsRetained: original.filter((avatar) => {
+        const node = avatar.deref();
+        return node !== undefined && current.has(node);
+      }).length,
+      agentAvatarsFinal: current.size,
+    };
+  });
+}
+
+async function prepareAgentSelector(page: Page) {
+  await page.locator(".settings-sidebar__agent .agent-select__trigger").click();
+  await countRows(page, "[data-agent-option]", agentCount);
+  // Each rendered emoji acknowledges that agent's initial identity reply.
+  await countRows(page, '[data-agent-option] .identity-avatar__text[data-avatar="🧪"]', agentCount);
+  await countRows(page, agentAvatarSelector, agentCount);
+  const references = await agentAvatarReferences(page);
+  try {
+    await page.keyboard.press("Escape");
+    await page.locator(".agent-select__menu").waitFor({ state: "hidden" });
+    await frames(page);
+    if ((await agentAvatarCounts(references)).agentAvatarsRetained !== agentCount) {
+      throw new Error("Closing the first hydrated selector replaced an agent avatar");
+    }
+  } finally {
+    // Diagnostic GC snapshots must not retain DOM through Playwright handles.
+    await references.dispose();
+  }
+}
+
 function agentSelectionScenario(roundTripMs: 0 | 100): InteractionScenario {
   return {
     ...fixture,
@@ -264,28 +306,17 @@ function agentSelectionScenario(roundTripMs: 0 | 100): InteractionScenario {
         };
       },
     }),
-    prepare: async (page) => {
-      const trigger = page.locator(".settings-sidebar__agent .agent-select__trigger");
-      await trigger.click();
-      await countRows(page, "[data-agent-option]", agentCount);
-      // Each rendered emoji acknowledges that agent's initial identity reply.
-      await countRows(
-        page,
-        '[data-agent-option] .identity-avatar__text[data-avatar="🧪"]',
-        agentCount,
-      );
-      await page.keyboard.press("Escape");
-      await page.locator(".agent-select__menu").waitFor({ state: "hidden" });
-      await frames(page);
-    },
-    run: async (page) => {
-      const originalAvatars = await page.evaluateHandle(() =>
-        Array.from(document.querySelectorAll("[data-agent-option] .agent-select__avatar")),
-      );
+    prepare: prepareAgentSelector,
+    run: async (page, gateway) => {
+      const identityRequestsBefore = (await gateway.getRequests("agent.identity.get")).length;
+      const originalAvatars = await agentAvatarReferences(page);
       try {
         const trigger = page.locator(".settings-sidebar__agent .agent-select__trigger");
         await trigger.click();
         await countRows(page, "[data-agent-option]", agentCount);
+        if ((await agentAvatarCounts(originalAvatars)).agentAvatarsRetained !== agentCount) {
+          throw new Error("Warm selector reopen replaced an agent avatar");
+        }
         await page.locator('[data-agent-option][value="data-agent-0299"]').click();
         await page.waitForFunction(() =>
           document
@@ -294,23 +325,20 @@ function agentSelectionScenario(roundTripMs: 0 | 100): InteractionScenario {
         );
         await trigger.locator('.identity-avatar__text[data-avatar="🧪"]').waitFor();
         await frames(page);
-        const avatars = await originalAvatars.evaluate((original) => {
-          const current = new Set(
-            document.querySelectorAll("[data-agent-option] .agent-select__avatar"),
-          );
-          return {
-            agentAvatarsInitial: original.length,
-            agentAvatarsRetained: original.filter((avatar) => current.has(avatar)).length,
-            agentAvatarsFinal: current.size,
-          };
-        });
+        const avatars = await agentAvatarCounts(originalAvatars);
         if (avatars.agentAvatarsInitial !== agentCount || avatars.agentAvatarsFinal !== agentCount) {
           throw new Error("Expected all 300 agent row avatars before and after warm selection");
+        }
+        const identityRequests =
+          (await gateway.getRequests("agent.identity.get")).length - identityRequestsBefore;
+        if (identityRequests !== 0) {
+          throw new Error(`Warm selection issued ${identityRequests} identity requests`);
         }
         return {
           fixtureAgents: agentCount,
           selectedFinalAgent: true,
           identityRoundTripMs: roundTripMs,
+          identityRequests,
           ...avatars,
         };
       } finally {
@@ -319,6 +347,44 @@ function agentSelectionScenario(roundTripMs: 0 | 100): InteractionScenario {
     },
   };
 }
+
+const agentReopenRetentionScenario: InteractionScenario = {
+  ...agentSelectionScenario(0),
+  id: "data-agent-reopen-retention",
+  route: pathForAgentPanel("main", "overview"),
+  explicitOnly: true,
+  diagnostic: "Ten hydrated same-selection reopen cycles; forced-GC snapshots are memory proof only.",
+  expected:
+    "Reopening the hydrated selector ten times preserves all 300 avatars without identity reads.",
+  prepare: prepareAgentSelector,
+  run: async (page, gateway) => {
+    const identityRequestsBefore = (await gateway.getRequests("agent.identity.get")).length;
+    const references = await agentAvatarReferences(page);
+    try {
+      for (let cycle = 0; cycle < 10; cycle++) {
+        await page.locator(".settings-sidebar__agent .agent-select__trigger").click();
+        await countRows(page, "[data-agent-option]", agentCount);
+        if ((await agentAvatarCounts(references)).agentAvatarsRetained !== agentCount) {
+          throw new Error(`Selector reopen ${cycle + 1} replaced an agent avatar`);
+        }
+        await page.keyboard.press("Escape");
+        await page.locator(".agent-select__menu").waitFor({ state: "hidden" });
+        await frames(page);
+      }
+      const avatars = await agentAvatarCounts(references);
+      const identityRequests =
+        (await gateway.getRequests("agent.identity.get")).length - identityRequestsBefore;
+      if (identityRequests !== 0 || avatars.agentAvatarsFinal !== agentCount) {
+        throw new Error(
+          "Repeated selector reopen changed the hydrated roster or issued identity reads",
+        );
+      }
+      return { ...avatars, identityRequests, reopenCycles: 10 };
+    } finally {
+      await references.dispose();
+    }
+  },
+};
 
 async function waitSyntheticResponse(roundTripMs: 0 | 100) {
   if (roundTripMs) {
@@ -691,6 +757,7 @@ export const dataCatalogScenarios: readonly InteractionScenario[] = [
   catalogScenario("search", 100),
   agentSelectionScenario(0),
   agentSelectionScenario(100),
+  agentReopenRetentionScenario,
   {
     ...fixture,
     id: "data-agent-skills-render",

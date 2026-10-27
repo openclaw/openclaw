@@ -52,6 +52,7 @@ import {
   readControlUiResourceCounts,
   type ControlUiResourceCounts,
 } from "./lib/control-ui-resource-counts.ts";
+import { captureRetention, installRetentionTimers } from "./lib/control-ui-retention.ts";
 import {
   createWorkboardResourceFixture,
   prepareWorkboardResourceSource,
@@ -359,7 +360,13 @@ type Result = {
     error?: string;
   };
   durationBreakdownMs?: Record<string, number>;
-  retainedHeap?: { beforeBytes: number; afterBytes?: number; deltaBytes?: number };
+  retainedHeap?: {
+    beforeBytes: number;
+    afterBytes?: number;
+    deltaBytes?: number;
+    before: Awaited<ReturnType<typeof captureRetention>> & { artifact: string };
+    after?: Awaited<ReturnType<typeof captureRetention>> & { artifact: string };
+  };
   longTasks?: { count: number; totalMs: number; maxMs: number };
   requests?: Record<string, number>;
   scenarioEvidence?: InteractionEvidence;
@@ -615,7 +622,7 @@ try {
           : false,
         cpuThrottle,
         retainedHeap: values["retained-heap"]
-          ? "Separate GC-controlled proof: collect before tracing and after action metrics/tracing; not a timing comparison."
+          ? "Separate GC-controlled proof: full heap/DOM snapshots after preparation and after action metrics/tracing, including fixture request history; not a timing comparison."
           : false,
         pairOrder: values["control-bundle-dir"]
           ? values.counterbalance
@@ -893,6 +900,9 @@ try {
                 },
               },
             );
+            if (values["retained-heap"]) {
+              await installRetentionTimers(page);
+            }
             await scenario.setup?.(page);
             await page.goto(new URL(scenario.route, slot.server.baseUrl).href);
             await waitForControlUiInitialRoster(page, 15_000 * cpuThrottle);
@@ -907,7 +917,7 @@ try {
               await cdp.send("Network.disable");
             }
             result.measurementClass =
-              scenario.diagnostic || values["function-counts"]
+              scenario.diagnostic || values["function-counts"] || values["retained-heap"]
                 ? "diagnostic"
                 : scenario.projectionFamily
                   ? values["projection-counts"]
@@ -944,12 +954,15 @@ try {
               timeDomain: values["thread-cpu-time"] ? "threadTicks" : "timeTicks",
             });
             if (values["retained-heap"]) {
-              await cdp.send("HeapProfiler.collectGarbage");
-              const initial = await metrics(cdp);
-              if (initial.JSHeapUsedSize === undefined) {
-                throw new Error("Missing JSHeapUsedSize after initial garbage collection");
-              }
-              result.retainedHeap = { beforeBytes: initial.JSHeapUsedSize };
+              const artifact = `${artifactPrefix}.before.heapsnapshot`;
+              // Scenarios can retain request-count cursors from preparation.
+              const initial = await captureRetention(page, cdp, path.join(artifactDir, artifact), {
+                preserveFixtureRequests: true,
+              });
+              result.retainedHeap = {
+                beforeBytes: initial.heapUsedBytes,
+                before: { ...initial, artifact },
+              };
             }
             if (values["selector-stats"]) {
               cdp.on(
@@ -1402,13 +1415,13 @@ try {
               const retainedHeap = result.retainedHeap;
               if (values["retained-heap"] && cdp && retainedHeap && result.status === "passed") {
                 await capture(async () => {
-                  await cdp!.send("HeapProfiler.collectGarbage");
-                  const final = await metrics(cdp!);
-                  if (final.JSHeapUsedSize === undefined) {
-                    throw new Error("Missing JSHeapUsedSize after final garbage collection");
-                  }
-                  retainedHeap.afterBytes = final.JSHeapUsedSize;
-                  retainedHeap.deltaBytes = final.JSHeapUsedSize - retainedHeap.beforeBytes;
+                  const artifact = `${artifactPrefix}.after.heapsnapshot`;
+                  const final = await captureRetention(page, cdp!, path.join(artifactDir, artifact), {
+                    preserveFixtureRequests: true,
+                  });
+                  retainedHeap.after = { ...final, artifact };
+                  retainedHeap.afterBytes = final.heapUsedBytes;
+                  retainedHeap.deltaBytes = final.heapUsedBytes - retainedHeap.beforeBytes;
                 });
               }
               if (!values["first-pair-screenshots"] || pair === 0 || result.status === "failed") {
@@ -1549,6 +1562,7 @@ const summary = viewports
               metric,
               !diagnostic &&
               !values["function-counts"] &&
+              !values["retained-heap"] &&
               samples.length &&
               !values["projection-counts"] &&
               samples.every((row) => row[metric] !== undefined)

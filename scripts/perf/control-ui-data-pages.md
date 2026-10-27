@@ -43,11 +43,15 @@ node --import ./scripts/tsx.mjs scripts/bench-control-ui-interactions.ts \
   --retained-heap --pairs 1 --output <memory-artifact-parent>
 ```
 
-`--retained-heap` invokes `HeapProfiler.collectGarbage` before action metrics and
-tracing start, then again after the action metrics and trace interval close. It
-adds `retainedHeap.beforeBytes`, `afterBytes`, and `deltaBytes` alongside the
-unforced heap endpoints. This collection is labeled GC-controlled proof in the
-manifest; keep its timing results separate from normal CPU comparisons.
+`--retained-heap` uses the existing retention collector before action metrics and
+tracing start, then after the action metrics and trace interval close. Both
+milestones preserve the synthetic request history, collect garbage twice, and save
+full heap snapshots plus DOM, live/disposed Solid owner, timer and listener counts.
+`retainedHeap.before` and `after` contain these summaries and artifact names;
+`beforeBytes`, `afterBytes`, and `deltaBytes` preserve the heap endpoints. These
+observations are diagnostic, with timing distributions excluded from comparisons.
+Request history remains part of these whole-page snapshots so setup cursors and
+cumulative request assertions keep their existing meaning.
 The long-stream fixture releases consumed response arrays before both heap
 endpoints so its synthetic response queue is not mistaken for UI retention.
 
@@ -84,6 +88,7 @@ the tool report has 40 groups of 25 tools with effective-access diagnostics.
 | `data-catalog-search`        | Search through the debounced Gateway query; assert 100 results.               |
 | `data-agent-selection`       | Reopen the hydrated 300-agent selector and select its final agent.            |
 | `data-agent-selection-100ms` | Repeat hydrated selection with 100 ms simulated identity-RPC round trips.     |
+| `data-agent-reopen-retention` | Explicit-only diagnostic: close/reopen the hydrated selector ten times.       |
 | `data-agent-skills-render`   | Reveal the Skills panel; assert 1,000 skill rows.                             |
 | `data-agent-skills-filter`   | Filter to the final skill; assert one row.                                    |
 | `data-agent-skills-refresh`  | Refresh skills; await the report and preserved rows.                          |
@@ -165,9 +170,20 @@ Usage filtering/paging and session-window selection reuse production owners.
 Agent selection also records `agentAvatarsInitial`, `agentAvatarsRetained`, and
 `agentAvatarsFinal` alongside the outer-row identity probe. These compare the
 avatar elements before reopening and after selection; they count retained final
-elements, not transient construction. Both endpoints must contain 300 avatars,
-while the retained count remains observational so the same scenario runs on a
-baseline that replaces inner content.
+elements, not transient construction. The first open, first close, and warm
+reopen must keep all 300 avatars; the measured interval must issue zero identity
+requests. Post-selection retention remains observational so the same scenario
+runs on a baseline that replaces inner content when selection changes.
+
+Run `data-agent-reopen-retention` with `--retained-heap` separately from timing.
+Its two milestones are after the first hydrated open/close and after ten more
+same-selection open/close cycles. All avatar observation handles are disposed
+before each GC snapshot. Compare the exact same milestones for base, candidate,
+and A/A control; reject growing live owners, DOM nodes, detached nodes, or active
+timers/listeners after warmup. Report any constant candidate heap increase at
+both milestones separately; do not call the retained 300-row cache a leak or
+invent a byte cap. A positive heap slope without structural attribution needs
+inspection of the retained snapshots before acceptance.
 
 The workload does not invent sort controls on pages without them. Plugin-provided
 views and heavy iframe documents belong to their separate lane. Mobile coverage
