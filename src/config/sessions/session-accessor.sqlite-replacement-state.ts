@@ -301,7 +301,7 @@ export function commitSessionEntryReplacementsInDatabase(
     const written = writeSessionEntry(
       database,
       replacement.sessionKey,
-      structuredClone(replacement.entry),
+      { ...replacement.entry },
       {
         ...(input.consumePendingReset ? { consumePendingReset: true } : {}),
         previousEntry: selectedBefore ?? null,
