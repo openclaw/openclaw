@@ -414,6 +414,7 @@ export function ChatSummaryAutomations(props: ChatSummaryAutomationsProps) {
       : (cached()?.rows ?? []),
   );
   const hasCachedRows = () => inventory.jobs().length > shown();
+  const unavailable = () => inventory.loading() || !inventory.connected();
   const more = () =>
     cached()?.more ?? (hasCachedRows() || (inventory.hasMore() && !inventory.error()));
   const receipt = createMemo(() =>
@@ -437,12 +438,7 @@ export function ChatSummaryAutomations(props: ChatSummaryAutomationsProps) {
     const count = shown() + 10;
     // Revealing retained rows needs no network request, even during a failed refresh.
     if (!hasCachedRows()) {
-      if (
-        inventory.error() ||
-        inventory.loading() ||
-        !inventory.connected() ||
-        !inventory.hasMore()
-      ) {
+      if (inventory.error() || unavailable() || !inventory.hasMore()) {
         return;
       }
       await inventory.loadMore();
@@ -632,7 +628,7 @@ export function ChatSummaryAutomations(props: ChatSummaryAutomationsProps) {
         <button
           type="button"
           class="chat-summary__automation-more"
-          disabled={!hasCachedRows() && (pending() || !inventory.connected())}
+          aria-disabled={!hasCachedRows() && unavailable() ? "true" : undefined}
           onClick={(event) => void reveal(event.currentTarget)}
         >
           {t("chat.sessionDetails.automationShowMore")}

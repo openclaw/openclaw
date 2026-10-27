@@ -50,10 +50,36 @@ suite.define(() => {
           deferredMethods: ["connect"],
           sessions: [parent, child],
           historyMessages: [{ role: "assistant", content: text }],
-          featureMethods: [...defaultControlUiFeatureMethods, "progressCard.get"],
+          featureMethods: [
+            ...defaultControlUiFeatureMethods,
+            "progressCard.get",
+            "progressCard.refresh",
+          ],
           featureEvents: ["cron.inventory.changed"],
           methodResponses: {
-            "cron.list": cronListResponseFixture(cronJobsListResponse([automation])),
+            "cron.list": cronListResponseFixture(
+              cronJobsListResponse([
+                automation,
+                ...Array.from({ length: 10 }, (_, index) =>
+                  createCronJob(`details-check-${index}`, `Scheduled release check ${index}`, {
+                    agentId: "main",
+                    owner: { agentId: "main", sessionKey },
+                  }),
+                ),
+              ]),
+            ),
+            "artifacts.list": {
+              artifacts: [
+                {
+                  id: "release-notes",
+                  title: "Release notes.md",
+                  mimeType: "text/markdown",
+                  sizeBytes: 512,
+                  type: "document",
+                  download: { mode: "bytes" },
+                },
+              ],
+            },
             "progressCard.get": {
               card: {
                 sessionKey,
@@ -75,12 +101,27 @@ suite.define(() => {
         const automations = details.locator('[data-details-group="automations"]');
         const people = details.locator('[data-details-group="people"]');
         const progress = details.locator('[data-progress-card-placement="details"]');
+        const outputs = details.locator('[data-details-group="outputs"]');
+        const count = outputs.locator(".chat-details-desktop-section__count");
+        const refresh = progress.locator(".task-progress-details__refresh");
+        const more = automations.locator(".chat-summary__automation-more");
+        const controlAppearance = () =>
+          details
+            .locator(".task-progress-details__refresh, .chat-summary__automation-more")
+            .evaluateAll((buttons) =>
+              buttons.map((button) => {
+                const style = getComputedStyle(button);
+                return [button.className, style.opacity, style.color, style.cursor];
+              }),
+            );
         await subagents
           .getByRole("button", { name: "Review the release Done", exact: true })
           .waitFor();
         await automations.getByText("Scheduled release check", { exact: true }).waitFor();
         await automations.locator(".chat-summary__automation-attention").waitFor();
         await progress.waitFor();
+        await expect.poll(() => count.textContent()).toBe("·1");
+        const liveAppearance = await controlAppearance();
         await expect
           .poll(() => people.locator(".chat-details-people__preview-avatar").count())
           .toBe(1);
@@ -111,6 +152,20 @@ suite.define(() => {
         await automations.getByText("Scheduled release check", { exact: true }).waitFor();
         expect(await automations.locator(".chat-summary__automation-attention").count()).toBe(1);
         await progress.waitFor();
+        expect(await count.textContent()).toBe("·1");
+        expect(await refresh.getAttribute("aria-disabled")).toBe("true");
+        expect(await refresh.getAttribute("disabled")).toBeNull();
+        expect(await controlAppearance()).toEqual(liveAppearance);
+        const retainedRefresh = await refresh.elementHandle();
+        await refresh.click({ force: true });
+        await refresh.press("Enter");
+        await refresh.press("Space");
+        expect(await gateway.getRequests("progressCard.refresh")).toHaveLength(0);
+        expect(await more.getAttribute("aria-disabled")).toBe("true");
+        expect(await more.getAttribute("disabled")).toBeNull();
+        await more.click({ force: true });
+        await more.press("Enter");
+        expect(await gateway.getRequests("cron.list")).toHaveLength(0);
         expect(await people.locator(".chat-details-people__preview-avatar").count()).toBe(1);
         expect(await details.locator("openclaw-panel-loading-skeleton").count()).toBe(0);
         expect(await gateway.getRequests("cron.list")).toHaveLength(0);
@@ -133,6 +188,8 @@ suite.define(() => {
                 return {
                   section: section.dataset.detailsGroup ?? "progress",
                   top: box.top - bounds.top,
+                  left: box.left - bounds.left,
+                  width: box.width,
                   height: box.height,
                 };
               }),
@@ -143,6 +200,7 @@ suite.define(() => {
         expect(before.sections.map((section) => section.section)).toEqual([
           "people",
           "subagents",
+          "outputs",
           "progress",
           "automations",
         ]);
@@ -155,6 +213,11 @@ suite.define(() => {
           .toBe("false");
         await waitForLayoutSettled(page, ".chat-details-desktop-body__content");
         expect(await geometry()).toEqual(before);
+        expect(await count.textContent()).toBe("·1");
+        expect(await refresh.getAttribute("aria-disabled")).toBeNull();
+        expect(await retainedRefresh?.evaluate((button) => button.isConnected)).toBe(true);
+        await retainedRefresh?.dispose();
+        expect(await gateway.getRequests("progressCard.refresh")).toHaveLength(0);
         for (const section of retained) {
           const state = await section.evaluate((element) => {
             if (!(element instanceof Element)) {

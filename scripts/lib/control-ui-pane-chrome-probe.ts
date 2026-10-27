@@ -31,7 +31,16 @@ export function installPaneChromeProbe() {
               section.getAttribute("data-progress-card-placement") ??
               "skeleton",
             top: Math.round(box.top - panelBox.top),
+            left: Math.round(box.left - panelBox.left),
+            width: Math.round(box.width),
+            panelLeft: Math.round(panelBox.left),
+            panelTop: Math.round(panelBox.top),
+            panelWidth: Math.round(panelBox.width),
             height: Math.round(box.height),
+            outputCount:
+              section.querySelector(".chat-details-desktop-section__count")?.textContent?.trim() ??
+              null,
+            refresh: Boolean(section.querySelector(".task-progress-details__refresh")),
             visible: box.height > 0 && box.top < panelBox.bottom && box.bottom > panelBox.top,
             nodes: section.querySelectorAll("*").length,
             images: Array.from(section.querySelectorAll("img")).map((image) => ({

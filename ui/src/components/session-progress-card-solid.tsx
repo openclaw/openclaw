@@ -35,6 +35,7 @@ export type SessionProgressCardProps = {
   collapseComposerByDefault?: boolean;
   composerDisclosureContext?: ComposerProgressDisclosureContext;
   refreshAction?: SessionProgressCardRefreshAction;
+  reserveRefresh?: boolean;
   onClearSaved?: (card: ProgressCard) => void;
   menuOptions?: Pick<MenuProps, "items" | "onSelect" | "disabled" | "class">;
   menuRef?: (menu: MenuHandle) => void;
@@ -272,10 +273,11 @@ export function ProgressDetailsRefresh(props: {
   disabled?: boolean;
   desktopDetails?: boolean;
   hideTooltip?: boolean;
+  reserved?: boolean;
 }) {
   const pending = () => props.action?.state === "pending";
   return (
-    <Show when={props.action}>
+    <Show when={props.action || props.reserved}>
       <openclaw-tooltip
         prop:placement="top"
         prop:disabled={props.disabled || props.hideTooltip || false}
@@ -287,6 +289,8 @@ export function ProgressDetailsRefresh(props: {
             pending() ? "sessionProgressCard.refresh.pending" : "sessionProgressCard.refresh.label",
           )}
           aria-busy={pending() ? "true" : "false"}
+          aria-disabled={!props.action ? "true" : undefined}
+          aria-description={!props.action ? t("sessionProgressCard.widgetLoading") : undefined}
           disabled={props.disabled || pending()}
           data-pending={pending() ? "true" : "false"}
           onClick={(event) => {
@@ -499,6 +503,7 @@ function DetailsCard(props: CardProps) {
             <ProgressDetailsRefresh
               card={props.card}
               action={props.refreshAction}
+              reserved={props.reserveRefresh}
               disabled={props.menuOptions?.disabled}
               desktopDetails={props.desktopDetails}
             />

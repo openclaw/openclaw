@@ -296,6 +296,8 @@ it("paints cached section slots in final order and adopts live rows in place", a
   ).toEqual(["subagents", "outputs", "automations"]);
   expect(view.group("subagents")?.textContent).toContain("Review");
   expect(view.group("automations")?.textContent).toContain("Scheduled check");
+  const outputCount = view.group("outputs")?.querySelector(".chat-details-desktop-section__count");
+  expect(outputCount?.textContent).toBe("·1");
   view.update({
     subagentSessionsHydrated: true,
     subagentSessions: [
@@ -320,6 +322,9 @@ it("paints cached section slots in final order and adopts live rows in place", a
     initial,
   );
   expect(sections()).toEqual(["subagents", "outputs", "automations"]);
+  expect(view.group("outputs")?.querySelector(".chat-details-desktop-section__count")).toBe(
+    outputCount,
+  );
   view.update({
     subagentSessions: [],
     outputs: { ...view.initial.outputs!, artifacts: [], dashboard: null },

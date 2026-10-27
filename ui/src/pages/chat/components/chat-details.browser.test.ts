@@ -277,7 +277,7 @@ describe("chat Details presentation", () => {
     );
   });
 
-  it("aligns the Environment diff below its branch label without shifting on hover or focus", async () => {
+  it("keeps first-attached Details insets stable and aligns the Environment diff below its branch label", async () => {
     await page.viewport(1000, 800);
     const openChanges = vi.fn();
     const styles = document.createElement("style");
@@ -318,17 +318,28 @@ describe("chat Details presentation", () => {
       { container: panel },
     );
     flush();
+    const heading = panel.querySelector(".chat-details-desktop-section__heading")!;
+    const expectHeadingInsets = () => {
+      const panelBounds = panel.getBoundingClientRect();
+      const headingBounds = heading.getBoundingClientRect();
+      expect(headingBounds.left - panelBounds.left).toBeCloseTo(17);
+      expect(panelBounds.right - headingBounds.right).toBeCloseTo(17);
+    };
+    // Measure both widths before the scroll owner's first scheduled layout read.
+    for (const width of [600, 300]) {
+      panel.style.width = width + "px";
+      expectHeadingInsets();
+    }
     // The Environment body loads lazily; capture its controls only after it renders.
     await expect
       .poll(() => panel.querySelector(".chat-environment__branch-controls button.chat-pr__diff"))
       .not.toBeNull();
-    const heading = panel.querySelector(".chat-details-desktop-section__heading")!;
     const navigation = panel.querySelector<HTMLButtonElement>(
       ".chat-environment__branch-controls button.chat-pr__diff",
     )!;
     const branchLabel = panel.querySelector(".chat-environment__branch-name")!;
-    // The scroll owner applies its initial gutter measurement before the first paint.
     await new Promise(requestAnimationFrame);
+    expectHeadingInsets();
     expect(navigation.getAttribute("aria-label")).toBe("Show session changes");
     expect(navigation.textContent).toContain("+3");
     expect(navigation.textContent).toContain("−1");

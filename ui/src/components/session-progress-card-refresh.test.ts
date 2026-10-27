@@ -15,6 +15,31 @@ const statusText = (root: HTMLElement) => root.querySelector("[role=status]")?.t
 const time = (container: HTMLElement) => container.querySelector("time");
 
 describe("progress card refresh control", () => {
+  it("retains the cached desktop refresh button while live authority arrives", () => {
+    const onRefresh = vi.fn();
+    const { container, show } = createView({ placement: "details", desktopDetails: true });
+    show({ reserveRefresh: true });
+    const button = container.querySelector<HTMLButtonElement>(".task-progress-details__refresh")!;
+    expect(button).not.toBeNull();
+    expect(button.disabled).toBe(false);
+    expect(button.getAttribute("aria-disabled")).toBe("true");
+    expect(button.getAttribute("aria-description")).toBe("Loading session progress…");
+    const glyph = button.innerHTML;
+    button.click();
+    expect(onRefresh).not.toHaveBeenCalled();
+
+    show({ reserveRefresh: false, refreshAction: { onRefresh } });
+    expect(container.querySelector(".task-progress-details__refresh")).toBe(button);
+    expect(button.innerHTML).toBe(glyph);
+    expect(button.hasAttribute("aria-disabled")).toBe(false);
+    expect(button.hasAttribute("aria-description")).toBe(false);
+    button.click();
+    expect(onRefresh).toHaveBeenCalledExactlyOnceWith(progressCard);
+
+    show({ reserveRefresh: false, refreshAction: undefined });
+    expect(container.querySelector(".task-progress-details__refresh")).toBeNull();
+  });
+
   it.each([false, true])(
     "refreshes from the options menu without toggling or dragging (collapsed: %s)",
     async (collapsed) => {
