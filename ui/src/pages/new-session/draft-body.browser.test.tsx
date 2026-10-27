@@ -1,5 +1,6 @@
 import { afterEach, expect, it } from "vitest";
 import { page } from "vitest/browser";
+import { syncControlUiSystemChrome } from "../../app/control-ui-presentation.ts";
 import { mountSolid } from "../../test-helpers/mount-solid.ts";
 import { releaseChatAttachmentPayload } from "../chat/attachment-payload-store.ts";
 import { buildLocalUserMessage } from "../chat/user-message-content.ts";
@@ -24,6 +25,7 @@ it.each([
   await page.viewport(width, 800);
   styles.textContent = baseStyles;
   document.head.append(styles);
+  syncControlUiSystemChrome(true);
   container.className = "new-session-page chat";
   document.body.append(container);
   ({ unmount } = mountSolid(

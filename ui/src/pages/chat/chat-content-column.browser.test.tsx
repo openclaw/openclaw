@@ -276,39 +276,19 @@ it.each(["light", "dark"])(
     const root = document.body.appendChild(document.createElement("div"));
     root.className = "chat";
     const documentRoot = document.documentElement;
-    const previousTheme = documentRoot.getAttribute("data-theme");
-    const previousMode = documentRoot.getAttribute("data-theme-mode");
+    const previousAttributes = ["data-theme", "data-theme-mode", "style"].map(
+      (name) => [name, documentRoot.getAttribute(name)] as const,
+    );
     documentRoot.dataset.theme = mode;
     documentRoot.dataset.themeMode = mode;
     const style = documentRoot.style;
-    const previousAccent = style.getPropertyValue("--accent");
-    const previousLink = style.getPropertyValue("--link");
-    const previousLinkHover = style.getPropertyValue("--link-hover");
     onTestFinished(() => {
       root.remove();
-      if (previousTheme === null) {
-        documentRoot.removeAttribute("data-theme");
-      } else {
-        documentRoot.setAttribute("data-theme", previousTheme);
-      }
-      if (previousMode === null) {
-        documentRoot.removeAttribute("data-theme-mode");
-      } else {
-        documentRoot.setAttribute("data-theme-mode", previousMode);
-      }
-      if (previousAccent) {
-        style.setProperty("--accent", previousAccent);
-      } else {
-        style.removeProperty("--accent");
-      }
-      for (const [property, previous] of [
-        ["--link", previousLink],
-        ["--link-hover", previousLinkHover],
-      ] as const) {
-        if (previous) {
-          style.setProperty(property, previous);
+      for (const [name, value] of previousAttributes) {
+        if (value === null) {
+          documentRoot.removeAttribute(name);
         } else {
-          style.removeProperty(property);
+          documentRoot.setAttribute(name, value);
         }
       }
       syncControlUiSystemChrome(true);
