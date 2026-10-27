@@ -295,11 +295,15 @@ it.skipIf(process.platform === "win32")(
       await fs.symlink(checkout, path.join(root, "alias"));
       await fs.appendFile(path.join(checkout, "tracked.txt"), "after\n");
       await fs.writeFile(path.join(origin, ".git/worktrees/checkout/index.lock"), "writer\n");
+      const commands = vi.spyOn(execRunner, "runCommandBuffersWithTimeout");
       for (const cwd of [path.join(checkout, "nested"), path.join(root, "alias")]) {
         const timing: DiffReadTiming = { durations: {} };
         const read = () => loadCheckoutDiff({ cwd, sessionKey: "fixture" }, timing);
         const first = await read();
         expect(first.files[0]?.patch).toContain("+after");
+        expect(commands.mock.calls.filter(([argv]) => argv.includes("symbolic-ref"))).toHaveLength(
+          0,
+        );
         await fs.writeFile(path.join(checkout, "ignored/build.txt"), "rebuilt\n");
         expect(await read()).toEqual(first);
         expect(timing.outcome).toBe("cache-hit");
