@@ -8,6 +8,7 @@ import type { runBeforeToolCallHook as runBeforeToolCallHookType } from "../agen
 import type { OpenClawToolsOptions } from "../agents/openclaw-tools.types.js";
 import type { AnyAgentTool } from "../agents/tools/common.js";
 import { upsertSessionEntryCore } from "../config/sessions/session-accessor.js";
+import { getDiagnosticSessionState } from "../logging/diagnostic-session-state.js";
 import { withPluginRuntimeGatewayRequestScope } from "../plugins/runtime/gateway-request-scope.js";
 import { prepareUserProfileCatalog } from "../state/user-profile-list.js";
 import { ensureGatewayOwnerProfile, ensureProfileForEmail } from "../state/user-profiles.js";
@@ -237,6 +238,11 @@ vi.mock("../agents/agent-tools.before-tool-call.js", () => ({
   runBeforeToolCallHook: hookMocks.runBeforeToolCallHook,
 }));
 
+const { runBeforeToolCallHook: actualRunBeforeToolCallHook } =
+  await vi.importActual<typeof import("../agents/agent-tools.before-tool-call.js")>(
+    "../agents/agent-tools.before-tool-call.js",
+  );
+
 const { authorizeHttpGatewayConnect } = await import("./auth.js");
 const { handleToolsInvokeHttpRequest } = await import("./tools-invoke-http.js");
 const { toolsInvokeHandlers } = await import("./server-methods/tools-invoke.js");
@@ -397,6 +403,46 @@ describe("POST /tools/invoke", () => {
     setMainAllowedTools,
     invokeToolAuthed,
     expectOkInvokeResponse,
+  });
+
+  it("does not record Gateway tools.invoke calls in agent tool-loop history", async () => {
+    setMainAllowedTools({ allow: ["session_status"], gatewayAllow: ["session_status"] });
+    const enabledLoopDetection = { enabled: true, warnAt: 3 };
+    hookMocks.runBeforeToolCallHook.mockImplementation(actualRunBeforeToolCallHook);
+
+    for (let index = 0; index < 10; index += 1) {
+      const response = await invokeTool({ tool: "session_status", sessionKey: "main" });
+      expect(response.status).toBe(200);
+    }
+    for (let index = 0; index < 10; index += 1) {
+      const call = await invokeToolsRpc({
+        name: "session_status",
+        args: {},
+        sessionKey: "main",
+        idempotencyKey: `issue-186022-${index}`,
+      });
+      expect(call?.[0]).toBe(true);
+    }
+
+    const sessionKey = "agent:main:main";
+    expect(hookMocks.resolveToolLoopDetectionConfig).not.toHaveBeenCalled();
+    expect(getDiagnosticSessionState({ sessionKey }).toolCallHistory ?? []).toHaveLength(0);
+
+    await actualRunBeforeToolCallHook({
+      toolName: "session_status",
+      params: {},
+      toolCallId: "agent-run-tool-call",
+      ctx: {
+        agentId: "main",
+        config: cfg as never,
+        sessionKey,
+        runId: "agent-run-1",
+        loopDetection: enabledLoopDetection,
+      },
+    });
+    expect(getDiagnosticSessionState({ sessionKey }).toolCallHistory).toEqual([
+      expect.objectContaining({ toolName: "session_status", runId: "agent-run-1" }),
+    ]);
   });
 
   it("enforces action policy for administrator tool calls after hook rewrites", async () => {
