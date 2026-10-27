@@ -142,21 +142,14 @@ it.skipIf(!connection)(
         ).toEqual([{ count: 1 }]);
 
         const configPath = "/synthetic/openclaw.json";
+        const patchHealth = patchConfigHealthEntryInDatabase.bind(null, remote, configPath);
         const observedJson = '{ "hash": "observed" }';
         const promotedJson = '{"hash":"promoted"}';
         const readHealthBasis = () =>
           configHealthReadOperations["config.health.read"](undefined, remote).snapshot.basis[
             configPath
           ];
-        expect(
-          patchConfigHealthEntryInDatabase(
-            remote,
-            configPath,
-            { last_known_good_json: observedJson },
-            null,
-            100,
-          ),
-        ).toBe(true);
+        expect(patchHealth({ last_known_good_json: observedJson }, null, 100)).toBe(true);
         const observed = readHealthBasis();
         expect(observed).toEqual({
           lastKnownGoodJson: observedJson,
@@ -165,9 +158,7 @@ it.skipIf(!connection)(
           updatedAtMs: 100,
         });
         expect(
-          patchConfigHealthEntryInDatabase(
-            remote,
-            configPath,
+          patchHealth(
             {
               last_promoted_good_json: promotedJson,
               last_observed_suspicious_signature: "observed-signature",
@@ -194,14 +185,10 @@ it.skipIf(!connection)(
           { ...promoted, lastPromotedGoodJson: null },
           { ...promoted, suspiciousSignature: null },
         ]) {
-          expect(
-            patchConfigHealthEntryInDatabase(remote, configPath, clearHealth, stale, 200),
-          ).toBe(false);
+          expect(patchHealth(clearHealth, stale, 200)).toBe(false);
         }
         expect(readHealthBasis()).toEqual(promoted);
-        expect(
-          patchConfigHealthEntryInDatabase(remote, configPath, clearHealth, promoted, 200),
-        ).toBe(true);
+        expect(patchHealth(clearHealth, promoted, 200)).toBe(true);
         const cleared = readHealthBasis();
         expect(cleared).toEqual({
           lastKnownGoodJson: null,
@@ -209,15 +196,7 @@ it.skipIf(!connection)(
           suspiciousSignature: null,
           updatedAtMs: 200,
         });
-        expect(
-          patchConfigHealthEntryInDatabase(
-            remote,
-            configPath,
-            { last_known_good_json: observedJson },
-            cleared,
-            300,
-          ),
-        ).toBe(true);
+        expect(patchHealth({ last_known_good_json: observedJson }, cleared, 300)).toBe(true);
 
         const input = {
           sessionKey: "agent:main:conformance",
