@@ -679,19 +679,11 @@ html.openclaw-native-macos:not(.openclaw-native-web-chrome)
   height: 28px;
 }
 
-.sidebar--rail .sidebar-session-toolbar__button.sidebar-session-sort {
+.sidebar--rail .sidebar-session-sort {
   width: auto;
   max-width: 50%;
   gap: 2px;
   opacity: 1;
-}
-
-.sidebar-session-sort__status {
-  min-width: 0;
-  overflow: hidden;
-  font-size: 12px;
-  text-overflow: ellipsis;
-  white-space: nowrap;
 }
 
 html.openclaw-native-web-chrome .shell:not(.shell--mobile-nav) .sidebar-panel-header {
