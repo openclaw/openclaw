@@ -750,6 +750,7 @@ it.each([false, true])(
       const result = await appendSessionManagerActor({
         actor,
         toolResult,
+        message: { role: toolResult ? "toolResult" : "user" },
         assertCurrent: () => authority.assertCurrent(),
         append: messageAppend(
           actor,
@@ -869,6 +870,7 @@ it.each([
       appendSessionManagerActor({
         actor,
         toolResult: false,
+        message: { role: "user" },
         assertCurrent() {},
         append: messageAppend(actor, initial.entry!.sessionId, { role: "user", content: [] }),
       }),
