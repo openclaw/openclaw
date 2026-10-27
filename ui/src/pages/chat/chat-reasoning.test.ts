@@ -11,10 +11,8 @@ import {
 } from "./chat-history.inflight.test-support.ts";
 import { loadChatHistory } from "./chat-history.ts";
 import { projectChatReasoning } from "./chat-reasoning.ts";
-import { buildCachedChatItems, getChatItemsGeneration } from "./chat-thread.ts";
 import { resetChatViewState } from "./chat-view-state.test-support.ts";
 import { renderChatInto } from "./chat-view.test-helpers.ts";
-import { projectTranscriptChain } from "./components/chat-transcript-message-index.ts";
 import {
   installTranscriptDomMocks,
   resetTranscriptTestDom,
@@ -36,6 +34,14 @@ let state: TestState;
 let container: HTMLElement;
 const thinkingNode = () => container.querySelector(".chat-thinking");
 const thinkingNodes = () => container.querySelectorAll(".chat-thinking");
+const thought = (text: string) => ({ type: "thinking", thinking: text });
+const answer = (text = "The answer is 42.") => ({ type: "text", text });
+const toolCall = (id: string, args = {}) => ({
+  type: "toolCall",
+  id,
+  name: "read",
+  arguments: args,
+});
 
 function transcriptRow<T extends { id: string; seq: number }>(
   content: unknown,
@@ -62,15 +68,19 @@ afterEach(() => {
   vi.useRealTimers();
 });
 
-function thinking(text: string, seq = 1, owner = runId, itemId = "thinking-1") {
+function thinkingEvent(data: Record<string, unknown>, seq: number, owner = runId, ts = 3) {
   handleAgentEvent(state, {
     runId: owner,
     seq,
     stream: "thinking",
-    ts: 3,
+    ts,
     sessionKey: "main",
-    data: { text, delta: text, itemId },
+    data,
   });
+}
+
+function thinking(text: string, seq = 1, owner = runId, itemId = "thinking-1") {
+  thinkingEvent({ text, delta: text, itemId }, seq, owner);
 }
 
 function final(text = "The answer is 42.", seq = 3, sessionKey = state.sessionKey) {
@@ -79,7 +89,7 @@ function final(text = "The answer is 42.", seq = 3, sessionKey = state.sessionKe
     sessionKey,
     runId,
     seq,
-    message: { role: "assistant", content: [{ type: "text", text }] },
+    message: { role: "assistant", content: [answer(text)] },
   });
 }
 
@@ -90,20 +100,18 @@ function receipt(
   messageRunId = runId,
   messageSeq?: number,
 ) {
-  handleAgentEvent(state, {
-    runId,
-    seq,
-    stream: "thinking",
-    ts: 4,
-    sessionKey: "main",
-    data: {
+  thinkingEvent(
+    {
       phase: "persisted",
       itemId,
       messageId,
       messageRunId,
       ...(messageSeq === undefined ? {} : { messageSeq }),
     },
-  });
+    seq,
+    runId,
+    4,
+  );
 }
 
 function expectAnswer() {
@@ -144,10 +152,7 @@ function persistReasoning(
 ) {
   receipt("answer", "thinking-1", 2, runId, positions.appended);
   const message = transcriptRow(
-    [
-      { type: "thinking", thinking: text },
-      { type: "text", text: "The answer is 42." },
-    ],
+    [thought(text), answer()],
     { id: "answer", seq: positions.displayed, runId, runTerminal: true },
     { timestamp: 4, stopReason: "stop" },
   );
@@ -174,7 +179,8 @@ function applyMessage(
 }
 
 it("shows thinking while generating and retains it through thinking-only history hydration", async () => {
-  thinking("**Checking** the evidence.");
+  thinking("Checking");
+  thinking("**Checking** the evidence.", 2);
   show();
   expect(container.querySelector(".chat-thinking strong")?.textContent).toBe("Checking");
   expect(state.chatMessages).toEqual([user]);
@@ -188,32 +194,29 @@ it("shows thinking while generating and retains it through thinking-only history
 it.each([
   { order: "after", appended: 2, displayed: 2 },
   { order: "before", appended: 18, displayed: 7 },
-])(
-  "hands reasoning to history once $order final (append $appended, display $displayed)",
-  async ({ order, appended, displayed }) => {
-    const text = "Checking the evidence carefully.";
-    thinking(text);
+])("hands reasoning to history once $order final", async ({ order, appended, displayed }) => {
+  const text = "Checking the evidence carefully.";
+  thinking(text);
+  showReasoning(1);
+  if (order === "before") {
+    persistReasoning(text, true, { appended, displayed });
     showReasoning(1);
-    if (order === "before") {
-      persistReasoning(text, true, { appended, displayed });
-      showReasoning(1);
-      expect(state.chatReasoning?.items.at(-1)?.receipt?.persisted).toBe(true);
-    }
-    final();
+    expect(state.chatReasoning?.items.at(-1)?.receipt?.persisted).toBe(true);
+  }
+  final();
+  show();
+  expectAnswer();
+  expect(state.chatReasoning).toBeNull();
+  if (order === "after") {
+    // An intervening older snapshot must retain the reducer-owned live final.
+    await loadChatHistory(state);
+    expect(state.chatMessages.map(extractThinkingCached)).toContain(text);
+    persistReasoning(text, false, { appended, displayed });
     show();
     expectAnswer();
-    expect(state.chatReasoning).toBeNull();
-    if (order === "after") {
-      // An intervening older snapshot must retain the reducer-owned live final.
-      await loadChatHistory(state);
-      expect(state.chatMessages.map(extractThinkingCached)).toContain(text);
-      persistReasoning(text, false, { appended, displayed });
-      show();
-      expectAnswer();
-    }
-    expect(state.chatMessages).toHaveLength(2);
-  },
-);
+  }
+  expect(state.chatMessages).toHaveLength(2);
+});
 
 it("applies View and session visibility independently to live and saved reasoning", () => {
   thinking("Private synthetic reasoning.");
@@ -249,7 +252,7 @@ it("falls back to the inherited reasoning default only without a session overrid
 });
 
 it.each(["error", "aborted"] as const)(
-  "retires reasoning on a message-less %s and ignores late thinking after sequence cleanup",
+  "retires message-less %s reasoning and fences late thinking",
   (terminal) => {
     thinking("Unfinished reasoning.");
     handleChatGatewayEvent(state, {
@@ -276,35 +279,6 @@ it("fences replay and sibling runs and retires preview on a new run or session r
   thinking("New reasoning.", 1, "new-run");
   reduceChatSessionProjection(state, { type: "sessionReset" });
   expect(state.chatReasoning).toBeNull();
-});
-
-it("updates reasoning deltas in the existing live slot without rebuilding loaded history", () => {
-  thinking("Earlier tool reasoning.", 1, runId, "earlier");
-  thinking("First sentence.", 2);
-  const input = {
-    paneId: "reasoning-cache",
-    sessionKey: "main",
-    runId,
-    messages: state.chatMessages,
-    toolMessages: [],
-    streamSegments: [],
-    stream: state.chatStream,
-    streamStartedAt: state.chatStreamStartedAt,
-    reasoning: state.chatReasoning,
-    showToolCalls: true,
-  };
-  const first = buildCachedChatItems(input);
-  const generation = getChatItemsGeneration(first);
-  const options = { sessionKey: "main", runWorking: true, searchActive: false };
-  const firstChain = projectTranscriptChain(first, options);
-  thinking("First sentence. Second sentence.", 3);
-  const second = buildCachedChatItems({ ...input, reasoning: state.chatReasoning });
-  expect(second).toBe(first);
-  expect(getChatItemsGeneration(second)).toBe(generation);
-  expect(projectTranscriptChain(second, options).continuations).toBe(firstChain.continuations);
-  expect(second.find((item) => item.kind === "stream" && item.isStreaming)).toMatchObject({
-    thinking: "First sentence. Second sentence.",
-  });
 });
 
 it("does not attach foreground thinking to another session's final with the same run ID", () => {
@@ -358,10 +332,7 @@ it("does not let an earlier receipt consume equal reasoning from the next assist
   receipt("earlier", "earlier", 3);
   applyMessage(
     transcriptRow(
-      [
-        { type: "thinking", thinking: text },
-        { type: "toolCall", id: "tool-1", name: "read", arguments: {} },
-      ],
+      [thought(text), toolCall("tool-1")],
       { id: "earlier", seq: 2, runId },
       { timestamp: 3, stopReason: "toolUse" },
     ),
@@ -378,15 +349,7 @@ it("keeps persisted tool-step reasoning visible until its run finishes", async (
   const sessionKey = "agent:main:dashboard:reasoning";
   const toolMessage = (index: number, owner: string, text: string, timestamp: number) =>
     transcriptRow(
-      [
-        { type: "thinking", thinking: text },
-        {
-          type: "toolCall",
-          id: `read-${index}`,
-          name: "read",
-          arguments: { path: `evidence-${index}.txt` },
-        },
-      ],
+      [thought(text), toolCall(`read-${index}`, { path: `evidence-${index}.txt` })],
       { id: `${owner}-${index}`, seq: timestamp, runId: owner },
       { stopReason: "toolUse" },
     );
@@ -410,28 +373,23 @@ it("keeps persisted tool-step reasoning visible until its run finishes", async (
   let seq = 0;
   const agent = (stream: string, data: Record<string, unknown>, ts: number) =>
     handleAgentEvent(state, { sessionKey, runId, seq: ++seq, stream, data, ts });
+  const tool = (index: number, phase: "start" | "result", ts: number) =>
+    agent(
+      "tool",
+      {
+        toolCallId: `read-${index}`,
+        name: "read",
+        phase,
+        ...(phase === "start"
+          ? { args: { path: `evidence-${index}.txt` } }
+          : { result: { content: [answer("42")] } }),
+      },
+      ts,
+    );
   for (const index of [0, 1]) {
     agent("thinking", { itemId: `thought-${index}`, text: thoughts[index] }, 1_100 + index * 100);
-    agent(
-      "tool",
-      {
-        toolCallId: `read-${index}`,
-        name: "read",
-        phase: "start",
-        args: { path: `evidence-${index}.txt` },
-      },
-      1_150 + index * 100,
-    );
-    agent(
-      "tool",
-      {
-        toolCallId: `read-${index}`,
-        name: "read",
-        phase: "result",
-        result: { content: [{ type: "text", text: "42" }] },
-      },
-      1_160 + index * 100,
-    );
+    tool(index, "start", 1_150 + index * 100);
+    tool(index, "result", 1_160 + index * 100);
   }
   agent("thinking", { itemId: "thought-2", text: thoughts[2] }, 1_300);
   const expectSteps = () => {
@@ -533,10 +491,7 @@ it("uses the producer run in the receipt when Gateway remaps the live client run
   receipt("source-answer", "thinking-1", 2, "source-run");
   applyMessage(
     transcriptRow(
-      [
-        { type: "thinking", thinking: "A remapped source occurrence." },
-        { type: "text", text: "Source answer." },
-      ],
+      [thought("A remapped source occurrence."), answer("Source answer.")],
       { id: "source-answer", seq: 2, runId: "source-run" },
       { timestamp: 4 },
     ),

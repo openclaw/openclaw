@@ -8,6 +8,8 @@
  * Run separate fixtures/builds in counterbalanced base/candidate order. The 600-second
  * untraced window gates CPU, GC and latency. A subsequent 60-second sampled allocation
  * window is reported separately, includes collected objects, and never gates GC/latency.
+ * All 40 synthetic plugins must answer their inspection RPC; two also count prompt hooks
+ * (one deterministic context contribution, one read-only observer) in every window.
  * Reuse --duration-seconds 10 --allocation-seconds 5 only for harness smoke, not perf proof.
  */
 import assert from "node:assert/strict";
@@ -154,6 +156,15 @@ function extra(child: ChildProcess, action: "start" | "stop"): Promise<Record<st
     child.send({ channel: "ws-counter-stress", action });
   });
 }
+async function readModelCallCount() {
+  const response = await fetch(`http://127.0.0.1:${mockPort}/health`);
+  assert(response.ok);
+  const health: unknown = await response.json();
+  assert(isRecord(health) && isRecord(health.requests) && isRecord(health.requests.ingress));
+  const { responses, chatCompletions } = health.requests.ingress;
+  assert(typeof responses === "number" && typeof chatCompletions === "number");
+  return responses + chatCompletions;
+}
 function tails(samples: number[]) {
   const sorted = samples.toSorted((a, b) => a - b);
   return {
@@ -202,8 +213,38 @@ try {
   config.diagnostics = { enabled: true };
   config.cron = { ...config.cron, enabled: true };
   config.plugins.entries = { "memory-core": { config: { dreaming: { enabled: false } } } };
+  const pluginFixtures = writePluginFixtures(output, { count: 40 });
+  const promptHookIds = pluginFixtures.pluginIds.slice(0, 2);
+  for (const [index, id] of pluginFixtures.pluginIds.entries()) {
+    if (index < 2) {
+      config.plugins.entries[id] = { hooks: { allowConversationAccess: true } };
+    }
+    writeFileSync(
+      path.join(pluginFixtures.pluginsDir, id, "index.cjs"),
+      `module.exports = {
+  id: ${JSON.stringify(id)},
+  register(api) {
+    let promptBuilds = 0;
+    let messagesRead = 0;
+    ${
+      index < 2
+        ? `api.on("before_prompt_build", (event) => {
+      promptBuilds++;
+      messagesRead += event.messages.length;
+      ${index === 0 ? 'return { prependContext: "Synthetic prompt-hook context." };' : "return undefined;"}
+    });`
+        : ""
+    }
+    api.registerGatewayMethod(${JSON.stringify(`${id}.inspect`)}, ({ respond }) => {
+      respond(true, { id: ${JSON.stringify(id)}, promptBuilds, messagesRead });
+    }, { scope: "operator.read" });
+  },
+};
+`,
+    );
+  }
   const configPath = writeGatewayBenchConfig(output, config, {
-    pluginFixtures: writePluginFixtures(output, { count: 40 }),
+    pluginFixtures,
   });
   const control = path.join(output, "mock-control.json");
   const reply = "Synthetic workspace inspected. ".repeat(40);
@@ -329,6 +370,40 @@ try {
       await rpc(client, "sessions.messages.subscribe", { key, subscriptionId: `stress-${index}` });
     }
   }
+  async function inspectPlugins(ids: string[]) {
+    const client = clients[0];
+    assert(client);
+    const counts: Record<string, { promptBuilds: number; messagesRead: number }> = {};
+    for (const id of ids) {
+      const result = await rpc(client, `${id}.inspect`, {});
+      assert(
+        isRecord(result) &&
+          result.id === id &&
+          typeof result.promptBuilds === "number" &&
+          typeof result.messagesRead === "number",
+        `plugin activation proof missing: ${id}`,
+      );
+      counts[id] = { promptBuilds: result.promptBuilds, messagesRead: result.messagesRead };
+    }
+    return counts;
+  }
+  function promptHookDelta(
+    before: Awaited<ReturnType<typeof inspectPlugins>>,
+    after: Awaited<ReturnType<typeof inspectPlugins>>,
+    requireHistory = true,
+  ) {
+    return Object.fromEntries(
+      promptHookIds.map((id) => {
+        const promptBuilds = after[id]!.promptBuilds - before[id]!.promptBuilds;
+        const messagesRead = after[id]!.messagesRead - before[id]!.messagesRead;
+        assert(
+          promptBuilds > 0 && (!requireHistory || messagesRead > 0),
+          `prompt hook was not exercised: ${id} builds=${promptBuilds} messages=${messagesRead}`,
+        );
+        return [id, { promptBuilds, messagesRead }];
+      }),
+    );
+  }
   async function workload(seconds: number) {
     const started = performance.now();
     const deadline = started + seconds * 1000;
@@ -338,9 +413,10 @@ try {
     const framesBefore = eventFrames;
     await Promise.all([
       ...clients.map(async (client, index) => {
+        const maxRounds = Math.ceil((seconds * 1000 - index * 10) / integer("poll-ms"));
         let ordinal = 0;
         await delay(index * 10);
-        while (performance.now() < deadline) {
+        while (performance.now() < deadline && ordinal < maxRounds) {
           if (failure) {
             throw failure;
           }
@@ -365,17 +441,19 @@ try {
             mutations++;
           }
           ordinal++;
-          await delay(
-            Math.min(
-              Math.max(0, integer("poll-ms") - (performance.now() - at)),
-              Math.max(0, deadline - performance.now()),
-            ),
-          );
+          const nextAt = at + integer("poll-ms");
+          // A deadline-clamped timer can wake early and admit an extra round.
+          if (nextAt >= deadline) {
+            break;
+          }
+          await delay(Math.max(0, nextAt - performance.now()));
         }
       }),
       ...clients.slice(0, active).map(async (client, index) => {
+        const maxRounds = Math.ceil((seconds * 1000 - index * 50) / integer("turn-ms"));
+        let ordinal = 0;
         await delay(index * 50);
-        while (performance.now() < deadline) {
+        while (performance.now() < deadline && ordinal < maxRounds) {
           if (failure) {
             throw failure;
           }
@@ -393,15 +471,17 @@ try {
           assert(isRecord(completed) && completed.status === "ok", "mock turn failed");
           assert(successfulTools.delete(runId), "turn lacked successful read/grep tool evidence");
           turns++;
-          await delay(
-            Math.min(
-              Math.max(0, integer("turn-ms") - (performance.now() - at)),
-              Math.max(0, deadline - performance.now()),
-            ),
-          );
+          ordinal++;
+          const nextAt = at + integer("turn-ms");
+          // A deadline-clamped timer can wake early and admit an extra round.
+          if (nextAt >= deadline) {
+            break;
+          }
+          await delay(Math.max(0, nextAt - performance.now()));
         }
       }),
     ]);
+    await delay(Math.max(0, deadline - performance.now()));
     if (failure) {
       throw failure;
     }
@@ -414,7 +494,10 @@ try {
       sessionsList: tails(listTimes),
     };
   }
+  const activatedPlugins = await inspectPlugins(pluginFixtures.pluginIds);
   await workload(10);
+  const warmHooks = await inspectPlugins(promptHookIds);
+  promptHookDelta(activatedPlugins, warmHooks, false);
   console.log(
     JSON.stringify({
       phase: "ready",
@@ -422,9 +505,11 @@ try {
       fixture: summary,
       clients: clientCount,
       active,
-      plugins: 40,
+      plugins: Object.keys(activatedPlugins).length,
+      promptHooks: promptHookIds,
     }),
   );
+  const beforeModelCalls = await readModelCallCount();
   const beforeResources = await readGatewayResources(gateway);
   const stopDiagnostics = await startGatewayDiagnostics(gateway);
   await extra(gateway, "start");
@@ -441,18 +526,22 @@ try {
   );
   const gcMs = diagnostics.gc.durationMs?.total ?? 0;
   const afterResources = await readGatewayResources(gateway);
+  const untracedHooks = await inspectPlugins(promptHookIds);
+  const afterModelCalls = await readModelCallCount();
   assert(
     typeof counters.frames === "number" && counters.frames > 0,
     "WebSocket metrics consumer did not receive frames",
   );
   const untraced = {
     ...untracedWork,
+    modelCalls: afterModelCalls - beforeModelCalls,
     cpu,
     mainThreadCpuPercent: (cpu.mainThread.totalMs / cpu.wallMs) * 100,
     gcSecondsPerMinute: (gcMs / diagnostics.durationMs) * 60,
     counters,
     diagnostics,
     resources: { before: beforeResources, after: afterResources },
+    promptHooks: promptHookDelta(warmHooks, untracedHooks),
   };
   writeFileSync(path.join(output, "untraced.json"), JSON.stringify(untraced, null, 2));
   console.log(JSON.stringify({ phase: "untraced-complete", ...untraced }));
@@ -464,19 +553,22 @@ try {
   const allocationWork = await workload(integer("allocation-seconds"));
   const allocationCounters = await extra(gateway, "stop");
   await controlGatewayProfile(gateway, "heap", "stop", profilePath);
+  const allocationHooks = await inspectPlugins(promptHookIds);
   const heap = readGatewayHeapProfile(profilePath);
   const allocation = {
     ...allocationWork,
+    modelCalls: (await readModelCallCount()) - afterModelCalls,
     counters: allocationCounters,
     bytesPerSecond: (heap.sampledAllocatedBytes / allocationWork.durationMs) * 1000,
     heap,
+    promptHooks: promptHookDelta(untracedHooks, allocationHooks),
   };
   const report = {
     revision: values.revision,
     fixture: summary,
     clientCount,
     active,
-    plugins: 40,
+    plugins: Object.keys(activatedPlugins).length,
     durationSeconds: integer("duration-seconds"),
     untraced,
     allocation,

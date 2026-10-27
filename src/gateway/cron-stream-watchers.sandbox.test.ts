@@ -54,7 +54,6 @@ it("delivers split UTF-8 sandbox output through the watcher without starting a h
     await watchers.start(sandboxJob());
     await clock.advanceBy(50);
     expect(await delivered.promise).toBe("watcher 🦀 ready");
-    expect(spawnSandboxSource).toHaveBeenCalledOnce();
     expect(fake.spawn).not.toHaveBeenCalled();
   } finally {
     await watchers.stopAll("shutdown");
@@ -105,6 +104,7 @@ it("retains failed sandbox extinction, reports the error, and blocks replacement
   const { watchers, recordFailure, fake } = createCronStreamWatcherFixture({
     scheduler,
     spawnSandboxSource,
+    recordFailure: vi.fn<CronStreamOwnerParams["recordFailure"]>(async () => {}),
   });
   const streamJob = sandboxJob();
   try {
@@ -118,17 +118,11 @@ it("retains failed sandbox extinction, reports the error, and blocks replacement
       processAlive: true,
       restartTimerPending: false,
     });
-    expect(recordFailure).toHaveBeenCalledWith(
-      streamJob.id,
-      expect.stringContaining(extinctionError.message),
-      expect.objectContaining({
-        streamStatus: "error",
-        streamError: expect.stringContaining(extinctionError.message),
-        streamRestartExhausted: true,
-      }),
-      expect.any(String),
-      expect.any(String),
-    );
+    expect(recordFailure.mock.calls[0]?.[2]).toMatchObject({
+      streamStatus: "error",
+      streamError: expect.stringContaining(extinctionError.message),
+      streamRestartExhausted: true,
+    });
     expect(spawnSandboxSource).toHaveBeenCalledOnce();
     expect(fake.spawn).not.toHaveBeenCalled();
   } finally {

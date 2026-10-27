@@ -12,6 +12,10 @@ registerUsageEnglish();
 
 const CHARS_PER_TOKEN = 4;
 const DAY_MS = 86_400_000;
+const costFormatters: Partial<Record<2 | 4 | 6, Intl.NumberFormat>> = {};
+// These labels use the host realm's default locale, independently of the UI language.
+let dayLabelFormatter: Intl.DateTimeFormat | undefined;
+let fullDateFormatter: Intl.DateTimeFormat | undefined;
 
 function charsToTokens(chars: number): number {
   return Math.round(chars / CHARS_PER_TOKEN);
@@ -31,12 +35,16 @@ function formatUsageTokens(n: number, report?: UsageTotals["usageReport"]): stri
 
 // Usage charts choose fixed precision from the surrounding scale; the shared
 // adaptive cost formatter would change labels as values cross its thresholds.
-function formatUsageCost(n: number, decimals = 2, report?: UsageTotals["usageReport"]): string {
-  const amount = n.toLocaleString("en-US", {
+function formatUsageCost(
+  n: number,
+  decimals: 2 | 4 | 6 = 2,
+  report?: UsageTotals["usageReport"],
+): string {
+  const formatter = (costFormatters[decimals] ??= new Intl.NumberFormat("en-US", {
     minimumFractionDigits: decimals,
     maximumFractionDigits: decimals,
-  });
-  return atLeast(`$${amount}`, report);
+  }));
+  return atLeast(`$${formatter.format(n)}`, report);
 }
 
 export function formatAnalysisCost(value: number, report?: UsageTotals["usageReport"]): string {
@@ -90,16 +98,30 @@ function parseIsoDayIndex(dateStr: string): number | null {
 }
 
 function formatDayLabel(dateStr: string): string {
-  return formatCalendarDate(dateStr, { month: "short", day: "numeric" });
+  const date = parseYmdDate(dateStr);
+  if (!date) {
+    return dateStr;
+  }
+  dayLabelFormatter ??= new Intl.DateTimeFormat(undefined, {
+    month: "short",
+    day: "numeric",
+    timeZone: "UTC",
+  });
+  return dayLabelFormatter.format(date);
 }
 
 function formatFullDate(dateStr: string): string {
-  return formatCalendarDate(dateStr, { month: "long", day: "numeric", year: "numeric" });
-}
-
-function formatCalendarDate(dateStr: string, options: Intl.DateTimeFormatOptions): string {
   const date = parseYmdDate(dateStr);
-  return date ? date.toLocaleDateString(undefined, { ...options, timeZone: "UTC" }) : dateStr;
+  if (!date) {
+    return dateStr;
+  }
+  fullDateFormatter ??= new Intl.DateTimeFormat(undefined, {
+    month: "long",
+    day: "numeric",
+    year: "numeric",
+    timeZone: "UTC",
+  });
+  return fullDateFormatter.format(date);
 }
 
 function buildUsageCostWindows(
@@ -118,17 +140,24 @@ function buildUsageCostWindows(
   }
 
   const rangeDays = rangeEndDay - rangeStartDay + 1;
-  return [rangeDays, ...[1, 7, 30, 90].filter((days) => days < rangeDays)].map((days) => {
-    const startDay = rangeEndDay - days + 1;
-    const totals = createEmptyCostUsageTotals();
-    for (const entry of daily) {
-      const day = parseIsoDayIndex(entry.date);
-      if (day !== null && day >= startDay && day <= rangeEndDay) {
-        addCostUsageTotals(totals, entry);
+  const windows = [rangeDays, ...[1, 7, 30, 90].filter((days) => days < rangeDays)].map((days) => ({
+    days,
+    endDate: rangeEndDate,
+    totals: createEmptyCostUsageTotals(),
+  }));
+  for (const entry of daily) {
+    const day = parseIsoDayIndex(entry.date);
+    if (day === null || day < rangeStartDay || day > rangeEndDay) {
+      continue;
+    }
+    const daysAgo = rangeEndDay - day;
+    for (const window of windows) {
+      if (daysAgo < window.days) {
+        addCostUsageTotals(window.totals, entry);
       }
     }
-    return { days, endDate: rangeEndDate, totals };
-  });
+  }
+  return windows;
 }
 
 type UsageInsightStats = {

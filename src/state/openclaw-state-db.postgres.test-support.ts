@@ -46,6 +46,18 @@ if (parentPort) {
   try {
     installSqliteDatabaseAdmissions(input.admissions);
     const options = { path: input.path, env: input.env };
+    const writeConformance = (value: string, insert = false) =>
+      runOpenClawStateWriteTransaction(
+        ({ db }) =>
+          db
+            .prepare(
+              insert
+                ? "INSERT INTO config_machine_state (state_key, value_json, updated_at_ms) VALUES ('conformance', ?, 1)"
+                : "UPDATE config_machine_state SET value_json = ? WHERE state_key = 'conformance'",
+            )
+            .run(value),
+        options,
+      );
     if (input.mode === "migrate") {
       const lock = await acquireGatewayLock({
         env: input.env,
@@ -108,15 +120,7 @@ if (parentPort) {
       ensureUserBackgroundSchema(options);
       assert.equal(tableExists(database.db, "user_background_images"), true);
       assert.equal(tableExists(database.db, "user_profiles"), true);
-      runOpenClawStateWriteTransaction(
-        ({ db }) =>
-          db
-            .prepare(
-              "INSERT INTO config_machine_state (state_key, value_json, updated_at_ms) VALUES (?, ?, ?)",
-            )
-            .run("conformance", "before", 1),
-        options,
-      );
+      writeConformance("before", true);
       const snapshot = withOpenClawStateReadOnlyLocation(
         ({ db }) => {
           assert.equal(db.prepare("SHOW transaction_read_only").get()?.transaction_read_only, "on");

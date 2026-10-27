@@ -18,7 +18,10 @@ import {
   sidebarSnapshotScopeKey,
 } from "../pages/chat/session-snapshot-prewarm.ts";
 import { SessionSnapshotStore } from "../pages/chat/session-snapshot-store.ts";
-import { createApplicationGatewaySnapshot } from "../test-helpers/application-context-fixtures.ts";
+import {
+  createApplicationGateway,
+  createApplicationGatewaySnapshot,
+} from "../test-helpers/application-context-fixtures.ts";
 import { gatewayHelloForMethods } from "../test-helpers/gateway-methods.ts";
 import { createStorageMock } from "../test-helpers/storage.ts";
 import { parseSidebarSnapshot, type SidebarSnapshotModel } from "./sidebar-snapshot-model.ts";
@@ -39,7 +42,6 @@ const model: SidebarSnapshotModel = {
   pageScopeId: null,
   pinnedSessions: [],
   entries: ["route:usage"],
-  sessions: [],
   sections: [],
   cards: [],
   collapsedAgentIds: [],
@@ -60,14 +62,10 @@ const model: SidebarSnapshotModel = {
 function fixture(initialAgentId = "main", initialPageScopeId: string | null = null) {
   let selectedAgentId = initialAgentId;
   let pageScopeId = initialPageScopeId;
-  let snapshot: ApplicationGatewaySnapshot = createApplicationGatewaySnapshot({
-    phase: "connecting",
-  });
-  const listeners = new Set<(snapshot: ApplicationGatewaySnapshot) => void>();
-  const gateway = {
-    get snapshot() {
-      return snapshot;
-    },
+  const publication = createApplicationGateway(
+    createApplicationGatewaySnapshot({ phase: "connecting" }),
+  );
+  const gateway = Object.assign(publication.gateway, {
     connection: { gatewayUrl: scope.gatewayScope, token: "", bootstrapToken: "", password: "" },
     connectionRevision: 0,
     eventLog: [],
@@ -77,14 +75,10 @@ function fixture(initialAgentId = "main", initialPageScopeId: string | null = nu
     setSessionKey() {},
     start() {},
     stop() {},
-    subscribe(listener: (snapshot: ApplicationGatewaySnapshot) => void) {
-      listeners.add(listener);
-      return () => listeners.delete(listener);
-    },
     subscribeEventLog: () => () => {},
     subscribeEvents: () => () => {},
     loadSelfProfile: async () => null,
-  } satisfies ApplicationGateway;
+  }) satisfies ApplicationGateway;
   const restored = createDeferred();
   let saved = createDeferred();
   let settled = false;
@@ -144,8 +138,8 @@ function fixture(initialAgentId = "main", initialPageScopeId: string | null = nu
       return saved.promise;
     },
     publish(patch: Partial<ApplicationGatewaySnapshot> = {}) {
-      snapshot = {
-        ...snapshot,
+      publication.publish({
+        ...gateway.snapshot,
         phase: "connected",
         hello: {
           ...gatewayHelloForMethods([]),
@@ -153,10 +147,7 @@ function fixture(initialAgentId = "main", initialPageScopeId: string | null = nu
         },
         selfUser: { id: scope.profileId },
         ...patch,
-      };
-      for (const listener of listeners) {
-        listener(snapshot);
-      }
+      });
     },
   };
 }

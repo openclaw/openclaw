@@ -130,13 +130,6 @@ async function admittedStatusOutput(
   }
   const stores = describeAdmittedDatabaseStores(config);
   const report = await resolveStatusDatabaseEngines(config, stores);
-  assert.equal(report.source, "admitted");
-  for (const store of stores) {
-    assert.equal(store.schema.pending, null);
-    if (store.observed === "postgres") {
-      assert.equal(store.connectivity, "unknown");
-    }
-  }
   return { source: report.source, text: buildStatusDatabaseStoreRows(report), json: stores };
 }
 

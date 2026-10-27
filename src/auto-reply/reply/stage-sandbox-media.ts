@@ -27,11 +27,9 @@ import { normalizeScpRemoteHost, normalizeScpRemotePath } from "../../infra/scp-
 import { resolvePreferredOpenClawTmpDir } from "../../infra/tmp-openclaw-dir.js";
 import { resolveChannelRemoteInboundAttachmentRoots } from "../../media/channel-inbound-roots.js";
 import { resolveStagedInputMaxBytes } from "../../media/configured-max-bytes.js";
+import { buildInboundMediaUriFromPath } from "../../media/inbound-media-path.js";
 import { normalizeMediaFacts } from "../../media/media-facts.js";
-import {
-  buildInboundMediaUriFromPath,
-  resolveInboundMediaReference,
-} from "../../media/media-reference.js";
+import { resolveInboundMediaReference } from "../../media/media-reference.js";
 import {
   STAGED_INPUT_MAX_BYTES,
   STAGED_INPUT_GITIGNORE,
@@ -64,6 +62,8 @@ export async function stageSandboxMedia(params: {
   sessionKey?: string;
   workspaceDir: string;
   skillsSnapshot?: SkillSnapshot;
+  /** Borrowed from the caller, which retains and disposes its live workspace ownership. */
+  preparedWorkspace?: NonNullable<Awaited<ReturnType<typeof prepareSandboxWorkspaceForSession>>>;
   remoteMediaMode?: "sandbox-or-cache" | "cache";
   abortSignal?: AbortSignal;
   awaitSessionDiffBaseline?: () => Promise<void>;
@@ -113,8 +113,11 @@ export async function stageSandboxMedia(params: {
       : null;
   using sandboxLifetime = { [Symbol.dispose]: () => sshSandbox?.[Symbol.dispose]?.() };
   void sandboxLifetime;
-  using preparedWorkspace =
-    forceRemoteCache || sshSandbox ? null : await prepareSandboxWorkspaceForSession(sandboxParams);
+  using ownedWorkspace =
+    params.preparedWorkspace || forceRemoteCache || sshSandbox
+      ? null
+      : await prepareSandboxWorkspaceForSession(sandboxParams);
+  const preparedWorkspace = params.preparedWorkspace ?? ownedWorkspace;
   const sandbox = sshSandbox ?? preparedWorkspace?.workspace;
   const assertCurrent = () => {
     abortSignal?.throwIfAborted();
@@ -199,7 +202,8 @@ export async function stageSandboxMedia(params: {
     let downloadedMediaUri: string | undefined;
     const stageSource = async (sourcePath: string) => {
       if (!destination.bridge) {
-        // Validate before publishing the privacy marker; copyIn rechecks while streaming.
+        // Validate before publishing the privacy marker; copyIn rechecks while copying.
+        let clone: "auto" | "never";
         {
           await using opened = await openLocalFileSafely({ filePath: sourcePath });
           if (opened.stat.size > stagingMaxBytes) {
@@ -208,9 +212,12 @@ export async function stageSandboxMedia(params: {
               `file exceeds limit of ${stagingMaxBytes} bytes (got ${opened.stat.size})`,
             );
           }
+          // Small inputs cost less to copy; reserve clone setup for bulk transfers.
+          clone = opened.stat.size >= 32 * 1024 * 1024 ? "auto" : "never";
         }
         await prepareDestination();
         await destination.root.copyIn(relativeDest, sourcePath, {
+          clone,
           maxBytes: stagingMaxBytes,
           mkdir: false,
           overwrite: false,

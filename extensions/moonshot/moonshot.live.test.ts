@@ -145,6 +145,26 @@ function resolveMoonshotModels(
   return [defaultModel, { ...defaultModel, baseUrl: MOONSHOT_CN_BASE_URL }];
 }
 
+async function runMoonshotRegionScenario(
+  modelId: string,
+  fallbackMessage: string,
+  runScenario: (model: Model<"openai-completions">) => Promise<void>,
+) {
+  let lastAuthError: unknown;
+  for (const model of resolveMoonshotModels(modelId)) {
+    try {
+      await runScenario(model);
+      return;
+    } catch (error) {
+      if (!isMoonshotAuthDrift(error)) {
+        throw error;
+      }
+      lastAuthError = error;
+    }
+  }
+  throw toLintErrorObject(lastAuthError, fallbackMessage);
+}
+
 function createNoopTool(): Tool {
   return {
     name: "noop",
@@ -354,19 +374,11 @@ describeModelLive("moonshot K2.6 replay live", () => {
       expect(response.stopReason).not.toBe("error");
     };
 
-    let lastAuthError: unknown;
-    for (const model of resolveMoonshotModels("kimi-k2.6")) {
-      try {
-        await runScenario(model);
-        return;
-      } catch (error) {
-        if (!isMoonshotAuthDrift(error)) {
-          throw error;
-        }
-        lastAuthError = error;
-      }
-    }
-    throw toLintErrorObject(lastAuthError, "Moonshot K2.6 rejected the API key in both regions");
+    await runMoonshotRegionScenario(
+      "kimi-k2.6",
+      "Moonshot K2.6 rejected the API key in both regions",
+      runScenario,
+    );
   }, 180_000);
 });
 
@@ -453,21 +465,10 @@ describeModelLive("moonshot K2.7 Code live", () => {
       expect(text).toMatch(/^ok[.!]?$/i);
     };
 
-    let lastAuthError: unknown;
-    for (const model of resolveMoonshotModels("kimi-k2.7-code")) {
-      try {
-        await runScenario(model);
-        return;
-      } catch (error) {
-        if (!isMoonshotAuthDrift(error)) {
-          throw error;
-        }
-        lastAuthError = error;
-      }
-    }
-    throw toLintErrorObject(
-      lastAuthError,
+    await runMoonshotRegionScenario(
+      "kimi-k2.7-code",
       "Moonshot K2.7 Code rejected the API key in both regions",
+      runScenario,
     );
   }, 180_000);
 });
@@ -538,18 +539,10 @@ describeModelLive("moonshot K3 live", () => {
       expect(toolCall.name).toBe("noop");
     };
 
-    let lastAuthError: unknown;
-    for (const model of resolveMoonshotModels("kimi-k3")) {
-      try {
-        await runScenario(model, MOONSHOT_API_KEY);
-        return;
-      } catch (error) {
-        if (!isMoonshotAuthDrift(error)) {
-          throw error;
-        }
-        lastAuthError = error;
-      }
-    }
-    throw toLintErrorObject(lastAuthError, "Moonshot K3 rejected the API key in both regions");
+    await runMoonshotRegionScenario(
+      "kimi-k3",
+      "Moonshot K3 rejected the API key in both regions",
+      (model) => runScenario(model, MOONSHOT_API_KEY),
+    );
   }, 180_000);
 });

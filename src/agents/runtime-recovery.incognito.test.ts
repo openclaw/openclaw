@@ -36,6 +36,7 @@ import { resolveAgentRunSessionTarget } from "./run-session-target.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterAll);
 const authority = { assertCurrent() {}, authorize() {} };
+const readAuthority = { assertCurrent() {}, assertReadable() {} };
 let stateDir: string;
 let actor: ReturnType<typeof memorySessionActorOwners.get>;
 let sibling: typeof actor;
@@ -87,10 +88,7 @@ async function create(name: string, patch: Partial<SessionEntry> = {}, owner = a
     incognito: true,
     ...patch,
   };
-  const handle = await owner.acquire(
-    { database: owner.identity, sessionKey },
-    { assertCurrent() {}, assertReadable() {} },
-  );
+  const handle = await owner.acquire({ database: owner.identity, sessionKey }, readAuthority);
   bindings.set(`${owner.path}\n${sessionKey}`, {
     actor: handle,
     authority,
@@ -114,6 +112,7 @@ function recoveryRuntime(
     throw new Error("Recovery must settle without redispatch");
   });
   return {
+    prepareFailedWorkerPlacement: async () => undefined,
     prepareRestartRecovery,
     dispatchAgent: unexpected,
     dispatchSessionMethod: unexpected,
@@ -326,13 +325,12 @@ it("settles same-process recovery through its original actor after preparation y
   });
   const gate = createDeferredCore<number | undefined>();
   const entered = createDeferredCore();
-  const prepare = vi.fn(() => {
+  const prepare = () => {
     entered.resolve();
     return gate.promise;
-  });
+  };
   const recovering = recover(target, recoveryRuntime(prepare));
   await entered.promise;
-  expect(prepare).toHaveBeenCalledOnce();
   gate.resolve(undefined);
   await expect(recovering).resolves.toMatchObject({ settled: 1, failed: 0 });
   expect(readEntry(target)).toMatchObject({ status: "done", abortedLastRun: false });
@@ -375,7 +373,7 @@ it("refuses a replacement session after recovery preparation yields", async () =
     actor.closeSession(target.sessionKey);
     const replacement = await actor.acquire(
       { database: actor.identity, sessionKey: target.sessionKey },
-      { assertCurrent() {}, assertReadable() {} },
+      readAuthority,
     );
     try {
       await writeEntry(replacement, {

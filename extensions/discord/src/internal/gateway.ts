@@ -81,7 +81,12 @@ export class GatewayPlugin implements GatewayPluginContract {
   private reconnectTimeout?: NodeJS.Timeout;
   private readonly voiceStateCache = new DiscordGatewayVoiceStateCache();
   private outboundLimiter = new GatewaySendLimiter(
-    (payload) => this.sendSerializedGatewayEvent(payload),
+    (payload) => {
+      if (!this.ws || this.ws.readyState !== READY_STATE_OPEN) {
+        throw new Error("Discord gateway socket is not open");
+      }
+      this.ws.send(payload);
+    },
     (error) => this.emitter.emit("error", error),
     (warning) =>
       this.emitter.emit(
@@ -132,29 +137,6 @@ export class GatewayPlugin implements GatewayPluginContract {
     this.ws = this.createWebSocket(ensureGatewayParams(baseUrl));
     this.isConnecting = true;
     this.isConnected = false;
-    this.setupWebSocket(resume);
-  }
-
-  disconnect(): void {
-    this.shouldReconnect = false;
-    this.stopReconnectTimer();
-    this.stopHeartbeat();
-    this.outboundLimiter.clear();
-    this.ws?.close(1000, "Client disconnect");
-    this.ws = null;
-    this.isConnecting = false;
-    this.isConnected = false;
-    this.reconnectAttempts = 0;
-    this.consecutiveResumeFailures = 0;
-    this.voiceStateCache.clear();
-    this.selfUserId = null;
-  }
-
-  protected createWebSocket(url: string): ws.WebSocket {
-    return new WebSocket(url, DISCORD_GATEWAY_WS_CLIENT_OPTIONS);
-  }
-
-  private setupWebSocket(resume: boolean): void {
     const socket = this.ws;
     if (!socket) {
       return;
@@ -175,7 +157,81 @@ export class GatewayPlugin implements GatewayPluginContract {
         this.emitter.emit("error", new Error("Invalid gateway payload"));
         return;
       }
-      this.handlePayload(payload, resume, socket);
+      if (payload.s !== null && payload.s !== undefined) {
+        this.sequence = payload.s;
+      }
+      switch (payload.op) {
+        case GatewayOpcodes.Hello: {
+          const intervalMs =
+            asSafeIntegerInRange(asOptionalRecord(payload.d)?.heartbeat_interval, {
+              min: 1,
+              max: MAX_TIMER_TIMEOUT_MS,
+            }) ?? 45_000;
+          this.stopHeartbeat();
+          const scheduleHeartbeatCycle = () => {
+            this.heartbeatInterval = setTimeout(() => {
+              this.heartbeatInterval = undefined;
+              if (!this.lastHeartbeatAck) {
+                this.emitter.emit("error", new Error("Gateway heartbeat ACK timeout"));
+                this.scheduleReconnect({ reason: "zombie", preferResume: true });
+                return;
+              }
+              this.sendHeartbeat();
+              scheduleHeartbeatCycle();
+            }, intervalMs);
+            this.heartbeatInterval.unref();
+          };
+          this.firstHeartbeatTimeout = setTimeout(
+            () => {
+              this.firstHeartbeatTimeout = undefined;
+              this.sendHeartbeat();
+              scheduleHeartbeatCycle();
+            },
+            Math.max(0, intervalMs * Math.random()),
+          );
+          this.firstHeartbeatTimeout.unref();
+          const resumeState = resume ? this.getResumeState() : null;
+          if (resumeState) {
+            this.send(
+              {
+                op: GatewayOpcodes.Resume,
+                d: {
+                  token: this.client?.options.token ?? "",
+                  session_id: resumeState.sessionId,
+                  seq: resumeState.sequence,
+                },
+              },
+              true,
+            );
+          } else {
+            void this.identifyWithConcurrency(socket).catch(this.emitAsyncError);
+          }
+          break;
+        }
+        case GatewayOpcodes.HeartbeatAck:
+          this.lastHeartbeatAck = true;
+          break;
+        case GatewayOpcodes.Heartbeat:
+          this.sendHeartbeat();
+          break;
+        case GatewayOpcodes.Dispatch:
+          void this.handleDispatch(payload).catch(this.emitAsyncError);
+          break;
+        case GatewayOpcodes.InvalidSession:
+          if (!payload.d) {
+            this.resetSessionState();
+          }
+          this.scheduleReconnect({
+            reason: "invalid-session",
+            preferResume: payload.d,
+            minDelayMs:
+              INVALID_SESSION_MIN_DELAY_MS + Math.floor(Math.random() * INVALID_SESSION_JITTER_MS),
+          });
+          break;
+        case GatewayOpcodes.Reconnect:
+          this.scheduleReconnect({ reason: "reconnect-opcode", preferResume: true });
+          break;
+      }
     });
     socket.on("close", (code) => {
       if (socket !== this.ws) {
@@ -213,64 +269,23 @@ export class GatewayPlugin implements GatewayPluginContract {
     });
   }
 
-  private handlePayload(
-    payload: GatewayReceivePayload,
-    resume: boolean,
-    sourceSocket?: ws.WebSocket,
-  ): void {
-    if (payload.s !== null && payload.s !== undefined) {
-      this.sequence = payload.s;
-    }
-    switch (payload.op) {
-      case GatewayOpcodes.Hello: {
-        this.startHeartbeat(
-          asSafeIntegerInRange(asOptionalRecord(payload.d)?.heartbeat_interval, {
-            min: 1,
-            max: MAX_TIMER_TIMEOUT_MS,
-          }) ?? 45_000,
-        );
-        const resumeState = resume ? this.getResumeState() : null;
-        if (resumeState) {
-          this.send(
-            {
-              op: GatewayOpcodes.Resume,
-              d: {
-                token: this.client?.options.token ?? "",
-                session_id: resumeState.sessionId,
-                seq: resumeState.sequence,
-              },
-            },
-            true,
-          );
-        } else {
-          void this.identifyWithConcurrency(sourceSocket).catch(this.emitAsyncError);
-        }
-        break;
-      }
-      case GatewayOpcodes.HeartbeatAck:
-        this.lastHeartbeatAck = true;
-        break;
-      case GatewayOpcodes.Heartbeat:
-        this.sendHeartbeat();
-        break;
-      case GatewayOpcodes.Dispatch:
-        void this.handleDispatch(payload).catch(this.emitAsyncError);
-        break;
-      case GatewayOpcodes.InvalidSession:
-        if (!payload.d) {
-          this.resetSessionState();
-        }
-        this.scheduleReconnect({
-          reason: "invalid-session",
-          preferResume: payload.d,
-          minDelayMs:
-            INVALID_SESSION_MIN_DELAY_MS + Math.floor(Math.random() * INVALID_SESSION_JITTER_MS),
-        });
-        break;
-      case GatewayOpcodes.Reconnect:
-        this.scheduleReconnect({ reason: "reconnect-opcode", preferResume: true });
-        break;
-    }
+  disconnect(): void {
+    this.shouldReconnect = false;
+    this.stopReconnectTimer();
+    this.stopHeartbeat();
+    this.outboundLimiter.clear();
+    this.ws?.close(1000, "Client disconnect");
+    this.ws = null;
+    this.isConnecting = false;
+    this.isConnected = false;
+    this.reconnectAttempts = 0;
+    this.consecutiveResumeFailures = 0;
+    this.voiceStateCache.clear();
+    this.selfUserId = null;
+  }
+
+  protected createWebSocket(url: string): ws.WebSocket {
+    return new WebSocket(url, DISCORD_GATEWAY_WS_CLIENT_OPTIONS);
   }
 
   private emitAsyncError = (error: unknown): void => {
@@ -279,32 +294,6 @@ export class GatewayPlugin implements GatewayPluginContract {
       error instanceof Error ? error : new Error(String(error), { cause: error }),
     );
   };
-
-  private startHeartbeat(intervalMs: number): void {
-    this.stopHeartbeat();
-    const scheduleHeartbeatCycle = () => {
-      this.heartbeatInterval = setTimeout(() => {
-        this.heartbeatInterval = undefined;
-        if (!this.lastHeartbeatAck) {
-          this.emitter.emit("error", new Error("Gateway heartbeat ACK timeout"));
-          this.scheduleReconnect({ reason: "zombie", preferResume: true });
-          return;
-        }
-        this.sendHeartbeat();
-        scheduleHeartbeatCycle();
-      }, intervalMs);
-      this.heartbeatInterval.unref();
-    };
-    this.firstHeartbeatTimeout = setTimeout(
-      () => {
-        this.firstHeartbeatTimeout = undefined;
-        this.sendHeartbeat();
-        scheduleHeartbeatCycle();
-      },
-      Math.max(0, intervalMs * Math.random()),
-    );
-    this.firstHeartbeatTimeout.unref();
-  }
 
   private stopHeartbeat(): void {
     for (const key of ["heartbeatInterval", "firstHeartbeatTimeout"] as const) {
@@ -326,7 +315,16 @@ export class GatewayPlugin implements GatewayPluginContract {
     this.send({ op: GatewayOpcodes.Heartbeat, d: this.sequence }, true);
   }
 
-  private identify(): void {
+  private async identifyWithConcurrency(sourceSocket?: ws.WebSocket): Promise<void> {
+    await sharedGatewayIdentifyLimiter.wait();
+    const socket = sourceSocket ?? this.ws;
+    if (!socket || socket !== this.ws) {
+      return;
+    }
+    if (socket.readyState !== READY_STATE_OPEN) {
+      this.scheduleReconnect({ reason: "identify", preferResume: false });
+      return;
+    }
     this.send(
       {
         op: GatewayOpcodes.Identify,
@@ -338,19 +336,6 @@ export class GatewayPlugin implements GatewayPluginContract {
       },
       true,
     );
-  }
-
-  private async identifyWithConcurrency(sourceSocket?: ws.WebSocket): Promise<void> {
-    await sharedGatewayIdentifyLimiter.wait();
-    const socket = sourceSocket ?? this.ws;
-    if (!socket || socket !== this.ws) {
-      return;
-    }
-    if (socket.readyState !== READY_STATE_OPEN) {
-      this.scheduleReconnect({ reason: "identify", preferResume: false });
-      return;
-    }
-    this.identify();
   }
 
   send(payload: GatewaySendPayload | GatewayReceivePayload, skipRateLimit = false): void {
@@ -365,13 +350,6 @@ export class GatewayPlugin implements GatewayPluginContract {
       );
     }
     this.outboundLimiter.send(serialized, { critical: skipRateLimit });
-  }
-
-  private sendSerializedGatewayEvent(serialized: string): void {
-    if (!this.ws || this.ws.readyState !== READY_STATE_OPEN) {
-      throw new Error("Discord gateway socket is not open");
-    }
-    this.ws.send(serialized);
   }
 
   private async handleDispatch(payload: GatewayDispatchPayload): Promise<void> {

@@ -1,4 +1,3 @@
-import * as toolSchema from "@openclaw/ai/internal/tool-schema";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { CapabilityModelProviderCandidate } from "../../../packages/media-generation-core/src/capability-model-ref.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
@@ -7,8 +6,6 @@ import type { ModelDefinitionConfig } from "../../config/types.models.js";
 import { buildMediaUnderstandingRegistry } from "../../media-understanding/provider-registry.js";
 import type { MediaUnderstandingProvider } from "../../media-understanding/types.js";
 import type { ImageDescriptionRequest } from "../../plugin-sdk/media-understanding.js";
-import { clearPluginMetadataLifecycleCaches } from "../../plugins/plugin-metadata-lifecycle.js";
-import { finalizeAgentTools } from "../agent-tools.finalize.js";
 import { createAuthProfileStoreFixture } from "../auth-profiles/credential-fixtures.test-support.js";
 import { getApiKeyForModelCore, hasUsableCustomProviderApiKey } from "../model-auth.js";
 import { resolveImageToolFactoryAvailable } from "../openclaw-tools.media-factory-plan.js";
@@ -64,14 +61,9 @@ function makeVisionModel(id: string) {
   } satisfies ModelDefinitionConfig;
 }
 
-function createUserReportedConfig(params?: { includeApiKey?: boolean }): OpenClawConfig {
-  const includeApiKey = params?.includeApiKey ?? true;
+function createUserReportedConfig(includeApiKey = true): OpenClawConfig {
   return {
-    agents: {
-      defaults: {
-        model: { primary: USER_PRIMARY },
-      },
-    },
+    agents: { defaults: { model: { primary: USER_PRIMARY } } },
     models: {
       providers: {
         [USER_PROVIDER]: {
@@ -84,7 +76,6 @@ function createUserReportedConfig(params?: { includeApiKey?: boolean }): OpenCla
     },
   };
 }
-
 function createBedrockSdkConfig(): OpenClawConfig {
   return {
     agents: { defaults: { model: { primary: `${BEDROCK_PROVIDER}/text-1` } } },
@@ -106,6 +97,17 @@ const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 describe("image custom provider auth regression", () => {
   let agentDir: string;
+  const tool = (config: OpenClawConfig, modelHasVision?: boolean) =>
+    createImageTool({
+      config,
+      agentDir,
+      modelHasVision,
+      authProfileStore: createAuthProfileStoreFixture({}),
+    })!;
+  const imageInput = {
+    prompt: "Read this screenshot.",
+    path: `data:image/png;base64,${ONE_PIXEL_PNG_B64}`,
+  };
 
   beforeEach(() => {
     agentDir = tempDirs.make("openclaw-image-auth-regression-");
@@ -143,39 +145,17 @@ describe("image custom provider auth regression", () => {
   });
 
   it.each([false, true])(
-    "reuses published schemas for vision=%s across runs and sessions",
+    "exposes a model override only without native vision (%s)",
     (modelHasVision) => {
-      clearPluginMetadataLifecycleCaches();
-      const config = createUserReportedConfig();
-      const construct = (sessionId: string) =>
-        finalizeAgentTools({
-          tools: [createRequiredImageTool({ config, agentDir, modelHasVision })],
-          config,
-          hookContext: { sessionId },
-          modelProvider: "openai",
-          modelApi: "openai-responses",
-          wrapBeforeToolCallHook: false,
-        })[0]!;
-      const cold = construct("image-schema-first");
+      const { parameters } = createRequiredImageTool({
+        config: createUserReportedConfig(),
+        agentDir,
+        modelHasVision,
+      });
       if (modelHasVision) {
-        expect(cold.parameters).not.toHaveProperty("properties.model");
+        expect(parameters).not.toHaveProperty("properties.model");
       } else {
-        expect(cold.parameters).toHaveProperty("properties.model");
-      }
-      const bytes = JSON.stringify(cold.parameters);
-      const publish = vi.spyOn(toolSchema, "publishRuntimeToolInputSchema");
-      try {
-        for (const sessionId of [
-          "image-schema-first",
-          "image-schema-second",
-          "image-schema-third",
-        ]) {
-          expect(JSON.stringify(construct(sessionId).parameters)).toBe(bytes);
-        }
-        expect(publish).not.toHaveBeenCalled();
-      } finally {
-        publish.mockRestore();
-        clearPluginMetadataLifecycleCaches();
+        expect(parameters).toHaveProperty("properties.model");
       }
     },
   );
@@ -188,12 +168,7 @@ describe("image custom provider auth regression", () => {
     const cfg = createBedrockSdkConfig();
 
     expect(hasProviderAuthForTool({ provider: BEDROCK_PROVIDER, cfg })).toBe(true);
-    const tool = createImageTool({
-      config: cfg,
-      agentDir,
-      authProfileStore: createAuthProfileStoreFixture({}),
-    });
-    const result = await tool!.execute("bedrock-sdk", {
+    const result = await tool(cfg).execute("bedrock-sdk", {
       path: `data:image/png;base64,${ONE_PIXEL_PNG_B64}`,
     });
     expect(result.content).toContainEqual({
@@ -212,6 +187,7 @@ describe("image custom provider auth regression", () => {
   it("executes deferred fallback discovery with config-backed auth and runtime key resolution", async () => {
     // Deferred execution resolves credentials stored in config after registration.
     const cfg = createUserReportedConfig();
+    expect(hasProviderAuthForTool({ provider: USER_PROVIDER, cfg })).toBe(true);
     const auth = await getApiKeyForModelCore({
       model: {
         ...makeVisionModel(USER_MODEL),
@@ -226,44 +202,20 @@ describe("image custom provider auth regression", () => {
     expect(auth.apiKey).toBe(CONFIG_API_KEY);
     expect(auth.source).toContain("models.json");
 
-    const tool = createImageTool({
-      config: cfg,
-      agentDir,
-      modelHasVision: false,
-      authProfileStore: createAuthProfileStoreFixture({}),
-    });
-    expect(typeof tool?.execute).toBe("function");
-    expect(tool?.name).toBe("view_image");
-
-    const result = await tool!.execute("regression-1", {
-      prompt: "Read this screenshot.",
-      path: `data:image/png;base64,${ONE_PIXEL_PNG_B64}`,
-    });
-
-    const payload = result as { content?: Array<{ type?: string; text?: string }> };
-    const text = payload.content?.find((entry) => entry.type === "text")?.text ?? "";
+    const imageTool = tool(cfg, false);
+    const result = await imageTool.execute("regression-1", imageInput);
+    const text = result.content.find((entry) => entry.type === "text")?.text ?? "";
     expect(text).toContain(`seen:${USER_PRIMARY}`);
-    expect(text).not.toMatch(/No image model is configured/i);
-    expect(mediaRuntimeMock.optimizeImageBufferForWebMedia).toHaveBeenCalledTimes(1);
   });
 
   it("still rejects the same fallback config when apiKey is missing", async () => {
-    const cfg = createUserReportedConfig({ includeApiKey: false });
+    const cfg = createUserReportedConfig(false);
     expect(hasUsableCustomProviderApiKey(cfg, USER_PROVIDER)).toBe(false);
     expect(hasProviderAuthForTool({ provider: USER_PROVIDER, cfg })).toBe(false);
 
-    const tool = createImageTool({
-      config: cfg,
-      agentDir,
-      modelHasVision: false,
-      authProfileStore: createAuthProfileStoreFixture({}),
-    });
-    await expect(
-      tool!.execute("regression-2", {
-        prompt: "Read this screenshot.",
-        path: `data:image/png;base64,${ONE_PIXEL_PNG_B64}`,
-      }),
-    ).rejects.toThrow(/No image model is configured/);
+    await expect(tool(cfg, false).execute("regression-2", imageInput)).rejects.toThrow(
+      /No image model is configured/,
+    );
   });
 });
 

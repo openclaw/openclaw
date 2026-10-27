@@ -1,6 +1,7 @@
 import { measuredRequestPressure } from "@openclaw/ai/internal/openai";
 import type { FirstStreamEventInternalOptions } from "@openclaw/ai/internal/runtime";
 import type { CompactionReplayRejection } from "@openclaw/ai/transports";
+import { setInternalRepetitionGuard } from "../../../../packages/agent-core/src/internal-hooks.js";
 import { resolveDiagnosticModelContentCapturePolicy } from "../../../infra/diagnostic-llm-content.js";
 import { DEFAULT_UNDICI_STREAM_TIMEOUT_MS } from "../../../infra/net/undici-global-dispatcher.js";
 import type { AssistantMessage } from "../../../llm/types.js";
@@ -16,7 +17,6 @@ import { shouldAllowProviderOwnedThinkingReplay } from "../../embedded-agent-hel
 import { wrapStreamFnTextTransforms } from "../../plugin-text-transforms.js";
 import { resolveModelCallUrgency } from "../../run-trigger.js";
 import type { StreamFn } from "../../runtime/index.js";
-import { setInternalRepetitionGuard } from "../../runtime/internal-hooks.js";
 import { withSessionManagerWrite } from "../../sessions/session-manager-write-admission.js";
 import { resolveAgentTimeoutMs } from "../../timeout.js";
 import { UNKNOWN_TOOL_THRESHOLD } from "../../tool-loop-detection.js";
@@ -41,7 +41,6 @@ import {
 } from "./attempt-sessions-yield.js";
 import { wrapStreamFnHandleSensitiveStopReason } from "./attempt-stop-reason-recovery.js";
 import {
-  sanitizeOpenAIResponsesReplayForStream,
   sanitizeReplayToolCallIdsForStream,
   shouldApplyReplayToolCallIdSanitizer,
   wrapStreamFnSanitizeMalformedToolCalls,
@@ -101,7 +100,7 @@ function wrapStreamFnWithCompactionReplayRepair(
       await joinRepairs();
       throw error;
     }
-    return wrapStreamObjectSettlement(response, joinRepairs);
+    return wrapStreamObjectSettlement(response, joinRepairs, () => repairs.length > 0);
   };
 }
 
@@ -215,6 +214,7 @@ export function installEmbeddedAttemptStreamGuards(
       cacheRetention: effectivePromptCacheRetention,
       streamStrategy,
       transport: effectiveAgentTransport,
+      getSystemPromptSeries: () => input.prepared.sessionRuntime.state.systemPromptSeries,
     },
     (observation, snapshot) => {
       if (observation.broke) {
@@ -227,6 +227,9 @@ export function installEmbeddedAttemptStreamGuards(
             `requestGapMs=${observation.requestGapMs ?? "unknown"} promptTokens=${observation.promptTokens ?? "unknown"} ` +
             `responseId=${observation.responseId ?? "unknown"} sessionId=${attempt.sessionId} ` +
             `${turnFacts} ` +
+            (observation.systemPromptSeries
+              ? `systemPromptSeries=${observation.systemPromptSeries} `
+              : "") +
             `providerPrefix=${observation.providerPrefix ?? "unavailable"} ` +
             `requests=${JSON.stringify(observation.requests)}`,
         );
@@ -306,9 +309,6 @@ export function installEmbeddedAttemptStreamGuards(
       repairRejectedReplay("compaction", checkpoint),
     );
   }
-  if (isOpenAIResponsesApi) {
-    installStreamWrapper(wrapStreamFnWithMessageTransform, sanitizeOpenAIResponsesReplayForStream);
-  }
 
   const innerStreamFn = session.agent.streamFn;
   session.agent.streamFn = (model, context, options) => {
@@ -387,9 +387,11 @@ export function installEmbeddedAttemptStreamGuards(
       streamWithIdleTimeout,
       idleTimeoutMs > 0 ? idleTimeoutMs : firstEventTimeoutMs,
       (error) => callbacks.onIdleTimeout(error),
-      idleTimeoutMs > 0
-        ? { runId: attempt.runId }
-        : { runId: attempt.runId, scope: "creation-only" },
+      {
+        runId: attempt.runId,
+        watchdogAttempt: callbacks.diagnosticOwner.watchdogAttempt,
+        scope: idleTimeoutMs > 0 ? "creation-and-gaps" : "creation-only",
+      },
     );
   }
   if (firstEventTimeoutMs > 0) {

@@ -6,9 +6,16 @@ import {
   resolveAttachmentSource,
   readAttachmentSource,
 } from "./chat-message-attachment-source.ts";
-import { releaseChatMediaResourceOwner, type AttachmentItem } from "./chat-message-media.ts";
+import {
+  releaseChatMediaResourceOwner,
+  type AttachmentItem,
+  type ImageRenderOptions,
+} from "./chat-message-media.ts";
 
 const subscribers: (() => void)[] = [];
+function expectAvailable(actual: ReturnType<typeof resolveAttachmentSource>, src: string) {
+  expect(actual).toMatchObject({ status: "available", source: { src } });
+}
 afterEach(() => {
   subscribers.splice(0).forEach(releaseChatMediaResourceOwner);
   vi.useRealTimers();
@@ -49,12 +56,9 @@ it("shares a managed artifact read across URL aliases without sharing other targ
   const url = "/api/chat/media/outgoing/agent%3Amain%3Aone/recording/full?mediaTicket=fresh";
   response.resolve({ url, expiresAt: "2099-01-01T00:00:00.000Z" });
   await response.promise;
-  expect(first()).toMatchObject({ status: "available", source: { src: url } });
-  expect(second()).toMatchObject({ status: "available", source: { src: url } });
-  expect(source("agent:main:one", "third")()).toMatchObject({
-    status: "available",
-    source: { src: url },
-  });
+  expectAvailable(first(), url);
+  expectAvailable(second(), url);
+  expectAvailable(source("agent:main:one", "third")(), url);
   expect(resolveArtifactDownload).toHaveBeenCalledOnce();
 
   expect(source("agent:main:two", "other-session")().status).toBe("checking");
@@ -113,12 +117,16 @@ function preparedFixture(id: string) {
   };
   const expiresAt = new Date(Date.now() + 300_000).toISOString();
   const controller = new AbortController();
-  const receipt = prepareManagedAttachmentGrant(
-    { sessionKey, artifactId: id, connectionEpoch: 31 },
-    controller.signal,
-  );
-  onTestFinished(receipt.release);
-  const subscriber = vi.fn();
+  const prepare = (signal = new AbortController().signal) => {
+    const receipt = prepareManagedAttachmentGrant(
+      { sessionKey, artifactId: id, connectionEpoch: 31 },
+      signal,
+    );
+    onTestFinished(receipt.release);
+    return receipt;
+  };
+  const receipt = prepare(controller.signal);
+  const subscriber = () => {};
   subscribers.push(subscriber);
   const resolveArtifactDownload = vi.fn(async () => ({
     url: attachment.url.replace("mediaTicket=prepared", "mediaTicket=renewed"),
@@ -130,39 +138,37 @@ function preparedFixture(id: string) {
     expiresAt,
     controller,
     receipt,
-    subscriber,
     resolveArtifactDownload,
-    options,
+    prepare,
+    read: (overrides: Partial<ImageRenderOptions> = {}) =>
+      resolveAttachmentSource(attachment, { ...options, ...overrides }),
+    admit: () => {
+      admitManagedAttachmentGrant(receipt, attachment, expiresAt);
+      receipt.release();
+    },
   };
 }
 
 it("adopts a prepared grant without another request, then renews it at expiry", async () => {
   const fixture = preparedFixture("prepared-renewal");
-  admitManagedAttachmentGrant(fixture.receipt, fixture.attachment, fixture.expiresAt);
-  fixture.receipt.release();
-  expect(resolveAttachmentSource(fixture.attachment, fixture.options)).toMatchObject({
-    status: "available",
-    source: { src: fixture.attachment.url },
-  });
+  fixture.admit();
+  expectAvailable(fixture.read(), fixture.attachment.url);
   expect(fixture.resolveArtifactDownload).not.toHaveBeenCalled();
   vi.setSystemTime(Date.parse(fixture.expiresAt) + 1);
-  expect(resolveAttachmentSource(fixture.attachment, fixture.options).status).toBe("checking");
+  expect(fixture.read().status).toBe("checking");
   await Promise.resolve();
   await fixture.resolveArtifactDownload.mock.results[0]?.value;
-  expect(resolveAttachmentSource(fixture.attachment, fixture.options)).toMatchObject({
-    status: "available",
-    source: { src: fixture.attachment.url.replace("mediaTicket=prepared", "mediaTicket=renewed") },
-  });
+  expectAvailable(
+    fixture.read(),
+    fixture.attachment.url.replace("mediaTicket=prepared", "mediaTicket=renewed"),
+  );
   expect(fixture.resolveArtifactDownload).toHaveBeenCalledOnce();
 });
 
 it("keeps a prepared grant isolated from a replacement connection", async () => {
   const fixture = preparedFixture("prepared-reconnect");
-  admitManagedAttachmentGrant(fixture.receipt, fixture.attachment, fixture.expiresAt);
-  fixture.receipt.release();
-  expect(
-    resolveAttachmentSource(fixture.attachment, { ...fixture.options, connectionEpoch: 32 }).status,
-  ).toBe("checking");
+  fixture.admit();
+  expect(fixture.read({ connectionEpoch: 32 }).status).toBe("checking");
   await Promise.resolve();
   await fixture.resolveArtifactDownload.mock.results[0]?.value;
   expect(fixture.resolveArtifactDownload).toHaveBeenCalledOnce();
@@ -171,62 +177,43 @@ it("keeps a prepared grant isolated from a replacement connection", async () => 
 it("does not replace newer denied authority with an older prepared result", async () => {
   const fixture = preparedFixture("prepared-denied");
   const denied = vi.fn(async () => null);
-  const options = { ...fixture.options, resolveArtifactDownload: denied };
-  expect(resolveAttachmentSource(fixture.attachment, options).status).toBe("checking");
+  const read = () => fixture.read({ resolveArtifactDownload: denied });
+  expect(read().status).toBe("checking");
   await Promise.resolve();
   await denied.mock.results[0]?.value;
-  expect(resolveAttachmentSource(fixture.attachment, options).status).toBe("unavailable");
-  admitManagedAttachmentGrant(fixture.receipt, fixture.attachment, fixture.expiresAt);
-  fixture.receipt.release();
-  expect(resolveAttachmentSource(fixture.attachment, options).status).toBe("unavailable");
+  expect(read().status).toBe("unavailable");
+  fixture.admit();
+  expect(read().status).toBe("unavailable");
   expect(denied).toHaveBeenCalledOnce();
 });
 
 it("retires an aborted receipt even when its empty resource is recreated", () => {
   const fixture = preparedFixture("prepared-retired");
   fixture.controller.abort();
-  const replacement = prepareManagedAttachmentGrant(
-    {
-      sessionKey: "agent:main:prepared",
-      artifactId: fixture.attachment.artifactId!,
-      connectionEpoch: 31,
-    },
-    new AbortController().signal,
-  );
-  onTestFinished(replacement.release);
+  fixture.prepare();
   admitManagedAttachmentGrant(fixture.receipt, fixture.attachment, fixture.expiresAt);
-  expect(resolveAttachmentSource(fixture.attachment, fixture.options).status).toBe("checking");
+  expect(fixture.read().status).toBe("checking");
 });
 
 it("does not admit a prepared grant over an in-flight renewal", async () => {
   const fixture = preparedFixture("prepared-pending");
   const response = Promise.withResolvers<{ url: string; expiresAt: string }>();
   const resolver = vi.fn(() => response.promise);
-  const options = { ...fixture.options, resolveArtifactDownload: resolver };
-  expect(resolveAttachmentSource(fixture.attachment, options).status).toBe("checking");
+  const read = () => fixture.read({ resolveArtifactDownload: resolver });
+  expect(read().status).toBe("checking");
   await Promise.resolve();
-  const pendingReceipt = prepareManagedAttachmentGrant(
-    {
-      sessionKey: "agent:main:prepared",
-      artifactId: fixture.attachment.artifactId!,
-      connectionEpoch: 31,
-    },
-    new AbortController().signal,
-  );
-  onTestFinished(pendingReceipt.release);
+  const pendingReceipt = fixture.prepare();
   admitManagedAttachmentGrant(pendingReceipt, fixture.attachment, fixture.expiresAt);
-  expect(resolveAttachmentSource(fixture.attachment, options).status).toBe("checking");
+  expect(read().status).toBe("checking");
   response.resolve({
     url: fixture.attachment.url.replace("mediaTicket=prepared", "mediaTicket=pending-owner"),
     expiresAt: fixture.expiresAt,
   });
   await response.promise;
-  expect(resolveAttachmentSource(fixture.attachment, options)).toMatchObject({
-    status: "available",
-    source: {
-      src: fixture.attachment.url.replace("mediaTicket=prepared", "mediaTicket=pending-owner"),
-    },
-  });
+  expectAvailable(
+    read(),
+    fixture.attachment.url.replace("mediaTicket=prepared", "mediaTicket=pending-owner"),
+  );
   expect(resolver).toHaveBeenCalledOnce();
 });
 

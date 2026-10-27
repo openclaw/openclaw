@@ -1,17 +1,9 @@
 /** Shared prompt delivery for embedded tool-start handlers and self-publishing harnesses. */
 import type { QuestionRequestQuestion } from "../../../packages/gateway-protocol/src/index.js";
 import type { ReplyPayload } from "../../auto-reply/reply-payload.js";
-import {
-  durableMessageBatchMayHaveReachedRecipient,
-  sendDurableMessageBatchCore,
-} from "../../channels/message/runtime.js";
 import { resolveControlUiSessionLinkBase } from "../../config/control-ui-link-base.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { runWithQuestionChannelDeliveries } from "../../infra/question-channel-runtime.js";
-import {
-  isDeliverableMessageChannel,
-  normalizeMessageChannel,
-} from "../../utils/message-channel-normalize.js";
 import { buildAgentHarnessQuestionPromptPayload } from "../harness/user-input-bridge.js";
 
 /** Tools whose call opens a question a person must answer before the turn continues. */
@@ -31,52 +23,6 @@ export type QuestionPromptDelivery = {
 
 /** Host-generated capability guidance that is safe to return to the model. */
 export class QuestionPromptUnavailableError extends Error {}
-
-/** Builds a portable prompt sender for Gateway-scoped / loopback tool construction. */
-export function createChannelQuestionPromptDelivery(params: {
-  cfg: OpenClawConfig;
-  channel?: string | null;
-  to?: string | number | null;
-  accountId?: string;
-  threadId?: string | number | null;
-}): QuestionPromptDelivery | undefined {
-  const cfg = params.cfg;
-  const channel = normalizeMessageChannel(params.channel);
-  const to = params.to?.toString().trim();
-  if (!channel || !to || !isDeliverableMessageChannel(channel)) {
-    return undefined;
-  }
-  return {
-    messageChannel: channel,
-    send: async (payload, options) => {
-      const send = await sendDurableMessageBatchCore({
-        cfg,
-        channel,
-        to,
-        accountId: params.accountId,
-        threadId: params.threadId ?? undefined,
-        payloads: [payload],
-        bestEffort: false,
-        durability: "required",
-        deliveryRetryOwner: "caller",
-        signal: options?.signal,
-      });
-      // Fail closed when the durable batch did not reach the chat. ask_user then
-      // cancels instead of waiting on Control UI after a suppressed or failed send.
-      if (durableMessageBatchMayHaveReachedRecipient(send)) {
-        return;
-      }
-      if (send.status === "failed") {
-        throw send.error;
-      }
-      throw new Error(
-        send.status === "suppressed"
-          ? `question prompt delivery was suppressed: ${send.reason}`
-          : "question prompt delivery did not reach the conversation",
-      );
-    },
-  };
-}
 
 /**
  * Publishes the prompt for an already-committed gateway question record.

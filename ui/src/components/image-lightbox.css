@@ -178,8 +178,7 @@ openclaw-image-lightbox {
     height: 100%;
     min-height: 0;
     min-width: 0;
-    display: grid;
-    place-items: center;
+    display: flex;
   }
 
   .navigation {
@@ -274,6 +273,8 @@ openclaw-image-lightbox {
   }
 
   .image {
+    /* Panzoom uses resolved margins to locate the pointer's zoom focal point. */
+    margin: auto;
     width: auto;
     cursor: zoom-in;
     -webkit-user-drag: none;

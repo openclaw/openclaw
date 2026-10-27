@@ -5,18 +5,10 @@ import {
   updateConfigFormValue,
 } from "../lib/config/config-draft-model.ts";
 import { createInitialConfigState } from "../lib/config/config-state-model.ts";
-import { renderAnalyzedFormFixture } from "../test-helpers/config-form-fixtures.tsx";
+import { expectElement, renderAnalyzedFormFixture } from "../test-helpers/config-form-fixtures.tsx";
 import { flush } from "../test-helpers/solid-settle.ts";
 import { analyzeConfigSchema } from "./config-form.analyze.ts";
 import type { JsonSchema } from "./config-form.shared.ts";
-
-function expectElement<T extends Element>(element: T | null | undefined, label: string): T {
-  expect(element instanceof Element, label).toBe(true);
-  if (!(element instanceof Element)) {
-    throw new Error(`missing ${label}`);
-  }
-  return element;
-}
 
 describe("config form map integrity", () => {
   it.each(["agent"])(

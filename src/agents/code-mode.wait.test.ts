@@ -1,6 +1,6 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { Type } from "typebox";
-import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
+import { afterEach, expect, it, vi } from "vitest";
 import { runWithAgentToolExecutionContext } from "../../packages/agent-core/src/tool-execution-context.js";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { emitAgentEvent } from "../infra/agent-events.js";
@@ -504,34 +504,20 @@ it.each([-60_000, 60_000])(
   },
 );
 
-describe("suspended-run owner scope", () => {
-  const identities = ["runId", "sessionId", "sessionKey", "agentId"] as const;
-  const rejections = new Map<(typeof identities)[number], string>();
-  let rightfulResult: Record<string, unknown>;
-  beforeAll(async () => {
+it.each(["runId", "sessionId", "sessionKey", "agentId"] as const)(
+  "rejects suspended-run callers missing the owner %s",
+  async (missing) => {
     const { ctx, run, resume } = harness([pluginTool("fake_noop", "Noop")], { agentId: "owner" });
     const first = await run('await yield_control("pause"); return "owner-secret";', "scoped");
     expect(first.status).toBe("waiting");
-    for (const missing of identities) {
-      const foreign = createCodeModeTools({ ...ctx, [missing]: undefined })[1]!;
-      rejections.set(
-        missing,
-        await foreign.execute("missing-owner", { runId: first.runId }).then(
-          () => "unexpected success",
-          (error: unknown) => (error instanceof Error ? error.message : String(error)),
-        ),
-      );
-      expect(testing.activeRuns.has(first.runId as string)).toBe(true);
-    }
-    rightfulResult = await resume(first, "rightful-owner");
-  });
-  it.each(identities)("rejects suspended-run callers missing the owner %s", (missing) => {
-    expect(rejections.get(missing)).toContain(
+    const foreign = createCodeModeTools({ ...ctx, [missing]: undefined })[1]!;
+    await expect(foreign.execute("missing-owner", { runId: first.runId })).rejects.toThrow(
       missing === "runId" ? "different agent run" : "different session",
     );
-    expectCompleted(rightfulResult, "owner-secret");
-  });
-});
+    expect(testing.activeRuns.has(String(first.runId))).toBe(true);
+    expectCompleted(await resume(first, "rightful-owner"), "owner-secret");
+  },
+);
 
 it("rejects concurrent waits for the same suspended run", async () => {
   const { run, resume, wait } = harness([]);

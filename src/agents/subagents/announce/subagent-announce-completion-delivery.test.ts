@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import {
   readOperatorToolGatewayAuthority,
   runWithOperatorToolGatewayAuthority,
@@ -80,9 +80,8 @@ it.each([
         },
       }),
     });
-    const observedAuthority = vi.fn();
     dispatch.mockImplementation(async () => {
-      observedAuthority(readOperatorToolGatewayAuthority()?.operatorRunAuthority);
+      expect(readOperatorToolGatewayAuthority()?.operatorRunAuthority).toBeUndefined();
       return { status: "ok" };
     });
     try {
@@ -96,7 +95,6 @@ it.each([
       );
       if (current) {
         await expect(delivery).resolves.toEqual({ status: "ok" });
-        expect(observedAuthority).toHaveBeenCalledWith(undefined);
       } else {
         await expect(delivery).rejects.toThrow("continuation owner retired");
         expect(dispatch).not.toHaveBeenCalled();
@@ -145,26 +143,85 @@ it.each(["commit", "failure", "revocation"] as const)(
   },
 );
 
-describe("hasFailedSubagentNoOutputCompletion", () => {
-  it.each([
-    ["absent", { noVisibleResult: true }, true],
-    ["reworded", { noVisibleResult: true, result: "(nothing to report)" }, true],
-    ["visible placeholder", {}, false],
-    ["success", { noVisibleResult: true, status: "ok" }, false],
-    ["other source", { noVisibleResult: true, source: "image_generation" }, false],
-  ] as const)("classifies %s from the recorded fact", (_label, overrides, expected) => {
-    const event = {
-      type: "task_completion",
-      source: "subagent",
-      status: "error",
-      result: "(no output)",
-      ...overrides,
-    } as const;
-    expect(hasFailedSubagentNoOutputCompletion([event])).toBe(expected);
-  });
-
-  it("reports nothing for an absent or empty event list", () => {
-    expect(hasFailedSubagentNoOutputCompletion(undefined)).toBe(false);
-    expect(hasFailedSubagentNoOutputCompletion([])).toBe(false);
-  });
+it.each([
+  ["absent", { noVisibleResult: true }, true],
+  ["reworded", { noVisibleResult: true, result: "(nothing to report)" }, true],
+  ["visible placeholder", {}, false],
+  ["success", { noVisibleResult: true, status: "ok" }, false],
+  ["other source", { noVisibleResult: true, source: "image_generation" }, false],
+] as const)("classifies %s completion from the recorded fact", (_label, overrides, expected) => {
+  const event = {
+    type: "task_completion",
+    source: "subagent",
+    status: "error",
+    result: "(no output)",
+    ...overrides,
+  } as const;
+  expect(hasFailedSubagentNoOutputCompletion([event])).toBe(expected);
 });
+
+it("reports nothing for an absent or empty event list", () => {
+  expect(hasFailedSubagentNoOutputCompletion(undefined)).toBe(false);
+  expect(hasFailedSubagentNoOutputCompletion([])).toBe(false);
+});
+
+it.each(["deadline", "admission", "execution"] as const)(
+  "publishes a materialized %s abort reason with unchanged failure identity",
+  async (trigger) => {
+    vi.useFakeTimers();
+    const prepareStackTrace = Object.getOwnPropertyDescriptor(Error, "prepareStackTrace");
+    const formatted = new Set<Error>();
+    Error.prepareStackTrace = (error) => {
+      formatted.add(error);
+      return `${error.name}: ${error.message}`;
+    };
+    let current = true;
+    let signal: AbortSignal | undefined;
+    let formattedAtAbort = false;
+    dispatch.mockImplementation(async (_method, _params, options) => {
+      signal = options?.signal;
+      signal?.addEventListener("abort", () => {
+        formattedAtAbort = formatted.has(signal?.reason);
+      });
+      if (trigger === "deadline") {
+        return new Promise((_resolve, reject) => {
+          signal?.addEventListener("abort", () => reject(signal?.reason as Error), { once: true });
+        });
+      }
+      current = false;
+      if (trigger === "admission") {
+        options?.sessionMutationCommitGuard?.();
+      } else {
+        options?.onExecutionStarted?.();
+      }
+      return undefined;
+    });
+    try {
+      const result = announce({
+        timeoutMs: 10,
+        isExecutionAllowed: () => current,
+        isSourceSessionAdmissionAllowed: () => current,
+      }).catch((error: unknown) => error);
+      if (trigger === "deadline") {
+        await vi.advanceTimersByTimeAsync(10);
+      }
+      const failure = await result;
+      expect(formattedAtAbort).toBe(true);
+      expect(signal?.aborted).toBe(true);
+      expect(failure).toBe(signal?.reason);
+      expect(failure).toBeInstanceOf(Error);
+      expect((failure as Error).message).toBe(
+        trigger === "deadline"
+          ? "gateway request timeout for agent"
+          : "subagent source lifecycle changed before completion delivery",
+      );
+    } finally {
+      if (prepareStackTrace) {
+        Object.defineProperty(Error, "prepareStackTrace", prepareStackTrace);
+      } else {
+        Reflect.deleteProperty(Error, "prepareStackTrace");
+      }
+      vi.useRealTimers();
+    }
+  },
+);

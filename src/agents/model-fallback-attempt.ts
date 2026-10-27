@@ -485,7 +485,7 @@ export async function resolveModelFallbackCandidateHarnessAuthPrecheck(
   throw new MissingAgentHarnessError(runtime);
 }
 
-export function resolveModelFallbackCandidateAgentRuntime(
+function resolveModelFallbackCandidateAgentRuntime(
   params: ModelFallbackRuntimeContext & ModelCandidate,
 ): {
   agentHarnessRuntimeOverride?: string;

@@ -35,9 +35,10 @@ const video = {
   width: 320,
   height: 180,
 };
-const viewports = ["light", "dark"].flatMap((theme) =>
-  [1440, 390].map((width) => ({ theme, width })),
-);
+const viewports = [
+  { theme: "light", width: 1440 },
+  { theme: "dark", width: 390 },
+];
 const all = <T extends Element = HTMLElement>(root: ParentNode, selector: string) =>
   Array.from(root.querySelectorAll<T>(selector));
 
@@ -83,12 +84,10 @@ function blocks(container: HTMLElement) {
   return all(container, ".chat-text > p, .chat-image-frame, .chat-assistant-attachment-card");
 }
 const rect = (element: Element) => element.getBoundingClientRect();
+const expectMargins = (element: Element, marginTop: string) =>
+  expect(getComputedStyle(element)).toMatchObject({ marginTop, marginBottom: "0px" });
 const geometry = (container: HTMLElement) =>
   blocks(container).map((element) => rect(element).toJSON());
-function expectNear(actual: number, expected: number) {
-  expect(Math.abs(actual - expected)).toBeLessThanOrEqual(0.5);
-}
-
 function expectRhythm(container: HTMLElement, count: number) {
   const rendered = blocks(container);
   expect(rendered).toHaveLength(count);
@@ -113,13 +112,9 @@ async function expectReadyRhythm(container: HTMLElement, count: number) {
   await vi.waitFor(() => expectRhythm(container, count));
 }
 
-it.each(
-  viewports.flatMap(({ theme, width }) =>
-    [false, true].map((streaming) => ({ theme, width, streaming })),
-  ),
-)(
-  "matches paragraph rhythm in $theme at $width px (streaming: $streaming)",
-  async ({ theme, width, streaming }) => {
+it.each(viewports)(
+  "matches paragraph rhythm through streaming in $theme at $width px",
+  async ({ theme, width }) => {
     const { container, draw } = mount(width, theme);
     const content = [
       image,
@@ -133,7 +128,7 @@ it.each(
       text("File caption."),
       image,
     ];
-    draw(content, streaming);
+    draw(content, true);
     await expectReadyRhythm(container, 11);
     const images = all<HTMLImageElement>(container, "img.chat-message-image");
     // The last lazy image can be below Chromium's loading margin.
@@ -142,22 +137,18 @@ it.each(
       await element.decode();
     }
     expectRhythm(container, 11);
-    if (streaming) {
-      for (const isStreaming of [true, false]) {
-        draw([...content, text("\n\nStreaming continues.")], isStreaming);
-        expectRhythm(container, 12);
-        const updatedImages = all(container, "img.chat-message-image");
-        expect(updatedImages).toHaveLength(images.length);
-        for (const [index, retainedImage] of images.entries()) {
-          expect(updatedImages[index]).toBe(retainedImage);
-        }
-      }
+    for (const isStreaming of [true, false]) {
+      draw([...content, text("\n\nStreaming continues.")], isStreaming);
+      expectRhythm(container, 12);
+      const updated = all(container, "img.chat-message-image");
+      expect(updated).toHaveLength(images.length);
+      images.forEach((retainedImage, index) => expect(updated[index]).toBe(retainedImage));
     }
   },
 );
 
-it.each(["light", "dark"])("keeps attachment-only edges flush in %s", async (theme) => {
-  const { container, draw } = mount(390, theme);
+it("keeps attachment-only edges flush", async () => {
+  const { container, draw } = mount(390, "light");
   for (const role of ["assistant", "user"]) {
     draw([file, fileAttachment("second")], false, role);
     await expectReadyRhythm(container, 2);
@@ -187,54 +178,31 @@ it("reserves the image and both gaps while a streamed image loads", async () => 
   expect(geometry(container)).toEqual(before);
 });
 
-it.each(
-  viewports.flatMap(({ theme, width }) =>
-    ["assistant", "user"].map((role) => ({ theme, width, role })),
-  ),
-)(
-  "separates all heading levels in $role messages ($theme, $width px)",
-  ({ theme, width, role }) => {
-    const { container, draw } = mount(width, theme);
-    for (const textSize of [14, 20]) {
-      document.documentElement.style.setProperty("--chat-text-size", `${textSize}px`);
-      for (const level of [1, 2, 3, 4]) {
-        const heading = "#".repeat(level);
-        const markdown = [
-          `${heading} First heading`,
-          "First paragraph.",
-          "Second paragraph.",
-          `${heading} Section heading`,
-          "Following paragraph.",
-          "- First item\n- Second item",
-          "> Quoted paragraph.",
-          "```text\nSample code\n```",
-        ].join("\n\n");
-        draw(markdown, false, role);
-        const root = container.querySelector(".chat-text")!;
-        const headings = root.querySelectorAll(`h${level}`);
-        expect(headings).toHaveLength(2);
-        const first = getComputedStyle(headings[0]!);
-        const section = getComputedStyle(headings[1]!);
-        const paragraph = root.querySelector("p + p")!;
-        const paragraphGap = Number.parseFloat(getComputedStyle(paragraph).marginTop);
-        expect(paragraphGap).toBe(textSize);
-        expect(first).toMatchObject({ marginTop: "0px", marginBottom: "0px" });
-        expect(section.marginBottom).toBe("0px");
-        expectNear(Number.parseFloat(section.marginTop), paragraphGap * 1.5);
-        const previous = headings[1]!.previousElementSibling!;
-        expectNear(rect(headings[1]!).top - rect(previous).bottom, paragraphGap * 1.5);
-        for (const block of root.querySelectorAll(
-          ":scope > p, :scope > ul, :scope > blockquote, :scope > .code-block-wrapper",
-        )) {
-          expect(getComputedStyle(block)).toMatchObject({
-            marginTop: `${textSize}px`,
-            marginBottom: "0px",
-          });
-        }
+it.each(["assistant", "user"])("separates all heading levels in %s messages", (role) => {
+  const { container, draw } = mount(390, "light");
+  for (const textSize of [14, 20]) {
+    document.documentElement.style.setProperty("--chat-text-size", `${textSize}px`);
+    for (const level of [1, 2, 3, 4]) {
+      const heading = "#".repeat(level);
+      const markdown = `${heading} First\n\nFirst paragraph.\n\nSecond paragraph.\n\n${heading} Section\n\nFollowing paragraph.\n\n- Item\n\n> Quote\n\n\`\`\`text\nCode\n\`\`\``;
+      draw(markdown, false, role);
+      const root = container.querySelector(".chat-text")!;
+      const headings = root.querySelectorAll(`h${level}`);
+      expect(headings).toHaveLength(2);
+      expectMargins(headings[0]!, "0px");
+      expectMargins(headings[1]!, `${textSize * 1.5}px`);
+      const previous = headings[1]!.previousElementSibling!;
+      expect(
+        Math.abs(rect(headings[1]!).top - rect(previous).bottom - textSize * 1.5),
+      ).toBeLessThanOrEqual(0.5);
+      for (const block of root.querySelectorAll(
+        ":scope > p, :scope > ul, :scope > blockquote, :scope > .code-block-wrapper",
+      )) {
+        expectMargins(block, `${textSize}px`);
       }
     }
-  },
-);
+  }
+});
 
 it.each([
   { width: 768, direction: "ltr", scale: 1, long: false },

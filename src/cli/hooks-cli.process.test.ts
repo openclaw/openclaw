@@ -10,6 +10,7 @@ import {
   withinTest,
 } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { isProcessAlive } from "../../test/scripts/live-process-fixture.test-support.js";
 import {
   buildNativeHookRelayCommand,
   registerOwnedNativeHookRelay,
@@ -152,15 +153,6 @@ function relayEnv(fixture: Awaited<ReturnType<typeof createRelayPreloadFixture>>
     NODE_OPTIONS: `--import=${pathToFileURL(fixture.preloadPath).href}`,
     OPENCLAW_STATE_DIR: fixture.stateDir,
   };
-}
-
-function isProcessAlive(pid: number): boolean {
-  try {
-    process.kill(pid, 0);
-    return true;
-  } catch {
-    return false;
-  }
 }
 
 function relayArgs(relayId: string, ...args: string[]) {

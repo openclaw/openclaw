@@ -1,16 +1,5 @@
 import { isBlockedHostnameOrIp } from "../api.js";
 
-type VoiceCallWebhookExposureConfig = {
-  provider?: string;
-  publicUrl?: string;
-  tunnel?: {
-    provider?: string;
-  };
-  tailscale?: {
-    mode?: string;
-  };
-};
-
 export function providerRequiresPublicWebhook(providerName: string | undefined): boolean {
   return providerName === "twilio" || providerName === "telnyx" || providerName === "plivo";
 }
@@ -22,7 +11,16 @@ export function isProviderUnreachableWebhookUrl(webhookUrl: string): boolean {
 }
 
 /** Resolve a human-readable webhook exposure status for doctor/setup surfaces. */
-export function resolveWebhookExposureStatus(config: VoiceCallWebhookExposureConfig) {
+export function resolveWebhookExposureStatus(config: {
+  provider?: string;
+  publicUrl?: string;
+  tunnel?: {
+    provider?: string;
+  };
+  tailscale?: {
+    mode?: string;
+  };
+}) {
   if (config.provider === "mock") {
     return {
       ok: true,

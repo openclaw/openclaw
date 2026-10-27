@@ -1,5 +1,6 @@
 import { expect, it } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
+import { mediaTicketPayload } from "../test-helpers/control-ui-attachment-fixtures.ts";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { waitForChatScrollIdle } from "./chat-flow.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
@@ -11,7 +12,7 @@ const suite = createControlUiE2eSuite({
 
 suite.define(() => {
   it.each([true, false])(
-    "keeps saved images stable through metadata, decode, and remount (dimensions: %s)",
+    "sizes saved images through metadata, decode, and remount (dimensions: %s)",
     async (sized) => {
       await suite.withPage(
         { reducedMotion: "reduce", viewport: { width: 1440, height: 900 } },
@@ -26,20 +27,13 @@ suite.define(() => {
             canvas.getContext("2d")!.fillRect(0, 0, canvas.width, canvas.height);
             return canvas.toDataURL("image/png").split(",")[1]!;
           });
-          let releaseImage!: () => void;
-          const imageReady = new Promise<void>((resolve) => {
-            releaseImage = resolve;
-          });
+          const { promise: imageReady, resolve: releaseImage } = createDeferred();
           await page.route("**/__openclaw__/assistant-media?**", async (route) => {
             if (new URL(route.request().url()).searchParams.get("meta") === "1") {
               metadataRequested.resolve();
               await metadataReady.promise;
               await route.fulfill({
-                json: {
-                  available: true,
-                  mediaTicket: "sizing-ticket",
-                  mediaTicketExpiresAt: new Date(Date.now() + 300_000).toISOString(),
-                },
+                json: mediaTicketPayload("sizing-ticket", 300_000),
               });
               return;
             }
@@ -119,7 +113,11 @@ suite.define(() => {
             await image.evaluate((element) => (element as HTMLImageElement).naturalHeight),
           ).toBe(240);
           await waitForChatScrollIdle(page);
-          expect(await geometry()).toEqual(before);
+          const decoded = await geometry();
+          expect(decoded.imageHeight).toBeCloseTo(200, 1);
+          if (sized) {
+            expect(decoded).toEqual(before);
+          }
           const gap = () =>
             image.evaluate((element) => {
               const row = element.closest<HTMLElement>(".chat-virtual-row")!;
@@ -142,11 +140,11 @@ suite.define(() => {
           await thread.hover();
           await page.mouse.wheel(0, -100_000);
           await image.waitFor({ state: "visible" });
-          await expect.poll(async () => (await geometry()).height).toBe(before.height);
+          await expect.poll(async () => (await geometry()).height).toBe(decoded.height);
           await image.evaluate((element) => (element as HTMLImageElement).decode());
           const returned = await geometry();
-          expect(returned.imageWidth).toBe(before.imageWidth);
-          expect(returned.imageHeight).toBe(before.imageHeight);
+          expect(returned.imageWidth).toBe(decoded.imageWidth);
+          expect(returned.imageHeight).toBe(decoded.imageHeight);
           expect(Math.abs(await gap())).toBeLessThanOrEqual(1);
         },
       );

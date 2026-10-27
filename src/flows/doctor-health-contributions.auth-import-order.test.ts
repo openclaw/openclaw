@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { stripVTControlCharacters } from "node:util";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, aroundEach, describe, expect, it, vi } from "vitest";
 import {
   loadPersistedAuthProfileStore,
   loadPersistedSharedAuthProfileStore,
@@ -11,22 +11,18 @@ import {
   prepareAuthProfileSourceReceipt,
   type AuthProfileMigrationSourceReceipt,
 } from "../commands/doctor-auth-migration-receipts.js";
-import type { DoctorPrompter } from "../commands/doctor-prompter.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
+import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import {
-  closeOpenClawStateDatabaseForTest,
-  openOpenClawStateDatabase,
-} from "../state/openclaw-state-db.js";
-import {
-  createOpenClawTestState,
+  withOpenClawTestState,
   type OpenClawTestState,
 } from "../test-utils/openclaw-test-state.js";
-import { showDoctorHealthSummary } from "./doctor-health-contribution.js";
+import { runAuthProfileMigration } from "./doctor-auth-health.js";
 import {
   createDoctorHealthFlowContext,
-  resolveDoctorHealthContributions,
-} from "./doctor-health-contributions.test-support.js";
+  createDoctorPrompterFixture,
+} from "./doctor-health-context.test-support.js";
+import { showDoctorHealthSummary } from "./doctor-health-contribution.js";
 
 // mock-isolation: Scenario fixtures own credential state and migration outcomes; isolate filesystem writes and provider login effects proved by their owner suites.
 vi.mock("../commands/doctor-auth-legacy-oauth.js", () => ({
@@ -41,37 +37,19 @@ vi.mock("../commands/doctor-model-catalog-credentials.js", () => ({
   maybeMigrateModelCatalogCredentials: vi.fn(async () => undefined),
 }));
 
-// mock-isolation: Auth migration fixtures isolate live credential stores and OAuth refresh while proving migration and persistence ordering.
-vi.mock("../commands/doctor-auth.js", () => ({
-  inspectAuthProfileHealth: vi.fn(async () => []),
-  collectCopilotAmbientTokenFindings: vi.fn(() => []),
-  collectLegacyCodexProviderOverrideFindings: vi.fn(() => []),
-  collectSharedAuthStoreFindings: vi.fn(() => []),
-}));
-
-const states: OpenClawTestState[] = [];
+let testState: OpenClawTestState;
 const { recordAuthProfileMigrationImported } = (globalThis as Record<PropertyKey, unknown>)[
   Symbol.for("openclaw.authProfileMigrationReceiptsTestApi")
 ] as {
   recordAuthProfileMigrationImported: (receipt: AuthProfileMigrationSourceReceipt) => void;
 };
 
-function makePrompter(shouldRepair: boolean): DoctorPrompter {
+function makePrompter(shouldRepair: boolean) {
   return {
+    ...createDoctorPrompterFixture(shouldRepair, true),
     confirm: vi.fn(async () => false),
-    confirmAutoFix: vi.fn(async () => shouldRepair),
     confirmAggressiveAutoFix: vi.fn(async () => false),
     confirmRuntimeRepair: vi.fn(async () => false),
-    select: vi.fn(async (_params, fallback) => fallback),
-    shouldRepair,
-    shouldForce: false,
-    repairMode: {
-      shouldRepair,
-      shouldForce: false,
-      nonInteractive: false,
-      canPrompt: true,
-      updateInProgress: false,
-    },
   };
 }
 
@@ -79,63 +57,48 @@ function makeLegacyConfig(): OpenClawConfig {
   return {
     auth: {
       profiles: {
-        "openai:bravo": {
-          provider: "openai",
-          mode: "api_key",
-        },
-        "openai-codex:bravo": {
-          provider: "openai-codex",
-          mode: "oauth",
-        },
+        "openai:bravo": { provider: "openai", mode: "api_key" },
+        "openai-codex:bravo": { provider: "openai-codex", mode: "oauth" },
       },
       order: { "openai-codex": ["openai-codex:bravo"] },
     },
-  } as OpenClawConfig;
-}
-
-async function makeState(): Promise<OpenClawTestState> {
-  const state = await createOpenClawTestState({
-    layout: "state-only",
-    prefix: "openclaw-doctor-auth-import-order-",
-    env: { OPENCLAW_AGENT_DIR: undefined },
-  });
-  states.push(state);
-  return state;
+  };
 }
 
 async function writeLegacyRotationState(state: OpenClawTestState): Promise<string> {
-  return await state.writeText(
-    "agents/main/agent/auth-state.json",
-    `${JSON.stringify({
-      version: 1,
-      order: { "openai-codex": ["openai-codex:bravo"] },
-      lastGood: { "openai-codex": "openai-codex:bravo" },
-      usageStats: { "openai-codex:bravo": { lastUsed: 123 } },
-    })}\n`,
-  );
+  return await state.writeJson("agents/main/agent/auth-state.json", {
+    version: 1,
+    order: { "openai-codex": ["openai-codex:bravo"] },
+    lastGood: { "openai-codex": "openai-codex:bravo" },
+    usageStats: { "openai-codex:bravo": { lastUsed: 123 } },
+  });
 }
 
 async function writeLegacyCredentialStore(state: OpenClawTestState): Promise<string> {
-  return await state.writeText(
-    "agents/main/agent/auth-profiles.json",
-    `${JSON.stringify({
-      version: 1,
-      profiles: {
-        "openai:bravo": {
-          type: "api_key",
-          provider: "openai",
-          key: "existing-key",
-        },
-        "openai-codex:bravo": {
-          type: "oauth",
-          provider: "openai-codex",
-          access: "legacy-access",
-          refresh: "legacy-refresh",
-          expires: 1_900_000_000_000,
-        },
+  return await state.writeJson("agents/main/agent/auth-profiles.json", {
+    version: 1,
+    profiles: {
+      "openai:bravo": { type: "api_key", provider: "openai", key: "existing-key" },
+      "openai-codex:bravo": {
+        type: "oauth",
+        provider: "openai-codex",
+        access: "legacy-access",
+        refresh: "legacy-refresh",
+        expires: 1_900_000_000_000,
       },
-    })}\n`,
-  );
+    },
+  });
+}
+
+function context(state: OpenClawTestState, shouldRepair: boolean) {
+  const cfg = makeLegacyConfig();
+  return createDoctorHealthFlowContext({
+    cfg,
+    cfgForPersistence: shouldRepair ? structuredClone(cfg) : cfg,
+    prompter: makePrompter(shouldRepair),
+    env: state.env,
+    configPath: path.join(state.stateDir, "openclaw.json"),
+  });
 }
 
 function loadMigratedStore(state: OpenClawTestState) {
@@ -145,31 +108,29 @@ function loadMigratedStore(state: OpenClawTestState) {
   );
 }
 
-function authProfileMigrationContribution() {
-  const contribution = resolveDoctorHealthContributions().find(
-    (entry) => entry.id === "doctor:auth-profile-migration",
-  );
-  if (!contribution) {
-    throw new Error("doctor:auth-profile-migration contribution is not registered");
-  }
-  return contribution;
-}
-
-afterEach(async () => {
+aroundEach((runTest) =>
+  withOpenClawTestState(
+    {
+      layout: "state-only",
+      prefix: "openclaw-doctor-auth-import-order-",
+      env: { OPENCLAW_AGENT_DIR: undefined },
+    },
+    async (current) => {
+      testState = current;
+      await runTest();
+    },
+  ),
+);
+afterEach(() => {
   vi.restoreAllMocks();
   clearRuntimeAuthProfileStoreSnapshots();
-  closeOpenClawAgentDatabasesForTest();
-  closeOpenClawStateDatabaseForTest();
-  for (const state of states.splice(0)) {
-    await state.cleanup();
-  }
 });
 
 describe("interactive Doctor auth migration", () => {
   it.each(["failed", "declined"] as const)(
     "reports interrupted archive recovery when the remaining migration is %s",
     async (outcome) => {
-      const state = await makeState();
+      const state = testState;
       const sourcePath = await state.writeText("credentials/oauth.json", "{}\n");
       const sourceBytes = fs.readFileSync(sourcePath);
       const receipt = prepareAuthProfileSourceReceipt({
@@ -188,18 +149,12 @@ describe("interactive Doctor auth migration", () => {
       }
       const remainingPath = outcome === "declined" ? await writeLegacyCredentialStore(state) : null;
       const statePath = outcome === "declined" ? await writeLegacyRotationState(state) : null;
-      const cfg = makeLegacyConfig();
-      const originalConfig = structuredClone(cfg);
-      const prompter = makePrompter(false);
-      const ctx = createDoctorHealthFlowContext({
-        cfg,
-        prompter,
-        env: state.env,
-        configPath: path.join(state.stateDir, "openclaw.json"),
-      });
+      const ctx = context(state, false);
+      const originalConfig = structuredClone(ctx.cfg);
+      const { prompter } = ctx;
       const stdout = vi.spyOn(process.stdout, "write").mockReturnValue(true);
 
-      await authProfileMigrationContribution().run(ctx);
+      await runAuthProfileMigration(ctx);
       showDoctorHealthSummary(ctx);
       const summary = vi
         .mocked(ctx.runtime.log)
@@ -240,19 +195,12 @@ describe("interactive Doctor auth migration", () => {
   );
 
   it("commits config credentials and standalone state with one mapping after acceptance", async () => {
-    const state = await makeState();
-    const cfg = makeLegacyConfig();
+    const state = testState;
     await writeLegacyCredentialStore(state);
     await writeLegacyRotationState(state);
-    const ctx = createDoctorHealthFlowContext({
-      cfg,
-      cfgForPersistence: structuredClone(cfg),
-      prompter: makePrompter(true),
-      env: state.env,
-      configPath: path.join(state.stateDir, "openclaw.json"),
-    });
+    const ctx = context(state, true);
 
-    await authProfileMigrationContribution().run(ctx);
+    await runAuthProfileMigration(ctx);
 
     expect(loadMigratedStore(state)).toMatchObject({
       profiles: {

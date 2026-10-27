@@ -1,6 +1,5 @@
 /* Discrete display transitions keep the closed surface painted during its exit. */
 .chat-details[data-desktop]:has(> .chat-details-desktop-body) {
-  --details-surface: var(--card);
   flex-direction: column;
   padding: 0;
   overflow: hidden;
@@ -8,10 +7,6 @@
 
 .chat-details:not([hidden]):has(> .chat-details-desktop-body) {
   display: flex;
-}
-
-.chat-details.chat-details--docked:has(> .chat-details-desktop-body) {
-  --details-surface: var(--panel-strong);
 }
 
 .chat-details-desktop-body {
@@ -194,7 +189,7 @@
   > .chat-details-processes__envelope
   > .chat-details-processes__motion-content
   > .chat-details-desktop-section,
-.chat-details-session[data-details-desktop]
+.chat-details-desktop-body__content
   > openclaw-chat-summary-automations
   > :is(.chat-details__group, .chat-details-desktop-section) {
   margin: 0;
@@ -424,7 +419,7 @@
 }
 
 .chat-details .chat-details-desktop-body a.chat-details-people__row:hover {
-  background: var(--bg-hover);
+  background: var(--surface-hover);
 }
 
 .chat-details

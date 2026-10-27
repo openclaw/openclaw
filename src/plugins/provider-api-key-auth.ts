@@ -115,11 +115,7 @@ export async function persistProviderApiKey(
   return true;
 }
 
-function resolveProfileIds(params: {
-  providerId: string;
-  profileId?: string;
-  profileIds?: string[];
-}) {
+function resolveProfileIds(params: Parameters<typeof createProviderApiKeyAuthMethod>[0]) {
   const explicit = normalizeUniqueStringEntries(params.profileIds ?? []);
   if (explicit.length > 0) {
     return explicit;

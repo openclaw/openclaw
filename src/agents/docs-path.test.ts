@@ -21,7 +21,7 @@ async function makePackageRoot(hasDocs = false, git = false): Promise<string> {
   return root;
 }
 
-async function writeDocsJson(root: string): Promise<void> {
+async function writeDocsJson(root: string) {
   await fs.mkdir(path.join(root, "docs"), { recursive: true });
   await fs.writeFile(path.join(root, "docs", "docs.json"), "{}\n");
 }
@@ -30,28 +30,16 @@ const rejectShell = () =>
   Promise.reject(new Error("Reference discovery must not execute shell commands"));
 
 describe("resolveOpenClawReferencePaths", () => {
-  it.each(["workspace", "nested", "incomplete", "npm", "git"])(
-    "resolves local references for %s roots",
-    async (scenario) => {
-      const hasDocs = ["workspace", "nested", "git"].includes(scenario);
-      const root = await makePackageRoot(hasDocs, scenario === "git");
-      const cwd = scenario === "nested" ? path.join(root, "dist", "agents") : root;
-      await fs.mkdir(cwd, { recursive: true });
-      if (scenario === "incomplete") {
-        await fs.mkdir(path.join(root, "docs", "reference", "templates"), { recursive: true });
-      }
-      const references = await resolveOpenClawReferencePaths(
-        scenario === "workspace" ? { workspaceDir: root } : { cwd },
-      );
-      const docsPath = hasDocs ? path.join(root, "docs") : null;
-      expect(references.docsPath).toBe(docsPath);
-      if (scenario === "git") {
-        expect(references).toEqual({ docsPath, sourcePath: root });
-      } else if (scenario === "npm") {
-        expect(references.sourcePath).toBeNull();
-      }
-    },
-  );
+  it.each([true, false])("requires local reference markers (complete=%s)", async (complete) => {
+    const root = await makePackageRoot(complete, complete);
+    if (!complete) {
+      await fs.mkdir(path.join(root, "docs", "reference", "templates"), { recursive: true });
+    }
+    expect(await resolveOpenClawReferencePaths({ cwd: root })).toEqual({
+      docsPath: complete ? path.join(root, "docs") : null,
+      sourcePath: complete ? root : null,
+    });
+  });
   it.each([
     ["unmounted", null, null],
     ["workspace", "/workspace/docs", "/workspace"],

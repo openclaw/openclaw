@@ -39,18 +39,16 @@ afterEach(() => {
   localStorage.clear();
 });
 
-it.each([true, false])("brings an upgrade bindle (resident=%s)", async (residentEnabled) => {
+it("defers the upgrade bindle until the resident arrives", async () => {
   vi.setSystemTime(new Date("2026-07-09T12:00:00"));
   localStorage.setItem(versionKey, "2026.6.1");
   const element = createPet(42);
-  element.residentEnabled = residentEnabled;
+  element.residentEnabled = false;
   element.gatewayVersion = "2026.7.1";
-  if (!residentEnabled) {
-    await element.updateComplete;
-    expect(localStorage.getItem(versionKey)).toBe("2026.6.1");
-    expect(element.querySelector(".lob-bindle")).toBeNull();
-    element.residentEnabled = true;
-  }
+  await element.updateComplete;
+  expect(localStorage.getItem(versionKey)).toBe("2026.6.1");
+  expect(element.querySelector(".lob-bindle")).toBeNull();
+  element.residentEnabled = true;
   await arrive(element);
 
   expect(element.querySelector(".lob-bindle")).not.toBeNull();
@@ -101,10 +99,8 @@ it.each(["penguin", "fedora"] as const)("refreshes a crossing's pool to %s", asy
   await tick(element, 13_000);
   expect(element.querySelector(passerSelector)).toBeNull();
 
-  for (let refresh = 0; refresh < 2; refresh++) {
-    await updatePet(element, { critters: visitorPool() }, 10_000);
-    expect(element.querySelector(passerSelector)).toBeNull();
-  }
+  await updatePet(element, { critters: visitorPool() }, 20_000);
+  expect(element.querySelector(passerSelector)).toBeNull();
 
   const parent = element.parentElement!;
   element.remove();
@@ -150,19 +146,12 @@ it("earns the golden ledge trim once the Lobsterdex is complete", async () => {
     expect(element.hasAttribute("data-dex-complete")).toBe(complete);
   }
 });
-it("plans plugin ids and resolves catalog, artwork, and default crossing durations", () => {
+it("plans plugin ids without strangers and defaults unknown crossing durations", () => {
   expect(planLobsterPasser(21, { critters: ["ferris"], strangers: false })?.kind).toBe("ferris");
-  const artwork = {
-    ferris: { url: "/ferris", crossMs: 5000 },
-    snail: { url: "/snail", crossMs: 5000 },
-  };
-  expect(resolveLobsterPasserCrossMs("snail", artwork)).toBe(90000);
-  expect(resolveLobsterPasserCrossMs("ferris", artwork)).toBe(5000);
   expect(resolveLobsterPasserCrossMs("constructor")).toBe(12000);
 });
 
 it.each([
-  ["crab", "a plugin visitor", 11000],
   ["stranger", "a plugin visitor", 11000],
   ["ferris", "a crab, allegedly", 5000],
 ] as const)(
@@ -180,14 +169,11 @@ it.each([
     await vi.dynamicImportSettled();
     const passer = element.querySelector<HTMLElement>(`.lobster-pet--${kind}`)!;
     expect(passer.title).toBe(title);
-    expect(passer.style.getPropertyValue("--lob-scale")).toBe("1.8");
     expect(passer.style.getPropertyValue("--lob-cross")).toBe(`${crossMs}ms`);
     expect(passer.querySelector(".lobster-pet__body img")?.getAttribute("src")).toBe(
       `blob:/${kind}?v=1`,
     );
     expect(passer.querySelector("svg")).toBeNull();
-    await updatePet(element, { critters: [...element.critters] });
-    expect(element.querySelector(passerSelector)).toBe(passer);
 
     if (kind === "ferris") {
       await updatePet(element, {

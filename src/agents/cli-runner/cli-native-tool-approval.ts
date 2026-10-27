@@ -1,6 +1,7 @@
 import { addTimerTimeoutGraceMs } from "@openclaw/normalization-core/number-coercion";
 import { logVerbose } from "../../globals.js";
 import { racePromiseWithAbortSignal } from "../../infra/abort-signal.js";
+import { formatErrorMessage } from "../../infra/errors.js";
 import {
   exceedsApprovalTextLimit,
   sanitizeExecApprovalWarningTextWithStatus,
@@ -28,7 +29,9 @@ import {
 } from "../../infra/system-run-approval-binding.js";
 import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.js";
 import { sliceUtf16Safe, truncateUtf16Safe } from "../../utils.js";
+import { withGatewayToolApprovalOwner } from "../tools/gateway-caller-context.js";
 import { callGatewayTool } from "../tools/gateway.js";
+import { cliBackendLog } from "./log.js";
 
 type CliNativeToolApprovalOutcome =
   | { kind: "allow"; grantAlways: boolean; updatedInput?: Record<string, unknown> }
@@ -262,28 +265,33 @@ export async function requestCliNativeToolApproval(params: {
       description.truncated
         ? ["allow-once", "deny"]
         : ["allow-once", "allow-always", "deny"];
+    // Agent-runtime callers must name the backend as the signed approval owner.
     const requestResult = await racePromiseWithAbortSignal(
-      callGatewayTool<{ id?: string; decision?: unknown }>(
-        "plugin.approval.request",
-        { timeoutMs: gatewayTimeoutMs },
-        {
-          pluginId: params.pluginId,
-          toolName: params.toolName,
-          toolCallId: params.toolCallId,
-          agentId: params.agentId,
-          sessionKey: params.sessionKey,
-          title: truncateUtf16Safe(
-            `${params.pluginId} native tool: ${params.toolName}`,
-            PLUGIN_APPROVAL_TITLE_MAX_LENGTH,
+      withGatewayToolApprovalOwner(
+        params.pluginId,
+        async () =>
+          await callGatewayTool<{ id?: string; decision?: unknown }>(
+            "plugin.approval.request",
+            { timeoutMs: gatewayTimeoutMs },
+            {
+              pluginId: params.pluginId,
+              toolName: params.toolName,
+              toolCallId: params.toolCallId,
+              agentId: params.agentId,
+              sessionKey: params.sessionKey,
+              title: truncateUtf16Safe(
+                `${params.pluginId} native tool: ${params.toolName}`,
+                PLUGIN_APPROVAL_TITLE_MAX_LENGTH,
+              ),
+              description: description.text,
+              detail: truncatePluginApprovalDetail(description.compact),
+              severity: "warning",
+              allowedDecisions,
+              timeoutMs,
+              twoPhase: true,
+            },
+            { expectFinal: false, signal: params.abortSignal },
           ),
-          description: description.text,
-          detail: truncatePluginApprovalDetail(description.compact),
-          severity: "warning",
-          allowedDecisions,
-          timeoutMs,
-          twoPhase: true,
-        },
-        { expectFinal: false, signal: params.abortSignal },
       ),
       params.abortSignal,
     );
@@ -328,7 +336,13 @@ export async function requestCliNativeToolApproval(params: {
       return { kind: "allow", grantAlways: decision === "allow-always" };
     }
     return { kind: "deny", reason: decision === "deny" ? "user" : "unavailable" };
-  } catch {
+  } catch (error) {
+    // Still fail closed, but keep Gateway rejections visible to operators.
+    if (!params.abortSignal?.aborted) {
+      cliBackendLog.warn(
+        `native tool approval unavailable for ${params.toolName}: ${formatErrorMessage(error)}`,
+      );
+    }
     return { kind: "deny", reason: "unavailable" };
   }
 }

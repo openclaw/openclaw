@@ -1,15 +1,24 @@
 import type { SqliteWorkerCommand } from "../../infra/sqlite-worker-contract.js";
 import type {
   SessionActorAuthorityFacts,
+  SessionActorHotState,
   SessionActorOperations,
 } from "./session-actor-contract.js";
 
-/** Admission carries authority and receipt identity, not the resident transcript indexes. */
+type SessionActorAuthoritySnapshot =
+  | SessionActorAuthorityFacts
+  | { target: SessionActorAuthorityFacts["target"]; entryReference: string };
+
+/** Only an exact worker-confirmed preimage can replace unchanged entry bytes. */
 export function projectSessionActorAuthority(
   state: SessionActorAuthorityFacts,
-): SessionActorAuthorityFacts {
-  const { target, version, writeToken, dependencySessionIds, entry } = state;
-  return { target, version, writeToken, dependencySessionIds, entry };
+  reference?: Pick<SessionActorHotState, "entry" | "writeToken">,
+): SessionActorAuthoritySnapshot {
+  const { target, entry } = state;
+  if (reference && entry === reference.entry) {
+    return { target, entryReference: reference.writeToken };
+  }
+  return { target, entry };
 }
 
 export function isSessionActorCommand(command: {

@@ -1,3 +1,4 @@
+import type { CyberAccessProgram } from "../../../packages/gateway-protocol/src/schema/sessions-row.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { ContextEngineHostSupport } from "../../context-engine/host-compat.js";
 import type { PluginHookAgentContext } from "../../plugins/hook-agent-context.types.js";
@@ -41,6 +42,9 @@ export type RunEntryCandidateOptions = {
   agentHarnessRuntimeOverride: string | undefined;
   assistantErrorTranscript: AssistantErrorTranscript;
   authProfileFailurePolicy?: AuthProfileFailurePolicy;
+  /** Turn-local Access escalation; preserves the refused attempt's account. */
+  cyberAccessProgram?: "daybreak_blue";
+  authProfileId?: string;
   classifyResult: (result: EmbeddedAgentRunResult) => ModelFallbackResultClassification;
   allowTransientCooldownProbe?: boolean;
   isFinalFallbackAttempt?: boolean;
@@ -49,20 +53,6 @@ export type RunEntryCandidateOptions = {
   contextEngineLogicalTurnLease: ContextEngineLogicalTurnLease;
   onContextEngineTurnCandidate: (facts: ContextEngineTurnAttemptFacts) => void;
 };
-
-type RunEntryHarnessPreparation =
-  | { kind: "direct" }
-  | {
-      kind: "measured";
-      run: (prepare: () => Promise<void>) => Promise<void>;
-    };
-
-type RunEntrySessionOverride =
-  | { kind: "preserve" }
-  | {
-      kind: "reconcile-completed";
-      reconcile: (candidate: { provider: string; model: string }) => Promise<void>;
-    };
 
 export type EmbeddedAgentRunEntryResult<T extends EmbeddedAgentRunResult> = {
   outcome: "completed" | "exhausted";
@@ -85,6 +75,7 @@ export type EmbeddedAgentRunEntryParams<T extends EmbeddedAgentRunResult> = {
     fallbacksOverride?: string[];
     agentDir?: string;
     userLockedAuthProfileId?: string;
+    cyberAccessProgram?: CyberAccessProgram;
   } & ModelManifestNormalizationContext;
   identity: {
     runId: string;
@@ -98,7 +89,12 @@ export type EmbeddedAgentRunEntryParams<T extends EmbeddedAgentRunResult> = {
   harness: {
     workspaceDir: string;
     sessionKey?: string;
-    preparation: RunEntryHarnessPreparation;
+    preparation:
+      | { kind: "direct" }
+      | {
+          kind: "measured";
+          run: (prepare: () => Promise<void>) => Promise<void>;
+        };
     resolveRuntimeOverride: (provider: string, model: string) => string | undefined;
     resolveContextEngineHost?: (
       provider: string,
@@ -107,7 +103,12 @@ export type EmbeddedAgentRunEntryParams<T extends EmbeddedAgentRunResult> = {
     ) => ContextEngineHostSupport | undefined;
   };
   behavior: RunEntryTerminalBehavior;
-  sessionOverride: RunEntrySessionOverride;
+  sessionOverride:
+    | { kind: "preserve" }
+    | {
+        kind: "reconcile-completed";
+        reconcile: (candidate: { provider: string; model: string }) => Promise<void>;
+      };
   abortSignal?: AbortSignal;
   onFallbackStep?: (step: ModelFallbackStepFields) => void | Promise<void>;
   /** Runs once after the successful winner is accepted, before post-turn context commit. */

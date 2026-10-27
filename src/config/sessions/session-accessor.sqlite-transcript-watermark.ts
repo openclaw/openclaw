@@ -13,10 +13,8 @@ import {
 } from "../../state/openclaw-agent-db-readonly.js";
 import type { DB } from "../../state/openclaw-agent-db.generated.js";
 import type { SessionTranscriptReadScope } from "./session-accessor.sqlite-contract.js";
-import {
-  resolveSqliteTranscriptReadScope,
-  toDatabaseOptions,
-} from "./session-accessor.sqlite-scope.js";
+import { resolveSqliteTranscriptReadScope } from "./session-accessor.sqlite-read-scope.js";
+import { toDatabaseOptions } from "./session-accessor.sqlite-scope-helpers.js";
 import type { SessionTranscriptWatermark } from "./session-accessor.sqlite-transcript-watermark-read.js";
 import { readSessionActorTransactionState } from "./session-actor-transaction.js";
 import { readTranscriptContextFacts } from "./session-transcript-context-facts.js";

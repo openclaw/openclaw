@@ -11,6 +11,7 @@ import * as commandRuntime from "../../process/exec.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { drainGlobalSingletonLifecycleState } from "../../shared/global-singleton.js";
 import { raceNodeWorkerOperation } from "./node-worker-abort.js";
+import { workspaceFile } from "./workspace-manifest-fixtures.test-support.js";
 import { loadStagedWorkspaceManifest } from "./workspace-manifest-worker.js";
 import {
   serializeWorkerWorkspaceManifest,
@@ -51,6 +52,20 @@ type FixtureOptions = {
 function flipByte(bytes: Buffer, index: number, mask = 0xff) {
   bytes[index] = bytes[index]! ^ mask;
   return bytes;
+}
+
+function holdCommitReads() {
+  const held = { entered: createDeferredCore(), release: createDeferredCore(), reads: 0 };
+  const run = commandRuntime.runCommandBuffered;
+  vi.spyOn(commandRuntime, "runCommandBuffered").mockImplementation(async (argv, options) => {
+    if (argv.includes("cat-file") && argv.includes("commit")) {
+      held.reads++;
+      held.entered.resolve();
+      await raceNodeWorkerOperation(held.release.promise, options?.signal);
+    }
+    return run(argv, options);
+  });
+  return held;
 }
 
 function corruptBatch(
@@ -134,13 +149,7 @@ async function stagedFixture(
     const target = path.join(input, entryPath);
     await fs.writeFile(target, content, { mode: entryPath === "executable.sh" ? 0o755 : 0o644 });
     const mode = (await fs.stat(target)).mode & 0o111 ? 0o755 : 0o644;
-    entries.push({
-      path: entryPath,
-      type: "file",
-      mode,
-      size: content.byteLength,
-      sha256: createHash("sha256").update(content).digest("hex"),
-    });
+    entries.push({ ...workspaceFile(entryPath, content), mode });
   }
   if (process.platform !== "win32") {
     await fs.symlink(binaryPath, path.join(input, "current-link"));
@@ -178,18 +187,7 @@ it("joins only matching pending staged reads and forgets settled results", async
   await fs.cp(fixture.repository, peer, { recursive: true });
   const secondRef = workerWorkspaceResultRef("second-read");
   await git(fixture.repository, ["update-ref", secondRef, fixture.commit]);
-  const entered = createDeferredCore();
-  const release = createDeferredCore();
-  const runBuffered = commandRuntime.runCommandBuffered;
-  let reads = 0;
-  vi.spyOn(commandRuntime, "runCommandBuffered").mockImplementation(async (argv, options) => {
-    if (argv.includes("cat-file") && argv.includes("commit")) {
-      reads++;
-      entered.resolve();
-      await raceNodeWorkerOperation(release.promise, options?.signal);
-    }
-    return runBuffered(argv, options);
-  });
+  const held = holdCommitReads();
   const read = (
     root = fixture.repository,
     ref = fixture.stagedResultRef,
@@ -199,7 +197,7 @@ it("joins only matching pending staged reads and forgets settled results", async
   const controller = new AbortController();
   const operations = [read()];
   try {
-    await entered.promise;
+    await held.entered.promise;
     operations.push(read(fixture.repository, fixture.stagedResultRef, undefined, []));
     operations.push(read());
     operations.push(read(peer));
@@ -214,17 +212,16 @@ it("joins only matching pending staged reads and forgets settled results", async
     operations.push(read());
     vi.stubEnv("GIT_CONFIG_GLOBAL", previousConfig);
     operations.push(read());
-    release.resolve();
+    held.release.resolve();
     const snapshots = await Promise.all(operations);
-    expect(reads).toBe(6);
+    expect(held.reads).toBe(6);
     for (const snapshot of snapshots) {
       expect(snapshot.changedEntries.map((entry) => entry.path)).toContain("executable.sh");
-      expect(snapshot.base.entries).toEqual([]);
     }
     await read();
-    expect(reads).toBe(7);
+    expect(held.reads).toBe(7);
   } finally {
-    release.resolve();
+    held.release.resolve();
     await Promise.allSettled(operations);
   }
 });
@@ -281,19 +278,8 @@ it.each([2, 4])("isolates ref mutations and old settlement with %i CPUs", async 
 
 it("isolates cancellation and releases failed staged reads for retry", async () => {
   const fixture = await stagedFixture(0);
-  const entered = createDeferredCore();
-  const release = createDeferredCore();
+  const held = holdCommitReads();
   const controller = new AbortController();
-  const runBuffered = commandRuntime.runCommandBuffered;
-  let reads = 0;
-  vi.spyOn(commandRuntime, "runCommandBuffered").mockImplementation(async (argv, options) => {
-    if (argv.includes("cat-file") && argv.includes("commit")) {
-      reads++;
-      entered.resolve();
-      await raceNodeWorkerOperation(release.promise, options?.signal);
-    }
-    return runBuffered(argv, options);
-  });
   const cancelled = loadStagedWorkspaceManifest(
     fixture.repository,
     fixture.stagedResultRef,
@@ -302,7 +288,7 @@ it("isolates cancellation and releases failed staged reads for retry", async () 
   const cancelledOutcome = Promise.allSettled([cancelled]);
   const operations: Promise<unknown>[] = [cancelledOutcome];
   try {
-    await entered.promise;
+    await held.entered.promise;
     const independent = loadStagedWorkspaceManifest(fixture.repository, fixture.stagedResultRef);
     operations.push(independent);
     controller.abort(new Error("staged read owner cancelled"));
@@ -312,18 +298,18 @@ it("isolates cancellation and releases failed staged reads for retry", async () 
         reason: expect.objectContaining({ message: "staged read owner cancelled" }),
       },
     ]);
-    release.resolve();
+    held.release.resolve();
     expect((await independent).changedEntries.length).toBeGreaterThan(0);
-    expect(reads).toBe(2);
+    expect(held.reads).toBe(2);
     const missing = workerWorkspaceResultRef("not-created-yet");
     await expect(loadStagedWorkspaceManifest(fixture.repository, missing)).rejects.toThrow();
     await git(fixture.repository, ["update-ref", missing, fixture.commit]);
     expect(
       (await loadStagedWorkspaceManifest(fixture.repository, missing)).changedEntries.length,
     ).toBeGreaterThan(0);
-    expect(reads).toBe(4);
+    expect(held.reads).toBe(4);
   } finally {
-    release.resolve();
+    held.release.resolve();
     await Promise.allSettled(operations);
   }
 });
@@ -337,9 +323,6 @@ it.each<[number, number, FixtureOptions]>([
   "materializes %i files with at most %i Git reads (%j)",
   async (fileCount, maxReads, fixtureOptions) => {
     const fixture = await stagedFixture(fileCount, fixtureOptions);
-    expect(fixture.commit).toBe(
-      await git(fixture.repository, ["rev-parse", `${fixture.stagedResultRef}^{commit}`]),
-    );
     const gitReads: string[][] = [];
     const runBuffered = commandRuntime.runCommandBuffered;
     vi.spyOn(commandRuntime, "runCommandBuffered").mockImplementation(async (argv, options) => {
@@ -348,11 +331,12 @@ it.each<[number, number, FixtureOptions]>([
       }
       return await runBuffered(argv, options);
     });
-    const writes = vi.spyOn(fs, "writeFile");
-    const links = vi.spyOn(fs, "symlink");
     let stagingRoot = "";
     await fixture.read(async (snapshot) => {
       stagingRoot = snapshot.stagingRoot;
+      expect((await fs.readdir(stagingRoot)).toSorted()).toEqual(
+        snapshot.changedEntries.map((entry) => entry.path).toSorted(),
+      );
       for (const entry of snapshot.changedEntries) {
         const target = path.join(stagingRoot, entry.path);
         if (entry.type === "symlink") {
@@ -365,18 +349,6 @@ it.each<[number, number, FixtureOptions]>([
           }
         }
       }
-      const materialized = [
-        ...writes.mock.calls.map(([target]) => {
-          assert(typeof target === "string");
-          return target;
-        }),
-        ...links.mock.calls.map(([, target]) => String(target)),
-      ];
-      expect(
-        materialized.filter((target) => target.startsWith(stagingRoot + path.sep)).toSorted(),
-      ).toEqual(
-        snapshot.changedEntries.map((entry) => path.join(stagingRoot, entry.path)).toSorted(),
-      );
     });
     await expect(fs.stat(stagingRoot)).rejects.toMatchObject({ code: "ENOENT" });
     expect(gitReads.length, JSON.stringify(gitReads)).toBeLessThanOrEqual(maxReads);

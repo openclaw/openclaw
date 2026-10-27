@@ -1,5 +1,5 @@
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, onTestFinished } from "vitest";
 import { createTestConfigSnapshot } from "../commands/test-runtime-config-helpers.js";
 import type { ConfigValidationIssue, OpenClawConfig } from "../config/types.openclaw.js";
 import { createPluginManifestRecordFixture } from "../plugins/plugin-metadata.test-support.js";
@@ -139,6 +139,15 @@ describe("plugins cli list", () => {
   ])(
     "surfaces plugin discovery and stale-registry diagnostics in the $label list",
     async ({ args, visibleError }) => {
+      const columns = Object.getOwnPropertyDescriptor(process.stdout, "columns");
+      Object.defineProperty(process.stdout, "columns", { configurable: true, value: 240 });
+      onTestFinished(() => {
+        if (columns) {
+          Object.defineProperty(process.stdout, "columns", columns);
+        } else {
+          Reflect.deleteProperty(process.stdout, "columns");
+        }
+      });
       const refreshMessage =
         "Persisted plugin registry is stale. Run `openclaw plugins registry --refresh`.";
       const dependencyError = "Plugin dependency example-package could not be resolved.";

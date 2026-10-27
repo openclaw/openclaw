@@ -8,7 +8,6 @@ import {
   BlobsterGenerationAuthorityChangedError,
   BlobsterUnsupportedRuntimeError,
 } from "../../agents/blobster-generation-errors.js";
-import { generateBlobsterForAgent } from "../../agents/blobster-generation.js";
 import { isLlmOperatorAuthorizationError } from "../../plugins/runtime/runtime-llm-error.js";
 import { captureGatewayOperatorRunAuthority } from "../operator-run-authority.js";
 import { defineValidatedGatewayMethod } from "./validation.js";
@@ -38,6 +37,7 @@ export const agentAvatarGenerateHandler = defineValidatedGatewayMethod(
       return;
     }
     try {
+      const { generateBlobsterForAgent } = await import("../../agents/blobster-generation.js");
       assertCurrent();
       const result = await generateBlobsterForAgent({
         cfg: context.getRuntimeConfig(),

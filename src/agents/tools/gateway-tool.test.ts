@@ -34,6 +34,11 @@ vi.mock("../../gateway/server-plugin-in-process-dispatch.js", () => ({
   getInProcessGatewayRequestContext: (resolve?: () => GatewayRequestContext | undefined) =>
     resolve ? resolve() : host.context,
 }));
+const ownerTool = () => createGatewayTool({ senderIsOwner: true, allowConfigReads: false });
+const expectNoGatewayCall = () => {
+  expect(callGatewayToolMock).not.toHaveBeenCalled();
+  expect(dispatchMock).not.toHaveBeenCalled();
+};
 
 describe("gateway tool", () => {
   beforeEach(() => {
@@ -50,8 +55,7 @@ describe("gateway tool", () => {
       await expect(tool.execute("denied-config", { action, path: "channels" })).rejects.toThrow(
         `Action not available: ${action}`,
       );
-      expect(callGatewayToolMock).not.toHaveBeenCalled();
-      expect(dispatchMock).not.toHaveBeenCalled();
+      expectNoGatewayCall();
     },
   );
 
@@ -83,10 +87,7 @@ describe("gateway tool", () => {
       return result;
     });
     try {
-      const result = await createGatewayTool({
-        senderIsOwner: true,
-        allowConfigReads: false,
-      }).execute("maintenance", {
+      const result = await ownerTool().execute("maintenance", {
         action: "restart",
         note: "update.run",
         skipDeferral: true,
@@ -120,8 +121,7 @@ describe("gateway tool", () => {
         senderIsOwner: true,
       });
       expect(result.details).toMatchObject({ ok: false, code: "owner_required" });
-      expect(dispatchMock).not.toHaveBeenCalled();
-      expect(callGatewayToolMock).not.toHaveBeenCalled();
+      expectNoGatewayCall();
     },
   );
 });
@@ -140,8 +140,7 @@ describe("gateway maintenance authority", () => {
           gatewayToken: "synthetic-token",
         }),
       ).rejects.toThrow("Gateway instance unavailable");
-      expect(dispatchMock).not.toHaveBeenCalled();
-      expect(callGatewayToolMock).not.toHaveBeenCalled();
+      expectNoGatewayCall();
     },
   );
 });
@@ -253,7 +252,7 @@ describe("gateway update action", () => {
     },
   );
 
-  it.each([undefined])("requires an explicit owner identity (%s)", async (senderIsOwner) => {
+  it("requires an explicit owner identity", async () => {
     const result = await withGatewayToolCallerIdentity(
       {
         agentId: "main",
@@ -261,7 +260,7 @@ describe("gateway update action", () => {
         turnSourceChannel: "telegram",
       },
       () =>
-        createGatewayTool({ senderIsOwner, requesterSenderId: "123456789" }).execute("update", {
+        createGatewayTool({ requesterSenderId: "123456789" }).execute("update", {
           action: "update.run",
           requesterSenderId: "spoofed",
           channel: "discord",
@@ -274,8 +273,7 @@ describe("gateway update action", () => {
       message:
         "No authenticated owner chat principal or operator-scheduled admission authorizes this update. Ask the operator to add `telegram:123456789` to `commands.ownerAllowFrom`.",
     });
-    expect(callGatewayToolMock).not.toHaveBeenCalled();
-    expect(dispatchMock).not.toHaveBeenCalled();
+    expectNoGatewayCall();
   });
 
   it.each([0])(
@@ -360,10 +358,7 @@ describe("gateway update action", () => {
 
   it("still calls without a caller session", async () => {
     dispatchMock.mockResolvedValue({ ok: true, result: { status: "ok", steps: [] } });
-    const result = await createGatewayTool({
-      senderIsOwner: true,
-      allowConfigReads: false,
-    }).execute("update", {
+    const result = await ownerTool().execute("update", {
       action: "update.run",
     });
     expect(dispatchMock).toHaveBeenCalledOnce();
@@ -376,8 +371,7 @@ describe("gateway update action", () => {
     await expect(
       createGatewayTool({ senderIsOwner: true }).execute("update", { action: "update.run" }),
     ).rejects.toThrow("Gateway instance unavailable for update.run");
-    expect(dispatchMock).not.toHaveBeenCalled();
-    expect(callGatewayToolMock).not.toHaveBeenCalled();
+    expectNoGatewayCall();
   });
 
   it("preserves update diagnostic Unicode in tool results", async () => {

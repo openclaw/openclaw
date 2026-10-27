@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import fsSync, { closeSync, openSync, readSync } from "node:fs";
+import fsSync, { readSync } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -88,46 +88,31 @@ describe("pinned file descriptors", () => {
     },
   );
 
-  it("hashes all bytes without moving or closing the borrowed descriptor", async () => {
+  it("hashes and copies all bytes without moving or closing borrowed descriptors", async () => {
     const sourcePath = path.join(directory, "source");
     await fs.writeFile(sourcePath, bytes);
-    const fd = openSync(sourcePath, "r");
-    try {
-      readSync(fd, Buffer.alloc(2));
-      expect(hashFileDescriptorSync(fd)).toEqual({
-        sha256: expectedHash,
-        sizeBytes: bytes.length,
-      });
-      const remaining = Buffer.alloc(bytes.length);
-      const count = readSync(fd, remaining);
-      expect(remaining.subarray(0, count)).toEqual(bytes.subarray(2));
-    } finally {
-      closeSync(fd);
-    }
-  });
-
-  it("copies and observes all source bytes while retaining both handle positions", async () => {
-    const source = await fs.open(path.join(directory, "source"), "wx+");
+    await using source = await fs.open(sourcePath, "r");
+    readSync(source.fd, Buffer.alloc(2));
+    expect(hashFileDescriptorSync(source.fd)).toEqual({
+      sha256: expectedHash,
+      sizeBytes: bytes.length,
+    });
+    const remaining = Buffer.alloc(bytes.length);
+    const count = readSync(source.fd, remaining);
+    expect(remaining.subarray(0, count)).toEqual(bytes.subarray(2));
     const targetPath = path.join(directory, "target");
-    const target = await fs.open(targetPath, "wx+");
-    try {
-      await source.writeFile(bytes);
-      await target.writeFile("seed");
-      const observed = createHash("sha256");
-      expect(
-        await copyFileHandle(source, target, {
-          onChunk: (chunk) => {
-            observed.update(chunk);
-          },
-        }),
-      ).toBe(bytes.length);
-      expect(observed.digest("hex")).toBe(expectedHash);
-      expect(await fs.readFile(targetPath)).toEqual(bytes);
-      expect(await source.readFile()).toHaveLength(0);
-      expect(await target.readFile()).toEqual(bytes.subarray(4));
-    } finally {
-      await target.close();
-      await source.close();
-    }
+    await using target = await fs.open(targetPath, "wx+");
+    await target.writeFile("seed");
+    const observed = createHash("sha256");
+    const copied = await copyFileHandle(source, target, {
+      onChunk: (chunk) => {
+        observed.update(chunk);
+      },
+    });
+    expect(copied).toBe(bytes.length);
+    expect(observed.digest("hex")).toBe(expectedHash);
+    expect(await fs.readFile(targetPath)).toEqual(bytes);
+    expect(await source.readFile()).toHaveLength(0);
+    expect(await target.readFile()).toEqual(bytes.subarray(4));
   });
 });

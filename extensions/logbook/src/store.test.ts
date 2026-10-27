@@ -3,6 +3,7 @@ import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { beforeEach, describe, expect, it } from "vitest";
 import { dayKeyFor } from "./day.js";
+import { LOGBOOK_SCHEMA_VERSION } from "./store-schema.js";
 import { LogbookStore } from "./store.js";
 import {
   BASE,
@@ -23,10 +24,12 @@ const draft = (overrides: Partial<LogbookCardDraft> = {}) =>
 
 describe("LogbookStore", () => {
   let dir: string;
+  let databasePath: string;
   let store: LogbookStore;
 
   beforeEach(async () => {
     dir = fixture.makeDir();
+    databasePath = path.join(dir, "logbook.sqlite");
     store = await fixture.open(dir);
   });
 
@@ -35,15 +38,14 @@ describe("LogbookStore", () => {
   const replaceCards = (drafts: LogbookCardDraft[]) =>
     store.replaceCardsInWindow(DAY, BASE, BASE + 60_000, drafts);
   const cardTitles = async () => (await store.cardsForDay(DAY)).map(({ title }) => title);
-  const insertFrame = async (capturedAtMs: number) => {
-    const day = dayKeyFor(capturedAtMs);
-    return await store.captureFrame({
+  const rows = (sql: string) => readRows(databasePath, sql);
+  const insertFrame = (capturedAtMs: number) =>
+    store.captureFrame({
       capturedAtMs,
-      day,
+      day: dayKeyFor(capturedAtMs),
       screenIndex: 0,
       buffer: Buffer.from(`jpeg-bytes-${capturedAtMs}`),
     });
-  };
 
   it("refuses a hardlinked database with another frame root before bootstrapping that root", async () => {
     const capturedAtMs = Date.now();
@@ -55,32 +57,31 @@ describe("LogbookStore", () => {
       "SQLite database already belongs to another worker backend",
     );
     expect(fs.existsSync(path.join(otherRoot, "frames"))).toBe(false);
-    expect(await store.framesInRange(capturedAtMs, capturedAtMs + 1)).toMatchObject([
-      {
-        id: frameId,
-        capturedAtMs,
-      },
-    ]);
     expect(await store.framePayload(frameId)).toMatchObject({
       frameId,
       capturedAtMs,
       base64: Buffer.from(`jpeg-bytes-${capturedAtMs}`).toString("base64"),
     });
-    expect(
-      fs.readFileSync(store.frameFilePath(dayKeyFor(capturedAtMs), capturedAtMs), "utf8"),
-    ).toBe(`jpeg-bytes-${capturedAtMs}`);
     expect(await store.countUnbatchedActiveFrames()).toBe(1);
   });
 
-  it("rolls back large frame claims with a late missing or duplicate frame", async () => {
+  it("rolls back empty, duplicate, missing and already-owned frame claims", async () => {
     const t0 = Date.now();
+    await expect(createBatch([], t0, t0 + 1000, DAY)).rejects.toThrow(
+      "Logbook batch requires at least one frame",
+    );
+    expect(await store.latestBatch()).toBeNull();
     const frameIds = await Promise.all(
       Array.from({ length: 70 }, (_, index) => insertFrame(t0 + index)),
     );
     const firstFrameId = expectDefined(frameIds[0], "first frame");
 
-    for (const invalidFrameId of [999_999, firstFrameId]) {
-      await expect(createBatch([...frameIds, invalidFrameId], t0)).rejects.toThrow(
+    for (const [claim, invalidFrameId] of [
+      [[firstFrameId, firstFrameId], firstFrameId],
+      [[...frameIds, 999_999], 999_999],
+      [[...frameIds, firstFrameId], firstFrameId],
+    ] as const) {
+      await expect(createBatch([...claim], t0)).rejects.toThrow(
         `Logbook frame ${invalidFrameId} is missing or already batched`,
       );
 
@@ -91,36 +92,13 @@ describe("LogbookStore", () => {
     const batchId = await createBatch(frameIds, t0);
     expect(await store.latestBatch()).toMatchObject({ id: batchId, frameCount: 70 });
     expect(await store.countUnbatchedActiveFrames()).toBe(0);
-  });
-
-  it("does not steal a frame from an existing batch", async () => {
-    const t0 = Date.now();
-    const firstFrame = await insertFrame(t0);
     const secondFrame = await insertFrame(t0 + 1000);
-    const firstBatch = await createBatch([firstFrame], t0);
-
-    await expect(createBatch([firstFrame, secondFrame], t0, t0 + 2000)).rejects.toThrow(
-      `Logbook frame ${firstFrame} is missing or already batched`,
+    await expect(createBatch([firstFrameId, secondFrame], t0, t0 + 2000)).rejects.toThrow(
+      `Logbook frame ${firstFrameId} is missing or already batched`,
     );
-
-    expect((await store.latestBatch())?.id).toBe(firstBatch);
-    expect((await store.batchImages(firstBatch)).map(({ frame }) => frame.id)).toEqual([
-      firstFrame,
-    ]);
+    expect((await store.latestBatch())?.id).toBe(batchId);
+    expect((await store.batchImages(batchId)).map(({ frame }) => frame.id)).toContain(firstFrameId);
     expect((await store.unbatchedActiveFrames(10)).map((frame) => frame.id)).toEqual([secondFrame]);
-  });
-
-  it("rejects empty and duplicate frame claims without leaving a batch", async () => {
-    const t0 = Date.now();
-    await expect(createBatch([], t0, t0 + 1000, DAY)).rejects.toThrow(
-      "Logbook batch requires at least one frame",
-    );
-    const frameId = await insertFrame(t0);
-    await expect(createBatch([frameId, frameId], t0, t0 + 1000, DAY)).rejects.toThrow(
-      `Logbook frame ${frameId} is missing or already batched`,
-    );
-    expect(await store.latestBatch()).toBeNull();
-    expect(await store.countUnbatchedActiveFrames()).toBe(1);
   });
 
   it("round-trips distractions and computes day stats", async () => {
@@ -141,13 +119,11 @@ describe("LogbookStore", () => {
     });
     expect(expectDefined(cards[0], "stored logbook card").distractions).toEqual(distractions);
     const stats = (await store.timelineForDay(DAY)).stats;
-    expect(stats.trackedMs).toBe(60 * 60_000);
-    expect(stats.distractionMs).toBe(5 * 60_000);
-    expect(stats.categories).toEqual([
-      { category: "coding", ms: 30 * 60_000 },
-      { category: "review", ms: 30 * 60_000 },
-    ]);
-    expect(expectDefined(stats.apps[0], "logbook app statistic").domain).toBe("github.com");
+    expect(stats).toMatchObject({ trackedMs: 60 * 60_000, distractionMs: 5 * 60_000 });
+    expect(stats.categories).toEqual(
+      ["coding", "review"].map((category) => ({ category, ms: 30 * 60_000 })),
+    );
+    expect(stats.apps).toEqual([{ domain: "github.com", ms: 30 * 60_000 }]);
     expect(await store.countCardsForDay(DAY)).toBe(cards.length);
     expect(await store.countCardsForDay("2026-07-04")).toBe(0);
     expect(await store.timelineForDay("2026-07-04")).toEqual({
@@ -155,7 +131,7 @@ describe("LogbookStore", () => {
       cards: [],
       stats: { trackedMs: 0, distractionMs: 0, categories: [], apps: [] },
     });
-    withDatabase(path.join(dir, "logbook.sqlite"), (database) => {
+    withDatabase(databasePath, (database) => {
       database.prepare("UPDATE cards SET distractions = ? WHERE title = ?").run("{", "Review");
     });
     await expect(store.cardsForDay(DAY)).rejects.toThrow(/JSON/);
@@ -183,21 +159,14 @@ describe("LogbookStore", () => {
     expect(await store.framesInRange(now - 21 * 24 * 60 * 60_000, now)).toEqual([]);
   });
 
-  it("rejects observations for a missing batch", async () => {
-    await expect(
-      store.replaceObservations(999_999, DAY, [
-        { startMs: 1, endMs: 2, text: "orphan observation" },
-      ]),
-    ).rejects.toThrow();
-    expect(await store.observationsInRange(DAY, 0, Number.MAX_SAFE_INTEGER)).toEqual([]);
-  });
-
   it("replaces large observation sets in order and rolls back a late invalid timestamp", async () => {
+    const observation = { startMs: 1, endMs: 2, text: "orphan observation" };
+    await expect(store.replaceObservations(999_999, DAY, [observation])).rejects.toThrow();
+    expect(await store.observationsInRange(DAY, 0, Number.MAX_SAFE_INTEGER)).toEqual([]);
     const frameId = await insertFrame(Date.now());
     const batchId = await createBatch([frameId], 1, 2, DAY);
     const segments = Array.from({ length: 70 }, (_, index) => ({
-      startMs: 1,
-      endMs: 2,
+      ...observation,
       text: `Observation ${Math.max(0, index - 1)}`,
     }));
     await store.replaceObservations(batchId, DAY, [{ startMs: 1, endMs: 2, text: "replaced" }]);
@@ -234,14 +203,11 @@ describe("LogbookStore", () => {
 
   it("keeps capture data owner-only on disk", () => {
     const mode = (p: string) => fs.statSync(p).mode & 0o777;
-    expect(mode(dir)).toBe(0o700);
-    expect(mode(store.framesDir)).toBe(0o700);
-    expect(mode(path.join(dir, "logbook.sqlite"))).toBe(0o600);
+    expect([dir, store.framesDir, databasePath].map(mode)).toEqual([0o700, 0o700, 0o600]);
   });
 
   it("migrates legacy tables to STRICT without losing batch assignments", async () => {
     await store.close();
-    const databasePath = path.join(dir, "logbook.sqlite");
     fs.rmSync(databasePath, { force: true });
     execSql(
       databasePath,
@@ -266,48 +232,46 @@ describe("LogbookStore", () => {
 
     store = await fixture.open(dir);
 
-    expect(readRows(databasePath, "SELECT id, batch_id FROM frames")).toEqual([
-      { id: 11, batch_id: 7 },
-    ]);
+    expect(rows("SELECT id, batch_id FROM frames")).toEqual([{ id: 11, batch_id: 7 }]);
     expect(
-      readRows(
-        databasePath,
-        `SELECT name, strict FROM pragma_table_list
-             WHERE schema = 'main' AND type = 'table' AND name NOT LIKE 'sqlite_%'
-             ORDER BY name`,
+      rows(
+        "SELECT name, strict FROM pragma_table_list WHERE name IN ('batches', 'frames', 'cards', 'observations', 'standups') ORDER BY name",
       ),
-    ).toEqual(
-      ["batches", "cards", "frames", "observations", "standups"].map((name) => ({
-        name,
-        strict: 1,
-      })),
-    );
+    ).toEqual([
+      { name: "batches", strict: 1 },
+      { name: "cards", strict: 1 },
+      { name: "frames", strict: 1 },
+      { name: "observations", strict: 1 },
+      { name: "standups", strict: 1 },
+    ]);
   });
 
   it("refuses a newer schema without changing its stored data", async () => {
+    await Promise.all([DAY, "2026-07-04"].map((day) => store.saveStandup(day, "Original")));
     await store.saveStandup(DAY, "Preserved future-version fixture");
     await store.close();
-    const databasePath = path.join(dir, "logbook.sqlite");
     // The future-version file must reach its first managed admission here.
     fs.renameSync(databasePath, `${databasePath}.seed`);
     fs.copyFileSync(`${databasePath}.seed`, databasePath);
-    execSql(databasePath, "PRAGMA user_version = 3");
+    const futureVersion = LOGBOOK_SCHEMA_VERSION + 1;
+    execSql(databasePath, `PRAGMA user_version = ${futureVersion}`);
 
     await expect(LogbookStore.open(dir, workerModuleUrl)).rejects.toThrow(
-      "Logbook database uses newer schema version 3; this build supports 2",
+      `Logbook database uses newer schema version ${futureVersion}; this build supports ${LOGBOOK_SCHEMA_VERSION}`,
     );
-    expect(readRows(databasePath, "PRAGMA user_version")).toEqual([{ user_version: 3 }]);
-    expect(readRows(databasePath, "SELECT day, text FROM standups")).toEqual([
+    expect(rows("PRAGMA user_version")).toEqual([{ user_version: futureVersion }]);
+    expect(rows("SELECT day, text FROM standups ORDER BY day")).toEqual([
       { day: DAY, text: "Preserved future-version fixture" },
+      { day: "2026-07-04", text: "Original" },
     ]);
   });
 
   it("rolls back a legacy STRICT migration when stored data has the wrong type", async () => {
     const legacyDir = path.join(dir, "invalid-legacy");
     fs.mkdirSync(legacyDir);
-    const databasePath = path.join(legacyDir, "logbook.sqlite");
+    const legacyPath = path.join(legacyDir, "logbook.sqlite");
     execSql(
-      databasePath,
+      legacyPath,
       `
       CREATE TABLE standups (day TEXT PRIMARY KEY, text TEXT NOT NULL, updated_ms TEXT NOT NULL);
       INSERT INTO standups VALUES ('${DAY}', 'legacy', 'not-an-integer');
@@ -319,9 +283,9 @@ describe("LogbookStore", () => {
     );
 
     expect(
-      readRows(databasePath, "SELECT strict FROM pragma_table_list WHERE name = 'standups'"),
+      readRows(legacyPath, "SELECT strict FROM pragma_table_list WHERE name = 'standups'"),
     ).toEqual([{ strict: 0 }]);
-    expect(readRows(databasePath, "SELECT * FROM standups")).toEqual([
+    expect(readRows(legacyPath, "SELECT * FROM standups")).toEqual([
       { day: DAY, text: "legacy", updated_ms: "not-an-integer" },
     ]);
   });

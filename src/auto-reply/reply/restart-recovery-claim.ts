@@ -425,29 +425,27 @@ export function createReplyRestartRecoveryClaimController(
       return "admitted";
     }
 
-    const deliveryContext = params.resolveDeliveryContext(entry);
-    const recoverableDeliveryContext = sourceTurnId ? deliveryContext : undefined;
-    if (recoverableDeliveryContext && !strandedRetryRunId) {
+    const resolvedDeliveryContext = params.resolveDeliveryContext(entry);
+    const deliveryContext = sourceTurnId ? resolvedDeliveryContext : undefined;
+    if (deliveryContext && !strandedRetryRunId) {
       const sourceMessage = recorder?.getPersistedMessage?.() ?? (await recorder?.resolveMessage());
       const persistedSourceTurnId = normalizeOptionalString(sourceMessage?.idempotencyKey);
       if (!recorder || persistedSourceTurnId !== sourceTurnId) {
         throw new Error("channel restart recovery requires source-keyed user-turn admission");
       }
     }
-    const claimSourceRunId =
-      recoverableDeliveryContext && sourceTurnId ? sourceTurnId : recoveryRunId;
-    const operatorSource =
-      !recoverableDeliveryContext && !sourceTurnId
-        ? createRestartRecoveryOperatorSource({
-            authority: params.operatorAuthority,
-            entry,
-            agentId: params.agentId,
-            sessionKey: params.sessionKey,
-            sourceRunId: recoveryRunId,
-            inputProvenance: params.inputProvenance,
-            requesterOrigin,
-          })
-        : undefined;
+    const claimSourceRunId = deliveryContext && sourceTurnId ? sourceTurnId : recoveryRunId;
+    const operatorSource = sourceTurnId
+      ? undefined
+      : createRestartRecoveryOperatorSource({
+          authority: params.operatorAuthority,
+          entry,
+          agentId: params.agentId,
+          sessionKey: params.sessionKey,
+          sourceRunId: recoveryRunId,
+          inputProvenance: params.inputProvenance,
+          requesterOrigin,
+        });
     // Internal children retain requester custody even without an outward delivery route.
     const requesterSource = createRestartRecoveryRequesterSource({
       requesterOrigin,
@@ -458,7 +456,7 @@ export function createReplyRestartRecoveryClaimController(
     });
     const requesterChannel = requesterSource?.requesterOrigin.messageProvider;
     if (
-      !recoverableDeliveryContext &&
+      !deliveryContext &&
       !activeClaimRunId &&
       (!recorder || recorder.hasPersisted()) &&
       !operatorSource &&
@@ -493,9 +491,9 @@ export function createReplyRestartRecoveryClaimController(
     const transfersControlUiClaim =
       canReplaceAbortedClaim &&
       entry.restartRecoverySourceIngress === "control-ui" &&
-      !recoverableDeliveryContext;
+      !deliveryContext;
     const hasClaim =
-      recoverableDeliveryContext || transfersControlUiClaim || operatorSource || requesterSource;
+      deliveryContext || transfersControlUiClaim || operatorSource || requesterSource;
     const patch: SessionTranscriptTurnLifecyclePatch = {
       ...retiredClaim,
       abortedLastRun: false,
@@ -505,7 +503,7 @@ export function createReplyRestartRecoveryClaimController(
       restartRecoveryBeforeAgentReplyState: undefined,
       restartRecoveryDeliveryReceiptState: undefined,
       restartRecoveryDeliveryToolCallId: undefined,
-      restartRecoveryDeliveryContext: recoverableDeliveryContext,
+      restartRecoveryDeliveryContext: deliveryContext,
       restartRecoveryDeliveryRequestFingerprint: undefined,
       restartRecoveryDeliveryRunId: hasClaim ? recoveryRunId : undefined,
       restartRecoveryOperatorSource: operatorSource,
@@ -519,11 +517,13 @@ export function createReplyRestartRecoveryClaimController(
         : normalizeOptionalString(params.requesterSenderId),
       restartRecoverySameChannelThreadRequired:
         !transfersControlUiClaim && params.sameChannelThreadRequired === true ? true : undefined,
-      restartRecoverySourceIngress: recoverableDeliveryContext
+      restartRecoverySourceIngress: deliveryContext
         ? "channel"
         : transfersControlUiClaim
           ? "control-ui"
-          : (operatorSource || requesterSource) && params.inputProvenance?.kind === "inter_session"
+          : (operatorSource || requesterSource) &&
+              params.inputProvenance &&
+              params.inputProvenance.kind !== "external_user"
             ? "internal"
             : (operatorSource?.snapshot.sourceIngress ??
               (requesterSource

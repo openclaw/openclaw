@@ -129,19 +129,11 @@ it("keeps a catalog family only where the configured route serves the declared m
   expect(familyFor({ baseUrl: configuredEndpoint })).toBeUndefined();
   expect(familyFor({ api: "openai-completions" })).toBeUndefined();
 
-  // An overlay that moves the row to another route drops the old route's family.
-  expect(overlayCatalogMetadata(captured, { ...captured, family: undefined }).family).toBe("meta");
-  expect(
-    overlayCatalogMetadata(captured, {
-      ...captured,
-      family: undefined,
-      baseUrl: configuredEndpoint,
-    }).family,
-  ).toBeUndefined();
-  expect(
-    overlayCatalogMetadata(captured, { ...captured, baseUrl: configuredEndpoint, family: "zai" })
-      .family,
-  ).toBe("zai");
+  const overlayFamily = (override: Partial<ModelCatalogEntry> = {}) =>
+    overlayCatalogMetadata(captured, { ...captured, family: undefined, ...override }).family;
+  expect(overlayFamily()).toBe("meta");
+  expect(overlayFamily({ baseUrl: configuredEndpoint })).toBeUndefined();
+  expect(overlayFamily({ baseUrl: configuredEndpoint, family: "zai" })).toBe("zai");
 
   // A managed route projection keeps the model identity, family included.
   const cfg = modelConfig([makeModel("compact-chat")]);

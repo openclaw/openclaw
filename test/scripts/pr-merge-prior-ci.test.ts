@@ -361,7 +361,7 @@ describePosix("explicit prior-CI admin landing", () => {
     ["wrong-ci-run", "successful exact-head security enforcement is required"],
     ["wrong-ci-attempt", "successful exact-head security enforcement is required"],
     ["duplicate-enforcement", "successful exact-head security enforcement is required"],
-    ["automation-dispatch", "successful protected Security Review publisher is required"],
+    ["unsupported-event", "successful protected Security Review publisher is required"],
     ["missing-job", "security-fast must pass independently"],
     ["duplicate-job", "security-fast must pass independently"],
     ["missing-status", "current combined CI/security status is required"],
@@ -415,6 +415,35 @@ describePosix("explicit prior-CI admin landing", () => {
       });
     }
   });
+
+  it.each([false, true])(
+    "binds a dispatched Security Review to the exact CI attempt (headOnly=%s)",
+    (headOnly) => {
+      const f = preExistingCandidate();
+      const state = f.state();
+      state.priorCi.security.publisherEvent = "workflow_dispatch";
+      if (headOnly) {
+        state.priorCi.security.fault = "head-only-enforcement";
+      }
+      f.save(state);
+      const result = f.adminPriorCi(f.path);
+      expectResult(
+        f,
+        result,
+        headOnly ? "successful exact-head security enforcement is required" : undefined,
+        headOnly ? 0 : 1,
+      );
+      if (headOnly) {
+        expectNoIntent(f);
+      } else {
+        expect(f.record().priorCiAdmin.securityReview).toMatchObject({
+          runId: 901,
+          runAttempt: 1,
+          jobId: 902,
+        });
+      }
+    },
+  );
 
   it.each(["monitor", "matrix"])("rejects a cancelled failed step under %s attribution", (kind) => {
     const f = kind === "matrix" ? matrixCandidate() : preExistingCandidate();

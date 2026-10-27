@@ -100,6 +100,18 @@ function personalProviderConfig(baseUrl: string) {
   };
 }
 
+function transportRegistry(transports: Record<string, () => undefined>) {
+  const registry = createEmptyPluginRegistry();
+  for (const [id, normalizeTransport] of Object.entries(transports)) {
+    registry.providers.push({
+      pluginId: id,
+      source: "test",
+      provider: { id, label: id, auth: [], normalizeTransport },
+    });
+  }
+  return registry;
+}
+
 beforeEach(() => {
   clearPluginMetadataLifecycleCaches();
   for (const mock of Object.values(manifestMocks)) {
@@ -117,24 +129,10 @@ it("caches native donor facts and misses without unrelated provider hooks", () =
   const unrelatedTransport = vi.fn(() => {
     throw new Error("Unrelated provider hook reached");
   });
-  const pluginRegistry = createEmptyPluginRegistry();
-  pluginRegistry.providers.push(
-    {
-      pluginId: "mistral",
-      source: "test",
-      provider: { id: "mistral", label: "Mistral", auth: [], normalizeTransport },
-    },
-    {
-      pluginId: "unrelated",
-      source: "test",
-      provider: {
-        id: "unrelated",
-        label: "Unrelated",
-        auth: [],
-        normalizeTransport: unrelatedTransport,
-      },
-    },
-  );
+  const pluginRegistry = transportRegistry({
+    mistral: normalizeTransport,
+    unrelated: unrelatedTransport,
+  });
   const nativeConfig = personalProviderConfig("https://api.mistral.ai/v1");
   const proxyConfig = personalProviderConfig("http://localhost:4000");
   const lookup = { provider: "personal", modelId: "mistral-medium-3-5" };
@@ -191,12 +189,7 @@ it("keeps a static donor miss separate from an allowed refreshable lookup", () =
   ]);
   const cfg = personalProviderConfig("https://api.mistral.ai/v1");
   const lookup = { provider: "personal", modelId: "mistral-medium-3-5", cfg, metadataSnapshot };
-  const pluginRegistry = createEmptyPluginRegistry();
-  pluginRegistry.providers.push({
-    pluginId: "mistral",
-    source: "test",
-    provider: { id: "mistral", label: "Mistral", auth: [], normalizeTransport: () => undefined },
-  });
+  const pluginRegistry = transportRegistry({ mistral: () => undefined });
   withPluginRuntimeGenerationScope({ metadataSnapshot, pluginRegistry }, () => {
     expect(resolveBundledStaticCatalogModel(lookup)).toBeUndefined();
     expect(

@@ -93,7 +93,7 @@ suite.define(() => {
         ],
       });
       await page.goto(`${suite.server.baseUrl}chat`);
-      await gateway.waitForRequest("chat.startup");
+      await gateway.waitForRequest("sessions.messages.subscribe");
       const composer = page.locator(".agent-chat__input");
       await composer.locator('[data-chat-thinking-select="true"]').waitFor();
       await openChatSidePanelType(page, "Files");

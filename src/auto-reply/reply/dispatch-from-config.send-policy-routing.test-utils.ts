@@ -26,6 +26,7 @@ import {
   globalBeforeAll0,
   describe2BeforeEach0,
   requireBlockReplyHandler,
+  createMessageToolOnlyDispatchArgs,
 } from "./dispatch-from-config.test-support.js";
 import { createReplyDispatcher } from "./reply-dispatcher.js";
 import { buildTestCtx } from "./test-ctx.js";
@@ -342,7 +343,7 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
       mediaUrls: undefined,
       idempotencyKey: "run-1:internal-source-reply:0",
       expectedSessionId: "s1",
-      storePath: "/tmp/mock-sessions.json",
+      storePath: sessionStoreMocks.resolveSessionStorePathCore(),
       updateMode: "inline",
       config: emptyConfig,
       beforeMessageWrite: expect.any(Function),
@@ -406,7 +407,7 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
       mediaUrls: ["https://example.com/redacted.png"],
       idempotencyKey: "run-1:internal-source-reply:rewritten",
       expectedSessionId: "s1",
-      storePath: "/tmp/mock-sessions.json",
+      storePath: sessionStoreMocks.resolveSessionStorePathCore(),
       updateMode: "inline",
       config: emptyConfig,
       beforeMessageWrite: expect.any(Function),
@@ -566,15 +567,9 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
     );
     const ctx = buildTestCtx({ SessionKey: "test:session" });
 
-    const result = await dispatchReplyFromConfig({
-      ctx,
-      cfg: emptyConfig,
-      dispatcher,
-      replyResolver,
-      replyOptions: {
-        sourceReplyDeliveryMode: "message_tool_only",
-      },
-    });
+    const result = await dispatchReplyFromConfig(
+      createMessageToolOnlyDispatchArgs(ctx, dispatcher, replyResolver),
+    );
 
     expect(replyResolver).toHaveBeenCalledTimes(1);
     expect(result.queuedFinal).toBe(false);
@@ -972,7 +967,7 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
     expect(replyResolver).toHaveBeenCalledTimes(1);
     expect(sessionStoreMocks.loadSessionStoreEntry).toHaveBeenCalledWith({
       agentId: "main",
-      storePath: "/tmp/mock-sessions.json",
+      storePath: sessionStoreMocks.resolveSessionStorePathCore(),
       sessionKey: parentSessionKey,
       readConsistency: "latest",
       clone: false,

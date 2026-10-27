@@ -3,12 +3,9 @@ import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
 import {
   openEngineStore,
-  postgresIndexOrderingMigration,
   withEngineStoreAdmission,
-  withLegacyPostgresIndexOrdering,
   type EngineConnection,
   type DatabaseEngineInput,
-  type StoreSchema,
 } from "openclaw/plugin-sdk/database-engine-worker-runtime";
 import {
   configureSqliteConnectionPragmas,
@@ -22,24 +19,9 @@ import {
   getAdmittedSqliteSchemaFacts,
   type SqliteDatabaseAdmissionKey,
 } from "openclaw/plugin-sdk/sqlite-worker-runtime";
-import { WORKBOARD_POSTGRES_SCHEMA_SQL } from "./workboard-postgres-schema.js";
+import { workboardEngineSchema } from "./store-engine-schema.js";
 import { SCHEMA_VERSION, WORKBOARD_SCHEMA_SQL } from "./workboard-schema.js";
 export type WorkboardSqlConnection = EngineConnection;
-
-export const workboardEngineSchema: StoreSchema = {
-  id: "workboard",
-  version: SCHEMA_VERSION,
-  sqlite: WORKBOARD_SCHEMA_SQL,
-  postgres: WORKBOARD_POSTGRES_SCHEMA_SQL,
-  postgresMigrations: [
-    {
-      version: 4,
-      fromSchema: { postgres: withLegacyPostgresIndexOrdering(WORKBOARD_POSTGRES_SCHEMA_SQL) },
-      schema: { postgres: WORKBOARD_POSTGRES_SCHEMA_SQL },
-      sql: postgresIndexOrderingMigration(WORKBOARD_POSTGRES_SCHEMA_SQL),
-    },
-  ],
-};
 
 const WORKBOARD_SQLITE_BUSY_TIMEOUT_MS = 5000;
 const WORKBOARD_SQLITE_DIR_MODE = 0o700;

@@ -1,15 +1,12 @@
 import { randomUUID } from "node:crypto";
 import path from "node:path";
-import { performance } from "node:perf_hooks";
-import { stripVTControlCharacters } from "node:util";
-import { afterEach, beforeAll, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { formatBillingErrorMessage } from "../../agents/failover/user-copy.js";
 import { clearAgentHarnesses } from "../../agents/harness/registry.js";
 import { readAgentRunTerminalOutcome } from "../../channels/turn/agent-run-terminal-outcome.js";
 import { setVerbose } from "../../global-state.js";
-import * as diagnostics from "../../infra/diagnostic-events.js";
 import { onDiagnosticEvent, type DiagnosticEventPayload } from "../../infra/diagnostic-events.js";
 import {
   applyLoggingConfig,
@@ -19,8 +16,12 @@ import {
 } from "../../logging/logger.js";
 import { loggingState } from "../../logging/state.js";
 import { setActivePluginRegistry } from "../../plugins/runtime.js";
-import { getSessionControllerOperation } from "../../sessions/session-controller.js";
+import {
+  createReplyOperation,
+  getSessionControllerOperation,
+} from "../../sessions/session-controller.js";
 import { captureSessionTarget } from "../../sessions/session-controller.lifecycle.js";
+import { testing as controllerTesting } from "../../sessions/session-controller.test-support.js";
 import * as channels from "../../test-utils/channel-plugins.js";
 import { withReplyDispatcher } from "../dispatch-dispatcher.js";
 import { setReplyPayloadMetadata } from "../reply-payload.js";
@@ -31,6 +32,7 @@ import {
   createDispatcher,
   diagnosticMocks,
   mocks,
+  mockSessionStorePath,
   noAbortResult,
   resetPluginTtsAndThreadMocks,
   sessionStoreMocks,
@@ -38,6 +40,7 @@ import {
 } from "./dispatch-from-config.shared.test-harness.js";
 import type { DispatchFromConfigParams } from "./dispatch-from-config.types.js";
 import { expectedNoQueuedReplyResult } from "./dispatch-result-expectations.test-support.js";
+import { resetInboundDedupe } from "./inbound-dedupe.js";
 import { createReplyDispatcher } from "./reply-dispatcher.js";
 import {
   REPLY_OPERATION_RUN_STATE,
@@ -46,11 +49,7 @@ import {
 } from "./reply-operation-run-state.js";
 import { buildTestCtx } from "./test-ctx.js";
 
-let dispatchReplyFromConfig: typeof import("./dispatch-from-config.js").dispatchReplyFromConfig;
-let createReplyOperation: typeof import("../../sessions/session-controller.js").createReplyOperation;
-
-let controllerTesting: typeof import("../../sessions/session-controller.test-support.js").testing;
-let resetInboundDedupe: typeof import("./inbound-dedupe.js").resetInboundDedupe;
+const { dispatchReplyFromConfig } = await import("./dispatch-from-config.js");
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
@@ -58,7 +57,7 @@ type ReplyResolver = NonNullable<DispatchFromConfigParams["replyResolver"]>;
 
 const sessionKey = "agent:main:telegram:direct:1";
 const sessionTarget = captureSessionTarget({
-  storeScope: "/tmp/mock-sessions.json",
+  storeScope: mockSessionStorePath,
   sessionKey,
   agentId: "main",
 });
@@ -104,15 +103,6 @@ function expectFailure(
   expect(operation?.result).toEqual({ kind: "failed", code: "run_failed", cause });
 }
 
-beforeAll(async () => {
-  ({ dispatchReplyFromConfig } = await import("./dispatch-from-config.js"));
-  ({ createReplyOperation } = await import("../../sessions/session-controller.js"));
-
-  ({ testing: controllerTesting } =
-    await import("../../sessions/session-controller.test-support.js"));
-  ({ resetInboundDedupe } = await import("./inbound-dedupe.js"));
-});
-
 beforeEach(() => {
   controllerTesting.resetSessionControllerForTest();
   resetInboundDedupe();
@@ -124,8 +114,10 @@ beforeEach(() => {
 });
 
 describe("dispatchReplyFromConfig visible admission recovery", () => {
-  let processedEvents: Extract<DiagnosticEventPayload, { type: "message.processed" }>[];
-  let dispatchEvents: Extract<DiagnosticEventPayload, { type: "message.dispatch.completed" }>[];
+  let failureEvents: Extract<
+    DiagnosticEventPayload,
+    { type: "message.processed" | "message.dispatch.completed" }
+  >[];
   let unsubscribe: () => void;
 
   beforeEach(() => {
@@ -137,17 +129,13 @@ describe("dispatchReplyFromConfig visible admission recovery", () => {
       file: path.join(tempDirs.make("dispatch-diagnostics-"), "gateway.log"),
       consoleLevel: "silent",
     });
-    processedEvents = [];
-    dispatchEvents = [];
+    failureEvents = [];
     unsubscribe = onDiagnosticEvent((event) => {
-      if (event.type === "message.processed") {
-        processedEvents.push(event);
-      } else if (event.type === "message.dispatch.completed") {
-        dispatchEvents.push(event);
+      if (event.type === "message.processed" || event.type === "message.dispatch.completed") {
+        failureEvents.push(event);
       }
     });
     diagnosticMocks.forwardToRealPipeline = true;
-    diagnosticMocks.logMessageDispatchCompleted.mockClear();
     sessionStoreMocks.currentEntry = undefined;
     sessionStoreMocks.entriesBySessionKey.clear();
   });
@@ -159,7 +147,6 @@ describe("dispatchReplyFromConfig visible admission recovery", () => {
     vi.unstubAllEnvs();
     unsubscribe();
     diagnosticMocks.forwardToRealPipeline = false;
-    vi.useRealTimers();
     controllerTesting.resetSessionControllerForTest();
     resetInboundDedupe();
   });
@@ -183,74 +170,68 @@ describe("dispatchReplyFromConfig visible admission recovery", () => {
   it.each([
     { name: "info", logging: { level: "info" }, detail: false },
     { name: "debug", logging: { level: "debug" }, detail: true },
-    { name: "environment info", logging: { level: "debug" }, env: "info", detail: false },
-  ] as const)(
-    "recovers a visible partial with $name diagnostics",
-    async ({ logging, detail, ...testCase }) => {
-      vi.stubEnv("OPENCLAW_LOG_LEVEL", "env" in testCase ? testCase.env : undefined);
-      applyLoggingConfig({
-        file: path.join(tempDirs.make("dispatch-diagnostic-level-"), "gateway.log"),
-        consoleLevel: "silent",
-        ...logging,
-        redactPatterns: ["private-start-.*?-private-end"],
-      });
-      const secret = "sk-ant-abcdefghijklmnopqrstuvwxyz";
-      const customSecret = `private-start-${"x".repeat(2_500)}-private-end`;
-      const resolverError = new Error(
-        `provider failed after partial: ${secret} ${customSecret} preserved-after-redaction ${"🦞".repeat(1_100)}`,
-      );
-      const textReads: string[] = [];
-      let replyOperation: ReturnType<typeof createReplyOperation> | undefined;
-      const replyResolver: ReplyResolver = async (_ctx, options) => {
-        replyOperation = options?.replyOperation;
-        options?.onAgentRunStart?.("failed-run");
-        let text = "";
-        for (let index = 0; index < 256; index++) {
-          await options?.onPartialReply?.({
-            get text() {
-              textReads.push(text);
-              return text;
-            },
-          });
-          text += index ? "x" : "partial telegram reply";
-        }
-        throw resolverError;
-      };
-      const dispatchParams = createVisibleDispatchParams(replyResolver, {
-        cfg: { diagnostics: { enabled: true } },
-        replyOptions: { onPartialReply: vi.fn(async () => (detail ? true : undefined)) },
-      });
-
-      const result = await dispatchReplyFromConfig(dispatchParams);
-      expect(textReads).toEqual(["", "partial telegram reply"]);
-      expectFailure(replyOperation, resolverError);
-      expect(result.queuedFinal).toBe(true);
-      expect(readAgentRunTerminalOutcome(result)).toBe("failed");
-      for (const events of [processedEvents, dispatchEvents]) {
-        expect(events).toEqual([
-          expect.objectContaining({
-            outcome: "error",
-            sessionKey,
-            durationMs: expect.any(Number),
-            error: detail ? expect.stringContaining("preserved-after-redaction") : undefined,
-          }),
-        ]);
-        expect(JSON.stringify(events)).not.toContain(secret);
-        expect(JSON.stringify(events)).not.toContain("x".repeat(64));
-        if (detail) {
-          expect(events[0]?.error?.length).toBeLessThanOrEqual(2_048);
-          expect(events[0]?.error?.isWellFormed()).toBe(true);
-        }
+  ] as const)("recovers a visible partial with $name diagnostics", async ({ logging, detail }) => {
+    applyLoggingConfig({
+      file: path.join(tempDirs.make("dispatch-diagnostic-level-"), "gateway.log"),
+      consoleLevel: "silent",
+      ...logging,
+      redactPatterns: ["private-start-.*?-private-end"],
+    });
+    const secret = "sk-ant-abcdefghijklmnopqrstuvwxyz";
+    const customSecret = `private-start-${"x".repeat(2_500)}-private-end`;
+    const resolverError = new Error(
+      `provider failed after partial: ${secret} ${customSecret} preserved-after-redaction ${"🦞".repeat(1_100)}`,
+    );
+    const textReads: string[] = [];
+    let replyOperation: ReturnType<typeof createReplyOperation> | undefined;
+    const replyResolver: ReplyResolver = async (_ctx, options) => {
+      replyOperation = options?.replyOperation;
+      options?.onAgentRunStart?.("failed-run");
+      let text = "";
+      for (let index = 0; index < 256; index++) {
+        await options?.onPartialReply?.({
+          get text() {
+            textReads.push(text);
+            return text;
+          },
+        });
+        text += index ? "x" : "partial telegram reply";
       }
-      expect(dispatchEvents[0]?.error).toBe(processedEvents[0]?.error);
-      expect(dispatchParams.replyOptions?.onPartialReply).toHaveBeenCalledTimes(256);
-      expect(dispatchParams.dispatcher.sendFinalReply).toHaveBeenCalledWith(
-        expect.objectContaining({
-          text: expect.stringContaining("Check the conversation before trying again"),
-        }),
-      );
-    },
-  );
+      throw resolverError;
+    };
+    const dispatchParams = createVisibleDispatchParams(replyResolver, {
+      cfg: { diagnostics: { enabled: true } },
+      replyOptions: { onPartialReply: vi.fn(async () => (detail ? true : undefined)) },
+    });
+
+    const result = await dispatchReplyFromConfig(dispatchParams);
+    expect(textReads).toEqual(["", "partial telegram reply"]);
+    expectFailure(replyOperation, resolverError);
+    expect(result.queuedFinal).toBe(true);
+    expect(readAgentRunTerminalOutcome(result)).toBe("failed");
+    expect(failureEvents.map((event) => event.type).toSorted()).toEqual([
+      "message.dispatch.completed",
+      "message.processed",
+    ]);
+    for (const event of failureEvents) {
+      expect(event).toMatchObject({
+        outcome: "error",
+        sessionKey,
+        error: detail ? expect.stringContaining("preserved-after-redaction") : undefined,
+      });
+      expect(JSON.stringify(event)).not.toContain(secret);
+      expect(JSON.stringify(event)).not.toContain("x".repeat(64));
+      if (detail) {
+        expect(event.error?.length).toBeLessThanOrEqual(2_048);
+        expect(event.error?.isWellFormed()).toBe(true);
+      }
+    }
+    expect(dispatchParams.dispatcher.sendFinalReply).toHaveBeenCalledWith(
+      expect.objectContaining({
+        text: expect.stringContaining("Check the conversation before trying again"),
+      }),
+    );
+  });
 
   it("rethrows post-run dispatch errors after a completed run with no visible reply", async () => {
     const resolverError = new Error("final delivery failed after completion");
@@ -642,25 +623,12 @@ describe("restart tombstone channel feedback", () => {
   }
 
   it("delivers one message-tool room notice and warns for every rejected inbound", async () => {
-    let elapsedMs = 0;
-    const clock = vi.spyOn(performance, "now").mockImplementation(() => elapsedMs);
-    const diagnosticsWereEnabled = diagnostics.areDiagnosticsEnabledForProcess();
-    diagnostics.setDiagnosticsEnabledForProcess(true);
-    onTestFinished(() => {
-      clock.mockRestore();
-      diagnostics.setDiagnosticsEnabledForProcess(diagnosticsWereEnabled);
-    });
-    sessionStoreMocks.loadSessionEntry.mockImplementation(() => {
-      elapsedMs += 1_500;
-      return sessionStoreMocks.currentEntry;
-    });
-    // Uncontended lifecycle effects stay quiet even when their own work is slow.
     const rejectionWarnings = () =>
       warn.mock.calls.filter(([line]) => line.includes("[auto-reply/reply-turn-admission]"));
     await rejectInbound({ visibleReplies: "message_tool" });
     expect(rejectionWarnings()).toHaveLength(1);
     expect(deliver).toHaveBeenCalledExactlyOnceWith(
-      expect.objectContaining({ text: notice }),
+      expect.objectContaining({ isError: true, text: notice }),
       expect.objectContaining({ kind: "final" }),
     );
     await rejectInbound({ visibleReplies: "message_tool" });
@@ -672,9 +640,6 @@ describe("restart tombstone channel feedback", () => {
       expect(line).toContain("automatic recovery exhausted");
       expect(line).toContain("/reset");
     }
-    expect(warn.mock.calls.map(([line]) => stripVTControlCharacters(line))).not.toContainEqual(
-      expect.stringContaining("[sessions/lifecycle] slow session lifecycle operation"),
-    );
     expect(sessionStoreMocks.currentEntry).toMatchObject({
       sessionId: "failed-session",
       mainRestartRecovery: { tombstone: { reason: "automatic recovery exhausted" } },

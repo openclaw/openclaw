@@ -11,14 +11,6 @@ import {
   type AgentIdentityOutcome,
 } from "./identity-actions.ts";
 
-type AgentSelectionDraftHost = AgentFilesState & {
-  agentsSelectedId: string | null;
-  agentFileActive: string | null;
-  identityDraft: AgentIdentityDraft;
-  identitySaving: boolean;
-  identityOutcome: Promise<AgentIdentityOutcome> | null;
-};
-
 type Selection = {
   selectedId: string | null;
   profileId: string | null;
@@ -45,7 +37,13 @@ const retainedIdentityWork = new WeakMap<ApplicationContext, RetainedIdentityWor
 
 /** Owns private editor drafts across the selected target's presentation lifetime. */
 export function createAgentSelectionDrafts(
-  host: AgentSelectionDraftHost,
+  host: AgentFilesState & {
+    agentsSelectedId: string | null;
+    agentFileActive: string | null;
+    identityDraft: AgentIdentityDraft;
+    identitySaving: boolean;
+    identityOutcome: Promise<AgentIdentityOutcome> | null;
+  },
   resetSelection: () => void,
 ) {
   const retainedFiles = new Map<string, RetainedAgentFileDrafts>();

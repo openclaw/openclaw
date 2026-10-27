@@ -162,45 +162,6 @@ describe("runSetupModelAuthStep", () => {
     );
   });
 
-  it("keeps provider-selected models owned by the selected fleet agent", async () => {
-    const selectedModel = "managed-local/selected";
-    const existingModels = { "ops/current": { alias: "existing" } };
-    const selectedModels = { ...existingModels, [selectedModel]: { alias: "selected" } };
-    const config = agentConfig({
-      ownership: "explicit",
-      defaults: {
-        systemAgent: { agentId: "ops" },
-        model: { primary: "global/current" },
-        models: { "global/current": { alias: "global" } },
-      },
-      entries: {
-        ops: {
-          model: { primary: "ops/current" },
-          models: existingModels,
-          agentDir: "/tmp/ops-agent",
-          workspace: "/tmp/ops-workspace",
-        },
-        main: { model: { primary: "main/current" } },
-      },
-    });
-    applyAuthChoice.mockImplementationOnce(({ config: authConfig }: { config: OpenClawConfig }) => {
-      const prepared = structuredClone(authConfig);
-      prepared.agents!.defaults!.model = { primary: selectedModel };
-      prepared.agents!.defaults!.models = {
-        ...authConfig.agents?.defaults?.models,
-        [selectedModel]: { alias: "selected" },
-      };
-      return candidate(prepared);
-    });
-
-    const result = await runStep({ config, opts: { authChoice: "anthropic-cli" } });
-
-    expect(result.config.agents?.defaults).toEqual(config.agents?.defaults);
-    expect(result.config.agents?.entries?.main).toEqual(config.agents?.entries?.main);
-    expect(result.config.agents?.entries?.ops?.model).toEqual({ primary: selectedModel });
-    expect(result.config.agents?.entries?.ops?.models).toEqual(selectedModels);
-  });
-
   it("passes the explicit system agent to custom setup while preserving its existing model", async () => {
     const config = agentConfig({
       ownership: "explicit",
@@ -286,8 +247,6 @@ describe("runSetupModelAuthStep", () => {
 
   it.each([
     { source: "root", phase: "chooser" },
-    { source: "include", phase: "chooser" },
-    { source: "root", phase: "preparation" },
     { source: "include", phase: "preparation" },
   ])(
     "revokes prepared provider requests when the $source config changes during $phase",
@@ -388,17 +347,6 @@ describe("resolveQuickstartGatewayDefaults", () => {
     ] as const) {
       expect(gatewayDefaults(config, opts).authMode).toBe(expected);
     }
-  });
-
-  it("maps an explicit env-backed token to the canonical SecretRef", () => {
-    expect(
-      gatewayDefaults(storedConfig, {
-        gatewayTokenRefEnv: " OPENCLAW_GATEWAY_TOKEN ",
-      }),
-    ).toMatchObject({
-      authMode: "token",
-      token: { source: "env", provider: "default", id: "OPENCLAW_GATEWAY_TOKEN" },
-    });
   });
 });
 

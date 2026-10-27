@@ -1,6 +1,7 @@
 import { skipWhitespace } from "../../../packages/tool-call-repair/src/grammar.js";
 import { findCodeRegions } from "./code-ranges.js";
 import { createTagNameProbe } from "./tag-name-probe.js";
+import { createConditionalTextProjector, type TextFilter } from "./text-projection.js";
 
 type FinalTagMatch = {
   index: number;
@@ -11,10 +12,6 @@ type FinalTagMatch = {
 
 export const FINAL_TAG_NAME = "final";
 const FINAL_TAG_CANDIDATE_RE = /<[^<>]*>/g;
-
-export function createFinalTagProbe() {
-  return createTagNameProbe([FINAL_TAG_NAME]);
-}
 
 function parseAttributeList(text: string): boolean {
   const attribute = /[^\s=/"'<>]+(?:\s*=\s*(?:"[^"]*"|'[^']*'|[^\s"'<>]+))?/y;
@@ -79,13 +76,21 @@ export function findFinalTagMatches(text: string): FinalTagMatch[] {
 }
 
 /** Removes final-answer markers outside Markdown code while preserving their enclosed answer. */
-export function stripFinalTags(text: string): string {
-  const matches = findFinalTagMatches(text);
+export function stripFinalTags(
+  text: string,
+  options?: {
+    contentStart: number;
+    codeRegions: () => ReturnType<typeof findCodeRegions>;
+  },
+): string {
+  const matches = findFinalTagMatches(text).filter(
+    (match) => match.index >= (options?.contentStart ?? 0),
+  );
   if (matches.length === 0) {
     return text;
   }
   // Literal examples must survive the final delivery sanitizer, just as they do reasoning cleanup.
-  const codeRegions = findCodeRegions(text);
+  const codeRegions = options?.codeRegions() ?? findCodeRegions(text);
   let codeIndex = 0;
   let output = "";
   let lastIndex = 0;
@@ -105,3 +110,28 @@ export function stripFinalTags(text: string): string {
   output += text.slice(lastIndex);
   return output;
 }
+
+export const finalTagTextFilter: TextFilter = {
+  transform: stripFinalTags,
+  create: () =>
+    createConditionalTextProjector(
+      stripFinalTags,
+      createTagNameProbe([FINAL_TAG_NAME]),
+      (text, boundary, context) => {
+        const pending =
+          text.lastIndexOf("<") > text.lastIndexOf(">") ? text.lastIndexOf("<") : Infinity;
+        // A completed multiline tag must settle as one token, not at an interior newline.
+        const crossesBoundary = findFinalTagMatches(text).some(
+          (match) => match.index < boundary && match.index + match.text.length > boundary,
+        );
+        const safe = boundary > context.contentStart && pending >= boundary && !crossesBoundary;
+        return {
+          text: stripFinalTags(text, context),
+          retainStart: safe ? boundary : context.contentStart,
+          retainedOutputStart: safe
+            ? stripFinalTags(text.slice(0, boundary), context).length
+            : context.contentStart,
+        };
+      },
+    ),
+};

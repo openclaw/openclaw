@@ -1,5 +1,9 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
 import * as querystring from "node:querystring";
+import type {
+  ChannelIngressContextBinding,
+  ResolvedChannelMessageIngress,
+} from "openclaw/plugin-sdk/channel-ingress-runtime";
 import { pruneMapToMaxSize } from "openclaw/plugin-sdk/collection-runtime";
 import { writeJsonWithoutCharset as respondJson } from "openclaw/plugin-sdk/http-response-runtime";
 import {
@@ -19,7 +23,6 @@ import {
 } from "openclaw/plugin-sdk/webhook-ingress";
 import { sendHttpRequestRejection } from "openclaw/plugin-sdk/webhook-request-guards";
 import * as synologyClient from "./client.js";
-import type { SynologyInboundMessage } from "./inbound-context.js";
 import { validateToken, authorizeUserForDmWithIngress, sanitizeInput } from "./security.js";
 import type { SynologyWebhookPayload, ResolvedSynologyChatAccount } from "./types.js";
 import {
@@ -38,6 +41,19 @@ const PREAUTH_BODY_TIMEOUT_MS = 5_000;
 const PREAUTH_MAX_REQUESTS_PER_MINUTE = 10;
 const INVALID_TOKEN_WINDOW_MS = 60_000;
 const INVALID_TOKEN_MAX_TRACKED_KEYS = 5_000;
+
+type SynologyInboundMessage = {
+  resolveChannelIngress: (
+    contextBinding: ChannelIngressContextBinding,
+  ) => Promise<ResolvedChannelMessageIngress>;
+  messageId: string;
+  body: string;
+  from: string;
+  senderName: string;
+  chatType: string;
+  commandAuthorized: boolean;
+  chatUserId?: string;
+};
 
 type InvalidTokenRateLimitState = {
   count: number;
@@ -188,9 +204,7 @@ export async function processSynologyWebhookIngressEvent(params: {
       "Synology Chat claimed webhook cannot be normalized.",
     );
   }
-  const resolveChannelIngress = async (
-    contextBinding?: import("openclaw/plugin-sdk/channel-ingress-runtime").ChannelIngressContextBinding,
-  ) => {
+  const resolveChannelIngress = async (contextBinding?: ChannelIngressContextBinding) => {
     const auth = await authorizeUserForDmWithIngress({
       accountId: params.account.accountId,
       userId: payload.user_id,

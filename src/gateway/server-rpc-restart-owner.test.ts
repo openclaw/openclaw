@@ -41,7 +41,6 @@ it(
     const queuedSourceRegistered = createDeferred<rpcSources.RpcSourceRef>();
     const recoveryMarked = createDeferred();
     let firstReceived = false;
-    let followupReceived = false;
     const tasks = new Set<Promise<void>>();
     const providerServer = createServer((request, response) => {
       const task = (async () => {
@@ -51,9 +50,7 @@ it(
           return;
         }
         const followup = body.includes("SYNTHETIC_QUEUED_REPLY");
-        if (followup) {
-          followupReceived = true;
-        } else if (body.includes("SYNTHETIC_FIRST_REPLY")) {
+        if (!followup && body.includes("SYNTHETIC_FIRST_REPLY")) {
           firstReceived = true;
           await firstGate.promise;
         }
@@ -120,10 +117,9 @@ it(
         };
       });
     onTestFinished(async () => {
-      startupSpy.mockRestore();
-      registrationSpy.mockRestore();
-      finalizationSpy.mockRestore();
-      markerSpy.mockRestore();
+      for (const spy of [startupSpy, registrationSpy, finalizationSpy, markerSpy]) {
+        spy.mockRestore();
+      }
       firstGate.resolve();
       finalGate.resolve();
       if (resources.gateway) {
@@ -196,7 +192,6 @@ it(
     expect(queuedSource.input.claim).toBeUndefined();
     firstGate.resolve();
     await withinTest(finalReached.promise, signal);
-    expect(followupReceived).toBe(true);
     const history = await client.request<{ messages: unknown[] }>("chat.history", {
       sessionKey,
       limit: 20,

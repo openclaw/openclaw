@@ -127,7 +127,7 @@ it.each([
         (part): part is APIButtonComponentWithCustomId =>
           part.type === ComponentType.Button && "custom_id" in part,
       );
-    expect(buttons.map((button) => button.label)).toEqual(["All models", "Keep restrictions"]);
+    expect(buttons.map((button) => button.label)).toEqual(choices.map(([label]) => label));
     const ids = buttons.map((button) => {
       const parsed = parseDiscordComponentCustomId(button.custom_id);
       assert(parsed);
@@ -149,16 +149,13 @@ it.each([
     const entries = await Promise.all(
       ids.map((id) => resolveDiscordComponentEntryWithPersistence({ id, consume: false })),
     );
-    expect(entries.map((entry) => [entry?.label, entry?.callbackData])).toEqual([
-      ["All models", "/login choice token 0"],
-      ["Keep restrictions", "/login choice token 1"],
-    ]);
+    expect(entries.map((entry) => [entry?.label, entry?.callbackData])).toEqual(choices);
     for (const entry of entries) {
       expect(entry).toMatchObject({
         ...componentRoute,
         callbackDataKind: "command",
+        messageId: hasMessageId ? "native-message" : undefined,
       });
-      expect(entry?.messageId).toBe(hasMessageId ? "native-message" : undefined);
     }
   },
 );

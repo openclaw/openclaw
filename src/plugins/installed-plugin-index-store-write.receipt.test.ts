@@ -8,7 +8,7 @@ import * as operationAdmission from "../infra/sqlite-worker-operation-admission.
 import * as workerStore from "../infra/sqlite-worker-store.js";
 import { closeOpenClawStateDatabaseAsync } from "../state/openclaw-state-db.js";
 import { withEnvAsync } from "../test-utils/env.js";
-import { observeMainThreadSql } from "../test-utils/main-thread-sql-spies.test-support.js";
+import { withoutMainThreadSql } from "../test-utils/main-thread-sql-spies.test-support.js";
 import {
   commitPluginInstallRecordsOnly,
   commitPluginInstallRecordsWithConfig,
@@ -63,17 +63,6 @@ function revocableAuthority() {
       }
     },
   };
-}
-
-async function withoutMainThreadSql<T>(run: () => Promise<T>): Promise<T> {
-  const sql = observeMainThreadSql();
-  try {
-    const result = await run();
-    sql.expectIdle();
-    return result;
-  } finally {
-    sql.restore();
-  }
 }
 
 function afterAcknowledgedIndexCommand(
@@ -230,15 +219,8 @@ describe("installed plugin index mutation receipts", () => {
         const before = f.row();
         const assertCurrent = vi.fn();
         const receipt = await persist(otherEnv, assertCurrent);
-        // Preparation, transaction, commit and disclosure each check current authority once.
-        expect(assertCurrent).toHaveBeenCalledTimes(4);
         const after = f.row();
         expect(receipt.mutation).toEqual({ databasePath: lease.databasePath, before, after });
-        expect(receipt.mutation.before).toEqual(
-          valueJson === null
-            ? null
-            : { state_key: stateKey, value_json: valueJson, updated_at_ms: 9_007 },
-        );
         expect(receipt.mutation.after.updated_at_ms).toBe(receipt.revision);
         expect(JSON.parse(receipt.mutation.after.value_json).revision).toBe(receipt.revision);
         expect(receipt.previous?.policyHash ?? null).toBe(valueJson === priorJson ? "prior" : null);

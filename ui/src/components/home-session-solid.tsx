@@ -1,16 +1,21 @@
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
-import { createMemo, createSignal, onSettled, Show } from "solid-js";
+import { createMemo, createSignal, Loading, onSettled, Show } from "solid-js";
 import { formatChatWorkContext } from "../../../src/chat/work-context.js";
 import { registerAssistantContextEnglish } from "../i18n/locales/en-assistant-context.ts";
+import { projectGateway } from "../lib/reactive/application.ts";
 import { useApplication } from "../lib/reactive/context.ts";
 import { registerEnglishCatalog, t } from "../lib/reactive/i18n.ts";
 import { listen } from "../lib/reactive/listener.ts";
+import { resolveHomeSession } from "../lib/sessions/home-session.ts";
+import { resolveUiConfiguredMainKey } from "../lib/sessions/session-key.ts";
 import type { ChatWorkContext } from "../pages/chat/chat-work-context.ts";
+import { HomeSessionUnavailable } from "./home-session-unavailable.tsx";
+import { Icon } from "./solid/icon.tsx";
 import "../pages/chat/chat-pane.tsx";
 import "../styles/chat.ts";
 import "../styles/chat/composer.css";
 import "../styles/chat/composer-status.css";
-import { Icon } from "./solid/icon.tsx";
+import { LoadingState } from "./solid/loading-state.tsx";
 
 registerEnglishCatalog(registerAssistantContextEnglish);
 
@@ -24,6 +29,24 @@ export function HomeSession(input: Partial<Props>) {
   const workContext = () => input.workContext ?? defaultWorkContext;
   let host!: HTMLElement;
   const app = useApplication();
+  const gateway = projectGateway(app.gateway);
+  const connection = createMemo(
+    () => {
+      const snapshot = gateway.read().snapshot;
+      return { client: snapshot.client, hello: snapshot.hello };
+    },
+    { equals: (a, b) => a.client === b.client && a.hello === b.hello },
+  );
+  const available = createMemo(() => {
+    const snapshot = connection();
+    return snapshot.hello?.auth?.sessionCap === "none"
+      ? resolveHomeSession(snapshot, {
+          sessionKey: sessionKey(),
+          agentId: agentId(),
+          mainKey: resolveUiConfiguredMainKey({ hello: snapshot.hello }),
+        })
+      : true;
+  });
   const [includeContext, setIncludeContext] = createSignal(true);
   const [selectionAvailable, setSelectionAvailable] = createSignal(false);
   const scope = createMemo(() =>
@@ -122,21 +145,25 @@ export function HomeSession(input: Partial<Props>) {
           </button>
         </Show>
       </div>
-      <Show when={owner()} keyed>
-        {(identity) => (
-          <openclaw-chat-pane
-            prop:paneId={`home-dock:${identity}`}
-            prop:presentationId={`home-dock:${identity}`}
-            prop:sessionKey={sessionKey()}
-            prop:agentId={agentId()}
-            prop:inputRegion="dock"
-            prop:active={true}
-            prop:compact={true}
-            prop:narrow={true}
-            prop:workContext={includeContext() ? context() : undefined}
-          />
-        )}
-      </Show>
+      <Loading fallback={<LoadingState />}>
+        <Show when={available()} fallback={<HomeSessionUnavailable agentId={agentId()} />}>
+          <Show when={owner()} keyed>
+            {(identity) => (
+              <openclaw-chat-pane
+                prop:paneId={`home-dock:${identity}`}
+                prop:presentationId={`home-dock:${identity}`}
+                prop:sessionKey={sessionKey()}
+                prop:agentId={agentId()}
+                prop:inputRegion="dock"
+                prop:active={true}
+                prop:compact={true}
+                prop:narrow={true}
+                prop:workContext={includeContext() ? context() : undefined}
+              />
+            )}
+          </Show>
+        </Show>
+      </Loading>
     </openclaw-home-session>
   );
 }

@@ -61,13 +61,11 @@ it("keeps config and declared plugin resources while excluding disposable core i
         await fs.mkdir(plugin);
         await fs.mkdir(declared);
         const pluginDatabase = path.join(plugin, "plugin.sqlite");
-        const db = new DatabaseSync(pluginDatabase);
-        try {
+        {
+          using db = new DatabaseSync(pluginDatabase);
           db.exec(
             "CREATE TABLE payload(value TEXT); INSERT INTO payload VALUES('plugin recovery');",
           );
-        } finally {
-          db.close();
         }
         const skill = path.join(declared, "SKILL.md");
         await fs.writeFile(skill, "retain declared repair input");
@@ -90,13 +88,14 @@ it("keeps config and declared plugin resources while excluding disposable core i
         );
         // Synthetic declarations isolate plugin execution; discovery, native custody,
         // snapshots, file traversal, manifests and publication use production code.
+        const warning = {
+          kind: "undeclared-migration-resources" as const,
+          pluginId: "synthetic-legacy",
+          message: "Synthetic legacy resources are undeclared",
+        };
         vi.spyOn(pluginResources, "preparePluginDoctorMigrationBackupResources").mockImplementation(
           async (params) => {
-            params.warnings.push({
-              kind: "undeclared-migration-resources",
-              pluginId: "synthetic-legacy",
-              message: "Synthetic legacy resources are undeclared",
-            });
+            params.warnings.push(warning);
             const canvas = await preparePluginDoctorMigrationResources(
               stateMigrations.map((migration) => ({ pluginId: "canvas", migration })),
               {
@@ -122,13 +121,12 @@ it("keeps config and declared plugin resources while excluding disposable core i
           },
         );
         const messages: string[] = [];
+        const log = (...args: unknown[]) => {
+          messages.push(args.map(String).join(" "));
+        };
         const runtime: RuntimeEnv = {
-          log: (...args) => {
-            messages.push(args.map(String).join(" "));
-          },
-          error: (...args) => {
-            messages.push(args.map(String).join(" "));
-          },
+          log,
+          error: log,
           exit: () => {
             throw new Error("Doctor exited unexpectedly");
           },
@@ -192,22 +190,16 @@ it("keeps config and declared plugin resources while excluding disposable core i
             sqlite: false,
             directory: true,
           });
-          expect((manifest.warnings ?? []).some((warning) => warning.pluginId === "canvas")).toBe(
+          expect((manifest.warnings ?? []).some((entry) => entry.pluginId === "canvas")).toBe(
             false,
           );
-          const captured = new DatabaseSync(payload(pluginDatabase), { readOnly: true });
-          try {
+          {
+            using captured = new DatabaseSync(payload(pluginDatabase), { readOnly: true });
             expect(captured.prepare("SELECT value FROM payload").all()).toEqual([
               { value: "plugin recovery" },
             ]);
-          } finally {
-            captured.close();
           }
-          expect(manifest.warnings).toContainEqual({
-            kind: "undeclared-migration-resources",
-            pluginId: "synthetic-legacy",
-            message: "Synthetic legacy resources are undeclared",
-          });
+          expect(manifest.warnings).toContainEqual(warning);
           expect(captureResult.findings).toContainEqual(
             expect.objectContaining({
               category: "recommended",

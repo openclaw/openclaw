@@ -26,7 +26,6 @@ import {
 const configured: unknown = getEnvironmentData("openclaw.test.workboard.connection");
 const connection = typeof configured === "string" ? configured : undefined;
 const identity = { provider: "local", model: "fixture", providerKey: "fixture" };
-const provider = { id: identity.provider, model: identity.model };
 const canonicalAgentSql = fs.readFileSync(
   new URL("../../../../src/state/postgres-schema.generated/agent.postgres.sql", import.meta.url),
   "utf8",
@@ -57,16 +56,19 @@ describe.skipIf(!connection)("PostgreSQL memory embedding cache", () => {
       hash: `hash-${String(index).padStart(3, "0")}`,
       embedding: [index, Math.PI],
     }));
-  const publish = (rows: ReturnType<typeof entries>, maxEntries?: number, now = 1) =>
+  const publish = (
+    rows: ReturnType<typeof entries>,
+    options: Partial<Omit<Parameters<typeof upsertMemoryEmbeddingCache>[0], "db" | "entries">> = {},
+  ) =>
     write(() =>
       upsertMemoryEmbeddingCache({
         db: database,
-        cacheSize: { size: countMemoryEmbeddingCache(database), exact: true },
-        provider,
+        cacheSize: options.cacheSize ?? { size: countMemoryEmbeddingCache(database), exact: true },
+        provider: { id: identity.provider, model: identity.model },
         providerKey: identity.providerKey,
         entries: () => rows,
-        maxEntries,
-        now,
+        now: 1,
+        ...options,
       }),
     );
   const read = (hashes: string[]) =>
@@ -172,7 +174,6 @@ describe.skipIf(!connection)("PostgreSQL memory embedding cache", () => {
       spy.mockRestore();
     }
     expect(insertBindings).toEqual([128 * 7, 7]);
-    expect(Math.max(...insertBindings)).toBeLessThanOrEqual(65_535);
     const expected = new Map(rows.map(({ hash, embedding }) => [hash, embedding]));
     expected.set("hash-000", [Number.EPSILON, -0]);
     expect(read(rows.map(({ hash }) => hash))).toEqual(expected);
@@ -188,7 +189,7 @@ describe.skipIf(!connection)("PostgreSQL memory embedding cache", () => {
         upsertMemoryEmbeddingCache({
           db: database,
           cacheSize: { size: countMemoryEmbeddingCache(database), exact: true },
-          provider,
+          provider: { id: identity.provider, model: identity.model },
           providerKey: identity.providerKey,
           entries: () => entries(129).map(({ hash }) => ({ hash, embedding: [-1, -1] })),
         });
@@ -200,16 +201,9 @@ describe.skipIf(!connection)("PostgreSQL memory embedding cache", () => {
 
   it("evicts only one composite identity when providers share a hash", () => {
     for (const id of ["a", "z"]) {
-      write(() =>
-        upsertMemoryEmbeddingCache({
-          db: database,
-          cacheSize: { size: countMemoryEmbeddingCache(database), exact: true },
-          provider: { id, model: identity.model },
-          providerKey: identity.providerKey,
-          entries: () => [{ hash: "shared", embedding: [1, 2] }],
-          now: 1,
-        }),
-      );
+      publish([{ hash: "shared", embedding: [1, 2] }], {
+        provider: { id, model: identity.model },
+      });
     }
     expect(write(() => pruneMemoryEmbeddingCache(database, { size: 2, exact: true }, 1))).toEqual({
       size: 1,
@@ -235,7 +229,7 @@ describe.skipIf(!connection)("PostgreSQL memory embedding cache", () => {
     expect(read(rows.map(({ hash }) => hash))).toEqual(
       new Map(rows.slice(100).map(({ hash, embedding }) => [hash, embedding])),
     );
-    publish([{ hash: "fresh", embedding: [42, 43] }], 3, 2);
+    publish([{ hash: "fresh", embedding: [42, 43] }], { maxEntries: 3, now: 2 });
     expect(read([...rows.map(({ hash }) => hash), "fresh"])).toEqual(
       new Map([
         ["hash-399", [399, Math.PI]],
@@ -252,16 +246,12 @@ describe.skipIf(!connection)("PostgreSQL memory embedding cache", () => {
     chunks: Array<[hash: string, updatedAt: number]>,
   ) {
     for (const [id, providerKey, hash, now] of cache) {
-      write(() =>
-        upsertMemoryEmbeddingCache({
-          db: database,
-          cacheSize: { size: 0, exact: false },
-          provider: { id, model: "m" },
-          providerKey,
-          entries: () => [{ hash, embedding: [1, 2] }],
-          now,
-        }),
-      );
+      publish([{ hash, embedding: [1, 2] }], {
+        provider: { id, model: "m" },
+        providerKey,
+        now,
+        cacheSize: { size: 0, exact: false },
+      });
     }
     write(() => {
       for (const [hash, updatedAt] of chunks) {
@@ -325,18 +315,14 @@ describe.skipIf(!connection)("PostgreSQL memory embedding cache", () => {
       [["live", 10]],
     );
     const insert = (hash: string, identities: Array<typeof a>) =>
-      write(() =>
-        upsertMemoryEmbeddingCache({
-          db: database,
-          cacheSize: { size: 4, exact: true },
-          provider: { id: "openai", model: "m" },
-          providerKey: "k",
-          entries: () => [{ hash, embedding: [3, 4] }],
-          maxEntries: 4,
-          unreferencedFirst: { identities },
-          now: 30,
-        }),
-      );
+      publish([{ hash, embedding: [3, 4] }], {
+        provider: { id: a.provider, model: a.model },
+        providerKey: a.providerKey,
+        maxEntries: 4,
+        now: 30,
+        cacheSize: { size: 4, exact: true },
+        unreferencedFirst: { identities },
+      });
     // Both listed identities are preferred before the live row, oldest first.
     insert("new-1", [a, b]);
     insert("new-2", [a, b]);

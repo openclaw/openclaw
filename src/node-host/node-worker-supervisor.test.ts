@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
+import { pathToFileURL } from "node:url";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import type { NodeWorkerSupervisorTransport } from "../gateway/node-registry-private.js";
@@ -218,6 +219,19 @@ describe("node worker supervisor", () => {
     await supervisor.close();
     await rejected;
     expect(await f.receipt(waiting.launchId)).toBeUndefined();
+  });
+
+  it("launches a downloaded worker through the standalone executable's generic runtime", async () => {
+    await using f = fixture();
+    vi.stubGlobal("__openclawStandaloneRootUrl", pathToFileURL(f.workspaceDir).href);
+    try {
+      const input = launchInput(f.workspaceDir, "generic-worker-env", "env");
+      await f.launch(input);
+      expect((await f.terminal(input.launchId)).state).toBe("completed");
+      expect(f.json(`${input.launchId}.env.json`)).toMatchObject({ BUN_BE_BUN: "1" });
+    } finally {
+      vi.unstubAllGlobals();
+    }
   });
 
   it("spawns workers with only supplied runtime essentials", async () => {

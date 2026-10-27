@@ -1,4 +1,3 @@
-/** Tests agent compaction settings and small-context auto-compaction guards. */
 import { describe, expect, it, vi } from "vitest";
 import { shouldCompact } from "../../packages/agent-core/src/harness/compaction/compaction.js";
 import type { AgentCompactionConfig } from "../config/types.agent-defaults.js";
@@ -173,82 +172,31 @@ describe("resolveEffectiveCompactionMode", () => {
   });
 });
 
-describe("isSilentOverflowProneModel", () => {
-  // Reporter's repro shape: openrouter routing to z-ai/glm. Both the bare
-  // `z-ai/...` form and the `openrouter/z-ai/...` qualified form must hit.
-  it("flags z-ai-prefixed model ids regardless of qualifier", () => {
-    expect(isSilentOverflowProneModel({ provider: "openrouter", modelId: "z-ai/glm-5.1" })).toBe(
-      true,
-    );
-    expect(
-      isSilentOverflowProneModel({ provider: "openrouter", modelId: "openrouter/z-ai/glm-5" }),
-    ).toBe(true);
-  });
-
-  it("flags a config-set z.ai provider regardless of model id", () => {
-    expect(isSilentOverflowProneModel({ provider: "z.ai", modelId: "glm-5.1" })).toBe(true);
-    expect(isSilentOverflowProneModel({ provider: "z-ai", modelId: "glm-5.1" })).toBe(true);
-  });
-
-  it("flags a direct api.z.ai baseUrl via endpointClass", () => {
-    expect(
-      isSilentOverflowProneModel({
-        provider: "openai",
-        modelId: "glm-5.1",
-        baseUrl: "https://api.z.ai/api/coding/paas/v4",
-      }),
-    ).toBe(true);
-  });
-
-  // #75799: gateways relabel bare GLM models; the secondary compaction guard must survive.
-  it("flags bare glm- model ids without a namespace prefix, regardless of provider", () => {
-    expect(isSilentOverflowProneModel({ provider: "custom", modelId: "glm-5.1" })).toBe(true);
-    expect(isSilentOverflowProneModel({ provider: "custom", modelId: "glm-4.7" })).toBe(true);
-    expect(isSilentOverflowProneModel({ provider: "openai", modelId: "glm-5.1" })).toBe(true);
-    expect(isSilentOverflowProneModel({ provider: "openrouter", modelId: "glm-5.1" })).toBe(true);
-  });
-
-  // Detection is intentionally narrow to z.ai-style accounting. Namespaced GLM
-  // ids that route through providers with their own overflow accounting must
-  // NOT be flagged — those hosts may not exhibit the z.ai silent-overflow
-  // shape, and disabling embedded auto-compaction for them would over-broaden the
-  // kill surface beyond the reproducible repro.
-  it("does not flag namespaced GLM ids routed through non-z.ai hosts", () => {
-    expect(
-      isSilentOverflowProneModel({ provider: "ollama", modelId: "ollama/glm-5.1:cloud" }),
-    ).toBe(false);
-    expect(
-      isSilentOverflowProneModel({ provider: "opencode-go", modelId: "opencode-go/glm-5.1" }),
-    ).toBe(false);
-  });
-
-  // shared model runtime's overflow.ts only documents z.ai as the silent-overflow style. We
-  // intentionally do NOT extend the guard to anthropic/openai/google/openrouter-
-  // anthropic routes — adding them without a reproducible repro would broaden
-  // the kill surface and regress baseline behavior for those providers.
-  it("does not flag anthropic, openai, google or other routes", () => {
-    expect(
-      isSilentOverflowProneModel({ provider: "anthropic", modelId: "claude-sonnet-4.6" }),
-    ).toBe(false);
-    expect(isSilentOverflowProneModel({ provider: "openai", modelId: "gpt-5.5" })).toBe(false);
-    expect(
-      isSilentOverflowProneModel({
-        provider: "openrouter",
-        modelId: "anthropic/claude-sonnet-4.6",
-      }),
-    ).toBe(false);
-    expect(isSilentOverflowProneModel({ provider: "google", modelId: "gemini-2.5-pro" })).toBe(
-      false,
-    );
-  });
-
-  it("treats missing fields as not silent-overflow-prone", () => {
-    expect(isSilentOverflowProneModel({})).toBe(false);
-    expect(
-      isSilentOverflowProneModel({ provider: undefined, modelId: undefined, baseUrl: null }),
-    ).toBe(false);
-  });
-});
+// #75799: bare GLM ids cover relabeled gateways, but other hosts' namespaced ids stay exempt.
+it.each([
+  ["openrouter", "z-ai/glm-5.1", true],
+  ["openrouter", "openrouter/z-ai/glm-5", true],
+  ["z.ai", "glm-5.1", true],
+  ["z-ai", "glm-5.1", true],
+  ["openai", "glm-5.1", true, "https://api.z.ai/api/coding/paas/v4"],
+  ["custom", "glm-5.1", true],
+  ["custom", "glm-4.7", true],
+  ["openai", "glm-5.1", true],
+  ["openrouter", "glm-5.1", true],
+  ["ollama", "ollama/glm-5.1:cloud", false],
+  ["opencode-go", "opencode-go/glm-5.1", false],
+  ["anthropic", "claude-sonnet-4.6", false],
+  ["openai", "gpt-5.5", false],
+  ["openrouter", "anthropic/claude-sonnet-4.6", false],
+  ["google", "gemini-2.5-pro", false],
+  [undefined, undefined, false],
+  [undefined, undefined, false, null],
+] satisfies Array<[string | undefined, string | undefined, boolean, (string | null)?]>)(
+  "classifies silent overflow for %s/%s as %s (endpoint %s)",
+  (provider, modelId, expected, baseUrl?: string | null) => {
+    expect(isSilentOverflowProneModel({ provider, modelId, baseUrl })).toBe(expected);
+  },
+);
 
 describe("applyAgentAutoCompactionGuard", () => {
   it("preserves configured reserve tokens when disabling embedded auto-compaction", () => {

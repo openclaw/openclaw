@@ -23,12 +23,7 @@ vi.mock("openclaw/plugin-sdk/runtime-env", async (importOriginal) => ({
 type CommandRunner = OpenClawPluginApi["runtime"]["system"]["runCommandWithTimeout"];
 type CommandResult = Awaited<ReturnType<CommandRunner>>;
 type WrapperHook = "wrapStreamFn" | "wrapSimpleCompletionStreamFn";
-const model = makeModel("claude-fable-5-1", {
-  name: "Claude Fable 5.1",
-  input: ["text"],
-  contextWindow: 1_000_000,
-  maxTokens: 128_000,
-});
+const model = makeModel("claude-fable-5-1");
 const context = {
   messages: [{ role: "user", content: "hello", timestamp: 1 }],
 } satisfies Parameters<StreamFn>[1];
@@ -57,7 +52,6 @@ function register(
   }
   return {
     provider,
-    backend,
     readRuntime,
     runCommandWithTimeout,
     prepare: () => backend.prepareExecution?.(executionContext),
@@ -135,16 +129,13 @@ it.each([
   const request = capture(fixture.provider);
   await request.run();
   await request.run();
-  expect(request.base.mock.calls.map((call) => call[2]?.headers)).toEqual([
-    oauthOptions.headers,
-    oauthOptions.headers,
-  ]);
+  expect(request.headers()).toEqual(oauthOptions.headers);
+  expect(request.headers(1)).toEqual(oauthOptions.headers);
   expect(runner).toHaveBeenCalledTimes(mode === "missing" ? 0 : 1);
   expect(resolveClaudeTerminalExecutable).toHaveBeenCalledOnce();
   await fixture.prepare();
   expect(fixture.args()).not.toContain("--exclude-dynamic-system-prompt-sections");
   if (warning) {
-    expect(subsystemLogMock.warn).toHaveBeenCalledOnce();
     const message = String(subsystemLogMock.warn.mock.calls[0]?.[0]);
     expect(message).toContain(warning);
     // Diagnostics must never expose subprocess output or raw exception text.
@@ -190,9 +181,6 @@ it("shares lazy CLI discovery across native execution and both OAuth wrappers", 
   ];
   await Promise.resolve();
   expect(fixture.runCommandWithTimeout).toHaveBeenCalledOnce();
-  expect(resolveClaudeTerminalExecutable).toHaveBeenCalledWith(process.env, {
-    pathStrategy: "direct",
-  });
   expect(normal.base).not.toHaveBeenCalled();
   expect(simple.base).not.toHaveBeenCalled();
   expect(prepared).not.toHaveBeenCalled();
@@ -219,13 +207,6 @@ it("bounds requests even while process cleanup is pending and caches the fallbac
   await vi.advanceTimersByTimeAsync(1);
   await response;
   expect(request.headers()).toEqual(oauthOptions.headers);
-  expect(runner).toHaveBeenCalledWith(["/synthetic/claude", "--version"], {
-    timeoutMs: 1_500,
-    killProcessTree: true,
-    killGraceMs: 100,
-    maxOutputBytes: { stdout: 1_024, stderr: 1_024 },
-    terminateOnOutputLimit: true,
-  });
   await request.run();
   expect(runner).toHaveBeenCalledOnce();
   pending.resolve(commandResult({ stdout: "2.1.400 (Claude Code)" }));

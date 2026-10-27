@@ -45,12 +45,9 @@ vi.mock("./auth-profiles/external-cli-sync.js", () => ({
 }));
 
 // mock-isolation: Reader lifecycle and SQL counts cover seeded databases only; provider discovery opens unrelated stores.
-vi.mock("../plugins/provider-external-auth-core.js", () => ({
-  createProviderExternalAuthResolver: () => ({
-    resolveExternalAuthProfilesWithPlugins: () => [],
-    withPreparedExternalAuthProfiles: async <T>(_params: unknown, run: () => Promise<T>) => run(),
-  }),
-}));
+vi.mock("../plugins/provider-external-auth-core.js", async () =>
+  (await import("../plugins/provider-external-auth.test-support.js")).createExternalAuthMock(),
+);
 
 const storeSchema = `CREATE TABLE auth_profile_store (
   store_key TEXT PRIMARY KEY, store_json TEXT NOT NULL, updated_at INTEGER NOT NULL

@@ -49,7 +49,7 @@ suite.define(() => {
         });
 
         await page.goto(`${suite.server.baseUrl}chat`);
-        await gateway.waitForRequest("chat.startup");
+        await gateway.waitForRequest("sessions.messages.subscribe");
         const composer = page.locator(".agent-chat__composer-combobox textarea");
         const draft = (value: string) => expect.poll(() => composer.inputValue()).toBe(value);
         const screenshot = async (name: string, target: Locator) => {

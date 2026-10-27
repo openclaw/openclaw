@@ -5,6 +5,8 @@ export function useStreamAutoFollow(options: {
   enabled: () => boolean;
   identity: () => unknown;
   content?: () => unknown;
+  /** Virtualized streams own convergence as estimated row heights settle. */
+  scrollToEnd?: () => void;
 }) {
   let atBottom = true;
   let frame: number | undefined;
@@ -14,6 +16,8 @@ export function useStreamAutoFollow(options: {
     }
   });
   function schedule(identity: unknown, force = false) {
+    // A virtualized trim can emit an anchor scroll before this frame runs.
+    const wasAtBottom = atBottom;
     if (frame !== undefined) {
       cancelAnimationFrame(frame);
     }
@@ -23,11 +27,19 @@ export function useStreamAutoFollow(options: {
       if (!container?.isConnected || options.identity() !== identity) {
         return;
       }
-      const distance = container.scrollHeight - container.scrollTop - container.clientHeight;
-      if (!force && (!options.enabled() || (!atBottom && distance >= 120))) {
+      if (
+        !force &&
+        (!options.enabled() ||
+          (!wasAtBottom &&
+            container.scrollHeight - container.scrollTop - container.clientHeight >= 120))
+      ) {
         return;
       }
-      container.scrollTop = container.scrollHeight;
+      if (options.scrollToEnd) {
+        options.scrollToEnd();
+      } else {
+        container.scrollTop = container.scrollHeight;
+      }
       atBottom = true;
     });
   }

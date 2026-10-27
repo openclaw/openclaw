@@ -76,12 +76,10 @@ export async function localWorkspaceNode(root: string, entryPath: string): Promi
 async function fileEntryMatches(
   absolute: string,
   entry: Extract<WorkerWorkspaceManifestEntry, { type: "file" }>,
-  root?: string,
 ): Promise<boolean> {
   const snapshot = await computeWorkspaceFileSnapshot(
     absolute,
     MAX_RECONCILIATION_FILE_BYTES,
-    root,
   ).catch((error: unknown) => {
     if (error instanceof WorkerTaskError) {
       throw error;
@@ -111,16 +109,6 @@ export async function absoluteEntryMatches(
     return false;
   }
   return await fileEntryMatches(absolute, entry);
-}
-
-export async function entryMatches(
-  root: string,
-  entry: WorkerWorkspaceManifestEntry,
-): Promise<boolean> {
-  if (entry.type === "symlink") {
-    return await absoluteEntryMatches(localPath(root, entry.path), entry);
-  }
-  return await fileEntryMatches(localPath(root, entry.path), entry, root);
 }
 
 export async function readWorkspaceTreeFile(params: {

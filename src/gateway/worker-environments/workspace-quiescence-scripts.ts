@@ -680,7 +680,7 @@ const REMOTE_WORKSPACE_RESUME_JS = String.raw`${REMOTE_QUIESCENCE_CONTROL_CONTEX
 process.stdout.write(resumeWorkspaceLease(process.argv[3] === "owned"));
 `;
 
-export const workspaceQuiescenceScripts = {
+const workspaceQuiescenceScripts = {
   acquire: createWorkspaceQuiesceScript(false),
   renew: REMOTE_WORKSPACE_RENEW_QUIESCENCE_JS,
   release: REMOTE_WORKSPACE_RESUME_JS,

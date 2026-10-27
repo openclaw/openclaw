@@ -30,6 +30,7 @@ import type {
 } from "./server-methods/types.js";
 import { retainSessionListForegroundWork } from "./session-projection-work.js";
 import { resolveRequestedSessionAgentId } from "./session-request-agent.js";
+import { createSessionRowModelFactsReader } from "./session-row-projection-materialize.js";
 import {
   create as createSessionRow,
   selectionRow,
@@ -263,14 +264,14 @@ export function createSessionRowProjectionFixture(params: {
       typeof query.parentSessionKey === "string"
         ? query.parentSessionKey
         : query.parentSessionKey?.key;
+    const identities =
+      query.candidateSessionIdsOrKeys ??
+      (query.sessionIdOrKey ? new Set([query.sessionIdOrKey]) : undefined);
     const matchingKeys =
-      query.sessionIdOrKey &&
+      identities &&
       new Set(
         [...rows.values()]
-          .filter(
-            (row) =>
-              row.key === query.sessionIdOrKey || row.entry.sessionId === query.sessionIdOrKey,
-          )
+          .filter((row) => identities.has(row.key) || identities.has(row.entry.sessionId))
           .map((row) => row.key),
       );
     const selected = matching(query).filter(
@@ -308,6 +309,7 @@ export function createSessionRowProjectionFixture(params: {
     onSelectionChange: revisions.onSelectionChange,
     onFactsChange: revisions.onFactsChange,
     readTaskPublicationRevision: revisions.taskPublication,
+    hasLogicalChildEntries: (parent) => selectEntries({ parentSessionKey: parent }).length > 0,
     readPreparedRowContext: () => rowContext,
     readPreparedSpawnedBy(query) {
       const row = describe(query);
@@ -333,7 +335,14 @@ export function createSessionRowProjectionFixture(params: {
     // This row-only fixture cannot certify the resident owner's complete ancestry graph.
     ancestorRows: () => undefined,
     setArchivePageSize: () => {},
-    modelFacts: (query) => describe(query)!.materialized.source,
+    ...createSessionRowModelFactsReader({
+      rows: () => rows.values(),
+      lookup: describe,
+      dirty: new Set(),
+      onFactsChange: revisions.onFactsChange,
+      readSourceEntry: (_row, key) => store[key],
+      state: () => ({ cfg, modelCatalog, rowContext }),
+    }),
     withPreparedExactRows: async (queries, consume) => {
       queries(cfg);
       return consume(projection);

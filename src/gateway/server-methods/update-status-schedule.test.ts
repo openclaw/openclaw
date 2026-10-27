@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { createDeferred, withinTest } from "../../../test/helpers/promise.js";
+import { createMacosAppInstallOwner } from "../../commands/test-runtime-config-helpers.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { UpdateCampaignController } from "../../infra/update-campaign.js";
 import {
@@ -332,12 +333,7 @@ it("omits app-owned install and stale package targets from the protocol schedule
   stalePackageSchedule("dev", false);
   install.mockResolvedValue(
     installAt("host", "/opt/OpenClaw.app/openclaw", {
-      installOwner: {
-        schemaVersion: 1,
-        owner: "macos-app",
-        displayName: "OpenClaw.app",
-        updateHint: "Update OpenClaw.app to update this Gateway.",
-      },
+      installOwner: createMacosAppInstallOwner(),
     }),
   );
 

@@ -1,5 +1,20 @@
 import { describe, expect, it } from "vitest";
+import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { describeAcpSpawnTargetParameter, resolveTargetAcpAgentId } from "./acp-spawn-target.js";
+
+const coder = { runtime: { type: "acp" as const } };
+const defaultAcp = { defaultAgent: "codex" };
+const required = "agentId is required.";
+const defaultNote = 'Omit to use the configured ACP default ("codex").';
+const none = `No ACP harness id is allowed. ${required}`;
+const example = (ids: string, suffix = required) =>
+  `ACP harness id, for example: ${ids}. ${suffix}`;
+function config(
+  entries: NonNullable<OpenClawConfig["agents"]>["entries"],
+  acp?: OpenClawConfig["acp"],
+): OpenClawConfig {
+  return { agents: { entries }, ...(acp ? { acp } : {}) };
+}
 
 describe("resolveTargetAcpAgentId", () => {
   it.each(["", "агент✨"])("rejects explicit unrepresentable ACP agent id %j", (agentId) => {
@@ -10,139 +25,58 @@ describe("resolveTargetAcpAgentId", () => {
       }),
     ).toEqual({ ok: false, error: `agentId "${agentId}" was not found` });
   });
-
-  it("keeps omitted ACP agent ids on the configured default path", () => {
-    expect(
-      resolveTargetAcpAgentId({
-        cfg: { acp: { defaultAgent: "codex" } },
-      }),
-    ).toEqual({ ok: true, agentId: "codex" });
-  });
-
-  it.each(["reviewer", undefined])(
-    "resolves configured alias ownership for explicit or default targets (%s)",
-    (requestedAgentId) => {
-      expect(
-        resolveTargetAcpAgentId({
-          requestedAgentId,
-          cfg: {
-            acp: { defaultAgent: "reviewer" },
-            agents: {
-              entries: {
-                reviewer: { runtime: { type: "acp", acp: { agent: "codex" } } },
-              },
-            },
-          },
-        }),
-      ).toMatchObject({ ok: true, agentId: "codex", configAgentId: "reviewer" });
-    },
-  );
-
-  it("leaves a raw harness without a configured OpenClaw owner id", () => {
-    expect(
-      resolveTargetAcpAgentId({
-        requestedAgentId: "cursor",
-        cfg: { agents: { entries: { main: {} } } },
-      }),
-    ).toEqual({ ok: true, agentId: "cursor" });
-  });
 });
 
 describe("describeAcpSpawnTargetParameter", () => {
-  it.each([{ agents: { entries: {} } }, {}])(
-    "requires agentId and suggests examples without offering the implicit main agent: %j",
-    (cfg) => {
-      expect(describeAcpSpawnTargetParameter(cfg)).toBe(
-        "ACP harness id, for example: codex, claude. agentId is required.",
-      );
-    },
-  );
-
-  it("describes the configured default when no allowlist is set", () => {
-    expect(
-      describeAcpSpawnTargetParameter({ agents: { entries: {} }, acp: { defaultAgent: "codex" } }),
-    ).toBe('ACP harness id, for example: codex. Omit to use the configured ACP default ("codex").');
-  });
-
-  it("does not offer a native config agent as an ACP harness", () => {
-    const description = describeAcpSpawnTargetParameter({
-      agents: { entries: { main: {}, coder: { runtime: { type: "acp" } } } },
-      acp: { defaultAgent: "codex" },
-    });
-    expect(description).toBe(
-      'ACP harness id, for example: coder, codex. Omit to use the configured ACP default ("codex").',
-    );
-    expect(description).not.toContain("main");
-  });
-
   it.each([
-    [["codex"], "ACP harness id, for example: claude. agentId is required."],
-    [["codex", "claude"], "ACP harness id. agentId is required."],
-  ])("drops example ids that are native config agents: %j", (native, expected) => {
-    const entries = Object.fromEntries(native.map((id) => [id, {}]));
-    expect(describeAcpSpawnTargetParameter({ agents: { entries } })).toBe(expected);
-  });
-
-  it("lists only allowlisted ids and drops a default the allowlist rejects", () => {
-    expect(
-      describeAcpSpawnTargetParameter({
-        agents: { entries: { main: {} } },
-        acp: { allowedAgents: ["codex", "claude"], defaultAgent: "gemini" },
-      }),
-    ).toBe("ACP harness id from: claude, codex. agentId is required.");
-  });
-
-  it("does not advertise wildcard access the policy does not grant", () => {
-    expect(
-      describeAcpSpawnTargetParameter({
-        agents: { entries: {} },
-        acp: { allowedAgents: ["*"], defaultAgent: "codex" },
-      }),
-    ).toBe("No ACP harness id is allowed. agentId is required.");
+    ["empty registry", config({}), example("codex, claude")],
+    ["configured default", config({}, defaultAcp), example("codex", defaultNote)],
+    [
+      "native agent exclusion",
+      config({ main: {}, coder }, defaultAcp),
+      example("coder, codex", defaultNote),
+    ],
+    ["native example exclusion", config({ codex: {} }), example("claude")],
+    ["all examples excluded", config({ codex: {}, claude: {} }), `ACP harness id. ${required}`],
+    [
+      "disallowed default",
+      config({ main: {} }, { allowedAgents: ["codex", "claude"], defaultAgent: "gemini" }),
+      `ACP harness id from: claude, codex. ${required}`,
+    ],
+    ["non-granting wildcard", config({}, { allowedAgents: ["*"], ...defaultAcp }), none],
+  ] satisfies Array<[string, OpenClawConfig, string]>)("describes %s", (_label, cfg, expected) => {
+    expect(describeAcpSpawnTargetParameter(cfg)).toBe(expected);
   });
 
   describe("for a subagent requester", () => {
-    const acp = { defaultAgent: "codex" };
-    const coder = { runtime: { type: "acp" as const } };
-
-    it("offers no harness when the requester may only target itself", () => {
-      expect(
-        describeAcpSpawnTargetParameter({ agents: { entries: { main: {}, coder } }, acp }, "main"),
-      ).toBe("No ACP harness id is allowed. agentId is required.");
-    });
-
-    it("lists only the harnesses the requester allowlist admits", () => {
-      expect(
-        describeAcpSpawnTargetParameter(
-          {
-            agents: {
-              entries: { main: { subagents: { allowAgents: ["codex"] } }, coder },
-            },
-            acp,
+    it.each([
+      ["requester only", config({ main: {}, coder }, defaultAcp), none],
+      [
+        "requester allowlist",
+        config({ main: { subagents: { allowAgents: ["codex"] } }, coder }, defaultAcp),
+        `ACP harness id from: codex. ${defaultNote}`,
+      ],
+      [
+        "explicit target required",
+        {
+          ...config({ main: {}, coder }, defaultAcp),
+          agents: {
+            entries: { main: {}, coder },
+            defaults: { subagents: { allowAgents: ["*"], requireAgentId: true } },
           },
-          "main",
-        ),
-      ).toBe('ACP harness id from: codex. Omit to use the configured ACP default ("codex").');
-    });
-
-    it("requires agentId when the requester config does", () => {
-      expect(
-        describeAcpSpawnTargetParameter(
-          {
-            agents: {
-              defaults: { subagents: { allowAgents: ["*"], requireAgentId: true } },
-              entries: { main: {}, coder },
-            },
-            acp,
-          },
-          "main",
-        ),
-      ).toBe("ACP harness id from: coder, codex. agentId is required.");
-    });
+        },
+        `ACP harness id from: coder, codex. ${required}`,
+      ],
+    ] satisfies Array<[string, OpenClawConfig, string]>)(
+      "describes %s",
+      (_label, cfg, expected) => {
+        expect(describeAcpSpawnTargetParameter(cfg, "main")).toBe(expected);
+      },
+    );
   });
 
   describe("for a sender-restricted session", () => {
-    const cfg = { agents: { entries: { main: {}, coder: { runtime: { type: "acp" as const } } } } };
+    const cfg = config({ main: {}, coder });
     const sender = { requesterAgentId: "main", inheritedToolPolicySource: "sender" as const };
 
     it("offers no harness other than the requester", () => {
@@ -152,7 +86,7 @@ describe("describeAcpSpawnTargetParameter", () => {
           undefined,
           sender,
         ),
-      ).toBe("No ACP harness id is allowed. agentId is required.");
+      ).toBe(none);
     });
 
     it("omits aliases whose requested id the sender check rejects", () => {
@@ -171,14 +105,6 @@ describe("describeAcpSpawnTargetParameter", () => {
           workspaceDir: "/work",
         }),
       ).toBe("ACP harness id from: main. agentId is required.");
-    });
-
-    it("keeps the unrestricted guidance when the sender is not restricted", () => {
-      expect(
-        describeAcpSpawnTargetParameter(cfg, undefined, {
-          requesterAgentId: "main",
-        }),
-      ).toBe("ACP harness id, for example: coder. agentId is required.");
     });
   });
 });

@@ -12,6 +12,7 @@ import {
   LEGACY_MISSING_TOOL_RESULT_TEXT,
   makeMissingToolResult,
 } from "../../../packages/agent-core/src/harness/session/tool-result-pairing.js";
+import { anthropicTextTurn } from "../../../test/anthropic-text-turn.test-support.js";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { makeUserMessage } from "../../../test/helpers/user-message.js";
 import { modelDefinition } from "../../agents/model-auth.fixtures.test-support.js";
@@ -56,38 +57,8 @@ it("chat.send replays synthetic repairs through session history and the register
       expect(request.url).toBe("/v1/messages");
       requests.push(JSON.parse(await readText(request)));
       nextRequestReceived?.resolve();
-      const events = [
-        {
-          type: "message_start",
-          message: {
-            id: "replay-message",
-            type: "message",
-            role: "assistant",
-            model,
-            content: [],
-            stop_reason: null,
-            stop_sequence: null,
-            usage: { input_tokens: 100, output_tokens: 0 },
-          },
-        },
-        { type: "content_block_start", index: 0, content_block: { type: "text", text: "" } },
-        {
-          type: "content_block_delta",
-          index: 0,
-          delta: { type: "text_delta", text: "REPLAY_SETTLED" },
-        },
-        { type: "content_block_stop", index: 0 },
-        {
-          type: "message_delta",
-          delta: { stop_reason: "end_turn", stop_sequence: null },
-          usage: { output_tokens: 5 },
-        },
-        { type: "message_stop" },
-      ];
       response.writeHead(200, { "content-type": "text/event-stream" });
-      response.end(
-        events.map((event) => `event: ${event.type}\ndata: ${JSON.stringify(event)}\n\n`).join(""),
-      );
+      response.end(anthropicTextTurn(model, "REPLAY_SETTLED", "replay-message", 100, 5));
     })();
     providerWork.push(work);
     void work.catch((error: unknown) => {

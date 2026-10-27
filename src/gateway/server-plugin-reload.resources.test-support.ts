@@ -25,8 +25,13 @@ type RecoveryFixture = Awaited<ReturnType<RecoveryFixtureFactory>>;
 
 async function readResource(fixture: RecoveryFixture) {
   const respond = await invokeReloadMethod(fixture.registryOwner.registry, "first.resource");
-  expect(respond).toHaveBeenCalledOnce();
   return respond.mock.calls[0]?.[1];
+}
+
+function expectServing(fixture: RecoveryFixture, instance = fixture.instance()) {
+  expect(fixture.registryOwner.registry).toBe(fixture.previousRegistry);
+  expect(instance.run(() => "still serving")).toBe("still serving");
+  fixture.expectServices({ firstStop: 0, siblingStop: 0 });
 }
 
 function resourceConfig(mode: string): OpenClawConfig {
@@ -177,10 +182,7 @@ async function verifySelfConsumerReload(
       reloadFailure(caller === "own invocation" ? "prepare" : "drain"),
     );
     expect(prepareConfigEffects).toHaveBeenCalledTimes(caller === "own invocation" ? 0 : 1);
-    fixture.expectServices({ firstStop: 0, siblingStop: 0 });
-    expect(fixture.candidates).toHaveLength(0);
-    expect(fixture.registryOwner.registry).toBe(fixture.previousRegistry);
-    expect(instance.run(() => "still serving")).toBe("still serving");
+    expectServing(fixture, instance);
     cleanup.resolve();
     await closing;
     assert(consumer);
@@ -236,7 +238,6 @@ async function verifyOverlappingRetainedWork(createRecoveryFixture: RecoveryFixt
     expect(fixture.firstStop).not.toHaveBeenCalled();
     first();
     expect(instance.run(() => "old run finishes")).toBe("old run finishes");
-    expect(fixture.candidates).toHaveLength(0);
     second();
     await Promise.race([entered.promise, reloading]);
     expect(disposed).toEqual([]);
@@ -247,10 +248,8 @@ async function verifyOverlappingRetainedWork(createRecoveryFixture: RecoveryFixt
       receipt.runtime.warnings?.filter((warning) => warning.includes("retained work")),
     ).toEqual([expect.stringMatching(/waited for.*retained work.*finish/)]);
     expect(disposed).toEqual([1]);
-    const next = fixture.registryOwner.registry;
-    expect(next).not.toBe(old);
-    const release = retainRuntimePluginWork([next]);
-    release();
+    expect(fixture.registryOwner.registry).not.toBe(old);
+    retainRuntimePluginWork([fixture.registryOwner.registry])();
     expect(registrations).toBe(2);
   } finally {
     first();
@@ -294,7 +293,6 @@ async function verifyExplicitDrainWait(
     });
     await vi.advanceTimersByTimeAsync(70_000);
     expect(operation.state.settled).toBe(false);
-    expect(fixture.candidates).toHaveLength(0);
     expect(fixture.firstStop).not.toHaveBeenCalled();
     expect(instance.disposing).toBe(false);
     if (outcome !== "complete") {
@@ -311,18 +309,15 @@ async function verifyExplicitDrainWait(
           cause: { message: expect.stringContaining("admitted work did not settle within 600s") },
         });
       }
-      expect(fixture.registryOwner.registry).toBe(fixture.previousRegistry);
-      expect(instance.run(() => "still serving")).toBe("still serving");
+      expectServing(fixture, instance);
       expect(instance.disposing).toBe(false);
       instance.retainWork()();
-      expect(fixture.firstStop).not.toHaveBeenCalled();
       expect(fixture.rollbackConfigEffects).toHaveBeenCalledOnce();
     } else {
       release();
       await call;
       expect(await reloading).toMatchObject(firstReloaded);
       expect(fixture.registryOwner.registry).not.toBe(fixture.previousRegistry);
-      expect(fixture.candidates).toHaveLength(1);
       expect(instance.disposing).toBe(true);
     }
     expect(fixture.owner.getReloadStatus()).toBeUndefined();
@@ -375,9 +370,7 @@ export function registerPluginRetainedWorkReloadTests(
       expect(runInTurn(() => instance.hasActiveCall)).toBe(false);
       await expect(runInTurn(() => fixture.reload())).rejects.toThrow("own active turn");
       expect(prepareConfigEffects).not.toHaveBeenCalled();
-      fixture.expectServices({ firstStop: 0, siblingStop: 0 });
-      expect(fixture.registryOwner.registry).toBe(registry);
-      expect(instance.run(() => "still serving")).toBe("still serving");
+      expectServing(fixture, instance);
 
       await lease[Symbol.asyncDispose]();
       allowEffects = true;

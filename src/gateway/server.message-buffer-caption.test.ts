@@ -7,6 +7,7 @@ import type {
   ArtifactsDownloadResult,
   ArtifactsListResult,
 } from "../../packages/gateway-protocol/src/schema/artifacts.js";
+import { readRequestText } from "../../test/helpers/gateway-integration-fixtures.js";
 import { writeOpenAiResponsesText } from "../../test/helpers/openai-responses-sse.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { clearConfigCache, clearRuntimeConfigSnapshot } from "../config/config.js";
@@ -15,9 +16,11 @@ import { captureEnv, setTestEnvValue } from "../test-utils/env.js";
 import {
   closeProvider,
   listenProvider,
-  writeToolCallResponse,
+  writeToolCall,
 } from "./gateway-provider-fixture.test-support.js";
 import { disconnectGatewayClient, startGatewayWithClient } from "./test-helpers.e2e.js";
+import { createGatewayArtifactTestEnv } from "./test-helpers.env.js";
+import { buildMockOpenAiResponsesProvider } from "./test-openai-responses-model.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const attachment = Buffer.from("current-source attachment");
@@ -58,20 +61,15 @@ it(
       bytes?: Buffer;
       finalText?: string;
     };
+    const attached = (scenario: (typeof captionCases)[number]): Scenario => ({
+      ...scenario,
+      buffer: attachment.toString("base64"),
+      expected: "attachment",
+      bytes: attachment,
+    });
     const cases: [Scenario, ...Scenario[]] = [
-      {
-        ...captionCases[0],
-        buffer: attachment.toString("base64"),
-        expected: "attachment",
-        bytes: attachment,
-      },
-      ...captionCases.slice(1).map((scenario) => ({
-        name: scenario.name,
-        caption: scenario.caption,
-        buffer: attachment.toString("base64"),
-        expected: "attachment" as const,
-        bytes: attachment,
-      })),
+      attached(captionCases[0]),
+      ...captionCases.slice(1).map(attached),
       ...[undefined, "", "  "].map((buffer, index) => ({
         name: `empty-${index}`,
         caption: captionCases[1].caption,
@@ -114,19 +112,7 @@ it(
       },
     ];
     const configPath = path.join(state, "openclaw.json");
-    const environment = {
-      OPENCLAW_HOME: root,
-      OPENCLAW_STATE_DIR: state,
-      OPENCLAW_CONFIG_PATH: configPath,
-      OPENCLAW_SKIP_CHANNELS: "1",
-      OPENCLAW_SKIP_GMAIL_WATCHER: "1",
-      OPENCLAW_SKIP_CRON: "1",
-      OPENCLAW_SKIP_CANVAS_HOST: "1",
-      OPENCLAW_SKIP_BROWSER_CONTROL_SERVER: "1",
-      OPENCLAW_SKIP_PROVIDERS: "1",
-      OPENCLAW_DISABLE_BUNDLED_PLUGINS: "0",
-      OPENCLAW_BUNDLED_PLUGINS_DIR: path.resolve("dist/extensions"),
-    };
+    const environment = createGatewayArtifactTestEnv(root, state, configPath);
     const snapshot = captureEnv(Object.keys(environment));
     for (const [key, value] of Object.entries(environment)) {
       setTestEnvValue(key, value);
@@ -135,15 +121,12 @@ it(
     let requests: Array<Record<string, unknown>> = [];
     const provider = createServer((request, response) => {
       void (async () => {
-        const chunks: Buffer[] = [];
-        for await (const chunk of request) {
-          chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
-        }
+        const text = await readRequestText(request);
         if (request.method !== "POST" || request.url !== "/v1/responses") {
           response.writeHead(404).end();
           return;
         }
-        const body: unknown = JSON.parse(Buffer.concat(chunks).toString("utf8"));
+        const body: unknown = JSON.parse(text);
         if (!isRecord(body)) {
           throw new Error("Invalid completion request");
         }
@@ -157,22 +140,20 @@ it(
           return;
         }
         if (requests.filter((candidate) => candidate.model === "buffer-proof").length === 1) {
-          const item = {
-            type: "function_call",
-            id: `fc_${selected.name}`,
-            call_id: `call_${selected.name}`,
-            name: "message",
-            arguments: JSON.stringify({
+          writeToolCall(
+            response,
+            "message",
+            {
               action: "send",
               message: selected.caption,
               buffer: selected.buffer,
               media: selected.media,
               filename: "proof.txt",
               contentType: "text/plain",
-            }),
-            status: "completed",
-          };
-          writeToolCallResponse(response, item, `response_${selected.name}`, 10, 10);
+            },
+            10,
+            10,
+          );
         } else {
           writeOpenAiResponsesText(response, {
             text: selected.finalText ?? "NO_REPLY",
@@ -184,7 +165,11 @@ it(
     });
     let gateway: Awaited<ReturnType<typeof startGatewayWithClient>> | undefined;
     try {
-      const baseUrl = await listenProvider(provider);
+      const model = buildMockOpenAiResponsesProvider(
+        await listenProvider(provider),
+        "buffer-proof",
+      );
+      Object.assign(model.config.models[0], { contextWindow: 16000, maxTokens: 256 });
       gateway = await startGatewayWithClient({
         cfg: {
           agents: {
@@ -200,26 +185,7 @@ it(
           },
           models: {
             mode: "replace",
-            providers: {
-              openai: {
-                baseUrl,
-                apiKey: "test",
-                api: "openai-responses",
-                request: { allowPrivateNetwork: true },
-                models: [
-                  {
-                    id: "buffer-proof",
-                    name: "buffer-proof",
-                    api: "openai-responses",
-                    reasoning: false,
-                    input: ["text"],
-                    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-                    contextWindow: 16000,
-                    maxTokens: 256,
-                  },
-                ],
-              },
-            },
+            providers: { openai: { ...model.config, request: { allowPrivateNetwork: true } } },
           },
           // This provider scripts direct message calls to prove buffer handling, not discovery.
           tools: { profile: "messaging", toolSearch: false },
@@ -233,20 +199,24 @@ it(
         configPath,
         token: "buffer-proof-token",
       });
+      const waitForRun = (runId: string) =>
+        gateway!.client.request<{ status: string }>(
+          "agent.wait",
+          { runId, timeoutMs: 60_000 },
+          { timeoutMs: 65_000 },
+        );
       for (const scenario of cases) {
         selected = scenario;
         requests = [];
         const sessionKey = `agent:main:buffer-${scenario.name}`;
-        const started = await gateway.client.request<{ runId: string }>("chat.send", {
-          sessionKey,
-          message: "Send the attachment in this conversation.",
-          idempotencyKey: `buffer-${scenario.name}`,
-        });
-        const completed = await gateway.client.request<{ status: string }>(
-          "agent.wait",
-          { runId: started.runId, timeoutMs: 60_000 },
-          { timeoutMs: 65_000 },
-        );
+        const send = () =>
+          gateway!.client.request<{ runId: string }>("chat.send", {
+            sessionKey,
+            message: "Send the attachment in this conversation.",
+            idempotencyKey: `buffer-${scenario.name}`,
+          });
+        const started = await send();
+        const completed = await waitForRun(started.runId);
         const history = await gateway.client.request<{ messages: Array<Record<string, unknown>> }>(
           "chat.history",
           { sessionKey, limit: 20 },
@@ -287,8 +257,10 @@ it(
             "artifacts.download",
             { sessionKey, artifactId: artifact.id },
           );
-          expect.soft(downloaded.artifact.mimeType, scenario.name).toBe("text/plain");
-          expect.soft(downloaded.artifact.title, scenario.name).toBe("proof.txt");
+          expect.soft(downloaded.artifact, scenario.name).toMatchObject({
+            mimeType: "text/plain",
+            title: "proof.txt",
+          });
           if (!downloaded.url) {
             throw new Error("Managed artifact URL missing");
           }
@@ -299,17 +271,9 @@ it(
             .toEqual(scenario.bytes);
         }
         const primaryCount = requests.filter((request) => request.model === "buffer-proof").length;
-        const replay = await gateway.client.request<{ runId: string }>("chat.send", {
-          sessionKey,
-          message: "Send the attachment in this conversation.",
-          idempotencyKey: `buffer-${scenario.name}`,
-        });
+        const replay = await send();
         expect(replay.runId).toBe(started.runId);
-        await gateway.client.request(
-          "agent.wait",
-          { runId: replay.runId, timeoutMs: 60_000 },
-          { timeoutMs: 65_000 },
-        );
+        await waitForRun(replay.runId);
         expect(
           await gateway.client.request("artifacts.list", { sessionKey, messageRole: "assistant" }),
         ).toEqual(listed);

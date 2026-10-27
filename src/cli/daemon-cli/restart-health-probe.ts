@@ -235,41 +235,6 @@ function readActivatedPluginErrors(health: unknown): PluginHealthErrorSummary[] 
   });
 }
 
-function readChannelProbeFailures(health: unknown) {
-  const errors: GatewayReachability["channelProbeErrors"] = [];
-  const timeouts: GatewayReachability["channelProbeErrors"] = [];
-  const warnings: GatewayReachability["channelProbeErrors"] = [];
-  const channels = asOptionalRecord(asOptionalRecord(health)?.channels);
-  for (const [id, summary] of Object.entries(channels ?? {})) {
-    const accounts = Object.entries(asOptionalRecord(asOptionalRecord(summary)?.accounts) ?? {});
-    for (const [accountId, value] of accounts.length ? accounts : Object.entries({ "": summary })) {
-      const account = asOptionalRecord(value);
-      if (account?.enabled === false || account?.configured === false) {
-        continue;
-      }
-      if (account?.running === false || account?.healthState === "not-running") {
-        warnings.push({
-          id: accountId ? `${id}/${accountId}` : id,
-          error:
-            typeof account.lastError === "string" && account.lastError.trim()
-              ? account.lastError
-              : "not running",
-        });
-      }
-    }
-    const probe = asOptionalRecord(asOptionalRecord(summary)?.probe);
-    if (!probe || (probe.timedOut !== true && probe.ok !== false)) {
-      continue;
-    }
-    // Retain the explicit timeout marker from older Gateways that also sent ok:false.
-    (probe.timedOut === true ? timeouts : errors).push({
-      id,
-      error: typeof probe.error === "string" && probe.error.trim() ? probe.error : "check failed",
-    });
-  }
-  return { errors, timeouts, warnings };
-}
-
 function readUnavailablePlugins(health: unknown): UnavailablePluginHealthSummary[] {
   const unavailable = asOptionalRecord(asOptionalRecord(health)?.plugins)?.unavailable;
   if (!Array.isArray(unavailable)) {
@@ -352,7 +317,39 @@ export async function confirmGatewayReachable(params: {
     result.reachable = true;
     result.activatedPluginErrors = readActivatedPluginErrors(health);
     result.unavailablePlugins = readUnavailablePlugins(health);
-    const { errors, timeouts, warnings } = readChannelProbeFailures(health);
+    const errors: GatewayReachability["channelProbeErrors"] = [];
+    const timeouts: GatewayReachability["channelProbeErrors"] = [];
+    const warnings: GatewayReachability["channelProbeErrors"] = [];
+    const channels = asOptionalRecord(asOptionalRecord(health)?.channels);
+    for (const [id, summary] of Object.entries(channels ?? {})) {
+      const accounts = Object.entries(asOptionalRecord(asOptionalRecord(summary)?.accounts) ?? {});
+      for (const [accountId, value] of accounts.length
+        ? accounts
+        : Object.entries({ "": summary })) {
+        const account = asOptionalRecord(value);
+        if (account?.enabled === false || account?.configured === false) {
+          continue;
+        }
+        if (account?.running === false || account?.healthState === "not-running") {
+          warnings.push({
+            id: accountId ? `${id}/${accountId}` : id,
+            error:
+              typeof account.lastError === "string" && account.lastError.trim()
+                ? account.lastError
+                : "not running",
+          });
+        }
+      }
+      const probe = asOptionalRecord(asOptionalRecord(summary)?.probe);
+      if (!probe || (probe.timedOut !== true && probe.ok !== false)) {
+        continue;
+      }
+      // Retain the explicit timeout marker from older Gateways that also sent ok:false.
+      (probe.timedOut === true ? timeouts : errors).push({
+        id,
+        error: typeof probe.error === "string" && probe.error.trim() ? probe.error : "check failed",
+      });
+    }
     result.channelProbeErrors = errors;
     result.channelRuntimeWarnings = warnings.length ? warnings : undefined;
     if (timeouts.length) {

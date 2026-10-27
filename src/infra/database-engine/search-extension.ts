@@ -1,4 +1,8 @@
-import { isPostgresSqlConnection, type EngineConnection } from "../sql-connection.js";
+import {
+  isPostgresSqlConnection,
+  type EngineConnection,
+  type PostgresSqlConnection,
+} from "../sql-connection.js";
 import {
   invalidateLocalSqliteSchemaAdmissions,
   publishSqliteDatabaseSchemaChange,
@@ -22,6 +26,22 @@ import { admitSqliteMemoryTextSearch } from "./sqlite-search-schema.js";
 
 class SearchExtensionDefinitionChangedError extends Error {
   override name = "SearchExtensionDefinitionChangedError";
+}
+
+/** Definition preflight only; binding still checks the store's search capability admission. */
+export function arePostgresSearchExtensionsAdmitted(
+  db: PostgresSqlConnection,
+  definitions: Readonly<Record<string, SearchSchema>>,
+): boolean {
+  const schema = getAdmittedPostgresSchema(db);
+  return Boolean(
+    schema &&
+    getPostgresPhysicalFacts(db) &&
+    Object.entries(definitions).every(
+      ([name, definition]) =>
+        JSON.stringify(schema.searchExtensions?.[name]) === JSON.stringify(definition),
+    ),
+  );
 }
 
 /** Register only at the owner's admission boundary; SQLite retains its existing derived lifecycle. */

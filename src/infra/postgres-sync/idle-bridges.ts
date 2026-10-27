@@ -9,12 +9,9 @@ const maxIdleBridges = 4;
 const idleBridgeTimeoutMs = 3 * 60_000;
 
 function closeBridge(bridge: PostgresBridge): void {
-  // Only server-idle transports enter this pool; termination closes their sockets.
+  // Closing this logical endpoint releases only its independently owned socket.
   bridge.port.close();
-  void bridge.worker.terminate();
 }
-
-const ignoreWorkerError = () => {};
 
 function closeIdleBridges(): void {
   const bridges = [...idleBridges.values()];
@@ -35,7 +32,7 @@ function unwatch(): void {
 
 export function hasIdlePostgresBridge(key: string): boolean {
   const bridge = idleBridges.get(key)?.bridge;
-  return bridge !== undefined && !Atomics.load(bridge.control, 1);
+  return bridge !== undefined && !Atomics.load(bridge.service, 1);
 }
 
 function removeIdleBridge(key: string): PostgresBridge | undefined {
@@ -51,11 +48,10 @@ function removeIdleBridge(key: string): PostgresBridge | undefined {
 export function takeIdlePostgresBridge(key: string): PostgresBridge | undefined {
   const bridge = removeIdleBridge(key);
   if (bridge) {
-    if (Atomics.load(bridge.control, 1)) {
+    if (Atomics.load(bridge.service, 1)) {
       closeBridge(bridge);
       return undefined;
     }
-    bridge.worker.off("error", ignoreWorkerError);
   }
   return bridge;
 }
@@ -73,8 +69,6 @@ export function retainIdlePostgresBridge(key: string, bridge: PostgresBridge): v
     process.once("beforeExit", closeIdleBridges);
     process.once("exit", closeIdleBridges);
   }
-  // An idle worker error must not reach a closed logical connection or crash its parent.
-  bridge.worker.on("error", ignoreWorkerError);
   const timeout = setTimeout(() => {
     const expired = removeIdleBridge(key);
     if (expired) {

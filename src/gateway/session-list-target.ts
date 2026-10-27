@@ -18,35 +18,10 @@ export function readSessionListSelectionFacts(
     category?: string;
     heartbeatIsolatedBaseSessionKey?: string;
     createdSurface?: "plugin-dock";
-    chatType?: string;
-    autoLabel?: string;
-    topicName?: string;
-    groupChannel?: string;
-    space?: string;
-    delivery?: SessionEntry["delivery"];
-    modelProvider?: string;
-    model?: string;
   } & Omit<Parameters<typeof isSystemCreatedSessionRow>[0], "key" | "classification">,
 ) {
   const parsed = parseAgentSessionKey(key);
   return {
-    // Search memoization shares this identity, independently of activity timestamps.
-    searchSource: [
-      entry?.sessionId,
-      entry?.label,
-      entry?.subject,
-      entry?.category,
-      entry?.displayName,
-      entry?.autoLabel,
-      entry?.topicName,
-      entry?.groupChannel,
-      entry?.space,
-      entry?.delivery,
-      entry?.chatType,
-      entry?.spawnedBy,
-      entry?.modelProvider,
-      entry?.model,
-    ],
     agentId: parsed ? normalizeAgentId(parsed.agentId) : undefined,
     isCronRun: isCronRunSessionKey(key),
     isCron: isCronSessionDisplayKey(key),

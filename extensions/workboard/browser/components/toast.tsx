@@ -2,7 +2,6 @@
 import { createEffect, createSignal, onSettled, Show } from "solid-js";
 import { t } from "../i18n/index.ts";
 import { icons } from "./icons.tsx";
-import "./toast.css";
 
 type ToastTone = "info" | "error";
 

@@ -18,70 +18,74 @@ export function buildCronViewProps(page: ReturnType<typeof createCronPage>) {
   const runtimeConfig = page.inventories.runtimeConfig.read();
   const cron = page.cron();
   const agentsList = page.inventories.agents.read().agentsList;
-  const catalogModels = page.cronModelSuggestions();
-  const conversations = page.deliveryDirectory.conversations;
-  const accountId = page.cron().cronForm.deliveryAccountId.trim();
-  // The bounded directory cannot prove a unique account/topic route. Only the
-  // operator's explicit account supplies plain targets; never infer routing.
-  const conversationTargets = accountId
-    ? normalizeSortedUniqueTrimmedStringList(
-        conversations
-          .filter((conversation) => conversation.accountId === accountId)
-          .map((conversation) => conversation.target),
-      )
-    : [];
-  const configValue = currentConfigObject(runtimeConfig);
-  const channel = cron.cronForm.deliveryChannel.trim() || "last";
-  const systemAgentIds = new Set(
-    (agentsList?.agents ?? [])
-      .filter((entry) => entry.kind === "system")
-      .map((entry) => entry.id.trim()),
-  );
-  const agentSuggestions = normalizeSortedUniqueTrimmedStringList([
-    ...listSelectableAgents(agentsList?.agents ?? []).map((entry) => entry.id.trim()),
-    ...cron.cronJobs.map((job) =>
-      typeof job.agentId === "string" && !systemAgentIds.has(job.agentId.trim())
-        ? job.agentId.trim()
-        : "",
-    ),
-  ]);
-  const modelSuggestions = normalizeSortedUniqueTrimmedStringList([
-    ...catalogModels,
-    ...resolveConfiguredCronModelSuggestions(configValue),
-    ...cron.cronJobs.map((job) => {
-      const payload = job.payload;
-      return payload.kind === "agentTurn" && typeof payload.model === "string"
-        ? payload.model.trim()
-        : "";
-    }),
-  ]);
-  const savedDeliveryTargets = normalizeSortedUniqueTrimmedStringList(
-    cron.cronJobs.map((job) => job.delivery?.to),
-  );
-  const deliveryTargets = normalizeSortedUniqueTrimmedStringList([
-    ...savedDeliveryTargets,
-    ...(cron.cronForm.deliveryMode === "announce" ? conversationTargets : []),
-  ]);
-  const accountTargets = normalizeTrimmedStringList(
-    (channel === "last"
-      ? Object.values(channels.channelsSnapshot?.channelAccounts ?? {}).flat()
-      : (channels.channelsSnapshot?.channelAccounts?.[channel] ?? [])
-    ).map((account) => account.accountId),
-  );
-  const forDeliveryMode = (targets: string[]) =>
-    cron.cronForm.deliveryMode === "webhook"
-      ? targets.filter((value) => /^https?:\/\//i.test(value))
-      : targets;
-  const suggestions = {
-    agentSuggestions,
-    modelSuggestions,
-    timezoneSuggestions: resolveTimezoneSuggestions(
+  let agentSuggestions: string[] = [];
+  let modelSuggestions: string[] = [];
+  let timezoneSuggestions: string[] = [];
+  let accountSuggestions: string[] = [];
+  let failureAlertToSuggestions: string[] = [];
+  let deliveryToSuggestions: string[] = [];
+  // Only the editor consumes these inventories; list updates must not rebuild them.
+  if (cron.cronCreateOpen || (cron.cronEditingJob && page.detailTab() !== "history")) {
+    const conversations = page.deliveryDirectory.conversations;
+    const accountId = page.cron().cronForm.deliveryAccountId.trim();
+    // The bounded directory cannot prove a unique account/topic route. Only the
+    // operator's explicit account supplies plain targets; never infer routing.
+    const conversationTargets = accountId
+      ? normalizeSortedUniqueTrimmedStringList(
+          conversations
+            .filter((conversation) => conversation.accountId === accountId)
+            .map((conversation) => conversation.target),
+        )
+      : [];
+    const configValue = currentConfigObject(runtimeConfig);
+    const channel = cron.cronForm.deliveryChannel.trim() || "last";
+    const systemAgentIds = new Set(
+      (agentsList?.agents ?? [])
+        .filter((entry) => entry.kind === "system")
+        .map((entry) => entry.id.trim()),
+    );
+    agentSuggestions = normalizeSortedUniqueTrimmedStringList([
+      ...listSelectableAgents(agentsList?.agents ?? []).map((entry) => entry.id.trim()),
+      ...cron.cronJobs.map((job) =>
+        typeof job.agentId === "string" && !systemAgentIds.has(job.agentId.trim())
+          ? job.agentId.trim()
+          : "",
+      ),
+    ]);
+    modelSuggestions = normalizeSortedUniqueTrimmedStringList([
+      ...page.cronModelSuggestions(),
+      ...resolveConfiguredCronModelSuggestions(configValue),
+      ...cron.cronJobs.map((job) => {
+        const payload = job.payload;
+        return payload.kind === "agentTurn" && typeof payload.model === "string"
+          ? payload.model.trim()
+          : "";
+      }),
+    ]);
+    const savedDeliveryTargets = normalizeSortedUniqueTrimmedStringList(
+      cron.cronJobs.map((job) => job.delivery?.to),
+    );
+    const deliveryTargets = normalizeSortedUniqueTrimmedStringList([
+      ...savedDeliveryTargets,
+      ...(cron.cronForm.deliveryMode === "announce" ? conversationTargets : []),
+    ]);
+    const accountTargets = normalizeTrimmedStringList(
+      (channel === "last"
+        ? Object.values(channels.channelsSnapshot?.channelAccounts ?? {}).flat()
+        : (channels.channelsSnapshot?.channelAccounts?.[channel] ?? [])
+      ).map((account) => account.accountId),
+    );
+    const forDeliveryMode = (targets: string[]) =>
+      cron.cronForm.deliveryMode === "webhook"
+        ? targets.filter((value) => /^https?:\/\//i.test(value))
+        : targets;
+    timezoneSuggestions = resolveTimezoneSuggestions(
       cron.cronJobs.map((job) => (job.schedule.kind === "cron" ? (job.schedule.tz ?? "") : "")),
-    ),
-    accountTargets,
-    failureAlertToSuggestions: forDeliveryMode(savedDeliveryTargets),
-    deliveryToSuggestions: forDeliveryMode(deliveryTargets),
-  };
+    );
+    accountSuggestions = accountTargets;
+    failureAlertToSuggestions = forDeliveryMode(savedDeliveryTargets);
+    deliveryToSuggestions = forDeliveryMode(deliveryTargets);
+  }
   const canManage = page.canManageCron();
   const eventSource = page.eventSource.view;
   const fieldErrors = {
@@ -138,12 +142,12 @@ export function buildCronViewProps(page: ReturnType<typeof createCronPage>) {
     eventSource,
     fieldErrors,
     canSubmit: page.cron().connected && !hasCronFormErrors(fieldErrors),
-    agentSuggestions: suggestions.agentSuggestions,
-    modelSuggestions: suggestions.modelSuggestions,
+    agentSuggestions,
+    modelSuggestions,
     thinkingSuggestions: THINKING_SUGGESTIONS,
-    timezoneSuggestions: suggestions.timezoneSuggestions,
-    deliveryToSuggestions: suggestions.deliveryToSuggestions,
-    failureAlertToSuggestions: suggestions.failureAlertToSuggestions,
-    accountSuggestions: suggestions.accountTargets,
+    timezoneSuggestions,
+    deliveryToSuggestions,
+    failureAlertToSuggestions,
+    accountSuggestions,
   };
 }

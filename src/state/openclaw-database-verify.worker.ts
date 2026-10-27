@@ -1,12 +1,6 @@
 import { formatSqliteErrorCodeSuffix } from "../infra/sqlite-error-diagnostics.js";
 import { OPENCLAW_SQLITE_BUSY_TIMEOUT_MS } from "./openclaw-state-db-contract.js";
 
-export type OpenClawDatabaseVerifyTarget = {
-  path: string;
-  label: string;
-  check: "quick" | "full";
-};
-
 export type OpenClawDatabaseVerifyResult = {
   path: string;
   ok: boolean;
@@ -19,9 +13,11 @@ function formatVerifyError(error: unknown): string {
   return `${message}${formatSqliteErrorCodeSuffix(error)}`;
 }
 
-export async function verifyOpenClawDatabase(
-  target: OpenClawDatabaseVerifyTarget,
-): Promise<OpenClawDatabaseVerifyResult> {
+export async function verifyOpenClawDatabase(target: {
+  path: string;
+  label: string;
+  check: "quick" | "full";
+}): Promise<OpenClawDatabaseVerifyResult> {
   const [integrity, source] = await Promise.all([
     import("../infra/sqlite-integrity.js"),
     import("../infra/sqlite-source-handle.js"),

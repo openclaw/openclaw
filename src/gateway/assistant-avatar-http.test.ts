@@ -297,6 +297,19 @@ it.each([
   }
 });
 
+it("serves an unversioned data avatar thumbnail", async () => {
+  const fixture = avatarFixture("/control");
+  fixture.setAvatar(encodeDataUrl(APNG_BYTES));
+
+  const response = await fixture.request("/control/avatar/main");
+
+  expect(response.res.statusCode).toBe(200);
+  expect(response.setHeader).toHaveBeenCalledWith("content-type", "image/png");
+  expect(response.setHeader).toHaveBeenCalledWith("cache-control", "private, no-cache");
+  expect(response.setHeader).toHaveBeenCalledWith("vary", "Authorization, Cookie");
+  expect(response.end).toHaveBeenCalledWith(expect.any(Buffer));
+});
+
 it.each(["local", "data"])(
   "reuses authenticated thumbnails across five %s avatars until their source changes",
   async (sourceKind) => {

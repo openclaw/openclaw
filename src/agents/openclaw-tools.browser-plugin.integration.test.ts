@@ -31,6 +31,7 @@ import {
   createOutboundTestPlugin,
   createTestRegistry,
 } from "../test-utils/channel-plugins.js";
+import { createEmptyPreparedModelRuntimeFixture } from "./embedded-agent-runner/model.fixture.test-support.js";
 import { resolveOpenClawPluginToolsForOptions } from "./openclaw-plugin-tools.js";
 import { createOpenClawTools, createOpenClawToolsAsync } from "./openclaw-tools.js";
 import { prepareOwnedPluginLoadContext } from "./prepared-model-runtime.plugin-context.js";
@@ -422,22 +423,14 @@ describe("createOpenClawTools browser plugin integration", () => {
       config,
       workspaceDir: "/tmp",
       preparedModelRuntime: {
-        catalogOwner: undefined,
-        agentDir: "/tmp/agent",
+        ...createEmptyPreparedModelRuntimeFixture({
+          agentDir: "/tmp/agent",
+          config,
+          metadataSnapshot,
+          createStores: vi.fn(),
+        }),
         workspaceDir: "/tmp",
-        activeProjectKeys: [],
-        config,
-        observationConfig: config,
-        isCurrent: () => true,
-        authModes: {},
-        metadataSnapshot,
         pluginRegistry,
-        allowGatewaySubagentBinding: false,
-        modelCatalog: { entries: [], routeVariants: [] },
-        configuredRuntimeModels: [],
-        findConfiguredRuntimeModel: () => undefined,
-        inlineProviderModels: [],
-        createStores: vi.fn(),
       },
     });
     expect(params.preparedRuntime).toEqual({

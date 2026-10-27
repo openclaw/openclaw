@@ -149,6 +149,9 @@ export function createCodexRuntimePlanFixture(): NonNullable<
       modelId: "gpt-5.4-codex",
       harnessId: "codex",
     },
+    transport: {
+      resolveExtraParams: () => ({}),
+    },
     prompt: {
       resolveSystemPromptContribution: () => undefined,
     },

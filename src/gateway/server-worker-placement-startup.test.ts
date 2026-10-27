@@ -47,6 +47,44 @@ function mockDispatch(overrides: Partial<WorkerPlacementDispatchService> = {}) {
 
 type ReconcileGuard = (environmentId: string, reconcileCore: () => Promise<void>) => Promise<void>;
 
+function guardedEnvironments(install: (guard: ReconcileGuard) => () => void | Promise<void>) {
+  return {
+    ...createEnvironments(),
+    get: vi.fn((environmentId: string) => ({ environmentId, state: "provisioning" })),
+    installReconcileEnvironmentGuard: vi.fn(install),
+  };
+}
+
+function placementRuntime(
+  placement: { sessionId: string; environmentId?: string | null },
+  environments:
+    | ReturnType<typeof createEnvironments>
+    | ReturnType<typeof guardedEnvironments> = createEnvironments(),
+  overrides: Partial<ReturnType<typeof placementStoreDefaults>> = {},
+) {
+  return createRuntime({
+    placements: {
+      ...placementStoreDefaults(() => [placement]),
+      get: () => placement,
+      ...overrides,
+    } as never,
+    environments: environments as never,
+  });
+}
+
+function startupPlacement(state: "local" | "provisioning" | "active") {
+  return {
+    sessionId: "session-startup",
+    sessionKey: "agent:main:startup",
+    agentId: "main",
+    state,
+    generation: 1,
+    environmentId: state === "local" ? null : "worker-startup",
+    activeOwnerEpoch: state === "active" ? 1 : null,
+    turnClaim: null,
+  };
+}
+
 async function withStoredSession(
   mode: "recovery" | "authority",
   run: (root: string, storePath: string) => Promise<void>,
@@ -159,9 +197,7 @@ describe("worker placement startup health lifetime", () => {
       });
     let holdScheduledWork = false;
     const diskSpace = {
-      read: vi.fn(),
-      version: vi.fn(() => 0),
-      invalidate: vi.fn(),
+      ...createIdleDiskSpace(),
       nextSweepAtMs: () => time.clock.now() + 60_000,
       sweep: vi.fn(async () => {
         if (holdScheduledWork) {
@@ -195,8 +231,6 @@ describe("worker placement startup health lifetime", () => {
 
     try {
       sidecar = await startRuntime(runtime, { startupTrace });
-
-      expect(sidecar).not.toBeNull();
       const completedPhases = info.mock.calls.flatMap(([line]) => {
         const match = /sidecars\.worker-environments\.([\w-]+) [\d.]+ms/.exec(line);
         return match ? [match[1]] : [];
@@ -252,24 +286,8 @@ describe("worker placement startup health lifetime", () => {
       const reconcile = vi.fn(async () => await releaseRecovery.promise);
       mockDispatch({ reconcile });
       runtimeFactoryMocks.createSessionEvidenceResolver.mockResolvedValue(async () => "current");
-      const placement = {
-        sessionId: `session-startup-${state}`,
-        sessionKey: `agent:main:startup-${state}`,
-        agentId: "main",
-        state,
-        generation: 1,
-        environmentId: `worker-startup-${state}`,
-        activeOwnerEpoch: state === "active" ? 1 : null,
-        turnClaim: null,
-      };
       const environments = createEnvironments();
-      const runtime = createRuntime({
-        placements: {
-          ...placementStoreDefaults(() => [placement]),
-          get: () => placement,
-        } as never,
-        environments: environments as never,
-      });
+      const runtime = placementRuntime(startupPlacement(state), environments);
       const starting = startRuntime(runtime);
 
       try {
@@ -306,24 +324,9 @@ describe("worker placement startup health lifetime", () => {
       runtimeFactoryMocks.resolveSessionEvidence,
     );
     mockDispatch({ reconcileActive });
-    const placement = {
-      sessionId: "session-startup",
-      sessionKey: "agent:main:startup",
-      agentId: "main",
-      state: "local",
-      generation: 1,
-      turnClaim: null,
-      environmentId: null,
-      activeOwnerEpoch: null,
-    } as const;
     const environments = createEnvironments();
-    const runtime = createRuntime({
-      placements: {
-        ...placementStoreDefaults(() => [placement]),
-        get: () => placement,
-        retireSessionPlacementAsync,
-      } as never,
-      environments: environments as never,
+    const runtime = placementRuntime(startupPlacement("local"), environments, {
+      retireSessionPlacementAsync,
     });
     let sidecar: { stop: () => Promise<void> } | undefined;
     const unregisterSidecar = vi.fn();
@@ -413,14 +416,10 @@ describe("worker placement startup health lifetime", () => {
         expect(installedGuard).toBeDefined();
       });
       mockDispatch({ reconcile, resumeProvisioning });
-      const environments = {
-        ...createEnvironments(),
-        get: vi.fn((environmentId: string) => ({ environmentId, state: "provisioning" })),
-        installReconcileEnvironmentGuard: vi.fn((guard: ReconcileGuard) => {
-          installedGuard = guard;
-          return vi.fn();
-        }),
-      };
+      const environments = guardedEnvironments((guard) => {
+        installedGuard = guard;
+        return vi.fn();
+      });
       const runtime = createRuntime({
         placements: placementStoreDefaults(() => placementRows) as never,
         environments: environments as never,
@@ -448,8 +447,8 @@ describe("worker placement startup health lifetime", () => {
           expect(signal?.aborted).toBe(false);
         });
         await guard(provisioning.environmentId, exactCore);
-        expect(resumeProvisioning).toHaveBeenCalledOnce();
         expect(resumeProvisioning.mock.calls[0]?.[0]).toBe(provisioning);
+        expect(resumeProvisioning).toHaveBeenCalledOnce();
         expect(exactCore).toHaveBeenCalledOnce();
 
         placementRows = [];
@@ -499,9 +498,7 @@ describe("worker placement startup health lifetime", () => {
       }),
     });
     const environments = {
-      ...createEnvironments(),
-      get: vi.fn((environmentId: string) => ({ environmentId, state: "provisioning" })),
-      installReconcileEnvironmentGuard: vi.fn((guard: ReconcileGuard) => {
+      ...guardedEnvironments((guard) => {
         installedGuard = guard;
         return async () => {
           events.push("guard:uninstall");
@@ -523,13 +520,7 @@ describe("worker placement startup health lifetime", () => {
         await guardedRecovery;
       }),
     };
-    const runtime = createRuntime({
-      placements: {
-        ...placementStoreDefaults(() => [placement]),
-        get: () => placement,
-      } as never,
-      environments: environments as never,
-    });
+    const runtime = placementRuntime(placement, environments);
     const dispatchOptions = runtimeFactoryMocks.createDispatch.mock.calls.at(-1)?.[0] as {
       isShuttingDown?: () => boolean;
     };
@@ -566,8 +557,6 @@ describe("worker placement startup health lifetime", () => {
     const postCloseCore = vi.fn(async () => {});
     await guard("worker-after-close", postCloseCore);
     expect(postCloseCore).not.toHaveBeenCalled();
-    expect(environments.stop).toHaveBeenCalledOnce();
-
     releaseRecovery.resolve();
     await Promise.all([guardedRecovery, stopping]);
     expect(events).toEqual([
@@ -584,11 +573,7 @@ describe("worker placement startup health lifetime", () => {
 describe("worker placement startup recovery authority", () => {
   it("holds exact session authority through async recovery work after cancellation", async () => {
     await withStoredSession("authority", async (root, storePath) => {
-      mockDispatch({
-        move: vi.fn(),
-        reconcile: vi.fn(),
-        reconcileActive: vi.fn(),
-      });
+      mockDispatch();
       const placement = {
         state: "provisioning",
         generation: 7,

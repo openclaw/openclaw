@@ -103,18 +103,18 @@ openclaw-chat-details[mobile] {
   inset-inline: auto 0;
   width: var(--chat-details-space);
   height: 100%;
-  border: 1px solid var(--border-strong);
+  border: 1px solid var(--overlay-border, var(--border-strong));
   border-radius: 16px;
   background: var(--panel-strong);
   box-shadow: var(--shadow-md);
   overflow-wrap: anywhere;
 }
 
-/* Overlay and docked Details share the same surface and entrance motion. */
+/* Overlay and docked Details share the popover surface and entrance motion. */
 .chat-details[data-desktop] {
-  --details-surface: var(--panel-strong);
+  --details-surface: var(--popover);
   inset: auto;
-  border-color: var(--border-strong);
+  border-color: var(--overlay-border, var(--border-strong));
   background: var(--details-surface);
   box-shadow: var(--shadow-md);
   max-width: 300px;
@@ -275,7 +275,7 @@ openclaw-chat-details[mobile] {
   text-overflow: clip;
 }
 .chat-details button:hover {
-  background: var(--bg-hover);
+  background: var(--surface-hover);
 }
 .chat-details :is(button, summary):focus-visible,
 .chat-details-toggle:focus-visible {
@@ -520,7 +520,7 @@ openclaw-chat-details[mobile] {
   color: var(--text);
 }
 button.chat-details__process:is(:hover, :focus-visible) {
-  background: var(--bg-hover);
+  background: var(--surface-hover);
 }
 .chat-details__process-name {
   overflow: hidden;

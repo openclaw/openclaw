@@ -6,7 +6,7 @@ import { withWorktreeAllocationLease } from "../../agents/worktrees/allocation.j
 import { reservePendingWorktree } from "../../agents/worktrees/pending-slots.js";
 import { readExistingWorktreePaths } from "../../agents/worktrees/registry-read.js";
 import { insertRegistryWorktree } from "../../agents/worktrees/registry.js";
-import type { ManagedWorktreeRecord } from "../../agents/worktrees/types.js";
+import { makeWorktreeRecord } from "../../agents/worktrees/service.test-support.js";
 import { resolveBackupPlanFromDisk } from "../../commands/backup-shared.js";
 import * as stateReads from "../../state/openclaw-state-db-readonly.js";
 import { runOpenClawStateWriteTransaction } from "../../state/openclaw-state-db.js";
@@ -16,20 +16,12 @@ import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { withEngineStoreAdmission } from "./admission-scope.js";
 import { mixedAgentConnection, useMixedAgentPair } from "./mixed-agent.conformance.test-support.js";
 
-function record(root: string, id: string): ManagedWorktreeRecord {
-  return {
-    id,
-    name: id,
-    repoRoot: root,
-    repoFingerprint: "0123456789abcdef",
+function record(root: string, id: string) {
+  return makeWorktreeRecord(root, id, {
     path: path.join(root, "checkouts", id),
     branch: `worktree/${id}`,
-    baseRef: "HEAD",
-    ownerKind: "session",
     ownerId: `agent:main:${id}`,
-    createdAt: 1,
-    lastActiveAt: 1,
-  };
+  });
 }
 
 function writePendingPayload(env: NodeJS.ProcessEnv, id: string, payload: string) {

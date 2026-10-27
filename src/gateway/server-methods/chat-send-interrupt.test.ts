@@ -1,10 +1,9 @@
 import { assert, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { registerAgentSessionLoopTestLifecycle } from "../../agents/sessions/agent-session-loop-correctness.test-support.js";
-import { captureSessionTarget } from "../../sessions/session-controller.lifecycle.js";
+import { controllerSource, controllerTarget } from "../../sessions/controller-core.test-support.js";
 import {
   releaseSessionControllerClaim,
-  reserveSessionControllerSource,
   retireSessionControllerInput,
   tryClaimSessionControllerTask,
 } from "../../sessions/session-controller.mailbox.js";
@@ -37,14 +36,8 @@ it("leaves the active run intact when replacement session settings are stale", a
 it("cancels an earlier admission before it owns a reply operation", async () => {
   await using fixture = await createFixture({ active: false });
   const cancelled = vi.fn();
-  const pending = reserveSessionControllerSource(fixture.scope.sessionKey, {
-    target: captureSessionTarget({
-      storeScope: fixture.scope.storePath,
-      sessionKey: fixture.scope.sessionKey,
-      agentId: fixture.scope.agentId,
-      incarnation: fixture.scope.sessionId,
-    }),
-    policy: { mode: "followup" },
+  const { storePath, sessionKey, sessionId } = fixture.scope;
+  const pending = controllerSource(controllerTarget(storePath, sessionKey, sessionId), {
     adapter: { cancel: cancelled },
   });
   fixture.params.queueMode = "interrupt";
@@ -62,17 +55,11 @@ it("cancels an earlier admission before it owns a reply operation", async () => 
 });
 
 it("captures earlier claimed admissions without capturing another incarnation or later arrivals", () => {
-  const target = captureSessionTarget({
-    storeScope: "/synthetic/chat-interrupt/sessions.json",
-    sessionKey: "agent:main:interrupt-capture",
-    incarnation: "current-session",
-    agentId: "main",
-  });
+  const store = "/synthetic/chat-interrupt/sessions.json";
+  const key = "agent:main:interrupt-capture";
+  const target = controllerTarget(store, key, "current-session");
   const reserve = (incarnation = target.incarnation) =>
-    reserveSessionControllerSource(target.sessionKey, {
-      target: captureSessionTarget({ ...target, incarnation }),
-      policy: { mode: "followup" },
-    });
+    controllerSource(controllerTarget(store, key, incarnation));
   const previous = reserve();
   const claim = tryClaimSessionControllerTask(previous);
   assert(claim);
@@ -99,6 +86,7 @@ it("acknowledges an interrupt while a finalizing owner refuses cancellation", as
   const active = fixture.activeRun;
   assert(active, "Expected an active fixture run");
   const cleanup = createDeferred();
+  using _ = { [Symbol.dispose]: cleanup.resolve };
   active.registerExecutionCleanup(() => cleanup.promise);
   const settled = vi.fn();
   void active.ownerSettlement.then(settled);
@@ -106,15 +94,11 @@ it("acknowledges an interrupt while a finalizing owner refuses cancellation", as
   active.attachBackend({ kind: "embedded", cancel });
   active.freezeAbort();
   fixture.params.queueMode = "interrupt";
-  try {
-    const respond = await fixture.send();
-    expect(cancel).not.toHaveBeenCalled();
-    expect(active.abortSignal.aborted).toBe(false);
-    expect(settled).not.toHaveBeenCalled();
-    const payload = respond.mock.calls[0]?.[1];
-    expect(respond.mock.calls[0]).toMatchObject({ 0: true, 1: { status: "started" } });
-    expect(payload).not.toHaveProperty("interruptedActiveRun");
-  } finally {
-    cleanup.resolve();
-  }
+  const respond = await fixture.send();
+  expect(cancel).not.toHaveBeenCalled();
+  expect(active.abortSignal.aborted).toBe(false);
+  expect(settled).not.toHaveBeenCalled();
+  const payload = respond.mock.calls[0]?.[1];
+  expect(respond.mock.calls[0]).toMatchObject({ 0: true, 1: { status: "started" } });
+  expect(payload).not.toHaveProperty("interruptedActiveRun");
 }, 10_000);

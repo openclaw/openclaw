@@ -1,13 +1,12 @@
 import type { BrowserContextOptions, Page } from "playwright";
 import { expect, it } from "vitest";
-import { installMockGateway, startControlUiE2eServer } from "../test-helpers/control-ui-e2e.ts";
+import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { chatMessage } from "./chat-flow.test-support.ts";
 import { polledAttribute } from "./chat-presentation.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
 const suite = createControlUiE2eSuite({
   name: "Control UI fenced code blocks",
-  startServer: () => startControlUiE2eServer(undefined, { source: true }),
 });
 const desktop = {
   locale: "en-US",

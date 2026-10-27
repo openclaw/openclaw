@@ -3,7 +3,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { isDeepStrictEqual } from "node:util";
 import { expect, vi } from "vitest";
-import { createDeferred } from "../../test/helpers/promise.js";
+import { awaitGateBeforeSettlement, createDeferred } from "../../test/helpers/promise.js";
 import {
   createOperationalRunInstanceRef,
   getAdmittedRunDelegatedAuthority,
@@ -50,15 +50,8 @@ export async function readEffectFile(file: string): Promise<Buffer | undefined> 
   }
 }
 
-export async function reach<T>(boundary: Promise<T>, request: Promise<Response>): Promise<T> {
-  const first = await Promise.race([
-    boundary.then((value) => ({ boundary: value })),
-    request.then((response) => ({ response })),
-  ]);
-  if ("response" in first) {
-    throw new Error("RPC ended before proof boundary");
-  }
-  return first.boundary;
+export function reach<T>(boundary: Promise<T>, request: Promise<Response>) {
+  return awaitGateBeforeSettlement(boundary, request, "RPC ended before proof boundary");
 }
 
 export function installAuthorityProofKernel() {

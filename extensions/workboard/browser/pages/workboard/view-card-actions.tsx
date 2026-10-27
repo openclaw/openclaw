@@ -164,7 +164,6 @@ export function getCardActionState(props: WorkboardProps, card: WorkboardCard) {
     session?.hasActiveRun === true ||
     (session?.hasActiveRun !== false && session?.status === "running");
   return {
-    state,
     busy,
     live,
     linkedSessionKey,

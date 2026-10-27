@@ -121,6 +121,84 @@ describe.skipIf(!mixedAgentConnection).each(["sqlite", "postgres"] as const)(
       return { database, scope };
     }
 
+    it("flushes initialization payloads and projections once while preserving its three events", async () => {
+      const seed = admit(() => fixture("initialization"));
+      const f = createSessionActorWorkerFixture(seed, (options) =>
+        admit(() => openOpenClawAgentDatabase(options)),
+      );
+      const timestamp = "2026-01-01T00:00:00.000Z";
+      const events = [
+        { type: "session", id: f.scope.sessionId, version: 3, timestamp },
+        {
+          type: "model_change",
+          id: "model",
+          parentId: null,
+          provider: "synthetic",
+          modelId: "synthetic",
+          timestamp,
+        },
+        {
+          type: "thinking_level_change",
+          id: "thinking",
+          parentId: "model",
+          thinkingLevel: "high",
+          timestamp,
+        },
+      ] as const;
+      const command: Mutation = {
+        type: "session.actor.appendTranscriptEvent",
+        input: {
+          target: f.target,
+          commandId: "initialize",
+          phaseId: "turn",
+          append: {
+            kind: "metadata",
+            header: { scope: f.scope, event: JSON.stringify(events[0]), options: {} },
+            input: {
+              scope: f.scope,
+              initialModel: events[1],
+              event: JSON.stringify(events[2]),
+              options: { appendIntent: "active-branch" },
+            },
+          },
+        },
+      };
+      try {
+        await f.prepare(command);
+        const trips = observePgTrips(f.database.db);
+        try {
+          expect(admit(() => f.mutate(command)).kind).toBe("committed");
+        } finally {
+          trips.restore();
+        }
+        if (engine === "postgres") {
+          expect(
+            trips.statements.filter((sql) => /insert into "transcript_events"/iu.test(sql)),
+          ).toHaveLength(1);
+          expect(
+            trips.statements.filter((sql) =>
+              /(?:insert into|update) "session_transcript_index_state"/iu.test(sql),
+            ),
+          ).toHaveLength(1);
+          expect(
+            trips.statements.filter((sql) =>
+              /update "session_windows" set[^;]*"transcript_updated_at"/iu.test(sql),
+            ),
+          ).toHaveLength(1);
+        }
+        expect(
+          admit(() => readTranscriptEventRows(f.database, f.scope.sessionId)).map((row) =>
+            JSON.parse(row.eventJson),
+          ),
+        ).toEqual(events);
+        expect(admit(() => projection(f.database.db, f.scope.sessionId)).state).toEqual(
+          indexState(2, 0, 2, "thinking"),
+        );
+      } finally {
+        f.close();
+      }
+    });
+
     it("uses one projection trip per accepted input, tool result, and final without changing persisted content", async () => {
       const seed = admit(() => {
         const fixtureState = fixture("turn");

@@ -39,6 +39,7 @@ it.each([
 ])("isolates provider credentials by destination (%s / %s)", async (providerQuery, remoteQuery) => {
   vi.stubEnv("OPENCLAW_TEST_LMSTUDIO_LITERAL", "ambient-bait");
   vi.stubEnv("OPENCLAW_TEST_LMSTUDIO_PROVIDER", "resolved-provider-value");
+  const acquireLocalService = vi.fn(async () => ({ release: vi.fn() }));
 
   const observedRequests: Array<{ url?: string; headers: IncomingHttpHeaders }> = [];
   const handler: RequestListener = (request, response) => {
@@ -53,6 +54,8 @@ it.each([
     const { provider } = await createProvider(
       {
         baseUrl: `${origin}/v1${providerQuery}`,
+        apiKey: "provider-host-key",
+        localService: { command: process.execPath },
         params: { preload: false },
         headers: {
           "X-Provider-Only": "${OPENCLAW_TEST_LMSTUDIO_PROVIDER}",
@@ -61,9 +64,10 @@ it.each([
         models: [],
       },
       {
+        acquireLocalService,
         remote: {
           baseUrl: `${origin}/v1${remoteQuery}`,
-          apiKey: "synthetic-memory-key",
+          apiKey: remoteQuery ? undefined : "synthetic-memory-key",
           headers: {
             "X-Already-Resolved": "  ${OPENCLAW_TEST_LMSTUDIO_LITERAL}  ",
             "X-Shared": "  remote-value  ",
@@ -75,18 +79,20 @@ it.each([
 
     const result = provider.embed("hello", { inputType: "query" });
     await expect(result).resolves.toEqual([0.25, 0.5, 0.75]);
+    expect(acquireLocalService).not.toHaveBeenCalled();
     expect(observedRequests).toHaveLength(1);
     expect(observedRequests[0]?.url).toBe(`/v1/embeddings${remoteQuery}`);
     const headers = observedRequests[0]?.headers;
     expect(headers).toMatchObject({
       "x-already-resolved": "${OPENCLAW_TEST_LMSTUDIO_LITERAL}",
       "x-shared": "remote-value",
-      authorization: "Bearer synthetic-memory-key",
     });
     expect(headers).not.toHaveProperty("x-empty");
     if (!remoteQuery) {
+      expect(headers).toHaveProperty("authorization", "Bearer synthetic-memory-key");
       expect(headers).toHaveProperty("x-provider-only", "${OPENCLAW_TEST_LMSTUDIO_PROVIDER}");
     } else {
+      expect(headers).not.toHaveProperty("authorization");
       expect(headers).not.toHaveProperty("x-provider-only");
     }
   });

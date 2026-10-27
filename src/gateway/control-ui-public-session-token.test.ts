@@ -7,11 +7,11 @@ import { isSecretValueRegisteredForRedaction } from "../logging/secret-redaction
 import { resetSecretRedactionRegistryForTest } from "../logging/secret-redaction-registry.test-support.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import {
-  loadPublicSessionShareTokenCodec,
-  mintExistingPublicSessionShareToken,
-  mintPublicSessionWidgetToken,
-  resolvePublicSessionShareToken,
-  resolvePublicSessionWidgetToken,
+  loadPublicSessionShareTokenCodec as loadCodec,
+  mintExistingPublicSessionShareToken as mintPreview,
+  mintPublicSessionWidgetToken as mintWidget,
+  resolvePublicSessionShareToken as resolveShare,
+  resolvePublicSessionWidgetToken as resolveWidget,
   type PublicSessionShareLocator,
 } from "./control-ui-public-session-token.js";
 
@@ -28,14 +28,17 @@ afterEach(() => {
 });
 
 describe("public session share token", () => {
-  it("round-trips an exact locator without exposing any identifier", async () => {
+  it("round-trips opaque locators with fresh nonces and a stable cached identity", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
       const prepare = vi.spyOn(DatabaseSync.prototype, "prepare");
       const exec = vi.spyOn(DatabaseSync.prototype, "exec");
-      const codec = await loadPublicSessionShareTokenCodec();
-      expect(loadPublicSessionShareTokenCodec()).toBe(codec);
+      const codec = await loadCodec();
+      expect(loadCodec()).toBe(codec);
       const token = codec.mint(LOCATOR);
       expect(codec.resolve(token)).toEqual(LOCATOR);
+      const secondToken = codec.mint(LOCATOR);
+      expect(secondToken).not.toBe(token);
+      expect(codec.resolve(secondToken)).toEqual(LOCATOR);
       for (const identifier of Object.values(LOCATOR)) {
         expect(token).not.toContain(identifier);
       }
@@ -46,21 +49,9 @@ describe("public session share token", () => {
     });
   });
 
-  it("uses fresh nonces while retaining the same restart-stable identity", async () => {
-    await withOpenClawTestState({ scenario: "minimal" }, async () => {
-      const first = await loadPublicSessionShareTokenCodec();
-      const firstToken = first.mint(LOCATOR);
-      const secondToken = first.mint(LOCATOR);
-      const second = await loadPublicSessionShareTokenCodec();
-      expect(secondToken).not.toBe(firstToken);
-      expect(second.resolve(firstToken)).toEqual(LOCATOR);
-      expect(second.resolve(secondToken)).toEqual(LOCATOR);
-    });
-  });
-
   it("fails closed for tampering, another installation, and malformed tokens", async () => {
     const token = await withOpenClawTestState({ scenario: "minimal" }, async () => {
-      const codec = await loadPublicSessionShareTokenCodec();
+      const codec = await loadCodec();
       const created = codec.mint(LOCATOR);
       const last = created.at(-1) ?? "";
       const tampered = `${created.slice(0, -1)}${last === "a" ? "b" : "a"}`;
@@ -70,27 +61,27 @@ describe("public session share token", () => {
       return created;
     });
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
-      expect(await resolvePublicSessionShareToken(token)).toBeNull();
+      expect(await resolveShare(token)).toBeNull();
     });
   });
 
   it("does not create durable identity state from an anonymous token", async () => {
     const foreignToken = await withOpenClawTestState({ scenario: "minimal" }, async () =>
-      (await loadPublicSessionShareTokenCodec()).mint(LOCATOR),
+      (await loadCodec()).mint(LOCATOR),
     );
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
-      expect(await resolvePublicSessionShareToken(foreignToken)).toBeNull();
-      expect(await mintExistingPublicSessionShareToken(LOCATOR)).toBeUndefined();
-      expect(await mintPublicSessionWidgetToken(LOCATOR, "widget-a")).toBeUndefined();
-      expect(await resolvePublicSessionWidgetToken(foreignToken)).toBeNull();
+      expect(await resolveShare(foreignToken)).toBeNull();
+      expect(await mintPreview(LOCATOR)).toBeUndefined();
+      expect(await mintWidget(LOCATOR, "widget-a")).toBeUndefined();
+      expect(await resolveWidget(foreignToken)).toBeNull();
       expect(await loadDeviceIdentityIfPresentAsync()).toBeNull();
 
-      const localToken = (await loadPublicSessionShareTokenCodec()).mint(LOCATOR);
+      const localToken = (await loadCodec()).mint(LOCATOR);
       expect(await loadDeviceIdentityIfPresentAsync()).not.toBeNull();
-      expect(await resolvePublicSessionShareToken(localToken)).toEqual(LOCATOR);
-      const preview = await mintExistingPublicSessionShareToken(LOCATOR);
-      expect(await mintExistingPublicSessionShareToken(LOCATOR)).toBe(preview);
-      expect(await resolvePublicSessionShareToken(preview!)).toEqual(LOCATOR);
+      expect(await resolveShare(localToken)).toEqual(LOCATOR);
+      const preview = await mintPreview(LOCATOR);
+      expect(await mintPreview(LOCATOR)).toBe(preview);
+      expect(await resolveShare(preview!)).toEqual(LOCATOR);
     });
   });
 });
@@ -98,60 +89,43 @@ describe("public session share token", () => {
 describe("public session widget token", () => {
   it("binds one document, separates publication authority, and remains stable across renders", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
-      const codec = await loadPublicSessionShareTokenCodec();
+      const codec = await loadCodec();
       const shareToken = codec.mint(LOCATOR);
-      const token = await mintPublicSessionWidgetToken(LOCATOR, "widget-a");
+      const token = await mintWidget(LOCATOR, "widget-a");
       expect(token).toBeDefined();
-      expect(await resolvePublicSessionWidgetToken(token!)).toEqual({
-        locator: LOCATOR,
-        docId: "widget-a",
-      });
-      expect(await resolvePublicSessionWidgetToken(shareToken)).toBeNull();
-      expect(await resolvePublicSessionShareToken(token!)).toBeNull();
-      const other = await mintPublicSessionWidgetToken(LOCATOR, "widget-b");
+      expect(await resolveWidget(token!)).toEqual({ locator: LOCATOR, docId: "widget-a" });
+      expect(await resolveWidget(shareToken)).toBeNull();
+      expect(await resolveShare(token!)).toBeNull();
+      const other = await mintWidget(LOCATOR, "widget-b");
       expect(other).not.toBe(token);
-      expect(await resolvePublicSessionWidgetToken(other!)).toEqual({
-        locator: LOCATOR,
-        docId: "widget-b",
-      });
-      expect(
-        await mintPublicSessionWidgetToken(
-          {
-            shareId: LOCATOR.shareId,
-            sessionId: LOCATOR.sessionId,
-            sessionKey: LOCATOR.sessionKey,
-            agentId: LOCATOR.agentId,
-          },
-          "widget-a",
-        ),
-      ).toBe(token);
+      expect(await resolveWidget(other!)).toEqual({ locator: LOCATOR, docId: "widget-b" });
+      const { agentId, ...otherFields } = LOCATOR;
+      expect(await mintWidget({ ...otherFields, agentId }, "widget-a")).toBe(token);
       const otherLocator = { ...LOCATOR, sessionId: "other-session" };
-      const otherSession = await mintPublicSessionWidgetToken(otherLocator, "widget-a");
+      const otherSession = await mintWidget(otherLocator, "widget-a");
       expect(otherSession).not.toBe(token);
-      expect(await resolvePublicSessionWidgetToken(otherSession!)).toEqual({
+      expect(await resolveWidget(otherSession!)).toEqual({
         locator: otherLocator,
         docId: "widget-a",
       });
-      expect(await mintPublicSessionWidgetToken(LOCATOR, "widget-a")).toBe(token);
+      expect(await mintWidget(LOCATOR, "widget-a")).toBe(token);
       expect(isSecretValueRegisteredForRedaction(token!)).toBe(true);
       resetSecretRedactionRegistryForTest();
-      await resolvePublicSessionWidgetToken(token!);
+      await resolveWidget(token!);
       expect(isSecretValueRegisteredForRedaction(token!)).toBe(true);
       expect(isSecretValueRegisteredForRedaction(LOCATOR.shareId)).toBe(true);
       const last = token!.at(-1);
-      expect(
-        await resolvePublicSessionWidgetToken(`${token!.slice(0, -1)}${last === "a" ? "b" : "a"}`),
-      ).toBeNull();
-      expect(await resolvePublicSessionWidgetToken(`v1.${"a".repeat(16_384)}`)).toBeNull();
+      expect(await resolveWidget(`${token!.slice(0, -1)}${last === "a" ? "b" : "a"}`)).toBeNull();
+      expect(await resolveWidget(`v1.${"a".repeat(16_384)}`)).toBeNull();
       for (const docId of ["", ".", "..", "../widget", " widget", "widget/a", "a".repeat(129)]) {
-        expect(await mintPublicSessionWidgetToken(LOCATOR, docId)).toBeUndefined();
+        expect(await mintWidget(LOCATOR, docId)).toBeUndefined();
       }
     });
   });
 
   it("rejects authenticated claims with invalid documents or unexpected fields", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
-      await loadPublicSessionShareTokenCodec();
+      await loadCodec();
       const identity = await loadDeviceIdentityIfPresentAsync();
       const seed = deriveCanonicalEd25519PrivateKeyRaw(identity!.privateKeyPem);
       const key = Buffer.from(
@@ -174,9 +148,9 @@ describe("public session widget token", () => {
         ]);
         return `v1.${Buffer.concat([nonce, cipher.getAuthTag(), ciphertext]).toString("base64url")}`;
       };
-      expect(await resolvePublicSessionShareToken(seal({ v: 1, ...LOCATOR }))).toBeNull();
+      expect(await resolveShare(seal({ v: 1, ...LOCATOR }))).toBeNull();
       expect(
-        await resolvePublicSessionWidgetToken(
+        await resolveWidget(
           seal({ v: 1, ...LOCATOR, doc: "widget" }, "openclaw.public-session-share-locator.aad.v1"),
         ),
       ).toBeNull();
@@ -191,17 +165,13 @@ describe("public session widget token", () => {
         { doc: "widget", extra: "unexpected" },
         { doc: "widget", v: 2 },
       ]) {
-        expect(
-          await resolvePublicSessionWidgetToken(seal({ v: 1, ...LOCATOR, ...extra })),
-        ).toBeNull();
+        expect(await resolveWidget(seal({ v: 1, ...LOCATOR, ...extra }))).toBeNull();
       }
       const docId = "a".repeat(128);
-      expect(await resolvePublicSessionWidgetToken(seal({ v: 1, ...LOCATOR, doc: docId }))).toEqual(
-        {
-          locator: LOCATOR,
-          docId,
-        },
-      );
+      expect(await resolveWidget(seal({ v: 1, ...LOCATOR, doc: docId }))).toEqual({
+        locator: LOCATOR,
+        docId,
+      });
       key.fill(0);
     });
   });

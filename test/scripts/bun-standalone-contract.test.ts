@@ -173,6 +173,19 @@ describe("standalone build interface", () => {
   });
 
   it.each(["--compile-aot", "--aot-source"])(
+    "forwards compiler analysis opt-outs with %s",
+    (mode) => {
+      expect(
+        parse("--aot-disable", "flow-results", mode, "--aot-disable=pass:PlaceTypeTests"),
+      ).toMatchObject({
+        mode: "aot",
+        compileFlags: ["--aot", "--aot-disable=flow-results", "--aot-disable=pass:PlaceTypeTests"],
+        aotCompileOptions: { aotDisable: ["flow-results", "pass:PlaceTypeTests"] },
+      });
+    },
+  );
+
+  it.each(["--compile-aot", "--aot-source"])(
     "normalizes retained trim features with %s",
     (mode) => {
       for (const flags of [
@@ -204,6 +217,8 @@ describe("standalone build interface", () => {
     ["--bytecode", "--trim"],
     ["--trim-allow=run"],
     ["--bytecode", "--trim-allow=run,jit"],
+    ["--aot-disable=flow-results"],
+    ["--bytecode", "--aot-disable=flow-results"],
   ])("requires AOT for compiler options %j", (...flags) => {
     expect(() => parseStandaloneArguments(["out", ...flags])).toThrow("requires --compile-aot");
   });
@@ -222,6 +237,10 @@ describe("standalone build interface", () => {
     ["--trim-allow=run,"],
     ["--trim-allow=ffi"],
     ["--explain="],
+    ["--aot-disable"],
+    ["--aot-disable="],
+    ["--aot-disable=flow-results,"],
+    ["--aot-disable", "--trim"],
   ])("rejects incomplete or repeated AOT options %j", (...flags) => {
     expect(() => parseStandaloneArguments(["out", "--compile-aot", ...flags])).toThrow();
   });
@@ -300,7 +319,7 @@ describe("standalone build interface", () => {
     const manifest = await createStandaloneManifest({
       outputRoot: root,
       mode: "jit",
-      bun: { version: "1.4.3", revision: "1.4.3+fixture", executableSha256: "a".repeat(64) },
+      bun: { version: "1.4.4", revision: "1.4.4+fixture", executableSha256: "a".repeat(64) },
       openclaw: { version: "2026.10.3", commit: "b".repeat(40) },
       embedded: { modules: 4, plugins: 1, workers: 2, inlineWorkers: 0 },
       plugins: { embedded: ["slack", "codex"], omitted: ["signal", "matrix"] },

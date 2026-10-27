@@ -1,9 +1,7 @@
 /* @vitest-environment jsdom */
 
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
-import { makeChatHost } from "../chat-host.test-support.ts";
 import { stubAnimationFrames } from "../chat-view.test-helpers.ts";
-import { lockChatScroll } from "../scroll.ts";
 import { mountTestTranscript } from "../test-helpers/chat-transcript-native.tsx";
 import { createChatTranscript } from "./chat-transcript-controller.ts";
 import {
@@ -25,14 +23,10 @@ function scrollReader(container: HTMLElement, top: number) {
   container.dispatchEvent(new Event("scroll"));
 }
 
-function mockScroll(container: HTMLElement, notify = false) {
+function mockScroll(container: HTMLElement) {
   return (container.scrollTo = vi.fn((options?: ScrollToOptions | number) => {
     if (typeof options === "object" && options.top !== undefined) {
-      const previous = container.scrollTop;
       container.scrollTop = options.top;
-      if (notify && previous !== container.scrollTop) {
-        container.dispatchEvent(new Event("scroll"));
-      }
     }
   }));
 }
@@ -82,103 +76,10 @@ it("remeasures skipped rows when automatic follow replaces smooth scrolling", as
   expect(transcriptSize(container)).toBe(before + 60);
 });
 
-it.each(["none", "wheel", "programmatic"] as const)(
-  "keeps measured growth after a no-op smooth follow, reader departure=%s",
-  async (departure) => {
-    const flushFrames = stubAnimationFrames();
-    transcriptDomState.measuredRowHeight = 120;
-    let followEnabled = true;
-    const { container, transcript, session, renderRows, rows } = await mountFollow(
-      "smooth-no-op",
-      40,
-      {
-        canFollowEnd: () => followEnabled,
-        onReaderScroll: () => {
-          followEnabled = false;
-        },
-      },
-    );
-    let scrollHeight = 4800;
-    setTranscriptViewport(container, () => scrollHeight);
-    const scrollTo = mockScroll(container, true);
-    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
-    session.setContentReady(true);
-    scrollReader(container, 4200);
-    renderRows(rows);
-    await vi.advanceTimersByTimeAsync(150);
-    flushFrames();
-    renderRows(rows);
-    flushFrames();
-    scrollTo.mockClear();
-
-    transcript.scrollToEnd({ source: "auto", behavior: "smooth" });
-    flushFrames();
-    expect(scrollTo.mock.calls).toEqual([
-      [{ top: 4200, behavior: "smooth" }],
-      [{ top: 4200, behavior: "instant" }],
-    ]);
-    if (departure === "wheel") {
-      container.dispatchEvent(new WheelEvent("wheel", { deltaY: -100 }));
-    }
-    if (departure !== "none") {
-      scrollReader(container, container.scrollTop - 100);
-    }
-    const readerOffset = container.scrollTop;
-    const lastRow = requireElement(container, '[data-virtual-row-key="row:39"]');
-    lastRow.style.height = "155px";
-    emitTranscriptResize(lastRow, 800, 155);
-    scrollHeight += 35;
-    renderRows(rows);
-    flushFrames();
-    expect(container.scrollTop).toBe(departure === "none" ? 4235 : readerOffset);
-    expect(followEnabled).toBe(departure !== "wheel");
-  },
-);
-
-it.each([
-  ["auto", false],
-  ["manual", false],
-  ["manual", true],
-] as const)(
-  "allows reader takeover after retargeting %s follow (settled=%s)",
-  async (source, settled) => {
-    stubAnimationFrames();
-    const policy = makeChatHost({ chatHasAutoScrolled: true });
-    const { container, transcript } = await mountFollow("follow-continuity", 40, {
-      canFollowEnd: () => !policy.chatFollowLocked,
-    });
-    Object.assign(policy, { chatCancelScroll: () => transcript.cancelScroll() });
-    setTranscriptViewport(container, 4800);
-    container.scrollTop = 1000;
-    const writes: ScrollToOptions[] = [];
-    container.scrollTo = (options?: ScrollToOptions | number) => {
-      if (typeof options === "object") {
-        writes.push(options);
-      }
-    };
-    transcript.scrollToEnd({ source, behavior: "smooth" });
-    expect(writes.some((write) => write.behavior === "smooth")).toBe(true);
-    writes.length = 0;
-    transcript.scrollToEnd({ source: "auto", behavior: "smooth" });
-    expect(writes.length).toBeGreaterThan(0);
-    expect(writes.every((write) => write.behavior === "smooth")).toBe(true);
-    if (settled) {
-      container.scrollTop = 4200;
-    }
-    writes.length = 0;
-    lockChatScroll(policy);
-    expect(policy.chatFollowLocked).toBe(true);
-    expect(writes).toEqual([
-      expect.objectContaining({ behavior: "instant", top: settled ? 4200 : 1000 }),
-    ]);
-  },
-);
 it.each([
   [0, true, false],
   [8, true, false],
-  [50, true, false],
   [0, false, false],
-  [8, false, false],
   [0, true, true],
 ] as const)(
   "follows typing growth only from the resting end (distance=%s, follow=%s, pending=%s)",

@@ -5,6 +5,7 @@ import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
 import { createTestPluginApi } from "openclaw/plugin-sdk/plugin-test-api";
 import type { SessionTranscriptWriteContext } from "openclaw/plugin-sdk/session-transcript-runtime";
 import { withEnvAsync } from "openclaw/plugin-sdk/test-env";
+import { withinTest } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createSessionCatalogContinuationStore } from "../test-support/session-catalog-continuation.test-support.js";
 
@@ -13,35 +14,7 @@ type ResolveAcpSessionAvailability =
 type RunCommandBuffered =
   (typeof import("openclaw/plugin-sdk/process-runtime"))["runCommandBuffered"];
 type RegisteredSessionCatalogProvider = Parameters<OpenClawPluginApi["registerSessionCatalog"]>[0];
-type OptionalCatalogAgent<T extends { agentId?: string }> = Omit<T, "agentId"> & {
-  agentId?: string;
-};
-type SessionCatalogProvider = Omit<
-  RegisteredSessionCatalogProvider,
-  "list" | "read" | "continueSession" | "archive" | "openTerminal"
-> & {
-  list: (
-    params: OptionalCatalogAgent<Parameters<RegisteredSessionCatalogProvider["list"]>[0]>,
-  ) => ReturnType<RegisteredSessionCatalogProvider["list"]>;
-  read: (
-    params: OptionalCatalogAgent<Parameters<RegisteredSessionCatalogProvider["read"]>[0]>,
-  ) => ReturnType<RegisteredSessionCatalogProvider["read"]>;
-  continueSession?: (
-    params: OptionalCatalogAgent<
-      Parameters<NonNullable<RegisteredSessionCatalogProvider["continueSession"]>>[0]
-    >,
-  ) => ReturnType<NonNullable<RegisteredSessionCatalogProvider["continueSession"]>>;
-  archive?: (
-    params: OptionalCatalogAgent<
-      Parameters<NonNullable<RegisteredSessionCatalogProvider["archive"]>>[0]
-    >,
-  ) => ReturnType<NonNullable<RegisteredSessionCatalogProvider["archive"]>>;
-  openTerminal?: (
-    params: OptionalCatalogAgent<
-      Parameters<NonNullable<RegisteredSessionCatalogProvider["openTerminal"]>>[0]
-    >,
-  ) => ReturnType<NonNullable<RegisteredSessionCatalogProvider["openTerminal"]>>;
-};
+type SessionCatalogProvider = RegisteredSessionCatalogProvider;
 type NodeHostCommand = Parameters<OpenClawPluginApi["registerNodeHostCommand"]>[0];
 type NodeInvokePolicy = Parameters<OpenClawPluginApi["registerNodeInvokePolicy"]>[0];
 type CatalogListParams = Parameters<SessionCatalogProvider["list"]>[0];
@@ -400,7 +373,11 @@ function restoreEnv(name: string, value: string | undefined) {
   }
 }
 
+let cleanupHeldListing: (() => Promise<void>) | undefined;
 afterEach(async () => {
+  // Timeout teardown must join the fixture before resetting its mocks and environment.
+  await cleanupHeldListing?.();
+  cleanupHeldListing = undefined;
   acpRuntimeMocks.resolveAcpSessionAvailability.mockReset().mockReturnValue({ available: true });
   nodeHostMocks.runNodePtyCommand.mockClear();
   processRuntimeMocks.runCommandBuffered.mockClear();
@@ -712,6 +689,7 @@ describe("OpenCode session catalog", () => {
     ]);
     expect(transcriptMocks.messages[0]?.["__openclaw"]).toEqual({
       mirrorOrigin: "opencode-catalog-import",
+      catalogDisplay: { type: "userMessage" },
     });
   });
 
@@ -1004,7 +982,7 @@ describe("OpenCode session catalog", () => {
     );
   });
 
-  it("fans out paired-node listing instead of blocking later hosts", async () => {
+  it("fans out paired-node listing instead of blocking later hosts", async (context) => {
     const { promise: slow, resolve: releaseSlow } = Promise.withResolvers<unknown>();
     const page = (threadId: string) => pairedNodeSessionPage(pairedNodeSession({ threadId }));
     const invoke = vi.fn(({ nodeId }: { nodeId: string }) =>
@@ -1018,8 +996,21 @@ describe("OpenCode session catalog", () => {
     );
 
     const listing = provider!.list({ hostIds: ["node:node-a", "node:node-b"] });
-    await vi.waitFor(() => expect(invoke).toHaveBeenCalledTimes(2));
-    releaseSlow?.(page("session-a"));
+    const fanOut = vi.waitFor(() => expect(invoke).toHaveBeenCalledTimes(2));
+    const settledWork = Promise.allSettled([listing, fanOut]);
+    let cleanupPromise: Promise<void> | undefined;
+    const cleanup = () =>
+      (cleanupPromise ??= (async () => {
+        // The held mock ignores cancellation; join both node tasks and the polling assertion.
+        releaseSlow(page("session-a"));
+        await settledWork;
+      })());
+    cleanupHeldListing = cleanup;
+    try {
+      await withinTest(fanOut, context.signal);
+    } finally {
+      await cleanup();
+    }
     await expect(listing).resolves.toEqual([
       expect.objectContaining({ nodeId: "node-a", sessions: [expect.any(Object)] }),
       expect.objectContaining({ nodeId: "node-b", sessions: [expect.any(Object)] }),

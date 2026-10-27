@@ -9,11 +9,16 @@ import {
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { prepareModelRequestBody } from "../../../packages/ai/src/transports/model-request-body.js";
 import { createDeferred } from "../../../test/helpers/promise.js";
+import type { WorkerTaskPool } from "../../infra/worker-task-pool.js";
+import { resolveGlobalSingleton } from "../../shared/global-singleton.js";
 import { createZeroUsageFixture } from "../test-helpers/usage-fixtures.js";
+import { prepareProviderPrompt } from "./provider-prompt-serialization.js";
 import {
   clearProviderPromptState,
   getProviderPromptState,
   markLastProviderPromptContextRejected,
+  type PromptPreparationResult,
+  type PromptPreparationTask,
   type ProviderPromptState,
   wrapStreamFnWithProviderPromptState,
 } from "./provider-prompt-state.js";
@@ -220,6 +225,40 @@ describe("provider prompt state", () => {
       canonical: '["earlier"]',
     },
     {
+      name: "array with a trailing hole",
+      payload: Object.assign(["earlier"], { length: 2 }),
+      canonical: '["earlier",undefined]',
+    },
+    {
+      name: "sparse array rejected before inspecting a custom child",
+      payload: Object.assign(
+        [
+          Object.create(
+            new Proxy(
+              {},
+              {
+                has() {
+                  throw new Error("custom prototype must not be inspected");
+                },
+              },
+            ),
+          ),
+        ],
+        { length: 2 },
+      ),
+      canonical: "[{},undefined]",
+    },
+    {
+      name: "accessor after ordinary prompt data",
+      payload: {
+        input: "earlier".repeat(1_000),
+        get tail() {
+          return "getter value";
+        },
+      },
+      canonical: `{"input":"${"earlier".repeat(1_000)}","tail":"getter value"}`,
+    },
+    {
       name: "custom hook callback",
       payload: { input: "hello", callback: () => undefined },
       canonical: '{"callback":null,"input":"hello"}',
@@ -245,6 +284,41 @@ describe("provider prompt state", () => {
     await expect(wrapped(model, { messages: [] })).rejects.toThrow(
       "byte-identical provider payload",
     );
+  });
+
+  it("admits a large prompt without allocating key-entry iterators", async () => {
+    const payload = {
+      messages: Array.from({ length: 512 }, () => ({ text: "x".repeat(2048) })),
+    };
+    const prepared = prepareProviderPrompt({ payload, encode: false });
+    const entries = vi.spyOn(Array.prototype, "entries");
+    // A prior file can own the pool through an earlier module evaluation;
+    // replace only its transport so admission and payload observation stay real.
+    const pool = resolveGlobalSingleton<
+      WorkerTaskPool<PromptPreparationTask, PromptPreparationResult>
+    >(Symbol.for("openclaw.providerPromptHashPool"), () => {
+      throw new Error("Expected provider prompt state to initialize its worker pool");
+    });
+    const worker = vi.spyOn(pool, "run").mockResolvedValueOnce({
+      kind: "provider",
+      prompt: prepared,
+    });
+    const wrapped = observe(state, async (_model, _context, options) => {
+      await options?.onPayload?.(payload, model);
+      return createResultStream("stop");
+    });
+    try {
+      await wrapped(model, context);
+      expect(worker).toHaveBeenCalledExactlyOnceWith(expect.any(Function), {
+        inputBytes: 2_153_412,
+        signal: undefined,
+      });
+      expect(state.lastAttempt?.digest).toBe(prepared.digest);
+      expect(entries).not.toHaveBeenCalled();
+    } finally {
+      worker.mockRestore();
+      entries.mockRestore();
+    }
   });
 
   it("does not compare rejected payloads across effective context scopes", async () => {

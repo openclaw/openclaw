@@ -40,21 +40,6 @@ afterEach(() => {
   expect(nativeExitCalls).toBe(0);
 });
 
-it.each([
-  { commit: "abc1234", expected: "OpenClaw 9.9.9-test (abc1234)" },
-  { commit: null, expected: "OpenClaw 9.9.9-test" },
-])("prints version output with commit $commit", async ({ commit, expected }) => {
-  const printed = createDeferred();
-  output.mockImplementation(() => printed.resolve());
-  vi.mocked(resolveCommitHash).mockReturnValue(commit);
-
-  expect(tryHandleRootVersionFastPath(argv)).toBe(true);
-  await printed.promise;
-
-  expect(output).toHaveBeenCalledWith(expected);
-  expect(process.exitCode).toBe(0);
-});
-
 it("skips host handling when container-targeted", () => {
   expect(
     tryHandleRootVersionFastPath(["node", "openclaw", "--container", "demo", "--version"]),
@@ -66,35 +51,48 @@ it("skips host handling when container-targeted", () => {
   expect(output).not.toHaveBeenCalled();
 });
 
-it.each(["pretty", "json"] as const)(
-  "reports %s version-resolution errors",
-  async (consoleStyle) => {
-    const printed = createDeferred();
-    const stderr = vi.spyOn(process.stderr, "write").mockImplementation(() => {
+it.each([
+  ["abc1234", undefined, "OpenClaw 9.9.9-test (abc1234)"],
+  [null, undefined, "OpenClaw 9.9.9-test"],
+  [null, "pretty", undefined],
+  [null, "json", undefined],
+] as const)("handles commit %s with %s diagnostics", async (commit, consoleStyle, expected) => {
+  const printed = createDeferred();
+  let diagnostic = "";
+  output.mockImplementation(() => printed.resolve());
+  if (consoleStyle) {
+    vi.spyOn(process.stderr, "write").mockImplementation((chunk) => {
+      diagnostic += String(chunk);
       printed.resolve();
       return true;
     });
-    vi.mocked(resolveCommitHash).mockImplementation(() => {
-      const error = new Error("version resolution failed");
-      // Bun can materialize a collected stack with a bare header and no message.
-      error.stack = "Error\n    at resolveCommitHash (git-commit.js:1:1)";
-      throw error;
-    });
     setLoggerOverride({ level: "silent", consoleLevel: "info", consoleStyle });
-
-    expect(tryHandleRootVersionFastPath(argv)).toBe(true);
-    await printed.promise;
-
-    expect(process.exitCode).toBe(1);
-    expect(output).not.toHaveBeenCalled();
-    const line = stderr.mock.calls.map(([value]) => String(value)).join("");
-    if (consoleStyle === "json") {
-      expect(JSON.parse(line)).toMatchObject({
-        level: "error",
-        message: expect.stringContaining("version resolution failed"),
-      });
-    } else {
-      expect(line).toContain("version resolution failed");
+  }
+  vi.mocked(resolveCommitHash).mockImplementation(() => {
+    if (!consoleStyle) {
+      return commit;
     }
-  },
-);
+    const error = new Error("version resolution failed");
+    // Bun can materialize a collected stack with a bare header and no message.
+    error.stack = "Error\n    at resolveCommitHash (git-commit.js:1:1)";
+    throw error;
+  });
+
+  expect(tryHandleRootVersionFastPath(argv)).toBe(true);
+  await printed.promise;
+
+  expect(process.exitCode).toBe(consoleStyle ? 1 : 0);
+  if (!consoleStyle) {
+    expect(output).toHaveBeenCalledWith(expected);
+    return;
+  }
+  expect(output).not.toHaveBeenCalled();
+  if (consoleStyle === "json") {
+    expect(JSON.parse(diagnostic)).toMatchObject({
+      level: "error",
+      message: expect.stringContaining("version resolution failed"),
+    });
+  } else {
+    expect(diagnostic).toContain("version resolution failed");
+  }
+});

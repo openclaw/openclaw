@@ -88,15 +88,11 @@ async function dispatchPluginRequest(
   {
     path = SECURE_HOOK_PATH,
     authContext = trusted,
-  }: { path?: string; authContext?: PluginRequestAuthContext } = {},
+    req = { url: path } as IncomingMessage,
+  }: { path?: string; authContext?: PluginRequestAuthContext; req?: IncomingMessage } = {},
 ) {
   const response = makeMockHttpResponse();
-  const handled = await handler(
-    { url: path } as IncomingMessage,
-    response.res,
-    undefined,
-    authContext,
-  );
+  const handled = await handler(req, response.res, undefined, authContext);
   return { handled, ...response };
 }
 async function invoke(
@@ -447,14 +443,15 @@ async function withCookieSessionReader(
             authGeneration: "http-generation",
           });
           expect(authorized).not.toBeNull();
-          const response = makeMockHttpResponse();
-          expect(
-            await handler(req, response.res, undefined, {
+          const response = await dispatchPluginRequest(handler, {
+            req,
+            authContext: {
               gatewayAuthSatisfied: true,
               gatewayRequestAuth: authorized!.requestAuth,
               gatewayRequestOperatorScopes: authorized!.operatorScopes,
-            }),
-          ).toBe(true);
+            },
+          });
+          expect(response.handled).toBe(true);
           return { statusCode: response.res.statusCode, result };
         };
         const dispatch: SessionDispatch = async (method, key) => {

@@ -42,7 +42,8 @@ dreaming consolidation sidecar:
   index. `--json` returns
   `[{"agentId","provider","health","memoryCore":"consolidation-sidecar"}]`.
   `--deep`, `--index`, and `--fix` exit with code 1 because they inspect
-  Memory Core's own index.
+  Memory Core's own index. With `--json`, these refusals return the standard
+  [CLI JSON failure envelope](/cli#json-failures).
 - `memory search` exits with code 1 and names the slot owner instead of
   searching the sidecar index.
 - `index`, `reset`, `forget`, `promote`, and the REM commands keep working on
@@ -152,6 +153,7 @@ stale index records without `--force` or re-embedding unchanged conversations.
 Historical transcripts without a recognizable helper identity remain eligible.
 
 Full rebuilds wait for temporary database cleanup before reporting completion.
+Searches remain available against the published index while a rebuild finishes.
 File removal runs asynchronously so cleanup does not block the Gateway event loop.
 SQLite background rebuilds retain completed work when foreground activity interrupts
 indexing. The next sync resumes the rebuild, incorporating source changes before

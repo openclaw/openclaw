@@ -22,13 +22,18 @@ const readVectors = () =>
 const readDebt = () => select("meta", "value", "WHERE key = 'memory_vector_rebuild_v1'").get();
 const embeddingHex = (embedding: number[]) =>
   Buffer.from(new Float32Array(embedding).buffer).toString("hex").toUpperCase();
-const databases: MemoryIndexDatabase[] = [];
 let store: MemoryIndexDatabase;
 let conn: DatabaseSync;
 function select(table: string, columns: string, suffix = "") {
   return conn.prepare(`SELECT ${columns} FROM memory_index_${table} ${suffix}`);
 }
 const all = (sql: string, ...params: SQLInputValue[]) => conn.prepare(sql).all(...params);
+const currentPath = "memory/current.md";
+const siblingPath = "memory/sibling.md";
+const vectorX = [1, 0, 0];
+const vectorY = [0, 1, 0];
+const chunkId = (value: Replacement, chunk: Replacement["chunks"][number]) =>
+  memoryChunkRowId(value.source, value.entry.path, chunk, value.model);
 const sourceTables = ["sources", "chunks", "chunks_fts", "paths_fts"];
 const metadataTables = ["chunk_recall_metadata", "chunk_provenance"];
 const derivedTables = [...metadataTables, "chunks_vec"];
@@ -40,7 +45,7 @@ function expectCounts(tables: string[], count: number) {
 }
 function expectedVectors(value: Replacement) {
   return value.chunks.map((chunk, index) => ({
-    id: memoryChunkRowId(value.source, value.entry.path, chunk, value.model),
+    id: chunkId(value, chunk),
     embedding: embeddingHex(value.embeddings[index]!),
   }));
 }
@@ -58,7 +63,6 @@ function interruptVectorDeletes(failAt: number) {
 beforeEach(async () => {
   conn = new DatabaseSync(":memory:", { allowExtension: true });
   store = new MemoryIndexDatabase(conn);
-  databases.push(store);
   const schema = ensureMemoryIndexSchema({ db: conn, cacheEnabled: false, ftsEnabled: true });
   expect(schema.ftsAvailable).toBe(true);
   expect((await loadSqliteVecExtension({ db: conn })).ok).toBe(true);
@@ -69,11 +73,7 @@ beforeEach(async () => {
   Object.assign(store.vector, { enabled: true, available: true });
 });
 
-afterEach(() => {
-  for (const database of databases.splice(0)) {
-    database.release();
-  }
-});
+afterEach(() => store.release());
 
 function replacement(path: string, hash = "original", chunkCount = 1): Replacement {
   return {
@@ -82,7 +82,7 @@ function replacement(path: string, hash = "original", chunkCount = 1): Replaceme
     model: "test-model",
     now: 100,
     vectorReady: true,
-    embeddings: Array.from({ length: chunkCount }, () => [1, 0, 0]),
+    embeddings: Array.from({ length: chunkCount }, () => [...vectorX]),
     chunks: Array.from({ length: chunkCount }, (_, index) => ({
       startLine: index + 1,
       endLine: index + 1,
@@ -110,8 +110,8 @@ function writeGroup(values: Replacement[]) {
 }
 
 function indexedSource(chunks: number, clean = true) {
-  const value = replacement("memory/current.md", "original", chunks);
-  const sibling = replacement("memory/sibling.md");
+  const value = replacement(currentPath, "original", chunks);
+  const sibling = replacement(siblingPath);
   write(value);
   write(sibling);
   if (clean) {
@@ -122,11 +122,7 @@ function indexedSource(chunks: number, clean = true) {
 
 function remove(pathname: string, expectedHash: string) {
   return mutate((kernel) =>
-    kernel.deleteIfCurrent({
-      path: pathname,
-      source: "memory",
-      expectedHash,
-    }),
+    kernel.deleteIfCurrent({ path: pathname, source: "memory", expectedHash }),
   );
 }
 
@@ -137,21 +133,19 @@ function snapshot() {
 }
 
 describe("memory source index native kernel", () => {
-  it("repairs changed and missing vectors, appends chunks, and removes empty and stale vectors", async () => {
+  it("repairs, appends and removes changed, missing, empty and stale vectors", () => {
     const { value } = indexedSource(4);
-    const ids = value.chunks.map((chunk) =>
-      memoryChunkRowId(value.source, value.entry.path, chunk, value.model),
-    );
+    const ids = value.chunks.map((chunk) => chunkId(value, chunk));
     const [, changedId, missingId, emptyId] = ids;
     assert.ok(changedId && missingId && emptyId);
     conn.prepare("DELETE FROM memory_index_chunks_vec WHERE id = ?").run(missingId);
     const appended = replacement(value.entry.path, "original", 5);
-    appended.embeddings[1] = [0, 1, 0];
+    appended.embeddings[1] = vectorY;
     appended.embeddings[3] = [];
     write(appended);
     expect(
       select("chunks_vec", "id, hex(embedding) AS embedding", "WHERE id = ?").get(changedId),
-    ).toEqual({ id: changedId, embedding: embeddingHex([0, 1, 0]) });
+    ).toEqual({ id: changedId, embedding: embeddingHex(vectorY) });
     expect(select("chunks_vec", "id", "WHERE id = ?").get(missingId)).toEqual({ id: missingId });
     expect(select("chunks_vec", "id", "WHERE id = ?").get(emptyId)).toBeUndefined();
     write({
@@ -163,17 +157,14 @@ describe("memory source index native kernel", () => {
   });
 
   it.each([32, 2163])(
-    "replaces %i stale vectors without removing retained, appended or sibling vectors",
-    async (staleCount) => {
+    "replaces %i stale vectors but keeps retained, appended and sibling vectors",
+    (staleCount) => {
       const { value, sibling } = indexedSource(staleCount + 1);
       const appended = replacement(value.entry.path, "new");
       const next = {
         ...value,
         chunks: [value.chunks[0]!, appended.chunks[0]!],
-        embeddings: [
-          [1, 0, 0],
-          [0, 1, 0],
-        ],
+        embeddings: [vectorX, vectorY],
       };
       write(next);
       const expected = [...expectedVectors(next), ...expectedVectors(sibling)].toSorted((a, b) =>
@@ -185,27 +176,24 @@ describe("memory source index native kernel", () => {
     },
   );
 
-  it.each([5, 2164])(
-    "rolls back stale-vector cleanup with rebuild debt (%i chunks)",
-    async (chunks) => {
-      const { value } = indexedSource(chunks);
-      const vectors = select("chunks_vec", "id", "ORDER BY id").all();
-      const deletes = interruptVectorDeletes(4);
-      try {
-        write({
-          ...value,
-          chunks: value.chunks.slice(0, 2),
-          embeddings: value.embeddings.slice(0, 2),
-        });
-      } finally {
-        conn.setAuthorizer(null);
-      }
-      expect(deletes()).toBe(4);
-      expect(select("chunks_vec", "id", "ORDER BY id").all()).toEqual(vectors);
-      expect(select("chunks", "count(*) AS n").get()).toEqual({ n: 3 });
-      expect(readDebt()).toEqual({ value: "1" });
-    },
-  );
+  it.each([5, 2164])("rolls back stale-vector cleanup with rebuild debt (%i chunks)", (chunks) => {
+    const { value } = indexedSource(chunks);
+    const vectors = select("chunks_vec", "id", "ORDER BY id").all();
+    const deletes = interruptVectorDeletes(4);
+    try {
+      write({
+        ...value,
+        chunks: value.chunks.slice(0, 2),
+        embeddings: value.embeddings.slice(0, 2),
+      });
+    } finally {
+      conn.setAuthorizer(null);
+    }
+    expect(deletes()).toBe(4);
+    expect(select("chunks_vec", "id", "ORDER BY id").all()).toEqual(vectors);
+    expect(select("chunks", "count(*) AS n").get()).toEqual({ n: 3 });
+    expect(readDebt()).toEqual({ value: "1" });
+  });
 
   it.each([
     { count: 2, retainedLast: false },
@@ -214,7 +202,7 @@ describe("memory source index native kernel", () => {
   ])(
     "keeps last-write values for repeated IDs ($count, retained=$retainedLast)",
     ({ count, retainedLast }) => {
-      const value = replacement("memory/current.md");
+      const value = replacement(currentPath);
       write(value);
       markMemoryVectorIndexClean(conn);
       const chunk = value.chunks[0];
@@ -235,7 +223,7 @@ describe("memory source index native kernel", () => {
               supersedesKey: last ? "latest-source" : "earlier-source",
             },
           },
-          embedding: last && !retainedLast ? [1, 0, 0] : [0, 1, 0],
+          embedding: last && !retainedLast ? vectorX : vectorY,
           ...(last && retainedLast ? { retained: true } : {}),
         };
       });
@@ -266,62 +254,53 @@ describe("memory source index native kernel", () => {
         },
       ]);
       expect(select("chunks_vec", "hex(embedding) AS embedding").all()).toEqual([
-        { embedding: embeddingHex(retainedLast ? [0, 1, 0] : [1, 0, 0]) },
+        { embedding: embeddingHex(retainedLast ? vectorY : vectorX) },
       ]);
     },
   );
 
-  it.each(["unverified", "incomplete"])(
-    "repairs stale same-ID vectors in a %s index",
-    async (state) => {
-      const value = replacement("memory/current.md");
-      write(value);
-      const chunk = value.chunks[0];
-      assert.ok(chunk);
-      const id = memoryChunkRowId(value.source, value.entry.path, chunk, value.model);
-      value.embeddings[0] = [0, 1, 0];
+  it.each(["unverified", "incomplete"])("repairs stale same-ID vectors: %s", (state) => {
+    const value = replacement(currentPath);
+    write(value);
+    const chunk = value.chunks[0];
+    assert.ok(chunk);
+    const id = chunkId(value, chunk);
+    value.embeddings[0] = vectorY;
+    conn
+      .prepare("UPDATE memory_index_chunks SET embedding = ? WHERE id = ?")
+      .run(encodeMemoryEmbedding(vectorY), id);
+    if (state === "incomplete") {
       conn
-        .prepare("UPDATE memory_index_chunks SET embedding = ? WHERE id = ?")
-        .run(encodeMemoryEmbedding([0, 1, 0]), id);
-      if (state === "incomplete") {
-        conn
-          .prepare(
-            "INSERT INTO memory_index_meta (key,value) VALUES ('memory_vector_rebuild_v1','1')",
-          )
-          .run();
-      }
-      write(value);
-      expect(select("chunks_vec", "hex(embedding) AS embedding", "WHERE id = ?").get(id)).toEqual({
-        embedding: embeddingHex([0, 1, 0]),
-      });
-    },
-  );
+        .prepare(
+          "INSERT INTO memory_index_meta (key,value) VALUES ('memory_vector_rebuild_v1','1')",
+        )
+        .run();
+    }
+    write(value);
+    expect(select("chunks_vec", "hex(embedding) AS embedding", "WHERE id = ?").get(id)).toEqual({
+      embedding: embeddingHex(vectorY),
+    });
+  });
 
   it.each([
     { clean: false, chunks: 4 },
     { clean: true, chunks: 4 },
     { clean: true, chunks: 2164 },
-  ])(
-    "rolls back the source and vectors (clean: $clean, chunks: $chunks)",
-    async ({ clean, chunks }) => {
-      const { value } = indexedSource(chunks, clean);
-      const before = snapshot();
-      conn.exec(
-        "CREATE TRIGGER fail_source_update AFTER UPDATE ON memory_index_sources BEGIN SELECT RAISE(ABORT, 'source update failed'); END",
-      );
-      expect(() =>
-        write({
-          ...value,
-          chunks: value.chunks.slice(0, 2),
-          embeddings: [
-            [0, 1, 0],
-            [1, 0, 0],
-          ],
-        }),
-      ).toThrow("source update failed");
-      expect(snapshot()).toEqual(before);
-    },
-  );
+  ])("rolls back the source and vectors (clean: $clean, chunks: $chunks)", ({ clean, chunks }) => {
+    const { value } = indexedSource(chunks, clean);
+    const before = snapshot();
+    conn.exec(
+      "CREATE TRIGGER fail_source_update AFTER UPDATE ON memory_index_sources BEGIN SELECT RAISE(ABORT, 'source update failed'); END",
+    );
+    expect(() =>
+      write({
+        ...value,
+        chunks: value.chunks.slice(0, 2),
+        embeddings: [vectorY, vectorX],
+      }),
+    ).toThrow("source update failed");
+    expect(snapshot()).toEqual(before);
+  });
 
   it("publishes across a source-header batch boundary with fallback provenance", () => {
     const values = Array.from({ length: 129 }, (_, index) => {
@@ -351,7 +330,7 @@ describe("memory source index native kernel", () => {
     expectCounts(["chunks"], 0);
   });
 
-  it("keeps later replacements and retained metadata authoritative within a group", async () => {
+  it("keeps later replacements and retained metadata authoritative within a group", () => {
     const source = { source: "sessions" as const, agentId: "main", sessionId: "repeated" };
     const initial = { ...replacement("sessions/repeated.jsonl"), ...source };
     write(initial);
@@ -360,12 +339,12 @@ describe("memory source index native kernel", () => {
     const last = { ...replacement(initial.entry.path, "searchable"), ...source, now: 300 };
     const chunk = last.chunks[0];
     assert.ok(chunk);
-    const sibling = replacement("memory/sibling.md", "sibling");
+    const sibling = replacement(siblingPath, "sibling");
     mutate((kernel) =>
       kernel.replaceGroup([
         ...[first, sibling, last].map((value) => ({
           header: value,
-          rows: value.chunks.map((row) => ({ chunk: row, embedding: [0, 1, 0] })),
+          rows: value.chunks.map((row) => ({ chunk: row, embedding: vectorY })),
         })),
         {
           header: { ...last, delta: true, now: 400 },
@@ -392,7 +371,7 @@ describe("memory source index native kernel", () => {
     ).toEqual(
       [sibling.entry.path, initial.entry.path].map((path) => ({
         path,
-        embedding: embeddingHex([0, 1, 0]),
+        embedding: embeddingHex(vectorY),
       })),
     );
     expect(select("sources", "hash", "WHERE path = ?").get(initial.entry.path)).toEqual({
@@ -401,7 +380,7 @@ describe("memory source index native kernel", () => {
     expectCounts(["chunks_vec"], 2);
   });
 
-  it("applies later removals to chunks published by an intermediate removal flush", async () => {
+  it("applies later removals to chunks published by an intermediate removal flush", () => {
     const initial = {
       ...replacement("sessions/ordered.jsonl", "obsolete", 128),
       source: "sessions" as const,
@@ -414,14 +393,14 @@ describe("memory source index native kernel", () => {
     assert.ok(temporary && survivor);
     mutate((kernel) =>
       kernel.replaceRows({ ...initial, delta: true }, [
-        { chunk: temporary, embedding: [1, 0, 0] },
+        { chunk: temporary, embedding: vectorX },
         ...initial.chunks.map((chunk) => ({
-          removedId: memoryChunkRowId(initial.source, initial.entry.path, chunk, initial.model),
+          removedId: chunkId(initial, chunk),
         })),
         {
-          removedId: memoryChunkRowId(initial.source, initial.entry.path, temporary, initial.model),
+          removedId: chunkId(initial, temporary),
         },
-        { chunk: survivor, embedding: [0, 1, 0] },
+        { chunk: survivor, embedding: vectorY },
       ]),
     );
     expect(select("chunks", "text").all()).toEqual([{ text: "survivor indexed text" }]);
@@ -433,7 +412,7 @@ describe("memory source index native kernel", () => {
     expectCounts(derivedTables, 1);
   });
 
-  it("rolls back grouped sources and vectors when a buffered provenance write fails", async () => {
+  it("rolls back grouped sources and vectors when a buffered provenance write fails", () => {
     write(replacement("memory/first.md"));
     write(replacement("memory/last.md"));
     markMemoryVectorIndexClean(conn);
@@ -455,10 +434,10 @@ describe("memory source index native kernel", () => {
     { chunks: 2048, failAt: 3, rollback: true },
   ])(
     "rolls back $failAt/$chunks vector deletes (outer: $rollback)",
-    async ({ chunks, failAt, rollback }) => {
-      const pathname = "memory/current.md";
+    ({ chunks, failAt, rollback }) => {
+      const pathname = currentPath;
       write(replacement(pathname, "original", chunks));
-      write(replacement("memory/sibling.md"));
+      write(replacement(siblingPath));
       const before = readVectors();
       const previousDebt = readDebt();
       if (rollback) {
@@ -484,28 +463,26 @@ describe("memory source index native kernel", () => {
         count: rollback ? chunks : 0,
       });
       expect(select("sources", "path", "ORDER BY path").all()).toEqual(
-        rollback
-          ? [{ path: pathname }, { path: "memory/sibling.md" }]
-          : [{ path: "memory/sibling.md" }],
+        rollback ? [{ path: pathname }, { path: siblingPath }] : [{ path: siblingPath }],
       );
     },
   );
 
-  it("conditionally removes all source representations while retaining a sibling", async () => {
-    write(replacement("memory/current.md"));
-    write(replacement("memory/sibling.md"));
+  it("conditionally removes all source representations while retaining a sibling", () => {
+    write(replacement(currentPath));
+    write(replacement(siblingPath));
     const before = snapshot();
-    expect(remove("memory/current.md", "stale")).toBe(false);
+    expect(remove(currentPath, "stale")).toBe(false);
     expect(snapshot()).toEqual(before);
-    expect(remove("memory/current.md", "original")).toBe(true);
+    expect(remove(currentPath, "original")).toBe(true);
     for (const table of sourceTables) {
-      expect(select(table, "path").all()).toEqual([{ path: "memory/sibling.md" }]);
+      expect(select(table, "path").all()).toEqual([{ path: siblingPath }]);
     }
     expectCounts(derivedTables, 1);
   });
 
   it("aborts source removal when reading vector cleanup targets fails", () => {
-    const pathname = "memory/current.md";
+    const pathname = currentPath;
     write(replacement(pathname));
     const before = snapshot();
     let refused = false;
@@ -561,11 +538,7 @@ describe("memory source index session delta", () => {
     assert.ok(value.source === "sessions");
     const retained = value.chunks.filter((chunk) => retainedLines.includes(chunk.startLine));
     const written = value.chunks.filter((chunk) => !retainedLines.includes(chunk.startLine));
-    const desiredIds = new Set(
-      value.chunks.map((chunk) =>
-        memoryChunkRowId(value.source, value.entry.path, chunk, value.model),
-      ),
-    );
+    const desiredIds = new Set(value.chunks.map((chunk) => chunkId(value, chunk)));
     const { chunks: _chunks, embeddings: _embeddings, ...header } = value;
     const rows: MemorySourceIndexRow[] = [
       ...readMemorySourceChunks(conn, value.source, value.entry.path)
@@ -580,7 +553,7 @@ describe("memory source index session delta", () => {
         embedding: [],
         retained: true,
       })),
-      ...written.map((chunk) => ({ chunk, embedding: [1, 0, 0] })),
+      ...written.map((chunk) => ({ chunk, embedding: vectorX })),
     ];
     return mutate((kernel) => kernel.replaceRows({ ...header, delta: retained.length > 0 }, rows));
   }
@@ -589,8 +562,8 @@ describe("memory source index session delta", () => {
     select("chunks", "chunk_rowid, start_line, text, updated_at", "ORDER BY start_line").all();
 
   it.each([2, 129])(
-    "removes %i session chunks and their derived data while retaining unchanged content",
-    async (removedCount) => {
+    "removes %i session chunks and derived data, retaining unchanged content",
+    (removedCount) => {
       write(session("v1", [1, 2, ...Array.from({ length: removedCount }, (_, i) => i + 7)]));
       const [first, second] = readChunks();
 
@@ -623,7 +596,7 @@ describe("memory source index session delta", () => {
     },
   );
 
-  it("refreshes retained recall metadata and provenance without changing indexed content", async () => {
+  it("refreshes retained metadata and provenance without changing content", () => {
     write(session("v1", [1, 2]));
     const before = readChunks();
     const changed = session("v2", [1, 2]);

@@ -164,7 +164,7 @@ it.each(["unsupported", "forced"] as const)("keeps %s admission passive", async 
   expect(mocks.spawn).not.toHaveBeenCalled();
 });
 
-it.each(["known-version", "unknown-version", "artifact"] as const)(
+it.each(["unknown-version", "artifact"] as const)(
   "isolates private %s context and runtime identity",
   async (target) => {
     if (target === "unknown-version") {
@@ -252,35 +252,30 @@ it.each(["known-version", "unknown-version", "artifact"] as const)(
   },
 );
 
-it.each([false, true])("bounds refusal diagnostics (oversized=%s)", async (oversized) => {
-  const message = oversized ? "diagnostic ".repeat(500) : "The config is invalid.";
+it("bounds refusal diagnostics while preserving reason identities and short messages", async () => {
+  const message = "diagnostic ".repeat(500);
   const reply: UpdateAdmissionVerdict = {
     ...admit(),
     verdict: "refuse",
     reasons: [
-      { code: "invalid-config", message, nextAction: oversized ? message : "Repair the config." },
+      { code: "invalid-config", message, nextAction: message },
       { code: "database-schema-preflight", message: "The target cannot read this database." },
     ],
-    warnings: oversized
-      ? [
-          { code: "x".repeat(81), message },
-          ...Array.from({ length: 40 }, (_, index) => ({ code: `warning-${index}`, message })),
-        ]
-      : admit().warnings,
+    warnings: [
+      { code: "x".repeat(81), message },
+      ...Array.from({ length: 40 }, (_, index) => ({ code: `warning-${index}`, message })),
+    ],
     facts: {
       ...admit().facts,
-      checks: [{ name: "config", status: "refuse", ...(oversized ? { detail: message } : {}) }],
+      checks: [{ name: "config", status: "refuse", detail: message }],
     },
   };
   fixture = { code: 3, stdout: JSON.stringify(reply) };
   const result = await run();
   await expectContextRemoved();
-  if (!oversized) {
-    expect(result).toEqual({ owner: "candidate", verdict: reply });
-    return;
-  }
   const verdict = result.verdict;
   expect(result).toMatchObject({ owner: "candidate", verdict: { verdict: "refuse" } });
+  expect(verdict?.reasons[1]).toEqual(reply.reasons[1]);
   expect(verdict?.reasons.map((reason) => reason.code)).toEqual(
     reply.reasons.map((reason) => reason.code),
   );

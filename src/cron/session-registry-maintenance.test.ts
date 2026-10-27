@@ -1,8 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, aroundEach, describe, expect, it, vi } from "vitest";
 import { observeHostDataSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
-import { resetConfigRuntimeState } from "../config/config.js";
 import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import { loadSessionEntry, replaceSessionEntry } from "../config/sessions/session-accessor.js";
 import { resolveSqliteTargetFromSessionStorePath } from "../config/sessions/session-sqlite-target.js";
@@ -14,10 +13,7 @@ import {
   type AgentDatabaseAdmissionRefusal,
 } from "../state/agent-database-admission.js";
 import { reconstructAgentDeletionJournal } from "../state/agent-deletion-journal-recovery.js";
-import {
-  closeOpenClawAgentDatabasesAsync,
-  closeOpenClawAgentDatabasesForTest,
-} from "../state/openclaw-agent-db.js";
+import { closeOpenClawAgentDatabasesAsync } from "../state/openclaw-agent-db.js";
 import {
   openOpenClawStateDatabase,
   runOpenClawStateWriteTransaction,
@@ -49,41 +45,31 @@ async function writeStaleCronSession(
   return scope;
 }
 
-function withMaintenanceState<Args extends unknown[]>(run: (...args: Args) => Promise<void>) {
-  return (...args: Args) =>
+describe("runSessionRegistryMaintenance", () => {
+  aroundEach((run) =>
     withOpenClawTestState(
-      { layout: "state-only", prefix: "openclaw-session-registry-maintenance-" },
+      { layout: "state-only", label: "session-registry-maintenance" },
       async (fixture) => {
         state = fixture;
-        resetConfigRuntimeState();
         setRuntimeConfigSnapshot({});
-        await run(...args);
+        await run();
       },
-    );
-}
-
-describe("runSessionRegistryMaintenance", () => {
-  afterEach(() => {
-    vi.restoreAllMocks();
-    resetConfigRuntimeState();
-    closeOpenClawAgentDatabasesForTest();
-  });
-
-  it(
-    "skips the sweep instead of pruning when the cron store is unreadable",
-    withMaintenanceState(async () => {
-      const stale = await writeStaleCronSession("main");
-      vi.spyOn(cronStore, "loadCronJobsStore").mockRejectedValue(
-        new Error("cron store load unavailable"),
-      );
-
-      const summary = await maintain();
-
-      expect(summary.skippedReason).toContain("cron store unreadable");
-      expect(summary.pruned).toBe(0);
-      expect(loadSessionEntry(stale)).toBeDefined();
-    }),
+    ),
   );
+  afterEach(() => vi.restoreAllMocks());
+
+  it("skips the sweep instead of pruning when the cron store is unreadable", async () => {
+    const stale = await writeStaleCronSession("main");
+    vi.spyOn(cronStore, "loadCronJobsStore").mockRejectedValue(
+      new Error("cron store load unavailable"),
+    );
+
+    const summary = await maintain();
+
+    expect(summary.skippedReason).toContain("cron store unreadable");
+    expect(summary.pruned).toBe(0);
+    expect(loadSessionEntry(stale)).toBeDefined();
+  });
 
   it.each([
     "agent-database-inspection-pending",
@@ -91,7 +77,7 @@ describe("runSessionRegistryMaintenance", () => {
     "agent-database-ownership-mismatch",
   ] as const)(
     "defers registry pruning while another agent has %s",
-    withMaintenanceState(async (code: AgentDatabaseAdmissionRefusal["code"]) => {
+    async (code: AgentDatabaseAdmissionRefusal["code"]) => {
       const now = Date.now();
       vi.spyOn(Date, "now").mockReturnValue(now);
       await configure({
@@ -149,12 +135,12 @@ describe("runSessionRegistryMaintenance", () => {
 
       expect(await maintain()).toMatchObject({ pruned: 1, skippedStores: 0 });
       expect(loadSessionEntry(healthy)).toBeUndefined();
-    }),
+    },
   );
 
   it.each(["per-agent", "fixed selector", "exact database"])(
     "prunes every configured agent's stale cron rows with a %s store",
-    withMaintenanceState(async (kind: string) => {
+    async (kind: string) => {
       const store =
         kind === "per-agent"
           ? undefined
@@ -189,12 +175,12 @@ describe("runSessionRegistryMaintenance", () => {
       for (const scope of scopes) {
         expect(loadSessionEntry(scope)).toBeUndefined();
       }
-    }),
+    },
   );
 
   it.each(["missing", "reconstructed"])(
     "defers registry pruning while stores are held by %s deletion history",
-    withMaintenanceState(async (history: string) => {
+    async (history: string) => {
       const main = await writeStaleCronSession("main");
       const retained = await writeStaleCronSession("retained");
       const databasePath = resolveSqliteTargetFromSessionStorePath(retained.storePath).path;
@@ -218,28 +204,20 @@ describe("runSessionRegistryMaintenance", () => {
         agentId: "retained",
         storePath: retained.storePath,
         skippedReason: "agent-store-held",
-        warning: expect.stringContaining(`Held agent retained database ${databasePath}`),
+        warning: expect.stringContaining("openclaw doctor --fix"),
       });
-      const held = summary.stores.find((store) => store.agentId === "retained");
-      expect(held).toMatchObject({ warning: expect.stringContaining("openclaw doctor --fix") });
       expect(await fs.readFile(databasePath)).toEqual(bytes);
       expect(loadSessionEntry(retained)).toBeDefined();
       expect(loadSessionEntry(main)).toBeDefined();
-    }),
+    },
   );
 
-  it(
-    "keeps a corrupt store terminal",
-    withMaintenanceState(async () => {
-      const retiredStorePath = path.join(state.sessionsDir("retired"), "sessions.json");
-      openOpenClawStateDatabase();
-      const sqlitePath = resolveSqliteTargetFromSessionStorePath(retiredStorePath).path;
-      if (!sqlitePath) {
-        throw new Error("expected retired store to resolve to SQLite");
-      }
-      await fs.mkdir(path.dirname(sqlitePath), { recursive: true });
-      await fs.writeFile(sqlitePath, "not a sqlite database");
-      await expect(maintain(false)).rejects.toThrow();
-    }),
-  );
+  it("keeps a corrupt store terminal", async () => {
+    const retiredStorePath = path.join(state.sessionsDir("retired"), "sessions.json");
+    openOpenClawStateDatabase();
+    const sqlitePath = resolveSqliteTargetFromSessionStorePath(retiredStorePath).path;
+    await fs.mkdir(path.dirname(sqlitePath), { recursive: true });
+    await fs.writeFile(sqlitePath, "not a sqlite database");
+    await expect(maintain(false)).rejects.toThrow();
+  });
 });

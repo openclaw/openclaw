@@ -1,4 +1,5 @@
 // Codex tests cover attempt context plugin behavior.
+import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -23,6 +24,7 @@ import {
 import { buildCodexWorkspaceBootstrapContext } from "./attempt-workspace-context.js";
 import type { CodexDynamicToolFunctionSpec, CodexDynamicToolSpec } from "./protocol.js";
 import type { CodexAppServerContextEngineBinding } from "./session-binding.js";
+import * as fingerprints from "./thread-fingerprints.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 type WorkspaceOptions = Parameters<typeof buildCodexWorkspaceBootstrapContext>[0];
@@ -167,6 +169,53 @@ describe("Codex app-server attempt context", () => {
         truncated: null,
       },
     ]);
+  });
+
+  it("reuses each Codex definition hash until its schema JSON changes", () => {
+    const stabilize = vi.spyOn(fingerprints, "stabilizeJsonValue");
+    const frozen = Object.freeze({
+      type: "object",
+      properties: Object.freeze({ query: Object.freeze({ type: "string" }) }),
+    });
+    const mutable = { type: "object", properties: { query: { type: "string" } } };
+    const shallow = Object.freeze(mutable);
+    const tool = makeTool("search", { inputSchema: frozen });
+    const otherTool = makeTool("lookup", { inputSchema: shallow });
+    const params: Parameters<typeof buildCodexSystemPromptReport>[0] = {
+      attempt: { sessionId: "report" } as EmbeddedRunAttemptParams,
+      sessionKey: "agent:main:report",
+      workspaceDir: "/workspace",
+      developerInstructions: "instructions",
+      workspaceBootstrapContext: { bootstrapFiles: [], contextFiles: [], promptContextFiles: [] },
+      skillsPrompt: "",
+      tools: [tool],
+    };
+    const report = () => buildCodexSystemPromptReport(params).tools.entries[0];
+    const expectedHash = (type: string) =>
+      createHash("sha256")
+        .update(`{"properties":{"query":{"type":"${type}"}},"type":"object"}`)
+        .digest("hex");
+    expect(report()?.schemaHash).toBe(expectedHash("string"));
+    expect(report()?.schemaHash).toBe(expectedHash("string"));
+    params.tools = [otherTool];
+    expect(report()?.schemaHash).toBe(expectedHash("string"));
+    mutable.properties.query.type = "integer";
+    expect(report()?.schemaHash).toBe(expectedHash("integer"));
+    params.tools = [tool];
+    expect(report()?.schemaHash).toBe(expectedHash("string"));
+    const replacement = Object.freeze({
+      type: "object",
+      properties: Object.freeze({ query: Object.freeze({ type: "boolean" }) }),
+    });
+    tool.inputSchema = replacement;
+    expect(report()?.schemaHash).toBe(expectedHash("boolean"));
+    params.tools = [otherTool];
+    expect(report()?.schemaHash).toBe(expectedHash("integer"));
+    params.tools = [tool];
+    expect(report()?.schemaHash).toBe(expectedHash("boolean"));
+    expect(stabilize.mock.calls.filter(([schema]) => schema === frozen)).toHaveLength(1);
+    expect(stabilize.mock.calls.filter(([schema]) => schema === shallow)).toHaveLength(2);
+    expect(stabilize.mock.calls.filter(([schema]) => schema === replacement)).toHaveLength(1);
   });
 
   it("keeps MEMORY.md injected when sandbox effective workspace differs", async () => {

@@ -1,4 +1,5 @@
 import {
+  localAgentAvatarDataUrl,
   prepareLocalAgentAvatarFile,
   type PreparedLocalAgentAvatarFile,
 } from "../agents/identity-avatar-file.js";
@@ -15,7 +16,6 @@ import {
   looksLikeAvatarPath,
 } from "../shared/avatar-policy.js";
 import {
-  gatewayAvatarFileDataUrl,
   prepareGatewayAvatarDataUrl,
   prepareGatewayAvatarFile,
   type GatewayAvatarImageSource,
@@ -155,7 +155,7 @@ export async function resolveGatewayAssistantAvatar(params: {
     return { avatar: source, resolution: prepared.resolution };
   }
 
-  const dataUrl = gatewayAvatarFileDataUrl(prepared.file);
+  const dataUrl = localAgentAvatarDataUrl(prepared.file);
   if (!dataUrl) {
     return {
       avatar: identity.emoji ?? DEFAULT_ASSISTANT_IDENTITY.avatar,

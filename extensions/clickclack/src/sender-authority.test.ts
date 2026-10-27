@@ -134,52 +134,48 @@ function installTransport(
         init,
         body: typeof init?.body === "string" ? JSON.parse(init.body) : undefined,
       });
-      const respond = async (stage: RequestStage, response: () => Response) => {
+      const respond = async (stage: RequestStage, body: unknown, status = 200) => {
         await options.beforeResponse?.(stage, account);
-        return response();
+        return Response.json(body, { status });
       };
-      const created = (body: unknown) => Response.json(body, { status: 201 });
       const request = `${init?.method ?? "GET"} ${url.pathname}`;
       switch (request) {
         case "POST /api/dms":
-          return respond("dm", () => created({ conversation: { id: `dcn_${account}` } }));
+          return respond("dm", { conversation: { id: `dcn_${account}` } }, 201);
         case "GET /api/uploads/by-nonce":
-          return respond(
-            "upload lookup",
-            () =>
-              new Response("Not found", {
-                status: 404,
-                headers: { "X-ClickClack-Upload-Nonce": "supported" },
-              }),
-          );
+          await options.beforeResponse?.("upload lookup", account);
+          return new Response("Not found", {
+            status: 404,
+            headers: { "X-ClickClack-Upload-Nonce": "supported" },
+          });
         case "POST /api/uploads":
-          return respond("upload", () =>
-            created({ upload: { id: `upl_${account}`, filename: "proof.txt" } }),
+          return respond(
+            "upload",
+            { upload: { id: `upl_${account}`, filename: "proof.txt" } },
+            201,
           );
         case `POST /api/dms/dcn_${account}/messages`:
         case `POST /api/channels/chn_${account}/messages`:
-          return respond("message", () => created({ message: { id: `msg_${account}` } }));
+          return respond("message", { message: { id: `msg_${account}` } }, 201);
         case `POST /api/messages/msg_${account}/attachments`: {
           const attempt = (attachmentAttempts.get(account) ?? 0) + 1;
           attachmentAttempts.set(account, attempt);
-          return respond("attachment", () => {
-            if (options.firstAttachmentFails && attempt === 1) {
-              throw new Error("First attachment response was lost");
-            }
-            return Response.json({ ok: true });
-          });
+          await options.beforeResponse?.("attachment", account);
+          if (options.firstAttachmentFails && attempt === 1) {
+            throw new Error("First attachment response was lost");
+          }
+          return Response.json({ ok: true });
         }
         case `GET /api/messages/msg_${account}`:
-          return respond("reconciliation", () => {
-            if (options.reconciliationFails) {
-              throw new Error("Attachment reconciliation was unavailable");
-            }
-            return Response.json({
-              message: {
-                id: `msg_${account}`,
-                attachments: options.reconciledAttachment ? [{ id: `upl_${account}` }] : [],
-              },
-            });
+          await options.beforeResponse?.("reconciliation", account);
+          if (options.reconciliationFails) {
+            throw new Error("Attachment reconciliation was unavailable");
+          }
+          return Response.json({
+            message: {
+              id: `msg_${account}`,
+              attachments: options.reconciledAttachment ? [{ id: `upl_${account}` }] : [],
+            },
           });
         default:
           throw new Error(`Unexpected ClickClack request: ${request}`);
@@ -355,7 +351,7 @@ it("keeps a revoked outbound sender independent from an active message account",
       cfg,
       accountId: "beta",
       to: "dm:usr_beta",
-      text: "Beta reply",
+      text: '<tool_call>{"name":"exec"}</tool_call>Beta reply\n⚠️ 🛠️ `search repos (agent)` failed',
       replyToId: "msg_quote",
       ...beta.context,
     }),

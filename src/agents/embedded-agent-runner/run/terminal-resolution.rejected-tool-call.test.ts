@@ -172,6 +172,36 @@ it.each(["message", "error code", "exec refusal"])(
   },
 );
 
+it("continues once when the rejected call followed visible progress text", async () => {
+  const turn = rejectedCallAfterSettledTool(
+    {},
+    {
+      api: "openai-responses",
+      provider: "minimax-tp",
+      model: "MiniMax-M3.1-Flash",
+      stopReason: "error",
+      errorCode: "malformed_tool_call_arguments",
+      errorMessage: "Responses stream completed tool call with invalid JSON arguments",
+      content: [{ type: "text", text: "Progress: checking the weekly report." }],
+    },
+  );
+  const { resolve, activateInternalPrompt } = terminalCase(turn);
+  await expect(resolve()).resolves.toEqual({ action: "retry" });
+  expect(activateInternalPrompt).toHaveBeenCalledExactlyOnceWith(
+    expect.stringContaining("do not repeat it"),
+  );
+});
+
+it("continues after a consumed preflight refusal with visible progress text", async () => {
+  const turn = await refusedExecThenRejectedCall();
+  turn.attemptAssistant.content = [
+    { type: "text", text: "Progress: retrying the inspection after the refusal." },
+  ];
+  const { resolve, activateInternalPrompt } = terminalCase(turn);
+  await expect(resolve()).resolves.toEqual({ action: "retry" });
+  expect(activateInternalPrompt).toHaveBeenCalledOnce();
+});
+
 it("continues after multiple consumed preflight refusals", async () => {
   const turn = await refusedExecThenRejectedCall();
   prependFailedExec(turn, await refusedExecResult("call_earlier"));

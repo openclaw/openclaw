@@ -410,7 +410,7 @@ function seedReadyReview(fixture: ReturnType<typeof makeMismatchedWrapperRepo>) 
 
 describe("scripts/pr wrappers", () => {
   function workflowFixture() {
-    const fixture = makeMismatchedWrapperRepo();
+    const fixture = makeMismatchedWrapperRepo({ toolingOnly: true });
     const reviewPath = join(fixture.canonical, "scripts/pr-lib/review.sh");
     writeFileSync(
       reviewPath,
@@ -521,7 +521,7 @@ exit "$status"
   });
 
   itPosix("preserves the caller's gh route environment through startup", () => {
-    const fixture = makeMismatchedWrapperRepo();
+    const fixture = makeMismatchedWrapperRepo({ toolingOnly: true });
     cpSync("scripts/lib/plain-gh.sh", join(fixture.canonical, "scripts/lib/plain-gh.sh"));
     fixture.write(
       "scripts/pr-lib/worktree.sh",
@@ -537,7 +537,7 @@ exit "$status"
   });
 
   itPosix("fails loudly at preflight when ripgrep is unavailable", () => {
-    const fixture = makeMismatchedWrapperRepo();
+    const fixture = makeMismatchedWrapperRepo({ toolingOnly: true });
     rmSync(join(fixture.bin, "rg"));
     for (const command of ["bash", "basename", "dirname", "git", "gh", "jq", "pnpm", "node"]) {
       rmSync(join(fixture.bin, command), { force: true });
@@ -642,7 +642,7 @@ exit "$status"
       .join("");
   }
   function mergeDispatchFixture(main = true) {
-    const fixture = makeMismatchedWrapperRepo();
+    const fixture = makeMismatchedWrapperRepo({ toolingOnly: true });
     if (main) {
       fixture.write("gh", baseBranchGhStub("main"), fixture.bin);
     }
@@ -716,7 +716,7 @@ exit "$status"
   itPosix(
     "requires an exact receipt and explicit confirmation for completion-only dispatch",
     () => {
-      const fixture = makeMismatchedWrapperRepo();
+      const fixture = makeMismatchedWrapperRepo({ toolingOnly: true });
       fixture.write(
         "scripts/pr-lib/merge.sh",
         `merge_complete() { printf '<%s>\\n' "$@"; }\nmerge_run() { exit 99; }\n`,
@@ -745,7 +745,7 @@ exit "$status"
   );
 
   itPosix("rejects ambiguous body flags and keeps recovery confirmation mandatory", () => {
-    const fixture = makeMismatchedWrapperRepo();
+    const fixture = makeMismatchedWrapperRepo({ toolingOnly: true });
     for (const args of [
       ["merge-run", "123", "--body-file"],
       ["merge-run", "123", "--observed-head", selectedHead],
@@ -794,7 +794,7 @@ exit "$status"
   });
 
   it("runs a mismatched advisory wrapper locally with an explicit developer opt-in", () => {
-    const fixture = makeMismatchedWrapperRepo();
+    const fixture = makeMismatchedWrapperRepo({ toolingOnly: true });
     const cliResult = runWrapper(fixture, ["--dev-wrapper", "ci-dispatch", "123"], "linked");
     expect(cliResult.status, `${cliResult.stderr}\n${cliResult.stdout}`).toBe(0);
     expect(cliResult.stdout).toContain("local wrapper executed");
@@ -848,7 +848,7 @@ exit "$status"
   );
 
   it("substitutes the canonical wrapper for a stale-base worktree once main moves the wrapper", () => {
-    const fixture = makeMismatchedWrapperRepo();
+    const fixture = makeMismatchedWrapperRepo({ toolingOnly: true });
     // Stale worktree: created at the pushed main base, no local wrapper edits.
     const stale = join(fixture.root, "stale");
     const baseline = fixture.gitText(["rev-parse", "main"]);
@@ -1498,6 +1498,7 @@ exec "$OPENCLAW_TEST_NODE" "$@"
     ];
     const directory = "scripts/pr-lib/path-spelling";
     const fixture = makeMismatchedWrapperRepo({
+      toolingOnly: true,
       dispatchBody: `node -e '
 const { readFileSync } = require("node:fs");
 const { join } = require("node:path");
@@ -1623,7 +1624,7 @@ if (process.env.PR_TEST_INTERRUPT !== "1") process.exit(Number(process.env.PR_TE
   });
 
   itPosix("materializes the anchor when tar stops before the producer's trailing padding", () => {
-    const fixture = makeMismatchedWrapperRepo();
+    const fixture = makeMismatchedWrapperRepo({ toolingOnly: true });
     parkCanonicalOffAnchor(fixture);
     const git = join(fixture.bin, "git");
     writeFileSync(

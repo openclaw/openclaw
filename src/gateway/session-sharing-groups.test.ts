@@ -175,11 +175,15 @@ describe("session sharing group mutations", () => {
     },
   );
 
-  it("reuses group membership metadata and immediately observes changed member permissions", async () => {
+  it("filters and updates defaults using current member permissions without repeated SQL", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
       const cfg = {};
       setRuntimeConfigSnapshot(cfg);
       await putSessionGroups({ cfg, names: ["Projects", "Personal"] });
+      const projects = { name: "Projects", cwd: "/repos/projects", worktree: true };
+      const personal = { name: "Personal", cwd: "/repos/personal", worktree: false };
+      await updateSessionGroupDefaults(projects.name, projects);
+      await updateSessionGroupDefaults(personal.name, personal);
       const scope = { agentId: "main", sessionKey: "agent:main:restricted-group-member" };
       await restrictedMember(
         "restricted-group-member",
@@ -200,15 +204,19 @@ describe("session sharing group mutations", () => {
           isWebchatConnect: () => true,
           respond: (...response) => responses.push(response),
         });
-        expect(responses).toHaveLength(1);
-        expect(responses[0]?.[0]).toBe(true);
+        expect(responses).toEqual([[true, expect.any(Object), undefined]]);
         return responses[0]?.[1];
       };
-      expect(await readDefaults()).toEqual({ defaults: [{ name: "Personal" }] });
+      const updateParams = { name: "Projects", cwd: null, worktree: false };
+      await prepareMembership(context);
+      expect(groupAuthorization(context, viewer, "update", updateParams).error).toMatchObject({
+        details: { code: "SESSION_PARTICIPATION_REQUIRED" },
+      });
+      expect(await readDefaults()).toEqual({ defaults: [personal] });
       const sql = observeHostDataSql();
       try {
         for (let index = 0; index < 3; index++) {
-          expect(await readDefaults()).toEqual({ defaults: [{ name: "Personal" }] });
+          expect(await readDefaults()).toEqual({ defaults: [personal] });
         }
         expect(sql.queries).toEqual([]);
       } finally {
@@ -216,11 +224,30 @@ describe("session sharing group mutations", () => {
       }
 
       await upsertSessionEntryCore(scope, { category: "Personal" });
-      expect(await readDefaults()).toEqual({ defaults: [{ name: "Projects" }] });
+      expect(await readDefaults()).toEqual({ defaults: [projects] });
       await upsertSessionEntryCore(scope, { visibility: "shared" });
       expect(await readDefaults()).toEqual({
-        defaults: [{ name: "Projects" }, { name: "Personal" }],
+        defaults: [projects, personal],
       });
+
+      await upsertSessionEntryCore(scope, { category: "Projects", visibility: "read-only" });
+      await prepareMembership(context);
+      const params = { ...updateParams, name: "Personal" };
+      const authorization = groupAuthorization(context, viewer, "update", params);
+      expect(authorization.error).toBeNull();
+      const respond = vi.fn();
+      await sessionGroupHandlers["sessions.groups.update"]!({
+        params,
+        client: viewer,
+        context,
+        sessionMutationAuthorization: authorization.authorization,
+        respond,
+      } as never);
+      expect(respond).toHaveBeenCalledExactlyOnceWith(
+        true,
+        { ok: true, defaults: [{ name: "Personal", worktree: false }] },
+        undefined,
+      );
     });
   });
 
@@ -283,24 +310,7 @@ describe("session sharing group mutations", () => {
       });
     },
   );
-  it("refuses restricted group drops at put admission while allowing retained groups", async () => {
-    await withOpenClawTestState({ scenario: "minimal" }, async () => {
-      const cfg = rolePolicyConfig();
-      setRuntimeConfigSnapshot(cfg);
-      await putSessionGroups({ cfg: {}, names: ["Projects"] });
-      await restrictedMember("restricted-put-member", "Projects");
-      const viewer = roleClient("none", "put-viewer");
-      const context = { getRuntimeConfig: () => cfg } as GatewayRequestContext;
-
-      await prepareMembership(context);
-      expect(groupAuthorization(context, viewer, "put", { names: [] }).error).not.toBeNull();
-      expect(
-        groupAuthorization(context, viewer, "put", { names: [" Projects "] }).error,
-      ).toBeNull();
-    });
-  });
-
-  it("rechecks late group members before committing a put drop", async () => {
+  it("refuses restricted group drops at admission and rechecks late members before commit", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
       const cfg = rolePolicyConfig();
       setRuntimeConfigSnapshot(cfg);
@@ -323,6 +333,9 @@ describe("session sharing group mutations", () => {
         } as never),
       ).rejects.toBeInstanceOf(SessionMutationAuthorizationChangedError);
       expect(readSessionGroupCatalog().groups).toEqual(groups);
+      await prepareMembership(context);
+      expect(groupAuthorization(context, viewer, "put", { names: [] }).error).not.toBeNull();
+      expect(groupAuthorization(context, viewer, "put", { names: [" Race "] }).error).toBeNull();
     });
   });
 
@@ -399,60 +412,4 @@ describe("session sharing group mutations", () => {
       });
     },
   );
-
-  it("filters group defaults and blocks updates for sessions the caller cannot mutate", async () => {
-    await withOpenClawTestState({ scenario: "minimal" }, async () => {
-      const cfg = {};
-      setRuntimeConfigSnapshot(cfg);
-      await putSessionGroups({ cfg: {}, names: ["Projects", "Personal"] });
-      await updateSessionGroupDefaults("Projects", { cwd: "/repos/projects", worktree: true });
-      await updateSessionGroupDefaults("Personal", { cwd: "/repos/personal", worktree: false });
-      await restrictedMember("restricted-project", "Projects");
-      const viewer = client({ user: "viewer@example.com" });
-      const context = subscriberContext(cfg);
-
-      await prepareMembership(context);
-      expect(
-        groupAuthorization(context, viewer, "update", {
-          name: "Projects",
-          cwd: null,
-          worktree: false,
-        }).error,
-      ).toMatchObject({ details: { code: "SESSION_PARTICIPATION_REQUIRED" } });
-
-      const responses: Parameters<RespondFn>[] = [];
-      await prepareMembership(context);
-      await sessionGroupHandlers["sessions.groups.defaults"]?.({
-        params: {},
-        client: viewer,
-        context,
-        respond: (...response: Parameters<RespondFn>) => responses.push(response),
-      } as never);
-      expect(responses).toEqual([
-        [
-          true,
-          { defaults: [{ name: "Personal", cwd: "/repos/personal", worktree: false }] },
-          undefined,
-        ],
-      ]);
-
-      const personalAuthorization = groupAuthorization(context, viewer, "update", {
-        name: "Personal",
-        cwd: null,
-        worktree: false,
-      });
-      expect(personalAuthorization.error).toBeNull();
-      const updateResponses: Parameters<RespondFn>[] = [];
-      await sessionGroupHandlers["sessions.groups.update"]?.({
-        params: { name: "Personal", cwd: null, worktree: false },
-        client: viewer,
-        context,
-        sessionMutationAuthorization: personalAuthorization.authorization,
-        respond: (...response: Parameters<RespondFn>) => updateResponses.push(response),
-      } as never);
-      expect(updateResponses).toEqual([
-        [true, { ok: true, defaults: [{ name: "Personal", worktree: false }] }, undefined],
-      ]);
-    });
-  });
 });

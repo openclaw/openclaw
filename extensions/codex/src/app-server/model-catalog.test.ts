@@ -92,6 +92,32 @@ describe("Codex app-server model catalog", () => {
     owner = createCodexAppServerModelCatalog("codex");
   });
 
+  it.each(["chatgpt", "apiKey"])(
+    "publishes only explicit caller program metadata for %s discovery",
+    async (type) => {
+      rpc.request.mockResolvedValue({ account: { type }, requiresOpenaiAuth: true });
+      listModelsMock.mockResolvedValue({
+        models: [
+          {
+            ...opaqueCatalog().models[0]!,
+            availableAccessPrograms: { cyber: ["standard", "daybreak_blue"] },
+          },
+        ],
+      });
+      const result = await owner.load(catalogParams, undefined);
+      expect(result.outcomes?.[0]?.modelAccessPrograms).toEqual([
+        {
+          modelId: "synthetic-opaque",
+          runtimeId: "codex",
+          cyber: ["standard", "daybreak_blue"],
+        },
+      ]);
+      expect(read()).toBeDefined();
+      rpc.epoch += 1;
+      expect(read()).toBeUndefined();
+    },
+  );
+
   it.each([
     {
       name: "unanswered account read",
@@ -157,11 +183,6 @@ describe("Codex app-server model catalog", () => {
         },
       },
     ]);
-    expect(listModelsMock).toHaveBeenCalledExactlyOnceWith({
-      request: rpc.request,
-      limit: 100,
-      includeHidden: true,
-    });
     expect(probeCodexNativeAuth).not.toHaveBeenCalled();
   });
 
@@ -335,7 +356,11 @@ describe("Codex app-server model catalog", () => {
       const result = await owner.load(catalogParams, nativePluginConfig);
       expect(result.entries).toContainEqual(expect.objectContaining({ id: "synthetic-opaque" }));
       expect(result.outcomes).toEqual([
-        { provider: "openai", status: account ? "ready" : "unavailable" },
+        {
+          provider: "openai",
+          status: account ? "ready" : "unavailable",
+          ...(account ? { modelAccessPrograms: [] } : {}),
+        },
       ]);
       expect(read({}, nativePluginConfig)).toEqual(readiness);
       expect(read({ agentId: "another" }, nativePluginConfig)).toBeUndefined();

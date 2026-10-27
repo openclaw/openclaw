@@ -1,7 +1,7 @@
 import { For, onSettled, Show } from "solid-js";
 import { uploadsEnabled } from "../../../lib/uploads.ts";
 import type { ChatAttachmentControlsProps } from "./chat-attachment-controls.types.ts";
-import type { ChatAttachmentInputHandle } from "./chat-attachment-inputs.ts";
+import type { AttachmentInputKind, ChatAttachmentInputHandle } from "./chat-attachment-inputs.ts";
 import { appendChatAttachmentFiles } from "./chat-attachments.ts";
 import type { OpenClawChatCameraCapture } from "./chat-camera-capture.tsx";
 import "./chat-camera-capture.css";
@@ -17,7 +17,7 @@ export function ChatAttachmentInputs(
   return (
     <Show when={uploadsEnabled(props.uploadConfig)}>
       {(_enabled) => {
-        const inputs: Partial<Record<"file" | "photo" | "camera", HTMLInputElement>> = {};
+        const inputs: Partial<Record<AttachmentInputKind, HTMLInputElement>> = {};
         let camera: OpenClawChatCameraCapture | undefined;
         onSettled(() => props.inputHandle.bindInputs({ inputs, camera }));
         return (
@@ -38,7 +38,7 @@ export function ChatAttachmentInputs(
               prop:onNativeCapture={openInput("camera")}
               prop:onUpload={openInput("photo")}
             />
-            <For each={["file", "photo", "camera"] as const}>
+            <For each={["file", "photo", "camera", "media"] as const}>
               {(kind) => (
                 <input
                   ref={(element) => {
@@ -47,7 +47,13 @@ export function ChatAttachmentInputs(
                   type="file"
                   tabindex="-1"
                   aria-hidden="true"
-                  accept={kind === "file" && !props.imagesOnly ? undefined : "image/*"}
+                  accept={
+                    props.imagesOnly || kind === "photo" || kind === "camera"
+                      ? "image/*"
+                      : kind === "media"
+                        ? "image/*,video/*"
+                        : undefined
+                  }
                   multiple={kind !== "camera"}
                   capture={kind === "camera" ? "environment" : undefined}
                   class={[`agent-chat__${kind}-input`]}

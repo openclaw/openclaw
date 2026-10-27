@@ -68,27 +68,6 @@ function isHistorySessionInfoForRequestedSession(
   );
 }
 
-function findSelectedSessionRow(
-  host: ChatIdleSessionReconciliationHost,
-  sessionsResult: SessionsListResult | null | undefined,
-  sessionKey: string,
-  historySessionKey: string | undefined,
-): GatewaySessionRow | undefined {
-  const requestedGlobalAgentId =
-    historySessionKey && isUiGlobalSessionKey(historySessionKey)
-      ? resolveUiGlobalAliasAgentId(host, sessionKey)
-      : undefined;
-  return sessionsResult?.sessions.find((session) => {
-    if (areUiSessionKeysEquivalent(session.key, sessionKey)) {
-      return true;
-    }
-    return (
-      requestedGlobalAgentId != null &&
-      resolveUiGlobalAliasAgentId(host, session.key) === requestedGlobalAgentId
-    );
-  });
-}
-
 function historyIdleProofIsStaleForSelectedRow(
   historySessionInfo: GatewaySessionRow,
   selectedRow: GatewaySessionRow | undefined,
@@ -129,12 +108,20 @@ export function flushChatQueueAfterIdleSessionReconciliation(
       historyRefreshSettled.status === "fulfilled"
         ? historyRefreshSettled.value?.sessionInfo
         : null;
-    const selectedSessionRow = findSelectedSessionRow(
-      host,
-      freshSessionsResult,
-      sessionKey,
-      historySessionInfo?.key,
-    );
+    const historySessionKey = historySessionInfo?.key;
+    const requestedGlobalAgentId =
+      historySessionKey && isUiGlobalSessionKey(historySessionKey)
+        ? resolveUiGlobalAliasAgentId(host, sessionKey)
+        : undefined;
+    const selectedSessionRow = freshSessionsResult?.sessions.find((session) => {
+      if (areUiSessionKeysEquivalent(session.key, sessionKey)) {
+        return true;
+      }
+      return (
+        requestedGlobalAgentId != null &&
+        resolveUiGlobalAliasAgentId(host, session.key) === requestedGlobalAgentId
+      );
+    });
     const historySessionKnownIdle = Boolean(
       historySessionInfo &&
       isHistorySessionInfoForRequestedSession(host, historySessionInfo.key, sessionKey) &&

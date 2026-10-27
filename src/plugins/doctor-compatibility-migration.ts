@@ -23,7 +23,7 @@ export type PluginDoctorCompatibilityResult = {
 export type PluginDoctorCompatibilityOptions = {
   env?: NodeJS.ProcessEnv;
   startup?: boolean;
-  historicalWebhookListeners?: boolean;
+  historicalWebhookListeners?: boolean | "preserve-configured";
   historicalWebhookCompletion?: HistoricalWebhookCompletion;
   onInspectedPlugin?: (pluginId: string, hasConfigRepair: boolean) => void;
 };
@@ -85,7 +85,11 @@ export function applyResolvedPluginDoctorCompatibilityMigrations(
   },
 ): PluginDoctorCompatibilityResult {
   const applyHistoricalWebhookPins = params.historicalWebhookListeners
-    ? createHistoricalWebhookPinMigration(params.env, params.historicalWebhookCompletion)
+    ? createHistoricalWebhookPinMigration(
+        params.env,
+        params.historicalWebhookCompletion,
+        params.historicalWebhookListeners === "preserve-configured",
+      )
     : undefined;
   const initialized = applyHistoricalWebhookPins
     ? applyHistoricalWebhookPins({ config: cfg, changes: [] }, undefined, params)

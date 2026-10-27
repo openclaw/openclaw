@@ -54,10 +54,10 @@ import { executeSqliteQuerySync, getNodeSqliteKysely } from "./kysely-sync.js";
 import { openNodeSqliteDatabase } from "./node-sqlite.js";
 import {
   isAppleDoubleMetadataFile,
-  probeSqliteDatabaseHeaders,
   resolveSqliteDatabaseFilePaths,
   SQLITE_SIDECAR_SUFFIXES,
 } from "./sqlite-files.js";
+import { probeSqliteDatabaseHeaders } from "./sqlite-header-probe.js";
 import { createVerifiedSqliteSnapshot } from "./sqlite-snapshot.js";
 import {
   createLegacyAuditDatabaseWitness,

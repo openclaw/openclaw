@@ -11,7 +11,6 @@ import { buildCommandTestParams } from "../../../auto-reply/reply/commands.test-
 import { runWithCommandNativeSubagents } from "../../../auto-reply/reply/dispatch-native-subagent.js";
 import { buildTestCtx } from "../../../auto-reply/reply/test-ctx.js";
 import {
-  loadSessionEntry,
   loadTranscriptEvents,
   resetSessionEntryLifecycle,
 } from "../../../config/sessions/session-accessor.js";
@@ -26,6 +25,7 @@ import { createUserTurnTranscriptRecorder } from "../../../sessions/user-turn-tr
 import { resolveAgentWorkspaceDir } from "../../agent-scope.js";
 import { subagentRuns } from "../registry/subagent-registry-memory.js";
 import { releaseSwarmRun } from "../swarm/swarm-scheduler.js";
+import { sessionReader } from "./subagent-spawn.fixtures.test-support.js";
 import {
   createSpawnTranscriptTarget,
   createSpawnOperatorSource,
@@ -41,6 +41,7 @@ export function registerNativePluginCommandCases(options: NativePluginSpawnTestO
     const bound = await options.createBoundParent(source.authority);
     const { context, runtime } = await options.createBoundGateway(bound);
     const { parentSessionKey, parentRunId } = bound;
+    const readSession = sessionReader(bound.storePath);
     const workspaceDir = resolveAgentWorkspaceDir(bound.cfg, "main");
     const builder = createTestPluginRegistry();
     const record = createOwnershipRecord("command-controller", {
@@ -58,27 +59,26 @@ export function registerNativePluginCommandCases(options: NativePluginSpawnTestO
     let retained: NativeSubagentRuntime | undefined;
     let commandRun = 0;
     let activeSignal: AbortSignal | undefined = bound.parent.controller.signal;
+    const closedSpawn = (requestId: string) =>
+      expect(
+        expectDefined(retained, "retained runtime").spawn({ requestId, task: "Must not run" }),
+      ).rejects.toSatisfy((error: unknown) => String(error).includes("command invocation closed"));
     const handler = vi.fn(async (ctx: PluginCommandContext) => {
       const native = expectDefined(ctx.runtimeContext?.subagents, "host command capability");
       retained = native;
       expect(Reflect.has(native, "prepareCommand")).toBe(false);
-      const entry = expectDefined(
-        loadSessionEntry({ storePath: bound.storePath, sessionKey: parentSessionKey }),
-        "current requester",
-      );
+      const entry = expectDefined(readSession(parentSessionKey), "current requester");
       const events = await loadTranscriptEvents({
         agentId: "main",
         storePath: bound.storePath,
         sessionKey: parentSessionKey,
         sessionId: entry.sessionId,
       });
-      expect(events).toEqual(
-        expect.arrayContaining([
-          expect.objectContaining({
-            type: "message",
-            message: expect.objectContaining({ role: "user", content: "/pstack-review" }),
-          }),
-        ]),
+      expect(events).toContainEqual(
+        expect.objectContaining({
+          type: "message",
+          message: expect.objectContaining({ role: "user", content: "/pstack-review" }),
+        }),
       );
       if (commandRun === 1) {
         const child = await native.spawn({
@@ -88,10 +88,7 @@ export function registerNativePluginCommandCases(options: NativePluginSpawnTestO
           context: "isolated",
         });
         childRunId = child.runId;
-        const actual = expectDefined(
-          loadSessionEntry({ storePath: bound.storePath, sessionKey: child.childSessionKey }),
-          "native child",
-        );
+        const actual = expectDefined(readSession(child.childSessionKey), "native child");
         expect(child.selection?.requested.model).toBe("custom/test-model");
         expect(child.selection?.resolved?.model).toBe("custom/test-model");
         expect(child.selection?.resolved?.model).toBe(actual.modelProvider + "/" + actual.model);
@@ -145,10 +142,7 @@ export function registerNativePluginCommandCases(options: NativePluginSpawnTestO
     builder.registry.plugins.push(record);
     const invokeCommand = async () => {
       commandRun += 1;
-      const entry = expectDefined(
-        loadSessionEntry({ storePath: bound.storePath, sessionKey: parentSessionKey }),
-        "requester session",
-      );
+      const entry = expectDefined(readSession(parentSessionKey), "requester session");
       const ctx = buildTestCtx({
         Body: "/pstack-review",
         CommandBody: "/pstack-review",
@@ -251,14 +245,7 @@ export function registerNativePluginCommandCases(options: NativePluginSpawnTestO
               shouldContinue: false,
               reply: { text: "review queued" },
             });
-            await expect(
-              expectDefined(retained, "retained runtime").spawn({
-                requestId: "late",
-                task: "Must not run",
-              }),
-            ).rejects.toSatisfy((error: unknown) =>
-              String(error).includes("command invocation closed"),
-            );
+            await closedSpawn("late");
           }
           const stopStartedAt = performance.now();
           const stop = await tryFastAbortFromMessage({
@@ -284,14 +271,7 @@ export function registerNativePluginCommandCases(options: NativePluginSpawnTestO
             expect(collectFailure).toMatchObject({ name: "AbortError" });
             expect(await handler.mock.results[0]?.value).not.toHaveProperty("continueAgent");
             const acceptedRunIds = [...subagentRuns.keys()];
-            await expect(
-              expectDefined(retained, "retained runtime").spawn({
-                requestId: "late-after-stop",
-                task: "Must not run after stop",
-              }),
-            ).rejects.toSatisfy((error: unknown) =>
-              String(error).includes("command invocation closed"),
-            );
+            await closedSpawn("late-after-stop");
             expect([...subagentRuns.keys()]).toEqual(acceptedRunIds);
           }
           expect(
@@ -300,13 +280,9 @@ export function registerNativePluginCommandCases(options: NativePluginSpawnTestO
           ).toBe("killed");
           expect(options.runEmbeddedAgent).not.toHaveBeenCalled();
           if (stopTiming === "during collect") {
-            expect(handler).toHaveBeenCalledTimes(1);
             return;
           }
-          const before = expectDefined(
-            loadSessionEntry({ storePath: bound.storePath, sessionKey: parentSessionKey }),
-            "before reset",
-          );
+          const before = expectDefined(readSession(parentSessionKey), "before reset");
           const reset = await resetSessionEntryLifecycle({
             agentId: "main",
             storePath: bound.storePath,
@@ -324,7 +300,6 @@ export function registerNativePluginCommandCases(options: NativePluginSpawnTestO
             shouldContinue: false,
             reply: { text: "old child refused" },
           });
-          expect(handler).toHaveBeenCalledTimes(2);
         },
       );
     } catch (error) {

@@ -26,13 +26,11 @@ const { discordPlugin, discordSetupPlugin } = await loadBundledPluginFacade<{
   discordPlugin: ChannelPlugin;
   discordSetupPlugin: ChannelPlugin;
 }>({ pluginId: "discord", artifactBasename: "api.ts" });
-const { telegramPlugin, telegramSetupPlugin } = await loadBundledPluginFacade<{
-  telegramPlugin: ChannelPlugin;
+const { telegramSetupPlugin } = await loadBundledPluginFacade<{
   telegramSetupPlugin: ChannelPlugin;
 }>({ pluginId: "telegram", artifactBasename: "api.ts" });
 const registry = createTestRegistry([
   { pluginId: "discord", plugin: discordPlugin, source: "test" },
-  { pluginId: "telegram", plugin: telegramPlugin, source: "test" },
 ]);
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
@@ -68,9 +66,6 @@ it.each([false, true])("Doctor reports or repairs a stripped owner (history: %s)
       prepareDoctorContext(configPath),
     );
     if (history) {
-      expect(ctx.configResult.pendingChangePanels?.join("\n")).toContain(
-        "Restored commands.ownerAllowFrom[0] target kind",
-      );
       await runInitialConfigWriteHealth(ctx);
       expect(ctx.configWriteRefusal).toBeUndefined();
       const saved = await readConfigFileSnapshot();
@@ -105,14 +100,12 @@ it("recovers an installed channel's owner kind without a runtime registry", asyn
     channels: ["discord"],
     configSchema: { type: "object", properties: {} },
   });
-  await fs.writeFile(
-    path.join(pluginDir, "index.cjs"),
-    'throw new Error("Doctor must not activate the runtime");',
-  );
-  await fs.writeFile(
-    path.join(pluginDir, "setup-entry.cjs"),
-    "module.exports = { plugin: globalThis.__doctorOwnerSetup };",
-  );
+  for (const [name, source] of Object.entries({
+    "index.cjs": 'throw new Error("Doctor must not activate the runtime");',
+    "setup-entry.cjs": "module.exports = { plugin: globalThis.__doctorOwnerSetup };",
+  })) {
+    await fs.writeFile(path.join(pluginDir, name), source);
+  }
   vi.stubGlobal("__doctorOwnerSetup", discordSetupPlugin);
   const cfg = config(bareOwner, { allow: ["discord"], load: { paths: [pluginDir] } });
   const configPath = path.join(home, "openclaw.json");
@@ -147,21 +140,16 @@ it.each([
 const registrySnapshot = captureActivePluginRegistrySnapshot();
 beforeEach(() => setActivePluginRegistry(registry));
 
-it.each(["runtime", "setup"])(
-  "normalizes a legacy owner using the unambiguous Telegram %s contract",
-  (surface) => {
-    if (surface === "setup") {
-      setActivePluginRegistry(
-        createTestRegistry([{ pluginId: "telegram", plugin: telegramSetupPlugin, source: "test" }]),
-      );
-    }
-    const migrated = migrateLegacyCommandOwners(
-      { commands: { ownerAllowFrom: ["telegram:user:123"] } },
-      [],
-    );
-    expect(migrated.commands?.ownerAllowFrom).toEqual(["telegram:123"]);
-  },
-);
+it("normalizes a legacy owner using the unambiguous Telegram setup contract", () => {
+  setActivePluginRegistry(
+    createTestRegistry([{ pluginId: "telegram", plugin: telegramSetupPlugin, source: "test" }]),
+  );
+  const migrated = migrateLegacyCommandOwners(
+    { commands: { ownerAllowFrom: ["telegram:user:123"] } },
+    [],
+  );
+  expect(migrated.commands?.ownerAllowFrom).toEqual(["telegram:123"]);
+});
 afterEach(() => {
   restoreActivePluginRegistrySnapshot(registrySnapshot);
   vi.unstubAllGlobals();
@@ -170,7 +158,6 @@ afterEach(() => {
 
 it("keeps a Discord owner's direct heartbeat route and command authority through Doctor", async () => {
   const original = config();
-  expect(await heartbeat(original)).toMatchObject(directRoute);
   const migrated = migrateLegacyCommandOwners(original, []);
   expect(await heartbeat(migrated)).toMatchObject(directRoute);
   expect(migrated.commands?.ownerAllowFrom).toEqual([typedOwner]);

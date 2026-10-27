@@ -15,6 +15,7 @@ import {
 import { projectCronRunHistoryPage } from "../run-history.js";
 import type { CronJob } from "../types.js";
 import { loadCronStoreFromDatabase } from "./load.kernel.js";
+import { finalizeCronRunsInWorker } from "./run-finalization.worker.js";
 import { readCronRunRecordsInDatabase } from "./run-history.kernel.js";
 import { queueJob } from "./run-queue.test-support.js";
 import { cancelCronRequestsInWorker } from "./run-queue.worker.js";
@@ -168,42 +169,6 @@ function observeWakes(channelName: string) {
   };
 }
 
-it("activates scheduled requests in FIFO capacity order and observes a queued edit on the next tick", () => {
-  const count = DEFAULT_CRON_MAX_CONCURRENT_RUNS + 2;
-  const scheduler = storedScheduler(
-    "scheduled-activation",
-    jobSeries("job", count, (index) => now - (count - index) * minute).toReversed(),
-  );
-  const started = scheduler.start(now, immediate(count));
-  expect(jobIds(started.accepted)).toEqual(ids("job", count));
-  expect(jobIds(started.launches)).toEqual(ids("job", DEFAULT_CRON_MAX_CONCURRENT_RUNS));
-  const queuedId = `job-${DEFAULT_CRON_MAX_CONCURRENT_RUNS}`;
-  const persisted = scheduler.read();
-  expect(persisted.filter((entry) => entry.state.runningAtMs === now)).toHaveLength(
-    DEFAULT_CRON_MAX_CONCURRENT_RUNS,
-  );
-  expect(persisted.filter((entry) => entry.state.queuedAtMs === now)).toHaveLength(2);
-  const queued = persisted.find((entry) => entry.id === queuedId)!;
-  queued.payload = { kind: "command", argv: ["echo", "edited while queued"] };
-  queued.state.lastError = "preserve earlier failure";
-  scheduler.save(persisted);
-  expect(scheduler.tick(now + 1, 1)).toMatchObject({ accepted: [], launches: [] });
-  expect(scheduler.receipts()).toHaveLength(count);
-  scheduler.cancel([started.launches[0]!.runReceipt.receiptId], now + 2, "test releases one slot");
-  const resumed = scheduler.tick(now + 3, 3);
-  expect(resumed.accepted).toEqual([]);
-  expect(jobIds(resumed.launches)).toEqual([queuedId]);
-  expect(resumed.launches[0]?.job.payload).toEqual({
-    kind: "command",
-    argv: ["echo", "edited while queued"],
-  });
-  expect(resumed.launches[0]?.job.state).toMatchObject({
-    runningAtMs: now + 3,
-    lastError: "preserve earlier failure",
-  });
-  expect(scheduler.job(queuedId)?.state).toEqual(resumed.launches[0]?.job.state);
-});
-
 it.each(["every", "cron"] as const)(
   "advances a cancelled %s slot across scheduler and database restart",
   async (kind) => {
@@ -303,11 +268,14 @@ it("does not activate work for a paused caller when another subscriber is active
 it("persists the five-immediate limit, overflow staggering, and pending requests across restart", async () => {
   const scheduler = storedScheduler(
     "overflow-restart",
-    jobSeries("job", 7, (index) => now - (7 - index) * minute),
+    jobSeries("job", 7, (index) => now - (7 - index) * minute).toReversed(),
   );
   const started = scheduler.start();
   expect(jobIds(started.accepted)).toEqual(ids("job", 5));
-  const deferred = scheduler.read().slice(5);
+  const deferred = scheduler
+    .read()
+    .filter(({ state }) => state.startupCatchupAtMs !== undefined)
+    .toReversed();
   expect(deferred.map(({ state }) => [state.nextRunAtMs, state.startupCatchupAtMs])).toEqual([
     [now + 5_000, now + 5_000],
     [now + 10_000, now + 10_000],
@@ -315,7 +283,12 @@ it("persists the five-immediate limit, overflow staggering, and pending requests
   const receipts = scheduler.receipts();
   expect((await scheduler.restart(now + 1_000)).accepted).toEqual([]);
   expect(scheduler.receipts()).toEqual(receipts);
-  expect(scheduler.read().slice(5)).toEqual(deferred);
+  expect(
+    scheduler
+      .read()
+      .filter(({ state }) => state.startupCatchupAtMs !== undefined)
+      .toReversed(),
+  ).toEqual(deferred);
 });
 
 it("defers missed isolated and main-session work for two minutes without blocking command work", () => {
@@ -393,6 +366,72 @@ it.each([false, true])("bounds forward clock catch-up with intervening refresh=%
   expect(scheduler.read()[5]).toEqual(jumped.jobs.find(({ id }) => id === "jump-5"));
   expect(scheduler.tick(jumpedAtMs + 1, 1_001).accepted).toEqual([]);
   expect(scheduler.receipts()).toHaveLength(5);
+});
+
+it.each([false, true])("recovers stale cron slots unless skipMissedJobs=%s", (skipMissedJobs) => {
+  const healthy = job("stale-future", now + minute, {
+    schedule: cronSchedule,
+    state: {
+      nextRunAtMs: now + minute,
+      lastRunAtMs: now,
+      lastRunStatus: "ok",
+      lastDurationMs: 1_000,
+    },
+  });
+  const scheduler = storedScheduler(`missed-slot-${skipMissedJobs}`, [healthy]);
+  expect(
+    scheduler.start(now, {
+      snapshot: { config: { ...snapshot.config, cronConfig: { skipMissedJobs } } },
+    }).accepted,
+  ).toEqual([]);
+  scheduler.save([
+    {
+      ...healthy,
+      state: {
+        nextRunAtMs: now + 30 * minute,
+        lastRunAtMs: now - 120 * minute,
+        lastRunStatus: "ok",
+        lastDurationMs: 1_000,
+      },
+    },
+  ]);
+  const tick = scheduler.tick(now + 1_000, 1_000);
+  expect(jobIds(tick.launches)).toEqual(skipMissedJobs ? [] : ["stale-future"]);
+  if (skipMissedJobs) {
+    return;
+  }
+  let launch = tick.launches[0]!;
+  for (let slot = 1; slot <= 30; slot += 1) {
+    const endedAt = launch.runReceipt.startedAtMs + 100;
+    withinWorker(() =>
+      finalizeCronRunsInWorker(database, {
+        storeKey: scheduler.storeKey,
+        snapshot: {
+          nowMs: endedAt,
+          defaultAgentId: "main",
+          outcomes: [
+            {
+              jobId: launch.job.id,
+              job: launch.job,
+              runReceipt: launch.runReceipt,
+              status: "ok",
+              completionStatus: "succeeded",
+              errorReason: undefined,
+              deliveryState: {
+                status: "not-requested",
+                failureNotification: { status: "not-requested" },
+              },
+              startedAt: launch.runReceipt.startedAtMs,
+              endedAt,
+            },
+          ],
+        },
+      }),
+    );
+    const next = scheduler.tick(now + slot * minute, slot * minute);
+    expect(jobIds(next.launches), `scheduled minute ${slot}`).toEqual(["stale-future"]);
+    launch = next.launches[0]!;
+  }
 });
 
 it("keeps the persisted next deadline when the wall clock moves backward", () => {

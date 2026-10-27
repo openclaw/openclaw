@@ -3,8 +3,8 @@
 import { expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { SessionCapability } from "../../lib/sessions/index.ts";
+import { createGatewayBrowserClientFixture } from "./chat-application-context.test-support.ts";
 import { createTestChatPane, nativeHistoryMessage } from "./chat-pane-history.test-support.ts";
-import { createGatewayBrowserClientFixture } from "./chat-pane.test-support.ts";
 import { flushDeferredRowPrune } from "./components/chat-transcript.test-support.ts";
 
 const sourceId = "source-message";
@@ -76,13 +76,18 @@ it.each([true, false])(
       expect(pane.currentReplyNavigationId(state.sessionKey)).toBe(sourceId);
       await vi.waitFor(() => expect(revealMessage).toHaveBeenCalledWith(sourceId));
       for (const [index, offset] of [2, 4].entries()) {
-        expect(request).toHaveBeenNthCalledWith(index + 1, "chat.history", {
-          sessionKey: state.sessionKey,
-          limit: 1000,
-          maxBytes: 3 * 1024 * 1024,
-          toolResultMaxChars: 2_000,
-          offset,
-        });
+        expect(request).toHaveBeenNthCalledWith(
+          index + 1,
+          "chat.history",
+          {
+            sessionKey: state.sessionKey,
+            limit: 1000,
+            maxBytes: 3 * 1024 * 1024,
+            toolResultMaxChars: 2_000,
+            offset,
+          },
+          { signal: expect.any(AbortSignal) },
+        );
       }
     } else {
       await vi.waitFor(() => expect(state.lastError).toBe("The original message is unavailable."));

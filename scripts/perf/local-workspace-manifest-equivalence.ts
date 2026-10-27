@@ -5,8 +5,11 @@
  *   OPENCLAW_BENCH_BASELINE_DIR=$PWD/.local/buf28/baseline node --import ./scripts/tsx.mjs scripts/perf/local-workspace-manifest-equivalence.ts run .local/buf28/equivalence baseline
  *   node --import ./scripts/tsx.mjs scripts/perf/local-workspace-manifest-equivalence.ts run .local/buf28/equivalence candidate
  *   node --import ./scripts/tsx.mjs scripts/perf/local-workspace-manifest-equivalence.ts compare .local/buf28/equivalence
- * Both sides use the same immutable files, so filesystem identities and compressed
- * mutations compare exactly. Each side owns separate synthetic SQLite state.
+ * Both sides use the same immutable files and separate synthetic SQLite state.
+ * Compare manifest bytes and public root/delta references; storage-only records,
+ * fingerprints, preparation batches and compressed mutations intentionally differ.
+ * Includes contained and escaping symlinks, and repeats scans after acceptance
+ * to exercise each version's persisted stat reuse.
  * Behavioral equivalence is expected to pass on both versions; the companion
  * measurement script supplies the performance regression evidence.
  */
@@ -15,11 +18,8 @@ import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { deserialize } from "node:v8";
-import { inflateRawSync } from "node:zlib";
-import type { LocalWorkspaceManifestScan } from "../../src/gateway/worker-environments/local-workspace-manifest-scan.js";
-import type { LocalWorkspaceManifestRecord } from "../../src/gateway/worker-environments/local-workspace-manifest-tree.js";
-import type { LocalWorkspaceMutation } from "../../src/gateway/worker-environments/local-workspace-store.types.js";
+import type { LocalWorkspaceStore } from "../../src/gateway/worker-environments/local-workspace-store.js";
+import type { LocalWorkspaceManifestScan } from "../../src/gateway/worker-environments/local-workspace-store.types.js";
 
 const [mode, scratchArgument, label] = process.argv.slice(2);
 assert.ok(["prepare", "run", "compare"].includes(mode ?? "") && scratchArgument);
@@ -40,28 +40,39 @@ type Fixture = {
   after: Files;
   hostOnly?: Files;
   hostUntracked?: Files;
+  beforeLinks?: Files;
+  afterLinks?: Files;
+  escapingLinks?: Files;
 };
 const digest = (value: string | Uint8Array) => createHash("sha256").update(value).digest("hex");
 const byPath = <T extends { path: string }>(a: T, b: T) =>
   a.path < b.path ? -1 : a.path > b.path ? 1 : 0;
 const filesFor = (fixture: Fixture, target: "canonical" | "projection") =>
   path.join(scratch, "files", fixture.name, target);
-function document(files: Files) {
+function document(files: Files, links: Files = {}) {
   const directories = new Set<string>();
-  const entries = Object.entries(files).map(([entryPath, content]) => {
-    let parent = path.posix.dirname(entryPath);
-    while (parent !== ".") {
-      directories.add(parent);
-      parent = path.posix.dirname(parent);
-    }
-    return {
+  const entries = [
+    ...Object.entries(files).map(([entryPath, content]) => ({
       path: entryPath,
       type: "file" as const,
       mode: 0o644,
       size: Buffer.byteLength(content),
       sha256: digest(content),
-    };
-  });
+    })),
+    ...Object.entries(links).map(([entryPath, target]) => ({
+      path: entryPath,
+      type: "symlink" as const,
+      mode: 0o777,
+      target,
+    })),
+  ];
+  for (const entry of entries) {
+    let parent = path.posix.dirname(entry.path);
+    while (parent !== ".") {
+      directories.add(parent);
+      parent = path.posix.dirname(parent);
+    }
+  }
   // Independent expected wire bytes: directories have mode 0700, files 0644,
   // and canonical JSON uses path order with directories in the entries array.
   return JSON.stringify({
@@ -73,32 +84,22 @@ function document(files: Files) {
     ].toSorted(byPath),
   });
 }
-function recordsForComparison(records: LocalWorkspaceManifestRecord[]) {
-  return records.toSorted((a, b) => byPath(a.node, b.node));
-}
 function scanForComparison(value: LocalWorkspaceManifestScan) {
-  const { observation, ...scan } = value;
-  const mutation = observation
-    ? (deserialize(inflateRawSync(observation.mutation)) as LocalWorkspaceMutation)
-    : undefined;
-  if (mutation?.kind === "update" && mutation.manifest) {
-    mutation.manifest.records = recordsForComparison(mutation.manifest.records);
-    mutation.manifest.removed.sort();
-  }
   return {
-    ...scan,
-    records: recordsForComparison(scan.records),
-    removed: scan.removed.toSorted(),
-    ...(observation
-      ? {
-          observation: {
-            ...observation,
-            mutation,
-          },
-        }
-      : {}),
+    previousRoot: value.previousRoot,
+    resultingRoot: value.resultingRoot,
+    baseManifestRaw: value.baseManifestRaw,
+    baseManifestRef: value.baseManifestRef,
+    currentManifestRaw: value.currentManifestRaw,
+    currentManifestRef: value.currentManifestRef,
+    buildCacheInputs: value.buildCacheInputs,
   };
 }
+type ProjectionSeed = Parameters<LocalWorkspaceStore["create"]>[0];
+type LegacyProjectionSeed = Omit<
+  ProjectionSeed,
+  "tree_root_digest" | "source_paths_digest" | "canonical_fingerprints" | "projection_fingerprints"
+>;
 const edited = { ...initial, "source.txt": "modified\n" };
 const addedRemoved = {
   ".gitignore": initial[".gitignore"],
@@ -124,6 +125,18 @@ const fixtures: Fixture[] = [
     hostOnly: { "admitted.txt": "host-index input\n" },
     hostUntracked: { "private.txt": "host-only untracked\n" },
   },
+  {
+    name: "symlinks",
+    before: initial,
+    after: initial,
+    beforeLinks: { link: "delete.txt" },
+    afterLinks: {
+      link: "source.txt",
+      "nested/up": "../source.txt",
+      dangling: "missing.txt",
+    },
+    escapingLinks: { escape: "../outside.txt" },
+  },
 ];
 
 if (mode === "prepare") {
@@ -145,6 +158,12 @@ if (mode === "prepare") {
         await fs.mkdir(path.dirname(filename), { recursive: true });
         await fs.writeFile(filename, content, { mode: 0o644 });
       }
+      const links = { ...fixture.afterLinks, ...fixture.escapingLinks };
+      for (const [entryPath, destination] of Object.entries(links)) {
+        const filename = path.join(root, entryPath);
+        await fs.mkdir(path.dirname(filename), { recursive: true });
+        await fs.symlink(destination, filename);
+      }
       if (target === "canonical") {
         execFileSync("git", ["init", "--quiet", root]);
         execFileSync("git", [
@@ -153,7 +172,7 @@ if (mode === "prepare") {
           "add",
           "--force",
           "--",
-          ...Object.keys({ ...fixture.after, ...fixture.hostOnly }),
+          ...Object.keys({ ...fixture.after, ...fixture.hostOnly, ...links }),
         ]);
       }
     }
@@ -167,7 +186,13 @@ if (mode === "prepare") {
     JSON.stringify({
       equivalent: true,
       cases: candidate.length,
-      actionsPerCase: ["scan", "materialize", "replace", "materialize after replace"],
+      actionsPerCase: [
+        "scan",
+        "materialize",
+        "scan with accepted stat hints",
+        "replace",
+        "materialize after replace",
+      ],
     }),
   );
 } else {
@@ -216,15 +241,16 @@ if (mode === "prepare") {
                 ...fixture.after,
                 ...fixture.hostOnly,
               },
+          fixture.afterLinks,
         );
         const result = await withLocalWorkspaceStore({ worktreeId: id, env }, async (store) => {
-          const rawManifest = document(fixture.before);
+          const rawManifest = document(fixture.before, fixture.beforeLinks);
           const baseline = {
             rawManifest,
             manifestRef: `sha256:${digest(rawManifest)}`,
             buildCacheInputs: [],
           };
-          const created = await store.create({
+          const row: LegacyProjectionSeed = {
             worktree_id: id,
             agent_id: "main",
             session_key: "agent:main:synthetic",
@@ -232,7 +258,9 @@ if (mode === "prepare") {
             lifecycle_revision: null,
             projection_path: filesFor(fixture, "projection"),
             base_commit: baseCommit,
-            source_paths_json: JSON.stringify(Object.keys(fixture.before)),
+            source_paths_json: JSON.stringify(
+              Object.keys({ ...fixture.before, ...fixture.beforeLinks }),
+            ),
             baseline_json: null,
             baseline_ref: null,
             checkpoint_json: null,
@@ -242,7 +270,21 @@ if (mode === "prepare") {
             journal_pack: null,
             paused_runtimes_json: null,
             created_at_ms: 1,
-          });
+          };
+          // The explicit historical overlay supplies the v31 create contract, without CAS columns.
+          const createLegacy = store.create as (
+            row: LegacyProjectionSeed,
+          ) => ReturnType<LocalWorkspaceStore["create"]>;
+          const created =
+            label === "baseline"
+              ? await createLegacy(row)
+              : await store.create({
+                  ...row,
+                  tree_root_digest: null,
+                  source_paths_digest: null,
+                  canonical_fingerprints: null,
+                  projection_fingerprints: null,
+                });
           await store.update(created, {}, undefined, baseline);
           const scanned = await store.manifest(store.get()!, {
             kind: "scan",
@@ -254,10 +296,38 @@ if (mode === "prepare") {
             await store.accept(scanned.observation);
           }
           await store.update(store.get()!, {}, undefined, scanned);
+          if (label === "candidate") {
+            assert.ok(scanned.treeRoot, `${id}: scan omitted its immutable root`);
+            assert.equal(
+              Buffer.from(store.get()!.tree_root_digest!).toString("hex"),
+              scanned.treeRoot.slice("sha256:".length),
+              `${id}: acceptance did not publish its tree root`,
+            );
+            const fingerprints =
+              target === "canonical"
+                ? store.get()!.projection_fingerprints
+                : store.get()!.canonical_fingerprints;
+            assert.ok(fingerprints, `${id}: acceptance omitted its target fingerprints`);
+          }
           const accepted = await store.manifest(store.get()!, { kind: "materialize" });
           assert.ok(accepted.kind === "materialize");
           assert.equal(accepted.rawManifest, expectedRaw, `${id}: accepted file inventory differs`);
           assert.equal(accepted.manifestRef, `sha256:${digest(expectedRaw)}`);
+          const reused = await store.manifest(store.get()!, {
+            kind: "scan",
+            target,
+            canonicalRoot: filesFor(fixture, "canonical"),
+          });
+          assert.ok(reused.kind === "scan");
+          assert.equal(reused.resultingRoot, scanned.resultingRoot, `${id}: repeat root differs`);
+          assert.deepEqual(reused.records, [], `${id}: repeat scan changes records`);
+          assert.deepEqual(reused.removed, [], `${id}: repeat scan removes records`);
+          assert.equal(reused.observation, undefined, `${id}: repeat scan changes stat hints`);
+          assert.equal(
+            reused.currentManifestRaw,
+            reused.baseManifestRaw,
+            `${id}: repeat scan reports a content delta`,
+          );
           const replacement = await store.manifest(store.get()!, {
             kind: "replace",
             rawManifest: accepted.rawManifest,
@@ -272,6 +342,7 @@ if (mode === "prepare") {
             scanned.resultingRoot,
             `${id}: replace changes accepted root`,
           );
+          const replacementRoot = store.get()!.baseline_ref;
           const replaced = await store.manifest(store.get()!, { kind: "materialize" });
           assert.deepEqual(
             replaced,
@@ -282,10 +353,10 @@ if (mode === "prepare") {
           return {
             id,
             scan: scanForComparison(scanned),
+            reusedScan: scanForComparison(reused),
             accepted,
             replacement: {
-              ...replacement.update,
-              mutation: Buffer.from(replacement.update.mutation).toString("base64"),
+              resultingRoot: replacementRoot,
             },
           };
         });

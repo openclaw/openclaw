@@ -19,7 +19,9 @@ import {
 } from "../../config/runtime-snapshot.js";
 import type { ModelDefinitionConfig } from "../../config/types.models.js";
 import * as logger from "../../logger.js";
+import { createEmptyPluginSetupRegistry } from "../../plugins/setup-registry.test-support.js";
 import * as statusText from "../../status/status-text.js";
+import { expectText } from "../../test-utils/text-assertions.js";
 import { buildStatusPluginsReply, buildStatusText } from "./commands-status.js";
 import { buildKiraStatusReply, buildStatusReplyForTest } from "./commands-status.test-support.js";
 import { baseCommandTestConfig, buildCommandTestParams } from "./commands.test-harness.js";
@@ -116,15 +118,6 @@ const statusDefaults = {
 
 async function renderStatus(params: Partial<StatusTextParams>) {
   return normalizeTestText(await buildStatusText({ ...statusDefaults, ...params }));
-}
-
-function expectText(text: string, includes: string[], excludes: string[] = []) {
-  for (const part of includes) {
-    expect(text).toContain(part);
-  }
-  for (const part of excludes) {
-    expect(text).not.toContain(part);
-  }
 }
 
 function expectSelectedUsage(text: string, extra: string[] = []) {
@@ -249,13 +242,7 @@ describe("buildStatusReply subagent summary", () => {
   beforeEach(async () => {
     setRuntimeConfigSnapshot(baseCfg);
     cliBackendsTesting.setDepsForTest({
-      resolvePluginSetupRegistry: () => ({
-        providers: [],
-        cliBackends: [],
-        configMigrations: [],
-        autoEnableProbes: [],
-        diagnostics: [],
-      }),
+      resolvePluginSetupRegistry: () => createEmptyPluginSetupRegistry(),
       resolveRuntimeCliBackends: () => [
         {
           id: "claude-cli",

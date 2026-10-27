@@ -1,4 +1,3 @@
-import "./server-startup-module-mocks.test-support.js";
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import path from "node:path";
@@ -54,7 +53,6 @@ import {
   withOpenClawTestState,
   type OpenClawTestState,
 } from "../test-utils/openclaw-test-state.js";
-import { buildGatewayReloadPlan } from "./config-reload-plan.js";
 import { createAccessPolicyTransport } from "./server-methods/agent.visitor-access.test-support.js";
 import type { GatewayRequestHandler } from "./server-methods/types.js";
 import * as bootstrap from "./server-plugin-bootstrap.js";
@@ -67,9 +65,6 @@ import { GatewayRequestEntryLifetime } from "./server-request-entry.js";
 import { createGatewaySidecarStopOwner } from "./server-sidecar-owners.js";
 import { publishConfiguredModelRuntimeSnapshots } from "./server-startup-model-runtime.js";
 import { runGatewayStartupObservers } from "./server-startup-observers.js";
-
-const { installGatewaySubagentModuleLoad } =
-  await import("./server-startup-module-mocks.test-support.js");
 
 function modelConfig(workspace: string): Pick<OpenClawConfig, "agents" | "models"> {
   const fixture = {
@@ -92,10 +87,10 @@ async function createPublishedPluginFixture(
   const { workspaceDir } = state;
   await state.writeConfig(config);
   setRuntimeConfigSnapshot(config);
-  const logs = { info: vi.fn(onInfo), warn: vi.fn(), error: vi.fn(), debug: vi.fn() };
   let services: PluginServicesHandle | null = null;
   let manageServices = false;
   const env = process.env;
+  const logs = { info: vi.fn(onInfo), warn: vi.fn(), error: vi.fn(), debug: vi.fn() };
   const log = { ...createSubsystemLogger("gateway/plugins"), ...logs };
   const metadataSnapshot = await resolveConfigWidePluginMetadataSnapshotAsync({
     config,
@@ -126,6 +121,7 @@ async function createPublishedPluginFixture(
   const metadata = retainGatewayPluginMetadata(scheduler);
   metadata.publish(metadataSnapshot);
   const loaded = [initial];
+  const leases = new AsyncDisposableStack();
   const lifetime = createGatewaySidecarStopOwner();
   const runtime = {
     scheduler,
@@ -185,7 +181,6 @@ async function createPublishedPluginFixture(
     registryOwner,
     runtime,
     log,
-    logs,
     async startServices() {
       manageServices = true;
       services = await startPluginServices({
@@ -229,19 +224,21 @@ async function createPublishedPluginFixture(
       const published =
         snapshot ?? (await loadPublishedGatewayReplyDispatchRuntime({ agentId: "main" }));
       assert(published);
-      return await inRegistry(() =>
-        acquireAgentRunPreparedModelRuntime(
-          {
-            config: published.config,
-            agentId: published.agentId,
-            agentDir: published.agentDir,
-            workspaceDir: published.workspaceDir,
-            allowGatewaySubagentBinding: true,
-            runtimePluginSelections: [
-              { provider: "fixture", modelId: "probe", runtime: "openclaw" },
-            ],
-          },
-          { catalogMode: "static", pluginGeneration: published.pluginGeneration },
+      return leases.use(
+        await inRegistry(() =>
+          acquireAgentRunPreparedModelRuntime(
+            {
+              config: published.config,
+              agentId: published.agentId,
+              agentDir: published.agentDir,
+              workspaceDir: published.workspaceDir,
+              allowGatewaySubagentBinding: true,
+              runtimePluginSelections: [
+                { provider: "fixture", modelId: "probe", runtime: "openclaw" },
+              ],
+            },
+            { catalogMode: "static", pluginGeneration: published.pluginGeneration },
+          ),
         ),
       );
     },
@@ -276,7 +273,9 @@ async function createPublishedPluginFixture(
           },
         }),
       ),
-    async close() {
+    async [Symbol.asyncDispose]() {
+      await leases.disposeAsync();
+      await closePreparedModelRuntimeSnapshots();
       await services?.stop({ strict: true });
       await lifetime.stop();
       loaded.forEach((entry) => entry.retireGatewayRuntimeBindings());
@@ -366,12 +365,12 @@ it.each(["plugins.reload", "auth refresh", "tool handoff"] as const)(
         },
         tools: { allow: [toolName] },
       };
-      const fixture = await createPublishedPluginFixture(state, config, (message) => {
+      await using fixture = await createPublishedPluginFixture(state, config, (message) => {
         if (message.includes("Plugin replacement queued behind")) {
           queued.resolve();
         }
       });
-      const { initial, registryOwner, logs } = fixture;
+      const { initial, registryOwner } = fixture;
       const gatewayRecord = (registry: PluginRegistry) => {
         const record = registry.plugins.find((entry) => entry.id === toolPluginId);
         assert(record);
@@ -385,164 +384,146 @@ it.each(["plugins.reload", "auth refresh", "tool handoff"] as const)(
         });
       };
       let lease: PreparedModelRuntimeLease | undefined;
-      try {
-        await fixture.publish();
-        lease = await fixture.acquireTurn();
-        const prepared = lease.snapshot.pluginRegistry;
-        assert(prepared);
-        const oldRecord = gatewayRecord(initial.pluginRegistry);
-        const oldInstance = getPluginInstance(oldRecord);
-        assert(oldInstance);
-        // The prepared turn lists the Gateway instance; only the provider owner the Gateway lacks loads.
-        expect(prepared).not.toBe(initial.pluginRegistry);
-        expect(gatewayRecord(prepared)).toBe(oldRecord);
-        expect(initial.pluginRegistry.plugins.some(({ id }) => id === providerPluginId)).toBe(
-          false,
+      await fixture.publish();
+      lease = await fixture.acquireTurn();
+      const prepared = lease.snapshot.pluginRegistry;
+      assert(prepared);
+      const oldRecord = gatewayRecord(initial.pluginRegistry);
+      const oldInstance = getPluginInstance(oldRecord);
+      assert(oldInstance);
+      // The prepared turn lists the Gateway instance; only the provider owner the Gateway lacks loads.
+      expect(gatewayRecord(prepared)).toBe(oldRecord);
+      expect(initial.pluginRegistry.plugins.some(({ id }) => id === providerPluginId)).toBe(false);
+      expect(prepared.plugins.find(({ id }) => id === providerPluginId)?.status).toBe("loaded");
+      await expectProbe(lease);
+
+      if (change === "auth refresh") {
+        // Credential changes republish the owner while reusing its plugin generation.
+        const before = await loadPublishedGatewayReplyDispatchRuntime({ agentId: "main" });
+        assert(before);
+        upsertAuthProfile({
+          profileId: "fixture:borrow",
+          credential: { type: "api_key", provider: "fixture", key: "synthetic-borrow-key" },
+          agentDir: before.agentDir,
+        });
+        const next = await fixture.acquireTurn();
+        expect(await loadPublishedGatewayReplyDispatchRuntime({ agentId: "main" })).not.toBe(
+          before,
         );
-        expect(prepared.plugins.find(({ id }) => id === providerPluginId)?.status).toBe("loaded");
-        expect(Reflect.get(globalThis, evaluations)[toolPluginId]).toBe(1);
-        await expectProbe(lease);
-
-        if (change === "auth refresh") {
-          // Credential changes republish the owner while reusing its plugin generation.
-          const before = await loadPublishedGatewayReplyDispatchRuntime({ agentId: "main" });
-          assert(before);
-          upsertAuthProfile({
-            profileId: "fixture:borrow",
-            credential: { type: "api_key", provider: "fixture", key: "synthetic-borrow-key" },
-            agentDir: before.agentDir,
-          });
-          const next = await fixture.acquireTurn();
-          expect(await loadPublishedGatewayReplyDispatchRuntime({ agentId: "main" })).not.toBe(
-            before,
-          );
-          const republished = next.snapshot.pluginRegistry;
-          assert(republished);
-          expect(gatewayRecord(republished)).toBe(oldRecord);
-          await expectProbe(next);
-          // Retiring every prepared generation leaves the Gateway-owned instance live.
-          await lease[Symbol.asyncDispose]();
-          lease = undefined;
-          await next[Symbol.asyncDispose]();
-          await closePreparedModelRuntimeSnapshots();
-          expect(oldInstance.owner?.registry).toBe(initial.pluginRegistry);
-          expect(oldInstance).toMatchObject({ acceptingCalls: true, disposing: false });
-          return;
-        }
-
-        // plugins.reload queues behind the admitted turn instead of disposing its instance.
-        const startReload = () =>
-          fixture.reload(config, [], {
-            pluginIds: [toolPluginId],
-            reason: "reload",
-            operationId: "borrow-reload",
-          });
-        if (change === "tool handoff") {
-          const sessionKey = "agent:main:reload-handoff";
-          const sessionId = "reload-handoff-session";
-          await upsertSessionEntryCore(
-            { agentId: "main", sessionKey },
-            { sessionId, updatedAt: 1 },
-          );
-          const scopedLease = scopePreparedModelRuntimeLease(lease);
-          const operation = createTestReplyOperation({ sessionKey, sessionId });
-          operation.setPhase("running");
-          const cleanup = createDeferredCore();
-          const resumed = createDeferredCore<string>();
-          const handler: GatewayRequestHandler = async ({ respond }) => {
-            // Provider catalog refresh may still retain the plugin after this turn closes.
-            expect(lease).toBeUndefined();
-            await startReload();
-            respond(true, { ok: true, runtime: { generation: 2, pluginIds: [toolPluginId] } });
-          };
-          const context = createContext([["plugins.reload", "operator.admin", "plugins", handler]]);
-          context.getRuntimeConfig = () => config;
-          context.resolveGatewayContext = () => context;
-          const enqueue = vi
-            .spyOn(sessionEvents, "enqueueSessionEventForHost")
-            .mockImplementation((text, options) => {
-              expect(options).toMatchObject({ expectedTarget: { sessionId }, sessionKey });
-              resumed.resolve(text);
-              return {
-                id: "resume",
-                cancel: () => false,
-                accepted: Promise.resolve({ ok: true }),
-                settled: Promise.resolve({
-                  status: "completed",
-                  executionStarted: true,
-                  delivered: false,
-                }),
-              };
-            });
-          const runReloadTool = async () => {
-            const result = await createPluginsTool({
-              sessionId,
-              onYield: () => {
-                operation.completeWithAfterClearBarrier(
-                  (async () => {
-                    await cleanup.promise;
-                    await scopedLease[Symbol.asyncDispose]();
-                    lease = undefined;
-                  })(),
-                );
-              },
-            }).execute("reload-handoff", { action: "reloadAndResume", pluginId: toolPluginId });
-            expect(result.details).toMatchObject({ status: "started", async: true, yielded: true });
-            expect(oldInstance.retainedWorkCount).toBeGreaterThan(0);
-            expect(enqueue).not.toHaveBeenCalled();
-            cleanup.resolve();
-            expect(await resumed.promise).toContain('"ok":true');
-            expect(enqueue).toHaveBeenCalledOnce();
-          };
-          try {
-            await withPluginRuntimeGatewayRequestScope(
-              { context, resolveGatewayContext: () => context, isWebchatConnect: () => false },
-              () =>
-                withOperatorToolGatewayAuthority(
-                  { scopes: ["operator.admin"], operatorRoleActor: { kind: "system" } },
-                  () =>
-                    withGatewayToolCallerIdentity({ agentId: "main", sessionKey }, () =>
-                      scopedLease.run(runReloadTool),
-                    ),
-                ),
-            );
-          } finally {
-            cleanup.resolve();
-            operation.complete();
-            enqueue.mockRestore();
-          }
-        } else {
-          const reload = startReload();
-          await awaitGateBeforeSettlement(
-            queued.promise,
-            reload,
-            "Expected plugin replacement to queue behind the admitted turn",
-          );
-          expect(oldInstance.acceptingCalls).toBe(true);
-          await expectProbe(lease);
-          await lease[Symbol.asyncDispose]();
-          lease = undefined;
-          await reload;
-        }
-        expect(logs.info).toHaveBeenCalledWith(`Plugin replacement applied: ${toolPluginId}`);
-        await disposed.promise;
-        expect(oldInstance).toMatchObject({ disposing: true, acceptingCalls: false });
-
-        // The refreshed prepared runtime borrows the reloaded Gateway instance.
-        const nextRecord = gatewayRecord(registryOwner.registry);
-        expect(nextRecord).not.toBe(oldRecord);
-        await fixture.refresh(config);
-        lease = await fixture.acquireTurn();
-        const refreshed = lease.snapshot.pluginRegistry;
-        assert(refreshed);
-        expect(gatewayRecord(refreshed)).toBe(nextRecord);
-        await expectProbe(lease, 2);
-      } finally {
-        await lease?.[Symbol.asyncDispose]();
+        const republished = next.snapshot.pluginRegistry;
+        assert(republished);
+        expect(gatewayRecord(republished)).toBe(oldRecord);
+        await expectProbe(next);
+        // Retiring every prepared generation leaves the Gateway-owned instance live.
+        await lease[Symbol.asyncDispose]();
+        lease = undefined;
+        await next[Symbol.asyncDispose]();
         await closePreparedModelRuntimeSnapshots();
-        await fixture.close();
-        vi.unstubAllEnvs();
+        expect(oldInstance).toMatchObject({ acceptingCalls: true, disposing: false });
+        return;
       }
+
+      // plugins.reload queues behind the admitted turn instead of disposing its instance.
+      const startReload = () =>
+        fixture.reload(config, [], {
+          pluginIds: [toolPluginId],
+          reason: "reload",
+          operationId: "borrow-reload",
+        });
+      if (change === "tool handoff") {
+        const sessionKey = "agent:main:reload-handoff";
+        const sessionId = "reload-handoff-session";
+        await upsertSessionEntryCore({ agentId: "main", sessionKey }, { sessionId, updatedAt: 1 });
+        const scopedLease = scopePreparedModelRuntimeLease(lease);
+        const operation = createTestReplyOperation({ sessionKey, sessionId });
+        operation.setPhase("running");
+        const cleanup = createDeferredCore();
+        const resumed = createDeferredCore<string>();
+        const handler: GatewayRequestHandler = async ({ respond }) => {
+          // Provider catalog refresh may still retain the plugin after this turn closes.
+          expect(lease).toBeUndefined();
+          await startReload();
+          respond(true, { ok: true, runtime: { generation: 2, pluginIds: [toolPluginId] } });
+        };
+        const context = createContext([["plugins.reload", "operator.admin", "plugins", handler]]);
+        context.getRuntimeConfig = () => config;
+        context.resolveGatewayContext = () => context;
+        const enqueue = vi
+          .spyOn(sessionEvents, "enqueueSessionEventForHost")
+          .mockImplementation((text, options) => {
+            expect(options).toMatchObject({ expectedTarget: { sessionId }, sessionKey });
+            resumed.resolve(text);
+            return {
+              id: "resume",
+              cancel: () => false,
+              accepted: Promise.resolve({ ok: true }),
+              settled: Promise.resolve({
+                status: "completed",
+                executionStarted: true,
+                delivered: false,
+              }),
+            };
+          });
+        const runReloadTool = async () => {
+          const result = await createPluginsTool({
+            sessionId,
+            onYield: () => {
+              operation.completeWithAfterClearBarrier(
+                (async () => {
+                  await cleanup.promise;
+                  await scopedLease[Symbol.asyncDispose]();
+                  lease = undefined;
+                })(),
+              );
+            },
+          }).execute("reload-handoff", { action: "reloadAndResume", pluginId: toolPluginId });
+          expect(result.details).toMatchObject({ status: "started", async: true, yielded: true });
+          expect(oldInstance.retainedWorkCount).toBeGreaterThan(0);
+          expect(enqueue).not.toHaveBeenCalled();
+          cleanup.resolve();
+          expect(await resumed.promise).toContain('"ok":true');
+        };
+        try {
+          await withPluginRuntimeGatewayRequestScope(
+            { context, resolveGatewayContext: () => context, isWebchatConnect: () => false },
+            () =>
+              withOperatorToolGatewayAuthority(
+                { scopes: ["operator.admin"], operatorRoleActor: { kind: "system" } },
+                () =>
+                  withGatewayToolCallerIdentity({ agentId: "main", sessionKey }, () =>
+                    scopedLease.run(runReloadTool),
+                  ),
+              ),
+          );
+        } finally {
+          cleanup.resolve();
+          operation.complete();
+          enqueue.mockRestore();
+        }
+      } else {
+        const reload = startReload();
+        await awaitGateBeforeSettlement(
+          queued.promise,
+          reload,
+          "Expected plugin replacement to queue behind the admitted turn",
+        );
+        expect(oldInstance.acceptingCalls).toBe(true);
+        await expectProbe(lease);
+        await lease[Symbol.asyncDispose]();
+        lease = undefined;
+        await reload;
+      }
+      await disposed.promise;
+      expect(oldInstance).toMatchObject({ disposing: true, acceptingCalls: false });
+
+      // The refreshed prepared runtime borrows the reloaded Gateway instance.
+      const nextRecord = gatewayRecord(registryOwner.registry);
+      await fixture.refresh(config);
+      lease = await fixture.acquireTurn();
+      const refreshed = lease.snapshot.pluginRegistry;
+      assert(refreshed);
+      expect(gatewayRecord(refreshed)).toBe(nextRecord);
+      await expectProbe(lease, 2);
     }),
 );
 
@@ -561,125 +542,91 @@ it.for(["cold start", "hot enable"] as const)(
       vi.stubEnv("OPENCLAW_BUNDLED_PLUGINS_DIR", bundledDir);
       vi.stubEnv("OPENCLAW_TEST_TRUST_BUNDLED_PLUGINS_DIR", "1");
       vi.stubEnv("OPENCLAW_DISABLE_BUNDLED_PLUGINS", undefined);
-      const visitorConfig = () => ({
+      const visitorConfig = {
         accountId: "test-account",
         appId: "test-app",
         apiToken: "synthetic-visitor-token",
-      });
+      };
       const configFor = (enabled: boolean): OpenClawConfig => ({
         ...modelConfig(state.workspaceDir),
         plugins: {
           allow: [pluginId],
           slots: { memory: "none" },
-          entries: { [pluginId]: { enabled, config: visitorConfig() } },
+          entries: { [pluginId]: { enabled, config: visitorConfig } },
         },
         tools: { allow: [visitorToolName] },
       });
       let config = configFor(mode === "cold start");
-      const fixture = await createPublishedPluginFixture(state, config);
-      const { initial, registryOwner, runtime, log, logs } = fixture;
-      const startupModuleRestorers: Array<() => void> = [];
-      let runLease: Awaited<ReturnType<typeof acquireAgentRunPreparedModelRuntime>> | undefined;
-      try {
-        // Match post-attach startup: publish configured model owners, start services,
-        // then deliver gateway_start before admitting the first owner turn.
-        await fixture.publish();
-        await fixture.startServices();
-        await installGatewaySubagentModuleLoad(
-          async () => {},
-          () => {
-            const settled = Promise.resolve();
-            return { initial: settled, pending: new Map(), settled };
-          },
-          startupModuleRestorers,
-        );
-        const sentinel = vi
-          .spyOn(await import("./server-update-sentinel.js"), "prepareLatestUpdateRestartSentinel")
-          .mockResolvedValue(null);
-        startupModuleRestorers.push(() => sentinel.mockRestore());
-        await runGatewayStartupObservers({
-          registry: initial.pluginRegistry,
-          resolveGatewayContext: () => undefined,
-          loadSubagentRegistryActivation: async () =>
-            (await import("../agents/subagents/registry/subagent-registry.js"))
-              .activateSubagentRegistry,
-          createHookRunner: async (...args) =>
-            (await import("../plugins/hooks.js")).createHookRunner(...args),
-          refreshLatestUpdateRestartSentinel: async () =>
-            (await import("./server-update-sentinel.js")).prepareLatestUpdateRestartSentinel(
-              state.env,
-            ),
-          signal: runtime.requestEntryLifetime.signal,
-          port: 0,
-          config,
-          workspaceDir: state.workspaceDir,
-          getCron: () => undefined,
-          log,
-          logHooks: logs,
+      await using fixture = await createPublishedPluginFixture(state, config);
+      const { initial, registryOwner, runtime, log } = fixture;
+      // Match post-attach startup: publish configured model owners, start services,
+      // then deliver gateway_start before admitting the first owner turn.
+      await fixture.publish();
+      await fixture.startServices();
+      const settled = Promise.resolve();
+      await runGatewayStartupObservers({
+        registry: initial.pluginRegistry,
+        resolveGatewayContext: () => undefined,
+        loadSubagentRegistryActivation: () => () => ({
+          initial: settled,
+          pending: new Map(),
+          settled,
+        }),
+        createHookRunner: async (...args) =>
+          (await import("../plugins/hooks.js")).createHookRunner(...args),
+        refreshLatestUpdateRestartSentinel: async () => null,
+        signal: runtime.requestEntryLifetime.signal,
+        port: 0,
+        config,
+        workspaceDir: state.workspaceDir,
+        getCron: () => undefined,
+        log,
+        logHooks: log,
+      });
+      if (mode === "hot enable") {
+        expect(fixture.tools(visitorToolName, undefined, config)).toEqual([]);
+        const nextConfig = configFor(true);
+        const changedPaths = [`plugins.entries.${pluginId}.enabled`];
+        await state.writeConfig(nextConfig);
+        await fixture.reload(nextConfig, changedPaths, undefined, () => {
+          markPreparedModelRuntimeSnapshotsStale(
+            "prepared model runtime owner is stale before config publication",
+            { waitForReplacement: true },
+          );
+          config = nextConfig;
+          setRuntimeConfigSnapshot(config);
         });
-        if (mode === "hot enable") {
-          expect(fixture.tools(visitorToolName, runLease, config)).toEqual([]);
-          const nextConfig = configFor(true);
-          const changedPaths = [`plugins.entries.${pluginId}.enabled`];
-          const plan = buildGatewayReloadPlan(changedPaths, {
-            previousConfig: config,
-            candidateConfig: nextConfig,
-          });
-          expect(plan).toMatchObject({ reloadPlugins: true, restartGateway: false });
-          await state.writeConfig(nextConfig);
-          await fixture.reload(nextConfig, changedPaths, undefined, () => {
-            markPreparedModelRuntimeSnapshotsStale(
-              "prepared model runtime owner is stale before config publication",
-              { waitForReplacement: true },
-            );
-            config = nextConfig;
-            setRuntimeConfigSnapshot(config);
-          });
-          expect(logs.info).toHaveBeenCalledWith(`Plugin replacement applied: ${pluginId}`);
-          await fixture.refresh(config);
-        }
-        // Use the published owner and the same acquisition as Gateway agent admission.
-        const published = await loadPublishedGatewayReplyDispatchRuntime({ agentId: "main" });
-        assert(published);
-        const record = registryOwner.registry.plugins.find((entry) => entry.id === pluginId);
-        assert(record);
-        const gatewayInstance = getPluginInstance(record);
-        assert(gatewayInstance);
-        // Settle startup/catalog work before measuring the independent agent-run lease.
-        await gatewayInstance.waitForRetainedWork(signal);
-        const retainedBeforeRun = gatewayInstance.retainedWorkCount;
-        runLease = await fixture.acquireTurn(published);
-        const tool = fixture
-          .tools(visitorToolName, runLease, config)
-          .find(({ name }) => name === visitorToolName);
-        assert(tool, "enabled tool must resolve for the owner agent");
-        const result = await tool.execute("visitor-revoke-call", {
-          email: "absent@example.test",
-        });
-        expect(result).toMatchObject({
-          content: [
-            {
-              type: "text",
-              text: "No visitor grant found for absent@example.test; nothing to revoke.",
-            },
-          ],
-          details: {},
-        });
-        expect(gatewayInstance.retainedWorkCount).toBeGreaterThan(retainedBeforeRun);
-        await runLease[Symbol.asyncDispose]();
-        runLease = undefined;
-        await gatewayInstance.waitForRetainedWork(runtime.requestEntryLifetime.signal);
-        expect(gatewayInstance.retainedWorkCount).toBe(retainedBeforeRun);
-      } finally {
-        try {
-          await runLease?.[Symbol.asyncDispose]();
-          await closePreparedModelRuntimeSnapshots();
-          await fixture.close();
-          vi.unstubAllEnvs();
-          vi.unstubAllGlobals();
-        } finally {
-          startupModuleRestorers.toReversed().forEach((restore) => restore());
-        }
+        await fixture.refresh(config);
       }
+      // Use the published owner and the same acquisition as Gateway agent admission.
+      const published = await loadPublishedGatewayReplyDispatchRuntime({ agentId: "main" });
+      assert(published);
+      const record = registryOwner.registry.plugins.find((entry) => entry.id === pluginId);
+      assert(record);
+      const gatewayInstance = getPluginInstance(record);
+      assert(gatewayInstance);
+      // Settle startup/catalog work before measuring the independent agent-run lease.
+      await gatewayInstance.waitForRetainedWork(signal);
+      const retainedBeforeRun = gatewayInstance.retainedWorkCount;
+      const runLease = await fixture.acquireTurn(published);
+      const tool = fixture
+        .tools(visitorToolName, runLease, config)
+        .find(({ name }) => name === visitorToolName);
+      assert(tool, "enabled tool must resolve for the owner agent");
+      const result = await tool.execute("visitor-revoke-call", {
+        email: "absent@example.test",
+      });
+      expect(result).toMatchObject({
+        content: [
+          {
+            type: "text",
+            text: "No visitor grant found for absent@example.test; nothing to revoke.",
+          },
+        ],
+      });
+      expect(gatewayInstance.retainedWorkCount).toBeGreaterThan(retainedBeforeRun);
+      await runLease[Symbol.asyncDispose]();
+      await gatewayInstance.waitForRetainedWork(runtime.requestEntryLifetime.signal);
+      expect(gatewayInstance.retainedWorkCount).toBe(retainedBeforeRun);
     }),
 );

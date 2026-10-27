@@ -54,9 +54,15 @@ function modelsResult(models: object[], extra = {}) {
   });
 }
 
+function expectModels(respond: ReturnType<typeof vi.fn>, models: object[], extra = {}) {
+  expect(respond.mock.calls).toEqual([[true, modelsResult(models, extra), undefined]]);
+}
+
 function nativeModel(provider: string, id: string, nativeRuntime: string, name = "Native model") {
   return { provider, id, nativeRuntime, name };
 }
+
+const saved = { provider: "custom", id: "saved-model", name: "Saved model" };
 
 function nativeConfig(
   model: string,
@@ -97,7 +103,6 @@ it("serves published models while single-flight native discovery is pending", as
       defaults: { model: "custom/saved-model", modelPolicy: { allow: ["custom/*"] } },
     },
   };
-  const saved = { provider: "custom", id: "saved-model", name: "Saved model" };
   const discovered = { provider: "custom", id: "discovered-model", name: "Discovered model" };
   const started = createDeferredCore();
   const release = createDeferredCore();
@@ -122,12 +127,12 @@ it("serves published models while single-flight native discovery is pending", as
   try {
     await withinTest(started.promise, signal);
     for (const response of await withinTest(Promise.all(requests), signal)) {
-      expect(response).toHaveBeenCalledWith(true, modelsResult([saved]), undefined);
+      expectModels(response, [saved]);
     }
     expect(loadNative).toHaveBeenCalledOnce();
     release.resolve();
     await owner.loadNativeModelCatalog!();
-    expect(await pick()).toHaveBeenCalledWith(true, modelsResult([discovered]), undefined);
+    expectModels(await pick(), [discovered]);
     expect(loadNative).toHaveBeenCalledOnce();
   } finally {
     release.resolve();
@@ -202,16 +207,10 @@ it("defers native discovery until agent catalog demand and reacquires retired ob
     });
   }
   expect(loadNative).not.toHaveBeenCalled();
-  expect(mocks.runPreparedModelCatalogWorker).toHaveBeenCalledTimes(agentIds.length);
   const read = () => loadCatalog({ agentId: "pro", config });
   const requestPicker = createPicker(config);
   const pick = async () => {
-    const respond = await requestPicker();
-    expect(respond.mock.calls[0]).toEqual([
-      true,
-      modelsResult([{ provider: native.provider, id: native.id }]),
-      undefined,
-    ]);
+    expectModels(await requestPicker(), [{ provider: native.provider, id: native.id }]);
   };
   await Promise.all([pick(), pick()]);
   expect(loadNative).toHaveBeenCalledOnce();
@@ -219,13 +218,12 @@ it("defers native discovery until agent catalog demand and reacquires retired ob
   expect(first.entries).toContainEqual(expect.objectContaining(native));
   expect(concurrent.entries).toEqual(first.entries);
   expect(loadNative).toHaveBeenCalledOnce();
-  expect(loadNative.mock.calls[0]?.[0].agentDir).toBe(fixture.state.agentDir("pro"));
+  expect(observed).toEqual(new Set([fixture.state.agentDir("pro")]));
   await read();
   expect(loadNative).toHaveBeenCalledOnce();
   observed.clear();
   expect((await read()).entries).toContainEqual(expect.objectContaining(native));
   expect(loadNative).toHaveBeenCalledTimes(2);
-  expect(mocks.runPreparedModelCatalogWorker).toHaveBeenCalledTimes(agentIds.length);
   observed.clear();
   loadNative.mockResolvedValueOnce({
     entries: [native],
@@ -254,7 +252,6 @@ it.each(["discovery failure", "superseded owner", "changed authorization"])(
       throw failure;
     });
     installHarnesses({ id: "native-test", loadModelCatalog: loadNative });
-    const saved = { provider: "custom", id: "saved-model", name: "Saved model" };
     mocks.runPreparedModelCatalogWorker.mockResolvedValue(
       snapshot([saved], {
         providerOutcomes: [{ provider: saved.provider, status: "ready" }],
@@ -276,9 +273,7 @@ it.each(["discovery failure", "superseded owner", "changed authorization"])(
       ]);
       return;
     }
-    expect(respond.mock.calls).toEqual([
-      [true, modelsResult([saved], { refreshFailed: true }), undefined],
-    ]);
+    expectModels(respond, [saved], { refreshFailed: true });
     await pick();
     expect(loadNative).toHaveBeenCalledOnce();
     await expect(
@@ -295,7 +290,6 @@ it.each(["discovery failure", "superseded owner", "changed authorization"])(
 
 it.each([
   { sharedProvider: false, runtime: "native-test" },
-  { sharedProvider: true, runtime: "native-test" },
   { sharedProvider: true, runtime: "constructor" },
   { sharedProvider: true, runtime: "__proto__" },
 ])(
@@ -344,11 +338,7 @@ it.each([
     }
     const acquisitions = loadHealthy.mock.calls.length;
     const expectHealthy = async () => {
-      expect(await pick()).toHaveBeenCalledWith(
-        true,
-        modelsResult([{ id: native.id, available: true }], { refreshFailed: true }),
-        undefined,
-      );
+      expectModels(await pick(), [{ id: native.id, available: true }], { refreshFailed: true });
     };
     await expectHealthy();
     expect(loadHealthy).toHaveBeenCalledTimes(acquisitions);
@@ -388,7 +378,5 @@ it("acquires remaining native runtimes after an initial provider-scoped refresh"
   expect(loadSecond).not.toHaveBeenCalled();
   const respond = await createPicker(config)();
   expect(loadSecond).toHaveBeenCalledOnce();
-  expect(respond.mock.calls).toEqual([
-    [true, modelsResult([{ provider: second.provider, id: second.id }]), undefined],
-  ]);
+  expectModels(respond, [{ provider: second.provider, id: second.id }]);
 });

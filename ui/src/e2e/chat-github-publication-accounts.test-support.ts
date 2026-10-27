@@ -1,6 +1,6 @@
 import type { BrowserContext, Locator, Page } from "playwright";
 import { expect, it } from "vitest";
-import { SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD } from "../lib/session-pull-requests.ts";
+import { SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD } from "../../../src/gateway/control-ui-contract.js";
 import { waitForLayoutSettled } from "../pages/chat/chat-layout.browser.test-support.ts";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { navigationDrawerToggle } from "../test-helpers/control-ui-navigation.ts";
@@ -68,62 +68,6 @@ export function defineGitHubPublicationAccountTests({
     return { page, gateway };
   }
 
-  it("explains changed publication availability without requiring a connection", async () => {
-    const { page, gateway } = await openPublication({
-      assistantName: "Publication QA",
-      workspace: "/synthetic/publication-qa",
-      communityInvite: false,
-      methodResponses: {
-        "sessions.github.options": {
-          ...publicationOptions,
-          shared: null,
-          personal: {
-            ...publicationOptions.personal,
-            state: "disconnected",
-            account: null,
-            generation: null,
-          },
-          sharedUnavailableReason: "changed",
-        },
-      },
-    });
-    const discovered = await gateway.waitForRequest("sessions.github.options");
-    expect(discovered.params).toEqual({ sessionKey: "agent:main:main", agentId: "main" });
-    await openChatPublication(page);
-    const publish = publicationAction(page, "Create PR");
-    await publish.waitFor();
-    await expect.poll(() => publish.isEnabled()).toBe(false);
-    const row = page.locator(".chat-environment__branch");
-    const note = row.locator(".chat-pr__publication-note");
-    const refresh = publicationAction(row, "Refresh publication");
-    await note.waitFor();
-    expect(await refresh.count()).toBe(1);
-    expect(await refresh.isEnabled()).toBe(true);
-    expect(await note.textContent()).toContain(
-      "The Gateway GitHub account changed. Reload and retry publication.",
-    );
-    expect(await row.textContent()).not.toContain("Connect GitHub in Settings");
-    expect(await publicationAction(page, "Publication account").count()).toBe(0);
-    expect(await gateway.getRequests("sessions.github.publish")).toHaveLength(0);
-    expect(await gateway.getRequests("sessions.github.confirm")).toHaveLength(0);
-    const previousOptions = (await gateway.getRequests("sessions.github.options")).length;
-    await gateway.setMethodResponse("sessions.github.options", {
-      ...publicationOptions,
-      personal: null,
-      shared: { ...publicationOptions.shared, source: "system-detected" },
-    });
-    await refresh.click();
-    const retried = await gateway.waitForRequest("sessions.github.options", {
-      after: previousOptions,
-    });
-    expect(retried.params).toEqual({ sessionKey: "agent:main:main", agentId: "main" });
-    await expect.poll(() => publish.isEnabled()).toBe(true);
-    await note.waitFor({ state: "hidden" });
-    expect(await refresh.count()).toBe(0);
-    expect(await gateway.getRequests("sessions.github.publish")).toHaveLength(0);
-    expect(await gateway.getRequests("sessions.github.confirm")).toHaveLength(0);
-  });
-
   it.each([1180, 390])(
     "keeps the account menu compact and keyboard accessible at %ipx",
     async (width) => {
@@ -138,6 +82,8 @@ export function defineGitHubPublicationAccountTests({
           : {},
         width,
       );
+      const reopenDetails = () =>
+        width === 390 ? openChatPublication(page) : openChatDetails(page);
       await openChatPublication(page);
       const arrow =
         width === 390
@@ -193,11 +139,7 @@ export function defineGitHubPublicationAccountTests({
         .poll(() => arrow.evaluate((element) => element === document.activeElement))
         .toBe(true);
       await showPublicationBranch(gateway, "openclaw/updated-branch");
-      if (width === 390) {
-        await openChatPublication(page);
-      } else {
-        await openChatDetails(page);
-      }
+      await reopenDetails();
       await row
         .getByText("openclaw/updated-branch", { exact: true })
         .waitFor({ state: "attached" });
@@ -220,11 +162,7 @@ export function defineGitHubPublicationAccountTests({
           "false",
         );
       }
-      if (width === 390) {
-        await openChatPublication(page);
-      } else {
-        await openChatDetails(page);
-      }
+      await reopenDetails();
       expect(await personal.isVisible()).toBe(false);
       if (width === 390) {
         await navigationDrawerToggle(page).click();
@@ -246,43 +184,55 @@ export function defineGitHubPublicationAccountTests({
     },
   );
 
-  it.each([
-    { name: "reclaimed", state: "reclaimed", running: false, conflict: false, ready: true },
-    { name: "remote", state: "active", running: false, conflict: false, ready: false },
-    { name: "running", state: "reclaimed", running: true, conflict: false, ready: false },
-    { name: "conflicted", state: "reclaimed", running: false, conflict: true, ready: false },
-  ])(
-    "gates personal publication for a $name workspace",
-    async ({ state, running, conflict, ready }) => {
-      const now = Date.now();
-      const { page } = await openPublication({
-        sessions: [
-          createControlUiSessionRow("agent:main:main", "Publication workspace", now, {
-            hasActiveRun: running,
-            status: running ? "running" : "done",
-            placement: {
-              state,
-              generation: 1,
-              createdAtMs: now,
-              updatedAtMs: now,
-              stateChangedAtMs: now,
-              workspaceResultConflict: conflict
-                ? {
-                    paths: ["src/example.ts"],
-                    stagedResultRef: "refs/openclaw/worker-results/test",
-                    totalCount: 1,
-                  }
-                : undefined,
-            },
-          }),
-        ],
-      });
-      await openChatPublication(page);
-      await selectPublicationAccount(page, "personal");
-      const publish = page.getByRole("button", { name: "Create PR" });
+  it("gates personal publication for each session's workspace", async () => {
+    const workspaces = [
+      { name: "reclaimed", state: "reclaimed", running: false, conflict: false, ready: true },
+      { name: "remote", state: "active", running: false, conflict: false, ready: false },
+      { name: "running", state: "reclaimed", running: true, conflict: false, ready: false },
+      { name: "conflicted", state: "reclaimed", running: false, conflict: true, ready: false },
+    ];
+    const now = Date.now();
+    const rows = workspaces.map(({ name, state, running, conflict }, index) =>
+      createControlUiSessionRow(
+        index === 0 ? "agent:main:main" : `agent:main:publication-${name}`,
+        `${name} publication workspace`,
+        now,
+        {
+          hasActiveRun: running,
+          status: running ? "running" : "done",
+          placement: {
+            state,
+            generation: 1,
+            createdAtMs: now,
+            updatedAtMs: now,
+            stateChangedAtMs: now,
+            workspaceResultConflict: conflict
+              ? {
+                  paths: ["src/example.ts"],
+                  stagedResultRef: "refs/openclaw/worker-results/test",
+                  totalCount: 1,
+                }
+              : undefined,
+          },
+        },
+      ),
+    );
+    const { page, gateway } = await openPublication({ sessions: rows });
+    for (const [index, { name, conflict, ready }] of workspaces.entries()) {
+      const sessionKey = rows[index]!.key;
+      if (index !== 0) {
+        await page
+          .locator(
+            `.sidebar-recent-session[data-session-key="${sessionKey}"] a.sidebar-recent-session__link`,
+          )
+          .click();
+        await showPublicationBranch(gateway, undefined, sessionKey);
+      }
+      const publication = await openChatPublication(page);
+      await selectPublicationAccount(publication, "personal");
+      const publish = publication.getByRole("button", { name: "Create PR" });
       await publish.waitFor();
-
-      await expect.poll(() => publish.isEnabled()).toBe(ready);
+      await expect.poll(() => publish.isEnabled(), { message: `${name} workspace` }).toBe(ready);
       if (conflict) {
         const notice = page.locator(".chat-workspace-conflict-notice");
         await notice.getByRole("button", { name: "Dismiss workspace conflict notice" }).click();
@@ -290,6 +240,11 @@ export function defineGitHubPublicationAccountTests({
         await openChatPublication(page);
         await page.getByRole("menuitemradio", { name: "@alice-tools", exact: true }).waitFor();
       }
-    },
-  );
+      await page.keyboard.press("Escape");
+      await page
+        .locator(".chat-pane-cache__pane--active .chat-pr-branch-menu")
+        .waitFor({ state: "hidden" });
+    }
+    expect(await gateway.getRequests("sessions.github.publish")).toHaveLength(0);
+  });
 }

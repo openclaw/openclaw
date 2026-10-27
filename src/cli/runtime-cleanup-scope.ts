@@ -69,6 +69,7 @@ export async function withCliCommandCleanup<T>(
   const { closeOpenClawStateDatabaseAsync } = await import("../state/openclaw-state-db-cache.js");
   const { closeDefaultRetainedNativeWorkerSource } =
     await import("../infra/worker-native-lifecycle.js");
+  const { closePostgresPool } = await import("../infra/postgres-sync/pool.js");
   const { closeSkillsWatchers } = await import("../skills/runtime/refresh.js");
   const pluginResources = new CliPluginInvocationResources();
   const releaseSignals = installCliSignalExitHandlers();
@@ -102,6 +103,7 @@ export async function withCliCommandCleanup<T>(
           await runCliDisposerAfterPending("shared-state", async () => {
             await closeOpenClawStateDatabaseAsync();
             await closeDefaultRetainedNativeWorkerSource();
+            await closePostgresPool();
           });
         }
       }),

@@ -110,69 +110,55 @@ describe("GPT-Live socket worker", () => {
 
 // Managed proxy hooks live only in the Gateway isolate; the media worker sees the env.
 describe("GPT-Live socket worker managed proxy", () => {
-  it("tunnels media through the managed proxy and exchanges audio", async () => {
-    const target = await startAudioEchoTarget();
-    const proxy = await startForwardProxy(true);
-    stubManagedProxyEnv(proxy.url, "gateway-only");
-    // Only the proxy reaches this host, like api.openai.com behind egress restrictions.
-    const authority = `gpt-live.openai.test:${target.port}`;
-    const audio: Buffer[] = [];
-    const errors: Error[] = [];
-    const { promise: firstAudio, resolve: echoed } = Promise.withResolvers<void>();
-    const socket = OpenAIQuicksilverWorkerSocket.create(
-      `ws://${authority}`,
-      { maxPayload: 1024 * 1024 },
-      { model: "gpt-live-1", paced: true },
-      {
-        onAudio: (chunk) => {
-          audio.push(chunk);
-          echoed();
+  it.each([true, false])(
+    "exchanges audio only when the managed proxy admits the tunnel (%s)",
+    async (admit) => {
+      const target = await startAudioEchoTarget();
+      const proxy = await startForwardProxy(admit);
+      // Success requires the proxy's DNS; refusal uses a directly reachable target
+      // so an unauthorized direct fallback would be observable.
+      stubManagedProxyEnv(proxy.url, admit ? "gateway-only" : "proxy");
+      const authority = `${admit ? "gpt-live.openai.test" : "127.0.0.1"}:${target.port}`;
+      const audio: Buffer[] = [];
+      const errors: Error[] = [];
+      const { promise: firstAudio, resolve: echoed } = Promise.withResolvers<void>();
+      const socket = OpenAIQuicksilverWorkerSocket.create(
+        `ws://${authority}`,
+        { maxPayload: admit ? 1024 * 1024 : 1024 },
+        { model: "gpt-live-1", paced: true },
+        {
+          onAudio: (chunk) => {
+            audio.push(chunk);
+            echoed();
+          },
         },
-      },
-    );
-    socket.on("error", (error) => errors.push(error));
-    try {
-      const startup = await settleStartup(socket);
-      expect(proxy.connects).toEqual([authority]);
-      expect(startup).toBe("open");
-      socket.sendAudio(Buffer.alloc(960, 1));
-      socket.startAudio();
-      await firstAudio;
-      expect(audio[0]).toEqual(Buffer.alloc(960, 1));
-      const closed = once(socket, "close");
-      socket.close();
-      await closed;
-      expect(errors).toEqual([]);
-    } finally {
-      socket.close();
-      await Promise.all([target.close(), proxy.close()]);
-    }
-  }, 10_000);
-
-  it("fails closed without a direct connection when the proxy refuses the tunnel", async () => {
-    const target = await startAudioEchoTarget();
-    const proxy = await startForwardProxy(false);
-    // Loopback mode "proxy" keeps this target directly reachable, so a fallback would connect.
-    stubManagedProxyEnv(proxy.url, "proxy");
-    const authority = `127.0.0.1:${target.port}`;
-    const errors: Error[] = [];
-    const socket = OpenAIQuicksilverWorkerSocket.create(
-      `ws://${authority}`,
-      { maxPayload: 1024 },
-      { model: "gpt-live-1", paced: true },
-      { onAudio: () => {} },
-    );
-    socket.on("error", (error) => errors.push(error));
-    try {
-      expect(await settleStartup(socket)).toBe("close");
-      expect(proxy.connects).toEqual([authority]);
-      expect(errors).toHaveLength(1);
-      expect(target.connections()).toBe(0);
-    } finally {
-      socket.close();
-      await Promise.all([target.close(), proxy.close()]);
-    }
-  }, 10_000);
+      );
+      socket.on("error", (error) => errors.push(error));
+      try {
+        const startup = await settleStartup(socket);
+        expect(proxy.connects).toEqual([authority]);
+        if (!admit) {
+          expect(startup).toBe("close");
+          expect(errors).toHaveLength(1);
+          expect(target.connections()).toBe(0);
+          return;
+        }
+        expect(startup).toBe("open");
+        socket.sendAudio(Buffer.alloc(960, 1));
+        socket.startAudio();
+        await firstAudio;
+        expect(audio[0]).toEqual(Buffer.alloc(960, 1));
+        const closed = once(socket, "close");
+        socket.close();
+        await closed;
+        expect(errors).toEqual([]);
+      } finally {
+        socket.close();
+        await Promise.all([target.close(), proxy.close()]);
+      }
+    },
+    10_000,
+  );
 });
 
 // Mirrors the env startProxy exports for runtimes that cannot share its hooks.

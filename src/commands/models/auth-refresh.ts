@@ -8,7 +8,6 @@ import {
 import { isGatewayTransportError } from "../../gateway/transport-error.js";
 import type { RuntimeEnv } from "../../runtime.js";
 
-export type ModelAuthRefreshOperation = "login" | "logout" | "update";
 export type ModelAuthRefreshOutcome = "refreshed" | "gateway-rejected" | "gateway-unreachable";
 
 export async function refreshProviderAuthAfterLogin(params: {
@@ -33,7 +32,7 @@ export async function refreshProviderAuthAfterLogin(params: {
 
 export async function refreshRunningGatewayAuthState(
   agentId: string | undefined,
-  operation: ModelAuthRefreshOperation,
+  operation: "login" | "logout" | "update",
   runtime: Pick<RuntimeEnv, "error">,
 ): Promise<ModelAuthRefreshOutcome> {
   let gatewayConnected = false;

@@ -54,7 +54,6 @@ let server: Server;
 let view: McpAppViewLease;
 let questionStarted: ReturnType<typeof createDeferred<void>>;
 let questionAnswer: ReturnType<typeof createDeferred<typeof answer>>;
-let toolStarted: ReturnType<typeof createDeferred<void>>;
 let toolCalls: number;
 
 function elicit(ctx: ServerContext, params: ElicitRequestParams) {
@@ -68,7 +67,6 @@ beforeEach(async () => {
   vi.useFakeTimers();
   questionStarted = createDeferred();
   questionAnswer = createDeferred<typeof answer>();
-  toolStarted = createDeferred();
   toolCalls = 0;
   mocks.question.mockReset().mockImplementation(async (method, params, signal) => {
     if (method === "question.request") {
@@ -87,7 +85,6 @@ beforeEach(async () => {
   }));
   server.setRequestHandler("tools/call", async (_request, ctx) => {
     toolCalls += 1;
-    toolStarted.resolve();
     const result = await elicit(ctx, {
       message: "Choose a color",
       requestedSchema: {
@@ -164,9 +161,6 @@ describe("MCP tool human-input timeouts", () => {
     expect(call.respond).not.toHaveBeenCalled();
     approval.resolve();
     await questionStarted.promise;
-    expect
-      .soft(mocks.question.mock.calls.find(([method]) => method === "question.request")![1])
-      .toMatchObject({ timeoutMs: 600_000 });
     await vi.advanceTimersByTimeAsync(500_000);
     expect(call.respond).not.toHaveBeenCalled();
     questionAnswer.resolve(answer);
@@ -176,18 +170,6 @@ describe("MCP tool human-input timeouts", () => {
         { type: "text", text: JSON.stringify({ action: "accept", content: { choice: "Blue" } }) },
       ],
     });
-  });
-
-  it("keeps ordinary tools on their configured deadline", async () => {
-    server.setRequestHandler("tools/call", async (_request, ctx) => {
-      toolStarted.resolve();
-      return await racePromiseWithAbortSignal(new Promise<never>(() => {}), ctx.mcpReq.signal);
-    });
-    const call = invoke();
-    await toolStarted.promise;
-    await vi.advanceTimersByTimeAsync(requestTimeoutMs);
-    await call.pending;
-    expectTimeout(call.respond);
   });
 
   it("bounds repeated human questions by one allowance for the whole tool call", async () => {

@@ -51,7 +51,13 @@ type ScheduledPlacement = "child" | "in-session" | "detached";
 
 type ScheduledAuthority = Readonly<{
   owner: boolean;
-  basis: "operator-source" | "channel-owner" | "profile-role" | "legacy" | "none";
+  basis:
+    | "operator-source"
+    | "channel-owner"
+    | "profile-role"
+    | "trusted-policy"
+    | "legacy"
+    | "none";
   /** Undefined for ingress turns, which are admitted without a schedule source. */
   admissionSource?: NonNullable<AdmittedRunContext["admissionSource"]>;
 }>;
@@ -289,7 +295,13 @@ function resolveAuthority(
   if (principal.kind === "parent") {
     const { requester } = principal;
     if (requester.kind === "unknown") {
-      return withSource(false, "none");
+      // v2026.10.6 recorded a trusted policy, but no requester, for jobs an
+      // authenticated operator linked with `cron.add --session-key`; agents never
+      // get one. Those runs keep the operator surface they had, like an unlinked
+      // trusted job. Agent-created jobs with no requester stay non-owners.
+      return job.scheduledToolPolicy?.mode === "trusted"
+        ? withSource(true, "trusted-policy")
+        : withSource(false, "none");
     }
     // A missing check fails closed: the caller owns running it each occurrence.
     const owner = facts.requesterCheck?.owner === true;

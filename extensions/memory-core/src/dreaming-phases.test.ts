@@ -352,11 +352,6 @@ describe("memory-core dreaming phases", () => {
         valid: { ...entry, key: "valid", lastRecalledAt: "2026-04-14T12:00:00.000Z" },
       },
     });
-    expect(
-      Object.keys(
-        (await shortTermTesting.readRecallStore(workspaceDir, now.toISOString())).entries,
-      ),
-    ).toEqual(["invalid", "valid"]);
     const { sweep, logger } = createHarness(
       inlineConfig({ light: { enabled: true, limit: 1, lookbackDays: 3, dedupeSimilarity: 0.9 } }),
     );
@@ -413,7 +408,7 @@ describe("memory-core dreaming phases", () => {
     });
   });
 
-  it.each(["## Ops"])("does not ingest nested REM output before boundary %s", async (boundary) => {
+  it("does not ingest nested REM output before the next section", async () => {
     await withClock(async () => {
       await writeDailyNote([
         `# ${DAY}`,
@@ -427,7 +422,7 @@ describe("memory-core dreaming phases", () => {
         "- Old generated dream text must not become a daily memory.",
         "### Possible Lasting Truths",
         "- Old generated lasting truth must not become a daily memory.",
-        boundary,
+        "## Ops",
         "### User follow-up",
         "- Rotate access keys.",
       ]);

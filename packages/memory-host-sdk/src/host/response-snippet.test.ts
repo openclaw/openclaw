@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { withTestTimeout } from "../../../../test/helpers/promise.js";
+import { awaitGateBeforeSettlement, withinTest } from "../../../../test/helpers/promise.js";
 import {
   readMemoryHostResponseTextSnippet as snippet,
   readResponseJsonWithLimit as json,
@@ -103,32 +103,39 @@ describe("readMemoryHostResponseTextSnippet", () => {
     expect(cancel).toHaveBeenCalledOnce();
   });
 
-  it.each([
+  it.for([
     ["snippet", undefined],
     ["json", undefined],
     ["json", '{"ok":true}'],
-  ] as const)("cancels %s body reads when the caller aborts (prefix: %s)", async (kind, prefix) => {
-    const fixture = createPendingResponse({ prefix });
-    const controller = new AbortController();
-    const expected = new Error(`${kind} aborted`);
-    const settled = read(kind, fixture.response, controller.signal).then(
-      () => undefined,
-      (error: unknown) => error,
-    );
-    try {
-      await withTestTimeout(fixture.readStarted, 1_000, "read did not start");
-      expect(fixture.response.body?.locked).toBe(true);
-      controller.abort(expected);
+  ] as const)(
+    "cancels %s body reads when the caller aborts (prefix: %s)",
+    async ([kind, prefix], { signal }) => {
+      const fixture = createPendingResponse({ prefix });
+      const controller = new AbortController();
+      const expected = new Error(`${kind} aborted`);
+      const operation = read(kind, fixture.response, controller.signal);
+      const settled = operation.then(
+        () => undefined,
+        (error: unknown) => error,
+      );
+      try {
+        await withinTest(
+          awaitGateBeforeSettlement(fixture.readStarted, operation, "read did not start"),
+          signal,
+        );
+        expect(fixture.response.body?.locked).toBe(true);
+        controller.abort(expected);
 
-      await expect(withTestTimeout(settled, 1_000, "abort did not settle")).resolves.toBe(expected);
-      expect(fixture.cancel).toHaveBeenCalledOnce();
-      expect(fixture.response.body?.locked).toBe(false);
-    } finally {
-      controller.abort(expected);
-      fixture.dispose();
-      await withTestTimeout(settled, 1_000, "cleanup did not settle");
-    }
-  });
+        await expect(withinTest(settled, signal)).resolves.toBe(expected);
+        expect(fixture.cancel).toHaveBeenCalledOnce();
+        expect(fixture.response.body?.locked).toBe(false);
+      } finally {
+        controller.abort(expected);
+        fixture.dispose();
+        await settled;
+      }
+    },
+  );
 
   it("rejects a JSON body with invalid UTF-8 bytes", async () => {
     const body = new TextEncoder().encode('{"ok":"value"}');

@@ -29,23 +29,18 @@ const storedUtterances = (sessionId: string, utterances: Utterance[]) =>
   utterances.map((utterance) => ({ ...utterance, sessionId }));
 type ExportRow = { export_manifest_json: string; export_pending_json: string };
 
-const originalStateDir = process.env.OPENCLAW_STATE_DIR;
 const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
   afterAll(async () => {
     await closeOpenClawStateDatabaseAsync();
     closeOpenClawStateDatabaseForTest();
-    if (originalStateDir === undefined) {
-      delete process.env.OPENCLAW_STATE_DIR;
-    } else {
-      process.env.OPENCLAW_STATE_DIR = originalStateDir;
-    }
+    vi.unstubAllEnvs();
     cleanup();
   }),
 );
 const suiteStateDir = tempDirs.make("transcript-export-digest-");
 let nextSessionId = 0;
 beforeEach(() => {
-  process.env.OPENCLAW_STATE_DIR = suiteStateDir;
+  vi.stubEnv("OPENCLAW_STATE_DIR", suiteStateDir);
 });
 afterEach(() => vi.restoreAllMocks());
 
@@ -72,7 +67,6 @@ async function seed(count: number, modified = false, missingMetadata = false) {
   }
   const files = await store.materializeSessionArtifacts(session, "transcript");
   const raw = await fs.readFile(files.transcriptPath, "utf8");
-  expect(jsonLines(raw)).toEqual(storedUtterances(session.sessionId, utterances));
   const hash = digest(raw);
   const { db: database, path: dbPath } = openOpenClawStateDatabase({ env });
   const read = () => {
@@ -86,10 +80,7 @@ async function seed(count: number, modified = false, missingMetadata = false) {
       pending: JSON.parse(row.export_pending_json) as unknown[],
     };
   };
-  const row = read();
-  expect(row.pending).toEqual([]);
-  const manifest = row.manifest;
-  expect(manifest["transcript.jsonl"]).toBe(hash);
+  const manifest = read().manifest;
   delete manifest["transcript.jsonl"];
   if (missingMetadata) {
     delete manifest["metadata.json"];
@@ -125,18 +116,14 @@ async function expectRecovery(result: Promise<string>, failed: boolean, metadata
 
 async function runCli(args: string[]): Promise<string> {
   let output = "";
-  const writeSpy = vi.spyOn(process.stdout, "write").mockImplementation((chunk) => {
+  using _ = vi.spyOn(process.stdout, "write").mockImplementation((chunk) => {
     output += String(chunk);
     return true;
   });
-  try {
-    const program = new Command().name("openclaw");
-    registerTranscriptsCli(program);
-    await program.parseAsync(["transcripts", ...args], { from: "user" });
-    return output;
-  } finally {
-    writeSpy.mockRestore();
-  }
+  const program = new Command().name("openclaw");
+  registerTranscriptsCli(program);
+  await program.parseAsync(["transcripts", ...args], { from: "user" });
+  return output;
 }
 
 async function afterWrite(sessionDir: string, onWrite: () => void | Promise<void>) {
@@ -197,49 +184,44 @@ it("preserves the published artifact when its lease is revoked after a temporary
   }
 });
 
-it.each(["append", "reset"] as const)("exports stable snapshots during %s", async (change) => {
-  const { store, dbPath, session, utterances, files, raw, hash, read, check } = await seed(70);
+it("exports a stable snapshot across reset and append", async () => {
+  const { store, dbPath, session, files, raw, hash, read, check } = await seed(70);
   await store.materializeSessionArtifacts(session, "metadata");
-  const added = { id: "after-snapshot", text: `Speech after ${change}` };
-  const openSpy = await afterWrite(files.sessionDir, async () => {
-    if (change === "reset") {
-      const foreign = new DatabaseSync(dbPath);
-      try {
-        foreign.exec("PRAGMA foreign_keys = ON; BEGIN IMMEDIATE");
-        for (const table of ["utterances", "summaries"]) {
+  const added = { id: "after-snapshot", text: "Speech after reset" };
+  {
+    using _ = await afterWrite(files.sessionDir, async () => {
+      {
+        using foreign = new DatabaseSync(dbPath);
+        try {
+          foreign.exec("PRAGMA foreign_keys = ON; BEGIN IMMEDIATE");
+          for (const table of ["utterances", "summaries"]) {
+            foreign
+              .prepare(
+                `DELETE FROM meeting_transcript_${table} WHERE session_id = ? AND session_started_at = ?`,
+              )
+              .run(session.sessionId, session.startedAt);
+          }
           foreign
             .prepare(
-              `DELETE FROM meeting_transcript_${table} WHERE session_id = ? AND session_started_at = ?`,
+              "UPDATE meeting_transcript_sessions SET next_utterance_seq = 0 WHERE session_id = ? AND started_at = ?",
             )
             .run(session.sessionId, session.startedAt);
+          foreign.exec("COMMIT");
+        } finally {
+          if (foreign.isTransaction) {
+            foreign.exec("ROLLBACK");
+          }
         }
-        foreign
-          .prepare(
-            "UPDATE meeting_transcript_sessions SET next_utterance_seq = 0 WHERE session_id = ? AND started_at = ?",
-          )
-          .run(session.sessionId, session.startedAt);
-        foreign.exec("COMMIT");
-      } finally {
-        if (foreign.isTransaction) {
-          foreign.exec("ROLLBACK");
-        }
-        foreign.close();
       }
       await store.writeSession(session);
-    }
-    await store.appendUtteranceForSession(session, added);
-  });
-  try {
+      await store.appendUtteranceForSession(session, added);
+    });
     await store.materializeSessionArtifacts(session, "transcript");
     await check(raw, hash);
-  } finally {
-    openSpy.mockRestore();
   }
   await store.materializeSessionArtifacts(session, "transcript");
   const refreshed = await fs.readFile(files.transcriptPath, "utf8");
-  expect(jsonLines(refreshed)).toEqual(
-    storedUtterances(session.sessionId, [...(change === "append" ? utterances : []), added]),
-  );
+  expect(jsonLines(refreshed)).toEqual(storedUtterances(session.sessionId, [added]));
   expect(read().manifest["transcript.jsonl"]).toBe(digest(refreshed));
   expect(read().pending).toEqual([]);
 });

@@ -1,6 +1,6 @@
 // Guards which configured transport routes may replace a catalog model's native route.
 import { describe, expect, it } from "vitest";
-import { makeEmptyPluginMetadataOwners } from "../../plugins/current-plugin-metadata.test-support.js";
+import { makeEmptyPluginMetadataOwners } from "../../plugins/plugin-metadata-empty.test-support.js";
 import type { PluginMetadataSnapshotOwnerMaps } from "../../plugins/plugin-metadata-snapshot.types.js";
 import type { ProviderRuntimeModel } from "../../plugins/provider-runtime-model.types.js";
 import { applyConfiguredProviderOverrides } from "./model.configured-overrides.js";

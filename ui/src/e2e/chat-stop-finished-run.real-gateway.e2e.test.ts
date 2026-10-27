@@ -6,13 +6,14 @@ import { expect, it } from "vitest";
 import { writeOpenAiResponsesText } from "../../../test/helpers/openai-responses-sse.ts";
 import type { OpenClawTestInstance } from "../../../test/helpers/openclaw-test-instance.ts";
 import { createDeferred } from "../../../test/helpers/promise.ts";
+import { GatewaySessionRowEvents } from "../api/gateway-session-row-events.ts";
 import type { SessionsListResult } from "../api/types.ts";
 import type { ChatPageHost } from "../pages/chat/chat-state-host.ts";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import { waitForControlUiGatewayReady } from "../test-helpers/control-ui-e2e-readiness.ts";
 import { enterControlUiSession } from "../test-helpers/control-ui-session-entry.ts";
 import {
-  callGateway,
+  connectChatGateway,
   createChatGatewayInstance,
   gatewayChatUrl,
 } from "./chat-real-gateway.test-support.ts";
@@ -56,6 +57,7 @@ type Frame = {
 };
 let artifactDir: string;
 let instance: OpenClawTestInstance;
+let client: Awaited<ReturnType<typeof connectChatGateway>>;
 let provider: Awaited<ReturnType<typeof startProvider>>;
 async function startProvider() {
   const completion = createDeferred();
@@ -120,6 +122,14 @@ async function startProvider() {
 const suite = createControlUiE2eSuite({
   name: "Chat Stop after a real Gateway finished the run",
   startServerBeforeBrowser: true,
+  resources: {
+    async run(signal) {
+      client = await connectChatGateway(instance, signal);
+    },
+    async close() {
+      await client?.stopAndWait();
+    },
+  },
   async startServer() {
     artifactDir = createControlUiE2eArtifactDir("stop-finished-run");
     provider = await startProvider();
@@ -173,11 +183,8 @@ suite.define(() => {
         let dropped = 0;
         let delayTerminalDescriptors = true;
         const deferredDescriptors: Array<() => void> = [];
-        const call = async (method: string, params: Record<string, unknown>) => {
-          return JSON.parse(await callGateway(instance, method, params));
-        };
         const sessionRow = async () => {
-          const result: SessionsListResult = await call("sessions.list", {
+          const result = await client.request<SessionsListResult>("sessions.list", {
             agentId: "main",
             limit: 50,
           });
@@ -228,7 +235,7 @@ suite.define(() => {
           }
           return false;
         };
-        await call("sessions.create", {
+        await client.request("sessions.create", {
           key: sessionKey,
           agentId: "main",
           label: "Stop finished run",
@@ -246,6 +253,7 @@ suite.define(() => {
             await page.routeWebSocket(`ws://127.0.0.1:${instance.port}/**`, (socket) => {
               sockets += 1;
               const server = socket.connectToServer();
+              const rowEvents = new GatewaySessionRowEvents();
               socket.onMessage((message) => {
                 const raw = message.toString();
                 const frame: Frame = JSON.parse(raw);
@@ -276,7 +284,18 @@ suite.define(() => {
               });
               server.onMessage((message) => {
                 const raw = message.toString();
-                const frame: Frame = JSON.parse(raw);
+                const wireFrame: Frame = JSON.parse(raw);
+                // Withhold logical notifications without dropping wire compression baselines.
+                const projected =
+                  wireFrame.type === "event" &&
+                  (wireFrame.event === "sessions.changed" || wireFrame.event === "session.message")
+                    ? rowEvents.project({ ...wireFrame, event: wireFrame.event })
+                    : null;
+                if (projected?.missingBaseline) {
+                  throw new Error("UNQUALIFIED: fixture lost a Gateway session row baseline");
+                }
+                const frame: Frame = projected?.event ?? wireFrame;
+                const forwarded = projected ? JSON.stringify(frame) : message;
                 const request = frame.id ? pending.get(frame.id) : undefined;
                 if (frame.type === "res") {
                   received.push(frame);
@@ -296,7 +315,7 @@ suite.define(() => {
                       pending.delete(frame.id);
                     }
                     delivered.push(frame);
-                    socket.send(message);
+                    socket.send(forwarded);
                   };
                   const session = frame.payload?.session;
                   const historySession = frame.payload?.sessionInfo;
@@ -500,11 +519,14 @@ suite.define(() => {
             await page
               .getByRole("button", { name: "Send message", exact: true })
               .waitFor({ state: "visible" });
-            await page.screenshot({ path: path.join(artifactDir, "03-send-restored.png") });
+            expect(
+              await page.evaluate(() => window.openclawControlUi?.snapshot().gatewayPhase),
+            ).toBe("connected");
             expect(sockets).toBe(1);
             expect(sent.filter((frame) => frame.method === "connect")).toHaveLength(1);
             expect(sent.filter((frame) => frame.method === "chat.abort")).toHaveLength(1);
             expect(await composer.inputValue()).toBe("Next draft");
+            await page.screenshot({ path: path.join(artifactDir, "03-send-restored.png") });
           },
         );
       },

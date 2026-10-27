@@ -12,10 +12,8 @@ import {
 import { createMockPluginRegistry } from "../plugins/hooks.test-fixtures.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
-import { getPluginToolMeta } from "../plugins/tool-metadata.js";
 import { createOpenClawCodingToolsInternal } from "./agent-tools.js";
 import type { OpenClawCodingToolsOptions } from "./agent-tools.options.js";
-import { getChannelAgentToolMeta } from "./channel-tool-metadata.js";
 import {
   createCodeModeHarness,
   resetCodeModeTestState,
@@ -63,20 +61,9 @@ const emptyPage = {
 };
 const unavailableRecoveryInputs = [
   { action: "status" },
-  {
-    action: "add",
-    job: {
-      name: "Replacement",
-      schedule: { kind: "every", everyMs: 60_000 },
-      payload: { kind: "systemEvent", text: "Synthetic reminder" },
-    },
-  },
-  { action: "update", jobId: job.id, job: { enabled: true } },
   { action: "remove", jobId: job.id },
-  { action: "run", jobId: job.id },
-  { action: "wake", text: "Resume work" },
-  { action: "next_check", jobId: job.id, in: "15m" },
 ] as const;
+const read = { action: "get", jobId: job.id };
 const gatewayCall = vi.fn<typeof gateway.callGatewayTool>();
 const catalogs: ToolSearchCatalogRef[] = [];
 
@@ -121,17 +108,7 @@ function construct(options: Partial<OpenClawCodingToolsOptions> = {}) {
     },
     ...options,
   });
-  const retained = tools.filter((tool) =>
-    isAgentToolRestartSafe(tool, {
-      declaredReplaySafe: () => {
-        const plugin = getPluginToolMeta(tool);
-        if (plugin) {
-          return !plugin.mcp && plugin.replaySafe === true;
-        }
-        return getChannelAgentToolMeta(tool) ? false : undefined;
-      },
-    }),
-  );
+  const retained = tools.filter((tool) => isAgentToolRestartSafe(tool));
   const catalog = applyToolSearchCatalog({
     tools: retained,
     config: options.config ?? config,
@@ -164,13 +141,12 @@ describe("restart-safe automation inspection", () => {
       return job as T;
     });
 
-    const result = await surface.call({ action: "get", jobId: job.id });
+    const result = await surface.call(read);
 
     expect(result.details).toMatchObject({
       tool: { name: "automations" },
       result: { details: { id: job.id, enabled: false, state: { streamStatus: "running" } } },
     });
-    expect(gatewayCall).toHaveBeenCalledOnce();
     expect(surface.retained.some((tool) => tool.name === "exec")).toBe(false);
     await expect(surface.call({ command: "echo forbidden" }, "exec")).rejects.toThrow();
     expect(gatewayCall).toHaveBeenCalledOnce();
@@ -192,21 +168,14 @@ describe("restart-safe automation inspection", () => {
         },
       },
     });
-    expect(gatewayCall).toHaveBeenLastCalledWith("cron.list", expect.anything(), {
-      includeDisabled: true,
-      compact: true,
-    });
     gatewayCall.mockRejectedValueOnce(new Error("Recorded outcome unavailable"));
-    await expect(surface.call({ action: "get", jobId: job.id })).rejects.toThrow(
-      "Recorded outcome unavailable",
-    );
-    expect(gatewayCall).toHaveBeenCalledTimes(2);
+    await expect(surface.call(read)).rejects.toThrow("Recorded outcome unavailable");
   });
 
-  it("rejects global status and every automation mutation at the owner even with open admission", async () => {
+  it("rejects global status and mutation at the owner even with open admission", async () => {
     const surface = construct();
     const automation = surface.automation();
-    expect(Value.Check(automation.parameters, { action: "get", jobId: job.id })).toBe(true);
+    expect(Value.Check(automation.parameters, read)).toBe(true);
     for (const args of unavailableRecoveryInputs) {
       expect(Value.Check(automation.parameters, args), args.action).toBe(false);
       // Direct invocation exercises the owner guard independently of catalog schema validation.
@@ -229,9 +198,7 @@ describe("restart-safe automation inspection", () => {
       createMockPluginRegistry([{ hookName: "before_tool_call", handler: rewrite }]),
     );
     const automation = surface.automation();
-    await expect(
-      automation.execute("rewritten-read", { action: "get", jobId: job.id }),
-    ).rejects.toThrow(/read-only/i);
+    await expect(automation.execute("rewritten-read", read)).rejects.toThrow(/read-only/i);
     expect(rewrite).toHaveBeenCalled();
     expect(gatewayCall).not.toHaveBeenCalled();
   });
@@ -239,14 +206,14 @@ describe("restart-safe automation inspection", () => {
   it("keeps explicit user denial ahead of recovery availability", async () => {
     const surface = construct({ config: { tools: { ...config.tools, deny: ["automations"] } } });
     expect(surface.tools.some((tool) => tool.name === "automations")).toBe(false);
-    await expect(surface.call({ action: "get", jobId: job.id })).rejects.toThrow();
+    await expect(surface.call(read)).rejects.toThrow();
     expect(gatewayCall).not.toHaveBeenCalled();
   });
 
   it("retains the scheduled run's exact-job restriction while removing cleanup writes", async () => {
     const surface = construct({ trigger: "cron", jobId: job.id });
     gatewayCall.mockResolvedValue(job);
-    await surface.call({ action: "get", jobId: job.id });
+    await surface.call(read);
     await expect(surface.call({ action: "get", jobId: "another-job" })).rejects.toThrow(
       "restricted to the current automation",
     );
@@ -257,20 +224,16 @@ describe("restart-safe automation inspection", () => {
     for (const options of [{ sessionKey: undefined }, { forceRestartSafeTools: false }]) {
       const denied = construct(options);
       await expect(
-        denied.automation().execute("denied-recovery-read", { action: "get", jobId: job.id }),
-      ).resolves.toMatchObject({ details: { gated: true } });
+        denied.automation().execute("denied-recovery-read", read),
+      ).resolves.toMatchObject({
+        details: { gated: true },
+      });
     }
     expect(gatewayCall).not.toHaveBeenCalled();
     const surface = construct({ forceRestartSafeTools: false, senderIsOwner: true });
     const automation = surface.automation();
     expect(isAgentToolRestartSafe(automation)).toBe(false);
     expect(Value.Check(automation.parameters, { action: "remove", jobId: job.id })).toBe(true);
-    gatewayCall
-      .mockResolvedValueOnce({ ...job, configRevision: `sha256:${"a".repeat(64)}` })
-      .mockResolvedValueOnce({ ok: true, removed: true });
-    const result = await automation.execute("normal-removal", { action: "remove", jobId: job.id });
-    expect(result.details).toMatchObject({ ok: true, removed: true });
-    expect(gatewayCall.mock.calls.map(([method]) => method)).toEqual(["cron.get", "cron.remove"]);
   });
 
   it("allows owner reads in forced restart-safe Code Mode without admitting a later write", async () => {

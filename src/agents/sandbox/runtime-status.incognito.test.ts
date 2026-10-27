@@ -39,26 +39,32 @@ const harness: AgentHarness = {
 };
 afterEach(() => memorySessionActorOwners.reset());
 const enabledStatus = { sandboxed: true, sandboxRequired: false };
+const defaultConfig: OpenClawConfig = {
+  agents: { defaults: { sandbox: { mode: "all" } } },
+};
+const identity = <T>(value: T) => value;
 
 function memoryPolicy(state: OpenClawTestState, suffix: string) {
   const sessionKey = `agent:main:dashboard:incognito-${suffix}`;
   const storePath = resolveIncognitoOpenClawAgentSqlitePath({ agentId: "main", env: state.env });
-  const cfg: OpenClawConfig = {
-    agents: { defaults: { sandbox: { mode: "all" } } },
-    session: { store: storePath },
-  };
+  const request = { cfg: { ...defaultConfig, session: { store: storePath } }, sessionKey };
+  const scope = { agentId: "main", sessionKey, storePath, env: state.env };
+  const source = { env: state.env, cwd: state.env.OPENCLAW_STATE_DIR!, assertCurrent() {} };
   return {
-    request: { cfg, sessionKey },
+    request,
     storePath,
-    scope: { agentId: "main", sessionKey, storePath, env: state.env },
-    source: { env: state.env, cwd: state.env.OPENCLAW_STATE_DIR!, assertCurrent() {} },
+    scope,
+    source,
+    classify: () => resolveSandboxRuntimeStatus(request),
+    batch: () => withSandboxRuntimeStatusesInWorker([request], source, identity),
+    update: (entry: Parameters<typeof upsertSessionEntryCore>[1]) =>
+      upsertSessionEntryCore(scope, entry),
   };
 }
 
 it("classifies unbound memory policy and rejects execution after permission or sandbox changes", async () => {
   await withOpenClawTestState({ label: "memory-policy" }, async (state) => {
-    const { request, scope, source } = memoryPolicy(state, "policy");
-    const classify = () => resolveSandboxRuntimeStatus(request);
+    const { request, scope, source, classify, batch, update } = memoryPolicy(state, "policy");
     const observe = observeHostDataSql();
     try {
       await replaceSessionEntry(scope, {
@@ -79,22 +85,16 @@ it("classifies unbound memory policy and rejects execution after permission or s
       };
       expect(classify().sandboxed).toBe(false);
       await expect(assertAgentHarnessExecutionEnvironment(harness, params)).resolves.toBe(true);
-      expect(
-        resolveSandboxRuntimeStatus({
-          ...request,
-          preparedSessionEntry: { sandbox: "required" },
-        }).sandboxRequired,
-      ).toBe(true);
-      await expect(
-        withSandboxRuntimeStatusesInWorker([request], source, (statuses) => statuses),
-      ).resolves.toMatchObject([{ sandboxed: false }]);
-      await upsertSessionEntryCore(scope, { permissionMode: "workspace" });
+      const prepared = { ...request, preparedSessionEntry: { sandbox: "required" as const } };
+      expect(resolveSandboxRuntimeStatus(prepared).sandboxRequired).toBe(true);
+      await expect(batch()).resolves.toMatchObject([{ sandboxed: false }]);
+      await update({ permissionMode: "workspace" });
       await expect(assertAgentHarnessExecutionEnvironment(harness, params)).rejects.toThrow(
         "requires Full access",
       );
       await expect(
         withSandboxRuntimeStatusInWorker(request, source, async () => {
-          await upsertSessionEntryCore(scope, { sandboxMode: undefined });
+          await update({ sandboxMode: undefined });
           return "prepared";
         }),
       ).rejects.toThrow("Session entry changed during read");
@@ -108,11 +108,9 @@ it("classifies unbound memory policy and rejects execution after permission or s
 
 it("classifies absent incognito sessions without allocating an owner", async () => {
   await withOpenClawTestState({ label: "memory-policy-absent" }, async (state) => {
-    const { request, storePath, source } = memoryPolicy(state, "absent");
-    expect(resolveSandboxRuntimeStatus(request)).toMatchObject(enabledStatus);
-    await expect(
-      withSandboxRuntimeStatusesInWorker([request], source, (statuses) => statuses),
-    ).resolves.toMatchObject([enabledStatus]);
+    const { classify, batch, storePath } = memoryPolicy(state, "absent");
+    expect(classify()).toMatchObject(enabledStatus);
+    await expect(batch()).resolves.toMatchObject([enabledStatus]);
     expect(memorySessionActorOwners.read({ agentId: "main", path: storePath })).toBeUndefined();
   });
 });
@@ -164,7 +162,7 @@ const requiredStatus = { sandboxed: true, sandboxRequired: true };
 
 it("uses canonical classification identity in exact, batch, and context resolution", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
-    const cfg: OpenClawConfig = { agents: { defaults: { sandbox: { mode: "all" } } } };
+    const cfg = defaultConfig;
     setRuntimeConfigSnapshot(cfg);
     const optional = "agent:main:optional";
     const required = "agent:main:required";
@@ -195,13 +193,9 @@ it("uses canonical classification identity in exact, batch, and context resoluti
     );
     await expect(
       withSandboxRuntimeStatusesInWorker(
-        ["optional", required, native].map((sessionKey) => ({
-          cfg,
-          agentId: "main",
-          sessionKey,
-        })),
+        ["optional", required, native].map((sessionKey) => ({ cfg, agentId: "main", sessionKey })),
         { env: state.env, cwd: state.workspaceDir, assertCurrent() {} },
-        (statuses) => statuses,
+        identity,
       ),
     ).resolves.toMatchObject([optionalStatus, requiredStatus, requiredStatus]);
     // An opted-out session must not start or prepare any sandbox backend.

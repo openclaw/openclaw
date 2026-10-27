@@ -6,6 +6,7 @@ import type { GatewaySessionRow, SessionsListResult } from "../../../api/types.t
 import { currentThemeBranding, setCurrentThemeBranding } from "../../../app/theme-branding.ts";
 import { resolveAvatarHat } from "../../../components/agent-avatar-hat.ts";
 import { latestBrowserTabCards } from "../../../lib/chat/browser-tab-preview.ts";
+import { sessionListResult } from "../../../test-helpers/chat-model.ts";
 import { createTestGatewayClient } from "../../../test-helpers/gateway-client.ts";
 import { gatewayHelloForMethods } from "../../../test-helpers/gateway-methods.ts";
 import {
@@ -14,8 +15,8 @@ import {
 } from "../../../test-helpers/interrupted-chat-history.ts";
 import { flush, waitForSolid } from "../../../test-helpers/solid-settle.ts";
 import * as artworkLoader from "../../plugins/icon-loader.ts";
+import { createInitializationContext } from "../chat-application-context.test-support.ts";
 import { attachHistoryActivity } from "../chat-history-request.ts";
-import { createInitializationContext } from "../chat-pane.test-support.ts";
 import { createTestTranscript } from "../chat-view.test-helpers.ts";
 import { getChatSessionProjection, reduceChatSessionProjection } from "../history-merge.ts";
 import { saveChatSessionScrollPosition } from "../scroll.ts";
@@ -114,6 +115,31 @@ describe("chat transcript rendering", () => {
     }
     vi.useRealTimers();
     resetTranscriptTestDom();
+  });
+
+  it("keeps cached message context metadata until the live session replaces it", async () => {
+    const sessionKey = "agent:main:cached-meta";
+    const props = threadProps(
+      "cached-meta",
+      sessionKey,
+      [
+        {
+          role: "assistant",
+          content: "Cached reply with usage",
+          usage: { input: 20_000, output: 100 },
+          timestamp: 1_000,
+        },
+      ],
+      { transcriptMetadata: { key: sessionKey, kind: "direct", contextTokens: 100_000 } },
+    );
+    const { container, rerender } = await mountThread(props);
+    expect(container.querySelector(".msg-meta__ctx")?.textContent).toBe("20% ctx");
+    props.transcriptMetadata = undefined;
+    props.selectedSession = { key: sessionKey, kind: "direct", contextTokens: 200_000 };
+    rerender();
+    await waitForSolid(() =>
+      expect(container.querySelector(".msg-meta__ctx")?.textContent).toBe("10% ctx"),
+    );
   });
 
   it.each([true, false])(
@@ -506,13 +532,11 @@ describe("chat transcript rendering", () => {
       archivedAt: 2_000,
       archivedBy: { type: "human", id: "profile-ada", label: "Ada" },
     };
-    const sessions: SessionsListResult = {
-      ts: 0,
-      path: "",
-      count: 1,
-      defaults: { modelProvider: "openai", model: "gpt-5", contextTokens: null },
-      sessions: [archivedSession],
-    };
+    const sessions: SessionsListResult = sessionListResult(0, [archivedSession], {
+      modelProvider: "openai",
+      model: "gpt-5",
+      contextTokens: null,
+    });
     const props = threadProps(
       "pane-archived-notice",
       sessionKey,
@@ -647,21 +671,20 @@ describe("chat transcript rendering", () => {
     );
   }
 
-  function searchFor(container: HTMLElement, query: string) {
-    const input = requireElement(container, "input") as HTMLInputElement;
+  async function searchFor(container: HTMLElement, query: string) {
+    const input = await waitForSolid(() => requireElement(container, "input") as HTMLInputElement);
     input.value = query;
     input.dispatchEvent(new Event("input", { bubbles: true }));
   }
 
-  it("projects search changes without redraw callbacks or replacing its input", () => {
+  it("projects search changes without redraw callbacks or replacing its input", async () => {
     const paneId = "native-search-revision";
     const state = getTranscriptState(paneId);
     const container = transcriptContainer();
     render(renderTranscriptSearch(paneId), container);
     expect(container.querySelector("input")).toBeNull();
     state.search.toggle();
-    flush();
-    const input = requireElement(container, "input") as HTMLInputElement;
+    const input = await waitForSolid(() => requireElement(container, "input") as HTMLInputElement);
     input.focus();
     state.search.setQuery("updated query");
     flush();
@@ -845,7 +868,7 @@ describe("chat transcript rendering", () => {
       toggleTranscriptSearch(paneId);
       flush();
       transcript.start();
-      searchFor(searchContainer, text);
+      await searchFor(searchContainer, text);
       await flushDeferredRowPrune();
 
       const bubble = requireElement(container, ".chat-group.assistant .chat-bubble");
@@ -891,7 +914,7 @@ describe("chat transcript rendering", () => {
       transcript.start();
       rerender();
       if (search) {
-        searchFor(searchContainer, "workspace layout");
+        await searchFor(searchContainer, "workspace layout");
       }
       await flushDeferredRowPrune();
 

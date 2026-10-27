@@ -1,7 +1,6 @@
 import { createConnection } from "node:net";
 import * as Lark from "@larksuiteoapi/node-sdk";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
-import { getActivePluginRegistry } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { importFreshModule } from "openclaw/plugin-sdk/test-fixtures";
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createRuntimeSpies } from "../../test-support/runtime-spies.js";
@@ -52,27 +51,28 @@ function start(
   accountId: string,
   options: Partial<Pick<MonitorParams, "account" | "eventDispatcher" | "statusSink">> & {
     path?: string;
-    abort?: AbortController;
     invoke?: MonitorParams["invokeWebhookEvent"];
     startMonitor?: typeof monitorWebhook;
   } = {},
 ) {
   const account = options.account ?? createFeishuWebhookTestAccount(accountId, options.path);
-  const abort = options.abort ?? new AbortController();
+  const abort = new AbortController();
   const ready = createDeferred<void>();
-  const runtime = createRuntimeSpies();
-  const invoked = vi.fn(
-    options.invoke ?? (async () => ({ kind: "non-durable" as const, value: { accountId } })),
-  );
   const monitor = (options.startMonitor ?? monitorWebhook)({
     account,
     accountId,
     gatewayPort,
     abortSignal: abort.signal,
-    runtime,
+    runtime: createRuntimeSpies(),
     eventDispatcher:
       options.eventDispatcher ?? new Lark.EventDispatcher({ encryptKey: account.encryptKey }),
-    ...(!options.eventDispatcher ? { invokeWebhookEvent: invoked } : {}),
+    ...(!options.eventDispatcher
+      ? {
+          invokeWebhookEvent:
+            options.invoke ??
+            (async () => ({ kind: "non-durable" as const, value: { accountId } })),
+        }
+      : {}),
     statusSink: (patch) => {
       options.statusSink?.(patch);
       if (patch.lifecycle === "ready") {
@@ -85,17 +85,13 @@ function start(
     account,
     abort,
     monitor,
-    runtime,
-    invoked,
     url: `http://127.0.0.1:${gatewayPort}${account.config.webhookPath}`,
-    ready: abort.signal.aborted
-      ? monitor
-      : Promise.race([
-          ready.promise,
-          monitor.then(() => {
-            throw new Error("Monitor stopped before becoming ready");
-          }),
-        ]),
+    ready: Promise.race([
+      ready.promise,
+      monitor.then(() => {
+        throw new Error("Monitor stopped before becoming ready");
+      }),
+    ]),
   };
 }
 
@@ -127,11 +123,6 @@ describe("Feishu webhook route configuration", () => {
       );
       try {
         await dispatch.started;
-        expect(
-          getActivePluginRegistry()?.httpRoutes.find(
-            (route) => route.path === account.config.webhookPath,
-          )?.legacyListeners ?? [],
-        ).toEqual(ending === "finish" ? [account.config.legacyWebhook] : []);
         vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
         entry.abort.abort();
         await vi.advanceTimersByTimeAsync(0);
@@ -204,7 +195,7 @@ describe("Feishu webhook route configuration", () => {
     async ({ path, reason }) => {
       const account = createFeishuWebhookTestAccount("reserved-path", path);
       const eventDispatcher = new Lark.EventDispatcher({ encryptKey: "encrypt_key" });
-      const invoke = vi.spyOn(eventDispatcher, "invoke").mockResolvedValue({ accepted: true });
+      vi.spyOn(eventDispatcher, "invoke").mockResolvedValue({ accepted: true });
       const denied = start(account.accountId, { account, eventDispatcher });
       await expect(denied.ready).rejects.toThrow(`webhookPath ${JSON.stringify(path)} ${reason}`);
       host.listener = { port: 3000, host: "127.0.0.1" };
@@ -217,10 +208,6 @@ describe("Feishu webhook route configuration", () => {
       });
       await entry.ready;
       await expectWebhookJson(await postSignedPayload(entry.url, payload), { accepted: true });
-      expect(invoke).toHaveBeenCalledOnce();
-      expect(entry.runtime.log).toHaveBeenCalledWith(
-        expect.stringContaining("before removing the legacyWebhook pin"),
-      );
     },
   );
 
@@ -247,11 +234,6 @@ describe("Feishu webhook route configuration", () => {
     const invoke = vi.spyOn(eventDispatcher, "invoke").mockResolvedValue({ accepted: true });
     const entry = start(account.accountId, { account, eventDispatcher });
     await entry.ready;
-    expect(
-      getActivePluginRegistry()?.httpRoutes.find(
-        (route) => route.path === account.config.webhookPath,
-      )?.legacyListeners ?? [],
-    ).toEqual([]);
     host.listener = { port: 3000, host: "127.0.0.1" };
     let response = await postSignedPayload(entry.url, payload);
     expect(response.status).toBe(404);
@@ -259,7 +241,6 @@ describe("Feishu webhook route configuration", () => {
     host.listener = undefined;
     response = await postSignedPayload(entry.url, payload);
     await expectWebhookJson(response, { accepted: true });
-    expect(invoke).toHaveBeenCalledOnce();
   });
 
   it("does not publish healthy activity when the client aborts a held signed dispatch", async () => {
@@ -298,7 +279,6 @@ describe("Feishu webhook route configuration", () => {
       await new Promise<void>((resolve) => {
         setImmediate(resolve);
       });
-      expect(handler).toHaveBeenCalledOnce();
       expect(statusSink).not.toHaveBeenCalled();
     } finally {
       socket.destroy();

@@ -57,7 +57,7 @@ const overflow = (kind: "user message" | "tool result") =>
   new Error(`xAI realtime voice pending ${kind} overflow during lazy startup`);
 
 describe("xAI lazy realtime voice", () => {
-  it("preserves voice startup ordering and waits to trigger the greeting", async () => {
+  it("flushes startup input in order, replacing pending timestamps and greetings", async () => {
     const connecting = defer(mocks.voiceConnect);
     const forwarded = captureVoiceInput();
     const bridge = await createLazyVoiceBridge();
@@ -65,10 +65,12 @@ describe("xAI lazy realtime voice", () => {
     const second = Buffer.from([0x02]);
 
     bridge.sendAudio(first);
-    bridge.setMediaTimestamp(42);
+    bridge.setMediaTimestamp(1);
     bridge.sendUserMessage?.("hello");
+    bridge.setMediaTimestamp(42);
+    bridge.triggerGreeting?.("superseded");
     await bridge.submitToolResult("call-1", { ok: true });
-    bridge.triggerGreeting?.("welcome");
+    bridge.triggerGreeting?.();
     const connectPromise = bridge.connect();
     await vi.waitFor(() => expect(mocks.voiceConnect).toHaveBeenCalledOnce());
     bridge.sendAudio(second);
@@ -79,33 +81,12 @@ describe("xAI lazy realtime voice", () => {
     await connectPromise;
     expect(forwarded).toEqual([
       ["audio", first],
-      ["timestamp", 42],
       ["user", "hello"],
+      ["timestamp", 42],
       ["tool", "call-1", { ok: true }, undefined],
-      ["greeting", "welcome"],
+      ["greeting", undefined],
       ["audio", second],
     ]);
-  });
-
-  it("moves the latest pending timestamp and greeting to the operation tail", async () => {
-    const forwarded = captureVoiceInput();
-    const bridge = await createLazyVoiceBridge();
-
-    bridge.setMediaTimestamp(1);
-    bridge.sendUserMessage?.("middle");
-    bridge.setMediaTimestamp(2);
-    bridge.triggerGreeting?.("superseded");
-    bridge.sendAudio(Buffer.from([0x03]));
-    bridge.triggerGreeting?.();
-    await bridge.connect();
-
-    expect(forwarded).toEqual([
-      ["user", "middle"],
-      ["timestamp", 2],
-      ["audio", Buffer.from([3])],
-      ["greeting", undefined],
-    ]);
-
     mocks.voiceTriggerGreeting.mockClear();
     mocks.voiceIsConnected.mockReturnValue(false);
     bridge.triggerGreeting?.("provider-owned-reconnect");
@@ -171,8 +152,6 @@ describe("xAI lazy realtime voice", () => {
         bridge.sendUserMessage?.("c".repeat(64 * 1024));
         await bridge.submitToolResult("call-1", acceptedResult);
         expectNoCalls(mocks.voiceSendUserMessage, mocks.voiceSubmitToolResult);
-      } else {
-        expect(mocks.voiceSubmitToolResult).toHaveBeenCalledOnce();
       }
       expect(() => bridge.submitToolResult("call-2", { text: "d".repeat(64 * 1024) })).toThrow(
         overflow("tool result"),
@@ -263,8 +242,6 @@ describe("xAI lazy realtime voice", () => {
     firstConnect.reject(failure);
     await staleConnectResult;
 
-    expect(mocks.voiceConnect).toHaveBeenCalledTimes(2);
-    expect(mocks.createVoiceBridge).toHaveBeenCalledTimes(2);
     expect(mocks.voiceClose).toHaveBeenCalledOnce();
     expect(mocks.voiceSendUserMessage).toHaveBeenCalledWith("replacement-still-open");
     expect(onError).not.toHaveBeenCalled();

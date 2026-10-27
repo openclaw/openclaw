@@ -4,14 +4,9 @@ import { DatabaseSync } from "node:sqlite";
 import { afterEach, assert, beforeEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { preflightOpenClawDatabaseSchemas } from "../../state/openclaw-database-preflight.js";
-import {
-  closeOpenClawStateDatabaseAsync,
-  closeOpenClawStateDatabaseForTest,
-  openOpenClawStateDatabase,
-} from "../../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
-import { removePreparedWorkerOwnershipColumns } from "../../state/openclaw-state-schema-v17.test-support.js";
 import { execNodeEvalSync } from "../../test-utils/node-process.js";
+import { stepFixture } from "./update-command-fixtures.test-support.js";
 
 const mocks = vi.hoisted(() => ({ doctor: vi.fn() }));
 vi.mock("./update-command-package.js", () => ({ runPackageUpdateDoctor: mocks.doctor }));
@@ -24,15 +19,13 @@ import {
 
 const dirs = useAutoCleanupTempDirTracker(afterEach);
 const targetSchemas = { state: 16, agent: 19 };
-const doctorSuccess = {
-  name: "openclaw doctor",
+const doctorSuccess = stepFixture("openclaw doctor", {
   command: "node openclaw.mjs doctor --non-interactive --fix",
   cwd: "/selected-target",
-  durationMs: 1,
   exitCode: 0,
   stdoutTail: "",
   stderrTail: "",
-};
+});
 let env: NodeJS.ProcessEnv;
 let filename: string;
 type Options = Parameters<typeof initializeUpdateStateFromTarget>[0];
@@ -56,7 +49,6 @@ beforeEach(() => {
   env = freshEnvironment();
   filename = resolveOpenClawStateSqlitePath(env);
 });
-afterEach(() => closeOpenClawStateDatabaseForTest());
 
 function runIndependentSchemaWriter(value: string) {
   const params = { databasePath: filename };
@@ -84,32 +76,22 @@ function runIndependentSchemaWriter(value: string) {
   ).trim();
 }
 
-function withDatabase(file: string, use: (db: DatabaseSync) => void, readOnly = false) {
-  using db = new DatabaseSync(file, { readOnly });
-  use(db);
-}
-
-let targetDatabaseBytes: Buffer | undefined;
 async function publishTargetDatabase() {
-  if (!targetDatabaseBytes) {
-    const file = openOpenClawStateDatabase({ env: freshEnvironment() }).path;
-    await closeOpenClawStateDatabaseAsync();
-    withDatabase(file, (db) => {
-      removePreparedWorkerOwnershipColumns(db);
-      db.exec(
-        "PRAGMA user_version=16; UPDATE schema_meta SET schema_version=16, app_version='2026.9.2'",
-      );
-    });
-    targetDatabaseBytes = fs.readFileSync(file);
-  }
   fs.mkdirSync(path.dirname(filename), { recursive: true });
-  fs.writeFileSync(filename, targetDatabaseBytes);
+  {
+    using database = new DatabaseSync(filename);
+    // Initialization only needs the target's schema header and some bytes to preserve.
+    database.exec(
+      "PRAGMA user_version=16; CREATE TABLE target_state(value); INSERT INTO target_state VALUES('retained');",
+    );
+  }
   return fs.readFileSync(filename);
 }
 
 async function checkTargetSchemas(selectedEnv: NodeJS.ProcessEnv) {
   const result = await preflightOpenClawDatabaseSchemas({
     env: selectedEnv,
+    scope: "state",
     supportedVersions: targetSchemas,
   });
   if (result.incompatible.length || result.indeterminate.length) {
@@ -198,11 +180,10 @@ it.each([
       );
       mocks.doctor.mockImplementation(async () => {
         fs.mkdirSync(path.dirname(filename), { recursive: true });
-        withDatabase(filename, (db) => {
-          db.exec(
-            "PRAGMA user_version=1; CREATE TABLE legacy_state(value TEXT); INSERT INTO legacy_state VALUES('target-owned')",
-          );
-        });
+        using db = new DatabaseSync(filename);
+        db.exec(
+          "PRAGMA user_version=1; CREATE TABLE legacy_state(value TEXT); INSERT INTO legacy_state VALUES('target-owned')",
+        );
         return doctorSuccess;
       });
       await fence.run(async () => {
@@ -216,16 +197,11 @@ it.each([
       await expect(updateStateNeedsInitialization(env)).rejects.toThrow(
         "without an active schema lease or maintenance scope",
       );
-      withDatabase(
-        filename,
-        (reader) => {
-          expect(reader.prepare("PRAGMA user_version").get()).toEqual({ user_version: 1 });
-          expect(reader.prepare("SELECT value FROM legacy_state").get()).toEqual({
-            value: "target-owned",
-          });
-        },
-        true,
-      );
+      using reader = new DatabaseSync(filename, { readOnly: true });
+      expect(reader.prepare("PRAGMA user_version").get()).toEqual({ user_version: 1 });
+      expect(reader.prepare("SELECT value FROM legacy_state").get()).toEqual({
+        value: "target-owned",
+      });
     } finally {
       await fence?.release();
     }

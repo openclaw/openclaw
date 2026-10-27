@@ -11,12 +11,11 @@ const visible = { snapshot: '- button "Visible" [ref=e1]', refs: { e1: { role: "
 describe("pw-role-snapshot", () => {
   it.each([false, true])("preserves encoded names and frame refs (%s)", (interactive) => {
     const snapshot = `- 'button "Save: owner''s draft" [ref=f2e3]': text [ref=e99]\n- button "Save \\"draft\\" [ref=e98]" [ref=f2e4]`;
-    const { refs, stats } = finalize(build(snapshot, { interactive }));
+    const { refs } = finalize(build(snapshot, { interactive }));
     expect(refs).toEqual({
       f2e3: { role: "button", name: "Save: owner's draft" },
       f2e4: { role: "button", name: 'Save "draft" [ref=e98]' },
     });
-    expect(stats.refs).toBe(2);
   });
 
   it.each([
@@ -74,15 +73,10 @@ describe("pw-role-snapshot", () => {
     const result = finalize({
       snapshot:
         '- button "Visible \\" [ref=e2]" [ref=e1]\n- button: attacker [ref=e2]\n\nLinks:\n1. [ref=e3] -> https://example.com/',
-      refs: {
-        e1: { role: "button" },
-        e2: { role: "button" },
-        e3: { role: "link" },
-      },
+      refs: { ...visible.refs, e2: { role: "button" }, e3: { role: "link" } },
     });
 
     expect(result.refs).toEqual({ e1: { role: "button" } });
-    expect(result.stats).toMatchObject({ refs: 1 });
   });
 
   it("preserves MCP refs around Unicode separators", () => {
@@ -113,24 +107,16 @@ describe("pw-role-snapshot", () => {
     expect(result.truncated).toBeUndefined();
   });
 
-  it("marks only new role identities and preserves ref extraction", () => {
-    const previousKeys = identityKeys({ e1: { role: "button", name: "Save" } }, "role");
-    const refs = {
-      e7: { role: "button", name: "Save" },
-      e8: { role: "dialog", name: "Confirmation" },
-    };
-    const finalized = finalize({
-      snapshot: ['- button "Save" [ref=e7]', '- dialog "Confirmation" [ref=e8]'].join("\n"),
-      refs,
-      delta: { mode: "role", previousKeys },
-    });
-
-    expect(finalized).toMatchObject({
-      snapshot:
-        '- button "Save" [ref=e7]\n- dialog "Confirmation" [ref=e8] [new]\n1 new element(s) since last snapshot',
-      newElements: 1,
-    });
-    expect(finalized.refs).toEqual(refs);
+  it("does not mark remembered role identities when refs change", () => {
+    const button = { role: "button", name: "Save" };
+    const snapshot = '- button "Save" [ref=e7]';
+    expect(
+      finalize({
+        snapshot,
+        refs: { e7: button },
+        delta: { mode: "role", previousKeys: identityKeys({ e1: button }, "role") },
+      }).snapshot,
+    ).toBe(snapshot);
   });
 
   it("parses role refs", () => {

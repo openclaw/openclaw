@@ -42,20 +42,6 @@ function createTypingHarness(overrides: TypingHarnessOptions = {}) {
 }
 
 describe("createTypingCallbacks", () => {
-  it("coalesces concurrent starts without blocking and allows a later start", async () => {
-    const { promise, resolve } = createDeferred();
-    const { start, callbacks } = createTypingHarness({
-      start: vi.fn().mockReturnValueOnce(promise).mockResolvedValue(undefined),
-    });
-
-    await Promise.all(Array.from({ length: 100 }, () => callbacks.onReplyStart()));
-    expect(start).toHaveBeenCalledTimes(1);
-    resolve();
-    await flushMicrotasks();
-    await callbacks.onReplyStart();
-    expect(start).toHaveBeenCalledTimes(2);
-  });
-
   it("coalesces explicit starts with a pending keepalive without shifting cadence", async () => {
     const { promise, resolve } = createDeferred();
     const { start, callbacks } = createTypingHarness({
@@ -64,19 +50,15 @@ describe("createTypingCallbacks", () => {
         .mockResolvedValueOnce(undefined)
         .mockReturnValueOnce(promise),
     });
-
     await callbacks.onReplyStart();
     await flushMicrotasks();
     await vi.advanceTimersByTimeAsync(3_000);
     expect(start).toHaveBeenCalledTimes(2);
-
-    await callbacks.onReplyStart();
+    await Promise.all(Array.from({ length: 100 }, () => callbacks.onReplyStart()));
     await vi.advanceTimersByTimeAsync(9_000);
     expect(start).toHaveBeenCalledTimes(2);
-
     resolve();
     await flushMicrotasks();
-
     await vi.advanceTimersByTimeAsync(2_999);
     expect(start).toHaveBeenCalledTimes(2);
     await vi.advanceTimersByTimeAsync(1);
@@ -136,10 +118,8 @@ describe("createTypingCallbacks", () => {
     const { stop, onStopError, callbacks } = createTypingHarness({
       stop: vi.fn().mockRejectedValue(new Error("stop")),
     });
-
     callbacks.onIdle?.();
     await flushMicrotasks();
-
     expect(stop).toHaveBeenCalledTimes(1);
     expect(onStopError).toHaveBeenCalledTimes(1);
   });
@@ -158,18 +138,15 @@ describe("createTypingCallbacks", () => {
         acceptedStarts.push(now);
       },
     });
-
     await callbacks.onReplyStart();
     for (let elapsedMs = 6_000; elapsedMs <= 132_000; elapsedMs += 6_000) {
       await vi.advanceTimersByTimeAsync(6_000);
       await callbacks.onReplyStart();
     }
-
     expect(acceptedStarts.at(-1)).toBeGreaterThan(120_000);
     for (let index = 1; index < acceptedStarts.length; index += 1) {
       expect(acceptedStarts[index]! - acceptedStarts[index - 1]!).toBeLessThanOrEqual(4_000);
     }
-
     callbacks.onIdle?.();
     const countAtTaskCompletion = acceptedStarts.length;
     await vi.advanceTimersByTimeAsync(12_000);

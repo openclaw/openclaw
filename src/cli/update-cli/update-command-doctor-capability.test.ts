@@ -10,6 +10,7 @@ import { createUpdateRun } from "../../infra/update-run-ledger.js";
 import * as commandExec from "../../process/exec.js";
 import { defaultRuntime } from "../../runtime.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
+import { writeFixtureJson } from "../cli-fixtures.test-support.js";
 import type { UpdateCommandOptions } from "./shared.js";
 import { convergeUpdatePlugins } from "./update-command-convergence.js";
 import { updateExecutorNativeEntrypoints } from "./update-command-executor-native-runtime.test-support.js";
@@ -53,14 +54,11 @@ it.each([
       vi.spyOn(defaultRuntime, "log").mockImplementation(() => undefined);
       vi.spyOn(defaultRuntime, "error").mockImplementation(() => undefined);
       await state.writeConfig({ plugins: { enabled: false } });
-      await fs.writeFile(
-        path.join(root, "package.json"),
-        JSON.stringify({
-          name: "openclaw",
-          type: "module",
-          version: targetVersion,
-        }),
-      );
+      await writeFixtureJson(path.join(root, "package.json"), {
+        name: "openclaw",
+        type: "module",
+        version: targetVersion,
+      });
       await fs.writeFile(
         path.join(root, "dist", "index.js"),
         `import fs from "node:fs";
@@ -94,6 +92,7 @@ it.each([
               ? `
               ${owner.pathname.endsWith(".ts") ? `await import(${JSON.stringify(pathToFileURL(path.resolve("scripts/tsx.mjs")).href)});` : ""}
               const {withDelegatedUpdateCommandExecutor}=await import(${JSON.stringify(owner.href)});
+              if (input.fullIntegrityCheck !== true) throw new Error("Doctor lost full integrity request");
               await withDelegatedUpdateCommandExecutor(input.executor,input.runId,input.root,async fence=>{
                 fence.assertCurrent();
                 fs.appendFileSync(${JSON.stringify(marker)},"native-doctor\\n");
@@ -146,6 +145,7 @@ it.each([
       const opts: UpdateCommandOptions = {
         yes: true,
         json: true,
+        fullIntegrityCheck: target === "modern",
         run: {
           runId: record.runId,
           env: state.env,

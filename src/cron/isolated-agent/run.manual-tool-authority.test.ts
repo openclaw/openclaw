@@ -4,9 +4,9 @@ import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { applyEmbeddedAttemptToolsAllow } from "../../agents/embedded-agent-runner/run/attempt-tool-construction-plan.js";
 import type { RunEmbeddedAgentParams } from "../../agents/embedded-agent-runner/run/params.js";
 import { AUTOMATIONS_TOOL_NAME } from "../../agents/tools/automations-tool-name.js";
-import { createGatewayMethodRegistry } from "../../gateway/methods/registry.js";
 import { captureGatewayOperatorRunAuthority } from "../../gateway/operator-run-authority.js";
 import { createScheduledGatewayRunner } from "../../gateway/scheduled-run-gateway-context.js";
+import { createRequestGatewayMethodRegistry } from "../../gateway/server-methods.js";
 import { cronHandlers } from "../../gateway/server-methods/cron.js";
 import {
   createCronFixture,
@@ -26,20 +26,15 @@ import {
   resetAuthorityRunHarness,
   withAuthorityTools,
 } from "./run.authority.test-support.js";
-import {
-  loadRunCronIsolatedAgentTurn,
-  makeCronSession,
-  resolveCronSessionMock,
-  runEmbeddedAgentMock,
-} from "./run.test-harness.js";
+import * as harness from "./run.test-harness.js";
 
-const runCronIsolatedAgentTurn = await loadRunCronIsolatedAgentTurn();
+const runCronIsolatedAgentTurn = await harness.loadRunCronIsolatedAgentTurn();
 installRequesterCronAuthorityTestHooks();
 
 beforeEach(resetAuthorityRunHarness);
 
 afterEach(() => {
-  runEmbeddedAgentMock.mockReset();
+  harness.runEmbeddedAgentMock.mockReset();
 });
 
 it.each(["allowed", "senderless", "read-only", "disable", "remove"] as const)(
@@ -53,7 +48,9 @@ it.each(["allowed", "senderless", "read-only", "disable", "remove"] as const)(
       session: { store: sessionStorePath },
       tools: { allow: [AUTOMATIONS_TOOL_NAME, "read"] },
     });
-    resolveCronSessionMock.mockReturnValue(makeCronSession({ storePath: sessionStorePath }));
+    harness.resolveCronSessionMock.mockReturnValue(
+      harness.makeCronSession({ storePath: sessionStorePath }),
+    );
     const fixture = createCronFixture(undefined, config);
     const { context } = fixture;
     context.resolveGatewayContext = () => context;
@@ -62,27 +59,14 @@ it.each(["allowed", "senderless", "read-only", "disable", "remove"] as const)(
       expectDefined(cronHandlers["cron.list"], "cron.list")(options),
     );
     context.getGatewayMethodRegistry = () =>
-      createGatewayMethodRegistry(
-        (
-          [
-            ["cron.add", "operator.admin"],
-            ["cron.run", "operator.write"],
-            ["cron.list", "operator.read"],
-          ] as const
-        ).map(([name, scope]) => ({
-          name,
-          scope,
-          owner: { kind: "core", area: "cron" },
-          handler: name === "cron.list" ? listHandler : expectDefined(cronHandlers[name], name),
-        })),
-      );
+      createRequestGatewayMethodRegistry({ "cron.list": listHandler });
     const toolsReady = createDeferredCore();
     const continueTool = createDeferredCore();
     const finished = createDeferredCore<CronEvent>();
     let offeredTools: string[] = [];
     let toolResult: unknown;
     let toolError: string | undefined;
-    runEmbeddedAgentMock.mockImplementation(async (params: RunEmbeddedAgentParams) =>
+    harness.runEmbeddedAgentMock.mockImplementation(async (params: RunEmbeddedAgentParams) =>
       withAuthorityTools(
         params,
         async (constructed) => {

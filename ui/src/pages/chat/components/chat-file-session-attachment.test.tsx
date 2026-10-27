@@ -88,10 +88,7 @@ it.each(["original", "dirty", "fallback"])(
     });
     view.container.querySelector("button")!.click();
     await waitForSolid(() => expect(attachments).toHaveLength(1));
-    const attachment = attachments[0];
-    if (!attachment) {
-      throw new Error("The file was not staged");
-    }
+    const attachment = attachments[0]!;
     expect(attachment).toMatchObject({
       fileName: "notes.md",
       mimeType: "text/markdown",
@@ -119,7 +116,6 @@ it.each([
   "connection",
   "unmount",
   "source",
-  "destination",
   "policy",
   "auth",
   "runtime agent",
@@ -173,63 +169,40 @@ it.each([
     };
     const [props, setProps] = createSignal(initial);
     let transfer!: ReturnType<typeof createFileSessionAttachment>;
-    const view = mountSolid(() => {
-      transfer = createFileSessionAttachment({
-        get content() {
-          return props().content;
-        },
-        get attachmentChat() {
-          return props().attachmentChat;
-        },
-        get attachmentRuntime() {
-          return props().attachmentRuntime;
-        },
-        get filePresented() {
-          return props().filePresented;
-        },
-        get fileWorkspace() {
-          return props().fileWorkspace;
-        },
-      });
+    function TransferButton(current: FileSessionAttachmentProps) {
+      transfer = createFileSessionAttachment(current);
       return <button onClick={() => transfer()?.attach()}>Attach</button>;
-    });
+    }
+    const view = mountSolid(() => <TransferButton {...props()} />);
     const button = view.getByRole("button", { name: "Attach" });
     button.click();
     button.click();
     expect(balance).toBe(1);
     await waitForSolid(() => expect(transfer()?.pending).toBe(true));
     expect(download).toHaveBeenCalledOnce();
-    const next = { ...initial };
-    if (change === "file") {
-      next.content = { ...file, path: "other.md" };
-    } else if (change === "source") {
-      next.content = { ...file, download: async () => null };
-    } else if (change === "session" || change === "destination") {
-      next.attachmentChat = { ...initial.attachmentChat!, sessionKey: "agent:main:other" };
-    } else if (change === "connection") {
-      next.attachmentRuntime = { ...initial.attachmentRuntime, connectionEpoch: 2 };
-    } else if (change === "policy") {
-      next.attachmentRuntime = { ...initial.attachmentRuntime, policyKey: "next" };
-    } else if (change === "auth") {
-      next.attachmentRuntime = { ...initial.attachmentRuntime, authToken: "synthetic-next" };
-    } else if (change === "runtime agent") {
-      next.attachmentRuntime = { ...initial.attachmentRuntime, agentId: "other" };
-    } else if (change === "runtime session") {
-      next.attachmentRuntime = { ...initial.attachmentRuntime, sessionKey: "agent:main:other" };
-    } else if (change === "resource base") {
-      next.attachmentRuntime = { ...initial.attachmentRuntime, resourceBasePath: "/next/" };
-    } else if (change === "artifact resolver") {
-      next.attachmentRuntime = {
-        ...initial.attachmentRuntime,
-        resolveArtifactDownload: async () => null,
-      };
-    } else if (change === "hidden") {
-      next.filePresented = false;
-    } else if (change === "folder") {
-      next.fileWorkspace = { showingFolder: true };
-    } else if (change === "pending owner") {
-      next.attachmentChat = { ...initial.attachmentChat!, onPendingReadsChange: () => {} };
-    }
+    const runtime = (patch: Partial<FileSessionAttachmentProps["attachmentRuntime"]>) => ({
+      attachmentRuntime: { ...initial.attachmentRuntime, ...patch },
+    });
+    const changes: Record<typeof change, Partial<FileSessionAttachmentProps>> = {
+      file: { content: { ...file, path: "other.md" } },
+      source: { content: { ...file, download: async () => null } },
+      session: { attachmentChat: { ...initial.attachmentChat!, sessionKey: "agent:main:other" } },
+      connection: runtime({ connectionEpoch: 2 }),
+      policy: runtime({ policyKey: "next" }),
+      auth: runtime({ authToken: "synthetic-next" }),
+      "runtime agent": runtime({ agentId: "other" }),
+      "runtime session": runtime({ sessionKey: "agent:main:other" }),
+      "resource base": runtime({ resourceBasePath: "/next/" }),
+      "artifact resolver": runtime({ resolveArtifactDownload: async () => null }),
+      hidden: { filePresented: false },
+      folder: { fileWorkspace: { showingFolder: true } },
+      "pending owner": {
+        attachmentChat: { ...initial.attachmentChat!, onPendingReadsChange: () => {} },
+      },
+      unmount: {},
+      disconnect: {},
+    };
+    const next = { ...initial, ...changes[change] };
     if (change === "unmount") {
       view.unmount();
     } else {

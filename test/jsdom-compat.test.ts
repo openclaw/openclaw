@@ -1,5 +1,4 @@
 /* @vitest-environment jsdom */
-import { resolveObjectURL } from "node:buffer";
 import { spawnSync } from "node:child_process";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
@@ -22,6 +21,7 @@ describe("jsdom native API boundary", () => {
         "--eval",
         `
           import assert from "node:assert/strict";
+          import { resolveObjectURL } from "node:buffer";
           import { createRequire } from "node:module";
           const require = createRequire(process.argv[1]);
           const { builtinEnvironments } = require("vitest/runtime");
@@ -40,12 +40,14 @@ describe("jsdom native API boundary", () => {
           }
           const environment = await builtinEnvironments.jsdom.setup(globalThis, {});
           try {
-            const url = URL.createObjectURL(new Blob(["complete asset"], { type: "image/png" }));
+            const url = URL.createObjectURL(new Blob([new Uint8Array([0, 1, 127, 128, 255])], { type: "image/png" }));
             try {
-              process.stdout.write(await (await fetch(url)).text());
+              assert.equal(resolveObjectURL(url)?.type, "image/png");
+              process.stdout.write(Buffer.from(await (await fetch(url)).arrayBuffer()).toString("hex"));
             } finally {
               URL.revokeObjectURL(url);
             }
+            await assert.rejects(fetch(url));
           } finally {
             await environment.teardown(globalThis);
           }
@@ -59,21 +61,14 @@ describe("jsdom native API boundary", () => {
     );
     expect(result.error).toBeUndefined();
     expect(result.status, result.stderr).toBe(0);
-    expect(result.stdout).toBe("complete asset");
+    expect(result.stdout).toBe("00017f80ff");
   });
 
-  it.each([0, 2])("keeps window event identity across %i iframe levels", (depth) => {
-    let target: Window = window;
-    let outerFrame: HTMLIFrameElement | undefined;
-    for (let level = 0; level < depth; level++) {
-      const frame = target.document.createElement("iframe");
-      target.document.body.append(frame);
-      outerFrame ??= frame;
-      if (!frame.contentWindow) {
-        throw new Error("Missing iframe window");
-      }
-      target = frame.contentWindow;
-    }
+  it("keeps event identity in nested iframe windows", () => {
+    const frame = document.createElement("iframe");
+    document.body.append(frame);
+    frame.contentDocument!.body.innerHTML = "<iframe></iframe>";
+    const target = frame.contentWindow!.frames[0]!;
     const received: Event[] = [];
     const listener = (event: Event) => received.push(event);
     const event = new Event("openclaw-jsdom-probe");
@@ -87,21 +82,8 @@ describe("jsdom native API boundary", () => {
         /not a valid instance of EventTarget/,
       );
     } finally {
-      outerFrame?.remove();
+      frame.remove();
     }
-  });
-
-  it("preserves Blob bytes through object URLs and revocation", async () => {
-    const bytes = new Uint8Array([0, 1, 127, 128, 255]);
-    const url = URL.createObjectURL(new Blob([bytes], { type: "application/octet-stream" }));
-    try {
-      expect(resolveObjectURL(url)?.type).toBe("application/octet-stream");
-      const response = await fetch(url);
-      expect(new Uint8Array(await response.arrayBuffer())).toEqual(bytes);
-    } finally {
-      URL.revokeObjectURL(url);
-    }
-    await expect(fetch(url)).rejects.toThrow();
   });
 
   it("preserves Blob and multipart file bytes, names, and types in Request", async () => {
@@ -112,18 +94,11 @@ describe("jsdom native API boundary", () => {
     form.append("label", "synthetic");
     form.append("file", file);
     const multipart = new Request("https://example.test/", { method: "POST", body: form });
-    const boundary = multipart.headers.get("content-type")?.match(/boundary=(.+)$/u)?.[1];
-    expect(boundary).toBeTruthy();
-    expect(await multipart.text()).toBe(
-      `--${boundary}\r\n` +
-        'Content-Disposition: form-data; name="label"\r\n\r\n' +
-        "synthetic\r\n" +
-        `--${boundary}\r\n` +
-        'Content-Disposition: form-data; name="file"; filename="report.bin"\r\n' +
-        "Content-Type: application/octet-stream\r\n\r\n" +
-        "exact file bytes\r\n" +
-        `--${boundary}--\r\n`,
-    );
+    const decoded = await multipart.formData();
+    expect(decoded.get("label")).toBe("synthetic");
+    const part = decoded.get("file");
+    expect(part).toMatchObject({ name: "report.bin", type: "application/octet-stream" });
+    expect(await new Response(part).text()).toBe("exact file bytes");
   });
 
   it("keeps the DOM FileReader and File brands paired", async () => {
@@ -133,7 +108,9 @@ describe("jsdom native API boundary", () => {
       reader.addEventListener(
         "error",
         () => reject(reader.error ?? new Error("FileReader failed")),
-        { once: true },
+        {
+          once: true,
+        },
       );
     });
     reader.readAsDataURL(new File(["reader bytes"], "reader.txt", { type: "text/plain" }));
@@ -154,9 +131,6 @@ describe("jsdom native API boundary", () => {
     });
     try {
       expect(preparations).toBe(1);
-      expect(
-        await new target.Request("https://example.test/", { method: "POST", body: "ok" }).text(),
-      ).toBe("ok");
     } finally {
       await environment.teardown(target);
     }

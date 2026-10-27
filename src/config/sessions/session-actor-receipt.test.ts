@@ -5,8 +5,13 @@ import { runSqliteImmediateTransactionSync } from "../../infra/sqlite-transactio
 import { readTranscriptEventRows } from "./session-accessor.sqlite-read.js";
 import { appendTranscriptEventsInTransaction } from "./session-accessor.sqlite-transcript-store.js";
 import type { SessionActorHotState } from "./session-actor-contract.js";
-import { createSessionActorCommittedOutcome } from "./session-actor-receipt.js";
+import {
+  createSessionActorCommittedOutcome,
+  projectSessionActorCommittedOutcome,
+  restoreSessionActorCommittedOutcome,
+} from "./session-actor-receipt.js";
 import { withActor, type Fixture, type Mutation } from "./session-actor-worker.test-support.js";
+import { addSessionMember } from "./session-sharing-store.native.js";
 
 // mock-isolation: Count real receipt encodings separately from residency/transport work.
 vi.mock("node:v8", async (importOriginal) => {
@@ -47,6 +52,48 @@ function expectRetry(f: Fixture, command: Mutation) {
     receipt: { transcript: { appendedEvents: [] } },
   });
 }
+
+it("detaches read and committed metadata while retaining the actor's current facts", () =>
+  withActor(async (f) => {
+    const participant = { identity: { type: "agent" as const, id: "peer" }, promptedAt: 10 };
+    f.participant(participant);
+    addSessionMember(f.scope, { identityId: "viewer", addedBy: "owner", addedAt: 1 });
+    f.restartActor();
+    let before: SessionActorHotState;
+    {
+      using decode = vi.spyOn(JSON, "parse");
+      before = f.read();
+      expect(
+        decode.mock.calls.filter(
+          ([json]) => json.includes('"actor_id"') && json.includes('"contribution_count"'),
+        ),
+      ).toHaveLength(1);
+    }
+    const command: Mutation = {
+      type: "session.actor.patch",
+      input: {
+        target: f.target,
+        expected: before.version,
+        commandId: "metadata-isolation",
+        phaseId: "turn",
+        reducers: [{ kind: "activity", updatedAt: 20 }],
+      },
+    };
+    await f.prepare(command);
+    const outcome = f.mutate(command);
+    assert(outcome.kind === "committed");
+    const current = f.read();
+    for (const snapshot of [before, outcome.receipt.postimage]) {
+      Object.assign(snapshot.target, { sessionKey: "caller edit" });
+      Object.assign(snapshot.version, { sequence: -1 });
+      snapshot.participants[0]!.identity.id = "caller edit";
+      snapshot.members[0]!.identityId = "caller edit";
+    }
+    expect(f.read()).toEqual(current);
+    f.participant({ ...participant, promptedAt: 30 });
+    expect(f.read().participants[0]).toMatchObject({ contributionCount: 2, lastPromptedAt: 30 });
+    expect(current.participants[0]).toMatchObject({ contributionCount: 1, lastPromptedAt: 10 });
+  }));
 
 it("publishes only newly committed events with exact stored UTF-8 sizes, including noncanonical JSON", () =>
   withActor(async (f) => {
@@ -201,3 +248,112 @@ it("keeps append receipts independent of retained transcript length", async () =
   // Scalar sequence/count encodings may grow; retained history must not cross the worker boundary.
   expect(Math.max(...receiptBytes) - Math.min(...receiptBytes)).toBeLessThan(128);
 });
+
+it.each([false, true])("restores only an exact preimage (delta=%s)", (changed) => {
+  const before = hot(1);
+  before.entry = { sessionId: "session", updatedAt: 1, label: "removed", inputTokens: 3 };
+  const entry = changed
+    ? { sessionId: "session", updatedAt: 2, inputTokens: 3, outputTokens: 4 }
+    : before.entry;
+  const outcome = createSessionActorCommittedOutcome({
+    phase: changed ? "patch" : "appendTranscriptEvent",
+    command: { commandId: "append", phaseId: "turn" },
+    before,
+    after: { ...hot(2), entry },
+    applied: { value: { projectionNeedsReconcile: false }, reducers: [] },
+  });
+  const wire = projectSessionActorCommittedOutcome(outcome, before);
+  expect(wire.receipt.postimage.entry).toBeUndefined();
+  for (const reference of [undefined, { ...before, writeToken: "another-revision" }]) {
+    expect(() => restoreSessionActorCommittedOutcome(wire, reference)).toThrow(
+      "Session actor receipt entry reference is unavailable",
+    );
+    expect(wire.receipt.postimage.entry).toBeUndefined();
+  }
+  expect(restoreSessionActorCommittedOutcome(wire, before).receipt.postimage.entry).toEqual(entry);
+  expect(before.entry?.label).toBe("removed");
+  expect(before.entry?.updatedAt).toBe(1);
+});
+
+it.each(["append", "tool", "patch"] as const)(
+  "bounds receipts against the exact preimage held by a %s command",
+  (phase) =>
+    withActor(async (f) => {
+      const prompt = "synthetic instructions ".repeat(1600);
+      f.writeEntry({ ...f.nativeEntry()!, skillsSnapshot: { prompt, skills: [] } });
+      for (const mode of ["matching", "stale", "changed"] as const) {
+        const before = f.read();
+        const input = {
+          target: f.target,
+          commandId: `resident-${phase}-${mode}`,
+          phaseId: "turn",
+          entryReference: mode === "stale" ? "stale-token" : before.writeToken,
+          reducers: [
+            {
+              kind: "activity" as const,
+              updatedAt: mode === "changed" ? 20 : before.entry!.updatedAt,
+            },
+          ],
+        };
+        const selected: Mutation =
+          phase === "patch"
+            ? { type: "session.actor.patch", input }
+            : phase === "tool"
+              ? {
+                  type: "session.actor.appendToolResult",
+                  input: {
+                    ...input,
+                    append: {
+                      kind: "message",
+                      input: {
+                        scope: f.scope,
+                        cwd: "/synthetic",
+                        messageJson: JSON.stringify({
+                          role: "toolResult",
+                          toolCallId: `tool-${mode}`,
+                          toolName: "synthetic",
+                          content: [{ type: "text", text: "x".repeat(1024) }],
+                          isError: false,
+                          timestamp: 1,
+                        }),
+                      },
+                    },
+                  },
+                }
+              : {
+                  type: "session.actor.appendTranscriptEvent",
+                  input: {
+                    ...input,
+                    sessionId: f.scope.sessionId,
+                    lifecycleRevision: null,
+                    eventJson: JSON.stringify({
+                      type: "custom",
+                      customType: "synthetic-receipt",
+                      id: `new-event-${mode}`,
+                      parentId: null,
+                      data: { content: "x".repeat(6 * 1024) },
+                    }),
+                  },
+                };
+        await f.prepare(selected);
+        const outcome = f.mutate(selected);
+        assert(outcome.kind === "committed");
+        if (mode !== "stale") {
+          expect(serialize(outcome).byteLength).toBeLessThan(16 * 1024);
+          const restored = restoreSessionActorCommittedOutcome(outcome, before);
+
+          expect(restored.receipt.postimage).toEqual(f.read());
+          expect(restored.receipt.postimage.entry?.skillsSnapshot).toBe(
+            before.entry?.skillsSnapshot,
+          );
+        } else {
+          expect(outcome.receipt.postimage).toEqual(f.read());
+          outcome.receipt.postimage.entry!.skillsSnapshot!.prompt = "caller edit";
+        }
+        expect(before.entry?.skillsSnapshot?.prompt).toBe(prompt);
+        expect(f.read().entry?.skillsSnapshot?.prompt).toBe(prompt);
+        expect(f.nativeEntry()?.skillsSnapshot?.prompt).toBe(prompt);
+        expect(f.nativeEntry()?.updatedAt).toBe(mode === "changed" ? 20 : before.entry?.updatedAt);
+      }
+    }),
+);

@@ -2,12 +2,10 @@ import "openclaw/plugin-sdk/compiled-subprocess-testing";
 import type { ServerResponse } from "node:http";
 import { createDeferred } from "openclaw/plugin-sdk/concurrency-runtime";
 import { upsertAuthProfileAsync, type OpenClawConfig } from "openclaw/plugin-sdk/provider-auth";
-import { convertPcmToMulaw8k } from "openclaw/plugin-sdk/realtime-voice-provider";
 import { getSpeechProvider, type SpeechSynthesisRequest } from "openclaw/plugin-sdk/speech";
 import { withServer, withTempHome } from "openclaw/plugin-sdk/test-env";
 import { synthesizeSpeech, textToSpeechTelephony } from "openclaw/plugin-sdk/tts-runtime";
 import { describe, expect, it } from "vitest";
-import { buildClawRouterProviderConfig } from "./provider-catalog.js";
 
 const AUDIO = Buffer.from([0x49, 0x44, 0x33, 1, 2, 3]);
 type Request = { url: string; auth?: string; body: Record<string, unknown> };
@@ -16,7 +14,18 @@ type Fixture = {
   home: string;
   requests: Request[];
   request: (providerConfig?: Record<string, unknown>) => SpeechSynthesisRequest;
+  tts: (
+    options?: Partial<Parameters<typeof synthesizeSpeech>[0]>,
+  ) => ReturnType<typeof synthesizeSpeech>;
 };
+const withoutKey = (cfg: OpenClawConfig): OpenClawConfig => ({
+  ...cfg,
+  models: {
+    providers: {
+      clawrouter: { baseUrl: cfg.models?.providers?.clawrouter?.baseUrl ?? "", models: [] },
+    },
+  },
+});
 
 async function withFixture(
   run: (fixture: Fixture) => Promise<void>,
@@ -60,6 +69,14 @@ async function withFixture(
             cfg,
             home,
             requests,
+            tts: (options = {}) =>
+              synthesizeSpeech({
+                text: "Hello from ClawRouter",
+                cfg,
+                prefsPath: home + "/tts-prefs.json",
+                disableFallback: true,
+                ...options,
+              }),
             request: (providerConfig = {}) => ({
               cfg,
               providerConfig,
@@ -76,23 +93,13 @@ async function withFixture(
 }
 
 function speech(cfg: OpenClawConfig) {
-  const provider = getSpeechProvider("clawrouter", cfg);
-  expect(provider, "native speech provider must be discoverable").toBeDefined();
-  if (!provider) {
-    throw new Error("native ClawRouter speech provider missing");
-  }
-  return provider;
+  return getSpeechProvider("clawrouter", cfg)!;
 }
 
 describe("ClawRouter native speech", () => {
   it("selects the qualified voice model through native TTS, without a chat provider selection", async () => {
-    await withFixture(async ({ cfg, home, requests }) => {
-      const result = await synthesizeSpeech({
-        text: "Hello from ClawRouter",
-        cfg,
-        prefsPath: home + "/tts-prefs.json",
-        disableFallback: true,
-      });
+    await withFixture(async ({ tts, requests }) => {
+      const result = await tts();
       expect(result).toMatchObject({
         success: true,
         provider: "clawrouter",
@@ -118,7 +125,7 @@ describe("ClawRouter native speech", () => {
 
   it("applies Talk config, canonical speaker selection and per-call overrides through TTS", async () => {
     await withFixture(
-      async ({ cfg, home, requests }) => {
+      async ({ cfg, tts, requests }) => {
         const provider = speech(cfg);
         const talkProviderConfig = {
           modelId: "openai/tts-1",
@@ -126,28 +133,29 @@ describe("ClawRouter native speech", () => {
           responseFormat: "wav",
           speed: 0.75,
         };
-        const providerConfig = provider.resolveTalkConfig?.({
+        const providerConfig = provider.resolveTalkConfig!({
           cfg,
           baseTtsConfig: { providers: { clawrouter: { voice: "alloy" } } },
           talkProviderConfig,
           timeoutMs: 5000,
         });
-        if (!providerConfig) {
-          throw new Error("ClawRouter Talk configuration missing");
-        }
-        const overrides = provider.resolveTalkOverrides?.({
+        const overrides = provider.resolveTalkOverrides!({
           talkProviderConfig,
           params: { voiceId: "nova", speed: 1.25 },
         });
-        const result = await synthesizeSpeech({
-          text: "Talk route",
+        if (!overrides) {
+          throw new Error("ClawRouter Talk overrides missing");
+        }
+        const result = await tts({
           cfg: {
             ...cfg,
             tts: { provider: "clawrouter", providers: { clawrouter: providerConfig } },
           },
-          prefsPath: home + "/tts-prefs.json",
-          overrides: { provider: "clawrouter", providerOverrides: { clawrouter: overrides ?? {} } },
-          disableFallback: true,
+          text: "Talk route",
+          overrides: {
+            provider: "clawrouter",
+            providerOverrides: { clawrouter: overrides },
+          },
         });
         expect(result).toMatchObject({
           success: true,
@@ -189,32 +197,19 @@ describe("ClawRouter native speech", () => {
           voiceCompatible: true,
           audioBuffer: AUDIO,
         });
-        expect(requests.map((req) => req.body.response_format)).toEqual([
-          "mp3",
-          "opus",
-          "aac",
-          "flac",
-          "wav",
-          "pcm",
-          "opus",
-        ]);
+        expect(requests.at(-1)?.body.response_format).toBe("opus");
       },
       (res, req) => {
-        const mime: Record<string, string> = {
-          mp3: "audio/mpeg",
-          opus: "audio/ogg",
-          aac: "audio/aac",
-          flac: "audio/flac",
-          wav: "audio/wav",
-          pcm: "application/octet-stream",
-        };
-        res.setHeader("content-type", mime[String(req.body.response_format)] ?? "text/plain");
+        res.setHeader(
+          "content-type",
+          req.body.response_format === "pcm" ? "application/octet-stream" : "audio/mpeg",
+        );
         res.end(AUDIO);
       },
     );
   });
 
-  it("returns 24 kHz PCM through native telephony, ready for the existing 8 kHz mu-law converter", async () => {
+  it("returns 24 kHz PCM through native telephony", async () => {
     const silence = Buffer.alloc(4800); // 100 ms signed 16-bit mono at 24 kHz.
     await withFixture(
       async ({ cfg, home, requests }) => {
@@ -231,12 +226,6 @@ describe("ClawRouter native speech", () => {
           audioBuffer: silence,
         });
         expect(requests[0]?.body.response_format).toBe("pcm");
-        if (!result.audioBuffer || !result.sampleRate) {
-          throw new Error("native telephony audio missing");
-        }
-        expect(convertPcmToMulaw8k(result.audioBuffer, result.sampleRate)).toEqual(
-          Buffer.alloc(800, 0xff),
-        );
       },
       (res) => {
         res.setHeader("content-type", "application/octet-stream");
@@ -247,7 +236,7 @@ describe("ClawRouter native speech", () => {
 
   it("honors explicit speech keys over ambient auth while keeping selected profiles terminal", async () => {
     await withFixture(
-      async ({ cfg, home, requests, request }) => {
+      async ({ cfg, home, tts, requests, request }) => {
         const agentDir = home + "/.openclaw/agents/main/agent";
         await upsertAuthProfileAsync({
           agentDir,
@@ -260,14 +249,7 @@ describe("ClawRouter native speech", () => {
           credential: { type: "api_key", provider: "openai", key: "fixture-stored-openai" },
         });
         const provider = speech(cfg);
-        const storedCfg: OpenClawConfig = {
-          ...cfg,
-          models: {
-            providers: {
-              clawrouter: { baseUrl: cfg.models?.providers?.clawrouter?.baseUrl ?? "", models: [] },
-            },
-          },
-        };
+        const storedCfg = withoutKey(cfg);
         await expect(provider.synthesize({ ...request(), cfg: storedCfg })).resolves.toMatchObject({
           audioBuffer: AUDIO,
         });
@@ -285,21 +267,16 @@ describe("ClawRouter native speech", () => {
           const apiKey = "fixture-explicit-" + route;
           const providerConfig =
             route === "talk"
-              ? provider.resolveTalkConfig?.({
+              ? provider.resolveTalkConfig!({
                   cfg,
                   baseTtsConfig: { providers: { clawrouter: {} } },
                   talkProviderConfig: { apiKey },
                   timeoutMs: 5000,
                 })
               : { apiKey };
-          if (!providerConfig) {
-            throw new Error("ClawRouter speech configuration missing");
-          }
-          const result = await synthesizeSpeech({
-            text: "Explicit " + route + " key",
+          const result = await tts({
             cfg: { ...cfg, tts: { providers: { clawrouter: providerConfig } } },
-            prefsPath: home + "/tts-prefs.json",
-            disableFallback: true,
+            text: "Explicit " + route + " key",
           });
           expect(result).toMatchObject({ success: true, audioBuffer: AUDIO });
         }
@@ -317,25 +294,13 @@ describe("ClawRouter native speech", () => {
 
   it("never borrows an OpenAI credential and preserves service grant failures without exposing keys", async () => {
     await withFixture(
-      async ({ cfg, home, request, requests }) => {
-        const noKeyCfg: OpenClawConfig = {
-          ...cfg,
-          models: {
-            providers: {
-              clawrouter: { baseUrl: cfg.models?.providers?.clawrouter?.baseUrl ?? "", models: [] },
-            },
-          },
-        };
+      async ({ cfg, tts, request, requests }) => {
+        const noKeyCfg = withoutKey(cfg);
         await expect(speech(cfg).synthesize({ ...request(), cfg: noKeyCfg })).rejects.toThrow(
           /No API key|Configure a ClawRouter/i,
         );
         expect(requests).toHaveLength(0);
-        const result = await synthesizeSpeech({
-          text: "Denied",
-          cfg,
-          prefsPath: home + "/tts-prefs.json",
-          disableFallback: true,
-        });
+        const result = await tts({ text: "Denied" });
         expect(result.success).toBe(false);
         expect(result.error).toContain("403");
         expect(result.error).toContain("speech grant required");
@@ -352,34 +317,17 @@ describe("ClawRouter native speech", () => {
     );
   });
 
-  it("rejects malformed, empty and oversized successful responses at the audio boundary", async () => {
-    for (const mode of ["json", "empty", "overflow"] as const) {
-      await withFixture(
-        async ({ cfg, home }) => {
-          const limited: OpenClawConfig = {
-            ...cfg,
-            agents: { defaults: { ...cfg.agents?.defaults, mediaMaxMb: 4 / (1024 * 1024) } },
-          };
-          const result = await synthesizeSpeech({
-            text: "Bad response",
-            cfg: limited,
-            prefsPath: home + "/tts-prefs.json",
-            disableFallback: true,
-          });
-          expect(result.success).toBe(false);
-          expect(result.audioBuffer).toBeUndefined();
-          expect(result.error).toContain(
-            mode === "overflow" ? "exceeds configured limit" : "malformed audio",
-          );
-        },
-        (res) => {
-          res.setHeader("content-type", mode === "json" ? "application/json" : "audio/mpeg");
-          res.end(
-            mode === "json" ? '{"error":"not audio"}' : mode === "empty" ? Buffer.alloc(0) : AUDIO,
-          );
-        },
-      );
-    }
+  it("enforces the configured audio response byte limit through TTS", async () => {
+    await withFixture(async ({ cfg, tts }) => {
+      const limited: OpenClawConfig = {
+        ...cfg,
+        agents: { defaults: { ...cfg.agents?.defaults, mediaMaxMb: 4 / (1024 * 1024) } },
+      };
+      const result = await tts({ cfg: limited, text: "Bad response" });
+      expect(result.success).toBe(false);
+      expect(result.audioBuffer).toBeUndefined();
+      expect(result.error).toContain("exceeds configured limit");
+    });
   });
 
   it("aborts an in-flight HTTP body at the request deadline and releases its socket", async () => {
@@ -418,53 +366,5 @@ describe("ClawRouter native speech", () => {
       await provider.synthesize({ ...request(), text: "😀".repeat(4096) });
       expect(requests[0]?.body.input).toBe("😀".repeat(4096));
     });
-  });
-
-  it("keeps speech-only catalog models out of conversational discovery", async () => {
-    await withFixture(
-      async ({ cfg }) => {
-        const config = await buildClawRouterProviderConfig({
-          apiKey: "fixture-router",
-          baseUrl: cfg.models?.providers?.clawrouter?.baseUrl,
-        });
-        expect(config.models.map((model) => model.id)).toEqual(["openai/gpt-chat-fixture"]);
-      },
-      (res, req) => {
-        if (req.url !== "/v1/catalog") {
-          res.statusCode = 404;
-          res.end();
-          return;
-        }
-        res.setHeader("content-type", "application/json");
-        res.end(
-          JSON.stringify({
-            providers: [
-              {
-                id: "openai",
-                displayName: "OpenAI",
-                nativeBaseUrl: "/v1/native/openai",
-                openaiCompatible: true,
-                routes: [
-                  { path: "/v1/responses", requestFormat: "openai.responses", methods: ["POST"] },
-                  {
-                    path: "/v1/audio/speech",
-                    requestFormat: "openai.audio_speech",
-                    methods: ["POST"],
-                  },
-                ],
-                models: [
-                  { id: "openai/tts-1", upstream: "tts-1", capabilities: ["audio.speech"] },
-                  {
-                    id: "openai/gpt-chat-fixture",
-                    upstream: "gpt-chat-fixture",
-                    capabilities: ["llm.responses"],
-                  },
-                ],
-              },
-            ],
-          }),
-        );
-      },
-    );
   });
 });

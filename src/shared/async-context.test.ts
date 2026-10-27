@@ -1,10 +1,28 @@
 import { AsyncLocalStorage, AsyncResource, executionAsyncId } from "node:async_hooks";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { AsyncContext } from "./async-context.js";
 import { runWithAsyncStore } from "./async-store.js";
 import { createDeferredCore } from "./deferred.js";
 
 describe("AsyncContext", () => {
+  it("does not freeze private frames when entering or restoring fields", () => {
+    const field = new AsyncContext<string>(Symbol("field"));
+    const sibling = new AsyncContext<string>(Symbol("sibling"));
+    const root = new AsyncResource("test-root");
+    const freeze = vi.spyOn(Object, "freeze");
+    let freezes: number;
+    try {
+      root.runInAsyncScope(() => {
+        field.run("outer", () => sibling.enterWith("retained"));
+      });
+      freezes = freeze.mock.calls.length;
+    } finally {
+      freeze.mockRestore();
+      root.emitDestroy();
+    }
+    expect(freezes).toBe(0);
+  });
+
   it("restores only the selected field across nesting, clearing, and throws", () => {
     const request = new AsyncContext<{ active: boolean }>(Symbol("request"));
     const trace = new AsyncContext<string>(Symbol("trace"));

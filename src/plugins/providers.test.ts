@@ -4,6 +4,7 @@ import type { PluginManifestRecord } from "./manifest-registry.js";
 import { createPluginManifestRecordFixture } from "./plugin-metadata.test-support.js";
 import type { PluginRegistrySnapshot } from "./plugin-registry.js";
 import { createEmptyPluginRegistry } from "./registry-empty.js";
+import { createIndexFixture } from "./test-helpers/installed-plugin-index-fixture.js";
 import type { ProviderPlugin } from "./types.js";
 
 type ResolveRuntimePluginRegistry = typeof import("./loader.js").resolveRuntimePluginRegistry;
@@ -86,17 +87,10 @@ function createProviderRegistrySnapshotFixture(): PluginRegistrySnapshot {
     return snapshotPlugin;
   });
 
-  return {
-    version: 1,
-    hostContractVersion: "test",
-    compatRegistryVersion: "test",
-    migrationVersion: 1,
-    policyHash: "test",
+  return createIndexFixture({
     generatedAtMs: 0,
-    installRecords: {},
     plugins,
-    diagnostics: [],
-  };
+  });
 }
 
 function providerRegistry(provider: ProviderPlugin, pluginId = provider.id) {

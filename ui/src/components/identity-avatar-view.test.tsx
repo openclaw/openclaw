@@ -106,6 +106,10 @@ it.each(["profile", "agent"] as const)(
         : mountAgent({ id: "ada", name: "Ada", avatar: url, textAvatar: "A" });
     await view.loaded("blob:old-identity");
     const image = view.image();
+    expect(image?.getAttribute("referrerpolicy")).toBe("no-referrer");
+    if (kind === "profile") {
+      expect([image?.alt, image?.getAttribute("aria-hidden")]).toEqual(["Ada Lovelace", "true"]);
+    }
     setAvatarGatewayOrigin(gateway, ["new-token"]);
     await view.loaded("blob:new-identity");
     expect(view.image()).toBe(image);
@@ -116,39 +120,6 @@ it.each(["profile", "agent"] as const)(
     );
   },
 );
-
-it("preserves the image across authenticated revision updates", async () => {
-  const { fetchAvatar } = mockImages(["blob:v1", "blob:v2"]);
-  const identity = profile();
-  const view = mountImage(identity);
-  expect(view.frame()?.classList.contains("is-pending")).toBe(true);
-  expect(view.frame()?.classList.contains("is-fallback")).toBe(false);
-  await view.loaded("blob:v1");
-  const image = view.image()!;
-  expect(["alt", "aria-hidden", "referrerpolicy"].map((name) => image.getAttribute(name))).toEqual([
-    "Ada Lovelace",
-    "true",
-    "no-referrer",
-  ]);
-  expect(fetchAvatar).toHaveBeenCalledExactlyOnceWith(
-    `${gateway}/api/users/profile-ada/avatar?v=1`,
-    expect.objectContaining({ headers: { Authorization: "Bearer avatar-token" } }),
-  );
-  image.dispatchEvent(new Event("load"));
-  view.update(profile(2));
-  expect(view.frame()?.classList.contains("is-pending")).toBe(true);
-  await view.loaded("blob:v2");
-  image.dispatchEvent(new Event("load"));
-  flush();
-  expect(view.image()).toBe(image);
-  expect(view.frame()?.getAttribute("data-avatar-state")).toBe("loaded");
-  image.dispatchEvent(new Event("error"));
-  flush();
-  expect(view.frame()?.classList.contains("is-fallback")).toBe(true);
-  image.dispatchEvent(new Event("load"));
-  flush();
-  expect(view.frame()?.classList.contains("is-fallback")).toBe(false);
-});
 
 it("does not restore retired Gateway images on remount", async () => {
   const { fetchAvatar, revoke } = mockImages("blob:old-gateway", "old-token");
@@ -200,8 +171,20 @@ it("retains pending images through replacement/remount under pressure", async ()
     second.update({ ...identity });
     expect(revoke).not.toHaveBeenCalledWith("blob:view-1");
     expect(requests).toBe(2);
+    const image = second.image()!;
     second.update({ ...identity, profileAvatarUrl: "/api/users/profile-ada/avatar?v=2" });
+    expect(second.frame()?.classList.contains("is-pending")).toBe(true);
     await second.loaded("blob:view-2");
+    expect(second.image()).toBe(image);
+    for (const [event, fallback] of [
+      ["error", true],
+      ["load", false],
+    ] as const) {
+      image.dispatchEvent(new Event(event));
+      flush();
+      expect(second.frame()?.classList.contains("is-fallback")).toBe(fallback);
+    }
+    expect(second.frame()?.getAttribute("data-avatar-state")).toBe("loaded");
     expect(revoke).toHaveBeenCalledWith("blob:view-1");
     expect(revoke).not.toHaveBeenCalledWith("blob:view-2");
     expect(fetchAvatar).toHaveBeenCalledTimes(131);
@@ -242,22 +225,6 @@ it("updates reserved avatars on theme publication", async () => {
   flush();
   expect(view.container.querySelector("openclaw-theme-brand-icon")).toBeNull();
   expect(view.image()?.getAttribute("src")).toContain("favicon.svg");
-});
-
-it("hides fallback while loading and restores it on failure", async () => {
-  setAvatarGatewayOrigin(gateway, ["avatar-token"]);
-  const response = createDeferred<Response>();
-  vi.spyOn(globalThis, "fetch").mockReturnValue(response.promise);
-  const view = mountAgent({ id: "hydrated", textAvatar: "🦀" });
-  const frame = view.frame();
-  expect(frame?.classList.contains("is-fallback")).toBe(true);
-  view.update({ id: "hydrated", textAvatar: "🦀", avatar: "/avatar/hydrated" });
-  expect(view.frame()).toBe(frame);
-  expect(frame?.classList.contains("is-pending")).toBe(true);
-  expect(frame?.classList.contains("is-fallback")).toBe(false);
-  response.resolve(new Response(null, { status: 404 }));
-  await vi.waitFor(() => expect(frame?.classList.contains("is-fallback")).toBe(true));
-  expect(frame?.getAttribute("data-avatar-state")).toBe("failed");
 });
 
 it("recognizes cached decoding on remount without a load event", async () => {

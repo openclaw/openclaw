@@ -233,8 +233,8 @@ export function DebugPage() {
   }
   onSettled(() => {
     // Every connection transition aborts diagnostics and retires RPC results before reconnect.
-    const stopGateway = gateway.subscribe(() => {
-      const snapshot = gateway.read().snapshot;
+    const stopGateway = context.gateway.subscribe(() => {
+      const snapshot = context.gateway.snapshot;
       if (lifecycle.transition(snapshot)) {
         invalidate();
       }

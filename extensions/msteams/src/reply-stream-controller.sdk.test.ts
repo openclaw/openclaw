@@ -17,6 +17,9 @@ type TeamsLoopbackRequest = {
 const acknowledgedPrefix = "a".repeat(4_000);
 const completeReply = `${acknowledgedPrefix}${"b".repeat(200)}`;
 const replacementReply = "provider-final replacement";
+const presentation = {
+  blocks: [{ type: "buttons" as const, buttons: [{ label: "Deploy", value: "deploy" }] }],
+};
 const requests: TeamsLoopbackRequest[] = [];
 type ConnectorReply = { id?: string; error?: { message?: string } };
 
@@ -168,6 +171,20 @@ async function acknowledgedController(scenario: string, text = acknowledgedPrefi
   return harness;
 }
 
+function receipt(scenario: string, content = acknowledgedPrefix) {
+  return { visibleReplySent: true, content, messageId: `stream-${scenario}` };
+}
+
+function requestStatuses(scenario: string) {
+  return scenarioRequests(scenario).map((request) => request.status);
+}
+
+function rejectedChunks(scenario: string) {
+  return scenarioRequests(scenario).filter(
+    ({ type, status }) => type === "typing" && status === 403,
+  );
+}
+
 describe("Microsoft Teams SDK acknowledged stream fallback", () => {
   it.each([
     { mode: "partial", canceled: false, media: false },
@@ -184,9 +201,6 @@ describe("Microsoft Teams SDK acknowledged stream fallback", () => {
         streaming: { mode },
       });
       const text = "Choose an environment";
-      const presentation = {
-        blocks: [{ type: "buttons" as const, buttons: [{ label: "Deploy", value: "deploy" }] }],
-      };
       const mediaUrl = "https://example.test/report.png";
       if (mode === "partial") {
         controller.onPartialReply({ text });
@@ -200,9 +214,7 @@ describe("Microsoft Teams SDK acknowledged stream fallback", () => {
       }
 
       await expect(controller.finalize()).resolves.toEqual({
-        visibleReplySent: true,
-        content: text,
-        messageId: `stream-${scenario}`,
+        ...receipt(scenario, text),
         ...(canceled ? {} : { postNativePayloads: [{ text: undefined, presentation }] }),
       });
       expect(stream.canceled).toBe(canceled);
@@ -220,27 +232,16 @@ describe("Microsoft Teams SDK acknowledged stream fallback", () => {
 
     controller.onPartialReply({ text: completeReply });
     await firstFlushFailure;
-    expect(
-      scenarioRequests("size-limit").filter(
-        (request) => request.type === "typing" && request.status === 403,
-      ),
-    ).toHaveLength(1);
+    expect(rejectedChunks("size-limit")).toHaveLength(1);
     expect(acknowledgements).toEqual([{ id: "stream-size-limit", text: acknowledgedPrefix }]);
     expect(controller.preparePayload({ text: completeReply })).toBeUndefined();
 
     await expect(controller.finalize()).resolves.toEqual({
-      visibleReplySent: true,
-      content: acknowledgedPrefix,
-      messageId: "stream-size-limit",
+      ...receipt("size-limit"),
       fallbackPayload: { text: "b".repeat(200) },
     });
-    // Finalization queues its own metadata activity; this is a second
-    // provider operation, not a retry of the rejected streaming chunk.
-    expect(
-      scenarioRequests("size-limit").filter(
-        (request) => request.type === "typing" && request.status === 403,
-      ),
-    ).toHaveLength(2);
+    // Finalization queues metadata as another provider operation, not a chunk retry.
+    expect(rejectedChunks("size-limit")).toHaveLength(2);
   });
 
   it.each(["cancel", "cancel-close"] as const)("honors HTTP Stop during %s", async (scenario) => {
@@ -256,11 +257,7 @@ describe("Microsoft Teams SDK acknowledged stream fallback", () => {
         text: scenario === "cancel" ? completeReply : acknowledgedPrefix,
       }),
     ).toBeUndefined();
-    await expect(controller.finalize()).resolves.toEqual({
-      visibleReplySent: true,
-      content: acknowledgedPrefix,
-      messageId: `stream-${scenario}`,
-    });
+    await expect(controller.finalize()).resolves.toEqual(receipt(scenario));
     expect(stream.canceled).toBe(true);
     if (scenario === "cancel-close") {
       expect(controller.wasCanceled()).toBe(true);
@@ -281,25 +278,16 @@ describe("Microsoft Teams SDK acknowledged stream fallback", () => {
       const { acknowledgements, controller, stream } = await acknowledgedController(scenario);
       const canceled = scenario === "cancel-replacement";
       const mediaUrl = `https://example.test/${canceled ? "must-not-send" : "replacement"}.png`;
-      const presentation = {
-        blocks: [{ type: "buttons" as const, buttons: [{ label: "Deploy", value: "deploy" }] }],
-      };
       controller.onPartialReply({ text: replacementReply });
       expect(
         controller.preparePayload({ text: replacementReply, mediaUrl, presentation }),
       ).toBeUndefined();
       await expect(controller.finalize()).resolves.toEqual(
         canceled
-          ? {
-              visibleReplySent: true,
-              content: acknowledgedPrefix,
-              messageId: `stream-${scenario}`,
-            }
+          ? receipt(scenario)
           : {
-              visibleReplySent: true,
-              content: replacementReply,
+              ...receipt(scenario, replacementReply),
               logicalContent: replacementReply,
-              messageId: `stream-${scenario}`,
               postNativePayloads: [{ text: undefined, mediaUrl, presentation }],
             },
       );
@@ -336,9 +324,7 @@ describe("Teams native final text preparation", () => {
         },
       ]),
     );
-    expect(scenarioRequests("presentation-timeout").map((request) => request.status)).toEqual([
-      201, 201, 403, 201,
-    ]);
+    expect(requestStatuses("presentation-timeout")).toEqual([201, 201, 403, 201]);
   });
 
   it.each(["presentation-close-failure", "presentation-cancel"] as const)(
@@ -348,22 +334,15 @@ describe("Teams native final text preparation", () => {
       const text = canceled
         ? "# Deployment status"
         : "# Deployment status\n\n@[Alex](11111111-2222-3333-4444-555555555555)";
-      const presentation = {
-        blocks: [{ type: "buttons" as const, buttons: [{ label: "Deploy", value: "deploy" }] }],
-      };
       const { controller } = await acknowledgedController(scenario, text);
       controller.preparePayload({ text, presentation });
       await expect(controller.finalize()).resolves.toEqual({
-        visibleReplySent: true,
-        messageId: `stream-${scenario}`,
-        content: canceled ? text : "**Deployment status**\n\n<at>Alex</at>",
+        ...receipt(scenario, canceled ? text : "**Deployment status**\n\n<at>Alex</at>"),
         ...(canceled
           ? {}
           : { logicalContent: text, fallbackPayload: { text: undefined, presentation } }),
       });
-      expect(scenarioRequests(scenario).map((request) => request.status)).toEqual(
-        canceled ? [201, 403] : [201, 201, 403],
-      );
+      expect(requestStatuses(scenario)).toEqual(canceled ? [201, 403] : [201, 201, 403]);
     },
   );
 });

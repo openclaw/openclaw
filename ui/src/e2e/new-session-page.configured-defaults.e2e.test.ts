@@ -32,6 +32,7 @@ suite.define(() => {
         : (["last-used", "configured"] as const);
       for (const policy of policies) {
         const configuredDefaults = required || policy === "configured";
+        const fullDraftJourney = configuredDefaults && (!required || policy === undefined);
         await suite.withPage(
           { ...createControlUiE2eContextOptions(), reducedMotion: "reduce" },
           async ({ page }) => {
@@ -159,7 +160,7 @@ suite.define(() => {
                 ),
               )
               .toBe("low");
-            if (configuredDefaults) {
+            if (fullDraftJourney) {
               if (source === "browser") {
                 // A draft with no explicit model choice has exactly the pre-change row
                 // format: content and blobs, without the optional modelSelection field.
@@ -309,12 +310,16 @@ suite.define(() => {
                 await expect.poll(() => effort.getAttribute("data-chat-thinking-value")).toBe("");
                 await expect.poll(() => effort.textContent()).toContain("High");
               }
+            }
+            if (configuredDefaults) {
               await page.locator('[data-chat-model-select="true"]').click();
               await page.locator('[data-chat-model-search="true"]').fill("mini");
               await page.locator('[data-chat-model-option="openai/gpt-4.1-mini"]').click();
               await effort.click();
               await page.locator('[data-chat-thinking-slider="true"]').fill("0");
               await page.keyboard.press("Escape");
+            }
+            if (fullDraftJourney) {
               await page.locator(".new-session-page__message").fill("Resume this draft");
               await expect
                 .poll(() =>
@@ -381,7 +386,7 @@ suite.define(() => {
                 expectedLeafEntryId: null,
               });
             }
-            if (configuredDefaults && source === "browser") {
+            if (fullDraftJourney && source === "browser") {
               expect(initialTurn.params).toMatchObject({
                 attachments: [
                   {
@@ -392,7 +397,7 @@ suite.define(() => {
                 ],
               });
             }
-            if (configuredDefaults) {
+            if (fullDraftJourney) {
               await waitForCommittedChatRoute(page);
               // Replacing the document must not interrupt the submitted draft's cleanup.
               await waitForCommittedComposerDraft(page, JSON.stringify(["", "", ""]), null, 0);

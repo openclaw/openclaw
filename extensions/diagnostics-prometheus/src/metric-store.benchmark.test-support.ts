@@ -25,7 +25,7 @@ import {
   createPrometheusMetricStore,
   type PrometheusMetricStore,
 } from "./prometheus-metric-store.js";
-import { recordWorkerRequest } from "./service-worker.js";
+import { createWorkerRequestMetricsRecorder } from "./service-worker.js";
 
 const { values } = parseArgs({
   options: {
@@ -56,26 +56,17 @@ function integerOption(value: string, name: string, min: number, max: number) {
   );
   return parsed;
 }
-const iterations = integerOption(values.iterations, "--iterations", 1000, 10000000);
-const renderSamples = integerOption(values["render-samples"], "--render-samples", 200, 100000);
-const allocationRenders = integerOption(
-  values["allocation-renders"],
-  "--allocation-renders",
-  1,
-  100000,
-);
-const phaseMs = integerOption(values["phase-ms"], "--phase-ms", 1000, 3600000);
-const updatesPerRender = integerOption(
-  values["updates-per-render"],
-  "--updates-per-render",
-  0,
-  16384,
-);
+function numericOption(name: keyof typeof values, min: number, max: number) {
+  return integerOption(String(values[name]), `--${name}`, min, max);
+}
+const iterations = numericOption("iterations", 1000, 10000000);
+const renderSamples = numericOption("render-samples", 200, 100000);
+const allocationRenders = numericOption("allocation-renders", 1, 100000);
+const phaseMs = numericOption("phase-ms", 1000, 3600000);
+const updatesPerRender = numericOption("updates-per-render", 0, 16384);
 assert(!updatesPerRender || values.shape, "--updates-per-render requires --shape");
 const withHttp = values.http || values["http-only"];
-const httpPort = values["http-port"]
-  ? integerOption(values["http-port"], "--http-port", 40000, 65535)
-  : undefined;
+const httpPort = values["http-port"] ? numericOption("http-port", 40000, 65535) : undefined;
 assert(!values["heap-snapshot"] || !withHttp, "Heap snapshots are a separate retention-only pass");
 assert(!withHttp || httpPort, "--http-port is required with --http or --http-only");
 const startAt = values["start-at"] ? Number(values["start-at"]) : Date.now() + 30000;
@@ -126,10 +117,10 @@ function memoryDelta(after: NodeJS.MemoryUsage, before: NodeJS.MemoryUsage) {
   };
 }
 
-async function measure(
+async function measure<T>(
   name: string,
   operations: number,
-  run: () => void | Promise<void>,
+  run: () => T | Promise<T>,
   profiled = true,
 ) {
   await phaseStart(name);
@@ -167,7 +158,7 @@ async function measure(
   const eventLoop = monitorEventLoopDelay({ resolution: 1 });
   eventLoop.enable();
   started = performance.now();
-  await run();
+  const result = await run();
   ended = performance.now();
   const used = process.cpuUsage(cpu);
   eventLoop.disable();
@@ -212,17 +203,18 @@ async function measure(
       p99Eligible: eventLoop.count >= 1000,
     },
   };
+  return result;
 }
 
 type Shape = {
   histograms: { name: PrometheusMetricName; labelSets: number; finiteBuckets: number[] }[];
   scalars: { name: PrometheusMetricName; labelSets: number; type: "counter" | "gauge" }[];
 };
+function shapeObject(value: unknown, message: string): asserts value is Record<string, unknown> {
+  assert(value && typeof value === "object", message);
+}
 function parseShape(raw: unknown): Shape {
-  assert(
-    raw && typeof raw === "object" && "histograms" in raw && "scalars" in raw,
-    "Invalid shape",
-  );
+  shapeObject(raw, "Invalid shape");
   assert(
     Array.isArray(raw.histograms) && Array.isArray(raw.scalars),
     "Shape must contain histogram and scalar arrays",
@@ -230,10 +222,7 @@ function parseShape(raw: unknown): Shape {
   let total = 0;
   const names = new Set<string>();
   const series = (row: unknown) => {
-    assert(
-      row && typeof row === "object" && "name" in row && "labelSets" in row,
-      "Invalid series shape",
-    );
+    shapeObject(row, "Invalid series shape");
     assert(
       typeof row.name === "string" && Object.hasOwn(PROMETHEUS_FAMILY_RESERVES, row.name),
       "Unknown metric name",
@@ -249,15 +238,12 @@ function parseShape(raw: unknown): Shape {
       Math.max(MAX_PROMETHEUS_FAMILY_SERIES, PROMETHEUS_FAMILY_RESERVES[name]),
     );
     total += labelSets;
-    return { name, labelSets };
+    return { name, labelSets, finiteBuckets: row.finiteBuckets, type: row.type };
   };
   const histograms: Shape["histograms"] = raw.histograms.map((row: unknown) => {
-    const common = series(row);
-    assert(
-      row && typeof row === "object" && "finiteBuckets" in row && Array.isArray(row.finiteBuckets),
-      "Invalid histogram bounds",
-    );
-    const finiteBuckets = row.finiteBuckets.map((bound: unknown) => {
+    const { name, labelSets, finiteBuckets: bounds } = series(row);
+    assert(Array.isArray(bounds), "Invalid histogram bounds");
+    const finiteBuckets = bounds.map((bound: unknown) => {
       assert(
         typeof bound === "number" && Number.isFinite(bound),
         "Histogram bounds must be finite",
@@ -270,18 +256,12 @@ function parseShape(raw: unknown): Shape {
         finiteBuckets.every((bound, index) => index === 0 || bound > finiteBuckets[index - 1]!),
       "Histogram bounds must be sorted and unique",
     );
-    return { ...common, finiteBuckets };
+    return { name, labelSets, finiteBuckets };
   });
   const scalars: Shape["scalars"] = raw.scalars.map((row: unknown) => {
-    const common = series(row);
-    assert(
-      row &&
-        typeof row === "object" &&
-        "type" in row &&
-        (row.type === "counter" || row.type === "gauge"),
-      "Invalid scalar type",
-    );
-    return { ...common, type: row.type };
+    const { name, labelSets, type } = series(row);
+    assert(type === "counter" || type === "gauge", "Invalid scalar type");
+    return { name, labelSets, type };
   });
   assert(total <= capacity, "Shape exceeds store capacity");
   return { histograms, scalars };
@@ -533,17 +513,8 @@ async function measureHttp(
       ["prometheus.http", renderSamples, false],
       ["prometheus.http-allocation", allocationRenders, true],
     ] as const) {
-      let reply: Reply | undefined;
       const previousServed = served;
-      await measure(
-        name,
-        count,
-        async () => {
-          reply = await request(count);
-        },
-        profiled,
-      );
-      assert(reply);
+      const reply = await measure(name, count, () => request(count), profiled);
       assert.equal(served - previousServed, count);
       results[`${name}.client`] = {
         receivedBytes: reply.totalBytes,
@@ -580,19 +551,10 @@ try {
     observe(2000);
     await measure("prometheus.observation", iterations * 3, () => observe(iterations));
     const workerStore = createPrometheusMetricStore();
+    const recordWorker = createWorkerRequestMetricsRecorder(workerStore);
     const record = (count: number) => {
       for (let index = 0; index < count; index++) {
-        recordWorkerRequest(workerStore, {
-          type: "worker.request",
-          ts: 1,
-          seq: index,
-          kind: "sqlite_read",
-          phase: "completed",
-          requestClass: "sessions.get",
-          queueDepth: 0,
-          queueWaitMs: 0.1,
-          durationMs: 1,
-        });
+        recordWorker("sqlite_read", "sessions.get", "completed", 0, 0.1, 1, undefined);
       }
     };
     record(2000);

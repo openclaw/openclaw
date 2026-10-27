@@ -3,7 +3,11 @@ import path from "node:path";
 import { MessageChannel, type Worker } from "node:worker_threads";
 import { normalizeAgentId } from "@openclaw/normalization-core/agent-id";
 import { toStringifiedError } from "@openclaw/normalization-core/error-coercion";
+import { createWorkerIdleTimers, WorkerTaskError } from "@openclaw/worker-runtime";
+import { markWorkerRetirement } from "../../infra/worker-cpu.js";
+import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { createDeferredCore } from "../../shared/deferred.js";
+import { runInDetachedAsyncContext } from "../../shared/detached-async-context.js";
 import { resolveGlobalSingleton } from "../../shared/global-singleton.js";
 import type { OpenClawAgentDatabaseOptions } from "../../state/openclaw-agent-db-contract.js";
 import { registerOpenClawAgentDatabaseAsyncResource } from "../../state/openclaw-agent-db-resources.js";
@@ -19,6 +23,11 @@ import type {
   SqliteArchiveSessionRequest,
   SqliteArchiveSessionResponse,
 } from "./session-accessor.sqlite-archive-types.js";
+import {
+  joinSqliteArchiveWorkerCleanup,
+  SQLITE_ARCHIVE_TASK_TIMEOUT_MS,
+  watchSqliteWorkerSettlement,
+} from "./session-accessor.sqlite-archive-worker-lifetime.js";
 import type {
   SqliteMutationWorkerTransport,
   WorkerCleanup,
@@ -33,6 +42,8 @@ type ArchiveConnection = {
   exited: Promise<void>;
   didExit: boolean;
   operationId: number;
+  idle: ReturnType<typeof createWorkerIdleTimers>;
+  idleTimer?: NodeJS.Timeout;
   failure?: Error;
   retiring?: Promise<void>;
 };
@@ -66,6 +77,7 @@ export async function withSqliteTranscriptArchiveSession<T>(
 }
 
 type SqliteArchiveResponseByOperation = {
+  "cold-prepare": Extract<SqliteArchiveSessionResponse, { type: "cold-prepared" }>;
   materialize: Extract<SqliteArchiveSessionResponse, { type: "done" }>;
   publish: Extract<SqliteArchiveSessionResponse, { type: "published" }>;
   "read-page": Extract<SqliteArchiveSessionResponse, { type: "page-read" }>;
@@ -163,11 +175,13 @@ class ArchiveSession {
   ): Promise<SqliteArchiveSessionResponse> {
     this.assertCurrent();
     if (
-      request.plans.some(
-        (plan) =>
-          normalizeAgentId(plan.agentId) !== this.options.agentId ||
-          path.resolve(plan.databasePath) !== this.options.path,
-      )
+      request.operation === "cold-prepare"
+        ? !this.matches(request.input.databaseOptions)
+        : request.plans.some(
+            (plan) =>
+              normalizeAgentId(plan.agentId) !== this.options.agentId ||
+              path.resolve(plan.databasePath) !== this.options.path,
+          )
     ) {
       throw new Error("SQLite archive request changed its captured database owner");
     }
@@ -175,12 +189,28 @@ class ArchiveSession {
       createWorker,
       (connection) =>
         new Promise<SqliteArchiveSessionResponse>((resolve, reject) => {
+          const deadline = setTimeout(() => {
+            connection.failure ??= new WorkerTaskError(
+              "Session archiving took longer than 3 minutes. Wait for it to stop, then retry; if it remains stuck, restart the Gateway.",
+              "timeout",
+            );
+            createSubsystemLogger("session-sqlite").warn(connection.failure.message);
+            // Keep the FIFO and database resources until the native worker actually exits.
+            watchSqliteWorkerSettlement(connection.exited);
+            void connection.worker.terminate().catch(() => {});
+          }, SQLITE_ARCHIVE_TASK_TIMEOUT_MS);
           const cleanup = () => {
+            clearTimeout(deadline);
             connection.worker.off("message", receive);
             connection.worker.off("exit", exit);
           };
           // The FIFO has one request in flight on this private, paired worker port.
-          const receive = (response: SqliteArchiveSessionResponse) => {
+          const receive = (
+            response: SqliteArchiveSessionResponse | { type: "archive-temporary-file" },
+          ) => {
+            if (response.type === "archive-temporary-file" || connection.failure) {
+              return;
+            }
             cleanup();
             resolve(response);
           };
@@ -296,6 +326,9 @@ class ArchiveSession {
     // The FIFO leaves no native handles in the idle worker; transfer execution, not authority.
     const previous = sessions.warm;
     if (previous && previous !== this) {
+      if (previous.connection) {
+        previous.connection.idle.clear(previous.connection);
+      }
       if (
         !previous.revoked &&
         previous.options.env.OPENCLAW_STATE_DIR === this.options.env.OPENCLAW_STATE_DIR &&
@@ -314,6 +347,9 @@ class ArchiveSession {
       }
     }
     this.assertCurrent();
+    if (this.connection) {
+      this.connection.idle.clear(this.connection);
+    }
     await this.connection?.retiring;
     this.assertCurrent();
     const connection = (this.connection ??= this.start(createWorker));
@@ -332,6 +368,15 @@ class ArchiveSession {
       if (this.dispatched === dispatched) {
         this.dispatched = undefined;
       }
+      if (!connection.retiring && !connection.didExit && !connection.failure) {
+        connection.idle.arm(connection, 5 * 60_000, () => {
+          // An open scope remains usable after its idle carrier exits.
+          markWorkerRetirement(connection.worker, "idle_timeout");
+          void (this.released ? this.close() : this.retire()).catch((error: unknown) => {
+            process.emitWarning(`SQLite archive worker retirement failed: ${String(error)}`);
+          });
+        });
+      }
     }
   }
 
@@ -346,6 +391,7 @@ class ArchiveSession {
       didExit: false,
       exited: Promise.resolve(),
       operationId: 0,
+      idle: createWorkerIdleTimers(runInDetachedAsyncContext),
     };
     worker.on("error", (error) => {
       connection.failure ??= toStringifiedError(error);
@@ -356,6 +402,7 @@ class ArchiveSession {
     });
     connection.exited = new Promise((resolve) => {
       worker.once("exit", (code) => {
+        connection.idle.clear(connection);
         connection.didExit = true;
         if (code !== 0) {
           connection.failure ??= new Error(`SQLite archive Worker exited with code ${code}`);
@@ -371,6 +418,7 @@ class ArchiveSession {
     if (!connection) {
       return Promise.resolve();
     }
+    connection.idle.clear(connection);
     return (connection.retiring ??= (async () => {
       // Queued requests own no native work and will refuse at FIFO admission.
       await this.dispatched?.catch(() => {});
@@ -383,6 +431,7 @@ class ArchiveSession {
         }
       }
       await connection.exited;
+      await joinSqliteArchiveWorkerCleanup(connection.worker);
       connection.worker.removeAllListeners();
       if (this.connection === connection) {
         this.connection = undefined;

@@ -2,10 +2,8 @@ import { randomUUID } from "node:crypto";
 import { isDeepStrictEqual } from "node:util";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { DeliveryQueueStoredStatus } from "../../../infra/delivery-queue-sqlite.kernel.js";
-import { scheduleSessionDelivery } from "../../../infra/session-delivery-queue-runtime.js";
 import type { QueuedSessionDelivery } from "../../../infra/session-delivery-queue.records.js";
 import type { SessionDeliveryWorkerOperations } from "../../../infra/session-delivery-queue.worker.js";
-import { createSubsystemLogger } from "../../../logging/subsystem.js";
 import type { OpenClawStateDatabaseOptions } from "../../../state/openclaw-state-db.js";
 import { captureOpenClawStateWorkerContext } from "../../../state/openclaw-state-worker-context.js";
 import type { OpenClawStateWorkerContext } from "../../../state/openclaw-state-worker-context.types.js";
@@ -43,11 +41,9 @@ import type {
   RequesterWakeMutation,
   SubagentCompletionMutation,
   SubagentCompletionMutationResult,
-  SubagentCompletionQueueReceipt,
   SubagentCompletionRecord,
 } from "./subagent-completion-mutation.types.js";
 
-const log = createSubsystemLogger("subagents/completion");
 export class SubagentCompletionSourceChangedError extends SubagentRegistryMutationRejectedError {}
 
 type AdmissionReceipt =
@@ -101,44 +97,9 @@ function parseMutationReceipt(
     (typeof value.applied !== "boolean" && value.applied !== null) ||
     !Array.isArray(value.records) ||
     !Array.isArray(value.retiredRunIds) ||
-    !Array.isArray(value.queueIds) ||
-    !value.retiredRunIds.every(
-      (id): id is string => typeof id === "string" && runIds.includes(id),
-    ) ||
-    !value.queueIds.every((id): id is string => typeof id === "string")
+    !value.retiredRunIds.every((id): id is string => typeof id === "string" && runIds.includes(id))
   ) {
     throw new Error("Subagent completion mutation acknowledgment does not identify its write");
-  }
-  const queueIds = value.queueIds;
-  const queueReceipts = (Array.isArray(value.queueReceipts) ? value.queueReceipts : []).map(
-    (receipt): SubagentCompletionQueueReceipt => {
-      if (!isRecord(receipt) || typeof receipt.id !== "string" || !queueIds.includes(receipt.id)) {
-        throw new Error("Subagent completion acknowledged another queue intent");
-      }
-      if (receipt.status === "completed" || receipt.status === "failed") {
-        return { id: receipt.id, status: receipt.status };
-      }
-      if (
-        receipt.status !== "pending" ||
-        typeof receipt.enqueuedAt !== "number" ||
-        !Number.isFinite(receipt.enqueuedAt) ||
-        typeof receipt.payloadJson !== "string"
-      ) {
-        throw new Error("Subagent completion acknowledged an invalid pending queue intent");
-      }
-      return {
-        id: receipt.id,
-        status: "pending",
-        enqueuedAt: receipt.enqueuedAt,
-        payloadJson: receipt.payloadJson,
-      };
-    },
-  );
-  if (
-    queueReceipts.length !== value.queueIds.length ||
-    new Set(queueReceipts.map(({ id }) => id)).size !== queueReceipts.length
-  ) {
-    throw new Error("Subagent completion acknowledged incomplete queue intents");
   }
   const records = value.records.map((record) => {
     const acknowledged = parseAcknowledgedRecord(record);
@@ -152,8 +113,6 @@ function parseMutationReceipt(
     applied: value.applied,
     records,
     retiredRunIds: value.retiredRunIds,
-    queueIds: value.queueIds,
-    ...(queueReceipts.length > 0 ? { queueReceipts } : {}),
   };
 }
 
@@ -336,9 +295,8 @@ async function mutateCompletion(
     (rows) => {
       const value: {
         applied: boolean | null;
-        queueIds: string[];
         receiptRetentionFailure?: { error: unknown };
-      } = { applied: null, queueIds: [] };
+      } = { applied: null };
       return { value, mutation: plan(rows) };
     },
     {
@@ -396,7 +354,6 @@ async function mutateCompletion(
         return {
           value: {
             applied: receipt.applied,
-            queueIds: receipt.queueIds,
             receiptRetentionFailure,
           },
           postimages,
@@ -404,16 +361,6 @@ async function mutateCompletion(
       },
     },
   );
-  for (const id of result.queueIds) {
-    try {
-      await scheduleSessionDelivery(id, context);
-    } catch (error) {
-      log.warn("Subagent completion remains queued after scheduling failed", {
-        queueId: id,
-        error,
-      });
-    }
-  }
   return {
     applied: result.applied,
     publication: result.applied === true ? "published" : "unchanged",
@@ -432,7 +379,11 @@ export async function settleSubagentCompletionDelivery(
           "Subagent completion delivery generation changed",
         );
       }
-      const subagent = structuredClone(current);
+      // The registry freezes the source row; only delivery changes here.
+      const subagent = {
+        ...current,
+        delivery: current.delivery && { ...current.delivery },
+      };
       const delivery = ensureDeliveryState(subagent);
       if (delivery.status !== "delivered" || delivery.queueId !== undefined) {
         const now = Date.now();
@@ -487,7 +438,7 @@ export async function blockSubagentCompletionDelivery(
             params.storeReplaced ||
             params.disposition === "permanent_failure")
         ) {
-          // The durable outcome precedes releasing FIFO for its queued failure notice.
+          // The durable outcome precedes releasing the completion input.
           retireSubagentCompletionControllerInput(params.subagent);
         }
       },

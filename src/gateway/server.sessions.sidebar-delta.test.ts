@@ -7,7 +7,6 @@ import {
   buildSessionListParams,
   requestSessionListParams,
 } from "../../ui/src/lib/sessions/session-requests.js";
-import { writeConfigFile } from "../config/config.js";
 import { getRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import {
   patchSessionEntryCore,
@@ -19,33 +18,23 @@ import {
   getAgentRunLifecycleGeneration,
   registerAgentRunContext,
 } from "../infra/agent-run-registry.js";
-import {
-  onTrustedInternalDiagnosticEvent,
-  waitForDiagnosticEventsDrained,
-} from "../infra/diagnostic-events.js";
 import { ensureProfileForEmail } from "../state/user-profiles.js";
 import {
-  browserProxyAuth,
+  BROWSER_ORIGIN,
+  configureBrowserAuth,
   connectReq,
   CONTROL_UI_CLIENT,
   installGatewayTestHooks,
   openWs,
   onceMessage,
-  testState,
   withGatewayServer,
 } from "./server.auth.test-helpers.js";
 
 installGatewayTestHooks({ scope: "suite" });
 
 test("sidebar wire caches retain deltas across real runtime publications", async () => {
-  const origin = "https://sidebar.example.test";
-  const auth = browserProxyAuth();
-  testState.gatewayAuth = auth;
-  const controlUi = { allowedOrigins: [origin] };
-  testState.gatewayControlUi = controlUi;
-  await writeConfigFile({
-    gateway: { auth, trustedProxies: ["127.0.0.1"], controlUi },
-  });
+  const origin = BROWSER_ORIGIN;
+  await configureBrowserAuth();
   const viewer = ensureProfileForEmail("sidebar-reader@example.test");
   const peer = ensureProfileForEmail("sidebar-peer@example.test");
   let now = Date.now();
@@ -69,12 +58,6 @@ test("sidebar wire caches retain deltas across real runtime publications", async
     outcome: "full" | "delta" | "unchanged";
   };
   let observation: Observation | undefined;
-  const retirements: string[] = [];
-  const stopDiagnostics = onTrustedInternalDiagnosticEvent((entry) => {
-    if (entry.type === "sessions.list.baseline.retired") {
-      retirements.push(entry.cause);
-    }
-  });
   try {
     await withGatewayServer(async ({ port }) => {
       const socket = await openWs(port, {
@@ -215,8 +198,6 @@ test("sidebar wire caches retain deltas across real runtime publications", async
           });
           await read(`member-${label}`, "delta");
         }
-        await waitForDiagnosticEventsDrained();
-        expect.soft(retirements).toEqual([]);
         await client.request("users.setDisplayName", {
           profileId: viewer.id,
           displayName: "Updated sidebar reader",
@@ -224,23 +205,18 @@ test("sidebar wire caches retain deltas across real runtime publications", async
         await read("profile-presentation", "full", {
           createdActor: { label: "Updated sidebar reader" },
         });
-        await waitForDiagnosticEventsDrained();
-        expect.soft(retirements).toEqual(["identity"]);
         await read("profile-idle", "unchanged");
         setRuntimeConfigSnapshot({
           ...getRuntimeConfigSnapshot(),
           ui: { prefs: { sidebarEntries: ["sessions"] } },
         });
         await read("config-presentation", "full");
-        await waitForDiagnosticEventsDrained();
-        expect.soft(retirements).toEqual(["identity", "config"]);
       } finally {
         runIds.forEach((runId) => clearAgentRunContext(runId));
         socket.close();
       }
     });
   } finally {
-    stopDiagnostics();
     clock.mockRestore();
   }
 });

@@ -55,12 +55,10 @@ it("indexes canonical transcript sources and retained legacy installed-index con
   expect(ownerIds(lookup, "fixture-legacy-source")).toEqual(["alpha"]);
 });
 
-it("prepares immutable ownership and install records once while preserving policy and caller copies", () => {
+it("prepares immutable ownership and install records once while preserving caller copies", () => {
   withPluginCache(createPluginCache(), () => {
     const snapshot = createSnapshot();
-    const acceptedSurface = createPluginDeclaredSurface({
-      channels: ["fixture-channel"],
-    });
+    const acceptedSurface = createPluginDeclaredSurface({ channels: ["fixture-channel"] });
     assert(snapshot.index.installRecords.alpha);
     snapshot.index.installRecords.alpha.acceptedSurface = acceptedSurface;
     finalizePluginMetadataSnapshot(snapshot);
@@ -98,20 +96,14 @@ it("prepares immutable ownership and install records once while preserving polic
     }
     expect.soft(compile).toHaveBeenCalledTimes(2);
     expect.soft(parse).toHaveBeenCalledTimes(1);
-    for (const policy of ["allow", "deny"] as const) {
-      const config = { plugins: policy === "allow" ? { allow: ["alpha"] } : { deny: ["alpha"] } };
-      expect(isInstalledPluginEnabled(snapshot.index, "alpha", config)).toBe(policy === "allow");
-    }
     expect(isInstalledPluginEnabled(snapshot.index, "missing")).toBe(false);
   });
 });
 
-it.each([false, true])("rereads mutable nested inputs (frozen shell: %s)", (freezeShell) => {
+it("rereads mutable nested inputs even under a frozen shell", () => {
   withPluginCache(createPluginCache(), () => {
     const snapshot = createSnapshot();
-    if (freezeShell) {
-      Object.freeze(snapshot.index);
-    }
+    Object.freeze(snapshot.index);
     const owners = (id: string) => ownerIds(scopeLookup(snapshot.index), id);
     expect(owners("shared")).toEqual(["alpha", "beta"]);
     expect(recordsFrom(snapshot.index).alpha?.spec).toBe("alpha@1");

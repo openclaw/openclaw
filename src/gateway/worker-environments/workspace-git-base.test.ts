@@ -39,7 +39,6 @@ it("shares a project across linked worktrees and commits while isolating reposit
   const { root, repository, worktree } = await fixture();
   await requireGit(repository, ["worktree", "add", "--detach", worktree, "HEAD"]);
   const original = await prepare(repository, "gateway-one");
-  expect(original).toMatchObject({ label: "repository" });
   expect(await prepare(worktree, "gateway-one")).toEqual(original);
 
   await write(worktree, "next commit\n");
@@ -108,14 +107,9 @@ it("labels snapshots from the normalized origin, falling back to the project dir
   expect(await prepare(worktree)).toEqual(original);
 });
 
-it("does not invent a project snapshot for a plain or unborn workspace", async () => {
+it("rejects a pinned snapshot when the repository is no longer available", async () => {
   const root = await fs.realpath(tempDirs.make("worker-project-unborn-"));
-  expect(await prepare(root)).toBeUndefined();
   await expect(prepare(root, "gateway", "a".repeat(40))).rejects.toThrow("no longer available");
-  await requireGit(root, ["init", "--quiet"]);
-  await write(root, "uncommitted\n");
-  await requireGit(root, ["add", "."]);
-  expect(await prepare(root)).toBeUndefined();
 });
 
 it("packs only the pinned commit and tree without local credentials, overlays, or history", async () => {

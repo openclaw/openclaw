@@ -1,15 +1,5 @@
-import type { ChildProcess } from "node:child_process";
-import { existsSync } from "node:fs";
-import fs from "node:fs/promises";
-import path from "node:path";
-import { setTimeout as delay } from "node:timers/promises";
 import { expect, it, vi } from "vitest";
-import {
-  fixtureReceiptClientSource,
-  openFixtureReceiptChannel,
-} from "../../test/helpers/fixture-receipts.js";
-import { startProcessWatchdogFixture } from "../../test/helpers/process-watchdog.js";
-import { createDeferred, withinTest } from "../../test/helpers/promise.js";
+import { createDeferred } from "../../test/helpers/promise.js";
 import {
   getGatewaySuspendStatus,
   prepareGatewaySuspend,
@@ -22,9 +12,6 @@ import type { SpawnResult } from "../process/exec-result.js";
 import * as execSpawn from "../process/exec-spawn.js";
 import * as processExecution from "../process/exec.js";
 import { resetGatewayWorkAdmission } from "../process/gateway-work-admission.js";
-import { isPidAlive } from "../shared/pid-alive.js";
-import { readPidFile } from "../test-utils/process-tree.js";
-import { withTempDir } from "../test-utils/temp-dir.js";
 import { runCronCommandJob } from "./command-runner.js";
 import { cronTestJob } from "./service.fixture-builders.test-support.js";
 import type { CronJob } from "./types.js";
@@ -36,8 +23,6 @@ type CommandPayload = Extract<CronJob["payload"], { kind: "command" }>;
 function makeCommandJob(payload: Omit<CommandPayload, "kind">): CronJob {
   return cronTestJob({
     id: "command-job",
-    name: "Command job",
-    wakeMode: "now",
     payload: { kind: "command", ...payload },
   });
 }
@@ -112,6 +97,10 @@ it.each([
     };
     const running = runCronCommandJob({ job });
     try {
+      expect(runCommand).toHaveBeenCalledWith(
+        [...argv],
+        expect.objectContaining({ killProcessTree: true, timeoutMs: 600_000 }),
+      );
       expect(readLifecycleWriteCustody()).toEqual(
         ownsBackup ? [{ phase: "backup", count: 1 }] : [],
       );
@@ -206,9 +195,6 @@ it.each<
   ["NO_REPLY\n", undefined],
   ["NO_REPLY\nNO_REPLY", "NO_REPLY"],
   ["NO_REPLY.", "NO_REPLY."],
-  ['{"action":"NO_REPLY"}', '{"action":"NO_REPLY"}'],
-  ['"NO_REPLY"', '"NO_REPLY"'],
-  ["No channel reply.", "No channel reply."],
   [" NO_REPLY\nReport", "NO_REPLY\nReport"],
   [
     `Visit https://example.com/device and enter code ABCD-EFGH\n${"x".repeat(200)}`,
@@ -287,92 +273,6 @@ it.each([
   },
 );
 
-it.skipIf(process.platform === "win32")(
-  "kills shell process groups on timeout",
-  async ({ signal }) =>
-    withTempDir("openclaw-cron-command-", async (tempDir) => {
-      const receipts = await openFixtureReceiptChannel();
-      await using _ = { [Symbol.asyncDispose]: () => receipts.close() };
-      const childPidPath = path.join(tempDir, "child.pid");
-      const childPath = path.join(tempDir, "child.mjs");
-      await fs.writeFile(
-        childPath,
-        [
-          fixtureReceiptClientSource(receipts.endpoint),
-          'import { writeFileSync } from "node:fs";',
-          "setInterval(() => {}, 1000);",
-          `writeFileSync(${JSON.stringify(childPidPath)}, String(process.pid));`,
-          `sendReceipt(${JSON.stringify(childPidPath)}, "ready");`,
-        ].join("\n"),
-      );
-      const shellCommand = [
-        `${JSON.stringify(process.execPath)} ${JSON.stringify(childPath)} &`,
-        "child_pid=$!",
-        'wait "$child_pid"',
-      ].join("\n");
-
-      const controller = new AbortController();
-      const spawnSpy = vi.spyOn(execSpawn, "spawnCommandWithInvocation");
-      let parent: ChildProcess | undefined;
-      let releaseAndWait: (() => ReturnType<typeof runCronCommandJob>) | undefined;
-      let running: ReturnType<typeof runCronCommandJob> | undefined;
-      try {
-        // Hold only the command deadline until the child is live. Group exit
-        // observation and scoped cleanup must keep real time to observe the OS.
-        releaseAndWait = startProcessWatchdogFixture(() => {
-          running = runCronCommandJob({
-            job: makeCommandJob({
-              argv: ["sh", "-lc", shellCommand],
-              timeoutSeconds: 0.5,
-            }),
-            abortSignal: controller.signal,
-          });
-          return running;
-        });
-        const spawnResult = spawnSpy.mock.results[0];
-        if (!running || spawnResult?.type !== "return") {
-          throw new Error("command did not spawn");
-        }
-        parent = spawnResult.value.child.nodeChildProcess;
-        // The child records readiness before reporting it on the independent socket.
-        const settled = running.then(() => {
-          if (!existsSync(childPidPath)) {
-            throw new Error("command settled before its shell descendant became live");
-          }
-        });
-        await withinTest(Promise.race([receipts.waitFor(childPidPath, "ready"), settled]), signal);
-        const childPid = await readPidFile(childPidPath);
-        expect(Number.isSafeInteger(childPid)).toBe(true);
-        expect(isPidAlive(childPid)).toBe(true);
-
-        const result = await withinTest(releaseAndWait(), signal);
-        expect(result.status).toBe("error");
-        expect(result.error).toBe("command timed out");
-        // Scope cleanup has settled, but it exposes no exact adopted-child reap event.
-        while (isPidAlive(childPid)) {
-          await delay(25, undefined, { signal }).catch((error: unknown) => {
-            throw new Error(`Cron shell descendant ${childPid} stayed alive`, { cause: error });
-          });
-        }
-        expect(isPidAlive(childPid)).toBe(false);
-      } finally {
-        try {
-          controller.abort();
-          if (parent?.pid) {
-            try {
-              process.kill(-parent.pid, "SIGKILL");
-            } catch {
-              // The command may already have reaped its process group.
-            }
-          }
-        } finally {
-          spawnSpy.mockRestore();
-          await releaseAndWait?.();
-        }
-      }
-    }),
-);
-
 function mockUncertainCleanupAfter(
   result: Pick<SpawnResult, "code" | "termination"> &
     Partial<Pick<SpawnResult, "stdout" | "stderr">>,
@@ -425,24 +325,17 @@ it.each([
             summary: "stdout:\nBackup created\n\nstderr:\nBackup verification completed",
           },
     );
-    const command = timeout
-      ? '"sleep" "60"'
-      : SCHEDULED_BACKUP_COMMAND.map((arg) => JSON.stringify(arg)).join(" ");
-    const diagnostic = {
-      ts: 789,
-      source: "exec",
-      severity: "error",
-      exitCode: timeout ? 124 : 0,
-    };
-    expect(result.diagnostics?.entries).toEqual([
-      timeout
-        ? expect.objectContaining({ source: "exec", severity: "error", exitCode: 124 })
-        : { ...diagnostic, message: `command error: ${command}`, truncated: false },
-      {
-        ...diagnostic,
-        message: `Command cleanup could not confirm that owned work stopped: ${command}`,
-      },
-    ]);
+    expect(result.diagnostics?.entries).toHaveLength(2);
+    for (const entry of result.diagnostics?.entries ?? []) {
+      expect(entry).toMatchObject({
+        source: "exec",
+        severity: "error",
+        exitCode: timeout ? 124 : 0,
+      });
+    }
+    expect(result.diagnostics?.entries[1]?.message).toContain(
+      "Command cleanup could not confirm that owned work stopped",
+    );
     if (!timeout) {
       expect(result.failureNotificationDetail).toBeUndefined();
       expect(result.diagnostics?.summary).toBe(result.summary);

@@ -44,7 +44,7 @@ export function createModelSpeedPolicyResolver(params: {
         ),
       ),
   );
-  return (
+  const prepare = (
     entry: ModelCatalogEntry,
     evaluation: ModelAuthAvailabilityEvaluation,
     runtimeId?: string,
@@ -54,10 +54,23 @@ export function createModelSpeedPolicyResolver(params: {
     supportsServiceTierRecovery?: boolean;
   } => {
     const policy = policies.get(normalizeProviderId(entry.provider));
-    if (!policy || (evaluation.routeResolution !== null && !evaluation.selectedRoute)) {
+    if (!policy) {
       return {};
     }
     const route = evaluation.selectedRoute ?? entry;
+    if (!policy.resolveFastModeSupport && !policy.resolveServiceTiers) {
+      return {
+        supportsFastMode: undefined,
+        serviceTiers: undefined,
+        supportsServiceTierRecovery:
+          (runtimeId ?? entry.nativeRuntime) === "openclaw" &&
+          supportsNativeOpenAIResponsesEndpoint({
+            provider: entry.provider,
+            api: route.api ?? "",
+            baseUrl: route.baseUrl,
+          }),
+      };
+    }
     const { defaultParams, modelParams, agentModelParams, agentParams } =
       resolveModelExtraParamSources({
         config: params.cfg,
@@ -92,5 +105,43 @@ export function createModelSpeedPolicyResolver(params: {
           baseUrl: route.baseUrl,
         }),
     };
+  };
+  // These are local request-mapping facts, not account readiness or service-tier observations.
+  // The catalog owner retires this resolver with its config, metadata and auth generation.
+  const prepared = new WeakMap<
+    ModelCatalogEntry,
+    Array<{
+      api: string | undefined;
+      baseUrl: string | undefined;
+      authMode: string | undefined;
+      runtimeId: string | undefined;
+      policy: ReturnType<typeof prepare>;
+    }>
+  >();
+  return (
+    entry: ModelCatalogEntry,
+    evaluation: ModelAuthAvailabilityEvaluation,
+    runtimeId = entry.nativeRuntime,
+  ): ReturnType<typeof prepare> => {
+    if (evaluation.routeResolution !== null && !evaluation.selectedRoute) {
+      return {};
+    }
+    const { api, baseUrl } = evaluation.selectedRoute ?? entry;
+    const authMode = evaluation.selectedAuthMode;
+    const variants = prepared.get(entry) ?? [];
+    const existing = variants.find(
+      (variant) =>
+        variant.api === api &&
+        variant.baseUrl === baseUrl &&
+        variant.authMode === authMode &&
+        variant.runtimeId === runtimeId,
+    );
+    if (existing) {
+      return existing.policy;
+    }
+    const policy = prepare(entry, evaluation, runtimeId);
+    variants.push({ api, baseUrl, authMode, runtimeId, policy });
+    prepared.set(entry, variants);
+    return policy;
   };
 }

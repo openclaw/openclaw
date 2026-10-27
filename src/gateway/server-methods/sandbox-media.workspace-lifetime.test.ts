@@ -95,10 +95,8 @@ it.for(["staged", "read-failed", "aborted", "retired"] as const)(
           signal,
         );
         const owner = await prepare.mock.results[0]?.value;
-        expect(owner).toBeDefined();
         expect(() => owner!.assertCurrent()).not.toThrow();
         const projection = await readLocalWorkspaceProjection(worktree.id);
-        expect(projection).toBeDefined();
         const projectionPath = projection!.projection_path;
         if (outcome === "retired") {
           expect(await service.remove({ id: worktree.id, reason: "manual-delete" })).toMatchObject({

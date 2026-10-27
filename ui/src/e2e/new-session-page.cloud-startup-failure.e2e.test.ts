@@ -107,7 +107,7 @@ suite.define(() => {
       await pollLocatorText(retained).toContain(message);
       const working = retained.locator(".chat-working-indicator");
       await pollLocatorText(working).toContain(
-        outcome === "pending" ? "Sending message" : "Provisioning environment",
+        outcome === "pending" ? "Starting…" : "Provisioning environment",
       );
       expect(await retained.textContent()).not.toContain("temporary session was cleaned up");
       expect(page.url()).toBe(route);
@@ -177,6 +177,7 @@ suite.define(() => {
       const diagnostic = `cloud profile was removed\n${"Enrollment detail. ".repeat(80)}\nFinal startup diagnostic.`;
       const gateway = await installMockGateway(page, {
         defaultAgentId: "cloud",
+        subscriptionInitialHistory: !historyFails,
         deferredMethods: ["sessions.dispatch", ...(historyFails ? ["chat.startup"] : [])],
         featureMethods: ["sessions.create", "sessions.dispatch", "chat.startup"],
         workspaceGit: true,

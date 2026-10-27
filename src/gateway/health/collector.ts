@@ -21,6 +21,7 @@ import { isDiagnosticFlagEnabled } from "../../infra/diagnostic-flags.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import {
   projectHeartbeatSummary,
+  readHeartbeatSummaryForStatus,
   readHeartbeatSummarySnapshot,
 } from "../../infra/heartbeat-summary-snapshot.js";
 import { redactToolPayloadTextWithConfig } from "../../logging/redact.js";
@@ -145,14 +146,12 @@ async function prepareHealthAgentSummaries(
   const { prepareStatusSessionStores } = await import("../../status/session-stores.js");
   const { isTransientSqliteError } = await import("../../infra/unhandled-rejections.js");
   // Receipts list the primary job first; retain it when converted siblings share an agent.
-  const heartbeatJobs = new Map(
-    (
-      await (cronState?.readHeartbeatSummary?.(cfg) ??
-        readHeartbeatSummarySnapshot(cfg, cronState?.storePath))
-    )
-      .toReversed()
-      .map((job) => [job.agentId, job]),
+  const heartbeat = await readHeartbeatSummaryForStatus(
+    () =>
+      cronState?.readHeartbeatSummary?.(cfg) ??
+      readHeartbeatSummarySnapshot(cfg, cronState?.storePath),
   );
+  const heartbeatJobs = new Map(heartbeat.jobs.toReversed().map((job) => [job.agentId, job]));
   const sessionStores = await prepareStatusSessionStores(
     cfg,
     ordered,
@@ -180,7 +179,7 @@ async function prepareHealthAgentSummaries(
         agentId: agent.id,
         name: agent.name,
         isDefault: agent.id === displayDefaultId,
-        heartbeat: projectHeartbeatSummary(heartbeatJobs.get(agent.id)),
+        heartbeat: projectHeartbeatSummary(heartbeatJobs.get(agent.id), heartbeat.selectionWarning),
         sessions: projectHealthSessions(store.path, store),
       }));
       return {
@@ -220,11 +219,13 @@ function buildPluginHealthSummary(cfg: OpenClawConfig): PluginHealthSummary | un
       state,
       diagnostic: toPublicPluginVerificationDiagnostic(diagnostic),
     }))
-    .toSorted((left, right) => left.id.localeCompare(right.id));
+    // oxlint-disable-next-line unicorn/no-array-sort -- The mapped health summaries are private to this collection.
+    .sort((left, right) => left.id.localeCompare(right.id));
   const loaded = (registry?.plugins ?? [])
     .filter((plugin) => plugin.status === "loaded")
     .map((plugin) => plugin.id)
-    .toSorted((left, right) => left.localeCompare(right));
+    // oxlint-disable-next-line unicorn/no-array-sort -- The mapped plugin IDs are private to this collection.
+    .sort((left, right) => left.localeCompare(right));
   const loadErrors = (registry?.plugins ?? [])
     .filter(
       (plugin) =>
@@ -262,7 +263,8 @@ function buildPluginHealthSummary(cfg: OpenClawConfig): PluginHealthSummary | un
         ),
       )
     : [];
-  const errors = [...loadErrors, ...serviceErrors].toSorted(
+  // oxlint-disable-next-line unicorn/no-array-sort -- The combined error array is private to this collection.
+  const errors = [...loadErrors, ...serviceErrors].sort(
     (left, right) => left.id.localeCompare(right.id) || left.error.localeCompare(right.error),
   );
   if (loaded.length === 0 && errors.length === 0 && unavailable.length === 0) {

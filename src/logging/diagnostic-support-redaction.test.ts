@@ -9,6 +9,9 @@ import {
   sanitizeSupportConfigValue,
   sanitizeSupportSnapshotValue,
 } from "./diagnostic-support-redaction.js";
+import * as textRedaction from "./redact.js";
+import { registerSecretValueForRedaction } from "./secret-redaction-registry.js";
+import { resetSecretRedactionRegistryForTest } from "./secret-redaction-registry.test-support.js";
 
 function fakeAwsSecretAccessKey(): string {
   return fakeRepeatedToken(["A", "b", "9", "/"]);
@@ -46,6 +49,23 @@ describe("diagnostic support redaction", () => {
   const tempDir = path.join(os.tmpdir(), "openclaw-support-redaction-test");
   const npmLayoutRefusal =
     "The npm global install layout cannot stage a candidate. Reinstall with npm into its default global layout, then retry the update.";
+
+  it("checks repeated field names once per capture and rechecks newly registered secrets", () => {
+    const context = { env: {}, stateDir: tempDir };
+    const redact = vi.spyOn(textRedaction, "redactText");
+    try {
+      const values = [{ source: "workspace" }, { source: "bundled" }, { source: "project" }];
+      expect(sanitizeSupportSnapshotValue(values, context)).toEqual(values);
+      expect(redact.mock.calls.filter(([text]) => text === "source")).toHaveLength(1);
+      registerSecretValueForRedaction("source");
+      expect(sanitizeSupportSnapshotValue({ source: "workspace" }, context)).toEqual({
+        "<identifier#1>": "workspace",
+      });
+    } finally {
+      redact.mockRestore();
+      resetSecretRedactionRegistryForTest();
+    }
+  });
 
   it.each([
     "schema migration required",

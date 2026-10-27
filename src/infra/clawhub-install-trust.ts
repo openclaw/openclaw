@@ -1,7 +1,7 @@
 // Shared ClawHub exact-release trust gate for plugin, skill, and Claw installs.
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { stripAnsi, visibleWidth } from "../../packages/terminal-core/src/ansi.js";
-import { sanitizeTerminalText } from "../../packages/terminal-core/src/safe-text.js";
+import { terminalText } from "../../packages/terminal-core/src/safe-text.js";
 import { theme } from "../../packages/terminal-core/src/theme.js";
 import { resolveClawHubBaseUrl } from "./clawhub-client.js";
 import { encodeClawHubPackagePath, formatClawHubReleaseLabel } from "./clawhub-display.js";
@@ -205,70 +205,6 @@ function formatClawHubSubjectReleaseLabel(subject: ClawHubTrustSubject, version:
   return formatClawHubReleaseLabel(formatClawHubSubjectPackageName(subject), version);
 }
 
-function validateClawHubSecurityIdentity(params: {
-  security: ClawHubPackageSecurityResponse;
-  packageName: string;
-  packageLabel?: string;
-  version: string;
-  expectedFamily?: string;
-  expectedClawArtifact?: ClawHubExpectedClawArtifact;
-}): ClawHubTrustFailure | null {
-  const packageLabel = params.packageLabel ?? params.packageName;
-  const responsePackageName = normalizeOptionalString(params.security.package?.name);
-  if (responsePackageName !== params.packageName) {
-    return {
-      ok: false,
-      error: `ClawHub release trust check for "${formatClawHubReleaseLabel(packageLabel, params.version)}" returned package "${sanitizeTerminalText(responsePackageName ?? "unknown")}".`,
-      code: CLAWHUB_TRUST_ERROR_CODE.CLAWHUB_SECURITY_UNAVAILABLE,
-      version: params.version,
-    };
-  }
-  if (params.expectedFamily && params.security.package?.family !== params.expectedFamily) {
-    return {
-      ok: false,
-      error: `ClawHub release trust check for "${formatClawHubReleaseLabel(packageLabel, params.version)}" returned a different package family.`,
-      code: CLAWHUB_TRUST_ERROR_CODE.CLAWHUB_SECURITY_UNAVAILABLE,
-      version: params.version,
-    };
-  }
-  const responseVersion = normalizeOptionalString(params.security.release?.version);
-  if (responseVersion !== params.version) {
-    return {
-      ok: false,
-      error: `ClawHub release trust check for "${formatClawHubReleaseLabel(packageLabel, params.version)}" returned version "${sanitizeTerminalText(responseVersion ?? "unknown")}".`,
-      code: CLAWHUB_TRUST_ERROR_CODE.CLAWHUB_SECURITY_UNAVAILABLE,
-      version: params.version,
-    };
-  }
-  if (params.expectedFamily === "claw" && !params.expectedClawArtifact) {
-    return {
-      ok: false,
-      error: `ClawHub release trust check for "${formatClawHubReleaseLabel(packageLabel, params.version)}" has no selected artifact identity.`,
-      code: CLAWHUB_TRUST_ERROR_CODE.CLAWHUB_SECURITY_UNAVAILABLE,
-      version: params.version,
-    };
-  }
-  if (params.expectedClawArtifact) {
-    const release = params.security.release;
-    if (
-      release?.artifactKind !== "npm-pack" ||
-      normalizeClawHubSha256Hex(release.artifactSha256 ?? "") !==
-        params.expectedClawArtifact.sha256 ||
-      release.npmIntegrity !== params.expectedClawArtifact.npmIntegrity ||
-      (params.expectedClawArtifact.npmShasum !== undefined &&
-        release.npmShasum !== params.expectedClawArtifact.npmShasum)
-    ) {
-      return {
-        ok: false,
-        error: `ClawHub release trust check for "${formatClawHubReleaseLabel(packageLabel, params.version)}" returned a different artifact identity.`,
-        code: CLAWHUB_TRUST_ERROR_CODE.CLAWHUB_SECURITY_UNAVAILABLE,
-        version: params.version,
-      };
-    }
-  }
-  return null;
-}
-
 function readSkillVerdictSecurityStatus(item: ClawHubSkillSecurityVerdictItem): string | undefined {
   if (!item.security || typeof item.security !== "object") {
     return undefined;
@@ -330,30 +266,26 @@ function mapSkillSecurityVerdictToPackageSecurity(params: {
   const responseSlug = normalizeOptionalString(params.item.slug ?? params.item.requestedSlug);
   if (responseSlug !== params.packageName) {
     throw new Error(
-      `ClawHub skill trust check for "${formatClawHubReleaseLabel(params.packageName, params.version)}" returned skill "${sanitizeTerminalText(responseSlug ?? "unknown")}".`,
+      terminalText`ClawHub skill trust check for "${formatClawHubReleaseLabel(params.packageName, params.version)}" returned skill "${responseSlug ?? "unknown"}".`,
     );
   }
   const responsePublisher = normalizeOptionalString(params.item.publisherHandle);
   if (params.ownerHandle && responsePublisher !== params.ownerHandle) {
     throw new Error(
-      `ClawHub skill trust check for "${formatClawHubReleaseLabel(params.packageName, params.version)}" returned publisher "${sanitizeTerminalText(responsePublisher ?? "unknown")}", expected "${sanitizeTerminalText(params.ownerHandle)}".`,
+      terminalText`ClawHub skill trust check for "${formatClawHubReleaseLabel(params.packageName, params.version)}" returned publisher "${responsePublisher ?? "unknown"}", expected "${params.ownerHandle}".`,
     );
   }
   const responseVersion = normalizeOptionalString(params.item.version);
   if (responseVersion !== params.version) {
-    const reason = params.item.error?.message
-      ? `: ${sanitizeTerminalText(params.item.error.message)}`
-      : "";
+    const reason = params.item.error?.message ? `: ${params.item.error.message}` : "";
     throw new Error(
-      `ClawHub skill trust check for "${formatClawHubReleaseLabel(params.packageName, params.version)}" returned version "${sanitizeTerminalText(responseVersion ?? "unknown")}"${reason}.`,
+      terminalText`ClawHub skill trust check for "${formatClawHubReleaseLabel(params.packageName, params.version)}" returned version "${responseVersion ?? "unknown"}"${reason}.`,
     );
   }
   if (hasSkillVerdictSecurityError(params.item)) {
-    const reason = params.item.error?.message
-      ? `: ${sanitizeTerminalText(params.item.error.message)}`
-      : "";
+    const reason = params.item.error?.message ? `: ${params.item.error.message}` : "";
     throw new Error(
-      `ClawHub skill trust check for "${formatClawHubReleaseLabel(params.packageName, params.version)}" did not return a usable security verdict${reason}.`,
+      terminalText`ClawHub skill trust check for "${formatClawHubReleaseLabel(params.packageName, params.version)}" did not return a usable security verdict${reason}.`,
     );
   }
   const decision = normalizeClawHubTrustToken(params.item.decision);
@@ -503,25 +435,65 @@ export async function checkClawHubPackageTrust(params: {
       token: params.token,
       timeoutMs: params.timeoutMs,
     });
-    const identityFailure = validateClawHubSecurityIdentity({
-      security: fetchedSecurity.security,
-      packageName: params.subject.packageName,
-      packageLabel,
-      version: params.version,
-      ...(params.subject.kind === "claw" ? { expectedFamily: "claw" } : {}),
-      ...(params.subject.kind === "claw" && params.expectedClawArtifact
-        ? { expectedClawArtifact: params.expectedClawArtifact }
-        : {}),
-    });
-    if (identityFailure) {
-      return identityFailure;
+    const expectedFamily = params.subject.kind === "claw" ? "claw" : undefined;
+    const expectedClawArtifact = expectedFamily ? params.expectedClawArtifact : undefined;
+    const responsePackageName = normalizeOptionalString(fetchedSecurity.security.package?.name);
+    if (responsePackageName !== params.subject.packageName) {
+      return {
+        ok: false,
+        error: terminalText`ClawHub release trust check for "${formatClawHubReleaseLabel(packageLabel, params.version)}" returned package "${responsePackageName ?? "unknown"}".`,
+        code: CLAWHUB_TRUST_ERROR_CODE.CLAWHUB_SECURITY_UNAVAILABLE,
+        version: params.version,
+      };
+    }
+    if (expectedFamily && fetchedSecurity.security.package?.family !== expectedFamily) {
+      return {
+        ok: false,
+        error: `ClawHub release trust check for "${formatClawHubReleaseLabel(packageLabel, params.version)}" returned a different package family.`,
+        code: CLAWHUB_TRUST_ERROR_CODE.CLAWHUB_SECURITY_UNAVAILABLE,
+        version: params.version,
+      };
+    }
+    const responseVersion = normalizeOptionalString(fetchedSecurity.security.release?.version);
+    if (responseVersion !== params.version) {
+      return {
+        ok: false,
+        error: terminalText`ClawHub release trust check for "${formatClawHubReleaseLabel(packageLabel, params.version)}" returned version "${responseVersion ?? "unknown"}".`,
+        code: CLAWHUB_TRUST_ERROR_CODE.CLAWHUB_SECURITY_UNAVAILABLE,
+        version: params.version,
+      };
+    }
+    if (expectedFamily === "claw" && !expectedClawArtifact) {
+      return {
+        ok: false,
+        error: `ClawHub release trust check for "${formatClawHubReleaseLabel(packageLabel, params.version)}" has no selected artifact identity.`,
+        code: CLAWHUB_TRUST_ERROR_CODE.CLAWHUB_SECURITY_UNAVAILABLE,
+        version: params.version,
+      };
+    }
+    if (expectedClawArtifact) {
+      const release = fetchedSecurity.security.release;
+      if (
+        release?.artifactKind !== "npm-pack" ||
+        normalizeClawHubSha256Hex(release.artifactSha256 ?? "") !== expectedClawArtifact.sha256 ||
+        release.npmIntegrity !== expectedClawArtifact.npmIntegrity ||
+        (expectedClawArtifact.npmShasum !== undefined &&
+          release.npmShasum !== expectedClawArtifact.npmShasum)
+      ) {
+        return {
+          ok: false,
+          error: `ClawHub release trust check for "${formatClawHubReleaseLabel(packageLabel, params.version)}" returned a different artifact identity.`,
+          code: CLAWHUB_TRUST_ERROR_CODE.CLAWHUB_SECURITY_UNAVAILABLE,
+          version: params.version,
+        };
+      }
     }
     security = fetchedSecurity.security;
     warningLinks = fetchedSecurity.links;
   } catch (error) {
     return {
       ok: false,
-      error: `ClawHub release trust check failed for "${releaseLabel}": ${sanitizeTerminalText(formatErrorMessage(error))}`,
+      error: terminalText`ClawHub release trust check failed for "${releaseLabel}": ${formatErrorMessage(error)}`,
       code: CLAWHUB_TRUST_ERROR_CODE.CLAWHUB_SECURITY_UNAVAILABLE,
       version: params.version,
     };
@@ -552,14 +524,14 @@ export async function checkClawHubPackageTrust(params: {
         ? theme.success("Safe")
         : theme.warn("Review");
   const terminalAudit = renderClawHubAuditBox([
-    auditReleaseLabel,
+    terminalText`${auditReleaseLabel}`,
     "",
     `Outcome: ${outcome}`,
     "",
     "Overview:",
-    ...overview.split("\n").map((line) => sanitizeTerminalText(line)),
+    ...overview.split("\n").map((line) => terminalText`${line}`),
     "",
-    `Details: ${sanitizeTerminalText(securityAuditUrl)}`,
+    terminalText`Details: ${securityAuditUrl}`,
   ]);
   const audit = stripAnsi(terminalAudit);
   if (disposition === "clean") {

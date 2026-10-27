@@ -22,6 +22,7 @@ type OpenAIResponsesPayloadModel = {
   contextTokens?: unknown;
   contextWindow?: unknown;
   compat?: unknown;
+  thinkingLevelMap?: unknown;
 };
 
 type OpenAIResponsesPayloadPolicy = {
@@ -339,7 +340,9 @@ export function resolveOpenAIResponsesPayloadPolicy(
     isResponsesApi &&
     // Custom endpoints need an explicit capability; model-name hints describe native routes.
     !supportsOpenAIReasoningEffort(
-      capabilities.usesKnownNativeOpenAIRoute ? model : { compat: model.compat },
+      capabilities.usesKnownNativeOpenAIRoute
+        ? model
+        : { compat: model.compat, thinkingLevelMap: model.thinkingLevelMap },
       "none",
     );
   // Strict OpenAI-compatible Responses endpoints reject output-only fields

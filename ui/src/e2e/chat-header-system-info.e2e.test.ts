@@ -39,7 +39,7 @@ suite.define(() => {
         },
       });
       await page.goto(controlUiSessionUrl(suite.server.baseUrl, row.key));
-      await gateway.waitForRequest("chat.startup");
+      await gateway.waitForRequest("sessions.messages.subscribe", { match: { key: row.key } });
       const pane = page.locator("openclaw-chat-pane.chat-pane-cache__pane--active");
       await pane.waitFor();
       await pane

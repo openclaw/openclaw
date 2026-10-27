@@ -78,6 +78,16 @@ async function createFixture(stateDir: string, agentDir: string) {
       order: { openai: [platformId, subscriptionId] },
     },
   };
+  const publish = (patch: Partial<OpenClawConfig>) => {
+    cfg = { ...cfg, ...patch };
+    setRuntimeConfigSnapshot(cfg);
+  };
+  const providerConfig = (provider: "openai" | "ollama", key?: string) => ({
+    ...(provider === "ollama" ? { api: "ollama" as const } : {}),
+    ...(key === undefined ? {} : { apiKey: key }),
+    baseUrl: provider === "ollama" ? "http://127.0.0.1:11434" : "https://api.openai.com/v1",
+    models: [],
+  });
   setRuntimeConfigSnapshot(cfg);
   await persistAuthProfileBatch({
     profiles: [
@@ -196,10 +206,9 @@ async function createFixture(stateDir: string, agentDir: string) {
       cfg.models = {
         providers: {
           openai: {
+            ...providerConfig("openai"),
             api: "openai-responses",
-            baseUrl: "https://api.openai.com/v1",
             agentRuntime: { id: "openclaw" },
-            models: [],
           },
         },
       };
@@ -319,37 +328,23 @@ async function createFixture(stateDir: string, agentDir: string) {
     async useUnstoredCredential(provider: "openai" | "ollama", configuredKey?: string) {
       const store = await loadAuthProfileStoreWithoutExternalProfilesAsync(agentDir);
       await removeAuthProfilesAcrossOwnerStores({ profileIds: Object.keys(store.profiles) });
+      const models =
+        provider === "ollama" || configuredKey
+          ? {
+              providers: {
+                [provider]: providerConfig(
+                  provider,
+                  provider === "ollama" ? "ollama-local" : configuredKey,
+                ),
+              },
+            }
+          : undefined;
       cfg = {
         agents: {
           entries: { main: { agentDir } },
           defaults: { model: provider === "openai" ? "openai/gpt-4.1" : "ollama/llama3.3" },
         },
-        ...(provider === "ollama"
-          ? {
-              models: {
-                providers: {
-                  ollama: {
-                    api: "ollama",
-                    apiKey: "ollama-local",
-                    baseUrl: "http://127.0.0.1:11434",
-                    models: [],
-                  },
-                },
-              },
-            }
-          : configuredKey
-            ? {
-                models: {
-                  providers: {
-                    openai: {
-                      apiKey: configuredKey,
-                      baseUrl: "https://api.openai.com/v1",
-                      models: [],
-                    },
-                  },
-                },
-              }
-            : {}),
+        ...(models ? { models } : {}),
       };
       setRuntimeConfigSnapshot(cfg);
     },
@@ -370,8 +365,7 @@ async function createFixture(stateDir: string, agentDir: string) {
       return { profileId: authProfileId, owner: person(owner.id), other: person(other.id) };
     },
     addAgent(agentId: string) {
-      cfg = {
-        ...cfg,
+      publish({
         agents: {
           ...cfg.agents,
           entries: {
@@ -379,12 +373,10 @@ async function createFixture(stateDir: string, agentDir: string) {
             [agentId]: { agentDir: path.join(stateDir, "agents", agentId, "agent") },
           },
         },
-      };
-      setRuntimeConfigSnapshot(cfg);
+      });
     },
     setAlias() {
-      cfg = {
-        ...cfg,
+      publish({
         agents: {
           ...cfg.agents,
           defaults: {
@@ -392,15 +384,12 @@ async function createFixture(stateDir: string, agentDir: string) {
             models: { "openai/gpt-4o": { alias: "synthetic-alias" } },
           },
         },
-      };
-      setRuntimeConfigSnapshot(cfg);
+      });
     },
     setDefaultProfile(profileId: string) {
-      cfg = {
-        ...cfg,
+      publish({
         agents: { ...cfg.agents, defaults: { model: "openai/gpt-4.1@" + profileId } },
-      };
-      setRuntimeConfigSnapshot(cfg);
+      });
     },
     setScheduledProfile(profileId: string, scope: "agent" | "default", allowed: boolean) {
       const subagents = { model: "openai/gpt-4o@" + profileId };
@@ -420,12 +409,10 @@ async function createFixture(stateDir: string, agentDir: string) {
       setRuntimeConfigSnapshot(cfg);
     },
     async changeDefaults(profileId: string) {
-      cfg = {
-        ...cfg,
+      publish({
         agents: { ...cfg.agents, defaults: { model: "openai/gpt-4o@" + profileId } },
         auth: { ...cfg.auth, order: { openai: [profileId] } },
-      };
-      setRuntimeConfigSnapshot(cfg);
+      });
       await setAuthProfileOrder({ agentDir, provider: "openai", order: [profileId] });
     },
   };

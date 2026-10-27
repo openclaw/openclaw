@@ -70,7 +70,7 @@ openclaw-chat-summary-automations {
   line-height: 24px;
 
   &:hover {
-    background: var(--bg-hover);
+    background: var(--surface-hover);
 
     .chat-summary__automation-paused {
       background: var(--bg-hover);

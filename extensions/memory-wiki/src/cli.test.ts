@@ -1,4 +1,4 @@
-import { execFile, execFileSync } from "node:child_process";
+import { execFile, execFileSync, spawn } from "node:child_process";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { promisify } from "node:util";
@@ -197,11 +197,13 @@ describe("memory-wiki cli", () => {
     };
   }
 
-  it("registers apply synthesis and writes a synthesis page", async () => {
+  it("prefers inline --body and writes a synthesis page", async () => {
     const { config, read } = await createCliVault();
 
     await runWiki(config, [
       ...synthesisArgs,
+      "--body-file",
+      path.join(config.vault.path, "missing-body.txt"),
       "--source-id",
       "source.alpha",
       "--source-id",
@@ -212,6 +214,93 @@ describe("memory-wiki cli", () => {
     expect(page).toContain("Alpha from CLI.");
     expect(page).toContain("source.alpha");
     await expect(read("index.md")).resolves.toContain("[CLI Alpha](syntheses/cli-alpha.md)");
+  });
+
+  it.skipIf(process.platform === "win32").each([false, true])(
+    "rejects FIFO --body-file before changing synthesis (symlink: %s)",
+    async (symlink) => {
+      const { rootDir, config, read } = await createCliVault();
+      const args = ["apply", "synthesis", "Good", "--source-id", "src.manual"];
+      await runWiki(config, [...args, "--body", "Keep this summary."]);
+      const before = await read("syntheses/good.md");
+      const fifo = path.join(rootDir, "body.fifo");
+      execFileSync("mkfifo", [fifo]);
+      const input = symlink ? path.join(rootDir, "body-link.fifo") : fifo;
+      if (symlink) {
+        await fs.symlink(fifo, input);
+      }
+      // An EOF writer lets a regressed blocking read fail without hanging the worker.
+      const writer = spawn(
+        process.execPath,
+        [
+          "-e",
+          "const fs = require('node:fs'); fs.open(process.argv[1], 'w', (error, fd) => { if (error) throw error; fs.closeSync(fd); });",
+          fifo,
+        ],
+        { stdio: "ignore" },
+      );
+      const exited = new Promise<void>((resolve, reject) => {
+        writer.once("error", reject);
+        writer.once("close", () => resolve());
+      });
+      try {
+        await expect(runWiki(config, [...args, "--body-file", input])).rejects.toThrow(
+          `wiki apply synthesis --body-file could not be read: ${input}. path must be a regular file. Supply a regular UTF-8 file (or use --body), then retry.`,
+        );
+        expect(await read("syntheses/good.md")).toBe(before);
+        expect((await fs.lstat(fifo)).isFIFO()).toBe(true);
+        if (symlink) {
+          expect((await fs.lstat(input)).isSymbolicLink()).toBe(true);
+        }
+      } finally {
+        writer.kill("SIGKILL");
+        await exited;
+      }
+    },
+  );
+
+  it.skipIf(process.platform === "win32")(
+    "reads a symlinked UTF-8 --body-file larger than one MiB without truncating",
+    async () => {
+      const { rootDir, config, read, write } = await createCliVault();
+      const body = `Café 😀 ${"x".repeat(1_048_576)} end.`;
+      await write("body.txt", body);
+      const input = path.join(rootDir, "body-link.txt");
+      await fs.symlink("body.txt", input);
+
+      await runWiki(config, [
+        "apply",
+        "synthesis",
+        "Large",
+        "--source-id",
+        "src.manual",
+        "--body-file",
+        input,
+      ]);
+
+      expect(await read("syntheses/large.md")).toContain(body);
+      expect((await fs.lstat(input)).isSymbolicLink()).toBe(true);
+    },
+  );
+
+  it("preserves structured --body-file I/O errors before changing synthesis", async () => {
+    const { config, read, write } = await createCliVault();
+    const args = ["apply", "synthesis", "Good", "--source-id", "src.manual"];
+    await runWiki(config, [...args, "--body", "Keep this summary."]);
+    const before = await read("syntheses/good.md");
+    const input = await write("body.txt", "Replacement summary.");
+    const bodyPath = await fs.realpath(input);
+    const denied = Object.assign(new Error("Body file read denied"), { code: "EACCES" });
+    const realOpen = fs.open;
+    vi.spyOn(fs, "open").mockImplementation((filePath, flags, mode) => {
+      if (filePath === bodyPath) {
+        return Promise.reject(denied);
+      }
+      return realOpen(filePath, flags, mode);
+    });
+
+    await expect(runWiki(config, [...args, "--body-file", input])).rejects.toBe(denied);
+    expect(await read("syntheses/good.md")).toBe(before);
   });
 
   it("rejects blank and invalid UTF-8 --body-file before wiping synthesis", async () => {

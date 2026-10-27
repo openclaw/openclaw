@@ -9,11 +9,15 @@ import {
 } from "../../sessions/session-capability.test-support.ts";
 import "./session-progress.tsx";
 
-function createContext(progressRead: () => Promise<unknown> = async () => ({ card: null })) {
+function createContext(
+  progressRead: () => Promise<unknown> = async () => ({ card: null }),
+  rosterRead: (params?: Record<string, unknown>) => Promise<unknown> = async () =>
+    sessionsResult([], 1),
+) {
   const { gateway, sessions, selection, connect, emitEvent } = createSubscriptionHydrationHarness(
-    async (method) => {
+    async (method, params) => {
       if (method === "sessions.list") {
-        return sessionsResult([], 1);
+        return params?.source === "dashboard" ? rosterRead(params) : sessionsResult([], 1);
       }
       if (method === "progressCard.get") {
         return progressRead();
@@ -23,13 +27,17 @@ function createContext(progressRead: () => Promise<unknown> = async () => ({ car
   );
   connect();
   let active = 0;
+  const activeByAgent = new Map<string, number>();
   const subscribeList = sessions.subscribeList.bind(sessions);
   const subscribe = vi.spyOn(sessions, "subscribeList").mockImplementation((scope, listener) => {
     const release = subscribeList(scope, listener);
+    const agentId = scope.agentId ?? "";
     active += 1;
+    activeByAgent.set(agentId, (activeByAgent.get(agentId) ?? 0) + 1);
     return () => {
       release();
       active -= 1;
+      activeByAgent.set(agentId, activeByAgent.get(agentId)! - 1);
     };
   });
   onTestFinished(() => {
@@ -41,13 +49,19 @@ function createContext(progressRead: () => Promise<unknown> = async () => ({ car
     selection,
     emitEvent,
     subscriptions: () => [active, subscribe.mock.calls.length],
+    subscriptionsFor: (agentId: string) => activeByAgent.get(agentId) ?? 0,
   };
 }
 
-function mount(context: ApplicationContext) {
+function mount(
+  context: ApplicationContext,
+  sessionKey = "agent:main:progress-widget",
+  active = true,
+) {
   const provider = createApplicationContextProvider(context);
   const element = document.createElement("openclaw-session-progress-widget");
-  element.session = { sessionKey: "agent:main:progress-widget" };
+  element.session = { sessionKey };
+  element.active = active;
   provider.append(element);
   document.body.append(provider);
   return { provider, element };
@@ -148,4 +162,87 @@ it("moves the listener with context and activity without duplicating it on selec
     await element.updateComplete;
     expect(subscriptions()).toEqual(expected);
   }
+});
+
+it("shares same-agent roster observations without joining other agents or applications", async () => {
+  const first = createContext();
+  const second = createContext();
+  const left = mount(first.context, "agent:main:left");
+  const right = mount(first.context, "agent:main:right");
+  right.element.session = { sessionKey: "right", agentId: " main " };
+  const writer = mount(first.context, "agent:writer:progress");
+  const otherApplication = mount(second.context, "agent:main:other");
+  for (const { element } of [left, right, writer, otherApplication]) {
+    await ready(element);
+  }
+  expect(first.subscriptions()).toEqual([2, 2]);
+  expect(first.subscriptionsFor("main")).toBe(1);
+  expect(first.subscriptionsFor("writer")).toBe(1);
+  expect(second.subscriptions()).toEqual([1, 1]);
+
+  left.element.active = false;
+  await left.element.updateComplete;
+  expect(first.subscriptions()).toEqual([2, 2]);
+  right.element.active = false;
+  await right.element.updateComplete;
+  expect(first.subscriptions()).toEqual([1, 2]);
+  expect(first.subscriptionsFor("writer")).toBe(1);
+  expect(second.subscriptions()).toEqual([1, 1]);
+
+  left.element.active = true;
+  await left.element.updateComplete;
+  expect(first.subscriptions()).toEqual([2, 3]);
+  left.element.remove();
+  await left.element.updateComplete;
+  expect(first.subscriptions()).toEqual([1, 3]);
+  writer.element.remove();
+  await writer.element.updateComplete;
+  expect(first.subscriptions()).toEqual([0, 3]);
+  expect(second.subscriptions()).toEqual([1, 1]);
+});
+
+it("refreshes an empty roster only when its first active observer arrives", async () => {
+  const response = createDeferred<ReturnType<typeof sessionsResult>>();
+  const rosterRead = vi.fn(async () => response.promise);
+  const owner = createContext(undefined, rosterRead);
+  const first = mount(owner.context, "agent:main:first", false);
+  await first.element.updateComplete;
+  expect(owner.subscriptions()).toEqual([0, 0]);
+  expect(rosterRead).not.toHaveBeenCalled();
+
+  first.element.active = true;
+  await ready(first.element);
+  expect(rosterRead).toHaveBeenCalledOnce();
+  expect(rosterRead).toHaveBeenLastCalledWith(
+    expect.objectContaining({
+      agentId: "main",
+      source: "dashboard",
+      excludeDock: false,
+      archived: "all",
+    }),
+  );
+  const second = mount(owner.context, "agent:main:second");
+  await ready(second.element);
+  expect(owner.subscriptions()).toEqual([1, 1]);
+  expect(rosterRead).toHaveBeenCalledOnce();
+
+  response.resolve(sessionsResult([], 2));
+  await vi.waitFor(() =>
+    expect(
+      owner.context.sessions.listSnapshot({
+        agentId: "main",
+        source: "dashboard",
+        excludeDock: false,
+        archivedFilter: "all",
+      }).loading,
+    ).toBe(false),
+  );
+  first.element.active = false;
+  second.element.active = false;
+  await Promise.all([first.element.updateComplete, second.element.updateComplete]);
+  expect(owner.subscriptions()).toEqual([0, 1]);
+  first.element.active = true;
+  await ready(first.element);
+  expect(owner.subscriptions()).toEqual([1, 2]);
+  expect(rosterRead).toHaveBeenCalledTimes(2);
 });

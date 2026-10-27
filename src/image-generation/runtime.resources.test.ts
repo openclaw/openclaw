@@ -10,6 +10,7 @@ import {
   useNoBundledPlugins,
   writePlugin,
 } from "../plugins/loader.test-fixtures.js";
+import { cleanupNativeFixture, nativeFixtureEnv } from "../plugins/native-resource.test-support.js";
 import { clearPluginMetadataLifecycleCaches } from "../plugins/plugin-metadata-lifecycle.js";
 import { withPluginRuntimeRegistryScope } from "../plugins/runtime/gateway-request-scope.js";
 import { createDeferredCore } from "../shared/deferred.js";
@@ -99,12 +100,7 @@ function createNativeImageFixture(id = "native-image-owner", rejectGeneration = 
   cleanups.push(async () => {
     resume.resolve();
     await pending;
-    for (const { database } of connections) {
-      if (database.isOpen) {
-        database.close();
-      }
-    }
-    Reflect.deleteProperty(globalThis, key);
+    cleanupNativeFixture(key, connections);
   });
   return {
     plugin,
@@ -127,11 +123,7 @@ function createNativeImageFixture(id = "native-image-owner", rejectGeneration = 
       resume.resolve();
       return await pending!;
     },
-    env: {
-      OPENCLAW_HOME: dir,
-      OPENCLAW_STATE_DIR: dir,
-      OPENCLAW_CONFIG_PATH: path.join(dir, "config.json"),
-    },
+    env: nativeFixtureEnv(dir),
   };
 }
 

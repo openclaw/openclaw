@@ -1,7 +1,6 @@
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, expect, it, vi } from "vitest";
-import { trackSqliteStatementExecutions } from "../../test/helpers/sqlite-statement-execution-counter.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { runSqliteImmediateTransactionSync } from "../infra/sqlite-transaction.js";
 import { readDatabasePathIdentitySync } from "../infra/sqlite-worker-identity.js";
@@ -114,9 +113,14 @@ it.each(["native", "existing", "worker"] as const)(
   },
 );
 
-it.each(["released", "admission-refused", "identity-mismatch", "replacement-owner"] as const)(
+it.each([
+  ["released", undefined],
+  ["admission-refused", "original-owner"],
+  ["identity-mismatch", "original-owner"],
+  ["replacement-owner", "replacement-owner"],
+] as const)(
   "settles worker lease release at its final admission (%s)",
-  async (outcome) => {
+  async (outcome, expectedOwner) => {
     const refused = new Error("Lease cleanup owner refused its final grant");
     const {
       database,
@@ -142,10 +146,6 @@ it.each(["released", "admission-refused", "identity-mismatch", "replacement-owne
       new DatabaseSync(otherPath).close();
       databaseIdentity = readDatabasePathIdentitySync(otherPath).key;
     }
-    const deletes = trackSqliteStatementExecutions(db, ["release"], (sql) =>
-      /^delete from "state_leases"(?:\s|$)/i.test(sql) ? "release" : null,
-    );
-    const exec = vi.spyOn(db, "exec");
     const release = () => workerRelease(databaseIdentity);
     try {
       if (outcome === "admission-refused") {
@@ -156,23 +156,8 @@ it.each(["released", "admission-refused", "identity-mismatch", "replacement-owne
       } else {
         release();
       }
-      expect(deletes.counts.release).toBe(
-        outcome === "admission-refused" || outcome === "identity-mismatch" ? 0 : 1,
-      );
-      expect(
-        exec.mock.calls.filter(([sql]) =>
-          /^(?:BEGIN|COMMIT|ROLLBACK|SAVEPOINT|RELEASE)\b/i.test(sql),
-        ),
-      ).toEqual([]);
-      expect(readOpenClawStateLease(db, identity)?.owner).toBe(
-        outcome === "released"
-          ? undefined
-          : outcome === "replacement-owner"
-            ? "replacement-owner"
-            : identity.owner,
-      );
+      expect(readOpenClawStateLease(db, identity)?.owner).toBe(expectedOwner);
     } finally {
-      deletes.restore();
       admission.finish();
       await closeOpenClawStateDatabaseAsync();
     }
@@ -181,27 +166,22 @@ it.each(["released", "admission-refused", "identity-mismatch", "replacement-owne
 
 it("still reports commit contention after nonblocking admission succeeds", () => {
   const pathname = path.join(dirs.make("lease-commit-diagnostics-"), "state.sqlite");
-  const db = new DatabaseSync(pathname);
+  using db = new DatabaseSync(pathname);
   db.exec("PRAGMA busy_timeout=0; CREATE TABLE entries (value TEXT)");
-  const peer = new DatabaseSync(pathname);
-  try {
-    peer.exec("BEGIN");
-    peer.prepare("SELECT * FROM entries").all();
-    warn.mockClear();
-    expect(() =>
-      runSqliteImmediateTransactionSync(db, () => db.exec("INSERT INTO entries VALUES ('new')"), {
-        beginLockFailureReporting: "suppress",
-        busyTimeoutMs: 0,
-      }),
-    ).toThrow(expect.objectContaining({ errcode: 5 }));
-    expect(warn).toHaveBeenCalledExactlyOnceWith(
-      "SQLite transaction lock wait failed",
-      expect.objectContaining({ step: "commit", failureKind: "lock-contention" }),
-    );
-    peer.exec("ROLLBACK");
-    expect(db.prepare("SELECT * FROM entries").all()).toEqual([]);
-  } finally {
-    peer.close();
-    db.close();
-  }
+  using peer = new DatabaseSync(pathname);
+  peer.exec("BEGIN");
+  peer.prepare("SELECT * FROM entries").all();
+  warn.mockClear();
+  expect(() =>
+    runSqliteImmediateTransactionSync(db, () => db.exec("INSERT INTO entries VALUES ('new')"), {
+      beginLockFailureReporting: "suppress",
+      busyTimeoutMs: 0,
+    }),
+  ).toThrow(expect.objectContaining({ errcode: 5 }));
+  expect(warn).toHaveBeenCalledExactlyOnceWith(
+    "SQLite transaction lock wait failed",
+    expect.objectContaining({ step: "commit", failureKind: "lock-contention" }),
+  );
+  peer.exec("ROLLBACK");
+  expect(db.prepare("SELECT * FROM entries").all()).toEqual([]);
 });

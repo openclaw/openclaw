@@ -8,7 +8,7 @@ import {
   resolveSqliteTranscriptScope,
   toDatabaseOptions,
 } from "../../../config/sessions/session-accessor.sqlite-scope.js";
-import { appendTranscriptEventSnapshotSync } from "../../../config/sessions/session-accessor.sqlite-transcript-write.js";
+import { appendTranscriptEventSnapshotSync } from "../../../config/sessions/session-accessor.sqlite-transcript-write.kernel.js";
 import { appendPreparedTranscriptEvent } from "../../../config/sessions/session-transcript-event.js";
 import { sessionTranscriptIndexNeedsReconcile } from "../../../config/sessions/session-transcript-index.js";
 import { waitForSessionTranscriptProjection } from "../../../config/sessions/session-transcript-reconcile.js";

@@ -13,7 +13,6 @@ import {
 } from "./service/jobs-scheduling.js";
 import { recomputeNextRunsForMaintenance } from "./service/jobs-scheduling.test-support.js";
 import { applyDeclarativeJobSpec, applyJobPatch, createJob } from "./service/jobs.js";
-import type { CronServiceState } from "./service/state.js";
 import type { CronJob, CronJobCreate, CronJobPatch } from "./types.js";
 
 const NOW = Date.parse("2026-07-21T12:00:00.000Z");
@@ -43,10 +42,8 @@ const fixtureJob = (overrides: Partial<CronJob> = {}) =>
 const agentJob = (delivery?: CronJob["delivery"], overrides: Partial<CronJob> = {}) =>
   fixtureJob({ ...agentInput(), delivery, ...overrides });
 
-const fixtureState = () => ({ deps: { nowMs: () => NOW } }) as unknown as CronServiceState;
-
 const createTestJob = (jobInput = input(), opts?: Parameters<typeof createJob>[2]) =>
-  createJob(fixtureState(), jobInput, opts);
+  createJob({ deps: { nowMs: () => NOW } }, jobInput, opts);
 
 const convergence = { enabledExplicit: true, nowMs: NOW };
 
@@ -238,9 +235,8 @@ const hourly: CronJob["schedule"] = {
   staggerMs: 120_000,
 };
 it("treats missing enabled as enabled for legacy wake selection", () => {
-  const serviceState = fixtureState();
-  serviceState.store = {
-    version: 1,
+  const serviceState = createMockCronStateForJobs({
+    nowMs: NOW,
     jobs: [
       fixtureJob({
         enabled: undefined as unknown as boolean,
@@ -248,7 +244,7 @@ it("treats missing enabled as enabled for legacy wake selection", () => {
         state: { nextRunAtMs: NOW + 60_000 },
       }),
     ],
-  };
+  });
   expect(nextWakeAtMs(serviceState)).toBe(NOW + 60_000);
 });
 

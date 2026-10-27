@@ -198,24 +198,16 @@ describe("update failure triage diagnostics", () => {
   });
 
   it("reserves the terminal plugin warning before earlier errors exhaust the diagnostic budget", async () => {
+    const errors = ["Earlier failure one", "Earlier failure two", "Earlier failure three"];
     const { failure: recorded } = await writePlugins({
       status: "error",
-      sync: {
-        errors: ["Earlier failure one", "Earlier failure two", "Earlier failure three"],
-      },
+      sync: { errors },
       warnings: [{ reason: "Terminal Doctor failure", message: "Refusing to restart" }],
     });
-
-    expect(recorded).toMatchObject({
-      omittedDetails: 1,
-      result: {
-        postUpdate: {
-          plugins: {
-            sync: { errors: ["Earlier failure one", "Earlier failure two"] },
-            warnings: [{ reason: "Terminal Doctor failure", message: "Refusing to restart" }],
-          },
-        },
-      },
+    expect(recorded.omittedDetails).toBe(1);
+    expect("result" in recorded && recorded.result.postUpdate?.plugins).toMatchObject({
+      sync: { errors: ["Earlier failure one", "Earlier failure two"] },
+      warnings: [{ reason: "Terminal Doctor failure", message: "Refusing to restart" }],
     });
   });
 

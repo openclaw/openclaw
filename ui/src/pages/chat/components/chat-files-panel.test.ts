@@ -9,7 +9,7 @@ import {
 } from "../../../components/panel-hosted-tabs.ts";
 import { installResizeObserverStub } from "../../../test-helpers/resize-observer.ts";
 import { flush, waitForSolid } from "../../../test-helpers/solid-settle.ts";
-import { createGatewayBrowserClientFixture } from "../chat-pane.test-support.ts";
+import { createGatewayBrowserClientFixture } from "../chat-application-context.test-support.ts";
 import { readFileDraft, setFileDraft } from "./chat-file-drafts.ts";
 import { createSessionWorkspaceHost } from "./chat-session-workspace-host.test-support.ts";
 import {

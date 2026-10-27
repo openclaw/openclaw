@@ -79,7 +79,13 @@ suite.define(() => {
               avatar.locator("img").evaluate((image: HTMLImageElement) => image.naturalWidth),
             )
             .toBeGreaterThan(0);
-          await expect.poll(() => initials.isVisible()).toBe(false);
+          expect(await initials.isVisible()).toBe(true);
+          expect(
+            await avatar.locator("img").evaluate((image) => {
+              const { x, y, width, height } = image.getBoundingClientRect();
+              return document.elementFromPoint(x + width / 2, y + height / 2) === image;
+            }),
+          ).toBe(true);
           expect(await size()).toEqual(pendingSize);
           expect(requests).toEqual([avatarUrl]);
         } finally {

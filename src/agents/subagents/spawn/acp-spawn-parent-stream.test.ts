@@ -97,7 +97,6 @@ describe("startAcpSpawnParentStreamRelay", () => {
       childSessionKey: "agent:codex:acp:child-1",
       deliveryContext,
     });
-
     expect(enqueueSessionEventMock).not.toHaveBeenCalled();
     relay.notifyStarted();
     relay.assistant("hello");
@@ -135,16 +134,10 @@ describe("startAcpSpawnParentStreamRelay", () => {
     relay.assistant("hello from child");
     vi.advanceTimersByTime(2_500);
 
-    expect(enqueueSessionEventMock.mock.calls).toEqual([
-      [
-        "codex: hello from child",
-        expect.objectContaining({
-          contextKey: "acp-spawn:run:progress",
-          agentId: "ops",
-          sessionKey: "global",
-        }),
-      ],
-    ]);
+    expect(enqueueSessionEventMock).toHaveBeenCalledExactlyOnceWith(
+      "codex: hello from child",
+      expect.objectContaining({ agentId: "ops", sessionKey: "global" }),
+    );
   });
 
   it("emits a pre-prompt stall notice and a resumed notice when output returns", () => {
@@ -162,36 +155,31 @@ describe("startAcpSpawnParentStreamRelay", () => {
     expectFragments(["run failed: boom"]);
   });
 
-  it("classifies stalls after prompt submission but before the first runtime event", () => {
-    const relay = createRelay();
-
-    relay.prompt(["HTTPS_PROXY"]);
-    vi.advanceTimersByTime(60_000);
-
-    expectFragments(
+  it.each([
+    [
+      false,
       ["prompt was submitted but no ACP runtime event arrived for 60s", "proxy env: HTTPS_PROXY"],
-      ["waiting for interactive input"],
-    );
-  });
-
-  it("classifies runtime activity without visible assistant output separately from input waits", () => {
-    const relay = createRelay();
-
-    relay.prompt();
-    vi.advanceTimersByTime(45_000);
-    relay.status("connecting to upstream");
-    vi.advanceTimersByTime(45_000);
-    expectFragments([], ["has ACP runtime activity"]);
-
-    vi.advanceTimersByTime(15_000);
-
-    expectFragments(
+    ],
+    [
+      true,
       [
         "has ACP runtime activity but no visible assistant output for 60s",
         "Last ACP event: status",
       ],
-      ["waiting for interactive input"],
-    );
+    ],
+  ] as const)("classifies pre-output stalls (runtime activity=%s)", (activity, messages) => {
+    const relay = createRelay();
+    relay.prompt(["HTTPS_PROXY"]);
+    if (activity) {
+      vi.advanceTimersByTime(45_000);
+      relay.status("connecting to upstream");
+      vi.advanceTimersByTime(45_000);
+      expectFragments([], ["has ACP runtime activity"]);
+      vi.advanceTimersByTime(15_000);
+    } else {
+      vi.advanceTimersByTime(60_000);
+    }
+    expectFragments([...messages], ["waiting for interactive input"]);
   });
 
   it("auto-disposes stale relays after max lifetime timeout", () => {
@@ -210,17 +198,8 @@ describe("startAcpSpawnParentStreamRelay", () => {
   it("relays the latest replaceable assistant snapshot instead of superseded drafts", () => {
     const relay = createRelay();
 
-    relay.emit("assistant", {
-      text: "coordination draft",
-      delta: "coordination draft",
-      replaceable: true,
-    });
-    relay.emit("assistant", {
-      text: "final answer",
-      delta: "",
-      replace: true,
-      replaceable: true,
-    });
+    relay.emit("assistant", { text: "coordination draft", replaceable: true });
+    relay.emit("assistant", { text: "final answer", replace: true, replaceable: true });
     relay.end();
 
     expectFragments(["codex: final answer"], ["coordination draft"]);
@@ -262,48 +241,48 @@ describe("startAcpSpawnParentStreamRelay", () => {
   const progress: Streaming = { mode: "progress" };
   const on = { progress: { commentary: true } };
   const off = { progress: { commentary: false } };
-  it.each<
-    [
-      string,
-      string,
-      Streaming | undefined,
-      { mode?: "off"; progress?: { commentary: boolean } } | undefined,
-      "assistant" | "item",
-      boolean,
-      boolean?,
-    ]
-  >([
-    ["Discord progress", "discord", progress, undefined, "assistant", true],
-    ["Discord unset", "discord", undefined, undefined, "item", false],
-    ["commentary disabled", "forum", { ...progress, ...off }, undefined, "item", false],
+  it.each([
+    ["Discord progress", "discord", progress, undefined, "assistant", true, false],
+    ["commentary disabled", "forum", { ...progress, ...off }, undefined, "item", false, false],
     ["normalized account opt-out", "forum", progress, off, "item", false, true],
-    ["account mode opt-out", "forum", { ...progress, ...on }, { mode: "off" }, "item", false],
-    ["account inherits mode", "forum", progress, on, "assistant", true],
-    ["channel mode off", "discord", { mode: "off" }, on, "assistant", false],
-  ])("%s", (_name, channel, streaming, accountStreaming, stream, visible, normalizeAccount) => {
-    const configuredAccount = normalizeAccount ? "Carey Notifications" : "work";
-    const accountId = normalizeAccount ? "carey-notifications" : configuredAccount;
-    const relay = createRelay({
-      cfg: {
-        channels: {
-          [channel]: {
-            streaming,
-            ...(accountStreaming
-              ? { accounts: { [configuredAccount]: { streaming: accountStreaming } } }
-              : {}),
+    [
+      "account mode opt-out",
+      "forum",
+      { ...progress, ...on },
+      { mode: "off" },
+      "item",
+      false,
+      false,
+    ],
+    ["account inherits mode", "forum", progress, on, "assistant", true, false],
+    ["channel mode off", "discord", { mode: "off" }, on, "assistant", false, false],
+  ] as const)(
+    "%s",
+    (_name, channel, streaming, accountStreaming, stream, visible, normalizeAccount) => {
+      const configuredAccount = normalizeAccount ? "Carey Notifications" : "work";
+      const accountId = normalizeAccount ? "carey-notifications" : configuredAccount;
+      const relay = createRelay({
+        cfg: {
+          channels: {
+            [channel]: {
+              streaming,
+              ...(accountStreaming
+                ? { accounts: { [configuredAccount]: { streaming: accountStreaming } } }
+                : {}),
+            },
           },
         },
-      },
-      deliveryContext: { ...progressCommentaryDeliveryContext, channel, accountId },
-    });
-    if (stream === "assistant") {
-      relay.assistant("Checking progress.", "commentary");
-    } else {
-      relay.preamble("Checking progress.");
-    }
-    vi.advanceTimersByTime(2_500);
-    expect(collectedTexts()).toEqual(visible ? ["codex: Checking progress."] : []);
-  });
+        deliveryContext: { ...progressCommentaryDeliveryContext, channel, accountId },
+      });
+      if (stream === "assistant") {
+        relay.assistant("Checking progress.", "commentary");
+      } else {
+        relay.preamble("Checking progress.");
+      }
+      vi.advanceTimersByTime(2_500);
+      expect(collectedTexts()).toEqual(visible ? ["codex: Checking progress."] : []);
+    },
+  );
 
   it("does not relay ACP status tags hidden by default when progress commentary is enabled", () => {
     const relay = progressRelay();

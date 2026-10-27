@@ -1,12 +1,9 @@
 import { vi } from "vitest";
 import type { GitHubIdentityFacts } from "../../../../packages/gateway-protocol/src/schema/agents-models-skills.ts";
-import type { GatewayBrowserClient } from "../../api/gateway.ts";
+import type { GatewayBrowserClient as Client } from "../../api/gateway.ts";
 import type { RuntimeConfigCapability } from "../../lib/config/runtime-config-capability.ts";
 import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
-import {
-  createGitHubIdentityForTest,
-  type TestGitHubIdentity,
-} from "./github-identity.test-support.ts";
+import { createGitHubIdentityForTest } from "./github-identity.test-support.ts";
 
 export const authorizationCode = {
   requestId: "33333333-3333-4333-8333-333333333333",
@@ -27,35 +24,29 @@ export const availableIdentity = {
   oauthScopes: ["repo"],
   repositoryGrants: "unknown",
 } satisfies GitHubIdentityFacts;
-export function availableStatus(scope: "system" | "agent" = "agent") {
-  return {
+export const availableStatus = (scope: "system" | "agent" = "agent") =>
+  ({
     agentId: "main",
     selectedScope: scope,
     selected: { scope, configured: true, identity: availableIdentity },
     effective: availableIdentity,
-  } as const;
-}
+  }) as const;
 export function sharedTarget(profileId = "profile-b", config: Record<string, unknown> = {}) {
   return { kind: "shared", scope: "system", agentId: "main", config, profileId } as const;
 }
-type Context = Partial<Parameters<TestGitHubIdentity["sync"]>[0]> & {
+type Deps = Parameters<typeof createGitHubIdentityForTest>[0];
+type RunMutation = RuntimeConfigCapability["runExternalMutation"];
+type Behavior = { beforeDispatch?: () => void; refreshError?: string };
+type Context = Partial<Parameters<ReturnType<typeof createGitHubIdentityForTest>["sync"]>[0]> & {
   config?: Record<string, unknown>;
   agentId?: string;
   scope?: "system" | "agent";
 };
-export function createIdentityFixture(
-  client: GatewayBrowserClient,
-  deps: Parameters<typeof createGitHubIdentityForTest>[0] = {},
-  defaults: Context = {},
-) {
+export function createIdentityFixture(client: Client, deps: Deps = {}, defaults: Context = {}) {
   const identity = createGitHubIdentityForTest(deps);
   const sync = (context: Context = {}) => {
-    const {
-      config = {},
-      agentId = "main",
-      scope = "system",
-      ...overrides
-    } = { ...defaults, ...context };
+    const merged = { ...defaults, ...context };
+    const { config = {}, agentId = "main", scope = "system", ...overrides } = merged;
     identity.sync({
       client,
       connected: true,
@@ -72,23 +63,15 @@ export function createIdentityFixture(
 }
 export function setupRequest(
   respond: ((method: string, params?: unknown) => Promise<unknown>) | Record<string, () => unknown>,
-  options: {
-    mutation?: boolean;
-    runExternalMutation?: RuntimeConfigCapability["runExternalMutation"];
-    context?: Context;
-  } = {},
+  options: { mutation?: boolean; runExternalMutation?: RunMutation; context?: Context } = {},
 ) {
-  const request = vi.fn(
-    typeof respond === "function"
-      ? respond
-      : async (method: string) => {
-          const handler = respond[method];
-          if (!handler) {
-            throw new Error(`unexpected method ${method}`);
-          }
-          return handler();
-        },
-  );
+  const request = vi.fn(async (method: string, params?: unknown) => {
+    const handler = typeof respond === "function" ? respond : respond[method];
+    if (!handler) {
+      throw new Error(`unexpected method ${method}`);
+    }
+    return handler(method, params);
+  });
   const client = createTestGatewayClient(request);
   const runExternalMutation =
     options.runExternalMutation ?? (options.mutation ? createMutationRunner(client) : undefined);
@@ -96,30 +79,22 @@ export function setupRequest(
   fixture.sync();
   return { ...fixture, request, client };
 }
-export function createMutationRunner(
-  client: GatewayBrowserClient,
-  behavior: { beforeDispatch?: () => void; refreshError?: string } = {},
-): RuntimeConfigCapability["runExternalMutation"] {
-  return async (task, options = {}) => {
+export const createMutationRunner =
+  (client: Client, behavior: Behavior = {}): RunMutation =>
+  async (task, options = {}) => {
     behavior.beforeDispatch?.();
     if (options.canDispatch && !options.canDispatch()) {
-      return {
-        ok: false,
-        reason: "unavailable",
-        error: options.dispatchError ?? "Access changed.",
-      };
+      const error = options.dispatchError ?? "Access changed.";
+      return { ok: false, reason: "unavailable", error };
     }
     try {
-      return {
-        ok: true,
-        value: await task(client),
-        refresh: behavior.refreshError ? { ok: false, error: behavior.refreshError } : { ok: true },
-      };
+      const value = await task(client);
+      const error = behavior.refreshError;
+      return { ok: true, value, refresh: error ? { ok: false, error } : { ok: true } };
     } catch (error) {
       return { ok: false, reason: "error", error: String(error) };
     }
   };
-}
 export async function forbidSharedMutation(): Promise<never> {
   throw new Error("Personal or view-only flow touched shared config");
 }

@@ -1,5 +1,5 @@
 import { gatewayCredentialScope } from "@openclaw/gateway-client/browser";
-import { CONTROL_UI_OPERATOR_ROLE } from "../api/gateway.ts";
+import { CONTROL_UI_OPERATOR_ROLE } from "../api/gateway-connect-plan.ts";
 import { retireStoredGoalOperations } from "../lib/chat/goal-operation-storage.ts";
 import {
   clearDeviceAuthToken,

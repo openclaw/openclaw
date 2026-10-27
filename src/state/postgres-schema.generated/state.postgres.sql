@@ -1397,15 +1397,15 @@ CREATE INDEX "idx_current_conversation_bindings_expires" ON "current_conversatio
 
 CREATE INDEX "idx_current_conversation_bindings_target" ON "current_conversation_bindings" (("target_session_key") ASC, ("updated_at") DESC, ("binding_key") ASC);
 
-CREATE INDEX "idx_delivery_queue_bounded_retention" ON "delivery_queue_entries" (("queue_name") ASC, ("retention_id_prefix") ASC NULLS FIRST, ("enqueued_at") DESC, ("id") DESC) WHERE ("status" IN ('completed', 'failed')) AND ("recovery_state" = 'completed_bounded') AND "retention_id_prefix" IS NOT NULL;
+CREATE INDEX "idx_delivery_queue_bounded_retention" ON "delivery_queue_entries" (("queue_name") ASC, ("retention_id_prefix") ASC, ("enqueued_at") DESC, ("id") DESC) WHERE ("status" IN ('completed', 'failed')) AND ("recovery_state" = 'completed_bounded') AND "retention_id_prefix" IS NOT NULL;
 
 CREATE INDEX "idx_delivery_queue_failed" ON "delivery_queue_entries" (("status") ASC, ("queue_name") ASC, ("failed_at") ASC NULLS FIRST, ("id") ASC);
 
 CREATE INDEX "idx_delivery_queue_pending" ON "delivery_queue_entries" (("queue_name") ASC, ("status") ASC, ("enqueued_at") ASC, ("id") ASC);
 
-CREATE INDEX "idx_delivery_queue_session" ON "delivery_queue_entries" (("queue_name") ASC, ("status") ASC, ("session_key") ASC NULLS FIRST, ("enqueued_at") ASC, ("id") ASC) WHERE "session_key" IS NOT NULL;
+CREATE INDEX "idx_delivery_queue_session" ON "delivery_queue_entries" (("queue_name") ASC, ("status") ASC, ("session_key") ASC, ("enqueued_at") ASC, ("id") ASC) WHERE "session_key" IS NOT NULL;
 
-CREATE INDEX "idx_delivery_queue_target" ON "delivery_queue_entries" (("queue_name") ASC, ("status") ASC, ("channel") ASC NULLS FIRST, ("target") ASC NULLS FIRST, ("enqueued_at") ASC, ("id") ASC) WHERE "channel" IS NOT NULL AND "target" IS NOT NULL;
+CREATE INDEX "idx_delivery_queue_target" ON "delivery_queue_entries" (("queue_name") ASC, ("status") ASC, ("channel") ASC, ("target") ASC, ("enqueued_at") ASC, ("id") ASC) WHERE "channel" IS NOT NULL AND "target" IS NOT NULL;
 
 CREATE INDEX "idx_device_bootstrap_tokens_ts" ON "device_bootstrap_tokens" (("ts") ASC);
 
@@ -1429,11 +1429,11 @@ CREATE INDEX "idx_gateway_restart_sentinel_ts" ON "gateway_restart_sentinel" (("
 
 CREATE INDEX "idx_macos_port_guardian_records_port" ON "macos_port_guardian_records" (("port") ASC, ("timestamp") DESC);
 
-CREATE INDEX "idx_managed_outgoing_images_agent_message" ON "managed_outgoing_image_records" (("session_key") ASC, ("agent_id") ASC NULLS FIRST, ("message_id") ASC NULLS FIRST, ("attachment_id") ASC) WHERE "message_id" IS NOT NULL;
+CREATE INDEX "idx_managed_outgoing_images_agent_message" ON "managed_outgoing_image_records" (("session_key") ASC, ("agent_id") ASC NULLS FIRST, ("message_id") ASC, ("attachment_id") ASC) WHERE "message_id" IS NOT NULL;
 
 CREATE INDEX "idx_managed_outgoing_images_agent_session" ON "managed_outgoing_image_records" (("session_key") ASC, ("agent_id") ASC NULLS FIRST, ("created_at") DESC, ("attachment_id") ASC);
 
-CREATE INDEX "idx_managed_outgoing_images_message" ON "managed_outgoing_image_records" (("session_key") ASC, ("message_id") ASC NULLS FIRST, ("attachment_id") ASC) WHERE "message_id" IS NOT NULL;
+CREATE INDEX "idx_managed_outgoing_images_message" ON "managed_outgoing_image_records" (("session_key") ASC, ("message_id") ASC, ("attachment_id") ASC) WHERE "message_id" IS NOT NULL;
 
 CREATE INDEX "idx_managed_outgoing_images_session" ON "managed_outgoing_image_records" (("session_key") ASC, ("created_at") DESC, ("attachment_id") ASC);
 
@@ -1453,7 +1453,7 @@ CREATE INDEX "idx_meeting_transcript_sessions_source" ON "meeting_transcript_ses
 
 CREATE INDEX "idx_meeting_transcript_sessions_started" ON "meeting_transcript_sessions" (("started_at") DESC, ("session_id") ASC);
 
-CREATE INDEX "idx_meeting_transcript_utterances_id" ON "meeting_transcript_utterances" (("session_id") ASC, ("session_started_at") ASC, ("utterance_id") ASC NULLS FIRST) WHERE "utterance_id" IS NOT NULL;
+CREATE INDEX "idx_meeting_transcript_utterances_id" ON "meeting_transcript_utterances" (("session_id") ASC, ("session_started_at") ASC, ("utterance_id") ASC) WHERE "utterance_id" IS NOT NULL;
 
 CREATE INDEX "idx_migration_runs_started" ON "migration_runs" (("started_at") DESC, ("id") ASC);
 
@@ -1469,11 +1469,11 @@ CREATE UNIQUE INDEX "idx_operator_approvals_cursor_id" ON "operator_approvals" (
 
 CREATE UNIQUE INDEX "idx_operator_approvals_resolution_ref" ON "operator_approvals" (("resolution_ref") ASC);
 
-CREATE INDEX "idx_operator_approvals_resolved" ON "operator_approvals" (("resolved_at_ms") ASC NULLS FIRST, ("approval_id") ASC) WHERE "resolved_at_ms" IS NOT NULL;
+CREATE INDEX "idx_operator_approvals_resolved" ON "operator_approvals" (("resolved_at_ms") ASC, ("approval_id") ASC) WHERE "resolved_at_ms" IS NOT NULL;
 
 CREATE INDEX "idx_operator_approvals_runtime_pending" ON "operator_approvals" (("runtime_epoch") ASC, ("approval_id") ASC) WHERE ("status" = 'pending');
 
-CREATE INDEX "idx_operator_approvals_source_run_resolved" ON "operator_approvals" (("source_run_id") ASC NULLS FIRST, ("resolved_at_ms") ASC NULLS FIRST, ("approval_id") ASC) WHERE "source_run_id" IS NOT NULL AND "resolved_at_ms" IS NOT NULL;
+CREATE INDEX "idx_operator_approvals_source_run_resolved" ON "operator_approvals" (("source_run_id") ASC, ("resolved_at_ms") ASC, ("approval_id") ASC) WHERE "source_run_id" IS NOT NULL AND "resolved_at_ms" IS NOT NULL;
 
 CREATE INDEX "idx_operator_approvals_source_session_created" ON "operator_approvals" (("source_session_key") ASC NULLS FIRST, ("created_at_ms") DESC, ("approval_id") ASC);
 
@@ -1481,17 +1481,17 @@ CREATE INDEX "idx_operator_approvals_status_expiry" ON "operator_approvals" (("s
 
 CREATE INDEX "idx_plugin_binding_approvals_plugin" ON "plugin_binding_approvals" (("plugin_id") ASC, ("approved_at") DESC);
 
-CREATE INDEX "idx_plugin_blob_expiry" ON "plugin_blob_entries" (("expires_at") ASC NULLS FIRST) WHERE "expires_at" IS NOT NULL;
+CREATE INDEX "idx_plugin_blob_expiry" ON "plugin_blob_entries" (("expires_at") ASC) WHERE "expires_at" IS NOT NULL;
 
 CREATE INDEX "idx_plugin_blob_listing" ON "plugin_blob_entries" (("plugin_id") ASC, ("namespace") ASC, ("created_at") ASC, ("entry_key") ASC);
 
-CREATE INDEX "idx_plugin_state_expiry" ON "plugin_state_entries" (("expires_at") ASC NULLS FIRST) WHERE "expires_at" IS NOT NULL;
+CREATE INDEX "idx_plugin_state_expiry" ON "plugin_state_entries" (("expires_at") ASC) WHERE "expires_at" IS NOT NULL;
 
 CREATE INDEX "idx_plugin_state_listing" ON "plugin_state_entries" (("plugin_id") ASC, ("namespace") ASC, ("created_at") ASC, ("entry_key") ASC, ("expires_at") ASC NULLS FIRST);
 
-CREATE INDEX "idx_sandbox_registry_last_used" ON "sandbox_registry_entries" (("registry_kind") ASC, ("last_used_at_ms") DESC NULLS LAST, ("container_name") ASC) WHERE "last_used_at_ms" IS NOT NULL;
+CREATE INDEX "idx_sandbox_registry_last_used" ON "sandbox_registry_entries" (("registry_kind") ASC, ("last_used_at_ms") DESC, ("container_name") ASC) WHERE "last_used_at_ms" IS NOT NULL;
 
-CREATE INDEX "idx_sandbox_registry_session" ON "sandbox_registry_entries" (("registry_kind") ASC, ("session_key") ASC NULLS FIRST, ("last_used_at_ms") DESC NULLS LAST, ("container_name") ASC) WHERE "session_key" IS NOT NULL;
+CREATE INDEX "idx_sandbox_registry_session" ON "sandbox_registry_entries" (("registry_kind") ASC, ("session_key") ASC, ("last_used_at_ms") DESC NULLS LAST, ("container_name") ASC) WHERE "session_key" IS NOT NULL;
 
 CREATE INDEX "idx_sandbox_registry_updated" ON "sandbox_registry_entries" (("registry_kind") ASC, ("updated_at") DESC, ("container_name") ASC);
 
@@ -1505,9 +1505,9 @@ CREATE INDEX "idx_session_watch_cursors_target" ON "session_watch_cursors" (("ta
 
 CREATE INDEX "idx_skill_uploads_expiry" ON "skill_uploads" (("expires_at") ASC);
 
-CREATE INDEX "idx_skill_uploads_idempotency" ON "skill_uploads" (("idempotency_key_hash") ASC NULLS FIRST) WHERE "idempotency_key_hash" IS NOT NULL;
+CREATE INDEX "idx_skill_uploads_idempotency" ON "skill_uploads" (("idempotency_key_hash") ASC) WHERE "idempotency_key_hash" IS NOT NULL;
 
-CREATE INDEX "idx_state_leases_expiry" ON "state_leases" (("expires_at") ASC NULLS FIRST, ("scope") ASC, ("lease_key") ASC) WHERE "expires_at" IS NOT NULL;
+CREATE INDEX "idx_state_leases_expiry" ON "state_leases" (("expires_at") ASC, ("scope") ASC, ("lease_key") ASC) WHERE "expires_at" IS NOT NULL;
 
 CREATE INDEX "idx_state_leases_owner" ON "state_leases" (("owner") ASC);
 
@@ -1525,13 +1525,13 @@ CREATE INDEX "idx_task_runs_runtime_run" ON "task_runs" (("runtime") ASC, ("run_
 
 CREATE INDEX "idx_web_push_subscriptions_updated" ON "web_push_subscriptions" (("updated_at_ms") DESC, ("subscription_id") ASC);
 
-CREATE UNIQUE INDEX "idx_worker_environments_provider_lease" ON "worker_environments" (("provider_id") ASC, ("lease_id") ASC NULLS FIRST) WHERE "lease_id" IS NOT NULL;
+CREATE UNIQUE INDEX "idx_worker_environments_provider_lease" ON "worker_environments" (("provider_id") ASC, ("lease_id") ASC) WHERE "lease_id" IS NOT NULL;
 
 CREATE INDEX "idx_worker_environments_terminal_changed" ON "worker_environments" (("state_changed_at_ms") ASC, ("environment_id") ASC);
 
 CREATE UNIQUE INDEX "idx_worker_inference_turns_pending_run" ON "worker_inference_turns" (("session_id") ASC, ("run_epoch") ASC, ("run_id") ASC) WHERE ("state" = 'pending');
 
-CREATE INDEX "idx_worker_session_placements_environment" ON "worker_session_placements" (("environment_id") ASC NULLS FIRST) WHERE "environment_id" IS NOT NULL;
+CREATE INDEX "idx_worker_session_placements_environment" ON "worker_session_placements" (("environment_id") ASC) WHERE "environment_id" IS NOT NULL;
 
 CREATE INDEX "idx_worker_session_placements_reconcile" ON "worker_session_placements" (("updated_at_ms") ASC, ("session_id") ASC);
 

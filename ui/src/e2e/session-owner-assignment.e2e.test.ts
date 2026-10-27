@@ -65,7 +65,12 @@ function directoryResponse(extraNames: string[]): UsersListResult {
   };
 }
 
-async function installOwnerGateway(page: Page, archived = false, extraNames: string[] = []) {
+async function installOwnerGateway(
+  page: Page,
+  archived = false,
+  extraNames: string[] = [],
+  initialPage: "chat" | "sessions" = "chat",
+) {
   await routeAvatarFixtures(page, [{ id: "profile-ada", background: "#7c3aed", label: "A" }]);
   const result = sessionsListResponse(archived);
   const gateway = await installMockGateway(page, {
@@ -97,11 +102,15 @@ async function installOwnerGateway(page: Page, archived = false, extraNames: str
     sessionKey,
   });
   await page.goto(
-    archived
-      ? `${suite.server.baseUrl}chat?session=${encodeURIComponent(sessionKey)}`
-      : controlUiSessionUrl(suite.server.baseUrl, sessionKey),
+    initialPage === "sessions"
+      ? `${suite.server.baseUrl}sessions`
+      : archived
+        ? `${suite.server.baseUrl}chat?session=${encodeURIComponent(sessionKey)}`
+        : controlUiSessionUrl(suite.server.baseUrl, sessionKey),
   );
-  await page.getByText("Owner assignment outcome proof.", { exact: true }).waitFor();
+  if (initialPage === "chat") {
+    await page.getByText("Owner assignment outcome proof.", { exact: true }).waitFor();
+  }
   await gateway.deferNext("sessions.assignOwner");
   return gateway;
 }
@@ -258,9 +267,7 @@ suite.define(() => {
       suite.withPage(
         { ...createControlUiE2eContextOptions(), viewport: { width, height: 900 } },
         async ({ page }) => {
-          const gateway = await installOwnerGateway(page);
-          await page.goto(`${suite.server.baseUrl}sessions`);
-          await gateway.deferNext("sessions.assignOwner");
+          const gateway = await installOwnerGateway(page, false, [], "sessions");
           const roster = page.locator("openclaw-sessions-page");
           const row = roster.locator("tbody tr").filter({
             has: page.getByRole("checkbox", { name: `Select session: ${sessionKey}`, exact: true }),

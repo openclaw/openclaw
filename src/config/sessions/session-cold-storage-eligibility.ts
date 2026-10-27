@@ -19,6 +19,7 @@ export function readSessionColdStorageProtection(
   database: { db: EngineConnection },
   beforeMs: number,
   liveSessionKeys: ReadonlySet<string>,
+  sessionIds?: readonly string[],
 ): Set<string> {
   const db = getNodeSqliteKysely<DB>(database.db);
   const protectedIds = new Set<string>();
@@ -35,7 +36,23 @@ export function readSessionColdStorageProtection(
         "last_activity_at",
         "last_interaction_at",
         "entry_json",
-      ]),
+      ])
+      .$if(sessionIds !== undefined, (query) =>
+        query.where((eb) =>
+          eb.or([
+            eb("has_optional_references", "=", 1),
+            eb("current_session_id", "in", sqliteStringSet(sessionIds!)),
+            eb(
+              "session_key",
+              "in",
+              db
+                .selectFrom("session_windows")
+                .select("session_key")
+                .where("session_id", "in", sqliteStringSet(sessionIds!)),
+            ),
+          ]),
+        ),
+      ),
   )) {
     const entry: InternalSessionEntry | undefined =
       parseCanonicalSqliteSessionEntry(row) ?? undefined;
@@ -83,6 +100,9 @@ export function readSessionColdStorageProtection(
     db
       .selectFrom("session_windows")
       .select("session_id")
+      .$if(sessionIds !== undefined, (query) =>
+        query.where("session_id", "in", sqliteStringSet(sessionIds!)),
+      )
       // Live work, recovery, and unreadable nodes protect every generation of their exact key.
       .where((eb) =>
         eb.or([
@@ -100,6 +120,9 @@ export function readSessionColdStorageProtection(
       db
         .selectFrom("session_pending_inputs")
         .select("session_id")
+        .$if(sessionIds !== undefined, (query) =>
+          query.where("session_id", "in", sqliteStringSet(sessionIds!)),
+        )
         .where("state", "in", ["queued", "interrupted"])
         .$if(hasPendingInputConsumptionColumn(database.db), (query) =>
           query.where("consumed_event_id", "is", null),

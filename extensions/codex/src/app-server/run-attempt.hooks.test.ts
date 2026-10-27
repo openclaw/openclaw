@@ -189,6 +189,7 @@ async function heldAttempt(overrides: Partial<ReturnType<typeof createTestParams
     ...hooks,
     backend: { read: replyBackend, freezeAbort, detachBackend },
     harness,
+    params,
     onAttemptAbort,
     onAgentEvent,
     run,
@@ -461,6 +462,99 @@ describe("runCodexAppServerAttempt hooks and model diagnostics", () => {
     expect(backend.detachBackend).toHaveBeenCalledWith(replyBackend);
     await turnSettled;
     expect(resolveActiveEmbeddedRunSessionId("agent:main:session-1")).toBeUndefined();
+  });
+
+  it("keeps an already-persisted user request in agent_end observations", async () => {
+    const persistedUser = { role: "user" as const, content: "real user request", timestamp: 1 };
+    const { agentEnd, releaseAgentEnd, harness, run, turnSettled } = await heldAttempt({
+      prompt: "real user request",
+      suppressNextUserMessagePersistence: true,
+      userTurnTranscriptRecorder: {
+        message: persistedUser,
+        getAdmissionReceipt: () => undefined,
+        getPersistedMessage: () => persistedUser,
+      } as unknown as NonNullable<
+        ReturnType<typeof createTestParams>["userTurnTranscriptRecorder"]
+      >,
+    });
+    await run.waitForTurnAccepted();
+    await harness.notify(agentMessage("msg-final", "Done.", { status: "completed" }));
+    await complete(harness);
+    await vi.waitFor(() => expect(agentEnd).toHaveBeenCalledTimes(1), fastWait);
+
+    const event = mockCall(agentEnd, "agent_end")[0] as {
+      messages: Array<{ role: string; content: unknown }>;
+    };
+    const observedUsers = event.messages.filter((message) => message.role === "user");
+    expect(observedUsers).toEqual([expect.objectContaining(persistedUser)]);
+    expect(event.messages.filter((message) => message.role === "assistant")).toHaveLength(1);
+
+    releaseAgentEnd();
+    await run;
+    await turnSettled;
+  });
+
+  it("keeps the persisted request when steering is present in agent_end observations", async () => {
+    let pendingRefresh = false;
+    const persistedUser = {
+      role: "user" as const,
+      content: "Remember alpha",
+      timestamp: 1,
+      idempotencyKey: "turn-1:user",
+    };
+    const { agentEnd, releaseAgentEnd, harness, params, run, turnSettled } = await heldAttempt({
+      prompt: "Remember alpha",
+      suppressNextUserMessagePersistence: true,
+      pluginRuntimeRefreshPending: () => pendingRefresh,
+      userTurnTranscriptRecorder: {
+        message: persistedUser,
+        getAdmissionReceipt: () => undefined,
+        getPersistedMessage: () => persistedUser,
+      } as unknown as NonNullable<
+        ReturnType<typeof createTestParams>["userTurnTranscriptRecorder"]
+      >,
+    });
+    await run.waitForTurnAccepted();
+    expect(
+      queueActiveRunMessageForTest(params.sessionId!, "Also beta", {
+        debounceMs: 0,
+        isInboundUserMessage: true,
+        toolAuthorityFingerprint: params.toolAuthorityFingerprint,
+      }),
+    ).toBe(true);
+    await harness.waitForMethod("turn/steer");
+    const steer = harness.requests.find((entry) => entry.method === "turn/steer");
+    const clientUserMessageId = (steer?.params as { clientUserMessageId?: string } | undefined)
+      ?.clientUserMessageId;
+    if (!clientUserMessageId) {
+      throw new Error("turn/steer clientUserMessageId missing");
+    }
+    await harness.notify(
+      itemNotification("item/completed", {
+        id: "steered-user-message",
+        type: "userMessage",
+        clientId: clientUserMessageId,
+      }),
+    );
+
+    pendingRefresh = true;
+    await harness.notify(agentMessage("msg-final-steer", "Done.", { status: "completed" }));
+    await complete(harness);
+    await vi.waitFor(() => expect(agentEnd).toHaveBeenCalledTimes(1), fastWait);
+
+    const event = mockCall(agentEnd, "agent_end")[0] as {
+      messages: Array<{ role: string; content: unknown }>;
+    };
+    const observedUsers = event.messages.filter((message) => message.role === "user");
+    expect(observedUsers).toEqual([
+      expect.objectContaining(persistedUser),
+      expect.objectContaining({ role: "user", content: "Also beta" }),
+    ]);
+    expect(event.messages.filter((message) => message.role === "assistant")).toHaveLength(1);
+
+    releaseAgentEnd();
+    await run;
+    await turnSettled;
   });
 
   it.each(["client close", "failed turn"])(

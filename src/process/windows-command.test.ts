@@ -34,8 +34,7 @@ async function writeArgvFixture(cwd: string, file: string, script = stdoutScript
 it("leaves Linux commands unchanged", () => {
   using platform = vi.spyOn(process, "platform", "get");
   platform.mockReturnValue("linux");
-  const cmdCommands = ["pnpm"];
-  expect(resolveWindowsCommandShim({ command: "pnpm", cmdCommands })).toBe("pnpm");
+  expect(resolveWindowsCommandShim({ command: "pnpm", cmdCommands: ["pnpm"] })).toBe("pnpm");
 });
 
 type Dir = string | undefined;
@@ -75,70 +74,42 @@ windowsIt("honors PATHEXT precedence before package-manager shim fallback", ({ c
   });
 });
 
-it("preserves trailing cwd whitespace when resolving bare commands from relative PATH", async () => {
-  await withTempDir("openclaw-windows-command-trailing-", async (base) => {
-    await mkdir(path.join(base, "job", "bin"), { recursive: true });
-    await mkdir(path.join(`${base}/job `, "bin"), { recursive: true });
-    await writeFile(path.join(base, "job", "bin", "tool.exe"), "");
-    await writeFile(path.join(`${base}/job `, "bin", "tool.exe"), "");
-    const cwd = `${path.join(base, "job")} `;
-    withMockedWindowsPlatform(() => {
-      expect(
-        resolveSafeChildProcessInvocation({
-          argv: ["tool.exe"],
-          cwd,
-          env: { PATH: "bin", PATHEXT: ".EXE" },
-        }).command,
-      ).toBe(path.join(`${base}/job `, "bin", "tool.exe"));
-    });
-  });
+windowsIt("preserves trailing cwd whitespace for relative PATH", async ({ cwd }) => {
+  const childCwd = path.join(cwd, "cwd ");
+  await mkdir(childCwd, { recursive: true });
+  await writeFile(path.join(childCwd, "tool.exe"), "");
+  expect(resolveCommand(["tool.exe"], { PATH: ".", PATHEXT: ".EXE" }, childCwd).command).toBe(
+    path.join(childCwd, "tool.exe"),
+  );
 });
 
-it("falls back to process cwd for blank cwd when resolving bare commands from relative PATH", async () => {
-  await withTempDir("openclaw-windows-command-blank-", async (base) => {
-    await mkdir(path.join(base, "bin"), { recursive: true });
-    await writeFile(path.join(base, "bin", "tool.exe"), "");
-    const cwdSpy = vi.spyOn(process, "cwd").mockReturnValue(base);
-    try {
-      withMockedWindowsPlatform(() => {
-        expect(
-          resolveSafeChildProcessInvocation({
-            argv: ["tool.exe"],
-            cwd: "   ",
-            env: { PATH: "bin", PATHEXT: ".EXE" },
-          }).command,
-        ).toBe(path.join(base, "bin", "tool.exe"));
-      });
-    } finally {
-      cwdSpy.mockRestore();
-    }
-  });
+windowsIt("uses process cwd for blank cwd and relative PATH", ({ cwd }) => {
+  using cwdSpy = vi.spyOn(process, "cwd");
+  cwdSpy.mockReturnValue(cwd);
+  expect(resolveCommand(["tool.exe"], { PATH: "bin", PATHEXT: ".EXE" }, "   ").command).toBe(
+    path.join(cwd, "bin", "tool.exe"),
+  );
 });
 
 describe.runIf(process.platform === "win32")("Windows batch argv preservation", () => {
-  const ordinary = ["alpha", "omega"];
-  const cases = [
-    ordinary,
-    ["two words", "omega"],
-    ["", "omega"],
-    ["alpha", "", "omega"],
-    ["alpha", ""],
-    ["two\twords", "omega"],
-    ["\t", "omega"],
-    ['say "hello"', "omega"],
-    ["left^right", "omega"],
-    ["C:\\two words\\", "omega"],
-    ['left^"right', "omega"],
-    ['left\\"right', "omega"],
-    ['left\\\\"right', "omega"],
-    ["(round)", "[square]", "{curly}", "semi;colon", "eq=sign", "comma,value", "bang!"],
-  ];
-  it.each([
-    ...cases.map((args) => ["argv with ^caret.cmd", args] as const),
-    ...["argv.cmd", "argv with spaces.cmd"].map((file) => [file, ordinary] as const),
-  ])(
-    "preserves argv through %s: %j",
-    (file, args) =>
+  const args = [
+    ["", "alpha", "", "two words", "two\twords", "\t", 'say "hello"'],
+    ["left^right", "C:\\two words\\", 'left^"right', 'left\\"right', 'left\\\\"right'],
+    [
+      "(round)",
+      "[square]",
+      "{curly}",
+      "semi;colon",
+      "eq=sign",
+      "comma,value",
+      "bang!",
+      "omega",
+      "",
+    ],
+  ].flat();
+  it.each(["argv.cmd", "argv with spaces.cmd", "argv with ^caret.cmd"])(
+    "preserves literal, empty and quoted argv through %s",
+    (file) =>
       withTempDir("openclaw-batch-argv-", async (cwd) => {
         const command = await writeArgvFixture(cwd, file);
         const result = await runCommandWithTimeout([command, ...args], { cwd, timeoutMs: 5_000 });
@@ -152,10 +123,10 @@ describe.runIf(process.platform === "win32")("Windows batch argv preservation", 
     "preserves literal arguments through a real PTY running %s",
     (file) =>
       withTempDir("openclaw-batch-argv-pty-", async (cwd) => {
-        const args =
+        const ptyArgs =
           file === "node.exe"
             ? ["alpha", "", "two words", "two\twords", "A&B", "100%", "left|right", "<in", ">out"]
-            : cases.flat();
+            : args;
         const script = path.join(cwd, "argv.cjs");
         const output = path.join(cwd, "received.json");
         const source =
@@ -166,7 +137,7 @@ describe.runIf(process.platform === "win32")("Windows batch argv preservation", 
         );
         const pty = await spawnTerminalPty({
           file: command,
-          args: file === "node.exe" ? [script, ...args] : args,
+          args: file === "node.exe" ? [script, ...ptyArgs] : ptyArgs,
           cwd,
           env: Object.fromEntries(entries),
           cols: 120,
@@ -178,7 +149,7 @@ describe.runIf(process.platform === "win32")("Windows batch argv preservation", 
         });
         try {
           await vi.waitFor(() => expect(exitCode).toBe(0), { timeout: 5_000 });
-          expect(JSON.parse(await readFile(output, "utf8"))).toEqual(args);
+          expect(JSON.parse(await readFile(output, "utf8"))).toEqual(ptyArgs);
         } finally {
           if (exitCode === undefined) {
             pty.kill();

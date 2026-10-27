@@ -96,11 +96,16 @@ it("loads on demand, retries a failed import, and retires a pending modal withou
   const modal = host.querySelector("openclaw-modal-dialog")!;
   expect(modal.textContent).toContain("https://current.example");
   expect(modal.textContent).toContain("https://replacement.example");
-  const buttons = modal.querySelectorAll<HTMLButtonElement>(".gateway-switch__actions button");
-  buttons[0]!.click();
-  buttons[1]!.click();
-  modal.dispatchEvent(new CustomEvent("modal-cancel"));
+  const buttons = Array.from(
+    modal.querySelectorAll<HTMLButtonElement>(".gateway-switch__actions button"),
+  );
+  buttons.find((button) => button.textContent === "Keep current Gateway")!.click();
+  expect(cancel).toHaveBeenCalledOnce();
+  expect(confirm).not.toHaveBeenCalled();
+  buttons.find((button) => button.textContent === "Switch to replacement.example")!.click();
   expect(confirm).toHaveBeenCalledOnce();
+  expect(cancel).toHaveBeenCalledOnce();
+  modal.dispatchEvent(new CustomEvent("modal-cancel"));
   expect(cancel).toHaveBeenCalledTimes(2);
 
   show(null);

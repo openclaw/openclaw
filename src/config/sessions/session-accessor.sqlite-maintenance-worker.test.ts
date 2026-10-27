@@ -50,6 +50,10 @@ import { registerSessionMaintenancePreserveKeysProvider } from "./store-maintena
 
 afterEach(() => vi.restoreAllMocks());
 
+function cleanup(...callbacks: Array<() => void>) {
+  return { [Symbol.dispose]: () => callbacks.forEach((callback) => callback()) };
+}
+
 function withMaintenanceFixture(
   run: (fixture: ReturnType<typeof maintenanceFixture>) => Promise<void>,
 ) {
@@ -98,8 +102,6 @@ it.for(["cold", "warm-cap", "removal"] as const)(
       if (scenario === "warm-cap") {
         await maintain(active, "warm", policy, { workerGuard: {} });
         vi.restoreAllMocks();
-      }
-      if (scenario === "warm-cap") {
         seed(locked.sessionKey, "locked", Date.now() - 3, { modelSelectionLocked: true });
         seed(protectedEntry.sessionKey, "protected", Date.now() - 2);
         seedStale(Date.now() - 1);
@@ -169,7 +171,7 @@ it.for(["cold", "warm-cap", "removal"] as const)(
       if (!remove) {
         expect(parentSql).toEqual([]);
       }
-      expect(planningPhases).toEqual(["prepared", "planning"]);
+      expect(planningPhases).toEqual(remove ? ["prepared", "planning"] : ["prepared"]);
       expect(workerThreadIds[0]).toBeGreaterThan(0);
       expect(writeOutcomes).toEqual([
         { kind: remove ? "committed" : "not-committed", admitted: remove },
@@ -321,11 +323,8 @@ describe("automatic worker planning protections", () => {
       });
       release = () => lease.release();
     }
-    try {
-      await run();
-    } finally {
-      release();
-    }
+    using _ = cleanup(release);
+    await run();
   });
 });
 
@@ -356,14 +355,11 @@ it("rolls back archive metadata when a run registers at planning commit", async 
         }
       },
     });
-    try {
-      await maintain(active, "updated", maintenancePolicy());
-      expect(protectedNow).toBe(true);
-      expect(loadSessionEntry(scope(protectedKey))?.archivedAt).toBeUndefined();
-      expect(loadSessionEntry(scope(staleKey))?.archivedAt).toEqual(expect.any(Number));
-    } finally {
-      clearAgentRunContext("maintenance-live-run");
-    }
+    using _ = cleanup(() => clearAgentRunContext("maintenance-live-run"));
+    await maintain(active, "updated", maintenancePolicy());
+    expect(protectedNow).toBe(true);
+    expect(loadSessionEntry(scope(protectedKey))?.archivedAt).toBeUndefined();
+    expect(loadSessionEntry(scope(staleKey))?.archivedAt).toEqual(expect.any(Number));
   });
 });
 
@@ -410,7 +406,7 @@ it.each([
       };
       const workerThreadIds: number[] = [];
       observeSessionMaintenancePlanningWorker({
-        beforeExecute() {
+        afterPrepare() {
           if (boundary === "before-authorization" && !changed) {
             mutate();
           }
@@ -470,20 +466,17 @@ it("retains a managed backdate during synchronous maintenance publication reentr
       replaceSessionEntrySync(victim, { sessionId: "victim", updatedAt: 1 });
       observed.push({ before, after: loadSessionEntry(victim)?.updatedAt });
     });
-    try {
-      await maintain(
-        active,
-        "publish",
-        policy,
-        {},
-        (result) => result.archived === 1 && loadSessionEntry(victim)?.archivedAt !== undefined,
-      );
-      expect(observed).toEqual([{ before: undefined, after: 1 }]);
-      expect(loadSessionEntry(victim)?.archivedAt).toEqual(expect.any(Number));
-      expect(loadSessionEntry(stale)?.archivedAt).toEqual(expect.any(Number));
-    } finally {
-      unsubscribe();
-    }
+    using _ = cleanup(unsubscribe);
+    await maintain(
+      active,
+      "publish",
+      policy,
+      {},
+      (result) => result.archived === 1 && loadSessionEntry(victim)?.archivedAt !== undefined,
+    );
+    expect(observed).toEqual([{ before: undefined, after: 1 }]);
+    expect(loadSessionEntry(victim)?.archivedAt).toEqual(expect.any(Number));
+    expect(loadSessionEntry(stale)?.archivedAt).toEqual(expect.any(Number));
   });
 });
 

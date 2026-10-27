@@ -486,6 +486,8 @@ export type WorkerProvider = {
   destroy: (lease: {
     leaseId: string;
     profile: WorkerProfile;
+    /** Cancel commands, await their settlement, and reject while teardown remains unconfirmed. */
+    signal?: AbortSignal;
     /**
      * Optional notification that cleanup is accepted and no longer needs the session.
      * The host may reclaim the session, but retains this operation until its promise settles.

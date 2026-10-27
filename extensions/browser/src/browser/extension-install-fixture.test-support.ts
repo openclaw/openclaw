@@ -154,13 +154,9 @@ function selectFixture(fixture: InstallFixture = {}) {
   }
   if (native?.context) {
     const context = native.context;
-    property("execPath", context.nodePath);
-    property("argv", [
-      context.nodePath,
-      context.cliPath,
-      "--browser-profile",
-      context.browserProfile,
-    ]);
+    const { nodePath, cliPath, browserProfile } = context;
+    property("execPath", nodePath);
+    property("argv", [nodePath, cliPath, "--browser-profile", browserProfile]);
     vi.mocked(resolveStateDir).mockImplementation((selectedEnv) =>
       selectedEnv ? context.stateDir : (fixture.stateDir ?? context.stateDir),
     );

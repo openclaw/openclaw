@@ -2,7 +2,10 @@
 import { describe, expect, it, vi } from "vitest";
 import type { GatewayBrowserClient } from "../api/gateway.ts";
 import type { ApplicationGatewaySnapshot } from "../app/context.ts";
-import { createApplicationGateway as createGateway } from "../test-helpers/application-context-fixtures.ts";
+import {
+  createApplicationGateway as createGateway,
+  createApplicationGatewaySnapshot,
+} from "../test-helpers/application-context-fixtures.ts";
 import { gatewayHelloForMethods } from "../test-helpers/gateway-methods.ts";
 import { GatewayPageBinding } from "./gateway-page-binding.ts";
 
@@ -10,17 +13,7 @@ function snapshot(
   client: GatewayBrowserClient | null = {} as GatewayBrowserClient,
   phase: ApplicationGatewaySnapshot["phase"] = "connected",
 ): ApplicationGatewaySnapshot {
-  return {
-    client,
-    phase,
-    offlineStable: false,
-    hello: null,
-    canvasPluginSurfaceUrl: null,
-    assistantAgentId: null,
-    sessionKey: "agent:main:main",
-    lastError: null,
-    lastErrorCode: null,
-  };
+  return createApplicationGatewaySnapshot({ client, phase, sessionKey: "agent:main:main" });
 }
 
 function bind(source = createGateway(snapshot()), getGateway = () => source.gateway) {

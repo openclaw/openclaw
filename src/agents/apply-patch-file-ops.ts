@@ -89,6 +89,7 @@ export async function resolvePatchFileOps(options: ApplyPatchFileOptions): Promi
             filePath,
             cwd: root,
             data: content,
+            mkdir: true,
             signal: options.signal,
           });
         }),
@@ -96,11 +97,6 @@ export async function resolvePatchFileOps(options: ApplyPatchFileOptions): Promi
         runWithAgentToolSourceExecutionScope(assertCurrent, async () => {
           assertCurrent();
           await bridge.remove({ filePath, cwd: root, force: false, signal: options.signal });
-        }),
-      mkdirp: (dir) =>
-        runWithAgentToolSourceExecutionScope(assertCurrent, async () => {
-          assertCurrent();
-          await bridge.mkdirp({ filePath: dir, cwd: root, signal: options.signal });
         }),
     });
   }

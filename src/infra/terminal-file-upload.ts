@@ -114,8 +114,7 @@ function scheduleCleanup(root: string, state: CleanupState, at: number): void {
       },
       Math.max(0, at - Date.now()),
     ),
-  );
-  state.timer.unref?.();
+  ).unref();
 }
 
 async function withUploadLock<T>(

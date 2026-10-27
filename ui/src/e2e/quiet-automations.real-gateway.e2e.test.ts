@@ -20,11 +20,15 @@ import type { SessionsListResult } from "../api/types.ts";
 import { pairControlUiPage } from "../test-helpers/control-ui-browser-pairing.ts";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import { waitForControlUiGatewayReady } from "../test-helpers/control-ui-e2e-readiness.ts";
-import { takeControlUiScreenshotFrame } from "../test-helpers/control-ui-e2e-screenshot.ts";
+import {
+  takeControlUiScreenshotFrame,
+  waitForControlUiProofSurface,
+} from "../test-helpers/control-ui-e2e-screenshot.ts";
 import { controlUiSessionUrl } from "../test-helpers/control-ui-e2e.ts";
 import { withControlUiRunInspector } from "../test-helpers/control-ui-run-inspector.ts";
 import { observeBackgroundWorkRpc } from "./background-work.real-gateway.test-support.ts";
 import { closeChatDetails, openChatDetails } from "./chat-details.test-support.ts";
+import { connectChatGateway } from "./chat-real-gateway.test-support.ts";
 import {
   createControlUiE2eContextOptions,
   createControlUiE2eSuite,
@@ -38,8 +42,11 @@ import {
 // One real producer-to-browser regression. Optional external inference is explicitly opt-in.
 const baselineRoot = process.env.OPENCLAW_QUIET_PROOF_BASELINE_ROOT;
 const live = !baselineRoot && process.env.OPENCLAW_QUIET_PROOF_LIVE === "1";
+const captureUiProof =
+  Boolean(baselineRoot) || live || process.env.OPENCLAW_CAPTURE_UI_PROOF === "1";
 const uiRoot = path.resolve(baselineRoot ?? ".", "dist/control-ui");
 let instance: OpenClawTestInstance;
+let client: Awaited<ReturnType<typeof connectChatGateway>>;
 let provider: Awaited<ReturnType<typeof startQuietProvider>>;
 let artifacts: string;
 const proof: Record<string, unknown> = {
@@ -57,6 +64,14 @@ const save = () =>
 const suite = createControlUiE2eSuite({
   name: "Quiet automation real Gateway boundary",
   startServerBeforeBrowser: true,
+  resources: {
+    async run(signal) {
+      client = await connectChatGateway(instance, signal);
+    },
+    async close() {
+      await client?.stopAndWait();
+    },
+  },
   async startServer() {
     artifacts = createControlUiE2eArtifactDir(
       baselineRoot ? "quiet-automations-before" : "quiet-automations-after",
@@ -153,18 +168,7 @@ async function cli(args: string[]) {
   return result.stdout;
 }
 async function rpc<T>(method: string, params: Record<string, unknown>): Promise<T> {
-  return JSON.parse(
-    await cli([
-      "gateway",
-      "call",
-      method,
-      "--params",
-      JSON.stringify(params),
-      "--json",
-      "--timeout",
-      "90000",
-    ]),
-  );
+  return client.request<T>(method, params, { timeoutMs: 90_000 });
 }
 async function session() {
   const result = await rpc<SessionsListResult>("sessions.list", {
@@ -203,6 +207,13 @@ async function screenshot(page: Page, name: string, required: string) {
     .filter({ hasText: required, visible: true })
     .getByText(required, { exact: true })
     .first();
+  if (!captureUiProof) {
+    await waitForControlUiProofSurface(body, [target]);
+    if ((page.viewportSize()?.width ?? 1440) < 560) {
+      await target.scrollIntoViewIfNeeded();
+    }
+    return;
+  }
   const frame = await takeControlUiScreenshotFrame(page, body, [target], {
     animations: "disabled",
     ...((page.viewportSize()?.width ?? 1440) < 560 ? { scrollTo: target } : {}),
@@ -419,10 +430,12 @@ suite.define(() => {
         const checkedBeforeTrigger = await checked.getAttribute("datetime");
         const beforeTrigger = await rpc<CronJob>("cron.get", { id });
         const providerRequestsBeforeTrigger = provider.requests();
+        // Start the first occurrence soon while retaining the trigger's minimum cadence.
+        const triggerAnchorMs = Date.now() + 1_000;
         const due = await rpc<CronJob>("cron.update", {
           id,
           patch: {
-            schedule: { kind: "every", everyMs: 30_000, anchorMs: Date.now() },
+            schedule: { kind: "every", everyMs: 30_000, anchorMs: triggerAnchorMs },
             trigger: { script: "return { fire: false };" },
           },
         });

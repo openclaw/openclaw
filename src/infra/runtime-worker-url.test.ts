@@ -9,6 +9,11 @@ import { describe, expect, it, vi } from "vitest";
 import "../test-utils/prepare-compiled-subprocesses.js";
 import { withTempDir } from "../test-utils/temp-dir.js";
 import {
+  resolveExternalPackageRuntimeEntrypointUrl as external,
+  resolveRuntimeDeployEntrypointUrl as deploy,
+  resolveRuntimeScriptEntrypointUrl as script,
+} from "./runtime-process-url.js";
+import {
   resolveRuntimeWorkerArgv,
   resolveRuntimeWorkerThreadExecArgv,
   resolveRuntimeWorkerUrl,
@@ -16,6 +21,32 @@ import {
 } from "./runtime-worker-url.js";
 
 const requireFromHere = createRequire(import.meta.url);
+const fileUrl = (root: string, file: string) => pathToFileURL(path.join(root, file)).href;
+function expectWorker(
+  params: Parameters<typeof resolveRuntimeWorkerUrl>[0],
+  root: string,
+  expected: string,
+) {
+  expect(fileURLToPath(resolveRuntimeWorkerUrl(params))).toBe(path.join(root, expected));
+}
+function expectRuntimeArgs(
+  extension: string,
+  runtime: string | undefined,
+  node: boolean,
+  loader = import.meta.resolve("tsx"),
+) {
+  const url = pathToFileURL(path.resolve(`worker fixture.${extension}`));
+  const needsLoader = node && extension.endsWith("ts");
+  expect(resolveRuntimeWorkerArgv(url, runtime)).toEqual([
+    ...(node ? [] : ["--no-install"]),
+    ...(needsLoader ? ["--import", loader] : []),
+    fileURLToPath(url),
+  ]);
+  expect(resolveRuntimeWorkerThreadExecArgv(url, runtime)).toEqual(
+    needsLoader ? ["--import", import.meta.resolve("tsx/esm")] : [],
+  );
+  expect(runtimeNeedsTypeScriptLoader(fileURLToPath(url), runtime)).toBe(needsLoader);
+}
 
 describe("runtime bootstrap entrypoint URLs", () => {
   it.each([false, true])("resolves package-owned entries (bundled=%s)", async (bundled) => {
@@ -53,52 +84,30 @@ console.log(JSON.stringify({ external: resolveRuntimeBootstrapExternalEntrypoint
 describe("resolveRuntimeWorkerUrl", () => {
   it("resolves source siblings and stable packaged worker paths", () => {
     const root = path.resolve("worker-fixture-root");
-    expect(
-      fileURLToPath(
-        resolveRuntimeWorkerUrl({
-          currentModuleUrl: pathToFileURL(path.join(root, "src/agents/code-mode-worker.ts")).href,
-          sourceWorkerName: "code-mode.worker",
-          distWorkerPath: "agents/code-mode.worker.js",
-        }),
-      ),
-    ).toBe(path.join(root, "src/agents/code-mode.worker.ts"));
-
-    expect(
-      fileURLToPath(
-        resolveRuntimeWorkerUrl({
-          currentModuleUrl: pathToFileURL(path.join(root, "src/agents/code-mode-worker.ts")).href,
-          sourceWorkerName: "generated.worker",
-          sourceExtension: ".mjs",
-          distWorkerPath: "agents/generated.worker.js",
-        }),
-      ),
-    ).toBe(path.join(root, "src/agents/generated.worker.mjs"));
-
-    for (const currentModuleUrl of [
-      pathToFileURL(path.join(root, "dist/agents/code-mode.js")).href,
-      pathToFileURL(path.join(root, "dist/selection-abc123.js")).href,
-      pathToFileURL(path.join(root, "dist/selection-abc123.mjs")).href,
+    const entry = {
+      currentModuleUrl: fileUrl(root, "src/agents/code-mode-worker.ts"),
+      sourceWorkerName: "code-mode.worker",
+      distWorkerPath: "agents/code-mode.worker.js",
+    };
+    expectWorker(entry, root, "src/agents/code-mode.worker.ts");
+    expectWorker(
+      { ...entry, sourceWorkerName: "generated.worker", sourceExtension: ".mjs" },
+      root,
+      "src/agents/generated.worker.mjs",
+    );
+    for (const modulePath of [
+      "dist/agents/code-mode.js",
+      "dist/selection-abc123.js",
+      "dist/selection-abc123.mjs",
     ]) {
-      expect(
-        fileURLToPath(
-          resolveRuntimeWorkerUrl({
-            currentModuleUrl,
-            sourceWorkerName: "code-mode.worker",
-            distWorkerPath: "agents/code-mode.worker.js",
-          }),
-        ),
-      ).toBe(path.join(root, "dist/agents/code-mode.worker.js"));
+      const params = { ...entry, currentModuleUrl: fileUrl(root, modulePath) };
+      expectWorker(params, root, "dist/agents/code-mode.worker.js");
       const candidateRoot = path.join(root, "candidate");
-      expect(
-        fileURLToPath(
-          resolveRuntimeWorkerUrl({
-            currentModuleUrl,
-            sourceWorkerName: "code-mode.worker",
-            distWorkerPath: "agents/code-mode.worker.js",
-            root: candidateRoot,
-          }),
-        ),
-      ).toBe(path.join(candidateRoot, "dist/agents/code-mode.worker.js"));
+      expectWorker(
+        { ...params, root: candidateRoot },
+        candidateRoot,
+        "dist/agents/code-mode.worker.js",
+      );
     }
   });
 
@@ -114,36 +123,27 @@ describe("resolveRuntimeWorkerUrl", () => {
       for (const packageName of ["openclaw", "@openclaw/store"]) {
         await writeFile(path.join(root, "package.json"), JSON.stringify({ name: packageName }));
         for (const modulePath of ["dist/index.js", "dist/.setup/shared-abc.mjs"]) {
-          const currentModuleUrl = pathToFileURL(path.join(root, modulePath)).href;
-          expect(fileURLToPath(resolveRuntimeWorkerUrl({ ...entry, currentModuleUrl }))).toBe(
-            path.join(
-              root,
-              "dist",
-              packageName === entry.package.name
-                ? entry.package.distWorkerPath
-                : entry.distWorkerPath,
-            ),
+          const params = { ...entry, currentModuleUrl: fileUrl(root, modulePath) };
+          expectWorker(
+            params,
+            root,
+            `dist/${packageName === entry.package.name ? entry.package.distWorkerPath : entry.distWorkerPath}`,
           );
-          expect(fileURLToPath(resolveRuntimeWorkerUrl({ ...entry, currentModuleUrl, root }))).toBe(
-            path.join(root, "dist", entry.distWorkerPath),
-          );
+          expectWorker({ ...params, root }, root, `dist/${entry.distWorkerPath}`);
         }
       }
       await writeFile(path.join(root, "package.json"), "invalid-json");
       expect(() =>
         resolveRuntimeWorkerUrl({
           ...entry,
-          currentModuleUrl: pathToFileURL(path.join(root, "dist/index.js")).href,
+          currentModuleUrl: fileUrl(root, "dist/index.js"),
         }),
       ).toThrow("Cannot resolve runtime worker package");
-      expect(
-        fileURLToPath(
-          resolveRuntimeWorkerUrl({
-            ...entry,
-            currentModuleUrl: pathToFileURL(path.join(root, "src/entry.ts")).href,
-          }),
-        ),
-      ).toBe(path.join(root, "src/store.worker.ts"));
+      expectWorker(
+        { ...entry, currentModuleUrl: fileUrl(root, "src/entry.ts") },
+        root,
+        "src/store.worker.ts",
+      );
     });
   });
 });
@@ -156,17 +156,11 @@ describe("resolveRuntimeWorkerArgv", () => {
     { runtime: "C:\\Program Files\\Bun\\bun.exe", typescriptLoader: false },
   ])("uses the source loader appropriate for $runtime", ({ runtime, typescriptLoader }) => {
     for (const extension of ["ts", "mts", "cts", "js", "mjs"]) {
-      const url = pathToFileURL(path.resolve(`worker fixture.${extension}`));
-      const tsxUrl = pathToFileURL(requireFromHere.resolve("tsx")).href;
-      const loader = typescriptLoader && extension.endsWith("ts") ? ["--import", tsxUrl] : [];
-      expect(resolveRuntimeWorkerArgv(url, runtime)).toEqual([
-        ...(typescriptLoader ? loader : ["--no-install"]),
-        fileURLToPath(url),
-      ]);
-      expect(resolveRuntimeWorkerThreadExecArgv(url, runtime)).toEqual(
-        typescriptLoader && extension.endsWith("ts")
-          ? ["--import", import.meta.resolve("tsx/esm")]
-          : [],
+      expectRuntimeArgs(
+        extension,
+        runtime,
+        typescriptLoader,
+        pathToFileURL(requireFromHere.resolve("tsx")).href,
       );
     }
   });
@@ -183,23 +177,13 @@ describe("resolveRuntimeWorkerArgv", () => {
         versions: { configurable: true, value: { ...process.versions, bun } },
       });
       for (const extension of ["ts", "mts", "cts", "js", "mjs"]) {
-        const url = pathToFileURL(path.resolve(`worker fixture.${extension}`));
         for (const { selected, typescriptLoader } of [
           { selected: undefined, typescriptLoader: !bun },
           { selected: currentExecutable, typescriptLoader: !bun },
           { selected: path.resolve("foreign-runtime-fixture", "node"), typescriptLoader: true },
           { selected: path.resolve("foreign-runtime-fixture", "bun"), typescriptLoader: false },
         ]) {
-          const needsLoader = typescriptLoader && extension.endsWith("ts");
-          expect(resolveRuntimeWorkerArgv(url, selected)).toEqual([
-            ...(typescriptLoader ? [] : ["--no-install"]),
-            ...(needsLoader ? ["--import", import.meta.resolve("tsx")] : []),
-            fileURLToPath(url),
-          ]);
-          expect(resolveRuntimeWorkerThreadExecArgv(url, selected)).toEqual(
-            needsLoader ? ["--import", import.meta.resolve("tsx/esm")] : [],
-          );
-          expect(runtimeNeedsTypeScriptLoader(fileURLToPath(url), selected)).toBe(needsLoader);
+          expectRuntimeArgs(extension, selected, typescriptLoader);
         }
       }
     } finally {
@@ -261,40 +245,15 @@ describe("resolveRuntimeProcessEntrypointUrl", () => {
   });
 });
 
-describe("resolveExternalPackageRuntimeEntrypointUrl", () => {
-  it.each([
-    ["sourceCli", "src/entry.ts"],
-    ["cliLauncher", "openclaw.mjs"],
-    ["preinstall", "scripts/preinstall-package-manager-warning.mjs"],
-    ["postinstall", "scripts/postinstall-bundled-plugins.mjs"],
-  ] as const)("resolves %s in the selected package", async (name, relativePath) => {
-    const { resolveExternalPackageRuntimeEntrypointUrl } = await import("./runtime-process-url.js");
-    const packageRoot = path.resolve("external package with spaces");
-    expect(resolveExternalPackageRuntimeEntrypointUrl(name, packageRoot)).toEqual(
-      pathToFileURL(path.join(packageRoot, relativePath)),
-    );
-  });
-});
-
-describe("resolveRuntimeScriptEntrypointUrl", () => {
-  it("resolves the declared handoff script in its staging directory", async () => {
-    const { resolveRuntimeScriptEntrypointUrl } = await import("./runtime-process-url.js");
-    const directory = path.resolve("handoff directory #1");
-    expect(resolveRuntimeScriptEntrypointUrl("managedUpdateHandoff", directory)).toEqual(
-      pathToFileURL(path.join(directory, "handoff.cjs")),
-    );
-  });
-});
-
-describe("resolveRuntimeDeployEntrypointUrl", () => {
-  it.each([
-    ["worker", "worker.mjs"],
-    ["image-processor.worker", "image-processor.worker.mjs"],
-  ] as const)("resolves %s in the selected bundle", async (name, fileName) => {
-    const { resolveRuntimeDeployEntrypointUrl } = await import("./runtime-process-url.js");
-    const directory = path.resolve("worker bundle #1");
-    expect(resolveRuntimeDeployEntrypointUrl(name, directory)).toEqual(
-      pathToFileURL(path.join(directory, fileName)),
-    );
-  });
+it.each([
+  ["src/entry.ts", external.bind(null, "sourceCli")],
+  ["openclaw.mjs", external.bind(null, "cliLauncher")],
+  ["scripts/preinstall-package-manager-warning.mjs", external.bind(null, "preinstall")],
+  ["scripts/postinstall-bundled-plugins.mjs", external.bind(null, "postinstall")],
+  ["handoff.cjs", script.bind(null, "managedUpdateHandoff")],
+  ["worker.mjs", deploy.bind(null, "worker")],
+  ["image-processor.worker.mjs", deploy.bind(null, "image-processor.worker")],
+] as const)("resolves %s beneath the selected runtime root", (file, resolve) => {
+  const directory = path.resolve("runtime directory #1 with spaces");
+  expect(resolve(directory)).toEqual(pathToFileURL(path.join(directory, file)));
 });

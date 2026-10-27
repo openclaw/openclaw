@@ -9,7 +9,6 @@ import {
   getSubagentSessionListReadSnapshotIdentity,
   prepareSubagentSessionListReadCache,
 } from "../agents/subagents/registry/subagent-registry-state.js";
-import type { SubagentRunRecord } from "../agents/subagents/registry/subagent-registry.types.js";
 import { setRuntimeConfigSnapshot } from "../config/config.js";
 import { loadSessionEntry, replaceSessionEntrySync } from "../config/sessions/session-accessor.js";
 import { readPreparedSessionEntryChange } from "../config/sessions/session-accessor.sqlite-entry-cache-publication.js";
@@ -27,7 +26,6 @@ import * as projectionWork from "./session-projection-work.js";
 import { bindSessionRowProjection } from "./session-row-projection-access.js";
 import * as materialization from "./session-row-projection-materialize.js";
 import { writeRow } from "./session-row-projection-read-fixtures.test-support.js";
-import { createSessionRowProjection } from "./session-row-projection.js";
 import {
   createTestProjection,
   holdForeground,
@@ -35,6 +33,7 @@ import {
   watchRowFacts as observeRowFacts,
 } from "./session-row-projection.read-fixture.test-support.js";
 import { listProjectedSessions } from "./session-utils-list.js";
+import * as rowProjection from "./session-utils-projection.js";
 
 afterEach(() => {
   vi.restoreAllMocks();
@@ -69,25 +68,18 @@ it("settles a registry revision after persisting an already absent run", async (
         },
       }),
     );
-    const projection = await createSessionRowProjection({ cfg, modelCatalog: [] });
-    const releaseForeground = projectionWork.retainSessionListForegroundWork();
-    try {
-      await projection.ensureMaterialized();
-      expect(projection.needsMaterialization).toBe(false);
-      persistRegistryFixture(subagentRuns, ["already-absent-run"]);
-      expect(projection.dirtyRowCount).toBe(0);
-      remainingRefreshes = 10;
-      await projection.ensureMaterialized();
-      expect(projection.needsMaterialization).toBe(false);
-      expect(
-        projection.snapshot({ agentId: target.agentId, key: target.sessionKey }).row,
-      ).toMatchObject({
-        sessionId: "registry-revision",
-      });
-    } finally {
-      projection.dispose();
-      releaseForeground();
-    }
+    using projection = await createTestProjection({ cfg, modelCatalog: [] });
+    using _ = holdForeground();
+    await projection.ensureMaterialized();
+    expect(projection.needsMaterialization).toBe(false);
+    persistRegistryFixture(subagentRuns, ["already-absent-run"]);
+    expect(projection.dirtyRowCount).toBe(0);
+    remainingRefreshes = 10;
+    await projection.ensureMaterialized();
+    expect(projection.needsMaterialization).toBe(false);
+    expect(
+      projection.snapshot({ agentId: target.agentId, key: target.sessionKey }).row,
+    ).toMatchObject({ sessionId: "registry-revision" });
   });
 });
 
@@ -120,23 +112,21 @@ it.each([
       const anchorKey = "agent:main:archive-recovery-anchor";
       writeRow(anchorKey, { sessionId: "archive-recovery-anchor" });
       if (kind !== "new") {
-        replaceSessionEntrySync(target, {
+        writeRow(key, {
           sessionId: previousSessionId,
-          updatedAt: 1,
           ...(resetsIdentity ? { lifecycleRevision: "before-reset" } : {}),
         });
       }
-      const releaseForeground = projectionWork.retainSessionListForegroundWork();
+      using _ = holdForeground();
       const context = createDirectChatContext({
         getRuntimeConfig: () => cfg,
         loadGatewayModelCatalog: async () => [],
       });
       const entered = createDeferredCore();
       const release = createDeferredCore();
-      let projection: Awaited<ReturnType<typeof createSessionRowProjection>> | undefined;
+      using projection = await createTestProjection({ cfg, context, modelCatalog: [] });
       let recovery: Promise<unknown> | undefined;
       try {
-        projection = await createSessionRowProjection({ cfg, context, modelCatalog: [] });
         bindSessionRowProjection(context, () => projection);
         await projection.ensureMaterialized();
         const captured = projection.capture(query);
@@ -260,8 +250,6 @@ it.each([
       } finally {
         release.resolve();
         await recovery;
-        projection?.dispose();
-        releaseForeground();
       }
     });
   },
@@ -271,6 +259,8 @@ it.each([
   { publication: "broad-ownership", archived: true },
   { publication: "clear", archived: false },
   { publication: "persistence", archived: false },
+  { publication: "keyed-ownership", archived: false },
+  { publication: "keyed-swarm", archived: false },
 ] as const)(
   "refreshes subagent facts before synchronous $publication observers (archived=$archived)",
   async ({ publication, archived }) => {
@@ -278,10 +268,11 @@ it.each([
       const child = "agent:main:child",
         parent = "agent:main:parent",
         nextParent = "agent:main:next";
-      for (const key of [child, parent, nextParent]) {
+      const keys = [child, parent, nextParent, "agent:main:unrelated"];
+      for (const key of keys) {
         writeRow(key, archived && key === child ? { archivedAt: 1 } : {});
       }
-      const run: SubagentRunRecord = {
+      const run = createSubagentRunRecord({
         runId: "run",
         childSessionKey: child,
         requesterSessionKey: parent,
@@ -291,78 +282,82 @@ it.each([
         collect: true,
         requesterDisplayKey: "parent",
         task: "Synthetic task",
-        cleanup: "keep",
         createdAt: 1,
         execution: { status: "running", startedAt: 1 },
-        completion: { required: false },
         delivery: { status: "not_required" },
-      };
+      });
       using _ = holdSubagentExecution(run.runId, child);
       subagentRuns.set(run.runId, run);
       if (archived) {
         persistRegistryFixture(subagentRuns);
       }
-      const projection = await createSessionRowProjection({ cfg });
+      using projection = await createTestProjection({ cfg });
       await projection.ensureMaterialized();
       const reads = vi.spyOn(materialization, "readSessionRowEntry");
-      const snapshot = () =>
-        archived ? undefined : projection.snapshot({ agentId: "main", key: child }).row;
+      const childLinks = vi.spyOn(rowProjection, "projectSessionRowChildLinks");
+      const snapshot = (key = child) =>
+        archived && key === child ? undefined : projection.snapshot({ agentId: "main", key }).row;
+      keys.forEach((key) => snapshot(key));
+      childLinks.mockClear();
       let observed: ReturnType<typeof snapshot> | undefined;
       let observedParents: string[][] | undefined;
-      const stop = sessionChanges.subscribe(() => {
-        observed = snapshot();
-        observedParents = [parent, nextParent].map((parentSessionKey) =>
-          projection.selectEntries({ parentSessionKey }).map((row) => row.key),
-        );
-      });
-      try {
-        expect(snapshot()?.controlOwnerSessionKey).toBe(archived ? undefined : parent);
-        const moved = publication !== "clear";
-        if (moved) {
-          const replacement = {
-            ...run,
-            requesterSessionKey: nextParent,
-            swarmRequesterSessionKey: nextParent,
-          };
-          subagentRuns.set(run.runId, replacement);
-          // Control reflects the current executor immediately; navigation waits for publication.
-          expect(snapshot()?.controlOwnerSessionKey).toBe(archived ? undefined : nextParent);
-          if (publication === "broad-ownership") {
-            publishSubagentRunChanges();
-          } else {
-            persistRegistryFixture(subagentRuns, [run.runId]);
-          }
+      using cleanup = new DisposableStack();
+      cleanup.defer(
+        sessionChanges.subscribe(() => {
+          observed = snapshot();
+          observedParents = [parent, nextParent].map((parentSessionKey) =>
+            projection.selectEntries({ parentSessionKey }).map((row) => row.key),
+          );
+        }),
+      );
+      expect(snapshot()?.controlOwnerSessionKey).toBe(archived ? undefined : parent);
+      const moved = publication !== "clear";
+      const swarmOnly = publication === "keyed-swarm";
+      const owner = swarmOnly ? parent : nextParent;
+      if (moved) {
+        const replacement = {
+          ...run,
+          ...(swarmOnly
+            ? { collectorCompletion: { status: "done" as const } }
+            : { requesterSessionKey: nextParent, swarmRequesterSessionKey: nextParent }),
+        };
+        subagentRuns.set(run.runId, replacement);
+        // Control reflects the current executor immediately; navigation waits for publication.
+        expect(snapshot()?.controlOwnerSessionKey).toBe(archived ? undefined : owner);
+        if (publication === "broad-ownership") {
+          publishSubagentRunChanges();
+        } else if (publication.startsWith("keyed")) {
+          subagentRuns.commitOwnership(replacement);
         } else {
-          subagentRuns.clear();
+          persistRegistryFixture(subagentRuns, [run.runId]);
         }
-        expect(observed?.key).toBe(archived ? undefined : child);
-        expect(observed?.controlOwnerSessionKey).toBe(!archived && moved ? nextParent : undefined);
-        expect(observedParents).toEqual([[], moved ? [child] : []]);
-        if (archived) {
-          expect(projection.capture({ agentId: "main", key: child })?.materialized).toBeUndefined();
+      } else {
+        subagentRuns.clear();
+      }
+      expect(observed?.key).toBe(archived ? undefined : child);
+      expect(observed?.controlOwnerSessionKey).toBe(!archived && moved ? owner : undefined);
+      expect(observedParents).toEqual(swarmOnly ? [[child], []] : [[], moved ? [child] : []]);
+      if (archived) {
+        expect(projection.capture({ agentId: "main", key: child })?.materialized).toBeUndefined();
+      }
+      await projection.ensureMaterialized();
+      expect(snapshot(swarmOnly ? nextParent : parent)?.childSessions).toBeUndefined();
+      expect(snapshot(owner)?.childSessions).toEqual(moved ? [child] : undefined);
+      if (publication !== "persistence") {
+        expect(snapshot(swarmOnly ? nextParent : parent)?.swarm).toBeUndefined();
+        const swarm = snapshot(owner)?.swarm;
+        if (moved) {
+          expect(swarm?.groups).toEqual([
+            expect.objectContaining({ groupId: "group", [swarmOnly ? "done" : "running"]: 1 }),
+          ]);
+        } else {
+          expect(swarm).toBeUndefined();
         }
-        await projection.ensureMaterialized();
-        expect(
-          projection.snapshot({ agentId: "main", key: parent }).row?.childSessions,
-        ).toBeUndefined();
-        expect(
-          projection.snapshot({ agentId: "main", key: nextParent }).row?.childSessions,
-        ).toEqual(moved ? [child] : undefined);
-        if (publication === "broad-ownership" || publication === "clear") {
-          expect(projection.snapshot({ agentId: "main", key: parent }).row?.swarm).toBeUndefined();
-          const swarm = projection.snapshot({ agentId: "main", key: nextParent }).row?.swarm;
-          if (moved) {
-            expect(swarm?.groups).toEqual([
-              expect.objectContaining({ groupId: "group", running: 1 }),
-            ]);
-          } else {
-            expect(swarm).toBeUndefined();
-          }
-          expect(reads).not.toHaveBeenCalled();
-        }
-      } finally {
-        stop();
-        projection.dispose();
+        expect(reads).not.toHaveBeenCalled();
+      }
+      keys.forEach((key) => snapshot(key));
+      if (publication.startsWith("keyed")) {
+        expect(childLinks).toHaveBeenCalledTimes(swarmOnly ? 1 : 2);
       }
     });
   },
@@ -387,7 +382,6 @@ it("keeps current row facts when the subagent snapshot changes during a list", a
           childSessionKey: "agent:main:unrelated-child",
           requesterSessionKey: "agent:main:unrelated-parent",
           generation: 1,
-          completion: { required: false },
           delivery: { status: "not_required" },
         });
         persistRegistryFixture(new Map([[run.runId, run]]));

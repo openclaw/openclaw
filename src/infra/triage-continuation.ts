@@ -1,7 +1,6 @@
 // Private live continuations across the installed CLI, never serialized execution authority.
 import { realpathSync } from "node:fs";
 import { z } from "zod";
-import type { TriageFailureContext } from "../commands/triage-prompt.js";
 import {
   CONTROL_PLANE_UPDATE_SENTINEL_META_ENV,
   UPDATE_RUN_ID_ENV,
@@ -92,15 +91,7 @@ async function exchangeWithParent(message: object, signal?: AbortSignal): Promis
   });
 }
 
-export async function acceptTriageContinuation(): Promise<
-  | {
-      failure: TriageFailureContext;
-      signal: AbortSignal;
-      assertCurrent: () => void;
-      finish: (cleanup: "closed" | "uncertain") => Promise<void>;
-    }
-  | undefined
-> {
+export async function acceptTriageContinuation() {
   if (process.env.OPENCLAW_UPDATE_RUN_HANDOFF !== "1") {
     return undefined;
   }

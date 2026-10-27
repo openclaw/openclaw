@@ -6,6 +6,7 @@ import {
   Loading,
   Show,
   action,
+  createDeferred,
   createMemo,
   createOptimistic,
   createSignal,
@@ -53,21 +54,29 @@ export function AgentSkills(params: AgentSkillsProps) {
       ? params.readData().agentSkillsReport
       : null,
   );
-  const report = createMemo(async () => {
-    const read = issued();
-    const fallback = cached();
-    try {
-      return {
-        report: read?.agentId === params.agentId ? ((await read.result) ?? fallback) : fallback,
-      };
-    } catch (error) {
-      return { report: fallback, error: formatUiError(error) };
-    }
-  });
   const scope = createMemo(() => `${params.agentId}:${params.readData().requestGeneration}`);
   return (
     <Show when={scope()} keyed>
       {(capturedScope) => {
+        // Keep one list mounted; JSX reads this scope's cached report until the first result.
+        const report = createDeferred<
+          { report: SkillStatusReport | null; error?: string } | undefined
+        >(
+          async () => {
+            const read = issued();
+            const fallback = cached();
+            try {
+              return {
+                report:
+                  read?.agentId === params.agentId ? ((await read.result) ?? fallback) : fallback,
+              };
+            } catch (error) {
+              return { report: fallback, error: formatUiError(error) };
+            }
+          },
+          { loadingValue: undefined },
+        );
+        const pending = createMemo(() => report() === undefined || isPending(report));
         const config = createMemo(() => resolveAgentConfig(params.configForm, params.agentId));
         const [explicit, setExplicit] = createOptimistic(() =>
           Array.isArray(config().entry?.skills),
@@ -97,11 +106,7 @@ export function AgentSkills(params: AgentSkillsProps) {
             void reset(completion).catch(() => undefined);
           });
         };
-        const Content = (props: {
-          report: SkillStatusReport | null;
-          pending: boolean;
-          readError?: string;
-        }) => (
+        return (
           <AgentSkillsContent
             {...params}
             explicit={explicit()}
@@ -109,19 +114,10 @@ export function AgentSkills(params: AgentSkillsProps) {
             resetting={resetting()}
             command={command()}
             onClear={onClear}
-            report={props.report}
-            pending={props.pending}
-            readError={props.readError}
+            report={report()?.report ?? cached()}
+            pending={pending()}
+            readError={pending() ? undefined : report()?.error}
           />
-        );
-        return (
-          <Loading fallback={<Content report={cached()} pending />}>
-            <Content
-              report={report().report}
-              pending={isPending(report)}
-              readError={isPending(report) ? undefined : report().error}
-            />
-          </Loading>
         );
       }}
     </Show>
@@ -149,15 +145,26 @@ function AgentSkillsContent(
   const allowSet = createMemo(() => new Set(params.allowlist ?? []));
   const usingAllowlist = () => params.allowlist !== undefined;
   const rawSkills = createMemo(() => params.report?.skills ?? []);
+  const searchableSkills = createMemo(() =>
+    rawSkills().map((skill) => ({
+      skill,
+      text: normalizeLowercaseStringOrEmpty(
+        [skill.name, skill.description, skill.source].join(" "),
+      ),
+    })),
+  );
   const filter = createMemo(() => normalizeLowercaseStringOrEmpty(params.filter));
-  const filtered = createMemo(() =>
-    filter()
-      ? rawSkills().filter((skill) =>
-          normalizeLowercaseStringOrEmpty(
-            [skill.name, skill.description, skill.source].join(" "),
-          ).includes(filter()),
-        )
-      : rawSkills(),
+  const filtered = createMemo(
+    () =>
+      filter()
+        ? searchableSkills()
+            .filter((entry) => entry.text.includes(filter()))
+            .map((entry) => entry.skill)
+        : rawSkills(),
+    {
+      equals: (previous, next) =>
+        previous.length === next.length && previous.every((skill, index) => skill === next[index]),
+    },
   );
   const groups = createMemo(() => groupSkills(filtered()));
   const enabledCount = createMemo(() =>

@@ -75,6 +75,11 @@ export type GatewayRecoveryTypingParams = {
 };
 
 export type GatewayRecoveryRuntime = {
+  prepareFailedWorkerPlacement: (target: {
+    sessionId: string;
+    sessionKey: string;
+    agentId: string;
+  }) => Promise<{ reason: string; isCurrent: () => boolean; release: () => void } | undefined>;
   resumeChatInput: (
     target: import("./chat-input-recovery-source.js").ChatInputRecoveryTarget,
     options: {

@@ -3,6 +3,7 @@ import { writeFile } from "node:fs/promises";
 import { createServer, type ServerResponse } from "node:http";
 import type { AddressInfo } from "node:net";
 import { join } from "node:path";
+import { buffer as consumeBuffer } from "node:stream/consumers";
 import { Client as TeamsApiClient } from "@microsoft/teams.api";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { withTempDir } from "openclaw/plugin-sdk/test-env";
@@ -114,14 +115,11 @@ async function createConnectorFixture() {
     acceptMessage(response, `accepted-${requests.length}`);
   const server = createServer((request, response) => {
     void (async () => {
-      const chunks: Buffer[] = [];
-      for await (const chunk of request) {
-        chunks.push(Buffer.from(chunk));
-      }
+      const bodyBuffer = await consumeBuffer(request);
       requests.push({
         method: request.method ?? "",
         path: request.url ?? "",
-        activity: JSON.parse(Buffer.concat(chunks).toString("utf8")) as Record<string, unknown>,
+        activity: JSON.parse(bodyBuffer.toString("utf8")) as Record<string, unknown>,
       });
       respond(response);
     })().catch((error: unknown) => response.destroy(error as Error));

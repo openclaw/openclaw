@@ -1,8 +1,10 @@
+import { ErrorCodes, GatewayProtocolRequestError } from "@openclaw/gateway-client/browser";
 import type {
   SessionsPatchManyParams,
   SessionsPatchManyResult,
 } from "../../../../packages/gateway-protocol/src/index.js";
 import { SESSION_ARCHIVE_REQUEST_OPTIONS } from "../../../../src/shared/session-archive-timeout.ts";
+import { t } from "../../i18n/index.ts";
 import { formatUiError } from "../format-error.ts";
 import { showToast } from "../toast.ts";
 import {
@@ -20,12 +22,9 @@ import { projectSessionArchiveFields } from "./session-archive-state.ts";
 import { resolveSessionCreateParams } from "./session-create-params.ts";
 import { releaseSessionPatchPreview, type SessionPatchPreview } from "./session-deferred-patch.ts";
 import type { Deletion, SessionDeletionOperationsHost } from "./session-deletions.ts";
+import { sessionListAgentMatcher } from "./session-list-query.ts";
 import type { createSessionModelOverrides } from "./session-model-overrides.ts";
 import { registerSessionMutationOperations } from "./session-mutation-operations.ts";
-import {
-  createSessionMutationRefresh,
-  isRejectedSessionMutation,
-} from "./session-mutation-refresh.ts";
 import type { SessionMutationsHost } from "./session-mutations-host.ts";
 import { projectSessionPatchRowFields } from "./session-patch-row-facts.ts";
 import {
@@ -43,12 +42,48 @@ import type {
   SessionRequestClient,
 } from "./session-types.ts";
 
-export function reconcileConfirmedSessionConnection(
+/** Only definitive protocol rejection proves that the requested mutation did not commit. */
+function isRejectedSessionMutation(error: unknown): boolean {
+  return (
+    error instanceof GatewayProtocolRequestError &&
+    (error.gatewayCode === ErrorCodes.INVALID_REQUEST ||
+      error.gatewayCode === ErrorCodes.FORBIDDEN ||
+      error.gatewayCode === ErrorCodes.APPROVAL_NOT_FOUND)
+  );
+}
+
+/** Reconcile committed mutations without confusing refresh failures with failed writes. */
+export async function reconcileConfirmedSessionConnection(
   host: SessionMutationsHost,
   scope: SessionConnectionScope,
   agentId?: string | null,
 ): Promise<boolean> {
-  return createSessionMutationRefresh(host).reconcileConfirmedPreviousConnection(scope, agentId);
+  const replacement = host.connection.capture();
+  if (!replacement || replacement.client !== scope.client) {
+    return false;
+  }
+  let refreshError: string | undefined;
+  try {
+    const outcome = await host.reconcileMutation(agentId);
+    refreshError = outcome.status === "failed" ? outcome.error : undefined;
+  } catch (error) {
+    refreshError = formatUiError(error);
+  }
+  if (!host.connection.isCurrent(replacement)) {
+    return false;
+  }
+  host.publish(
+    {
+      ...host.readState(),
+      error: refreshError
+        ? t("connection.sessionOperationCompletedPreviousConnectionWithRefreshError", {
+            error: refreshError,
+          })
+        : t("connection.sessionOperationCompletedPreviousConnection"),
+    },
+    "operation",
+  );
+  return true;
 }
 
 export async function runSessionPatch(
@@ -82,8 +117,48 @@ export async function runSessionPatch(
     canDispatchSettings,
     patchRowLocal,
   } = owner;
-  const { reconcileConfirmedPreviousConnection, refreshCategory, reportUncertainCategory } =
-    createSessionMutationRefresh(host);
+  // Placement receipts complete immediately; the roster owner reconciles asynchronously.
+  const refreshCategory = (refreshScope: SessionConnectionScope, agentId?: string | null): void => {
+    // A scoped read cannot acquire error ownership by later selecting its agent.
+    // A replacement foreground snapshot retires this warning, not row reconciliation.
+    const foreground = host.readState();
+    const ownsForeground = sessionListAgentMatcher(agentId)(foreground.agentId);
+    const isErrorCurrent = () => {
+      const current = host.readState();
+      return (
+        ownsForeground &&
+        host.connection.isCurrent(refreshScope) &&
+        current.agentId === foreground.agentId &&
+        current.result === foreground.result &&
+        current.resultCached === foreground.resultCached
+      );
+    };
+    const report = (error: string) => {
+      if (isErrorCurrent()) {
+        host.publish(
+          { ...host.readState(), error: t("connection.sessionMoveRefreshFailed", { error }) },
+          "operation",
+        );
+      }
+    };
+    void host
+      .reconcileMutation(agentId, isErrorCurrent)
+      .then((outcome) => {
+        if (outcome.status === "failed") {
+          report(outcome.error);
+        }
+      })
+      .catch((error: unknown) => report(formatUiError(error)));
+  };
+  // Reconcile the original owner after transport loss without retrying its write.
+  const reportUncertainCategory = (error: unknown, agentId?: string | null): Error => {
+    void host.reconcileMutation(agentId).catch(() => undefined);
+    const uncertainty = new Error(
+      t("connection.sessionMoveUncertain", { error: formatUiError(error) }),
+    );
+    host.publish({ ...host.readState(), error: uncertainty.message }, "operation");
+    return uncertainty;
+  };
   let rowPatchConfirmed = false;
   let writeConfirmed = false;
   let permissionProjection: SessionPermissionClaim | undefined;
@@ -131,7 +206,9 @@ export async function runSessionPatch(
     writeConfirmed = true;
     if (!host.connection.isCurrent(scope)) {
       settleOptimisticPatch(false);
-      return (await reconcileConfirmedPreviousConnection(scope, options.agentId)) ? result : null;
+      return (await reconcileConfirmedSessionConnection(host, scope, options.agentId))
+        ? result
+        : null;
     }
     options.onConfirmed?.(result);
     // The receipt can bind a previously unbound settings target synchronously.
@@ -208,7 +285,9 @@ export async function runSessionPatch(
       }
       if (!host.connection.isCurrent(scope)) {
         settleOptimisticPatch(false);
-        return (await reconcileConfirmedPreviousConnection(scope, options.agentId)) ? result : null;
+        return (await reconcileConfirmedSessionConnection(host, scope, options.agentId))
+          ? result
+          : null;
       }
       if (permissionProjection?.isCurrent() === false) {
         settleOptimisticPatch(true);

@@ -13,8 +13,12 @@ import {
   pickerValue as modelPickerValue,
 } from "../test-helpers/select-picker-e2e.ts";
 import { sessionsUsageResponse } from "../test-helpers/sessions-usage-response.ts";
+import { agentRoster } from "./agent-roster.test-support.ts";
 import { createSettingsPageOptions } from "./config-composer-fixtures.test-support.ts";
-import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
+import {
+  createControlUiE2eContextOptions,
+  createControlUiE2eSuite,
+} from "./control-ui-e2e-suite.test-support.ts";
 import { expandProvider } from "./model-providers.test-support.ts";
 
 const suite = createControlUiE2eSuite({
@@ -192,12 +196,7 @@ suite.define(() => {
     "opens existing provider settings from %s without starting a connection",
     async (origin) => {
       await suite.withPage(
-        {
-          locale: "en-US",
-          reducedMotion: "reduce",
-          serviceWorkers: "block",
-          viewport: { width: 1280, height: 900 },
-        },
+        { ...createControlUiE2eContextOptions(), reducedMotion: "reduce" },
         async ({ page }) => {
           const gateway = await installMockGateway(page, {
             assistantAgentId: "main",
@@ -213,15 +212,7 @@ suite.define(() => {
               },
             ],
             methodResponses: {
-              "agents.list": {
-                defaultId: "main",
-                mainKey: "main",
-                scope: "per-sender",
-                agents: [
-                  { id: "main", name: "Main" },
-                  { id: "writer", name: "Writer" },
-                ],
-              },
+              "agents.list": agentRoster({ main: "Main", writer: "Writer" }, "main", "per-sender"),
               "models.authStatus": {
                 ts: 1,
                 providers: [
@@ -391,7 +382,6 @@ suite.define(() => {
     );
   });
   it.each([
-    { value: "all", label: "Show all Example models", native: false },
     { value: "keep", label: "Keep current restrictions", native: false },
     { value: "all", label: "Show all Example models", native: true },
   ])("keeps the default after $value model access (native: $native)", async (modelAccess) => {
@@ -574,13 +564,9 @@ suite.define(() => {
   });
   it("shows a provider's accounts and every connection method before browser sign-in", async () => {
     await suite.withPage(
-      {
-        locale: "en-US",
-        reducedMotion: "reduce",
-        serviceWorkers: "block",
-        viewport: { width: 1280, height: 900 },
-      },
+      { ...createControlUiE2eContextOptions(), reducedMotion: "reduce" },
       async ({ page, context }) => {
+        const now = Date.now();
         const signInUrl = "https://provider.example/sign-in";
         await context.route("https://provider.example/**", (route) =>
           route.fulfill({
@@ -600,7 +586,7 @@ suite.define(() => {
           ],
           methodResponses: {
             "models.authStatus": {
-              ts: 1,
+              ts: now,
               providers: [
                 {
                   provider: "openai",
@@ -619,6 +605,7 @@ suite.define(() => {
                       profileId: "openai:siwc",
                       type: "oauth",
                       status: "expiring",
+                      expiry: { at: now + 3_600_000, remainingMs: 3_600_000, label: "1h" },
                       source: "saved",
                       email: "alex@example.invalid",
                       displayName: "Sign in with ChatGPT",
@@ -702,7 +689,11 @@ suite.define(() => {
         expect(await profiles.first().textContent()).toContain("alex@example.invalid");
         expect(await profiles.first().textContent()).toContain("Codex CLI");
         expect(await profiles.last().textContent()).toContain("alex@example.invalid");
-        expect(await profiles.last().textContent()).toContain("Expiring");
+        expect(await profiles.last().textContent()).toContain("Access token expires in 1h");
+        expect(await profiles.last().textContent()).toContain("Credentials configured");
+        expect(await profiles.last().textContent()).toContain(
+          "Access-token expiry alone does not mean you need to sign in again.",
+        );
         const connectionMethod = (label: string) =>
           dialog.getByRole("button").filter({
             has: page.locator("strong").filter({ hasText: label }),

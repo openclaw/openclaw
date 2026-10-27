@@ -164,11 +164,6 @@ test.each(["current", "revoked"] as const)(
           base: { sessionId: sessionIds[2] },
           archivedGenerations: [false, false, false],
         });
-        for (const [index, sessionId] of sessionIds.entries()) {
-          expect(await loadTranscriptEvents({ sessionKey, sessionId, storePath })).toEqual([
-            events[index],
-          ]);
-        }
       } else {
         expect(result).toMatchObject({
           outcome: { response: { ok: true, payload: { removed: true } } },
@@ -176,9 +171,11 @@ test.each(["current", "revoked"] as const)(
           archivedGenerations: [true, true, true],
           handlerErrors: [],
         });
-        for (const sessionId of sessionIds) {
-          expect(await loadTranscriptEvents({ sessionKey, sessionId, storePath })).toEqual([]);
-        }
+      }
+      for (const [index, sessionId] of sessionIds.entries()) {
+        expect(await loadTranscriptEvents({ sessionKey, sessionId, storePath })).toEqual(
+          authority === "revoked" ? [events[index]] : [],
+        );
       }
     } finally {
       vi.useRealTimers();

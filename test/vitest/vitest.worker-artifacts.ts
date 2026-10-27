@@ -44,10 +44,11 @@ export function compiledSubprocessesPlugin(): Plugin {
       }
       // Declaration selection changes source versus compiled imports; generations
       // with the same selection can share parent transforms.
-      defineCacheKeyGenerator(() =>
-        nativeSchtasksIntegrationEnabled
-          ? "openclaw:compiled-subprocesses:native-schtasks"
-          : "openclaw:compiled-subprocesses",
+      defineCacheKeyGenerator(
+        () =>
+          (nativeSchtasksIntegrationEnabled
+            ? "openclaw:compiled-subprocesses:native-schtasks"
+            : "openclaw:compiled-subprocesses") + `:${supplied.preset ?? "full"}`,
       );
       const instance = vitest as WorkerVitest;
       if (!instance[ownerKey]) {

@@ -190,10 +190,14 @@ export async function claimSubagentYieldInRuns(params: {
         ...resetRequesterSettleWakeRetry(entry.requesterSettleWake),
         batchRunIds: entry.requesterSettleWake?.batchRunIds ?? [entry.runId],
         pauseNotice: {
-          acknowledgment: truncateUtf16Safe(
-            params.acknowledgment?.trim() || "Paused awaiting continuation.",
-            12_000,
-          ),
+          // A pending wake can outlive the reply that supplied this bounded notice.
+          acknowledgment: Buffer.from(
+            truncateUtf16Safe(
+              params.acknowledgment?.trim() || "Paused awaiting continuation.",
+              12_000,
+            ),
+            "utf16le",
+          ).toString("utf16le"),
         },
       };
       return { value: { messageWaitRegistered: true }, postimages: new Map([[entry.runId, next]]) };

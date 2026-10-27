@@ -17,6 +17,8 @@ import { areDiagnosticsEnabledForProcess } from "../../../infra/diagnostic-event
 import { toErrorObject } from "../../../infra/errors.js";
 import type { AssistantMessageEvent } from "../../../llm/types.js";
 import { markDiagnosticRunProgress } from "../../../logging/diagnostic-run-activity.js";
+import { SESSION_WATCHDOG_WARNING_MS } from "../../../sessions/session-controller.watchdog-state.js";
+import type { SessionControllerWatchdogAttempt } from "../../../sessions/session-controller.watchdog.js";
 import { captureAsyncWorkTracker } from "../../../shared/async-work-scope.js";
 import { getLastToolActivityMs, onToolActivity } from "../../../shared/tool-activity-heartbeat.js";
 import { recordAgentCleanupFailure } from "../../run-cleanup-timeout.js";
@@ -24,7 +26,7 @@ import type { EmbeddedRunTrigger } from "../../run-trigger.js";
 import type { StreamFn } from "../../runtime/index.js";
 import type { MutableAssistantMessageEventStream } from "../../stream-compat.js";
 import { createStreamIteratorWrapper } from "../../stream-iterator-wrapper.js";
-import { abortable } from "./abortable.js";
+import { abortable, createAbortableError } from "./abortable.js";
 
 const DEFAULT_LLM_IDLE_TIMEOUT_MS = 120_000;
 const SELF_HOSTED_LLM_IDLE_TIMEOUT_MS = 300_000;
@@ -116,16 +118,6 @@ function hasLocalProviderAuthMarker(apiKey: unknown): boolean {
   return typeof apiKey === "string" && LOCAL_PROVIDER_AUTH_MARKERS.has(apiKey.trim().toLowerCase());
 }
 
-function hasConfiguredLocalProviderSignal(params: {
-  cfg: OpenClawConfig | undefined;
-  provider: string | undefined;
-}): boolean {
-  const providerConfig = findConfiguredProviderConfig(params.cfg, params.provider);
-  return Boolean(
-    providerConfig?.localService || hasLocalProviderAuthMarker(providerConfig?.apiKey),
-  );
-}
-
 type LlmTimeoutParams = {
   cfg?: OpenClawConfig;
   runTimeoutMs?: number;
@@ -135,12 +127,12 @@ type LlmTimeoutParams = {
 
 /**
  * Classifies the model endpoint locality shared by the idle and first-event
- * watchdogs. Ollama `*:cloud` models stay "cloud" even behind a local proxy,
- * and so does any provider whose config declares `remote: true` (a loopback
- * or private relay in front of a hosted API).
+ * watchdogs. Explicit remote providers and Ollama `*:cloud` models retain
+ * hosted timing behind local relays, including those managed by localService.
  */
 function resolveRuntimeModelLocality(params?: LlmTimeoutParams) {
-  if (findConfiguredProviderConfig(params?.cfg, params?.model?.provider)?.remote === true) {
+  const providerConfig = findConfiguredProviderConfig(params?.cfg, params?.model?.provider);
+  if (providerConfig?.remote === true) {
     return { isLocalRuntimeModel: false, isSelfHostedRuntimeModel: false };
   }
   const baseUrl = params?.model?.baseUrl;
@@ -156,10 +148,8 @@ function resolveRuntimeModelLocality(params?: LlmTimeoutParams) {
           hostname &&
           (EXPLICIT_LOCAL_HOSTNAMES.has(hostname) ||
             (isBareProviderHostname(hostname) &&
-              hasConfiguredLocalProviderSignal({
-                cfg: params?.cfg,
-                provider: params?.model?.provider,
-              }))),
+              (providerConfig?.localService ||
+                hasLocalProviderAuthMarker(providerConfig?.apiKey)))),
         )),
   };
 }
@@ -245,7 +235,11 @@ export function streamWithIdleTimeout(
   baseFn: StreamFn,
   timeoutMs: number,
   onIdleTimeout?: (error: Error) => void,
-  opts?: { runId?: string; scope?: "creation-and-gaps" | "creation-only" },
+  opts?: {
+    runId?: string;
+    scope?: "creation-and-gaps" | "creation-only";
+    watchdogAttempt?: Pick<SessionControllerWatchdogAttempt, "beginRequest">;
+  },
 ): StreamFn {
   const guardIterationGaps = opts?.scope !== "creation-only";
   const runId = opts?.runId;
@@ -254,6 +248,14 @@ export function streamWithIdleTimeout(
     const trackCleanup = captureAsyncWorkTracker();
     const streamAbortController = new AbortController();
     const firstEventTimeoutMs = clampTimeoutMs(getFirstStreamEventTimeoutMs(options) ?? timeoutMs);
+    let watchdogDeadlineAtMs: number | undefined = Date.now() + firstEventTimeoutMs;
+    const endWatchdogRequest = opts?.watchdogAttempt?.beginRequest({
+      get deadlineAtMs() {
+        return watchdogDeadlineAtMs === undefined
+          ? undefined
+          : watchdogDeadlineAtMs + SESSION_WATCHDOG_WARNING_MS;
+      },
+    });
     const startTimer = (
       delay: number,
       reject: (error: Error) => void,
@@ -262,6 +264,8 @@ export function streamWithIdleTimeout(
       name = "LlmIdleTimeoutError",
     ) => {
       return setTimeout(() => {
+        // The request fails first; retain time for attempt cleanup and retry admission.
+        endWatchdogRequest?.(Date.now() + SESSION_WATCHDOG_WARNING_MS);
         if (requestDeadline?.reject === reject) {
           requestTimedOut = true;
         }
@@ -292,6 +296,9 @@ export function streamWithIdleTimeout(
     const clearRequestDeadline = () => {
       clearTimeout(requestDeadline?.timer);
       requestDeadline = undefined;
+      if (!iterationWatchdogActive) {
+        watchdogDeadlineAtMs = undefined;
+      }
       if (!requestTimedOut) {
         requestTimeout = undefined;
       }
@@ -303,10 +310,15 @@ export function streamWithIdleTimeout(
       }
       requestDeadline.accepted = true;
       unsubscribeCreationActivity();
-      clearTimeout(requestDeadline.timer);
       // Acceptance can precede factory resolution and iterator admission.
       if (guardIterationGaps && !iterationWatchdogActive) {
-        requestDeadline.timer = startTimer(timeoutMs, requestDeadline.reject);
+        watchdogDeadlineAtMs = Date.now() + timeoutMs;
+        if (firstEventTimeoutMs === timeoutMs) {
+          requestDeadline.timer.refresh();
+        } else {
+          clearTimeout(requestDeadline.timer);
+          requestDeadline.timer = startTimer(timeoutMs, requestDeadline.reject);
+        }
       } else {
         clearRequestDeadline();
       }
@@ -338,6 +350,7 @@ export function streamWithIdleTimeout(
       sourceSignal?.addEventListener("abort", abortFromSourceSignal, { once: true });
     }
     const cleanupSourceSignal = () => {
+      endWatchdogRequest?.();
       clearRequestDeadline();
       sourceSignal?.removeEventListener("abort", abortFromSourceSignal);
     };
@@ -380,9 +393,21 @@ export function streamWithIdleTimeout(
           return returning;
         };
         let idleTimer: NodeJS.Timeout | undefined;
+        let idleTimerDelay = 0;
         let progressTimer: NodeJS.Timeout | undefined;
+        let progressTimerDelay = 0;
+        let progressTimerBudget = 0;
         let lastProgressAt = Date.now();
         let rejectIdleTimeout: ((error: Error) => void) | undefined;
+        const pendingAborts = new Set<(error: Error) => void>();
+        const abortIteration = () => {
+          if (sourceSignal) {
+            for (const reject of pendingAborts) {
+              reject(createAbortableError(sourceSignal));
+            }
+          }
+        };
+        sourceSignal?.addEventListener("abort", abortIteration, { once: true });
         // Consume pre-stream tool activity once; reusing it shortens later chunk budgets.
         let streamFirstArmDone = false;
         // Police parked consumers until the native producer settles. Content-free
@@ -393,41 +418,64 @@ export function streamWithIdleTimeout(
           clearTimeout(idleTimer);
           clearTimeout(progressTimer);
           idleTimer = progressTimer = undefined;
+          watchdogDeadlineAtMs = undefined;
         };
         const rejectTimeout = (error: Error) => {
           clearTimers();
           rejectIdleTimeout?.(error);
         };
         const armTimer = (progress = true) => {
-          clearTimeout(idleTimer);
           if (!guardIterationGaps || settled || (!producerCompletion && !rejectIdleTimeout)) {
             clearTimers();
             return;
           }
-          const activeToolMs = runId ? getLastToolActivityMs(runId) : 0;
-          const recentActivity = activeToolMs > 0 && Date.now() - activeToolMs < timeoutMs;
-          const isFirstStreamArm = !streamFirstArmDone;
-          const effectiveTimeout =
-            isFirstStreamArm && recentActivity
-              ? Math.max(1, timeoutMs - Math.max(0, Date.now() - activeToolMs))
-              : timeoutMs;
-          streamFirstArmDone = true;
-          idleTimer = startTimer(effectiveTimeout, rejectTimeout);
+          const now = Date.now();
+          let effectiveTimeout = timeoutMs;
+          if (!streamFirstArmDone) {
+            const activeToolMs = runId ? getLastToolActivityMs(runId) : 0;
+            if (activeToolMs > 0 && now - activeToolMs < timeoutMs) {
+              effectiveTimeout = Math.max(1, timeoutMs - Math.max(0, now - activeToolMs));
+            }
+            streamFirstArmDone = true;
+          }
+          if (idleTimer && idleTimerDelay === effectiveTimeout) {
+            idleTimer.refresh();
+          } else {
+            clearTimeout(idleTimer);
+            idleTimer = startTimer(effectiveTimeout, rejectTimeout);
+            idleTimerDelay = effectiveTimeout;
+          }
           iterationWatchdogActive = true;
           if (requestDeadline?.accepted) {
             clearRequestDeadline();
           }
           if (progress) {
-            lastProgressAt = Date.now();
+            lastProgressAt = now;
           }
-          clearTimeout(progressTimer);
-          progressTimer = startTimer(
-            Math.max(1, progressTimeoutMs - (Date.now() - lastProgressAt)),
-            rejectTimeout,
-            progressTimeoutMs,
-            "no model progress",
-            "LlmNoProgressError",
+          watchdogDeadlineAtMs = Math.min(
+            now + effectiveTimeout,
+            lastProgressAt + progressTimeoutMs,
           );
+          // Heartbeats preserve the progress deadline; only real progress resets it.
+          if (
+            progress &&
+            progressTimer &&
+            progressTimerDelay === progressTimeoutMs &&
+            progressTimerBudget === progressTimeoutMs
+          ) {
+            progressTimer.refresh();
+          } else if (progress || !progressTimer || progressTimerBudget !== progressTimeoutMs) {
+            clearTimeout(progressTimer);
+            progressTimerBudget = progressTimeoutMs;
+            progressTimerDelay = Math.max(1, progressTimeoutMs - (now - lastProgressAt));
+            progressTimer = startTimer(
+              progressTimerDelay,
+              rejectTimeout,
+              progressTimeoutMs,
+              "no model progress",
+              "LlmNoProgressError",
+            );
+          }
         };
         const unsubscribeLlmActivity = onLlmRequestActivity(
           streamAbortController.signal,
@@ -456,26 +504,46 @@ export function streamWithIdleTimeout(
         // Without native completion, preserve structural streams' historical
         // pending-next guard: a parked consumer cannot prove producer silence.
         void producerCompletion?.then(settle, settle);
+        let iteratorFinished = false;
+        const releaseAbortListener = () => {
+          if (iteratorFinished && pendingAborts.size === 0) {
+            sourceSignal?.removeEventListener("abort", abortIteration);
+          }
+        };
+        const finishIterator = () => {
+          settle();
+          iteratorFinished = true;
+          releaseAbortListener();
+        };
 
         return createStreamIteratorWrapper({
           iterator,
           next: async (streamIterator) => {
             let pendingNext: ReturnType<typeof streamIterator.next> | undefined;
+            let rejectAbort: ((error: Error) => void) | undefined;
             try {
-              const timeoutPromise = new Promise<never>((_, reject) => {
-                rejectIdleTimeout = reject;
-                armTimer(false);
-              });
-              // Providers may ignore their mirrored abort signal, so caller
-              // cancellation must also settle this exact iterator wait.
-              pendingNext = streamIterator.next();
-              const result = await withSourceAbort(
-                withRequestTimeout(Promise.race([pendingNext, timeoutPromise])),
+              const waiting = new Promise<IteratorResult<AssistantMessageEvent>>(
+                (resolve, reject) => {
+                  rejectIdleTimeout = reject;
+                  rejectAbort = reject;
+                  if (sourceSignal) {
+                    pendingAborts.add(reject);
+                  }
+                  armTimer(false);
+                  // Cancellation rejects this wait synchronously, before a provider's
+                  // mirrored-signal rejection can replace the caller's abort reason.
+                  pendingNext = streamIterator.next();
+                  void pendingNext.then(resolve, reject);
+                  if (sourceSignal?.aborted) {
+                    reject(createAbortableError(sourceSignal));
+                  }
+                },
               );
+              const result = await withRequestTimeout(waiting);
               finishCreation();
 
               if (result.done) {
-                settle();
+                finishIterator();
                 return result;
               }
 
@@ -487,21 +555,26 @@ export function streamWithIdleTimeout(
               armTimer(!producerReportsActivity);
               return result;
             } catch (error) {
-              settle();
+              finishIterator();
               // The caller's race can finish before the iterator's admitted
               // work. Its owner retains both operations through settlement.
               void trackCleanup(() => Promise.allSettled([pendingNext, returnIterator()])).catch(
                 () => recordAgentCleanupFailure(),
               );
-              throw error;
+              throw sourceSignal ? toErrorObject(error, "Non-Error rejection") : error;
+            } finally {
+              if (rejectAbort) {
+                pendingAborts.delete(rejectAbort);
+              }
+              releaseAbortListener();
             }
           },
           onReturn(_streamIterator, value) {
-            settle();
+            finishIterator();
             return returnIterator(value);
           },
           onThrow(streamIterator, error) {
-            settle();
+            finishIterator();
             return (
               streamIterator.throw?.(error) ??
               Promise.reject(toErrorObject(error, "Non-Error rejection"))

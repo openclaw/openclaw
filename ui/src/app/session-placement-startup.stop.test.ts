@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { GATEWAY_STARTUP_ADMISSION_WAIT_MS } from "../../../packages/gateway-protocol/src/startup-unavailable.js";
 import { createDeferred } from "../../../test/helpers/promise.js";
-import { GatewayRequestError } from "../api/gateway.ts";
+import { GatewayRequestError } from "../api/gateway-connect-errors.ts";
 import { requestCloudWorkerStop } from "../components/cloud-worker-stop.runtime.ts";
 import {
   pauseSessionPlacementRecovery,
@@ -12,6 +12,7 @@ import {
 import * as toast from "../lib/toast.ts";
 import { reviewPrivateComposerDraft } from "../pages/chat/components/private-composer-recovery-dialog.tsx";
 import { PendingSessionPlacementRecoveryState } from "../pages/new-session/session-placement-recovery-state.ts";
+import { restoreMocksAndGlobals } from "../test-helpers/mock-cleanup.ts";
 import { createStorageMock } from "../test-helpers/storage.ts";
 import { createChatAttachmentHandoff } from "./chat-attachment-handoff.ts";
 import { canReloadControlUiDocument } from "./document-reload-guard.ts";
@@ -36,10 +37,7 @@ describe("placement startup Stop", () => {
   const recoveryAccess = { readSessionPlacementRecovery, pauseSessionPlacementRecovery };
 
   beforeEach(() => sessionStorage.clear());
-  afterEach(() => {
-    vi.restoreAllMocks();
-    vi.unstubAllGlobals();
-  });
+  afterEach(() => restoreMocksAndGlobals());
 
   function createStopHarness(phase: string) {
     const moduleLoad = createDeferred<{ default: typeof createRuntime }>();
@@ -566,10 +564,7 @@ describe("placement startup reload", () => {
     // Each case represents a fresh document, including in-memory reload ownership.
     vi.stubGlobal("sessionStorage", createStorageMock());
   });
-  afterEach(() => {
-    vi.restoreAllMocks();
-    vi.unstubAllGlobals();
-  });
+  afterEach(() => restoreMocksAndGlobals());
 
   it("reloads a saved paused startup after a cached import failure", async () => {
     const reload = vi

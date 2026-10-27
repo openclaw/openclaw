@@ -209,8 +209,6 @@ async function prepareSourceRequest(
 ): Promise<GatewaySessionStoreSourceRequest | undefined> {
   const paths = createOpenClawAgentDatabasePathMatcher();
   memo.pathsCurrent = () => paths.isCurrent();
-  paths(params.registryPath, params.registryPath);
-  observe(params.registryPath);
   const inventory = prepareSessionStoreTargetInventory(
     sessionStoreRoutingConfig(routing),
     routing.agentIds,

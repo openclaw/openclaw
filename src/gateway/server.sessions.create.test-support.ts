@@ -212,4 +212,38 @@ export async function withFixedOwnerSessionStore(
   }
 }
 
+export function sessionCreateRuntimeClient(scopes: string[]) {
+  return {
+    connect: { scopes },
+    internal: {
+      agentRuntimeIdentity: {
+        kind: "agentRuntime",
+        agentId: "main",
+        sessionKey: "agent:main:main",
+      },
+    },
+  };
+}
+
 export { sessionDiffBaselineMocks, dashboardTitleGenerationMocks, dashboardTitleScheduleMocks };
+
+export function createGuestSandboxSessionConfig(storePath: string, others: "none" | "view") {
+  return {
+    ...getRuntimeConfig(),
+    session: { ...getRuntimeConfig().session, store: storePath },
+    gateway: {
+      ...getRuntimeConfig().gateway,
+      roles: {
+        default: "guest",
+        definitions: {
+          guest: {
+            sessions: { others },
+            agents: ["main"],
+            scopes: ["operator.read" as const, "operator.write" as const],
+            sandbox: "required" as const,
+          },
+        },
+      },
+    },
+  };
+}

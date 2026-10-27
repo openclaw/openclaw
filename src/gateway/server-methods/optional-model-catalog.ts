@@ -4,7 +4,7 @@ import type { GatewayRequestContext } from "./types.js";
 /** Reads already-published startup facts without starting provider discovery on an RPC hot path. */
 export async function readPreparedServerMethodModelCatalog(
   context: GatewayRequestContext,
-  options?: { agentId?: string },
+  options?: { agentId?: string; includeSessionRowPolicy?: boolean },
 ): Promise<PreparedGatewayModelCatalog | undefined> {
   try {
     return await context.readPreparedGatewayModelCatalog?.(options);
@@ -18,17 +18,21 @@ export async function readPreparedServerMethodModelCatalog(
 export async function readPreparedServerMethodModelCatalogs(
   context: GatewayRequestContext,
   agentIds: readonly string[],
+  options?: { includeSessionRowPolicy?: boolean },
 ): Promise<Map<string, PreparedGatewayModelCatalog | undefined>> {
   const catalogs = new Map<string, PreparedGatewayModelCatalog | undefined>();
   if (!context.readPreparedGatewayModelCatalogBatch) {
     // Public SDK contexts from older hosts may only provide the scalar reader.
     for (const agentId of agentIds) {
-      catalogs.set(agentId, await readPreparedServerMethodModelCatalog(context, { agentId }));
+      catalogs.set(
+        agentId,
+        await readPreparedServerMethodModelCatalog(context, { ...options, agentId }),
+      );
     }
     return catalogs;
   }
   try {
-    const results = await context.readPreparedGatewayModelCatalogBatch(agentIds);
+    const results = await context.readPreparedGatewayModelCatalogBatch(agentIds, options);
     agentIds.forEach((agentId, index) => {
       const result = results[index];
       catalogs.set(agentId, result?.status === "fulfilled" ? result.value : undefined);

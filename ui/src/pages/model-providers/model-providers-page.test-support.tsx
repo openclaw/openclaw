@@ -12,6 +12,7 @@ import type { RouteId } from "../../app-routes.ts";
 import type { ApplicationContext, ApplicationGatewaySnapshot } from "../../app/context.ts";
 import { createGatewayMetadataObserver } from "../../app/gateway-observers.ts";
 import type { SelectPicker } from "../../components/select-picker.ts";
+import { agentRoster } from "../../e2e/agent-roster.test-support.ts";
 import { invalidateChatMetadataStore } from "../../lib/chat/chat-metadata-cache.ts";
 import type {
   RuntimeConfigExternalMutationOptions,
@@ -357,15 +358,7 @@ export function createHarness(initialScopeId: string) {
     gateway: gatewaySource.gateway,
     agents: {
       state: {
-        agentsList: {
-          defaultId: "main",
-          mainKey: "main",
-          scope: "project",
-          agents: [
-            { id: "main", name: "Main" },
-            { id: "writer", name: "Writer" },
-          ],
-        },
+        agentsList: agentRoster({ main: "Main", writer: "Writer" }, "main", "project"),
         agentsLoading: false,
         agentsError: null as string | null,
       },

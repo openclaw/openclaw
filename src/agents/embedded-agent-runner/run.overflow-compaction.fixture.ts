@@ -16,6 +16,7 @@ export function makeOverflowError(message: string = DEFAULT_OVERFLOW_ERROR_MESSA
 }
 
 type MockRuntimePlan = Pick<AgentRuntimePlan, "auth"> & {
+  transport: Pick<AgentRuntimePlan["transport"], "resolveExtraParams">;
   observability: Pick<AgentRuntimePlan["observability"], "harnessId">;
 };
 
@@ -27,6 +28,9 @@ export function makeMockRuntimePlan(): MockRuntimePlan {
     },
     observability: {
       harnessId: "codex",
+    },
+    transport: {
+      resolveExtraParams: () => ({}),
     },
   };
 }

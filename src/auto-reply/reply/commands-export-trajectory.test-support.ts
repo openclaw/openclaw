@@ -84,10 +84,11 @@ describe("buildExportTrajectoryCommandReply", () => {
     vi.clearAllMocks();
   });
 
-  it("requests per-run exec approval for trajectory exports", async () => {
+  it("requests per-run approval with shell-safe trajectory export values", async () => {
     const { execCalls } = mockCommandBoundaries();
     const params = makeParams();
     params.ctx.ApprovalReviewerDeviceId = "device-trajectory-reviewer";
+    params.command.commandBodyNormalized = "/export-trajectory bad'; Invoke-Expression evil ;'";
 
     const reply = await buildExportTrajectoryCommandReply(params);
 
@@ -115,10 +116,15 @@ describe("buildExportTrajectoryCommandReply", () => {
     const command = execCall.params.command;
     expect(command).not.toContain("--session-key");
     expect(command).not.toContain("openclaw sessions export-trajectory");
+    expect(command).toMatch(/'?sessions'?\s+'?export-trajectory'?/u);
+    expect(command).toMatch(/'?--request-json-base64'?\s+'?[A-Za-z0-9_-]+'?/u);
+    expect(command).toMatch(/'?--json'?$/u);
+    expect(command).not.toContain("Invoke-Expression");
     const request = readEncodedRequestFromCommand(command);
     expect(request).toMatchObject({
       sessionKey: "agent:target:session",
       workspace: params.workspaceDir,
+      output: "bad'; Invoke-Expression evil ;'",
     });
   });
 
@@ -151,21 +157,6 @@ describe("buildExportTrajectoryCommandReply", () => {
     expect(reply.text?.endsWith(text)).toBe(true);
   });
 
-  it("keeps user-controlled export values out of the shell command", async () => {
-    const { execCalls } = mockCommandBoundaries();
-    const params = makeParams();
-    params.command.commandBodyNormalized = "/export-trajectory bad'; Invoke-Expression evil ;'";
-
-    await buildExportTrajectoryCommandReply(params);
-
-    const command = expectDefined(execCalls[0], "exec call").params.command;
-    expect(command).toMatch(/'?sessions'?\s+'?export-trajectory'?/u);
-    expect(command).toMatch(/'?--request-json-base64'?\s+'?[A-Za-z0-9_-]+'?/u);
-    expect(command).toMatch(/'?--json'?$/u);
-    expect(command).not.toContain("Invoke-Expression");
-    expect(readEncodedRequestFromCommand(command).output).toBe("bad'; Invoke-Expression evil ;'");
-  });
-
   it.each(["path", "spaced path", "encoded request"])(
     "rejects oversized %s before exec approval",
     async (kind) => {
@@ -187,12 +178,14 @@ describe("buildExportTrajectoryCommandReply", () => {
     },
   );
 
-  it("keeps suppressed trajectory export requests private", async () => {
+  it.each([true, false])("keeps group exports private (owner route=%s)", async (hasRoute) => {
     const { execCalls, privateReplies } = mockCommandBoundaries({
-      privateTargets: [
-        { channel: "telegram", to: "owner-dm", accountId: "account-1" },
-        { channel: "whatsapp", to: "backup-owner-dm", accountId: "account-2" },
-      ],
+      privateTargets: hasRoute
+        ? [
+            { channel: "telegram", to: "owner-dm", accountId: "account-1" },
+            { channel: "whatsapp", to: "backup-owner-dm", accountId: "account-2" },
+          ]
+        : [],
     });
     const params = makeParams();
     params.isGroup = true;
@@ -201,23 +194,17 @@ describe("buildExportTrajectoryCommandReply", () => {
     params.ctx.MessageThreadId = 42;
 
     const reply = await buildExportTrajectoryCommandReply(params);
-
+    if (!hasRoute) {
+      expect(reply.text).toContain("Run /export-trajectory from an owner DM");
+      expect(execCalls).toHaveLength(0);
+      expect(privateReplies).toHaveLength(0);
+      return;
+    }
     expect(reply.text).toContain("Private delivery of the export request was suppressed");
     expect(reply.text).not.toContain(params.workspaceDir);
     expect(reply.text).not.toContain("traj-approval");
     expect(reply.text).not.toContain("--request-json-base64");
     expect(reply.text).not.toContain("agent:target:session");
-    const route = commandMocks.resolvePrivateCommandRouteTargets.mock.calls[0]?.[0];
-    expect(route).toMatchObject({
-      id: "trajectory-export-private-route",
-      commandParams: {
-        agentId: "target",
-        sessionKey: "agent:target:session",
-        command: { channel: "quietchat" },
-        ctx: { OriginatingTo: "origin-group", AccountId: "account-1", MessageThreadId: 42 },
-      },
-      commandArgv: expect.arrayContaining(["sessions", "export-trajectory", "--json"]),
-    });
     expect(privateReplies).toHaveLength(1);
     expect(privateReplies[0]?.targets).toEqual([
       { channel: "telegram", to: "owner-dm", accountId: "account-1" },
@@ -232,18 +219,5 @@ describe("buildExportTrajectoryCommandReply", () => {
       currentChannelId: "owner-dm",
       accountId: "account-1",
     });
-  });
-
-  it("fails closed in groups when no private owner route is available", async () => {
-    const { execCalls, privateReplies } = mockCommandBoundaries();
-    const params = makeParams();
-    params.isGroup = true;
-    params.command.to = "group-1";
-
-    const reply = await buildExportTrajectoryCommandReply(params);
-
-    expect(reply.text).toContain("Run /export-trajectory from an owner DM");
-    expect(execCalls).toHaveLength(0);
-    expect(privateReplies).toHaveLength(0);
   });
 });

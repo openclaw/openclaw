@@ -42,6 +42,17 @@ function toolEvent(phase: string, toolCallId: string, extra: Record<string, unkn
   return ["tool", { phase, name: "Bash", toolCallId, ...extra }] satisfies CliEvent;
 }
 
+function replySpies() {
+  return {
+    onItemEvent: vi.fn<NonNullable<GetReplyOptions["onItemEvent"]>>(async () => undefined),
+    onToolStart: vi.fn<NonNullable<GetReplyOptions["onToolStart"]>>(async () => undefined),
+    onPartialReply: vi.fn<NonNullable<GetReplyOptions["onPartialReply"]>>(async () => undefined),
+    onReasoningStream: vi.fn<NonNullable<GetReplyOptions["onReasoningStream"]>>(
+      async () => undefined,
+    ),
+  };
+}
+
 function releaseTypingAfterRun(typing: { resolve: () => void }, run: Promise<unknown>) {
   const finish = async () => {
     typing.resolve();
@@ -104,27 +115,6 @@ describe("executeAgentTurn: CLI progress bridging", () => {
     expect(previewOrder).toEqual(["Hello", "Hello released", "Hello world"]);
   });
 
-  it("bridges CLI tool agent events into onToolStart for live preview", async () => {
-    const followupRun = createCliRun("claude-cli", "claude-opus-4-6");
-    mockCliEvents(
-      [
-        toolEvent("start", "toolu_01ABCD", { args: { command: "ls -la" } }),
-        toolEvent("result", "toolu_01ABCD", { isError: false }),
-      ],
-      "done",
-      false,
-    );
-
-    const onToolStart = vi.fn<NonNullable<GetReplyOptions["onToolStart"]>>(async () => undefined);
-
-    await executeCliTurn(followupRun, { onToolStart });
-    await nextImmediate();
-
-    expect(onToolStart).toHaveBeenCalledTimes(1);
-    const call = onToolStart.mock.calls[0]?.[0];
-    expect([call?.name, call?.phase, call?.args]).toEqual(["Bash", "start", { command: "ls -la" }]);
-  });
-
   it.each(["assistant", "tool"] as const)(
     "starts %s progress first while typing is slow",
     async (first) => {
@@ -135,7 +125,7 @@ describe("executeAgentTurn: CLI progress bridging", () => {
       mockCliEvents(
         assistantFirst
           ? [event("answer before tool"), event("answer before tool 2", " 2"), tool("start")]
-          : [tool("start"), tool("update"), event("answer after tool")],
+          : [tool("start"), tool("update"), tool("result"), event("answer after tool")],
       );
       const typing = createDeferred();
       const typingSignals = createMockTypingSignaler();
@@ -143,6 +133,10 @@ describe("executeAgentTurn: CLI progress bridging", () => {
         assistantFirst ? typingSignals.signalTextDelta : typingSignals.signalToolStart,
       ).mockReturnValue(typing.promise);
       const callbackOrder: string[] = [];
+      const toolCalls: unknown[] = [];
+      const expectedOrder = assistantFirst
+        ? ["partial:answer before tool", "partial:answer before tool 2", "tool"]
+        : ["tool:start", "tool:update", "partial:answer after tool"];
       const lastStarted = createDeferred();
       const runPromise = executeCliTurn(
         createCliRun("claude-cli", "claude-opus-4-6"),
@@ -155,6 +149,7 @@ describe("executeAgentTurn: CLI progress bridging", () => {
             }
           },
           onToolStart: (payload) => {
+            toolCalls.push([payload.name, payload.args]);
             callbackOrder.push(assistantFirst ? "tool" : `tool:${payload.phase}`);
             if (assistantFirst) {
               lastStarted.resolve();
@@ -167,14 +162,14 @@ describe("executeAgentTurn: CLI progress bridging", () => {
 
       try {
         await Promise.race([lastStarted.promise, runPromise]);
-        expect(callbackOrder).toEqual(
-          assistantFirst
-            ? ["partial:answer before tool", "partial:answer before tool 2", "tool"]
-            : ["tool:start", "tool:update", "partial:answer after tool"],
-        );
+        expect(callbackOrder).toEqual(expectedOrder);
       } finally {
         await finish();
       }
+      expect(callbackOrder).toEqual(expectedOrder);
+      expect(toolCalls).toEqual(
+        Array.from({ length: assistantFirst ? 1 : 2 }, () => ["Bash", { command: "echo hi" }]),
+      );
     },
   );
 
@@ -195,7 +190,7 @@ describe("executeAgentTurn: CLI progress bridging", () => {
       true,
     );
 
-    const onItemEvent = vi.fn<NonNullable<GetReplyOptions["onItemEvent"]>>(async () => undefined);
+    const { onItemEvent } = replySpies();
 
     await executeCliTurn(followupRun, {
       onItemEvent,
@@ -226,13 +221,7 @@ describe("executeAgentTurn: CLI progress bridging", () => {
               [stream, { text: "NO_REPLY do not preview", delta: " do not preview" }],
             ],
       );
-      const onToolStart = vi.fn<NonNullable<GetReplyOptions["onToolStart"]>>(async () => undefined);
-      const onPartialReply = vi.fn<NonNullable<GetReplyOptions["onPartialReply"]>>(
-        async () => undefined,
-      );
-      const onReasoningStream = vi.fn<NonNullable<GetReplyOptions["onReasoningStream"]>>(
-        async () => undefined,
-      );
+      const { onToolStart, onPartialReply, onReasoningStream } = replySpies();
       await executeCliTurn(followupRun, { onToolStart, onPartialReply, onReasoningStream });
       await nextImmediate();
       expect(onToolStart).not.toHaveBeenCalled();
@@ -252,9 +241,7 @@ describe("executeAgentTurn: CLI progress bridging", () => {
       "Thinking about it",
     );
 
-    const onReasoningStream = vi.fn<NonNullable<GetReplyOptions["onReasoningStream"]>>(
-      async (_payload) => undefined,
-    );
+    const { onReasoningStream } = replySpies();
 
     await executeCliTurn(followupRun, { onReasoningStream });
 
@@ -307,17 +294,16 @@ describe("executeAgentTurn: CLI progress bridging", () => {
       return { payloads: [{ text: parser.getOutput()?.text ?? "" }], meta: {} };
     });
 
-    const onPartialReply = vi.fn<NonNullable<GetReplyOptions["onPartialReply"]>>(
-      async () => undefined,
-    );
-    const onReasoningStream = vi.fn<NonNullable<GetReplyOptions["onReasoningStream"]>>(
-      async () => undefined,
-    );
+    const { onPartialReply, onReasoningStream } = replySpies();
 
     await executeCliTurn(followupRun, { onPartialReply, onReasoningStream });
 
-    expect(onReasoningStream.mock.calls.map(([payload]) => payload.text)).toEqual([
-      "Private analysis.",
+    expect(onReasoningStream.mock.calls.map(([payload]) => payload)).toEqual([
+      {
+        text: "Private analysis.",
+        isReasoningSnapshot: true,
+        requiresReasoningProgressOptIn: true,
+      },
     ]);
     expect(onPartialReply.mock.calls.map(([payload]) => payload.text)).toEqual(["Visible answer."]);
   });

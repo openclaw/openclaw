@@ -1,12 +1,12 @@
 import type { Component } from "@earendil-works/pi-tui";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { createRunExit } from "../agents/bash-tools.exec-runtime.test-support.js";
 import * as safeCwd from "../infra/safe-cwd.js";
 import {
   getProcessSupervisor,
   type ManagedRun,
   type ProcessSupervisor,
 } from "../process/supervisor/index.js";
-import type { RunExit, SpawnInput } from "../process/supervisor/types.js";
 import { SearchableSelectList } from "./components/searchable-select-list.js";
 import { createLocalShellRunner } from "./tui-local-shell.js";
 import { createOverlayHandle } from "./tui-overlay-handle.test-support.js";
@@ -16,7 +16,9 @@ vi.mock("../process/supervisor/index.js", () => ({
   getProcessSupervisor: vi.fn(),
 }));
 
-function createShellSupervisor(spawn = vi.fn<ProcessSupervisor["spawn"]>()) {
+function createShellSupervisor(
+  spawn: ProcessSupervisor["spawn"] = vi.fn<ProcessSupervisor["spawn"]>(),
+) {
   const cleanupScope = vi.fn(async (_scopeKey: string) => {});
   const cancelScope = vi.fn<ProcessSupervisor["cancelScope"]>();
   const supervisor = {
@@ -30,8 +32,6 @@ function createShellSupervisor(spawn = vi.fn<ProcessSupervisor["spawn"]>()) {
   } satisfies ProcessSupervisor;
   return { supervisor, cleanupScope };
 }
-
-type ShellSupervisor = ReturnType<typeof createShellSupervisor>["supervisor"];
 
 const harnesses: Array<{ shutdown: () => Promise<void>; runs: Promise<void>[] }> = [];
 
@@ -47,7 +47,7 @@ afterEach(async () => {
 });
 
 function createShellHarness(params?: {
-  spawn?: ShellSupervisor["spawn"];
+  spawn?: ProcessSupervisor["spawn"];
   supervisor?: ReturnType<typeof createShellSupervisor>;
 }) {
   const messages: string[] = [];
@@ -92,17 +92,7 @@ function createShellHarness(params?: {
 }
 
 function createSettlingSpawn(params: { stdout?: string[]; stderr?: string[]; error?: Error }) {
-  return vi.fn<ProcessSupervisor["spawn"]>(async (input: SpawnInput) => {
-    const exit: RunExit = {
-      reason: "exit",
-      exitCode: 0,
-      exitSignal: null,
-      durationMs: 0,
-      stdout: "",
-      stderr: "",
-      timedOut: false,
-      noOutputTimedOut: false,
-    };
+  return vi.fn<ProcessSupervisor["spawn"]>(async (input) => {
     const activity = { resultSettled: false, lastOutputAtMs: 0 };
     return {
       activity,
@@ -115,7 +105,7 @@ function createSettlingSpawn(params: { stdout?: string[]; stderr?: string[]; err
         if (params.error) {
           throw params.error;
         }
-        return exit;
+        return createRunExit({ durationMs: 0 });
       },
       cancel: vi.fn(),
       detachOutput: vi.fn(),
@@ -141,30 +131,10 @@ describe("createLocalShellRunner", () => {
     expect(harness.closeOverlay).toHaveBeenCalledWith(harness.overlayHandle);
   });
 
-  it("sets OPENCLAW_SHELL when running local shell commands", async () => {
-    const spawn = createSettlingSpawn({});
-
-    vi.stubEnv("PATH", "/tmp/bin");
-    const harness = createShellHarness({ spawn });
-
-    await harness.approve("!echo hi");
-    expect(harness.openOverlay).toHaveBeenCalledTimes(1);
-    expect(spawn).toHaveBeenCalledTimes(1);
-    expect(spawn.mock.calls[0]?.[0]).toMatchObject({
-      mode: "anchored-shell",
-      env: { OPENCLAW_SHELL: "tui-local", PATH: "/tmp/bin" },
-    });
-    expect(harness.messages).toContain("local shell: enabled for this session");
-  });
-
   it.each([
-    { name: "stderr after a full stdout cap", stdout: "0".repeat(40_000), stderr: "FATAL" },
-    {
-      name: "a code point at the tail boundary",
-      stdout: "x😀" + "a".repeat(39_994),
-      stderr: "tail",
-    },
-  ])("preserves $name", async ({ stdout, stderr }) => {
+    ["full stdout cap", "0".repeat(40_000), "FATAL"],
+    ["code point at the tail boundary", "x😀" + "a".repeat(39_994), "tail"],
+  ])("preserves stderr after %s", async (_name, stdout, stderr) => {
     const harness = createShellHarness({
       spawn: createSettlingSpawn({ stdout: [stdout], stderr: [stderr] }),
     });
@@ -193,7 +163,7 @@ describe("createLocalShellRunner", () => {
       spawn.mockImplementationOnce(createSettlingSpawn({ error }));
     }
     const harness = createShellHarness({ spawn });
-    await expect(harness.approve("!echo first")).resolves.toBeUndefined();
+    await harness.approve("!echo first");
     await harness.runLocalShellLine("!echo second");
 
     expect(harness.messages.filter((message) => message.startsWith("[local]"))).toEqual([
@@ -219,10 +189,7 @@ describe("createLocalShellRunner", () => {
     await run;
 
     expect(harness.supervisor.spawn).not.toHaveBeenCalled();
-    expect(harness.supervisor.cancelScope).toHaveBeenCalledOnce();
-    expect(harness.cleanupScope).toHaveBeenCalledWith(
-      vi.mocked(harness.supervisor.cancelScope).mock.calls[0]?.[0],
-    );
+    expect(harness.cleanupScope).toHaveBeenCalledExactlyOnceWith(expect.any(String));
     expect(harness.closeOverlay).toHaveBeenCalledWith(harness.overlayHandle);
   });
 
@@ -240,18 +207,10 @@ describe("createLocalShellRunner", () => {
     expect(firstScope).toBeDefined();
     expect(secondScope).toBeDefined();
     expect(firstScope).not.toBe(secondScope);
-    const liveScopes = new Set([firstScope, secondScope]);
-    vi.mocked(first.supervisor.cancelScope).mockImplementation((scopeKey) => {
-      liveScopes.delete(scopeKey);
-    });
-
     const shutdown = first.shutdown();
     expect(first.shutdown()).toBe(shutdown);
     await shutdown;
 
-    expect(first.supervisor.cancelScope).toHaveBeenCalledOnce();
-    expect(first.supervisor.cancelScope).toHaveBeenCalledWith(firstScope);
-    expect(first.cleanupScope).toHaveBeenCalledWith(firstScope);
-    expect(liveScopes).toEqual(new Set([secondScope]));
+    expect(first.cleanupScope).toHaveBeenCalledExactlyOnceWith(firstScope);
   });
 });

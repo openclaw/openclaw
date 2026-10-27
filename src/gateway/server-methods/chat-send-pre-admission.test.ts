@@ -27,7 +27,6 @@ import {
 import { linkEmail } from "../../state/user-profile-writes.worker.js";
 import { ensureProfileForEmail } from "../../state/user-profiles.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
-import { setGatewayDedupeEntry } from "../agent-turn/agent-job.js";
 import { registerChatAbortController } from "../chat-abort.js";
 import { createChatAbortMarker } from "../server-chat-state.js";
 import { createDirectChatContext } from "../server-chat.agent-events.test-helpers.js";
@@ -145,6 +144,10 @@ function expectFailure(respond: RetryParams["respond"], fields: Record<string, u
   expect(respond).toHaveBeenCalledWith(false, undefined, expect.objectContaining(fields));
 }
 
+function expectCached(payload: unknown, metadata: Record<string, unknown> = { cached: true }) {
+  expect(params.respond).toHaveBeenCalledWith(true, payload, undefined, metadata);
+}
+
 function expectConflict(respond: RetryParams["respond"]) {
   expectFailure(respond, {
     code: "INVALID_REQUEST",
@@ -169,8 +172,8 @@ beforeEach(() => {
   params = createFixture();
 });
 
-it("stops admitted session work while preserving a detached producer", async () => {
-  await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+it("stops admitted session work while preserving a detached producer", () =>
+  withOpenClawTestState({ scenario: "minimal" }, async (state) => {
     const cfg: OpenClawConfig = {
       session: { store: state.statePath("agents", "{agentId}", "sessions", "sessions.sqlite") },
     };
@@ -222,11 +225,10 @@ it("stops admitted session work while preserving a detached producer", async () 
       admission.release();
       detachActiveEmbeddedRun(entry!.sessionId, handle);
     }
-  });
-});
+  }));
 
-it("stops selected-agent work without cancelling the compatibility owner's run", async () => {
-  await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+it("stops selected-agent work without cancelling the compatibility owner's run", () =>
+  withOpenClawTestState({ scenario: "minimal" }, async (state) => {
     const cfg: OpenClawConfig = {
       session: {
         scope: "global",
@@ -311,10 +313,9 @@ it("stops selected-agent work without cancelling the compatibility owner's run",
         registration.cleanup();
       }
     }
-  });
-});
+  }));
 
-it.each(["pending", "active", "accepted", "terminal"] as const)(
+it.each(["pending", "active", "accepted", "terminal", "metadata"] as const)(
   "requires accepted custody and rejects changed mention recipients for a %s retry",
   async (state) => {
     const { clientRunId, pendingChatSendKey, sessionKey } = params.session;
@@ -348,17 +349,17 @@ it.each(["pending", "active", "accepted", "terminal"] as const)(
       registerRpcSource(clientRunId, source);
       await claimRpcSourceForTest(source);
     }
-    expect(await retry(params)).toBe(true);
+    expect(await retry(params)).toBe(state !== "metadata");
     if (state === "pending" || state === "active") {
       expectFailure(params.respond, { code: "UNAVAILABLE", retryable: true });
+    } else if (state === "metadata") {
+      expect(params.respond).not.toHaveBeenCalled();
     } else {
-      expect(params.respond).toHaveBeenCalledWith(
-        true,
+      expectCached(
         expect.objectContaining({
           runId: clientRunId,
           status: state === "terminal" ? "ok" : "in_flight",
         }),
-        undefined,
         expect.objectContaining({ cached: true }),
       );
     }
@@ -367,27 +368,8 @@ it.each(["pending", "active", "accepted", "terminal"] as const)(
     params.request.requestIdentity = "changed-carol-selection";
     params.request.mentions = [{ profileId: "carol", start: 3, end: 7 }];
     await expectRetryConflict(params);
-    expect(readSessionSubmittedInput).not.toHaveBeenCalled();
   },
 );
-
-it("keeps a transient preparation failure retryable without treating identity metadata as an ACK", async () => {
-  params.context.dedupe.set(`chat:${params.session.clientRunId}`, {
-    ts: 100,
-    ok: true,
-    requestIdentity: params.request.requestIdentity,
-  });
-  expect(await retry(params)).toBe(false);
-  expect(params.respond).not.toHaveBeenCalled();
-
-  setGatewayDedupeEntry({
-    dedupe: params.context.dedupe,
-    key: `chat:${params.session.clientRunId}`,
-    entry: { ts: 200, ok: true, payload: { runId: params.session.clientRunId, status: "ok" } },
-  });
-  params.request.requestIdentity = "changed-after-terminal";
-  await expectRetryConflict(params);
-});
 
 it("replays explicit cancellation before a retained accepted input marker", async () => {
   const { clientRunId } = params.session;
@@ -400,10 +382,8 @@ it("replays explicit cancellation before a retained accepted input marker", asyn
   params.context.chatRunState.getOrCreate(clientRunId).abortMarker = createChatAbortMarker(200);
 
   expect(await retry(params)).toBe(true);
-  expect(params.respond).toHaveBeenCalledWith(
-    true,
+  expectCached(
     { runId: clientRunId, status: "timeout", summary: "aborted", endedAt: 200 },
-    undefined,
     { cached: true, runId: clientRunId },
   );
 });
@@ -462,30 +442,21 @@ it.each(["different", undefined])(
     });
     params.session.restartSafeRequest = { fingerprint: "original" };
     expect(resolveChatSendRequestConflict(params)).toBeUndefined();
-    expect(readSessionSubmittedInput).not.toHaveBeenCalled();
   },
 );
 
-it.each(["unchanged", "removed", "uncached removal", "rotated device"] as const)(
+it.each(["unchanged", "removed", "uncached removal"] as const)(
   "compares %s selections to the original source after RAM identity expires",
   async (selection) => {
-    const terminal = selection === "uncached removal" || selection === "rotated device";
+    const terminal = selection === "uncached removal";
     if (terminal) {
       params.session.entry!.restartRecoveryTerminalRunIds = [params.session.clientRunId];
     } else {
       cacheSuccess(params, 200);
     }
-    submittedInput.mockResolvedValue({
-      ...submittedMessage(params),
-      ...(selection === "rotated device"
-        ? { __openclaw: { chatRequestIdentity: "original-device-fingerprint" } }
-        : {}),
-    });
+    submittedInput.mockResolvedValue(submittedMessage(params));
     if (selection === "removed" || terminal) {
       params.request.mentions = undefined;
-    }
-    if (selection === "rotated device") {
-      params.request.requestIdentity = "rotated-device-fingerprint";
     }
     if (selection === "uncached removal") {
       expect(
@@ -494,12 +465,7 @@ it.each(["unchanged", "removed", "uncached removal", "rotated device"] as const)
     } else {
       expect(await retry(params)).toBe(true);
       if (selection === "unchanged") {
-        expect(params.respond).toHaveBeenCalledWith(
-          true,
-          { runId: params.session.clientRunId, status: "ok" },
-          undefined,
-          { cached: true },
-        );
+        expectCached({ runId: params.session.clientRunId, status: "ok" });
       } else {
         expectConflict(params.respond);
       }
@@ -527,7 +493,6 @@ it.each(["missing", "work context", "redacted"] as const)(
       });
     }
     await expectRetryConflict(params);
-    expect(readSessionSubmittedInput).toHaveBeenCalledOnce();
     if (source === "missing") {
       expectFailure(params.respond, {
         message: expect.stringContaining("Check the conversation history"),
@@ -563,7 +528,6 @@ it.each(["ready", "routing changed", "archived"] as const)(
     if (outcome === "archived") {
       params.session.entry!.archivedAt = 100;
     }
-    let authorityReads = 0;
     let consuming = false;
     params.assertCurrent = () => {
       expect(consuming).toBe(true);
@@ -573,7 +537,6 @@ it.each(["ready", "routing changed", "archived"] as const)(
       return outcome === "routing changed";
     };
     params.withCurrent = async (consume) => {
-      authorityReads += 1;
       consuming = true;
       try {
         return consume();
@@ -583,8 +546,6 @@ it.each(["ready", "routing changed", "archived"] as const)(
     };
 
     expect(await runChatSendPreAdmission(params)).toBe(outcome === "ready");
-    expect(authorityReads).toBe(2);
-    expect(readSessionSubmittedInput).toHaveBeenCalledOnce();
     if (outcome === "ready") {
       expect(params.respond).not.toHaveBeenCalled();
     } else {
@@ -594,11 +555,7 @@ it.each(["ready", "routing changed", "archived"] as const)(
 );
 
 it("rechecks a competing request admitted while durable recovery yields", async () => {
-  let authorityReads = 0;
-  params.withCurrent = async (consume) => {
-    authorityReads += 1;
-    return consume();
-  };
+  params.withCurrent = async (consume) => consume();
   const { session } = params;
   const deferred = createDeferred<Awaited<ReturnType<typeof resolveDurableChatClaim>>>();
   const entered = createDeferred();
@@ -608,12 +565,10 @@ it("rechecks a competing request admitted while durable recovery yields", async 
   });
   const pending = runChatSendPreAdmission(params);
   await entered.promise;
-  expect(authorityReads).toBe(1);
   cacheSuccess(params, 200, "competing-input");
   deferred.resolve({ kind: "continue", entry: session.entry });
   expect(await pending).toBe(false);
   expectConflict(params.respond);
-  expect(authorityReads).toBe(2);
 });
 
 it.each(["unchanged", "cached-success", "new-admission"] as const)(

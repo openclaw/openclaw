@@ -153,48 +153,39 @@ describe("A2A channel inbound dispatch", () => {
     },
   );
 
-  it("matches interleaved same-context replies to their originating tasks", async () => {
-    const second = fixture.store.create(fixture.task.contextId, "hermes", "second");
-    fixture.dispatch.mockImplementation(async (turn) => dispatched(turn, false, true));
-    await fixture.run();
-    await fixture.run({ taskId: second.id, messageId: "second" });
-    const turns = fixture.dispatch.mock.calls.map(([turn]) => turn);
-    await turns[1]!.delivery.deliver({ text: "second reply" }, { kind: "final" });
-    await turns[0]!.delivery.deliver({ text: "first reply" }, { kind: "final" });
-    expect(fixture.task.artifacts[0]?.parts).toEqual([{ text: "first reply" }]);
-    expect(second.artifacts[0]?.parts).toEqual([{ text: "second reply" }]);
-  });
+  it.each(["hermes", "crew"])(
+    "correlates interleaved same-context replies from %s",
+    async (peerName) => {
+      fixture.params.account.config.peers!.crew = { token: "second-token" };
+      const second = fixture.store.create(fixture.task.contextId, peerName, "second");
+      fixture.store.start(second.id);
+      fixture.dispatch.mockImplementation(async (turn) => dispatched(turn, false, true));
+      const config = { session: { dmScope: "per-channel-peer" as const } };
+      await Promise.all([
+        fixture.run({ config }),
+        fixture.run({ config, taskId: second.id, messageId: "second", peerName }),
+      ]);
+      const [firstTurn, secondTurn] = fixture.dispatch.mock.calls.map(([turn]) => turn);
+      expect(firstTurn!.route.sessionKey === secondTurn!.route.sessionKey).toBe(
+        peerName === "hermes",
+      );
+      expect([firstTurn!.ctxPayload.From, secondTurn!.ctxPayload.From]).toEqual([
+        "a2a:hermes",
+        `a2a:${peerName}`,
+      ]);
+      await secondTurn!.delivery.deliver({ text: "second reply" }, { kind: "final" });
+      await firstTurn!.delivery.deliver({ text: "first reply" }, { kind: "final" });
+      expect(fixture.task.artifacts[0]?.parts).toEqual([{ text: "first reply" }]);
+      expect(fixture.store.get(second.id, peerName)?.artifacts[0]?.parts).toEqual([
+        { text: "second reply" },
+      ]);
+    },
+  );
 
-  it("propagates dispatch failures to the HTTP task owner", async () => {
+  it("propagates dispatch failure to the HTTP owner", async () => {
     const failure = new Error("provider unavailable");
     fixture.dispatch.mockRejectedValue(failure);
     await expect(fixture.run()).rejects.toBe(failure);
-  });
-
-  it("isolates route sessions and replies when distinct peers reuse one context ID", async () => {
-    fixture.params.account.config.peers = {
-      hermes: { token: "first-token" },
-      crew: { token: "second-token" },
-    };
-    const crewTask = fixture.store.create(fixture.task.contextId, "crew", "crew-message");
-    fixture.store.start(crewTask.id);
-    fixture.dispatch.mockImplementation(async (turn) => {
-      await turn.delivery.deliver({ text: String(turn.ctxPayload.From) }, { kind: "final" });
-      return dispatched(turn, true);
-    });
-    const config = { session: { dmScope: "per-channel-peer" as const } };
-
-    await Promise.all([
-      fixture.run({ config }),
-      fixture.run({ config, taskId: crewTask.id, messageId: "crew-message", peerName: "crew" }),
-    ]);
-
-    const dispatches = fixture.dispatch.mock.calls;
-    expect(dispatches[0]?.[0].route.sessionKey).not.toBe(dispatches[1]?.[0].route.sessionKey);
-    expect(fixture.task.artifacts[0]?.parts[0]).toEqual({ text: "a2a:hermes" });
-    expect(fixture.store.get(crewTask.id, "crew")?.artifacts[0]?.parts[0]).toEqual({
-      text: "a2a:crew",
-    });
   });
 
   it("routes a stable peer binding before account fallback while preserving exact context overrides", async () => {

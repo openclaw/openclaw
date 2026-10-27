@@ -45,14 +45,15 @@ process.env = {
 };
 const source = new URL("../../src/infra/session-cost-usage-cache-runtime.ts", import.meta.url);
 const sourceSha256 = createHash("sha256").update(readFileSync(source)).digest("hex");
-const [owner, { AsyncWorkScope }, agentDb, stateDb, { loadConfig }] = await Promise.all([
-  import("../../src/infra/session-cost-usage-cache-runtime.js"),
-  import("../../src/shared/async-work-scope.js"),
-  import("../../src/state/openclaw-agent-db.js"),
-  import("../../src/state/openclaw-state-db.js"),
-  import("../../src/config/config.js"),
-]);
-const config = loadConfig();
+const [owner, { AsyncWorkScope }, agentDb, stateDb, { captureRuntimeConfigAsyncReader }] =
+  await Promise.all([
+    import("../../src/infra/session-cost-usage-cache-runtime.js"),
+    import("../../src/shared/async-work-scope.js"),
+    import("../../src/state/openclaw-agent-db.js"),
+    import("../../src/state/openclaw-state-db.js"),
+    import("../../src/config/config.js"),
+  ]);
+const config = await captureRuntimeConfigAsyncReader()();
 const scope = new AsyncWorkScope();
 const timeout = new Error("Usage refresh benchmark timed out");
 const deadline = setTimeout(() => scope.beginClose(timeout), timeoutMs);

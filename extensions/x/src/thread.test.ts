@@ -62,16 +62,32 @@ describe("X thread context", () => {
         data: [root, parent, quote].filter((value) => ids.includes(value.id)),
       });
     });
-    const context = await assembleXThread({ api, mention, maxPosts: 5 });
+    const mentionBefore = structuredClone(mention);
+    const sortedCopies = vi.spyOn(Array.prototype, "toSorted");
+    const reversedCopies = vi.spyOn(Array.prototype, "toReversed");
+    let copies = 0;
+    const context = await assembleXThread({ api, mention, maxPosts: 5 }).finally(() => {
+      copies = sortedCopies.mock.calls.length + reversedCopies.mock.calls.length;
+      sortedCopies.mockRestore();
+      reversedCopies.mockRestore();
+    });
     const { posts, label, bodyForAgent: body } = context;
     expect(fetched).toEqual(["1", "2", "3"]);
     expect(posts.map((value) => value.id)).toEqual(["1", "3", "5", "6", "7"]);
     expect(label).toBe("@maintainer: root");
-    expect(body).toContain("@maintainer (2026-10-01T00:00:03Z) [quoted post]: quoted context");
-    expect(body).toContain(
-      "@maintainer (2026-10-01T00:00:05Z) [triggering mention]: @bot investigate",
+    expect(body).toBe(
+      [
+        "X thread context (oldest to newest):",
+        "> @maintainer (2026-10-01T00:00:01Z): root",
+        "> @maintainer (2026-10-01T00:00:03Z) [quoted post]: quoted context",
+        "> @maintainer (2026-10-01T00:00:05Z) [triggering mention]: @bot investigate",
+        "> @maintainer (2026-10-01T00:00:06Z): recent",
+        "> @maintainer (2026-10-01T00:00:07Z): latest",
+        "",
+        "Reply to the triggering mention.",
+      ].join("\n"),
     );
-    expect(body.indexOf("root")).toBeLessThan(body.indexOf("latest"));
-    expect(mention.text).toBe("@bot investigate");
+    expect(mention).toEqual(mentionBefore);
+    expect(copies).toBe(0);
   });
 });

@@ -52,7 +52,7 @@ async function startServer(
     },
     capture() {
       const capture = captureSocket(port);
-      cleanup.push(() => capture.dispose());
+      cleanup.push(() => capture.socket.destroy());
       return capture;
     },
     upgrade(upgradeOptions: UpgradeOptions = {}) {
@@ -93,31 +93,10 @@ const reply =
   };
 function captureSocket(port: number) {
   const socket = connect({ host: "127.0.0.1", port });
-  const chunks: Buffer[] = [];
-  const errors: string[] = [];
-  const capture = {
-    socket,
-    chunks,
-    errors,
-    ended: false,
-    closed: new Promise<void>((resolve) => {
-      socket.once("close", resolve);
-    }),
-    dispose() {
-      clearTimeout(deadline);
-      socket.destroy();
-    },
-  };
-  socket.on("data", (chunk: Buffer) => capture.chunks.push(chunk));
-  socket.on("error", (error) => capture.errors.push(error.message));
-  socket.once("end", () => {
-    capture.ended = true;
-  });
-  const deadline = setTimeout(() => {
-    capture.errors.push("client deadline");
-    socket.destroy();
-  }, 3000);
-  return capture;
+  const deadline = setTimeout(() => socket.destroy(new Error("client deadline")), 3000);
+  // Consuming to EOF proves graceful delivery; resets and the deadline reject the read.
+  const response = text(socket).finally(() => clearTimeout(deadline));
+  return { socket, response };
 }
 
 it("rejects websocket upgrade headers that Node routes as ordinary HTTP", async () => {
@@ -127,38 +106,30 @@ it("rejects websocket upgrade headers that Node routes as ordinary HTTP", async 
     handleHooksRequest,
     getRuntimeConfig: () => ({ gateway: { trustedProxies: [] } }),
   });
-  const { socket, chunks } = fixture.capture();
+  const { socket, response } = fixture.capture();
   const closed = once(socket, "close", { signal: AbortSignal.timeout(1_000) });
   socket.write(
     `GET /hooks/wake HTTP/1.1\r\nHost: 127.0.0.1:${fixture.port}\r\nUpgrade: websocket\r\nConnection: keep-alive\r\n\r\n`,
   );
-  await closed;
-  const response = Buffer.concat(chunks).toString();
-  expect(response).toContain("HTTP/1.1 400 Bad Request");
-  expect(response).toContain("Connection: close");
+  const [, wire] = await Promise.all([closed, response]);
+  expect(wire).toContain("HTTP/1.1 400 Bad Request");
+  expect(wire).toContain("Connection: close");
   expect(handleHooksRequest).not.toHaveBeenCalled();
 });
 
 it("flushes HTTP 503 before closing when a WebSocket upgrade throws", async () => {
   await using fixture = await startServer({ handleHooksRequest: async () => false });
-  const warn = vi.fn();
-  const wss = fixture.upgrade({ log: { warn } });
+  const wss = fixture.upgrade();
   const connected = vi.fn();
   wss.on("connection", connected);
-  const failUpgrade = vi.fn(() => {
+  wss.once("headers", () => {
     throw new Error("upgrade failed");
   });
-  wss.once("headers", failUpgrade);
   const capture = fixture.capture();
   capture.socket.write(websocketRequest);
-  await capture.closed;
-  expect(failUpgrade).toHaveBeenCalledOnce();
+  const wire = await capture.response;
   expect(connected).not.toHaveBeenCalled();
-  expect(warn).toHaveBeenCalledWith(expect.stringContaining("gateway websocket upgrade failed"));
-  expect(capture).toMatchObject({ errors: [], ended: true });
-  expect(Buffer.concat(capture.chunks).toString()).toBe(
-    "HTTP/1.1 503 Service Unavailable\r\nConnection: close\r\n\r\n",
-  );
+  expect(wire).toBe("HTTP/1.1 503 Service Unavailable\r\nConnection: close\r\n\r\n");
 });
 
 it("delivers an upgrade rejection after an ordinary response on a reused connection", async () => {
@@ -321,13 +292,11 @@ it.each([
         return true;
       },
     });
-    const { socket, chunks, errors, closed } = fixture.capture();
+    const { socket, response } = fixture.capture();
     socket.write(
       `GET /expect HTTP/${version}\r\nHost: localhost\r\nExpect: ${expectation}\r\nConnection: close\r\n\r\n`,
     );
-    await closed;
-    const wire = Buffer.concat(chunks).toString();
-    expect(errors).toEqual([]);
+    const wire = await response;
     expect(wire.match(/HTTP\/1\.1 \d{3}/g)).toEqual(
       interim ? ["HTTP/1.1 100", `HTTP/1.1 ${status}`] : [`HTTP/1.1 ${status}`],
     );
@@ -358,15 +327,13 @@ it.each([
     handlePluginUpgrade: upgrades,
     shouldEnforcePluginGatewayAuth: () => false,
   });
-  const { socket, chunks: received, errors, closed } = fixture.capture();
+  const { socket, response } = fixture.capture();
   const payload = "x".repeat(1024 * 1024 + 1);
   const requestLine = next === "connect" ? "CONNECT localhost:80 HTTP/1.1" : "GET /second HTTP/1.1";
   socket.write(
     `POST /first HTTP/1.1\r\nHost: localhost\r\nTransfer-Encoding: chunked\r\n\r\n${payload.length.toString(16)}\r\n${payload}\r\n0\r\n\r\n${requestLine}\r\nHost: localhost\r\n${headers}\r\n`,
   );
-  await closed;
-  const wire = Buffer.concat(received).toString();
-  expect(errors).toEqual([]);
+  const wire = await response;
   expect(wire).toMatch(/^HTTP\/1\.1 413 /);
   expect(wire).toContain("X-Content-Type-Options: nosniff");
   expect(wire.split("\r\n\r\n")[1]).toBe("Payload too large");

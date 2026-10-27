@@ -3,7 +3,7 @@ import { resolveGlobalSingleton } from "./global-singleton.js";
 
 type Context = Readonly<Record<symbol, unknown>>;
 
-// Runtime chunks share the carrier; each owner controls only its own field.
+// Runtime chunks share the private carrier; fresh frames are never mutated or exposed.
 const context = resolveGlobalSingleton(
   Symbol.for("openclaw.asyncContext"),
   () => new AsyncLocalStorage<Context | undefined>(),
@@ -24,16 +24,14 @@ export class AsyncContext<T> {
     if (Object.is(priorValue, value)) {
       return run();
     }
-    const entered = Object.freeze({ ...prior, [this.key]: value });
+    const entered = { ...prior, [this.key]: value };
     context.enterWith(entered);
     try {
       return run();
     } finally {
       const current = context.getStore();
       // Native run restores its own value without undoing a sibling's enterWith.
-      context.enterWith(
-        current === entered ? prior : Object.freeze({ ...current, [this.key]: priorValue }),
-      );
+      context.enterWith(current === entered ? prior : { ...current, [this.key]: priorValue });
     }
   }
 
@@ -43,6 +41,6 @@ export class AsyncContext<T> {
 
   /** Used by the single-copy runner, which owns restoration of the entire frame. */
   enterWith(value: T | undefined): void {
-    context.enterWith(Object.freeze({ ...context.getStore(), [this.key]: value }));
+    context.enterWith({ ...context.getStore(), [this.key]: value });
   }
 }

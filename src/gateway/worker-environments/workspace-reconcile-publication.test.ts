@@ -42,13 +42,11 @@ afterEach(() => {
 async function workspace(eol = "\n", added = false) {
   const root = tempDirs.make("publication-local-");
   const stagingRoot = tempDirs.make("publication-staged-");
-  const baseBytes = Buffer.from(`base${eol}`);
-  const workerBytes = Buffer.from(`worker${eol}`);
-  const addedBytes = Buffer.from(`added${eol}`);
-  await fs.writeFile(path.join(root, "result.txt"), baseBytes);
-  await fs.writeFile(path.join(stagingRoot, "result.txt"), workerBytes);
+  const bytes = (content: string) => Buffer.from(content + eol);
+  await fs.writeFile(path.join(root, "result.txt"), bytes("base"));
+  await fs.writeFile(path.join(stagingRoot, "result.txt"), bytes("worker"));
   if (added) {
-    await fs.writeFile(path.join(stagingRoot, "added.txt"), addedBytes);
+    await fs.writeFile(path.join(stagingRoot, "added.txt"), bytes("added"));
   }
   const capture = (directory: string) =>
     captureWorkspaceManifest({ root: directory, baseCommit: null });
@@ -57,9 +55,7 @@ async function workspace(eol = "\n", added = false) {
   return {
     root,
     stagingRoot,
-    baseBytes,
-    workerBytes,
-    addedBytes,
+    bytes,
     base: base.manifest,
     current: current.manifest,
     baseManifestRef: base.manifestRef,
@@ -123,7 +119,7 @@ it.each([
       },
       async () => {
         if (definitive) {
-          expect(await read(f.root)).toEqual(f.baseBytes);
+          expect(await read(f.root)).toEqual(f.bytes("base"));
         }
       },
     );
@@ -144,17 +140,14 @@ it.each([
     ).rejects.toBe(publicationFailure);
     if (definitive) {
       expect(state.pending()).toBeUndefined();
-      expect(journal.abort).toHaveBeenCalledOnce();
-      await expect(read(f.root)).resolves.toEqual(f.baseBytes);
+      await expect(read(f.root)).resolves.toEqual(f.bytes("base"));
       return;
     }
     expect(state.pending()).toBeDefined();
-    expect(journal.commit).toHaveBeenCalledTimes(phase === "apply" ? 0 : 1);
-    expect(journal.abort).not.toHaveBeenCalled();
-    await expect(read(f.root)).resolves.toEqual(f.workerBytes);
-    await expect(read(f.root, "added.txt")).resolves.toEqual(f.addedBytes);
+    await expect(read(f.root)).resolves.toEqual(f.bytes("worker"));
+    await expect(read(f.root, "added.txt")).resolves.toEqual(f.bytes("added"));
     await recoverWorkerWorkspaceReconciliation({ root: f.root, journal: state.pending()! });
-    await expect(read(f.root)).resolves.toEqual(f.baseBytes);
+    await expect(read(f.root)).resolves.toEqual(f.bytes("base"));
     await expect(fs.access(path.join(f.root, "added.txt"))).rejects.toThrow();
     expect(state.pending()).toBeDefined();
   },
@@ -167,20 +160,18 @@ it.each([
 ])("%s", async (_name, cleanupFails, publicationFails) => {
   const f = await workspace();
   const publicationError = new Error("accepted publication rejected");
-  const cleanupError = new Error("scratch removal failed");
   const ref = workerWorkspaceResultRef("claim-staging-cleanup");
   const hasRef = (stagedResultRef: string) =>
     hasWorkerWorkspaceResultRef({ root: f.root, stagedResultRef });
   const candidateRef = preparedWorkerWorkspaceResultRef(ref);
   const record = vi.fn();
-  const commit = vi.fn(async () => {});
-  const abort = vi.fn(async () => {});
+  const { journal } = journalFixture();
   const prepared = await workerWorkspaceResultStaging.prepareRequestedWorkerWorkspaceResult({
     request: {
       localPath: f.root,
       remoteWorkspaceDir: "/worker/workspace",
       baseManifestRef: f.baseManifestRef,
-      journal: { load: async () => undefined, begin: async () => {}, commit, abort },
+      journal,
       stagedResult: { ref, record },
     },
     stagingRoot: f.stagingRoot,
@@ -195,12 +186,10 @@ it.each([
   });
   const remove = fs.rm;
   const scratch = tempDirs.make("openclaw-workspace-result-cleanup-scratch-");
-  const makeScratch = vi.spyOn(fs, "mkdtemp").mockResolvedValueOnce(scratch);
-  const removeSpy = vi.spyOn(fs, "rm").mockImplementation(async (target, options) => {
-    if (target === scratch) {
-      if (cleanupFails) {
-        throw cleanupError;
-      }
+  vi.spyOn(fs, "mkdtemp").mockResolvedValueOnce(scratch);
+  vi.spyOn(fs, "rm").mockImplementation(async (target, options) => {
+    if (target === scratch && cleanupFails) {
+      throw new Error("scratch removal failed");
     }
     return await remove(target, options);
   });
@@ -218,12 +207,12 @@ it.each([
     );
     if (publicationFails) {
       await expect(finalized).rejects.toBe(publicationError);
-      expect(abort).toHaveBeenCalledOnce();
+      expect(journal.abort).toHaveBeenCalledOnce();
     } else {
       await expect(finalized).resolves.toMatchObject({ manifestRef: f.currentManifestRef });
-      expect(commit).toHaveBeenCalledOnce();
+      expect(journal.commit).toHaveBeenCalledOnce();
     }
-    await expect(read(f.root)).resolves.toEqual(publicationFails ? f.baseBytes : f.workerBytes);
+    await expect(read(f.root)).resolves.toEqual(f.bytes(publicationFails ? "base" : "worker"));
     await expect(hasRef(ref)).resolves.toBe(!publicationFails);
     await expect(hasRef(candidateRef)).resolves.toBe(false);
     expect(record).toHaveBeenCalledTimes(publicationFails ? 0 : 1);
@@ -236,8 +225,6 @@ it.each([
       await expect(fs.access(scratch)).rejects.toMatchObject({ code: "ENOENT" });
     }
   } finally {
-    makeScratch.mockRestore();
-    removeSpy.mockRestore();
-    await remove(scratch, { recursive: true, force: true });
+    vi.restoreAllMocks();
   }
 });

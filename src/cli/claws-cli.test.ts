@@ -3,6 +3,7 @@ import { dirname, join } from "node:path";
 import { Command } from "commander";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { createDeferredCore } from "../shared/deferred.js";
 import * as cliTestHelpers from "./claws-cli.test-helpers.js";
 
 const enabledClawsLabsConfig = { gateway: { controlUi: { experimental: { claws: true } } } };
@@ -350,10 +351,7 @@ describe("claws cli", () => {
 
   it("does not apply Add before owning the target agent lease", async () => {
     const manifestPath = await writeManifest();
-    let releaseLease!: () => void;
-    const heldLease = new Promise<void>((resolve) => {
-      releaseLease = resolve;
-    });
+    const { promise: heldLease, resolve: releaseLease } = createDeferredCore();
     mocks.withOpenClawStateLease.mockImplementationOnce(async (_options, run) => {
       await heldLease;
       return await run({ assertOwned: mocks.leaseAssertOwned });

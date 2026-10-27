@@ -18,6 +18,7 @@ import { withPluginHttpRouteRegistry } from "../plugins/http-registry.js";
 import { PluginInstanceDrainTimeoutError } from "../plugins/plugin-instance-error.js";
 import { getPluginInstance, type PluginInstanceHandle } from "../plugins/plugin-instance-scope.js";
 import { collectRegistryInvocationInstances } from "../plugins/plugin-invocation-scope.js";
+import { pluginHandsOverTurns } from "../plugins/plugin-turn-handover-eligibility.js";
 import type { PluginRegistry } from "../plugins/registry-types.js";
 import { disposePluginRegistryInstances } from "../plugins/runtime.js";
 import {
@@ -25,21 +26,23 @@ import {
   getPluginServiceCleanupSettlement,
   type PluginServicesHandle,
 } from "../plugins/services.js";
+import { formatPluginReloadDrainReason } from "./plugin-reload-drain-reason.js";
 import type { GatewayPluginReloadStatus } from "./server-plugin-reload-status.types.js";
 
 const PLUGIN_RELOAD_ADMITTED_WORK_TIMEOUT_MS = 60_000;
 
-// Logs/readiness have broader readership than admin inspection: never project owner IDs here.
+// Keep acquisition facts in raw logs; each egress applies its own redaction policy.
 function logRetainedReferences(
   instances: readonly PluginInstanceHandle[],
   phase: "queued" | "timeout",
-  log: Pick<ReturnType<typeof createSubsystemLogger>, "info">,
+  log: Pick<ReturnType<typeof createSubsystemLogger>, "info" | "warn">,
 ): void {
   const selected = instances
     .slice(0, 8)
-    .map((instance) => instance.retentionSnapshot({ limit: 8, includeOwners: false }));
-  log.info(
-    `Plugin retained references (${phase}): ${JSON.stringify({ instances: selected, omittedInstances: Math.max(0, instances.length - selected.length) })}. Use administrator plugins.inspect runtimeRetention for acquisition owners; a turn awaiting its own retained work cannot drain.`,
+    .map((instance) => instance.retentionSnapshot({ limit: 8 }));
+  log[phase === "timeout" ? "warn" : "info"](
+    `Plugin retained references (${phase}); a turn awaiting its own retained work cannot drain.`,
+    { instances: selected, omittedInstances: Math.max(0, instances.length - selected.length) },
   );
 }
 
@@ -324,18 +327,31 @@ export function createPluginReloadCleanup({
     { includeConsumers = false, includeCalls = false } = {},
   ) => {
     const instances = previousInstances(pluginIds);
-    const count = instances.reduce(
-      (total, instance) =>
-        total + instance.retainedWorkCount + (includeCalls ? instance.ordinaryCallCount : 0),
-      0,
-    );
+    const holds = previousRegistry.plugins.flatMap((record) => {
+      const instance = pluginIds.has(record.id) && getPluginInstance(record);
+      return instance
+        ? [
+            {
+              pluginId: record.id,
+              count: instance.retainedWorkCount + (includeCalls ? instance.ordinaryCallCount : 0),
+              turnHandover: pluginHandsOverTurns([previousRegistry], record.id),
+            },
+          ]
+        : [];
+    });
+    const count = holds.reduce((total, hold) => total + hold.count, 0);
     if (!instances.length || (!count && !includeConsumers)) {
       return;
     }
     retainedWorkQueued ||= count > 0;
     const deadlineAtMs = admittedWorkDeadline();
     const reason = count
-      ? `Plugin replacement queued behind ${count} ${includeCalls ? "admitted" : "retained"} work item(s) for plugin ${[...pluginIds].join(", ")}; new agent runs wait up to the ${admittedWorkTimeoutMs / 1_000}s drain budget.${waitForDrain ? " Press Ctrl+C to cancel the waiting reload." : ""}`
+      ? formatPluginReloadDrainReason({
+          holds,
+          includeCalls,
+          drainBudgetSeconds: admittedWorkTimeoutMs / 1_000,
+          cancellable: waitForDrain,
+        })
       : "Waiting for admitted plugin cleanup before replacing it.";
     reportStatus({
       phase: "reloading",

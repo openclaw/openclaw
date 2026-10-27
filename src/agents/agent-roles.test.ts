@@ -24,12 +24,9 @@ describe("bundled agent roles", () => {
       { ...preset, specialists: [{ id: "worker", role: "missing-role" }] },
       { ...preset, specialists: [{ id: preset.coordinator.id, role: "researcher" }] },
     ]) {
-      const read = vi.spyOn(fs, "readFile").mockResolvedValueOnce(JSON.stringify(invalid));
-      try {
-        await expect(loadAgentTeamPreset()).rejects.toThrow();
-      } finally {
-        read.mockRestore();
-      }
+      using _ = vi.spyOn(fs, "readFile").mockResolvedValueOnce(JSON.stringify(invalid));
+
+      await expect(loadAgentTeamPreset()).rejects.toThrow();
     }
     await expect(loadAgentRole("../researcher")).rejects.toThrow("Available roles:");
     await expect(loadAgentTeamPreset("../team")).rejects.toThrow("Available presets: team");

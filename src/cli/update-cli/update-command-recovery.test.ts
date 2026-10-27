@@ -26,6 +26,7 @@ import {
 } from "../../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
 import type { UpdateCommandOptions } from "./shared.js";
+import { cleanupUpdateCommandTest } from "./update-command-cleanup.test-support.js";
 import { snapshotUpdateFixtureTree } from "./update-command-filesystem-snapshot.test-support.js";
 import { resultFixture } from "./update-command-fixtures.test-support.js";
 import { finishParams } from "./update-command-maintenance-fixtures.test-support.js";
@@ -37,11 +38,7 @@ import * as service from "./update-command-service.js";
 import { resolveSettledUpdateCommandResult } from "./update-command-terminal.js";
 
 const dirs = useAutoCleanupTempDirTracker(afterEach);
-afterEach(() => {
-  closeOpenClawStateDatabaseForTest();
-  vi.restoreAllMocks();
-  vi.unstubAllEnvs();
-});
+afterEach(cleanupUpdateCommandTest);
 
 describe("package finalization recovery targets", () => {
   function target() {

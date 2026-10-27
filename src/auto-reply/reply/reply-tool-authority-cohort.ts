@@ -1,5 +1,4 @@
 import { isDeepStrictEqual } from "node:util";
-import { stableStringify } from "@openclaw/normalization-core";
 import { retainPreparedSessionEntryPredicate } from "../../config/sessions/session-accessor.sqlite-entry-cache-publication-state.js";
 import { assertSessionEntryCohortScope } from "../../config/sessions/session-entry-cohort-scope.js";
 import type { SessionEntryCohortReader } from "../../config/sessions/session-entry-read-runtime.types.js";
@@ -34,6 +33,8 @@ export function captureReplyToolAuthoritySession(
   };
 }
 
+const actorComparisonOptions = { skipPrototype: true };
+
 /** Retain the captured file-backed classification while its published entry remains current. */
 export function retainReplyToolAuthorityClassification(
   original: CapturedReplyToolAuthoritySession | undefined,
@@ -43,19 +44,17 @@ export function retainReplyToolAuthorityClassification(
   if (!original?.source || typeof original.source.databaseIdentity !== "string") {
     return undefined;
   }
-  const classificationFacts = (candidate: SessionEntry | undefined) => ({
-    sessionId: candidate?.sessionId,
-    lifecycleRevision: candidate?.lifecycleRevision,
-    sandbox: candidate?.sandbox,
-    sandboxMode: candidate?.sandboxMode,
-    createdActor: candidate?.createdActor,
-  });
   const predicate = retainPreparedSessionEntryPredicate({
     databaseIdentity: `file:${original.source.databaseIdentity}`,
     sessionKey: original.canonicalKey,
     entry,
     matches: (before, after) =>
-      stableStringify(classificationFacts(before)) === stableStringify(classificationFacts(after)),
+      before?.sessionId === after?.sessionId &&
+      before?.lifecycleRevision === after?.lifecycleRevision &&
+      before?.sandbox === after?.sandbox &&
+      before?.sandboxMode === after?.sandboxMode &&
+      // Admitted actor data is structural: key order/prototypes do not identify a creator.
+      isDeepStrictEqual(before?.createdActor, after?.createdActor, actorComparisonOptions),
   });
   return {
     release: () => predicate.release(),

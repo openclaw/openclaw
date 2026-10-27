@@ -15,12 +15,19 @@ import {
   getSubagentRunsForCollectorGroup,
   getSubagentSessionReadLookup,
   immutableSubagentRun,
-  isSubagentRunPayloadEvicted,
+  immutableSubagentRunSessionList,
   restoreSubagentRunPayload,
   subagentRuns,
 } from "./subagent-registry-memory.js";
+import { createSubagentSessionListReadIndex } from "./subagent-registry-read-index.js";
+import { getLatestLiveSubagentRunByChildSessionKey } from "./subagent-registry-read.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
-import { isSameSubagentRunOwner } from "./subagent-run-generation.js";
+import * as runGeneration from "./subagent-run-generation.js";
+import { bindSubagentRunRuntimeKey, isSameSubagentRunOwner } from "./subagent-run-generation.js";
+import {
+  isSubagentRunPayloadEvicted,
+  getSubagentTerminalReplySummary,
+} from "./subagent-run-payload-facts.js";
 
 function createRun(runId: string, overrides: Partial<SubagentRunRecord> = {}): SubagentRunRecord {
   return {
@@ -37,6 +44,48 @@ function createRun(runId: string, overrides: Partial<SubagentRunRecord> = {}): S
 }
 
 afterEach(() => subagentRuns.clear());
+
+it("prepares list-owner facts once per view without lending authority to display rows or old incarnations", () => {
+  const entry = createRun("shared-read-owner");
+  subagentRuns.set(entry.runId, entry);
+  const resident = subagentRuns.get(entry.runId)!;
+  const display = immutableSubagentRunSessionList(resident);
+  let identity = {};
+  const copy = vi.spyOn(runGeneration, "copySubagentRunRuntimeOwner");
+  const view = createSubagentSessionListReadIndex(
+    {
+      snapshotIdentity: () => identity,
+      runs: () => new Map([[entry.runId, display]]),
+      prepare: async () => {},
+    },
+    1,
+  );
+  const read = () => [...view.read(1).inputs.inMemoryRuns!][0]!;
+  try {
+    const first = read();
+    expect(copy).toHaveBeenCalledTimes(1);
+    expect(read()).toBe(first);
+    expect(first).not.toBe(display);
+    expect(Object.isFrozen(first)).toBe(true);
+    expect(isSameSubagentRunOwner(resident, first)).toBe(true);
+    expect(isSameSubagentRunOwner(resident, display)).toBe(false);
+
+    bindSubagentRunRuntimeKey(resident, {});
+    identity = {};
+    const next = read();
+    expect(copy).toHaveBeenCalledTimes(2);
+    expect(next).not.toBe(first);
+    expect(read()).toBe(next);
+    expect(next).toEqual(first);
+    expect(isSameSubagentRunOwner(resident, first)).toBe(false);
+    expect(isSameSubagentRunOwner(resident, next)).toBe(true);
+    expect(immutableSubagentRunSessionList(resident)).toBe(display);
+    expect(isSameSubagentRunOwner(resident, display)).toBe(false);
+  } finally {
+    view.dispose();
+    copy.mockRestore();
+  }
+});
 
 describe("completed subagent payload residency", () => {
   function completedRun(overrides: Partial<SubagentRunRecord> = {}): SubagentRunRecord {
@@ -67,7 +116,11 @@ describe("completed subagent payload residency", () => {
     expect(resident.task).toBe(original.task.slice(0, 160));
     expect(resident.completion?.resultText).toBeUndefined();
     expect(resident.completion?.fallbackResultText).toBeUndefined();
-    expect(resident.completion?.terminalReply).toEqual(original.completion?.terminalReply);
+    expect(resident.completion?.terminalReply).toBeUndefined();
+    expect(getSubagentTerminalReplySummary(resident)).toEqual({
+      disposition: "visible",
+      textLength: "Final reply evidence".length,
+    });
     expect(isSubagentRunPayloadEvicted(resident)).toBe(true);
     expect(compactSubagentRunForMemory(resident)).toBe(resident);
 
@@ -124,6 +177,33 @@ describe("completed subagent payload residency", () => {
 });
 
 describe("subagent run memory indexes", () => {
+  it("reuses captured child links across run-state changes and retires them on an ownership move", () => {
+    const first = createRun("first");
+    const second = createRun("second");
+    subagentRuns.set(first.runId, first);
+    subagentRuns.set(second.runId, second);
+    const lookup = getSubagentSessionReadLookup(subagentRuns);
+    const links = lookup.captureTopology();
+    expect(links).toEqual([
+      { childSessionKey: first.childSessionKey, requesterSessionKey: "agent:main:main" },
+      { childSessionKey: second.childSessionKey, requesterSessionKey: "agent:main:main" },
+    ]);
+    for (const status of ["queued", "running", "terminal"] as const) {
+      subagentRuns.set(first.runId, { ...first, execution: { status } });
+      expect(lookup.captureTopology()).toBe(links);
+    }
+    subagentRuns.set(first.runId, { ...first, requesterSessionKey: "agent:main:moved" });
+    expect(lookup.captureTopology()).toEqual([
+      { childSessionKey: first.childSessionKey, requesterSessionKey: "agent:main:moved" },
+      { childSessionKey: second.childSessionKey, requesterSessionKey: "agent:main:main" },
+    ]);
+    expect(links[0]?.requesterSessionKey).toBe("agent:main:main");
+    subagentRuns.delete(second.runId);
+    expect(lookup.captureTopology()).toEqual([
+      { childSessionKey: first.childSessionKey, requesterSessionKey: "agent:main:moved" },
+    ]);
+  });
+
   it("selects unfinished work and due retention across replacement, deletion, and reset", () => {
     const history = createRun("history", {
       execution: { status: "terminal", endedAt: 2 },
@@ -224,6 +304,8 @@ describe("subagent run memory indexes", () => {
         scenario === "replacement" ? "main" : childSessionKey === "global" ? undefined : "research",
     };
     const selected = scenario === "unresolved" ? first : second;
+    const latest = () =>
+      getLatestLiveSubagentRunByChildSessionKey(childSessionKey, undefined, "MAIN");
     const authorize = () =>
       findAuthorizedSwarmCollectorRequest({
         childSessionKey,
@@ -233,6 +315,14 @@ describe("subagent run memory indexes", () => {
     subagentRuns.set(first.runId, first);
     subagentRuns.set(second.runId, second);
     expect(authorize()).toEqual(selected);
+    expect(latest()).toEqual(selected);
+    expect(
+      getLatestLiveSubagentRunByChildSessionKey(
+        childSessionKey,
+        (run) => run.runId === first.runId,
+        "main",
+      ),
+    ).toEqual(first);
     if (scenario === "unresolved") {
       expect([...getSubagentRunsForChildSession(childSessionKey, "main")]).toEqual([first]);
       expect([...getSubagentChildSessionCandidates(childSessionKey)]).toEqual([first, second]);
@@ -244,11 +334,14 @@ describe("subagent run memory indexes", () => {
     expect(authorize()).toEqual(second);
 
     subagentRuns.set(first.runId, first);
+    expect(latest()).toEqual(second);
     subagentRuns.delete(first.runId);
     expect(authorize()).toEqual(second);
+    expect(latest()).toEqual(second);
 
     subagentRuns.clear();
     expect(authorize()).toBeUndefined();
+    expect(latest()).toBeNull();
   });
 
   it("tracks distinct scheduler slot aliases across replacement and deletion", () => {
@@ -334,6 +427,10 @@ describe("subagent run memory indexes", () => {
       subagentRuns.set(first.runId, first);
       subagentRuns.set(second.runId, second);
       expect(select(first)).toEqual(expected(first, second));
+
+      const updated = { ...first, execution: { status: "terminal" as const, endedAt: 2 } };
+      subagentRuns.set(updated.runId, updated);
+      expect(select(updated)).toEqual(expected(second, updated));
 
       const replacement = {
         ...first,

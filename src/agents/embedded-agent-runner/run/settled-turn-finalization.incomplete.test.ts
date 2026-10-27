@@ -1,5 +1,7 @@
+import { randomBytes } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { crc32, deflateSync } from "node:zlib";
 import type { Context } from "openclaw/plugin-sdk/llm";
 import { expect, it, vi } from "vitest";
 import { setRuntimeConfigSnapshot } from "../../../config/runtime-snapshot.js";
@@ -27,23 +29,97 @@ const modelId = "fixture-model";
 const summary = "Both files are written: a.txt contains alpha and b.txt contains beta.";
 const cutoffNotice =
   "The model was cut off at its output token limit, so the summary above was written afterwards without tools.";
+const prompt =
+  "Create a.txt containing alpha, then b.txt containing beta. Tell me when both are written.";
+
+// An incompressible 160x120 PNG: large in bytes, a flat 2,000 tokens to the estimator.
+function screenshotPng(): Buffer {
+  const chunk = (type: string, data: Buffer) => {
+    const body = Buffer.concat([Buffer.from(type), data]);
+    const size = Buffer.alloc(4);
+    size.writeUInt32BE(data.length);
+    const crc = Buffer.alloc(4);
+    crc.writeUInt32BE(crc32(body));
+    return Buffer.concat([size, body, crc]);
+  };
+  const header = Buffer.alloc(13);
+  header.writeUInt32BE(160, 0);
+  header.writeUInt32BE(120, 4);
+  header.set([8, 2, 0, 0, 0], 8);
+  const rows = Array.from({ length: 120 }, () =>
+    Buffer.concat([Buffer.alloc(1), randomBytes(480)]),
+  );
+  return Buffer.concat([
+    Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]),
+    chunk("IHDR", header),
+    chunk("IDAT", deflateSync(Buffer.concat(rows))),
+    chunk("IEND", Buffer.alloc(0)),
+  ]);
+}
 
 // Adapted from @ablake4427's #178300 reproduction: real writes and finalization,
 // with only provider I/O scripted. A summary cannot finish interrupted work.
 it.each([
-  { interrupted: true, label: "preserves a length failure after recovering a summary" },
-  { interrupted: false, label: "keeps genuinely completed work successful after summary recovery" },
-])("$label", async ({ interrupted }) => {
-  const sessionId = interrupted ? "interrupted-finalization" : "completed-finalization";
+  {
+    interrupted: true,
+    screenshots: 0,
+    label: "preserves a length failure after recovering a summary",
+  },
+  {
+    interrupted: false,
+    screenshots: 0,
+    label: "keeps genuinely completed work successful after summary recovery",
+  },
+  // The summary reopens the session within contextWindow * 8 bytes; screenshots
+  // fill those bytes long before the token budget, so the request must survive.
+  {
+    interrupted: true,
+    screenshots: 10,
+    label: "keeps the user's request in view after a screenshot-heavy cut-off",
+  },
+])("$label", async ({ interrupted, screenshots }) => {
+  const sessionId = screenshots
+    ? "screenshot-finalization"
+    : interrupted
+      ? "interrupted-finalization"
+      : "completed-finalization";
   await withOpenClawTestState({ label: sessionId }, async (state) => {
     const bundled = state.path("bundled");
     await fs.mkdir(bundled);
+    await fs.writeFile(path.join(state.workspaceDir, "shot.png"), screenshotPng());
     const requests: string[] = [];
+    let summaryRequestHasPrompt: boolean | undefined;
+    let summaryRequestBytes = 0;
     const stream: StreamFn = (model, context: Context) => {
       const hasTools = Boolean(context.tools?.length);
       const toolResults = context.messages.filter(
         (message) => message.role === "toolResult",
       ).length;
+      if (!hasTools) {
+        const view = JSON.stringify(context.messages);
+        summaryRequestHasPrompt = view.includes(prompt);
+        summaryRequestBytes = Buffer.byteLength(view);
+      }
+      if (hasTools && toolResults > 0 && toolResults <= screenshots) {
+        requests.push("read");
+        const read = makeAgentAssistantMessage({
+          api: model.api,
+          provider: model.provider,
+          model: model.id,
+          stopReason: "toolUse",
+          content: [
+            {
+              type: "toolCall",
+              id: `read-${toolResults}`,
+              name: "read",
+              arguments: { path: "shot.png" },
+            },
+          ],
+        });
+        return createQueuedAssistantStream((push) => {
+          push({ type: "done", reason: "toolUse", message: read });
+        });
+      }
       const file = toolResults === 0 ? "a" : !interrupted && toolResults === 1 ? "b" : undefined;
       const message = makeAgentAssistantMessage({
         api: model.api,
@@ -126,7 +202,14 @@ it.each([
               auth: "api-key",
               apiKey: "synthetic-finalization-key",
               baseUrl: "https://provider.invalid",
-              models: [completionModelDefinition({ id: modelId, contextWindow: 200_000 })],
+              models: [
+                completionModelDefinition({
+                  id: modelId,
+                  ...(screenshots
+                    ? { contextWindow: 65_536, input: ["text", "image"] }
+                    : { contextWindow: 200_000 }),
+                }),
+              ],
             },
           },
         },
@@ -163,8 +246,7 @@ it.each([
               },
               provider: "anthropic",
               model: modelId,
-              prompt:
-                "Create a.txt containing alpha, then b.txt containing beta. Tell me when both are written.",
+              prompt,
               toolsAllow: ["read", "write"],
               cleanupBundleMcpOnRunEnd: true,
               timeoutMs: 60_000,
@@ -177,9 +259,14 @@ it.each([
             expect(network).not.toHaveBeenCalled();
             expect(requests).toEqual(
               interrupted
-                ? ["write-a", "length", "summary"]
+                ? ["write-a", ...Array<string>(screenshots).fill("read"), "length", "summary"]
                 : ["write-a", "write-b", "stop", "summary"],
             );
+            expect(summaryRequestHasPrompt).toBe(true);
+            if (screenshots) {
+              // The request survives inside the replay byte bound, not by loading everything.
+              expect(summaryRequestBytes).toBeLessThan(65_536 * 8);
+            }
             expect(await fs.readFile(path.join(state.workspaceDir, "a.txt"), "utf8")).toBe(
               "alpha\n",
             );

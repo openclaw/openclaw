@@ -4,7 +4,10 @@ import type { DatabaseSyncOptions } from "node:sqlite";
 import { threadId } from "node:worker_threads";
 import { expect, it, vi } from "vitest";
 import { getNodeSqliteKysely, iterateSqliteQuerySync } from "./kysely-sync.js";
-import { sqliteMaintenanceFixture } from "./sqlite-maintenance-fixture.test-support.js";
+import {
+  sqliteMaintenanceFixture,
+  sqliteSchedulerClock,
+} from "./sqlite-maintenance-fixture.test-support.js";
 import {
   assertNoActiveSqliteReaders,
   readSqliteReaderDiagnosticsForPath,
@@ -76,7 +79,7 @@ it("retains relayed health across native generations and rejects older observati
 });
 
 it("recycles an oversized completed WAL during admitted periodic maintenance without waiting for readers", async () => {
-  vi.useFakeTimers();
+  const clock = sqliteSchedulerClock();
   let admitted = false;
   const { databasePath, writer, maintenance } = fixture(
     {
@@ -93,20 +96,20 @@ it("recycles an oversized completed WAL during admitted periodic maintenance wit
   }
   const oversized = fs.statSync(`${databasePath}-wal`).size;
   expect(oversized).toBeGreaterThan(64 * 1024 * 1024);
-  await vi.advanceTimersByTimeAsync(100);
+  await clock.advanceBy(100);
   expect(fs.statSync(`${databasePath}-wal`).size).toBe(oversized);
   const reader = open(databasePath, { readOnly: true });
   reader.exec("BEGIN");
   expect(reader.prepare("SELECT length(value) AS bytes FROM payload").get()?.bytes).toBe(1048576);
   admitted = true;
   const started = performance.now();
-  await vi.advanceTimersByTimeAsync(100);
+  await clock.advanceBy(100);
   expect(performance.now() - started).toBeLessThan(1_000);
   expect(fs.statSync(`${databasePath}-wal`).size).toBe(oversized);
   expect(maintenance.health?.state).toBe("blocked");
   expect(writer.prepare("PRAGMA busy_timeout").get()?.timeout).toBe(5_000);
   reader.exec("ROLLBACK");
-  await vi.advanceTimersByTimeAsync(100);
+  await clock.advanceBy(100);
   expect(fs.statSync(`${databasePath}-wal`).size).toBeLessThanOrEqual(64 * 1024 * 1024);
   expect(maintenance.health?.state).toBe("complete");
   expect(writer.prepare("SELECT length(value) AS bytes FROM payload").get()?.bytes).toBe(1048576);

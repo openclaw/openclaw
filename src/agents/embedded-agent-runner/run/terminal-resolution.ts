@@ -639,9 +639,7 @@ async function completeEmbeddedRun(
         finalPromptText: input.attempt.finalPromptText,
         finalAssistantVisibleText:
           sourceFinal?.text ??
-          (isMissingReplyNotice
-            ? undefined
-            : (incompleteText ?? input.prepared.finalAssistantVisibleText)),
+          (isMissingReplyNotice ? undefined : input.prepared.finalAssistantVisibleText),
         finalAssistantRawText: isMissingReplyNotice
           ? undefined
           : input.prepared.finalAssistantRawText,

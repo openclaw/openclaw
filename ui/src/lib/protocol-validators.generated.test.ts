@@ -20,7 +20,10 @@ import {
   SessionsGoalClearParamsSchema,
   SessionsGoalUpdateParamsSchema,
 } from "../../../packages/gateway-protocol/src/schema/sessions-goal.js";
-import { SessionReactionEventSchema } from "../../../packages/gateway-protocol/src/schema/sessions-reactions.js";
+import {
+  MessageReactionSummarySchema,
+  SessionReactionEventSchema,
+} from "../../../packages/gateway-protocol/src/schema/sessions-reactions.js";
 import {
   SessionPermissionModeSchema,
   SessionRowSchema,
@@ -90,166 +93,49 @@ const progress = { sessionKey: "s", revision: 1, updatedAt: 0 };
 const replay = { sessionKey: "s", updatedAtMs: 1, truncated: false };
 const createFields = SessionsCreateParamsSchema.properties;
 
-// Checker, canonical schema, accepted value, rejected value.
-const fixtures: Array<[keyof typeof checks, TSchema, unknown, unknown]> = [
-  [
-    "isBoardSnapshot",
-    BoardSnapshotSchema,
+type Fixture = { name: keyof typeof checks; schema: TSchema; valid: unknown; invalid: unknown };
+const board = {
+  sessionKey: "agent:main:dashboard",
+  revision: 1,
+  tabs: [{ tabId: "overview", title: "Overview", position: 0, chatDock: "right" }],
+  widgets: [
     {
-      sessionKey: "agent:main:dashboard",
+      name: "chart",
+      tabId: "overview",
+      contentKind: "html",
+      sizeW: 12,
+      sizeH: 8,
+      position: 0,
+      grantState: "none",
       revision: 1,
-      tabs: [{ tabId: "overview", title: "Overview", position: 0, chatDock: "right" }],
-      widgets: [
-        {
-          name: "chart",
-          tabId: "overview",
-          contentKind: "html",
-          sizeW: 12,
-          sizeH: 8,
-          position: 0,
-          grantState: "none",
-          revision: 1,
-        },
-      ],
-    },
-    { sessionKey: "agent:main:dashboard", revision: 1, tabs: [], widgets: [{}] },
-  ],
-  [
-    "isSessionParticipantIdentity",
-    SessionParticipantIdentitySchema,
-    { type: "remote", pluginId: "slack", domain: "workspace", idKind: "user", id: "user-1" },
-    { type: "profile", id: "profile-1", displayName: "Extra field" },
-  ],
-  [
-    "isSessionReactionEvent",
-    SessionReactionEventSchema,
-    reaction,
-    { ...reaction, reactions: [{ emoji: "👍", count: 0, identities: [] }] },
-  ],
-  [
-    "isTalkVoiceChangeEvent",
-    TalkVoiceChangeEventSchema,
-    { ...voice, phase: "requested" },
-    { ...voice, phase: "ready" },
-  ],
-  ["isAgentActivityItem", AgentActivityItemSchema, activity, { ...activity, startedAt: Infinity }],
-  [
-    "isAgentRuntimeRestrictionErrorDetails",
-    AgentRuntimeRestrictionErrorDetailsSchema,
-    {
-      ...restriction,
-      recovery: {
-        action: "use-native-permissions",
-        sessionId: "session-1",
-        expectedPermissionMode: "guarded",
-        expectedSandboxMode: "off",
-        expectedNativeRuntimeConsent: null,
-      },
-    },
-    { ...restriction, recovery: { action: "use-native-permissions", sessionId: "session-1" } },
-  ],
-  [
-    "isSessionObserverDigest",
-    SessionObserverDigestSchema,
-    { ...observer, headline: "😀".repeat(120) },
-    { ...observer, headline: "😀".repeat(121) },
-  ],
-  [
-    "isSessionNarrationEvent",
-    SessionNarrationEventSchema,
-    { sessionKey: "s", runId: "r", text: "" },
-    { sessionKey: "s", runId: "r", text: "", extra: true },
-  ],
-  [
-    "isSessionApprovalEvent",
-    SessionApprovalEventSchema,
-    { sessionKey: "s", updatedAtMs: 1, phase: "pending", approval },
-    { sessionKey: "s", updatedAtMs: 1, phase: "terminal", approval },
-  ],
-  [
-    "isSessionApprovalReplay",
-    SessionApprovalReplaySchema,
-    { ...replay, approvals: [approval] },
-    {
-      ...replay,
-      approvals: [
-        {
-          ...approval,
-          presentation: {
-            ...approval.presentation,
-            allowedDecisions: ["allow-once", "allow-once"],
-          },
-        },
-      ],
     },
   ],
-  [
-    "isSessionsGoalUpdateParams",
-    SessionsGoalUpdateParamsSchema,
-    { ...goalIdentity, action: "edit", objective: "Ship" },
-    { ...goalIdentity, action: "pause", objective: "Ship" },
-  ],
-  [
-    "isSessionsGoalClearParams",
-    SessionsGoalClearParamsSchema,
-    goalIdentity,
-    { ...goalIdentity, issuedAtMs: -1 },
-  ],
-  ["isSessionWorktreeSource", createFields.worktreeSource, "empty", "repository"],
-  [
-    "isSessionDeviceFolder",
-    createFields.deviceFolder,
-    { deviceId: "device-1", path: "/work" },
-    { deviceId: "device-1", path: "" },
-  ],
-  [
-    "isSessionRepository",
-    createFields.repository,
-    { url: "https://example.test/repo.git" },
-    { url: "https://example.test/repo.git", unexpected: 1 },
-  ],
-  ["isSessionFastMode", createFields.fastMode, "ultrafast", "fast"],
-  ["isSessionTitleSource", createFields.titleSource, "😀".repeat(1000), "😀".repeat(1001)],
-  ["isSessionPermissionMode", SessionPermissionModeSchema, "guarded", "unrestricted"],
-  [
-    "isSessionToolOverrides",
-    SessionToolOverridesSchema,
-    { mcpToolsDeny: { server: ["tool"] } },
-    { mcpToolsDeny: { server: [123] } },
-  ],
-  [
-    "isChatHistoryState",
-    Type.Object(
-      {
-        stateRevision: Type.Required(ChatHistoryParamsSchema).properties.knownState,
-        pendingInputs: Type.Optional(ChatPendingInputsPageSchema),
-        sessionInfo: Type.Optional(SessionRowSchema),
-      },
-      { additionalProperties: false },
-    ),
-    {
-      stateRevision: { pendingInputs: "inputs-1", sessionInfo: "session-1" },
-      pendingInputs: { items: [], total: 0 },
-      sessionInfo: { key: "s", kind: "direct", sessionId: "session-1" },
-    },
-    {
-      stateRevision: { sessionInfo: "session-1" },
-      sessionInfo: { key: "s", kind: "direct", owner: { actor: { type: "unknown" } } },
-    },
-  ],
-  [
-    "isChatTranscriptMetadata",
-    Type.Pick(SessionRowSchema, CHAT_TRANSCRIPT_METADATA_KEYS),
-    { key: "s", kind: "direct", owner: { actor: { type: "human" } } },
-    { key: "s", kind: "direct", owner: { actor: { type: "unknown" } } },
-  ],
-  [
-    "isProgressCard",
-    ProgressCardSchema,
-    { ...progress, steps: [{ step: "Ship", status: "pending" }] },
-    { ...progress, steps: [{ step: "Ship", status: "unknown" }] },
-  ],
-];
+};
+const recovery = {
+  action: "use-native-permissions",
+  sessionId: "session-1",
+  expectedPermissionMode: "guarded",
+  expectedSandboxMode: "off",
+  expectedNativeRuntimeConsent: null,
+};
+const duplicateDecisions = {
+  ...approval,
+  presentation: { ...approval.presentation, allowedDecisions: ["allow-once", "allow-once"] },
+};
+const historySchema = Type.Object(
+  {
+    stateRevision: Type.Required(ChatHistoryParamsSchema).properties.knownState,
+    pendingInputs: Type.Optional(ChatPendingInputsPageSchema),
+    sessionInfo: Type.Optional(SessionRowSchema),
+  },
+  { additionalProperties: false },
+);
+const history = {
+  stateRevision: { pendingInputs: "inputs-1", sessionInfo: "session-1" },
+  pendingInputs: { items: [], total: 0 },
+  sessionInfo: { key: "s", kind: "direct", sessionId: "session-1" },
+};
+const invalidOwner = { key: "s", kind: "direct", owner: { actor: { type: "unknown" } } };
 
 describe("standalone browser protocol validation", () => {
   it("keeps bounded display positions and strips unrelated persisted fields", () => {
@@ -275,9 +161,35 @@ describe("standalone browser protocol validation", () => {
     }
   });
 
-  it.each(fixtures)(
-    "preserves canonical %s acceptance and rejection",
-    (name, schema, valid, invalid) => {
+  it.each`
+    name                                       | schema                                                        | valid                                                                                       | invalid
+    ${"isBoardSnapshot"}                       | ${BoardSnapshotSchema}                                        | ${board}                                                                                    | ${{ ...board, tabs: [], widgets: [{}] }}
+    ${"isSessionParticipantIdentity"}          | ${SessionParticipantIdentitySchema}                           | ${{ type: "remote", pluginId: "slack", domain: "workspace", idKind: "user", id: "user-1" }} | ${{ type: "profile", id: "profile-1", displayName: "Extra field" }}
+    ${"isSessionReactionEvent"}                | ${SessionReactionEventSchema}                                 | ${reaction}                                                                                 | ${{ ...reaction, reactions: [{ emoji: "👍", count: 0, identities: [] }] }}
+    ${"isMessageReactionSummary"}              | ${MessageReactionSummarySchema}                               | ${{ emoji: "👍", count: 1, identities: [{ id: "peer" }] }}                                  | ${{ emoji: "👍", count: 0, identities: [] }}
+    ${"isTalkVoiceChangeEvent"}                | ${TalkVoiceChangeEventSchema}                                 | ${{ ...voice, phase: "requested" }}                                                         | ${{ ...voice, phase: "ready" }}
+    ${"isAgentActivityItem"}                   | ${AgentActivityItemSchema}                                    | ${activity}                                                                                 | ${{ ...activity, startedAt: Infinity }}
+    ${"isAgentRuntimeRestrictionErrorDetails"} | ${AgentRuntimeRestrictionErrorDetailsSchema}                  | ${{ ...restriction, recovery }}                                                             | ${{ ...restriction, recovery: { action: "use-native-permissions", sessionId: "session-1" } }}
+    ${"isSessionObserverDigest"}               | ${SessionObserverDigestSchema}                                | ${{ ...observer, headline: "😀".repeat(120) }}                                              | ${{ ...observer, headline: "😀".repeat(121) }}
+    ${"isSessionNarrationEvent"}               | ${SessionNarrationEventSchema}                                | ${{ sessionKey: "s", runId: "r", text: "" }}                                                | ${{ sessionKey: "s", runId: "r", text: "", extra: true }}
+    ${"isSessionApprovalEvent"}                | ${SessionApprovalEventSchema}                                 | ${{ sessionKey: "s", updatedAtMs: 1, phase: "pending", approval }}                          | ${{ sessionKey: "s", updatedAtMs: 1, phase: "terminal", approval }}
+    ${"isSessionApprovalReplay"}               | ${SessionApprovalReplaySchema}                                | ${{ ...replay, approvals: [approval] }}                                                     | ${{ ...replay, approvals: [duplicateDecisions] }}
+    ${"isSessionsGoalUpdateParams"}            | ${SessionsGoalUpdateParamsSchema}                             | ${{ ...goalIdentity, action: "edit", objective: "Ship" }}                                   | ${{ ...goalIdentity, action: "pause", objective: "Ship" }}
+    ${"isSessionsGoalClearParams"}             | ${SessionsGoalClearParamsSchema}                              | ${goalIdentity}                                                                             | ${{ ...goalIdentity, issuedAtMs: -1 }}
+    ${"isSessionWorktreeSource"}               | ${createFields.worktreeSource}                                | ${"empty"}                                                                                  | ${"repository"}
+    ${"isSessionDeviceFolder"}                 | ${createFields.deviceFolder}                                  | ${{ deviceId: "device-1", path: "/work" }}                                                  | ${{ deviceId: "device-1", path: "" }}
+    ${"isSessionRepository"}                   | ${createFields.repository}                                    | ${{ url: "https://example.test/repo.git" }}                                                 | ${{ url: "https://example.test/repo.git", unexpected: 1 }}
+    ${"isSessionFastMode"}                     | ${createFields.fastMode}                                      | ${"ultrafast"}                                                                              | ${"fast"}
+    ${"isSessionCyberAccessProgram"}           | ${createFields.cyberAccessProgram}                            | ${"daybreak_blue"}                                                                          | ${"unknown"}
+    ${"isSessionTitleSource"}                  | ${createFields.titleSource}                                   | ${"😀".repeat(1000)}                                                                        | ${"😀".repeat(1001)}
+    ${"isSessionPermissionMode"}               | ${SessionPermissionModeSchema}                                | ${"guarded"}                                                                                | ${"unrestricted"}
+    ${"isSessionToolOverrides"}                | ${SessionToolOverridesSchema}                                 | ${{ mcpToolsDeny: { server: ["tool"] } }}                                                   | ${{ mcpToolsDeny: { server: [123] } }}
+    ${"isChatHistoryState"}                    | ${historySchema}                                              | ${history}                                                                                  | ${{ stateRevision: { sessionInfo: "session-1" }, sessionInfo: invalidOwner }}
+    ${"isChatTranscriptMetadata"}              | ${Type.Pick(SessionRowSchema, CHAT_TRANSCRIPT_METADATA_KEYS)} | ${{ key: "s", kind: "direct", contextTokens: 32768, owner: { actor: { type: "human" } } }}  | ${invalidOwner}
+    ${"isProgressCard"}                        | ${ProgressCardSchema}                                         | ${{ ...progress, steps: [{ step: "Ship", status: "pending" }] }}                            | ${{ ...progress, steps: [{ step: "Ship", status: "unknown" }] }}
+  `(
+    "preserves canonical $name acceptance and rejection",
+    ({ name, schema, valid, invalid }: Fixture) => {
       const check = checks[name];
       expect(Value.Check(schema, valid)).toBe(true);
       expect(check(valid)).toBe(true);

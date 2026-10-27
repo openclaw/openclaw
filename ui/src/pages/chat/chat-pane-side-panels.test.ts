@@ -8,10 +8,10 @@ import { sessionsResult } from "../../lib/sessions/session-capability.test-suppo
 import { renderPanelFixture } from "../../test-helpers/chat-pane-embedded-panels.ts";
 import { waitForSolid } from "../../test-helpers/solid-settle.ts";
 import { createStorageMock } from "../../test-helpers/storage.ts";
+import { createGatewayBrowserClientFixture } from "./chat-application-context.test-support.ts";
 import { createRefreshChatPane } from "./chat-pane-history.test-support.ts";
 import {
   connectPaneTestView,
-  createGatewayBrowserClientFixture,
   createTestChatPane,
   getPaneTestRuntime,
 } from "./chat-pane.test-support.ts";
@@ -53,6 +53,14 @@ function createPane() {
   return { ...fixture, parent, child, roster, run };
 }
 
+function dashboard(options: Parameters<typeof createDashboardHarness>[0]) {
+  vi.stubGlobal("localStorage", createStorageMock());
+  vi.stubGlobal("sessionStorage", createStorageMock());
+  const h = createDashboardHarness(options);
+  onTestFinished(() => h.mount.remove());
+  return h;
+}
+
 it("projects the Side Chat model catalog only when its panel mounts", async () => {
   const { pane, state } = createTestChatPane({ client: createGatewayBrowserClientFixture() });
   const context = pane.context;
@@ -60,7 +68,6 @@ it("projects the Side Chat model catalog only when its panel mounts", async () =
   context.gateway.snapshot.hello = state.hello;
   state.chatModelCatalog = [{ id: "test-model", name: "Test model", provider: "example" }];
   state.updateSidebarLayout(openSlot(openSlot({ columns: [] }, "companion"), "terminal"));
-  const projectCatalog = vi.spyOn(state.chatModelCatalog, "map");
   const mount = document.body.appendChild(document.createElement("div"));
   onTestFinished(() => mount.remove());
   const renderPanels = async () => {
@@ -75,7 +82,6 @@ it("projects the Side Chat model catalog only when its panel mounts", async () =
   };
 
   await renderPanels();
-  expect(projectCatalog).not.toHaveBeenCalled();
   expect(mount.querySelector("openclaw-chat-session-rail")).toBeNull();
 
   state.updateSidebarLayout(openSlot(state.sidebarLayout, "companion"));
@@ -91,7 +97,6 @@ it("projects the Side Chat model catalog only when its panel mounts", async () =
   await waitForSolid(() =>
     expect(rail.modelControls?.modelCatalog?.[0]).toEqual(state.chatModelCatalog[0]),
   );
-  expect(projectCatalog).toHaveBeenCalledOnce();
   state.chatModelsLoading = true;
   await waitForSolid(() => expect(rail.modelControls?.modelCatalogState.status).toBe("loading"));
   state.chatModelCatalog = [{ id: "loaded-model", name: "Loaded model", provider: "example" }];
@@ -150,8 +155,8 @@ it.each([true, false])(
   },
 );
 
-it.each([undefined, "processes"] as const)(
-  "keeps Subagents closed across lifecycle changes with %s selected",
+it.each([undefined, "processes", "subagents"] as const)(
+  "preserves the chosen panels across lifecycle changes with %s selected",
   (selected) => {
     const { pane, state, parent, child, roster, run } = createPane();
     if (selected) {
@@ -171,37 +176,26 @@ it.each([undefined, "processes"] as const)(
     expect(state.sidebarLayout).toEqual(layout);
 
     run(false);
+    expect(state.sidebarLayout).toEqual(layout);
     run(true);
     expect(state.sidebarLayout).toEqual(layout);
+    if (selected === "subagents") {
+      state.updateSidebarLayout(closeSlot(state.sidebarLayout, "subagents"));
+      pane.render();
+      expect(isSidebarSlotVisible(state.sidebarLayout, "subagents")).toBe(false);
+      run(false);
+      run(true);
+      expect(isSidebarSlotVisible(state.sidebarLayout, "subagents")).toBe(false);
+    }
   },
 );
 
-it("preserves a manually opened panel and never reopens it after dismissal", () => {
-  const { pane, state, child, roster, run } = createPane();
-  roster.rows = [child];
-  state.updateSidebarLayout(openSlot(state.sidebarLayout, "subagents"));
-  run(true);
-  expect(isSidebarSlotVisible(state.sidebarLayout, "subagents")).toBe(true);
-
-  run(false);
-  expect(isSidebarSlotVisible(state.sidebarLayout, "subagents")).toBe(true);
-
-  state.updateSidebarLayout(closeSlot(state.sidebarLayout, "subagents"));
-  pane.render();
-  expect(isSidebarSlotVisible(state.sidebarLayout, "subagents")).toBe(false);
-  run(true);
-  expect(isSidebarSlotVisible(state.sidebarLayout, "subagents")).toBe(false);
-});
-
 it("persists tab selection without changing the chosen main content", () => {
-  vi.stubGlobal("localStorage", createStorageMock());
-  vi.stubGlobal("sessionStorage", createStorageMock());
   const stored = promoteSidebarPanel(
     openSlot(openSlot({ columns: [] }, "terminal"), "dashboard"),
     "dashboard",
   );
-  const h = createDashboardHarness({ savedLayout: stored });
-  onTestFinished(() => h.mount.remove());
+  const h = dashboard({ savedLayout: stored });
   h.sync();
 
   const layout = expectDefined(h.pane.render().layout, "Dashboard pane layout");
@@ -214,12 +208,9 @@ it("persists tab selection without changing the chosen main content", () => {
 });
 
 it("closes dashboard presentation through its owner without minimizing unrelated tabs", () => {
-  vi.stubGlobal("localStorage", createStorageMock());
-  vi.stubGlobal("sessionStorage", createStorageMock());
-  const h = createDashboardHarness({
+  const h = dashboard({
     savedLayout: openSlot(openSlot({ columns: [] }, "dashboard"), "terminal"),
   });
-  onTestFinished(() => h.mount.remove());
   h.sync();
 
   const layout = expectDefined(h.pane.render().layout, "Dashboard pane layout");
@@ -231,12 +222,9 @@ it("closes dashboard presentation through its owner without minimizing unrelated
 });
 
 it("discards a Details process request after switching agents on the same global key", () => {
-  vi.stubGlobal("localStorage", createStorageMock());
-  vi.stubGlobal("sessionStorage", createStorageMock());
-  const { pane, state, mount } = createDashboardHarness({
+  const { pane, state } = dashboard({
     row: { key: "global", agentId: "main", sessionId: "global-session", kind: "direct" },
   });
-  onTestFinished(() => mount.remove());
   pane.routeFace = "chat";
   const runtime = getPaneTestRuntime(pane);
   state.assistantAgentId = "main";

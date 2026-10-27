@@ -1,4 +1,5 @@
 import { expect, it } from "vitest";
+import { createBoardWidget } from "../lib/board/widget.test-support.ts";
 import { controlUiSessionUrl, installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { workboardUi } from "../test-helpers/control-ui-workboard-fixture.ts";
 import { board as emptyBoard, seedChatSettings } from "./chat-layout-fixtures.test-support.ts";
@@ -10,24 +11,17 @@ const suite = createControlUiE2eSuite({
 });
 
 const sessionKey = "agent:main:dashboard:workboard-layout";
-const boardSnapshot = {
-  ...emptyBoard(sessionKey),
-  widgets: [
-    {
-      name: "workboard-board",
-      tabId: "main",
-      title: "Platform board",
-      contentKind: "plugin",
-      pluginKind: "workboard:board",
-      props: { boardId: "platform" },
-      sizeW: 12,
-      sizeH: 5,
-      position: 0,
-      grantState: "none",
-      revision: 1,
-    },
-  ],
-};
+const boardSnapshot = emptyBoard(sessionKey, [
+  createBoardWidget({
+    name: "workboard-board",
+    title: "Platform board",
+    contentKind: "plugin",
+    pluginKind: "workboard:board",
+    props: { boardId: "platform" },
+    sizeW: 12,
+    sizeH: 5,
+  }),
+]);
 
 const statuses = ["ready", "running", "done"] as const;
 const cards = statuses.map((status, index) => ({
@@ -48,7 +42,13 @@ suite.define(() => {
     await suite.withPage({ viewport: { height: 900, width: 1280 } }, async ({ page }) => {
       const cursor = { position: cards[1]!.position, createdAt: 1, id: cards[1]!.id };
       const firstPage = { cards: cards.slice(0, 2), statuses, nextCursor: cursor };
-      const lastPage = { cards: cards.slice(2), statuses };
+      const readyCards = Array.from({ length: 6 }, (_, index) => ({
+        ...cards[0]!,
+        id: `ready-page-${index}`,
+        title: `Ready page card ${index + 1}`,
+        position: (index + 4) * 1000,
+      }));
+      const lastPage = { cards: [...cards.slice(2), ...readyCards], statuses };
       await installMockGateway(page, {
         ...workboardUi,
         sessionKey,
@@ -107,8 +107,42 @@ suite.define(() => {
         });
       }
       await loadMore.click();
-      await expect.poll(() => board.locator(".workboard-card").count()).toBe(3);
+      await expect.poll(() => board.locator(".workboard-card").count()).toBe(9);
       expect(await loadMore.count()).toBe(0);
+      const ready = board.locator(".workboard-column--ready .workboard-column__cards");
+      await expect
+        .poll(() =>
+          ready.evaluate((element) => ({
+            overflows: element.scrollHeight > element.clientHeight + 1,
+            scrollable: element.hasAttribute("data-scrollable"),
+            bottom: element.style.getPropertyValue("--workboard-fade-bottom"),
+          })),
+        )
+        .toEqual({ overflows: true, scrollable: true, bottom: "24px" });
+      expect(
+        await ready.evaluate((element) => {
+          const viewport = element.getBoundingClientRect();
+          return [...element.querySelectorAll(".workboard-card")].every((card) => {
+            const bounds = card.getBoundingClientRect();
+            return bounds.left >= viewport.left - 1 && bounds.right <= viewport.right + 1;
+          });
+        }),
+      ).toBe(true);
+      await ready.evaluate((element) => {
+        element.scrollTop = element.scrollHeight;
+      });
+      await expect
+        .poll(() =>
+          ready
+            .locator(".workboard-card")
+            .last()
+            .evaluate((card) => {
+              const viewport = card.closest(".workboard-column__cards")!.getBoundingClientRect();
+              const bounds = card.getBoundingClientRect();
+              return bounds.top >= viewport.top && bounds.bottom <= viewport.bottom + 1;
+            }),
+        )
+        .toBe(true);
     });
   });
 });

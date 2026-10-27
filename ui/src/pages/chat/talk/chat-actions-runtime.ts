@@ -4,11 +4,23 @@ import { loadSettings, patchSettings } from "../../../app/settings.ts";
 import { formatUiError, formatUiExternalText } from "../../../lib/format-error.ts";
 import type { GatewaySpeechPlayback } from "../../../lib/speech-playback.ts";
 import type { ChatRealtimeState, stopChatRealtimeTalk } from "../chat-realtime.ts";
+import { persistedMessageEntryId } from "../chat-thread-items.ts";
 import { orderRealtimeTalkConversation, updateRealtimeTalkConversation } from "./conversation.ts";
 import { discoverRealtimeTalkCameras, RealtimeTalkSelectedMicrophoneError } from "./input.ts";
 import { RealtimeTalkSession } from "./session.ts";
 import type { SplitTalkOptions } from "./split.ts";
-import type { RealtimeTalkVoiceSelection } from "./voice-selection.ts";
+import { RealtimeTalkVoiceSelection } from "./voice-selection.ts";
+
+/** Where a new caption starts: after the newest saved message, or first in an empty chat. */
+function latestSavedMessageId(messages: readonly unknown[]): string | null | undefined {
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    const id = persistedMessageEntryId(messages[index]);
+    if (id) {
+      return id;
+    }
+  }
+  return messages.length ? undefined : null;
+}
 
 const talkStatusIsError = (state: ChatRealtimeState) =>
   state.realtimeTalk.snapshot.realtimeTalkStatus === "error";
@@ -123,6 +135,7 @@ type RealtimeTalkStart = {
   client: GatewayBrowserClient;
   sessionKey: string;
   voiceController: RealtimeTalkVoiceSelection | null;
+  useSystemDefault: boolean;
   voiceChange?: TalkVoiceChangeEvent;
   replacementTransport: ReturnType<RealtimeTalkSession["getTransport"]>;
   inputDeviceId?: string;
@@ -133,7 +146,10 @@ type RealtimeTalkStart = {
   itemPrefix: string;
   orderOffset: number;
   stopRealtimeTalk: typeof stopChatRealtimeTalk;
-  startRealtimeTalk: (useSystemDefault: boolean) => Promise<RealtimeTalkSession | undefined>;
+  startRealtimeTalk: (
+    useSystemDefault: boolean,
+    voiceChange?: TalkVoiceChangeEvent,
+  ) => Promise<RealtimeTalkSession | undefined>;
 };
 
 export async function startChatRealtimeSession(
@@ -141,7 +157,8 @@ export async function startChatRealtimeSession(
   {
     client,
     sessionKey,
-    voiceController,
+    voiceController: initialVoiceController,
+    useSystemDefault,
     voiceChange,
     replacementTransport,
     inputDeviceId,
@@ -155,6 +172,29 @@ export async function startChatRealtimeSession(
     stopRealtimeTalk,
   }: RealtimeTalkStart,
 ): Promise<RealtimeTalkSession | undefined> {
+  let voiceController = initialVoiceController;
+  if (!voiceChange) {
+    const controller: RealtimeTalkVoiceSelection = new RealtimeTalkVoiceSelection({
+      client,
+      sessionKey,
+      isCurrent: () =>
+        state.realtimeTalk.snapshot.realtimeTalkVoiceController === controller &&
+        state.client === client &&
+        state.sessionKey === sessionKey &&
+        state.connected,
+      currentCall: () => state.realtimeTalk.snapshot.realtimeTalkSession,
+      restart: (request) => startRealtimeTalk(useSystemDefault, request),
+      cancel: (message) => {
+        stopRealtimeTalk(state, { preserveConversation: true });
+        state.realtimeTalk.update({
+          realtimeTalkStatus: "error",
+          realtimeTalkDetail: message,
+        });
+      },
+    });
+    voiceController = controller;
+    state.realtimeTalk.update({ realtimeTalkVoiceController: controller });
+  }
   let autoEnableCameraAttempted = false;
   const forCurrentSession =
     <Args extends unknown[]>(callback: (...args: Args) => void) =>
@@ -214,13 +254,16 @@ export async function startChatRealtimeSession(
         state.realtimeTalk.update({
           realtimeTalkConversationState: updateRealtimeTalkConversation(
             state.realtimeTalk.snapshot.realtimeTalkConversationState,
-            entry.itemId === undefined
-              ? entry
-              : {
-                  ...entry,
-                  itemId: `${itemPrefix}${entry.itemId}`,
-                  order: entry.order === undefined ? undefined : orderOffset + entry.order,
-                },
+            {
+              ...entry,
+              ...(entry.itemId === undefined
+                ? {}
+                : {
+                    itemId: `${itemPrefix}${entry.itemId}`,
+                    order: entry.order === undefined ? undefined : orderOffset + entry.order,
+                  }),
+              afterMessageId: latestSavedMessageId(state.chatMessages),
+            },
           ),
         });
       }),

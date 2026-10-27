@@ -37,7 +37,6 @@ const BOT_PUBLIC_KEY = getPublicKey(Uint8Array.from(Buffer.from(PRIVATE_KEY, "he
 const MEMBER_PUBLIC_KEY = "b".repeat(64);
 const RELAY_PUBLIC_KEY = "c".repeat(64);
 const ROOM_ID = "7c4a6d2a-2ed9-4b4e-a5e2-4d705ee9b34c";
-const roomFilter = { authors: [RELAY_PUBLIC_KEY], "#d": [ROOM_ID], limit: 1 };
 
 function directoryParams(overrides: BuzzConfigInput = {}) {
   const buzz = {
@@ -51,15 +50,14 @@ function directoryParams(overrides: BuzzConfigInput = {}) {
 
 function activeBus(overrides: Partial<Directory> = {}): ActiveBus {
   return {
-    directory: {
-      self: () => ({ kind: "user", id: BOT_PUBLIC_KEY }),
-      listPeers: () => [],
-      listGroupMembers: () => [],
-      listGroups: () => [],
-      ...overrides,
-    },
+    directory: Object.assign(profileState([]), overrides),
     refreshDirectory: vi.fn(async () => {}),
   };
+}
+
+function expectNoNetwork() {
+  expect(fetch).not.toHaveBeenCalled();
+  expect(relayMocks.connect).not.toHaveBeenCalled();
 }
 
 function event(params: Partial<Event> & Pick<Event, "kind">): Event {
@@ -108,19 +106,13 @@ describe("Buzz live directory", () => {
     const params = directoryParams();
 
     await expect(
-      listBuzzDirectoryPeersLive({
-        ...params,
-        query: "alice",
-        limit: 1,
-      }),
+      listBuzzDirectoryPeersLive({ ...params, query: "alice", limit: 1 }),
     ).resolves.toEqual([
       expect.objectContaining({ kind: "user", id: MEMBER_PUBLIC_KEY, ...ALICE }),
     ]);
-
-    expect(relayMocks.subscriptions.map(({ filter }) => filter)).toEqual([
-      { ...roomFilter, kinds: [39_000] },
-      { ...roomFilter, kinds: [39_002] },
-      { kinds: [0], authors: [BOT_PUBLIC_KEY, MEMBER_PUBLIC_KEY, RELAY_PUBLIC_KEY], limit: 3 },
+    expect(relayMocks.subscriptions.slice(0, 2).map(({ filter }) => filter.authors)).toEqual([
+      [RELAY_PUBLIC_KEY],
+      [RELAY_PUBLIC_KEY],
     ]);
     expect(relayMocks.auth).toHaveBeenCalledOnce();
     expect(relayMocks.close).toHaveBeenCalledOnce();
@@ -158,14 +150,9 @@ describe("Buzz live directory", () => {
           ? { source: "env", provider: "default", id: "UNAVAILABLE_KEY" }
           : PRIVATE_KEY,
       }).cfg.channels.buzz;
-      const cfg = {
-        channels: {
-          buzz: {
-            enabled: rootEnabled,
-            accounts: { ada: account },
-          },
-        },
-      } as OpenClawConfig;
+      const cfg: OpenClawConfig = {
+        channels: { buzz: { enabled: rootEnabled, accounts: { ada: account } } },
+      };
       const params = { cfg, accountId: "ada", runtime };
       await expect(
         listBuzzDirectoryGroupsLive({ ...params, query: ROOM_ID, limit: 1 }),
@@ -176,8 +163,7 @@ describe("Buzz live directory", () => {
       );
       const self = await getBuzzDirectorySelf(params);
       expect(self?.id ?? null).toBe(unavailable ? null : BOT_PUBLIC_KEY);
-      expect(fetch).not.toHaveBeenCalled();
-      expect(relayMocks.connect).not.toHaveBeenCalled();
+      expectNoNetwork();
       expect(refreshDirectory).not.toHaveBeenCalled();
     },
   );
@@ -187,26 +173,19 @@ describe("Buzz live directory", () => {
     const { cfg } = directoryParams({
       authTag: { source: "env", provider: "default", id: "MISSING_BUZZ_AUTH_TAG" },
     });
-    const { listBuzzDirectoryGroupsFromConfig } = await import("./directory-config.js");
-
-    await expect(listBuzzDirectoryGroupsFromConfig({ cfg, accountId: "default" })).resolves.toEqual(
-      [expect.objectContaining({ id: `buzz:${ROOM_ID}` })],
-    );
     await expect(
       listBuzzDirectoryGroupsLive({ cfg, accountId: "default", runtime }),
     ).rejects.toThrow(/configured.*unavailable|unresolved/i);
-    expect(relayMocks.connect).not.toHaveBeenCalled();
-    expect(fetch).not.toHaveBeenCalled();
+    expectNoNetwork();
   });
 
   it("does not load peers or memberships from archived rooms", async () => {
     relayMocks.roomMetadataEvents = [room("Engineering", true)];
     await expect(listBuzzDirectoryPeersLive(directoryParams())).resolves.toEqual([]);
 
-    expect(relayMocks.subscriptions.map(({ filter }) => filter)).toEqual([
-      { ...roomFilter, kinds: [39_000] },
-      { kinds: [0], authors: [BOT_PUBLIC_KEY], limit: 1 },
-    ]);
+    expect(relayMocks.subscriptions.some(({ filter }) => filter.kinds?.includes(39_002))).toBe(
+      false,
+    );
   });
 
   it("refreshes only room listings when an active bus already owns directory state", async () => {
@@ -226,19 +205,12 @@ describe("Buzz live directory", () => {
   });
 
   it("returns the active directory snapshot when room metadata refresh fails", async () => {
-    const refreshDirectory = vi.fn(async () => {
-      throw new Error("relay stalled");
-    });
-    gatewayMocks.activeBus = {
-      ...activeBus({
-        listGroups: () => [{ kind: "group", id: `buzz:${ROOM_ID}`, name: "Cached Engineering" }],
-      }),
-      refreshDirectory,
-    };
-
-    await expect(listBuzzDirectoryGroupsLive(directoryParams())).resolves.toEqual([
-      { kind: "group", id: `buzz:${ROOM_ID}`, name: "Cached Engineering" },
-    ]);
+    const cached = [{ kind: "group" as const, id: `buzz:${ROOM_ID}`, name: "Cached Engineering" }];
+    gatewayMocks.activeBus = activeBus({ listGroups: () => cached });
+    vi.mocked(gatewayMocks.activeBus.refreshDirectory).mockRejectedValue(
+      new Error("relay stalled"),
+    );
+    await expect(listBuzzDirectoryGroupsLive(directoryParams())).resolves.toEqual([...cached]);
   });
 });
 
@@ -309,10 +281,7 @@ describe("Buzz directory state", () => {
       profile({ name: "Fallback", image: "https://example.com/fallback.png" }),
     );
     expect(fallback.listPeers({})).toMatchObject([
-      {
-        name: "Fallback",
-        avatarUrl: "https://example.com/fallback.png",
-      },
+      { name: "Fallback", avatarUrl: "https://example.com/fallback.png" },
     ]);
 
     const emptyPrimary = profileState();

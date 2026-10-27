@@ -128,6 +128,29 @@ it("publishes scope discovery and reference installs without revisiting unchange
   expect(visited).toBe(0);
   expect([...registry.capture(cursor)[0]!.references.keys()]).toEqual([123]);
 
+  // Worker discovery creates a cell without advancing the host's shared revision.
+  const importer = createAdmission();
+  createReceipts(importer, { publish: () => {} }).readSqliteDatabaseScopedWriteTokenForPath(
+    ":memory:",
+    "imported",
+  );
+  registry.install([{ ...record, writeScopes: importer.writeScopes }]);
+  expect(visited).toBe(0);
+  expect([...registry.capture(cursor)[0]!.writeScopes.keys()]).toEqual(['["key","imported"]']);
+
+  registry.install([
+    {
+      ...record,
+      facts: new Map(),
+      writeScopes: new Map(),
+      references: new Map([[124, references]]),
+    },
+  ]);
+  expect(visited).toBe(0);
+  expect([...registry.capture(cursor)[0]!.references.keys()]).toEqual([124]);
+  registry.capture();
+  expect(visited).toBe(0);
+
   const added = receipts.readSqliteDatabaseScopedWriteTokenForPath(":memory:", "new");
   expect(visited).toBe(0);
   const [delta] = registry.capture(cursor);
@@ -140,7 +163,7 @@ it("publishes scope discovery and reference installs without revisiting unchange
   using database = new DatabaseSync(":memory:");
   receipts.retireSqliteDatabaseWriteScopes(database, ["new"]);
   expect(Atomics.load(delta!.writeScopes.get('["key","new"]')!.state, 1)).toBe(1);
-  expect(registry.capture()[0]!.writeScopes.size).toBe(256);
+  expect(registry.capture()[0]!.writeScopes.size).toBe(257);
   expect(receipts.readSqliteDatabaseScopedWriteTokenForPath(":memory:", "new")).not.toBe(added);
   expect([...registry.capture(cursor)[0]!.writeScopes.keys()]).toEqual(['["key","new"]']);
 });

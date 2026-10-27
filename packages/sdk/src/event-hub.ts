@@ -76,7 +76,14 @@ export class EventHub<T> {
           wake: () => void;
         };
         const pendingReads: PendingRead[] = [];
-        const finishPendingReads = () => {
+        const cleanup = () => {
+          if (stopped) {
+            return;
+          }
+          stopped = true;
+          // Iterator retirement discards its backlog; hub close alone still permits draining.
+          queue.length = 0;
+          this.listeners.delete(listener);
           for (const pending of pendingReads.splice(0)) {
             this.waiters.delete(pending.wake);
             if (hasStreamError) {
@@ -87,16 +94,6 @@ export class EventHub<T> {
               pending.resolve({ done: true, value: undefined });
             }
           }
-        };
-        const cleanup = () => {
-          if (stopped) {
-            return;
-          }
-          stopped = true;
-          // Iterator retirement discards its backlog; hub close alone still permits draining.
-          queue.length = 0;
-          this.listeners.delete(listener);
-          finishPendingReads();
         };
         const listener = (event: T) => {
           let matches: boolean;

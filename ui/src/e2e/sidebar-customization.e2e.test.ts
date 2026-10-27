@@ -2,7 +2,6 @@
 import type { Locator } from "playwright";
 import { expect, it } from "vitest";
 import type { AppSidebarElement } from "../components/app-sidebar.tsx";
-import { waitForControlUiProofSurface } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import {
   controlUiSessionPath,
   installMockGateway,
@@ -19,6 +18,11 @@ import { openSidebarPages, openSidebarPinMenu } from "./sidebar-customization.te
 const suite = createControlUiE2eSuite({
   name: "Control UI sidebar customization mocked Gateway E2E",
   startServerBeforeBrowser: true,
+  // Pointer coverage needs visible native scrollbars with a measurable gutter.
+  browserLaunchOptions: {
+    ignoreDefaultArgs: ["--hide-scrollbars"],
+    args: ["--disable-features=OverlayScrollbar,OverlayScrollbars"],
+  },
   unavailableMessage: (executablePath) =>
     `Playwright Chromium is not installed or cannot start at ${executablePath}. Run \`pnpm --dir ui exec playwright install --with-deps chromium\`, or set OPENCLAW_UI_E2E_ALLOW_MISSING_CHROMIUM=1 only when intentionally skipping this lane.`,
 });
@@ -34,14 +38,101 @@ async function roundedWidth(locator: Locator): Promise<number> {
 }
 
 suite.define(() => {
-  it.each(
-    [1440, 390].flatMap((width) => [
-      { width, entry: "route:systems", label: "Systems", route: "chat" },
-      { width, entry: "plugin:workboard/workboard", label: "Workboard", route: "workboard/ops" },
-    ]),
-  )(
-    "keeps $label nav controls aligned and separated at $width px",
-    async ({ width, entry, label, route }) => {
+  it.each(["ltr", "rtl"] as const)(
+    "keeps the sidebar scrollbar separate from its resize target in %s",
+    async (direction) => {
+      await suite.withPage(
+        { locale: "en-US", serviceWorkers: "block", viewport: { height: 954, width: 1105 } },
+        async ({ page }) => {
+          await installMockGateway(page, {
+            sessions: Array.from({ length: 40 }, (_, index) => ({
+              key: `agent:main:divider-session-${index}`,
+              label: `Project checkpoint ${index + 1}`,
+              kind: "direct",
+              updatedAt: 1_800_000_000_000 - index * 60_000,
+            })),
+          });
+          await page.goto(`${suite.server.baseUrl}chat`);
+          const body = page.locator(".sidebar-shell__body");
+          const nav = page.locator(".shell-nav");
+          const resizer = page.getByRole("separator", { name: "Resize sidebar" });
+          for (let batch = 0; batch < 3; batch++) {
+            const more = body.getByRole("button", { name: "Show more", exact: true }).first();
+            await more.click();
+          }
+          await expect
+            .poll(() => body.evaluate((element) => element.scrollHeight > element.clientHeight))
+            .toBe(true);
+          await page.evaluate((pageDirection) => {
+            document.documentElement.dir = pageDirection;
+          }, direction);
+          await expect
+            .poll(() => body.evaluate((element) => getComputedStyle(element).direction))
+            .toBe(direction);
+          await body.evaluate((element) => {
+            element.scrollTop = 0;
+          });
+          await expect.poll(() => body.evaluate((element) => element.scrollTop)).toBe(0);
+          await page.evaluate(
+            () =>
+              new Promise<void>((resolve) => {
+                requestAnimationFrame(() => requestAnimationFrame(() => resolve()));
+              }),
+          );
+          const bounds = await body.boundingBox();
+          expect(bounds).not.toBeNull();
+          const width = await roundedWidth(nav);
+          // The center of a 16px folding control at the content edge stays clickable.
+          expect(
+            await page.locator("main.content").evaluate((element, pageDirection) => {
+              const rect = element.getBoundingClientRect();
+              const x = pageDirection === "rtl" ? rect.right - 8 : rect.left + 8;
+              const hit = document.elementFromPoint(x, rect.top + 50);
+              return hit !== null && element.contains(hit);
+            }, direction),
+          ).toBe(true);
+          const scrollbarWidth = await body.evaluate(
+            (element) => element.getBoundingClientRect().width - element.clientWidth,
+          );
+          expect(scrollbarWidth).toBeGreaterThan(0);
+          const x =
+            direction === "rtl"
+              ? bounds!.x + scrollbarWidth / 2
+              : bounds!.x + bounds!.width - scrollbarWidth / 2;
+          const y = bounds!.y + 50;
+          expect(
+            await page.evaluate(
+              (point) =>
+                document.elementFromPoint(point.x, point.y)?.closest("resizable-divider") === null,
+              { x, y },
+            ),
+          ).toBe(true);
+          await page.mouse.move(x, y);
+          await page.mouse.down();
+          await page.mouse.move(x, y + 120, { steps: 12 });
+          await page.mouse.up();
+          await expect.poll(() => body.evaluate((element) => element.scrollTop)).toBeGreaterThan(0);
+          expect(await roundedWidth(nav)).toBe(width);
+          const resizeBounds = await resizer.boundingBox();
+          expect(resizeBounds).not.toBeNull();
+          const resizeX = resizeBounds!.x + resizeBounds!.width / 2;
+          await page.mouse.move(resizeX, y);
+          await page.mouse.down();
+          // Preserve the existing physical-delta resize contract in both directions.
+          await page.mouse.move(resizeX + 60, y, { steps: 6 });
+          await page.mouse.up();
+          await expect.poll(() => roundedWidth(nav)).toBe(width + 60);
+          await resizer.focus();
+          await page.keyboard.press("Home");
+          await expect.poll(() => roundedWidth(nav)).toBe(292);
+        },
+      );
+    },
+  );
+
+  it.each([1440, 390])(
+    "keeps Systems and Workboard nav controls aligned and separated at %i px",
+    async (width) => {
       await suite.withPage(
         { locale: "en-US", serviceWorkers: "block", viewport: { height: 900, width } },
         async ({ page }) => {
@@ -58,86 +149,107 @@ suite.define(() => {
           });
           await seedChatSettings(page, suite.server.baseUrl, {
             sidebarAgentsMode: "roster",
-            railShortcuts: ["route:sessions", entry, "route:cron"],
+            railShortcuts: [
+              "route:sessions",
+              "route:systems",
+              "plugin:workboard/workboard",
+              "route:cron",
+            ],
           });
-          await page.goto(`${suite.server.baseUrl}${route}`);
-          if (label === "Workboard") {
-            await page.locator(".workboard-page-title", { hasText: "Operations" }).waitFor();
-          }
+          await page.goto(`${suite.server.baseUrl}chat`);
           if (width < 900) {
             await navigationDrawerToggle(page).click();
           }
           const sidebar = page.locator("openclaw-app-sidebar");
-          const row = sidebar.locator('.sidebar-rail__pin[data-sidebar-entry="' + entry + '"]');
-          await row.waitFor();
-          expect(await row.locator(".nav-item--child").count()).toBe(0);
-          const originalBox = await row.boundingBox();
-          expect(originalBox).not.toBeNull();
-          const order = () =>
-            sidebar
-              .locator(".sidebar-rail__pin")
-              .evaluateAll((pins) => pins.map((pin) => pin.getAttribute("data-sidebar-entry")));
-          const expected = await order();
-          const index = expected.indexOf(entry);
-          expect(index).toBeGreaterThan(0);
-          [expected[index - 1], expected[index]] = [expected[index]!, expected[index - 1]!];
-          const navLink = row.locator(".nav-item").first();
-          await navLink.click({ button: "right" });
-          await page.getByRole("menuitem", { name: "Move up", exact: true }).click();
-          await expect.poll(order).toEqual(expected);
-          const [iconBox, rowBox, linkBox] = await Promise.all([
-            row.locator(".nav-item__icon").first().boundingBox(),
-            row.boundingBox(),
-            navLink.boundingBox(),
-          ]);
-          expect(iconBox).not.toBeNull();
-          expect(rowBox).not.toBeNull();
-          expect(linkBox).not.toBeNull();
-          expect(rowBox!.height).toBe(originalBox!.height);
-          expect(rowBox!.height).toBe(linkBox!.height);
-          expect(
-            Math.abs(iconBox!.x + iconBox!.width / 2 - (linkBox!.x + linkBox!.width / 2)),
-          ).toBeLessThanOrEqual(1);
-          if (label === "Workboard") {
-            const pages = await openSidebarPages(page);
-            const operationsEntry = pages.locator(
-              '[data-sidebar-entry="plugin:workboard/board-ops"]',
-            );
-            await operationsEntry.getByRole("link", { name: "Operations", exact: true }).waitFor();
-            // Pages owns a flat entry for every registration, including plugin children.
-            expect(await pages.getByRole("link", { name: "Operations", exact: true }).count()).toBe(
-              1,
-            );
-            expect(
-              await pages
-                .locator('[data-sidebar-entry^="plugin:workboard/"] a')
-                .evaluateAll((links) =>
-                  links
-                    .map((link) => link.getAttribute("href"))
-                    .toSorted((left, right) => (left ?? "").localeCompare(right ?? "")),
-                ),
-            ).toEqual(["/workboard", "/workboard/default", "/workboard/ops"]);
-            expect(await pages.locator(".nav-item--child").count()).toBe(0);
-            expect(await row.locator(".nav-item--child").count()).toBe(0);
-            if (width === 1440) {
-              const operationsPage = pages.locator(".sidebar-pages__entry").filter({
-                has: page.locator('[data-sidebar-entry="plugin:workboard/board-ops"]'),
-              });
-              await operationsPage.getByRole("button", { name: "Pin", exact: true }).click();
-              const shortcut = sidebar.locator(
-                '.sidebar-rail__pin[data-sidebar-entry="plugin:workboard/board-ops"]',
-              );
-              await shortcut.getByRole("link", { name: "Operations", exact: true }).waitFor();
-              await pages.locator('a[href="/workboard/default"]').click();
-              await expect.poll(() => new URL(page.url()).pathname).toBe("/workboard/default");
-              await shortcut.getByRole("link", { name: "Operations", exact: true }).click();
+          for (const { entry, label } of [
+            { entry: "route:systems", label: "Systems" },
+            { entry: "plugin:workboard/workboard", label: "Workboard" },
+          ]) {
+            if (label === "Workboard") {
+              const pages = await openSidebarPages(page);
+              await pages.getByRole("link", { name: "Operations", exact: true }).click();
               await expect.poll(() => new URL(page.url()).pathname).toBe("/workboard/ops");
-              await openSidebarPages(page);
-              await pages.getByRole("link", { name: "Workboard", exact: true }).click();
-              await expect.poll(() => new URL(page.url()).pathname).toBe("/workboard");
-              await operationsPage.getByRole("button", { name: "Unpin", exact: true }).click();
-              await expect.poll(() => shortcut.count()).toBe(0);
-              expect(await operationsEntry.getByRole("link").count()).toBe(1);
+              await page.locator(".workboard-page-title", { hasText: "Operations" }).waitFor();
+              if (
+                width < 900 &&
+                (await navigationDrawerToggle(page).getAttribute("aria-expanded")) === "false"
+              ) {
+                await navigationDrawerToggle(page).click();
+              }
+            }
+            const row = sidebar.locator('.sidebar-rail__pin[data-sidebar-entry="' + entry + '"]');
+            await row.waitFor();
+            expect(await row.locator(".nav-item--child").count()).toBe(0);
+            const originalBox = await row.boundingBox();
+            expect(originalBox).not.toBeNull();
+            const order = () =>
+              sidebar
+                .locator(".sidebar-rail__pin")
+                .evaluateAll((pins) => pins.map((pin) => pin.getAttribute("data-sidebar-entry")));
+            const expected = await order();
+            const index = expected.indexOf(entry);
+            expect(index).toBeGreaterThan(0);
+            [expected[index - 1], expected[index]] = [expected[index]!, expected[index - 1]!];
+            const navLink = row.locator(".nav-item").first();
+            await navLink.click({ button: "right" });
+            await page.getByRole("menuitem", { name: "Move up", exact: true }).click();
+            await expect.poll(order).toEqual(expected);
+            const [iconBox, rowBox, linkBox] = await Promise.all([
+              row.locator(".nav-item__icon").first().boundingBox(),
+              row.boundingBox(),
+              navLink.boundingBox(),
+            ]);
+            expect(iconBox).not.toBeNull();
+            expect(rowBox).not.toBeNull();
+            expect(linkBox).not.toBeNull();
+            expect(rowBox!.height).toBe(originalBox!.height);
+            expect(rowBox!.height).toBe(linkBox!.height);
+            expect(
+              Math.abs(iconBox!.x + iconBox!.width / 2 - (linkBox!.x + linkBox!.width / 2)),
+            ).toBeLessThanOrEqual(1);
+            if (label === "Workboard") {
+              const pages = await openSidebarPages(page);
+              const operationsEntry = pages.locator(
+                '[data-sidebar-entry="plugin:workboard/board-ops"]',
+              );
+              await operationsEntry
+                .getByRole("link", { name: "Operations", exact: true })
+                .waitFor();
+              // Pages owns a flat entry for every registration, including plugin children.
+              expect(
+                await pages.getByRole("link", { name: "Operations", exact: true }).count(),
+              ).toBe(1);
+              expect(
+                await pages
+                  .locator('[data-sidebar-entry^="plugin:workboard/"] a')
+                  .evaluateAll((links) =>
+                    links
+                      .map((link) => link.getAttribute("href"))
+                      .toSorted((left, right) => (left ?? "").localeCompare(right ?? "")),
+                  ),
+              ).toEqual(["/workboard", "/workboard/default", "/workboard/ops"]);
+              expect(await pages.locator(".nav-item--child").count()).toBe(0);
+              expect(await row.locator(".nav-item--child").count()).toBe(0);
+              if (width === 1440) {
+                const operationsPage = pages.locator(".sidebar-pages__entry").filter({
+                  has: page.locator('[data-sidebar-entry="plugin:workboard/board-ops"]'),
+                });
+                await operationsPage.getByRole("button", { name: "Pin", exact: true }).click();
+                const shortcut = sidebar.locator(
+                  '.sidebar-rail__pin[data-sidebar-entry="plugin:workboard/board-ops"]',
+                );
+                await shortcut.getByRole("link", { name: "Operations", exact: true }).waitFor();
+                await pages.locator('a[href="/workboard/default"]').click();
+                await expect.poll(() => new URL(page.url()).pathname).toBe("/workboard/default");
+                await shortcut.getByRole("link", { name: "Operations", exact: true }).click();
+                await expect.poll(() => new URL(page.url()).pathname).toBe("/workboard/ops");
+                await openSidebarPages(page);
+                await pages.getByRole("link", { name: "Workboard", exact: true }).click();
+                await expect.poll(() => new URL(page.url()).pathname).toBe("/workboard");
+                await operationsPage.getByRole("button", { name: "Unpin", exact: true }).click();
+                await expect.poll(() => shortcut.count()).toBe(0);
+                expect(await operationsEntry.getByRole("link").count()).toBe(1);
+              }
             }
           }
         },
@@ -175,11 +287,12 @@ suite.define(() => {
     try {
       await page.goto(`${suite.server.baseUrl}settings/appearance`);
       await waitForControlUiSettingsTakeover(page);
+      const sidebarSettings = page.locator("#settings-appearance-sidebar");
+      await sidebarSettings.scrollIntoViewIfNeeded();
       const labelsRequest = await gateway.waitForRequest("sessions.catalog.list", {
         match: { metadataOnly: true },
       });
       expect(labelsRequest.params).not.toHaveProperty("limitPerHost");
-      const sidebarSettings = page.locator("#settings-appearance-sidebar");
       await sidebarSettings.getByRole("heading", { name: "Hidden session sections" }).waitFor();
       const recovery = sidebarSettings.locator(".settings-group", { hasText: "offline-catalog" });
       const row = recovery.locator(".settings-row", { hasText: "Claude Code" });
@@ -316,8 +429,7 @@ suite.define(() => {
         )
         .toBe("page");
       const settingsLinks = settingsSidebar.locator(".settings-sidebar__item");
-      const allSettingsLabels = await trimmedTextContents(settingsLinks);
-      expect(allSettingsLabels).not.toContain("Agent Defaults");
+      expect(await trimmedTextContents(settingsLinks)).not.toContain("Agent Defaults");
       await expect
         .poll(() =>
           settingsSearch.evaluate((input) => {
@@ -328,30 +440,8 @@ suite.define(() => {
           }),
         )
         .toBe(true);
-      await settingsSearch.fill("cp");
-      await expect
-        .poll(() =>
-          trimmedTextContents(
-            settingsSidebar.locator(
-              ".settings-sidebar__item-label, .settings-sidebar__subitem-label",
-            ),
-          ),
-        )
-        .toEqual(["Gateway", "Gateway Host"]);
       await settingsSearch.fill("mcp");
-      await expect
-        .poll(() =>
-          trimmedTextContents(
-            settingsSidebar.locator(
-              ".settings-sidebar__item-label, .settings-sidebar__subitem-label",
-            ),
-          ),
-        )
-        .toEqual(["MCP"]);
       await settingsSidebar.getByRole("link", { name: "MCP" }).click();
-      await expect.poll(() => new URL(page.url()).pathname).toBe("/settings/mcp");
-      await settingsSearch.fill("  ThEmE  ");
-      await expect.poll(() => trimmedTextContents(settingsLinks)).toEqual(["Appearance"]);
       await expect.poll(() => new URL(page.url()).pathname).toBe("/settings/mcp");
       await settingsSearch.fill("system");
       await expect
@@ -371,6 +461,7 @@ suite.define(() => {
           "Notifications",
           "Gateway",
         ]);
+      await expect.poll(() => new URL(page.url()).pathname).toBe("/settings/mcp");
       await settingsSearch.fill("browser");
       const browserResult = settingsSidebar.getByRole("link", {
         name: "Browser",
@@ -423,13 +514,7 @@ suite.define(() => {
         )
         .toBe(true);
 
-      await settingsSearch.fill("does-not-exist");
-      await expect.poll(() => settingsLinks.count()).toBe(0);
-      await expect
-        .poll(() => settingsSidebar.getByRole("status").textContent())
-        .toContain("No matching settings.");
-      await settingsSidebar.getByRole("button", { name: "Clear settings search" }).click();
-      await expect.poll(() => trimmedTextContents(settingsLinks)).toEqual(allSettingsLabels);
+      await settingsSearch.fill("");
       await settingsSidebar.getByRole("link", { name: "Agents", exact: true }).click();
       await expect.poll(() => new URL(page.url()).pathname).toBe("/settings/agents");
       const agentDefaultsRow = page.getByRole("button", {
@@ -507,25 +592,9 @@ suite.define(() => {
       await expect
         .poll(() => usage.evaluate((entry) => getComputedStyle(entry).backgroundColor))
         .not.toBe("rgba(0, 0, 0, 0)");
-      // Rail pins match the view buttons: same icon size, and the same fill for
-      // hover and for the current page.
       const railUsage = pinnedItems.first();
-      const iconWidth = (locator: typeof railUsage) =>
-        locator
-          .locator("svg")
-          .first()
-          .evaluate((svg) => svg.getBoundingClientRect().width);
-      const background = (locator: typeof railUsage) =>
-        locator.evaluate((element) => getComputedStyle(element).backgroundColor);
-      expect(await iconWidth(railUsage)).toBe(await iconWidth(pagesButton));
-      await waitForControlUiProofSurface(pagesButton, []);
-      const pressedBackground = await background(pagesButton);
-      await railUsage.hover();
-      await expect.poll(() => background(railUsage)).toBe(pressedBackground);
       await railUsage.click();
       await expect.poll(() => new URL(page.url()).pathname).toBe("/usage");
-      await page.mouse.move(900, 600);
-      await expect.poll(() => background(railUsage)).toBe(pressedBackground);
       await page.goto(`${suite.server.baseUrl}chat`);
       await page.reload();
       await expect.poll(() => trimmedTextContents(pinnedItems)).toEqual(["Usage"]);

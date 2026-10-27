@@ -10,7 +10,9 @@ import {
   type NormalizedUsage,
 } from "./usage.js";
 
-it("starts independent usage snapshots with zero counts and costs", () => {
+type Raw = Parameters<typeof normalizeUsage>[0];
+const contextUsage = { state: "available", promptTokens: 10, totalTokens: 12 } as const;
+it("starts independent zero-count and zero-cost snapshots", () => {
   const first = makeZeroUsageSnapshot();
   first.input = 12;
   first.cost.total = 0.5;
@@ -23,46 +25,9 @@ it("starts independent usage snapshots with zero counts and costs", () => {
     cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
   });
 });
-
-function expectNormalized(input: Parameters<typeof normalizeUsage>[0], expected: NormalizedUsage) {
-  expect(normalizeUsage(input)).toEqual({
-    input: undefined,
-    output: undefined,
-    cacheRead: undefined,
-    cacheWrite: undefined,
-    total: undefined,
-    ...expected,
-  });
-}
-
-const billingUsage = {
-  input: 12,
-  output: 15_104,
-  cacheRead: 819_661,
-  cacheWrite: 93_130,
-  total: 927_907,
-};
-
-const contextUsage = {
-  state: "available",
-  promptTokens: 148_874,
-  totalTokens: 163_978,
-} as const;
-
-it("preserves only complete context snapshots", () => {
-  expect(normalizeUsage({ input: 12, contextUsage })).toMatchObject({ input: 12, contextUsage });
-  expectNormalized(
-    {
-      input: 12,
-      contextUsage: { state: "available", promptTokens: 163_978, totalTokens: 148_874 },
-    },
-    { input: 12 },
-  );
-});
-
 it.each([
   [
-    "separates nested cache creation from uncached input",
+    "nested cache creation",
     {
       prompt_tokens: 100,
       completion_tokens: 10,
@@ -71,41 +36,37 @@ it.each([
     },
     { input: 0, output: 10, cacheRead: 40, cacheWrite: 60, total: 110 },
   ],
+  ["llama.cpp timings", { timings: { prompt_n: 30, predicted_n: 3 } }, { input: 30, output: 3 }],
   [
-    "normalizes llama.cpp timings",
-    { timings: { prompt_n: 30_834, predicted_n: 34 } },
-    { input: 30_834, output: 34 },
-  ],
-  [
-    "handles OpenAI Responses cache and reasoning details",
+    "Responses cache and reasoning",
     {
-      input_tokens: 120,
-      output_tokens: 30,
-      total_tokens: 250,
-      input_tokens_details: { cached_tokens: 100 },
-      output_tokens_details: { reasoning_tokens: 17 },
+      input_tokens: 12,
+      output_tokens: 3,
+      total_tokens: 25,
+      input_tokens_details: { cached_tokens: 10 },
+      output_tokens_details: { reasoning_tokens: 1 },
     },
-    { input: 20, output: 30, cacheRead: 100, reasoningTokens: 17, total: 250 },
+    { input: 2, output: 3, cacheRead: 10, reasoningTokens: 1, total: 25 },
   ],
   [
-    "normalizes zero Anthropic output reasoning tokens",
-    {
-      input_tokens: 30,
-      output_tokens: 40,
-      output_tokens_details: { thinking_tokens: 0 },
-    },
-    { input: 30, output: 40, reasoningTokens: 0 },
+    "Anthropic zero reasoning",
+    { input_tokens: 3, output_tokens: 4, output_tokens_details: { thinking_tokens: 0 } },
+    { input: 3, output: 4, reasoningTokens: 0 },
   ],
   [
-    "clamps pre-subtracted negative input to zero",
-    { input: -4900, output: 200, cacheRead: 5000 },
-    { input: 0, output: 200, cacheRead: 5000 },
+    "negative input",
+    { input: -49, output: 2, cacheRead: 50 },
+    { input: 0, output: 2, cacheRead: 50 },
   ],
-] satisfies Array<[string, Parameters<typeof normalizeUsage>[0], NormalizedUsage]>)(
-  "%s",
-  (_name, input, expected) => expectNormalized(input, expected),
-);
-
+  ["complete context", { input: 1, contextUsage }, { input: 1, contextUsage }],
+  [
+    "invalid context",
+    { input: 1, contextUsage: { state: "available", promptTokens: 12, totalTokens: 10 } },
+    { input: 1 },
+  ],
+] satisfies Array<[string, Raw, NormalizedUsage]>)("normalizes %s", (_name, raw, expected) => {
+  expect(normalizeUsage(raw)).toEqual(expected);
+});
 it.each([null, {}])("returns undefined for empty usage %j", (raw) => {
   expect(normalizeUsage(raw)).toBeUndefined();
 });
@@ -120,15 +81,15 @@ it("keeps interrupted accounting without provisional counts or cost", () => {
     }),
   ).toEqual({ usageReport: { state: "unavailable" }, contextUsage: { state: "unavailable" } });
 });
-it("preserves recorded zero cost and 1h writes through normalization", () => {
+it("preserves recorded zero cost and TTL writes through repeated normalization", () => {
   const raw = {
-    input: 20,
-    output: 10,
-    cacheRead: 30,
-    cacheWrite: 60,
-    cacheWrite1h: 40,
-    cacheWrite5m: 20,
-    totalTokens: 120,
+    input: 2,
+    output: 1,
+    cacheRead: 3,
+    cacheWrite: 6,
+    cacheWrite1h: 4,
+    cacheWrite5m: 2,
+    totalTokens: 12,
     cost: { total: 0, totalOrigin: "provider-billed" as const },
   };
   const normalized = normalizeUsage(structuredClone(raw));
@@ -136,26 +97,41 @@ it("preserves recorded zero cost and 1h writes through normalization", () => {
   expect(normalized).toEqual({ ...fields, total: totalTokens });
   expect(normalizeUsage(normalized)).toEqual(normalized);
 });
-it("retains a valid zero-cost-only fact", () => {
+it("retains a zero-cost-only fact", () => {
   const normalized = normalizeUsage({ cost: { total: 0 } });
   expect(normalized).toMatchObject({ cost: { total: 0 } });
   expect(normalizeUsage(normalized)).toEqual(normalized);
 });
-it("guards against empty/zero usage overwrites", () => {
-  for (const [input, expected] of [
-    [undefined, false],
-    [null, false],
-    [{}, false],
-    [{ input: 0, output: 0 }, false],
-    [{ reasoningTokens: 1 }, true],
-    [{ input: 1 }, true],
-    [{ total: 1 }, true],
-    [{ input: 12, output: 3, usageReport: { state: "unavailable" } }, false],
-  ] satisfies [Parameters<typeof hasNonzeroUsage>[0], boolean][]) {
-    expect(hasNonzeroUsage(input)).toBe(expected);
-  }
-});
-it("preserves reasoning token details", () => {
+it.each([
+  [undefined, false],
+  [{}, false],
+  [{ input: 0, output: 0 }, false],
+  [{ reasoningTokens: 1 }, true],
+  [{ input: 1 }, true],
+  [{ total: 1 }, true],
+  [{ input: 12, output: 3, usageReport: { state: "unavailable" } }, false],
+] satisfies [Parameters<typeof hasNonzeroUsage>[0], boolean][])(
+  "guards usage overwrite for %j",
+  (input, expected) => expect(hasNonzeroUsage(input)).toBe(expected),
+);
+it.each([
+  [undefined, { prompt_tokens: 0, completion_tokens: 0, total_tokens: 0 }],
+  [
+    { input: 5, output: 1, cacheRead: 30, cacheWrite: 0, total: 36 },
+    {
+      prompt_tokens: 35,
+      completion_tokens: 1,
+      total_tokens: 36,
+      prompt_tokens_details: { cached_tokens: 30 },
+    },
+  ],
+] satisfies Array<[NormalizedUsage | undefined, ReturnType<typeof toOpenAiChatCompletionsUsage>]>)(
+  "projects Chat Completions usage %j",
+  (input, expected) => {
+    expect(toOpenAiChatCompletionsUsage(input)).toEqual(expected);
+  },
+);
+it("round-trips reasoning token details", () => {
   const usage = {
     prompt_tokens: 10,
     completion_tokens: 8,
@@ -164,42 +140,22 @@ it("preserves reasoning token details", () => {
   };
   expect(toOpenAiChatCompletionsUsage(normalizeUsage(structuredClone(usage)))).toEqual(usage);
 });
-
-it("returns zeros for undefined usage", () => {
-  expect(toOpenAiChatCompletionsUsage(undefined)).toEqual({
-    prompt_tokens: 0,
-    completion_tokens: 0,
-    total_tokens: 0,
-  });
-});
-
-it("forwards cached_tokens via prompt_tokens_details when cache was hit", () => {
-  expect(
-    toOpenAiChatCompletionsUsage({
-      input: 594,
-      output: 79,
-      cacheRead: 30848,
-      cacheWrite: 0,
-      total: 31521,
-    }),
-  ).toEqual({
-    prompt_tokens: 31442,
-    completion_tokens: 79,
-    total_tokens: 31521,
-    prompt_tokens_details: { cached_tokens: 30848 },
-  });
-});
-it("returns undefined for empty usage", () => {
+it("does not derive a prompt from empty usage", () => {
   expect(derivePromptTokens({})).toBeUndefined();
 });
-it("does not treat total-only usage as a prompt snapshot", () => {
-  expect(deriveContextPromptTokens({ lastCallUsage: { input: 1_000, total: 1_200 } })).toBe(1_000);
-  expect(deriveContextPromptTokens({ lastCallUsage: { total: 1_200 } })).toBeUndefined();
-  expect(deriveContextPromptTokens({ lastCallUsage: { output: 200, total: 1_200 } })).toBe(1_000);
-});
+it.each([
+  [{ input: 1_000, total: 1_200 }, 1_000],
+  [{ total: 1_200 }, undefined],
+  [{ output: 200, total: 1_200 }, 1_000],
+] satisfies Array<[NormalizedUsage, number | undefined]>)(
+  "recovers only evidenced last-call prompt counts: %j",
+  (lastCallUsage, expected) => {
+    expect(deriveContextPromptTokens({ lastCallUsage })).toBe(expected);
+  },
+);
 it.each([
   [
-    "unclamped context exceeding its window",
+    "unclamped window",
     {
       usage: { input: 27, cacheRead: 2_400_000, cacheWrite: 0, total: 2_402_300 },
       contextTokens: 200_000,
@@ -207,37 +163,30 @@ it.each([
     2_400_027,
   ],
   [
-    "last-call usage",
+    "last-call, not accumulated usage",
     {
-      lastCallUsage: { input: 38_333, output: 66, cacheRead: 120_320, total: 158_719 },
-      usage: { input: 497_720, output: 7_485, cacheRead: 1_323_520, total: 1_828_725 },
+      lastCallUsage: { input: 1, output: 3, cacheRead: 2, total: 6 },
+      usage: { input: 10, output: 30, cacheRead: 20, total: 60 },
     },
-    158_653,
+    3,
   ],
-  ["explicit context", { usage: { ...billingUsage, contextUsage } }, 148_874],
+  ["explicit context", { usage: { input: 1, contextUsage } }, 10],
   [
     "unavailable context",
-    { usage: { ...billingUsage, contextUsage: { state: "unavailable" } } },
+    { usage: { input: 1, contextUsage: { state: "unavailable" } } },
     undefined,
   ],
   [
     "prompt override",
-    {
-      usage: { input: 1000, cacheRead: 500, cacheWrite: 200 },
-      contextTokens: 4000,
-      promptTokens: 2500,
-    },
-    2500,
+    { usage: { input: 10, cacheRead: 5, cacheWrite: 2 }, contextTokens: 40, promptTokens: 25 },
+    25,
   ],
 ] satisfies Array<[string, Parameters<typeof deriveSessionTotalTokens>[0], number | undefined]>)(
   "uses %s for session context",
-  (_name, input, expected) => {
-    expect(deriveSessionTotalTokens(input)).toBe(expected);
-  },
+  (_name, input, expected) => expect(deriveSessionTotalTokens(input)).toBe(expected),
 );
-
 it.each(["cacheWrite1h", "cacheWrite5m"] as const)(
-  "retains %s-only usage, including reported zero",
+  "retains %s-only zero and positive usage",
   (bucket) => {
     for (const value of [0, 12]) {
       expect(normalizeUsage({ [bucket]: value })).toMatchObject({ [bucket]: value });

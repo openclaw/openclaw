@@ -13,7 +13,7 @@ import {
   replaceSessionEntrySync,
   updateSessionProfileInvolvementAsync,
 } from "../config/sessions/session-accessor.js";
-import type { SessionEntry } from "../config/sessions/types.js";
+import type { InternalSessionEntry as SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../plugins/runtime.js";
 import { sessionChanges } from "../sessions/session-row-changes.js";
@@ -24,17 +24,20 @@ import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { createSessionConversationTestRegistry } from "../test-utils/session-conversation-registry.js";
 import { registerRpcSourceForTest } from "./server-methods/rpc-source-fixtures.test-support.js";
 import { requestContext } from "./server-methods/sessions-read-cache.test-support.js";
+import { createSessionIdentityProjection } from "./session-identity-projection.js";
 import { retainSessionListForegroundWork } from "./session-projection-work.js";
 import { create as createSessionRow } from "./session-row-projection-record.js";
 import { createSessionRowProjection } from "./session-row-projection.js";
 import { holdSubagentExecution } from "./session-row-projection.read-fixture.test-support.js";
 import { createSessionRowProjectionFixture } from "./session-row-projection.test-support.js";
+import { createSessionRowSelection } from "./session-row-selection.js";
 import {
   filterAndSortSessionEntries,
   listProjectedSessions,
   prepareProjectedSessionList,
   prepareSessionRowSelection,
 } from "./session-utils-list.js";
+import { buildSessionListRowMetadataContext } from "./session-utils-projection.js";
 import { claimRpcSourceForTest } from "./test-helpers.rpc-source.js";
 
 type ListOptions = Parameters<typeof listProjectedSessions>[0];
@@ -57,6 +60,86 @@ beforeEach(() => {
 
 afterEach(() => {
   resetPluginRuntimeStateForTest();
+});
+
+it("selects canonical participant involvement without reading display fields", () => {
+  const cfg = { agents: { entries: { main: {} } } };
+  const label = vi.fn(() => "Participant display");
+  const context = buildSessionListRowMetadataContext({ now: 1 });
+  context.identityProjection = createSessionIdentityProjection();
+  for (const [id, profileId] of [
+    ["alias", "ada"],
+    ["ada", "ada"],
+    ["bob", "bob"],
+  ] as const) {
+    context.userProfileIdentityById.set(id, {
+      kind: "resolved",
+      profileId,
+      get label() {
+        return label();
+      },
+      avatarUrl: "/synthetic/avatar",
+      hasUploadedAvatar: false,
+    });
+  }
+  const storePath = "/synthetic/involvement.sqlite";
+  const agents = new Set(["main"]);
+  const selection = createSessionRowSelection(
+    cfg,
+    {
+      path: storePath,
+      paths: new Map([[storePath, 0]]),
+      agentId: "main",
+      configuredAgentIds: agents,
+      ownerAgentIds: agents,
+    },
+    false,
+    () => context,
+  );
+  const key = "agent:main:participants";
+  const put = (entry: SessionEntry) =>
+    selection.add({
+      ...createSessionRow(
+        { key, agentId: "main", storeTarget: { agentId: "main", storePath } },
+        entry,
+      ),
+      entry,
+    });
+  const entry: SessionEntry = {
+    sessionId: key,
+    updatedAt: 1,
+    participants: [
+      { identity: { type: "profile", id: "alias" } },
+      { identity: { type: "profile", id: "ada" } },
+      { identity: { type: "agent", id: "main" } },
+      { identity: { type: "legacy", actorType: "human", source: null, id: "bob" } },
+    ],
+    profileInvolvement: {
+      key,
+      profiles: { ada: { hidden: true, updatedAt: 1 }, bob: { hidden: false, updatedAt: 1 } },
+    },
+  };
+  put(entry);
+  const keys = (id: string, personal: boolean) => [
+    ...selection.read().involvementKeys(id, personal),
+  ];
+  expect(keys("ada", false)).toEqual([key]);
+  expect(keys("ada", true)).toEqual([]);
+  expect(keys("bob", false)).toEqual([]);
+  expect(keys("bob", true)).toEqual([key]);
+  expect(label).not.toHaveBeenCalled();
+  // Profile merges and entry replacement must retire the old membership.
+  context.userProfileIdentityById.set("alias", {
+    kind: "resolved",
+    profileId: "bob",
+    avatarUrl: "/synthetic/avatar",
+    hasUploadedAvatar: false,
+  });
+  context.identityProjection.invalidate();
+  expect(keys("bob", false)).toEqual([key]);
+  put({ ...entry, participants: [], profileInvolvement: undefined });
+  expect(keys("ada", false)).toEqual([]);
+  expect(keys("bob", true)).toEqual([]);
 });
 
 it("updates empty involvement and creator indexes across row changes and topology resets", async () => {
@@ -158,8 +241,15 @@ it("maintains list order across metadata changes and archived-row rematerializat
       expect((await list("lastInteractionAt"))[0]?.key).toBe(second);
       expect((await list("activity"))[0]?.key).toBe(second);
       expect((await list())[0]?.key).toBe(first);
+      const search = async (text: string, archived: boolean | "all" = "all") =>
+        rowKeys(await listRows(projection, { search: text, archived }));
+      expect(await search("changed metadata")).toEqual([]);
       writeMain(second, { updatedAt: 3, label: "Changed metadata" });
       expect((await list())[0]).toMatchObject({ key: second, label: "Changed metadata" });
+      expect(await search("CHANGED—metadata")).toEqual([second]);
+      writeMain(second, { updatedAt: 3, label: "Replacement title" });
+      expect(await search("changed metadata")).toEqual([]);
+      expect(await search("replacement title")).toEqual([second]);
       const third = "agent:main:third";
       writeMain(third, { updatedAt: 4, lastInteractionAt: 3 });
       expect((await list())[0]?.key).toBe(third);
@@ -172,6 +262,8 @@ it("maintains list order across metadata changes and archived-row rematerializat
       });
       // Archive membership is presence, including a zero timestamp.
       writeMain(third, { updatedAt: 4, lastInteractionAt: 3, archivedAt: 0 });
+      expect(await search("agent:main:third", true)).toEqual([third]);
+      expect(await search("agent:main:third", false)).toEqual([]);
       expect((await list())[0]?.key).toBe(second);
       expect(await listRows(projection, { archived: true, limit: 1 })).toMatchObject({
         sessions: [{ key: third }],
@@ -275,9 +367,14 @@ it("refreshes agent owner facets when the sidebar roster changes", async () => {
       // Read the cold ACP row before a scoped read can populate its owner projection.
       expect((await list(false)).owners?.map(({ id }) => id)).toEqual(["owner"]);
       expect((await list()).owners?.map(({ id }) => id)).toEqual(["owner"]);
+      const searchOwned = async (search: string, ownerId: string) =>
+        rowKeys(await listRows(projection, { archived: "all", search, ownerId }));
+      expect(await searchOwned("owned", "owner")).toEqual([key]);
       await patchSessionEntryCore({ agentId: "main", sessionKey: key }, () => ({
         label: "Metadata changed",
       }));
+      expect(await searchOwned("metadata changed", "owner")).toEqual([key]);
+      expect(await searchOwned("metadata changed", "main")).toEqual([]);
       expect((await list()).owners?.map(({ id }) => id)).toEqual(["owner"]);
       cfg = { ...cfg, agents: { entries: { main: {} } } };
       setRuntimeConfigSnapshot(cfg);
@@ -336,15 +433,13 @@ it("filters active sentinels only after selecting their physical store winner", 
       };
     });
     projection.selectEntries = (query) => {
-      if (!query?.sessionIdOrKey) {
+      const identities = query?.candidateSessionIdsOrKeys;
+      if (!identities) {
         return rows;
       }
       const keys = new Set(
         rows
-          .filter(
-            (row) =>
-              row.key === query.sessionIdOrKey || row.entry.sessionId === query.sessionIdOrKey,
-          )
+          .filter((row) => identities.has(row.key) || identities.has(row.entry.sessionId))
           .map((row) => row.key),
       );
       return rows.filter((row) => keys.has(row.key));

@@ -6,7 +6,7 @@ import { createBaselineFixture } from "./pr-baseline-native.test-support.js";
 
 const dirs = useAutoCleanupTempDirTracker(afterAll);
 const describePosix = process.platform === "win32" ? describe.skip : describe;
-const fixture = () => createBaselineFixture(dirs.make("openclaw-pr-successor-"));
+const fixture = () => createBaselineFixture(dirs.make("openclaw-pr-successor-"), 2);
 
 describePosix("native successor source admission entry", () => {
   it("admits two reviewed successors while preserving signed ancestry, resolutions and proof", () => {

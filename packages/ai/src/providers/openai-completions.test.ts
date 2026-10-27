@@ -356,18 +356,20 @@ describe("OpenAI-compatible completions params", () => {
     ).toEqual(["alpha_tool", "zeta_tool"]);
   });
 
-  it("uses Z.AI max_tokens and disables thinking by default", async () => {
+  it.each([false, true])("uses Z.AI max_tokens with explicit off mapping=%s", async (mappedOff) => {
     const stream = streamOpenAICompletions(
       {
         ...createModel(32_000),
         provider: "zai",
         baseUrl: "https://api.z.ai/api/paas/v4",
         reasoning: true,
+        thinkingLevelMap: mappedOff ? { off: "none" } : undefined,
       },
       context,
       {
         apiKey: "sk-test",
         maxTokens: 1_024,
+        ...(mappedOff ? { reasoningEffort: "off" as const } : {}),
       },
     );
 

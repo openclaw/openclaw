@@ -2,6 +2,7 @@ import { gatewayCredentialScope } from "@openclaw/gateway-client/browser";
 import { afterEach, beforeEach, expect, it, onTestFinished, vi } from "vitest";
 import { storeDeviceAuthToken } from "../lib/nodes/index.ts";
 import * as prewarm from "../pages/chat/session-snapshot-prewarm.ts";
+import { restoreMocksAndGlobals } from "../test-helpers/mock-cleanup.ts";
 import { createStorageMock } from "../test-helpers/storage.ts";
 import { makeBootRecord as bootRecord, makeBootRoster } from "./bootstrap.test-support.ts";
 import { bootstrapApplication } from "./bootstrap.ts";
@@ -27,10 +28,7 @@ function spyPrewarm() {
   return vi.spyOn(prewarm, "prewarmChatSnapshot").mockImplementation(async () => undefined);
 }
 
-afterEach(() => {
-  vi.restoreAllMocks();
-  vi.unstubAllGlobals();
-});
+afterEach(() => restoreMocksAndGlobals());
 
 it.each([
   {

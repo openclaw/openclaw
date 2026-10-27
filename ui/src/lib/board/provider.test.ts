@@ -15,8 +15,9 @@ import {
   mcpAppWidgetNameForViewId,
 } from "./provider.ts";
 import type { BoardProvider } from "./provider.ts";
-import type { BoardSnapshot, BoardWidget } from "./types.ts";
+import type { BoardSnapshot } from "./types.ts";
 import { remainingBoardWidgetTicketTtlMs } from "./widget-ticket-lifetime.ts";
+import { createBoardWidget as widget } from "./widget.test-support.ts";
 const KEY = "agent:main:board";
 const mainTab = { tabId: "main", title: "Main", position: 0, chatDock: "right" as const };
 const capabilities = { canMutate: true, canGrant: true, canPinWidgets: true, canPinMcpApps: true };
@@ -27,17 +28,6 @@ const noCapabilities = {
   canPinMcpApps: false,
 };
 const approvalOnly = { ...noCapabilities, canGrant: true };
-const widget = (overrides: Partial<BoardWidget> = {}): BoardWidget => ({
-  name: "alpha",
-  tabId: "main",
-  contentKind: "html",
-  sizeW: 6,
-  sizeH: 4,
-  position: 0,
-  grantState: "none",
-  revision: 1,
-  ...overrides,
-});
 const snapshot = (revision = 1, overrides: Partial<BoardSnapshot> = {}): BoardSnapshot => ({
   sessionKey: KEY,
   revision,

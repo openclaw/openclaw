@@ -342,6 +342,10 @@ export const validateCronRunParams = createProtocolValidator(
   S.CronRunParamsSchema,
   Checks.isCronRunParams,
 );
+export const validateCronBindParams = createProtocolValidator(
+  S.CronBindParamsSchema,
+  Checks.isCronBindParams,
+);
 export const validateCronRunsParams = createProtocolValidator(
   S.CronRunsParamsSchema,
   Checks.isCronRunsParams,

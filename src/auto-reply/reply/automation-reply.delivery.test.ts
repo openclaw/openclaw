@@ -48,41 +48,36 @@ async function prepare(lane: "ordinary" | "queued", context: FinalizeReplyAgentR
 }
 
 describe.each(["ordinary", "queued"] as const)("%s automation final delivery", (lane) => {
-  it("keeps no_change quiet without losing an already committed source reply", async () => {
+  it.each([false, true])("keeps no_change quiet (committed source reply=%s)", async (committed) => {
     const { context, failMock } = createContext();
     const delivered = { text: "Already sent.", sourceReplyFinal: true };
-    context.execution.result.sourceReplyDeliveryState = "delivered";
-    context.execution.result.messagingToolSourceReplyPayloads = [delivered];
+    if (committed) {
+      context.execution.result.sourceReplyDeliveryState = "delivered";
+      context.execution.result.messagingToolSourceReplyPayloads = [delivered];
+    }
     context.execution.result.payloads = [
       { text: "Unsent explanation." },
       { text: "Reasoning", isReasoning: true },
       { mediaUrl: "https://example.invalid/unsent.png" },
     ];
-    context.opts = { reasoningPayloadsEnabled: true };
+    const onAgentRunTerminalOutcome = vi.fn();
+    context.opts = { reasoningPayloadsEnabled: true, onAgentRunTerminalOutcome };
 
     expect(await prepare(lane, context)).toEqual([]);
-    expect(context.execution.result.sourceReplyDeliveryState).toBe("delivered");
-    expect(context.execution.result.messagingToolSourceReplyPayloads).toEqual([delivered]);
+    if (committed) {
+      expect(context.execution.result.sourceReplyDeliveryState).toBe("delivered");
+      expect(context.execution.result.messagingToolSourceReplyPayloads).toEqual([delivered]);
+    }
     expect(failMock).not.toHaveBeenCalled();
-  });
-
-  it("does not invent a missing reply for a completed no_change", async () => {
-    const { context, failMock } = createContext();
-    context.execution.result.payloads = [{ text: "No updates." }];
-    context.opts = { onAgentRunTerminalOutcome: vi.fn() };
-
-    expect(await prepare(lane, context)).toEqual([]);
-    expect(failMock).not.toHaveBeenCalled();
-    expect(context.opts.onAgentRunTerminalOutcome).not.toHaveBeenCalled();
+    expect(onAgentRunTerminalOutcome).not.toHaveBeenCalled();
   });
 
   it("keeps a terminal failure visible after record_result no_change", async () => {
     const { context } = createContext();
-    context.execution = {
-      ...context.execution,
-      status: "failed",
-      terminalFailurePayload: markAgentRunFailureReplyPayload({ text: "Terminal failure" }),
-    };
+    context.execution.status = "failed";
+    context.execution.terminalFailurePayload = markAgentRunFailureReplyPayload({
+      text: "Terminal failure",
+    });
     context.execution.result.payloads = [{ text: "Hidden reasoning", isReasoning: true }];
 
     expect(await prepare(lane, context)).toMatchObject([

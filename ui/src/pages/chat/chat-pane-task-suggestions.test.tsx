@@ -10,7 +10,8 @@ import type {
   TaskSuggestionsListResult as ListResult,
 } from "../../../../packages/gateway-protocol/src/index.js";
 import { createDeferred } from "../../../../test/helpers/promise.js";
-import { GatewayRequestError, type GatewayBrowserClient } from "../../api/gateway.ts";
+import { GatewayRequestError } from "../../api/gateway-connect-errors.ts";
+import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { makeBootRoster } from "../../app/bootstrap.test-support.ts";
 import {
   createGatewayRequestMock,
@@ -20,10 +21,8 @@ import {
 import { gatewayHelloForMethods } from "../../test-helpers/gateway-methods.ts";
 import { mountSolid } from "../../test-helpers/mount-solid.ts";
 import { projectChatFields } from "./chat-field-projection.ts";
-import {
-  createSessionCapabilityFixture,
-  createTestChatPane as createChatPane,
-} from "./chat-pane.test-support.ts";
+import { createTestChatPane as createChatPane } from "./chat-pane.test-support.ts";
+import { createSessionCapabilityFixture } from "./chat-session-capability.test-support.ts";
 import {
   ChatTaskSuggestionTray,
   type ChatTaskSuggestionTrayProps,
@@ -112,7 +111,7 @@ function createTray(pane: ReturnType<typeof createChatPane>["pane"]) {
     draw: (connected = true) => {
       const props = pane.suggestionChatProps(connected, false, false);
       if (!setView) {
-        const [current, update] = createSignal(props);
+        const [current, update] = createSignal<ChatTaskSuggestionTrayProps>(props);
         mountSolid(() => <ChatTaskSuggestionTray view={current()} />, { container });
         setView = update;
       } else {
@@ -606,7 +605,7 @@ it.each(
     await pane.refreshTaskSuggestions();
     expect(pane.tasks.suggestions).toEqual([]);
     // Retained handlers cannot revive a retired operation after reconciliation removes it.
-    originalProps.onAcceptTaskSuggestion?.(suggestion, "local");
+    await originalProps.onAcceptTaskSuggestion?.(suggestion, "local");
     expect(navigate).not.toHaveBeenCalled();
     expect(acceptCalls(request)).toHaveLength(1);
     if (phase === "starting") {

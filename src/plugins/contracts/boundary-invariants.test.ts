@@ -26,6 +26,7 @@ const BUNDLED_TYPED_HOOK_REGISTRATION_GUARDS = {
   "extensions/discord/subagent-hooks-api.ts": ["subagent_delivery_target", "subagent_ended"],
   "extensions/facetime/index.ts": ["before_tool_call"],
   "extensions/feishu/subagent-hooks-api.ts": ["subagent_delivery_target", "subagent_ended"],
+  "extensions/knowledge/src/memory-index-hook.ts": ["before_prompt_build"],
   "extensions/matrix/subagent-hooks-api.ts": ["subagent_delivery_target", "subagent_ended"],
   "extensions/mcp-events/index.ts": ["cron_changed", "cron_reconciled"],
   "extensions/memory-core/src/dreaming.ts": ["before_agent_reply", "gateway_start"],
@@ -56,29 +57,6 @@ const BUNDLED_LIVE_CONFIG_HOOK_GUARDS = {
     "resolveEffectiveEnableState(",
     '"onepassword"',
     "api.runtime.config.current()",
-  ],
-} as const satisfies Record<string, readonly string[]>;
-const BUNDLED_LIVE_CONFIG_PROVIDER_GUARDS = {
-  "extensions/amazon-bedrock/register.sync.runtime.ts": [
-    "resolvePluginConfigObject(",
-    "const startupPluginConfig = (api.pluginConfig ?? {})",
-    "const currentPluginConfig = resolveCurrentPluginConfig(ctx.config);",
-    "const currentPluginConfig = resolveCurrentPluginConfig(config);",
-    "const currentGuardrail = currentPluginConfig?.guardrail;",
-  ],
-  "extensions/amazon-bedrock-mantle/register.sync.runtime.ts": [
-    "pluginConfig: resolvePluginConfigObject(ctx.config, providerId),",
-  ],
-  "extensions/ollama/index.ts": [
-    "resolvePluginConfigObject(",
-    'const runtimePluginConfig = resolvePluginConfigObject(config, "ollama");',
-    "return config ? {} : startupPluginConfig;",
-  ],
-  "extensions/openai/index.ts": [
-    "resolvePluginConfigObject(",
-    'const runtimePluginConfig = resolvePluginConfigObject(ctx.config, "openai");',
-    "runtimePluginConfig ??",
-    "ctx.config ? undefined : (api.pluginConfig as Record<string, unknown>)",
   ],
 } as const satisfies Record<string, readonly string[]>;
 const BUNDLED_STARTUP_GATED_HOOK_FORBIDDEN_SNIPPETS = {
@@ -269,11 +247,13 @@ describe("plugin contract boundary invariants", () => {
     expectSnippetGuards(BUNDLED_LIVE_CONFIG_HOOK_GUARDS);
   });
 
-  it("keeps live provider config surfaces on runtime config lookups", () => {
-    expectSnippetGuards(BUNDLED_LIVE_CONFIG_PROVIDER_GUARDS);
-    expect(
-      readRepoSource("extensions/amazon-bedrock-mantle/register.sync.runtime.ts"),
-    ).not.toContain("api.pluginConfig");
+  it("does not restore startup provider defaults when live plugin config is removed", () => {
+    expectSnippetGuards({
+      "extensions/ollama/index.ts": ["return config ? {} : startupPluginConfig;"],
+      "extensions/openai/index.ts": [
+        "ctx.config ? undefined : (api.pluginConfig as Record<string, unknown>)",
+      ],
+    });
   });
 
   it("keeps long-lived bundled hook handlers off startup-only registration gates", () => {

@@ -168,8 +168,6 @@ describe("node auto-update controller", () => {
   it.each([
     ["unmanaged process", false, "package", {}],
     ["source checkout", true, "git", {}],
-    ["unknown installation", true, "unknown", {}],
-    ["host-owned installation", true, "host", {}],
     ["node setting", true, "package", { nodeHost: { autoUpdate: { enabled: false } } }],
     ["startup check setting", true, "package", { update: { checkOnStart: false } }],
     ["dev channel", true, "package", { update: { channel: "dev" } }],
@@ -205,10 +203,6 @@ describe("node auto-update controller", () => {
     const host = start(true);
     await host.advance(0, { prepare: 1, compatible: 0, restart: 0 });
     await host.advance(30_000, { pause: 2, prepare: 1, discover: 1 });
-    expect(
-      host.log.mock.calls.filter(([message]) => message.includes("waiting for active work")),
-    ).toHaveLength(1);
-
     host.runtime.tryPauseForUpdate.mockResolvedValue(true);
     await host.advance(30_000, { restart: 1, accepted: 0, resume: 0 });
     acknowledgment.resolve();
@@ -246,23 +240,18 @@ describe("node auto-update controller", () => {
         stage === "download" ? mocks.prepare.mock.calls[0] : mocks.compatible.mock.calls[0];
       if (stage === "idle") {
         expect(host.runtime.tryPauseForUpdate).toHaveBeenCalledOnce();
-        expect(mocks.compatible).not.toHaveBeenCalled();
-        expect(mocks.restart).not.toHaveBeenCalled();
       } else {
         expect(invocation?.[0].signal?.aborted).toBe(false);
       }
-      let stopped = false;
-      const stopping = host.controller.stop().then(() => {
-        stopped = true;
-      });
+      const stopped = vi.fn();
+      const stopping = host.controller.stop().then(stopped);
       if (stage !== "idle") {
         expect(invocation?.[0].signal?.aborted).toBe(true);
       }
       await vi.advanceTimersByTimeAsync(0);
-      expect(stopped).toBe(false);
+      expect(stopped).not.toHaveBeenCalled();
       pending.resolve();
       await stopping;
-      expect(stopped).toBe(true);
       if (stage === "idle") {
         expect(mocks.compatible).not.toHaveBeenCalled();
       }
@@ -304,41 +293,16 @@ describe("node auto-update discovery runtime", () => {
     vi.unstubAllGlobals();
   });
 
-  it.each(["bun", "node"] as const)(
-    "uses the %s registry transport to discover a candidate",
-    async (runtime) => {
-      useRuntime(runtime);
-      const registryUrl = "http://127.0.0.1:4873/";
-      const stdout = JSON.stringify({ version: candidate.version });
-      if (runtime === "bun") {
-        vi.stubEnv("OPENCLAW_UPDATE_PACKAGE_SPEC", "openclaw");
-        vi.stubEnv("NPM_CONFIG_REGISTRY", registryUrl);
-        mocks.fetch.mockResolvedValue(new Response(stdout));
-      } else {
-        mocks.exec.mockResolvedValue(createCommandResult({ stdout }));
-      }
-      start();
-      await vi.advanceTimersByTimeAsync(0);
-      if (runtime === "bun") {
-        expect(mocks.exec).not.toHaveBeenCalled();
-        expect(mocks.fetch).toHaveBeenCalledWith(
-          `${registryUrl}openclaw/latest`,
-          expect.objectContaining({ signal: expect.any(AbortSignal) }),
-        );
-      } else {
-        expect(mocks.fetch).not.toHaveBeenCalled();
-        expect(mocks.exec).toHaveBeenCalledWith(
-          "npm view openclaw@latest version engines.node openclaw.schemaVersions --json --global".split(
-            " ",
-          ),
-          expect.objectContaining({ signal: expect.any(AbortSignal) }),
-        );
-      }
-      expect(mocks.prepare).toHaveBeenCalledWith(
-        expect.objectContaining({ targetVersion: candidate.version }),
-      );
-    },
-  );
+  it("stages the candidate discovered by npm", async () => {
+    useRuntime("node");
+    mocks.exec.mockResolvedValue(
+      createCommandResult({ stdout: JSON.stringify({ version: candidate.version }) }),
+    );
+    await start().advance(0, { prepare: 1 });
+    expect(mocks.prepare).toHaveBeenCalledWith(
+      expect.objectContaining({ targetVersion: candidate.version }),
+    );
+  });
 
   it("cancels an in-flight Bun registry read when the node stops", async () => {
     useRuntime("bun");

@@ -158,14 +158,7 @@ export function createPluginsTool(options?: {
             operation,
             requestOwners,
             signal,
-            run: ({ assertCurrent, signal: handoffSignal }) =>
-              callAgentToolGatewayRequest({
-                method: "plugins.reload",
-                params: reloadRequest,
-                sessionMutationCommitGuard: assertCurrent,
-                signal: handoffSignal,
-                timeoutMs: null,
-              }),
+            request: { method: "plugins.reload", params: reloadRequest },
             formatResult: (payload) => JSON.stringify(pluginsToolResult(payload).details),
           });
         }

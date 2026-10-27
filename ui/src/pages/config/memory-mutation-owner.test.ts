@@ -14,7 +14,7 @@ import { mountSolid } from "../../test-helpers/mount-solid.ts";
 import { createSolidApplicationContextProvider } from "../../test-helpers/solid-application-context.tsx";
 import { flush, waitForSolid } from "../../test-helpers/solid-settle.ts";
 import { completeConfigContext, mountConfigPage } from "./config-page.test-support.ts";
-import { ConfigPage } from "./config-page.tsx";
+import { ConfigRoute } from "./config-page.tsx";
 import {
   mountMemoryPage,
   memoryTabRoute,
@@ -197,11 +197,15 @@ it("leaves Memory through RouterOutlet while an add-on mutation is pending", asy
     catalog: [addon("active-memory", true)],
     setEnabled: () => pending.promise,
   });
-  // The routed ConfigPage gates controls on the config capability.
+  // The routed Settings page gates controls on the config capability.
   Object.assign(context.runtimeConfig, { canSet: true });
   const memoryModule = {
     renderSolid: () =>
-      createComponent(ConfigPage, { pageId: "memory", routeData: element.routeData }),
+      createComponent(ConfigRoute, {
+        data: { ...memoryTabRoute("overview"), ...element.routeData, pageId: "memory" },
+        loaderPending: false,
+        presented: true,
+      }),
   };
   const router = createRouter<RouteId, ApplicationContext, typeof memoryModule>({
     routes: [

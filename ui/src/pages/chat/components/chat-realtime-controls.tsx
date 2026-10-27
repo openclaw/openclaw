@@ -2,6 +2,8 @@ import { For, Show } from "solid-js";
 import { registerChatComposerEnglish } from "../../../i18n/locales/en-chat-composer.ts";
 import { registerChatSessionEnglish } from "../../../i18n/locales/en-chat-session.ts";
 import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
+import { createParkedProjection } from "../../../lib/reactive/parked-projection.ts";
+import { createDocumentVisibility } from "../../../lib/reactive/platform.ts";
 import type { RealtimeTalkConversationEntry } from "../talk/conversation-state.ts";
 
 registerEnglishCatalog(registerChatSessionEnglish);
@@ -13,14 +15,16 @@ export function RealtimeTalkConversation(props: {
   userName?: string | null;
   entries: readonly RealtimeTalkConversationEntry[];
 }) {
+  const documentVisible = createDocumentVisibility();
+  const entries = createParkedProjection(() => props.entries, documentVisible);
   return (
-    <Show when={props.entries.length}>
+    <Show when={entries().length}>
       <div
         class="agent-chat__voice-turns"
         role="log"
         aria-label={t("chat.composer.voiceTranscript")}
       >
-        <For each={props.entries} keyed={(entry) => entry.id}>
+        <For each={entries()} keyed={(entry) => entry.id}>
           {(entry) => (
             <div
               class={[

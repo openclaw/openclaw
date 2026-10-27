@@ -29,7 +29,7 @@ const withPage = (
         methodResponses: { "update.status": { updateAvailable }, ...scenario.methodResponses },
       });
       expect((await page.goto(suite.server.baseUrl + "chat"))?.status()).toBe(200);
-      await gateway.waitForRequest("chat.startup");
+      await gateway.waitForRequest("sessions.messages.subscribe");
       await run(page, gateway);
     },
   );

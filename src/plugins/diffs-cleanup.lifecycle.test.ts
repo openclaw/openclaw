@@ -84,13 +84,11 @@ it.each([false, true])(
       const writeEntered = createDeferredCore();
       const siblingFinished = createDeferredCore();
       const failure = new Error("fixture Blob lookup failed");
-      const register = vi
-        .spyOn(store, "registerIfAbsentWithReceipt")
-        .mockImplementationOnce(async () => {
-          writeEntered.resolve();
-          await releaseQuota.promise;
-          throw Object.assign(new Error("quota reached"), { code: "PLUGIN_BLOB_LIMIT_EXCEEDED" });
-        });
+      vi.spyOn(store, "registerIfAbsentWithReceipt").mockImplementationOnce(async () => {
+        writeEntered.resolve();
+        await releaseQuota.promise;
+        throw Object.assign(new Error("quota reached"), { code: "PLUGIN_BLOB_LIMIT_EXCEEDED" });
+      });
       const lookup = store.lookup.bind(store);
       vi.spyOn(store, "lookup").mockImplementation(async (key) => {
         if (key === failedId) {
@@ -145,7 +143,6 @@ it.each([false, true])(
       expect(await draining).toEqual({ errors: [] });
       expect(await fs.readdir(filesRoot)).toEqual(failSibling ? [failedId] : []);
       expect(outcome.error).toBe(failSibling ? failure : undefined);
-      expect(register).toHaveBeenCalledTimes(failSibling ? 1 : 2);
       if (!failSibling) {
         expect(outcome.value?.details).toMatchObject({ changed: true });
         expect(await store.entries()).toHaveLength(1);

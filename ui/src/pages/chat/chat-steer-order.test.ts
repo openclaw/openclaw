@@ -3,17 +3,19 @@ import { afterEach, expect, it, vi } from "vitest";
 import { extractText } from "../../lib/chat/message-extract.ts";
 import { chatItemGroups } from "./chat-agent-run-grouping.ts";
 import { handleChatGatewayEvent } from "./chat-gateway.ts";
-import { activeHistory, createState } from "./chat-history.inflight.test-support.ts";
+import {
+  activeHistory,
+  buildStateItems,
+  createState,
+  steerPrompts,
+} from "./chat-history.inflight.test-support.ts";
 import { loadChatHistory } from "./chat-history.ts";
-import { buildChatItems } from "./chat-thread-build.ts";
 import { nativeMessage } from "./chat-thread-fixtures.test-support.ts";
 import { projectTranscriptChain } from "./components/chat-transcript-message-index.ts";
 import { applySessionMessagePayload } from "./session-message-apply.ts";
 import { handleAgentEvent } from "./tool-stream.ts";
 
-afterEach(() => {
-  vi.useRealTimers();
-});
+afterEach(() => vi.useRealTimers());
 
 it.each(["tool", "item"] as const)(
   "keeps tool activity ordered across steers and history (%s)",
@@ -21,11 +23,7 @@ it.each(["tool", "item"] as const)(
     vi.useFakeTimers();
     vi.setSystemTime(10_000);
     const history = activeHistory("active-run");
-    const original = nativeMessage("user", "Original prompt", 1, {
-      id: "original",
-      idempotencyKey: "active-run:user",
-      seq: 1,
-    });
+    const { original, steer } = steerPrompts(4, 2_000);
     history.messages = [original];
     const state = createState(history);
     await loadChatHistory(state);
@@ -71,20 +69,11 @@ it.each(["tool", "item"] as const)(
     vi.setSystemTime(1_000);
     emitReply("Already visible answer.");
     const rows = () =>
-      projectTranscriptChain(
-        buildChatItems({
-          paneId: "steer-order",
-          sessionKey: state.sessionKey,
-          runId: state.chatRunId,
-          messages: state.chatMessages,
-          toolMessages: state.chatToolMessages,
-          streamSegments: state.chatStreamSegments,
-          stream: state.chatStream,
-          streamStartedAt: state.chatStreamStartedAt,
-          showToolCalls: true,
-        }),
-        { sessionKey: state.sessionKey, runWorking: state.chatRunId !== null, searchActive: false },
-      )
+      projectTranscriptChain(buildStateItems(state, "steer-order"), {
+        sessionKey: state.sessionKey,
+        runWorking: state.chatRunId !== null,
+        searchActive: false,
+      })
         .transcriptItems.flatMap((item) => (item.kind === "agent-run-frame" ? item.parts : [item]))
         .flatMap((item) =>
           item.kind === "stream-run"
@@ -119,12 +108,6 @@ it.each(["tool", "item"] as const)(
     emitReply("", false, true);
     accept({ runId: "active-run", message: savedAnswer });
     expect(rows()).toEqual(before);
-    const steer = nativeMessage("user", "Take over the other work too", 2_000, {
-      id: "steer",
-      idempotencyKey: "steer-run:user",
-      seq: 4,
-      steerTargetRunId: "active-run",
-    });
     accept({ message: steer });
     expect(rows()).toEqual([...before, steer.content]);
     history.messages = [original, beforeTool, savedAnswer, steer];

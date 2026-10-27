@@ -22,6 +22,7 @@ import { setTwitchRuntime } from "./runtime.js";
 import { TwitchClientManager } from "./twitch-client.js";
 
 let provider: AuthProvider;
+const listener = () => ({ unbind() {} });
 vi.mock("@twurple/chat", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@twurple/chat")>()),
   ChatClient: class {
@@ -31,14 +32,10 @@ vi.mock("@twurple/chat", async (importOriginal) => ({
     }
     onAuthenticationSuccess(fn: () => void) {
       this.ready = fn;
-      return { unbind() {} };
+      return listener();
     }
-    onAuthenticationFailure() {
-      return { unbind() {} };
-    }
-    onDisconnect() {
-      return { unbind() {} };
-    }
+    onAuthenticationFailure = listener;
+    onDisconnect = listener;
     onMessage() {}
     connect() {
       this.ready();
@@ -73,9 +70,12 @@ function manager() {
 function connect(owner = manager()) {
   return owner.getClient(initial, current, "default");
 }
-beforeEach(async () => {
+async function reopenState() {
   await closeOpenClawStateDatabaseAsync();
   resetPluginStateStoreForTests();
+}
+beforeEach(async () => {
+  await reopenState();
   stateDir = mkdtempSync(path.join(os.tmpdir(), "twitch-oauth-owner-"));
   vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
   current = { channels: { twitch: { ...initial } } };
@@ -99,12 +99,11 @@ beforeEach(async () => {
 });
 afterEach(async () => {
   vi.unstubAllGlobals();
-  await closeOpenClawStateDatabaseAsync();
-  resetPluginStateStoreForTests();
+  await reopenState();
   vi.unstubAllEnvs();
   rmSync(stateDir, { recursive: true, force: true });
 });
-function network(handler: (url: URL, init?: RequestInit) => Promise<Response>) {
+function network(handler: () => Promise<Response>, beforeValidate = () => {}) {
   const tokenPosts: string[] = [];
   vi.stubGlobal(
     "fetch",
@@ -119,9 +118,10 @@ function network(handler: (url: URL, init?: RequestInit) => Promise<Response>) {
         expect(form.get("client_secret")).toBe(initial.clientSecret);
         expect(form.get("grant_type")).toBe("refresh_token");
         tokenPosts.push(form.get("refresh_token")!);
-        return await handler(url, init);
+        return await handler();
       }
       expect(url.href).toBe("https://id.twitch.tv/oauth2/validate");
+      beforeValidate();
       return Response.json({
         client_id: initial.clientId,
         login: initial.username,
@@ -156,7 +156,6 @@ it("restores an undispatched grant after DNS failure at the real request guard",
   await connect();
   expect(attempts).toEqual([initial.refreshToken]);
 });
-
 it("uses a fresh configured access token for chat scopes without consuming its refresh grant", async () => {
   const fresh = { ...initial, expiresIn: 3600, obtainmentTimestamp: Date.now() };
   current = { channels: { twitch: fresh } };
@@ -170,36 +169,27 @@ it("uses a fresh configured access token for chat scopes without consuming its r
   expect(posts).toEqual([]);
 });
 it("retains a completed rotation when token validation is transiently unavailable", async () => {
-  const posts = network(async () => Response.json(rotated));
-  const realFetch = globalThis.fetch;
   let validations = 0;
-  vi.stubGlobal(
-    "fetch",
-    vi.fn<typeof fetch>(async (input, init) => {
-      if (
-        new URL(resolveRequestUrl(input)).pathname === "/oauth2/validate" &&
-        ++validations === 1
-      ) {
+  const posts = network(
+    async () => Response.json(rotated),
+    () => {
+      if (++validations === 1) {
         throw new TypeError("synthetic validation offline");
       }
-      return await realFetch(input, init);
-    }),
+    },
   );
   await expect(connect()).rejects.toThrow();
-  await closeOpenClawStateDatabaseAsync();
-  resetPluginStateStoreForTests();
+  await reopenState();
   await connect();
   expect(validations).toBe(2);
   expect((await provider.getAccessTokenForIntent!("chat"))?.accessToken).toBe(rotated.access_token);
   expect(posts).toEqual([initial.refreshToken]);
 });
-
 it("persists the initial rotation before chat and reopens the replacement for the next refresh", async () => {
   const posts = network(async () => Response.json(rotated));
   await connect();
   expect((await provider.getAccessTokenForIntent!("chat"))?.accessToken).toBe(rotated.access_token);
-  await closeOpenClawStateDatabaseAsync();
-  resetPluginStateStoreForTests();
+  await reopenState();
   await connect();
   expect(posts).toEqual([initial.refreshToken]);
   await provider.refreshAccessTokenForIntent!("chat");
@@ -219,41 +209,24 @@ it.each(["lost-response", "nested-rejection"] as const)(
     expect(posts).toEqual([initial.refreshToken]);
   },
 );
-it("cannot publish a held old grant after account authority changes", async () => {
-  const entered = createDeferred<void>();
-  const release = createDeferred<void>();
-  const posts = network(async () => {
-    entered.resolve();
-    await release.promise;
-    return Response.json(rotated);
-  });
-  const outcome = connect().then(
-    () => "published",
-    () => "changed",
-  );
-  await entered.promise;
-  current = { channels: { twitch: { ...initial, refreshToken: "synthetic-new-login" } } };
-  release.resolve();
-  expect(await outcome).toBe("changed");
-  expect(posts).toEqual([initial.refreshToken]);
-});
-
-it("does not publish a held refresh after the channel account is disabled", async () => {
-  const entered = createDeferred<void>();
-  const release = createDeferred<void>();
-  const posts = network(async () => {
-    entered.resolve();
-    await release.promise;
-    return Response.json(rotated);
-  });
-  const outcome = connect().then(
-    () => "published",
-    () => "disabled",
-  );
-  await entered.promise;
-  current = { channels: { twitch: { ...initial, enabled: false } } };
-  release.resolve();
-  expect(await outcome).toBe("disabled");
-  await expect(connect()).rejects.toThrow();
-  expect(posts).toEqual([initial.refreshToken]);
-});
+it.each([{ refreshToken: "synthetic-new-login" }, { enabled: false }])(
+  "does not publish a held refresh after authority changes: %j",
+  async (change) => {
+    const entered = createDeferred<void>();
+    const release = createDeferred<void>();
+    const posts = network(async () => {
+      entered.resolve();
+      await release.promise;
+      return Response.json(rotated);
+    });
+    const outcome = expect(connect()).rejects.toThrow();
+    await entered.promise;
+    current = { channels: { twitch: { ...initial, ...change } } };
+    release.resolve();
+    await outcome;
+    if ("enabled" in change) {
+      await expect(connect()).rejects.toThrow();
+    }
+    expect(posts).toEqual([initial.refreshToken]);
+  },
+);

@@ -4,32 +4,23 @@ import path from "node:path";
 import { afterEach, beforeEach, expect, vi } from "vitest";
 import * as gateway from "../agents/tools/in-process-gateway.js";
 import type { InProcessGatewayCaller } from "../agents/tools/in-process-gateway.js";
+import { closeBoardDatabases } from "../boards/board-store.test-support.js";
 import type { createBoardHarness } from "../gateway/server-methods/board.test-support.js";
 import type { WidgetPresenter } from "../plugins/plugin-registration.types.js";
 import { resetPluginRuntimeStateForTest } from "../plugins/runtime.js";
-import {
-  closeOpenClawAgentDatabasesAsync,
-  closeOpenClawAgentDatabasesForTest,
-} from "../state/openclaw-agent-db.js";
-import {
-  closeOpenClawStateDatabaseAsync,
-  closeOpenClawStateDatabaseForTest,
-} from "../state/openclaw-state-db.js";
 import { resolveCanvasDocumentsDir } from "./documents.js";
 import { createShowWidgetTool } from "./widget-tool.js";
 
 export type WidgetToolOptions = NonNullable<Parameters<typeof createShowWidgetTool>[0]>;
-export function asGatewayCaller(
-  invoke: ReturnType<typeof createBoardHarness>["invoke"],
-): InProcessGatewayCaller {
-  return async <T>(method: string, params: Record<string, unknown>): Promise<T> => {
+export const asGatewayCaller =
+  (invoke: ReturnType<typeof createBoardHarness>["invoke"]): InProcessGatewayCaller =>
+  async <T>(method: string, params: Record<string, unknown>): Promise<T> => {
     const [ok, value, error] = (await invoke(method, params)).mock.calls[0]!;
     if (!ok) {
       throw new Error(error?.message ?? "board request failed");
     }
     return value as T;
   };
-}
 type WidgetTool = ReturnType<typeof createShowWidgetTool>;
 export const widget = { title: "Status", widget_code: "<p>ready</p>" };
 export const runWidget = (tool: WidgetTool, args: Record<string, unknown> = {}) =>
@@ -65,10 +56,7 @@ export function useWidgetHarness() {
   });
   afterEach(async () => {
     vi.useRealTimers();
-    await closeOpenClawAgentDatabasesAsync();
-    closeOpenClawAgentDatabasesForTest();
-    await closeOpenClawStateDatabaseAsync();
-    closeOpenClawStateDatabaseForTest();
+    await closeBoardDatabases();
     resetPluginRuntimeStateForTest();
     await rm(stateDir, { recursive: true, force: true });
     vi.restoreAllMocks();

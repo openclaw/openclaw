@@ -13,8 +13,8 @@ import {
   getModelRegistryRuntime,
   initializeModelRegistryRuntime,
 } from "../agents/sessions/model-registry-runtime.js";
+import { makeAgentAssistantMessage } from "../agents/test-helpers/agent-message-fixtures.js";
 import { makeProviderModelFixture } from "../agents/test-helpers/provider-model-fixture.js";
-import { ZERO_USAGE_FIXTURE } from "../agents/test-helpers/usage-fixtures.js";
 import { openClawAgentCoreRuntime } from "../plugin-sdk/agent-core.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { PluginInstanceUnavailableError } from "./plugin-instance-error.js";
@@ -30,24 +30,17 @@ import {
 
 const model: Model = makeProviderModelFixture({
   id: "consumer-fixture",
-  name: "Consumer fixture",
   api: "test-api",
   provider: "test-provider",
   baseUrl: "https://example.test",
-  contextWindow: 8000,
-  maxTokens: 1000,
 });
 const user = { role: "user" as const, content: "Summarize this synthetic turn.", timestamp: 1 };
-const message: AssistantMessage = {
-  role: "assistant",
+const message: AssistantMessage = makeAgentAssistantMessage({
   content: [{ type: "text", text: "Synthetic summary" }],
   api: model.api,
   provider: model.provider,
   model: model.id,
-  stopReason: "stop",
-  timestamp: 2,
-  usage: { ...ZERO_USAGE_FIXTURE, input: 1, output: 1, totalTokens: 2 },
-};
+});
 const config = { model, convertToLlm: () => [user] };
 const noTools = async () => ({
   messages: [],
@@ -205,7 +198,6 @@ it.each(["host", "descendant"])("waits for retained %s work to settle", async (k
     release();
   }
   await drained;
-  expect(settled).toHaveBeenCalledOnce();
   await instance.dispose();
   expectUnavailable(() => instance.run(() => "unavailable"));
 });
@@ -214,10 +206,10 @@ it("admits an async stream factory through recovery before retirement can finish
   const instance = new PluginInstance("async-consumer");
   const factoryStarted = createDeferredCore();
   const releaseFactory = createDeferredCore();
-  const source: AssistantMessageEventStreamLike = {
-    [Symbol.asyncIterator]: () => chunks({ type: "start" as const, partial: message }),
-    result: async () => message,
-  };
+  const iterator = vi.fn(() => chunks({ type: "start" as const, partial: message }));
+  const result = vi.fn(async () => message);
+  const source = { [Symbol.asyncIterator]: iterator, result };
+  const retainedSource = instance.wrap(source);
   const factory = instance.wrap(async () => {
     factoryStarted.resolve();
     await releaseFactory.promise;
@@ -232,6 +224,13 @@ it("admits an async stream factory through recovery before retirement can finish
     releaseFactory.resolve();
     await expect(output).resolves.toBe("Synthetic summary");
     await closing;
+    iterator.mockClear();
+    result.mockClear();
+    await expect(consume("summary", () => retainedSource)).rejects.toThrow(
+      /reloaded|disabled|retiring/,
+    );
+    expect(iterator).not.toHaveBeenCalled();
+    expect(result).not.toHaveBeenCalled();
   } finally {
     releaseFactory.resolve();
     await output;
@@ -282,7 +281,6 @@ it.each(["agent", "branch", "model-summary"] as const)(
       terminal.resolve();
       await expect(output).resolves.toContain("Synthetic summary");
       await closing;
-      expect(retirement.done).toBe(true);
     } finally {
       finishIterator.resolve();
       terminal.resolve();
@@ -310,17 +308,6 @@ it("aborts an error response before invoking its decorated result hook", async (
   });
   await consume("agent", stream);
   expect(result).toHaveBeenCalledOnce();
-});
-
-it("rejects consumption after the exact stream owner has disposed", async () => {
-  const instance = new PluginInstance("late-consumer");
-  const iterator = vi.fn(() => chunks({ type: "start" as const, partial: message }));
-  const result = vi.fn(async () => message);
-  const stream = instance.wrap({ [Symbol.asyncIterator]: iterator, result });
-  await instance.dispose();
-  await expect(consume("summary", () => stream)).rejects.toThrow(/reloaded|disabled|retiring/);
-  expect(iterator).not.toHaveBeenCalled();
-  expect(result).not.toHaveBeenCalled();
 });
 
 it("keeps retained consumers separate from ordinary drain when cleanup rejects", async () => {

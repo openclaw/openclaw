@@ -100,9 +100,48 @@ afterEach(async () => {
   document.body.replaceChildren();
   await Promise.resolve();
   vi.useRealTimers();
+  vi.unstubAllGlobals();
 });
 
 describe("generic link hovercards", () => {
+  it("starts page observation only with intent and retires a pending shadow-root link", async () => {
+    const NativeMutationObserver = MutationObserver;
+    const observers: MutationObserver[] = [];
+    const observations: {
+      observer: MutationObserver;
+      target: Node;
+      options?: MutationObserverInit;
+    }[] = [];
+    vi.stubGlobal(
+      "MutationObserver",
+      class extends NativeMutationObserver {
+        constructor(callback: MutationCallback) {
+          super(callback);
+          observers.push(this);
+        }
+        override observe(target: Node, options?: MutationObserverInit) {
+          observations.push({ observer: this, target, options });
+          super.observe(target, options);
+        }
+      },
+    );
+    const view = fixture(true);
+    fixture();
+    expect(observers).toHaveLength(1);
+    view.anchor.dispatchEvent(new MouseEvent("pointerover", { bubbles: true, composed: true }));
+    const pageObserver = observations.find(({ options }) =>
+      options?.attributeFilter?.includes("data-file-path"),
+    )?.observer;
+    expect(pageObserver).toBeDefined();
+    expect(observations).toContainEqual({
+      observer: pageObserver,
+      target: view.anchor.getRootNode(),
+      options: { childList: true, subtree: true, attributes: true },
+    });
+    view.anchor.setAttribute("data-file-path", "/guide");
+    await vi.advanceTimersByTimeAsync(250);
+    expectNoPreview(view.request);
+  });
   it("keeps a rendered GitHub sign-in link ordinary while genuine issue, PR, and commit links preview", async () => {
     const view = fixture();
     const login = "https://github.com/login?return_to=%2Facme%2Fproject%2Fpull%2F42";

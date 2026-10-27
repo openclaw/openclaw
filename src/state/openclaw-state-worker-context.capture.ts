@@ -7,6 +7,7 @@ import { isGatewayExternallySupervised } from "../infra/gateway-supervision.js";
 import { mergeProcessEnv } from "../infra/process-env.js";
 import { isArtifactPreservingStateRead } from "./artifact-preserving-state-reads.js";
 import { getOpenClawDatabaseMaintenanceScope } from "./openclaw-state-db-async-lifecycle.js";
+import { resolveLegacyCronDefaultStoreKey } from "./openclaw-state-db-cron-identity-migration.js";
 import { captureOpenClawStateSchemaReadAdmission } from "./openclaw-state-db-schema-policy.js";
 import { resolveOpenClawStateSqlitePath } from "./openclaw-state-db.paths.js";
 import type { OpenClawStateWorkerContext } from "./openclaw-state-worker-context.types.js";
@@ -95,6 +96,7 @@ export function captureOpenClawStateWorkerContextWithAdmission(
   const context = captureOpenClawStateReadWorkerContextWithAdmission(options, captureAdmission);
   return {
     ...context,
+    initializationCronDefaultStoreKey: resolveLegacyCronDefaultStoreKey(options.env ?? process.env),
     initializationEnvironment: mergeProcessEnv([
       options.env ?? process.env,
       { OPENCLAW_STATE_DIR: undefined, OPENCLAW_SUPERVISOR_MODE: undefined },

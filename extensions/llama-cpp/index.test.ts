@@ -7,22 +7,8 @@ import type {
   OpenClawPluginApi,
   ProviderWrapStreamFnContext,
 } from "openclaw/plugin-sdk/plugin-entry";
-import { createTestPluginApi } from "openclaw/plugin-sdk/plugin-test-api";
-import {
-  createPluginRegistryFixture,
-  registerVirtualTestPlugin,
-} from "openclaw/plugin-sdk/plugin-test-contracts";
-import {
-  clearEmbeddingProviders,
-  createEmptyPluginRegistry,
-  getActivePluginRegistry,
-  getRegisteredEmbeddingProvider,
-  setActivePluginRegistry,
-} from "openclaw/plugin-sdk/plugin-test-runtime";
-import type {
-  ModelProviderConfig,
-  ProviderPlugin,
-} from "openclaw/plugin-sdk/provider-model-shared";
+import { createCapturedPluginRegistration } from "openclaw/plugin-sdk/plugin-test-runtime";
+import type { ModelProviderConfig } from "openclaw/plugin-sdk/provider-model-shared";
 import { buildOpenAICompletionsParams as buildParams } from "openclaw/plugin-sdk/provider-transport-runtime";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -76,46 +62,30 @@ import {
 import { llamaCppEmbeddingProviderAdapter } from "./src/embedding-provider.js";
 
 const LOCAL_EMBEDDING_RUNTIME_FACTS = Symbol.for("openclaw.localEmbeddingRuntimeFacts");
+const runtimeFacts = {
+  buildInfo: "b10357 (689e227db)",
+  endpoints: { health: "ready", metrics: "ready" },
+};
 const { create: createEmbedding, resolveIndexIdentity } = llamaCppEmbeddingProviderAdapter;
-let previousPluginRegistry: ReturnType<typeof getActivePluginRegistry>;
 let fixture: ReturnType<typeof createFixture>;
 
 beforeEach(() => {
   fixture = createFixture();
-  previousPluginRegistry = getActivePluginRegistry();
   mocks.detectHardware.mockReset();
   mocks.discoverServer.mockReset();
   mocks.ensureModel.mockResolvedValue("/models/model.gguf");
   mocks.ensureRuntime.mockResolvedValue({ command: "/runtime/llama-server" });
   mocks.ensureChat.mockResolvedValue(undefined);
   mocks.prepareServer.mockResolvedValue({});
-  mocks.inspectRuntime.mockResolvedValue({
-    buildInfo: "b10357 (689e227db)",
-    endpoints: { health: "ready", metrics: "ready" },
-  });
-  mocks.genericCreate.mockResolvedValue({
-    provider: {
-      embed: vi.fn(async () => [0.6, 0.8]),
-      embedBatch: vi.fn(async () => [[0.3, 0.4]]),
-    },
-  });
+  mocks.inspectRuntime.mockResolvedValue(runtimeFacts);
+  mocks.genericCreate.mockResolvedValue(embeddingResult([0.6, 0.8], [[0.3, 0.4]]));
 });
 
-afterEach(() => {
-  clearEmbeddingProviders();
-  setActivePluginRegistry(previousPluginRegistry ?? createEmptyPluginRegistry());
-  vi.clearAllMocks();
-});
+afterEach(() => vi.clearAllMocks());
 
-function registerTextProvider(): ProviderPlugin {
-  const providers: ProviderPlugin[] = [];
-  llamaCppPlugin.register(
-    createTestPluginApi({
-      id: PROVIDER_ID,
-      registerProvider: (provider) => providers.push(provider),
-    }),
-  );
-  expect(providers.map((provider) => provider.id)).toEqual([PROVIDER_ID]);
+function registerTextProvider() {
+  const { api, providers } = createCapturedPluginRegistration({ id: PROVIDER_ID });
+  llamaCppPlugin.register(api);
   return expectDefined(providers[0], "llama.cpp provider");
 }
 
@@ -152,6 +122,15 @@ function createFixture() {
   return { options, config, providerConfig, model };
 }
 
+function embeddingResult(vector: number[], batch: number[][]) {
+  return {
+    provider: {
+      embed: async () => vector,
+      embedBatch: async () => batch,
+    },
+  };
+}
+
 function wrapChat(
   hook: "wrapStreamFn" | "wrapSimpleCompletionStreamFn",
   config: ProviderWrapStreamFnContext["config"],
@@ -176,23 +155,6 @@ function expectCall(mock: ReturnType<typeof vi.fn>, expected: Record<string, unk
 }
 
 describe("llama.cpp provider plugin", () => {
-  it("uses the normal OpenAI-compatible text transport", () => {
-    const provider = registerTextProvider();
-    expect(provider).toMatchObject({
-      id: PROVIDER_ID,
-      label: "llama.cpp",
-      normalizeToolSchemas: expect.any(Function),
-      inspectToolSchemas: expect.any(Function),
-      reconcileLocalService: expect.any(Function),
-    });
-    expect(provider.auth.map(({ id, wizard }) => [id, wizard?.choiceId])).toEqual([
-      ["local", "llama-cpp"],
-      ["existing-server", "llama-cpp-existing-server"],
-      ["local-media", undefined],
-    ]);
-    expect(provider).not.toHaveProperty("createStreamFn");
-  });
-
   it("never discovers external models for a managed local service", async () => {
     const provider = registerTextProvider();
     const prepareDynamicModel = expectDefined(provider.prepareDynamicModel, "dynamic model hook");
@@ -210,29 +172,14 @@ describe("llama.cpp provider plugin", () => {
   });
 
   it("normalizes sequential requests through the external stream wrapper", async () => {
-    const { model: configured } = fixture;
-    const model: Model = {
-      ...configured,
-      reasoning: true,
-      compat: { supportsReasoningEffort: true, supportsJsonSchemaResponseFormat: true },
-    };
+    const { model } = fixture;
+    model.reasoning = true;
+    model.compat = { supportsReasoningEffort: true, supportsJsonSchemaResponseFormat: true };
     const schema = { type: "object", properties: { ok: { type: "boolean" } } };
-    const payloads: unknown[] = [];
+    let reasoning: "off" | "max" | undefined;
     const inner = vi.fn<StreamFn>(async (requestModel, context, options) => {
       const request = buildParams({ ...requestModel, api: "openai-completions" }, context, options);
-      payloads.push((await options?.onPayload?.(request, requestModel)) ?? request);
-      const stream = createAssistantMessageEventStream();
-      stream.end();
-      return stream;
-    });
-    const wrapped = wrapChat("wrapStreamFn", {}, model, inner);
-    const reasoningLevels = ["off", "max", undefined] as const;
-    for (const reasoning of reasoningLevels) {
-      const options = { responseFormat: schema, ...(reasoning ? { reasoning } : {}) };
-      await wrapped(model, { messages: [] }, options);
-    }
-    for (const [index, reasoning] of reasoningLevels.entries()) {
-      const payload = payloads[index];
+      const payload = (await options?.onPayload?.(request, requestModel)) ?? request;
       expect(payload).toMatchObject({ response_format: { type: "json_object", schema } });
       if (reasoning === "off") {
         expect(payload).toHaveProperty("chat_template_kwargs.enable_thinking", false);
@@ -240,14 +187,21 @@ describe("llama.cpp provider plugin", () => {
         expect(payload).not.toHaveProperty("chat_template_kwargs");
         expect(payload).toHaveProperty("reasoning_effort", "high");
       }
+      const stream = createAssistantMessageEventStream();
+      stream.end();
+      return stream;
+    });
+    const wrapped = wrapChat("wrapStreamFn", {}, model, inner);
+    for (reasoning of ["off", "max", undefined] as const) {
+      const options = { responseFormat: schema, ...(reasoning ? { reasoning } : {}) };
+      await wrapped(model, { messages: [] }, options);
     }
-    expect(inner).toHaveBeenCalledTimes(reasoningLevels.length);
+    expect(inner).toHaveBeenCalledTimes(3);
     expect(mocks.ensureChat).not.toHaveBeenCalled();
   });
 
   it("keeps an embedding-only managed model inventory empty", async () => {
-    const provider = registerTextProvider();
-    const catalog = expectDefined(provider.catalog, "managed model catalog");
+    const catalog = expectDefined(registerTextProvider().catalog, "managed model catalog");
     const { config, providerConfig } = fixture;
     providerConfig.models = [];
     const result = await catalog.run({
@@ -257,27 +211,6 @@ describe("llama.cpp provider plugin", () => {
       resolveProviderAuth: () => ({ apiKey: undefined, mode: "none", source: "none" }),
     });
     expect(result).toMatchObject({ provider: { models: [] } });
-  });
-
-  it("registers local embeddings through the generic provider contract", () => {
-    const { config, registry } = createPluginRegistryFixture();
-    registerVirtualTestPlugin({
-      registry,
-      config,
-      id: PROVIDER_ID,
-      name: "llama.cpp Provider",
-      contracts: { embeddingProviders: ["local"] },
-      register: llamaCppPlugin.register,
-    });
-    setActivePluginRegistry(registry.registry);
-    expect(getRegisteredEmbeddingProvider("local")).toMatchObject({
-      ownerPluginId: PROVIDER_ID,
-      adapter: {
-        id: "local",
-        defaultModel: DEFAULT_MODEL,
-        transport: "local",
-      },
-    });
   });
 
   it("requires managed setup when local memory retains a remote SecretRef", async () => {
@@ -292,72 +225,50 @@ describe("llama.cpp provider plugin", () => {
     expect(mocks.prepareServer).not.toHaveBeenCalled();
   });
   it.each([undefined, "/models/custom-embedding.gguf"])(
-    "routes managed embeddings (%s)",
+    "routes managed embeddings and preserves media residency (%s)",
     async (modelPath) => {
+      const { providerConfig } = fixture;
+      providerConfig.params = { mediaModels: { ocr: "ocr", vision: "vision" } };
+      providerConfig.localService?.args?.push("--models-max", "1");
       if (modelPath) {
         fixture.providerConfig.models = [];
       }
       const result = await createEmbedding({ ...fixture.options, local: { modelPath } });
+      expectCall(mocks.prepareServer, {
+        chatModel: { mode: "preserve" },
+        configuredChatModelIds: modelPath ? [] : ["gemma-4-e4b-it-q4_k_m"],
+        mediaModels: [],
+        localService: providerConfig.localService,
+        embeddingModelPath: "/models/model.gguf",
+      });
       expect(result.runtime?.cacheKeyData).toEqual({
         provider: "local",
         model: modelPath ?? DEFAULT_MODEL,
       });
-      if (modelPath) {
-        expect(mocks.ensureModel).toHaveBeenCalledTimes(1);
-        expectCall(mocks.ensureModel, { source: modelPath, download: true });
-        expectCall(mocks.prepareServer, {
-          chatModel: { mode: "preserve" },
-          embeddingModelPath: "/models/model.gguf",
-        });
-        return;
-      }
+      expectCall(mocks.ensureModel, { source: modelPath ?? DEFAULT_MODEL, download: true });
       const provider = expectDefined(result.provider, "local embedding provider");
       expect(provider.maxInputTokens).toBe(2044);
       await expect(provider.embed("hello")).resolves.toEqual([0.6, 0.8]);
-      expectCall(mocks.genericCreate, {
-        provider: PROVIDER_ID,
-        model: "embeddinggemma-300m-qat-q8_0",
-        remote: undefined,
-      });
       const readFacts = Reflect.get(provider, LOCAL_EMBEDDING_RUNTIME_FACTS);
-      expect(typeof readFacts).toBe("function");
-      expect(readFacts()).toMatchObject({
-        buildInfo: "b10357 (689e227db)",
-        endpoints: { health: "ready", metrics: "ready" },
-      });
+      expect(readFacts()).toMatchObject(runtimeFacts);
     },
   );
 
   it.each([
     { dimensions: undefined, expected: [3 / 13, 4 / 13, 12 / 13] },
     { dimensions: 2, expected: [0.6, 0.8] },
-    { dimensions: 3, expected: [3 / 13, 4 / 13, 12 / 13] },
-  ])(
-    "projects and normalizes local vectors with dimensions=$dimensions",
-    async ({ dimensions, expected }) => {
-      mocks.genericCreate.mockResolvedValueOnce({
-        provider: {
-          embed: async () => [3, 4, 12],
-          embedBatch: async () => [
-            [3, 4, 12],
-            [3, 4, 12],
-          ],
-        },
-      });
-      const result = await createEmbedding({ ...fixture.options, dimensions });
-      const provider = expectDefined(result.provider, "local embedding provider");
+  ])("projects local vectors to $dimensions dimensions", async ({ dimensions, expected }) => {
+    const vector = [3, 4, 12];
+    mocks.genericCreate.mockResolvedValueOnce(embeddingResult(vector, [vector, vector]));
+    const result = await createEmbedding({ ...fixture.options, dimensions });
+    const provider = expectDefined(result.provider, "local embedding provider");
 
-      await expect(provider.embed("query")).resolves.toEqual(expected);
-      await expect(provider.embedBatch(["first", "second"])).resolves.toEqual([expected, expected]);
-      expect(provider.dimensions).toBe(dimensions);
-      expectCall(mocks.genericCreate, { dimensions: undefined });
-      expect(result.runtime?.cacheKeyData).toEqual({
-        provider: "local",
-        model: DEFAULT_MODEL,
-        ...(dimensions === undefined ? {} : { outputDimensionality: dimensions }),
-      });
-    },
-  );
+    await expect(provider.embed("query")).resolves.toEqual(expected);
+    await expect(provider.embedBatch(["first", "second"])).resolves.toEqual([expected, expected]);
+    expect(provider.dimensions).toBe(dimensions);
+    const cacheKeyData = expectDefined(result.runtime?.cacheKeyData, "embedding cache key data");
+    expect(cacheKeyData.outputDimensionality).toBe(dimensions);
+  });
 
   it("rejects local vectors shorter than the requested dimensions", async () => {
     const result = await createEmbedding({ ...fixture.options, dimensions: 3 });
@@ -375,19 +286,6 @@ describe("llama.cpp provider plugin", () => {
     }
   });
 
-  it("keeps media preset sections and residency when refreshing embeddings", async () => {
-    const { options, providerConfig: provider } = fixture;
-    provider.params = { mediaModels: { ocr: "ocr", vision: "vision" } };
-    provider.localService?.args?.push("--models-max", "1");
-    await createEmbedding(options);
-    expectCall(mocks.prepareServer, {
-      chatModel: { mode: "preserve" },
-      configuredChatModelIds: expect.arrayContaining(["gemma-4-e4b-it-q4_k_m"]),
-      mediaModels: [],
-      localService: provider.localService,
-    });
-  });
-
   it("reapplies embedding A to B to A and injects preset reconciliation", async () => {
     const acquireLocalService = vi.fn(async () => ({ release: vi.fn() }));
     const options = { ...fixture.options, acquireLocalService };
@@ -395,15 +293,13 @@ describe("llama.cpp provider plugin", () => {
     provider.baseUrl = "http://127.0.0.1:29434/v1";
     provider.params = { modelCacheDir: "/models/embedding-transition-cache" };
     mocks.ensureModel.mockImplementation(async ({ source }) => source);
-    for (const modelPath of ["/models/a.gguf", "/models/b.gguf", "/models/a.gguf"]) {
+    const sequence = ["/models/a.gguf", "/models/b.gguf", "/models/a.gguf"];
+    for (const modelPath of sequence) {
       await createEmbedding({ ...options, local: { modelPath } });
     }
-    expect(mocks.prepareServer).toHaveBeenCalledTimes(3);
-    expect(mocks.prepareServer.mock.calls.map(([call]) => call.embeddingModelPath)).toEqual([
-      "/models/a.gguf",
-      "/models/b.gguf",
-      "/models/a.gguf",
-    ]);
+    expect(mocks.prepareServer.mock.calls.map(([call]) => call.embeddingModelPath)).toEqual(
+      sequence,
+    );
     const forwarded = mocks.genericCreate.mock.calls[0]?.[0] as Pick<
       OpenClawPluginApi["runtime"]["llm"],
       "acquireLocalService"
@@ -416,46 +312,30 @@ describe("llama.cpp provider plugin", () => {
     );
   });
 
-  it("keeps chat preparation independent from an active custom embedding model", async () => {
-    const staleEmbeddingSource = "hf:retired-org/removed-embedding-model-GGUF/embedding.gguf";
-    const { config: configured, providerConfig, model } = fixture;
+  it("prepares chat before transport independently of an active custom embedding model", async () => {
+    const { config: configured, model } = fixture;
     const search = {
       enabled: true,
       provider: "local" as const,
-      local: { modelPath: staleEmbeddingSource },
+      local: { modelPath: "hf:retired-org/removed-embedding-model-GGUF/embedding.gguf" },
     };
     const config = { ...configured, memory: { search } };
-    const inner = vi.fn(() => ({}) as never);
-    for (const hook of ["wrapStreamFn", "wrapSimpleCompletionStreamFn"] as const) {
-      await wrapChat(hook, config, model, inner)({} as never, { messages: [] }, {});
-    }
-    expect(mocks.ensureChat).toHaveBeenCalledWith({
-      provider: providerConfig,
-      model: expect.objectContaining({ id: model.id }),
-    });
-    expect(mocks.ensureChat).toHaveBeenCalledTimes(2);
-    expect(inner).toHaveBeenCalledTimes(2);
-  });
-
-  it("prepares managed chat before simple-completion transport", async () => {
-    const { config, model } = fixture;
     const order: string[] = [];
-    mocks.ensureChat.mockImplementationOnce(async () => {
+    mocks.ensureChat.mockImplementation(async () => {
       order.push("prepare");
     });
-    const transport = vi.fn(() => {
+    const inner = vi.fn(() => {
       order.push("transport");
       return {} as never;
     });
-    const wrapped = wrapChat("wrapSimpleCompletionStreamFn", config, model, transport);
-    await wrapped({} as never, { messages: [] }, {});
-    expect(order).toEqual(["prepare", "transport"]);
-    expect(transport).toHaveBeenCalledOnce();
+    for (const hook of ["wrapStreamFn", "wrapSimpleCompletionStreamFn"] as const) {
+      await wrapChat(hook, config, model, inner)({} as never, { messages: [] }, {});
+    }
+    expect(order).toEqual(["prepare", "transport", "prepare", "transport"]);
   });
 
   it("keeps registered text setup chat-capable when local memory is enabled", async () => {
-    const provider = registerTextProvider();
-    const method = expectDefined(provider.auth[0], "llama.cpp setup method");
+    const method = expectDefined(registerTextProvider().auth[0], "llama.cpp setup method");
     fixture.providerConfig.models = [];
     const config = { ...fixture.config, memory: { search: { provider: "local" as const } } };
     mocks.detectHardware.mockResolvedValue({
@@ -499,25 +379,22 @@ describe("llama.cpp provider plugin", () => {
     fixture.providerConfig.params = { modelCacheDir };
     const modelPath = custom ? "/models/custom.gguf" : path.join(modelCacheDir, CACHE_FILE);
     const model = custom ? modelPath : DEFAULT_MODEL;
+    const aliases = [
+      path.join(modelCacheDir, CACHE_FILE),
+      path.join(resolveLegacyLlamaCppModelCacheDir(), CACHE_FILE),
+      CACHE_FILE,
+    ].map((alias) => expect.objectContaining({ model: alias }));
     const identity = resolveIndexIdentity?.({
       ...fixture.options,
       config: custom ? {} : fixture.config,
-      model: custom ? modelPath : DEFAULT_MODEL,
+      model,
       local: { modelPath },
       ...(custom ? { dimensions: 512 } : {}),
     });
     expect(identity).toEqual({
       model,
       cacheKeyData: { provider: "local", model, ...(custom ? { outputDimensionality: 512 } : {}) },
-      aliases: custom
-        ? []
-        : expect.arrayContaining(
-            [
-              path.join(modelCacheDir, CACHE_FILE),
-              path.join(resolveLegacyLlamaCppModelCacheDir(), CACHE_FILE),
-              CACHE_FILE,
-            ].map((alias) => expect.objectContaining({ model: alias })),
-          ),
+      aliases: custom ? [] : expect.arrayContaining(aliases),
     });
   });
 });

@@ -4,12 +4,6 @@ import type {
   OAuthTokens,
 } from "@modelcontextprotocol/client";
 
-type McpOAuthAuthorizationChallenge = {
-  resourceMetadataUrl?: string;
-  scope?: string;
-  requiresAuthorization?: true;
-};
-
 export type McpOAuthStore = {
   /** Non-secret authorization incarnation; token refresh preserves it, reauthorization does not. */
   authorizationId?: string;
@@ -25,7 +19,11 @@ export type McpOAuthStore = {
   discoveryState?: OAuthDiscoveryState;
   lastAuthorizationUrl?: string;
   redirectUrl?: string;
-  pendingAuthorizationChallenge?: McpOAuthAuthorizationChallenge;
+  pendingAuthorizationChallenge?: {
+    resourceMetadataUrl?: string;
+    scope?: string;
+    requiresAuthorization?: true;
+  };
 };
 
 export type McpOAuthMutation =

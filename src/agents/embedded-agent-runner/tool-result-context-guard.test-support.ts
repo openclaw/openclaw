@@ -39,17 +39,6 @@ export function makeToolResultWithDetails(
   });
 }
 
-export function getToolResultText(msg: AgentMessage): string {
-  const content = (msg as { content?: unknown }).content;
-  if (typeof content === "string") {
-    return content;
-  }
-  const block = (Array.isArray(content) ? content : []).find(
-    (entry) => entry && typeof entry === "object" && (entry as { type?: string }).type === "text",
-  ) as { text?: string } | undefined;
-  return typeof block?.text === "string" ? block.text : "";
-}
-
 export function makeGuardableAgent(transformContext?: Agent["transformContext"]) {
   return { transformContext };
 }

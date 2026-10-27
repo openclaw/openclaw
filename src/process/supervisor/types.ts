@@ -146,36 +146,33 @@ type SpawnBaseInput = {
   onCancel?: (reason: TerminationReason) => void;
 };
 
-type SpawnChildInput = SpawnBaseInput & {
-  mode: "child";
-  argv: string[];
-  /** Append invocation arguments after queued scope admission, immediately before child construction. */
-  resolveArgs?: () => string[];
-  /** Preserve a distinct invocation name while executing argv[0]. */
-  argv0?: string;
-  /** Preserve a caller-prepared environment without environment-mutating spawn wrappers. */
-  exactEnv?: true;
-  windowsVerbatimArguments?: boolean;
-  input?: string;
-  /** Prepare input authority at the adapter's stdin delivery boundary. */
-  prepareInput?: () => void | Promise<void>;
-  stdinMode?: "inherit" | "pipe-open" | "pipe-closed";
-  secretInput?: SpawnSecretInput;
-  onStdoutRaw?: (chunk: Buffer) => void;
-  onStderrRaw?: (chunk: Buffer) => void;
-};
-
-type SpawnPtyInput = SpawnBaseInput & {
-  mode: "pty";
-  argv: string[];
-};
-
-type SpawnAnchoredShellInput = SpawnBaseInput & {
-  mode: "anchored-shell";
-  command: string;
-};
-
-export type SpawnInput = SpawnChildInput | SpawnPtyInput | SpawnAnchoredShellInput;
+export type SpawnInput =
+  | (SpawnBaseInput & {
+      mode: "child";
+      argv: string[];
+      /** Append invocation arguments after queued scope admission, immediately before child construction. */
+      resolveArgs?: () => string[];
+      /** Preserve a distinct invocation name while executing argv[0]. */
+      argv0?: string;
+      /** Preserve a caller-prepared environment without environment-mutating spawn wrappers. */
+      exactEnv?: true;
+      windowsVerbatimArguments?: boolean;
+      input?: string;
+      /** Prepare input authority at the adapter's stdin delivery boundary. */
+      prepareInput?: () => void | Promise<void>;
+      stdinMode?: "inherit" | "pipe-open" | "pipe-closed";
+      secretInput?: SpawnSecretInput;
+      onStdoutRaw?: (chunk: Buffer) => void;
+      onStderrRaw?: (chunk: Buffer) => void;
+    })
+  | (SpawnBaseInput & {
+      mode: "pty";
+      argv: string[];
+    })
+  | (SpawnBaseInput & {
+      mode: "anchored-shell";
+      command: string;
+    });
 
 /**
  * required-all includes external execution; owned-only leaves explicit backend

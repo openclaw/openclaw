@@ -3,6 +3,7 @@
  *
  * Handles host paths, file URLs, temporary media paths, and workspace root assertions.
  */
+import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { URL } from "node:url";
@@ -10,6 +11,7 @@ import {
   assertNoPathAliasEscape,
   assertNoWindowsNetworkPath,
   hasEncodedFileUrlSeparator,
+  resolveAbsolutePathForRead,
   resolvePathPrefixSync,
   safeFileURLToPath,
   type PathAliasPolicy,
@@ -133,6 +135,15 @@ export function isPathBoundaryEscapeError(
 }
 
 async function resolveRawPathViaExistingAncestor(rawPath: string): Promise<string> {
+  try {
+    // Kernel traversal checks search permissions even inside symlink targets;
+    // native realpath alone can erase a denied directory followed by '..'.
+    if (fs.existsSync(rawPath)) {
+      return (await resolveAbsolutePathForRead(rawPath, { symlinks: "follow" })).canonicalPath;
+    }
+  } catch {
+    // The prefix resolver owns missing paths and the original error contract.
+  }
   const { existingPath, unresolvedSegments } = resolvePathPrefixSync(rawPath);
   return path.resolve(existingPath, ...unresolvedSegments);
 }

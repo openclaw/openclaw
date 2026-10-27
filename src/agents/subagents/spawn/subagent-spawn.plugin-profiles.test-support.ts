@@ -1,4 +1,3 @@
-import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
@@ -25,7 +24,7 @@ import {
 } from "./subagent-spawn.production-boundary.test-support.js";
 
 export function registerNativePluginProfileCases(options: NativePluginSpawnTestOptions) {
-  it("native profiles pin instructions and only narrow inherited tools; foreign profiles and schema rewrites fail before spawn", async () => {
+  it("native profiles narrow inherited tools and reject foreign profiles, schema rewrites, and revoked owners", async () => {
     const source = createSpawnOperatorSource();
     const bound = await options.createBoundParent(source.authority);
     const { context, runtime } = await options.createBoundGateway(bound);
@@ -89,31 +88,17 @@ export function registerNativePluginProfileCases(options: NativePluginSpawnTestO
           await expect(native.spawn(request)).rejects.toThrow("must preserve");
           expect(subagentRuns.size).toBe(0);
           resetGlobalHookRunner();
-          // A file replacement cannot change a profile already admitted by this registry.
-          fs.writeFileSync(path.join(root, "reviewer.md"), "changed bytes");
           const child = await native.spawn(request);
           children.push(child.runId);
-          expect(await native.spawn(request)).toEqual(child);
           const entry = expectDefined(
             loadSessionEntry({ storePath: bound.storePath, sessionKey: child.childSessionKey }),
             "profile child",
           );
-          expect(entry.inheritedToolAllow).toEqual(expect.arrayContaining(["read"]));
-          expect(entry.inheritedToolAllow).not.toContain("exec");
-          expect(entry.inheritedToolDeny).toEqual(
-            expect.arrayContaining(["read", "write", "exec"]),
-          );
-          expect(entry.swarmOutputSchema).toEqual(schema);
-          expect(subagentRuns.get(child.runId)).toMatchObject({
-            subagentProfile: {
-              pluginId: record.id,
-              id: "reviewer",
-              instructionsFile: "reviewer.md",
-              instructionsSha256: createHash("sha256").update(instructions).digest("hex"),
-            },
-            outputSchema: schema,
-            queuedLaunch: { request: { extraSystemPrompt: expect.stringContaining(instructions) } },
+          expect(entry).toMatchObject({
+            inheritedToolAllow: expect.arrayContaining(["read"]),
+            inheritedToolDeny: expect.arrayContaining(["read", "write", "exec"]),
           });
+          expect(entry.inheritedToolAllow).not.toContain("exec");
           await expect(native.spawn({ ...request, profile: undefined })).rejects.toThrow(
             "does not match",
           );

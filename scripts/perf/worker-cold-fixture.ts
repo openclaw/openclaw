@@ -1,6 +1,8 @@
 // Offline setup only, before launching a Gateway against this synthetic fixture:
 // node --import ./scripts/tsx.mjs scripts/perf/worker-cold-fixture.ts --state-dir .local/worker-base
-// One native maintenance pass creates at most 128 genuine cold transcripts. The
+// --count 257 selects 256 load histories plus one reserved post-idle history read
+// (default 128). Native maintenance batches may archive more than the requested
+// count; the summary records the actual total and selects exactly count keys. The
 // resulting worker-cold-summary.json lists current session keys for first/repeat
 // chat.history reads. Start from a fresh team-shape fixture for each comparison.
 // --resume verifies existing archive files and recovers a missing summary without archiving again.
@@ -14,13 +16,22 @@ import type { DB } from "../../src/state/openclaw-agent-db.generated.js";
 import { createGatewayBenchEnv } from "../lib/gateway-bench-runtime.ts";
 
 const { values } = parseArgs({
-  options: { "state-dir": { type: "string" }, resume: { type: "boolean", default: false } },
+  options: {
+    "state-dir": { type: "string" },
+    count: { type: "string", default: "128" },
+    resume: { type: "boolean", default: false },
+  },
 });
 assert(values["state-dir"], "--state-dir must identify an existing offline team-shape fixture");
 const root = realpathSync(values["state-dir"]);
 const fixture = JSON.parse(readFileSync(path.join(root, "team-shape-summary.json"), "utf8"));
 assert.equal(fixture.format, "openclaw-team-shape-v1");
 assert(fixture.sessionCount > 0, "the fixture must contain synthetic sessions");
+const count = Number(values.count);
+assert(
+  Number.isSafeInteger(count) && count > 0 && count <= fixture.sessionCount,
+  "--count must be a positive integer no larger than the fixture session count",
+);
 const configPath = path.join(root, "openclaw.json");
 const originalConfig = readFileSync(configPath, "utf8");
 const config: OpenClawConfig = JSON.parse(originalConfig);
@@ -120,24 +131,33 @@ try {
         }
         const result = values.resume
           ? { archivedTranscripts: existing.length, externalizedTranscripts: 0 }
-          : await cold.runSessionColdStorageMaintenance({
-              config: {
-                ...config,
-                session: {
-                  ...config.session,
-                  maintenance: {
-                    ...config.session?.maintenance,
-                    // Warn mode disables unrelated deleted/reset archive retention pruning.
-                    mode: "warn",
-                    coldStorage: { enabled: true, afterDays: 0 },
-                  },
+          : { archivedTranscripts: 0, externalizedTranscripts: 0 };
+        while (!values.resume && result.archivedTranscripts < count) {
+          const batch = await cold.runSessionColdStorageMaintenance({
+            config: {
+              ...config,
+              session: {
+                ...config.session,
+                maintenance: {
+                  ...config.session?.maintenance,
+                  // Warn mode disables unrelated deleted/reset archive retention pruning.
+                  mode: "warn",
+                  coldStorage: { enabled: true, afterDays: 0 },
                 },
               },
-              assertCurrent: () => authority.assertCurrent(),
-            });
+            },
+            assertCurrent: () => authority.assertCurrent(),
+          });
+          assert(
+            batch.archivedTranscripts > 0 && batch.archivedTranscripts <= 128,
+            "native maintenance could not prepare the requested cold transcript count",
+          );
+          result.archivedTranscripts += batch.archivedTranscripts;
+          result.externalizedTranscripts += batch.externalizedTranscripts;
+        }
         authority.assertCurrent();
         const sessions = values.resume ? existing : readCold();
-        assert(result.archivedTranscripts > 0 && result.archivedTranscripts <= 128);
+        assert(result.archivedTranscripts >= count, "not enough cold transcripts for --count");
         assert.equal(sessions.length, result.archivedTranscripts);
         assert.equal(result.externalizedTranscripts, 0);
         assert(sessions.every((row) => row.sessionId === row.currentSessionId));
@@ -145,8 +165,9 @@ try {
         return {
           format: "openclaw-worker-cold-fixture-v1",
           ...result,
-          sessionKeys: sessions.map((row) => row.sessionKey),
-          sessions,
+          requestedCount: count,
+          sessionKeys: sessions.slice(0, count).map((row) => row.sessionKey),
+          sessions: sessions.slice(0, count),
         };
       } finally {
         // Agent close drains registered readers; whole-state close retires their
@@ -188,7 +209,13 @@ try {
   assert.equal(workers.getTrackedWorkerLifecycleSnapshot().workerCount, 0, "owned workers remain");
   const output = path.join(root, "worker-cold-summary.json");
   writeFileSync(output, `${JSON.stringify(summary, null, 2)}\n`, { flag: "wx" });
-  console.log(JSON.stringify({ output, archivedTranscripts: summary.archivedTranscripts }));
+  console.log(
+    JSON.stringify({
+      output,
+      archivedTranscripts: summary.archivedTranscripts,
+      selectedTranscripts: summary.sessionKeys.length,
+    }),
+  );
 } finally {
   process.off("worker", trackNativeExit);
   process.env = previousEnv;

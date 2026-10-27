@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { appendGitConfig, gitMaintenanceEnvironment } from "../../infra/git-maintenance-env.js";
+import { gitMaintenanceEnvironmentExpression } from "../../infra/git-maintenance-env.js";
 import type { WorkerProvider } from "../../plugins/capability-provider.types.js";
 import type { EnvironmentRecipe, LifecycleCommand } from "./environment-recipe.js";
 import { DEFAULT_NODE_TOOLCHAIN_SETUP_SH } from "./node-toolchain.js";
@@ -111,7 +111,12 @@ const manifestScript = ${JSON.stringify(REMOTE_WORKSPACE_MANIFEST_JS)};
 process.umask(0o077);
 const machineHome = fs.realpathSync(os.homedir());
 let setupPath = process.env.PATH;
-const env = { PATH: process.env.PATH, HOME: machineHome, LANG: "C.UTF-8", GIT_CONFIG_NOSYSTEM: "1", GIT_CONFIG_GLOBAL: os.devNull, ...(${appendGitConfig.toString()})(${JSON.stringify(gitMaintenanceEnvironment())}, [["core.hooksPath", os.devNull], ["core.fsmonitor", "false"]]), GIT_TERMINAL_PROMPT: "0", GIT_ASKPASS: "", SSH_ASKPASS: "" };
+const env = { PATH: process.env.PATH, HOME: machineHome, LANG: "C.UTF-8", GIT_CONFIG_NOSYSTEM: "1", GIT_CONFIG_GLOBAL: os.devNull, ...${gitMaintenanceEnvironmentExpression(
+  [
+    [JSON.stringify("core.hooksPath"), "os.devNull"],
+    [JSON.stringify("core.fsmonitor"), JSON.stringify("false")],
+  ],
+)}, GIT_TERMINAL_PROMPT: "0", GIT_ASKPASS: "", SSH_ASKPASS: "" };
 const ownedDirectory = (parent, name, create = false) => {
   const target = path.join(parent, name);
   if (create && !fs.existsSync(target)) fs.mkdirSync(target, { mode: 0o700 });

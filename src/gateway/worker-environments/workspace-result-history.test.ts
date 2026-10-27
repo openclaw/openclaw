@@ -87,7 +87,23 @@ async function fixture(kind: "fast-forward" | "moved" | "divergent" | "empty" = 
     gitHistory: { baseCommit, headCommit, descendsFromBase: kind !== "divergent" },
     gitPackPath,
   });
-  return { local, worker, ref, baseCommit, headCommit, expectedLocalHead, base };
+  return {
+    local,
+    ref,
+    baseCommit,
+    headCommit,
+    expectedLocalHead,
+    git: (...args: string[]) => git(local, ...args),
+    read: (file: string) => fs.readFile(path.join(local, file), "utf8"),
+    apply: () =>
+      applyStagedWorkerWorkspaceResult({
+        root: local,
+        stagedResultRef: ref,
+        expectedBaseManifestRef: base.manifestRef,
+        journal,
+      }),
+    adopt: () => adoptStagedWorkerWorkspaceHistory({ root: local, stagedResultRef: ref }),
+  };
 }
 
 const journal = {
@@ -106,25 +122,18 @@ it("retains worker history through result GC and adopts it while leaving later e
   expect(await git(f.local, "show", "-s", "--format=%s", `${f.ref}^`)).toBe(
     "worker-authored commit",
   );
-  await applyStagedWorkerWorkspaceResult({
-    root: f.local,
-    stagedResultRef: f.ref,
-    expectedBaseManifestRef: f.base.manifestRef,
-    journal,
-  });
-  expect(await git(f.local, "rev-parse", "HEAD")).toBe(f.baseCommit);
-  await expect(
-    adoptStagedWorkerWorkspaceHistory({ root: f.local, stagedResultRef: f.ref }),
-  ).resolves.toBeUndefined();
-  expect(await git(f.local, "rev-parse", "HEAD")).toBe(f.headCommit);
-  expect(await git(f.local, "show", "HEAD:tracked.txt")).toBe("committed");
-  expect(await fs.readFile(path.join(f.local, "tracked.txt"), "utf8")).toBe("uncommitted edit\n");
-  expect(await git(f.local, "diff", "--cached", "--name-only")).toBe("");
-  expect(await git(f.local, "diff", "--name-only")).toBe("tracked.txt");
-  expect(await git(f.local, "status", "--porcelain")).toContain("?? new.txt");
+  await f.apply();
+  expect(await f.git("rev-parse", "HEAD")).toBe(f.baseCommit);
+  await expect(f.adopt()).resolves.toBeUndefined();
+  expect(await f.git("rev-parse", "HEAD")).toBe(f.headCommit);
+  expect(await f.git("show", "HEAD:tracked.txt")).toBe("committed");
+  expect(await f.read("tracked.txt")).toBe("uncommitted edit\n");
+  expect(await f.git("diff", "--cached", "--name-only")).toBe("");
+  expect(await f.git("diff", "--name-only")).toBe("tracked.txt");
+  expect(await f.git("status", "--porcelain")).toContain("?? new.txt");
   // Recovery after the ref update repeats the index cutover without another commit.
-  await adoptStagedWorkerWorkspaceHistory({ root: f.local, stagedResultRef: f.ref });
-  expect(await git(f.local, "rev-parse", "HEAD")).toBe(f.headCommit);
+  await f.adopt();
+  expect(await f.git("rev-parse", "HEAD")).toBe(f.headCommit);
 });
 
 it.each(["edited", "deleted"] as const)(
@@ -139,19 +148,12 @@ it.each(["edited", "deleted"] as const)(
     } else {
       await fs.rm(file);
     }
-    await applyStagedWorkerWorkspaceResult({
-      root: f.local,
-      stagedResultRef: f.ref,
-      expectedBaseManifestRef: f.base.manifestRef,
-      journal,
-    });
+    await f.apply();
     for (let replay = 0; replay < 2; replay++) {
-      await expect(
-        adoptStagedWorkerWorkspaceHistory({ root: f.local, stagedResultRef: f.ref }),
-      ).resolves.toBeUndefined();
-      expect(await git(f.local, "rev-parse", "HEAD")).toBe(f.headCommit);
-      expect(await git(f.local, "show", ":local.txt")).toBe("staged content");
-      expect(await git(f.local, "diff", "--cached", "--name-only")).toBe("local.txt");
+      await expect(f.adopt()).resolves.toBeUndefined();
+      expect(await f.git("rev-parse", "HEAD")).toBe(f.headCommit);
+      expect(await f.git("show", ":local.txt")).toBe("staged content");
+      expect(await f.git("diff", "--cached", "--name-only")).toBe("local.txt");
       if (workingFile === "edited") {
         expect(await fs.readFile(file, "utf8")).toBe("working content\n");
       } else {
@@ -166,18 +168,11 @@ it("keeps the branch and staged content when the index conflicts with worker com
   await fs.writeFile(path.join(f.local, "tracked.txt"), "staged local content\n");
   await git(f.local, "add", "tracked.txt");
   await fs.writeFile(path.join(f.local, "tracked.txt"), "base\n");
-  await applyStagedWorkerWorkspaceResult({
-    root: f.local,
-    stagedResultRef: f.ref,
-    expectedBaseManifestRef: f.base.manifestRef,
-    journal,
-  });
-  await expect(
-    adoptStagedWorkerWorkspaceHistory({ root: f.local, stagedResultRef: f.ref }),
-  ).resolves.toContain("staged changes conflict with worker commits");
-  expect(await git(f.local, "rev-parse", "HEAD")).toBe(f.baseCommit);
-  expect(await git(f.local, "show", ":tracked.txt")).toBe("staged local content");
-  expect(await fs.readFile(path.join(f.local, "tracked.txt"), "utf8")).toBe("uncommitted edit\n");
+  await f.apply();
+  await expect(f.adopt()).resolves.toContain("staged changes conflict with worker commits");
+  expect(await f.git("rev-parse", "HEAD")).toBe(f.baseCommit);
+  expect(await f.git("show", ":tracked.txt")).toBe("staged local content");
+  expect(await f.read("tracked.txt")).toBe("uncommitted edit\n");
 });
 
 it.each([
@@ -187,26 +182,17 @@ it.each([
   "keeps file reconciliation when history is %s and names the fallback",
   async (kind, reason) => {
     const f = await fixture(kind);
-    await applyStagedWorkerWorkspaceResult({
-      root: f.local,
-      stagedResultRef: f.ref,
-      expectedBaseManifestRef: f.base.manifestRef,
-      journal,
-    });
-    await expect(
-      adoptStagedWorkerWorkspaceHistory({ root: f.local, stagedResultRef: f.ref }),
-    ).resolves.toContain(reason);
-    expect(await git(f.local, "rev-parse", "HEAD")).toBe(f.expectedLocalHead);
-    expect(await fs.readFile(path.join(f.local, "tracked.txt"), "utf8")).toBe("uncommitted edit\n");
-    expect(await fs.readFile(path.join(f.local, "new.txt"), "utf8")).toBe("uncommitted new file\n");
+    await f.apply();
+    await expect(f.adopt()).resolves.toContain(reason);
+    expect(await f.git("rev-parse", "HEAD")).toBe(f.expectedLocalHead);
+    expect(await f.read("tracked.txt")).toBe("uncommitted edit\n");
+    expect(await f.read("new.txt")).toBe("uncommitted new file\n");
   },
 );
 
 it("adopts an empty worker commit when file manifests are identical", async () => {
   const f = await fixture("empty");
-  await expect(
-    adoptStagedWorkerWorkspaceHistory({ root: f.local, stagedResultRef: f.ref }),
-  ).resolves.toBeUndefined();
-  expect(await git(f.local, "rev-parse", "HEAD")).toBe(f.headCommit);
-  expect(await git(f.local, "status", "--porcelain")).toBe("");
+  await expect(f.adopt()).resolves.toBeUndefined();
+  expect(await f.git("rev-parse", "HEAD")).toBe(f.headCommit);
+  expect(await f.git("status", "--porcelain")).toBe("");
 });

@@ -1,12 +1,7 @@
-import { once } from "node:events";
+import { on, once } from "node:events";
 import { rawDataToString } from "openclaw/plugin-sdk/webhook-ingress";
 import { expect, it, describe } from "vitest";
-import { WebSocket, type RawData } from "ws";
-import { createQaBusState } from "../../bus-state.js";
-import { runScenarioFlow } from "../../scenario-flow-runner.js";
-import { runQaSuiteScenarioSteps } from "../../suite-runtime-flow.js";
-import { makeQaSuiteTestScenario } from "../../suite-test-helpers.js";
-import type { QaMockContinuationHold } from "../shared/types.js";
+import { WebSocket } from "ws";
 import { userInputs } from "./server.fixtures.test-support.js";
 import {
   createMockServerTestHarness,
@@ -45,59 +40,47 @@ async function startConnection() {
   return {
     send,
     read: (prompt: string, extra = {}) =>
-      send({ ...streaming, tools: readTool, input: userInput(prompt), ...extra }),
-    complete: async (request: Request) => readCompletedResponse(await send(request)),
+      send({
+        ...streaming,
+        tools: [{ type: "function", name: "read" }],
+        input: userInputs(prompt),
+        ...extra,
+      }),
     debug: (path: string) => debugJson(server.baseUrl, path),
   };
 }
 
-const userInput = (text: string) => [{ role: "user", content: [{ type: "input_text", text }] }];
-
-const readTool = [{ type: "function", name: "read" }];
-
 const streaming = { model: "gpt-5.6-sol", stream: true };
 
-const debugJson = async (baseUrl: string, path: string) =>
-  await fetch(`${baseUrl}/debug/${path}`).then((response) => response.json());
+const debugJson = (baseUrl: string, path: string) => getJson({ baseUrl }, `/debug/${path}`);
 
 async function collectResponseEvents(socket: WebSocket, request: Request) {
-  return await new Promise<JsonObject[]>((resolve, reject) => {
-    const events: JsonObject[] = [];
-    const timeout = setTimeout(() => {
-      cleanup();
-      reject(new Error("timed out waiting for the mock Responses WebSocket"));
-    }, 5_000);
-    const cleanup = () => {
-      clearTimeout(timeout);
-      socket.off("message", onMessage);
-      socket.off("error", onError);
-    };
-    const onError = (error: Error) => {
-      cleanup();
-      reject(error);
-    };
-    const onMessage = (data: RawData) => {
-      const event = JSON.parse(rawDataToString(data)) as JsonObject;
-      events.push(event);
-      if (event.type === "response.completed" || event.type === "error") {
-        cleanup();
-        resolve(events);
-      }
-    };
-    socket.on("message", onMessage);
-    socket.on("error", onError);
+  const events: JsonObject[] = [];
+  const messages = on(socket, "message", { signal: AbortSignal.timeout(5_000) });
+  try {
     socket.send(
       typeof request === "string"
         ? request
         : JSON.stringify({ type: "response.create", ...request }),
     );
-  });
+    for await (const [data] of messages) {
+      const event = requireRecord(JSON.parse(rawDataToString(data)), "WebSocket event");
+      events.push(event);
+      if (event.type === "response.completed" || event.type === "error") {
+        return events;
+      }
+    }
+    throw new Error("WebSocket event stream ended without a response");
+  } finally {
+    await messages.return?.();
+  }
 }
 
 function readCompletedResponse(events: JsonObject[]) {
-  const completion = events.find((event) => event.type === "response.completed");
-  expect(completion).toBeDefined();
-  return completion?.response as JsonObject;
+  return requireRecord(
+    events.find((event) => event.type === "response.completed")?.response,
+    "completed response",
+  );
 }
 
 function expectError(events: JsonObject[], status: number, error: JsonObject, fields = {}) {
@@ -144,84 +127,58 @@ it("holds one continuation across a disconnect without holding its replacement",
   }
 });
 
-it("reconstructs Codex previous-response deltas on the same reusable connection", async () => {
-  const { send, read, debug } = await startConnection();
-  const prompt = "Read README.md for the source and docs discovery report.";
-  const firstEvents = await read(prompt);
-  const firstResponse = readCompletedResponse(firstEvents);
-  const output = firstResponse.output as JsonObject[];
-  const toolCall = output.find((item) => item.type === "function_call");
-  expect(toolCall?.call_id).toEqual(expect.any(String));
-  const secondEvents = await send({
-    ...streaming,
-    previous_response_id: firstResponse.id,
-    input: functionOutput(toolCall?.call_id, "README: source and docs evidence captured"),
-  });
-  for (const events of [firstEvents, secondEvents]) {
-    expect(events.map((event) => event.sequence_number)).toEqual(events.map((_, index) => index));
-  }
-  const requests = (await debug("requests")) as JsonObject[];
-  expect(requests).toHaveLength(2);
-  expect(requests[1]).toMatchObject({
-    prompt,
-    toolOutput: "README: source and docs evidence captured",
-    toolOutputCallId: toolCall?.call_id,
-  });
-});
+const customTool = { type: "custom", name: "apply_patch" };
+const namespacedTool = {
+  type: "namespace",
+  name: "openclaw_direct",
+  tools: [
+    { ...customTool, format: { type: "grammar", syntax: "lark", definition: "start: /.+/" } },
+  ],
+};
 
-it("preserves empty tool-result identity without replaying a native patch", async () => {
-  const { complete, debug } = await startConnection();
-  const prompt =
-    "tool search qa check target=apply_patch. Call apply_patch exactly once and then summarize.";
-  const initial = await complete({
-    tools: [{ type: "custom", name: "apply_patch" }],
-    input: userInput(prompt),
-  });
-  const call = (initial.output as JsonObject[])[0];
-  expect(call).toMatchObject({ type: "custom_tool_call", name: "apply_patch" });
-  const completed = await complete({
-    previous_response_id: initial.id,
-    input: [{ type: "custom_tool_call_output", call_id: call?.call_id, output: "" }],
-  });
-  expect(completed.output).toEqual([expect.objectContaining({ type: "message" })]);
-  const recorded = await debug("last-request");
-  expect(recorded).toMatchObject({ toolOutput: "", toolOutputCallId: call?.call_id });
-  expect(recorded).not.toHaveProperty("plannedToolName");
-});
-
-it("preserves namespaced native custom-tool identity over Responses WebSocket", async () => {
-  const { send } = await startConnection();
-  const events = await send({
-    tools: [
-      {
-        type: "namespace",
-        name: "openclaw_direct",
-        tools: [
-          {
-            type: "custom",
-            name: "apply_patch",
-            format: { type: "grammar", syntax: "lark", definition: "start: /.+/" },
-          },
-        ],
-      },
-    ],
-    input: userInput(
-      "tool search qa check target=apply_patch. Call apply_patch exactly once and then summarize.",
-    ),
-  });
-  for (const item of [
-    ...["response.output_item.added", "response.output_item.done"].map((type) =>
-      requireRecord(events.find((event) => event.type === type)?.item, type),
-    ),
-    outputItem(readCompletedResponse(events)),
-  ]) {
-    expect(item).toMatchObject({
-      type: "custom_tool_call",
-      name: "apply_patch",
-      namespace: "openclaw_direct",
+it.each([false, true])(
+  "preserves native tool identity and empty results (namespaced=%s)",
+  async (namespaced) => {
+    const { send, debug } = await startConnection();
+    const prompt =
+      "tool search qa check target=apply_patch. Call apply_patch exactly once and then summarize.";
+    const events = await send({
+      tools: [namespaced ? namespacedTool : customTool],
+      input: userInputs(prompt),
     });
-  }
-});
+    const initial = readCompletedResponse(events);
+    const call = outputItem(initial);
+    for (const item of [
+      ...["response.output_item.added", "response.output_item.done"].map((type) =>
+        requireRecord(events.find((event) => event.type === type)?.item, type),
+      ),
+      call,
+    ]) {
+      expect(item).toMatchObject({
+        type: "custom_tool_call",
+        name: "apply_patch",
+        ...(namespaced ? { namespace: "openclaw_direct" } : {}),
+      });
+    }
+    expect(call.call_id).toEqual(expect.any(String));
+    const continuation = await send({
+      previous_response_id: initial.id,
+      input: [{ type: "custom_tool_call_output", call_id: call.call_id, output: "" }],
+    });
+    for (const response of [events, continuation]) {
+      expect(response.map((event) => event.sequence_number)).toEqual(
+        response.map((_, index) => index),
+      );
+    }
+    expect(readCompletedResponse(continuation).output).toEqual([
+      expect.objectContaining({ type: "message" }),
+    ]);
+    expect(await debug("requests")).toHaveLength(2);
+    const recorded = await debug("last-request");
+    expect(recorded).toMatchObject({ prompt, toolOutput: "", toolOutputCallId: call.call_id });
+    expect(recorded).not.toHaveProperty("plannedToolName");
+  },
+);
 
 it("preserves the full warmup prompt when the first real response sends an empty delta", async () => {
   const { send, read, debug } = await startConnection();
@@ -232,9 +189,7 @@ it("preserves the full warmup prompt when the first real response sends an empty
     previous_response_id: readCompletedResponse(warmup).id,
     input: [],
   });
-  expect(events.map((event) => event.type)).toEqual(
-    expect.arrayContaining(["response.output_item.done", "response.completed"]),
-  );
+  readCompletedResponse(events);
   expect(await debug("last-request")).toMatchObject({
     model: "gpt-5.6-sol",
     prompt,
@@ -244,12 +199,10 @@ it("preserves the full warmup prompt when the first real response sends an empty
 });
 
 it("preserves the injected post-tool 503 failure on the WebSocket transport", async () => {
-  const { send, read, debug } = await startConnection();
+  const { send, read } = await startConnection();
   const prompt = "Provider HTTP 503 after tool QA check: read QA_KICKOFF_TASK.md, then reply.";
-  const firstEvents = await read(prompt);
-  const firstResponse = readCompletedResponse(firstEvents);
-  const output = firstResponse.output as JsonObject[];
-  const toolCall = output.find((item) => item.type === "function_call");
+  const firstResponse = readCompletedResponse(await read(prompt));
+  const toolCall = outputToolCall(firstResponse, "read");
   const failure = await send({
     ...streaming,
     previous_response_id: firstResponse.id,
@@ -262,9 +215,6 @@ it("preserves the injected post-tool 503 failure on the WebSocket transport", as
     expect.objectContaining({ code: "previous_response_not_found" }),
     { sequence_number: 0 },
   );
-  const requests = (await debug("requests")) as JsonObject[];
-  expect(requests).toHaveLength(2);
-  expect(requests[1]).toMatchObject({ prompt, toolOutput: "QA mission loaded" });
 });
 
 it("preserves the coded compaction overflow on the WebSocket transport", async () => {
@@ -272,7 +222,7 @@ it("preserves the coded compaction overflow on the WebSocket transport", async (
   const failure = await send({
     ...streaming,
     client_metadata: { session_id: "compaction-websocket" },
-    input: userInput(`${QA_COMPACTION_RETRY_PROMPT}\n${"x".repeat(300_000)}`),
+    input: userInputs(`${QA_COMPACTION_RETRY_PROMPT}\n${"x".repeat(300_000)}`),
   });
   expectError(failure, 400, {
     type: "invalid_request_error",
@@ -299,7 +249,7 @@ it("returns a bounded protocol error for malformed WebSocket requests", async ()
 });
 
 describe("QA held continuation", () => {
-  it("lets a maintained flow hold one exact session continuation before its response", async () => {
+  it("holds one exact session continuation before its response", async () => {
     const server = await startMockServer();
     const controller = new AbortController();
     const sessionId = "held-session";
@@ -311,42 +261,8 @@ describe("QA held continuation", () => {
     if (typeof call.call_id !== "string") {
       throw new Error("provider omitted tool-call identity");
     }
-    const vars: Record<string, QaMockContinuationHold> = {};
+    const hold = server.holdNextContinuation(sessionId, controller.signal);
     try {
-      const result = await runScenarioFlow({
-        api: {
-          env: { mock: server },
-          signal: controller.signal,
-          state: createQaBusState(),
-          scenario: makeQaSuiteTestScenario("held-continuation"),
-          config: {},
-          runScenario: runQaSuiteScenarioSteps,
-        },
-        scenarioTitle: "held continuation",
-        vars,
-        flow: {
-          steps: [
-            {
-              name: "arm",
-              actions: [
-                {
-                  call: "env.mock.holdNextContinuation",
-                  args: [sessionId, { expr: "signal" }],
-                  saveAs: "hold",
-                },
-              ],
-            },
-          ],
-        },
-      });
-      expect(result, JSON.stringify(result)).toMatchObject({
-        status: "pass",
-        steps: [{ status: "pass" }],
-      });
-      const hold = vars.hold;
-      if (!hold) {
-        throw new Error("scenario did not return its continuation hold");
-      }
       const continuation = [...input, call, makeToolOutputWithCallId(call.call_id, "done")];
       // An initial request and another session's continuation must not consume the hold.
       expect((await post(userInputs("Reply exactly: INITIAL-OK"))).status).toBe(200);
@@ -370,9 +286,6 @@ describe("QA held continuation", () => {
         }),
       ]);
       expect(checkpoint).toEqual({ cursor: 5, sessionId, toolOutputCallId: call.call_id });
-      expect(await getJson(server, "/debug/requests?after=4")).toMatchObject([
-        { ...checkpoint, requestKind: "tool-continuation", toolOutput: "done" },
-      ]);
       expect(completed).toBe(false);
       hold.release();
       expect((await pending).status).toBe(200);

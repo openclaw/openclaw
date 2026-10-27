@@ -17,7 +17,7 @@ import { createPluginMetadataSnapshotFixture } from "../plugins/plugin-metadata.
 import { CommandLane } from "../process/lanes.js";
 import { planSystemAgentCommand } from "./assistant.test-support.js";
 import { resolveSystemAgentConfiguredRouteFromConfig } from "./inference-route.js";
-import type { SystemAgentOverview } from "./overview.js";
+import { createSystemAgentOverviewFixture } from "./overview.fixture.test-support.js";
 import {
   createSystemAgentVerifiedInferenceTestFixture,
   installSystemAgentClaudeCliBackendTestFixture,
@@ -83,30 +83,12 @@ afterAll(() => {
   restoreCliBackendFixture?.();
 });
 
-function overview(defaultModel?: string): SystemAgentOverview {
-  return {
-    config: {
-      path: "/tmp/openclaw.json",
-      exists: true,
-      valid: true,
-      issues: [],
-      hash: "hash",
-    },
-    agents: [],
-    defaultAgentId: "main",
+function overview(defaultModel?: string) {
+  return createSystemAgentOverviewFixture({
+    config: { path: "/tmp/openclaw.json", exists: true, valid: true, issues: [], hash: "hash" },
     ...(defaultModel ? { defaultModel } : {}),
-    tools: {
-      codex: { command: "codex", found: false },
-      claude: { command: "claude", found: false },
-      gemini: { command: "gemini", found: false },
-      apiKeys: { openai: false, anthropic: false },
-    },
     gateway: { url: "ws://127.0.0.1:18789", source: "local loopback", reachable: false },
-    references: {
-      docsUrl: "https://docs.openclaw.ai",
-      sourceUrl: "https://github.com/openclaw/openclaw",
-    },
-  };
+  });
 }
 
 const defaultConfig = (): OpenClawConfig => ({ agents: { defaults: { model: "openai/gpt-5.5" } } });

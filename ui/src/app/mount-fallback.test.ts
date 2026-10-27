@@ -1,6 +1,9 @@
 import { readFile } from "node:fs/promises";
 import path from "node:path";
+import { createComponent } from "solid-js";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { ConnectingSplash } from "../components/solid/loading-skeleton.tsx";
+import { mountSolid } from "../test-helpers/mount-solid.ts";
 
 const indexHtmlPath = path.resolve(
   process.cwd(),
@@ -88,6 +91,52 @@ function pendingProbe(stalled = true) {
 }
 
 describe("Control UI document shell", () => {
+  it.each([
+    ["/new", "", "new"],
+    ["/new/?agent=main", "", "new"],
+    ["/sessions", "", "sessions"],
+    ["/settings/sessions", "", "sessions"],
+    ["/settings", "", "settings"],
+    ["/settings/appearance", "", "settings"],
+    ["/automations", "", "cron"],
+    ["/cron", "", "cron"],
+    ["/control/new", "/control", "new"],
+    ["/control/settings/appearance", "/control", "settings"],
+    ["/control/chat/main", "/control", "chat"],
+    ["/chat/main", "", "chat"],
+    ["/chat/main?catalog=example", "", "other"],
+    ["/chat/new", "", "chat"],
+    ["/newest", "", "other"],
+  ])("keeps the first static and Solid frames matched for %s", (route, basePath, expected) => {
+    const win = createIsolatedWindow(`http://localhost:3000${route}`);
+    win.document.documentElement.setAttribute("data-openclaw-control-ui-base-path", basePath);
+    installShell(win, "__zod_globalConfig");
+    expect(win.document.documentElement.getAttribute("data-openclaw-boot-route")).toBe(expected);
+
+    const previousUrl = window.location.href;
+    const previousBase = document.documentElement.getAttribute(
+      "data-openclaw-control-ui-base-path",
+    );
+    window.history.replaceState(null, "", route);
+    document.documentElement.setAttribute("data-openclaw-control-ui-base-path", basePath);
+    const mounted = mountSolid(() => createComponent(ConnectingSplash, { status: "Loading" }));
+    try {
+      expect(mounted.container.querySelector("main")?.dataset.route).toBe(expected);
+      expect(mounted.container.querySelector("main")?.hasAttribute("data-chat")).toBe(
+        expected === "chat",
+      );
+    } finally {
+      mounted.unmount();
+      window.history.replaceState(null, "", previousUrl);
+      if (previousBase === null) {
+        document.documentElement.removeAttribute("data-openclaw-control-ui-base-path");
+      } else {
+        document.documentElement.setAttribute("data-openclaw-control-ui-base-path", previousBase);
+      }
+      win.frameElement?.remove();
+    }
+  });
+
   it.each(["load", "error"])("activates the nonblocking entry stylesheet on %s", (eventType) => {
     const win = createIsolatedWindow();
     installShell(win, "__zod_globalConfig");
@@ -145,7 +194,7 @@ describe("Control UI mount fallback", () => {
       [win.document.documentElement, win.document.body].map(
         (element) => win.getComputedStyle(element).backgroundColor,
       ),
-    ).toEqual(["rgb(247, 242, 236)", "rgb(247, 242, 236)"]);
+    ).toEqual(["rgb(232, 226, 220)", "rgb(232, 226, 220)"]);
   });
 
   it("keeps the fallback visible until the app completes its first render", async () => {

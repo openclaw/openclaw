@@ -33,11 +33,6 @@ import { normalizeAgentId } from "../../lib/sessions/session-key.ts";
 
 export type ModelProviderAuthKind = "ok" | "expiring" | "expired" | "missing" | "api-key";
 
-type ModelProviderAuthSummary = {
-  kind: ModelProviderAuthKind;
-  expiryLabel?: string;
-};
-
 export type ModelProviderLogoutTarget = {
   provider: string;
   profileIds: string[];
@@ -52,8 +47,6 @@ export type ModelProviderPendingLogout = { cardId: string; label: string } & (
   | { removeTargets: ModelProviderRemovalTarget[]; keptSource?: string; configKey?: string }
 );
 
-type ModelProviderProfileOrderLock = NonNullable<ModelAuthStatusProvider["profileOrderLocked"]>;
-
 export type ModelProviderCard = {
   /** Canonical provider id used for icon + label lookup. */
   id: string;
@@ -66,7 +59,10 @@ export type ModelProviderCard = {
   /** Saved OAuth/token profiles eligible for targeted logout. */
   logoutTargets: ModelProviderLogoutTarget[];
   displayName: string;
-  auth?: ModelProviderAuthSummary;
+  auth?: {
+    kind: ModelProviderAuthKind;
+    expiryLabel?: string;
+  };
   profiles: ModelAuthStatusProfile[];
   /** Gateway auth owner used for priority changes to each visible profile. */
   profileProviderIds: Record<string, string>;
@@ -77,7 +73,7 @@ export type ModelProviderCard = {
   /** Auth owners whose stored priority can be reset. */
   profileOrderStoredProviders: string[];
   /** Configuration owner that pins priority for each auth owner. */
-  profileOrderLocks: Record<string, ModelProviderProfileOrderLock>;
+  profileOrderLocks: Record<string, NonNullable<ModelAuthStatusProvider["profileOrderLocked"]>>;
   apiKey?: ModelAuthStatusProvider["apiKey"];
   configApiKeys: Array<{ key: string; reference: boolean }>;
   modelCount: number;
@@ -439,16 +435,26 @@ export function resolveDefaultModelPresentation(
       ...modelSettingFallbacks(defaults.utilityModel),
     ].filter((value): value is string => typeof value === "string" && value.length > 0),
   );
-  const selectable: ModelPickerEntry[] = (models ?? []).filter(
-    (model) => model.available !== false || selected.has(modelCatalogRef(model)),
-  );
-  const seen = new Set(selectable.map(modelCatalogRef));
-  // An unavailable catalog cannot establish that a saved model is unavailable.
-  const availability = models === null ? {} : { available: false as const };
-  for (const ref of selected) {
-    if (seen.has(ref)) {
+  const source = models ?? [];
+  const missing = new Set(selected);
+  let filtered: ModelPickerEntry[] | undefined;
+  for (let index = 0; index < source.length; index++) {
+    const model = source[index]!;
+    if (model.available === false && !selected.has(modelCatalogRef(model))) {
+      filtered ??= source.slice(0, index);
       continue;
     }
+    if (missing.size > 0) {
+      missing.delete(modelCatalogRef(model));
+    }
+    filtered?.push(model);
+  }
+  // Preserve catalog identity through unrelated page notifications; copy only for
+  // actual filtering or saved selections absent from the published catalog.
+  const selectable: ModelPickerEntry[] = filtered ?? (missing.size > 0 ? [...source] : source);
+  // An unavailable catalog cannot establish that a saved model is unavailable.
+  const availability = models === null ? {} : { available: false as const };
+  for (const ref of missing) {
     const { model: modelRef, profile } = splitTrailingAuthProfile(ref);
     if (profile) {
       const match = (models ?? []).find((model) => modelCatalogRef(model) === modelRef);
@@ -539,10 +545,8 @@ export function readModelProviderConfig(config: Record<string, unknown> | null):
 
 export type ProviderOption = { id: string; displayName: string };
 
-type ModelProviderCapability = NonNullable<ModelAuthStatusResult["providerCapabilities"]>[number];
-
 export function buildUnconfiguredProviderOptions(
-  capabilities: ModelProviderCapability[] | undefined,
+  capabilities: NonNullable<ModelAuthStatusResult["providerCapabilities"]>[number][] | undefined,
   configuredProviderIds: Iterable<string>,
 ): ProviderOption[] {
   const configured = new Set(Array.from(configuredProviderIds, canonicalModelAuthProviderId));

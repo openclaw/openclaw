@@ -36,7 +36,7 @@ it.each([
   { mib: 40, owner: "client" },
   { mib: 0, owner: "host" },
 ] as const)(
-  "retains captured FIFO, cancellation, and $owner close while preparing a $mib MiB command",
+  "preserves FIFO/cancellation during $owner close ($mib MiB)",
   async ({ mib, owner }) => {
     const { databasePath, markerPath, gatePath } = preparationPaths();
     const store = await open(databasePath, { type: "prepare", markerPath, gatePath });
@@ -97,7 +97,7 @@ it.each([
 );
 
 it.each(["revoked", "rejected"] as const)(
-  "preserves uncommitted state after %s preparation and permits the next command",
+  "recovers without writes after %s preparation",
   async (failure) => {
     const { databasePath, markerPath, gatePath } = preparationPaths();
     const store = await open(databasePath, {
@@ -181,13 +181,8 @@ export function createSqliteWorkerBackend(input, context) {
         preparation: { key: "captured" },
         input: undefined,
       });
+      await store.close();
     }
-    await Promise.all(
-      clients.map((store) => {
-        assert.ok(store);
-        return store.close();
-      }),
-    );
   } finally {
     await broker.close();
   }

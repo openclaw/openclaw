@@ -162,6 +162,62 @@ it("records a nested Doctor refusal before reporting standalone finalization", a
   expect(report.body).not.toContain("Failed phase finalize-doctor: exit unknown");
 });
 
+it.each([false, true])(
+  "settles a retained Doctor phase failure after custody (retry=%s)",
+  async (retry) => {
+    const { lifecycle, read } = finalization(5_000);
+    const recordStep = ledger.recordUpdateRunStep;
+    let doctorOwnsState = true;
+    vi.spyOn(ledger, "recordUpdateRunStep").mockImplementation((runId, step, options) => {
+      if (doctorOwnsState && step.step === "finalize:doctor" && step.status === "failed") {
+        throw new Error("Doctor still owns the state database");
+      }
+      return recordStep(runId, step, options);
+    });
+    const message = "Doctor retained diagnostic marker";
+    const failureFacts = [{ check: "doctor", code: "doctor-failed", message }];
+    await expect(
+      lifecycle.run("doctor", async () => {
+        throw new UpdateDoctorError(message, failureFacts, { exitCode: 23 });
+      }),
+    ).rejects.toThrow(message);
+    expect(read().steps).toContainEqual(
+      expect.objectContaining({ step: "finalize:doctor", status: "in_progress" }),
+    );
+
+    doctorOwnsState = false;
+    if (retry) {
+      await lifecycle.run("doctor", async () => undefined);
+      lifecycle.complete(0);
+      expect(read()).toMatchObject({
+        status: "succeeded",
+        reason: null,
+        steps: expect.arrayContaining([
+          expect.objectContaining({ step: "finalize:doctor", status: "completed" }),
+        ]),
+      });
+      return;
+    }
+    lifecycle.fail();
+
+    expect(read()).toMatchObject({
+      status: "failed",
+      reason: "doctor-failed",
+      steps: expect.arrayContaining([
+        expect.objectContaining({
+          step: "finalize:doctor",
+          status: "failed",
+          detail: expect.stringContaining(message),
+          failureFacts,
+          exitCode: 23,
+          startedAtMs: expect.any(Number),
+          endedAtMs: expect.any(Number),
+        }),
+      ]),
+    });
+  },
+);
+
 it("records the plugin failure reason without finishing an inherited run", async () => {
   const inherited = ledger.createUpdateRun({ trigger: "cli" });
   vi.stubEnv(UPDATE_RUN_ID_ENV, inherited.runId);

@@ -1,6 +1,9 @@
 import type { Page } from "playwright";
 import { expect, it } from "vitest";
-import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
+import {
+  installMockGateway,
+  type ControlUiMockGatewayScenario,
+} from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
 const suite = createControlUiE2eSuite({ name: "New Session revisit" });
@@ -40,11 +43,14 @@ type DraftFixture = {
   composer: ReturnType<Page["locator"]>;
 };
 
-function withDraft(run: (fixture: DraftFixture) => Promise<void>, awaitInitialRoster = true) {
+function withDraft(
+  run: (fixture: DraftFixture) => Promise<void>,
+  scenario: ControlUiMockGatewayScenario = {},
+) {
   return suite.withPage(
     { viewport: { width: 1280, height: 900 }, locale: "en-US" },
     async ({ page }) => {
-      const gateway = await installMockGateway(page, { awaitInitialRoster });
+      const gateway = await installMockGateway(page, { awaitInitialRoster: true, ...scenario });
       await run({ page, gateway, composer: page.locator(".new-session-page__message") });
     },
   );
@@ -152,13 +158,17 @@ async function visitChats({ page, gateway, composer }: DraftFixture) {
 suite.define(() => {
   it.each([false, true])(
     "restores the composer after a render failure (persistent: %s)",
-    (persistent) => withDraft((fixture) => recoverComposer(fixture, persistent), false),
+    (persistent) =>
+      withDraft((fixture) => recoverComposer(fixture, persistent), { awaitInitialRoster: false }),
   );
   it("keeps a draft and avoids automatic reload after the composer was usable", () =>
     withDraft(preserveDraft));
   it.each(["chat.startup", "sessions.create"] as const)(
     "returns to plus after interrupted %s",
-    (method) => withDraft((fixture) => interruptNavigation(fixture, method)),
+    (method) =>
+      withDraft((fixture) => interruptNavigation(fixture, method), {
+        subscriptionInitialHistory: method !== "chat.startup",
+      }),
   );
   it("keeps the plus destination populated across repeated chat visits", () =>
     withDraft(visitChats));

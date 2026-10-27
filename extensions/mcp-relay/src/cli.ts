@@ -7,6 +7,15 @@ import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 type CliContext = Parameters<Parameters<OpenClawPluginApi["registerCli"]>[0]>[0];
 type RelayCommand = "status" | "pair" | "grants" | "revoke";
 
+function createRelayCommandFailure(error: unknown, redactUrl: (text: string) => string): Error {
+  const detail = redactUrl(error instanceof Error ? error.message : String(error));
+  // A raw cause can contain Gateway URL credentials. Only the redacted message
+  // and recovery instructions may reach the host CLI renderer.
+  return new Error(
+    `${detail}\nCheck that the Gateway is running and mcp-relay is enabled with openclaw plugins enable mcp-relay, then retry.`,
+  );
+}
+
 async function runCommand(
   op: RelayCommand,
   opts: GatewayRpcOpts,
@@ -43,15 +52,11 @@ async function runCommand(
     }
     defaultRuntime.writeJson(result);
   } catch (error) {
-    const detail = redactSensitiveUrlLikeString(
-      error instanceof Error ? error.message : String(error),
-    );
-    const message = `${detail}\nCheck that the Gateway is running and mcp-relay is enabled with openclaw plugins enable mcp-relay, then retry.`;
+    const failure = createRelayCommandFailure(error, redactSensitiveUrlLikeString);
     if (opts.json) {
-      defaultRuntime.writeJson({ error: message });
-    } else {
-      defaultRuntime.error(message);
+      throw failure;
     }
+    defaultRuntime.error(failure.message);
     defaultRuntime.exit(1);
   }
 }

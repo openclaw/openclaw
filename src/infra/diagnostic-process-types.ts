@@ -147,6 +147,8 @@ export type DiagnosticMemoryUsage = {
   workerCount?: number;
   /** Live PostgreSQL bridges, including children of workers with diagnostic registration. */
   postgresBridgeCount?: number;
+  /** Threads that started their own PostgreSQL pool without inherited endpoints. */
+  postgresPoolSelfRootCount?: number;
   workerHeapSampledCount?: number;
   workerHeapTotalBytes?: number;
   workerHeapUsedBytes?: number;

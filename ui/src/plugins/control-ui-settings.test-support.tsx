@@ -22,13 +22,14 @@ export function mountSettingsPresentation(
     locale: "en",
     ...overrides,
   };
+  let active = true;
   const listeners = new Set<() => void>();
   const notify = () => listeners.forEach((listener) => listener());
   const mounted = mountSolid(() => (
     <ControlUiSettingsPresentation
       application={application}
       placement={{ section: "memory", panel: "overview" }}
-      readSnapshot={() => snapshot}
+      readSnapshot={() => (active ? snapshot : null)}
       subscribe={(listener) => {
         listeners.add(listener);
         return () => listeners.delete(listener);
@@ -40,6 +41,10 @@ export function mountSettingsPresentation(
   return {
     ...mounted,
     notify,
+    retire() {
+      active = false;
+      notify();
+    },
     change(patch: Partial<ControlUiSettingsSnapshot>, beforeNotify?: () => void) {
       snapshot = { ...snapshot, ...patch };
       beforeNotify?.();

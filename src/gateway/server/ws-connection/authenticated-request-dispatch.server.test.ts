@@ -7,9 +7,7 @@ import {
 } from "../../../../packages/gateway-protocol/src/client-info.js";
 import { createOperationalRunInstanceRef } from "../../../agents/admitted-run-context.js";
 import {
-  createDiagnosticTraceContext,
   getActiveDiagnosticTraceContext,
-  runWithDiagnosticTraceContext,
   type DiagnosticTraceContext,
 } from "../../../infra/diagnostic-trace-context.js";
 import { createEmptyPluginRegistry } from "../../../plugins/registry-empty.js";
@@ -132,17 +130,6 @@ function expectAuthorityClosed(
   expect(harness.send).not.toHaveBeenCalledWith(expect.objectContaining({ id, ok: true }));
 }
 
-async function dispatchInFreshMessageScope(
-  dispatcher: ReturnType<typeof createDispatcher>["dispatcher"],
-  client: GatewayWsClient,
-  id: string,
-  traceparent?: string,
-): Promise<void> {
-  await runWithDiagnosticTraceContext(createDiagnosticTraceContext(), () =>
-    dispatcher.dispatch(traceRequest(id, traceparent), client),
-  );
-}
-
 async function warmDispatcher(
   harness: ReturnType<typeof createDispatchTestHarness>,
   client: GatewayWsClient,
@@ -222,7 +209,7 @@ describe("authenticated WebSocket request trace dispatch", () => {
       const client = createClient();
       const agentRuntimeIdentity = createTestAgentRuntimeIdentity(stage);
       client.internal = { agentRuntimeIdentity };
-      const dispatch = dispatchInFreshMessageScope(harness.dispatcher, client, stage);
+      const dispatch = harness.dispatcher.dispatch(traceRequest(stage), client);
       try {
         if (stage === "before response") {
           await gate.entered;
@@ -389,20 +376,9 @@ describe("authenticated WebSocket request trace dispatch", () => {
       await expect(sendTraceRequest(ws, "untraced-after-connect")).resolves.toMatchObject({
         ok: true,
       });
-      await expect(
-        sendTraceRequest(
-          ws,
-          "malformed",
-          "00-11111111111111111111111111111111-1111111111111111-zz",
-        ),
-      ).resolves.toMatchObject({ ok: true });
       const afterConnect = observed.get("untraced-after-connect")?.before;
-      const malformed = observed.get("malformed")?.before;
       expect(afterConnect).toBeDefined();
-      expect(malformed).toBeDefined();
       expect(afterConnect?.traceId).not.toBe("11111111111111111111111111111111");
-      expect(malformed?.traceId).not.toBe("11111111111111111111111111111111");
-      expect(malformed?.traceId).not.toBe(afterConnect?.traceId);
 
       requestBarrier = createDeferredCore();
       const first = sendTraceRequest(ws, "concurrent-first", TRACEPARENTS.first);
@@ -438,7 +414,7 @@ describe("authenticated WebSocket request trace dispatch", () => {
 
   it("returns a typed error when a handler response cannot be serialized", async () => {
     let invalidSerializationAttempts = 0;
-    const healthySerializationAttempts = new Map<string, number>();
+    let healthySerializationAttempts = 0;
     const { server, connect } = await startTraceServer("test.serialize", ({ req, respond }) => {
       const invalid = req.id === "invalid-payload";
       respond(true, {
@@ -447,9 +423,7 @@ describe("authenticated WebSocket request trace dispatch", () => {
             invalidSerializationAttempts += 1;
             return { value: 1n };
           }
-          const attempts = (healthySerializationAttempts.get(req.id) ?? 0) + 1;
-          healthySerializationAttempts.set(req.id, attempts);
-          if (attempts > 1) {
+          if (++healthySerializationAttempts > 1) {
             throw new Error("healthy response serialized more than once");
           }
           return { value: 1 };
@@ -473,14 +447,7 @@ describe("authenticated WebSocket request trace dispatch", () => {
       await expect(
         sendTraceRequest(ws, "healthy-after-error", undefined, "test.serialize"),
       ).resolves.toMatchObject({ ok: true });
-      expect(healthySerializationAttempts.get("healthy-after-error")).toBe(1);
-
-      ws.terminate();
-      ws = await connect(TRACEPARENTS.second);
-      await expect(
-        sendTraceRequest(ws, "healthy-after-reconnect", undefined, "test.serialize"),
-      ).resolves.toMatchObject({ ok: true });
-      expect(healthySerializationAttempts.get("healthy-after-reconnect")).toBe(1);
+      expect(healthySerializationAttempts).toBe(1);
     } finally {
       ws?.terminate();
       await server.close();

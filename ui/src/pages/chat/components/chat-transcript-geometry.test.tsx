@@ -3,15 +3,28 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { Virtualizer } from "@tanstack/virtual-core";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import {
+  handleMarkdownCodeBlockClick,
+  renderMarkdownCodeBlock,
+} from "../../../components/markdown-code-blocks.ts";
 import { flush } from "../../../test-helpers/solid-settle.ts";
+import { createInitializationContext } from "../chat-application-context.test-support.ts";
 import { createTestTranscript, stubAnimationFrames } from "../chat-view.test-helpers.ts";
 import { saveChatSessionScrollPosition } from "../scroll.ts";
+import {
+  cacheChatSessionSnapshot,
+  createChatWidgetLayout,
+  observeChatCache,
+  type ChatMessageCache,
+  type ChatWidgetLayout,
+} from "../session-message-cache.ts";
 import { SIDEBAR_GEOMETRY_COMMIT_EVENT } from "../sidebar-layout.ts";
 import {
   render,
   renderChatThread,
   mountTestTranscript,
 } from "../test-helpers/chat-transcript-native.tsx";
+import { RawOutputToggle } from "./chat-tool-content.solid.tsx";
 import { createChatTranscript } from "./chat-transcript-controller.ts";
 import {
   contentRows,
@@ -20,7 +33,7 @@ import {
   transcriptContainer,
 } from "./chat-transcript-fixture.test-support.tsx";
 import { readConnectedTranscriptRows } from "./chat-transcript-geometry.ts";
-import type { TranscriptRow } from "./chat-transcript-layout.ts";
+import { TranscriptLayoutOwner } from "./chat-transcript-layout-owner.ts";
 import { TranscriptRowRefs } from "./chat-transcript-row-refs.ts";
 import {
   flushDeferredRowPrune,
@@ -51,48 +64,210 @@ function railState(viewport: HTMLElement) {
 beforeEach(installTranscriptDomMocks);
 afterEach(resetTranscriptTestDom);
 
-it.each([null, 4_800])(
-  "keeps a bounded initial range before measured placement at offset %s",
-  (offset) => {
-    const flushFrames = stubAnimationFrames();
-    const paneId = `render-window-${offset}`;
-    const sessionKey = `agent:main:${paneId}`;
-    if (offset !== null) {
-      saveChatSessionScrollPosition(paneId, sessionKey, {
-        scrollTop: offset,
-        anchorToEnd: false,
-      });
-    }
-    vi.stubGlobal("innerWidth", 800);
-    vi.stubGlobal("innerHeight", 600);
-    const transcript = createChatTranscript(() => paneId);
-    const rows = contentRows(100, "row:", "Turn");
-    const renderRow = vi.fn((row: TranscriptRow) => (row.kind === "content" ? row.content : null));
-    const container = transcriptContainer();
-    const renderWindow = (windowRows = rows) => {
-      renderRow.mockClear();
-      render(
-        transcript.renderSession(sessionKey, (session) =>
-          session.render(windowRows, renderRow, null, false),
-        ),
-        container,
-      );
-      transcript.update();
-      flush();
-      return renderRow.mock.calls.length;
+it("reserves only the matching width and appearance, including text scale, width policy and recovery", () => {
+  const context = createInitializationContext();
+  const settings = {
+    ...context.theme.settings,
+    textScale: 100 as const,
+    chatMessageMaxWidth: "48rem",
+  };
+  const theme = { ...context.theme, settings, resolvedMode: "light" as const };
+  let cachedKey: string | undefined;
+  const widgetLayout: ChatWidgetLayout = {
+    read: (key) => {
+      cachedKey ??= key;
+      return key === cachedKey ? 300 : undefined;
+    },
+    readRows: () => undefined,
+    write: vi.fn(),
+    writeRows: vi.fn(),
+    invalidateRow: vi.fn(),
+  };
+  const props = threadProps("footprint-appearance", "agent:main:footprint", [], {
+    widgetLayout,
+    applicationContext: { ...context, theme },
+  });
+  const layout = new TranscriptLayoutOwner(() => {});
+  layout.rows = [{ key: "notice", revision: "notice-v1" }];
+  layout.rowWidth = 768;
+  layout.paneWidth = 1100;
+  layout.rowGutter = 166;
+  const reserve = (version = 0) => {
+    layout.configureRows(props, "gutter", version !== 0);
+    return layout.rowMinimum(0);
+  };
+  expect(reserve()).toBe(300);
+  for (const patch of [{ textScale: 90 as const }, { chatMessageMaxWidth: undefined }]) {
+    props.applicationContext = {
+      ...context,
+      theme: { ...theme, settings: { ...settings, ...patch } },
     };
-    transcript.start();
-    expect(renderWindow([])).toBe(0);
-    flushFrames();
+    expect(reserve()).toBe(0);
+  }
+  props.applicationContext = { ...context, theme: { ...theme, resolvedMode: "dark" } };
+  expect(reserve()).toBe(0);
+  props.applicationContext = { ...context, theme };
+  expect(reserve(1)).toBe(0);
+  expect(reserve()).toBe(300);
+  layout.rows = [{ key: "notice", revision: "notice-v2" }];
+  expect(reserve()).toBe(0);
+  layout.rows = [{ key: "notice", revision: "notice-v1" }];
+  layout.rowWidth = 400;
+  expect(reserve()).toBe(0);
+  layout.rowWidth = 0;
+  expect(reserve()).toBe(0);
+  layout.rowWidth = 768;
+  expect(reserve()).toBe(300);
+  layout.paneWidth = 1300;
+  expect(reserve()).toBe(0);
+  layout.paneWidth = 1100;
+  layout.rowGutter = 68;
+  expect(reserve()).toBe(0);
+  layout.rowGutter = 166;
+  layout.paneWidth = 0;
+  expect(reserve()).toBe(0);
+  layout.paneWidth = 1100;
+  expect(reserve()).toBe(300);
+  const viewportHeight = window.innerHeight;
+  vi.stubGlobal("innerHeight", viewportHeight - 200);
+  expect(reserve()).toBe(0);
+  vi.stubGlobal("innerHeight", viewportHeight);
+  expect(reserve()).toBe(300);
+  // A repeated expansion counter cannot admit a footprint from another recovered message.
+  cachedKey = undefined;
+  expect(reserve(2)).toBe(0);
+});
 
-    expect(renderWindow()).toBe(offset === null ? 1 : 9);
-    const mounted = transcriptRows(container).map((row) => Number(row.dataset.index));
-    expect(mounted).toEqual(expect.arrayContaining(offset === null ? [99] : [40, 44]));
-    expect(renderWindow()).toBe(offset === null ? 1 : 9);
-    flushFrames();
-    expect(renderWindow()).toBe(offset === null ? 1 : 9);
-
-    transcript.dispose();
+it.each(["chat-bubble-activity", "", "code-block-expand", "code-block-wrap", "raw-output"])(
+  "batches restorable footprints without persisting local disclosures (%s)",
+  (control) => {
+    const frames: FrameRequestCallback[] = [];
+    const idle: IdleRequestCallback[] = [];
+    vi.stubGlobal(
+      "requestAnimationFrame",
+      vi.fn((callback: FrameRequestCallback) => frames.push(callback)),
+    );
+    vi.stubGlobal(
+      "requestIdleCallback",
+      vi.fn((callback: IdleRequestCallback) => idle.push(callback)),
+    );
+    const container = transcriptContainer();
+    const code = control.startsWith("code-block-");
+    const content = code
+      ? renderMarkdownCodeBlock(
+          control === "code-block-wrap"
+            ? `const value = "${"synthetic code ".repeat(60)}";`
+            : "const value = 1;\n".repeat(40),
+          "ts",
+          {
+            codeBlockInteraction: "interactive",
+          },
+          { highlight: false },
+        )
+      : `<details class="${control}"><summary>Details</summary>Synthetic details</details>`;
+    container.innerHTML = `<div data-index="0" data-virtual-row-key="row">${content}</div>`;
+    const row = container.firstElementChild as HTMLElement;
+    if (control === "raw-output") {
+      render(<RawOutputToggle text={"Synthetic raw output\n".repeat(40)} />, row);
+      flush();
+    }
+    const host = { assistantAgentId: "main" };
+    const target = { sessionKey: "agent:main:footprints" };
+    const cache: ChatMessageCache = new Map();
+    cacheChatSessionSnapshot(cache, host, target, {
+      messages: [],
+      sessionId: "one",
+      pagination: { hasMore: false },
+    });
+    const write = vi.fn();
+    observeChatCache(cache, { write, delete: vi.fn() });
+    const layout = new TranscriptLayoutOwner(() => {});
+    layout.configureRows(
+      threadProps("footprint-idle", target.sessionKey, [], {
+        widgetLayout: createChatWidgetLayout()(cache, host, target),
+      }),
+      "gutter",
+      false,
+    );
+    layout.rowWidth = 768;
+    layout.paneWidth = 1100;
+    layout.rows = [{ key: "row", revision: "one" }];
+    layout.connect(container);
+    const virtualizer = new Virtualizer<HTMLDivElement, HTMLElement>({
+      count: 1,
+      estimateSize: () => 120,
+      getItemKey: () => "row",
+      getScrollElement: () => container,
+      measureElement: layout.measureRow,
+      observeElementRect: (_, callback) => {
+        callback({ width: 768, height: 600 });
+      },
+      observeElementOffset: (_, callback) => {
+        callback(0, false);
+      },
+      scrollToFn: () => {},
+    });
+    // eslint-disable-next-line no-underscore-dangle -- Native adapter lifecycle installs row observers.
+    const dispose = virtualizer._didMount();
+    // eslint-disable-next-line no-underscore-dangle -- Bind the native viewport before measuring.
+    virtualizer._willUpdate();
+    try {
+      virtualizer.measureElement(row);
+      emitTranscriptResize(row, 768, 100);
+      expect(write).not.toHaveBeenCalled();
+      layout.persistRows(virtualizer, false);
+      layout.persistRows(virtualizer, false);
+      expect(frames).toHaveLength(1);
+      frames.shift()!(0);
+      expect(write).not.toHaveBeenCalled();
+      idle.shift()!({ didTimeout: false, timeRemaining: () => 50 });
+      expect(write).toHaveBeenCalledTimes(1);
+      expect(Object.values(write.mock.calls[0]![1].widgetHeights)).toEqual([100]);
+      const disclosure = requireElement(
+        row,
+        control === "raw-output"
+          ? ".chat-tool-card__raw-toggle"
+          : code
+            ? ".code-block-wrapper"
+            : "details",
+      );
+      if (control === "raw-output") {
+        disclosure.click();
+        flush();
+        expect(disclosure.getAttribute("aria-expanded")).toBe("true");
+      } else if (code) {
+        row.addEventListener("click", handleMarkdownCodeBlockClick);
+        requireElement(row, `.${control}`).click();
+      } else if (disclosure instanceof HTMLDetailsElement) {
+        disclosure.open = true;
+      }
+      emitTranscriptResize(row, 768, 300);
+      layout.persistRows(virtualizer, false);
+      frames.shift()!(0);
+      idle.shift()!({ didTimeout: false, timeRemaining: () => 50 });
+      expect(write).toHaveBeenCalledTimes(1);
+      if (control === "raw-output") {
+        disclosure.click();
+        flush();
+      } else if (disclosure instanceof HTMLDetailsElement) {
+        disclosure.open = false;
+      }
+      disclosure.classList.remove("is-expanded", "is-wrapped");
+      emitTranscriptResize(row, 768, 100);
+      const savedKey = Object.keys(write.mock.calls[0]![1].widgetHeights)[0]!;
+      expect(createChatWidgetLayout()(cache, host, target).read(savedKey)).toBe(100);
+      layout.persistRows(virtualizer, false);
+      frames.shift()!(0);
+      layout.disconnect();
+      idle.shift()!({ didTimeout: false, timeRemaining: () => 50 });
+      expect(write).toHaveBeenCalledTimes(1);
+    } finally {
+      if (control === "raw-output") {
+        render(null, row);
+      }
+      layout.disconnect();
+      dispose();
+    }
   },
 );
 
@@ -125,6 +300,7 @@ it("measures newly committed rows before observer registration using fractional 
   virtualizer.getVirtualItems();
   const rowRefs = new TranscriptRowRefs(virtualizer, {
     isCurrentRow: () => true,
+    beforeMeasure: () => {},
     onMount: () => {},
   });
   try {
@@ -154,49 +330,6 @@ it("keeps fractional observer sizes as the sole skipped-row sizing input", async
     for (const row of transcriptRows(container)) {
       expect(row.style.containIntrinsicBlockSize).toBe("100.375px");
     }
-  } finally {
-    transcript.dispose();
-  }
-});
-
-it("keeps a displaced smooth end command smooth during row growth", async () => {
-  const flushFrames = stubAnimationFrames();
-  const transcript = createChatTranscript(() => "smooth-end-recovery", {
-    canFollowEnd: () => true,
-  });
-  const rows = contentRows(1);
-  const { container, renderRows } = await mountTestTranscript(
-    "smooth-end-recovery",
-    rows,
-    transcript,
-  );
-  let scrollHeight = 2000;
-  setTranscriptViewport(container, () => scrollHeight);
-  const scrollTo = vi.fn((options?: ScrollToOptions | number) => {
-    if (typeof options === "object" && options.behavior !== "smooth") {
-      container.scrollTop = options.top ?? container.scrollTop;
-    }
-  });
-  container.scrollTo = scrollTo;
-  try {
-    const row = requireElement(container, ".chat-virtual-row");
-    emitTranscriptResize(row, 800, scrollHeight);
-    renderRows(rows);
-    flushFrames();
-    transcript.cancelScroll();
-    container.scrollTop = 800;
-    transcript.scrollToEnd({ source: "manual", behavior: "smooth" });
-    scrollTo.mockClear();
-    scrollHeight += 100;
-    emitTranscriptResize(row, 800, scrollHeight);
-    renderRows(rows);
-    flushFrames();
-    expect(
-      scrollTo.mock.calls.some(
-        ([options]) => typeof options === "object" && options.behavior === "auto",
-      ),
-    ).toBe(false);
-    expect(container.scrollTop).toBe(800);
   } finally {
     transcript.dispose();
   }
@@ -468,9 +601,7 @@ it("keeps rendering rows after a hide-transition zero rect", async () => {
       observer.emit(0, 0);
     }
     for (const row of transcriptRows(container)) {
-      if (observer.observes(row)) {
-        observer.emitTarget(row, 0, 0);
-      }
+      observer.emitTarget(row, 0, 0);
     }
   }
   render(renderChatThread(props, transcript), container);

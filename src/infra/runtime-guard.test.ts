@@ -74,7 +74,7 @@ function runtimeDetails(
 ) {
   return {
     kind,
-    version: kind === "bun" ? "1.4.3" : "24.22.1",
+    version: kind === "bun" ? "1.4.4" : "24.22.1",
     execPath: `/usr/bin/${kind}`,
     pathEnv: "/usr/bin",
     hasNodeSqlite: true,
@@ -278,8 +278,9 @@ describe("runtime-guard", () => {
     ["1.4.0", false],
     ["1.4.1", false],
     ["1.4.2", false],
-    ["1.4.3", true],
-    ["1.4.3-canary.1+65d94e715", true],
+    ["1.4.3", false],
+    ["1.4.4", true],
+    ["1.4.4-canary.1+65d94e715", true],
     ["2.0.0", true],
     ["1.3.14", false],
     [null, false],
@@ -353,7 +354,7 @@ describe("runtime-guard", () => {
       }),
     );
     expect(runtime.error).toHaveBeenCalledExactlyOnceWith(
-      `${sqliteSelectionError}\nDetected: bun 1.4.3 (exec: /usr/bin/bun).`,
+      `${sqliteSelectionError}\nDetected: bun 1.4.4 (exec: /usr/bin/bun).`,
     );
     expect(runtime.exit).toHaveBeenCalledExactlyOnceWith(1);
     expect(runtime.log).not.toHaveBeenCalled();
@@ -369,8 +370,8 @@ describe("runtime-guard", () => {
     await expect(assertSupportedRuntime(runtime, details)).rejects.toThrow("exit");
     expect(runtime.error).toHaveBeenCalledWith(
       [
-        "openclaw requires Bun 1.4.3 or newer with WAL-reset-safe node:sqlite (SQLite 3.51.3+ or a patched 3.50.x/3.44.x release).",
-        "Detected: bun 1.4.3 (exec: /usr/bin/bun).",
+        "openclaw requires Bun 1.4.4 or newer with WAL-reset-safe node:sqlite (SQLite 3.51.3+ or a patched 3.50.x/3.44.x release).",
+        "Detected: bun 1.4.4 (exec: /usr/bin/bun).",
         "Detected SQLite: unavailable.",
         "PATH searched: /usr/bin",
         "Install Bun: https://bun.com/docs/installation",
@@ -383,7 +384,7 @@ describe("runtime-guard", () => {
     { version: "1.4.0", sqliteVersion: "3.53.2" },
     { version: "1.4.1", sqliteVersion: "3.53.2" },
     { version: "1.4.2", sqliteVersion: "3.53.2" },
-    { version: "1.4.3", sqliteVersion: "3.51.2" },
+    { version: "1.4.4", sqliteVersion: "3.51.2" },
   ])("rejects Bun $version with SQLite $sqliteVersion", async (details) => {
     const runtime = createExitingRuntime();
     await expect(assertSupportedRuntime(runtime, runtimeDetails("bun", details))).rejects.toThrow(

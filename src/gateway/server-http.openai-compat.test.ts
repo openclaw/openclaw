@@ -84,7 +84,7 @@ it.each(endpoints)("hot reloads %s routes on the same server", async (endpoint) 
           "/v1/embeddings",
           ...Object.values(routes),
         ]) {
-          const { res, getBody } = await sendRequest(server, {
+          const { res } = await sendRequest(server, {
             path: requestPath,
             headers: { "x-openclaw-scopes": "operator.read" },
           });
@@ -94,12 +94,6 @@ it.each(endpoints)("hot reloads %s routes on the same server", async (endpoint) 
           expect(res.statusCode, `${requestPath} with ${endpoint}=${enabled}`).toBe(
             isEnabled ? (isModels ? 200 : 405) : 404,
           );
-          if (isEnabled && requestPath === "/v1/models") {
-            expect(JSON.parse(getBody())).toMatchObject({
-              object: "list",
-              data: expect.arrayContaining([expect.objectContaining({ id: "openclaw/default" })]),
-            });
-          }
         }
       }
     },

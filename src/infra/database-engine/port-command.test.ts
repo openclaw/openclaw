@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { afterEach, beforeAll, expect, it } from "vitest";
+import { afterEach, expect, it } from "vitest";
 import "./database-suite-workers.test-support.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { OPENCLAW_STATE_SCHEMA_VERSION } from "../../state/openclaw-state-db-contract.js";
@@ -10,7 +10,6 @@ import { openNodeSqliteDatabase } from "../node-sqlite.js";
 import { seedPortSqlite } from "./port-command.integration.test-support.js";
 import { runDatabasePortTask } from "./port-command.worker.js";
 import { loadDatabasePortDescriptor } from "./port-provider-descriptor.js";
-import { inspectDatabasePort, type PortDescriptor } from "./port.worker.js";
 import { loadStatePortDescriptor } from "./state-port-descriptor.js";
 import metadata from "./workboard-port.generated.json" with { type: "json" };
 
@@ -18,10 +17,6 @@ const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const scope = { assertCurrent() {} };
 const inspect = (sourcePath: string) =>
   runDatabasePortTask({ operation: "inspect", sourcePath, config: {}, to: "postgres" }, scope);
-let descriptor: PortDescriptor;
-beforeAll(async () => {
-  descriptor = await loadDatabasePortDescriptor("workboard");
-});
 function fixture(sql = "") {
   const directory = tempDirs.make("port-command-");
   const sourcePath = path.join(directory, "workboard.sqlite");
@@ -39,11 +34,6 @@ async function hash(file: string) {
     .update(await fs.readFile(file))
     .digest("hex");
 }
-async function inspectSource(sourcePath: string) {
-  using db = openNodeSqliteDatabase(sourcePath, { readOnly: true, readBigInts: true });
-  descriptor.inspectSqliteSource?.(db);
-  return await inspectDatabasePort({ engine: "sqlite", db }, descriptor);
-}
 
 it.each(["agent", "state"])(
   "accepts legal first-use absence in %s inspection and completes only the private copy",
@@ -54,25 +44,23 @@ it.each(["agent", "state"])(
     const table = family === "agent" ? "session_nodes" : "agent_deletion_journal";
     const extraTable = family === "agent" ? table : "agent_database_leases";
     const column = family === "agent" ? "legacy_acp_migration_json" : "phase";
-    {
-      using db = openNodeSqliteDatabase(sourcePath);
-      db.exec([current, ...(current.fragments ?? [])].map((part) => part.sqlite).join("\n;\n"));
-      db.exec(`PRAGMA user_version = ${current.version}`);
-      if (family === "agent") {
-        db.exec(`INSERT INTO schema_meta VALUES ('primary', 'agent', ${current.version}, 'main', NULL, 1, 1);
+    seedPortSqlite(
+      sourcePath,
+      [current, ...(current.fragments ?? [])].map((part) => part.sqlite).join("\n;\n") +
+        `; PRAGMA user_version = ${current.version};` +
+        (family === "agent"
+          ? `INSERT INTO schema_meta VALUES ('primary', 'agent', ${current.version}, 'main', NULL, 1, 1);
           ALTER TABLE session_nodes DROP COLUMN legacy_acp_migration_json;
           ALTER TABLE session_key_contract DROP COLUMN canonical_ready;
           INSERT INTO session_nodes (session_key, current_session_id, entry_json, updated_at)
-          VALUES ('agent:main:main', 'retained-session', '{"sessionId":"retained-session"}', 17);`);
-      } else {
-        db.exec(`INSERT INTO schema_meta VALUES ('primary', 'global', ${current.version}, NULL, NULL, 1, 1);
+          VALUES ('agent:main:main', 'retained-session', '{"sessionId":"retained-session"}', 17);`
+          : `INSERT INTO schema_meta VALUES ('primary', 'global', ${current.version}, NULL, NULL, 1, 1);
           ALTER TABLE worker_workspace_pending_results DROP COLUMN repository_workspace_id;
           ALTER TABLE user_profile_identities DROP COLUMN verified_email_json;
           ALTER TABLE agent_deletion_journal DROP COLUMN phase;
           INSERT INTO agent_deletion_journal (agent_id, agent_dir, workspace_dir, sessions_dir, created_at)
-          VALUES ('retired', '/retired/agent', '/retired/workspace', '/retired/sessions', 17);`);
-      }
-    }
+          VALUES ('retired', '/retired/agent', '/retired/workspace', '/retired/sessions', 17);`),
+    );
     const original = await hash(sourcePath);
     await expect(inspect(sourcePath)).resolves.toMatchObject({ family, migrationRequired: true });
     const copy = path.join(directory, "private.sqlite");
@@ -133,19 +121,13 @@ it.each([false, true])(
       notes: ["Skipped empty retained SQLite table fleet_cells"],
     });
     expect(await hash(sourcePath)).toBe(original);
-    {
-      using db = openNodeSqliteDatabase(sourcePath);
-      db.exec("INSERT INTO fleet_cells VALUES ('retained')");
-    }
+    seedPortSqlite(sourcePath, "INSERT INTO fleet_cells VALUES ('retained')");
     const populated = await hash(sourcePath);
     await expect(inspect(sourcePath)).rejects.toThrow(
       /fleet_cells contains rows.*preserve.*SQLite/i,
     );
     expect(await hash(sourcePath)).toBe(populated);
-    {
-      using db = openNodeSqliteDatabase(sourcePath);
-      db.exec("DELETE FROM fleet_cells; CREATE TABLE unknown_payload (id TEXT)");
-    }
+    seedPortSqlite(sourcePath, "DELETE FROM fleet_cells; CREATE TABLE unknown_payload (id TEXT)");
     await expect(inspect(sourcePath)).rejects.toThrow("Unknown SQLite table");
   },
 );
@@ -229,8 +211,7 @@ it.each([
 ])("refuses %s (%s) without exposing payloads or changing the source", async (message, sql) => {
   const { sourcePath } = fixture(sql);
   const original = await hash(sourcePath);
-  const run = message === "database validation" ? inspect : inspectSource;
-  const failure = await run(sourcePath).catch((error: unknown) => error);
+  const failure = await inspect(sourcePath).catch((error: unknown) => error);
   expect(failure).toBeInstanceOf(Error);
   expect(String(failure)).toContain(message);
   expect(String(failure)).not.toContain("private-payload");

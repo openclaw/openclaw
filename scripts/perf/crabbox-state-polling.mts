@@ -24,6 +24,7 @@ const { values } = parseArgs({
     observer: { type: "string" },
     entry: { type: "string" },
     profile: { type: "boolean", default: false },
+    populated: { type: "boolean", default: false },
   },
 });
 if (!values.out || !values.observer) {
@@ -93,6 +94,26 @@ const env = createGatewayBenchEnv(fixture, configPath, {
     NODE_OPTIONS: `--require=${JSON.stringify(observer)} --enable-source-maps`,
   },
 });
+if (values.populated) {
+  const previousEnv = process.env;
+  process.env = { ...env, NODE_OPTIONS: "" };
+  const { createPluginStateKeyedStoreV2 } =
+    await import("../../src/plugin-state/plugin-state-store.js");
+  const { closeOpenClawStateDatabaseAsync } = await import("../../src/state/openclaw-state-db.js");
+  try {
+    const store = createPluginStateKeyedStoreV2(
+      "crabbox",
+      { namespace: "warm-images", maxEntries: 128, overflowPolicy: "reject-new" },
+      { assertCurrent() {} },
+    );
+    for (let index = 0; index < 32; index++) {
+      await store.register(`synthetic-profile-${index}`, { version: 3, allocations: {} });
+    }
+  } finally {
+    await closeOpenClawStateDatabaseAsync();
+    process.env = previousEnv;
+  }
+}
 const abort = new AbortController();
 const interrupt = () => abort.abort(new Error("Crabbox measurement interrupted"));
 process.once("SIGINT", interrupt);
@@ -102,7 +123,13 @@ let phase = "boot";
 let phaseStart = Date.now();
 const evidence = {
   format: "openclaw-crabbox-state-polling-v1",
-  workload: { settleSeconds: 70, steadySeconds: 120, profiles: 1, readyWorkers: 0 },
+  workload: {
+    settleSeconds: 70,
+    steadySeconds: 120,
+    profiles: 1,
+    readyWorkers: 0,
+    populatedRows: values.populated ? 32 : 0,
+  },
   phases: [] as Array<{ phase: string; start: number; end: number }>,
   ready: false,
   crabboxCalls: { version: 0, unexpected: 0 },

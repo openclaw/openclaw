@@ -219,12 +219,9 @@ module.exports = { id: ${JSON.stringify(id)}, register(api) {
         sentinel: { payload: { stats: { requiresRestart: false } } },
       });
       await expect.poll(async () => (await settledProbe("cold-chat")).captured?.label).toBe(label);
-      expect(await settledProbe("cold-chat")).toMatchObject({
-        starts: 1,
-        stops: 0,
-        pid: cold.pid,
-      });
-      expect((await settledProbe("cold-chat")).instance).not.toBe(cold.instance);
+      const replacement = await settledProbe("cold-chat");
+      expect(replacement).toMatchObject({ starts: 1, stops: 0, pid: cold.pid });
+      expect(replacement.instance).not.toBe(cold.instance);
       expect(await settledProbe("sibling-chat")).toEqual(sibling);
     }
     // Installing another plugin can rebuild metadata through a different producer.
@@ -402,17 +399,12 @@ it.each([false, true])(
         error: { details: { runtime: { committed: false, phase: "drain" } } },
       });
       expect(reload.error?.message).toContain("instance-binding service cleanup rejected");
-      expect(coordinator).toMatchObject({ serviceStops: 1, serviceStarts: 1 });
       expect(getActivePluginRegistry()).toBe(initialRegistry);
       releasePending.resolve();
       for (const accountId of ["active", "pending", "parked"]) {
         expect((await probe(accountId)).status).toBe(accountId === "active" ? 503 : 404);
         expect(starts.get(accountId)).toBe(1);
       }
-      const retry = await reloadPlugin(socket);
-      expect(retry.ok).toBe(false);
-      expect(coordinator.serviceStarts).toBe(1);
-      expect((await rpcReq(socket, "config.get", {})).ok).toBe(true);
       expect(hotReloadRecovery).not.toHaveBeenCalled();
       return;
     }

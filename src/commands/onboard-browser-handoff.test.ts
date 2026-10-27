@@ -120,8 +120,7 @@ it.each(["heartbeat", "disconnect", "new-tab"] as const)(
           ...(change === "new-tab" ? { instanceId: "new-tab" } : {}),
         },
       ]);
-    const result = await runHandoff({}, change === "new-tab" ? 0 : 60_000);
-    expect(result).toBe(change === "new-tab");
+    expect(await runHandoff({}, change === "new-tab" ? 0 : 60_000)).toBe(change === "new-tab");
     expect(Date.now()).toBe(change === "new-tab" ? 0 : 60_000);
     if (change !== "new-tab") {
       expect(prompter.note).not.toHaveBeenCalledWith(
@@ -132,22 +131,21 @@ it.each(["heartbeat", "disconnect", "new-tab"] as const)(
   },
 );
 
-it("preserves the coordinator target in the headless browser handoff", async () => {
-  expect(await runHandoff({ agentId: "coordinator" })).toBe(true);
-  expect(displayedNotes()).toContain("?session=agent%3Acoordinator%3Amain#");
-});
-
-it("prints an HTTPS tunnel destination for a headless loopback TLS Gateway", async () => {
-  await runHandoff({
-    config: {
-      gateway: {
-        bind: "loopback",
-        controlUi: { basePath: "/control" },
-        tls: { enabled: true },
+it("prints the coordinator's HTTPS tunnel destination for a headless loopback TLS Gateway", async () => {
+  expect(
+    await runHandoff({
+      agentId: "coordinator",
+      config: {
+        gateway: {
+          bind: "loopback",
+          controlUi: { basePath: "/control" },
+          tls: { enabled: true },
+        },
       },
-    },
-  });
+    }),
+  ).toBe(true);
   const displayed = displayedNotes();
+  expect(displayed).toContain("?session=agent%3Acoordinator%3Amain#");
   expect(displayed).toContain("https://localhost:18789/control/");
   expect(displayed).not.toContain("http://localhost:18789/control/");
   expect(displayed).toContain("#bootstrapToken=one-time-bootstrap");
@@ -222,10 +220,10 @@ it("keeps resolved password SecretRefs inside the Gateway presence request", asy
       },
     },
   });
-  expect(sharedMocks.callGateway).toHaveBeenCalledTimes(2);
-  for (const [options] of sharedMocks.callGateway.mock.calls) {
-    expect(options.password).toBe(gatewayPassword);
-  }
+  expect(sharedMocks.callGateway.mock.calls.map(([options]) => options.password)).toEqual([
+    gatewayPassword,
+    gatewayPassword,
+  ]);
   expect(displayedNotes()).not.toContain(gatewayPassword);
   expect(displayedNotes()).toContain("#bootstrapToken=one-time-bootstrap");
   expect(sharedMocks.issueControlUiBrowserHandoff).toHaveBeenCalledWith(links);
@@ -235,9 +233,9 @@ it.each(["suppressed", "disabled", "document", "presence", "bootstrap"] as const
   "does not open browser credentials after a %s gate failure",
   async (reason) => {
     if (reason === "document") {
-      sharedMocks.waitForControlUiDocument.mockResolvedValue({
-        ready: false,
-        reason: "Control UI build failed.",
+      sharedMocks.waitForControlUiDocument.mockImplementation(async ({ onPending }) => {
+        onPending?.();
+        return { ready: false, reason: "Control UI build failed." };
       });
     } else if (reason === "presence") {
       sharedMocks.callGateway.mockReset().mockRejectedValue(new Error("gateway unavailable"));
@@ -257,6 +255,8 @@ it.each(["suppressed", "disabled", "document", "presence", "bootstrap"] as const
     }
     if (reason === "document") {
       expect(sharedMocks.callGateway).not.toHaveBeenCalled();
+      expect(prompter.progress).toHaveBeenCalledWith("Preparing the Control UI…");
+      expect(vi.mocked(prompter.progress).mock.results[0]?.value.stop).toHaveBeenCalledOnce();
     }
     if (reason === "bootstrap") {
       expect(prompter.note).not.toHaveBeenCalled();
@@ -265,13 +265,3 @@ it.each(["suppressed", "disabled", "document", "presence", "bootstrap"] as const
     }
   },
 );
-
-it("starts and stops preparation progress only when the document reports pending", async () => {
-  sharedMocks.waitForControlUiDocument.mockImplementation(async ({ onPending }) => {
-    onPending?.();
-    return { ready: true };
-  });
-  await runHandoff();
-  expect(prompter.progress).toHaveBeenCalledWith("Preparing the Control UI…");
-  expect(vi.mocked(prompter.progress).mock.results[0]?.value.stop).toHaveBeenCalledOnce();
-});

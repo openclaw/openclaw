@@ -97,6 +97,8 @@ const writeNamedSkill = (dir: string, name: string, description: string) =>
   writeSkill({ dir: path.join(dir, name), name, description });
 const skillNamed = (entries: SkillEntry[], name: string) =>
   entries.find((entry) => entry.skill.name === name)?.skill;
+const writeCard = (dir: string, content: string) =>
+  fs.writeFile(path.join(dir, "skill-card.md"), content);
 
 it("keeps explicitly hidden remote collision losers out of snapshot hydration", async () => {
   const { gateway, sources, options, bind } = await fixture();
@@ -168,7 +170,7 @@ describe("remote skill discovery", () => {
       pluginSkillRoots: [],
       bundledSkillsDir: undefined,
     });
-    await fs.writeFile(path.join(workshopDir, "workshop-wins", "skill-card.md"), "Workshop card");
+    await writeCard(path.join(workshopDir, "workshop-wins"), "Workshop card");
     sources.status = readWorkspaceSkillStatusFacts({
       entries: sources.entries,
       workspaceDir: remote,
@@ -223,14 +225,8 @@ it.each(["pinned", "stale"])(
   "reads only authorized Gateway Library files for the %s card",
   async (skillCardKey) => {
     const { gateway, remote, sources, options, bind } = await fixture();
-    await fs.writeFile(
-      path.join(library.entries[0]!.skill.baseDir, "skill-card.md"),
-      "# Library card\n",
-    );
-    await fs.writeFile(
-      path.join(gateway, "skills", "stale", "skill-card.md"),
-      "# Gateway private card\n",
-    );
+    await writeCard(library.entries[0]!.skill.baseDir, "# Library card\n");
+    await writeCard(path.join(gateway, "skills", "stale"), "# Gateway private card\n");
     const forged = loadWorkspaceSkills(gateway, { workspaceOnly: true })[0]!;
     forged.skill.source = "openclaw-library";
     recordSkillFileHost(forged.skill, "gateway");

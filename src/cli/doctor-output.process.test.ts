@@ -4,6 +4,7 @@ import { DatabaseSync } from "node:sqlite";
 import { fileURLToPath } from "node:url";
 import { afterAll, afterEach, beforeAll, expect, it } from "vitest";
 import { createFixtureLifetime } from "../../test/helpers/fixture-lifetime.js";
+import { writeJsonFile as writeJson } from "../../test/helpers/temp-repo.js";
 import {
   createBuiltRuntime,
   runBuiltRuntime,
@@ -74,11 +75,6 @@ function runDoctor(root: string, repair = false) {
     { maxBuffer: 4 * 1024 * 1024 },
   );
   return tempDirs.track(runtimeDirs.track(child));
-}
-
-function writeJson(filename: string, value: unknown) {
-  fs.mkdirSync(path.dirname(filename), { recursive: true });
-  fs.writeFileSync(filename, `${JSON.stringify(value, null, 2)}\n`);
 }
 
 function fixture(label: string) {
@@ -224,8 +220,6 @@ it(
       const output = expectExit(await runDoctor(root, repair));
       expect(output).toContain('Retained unconfigured agent database "retired" at');
       expect(output).toContain(retained.path);
-      expect(output).toContain("Doctor will not remove it automatically because it may contain");
-      expect(output).toContain("retired or manually managed agent state.");
       expect(output).not.toContain('Retained unconfigured agent database "main"');
       expect(output).toContain("Skipped foreign agent database");
       expect(output).toContain(sanitizedExternalPath);

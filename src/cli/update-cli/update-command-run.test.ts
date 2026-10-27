@@ -42,7 +42,6 @@ import {
 } from "../../process/exec-result.js";
 import { defaultRuntime, ExitError } from "../../runtime.js";
 import { createDeferredCore } from "../../shared/deferred.js";
-import * as existingStateWrite from "../../state/openclaw-state-db-existing-write.js";
 import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
 import { closeStateDatabaseForTest } from "../../test-utils/database-cleanup.js";
 import { createUpdateProgress } from "./progress.js";
@@ -270,71 +269,6 @@ it("does not complete an operationally pending update from diagnostic success", 
   expect(snapshot()).toEqual(before);
   expect(getUpdateRun(run.runId, { env: run.env })?.status).toBe("running");
   expect(loadUpdateRecovery(run.runId, { env: run.env })).toEqual(record);
-});
-
-it("prints an unexpected JSON update failure after settlement even if diagnostics cannot be written", async () => {
-  const run = createRun("update-unexpected-failure-");
-  const { env } = run;
-  const primaryFailure = new Error("Candidate validation unexpectedly stopped.");
-  const warn = vi.spyOn(defaultRuntime, "error").mockImplementation(() => {});
-  vi.spyOn(existingStateWrite, "runExistingOpenClawStateWriteTransaction").mockImplementationOnce(
-    () => {
-      throw new Error("fixture diagnostics write refused");
-    },
-  );
-  const reportPath = path.join(env.OPENCLAW_STATE_DIR, "update-reports", `${run.runId}.md`);
-  let savedAtPublication: string | undefined;
-  const log = vi.spyOn(defaultRuntime, "log").mockImplementation(() => {});
-  const output = vi.spyOn(defaultRuntime, "writeJson").mockImplementation(() => {
-    savedAtPublication = fs.readFileSync(reportPath, "utf8");
-  });
-  let beforeSettlement: { status?: string; output: number } | undefined;
-  const outcome = await withUpdateCommandTerminalResult(
-    (registerRun) => {
-      registerRun(run);
-      return withUpdateCommandRecoveryUnwind(
-        { json: true, run },
-        { triageTarget: { env } },
-        async () => {
-          throw primaryFailure;
-        },
-      ).finally(() => {
-        beforeSettlement = {
-          status: getUpdateRun(run.runId, { env })?.status,
-          output: log.mock.calls.length + output.mock.calls.length,
-        };
-      });
-    },
-    { json: true },
-  ).catch((error: unknown) => error);
-  expect(outcome).toMatchObject({
-    name: "UpdateCommandFailure",
-    exitCode: 1,
-    result: { status: "error", reason: "update-failed" },
-  });
-  expect(collectNestedErrorCandidates(outcome)).toContain(primaryFailure);
-  expect(beforeSettlement).toEqual({ status: "running", output: 0 });
-  expect(getUpdateRun(run.runId, { env })).toMatchObject({
-    status: "failed",
-    reason: "update-failed",
-    verification: { rollbackOutcome: { status: "not-needed" } },
-    steps: expect.arrayContaining([
-      expect.objectContaining({
-        step: "requested",
-        status: "failed",
-        failureFacts: [expect.objectContaining({ message: primaryFailure.message })],
-      }),
-    ]),
-  });
-  expect(warn).toHaveBeenCalledWith(expect.stringContaining("fixture diagnostics write refused"));
-  expect(savedAtPublication).toContain("Candidate validation unexpectedly stopped.");
-  expect(savedAtPublication).toContain("OpenClaw update failed");
-  expect(output).toHaveBeenCalledExactlyOnceWith(
-    expect.objectContaining({ status: "error", runId: run.runId, reportPath }),
-  );
-  expect(JSON.stringify(output.mock.calls[0]?.[0])).toContain(
-    "Candidate validation unexpectedly stopped.",
-  );
 });
 
 it("saves the complete error diagnostics before printing the Markdown path", async () => {

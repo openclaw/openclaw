@@ -44,11 +44,12 @@ const task = (id: string, title: string, createdAt = Date.now()) => ({
 async function installStartupGateway(page: Page) {
   const config = { tools: { swarm: { enabled: true } } };
   return installMockGateway(page, {
+    subscriptionInitialHistory: false,
     sessionKey,
     sessions: [ownedSession(sessionKey, "Selected conversation")],
     historyMessages: [{ role: "assistant", content: historyText }],
-    deferredMethods: ["chat.startup"],
-    heldMethods: bulkMethods,
+    // Keep replacement startup reads held across visibility changes.
+    heldMethods: ["chat.startup", ...bulkMethods],
     featureMethods: [
       ...defaultControlUiFeatureMethods,
       "sessions.catalog.list",
@@ -106,6 +107,7 @@ async function openPendingChat(page: Page, gateway: Gateway) {
   await page
     .locator(".chat-pane-cache__pane--active .chat-thread .lazy-view-state--loading")
     .waitFor();
+  expect(await page.getByText(historyText, { exact: true }).count()).toBe(0);
 }
 
 async function expectBulkReadsHeld(gateway: Gateway) {
@@ -249,7 +251,7 @@ suite.define(() => {
           },
         ],
       });
-      await page.getByRole("button", { name: "Filter & sort", exact: true }).click();
+      await page.getByRole("button", { name: /^Filter & sort · /, exact: true }).click();
       await chooseSidebarMenuOption(page, "Status", "Archived");
       await closeSidebarMenu(page);
       await gateway.waitForRequest("sessions.list", {

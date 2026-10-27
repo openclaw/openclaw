@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import type { MessageActionResult } from "../infra/outbound/message-action-contracts.js";
+import { expectText } from "../test-utils/text-assertions.js";
 import { formatMessageCliText } from "./message-format.js";
 
 const getChannelPluginMock = vi.hoisted(() =>
@@ -73,15 +74,6 @@ function msg(id: string, ts: string, authorTag: string, content: string) {
 
 function render(result: MessageActionResult, options?: Parameters<typeof formatMessageCliText>[1]) {
   return formatMessageCliText(result, options).join("\n");
-}
-
-function expectText(output: string, included: string[], excluded: string[] = []) {
-  for (const text of included) {
-    expect(output).toContain(text);
-  }
-  for (const text of excluded) {
-    expect(output).not.toContain(text);
-  }
 }
 
 describe("formatMessageCliText displayLimit", () => {

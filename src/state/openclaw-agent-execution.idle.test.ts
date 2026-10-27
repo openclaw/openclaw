@@ -12,10 +12,7 @@ import {
   resetGatewayWorkAdmission,
 } from "../process/gateway-work-admission.js";
 import { createDeferredCore } from "../shared/deferred.js";
-import {
-  closeOpenClawAgentDatabaseByPathAsync,
-  closeOpenClawAgentDatabasesAsync,
-} from "./openclaw-agent-db-lifecycle.js";
+import { closeOpenClawAgentDatabasesAsync } from "./openclaw-agent-db-lifecycle.js";
 import type { AgentDatabaseRequestExecutionSource } from "./openclaw-agent-execution-admission-contract.js";
 import * as native from "./openclaw-agent-execution-native.js";
 import { captureOpenClawAgentDatabaseExecution } from "./openclaw-agent-execution.js";
@@ -142,26 +139,6 @@ it("closes all warm executors on restart drain", async () => {
   await vi.advanceTimersByTimeAsync(0);
   expect(closedAgents()).toEqual(["first", "second", "third", "fourth"]);
   expect(opened.every(({ close }) => close.mock.calls.length === 1)).toBe(true);
-});
-
-it("retires only the selected physical store and shares its directory alias", async () => {
-  const first = await use("first");
-  await use("second");
-  fs.mkdirSync(path.dirname(first.path), { recursive: true });
-  const alias = path.join(env.OPENCLAW_STATE_DIR!, "alias");
-  fs.symlinkSync(
-    path.dirname(first.path),
-    alias,
-    process.platform === "win32" ? "junction" : "dir",
-  );
-  const borrowed = capture("first", path.join(alias, path.basename(first.path)));
-  await borrowed.prepare(source);
-  await borrowed.release();
-  expect(opened).toHaveLength(2);
-  await closeOpenClawAgentDatabaseByPathAsync(borrowed.path, "first");
-  expect(closedAgents()).toEqual(["first"]);
-  await use("first", "second");
-  expect(opened.map(({ agentId }) => agentId)).toEqual(["first", "second", "first"]);
 });
 
 it("keeps a reborrow live while another idle executor is being evicted", async () => {

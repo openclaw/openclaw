@@ -3,14 +3,10 @@ import path from "node:path";
 import { setImmediate } from "node:timers/promises";
 import { setEnvironmentData, Worker } from "node:worker_threads";
 import { expectDefined as requireValue } from "@openclaw/normalization-core/expect";
-import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, expect, it, vi } from "vitest";
-import {
-  fixtureReceiptWorkerClientSource,
-  openFixtureReceiptChannel,
-} from "../../test/helpers/fixture-receipts.js";
 import { withinTest } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { observeWorkerActivity } from "../../test/helpers/worker-activity.js";
 import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import {
   encodeSessionArchiveContent,
@@ -94,6 +90,19 @@ const archiveEntry = {
     content: "synthetic archived message",
   },
 };
+async function writeArchive(root: string, sessionId: string, encoding: "plain" | "zstd" = "zstd") {
+  const content = transcriptText(sessionId, archiveEntry);
+  const encoded =
+    encoding === "plain"
+      ? { suffix: "", bytes: Buffer.from(content) }
+      : encodeSessionArchiveContent(content);
+  const archive = path.join(
+    await sessionsDirectory(root),
+    `${sessionId}.jsonl.reset.2026-02-05T12-00-00.000Z${encoded.suffix}`,
+  );
+  await fs.writeFile(archive, encoded.bytes);
+  return { archive, encoded };
+}
 type ReadProbe = Awaited<ReturnType<typeof observeUsageWorkerReads>>;
 async function expectNoRead(
   probe: ReadProbe,
@@ -246,18 +255,8 @@ it.each(["zstd", "plain"] as const)(
   "inventories %s archives without reading payloads and materializes only for a summary",
   async (encoding) => {
     const root = tempDirs.make("openclaw-usage-worker-metadata-");
-    const sessionsDir = await sessionsDirectory(root);
     const sessionId = `metadata-${encoding}`;
-    const content = transcriptText(sessionId, archiveEntry);
-    const encoded =
-      encoding === "plain"
-        ? { suffix: "", bytes: Buffer.from(content) }
-        : encodeSessionArchiveContent(content);
-    const archive = path.join(
-      sessionsDir,
-      `${sessionId}.jsonl.reset.2026-02-05T12-00-00.000Z${encoded.suffix}`,
-    );
-    await fs.writeFile(archive, encoded.bytes);
+    const { archive } = await writeArchive(root, sessionId, encoding);
     const { mtimeMs } = await fs.stat(archive);
     const reads = await observeUsageWorkerReads(root, [archive]);
     await reads.run(async () => {
@@ -284,19 +283,10 @@ it.each(["zstd", "plain"] as const)(
 
 it("joins compressed archive materialization before settling summary cancellation", async ({
   signal,
-  onTestFinished,
 }) => {
-  const receipts = await openFixtureReceiptChannel();
-  onTestFinished(() => receipts.close());
   const root = tempDirs.make("openclaw-usage-worker-native-archive-");
-  const sessionsDir = await sessionsDirectory(root);
-  const encoded = encodeSessionArchiveContent(transcriptText("native-archive", archiveEntry));
+  const { archive, encoded } = await writeArchive(root, "native-archive");
   expect(encoded.suffix).toBe(".zst");
-  const archive = path.join(
-    sessionsDir,
-    `native-archive.jsonl.reset.2026-02-05T12-00-00.000Z${encoded.suffix}`,
-  );
-  await fs.writeFile(archive, encoded.bytes);
   const entered = path.join(root, "native-entered");
   const release = new Int32Array(new SharedArrayBuffer(4));
   setEnvironmentData(entered, release.buffer);
@@ -310,18 +300,16 @@ it("joins compressed archive materialization before settling summary cancellatio
     preload,
     `const fs = require("node:fs");
 const zlib = require("node:zlib");
-const { getEnvironmentData, isMainThread, threadId } = require("node:worker_threads");
-${fixtureReceiptWorkerClientSource(receipts.broadcastName).replace(
-  'import { BroadcastChannel as FixtureReceiptBroadcastChannel } from "node:worker_threads";',
-  'const { BroadcastChannel: FixtureReceiptBroadcastChannel } = require("node:worker_threads");',
-)}
+const { BroadcastChannel, getEnvironmentData, isMainThread, threadId } = require("node:worker_threads");
 if (!isMainThread) {
   const compressed = Buffer.from(${JSON.stringify(encoded.bytes.toString("base64"))}, "base64");
   const decompress = zlib.zstdDecompressSync;
   zlib.zstdDecompressSync = function(bytes, ...args) {
     if (!Buffer.from(bytes).equals(compressed)) return Reflect.apply(decompress, this, [bytes, ...args]);
     fs.writeFileSync(${JSON.stringify(entered)}, String(threadId));
-    sendReceipt(${JSON.stringify(entered)}, "entered");
+    const activity = new BroadcastChannel(${JSON.stringify(`${entered}:activity`)});
+    activity.postMessage(threadId);
+    activity.close();
     const release = new Int32Array(getEnvironmentData(${JSON.stringify(entered)}));
     while (Atomics.load(release, 0) === 0) Atomics.wait(release, 0, 0);
     const result = Reflect.apply(decompress, this, [bytes, ...args]);
@@ -334,8 +322,8 @@ if (!isMainThread) {
   );
   try {
     await withUsageWorkerPreload(root, preload, async () => {
-      using posts = vi.spyOn(Worker.prototype, "postMessage");
       using terminate = vi.spyOn(Worker.prototype, "terminate");
+      const activeWorker = observeWorkerActivity(`${entered}:activity`);
       const scope = new AsyncWorkScope();
       const reason = new Error("summary owner closed");
       let summarySettled = false;
@@ -348,28 +336,17 @@ if (!isMainThread) {
         return result;
       });
       try {
-        // The marker precedes both the receipt and any summary settlement.
-        await withinTest(
+        // The durable marker precedes both the activity receipt and summary settlement.
+        const worker = await withinTest(
           Promise.race([
-            receipts.waitFor(entered, "entered"),
+            activeWorker,
             outcome.then(async () => {
               expect(Number(await fs.readFile(entered, "utf8"))).toBeGreaterThan(0);
+              return activeWorker;
             }),
           ]),
           signal,
         );
-        const dispatch = posts.mock.calls.findIndex(
-          ([message]) =>
-            isRecord(message) &&
-            isRecord(message.input) &&
-            message.input.kind === "usage-cost" &&
-            isRecord(message.input.operation) &&
-            message.input.operation.kind === "refresh",
-        );
-        const worker = posts.mock.contexts[dispatch];
-        if (!(worker instanceof Worker)) {
-          throw new Error("Expected the usage refresh worker");
-        }
         expect(worker.threadId).toBe(Number(await fs.readFile(entered, "utf8")));
         scope.beginClose(reason);
         const draining = scope.drain().then(() => {

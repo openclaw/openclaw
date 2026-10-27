@@ -1045,7 +1045,8 @@ async function runWorker() {
               page.goto(entryUrl, { waitUntil: "domcontentloaded" }),
             );
             // Persistence is deferred beyond paint; token auth also needs its real boot receipt.
-            const snapshotDeadline = Date.now() + 10_000;
+            // Loaded hosts can delay the boot receipt behind catalog reads; setup is unmeasured.
+            const snapshotDeadline = Date.now() + 60_000;
             for (;;) {
               const persisted = await page.evaluate(
                 async ({ sessionKey, bootRecordKey }) => {

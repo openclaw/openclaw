@@ -20,6 +20,7 @@ export type LlmBoundaryOptions = {
   includeTimestamp?: boolean;
   projectPersistedSenderContext?: boolean;
   userTranscriptContexts?: readonly UserTranscriptContext[];
+  currentUserIdempotencyKey?: string;
   currentUserTimestampOverride?: CurrentUserTimestampMatch;
   onRuntimeContextCarrierRemoved?: (removed: AgentMessage[]) => void;
 };

@@ -4,6 +4,7 @@ import { evaluateControlUiContext } from "../test-helpers/control-ui-e2e-context
 import { pauseVirtualClock } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiSessionRow as sessionRow } from "../test-helpers/control-ui-session-fixtures.ts";
 import { revealSidebarTarget } from "../test-helpers/control-ui-sidebar-window.ts";
+import { agentRoster } from "./agent-roster.test-support.ts";
 import * as ui from "./session-management.compact.test-support.ts";
 import {
   createSessionManagementE2eSuite,
@@ -35,15 +36,7 @@ suite.define(() => {
         sessionKey: main.key,
         sessionArchiveFiltering: true,
         methodResponses: {
-          "agents.list": {
-            agents: [
-              { id: "main", name: "Main" },
-              { id: "research", name: "Research" },
-            ],
-            defaultId: "main",
-            mainKey: "main",
-            scope: "agent",
-          },
+          "agents.list": agentRoster({ main: "Main", research: "Research" }, "main", "agent"),
           "sessions.delete": { ok: true, deleted: true },
           "sessions.list": {
             cases: [
@@ -119,7 +112,7 @@ suite.define(() => {
           researchListQuery,
         );
       const filter = async (label: "Archived" | "All") => {
-        await ui.button(sidebar, "Filter & sort").click();
+        await ui.button(sidebar, /^Filter & sort · /).click();
         await chooseSidebarMenuOption(sidebar.page(), "Status", label);
         await closeSidebarMenu(page);
       };

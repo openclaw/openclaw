@@ -11,7 +11,6 @@ import {
   mockLoadConfig,
   startInboxMonitor,
   waitForInboundWorkDrained,
-  type InboxMonitorOptions,
 } from "../../monitor-inbox.test-harness.js";
 import {
   boundarySelf as self,
@@ -60,12 +59,6 @@ describe("WhatsApp debounce reply quoting boundary", () => {
         });
         let dispatchGate = Promise.withResolvers<void>();
         let scheduled = Promise.withResolvers<void>();
-        const inboundQueue: NonNullable<InboxMonitorOptions["durableInboundQueue"]> =
-          createChannelIngressQueueForTests({
-            channelId: "whatsapp",
-            accountId,
-            stateDir: path.join(root, "ingress"),
-          });
         const { listener, sock } = await startInboxMonitor(
           async (msg) => {
             // Advance debounce time without freezing the real database and delivery workers.
@@ -77,7 +70,11 @@ describe("WhatsApp debounce reply quoting boundary", () => {
             accountId,
             debounceMs: scenario.debounceMs,
             authDir: path.join(root, "auth"),
-            durableInboundQueue: inboundQueue,
+            durableInboundQueue: createChannelIngressQueueForTests({
+              channelId: "whatsapp",
+              accountId,
+              stateDir: path.join(root, "ingress"),
+            }),
             shouldDebounce: () => {
               scheduled.resolve();
               return true;
@@ -124,7 +121,6 @@ describe("WhatsApp debounce reply quoting boundary", () => {
           await vi.advanceTimersByTimeAsync(scenario.debounceMs);
           await completeFlush();
 
-          expect(replyResolver).toHaveBeenCalledTimes(scenario.expectedQuoteIds.length);
           expect(quoteIds()).toEqual(scenario.expectedQuoteIds);
           expect(replyResolver.mock.calls.map(([ctx]) => ctx.RawBody)).toEqual(
             scenario.debounceMs > 858

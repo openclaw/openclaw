@@ -15,11 +15,7 @@ import {
   resolveAuthConnectErrorDetailCode as authCode,
 } from "./connect-error-details.js";
 
-const pairingDetails = {
-  code: "PAIRING_REQUIRED",
-  reason: "scope-upgrade",
-  requestId: "req-123",
-};
+const pairingDetails = { code: "PAIRING_REQUIRED", reason: "scope-upgrade", requestId: "req-123" };
 const protocolDetails = {
   code: "PROTOCOL_MISMATCH",
   clientMinProtocol: 5,
@@ -56,13 +52,11 @@ it("returns empty advice for invalid payloads", () => {
   expect(recoveryAdvice("x")).toStrictEqual({});
   expect(recoveryAdvice({ canRetryWithDeviceToken: "yes" })).toEqual({});
   expect(
-    recoveryAdvice({
-      canRetryWithDeviceToken: true,
-      recommendedNextStep: "retry_with_magic",
-    }),
+    recoveryAdvice({ canRetryWithDeviceToken: true, recommendedNextStep: "retry_with_magic" }),
   ).toEqual({ canRetryWithDeviceToken: true, recommendedNextStep: undefined });
 });
 
+const failed = (reason: string) => ({ message: "connect failed", reason });
 const failure = (
   kind: string,
   input: Parameters<typeof classify>[0],
@@ -86,27 +80,17 @@ it.each([
     { reason: "gateway closed (1008): pairing required" },
     "openclaw devices approve --latest",
   ),
-  failure(
-    "scope-mismatch",
-    { message: "connect failed", reason: "scope mismatch" },
-    "openclaw devices list",
-  ),
+  failure("scope-mismatch", failed("scope mismatch"), "openclaw devices list"),
   failure(
     "auth-rejected",
-    { message: "connect failed", reason: "device token mismatch" },
+    failed("device token mismatch"),
     "openclaw devices rotate --device <deviceId> --role operator",
   ),
-  failure(
-    "auth-rejected",
-    { message: "connect failed", reason: "gateway token mismatch" },
-    "gateway.remote.token",
-  ),
+  failure("auth-rejected", failed("gateway token mismatch"), "gateway.remote.token"),
   failure("gateway-rejected", { message: "gateway closed (1008): auth failed" }),
   failure(
     "rate-limited",
-    {
-      reason: "unauthorized: too many failed authentication attempts (retry later)",
-    },
+    { reason: "unauthorized: too many failed authentication attempts (retry later)" },
     "temporary authentication lockout",
   ),
   failure(
@@ -139,19 +123,15 @@ it("adds a Cloudflare hint only for Cloudflare Access redirect hosts", () => {
   const generic = classify(redirect("https://login.example/authorize"));
 
   expect(cloudflare.kind).toBe("identity-proxy");
-  expect(cloudflare.kind).not.toBe("unreachable");
   expect(cloudflare.remediation).toContain("Cloudflare Access");
   expect(generic.remediation).not.toContain("Cloudflare");
 });
 
-it("keeps trusted-proxy identity rejection distinct from generic unauthorized auth", () => {
-  expect(authCode("trusted_proxy_missing_header_cf-access-jwt-assertion")).toBe(
-    "AUTH_IDENTITY_HEADER_REQUIRED",
-  );
-});
-
-it("keeps non-header trusted-proxy rejection generic", () => {
-  expect(authCode("trusted_proxy_local_interface_check_failed")).toBe("AUTH_UNAUTHORIZED");
+it.each([
+  ["missing_header_cf-access-jwt-assertion", "AUTH_IDENTITY_HEADER_REQUIRED"],
+  ["local_interface_check_failed", "AUTH_UNAUTHORIZED"],
+])("maps trusted-proxy rejection %s to %s", (reason, expected) => {
+  expect(authCode(`trusted_proxy_${reason}`)).toBe(expected);
 });
 
 it("builds reason-specific pairing messages", () => {
@@ -162,32 +142,22 @@ it("builds reason-specific pairing messages", () => {
 });
 
 it("builds structured pairing details with remediation", () => {
-  expect(
-    buildDetails({
-      reason: "not-paired",
-      requestId: "req-123",
-      recommendedNextStep: "wait_then_retry",
-      retryable: true,
-      pauseReconnect: false,
-    }),
-  ).toEqual({
-    code: "PAIRING_REQUIRED",
+  const input = {
     reason: "not-paired",
     requestId: "req-123",
-    remediationHint: "Approve this device from the pending pairing requests.",
     recommendedNextStep: "wait_then_retry",
     retryable: true,
     pauseReconnect: false,
+  } as const;
+  expect(buildDetails(input)).toEqual({
+    ...input,
+    code: "PAIRING_REQUIRED",
+    remediationHint: "Approve this device from the pending pairing requests.",
   });
 });
 
 it("includes request ids in close reasons when available", () => {
-  expect(
-    closeReason({
-      reason: "role-upgrade",
-      requestId: "req-789",
-    }),
-  ).toBe(
+  expect(closeReason({ reason: "role-upgrade", requestId: "req-789" })).toBe(
     "pairing required: device is asking for a higher role than currently approved (requestId: req-789)",
   );
 });
@@ -195,12 +165,7 @@ it("includes request ids in close reasons when available", () => {
 it("drops request ids that do not match the allowlist", () => {
   expect(requestId("req-123")).toBe("req-123");
   expect(requestId("req-123;rm -rf /")).toBeUndefined();
-  expect(
-    readPairingDetails({
-      ...pairingDetails,
-      requestId: "req-123;rm -rf /",
-    }),
-  ).toEqual({
+  expect(readPairingDetails({ ...pairingDetails, requestId: "req-123;rm -rf /" })).toEqual({
     code: "PAIRING_REQUIRED",
     reason: "scope-upgrade",
     remediationHint: "Review the requested scopes, then approve the pending upgrade.",
@@ -214,9 +179,7 @@ it("parses surfaced pairing-required messages", () => {
   });
   expect(
     readPairingMessage("scope upgrade pending approval (requestId: req-123;rm -rf /)"),
-  ).toEqual({
-    reason: "scope-upgrade",
-  });
+  ).toEqual({ reason: "scope-upgrade" });
 });
 
 it.each([

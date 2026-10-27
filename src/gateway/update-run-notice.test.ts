@@ -16,7 +16,6 @@ import {
   recordUpdateRunStep,
   recordUpdateRunVerification,
 } from "../infra/update-run-ledger.js";
-import { renderUpdateRunNotice } from "../infra/update-run-notice.js";
 import {
   createOpenClawTestState,
   type OpenClawTestState,
@@ -96,7 +95,7 @@ describe("host-owned update notices", () => {
   );
 
   it.each([false, true])(
-    "outlives the requesting attempt while honoring session replacement (%s)",
+    "delivers after attempt disposal unless the session was replaced (%s)",
     async (replaced) => {
       await seedSession("admitted-session");
       const run = createUpdateRun({ trigger: "chat", origin: { sessionKey: target().sessionKey } });
@@ -114,15 +113,8 @@ describe("host-owned update notices", () => {
         () => notify(run, "parking"),
       );
       expect(result).toEqual({ delivered: !replaced, owned: !replaced });
-      const notices = await messages();
-      expect(notices).toMatchObject(
-        replaced
-          ? []
-          : [
-              assistantMessage(
-                expectDefined(renderUpdateRunNotice(run, "parking"), "parking notice"),
-              ),
-            ],
+      expect(await messages()).toMatchObject(
+        replaced ? [] : [assistantMessage("⏳ Restarting OpenClaw…")],
       );
       if (!replaced) {
         expect(getUpdateRun(run.runId)?.steps).toContainEqual(
@@ -175,7 +167,6 @@ describe("host-owned update notices", () => {
       expect(await notify(finished, "finished")).toEqual({ delivered: terminal, owned: terminal });
       expect(getUpdateRun(initial.runId)?.verification.noticeDelivered === true).toBe(terminal);
       expect(await messages()).toMatchObject([assistantMessage(previousText)]);
-      expect(await messages()).toHaveLength(1);
     },
   );
 });

@@ -38,6 +38,7 @@ import {
   registerPreparedModelRuntimePublicationListener as observePublication,
 } from "./prepared-model-runtime.js";
 import { getPreparedModelRuntimeStartupStatus } from "./prepared-model-runtime.startup-status.js";
+import { observeSettlement as watchSettlement } from "./promise-settlement.test-support.js";
 
 const fixture = usePreparedModelRuntimeHarness(
   { label: "hot-reload-dispatch" },
@@ -91,15 +92,6 @@ function pluginPlan(operationId: string) {
     reloadPlugins: true,
     pluginLifecycle: { operationId, pluginIds: ["synthetic"], reason: "reload" as const },
   };
-}
-
-function watchSettlement(promise: Promise<unknown>) {
-  let settled = false;
-  const mark = () => {
-    settled = true;
-  };
-  void promise.then(mark, mark);
-  return () => settled;
 }
 
 function createPluginReloadHandler(

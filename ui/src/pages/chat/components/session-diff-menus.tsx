@@ -11,7 +11,7 @@ import {
   type MenuItem,
 } from "../../../components/solid/menu.tsx";
 import { createTextOverflow } from "../../../components/solid/text-overflow.ts";
-import { registerChatSessionEnglish } from "../../../i18n/locales/en-chat-session.ts";
+import { registerChatSessionOptionalEnglish } from "../../../i18n/locales/en-chat-session-optional.ts";
 import { EDITOR_IDS, EDITOR_LABELS, type EditorId } from "../../../lib/editor-links.ts";
 import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
 import { AttachmentFileIcon } from "./chat-attachment-file-icon-solid.tsx";
@@ -26,7 +26,7 @@ import {
 } from "./session-diff-icons.tsx";
 import type { SessionDiffMode } from "./session-diff-preferences.ts";
 
-registerEnglishCatalog(registerChatSessionEnglish);
+registerEnglishCatalog(registerChatSessionOptionalEnglish);
 export { SessionDiffActionIcon } from "./session-diff-icons.tsx";
 
 export type SessionDiffMenuDraft =
@@ -547,67 +547,6 @@ export function SessionDiffMenu(props: SessionDiffMenuProps) {
         : []),
     ];
   }
-  function items(
-    menu: SessionDiffMenuData,
-    onCopyButtonRef: (button: HTMLButtonElement) => void,
-  ): MenuEntry[] {
-    const entries = rawItems(menu, onCopyButtonRef);
-    const desktop = "desktop" in menu && menu.desktop;
-    if (!desktop && (!("mobile" in menu) || !menu.mobile)) {
-      return entries;
-    }
-    const icons: Record<string, IconName> = desktop
-      ? {
-          "scope:all": "gitBranch",
-          reading: "eye",
-          highlighted: "codeXml",
-          plain: "fileText",
-          edit: "pencil",
-          "collapse-code": "foldVertical",
-          "collapse-functions": "listTree",
-          "expand-code": "chevronsUpDown",
-        }
-      : {
-          "scope:all": "fileDiff",
-          "scope:uncommitted": "diff",
-          "collapse-all": "chevronUp",
-          "expand-all": "chevronDown",
-          "toggle-wrap": "wrapText",
-          "toggle-split": "columns2",
-          sync: "arrowLeftRight",
-          "collapse-code": "chevronUp",
-          "collapse-functions": "listTree",
-          "expand-code": "chevronDown",
-        };
-    return entries.map((entry) => {
-      if (!("label" in entry) || entry.icon) {
-        return entry;
-      }
-      if (desktop) {
-        const action =
-          entry.id === "scope:uncommitted"
-            ? "uncommitted"
-            : entry.id === "commits"
-              ? "commit"
-              : undefined;
-        entry.icon = action ? (
-          <SessionDiffScopeIcon action={action} />
-        ) : icons[entry.id] ? (
-          <Icon name={icons[entry.id]!} />
-        ) : undefined;
-        return entry;
-      }
-      const icon = entry.id.startsWith("scope:commit:") ? "history" : icons[entry.id];
-      if (icon) {
-        entry.icon = (
-          <span class="session-menu__icon" aria-hidden="true">
-            <Icon name={icon} />
-          </span>
-        );
-      }
-      return entry;
-    });
-  }
   return (
     <openclaw-session-diff-menu>
       <Show when={props.menu} keyed>
@@ -617,11 +556,67 @@ export function SessionDiffMenu(props: SessionDiffMenuProps) {
           let releaseAnchor: (() => void) | undefined;
           onSettled(() => () => releaseAnchor?.());
           const placement = menu.kind === "scope" ? (menu.placement ?? "top-start") : "bottom-end";
-          const entries = createMemo(() =>
-            items(menu, (button) => {
+          const entries = createMemo((): MenuEntry[] => {
+            const onCopyButtonRef: (button: HTMLButtonElement) => void = (button) => {
               copyPathButton = button;
-            }),
-          );
+            };
+            const rawEntries = rawItems(menu, onCopyButtonRef);
+            const desktop = "desktop" in menu && menu.desktop;
+            if (!desktop && (!("mobile" in menu) || !menu.mobile)) {
+              return rawEntries;
+            }
+            const icons: Record<string, IconName> = desktop
+              ? {
+                  "scope:all": "gitBranch",
+                  reading: "eye",
+                  highlighted: "codeXml",
+                  plain: "fileText",
+                  edit: "pencil",
+                  "collapse-code": "foldVertical",
+                  "collapse-functions": "listTree",
+                  "expand-code": "chevronsUpDown",
+                }
+              : {
+                  "scope:all": "fileDiff",
+                  "scope:uncommitted": "diff",
+                  "collapse-all": "chevronUp",
+                  "expand-all": "chevronDown",
+                  "toggle-wrap": "wrapText",
+                  "toggle-split": "columns2",
+                  sync: "arrowLeftRight",
+                  "collapse-code": "chevronUp",
+                  "collapse-functions": "listTree",
+                  "expand-code": "chevronDown",
+                };
+            return rawEntries.map((entry) => {
+              if (!("label" in entry) || entry.icon) {
+                return entry;
+              }
+              if (desktop) {
+                const action =
+                  entry.id === "scope:uncommitted"
+                    ? "uncommitted"
+                    : entry.id === "commits"
+                      ? "commit"
+                      : undefined;
+                entry.icon = action ? (
+                  <SessionDiffScopeIcon action={action} />
+                ) : icons[entry.id] ? (
+                  <Icon name={icons[entry.id]!} />
+                ) : undefined;
+                return entry;
+              }
+              const icon = entry.id.startsWith("scope:commit:") ? "history" : icons[entry.id];
+              if (icon) {
+                entry.icon = (
+                  <span class="session-menu__icon" aria-hidden="true">
+                    <Icon name={icon} />
+                  </span>
+                );
+              }
+              return entry;
+            });
+          });
           const label = () =>
             menu.kind === "file"
               ? t("chat.sessionDiff.fileActions", { path: menu.path })

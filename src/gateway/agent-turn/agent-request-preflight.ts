@@ -20,6 +20,7 @@ import { readSessionEntryReadOnlyInWorker } from "../../config/sessions/session-
 import type { CommandLaneConfiguration } from "../../process/lanes.js";
 import { parseAgentSessionKey } from "../../routing/session-key.js";
 import {
+  isExecCompletionInputProvenance,
   isMainSessionRestartRecoveryInputProvenance,
   isProgressCardRefreshInputProvenance,
   normalizeInputProvenance,
@@ -218,11 +219,7 @@ export async function prepareAgentRequestPreflight(params: {
     return rejectInvalidRequest("Progress refresh input is reserved for progressCard.refresh.");
   }
   // Plugin tools read the starting run named on exec completion wakes; only the host stamps it.
-  if (
-    inputProvenance?.kind === "internal_system" &&
-    inputProvenance.sourceTool === "exec" &&
-    !canUseInternalRuntimeHandoff
-  ) {
+  if (isExecCompletionInputProvenance(inputProvenance) && !canUseInternalRuntimeHandoff) {
     return rejectInvalidRequest("Exec completion input is reserved for background exec owners.");
   }
   if (inputProvenance?.kind === "inter_session" && inputProvenance.sourceTool === "sessions_send") {

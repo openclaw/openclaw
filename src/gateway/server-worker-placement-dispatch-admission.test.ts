@@ -125,26 +125,42 @@ it.each(["replacement", "database-close"] as const)(
   },
 );
 
-it.each([
-  ["displayName", true],
-  ["participants", true],
+const participantFacts = { kind: "participants", projection: { participantCount: 1 } } as const;
+it.each<
+  [string, boolean, ReturnType<Parameters<typeof patchSessionEntryCore>[1]>?, SessionRowFacts?]
+>([
+  ["displayName", true, { displayName: "changed" }],
+  ["participants", true, { participantCount: 1 }],
   ["transcript", true],
   ["unknown", false],
-  ["lifecycleRevision", false],
-  ["deviceFolder", false],
+  ["lifecycleRevision", false, { lifecycleRevision: "changed" }],
+  ["deviceFolder", false, { deviceFolder: { deviceId: "device", path: "/replacement" } }],
   ["replacement-before-read", false],
-  ["partial-participants", true],
-  ["unknown-participants", false],
-  ["retained-participants", false],
-  ["owner-generation", false],
-  ["category-generation", false],
-  ["member-generation", false],
-] as const)(
+  ["partial-participants", true, undefined, participantFacts],
+  ["unknown-participants", false, undefined, { kind: "participants" }],
+  ["retained-participants", false, undefined, participantFacts],
+  [
+    "owner-generation",
+    false,
+    undefined,
+    { kind: "owner", sessionId: "acquiring", lifecycleRevision: "replacement", owner: undefined },
+  ],
+  [
+    "category-generation",
+    false,
+    undefined,
+    { kind: "category", sessionId: "replacement", category: null },
+  ],
+  [
+    "member-generation",
+    false,
+    undefined,
+    { kind: "member", sessionId: "replacement", identityId: "user", present: true },
+  ],
+])(
   "reconciles a %s publication during worker source acquisition",
-  async (field, accepted) => {
+  async (field, accepted, patch, facts) => {
     const { identity, scope, target } = await makeSession("acquiring");
-    const publish = (facts: SessionRowFacts) =>
-      sessionChanges.emit({ ...scope, scope: "session-entry", facts });
     const originalRead = sessionEntryReads.withSessionEntryReadOnlyInWorker;
     using read = vi.spyOn(sessionEntryReads, "withSessionEntryReadOnlyInWorker");
     read.mockImplementationOnce(async (input, assertCurrent, consume, ...rest) => {
@@ -156,24 +172,8 @@ it.each([
         assertCurrent,
         async (result, owner) => {
           // The UI can publish metadata while dispatch is acquiring its exact row.
-          if (field.endsWith("-participants")) {
-            publish({
-              kind: "participants",
-              ...(field !== "unknown-participants" ? { projection: { participantCount: 1 } } : {}),
-            });
-          } else if (field.endsWith("-generation")) {
-            publish(
-              field === "owner-generation"
-                ? {
-                    kind: "owner",
-                    sessionId: scope.sessionId,
-                    lifecycleRevision: "replacement",
-                    owner: undefined,
-                  }
-                : field === "category-generation"
-                  ? { kind: "category", sessionId: "replacement", category: null }
-                  : { kind: "member", sessionId: "replacement", identityId: "user", present: true },
-            );
+          if (facts) {
+            sessionChanges.emit({ ...scope, scope: "session-entry", facts });
           } else if (field === "transcript" || field === "unknown") {
             sessionChanges.emit({
               ...scope,
@@ -182,14 +182,8 @@ it.each([
                 ? { facts: { kind: "unchanged" as const } }
                 : { factsInvalidated: true as const }),
             });
-          } else if (field !== "replacement-before-read") {
-            await patchSessionEntryCore(scope, () =>
-              field === "deviceFolder"
-                ? { deviceFolder: { deviceId: "device", path: "/replacement" } }
-                : field === "participants"
-                  ? { participantCount: 1 }
-                  : { [field]: "changed" },
-            );
+          } else if (patch) {
+            await patchSessionEntryCore(scope, () => patch);
           }
           return consume(result, owner);
         },

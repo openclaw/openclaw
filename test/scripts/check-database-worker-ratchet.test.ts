@@ -11,6 +11,88 @@ const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 afterEach(() => vi.restoreAllMocks());
 
 it.each([
+  ["session-cold-storage-chunks.ts", "readSessionColdChunks", "executeSqliteQuerySync"],
+  [
+    "session-cold-storage-chunks.ts",
+    "iterateSessionColdRecords",
+    "executeSqliteQueryTakeFirstSync",
+  ],
+  [
+    "session-cold-storage-prepare.ts",
+    "prepareSessionColdArchiveInWorker",
+    "withOpenClawAgentDatabaseReadOnly",
+  ],
+  [
+    "session-cold-storage-prepare.ts",
+    "prepareSessionColdBatchInWorker",
+    "withOpenClawAgentDatabaseReadOnly",
+  ],
+])(
+  "proves the cold-storage kernel %s:%s only through reviewed entries",
+  (file, operation, primitive) => {
+    const relative = `src/config/sessions/${file}`;
+    const worker =
+      operation === "readSessionColdChunks"
+        ? "session-cold-storage-read.worker.ts"
+        : operation === "iterateSessionColdRecords"
+          ? "session-transcript-hydration.worker.ts"
+          : "session-accessor.sqlite-archive.worker.ts";
+    const sources = new Map([
+      [relative, `export function ${operation}() { return ${primitive}(query); }`],
+      [
+        `src/config/sessions/${worker}`,
+        `export async function dispatchColdPreparation() {
+          const { ${operation} } = await import('./${file.replace(/\.ts$/, ".js")}');
+          return scope.run(options, () => ${operation}());
+        }`,
+      ],
+    ]);
+    const tiers = () => inventory(process.cwd(), "", false, sources).map(({ tier }) => tier);
+    expect(tiers()).toEqual(["W"]);
+    sources.set(
+      "scripts/perf/session-cold-selection.ts",
+      `(await import('../../src/config/sessions/${file.replace(/\.ts$/, ".js")}')).${operation}();`,
+    );
+    expect(tiers()).toEqual(["T3"]);
+    sources.set(
+      "src/plugin-sdk/runtime.ts",
+      `import { ${operation} } from '../config/sessions/${file.replace(/\.ts$/, ".js")}';
+     export function runtime() { return ${operation}(); }`,
+    );
+    expect(tiers()).toEqual(["T1"]);
+  },
+);
+
+it("preserves worker ownership through the synchronous agent read scope", () => {
+  const sources = new Map([
+    [
+      "src/state/openclaw-agent-db-readonly.ts",
+      "export function withOpenClawAgentDatabaseReadOnly(operation) { return operation(database); }",
+    ],
+    [
+      "src/config/sessions/session-cold-storage-prepare.ts",
+      `import { withOpenClawAgentDatabaseReadOnly } from '../../state/openclaw-agent-db-readonly.js';
+       export function prepareSessionColdBatchInWorker() {
+         return withOpenClawAgentDatabaseReadOnly(() => executeSqliteQuerySync(query), options);
+       }`,
+    ],
+    [
+      "src/config/sessions/session-accessor.sqlite-archive.worker.ts",
+      `import { prepareSessionColdBatchInWorker } from './session-cold-storage-prepare.js';
+       prepareSessionColdBatchInWorker();`,
+    ],
+  ]);
+  const tiers = () => inventory(process.cwd(), "", false, sources).map(({ tier }) => tier);
+  expect(tiers()).toEqual(["W"]);
+  sources.set(
+    "src/plugin-sdk/runtime.ts",
+    `import { prepareSessionColdBatchInWorker } from '../config/sessions/session-cold-storage-prepare.js';
+     export function runtime() { return prepareSessionColdBatchInWorker(); }`,
+  );
+  expect(tiers()).toEqual(["T1"]);
+});
+
+it.each([
   ["session-claim-repair-copy.ts", "copySessionClaimForRepair"],
   ["session-accessor.sqlite-delivery-repair.ts", "copySessionDeliveriesForRepair"],
   ["session-accessor.sqlite-delivery-repair.ts", "readSessionDeliveryRepairInventory"],

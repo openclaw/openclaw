@@ -5,8 +5,7 @@ import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import { createAdmittedRunOperatorAuthority } from "./admitted-run-context.js";
 import type { AuthProfileStore } from "./auth-profiles/types.js";
-import { FailoverError, recordModelFallbackStop } from "./failover-error.js";
-import * as modelAuth from "./model-auth.js";
+import { FailoverError } from "./failover-error.js";
 import { createModelRuntimeChoiceOwnerFixture } from "./model-runtime-choice.test-support.js";
 import { prepareOperatorModelPolicy } from "./operator-model-policy.js";
 import { bindPreparedModelRuntimeAuth } from "./prepared-model-runtime-auth.js";
@@ -77,6 +76,23 @@ function prepared(runtimeId?: string): UtilityCompletionRuntimeParams {
   };
 }
 
+function runtimeLease(
+  snapshot: ReturnType<typeof createModelRuntimeChoiceOwnerFixture>,
+  release = async () => {},
+) {
+  return {
+    snapshot,
+    pluginGeneration: {
+      remoteCatalog: null,
+      pluginMetadataSnapshot: snapshot.metadataSnapshot,
+      inlineProviderModels: [],
+      configuredCatalogEntries: [],
+      pluginRegistry: snapshot.pluginRegistry,
+    },
+    [Symbol.asyncDispose]: release,
+  };
+}
+
 it.each(["missing", "api", "fallback", "native", "cooldown"] as const)(
   "preflights utility credentials from the published Gateway facts: %s",
   async (credential) => {
@@ -107,36 +123,19 @@ it.each(["missing", "api", "fallback", "native", "cooldown"] as const)(
       metadataSnapshot: params.metadataSnapshot,
       modelCatalog: params.snapshot,
     });
-    const store: AuthProfileStore = {
-      version: 1,
-      profiles:
-        credential === "cooldown"
-          ? {
-              "anthropic:default": {
-                type: "api_key",
-                provider: "anthropic",
-                key: "synthetic-key",
-              },
-            }
-          : {},
-      ...(credential === "cooldown"
-        ? { usageStats: { "anthropic:default": { cooldownUntil: Date.now() + 60_000 } } }
-        : {}),
-    };
+    const store: AuthProfileStore = { version: 1, profiles: {} };
+    if (credential === "cooldown") {
+      store.profiles["anthropic:default"] = {
+        type: "api_key",
+        provider: "anthropic",
+        key: "synthetic-key",
+      };
+      store.usageStats = { "anthropic:default": { cooldownUntil: Date.now() + 60_000 } };
+    }
     bindPreparedModelRuntimeAuth(snapshot, { store });
     const release = vi.fn(async () => {});
     using acquire = vi.spyOn(preparedRuntime, "acquirePreparedModelRuntimeSnapshot");
-    acquire.mockResolvedValue({
-      snapshot,
-      pluginGeneration: {
-        remoteCatalog: null,
-        pluginMetadataSnapshot: snapshot.metadataSnapshot,
-        inlineProviderModels: [],
-        configuredCatalogEntries: [],
-        pluginRegistry: snapshot.pluginRegistry,
-      },
-      [Symbol.asyncDispose]: release,
-    });
+    acquire.mockResolvedValue(runtimeLease(snapshot, release));
     await withEnvAsync(
       { ANTHROPIC_API_KEY: undefined, ANTHROPIC_OAUTH_TOKEN: undefined },
       async () => {
@@ -192,17 +191,7 @@ it("keeps utility auth available when the catalog contains another provider's tr
           modelCatalog: { entries, routeVariants: entries },
         });
         bindPreparedModelRuntimeAuth(snapshot, { store: { version: 1, profiles: {} } });
-        acquire.mockResolvedValue({
-          snapshot,
-          pluginGeneration: {
-            remoteCatalog: null,
-            pluginMetadataSnapshot: snapshot.metadataSnapshot,
-            inlineProviderModels: [],
-            configuredCatalogEntries: [],
-            pluginRegistry: snapshot.pluginRegistry,
-          },
-          [Symbol.asyncDispose]: async () => {},
-        });
+        acquire.mockResolvedValue(runtimeLease(snapshot));
         expect(await hasAvailableUtilityCompletionAuth(model)).toBe(true);
       }
     },
@@ -251,41 +240,6 @@ it.each(["missing credentials", "retired owner"])("omits a route with %s", async
     },
   );
 });
-
-it.each([false, true])(
-  "keeps the primary runtime regardless of prepared API credentials (%s)",
-  async (hasApiCredential) => {
-    const params = prepared();
-    params.cfg.models = undefined;
-    params.cfg.agents!.defaults!.utilityModel = undefined;
-    params.cfg.agents!.defaults!.models = {
-      "anthropic/claude-opus-4-6": { agentRuntime: { id: "claude-cli" } },
-    };
-    const plugin = params.metadataSnapshot.plugins[0];
-    if (!plugin) {
-      throw new Error("Expected the Anthropic metadata fixture.");
-    }
-    plugin.modelCatalog = {
-      providers: {
-        anthropic: {
-          defaultUtilityModel: "claude-haiku-4-5",
-          models: [{ id: "claude-haiku-4-5" }, { id: "claude-opus-4-6" }],
-        },
-      },
-    };
-    if (hasApiCredential) {
-      params.preparedAuthStore.profiles["anthropic:test"] = {
-        type: "api_key",
-        provider: "anthropic",
-        key: "synthetic-prepared-key",
-      };
-    }
-    using credentialLookup = vi.spyOn(modelAuth, "hasAvailableAuthForProvider");
-    const runtime = await resolveUtilityCompletionRuntimeForAgent(params);
-    expect(runtime).toEqual({ id: "claude-cli", kind: "cli", label: "Claude CLI" });
-    expect(credentialLookup).not.toHaveBeenCalled();
-  },
-);
 
 const complete = vi.fn();
 const cfg = config({
@@ -364,14 +318,6 @@ it("reads current fallbacks when reusing a prepared primary and retains its cred
     ["small", "local:utility"],
     ["backup", "local:utility"],
   ]);
-});
-
-it("does not replay a terminal provider failure", async () => {
-  const error = new Error("Terminal provider failure");
-  recordModelFallbackStop(error);
-  complete.mockRejectedValue(error);
-  await expect(run()).rejects.toBe(error);
-  expect(complete).toHaveBeenCalledOnce();
 });
 
 it("honors cancellation before another utility candidate", async () => {

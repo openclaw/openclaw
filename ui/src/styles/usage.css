@@ -1,5 +1,6 @@
 .usage-page {
   display: grid;
+  grid-template-columns: minmax(0, 1fr);
   gap: var(--space-5);
   container-type: inline-size;
 }
@@ -43,6 +44,7 @@
 .session-detail-row,
 .session-detail-bottom {
   display: grid;
+  grid-template-columns: minmax(0, 1fr);
   gap: 14px;
 }
 
@@ -99,8 +101,6 @@
 }
 
 .provider-usage-card__id,
-.provider-usage-reset,
-.provider-usage-summary,
 .usage-creators-table thead {
   color: var(--muted);
   font-size: 11px;
@@ -181,15 +181,6 @@
   flex-wrap: wrap;
   align-items: center;
   gap: 8px;
-}
-
-.usage-loading-spinner {
-  width: 12px;
-  height: 12px;
-  border: 2px solid currentcolor;
-  border-right-color: transparent;
-  border-radius: var(--radius-full);
-  animation: btn-spinner-spin 0.8s linear infinite;
 }
 
 .usage-loading-card {
@@ -273,14 +264,11 @@
 .usage-query-hint,
 .sessions-card-count,
 .session-bar-meta,
-.usage-mosaic-sub,
 .context-weight-desc,
 .timeseries-summary,
 .session-log-meta,
 .session-logs-header-count,
-.usage-daypart-label,
 .usage-hour-labels,
-.usage-hour-legend,
 .context-breakdown-more,
 .usage-lineage-note,
 .session-detail-indicator,
@@ -620,11 +608,26 @@
 .usage-summary-grid,
 .session-summary-grid,
 .usage-insights-grid,
-.usage-mosaic-grid,
 .context-breakdown-grid,
 .session-logs-list {
   display: grid;
   gap: 10px;
+}
+
+/* Long conversation text must not recursively size implicit grid columns in WebKit. */
+.session-logs-list {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.session-logs-list--windowed {
+  display: block;
+  height: min(70vh, 640px);
+  overflow: auto;
+  overscroll-behavior: contain;
+}
+
+.session-logs-window {
+  position: relative;
 }
 
 .usage-summary-grid {
@@ -696,8 +699,6 @@
 .usage-summary-sub,
 .session-summary-meta,
 .usage-list-sub,
-.usage-error-sub,
-.cost-window-range-label,
 .usage-section-meta {
   font-size: 12px;
   color: var(--muted);
@@ -1831,6 +1832,7 @@
 
 .session-log-entry {
   display: grid;
+  grid-template-columns: minmax(0, 1fr);
   gap: 8px;
   padding: 12px;
   border: 1px solid var(--border);

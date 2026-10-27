@@ -21,11 +21,11 @@ import { readSessionEntryCache } from "./session-accessor.sqlite-entry-cache.js"
 import type { SessionEntryCacheSnapshot } from "./session-accessor.sqlite-entry-cache.types.js";
 import { readSelectedSessionEntriesInDatabase } from "./session-accessor.sqlite-entry-selected.read.js";
 import { projectSqliteSessionParticipantsBatch } from "./session-accessor.sqlite-participant-projection.js";
+import { resolveSqliteScope } from "./session-accessor.sqlite-read-scope.js";
 import {
-  resolveSqliteScope,
   toDatabaseOptions,
   type ResolvedSqliteScope,
-} from "./session-accessor.sqlite-scope.js";
+} from "./session-accessor.sqlite-scope-helpers.js";
 import { parseSessionEntryJson, selectSessionEntryRows } from "./session-accessor.sqlite-status.js";
 import type { SessionEntryListScope } from "./session-accessor.types.js";
 import {

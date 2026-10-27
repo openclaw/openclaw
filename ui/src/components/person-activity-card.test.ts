@@ -72,31 +72,61 @@ const links = () => [
   ...container.querySelectorAll<HTMLAnchorElement>(".person-activity-card__session"),
 ];
 
-it("shows admitted read readiness and retains the loaded card through refresh", async () => {
+it("retains loaded selection and focused nodes across pending roster refreshes", async () => {
+  const initial = ["one", "two", "three", "four"].map((key, index) => session(key, 3 - index));
+  const openSession = vi.fn();
+  show();
+  expect(links()).toHaveLength(0);
   const first = Promise.withResolvers<Input>();
-  updatePersonActivityCard(container, { name: "Alice", read: first.promise });
+  const disposeCaller = createRoot((dispose) => {
+    updatePersonActivityCard(container);
+    updatePersonActivityCard(container, { name: "Alice", read: first.promise });
+    return dispose;
+  });
   flush();
   expect(getQueriesForElement(container).getByRole("status").textContent).toBe("Loading…");
   expect(container.getAttribute("aria-label")).toBe("Activity for Alice");
-
-  first.resolve(input({ sessionData: data([session("one", 1)]) }));
-  await waitForSolid(() => expect(links()).toHaveLength(1));
+  first.resolve(input({ sessionData: data(initial), openSession }));
+  await waitForSolid(() => expect(links()).toHaveLength(3));
+  expect(links().map((link) => link.textContent)).toEqual(
+    ["one", "two", "three"].map((name) => expect.stringContaining(name)),
+  );
   const loaded = container.querySelector(".person-activity-card");
-  const link = links()[0]!;
-  link.focus();
-
+  const focused = links()[1]!;
+  const title = focused.querySelector(".person-activity-card__session-name")!;
+  focused.focus();
+  disposeCaller();
   const refresh = Promise.withResolvers<Input>();
   updatePersonActivityCard(container, { name: "Alice", read: refresh.promise });
   flush();
   expect(container.querySelector(".person-activity-card")).toBe(loaded);
-  expect(links()[0]).toBe(link);
-  expect(document.activeElement).toBe(link);
-
-  refresh.resolve(input({ sessionData: data([{ ...session("one", 2), label: "Updated" }]) }));
-  await waitForSolid(() => expect(link.textContent).toContain("Updated"));
+  expect(links()[1]).toBe(focused);
+  expect(document.activeElement).toBe(focused);
+  refresh.resolve(
+    input({
+      sessionData: data([
+        { ...initial[1]!, label: "two updated", updatedAt: 4 },
+        initial[2]!,
+        initial[3]!,
+      ]),
+      openSession,
+    }),
+  );
+  await waitForSolid(() => expect(focused.textContent).toContain("two updated"));
   expect(container.querySelector(".person-activity-card")).toBe(loaded);
-  expect(links()[0]).toBe(link);
-  expect(document.activeElement).toBe(link);
+  expect(links()).toHaveLength(2);
+  expect(links()[0]).toBe(focused);
+  expect(focused.querySelector(".person-activity-card__session-name")).toBe(title);
+  expect(document.activeElement).toBe(focused);
+  const click = new MouseEvent("click", { bubbles: true, cancelable: true });
+  focused.dispatchEvent(click);
+  expect(click.defaultPrevented).toBe(true);
+  expect(openSession).toHaveBeenCalledWith(
+    expect.objectContaining({ key: "agent:main:two", label: "two updated" }),
+    "main",
+    { pathname: "/ui/chat/main/two" },
+  );
+  expect(links().some((link) => link.textContent?.includes("four"))).toBe(false);
 });
 
 it("replaces a failed read without retaining its error or accepting an obsolete result", async () => {
@@ -125,64 +155,15 @@ it("replaces a failed read without retaining its error or accepting an obsolete 
   expect(getQueriesForElement(container).queryByRole("status")).toBeNull();
 });
 
-it("retains recent selection and focused nodes while fresh roster facts update", () => {
-  const initial = ["one", "two", "three", "four"].map((key, index) => session(key, 3 - index));
-  const openSession = vi.fn();
-  const refresh = (sessionData?: PersonActivityData) => show({ sessionData, openSession });
-  refresh();
-  expect(links()).toHaveLength(0);
-  // The portal must outlive the caller's render scope.
-  const disposeCaller = createRoot((dispose) => {
-    updatePersonActivityCard(container);
-    refresh(data(initial));
-    return dispose;
-  });
-  flush();
-  expect(links().map((link) => link.textContent)).toEqual(
-    ["one", "two", "three"].map((name) => expect.stringContaining(name)),
-  );
-  const focused = links()[1]!;
-  const title = focused.querySelector(".person-activity-card__session-name")!;
-  focused.focus();
-  disposeCaller();
-  refresh(data([{ ...initial[1]!, label: "two updated", updatedAt: 4 }, initial[2]!, initial[3]!]));
-  flush();
-  expect(links()).toHaveLength(2);
-  expect(links()[0]).toBe(focused);
-  expect(focused.querySelector(".person-activity-card__session-name")).toBe(title);
-  expect(document.activeElement).toBe(focused);
-  expect(focused.textContent).toContain("two updated");
-  const click = new MouseEvent("click", { bubbles: true, cancelable: true });
-  focused.dispatchEvent(click);
-  expect(click.defaultPrevented).toBe(true);
-  expect(openSession).toHaveBeenCalledWith(
-    expect.objectContaining({ key: "agent:main:two", label: "two updated" }),
-    "main",
-    { pathname: "/ui/chat/main/two" },
-  );
-  expect(links().some((link) => link.textContent?.includes("four"))).toBe(false);
-});
-
-it("exposes activity navigation while presence is offline", () => {
-  const navigate = vi.fn();
+it("exposes the activity link while presence is offline", () => {
   show({
     user: { ...alice, entries: [] },
     sessionData: data([session("one", 1)]),
-    routing: { basePath: "/ui", navigate },
   });
   expect(card("status")?.textContent).toContain("Offline");
   expect(card("facts")).toBeNull();
   const link = getQueriesForElement(container).getByRole("link", { name: "View activity" });
-  const modifiedClick = new MouseEvent("click", {
-    bubbles: true,
-    cancelable: true,
-    metaKey: true,
-  });
-  link.dispatchEvent(modifiedClick);
-  expect(modifiedClick.defaultPrevented).toBe(false);
-  expect(navigate).not.toHaveBeenCalled();
-  link.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
-  expect(navigate).toHaveBeenCalledWith("alice", "Alice");
+  expect(link.getAttribute("href")).toBe("/ui/activity/alice");
 });
 
 it("localizes connection and session labels without replacing the focused link", async () => {

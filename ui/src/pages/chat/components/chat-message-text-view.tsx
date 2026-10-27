@@ -79,14 +79,11 @@ export type MessageMarkdownProps = {
 };
 
 export function MessageMarkdown(props: MessageMarkdownProps) {
-  // A cold tab can join a remote reply before the live runtime is ready. Keep
-  // that reply in one mutable island so loading cannot repartition its DOM.
-  const initialStreamingRuntime = loadStreamingMarkdown.peek();
   const streaming = createMemo(
     () =>
       props.options.isStreaming
         ? (loadStreamingMarkdown.peek() ?? loadStreamingMarkdown())
-        : undefined,
+        : loadStreamingMarkdown.peek(),
     { loadingValue: undefined },
   );
   const presentation = createMemo(() =>
@@ -97,7 +94,7 @@ export function MessageMarkdown(props: MessageMarkdownProps) {
       props.markdownOptions,
       props.duplicateSuffix,
       latest(streaming)?.toStreamingMarkdownDomParts,
-      !initialStreamingRuntime && props.options.isStreaming,
+      props.options.isStreaming && !latest(streaming),
     ),
   );
   return (

@@ -6,8 +6,6 @@ import { withSetupHealthGateway } from "../../test/helpers/setup-health-gateway.
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { deleteTestEnvValue, setTestEnvValue } from "../test-utils/env.js";
 import {
-  capturedReplaceConfigFileCalls,
-  configWritePluginLeaseDepths,
   gatewayReachableState,
   getPseudoPort,
   gatewayOnboardRuntime as runtime,
@@ -28,29 +26,10 @@ import {
 
 const SETUP_GATEWAY_PORT = 19861;
 
-const setupOptions = {
-  nonInteractive: true,
-  mode: "local",
-  authChoice: "skip",
-  skipSkills: true,
-  skipHealth: true,
-  installDaemon: false,
-} satisfies Parameters<typeof runNonInteractiveSetup>[0];
-
-async function writeSecureFile(filePath: string, content: string): Promise<void> {
-  await fs.writeFile(filePath, content, { mode: 0o600 });
-  await fs.chmod(filePath, 0o600);
-}
-
-function expectAuthCall(mock: unknown, expected: OnboardGatewayHealthCall) {
+function expectAuthCall(mock: unknown, expected: OnboardGatewayHealthCall = {}) {
   expect(mock).toHaveBeenCalledOnce();
   const [call] = readOnboardFirstMockCall(mock, "health auth") as [OnboardGatewayHealthCall];
   expect([call.token, call.password]).toEqual([expected.token, expected.password]);
-}
-
-function expectHealthAuth(expected: OnboardGatewayHealthCall) {
-  expectAuthCall(gatewayReachableState.mock, expected);
-  expectAuthCall(healthCommandMock, expected);
 }
 
 describe("onboard (non-interactive): gateway health auth", () => {
@@ -62,8 +41,6 @@ describe("onboard (non-interactive): gateway health auth", () => {
       await import("../logging/secret-redaction-registry.test-support.js");
     resetSecretRedactionRegistryForTest();
     testConfigStore.clear();
-    capturedReplaceConfigFileCalls.length = 0;
-    configWritePluginLeaseDepths.length = 0;
     deleteTestEnvValue("OPENCLAW_GATEWAY_TOKEN");
     deleteTestEnvValue("OPENCLAW_GATEWAY_PASSWORD");
     vi.clearAllMocks();
@@ -103,23 +80,6 @@ describe("onboard (non-interactive): gateway health auth", () => {
     return JSON.parse(readCapturedJson());
   }
 
-  async function runTokenSetup(
-    stateDir: string,
-    options: Partial<Parameters<typeof runNonInteractiveSetup>[0]>,
-  ) {
-    setTestEnvValue("OPENCLAW_STATE_DIR", stateDir);
-    setTestEnvValue("OPENCLAW_CONFIG_PATH", path.join(stateDir, "openclaw.json"));
-    await runNonInteractiveSetup(
-      {
-        ...setupOptions,
-        workspace: path.join(stateDir, "openclaw"),
-        ...options,
-      },
-      runtime,
-    );
-    return readTestConfig();
-  }
-
   it("keeps real health authentication on the setup Gateway despite ambient endpoints", async ({
     signal,
   }) => {
@@ -145,26 +105,20 @@ describe("onboard (non-interactive): gateway health auth", () => {
   }, 90_000);
 
   it.each([
-    ["file token", "token", "file", "value", "file-secret-token"],
-    ["unresolved file token", "token", "file", "value", undefined],
-    ["password SecretRef", "password", "env", "OPENCLAW_GATEWAY_PASSWORD", "resolved-password"],
-    [
-      "unresolved password SecretRef",
-      "password",
-      "env",
-      "MISSING_ONBOARD_GATEWAY_PASSWORD",
-      undefined,
-    ],
-    ["environment-only password", "password", undefined, undefined, "environment-password"],
+    ["token", "file", "value", "file-secret-token"],
+    ["token", "file", "value", undefined],
+    ["password", "env", "OPENCLAW_GATEWAY_PASSWORD", "resolved-password"],
+    ["password", "env", "MISSING_ONBOARD_GATEWAY_PASSWORD", undefined],
+    ["password", undefined, undefined, "environment-password"],
   ] as const)(
-    "resolves %s without persisting plaintext or falling back from unresolved refs",
-    async (_name, field, source, id, value) => {
+    "resolves %s/%s/%s to %s without persisting plaintext or falling back",
+    async (field, source, id, value) => {
       await withStateDir("state-health-auth-", async (stateDir) => {
         const provider = source === "file" ? "gateway-token-file" : "default";
         const ref = source && id ? { source, provider, id } : undefined;
         const tokenPath = path.join(stateDir, "gateway-token.txt");
         if (source === "file" && value) {
-          await writeSecureFile(tokenPath, `${value}\n`);
+          await fs.writeFile(tokenPath, `${value}\n`, { mode: 0o600 });
         }
         if (field === "token" || id === "OPENCLAW_GATEWAY_PASSWORD") {
           setTestEnvValue("OPENCLAW_GATEWAY_TOKEN", "stale-env-token");
@@ -192,14 +146,15 @@ describe("onboard (non-interactive): gateway health auth", () => {
 
         expect(readTestConfig().gateway?.auth?.[field]).toEqual(ref);
         if (value !== undefined) {
-          expectHealthAuth({ [field]: value });
+          expectAuthCall(gatewayReachableState.mock, { [field]: value });
+          expectAuthCall(healthCommandMock, { [field]: value });
           expect(healthCommandMock).toHaveBeenCalledWith(
             expect.objectContaining({ localPortOverride: SETUP_GATEWAY_PORT }),
             expect.anything(),
           );
           expect(result).toMatchObject({ ok: true });
         } else {
-          expectAuthCall(gatewayReachableState.mock, {});
+          expectAuthCall(gatewayReachableState.mock);
           expect(healthCommandMock).not.toHaveBeenCalled();
           expect(result).toMatchObject({
             ok: false,
@@ -224,10 +179,17 @@ describe("onboard (non-interactive): gateway health auth", () => {
         if (mode === "env-ref") {
           setTestEnvValue("OPENCLAW_GATEWAY_TOKEN", "ambient-gateway-token");
         }
-        const cfg = await runTokenSetup(stateDir, {
-          gatewayPort: port,
-          ...(mode === "lan" ? { gatewayBind: "lan" } : { secretInputMode: "ref" }),
-        });
+        await runNonInteractiveSetup(
+          {
+            ...createOnboardLocalDaemonOptions(stateDir),
+            skipHealth: true,
+            installDaemon: false,
+            gatewayPort: port,
+            ...(mode === "lan" ? { gatewayBind: "lan" } : { secretInputMode: "ref" }),
+          },
+          runtime,
+        );
+        const cfg = readTestConfig();
         if (mode === "lan") {
           expect(cfg.gateway).toMatchObject({
             bind: "lan",
@@ -236,12 +198,14 @@ describe("onboard (non-interactive): gateway health auth", () => {
           });
           return;
         }
-        expect(cfg.gateway?.auth?.mode).toBe("token");
-        expect(cfg.gateway?.auth?.token).toEqual({
-          source: mode === "store-ref" ? "store" : "env",
-          provider: "default",
-          id: "OPENCLAW_GATEWAY_TOKEN",
-        });
+        expect([cfg.gateway?.auth?.mode, cfg.gateway?.auth?.token]).toEqual([
+          "token",
+          {
+            source: mode === "store-ref" ? "store" : "env",
+            provider: "default",
+            id: "OPENCLAW_GATEWAY_TOKEN",
+          },
+        ]);
         // Generated refs need a value; copying an env value would silently outlive its rotation.
         const { readSecretStoreValue } = await import("../secrets/store/secret-store.js");
         const stored = await readSecretStoreValue({

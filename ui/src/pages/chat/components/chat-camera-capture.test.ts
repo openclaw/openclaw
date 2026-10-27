@@ -1,6 +1,6 @@
 /* @vitest-environment jsdom */
 
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi, type Mock } from "vitest";
 import { createDeferred } from "../../../../../test/helpers/promise.js";
 import { installDialogPolyfill } from "../../../test-helpers/modal-dialog.ts";
 import { mountSolid } from "../../../test-helpers/mount-solid.ts";
@@ -24,11 +24,9 @@ describe("composer camera capture", () => {
   let component: OpenClawChatCameraCapture;
   let restoreDialog: () => void;
   const restorers: (() => void)[] = [];
-  let getUserMedia: ReturnType<
-    typeof vi.fn<(constraints: MediaStreamConstraints) => Promise<CameraStream>>
-  >;
-  let enumerateDevices: ReturnType<typeof vi.fn>;
-  let play: ReturnType<typeof vi.fn<() => Promise<void>>>;
+  let getUserMedia: Mock<(constraints: MediaStreamConstraints) => Promise<CameraStream>>;
+  let enumerateDevices: Mock;
+  let play: Mock<() => Promise<void>>;
   const createObjectURL = vi.fn(() => "blob:camera-test");
   const revokeObjectURL = vi.fn();
   const destinations = { onCapture: vi.fn(), onUpload: vi.fn(), onNativeCapture: vi.fn() };
@@ -59,6 +57,7 @@ describe("composer camera capture", () => {
     component.show();
     await settle();
   }
+  const captureReady = () => waitForSolid(() => expect(button("Capture").disabled).toBe(false));
   async function click(text: string) {
     button(text).click();
     await settle();
@@ -113,7 +112,7 @@ describe("composer camera capture", () => {
       const video = component.querySelector("video");
       expect(video?.hasAttribute("playsinline")).toBe(true);
       expect(video?.hasAttribute("muted")).toBe(true);
-      await waitForSolid(() => expect(button("Capture").disabled).toBe(false));
+      await captureReady();
       const actions = {
         "modal-cancel": () => modal()?.dispatchEvent(new CustomEvent("modal-cancel")),
         abort: () => scope.abort(),
@@ -209,8 +208,7 @@ describe("composer camera capture", () => {
 
   function encodeFrames() {
     const context = { drawImage: vi.fn() };
-    const getContext = vi.fn(() => context);
-    replaceProperty(HTMLCanvasElement.prototype, "getContext", getContext);
+    replaceProperty(HTMLCanvasElement.prototype, "getContext", () => context);
     return vi.spyOn(HTMLCanvasElement.prototype, "toBlob").mockImplementation((callback) => {
       callback(new Blob(["camera frame"], { type: "image/jpeg" }));
     });
@@ -220,12 +218,12 @@ describe("composer camera capture", () => {
     encodeFrames();
     getUserMedia.mockResolvedValueOnce(media().stream).mockResolvedValueOnce(media().stream);
     await show();
-    await waitForSolid(() => expect(button("Capture").disabled).toBe(false));
+    await captureReady();
     await click("Capture");
     expect(component.querySelector("img")?.src).toBe("blob:camera-test");
     await click("Retake");
     expect(revokeObjectURL).toHaveBeenCalledWith("blob:camera-test");
-    await waitForSolid(() => expect(button("Capture").disabled).toBe(false));
+    await captureReady();
     await click("Capture");
     await click("Use photo");
     expect(destinations.onCapture).toHaveBeenCalledExactlyOnceWith(
@@ -245,7 +243,7 @@ describe("composer camera capture", () => {
     const capture = media();
     getUserMedia.mockResolvedValue(capture.stream);
     await show();
-    await waitForSolid(() => expect(button("Capture").disabled).toBe(false));
+    await captureReady();
     button("Capture").click();
     expect(capture.track.stop).toHaveBeenCalledOnce();
     component.readSignal = new AbortController().signal;

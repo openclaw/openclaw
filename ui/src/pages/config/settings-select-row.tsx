@@ -2,7 +2,7 @@ import type { JSX } from "@solidjs/web";
 import { SettingsSelect } from "../../components/solid/settings-select.tsx";
 import { SettingsRow } from "../../components/solid/settings-ui.tsx";
 
-type SettingsSelectRowProps<T extends string> = {
+export function SettingsSelectRow<T extends string>(props: {
   title: string;
   value: T;
   setting?: "send-shortcut" | "catalog-open-target";
@@ -11,9 +11,7 @@ type SettingsSelectRowProps<T extends string> = {
   description?: JSX.Element;
   disabled?: boolean;
   nested?: boolean;
-};
-
-export function SettingsSelectRow<T extends string>(props: SettingsSelectRowProps<T>) {
+}) {
   return (
     <SettingsRow
       title={props.title}

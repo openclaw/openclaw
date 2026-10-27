@@ -126,14 +126,11 @@ it("rejects already-retired authority without creating database state", async ()
   const options = { agentId: "refused", env: { OPENCLAW_STATE_DIR: root } };
   const refused = new Error("authority already retired");
   const operation = vi.fn();
-  let work: Promise<unknown> | undefined;
-  expect(() => {
-    work = own(
-      withOpenClawAgentDatabaseAsync(options, operation, () => {
-        throw refused;
-      }),
-    );
-  }).not.toThrow();
+  const work = own(
+    withOpenClawAgentDatabaseAsync(options, operation, () => {
+      throw refused;
+    }),
+  );
   await expect(work).rejects.toBe(refused);
   expect(operation).not.toHaveBeenCalled();
   expect(fs.existsSync(resolveOpenClawAgentSqlitePath(options))).toBe(false);

@@ -1,10 +1,10 @@
 import assert from "node:assert/strict";
 import { channel } from "node:diagnostics_channel";
 import { once } from "node:events";
-import { parentPort, setEnvironmentData, threadId, Worker, workerData } from "node:worker_threads";
+import { parentPort, setEnvironmentData, threadId, workerData } from "node:worker_threads";
+import { createConformanceWorker } from "../infra/database-engine/conformance.test-support.js";
 import { getPostgresPhysicalFacts } from "../infra/database-engine/physical-facts.js";
 import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
-import { resolveRuntimeWorkerThreadExecArgv } from "../infra/runtime-worker-url.js";
 import { isPostgresSqlConnection } from "../infra/sql-connection.js";
 import {
   captureSqliteDatabaseAdmissions,
@@ -45,13 +45,14 @@ async function runChronologyHost(input: { path: string; connection: string }): P
   admitSqliteSchema(anchor);
   setEnvironmentData("openclaw.test.state.connection", input.connection);
   const url = new URL(import.meta.url);
-  const worker = new Worker(url, {
-    execArgv: resolveRuntimeWorkerThreadExecArgv(url),
-    workerData: {
+  const worker = createConformanceWorker(
+    url,
+    {
       path: input.path,
       admissions: captureSqliteDatabaseAdmissions(undefined, { location: input.path }),
     },
-  });
+    { connection: input.connection },
+  );
   cleanup.defer(() => worker.terminate().then(() => undefined));
   worker.on("message", (message: ChronologyProof | { error: string } | { namespace: string }) => {
     process.send?.(message);

@@ -2,6 +2,7 @@ import { expect, it } from "vitest";
 import { buildWidgetDocument } from "../../../src/canvas/wrap.js";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { createRequireRecord } from "../../../test/helpers/record.js";
+import { createBoardWidget } from "../lib/board/widget.test-support.ts";
 import { isChatHistoryState } from "../lib/protocol-validators.generated/history-state.js";
 import { selectChatLayoutAction } from "../test-helpers/chat-layout-menu.ts";
 import {
@@ -10,7 +11,9 @@ import {
   installMockGateway,
 } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiSessionRow } from "../test-helpers/control-ui-session-fixtures.ts";
+import { agentRoster } from "./agent-roster.test-support.ts";
 import { useCanvasSandboxFixture } from "./canvas-sandbox.test-support.ts";
+import { board as createBoardSnapshot } from "./chat-layout-fixtures.test-support.ts";
 import {
   createControlUiE2eSuite,
   holdModuleResponse,
@@ -24,7 +27,7 @@ const otherSessionKey = sessionKey.replace("agent:main:", "agent:other:");
 suite.define(() => {
   const sandbox = useCanvasSandboxFixture();
   it.each(["mission-control-1234567890ab4def8234567890abcdef", "mission-control"])(
-    "restores /dashboard/main/%s before hello",
+    "restores /dashboard/main/%s before the socket opens",
     async (reference) => {
       const delayTranscriptValidation =
         reference === "mission-control-1234567890ab4def8234567890abcdef";
@@ -53,30 +56,20 @@ suite.define(() => {
             ...createControlUiSessionRow(sessionKey, title, 1),
             boardFace: "dashboard",
           };
-          const board = {
-            sessionKey,
-            revision: 1,
-            tabs: [{ tabId: "main", title: "Main", position: 0, chatDock: "right" }],
-            widgets: [
-              {
-                name: "mission",
-                tabId: "main",
-                title,
-                contentKind: "html",
-                sizeW: 12,
-                sizeH: 8,
-                position: 0,
-                grantState: "none",
-                revision: 1,
-                frameUrl: `${new URL(suite.server.baseUrl).origin}/__openclaw__/board/${encodeURIComponent(sessionKey)}/mission/index.html?bt=synthetic-ticket`,
-                viewTicket: "synthetic-ticket",
-                viewTicketTtlMs: 1_200_000,
-                viewGeneration: "0123456789abcdef0123456789abcdef",
-                sandboxUrl: sandbox(widgetHtml).sandboxUrl,
-                sandboxPort: sandbox(widgetHtml).sandboxPort,
-              },
-            ],
-          };
+          const board = createBoardSnapshot(sessionKey, [
+            createBoardWidget({
+              name: "mission",
+              title,
+              sizeW: 12,
+              sizeH: 8,
+              frameUrl: `${new URL(suite.server.baseUrl).origin}/__openclaw__/board/${encodeURIComponent(sessionKey)}/mission/index.html?bt=synthetic-ticket`,
+              viewTicket: "synthetic-ticket",
+              viewTicketTtlMs: 1_200_000,
+              viewGeneration: "0123456789abcdef0123456789abcdef",
+              sandboxUrl: sandbox(widgetHtml).sandboxUrl,
+              sandboxPort: sandbox(widgetHtml).sandboxPort,
+            }),
+          ]);
           const gateway = await installMockGateway(page, {
             sessionKey,
             authMethod: "trusted-proxy",
@@ -101,15 +94,7 @@ suite.define(() => {
                     },
                   }
                 : {}),
-              "agents.list": {
-                defaultId: "main",
-                mainKey: "main",
-                scope: "per-sender",
-                agents: [
-                  { id: "main", name: "Main" },
-                  { id: "other", name: "Other" },
-                ],
-              },
+              "agents.list": agentRoster({ main: "Main", other: "Other" }, "main", "per-sender"),
               "board.get": board,
             },
           });
@@ -244,16 +229,14 @@ suite.define(() => {
           const historyValidator = delayTranscriptValidation
             ? await holdModuleResponse(page, /\/assets\/history-state-[^/]+\.js(?:\?.*)?$/u)
             : undefined;
+          await gateway.setOnline(false);
           reloading = true;
           try {
             await page.goto(`${suite.server.baseUrl}dashboard/main/${reference}`, {
               waitUntil: "domcontentloaded",
             });
-            await gateway.waitForRequest("connect");
             if (historyValidator) {
               await historyValidator.request;
-              // A cached dashboard does not depend on transcript receipt validation.
-              await page.locator(".board-widget__frame").waitFor({ state: "attached" });
               historyValidator.release();
               await page.getByText("Synthetic mission briefing.", { exact: true }).waitFor();
             }
@@ -279,6 +262,8 @@ suite.define(() => {
               }
             }
             expect(await gateway.getRequests("board.get")).toHaveLength(0);
+            expect(await gateway.getRequests("connect")).toHaveLength(0);
+            await page.locator(".chat-pane__connection-state").waitFor({ state: "visible" });
             const frame = page.locator(".board-widget__frame");
             await frame.waitFor({ state: "attached" });
             const warmFrame = await frame.elementHandle();
@@ -293,9 +278,12 @@ suite.define(() => {
               .getByText("All systems ready")
               .waitFor();
             await skeleton.waitFor({ state: "detached" });
+            await gateway.setOnline(true);
+            await gateway.waitForRequest("connect");
             await gateway.resolveDeferred("connect");
             await gateway.waitForRequest("board.get");
             await gateway.resolveDeferred("board.get");
+            await page.locator(".chat-pane__connection-state").waitFor({ state: "hidden" });
             await page.evaluate(
               () =>
                 new Promise<void>((resolve) => {

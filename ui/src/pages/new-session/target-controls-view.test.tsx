@@ -16,31 +16,6 @@ afterEach(() => {
   sessionStorage.clear();
 });
 
-it("dispatches catalog retry through the current callback without replacing the button", () => {
-  const original = vi.fn();
-  const replacement = vi.fn();
-  const [retry, setRetry] = createSignal(() => original);
-  const { container } = mountSolid(() => (
-    <CatalogBar
-      retrying={false}
-      groupPending
-      onRetry={retry()}
-      agentSelect={undefined}
-      placeSelect={undefined}
-    />
-  ));
-  const button = container.querySelector("button")!;
-  button.click();
-  expect(original).toHaveBeenCalledOnce();
-
-  setRetry(() => replacement);
-  flush();
-  expect(container.querySelector("button")).toBe(button);
-  button.click();
-  expect(original).toHaveBeenCalledOnce();
-  expect(replacement).toHaveBeenCalledOnce();
-});
-
 it("retains catalog retry readiness through coalesced requests and host completion", async () => {
   const first = createDeferred();
   const second = createDeferred();
@@ -100,12 +75,13 @@ it("retries a rejected catalog read through the current owner", async () => {
   const recovered = createDeferred();
   const [read, setRead] = createSignal<{ promise?: Promise<void> }>({});
   const retry = vi.fn(() => setRead({ promise: recovered.promise }));
+  const [onRetry, setOnRetry] = createSignal(() => retry);
   const { container } = mountSolid(() => (
     <CatalogBar
       groupPending
       retrying={false}
       retryRead={read().promise}
-      onRetry={retry}
+      onRetry={onRetry()}
       agentSelect={undefined}
       placeSelect={undefined}
     />
@@ -123,6 +99,14 @@ it("retries a rejected catalog read through the current owner", async () => {
   expect(retry).toHaveBeenCalledOnce();
   recovered.resolve();
   await waitForFast(() => expect(container.querySelector("button")!.disabled).toBe(false));
+  const button = container.querySelector("button")!;
+  const replacement = vi.fn();
+  setOnRetry(() => replacement);
+  flush();
+  expect(container.querySelector("button")).toBe(button);
+  button.click();
+  expect(retry).toHaveBeenCalledOnce();
+  expect(replacement).toHaveBeenCalledOnce();
 });
 
 it.each([

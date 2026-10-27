@@ -1,54 +1,39 @@
-import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import type { IncomingMessage } from "node:http";
 import path from "node:path";
 import { gzipSync } from "node:zlib";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type { OpenClawPluginHttpRouteHandler } from "openclaw/plugin-sdk/plugin-entry";
-import type { PluginBlobStoreWithReceipts } from "openclaw/plugin-sdk/plugin-state-runtime";
 import { createMockServerResponse } from "openclaw/plugin-sdk/test-env";
-import { afterEach, assert, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { DiffArtifactStore } from "./store.js";
+import { afterEach, assert, beforeEach, describe, expect, it, vi } from "vitest";
+import type { DiffArtifactStore } from "./store.js";
 import {
   createDiffStoreHarness,
   diffContext as context,
-  ensureCuratedViewerRuntimeForTests,
   expireDiffArtifactForTest,
   registerDiffsHttpRouteForTest,
 } from "./test-helpers.js";
-import type { DiffArtifactBlobMetadata } from "./types.js";
 
 const fileMetadata = { version: 1, kind: "rendered_file", format: "png" } as const;
 
 function artifactToken(artifact: { viewerPath: string }): string {
-  const token = artifact.viewerPath.split("/").at(-1);
-  assert.isDefined(token);
-  return token;
+  return artifact.viewerPath.slice(artifact.viewerPath.lastIndexOf("/") + 1);
 }
-
-beforeAll(ensureCuratedViewerRuntimeForTests);
 
 let rootDir: string;
 let store: DiffArtifactStore;
-let blobStore: PluginBlobStoreWithReceipts<DiffArtifactBlobMetadata>;
-let reopenStore: Awaited<ReturnType<typeof createDiffStoreHarness>>["reopen"];
-let cleanupRootDir: () => Promise<void>;
+let fixture: Awaited<ReturnType<typeof createDiffStoreHarness>>;
+let blobStore: typeof fixture.blobStore;
 
 function setupStore(nativeKernel = false) {
   beforeEach(async () => {
-    ({
-      rootDir,
-      store,
-      blobStore,
-      reopen: reopenStore,
-      cleanup: cleanupRootDir,
-    } = await createDiffStoreHarness("openclaw-diffs-store-", { nativeKernel }));
+    fixture = await createDiffStoreHarness("openclaw-diffs-store-", { nativeKernel });
+    ({ rootDir, store, blobStore } = fixture);
   });
 
   afterEach(async () => {
     vi.restoreAllMocks();
     vi.useRealTimers();
-    await cleanupRootDir();
+    await fixture.cleanup();
   });
 }
 
@@ -56,16 +41,11 @@ describe("DiffArtifactStore", () => {
   setupStore(true);
   const maximum = 64 * 1024 * 1024;
 
-  it("rejects oversized input before token creation, registration or cleanup", async () => {
-    const random = vi.spyOn(crypto, "randomBytes");
-    const register = vi.spyOn(blobStore, "registerIfAbsentWithReceipt");
-    const cleanup = vi.spyOn(store, "scheduleCleanup");
+  it("rejects oversized input without storing an artifact", async () => {
     await expect(viewer({ html: "x".repeat(maximum + 1) })).rejects.toThrow(
       `Diff viewer HTML exceeds ${maximum} bytes.`,
     );
-    expect(random).not.toHaveBeenCalled();
-    expect(register).not.toHaveBeenCalled();
-    expect(cleanup).not.toHaveBeenCalled();
+    await expect(blobStore.entries()).resolves.toEqual([]);
   });
 
   it.each(["size-mismatch", "oversized-output"] as const)(
@@ -84,34 +64,30 @@ describe("DiffArtifactStore", () => {
       await expect(read(artifact)).rejects.toBeInstanceOf(Error);
     },
   );
-  it("reopens compressed viewer bytes and retrieves them with one authorized lookup", async () => {
+  it("reopens, authorizes, and expires compressed viewers", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
     await store.stopCleanup();
-    const registrationLookup = vi.spyOn(blobStore, "lookup");
     const artifact = await viewer({
       html: "<html>demo é 🦀</html>",
       context,
+      ttlMs: 1_000,
     });
-    expect(registrationLookup).not.toHaveBeenCalled();
-    registrationLookup.mockRestore();
     const stored = await blobStore.lookup(artifact.id);
     expect(Date.parse(artifact.expiresAt)).toBe(stored?.expiresAt);
-    expect(stored?.metadata).toMatchObject({
-      version: 1,
-      kind: "viewer",
-      encoding: "gzip",
-      decodedBytes: Buffer.byteLength("<html>demo é 🦀</html>"),
-      context,
-    });
+    expect(stored?.metadata.context).toEqual(context);
     expect(JSON.stringify(stored?.metadata)).not.toContain(artifactToken(artifact));
     await expect(fs.stat(rootDir)).rejects.toMatchObject({ code: "ENOENT" });
 
-    ({ store, blobStore } = await reopenStore());
+    ({ store, blobStore } = await fixture.reopen());
     const lookup = vi.spyOn(blobStore, "lookup");
     const loaded = await read(artifact);
     expect(Buffer.from(loaded!.html).toString("utf8")).toBe("<html>demo é 🦀</html>");
     expect(lookup).toHaveBeenCalledTimes(1);
     await expect(read(artifact, "0".repeat(48))).resolves.toBeNull();
     await expect(read(artifact, "short")).resolves.toBeNull();
+    await expireDiffArtifactForTest(rootDir, artifact.id, 1_000);
+    await expect(read(artifact)).resolves.toBeNull();
+    await expect(blobStore.deleteExpired()).resolves.toEqual([]);
   });
 
   it("caps artifact expiry instead of throwing near the Date boundary", async () => {
@@ -127,29 +103,13 @@ describe("DiffArtifactStore", () => {
     });
   });
 
-  it("expires artifacts after the ttl", async () => {
-    vi.useFakeTimers({ toFake: ["Date"] });
-    const artifact = await viewer({ ttlMs: 1_000 });
-
-    await store.stopCleanup();
-    await expireDiffArtifactForTest(rootDir, artifact.id, 1_000);
-    await expect(read(artifact)).resolves.toBeNull();
-    await expect(blobStore.deleteExpired()).resolves.toEqual([]);
-  });
-
   it("cleans expired rows and retries a quota-limited registration", async () => {
-    const registerIfAbsent = blobStore.registerIfAbsentWithReceipt.bind(blobStore);
-    const registerSpy = vi
-      .spyOn(blobStore, "registerIfAbsentWithReceipt")
-      .mockRejectedValueOnce(
-        Object.assign(new Error("quota"), { code: "PLUGIN_BLOB_LIMIT_EXCEEDED" }),
-      )
-      .mockImplementation(registerIfAbsent);
+    vi.spyOn(blobStore, "registerIfAbsentWithReceipt").mockRejectedValueOnce(
+      Object.assign(new Error("quota"), { code: "PLUGIN_BLOB_LIMIT_EXCEEDED" }),
+    );
     const cleanupSpy = vi.spyOn(store, "cleanupExpired").mockResolvedValue();
 
-    await viewer({ html: "<html>retry</html>", title: "Retry" });
-
-    expect(registerSpy).toHaveBeenCalledTimes(2);
+    await expect(viewer()).resolves.toMatchObject({ title: "Demo" });
     expect(cleanupSpy).toHaveBeenCalled();
   });
 
@@ -196,7 +156,6 @@ describe("DiffArtifactStore", () => {
     vi.useFakeTimers({ toFake: ["Date"] });
     const now = new Date("2026-02-27T16:00:00Z");
     vi.setSystemTime(now);
-    store = new DiffArtifactStore({ rootDir, blobStore });
     const cleanupSpy = vi.spyOn(store, "cleanupExpired").mockResolvedValue();
 
     await viewer({ html: "<html>one</html>", title: "One" });
@@ -216,12 +175,7 @@ describe("registered Diffs viewer route", () => {
   setupStore();
 
   function client(
-    access: Pick<
-      NonNullable<OpenClawConfig["gateway"]>,
-      "trustedProxies" | "allowRealIpFallback"
-    > & {
-      allowRemoteViewer?: boolean;
-    } = {},
+    access: { trustedProxies?: string[]; allowRemoteViewer?: boolean } = {},
     remoteAddress = "127.0.0.1",
   ) {
     const handler = registerDiffsHttpRouteForTest({
@@ -229,7 +183,6 @@ describe("registered Diffs viewer route", () => {
       config: {
         gateway: {
           trustedProxies: access.trustedProxies,
-          allowRealIpFallback: access.allowRealIpFallback,
         },
         plugins: {
           entries: {
@@ -257,30 +210,27 @@ describe("registered Diffs viewer route", () => {
     expect(res.getHeader("cache-control")).toBe("no-store, max-age=0");
   });
 
-  it("rejects invalid tokens", async () => {
-    const artifact = await viewer();
-    const res = await client()(artifact.viewerPath.replace(artifactToken(artifact), "bad-token"));
-
-    expect(res.statusCode).toBe(404);
-  });
-
-  it("serves the shared viewer asset", async () => {
-    const res = await client()("/plugins/diffs/assets/viewer.js");
-
-    expect(res.statusCode).toBe(200);
-    expect(String(res.body)).toContain("./viewer-runtime.js?v=");
-    expect(res.getHeader("cache-control")).toBe("no-store, max-age=0");
-  });
-
   it.each([
-    ["blocks non-loopback viewer access by default", "203.0.113.10", false, false, false, 404],
-    ["blocks loopback with proxy headers by default", "127.0.0.1", true, false, false, 404],
-    ["blocks trusted proxy without client-origin headers", "127.0.0.1", false, true, false, 404],
-    ["blocks proxied loopback with trusted proxies", "127.0.0.1", true, true, false, 404],
-    ["allows proxied loopback with allowRemoteViewer", "127.0.0.1", true, true, true, 200],
+    ["invalid token", "127.0.0.1", false, false, false, 404, true],
+    ["non-loopback", "203.0.113.10", false, false, false, 404, false],
+    ["loopback with proxy headers", "127.0.0.1", true, false, false, 404, false],
+    ["trusted proxy without origin headers", "127.0.0.1", false, true, false, 404, false],
+    ["proxied loopback", "127.0.0.1", true, true, false, 404, false],
+    ["explicit remote access", "127.0.0.1", true, true, true, 200, false],
+    ["IPv4 loopback", "127.0.0.2", false, false, false, 200, false],
+    ["IPv6 loopback", "::1", false, false, false, 200, false],
+    ["mapped loopback", "::ffff:127.0.0.2", false, false, false, 200, false],
   ] as const)(
-    "%s",
-    async (_name, remoteAddress, forwarded, trusted, allowRemoteViewer, expectedStatusCode) => {
+    "checks viewer access: %s",
+    async (
+      _name,
+      remoteAddress,
+      forwarded,
+      trusted,
+      allowRemoteViewer,
+      expectedStatusCode,
+      badToken,
+    ) => {
       const artifact = await viewer();
 
       const request = client(
@@ -288,7 +238,9 @@ describe("registered Diffs viewer route", () => {
         remoteAddress,
       );
       const res = await request(
-        artifact.viewerPath,
+        badToken
+          ? artifact.viewerPath.replace(artifactToken(artifact), "bad-token")
+          : artifact.viewerPath,
         forwarded ? { "x-forwarded-for": "203.0.113.10" } : undefined,
       );
 

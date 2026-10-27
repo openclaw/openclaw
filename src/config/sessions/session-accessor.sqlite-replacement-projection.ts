@@ -193,7 +193,7 @@ async function applyMemorySessionEntryReplacementProjection<T, TReplacement>(
     const config = params.skipMaintenance === false ? resolveMaintenanceConfig() : undefined;
     const preservation =
       config && config.mode !== "warn"
-        ? await prepareSessionMaintenancePreservation(memory.path)
+        ? await prepareSessionMaintenancePreservation(memory.path, { env: params.env })
         : undefined;
     try {
       readSessionActorStorageResult(
@@ -219,6 +219,7 @@ async function applyMemorySessionEntryReplacementProjection<T, TReplacement>(
             assertCurrent() {
               memory.authority.assertCurrent();
               assertSourceCurrent?.();
+              preservation?.capture();
             },
           },
           { committed: () => params.onLifecycleCommitted?.(false) },
@@ -467,6 +468,7 @@ async function applySqliteSessionEntryReplacementProjection<T, TReplacement>(
             params.skipMaintenance === false
               ? await prepareSessionMaintenancePreservation(params.storePath, {
                   native: !useWorker,
+                  env: resolved.env,
                 })
               : undefined;
           try {
@@ -564,6 +566,9 @@ async function applySqliteSessionEntryReplacementProjection<T, TReplacement>(
               assertCurrent,
               {
                 identityAgentId: resolved.agentId,
+                beforeCommit: (_publication, retained) => {
+                  preparedPreservation?.capture(retained);
+                },
                 onLifecycleCommitted: params.onLifecycleCommitted,
                 afterCommitted: params.afterCommitted
                   ? (context) => params.afterCommitted!(operation.result, context)

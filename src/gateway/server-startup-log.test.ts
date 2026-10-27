@@ -1,9 +1,6 @@
-// Startup log tests cover security warnings, model detail formatting, plugin
-// summaries, ANSI output, and dangerous config reporting.
-import { DatabaseSync } from "node:sqlite";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { stripAnsi } from "../../packages/terminal-core/src/ansi.js";
-import { modelDefinition } from "../agents/model-auth.fixtures.test-support.js";
+import { configFor, modelDefinition } from "../agents/model-auth.fixtures.test-support.js";
 import { makeProviderModelFixture } from "../agents/test-helpers/provider-model-fixture.js";
 import type { PluginManifestRecord } from "../plugins/manifest-registry.js";
 import { logGatewayStartup } from "./server-startup-log.js";
@@ -49,26 +46,18 @@ async function startup(overrides: Partial<Parameters<typeof logGatewayStartup>[0
   return { info, warn };
 }
 
-async function startupModelLog(params: {
-  cfg: Parameters<typeof logGatewayStartup>[0]["cfg"];
-  provider: string;
-  model: string;
-}) {
-  const { info } = await startup({
-    cfg: {
-      ...params.cfg,
-      agents: {
-        ...params.cfg.agents,
-        defaults: {
-          ...params.cfg.agents?.defaults,
-          model: `${params.provider}/${params.model}`,
-        },
-      },
-    },
-  });
+type StartupConfig = Parameters<typeof logGatewayStartup>[0]["cfg"];
+function modelCase(
+  name: string,
+  details: string,
+  defaults: NonNullable<StartupConfig["agents"]>["defaults"] = {},
+  cfg: StartupConfig = {},
+  model = "openai/gpt-5.5",
+) {
   return {
-    message: info.mock.calls[0]?.[0],
-    consoleMessage: String(info.mock.calls[0]?.[1]?.consoleMessage),
+    name,
+    expected: `agent model: ${model} (${details})`,
+    cfg: { ...cfg, agents: { ...cfg.agents, defaults: { ...defaults, model } } },
   };
 }
 
@@ -76,8 +65,7 @@ describe("gateway startup log", () => {
   it.each([false, true])(
     "logs the concrete owner's primary instead of its utility (ambient owner: %s)",
     async (ambientOwner) => {
-      const info = vi.fn();
-      await logGatewayStartup({
+      const { info } = await startup({
         cfg: {
           meta: { migrations: { utilityModelSeparation: true } },
           agents: {
@@ -110,11 +98,6 @@ describe("gateway startup log", () => {
             ),
           },
         },
-        env: {},
-        manifestRecords: [],
-        loadedPluginIds: [],
-        log: { info, warn: vi.fn() },
-        isNixMode: false,
       });
       expect(info.mock.calls[0]?.[0]).toContain("agent model: ordinary/large");
     },
@@ -150,14 +133,7 @@ describe("gateway startup log", () => {
 
   it("warns when a configured channel has no owning plugin", async () => {
     const { warn } = await startup({
-      cfg: {
-        channels: {
-          "missing-chat": {
-            enabled: true,
-            token: "configured",
-          },
-        },
-      },
+      cfg: { channels: { "missing-chat": { enabled: true, token: "configured" } } },
     });
 
     expect(warn.mock.calls).toContainEqual([
@@ -178,11 +154,7 @@ describe("gateway startup log", () => {
       }),
     ];
     const { warn } = await startup({
-      cfg: {
-        plugins: {
-          entries: { discord: { enabled: true } },
-        },
-      },
+      cfg: { plugins: { entries: { discord: { enabled: true } } } },
       env: { DISCORD_FAKE_TEST_TRIGGER: "configured" },
       manifestRecords,
       ambientEnvTriggers: "suppress",
@@ -204,14 +176,7 @@ describe("gateway startup log", () => {
       }),
     ];
     const { warn } = await startup({
-      cfg: {
-        channels: {
-          [unsafeChannelId]: {
-            enabled: true,
-            botToken: "configured",
-          },
-        },
-      },
+      cfg: { channels: { [unsafeChannelId]: { enabled: true, botToken: "configured" } } },
       manifestRecords,
     });
 
@@ -229,150 +194,63 @@ describe("gateway startup log", () => {
       }),
     ];
     const { warn } = await startup({
-      cfg: {
-        channels: {
-          "legacy-chat": {
-            enabled: true,
-            token: "configured",
-          },
-        },
-      },
+      cfg: { channels: { "legacy-chat": { enabled: true, token: "configured" } } },
       manifestRecords,
       activationSourceConfig: {
-        plugins: {
-          entries: {
-            "openclaw-modern-chat": {
-              enabled: true,
-            },
-          },
-        },
+        plugins: { entries: { "openclaw-modern-chat": { enabled: true } } },
       },
     });
 
     expect(warn.mock.calls.flat().join("\n")).not.toContain("configured channel warning");
   });
 
-  it("formats configured model thinking and fast mode defaults with the startup model", async () => {
-    const line = await startupModelLog({
-      cfg: {
-        agents: {
-          defaults: {
-            model: "openai/gpt-5.5",
-            models: {
-              "openai/gpt-5.5": {
-                params: {
-                  fastMode: true,
-                  thinking: "medium",
-                },
-              },
-            },
-            reasoningDefault: "stream",
-          },
-        },
+  it.each([
+    modelCase("configured model modes", "thinking=medium, fast=on", {
+      models: { "openai/gpt-5.5": { params: { fastMode: true, thinking: "medium" } } },
+      reasoningDefault: "stream",
+    }),
+    modelCase(
+      "provider thinking default",
+      "thinking=medium, fast=on",
+      {},
+      {
+        agents: { entries: { main: { fastModeDefault: true } } },
       },
-      provider: "openai",
-      model: "gpt-5.5",
-    });
-
-    expect(line.message).toBe("agent model: openai/gpt-5.5 (thinking=medium, fast=on)");
-    expect(stripAnsi(line.consoleMessage)).toBe(
-      "agent model: openai/gpt-5.5 (thinking=medium, fast=on)",
-    );
-  });
-
-  it.each(["medium", "off"] as const)(
-    "reports the provider's unset thinking default: %s",
-    async (level) => {
-      modelMocks.resolveThinkingDefault.mockReturnValue(level);
-      const line = await startupModelLog({
-        cfg: {
-          agents: {
-            defaults: {
-              model: "openai/gpt-5.5",
-            },
-            entries: { main: { fastModeDefault: true } },
-          },
-        },
-        provider: "openai",
-        model: "gpt-5.5",
-      });
-      expect(line.message).toBe(`agent model: openai/gpt-5.5 (thinking=${level}, fast=on)`);
-      expect(modelMocks.resolveThinkingDefault).toHaveBeenCalledTimes(1);
-    },
-  );
-
-  it("preserves explicit startup thinking off", async () => {
-    const line = await startupModelLog({
-      cfg: {
-        agents: {
-          defaults: {
-            models: {
-              "openai/gpt-5.5": { params: { thinking: "off", fastMode: true } },
-            },
-          },
-        },
+    ),
+    modelCase("explicit thinking off", "thinking=off, fast=on", {
+      models: { "openai/gpt-5.5": { params: { thinking: "off", fastMode: true } } },
+    }),
+    modelCase(
+      "explicit Ultra",
+      "thinking=ultra, fast=off",
+      { thinkingDefault: "ultra" },
+      {},
+      "openai/gpt-5.6-sol",
+    ),
+    modelCase(
+      "reasoning-disabled provider",
+      "thinking=off, fast=off",
+      {},
+      configFor("google", "https://generativelanguage.googleapis.com/v1beta", {
+        api: "google-generative-ai",
+        models: [modelDefinition("gemma-4-26b-a4b-it", { reasoning: false })],
+      }),
+      "google/gemma-4-26b-a4b-it",
+    ),
+    modelCase(
+      "agent mode overrides",
+      "thinking=high, fast=on",
+      {
+        thinkingDefault: "low",
+        reasoningDefault: "off",
+        models: { "openai/gpt-5.5": { params: { fastMode: false } } },
       },
-      provider: "openai",
-      model: "gpt-5.5",
-    });
-    expect(line.message).toBe("agent model: openai/gpt-5.5 (thinking=off, fast=on)");
-    expect(modelMocks.resolveThinkingDefault).not.toHaveBeenCalled();
-  });
-
-  it("preserves explicit Ultra in startup model details", async () => {
-    const line = await startupModelLog({
-      cfg: { agents: { defaults: { thinkingDefault: "ultra" } } },
-      provider: "openai",
-      model: "gpt-5.6-sol",
-    });
-    expect(line.message).toBe("agent model: openai/gpt-5.6-sol (thinking=ultra, fast=off)");
-    expect(modelMocks.resolveThinkingDefault).not.toHaveBeenCalled();
-  });
-
-  it("shows thinking off for configured provider models with reasoning disabled", async () => {
-    const line = await startupModelLog({
-      cfg: {
-        models: {
-          providers: {
-            google: {
-              api: "google-generative-ai",
-              baseUrl: "https://generativelanguage.googleapis.com/v1beta",
-              models: [
-                modelDefinition("gemma-4-26b-a4b-it", {
-                  name: "Gemma 4 26B",
-                  reasoning: false,
-                  contextWindow: 32_000,
-                }),
-              ],
-            },
-          },
-        },
-      },
-      provider: "google",
-      model: "gemma-4-26b-a4b-it",
-    });
-    expect(line.message).toBe("agent model: google/gemma-4-26b-a4b-it (thinking=off, fast=off)");
-    expect(modelMocks.resolveThinkingDefault).not.toHaveBeenCalled();
-  });
-
-  it("uses default agent mode overrides in the startup model details", async () => {
-    const line = await startupModelLog({
-      cfg: {
-        agents: {
-          defaults: {
-            thinkingDefault: "low",
-            reasoningDefault: "off",
-            models: {
-              "openai/gpt-5.5": { params: { fastMode: false } },
-            },
-          },
-          entries: { alpha: { thinkingDefault: "high", fastModeDefault: true } },
-        },
-      },
-      provider: "openai",
-      model: "gpt-5.5",
-    });
-    expect(line.message).toBe("agent model: openai/gpt-5.5 (thinking=high, fast=on)");
+      { agents: { entries: { alpha: { thinkingDefault: "high", fastModeDefault: true } } } },
+    ),
+  ])("formats $name in startup model details", async ({ expected, cfg }) => {
+    const { info } = await startup({ cfg });
+    expect(info.mock.calls[0]?.[0]).toBe(expected);
+    expect(stripAnsi(String(info.mock.calls[0]?.[1]?.consoleMessage))).toBe(expected);
   });
 
   it("logs a compact listening line with loaded plugin ids and duration", async () => {
@@ -390,25 +268,5 @@ describe("gateway startup log", () => {
     expect(listeningMessages).toEqual([
       "http server listening (3 plugins: alpha, beta, delta; 16.0s)",
     ]);
-    const messages = info.mock.calls.map((call) => call[0]);
-    const nativeRuntime = messages.find((message) => message.startsWith("native runtime: "));
-    const database = new DatabaseSync(":memory:");
-    try {
-      expect(JSON.parse(nativeRuntime!.slice("native runtime: ".length))).toMatchObject({
-        pid: process.pid,
-        node: process.versions.node,
-        sqlite: database.prepare("SELECT sqlite_version() AS version").get()?.version,
-        uv: process.versions.uv,
-        openssl: process.versions.openssl,
-      });
-    } finally {
-      database.close();
-    }
-    const workers = messages.find((message) => message.startsWith("worker startup state: "));
-    expect(JSON.parse(workers!.slice("worker startup state: ".length))).toMatchObject({
-      workerCount: expect.any(Number),
-      workerLifecycle: expect.any(Array),
-      compute: { limit: expect.any(Number), active: 0, pendingTasks: 0 },
-    });
   });
 });

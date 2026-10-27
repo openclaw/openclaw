@@ -25,12 +25,34 @@ export function activitySettings(): ReturnType<typeof loadSettings> {
 
 export type TestActivityPage = ReturnType<typeof createActivityPage>;
 
+class UnavailableActivityCapabilities {
+  router!: never;
+  connectionBootstrap!: never;
+  agentSelection!: never;
+  settingsAgentSelection!: never;
+  acquireChannels!: never;
+  config!: never;
+  scopeUpgrade!: never;
+  sidebarAttention!: never;
+  runtimeConfig!: never;
+  placementStartup!: never;
+  plugins!: never;
+  assistantDock!: never;
+  overlays!: never;
+  navigation!: never;
+  theme!: never;
+  nativeChatDrafts!: never;
+  webPush!: never;
+  chatSubmissions!: never;
+  chatAttachmentHandoff!: never;
+}
+
 export function createActivityContext(
   source: ApplicationContext["gateway"],
   capabilities: Pick<ApplicationContext, "sessions" | "agents" | "agentIdentity">,
   basePath = "",
 ): ApplicationContext {
-  return {
+  const context = Object.assign(new UnavailableActivityCapabilities(), {
     gateway: source,
     ...capabilities,
     basePath,
@@ -42,65 +64,17 @@ export function createActivityContext(
     preload: vi.fn(async () => {}),
     nativeDeviceSettings: null,
     nativeNotifications: null,
-    // These tests exercise Activity only; unexpected capability reads must fail.
-    get router(): never {
-      throw new Error("Activity fixture does not provide router");
+  });
+  // Unsupported fields are runtime markers; the proxy always throws before returning them.
+  return new Proxy(context, {
+    get(target, key, receiver) {
+      const value = Reflect.get(target, key, receiver);
+      if (Object.hasOwn(target, key) && value === undefined) {
+        throw new Error(`Activity fixture does not provide ${String(key)}`);
+      }
+      return value;
     },
-    get connectionBootstrap(): never {
-      throw new Error("Activity fixture does not provide connectionBootstrap");
-    },
-    get agentSelection(): never {
-      throw new Error("Activity fixture does not provide agentSelection");
-    },
-    get settingsAgentSelection(): never {
-      throw new Error("Activity fixture does not provide settingsAgentSelection");
-    },
-    get channels(): never {
-      throw new Error("Activity fixture does not provide channels");
-    },
-    get config(): never {
-      throw new Error("Activity fixture does not provide config");
-    },
-    get scopeUpgrade(): never {
-      throw new Error("Activity fixture does not provide scopeUpgrade");
-    },
-    get sidebarAttention(): never {
-      throw new Error("Activity fixture does not provide sidebarAttention");
-    },
-    get runtimeConfig(): never {
-      throw new Error("Activity fixture does not provide runtimeConfig");
-    },
-    get placementStartup(): never {
-      throw new Error("Activity fixture does not provide placementStartup");
-    },
-    get plugins(): never {
-      throw new Error("Activity fixture does not provide plugins");
-    },
-    get assistantDock(): never {
-      throw new Error("Activity fixture does not provide assistantDock");
-    },
-    get overlays(): never {
-      throw new Error("Activity fixture does not provide overlays");
-    },
-    get navigation(): never {
-      throw new Error("Activity fixture does not provide navigation");
-    },
-    get theme(): never {
-      throw new Error("Activity fixture does not provide theme");
-    },
-    get nativeChatDrafts(): never {
-      throw new Error("Activity fixture does not provide nativeChatDrafts");
-    },
-    get webPush(): never {
-      throw new Error("Activity fixture does not provide webPush");
-    },
-    get chatSubmissions(): never {
-      throw new Error("Activity fixture does not provide chatSubmissions");
-    },
-    get chatAttachmentHandoff(): never {
-      throw new Error("Activity fixture does not provide chatAttachmentHandoff");
-    },
-  };
+  });
 }
 
 export function createActivityPage(context: ApplicationContext, initial?: RouteLocation) {
@@ -127,14 +101,19 @@ export function createActivityPage(context: ApplicationContext, initial?: RouteL
   };
 }
 
-export function previews(page: TestActivityPage) {
+export async function settleActivity() {
+  await new Promise(requestAnimationFrame);
   flush();
+}
+
+export async function previews(page: TestActivityPage) {
+  await settleActivity();
   const entries = page.container.querySelectorAll(".activity-entry__preview");
   return Array.from(entries, (entry) => entry.textContent);
 }
 
-export function expandFirst(page: TestActivityPage) {
-  flush();
+export async function expandFirst(page: TestActivityPage) {
+  await settleActivity();
   const row = page.container.querySelector<HTMLDetailsElement>(".activity-entry")!;
   row.open = true;
   row.dispatchEvent(new Event("toggle"));

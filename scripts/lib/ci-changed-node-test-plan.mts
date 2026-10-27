@@ -261,6 +261,7 @@ const BUILT_ARTIFACT_TEST_INPUTS = new Set([
   "extensions/browser/chrome-extension/relay-key.test-support.ts",
   "extensions/browser/src/browser/extension-install.native-host.e2e.test.ts",
   "extensions/browser/src/browser/extension-install.test-support.ts",
+  "scripts/test-built-source-verifiers.mts",
 ]);
 
 /**
@@ -426,6 +427,7 @@ export function resolveChangedNodeTestTargets(
 ): string[] {
   const cwd = options.cwd ?? process.cwd();
   const paths = changedPaths.filter((file) => !isIndependentlyCheckedDocumentation(file, cwd));
+  const policyTargets = resolvePolicyTestTargets(changedPaths, { cwd, baseRef: options.baseRef });
   const aggressive = options.selectionMode === "aggressive";
   const smoke = aggressive ? AGGRESSIVE_PR_SMOKE_TEST_FILES : PR_SMOKE_TEST_FILES;
   const selections: { rule: string; input: string; targets: string[] }[] = [];
@@ -469,8 +471,8 @@ export function resolveChangedNodeTestTargets(
   recordSelection({ rule: "protected-owner", input: paths.join(", "), targets: ownerOptIns });
   recordSelection({
     rule: "policy-watch",
-    input: paths.join(", "),
-    targets: resolvePolicyTestTargets(paths),
+    input: changedPaths.join(", "),
+    targets: policyTargets,
   });
   recordSelection({ rule: "fixed-smoke", input: "PR", targets: smoke });
   const owners = [
@@ -489,7 +491,7 @@ export function resolveChangedNodeTestTargets(
       ...(paths.some((file) => listRunnableVitestConfigTargets().includes(file))
         ? ["test/vitest-projects-config.test.ts"]
         : []),
-      ...resolvePolicyTestTargets(paths),
+      ...policyTargets,
     ]),
   ];
   let inventory: string[] | undefined;
@@ -1029,7 +1031,7 @@ export function createChangedNodeTestShards(
   const selectedTargets =
     options.selectedTestTargets ?? resolveChangedNodeTestTargets(changedPaths, options);
   const livePaths = changedPaths.filter((file) => existsSync(path.join(cwd, file)));
-  const policyTargets = new Set(resolvePolicyTestTargets(changedPaths));
+  const policyTargets = new Set(resolvePolicyTestTargets(changedPaths, { cwd }));
   const resolvedTargetPlans = resolvePreciseChangedTargets(selectedTargets, cwd);
   if (resolvedTargetPlans.some(({ plans }) => plans.length === 0)) {
     return fallback("selected test lacks an executable owner");

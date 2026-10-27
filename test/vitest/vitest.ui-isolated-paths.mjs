@@ -29,6 +29,7 @@ export const uiIsolatedTestFiles = [
   "ui/src/components/mcp-app-bridge.test.ts",
   "ui/src/components/mcp-app-panel.test.tsx",
   "ui/src/components/mcp-app-view-lifecycle.test.ts",
+  "ui/src/components/mcp-app-view-resize.test.ts",
   "ui/src/components/mcp-app-view.test.ts",
   "ui/src/components/promise-modal-host-loading.test.ts",
   "ui/src/components/resizable-divider.test.ts",
@@ -51,11 +52,11 @@ export const uiIsolatedTestFiles = [
   "ui/src/pages/chat/chat-pane-identity.test.ts",
   "ui/src/pages/chat/chat-pane-keyboard-focus.test.ts",
   "ui/src/pages/chat/chat-pane-lifecycle.test.ts",
+  // Holds mobile chrome before first paint to verify its reserved layout slots.
+  "ui/src/pages/chat/chat-pane-mobile-chrome-loading.test.tsx",
   "ui/src/pages/chat/chat-pane-pull-requests.test.ts",
   "ui/src/pages/chat/chat-pane-retained-presentation.test.ts",
   "ui/src/pages/chat/chat-pane-retention.test.ts",
-  // Request-level speed proof replaces the provider SDK transport and SQL asset loaders.
-  "ui/src/pages/chat/chat-pane-session-controls.permissions.node.test.ts",
   "ui/src/pages/chat/chat-pane-swarm-startup.test.ts",
   "ui/src/pages/chat/chat-pane.read-marker.test.ts",
   "ui/src/pages/chat/chat-pane.session-discussion.test.ts",
@@ -63,6 +64,8 @@ export const uiIsolatedTestFiles = [
   "ui/src/pages/chat/chat-pane-tool-icons.test.tsx",
   // Holds the editor import before first use; other comment suites load it eagerly.
   "ui/src/pages/chat/components/chat-annotation-lazy.test.ts",
+  // The cold widget placeholder proof holds the renderer import.
+  "ui/src/pages/chat/components/chat-message-deferred.test.tsx",
   // Holds the rich-message import before first use by any other transcript suite.
   "ui/src/pages/chat/components/chat-rich-message-lazy.test.tsx",
   "ui/src/pages/chat/components/chat-transcript-controller.test.ts",

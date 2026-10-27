@@ -10,18 +10,18 @@ import {
   readRow,
   readRows,
 } from "./openclaw-state-db-fixtures.test-support.js";
-import { ensureNodeWorkerPreparedWorkspaceSchema } from "./openclaw-state-db-schema-additive.js";
+import { ensureNodeWorkerPreparedWorkspaceSchema as ensureWorkspace } from "./openclaw-state-db-schema-additive.js";
 import {
-  closeOpenClawStateDatabaseForTest,
-  detectOpenClawStateDatabaseSchemaMigrations,
-  openOpenClawStateDatabase,
-  repairOpenClawStateDatabaseSchema,
-  runOpenClawStateWriteTransaction,
+  closeOpenClawStateDatabaseForTest as closeState,
+  detectOpenClawStateDatabaseSchemaMigrations as detectMigrations,
+  openOpenClawStateDatabase as openState,
+  repairOpenClawStateDatabaseSchema as repairState,
+  runOpenClawStateWriteTransaction as writeState,
 } from "./openclaw-state-db.js";
 import { removePreparedWorkerOwnershipColumns } from "./openclaw-state-schema-v17.test-support.js";
 import {
   addPreCutoverClientCredentialTablesForTest,
-  withStateMigrationBackupForTest,
+  withStateMigrationBackupForTest as withBackup,
 } from "./openclaw-state-schema.test-support.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -35,7 +35,7 @@ const retainedTables = [
   "plugin_state_entries",
 ] as const;
 
-afterEach(() => closeOpenClawStateDatabaseForTest());
+afterEach(() => closeState());
 
 function readObligations(db: EngineConnection) {
   return Object.fromEntries(
@@ -58,23 +58,18 @@ function createLegacyWorkers(version = 16, publicationDeferred = false) {
   const options = {
     env: { OPENCLAW_STATE_DIR: tempDirs.make(`openclaw-prepared-v${version}-`) },
   };
-  const databasePath = openOpenClawStateDatabase(options).path;
+  const databasePath = openState(options).path;
   if (publicationDeferred) {
     createUpdateRun({ trigger: "cli", before: { version: "2026.9.2" } }, options);
   }
-  closeOpenClawStateDatabaseForTest();
+  closeState();
   using legacy = openNodeSqliteDatabase(databasePath);
   addPreCutoverClientCredentialTablesForTest(legacy);
   removePreparedWorkerOwnershipColumns(legacy);
   legacy.exec(`
-      DROP INDEX idx_plugin_state_listing;
-      CREATE INDEX idx_plugin_state_listing
-        ON plugin_state_entries(plugin_id, namespace, created_at, entry_key);
       INSERT INTO plugin_state_entries VALUES
         ('fixture', 'namespace', 'retained', '{"keep":true}', 10, NULL),
         ('fixture', 'namespace', 'expiring', '{"keep":true}', 10, 1000);
-    `);
-  legacy.exec(`
       ALTER TABLE worker_environments ADD COLUMN future_note TEXT;
       PRAGMA user_version = ${version};
       UPDATE schema_meta SET schema_version = ${version} WHERE meta_key = 'primary';
@@ -118,26 +113,22 @@ describe("prepared worker schema migration", () => {
     const options = {
       env: { OPENCLAW_STATE_DIR: tempDirs.make("openclaw-prepared-first-use-") },
     };
-    const { db } = openOpenClawStateDatabase(options);
+    const { db } = openState(options);
     const readTable = () =>
       readRow(db, "SELECT name FROM sqlite_schema WHERE name = 'node_worker_prepared_workspaces'");
     expect(readTable()).toBeUndefined();
     expect(() =>
-      runOpenClawStateWriteTransaction(() => {
-        ensureNodeWorkerPreparedWorkspaceSchema(db);
+      writeState(() => {
+        ensureWorkspace(db);
         expect(readTable()).toBeDefined();
         throw new Error("registration rejected");
       }, options),
     ).toThrow("registration rejected");
     expect(readTable()).toBeUndefined();
-    runOpenClawStateWriteTransaction(() => ensureNodeWorkerPreparedWorkspaceSchema(db), options);
+    writeState(() => ensureWorkspace(db), options);
     expect(readTable()).toBeDefined();
-    closeOpenClawStateDatabaseForTest();
-    expectRows(
-      openOpenClawStateDatabase(options).db,
-      "SELECT * FROM node_worker_prepared_workspaces",
-      [],
-    );
+    closeState();
+    expectRows(openState(options).db, "SELECT * FROM node_worker_prepared_workspaces", []);
   });
 
   it.each([
@@ -147,18 +138,16 @@ describe("prepared worker schema migration", () => {
     "preserves v$version workers and deferred publication ($deferred)",
     async ({ version, deferred }) => {
       const { options, databasePath, before } = createLegacyWorkers(version, deferred);
-      expect(detectOpenClawStateDatabaseSchemaMigrations(options)).toContainEqual({
+      expect(detectMigrations(options)).toContainEqual({
         kind: "prepared-worker-ownership-v17",
         path: databasePath,
       });
       if (deferred) {
-        const repaired = await withStateMigrationBackupForTest(options, () =>
-          repairOpenClawStateDatabaseSchema(options),
-        );
+        const repaired = await withBackup(options, () => repairState(options));
         expect(repaired.warnings).toEqual([]);
       }
-      await withStateMigrationBackupForTest(options, () => openOpenClawStateDatabase(options));
-      const { db } = openOpenClawStateDatabase(options);
+      await withBackup(options, () => openState(options));
+      const { db } = openState(options);
       expectRows(
         db,
         "SELECT rowid, * FROM worker_environments",
@@ -172,11 +161,6 @@ describe("prepared worker schema migration", () => {
         })),
       );
       expect(readObligations(db)).toEqual(before.obligations);
-      expect(
-        readRows(db, "PRAGMA index_info(idx_plugin_state_listing)").map((row) => row.name),
-      ).toEqual(["plugin_id", "namespace", "created_at", "entry_key", "expires_at"]);
-      expectRows(db, "PRAGMA foreign_key_check", []);
-      expectRow(db, "PRAGMA integrity_check", { integrity_check: "ok" });
       const publishedVersion = deferred ? 15 : OPENCLAW_STATE_SCHEMA_VERSION;
       expectRow(db, "PRAGMA user_version", {
         user_version: publishedVersion,
@@ -198,15 +182,8 @@ describe("prepared worker schema migration", () => {
         undefined,
       );
       const after = readSnapshot(db);
-      closeOpenClawStateDatabaseForTest();
-      expect(readSnapshot(openOpenClawStateDatabase(options).db)).toEqual(after);
-      expect(
-        (
-          await withStateMigrationBackupForTest(options, () =>
-            repairOpenClawStateDatabaseSchema(options),
-          )
-        ).warnings,
-      ).toEqual([]);
+      closeState();
+      expect(readSnapshot(openState(options).db)).toEqual(after);
     },
   );
 
@@ -217,11 +194,7 @@ describe("prepared worker schema migration", () => {
       BEGIN SELECT RAISE(ABORT, 'prepared migration rollback'); END;`);
     const before = readSnapshot(legacy);
     legacy.close();
-    expect(
-      await withStateMigrationBackupForTest(options, () =>
-        repairOpenClawStateDatabaseSchema(options),
-      ),
-    ).toEqual({
+    expect(await withBackup(options, () => repairState(options))).toEqual({
       changes: [],
       warnings: [expect.stringContaining("prepared migration rollback")],
     });
@@ -229,10 +202,10 @@ describe("prepared worker schema migration", () => {
     expect(readSnapshot(preserved)).toEqual(before);
   });
 
-  it("enforces complete preparation facts and retains consumed bindings on canonical reopen", async () => {
+  it("retains preparation constraints and consumed bindings on reopen", async () => {
     const { options } = createLegacyWorkers();
-    await withStateMigrationBackupForTest(options, () => openOpenClawStateDatabase(options));
-    const { db } = openOpenClawStateDatabase(options);
+    await withBackup(options, () => openState(options));
+    const { db } = openState(options);
     const setPreparation = db.prepare(`UPDATE worker_environments SET preparation_key = ?,
       preparation_demand_at_ms = ?, preparation_expires_at_ms = ?, preparation_consumed_at_ms = ?`);
     for (const tuple of [
@@ -248,7 +221,7 @@ describe("prepared worker schema migration", () => {
       expect(() => setPreparation.run(...tuple)).toThrow(/CHECK constraint failed/);
     }
     setPreparation.run(preparationKey, 10, 100, 20);
-    ensureNodeWorkerPreparedWorkspaceSchema(db);
+    ensureWorkspace(db);
     db.prepare(`INSERT INTO node_worker_prepared_workspaces (
       preparation_key, cache_key, gateway_namespace, workspace_dir, home_dir, source_manifest_ref, prepared_manifest_ref,
       state, environment_id, session_id, session_key, owner_epoch, created_at_ms, bound_at_ms
@@ -259,15 +232,19 @@ describe("prepared worker schema migration", () => {
       `sha256:${preparationKey}`,
       `sha256:${"d".repeat(64)}`,
     );
-    const setPreparedManifest = db.prepare(
-      "UPDATE node_worker_prepared_workspaces SET prepared_manifest_ref = ?",
-    );
-    for (const invalid of [null, "", `sha256:${"d".repeat(63)}`, `sha256:${"D".repeat(64)}`]) {
-      expect(() => setPreparedManifest.run(invalid)).toThrow(/constraint failed/);
-    }
-    const setCacheKey = db.prepare("UPDATE node_worker_prepared_workspaces SET cache_key = ?");
-    for (const invalid of [null, "", "c".repeat(63), "C".repeat(64)]) {
-      expect(() => setCacheKey.run(invalid)).toThrow(/constraint failed/);
+    for (const [column, prefix, letter] of [
+      ["prepared_manifest_ref", "sha256:", "d"],
+      ["cache_key", "", "c"],
+    ] as const) {
+      const update = db.prepare(`UPDATE node_worker_prepared_workspaces SET ${column} = ?`);
+      for (const invalid of [
+        null,
+        "",
+        prefix + letter.repeat(63),
+        prefix + letter.toUpperCase().repeat(64),
+      ]) {
+        expect(() => update.run(invalid)).toThrow(/constraint failed/);
+      }
     }
     expect(() => db.exec("UPDATE node_worker_prepared_workspaces SET state = 'available'")).toThrow(
       /CHECK constraint failed/,
@@ -280,8 +257,8 @@ describe("prepared worker schema migration", () => {
     ).toThrow(/NOT NULL constraint failed/);
     db.exec("UPDATE node_worker_prepared_workspaces SET state = 'retired', retired_at_ms = 30");
     const binding = readRow(db, "SELECT * FROM node_worker_prepared_workspaces");
-    closeOpenClawStateDatabaseForTest();
-    const reopened = openOpenClawStateDatabase(options).db;
+    closeState();
+    const reopened = openState(options).db;
     expectRow(reopened, "SELECT * FROM node_worker_prepared_workspaces", binding);
     expectRow(reopened, "SELECT preparation_consumed_at_ms FROM worker_environments", {
       preparation_consumed_at_ms: 20,

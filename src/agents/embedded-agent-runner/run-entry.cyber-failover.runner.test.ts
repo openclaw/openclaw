@@ -55,7 +55,7 @@ type RunCandidate = Parameters<typeof runEmbeddedAgentEntry>[0]["runCandidate"];
 function retryFailure(message: string, reason: "auth" | "overloaded") {
   return new FailoverError(message, {
     provider: "openai",
-    model: "gpt-daybreak-blue-latest",
+    model: "gpt-5.6",
     reason,
   });
 }
@@ -66,8 +66,16 @@ function runEntry(
   hasCommittedSideEffect = () => false,
   fallbacksOverride?: string[],
 ) {
+  const config = {
+    agents: {
+      defaults: {
+        embeddedAgent: { cyberFailover: { mode: "auto" as const } },
+      },
+    },
+  };
+  runtimeConfig.setRuntimeConfigSnapshot(config);
   return runEmbeddedAgentEntry({
-    selection: { cfg: {}, provider: "openai", model: "gpt-5.6", fallbacksOverride },
+    selection: { cfg: config, provider: "openai", model: "gpt-5.6", fallbacksOverride },
     identity: { runId, agentId: "main", sessionId: "session-1" },
     harness: createDirectHarness(),
     behavior: { kind: "command-rpc", hasCommittedSideEffect },
@@ -93,8 +101,8 @@ describe("runEmbeddedAgentEntry cyber failover against the real fallback runner"
       const refused = outcome === "restored policy refusal";
       const { result } = await runEntry(
         "run-real-fallback-accounting",
-        async (provider, model) => {
-          const primary = model === "gpt-5.6";
+        async (provider, model, options) => {
+          const primary = !options.isFallbackRetry;
           const candidate = makeResult(provider, model, refused);
           if (!refused && (primary || exhausted)) {
             candidate.payloads = [];
@@ -135,8 +143,8 @@ describe("runEmbeddedAgentEntry cyber failover against the real fallback runner"
     await expect(
       runEntry(
         "run-cyber-real-runner",
-        async (provider, model) => {
-          if (model === "gpt-daybreak-blue-latest") {
+        async (provider, model, options) => {
+          if (options.isFallbackRetry) {
             delivered = true;
             throw failure;
           }
@@ -162,7 +170,7 @@ describe("runEmbeddedAgentEntry cyber failover against the real fallback runner"
     let primaryAttempts = 0;
     const runCandidate: RunCandidate = async (provider, model, options) => {
       authFailurePolicies.push(options.authProfileFailurePolicy);
-      if (model === "gpt-daybreak-blue-latest") {
+      if (options.isFallbackRetry) {
         const reason = resolveAuthProfileFailureReason({
           failoverReason: "auth",
           providerStarted: true,

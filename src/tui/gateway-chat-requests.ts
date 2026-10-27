@@ -78,12 +78,12 @@ export class GatewayChatRequests {
       controller: new AbortController(),
     };
     const signal = AbortSignal.any([this.signal, pending.controller.signal]);
-    const deadline = Date.now() + GATEWAY_STARTUP_ADMISSION_WAIT_MS;
+    const deadline = performance.now() + GATEWAY_STARTUP_ADMISSION_WAIT_MS;
     this.pendingWrites.add(pending);
     try {
       return await operation(<R>(method: string, params: unknown) => {
         signal.throwIfAborted();
-        const timeoutMs = deadline - Date.now();
+        const timeoutMs = deadline - performance.now();
         if (timeoutMs <= 0) {
           throw new GatewayClientRequestTimeoutError({
             method,
@@ -129,7 +129,7 @@ export class GatewayChatRequests {
   }
 
   async loadHistory(opts: { sessionKey: string; agentId?: string; limit?: number }) {
-    const deadline = Date.now() + STARTUP_CHAT_HISTORY_RETRY_TIMEOUT_MS;
+    const deadline = performance.now() + STARTUP_CHAT_HISTORY_RETRY_TIMEOUT_MS;
     for (;;) {
       this.signal.throwIfAborted();
       try {
@@ -139,7 +139,7 @@ export class GatewayChatRequests {
           limit: opts.limit,
         });
       } catch (err) {
-        if (Date.now() >= deadline || !isRetryableStartupUnavailable(err)) {
+        if (performance.now() >= deadline || !isRetryableStartupUnavailable(err)) {
           throw err;
         }
         await sleep(resolveStartupRetryDelayMs(err), this.signal);

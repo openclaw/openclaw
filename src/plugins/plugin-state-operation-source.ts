@@ -25,7 +25,10 @@ export function bindPluginStateOperationModuleSource(params: {
   rootDir: string;
   source: string;
   origin: PluginOrigin;
-  artifact: ReturnType<typeof capturePluginGenerationArtifact>;
+  artifact: Pick<
+    ReturnType<typeof capturePluginGenerationArtifact>,
+    "rootDir" | "hasSource" | "resolve" | "prepareModule"
+  >;
   assertCodeCurrent?: () => void;
 }) {
   const { instance, artifact, origin } = params;

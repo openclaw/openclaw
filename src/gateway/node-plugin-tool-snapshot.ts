@@ -188,14 +188,17 @@ export function removeConnectedNodePluginTools(nodeId: string): void {
 }
 
 export function listConnectedNodePluginTools(): ConnectedNodePluginTool[] {
-  return [...toolsByNodeId.values()]
-    .flat()
-    .toSorted(
-      (left, right) =>
-        left.descriptor.pluginId.localeCompare(right.descriptor.pluginId) ||
-        left.descriptor.name.localeCompare(right.descriptor.name) ||
-        left.nodeId.localeCompare(right.nodeId),
-    );
+  return (
+    [...toolsByNodeId.values()]
+      .flat()
+      // oxlint-disable-next-line unicorn/no-array-sort -- flat creates a private array, leaving node snapshots untouched.
+      .sort(
+        (left, right) =>
+          left.descriptor.pluginId.localeCompare(right.descriptor.pluginId) ||
+          left.descriptor.name.localeCompare(right.descriptor.name) ||
+          left.nodeId.localeCompare(right.nodeId),
+      )
+  );
 }
 
 export function getConnectedNodePluginToolsVersion(): number {

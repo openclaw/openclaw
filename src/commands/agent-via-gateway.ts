@@ -537,55 +537,6 @@ function isConfirmedChatAbortResponseForRun(value: unknown, runId: string): bool
   return Array.isArray(response.runIds) && response.runIds.includes(runId);
 }
 
-async function abortAcceptedGatewayAgentRunWithRetries(params: {
-  runId: string | undefined;
-  sessionKey: string | undefined;
-  agentId?: string;
-  signal: AgentCliSignal | undefined;
-  runtime: RuntimeEnv;
-  request: GatewayAbortRequest;
-  logFailure?: boolean;
-}): Promise<boolean> {
-  for (const [attempt, retryDelayMs] of [...GATEWAY_ABORT_RETRY_DELAYS_MS, 0].entries()) {
-    const isFinalAttempt = attempt === GATEWAY_ABORT_RETRY_DELAYS_MS.length;
-    const logFailure = params.logFailure !== false && isFinalAttempt;
-    if (params.signal && params.runId && params.sessionKey) {
-      try {
-        const response = await params.request(
-          "chat.abort",
-          {
-            sessionKey: params.sessionKey,
-            runId: params.runId,
-            ...(params.agentId ? { agentId: params.agentId } : {}),
-          },
-          { timeoutMs: GATEWAY_ABORT_REQUEST_TIMEOUT_MS },
-        );
-        if (isConfirmedChatAbortResponseForRun(response, params.runId)) {
-          return true;
-        }
-        if (logFailure) {
-          params.runtime.error?.(
-            `Interrupted by ${params.signal}; Gateway run ${params.runId} was not confirmed aborted.`,
-          );
-        }
-      } catch (err) {
-        if (logFailure) {
-          params.runtime.error?.(
-            `Interrupted by ${params.signal}; failed to abort Gateway run ${params.runId}: ${String(
-              err,
-            )}`,
-          );
-        }
-      }
-    }
-    if (isFinalAttempt) {
-      return false;
-    }
-    await sleep(retryDelayMs);
-  }
-  return false;
-}
-
 function exitForReceivedSignal(signal: AgentCliSignal | undefined, runtime: RuntimeEnv): boolean {
   if (!signal) {
     return false;
@@ -725,16 +676,53 @@ async function agentViaGatewayCommand(
   let activeConnectionAbortAttempted = false;
   let activeConnectionAbortSucceeded = false;
   let response: GatewayAgentResponse | undefined;
-  const abortGatewayRun = (request: GatewayAbortRequest, logFailure = true) =>
-    abortAcceptedGatewayAgentRunWithRetries({
-      runId: runContext.accepted?.runId ?? idempotencyKey,
-      sessionKey: runContext.accepted?.sessionKey ?? abortSessionKey,
-      agentId: runContext.accepted?.agentId,
-      signal: signalBridge.getReceivedSignal(),
-      runtime,
-      request,
-      logFailure,
-    });
+  const abortGatewayRun = async (
+    request: GatewayAbortRequest,
+    shouldLogFailure = true,
+  ): Promise<boolean> => {
+    const abortRunId = runContext.accepted?.runId ?? idempotencyKey;
+    const abortSessionKeyForRun = runContext.accepted?.sessionKey ?? abortSessionKey;
+    const abortAgentId = runContext.accepted?.agentId;
+    const abortSignal = signalBridge.getReceivedSignal();
+    for (const [attempt, retryDelayMs] of [...GATEWAY_ABORT_RETRY_DELAYS_MS, 0].entries()) {
+      const isFinalAttempt = attempt === GATEWAY_ABORT_RETRY_DELAYS_MS.length;
+      const logFailure = shouldLogFailure && isFinalAttempt;
+      if (abortSignal && abortRunId && abortSessionKeyForRun) {
+        try {
+          const abortResponse = await request(
+            "chat.abort",
+            {
+              sessionKey: abortSessionKeyForRun,
+              runId: abortRunId,
+              ...(abortAgentId ? { agentId: abortAgentId } : {}),
+            },
+            { timeoutMs: GATEWAY_ABORT_REQUEST_TIMEOUT_MS },
+          );
+          if (isConfirmedChatAbortResponseForRun(abortResponse, abortRunId)) {
+            return true;
+          }
+          if (logFailure) {
+            runtime.error?.(
+              `Interrupted by ${abortSignal}; Gateway run ${abortRunId} was not confirmed aborted.`,
+            );
+          }
+        } catch (err) {
+          if (logFailure) {
+            runtime.error?.(
+              `Interrupted by ${abortSignal}; failed to abort Gateway run ${abortRunId}: ${String(
+                err,
+              )}`,
+            );
+          }
+        }
+      }
+      if (isFinalAttempt) {
+        return false;
+      }
+      await sleep(retryDelayMs);
+    }
+    return false;
+  };
   const dispatchGatewayAgentCall = async (activeCfg: OpenClawConfig) =>
     await withProgress(
       {

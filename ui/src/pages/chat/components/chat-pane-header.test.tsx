@@ -14,9 +14,9 @@ import type { ChatMobileHost } from "../chat-mobile-host.ts";
 import {
   activePlacementSession,
   createPaneHeaderWorkspaceFixture,
-  createSessionCapabilityFixture,
   createTestChatPane,
 } from "../chat-pane.test-support.ts";
+import { createSessionCapabilityFixture } from "../chat-session-capability.test-support.ts";
 import type { ChatPageHost } from "../chat-state-host.ts";
 import { openSlot } from "../sidebar-layout.ts";
 import {
@@ -238,6 +238,21 @@ describe("chat pane header", () => {
     expect(container.querySelector("openclaw-chat-header-session-menu")).not.toBeNull();
   });
 
+  it("translates the saved-conversation status through the header's English catalog registration", () => {
+    const { container, update } = mountHeader({
+      savedConversation: true,
+      gatewayStatus: { kind: "reconnecting" },
+    });
+    const savedStatus = () => text(container, ".chat-pane__connection-state");
+    expect(savedStatus()).toBe("Saved conversation · Reconnecting…");
+    update({ gatewayStatus: undefined });
+    expect(savedStatus()).toBe("Saved conversation · Reconnecting…");
+    update({ gatewayStatus: { kind: "offline" } });
+    expect(savedStatus()).toBe("Saved conversation · Disconnected");
+    update({ savedConversation: false, gatewayStatus: { kind: null } });
+    absent(container, ".chat-pane__connection");
+  });
+
   it("defers narrow Layout shortcuts and retains their nodes across label updates", async () => {
     const readShortcut = vi.fn(() => KEYBOARD_SHORTCUT_COMBOS.terminalPanel);
     const action = (label: string) => ({
@@ -256,7 +271,7 @@ describe("chat pane header", () => {
     });
     const menu = container.querySelector(".chat-pane__layout-menu")!;
     expect(readShortcut).not.toHaveBeenCalled();
-    await openNativeMenu(menu);
+    await openNativeMenu(menu, "terminal");
     const shortcut = menu.querySelector('[data-value="terminal"] kbd');
     expect(shortcut).not.toBeNull();
     update({ panelMenuActions: [action("Open terminal")] });

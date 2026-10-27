@@ -120,7 +120,7 @@ it.each(["blacksmith", "hybrid"])(
 
 it("keeps precise selection prices separate by worker policy", async () => {
   const owner = "agentic-commands-doctor-auth";
-  const files = ["hints", "profile-health", "shared-health"].map((part) =>
+  const files = ["deprecated-cli-profiles", "profile-health", "shared-health"].map((part) =>
     commandFile(`doctor-auth.${part}`),
   );
   const targets = files.slice(0, 2);

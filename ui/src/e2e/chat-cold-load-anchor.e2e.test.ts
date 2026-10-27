@@ -18,6 +18,7 @@ type ColdLoadFrame = {
   progress: boolean;
   threadTop: number;
   threadHeight: number;
+  rowHeights: Record<string, number>;
 };
 declare global {
   interface Window {
@@ -118,6 +119,7 @@ suite.define(() => {
                 progress: false,
                 threadTop: 0,
                 threadHeight: thread.clientHeight,
+                rowHeights: {},
               });
             }
             if (window.coldLoadSamples!.length < 24) {
@@ -223,6 +225,7 @@ suite.define(() => {
         const gateway = await installMockGateway(page, {
           sessionKey,
           authMethod: "trusted-proxy",
+          subscriptionInitialHistory: false,
           authMode: "trusted-proxy",
           featureMethods: ["chat.metadata", "chat.startup", "progressCard.get"],
           heldMethods: ["connect"],
@@ -268,6 +271,18 @@ suite.define(() => {
           }
           await pane.sessionSnapshotStore.flush();
         });
+        const settledRows = await page
+          .locator(".chat-virtual-row")
+          .evaluateAll((rows) =>
+            Object.fromEntries(
+              rows
+                .filter((row) => row.checkVisibility({ contentVisibilityAuto: true }))
+                .map((row) => [
+                  row.getAttribute("data-virtual-row-key")!,
+                  row.getBoundingClientRect().height,
+                ]),
+            ),
+          );
         await page.addInitScript(() => {
           const samples: ColdLoadFrame[] = [];
           const read = (): ColdLoadFrame | null => {
@@ -294,6 +309,12 @@ suite.define(() => {
               progress: card?.textContent?.includes("Review final report") === true,
               threadTop: threadRect.top,
               threadHeight: threadRect.height,
+              rowHeights: Object.fromEntries(
+                Array.from(thread.querySelectorAll<HTMLElement>(".chat-virtual-row"), (row) => [
+                  row.dataset.virtualRowKey!,
+                  row.getBoundingClientRect().height,
+                ]),
+              ),
             };
           };
           Object.assign(window, {
@@ -332,6 +353,16 @@ suite.define(() => {
         await page.waitForFunction(() => (window.coldLoadSamples?.length ?? 0) >= 20);
         const firstFrames = await page.evaluate(() => window.coldLoadSamples!.slice(0, 20));
         expectFrames(firstFrames, session.label, false);
+        for (const frame of firstFrames) {
+          expect(Object.keys(frame.rowHeights).some((key) => settledRows[key] !== undefined)).toBe(
+            true,
+          );
+          for (const [key, height] of Object.entries(settledRows)) {
+            if (frame.rowHeights[key] !== undefined) {
+              expect(frame.rowHeights[key]).toBeGreaterThanOrEqual(height - 1);
+            }
+          }
+        }
         // Details mounts on demand; its saved progress must still be readable before hello.
         await openChatTaskProgress(page);
         await progress
@@ -362,11 +393,15 @@ suite.define(() => {
         expect(titleWrites?.[0]?.title).toBe("expected-title");
         expect(titleWrites?.some((event) => event.title === "New session")).toBe(false);
         expectFrames(samples, session.label);
+        expect(await gateway.getRequests("sessions.messages.unsubscribe")).toHaveLength(0);
         await gateway.waitForRequest("connect");
         await page.evaluate(() => {
           window.coldLoadReconcileStart = window.coldLoadSamples?.length ?? 0;
           window.coldLoadTitleTrace?.mark("reconcile");
         });
+        // Cached presentation must not send subscription traffic before hello admission.
+        expect(await gateway.getRequests("sessions.messages.subscribe")).toHaveLength(0);
+        expect(await gateway.getRequests("sessions.messages.unsubscribe")).toHaveLength(0);
         await gateway.resolveDeferred("connect");
         await gateway.waitForRequest("chat.startup");
         await gateway.waitForRequest("progressCard.get");
@@ -399,6 +434,44 @@ suite.define(() => {
             expect(Math.abs(frame[key] - cached[key])).toBeLessThanOrEqual(1);
           }
         }
+        const scroller = page.locator(".chat-pane-cache__pane--active .chat-thread");
+        await scroller.hover();
+        await page.mouse.wheel(0, -450);
+        await page.waitForFunction(() => {
+          const thread = document.querySelector<HTMLElement>(
+            ".chat-pane-cache__pane--active .chat-thread",
+          );
+          return thread && thread.scrollHeight - thread.clientHeight - thread.scrollTop > 200;
+        });
+        const reader = await scroller.evaluate((element) => element.scrollTop);
+        const previousThread = await scroller.evaluateHandle((element) => element);
+        for (let index = 0; index < 3; index++) {
+          await page
+            .locator(
+              `.sidebar-recent-session[data-session-key="agent:main:recent-${index}"] a.sidebar-recent-session__link`,
+            )
+            .click();
+          await page
+            .locator(".chat-pane__session-title-text")
+            .filter({ hasText: `Recent conversation ${index}` })
+            .waitFor();
+        }
+        expect(await previousThread.evaluate((element) => element.isConnected)).toBe(false);
+        for (let index = 0; index < 3; index++) {
+          await page.goBack();
+        }
+        await page
+          .locator(".chat-pane__session-title-text")
+          .filter({ hasText: session.label })
+          .waitFor();
+        await page.waitForFunction(() => {
+          const pane = document.querySelector(".chat-pane-cache__pane--active");
+          const inner = pane?.querySelector<HTMLElement>(".chat-thread-inner");
+          return inner && getComputedStyle(inner).visibility !== "hidden";
+        });
+        expect(
+          Math.abs((await scroller.evaluate((element) => element.scrollTop)) - reader),
+        ).toBeLessThanOrEqual(1);
       },
     );
   });

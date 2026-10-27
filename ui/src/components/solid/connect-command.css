@@ -1,0 +1,90 @@
+.login-gate__command {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 4px 0 2px;
+  padding: 5px 8px 5px 10px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  color: var(--text);
+  cursor: copy;
+}
+
+.login-gate__command:hover {
+  border-color: var(--accent);
+}
+
+.login-gate__command:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.login-gate__command code {
+  flex: 1;
+  margin: 0;
+  padding: 0;
+  background: transparent;
+  border: 0;
+}
+
+.login-gate__command--hero {
+  margin: 0;
+  padding: 12px 10px 12px 14px;
+  border-color: var(--border-strong);
+  background: var(--bg-accent);
+  border-radius: var(--radius-md);
+}
+
+.login-gate__command--hero code {
+  font-family: var(--mono);
+  font-size: 13px;
+  line-height: 1.45;
+  color: var(--text-strong);
+  overflow-wrap: anywhere;
+}
+
+/* The prompt glyph is decorative; copying still yields the bare command. */
+.login-gate__command--hero code::before {
+  content: "$ ";
+  color: var(--muted);
+  user-select: none;
+}
+
+.login-gate__command--hero .chat-copy-btn {
+  flex: 0 0 auto;
+  padding: 6px;
+  border-color: transparent;
+  background: transparent;
+}
+
+.login-gate__command--hero:hover .chat-copy-btn {
+  border-color: var(--border);
+  background: var(--card);
+}
+
+/* The copy glyph swap normally ships with chat styles, which the gate renders
+   without; own it here so the check never shows beside the copy icon. */
+.login-gate .chat-copy-btn__icon {
+  position: relative;
+  display: inline-flex;
+  width: 14px;
+  height: 14px;
+}
+
+.login-gate .chat-copy-btn__icon-copy,
+.login-gate .chat-copy-btn__icon-check {
+  position: absolute;
+  top: 0;
+  left: 0;
+  transition: opacity var(--duration-fast) ease;
+}
+
+.login-gate .chat-copy-btn__icon-check,
+.login-gate .chat-copy-btn[data-copy-state="copied"] .chat-copy-btn__icon-copy {
+  opacity: 0;
+}
+
+.login-gate .chat-copy-btn[data-copy-state="copied"] .chat-copy-btn__icon-check {
+  opacity: 1;
+}

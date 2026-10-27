@@ -68,7 +68,7 @@ const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
 
 it("doubles consecutive busy delays, caps them, and resets after success", async () => {
   await withRefreshFixture(
-    async ({ agentId, files: [sessionFile], refresh, hold }) => {
+    async ({ agentId, files: [sessionFile], refresh, hold, request }) => {
       const params = { config, agentId, startMs: 0, endMs: Date.now() };
       const fullRefresh = hold("refreshed");
       let queuedSubset: ReturnType<typeof loadSessions> | undefined;
@@ -82,9 +82,8 @@ it("doubles consecutive busy delays, caps them, and resets after success", async
       });
       refresh.mockResolvedValueOnce("busy");
       try {
-        expect(await loadSummary(params)).toMatchObject({
-          cacheStatus: { status: "refreshing", pendingFiles: 1 },
-        });
+        // A full refresh request starts the busy retry ladder.
+        request();
         await tick(0, 1);
         for (const [index, delayMs] of [
           50, 100, 200, 400, 800, 1_600, 3_200, 5_000, 5_000,
@@ -216,14 +215,14 @@ const test = it.extend<{ usage: ReturnType<typeof makeRefreshFixture> }>({
   usage: async ({ task: _task }, use) => withRefreshFixture(use),
 });
 
-test("refreshes dirty sessions after their own quiet gaps without flushing unrelated reads", async ({
+test("keeps per-session quiet gaps across wall-clock rollback and unrelated reads", async ({
   signal,
   usage: { files, refresh, dirty, read },
 }) => {
   refresh.mockResolvedValue("refreshed");
   dirty(files[0]);
   await withinTest(read(files[1]), signal);
-  expect(refresh).not.toHaveBeenCalled();
+  vi.spyOn(Date, "now").mockReturnValue(Date.now() - 120_000);
   await vi.advanceTimersByTimeAsync(20_000);
   dirty(files[0]);
   dirty(files[1]);

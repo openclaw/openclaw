@@ -239,66 +239,25 @@ it.each([false, true])(
   },
 );
 
-it("keeps correlated setup completion uncertain when hello delivery fails", async () => {
-  const { paired, issued, verifyParams, state } = await createSetup("setup-send-failure", {
-    displayName: "Test phone",
-  });
-
-  const broadcast = vi.fn();
-  const context = createFailedHelloContext(rejectHello, broadcast);
-  const { onHelloDelivered } = context;
-  const { close } = context.handler;
-
-  await sendGatewayHello(context as never, state as never, {});
-
-  expect(close).toHaveBeenCalled();
-  expect(onHelloDelivered).not.toHaveBeenCalled();
-  expect(broadcast).toHaveBeenCalledWith(
-    "device.pair.setup.deliveryUncertain",
-    expect.objectContaining({ setupId: issued.setupId, deviceId: paired.deviceId }),
-    { dropIfSlow: true },
-  );
-  expect(broadcast.mock.calls.some(([event]) => event === "device.pair.setup.completed")).toBe(
-    false,
-  );
-  await expect(readCompletion({ setupId: issued.setupId })).resolves.toMatchObject({
-    setupId: issued.setupId,
-    deviceId: paired.deviceId,
-    deliveryState: "uncertain",
-  });
-  await expect(verifyDeviceBootstrapToken(verifyParams)).resolves.toEqual({
-    ok: false,
-    reason: "bootstrap_token_invalid",
-  });
-});
-
-it("does not consume a setup bearer after the paired public key is replaced", async () => {
-  const { paired, issued, verifyParams, state } = await createSetup("setup-replaced", {
-    publicKey: "public-key-original",
-  });
-  persistPaired({ ...paired, publicKey: "public-key-replacement" });
-  const context = createFailedHelloContext(async () => undefined);
-  const { close } = context.handler;
-
-  await sendGatewayHello(context as never, state as never, {});
-
-  expect(close).toHaveBeenCalled();
-  expect(context.sendFrame).not.toHaveBeenCalled();
-  await expect(readCompletion({ setupId: issued.setupId })).resolves.toBeNull();
-  await expect(verifyDeviceBootstrapToken(verifyParams)).resolves.toEqual({ ok: true });
-});
-
-it.each(["preparation", "transport"] as const)(
-  "restores an uncorrelated bootstrap token when hello %s fails",
+it.each(["correlated transport", "replaced identity", "preparation", "transport"] as const)(
+  "preserves bootstrap ownership when hello fails at %s",
   async (failure) => {
-    const paired = createPaired("generic-send-failure");
-    const issued = await issueDeviceBootstrapToken({ profile: bootstrapProfile });
+    const paired = createPaired("hello-failure", { displayName: "Test phone" });
+    const correlated = failure === "correlated transport" || failure === "replaced identity";
+    const issued = correlated
+      ? await issueDevicePairSetupBootstrapToken({ profile: bootstrapProfile })
+      : await issueDeviceBootstrapToken({ profile: bootstrapProfile });
+    const setupId = "setupId" in issued && typeof issued.setupId === "string" ? issued.setupId : "";
     const verifyParams = await verifyBootstrap(paired, issued.token);
-
-    const context = createFailedHelloContext();
+    const context = createFailedHelloContext(
+      failure === "replaced identity" ? async () => undefined : rejectHello,
+    );
     const { close } = context.handler;
+    const broadcast = context.handler.buildRequestContext().broadcast;
     const state = createBootstrapState(paired, issued.token);
-
+    if (failure === "replaced identity") {
+      persistPaired({ ...paired, publicKey: "public-key-replacement" });
+    }
     if (failure === "preparation") {
       const identity = await import("../../control-ui-identity.js");
       const preparationFailure = vi
@@ -317,8 +276,37 @@ it.each(["preparation", "transport"] as const)(
       }
     } else {
       await sendGatewayHello(context as never, state as never, {});
-      expect(close).toHaveBeenCalledWith(1011, "gateway hello delivery failed");
+      if (failure === "transport") {
+        expect(close).toHaveBeenCalledWith(1011, "gateway hello delivery failed");
+      } else {
+        expect(close).toHaveBeenCalled();
+      }
     }
-    await expect(verifyDeviceBootstrapToken(verifyParams)).resolves.toEqual({ ok: true });
+    if (failure === "correlated transport") {
+      expect(context.onHelloDelivered).not.toHaveBeenCalled();
+      expect(broadcast).toHaveBeenCalledWith(
+        "device.pair.setup.deliveryUncertain",
+        expect.objectContaining({ setupId, deviceId: paired.deviceId }),
+        { dropIfSlow: true },
+      );
+      expect(broadcast.mock.calls.some(([event]) => event === "device.pair.setup.completed")).toBe(
+        false,
+      );
+      await expect(readCompletion({ setupId })).resolves.toMatchObject({
+        setupId,
+        deviceId: paired.deviceId,
+        deliveryState: "uncertain",
+      });
+      await expect(verifyDeviceBootstrapToken(verifyParams)).resolves.toEqual({
+        ok: false,
+        reason: "bootstrap_token_invalid",
+      });
+    } else {
+      if (failure === "replaced identity") {
+        expect(context.sendFrame).not.toHaveBeenCalled();
+        await expect(readCompletion({ setupId })).resolves.toBeNull();
+      }
+      await expect(verifyDeviceBootstrapToken(verifyParams)).resolves.toEqual({ ok: true });
+    }
   },
 );

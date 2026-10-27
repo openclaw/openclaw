@@ -20,6 +20,7 @@ import {
   type OperatorScope,
 } from "./method-scopes.js";
 import type { GatewayMethodRegistryView } from "./methods/descriptor.js";
+import { SESSION_READ_SCOPE } from "./operator-scopes.js";
 import { resolvePluginRoutePathContext } from "./server/plugins-http/path-context.js";
 import {
   findMatchingPluginHttpRoutes,
@@ -191,7 +192,7 @@ export function listControlUiPluginWidgetKinds(
       .filter((plugin) => plugin.controlUi && !isControlUiPluginAllowed(plugin))
       .map((plugin) => plugin.id),
   );
-  const coreEntries = authorizeOperatorScopesForRequiredScope(READ_SCOPE, scopes).allowed
+  const coreEntries = authorizeOperatorScopesForRequiredScope(SESSION_READ_SCOPE, scopes).allowed
     ? CORE_CONTROL_UI_WIDGET_KINDS
     : [];
   const pluginEntries = visibleDescriptors(entries, scopes).flatMap((entry) => {
@@ -282,14 +283,19 @@ export function listControlUiLinkReaders(
   if (methods.pluginRegistry && methods.pluginRegistry !== registry) {
     return [];
   }
+  const readers = visibleDescriptors(registry.controlUiDescriptors, scopes).filter(
+    ({ descriptor }) => descriptor.surface === "link-reader" && descriptor.linkReader,
+  );
+  if (readers.length === 0) {
+    return [];
+  }
   const loaded = new Set(
     registry.plugins
       .filter((plugin) => plugin.enabled && plugin.status === "loaded")
       .map((plugin) => plugin.id),
   );
-  const descriptors = new Map(methods.descriptors().map((method) => [method.name, method]));
   const readable = (name: string, pluginId: string) => {
-    const method = descriptors.get(name);
+    const method = methods.getDescriptor(name);
     return (
       method?.owner.kind === "plugin" &&
       method.owner.pluginId === pluginId &&
@@ -298,7 +304,7 @@ export function listControlUiLinkReaders(
       !method.controlPlaneWrite
     );
   };
-  return visibleDescriptors(registry.controlUiDescriptors, scopes)
+  return readers
     .flatMap((entry) => {
       const descriptor = entry.descriptor;
       const metadata = descriptor.linkReader;

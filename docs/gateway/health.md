@@ -39,8 +39,11 @@ These summaries wait for current selection metadata. Display preparation and
 background model catalog discovery can continue independently, so a large fleet's
 catalog warmup does not hold session counts and recent-activity summaries open.
 Startup prepares selection and database facts for the roster; full display rows
-and optional transcript previews are prepared when a page or session recipient
-first requests them. Those rows stay resident for subsequent reads and refresh
+for up to 100 recent unarchived sessions warm in the background while the remaining
+startup work continues. Connect does not wait for that page, and each client still
+selects and authorizes its current visible rows. Other display rows and optional
+transcript previews are prepared when a page or session recipient first requests
+them. Those rows stay resident for subsequent reads and refresh
 from committed changes. Unrequested rows do not repeat display enrichment when
 the startup model catalog becomes available.
 Cold pages share bounded enrichment batches. Each requested row becomes available
@@ -271,7 +274,10 @@ its CPU and delay readings. If the sampler resets, health responses omit
 The optional `cpuBreakdown` separates independent native counters:
 
 - `hostUtilization` is the busy fraction of the host CPU time reported by
-  `os.cpus()`, from `0` to `1` across `hostCpuCount` logical CPUs. This includes
+  the aggregate `/proc/stat` counters on Linux and `os.cpus()` elsewhere, from
+  `0` to `1` across `hostCpuCount` online logical CPUs. Linux counts user, nice,
+  system, idle, and hard IRQ time, matching `os.cpus()`; iowait, softirq, and
+  steal are excluded, and guest time is not counted twice. This includes
   other processes and is not the Gateway's CPU quota or container allowance.
 - `mainThreadCoreRatio` measures the Gateway main thread with
   `process.threadCpuUsage()`, not event-loop utilization.

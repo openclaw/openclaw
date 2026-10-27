@@ -1,4 +1,4 @@
-import { createServer, request, type ClientRequest, type IncomingMessage } from "node:http";
+import { createServer } from "node:http";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core/expect";
 import { afterEach, expect, it, vi } from "vitest";
@@ -66,7 +66,7 @@ it("keeps an accepted QA reply pending after a lost HTTP response and refuses a 
     await using transport = new AsyncDisposableStack();
     const accepted = createDeferred();
     const releaseResponse = createDeferred();
-    const upstreamRequests: ClientRequest[] = [];
+    const upstream = new AbortController();
     const exchanges: Promise<void>[] = [];
     const exchangeErrors: unknown[] = [];
     const calls: Promise<Parameters<RespondFn>>[] = [];
@@ -76,25 +76,17 @@ it("keeps an accepted QA reply pending after a lost HTTP response and refuses a 
       requestCount++;
       const exchange = (async () => {
         expect(incoming).toMatchObject({ method: "POST", url: "/v1/outbound/message" });
-        const target = new URL(incoming.url!, bus.baseUrl);
-        const response = await new Promise<IncomingMessage>((resolve, reject) => {
-          const upstream = request(
-            target,
-            { method: incoming.method, headers: { ...incoming.headers, host: target.host } },
-            resolve,
-          );
-          upstreamRequests.push(upstream);
-          upstream.once("error", reject);
-          incoming.once("error", (error) => upstream.destroy(error));
-          incoming.pipe(upstream);
+        const response = await fetch(new URL(incoming.url!, bus.baseUrl), {
+          method: incoming.method,
+          headers: { "content-type": "application/json" },
+          body: await readRequestText(incoming),
+          signal: upstream.signal,
         });
-        const body = await readRequestText(response);
-        expect(response).toMatchObject({ statusCode: 200, complete: true });
+        const body = await response.json();
+        expect(response.status).toBe(200);
         const messages = busState.getSnapshot().messages;
         expect(messages).toMatchObject([{ direction: "outbound", text }]);
-        expect(JSON.parse(body)).toMatchObject({
-          message: { id: messages[0]!.id, text },
-        });
+        expect(body).toMatchObject({ message: { id: messages[0]!.id, text } });
         // The bus committed a business message, but the caller receives no HTTP response.
         accepted.resolve();
         await releaseResponse.promise;
@@ -108,9 +100,7 @@ it("keeps an accepted QA reply pending after a lost HTTP response and refuses a 
     });
     transport.defer(async () => {
       releaseResponse.resolve();
-      for (const upstream of upstreamRequests) {
-        upstream.destroy();
-      }
+      upstream.abort();
       const closing = proxy.listening ? closeHttpServer(proxy) : Promise.resolve();
       const settled = await Promise.allSettled([...calls, closing]);
       await Promise.all(exchanges);
@@ -141,11 +131,7 @@ it("keeps an accepted QA reply pending after a lost HTTP response and refuses a 
       createTestRegistry([{ pluginId: "qa-channel", source: "test", plugin: qaChannelPlugin }]),
     );
     const recovery = resources.use(
-      await createRecoveryControllerFixture(
-        scope,
-        { sessionId: identity.sessionId, updatedAt: 1 },
-        { getSessionId: () => identity.sessionId },
-      ),
+      await createRecoveryControllerFixture(scope, { sessionId: identity.sessionId, updatedAt: 1 }),
     );
     const operation = createReplyOperation({ ...identity, resetTriggered: false });
     const recorder = createUserTurnTranscriptRecorder({
@@ -276,7 +262,6 @@ it("keeps an accepted QA reply pending after a lost HTTP response and refuses a 
     ]);
     expect(loadSessionEntry(scope)).toMatchObject(pending);
     expect(requestCount).toBe(1);
-    expect(upstreamRequests).toHaveLength(1);
     expect(busState.getSnapshot().messages).toHaveLength(1);
     expect(operation.sourceReplyDelivered).toBe(false);
     expect(exchangeErrors).toEqual([]);

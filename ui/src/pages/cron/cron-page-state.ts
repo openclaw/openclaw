@@ -6,6 +6,7 @@ import { hasOperatorReadAccess, readGatewayOperatorAccess } from "../../app/oper
 import { showConfirmDialog } from "../../components/confirm-dialog.ts";
 import { registerCronEnglish } from "../../i18n/locales/en-cron.ts";
 import { watchAgentScope, watchSelectedAgent } from "../../lib/agents/index.ts";
+import { createChannelCapability } from "../../lib/channels/index.ts";
 import {
   hasCronFormErrors,
   normalizeCronFormState,
@@ -26,6 +27,10 @@ import {
   toggleCronJob,
   updateCronJobsFilter,
 } from "../../lib/cron/index.ts";
+import {
+  hasCronInventoryEvents,
+  isCronInventoryInvalidation,
+} from "../../lib/cron/inventory-connection.ts";
 import { loadCronRuns, loadCronRunsForJob, updateCronRunsFilter } from "../../lib/cron/runs.ts";
 import type { CronFormState, CronState } from "../../lib/cron/types.ts";
 import { isGatewayAvailable } from "../../lib/gateway-availability.ts";
@@ -71,7 +76,10 @@ export function createCronPage(context: () => ApplicationContext, host: () => HT
     publish: publishCronState,
   });
   const agents = projectOwner(context().agents, (source) => source.state);
-  const channels = projectOwner(context().channels, (source) => source.state);
+  const channels = projectOwner(
+    context().acquireChannels(createChannelCapability),
+    (source) => source.state,
+  );
   const runtimeConfig = projectOwner(context().runtimeConfig, (source) => source.state);
   const runTranscript = createCronRunTranscript(publish, () => {
     const scope = gateway.capture();
@@ -108,7 +116,6 @@ export function createCronPage(context: () => ApplicationContext, host: () => HT
       // Hydration refines scope without replacing operator intent or drafts.
       cron.cronAgentId = scopeId;
       void refreshCron();
-      void presentation.loadModels(cron);
       if ((cron.cronEditingJob || cron.cronCreateOpen) && !cron.cronForm.agentId.trim()) {
         void deliveryDirectory.load();
       }
@@ -144,7 +151,7 @@ export function createCronPage(context: () => ApplicationContext, host: () => HT
     let first = boundContext === null || sourceChanged;
     boundContext = currentContext;
     agents.replaceSource(currentContext.agents);
-    channels.replaceSource(currentContext.channels);
+    channels.replaceSource(currentContext.acquireChannels(createChannelCapability));
     runtimeConfig.replaceSource(currentContext.runtimeConfig);
     if (sourceChanged) {
       gateway.invalidate();
@@ -199,12 +206,22 @@ export function createCronPage(context: () => ApplicationContext, host: () => HT
       observeAgentScope(currentContext.agentSelection),
       watchSelectedAgent(currentContext.agentSelection, (agentId) => {
         if (presentation.modelRequest?.agentId !== agentId) {
-          void presentation.loadModels(cron);
+          presentation.resetModels();
+          publish();
         }
       }),
       currentContext.gateway.subscribeEvents((event) => {
-        if (active && context() === currentContext && event.event === "cron") {
-          void refreshCron({ coalesce: true, event: event.payload });
+        if (
+          active &&
+          context() === currentContext &&
+          (event.event === "cron" ||
+            (hasCronInventoryEvents(currentContext.gateway.snapshot) &&
+              isCronInventoryInvalidation(event, currentContext.gateway.snapshot)))
+        ) {
+          void refreshCron({
+            coalesce: true,
+            event: event.event === "cron" ? event.payload : undefined,
+          });
         }
       }),
     );
@@ -243,6 +260,7 @@ export function createCronPage(context: () => ApplicationContext, host: () => HT
     // The state writer owns route admission; its DOM requests follow this publication's commit.
     onSettled(() => {
       if (active) {
+        ensureEditorModels();
         afterRender();
       }
     });
@@ -291,7 +309,26 @@ export function createCronPage(context: () => ApplicationContext, host: () => HT
     } else if (!cron.cronRuns.length && !cron.cronRunsLoadingMore) {
       void presentation.runTask(loadCronRuns);
     }
-    if (forceRefresh || presentation.modelRequest?.state !== cron) {
+    onSettled(() => ensureEditorModels(forceRefresh));
+  }
+
+  function ensureEditorModels(forceRefresh = false) {
+    if (!active) {
+      return;
+    }
+    // The settled tab is authoritative; setters may still expose the previous tab.
+    if (!cron.cronCreateOpen && (!cron.cronEditingJob || detailTab() === "history")) {
+      if (presentation.modelRequest) {
+        presentation.resetModels();
+      }
+      return;
+    }
+    const agentId = context().agentSelection.state.selectedId;
+    if (!canRefreshCron() || !cron.connected || !cron.client || !agentId) {
+      return;
+    }
+    const request = presentation.modelRequest;
+    if (forceRefresh || request?.state !== cron || request.agentId !== agentId) {
       void presentation.loadModels(cron);
     }
   }
@@ -373,17 +410,23 @@ export function createCronPage(context: () => ApplicationContext, host: () => HT
     }
   }
 
-  async function refreshCron(options: { coalesce?: boolean; event?: unknown } = {}) {
+  async function refreshCron(
+    options: { coalesce?: boolean; event?: unknown; refresh?: boolean } = {},
+  ) {
     const cronState = cron;
     if (!canRefreshCron(cronState) || !cronState.connected || !cronState.client) {
       return;
     }
     void presentation.runTask((current) => loadCronRuns(current, options));
-    void context().channels.refresh(false);
+    void context().acquireChannels(createChannelCapability).refresh(false);
     await Promise.all([
       presentation.read("status", (current) => loadCronStatus(current, options)),
       presentation.read("jobs", (current) =>
-        loadCronJobsPage(current, { tableFilters: true, event: options.event }),
+        loadCronJobsPage(current, {
+          tableFilters: true,
+          event: options.event,
+          refresh: options.refresh,
+        }),
       ),
     ]);
   }
@@ -610,9 +653,12 @@ export function createCronPage(context: () => ApplicationContext, host: () => HT
 
   const actions = {
     onListTabChange: setListTab,
-    onDetailTabChange: setDetailTab,
+    onDetailTabChange: (tab: CronDetailTab) => {
+      setDetailTab(tab);
+      onSettled(() => ensureEditorModels());
+    },
     onFormChange: patchForm,
-    onRefresh: () => void refreshCron(),
+    onRefresh: () => void refreshCron({ refresh: true }),
     onSubmit: () => submitForm(),
     onSubmitRunNow: () => submitForm(true),
     onSelectJob: selectJob,

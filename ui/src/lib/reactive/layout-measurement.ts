@@ -1,13 +1,14 @@
 import { createEffect, onSettled } from "solid-js";
 import { cancelLayout, scheduleLayout } from "../layout-frame.ts";
-import { listen } from "./listener.ts";
+import { observeFontLoading } from "./font-loading.ts";
+import { observeResize } from "./observers.ts";
 
 /** Coalesce size and defined invalidations; returned writes run after layout reads. */
 export function createLayoutMeasurement<T>(
   changed: () => T,
   measure: (invalidation: T | undefined) => (() => void) | void,
   options: {
-    targets: () => readonly Element[];
+    targets: (invalidation: T | undefined) => readonly Element[];
     mutations?: () => Node;
     fonts?: boolean;
     /** Admit a known empty layout before a measurable element exists. */
@@ -19,25 +20,31 @@ export function createLayoutMeasurement<T>(
   const key = {};
   let ready = false;
   let invalidation: T | undefined;
-  let resizeObserver: ResizeObserver | undefined;
-  let observed = new Set<Element>();
+  let resizeAvailable = false;
+  const observed = new Map<Element, () => void>();
   const read = () => {
-    const targets = options.targets();
+    const targets = options.targets(invalidation);
     if (!targets[0]?.isConnected) {
+      for (const release of observed.values()) {
+        release();
+      }
+      observed.clear();
       return options.measureWithoutTarget ? measure(invalidation) : undefined;
     }
     const next = new Set(targets);
-    for (const target of observed) {
+    if (resizeAvailable) {
+      for (const target of next) {
+        if (!observed.has(target)) {
+          observed.set(target, observeResize([target], schedule));
+        }
+      }
+    }
+    for (const [target, release] of observed) {
       if (!next.has(target)) {
-        resizeObserver?.unobserve(target);
+        release();
+        observed.delete(target);
       }
     }
-    for (const target of next) {
-      if (!observed.has(target)) {
-        resizeObserver?.observe(target);
-      }
-    }
-    observed = next;
     return measure(invalidation);
   };
   const schedule = () => {
@@ -65,10 +72,8 @@ export function createLayoutMeasurement<T>(
   onSettled(() => {
     ready = true;
     // Font metrics can settle without resizing the measured viewport.
-    const stopFonts = options.fonts ? listen(document.fonts, "loadingdone", schedule) : undefined;
-    if (typeof ResizeObserver === "function") {
-      resizeObserver = new ResizeObserver(schedule);
-    }
+    const stopFonts = options.fonts ? observeFontLoading(document.fonts, schedule) : undefined;
+    resizeAvailable = typeof ResizeObserver === "function";
     const mutationObserver = options.mutations ? new MutationObserver(schedule) : undefined;
     if (mutationObserver && options.mutations) {
       mutationObserver.observe(options.mutations(), {
@@ -82,7 +87,10 @@ export function createLayoutMeasurement<T>(
       ready = false;
       stopFonts?.();
       cancelLayout(key);
-      resizeObserver?.disconnect();
+      for (const release of observed.values()) {
+        release();
+      }
+      observed.clear();
       mutationObserver?.disconnect();
     };
   });

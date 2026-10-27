@@ -1,5 +1,5 @@
 import { parseControlUiFocusLocation } from "@openclaw/session-url-contract";
-import { createComponent, flush } from "solid-js";
+import { flush } from "solid-js";
 /* @vitest-environment jsdom */
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { GatewayHelloOk } from "../api/gateway.ts";
@@ -13,24 +13,22 @@ import {
   sessionsResult,
 } from "../lib/sessions/session-capability.test-support.ts";
 import {
-  composerContextWrapper,
   createComposerContainer,
   createComposerProps,
+  disposeComposer,
+  renderComposerInto,
   resetComposerFixture,
 } from "../pages/chat/chat-composer.test-support.ts";
 import { admitQueuedMessageForSession } from "../pages/chat/chat-outbox-admission.test-support.ts";
 import { chatOutboxOwner } from "../pages/chat/chat-outbox-owner.ts";
 import { createTestChatPane } from "../pages/chat/chat-pane.test-support.ts";
 import { handleSendChat } from "../pages/chat/chat-send-submit.ts";
-import { createComposerQuestions } from "../pages/chat/components/chat-composer-questions.ts";
-import { ChatComposer } from "../pages/chat/components/chat-composer.tsx";
 import {
   activeQueuedMessageEdit,
   beginQueuedMessageEdit,
   cancelQueuedMessageEdit,
   updateQueuedMessageEdit,
 } from "../pages/chat/queued-message-edit.ts";
-import { mountSolid } from "../test-helpers/mount-solid.ts";
 import { createStorageMock } from "../test-helpers/storage.ts";
 import { mountOpenClawApp } from "./app-root.tsx";
 import { resolveControlUiDocumentMode } from "./approval-deep-link.ts";
@@ -249,7 +247,6 @@ describe("Control UI Gateway target lineage", () => {
         void drawShell();
       });
       const composer = createComposerContainer();
-      let unmountComposer: (() => void) | undefined;
       try {
         expect(
           admitQueuedMessageForSession(state, captureChatOutboxAdmission(state, sessionKey), {
@@ -296,17 +293,7 @@ describe("Control UI Gateway target lineage", () => {
             onCancel: () => cancelQueuedMessageEdit(state),
           },
         });
-        unmountComposer = mountSolid(
-          () =>
-            createComponent(ChatComposer, {
-              ...props,
-              questions: createComposerQuestions(props.paneId, () => props),
-            }),
-          {
-            container: composer,
-            wrapper: composerContextWrapper(composer),
-          },
-        ).unmount;
+        renderComposerInto(composer, props);
         flush();
         await vi.dynamicImportSettled();
         flush();
@@ -345,7 +332,7 @@ describe("Control UI Gateway target lineage", () => {
         releaseShell();
         releasePane();
         releaseOutbox();
-        unmountComposer?.();
+        disposeComposer(composer);
         pane.disconnectedCallback();
         sessions.dispose();
         gateway.stop();

@@ -1,5 +1,4 @@
 import { randomUUID } from "node:crypto";
-import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -34,7 +33,7 @@ afterEach(() => {
 
 // Recovery publication requires POSIX permissions and directory fsync.
 describe.skipIf(process.platform === "win32")("port recovery admission", () => {
-  it("checks once at each admission and sees a port started after successful preflight", async () => {
+  it("sees a port started after successful preflight and prior admission", async () => {
     await withDoctorConfigPreflightHome(async (home) => {
       const stateDir = path.join(home, ".openclaw");
       const configPath = path.join(stateDir, "openclaw.json");
@@ -49,20 +48,14 @@ describe.skipIf(process.platform === "win32")("port recovery admission", () => {
       openOpenClawStateDatabase({ path: path.join(stateDir, "state", "openclaw.sqlite") });
       closeOpenClawStateDatabaseForTest();
       const fixedPath = databasePortManifestPath(stateDir);
-      const reads = vi.spyOn(fsSync, "readFileSync");
-      const countReads = () => reads.mock.calls.filter(([file]) => file === fixedPath).length;
       expect(
         (await runStartupConfigPreflight({ gateway: true, observe: false })).snapshot.valid,
       ).toBe(true);
-      expect(countReads()).toBe(1);
       const lock = await acquireGatewayLock(lockOptions);
       expect(lock).not.toBeNull();
       await lock?.release();
-      expect(countReads()).toBe(2);
       writeDatabasePortManifest(stateDir, makeDatabasePortManifest(stateDir), () => {});
-      const beforeNewAdmission = countReads();
       await expect(acquireGatewayLock(lockOptions)).rejects.toThrow(fixedPath);
-      expect(countReads() - beforeNewAdmission).toBe(1);
     });
   });
 

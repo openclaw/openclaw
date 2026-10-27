@@ -1,6 +1,6 @@
 import { once } from "node:events";
 import { afterEach, assert, describe, expect, it, vi } from "vitest";
-import { WebSocketServer } from "ws";
+import { WebSocketServer, type WebSocket } from "ws";
 import { dashboardCommand } from "../../commands/dashboard.js";
 import { baseConfigSnapshot } from "../../commands/test-runtime-config-helpers.js";
 import {
@@ -61,6 +61,59 @@ afterEach(async () => {
   }
 });
 
+async function createListener(connection: (ws: WebSocket) => void, rejectUpgrade = false) {
+  const wss = new WebSocketServer({
+    host: "127.0.0.1",
+    port: 0,
+    ...(rejectUpgrade ? { verifyClient: () => false } : {}),
+  });
+  cleanups.push(() => closeMinimalGatewayServer(wss));
+  wss.on("connection", connection);
+  await once(wss, "listening");
+  const address = wss.address();
+  assert(address && typeof address !== "string");
+  return `ws://127.0.0.1:${address.port}`;
+}
+
+function serveStatus(ws: WebSocket, auth: unknown[], error?: string) {
+  sendMinimalGatewayConnectChallenge(ws);
+  ws.on("message", (data) => {
+    const frame = parseMinimalGatewayRequestFrame(data);
+    if (frame.method === "connect") {
+      auth.push(frame.params?.auth);
+      sendMinimalGatewayResponse(
+        ws,
+        frame.id!,
+        buildMinimalGatewayHelloOkPayload({
+          methods: ["status"],
+          auth: { role: "operator", scopes: ["operator.read"] },
+        }),
+      );
+    } else if (error) {
+      ws.send(
+        JSON.stringify({
+          type: "res",
+          id: frame.id,
+          ok: false,
+          error: { code: "UNAVAILABLE", message: error },
+        }),
+      );
+    } else {
+      sendMinimalGatewayResponse(ws, frame.id!, { status: "ok" });
+    }
+  });
+}
+
+async function createState(options?: Parameters<typeof createOpenClawTestState>[0]) {
+  const state = await createOpenClawTestState(options);
+  cleanups.push(() => state.cleanup());
+  return state;
+}
+
+async function stateFiles(stateDir: string) {
+  return (await listDirectoryTreeStrict(stateDir)).map((entry) => entry.relativePath);
+}
+
 async function checkDashboardReadiness(url: string, rpc: NonNullable<DaemonStatus["rpc"]>) {
   target.url = url;
   const port = Number(new URL(url).port);
@@ -91,43 +144,17 @@ describe("Gateway reachability over real sockets", () => {
   it.each([{}, { token: "service-token" }, { password: "service-password" }])(
     "freezes resolved service auth %j without pairing writes",
     async (auth) => {
-      const state = await createOpenClawTestState({
+      const state = await createState({
         env: {
           OPENCLAW_GATEWAY_TOKEN: "ambient-token",
           OPENCLAW_GATEWAY_PASSWORD: "ambient-password",
         },
       });
-      cleanups.push(() => state.cleanup());
-      const wss = new WebSocketServer({ host: "127.0.0.1", port: 0 });
-      cleanups.push(() => closeMinimalGatewayServer(wss));
-      let connectAuth: unknown;
-      wss.on("connection", (ws) => {
-        sendMinimalGatewayConnectChallenge(ws);
-        ws.on("message", (data) => {
-          const frame = parseMinimalGatewayRequestFrame(data);
-          if (frame.method === "connect") {
-            connectAuth = frame.params?.auth;
-            sendMinimalGatewayResponse(
-              ws,
-              frame.id!,
-              buildMinimalGatewayHelloOkPayload({
-                methods: ["status"],
-                auth: { role: "operator", scopes: ["operator.read"] },
-              }),
-            );
-          } else {
-            sendMinimalGatewayResponse(ws, frame.id!, { status: "ok" });
-          }
-        });
-      });
-      await once(wss, "listening");
-      const address = wss.address();
-      assert(address && typeof address !== "string");
-      const before = (await listDirectoryTreeStrict(state.stateDir)).map(
-        (walkEntry) => walkEntry.relativePath,
-      );
+      const connectAuth: unknown[] = [];
+      const url = await createListener((ws) => serveStatus(ws, connectAuth));
+      const before = await stateFiles(state.stateDir);
       const rpc = await probeGatewayStatus({
-        url: `ws://127.0.0.1:${address.port}`,
+        url,
         ...auth,
         config: {
           gateway: {
@@ -141,37 +168,22 @@ describe("Gateway reachability over real sockets", () => {
         requireRpc: true,
       });
       expect(rpc, JSON.stringify(rpc)).toMatchObject({ ok: true });
-      expect(connectAuth ?? {}).toEqual(auth);
-      expect(
-        (await listDirectoryTreeStrict(state.stateDir)).map((walkEntry) => walkEntry.relativePath),
-      ).toEqual(before);
+      expect(connectAuth.at(-1) ?? {}).toEqual(auth);
+      expect(await stateFiles(state.stateDir)).toEqual(before);
     },
   );
 
   it.each(["terminate", "policy-close", "silent", "upgrade-rejected"] as const)(
     "does not start a second service or accept a %s listener",
     async (mode) => {
-      const state = await createOpenClawTestState();
-      cleanups.push(() => state.cleanup());
-      const wss = new WebSocketServer({
-        host: "127.0.0.1",
-        port: 0,
-        ...(mode === "upgrade-rejected" ? { verifyClient: () => false } : {}),
-      });
-      cleanups.push(() => closeMinimalGatewayServer(wss));
-      wss.on("connection", (ws) => {
+      await createState();
+      const url = await createListener((ws) => {
         if (mode === "terminate") {
           ws.terminate();
         } else if (mode === "policy-close") {
           ws.close(1008, "pairing required");
         }
-      });
-      await once(wss, "listening");
-      const address = wss.address();
-      if (typeof address === "string" || !address) {
-        throw new Error("missing test listener address");
-      }
-      const url = `ws://127.0.0.1:${address.port}`;
+      }, mode === "upgrade-rejected");
       const rpc = await probeGatewayStatus({ url, config: {}, timeoutMs: 400, json: true });
       assert(!rpc.ok);
       expect(rpc.gatewayReached).toBeUndefined();
@@ -187,41 +199,8 @@ describe("Gateway reachability over real sockets", () => {
   );
 
   it("preserves the accepted handshake when a subsequent status RPC fails", async () => {
-    const state = await createOpenClawTestState();
-    cleanups.push(() => state.cleanup());
-    const wss = new WebSocketServer({ host: "127.0.0.1", port: 0 });
-    cleanups.push(() => closeMinimalGatewayServer(wss));
-    wss.on("connection", (ws) => {
-      sendMinimalGatewayConnectChallenge(ws);
-      ws.on("message", (data) => {
-        const frame = parseMinimalGatewayRequestFrame(data);
-        if (frame.method === "connect") {
-          sendMinimalGatewayResponse(
-            ws,
-            frame.id!,
-            buildMinimalGatewayHelloOkPayload({
-              methods: ["status"],
-              auth: { role: "operator", scopes: ["operator.read"] },
-            }),
-          );
-        } else {
-          ws.send(
-            JSON.stringify({
-              type: "res",
-              id: frame.id,
-              ok: false,
-              error: { code: "UNAVAILABLE", message: "synthetic status failure" },
-            }),
-          );
-        }
-      });
-    });
-    await once(wss, "listening");
-    const address = wss.address();
-    if (typeof address === "string" || !address) {
-      throw new Error("missing test listener address");
-    }
-    const url = `ws://127.0.0.1:${address.port}`;
+    await createState();
+    const url = await createListener((ws) => serveStatus(ws, [], "synthetic status failure"));
     const rpc = await probeGatewayStatus({
       url,
       urlOverride: url,

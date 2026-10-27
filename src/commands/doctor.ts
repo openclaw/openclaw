@@ -50,6 +50,8 @@ export async function doctorCommand(
   options?: DoctorOptions,
   databasePreflight?: DoctorDatabasePreflight,
 ): Promise<void> {
+  const { preparePostgresPoolForUpdate } = await import("../infra/postgres-sync/pool.js");
+  await preparePostgresPoolForUpdate("openclaw doctor --fix");
   const outputRuntime = runtime ?? defaultRuntime;
   if (options?.stateSqlite) {
     const { runDoctorStateSqliteCompact } = await import("./doctor-state-sqlite-compact.js");

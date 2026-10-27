@@ -1,7 +1,6 @@
 import { createMemo, Show } from "solid-js";
 import { isReservedSystemAgentId } from "../../../../src/system-agent/agent-id.js";
 import type { AgentsListResult } from "../../api/types.ts";
-import { currentThemeBranding, subscribeThemeBranding } from "../../app/theme-branding.ts";
 import {
   resolveLocalUserAvatarText,
   resolveLocalUserAvatarUrl,
@@ -34,7 +33,7 @@ import { formatSenderLabel, type SenderIdentity } from "../../lib/chat/sender-la
 import { resolveAvatarImageUrl } from "../../lib/identity-avatar-loader.ts";
 import type { IdentityAvatarView } from "../../lib/identity-avatar-view.ts";
 import { resolveAvatarInitials } from "../../lib/identity-avatar.ts";
-import { projectSource } from "../../lib/reactive/projection.ts";
+import { themeBrandingProjection } from "../../lib/reactive/theme-branding.ts";
 import { DEFAULT_AGENT_ID } from "../../lib/sessions/session-key.ts";
 import { ChatAuthorAvatar, UserAvatarSlot } from "./components/chat-author-avatar-view.tsx";
 
@@ -228,11 +227,7 @@ function AgentAvatar(props: {
   textAvatar?: string | null;
 }) {
   const gateway = useAvatarGatewayContext();
-  const branding = projectSource(null, {
-    read: currentThemeBranding,
-    subscribe: (_source, notify) => subscribeThemeBranding(notify),
-    equality: Object.is,
-  });
+  const branding = themeBrandingProjection;
   const url = createMemo(() => props.avatar?.trim() || "");
   const view = createMemo(() => {
     gateway();
@@ -258,6 +253,8 @@ function AgentAvatar(props: {
         ref={(element) => props.elementRef?.(element)}
         data-avatar-state={presentation.state()}
         class={["chat-avatar-slot", presentation.classes()]}
+        role="img"
+        aria-label={props.name}
       >
         <Show when={Boolean(view().imageUrl)}>
           <IdentityAvatarImage
@@ -265,10 +262,11 @@ function AgentAvatar(props: {
             onStateChange={presentation.onStateChange}
             class="chat-avatar assistant"
             alt={props.name}
+            ariaHidden
           />
         </Show>
         <AgentIdentityAvatar
-          agent={{ id: props.id, name: props.name, textAvatar: props.textAvatar }}
+          agent={{ id: props.id, textAvatar: props.textAvatar }}
           class="chat-avatar assistant"
         />
         <AgentAvatarHat agentId={props.id} branding={branding.read()} />

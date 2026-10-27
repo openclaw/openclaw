@@ -15,7 +15,7 @@ import {
   waitForMobileSidebarDrawerOpen,
 } from "./session-management.test-support.ts";
 
-const suite = createSessionManagementE2eSuite(true);
+const suite = createSessionManagementE2eSuite();
 const menuItem = (root: Page | Locator, name: string) =>
   root.getByRole("menuitem", { name, exact: true });
 const noNestedMenus = async (root: Page | Locator) =>
@@ -100,7 +100,7 @@ suite.define(() => {
             { id: "reports", pluginId: "reports", label: "Reports", icon: "chartBar" },
           ],
         });
-        // This suite serves Vite source; bind it to the same Gateway origin as the seed.
+        // Bind the UI to the same Gateway origin as the seeded preferences.
         await page.addInitScript({ content: createControlUiMockSameOriginGatewayScript() });
         await page.addInitScript(
           ({ key, gatewayUrl, railShortcuts }) => {

@@ -1,6 +1,7 @@
 import { once } from "node:events";
 import http from "node:http";
 import type { AddressInfo } from "node:net";
+import { promisify } from "node:util";
 import { rawDataToString } from "@openclaw/gateway-client/websocket-data";
 import { expect, it, vi } from "vitest";
 import { WebSocket, WebSocketServer } from "ws";
@@ -281,13 +282,9 @@ class PublicWorkerHarness {
     this.connectionWork.beginClose();
     await this.connectionWork.drain();
     this.publicRateLimiter.dispose();
-    await new Promise<void>((resolve) => {
-      this.wss.close(() => resolve());
-    });
+    await promisify(this.wss.close.bind(this.wss))();
     if (this.httpServer.listening) {
-      await new Promise<void>((resolve, reject) => {
-        this.httpServer.close((error) => (error ? reject(error) : resolve()));
-      });
+      await promisify(this.httpServer.close.bind(this.httpServer))();
     }
   }
 }

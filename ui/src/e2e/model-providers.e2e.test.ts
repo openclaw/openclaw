@@ -2,7 +2,7 @@
 import { writeFile } from "node:fs/promises";
 import path from "node:path";
 import { chromium, type Browser } from "playwright";
-import { beforeEach, afterAll, beforeAll, describe, expect, it } from "vitest";
+import { beforeEach, afterAll, beforeAll, describe, expect, inject, it } from "vitest";
 import { applyMergePatch } from "../../../src/config/merge-patch.js";
 import { sourceConfigSnapshot } from "../lib/config/config-snapshot.test-support.ts";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
@@ -71,7 +71,11 @@ describeControlUiE2e("Control UI Models mocked Gateway E2E", () => {
       throw new Error(`Playwright Chromium is unavailable at ${chromiumExecutablePath}`);
     }
     server = await startControlUiE2eServer();
-    browser = await chromium.launch({ executablePath: chromiumExecutablePath });
+    const { wsEndpoint } = inject("controlUiE2eChromium");
+    if (!wsEndpoint) {
+      throw new Error("Control UI E2E requires its shared Chromium server");
+    }
+    browser = await chromium.connect(wsEndpoint);
   });
 
   afterAll(async () => {
@@ -274,7 +278,14 @@ describeControlUiE2e("Control UI Models mocked Gateway E2E", () => {
               provider: "claude-cli",
               displayName: "Claude",
               status: "ok",
-              profiles: [{ profileId: "anthropic:default", type: "oauth", status: "expired" }],
+              profiles: [
+                {
+                  profileId: "anthropic:default",
+                  type: "oauth",
+                  status: "expired",
+                  expiry: { at: NOW - 1, remainingMs: -1, label: "0m" },
+                },
+              ],
               usage: {
                 providerId: "anthropic",
                 plan: "Max 20x",
@@ -319,9 +330,12 @@ describeControlUiE2e("Control UI Models mocked Gateway E2E", () => {
       await expect.poll(async () => claudeReadiness.textContent()).not.toContain("Expiring");
       await expect.poll(async () => claudeReadiness.textContent()).not.toContain("Not signed in");
       await expandProvider(page, "anthropic");
-      await expect
-        .poll(async () => claudeCard.locator(".model-providers__profile").textContent())
-        .toContain("Expired");
+      const claudeProfile = claudeCard.locator(".model-providers__profile");
+      await expect.poll(async () => claudeProfile.textContent()).toContain("Access token expired");
+      expect(await claudeProfile.textContent()).toContain("Credentials configured");
+      expect(await claudeProfile.textContent()).toContain(
+        "Access-token expiry alone does not mean you need to sign in again.",
+      );
       // The open row trades its summary chips for the full window tiles.
       expect(await claudeCard.locator(".provider-usage__chip").count()).toBe(0);
       const fiveHour = claudeCard.locator(".provider-usage__window", { hasText: "5h" });

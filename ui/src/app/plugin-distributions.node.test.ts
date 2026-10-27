@@ -108,7 +108,6 @@ it("publishes the complete immutable generation with only useful eligible sideca
     const target = path.join(output, revisions[0]!, name);
     expect(await readText(target)).toBe(body);
     const compressed = name === "large.js" || name === "small.css";
-    expect(Buffer.byteLength(body) >= 4096).toBe(name === "large.js");
     for (const extension of ["br", "gz"]) {
       const sidecar = `${target}.${extension}`;
       if (!compressed) {
@@ -195,53 +194,53 @@ it("serves the same validated generation and inventory from the development serv
   }
 });
 
-it.each([
-  { section: "memory", panel: "overview" },
-  { section: "channels", panel: "detail", channelId: "custom" },
-])(
-  "builds source Settings assets while preserving sibling distributions (%s)",
-  async (placement) => {
-    vi.stubEnv("OPENCLAW_CONTROL_UI_REQUIRE_PLUGIN_DISTRIBUTIONS", "1");
-    const { pluginRoot, files, generation } = await fixture();
-    const settingsRoot = at("extensions/settings-fixture");
-    await writeFiles(at("extensions/manifest-only"), {
-      "openclaw.plugin.json": { id: "manifest-only" },
-    });
-    await fs.symlink(path.resolve("node_modules"), at("node_modules"), "junction");
-    await writeFiles(root, {
-      "package.json": {
-        name: "openclaw",
-        type: "module",
-        ...(placement.section === "channels"
-          ? { files: ["!dist/extensions/settings-fixture/**"] }
-          : {}),
-      },
-    });
-    const manifest = {
-      id: "settings-fixture",
+it("builds bundled and root-excluded source Settings assets while preserving sibling distributions", async () => {
+  vi.stubEnv("OPENCLAW_CONTROL_UI_REQUIRE_PLUGIN_DISTRIBUTIONS", "1");
+  const { pluginRoot, files, generation } = await fixture();
+  await writeFiles(at("extensions/manifest-only"), {
+    "openclaw.plugin.json": { id: "manifest-only" },
+  });
+  await fs.symlink(path.resolve("node_modules"), at("node_modules"), "junction");
+  await writeFiles(root, {
+    "package.json": {
+      name: "openclaw",
+      type: "module",
+      files: ["!dist/extensions/channel-settings-fixture/**"],
+    },
+  });
+  const settings = [
+    { id: "memory-settings-fixture", placement: { section: "memory", panel: "overview" } },
+    {
+      id: "channel-settings-fixture",
+      placement: { section: "channels", panel: "detail", channelId: "custom" },
+    },
+  ].map(({ id, placement }) => ({
+    id,
+    manifest: {
+      id,
       ...(placement.section === "channels" ? { channels: [placement.channelId] } : {}),
       controlUi: {
         activation: "settings-only",
         entry: "dist/control-ui/source/index.js",
         settingsViews: [placement],
       },
-    };
-    await sourcePlugin(
-      "settings-fixture",
-      manifest,
-      'export default { pluginId: "settings-fixture", settingsViews: [] };\n',
-    );
-    await compile();
-    const packaged = JSON.parse(
-      await readText(at("dist/extensions/settings-fixture/openclaw.plugin.json")),
-    );
-    expect(packaged.controlUi.settingsViews).toEqual([placement]);
+    },
+  }));
+  for (const { id, manifest } of settings) {
+    await sourcePlugin(id, manifest, `export default { pluginId: "${id}", settingsViews: [] };\n`);
+  }
+  await compile();
+  for (const { id, manifest } of settings) {
+    const packaged = JSON.parse(await readText(at("dist/extensions", id, "openclaw.plugin.json")));
+    expect(packaged.controlUi.settingsViews).toEqual(manifest.controlUi.settingsViews);
     expect(packaged.controlUi.activation).toBe("settings-only");
-    expect(await fs.readdir(at("ui-output/assets/plugins/settings-fixture"))).toHaveLength(1);
-    expect(await readText(settingsRoot, "openclaw.plugin.json")).toBe(JSON.stringify(manifest));
-    for (const [name, body] of files) {
-      expect(await readText(pluginRoot, generation, name)).toBe(body);
-    }
-    expect(JSON.parse(await readText(pluginRoot, "package.json")).name).toBe("@openclaw/workboard");
-  },
-);
+    expect(await fs.readdir(at("ui-output/assets/plugins", id))).toHaveLength(1);
+    expect(await readText(at("extensions", id, "openclaw.plugin.json"))).toBe(
+      JSON.stringify(manifest),
+    );
+  }
+  for (const [name, body] of files) {
+    expect(await readText(pluginRoot, generation, name)).toBe(body);
+  }
+  expect(JSON.parse(await readText(pluginRoot, "package.json")).name).toBe("@openclaw/workboard");
+});

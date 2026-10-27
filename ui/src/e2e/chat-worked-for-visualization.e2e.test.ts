@@ -14,7 +14,7 @@ beforeEach(() => {
 });
 import { controlUiSessionUrl, installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { useCanvasSandboxFixture } from "./canvas-sandbox.test-support.ts";
-import { waitForChatScrollIdle } from "./chat-flow.test-support.ts";
+import { waitForChatScrollIdle, chatMessage } from "./chat-flow.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
 declare global {
@@ -288,16 +288,14 @@ suite.define(() => {
             ],
             timestamp: 1_500,
           },
-          {
-            role: "assistant",
-            content: [{ type: "text", text: "Checking." }],
+          chatMessage("assistant", "Checking.", {
             openclawStreamFallback: {
               itemId: "worked-for-checking",
               replacementText: "Checking.",
               source: "segment",
             },
             timestamp: 2_000,
-          },
+          }),
           {
             role: "toolResult",
             toolCallId: "worked-for-tool",
@@ -305,11 +303,7 @@ suite.define(() => {
             content: "ok",
             timestamp: 3_000,
           },
-          {
-            role: "assistant",
-            content: [{ type: "text", text: "Done." }],
-            timestamp: 4_000,
-          },
+          chatMessage("assistant", "Done.", { timestamp: 4_000 }),
         ],
       });
 

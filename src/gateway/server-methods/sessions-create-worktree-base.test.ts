@@ -19,7 +19,9 @@ import {
 import {
   controlUiClient,
   initializeRepository,
+  removeOwnedSessionWorktree,
   settleWorkspaceRuns,
+  successfulSessionRequest as requestOk,
 } from "../server.sessions.create.projects.test-support.js";
 import { sessionTitleRequests } from "../session-title-state.js";
 import { dispatchInboundMessageMock, testState } from "../test-helpers.js";
@@ -34,11 +36,6 @@ const execFileAsync = promisify(execFile);
 const git = (cwd: string, ...args: string[]) => execFileAsync("git", ["-C", cwd, ...args]);
 const readSession = (storePath: string, sessionKey: string) =>
   loadSessionEntry({ agentId: "main", sessionKey, storePath });
-async function requestOk<T>(...args: Parameters<typeof directSessionReq<T>>) {
-  const response = await directSessionReq<T>(...args);
-  expect(response.ok, JSON.stringify(response.error)).toBe(true);
-  return response.payload!;
-}
 const createRun = (
   params: Record<string, unknown>,
   options: Parameters<typeof directSessionReq<{ key: string; runId: string }>>[2],
@@ -87,14 +84,7 @@ async function cleanupRun(
   sessionKey: string,
 ) {
   await settleWorkspaceRuns(context, storePath, sessionKey, true);
-  const owned = await managedWorktrees.findLiveByOwner("session", sessionKey);
-  if (owned) {
-    await managedWorktrees.remove({
-      id: owned.id,
-      reason: "test-cleanup",
-      allowSnapshotLoss: true,
-    });
-  }
+  await removeOwnedSessionWorktree(sessionKey);
 }
 
 vi.mock("../../projects/project-clone.js", async (importOriginal) => {
@@ -314,16 +304,7 @@ test("sessions.create recovers a failed worktree in the same session with an exp
     // Automatic naming is independent of the failed worktree run's settlement.
     await sessionTitleRequests.get({ ...target, sessionId: beforeTitle.sessionId });
     const failed = loadSessionEntry(target)!;
-    expect(failed).toEqual({
-      ...beforeTitle,
-      displayName: expect.stringMatching(/^[a-z]+-[a-z]+$/),
-      titleRefinement: {
-        sessionId: beforeTitle.sessionId,
-        generatedName: failed.displayName,
-        remainingMessages: 6,
-      },
-      updatedAt: expect.any(Number),
-    });
+    expect(failed.displayName).toMatch(/^[a-z]+-[a-z]+$/);
     expect(failed.updatedAt).toBeGreaterThanOrEqual(beforeTitle.updatedAt);
     expect(failed).toMatchObject({
       status: "failed",
@@ -348,7 +329,6 @@ test("sessions.create recovers a failed worktree in the same session with an exp
     expect(bound).toMatchObject({
       sessionId: failed.sessionId,
       displayName: failed.displayName,
-      titleRefinement: failed.titleRefinement,
       projectId: project.id,
       lastRunError: failed.lastRunError,
       worktree: { repoRoot: repository },

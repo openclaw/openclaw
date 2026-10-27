@@ -66,6 +66,28 @@ export class ChatPaneComposerHandoff {
     presentations.add(this);
   }
 
+  static retainedAttachmentIds(
+    context: ApplicationContext,
+    attachments: readonly ChatAttachment[],
+  ): ReadonlySet<string> {
+    const retained = new Set(context.chatAttachmentHandoff.retainedAttachmentIds(attachments));
+    for (const presentation of composerPresentations.get(context) ?? []) {
+      const state = presentation.host.state();
+      if (!state) {
+        continue;
+      }
+      const references = [
+        ...state.chatAttachments,
+        ...Object.values(state.chatComposerFallbackByScope).flatMap((draft) => draft.attachments),
+        ...(state.chatQueuedEdit?.attachments ?? []),
+      ];
+      for (const { id } of references) {
+        retained.add(id);
+      }
+    }
+    return retained;
+  }
+
   claim(): void {
     if (!this.host.presented()) {
       return;

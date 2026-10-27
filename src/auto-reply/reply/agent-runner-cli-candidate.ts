@@ -20,7 +20,7 @@ import {
   hasNewGeneratedMediaTaskForSessionKey,
 } from "../../agents/media-generation-activity.js";
 import { findModelInCatalog } from "../../agents/model-catalog-lookup.js";
-import { recordModelFallbackStop } from "../../agents/model-fallback-stop.js";
+import { createUnrecordedScheduledAccountRefusal } from "../../agents/scheduled-unrecorded-account.js";
 import { normalizeChatType } from "../../channels/chat-type.js";
 import { shouldPreserveUserFacingSessionStateForInputProvenance } from "../../sessions/input-provenance.js";
 import { createAgentLifecycleTerminalBackstop } from "./agent-lifecycle-terminal.js";
@@ -55,6 +55,14 @@ export async function runCliFallbackCandidate(
     onSessionWriter: (writer: CompactionAccountingTarget) => void;
   },
 ): ReturnType<typeof runCliAgentWithLifecycle> {
+  if (
+    params.candidateRun.cyberAccessProgram !== undefined &&
+    params.candidateRun.cyberAccessProgram !== "standard"
+  ) {
+    throw new Error(
+      "Daybreak access is unsupported by this CLI runtime. Select Standard or use the OpenClaw or native Codex runtime.",
+    );
+  }
   const turn = params.turn;
   params.scheduledInference?.assertCandidate(params.provider, true);
   const onPreparedBlockReply = turn.opts?.onPreparedBlockReply;
@@ -232,11 +240,11 @@ export async function runCliFallbackCandidate(
                 config: params.runtimeConfig,
               }).authProfileId;
         if (turn.followupRun.run.scheduledAutomation && !scheduledInference && authProfileId) {
-          const refusal = new Error(
-            "Automation has no recorded inference account. Explicitly select its account with a model@profile update before running it.",
-          );
-          recordModelFallbackStop(refusal);
-          throw refusal;
+          throw createUnrecordedScheduledAccountRefusal({
+            runtime: params.cliExecutionProvider,
+            modelRef: `${params.provider}/${params.model}`,
+            profileId: authProfileId,
+          });
         }
         const diagnosticOwner = params.deferredLifecycle.handoffToCli();
         // A forked child carries the parent's binding with a one-shot fork marker;

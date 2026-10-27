@@ -122,7 +122,7 @@ export function registerParityHostLifecycle() {
   });
 }
 
-export async function captureAnthropicRequest(
+export async function captureAnthropicExchange(
   implementation: "provider" | "transport",
   options: {
     model?: Partial<Model<"anthropic-messages">>;
@@ -209,8 +209,18 @@ export async function captureAnthropicRequest(
           requestContext,
           streamOptions,
         );
-  const result = await stream.result();
-  expect(result.stopReason).toBe("stop");
+  const eventTrace = [];
+  for await (const event of stream) {
+    eventTrace.push(event);
+  }
+  return { requests, terminal: await stream.result(), eventTrace, warnings, info };
+}
+
+export async function captureAnthropicRequest(
+  ...args: Parameters<typeof captureAnthropicExchange>
+) {
+  const { requests, terminal, warnings, info } = await captureAnthropicExchange(...args);
+  expect(terminal.stopReason).toBe("stop");
   expect(requests).toHaveLength(1);
   const [request] = requests;
   if (!request) {

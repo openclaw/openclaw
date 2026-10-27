@@ -21,13 +21,6 @@ type StickyEntry = {
   lastUsedAtMs: number;
 };
 
-type StickyRateLimitFallback = {
-  candidates: ModelFallbackCandidate[];
-  /** Seeds the run's attempts: a skipped selected model keeps the fallback reason visible. */
-  attempts: FallbackAttempt[];
-  record: (winner: ModelCandidate, attempts: readonly FallbackAttempt[]) => void;
-};
-
 // Process-global so duplicated module instances (bundle chunks, per-file test registries)
 // share one store. Restart costs at most one cold cache; idle expiry and the cap bound
 // primary deferral.
@@ -39,7 +32,7 @@ const stickyFallbacks = resolveGlobalMap<string, StickyEntry>(
 export function takeStickyRateLimitFallback(
   params: { sessionId?: string; stickyRateLimitFallback?: boolean },
   candidates: ModelFallbackCandidate[],
-): StickyRateLimitFallback | undefined {
+) {
   const sessionId = params.sessionId;
   if (params.stickyRateLimitFallback !== true || !sessionId) {
     return undefined;
@@ -84,8 +77,9 @@ export function takeStickyRateLimitFallback(
   }
   return {
     candidates: orderedCandidates,
+    /** Seeds the run's attempts: a skipped selected model keeps the fallback reason visible. */
     attempts: skippedAttempt ? [skippedAttempt] : [],
-    record(winner, attempts) {
+    record(winner: ModelCandidate, attempts: readonly FallbackAttempt[]) {
       const winnerKey = modelKey(winner.provider, winner.model);
       if (!requested || winnerKey === requestedKey) {
         return;
@@ -114,8 +108,4 @@ export function takeStickyRateLimitFallback(
       pruneMapToMaxSize(stickyFallbacks, MAX_STICKY_SESSIONS);
     },
   };
-}
-
-export function resetStickyRateLimitFallbacksForTest(): void {
-  stickyFallbacks.clear();
 }

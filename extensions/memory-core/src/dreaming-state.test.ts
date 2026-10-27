@@ -52,6 +52,7 @@ function createFixture(onMutation?: (operation: "register" | "delete") => void, 
   });
   const scope = { namespace: "workspace-progress", workspaceDir: path.join(root, "workspace") };
   return {
+    env,
     scope,
     foreignWorkspace: { ...scope, workspaceDir: path.join(root, "foreign-workspace") },
     foreignNamespace: { ...scope, namespace: "workspace-other" },
@@ -75,10 +76,13 @@ const writeValue = (scope: Scope, key: string, value: string) =>
   writeMemoryCoreWorkspaceEntry({ ...scope, key, value });
 
 test("workspace enumeration isolates corrupt neighbors while preserving order and expiry", async () => {
-  const { scope, foreignWorkspace, foreignNamespace, database } = createFixture();
+  const { scope, foreignWorkspace, foreignNamespace, env } = createFixture();
   await writeValues(scope, { a: "a", b: "b", c: "c", expired: "expired" });
   await writeValue(foreignWorkspace, "foreign", "foreign");
   await writeValue(foreignNamespace, "other", "other");
+  // Raw fault injection models cold storage, outside the resident owner's lifetime.
+  await closeOpenClawStateDatabaseAsync();
+  let database = openOpenClawStateDatabase({ env });
   const prefix = `${memoryCoreWorkspaceStateKey(scope.workspaceDir)}:`;
   const foreignPrefix = `${memoryCoreWorkspaceStateKey(foreignWorkspace.workspaceDir)}:`;
   database.db
@@ -89,11 +93,14 @@ test("workspace enumeration isolates corrupt neighbors while preserving order an
        WHERE plugin_id = 'memory-core' AND namespace = ? AND entry_key LIKE ?`,
     )
     .run(scope.namespace, `${prefix}%`);
-  const corrupt = database.db.prepare(
-    `UPDATE plugin_state_entries SET value_json = '{'
+  const corrupt = (keyPrefix: string) =>
+    database.db
+      .prepare(
+        `UPDATE plugin_state_entries SET value_json = '{'
      WHERE plugin_id = 'memory-core' AND namespace = ? AND entry_key LIKE ?`,
-  );
-  corrupt.run(scope.namespace, `${foreignPrefix}%`);
+      )
+      .run(scope.namespace, `${keyPrefix}%`);
+  corrupt(foreignPrefix);
 
   // Equal timestamps retain stored-key order: SHA-256(c) sorts before SHA-256(b).
   expect(await readMemoryCoreWorkspaceEntries(scope)).toEqual([
@@ -116,7 +123,9 @@ test("workspace enumeration isolates corrupt neighbors while preserving order an
   ).toEqual({ value_json: "{" });
 
   await writeValue(scope, "corrupt", "selected");
-  corrupt.run(scope.namespace, `${prefix}%`);
+  await closeOpenClawStateDatabaseAsync();
+  database = openOpenClawStateDatabase({ env });
+  corrupt(prefix);
   for (const operation of [
     () => readMemoryCoreWorkspaceEntries(scope),
     () => writeValues(scope, {}),

@@ -8,7 +8,10 @@ import { loadProviderScopedThinkingCatalog } from "../../agents/model-catalog.ru
 import { buildModelAliasIndex } from "../../agents/model-selection.js";
 import { prepareOperatorModelPolicy } from "../../agents/operator-model-policy.js";
 import { persistStickyModelSelectionBestEffort } from "../../agents/sticky-model-selection.js";
-import { createFixtureRouteModels } from "../../agents/test-helpers/model-fallback-config-fixture.js";
+import {
+  createFixtureProviderModels,
+  createFixtureRouteModels,
+} from "../../agents/test-helpers/model-fallback-config-fixture.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import { triggerSessionPatchHook } from "../../gateway/session-patch-hooks.js";
@@ -467,15 +470,7 @@ describe("mixed inline directives", () => {
           models: { "fixture/blocked": { alias: "blocked" } },
         },
       },
-      models: {
-        providers: {
-          fixture: {
-            api: "openai-completions",
-            baseUrl: "https://fixture.invalid/v1",
-            models: [],
-          },
-        },
-      },
+      models: createFixtureProviderModels("https://fixture.invalid/v1"),
     };
     const operatorAuthority = createAdmittedRunOperatorAuthority({
       profileId: "limited-operator",

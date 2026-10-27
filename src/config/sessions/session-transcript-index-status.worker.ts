@@ -184,6 +184,7 @@ export function maintainSessionTranscriptIndexStatus(db: EngineConnection): {
     state.after_session = null;
     state.sibling_write_revision = siblingWriteRevision ?? -1;
   }
+  let statusChanged = resetPending || !state.complete;
   const candidates = new Set(
     resetPending
       ? []
@@ -325,20 +326,23 @@ export function maintainSessionTranscriptIndexStatus(db: EngineConnection): {
     state.complete = 0;
     state.after_session = null;
     state.sibling_write_revision = siblingWriteRevision ?? -1;
+    statusChanged = true;
   }
-  executeSqliteQuerySync(
-    db,
-    temporary
-      .updateTable("openclaw_transcript_index_status")
-      .set({
-        sibling_write_revision: state.sibling_write_revision,
-        schema_version: schema.schemaVersion,
-        complete: state.complete,
-        after_session: state.after_session,
-        completed_traversals: state.completed_traversals,
-      })
-      .where("id", "=", 1),
-  );
+  if (statusChanged) {
+    executeSqliteQuerySync(
+      db,
+      temporary
+        .updateTable("openclaw_transcript_index_status")
+        .set({
+          sibling_write_revision: state.sibling_write_revision,
+          schema_version: schema.schemaVersion,
+          complete: state.complete,
+          after_session: state.after_session,
+          completed_traversals: state.completed_traversals,
+        })
+        .where("id", "=", 1),
+    );
+  }
   const sessionIds = resetPending
     ? pending.filter((row) => row.state === 1).map((row) => row.session_id)
     : executeSqliteQuerySync(

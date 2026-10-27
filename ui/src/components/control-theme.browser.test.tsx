@@ -9,6 +9,7 @@ import { Icon } from "./solid/icon.tsx";
 import "./panel-tab-strip.css";
 import "../styles/base.css";
 import "../styles/layout.css";
+import "../styles/sidebar-menus.css";
 import "../../public/themes/absolutely.css";
 import "../../public/themes/phosphor.css";
 

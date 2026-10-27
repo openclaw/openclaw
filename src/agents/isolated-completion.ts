@@ -44,7 +44,6 @@ import {
   type AgentHarnessIsolatedCompletionParams,
 } from "./isolated-completion-model-authority.js";
 import {
-  hasCliSideEffectEvidence,
   IsolatedCompletionError,
   isRetryableIsolatedQuotaFailure,
   requireIsolatedAssistantText,
@@ -361,7 +360,16 @@ async function runIsolatedCompletionOwned(
               const result = await (diagnostics
                 ? diagnostics.dispatch("cli", dispatch)
                 : dispatch());
-              if (hasCliSideEffectEvidence(result)) {
+              if (
+                result.didSendViaMessagingTool ||
+                result.didDeliverSourceReplyViaMessageTool ||
+                result.messagingToolSentTexts?.length ||
+                result.messagingToolSentMediaUrls?.length ||
+                result.messagingToolSentTargets?.length ||
+                result.messagingToolSourceReplyPayloads?.length ||
+                result.acceptedSessionSpawns?.length ||
+                result.successfulCronAdds
+              ) {
                 throw new IsolatedCompletionError(
                   "output-rejected",
                   "Isolated CLI completion returned side-effect evidence; result rejected.",

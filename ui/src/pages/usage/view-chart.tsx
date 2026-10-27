@@ -36,34 +36,6 @@ export const USAGE_TOKEN_CATEGORIES = [
 
 type UsageChartRange = { startDate: string; endDate: string; complete: boolean };
 
-/**
- * Every calendar day of the range, so columns never move as a report fills in. Missing days are
- * known zero only once the report is complete; before that they are drawn as pending.
- */
-function calendarDaily(
-  daily: CostDailyEntry[],
-  range: UsageChartRange,
-): { days: CostDailyEntry[]; pending: Set<string> } {
-  const start = Date.parse(range.startDate);
-  const end = Date.parse(range.endDate);
-  const count = (end - start) / 86_400_000 + 1;
-  // Keep long historical ranges bounded instead of creating decades of empty columns.
-  if (!Number.isInteger(count) || count < 1 || count > 366) {
-    return { days: daily.toSorted((a, b) => a.date.localeCompare(b.date)), pending: new Set() };
-  }
-  const recorded = new Map(daily.map((day) => [day.date, day]));
-  const pending = new Set<string>();
-  const days = Array.from({ length: count }, (_, index) => {
-    const date = new Date(start + index * 86_400_000).toISOString().slice(0, 10);
-    const day = recorded.get(date);
-    if (!day && !range.complete) {
-      pending.add(date);
-    }
-    return day ?? { ...createEmptyCostUsageTotals(), date };
-  });
-  return { days, pending };
-}
-
 type ChartSeries = { id: string; label: string; color: string; values: number[] };
 
 /** Token types keep the colors the per-turn chart and breakdown use. */
@@ -106,7 +78,32 @@ export function DailyChartCompact(props: {
   onSelectDay: UsageProps["callbacks"]["filters"]["onSelectDay"];
   range: UsageChartRange;
 }) {
-  const calendar = createMemo(() => calendarDaily(props.dailyEntries, props.range));
+  const calendar = createMemo((): { days: CostDailyEntry[]; pending: Set<string> } => {
+    /**
+     * Every calendar day of the range, so columns never move as a report fills in. Missing days are
+     * known zero only once the report is complete; before that they are drawn as pending.
+     */
+    const daily = props.dailyEntries;
+    const range = props.range;
+    const start = Date.parse(range.startDate);
+    const end = Date.parse(range.endDate);
+    const count = (end - start) / 86_400_000 + 1;
+    // Keep long historical ranges bounded instead of creating decades of empty columns.
+    if (!Number.isInteger(count) || count < 1 || count > 366) {
+      return { days: daily.toSorted((a, b) => a.date.localeCompare(b.date)), pending: new Set() };
+    }
+    const recorded = new Map(daily.map((day) => [day.date, day]));
+    const pending = new Set<string>();
+    const days = Array.from({ length: count }, (_, index) => {
+      const date = new Date(start + index * 86_400_000).toISOString().slice(0, 10);
+      const day = recorded.get(date);
+      if (!day && !range.complete) {
+        pending.add(date);
+      }
+      return day ?? { ...createEmptyCostUsageTotals(), date };
+    });
+    return { days, pending };
+  });
   const days = () => calendar().days;
   const dates = createMemo(() => days().map((day) => day.date));
   const isTokens = () => props.chartMode === "tokens";
@@ -276,13 +273,16 @@ export function DailyChartCompact(props: {
                         height: `${scale() > 0 ? (((totals()[index] ?? 0) / scale()) * 100).toFixed(2) : 0}%`,
                       }}
                     >
-                      <For each={series().filter((entry) => (entry.values[index] ?? 0) > 0)}>
+                      <For
+                        each={series().filter((entry) => (entry.values[index] ?? 0) > 0)}
+                        keyed={(entry) => entry.id}
+                      >
                         {(entry) => (
                           <span
                             class="cost-segment"
                             style={{
-                              background: entry.color,
-                              "flex-grow": String(entry.values[index] ?? 0),
+                              background: entry().color,
+                              "flex-grow": String(entry().values[index] ?? 0),
                             }}
                           />
                         )}
@@ -294,7 +294,7 @@ export function DailyChartCompact(props: {
                         { "daily-bar-label--hidden": index % labelEvery() !== 0 },
                       ]}
                     >
-                      {formatDayLabel(date())}
+                      {index % labelEvery() === 0 ? formatDayLabel(date()) : ""}
                     </span>
                   </button>
                 )}

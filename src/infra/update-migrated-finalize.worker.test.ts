@@ -19,6 +19,7 @@ import {
 const fixture = vi.hoisted(() => ({
   close: vi.fn<() => Promise<void>>(),
   closeNative: vi.fn<() => Promise<void>>(),
+  closePostgres: vi.fn<() => Promise<void>>(),
   budget: vi.fn(),
   activation: vi.fn(),
   finish: vi.fn(),
@@ -84,6 +85,11 @@ vi.mock("../state/openclaw-state-db.js", () => ({
 // mock-isolation: Finalizer fixtures observe cleanup without closing the test process's native workers.
 vi.mock("./worker-native-lifecycle.js", () => ({
   closeDefaultRetainedNativeWorkerSource: fixture.closeNative,
+}));
+// mock-isolation: Keep executable cleanup scoped to the synthetic finalization fixture.
+vi.mock("./postgres-sync/pool.js", () => ({
+  preparePostgresPoolForUpdate: vi.fn(async () => {}),
+  closePostgresPool: fixture.closePostgres,
 }));
 vi.mock("./update-finalization-budget.js", () => ({
   resolveUpdateFinalizationTimeoutMs: fixture.budget,
@@ -190,10 +196,18 @@ async function runWorker(
   input: unknown,
   mode?: "--check" | "--doctor" | "--post-core",
   cleanup?: () => Promise<void>,
+  nativeCleanup?: () => Promise<void>,
 ) {
   const settled = createDeferredCore();
   fixture.close.mockImplementation(async () => cleanup?.());
-  fixture.closeNative.mockImplementation(async () => settled.resolve());
+  fixture.closeNative.mockImplementation(async () => {
+    try {
+      await nativeCleanup?.();
+    } finally {
+      settled.resolve();
+    }
+  });
+  fixture.closePostgres.mockResolvedValue(undefined);
   process.argv = [process.execPath, "update-migrated-finalize.worker.js", ...(mode ? [mode] : [])];
   vi.spyOn(process.stdin, Symbol.asyncIterator).mockImplementation(async function* () {
     yield JSON.stringify(input);
@@ -201,7 +215,30 @@ async function runWorker(
   });
   await import("./update-migrated-finalize.worker.js");
   await settled.promise;
+  await setImmediate();
 }
+
+it.each(["database", "native"] as const)(
+  "retains PostgreSQL services when the %s owner drain rejects",
+  async (owner) => {
+    const failure = new Error(`${owner} drain failed`);
+    const reject = async () => {
+      throw failure;
+    };
+    await runWorker(
+      {},
+      "--check",
+      owner === "database" ? reject : undefined,
+      owner === "native" ? reject : undefined,
+    );
+
+    expect(fixture.close).toHaveBeenCalledOnce();
+    expect(fixture.closeNative).toHaveBeenCalledOnce();
+    expect(fixture.closePostgres).not.toHaveBeenCalled();
+    expect(process.exitCode).toBe(1);
+    expect(stderr.join("")).toContain(failure.message);
+  },
+);
 
 it("keeps live callbacks and deadline owners out of the migrated wire contract", () => {
   type Options = MigratedUpdateFinalizationInput["params"]["opts"];
@@ -236,6 +273,7 @@ it("refuses a malformed post-core timeout before invoking the updater", async ()
   expect(fixture.activation).not.toHaveBeenCalled();
   expect(process.exitCode).toBe(1);
   expect(stderr.join("")).toContain("timeout");
+  expect(fixture.closePostgres).toHaveBeenCalledOnce();
 });
 
 it.each([

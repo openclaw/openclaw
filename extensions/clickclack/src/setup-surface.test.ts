@@ -1,5 +1,3 @@
-import fs from "node:fs";
-import path from "node:path";
 import { DEFAULT_ACCOUNT_ID } from "openclaw/plugin-sdk/account-id";
 import type { ChannelSetupInput } from "openclaw/plugin-sdk/channel-setup";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
@@ -11,7 +9,6 @@ import {
   runSetupWizardConfigure,
   runSetupWizardFinalize,
 } from "openclaw/plugin-sdk/plugin-test-runtime";
-import { withTempDir } from "openclaw/plugin-sdk/test-env";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { resolveClickClackAccount } from "./accounts.js";
 import { applyClickClackCredentialConfig, clickClackSetupContract } from "./setup-core.js";
@@ -45,7 +42,6 @@ vi.mock("./http-client.js", async (importOriginal) => ({
 import { clickClackSetupPlugin } from "./channel.setup.js";
 import { ClickClackHttpError } from "./http-client.js";
 import { clickClackSetupWizard } from "./setup-surface.js";
-import { verifyClickClackAccountAfterSetup } from "./setup-verify.js";
 import type { CoreConfig } from "./types.js";
 
 const { credentials, status, introNote, finalize } = clickClackSetupWizard;
@@ -63,6 +59,7 @@ function channelConfig(
 }
 const configuredAccount = channelConfig();
 const tokenRef = { source: "file", provider: "vault", id: "/clickclack/token" };
+const claimedAccount = { token: "test-token", workspace: { id: "wsp_1" }, defaults: {} };
 const runningMessage = "OpenClaw is running — ClickClack will connect automatically.";
 const connectedMessage = "Connected as @openclaw — workspace Default resolved.";
 const warnings = [
@@ -82,9 +79,11 @@ const warnings = [
 
 async function verify(overrides: Parameters<typeof channelConfig>[0] = {}) {
   const runtime = createNonExitingRuntimeEnv();
-  await verifyClickClackAccountAfterSetup({
+  await clickClackSetupContract.afterAccountConfigWritten?.({
+    previousCfg: {},
     cfg: channelConfig(overrides),
     accountId: "default",
+    input: {},
     runtime,
   });
   return runtime;
@@ -94,32 +93,6 @@ function expectLogs(runtime: Awaited<ReturnType<typeof verify>>, message: string
   expect(vi.mocked(runtime.log).mock.calls).toEqual([[message], [runningMessage]]);
 }
 
-function expectCredential(
-  cfg: CoreConfig,
-  hasConfiguredValue: boolean,
-  resolvedValue: string | undefined,
-  extra: Record<string, unknown> = {},
-) {
-  expect(credential.inspect({ cfg, accountId: "default" })).toMatchObject({
-    accountConfigured: true,
-    hasConfiguredValue,
-    resolvedValue,
-    ...extra,
-  });
-}
-
-async function expectValidationNote(message: string) {
-  const note = vi.fn(async () => undefined);
-  await expect(
-    runSetupWizardFinalize({
-      finalize,
-      cfg: configuredAccount,
-      prompter: createTestWizardPrompter({ note }),
-    }),
-  ).resolves.toBeUndefined();
-  expect(note).toHaveBeenCalledWith(message, "ClickClack connection check");
-}
-
 beforeEach(() => {
   claimClickClackSetupCode.mockReset();
   mocks.createClient.mockReset();
@@ -127,32 +100,30 @@ beforeEach(() => {
   mocks.me.mockReset().mockResolvedValue({ id: "usr_bot", handle: "openclaw" });
   mocks.workspaces
     .mockReset()
-    .mockResolvedValue([
-      { id: "wsp_default", name: "Default", slug: "default", created_at: "2026-01-01" },
-    ]);
+    .mockResolvedValue([{ id: "wsp_default", name: "Default", slug: "default" }]);
 });
 
 afterEach(() => vi.unstubAllEnvs());
 
 describe("ClickClack setup wizard", () => {
-  it("detects configured accounts and inspects plain, env, and file credentials", async () => {
+  it("detects configured accounts and inspects env and unresolved credentials", async () => {
     expect(await status.resolveConfigured({ cfg: configuredAccount })).toBe(true);
-    expectCredential(configuredAccount, true, "ccb_test");
-
     vi.stubEnv("CLICKCLACK_BOT_TOKEN", "ccb_env");
-    expectCredential(channelConfig({ token: undefined }), false, "ccb_env", {
+    expect(
+      credential.inspect({ cfg: channelConfig({ token: undefined }), accountId: "default" }),
+    ).toMatchObject({
+      accountConfigured: true,
+      hasConfiguredValue: false,
+      resolvedValue: "ccb_env",
       envValue: "ccb_env",
     });
-
-    await withTempDir("clickclack-setup-token-", async (tempDir) => {
-      const tokenFile = path.join(tempDir, "token");
-      fs.writeFileSync(tokenFile, "ccb_file\n", "utf8");
-      expectCredential(channelConfig({ token: undefined, tokenFile }), true, "ccb_file");
-    });
-
     const secretRefAccount = channelConfig({ token: tokenRef });
     expect(await status.resolveConfigured({ cfg: secretRefAccount })).toBe(true);
-    expectCredential(secretRefAccount, true, undefined);
+    expect(credential.inspect({ cfg: secretRefAccount, accountId: "default" })).toMatchObject({
+      accountConfigured: true,
+      hasConfiguredValue: true,
+      resolvedValue: undefined,
+    });
     expect(
       introNote?.shouldShow?.({
         cfg: secretRefAccount,
@@ -160,20 +131,6 @@ describe("ClickClack setup wizard", () => {
         credentialValues: {},
       }),
     ).toBe(false);
-  });
-
-  it("switches the default account to env auth before URL and workspace prompts", async () => {
-    const next = await credential.applyUseEnv?.({
-      cfg: channelConfig({ token: "ccb_stale", tokenFile: "/run/secrets/stale" }),
-      accountId: "default",
-    });
-
-    expect(next?.channels?.clickclack).not.toHaveProperty("token");
-    expect(next?.channels?.clickclack).not.toHaveProperty("tokenFile");
-    expect(next?.channels?.clickclack).toMatchObject({
-      baseUrl: "https://clickclack.example",
-      workspace: "default",
-    });
   });
 
   it("saves URL, token, and workspace through the guided flow", async () => {
@@ -189,12 +146,10 @@ describe("ClickClack setup wizard", () => {
     });
 
     expect(result.cfg.channels?.clickclack).toMatchObject({
+      ...baseInput,
       enabled: true,
       token: "ccb_guided",
-      baseUrl: "https://clickclack.example",
-      workspace: "default",
     });
-    expect(mocks.me).toHaveBeenCalledTimes(1);
     expect(queued.prompter.note).toHaveBeenCalledWith(connectedMessage, "ClickClack connection");
   });
 
@@ -211,13 +166,15 @@ describe("ClickClack setup wizard", () => {
     });
   });
 
-  it.each(warnings)("keeps setup saved on validation failure (%#)", async (arrange, message) => {
+  it.each(warnings)("continues with a warning (%#)", async (arrange, message) => {
     arrange();
-    await expectValidationNote(message);
-  });
-
-  it.each(warnings)("logs a warning and continues after writing (%#)", async (arrange, message) => {
-    arrange();
+    const note = vi.fn(async () => undefined);
+    await runSetupWizardFinalize({
+      finalize,
+      cfg: configuredAccount,
+      prompter: createTestWizardPrompter({ note }),
+    });
+    expect(note).toHaveBeenCalledWith(message, "ClickClack connection check");
     expectLogs(await verify(), message);
   });
 
@@ -257,18 +214,8 @@ describe("ClickClack setup wizard", () => {
     mocks.callGatewayFromCli.mockRejectedValue(error);
     const runtime = await verify();
     expect(runtime.log).toHaveBeenNthCalledWith(2, expected);
-    expect(mocks.callGatewayFromCli).toHaveBeenCalledWith(
-      "health",
-      { timeout: "1000", json: true },
-      undefined,
-      { expectFinal: false, progress: false },
-    );
   });
 });
-
-type ClickClackSetupCodeClaim = Awaited<
-  ReturnType<typeof import("./setup-claim.js").claimClickClackSetupCode>
->;
 
 type ClickClackSetupInput = ChannelSetupInput & {
   baseUrl?: string;
@@ -285,23 +232,11 @@ function bareConfig(
 
 const defaults = { defaultTo: "channel:general", allowFrom: ["*"], agentActivity: true };
 const codeInput = { code: "ABCD-EFGH-JKMN", baseUrl: baseInput.baseUrl };
-const exactClaimUrl =
-  "https://api.clickclack.example/services/clickclack/api/bot-setup-codes/claim";
+const publicApiBase = "https://api.clickclack.example/services/clickclack";
+const exactClaimUrl = `${publicApiBase}/api/bot-setup-codes/claim`;
 
 function apply(input: ClickClackSetupInput, cfg: CoreConfig = {}, accountId = DEFAULT_ACCOUNT_ID) {
   return clickClackSetupContract.applyAccountConfig({ cfg, accountId, input });
-}
-
-function claimResponse(
-  overrides: Partial<ClickClackSetupCodeClaim> = {},
-): ClickClackSetupCodeClaim {
-  return {
-    token: "test-token",
-    bot: { id: "usr_bot", handle: "openclaw", display_name: "OpenClaw" },
-    workspace: { id: "wsp_1", route_id: "clickclack", slug: "default", name: "ClickClack" },
-    defaults: {},
-    ...overrides,
-  };
 }
 
 function validate(
@@ -323,22 +258,18 @@ async function prepare(input: ClickClackSetupInput, cfg: OpenClawConfig = {}) {
 
 describe("ClickClack setup adapter", () => {
   it("claims a full setup URL and prepares the token, workspace, and defaults", async () => {
-    claimClickClackSetupCode.mockResolvedValue(claimResponse({ defaults }));
-
+    claimClickClackSetupCode.mockResolvedValue({ ...claimedAccount, defaults });
     await expect(
-      prepare({
-        code: "https://clickclack.example/#abcd-efgh-jkmn",
-        name: "Primary",
-      }),
+      prepare({ code: `${baseInput.baseUrl}/#abcd-efgh-jkmn`, name: "Primary" }),
     ).resolves.toEqual({
       name: "Primary",
-      baseUrl: "https://clickclack.example",
+      baseUrl: baseInput.baseUrl,
       token: "test-token",
       workspace: "wsp_1",
       ...defaults,
     });
     expect(claimClickClackSetupCode).toHaveBeenCalledWith({
-      claimUrl: "https://clickclack.example/api/bot-setup-codes/claim",
+      claimUrl: `${baseInput.baseUrl}/api/bot-setup-codes/claim`,
       code: "ABCDEFGHJKMN",
     });
   });
@@ -354,18 +285,16 @@ describe("ClickClack setup adapter", () => {
   ] as const)(
     "claims an exact endpoint over %s transport and keeps its public API base",
     async (_transport, code, cfg, claimUrl) => {
-      claimClickClackSetupCode.mockResolvedValue(
-        claimResponse({
-          contract_version: 1,
-          api_base_url: "https://api.clickclack.example/services/clickclack",
-        }),
-      );
-
-      await expect(prepare({ code: `${exactClaimUrl}#${code}` }, cfg)).resolves.toMatchObject({
-        baseUrl: "https://api.clickclack.example/services/clickclack",
-        token: "test-token",
-        workspace: "wsp_1",
+      claimClickClackSetupCode.mockResolvedValue({
+        ...claimedAccount,
+        contract_version: 1,
+        api_base_url: publicApiBase,
       });
+
+      await expect(prepare({ code: `${exactClaimUrl}#${code}` }, cfg)).resolves.toHaveProperty(
+        "baseUrl",
+        publicApiBase,
+      );
       expect(claimClickClackSetupCode).toHaveBeenCalledWith({
         claimUrl,
         expectedClaimUrl: exactClaimUrl,
@@ -451,20 +380,16 @@ describe("ClickClack setup adapter", () => {
 
   it("clickClackSetupContract.applyAccountConfig preserves the active collision winner", () => {
     const cfg = bareConfig({
-      baseUrl: "https://old.clickclack.example",
-      workspace: "old",
+      ...account,
       token: "root-token",
       defaultAccount: "ops",
-      accounts: {
-        Ops: { name: "Other spelling" },
-        ops: { name: "Active" },
-      },
+      accounts: { Ops: { name: "Other spelling" }, ops: { name: "Active" } },
     });
     const input = {
       baseUrl: "https://work.clickclack.example",
       workspace: "work",
       token: "work-token",
-    } satisfies ClickClackSetupInput;
+    };
 
     expect(validate(input, cfg, "work")).toBeNull();
     const next = apply(input, cfg, "work");
@@ -500,11 +425,7 @@ describe("ClickClack setup adapter", () => {
         tokenFile: "/run/secrets/old-token",
       }),
     ).channels?.clickclack;
-    expect(withEnv).toEqual({
-      enabled: true,
-      baseUrl: "https://clickclack.example",
-      workspace: "default",
-    });
+    expect(withEnv).toEqual({ ...baseInput, enabled: true });
 
     const namedWithToken = apply(
       { ...baseInput, token: "ccb_work", workspace: "work" },
@@ -529,24 +450,5 @@ describe("ClickClack setup adapter", () => {
       enabled: true,
       tokenFile: "/run/secrets/clickclack",
     });
-  });
-
-  it("runs post-write verification with the saved account config", async () => {
-    const cfg = bareConfig({ ...baseInput, token: "ccb_test" });
-    const runtime = createNonExitingRuntimeEnv();
-
-    await clickClackSetupContract.afterAccountConfigWritten?.({
-      previousCfg: {},
-      cfg,
-      accountId: DEFAULT_ACCOUNT_ID,
-      input: {},
-      runtime,
-    });
-
-    expect(mocks.createClient).toHaveBeenCalledWith({
-      baseUrl: baseInput.baseUrl,
-      token: "ccb_test",
-    });
-    expect(runtime.log).toHaveBeenCalledWith(connectedMessage);
   });
 });

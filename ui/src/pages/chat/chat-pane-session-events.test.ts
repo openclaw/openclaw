@@ -673,6 +673,7 @@ describe("mounted pane session event ownership", () => {
           content: [{ type: "text", text: "The newer run continues." }],
         },
       });
+      await vi.dynamicImportSettled();
       await expect.poll(() => continuing.state.chatStream).toBe("The newer run continues.");
       holdLaterReads = true;
       emitGatewayEvent("chat", {

@@ -1,6 +1,7 @@
 import { createComponent } from "solid-js";
 import "../../../styles.css";
 import "../../../styles/chat.ts";
+import "../../../styles/chat/side-panel.css";
 import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import type { SessionsDiffResult } from "../../../../../packages/gateway-protocol/src/index.js";
 import { mountSolid } from "../../../test-helpers/mount-solid.ts";

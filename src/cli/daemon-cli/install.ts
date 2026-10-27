@@ -115,6 +115,8 @@ export function mergeInstallInvocationEnv(params: {
     }
     // An installed CA file is additive, operator-owned Node startup trust; retain it on reinstall.
     // Never replay service-owned TLS-disable, proxy, or loader overrides from the old environment.
+    // The stale legacy darwin bundle is the exception: resolveNodeStartupTlsEnvironment treats
+    // that exact value as unset and the drift check flags installs carrying it for refresh.
     if (
       isDangerousHostEnvVarName(key) ||
       (isDangerousHostEnvOverrideVarName(key) && upper !== "NODE_EXTRA_CA_CERTS")
@@ -262,9 +264,12 @@ export async function runDaemonInstall(opts: DaemonInstallOptions) {
     fail(formatInvalidConfigPort("gateway.port"));
     return;
   }
-  const runtimeRaw = opts.runtime || resolveGatewayDaemonRuntime([pinnedRuntimePath ?? ""]);
+  const runtimeRaw =
+    opts.runtime ||
+    pinSnapshot.pin?.runtime ||
+    resolveGatewayDaemonRuntime([pinnedRuntimePath ?? ""]);
   if (!isGatewayDaemonRuntime(runtimeRaw)) {
-    fail('Invalid --runtime (use "node" or "bun")');
+    fail('Invalid --runtime (use "node", "bun", or "standalone")');
     return;
   }
   let runtime = runtimeRaw;
@@ -481,6 +486,17 @@ export async function runDaemonInstall(opts: DaemonInstallOptions) {
         }
         const currentEnvironment = currentCommand.environment ?? {};
         const currentNodeExtraCaCerts = currentEnvironment.NODE_EXTRA_CA_CERTS?.trim();
+        if (
+          currentNodeExtraCaCerts &&
+          !resolveNodeStartupTlsEnvironment({
+            env: currentEnvironment,
+            execPath: currentExecPath,
+          }).NODE_EXTRA_CA_CERTS
+        ) {
+          // Only the exact legacy darwin bundle resolves to nothing; every operator-chosen
+          // custom CA path survives, so this cannot fire for a deliberate Linux bundle.
+          return "Gateway service trusts the outdated macOS CA bundle; refreshing the install.";
+        }
         const expectedNodeExtraCaCerts = resolveNodeStartupTlsEnvironment({
           env: {
             ...autoRefreshEnv,

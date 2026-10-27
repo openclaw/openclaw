@@ -1,4 +1,4 @@
-type AttachmentInputKind = "file" | "photo" | "camera";
+export type AttachmentInputKind = "file" | "photo" | "camera" | "media";
 type AttachmentInputBindings = {
   inputs: Partial<Record<AttachmentInputKind, HTMLInputElement>>;
   camera?: { show(): void };

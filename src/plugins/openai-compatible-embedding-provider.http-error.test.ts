@@ -1,8 +1,8 @@
 import "../test-utils/prepare-compiled-subprocesses.js";
 import { once } from "node:events";
 import { createServer } from "node:http";
-import type { AddressInfo } from "node:net";
 import { afterEach, expect, it } from "vitest";
+import * as httpFixtures from "../../test/helpers/gateway-integration-fixtures.js";
 import { ProviderHttpError } from "../agents/provider-http-errors.js";
 import { openAICompatibleEmbeddingProviderAdapter } from "./openai-compatible-embedding-provider.js";
 
@@ -53,16 +53,14 @@ it.each<[string, number, number, string?, string?, string?, number?]>([
       });
     });
     servers.add(server);
-    server.listen(0, "127.0.0.1");
-    await once(server, "listening");
-    const address = server.address() as AddressInfo;
+    const origin = await httpFixtures.listenLoopback(server);
 
     const result = await openAICompatibleEmbeddingProviderAdapter.create({
       config: {},
       provider: "openai-compatible",
       model: "text-embedding-bge-m3",
       dimensions: 3,
-      remote: { baseUrl: `http://127.0.0.1:${address.port}/v1`, apiKey: token },
+      remote: { baseUrl: `${origin}/v1`, apiKey: token },
     });
     if (!result.provider) {
       throw new Error("expected OpenAI-compatible embedding provider");

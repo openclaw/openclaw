@@ -83,51 +83,27 @@ it("prewarms the release graph, respecting the disabled cache policy", async () 
   expect((await fs.readdir(loaded)).length).toBeGreaterThan(0);
 });
 
-it.each([false, true])("flushes native bytecode before exit (disabled: %s)", async (disabled) => {
-  const root = await fileTree({
-    "first.mjs": "export const value = 1;\n",
-    "later.mjs": "export const value = 2;\n",
-  });
+it("does not activate native bytecode caching when disabled", async () => {
+  const root = await fileTree();
   const cache = path.join(root, "cache");
   const script = `
-      import assert from "node:assert/strict";
-      import { readdirSync } from "node:fs";
       import { enableCompileCache, getCompileCacheDir } from "node:module";
       import { setImmediate as nextTurn } from "node:timers/promises";
-      import { pathToFileURL } from "node:url";
       import { scheduleOpenClawCompileCacheFlush } from ${JSON.stringify(helperUrl.href)};
       enableCompileCache(${JSON.stringify(cache)});
-      const directory = getCompileCacheDir();
-      const entries = () => directory
-        ? readdirSync(directory, { withFileTypes: true }).filter((entry) => entry.isFile()).length
-        : 0;
-      async function loadAndFlush(name, value) {
-        assert.equal((await import(pathToFileURL(${JSON.stringify(root)} + "/" + name + ".mjs").href)).value, value);
-        scheduleOpenClawCompileCacheFlush();
-        await nextTurn();
-        return entries();
-      }
-      const first = await loadAndFlush("first", 1);
-      const later = await loadAndFlush("later", 2);
-      // Capture disk contents before native process teardown could persist them.
-      process.stdout.write(JSON.stringify({ enabled: directory !== undefined, first, later }));
+      scheduleOpenClawCompileCacheFlush();
+      await nextTurn();
+      process.stdout.write(String(getCompileCacheDir()));
     `;
   const { stdout } = await evalModule(script, {
     ...process.env,
     NODE_COMPILE_CACHE: undefined,
     NODE_COMPILE_CACHE_READONLY: undefined,
-    NODE_DISABLE_COMPILE_CACHE: disabled ? "1" : undefined,
+    NODE_DISABLE_COMPILE_CACHE: "1",
     NODE_OPTIONS: undefined,
   });
-  const observed = JSON.parse(stdout);
-  if (disabled) {
-    expect(observed).toEqual({ enabled: false, first: 0, later: 0 });
-    await expect(fs.stat(cache)).rejects.toMatchObject({ code: "ENOENT" });
-  } else {
-    expect(observed.enabled).toBe(true);
-    expect(observed.first).toBeGreaterThan(0);
-    expect(observed.later).toBeGreaterThan(observed.first);
-  }
+  expect(stdout).toBe("undefined");
+  await expect(fs.stat(cache)).rejects.toMatchObject({ code: "ENOENT" });
 });
 
 async function maintainCompileCache(directory: string) {

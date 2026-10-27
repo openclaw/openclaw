@@ -46,8 +46,8 @@ export async function runBrowserCliCommand(
     await runCommandWithRuntime(defaultRuntime, action, reportError);
     return;
   }
-  // These older commands report even expected/JSON-mode errors locally. Keep
-  // that public CLI behavior distinct from runCommandWithRuntime's rethrow path.
+  // Older commands retain local human-mode diagnostics. JSON requests select
+  // the runtime policy below so the host can render their failure envelope.
   try {
     await action();
   } catch (error) {
@@ -95,7 +95,8 @@ export async function runBrowserCliRequest<T = unknown>(params: {
       );
     }
   };
-  await runBrowserCliCommand(action, params.errorPolicy);
+  const errorPolicy = params.parent.json ? "runtime" : params.errorPolicy;
+  await runBrowserCliCommand(action, errorPolicy);
 }
 
 export function printBrowserJsonResult(parent: BrowserParentOpts, payload: unknown): boolean {

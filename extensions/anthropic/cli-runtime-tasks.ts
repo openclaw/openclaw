@@ -43,12 +43,9 @@ export function recordTaskOwnership(
     return undefined;
   }
   const previous = session.taskOwners.get(taskId);
-  // Nested tasks report back to their launching agent, not the parent input.
-  // Native marks nested Bash explicitly; Agents and workflows carry a parent ID.
-  const owner =
-    task.owned_by_subagent === true || typeof task.parent_task_id === "string"
-      ? false
-      : (previous ?? inputUuid);
+  // Native marks subagent Bash explicitly. Nested Agents and workflows can
+  // forward their completion to the parent input after their launcher ends.
+  const owner = task.owned_by_subagent === true ? false : (previous ?? inputUuid);
   if (owner !== previous) {
     session.taskOwners.set(taskId, owner);
   }
@@ -56,4 +53,40 @@ export function recordTaskOwnership(
     session.taskRuns.set(task.run_id, taskId);
   }
   return owner === false ? undefined : taskId;
+}
+
+/** Agents and workflows make their own tool calls; subagent-owned work can resume its Agent. */
+function isDescendantTask(task: Record<string, unknown>): boolean {
+  return (
+    task.task_type === "local_agent" ||
+    task.task_type === "local_workflow" ||
+    task.owned_by_subagent === true ||
+    typeof task.parent_task_id === "string"
+  );
+}
+
+export function recordRunningDescendants(
+  running: Map<string, string | undefined>,
+  message: Record<string, unknown>,
+): boolean {
+  const startedTasks =
+    message.subtype === "task_started"
+      ? [message]
+      : message.subtype === "background_tasks_changed" && Array.isArray(message.tasks)
+        ? message.tasks.filter(isRecord)
+        : [];
+  for (const task of startedTasks) {
+    if (typeof task.task_id === "string" && isDescendantTask(task)) {
+      running.set(
+        task.task_id,
+        typeof task.parent_task_id === "string" ? task.parent_task_id : running.get(task.task_id),
+      );
+    }
+  }
+  if (message.subtype === "task_notification" && typeof message.task_id === "string") {
+    const parentTaskId = running.get(message.task_id);
+    running.delete(message.task_id);
+    return parentTaskId !== undefined && running.has(parentTaskId);
+  }
+  return false;
 }

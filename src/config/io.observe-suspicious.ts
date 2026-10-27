@@ -2,7 +2,6 @@ import { isRecord } from "../utils.js";
 
 type ConfigObserveSuspiciousBaseline = {
   bytes: number;
-  hasMeta: boolean;
   gatewayMode: string | null;
 };
 
@@ -32,7 +31,6 @@ export function resolveConfigObserveSuspiciousReasons(params: {
   hash?: string;
   lastObservedSuspiciousSignature?: string | null;
   bytes: number;
-  hasMeta: boolean;
   gatewayMode: string | null;
   parsed: unknown;
   lastKnownGood?: ConfigObserveSuspiciousBaseline;
@@ -45,9 +43,7 @@ export function resolveConfigObserveSuspiciousReasons(params: {
   if (baseline.bytes >= 512 && params.bytes < Math.floor(baseline.bytes * 0.5)) {
     reasons.push(`size-drop-vs-last-good:${baseline.bytes}->${params.bytes}`);
   }
-  if (baseline.hasMeta && !params.hasMeta) {
-    reasons.push("missing-meta-vs-last-good");
-  }
+  // ConfigMap seeds and operator-authored configs need not contain writer metadata.
   if (baseline.gatewayMode && !params.gatewayMode) {
     reasons.push("gateway-mode-missing-vs-last-good");
   }

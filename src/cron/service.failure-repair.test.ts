@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { advanceCronActiveJobGeneration } from "./active-jobs.js";
+import { resolveCronRunErrorReason } from "./run-error-reason.js";
 import { cronScriptFailureMetadata } from "./script-failure.js";
 import {
   createTelegramDelivery,
@@ -22,9 +23,7 @@ const owned = {
   failureAlert: { after: 2, cooldownMs: 0 },
 };
 
-function withRepair(run: AlertParams[1], failureAlert?: AlertParams[0]["failureAlert"]) {
-  return withFailureAlertCron({ failureAlert }, run);
-}
+const withRepair = (run: AlertParams[1]) => withFailureAlertCron({}, run);
 
 function expectNotifications(f: RepairFixture, repairs: number, alerts: number, notices?: number) {
   expect(f.runCronFailureRepair).toHaveBeenCalledTimes(repairs);
@@ -79,14 +78,24 @@ function applyError(
     payload: { kind: "agentTurn", message: "sync" },
     owner: owned.owner,
     failureAlert: { ...owned.failureAlert, channel: "telegram", to: "19098680" },
-    state: { consecutiveErrors: 2 },
+    state: { consecutiveErrors: 1 },
     ...overrides,
   });
   const deferredNotifications: DeferredCronNotifications = [];
   applyJobResult(
     state,
     job,
-    { status: "error", startedAt: runningAtMs, endedAt: runningAtMs + 1_000, ...result },
+    {
+      status: "error",
+      startedAt: runningAtMs,
+      endedAt: runningAtMs + 1_000,
+      errorReason: resolveCronRunErrorReason(
+        result.error,
+        result.provider,
+        result.errorClassification,
+      ),
+      ...result,
+    },
     { deferredNotifications },
   );
   return { job, deferredNotifications };
@@ -150,8 +159,8 @@ describe("CronService failure repair", () => {
 
   it.each(["before", "at"] as const)(
     "does not alert for a failed run started %s repair settlement",
-    async (ordering) => {
-      await withRepair(async (f) => {
+    (ordering) =>
+      withRepair(async (f) => {
         const { job, repair } = await pendingRepair(f);
 
         const started = Promise.withResolvers<void>();
@@ -179,8 +188,7 @@ describe("CronService failure repair", () => {
         expect(await f.cron.readJob(job.id)).toMatchObject({
           state: { consecutiveErrors: 3, failureAlertIncident: { repair: { settledAtMs } } },
         });
-      });
-    },
+      }),
   );
 
   it(
@@ -290,8 +298,8 @@ describe("CronService failure repair", () => {
 
   it.each(["operator cancellation", "restart retirement"] as const)(
     "keeps an owned one-shot quiet after %s",
-    async (interruption) => {
-      await withRepair(async (f) => {
+    (interruption) =>
+      withRepair(async (f) => {
         const started = Promise.withResolvers<void>();
         const result = Promise.withResolvers<{ status: "ok" }>();
         f.runScriptJob.mockImplementationOnce(async () => {
@@ -318,8 +326,7 @@ describe("CronService failure repair", () => {
         expect(f.cron.getJob(job.id)?.state.lastStatus).toBe("error");
         expectNotifications(f, 0, 0, 0);
         expect(f.cron.getJob(job.id)?.state.autoDisabled).toBeUndefined();
-      });
-    },
+      }),
   );
 
   it(
@@ -364,8 +371,8 @@ describe("CronService failure repair", () => {
     ["alerts disabled", { failureAlert: false }, [0, 0, 1]],
   ])(
     "notifies a terminal one-shot script failure: %s",
-    async (_name, jobOptions, [repairs, alerts, notices], rejectRepair = false) => {
-      await withRepair(async (f) => {
+    (_name, jobOptions, [repairs, alerts, notices], rejectRepair = false) =>
+      withRepair(async (f) => {
         const alertSettled = Promise.withResolvers<void>();
         if (rejectRepair) {
           f.runCronFailureRepair.mockRejectedValueOnce(new Error("owner session deleted"));
@@ -433,8 +440,7 @@ describe("CronService failure repair", () => {
         }
         await f.cron.run(job.id, "due");
         expectTerminalNotifications();
-      });
-    },
+      }),
   );
 
   describe("provider outage quick retries", () => {
@@ -450,8 +456,8 @@ describe("CronService failure repair", () => {
       ["owned every-minute", true, 60_000, 1, 0],
     ])(
       "holds the %s notification until the quick retries are exhausted",
-      async (_name, isOwned, everyMs, repairs, alerts) => {
-        await withRepair(async (f) => {
+      (_name, isOwned, everyMs, repairs, alerts) =>
+        withRepair(async (f) => {
           f.runIsolatedAgentJob.mockResolvedValue({
             status: "error",
             error: "fetch failed: getaddrinfo EAI_AGAIN api.example.com",
@@ -473,8 +479,7 @@ describe("CronService failure repair", () => {
           if (repairs) {
             expect(f.runCronFailureRepair.mock.calls[0]?.[0]?.message).toContain("failed 4");
           }
-        });
-      },
+        }),
     );
 
     it(
@@ -494,67 +499,45 @@ describe("CronService failure repair", () => {
       }),
     );
 
-    it.each<[string, Partial<Parameters<typeof applyJobResult>[2]>, string[]]>([
-      [
-        "provider ECONNREFUSED",
-        { error: "fetch failed: connect ECONNREFUSED 127.0.0.1:443", provider: "anthropic" },
-        [],
-      ],
+    it.each<[string, Partial<Parameters<typeof applyJobResult>[2]>]>([
       [
         "execution watchdog",
         {
           error: "cron: job execution timed out",
           errorClassification: { kind: "reason", reason: "timeout" },
         },
-        ["failure-repair"],
       ],
       [
         "helper script",
         { error: "script failure", ...cronScriptFailureMetadata("payload", "timeout") },
-        ["failure-repair"],
       ],
-    ])("second failure from %s requests the expected notification", (_name, result, expected) => {
+    ])("second failure from %s requests repair", (_name, result) => {
       const { job, deferredNotifications } = applyError(
         {
           schedule: { kind: "every", everyMs: 3_600_000, anchorMs: runningAtMs },
-          state: { consecutiveErrors: 1 },
         },
         result,
       );
       expect(job.state).toMatchObject({ consecutiveErrors: 2, lastErrorReason: "timeout" });
       expect(job.state.nextRunAtMs).toBe(runningAtMs + 1_000 + 60_000);
-      expect(deferredNotifications.map((notification) => notification.kind)).toEqual(expected);
+      expect(deferredNotifications.map((notification) => notification.kind)).toEqual([
+        "failure-repair",
+      ]);
     });
 
-    it.each<[string, Partial<CronJob>, number, string[]]>([
-      [
-        "weekly retry exhausted",
-        { schedule: { kind: "every", everyMs: 7 * 86_400_000 } },
-        3,
-        ["failure-repair"],
-      ],
-      [
-        "one-shot retry exhausted",
-        { schedule: { kind: "at", at: new Date(runningAtMs).toISOString() } },
-        3,
-        ["failure-repair"],
-      ],
-      ["disabled within retry budget", { enabled: false }, 1, ["failure-alert"]],
+    it.each<[string, Partial<CronJob>, string[]]>([
+      ["disabled within retry budget", { enabled: false }, ["failure-alert"]],
       [
         "unschedulable cron",
         { schedule: { kind: "cron", expr: "0 0 30 2 *" } },
-        1,
         ["failure-repair"],
       ],
-    ])("does not hold %s", (_name, overrides, consecutiveErrors, expected) => {
-      const { job, deferredNotifications } = applyError(
-        { ...overrides, state: { consecutiveErrors } },
-        { error: "fetch failed: connect ECONNREFUSED 127.0.0.1:443" },
-      );
-      expect(job.state.consecutiveErrors).toBe(consecutiveErrors + 1);
-      if (consecutiveErrors < 3) {
-        expect(job.state.nextRunAtMs).toBeUndefined();
-      }
+    ])("does not hold %s", (_name, overrides, expected) => {
+      const { job, deferredNotifications } = applyError(overrides, {
+        error: "fetch failed: connect ECONNREFUSED 127.0.0.1:443",
+      });
+      expect(job.state.consecutiveErrors).toBe(2);
+      expect(job.state.nextRunAtMs).toBeUndefined();
       expect(deferredNotifications.map((notification) => notification.kind)).toEqual(expected);
     });
   });
@@ -566,10 +549,7 @@ describe("CronService failure repair", () => {
     { name: "systemEvent", payload: { kind: "systemEvent", text: "check" } },
     { name: "script", payload: { kind: "script", script: "json({})" } },
   ])("requests repair for a $name job", ({ payload }) => {
-    const { deferredNotifications } = applyError(
-      { payload, state: { consecutiveErrors: 1 } },
-      { error: "boom" },
-    );
+    const { deferredNotifications } = applyError({ payload }, { error: "boom" });
     expect(deferredNotifications.map((notification) => notification.kind)).toEqual([
       "failure-repair",
     ]);

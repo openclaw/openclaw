@@ -5,11 +5,13 @@ import { WorkerTaskPool } from "../../infra/worker-task-pool.js";
 import { createPluginSourceCaptureRoot } from "../../plugins/plugin-source-capture-directory.js";
 import type { planOpenClawModelsJsonSource } from "../models-config.js";
 import type {
+  PreparedModelCatalogWorkerInput,
   PreparedModelCatalogWorkerTask,
   PreparedModelWorkerResult,
 } from "../prepared-model-catalog-worker.types.js";
 
-export type CatalogInspectionTask = PreparedModelCatalogWorkerTask & {
+export type CatalogInspectionTask = Omit<PreparedModelCatalogWorkerTask, "value"> & {
+  value: PreparedModelCatalogWorkerInput;
   inspection?: {
     existingAgentIds?: string[];
     provider?: string;

@@ -156,7 +156,7 @@ describe.skipIf(process.platform === "win32")("backup SQLite discovery performan
       expect(fileProbes).toBe(1);
       const headerProbes = spawn.mock.calls.filter(
         ([, args]) =>
-          Array.isArray(args) && args[0] === "-e" && args[1]?.includes("SQLite format 3"),
+          Array.isArray(args) && /[/\\]sqlite-header-probe\.worker\.[jt]s$/.test(args.at(-1) ?? ""),
       );
       // Global capture discovers aliases before the final, registry-backed inventory.
       expect(headerProbes).toHaveLength(2);

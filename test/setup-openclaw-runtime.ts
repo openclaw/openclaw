@@ -28,7 +28,7 @@ type WorkerCleanupHelpers = {
   resetFileLockStateForTest: typeof import("../src/plugin-sdk/file-lock.js").resetFileLockStateForTest;
   resetModelsJsonReadyCacheForTest: typeof import("../src/agents/models-config-state.test-support.js").resetModelsJsonReadyCacheForTest;
   resetPreparedModelRuntimeSnapshotsForTest: typeof import("../src/agents/prepared-model-runtime.test-support.js").resetPreparedModelRuntimeSnapshotsForTest;
-  resetStickyRateLimitFallbacksForTest: typeof import("../src/agents/model-fallback-sticky.js").resetStickyRateLimitFallbacksForTest;
+  resetStickyRateLimitFallbacksForTest: typeof import("../src/agents/model-fallback-sticky.test-support.js").resetStickyRateLimitFallbacksForTest;
 };
 
 type ReplyToModeResolver = NonNullable<
@@ -84,8 +84,8 @@ function loadWorkerCleanupHelpers(): Promise<WorkerCleanupHelpers> {
       vi.importActual<typeof import("../src/plugin-sdk/file-lock.js")>(
         "../src/plugin-sdk/file-lock.js",
       ),
-      vi.importActual<typeof import("../src/agents/model-fallback-sticky.js")>(
-        "../src/agents/model-fallback-sticky.js",
+      vi.importActual<typeof import("../src/agents/model-fallback-sticky.test-support.js")>(
+        "../src/agents/model-fallback-sticky.test-support.js",
       ),
     ]);
     return {

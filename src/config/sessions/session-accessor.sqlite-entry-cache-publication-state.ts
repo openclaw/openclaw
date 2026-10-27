@@ -242,6 +242,7 @@ export function prepareSessionEntryPublicationFacts(params: {
       : undefined;
     return {
       entry,
+      sharing: prepared?.sharing?.get(key),
       fullEntry: prepared?.fullEntries?.get(key),
       actorPostimage: prepared?.actorPostimages?.get(key),
       projection,

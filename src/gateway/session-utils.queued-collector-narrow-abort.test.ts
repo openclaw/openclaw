@@ -21,7 +21,6 @@ import {
   captureSessionTarget,
 } from "../sessions/session-controller.lifecycle.js";
 import { createReplyOperation } from "../sessions/session-controller.operation.js";
-import { getRpcSourceIdentity } from "../sessions/session-controller.rpc-sources.js";
 import { rpcSourceTesting } from "../sessions/session-lifecycle-admission.test-support.js";
 import { handleGatewayRequest } from "./server-methods.js";
 import { sessionAbortHandlers } from "./server-methods/sessions-abort.js";
@@ -55,12 +54,20 @@ function abort(client: ReturnType<typeof roleClient>, key: string, context = req
   return { respond: options.respond, done };
 }
 
+function expectAborted(respond: ReturnType<typeof vi.fn>, runId: string) {
+  expect(respond).toHaveBeenCalledOnce();
+  expect(respond.mock.calls[0]?.[2]).toBeUndefined();
+  expect(respond.mock.calls[0]?.slice(0, 2)).toEqual([
+    true,
+    { ok: true, status: "aborted", abortedRunId: runId },
+  ]);
+}
+
 it.each(["active", "queued", "pending-chat"] as const)(
   "narrow collector Stop preserves a same-key prior-incarnation %s producer",
   async (kind) => {
     const { client, entry, loaded } = await reserve("reserved", "collector-stop-owner");
-    const childSession = expectDefined(loaded.entry, "collector session");
-    expect(childSession.createdActor).toEqual({
+    expect(loaded.entry?.createdActor).toEqual({
       type: "human",
       source: "profile",
       id: client.authenticatedUserProfile!.profileId,
@@ -80,13 +87,13 @@ it.each(["active", "queued", "pending-chat"] as const)(
     const source = (
       runId: string,
       sessionId: string,
+      session = expectDefined(descendantSession, "descendant session"),
       sessionKey = expectDefined(descendant, "descendant").entry.childSessionKey,
-      storeScope = expectDefined(descendantSession, "descendant session").storePath,
       phase: "waiting" | "preparing" = "waiting",
     ) =>
       createRpcSourceForTest(
         { requester: { connectionId: client.connId } },
-        { runId, sessionId, phase, agentId: "main", storeScope, sessionKey },
+        { runId, sessionId, phase, agentId: "main", storeScope: session.storePath, sessionKey },
       );
     const descendantSource = descendant
       ? source("prior-descendant-input", "previous-descendant-session")
@@ -102,8 +109,8 @@ it.each(["active", "queued", "pending-chat"] as const)(
     const old = source(
       oldRunId,
       "previous-child-session",
+      loaded,
       entry.childSessionKey,
-      loaded.storePath,
       kind === "queued" ? "waiting" : "preparing",
     );
     if (kind === "active") {
@@ -122,19 +129,14 @@ it.each(["active", "queued", "pending-chat"] as const)(
           ownerConnId: client.connId,
           agentId: "main",
           sessionKey: entry.childSessionKey,
-          sessionId: getRpcSourceIdentity(old).sessionId,
+          sessionId: "previous-child-session",
         },
       });
     }
     const originalPending = context.dedupe.get(`${kind}:${oldRunId}`);
     const { respond, done } = abort(client, entry.childSessionKey, context);
     await done;
-    expect(respond).toHaveBeenCalledOnce();
-    expect(respond.mock.calls[0]?.[2]).toBeUndefined();
-    expect(respond.mock.calls[0]?.slice(0, 2)).toEqual([
-      true,
-      { ok: true, status: "aborted", abortedRunId: entry.runId },
-    ]);
+    expectAborted(respond, entry.runId);
     expect(isSubagentRunQueued(entry)).toBe(false);
     expect(getCurrentSubagentRunOwner(subagentRuns, entry)).toMatchObject({
       collectorCompletion: { status: "killed" },
@@ -234,10 +236,7 @@ it("narrow collector Stop joins owned raw effects without interrupting or waitin
     rawFinish.resolve();
     await raw;
     await stop;
-    expect(respond.mock.calls[0]?.slice(0, 2)).toEqual([
-      true,
-      { ok: true, status: "aborted", abortedRunId: entry.runId },
-    ]);
+    expectAborted(respond, entry.runId);
     expect(priorInterrupted).not.toHaveBeenCalled();
     expect(foreign.isActive()).toBe(true);
     expect(foreignAbort).not.toHaveBeenCalled();

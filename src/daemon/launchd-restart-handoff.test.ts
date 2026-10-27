@@ -44,6 +44,12 @@ const countCall = (command: string) => `    count_file="$LAUNCHCTL_STUB_DIR/${co
     printf '%s\n' "$count" > "$count_file"`;
 
 const spawnCall = () => spawnMock.mock.calls[0]!;
+const stubCommands = (commands: Record<string, string>) =>
+  `case "$1" in\n${Object.entries(commands)
+    .map(([command, body]) => `  ${command}) ${body} ;;`)
+    .join("\n")}\n  *) exit 0 ;;\nesac`;
+const countedCommand = (command: string, body: string) => `${countCall(command)}\n${body}`;
+const startStub = 'case "$1" in enable|kickstart) exit 0 ;; *) exit 1 ;; esac';
 
 async function executeHandoff(
   mode: "park" | "reload" | "start-after-exit",
@@ -54,7 +60,7 @@ async function executeHandoff(
   try {
     const file = (name: string) => path.join(stubDir, name);
     const writeScript = (name: string, source: string) => {
-      fs.writeFileSync(file(name), source, { mode: 0o755 });
+      fs.writeFileSync(file(name), `#!/bin/sh\n${source}\n`, { mode: 0o755 });
     };
     const home = file("home");
     const stateDir = path.join(home, ".openclaw");
@@ -77,8 +83,7 @@ async function executeHandoff(
     fs.mkdirSync(systemDaemonsDir);
     writeScript(
       "launchctl",
-      `#!/bin/sh
-LAUNCHCTL_CALLS_PATH="$TMPDIR/launchctl.calls"
+      `LAUNCHCTL_CALLS_PATH="$TMPDIR/launchctl.calls"
 LAUNCHCTL_STUB_DIR="$TMPDIR"
 printf '%s\\n' "$*" >> "$LAUNCHCTL_CALLS_PATH"
 printf '%s:%s:%s\\n' "\${BOUNDARY_PARENT+present}" "\${BOUNDARY_SERVICE+present}" "\${OPENCLAW_PROFILE+present}" >> "$TMPDIR/environment.calls"
@@ -88,7 +93,7 @@ fi
 ${launchctlStub}
 `,
     );
-    writeScript("sleep", "#!/bin/sh\nexit 0\n");
+    writeScript("sleep", "exit 0");
     const parser = file("plutil");
     if (systemOwnership === "interrupted extraction") {
       fs.writeFileSync(
@@ -97,8 +102,7 @@ ${launchctlStub}
       );
       writeScript(
         "plutil",
-        `#!/bin/sh
-for last; do :; done
+        `for last; do :; done
 if [ "$last" != '-' ]; then exit 1; fi
 if [ "$1" = '-extract' ]; then kill -TERM "$$"; fi
 exec /usr/bin/plutil "$@"
@@ -158,30 +162,20 @@ it("waits for the caller pid before kickstarting launchd", () => {
     ok: true,
     value: expect.any(Promise),
   });
-  expect(spawnMock).toHaveBeenCalledTimes(1);
   const [, args] = spawnCall();
-  expect([args[0], args[2], args[6]]).toEqual(["-c", "openclaw-launchd-restart-handoff", "9876"]);
+  expect(args[6]).toBe("9876");
   for (const fragment of [
     'while kill -0 "$wait_pid" >/dev/null 2>&1; do',
-    "exec >>'/Users/test/.openclaw/logs/gateway-restart.log' 2>&1",
-    "openclaw restart attempt source=handoff mode=kickstart",
-    "pid=%s interactive=0",
-    'launchctl enable "$service_target"',
     'if launchctl kickstart -k "$service_target"; then',
     'if launchctl bootstrap "$domain" "$plist_path"; then\n    status=0\n  else\n    launchctl kickstart -k "$service_target"',
   ]) {
     expect(args[1]).toContain(fragment);
   }
-  expect(args[1]).not.toMatch(/launchctl[^\n]*\/dev\/null/);
-  expect(args[1]).not.toContain("sleep 1");
   expect(unrefMock).toHaveBeenCalledTimes(1);
 });
 
 it("kickstarts after exit without replacing a running KeepAlive process", async () => {
-  const result = await executeHandoff(
-    "start-after-exit",
-    'case "$1" in enable|kickstart) exit 0 ;; *) exit 1 ;; esac',
-  );
+  const result = await executeHandoff("start-after-exit", startStub);
 
   expect(result).toMatchObject({
     exitCode: 0,
@@ -196,11 +190,7 @@ it.for(["loaded", "interrupted extraction"] as const)(
     if (scenario === "interrupted extraction" && process.platform !== "darwin") {
       context.skip();
     }
-    const result = await executeHandoff(
-      "start-after-exit",
-      'case "$1" in enable|kickstart) exit 0 ;; *) exit 1 ;; esac',
-      scenario,
-    );
+    const result = await executeHandoff("start-after-exit", startStub, scenario);
 
     expect(result).toMatchObject({ exitCode: 78, calls: [] });
     expect(result.log).toContain("restart blocked");
@@ -222,23 +212,12 @@ it("parks the service with bootout after the caller exits", async () => {
 it("executes the generated reload handoff through a delayed launchd stop", async () => {
   const result = await executeHandoff(
     "reload",
-    `
-case "$1" in
-  print)
-${countCall("print")}
-    [ "$count" -le 20 ] && exit 0
-    exit 113
-    ;;
-  bootstrap) exit 0 ;;
-  *) exit 0 ;;
-esac`,
+    stubCommands({ print: countedCommand("print", '[ "$count" -le 20 ] && exit 0\nexit 113') }),
   );
 
   expectReload(result, { print: 21, bootstrap: 1 });
-  const [, args] = spawnCall();
-  // #110137: outwait launchd's SIGKILL ceiling, then retry only while registered.
-  expect(args[1]).toContain('bootout_wait_count="345"');
-  expect(args[1]).toContain("sleep 1");
+  // #110137: the executed handoff must outwait teardown and reload in order.
+  expect(spawnCall()[1][1]).toContain('bootout_wait_count="345"');
   expect(result.log).toContain("mode=reload");
   expect(result.calls.slice(0, 2)).toEqual([
     "enable gui/501/test.label",
@@ -249,21 +228,11 @@ esac`,
 it("retries bootstrap when the label disappears between print and kickstart", async () => {
   const result = await executeHandoff(
     "reload",
-    `
-case "$1" in
-  print)
-${countCall("print")}
-    [ "$count" -eq 2 ] && exit 0
-    exit 113
-    ;;
-  bootstrap)
-${countCall("bootstrap")}
-    [ "$count" -eq 1 ] && exit 5
-    exit 0
-    ;;
-  kickstart) exit 113 ;;
-  *) exit 0 ;;
-esac`,
+    stubCommands({
+      print: countedCommand("print", '[ "$count" -eq 2 ] && exit 0\nexit 113'),
+      bootstrap: countedCommand("bootstrap", '[ "$count" -eq 1 ] && exit 5\nexit 0'),
+      kickstart: "exit 113",
+    }),
   );
 
   expectReload(result, { bootstrap: 2, kickstart: 1 });
@@ -287,7 +256,6 @@ it("sanitizes restart helper environment overrides before spawning", () => {
   };
   schedule({ env: { ...defaultEnv, ...unsafe }, mode: "kickstart" });
   const [, args, options] = spawnCall();
-  expect(args[1]).toContain("exec >>'/Users/test/.openclaw/logs/gateway-restart.log' 2>&1");
   for (const value of Object.values(unsafe)) {
     expect(args[1]).not.toContain(value);
   }

@@ -7,19 +7,10 @@ import {
   ReplyRunSuccessorAdmissionBlockedError,
 } from "../../sessions/session-controller.js";
 import { captureSessionTarget } from "../../sessions/session-controller.lifecycle.js";
+import { waitForReplyBarrierSettlement } from "../../sessions/session-controller.settlement.js";
 import { testing } from "../../sessions/session-controller.test-support.js";
 import { waitForReplyRunSuccessorAdmission } from "../../sessions/session-controller.wait.js";
 import { createTestReplyOperation } from "./reply-run-registry.test-helpers.js";
-
-async function withFakeReplyTimers<T>(run: () => Promise<T>): Promise<T> {
-  vi.useFakeTimers();
-  try {
-    return await run();
-  } finally {
-    await vi.runOnlyPendingTimersAsync();
-    vi.useRealTimers();
-  }
-}
 
 function barrier(
   operation: ReturnType<typeof createTestReplyOperation>,
@@ -56,7 +47,11 @@ function expectBlocked(sessionKey: string) {
 }
 
 describe("reply run successor barriers", () => {
-  afterEach(() => {
+  afterEach(async () => {
+    if (vi.isFakeTimers()) {
+      await vi.runOnlyPendingTimersAsync();
+      vi.useRealTimers();
+    }
     testing.resetSessionControllerForTest();
     resetCommandQueueStateForTest();
     resetDiagnosticRunActivityForTest();
@@ -64,53 +59,52 @@ describe("reply run successor barriers", () => {
   });
 
   it("fences every durable alias until successor handoff settles", async () => {
-    await withFakeReplyTimers(async () => {
-      const requestKey = "agent:main:telegram:alias:request";
-      const canonicalKey = "agent:main:telegram:alias:canonical";
-      const adoptedKey = "agent:main:telegram:alias:adopted";
-      const operation = createTestReplyOperation({
-        sessionKey: requestKey,
-        sessionId: "alias-session",
-      });
-      const firstBarrier = barrier(operation, [requestKey, canonicalKey]);
-      const secondBarrier = barrier(operation, [adoptedKey]);
-
-      operation.updateSessionId("rotated-alias-session");
-      operation.complete();
-      for (const sessionKey of [requestKey, canonicalKey, adoptedKey]) {
-        expectBlocked(sessionKey);
-      }
-      const timedWait = waitForReplyRunSuccessorAdmission(canonicalKey, 100);
-      await vi.advanceTimersByTimeAsync(100);
-      await expect(timedWait).resolves.toEqual({ settled: false });
-
-      const requestWait = waitForReplyRunSuccessorAdmission(requestKey, 100);
-      const canonicalWait = waitForReplyRunSuccessorAdmission(canonicalKey, 100);
-      firstBarrier.resolve();
-      for (const wait of [requestWait, canonicalWait]) {
-        await expect(wait).resolves.toEqual(settledSource(operation, "rotated-alias-session"));
-      }
-      expectBlocked(adoptedKey);
-      secondBarrier.resolve();
-      await expect(waitForReplyRunSuccessorAdmission(adoptedKey, 100)).resolves.toEqual(
-        settledSource(operation, "rotated-alias-session"),
-      );
-      const successor = createTestReplyOperation({ sessionKey: canonicalKey });
-      successor.complete();
+    vi.useFakeTimers();
+    const requestKey = "agent:main:telegram:alias:request";
+    const canonicalKey = "agent:main:telegram:alias:canonical";
+    const adoptedKey = "agent:main:telegram:alias:adopted";
+    const operation = createTestReplyOperation({
+      sessionKey: requestKey,
+      sessionId: "alias-session",
     });
+    const firstBarrier = barrier(operation, [requestKey, canonicalKey]);
+    const secondBarrier = barrier(operation, [adoptedKey]);
+
+    operation.updateSessionId("rotated-alias-session");
+    operation.complete();
+    for (const sessionKey of [requestKey, canonicalKey, adoptedKey]) {
+      expectBlocked(sessionKey);
+    }
+    const timedWait = waitForReplyRunSuccessorAdmission(canonicalKey, 100);
+    await vi.advanceTimersByTimeAsync(100);
+    await expect(timedWait).resolves.toEqual({ settled: false });
+
+    const requestWait = waitForReplyRunSuccessorAdmission(requestKey, 100);
+    const canonicalWait = waitForReplyRunSuccessorAdmission(canonicalKey, 100);
+    firstBarrier.resolve();
+    for (const wait of [requestWait, canonicalWait]) {
+      await expect(wait).resolves.toEqual(settledSource(operation, "rotated-alias-session"));
+    }
+    expectBlocked(adoptedKey);
+    secondBarrier.resolve();
+    await expect(waitForReplyRunSuccessorAdmission(adoptedKey, 100)).resolves.toEqual(
+      settledSource(operation, "rotated-alias-session"),
+    );
+    const successor = createTestReplyOperation({ sessionKey: canonicalKey });
+    successor.complete();
   });
 
-  it.each(["pending", "rejected"] as const)(
-    "starts a late deferred release and keeps successors fenced while it is %s",
-    async (releaseState) => {
+  it.each([
+    ["pending", null],
+    ["pending", 100],
+    ["rejected", null],
+  ] as const)(
+    "starts a late deferred release and keeps successors fenced while it is %s (timeout=%s)",
+    async (releaseState, timeout) => {
       const operation = createTestReplyOperation();
       operation.complete();
-      const entered = createDeferred();
       const release = createDeferred();
-      const start = vi.fn(() => {
-        entered.resolve();
-        return release.promise;
-      });
+      const start = vi.fn(() => release.promise);
       const controller = new AbortController();
       let wait: ReturnType<typeof waitForReplyRunSuccessorAdmission> | undefined;
       try {
@@ -122,13 +116,12 @@ describe("reply run successor barriers", () => {
           start,
         });
         expect(start).toHaveBeenCalledOnce();
-        await entered.promise;
         if (releaseState === "rejected") {
           release.reject(new Error("Synthetic late release failure"));
           await Promise.allSettled([release.promise]);
         }
         expectBlocked(operation.key);
-        wait = waitForReplyRunSuccessorAdmission(operation.key, null, {
+        wait = waitForReplyRunSuccessorAdmission(operation.key, timeout, {
           signal: controller.signal,
         });
         controller.abort();
@@ -154,44 +147,45 @@ describe("reply run successor barriers", () => {
     },
   );
 
-  it("cancels a bounded wait without releasing the successor fence", async () => {
-    const operation = createTestReplyOperation();
-    const release = barrier(operation);
-    operation.complete();
-    const controller = new AbortController();
-    try {
-      const wait = waitForReplyRunSuccessorAdmission(operation.key, 100, {
-        signal: controller.signal,
+  it.each([-60_000, 60_000])(
+    "keeps the extendable barrier deadline after a %s ms wall-clock step",
+    async (wallClockStepMs) => {
+      vi.useFakeTimers();
+      const pending = createDeferred();
+      let settled = false;
+      const settlement = waitForReplyBarrierSettlement(pending.promise, {
+        maxTimeoutMs: 30_000,
+        shouldExtend: () => true,
+      }).then(() => {
+        settled = true;
       });
-      controller.abort();
-      await expect(wait).resolves.toEqual({ settled: false });
-      expectBlocked(operation.key);
-    } finally {
-      release.resolve();
-      await waitForReplyRunSuccessorAdmission(operation.key, null);
-    }
-  });
+      try {
+        vi.setSystemTime(Date.now() + wallClockStepMs);
+        await vi.advanceTimersByTimeAsync(15_000);
+        expect(settled).toBe(false);
+        await vi.advanceTimersByTimeAsync(15_000);
+        expect(settled).toBe(true);
+      } finally {
+        pending.resolve();
+        await settlement;
+      }
+    },
+  );
 
   it("waits for the captured physical owner when logical keys are ambiguous", async () => {
     const sessionKey = "global";
-    const firstTarget = captureSessionTarget({
-      storeScope: "/synthetic/successor-barrier/first.sqlite",
-      sessionKey,
-    });
-    const secondTarget = captureSessionTarget({
-      storeScope: "/synthetic/successor-barrier/second.sqlite",
-      sessionKey,
-    });
-    const first = createTestReplyOperation({
-      sessionKey,
-      sessionId: "first-session",
-      target: firstTarget,
-    });
-    const second = createTestReplyOperation({
-      sessionKey,
-      sessionId: "second-session",
-      target: secondTarget,
-    });
+    const physicalOwner = (name: string) => {
+      const target = captureSessionTarget({
+        storeScope: `/synthetic/successor-barrier/${name}.sqlite`,
+        sessionKey,
+      });
+      return {
+        target,
+        operation: createTestReplyOperation({ sessionKey, sessionId: `${name}-session`, target }),
+      };
+    };
+    const { operation: first, target: firstTarget } = physicalOwner("first");
+    const { operation: second, target: secondTarget } = physicalOwner("second");
     const firstRelease = barrier(first);
     const secondRelease = barrier(second);
     first.complete();

@@ -20,6 +20,7 @@ vi.mock("./openclaw-state-lease-process-exit.js", () => ({
 // mock-isolation: Native storage is forbidden; the fixture drives lease outcomes explicitly.
 vi.mock("./openclaw-state-lease-storage.js", () => ({
   STATE_LEASE_WRITE_BACKOFF: { initialMs: 25, maxMs: 250, factor: 1.5, jitter: 0.25 },
+  createOpenClawStateLeaseLostErrorFromDatabase: leaseMocks.forbidden,
   isOpenClawStateLeaseWriteContention: leaseMocks.isWriteContention,
   releaseOpenClawStateLeaseBestEffort: async (_params: unknown, execute?: () => Promise<void>) =>
     execute?.(),

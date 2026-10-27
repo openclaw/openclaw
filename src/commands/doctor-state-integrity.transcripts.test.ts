@@ -26,7 +26,6 @@ import {
 } from "../state/openclaw-state-db.js";
 import { captureEnv, deleteTestEnvValue, setTestEnvValue } from "../test-utils/env.js";
 import { readTuiLastSessionKey, writeTuiLastSessionKey } from "../tui/tui-last-session.js";
-import { repairHeartbeatPoisonedMainSession } from "./doctor-heartbeat-main-session-repair.js";
 import {
   doctorChangesText,
   hasRepairPromptMessage,
@@ -297,29 +296,17 @@ describe("doctor transcript and heartbeat session repairs", () => {
   ] satisfies Array<[string, Partial<SessionEntry>, boolean]>)(
     "requires consent and ownership without human activity (%s)",
     async (_name, entry, prompts) => {
-      const warnings: string[] = [],
-        changes: string[] = [];
-      const storePath = path.join(tempHome, "unwritten-repair-store.json");
+      const store = { [mainKey]: { sessionId: "session", updatedAt: 1, ...entry } };
+      writeSessionStore({}, store);
       const confirmRuntimeRepair = vi.fn(async () => false);
-      await expect(
-        repairHeartbeatPoisonedMainSession({
-          mainKey,
-          mainEntry: { sessionId: "session", updatedAt: 1, ...entry },
-          isSessionKeyOccupied: () => false,
-          store: { kind: "legacy", path: storePath },
-          stateDir,
-          sessionPathOpts: { agentId: "main", sessionsDir: tempHome },
-          prompter: { confirmRuntimeRepair },
-          warnings,
-          changes,
-        }),
-      ).resolves.toBe(false);
-      expect(confirmRuntimeRepair).toHaveBeenCalledTimes(prompts ? 1 : 0);
+      await noteStateIntegrity({}, { confirmRuntimeRepair });
+      expect(
+        hasRepairPromptMessage(confirmRuntimeRepair, "Move heartbeat-owned main session"),
+      ).toBe(prompts);
       if (prompts) {
-        expect(warnings.join("\n")).toContain("(heartbeat metadata)");
+        expect(stateIntegrityText()).toContain("(heartbeat metadata)");
       }
-      expect(changes).toEqual([]);
-      expect(fs.existsSync(storePath)).toBe(false);
+      expect(readLegacy()).toEqual(store);
     },
   );
 });

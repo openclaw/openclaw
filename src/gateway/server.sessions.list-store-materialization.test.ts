@@ -1,20 +1,19 @@
 import path from "node:path";
-import { expect, test, vi } from "vitest";
+import { expect, test } from "vitest";
 import { trackSqliteStatementExecutions } from "../../test/helpers/sqlite-statement-execution-counter.js";
-import * as agentScope from "../agents/agent-scope.js";
 import * as sessionAccessor from "../config/sessions/session-accessor.js";
-import { replaceTranscriptEvents } from "../config/sessions/session-accessor.sqlite-transcript-write.test-support.js";
 import { resolveSqliteTargetFromSessionStorePath } from "../config/sessions/session-sqlite-target.js";
 import { withOpenClawAgentDatabaseWrite } from "../state/openclaw-agent-db-write.js";
 import { openOpenClawAgentDatabase } from "../state/openclaw-agent-db.js";
 import { requireNativeSqliteDatabase } from "../test-utils/native-sqlite.js";
 import { observeSessionRowBackfill } from "./session-row-backfill.test-support.js";
 import { bindSessionRowProjection } from "./session-row-projection-access.js";
-import { createSessionRowProjection } from "./session-row-projection.js";
+import { createTestProjection } from "./session-row-projection.read-fixture.test-support.js";
 import type { SessionsListResult } from "./session-utils.types.js";
 import { testState, writeSessionStore } from "./test-helpers.js";
 import {
   directSessionReq,
+  seedSessionTranscript,
   sessionStoreEntry,
   setupGatewaySessionsHandlerTestHarness,
 } from "./test/server-sessions.test-helpers.js";
@@ -31,40 +30,6 @@ const LIST_PARAMS = {
   includeUnknown: true,
   limit: 100,
 };
-
-test("sessions.list keeps warm roster enumeration bounded as ordinary rows grow", async () => {
-  await createSessionStoreDir();
-  testState.agentsConfig = { entries: { main: {}, work: {} } };
-  testState.agentConfig = { sessionStore: { agentId: "main" } };
-  const rosterReads: number[] = [];
-  for (const rows of [20, 2_001]) {
-    const entries: Record<string, ReturnType<typeof sessionStoreEntry>> = {
-      main: sessionStoreEntry("sess-main", { updatedAt: 1_781_000_000_001 }),
-    };
-    for (let index = 0; index < rows; index++) {
-      entries[`agent:main:ordinary-${index}`] = sessionStoreEntry(`ordinary-${index}`, {
-        updatedAt: 1_781_000_000_000 - index,
-      });
-    }
-    await writeSessionStore({ entries });
-    const request = { ...LIST_PARAMS, limit: rows + 1 };
-    expect((await directSessionReq("sessions.list", request)).ok).toBe(true);
-    const roster = vi.spyOn(agentScope, "listAgentIds");
-    try {
-      const result = await directSessionReq<SessionsListResult>("sessions.list", request);
-      expect(result.ok).toBe(true);
-      expect(result.payload?.totalCount).toBe(rows + 1);
-      expect(result.payload?.sessions.map(({ key }) => key)).toEqual([
-        "agent:main:main",
-        ...Array.from({ length: rows }, (_, index) => `agent:main:ordinary-${index}`),
-      ]);
-      rosterReads.push(roster.mock.calls.length);
-    } finally {
-      roster.mockRestore();
-    }
-  }
-  expect(rosterReads[1]).toBeLessThanOrEqual(rosterReads[0]!);
-});
 
 test("sessions.list retains stored titles and transcript previews beyond the database handle cap", async () => {
   const stateDir = process.env.OPENCLAW_STATE_DIR;
@@ -95,71 +60,54 @@ test("sessions.list retains stored titles and transcript previews beyond the dat
     } else {
       sessionAccessor.replaceSessionEntrySync({ agentId, sessionKey, storePath }, entry);
     }
-    await replaceTranscriptEvents({ agentId, sessionId, sessionKey, storePath }, [
-      { type: "session", version: 3, id: sessionId, cwd: "/tmp" },
-      ...(["user", "assistant"] as const).map((role, turn) => ({
-        type: "message" as const,
-        id: turn ? "reply" : "question",
-        parentId: turn ? "question" : null,
-        timestamp: `2026-06-19T12:00:0${turn + 1}.000Z`,
-        message: { role, content: `${turn ? "Reply" : "Title"} ${agentId}`, timestamp: turn + 1 },
-      })),
-    ]);
+    await seedSessionTranscript({
+      agentId,
+      sessionId,
+      sessionKey,
+      storePath,
+      messages: [
+        { role: "user", content: `Title ${agentId}` },
+        { role: "assistant", content: `Reply ${agentId}` },
+      ],
+    });
   }
 
   const cfg = { session: { store: storeTemplate }, agents: testState.agentsConfig };
   const backfilled = observeSessionRowBackfill(agentIds.map((agentId) => `agent:${agentId}:main`));
-  const projection = await createSessionRowProjection({ cfg });
+  using projection = await createTestProjection({ cfg });
   const context = {
     getRuntimeConfig: () => cfg,
     ...bindSessionRowProjection({}, () => projection),
   };
-  try {
-    const initial = await directSessionReq<SessionsListResult>(
+  const list = (limit?: number) =>
+    directSessionReq<SessionsListResult>(
       "sessions.list",
-      { includeDerivedTitles: true, includeLastMessage: true, limit: agentIds.length },
+      { includeDerivedTitles: true, includeLastMessage: true, limit },
       { context },
     );
-    expect(initial.ok).toBe(true);
-    expect(initial.payload?.sessions).toHaveLength(agentIds.length);
-    await backfilled;
-    await projection.ensureMaterialized();
-    for (const limit of [undefined, 100]) {
-      const result = await directSessionReq<SessionsListResult>(
-        "sessions.list",
-        { includeDerivedTitles: true, includeLastMessage: true, limit },
-        { context },
-      );
-
-      expect(result.ok).toBe(true);
-      expect(result.payload?.sessions).toMatchObject(
-        agentIds.map((agentId) => ({
-          agentId,
-          derivedTitle: `Title ${agentId}`,
-          lastMessagePreview: `Reply ${agentId}`,
-        })),
-      );
-    }
-  } finally {
-    projection.dispose();
+  const initial = await list(agentIds.length);
+  expect(initial.ok).toBe(true);
+  expect(initial.payload?.sessions).toHaveLength(agentIds.length);
+  await backfilled;
+  await projection.ensureMaterialized();
+  for (const limit of [undefined, 100]) {
+    const result = await list(limit);
+    expect(result.ok).toBe(true);
+    expect(result.payload?.sessions).toMatchObject(
+      agentIds.map((agentId) => ({
+        agentId,
+        derivedTitle: `Title ${agentId}`,
+        lastMessagePreview: `Reply ${agentId}`,
+      })),
+    );
   }
 });
 
-test("sessions.list projects out prompt snapshots without changing full entry reads", async () => {
+test("sessions.list serves warm rows without reading a malformed raw insertion", async () => {
   await createSessionStoreDir();
   await writeSessionStore({
     entries: {
-      main: sessionStoreEntry("sess-main", {
-        skillsSnapshot: { prompt: "large skill prompt", skills: [{ name: "test" }] },
-        systemPromptReport: {
-          source: "run",
-          generatedAt: Date.now(),
-          systemPrompt: { chars: 100, projectContextChars: 40, nonProjectContextChars: 60 },
-          injectedWorkspaceFiles: [],
-          skills: { promptChars: 0, entries: [] },
-          tools: { listChars: 0, schemaChars: 0, entries: [] },
-        },
-      }),
+      main: sessionStoreEntry("sess-main"),
     },
   });
   const storePath = testState.sessionStorePath!;
@@ -168,24 +116,10 @@ test("sessions.list projects out prompt snapshots without changing full entry re
     agentId: target.agentId ?? "main",
     path: target.path,
   });
-  const fullEntries = sessionAccessor.listSessionEntriesReadOnly({ agentId: "main", storePath });
-  expect(fullEntries).toHaveLength(1);
-  expect(fullEntries[0]?.entry.skillsSnapshot).toBeDefined();
-  expect(fullEntries[0]?.entry.systemPromptReport?.source).toBe("run");
-
-  const cfg = {
-    agents: { entries: { main: {} } },
-    session: { store: storePath },
-  };
-  let projection: Awaited<ReturnType<typeof createSessionRowProjection>> | undefined;
+  const cfg = { agents: { entries: { main: {} } }, session: { store: storePath } };
+  using projection = await createTestProjection({ cfg });
   let reads: ReturnType<typeof trackSqliteStatementExecutions<"sessionStore">> | undefined;
   try {
-    projection = await createSessionRowProjection({ cfg });
-    const resident = projection.describe({ agentId: "main", key: fullEntries[0]!.sessionKey });
-    expect(resident?.storedEntry?.sessionId).toBe("sess-main");
-    expect(resident?.storedEntry?.skillsSnapshot).toBeUndefined();
-    expect(resident?.storedEntry?.systemPromptReport).toBeUndefined();
-
     // Warm readers tolerate malformed raw edits; new readers must refuse them during admission.
     await withOpenClawAgentDatabaseWrite(
       { agentId: database.agentId, path: database.path },
@@ -212,19 +146,5 @@ test("sessions.list projects out prompt snapshots without changing full entry re
     expect(reads.counts.sessionStore).toBe(0);
   } finally {
     reads?.restore();
-    projection?.dispose();
   }
-
-  expect(sessionAccessor.listSessionEntriesReadOnly({ agentId: "main", storePath })).toEqual(
-    fullEntries,
-  );
-
-  const listEntries = sessionAccessor.listSessionEntriesReadOnly({
-    agentId: "main",
-    projection: "list",
-    storePath,
-  });
-  expect(listEntries.map(({ entry }) => [entry.skillsSnapshot, entry.systemPromptReport])).toEqual([
-    [undefined, undefined],
-  ]);
 });

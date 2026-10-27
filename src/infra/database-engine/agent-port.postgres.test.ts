@@ -6,7 +6,7 @@ import path from "node:path";
 import { getEnvironmentData } from "node:worker_threads";
 import { zstdCompressSync } from "node:zlib";
 import { Client, type QueryResultRow } from "pg";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import {
   memoryTextSearchSchema,
   memoryStandingIntentSearchSchema,
@@ -21,6 +21,8 @@ import { resolveSqliteTranscriptReadScope } from "../../config/sessions/session-
 import { resolveSessionColdArchivePath } from "../../config/sessions/session-cold-storage-codec.js";
 import { prepareTranscriptPayload } from "../../config/sessions/transcript-payload.js";
 import type { OpenClawConfig } from "../../config/types.js";
+import type { MemorySearchManager } from "../../memory-host-sdk/host/types.js";
+import * as memoryRuntime from "../../plugins/memory-runtime.js";
 import {
   capturePostgresBackup,
   preparePostgresRestore,
@@ -114,7 +116,40 @@ describe.skipIf(!connection)("agent database port", () => {
       async (state) => {
         await state.writeConfig({
           database: { engine: "sqlite", postgres: { connection: connection! } },
+          agents: { entries: { main: { workspace: state.workspaceDir } } },
         });
+        fs.mkdirSync(state.workspaceDir, { recursive: true });
+        fs.writeFileSync(path.join(state.workspaceDir, "MEMORY.md"), "Synthetic port memory.\n");
+        // Keep custody, the memory write, worker transport and statistics real;
+        // the embedding/plugin service is a fixed external fixture.
+        const memory = vi
+          .spyOn(memoryRuntime, "getActiveMemorySearchManagerCore")
+          .mockImplementationOnce(async () => {
+            const anchor = readBackupEngine(agentPath);
+            if (anchor.engine !== "postgres") {
+              throw new Error("Memory rebuild must use the published PostgreSQL anchor");
+            }
+            const manager: MemorySearchManager = {
+              search: async () => [],
+              readFile: async ({ relPath }) => ({ status: "not_found", path: relPath, text: "" }),
+              status: () => ({
+                backend: "builtin",
+                provider: "fixture",
+                dirty: false,
+                files: 1,
+                chunks: 1,
+              }),
+              sync: async () => {
+                await client.query(`INSERT INTO "${anchor.namespace}".memory_index_chunks
+                (id, path, source, start_line, end_line, hash, model, text, embedding, updated_at)
+                VALUES ('fixture', 'MEMORY.md', 'memory', 1, 1, 'fixture', 'fixture', 'synthetic', '[]', 1)`);
+              },
+              probeEmbeddingAvailability: async () => ({ ok: true }),
+              probeVectorAvailability: async () => true,
+              close: async () => {},
+            };
+            return { manager, searchRuntimeRegistered: true };
+          });
         const descriptor = await agentPortProvider.loadDescriptor();
         const agentPath = path.join(state.agentDir("main"), "openclaw-agent.sqlite");
         fs.mkdirSync(path.dirname(agentPath), { recursive: true });
@@ -184,6 +219,8 @@ describe.skipIf(!connection)("agent database port", () => {
             phase: "complete",
             engine: "postgres",
             stores: [agentPath],
+            plannerStatistics: [{ path: agentPath, result: { status: "analyzed" } }],
+            memoryRebuilds: [{ status: "rebuilt", plannerStatistics: { status: "analyzed" } }],
           });
           if (!("manifest" in result)) {
             throw new Error("Expected a completed, verified database port");
@@ -194,6 +231,17 @@ describe.skipIf(!connection)("agent database port", () => {
           expect(manifest).toMatchObject({ state: "complete", outcome: "ported" });
           expect(manifest.targets[0]?.verification).toMatchObject({ ownerAdmitted: true });
           expect(manifest.targets[0]?.verification?.contentHash).toMatch(/^[a-f0-9]{64}$/);
+          const intended = manifest.targets[0]!.intended;
+          if (intended.engine !== "postgres") {
+            throw new Error("Expected a PostgreSQL destination");
+          }
+          expect(
+            await rows(
+              `SELECT c.reltuples FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
+               WHERE n.nspname = $1 AND c.relname = 'memory_index_chunks'`,
+              [intended.namespace],
+            ),
+          ).toEqual([{ reltuples: 1 }]);
           const config = JSON.parse(fs.readFileSync(state.configPath, "utf8")) as OpenClawConfig;
           withDatabaseEngineSelection(
             {
@@ -235,6 +283,7 @@ describe.skipIf(!connection)("agent database port", () => {
               }),
           );
         } finally {
+          memory.mockRestore();
           const directory = state.statePath("recovery", "database-port");
           if (fs.existsSync(directory)) {
             const ownedNamespaces = new Set<string>();

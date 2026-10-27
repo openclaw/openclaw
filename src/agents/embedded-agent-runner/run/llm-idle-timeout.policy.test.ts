@@ -5,24 +5,40 @@ import { resolveAgentTimeoutMs } from "../../timeout.js";
 import { resolveLlmFirstEventTimeoutMs, resolveLlmIdleTimeoutMs } from "./llm-idle-timeout.js";
 
 type TimeoutParams = NonNullable<Parameters<typeof resolveLlmIdleTimeoutMs>[0]>;
-const local = { baseUrl: "http://127.0.0.1:11434" };
 const cloud = { provider: "openai", baseUrl: "https://api.openai.com/v1" };
 const defaults = (timeoutSeconds: number): OpenClawConfig => ({
   agents: { defaults: { timeoutSeconds } },
 });
+type Provider = NonNullable<NonNullable<OpenClawConfig["models"]>["providers"]>[string];
+const providerConfig = (baseUrl: string, apiKey: string): Provider => ({
+  baseUrl,
+  apiKey,
+  api: "openai-completions",
+  models: [],
+});
+const withProviders = (providers: Record<string, Provider>): OpenClawConfig => ({
+  models: { providers },
+});
+function expectBudgets(params: TimeoutParams, idle: number, firstEvent = idle) {
+  expect(resolveLlmIdleTimeoutMs(params)).toBe(idle);
+  expect(resolveLlmFirstEventTimeoutMs(params)).toBe(firstEvent);
+}
+function configured(keys: Record<string, string>, provider = " GPU "): TimeoutParams {
+  const baseUrl = "http://gpu-box:8000/v1";
+  return {
+    model: { provider, baseUrl },
+    cfg: withProviders(
+      Object.fromEntries(
+        Object.entries(keys).map(([key, marker]) => [key, providerConfig(baseUrl, marker)]),
+      ),
+    ),
+  };
+}
+type LocalityCase = { params: TimeoutParams; expected: number; cron?: number };
 
 describe("LLM watchdog policy", () => {
-  it.each<[string, TimeoutParams | undefined, number, number]>([
-    ["short agent budget", { cfg: defaults(30) }, 30_000, 30_000],
-    [
-      "explicit local provider budget",
-      { model: local, modelRequestTimeoutMs: 600_000 },
-      600_000,
-      600_000,
-    ],
-  ])("resolves idle and first-event budgets: %s", (_name, params, idle, firstEvent) => {
-    expect(resolveLlmIdleTimeoutMs(params)).toBe(idle);
-    expect(resolveLlmFirstEventTimeoutMs(params)).toBe(firstEvent);
+  it("caps idle and first-event watchdogs at the agent budget", () => {
+    expectBudgets({ cfg: defaults(30) }, 30_000);
   });
 
   it("keeps the cloud watchdog finite when the configured run timeout is unlimited", () => {
@@ -42,100 +58,49 @@ describe("LLM watchdog policy", () => {
     expect(resolveLlmIdleTimeoutMs({ model: { baseUrl } })).toBe(expected);
   });
 
-  it.each([
-    ["gpu", "http://gpu-box:8000/v1", { apiKey: "custom-local" }, 300_000, 600_000],
-    ["custom-proxy", "http://gateway:4000/v1", undefined, 120_000, 60_000],
-  ] satisfies [
-    string | undefined,
-    string,
-    Partial<NonNullable<NonNullable<OpenClawConfig["models"]>["providers"]>[string]> | undefined,
-    number,
-    number,
-  ][])(
-    "uses provider locality evidence for %s at %s",
-    (provider, baseUrl, providerConfig, idle, cron) => {
-      const cfg: OpenClawConfig | undefined =
-        providerConfig && provider
-          ? {
-              models: {
-                providers: {
-                  [provider]: { baseUrl, api: "openai-completions", models: [], ...providerConfig },
-                },
-              },
-            }
-          : undefined;
-      const model = { provider, baseUrl };
-      expect(resolveLlmIdleTimeoutMs({ cfg, model })).toBe(idle);
-      expect(resolveLlmFirstEventTimeoutMs({ cfg, model })).toBe(idle);
-      expect(resolveLlmIdleTimeoutMs({ cfg, model, trigger: "cron", runTimeoutMs: 600_000 })).toBe(
+  it.each`
+    name                        | params                                                                        | expected   | cron
+    ${"local marker"}           | ${configured({ gpu: "custom-local" }, "gpu")}                                 | ${300_000} | ${600_000}
+    ${"unconfigured proxy"}     | ${{ model: { provider: "custom-proxy", baseUrl: "http://gateway:4000/v1" } }} | ${120_000} | ${60_000}
+    ${"normalized key"}         | ${configured({ " GPU ": "custom-local" })}                                    | ${300_000} | ${undefined}
+    ${"canonical key priority"} | ${configured({ " GPU ": "custom-local", gpu: "synthetic-remote" })}           | ${120_000} | ${undefined}
+    ${"first normalized key"}   | ${configured({ " GPU ": "synthetic-remote", GPU: "custom-local" })}           | ${120_000} | ${undefined}
+  `("uses $name for configured provider locality", ({ params, expected, cron }: LocalityCase) => {
+    expectBudgets(params, expected);
+    if (cron !== undefined) {
+      expect(resolveLlmIdleTimeoutMs({ ...params, trigger: "cron", runTimeoutMs: 600_000 })).toBe(
         cron,
       );
-    },
-  );
-
-  it.each<{ name: string; entries: Array<[string, boolean]>; expected: number }>([
-    { name: "normalized key", entries: [[" GPU ", true]], expected: 300_000 },
-    {
-      name: "canonical key priority",
-      entries: [
-        [" GPU ", true],
-        ["gpu", false],
-      ],
-      expected: 120_000,
-    },
-    {
-      name: "first normalized key",
-      entries: [
-        [" GPU ", false],
-        ["GPU", true],
-      ],
-      expected: 120_000,
-    },
-  ])("uses $name for configured provider locality", ({ entries, expected }) => {
-    const baseUrl = "http://gpu-box:8000/v1";
-    const cfg: OpenClawConfig = {
-      models: {
-        providers: Object.fromEntries(
-          entries.map(([key, isLocal]) => [
-            key,
-            {
-              baseUrl,
-              api: "openai-completions",
-              models: [],
-              apiKey: isLocal ? "custom-local" : "synthetic-remote",
-            },
-          ]),
-        ),
-      },
-    };
-    const model = { provider: " GPU ", baseUrl };
-    expect(resolveLlmIdleTimeoutMs({ cfg, model })).toBe(expected);
-    expect(resolveLlmFirstEventTimeoutMs({ cfg, model })).toBe(expected);
+    }
   });
 
-  it.each<[string, Record<string, unknown>, { idle: number; firstEvent: number; cron: number }]>([
-    ["remote: true", { remote: true }, { idle: 120_000, firstEvent: 120_000, cron: 60_000 }],
+  it.each<[string, string, Partial<Provider>]>([
+    ["loopback relay", "http://127.0.0.1:8787", {}],
+    ["bare hostname with local auth", "http://gateway:8787", { apiKey: "custom-local" }],
     [
-      "remote: true with a local auth marker",
-      { remote: true, apiKey: "custom-local" },
-      { idle: 120_000, firstEvent: 120_000, cron: 60_000 },
+      "bare hostname with local service",
+      "http://gateway:8787",
+      { localService: { command: "/usr/bin/relay" } },
     ],
-    ["remote: false", { remote: false }, { idle: 0, firstEvent: 300_000, cron: 600_000 }],
-  ])("honours the provider remote hint on a loopback baseUrl: %s", (_name, extra, expected) => {
-    const baseUrl = "http://127.0.0.1:8787";
-    const cfg: OpenClawConfig = {
-      models: {
-        providers: {
-          relay: { baseUrl, api: "anthropic-messages", models: [], ...extra },
-        },
-      },
-    };
+  ])("uses hosted watchdogs for remote %s", (_name, baseUrl, extra) => {
+    const cfg = withProviders({
+      relay: { ...providerConfig(baseUrl, "synthetic-remote"), ...extra, remote: true },
+    });
     const model = { provider: "relay", id: "claude-sonnet-4-6", baseUrl };
-    expect({
-      idle: resolveLlmIdleTimeoutMs({ cfg, model }),
-      firstEvent: resolveLlmFirstEventTimeoutMs({ cfg, model }),
-      cron: resolveLlmIdleTimeoutMs({ cfg, model, trigger: "cron", runTimeoutMs: 600_000 }),
-    }).toEqual(expected);
+    expectBudgets({ cfg, model }, 120_000);
+    expect(resolveLlmIdleTimeoutMs({ cfg, model, trigger: "cron", runTimeoutMs: 600_000 })).toBe(
+      60_000,
+    );
+  });
+
+  it("keeps self-hosted provider identity local unless remote is true", () => {
+    const model = { provider: "ollama-relay", baseUrl: "http://gateway:8787" };
+    for (const remote of [undefined, false, true]) {
+      const cfg = withProviders({
+        "ollama-relay": { ...providerConfig(model.baseUrl, "synthetic-remote"), remote },
+      });
+      expectBudgets({ cfg, model }, remote ? 120_000 : 300_000);
+    }
   });
 
   it("keeps explicit provider timeoutSeconds ahead of the remote hint", () => {
@@ -147,20 +112,19 @@ describe("LLM watchdog policy", () => {
         },
       },
     };
-    expect(resolveLlmIdleTimeoutMs({ cfg, model, modelRequestTimeoutMs: 900_000 })).toBe(900_000);
+    const params = { cfg, model, modelRequestTimeoutMs: 900_000 };
+    expectBudgets(params, 900_000);
+    expectBudgets({ ...params, trigger: "cron", runTimeoutMs: 600_000 }, 600_000);
+    expectBudgets({ ...params, runTimeoutMs: 20_000 }, 20_000);
   });
 
   it.each([
     ["kimi-k2.5:cloud", "http://127.0.0.1:11434", 0],
     ["gpt-oss:120b-cloud", "http://ollama-box:11434", 300_000],
   ])("keeps hosted watchdogs for custom Ollama model %s through %s", (id, baseUrl, localIdle) => {
-    const cfg: OpenClawConfig = {
-      models: {
-        providers: {
-          "local-ollama": { api: "ollama", apiKey: "ollama-local", baseUrl, models: [] },
-        },
-      },
-    };
+    const cfg = withProviders({
+      "local-ollama": { ...providerConfig(baseUrl, "ollama-local"), api: "ollama" },
+    });
     const model = { provider: "local-ollama", id, baseUrl };
     expect({
       idle: resolveLlmIdleTimeoutMs({ cfg, model }),

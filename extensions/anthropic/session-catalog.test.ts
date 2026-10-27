@@ -28,15 +28,7 @@ import {
   readLocalClaudeTranscriptPage as readPage,
 } from "./session-catalog.js";
 
-type OwnerMethod = "list" | "read" | "continueSession" | "openTerminal";
-type OwnerMethods = Pick<RegisteredSessionCatalogProvider, OwnerMethod>;
-type SessionCatalogProvider = Omit<RegisteredSessionCatalogProvider, OwnerMethod> & {
-  [K in keyof OwnerMethods]: NonNullable<RegisteredSessionCatalogProvider[K]> extends (
-    params: infer P,
-  ) => infer R
-    ? (params: Omit<P, "agentId"> & { agentId?: string }) => R
-    : never;
-};
+type SessionCatalogProvider = RegisteredSessionCatalogProvider;
 
 function bindTestCatalogOwner(provider: RegisteredSessionCatalogProvider): SessionCatalogProvider {
   return {
@@ -262,12 +254,11 @@ async function writeDesktopMetadata(
 async function writeIndexedDesktopSession(
   home: string,
   sessionId: string,
-  localSessionId: string,
   metadata: Record<string, unknown> = {},
 ): Promise<void> {
   await writeIndexedSession(home, sessionId, { projectPath: "/work/openclaw", isSidechain: false });
   await writeDesktopMetadata(home, "fixture", {
-    sessionId: localSessionId,
+    sessionId: DESKTOP_SESSION_ID,
     cliSessionId: sessionId,
     cwd: "/work/openclaw",
     title: "Desktop session",
@@ -275,126 +266,27 @@ async function writeIndexedDesktopSession(
   });
 }
 
-function encodeVarint(value: number): Buffer {
-  const bytes: number[] = [];
-  let remaining = value;
-  while (remaining >= 0x80) {
-    bytes.push((remaining & 0x7f) | 0x80);
-    remaining = Math.floor(remaining / 0x80);
-  }
-  bytes.push(remaining);
-  return Buffer.from(bytes);
-}
+const DESKTOP_SESSION_ID = "local_11111111-1111-1111-1111-111111111111";
 
-function snappyLiteralChunk(value: Buffer): Buffer {
-  if (value.length <= 60) {
-    return Buffer.concat([Buffer.from([(value.length - 1) << 2]), value]);
-  }
-  const length = value.length - 1;
-  const lengthBytes: number[] = [];
-  let remaining = length;
-  while (remaining > 0) {
-    lengthBytes.push(remaining & 0xff);
-    remaining = Math.floor(remaining / 0x100);
-  }
-  return Buffer.concat([Buffer.from([(59 + lengthBytes.length) << 2, ...lengthBytes]), value]);
-}
+// Fixed SSTables from the synthetic Desktop store. The first three use Snappy
+// literal/copy records; the others exercise invalid labels and last-sequence wins.
+const DESKTOP_TABLES = {
+  Release:
+    "0gHwoAAongFfaHR0cHM6Ly9jbGF1ZGUuYWkAAWRmcmFtZS1zdG9yZQEBAAAAAAAAeyJpZCI6ImNnLTIyMjIyMjIyLTIyMjItMjIyMi0yMjIyLTIyMjIyMjIyMjIyMiIsIm5hbWUiOiJSZWxlYXNlIn17ImNvZGU6bG9jYWxfMTExMTExMTEtMTExMS0xMTExLTExMTEtMTExMTExMTExMTExIjoimm4AJCJ9AAAAAAEAAAABAAAAAAABA3gAswEAAAAAAQAAAAAAAAAAAAC4AQ8AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+  Changed:
+    "0gHwoAAongFfaHR0cHM6Ly9jbGF1ZGUuYWkAAWRmcmFtZS1zdG9yZQEBAAAAAAAAeyJpZCI6ImNnLTIyMjIyMjIyLTIyMjItMjIyMi0yMjIyLTIyMjIyMjIyMjIyMiIsIm5hbWUiOiJDaGFuZ2VkIn17ImNvZGU6bG9jYWxfMTExMTExMTEtMTExMS0xMTExLTExMTEtMTExMTExMTExMTExIjoimm4AJCJ9AAAAAAEAAAABAAAAAAABA3gAswEAAAAAAQAAAAAAAAAAAAC4AQ8AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+  "Normal poll update":
+    "3QHwqwAoqQFfaHR0cHM6Ly9jbGF1ZGUuYWkAAWRmcmFtZS1zdG9yZQEBAAAAAAAAeyJpZCI6ImNnLTIyMjIyMjIyLTIyMjItMjIyMi0yMjIyLTIyMjIyMjIyMjIyMiIsIm5hbWUiOiJOb3JtYWwgcG9sbCB1cGRhdGUifXsiY29kZTpsb2NhbF8xMTExMTExMS0xMTExLTExMTEtMTExMS0xMTExMTExMTExMTEiOiKaeQAkIn0AAAAAAQAAAAEAAAAAAAEDeAC+AQAAAAABAAAAAAAAAAAAAMMBDwAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
+  "decoder garbage":
+    "ACjiAV9odHRwczovL2NsYXVkZS5haQABZGZyYW1lLXN0b3JlAQEAAAAAAAB7ImlkIjoiY2ctMjIyMjIyMjItMjIyMi0yMjIyLTIyMjItMjIyMjIyMjIyMjIyIiwibmFtZSI6IlJlbGUSKQxhc2UifXsiaWQiOiJjZy0yMjIyMjIyMi0yMjIyLTIyMjItMjIyMi0yMjIyMjIyMjIyMjIiLCJuYW1lIjoiUmVsZWFzZSJ9eyJjb2RlOmxvY2FsXzExMTExMTExLTExMTEtMTExMS0xMTExLTExMTExMTExMTExMSI6ImNnLTIyMjIyMjIyLTIyMjItMjIyMi0yMjIyLTIyMjIyMjIyMjIyMiJ9AAAAAAEAAAAAAAAAAAABA3gAlgIAAAAAAQAAAAAAAAAAAACbAg8AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+  "newer empty entry":
+    "ACieAV9odHRwczovL2NsYXVkZS5haQABZGZyYW1lLXN0b3JlAQEAAAAAAAB7ImlkIjoiY2ctMjIyMjIyMjItMjIyMi0yMjIyLTIyMjItMjIyMjIyMjIyMjIyIiwibmFtZSI6IlJlbGVhc2UifXsiY29kZTpsb2NhbF8xMTExMTExMS0xMTExLTExMTEtMTExMS0xMTExMTExMTExMTEiOiJjZy0yMjIyMjIyMi0yMjIyLTIyMjItMjIyMi0yMjIyMjIyMjIyMjIifSEHAgIAAAAAAAB7fQAAAAABAAAAAAAAAAAAAQN4AN4BAAAAAAEAAAAAAAAAAAAA4wEPAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA==",
+};
 
-const CLAUDE_GROUP_USER_KEY = Buffer.from("_https://claude.ai\0\x01dframe-store", "latin1");
-
-function levelDbInternalKey(sequence: number, kind = 1): Buffer {
-  const trailer = Buffer.alloc(8);
-  trailer.writeBigUInt64LE((BigInt(sequence) << 8n) | BigInt(kind));
-  return Buffer.concat([CLAUDE_GROUP_USER_KEY, trailer]);
-}
-
-const LEVELDB_RESTART = Buffer.from([0, 0, 0, 0, 1, 0, 0, 0]);
-
-function levelDbDataBlock(
-  entries: Array<{ sequence: number; value: string | Buffer; kind?: number }>,
-): Buffer {
-  const encoded: Buffer[] = [];
-  let previousKey: Uint8Array = Buffer.alloc(0);
-  for (const entry of entries) {
-    const key = levelDbInternalKey(entry.sequence, entry.kind ?? 1);
-    let shared = 0;
-    while (shared < previousKey.length && previousKey[shared] === key[shared]) {
-      shared += 1;
-    }
-    const value = Buffer.from(entry.value);
-    encoded.push(
-      encodeVarint(shared),
-      encodeVarint(key.length - shared),
-      encodeVarint(value.length),
-      key.subarray(shared),
-      value,
-    );
-    previousKey = key;
-  }
-  return Buffer.concat([...encoded, LEVELDB_RESTART]);
-}
-
-function snappyGroupRecords(groupId: string, groupName: string, localSessionId: string): Buffer {
-  const group = `{"id":"${groupId}","name":"${groupName}"}`;
-  const assignmentPrefix = `{"code:${localSessionId}":"`;
-  const key = levelDbInternalKey(1);
-  const valueLength =
-    Buffer.byteLength(group) + Buffer.byteLength(assignmentPrefix) + groupId.length + 2;
-  const firstChunk = Buffer.concat([
-    encodeVarint(0),
-    encodeVarint(key.length),
-    encodeVarint(valueLength),
-    key,
-    Buffer.from(`${group}${assignmentPrefix}`),
-  ]);
-  const groupIdOffset = firstChunk.length - firstChunk.indexOf(groupId);
-  const tail = Buffer.concat([Buffer.from('"}'), LEVELDB_RESTART]);
-  const decodedLength = firstChunk.length + groupId.length + tail.length;
-  return Buffer.concat([
-    encodeVarint(decodedLength),
-    snappyLiteralChunk(firstChunk),
-    Buffer.from([((groupId.length - 1) << 2) | 2, groupIdOffset & 0xff, groupIdOffset >> 8]),
-    snappyLiteralChunk(tail),
-  ]);
-}
-
-function levelDbTable(data: Buffer, compression: 0 | 1): Buffer {
-  const dataWithTrailer = Buffer.concat([data, Buffer.from([compression, 0, 0, 0, 0])]);
-  const handle = Buffer.concat([encodeVarint(0), encodeVarint(data.length)]);
-  const indexEntry = Buffer.concat([Buffer.from([0, 1, handle.length, 0x78]), handle]);
-  const index = Buffer.concat([indexEntry, LEVELDB_RESTART]);
-  const indexWithTrailer = Buffer.concat([index, Buffer.alloc(5)]);
-  const footer = Buffer.alloc(48);
-  Buffer.concat([
-    encodeVarint(0),
-    encodeVarint(0),
-    encodeVarint(dataWithTrailer.length),
-    encodeVarint(index.length),
-  ]).copy(footer);
-  return Buffer.concat([dataWithTrailer, indexWithTrailer, footer]);
-}
-
-async function writeDesktopGroupStore(
-  home: string,
-  groupId: string,
-  groupName: string,
-  localSessionId: string,
-): Promise<void> {
+async function writeDesktopGroupStore(home: string, fixture: keyof typeof DESKTOP_TABLES) {
   const dir = path.join(home, "Library/Application Support/Claude/Local Storage/leveldb");
   await fs.mkdir(dir, { recursive: true });
-  await fs.writeFile(
-    path.join(dir, "000001.ldb"),
-    levelDbTable(snappyGroupRecords(groupId, groupName, localSessionId), 1),
-  );
-}
-
-async function writeDesktopGroupStoreEntries(
-  home: string,
-  entries: Array<{ sequence: number; value: string | Buffer; kind?: number }>,
-): Promise<void> {
-  const dir = path.join(home, "Library/Application Support/Claude/Local Storage/leveldb");
-  await fs.mkdir(dir, { recursive: true });
-  await fs.writeFile(path.join(dir, "000001.ldb"), levelDbTable(levelDbDataBlock(entries), 0));
+  await fs.writeFile(path.join(dir, "000001.ldb"), Buffer.from(DESKTOP_TABLES[fixture], "base64"));
 }
 
 async function writeBrokenClaudeNpmShim(binDir: string): Promise<string> {
@@ -943,24 +835,14 @@ describe("Claude session catalog", () => {
         invocableCommands: [] as string[],
       },
     ];
-    const runtime = {
-      nodes: {
-        list: vi.fn(async () => ({ nodes })),
-        invoke: vi.fn(async () =>
-          nodePayload({
-            sessions: [nodeSession(threadId, { source: "claude-desktop" })],
-          }),
+    const provider = captureCatalogProvider(
+      nodeRuntime(
+        nodes,
+        vi.fn(async () =>
+          nodePayload({ sessions: [nodeSession(threadId, { source: "claude-desktop" })] }),
         ),
-      },
-      config: { current: () => ({}) },
-      agent: {
-        session: {
-          listSessionEntries: () => [],
-          createSessionEntry: vi.fn(),
-        },
-      },
-    } as unknown as PluginRuntime;
-    const provider = captureCatalogProvider(runtime);
+      ),
+    );
 
     for (const [advertised, invocable] of [
       [commands, []],
@@ -1076,14 +958,8 @@ describe("Claude session catalog", () => {
     let now = Date.now();
     vi.spyOn(Date, "now").mockImplementation(() => now);
     const sessionId = "desktop-custom-group";
-    const localSessionId = "local_11111111-1111-1111-1111-111111111111";
-    await writeIndexedDesktopSession(home, sessionId, localSessionId);
-    await writeDesktopGroupStore(
-      home,
-      "cg-22222222-2222-2222-2222-222222222222",
-      "Release",
-      localSessionId,
-    );
+    await writeIndexedDesktopSession(home, sessionId);
+    await writeDesktopGroupStore(home, "Release");
 
     const groupFile = path.join(
       home,
@@ -1100,12 +976,7 @@ describe("Claude session catalog", () => {
       expect(page.sessions[0]?.customGroup).toBe("Release"),
     );
     expect(readFile.mock.calls.filter(([target]) => target === groupFile)).toEqual([]);
-    await writeDesktopGroupStore(
-      home,
-      "cg-22222222-2222-2222-2222-222222222222",
-      "Changed",
-      localSessionId,
-    );
+    await writeDesktopGroupStore(home, "Changed");
     await fs.utimes(groupFile, fixedGroupTime, fixedGroupTime);
     expect((await listClaudeSessions(home, { forceRefresh: true })).records[0]?.customGroup).toBe(
       "Changed",
@@ -1118,12 +989,7 @@ describe("Claude session catalog", () => {
         spy.mock.calls.filter(([target]) => typeof target === "string" && target.startsWith(home)),
       await listPage({}, home),
     );
-    await writeDesktopGroupStore(
-      home,
-      "cg-22222222-2222-2222-2222-222222222222",
-      "Normal poll update",
-      localSessionId,
-    );
+    await writeDesktopGroupStore(home, "Normal poll update");
     now += 60_001;
     expect((await listPage({}, home)).sessions[0]?.customGroup).toBe("Normal poll update");
   });
@@ -1131,22 +997,17 @@ describe("Claude session catalog", () => {
   it("retains the current Claude Desktop pull request when history is truncated", async () => {
     const home = await createHome();
     const sessionId = "desktop-pull-requests";
-    await writeIndexedDesktopSession(
-      home,
-      sessionId,
-      "local_aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
-      {
-        prNumber: 111772,
-        prs: [
-          { prNumber: 111772, state: "MERGED" },
-          { prNumber: 111179, state: "MERGED", dismissed: true },
-          ...Array.from({ length: 1_000 }, (_value, index) => ({
-            prNumber: index + 1,
-            state: "CLOSED",
-          })),
-        ],
-      },
-    );
+    await writeIndexedDesktopSession(home, sessionId, {
+      prNumber: 111772,
+      prs: [
+        { prNumber: 111772, state: "MERGED" },
+        { prNumber: 111179, state: "MERGED", dismissed: true },
+        ...Array.from({ length: 1_000 }, (_value, index) => ({
+          prNumber: index + 1,
+          state: "CLOSED",
+        })),
+      ],
+    });
 
     await expect(listPage({}, home)).resolves.toMatchObject({
       sessions: [
@@ -1167,19 +1028,8 @@ describe("Claude session catalog", () => {
     async (scenario) => {
       const home = await createHome();
       const sessionId = "desktop-group";
-      const localSessionId = "local_33333333-3333-3333-3333-333333333333";
-      const groupId = "cg-44444444-4444-4444-4444-444444444444";
-      await writeIndexedDesktopSession(home, sessionId, localSessionId);
-      await writeDesktopGroupStoreEntries(home, [
-        {
-          sequence: 1,
-          value:
-            (scenario === "decoder garbage"
-              ? `{"id":"${groupId}","name":"Rele\u0012)\fase"}`
-              : "") + `{"id":"${groupId}","name":"Release"}{"code:${localSessionId}":"${groupId}"}`,
-        },
-        ...(scenario === "newer empty entry" ? [{ sequence: 2, value: "{}" }] : []),
-      ]);
+      await writeIndexedDesktopSession(home, sessionId);
+      await writeDesktopGroupStore(home, scenario);
       const page = await listPage({}, home);
       expect(page.sessions[0]).toMatchObject({ threadId: sessionId, source: "claude-desktop" });
       if (scenario === "decoder garbage") {

@@ -6,6 +6,7 @@ import { retireQuestionChannelGateway } from "../infra/question-channel-runtime.
 import type { createSubsystemLogger } from "../logging/subsystem.js";
 import { bindLegacyPluginSdkResourceHost } from "../plugins/legacy-sdk-resource-host.js";
 import { bindGatewayContextResolver } from "../plugins/runtime/gateway-request-scope.js";
+import { runWithGatewayIndependentRootWorkAdmission } from "../process/gateway-work-admission.js";
 import { closeGatewayDeviceRevocation } from "./device-revocation.js";
 import { shouldUseGatewayOwnerProfile } from "./gateway-owner-profile.js";
 import { createGatewayChatMetadataLifecycle } from "./server-chat-metadata-lifecycle.js";
@@ -129,10 +130,36 @@ export async function prepareGatewayKernelRequestRuntime(params: {
         }
       }
       // The initial roster must be usable before reconnecting clients can issue lists.
+      // Load-bearing: exact preparations outrank the bulk drain, so an un-awaited drain can
+      // stay incomplete under traffic and every read re-prepares rows (#184368, reverted).
       await startupTrace.measure("sessions.materialize", () => projection.ensureMaterialized());
       if (projectionLifetime.closing) {
         throw new Error("Gateway closed during session projection startup");
       }
+      // Facts are ready, but display rows remain lazy. Warm the recent page while sidecars start.
+      void runtime.connectionWork
+        .track(() =>
+          runWithGatewayIndependentRootWorkAdmission(
+            async () => {
+              const { listProjectedSessions } = await import("./session-utils-list.js");
+              runtime.connectionWork.signal.throwIfAborted();
+              await startupTrace.measure("sessions.first-page", () =>
+                listProjectedSessions({
+                  projection,
+                  opts: { limit: 100, archived: false, rowMode: "sidebar" },
+                  acceptsSerializedJson: true,
+                }),
+              );
+            },
+            "startup:session-row-prewarm",
+            runtime.connectionWork.signal,
+          ),
+        )
+        .catch((error: unknown) => {
+          if (!runtime.connectionWork.signal.aborted) {
+            log.warn(`Session first-page preparation failed: ${formatErrorMessage(error)}`);
+          }
+        });
     }
     if (!runtime.opts.updateCanary) {
       await startupTrace.measure("gateway.lifetime-sidecars", () =>

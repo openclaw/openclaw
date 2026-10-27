@@ -31,14 +31,19 @@ import { disconnectGatewayClient } from "./test-helpers.e2e.js";
 const parentPrompt = "Spawn the child that will yield.";
 const childTask = "Pause this unfinished task until an incoming continuation arrives.";
 const queuedInput = "Queued durable child input";
-let responseSequence = 0;
+afterEach(async () => {
+  vi.useRealTimers();
+  await resetSubagentRegistryForTests({ persist: false });
+});
 
-async function startYieldModelServer(allowYield: Promise<void>) {
+it("bounds public child Stop while yielded queued-input cleanup remains pending", async () => {
+  const allowYield = createDeferred();
   const childAccepted = createDeferred<SpawnReceipt>();
   const childModelStarted = createDeferred();
   let yieldSent = false;
   let queuedInputRequests = 0;
-  const server = await startOpenAiResponsesModelServer({
+  let responseSequence = 0;
+  const model = await startOpenAiResponsesModelServer({
     modelId: "stop-proof",
     bindError: "Expected queued cleanup model server address",
     onRequest: async (request, response) => {
@@ -50,7 +55,7 @@ async function startYieldModelServer(allowYield: Promise<void>) {
       // Only the fresh child attempt carries its task without a prior tool result.
       if (body.includes(childTask) && !body.includes("function_call_output")) {
         childModelStarted.resolve();
-        await allowYield;
+        await allowYield.promise;
         yieldSent = true;
         writeOpenAiResponsesSse(
           response,
@@ -81,27 +86,9 @@ async function startYieldModelServer(allowYield: Promise<void>) {
       });
     },
   });
-  return {
-    childAccepted: childAccepted.promise,
-    childModelStarted: childModelStarted.promise,
-    hasSentYield: () => yieldSent,
-    queuedInputRequests: () => queuedInputRequests,
-    url: `${server.baseUrl}/v1`,
-    close: server.close,
-  };
-}
-
-afterEach(async () => {
-  vi.useRealTimers();
-  await resetSubagentRegistryForTests({ persist: false });
-});
-
-it("bounds public child Stop while yielded queued-input cleanup remains pending", async () => {
-  const allowYield = createDeferred();
-  const model = await startYieldModelServer(allowYield.promise);
   const { state, cfg, start } = await createSubagentStopFixture(
     "subagent-yielded-queued-cleanup",
-    model.url,
+    `${model.baseUrl}/v1`,
   );
   cfg.messages = { queue: { mode: "followup" } };
   const childTerminal = createDeferred();
@@ -112,7 +99,7 @@ it("bounds public child Stop while yielded queued-input cleanup remains pending"
       event.event === "chat" &&
       payload &&
       payload.sessionKey === childSessionKey &&
-      model.hasSentYield() &&
+      yieldSent &&
       ["aborted", "error", "final"].includes(String(payload.state))
     ) {
       childTerminal.resolve();
@@ -150,9 +137,9 @@ it("bounds public child Stop while yielded queued-input cleanup remains pending"
           deliver: false,
         }),
       ).resolves.toMatchObject({ runId: parentRunId, status: "started" });
-      const child = await model.childAccepted;
+      const child = await childAccepted.promise;
       childSessionKey = child.childSessionKey;
-      await model.childModelStarted;
+      await childModelStarted.promise;
 
       // Keep real ingress custody while the reply runner defers behind the child.
       const queue = createTestIngressQueue(state.stateDir);
@@ -262,5 +249,5 @@ it("bounds public child Stop while yielded queued-input cleanup remains pending"
     () => model.close(),
     () => state.cleanup(),
   );
-  expect(model.queuedInputRequests()).toBe(0);
+  expect(queuedInputRequests).toBe(0);
 });

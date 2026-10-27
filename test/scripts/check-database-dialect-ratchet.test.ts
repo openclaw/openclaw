@@ -338,11 +338,18 @@ it.each([
     [["PRAGMA auto_vacuum", "pragma", 0], ...nonMaintenance],
     true,
   ),
+  ...ownerCases("extensions/knowledge/src/retrieval.ts", [
+    ["CREATE VIRTUAL TABLE corpus USING fts5(id UNINDEXED, body)", "fts5", 0],
+    ["CREATE TEMP TABLE subset (id TEXT)", "temp-schema", 0],
+    ["DELETE FROM corpus WHERE rowid = 1", "rowid", 0],
+    ...nonMaintenance,
+  ]),
   ...ownerCases("src/consumer.ts", [
     ["PRAGMA foreign_keys = OFF", "pragma", 1],
     ["PRAGMA auto_vacuum", "pragma", 1],
     ["BEGIN EXCLUSIVE", "transaction-mode", 1],
     ["SELECT * FROM archive ORDER BY rowid", "rowid", 1],
+    ["CREATE VIRTUAL TABLE corpus USING fts5(id UNINDEXED, body)", "fts5", 1],
   ]),
   ...ownerCases("src/infra/update-doctor-migration-attribution.ts", [
     ["BEGIN EXCLUSIVE", "transaction-mode", 0],

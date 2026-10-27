@@ -238,7 +238,7 @@ baseIt.each(["requiredAuthProfileId", "sessionAuthProfileId"] as const)(
 
 test("uses prepared metadata ownership over ambient declarations", async (f) => {
   const modelPolicy = await import("./model-auth-policy.js");
-  const policy = vi.spyOn(modelPolicy, "isAuthModeAllowedForModel").mockImplementation(
+  using _ = vi.spyOn(modelPolicy, "isAuthModeAllowedForModel").mockImplementation(
     () =>
       metadataScope.getCurrentPluginMetadataSnapshot({
         config: f.cfg,
@@ -246,15 +246,12 @@ test("uses prepared metadata ownership over ambient declarations", async (f) => 
         allowWorkspaceScopedSnapshot: true,
       }) === f.metadata,
   );
-  try {
-    metadataScope.withPluginMetadataSnapshotScope(
-      metadataFixture("foreign-owner"),
-      () => expect(project(f).evaluateEntry(entry)).toMatchObject({ availability: true }),
-      { config: f.cfg, trustConfigIdentity: true },
-    );
-  } finally {
-    policy.mockRestore();
-  }
+
+  metadataScope.withPluginMetadataSnapshotScope(
+    metadataFixture("foreign-owner"),
+    () => expect(project(f).evaluateEntry(entry)).toMatchObject({ availability: true }),
+    { config: f.cfg, trustConfigIdentity: true },
+  );
 });
 
 test.each([false, true])(

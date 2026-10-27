@@ -12,6 +12,7 @@ import {
   GatewayBrowserClient,
   resolveGatewayErrorDetailCode,
   type GatewayEventListener,
+  type GatewayBrowserClientOptions,
   type GatewayHelloOk,
 } from "../api/gateway.ts";
 import { CONTROL_UI_BUILD_INFO, controlUiBuildDiffersFrom } from "../build-info.ts";
@@ -20,11 +21,10 @@ import { t } from "../i18n/index.ts";
 import { retireStoredGoalOperations } from "../lib/chat/goal-operation-storage.ts";
 import { readConnectionAuthReason } from "../lib/connection-hints.ts";
 import { formatUiError, formatUiExternalText } from "../lib/format-error.ts";
-import { setAvatarGatewayOrigin } from "../lib/identity-avatar-context.ts";
-import { resolveSessionKey } from "../lib/sessions/index.ts";
+import { resolveSessionKey } from "../lib/sessions/navigation.ts";
 import { readSessionDefaults } from "../lib/sessions/session-key.ts";
 import { generateUUID } from "../lib/uuid.ts";
-import { resolveControlUiAuthCandidates } from "./control-ui-auth.ts";
+import type { EarlyApplicationGateway } from "./early-gateway.ts";
 import { createGatewayCanvasSurfaceLease } from "./gateway-canvas-surface.ts";
 import {
   createGatewayControlUiReloadOptions,
@@ -39,6 +39,7 @@ import {
 } from "./gateway-observers.ts";
 import { readSuspensionPhase } from "./gateway-readiness.ts";
 import { createAvailabilityIndicators } from "./gateway-store.availability.ts";
+import { updateGatewayAvatarContext } from "./gateway-store.avatar-context.ts";
 import { createGatewayCredentials } from "./gateway-store.credentials.ts";
 import { createGatewayDeferredIntents } from "./gateway-store.deferred-intents.ts";
 import { createDeviceCredentialMethods } from "./gateway-store.device-credential.ts";
@@ -66,7 +67,7 @@ export function createApplicationGateway(
   initialSettings: ReturnType<typeof loadSettings>,
   initialPassword = "",
   initialBootstrapToken = "",
-  options: ApplicationGatewayOptions = {},
+  options: ApplicationGatewayOptions & { earlyGateway?: EarlyApplicationGateway } = {},
 ): ApplicationGateway {
   let settings = initialSettings;
   let persistConnectionSettings = options.persistDefaultConnectionSettings !== false;
@@ -78,7 +79,9 @@ export function createApplicationGateway(
     password: initialPassword,
   };
   let connectionRevision = 0;
-  const credentials = createGatewayCredentials(options.ownsWarmBoot !== false);
+  const early = options.earlyGateway;
+  const credentials =
+    early?.credentials ?? createGatewayCredentials(options.ownsWarmBoot !== false);
   let snapshot: ApplicationGatewaySnapshot = {
     client: null,
     phase: "stopped",
@@ -95,6 +98,8 @@ export function createApplicationGateway(
     selfUser: undefined,
   };
   let client: GatewayBrowserClient | null = null;
+  const updateAvatarContext = (hello?: GatewayHelloOk) =>
+    updateGatewayAvatarContext(client, connection, options.resourceBasePath, hello);
   const selfProfile = createGatewaySelfProfile({
     getSnapshot: () => snapshot,
     getConnection: () => connection,
@@ -366,19 +371,6 @@ export function createApplicationGateway(
       everConnected = false;
     }
     connection = nextConnection;
-    // Both connection setup and hello bind resources to this connection's credentials.
-    const updateAvatarContext = (hello?: GatewayHelloOk) => {
-      setAvatarGatewayOrigin(
-        nextConnection.gatewayUrl,
-        resolveControlUiAuthCandidates({
-          hello,
-          settings: nextConnection,
-          password: nextConnection.password,
-        }),
-        options.resourceBasePath,
-      );
-    };
-    updateAvatarContext();
     updateSettings(
       {
         gatewayUrl: nextConnection.gatewayUrl,
@@ -406,7 +398,7 @@ export function createApplicationGateway(
         ),
       });
     };
-    const nextClient = new GatewayBrowserClient({
+    const clientOptions: GatewayBrowserClientOptions = {
       ...credentials.prepare(nextConnection, credentialsChanged, client),
       clientName: options.clientOptions?.clientName ?? "openclaw-control-ui",
       clientVersion: CONTROL_UI_BUILD_INFO.version ?? "dev",
@@ -414,7 +406,8 @@ export function createApplicationGateway(
       platform: options.clientOptions?.platform,
       deviceFamily: options.clientOptions?.deviceFamily,
       mode: options.clientOptions?.mode ?? "webchat",
-      instanceId: options.clientOptions?.instanceId ?? generateUUID(),
+      instanceId:
+        options.clientOptions?.instanceId ?? early?.transport.client.instanceId ?? generateUUID(),
       scopes: options.clientOptions?.scopes,
       nativeConnectAuth: options.clientOptions?.nativeConnectAuth,
       get includeSessionMessageBodies() {
@@ -515,16 +508,14 @@ export function createApplicationGateway(
         if (client !== nextClient || snapshot.phase !== "connected") {
           return;
         }
+        updateAvatarContext(nextClient.hello ?? undefined);
         retireStoredGoalOperations(nextConnection.gatewayUrl, nextClient.recoveryScope);
         void deferredIntents.flush();
         setSnapshot({});
       },
       onConnecting: () => client === nextClient && setSnapshot({ reconnectAt: undefined }),
-      onReconnectScheduled: (delayMs) => {
-        if (client === nextClient) {
-          setSnapshot({ reconnectAt: Date.now() + delayMs });
-        }
-      },
+      onReconnectScheduled: (delayMs) =>
+        client === nextClient && setSnapshot({ reconnectAt: Date.now() + delayMs }),
       onClose: ({ code, reason, error, willRetry, busy }) => {
         if (client !== nextClient) {
           return;
@@ -532,6 +523,7 @@ export function createApplicationGateway(
         canvasSurface.stop();
         if (readConnectionAuthReason(error?.details) || error?.code === "PAIRING_REQUIRED") {
           nextClient.retireOfflineRecoveryScope?.();
+          updateAvatarContext();
           everConnected = false;
           credentials.retire(false);
         }
@@ -624,8 +616,11 @@ export function createApplicationGateway(
         record: recordGatewayEvent,
         listeners: eventListeners,
       }),
-    });
+    };
+    const adopted = early?.transport.adopt(clientOptions);
+    const nextClient = adopted ?? new GatewayBrowserClient(clientOptions);
     client = nextClient;
+    updateAvatarContext();
     setConnectionSnapshot({
       client: nextClient,
       // Keep the shell mounted while a fresh client attempts event-gap
@@ -645,7 +640,7 @@ export function createApplicationGateway(
     if (retiredEventLog) {
       publishEventLogRetirement(retiredEventLog);
     }
-    if (isCurrentClient(nextClient)) {
+    if (isCurrentClient(nextClient) && !adopted) {
       nextClient.start();
     }
   };
@@ -681,6 +676,9 @@ export function createApplicationGateway(
     },
     start: () => connect(),
     stop: () => {
+      if (client?.offlineRecoveryRetired) {
+        updateAvatarContext(snapshot.hello ?? undefined);
+      }
       stopped = true;
       deferredIntents.discard();
       clearOfflineIndicatorTimer();

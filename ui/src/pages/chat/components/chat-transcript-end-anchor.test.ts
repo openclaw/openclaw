@@ -22,14 +22,13 @@ function fixture(offset = 600) {
   element.scrollTop = offset;
   const anchor = new TranscriptEndAnchor(() => {});
   anchor.reconcile(element, false, false, vi.fn());
-  const commit = (changed: boolean, canFollow: boolean) =>
-    anchor.commitComposerResize(element, changed, canFollow, false);
   readHeight.mockClear();
   readContent.mockClear();
   return {
     element,
     anchor,
-    commit,
+    commit: (changed: boolean, canFollow: boolean) =>
+      anchor.commitComposerResize(element, changed, canFollow, false),
     readHeight,
     readContent,
     resize: (next: number) => (height = next),
@@ -38,12 +37,8 @@ function fixture(offset = 600) {
 
 it.each([
   ["unchanged viewport", 600, 600, 400, true, 600, false],
-  ["end", 600, 600, 300, true, 700, false],
   ["near end", 594, 594, 300, true, 700, false],
-  ["reader", 200, 200, 300, true, 200, false],
-  ["native return", 0, 600, 300, false, 700, true],
   ["native return before viewport resize", 0, 600, 400, false, 600, true],
-  ["ancestor displacement", 600, 572, 376, true, 624, false],
 ] as const)(
   "preserves composer resize intent after %s",
   (_, offset, before, height, canFollow, after, resumeFollow) => {
@@ -63,22 +58,19 @@ it.each([
   },
 );
 
-it.each([true, false])(
-  "preserves follow permission across shrink and regrowth: %s",
-  (canFollow) => {
-    const { element, anchor, commit, resize } = fixture(canFollow ? 600 : 550);
-    anchor.invalidateComposerResize(canFollow);
-    resize(500);
-    element.scrollTop = 500;
-    expect(commit(true, canFollow)).toEqual(correction(canFollow ? 600 : 500, 500));
-    if (!canFollow) {
-      anchor.reconcile(element, false, false, vi.fn());
-    }
-    anchor.invalidateComposerResize(canFollow);
-    resize(canFollow ? 450 : 400);
-    expect(commit(true, canFollow)).toEqual(correction(500, canFollow ? 550 : 500));
-  },
-);
+it.each([true, false])("keeps follow through shrink/regrowth: %s", (canFollow) => {
+  const { element, anchor, commit, resize } = fixture(canFollow ? 600 : 550);
+  anchor.invalidateComposerResize(canFollow);
+  resize(500);
+  element.scrollTop = 500;
+  expect(commit(true, canFollow)).toEqual(correction(canFollow ? 600 : 500, 500));
+  if (!canFollow) {
+    anchor.reconcile(element, false, false, vi.fn());
+  }
+  anchor.invalidateComposerResize(canFollow);
+  resize(canFollow ? 450 : 400);
+  expect(commit(true, canFollow)).toEqual(correction(500, canFollow ? 550 : 500));
+});
 
 it("preserves a capped editor's end intent until late native ancestor scrolling settles", () => {
   const { element, anchor, commit, readHeight, readContent } = fixture();

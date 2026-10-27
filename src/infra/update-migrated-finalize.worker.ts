@@ -36,6 +36,7 @@ import { OPENCLAW_STATE_SCHEMA_VERSION } from "../state/openclaw-state-db-contra
 import { closeOpenClawStateDatabaseAsync } from "../state/openclaw-state-db.js";
 import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
 import { resolveOpenClawPackageRootSync } from "./openclaw-root.js";
+import { closePostgresPool, preparePostgresPoolForUpdate } from "./postgres-sync/pool.js";
 import { resolveEnvironmentValue } from "./process-env.js";
 import { throwSqliteLifecycleErrors } from "./sqlite-lifecycle-errors.js";
 import { stopSupervisedPredecessorGateway } from "./update-candidate-predecessor-stop.js";
@@ -96,6 +97,9 @@ async function finalizeMigratedUpdate(): Promise<void> {
   // bypasses that bootstrap, so install the same kill-on-close owner before input.
   // POSIX callers own the detached process group and join its kernel extinction.
   await withCliProcessScope(retainCliProcessJobUntilExit);
+  await preparePostgresPoolForUpdate(
+    process.argv[2] === "--doctor" ? "openclaw doctor --fix" : "openclaw update repair",
+  );
   const chunks: Buffer[] = [];
   for await (const chunk of process.stdin) {
     chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
@@ -546,6 +550,7 @@ async function finalizeInput(
 
 void (async () => {
   const errors: unknown[] = [];
+  let databaseOwnersClosed = true;
   for (const finalize of [
     finalizeMigratedUpdate,
     finalizeActiveDebugProxyCaptures,
@@ -554,6 +559,20 @@ void (async () => {
   ]) {
     try {
       await finalize();
+    } catch (error) {
+      errors.push(error);
+      if (
+        finalize === closeOpenClawStateDatabaseAsync ||
+        finalize === closeDefaultRetainedNativeWorkerSource
+      ) {
+        databaseOwnersClosed = false;
+      }
+    }
+  }
+  // A rejected drain can retain live SQL work that still needs these services.
+  if (databaseOwnersClosed) {
+    try {
+      await closePostgresPool();
     } catch (error) {
       errors.push(error);
     }

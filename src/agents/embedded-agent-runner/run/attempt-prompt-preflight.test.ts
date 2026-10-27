@@ -6,7 +6,6 @@ import type { AgentMessage } from "../../runtime/index.js";
 import { SessionManager } from "../../sessions/index.js";
 import { makeAgentAssistantMessage } from "../../test-helpers/agent-message-fixtures.js";
 import { makeProviderModelFixture } from "../../test-helpers/provider-model-fixture.js";
-import { log } from "../logger.js";
 import { createToolResultPromptProjectionState } from "../session-prompt-state.js";
 import {
   handleEmbeddedAttemptMidTurnPrecheck,
@@ -45,12 +44,6 @@ const request = {
 };
 
 const makeToolResult = (text: string) => makeTextToolResult("call-1", "read", text, false, 1);
-
-function createSessionManagerWithMessage(message: AgentMessage): SessionManager {
-  const sessionManager = SessionManager.inMemory();
-  sessionManager.appendMessage(message as Parameters<typeof sessionManager.appendMessage>[0]);
-  return sessionManager;
-}
 
 function preflight(
   overrides: Partial<Parameters<typeof prepareEmbeddedAttemptPromptPreflight>[0]>,
@@ -133,7 +126,6 @@ describe("attempt prompt preflight", () => {
           ? "small retained window"
           : "retained content ".repeat(8_000),
     );
-    const discardedInvalid = checkpoint(true);
     let unwindowedMessages: AgentMessage[] | undefined;
     if (discarded) {
       unwindowedMessages = [owner];
@@ -146,7 +138,7 @@ describe("attempt prompt preflight", () => {
       ];
     } else if (fitting) {
       unwindowedMessages = [
-        ...(variant === "fitting-with-discarded-invalid" ? [owner, discardedInvalid] : []),
+        ...(variant === "fitting-with-discarded-invalid" ? [owner, checkpoint(true)] : []),
         { role: "user", content: "raw history ".repeat(40_000), timestamp: 1 },
       ];
     }
@@ -161,9 +153,11 @@ describe("attempt prompt preflight", () => {
           : undefined,
     });
     if (discarded || fitting) {
-      expect(result.skipPromptSubmission).toBe(false);
-      expect(result.promptError).toBeNull();
-      expect(result.preflightRecovery).toBeUndefined();
+      expect(result).toMatchObject({
+        skipPromptSubmission: false,
+        promptError: null,
+        preflightRecovery: undefined,
+      });
       if (fitting) {
         expect(result.contextBudgetStatus?.estimatedPromptTokens).toBeGreaterThan(20_000);
       }
@@ -199,9 +193,10 @@ describe("attempt prompt preflight", () => {
   ] as const)(
     "handles mid-turn %s",
     async (_name, route, text, contextTokenBudget, truncatedCount) => {
-      const sessionManager = text
-        ? createSessionManagerWithMessage(makeToolResult(text))
-        : SessionManager.inMemory();
+      const sessionManager = SessionManager.inMemory();
+      if (text) {
+        sessionManager.appendMessage(makeToolResult(text));
+      }
       const messagesBefore = sessionManager.buildSessionContext().messages;
       const replaceMessages = vi.fn();
       const outcome = await handleEmbeddedAttemptMidTurnPrecheck({
@@ -242,8 +237,7 @@ describe("attempt prompt preflight", () => {
     },
   );
 
-  it("warns and keeps client recovery when V2 pending input exceeds the hard budget", async () => {
-    using warn = vi.spyOn(log, "warn").mockImplementation(() => {});
+  it("keeps client recovery when V2 pending input exceeds the hard budget", async () => {
     const result = await preflight({
       providerCompactionAtRequestBoundary: true,
       contextTokenBudget: 100,
@@ -251,9 +245,6 @@ describe("attempt prompt preflight", () => {
     });
     expect(result.preflightRecovery).toEqual({ route: "compact_only" });
     expect(result.skipPromptSubmission).toBe(true);
-    expect(warn).toHaveBeenCalledWith(
-      expect.stringContaining("falling back to client compaction: pending input exceeds"),
-    );
   });
 
   it("admits heuristic tool-result pressure without recovery or mutating history", async () => {

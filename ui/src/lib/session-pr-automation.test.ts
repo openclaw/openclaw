@@ -68,8 +68,6 @@ function expectList(call: number, params: Record<string, unknown>) {
   );
 }
 
-const recipe = (option: CiAutomationOption, overrides: Partial<CiAutomationTarget> = {}) =>
-  jobSpec({ ...target, ...overrides }, option);
 const declarationKey = (overrides: Partial<CiAutomationTarget> = {}) =>
   declarationKeyFor({ ...target, ...overrides }, "autoMerge");
 
@@ -80,11 +78,11 @@ it.each([target.sessionId, "replacement"])(
     const merge = job("autoMerge", { enabled: false });
     const ignored = [
       job("autoMerge", {
-        ...recipe("autoMerge", { number: 43 }),
+        ...jobSpec({ ...target, number: 43 }, "autoMerge"),
         id: "other-pr",
       }),
       job("autoArchive", {
-        ...recipe("autoArchive", { sessionId: "old-incarnation" }),
+        ...jobSpec({ ...target, sessionId: "old-incarnation" }, "autoArchive"),
       }),
       job("autoFix", { declarationKey: "daily-briefing" }),
     ];
@@ -132,17 +130,7 @@ it("creates the selected declarative job and keeps its returned identity", async
   const created = job("autoArchive");
   request.mockResolvedValueOnce({ created: true, job: created });
   expect(await set("autoArchive", true)).toEqual(created);
-  expect(request).toHaveBeenCalledExactlyOnceWith(
-    "cron.add",
-    expect.objectContaining({
-      agentId: "main",
-      sessionKey: target.sessionKey,
-      sessionTarget: "isolated",
-      owner: { agentId: "main", sessionKey: target.sessionKey },
-      enabled: true,
-      payload: { kind: "agentTurn", message: expect.stringContaining(target.sessionId) },
-    }),
-  );
+  expect(request).toHaveBeenCalledExactlyOnceWith("cron.add", jobSpec(target, "autoArchive"));
 });
 
 it.each(["autoFix", "autoMerge"] as const)(
@@ -186,9 +174,10 @@ it("bounds declaration keys and separates every ownership dimension and action",
   ];
   const prefixes = [prefix, ...variants.map(declarationKey)];
   expect(new Set(prefixes).size).toBe(prefixes.length);
-  const keys = CI_AUTOMATION_OPTIONS.map((option) =>
-    recipe(option, { sessionKey: "long-session:".repeat(200) }),
-  ).map((spec) => spec.declarationKey);
+  const keys = CI_AUTOMATION_OPTIONS.map(
+    (option) =>
+      jobSpec({ ...target, sessionKey: "long-session:".repeat(200) }, option).declarationKey,
+  );
   expect(new Set(keys).size).toBe(3);
   for (const key of keys) {
     expect(key).toMatch(/^session-pr:v1:[a-f0-9]{64}:auto(?:Fix|Merge|Archive)$/u);

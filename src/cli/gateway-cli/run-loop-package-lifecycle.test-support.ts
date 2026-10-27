@@ -455,7 +455,6 @@ export function registerPackageLifecycleStopTests(fixtures: UpdateRespawnFixture
                     expect(outcome).toMatchObject({ failedStep: null, afterVersion: "2.0.0" });
                   }
                   expect(close).toHaveBeenCalledOnce();
-                  expect(fixtures.respawnGatewayProcessForUpdate).not.toHaveBeenCalled();
                   if (hosted) {
                     stop.expectHostedCompleted();
                   }

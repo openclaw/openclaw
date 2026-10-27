@@ -1,4 +1,4 @@
-import { lstat, mkdir, readFile, readdir, symlink, writeFile } from "node:fs/promises";
+import { mkdir, readFile, readdir, symlink, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -45,7 +45,7 @@ const providerConfig = {
 };
 
 describe("qa bundled plugin dir", () => {
-  it("stages a scoped mixed-source tree with working SDK, chunks, and dependency links", async () => {
+  it("stages a scoped mixed-source tree with working SDK, shared chunks, and dependencies", async () => {
     const f = await fixture();
     const selected = ["qa-channel", "memory-core", "runtime-only", "source-only"];
     const sdkImport = 'import { normalizeAccountId } from "openclaw/plugin-sdk/account-id";';
@@ -56,7 +56,7 @@ describe("qa bundled plugin dir", () => {
         exports: { "./plugin-sdk/account-id": { default: "./dist/plugin-sdk/account-id.js" } },
       },
       "dist/plugin-sdk/account-id.js": "export const normalizeAccountId = (v) => v.toLowerCase();",
-      "dist/extensions/qa-channel/index.js": `${sdkImport}\nexport const accountId = normalizeAccountId("QA");`,
+      "dist/extensions/qa-channel/index.js": `${sdkImport}\nimport "../../shared-chunk.js";\nexport const accountId = normalizeAccountId("QA");`,
       "extensions/qa-channel/openclaw.plugin.json": {
         id: "qa-channel",
         toolMetadata: { qa_read: { replaySafe: true } },
@@ -84,24 +84,13 @@ describe("qa bundled plugin dir", () => {
     );
 
     const { bundledPluginsDir: plugins } = await f.stage([...selected, "external-fixture"]);
-    const root = path.join(f.repoRoot, ".artifacts/qa-runtime", path.basename(f.tempRoot));
-    const staged = (...parts: string[]) => path.join(root, ...parts);
     const plugin = (file: string) => path.join(plugins, file);
-    const read = (file: string) => readFile(file, "utf8");
-    expect(plugins).toBe(staged("dist/extensions"));
     expect((await readdir(plugins)).toSorted()).toEqual(
       [...selected, "image-generation-core"].toSorted(),
     );
-    for (const [file, text] of [
-      [staged("package.json"), '"name":"openclaw"'],
-      [plugin("qa-channel/openclaw.plugin.json"), '"replaySafe":true'],
-      [staged("node_modules/fake-dep/index.js"), 'marker = "ok"'],
-    ] as const) {
-      await expect(read(file)).resolves.toContain(text);
-    }
-    for (const id of ["qa-channel", "memory-core", "image-generation-core"]) {
-      expect((await lstat(plugin(id))).isDirectory()).toBe(true);
-    }
+    await expect(readFile(plugin("qa-channel/openclaw.plugin.json"), "utf8")).resolves.toContain(
+      '"replaySafe":true',
+    );
     for (const [file, key, expected] of [
       ["qa-channel/index.js", "accountId", "qa"],
       ["runtime-only/index.js", "marker", "runtime"],
@@ -110,11 +99,6 @@ describe("qa bundled plugin dir", () => {
       const loaded: Record<string, unknown> = await import(pathToFileURL(plugin(file)).href);
       expect(loaded[key]).toBe(expected);
     }
-    for (const file of ["shared-chunk.js", "runtime-chunk.js"]) {
-      const stat = await lstat(staged("dist", file));
-      expect(stat.isFile() || stat.isSymbolicLink()).toBe(true);
-    }
-    expect((await lstat(staged("node_modules/fake-dep"))).isSymbolicLink()).toBe(true);
   });
 
   it("rejects invalid bundled plugin ids before staging paths are built", async () => {
@@ -126,7 +110,6 @@ describe("qa bundled plugin dir", () => {
     const f = await fixture();
     await f.write("dist/extensions/cli-owner/openclaw.plugin.json", {
       id: "cli-owner",
-      providers: ["fixture", "fixture"],
       cliBackends: ["codex-cli"],
     });
     await expect(

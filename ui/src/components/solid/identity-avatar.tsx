@@ -6,14 +6,13 @@ import {
 } from "../../../../packages/gateway-protocol/src/theme.ts";
 import { isReservedSystemAgentId } from "../../../../src/system-agent/agent-id.js";
 import { inferControlUiPublicAssetPath } from "../../app/public-assets.ts";
-import { currentThemeBranding, subscribeThemeBranding } from "../../app/theme-branding.ts";
 import {
   resolveAgentIdentityAvatarView,
   type AgentIdentity,
   type IdentityAvatarView,
 } from "../../lib/identity-avatar-view.ts";
 import type { IdentityAvatarInput } from "../../lib/identity-avatar.ts";
-import { projectSource } from "../../lib/reactive/projection.ts";
+import { themeBrandingProjection } from "../../lib/reactive/theme-branding.ts";
 import { resolveAvatarHat } from "../agent-avatar-hat.ts";
 import type { AgentSelectOption } from "../agent-select-types.ts";
 import { PluginThemeArtwork } from "../plugin-theme-artwork.tsx";
@@ -28,11 +27,7 @@ const AgentAvatarFace = lazy(() => import("../agent-avatar-face.tsx"), {
   export: "AgentAvatarFace",
 });
 
-const avatarBranding = projectSource(null, {
-  read: currentThemeBranding,
-  subscribe: (_source, notify) => subscribeThemeBranding(notify),
-  equality: Object.is,
-});
+const avatarBranding = themeBrandingProjection;
 
 export function AgentIdentityAvatar(props: {
   elementRef?: (element: HTMLElement) => void;
@@ -46,17 +41,38 @@ export function AgentIdentityAvatar(props: {
     return resolveAgentIdentityAvatarView(props.agent);
   });
   const presentation = createIdentityAvatarPresentation(view);
+  function SystemAgentAvatar(childProps: { branding: ThemeBranding }) {
+    return (
+      <Show
+        when={childProps.branding.brandIcon !== "claw"}
+        fallback={
+          <img
+            ref={(element) => props.elementRef?.(element)}
+            class={["identity-avatar--agent", props.class]}
+            src={inferControlUiPublicAssetPath("favicon.svg")}
+            alt={props.agent.name ?? ""}
+            aria-hidden={props.agent.name ? undefined : "true"}
+            decoding="async"
+          />
+        }
+      >
+        <span
+          ref={(element) => props.elementRef?.(element)}
+          class={["identity-avatar--agent", "identity-avatar--neutral", props.class]}
+          role={props.agent.name ? "img" : undefined}
+          aria-label={props.agent.name}
+          aria-hidden={props.agent.name ? undefined : "true"}
+        >
+          <ThemeBrandIcon branding={childProps.branding} />
+        </span>
+      </Show>
+    );
+  }
+
   return (
     <Show
       when={!isReservedSystemAgentId(props.agent.id)}
-      fallback={
-        <SystemAgentAvatar
-          name={props.agent.name}
-          class={props.class}
-          branding={avatarBranding.read()}
-          elementRef={props.elementRef}
-        />
-      }
+      fallback={<SystemAgentAvatar branding={avatarBranding.read()} />}
     >
       <span
         ref={(element) => props.elementRef?.(element)}
@@ -159,39 +175,6 @@ export function AgentAvatarHat(props: { agentId: string; branding: ThemeBranding
           </Show>
         </span>
       )}
-    </Show>
-  );
-}
-
-function SystemAgentAvatar(props: {
-  name?: string;
-  class?: string;
-  branding: ThemeBranding;
-  elementRef?: (element: HTMLElement) => void;
-}) {
-  return (
-    <Show
-      when={props.branding.brandIcon !== "claw"}
-      fallback={
-        <img
-          ref={(element) => props.elementRef?.(element)}
-          class={["identity-avatar--agent", props.class]}
-          src={inferControlUiPublicAssetPath("favicon.svg")}
-          alt={props.name ?? ""}
-          aria-hidden={props.name ? undefined : "true"}
-          decoding="async"
-        />
-      }
-    >
-      <span
-        ref={(element) => props.elementRef?.(element)}
-        class={["identity-avatar--agent", "identity-avatar--neutral", props.class]}
-        role={props.name ? "img" : undefined}
-        aria-label={props.name}
-        aria-hidden={props.name ? undefined : "true"}
-      >
-        <ThemeBrandIcon branding={props.branding} />
-      </span>
     </Show>
   );
 }

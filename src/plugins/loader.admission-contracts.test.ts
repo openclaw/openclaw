@@ -80,8 +80,6 @@ module.exports = { id: "admission-contract", register() {} };`,
     activated: false,
     status: "disabled",
     activationSource: "disabled",
-    activationReason: "bundled (disabled by default)",
-    error: "bundled (disabled by default)",
   });
   expect(registry.cliRegistrars).toHaveLength(0);
   expect(fs.existsSync(imported)).toBe(false);
@@ -92,27 +90,28 @@ it("keeps scoped forced setup selection with a setup entry", () => {
   const markers = makePluginLoaderTempDir();
   const fullMarker = path.join(markers, "full-imported");
   const setupMarker = path.join(markers, "setup-imported");
+  const dir = makePluginLoaderTempDir();
   const channelSource = `const channel = {
   id: "admission-channel",
   meta: { id: "admission-channel", label: "Admission Channel" },
   capabilities: { chatTypes: ["direct"] },
   config: { listAccountIds: () => ["default"], resolveAccount: () => ({}) },
 };`;
-  const plugin = writePlugin({
-    id: "admission-setup",
-    filename: "index.cjs",
-    body: `require("node:fs").writeFileSync(${JSON.stringify(fullMarker)}, "imported");
+  const entry = (filename: string, marker: string, body: string) =>
+    writePlugin({
+      id: "admission-setup",
+      dir,
+      filename,
+      body: `require("node:fs").writeFileSync(${JSON.stringify(marker)}, "imported");
 ${channelSource}
-module.exports = { id: "admission-setup", register(api) { api.registerChannel({ plugin: channel }); } };`,
-  });
-  writePlugin({
-    id: plugin.id,
-    dir: plugin.dir,
-    filename: "setup.cjs",
-    body: `require("node:fs").writeFileSync(${JSON.stringify(setupMarker)}, "imported");
-${channelSource}
-module.exports = { plugin: channel };`,
-  });
+module.exports = ${body};`,
+    });
+  const plugin = entry(
+    "index.cjs",
+    fullMarker,
+    '{ id: "admission-setup", register(api) { api.registerChannel({ plugin: channel }); } }',
+  );
+  entry("setup.cjs", setupMarker, "{ plugin: channel }");
   writePluginMetadata({
     dir: plugin.dir,
     id: plugin.id,

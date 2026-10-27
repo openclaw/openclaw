@@ -22,12 +22,11 @@ export class MockVerifier
   constructor(
     private readonly sasCallbacks: MatrixShowSasCallbacks | null,
     private readonly qrCallbacks: MatrixShowQrCodeCallbacks | null,
-    private readonly verifyImpl: () => Promise<void> = async () => {},
+    readonly verify: () => Promise<void> = async () => {},
   ) {
     super();
   }
 
-  verify = () => this.verifyImpl();
   cancel = (_e: Error): void => {};
   getShowSasCallbacks = () => this.sasCallbacks;
   getReciprocateQrCodeCallbacks = () => this.qrCallbacks;

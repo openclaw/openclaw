@@ -3,6 +3,7 @@
 import type { TtsSpeakResult } from "@openclaw/gateway-protocol";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../../test/helpers/promise.ts";
+import { restoreMocksAndGlobals } from "../../../test-helpers/mock-cleanup.ts";
 import { cleanupSolid, mountSolid } from "../../../test-helpers/mount-solid.ts";
 import { createSolidApplicationContextProvider } from "../../../test-helpers/solid-application-context.tsx";
 import { flush, waitForSolid } from "../../../test-helpers/solid-settle.ts";
@@ -65,10 +66,7 @@ beforeEach(() => {
   vi.spyOn(URL, "createObjectURL").mockImplementation(createUrl);
   vi.spyOn(URL, "revokeObjectURL").mockImplementation(revoke);
 });
-afterEach(() => {
-  vi.restoreAllMocks();
-  vi.unstubAllGlobals();
-});
+afterEach(() => restoreMocksAndGlobals());
 
 function readButton(view: ReturnType<typeof mount>, name = "Read aloud") {
   return view.getByRole<HTMLButtonElement>("button", { name });

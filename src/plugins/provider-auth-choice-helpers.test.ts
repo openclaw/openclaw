@@ -195,12 +195,9 @@ describe("applyProviderAuthConfigPatchWithNormalization", () => {
     };
     const next = applyAuthPatch({}, { agents: { entries: { ops: agent } } });
 
-    expect(next.agents?.entries?.ops?.model).toEqual({
-      primary: currentGemini,
-      fallbacks: [currentGemini],
-    });
-    expect(next.agents?.entries?.ops?.models).toEqual({
-      [currentGemini]: { alias: "ops-gemini" },
+    expect(next.agents?.entries?.ops).toEqual({
+      model: { primary: currentGemini, fallbacks: [currentGemini] },
+      models: { [currentGemini]: { alias: "ops-gemini" } },
     });
   });
 

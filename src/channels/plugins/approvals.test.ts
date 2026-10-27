@@ -1,24 +1,7 @@
 // Approval tests cover channel plugin approval request formatting and dispatch.
 import { describe, expect, it, vi } from "vitest";
+import { createNativeApprovalRuntimeStub as createNativeRuntimeStub } from "../../plugin-sdk/test-helpers/native-approval.js";
 import { resolveChannelApprovalAdapter, resolveChannelApprovalCapability } from "./approvals.js";
-
-function createNativeRuntimeStub() {
-  return {
-    availability: {
-      isConfigured: vi.fn(),
-      shouldHandle: vi.fn(),
-    },
-    presentation: {
-      buildPendingPayload: vi.fn(),
-      buildResolvedResult: vi.fn(),
-      buildExpiredResult: vi.fn(),
-    },
-    transport: {
-      prepareTarget: vi.fn(),
-      deliverPending: vi.fn(),
-    },
-  };
-}
 
 describe("resolveChannelApprovalCapability", () => {
   it("returns undefined when approvalCapability is absent", () => {

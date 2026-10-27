@@ -1,9 +1,10 @@
 import { createSignal } from "solid-js";
-import { expect, it, vi } from "vitest";
+import { expect, it, onTestFinished, vi } from "vitest";
 import { ChatLazyBoundary } from "../pages/chat/components/chat-lazy-boundary.tsx";
 import { MessageMarkdown } from "../pages/chat/components/chat-message-text-view.tsx";
 import { mountSolid } from "../test-helpers/mount-solid.ts";
 import { waitForSolid } from "../test-helpers/solid-settle.ts";
+import { loadStreamingMarkdown } from "./markdown-live-loader.ts";
 
 const runtime = vi.hoisted(() => Promise.withResolvers<void>());
 vi.mock("./markdown-live.ts", async (importOriginal) => {
@@ -83,16 +84,32 @@ it("renders current safe Markdown and retains its DOM while the live runtime loa
   expect(view.container.querySelector("[onerror], script")).toBeNull();
 
   runtime.resolve();
+  await loadStreamingMarkdown();
   await vi.dynamicImportSettled();
   await waitForSolid(() => {
     expect(view.container.querySelector(".live-message strong")?.textContent).toBe("Growing delta");
   });
   expectRetainedParagraphs();
   expect(view.container.querySelector(".live-code .code-block-copy")).toBe(copy);
-  setSource(`${latest} More`);
+  const html = Object.getOwnPropertyDescriptor(Element.prototype, "innerHTML")!;
+  const parsed: string[] = [];
+  Object.defineProperty(Element.prototype, "innerHTML", {
+    ...html,
+    set(value: string) {
+      parsed.push(value);
+      html.set!.call(this, value);
+    },
+  });
+  onTestFinished(() => {
+    Object.defineProperty(Element.prototype, "innerHTML", html);
+  });
+  setSource(`${latest} **More**`);
   await waitForSolid(() => {
     expect(view.container.querySelector(".live-message")?.textContent).toContain("More");
   });
+  expectRetainedParagraphs();
+  // Completed content must leave the mutable tail after the lazy runtime arrives.
+  expect(parsed.filter((value) => value.includes("First paragraph"))).toEqual([]);
   setStreaming(false);
   await waitForSolid(() => {
     expectRetainedParagraphs();

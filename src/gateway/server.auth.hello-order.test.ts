@@ -37,14 +37,23 @@ type ObservedFrame = {
 
 beforeEach(() => configureBrowserAuth());
 
-async function openBrowser(port: number, instanceId: string, caps: string[] = []) {
-  const identityPath = path.join(tempDirs.make("hello-browser-"), "client", "credentials.sqlite");
-  const socket = await openWs(port, {
+const browserAuth = {
+  skipDefaultAuth: true,
+  prePairDevice: true,
+  scopes: ["operator.read"],
+  browserOrigin: origin,
+};
+const openProxySocket = (port: number, user?: string) =>
+  openWs(port, {
     origin,
     "x-forwarded-for": "203.0.113.50",
     "x-forwarded-proto": "https",
-    "x-forwarded-user": `${instanceId}@example.com`,
+    ...(user ? { "x-forwarded-user": user } : {}),
   });
+
+async function openBrowser(port: number, instanceId: string, caps: string[] = []) {
+  const identityPath = path.join(tempDirs.make("hello-browser-"), "client", "credentials.sqlite");
+  const socket = await openProxySocket(port, `${instanceId}@example.com`);
   const frames: ObservedFrame[] = [];
   socket.on("message", (data) => frames.push(JSON.parse(rawDataToString(data))));
   return {
@@ -52,13 +61,10 @@ async function openBrowser(port: number, instanceId: string, caps: string[] = []
     frames,
     connect: () =>
       connectReq(socket, {
-        skipDefaultAuth: true,
-        prePairDevice: true,
+        ...browserAuth,
         deviceIdentityPath: identityPath,
         client: { ...CONTROL_UI_CLIENT, instanceId },
-        scopes: ["operator.read"],
         caps,
-        browserOrigin: origin,
       }),
   };
 }

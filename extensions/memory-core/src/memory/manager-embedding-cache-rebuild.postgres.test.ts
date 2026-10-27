@@ -1,19 +1,11 @@
 import assert from "node:assert/strict";
-import { AsyncLocalStorage } from "node:async_hooks";
 import fs from "node:fs/promises";
 import path from "node:path";
 import type { EmbeddingInput } from "openclaw/plugin-sdk/embedding-providers";
 import { readMemorySearchManagerStatus } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/memory-core-host-runtime-core";
-import { setRuntimeConfigSnapshot } from "openclaw/plugin-sdk/runtime-config-snapshot";
-import { createOpenClawTestState } from "openclaw/plugin-sdk/test-state";
-import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
-import { postgresProductScope } from "../postgres-product.test-support.js";
-import {
-  configureMemoryCoreDreamingStateForTests,
-  resetMemoryCoreDreamingStateForTests,
-} from "../test-helpers.js";
-import { closeAllMemorySearchManagers, getMemorySearchManager } from "./index.js";
+import { describe, expect, it, vi } from "vitest";
+import { getMemorySearchManager } from "./index.js";
+import { createPostgresIndexFixture } from "./postgres-index.test-support.js";
 
 const embeddingInputs = vi.hoisted(() => [] as Array<string | EmbeddingInput>);
 
@@ -38,70 +30,35 @@ vi.mock("./embeddings.js", async (original) => ({
 }));
 
 describe("PostgreSQL full memory rebuild at cache capacity", () => {
-  const database = postgresProductScope("memory_cache_rebuild");
-  let state: Awaited<ReturnType<typeof createOpenClawTestState>> | undefined;
-  let config: OpenClawConfig;
-  let run = AsyncLocalStorage.snapshot();
-  let connected = false;
-
-  beforeAll(async () => {
-    if (!database.connection) {
-      return;
-    }
-    state = await createOpenClawTestState({
-      label: "memory-cache-rebuild-postgres",
-      layout: "state-only",
-    });
-    await configureMemoryCoreDreamingStateForTests();
-    await database.connect();
-    connected = true;
-    config = {
-      database: { engine: "postgres" },
-      plugins: { enabled: false },
-      agents: { entries: { main: { workspace: state.workspaceDir } } },
-      memory: {
-        search: {
-          provider: "ollama",
-          model: "cache-rebuild-fixture",
-          fallback: "none",
-          sources: ["memory"],
-          cache: { enabled: true },
-          store: { vector: { enabled: true } },
-        },
+  const fixture = createPostgresIndexFixture("memory_cache_rebuild", "postgres", (workspace) => ({
+    database: { engine: "postgres" },
+    plugins: { enabled: false },
+    agents: { entries: { main: { workspace } } },
+    memory: {
+      search: {
+        provider: "ollama",
+        model: "cache-rebuild-fixture",
+        fallback: "none",
+        sources: ["memory"],
+        cache: { enabled: true },
+        store: { vector: { enabled: true } },
       },
-    };
-    setRuntimeConfigSnapshot(config);
-    run = database.select(() => AsyncLocalStorage.snapshot(), config);
-  });
+    },
+  }));
 
-  afterAll(async () => {
-    try {
-      await run(async () => {
-        await closeAllMemorySearchManagers();
-        resetMemoryCoreDreamingStateForTests();
-        await state?.cleanup();
-      });
-    } finally {
-      if (connected) {
-        await database.close();
-      }
-    }
-  });
-
-  it.skipIf(!database.connection)(
+  it.skipIf(fixture.unavailable)(
     "embeds only misses and retains every needed vector after pruning",
     async () =>
-      run(async () => {
-        assert(state);
-        const memory = path.join(state.workspaceDir, "memory");
+      fixture.run(async () => {
+        const memory = path.join(fixture.workspace, "memory");
         await fs.mkdir(memory, { recursive: true });
         await fs.writeFile(path.join(memory, "b.md"), "Previously cached beta.");
         await fs.writeFile(path.join(memory, "c.md"), "Previously cached gamma.");
         const result = await getMemorySearchManager({
-          cfg: config,
+          cfg: fixture.config,
           agentId: "main",
           purpose: "cli",
-          runInBackgroundContext: run,
+          runInBackgroundContext: fixture.run,
         });
         assert(result.manager, result.error ?? "Expected memory manager");
         const manager = result.manager;

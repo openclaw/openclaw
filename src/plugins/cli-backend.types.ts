@@ -235,6 +235,11 @@ export type CliBackendExecuteContext = {
   env: Record<string, string>;
   prompt: string;
   promptContext?: CliBackendPromptContext;
+  /**
+   * `host`: OpenClaw generated this prompt (for example a command completion, cron run or recovery);
+   * no person typed it. Backends with a native non-user input marker should apply it.
+   */
+  promptOrigin?: "host";
   modelId: string;
   systemPrompt: string;
   sessionId?: string;
@@ -526,6 +531,17 @@ type CliBackendPluginBase = {
    * Core rejects other names before grant/capture and excludes node/tool-disabled runs.
    */
   projectNativeToolAuthority?: (nativeTools: readonly string[]) => readonly string[];
+  /**
+   * Operator-selected native tools kept on OpenClaw-mediated agent turns, which
+   * otherwise expose no native tools. Core applies the same list to ordinary and
+   * verified completion turns, so return only tools that confer no capability
+   * through `projectNativeToolAuthority`; caller caps, restricted senders,
+   * delegated execution, and workspace-only runs still receive none.
+   */
+  resolveManagedNativeTools?: (ctx: {
+    config?: OpenClawConfig;
+    agentId: string;
+  }) => readonly string[];
   /**
    * Backend-owned JSONL line parser for provider-specific stream formats.
    *

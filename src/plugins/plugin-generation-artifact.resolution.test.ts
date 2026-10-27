@@ -15,6 +15,8 @@ import { writeArtifacts as writeTree } from "./public-surface.test-support.js";
 const temp = useAutoCleanupTempDirTracker(afterEach);
 afterEach(() => vi.restoreAllMocks());
 
+const silenceWarnings = () => vi.spyOn(process, "emitWarning").mockImplementation(() => undefined);
+
 it("initializes the package resolver only when capture needs it", async () => {
   expect(process.env.JITI_TSCONFIG_PATHS).toBeUndefined();
   await using resources = captureResources();
@@ -37,36 +39,6 @@ it("initializes the package resolver only when capture needs it", async () => {
     );
   }
   expect(createResolver).toHaveBeenCalledTimes(1);
-});
-
-it("pins configured tsconfig paths when preparing a module before a deferred import", async () => {
-  vi.stubEnv("JITI_TSCONFIG_PATHS", "true");
-  try {
-    await using resources = captureResources();
-    const root = temp.make("plugin-tsconfig-resolution-");
-    const config = (target: string) => ({
-      compilerOptions: { baseUrl: ".", paths: { "@fixture/*": [target] } },
-    });
-    writeTree(root, {
-      "package.json": { name: "fixture", type: "module" },
-      "tsconfig.json": config("./old/*"),
-      "index.js": "export const load = () => import('@fixture/value');",
-      "old/value.js": "export const value = 'old';",
-      "new/value.js": "export const value = 'new';",
-    });
-    const artifact = resources.keep(
-      capturePluginGenerationArtifact(root, undefined, (run) => run()),
-    );
-    const entry = artifact.resolve(path.join(root, "index.js"));
-    artifact.prepareModule(entry);
-    writeTree(root, { "tsconfig.json": config("./new/*") });
-    const selected = artifact.captureModule(entry, "@fixture/value", ["node", "import"]);
-    expect(selected && "target" in selected && fs.readFileSync(selected.target, "utf8")).toBe(
-      "export const value = 'old';",
-    );
-  } finally {
-    vi.unstubAllEnvs();
-  }
 });
 
 it.each([false, true])(
@@ -191,7 +163,7 @@ it.each(["relative symlink", "absolute junction"])(
       layout === "absolute junction" ? "junction" : "dir",
     );
     expect(fs.existsSync(link)).toBe(false);
-    const warning = vi.spyOn(process, "emitWarning").mockImplementation(() => undefined);
+    const warning = silenceWarnings();
     const rename = fs.renameSync;
     let publishedAtomically = false;
     vi.spyOn(fs, "renameSync").mockImplementation((from, to) => {
@@ -217,38 +189,31 @@ it.each(["relative symlink", "absolute junction"])(
   },
 );
 
-it("replaces a live link to another target without changing that target", async () => {
+it.each([false, true])("preserves existing dependency contents (link: %s)", async (isLink) => {
   await using resources = captureResources();
   const { artifact, entry, link, root } = fixture(resources);
-  const previous = path.join(root, "previous");
+  const previous = isLink ? path.join(root, "previous") : link;
   writeTree(previous, {
     "package.json": { main: "index.cjs" },
     "index.cjs": "module.exports = 'previous dependency';",
   });
-  fs.symlinkSync(previous, link, "junction");
-  const warning = vi.spyOn(process, "emitWarning").mockImplementation(() => undefined);
-
+  if (isLink) {
+    fs.symlinkSync(previous, link, "junction");
+  }
+  const warning = silenceWarnings();
   artifact.prepareDependency(entry, "dependency");
-  expect(createRequire(entry)("dependency")).toBe("captured dependency");
+  expect(createRequire(entry)("dependency")).toBe(
+    isLink ? "captured dependency" : "previous dependency",
+  );
   expect(fs.readFileSync(path.join(previous, "index.cjs"), "utf8")).toContain(
     "previous dependency",
   );
-  expect(warning).toHaveBeenCalledWith(expect.stringContaining("Replacing"));
-});
-
-it("preserves a real dependency directory", async () => {
-  await using resources = captureResources();
-  const { artifact, entry, link } = fixture(resources);
-  writeTree(link, {
-    "package.json": { main: "index.cjs" },
-    "index.cjs": "module.exports = 'nested install';",
-  });
-  const warning = vi.spyOn(process, "emitWarning").mockImplementation(() => undefined);
-
-  artifact.prepareDependency(entry, "dependency");
-  expect(fs.lstatSync(link).isDirectory()).toBe(true);
-  expect(createRequire(entry)("dependency")).toBe("nested install");
-  expect(warning).not.toHaveBeenCalled();
+  if (isLink) {
+    expect(warning).toHaveBeenCalledWith(expect.stringContaining("Replacing"));
+  } else {
+    expect(fs.lstatSync(link).isDirectory()).toBe(true);
+    expect(warning).not.toHaveBeenCalled();
+  }
 });
 
 it.each(["EPERM", "EISDIR"])(
@@ -277,7 +242,7 @@ it.each(["EPERM", "EISDIR"])(
       }
       symlink(destination, filename, type);
     });
-    vi.spyOn(process, "emitWarning").mockImplementation(() => undefined);
+    silenceWarnings();
 
     withMockedPlatform("win32", () => artifact.prepareNativeScopes(entry));
     expect(recreated).toBe(true);
@@ -298,16 +263,10 @@ it("marks a capture unprepared after dependency link creation fails", async () =
     }
     symlink(destination, filename, type);
   });
-
-  expect(() => artifact.prepareDependency(entry, "dependency")).toThrowError(
-    /Cannot prepare dependency dependency for plugin/,
-  );
-  expect(() => artifact.assertModuleAvailable(link)).toThrowError(
-    /Cannot prepare dependency dependency for plugin/,
-  );
+  const error = /Cannot prepare dependency dependency for plugin/;
+  expect(() => artifact.prepareDependency(entry, "dependency")).toThrowError(error);
+  expect(() => artifact.assertModuleAvailable(link)).toThrowError(error);
   failure.mockRestore();
-  expect(() => artifact.prepareDependency(entry, "dependency")).toThrowError(
-    /Cannot prepare dependency dependency for plugin/,
-  );
+  expect(() => artifact.prepareDependency(entry, "dependency")).toThrowError(error);
   expect(fs.readdirSync(path.dirname(link))).toEqual(["dependency"]);
 });

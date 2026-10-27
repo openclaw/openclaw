@@ -37,7 +37,6 @@ import { addSessionMember, removeSessionMember } from "../config/sessions/sessio
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { onAgentEvent } from "../infra/agent-events.js";
 import { loadOrCreateDeviceIdentityAsync } from "../infra/device-identity-async.js";
-import { persistDevicePairingStoreState } from "../infra/device-pairing-store.js";
 import {
   beginGatewayBootLifecycle,
   completeGatewayBootLifecycle,
@@ -52,12 +51,15 @@ import {
   listenProvider,
   writeToolCall,
 } from "./gateway-provider-fixture.test-support.js";
-import { createOperatorRecoveryFixture } from "./operator-run-recovery.test-support.js";
+import {
+  pairedOperator,
+  persistDevices,
+  recoveryFixture,
+} from "./operator-run-recovery.test-support.js";
 import {
   createChatInputRecovery,
   normalizeChatSendRequest,
 } from "./server-methods/chat-send-request.js";
-import { createContext } from "./server-plugin-in-process-dispatch.test-support.js";
 import * as deliveryRecovery from "./session-send-recovery.js";
 import { disconnectGatewayClient, startGatewayWithClient } from "./test-helpers.e2e.js";
 import { KERNEL_TEST_ENV } from "./test-helpers.env.js";
@@ -240,22 +242,10 @@ it.for([
       await loadOrCreateDeviceIdentityAsync();
       const cases = [];
       const owner = ensureProfileForEmail("owner@example.test");
-      const device = {
-        deviceId: "revoked-replay-device",
-        publicKey: "synthetic-public-key",
-        roles: ["operator"],
-        approvedScopes: ["operator.read", "operator.write"],
-        tokens: {
-          operator: {
-            token: "synthetic-device-token",
-            role: "operator",
-            scopes: ["operator.read", "operator.write"],
-            createdAtMs: 1,
-          },
-        },
-        createdAtMs: 1,
-        approvedAtMs: 1,
-      } satisfies Parameters<typeof createOperatorRecoveryFixture>[0]["device"];
+      const device = pairedOperator();
+      device.approvedScopes = ["operator.read", "operator.write"];
+      expectDefined(device.tokens?.operator, "paired operator token").scopes =
+        device.approvedScopes;
       for (const change of ["unchanged", "role", "device", "membership"] as const) {
         const profile = ensureProfileForEmail(`${change}@example.test`);
         if (change === "unchanged") {
@@ -276,11 +266,8 @@ it.for([
             },
           );
         }
-        const fixture = await createOperatorRecoveryFixture({
-          stateDir: state.stateDir,
-          context: createContext(),
+        const fixture = await recoveryFixture(state.stateDir, profile.id, {
           config,
-          profileId: profile.id,
           scopes: ["operator.read", "operator.write"],
           sourceIngress: "control-ui",
           sessionKey,
@@ -395,11 +382,7 @@ it.for([
           setUserProfileRole(profile.id, "revoked");
         }
         if (change === "device") {
-          persistDevicePairingStoreState(
-            { pendingById: {}, pairedByDeviceId: {} },
-            state.stateDir,
-            "both",
-          );
+          persistDevices(state.stateDir, [], "both");
         }
         if (change === "membership") {
           await removeSessionMember(fixture.target, profile.id);
@@ -430,6 +413,11 @@ it.for([
         await expect(
           client.request("agent.wait", { runId, timeoutMs: 30_000 }),
         ).resolves.toMatchObject({ status: "ok" });
+      };
+      const expectReplay = async (suffix: string) => {
+        const runId = `${runPrefix}-${suffix}`;
+        await vi.waitFor(() => expect(startedRuns).toContain(runId), { timeout: 30_000 });
+        await expectRunOk(runId);
       };
       await gateway.server.startupSettled;
       await recoveryStarted.promise;
@@ -513,19 +501,10 @@ it.for([
           { runId: `${runPrefix}-peer`, state: "interrupted" },
           { runId: `${runPrefix}-unchanged`, state: "interrupted" },
         ]);
-        await vi.waitFor(() => expect(startedRuns).toContain(`${runPrefix}-recovery-predecessor`), {
-          timeout: 30_000,
-        });
-        await expectRunOk(`${runPrefix}-recovery-predecessor`);
+        await expectReplay("recovery-predecessor");
       }
-      await vi.waitFor(() => expect(startedRuns).toContain(`${runPrefix}-peer`), {
-        timeout: 30_000,
-      });
-      await expectRunOk(`${runPrefix}-peer`);
-      await vi.waitFor(() => expect(startedRuns).toContain(`${runPrefix}-unchanged`), {
-        timeout: 30_000,
-      });
-      await expectRunOk(`${runPrefix}-unchanged`);
+      await expectReplay("peer");
+      await expectReplay("unchanged");
       expect(providerErrors).toEqual([]);
       expect(startedRuns.slice(0, 3)).toEqual([
         `${runPrefix}-recovery-predecessor`,

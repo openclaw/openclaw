@@ -1,3 +1,4 @@
+import type { DatabaseSync } from "node:sqlite";
 import { openNodeSqliteDatabase } from "../node-sqlite.js";
 import { prepareSqliteReadOnlyLocationSync } from "../sqlite-snapshot-source.js";
 import { readEngineAnchor } from "./open.js";
@@ -9,6 +10,10 @@ export type BackupEngine =
 /** Reads an already captured private image without reacquiring its live source. */
 export function readBackupEngineImage(imagePath: string, sourcePath: string): BackupEngine {
   using db = openNodeSqliteDatabase(imagePath, { readOnly: true });
+  return readEngineAnchorIdentity(db, sourcePath);
+}
+
+export function readEngineAnchorIdentity(db: DatabaseSync, sourcePath: string): BackupEngine {
   const rows = readEngineAnchor(db);
   if (!rows) {
     return { engine: "sqlite" };

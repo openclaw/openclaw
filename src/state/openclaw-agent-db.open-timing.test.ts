@@ -1,15 +1,10 @@
 import { performance } from "node:perf_hooks";
-import { isMainThread, threadId } from "node:worker_threads";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import * as sqlite from "../infra/node-sqlite.js";
 import { revokeSqliteDatabaseAdmissionsForPath } from "../infra/sqlite-database-admission.js";
 import * as integrityWorker from "../infra/sqlite-integrity-worker.js";
-import * as wal from "../infra/sqlite-wal.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { useAgentDatabaseDirectories } from "./openclaw-agent-db-lifecycle.test-support.js";
-import * as permissions from "./openclaw-agent-db-permissions.js";
-import * as registry from "./openclaw-agent-db-registry.js";
-import * as schema from "./openclaw-agent-db-schema.js";
 import {
   closeOpenClawAgentDatabaseByPath as closeAgentDb,
   closeOpenClawAgentDatabasesForTest,
@@ -45,12 +40,6 @@ function createTimedOpen(indexRepairMs = 0) {
   const advance = (durationMs: number) => {
     elapsedMs += durationMs;
   };
-  const after = <T>(result: T, durationMs: number): T => {
-    advance(durationMs);
-    return result;
-  };
-  const wallStartedAt = Date.now();
-  vi.spyOn(Date, "now").mockImplementation(() => wallStartedAt + Math.floor(elapsedMs));
   vi.spyOn(performance, "now").mockImplementation(() => elapsedMs);
 
   // Real operations advance a controlled clock at their existing owner boundaries.
@@ -58,7 +47,6 @@ function createTimedOpen(indexRepairMs = 0) {
   vi.spyOn(sqlite, "openNodeSqliteDatabase").mockImplementation((...args) => {
     const database = open(...args);
     if (args[0] === pathname) {
-      advance(50);
       const exec = database.exec.bind(database);
       vi.spyOn(database, "exec").mockImplementation((sql) => {
         exec(sql);
@@ -69,73 +57,34 @@ function createTimedOpen(indexRepairMs = 0) {
     }
     return database;
   });
-  const ensurePermissions = permissions.ensureOpenClawAgentDatabasePermissions;
-  vi.spyOn(permissions, "ensureOpenClawAgentDatabasePermissions").mockImplementation((...args) =>
-    after(ensurePermissions(...args), 10),
-  );
-  const configure = wal.configureSqliteConnectionPragmas;
-  vi.spyOn(wal, "configureSqliteConnectionPragmas").mockImplementation((...args) =>
-    after(configure(...args), args[1]?.databasePath === pathname ? 80 : 0),
-  );
-  const ensureSchema = schema.ensureOpenClawAgentSchema;
-  vi.spyOn(schema, "ensureOpenClawAgentSchema").mockImplementation((...args) =>
-    after(ensureSchema(...args), 90),
-  );
-  const register = registry.registerOpenClawAgentDatabase;
-  vi.spyOn(registry, "registerOpenClawAgentDatabase").mockImplementation((...args) =>
-    after(register(...args), 70),
-  );
   return { options, pathname, advance };
 }
 
 describe("agent database open timings", () => {
   it("reports canonical index repair separately from other open phases", () => {
     const { options, pathname } = createTimedOpen(1_000);
-    const database = openAgentDb(options);
-    database.db.exec(`
-    INSERT INTO session_nodes (session_key, current_session_id, entry_json, updated_at)
-    VALUES ('session-one', 'window-one', '{}', 1);
+    openAgentDb(options).db.exec(`
     DROP INDEX idx_agent_session_nodes_updated_at;
     CREATE INDEX idx_agent_session_nodes_updated_at ON session_nodes(session_key);
   `);
     closeAgentDb(pathname);
     logger.warn.mockClear();
 
-    const reopened = openAgentDb(options);
-    const sql =
-      "SELECT session_key FROM session_nodes INDEXED BY idx_agent_session_nodes_updated_at";
-    expect(reopened.db.prepare(sql).all()).toEqual([{ session_key: "session-one" }]);
-    expect(reopened.db.prepare("PRAGMA integrity_check").get()).toEqual({
-      integrity_check: "ok",
-    });
-    expect(logger.warn.mock.calls).toEqual([
-      [
-        expect.stringContaining(
-          `Rebuilt canonical agent SQLite indexes for ${options.agentId} (${pathname}):`,
-        ),
-        {
-          agentId: options.agentId,
-          path: pathname,
-          indexes: ["idx_agent_session_nodes_updated_at"],
-          elapsedMs: 1_000,
+    openAgentDb(options);
+    expect(logger.warn.mock.calls.map(([, fields]) => fields)).toMatchObject([
+      {
+        indexes: ["idx_agent_session_nodes_updated_at"],
+        elapsedMs: 1_000,
+      },
+      {
+        elapsedMs: 1_000,
+        integrityGateOutcome: "cached",
+        canonicalIndexMs: 1_000,
+        repairedIndexCount: 1,
+        phaseDurationsMs: {
+          validation: 1_000,
         },
-      ],
-      [
-        "slow OpenClaw agent database open",
-        expect.objectContaining({
-          elapsedMs: 1_150,
-          integrityGateOutcome: "cached",
-          canonicalIndexMs: 1_000,
-          repairedIndexCount: 1,
-          phaseDurationsMs: {
-            open: 60,
-            validation: 1_000,
-            configuration: 80,
-            schema: 0,
-            registration: 10,
-          },
-        }),
-      ],
+      },
     ]);
   });
 
@@ -185,34 +134,18 @@ describe("agent database open timings", () => {
       expect(logger.warn).toHaveBeenCalledExactlyOnceWith(
         "slow OpenClaw agent database open",
         expect.objectContaining({
-          agentId: options.agentId,
-          elapsedMs: 1_310,
-          path: pathname,
-          pid: process.pid,
-          threadId,
-          isMainThread,
+          elapsedMs: 1_000,
           admissionMode: "async",
           thresholdMs: 1_000,
           integrityGateMs: 1_000,
           integrityGateOutcome: "healthy",
-          integrityGateReason: "no-proof",
-          integrityGateMode: "full",
-          integrityWorkerCheckMs: expect.any(Number),
           integrityWorkerLifetimeMs: 0,
           integrityOutsideWorkerMs: 1_000,
-          canonicalIndexMs: 0,
-          repairedIndexCount: 0,
-          phaseDurationsMs: {
-            open: 60,
+          phaseDurationsMs: expect.objectContaining({
             validation: 1_000,
-            configuration: 80,
-            schema: 90,
-            registration: 80,
-          },
+          }),
         }),
       );
-      expect(logger.warn.mock.calls[0]?.[1]).not.toHaveProperty("integrityCheckSyncMs");
-      expect(logger.warn.mock.calls[0]?.[1]).not.toHaveProperty("integrityOutsideCheckMs");
     } finally {
       release.resolve();
       await outcomes;

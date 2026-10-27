@@ -11,6 +11,7 @@ import {
   replaceSessionEntrySync,
   resetSessionEntryLifecycle,
 } from "../../../config/sessions/session-accessor.js";
+import { setGatewayDedupeEntry } from "../../../gateway/agent-turn/agent-job.js";
 import type { GatewayRecoveryRuntime } from "../../../gateway/server-instance-runtime.types.js";
 import { createMockGatewayRecoveryRuntime } from "../../../gateway/server-recovery-runtime.test-support.js";
 import {
@@ -19,6 +20,7 @@ import {
 } from "../../../infra/agent-events.js";
 import { sqliteWorkerOwnerProbe as probe } from "../../../infra/sqlite-worker-owner-probe.test-support.js";
 import {
+  getActiveGatewayRootWorkCount,
   markGatewayRestartDraining,
   resetGatewayWorkAdmission,
 } from "../../../process/gateway-work-admission.js";
@@ -38,6 +40,7 @@ import {
 } from "./subagent-control-native.test-support.js";
 import { prepareSubagentKillSession } from "./subagent-control-session.js";
 import { getSubagentRunsForChildSession } from "./subagent-registry-memory.js";
+import { mutateCleanup } from "./subagent-registry-sweep-cleanup.js";
 import { reconcileDurableSubagentKillIntent } from "./subagent-registry-sweep-kill.js";
 import { registerSubagentSweepKillCustodyTests } from "./subagent-registry-sweeper-kill-custody.test-support.js";
 import { retireSupersededSubagentRun } from "./subagent-registry-sweeper-retire.js";
@@ -138,6 +141,31 @@ describe("subagent registry recovery scheduling", () => {
 
   registerSubagentSweepRetainedAuthorityTests(recoverRow, killSessionEntry);
 
+  it("isolates cleanup changes without copying the immutable run payload", async () => {
+    const { entry, runs } = createHarness({}, archivedRun());
+    const execution = { ...entry.execution };
+    using clone = vi.spyOn(globalThis, "structuredClone");
+
+    const updated = await mutateCleanup(
+      runs,
+      entry,
+      () => true,
+      (draft) => {
+        draft.execution.suppressSessionEffects = true;
+        draft.contextEngineCleanupCompletedAt = 123;
+      },
+    );
+
+    expect(entry.execution).toEqual(execution);
+    expect(entry.contextEngineCleanupCompletedAt).toBeUndefined();
+    expect(updated).toMatchObject({
+      execution: { suppressSessionEffects: true },
+      contextEngineCleanupCompletedAt: 123,
+    });
+    expect(runs.get(entry.runId)).toEqual(updated);
+    expect(clone.mock.calls.some(([value]) => value === entry)).toBe(false);
+  });
+
   it.each(["terminal", "running"] as const)(
     "only gives ended %s children requester-wake priority over suspended delivery cleanup",
     async (executionStatus) => {
@@ -223,29 +251,51 @@ describe("subagent registry recovery scheduling", () => {
         ...run(),
         runId: "sibling-run",
         childSessionKey: "agent:main:subagent:sibling",
+        childSessionIdentity: {
+          sessionId: "sibling-session",
+          lifecycleRevision: "sibling-revision",
+        },
       };
       runs.set(sibling.runId, sibling);
-      const sessionEntry = {
-        sessionId: "child-session",
-        startedAt: entry.execution.startedAt,
-        updatedAt: Date.now(),
+      const recordTerminal = (finished: SubagentRunRecord) => {
+        const session = {
+          ...finished.childSessionIdentity!,
+          startedAt: finished.execution.startedAt,
+          endedAt: Date.now(),
+          updatedAt: Date.now(),
+          status: "done" as const,
+        };
+        replaceSessionEntrySync({ sessionKey: finished.childSessionKey, env: state.env }, session);
+        setGatewayDedupeEntry({
+          dedupe: new Map(),
+          key: `agent:${finished.runId}`,
+          entry: {
+            ts: Date.now(),
+            ok: true,
+            payload: {
+              status: "completed",
+              startedAt: session.startedAt,
+              endedAt: session.endedAt,
+            },
+          },
+          session: {
+            sessionKey: finished.childSessionKey,
+            sessionId: session.sessionId,
+            agentId: "main",
+            lifecycleGeneration: getAgentEventLifecycleGeneration(),
+          },
+        });
       };
-      replaceSessionEntrySync(
-        { sessionKey: entry.childSessionKey, env: state.env },
-        { ...sessionEntry, status: "done", endedAt: Date.now() },
-      );
+      recordTerminal(entry);
       replaceSessionEntrySync(
         { sessionKey: sibling.childSessionKey, env: state.env },
-        { ...sessionEntry, sessionId: "sibling-session", status: undefined },
+        { ...sibling.childSessionIdentity, updatedAt: Date.now() },
       );
       const gate = createSweepGate();
       completeSubagentRunWithRecovery.mockImplementationOnce(gate.wait);
       await gate.check(sweeper, async (finish) => {
         expect(completeSubagentRunWithRecovery).toHaveBeenCalledOnce();
-        replaceSessionEntrySync(
-          { sessionKey: sibling.childSessionKey, env: state.env },
-          { ...sessionEntry, sessionId: "sibling-session", status: "done", endedAt: Date.now() },
-        );
+        recordTerminal(sibling);
         await finish();
         expect(completeSubagentRunWithRecovery).toHaveBeenLastCalledWith(
           expect.objectContaining({ runId: sibling.runId, outcome: { status: "ok" } }),
@@ -481,6 +531,50 @@ describe("subagent registry recovery scheduling", () => {
 
     expect(recoverRow).toHaveBeenCalledOnce();
   });
+
+  it.each([false, true])(
+    "finishes admitted cleanup and defers the remaining sweep during shutdown (collector=%s)",
+    async (collector) => {
+      const retained = collector
+        ? { collect: true, groupId: "group", collectorCompletion: { status: "done" as const } }
+        : {};
+      const { entry, runs, callGateway, sweeper } = createHarness({}, archivedRun(retained));
+      const sibling = archivedRun({
+        ...retained,
+        runId: "sibling-run",
+        childSessionKey: "agent:main:subagent:sibling",
+      });
+      runs.set(sibling.runId, sibling);
+      const deletion = createEnteredGate();
+      callGateway.mockImplementationOnce(deletion.wait);
+      let settled = false;
+      const sweep = sweeper.runTick().then(() => {
+        settled = true;
+      });
+      try {
+        await deletion.entered;
+        markGatewayRestartDraining("stop (SIGTERM)");
+        expect(settled).toBe(false);
+        expect(getActiveGatewayRootWorkCount()).toBe(1);
+      } finally {
+        deletion.release();
+        await sweep;
+      }
+
+      expect(callGateway).toHaveBeenCalledTimes(1);
+      expect(getActiveGatewayRootWorkCount()).toBe(0);
+      expect([...runs.keys()]).toEqual(collector ? [entry.runId, sibling.runId] : [sibling.runId]);
+
+      resetGatewayWorkAdmission();
+      await sweeper.runTick();
+      expect(runs.size).toBe(0);
+      expect(callGateway).toHaveBeenLastCalledWith(
+        expect.objectContaining({
+          params: expect.objectContaining({ key: sibling.childSessionKey }),
+        }),
+      );
+    },
+  );
 
   it("reports an admitted registry sweep failure even when restart drain has started", async () => {
     recoverRow.mockImplementationOnce(async () => {

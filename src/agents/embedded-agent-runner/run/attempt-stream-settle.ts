@@ -8,6 +8,7 @@ import {
 import type { ModelCompatConfig } from "../../../config/types.models.js";
 import type { ContextEngineInfo } from "../../../context-engine/types.js";
 import { formatErrorMessage } from "../../../infra/errors.js";
+import { withGuardedFetchBeforeRequest } from "../../../infra/net/fetch-request-authority.js";
 import { createOpenAIServiceTierObservationWrapper } from "../../../llm/providers/stream-wrappers/openai-service-tier-observation.js";
 import { createCodexNativeWebSearchWrapper } from "../../../llm/providers/stream-wrappers/openai.js";
 import { getAgentScopedMediaLocalRoots } from "../../../media/local-roots.js";
@@ -50,6 +51,7 @@ import {
 } from "../stream-resolution.js";
 import type { ProviderThinkLevel } from "../utils.js";
 import { joinWithRunLivenessDeadline, RUN_LIVENESS_JOIN_TIMEOUT_MS } from "./abortable.js";
+import { prepareEmbeddedAccessProgramGuard } from "./access-program.js";
 import {
   shouldWaitForCompletionRequiredAsyncTasks,
   waitForCompletionRequiredAsyncTasks,
@@ -70,6 +72,7 @@ import {
 import { selectCompactionTimeoutSnapshot } from "./compaction-timeout.js";
 import { materializeProviderContext } from "./images.js";
 import { wrapStreamFnWithMessageTransform } from "./message-transform-stream-wrapper.js";
+import { promptImageSessionKey } from "./prompt-image-decisions.js";
 import { wrapStreamFnWithProviderReviewContinuation } from "./provider-review-continuation.js";
 import type { EmbeddedRunAttemptParams } from "./types.js";
 
@@ -407,12 +410,26 @@ export async function prepareEmbeddedAttemptTransport(input: {
     attempt.admittedRunContext,
     input.abortSignal,
   );
-  const assertRunCurrent = input.assertCronRootCurrent
-    ? () => {
-        assertAdmittedCurrent?.();
-        input.assertCronRootCurrent?.();
-      }
-    : assertAdmittedCurrent;
+  const runtime = attempt.preparedModelRuntime;
+  const profileId = attempt.authProfileId;
+  const credential = profileId ? attempt.authProfileStore?.profiles[profileId] : undefined;
+  const selectedCredential =
+    runtime &&
+    resolveSelectedModelCredential({
+      provider: attempt.model.provider,
+      profileId,
+      mode: credential?.type ?? attempt.runtimePlan?.auth.selectedAuthMode,
+    });
+  // Observation initializes the account entry; capture Access authority only after it exists.
+  const recordServiceTier =
+    runtime?.accountCatalog &&
+    selectedCredential &&
+    selectedCredential.source !== "harness" &&
+    selectedCredential.requirement === "api-key" &&
+    attempt.model.provider === "openai" &&
+    attempt.model.api === "openai-responses"
+      ? runtime.accountCatalog.prepareServiceTierObserver({ selectedCredential, credential })
+      : undefined;
   // Rebuild each turn from the session's original stream base so prior-turn
   // wrappers do not pin us to stale provider/API transport behavior.
   const defaultSessionStreamFn = resolveEmbeddedAgentBaseStreamFn({
@@ -422,9 +439,21 @@ export async function prepareEmbeddedAttemptTransport(input: {
     settingsManager: input.settingsManager,
     sessionTransport: session.agent.transport,
   });
+  if (
+    attempt.cyberAccessProgram !== undefined &&
+    attempt.cyberAccessProgram !== "standard" &&
+    attempt.provider !== "openai"
+  ) {
+    throw new Error(
+      "Daybreak access is unsupported by this provider. Select Standard or an OpenAI model.",
+    );
+  }
   const streamExtraParamsOverride = {
     ...attempt.streamParams,
     fastMode: attempt.fastMode,
+    ...(attempt.provider === "openai" && attempt.cyberAccessProgram !== undefined
+      ? { accessPrograms: { cyber: attempt.cyberAccessProgram } }
+      : {}),
     // Memory extraction must see the original history, not a provider summary.
     ...(attempt.trigger === "memory"
       ? { anthropicServerCompaction: false, responsesServerCompaction: false }
@@ -462,6 +491,15 @@ export async function prepareEmbeddedAttemptTransport(input: {
   const effectiveExtraParams = suppressResponsesCompaction
     ? { ...resolvedExtraParams, responsesServerCompaction: false, responsesCompactEndpoint: false }
     : resolvedExtraParams;
+  const assertAccessCurrent = await prepareEmbeddedAccessProgramGuard(
+    attempt,
+    effectiveExtraParams,
+  );
+  const assertRunCurrent = () => {
+    assertAdmittedCurrent?.();
+    input.assertCronRootCurrent?.();
+    assertAccessCurrent?.();
+  };
   const providerStreamFn = registerProviderStreamForModel({
     model: attempt.model,
     cfg: attempt.transportConfig ?? attempt.config,
@@ -499,6 +537,7 @@ export async function prepareEmbeddedAttemptTransport(input: {
       const prepared = await materializeProviderContext({
         ...provider,
         context,
+        imageSessionKey: promptImageSessionKey(attempt),
         workspaceDir: input.workspaceDir,
         agentWorkspaceDir: attempt.workspaceDir,
         workspaceOnly: input.workspaceOnly,
@@ -531,7 +570,10 @@ export async function prepareEmbeddedAttemptTransport(input: {
       openclawThinkingExplicit: attempt.thinkingExplicit,
       ...(providerInput ? { [PROVIDER_MODEL_INPUT]: providerInput } : {}),
     };
-    return boundaryStreamFn(model, context, providerOptions);
+    // Async payload preparation outlives stream admission; managed fetch rechecks Access at egress.
+    return withGuardedFetchBeforeRequest(assertAccessCurrent, () =>
+      boundaryStreamFn(model, context, providerOptions),
+    );
   };
   // Install inside provider/config wrappers so their full onPayload chain runs
   // before admission hashes the request body that the built-in transport sends.
@@ -657,33 +699,12 @@ export async function prepareEmbeddedAttemptTransport(input: {
         : messages,
     );
   }
-  const runtime = attempt.preparedModelRuntime;
-  const profileId = attempt.authProfileId;
-  const credential = profileId ? attempt.authProfileStore?.profiles[profileId] : undefined;
-  const selectedCredential =
-    runtime &&
-    resolveSelectedModelCredential({
-      provider: attempt.model.provider,
-      profileId,
-      mode: credential?.type ?? attempt.runtimePlan?.auth.selectedAuthMode,
-    });
-  if (
-    runtime?.accountCatalog &&
-    selectedCredential &&
-    selectedCredential.source !== "harness" &&
-    selectedCredential.requirement === "api-key" &&
-    attempt.model.provider === "openai" &&
-    attempt.model.api === "openai-responses"
-  ) {
-    const record = runtime.accountCatalog.prepareServiceTierObserver({
-      selectedCredential,
-      credential,
-    });
+  if (recordServiceTier && selectedCredential && selectedCredential.source !== "harness") {
     session.agent.streamFn = createOpenAIServiceTierObservationWrapper(
       session.agent.streamFn,
       (model, observation) =>
         !input.abortSignal.aborted &&
-        record({
+        recordServiceTier({
           modelId: model.id,
           runtimeId: "openclaw",
           api: model.api,

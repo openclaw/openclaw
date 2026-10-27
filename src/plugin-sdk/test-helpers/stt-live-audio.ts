@@ -1,3 +1,4 @@
+import { setTimeout as delay } from "node:timers/promises";
 import { expect } from "vitest";
 import type {
   RealtimeTranscriptionProviderConfig,
@@ -12,12 +13,6 @@ export const OPENCLAW_LIVE_TRANSCRIPT_MARKER_RE = /open(?:claw|cl|flaw|clar|core
 
 export function expectOpenClawLiveTranscriptMarker(value: string): void {
   expect(normalizeTranscriptForMatch(value)).toMatch(OPENCLAW_LIVE_TRANSCRIPT_MARKER_RE);
-}
-
-function delay(ms: number) {
-  return new Promise<void>((resolve) => {
-    setTimeout(resolve, ms);
-  });
 }
 
 export async function waitForLiveExpectation(expectation: () => void, timeoutMs = 30_000) {

@@ -4,16 +4,16 @@ import { createDeferred } from "../../../test/helpers/promise.js";
 import type { SessionWorkspaceGetResult, SessionWorkspaceListResult } from "../api/types.ts";
 import type { ApplicationContext } from "../app/context.ts";
 import { ApplicationProvider } from "../lib/reactive/context.ts";
+import {
+  createGatewayBrowserClientFixture,
+  createInitializationContext,
+} from "../pages/chat/chat-application-context.test-support.ts";
 import { sidebarPanelDefinitions } from "../pages/chat/chat-pane-embedded-panels.ts";
 import type { SidebarPanelDefinitionParams } from "../pages/chat/chat-pane-embedded-types.ts";
 import { createChatPaneRails } from "../pages/chat/chat-pane-rails.ts";
 import { renderSidebarRegion } from "../pages/chat/chat-pane-sidebar-layout.ts";
 import { SidebarRegionView } from "../pages/chat/chat-pane-sidebar-view.tsx";
-import {
-  createGatewayBrowserClientFixture,
-  createInitializationContext,
-  createSessionCapabilityFixture,
-} from "../pages/chat/chat-pane.test-support.ts";
+import { createSessionCapabilityFixture } from "../pages/chat/chat-session-capability.test-support.ts";
 import type { ChatPageHost } from "../pages/chat/chat-state-host.ts";
 import { createPageState } from "../pages/chat/chat-state-page.ts";
 import { createChatProps } from "../pages/chat/chat-view.test-helpers.ts";

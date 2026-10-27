@@ -25,38 +25,50 @@ describe.skipIf(!connection)("PostgreSQL domain commit receipts", () => {
   const cleanups: Array<() => void> = [];
   const run = withEngineStoreAdmission;
 
-  function anchor() {
+  function open() {
     const database = new DatabaseSync(":memory:");
     cleanups.push(() => database.close());
-    return database;
-  }
-
-  function open(database = anchor()) {
     const db = run(() => new PostgresSyncConnection(connection!, schema, database, schema));
     cleanups.push(() => run(() => db.close()));
     return db;
   }
 
   function admitted() {
+    const db = open();
     const admission = createSqliteWorkerOperationAdmission((_request, grant) => grant());
     const owner: SqliteWorkerOperationContext = { port: admission.port };
     const publications: unknown[] = [];
     observeSqliteWorkerCommittedFacts(admission, ({ facts }) => publications.push(facts));
     cleanups.push(() => admission.finish());
     return {
+      db,
+      prefix: `${randomUUID()}:`,
       admission,
-      publications,
       execute: <T>(operation: () => T) =>
         run(() => withSqliteWorkerOperationAdmission(owner, operation)),
-      settle() {
+      settle(facts?: unknown) {
         settleSqliteWorkerOperationContext(owner, "completed");
         admission.service();
+        const committed = facts === undefined ? undefined : { facts };
+        expect(admission.committed).toEqual(committed);
+        expect(publications).toEqual(facts === undefined ? [] : [facts]);
+        expect(admission.settlement).toEqual(
+          facts === undefined ? { kind: "completed" } : { kind: "completed", committed },
+        );
       },
     };
   }
 
   function insert(db: PostgresSyncConnection, id: string) {
     db.prepare("INSERT INTO entries (id) VALUES (?)").run(id);
+  }
+
+  function write(db: PostgresSyncConnection, id: string, mode: string) {
+    if (mode === "transaction") {
+      db.runTransaction(() => insert(db, id));
+    } else {
+      insert(db, id);
+    }
   }
 
   function rows(db: PostgresSyncConnection, prefix: string) {
@@ -84,60 +96,36 @@ describe.skipIf(!connection)("PostgreSQL domain commit receipts", () => {
   it.each(["transaction", "autocommit"] as const)(
     "persists an untyped %s without publishing domain facts",
     (mode) => {
-      const prefix = `${randomUUID()}:`;
-      const db = open();
-      const operation = admitted();
-      operation.execute(() => {
-        if (mode === "transaction") {
-          db.runTransaction(() => insert(db, `${prefix}saved`));
-        } else {
-          insert(db, `${prefix}saved`);
-        }
-      });
+      const { db, prefix, ...operation } = admitted();
+      operation.execute(() => write(db, `${prefix}saved`, mode));
       run(() => db.close());
       expect(rows(open(), prefix)).toEqual([{ id: `${prefix}saved` }]);
       operation.settle();
-      expect(operation.admission.committed).toBeUndefined();
-      expect(operation.publications).toEqual([]);
-      expect(operation.admission.settlement).toEqual({ kind: "completed" });
     },
   );
 
-  it.each(
-    (["same", "other"] as const).flatMap((destination) =>
-      (["transaction", "autocommit"] as const).map((mode) => ({ destination, mode })),
-    ),
-  )(
-    "retains typed facts after an untyped $mode on the $destination anchor",
-    ({ destination, mode }) => {
-      const prefix = `${randomUUID()}:`;
-      const db = open();
-      const later = destination === "same" ? db : open();
-      const operation = admitted();
-      const facts = { kind: "saved-entry", id: `${prefix}typed` };
-      operation.execute(() => {
-        db.runTransaction(() => {
-          insert(db, facts.id);
-          deferSqliteWorkerCommitReceipt(db, facts);
-        });
-        if (mode === "transaction") {
-          later.runTransaction(() => insert(later, `${prefix}untyped`));
-        } else {
-          insert(later, `${prefix}untyped`);
-        }
+  it.each([
+    ["same", "transaction"],
+    ["same", "autocommit"],
+    ["other", "transaction"],
+    ["other", "autocommit"],
+  ])("retains typed facts on the %s anchor after an untyped %s", (destination, mode) => {
+    const { db, prefix, ...operation } = admitted();
+    const later = destination === "same" ? db : open();
+    const facts = { kind: "saved-entry", id: `${prefix}typed` };
+    operation.execute(() => {
+      db.runTransaction(() => {
+        insert(db, facts.id);
+        deferSqliteWorkerCommitReceipt(db, facts);
       });
-      expect(rows(later, prefix)).toEqual([{ id: facts.id }, { id: `${prefix}untyped` }]);
-      operation.settle();
-      expect(operation.admission.committed).toEqual({ facts });
-      expect(operation.publications).toEqual([facts]);
-      expect(operation.admission.settlement).toEqual({ kind: "completed", committed: { facts } });
-    },
-  );
+      write(later, `${prefix}untyped`, mode);
+    });
+    expect(rows(later, prefix)).toEqual([{ id: facts.id }, { id: `${prefix}untyped` }]);
+    operation.settle(facts);
+  });
 
   it("does not replace rolled-back inner facts with an untyped outer receipt", () => {
-    const prefix = `${randomUUID()}:`;
-    const db = open();
-    const operation = admitted();
+    const { db, prefix, ...operation } = admitted();
     operation.execute(() =>
       db.runTransaction(() => {
         expect(() =>
@@ -152,22 +140,15 @@ describe.skipIf(!connection)("PostgreSQL domain commit receipts", () => {
     );
     expect(rows(db, prefix)).toEqual([{ id: `${prefix}saved` }]);
     operation.settle();
-    expect(operation.admission.committed).toBeUndefined();
-    expect(operation.publications).toEqual([]);
-    expect(operation.admission.settlement).toEqual({ kind: "completed" });
   });
 
   it("delivers explicitly staged empty facts at settlement without a mutation", () => {
-    const db = open();
-    const operation = admitted();
+    const { db, ...operation } = admitted();
     const facts = { kind: "saved-entries", ids: [] };
     operation.execute(() =>
       db.runTransaction(() => deferSqliteWorkerCommitReceipt(db, facts, "settlement")),
     );
     expect(operation.admission.committed).toBeUndefined();
-    operation.settle();
-    expect(operation.admission.committed).toEqual({ facts });
-    expect(operation.publications).toEqual([facts]);
-    expect(operation.admission.settlement).toEqual({ kind: "completed", committed: { facts } });
+    operation.settle(facts);
   });
 });

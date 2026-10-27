@@ -87,7 +87,9 @@ it.each(["Gateway drain", "closed transport"])(
   "reacquires after %s and ignores retired events",
   async (reason) => {
     const { params, subscriptions, access, gateway, release } = await remoteFixture();
-    await resolveSnapshot(params);
+    await resolveSnapshot({ ...params, agentId: "first" });
+    await refresh.ensureSkillsWatcher({ ...params, agentId: "second" });
+    expect(access.watchSkills).toHaveBeenCalledTimes(1);
     const original = subscriptions[0]!;
     if (reason === "Gateway drain") {
       const version = versionOf(gateway);
@@ -115,6 +117,8 @@ it.each(["Gateway drain", "closed transport"])(
     if (reason === "Gateway drain") {
       subscriptions[1]!.emit("change");
       expect(versionOf(gateway)).toBeGreaterThan(version);
+      await refresh.closeSkillsWatchers();
+      expect(subscriptions[1]!.signal.aborted).toBe(true);
     } else {
       release();
       expect(subscriptions[1]!.signal.aborted).toBe(true);
@@ -127,16 +131,6 @@ it.each(["Gateway drain", "closed transport"])(
     }
   },
 );
-
-it("shares a remote subscription across agents until shutdown", async () => {
-  const { params, subscriptions, access } = await remoteFixture();
-  await refresh.ensureSkillsWatcher({ ...params, agentId: "first" });
-  await refresh.ensureSkillsWatcher({ ...params, agentId: "second" });
-  expect(access.watchSkills).toHaveBeenCalledTimes(1);
-
-  await refresh.closeSkillsWatchers();
-  expect(subscriptions[0]?.signal.aborted).toBe(true);
-});
 
 async function remoteFixture(options: { finishOnAbort?: boolean } = {}) {
   const gateway = workspaceDir;

@@ -47,19 +47,21 @@ export abstract class MemoryManagerEmbeddingCacheOps extends MemoryManagerSyncOp
     }
     const database = this.database;
     const assertCurrent = () => {
-      // Shutdown discards suspended rebuilds before releasing this database owner.
-      if ((this.closed && !this.closing) || !database.isOpen || this.database !== database) {
+      if (this.closed || !database.isOpen || this.database !== database) {
         throw new Error("Memory database owner closed or changed before write admission");
       }
     };
     const unreferencedFirst = {
       identities: this.syncProviderGeneration?.identities ?? this.resolveProviderIndexIdentities(),
     };
+    // Deletion may fence new writes before close. Stop optional maintenance between
+    // batches so retiring a suspended rebuild only drains and releases its resources.
     while (
-      await database.pruneEmbeddingCache(
+      !this.closing &&
+      (await database.pruneEmbeddingCache(
         { maxEntries: max, unreferencedFirst, ...(recount ? { recount: true } : {}) },
         assertCurrent,
-      )
+      ))
     ) {
       await yieldToEventLoop();
     }
@@ -70,12 +72,21 @@ export abstract class MemoryManagerEmbeddingCacheOps extends MemoryManagerSyncOp
     generation: MemorySemanticProviderGeneration,
   ) {
     const hashes = candidates.map((candidate) => candidate.chunk.hash);
+    const meta = generation.database.facts.meta;
+    // Only the published index can bind an alias to this vector space.
+    const providerIdentities = generation.identities.filter(
+      (identity, index) =>
+        index === 0 ||
+        (identity.provider === meta?.provider &&
+          identity.model === meta.model &&
+          identity.providerKey === meta.providerKey),
+    );
     const cached = this.cache.enabled
       ? await generation.database.read(
           {
             type: "cache.read",
             input: {
-              providerIdentities: generation.identities,
+              providerIdentities,
               hashes,
               ...(this.reindexProgress
                 ? {
@@ -280,8 +291,8 @@ export abstract class MemoryManagerEmbeddingCacheOps extends MemoryManagerSyncOp
           agentId: this.agentId,
           provider: { id: generation.provider.id, model: generation.provider.model },
           providerKey: generation.providerKey,
-          // During a full rebuild the embedding cache may temporarily hold up to 2×
-          // maxEntries rows; it is pruned to the cap after publication or abort.
+          // Rebuilds reserve at most 2× maxEntries. Live completion/abort trims to
+          // the cap; retirement leaves this bounded cache for later admitted writes.
           maxEntries:
             this.cache.maxEntries === undefined
               ? undefined

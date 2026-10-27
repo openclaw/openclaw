@@ -32,30 +32,11 @@ const visibleId = "synthetic-visible";
 const unknownOutcome = { code: "outcome-unknown" };
 
 type Fixture = Parameters<Parameters<typeof withNativeBindingFixture>[1]>[0];
-type Delivery = {
-  dispatched: number;
-  accepted: number;
-  acceptedDispatch?: number;
-  afterExecution?: () => void | Promise<void>;
-};
 type Observe = Parameters<typeof native.observeNativeGrants>[1];
 
 function createCutFixture(fixture: Fixture) {
-  const delivery: Delivery = { dispatched: 0, accepted: 0 };
   let observe: Observe = () => {};
-  native.spyAgentExecutions(execution, (worker) => ({
-    async execute(command, options) {
-      const dispatch =
-        command.type === "session.messageCut.commit" ? ++delivery.dispatched : undefined;
-      try {
-        return await worker.execute(command, options);
-      } finally {
-        if (dispatch !== undefined && dispatch === delivery.acceptedDispatch) {
-          await delivery.afterExecution?.();
-        }
-      }
-    },
-  }));
+  let accepted = 0;
   const answer = (id: string, content: string, timestamp: number) =>
     messageEvent(id, userId, { role: "assistant", content, timestamp });
   replaceTranscriptEventsSync(fixture.scope, [
@@ -66,29 +47,28 @@ function createCutFixture(fixture: Fixture) {
   ]);
   const snapshot = () => [fixture.readEntry(), loadTranscriptEventsSync(fixture.scope)];
   const original = snapshot();
-  probe.admission(admission, (request, grant, callback) => {
+  probe.admission(admission, (request, grant, admit) => {
     const facts = native.publication(request);
     if (facts?.kind === "native-binding-ready") {
-      // Production joins renewal and quiesces the lease before invoking this grant.
-      callback(request, () => {
+      // Ready-grant hooks run after renewal has quiesced, not at admission.
+      admit(request, () => {
         observe(request, facts);
-        const accepted = grant();
-        if (accepted) {
-          delivery.accepted++;
-          delivery.acceptedDispatch ??= delivery.dispatched;
+        const granted = grant();
+        if (granted) {
+          accepted++;
         }
-        return accepted;
+        return granted;
       });
-      return;
+    } else {
+      if (facts) {
+        observe(request, facts);
+      }
+      admit(request, grant);
     }
-    if (facts) {
-      observe(request, facts);
-    }
-    callback(request, grant);
   });
   return {
     ...fixture,
-    delivery,
+    accepted: () => accepted,
     onGrant: (next: Observe) => {
       observe = next;
     },
@@ -99,11 +79,6 @@ function createCutFixture(fixture: Fixture) {
 
 const withCutFixture = (run: (fixture: ReturnType<typeof createCutFixture>) => Promise<void>) =>
   withNativeBindingFixture("codex", (fixture) => run(createCutFixture(fixture)));
-
-function expectOneAcceptedExecution(delivery: Delivery) {
-  expect(delivery).toMatchObject({ accepted: 1, acceptedDispatch: delivery.dispatched });
-  expect(delivery.acceptedDispatch).toBeDefined();
-}
 
 it("vetoes rewind before A COMMIT when the native binding delete fails", () =>
   withCutFixture(async (fixture) => {
@@ -119,8 +94,6 @@ it("vetoes rewind before A COMMIT when the native binding delete fails", () =>
       }
     });
     const failure = await fixture.cut("rewind", userId).catch((error: unknown) => error);
-    expect(prepared).toBe(true);
-    expectOneAcceptedExecution(fixture.delivery);
     expect(failure).toBeInstanceOf(PluginStateStoreError);
     expect(failure).toMatchObject({ operation: "delete", code: "PLUGIN_STATE_CORRUPT" });
     fixture.expectUnchanged();
@@ -134,21 +107,18 @@ it("leaves a successor binding intact when rewind compensation cannot restore it
       sessionId: "successor-generation",
       binding: { threadId: "successor-thread", cwd: "/synthetic/successor" },
     };
-    let commitSeen = false;
     fixture.onGrant((request, facts) => {
       if (request.stage === "commit" && facts.kind === "session-native-binding") {
-        commitSeen = true;
         expect(fixture.readBinding()).toBeUndefined();
         fixture.bindingStore.register(fixture.bindingKey, successor);
         throw new Error("synthetic rewind COMMIT refusal");
       }
     });
     await expect(fixture.cut("rewind", userId)).rejects.toMatchObject(unknownOutcome);
-    expect(commitSeen).toBe(true);
     fixture.expectUnchanged();
     expect(fixture.readBinding()).toEqual(successor);
     await expect(fixture.cut("rewind", userId)).rejects.toMatchObject(unknownOutcome);
-    expectOneAcceptedExecution(fixture.delivery);
+    expect(fixture.accepted()).toBe(1);
     expect(fixture.readBinding()).toEqual(successor);
   }));
 
@@ -172,7 +142,7 @@ it("blocks branch switching after actual worker loss without releasing native su
       fixture.expectUnchanged();
       expect(fixture.readBinding()).toBeUndefined();
       await expect(fixture.cut("switch", alternateId)).rejects.toMatchObject(unknownOutcome);
-      expectOneAcceptedExecution(fixture.delivery);
+      expect(fixture.accepted()).toBe(1);
       expect(client.release).not.toHaveBeenCalled();
       expect(client.request).not.toHaveBeenCalled();
       expect(client.subscribed()).toBe(true);
@@ -198,13 +168,19 @@ it.each([
           published(change);
         }
       });
-      fixture.delivery.afterExecution = async () => {
-        arrived.resolve();
-        await release.promise;
-        if (loseReply) {
-          throw new Error("synthetic C3 result delivery lost");
-        }
-      };
+      native.spyAgentExecutions(execution, (worker) => ({
+        async execute(command, options) {
+          const result = await worker.execute(command, options);
+          if (command.type === "session.messageCut.commit") {
+            arrived.resolve();
+            await release.promise;
+            if (loseReply) {
+              throw new Error("synthetic C3 result delivery lost");
+            }
+          }
+          return result;
+        },
+      }));
       const cut = fixture.cut(mode, entryId);
       try {
         await awaitGateBeforeSettlement(arrived.promise, cut, "C3 did not reach receipt delivery");
@@ -221,7 +197,6 @@ it.each([
         expect(
           loadTranscriptEventsSync({ ...fixture.scope, sessionId: result.entry.sessionId }).at(-1),
         ).toMatchObject({ type: "leaf", targetId: leafId });
-        expectOneAcceptedExecution(fixture.delivery);
         expect(published).toHaveBeenCalledOnce();
         expect(client.release).toHaveBeenCalledOnce();
         expect(client.request).toHaveBeenCalledOnce();

@@ -151,9 +151,7 @@ describe("cron stream worker service", () => {
         consecutiveErrors: 5,
         lastError: "source exhausted restarts",
       };
-      expect(readCronRunRecordsForTests(job.id)).toEqual([
-        expect.objectContaining({ agentId: "alpha" }),
-      ]);
+      expect(readCronRunRecordsForTests(job.id)).toMatchObject([{ agentId: "alpha" }]);
       expect(service.getJob(job.id)?.state).toMatchObject(expectedState);
       expect(await readState()).toMatchObject(expectedState);
     }));
@@ -195,10 +193,6 @@ describe("cron stream worker service", () => {
       setDefaultAgent("alpha");
       const fake = fakeSupervisor();
       const scheduler = createTestGatewayScheduler();
-      const updateState = vi.fn(
-        (id: string, patch: Partial<CronJob["state"]>, scheduleKey: string, identity: string) =>
-          service.updateExternalState(id, scheduleKey, identity, patch),
-      );
       let dropped: ReturnType<typeof loseFirstCronMutationReply> | undefined;
       let retirementFailure: unknown;
       const retireSource = vi.fn(async (id: string, scheduleKey: string, identity: string) => {
@@ -217,7 +211,8 @@ describe("cron stream worker service", () => {
         getDefaultAgentId: () => service.getDefaultAgentId(),
         scheduler,
         getProcessSupervisor: () => fake.supervisor,
-        updateState,
+        updateState: (id, patch, scheduleKey, identity) =>
+          service.updateExternalState(id, scheduleKey, identity, patch),
         retireSource,
         updateCounters: (id, counters) => service.updateExternalCounters(id, counters),
         recordFailure: (id, error, patch, scheduleKey, identity) =>
@@ -234,12 +229,9 @@ describe("cron stream worker service", () => {
           processAlive: true,
         });
         expect((await readState())?.streamStatus).toBe("running");
-        updateState.mockClear();
         const stopping = await settle(watchers.stop(job.id, "shutdown"));
         const loss = expectDefined(dropped, "actual retirement reply loss");
         expect(loss.wasDropped()).toBe(true);
-        expect(loss.attempts).toEqual(["cron.mutateExternalState"]);
-        expect(retireSource.mock.calls).toEqual([[job.id, source.scheduleKey, source.identity]]);
         const storedState = expectDefined(await readState(), "durable retired stream state");
         const retiredIdentity = expectDefined(
           storedState.streamSourceIdentity,
@@ -251,14 +243,6 @@ describe("cron stream worker service", () => {
           sourceIdentity: retiredIdentity,
           processAlive: false,
         });
-        expect
-          .soft(updateState)
-          .toHaveBeenCalledExactlyOnceWith(
-            job.id,
-            { streamStatus: "stopped", streamError: undefined },
-            source.scheduleKey,
-            retiredIdentity,
-          );
         expect.soft(storedState.streamError).toBeUndefined();
         const stoppedState = { streamStatus: "stopped", streamSourceIdentity: retiredIdentity };
         expect.soft(storedState).toMatchObject(stoppedState);

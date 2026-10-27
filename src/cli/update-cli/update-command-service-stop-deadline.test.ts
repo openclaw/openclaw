@@ -10,6 +10,7 @@ import * as systemdExec from "../../daemon/systemd-exec.js";
 import { startSystemdService, stopSystemdService } from "../../daemon/systemd-lifecycle.js";
 import * as systemdScope from "../../daemon/systemd-scope.js";
 import * as systemdTransport from "../../daemon/systemd-user-transport.js";
+import * as ports from "../../infra/ports-inspect.js";
 import { createDoctorServiceInspectionBudget } from "../../infra/update-doctor-deadline.js";
 import * as processExec from "../../process/exec.js";
 import { mockProcessPlatform } from "../../test-utils/vitest-spies.js";
@@ -25,6 +26,12 @@ async function nativeStopFixture(home: string, expireDuring: "transport" | "sett
   let elapsedMs = 0;
   vi.spyOn(performance, "now").mockImplementation(() => elapsedMs);
   vi.spyOn(Date, "now").mockImplementation(() => wallNow);
+  vi.spyOn(ports, "inspectPortUsage").mockResolvedValue({
+    port: 18789,
+    status: "free",
+    listeners: [],
+    hints: [],
+  });
   vi.spyOn(systemdScope, "findInstalledSystemdGatewayScope").mockResolvedValue(null);
   vi.spyOn(systemdExec, "assertSystemdAvailable").mockResolvedValue(undefined);
   vi.spyOn(systemdScope, "assertNoSystemGatewayOwnershipForActivation").mockResolvedValue(

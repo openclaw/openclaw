@@ -2,12 +2,9 @@ import { chmodSync, mkdirSync } from "node:fs";
 import path from "node:path";
 import {
   openEngineStore,
-  postgresIndexOrderingMigration,
   withEngineStoreAdmission,
-  withLegacyPostgresIndexOrdering,
   type DatabaseEngineInput,
   type EngineConnection,
-  type StoreSchema,
 } from "openclaw/plugin-sdk/database-engine-worker-runtime";
 import {
   configureSqliteConnectionPragmas,
@@ -22,23 +19,8 @@ import {
   publishSqliteDatabaseAdmission,
   type SqliteDatabaseAdmissionKey,
 } from "openclaw/plugin-sdk/sqlite-worker-runtime";
-import { LOGBOOK_POSTGRES_SCHEMA_SQL } from "./logbook-postgres-schema.js";
+import { logbookEngineSchema } from "./store-engine-schema.js";
 import { LOGBOOK_SCHEMA_VERSION, SCHEMA } from "./store-schema.js";
-
-export const logbookEngineSchema: StoreSchema = {
-  id: "logbook",
-  version: LOGBOOK_SCHEMA_VERSION,
-  sqlite: SCHEMA,
-  postgres: LOGBOOK_POSTGRES_SCHEMA_SQL,
-  postgresMigrations: [
-    {
-      version: 2,
-      fromSchema: { postgres: withLegacyPostgresIndexOrdering(LOGBOOK_POSTGRES_SCHEMA_SQL) },
-      schema: { postgres: LOGBOOK_POSTGRES_SCHEMA_SQL },
-      sql: postgresIndexOrderingMigration(LOGBOOK_POSTGRES_SCHEMA_SQL),
-    },
-  ],
-};
 
 export const LOGBOOK_SQLITE_BUSY_TIMEOUT_MS = 5_000;
 const schemaAdmission: SqliteDatabaseAdmissionKey<true> = {

@@ -4,7 +4,7 @@ import path from "node:path";
 import { afterEach, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { parseRemoteWorkspaceManifestEnvelope } from "./workspace-hash-memo.js";
-import type { WorkspaceManifestProgramProcess } from "./workspace-manifest-script-bindings.js";
+import type { WorkspaceManifestProgram } from "./workspace-manifest-script-bindings.js";
 import { runWorkspaceManifestProgram } from "./workspace-manifest-script.generated.mjs";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -19,7 +19,7 @@ it("keeps overlapping captures and their mutation authority bound to each invoca
     await fs.mkdir(home);
     await fs.writeFile(path.join(workspace, "file.txt"), name);
     let stdout = "";
-    const processBinding: WorkspaceManifestProgramProcess = {
+    const processBinding: Parameters<WorkspaceManifestProgram>[0] = {
       argv: [process.execPath, workspace, baseCommit, "eligible", "memo-v1"],
       env: { HOME: home },
       pid: process.pid,

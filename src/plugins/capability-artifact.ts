@@ -118,8 +118,9 @@ function resolvePluginArtifactManifests(
   });
   const error = registry.diagnostics.find((diagnostic) => diagnostic.level === "error");
   if (error || registry.plugins.length === 0) {
+    const failure = error ?? registry.diagnostics.find((diagnostic) => diagnostic.level === "warn");
     throw new Error(
-      error?.message ?? `Plugin artifact has no valid plugin manifest: ${artifactRoot}`,
+      failure?.message ?? `Plugin artifact has no valid plugin manifest: ${artifactRoot}`,
     );
   }
   return registry.plugins;

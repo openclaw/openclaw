@@ -5,6 +5,10 @@ import { createDeferred } from "../../../../test/helpers/promise.js";
 import { Agent } from "../../../plugin-sdk/agent-core.js";
 import { createHookRunner } from "../../../plugins/hooks.js";
 import { createSubscribedSessionHarness } from "../../embedded-agent-subscribe.e2e-harness.js";
+import {
+  captureAgentPluginRuntimeRefresh,
+  createAgentPluginRuntimeRefresh,
+} from "../../plugin-runtime-refresh.js";
 import { makeAssistantMessageFixture } from "../../test-helpers/assistant-message-fixtures.js";
 import { makeProviderModelFixture } from "../../test-helpers/provider-model-fixture.js";
 import { textToolResult } from "../../test-helpers/sparse-transcript.test-support.js";
@@ -93,6 +97,7 @@ function createResultFixture(params: ResultInput = {}) {
       bootstrap: { bootstrapPromptWarning: {} },
       systemPrompt: { systemPromptReport: undefined },
       sessionRuntime: {
+        transport: { effectiveExtraParams: {} as Record<string, unknown> },
         agentSession: {
           clientToolCallSlots: params?.clientToolCallSlots ?? [],
           hasDeliveredSourceReply: () => false,
@@ -133,6 +138,14 @@ function settledToolMessages(): EmbeddedRunAttemptResult["messagesSnapshot"] {
 }
 
 describe("attempt result projection", () => {
+  it("reports the effective Access setting even when it came from model configuration", () => {
+    const fixture = createResultFixture();
+    fixture.input.prepared.sessionRuntime.transport.effectiveExtraParams = {
+      accessPrograms: { cyber: "daybreak_blue" },
+    };
+    expect(completeFixture(fixture).cyberAccessProgram).toBe("daybreak_blue");
+  });
+
   it.each<[string[], string, number?]>([
     [["First part.", "Second part."], "First part.\nSecond part."],
     [["NO_RE", "PLY\nFirst part.", "Second part."], "First part.\nSecond part."],
@@ -237,6 +250,31 @@ describe("attempt result projection", () => {
     });
     expect(result).not.toHaveProperty("beforeAgentFinalizeRevisionReason");
   });
+
+  it.each([
+    { refreshPending: true, outputs: 0 },
+    { refreshPending: false, outputs: 1 },
+  ])(
+    "reports llm_output only once a refresh no longer continues the turn: $refreshPending",
+    ({ refreshPending, outputs }) => {
+      const fixture = createResultFixture({ hasSuccessfulModelResponse: true });
+      vi.spyOn(fixture.hookRunner, "hasHooks").mockReturnValue(true);
+      const output = vi.spyOn(fixture.hookRunner, "runLlmOutput").mockResolvedValue(undefined);
+
+      // The attempt stopped at a step boundary for a pending refresh.
+      createAgentPluginRuntimeRefresh().run(() => {
+        const refresh = captureAgentPluginRuntimeRefresh();
+        refresh.bindConsumer(() => true);
+        if (refreshPending) {
+          refresh.request();
+          refresh.stopAtStep();
+        }
+        completeFixture(fixture);
+      });
+
+      expect(output).toHaveBeenCalledTimes(outputs);
+    },
+  );
 
   it("keeps current tool replay evidence separate from cumulative replay state", () => {
     const result = completeResult({ toolMetas: [{ toolName: "cron", replaySafe: false }] });

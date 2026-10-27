@@ -81,34 +81,34 @@ describe("selected transcript turn cold restoration", () => {
       expect(cold()).toBeUndefined();
       return message;
     });
-    const append = () =>
+    const turn = (messages: Parameters<typeof persistSessionTranscriptTurn>[1]["messages"]) =>
       persistSessionTranscriptTurn(
         { ...fixture.scope, sessionKey: "agent:main:global" },
         {
           expectedSessionId: historicalId,
           expectedLifecycleRevision: "selected",
-          messages: [
-            {
-              message: {
-                role: "user",
-                content: "Resume selected history",
-                idempotencyKey: "resume-selected-history",
-              },
-              workerPreparation: {
-                prepareMessageAfterIdempotencyCheckAsync: prepareMessage,
-              },
-            },
-          ],
+          messages,
           updateMode: "none",
         },
       );
+    const append = () =>
+      turn([
+        {
+          message: {
+            role: "user",
+            content: "Resume selected history",
+            idempotencyKey: "resume-selected-history",
+          },
+          workerPreparation: { prepareMessageAfterIdempotencyCheckAsync: prepareMessage },
+        },
+      ]);
     const replaceRevision = () =>
       replaceSessionEntrySync(fixture.scope, {
         sessionId: historicalId,
         updatedAt: 2,
         lifecycleRevision: "successor",
       });
-    return { ...fixture, append, cold, descriptor, replaceRevision, prepareMessage };
+    return { ...fixture, turn, append, cold, descriptor, replaceRevision, prepareMessage };
   }
 
   it.each(["turn", "plain turn", "locked worker with owner fence", "locked SDK released-sync"])(
@@ -120,18 +120,10 @@ describe("selected transcript turn cold restoration", () => {
         expect(fixture.prepareMessage).toHaveBeenCalledOnce();
       } else if (mode === "plain turn") {
         await expect(
-          persistSessionTranscriptTurn(
-            { ...fixture.scope, sessionKey: "agent:main:global" },
-            {
-              expectedSessionId: historicalId,
-              expectedLifecycleRevision: "selected",
-              messages: [
-                { message: { role: "user", content: "Resume selected history" } },
-                { message: { role: "assistant", content: "Restored history" } },
-              ],
-              updateMode: "none",
-            },
-          ),
+          fixture.turn([
+            { message: { role: "user", content: "Resume selected history" } },
+            { message: { role: "assistant", content: "Restored history" } },
+          ]),
         ).resolves.toMatchObject({ messages: [{ appended: true }, { appended: true }] });
       } else {
         const message = { role: "user", content: "Resume selected history" };
@@ -209,14 +201,18 @@ describe("selected transcript turn cold restoration", () => {
       if (timing === "at worker admission") {
         interceptRestoration((params) => ({
           ...params,
-          withWriteAdmission: (run, diagnostics) =>
-            params.withWriteAdmission((refusal) => {
-              if (!refusal) {
-                admitted = true;
-                fixture.replaceRevision();
-              }
-              return run(refusal);
-            }, diagnostics),
+          withWriteAdmission: (run, diagnostics, operation) =>
+            params.withWriteAdmission(
+              (refusal) => {
+                if (!refusal) {
+                  admitted = true;
+                  fixture.replaceRevision();
+                }
+                return run(refusal);
+              },
+              diagnostics,
+              operation,
+            ),
           onCommitRequest: () => {
             commitRequested = true;
             params.onCommitRequest();
@@ -303,10 +299,10 @@ describe("selected transcript turn cold restoration", () => {
       const resume = createDeferred();
       interceptRestoration((params) => ({
         ...params,
-        withWriteAdmission: async (run, diagnostics) => {
+        withWriteAdmission: async (run, diagnostics, operation) => {
           requested.resolve();
           await resume.promise;
-          return params.withWriteAdmission(run, diagnostics);
+          return params.withWriteAdmission(run, diagnostics, operation);
         },
       }));
       const callback = vi.fn(async (locked: { readEvents: () => Promise<unknown[]> }) =>

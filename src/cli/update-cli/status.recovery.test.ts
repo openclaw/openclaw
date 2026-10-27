@@ -4,6 +4,7 @@ import path from "node:path";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { listDirectoryTreeStrict } from "../../infra/directory-walk.js";
+import { createUpdateRunRecordFixture } from "../../infra/update-run-record.test-support.js";
 import { updateStatusCommand as updateStatus } from "./status.js";
 // Prepare the lazy production graph during collection, not inside the first test timeout.
 import "../../infra/update-recovery-backup-status.js";
@@ -160,31 +161,18 @@ async function terminal(
 }
 async function run(c: Capture) {
   const { UpdateRunRecordSchema } = await import("../../infra/update-run-schema.js");
-  return UpdateRunRecordSchema.parse({
-    runId: c.manifest.runId,
-    trigger: "cli",
-    status: "failed",
-    phase: "finished",
-    createdAtMs: 1,
-    updatedAtMs: 2,
-    finishedAtMs: 2,
-    confirmedAtMs: null,
-    downtimeMs: null,
-    reason: "candidate-failed",
-    origin: {
-      updateRecoveryCapture: {
-        manifestSha256: c.manifestSha256,
-        configWrites: [],
-        status: "pending",
+  return UpdateRunRecordSchema.parse(
+    createUpdateRunRecordFixture(c.manifest.runId, {
+      reason: "candidate-failed",
+      origin: {
+        updateRecoveryCapture: {
+          manifestSha256: c.manifestSha256,
+          configWrites: [],
+          status: "pending",
+        },
       },
-    },
-    target: {},
-    before: {},
-    after: {},
-    steps: [],
-    verification: {},
-    repair: [],
-  });
+    }),
+  );
 }
 
 it("reports standalone Doctor captures as manual evidence", async () => {
@@ -373,6 +361,27 @@ it("reports one failed set as unresolved and multiple failed sets as ambiguous",
     "ambiguous",
     "ambiguous",
   ]);
+});
+it("reports a set from a failure that never activated as stale and directs it to cleanup", async () => {
+  const c = await capture();
+  const failed = await run(c);
+  const validated = [
+    { step: "requested", status: "completed" },
+    { step: "original-state-capture", status: "completed" },
+    { step: "staging", status: "completed" },
+    { step: "validating", status: "failed" },
+  ] as const;
+  mocks.readRun.mockResolvedValue({ ...failed, steps: [...validated] });
+  const [set] = (await inspect()).recoverySets;
+  expect(set).toMatchObject({ status: "stale", nextAction: "openclaw update cleanup" });
+  expect(set.message).toContain("failed before changing the installation or state");
+  expect(set.message).not.toMatch(/manual inspection/i);
+  // An activation receipt keeps the same failed set as its manual recovery source.
+  mocks.readRun.mockResolvedValue({
+    ...failed,
+    steps: [...validated, { step: "activating", status: "failed" }],
+  });
+  expect((await inspect()).recoverySets[0].status).toBe("unresolved");
 });
 it("validates forward resolution against retained generations without writing", async () => {
   const c = await capture();

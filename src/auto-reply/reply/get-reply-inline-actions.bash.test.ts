@@ -24,11 +24,16 @@ beforeEach(() => {
 
 function bashInput(
   body: string,
-  options: { authorized?: boolean; group?: boolean; literal?: boolean } = {},
+  options: { authorized?: boolean; group?: boolean; literal?: boolean; enabled?: boolean } = {},
 ) {
-  const { authorized = true, group = false, literal = false } = options;
+  const {
+    authorized = true,
+    group = body.startsWith("@bot"),
+    literal = false,
+    enabled = true,
+  } = options;
   const cfg = {
-    commands: { bash: true, text: true },
+    commands: { bash: enabled, text: true },
     messages: { groupChat: { mentionPatterns: ["@bot"] } },
   };
   const ctx = buildTestCtx({
@@ -66,7 +71,7 @@ it.each([
   ["@bot ! printf fixture", "printf fixture"],
   ["![ -f fixture ]", "[ -f fixture ]"],
 ])("dispatches %s through the bash handler before a model turn", async (body, command) => {
-  const result = await handleInlineActions(bashInput(body, { group: body.startsWith("@bot") }));
+  const result = await handleInlineActions(bashInput(body));
   expect(result).toMatchObject({
     kind: "reply",
     reply: { text: expect.stringContaining("fixture output") },
@@ -81,24 +86,10 @@ it.each([
   expect(getReplyPayloadMetadata(result.reply)).toMatchObject({ commandReply: true });
 });
 
-it.each([true, false])("keeps Markdown images as chat with bash enabled=%s", async (enabled) => {
-  for (const body of [
-    "![diagram](https://example.com/diagram.png)",
-    "![nested [diagram]][figure]",
-  ]) {
-    const input = bashInput(body);
-    input.cfg.commands = { bash: enabled, text: true };
-    expect(await handleInlineActions(input)).toMatchObject({ kind: "continue" });
-    expect(execute).not.toHaveBeenCalled();
-  }
-});
-
-it.each(["!poll", "! poll", "!stop", "/bash poll", "@bot ! poll"])(
+it.each(["!poll", "!stop", "/bash poll", "@bot ! poll"])(
   "handles %s without executing a shell",
   async (body) => {
-    expect(
-      await handleInlineActions(bashInput(body, { group: body.startsWith("@bot") })),
-    ).toMatchObject({
+    expect(await handleInlineActions(bashInput(body))).toMatchObject({
       kind: "reply",
       reply: { text: "⚙️ No active bash job." },
     });
@@ -106,30 +97,27 @@ it.each(["!poll", "! poll", "!stop", "/bash poll", "@bot ! poll"])(
   },
 );
 
-it("shows bash usage for a bare bang", async () => {
-  expect(await handleInlineActions(bashInput("!"))).toMatchObject({
+it.each([
+  { body: "!", enabled: true, text: "⚙️ Usage:" },
+  { body: "! printf fixture", enabled: false, text: "bash is disabled" },
+])("reports $text without running a shell", async ({ body, enabled, text }) => {
+  expect(await handleInlineActions(bashInput(body, { enabled }))).toMatchObject({
     kind: "reply",
-    reply: { text: expect.stringContaining("⚙️ Usage:") },
+    reply: { text: expect.stringContaining(text) },
   });
   expect(execute).not.toHaveBeenCalled();
 });
 
 it.each([
+  { body: "![diagram](https://example.com/diagram.png)", enabled: true },
+  { body: "![diagram](https://example.com/diagram.png)", enabled: false },
+  { body: "![nested [diagram]][figure]", enabled: true },
+  { body: "![nested [diagram]][figure]", enabled: false },
   { body: "hello ! poll" },
   { body: "explain !poll" },
   { body: "! printf fixture", authorized: false },
   { body: "! printf fixture", literal: true },
 ])("keeps non-command or gated input out of the shell: $body", async ({ body, ...options }) => {
   expect(await handleInlineActions(bashInput(body, options))).toMatchObject({ kind: "continue" });
-  expect(execute).not.toHaveBeenCalled();
-});
-
-it("preserves the bash feature gate", async () => {
-  const input = bashInput("! printf fixture");
-  input.cfg.commands = { bash: false };
-  expect(await handleInlineActions(input)).toMatchObject({
-    kind: "reply",
-    reply: { text: expect.stringContaining("bash is disabled") },
-  });
   expect(execute).not.toHaveBeenCalled();
 });

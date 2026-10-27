@@ -7,9 +7,11 @@ import {
   type OpenClawCrablineChannelDriverSelection,
 } from "@openclaw/crabline";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import type {
-  QaBusInboundMessageInput,
-  QaBusMessage,
+import {
+  buildQaTarget as buildQaConversationTarget,
+  parseQaTarget,
+  type QaBusInboundMessageInput,
+  type QaBusMessage,
 } from "openclaw/plugin-sdk/qa-channel-protocol";
 import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
 import {
@@ -30,7 +32,6 @@ import {
 import { cleanupCrablineResources } from "./crabline-resource-cleanup.js";
 import { createCrablineSlackIngress } from "./crabline-slack-ingress.js";
 import { readQaJsonResponse } from "./ignored-response-body.js";
-import { buildQaConversationTarget, parseQaTarget } from "./qa-bus-protocol.js";
 import {
   createQaTransportStateMethods,
   sendQaTransportNativeCommand,
@@ -140,6 +141,8 @@ export async function createQaCrablineTransportAdapter(params: {
     const targetByProviderTarget = new Map<string, QaCrablineTarget>();
     const telegramMessageByProviderId = new Map<string, QaBusMessage>();
     const pendingTelegramMessagesByChat = new Map<string, QaBusMessage[]>();
+    // Generic Crabline observations include sends only. Keep their bus identity for edits.
+    const telegramSnapshotMessages = new WeakMap<QaBusMessage, { id: string; deleted?: true }>();
     const outboundEvents: QaTransportOutboundEvent[] = [];
     const discordTargets = new Map<string, QaCrablineTarget>();
     const discordReplies = await startCrablineDiscordReplies({
@@ -203,6 +206,10 @@ export async function createQaCrablineTransportAdapter(params: {
         ...(method === "editMessageText" ? { editedAt: Date.now() } : {}),
         reactions: [],
       };
+      const snapshotMessage = previous ? telegramSnapshotMessages.get(previous) : undefined;
+      if (snapshotMessage) {
+        telegramSnapshotMessages.set(message, snapshotMessage);
+      }
       if (method === "sendMessage") {
         const pending = pendingTelegramMessagesByChat.get(chatId) ?? [];
         pending.push(message);
@@ -240,10 +247,21 @@ export async function createQaCrablineTransportAdapter(params: {
         return outboundEvents;
       },
       observeEvent(this: void, event: unknown) {
+        let telegramLifecycle: QaTransportOutboundEvent | null = null;
         if (adapter.channel === "telegram") {
-          const lifecycle = readTelegramLifecycleEvent(event, outboundEvents.length + 1);
-          if (lifecycle) {
-            outboundEvents.push(lifecycle);
+          telegramLifecycle = readTelegramLifecycleEvent(event, outboundEvents.length + 1);
+          if (telegramLifecycle) {
+            outboundEvents.push(telegramLifecycle);
+            const snapshotMessage = telegramSnapshotMessages.get(telegramLifecycle.message);
+            if (snapshotMessage && !snapshotMessage.deleted) {
+              const input = { accountId: adapter.accountId, messageId: snapshotMessage.id };
+              if (telegramLifecycle.kind === "edited") {
+                baseState.editMessage({ ...input, text: telegramLifecycle.message.text });
+              } else if (telegramLifecycle.kind === "deleted") {
+                baseState.deleteMessage(input);
+                snapshotMessage.deleted = true;
+              }
+            }
           }
         }
         let normalizedEvent = event;
@@ -294,7 +312,7 @@ export async function createQaCrablineTransportAdapter(params: {
               );
             }
           }
-          baseState.addOutboundMessage({
+          const message = baseState.addOutboundMessage({
             accountId: observation.accountId,
             senderId: observation.senderId,
             senderName: observation.senderName,
@@ -302,6 +320,9 @@ export async function createQaCrablineTransportAdapter(params: {
             ...(replyToId ? { replyToId } : {}),
             ...destination,
           });
+          if (telegramLifecycle?.kind === "sent") {
+            telegramSnapshotMessages.set(telegramLifecycle.message, { id: message.id });
+          }
         }
       },
       async addInboundMessage(input: QaBusInboundMessageInput) {

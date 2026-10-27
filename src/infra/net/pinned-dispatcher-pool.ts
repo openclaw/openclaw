@@ -107,8 +107,7 @@ export class PinnedDispatcherPool {
         }
         entry.idleTimer = runInDispatcherPoolContext(() =>
           setTimeout(() => this.retireEntry(entry), PROVIDER_DISPATCHER_POOL_IDLE_TTL_MS),
-        );
-        entry.idleTimer.unref?.();
+        ).unref();
       },
     };
   }

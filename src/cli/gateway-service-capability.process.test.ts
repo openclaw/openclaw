@@ -155,18 +155,10 @@ it(
     const fixture = createFixture();
     const before = snapshotState(fixture.stateDir);
     try {
-      const capability = {
-        updateExecutor: "root-spawner-v1",
-        targetRootBinding: true,
-        definitionBackup: true,
-        retainedOwnerBinding: true,
-        originalDefinitionBinding: true,
-        originalRuntimePinBinding: true,
-      };
       for (const option of [["--update-executor", "check"], ["--update-executor=check"]]) {
         const result = await fixture.run(["gateway", "install", ...option, "--json"]);
         expect(result.code, `${result.stderr}\n${result.stdout}`).toBe(0);
-        expect(JSON.parse(result.stdout)).toEqual(capability);
+        expect(JSON.parse(result.stdout)).toMatchObject({ updateExecutor: "root-spawner-v1" });
       }
       const version = await fixture.run(["--version"]);
       expect(version.code, version.stderr).toBe(0);

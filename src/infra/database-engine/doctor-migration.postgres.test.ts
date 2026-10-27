@@ -30,6 +30,7 @@ import type {
   OpenClawStateReadLocation,
 } from "../../state/openclaw-state-read.types.js";
 import { stateBootstrapReadOperations } from "../../state/state-bootstrap-read.worker.js";
+import { VERSION } from "../../version.js";
 import { acquireGatewayLock } from "../gateway-lock.js";
 import { inspectGatewayOwnerLease } from "../gateway-owner-lease.worker.js";
 import { defaultPayload } from "../gateway-state-owner-record.js";
@@ -231,7 +232,7 @@ describe.skipIf(!connection)("Doctor PostgreSQL version migration", () => {
     await client.end();
   });
 
-  async function prepareSource(schema: StoreSchema) {
+  async function prepareSource(schema: StoreSchema, state: "source" | "migrated" = "source") {
     closeOpenClawStateDatabaseForTest();
     // Historical versions own different credentials, publication columns, and indexes.
     // Build their registered DDL instead of relabeling the current predecessor.
@@ -239,13 +240,16 @@ describe.skipIf(!connection)("Doctor PostgreSQL version migration", () => {
     using anchor = openNodeSqliteDatabase(pathname);
     publishSqliteDatabaseSchemaChange(anchor);
     admit(schema, pathname, false);
+    const now =
+      state === "migrated" ? "CAST(EXTRACT(EPOCH FROM CURRENT_TIMESTAMP) * 1000 AS bigint)" : "1";
+    const appVersion = state === "migrated" ? `'${VERSION.replaceAll("'", "''")}'` : "NULL";
     await client.query(`
       INSERT INTO "${namespace}".schema_meta
         (meta_key, role, schema_version, agent_id, app_version, created_at, updated_at)
-        VALUES ('primary', 'global', ${schema.version}, NULL, NULL, 1, 1);
+        VALUES ('primary', 'global', ${schema.version}, NULL, ${appVersion}, 1, ${now});
       INSERT INTO "${namespace}".config_machine_state VALUES
-        ('state.schema.contentVersion', '${schema.version}', 1),
-        ('doctor.fixture', '"before"', 1);
+        ('state.schema.contentVersion', '${schema.version}', ${now}),
+        ('doctor.fixture', '"${state === "migrated" ? "after" : "before"}"', 1);
     `);
   }
 
@@ -291,7 +295,7 @@ describe.skipIf(!connection)("Doctor PostgreSQL version migration", () => {
     }
   }
 
-  it.each([24, 25, 26, 27, 28, 31])(
+  it.each([24, 25, 26, 27, 28, 31, 33, 34])(
     "backs up and restores the real version %s before the registered migration",
     async (sourceVersion) => {
       stateEngineSchema.postgresMigrations = originalMigrations;
@@ -438,8 +442,7 @@ describe.skipIf(!connection)("Doctor PostgreSQL version migration", () => {
   it.each([false, true])(
     "keeps installed-driver schema rollback exact (foreign write: %s)",
     async (foreignWrite) => {
-      await prepare();
-      await runDoctor();
+      await prepareSource(stateEngineSchema, "migrated");
       closeOpenClawStateDatabaseForTest();
       const configPath = path.join(env.OPENCLAW_STATE_DIR!, "openclaw.json");
       fs.writeFileSync(configPath, JSON.stringify(config));
@@ -607,16 +610,11 @@ describe.skipIf(!connection)("Doctor PostgreSQL version migration", () => {
     [31, false],
     [32, false],
     [33, false],
+    [34, false],
   ] as const)(
     "keeps the real agent v%s→current rollback exact (foreign write: %s)",
     async (sourceVersion, foreignWrite) => {
-      // The preceding foreign-write case deliberately retains the candidate state schema.
-      closeOpenClawStateDatabaseForTest();
-      // Each case backs up only its own synthetic agent, never previous case registrations.
-      await client.query(`DELETE FROM "${namespace}".agent_databases WHERE agent_id = 'main'`);
-      await client.query(`DROP INDEX IF EXISTS "${namespace}".idx_doctor_future`);
-      await prepare();
-      await runDoctor();
+      await prepareSource(stateEngineSchema, "migrated");
       closeOpenClawStateDatabaseForTest();
       const configPath = path.join(env.OPENCLAW_STATE_DIR!, "openclaw.json");
       fs.writeFileSync(configPath, JSON.stringify(config));
@@ -900,7 +898,7 @@ describe.skipIf(!connection)("Doctor PostgreSQL version migration", () => {
             {
               indexname: "idx_agent_session_windows_conversation",
               indexdef:
-                "CREATE INDEX idx_agent_session_windows_conversation ON fixture_namespace.session_windows USING btree (primary_conversation_id NULLS FIRST) WHERE (primary_conversation_id IS NOT NULL)",
+                "CREATE INDEX idx_agent_session_windows_conversation ON fixture_namespace.session_windows USING btree (primary_conversation_id) WHERE (primary_conversation_id IS NOT NULL)",
             },
           ]);
           if (foreignWrite) {

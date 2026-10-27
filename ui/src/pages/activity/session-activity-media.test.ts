@@ -183,10 +183,13 @@ it("gates and coalesces discovery in FIFO order, retaining thumbnails in the sha
   pending[2]!.resolve(images("third"));
   await waitCalls(request, 4);
   pending[3]!.resolve(images("fourth"));
+  // Join lazy renderers before starting the gallery's DOM readiness deadline.
+  await vi.dynamicImportSettled();
   await waitForSolid(() => expect(container.querySelectorAll("img")).toHaveLength(16));
   expect(rows[4]!.querySelectorAll("img")).toHaveLength(0);
   await waitForSolid(() => expect(first.querySelectorAll(".chat-message-image")).toHaveLength(4));
   thumbnail(first).click();
+  await vi.dynamicImportSettled();
   await waitForSolid(() => expect(imageUrl(lightbox(first))).toBe(originalUrl));
   const opened = lightbox(first);
   update({ revision: 1 });

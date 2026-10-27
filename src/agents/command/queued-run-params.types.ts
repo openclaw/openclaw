@@ -54,6 +54,7 @@ export type QueuedAgentRunParams = {
   thinkLevel?: ThinkLevel;
   /** Run-scoped selection intent for declared chat-template effort. */
   thinkingExplicit?: boolean;
+  cyberAccessProgram?: SessionEntry["cyberAccessProgram"];
   fastMode?: FastMode;
   /** Effective auto fast-mode cutoff for this run, in seconds. */
   fastModeAutoOnSeconds?: number;
@@ -82,6 +83,8 @@ export type QueuedAgentRunParams = {
   memberRoleIds?: string[];
   permissionMode?: SessionEntry["permissionMode"];
   sessionRoot?: string;
+  /** Spawn-time blind child: the rendered prompt omits its model, identity and workspace path. */
+  blindPrompt?: SessionEntry["blindPrompt"];
   /** Locks the selected model against hooks and fallbacks; does not imply native model ownership. */
   modelSelectionLocked?: boolean;
   authProfileIdSource?: "auto" | "user";

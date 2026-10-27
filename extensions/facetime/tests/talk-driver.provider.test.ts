@@ -10,7 +10,7 @@ import type { RealtimeVoicePlaybackItem } from "openclaw/plugin-sdk/realtime-voi
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { buildOpenAIRealtimeVoiceProvider } from "../../openai/api.js";
 import { resolveFaceTimeConfig } from "../src/config.js";
-import { startFaceTimeTalkDriver, type FaceTimeTalkDriver } from "../src/talk-driver.js";
+import { startFaceTimeTalkDriver } from "../src/talk-driver.js";
 
 const audio = vi.hoisted(() => ({
   suppressionReady: vi.fn(async () => {}),
@@ -90,7 +90,7 @@ vi.mock("openclaw/plugin-sdk/proxy-capture", async (importOriginal) => ({
 }));
 
 type Socket = InstanceType<typeof providerMocks.FakeWebSocket>;
-const activeDrivers = new Set<FaceTimeTalkDriver>();
+const activeDrivers = new Set<Awaited<ReturnType<typeof startFaceTimeTalkDriver>>>();
 
 function emit(socket: Socket, event: Record<string, unknown>) {
   socket.emit("message", Buffer.from(JSON.stringify(event)));

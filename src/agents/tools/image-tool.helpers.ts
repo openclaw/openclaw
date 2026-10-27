@@ -1,73 +1,12 @@
 import { estimateBase64DecodedBytes } from "@openclaw/media-core/base64";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import type { AssistantMessage } from "../../llm/types.js";
 import { formatMediaSize } from "../../media/store.shared.js";
-import { extractEmbeddedAssistantText } from "../embedded-agent-utils.js";
 import { isMinimaxVlmProvider } from "../minimax-vlm.js";
 import { findNormalizedProviderValue, normalizeProviderId } from "../model-selection.js";
-import { createMediaAssistantTextCoercer } from "./media-tool-text.js";
 import { coerceToolModelConfig, type ToolModelConfig } from "./model-config.helpers.js";
 
 export type ImageModelConfig = ToolModelConfig;
-
-const IMAGE_REASONING_FALLBACK_SIGNATURES = new Set([
-  "reasoning_content",
-  "reasoning",
-  "reasoning_details",
-  "reasoning_text",
-]);
-const MAX_IMAGE_REASONING_FALLBACK_BLOCKS = 50;
-const MAX_IMAGE_REASONING_SIGNATURE_PARSE_CHARS = 2_048;
-const MAX_IMAGE_REASONING_SIGNATURE_SCAN_CHARS = 65_536;
-
-function isImageReasoningFallbackSignature(value: unknown): boolean {
-  if (!value) {
-    return false;
-  }
-  if (typeof value === "string") {
-    if (IMAGE_REASONING_FALLBACK_SIGNATURES.has(value)) {
-      return true;
-    }
-    const trimmed = value.trim();
-    if (!trimmed.startsWith("{") || !trimmed.endsWith("}")) {
-      return false;
-    }
-    if (trimmed.length > MAX_IMAGE_REASONING_SIGNATURE_PARSE_CHARS) {
-      const scanned = trimmed.slice(0, MAX_IMAGE_REASONING_SIGNATURE_SCAN_CHARS);
-      return /"id"\s*:\s*"rs_/.test(scanned) && /"type"\s*:\s*"reasoning(?:[."])/.test(scanned);
-    }
-    try {
-      return isImageReasoningFallbackSignature(JSON.parse(trimmed));
-    } catch {
-      return false;
-    }
-  }
-  if (typeof value !== "object") {
-    return false;
-  }
-  const record = value as { id?: unknown; type?: unknown };
-  const id = typeof record.id === "string" ? record.id : "";
-  const type = typeof record.type === "string" ? record.type : "";
-  return id.startsWith("rs_") && (type === "reasoning" || type.startsWith("reasoning."));
-}
-
-export function hasImageReasoningOnlyResponse(message: AssistantMessage): boolean {
-  if (extractEmbeddedAssistantText(message).trim() || !Array.isArray(message.content)) {
-    return false;
-  }
-  return message.content.slice(0, MAX_IMAGE_REASONING_FALLBACK_BLOCKS).some((block) => {
-    if (!block || typeof block !== "object") {
-      return false;
-    }
-    const record = block as { type?: unknown; thinking?: unknown; thinkingSignature?: unknown };
-    return (
-      record.type === "thinking" &&
-      typeof record.thinking === "string" &&
-      isImageReasoningFallbackSignature(record.thinkingSignature)
-    );
-  });
-}
 
 /** Decodes a base64 image data URL with optional decoded-size protection. */
 export function decodeDataUrl(
@@ -102,8 +41,6 @@ export function decodeDataUrl(
   }
   return { buffer, mimeType, kind: "image" };
 }
-
-export const coerceImageAssistantText = createMediaAssistantTextCoercer("Image");
 
 export function coerceImageModelConfig(cfg?: OpenClawConfig): ImageModelConfig {
   return coerceToolModelConfig(cfg?.agents?.defaults?.imageModel);

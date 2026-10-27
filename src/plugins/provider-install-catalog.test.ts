@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { createIndexFixture } from "./test-helpers/installed-plugin-index-fixture.js";
 
 type LoadPluginRegistrySnapshot = typeof import("./plugin-registry.js").loadPluginRegistrySnapshot;
 type ResolveManifestProviderAuthChoices =
@@ -40,17 +41,9 @@ function mockInstalled(
   plugins: InstalledPluginIndexRecord[] = [],
   installRecords: Record<string, InstalledPluginInstallRecordInfo> = {},
 ) {
-  loadPluginRegistrySnapshot.mockReturnValue({
-    version: 1 as const,
-    hostContractVersion: "test",
-    compatRegistryVersion: "test",
-    migrationVersion: 1 as const,
-    policyHash: "test",
-    generatedAtMs: 0,
-    installRecords,
-    plugins,
-    diagnostics: [],
-  });
+  loadPluginRegistrySnapshot.mockReturnValue(
+    createIndexFixture({ generatedAtMs: 0, installRecords, plugins }),
+  );
 }
 
 function installedPlugin(

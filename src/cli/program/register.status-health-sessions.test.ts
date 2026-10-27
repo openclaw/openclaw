@@ -18,23 +18,23 @@ const mocks = vi.hoisted(() => ({
   setVerbose: vi.fn(),
   runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
 }));
-// mock-isolation: Registration tests capture command arguments and lazy loading without reading or mutating session state.
+// mock-isolation: Capture dispatch and lazy loading without reading or mutating session state.
 vi.mock("../../commands/status.js", () => ({ statusCommand: mocks.status }));
-// mock-isolation: Registration tests capture command arguments and lazy loading without reading or mutating session state.
+// mock-isolation: Capture dispatch without reading live health state.
 vi.mock("../../commands/health.js", () => ({ healthCommand: mocks.health }));
-// mock-isolation: Registration tests capture command arguments and lazy loading without reading or mutating session state.
+// mock-isolation: Capture dispatch without reading session state.
 vi.mock("../../commands/sessions.js", () => ({ sessionsCommand: mocks.list }));
-// mock-isolation: Registration tests capture command arguments and lazy loading without reading or mutating session state.
+// mock-isolation: Capture lazy loading without mutating session state.
 vi.mock("../../commands/sessions-cleanup.js", () => {
   mocks.ownerLoaded();
   return { sessionsCleanupCommand: mocks.cleanup };
 });
-// mock-isolation: Registration tests capture command arguments and lazy loading without reading or mutating session state.
+// mock-isolation: Capture lazy loading without reading session state.
 vi.mock("../../commands/sessions-tail.js", () => {
   mocks.ownerLoaded();
   return { sessionsTailCommand: mocks.tail };
 });
-// mock-isolation: Registration tests capture command arguments and lazy loading without reading or mutating session state.
+// mock-isolation: Capture lazy loading without mutating session state.
 vi.mock("../../commands/sessions-compact.js", () => {
   mocks.ownerLoaded();
   return { sessionsCompactCommand: mocks.compact };
@@ -46,7 +46,7 @@ vi.mock("../../commands/sessions-lifecycle.js", async (importOriginal) => {
     sessionsLifecycleCommand: mocks.lifecycle,
   };
 });
-// mock-isolation: Registration tests capture command arguments and lazy loading without reading or mutating session state.
+// mock-isolation: Capture lazy loading without exporting session state.
 vi.mock("../../commands/export-trajectory.js", () => {
   mocks.ownerLoaded();
   return { exportTrajectoryCommand: mocks.exportTrajectory };
@@ -115,21 +115,9 @@ it.each([
   [
     "status --json --all --deep --usage --agent beta --debug --timeout 5000",
     mocks.status,
-    {
-      json: true,
-      all: true,
-      deep: true,
-      usage: true,
-      agent: "beta",
-      timeoutMs: 5000,
-      verbose: true,
-    },
+    { agent: "beta", timeoutMs: 5000, verbose: true },
   ],
-  [
-    "health --json --timeout 2500 --verbose",
-    mocks.health,
-    { json: true, timeoutMs: 2500, verbose: true },
-  ],
+  ["health --json --timeout 2500 --verbose", mocks.health, { timeoutMs: 2500, verbose: true }],
 ] as const)("dispatches %s with verbose and parsed timeout", async (args, owner, options) => {
   await run(args);
   expect(mocks.setVerbose).toHaveBeenCalledWith(true);

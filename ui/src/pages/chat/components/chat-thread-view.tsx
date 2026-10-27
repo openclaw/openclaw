@@ -40,12 +40,14 @@ import { ChatPositionRail } from "./chat-position-rail-solid.tsx";
 import {
   getTranscriptState,
   handleTranscriptContextMenu,
+  handleTranscriptSelectionMouseDown,
   handleTranscriptPointerUp,
   registerTranscriptElement,
   type ChatThreadProps,
 } from "./chat-thread-interactions.ts";
 import type { ChatTranscript } from "./chat-transcript-controller.ts";
 import { projectChatTranscript } from "./chat-transcript-projection.ts";
+import type { TranscriptHeader } from "./chat-transcript-session.ts";
 import { resolveAssistantDisplayAvatar } from "./chat-welcome.ts";
 import { ChatWelcome } from "./chat-welcome.tsx";
 
@@ -67,9 +69,11 @@ export function ChatThread(input: {
   props: ChatThreadProps;
   transcript: ChatTranscript;
   bindViewport?: (element: HTMLDivElement) => () => void;
+  historySupplement?: TranscriptHeader;
 }) {
   const mobile = useContext(ChatConversationMobile);
   let root: HTMLDivElement | undefined;
+  let stopSelectionGesture: (() => void) | undefined;
   const historyIntent = (event: Event) => input.props.onHistoryIntent?.(event);
   const paneId = createMemo(() => input.props.paneId);
   onSettled(() => root && registerTranscriptElement(paneId(), root));
@@ -137,13 +141,19 @@ export function ChatThread(input: {
     Boolean(input.props.gatewayClient?.connected),
   ]);
   const markdownRef = createMarkdownBlocksRef(() => input.props.transcriptVisible ?? true);
-  const historyHeader = () =>
-    input.props.historyPagination
-      ? {
-          props: input.props.historyPagination,
-          height: CHAT_HISTORY_BOUNDARY_HEIGHT_PX,
-        }
-      : null;
+  // The supplement takes the header only once the transcript has no earlier page,
+  // so its controls never stack under the history boundary.
+  const headerContent = (
+    <Show when={input.props.historyPagination} fallback={input.historySupplement?.content}>
+      {(pagination) => <ChatHistoryBoundary {...pagination()} />}
+    </Show>
+  );
+  const historyHeader = (): TranscriptHeader | null => {
+    const height = input.props.historyPagination
+      ? CHAT_HISTORY_BOUNDARY_HEIGHT_PX
+      : input.historySupplement?.height;
+    return height === undefined ? null : { content: headerContent, height };
+  };
   const historySentinel = (
     <div class="chat-history-sentinel" ref={[elementRef(input.props.onHistorySentinelRef)]} />
   );
@@ -151,19 +161,19 @@ export function ChatThread(input: {
   const contents = createMemo(() => {
     // Native range changes redraw this island without preparing the whole pane.
     geometry().read();
-    if (routeLoading()) {
-      return mobile() ? <ChatConversationLoading route /> : <LoadingState />;
+    if (routeLoading() && mobile()) {
+      return <ChatConversationLoading route />;
     }
     if (showLoadingSkeleton() || isEmpty()) {
       return (
         <div class="chat-thread-inner">
           {sentinel()}
-          {isEmpty() && !showLoadingSkeleton() && input.props.historyPagination ? (
-            <ChatHistoryBoundary {...input.props.historyPagination} />
-          ) : undefined}
+          {isEmpty() && !showLoadingSkeleton() ? historyHeader()?.content : undefined}
           {showLoadingSkeleton() ? (
             mobile() ? (
               <ChatConversationLoading route={false} />
+            ) : routeLoading() ? (
+              <LoadingState messagesOnly />
             ) : (
               <PanelLoadingSkeleton variant="chat" label={t("chat.thread.loading")} />
             )
@@ -202,6 +212,7 @@ export function ChatThread(input: {
               listen(element, type, historyIntent, { passive: true }),
             );
             return () => {
+              stopSelectionGesture?.();
               stopHistory.forEach((stop) => stop());
               releaseViewport?.();
             };
@@ -214,11 +225,12 @@ export function ChatThread(input: {
           "chat-thread",
           {
             "chat-thread--direct": current().projection.isDirectThread,
-            "chat-thread--route-loading": routeLoading(),
+            "chat-thread--route-loading": mobile() && routeLoading(),
             "chat-thread--comment-pins": commentPins(),
           },
         ]}
         role="log"
+        aria-label={t("chat.sidePanel.conversation")}
         aria-live="off"
         aria-relevant="additions"
         tabindex={0}
@@ -264,6 +276,10 @@ export function ChatThread(input: {
             event.preventDefault();
             input.props.onOpenSessionLink?.(sessionTarget);
           }
+        }}
+        onMouseDown={(event) => {
+          stopSelectionGesture?.();
+          stopSelectionGesture = handleTranscriptSelectionMouseDown(event);
         }}
         onContextMenu={(event) =>
           handleTranscriptContextMenu(
