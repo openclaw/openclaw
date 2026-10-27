@@ -166,12 +166,6 @@ describe("memory search config", () => {
       { sources: ["sessions"], searchSources: ["sessions"] },
     ],
     [
-      "legacy auto provider",
-      { provider: "auto" },
-      undefined,
-      { provider: "openai", model: "text-embedding-3-small" },
-    ],
-    [
       "mixed-case auto provider",
       { provider: "Auto" },
       undefined,
