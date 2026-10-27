@@ -21,8 +21,7 @@ const SECRET_SUPPORT_FIELD_RE =
 const PAYLOAD_SUPPORT_FIELD_RE =
   /(?:body|chat|content|detail|error|header|instruction|message|payload|prompt|result|text|tool|transcript)/iu;
 const IDENTIFIER_SUPPORT_FIELD_RE =
-  /(?:account[-_]?id|chat[-_]?id|conversation[-_]?id|email|message[-_]?id|phone|thread[-_]?id|user[-_]?id|username)/iu;
-const HOSTNAME_SUPPORT_FIELD_RE = /^(?:(?:bind[-_]?)?host(?:[-_]?name)?|nick(?:[-_]?name)?)$/iu;
+  /(?:account[-_]?id|chat[-_]?id|conversation[-_]?id|email|message[-_]?id|phone|thread[-_]?id|user[-_]?id|username)|^(?:(?:bind[-_]?)?host(?:[-_]?name)?|nick(?:[-_]?name)?)$/iu;
 const PRIVATE_MAP_SUPPORT_FIELD_RE =
   /^(?:accounts|chats|conversations|dms|messages|threads|users)$/iu;
 const CONFIG_PRIVATE_FIELD_RE =
@@ -85,8 +84,7 @@ function isPrivateSupportField(key: string): boolean {
   return (
     SECRET_SUPPORT_FIELD_RE.test(key) ||
     PAYLOAD_SUPPORT_FIELD_RE.test(key) ||
-    IDENTIFIER_SUPPORT_FIELD_RE.test(key) ||
-    HOSTNAME_SUPPORT_FIELD_RE.test(key)
+    IDENTIFIER_SUPPORT_FIELD_RE.test(key)
   );
 }
 
