@@ -422,6 +422,7 @@ export const databaseWorkerCoreTestFiles = [
   "src/channels/message/ingress-queue.test.ts",
   "src/auto-reply/reply/dispatch-from-config.command-refusal.test.ts",
   "src/auto-reply/reply/dispatch-from-config.ingress-retry.test.ts",
+  "src/auto-reply/reply/dispatch-from-config.reply-dispatch-scope.test.ts",
   "src/auto-reply/reply/reply-turn-admission.database-claim.test.ts",
   "src/auto-reply/reply/reply-turn-admission.recovery.test.ts",
   "src/auto-reply/reply/reply-turn-admission.rotation.test.ts",

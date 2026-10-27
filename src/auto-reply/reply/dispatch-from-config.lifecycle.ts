@@ -34,11 +34,11 @@ import {
   DispatchReplyOperationAbortedError,
   isDispatchReplyOperationAbortedError,
 } from "./dispatch-from-config.abort.js";
+import { deferLifecycleBlockedDispatchClaim } from "./dispatch-from-config.claim-retry.js";
 import {
   resolveDispatchResetAdmission,
   shouldLetSlackRoutedThreadBypassBusyReplyOperation,
 } from "./dispatch-from-config.context.js";
-import { deferLifecycleBlockedDispatchClaim } from "./dispatch-from-config.dispatch-admission.js";
 import { createReplyTurnLedger } from "./dispatch-from-config.turn-ledger.js";
 import type {
   DispatchFromConfigParams,
