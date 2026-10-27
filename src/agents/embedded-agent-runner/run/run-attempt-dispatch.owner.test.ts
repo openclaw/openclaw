@@ -2,7 +2,11 @@ import { randomUUID } from "node:crypto";
 import { existsSync } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import {
+  createPluginRegistryFixture,
+  registerVirtualTestPlugin,
+} from "openclaw/plugin-sdk/plugin-test-contracts";
+import { afterEach, assert, beforeEach, expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement, createDeferred } from "../../../../test/helpers/promise.js";
 import { setRuntimeConfigSnapshot } from "../../../config/runtime-snapshot.js";
 import {
@@ -10,6 +14,7 @@ import {
   upsertSessionEntryCore,
 } from "../../../config/sessions/session-accessor.js";
 import { CODEX_APP_SERVER_CONTEXT_ENGINE_HOST } from "../../../context-engine/host-compat.js";
+import { resolvePreparedGatewayOperatorAccessAuthority } from "../../../gateway/operator-access-policy.js";
 import { readLocalWorkspaceProjection } from "../../../gateway/worker-environments/local-workspace-store.test-support.js";
 import { getAgentEventLifecycleGeneration } from "../../../infra/agent-events.js";
 import { createEmptyPluginRegistry } from "../../../plugins/registry-empty.js";
@@ -42,9 +47,13 @@ import { insertRegistryWorktree } from "../../worktrees/registry.js";
 import { initializeManagedWorktreeTestRepository } from "../../worktrees/service.test-support.js";
 import type { ManagedWorktreeRecord } from "../../worktrees/types.js";
 import { createEmbeddedRunLaneController } from "./lane-controller.js";
-import { dispatchCases } from "./run-attempt-dispatch.cases.test-support.js";
+import {
+  assertDurableTranscriptRevocation,
+  dispatchCases,
+} from "./run-attempt-dispatch.cases.test-support.js";
 import { prepareAndDispatchEmbeddedRunAttempt } from "./run-attempt-dispatch.js";
 import { createSourceTurnDispatchAssertions } from "./run-attempt-dispatch.source-turn.test-support.js";
+import { claimAgentSessionWriter } from "./session-bootstrap.js";
 
 vi.mock("../../git-coauthor-prompt.js", () => ({
   resolveSessionGitCoauthorPrompt: vi.fn(),
@@ -307,9 +316,14 @@ it.each(dispatchCases)(
       const runId = `dispatch-${agentId}`;
       const harnessId = cancelTrajectory ? "codex" : "owner-fixture";
       const cancellation = new AbortController();
+      const policyGrant = new AbortController();
       const cancellationError = new Error("session aborted");
       const storePath = state.path("agents", agentId, "sessions", "sessions.json");
-      if (cancelTrajectory) {
+      if (
+        cancelTrajectory ||
+        transcriptTargetInvalidation === "target" ||
+        transcriptTargetInvalidation === "policy"
+      ) {
         await replaceSessionEntry(
           { sessionKey: "global", storePath },
           { sessionId: `${agentId}-global`, updatedAt: 1 },
@@ -317,9 +331,38 @@ it.each(dispatchCases)(
       }
       let onValidateSource: (() => void) | undefined;
       const assertSourceCurrent = vi.fn(() => onValidateSource?.());
+      setActivePluginRegistry(createEmptyPluginRegistry());
+      let policyAccess: ReturnType<typeof resolvePreparedGatewayOperatorAccessAuthority> = null;
+      if (transcriptTargetInvalidation === "policy") {
+        const { registry } = createPluginRegistryFixture(config);
+        registerVirtualTestPlugin({
+          registry,
+          config,
+          id: "transcript-access",
+          name: "Transcript access",
+          register(api) {
+            api.registerGatewayAccessPolicy({
+              authorize: () => ({
+                grantId: randomUUID(),
+                signal: policyGrant.signal,
+                assertCurrent: () => policyGrant.signal.throwIfAborted(),
+              }),
+            });
+          },
+        });
+        setActivePluginRegistry(registry.registry);
+        policyAccess = resolvePreparedGatewayOperatorAccessAuthority(
+          { profileId: "transcript-operator", emails: [], role: null, isCurrent: () => true },
+          config,
+          { requireLivePolicySet: true },
+        );
+        assert(policyAccess?.gatewayAccessGrant);
+      }
       const admission = prepareAgentRunAdmission({
         cfg: config,
-        assertSourceCurrent: transcriptTargetInvalidation ? assertSourceCurrent : undefined,
+        assertSourceCurrent:
+          policyAccess?.assertCurrent ??
+          (transcriptTargetInvalidation ? assertSourceCurrent : undefined),
         facts: {
           runId,
           agentId,
@@ -328,7 +371,6 @@ it.each(dispatchCases)(
         operationalRunInstance: createOperationalRunInstanceRef(runId),
       });
       const admittedRunContext = await admission.admit("plugin-harness", "owner-test");
-      setActivePluginRegistry(createEmptyPluginRegistry());
       let retainedRetryPreparer:
         | NonNullable<
             AgentHarnessAttemptParamsV2["hostCapabilities"]
@@ -336,12 +378,35 @@ it.each(dispatchCases)(
         | undefined;
       const sourceTurn = createSourceTurnDispatchAssertions();
       let assertPreparedTarget: (() => void) | undefined;
+      let capturedAttempt:
+        | Parameters<typeof harnessHost.createAgentHarnessHostCapabilities>[0]["attempt"]
+        | undefined;
       let activeControls: ReturnType<typeof laneController.createAttemptControls> | undefined;
       const targetChecked = new Error("prepared transcript target checked");
       const runAttempt = vi.fn<AgentHarness["runAttempt"]>(async (params) => {
         expect(params.cyberAccessProgram).toBe(cyberAccessProgram);
         sourceTurn.expectBinding(params);
         if (transcriptTargetInvalidation) {
+          if (
+            transcriptTargetInvalidation === "target" ||
+            transcriptTargetInvalidation === "policy"
+          ) {
+            assert(capturedAttempt);
+            await assertDurableTranscriptRevocation(capturedAttempt, workspaceDir, () => {
+              if (transcriptTargetInvalidation === "policy") {
+                policyGrant.abort(new Error("plugin access revoked"));
+              } else {
+                onValidateSource = () => {
+                  onValidateSource = undefined;
+                  input.sessionPromptState.sessionTarget = {
+                    ...input.sessionPromptState.sessionTarget!,
+                    sessionId: "rebound-target",
+                  };
+                };
+              }
+            });
+            throw targetChecked;
+          }
           expect(assertPreparedTarget).toBeTypeOf("function");
           assertSourceCurrent.mockClear();
           assertPreparedTarget!();
@@ -352,11 +417,6 @@ it.each(dispatchCases)(
               activeControls!.close();
             } else if (transcriptTargetInvalidation === "replaced") {
               laneController.createAttemptControls({ admittedRunContext });
-            } else {
-              input.sessionPromptState.sessionTarget = {
-                ...input.sessionPromptState.sessionTarget!,
-                sessionId: "rebound-target",
-              };
             }
           };
           expect(assertPreparedTarget).toThrow("Session target preparation outlived its attempt");
@@ -469,6 +529,21 @@ it.each(dispatchCases)(
         runtimePluginToolGrant,
       };
       sourceTurn.stamp(params);
+      const writerClaim =
+        transcriptTargetInvalidation === "target" || transcriptTargetInvalidation === "policy"
+          ? await claimAgentSessionWriter({
+              ...params,
+              sessionTarget: {
+                agentId,
+                sessionId: params.sessionId,
+                sessionKey: "global",
+                storePath,
+              },
+            })
+          : undefined;
+      if (writerClaim) {
+        expect(writerClaim.expectedWriterRunId).toBe(runId);
+      }
       let lifecycleGeneration = getAgentEventLifecycleGeneration();
       const laneController = createEmbeddedRunLaneController({
         getLifecycleGeneration: () => lifecycleGeneration,
@@ -559,6 +634,12 @@ it.each(dispatchCases)(
           }),
         },
         sessionPromptState: {
+          sessionWriterFence: writerClaim
+            ? {
+                expectedLifecycleRevision: writerClaim.expectedLifecycleRevision,
+                expectedWriterRunId: writerClaim.expectedWriterRunId,
+              }
+            : undefined,
           sessionId: `${agentId}-global`,
           sessionFile: "global",
           sessionTarget: {
@@ -672,6 +753,7 @@ it.each(dispatchCases)(
         ? vi
             .spyOn(harnessHost, "createAgentHarnessHostCapabilities")
             .mockImplementation((...args) => {
+              capturedAttempt = args[0].attempt;
               assertPreparedTarget = args[0].attempt.preparedSessionTarget?.assertCurrent;
               return createHost(...args);
             })
@@ -890,6 +972,7 @@ it.each(dispatchCases)(
         remoteImageRead?.mockRestore();
         restorePlacement();
         admission.close();
+        policyGrant.abort();
         restoreSandbox();
       }
     });
