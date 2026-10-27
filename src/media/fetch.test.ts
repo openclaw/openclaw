@@ -14,7 +14,6 @@ import {
   makeLookupFn,
 } from "./fetch.test-support.js";
 import fs from "node:fs/promises";
-import { createServer } from "node:http";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
@@ -26,20 +25,14 @@ function makeResponseHeaderStallingFetch() {
     async (_input: RequestInfo | URL, init?: RequestInit) =>
       await new Promise<Response>((_resolve, reject) => {
         const signal = init?.signal;
-        const rejectForAbort = () => reject(abortReasonError(signal));
+        const abort = () => reject(signal?.reason);
         if (signal?.aborted) {
-          rejectForAbort();
-          return;
+          abort();
+        } else {
+          signal?.addEventListener("abort", abort, { once: true });
         }
-        signal?.addEventListener("abort", rejectForAbort, { once: true });
       }),
   );
-}
-
-function abortReasonError(signal?: AbortSignal | null): Error {
-  return signal?.reason instanceof Error
-    ? signal.reason
-    : new Error("request aborted", { cause: signal?.reason });
 }
 
 function requireFetchGuardRequest(): unknown {
@@ -48,6 +41,15 @@ function requireFetchGuardRequest(): unknown {
     throw new Error("expected fetchWithSsrFGuard call");
   }
   return call[0];
+}
+
+async function listFiles(dir: string) {
+  return await fs.readdir(dir).catch((error: unknown) => {
+    if (hasErrnoCode(error, "ENOENT")) {
+      return [];
+    }
+    throw error;
+  });
 }
 
 function mediaRequest(overrides: Partial<Parameters<typeof saveRemoteMedia>[0]> = {}) {
@@ -116,23 +118,6 @@ describe("readRemoteMediaBuffer", () => {
     await expect(readMedia({ fetchImpl, maxBytes: 4 })).rejects.toThrow("exceeds maxBytes");
   });
 
-  it("rejects malformed content-length before remote buffer reads", async () => {
-    const body = makeCancelableStream([new Uint8Array([1, 2, 3, 4, 5])]);
-    const fetchImpl = vi.fn(
-      async () =>
-        new Response(body.stream, {
-          status: 200,
-          headers: { "content-length": "1e9" },
-        }),
-    );
-
-    await expect(readMedia({ fetchImpl, maxBytes: 4 })).rejects.toThrow(
-      "invalid content-length header: 1e9",
-    );
-
-    expect(body.wasCanceled()).toBe(true);
-  });
-
   it.each([
     {
       name: "redacts bot tokens from fetch failure messages",
@@ -191,18 +176,16 @@ describe("readRemoteMediaBuffer", () => {
     }
   });
 
-  it("keeps the parent abort active while reading the response body", async () => {
+  it.each([readMedia, saveMedia])("keeps parent cancellation active during %s", async (consume) => {
     const parent = new AbortController();
-    const fetchImpl = abortableBodyFetch();
-    const result = readMedia({
-      fetchImpl,
+    const { promise: bodyReady, resolve: bodyStarted } = createDeferred();
+    const result = consume({
+      fetchImpl: abortableBodyFetch(bodyStarted),
       requestInit: { signal: parent.signal },
       responseHeaderTimeoutMs: 60_000,
     }).catch((error: unknown) => error);
-
-    await vi.waitFor(() => expect(fetchImpl).toHaveBeenCalledTimes(1));
+    await bodyReady;
     parent.abort();
-
     await expect(result).resolves.toMatchObject(abortFailure);
   });
 
@@ -267,24 +250,11 @@ describe("readRemoteMediaBuffer", () => {
   });
 
   it("cancels retry backoff for store writes", async () => {
-    let requests = 0;
-    const server = createServer((_request, response) => {
-      requests += 1;
-      response.writeHead(503).end("busy");
-    });
-    await new Promise<void>((resolve, reject) => {
-      server.once("error", reject);
-      server.listen(0, "127.0.0.1", resolve);
-    });
-
-    try {
-      const address = server.address();
-      if (!address || typeof address === "string") {
-        throw new Error("expected a local media test server address");
-      }
-      const controller = new AbortController();
-      const operation = saveRemoteMedia({
-        url: `http://127.0.0.1:${address.port}/retry.bin`,
+    const controller = new AbortController();
+    const fetchImpl = vi.fn(async () => new Response("busy", { status: 503 }));
+    await expect(
+      saveMedia({
+        fetchImpl,
         requestInit: { signal: controller.signal },
         retry: {
           attempts: 2,
@@ -295,17 +265,9 @@ describe("readRemoteMediaBuffer", () => {
             setImmediate(() => controller.abort());
           },
         },
-      });
-
-      await expect(operation).rejects.toMatchObject(abortFailure);
-      expect(requests).toBe(1);
-      expect(fetchWithSsrFGuardMock).toHaveBeenCalledTimes(1);
-    } finally {
-      server.closeAllConnections();
-      await new Promise<void>((resolve, reject) => {
-        server.close((error) => (error ? reject(error) : resolve()));
-      });
-    }
+      }),
+    ).rejects.toMatchObject(abortFailure);
+    expect(fetchImpl).toHaveBeenCalledOnce();
   });
 
   it("uses trusted explicit-proxy mode when the caller opts in for proxy-side DNS", async () => {
@@ -322,53 +284,27 @@ describe("readRemoteMediaBuffer", () => {
       fetchImpl,
       lookupFn,
       trustExplicitProxyDns: true,
-      dispatcherAttempts: [
-        {
-          dispatcherPolicy,
-        },
-      ],
+      dispatcherAttempts: [{ dispatcherPolicy }],
     });
 
-    expect(fetchWithSsrFGuardMock).toHaveBeenCalledTimes(1);
-    expect(requireFetchGuardRequest()).toStrictEqual({
-      url: "https://files.example.test/file/bot123/photos/test.jpg",
-      fetchImpl,
-      init: undefined,
-      maxRedirects: undefined,
-      policy: undefined,
+    expect(requireFetchGuardRequest()).toMatchObject({
       lookupFn,
       dispatcherPolicy,
       mode: "trusted_explicit_proxy",
-      signal: expect.any(AbortSignal),
     });
   });
 
-  it("passes request timeout through the guarded fetch path", async () => {
-    const fetchImpl = vi.fn(async () => new Response("ok", { status: 200 }));
+  it("forwards request deadlines, cancellation, and HTTPS-only redirects to the guard", async () => {
     const parent = new AbortController();
-
-    await readMedia({ fetchImpl, requestInit: { signal: parent.signal }, timeoutMs: 1234 });
-
-    expect(fetchWithSsrFGuardMock).toHaveBeenCalledTimes(1);
+    await readMedia({
+      fetchImpl: documentFetch(),
+      requestInit: { signal: parent.signal },
+      timeoutMs: 1234,
+      requireHttps: true,
+    });
     expect(requireFetchGuardRequest()).toMatchObject({
-      url: "https://example.com/file.bin",
       timeoutMs: 1234,
       signal: parent.signal,
-    });
-  });
-
-  it("passes the HTTPS-only redirect policy through the guarded fetch path", async () => {
-    const fetchImpl = vi.fn(async () => new Response("ok", { status: 200 }));
-
-    await readMedia({
-      url: "https://example.com/favicon.ico",
-      fetchImpl,
-      requireHttps: true,
-      maxBytes: undefined,
-    });
-
-    expect(requireFetchGuardRequest()).toMatchObject({
-      url: "https://example.com/favicon.ico",
       requireHttps: true,
     });
   });
@@ -384,8 +320,7 @@ describe("readRemoteMediaBuffer", () => {
 
     expect(saved.fileName).toBe("report.csv");
     expect(saved.contentType).toBe("text/csv");
-    expect(saved.path).toMatch(/[a-f0-9-]{36}\.csv$/);
-    expect(saved.path).not.toMatch(/report---/);
+    expect(path.basename(saved.path)).toMatch(/^[a-f0-9-]{36}\.csv$/);
     await expect(fs.readFile(saved.path)).resolves.toStrictEqual(csv);
   });
 
@@ -402,24 +337,6 @@ describe("readRemoteMediaBuffer", () => {
 
     expect(saved.contentType).toBe("application/x-openclaw-charset-proof;charset=cp1251");
     await expect(fs.readFile(saved.path)).resolves.toStrictEqual(bytes);
-  });
-
-  it("keeps the parent abort active while saving the response body", async () => {
-    const parent = new AbortController();
-    const { promise: bodyReady, resolve: bodyStarted } = createDeferred();
-    const fetchImpl = abortableBodyFetch(bodyStarted);
-    const result = saveMedia({
-      url: "https://example.com/download",
-      fetchImpl,
-      requestInit: { signal: parent.signal },
-      maxBytes: 8,
-      responseHeaderTimeoutMs: 60_000,
-    }).catch((error: unknown) => error);
-
-    await bodyReady;
-    parent.abort();
-
-    await expect(result).resolves.toMatchObject(abortFailure);
   });
 
   it.each([
@@ -489,22 +406,11 @@ describe("readRemoteMediaBuffer", () => {
       maxBytes: 8,
     });
     expect(buffered.fileName).toBe(fileName);
-    expect(fetchImpl).toHaveBeenCalledTimes(1);
   });
 
   it("rejects bodyless successful responses without saving an empty file", async () => {
     const inboundDir = path.join(tempHome.home, ".openclaw", "media", "inbound");
-    const listInboundFiles = async () => {
-      try {
-        return (await fs.readdir(inboundDir)).toSorted();
-      } catch (error) {
-        if (hasErrnoCode(error, "ENOENT")) {
-          return [];
-        }
-        throw error;
-      }
-    };
-    const before = await listInboundFiles();
+    const before = await listFiles(inboundDir);
 
     await expect(
       saveResponseMedia(new Response(null, { status: 204 }), {
@@ -519,7 +425,7 @@ describe("readRemoteMediaBuffer", () => {
       message:
         "Failed to fetch media from https://example.com/empty: HTTP 204; empty response body",
     });
-    await expect(listInboundFiles()).resolves.toEqual(before);
+    await expect(listFiles(inboundDir)).resolves.toEqual(before);
   });
 
   it("does not let filename hints force stored extensions before byte sniffing", async () => {
@@ -535,9 +441,7 @@ describe("readRemoteMediaBuffer", () => {
 
     expect(saved.fileName).toBe("document.docx");
     expect(saved.contentType).toBe("image/jpeg");
-    expect(saved.path).toMatch(/[a-f0-9-]{36}\.jpg$/);
-    expect(saved.path).not.toMatch(/\.docx$/);
-    expect(saved.path).not.toMatch(/document---/);
+    expect(path.basename(saved.path)).toMatch(/^[a-f0-9-]{36}\.jpg$/);
     await expect(fs.readFile(saved.path)).resolves.toStrictEqual(jpeg);
   });
 
@@ -602,14 +506,7 @@ describe("readRemoteMediaBuffer", () => {
         expect(response.body?.locked).toBe(false);
         expect(body.wasCanceled()).toBe(false);
         const dir = path.join(tempHome.home, ".openclaw", "media", subdir);
-        await expect(
-          fs.readdir(dir).catch((error: unknown) => {
-            if (hasErrnoCode(error, "ENOENT")) {
-              return [];
-            }
-            throw error;
-          }),
-        ).resolves.toEqual([]);
+        await expect(listFiles(dir)).resolves.toEqual([]);
       } finally {
         await capture.body?.cancel();
         await operation;

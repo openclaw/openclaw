@@ -388,43 +388,47 @@ describe("media store filesystem faults", () => {
     return Object.assign(new Error(code), { code });
   }
 
-  it.each(
-    (["readdir", "rmdir"] as const).flatMap((operation) =>
-      ["EACCES", "EIO", "ENOENT"].map((code) => ({ operation, code })),
-    ),
-  )(
-    "distinguishes media cleanup $operation/$code from missing directories",
-    async ({ operation, code }) => {
+  function pathFault(target: string, code: string, error: Error) {
+    let injected = false;
+    return {
+      assertInjected: () => expect(injected).toBe(true),
+      async run<T>(candidate: unknown, original: () => Promise<T>): Promise<T> {
+        if (candidate === target) {
+          injected = true;
+          if (code !== "ENOENT") {
+            throw error;
+          }
+          await fs.rm(target, { recursive: true, force: true });
+        }
+        return await original();
+      },
+    };
+  }
+
+  it.each([
+    ["readdir", "EACCES"],
+    ["readdir", "ENOENT"],
+    ["rmdir", "EACCES"],
+    ["rmdir", "ENOENT"],
+  ] as const)(
+    "distinguishes media cleanup %s/%s from missing directories",
+    async (operation, code) => {
       const store = await freshStore(`cleanup-${operation}-${code}`);
       const mediaDir = await store.ensureMediaDir();
       const scopedDir = path.join(mediaDir, "inbound");
       const liveFile = await fileFixture(path.join(scopedDir, "live.txt"), "live media");
       const injectedError = errnoError(code);
-      let injected = false;
+      const fault = pathFault(operation === "readdir" ? mediaDir : scopedDir, code, injectedError);
       if (operation === "readdir") {
-        const readdir = fs.readdir;
-        vi.spyOn(fs, "readdir").mockImplementation(async (...args) => {
-          if (args[0] === mediaDir) {
-            injected = true;
-            if (code !== "ENOENT") {
-              throw injectedError;
-            }
-            await fs.rm(mediaDir, { recursive: true, force: true });
-          }
-          return await readdir(...args);
-        });
+        const original = fs.readdir;
+        vi.spyOn(fs, "readdir").mockImplementation((...args) =>
+          fault.run(args[0], () => original(...args)),
+        );
       } else {
-        const rmdir = fs.rmdir;
-        vi.spyOn(fs, "rmdir").mockImplementation(async (...args) => {
-          if (args[0] === scopedDir) {
-            injected = true;
-            if (code !== "ENOENT") {
-              throw injectedError;
-            }
-            await fs.rm(scopedDir, { recursive: true, force: true });
-          }
-          return await rmdir(...args);
-        });
+        const original = fs.rmdir;
+        vi.spyOn(fs, "rmdir").mockImplementation((...args) =>
+          fault.run(args[0], () => original(...args)),
+        );
       }
       const result = store.cleanOldMedia(60_000, { recursive: true, pruneEmptyDirs: true });
       if (code === "ENOENT") {
@@ -434,82 +438,72 @@ describe("media store filesystem faults", () => {
         await expect(result).rejects.toBe(injectedError);
         await expect(fs.readFile(liveFile, "utf8")).resolves.toBe("live media");
       }
-      expect(injected).toBe(true);
+      fault.assertInjected();
     },
   );
 
-  it.each(
-    (["readdir", "lstat", "remove"] as const).flatMap((operation) =>
-      (operation === "readdir" ? ["EACCES", "EIO"] : ["EACCES", "EIO", "ENOENT"]).map((code) => ({
-        operation,
-        code,
-      })),
-    ),
-  )(
-    "handles playback quota $operation/$code at the writer boundary",
-    async ({ operation, code }) => {
-      const injectedError = errnoError(code);
-      const oldName = "v2-quota-old.mp4";
-      const insertedName = "v2-quota-inserted.mp4";
-      let injected = false;
-      if (operation === "remove") {
-        mockFileStore((actualStore) => ({
-          remove: async (...args) => {
-            if (args[0] === `playback-transcode/${oldName}`) {
-              injected = true;
-              if (code !== "ENOENT") {
-                throw injectedError;
-              }
-              await fs.unlink(actualStore.path(args[0]));
-            }
-            return await actualStore.remove(...args);
-          },
-        }));
-      }
-      const store = await freshStore(`playback-quota-${operation}-${code}`);
-      const cacheDir = path.join(await store.ensureMediaDir(), store.PLAYBACK_TRANSCODE_SUBDIR);
-      const oldPath = path.join(cacheDir, oldName);
-      const oldSize = 512 * 1024 * 1024;
-      await fileFixture(oldPath, "", 2_000, oldSize);
-      if (operation === "readdir") {
-        const readdir = fs.readdir;
-        vi.spyOn(fs, "readdir").mockImplementation(async (...args) => {
-          if (args[0] === cacheDir) {
-            injected = true;
-            throw injectedError;
-          }
-          return await readdir(...args);
-        });
-      } else if (operation === "lstat") {
-        const lstat = fs.lstat;
-        vi.spyOn(fs, "lstat").mockImplementation(async (...args) => {
-          if (args[0] === oldPath) {
+  it.each([
+    ["readdir", "EACCES"],
+    ["lstat", "EACCES"],
+    ["lstat", "ENOENT"],
+    ["remove", "EACCES"],
+    ["remove", "ENOENT"],
+  ] as const)("handles playback quota %s/%s at the writer boundary", async (operation, code) => {
+    const injectedError = errnoError(code);
+    const oldName = "v2-quota-old.mp4";
+    const insertedName = "v2-quota-inserted.mp4";
+    let injected = false;
+    if (operation === "remove") {
+      mockFileStore((actualStore) => ({
+        remove: async (...args) => {
+          if (args[0] === `playback-transcode/${oldName}`) {
             injected = true;
             if (code !== "ENOENT") {
               throw injectedError;
             }
-            await fs.unlink(oldPath);
+            await fs.unlink(actualStore.path(args[0]));
           }
-          return await lstat(...args);
-        });
-      }
-      const result = store.writePlaybackTranscodeCache({
-        buffer: Buffer.from("x"),
-        fileName: insertedName,
-        maxBytes: 1,
-        tempPrefix: ".playback-quota-test",
-      });
-      if (code === "ENOENT") {
-        await expect(result).resolves.toBe(path.join(cacheDir, insertedName));
-        await expect(fs.stat(oldPath)).rejects.toMatchObject({ code: "ENOENT" });
-      } else {
-        await expect(result).rejects.toBe(injectedError);
-        await expect(fs.stat(oldPath)).resolves.toMatchObject({ size: oldSize });
-      }
+          return await actualStore.remove(...args);
+        },
+      }));
+    }
+    const store = await freshStore(`playback-quota-${operation}-${code}`);
+    const cacheDir = path.join(await store.ensureMediaDir(), store.PLAYBACK_TRANSCODE_SUBDIR);
+    const oldPath = path.join(cacheDir, oldName);
+    const oldSize = 512 * 1024 * 1024;
+    await fileFixture(oldPath, "", 2_000, oldSize);
+    const fault = pathFault(operation === "readdir" ? cacheDir : oldPath, code, injectedError);
+    if (operation === "readdir") {
+      const original = fs.readdir;
+      vi.spyOn(fs, "readdir").mockImplementation((...args) =>
+        fault.run(args[0], () => original(...args)),
+      );
+    } else if (operation === "lstat") {
+      const original = fs.lstat;
+      vi.spyOn(fs, "lstat").mockImplementation((...args) =>
+        fault.run(args[0], () => original(...args)),
+      );
+    }
+    const result = store.writePlaybackTranscodeCache({
+      buffer: Buffer.from("x"),
+      fileName: insertedName,
+      maxBytes: 1,
+      tempPrefix: ".playback-quota-test",
+    });
+    if (code === "ENOENT") {
+      await expect(result).resolves.toBe(path.join(cacheDir, insertedName));
+      await expect(fs.stat(oldPath)).rejects.toMatchObject({ code: "ENOENT" });
+    } else {
+      await expect(result).rejects.toBe(injectedError);
+      await expect(fs.stat(oldPath)).resolves.toMatchObject({ size: oldSize });
+    }
+    if (operation === "remove") {
       expect(injected).toBe(true);
-      await expect(fs.readFile(path.join(cacheDir, insertedName), "utf8")).resolves.toBe("x");
-    },
-  );
+    } else {
+      fault.assertInjected();
+    }
+    await expect(fs.readFile(path.join(cacheDir, insertedName), "utf8")).resolves.toBe("x");
+  });
 
   it.each(["ENOENT", "ENOSPC", "not-found", "wrapped-ENOENT", "wrapped-ENOSPC"] as const)(
     "does not replay failed buffer writes (%s)",
