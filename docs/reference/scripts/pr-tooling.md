@@ -45,15 +45,17 @@ The cache key covers the install inputs, platform, architecture, and Node ABI.
 For the audited source-install path, unrelated source revisions reuse the same
 installation. `scripts/pr-lib/dependency-inputs.json` records the lifecycle read
 set: all package manifests, lockfile, workspace/package-manager configuration,
-patches, lifecycle code and its imports, both SQL schemas, and the native
-protocol generator's declared inputs. Git-hook setup reads the presence of its
+patches, lifecycle code (including `pnpm:devPreinstall`) and its imports, both
+SQL schemas, and the native protocol generator's declared inputs and TypeScript
+configuration. Git-hook setup reads the presence of its
 directory, not hook contents. Generated outputs start absent in the archive.
 The full archive still undergoes the same Git blob, mode, symlink, and inventory
 verification before installation; sharing changes only dependency identity.
 
 The audit signature covers executable inputs and dependency/build policy.
 Changes to those inputs, a different runtime, a tracked `dist/` tree, or an older
-wrapper without an audit retain full-tree keying. This prevents a changed hook
+wrapper without an audit retain full-tree keying. Symlinked SQL inputs also use
+the full tree, so their targets cannot escape the key. This prevents a changed hook
 from reading a new source path while reusing an installation based on the old
 read set. SQL contents can change without a new code audit and still invalidate
 the key. To renew an audit, trace the root/workspace hooks and allowed dependency

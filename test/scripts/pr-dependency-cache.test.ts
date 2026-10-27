@@ -5,6 +5,7 @@ import {
   mkdirSync,
   readdirSync,
   readFileSync,
+  rmSync,
   symlinkSync,
   utimesSync,
   writeFileSync,
@@ -72,9 +73,13 @@ describePosix("frozen PR dependency identity", () => {
       "patches/example.patch": "patch",
       "scripts/prepare.mjs": "readFileSync('schema.sql')",
       "schema.sql": "CREATE TABLE example (id INTEGER);",
+      "packages/example/tsconfig.json": "{}",
+      "packages/example/src/native.ts": "export const native = 1;",
       "src/page.ts": "export const page = 1;",
     };
-    for (const [name, value] of Object.entries(fixture)) write(name, value);
+    for (const [name, value] of Object.entries(fixture)) {
+      write(name, value);
+    }
     git("add", ".");
     const rows = () =>
       git("ls-files", "--stage", "-z")
@@ -86,7 +91,7 @@ describePosix("frozen PR dependency identity", () => {
     );
     const audit = {
       files: ["scripts/prepare.mjs"],
-      directories: [],
+      directories: ["packages/example/src"],
       dataFiles: ["schema.sql"],
       presence: ["src"],
       runtime: {
@@ -113,9 +118,10 @@ describePosix("frozen PR dependency identity", () => {
     const first = key();
     write("src/page.ts", "export const page = 2;");
     expect(key()).toBe(first);
-    for (const [name, value] of Object.entries(fixture).filter(
-      ([name]) => name !== "src/page.ts",
-    )) {
+    for (const [name, value] of Object.entries(fixture)) {
+      if (name === "src/page.ts") {
+        continue;
+      }
       write(name, `${value}\n`);
       expect(key(), name).not.toBe(first);
       write(name, value);
@@ -124,6 +130,14 @@ describePosix("frozen PR dependency identity", () => {
     const changedData = key();
     write("src/page.ts", "export const page = 3;");
     expect(key()).toBe(changedData);
+    rmSync(join(root, "schema.sql"));
+    symlinkSync("src/page.ts", join(root, "schema.sql"));
+    const indirectData = key();
+    write("src/page.ts", "export const page = 4;");
+    expect(key()).not.toBe(indirectData);
+    rmSync(join(root, "schema.sql"));
+    write("schema.sql", fixture["schema.sql"]);
+    write("src/page.ts", "export const page = 3;");
     write("scripts/prepare.mjs", "readFileSync('src/page.ts')");
     const unaudited = key();
     write("src/page.ts", "export const page = 4;");

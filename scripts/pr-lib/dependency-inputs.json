@@ -32,7 +32,14 @@
     "src/gateway/session-method-policy.ts",
     "src/gateway/operator-scopes.ts",
     "src/shared/gateway-method-policy.ts",
-    "src/gateway/events.ts"
+    "src/gateway/events.ts",
+    "scripts/check-install-dependency-ownership.mjs",
+    "config/tsconfig/oxlint.source.json",
+    "packages/tsconfig.json",
+    "packages/normalization-core/tsconfig.json",
+    "scripts/tsconfig.json",
+    "src/tsconfig.json",
+    "src/gateway/tsconfig.json"
   ],
   "directories": [
     "packages/gateway-protocol/src",
@@ -49,7 +56,7 @@
     "extensions",
     "git-hooks"
   ],
-  "auditSha256": "eb87ddfc2929d830261e8f45214c16c03535b7a5698070d2c42771f0354d7fb5",
+  "auditSha256": "fe840d3c0ab865351010782fa4f0e77fa0fec14a2441f3dd2dd14b30fd5f07df",
   "runtime": {
     "platform": "darwin",
     "arch": "arm64",

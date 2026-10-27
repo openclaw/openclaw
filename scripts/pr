@@ -589,11 +589,14 @@ function dependencyKey(rows, tree, audit) {
   if (audit && audit.runtime.platform === process.platform && audit.runtime.arch === process.arch &&
       audit.runtime.modules === process.versions.modules) {
     const names = rows.map((row) => row.slice(row.indexOf("\t") + 1));
+    const codeInputs = [...audit.files, ...audit.directories];
     const inputs = rows.filter((row, index) => {
       const name = names[index];
       return audit.files.includes(name) || audit.dataFiles.includes(name) ||
         name === "pnpm-lock.yaml" || name.startsWith("patches/") ||
         /(?:^|\/)(?:package\.json|\.npmrc|\.pnpmfile\.[cm]js|pnpm-workspace\.yaml)$/.test(name) ||
+        (name.endsWith("/tsconfig.json") && codeInputs.some((input) =>
+          input.startsWith(name.slice(0, -"tsconfig.json".length)))) ||
         (audit.directories.some((directory) => name.startsWith(`${directory}/`)) &&
           /\.(?:ts|mts|mjs|js|json)$/.test(name) && !/\.(?:test|spec)\./.test(name));
     });
@@ -601,7 +604,10 @@ function dependencyKey(rows, tree, audit) {
     // full-tree contract until their read set (including dependency hooks) is audited.
     const audited = inputs.filter((row) => !audit.dataFiles.includes(row.slice(row.indexOf("\t") + 1)));
     const digest = createHash("sha256").update(audited.join("\0")).digest("hex");
-    if (digest === audit.auditSha256 && !names.some((name) => name.startsWith("dist/"))) {
+    const indirectData = inputs.some((row) => row.startsWith("120000 ") &&
+      audit.dataFiles.includes(row.slice(row.indexOf("\t") + 1)));
+    if (digest === audit.auditSha256 && !indirectData &&
+        !names.some((name) => name.startsWith("dist/"))) {
       identity = [inputs, audit.presence.map((path) =>
         names.some((name) => name === path || name.startsWith(`${path}/`)))];
     }
