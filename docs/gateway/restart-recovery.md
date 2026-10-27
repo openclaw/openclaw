@@ -95,6 +95,13 @@ The next visible message preserves an interrupted turn's recovery claim even
 when its saved status is failed, timed out, or killed. Recovery resumes the
 interrupted work before the new message takes foreground ownership.
 
+For non-Stop `chat.send` requests carrying a main-session recovery cycle, the Gateway logs
+one structured `chat.send recovery admission` event. It records the admission
+outcome (`rejected`, `admitted`, or `retried`), a session ID hash, the request and
+recovery run IDs, and `chargedAttempts` observed before admitting the request.
+It contains no message content. Rejected stale-session, permission, tool-setting,
+or changed-input requests leave that recovery custody unchanged.
+
 This page describes what survives a restart, how interrupted work is detected,
 and what the automatic resume looks like.
 

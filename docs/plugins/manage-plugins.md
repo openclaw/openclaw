@@ -28,6 +28,11 @@ Open **Plugins** in the Control UI, or use `/plugins` relative to the configured
 Control UI base path. For example, a base path of `/openclaw` uses
 `/openclaw/plugins`.
 
+Catalog detail links use `/plugins/<owner>/<plugin-name>`, such as
+`/plugins/openclaw/linear`. Existing encoded catalog links redirect to the readable
+URL while preserving query parameters and fragments. Local-only and unscoped
+catalog entries keep their ID-based URLs.
+
 **Installed plugins** shows up to 12 installed plugins, prioritizing enabled plugins,
 plugins that need setup, and plugins that need attention. Use search to filter
 the full inventory or choose **Show all** to browse every installed plugin. Each
