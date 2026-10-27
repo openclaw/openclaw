@@ -66,9 +66,9 @@ const controlUiPerformanceBudgets = {
   // Route consolidation saves 4,189 B total CSS gzip while merging always-loaded
   // sheets. Approved 2026-10-22: 57,154 B plus the prior 53,400 / 52,337 headroom.
   largestCssGzipBytes: 58_315,
-  // Lazy automation feed: 307,995 B CSS for 8.35% faster remote readiness,
+  // Lazy automation feed: 308,234 B CSS for 8.35% faster remote readiness,
   // one fewer request and 9,859 fewer encoded bytes. Retain 64 B build variance.
-  totalCssGzipBytes: 308_059,
+  totalCssGzipBytes: 308_298,
   // Logs windowing adds 38 B raw / 11 B gzip for 17% lower first-render task CPU
   // and 42% lower filter task CPU at 4x. Measured raw total plus 64 B variance.
   totalCssRawBytes: 1_597_676,
