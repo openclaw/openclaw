@@ -1007,6 +1007,9 @@ try {
               JSON.stringify({ dismissedAtMs: 1770000000000 }),
             ),
           );
+          if (values.structure) {
+            await page.addInitScript("globalThis.__name = (fn) => fn");
+          }
           if (values.diagnostic || values.structure) {
             await page.addInitScript(() => {
               // oxlint-disable-next-line typescript/unbound-method -- Forward the original socket receiver with call.
