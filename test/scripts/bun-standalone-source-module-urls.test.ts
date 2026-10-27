@@ -1,3 +1,4 @@
+import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import { stripTypeScriptTypes } from "node:module";
@@ -24,6 +25,7 @@ import {
 } from "../../scripts/lib/standalone-source-module-urls.mjs";
 import { copyStaticExtensionAssets } from "../../scripts/lib/static-extension-assets.mts";
 import { openRootFileSync } from "../../src/infra/boundary-file-read.js";
+import { writeJsonFile } from "../helpers/temp-repo.js";
 
 const roots: string[] = [];
 const formats: Array<"esm" | "cjs"> = ["esm", "cjs"];
@@ -547,15 +549,12 @@ rewriteRootRuntimeImportsToStableAliases({ rootDir });`,
   it("keeps inventory-emitted companions out of the declared entry contract", async () => {
     const { root, sourceRoot, write } = fixture();
     const packageDir = path.join(sourceRoot, "extensions/plugin");
-    write(
-      "extensions/plugin/package.json",
-      JSON.stringify({
-        name: "@openclaw/plugin",
-        version: "1.0.0",
-        type: "module",
-        openclaw: { extensions: ["./index.ts"], setupEntry: "./setup-entry.ts" },
-      }),
-    );
+    writeJsonFile(path.join(packageDir, "package.json"), {
+      name: "@openclaw/plugin",
+      version: "1.0.0",
+      type: "module",
+      openclaw: { extensions: ["./index.ts"], setupEntry: "./setup-entry.ts" },
+    });
     write(
       "extensions/plugin/index.ts",
       'export { readBuildInfo } from "./channel-plugin-api.ts";\n',
@@ -568,11 +567,10 @@ export default defineBundledChannelSetupEntry({ plugin: { specifier: "./channel-
     );
     const helper = write("extensions/plugin/channel-plugin-api.ts", helperContents);
     const plan = resolvePluginNpmRuntimeBuildPlan({ repoRoot: sourceRoot, packageDir });
-    if (!plan) {
-      throw new Error("Missing inventory fixture plan");
-    }
+    assert(plan, "Missing inventory fixture plan");
     const named = new Set<string>();
-    const base = createPluginNpmRuntimeBuildOptions(plan, { logLevel: "silent" });
+    const [base] = createPluginNpmRuntimeBuildOptions(plan, { logLevel: "silent" });
+    assert(base, "Missing inventory fixture build config");
     const config = {
       ...base,
       cwd: sourceRoot,
@@ -599,9 +597,7 @@ export default defineBundledChannelSetupEntry({ plugin: { specifier: "./channel-
     const outputs = urls.get(helper);
     expect(outputs).toHaveLength(1);
     const output = outputs?.[0];
-    if (!output) {
-      throw new Error("Missing inventory companion output");
-    }
+    assert(output, "Missing inventory companion output");
     runRelocatedHelper(root, sourceRoot, output);
   });
 
@@ -724,60 +720,67 @@ export default defineBundledChannelSetupEntry({ legacySessionSurface: { specifie
     },
   );
 
-  it("uses an isolated plugin's staged metadata after fresh build and cache restore", async () => {
+  it("uses isolated plugin and worker metadata after fresh build and cache restore", async () => {
     const { root, sourceRoot, write } = fixture();
-    const packageDir = path.join(sourceRoot, "extensions/plugin");
-    write(
-      "extensions/plugin/package.json",
-      JSON.stringify({
-        name: "@openclaw/plugin",
-        type: "module",
-        version: "1.0.0",
-        openclaw: {
-          extensions: ["./index.ts"],
-          setupEntry: "./setup-entry.ts",
-          build: { runtimeFormat: "cjs", bundledDist: false },
-          release: { publishToNpm: true },
+    const packageDir = path.join(sourceRoot, "extensions/codex");
+    writeJsonFile(path.join(packageDir, "package.json"), {
+      name: "@openclaw/codex",
+      type: "module",
+      version: "1.0.0",
+      openclaw: {
+        extensions: ["./index.ts"],
+        setupEntry: "./setup-entry.ts",
+        build: {
+          runtimeFormat: "cjs",
+          bundledDist: false,
+          workerEntries: ["./catalog-page.worker.ts"],
         },
-      }),
-    );
-    write("extensions/plugin/openclaw.plugin.json", JSON.stringify({ id: "plugin" }));
-    write("extensions/plugin/index.ts", 'export { readBuildInfo } from "./src/identity.ts";\n');
-    write(
-      "extensions/plugin/setup-entry.ts",
-      'export { readBuildInfo } from "./src/identity.ts";\n',
-    );
-    const helper = write("extensions/plugin/src/identity.ts", helperContents);
-    const plan = resolvePluginNpmRuntimeBuildPlan({ repoRoot: sourceRoot, packageDir });
-    if (!plan) {
-      throw new Error("Missing isolated plugin fixture plan");
+        release: { publishToNpm: true },
+      },
+    });
+    write("extensions/codex/openclaw.plugin.json", JSON.stringify({ id: "codex" }));
+    for (const name of ["index", "setup-entry", "catalog-page.worker"]) {
+      write(`extensions/codex/${name}.ts`, 'export { readBuildInfo } from "./src/identity.ts";\n');
     }
-    const base = createPluginNpmRuntimeBuildOptions(plan, { logLevel: "silent" });
-    const config = { ...base, cwd: sourceRoot } satisfies UserConfig;
+    const helper = write("extensions/codex/src/identity.ts", helperContents);
+    const plan = resolvePluginNpmRuntimeBuildPlan({ repoRoot: sourceRoot, packageDir });
+    assert(plan, "Missing isolated plugin fixture plan");
+    const configs = createPluginNpmRuntimeBuildOptions(plan, { logLevel: "silent" }).map((config) =>
+      Object.assign(config, { cwd: sourceRoot }),
+    );
+    const [config, workerConfig] = configs;
+    assert(config && workerConfig, "Missing isolated plugin build groups");
     const index = () =>
       createStandaloneSourceEntries({
         sourceRoot,
         configs: [],
         pluginEntries: [
           {
-            id: "plugin",
+            id: "codex",
             isolated: true,
             sourceEntries: plan.sourceEntries,
             runtimeExtension: ".cjs",
-            runtimeBuildConfig: config,
+            runtimeBuildConfigs: configs,
             runtimeBuildPlan: plan,
           },
         ],
       });
     await buildExternalPluginLocalDist({ repoRoot: sourceRoot, env: {}, logLevel: "silent" });
     expect(fs.existsSync(plan.outDir)).toBe(false);
-    const output = index().resolveModuleUrl(helper, config);
-    expect(output).toMatch(/^dist\/extensions\/plugin\/\.setup\/.*\.cjs$/);
-    expect(output).not.toContain("extensions/plugin/dist");
+    const entries = index();
+    const output = entries.resolveModuleUrl(helper, config);
+    const workerOutput = entries.resolveModuleUrl(helper, workerConfig);
+    expect(workerOutput).toBe("dist/extensions/codex/catalog-page.worker.cjs");
+    expect(entries.resolve(workerOutput)?.contextId).not.toBe(
+      entries.resolve("dist/extensions/codex/index.cjs")?.contextId,
+    );
+    expect(output).toMatch(/^dist\/extensions\/codex\/\.setup\/.*\.cjs$/);
+    expect(output).not.toContain("extensions/codex/dist");
     fs.rmSync(path.join(sourceRoot, "dist"), { recursive: true });
     await buildExternalPluginLocalDist({ repoRoot: sourceRoot, env: {}, logLevel: "silent" });
     expect(fs.existsSync(plan.outDir)).toBe(false);
     expect(index().resolveModuleUrl(helper, config)).toBe(output);
-    runRelocatedHelper(root, sourceRoot, output);
+    expect(index().resolveModuleUrl(helper, workerConfig)).toBe(workerOutput);
+    runRelocatedHelper(root, sourceRoot, workerOutput);
   });
 });

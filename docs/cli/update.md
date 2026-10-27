@@ -99,6 +99,8 @@ update failure report.
 
 After durable success, updates automatically retire eligible superseded recovery
 copies through the state owner, retaining the current update's rollback generation.
+A failed update that stopped before repair or activation does the same and also
+retires its own original-state capture, since nothing it captured changed.
 Cleanup warnings never fail or roll back the successful update. Manual
 `openclaw update cleanup` remains available for inspection and retry; see
 [recovery retirement](/cli/update/repair-and-recovery#update-cleanup).
@@ -752,10 +754,23 @@ the installed updater: installing a candidate does not retrofit its parent drive
 
 ## Runtime retention failures
 
+Runtime retention is best effort once the updater has kept its own copy of the
+native recovery helper. When it then cannot retain the rest of its running
+runtime, for example because of a `host-owned-plugin-link`, a changed source
+file, or a failed retention worker, it logs the reason with "continuing update
+without a verified retained rollback runtime" and continues. It retains nothing
+else and leaves the installed runtime unchanged; native recovery and the
+existing rollback protections still apply. The update still stops before
+activation when no private storage outside the installation is available for
+that helper, when the retention worker's process cleanup cannot be confirmed,
+or on cancellation or a lost update lease. Updaters released before this change
+stopped at every retention failure, and the guidance below explains their
+recorded failures; it also explains a retention warning worth repairing.
+
 **Fix now:** `host-owned-plugin-link` means a dependency symlink reaches
 OpenClaw-owned files that the updater cannot safely retain as an independent
 plugin dependency. Retention protects the running updater and recovery workers
-when package replacement removes the old files. Do not skip this check.
+when package replacement removes the old files.
 
 Inspect the link and target in the local failure output. Keep the source files
 and recovery backups. For a current installation, ask the plugin maintainer to

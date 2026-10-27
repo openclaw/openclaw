@@ -27,6 +27,18 @@ export function usableResumeBudgetMs(
   return remaining >= minimum ? remaining : undefined;
 }
 
+export function isCodeModePendingReady(
+  pending: readonly PendingBridgeState[],
+  settlementMode: CodeModeSettlementMode,
+): boolean {
+  const required = pendingBridgeStatesForSettlement(pending, settlementMode);
+  return (
+    required.length === 0 ||
+    (settlementMode.kind === "awaiting" && required.some((entry) => entry.settled)) ||
+    required.every((entry) => entry.settled)
+  );
+}
+
 export async function waitForCodeModePending(
   pending: readonly PendingBridgeState[],
   settlementMode: CodeModeSettlementMode,
@@ -39,12 +51,7 @@ export async function waitForCodeModePending(
   if (signal?.aborted) {
     return false;
   }
-  const required = pendingBridgeStatesForSettlement(pending, settlementMode);
-  if (
-    required.length === 0 ||
-    (settlementMode.kind === "awaiting" && required.some((entry) => entry.settled)) ||
-    required.every((entry) => entry.settled)
-  ) {
+  if (isCodeModePendingReady(pending, settlementMode)) {
     return true;
   }
   const pausedAtMs = approvalWait.pausedMs;

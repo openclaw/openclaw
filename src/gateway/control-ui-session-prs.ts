@@ -91,6 +91,11 @@ function branchCacheKey(
     context.owner.toLowerCase(),
     context.repo.toLowerCase(),
     context.branch,
+    // Tracking refs and remote URLs select the head repositories this snapshot covers.
+    context.forkHeadCandidates?.map(({ owner, repo }) => [
+      owner.toLowerCase(),
+      repo.toLowerCase(),
+    ]) ?? [],
     sessionIdentity,
     read.cacheScope,
   ]);
@@ -229,7 +234,30 @@ async function fetchBranchPullRequests(
   let items = parsePullList(
     await read.request(pullsByHeadUrl(context.owner, context.repo, head, read.apiBaseUrl)),
     read.host,
+  ).filter(
+    (item) =>
+      !item.headRepository ||
+      item.headRepository.toLowerCase() === `${item.owner}/${item.repo}`.toLowerCase(),
   );
+  for (const candidate of context.forkHeadCandidates ?? []) {
+    if (items.length > 0) {
+      break;
+    }
+    // An owner/branch query can return a PR from another repository owned by the
+    // same person. Match the actual remote, including renamed forks.
+    const repository = `${candidate.owner}/${candidate.repo}`.toLowerCase();
+    items = parsePullList(
+      await read.request(
+        pullsByHeadUrl(
+          context.owner,
+          context.repo,
+          `${candidate.owner}:${context.branch}`,
+          read.apiBaseUrl,
+        ),
+      ),
+      read.host,
+    ).filter((item) => item.headRepository?.toLowerCase() === repository);
+  }
   if (items.length === 0) {
     // Fork flow: the branch lives on the fork but PRs open against the parent.
     const parent = resolveGitHubForkParent(

@@ -41,7 +41,9 @@ it("publishes placement status without admitting another transcript message", as
     startedAt: 1,
     error: "Synthetic placement startup failed",
   });
-  expect(pane.textContent).toContain("Synthetic placement startup failed");
+  await waitForSolid(() =>
+    expect(pane.textContent).toContain("Synthetic placement startup failed"),
+  );
   expect(pane.state.chatMessages).toEqual([]);
 
   publish(null);
@@ -64,7 +66,7 @@ it("retires a replayed first prompt already collected into loaded history after 
   const history = (_method: string, params: unknown) => ({
     messages: [aggregate],
     sessionId: row.sessionId,
-    sessionInfo: row,
+    sessionInfo: { ...row, hasActiveRun: false },
     pendingInputs: { items: [], total: 0 },
     inputReceipts:
       params &&
@@ -111,5 +113,6 @@ it("retires a replayed first prompt already collected into loaded history after 
     expect(mounted.context.placementStartup.get(sessionKey)).toBeNull();
     expect(pane.state.chatMessages).toEqual([aggregate]);
     expect(mounted.context.chatSubmissions.readInitial(sessionKey, client)?.pending).toBe(false);
+    expect(pane.state.chatRunId).toBeNull();
   });
 });

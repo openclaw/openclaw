@@ -311,12 +311,18 @@ export function withSynchronousArtifactPreservingStateSnapshot<T>(
 
 export function resolveOpenClawStateReadPath(options: OpenClawStateDatabaseOptions): string {
   const pathname = resolveDatabasePath(options);
-  assertRetainedReadScopeAdmission(pathname, [
-    stateSnapshotReads.getStore(),
-    ...(disposableStateReads.getStore() ?? []),
-  ]);
-  isExistingOpenClawStateSchema(pathname);
+  assertOpenClawStateReadPathCurrent(pathname);
   return pathname;
+}
+
+/** Prepared paths still honor the invoking reader and schema owner's live admission. */
+export function assertOpenClawStateReadPathCurrent(pathname: string): void {
+  const snapshot = stateSnapshotReads.getStore();
+  const disposable = disposableStateReads.getStore();
+  if (snapshot || disposable?.length) {
+    assertRetainedReadScopeAdmission(pathname, [snapshot, ...(disposable ?? [])]);
+  }
+  isExistingOpenClawStateSchema(pathname);
 }
 
 function withOpenClawStateDatabaseReadOnlyIfOpen<T>(

@@ -978,10 +978,13 @@ exclusive offline ownership, or asks the running Gateway to perform retirement
 under its own live ownership. It does not stop or restart the Gateway for cleanup.
 This also applies to the macOS app's CLI updates and `--no-restart`; that flag does
 not bypass state ownership. Gateway-owned restart completion performs the same
-retirement after it records success.
+retirement after it records success. A failed update that never reached repair or
+activation attempts the same retirement after its failure is recorded, including
+its own capture.
 
 Eligibility and identity checks are unchanged: the just-finished update's capture
-stays until a **later successful update** supersedes it. Unfinished runs, pending
+stays until a **later successful update** supersedes it, unless that update failed
+before repair or activation. Unfinished runs, pending
 recovery, unresolved failed or rolled-back captures, orphaned/unmanifested copies,
 and blocked artifacts remain. Standalone Doctor captures keep their existing
 newest-three/30-day policy, always retaining the newest sealed capture. Historical
@@ -1129,9 +1132,13 @@ captures through their sealed manifests; it never reads the captured payload:
   successful update, or of any update that finished after it.
 - `protected` / `unfinished-update-run` or `pending-update-recovery`: the update is
   still running, or its recorded rollback has not settled.
+- `candidate` / `never-activated-update-capture`: a capture from a failed update
+  that stopped before repair or activation, so neither the installation nor its
+  state changed. The failed update retires it automatically when it finishes;
+  cleanup retires any that remain without waiting for a later successful update.
 - `protected` / `unresolved-failed-update`: a sealed capture from a failed update
-  that is neither restored nor repaired forward. It remains that update's manual
-  recovery source.
+  that reached repair or activation and is neither restored nor repaired forward.
+  It remains that update's manual recovery source.
 - `candidate` / `superseded-doctor-capture`: a sealed standalone `doctor-<id>`
   capture outside the newest three or older than 30 days. The newest sealed copy
   is always retained.

@@ -3469,6 +3469,43 @@ details[open] > summary > .knowledge-disclosure-label > .knowledge-icon {
   color: var(--muted);
   font-size: 12px;
 }
+.scribe-prompt {
+  display: grid;
+}
+.knowledge-page .scribe-prompt summary {
+  color: var(--text-strong, var(--text));
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+}
+.knowledge-page .scribe-prompt-text {
+  box-sizing: border-box;
+  width: 100%;
+  margin: 8px 0 6px;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm, 6px);
+  background: var(--bg);
+  color: var(--text-strong, var(--text));
+  font-family: var(--mono, ui-monospace, monospace);
+  font-size: 12px;
+  line-height: 1.5;
+  resize: vertical;
+}
+.scribe-prompt-foot {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+.scribe-prompt-foot small {
+  color: var(--muted);
+  font-size: 12px;
+}
+.scribe-prompt-foot button {
+  flex: none;
+  white-space: nowrap;
+}
 @media (max-width: 720px) {
   .scribe-row,
   .scribe-detail-head {

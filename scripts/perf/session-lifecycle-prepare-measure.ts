@@ -4,6 +4,8 @@
  *
  * A real temporary SQLite database and lifecycle planning backend produce both replies:
  * the base request omits retainedEntry; the candidate supplies the current replica receipt.
+ * The selected key is also listed as related, as in main-session reply initialization;
+ * the owner regression verifies this shape uses the receipt after each real metadata write.
  * Five counterbalanced 5,000-operation timing passes precede separate allocation samples.
  * Candidate timing includes host replica lookup, request metadata and reply reconstruction.
  * Worker SQL, token validation, transport scheduling, builders and commit CAS are excluded.
@@ -39,6 +41,7 @@ import { withOpenClawTestState } from "../../src/test-utils/openclaw-test-state.
 
 type Reply = SessionLifecyclePlanningOperations["prepare"]["output"];
 const iterations = 5_000;
+const skillCount = 320;
 const sessionCount = 10_000;
 const samplingInterval = 512;
 const gc = global.gc;
@@ -56,7 +59,9 @@ try {
         updatedAt: 1,
         skillsSnapshot: {
           prompt: "Synthetic lifecycle instructions. ".repeat(1_400),
-          skills: [{ name: "synthetic-skill" }],
+          skills: Array.from({ length: skillCount }, (_, index) => ({
+            name: `synthetic-${index}`,
+          })),
         },
       },
     );
@@ -81,7 +86,7 @@ try {
     try {
       const input = {
         removals: [],
-        upserts: [{ sessionKey }],
+        upserts: [{ sessionKey, relatedSessionKeys: [sessionKey] }],
         archiveDirectory: "/synthetic/archives",
       };
       const base = backend.execute({ type: "prepare", input });
@@ -232,6 +237,7 @@ try {
           {
             node: process.version,
             iterationsPerPass: iterations,
+            skillCount,
             timingPasses: 5,
             serializedBytes: { base: bytes.base.byteLength, candidate: bytes.candidate.byteLength },
             samplingInterval,

@@ -552,6 +552,10 @@ their own environment retain an isolated catalog worker for that environment.
 Provider-discovery entries use the exact selected runtime instance's captured
 source when it is already loaded, so discovery does not create a second copy of
 the same plugin package. Standalone discovery keeps its own setup lifetime.
+Public API sidecars follow the loader-selected setup or runtime artifact and its
+plugin root. A built Gateway uses the selected JavaScript sidecars even when
+discovery metadata still points at the source checkout; source-based instances
+keep their TypeScript sidecars and captured-source membership.
 The loader records its scoped registration inputs with their metadata inventory,
 so catalog workers reuse those facts instead of rerunning setup activation.
 Each worker retains the current plugin registration context for each loader

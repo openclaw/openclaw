@@ -8,6 +8,7 @@ import {
 } from "../infra/kysely-sync.js";
 import { isPostgresSqlConnection, type EngineConnection } from "../infra/sql-connection.js";
 import { normalizeSqliteNumber } from "../infra/sqlite-number.js";
+import { stageSqliteTransactionState } from "../infra/sqlite-post-commit.js";
 import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
 import {
   runOpenClawStateWriteTransaction,
@@ -199,6 +200,11 @@ function pruneAfterInsert(
       (normalizeSqliteNumber(oldest?.oldest ?? null) ?? Number.POSITIVE_INFINITY) +
       AUDIT_EVENT_RETENTION_MS;
   }
+  stageSqliteTransactionState(db, {
+    commit: () => {},
+    rollback: () => auditEventRetention.delete(db),
+    invalidate: () => auditEventRetention.delete(db),
+  });
   auditEventRetention.set(db, { ...retention, nextSequence });
 }
 
@@ -237,7 +243,6 @@ export function recordAuditEventInDatabase(
     ensureTerminalMessageExecutionBindingSchema(options);
   }
   const { db } = options.database;
-  const nested = db.isTransaction;
   try {
     const retention =
       input.kind !== "message"
@@ -285,9 +290,6 @@ export function recordAuditEventInDatabase(
         eventId: row?.event_id,
         token: executionToken,
       });
-      if (nested) {
-        auditEventRetention.delete(db);
-      }
       return row ? rowToAuditEvent(row) : undefined;
     }, options);
   } catch (error) {
@@ -305,7 +307,6 @@ export function recordAuditRunInDatabase(
   eventIds: readonly [string, string],
 ): void {
   const { db } = options.database;
-  const nested = db.isTransaction;
   const values = [
     bindAuditEvent(db, start, eventIds[0]),
     bindAuditEvent(db, finish, eventIds[1]),
@@ -358,9 +359,6 @@ export function recordAuditRunInDatabase(
         // Both VALUES attempts consume a sequence, including either replay conflict.
         Math.max(...inserted.map((row) => row.sequence + (row.values === values[0] ? 2 : 1))),
       );
-      if (nested) {
-        auditEventRetention.delete(db);
-      }
     }, options);
   } catch (error) {
     auditEventRetention.delete(db);

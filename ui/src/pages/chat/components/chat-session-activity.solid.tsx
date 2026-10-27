@@ -2,6 +2,8 @@ import type { JSX } from "@solidjs/web";
 import { For, Show, type Accessor } from "solid-js";
 import { Icon } from "../../../components/solid/icon.tsx";
 import type { MessageGroup } from "../../../lib/chat/chat-types.ts";
+import { resolveIdentityHue } from "../../../lib/identity-avatar.ts";
+import { participantPalette } from "../../../lib/reactive/participant-palette.ts";
 import { rawMessageTimestamp } from "../chat-thread-items.ts";
 import { ForwardedAttribution } from "./chat-forwarded-attribution.tsx";
 import type { RenderMessageGroupOptions } from "./chat-message-group-options.ts";
@@ -29,6 +31,13 @@ export function ChatSessionActivity(props: {
   return (
     <div
       class="chat-group tool chat-group--turn-block"
+      style={
+        props.group.senderSession?.sessionKey
+          ? participantPalette
+              .read()
+              ?.style(resolveIdentityHue({ id: props.group.senderSession.sessionKey }))
+          : undefined
+      }
       data-chat-row-key={props.group.key}
       data-file-session-key={props.group.senderSession?.sessionKey}
     >
