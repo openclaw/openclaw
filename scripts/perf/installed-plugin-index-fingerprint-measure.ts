@@ -21,7 +21,17 @@ await withPluginCache(cache, async () => {
     plugins: Array.from({ length: plugins }, (_, i) => ({ id: `fixture-${i}` })),
   });
   for (const plugin of snapshot.index.plugins) {
-    plugin.contributions = { providers: [plugin.pluginId] };
+    plugin.contributions = {
+      channels: [],
+      channelConfigs: [],
+      providers: [plugin.pluginId],
+      modelCatalogProviders: [],
+      modelSupportPrefixes: [],
+      modelSupportPatterns: [],
+      autoEnableProviderIds: [],
+      commandAliases: [],
+      contracts: {},
+    };
     plugin.sourceAdmissions = {
       [`${plugin.rootDir}\0catalog`]: {
         signature: "synthetic",
