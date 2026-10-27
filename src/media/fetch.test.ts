@@ -25,7 +25,12 @@ function makeResponseHeaderStallingFetch() {
     async (_input: RequestInfo | URL, init?: RequestInit) =>
       await new Promise<Response>((_resolve, reject) => {
         const signal = init?.signal;
-        const abort = () => reject(signal?.reason);
+        const abort = () => {
+          const reason: unknown = signal?.reason;
+          reject(
+            reason instanceof Error ? reason : new Error("request aborted", { cause: reason }),
+          );
+        };
         if (signal?.aborted) {
           abort();
         } else {
