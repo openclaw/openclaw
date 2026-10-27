@@ -14,6 +14,11 @@ import { withLegacyStateHeadLayout } from "../../state/openclaw-state-db-schema-
 import { withLegacyStateWriteIndexes } from "../../state/openclaw-state-db-schema-v27-indexes.js";
 import { withLegacyPublicationDraft } from "../../state/openclaw-state-db-schema-v28-publication.js";
 import { withLegacyLocalWorkspaceManifests } from "../../state/openclaw-state-db-schema-v31-workspace-manifests.js";
+import {
+  withLegacyLocalWorkspaceCas,
+  WORKSPACE_CAS_COLUMNS,
+  WORKSPACE_CAS_TABLES,
+} from "../../state/openclaw-state-db-schema-v35-workspace-cas.js";
 import { listOpenClawStateFeatureSchemas } from "../../state/openclaw-state-feature-schema.js";
 import { RETAINED_STATE_TABLES } from "../../state/openclaw-state-schema-compatibility.js";
 import { OPENCLAW_STATE_SCHEMA_SQL } from "../../state/openclaw-state-schema.js";
@@ -48,8 +53,8 @@ export async function loadStatePortDescriptor(
     // v29 removes credential tables; v30 fences policies; v31 adds per-path workspace baselines.
     if (
       backup ||
-      OPENCLAW_STATE_SCHEMA_VERSION !== 34 ||
-      ![24, 25, 26, 27, 28, 29, 30, 31, 32, 33].includes(sourceVersion)
+      OPENCLAW_STATE_SCHEMA_VERSION !== 35 ||
+      ![24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34].includes(sourceVersion)
     ) {
       throw new DatabasePortDataError(
         `Missing shared-state PostgreSQL backup descriptor for version ${sourceVersion}`,
@@ -63,11 +68,17 @@ export async function loadStatePortDescriptor(
   ): fact is typeof fact & { value: PortTable["columns"][number] } => fact.kind === "column";
   const historical = sourceVersion < 28;
   const legacyWorkspace = sourceVersion < 31;
+  const legacyCas = sourceVersion < 35;
   const catalog = [
     ...statePostgresRuntime.expectedCatalog,
     ...(source?.expectedCatalog ?? []),
   ].filter(
     (fact) =>
+      (!legacyCas ||
+        (!WORKSPACE_CAS_TABLES.some((table) => table === fact.table) &&
+          (fact.table !== "local_workspace_projections" ||
+            !isColumn(fact) ||
+            !WORKSPACE_CAS_COLUMNS.some((column) => column === fact.value.name)))) &&
       (!legacyWorkspace ||
         (fact.table !== "local_workspace_manifest_nodes" &&
           (fact.table !== "local_workspace_projections" ||
@@ -87,7 +98,8 @@ export async function loadStatePortDescriptor(
     (fact): fact is typeof fact & { value: string[] } => fact.kind === "primaryKey",
   );
   const sourceSql = (sql: string, schemaSql = sql) => {
-    const workspace = legacyWorkspace ? withLegacyLocalWorkspaceManifests(sql) : sql;
+    const cas = legacyCas ? withLegacyLocalWorkspaceCas(sql) : sql;
+    const workspace = legacyWorkspace ? withLegacyLocalWorkspaceManifests(cas) : cas;
     const publication = historical ? withLegacyPublicationDraft(workspace) : workspace;
     return sourceVersion < 33
       ? withLegacyPostgresIndexOrdering(
@@ -103,7 +115,9 @@ export async function loadStatePortDescriptor(
     sqlite: string,
   ) => {
     const tables = entry.tables.filter(
-      (table) => !legacyWorkspace || table.name !== "local_workspace_manifest_nodes",
+      (table) =>
+        (!legacyWorkspace || table.name !== "local_workspace_manifest_nodes") &&
+        (!legacyCas || !WORKSPACE_CAS_TABLES.some((name) => name === table.name)),
     );
     const names = new Set(tables.map((table) => table.name));
     return {

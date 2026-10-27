@@ -25,14 +25,6 @@ export function buildCodexMessagesSnapshot(params: {
   turnTainted?: boolean;
 }): AgentMessage[] {
   const messages = promptSnapshot(params.runParams, params.turnId, params.upstreamUserText);
-  if (params.reasoningText) {
-    messages.push(
-      attachCodexMirrorIdentity(
-        createAssistantReasoningMessage(params.runParams, params.reasoningText),
-        `${params.turnId}:reasoning`,
-      ),
-    );
-  }
   const commentaryMessages =
     params.runParams.config?.ui?.prefs?.chatPersistCommentary === false
       ? []
@@ -55,6 +47,14 @@ export function buildCodexMessagesSnapshot(params: {
       (asDateTimestampMs(left.timestamp) ?? 0) - (asDateTimestampMs(right.timestamp) ?? 0),
   );
   messages.push(...visibleWorkMessages);
+  if (params.reasoningText) {
+    messages.push(
+      attachCodexMirrorIdentity(
+        createAssistantReasoningMessage(params.runParams, params.reasoningText),
+        `${params.turnId}:reasoning`,
+      ),
+    );
+  }
   if (params.lastAssistant) {
     const assistant = applyCodexTranscriptTaint(params.lastAssistant, {
       tainted: params.turnTainted === true,

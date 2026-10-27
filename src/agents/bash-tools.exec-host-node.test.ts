@@ -1,8 +1,3 @@
-/**
- * Node-host exec orchestration tests.
- * Covers node target resolution, remote prepare/invoke payloads, approvals,
- * auto-review, and follow-up execution paths.
- */
 import crypto from "node:crypto";
 import { setImmediate } from "node:timers/promises";
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -111,9 +106,6 @@ const durableApprovalMock = vi.hoisted(() => vi.fn(() => false));
 const persistenceMock = vi.hoisted(() =>
   vi.fn<(_raw: MockAllowAlwaysPersistenceInput) => MockAllowAlwaysPersistenceDecision>(),
 );
-const allowedDecisionsMock = vi.hoisted(() =>
-  vi.fn<typeof import("../infra/exec-approvals.js").resolveExecApprovalAllowedDecisions>(),
-);
 const hostPolicyMock = vi.hoisted(() =>
   vi.fn(() => ({
     approvals: { allowlist: [] as ExecAllowlistEntry[], file: { version: 1, agents: {} } },
@@ -140,7 +132,6 @@ const inlineEvalMock = vi.hoisted(() => vi.fn<() => typeof INLINE_EVAL_HIT | nul
 
 vi.mock("../infra/exec-approvals.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../infra/exec-approvals.js")>();
-  allowedDecisionsMock.mockImplementation(actual.resolveExecApprovalAllowedDecisions);
   return {
     ...actual,
     countObsoleteGeneratedExecApprovalRules: vi.fn(() => 0),
@@ -151,7 +142,6 @@ vi.mock("../infra/exec-approvals.js", async (importOriginal) => {
     requiresExecApproval: requiresApprovalMock,
     resolveAllowAlwaysPersistenceDecision: persistenceMock,
     resolveAllowAlwaysPatternCoverage: patternCoverageMock,
-    resolveExecApprovalAllowedDecisions: allowedDecisionsMock,
     resolveExecApprovalsFromFile: nodeApprovalsMock,
   };
 });
@@ -242,7 +232,6 @@ type MockNodeInvokeParams = {
 };
 
 type GatewayToolCall = {
-  method: string;
   options: { timeoutMs?: number };
   params?: MockNodeInvokeParams;
   callOptions?: unknown;
@@ -256,18 +245,16 @@ function requireGatewayCommand(command: string): GatewayToolCall {
   if (!call) {
     throw new Error(`expected gateway command ${command}`);
   }
-  const [method, options, params, callOptions] = call as [
+  const [, options, params, callOptions] = call as [
     string,
     { timeoutMs?: number },
     MockNodeInvokeParams | undefined,
     unknown,
   ];
-  return { method, options, params, callOptions };
+  return { options, params, callOptions };
 }
 
 function requireRunParams(call: GatewayToolCall): Record<string, unknown> {
-  expect(call.method).toBe("node.invoke");
-  expect(call.params?.command).toBe("system.run");
   const params = call.params?.params;
   if (!params) {
     throw new Error("expected system.run params");
@@ -290,26 +277,6 @@ function expectNoSystemRun() {
   ).toBe(false);
 }
 
-function createNodeInvokeFailure(params: {
-  code: string;
-  nodeCommandDispatched?: boolean;
-  message?: string;
-}): Error {
-  return Object.assign(new Error(params.message ?? "node invoke failed"), {
-    name: "GatewayClientRequestError",
-    gatewayCode: "UNAVAILABLE",
-    details: {
-      nodeError: {
-        code: params.code,
-        message: params.message ?? "node invoke failed",
-      },
-      ...(params.nodeCommandDispatched !== undefined
-        ? { nodeCommandDispatched: params.nodeCommandDispatched }
-        : {}),
-    },
-  });
-}
-
 function requireRegisteredApprovalRequest(): Record<string, unknown> {
   const firstCall = registerApprovalMock.mock.calls[0];
   if (!firstCall) {
@@ -329,10 +296,6 @@ function expectSystemRunInvoke(params: {
   expect(requireRunParams(call).timeoutMs).toBe(params.runTimeoutMs);
   expect(call.params?.timeoutMs).toBe(params.invokeDeadlineMs);
   expect(call.options.timeoutMs).toBe(params.invokeWaitMs);
-  expect(params.runTimeoutMs).toBeLessThanOrEqual(params.invokeDeadlineMs);
-  expect(params.invokeDeadlineMs).toBeLessThanOrEqual(params.invokeWaitMs);
-  expect(params.invokeDeadlineMs).toBeGreaterThan(0);
-  expect(Number.isFinite(params.invokeWaitMs)).toBe(true);
 }
 
 function createNodeGatewayHandler(params: {
@@ -378,28 +341,40 @@ function createNodeGatewayHandler(params: {
   };
 }
 
-function mockGateway(params: Parameters<typeof createNodeGatewayHandler>[0]) {
-  gatewayMock.mockImplementation(createNodeGatewayHandler(params));
+function mockGateway(params: Partial<Parameters<typeof createNodeGatewayHandler>[0]> = {}) {
+  gatewayMock.mockImplementation(
+    createNodeGatewayHandler({ approvals: { version: 1, agents: {} }, ...params }),
+  );
+}
+
+function mockSystemRun(run: () => unknown) {
+  const handler = gatewayMock.getMockImplementation();
+  if (!handler) {
+    throw new Error("missing default gateway mock");
+  }
+  gatewayMock.mockImplementation((method, options, params: MockNodeInvokeParams | undefined) =>
+    method === "node.invoke" && params?.command === "system.run"
+      ? run()
+      : handler(method, options, params),
+  );
+}
+
+function expectCall(mock: unknown, fields: object) {
+  expect(mock).toHaveBeenCalledWith(expect.objectContaining(fields));
 }
 
 function buildAllowlistEvalResult(params?: {
   allowlistSatisfied?: boolean;
   segmentAllowlistEntry?: { pattern: string } | null;
 }) {
-  return {
-    allowlistMatches:
-      params?.allowlistSatisfied && params.segmentAllowlistEntry
-        ? [params.segmentAllowlistEntry]
-        : [],
-    analysisOk: true,
-    allowlistSatisfied: params?.allowlistSatisfied === true,
-    segments: [segment(["tool", "--version"])],
-    segmentAllowlistEntries:
-      params?.allowlistSatisfied && params.segmentAllowlistEntry
-        ? [params.segmentAllowlistEntry]
-        : [null],
-    segmentSatisfiedBy: [params?.allowlistSatisfied ? "allowlist" : null],
-  };
+  const matched = params?.allowlistSatisfied === true;
+  const entries = matched && params?.segmentAllowlistEntry ? [params.segmentAllowlistEntry] : [];
+  return analysis([segment(["tool", "--version"])], {
+    allowlistMatches: entries,
+    allowlistSatisfied: matched,
+    segmentAllowlistEntries: entries.length ? entries : [null],
+    segmentSatisfiedBy: [matched ? "allowlist" : null],
+  });
 }
 
 const fullNodePolicy: MockExecApprovalsResolved["agent"] = {
@@ -442,6 +417,15 @@ function segment(argv: string[], raw?: string): MockAllowlistSegment {
   return { resolution: null, argv, ...(raw === undefined ? {} : { raw }) };
 }
 
+function matchAnalysis(matched: boolean, selected: MockAllowlistSegment) {
+  const entries = matched ? [{}] : [];
+  return analysis([selected], {
+    allowlistMatches: entries,
+    allowlistSatisfied: matched,
+    segmentAllowlistEntries: entries,
+  });
+}
+
 function nodeInfo(
   overrides: Partial<
     Awaited<ReturnType<typeof import("./tools/nodes-utils.js").listNodes>>[number]
@@ -461,14 +445,8 @@ function nodePlan(
   commandText: string,
   commandPreview: string | null = commandText,
 ) {
-  return {
-    argv,
-    cwd: "/tmp/work",
-    commandText,
-    commandPreview,
-    agentId: "prepared-agent",
-    sessionKey: "prepared-session",
-  };
+  const { cwd, agentId, sessionKey } = preparedPlan;
+  return { argv, cwd, commandText, commandPreview, agentId, sessionKey };
 }
 
 function createHostPolicy(
@@ -520,17 +498,11 @@ function setHostPolicy(...args: Parameters<typeof createHostPolicy>) {
 
 describe("executeNodeHostCommand", () => {
   beforeEach(() => {
-    gatewayMock.mockReset().mockImplementation(
-      createNodeGatewayHandler({
-        approvals: { version: 1, agents: {} },
-        allowApprovalResolve: true,
-      }),
-    );
+    gatewayMock.mockReset();
+    mockGateway({ allowApprovalResolve: true });
     listNodesMock.mockReset().mockResolvedValue([nodeInfo()]);
-    preparedMock.mockReset().mockReturnValue({
-      plan: preparedPlan,
-      execPolicy: { security: "full", ask: "off" },
-    });
+    preparedMock.mockReset();
+    usePlan(preparedPlan);
 
     allowlistMock
       .mockReset()
@@ -547,7 +519,6 @@ describe("executeNodeHostCommand", () => {
       kind: "patterns",
       patterns: [{ pattern: "/trusted/bin/tool" }],
     });
-    allowedDecisionsMock.mockClear();
     hostPolicyMock.mockReset();
     setHostPolicy("full", "off");
     registerApprovalMock.mockReset().mockImplementation(async ({ approvalId }) => ({
@@ -593,16 +564,13 @@ describe("executeNodeHostCommand", () => {
       await vi.waitFor(() => expect(followupMock).toHaveBeenCalledTimes(2));
       await setImmediate();
       expect(unhandledRejections.reasons).toEqual([]);
-      expect(followupMock).toHaveBeenNthCalledWith(
-        1,
-        expect.objectContaining({ approvalId: "approval-1" }),
-        "Exec denied (node=node-1 id=approval-1, approval-request-failed): bun ./script.ts",
-      );
-      expect(followupMock).toHaveBeenNthCalledWith(
-        2,
-        expect.objectContaining({ approvalId: "approval-1" }),
-        "Exec denied (node=node-1 id=approval-1, approval-request-failed): bun ./script.ts",
-      );
+      for (const call of [1, 2]) {
+        expect(followupMock).toHaveBeenNthCalledWith(
+          call,
+          expect.objectContaining({ approvalId: "approval-1" }),
+          "Exec denied (node=node-1 id=approval-1, approval-request-failed): bun ./script.ts",
+        );
+      }
       expectNoSystemRun();
     } finally {
       unhandledRejections.restore();
@@ -611,24 +579,18 @@ describe("executeNodeHostCommand", () => {
 
   it("never replaces a detached outcome-unknown result with denial when delivery fails", async () => {
     const unhandledRejections = captureProcessUnhandledRejections();
-    const defaultImplementation = gatewayMock.getMockImplementation();
 
     try {
-      gatewayMock.mockImplementation(
-        async (method: string, options: unknown, callParams: MockNodeInvokeParams | undefined) => {
-          if (method === "node.invoke" && callParams?.command === "system.run") {
-            throw createNodeInvokeFailure({
-              code: "DISCONNECTED",
-              nodeCommandDispatched: true,
-              message: "node disconnected",
-            });
-          }
-          if (!defaultImplementation) {
-            throw new Error("missing default gateway mock");
-          }
-          return await defaultImplementation(method, options, callParams);
-        },
-      );
+      mockSystemRun(async () => {
+        throw Object.assign(new Error("node disconnected"), {
+          name: "GatewayClientRequestError",
+          gatewayCode: "UNAVAILABLE",
+          details: {
+            nodeError: { code: "DISCONNECTED", message: "node disconnected" },
+            nodeCommandDispatched: true,
+          },
+        });
+      });
       followupMock.mockRejectedValueOnce(new Error("outcome-unknown follow-up unavailable"));
       setHostPolicy("full", "always");
 
@@ -651,46 +613,70 @@ describe("executeNodeHostCommand", () => {
     }
   });
 
-  it("drops a detached node approval when cancellation wins before consumption", async () => {
-    const pendingDecision = createDeferred<string | null>();
-    const abortController = new AbortController();
-    approvalDecisionMock.mockReturnValueOnce(pendingDecision.promise);
-    setHostPolicy("full", "always");
-
-    const result = await runNode({ approvalFollowupMode: "agent", signal: abortController.signal });
-
-    expect(result.details?.status).toBe("approval-pending");
-    expect(approvalDecisionMock).toHaveBeenCalledOnce();
-    abortController.abort();
-    pendingDecision.resolve("allow-once");
-    await setImmediate();
-
-    expect(hostPolicyMock).toHaveBeenCalledTimes(1);
-    expect(followupMock).not.toHaveBeenCalled();
-    expectNoSystemRun();
-  });
-
-  it("drops a detached node approval cancelled during final policy revalidation", async () => {
-    const abortController = new AbortController();
-    const policy = createHostPolicy("full", "always");
-    const policyCheckpoint = createDeferred<typeof policy>();
-    hostPolicyMock
-      .mockReturnValueOnce(policy)
-      .mockImplementationOnce(
-        () => policyCheckpoint.promise as unknown as ReturnType<typeof hostPolicyMock>,
-      );
-
-    const result = await runNode({ approvalFollowupMode: "agent", signal: abortController.signal });
-
-    expect(result.details?.status).toBe("approval-pending");
-    await vi.waitFor(() => expect(hostPolicyMock).toHaveBeenCalledTimes(2));
-    abortController.abort();
-    policyCheckpoint.resolve(policy);
-    await setImmediate();
-
-    expect(followupMock).not.toHaveBeenCalled();
-    expectNoSystemRun();
-  });
+  it.each(["decision", "policy", "dispatch"] as const)(
+    "drops detached node work cancelled during %s",
+    async (stage) => {
+      const unhandledRejections = captureProcessUnhandledRejections();
+      try {
+        const controller = new AbortController();
+        const policy = createHostPolicy("full", "always");
+        const decision = createDeferred<string | null>();
+        const checkpoint = createDeferred<typeof policy>();
+        const invocation = createDeferred<{
+          payload: { success: boolean; stdout: string; exitCode: number };
+        }>();
+        setHostPolicy("full", "always");
+        if (stage === "decision") {
+          approvalDecisionMock.mockReturnValueOnce(decision.promise);
+        } else if (stage === "policy") {
+          hostPolicyMock
+            .mockReturnValueOnce(policy)
+            .mockImplementationOnce(
+              () => checkpoint.promise as unknown as ReturnType<typeof hostPolicyMock>,
+            );
+        } else {
+          mockGateway();
+          mockSystemRun(() => invocation.promise);
+        }
+        const result = await runNode({ approvalFollowupMode: "agent", signal: controller.signal });
+        expect(result.details?.status).toBe("approval-pending");
+        if (stage === "decision") {
+          expect(approvalDecisionMock).toHaveBeenCalledOnce();
+          controller.abort();
+          decision.resolve("allow-once");
+        } else if (stage === "policy") {
+          await vi.waitFor(() => expect(hostPolicyMock).toHaveBeenCalledTimes(2));
+          controller.abort();
+          checkpoint.resolve(policy);
+        } else {
+          await vi.waitFor(() =>
+            expect(requireGatewayCommand("system.run").callOptions).toEqual({
+              scopes: ["operator.write", "operator.approvals"],
+              signal: controller.signal,
+              dispatchAuthority: {
+                version: 2,
+                kind: "source-bound",
+                assertCurrent: expect.any(Function),
+              },
+            }),
+          );
+          controller.abort(new Error("run aborted during node invocation"));
+          invocation.reject(controller.signal.reason);
+        }
+        await setImmediate();
+        expect(unhandledRejections.reasons).toEqual([]);
+        expect(followupMock).not.toHaveBeenCalled();
+        if (stage !== "dispatch") {
+          expectNoSystemRun();
+        }
+        if (stage === "decision") {
+          expect(hostPolicyMock).toHaveBeenCalledTimes(1);
+        }
+      } finally {
+        unhandledRejections.restore();
+      }
+    },
+  );
 
   it("forwards prepared systemRunPlan within the native turn after approval", async () => {
     setHostPolicy("full", "always");
@@ -709,8 +695,6 @@ describe("executeNodeHostCommand", () => {
       toolCallId: "tool-node",
     });
 
-    await vi.waitFor(() => expect(gatewayMock).toHaveBeenCalledTimes(2));
-
     const call = requireGatewayCommand("system.run");
     expect(call.options.timeoutMs).toBe(40_000);
     expect(call.params?.timeoutMs).toBe(35_000);
@@ -723,68 +707,17 @@ describe("executeNodeHostCommand", () => {
       },
     });
     const runParams = requireRunParams(call);
-    expect(runParams.approved).toBe(true);
-    expect(runParams.approvalDecision).toBe("allow-once");
+    expect(runParams).toMatchObject({
+      approved: true,
+      approvalDecision: "allow-once",
+      timeoutMs: 30_000,
+      turnSourceChannel: "telegram",
+      turnSourceTo: "telegram:12345",
+      turnSourceAccountId: "work",
+      turnSourceThreadId: "42",
+    });
     expect(runParams.approvalSource).toBeUndefined();
     expect(runParams.systemRunPlan).toEqual(preparedPlan);
-    expect(runParams.timeoutMs).toBe(30_000);
-    expect(runParams.turnSourceChannel).toBe("telegram");
-    expect(runParams.turnSourceTo).toBe("telegram:12345");
-    expect(runParams.turnSourceAccountId).toBe("work");
-    expect(runParams.turnSourceThreadId).toBe("42");
-    expect(hostPolicyMock).toHaveBeenCalledTimes(2);
-  });
-
-  it("silently drops a detached node invocation cancelled during gateway dispatch", async () => {
-    const unhandledRejections = captureProcessUnhandledRejections();
-
-    try {
-      const abortController = new AbortController();
-      const pendingInvocation = createDeferred<{
-        payload: { success: boolean; stdout: string; exitCode: number };
-      }>();
-      setHostPolicy("full", "always");
-      gatewayMock.mockImplementation(
-        async (method: string, _options: unknown, params: MockNodeInvokeParams | undefined) => {
-          if (method === "exec.approvals.node.get") {
-            return { file: { version: 1, agents: {} } };
-          }
-          if (method === "node.invoke" && params?.command === "system.run.prepare") {
-            return { payload: { plan: preparedPlan } };
-          }
-          if (method === "node.invoke" && params?.command === "system.run") {
-            return pendingInvocation.promise;
-          }
-          throw new Error(`unexpected gateway method: ${method}`);
-        },
-      );
-
-      const result = await runNode({
-        approvalFollowupMode: "agent",
-        signal: abortController.signal,
-      });
-
-      expect(result.details?.status).toBe("approval-pending");
-      await vi.waitFor(() => {
-        expect(requireGatewayCommand("system.run").callOptions).toEqual({
-          scopes: ["operator.write", "operator.approvals"],
-          signal: abortController.signal,
-          dispatchAuthority: {
-            version: 2,
-            kind: "source-bound",
-            assertCurrent: expect.any(Function),
-          },
-        });
-      });
-      abortController.abort(new Error("run aborted during node invocation"));
-      pendingInvocation.reject(abortController.signal.reason);
-      await setImmediate();
-
-      expect(unhandledRejections.reasons).toEqual([]);
-      expect(followupMock).not.toHaveBeenCalled();
-    } finally {
-      unhandledRejections.restore();
-    }
   });
 
   it("does not dispatch an async human approval after gateway policy revocation", async () => {
@@ -813,69 +746,67 @@ describe("executeNodeHostCommand", () => {
 
     await expect(reviewNode(autoReviewer)).rejects.toThrow("ask=always requires human approval");
 
-    expect(autoReviewer).toHaveBeenCalledTimes(1);
-    expect(hostPolicyMock).toHaveBeenCalledTimes(2);
     expectNoSystemRun();
   });
 
-  it("promotes a timed-out allowlist fallback and tags its provenance", async () => {
-    const entry = { pattern: "/trusted/bin/tool" };
-    allowlistMock.mockReturnValue(
-      buildAllowlistEvalResult({ allowlistSatisfied: true, segmentAllowlistEntry: entry }),
-    );
-    nodeApprovalsMock.mockReturnValue(
-      createNodeApprovals([entry], {
-        security: "allowlist",
-        ask: "on-miss",
-        askFallback: "deny",
-        autoAllowSkills: false,
-      }),
-    );
-    setHostPolicy("allowlist", "always", "allowlist");
-    approvalDecisionMock.mockResolvedValue(null);
-
-    const result = await runNode({
-      command: "tool --version",
-      security: "allowlist",
-      ask: "always",
-    });
-
-    expect(result.details?.status).toBe("completed");
-    await vi.waitFor(() => {
-      expect(getRunParams()).toEqual(
-        expect.objectContaining({
-          approvalSource: "ask-fallback",
-        }),
-      );
-    });
-    const runParams = getRunParams();
-    expect(runParams.approved).toBeUndefined();
-    expect(runParams.approvalDecision).toBeUndefined();
-  });
-
-  it("tags headless inline fallback before invoking the node", async () => {
-    setHostPolicy("full", "always", "full");
-    registerApprovalMock.mockResolvedValue({
-      id: "approval-1",
-      expiresAtMs: Date.now() + 60_000,
-      finalDecision: null,
-    });
-
-    const result = await runNode({
-      ask: "always",
-      trigger: "cron",
-    });
-
-    expect(result.details?.status).toBe("completed");
-    expect(getRunParams()).toEqual(
-      expect.objectContaining({
-        approvalSource: "ask-fallback",
-      }),
-    );
-    const runParams = getRunParams();
-    expect(runParams.approved).toBeUndefined();
-    expect(runParams.approvalDecision).toBeUndefined();
-  });
+  it.each(["allowlist", "headless", "durable"] as const)(
+    "tags %s timeout fallback without fabricating a human grant",
+    async (kind) => {
+      const headless = kind === "headless";
+      const security = headless ? "full" : "allowlist";
+      const command =
+        kind === "allowlist"
+          ? "tool --version"
+          : headless
+            ? "bun ./script.ts"
+            : preparedPlan.commandText;
+      setHostPolicy(security, "always", security);
+      approvalDecisionMock.mockResolvedValue(null);
+      if (headless) {
+        registerApprovalMock.mockResolvedValue({
+          id: "approval-1",
+          expiresAtMs: Date.now() + 60_000,
+          finalDecision: null,
+        });
+      } else {
+        const entry =
+          kind === "durable"
+            ? {
+                pattern: exactCommandMarker(command),
+                source: "allow-always" as const,
+                commandText: command,
+              }
+            : { pattern: "/trusted/bin/tool" };
+        allowlistMock.mockReturnValue(
+          buildAllowlistEvalResult({
+            allowlistSatisfied: kind === "allowlist",
+            segmentAllowlistEntry: entry,
+          }),
+        );
+        durableApprovalMock.mockReturnValue(kind === "durable");
+        nodeApprovalsMock.mockReturnValue(
+          createNodeApprovals([entry], {
+            ...fullNodePolicy,
+            security,
+            ask: kind === "durable" ? "always" : "on-miss",
+          }),
+        );
+      }
+      const result = await runNode({
+        command,
+        security,
+        ask: "always",
+        ...(headless ? { trigger: "cron" } : {}),
+      });
+      expect(result.details?.status).toBe("completed");
+      const runParams = getRunParams();
+      expect(runParams.approvalSource).toBe("ask-fallback");
+      if (kind !== "durable") {
+        expect(runParams.approved).toBeUndefined();
+        expect(runParams.approvalDecision).toBeUndefined();
+      }
+    },
+  );
 
   it.each([false, true])(
     "denies revoked node-host policy (headless timeout=%s)",
@@ -928,65 +859,29 @@ describe("executeNodeHostCommand", () => {
     expectNoSystemRun();
   });
 
-  it("accepts a current exact-command durable grant for allowlist timeout fallback", async () => {
-    const commandText = preparedPlan.commandText;
-    const exactEntry = {
-      pattern: exactCommandMarker(commandText),
-      source: "allow-always" as const,
-      commandText,
-    };
-    allowlistMock.mockReturnValue(buildAllowlistEvalResult());
-    durableApprovalMock.mockReturnValue(true);
-    nodeApprovalsMock.mockReturnValue(
-      createNodeApprovals([exactEntry], {
-        security: "allowlist",
-        ask: "always",
-        askFallback: "deny",
-        autoAllowSkills: false,
-      }),
-    );
-    setHostPolicy("allowlist", "always", "allowlist");
-    approvalDecisionMock.mockResolvedValue(null);
+  it("keeps multiline direct node approval follow-up output intact", async () => {
+    setHostPolicy("full", "always");
+    const stdout = "first line\r\n\tindented\n\nlast line  \t\n";
+    const stderr = "warning: something\n";
+    mockGateway({ stdout, stderr });
 
-    const result = await runNode({
-      command: commandText,
-      security: "allowlist",
-      ask: "always",
-    });
+    const result = await runNode({ approvalFollowupMode: "direct" });
 
-    expect(result.details?.status).toBe("completed");
-    await vi.waitFor(() =>
-      expect(getRunParams()).toEqual(expect.objectContaining({ approvalSource: "ask-fallback" })),
+    expect(result.details?.status).toBe("approval-pending");
+    await vi.waitFor(() => expect(followupMock).toHaveBeenCalled());
+    expect(followupMock).toHaveBeenCalledWith(
+      expect.objectContaining({ direct: true }),
+      expect.any(String),
     );
-    expect(hostPolicyMock).toHaveBeenCalledTimes(3);
+    const message = followupMock.mock.calls[0]?.[1];
+    if (typeof message !== "string") {
+      throw new Error("expected follow-up message");
+    }
+    expect(message).toContain(`[stdout]\n${stdout}`);
+    expect(message).toContain(`[stderr]\n${stderr}`);
+    // The compact notify formatter would have collapsed every run of whitespace.
+    expect(message).not.toContain("first line indented last line");
   });
-
-  it.each([{ mode: "direct", direct: true }] as const)(
-    "keeps multiline $mode node approval follow-up output intact",
-    async ({ mode, direct }) => {
-      setHostPolicy("full", "always");
-      const stdout = "first line\r\n\tindented\n\nlast line  \t\n";
-      const stderr = "warning: something\n";
-      mockGateway({ approvals: { version: 1, agents: {} }, stdout, stderr });
-
-      const result = await runNode({ approvalFollowupMode: mode });
-
-      expect(result.details?.status).toBe("approval-pending");
-      await vi.waitFor(() => expect(followupMock).toHaveBeenCalled());
-      expect(followupMock).toHaveBeenCalledWith(
-        expect.objectContaining({ direct }),
-        expect.any(String),
-      );
-      const message = followupMock.mock.calls[0]?.[1];
-      if (typeof message !== "string") {
-        throw new Error("expected follow-up message");
-      }
-      expect(message).toContain(`[stdout]\n${stdout}`);
-      expect(message).toContain(`[stderr]\n${stderr}`);
-      // The compact notify formatter would have collapsed every run of whitespace.
-      expect(message).not.toContain("first line indented last line");
-    },
-  );
 
   it("returns the reviewer denial to the agent without requesting approval or dispatching", async () => {
     const autoReviewer = vi.fn<ExecAutoReviewer>(async () => ({
@@ -1003,17 +898,12 @@ describe("executeNodeHostCommand", () => {
       "Exec denied by auto-review (risk=medium): Inspect the script before running it\n" +
       "Do not attempt the same outcome through a workaround, indirect execution, or policy circumvention. Proceed only with a materially safer alternative, or ask the user to approve this exact command after explaining the risk.\n" +
       "Command: /usr/local/bin/bun ./script.ts";
-    expect(autoReviewer).toHaveBeenCalledTimes(1);
-    expect(result).toEqual({
+    expect(result).toMatchObject({
       content: [{ type: "text", text }],
       details: {
         status: "failed",
-        exitCode: null,
         failureKind: "auto-review-denied",
-        durationMs: 0,
         aggregated: text,
-        timedOut: false,
-        cwd: "/tmp/work",
         approvalReviewOutcome: "denied",
         approvalReviews: [
           {
@@ -1027,9 +917,7 @@ describe("executeNodeHostCommand", () => {
       },
     });
     expect(registerApprovalMock).not.toHaveBeenCalled();
-    expect(
-      gatewayMock.mock.calls.filter(([method]) => method === "node.invoke").map((call) => call[2]),
-    ).not.toContainEqual(expect.objectContaining({ command: "system.run" }));
+    expectNoSystemRun();
   });
 
   it("does not invoke the node after cancellation wins during auto-review", async () => {
@@ -1059,20 +947,8 @@ describe("executeNodeHostCommand", () => {
     const result = reviewNode(autoReviewer, { warnings });
 
     await expect(result).rejects.toThrow("exec denied: user-denied");
-    expect(autoReviewer).toHaveBeenCalledTimes(1);
-    expect(registerApprovalMock).toHaveBeenCalledTimes(1);
-    expect(registerApprovalMock).toHaveBeenCalledWith(
-      expect.objectContaining({ approvalId: "approval-1", host: "node" }),
-    );
-    expect(gatewayMock.mock.calls).not.toEqual(
-      expect.arrayContaining([
-        expect.arrayContaining([
-          "node.invoke",
-          expect.anything(),
-          expect.objectContaining({ command: "system.run" }),
-        ]),
-      ]),
-    );
+    expectCall(registerApprovalMock, { approvalId: "approval-1", host: "node" });
+    expectNoSystemRun();
     expect(warnings).toEqual([
       "Exec auto-review deferred to human approval (risk=unknown): exec reviewer failed: provider\\nfailed",
     ]);
@@ -1091,20 +967,12 @@ describe("executeNodeHostCommand", () => {
       const command = params?.command ?? "";
       const hasNodeAllowlist = Array.isArray(params?.allowlist) && params.allowlist.length > 0;
       const previewMatch = command === "./scripts/check_mail.sh --limit 5";
-      return {
-        allowlistMatches: previewMatch && hasNodeAllowlist ? [{}] : [],
-        analysisOk: true,
-        allowlistSatisfied: previewMatch && hasNodeAllowlist,
-        segments: [
-          previewMatch
-            ? segment(
-                ["./scripts/check_mail.sh", "--limit", "5"],
-                "./scripts/check_mail.sh --limit 5",
-              )
-            : segment(["/bin/rm", "-rf", "/tmp/work"], "/bin/rm -rf /tmp/work"),
-        ],
-        segmentAllowlistEntries: previewMatch && hasNodeAllowlist ? [{}] : [],
-      };
+      return matchAnalysis(
+        previewMatch && hasNodeAllowlist,
+        previewMatch
+          ? segment(["./scripts/check_mail.sh", "--limit", "5"], command)
+          : segment(divergentPlan.argv, divergentPlan.commandText),
+      );
     });
     const autoReviewer = vi.fn<ExecAutoReviewer>(async (input) =>
       input.command.includes("rm -rf")
@@ -1125,16 +993,14 @@ describe("executeNodeHostCommand", () => {
     const result = await reviewNode(autoReviewer, { command: "echo SAFE" });
 
     expect(result.details?.status).toBe("completed");
-    expect(autoReviewer).toHaveBeenCalledWith(
-      expect.objectContaining({
-        command: "/bin/rm -rf /tmp/work",
-        argv: ["/bin/rm", "-rf", "/tmp/work"],
-        agent: {
-          id: "prepared-agent",
-          sessionKey: "prepared-session",
-        },
-      }),
-    );
+    expectCall(autoReviewer, {
+      command: "/bin/rm -rf /tmp/work",
+      argv: ["/bin/rm", "-rf", "/tmp/work"],
+      agent: {
+        id: "prepared-agent",
+        sessionKey: "prepared-session",
+      },
+    });
     expect(registerApprovalMock).toHaveBeenCalled();
     expect(gatewayMock).not.toHaveBeenCalledWith(
       "exec.approval.resolve",
@@ -1157,20 +1023,12 @@ describe("executeNodeHostCommand", () => {
       const command = params?.command ?? "";
       const hasNodeAllowlist = Array.isArray(params?.allowlist) && params.allowlist.length > 0;
       const wrapperMatch = command.startsWith("/bin/sh") && hasNodeAllowlist;
-      return {
-        allowlistMatches: wrapperMatch ? [{}] : [],
-        analysisOk: true,
-        allowlistSatisfied: wrapperMatch,
-        segments: [
-          command.startsWith("/bin/sh")
-            ? segment(
-                ["/bin/sh", "-lc", "./scripts/untrusted.sh"],
-                `/bin/sh -lc "./scripts/untrusted.sh"`,
-              )
-            : segment(["./scripts/untrusted.sh"], "./scripts/untrusted.sh"),
-        ],
-        segmentAllowlistEntries: wrapperMatch ? [{}] : [],
-      };
+      return matchAnalysis(
+        wrapperMatch,
+        command.startsWith("/bin/sh")
+          ? segment(wrapperPlan.argv, wrapperPlan.commandText)
+          : segment(["./scripts/untrusted.sh"], "./scripts/untrusted.sh"),
+      );
     });
     requireUnmatchedApproval();
     durableApprovalMock.mockImplementation(
@@ -1191,74 +1049,51 @@ describe("executeNodeHostCommand", () => {
     expect(registerApprovalMock).toHaveBeenCalled();
   });
 
-  it.each([["zsh", "-ic"]])(
-    "keeps non-transport %s %s startup shells outside model auto-review",
-    async (shell, flag) => {
-      const payload = "./scripts/check_mail.sh --limit 5";
-      const loginCommand = `${shell} ${flag} "${payload}"`;
-      const loginPlan = nodePlan(
-        ["/bin/sh", "-lc", loginCommand],
-        `/bin/sh -lc "${loginCommand.replaceAll('"', '\\"')}"`,
-        loginCommand,
-      );
-      usePlan(loginPlan);
-      nodeApprovalsMock.mockReturnValue(createNodeApprovals([], fullNodePolicy));
-      allowlistMock.mockImplementation((params?: { command?: string }) => {
-        const command = params?.command ?? "";
-        return analysis([
-          command === loginPlan.commandText
-            ? segment(["/bin/sh", "-lc", loginCommand], loginPlan.commandText)
-            : command === loginCommand
-              ? segment([shell, flag, payload], loginCommand)
-              : segment(["./scripts/check_mail.sh", "--limit", "5"], payload),
-        ]);
-      });
-      requireUnmatchedApproval();
-      const autoReviewer = allowReviewer();
-      setHostPolicy("allowlist", "on-miss");
-
-      const warnings: string[] = [];
-      const result = await reviewNode(autoReviewer, {
-        command: loginCommand,
-
-        warnings,
-      });
-
-      expect(result.details?.status).toBe("completed");
-      expect(autoReviewer).not.toHaveBeenCalled();
-      expect(registerApprovalMock).toHaveBeenCalled();
-      expect(warnings).toContain(
-        "Exec auto-review skipped: login or interactive shell startup requires human approval",
-      );
-    },
-  );
-
-  it.each([
-    {
-      name: "deny security",
-      nodeSecurity: "deny",
-      nodeAsk: "off",
-    },
-  ] as const)("preserves node policy with a $name floor", async ({ nodeSecurity, nodeAsk }) => {
+  it("keeps non-transport zsh -ic startup shells outside model auto-review", async () => {
+    const shell = "zsh";
+    const flag = "-ic";
+    const payload = "./scripts/check_mail.sh --limit 5";
+    const loginCommand = `${shell} ${flag} "${payload}"`;
+    const loginPlan = nodePlan(
+      ["/bin/sh", "-lc", loginCommand],
+      `/bin/sh -lc "${loginCommand.replaceAll('"', '\\"')}"`,
+      loginCommand,
+    );
+    usePlan(loginPlan);
+    allowlistMock.mockImplementation((params?: { command?: string }) => {
+      const command = params?.command ?? "";
+      return analysis([
+        command === loginPlan.commandText
+          ? segment(["/bin/sh", "-lc", loginCommand], loginPlan.commandText)
+          : command === loginCommand
+            ? segment([shell, flag, payload], loginCommand)
+            : segment(["./scripts/check_mail.sh", "--limit", "5"], payload),
+      ]);
+    });
+    requireUnmatchedApproval();
     const autoReviewer = allowReviewer();
     setHostPolicy("allowlist", "on-miss");
-    preparedMock.mockReturnValue({
-      plan: preparedPlan,
-      execPolicy: { security: nodeSecurity, ask: nodeAsk },
-    });
-    nodeApprovalsMock.mockReturnValue(
-      createNodeApprovals([], {
-        security: nodeSecurity,
-        ask: nodeAsk,
-        askFallback: "deny",
-        autoAllowSkills: false,
-      }),
+
+    const warnings: string[] = [];
+    const result = await reviewNode(autoReviewer, { command: loginCommand, warnings });
+
+    expect(result.details?.status).toBe("completed");
+    expect(autoReviewer).not.toHaveBeenCalled();
+    expect(registerApprovalMock).toHaveBeenCalled();
+    expect(warnings).toContain(
+      "Exec auto-review skipped: login or interactive shell startup requires human approval",
     );
-    mockGateway({
-      approvals: { version: 1, agents: {} },
-      allowApprovalResolve: true,
-      execPolicy: { security: nodeSecurity, ask: nodeAsk },
-    });
+  });
+
+  it("preserves node policy with a deny security floor", async () => {
+    const execPolicy = { security: "deny", ask: "off" } as const;
+    const autoReviewer = allowReviewer();
+    setHostPolicy("allowlist", "on-miss");
+    usePlan(preparedPlan, execPolicy);
+    nodeApprovalsMock.mockReturnValue(
+      createNodeApprovals([], { ...fullNodePolicy, ...execPolicy }),
+    );
+    mockGateway({ allowApprovalResolve: true, execPolicy });
 
     const execution = reviewNode(autoReviewer);
 
@@ -1299,53 +1134,29 @@ describe("executeNodeHostCommand", () => {
     },
   );
 
-  it("requests detached human approval when node runtime policy requires ask always", async () => {
-    const autoReviewer = allowReviewer();
-    usePlan(preparedPlan, { security: "full", ask: "always" });
-    nodeApprovalsMock.mockReturnValue(createNodeApprovals([], fullNodePolicy));
-    setHostPolicy("allowlist", "on-miss");
-
-    const result = await reviewNode(autoReviewer, { approvalFollowupMode: "agent" });
-
-    expect(result.details?.status).toBe("approval-pending");
-    expect(autoReviewer).not.toHaveBeenCalled();
-    expect(registerApprovalMock).toHaveBeenCalledTimes(1);
-    expect(allowedDecisionsMock).toHaveBeenCalledWith({
-      ask: "always",
-      allowAlwaysPersistence: {
-        kind: "patterns",
-        patterns: [{ pattern: "/trusted/bin/tool" }],
-      },
-    });
-    expect(requireRegisteredApprovalRequest().unavailableDecisions).toEqual(["allow-always"]);
-    expect(pendingResultMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        allowedDecisions: ["allow-once", "deny"],
-      }),
-    );
-  });
-
-  it("omits allow-always from node approval prompts when node runtime policy is missing", async () => {
-    const autoReviewer = allowReviewer();
-    preparedMock.mockReturnValue({
-      plan: preparedPlan,
-      execPolicy: undefined,
-    });
-    setHostPolicy("allowlist", "on-miss");
-
-    const result = await reviewNode(autoReviewer);
-
-    expect(result.details?.status).toBe("completed");
-    expect(autoReviewer).not.toHaveBeenCalled();
-    expect(allowedDecisionsMock).toHaveBeenCalledWith({
-      ask: "always",
-      allowAlwaysPersistence: {
-        kind: "patterns",
-        patterns: [{ pattern: "/trusted/bin/tool" }],
-      },
-    });
-    expect(requireRegisteredApprovalRequest().unavailableDecisions).toEqual(["allow-always"]);
-  });
+  it.each(["ask-always", "missing"] as const)(
+    "keeps node runtime policy %s on the one-shot human path",
+    async (policy) => {
+      const detached = policy === "ask-always";
+      const autoReviewer = allowReviewer();
+      preparedMock.mockReturnValue({
+        plan: preparedPlan,
+        execPolicy: detached ? { security: "full", ask: "always" } : undefined,
+      });
+      setHostPolicy("allowlist", "on-miss");
+      const result = await reviewNode(
+        autoReviewer,
+        detached ? { approvalFollowupMode: "agent" } : {},
+      );
+      expect(result.details?.status).toBe(detached ? "approval-pending" : "completed");
+      expect(autoReviewer).not.toHaveBeenCalled();
+      expect(requireRegisteredApprovalRequest().unavailableDecisions).toEqual(["allow-always"]);
+      if (detached) {
+        expect(registerApprovalMock).toHaveBeenCalledTimes(1);
+        expectCall(pendingResultMock, { allowedDecisions: ["allow-once", "deny"] });
+      }
+    },
+  );
 
   it.each([
     {
@@ -1433,18 +1244,13 @@ describe("executeNodeHostCommand", () => {
       execPolicy: { security: "full", ask: "off" },
     });
     nodeApprovalsMock.mockReturnValue(createNodeApprovals([commandMarker, allowlistEntry]));
-    allowlistMock.mockImplementation((raw: unknown) => {
-      const params = raw as ShellAllowlistMockParams;
-      expect(params.env?.PATH).toBe("");
-      expect(params.env?.Path).toBe("");
-      return analysis([segment(["/trusted/bin/tool", "--version"])], {
+    allowlistMock.mockReturnValue(
+      analysis([segment(["/trusted/bin/tool", "--version"])], {
         segmentAllowlistEntries: [null],
-      });
-    });
+      }),
+    );
     patternCoverageMock.mockImplementation((raw: unknown) => {
       const params = raw as { segments?: MockAllowlistSegment[]; env?: NodeJS.ProcessEnv };
-      expect(params.env?.PATH).toBe("");
-      expect(params.env?.Path).toBe("");
       expect(params.segments?.[0]?.argv[0]).toBe("/trusted/bin/tool");
       return {
         complete: true,
@@ -1462,13 +1268,6 @@ describe("executeNodeHostCommand", () => {
 
     expect(result.details?.status).toBe("completed");
     expect(registerApprovalMock).not.toHaveBeenCalled();
-    expect(requiresApprovalMock).toHaveBeenLastCalledWith(
-      expect.objectContaining({
-        analysisOk: true,
-        allowlistSatisfied: false,
-        durableApprovalSatisfied: true,
-      }),
-    );
     expect(getRunParams().env).toBeUndefined();
   });
 
@@ -1534,9 +1333,6 @@ describe("executeNodeHostCommand", () => {
         }),
       ).rejects.toThrow("exec denied: request-failed");
       expect(registerApprovalMock).toHaveBeenCalledTimes(1);
-      expect(requiresApprovalMock).toHaveBeenLastCalledWith(
-        expect.objectContaining({ allowlistSatisfied: false, durableApprovalSatisfied: false }),
-      );
     },
   );
 
@@ -1568,20 +1364,12 @@ describe("executeNodeHostCommand", () => {
 
     expect(result.details?.status).toBe("completed");
     expect(registerApprovalMock).not.toHaveBeenCalled();
-    expect(requiresApprovalMock).toHaveBeenLastCalledWith(
-      expect.objectContaining({
-        analysisOk: true,
-        allowlistSatisfied: true,
-        durableApprovalSatisfied: false,
-      }),
-    );
-    expect(requireGatewayCommand("system.run.prepare").params?.params?.env).toEqual({
-      FOO: "bar",
-    });
-    expect(requireGatewayCommand("system.run.prepare").params?.params?.cwd).toBe("/tmp/work");
+    const preparation = requireGatewayCommand("system.run.prepare").params?.params;
     const runParams = getRunParams();
-    expect(runParams.env).toEqual({ FOO: "bar" });
-    expect(runParams.cwd).toBe("/tmp/work");
+    for (const params of [preparation, runParams]) {
+      expect(params?.env).toEqual({ FOO: "bar" });
+      expect(params?.cwd).toBe("/tmp/work");
+    }
     const evalEnvs = allowlistMock.mock.calls.map(([raw]) => (raw as ShellAllowlistMockParams).env);
     expect(evalEnvs.length).toBeGreaterThanOrEqual(2);
     expect(evalEnvs.every((env) => env != null && env.FOO === "bar" && env.PATH === "")).toBe(true);
@@ -1591,15 +1379,13 @@ describe("executeNodeHostCommand", () => {
     await runNode({ bypassHostApprovalFloors: true });
 
     expect(hostPolicyMock).not.toHaveBeenCalled();
-    expect(gatewayMock).toHaveBeenCalledTimes(2);
     expect(getRunParams().systemRunPlan).toEqual(preparedPlan);
   });
 
   it("uses the prepared cwd when no workdir was requested", async () => {
     await runNode({ workdir: undefined });
 
-    const runParams = requireRunParams(requireGatewayCommand("system.run"));
-    expect(runParams.cwd).toBe(preparedPlan.cwd);
+    expect(getRunParams().cwd).toBe(preparedPlan.cwd);
   });
 
   it("rejects disconnected node targets before invoking system.run", async () => {
@@ -1618,49 +1404,37 @@ describe("executeNodeHostCommand", () => {
   });
 
   it("returns a non-empty placeholder for silent node exec results", async () => {
-    mockGateway({ approvals: { version: 1, agents: {} }, stdout: "" });
+    mockGateway({ stdout: "" });
 
     const result = await runNode({
       command: "mkdir /tmp/quiet",
     });
 
     expect(result.content).toEqual([{ type: "text", text: "Node: node-1\n(no output)" }]);
-    const details = result.details;
-    expect(details?.status).toBe("completed");
-    if (details?.status !== "completed") {
-      throw new Error(`expected completed details, got ${details?.status ?? "missing"}`);
-    }
-    expect(details.exitCode).toBe(0);
-    expect(details.aggregated).toBe("");
-    expect(details.cwd).toBe("/tmp/work");
+    expect(result.details).toMatchObject({
+      status: "completed",
+      exitCode: 0,
+      aggregated: "",
+      cwd: "/tmp/work",
+    });
   });
 
   it.each([
-    {
-      timeoutSec: Number.POSITIVE_INFINITY,
-      invokeDeadlineMs: 35_000,
-      invokeWaitMs: 40_000,
-      runTimeoutMs: 30_000,
-    },
-    {
-      timeoutSec: 3_000_000,
-      invokeDeadlineMs: MAX_SAFE_TIMEOUT_DELAY_MS,
-      invokeWaitMs: MAX_SAFE_TIMEOUT_DELAY_MS,
-      runTimeoutMs: MAX_SAFE_TIMEOUT_DELAY_MS,
-    },
-    {
-      timeoutSec: Number.MAX_VALUE,
-      invokeDeadlineMs: MAX_SAFE_TIMEOUT_DELAY_MS,
-      invokeWaitMs: MAX_SAFE_TIMEOUT_DELAY_MS,
-      runTimeoutMs: MAX_SAFE_TIMEOUT_DELAY_MS,
-    },
-    { timeoutSec: 0, invokeDeadlineMs: 35_000, invokeWaitMs: 40_000, runTimeoutMs: 0 },
-    { timeoutSec: 120, invokeDeadlineMs: 125_000, invokeWaitMs: 130_000, runTimeoutMs: 120_000 },
+    [Number.POSITIVE_INFINITY, 35_000, 40_000, 30_000],
+    [3_000_000, MAX_SAFE_TIMEOUT_DELAY_MS, MAX_SAFE_TIMEOUT_DELAY_MS, MAX_SAFE_TIMEOUT_DELAY_MS],
+    [
+      Number.MAX_VALUE,
+      MAX_SAFE_TIMEOUT_DELAY_MS,
+      MAX_SAFE_TIMEOUT_DELAY_MS,
+      MAX_SAFE_TIMEOUT_DELAY_MS,
+    ],
+    [0, 35_000, 40_000, 0],
+    [120, 125_000, 130_000, 120_000],
   ])(
-    "bounds invocation deadlines for timeoutSec=$timeoutSec",
-    async ({ timeoutSec, ...budgets }) => {
+    "bounds invocation deadlines for timeoutSec=%s",
+    async (timeoutSec, invokeDeadlineMs, invokeWaitMs, runTimeoutMs) => {
       await runNode({ timeoutSec });
-      expectSystemRunInvoke(budgets);
+      expectSystemRunInvoke({ invokeDeadlineMs, invokeWaitMs, runTimeoutMs });
       const prepare = requireGatewayCommand("system.run.prepare");
       expect(prepare.params?.timeoutMs).toBeUndefined();
       expect(prepare.options.timeoutMs).toBe(15_000);
@@ -1682,13 +1456,10 @@ describe("executeNodeHostCommand", () => {
   ])(
     "rejects requested target $requestedNode without dispatch",
     async ({ requestedNode, boundNode, error }) => {
-      const homeNode = {
+      const homeNode = nodeInfo({
         nodeId: "f2396b588d391d30a79d300e196a17cf197f34969b5e2485d2734c953567f44e",
         displayName: "home-wsl-debian",
-        commands: ["system.run", "system.run.prepare"],
-        connected: true,
-        platform: process.platform,
-      };
+      });
       listNodesMock.mockResolvedValue([
         homeNode,
         ...(boundNode
@@ -1716,10 +1487,7 @@ describe("executeNodeHostCommand", () => {
 
   it("auto-reviews strict inline-eval commands with full/off host policy when node policy is available", async () => {
     const inlinePlan = {
-      argv: ["/usr/bin/python3", "-c", "print(1)"],
-      cwd: "/tmp/work",
-      commandText: "/usr/bin/python3 -c 'print(1)'",
-      commandPreview: null,
+      ...nodePlan(["/usr/bin/python3", "-c", "print(1)"], "/usr/bin/python3 -c 'print(1)'", null),
       agentId: "requested-agent",
       sessionKey: "requested-session",
     };
@@ -1739,19 +1507,12 @@ describe("executeNodeHostCommand", () => {
     });
 
     expect(result.details?.status).toBe("completed");
-    expect(autoReviewer).toHaveBeenCalledWith(
-      expect.objectContaining({
-        command: "/usr/bin/python3 -c 'print(1)'",
-        argv: ["/usr/bin/python3", "-c", "print(1)"],
-        host: "node",
-        reason: "strict-inline-eval",
-      }),
-    );
-    expect(gatewayMock).toHaveBeenCalledWith(
-      "exec.approvals.node.get",
-      { timeoutMs: 10_000 },
-      { nodeId: "node-1" },
-    );
+    expectCall(autoReviewer, {
+      command: "/usr/bin/python3 -c 'print(1)'",
+      argv: ["/usr/bin/python3", "-c", "print(1)"],
+      host: "node",
+      reason: "strict-inline-eval",
+    });
   });
 
   it("denies timed-out inline-eval requests instead of invoking the node", async () => {

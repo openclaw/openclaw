@@ -68,6 +68,10 @@ Use `--` to stop option parsing. Command words still dispatch after it: for exam
 - ANSI colors and progress indicators render only in TTY sessions.
 - OSC-8 hyperlinks render as clickable links where supported. Otherwise the
   CLI prints plain URLs.
+- Human-readable report values neutralize terminal escape sequences before styling.
+  Embedded newlines, carriage returns, and tabs appear as `\n`, `\r`, and `\t`
+  instead of changing the report layout. This display formatting does not change
+  the underlying paths, configuration values, or JSON fields.
 - On bounded reporting commands, `--json` reserves stdout for one JSON document.
   The CLI suppresses styling and progress output. Warnings and diagnostics stay on
   stderr.

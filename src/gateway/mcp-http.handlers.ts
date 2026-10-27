@@ -3,12 +3,12 @@ import crypto from "node:crypto";
 import type { ContentBlock } from "@modelcontextprotocol/client";
 import { ContentBlockSchema } from "@modelcontextprotocol/core";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { copyInternalToolResultState } from "../../packages/agent-core/src/internal-hooks.js";
 import { runWithSessionMcpToolCallAuthority } from "../agents/agent-bundle-mcp-request-context.js";
 import { runBeforeToolCallHook, type HookContext } from "../agents/agent-tools.before-tool-call.js";
 import { extractToolErrorMessage } from "../agents/embedded-agent-tool-results.js";
 import { createGatewayToolPolicyAssertion } from "../agents/gateway-tool-policy.js";
 import { runAgentHarnessAfterToolCallHook } from "../agents/harness/hook-helpers.js";
-import { copyInternalToolResultState } from "../agents/runtime/internal-hooks.js";
 import {
   formatToolExecutionErrorMessage,
   protectNetworkToolExecutionError,

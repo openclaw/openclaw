@@ -5,7 +5,7 @@
 .chat-talk-input-picker__menu {
   border: 1px solid var(--chat-composer-popover-border, var(--overlay-border));
   border-radius: var(--chat-composer-popover-radius, var(--radius-lg));
-  background: var(--chat-composer-popover-background, var(--bg-elevated));
+  background: var(--popover);
   box-shadow: var(--overlay-shadow);
   corner-shape: superellipse(1.5);
 }
@@ -930,7 +930,9 @@
 }
 
 @media (hover: hover) and (pointer: fine) {
-  .chat-talk-control:hover:not(.chat-talk-control--holding):not(:has(:focus-visible))
+  .chat-talk-control:hover:not(.chat-talk-control--holding):not(:has(:focus-visible)):not(
+      :has(.chat-send-btn:disabled)
+    )
     .chat-talk-input-picker:not([open]) {
     width: var(--chat-microphone-picker-width);
     transition-delay: var(--chat-microphone-reveal-delay);
@@ -988,7 +990,9 @@
 }
 
 @media (hover: hover) and (pointer: fine) {
-  .chat-talk-control:hover:not(.chat-talk-control--holding):not(:has(:focus-visible))
+  .chat-talk-control:hover:not(.chat-talk-control--holding):not(:has(:focus-visible)):not(
+      :has(.chat-send-btn:disabled)
+    )
     .chat-talk-input-picker:not([open])
     .chat-talk-input-picker__trigger {
     opacity: 1;
@@ -1842,9 +1846,13 @@ html[dir="rtl"] .chat-attachment-loading > span {
     transform var(--duration-fast) ease;
 }
 
-.chat-attachment-thumb--pasted-text .chat-attachment-remove {
-  opacity: 1;
-  transform: none;
+.chat-attachment-remove::before {
+  content: "";
+  position: absolute;
+  inset: 12px;
+  border: 1px solid var(--border-strong);
+  border-radius: inherit;
+  pointer-events: none;
 }
 
 .chat-attachment-thumb:is(:hover, :focus-within) .chat-attachment-remove {
@@ -2143,7 +2151,6 @@ html[dir="rtl"] .chat-attachment-loading > span {
   color: var(--text-strong);
 }
 
-.chat-controls__inline-select-trigger--disabled,
 .chat-controls__speed-toggle:disabled,
 .chat-controls__reasoning-option:disabled {
   cursor: not-allowed;
@@ -2203,15 +2210,22 @@ html[dir="rtl"] .chat-attachment-loading > span {
   text-align: left;
 }
 
-.chat-controls__inline-select-option:hover,
-.chat-controls__inline-select-option:focus-visible {
-  background: var(--bg-hover);
+.chat-controls__inline-select-option:is(:hover, :focus-visible):not(:disabled):not(
+    [aria-disabled="true"]
+  ) {
+  background: var(--surface-hover);
   outline: none;
 }
 
 .chat-controls__inline-select-option--selected {
   color: var(--text-strong);
   background: var(--chat-composer-menu-selected);
+}
+
+.chat-controls__inline-select-option--selected:is(:hover, :focus-visible):not(:disabled):not(
+    [aria-disabled="true"]
+  ) {
+  background: var(--surface-selected-hover);
 }
 
 /* Model and effort are independent surfaces so either choice stays one focused
@@ -3212,6 +3226,13 @@ html[dir="rtl"] .chat-attachment-loading > span {
   color: var(--text-strong);
 }
 
+.chat-controls__speed-options
+  .chat-controls__speed-option[aria-checked="true"]:is(:hover, :focus-visible):not(:disabled):not(
+    [aria-disabled="true"]
+  ) {
+  background: var(--surface-selected-hover);
+}
+
 .chat-controls__speed-option:disabled {
   opacity: 0.55;
 }
@@ -3752,8 +3773,9 @@ html[dir="rtl"] .chat-attachment-loading > span {
   transition: background 0.15s;
 }
 
-.agent-chat__recent:hover {
-  background: var(--bg-hover);
+.agent-chat__recent:hover,
+.agent-chat__recent:focus-visible {
+  background: var(--surface-hover);
 }
 
 .agent-chat__recent-name,

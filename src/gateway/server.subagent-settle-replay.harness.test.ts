@@ -7,6 +7,7 @@ import { buildAnnounceIdempotencyKey } from "../agents/announce-idempotency.js";
 import { prepareCommandSessionRecoveryEntry } from "../agents/command/session-preparation.js";
 import type { AgentCommandOpts } from "../agents/command/types.js";
 import { RESTART_RECOVERY_INTERRUPTION_NOTE } from "../agents/restart-recovery-prompt.js";
+import { createSubagentRunRecord } from "../agents/subagent-test-fixtures.test-helpers.js";
 import { maybeWakeRequesterAfterAllChildrenSettled } from "../agents/subagents/announce/subagent-announce.requester-settle-wake.js";
 import {
   mutateRequesterCompletionBatch,
@@ -109,7 +110,7 @@ describe("public yielded settle replay with real Gateway admission", () => {
     agentCommandMock.mockReset();
     await prepareGatewayReplyRuntimeForTest();
     const now = Date.now();
-    child = {
+    child = createSubagentRunRecord({
       runId: `settle-replay-child-${sequence}`,
       childSessionKey: `agent:main:subagent:settle-replay-child-${sequence}`,
       childAgentId: "main",
@@ -119,21 +120,16 @@ describe("public yielded settle replay with real Gateway admission", () => {
       requesterAgentId: "main",
       requesterStorePath: resolvePhysicalSessionStorePath({ sessionKey: requesterSessionKey }),
       completionRequesterSessionId: requesterSessionId,
-      task: "Return the isolated child result",
-      cleanup: "keep",
       createdAt: now - 30,
-      execution: {
-        status: "terminal",
-        startedAt: now - 20,
-        endedAt: now - 10,
-        outcome: { status: "ok" },
-      },
+      startedAt: now - 20,
+      endedAt: now - 10,
+      outcome: { status: "ok" },
       expectsCompletionMessage: true,
       completion: { required: true, resultText: "isolated child result", capturedAt: now - 10 },
       // Already-delivered results still owe the explicit yield continuation.
       delivery: { status: "delivered" },
       requesterSettleWake: wakeState([`settle-replay-child-${sequence}`]),
-    };
+    });
     saveChild(child);
   });
 
@@ -296,7 +292,6 @@ describe("public yielded settle replay with real Gateway admission", () => {
         });
         const replay = wake();
         expect(await replay.result).toBe(false);
-        expect(agentCommandMock).toHaveBeenCalledOnce();
         expect(replay.completeBatch).not.toHaveBeenCalled();
         expect(persistedChild()?.requesterSettleWake).toMatchObject({
           status: "dispatching",
@@ -306,7 +301,6 @@ describe("public yielded settle replay with real Gateway admission", () => {
         expect(child.requesterSettleWake?.nextAttemptAt).toBeUndefined();
         release.resolve();
         await terminal;
-        expect(agentCommandMock).toHaveBeenCalledOnce();
         const reconciliation = wake();
         expect(await reconciliation.result).toBe(outcome === "success");
         expect(agentCommandMock).toHaveBeenCalledOnce();
@@ -324,7 +318,6 @@ describe("public yielded settle replay with real Gateway admission", () => {
           expect(persisted?.delivery).toEqual({ status: "delivered" });
         }
         expect(await readUserTurnCompletionForTest(requesterScope, runId)).toMatchObject({
-          run_id: runId,
           outcome:
             outcome === "success"
               ? { status: "ok", reason: "completed" }

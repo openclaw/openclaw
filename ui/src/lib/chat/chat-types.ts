@@ -97,6 +97,8 @@ export type DurableComposerDraft = {
   modelSelection?: DurableDraftModelSelection;
   attachments: DurableComposerDraftAttachment[];
   questionDrafts?: DurableQuestionDraft[];
+  /** Context-only comments have no uploaded file payload. */
+  selectionAnnotations?: ChatSelectionAnnotation[];
 };
 
 export type ChatComposerDraftRetry = {
@@ -530,6 +532,7 @@ export type ToolCardOutcome =
   | "failed"
   | "blocked"
   | "skipped"
+  | "unrecorded"
   | "unknown";
 
 export type ChatGoalMutationAction = { goalId: string } & (

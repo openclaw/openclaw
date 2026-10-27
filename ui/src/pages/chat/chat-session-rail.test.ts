@@ -369,9 +369,8 @@ describe("ChatSessionRailElement", () => {
           draft: "",
         },
       });
-      const phrase = element.querySelector("openclaw-working-phrase")!;
-      await phrase.updateComplete;
-      expect(phrase.textContent?.replace(/\s+/g, " ").trim()).toBe(expected);
+      const text = () => element.querySelector("openclaw-working-phrase")?.textContent;
+      await waitForSolid(() => expect(text()?.replace(/\s+/g, " ").trim()).toBe(expected));
     } finally {
       setCurrentThemeBranding(originalBranding);
     }
@@ -550,7 +549,7 @@ describe("ChatSessionRailElement", () => {
   });
 
   it.each([false, true])(
-    "uses an empty-question fallback only for images (image: %s)",
+    "submits attachments without a written question (image: %s)",
     async (image) => {
       const onSubmit = vi.fn();
       const element = await mount({
@@ -576,16 +575,15 @@ describe("ChatSessionRailElement", () => {
           ],
         },
       });
-      expect(element.querySelector<HTMLButtonElement>("button[type=submit]")?.disabled).toBe(
-        !image,
-      );
+      expect(element.querySelector<HTMLButtonElement>("button[type=submit]")?.disabled).toBe(false);
       element.querySelector("form")!.dispatchEvent(new SubmitEvent("submit", { bubbles: true }));
       element
         .querySelector("textarea")!
         .dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
-      expect(onSubmit.mock.calls).toEqual(
-        image ? [["What does this image show?"], ["What does this image show?"]] : [],
-      );
+      const question = image
+        ? "What does this image show?"
+        : "Respond to the selected text and comments.";
+      expect(onSubmit.mock.calls).toEqual([[question], [question]]);
     },
   );
 

@@ -9,7 +9,6 @@ import { GatewayClientRequestError } from "../../packages/gateway-client/src/req
 import { ErrorCodes, errorShape } from "../../packages/gateway-protocol/src/index.js";
 import { resolveAgentWorkspaceDir } from "../agents/agent-scope-config.js";
 import { runBeforeToolCallHook } from "../agents/agent-tools.before-tool-call.js";
-import { resolveToolLoopDetectionConfig } from "../agents/agent-tools.js";
 import { getChannelAgentToolMeta } from "../agents/channel-tool-metadata.js";
 import { readEmbeddedMessageDeliveryFact } from "../agents/embedded-agent-message-delivery.js";
 import { createGatewayToolPolicyAssertion } from "../agents/gateway-tool-policy.js";
@@ -27,7 +26,7 @@ import {
 } from "../channels/plugins/conversation-read-origin.js";
 import { isMessageToolSendActionName } from "../channels/plugins/message-action-names.js";
 import { getRuntimeConfig } from "../config/io.js";
-import { withSessionActorStorage } from "../config/sessions/session-actor-storage-binding.js";
+import { withSessionActorStorage } from "../config/sessions/session-actor-storage-acquisition.js";
 import { captureSessionEntryMetadataRead } from "../config/sessions/session-entry-source-authority.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -559,13 +558,13 @@ async function invokeGatewayToolWithSignal(
       toolName,
       params: toolArgs,
       toolCallId,
+      // Operator calls share a session key but are outside its agent run.
       ctx: {
         agentId,
         config: params.cfg,
         sessionKey,
         approvalReviewerDeviceId: params.approvalReviewerDeviceId,
         workspaceDir,
-        loopDetection: resolveToolLoopDetectionConfig({ cfg: params.cfg, agentId }),
       },
       signal: params.signal,
       approvalMode: params.approvalMode,

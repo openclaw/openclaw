@@ -29,6 +29,7 @@ import {
 
 async function inspectProvisioning(
   sourceRoot: string,
+  estimateBytes = true,
 ): Promise<GitWorktreeOperations["worktree.provisioning-inspection"]["output"]> {
   const includePath = path.join(sourceRoot, ".worktreeinclude");
   if (!(await worktreePathExists(includePath))) {
@@ -63,7 +64,7 @@ async function inspectProvisioning(
     paths.push(...splitNullBuffer(candidates).map((entry) => entry.toString("utf8")));
   }
   let estimatedBytes = 0;
-  for (const relativePath of paths) {
+  for (const relativePath of estimateBytes ? paths : []) {
     const normalized = normalizeProvisionedRelativePath(relativePath);
     if (!normalized || !(await hasSafeParentDirectories(sourceRoot, normalized))) {
       continue;
@@ -142,7 +143,7 @@ export async function executeGitWorktreeOperation(
       return await snapshotWorktree(operation.input);
     }
     case "worktree.provisioning-inspection":
-      return await inspectProvisioning(operation.input.sourceRoot);
+      return await inspectProvisioning(operation.input.sourceRoot, operation.input.estimateBytes);
     case "worktree.cleanup-inspection":
       return await inspectCleanup(operation.input);
     case "worktree.git-size":

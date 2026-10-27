@@ -17,6 +17,7 @@ import {
   prepareSqliteReadOnlyLocationSyncInProcess,
 } from "./sqlite-readonly-location.js";
 import { MAX_SNAPSHOT_ATTEMPTS } from "./sqlite-snapshot-policy.js";
+import { createSqliteSnapshotStagingDirectorySync } from "./sqlite-snapshot-staging.js";
 import { readDatabasePathIdentitySync } from "./sqlite-worker-identity.js";
 
 const MIB = 1024 * 1024;
@@ -753,6 +754,9 @@ it.each(["overwrite", "transient missing pathname"] as const)(
     const bytes = patternedBytes(change === "overwrite" ? MIB : 4099);
     const fixture = createFixture(bytes);
     if (change === "overwrite") {
+      const directory = createSqliteSnapshotStagingDirectorySync(fixture.stagingRoot);
+      fixture.prepare = () =>
+        prepareSqliteReadOnlyLocationSyncInProcess(fixture.sourcePath, { directory });
       const after = Buffer.from(bytes);
       after.writeUInt8(after.readUInt8(after.length - 1) ^ 0xff, after.length - 1);
       const injected = afterFirstCopy(() => fs.writeFileSync(fixture.sourcePath, after));

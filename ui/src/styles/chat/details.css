@@ -110,9 +110,9 @@ openclaw-chat-details[mobile] {
   overflow-wrap: anywhere;
 }
 
-/* Overlay and docked Details share the same surface and entrance motion. */
+/* Overlay and docked Details share the popover surface and entrance motion. */
 .chat-details[data-desktop] {
-  --details-surface: var(--panel-strong);
+  --details-surface: var(--popover);
   inset: auto;
   border-color: var(--overlay-border, var(--border-strong));
   background: var(--details-surface);

@@ -79,6 +79,7 @@ function retireReader(reader: RetainedReader): void {
     return;
   }
   clearTimeout(reader.idleTimer);
+  reader.idleTimer = undefined;
   reader.retiring = true;
   reader.connection.close();
   retainedReaders.delete(reader.identity.key);
@@ -96,8 +97,7 @@ function scheduleReaderRetirement(reader: RetainedReader): void {
   ) {
     return;
   }
-  clearTimeout(reader.idleTimer);
-  reader.idleTimer = runInDetachedAsyncContext(() =>
+  reader.idleTimer ??= runInDetachedAsyncContext(() =>
     setTimeout(() => {
       try {
         retireReader(reader);
@@ -105,9 +105,9 @@ function scheduleReaderRetirement(reader: RetainedReader): void {
         process.emitWarning(`Idle shared-state reader cleanup failed: ${String(error)}`);
         scheduleReaderRetirement(reader);
       }
-    }, SQLITE_IDLE_HANDLE_TTL_MS),
+    }, SQLITE_IDLE_HANDLE_TTL_MS).unref(),
   );
-  reader.idleTimer.unref?.();
+  reader.idleTimer.refresh();
 }
 
 /** The host joins this receipt before allowing replacement or deletion of live state. */
@@ -168,8 +168,7 @@ function borrowStateReadConnection(
   }
   const retained = reader;
   observeOpenClawDatabaseMaintenanceResource(retained);
-  retained.borrowed = true;
-  clearTimeout(retained.idleTimer);
+  retained.borrowed = true; // Borrowing and settlement cannot yield to the idle timer.
   return {
     status: "available",
     value: {

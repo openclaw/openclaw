@@ -51,6 +51,7 @@ function prepareEnvelopeSerialization(
   payload: Record<string, unknown>,
   separateMessage: boolean,
   fields: [string, unknown][],
+  hasAncestors: boolean,
 ) {
   const segments: Array<{ prefix: string; field: "ancestorSessions" | "ancestorSessionRefs" }> = [];
   const entries: [string, unknown][] = [];
@@ -64,7 +65,7 @@ function prepareEnvelopeSerialization(
     if (field === "session" || (field === "message" && separateMessage)) {
       continue;
     }
-    if (field === "ancestorSessions" || field === "ancestorSessionRefs") {
+    if (hasAncestors && (field === "ancestorSessions" || field === "ancestorSessionRefs")) {
       segments.push({ prefix: prefix + flush(), field });
       prefix = "";
     } else {
@@ -235,7 +236,6 @@ export function prepareSessionEventProjection(
         };
         audiences.set(audienceKey, audience);
       }
-      const { row } = audience;
       const rowDeltas = hasGatewayClientCap(
         client.connect.caps,
         GATEWAY_CLIENT_CAPS.SESSION_ROW_DELTAS,
@@ -250,6 +250,7 @@ export function prepareSessionEventProjection(
       const deliveries = audience.deliveries[rowDeltas ? 1 : 0];
       let delivery = deliveries.get(references.history);
       if (!delivery) {
+        const { row } = audience;
         const plan = references.prepareDelivery(
           row,
           audience.ancestors,
@@ -311,6 +312,7 @@ export function prepareSessionEventProjection(
       const variant = Number(fieldRefs) + (omitMessage ? 2 : 0);
       let projected = delivery.variants[variant];
       if (!projected) {
+        const { row } = audience;
         const envelope = delivery.envelope;
         let template = envelope.variants[variant];
         const reused = template !== undefined;
@@ -393,6 +395,7 @@ export function prepareSessionEventProjection(
                 template.payload,
                 Boolean(message),
                 envelopeFields,
+                Boolean(audience.ancestors?.length),
               ))
             : undefined;
         const serializeSession = delivery.serializeSession;

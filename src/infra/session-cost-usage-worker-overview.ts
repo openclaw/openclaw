@@ -22,7 +22,6 @@ import {
   decodeUsageCostQuarters,
   usageQuartersNeedTranscript,
   type UsageCostQuarterBlock,
-  type UsageQuarterRange,
 } from "./session-cost-usage-quarters.js";
 import {
   readUsageCostQuarterSnapshotInDatabase,
@@ -77,118 +76,6 @@ type SqliteFreshness = {
 };
 type InstanceSource = UsageCostTranscriptFile | SqliteFreshness;
 
-function evaluateInstance(params: {
-  path: string | undefined;
-  file: InstanceSource | undefined;
-  entry: UsageCostQuarterSnapshotEntry | undefined;
-  range: UsageQuarterRange;
-  operation: QuarterOperation;
-  invalidRows: Map<string, SessionCostUsageRollupRow>;
-}): InstanceState {
-  const { path, file, entry, range, operation } = params;
-  const envelope = entry?.envelope;
-  if (path === undefined || !entry || !envelope?.projection || !file) {
-    return { state: "pending" };
-  }
-  if (entry.row.bodyBytes !== envelope.body.storedBytes) {
-    params.invalidRows.set(entry.row.key, entry.row);
-    return { state: "pending" };
-  }
-  const checkpoint = envelope.checkpoint;
-  let fresh: boolean;
-  if (file.kind === "sqlite-mutation") {
-    if (checkpoint.kind !== "sqlite" || (checkpoint.generation ?? null) !== file.generation) {
-      // Discovery and the cache crossed a rewrite; the refresh owner rebuilds it.
-      return { state: "pending" };
-    }
-    // Transcript writes advance the mutation time; a later append keeps the prefix usable.
-    fresh = checkpoint.mtimeMs >= file.mtimeMs;
-  } else if (
-    operation.kind === "overview" &&
-    checkpoint.kind === "sqlite" &&
-    file.kind === "sqlite"
-  ) {
-    if ((checkpoint.generation ?? null) !== (file.generation ?? null)) {
-      // Discovery and the cache crossed a rewrite; the refresh owner rebuilds it.
-      return { state: "pending" };
-    }
-    // A same-generation append can commit after discovery; newer cache stays usable.
-    fresh = checkpoint.maxSeq > (file.maxSeq ?? 0) || isUsageCostRollupFresh({ checkpoint, file });
-  } else {
-    // usage.cost rejects a checkpoint beyond the current transcript, such as a shorter rewrite.
-    if (!canUseUsageCostRollupForPartial({ checkpoint, file })) {
-      return { state: "pending" };
-    }
-    fresh = isUsageCostRollupFresh({ checkpoint, file });
-  }
-  if (entry.missingMonths > 0) {
-    return { state: "pending" };
-  }
-  const blocks: UsageCostQuarterBlock[] = [];
-  for (const month of entry.months) {
-    const block = decodeUsageCostQuarters(month.date, month.valueJson, month.blob);
-    if (!block) {
-      params.invalidRows.set(entry.row.key, entry.row);
-      return { state: "pending" };
-    }
-    if (usageQuartersNeedTranscript(block, range)) {
-      return { state: "exact", fresh };
-    }
-    blocks.push(block);
-  }
-  let untimestamped: Extract<InstanceState, { state: "covered" }>["untimestamped"];
-  if (operation.kind === "overview" && operation.includeUntimestamped) {
-    const decoded = decodeUsageCostRollup(
-      entry.row.valueJson,
-      operation.pricingFingerprint,
-      entry.body ?? null,
-    );
-    if (!decoded) {
-      params.invalidRows.set(entry.row.key, entry.row);
-      return { state: "pending" };
-    }
-    untimestamped = decoded.rollup.untimestamped;
-  }
-  return { state: "covered", blocks, untimestamped, computedAt: envelope.scannedAt, fresh };
-}
-
-type ReportCounts = {
-  /** Instances folded into the report. */
-  cached: number;
-  /** Instances missing or older than their transcript; folded ones still count. */
-  stale: number;
-  /** Instances omitted without a refresh: exact details or replay allowance needed. */
-  deferred: number;
-  /** Deferred instances that need a session detail read for exact usage. */
-  boundary: number;
-  /** Instances without quarter rows yet (refresh or upgrade backfill pending). */
-  pending: number;
-  refreshedAt: number;
-};
-
-function cacheStatusOf(counts: ReportCounts): UsageCacheStatus {
-  return {
-    status:
-      counts.stale === 0 && counts.deferred === 0
-        ? "fresh"
-        : counts.cached > 0 || counts.deferred > 0
-          ? "partial"
-          : "stale",
-    cachedFiles: counts.cached,
-    pendingFiles: counts.stale + counts.deferred,
-    staleFiles: counts.stale,
-    refreshedAt: counts.refreshedAt || undefined,
-    ...(counts.boundary > 0
-      ? {
-          partial: {
-            reason: "aggregate-boundary" as const,
-            message: USAGE_AGGREGATE_BOUNDARY_MESSAGE,
-          },
-        }
-      : {}),
-  };
-}
-
 /** Fold quarter rows for the Usage overview (per family) or `usage.cost` (per day). */
 export async function projectUsageCostQuartersInWorker(params: {
   operation: QuarterOperation;
@@ -225,14 +112,115 @@ export async function projectUsageCostQuartersInWorker(params: {
     calendar: createUsageCalendar(operation.dayBucket),
   });
   const invalidRows = new Map<string, SessionCostUsageRollupRow>();
-  const counts: ReportCounts = {
+  const counts = {
+    /** Instances folded into the report. */
     cached: 0,
+    /** Instances missing or older than their transcript; folded ones still count. */
     stale: 0,
+    /** Instances omitted without a refresh: exact details or replay allowance needed. */
     deferred: 0,
+    /** Deferred instances that need a session detail read for exact usage. */
     boundary: 0,
+    /** Instances without quarter rows yet (refresh or upgrade backfill pending). */
     pending: 0,
     refreshedAt: 0,
   };
+
+  function evaluateInstance(instanceParams: {
+    path: string | undefined;
+    file: InstanceSource | undefined;
+    entry: UsageCostQuarterSnapshotEntry | undefined;
+  }): InstanceState {
+    const { path, file, entry } = instanceParams;
+    const envelope = entry?.envelope;
+    if (path === undefined || !entry || !envelope?.projection || !file) {
+      return { state: "pending" };
+    }
+    if (entry.row.bodyBytes !== envelope.body.storedBytes) {
+      invalidRows.set(entry.row.key, entry.row);
+      return { state: "pending" };
+    }
+    const checkpoint = envelope.checkpoint;
+    let fresh: boolean;
+    if (file.kind === "sqlite-mutation") {
+      if (checkpoint.kind !== "sqlite" || (checkpoint.generation ?? null) !== file.generation) {
+        // Discovery and the cache crossed a rewrite; the refresh owner rebuilds it.
+        return { state: "pending" };
+      }
+      // Transcript writes advance the mutation time; a later append keeps the prefix usable.
+      fresh = checkpoint.mtimeMs >= file.mtimeMs;
+    } else if (
+      operation.kind === "overview" &&
+      checkpoint.kind === "sqlite" &&
+      file.kind === "sqlite"
+    ) {
+      if ((checkpoint.generation ?? null) !== (file.generation ?? null)) {
+        // Discovery and the cache crossed a rewrite; the refresh owner rebuilds it.
+        return { state: "pending" };
+      }
+      // A same-generation append can commit after discovery; newer cache stays usable.
+      fresh =
+        checkpoint.maxSeq > (file.maxSeq ?? 0) || isUsageCostRollupFresh({ checkpoint, file });
+    } else {
+      // usage.cost rejects a checkpoint beyond the current transcript, such as a shorter rewrite.
+      if (!canUseUsageCostRollupForPartial({ checkpoint, file })) {
+        return { state: "pending" };
+      }
+      fresh = isUsageCostRollupFresh({ checkpoint, file });
+    }
+    if (entry.missingMonths > 0) {
+      return { state: "pending" };
+    }
+    const blocks: UsageCostQuarterBlock[] = [];
+    for (const month of entry.months) {
+      const block = decodeUsageCostQuarters(month.date, month.valueJson, month.blob);
+      if (!block) {
+        invalidRows.set(entry.row.key, entry.row);
+        return { state: "pending" };
+      }
+      if (usageQuartersNeedTranscript(block, range)) {
+        return { state: "exact", fresh };
+      }
+      blocks.push(block);
+    }
+    let untimestamped: Extract<InstanceState, { state: "covered" }>["untimestamped"];
+    if (operation.kind === "overview" && operation.includeUntimestamped) {
+      const decoded = decodeUsageCostRollup(
+        entry.row.valueJson,
+        operation.pricingFingerprint,
+        entry.body ?? null,
+      );
+      if (!decoded) {
+        invalidRows.set(entry.row.key, entry.row);
+        return { state: "pending" };
+      }
+      untimestamped = decoded.rollup.untimestamped;
+    }
+    return { state: "covered", blocks, untimestamped, computedAt: envelope.scannedAt, fresh };
+  }
+
+  function cacheStatusOf(): UsageCacheStatus {
+    return {
+      status:
+        counts.stale === 0 && counts.deferred === 0
+          ? "fresh"
+          : counts.cached > 0 || counts.deferred > 0
+            ? "partial"
+            : "stale",
+      cachedFiles: counts.cached,
+      pendingFiles: counts.stale + counts.deferred,
+      staleFiles: counts.stale,
+      refreshedAt: counts.refreshedAt || undefined,
+      ...(counts.boundary > 0
+        ? {
+            partial: {
+              reason: "aggregate-boundary" as const,
+              message: USAGE_AGGREGATE_BOUNDARY_MESSAGE,
+            },
+          }
+        : {}),
+    };
+  }
   const observe = (snapshot: Map<string, UsageCostQuarterSnapshotEntry>) => {
     for (const entry of snapshot.values()) {
       counts.refreshedAt = Math.max(counts.refreshedAt, entry.envelope?.scannedAt ?? 0);
@@ -276,9 +264,6 @@ export async function projectUsageCostQuartersInWorker(params: {
         path: file.filePath,
         file,
         entry: snapshot.get(file.filePath),
-        range,
-        operation,
-        invalidRows,
       });
       if (instance.state === "pending") {
         counts.stale += 1;
@@ -332,7 +317,7 @@ export async function projectUsageCostQuartersInWorker(params: {
         startMs: operation.startMs,
         endMs: operation.endMs,
         formatDay,
-        cacheStatus: cacheStatusOf(counts),
+        cacheStatus: cacheStatusOf(),
       }),
       staleSessionFiles: [...staleSessionFiles],
       invalidRows: [...invalidRows.values()],
@@ -401,9 +386,6 @@ export async function projectUsageCostQuartersInWorker(params: {
         path: paths[index],
         file,
         entry: paths[index] === undefined ? undefined : snapshot.get(paths[index]),
-        range,
-        operation,
-        invalidRows,
       });
       if (state.state !== "covered") {
         incomplete = true;
@@ -446,7 +428,7 @@ export async function projectUsageCostQuartersInWorker(params: {
     batch: batch.finish(),
     computing,
     summarizing: counts.pending,
-    cacheStatus: cacheStatusOf(counts),
+    cacheStatus: cacheStatusOf(),
     staleSessionFiles: [...staleSessionFiles],
     invalidRows: [...invalidRows.values()],
   };

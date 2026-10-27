@@ -113,7 +113,6 @@ function isPlanningEvidenceScenario(
 }
 
 type PlanningEvidenceFixture = {
-  currentSummary: Record<string, unknown>;
   failureMessage: string;
   outboundText: string;
   scenario: PlanningEvidenceScenario;
@@ -167,11 +166,6 @@ function createPlanningEvidenceFixture(
       scenario,
       outboundText: expectedReply,
       failureMessage: "missing successful current-attempt progress_card update",
-      currentSummary: {
-        eventCursor: 9,
-        assistantMirrors: [{ identity: "current-turn:assistant", text: expectedReply }],
-        successfulToolCallCounts: { progress_card: 1 },
-      },
     };
   }
   if (scenario.execution.runtime === "codex" && artifactFile) {
@@ -180,11 +174,6 @@ function createPlanningEvidenceFixture(
       scenario,
       outboundText,
       failureMessage: "missing Codex harness progress_card signal",
-      currentSummary: {
-        eventCursor: 9,
-        assistantMirrors: [{ identity: "current-turn:assistant", text: outboundText }],
-        successfulToolCallCounts: { progress_card: 1 },
-      },
     };
   }
   if (scenario.execution.runtime === "openclaw" && artifactFile) {
@@ -192,10 +181,6 @@ function createPlanningEvidenceFixture(
       scenario,
       outboundText: `Built ${artifactFile}`,
       failureMessage: "missing OpenClaw progress_card signal",
-      currentSummary: {
-        eventCursor: 9,
-        successfulToolCallCounts: { progress_card: 1 },
-      },
     };
   }
   throw new Error(`unsupported planning evidence metadata: ${scenario.id}`);
@@ -203,7 +188,7 @@ function createPlanningEvidenceFixture(
 
 function runPlanningEvidenceFixture(
   fixture: PlanningEvidenceFixture,
-  currentSummary = fixture.currentSummary,
+  currentSummary: Record<string, unknown>,
 ) {
   const state = createQaBusState();
   const readOptions: unknown[] = [];
@@ -255,6 +240,68 @@ const planningEvidenceFixtures = readQaScenarioPack()
   .scenarios.filter(isPlanningEvidenceScenario)
   .map(createPlanningEvidenceFixture);
 
+const goalArtifact = "goal-continuance-live-00000000.txt";
+const goalArtifactText = "Goal continuance advanced the concrete next step.";
+
+function runGoalFlow(mode: "continue" | "premature-completion" | "early-artifact") {
+  const state = createQaBusState();
+  const sessionListCalls: string[] = [];
+  const hasContinued = () =>
+    state.getSnapshot().messages.some((m) => m.direction === "inbound" && m.text === "continue");
+  const result = runLoadedScenarioFlow("goal-followthrough-live", {
+    state,
+    api: {
+      env: {
+        providerMode: "live-frontier",
+        gateway: {
+          workspaceDir: "/qa-goal",
+          call: async (method: string) => {
+            sessionListCalls.push(method);
+            return {
+              sessions: [
+                {
+                  key: "agent:qa:main",
+                  hasActiveRun: mode !== "premature-completion" && sessionListCalls.length === 1,
+                  goal: {
+                    status: mode === "premature-completion" ? "complete" : "active",
+                    objective: goalArtifact,
+                  },
+                },
+              ],
+            };
+          },
+        },
+      },
+      path: { join: (...parts: string[]) => parts.join("/") },
+      fs: {
+        readFile: async (file: string) => {
+          if (
+            (mode === "continue" && file === `/qa-goal/${goalArtifact}` && hasContinued()) ||
+            (mode === "early-artifact" && sessionListCalls.length >= 2)
+          ) {
+            return goalArtifactText;
+          }
+          throw new Error("goal artifact has not been written");
+        },
+      },
+      normalizeLowercaseStringOrEmpty,
+    },
+    onWaitForOutboundMessage: ({ waitCount, state: currentState }) => {
+      const currentInbound = currentState
+        .getSnapshot()
+        .messages.findLast((m) => m.direction === "inbound");
+      currentState.addOutboundMessage({
+        accountId: "qa-channel",
+        to: "dm:goal-followthrough-live-00000000",
+        replyToId: currentInbound?.id,
+        text:
+          mode === "continue" && waitCount > 1 ? "GOAL-CONTINUANCE-DONE" : "GOAL-CONTINUANCE-READY",
+      });
+    },
+  });
+  return { result, state, sessionListCalls, hasContinued };
+}
+
 describe("scenario-flow-runner", () => {
   it.each(
     telegramRichObservationCases.filter(
@@ -266,63 +313,8 @@ describe("scenario-flow-runner", () => {
   );
 
   it("keeps live goal followthrough inside the active-goal context limit", async () => {
-    const state = createQaBusState();
-    const artifactFile = "goal-continuance-live-00000000.txt";
-    const artifactText = "Goal continuance advanced the concrete next step.";
-    const conversation = "dm:goal-followthrough-live-00000000";
-
-    const sessionListCalls: string[] = [];
-    const result = await runLoadedScenarioFlow("goal-followthrough-live", {
-      state,
-      api: {
-        env: {
-          providerMode: "live-frontier",
-          gateway: {
-            workspaceDir: "/qa-goal",
-            call: async (method: string) => {
-              sessionListCalls.push(method);
-              return {
-                sessions: [
-                  {
-                    key: "agent:qa:main",
-                    hasActiveRun: sessionListCalls.length === 1,
-                    goal: { status: "active", objective: artifactFile },
-                  },
-                ],
-              };
-            },
-          },
-        },
-        path: { join: (...parts: string[]) => parts.join("/") },
-        fs: {
-          readFile: async (file: string) => {
-            const continued = state
-              .getSnapshot()
-              .messages.some(
-                (message) => message.direction === "inbound" && message.text === "continue",
-              );
-            if (file === `/qa-goal/${artifactFile}` && continued) {
-              return artifactText;
-            }
-            throw new Error("goal artifact has not been written");
-          },
-        },
-        normalizeLowercaseStringOrEmpty,
-      },
-      onWaitForOutboundMessage: ({ waitCount, state: currentState }) => {
-        const currentInbound = currentState
-          .getSnapshot()
-          .messages.findLast((message) => message.direction === "inbound");
-        currentState.addOutboundMessage({
-          accountId: "qa-channel",
-          to: conversation,
-          replyToId: currentInbound?.id,
-          text: waitCount === 1 ? "GOAL-CONTINUANCE-READY" : "GOAL-CONTINUANCE-DONE",
-        });
-      },
-    });
-
-    expect(result.status).toBe("pass");
+    const { result, state, sessionListCalls, hasContinued } = runGoalFlow("continue");
+    expect((await result).status).toBe("pass");
     expect(sessionListCalls).toEqual(["sessions.list", "sessions.list", "sessions.list"]);
     const start = state
       .getSnapshot()
@@ -334,124 +326,22 @@ describe("scenario-flow-runner", () => {
     expect(objective.length).toBeLessThanOrEqual(200);
     expect(objective).toContain("GOAL-CONTINUANCE-READY");
     expect(objective).toContain("GOAL-CONTINUANCE-DONE");
-    expect(objective).toContain(artifactFile);
-    expect(objective).toContain(artifactText);
-    expect(
-      state
-        .getSnapshot()
-        .messages.some((message) => message.direction === "inbound" && message.text === "continue"),
-    ).toBe(true);
+    expect(objective).toContain(goalArtifact);
+    expect(objective).toContain(goalArtifactText);
+    expect(hasContinued()).toBe(true);
   });
 
   it("fails before continuation when the model prematurely completes a staged goal", async () => {
-    const state = createQaBusState();
-    const artifactFile = "goal-continuance-live-00000000.txt";
-    const conversation = "dm:goal-followthrough-live-00000000";
-
-    await expect(
-      runLoadedScenarioFlow("goal-followthrough-live", {
-        state,
-        api: {
-          env: {
-            providerMode: "live-frontier",
-            gateway: {
-              workspaceDir: "/qa-goal",
-              call: async () => ({
-                sessions: [
-                  {
-                    key: "agent:qa:main",
-                    hasActiveRun: false,
-                    goal: { status: "complete", objective: artifactFile },
-                  },
-                ],
-              }),
-            },
-          },
-          path: { join: (...parts: string[]) => parts.join("/") },
-          fs: {
-            readFile: async () => {
-              throw new Error("goal artifact has not been written");
-            },
-          },
-        },
-        onWaitForOutboundMessage: ({ state: currentState }) => {
-          const currentInbound = currentState
-            .getSnapshot()
-            .messages.findLast((message) => message.direction === "inbound");
-          currentState.addOutboundMessage({
-            accountId: "qa-channel",
-            to: conversation,
-            replyToId: currentInbound?.id,
-            text: "GOAL-CONTINUANCE-READY",
-          });
-        },
-      }),
-    ).rejects.toThrow("goal closed before continue");
-    expect(
-      state
-        .getSnapshot()
-        .messages.some((message) => message.direction === "inbound" && message.text === "continue"),
-    ).toBe(false);
+    const { result, hasContinued } = runGoalFlow("premature-completion");
+    await expect(result).rejects.toThrow("goal closed before continue");
+    expect(hasContinued()).toBe(false);
   });
 
   it("rejects an artifact written after the ready preview but before the first goal turn settles", async () => {
-    const state = createQaBusState();
-    const artifactFile = "goal-continuance-live-00000000.txt";
-    const conversation = "dm:goal-followthrough-live-00000000";
-    let sessionListCalls = 0;
-
-    await expect(
-      runLoadedScenarioFlow("goal-followthrough-live", {
-        state,
-        api: {
-          env: {
-            providerMode: "live-frontier",
-            gateway: {
-              workspaceDir: "/qa-goal",
-              call: async () => {
-                sessionListCalls += 1;
-                return {
-                  sessions: [
-                    {
-                      key: "agent:qa:main",
-                      hasActiveRun: sessionListCalls === 1,
-                      goal: { status: "active", objective: artifactFile },
-                    },
-                  ],
-                };
-              },
-            },
-          },
-          path: { join: (...parts: string[]) => parts.join("/") },
-          fs: {
-            readFile: async () => {
-              if (sessionListCalls >= 2) {
-                return "Goal continuance advanced the concrete next step.";
-              }
-              throw new Error("goal artifact has not been written");
-            },
-          },
-        },
-        onWaitForOutboundMessage: ({ state: currentState }) => {
-          const currentInbound = currentState
-            .getSnapshot()
-            .messages.findLast((message) => message.direction === "inbound");
-          currentState.addOutboundMessage({
-            accountId: "qa-channel",
-            to: conversation,
-            replyToId: currentInbound?.id,
-            text: "GOAL-CONTINUANCE-READY",
-          });
-        },
-      }),
-    ).rejects.toThrow("goal created the second-step artifact before continue");
-
-    expect(sessionListCalls).toBe(2);
-    expect(
-      state
-        .getSnapshot()
-        .messages.some((message) => message.direction === "inbound" && message.text === "continue"),
-    ).toBe(false);
+    const { result, sessionListCalls, hasContinued } = runGoalFlow("early-artifact");
+    await expect(result).rejects.toThrow("goal created the second-step artifact before continue");
+    expect(sessionListCalls).toHaveLength(2);
+    expect(hasContinued()).toBe(false);
   });
 
   it.each(planningEvidenceFixtures)(

@@ -45,6 +45,43 @@ const verifiedImageOutcomes = new LruCache<string | null>(4096, {
   sizeOf: (replacement) => 128 + (replacement?.length ?? 0),
 });
 
+type PreparedImage = {
+  data: string;
+  mimeType: string;
+  canonicalData?: string;
+  omission?: string;
+  digest?: string;
+};
+// Keep byte validation with the block's lifetime, not a second content-addressed
+// payload store. Mutable blocks invalidate on either input; decode outcomes and
+// backend retries remain owned by the bounded cache above.
+const preparedImages = new WeakMap<ImageContentBlock, PreparedImage>();
+
+function prepareImage(block: ImageContentBlock): PreparedImage {
+  const cached = preparedImages.get(block);
+  if (cached?.data === block.data && cached.mimeType === block.mimeType) {
+    return cached;
+  }
+  const prepared: PreparedImage = { data: block.data, mimeType: block.mimeType };
+  // Enforce the raw input ceiling before trim/canonicalize/decode allocations.
+  if (estimateBase64DecodedBytes(block.data) > MAX_IMAGE_INPUT_BYTES) {
+    prepared.omission = `omitted image payload: image exceeds input size limit (${formatBytesShort(MAX_IMAGE_INPUT_BYTES)})`;
+  } else {
+    const data = block.data.trim();
+    const canonicalData = data ? canonicalizeBase64(data) : undefined;
+    if (!canonicalData) {
+      prepared.omission = data
+        ? "omitted image payload: invalid base64"
+        : "omitted empty image payload";
+    } else if (canonicalData !== block.data) {
+      // Already-canonical input retains only the original string reference.
+      prepared.canonicalData = canonicalData;
+    }
+  }
+  preparedImages.set(block, prepared);
+  return prepared;
+}
+
 function isImageTypeBlock(block: unknown): block is Record<string, unknown> & { type: "image" } {
   return (
     Boolean(block) && typeof block === "object" && (block as { type?: unknown }).type === "image"
@@ -172,28 +209,12 @@ export async function sanitizeContentBlocksImages(
       continue;
     }
 
-    // Estimate decoded bytes on the raw payload before trim/canonicalize/decode
-    // so pathological multi-GB base64 cannot force a transient large allocation.
-    // maxBytes is the post-decode resize target; MAX_IMAGE_INPUT_BYTES is a
-    // conservative pre-decode ceiling (10 MiB) far below the 25MP/100MB
-    // processing headroom, so legitimate tool images still decode and resize.
-    if (estimateBase64DecodedBytes(block.data) > MAX_IMAGE_INPUT_BYTES) {
-      omit(
-        `omitted image payload: image exceeds input size limit (${formatBytesShort(MAX_IMAGE_INPUT_BYTES)})`,
-      );
+    const prepared = prepareImage(block);
+    if (prepared.omission) {
+      omit(prepared.omission);
       continue;
     }
-
-    const data = block.data.trim();
-    if (!data) {
-      omit("omitted empty image payload");
-      continue;
-    }
-    const canonicalData = canonicalizeBase64(data);
-    if (!canonicalData) {
-      omit("omitted image payload: invalid base64");
-      continue;
-    }
+    const canonicalData = prepared.canonicalData ?? prepared.data;
 
     try {
       const inferredMimeType = inferMimeTypeFromBase64(canonicalData);
@@ -203,7 +224,7 @@ export async function sanitizeContentBlocksImages(
       const resized = await (async (): Promise<{ base64: string; mimeType: string }> => {
         // Only callers sanitizing persisted bytes verify them, and only those bytes repeat.
         const cacheKey = verifyDecodability
-          ? `${createHash("sha256").update(canonicalData).digest("base64url")}:${maxDimensionPx}:${maxBytes}`
+          ? `${(prepared.digest ??= createHash("sha256").update(canonicalData).digest("base64url"))}:${maxDimensionPx}:${maxBytes}`
           : undefined;
         const cached = cacheKey === undefined ? undefined : verifiedImageOutcomes.get(cacheKey);
         if (cached !== undefined) {
@@ -303,11 +324,19 @@ export async function sanitizeContentBlocksImages(
           `Image could not be reduced below ${formatBytesShort(maxBytes)} (got ${formatBytesShort(bestSize)})`,
         );
       })();
-      out.push({
+      const sanitized = {
         ...block,
         data: resized.base64,
         mimeType: resized.mimeType,
-      });
+      };
+      if (resized.base64 === canonicalData) {
+        preparedImages.set(sanitized, {
+          data: resized.base64,
+          mimeType: resized.mimeType,
+          digest: prepared.digest,
+        });
+      }
+      out.push(sanitized);
     } catch (err) {
       omit(`omitted image payload: ${String(err)}`);
     }

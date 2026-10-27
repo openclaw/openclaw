@@ -91,7 +91,7 @@ const processDetails = (
   exitCode,
   exitReason,
 });
-const unknownRead = { toolCallId: "read-1", phase: "end", summary: "Outcome unknown" };
+const unknownRead = { toolCallId: "read-1", phase: "end", unpairedCall: true };
 function expectUnknownRead(entries: Awaited<ReturnType<typeof readTail>>["activity"]) {
   expect(entries).toMatchObject([activity("stored-call", unknownRead)]);
   expect(entries?.[0]?.items[0]).not.toHaveProperty("status");
@@ -266,7 +266,7 @@ it.each([true, false])("preserves reused call IDs (explicit run ownership: %s)",
     await appendMessage(scope, { ...result, ...ownership }, `${runId}-result`);
   }
   const delta = await readDelta(scope, cursor);
-  const unknownOutcome = { phase: "end", summary: "Outcome unknown" };
+  const unknownOutcome = { phase: "end", unpairedCall: true };
   expect(delta).toMatchObject({
     activity: [
       activity("failed-run-call", scoped ? { status: "failed" } : unknownOutcome),

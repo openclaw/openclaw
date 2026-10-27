@@ -1,0 +1,12 @@
+.personal-session-group-dialog {
+  min-height: 0;
+  overflow: hidden;
+}
+
+.personal-session-group-dialog__sessions {
+  display: flex;
+  min-height: 0;
+  min-width: 0;
+  flex-direction: column;
+  overflow-y: auto;
+}

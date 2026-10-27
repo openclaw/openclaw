@@ -15,7 +15,7 @@ import {
   PluginRuntimeApplicationError,
 } from "../plugins/lifecycle.js";
 import { PluginLoadFailureError } from "../plugins/loader-shared.js";
-import { prepareMemoryRuntimeReload } from "../plugins/memory-runtime.js";
+import type { prepareMemoryRuntimeReload } from "../plugins/memory-runtime.js";
 import { createPluginCache, retirePluginCache, withPluginCache } from "../plugins/plugin-cache.js";
 import { runAfterPluginLifecycleCommit } from "../plugins/plugin-lifecycle-lease.js";
 import { loadPluginLookUpTable } from "../plugins/plugin-lookup-table.js";
@@ -294,7 +294,7 @@ export async function reloadGatewayPlugins(
         sidecarReplacements.push(prepared);
       }
     }
-    memoryReplacement = prepareMemoryRuntimeReload(previousRegistry, nextRegistry);
+    memoryReplacement = services.prepareMemory(previousRegistry, nextRegistry);
     // Retained consumers and cleanup calls remain usable after ordinary admission closes.
     for (const sidecar of sidecarReplacements) {
       await sidecar.drain();
@@ -323,8 +323,8 @@ export async function reloadGatewayPlugins(
       strict ? attempt(stopErrors, run) : cleanup(label, run);
     await channels.stopPrevious(resourceHandoffIds, stopErrors, cleanup);
     const strictServiceStop =
-      resourceHandoffIds.size > 0 || memoryReplacement.retainedPluginIds.size > 0;
-    const serviceStopIds = new Set([...changedPluginIds, ...memoryReplacement.retainedPluginIds]);
+      resourceHandoffIds.size > 0 || memoryReplacement.restartPluginIds.size > 0;
+    const serviceStopIds = new Set([...changedPluginIds, ...memoryReplacement.restartPluginIds]);
     await stopOwner(strictServiceStop, "Plugin service cleanup failed", () =>
       stopPreviousServices(
         pluginRuntimeGeneration.currentServices(),
@@ -382,7 +382,7 @@ export async function reloadGatewayPlugins(
       (handle) => {
         candidateServices = handle;
       },
-      memoryReplacement.retainedPluginIds,
+      memoryReplacement.restartPluginIds,
     );
     await checkpoint();
     // Publication owns every independent activation tail, even when an earlier one fails.
@@ -588,7 +588,7 @@ export async function reloadGatewayPlugins(
                     recoveredServices = handle;
                     pluginRuntimeGeneration.setServices(handle);
                   },
-                  memoryReplacement?.retainedPluginIds,
+                  memoryReplacement?.restartPluginIds,
                 );
               });
               try {

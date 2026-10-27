@@ -1069,8 +1069,9 @@ select.settings-select:not([multiple]) {
 }
 
 .field.checkbox {
-  grid-template-columns: auto 1fr;
+  grid-template-columns: auto minmax(0, 1fr);
   align-items: center;
+  overflow-wrap: anywhere;
 }
 
 .config-form .field.checkbox {
@@ -1869,6 +1870,19 @@ select.settings-select:not([multiple]) {
 
 .data-table {
   --data-table-checkbox-col-width: 36px;
+  /* Sticky cells and the scrolling row share one opaque card composition. */
+  --data-table-row-bg: var(--card);
+  --data-table-hover-bg: color-mix(in srgb, var(--text) var(--surface-hover-amount), var(--card));
+  --data-table-selected-bg: color-mix(
+    in srgb,
+    var(--text) var(--surface-selected-amount),
+    var(--card)
+  );
+  --data-table-selected-hover-bg: color-mix(
+    in srgb,
+    var(--text) var(--surface-selected-hover-amount),
+    var(--card)
+  );
   width: 100%;
   border-collapse: separate;
   border-spacing: 0;
@@ -1993,7 +2007,9 @@ select.settings-select:not([multiple]) {
 }
 
 .data-table tbody tr:hover {
-  background: var(--bg-hover);
+  --data-table-row-bg: var(--data-table-hover-bg);
+
+  background: var(--data-table-row-bg);
 }
 
 .data-table tbody tr:last-child td {
@@ -2022,12 +2038,7 @@ select.settings-select:not([multiple]) {
 
 td.data-table-checkbox-col,
 td.data-table-key-col {
-  background: var(--card);
-}
-
-.data-table tbody tr:hover td.data-table-checkbox-col,
-.data-table tbody tr:hover td.data-table-key-col {
-  background: var(--bg-hover);
+  background: var(--data-table-row-bg);
 }
 
 .data-table-checkbox-col input[type="checkbox"] {
@@ -2249,7 +2260,6 @@ td.data-table-key-col {
   width: min(320px, calc(100vw - 24px));
   max-height: 320px;
   border: 1px solid var(--overlay-border);
-  background: var(--bg-elevated);
   box-shadow: var(--overlay-shadow);
 }
 

@@ -12,6 +12,7 @@ import * as managedBinary from "./crabbox-managed-binary.js";
 import { crabboxState } from "./crabbox-state.test-support.js";
 import {
   warmImage,
+  warmAllocation,
   warmRecord,
   warmStore,
   captureOperation,
@@ -226,6 +227,21 @@ describe("Crabbox warm-image doctor", () => {
                   : {}),
               });
       }
+      if (operation === "retire") {
+        record.allocations = {
+          cbx_choice_holder: warmAllocation({
+            kind: "checkpoint",
+            checkpointId: "chk_predecessor",
+          }),
+          cbx_generation_holder: warmAllocation(
+            { kind: "cold" },
+            {
+              imageGeneration: { checkpointId: "chk_predecessor", createdAtMs: 1 },
+            },
+          ),
+          cbx_unrelated: warmAllocation(),
+        };
+      }
       store.register("profile", record);
       const probe = vi.spyOn(managedBinary, "probeCrabboxVersion");
       const command = vi
@@ -257,6 +273,12 @@ describe("Crabbox warm-image doctor", () => {
           "capture attempts are skipped until `warmImages.refreshAfter`",
           "supports native checkpoints",
         ]);
+      } else if (operation === "retire") {
+        expectText(
+          findings[0]?.message,
+          ["cbx_choice_holder", "cbx_generation_holder"],
+          ["cbx_unrelated"],
+        );
       } else if (operation === "uncertain") {
         expectText(findings[0]?.fixHint, ["chk_interrupted_a", "chk_interrupted_b"]);
         expect(findings[0]?.fixHint).toContain(

@@ -1,6 +1,5 @@
 .session-menu > .oc-menu {
   border: 1px solid var(--overlay-border);
-  background: var(--bg-elevated);
   box-shadow: var(--overlay-shadow);
   min-width: 224px;
   max-width: 264px;

@@ -1,5 +1,6 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { getInternalToolExecutionPreparer } from "../../../../packages/agent-core/src/internal-hooks.js";
 import { awaitGateBeforeSettlement, createDeferred } from "../../../../test/helpers/promise.js";
 import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../../../config/config.js";
 import {
@@ -14,7 +15,6 @@ import { AgentRunTerminalOutcomeError } from "../../agent-run-terminal-error.js"
 import { wrapToolWithBeforeToolCallHook } from "../../agent-tools.before-tool-call.js";
 import type { createOpenClawCodingTools } from "../../agent-tools.js";
 import { Agent, type AgentEvent } from "../../runtime/index.js";
-import { getInternalToolExecutionPreparer } from "../../runtime/internal-hooks.js";
 import { SessionManager } from "../../sessions/session-manager.js";
 import { makeAgentAssistantMessage } from "../../test-helpers/agent-message-fixtures.js";
 import { createStubTool } from "../../test-helpers/agent-tool-stubs.js";

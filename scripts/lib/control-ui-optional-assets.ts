@@ -2,7 +2,7 @@ import { CONTROL_UI_LOCALE_ENTRIES } from "./control-ui-i18n-config.ts";
 
 // The opaque Mermaid sandbox loads one self-contained classic script only when
 // a diagram is viewed. Keep its size visible without relaxing ordinary chunks.
-export const MERMAID_RENDERER_ASSET = /^assets\/mermaid\.min-[\w-]+\.js$/u;
+export const MERMAID_RENDERER_ASSET = /^assets\/pele\.min-[\w-]+\.js$/u;
 // Locale catalogs are named Vite chunks loaded only after a language selection.
 // Keep one combined cap for base and on-demand config hints in every locale.
 const CONTROL_UI_LOCALE_ASSET_PATTERNS = CONTROL_UI_LOCALE_ENTRIES.flatMap(({ locale }) => [

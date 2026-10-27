@@ -1,6 +1,7 @@
 import type { Page } from "playwright";
 import { expect, it } from "vitest";
 import { finishElementAnimations } from "../test-helpers/animations.ts";
+import { openChatPanels } from "../test-helpers/chat-layout-menu.ts";
 import { configResponse } from "./appearance-prefs.test-support.ts";
 import { twoFrames } from "./chat-presentation.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
@@ -23,9 +24,9 @@ async function inspectSurfaces(page: Page) {
     const host = conversation.closest<HTMLElement>(".sidebar-region")!;
     const probe = document.createElement("div");
     root.append(probe);
-    const resolve = (value: string) => {
-      probe.style.backgroundColor = value;
-      return getComputedStyle(probe).backgroundColor;
+    const resolve = (value: string, property: "backgroundColor" | "backgroundImage") => {
+      probe.style[property] = value;
+      return getComputedStyle(probe)[property];
     };
     const composerStyle = getComputedStyle(composer);
     const bubbleStyle = getComputedStyle(bubble);
@@ -36,15 +37,16 @@ async function inspectSurfaces(page: Page) {
       return { width: rect.width, height: rect.height };
     };
     const expectedComposer = resolve(
-      "color-mix(in srgb, var(--chat-composer-surface) 78%, transparent)",
+      "linear-gradient(var(--chat-composer-surface), var(--chat-composer-surface)), none",
+      "backgroundImage",
     );
-    const expectedBubble = resolve("var(--chat-user-surface)");
+    const expectedBubble = resolve("var(--chat-user-surface)", "backgroundColor");
     probe.remove();
     return {
       themeSheets: [...document.querySelectorAll<HTMLLinkElement>('link[rel="stylesheet"]')]
         .filter((link) => link.href.includes("/themes/"))
         .map((link) => ({ href: new URL(link.href).pathname, loaded: Boolean(link.sheet) })),
-      composer: composerStyle.backgroundColor,
+      composer: composerStyle.backgroundImage,
       bubble: bubbleStyle.backgroundColor,
       expectedComposer,
       expectedBubble,
@@ -61,6 +63,48 @@ async function inspectSurfaces(page: Page) {
 }
 
 suite.define(() => {
+  it.each(["light", "dark"] as const)(
+    "shows the shared theme canvas through both desktop headers in %s mode",
+    async (mode) => {
+      const { page } = await openThemedChat("absolutely", mode, {
+        historyMessages: [{ role: "assistant", content: assistantText }],
+      });
+      await page.goto(`${suite.server.baseUrl}chat`);
+      await page.getByText(assistantText, { exact: true }).waitFor();
+      await openChatPanels(page, "desktop");
+      await page.locator(".chat-pane__header").waitFor();
+      await page.locator(".side-panel__header").waitFor();
+      for (const occupied of [false, true]) {
+        if (occupied) {
+          await page.locator(".side-panel-launcher__card").filter({ hasText: "Files" }).click();
+          await page.locator(".side-panel__header--occupied").waitFor();
+        }
+        const headers = page.locator(".chat-pane__header, .side-panel__header");
+        expect(
+          await headers.evaluateAll((elements) =>
+            elements.map((element) => getComputedStyle(element).backgroundColor),
+          ),
+        ).toEqual(["rgba(0, 0, 0, 0)", "rgba(0, 0, 0, 0)"]);
+        const covered = await headers.evaluateAll((elements) => {
+          const painted: string[] = [];
+          for (const header of elements) {
+            for (
+              let element: Element | null = header;
+              element && !element.matches(".shell");
+              element = element.parentElement
+            ) {
+              if (getComputedStyle(element).backgroundColor !== "rgba(0, 0, 0, 0)") {
+                painted.push(element.className);
+              }
+            }
+          }
+          return painted;
+        });
+        expect(covered, "Both headers must expose the same uninterrupted shell canvas").toEqual([]);
+      }
+    },
+  );
+
   it.each([
     ["claw", "light"],
     ["claw", "dark"],
@@ -176,9 +220,9 @@ suite.define(() => {
           const inherited = await inspectSurfaces(page);
           const expectedComposer = await page.evaluate((color) => {
             const probe = document.createElement("div");
-            probe.style.backgroundColor = `color-mix(in srgb, ${color} 78%, transparent)`;
+            probe.style.backgroundImage = `linear-gradient(${color}, ${color}), none`;
             document.body.append(probe);
-            const result = getComputedStyle(probe).backgroundColor;
+            const result = getComputedStyle(probe).backgroundImage;
             probe.remove();
             return result;
           }, surface);

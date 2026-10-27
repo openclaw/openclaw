@@ -7,7 +7,6 @@ import { cancelLayout, scheduleLayout } from "../../../lib/layout-frame.ts";
 import type { PresentationValue } from "../../../lib/presentation.ts";
 import type { AssistantMessageExpansionState } from "../chat-message-recovery.ts";
 import type { ChatSessionScrollPosition } from "../scroll.ts";
-import type { ChatHistoryBoundaryProps } from "./chat-history-boundary.tsx";
 import type { ChatMessageEntryAnimations } from "./chat-message-entry.ts";
 import type { TranscriptAnnouncement } from "./chat-transcript-announcement.ts";
 import { readConnectedTranscriptRows } from "./chat-transcript-geometry.ts";
@@ -48,13 +47,13 @@ export const CHAT_TRANSCRIPT_SCROLL_RESTORE_STABLE_FRAMES = 12;
 export const CHAT_TRANSCRIPT_ZERO_MAX_SETTLE_FRAMES = 60;
 
 export type TranscriptHeader = {
-  props: ChatHistoryBoundaryProps;
+  content: JSX.Element;
   /** Fixed pixel height; becomes the virtualizer's scrollMargin so row offsets stay exact. */
   height: number;
 };
 
 export type ChatTranscriptSession = {
-  readonly layout: Pick<TranscriptLayoutOwner, "viewportResizePending">;
+  readonly layout: Pick<TranscriptLayoutOwner, "viewportResizePending" | "configureRows" | "ready">;
   readonly entryAnimations: ChatMessageEntryAnimations;
   readonly messageElements: TranscriptMessageElements;
   readonly contentElement: HTMLDivElement | null;
@@ -78,7 +77,6 @@ export type ChatTranscriptSession = {
   /** Returns the sampled loaded message at or preceding the viewport midpoint. */
   activeMessageId(messageIds: readonly string[]): string | null;
   revealMessage(messageId: string): boolean;
-  setContentReady(ready: boolean): void;
   handleFocusIn(event: FocusEvent): void;
   handleFocusOut(event: FocusEvent): void;
 };

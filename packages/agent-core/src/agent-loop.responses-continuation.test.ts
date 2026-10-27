@@ -1,9 +1,20 @@
+import assert from "node:assert/strict";
 import { createServer } from "node:http";
-import { expect, it } from "vitest";
+import { expect, it, vi } from "vitest";
 import { listenLoopback } from "../../../test/helpers/gateway-integration-fixtures.js";
 import { writeOpenAiResponsesSse } from "../../../test/helpers/openai-responses-sse.js";
 import { streamOpenAIResponses } from "../../ai/src/providers/openai-responses.js";
-import { captureAgentLoop, config, model as baseModel, user } from "./agent-loop.test-support.js";
+import { buildOpenAIResponsesParams } from "../../ai/src/transports/openai-responses-params-internal.js";
+import { SYSTEM_PROMPT_CACHE_BOUNDARY } from "../../ai/src/utils/system-prompt-cache-boundary.js";
+import {
+  captureAgentLoop,
+  config,
+  makeAssistantMessage,
+  model as baseModel,
+  reply,
+  user,
+} from "./agent-loop.test-support.js";
+import { Agent } from "./agent.js";
 import type { Model } from "./llm.js";
 import type { AgentEvent } from "./types.js";
 
@@ -11,6 +22,54 @@ import type { AgentEvent } from "./types.js";
 
 const WIRE_TEXT = "夜班巡检记录：雾笛、备用灯与无线电均正常。";
 const DELTAS = ["夜班巡检记录：", "雾笛、备用灯与无", "线电均正常。"];
+
+it("prepares each live agent's prompt once across interleaved requests and refreshes changed bytes", async () => {
+  const model: Model = {
+    ...baseModel,
+    provider: "openai",
+    api: "openai-responses",
+    compat: { supportsInstructions: true },
+  };
+  const prompts = Array.from(
+    { length: 65 },
+    (_, i) => `Session ${i}${SYSTEM_PROMPT_CACHE_BOUNDARY}Keep 🦞.\ud800`,
+  );
+  const requests: string[] = [];
+  const agents = prompts.map(
+    (systemPrompt) =>
+      new Agent({
+        initialState: { model, systemPrompt },
+        streamFn: (_model, context) => {
+          const params = buildOpenAIResponsesParams(model, context, undefined);
+          requests.push(params.instructions ?? "");
+          return reply(makeAssistantMessage([{ type: "text", text: "done" }]));
+        },
+      }),
+  );
+  const replacements = vi.spyOn(String.prototype, "replaceAll");
+  try {
+    for (let round = 0; round < 2; round++) {
+      for (const agent of agents) {
+        await agent.prompt("continue");
+      }
+    }
+    const expected = prompts.map((_, i) => `Session ${i}\nKeep 🦞.`);
+    expect(requests).toEqual([...expected, ...expected]);
+    expect(
+      replacements.mock.calls.filter(([marker]) => marker === SYSTEM_PROMPT_CACHE_BOUNDARY),
+    ).toHaveLength(65);
+    const first = agents[0];
+    assert(first);
+    first.state.systemPrompt = `Changed${SYSTEM_PROMPT_CACHE_BOUNDARY}Now 🦀.\udc00`;
+    await first.prompt("continue");
+    expect(requests.at(-1)).toBe("Changed\nNow 🦀.");
+    expect(
+      replacements.mock.calls.filter(([marker]) => marker === SYSTEM_PROMPT_CACHE_BOUNDARY),
+    ).toHaveLength(66);
+  } finally {
+    replacements.mockRestore();
+  }
+});
 
 function providerEvents(): Record<string, unknown>[] {
   const item = {

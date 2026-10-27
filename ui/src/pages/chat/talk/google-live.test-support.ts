@@ -23,7 +23,7 @@ export const wsInstances: MockGoogleLiveWebSocket[] = [];
 export const audioContexts: MockAudioContext[] = [];
 export const createdSources: MockAudioBufferSource[] = [];
 export const inputProcessors: MockAudioProcessor[] = [];
-export const inputSinks: MockAudioSink[] = [];
+const inputSinks: MockAudioSink[] = [];
 
 export const googleLiveTestFixture = {
   getUserMedia: vi.fn(),

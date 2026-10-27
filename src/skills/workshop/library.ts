@@ -67,7 +67,7 @@ export class WorkshopWriteError extends Error {
   override name = "WorkshopWriteError";
 }
 
-const SKILL_FILE = "SKILL.md";
+export const SKILL_FILE = "SKILL.md";
 const ARCHIVE_DIR = ".archive";
 // The Agent Skills limit. Authoring guidance asks for ~160 bytes, but a hard 160 cap forced
 // lossy description rewrites whenever a review patched an older skill, and blocked restores.
@@ -75,8 +75,8 @@ const MAX_DESCRIPTION_BYTES = 1024;
 // New names follow the Agent Skills limit. Earlier releases named learned skills with
 // normalizeSkillIndexName and no length cap, so existing skills are matched by charset and
 // the filesystem's 255-byte name limit only; otherwise they stay loaded but unmanageable.
-const NEW_SKILL_NAME_PATTERN = /^[a-z0-9][a-z0-9-]{0,62}$/;
-const EXISTING_SKILL_NAME_PATTERN = /^[a-z0-9][a-z0-9-]{0,254}$/;
+export const NEW_SKILL_NAME_PATTERN = /^[a-z0-9][a-z0-9-]{0,62}$/;
+export const EXISTING_SKILL_NAME_PATTERN = /^[a-z0-9][a-z0-9-]{0,254}$/;
 const skillLocks = new KeyedAsyncQueue();
 const log = createSubsystemLogger("skills/workshop");
 
@@ -94,7 +94,7 @@ function resolveSkillPaths(config: OpenClawConfig, agentId: string, name: string
   };
 }
 
-function normalizeSkillFilePath(filePath: string | undefined): string {
+export function normalizeSkillFilePath(filePath: string | undefined): string {
   const trimmed = filePath?.trim();
   if (!trimmed || trimmed === SKILL_FILE) {
     return SKILL_FILE;
@@ -108,14 +108,14 @@ function normalizeSkillFilePath(filePath: string | undefined): string {
   }
 }
 
-async function readSkillFile(skillDir: string, filePath: string): Promise<string | null> {
+export async function readSkillFile(skillDir: string, filePath: string): Promise<string | null> {
   return filePath === SKILL_FILE
     ? await readWorkspaceSkillFile(path.join(skillDir, SKILL_FILE))
     : await readWorkspaceSupportFile({ skillDir, relativePath: filePath });
 }
 
 /** Regular files below one skill directory, SKILL.md first; links and dot entries are skipped. */
-async function listSkillFiles(
+export async function listSkillFiles(
   skillDir: string,
 ): Promise<{ files: string[]; sizeBytes: number; updatedAtMs: number }> {
   const entries = await listDirectoryTreeStrict(skillDir, {
@@ -188,7 +188,7 @@ function assertSafeContent(name: string, filePath: string, content: string): voi
 }
 
 /** Validates one file's next content: path, SKILL.md shape or support size, then the security scan. */
-function validateSkillFile(
+export function validateSkillFile(
   config: OpenClawConfig,
   name: string,
   filePath: string,
@@ -319,7 +319,7 @@ async function withSkillLocks<T>(keys: readonly string[], run: () => Promise<T>)
 }
 
 /** Serializes one skill's mutation, then refreshes discovery and records the change. */
-async function mutateSkill(
+export async function mutateSkill(
   ctx: WorkshopMutationContext,
   name: string,
   action: WorkshopChangeAction,
@@ -644,42 +644,62 @@ export async function restoreWorkshopSkill(
       target.id,
       path.join(paths.versionsDir, target.id),
     );
-    const staging = path.join(paths.root, ARCHIVE_DIR, `.restore-${randomUUID()}`);
-    const previous = path.join(paths.root, ARCHIVE_DIR, `.restore-previous-${randomUUID()}`);
-    try {
+    const versionId = await publishSkillBundle(paths, "restore", async (staging) => {
       for (const [filePath, content] of files) {
-        const destination = path.join(staging, ...filePath.split("/"));
-        await fs.mkdir(path.dirname(destination), { recursive: true });
-        await fs.writeFile(destination, content, { flag: "wx" });
+        await writeStagedFile(staging, filePath, content);
       }
-      const versionId = await snapshotSkill(paths, "restore");
-      // Swap by rename so a refused or failed publish puts the previous live skill back.
-      const hadLive = await pathExists(paths.skillDir);
-      if (hadLive) {
-        paths.assertLive();
-        await fs.rename(paths.skillDir, previous);
-      }
-      try {
-        paths.assertLive();
-        await fs.rename(staging, paths.skillDir);
-      } catch (error) {
-        if (hadLive) {
-          await fs.rename(previous, paths.skillDir);
-        }
-        throw error;
-      }
-      // Only successful publication may discard the original live copy.
-      await fs.rm(previous, { recursive: true, force: true });
-      const summary =
-        params.summary ??
-        (target.action === "archive"
-          ? "restored from archive"
-          : params.versionId
-            ? `restored version ${target.id}`
-            : `undid ${target.action.replace("_", " ")}`);
-      return { summary, versionId };
-    } finally {
-      await fs.rm(staging, { recursive: true, force: true });
-    }
+    });
+    const summary =
+      params.summary ??
+      (target.action === "archive"
+        ? "restored from archive"
+        : params.versionId
+          ? `restored version ${target.id}`
+          : `undid ${target.action.replace("_", " ")}`);
+    return { summary, versionId };
   });
+}
+
+export async function writeStagedFile(staging: string, filePath: string, content: string | Buffer) {
+  const destination = path.join(staging, ...filePath.split("/"));
+  await fs.mkdir(path.dirname(destination), { recursive: true });
+  await fs.writeFile(destination, content);
+}
+
+/**
+ * Publishes a whole skill at once: `fill` builds the complete next copy in a staging directory,
+ * the live skill is snapshotted, and the copies swap by rename. A failed fill, refused authority,
+ * or failed rename leaves the previous live skill in place. Returns the snapshot's version id.
+ */
+export async function publishSkillBundle(
+  paths: MutationPaths,
+  action: WorkshopChangeAction,
+  fill: (staging: string) => Promise<void>,
+): Promise<string | undefined> {
+  const staging = path.join(paths.root, ARCHIVE_DIR, `.${action}-${randomUUID()}`);
+  const previous = path.join(paths.root, ARCHIVE_DIR, `.${action}-previous-${randomUUID()}`);
+  try {
+    await fs.mkdir(staging, { recursive: true });
+    await fill(staging);
+    const versionId = await snapshotSkill(paths, action);
+    const hadLive = await pathExists(paths.skillDir);
+    if (hadLive) {
+      paths.assertLive();
+      await fs.rename(paths.skillDir, previous);
+    }
+    try {
+      paths.assertLive();
+      await fs.rename(staging, paths.skillDir);
+    } catch (error) {
+      if (hadLive) {
+        await fs.rename(previous, paths.skillDir);
+      }
+      throw error;
+    }
+    // Only successful publication may discard the original live copy.
+    await fs.rm(previous, { recursive: true, force: true });
+    return versionId;
+  } finally {
+    await fs.rm(staging, { recursive: true, force: true });
+  }
 }

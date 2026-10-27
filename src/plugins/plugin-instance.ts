@@ -30,6 +30,7 @@ import type {
   PluginRetentionOwner,
   PluginWorkRelease,
 } from "./plugin-instance.types.js";
+import { announcePluginReplacement } from "./plugin-replacement-watchers.js";
 import { PluginReferenceDiagnostics } from "./plugin-retention-diagnostics.js";
 import { mapPluginReturnPromise, resolvePluginReturnPromise } from "./plugin-return-value.js";
 import { releasePluginInstanceRegistry } from "./registry-lifecycle.js";
@@ -294,6 +295,7 @@ export class PluginInstance {
       );
     }
     /** Reserve the instance for a reload; any release ends the reservation and settles waiting callers. */
+    announcePluginReplacement(this, this.replacementPending);
     const settled = (this.replacementSettlement ??= createDeferredCore());
     return () => {
       if (this.replacementSettlement === settled) {

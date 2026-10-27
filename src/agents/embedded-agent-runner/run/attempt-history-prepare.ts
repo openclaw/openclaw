@@ -8,6 +8,7 @@ import {
   type SessionSourceAssertion,
 } from "../../../config/sessions/session-source-authority.js";
 import { OPENCLAW_EMBEDDED_CONTEXT_ENGINE_HOST } from "../../../context-engine/host-compat.js";
+import { freezeJsonSnapshot } from "../../../shared/immutable-data.js";
 import { prepareHarnessContextEnginePrompt } from "../../harness/context-engine-lifecycle.js";
 import { getHistoryLimitFromSessionKey, limitHistoryTurns } from "../history.js";
 import { log } from "../logger.js";
@@ -213,6 +214,12 @@ export async function prepareEmbeddedAttemptHistory(
     warn: (message) => log.warn(message),
   });
   input.setup.prepStages.mark("context-engine");
+  // Restored history stays writable through preparation; published replies are complete.
+  for (const message of messages) {
+    if (message.role === "assistant") {
+      freezeJsonSnapshot(message);
+    }
+  }
   activeSession.agent.state.messages = messages;
   if (systemPrompt !== systemPromptText) {
     setSystemPrompt(systemPrompt);

@@ -292,10 +292,20 @@ footer.sidebar-issues-panel__mentions-note {
   display: none;
 }
 
-.sidebar-issues-panel__summary:hover,
-.sidebar-issues-panel__details[open] > .sidebar-issues-panel__summary,
+.sidebar-issues-panel__summary:is(:hover, :focus-visible) {
+  background: var(--surface-hover);
+}
+
 .sidebar-issues-panel__details[open] {
-  background: var(--bg-hover);
+  background: var(--surface-selected);
+}
+
+.sidebar-issues-panel__details[open]:is(:hover, :focus-within) {
+  background: var(--surface-selected-hover);
+}
+
+.sidebar-issues-panel__details[open] > .sidebar-issues-panel__summary {
+  background: transparent;
 }
 
 .sidebar-issues-panel__summary:focus-visible,
@@ -588,7 +598,7 @@ footer.sidebar-issues-panel__mentions-note {
 
 .sidebar-approval-row:hover,
 .sidebar-approval-row:focus-within {
-  background: var(--bg-hover);
+  background: var(--surface-hover);
 }
 
 .sidebar-approval-row__content {

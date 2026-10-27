@@ -358,8 +358,9 @@ in the default hybrid reload mode. See
 [Apply changes and inspect](/plugins/manage-plugins#apply-changes-and-inspect)
 for application failures, cleanup warnings, and source-edit reloads.
 Plugins that declare OAuth-backed MCP servers list them under **Accounts** on
-the plugin's page; an administrator selects **Connect** to sign in once after
-the plugin is added. `openclaw mcp login <name>` signs in only to servers
+the plugin's page; an administrator selects **Sign in** to sign in once after
+the plugin is added. Until then, the plugin page and the chat install card show
+**Sign in** where the Install button was. `openclaw mcp login <name>` signs in only to servers
 defined under `mcp.servers`, not to servers a plugin declares.
 
 The page intentionally focuses on inventory, discovery, install, enablement,
@@ -441,6 +442,11 @@ When Advanced settings reconnects, a form with an already loaded schema stays
 visible at your reading position while the schema refreshes. Form and Setup
 controls cannot be edited until that refresh finishes. The first load still
 shows **Loading schema…** until a schema is available.
+
+In an agent's **Tools** tab, expand a tool group to browse its tools and policy
+details. Browser Find searches group summaries and tools in expanded groups.
+Selecting a tool in **Tool preview** opens its group and focuses its details.
+Collapsing a group closes its tool details.
 
 In an agent's **Files** editor, **Add file** opens a missing optional workspace
 document. Saving creates it only if it is still missing. If another editor or

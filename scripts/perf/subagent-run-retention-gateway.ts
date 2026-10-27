@@ -61,14 +61,18 @@ writeFileSync(
   `
 import { isMainThread } from 'node:worker_threads';
 import { getHeapStatistics, writeHeapSnapshot } from 'node:v8';
-if (isMainThread) process.on('message', message => {
+if (isMainThread) {
+process.on('message', message => {
   if (message?.channel !== 'subagent-retention-heap') return;
   global.gc(); global.gc();
   const heap = getHeapStatistics();
   const memory = process.memoryUsage();
   if (message.snapshot) writeHeapSnapshot(message.snapshot);
-  process.send({ channel: message.channel, heap, memory });
+  process.channel?.ref();
+  process.send({ channel: message.channel, heap, memory }, () => process.channel?.unref());
 });
+process.channel?.unref();
+}
 `,
 );
 const results = [];

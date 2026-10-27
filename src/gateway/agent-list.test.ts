@@ -1,7 +1,7 @@
 import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { afterEach, beforeEach, expect, it, onTestFinished, vi } from "vitest";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { createCanonicalAgentConfigFixture } from "../test-utils/config-roster.js";
@@ -36,16 +36,12 @@ it("projects sole, Doctor-migrated, and ownerless fleet ownership honestly", asy
 });
 
 it("retains disk system agents without treating regular disk dirs as roster members", async () => {
-  await Promise.all(
-    ["openclaw", "crestodian", "research"].map((id) =>
-      fs.mkdir(path.join(stateDir, "agents", id), { recursive: true }),
-    ),
-  );
-
-  const syncRead = vi.spyOn(fsSync, "readdirSync").mockImplementation(() => {
+  for (const id of ["openclaw", "crestodian", "research"]) {
+    await fs.mkdir(path.join(stateDir, "agents", id), { recursive: true });
+  }
+  using syncRead = vi.spyOn(fsSync, "readdirSync").mockImplementation(() => {
     throw new Error("Roster inventory must not block the Gateway thread");
   });
-  onTestFinished(() => syncRead.mockRestore());
   const cfg = { agents: { entries: { main: {} } } };
   const result = await listGatewayAgentsBasic(cfg);
 
@@ -55,31 +51,26 @@ it("retains disk system agents without treating regular disk dirs as roster memb
     { id: "openclaw", kind: "system", name: undefined },
   ]);
   await fs.rmdir(path.join(stateDir, "agents", "crestodian"));
-  expect((await listGatewayAgentsBasic(cfg)).agents.map(({ id }) => id)).toEqual([
-    "main",
-    "openclaw",
-  ]);
+  const remaining = await listGatewayAgentsBasic(cfg);
+  expect(remaining.agents.map(({ id }) => id)).toEqual(["main", "openclaw"]);
   expect(syncRead).not.toHaveBeenCalled();
 });
 
-it("lets configured ownership override disk system metadata", async () => {
-  await fs.mkdir(path.join(stateDir, "agents", "openclaw"), { recursive: true });
-  expect(
-    (
-      await list({
-        ownership: "explicit",
-        defaults: { systemAgent: { agentId: "main" } },
-        entries: { main: {}, openclaw: { name: "OpenClaw", identity: { name: "Fallback" } } },
-      })
-    ).agents,
-  ).toEqual([
-    { id: "main", kind: "agent", name: undefined },
-    { id: "openclaw", kind: "agent", name: "OpenClaw" },
-  ]);
-});
-
-it("falls back to identity.name when the configured agent name is missing", async () => {
-  expect((await list({ entries: { main: { identity: { name: "小金" } } } })).agents).toEqual([
-    { id: "main", kind: "agent", name: "小金" },
-  ]);
-});
+it.each([
+  { name: "OpenClaw", identity: "Fallback", expected: "OpenClaw" },
+  { name: undefined, identity: "小金", expected: "小金" },
+])(
+  "projects configured disk agents with display name $expected",
+  async ({ name, identity, expected }) => {
+    await fs.mkdir(path.join(stateDir, "agents", "openclaw"), { recursive: true });
+    const result = await list({
+      ownership: "explicit",
+      defaults: { systemAgent: { agentId: "main" } },
+      entries: { main: {}, openclaw: { name, identity: { name: identity } } },
+    });
+    expect(result.agents).toEqual([
+      { id: "main", kind: "agent", name: undefined },
+      { id: "openclaw", kind: "agent", name: expected },
+    ]);
+  },
+);

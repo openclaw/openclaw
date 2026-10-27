@@ -70,7 +70,7 @@ import { readSessionEntryPatchPredicate } from "./session-entry-patch-guard.js";
 import type { SessionEntryWritePostimages } from "./session-entry-write-postimage.js";
 import type { SessionParticipantRecord } from "./session-membership-facts.types.js";
 import { readStagedSessionTranscriptAuthority } from "./session-transcript-authority.js";
-import { prepareSessionTurnPredicates } from "./session-turn-predicate.js";
+import { prepareSessionTurnRoutingDependencies } from "./session-turn-predicate.js";
 import type { SessionTurnPlan } from "./session-turn.types.js";
 import { prepareSessionTurn, prepareVoiceTranscriptCommit } from "./session-turn.worker.js";
 import { collectSessionEntryLookupKeys } from "./store-entry.js";
@@ -435,9 +435,13 @@ export function createSessionActorWorker(
       if (command.type === "session.actor.read") {
         return;
       }
-      await prepareSessionTurnPredicates();
-      if ("turn" in command.input && command.input.turn?.options.voiceTranscript) {
-        await prepareVoiceTranscriptCommit();
+      if ("turn" in command.input && command.input.turn) {
+        await prepareSessionTurnRoutingDependencies(
+          command.input.turn.options.sessionTurnMutation?.routingPredicate,
+        );
+        if (command.input.turn.options.voiceTranscript) {
+          await prepareVoiceTranscriptCommit();
+        }
       }
     },
     execute(command: Command): SessionActorOperations[keyof SessionActorOperations]["output"] {

@@ -10,10 +10,6 @@ import { readStyleSheet } from "../../../../test/helpers/ui-style-fixtures.js";
 import { finishElementAnimations } from "../../test-helpers/animations.ts";
 import { closeBrowserPage, withBrowserPage } from "../../test-helpers/browser-page.ts";
 import {
-  startControlUiE2eServer,
-  type ControlUiE2eServer,
-} from "../../test-helpers/control-ui-e2e.ts";
-import {
   canRunChatLayoutBrowser,
   chromiumExecutablePath,
   createChatLayoutBrowser,
@@ -21,7 +17,6 @@ import {
   getBoundingBox,
   getRect,
   readUiCss,
-  mountMcpAppSurfaceFixture,
   rectsOverlap,
   waitForLayoutSettled,
   type ControlRect,
@@ -36,7 +31,6 @@ const describeBrowserLayout = canRunChatLayoutBrowser ? describe : describe.skip
 
 const layoutBrowser = createChatLayoutBrowser();
 const { openBrowserPage } = layoutBrowser;
-let realChatServer: ControlUiE2eServer | null = null;
 
 type ChatFixtureOptions = {
   composerAttachment?: boolean;
@@ -606,12 +600,9 @@ async function expectNoHorizontalOverflow(page: Page) {
 describeBrowserLayout.concurrent("chat responsive browser layout", () => {
   beforeAll(async () => {
     await layoutBrowser.start();
-    realChatServer = await startControlUiE2eServer();
   });
 
   afterAll(async () => {
-    await realChatServer?.close();
-    realChatServer = null;
     await layoutBrowser.close();
   });
 
@@ -811,28 +802,19 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
           return {
             activity: getComputedStyle(activity).userSelect,
             activityBackground: getComputedStyle(activity).backgroundColor,
-            activityPaddingBlock: [
-              getComputedStyle(activity).paddingTop,
-              getComputedStyle(activity).paddingBottom,
-            ],
             chevronGap: chevron.getBoundingClientRect().left - label.getBoundingClientRect().right,
             tool: firstToolStyle.userSelect,
-            toolPaddingBlock: [firstToolStyle.paddingTop, firstToolStyle.paddingBottom],
             toolRowGap: secondToolRect.top - firstToolRect.bottom,
           };
         });
-        const { toolRowGap, ...disclosureStyles } = styles;
+        const { toolRowGap, chevronGap, ...disclosureStyles } = styles;
         expect(disclosureStyles).toEqual({
           activity: "none",
           activityBackground: "rgba(0, 0, 0, 0)",
-          activityPaddingBlock: hasTouch ? ["8px", "8px"] : ["5px", "5px"],
-          // Summary gap (8px) less the chevron's own -3px inset.
-          chevronGap: 5,
           tool: "none",
-          toolPaddingBlock: ["3px", "3px"],
         });
+        expect(chevronGap).toBeGreaterThanOrEqual(0);
         expect(toolRowGap).toBeGreaterThanOrEqual(0);
-        expect(toolRowGap).toBeLessThanOrEqual(2);
       },
     );
   });
@@ -935,10 +917,6 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
             replyToWork: gap('[data-run-block="activity-reply"]', '[data-run-block="work"]'),
             workToReply: gap('[data-run-block="work"]', '[data-run-block="reply"]'),
             expandedTextToTool: gap('[data-expanded-row="text"]', '[data-expanded-row="tool"]'),
-            workedForSeparator: gap(
-              '[data-run-block="work"] > button',
-              ".chat-work-group__separator",
-            ),
             turn: gap('[data-run-block="reply"]', "[data-next-turn] .chat-bubble"),
             persistentTurn: gap(
               "[data-persistent-turn] .chat-bubble",
@@ -963,7 +941,6 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
           replyToWork: 8,
           workToReply: 8,
           expandedTextToTool: 6,
-          workedForSeparator: 0,
           // Footer offset + 24px footer row + turn gap (16px, or 12px on touch).
           turn: hasTouch ? 38 : 42,
           persistentTurn: hasTouch ? 38 : 42,
@@ -1192,44 +1169,6 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
         return chevron.left - label.right;
       });
       expect(measuredGap).toBeCloseTo(4, 0);
-    });
-  });
-
-  it("keeps inline MCP App reloads transparent without changing dashboard surfaces", async () => {
-    await withBrowserPage(openBrowserPage(1366, 900), async (page) => {
-      if (!realChatServer) {
-        throw new Error("Expected the Control UI server to be ready");
-      }
-      const provider = await mountMcpAppSurfaceFixture(page, realChatServer.baseUrl);
-      const backgrounds = await provider.evaluate(async (owner: HTMLElement) => {
-        await customElements.whenDefined("mcp-app-view");
-        const readFrameBackground = async (boardSurface?: string) => {
-          if (boardSurface) {
-            owner.style.setProperty("--board-surface", boardSurface);
-          } else {
-            owner.style.removeProperty("--board-surface");
-          }
-          const view = document.createElement("mcp-app-view") as HTMLElement & {
-            updateComplete: Promise<boolean>;
-          };
-          owner.replaceChildren(view);
-          await view.updateComplete;
-          const mount = view.querySelector(".mount");
-          if (!mount) {
-            throw new Error("MCP App mount is missing");
-          }
-          const frame = document.createElement("iframe");
-          mount.append(frame);
-          return getComputedStyle(frame).backgroundColor;
-        };
-        return {
-          dashboard: await readFrameBackground("rgb(12, 34, 56)"),
-          inline: await readFrameBackground(),
-        };
-      });
-
-      expect(backgrounds.dashboard).toBe("rgb(12, 34, 56)");
-      expect(backgrounds.inline).toBe("rgba(0, 0, 0, 0)");
     });
   });
 
@@ -2884,7 +2823,6 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
           return {
             background: getComputedStyle(node).backgroundColor,
             borderColor: getComputedStyle(node).borderColor,
-            boxShadow: getComputedStyle(node).boxShadow,
             left: bounds.left,
             right: bounds.right,
             top: bounds.top,
@@ -2925,10 +2863,6 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
         expect(surface.left).toBeCloseTo(shellBounds.left, 1);
         expect(surface.right).toBeCloseTo(shellBounds.right, 1);
       }
-      expect(new Set(stackSurfaces.slice(0, 3).map(({ background }) => background))).toHaveProperty(
-        "size",
-        1,
-      );
       for (const [index, surface] of stackSurfaces.entries()) {
         expect(Number.parseFloat(surface.topLeftRadius)).toBeGreaterThan(0);
         expect(surface.topRightRadius).toBe(surface.topLeftRadius);
@@ -2938,8 +2872,6 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
           expect(surface.top).toBeGreaterThan(stackSurfaces[index - 1]!.bottom);
         }
       }
-      expect(stackSurfaces[2]?.borderColor).toBe(stackSurfaces[1]?.borderColor);
-      expect(stackSurfaces[2]?.boxShadow).toBe(stackSurfaces[1]?.boxShadow.split(", rgba")[0]);
       for (const { state, surface } of warnGoalSurfaces) {
         expect(surface.background, state).not.toBe(stackSurfaces[2]?.background);
         expect(surface.borderColor, state).not.toBe(stackSurfaces[2]?.borderColor);

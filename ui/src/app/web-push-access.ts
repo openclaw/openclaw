@@ -1,12 +1,9 @@
 import { canCallGatewayMethod } from "../lib/gateway-methods.ts";
 import type { ApplicationGatewaySnapshot } from "./gateway.ts";
 
-export type WebPushAccess = {
-  canManage: boolean;
-  canReadPreferences: boolean;
-};
+export type WebPushAccess = ReturnType<typeof readWebPushAccess>;
 
-export function readWebPushAccess(snapshot: ApplicationGatewaySnapshot): WebPushAccess {
+export function readWebPushAccess(snapshot: ApplicationGatewaySnapshot) {
   // Push methods are bundled with the UI; subscription methods are intentionally
   // unadvertised. Their current operator scopes, not catalog presence, admit use.
   return {

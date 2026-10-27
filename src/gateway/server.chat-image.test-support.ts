@@ -5,8 +5,4 @@ export const INLINE_DOT_PNG_IMAGE = {
   type: "image",
   data: CHAT_DOT_PNG_BASE64,
   mimeType: "image/png",
-  sourceIndex: 0,
-  fileName: "dot.png",
-  width: 1,
-  height: 1,
 };

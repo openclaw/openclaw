@@ -60,6 +60,7 @@ import type {
   ProviderNormalizeModelIdContext,
   ProviderNormalizeTransportContext,
   ProviderPrepareRuntimeAuthContext,
+  ProviderPrepareRuntimeAuthContextV2,
   ProviderPreparedRuntimeAuth,
   ProviderResolveUsageAuthContext,
   ProviderResolvedUsageAuth,
@@ -391,6 +392,10 @@ export type ProviderPlugin = {
    */
   prepareRuntimeAuth?: (
     ctx: ProviderPrepareRuntimeAuthContext,
+  ) => Promise<ProviderPreparedRuntimeAuth | null | undefined>;
+  /** Preferred exchange for chat and Decision inference; takes precedence over the legacy hook. */
+  prepareRuntimeAuthV2?: (
+    ctx: ProviderPrepareRuntimeAuthContextV2,
   ) => Promise<ProviderPreparedRuntimeAuth | null | undefined>;
   /**
    * Usage/billing auth resolution hook.
