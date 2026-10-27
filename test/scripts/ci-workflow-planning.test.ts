@@ -10781,6 +10781,7 @@ describe("ci workflow guards", () => {
         ),
         "public-build browser proof",
       );
+      expect(browserProof.env?.OPENCLAW_VITEST_WORKER_CACHE).toBe("1");
       for (const [buildOutcome, cacheHit, chromiumOutcome, expected] of [
         ["success", "false", "success", reuse],
         ["skipped", "true", "success", reuse],
@@ -10824,22 +10825,94 @@ describe("ci workflow guards", () => {
       const receipt = path.join(root, "invocation.json");
       writeFileSync(
         path.join(root, "scripts/run-vitest.mjs"),
-        `import { writeFileSync } from "node:fs"; writeFileSync(${JSON.stringify(receipt)}, JSON.stringify(process.argv.slice(2)));`,
+        `import { writeFileSync } from "node:fs"; writeFileSync(${JSON.stringify(receipt)}, JSON.stringify({ args: process.argv.slice(2), cache: process.env.OPENCLAW_VITEST_WORKER_CACHE }));`,
       );
-      const result = runWorkflowShellScript(step.run, { cwd: root });
+      const result = runWorkflowShellScript(step.run, {
+        cwd: root,
+        env: { ...process.env, ...step.env },
+      });
       expect(result.status, result.stdout + result.stderr).toBe(0);
       expect(existsSync(receipt)).toBe(supported);
       if (supported) {
-        expect(JSON.parse(readFileSync(receipt, "utf8"))).toEqual([
+        expect(JSON.parse(readFileSync(receipt, "utf8"))).toEqual({
+          cache: "1",
+          args: [
+            "run",
+            "--config",
+            "test/vitest/vitest.ui-e2e.config.ts",
+            "--configLoader",
+            "runner",
+            "--maxWorkers",
+            "2",
+          ],
+        });
+      }
+    },
+  );
+
+  it.each([true, false])(
+    "caches Discord workers while validating its proof report (passed: %s)",
+    (passed) => {
+      const run = expectDefined(
+        readCiWorkflow().jobs["build-artifacts"].steps.find(
+          (step: WorkflowStep) => step.name === "Run built artifact checks",
+        ),
+        "built verifier command",
+      ).run;
+      const start = run.indexOf("run_discord_component_attachments() {");
+      const end = run.indexOf("\n# A missing startup asset", start);
+      expect(start).toBeGreaterThanOrEqual(0);
+      expect(end).toBeGreaterThan(start);
+      const root = tempDirs.make("openclaw-discord-cache-command-");
+      mkdirSync(path.join(root, "scripts"), { recursive: true });
+      const file = "test/e2e/qa-lab/plugins/discord-show-widget-contextual-presenter.e2e.test.ts";
+      const fullName =
+        "Discord show_widget contextual presenter process proof preserves component attachment filenames through the public Gateway message action";
+      const report = {
+        success: passed,
+        numFailedTestSuites: passed ? 0 : 1,
+        numFailedTests: passed ? 0 : 1,
+        numPassedTests: passed ? 1 : 0,
+        testResults: [
+          {
+            name: path.join(root, file),
+            status: passed ? "passed" : "failed",
+            assertionResults: [{ fullName, status: passed ? "passed" : "failed" }],
+          },
+        ],
+      };
+      writeFileSync(
+        path.join(root, "scripts/run-vitest.mjs"),
+        `
+      import { writeFileSync } from "node:fs";
+      const args = process.argv.slice(2);
+      writeFileSync("invocation.json", JSON.stringify({ args, cache: process.env.OPENCLAW_VITEST_WORKER_CACHE }));
+      writeFileSync(args[args.indexOf("--outputFile.json") + 1], ${JSON.stringify(JSON.stringify(report))});
+    `,
+      );
+      const result = runWorkflowShellScript(
+        `${run.slice(start, end)}\nrun_discord_component_attachments`,
+        {
+          cwd: root,
+          env: { ...process.env, RUNNER_TEMP: root, FROZEN_TARGET: "false" },
+        },
+      );
+      expect(result.status, result.stdout + result.stderr).toBe(passed ? 0 : 1);
+      expect(JSON.parse(readFileSync(path.join(root, "invocation.json"), "utf8"))).toEqual({
+        cache: "1",
+        args: [
           "run",
           "--config",
-          "test/vitest/vitest.ui-e2e.config.ts",
-          "--configLoader",
-          "runner",
-          "--maxWorkers",
-          "2",
-        ]);
-      }
+          "test/vitest/vitest.e2e.config.ts",
+          file,
+          "--testNamePattern",
+          fullName.replace("Discord show_widget contextual presenter process proof ", ""),
+          "--reporter=default",
+          "--reporter=json",
+          "--outputFile.json",
+          path.join(root, "discord-component-attachments.json"),
+        ],
+      });
     },
   );
 
@@ -10936,6 +11009,7 @@ describe("ci workflow guards", () => {
       OPENCLAW_UI_E2E_SKIP_REAL_GATEWAY: "1",
       OPENCLAW_BROWSER_EXTENSION_E2E: "1",
       OPENCLAW_E2E_WORKERS: "1",
+      OPENCLAW_VITEST_WORKER_CACHE: "1",
     });
     const productionScenario = expectDefined(
       artifactSteps.find(
@@ -10945,6 +11019,7 @@ describe("ci workflow guards", () => {
     );
     expect(productionScenario.env).toMatchObject({
       OPENCLAW_UI_E2E_SKIP_REAL_GATEWAY: "1",
+      OPENCLAW_VITEST_WORKER_CACHE: "1",
       OPENCLAW_UI_E2E_PRODUCTION_ARTIFACT_ROOT: "${{ github.workspace }}/dist/control-ui",
     });
     expect(productionScenario.run).toContain("ui-e2e-production-artifact-contract-v1");
