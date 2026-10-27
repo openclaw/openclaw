@@ -39,6 +39,7 @@ import {
   proveInterruptedWorkspaceCheckpoint,
   proveIncrementalWorkspaceEdits,
   proveSandboxMutationCheckpoints,
+  proveSharedSandboxCheckpoints,
   proveStagedInputCheckpointOwnership,
   proveWorkerOwnedIncrementalWorkspace,
 } from "./local-workspace-incremental.test-support.js";
@@ -161,6 +162,9 @@ afterEach(async () => {
 });
 
 it("checkpoints sandbox file writes once", () => proveSandboxMutationCheckpoints(owner));
+
+it("joins waiting sandbox checkpoints across handles without losing later writes", ({ signal }) =>
+  proveSharedSandboxCheckpoints(owner, signal));
 
 it("recovers an explicitly selected oversized artifact before the next sandbox preparation", async () => {
   await archiveFixture();
