@@ -145,6 +145,7 @@ export type OpenClawStateReadCommand =
   | { type: "sessionGroups.members"; cfg: OpenClawConfig }
   | { type: "onboardingRecommendations.read"; configKey: string }
   | { type: "userProfiles.reconcile"; profileId: string }
+  | { type: "userProfiles.identity"; profileId: string }
   | UserBackgroundReadCommand
   | UserProfileAvatarReadCommand
   | { type: "userProfiles.channelIdentity.list"; profileId: string }
@@ -164,6 +165,7 @@ export type OpenClawStateReadCommand =
       type: "userModelAccounts.catalog";
       selection: import("./user-model-accounts.js").PersonalCatalogSelection;
     }
+  | { type: "userPreferences.sessionPins" }
   | { type: "userPreferences.values"; profileIds: readonly string[]; key: string }
   | { type: "userPreferences.read"; profileId: string; keys?: readonly string[] }
   | {
@@ -207,10 +209,10 @@ export type OpenClawStateReadCommand =
       }[];
     }
   | { type: "workspace.snapshot"; workspaceDir: string }
-  | { type: "sandboxRegistry.list" }
+  | { type: "sandboxRegistry.list"; workspaceDir?: string }
   | { type: "sandboxRegistry.get"; containerName: string }
   | { type: "sandboxRegistry.runtimeIds"; backendId: string; scopeKey: string }
-  | { type: "sandboxRegistry.browsers" }
+  | { type: "sandboxRegistry.browsers"; workspaceDir?: string }
   | WorkspaceJournalReadCommand
   | { type: "workers.placementRecoveryCandidates" }
   | { type: "workers.placementPreservation" }

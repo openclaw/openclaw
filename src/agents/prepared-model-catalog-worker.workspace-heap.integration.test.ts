@@ -1,6 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
-import { expect, it } from "vitest";
+import { expect, it, vi } from "vitest";
 import { getPluginMetadataSnapshotCache } from "../plugins/plugin-cache.js";
 import { loadPluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
 import {
@@ -16,9 +16,10 @@ import {
   PROVIDER_ID,
   writeFixtureFiles,
 } from "./prepared-model-catalog-worker.test-support.js";
+import type { PreparedModelCatalogWorkerTask } from "./prepared-model-catalog-worker.types.js";
 import { usePreparedCatalogWorkerFixtures } from "./test-helpers/prepared-model-catalog-worker-fixture.js";
 
-const { makeTempDir, retireAfterTest } = usePreparedCatalogWorkerFixtures();
+const { makeTempDir, retireAfterTest, observeWorkers } = usePreparedCatalogWorkerFixtures();
 
 it("bounds native ESM payloads across alternating unchanged loader workspaces", async () => {
   const { root, env, config, marker } = await createCatalogFixture(makeTempDir, 0);
@@ -63,6 +64,19 @@ module.exports = { id: ${JSON.stringify(PROVIDER_ID)}, register(api) {
     },
   });
   const inventories: ReturnType<typeof loadPluginMetadataSnapshot>[] = [];
+  let metadataTransfers = 0;
+  const observer = observeWorkers((worker) => {
+    const post = worker.postMessage.bind(worker);
+    vi.spyOn(worker, "postMessage").mockImplementation((message, ...rest) => {
+      // The real worker transport owns this private envelope; retain counts, not its payload.
+      const task = (message as { input?: PreparedModelCatalogWorkerTask }).input;
+      if (task?.value && "pluginMetadataSnapshot" in task.value) {
+        metadataTransfers++;
+      }
+      post(message, ...rest);
+    });
+  });
+  observer.subscribe();
   const workers = ["one", "two"].map((agentId) => {
     const workspaceDir = path.join(root, `workspace-${agentId}`);
     const agentDir = path.join(env.OPENCLAW_STATE_DIR!, "agents", agentId, "agent");
@@ -123,4 +137,6 @@ module.exports = { id: ${JSON.stringify(PROVIDER_ID)}, register(api) {
   expect(last).toMatchObject({ threadId: samples[0]!.threadId, payloads: 2, callbacks: 2 });
   expect(last.memory.heapUsed - samples[4]!.memory.heapUsed).toBeLessThan(16 * 1024 * 1024);
   expect(last.memory.arrayBuffers - samples[4]!.memory.arrayBuffers).toBeLessThan(2 * 1024 * 1024);
+  expect(metadataTransfers).toBe(workers.length);
+  observer.close();
 }, 30_000);

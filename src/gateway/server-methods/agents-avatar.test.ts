@@ -1,4 +1,7 @@
-import { beforeEach, expect, it, vi } from "vitest";
+import { fileURLToPath } from "node:url";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { runNodeScript } from "../../../test/helpers/run-node-script.js";
+import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { BlobsterUnsupportedRuntimeError } from "../../agents/blobster-generation-errors.js";
 import { createLlmOperatorAuthorizationError } from "../../plugins/runtime/runtime-llm-error.js";
 import { agentAvatarGenerateHandler } from "./agents-avatar.js";
@@ -19,6 +22,7 @@ const preview = {
 const operator = { profileId: "owner" };
 const release = vi.fn();
 let current = true;
+const dirs = useAutoCleanupTempDirTracker(afterEach);
 
 function generate(params: Record<string, unknown> = { agentId: "garden", prompt: "A gardener" }) {
   return callAgentHandler(agentAvatarGenerateHandler, "agents.avatar.generate", params, {
@@ -39,6 +43,35 @@ beforeEach(() => {
   generation.mockReset().mockResolvedValue(preview);
   capture.mockReset().mockResolvedValue({ authority: operator, release });
   release.mockReset();
+});
+
+it("registers avatar generation without loading its parser", async () => {
+  const result = await runNodeScript(
+    [
+      "--import",
+      fileURLToPath(new URL("../../../scripts/tsx.mjs", import.meta.url)),
+      "--input-type=module",
+      "--eval",
+      `import assert from "node:assert/strict";
+import { registerHooks } from "node:module";
+registerHooks({ resolve(specifier, context, nextResolve) {
+  if (specifier === "parse5") throw new Error("Agents RPC registration loaded the avatar parser");
+  return nextResolve(specifier, context);
+} });
+const { agentAvatarGenerateHandler } = await import(${JSON.stringify(new URL("./agents-avatar.ts", import.meta.url).href)});
+assert.equal(typeof agentAvatarGenerateHandler, "function");
+console.log("avatar-handler-import-ok");`,
+    ],
+    {
+      PATH: process.env.PATH,
+      SystemRoot: process.env.SystemRoot,
+      HOME: dirs.make("agents-import-"),
+    },
+    30_000,
+  );
+  expect(result.error, result.stderr).toBeUndefined();
+  expect(result.status, result.stderr).toBe(0);
+  expect(result.stdout).toContain("avatar-handler-import-ok");
 });
 
 it.each([

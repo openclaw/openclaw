@@ -1,20 +1,6 @@
-import { createMemo, lazy, Show } from "solid-js";
-import type { ChatItem } from "../../../lib/chat/chat-types.ts";
+import { createMemo, Show } from "solid-js";
+import { ChatNoticeDetails, type ChatNoticeProps } from "./chat-divider.tsx";
 import { ChatRunFailureNotice } from "./chat-run-failure-notice.tsx";
-import type { ChatThreadProps } from "./chat-thread-interactions.ts";
-
-export type ChatNoticeProps = {
-  item: Extract<ChatItem, { kind: "notice" }>;
-  onPermissionRetry?: (message: string) => void;
-  recovery?: Pick<
-    ChatThreadProps,
-    "failureActionsRunId" | "runActive" | "runWorking" | "onRetryRun" | "onDismissPendingInput"
-  >;
-};
-
-const ChatNoticeDetails = lazy(() => import("./chat-divider.tsx"), {
-  export: "ChatNoticeDetails",
-});
 
 function FailureNotice(props: ChatNoticeProps) {
   const failure = () => props.item.runError!;

@@ -136,7 +136,7 @@ openclaw gateway install
 openclaw gateway status
 ```
 
-If the VM already has [Node 24.16+ or 26.1+](/install/node), you can install the
+If the VM already has [Node 24.22.1+ or 26.12.1+](/install/node), you can install the
 package directly instead. Use the following command on npm 12 or npm 11.16+. On
 npm 11.15 and earlier, omit `--allow-scripts=openclaw`.
 

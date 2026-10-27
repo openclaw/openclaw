@@ -1,5 +1,6 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { Static } from "typebox";
+import { attachInternalToolResultAcknowledgement } from "../../packages/agent-core/src/internal-hooks.js";
 import { getAgentToolExecutionContext } from "../../packages/agent-core/src/tool-execution-context.js";
 import { createAbortError as createNamedAbortError } from "../infra/abort-signal.js";
 import { formatDurationCompact } from "../infra/format-time/format-duration.ts";
@@ -42,7 +43,6 @@ import {
 import { recordCommandPoll, resetCommandPollCount } from "./command-poll-backoff.js";
 import { encodeKeySequence, encodePaste, hasCursorModeSensitiveKeys } from "./pty-keys.js";
 import type { AgentToolResult } from "./runtime/index.js";
-import { attachInternalToolResultAcknowledgement } from "./runtime/internal-hooks.js";
 import { PROCESS_TOOL_DISPLAY_SUMMARY } from "./tool-description-presets.js";
 import { ToolInputError, type AgentToolWithMeta } from "./tools/common.js";
 import { failText, textResult } from "./tools/tool-results.js";
@@ -503,19 +503,18 @@ export function createProcessTool(
               window.effectiveLimit,
             );
             const runtime = scopedSession ? describeRunningSession(scopedSession) : undefined;
+            const ended = record.exited && record.endedAt !== undefined;
             const text =
               retentionCapNote(record) +
               (slice || (scopedSession ? "(no output yet)" : "(no output recorded)")) +
               defaultTailNote(totalLines, window.usingDefaultTail) +
-              (isConfirmedRequestedStop(record)
-                ? `\n\nProcess stopped by request (${renderExecExitLabel(record)}).`
-                : "");
+              (ended ? `\n\n${finishedSessionText(record)}` : "");
             const output = runtime
               ? text +
                 buildInputWaitHint(runtime.waitingForInput) +
                 (runtime.followUp ? `\n\n${runtime.followUp}` : "")
               : appendExecTimeoutRetryGuidance(text, record.exitReason);
-            return textResult(output, {
+            const result = textResult(output, {
               ...(runtime
                 ? {
                     status: record.exited ? "completed" : "running",
@@ -531,6 +530,12 @@ export function createProcessTool(
               totalChars,
               truncated: record.truncated,
             });
+            // Reading an ended process delivers its result, so retire its completion like poll.
+            return ended
+              ? attachInternalToolResultAcknowledgement(result, () =>
+                  acknowledgeNotifyOnExit(record),
+                )
+              : result;
           });
         }
 

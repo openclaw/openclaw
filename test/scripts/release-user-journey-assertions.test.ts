@@ -267,6 +267,9 @@ describe("release user journey assertions", () => {
       socket = await openClickClackSocket(port, token);
       await expect(reconnected).resolves.toBeUndefined();
       expect(await state()).toMatchObject({ socketCount: 1, socketGeneration: 2 });
+      const pong = once(socket, "pong");
+      socket.ping();
+      await pong;
     } finally {
       if (socket) {
         await closeClickClackSocket(socket);

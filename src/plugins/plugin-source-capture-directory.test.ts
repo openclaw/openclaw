@@ -1,4 +1,5 @@
 import { spawn, spawnSync } from "node:child_process";
+import { once } from "node:events";
 import fs from "node:fs";
 import fsPromises from "node:fs/promises";
 import path from "node:path";
@@ -411,10 +412,7 @@ async function startCliCapture(worker: boolean, legacy = false, signal = false) 
   child.stderr.setEncoding("utf8").on("data", (chunk: string) => {
     stderr += chunk;
   });
-  const exited = new Promise<void>((resolve, reject) => {
-    child.once("error", reject);
-    child.once("close", () => resolve());
-  });
+  const exited = once(child, "close");
   void exited.catch(() => {});
   const nextLine = async () => {
     const result = await lines.next();

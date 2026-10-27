@@ -21,9 +21,14 @@ not prompt for embeddings. See [Configure](/cli/configure#memory-section).
 falls through to guided onboarding. Use `-m`/`--message` for one request or
 `--baseline` to initialize config/workspace folders without the wizard.
 
-Baseline setup (`--baseline`) requires the local Gateway to be stopped and holds
-exclusive ownership while creating agent state. Stop the Gateway through its
-service owner, wait for it to exit, then rerun the command.
+Baseline setup (`--baseline`) works with the local Gateway running or stopped.
+With the Gateway running, setup sends only its config change (for example
+`agents.defaults.workspace` or `agents.defaults.skipBootstrap`) to the Gateway,
+which saves the same config the offline command would; an unchanged config is
+not written. The Gateway seeds missing workspace files on the agent's first run.
+Creating the first config, or overriding a value inherited from an included
+config file, still needs the Gateway stopped: stop it through its service
+owner, wait for it to exit, then rerun the command.
 
 Routing order:
 

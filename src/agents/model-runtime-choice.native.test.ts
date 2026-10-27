@@ -398,6 +398,61 @@ it("validates off-catalog host routes without granting an incompatible runtime",
   expect(choice.validate()).toContain("not available");
 });
 
+it.each(["implicit", "configured"] as const)(
+  "admits a %s native-only model for spawn like the turn path",
+  async (routing) => {
+    // Only the native runtime lists this model; no API row can materialize it.
+    const entry: ModelCatalogEntry = {
+      provider: "fixture",
+      id: "native-only",
+      name: "Native only",
+      reasoning: true,
+      nativeRuntime: "native-test",
+    };
+    const cfg: OpenClawConfig =
+      routing === "configured"
+        ? {
+            agents: {
+              defaults: {
+                models: { "fixture/native-only": { agentRuntime: { id: "native-test" } } },
+              },
+            },
+          }
+        : {};
+    const registry = createEmptyPluginRegistry();
+    registry.agentHarnesses.push({
+      pluginId: "native-test",
+      source: "fixture",
+      harness: {
+        id: "native-test",
+        label: "Native test",
+        authBootstrap: "harness",
+        supports: () => ({ supported: true }),
+        readModelCatalogReadiness: () => ({ accountType: "oauth" }),
+        runAttempt: vi.fn(),
+      },
+    });
+    const owner = createModelRuntimeChoiceOwnerFixture(cfg, () => true, {
+      pluginRegistry: registry,
+      modelCatalog: { entries: [entry], routeVariants: [entry] },
+    });
+    bindPreparedModelRuntimeAuth(owner, { store: { version: 1, profiles: {} } });
+    published.owner = owner;
+    expect(
+      await prepareModelChoice({
+        cfg,
+        agentId: "main",
+        raw: "fixture/native-only",
+        source: "override",
+      }),
+    ).toMatchObject({
+      kind: "resolved",
+      ref: { provider: "fixture", model: "native-only" },
+      model: { provider: "fixture", id: "native-only" },
+    });
+  },
+);
+
 it("rejects a stale native observation without renewing it", async () => {
   // This choice also runs inside config write locks; native discovery there needs its own decision.
   const entry: ModelCatalogEntry = {

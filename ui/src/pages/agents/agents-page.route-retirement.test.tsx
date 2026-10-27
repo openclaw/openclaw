@@ -192,6 +192,7 @@ it("keeps Tools Save active through the real owner's roster refresh", async () =
     </ApplicationProvider>
   ));
   try {
+    await vi.dynamicImportSettled();
     const save = await waitForSolid(() =>
       mounted.getByRole<HTMLButtonElement>("button", { name: "Save" }),
     );

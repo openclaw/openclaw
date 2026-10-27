@@ -269,7 +269,10 @@ it.each([
       const doctor = startDoctor(waitForMaintenance);
       const completed = await doctor.result;
       expect(completed).toMatchObject({
-        error: { refusal: { kind: "deferred", reason: "agent-database-in-use" } },
+        error: {
+          message: expect.stringContaining(`Observed lease holder PID ${holder.holderPid}.`),
+          refusal: { kind: "deferred", reason: "agent-database-in-use" },
+        },
       });
       expect(doctor.log).not.toHaveBeenCalledWith(expect.stringContaining("Waiting up to"));
     } finally {

@@ -5,6 +5,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { writeFixtureJsonSync } from "../cli/cli-fixtures.test-support.js";
 import { automaticallyCleanUpdateRecovery } from "../cli/update-cli/automatic-cleanup.js";
 import { prepareUpdateCommandTerminalResult } from "../cli/update-cli/update-command-terminal.js";
 import { finalizeRestartUpdateRun } from "../gateway/server-restart-update-run.js";
@@ -80,19 +81,17 @@ function capture(runId: string, doctor = false, age = 0) {
     UPDATE_CAPTURE_PRIVACY_MARKER_CONTENT,
   );
   fs.writeFileSync(path.join(directory, "payload"), "preserved rollback bytes");
-  fs.writeFileSync(
+  writeFixtureJsonSync(
     path.join(directory, "manifest.json"),
-    JSON.stringify(
-      doctor
-        ? createMissingConfigRecoveryManifest({
-            runId,
-            installRoot: stateDir,
-            stateDir,
-            configPath: env.OPENCLAW_CONFIG_PATH,
-            createdAt: new Date(now - age * 86_400_000).toISOString(),
-          })
-        : {},
-    ),
+    doctor
+      ? createMissingConfigRecoveryManifest({
+          runId,
+          installRoot: stateDir,
+          stateDir,
+          configPath: env.OPENCLAW_CONFIG_PATH,
+          createdAt: new Date(now - age * 86_400_000).toISOString(),
+        })
+      : {},
   );
   return directory;
 }

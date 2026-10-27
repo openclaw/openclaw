@@ -14,6 +14,7 @@ import { defaultRuntime } from "../../runtime.js";
 import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
 import { withEnvAsync } from "../../test-utils/env.js";
 import { cleanupSessionStateForTest } from "../../test-utils/session-state-cleanup.js";
+import { writeFixtureJsonSync } from "../cli-fixtures.test-support.js";
 import { updateCleanupCommand } from "./cleanup.js";
 
 const dirs = useAutoCleanupTempDirTracker(afterEach);
@@ -42,17 +43,15 @@ function writeCapture(root: string, name: string, sealed: boolean, marked = true
 
 function writeSealedCapture(root: string, runId: string, createdAt: string): string {
   const directory = writeCapture(root, runId, true);
-  fs.writeFileSync(
+  writeFixtureJsonSync(
     path.join(directory, "manifest.json"),
-    JSON.stringify(
-      createMissingConfigRecoveryManifest({
-        runId,
-        installRoot: root,
-        stateDir: path.dirname(root),
-        configPath: path.join(root, "config.json"),
-        createdAt,
-      }),
-    ),
+    createMissingConfigRecoveryManifest({
+      runId,
+      installRoot: root,
+      stateDir: path.dirname(root),
+      configPath: path.join(root, "config.json"),
+      createdAt,
+    }),
   );
   return directory;
 }

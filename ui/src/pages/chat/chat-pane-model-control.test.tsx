@@ -1,17 +1,42 @@
 /* @vitest-environment jsdom */
 import { createSignal } from "solid-js";
-import { expect, it, vi } from "vitest";
+import { afterEach, expect, it, vi } from "vitest";
 import { mountSolid } from "../../test-helpers/mount-solid.ts";
-import { waitForSolid } from "../../test-helpers/solid-settle.ts";
+import { flush, waitForSolid } from "../../test-helpers/solid-settle.ts";
 import { createComposerControlsFixture } from "./chat-composer.test-support.ts";
 import type { ChatHistoryResult } from "./chat-history-snapshot.ts";
 import { ChatPaneModelControl } from "./chat-pane-model-control.tsx";
 import { makeChatPageHost } from "./chat-pending-inputs.test-support.ts";
 import { refreshPageChat, retireChatMetadataRequests } from "./chat-state-refresh.ts";
+import * as catalogPresentation from "./components/chat-model-catalog-presentation.ts";
 import { cacheChatSessionSnapshot, readChatSessionSnapshot } from "./session-message-cache.ts";
 
 const saved = { id: "saved", provider: "openai", name: "Saved model" };
 const sessionKey = "agent:main:restored";
+
+afterEach(() => vi.restoreAllMocks());
+
+it("reuses the saved catalog across unrelated frames and refreshes changed model facts", async () => {
+  const prepare = vi.spyOn(catalogPresentation, "prepareChatModelCatalog");
+  const initial = {
+    ...createComposerControlsFixture().model,
+    snapshot: { id: "saved", provider: "openai", name: "Saved model" },
+  };
+  const [model, setModel] = createSignal(initial);
+  const view = mountSolid(() => <ChatPaneModelControl model={model()} />);
+  const trigger = () => view.container.querySelector<HTMLElement>("[data-chat-model-select]");
+  await waitForSolid(() => expect(trigger()?.textContent).toContain("Saved model"));
+  const prepared = prepare.mock.calls.length;
+
+  setModel({ ...initial, loading: !initial.loading });
+  flush();
+  expect(prepare).toHaveBeenCalledTimes(prepared);
+  expect(trigger()?.getAttribute("aria-disabled")).toBe("true");
+
+  setModel({ ...initial, snapshot: { ...initial.snapshot, name: "Updated saved model" } });
+  await waitForSolid(() => expect(trigger()?.textContent).toContain("Updated saved model"));
+  expect(prepare.mock.calls.length).toBeGreaterThan(prepared);
+});
 
 it.each([
   { inherited: true, supported: false, tiers: ["default"], speed: "Standard", active: false },

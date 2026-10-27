@@ -389,6 +389,12 @@
   -webkit-user-select: none;
 }
 
+/* Desktop chat and panel chrome reveal one continuous shell canvas. Mobile
+   keeps its own reading surface. */
+.sidebar-region--desktop .chat-pane__header {
+  background: transparent;
+}
+
 .chat-pane__header:not(.chat-pane__header--mobile) .chat-pane__header-leading,
 .chat-pane__header:not(.chat-pane__header--mobile) .chat-pane__header-trailing {
   gap: 4px;

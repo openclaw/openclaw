@@ -1,5 +1,3 @@
-/* @vitest-environment jsdom */
-
 import { expectDefined } from "@openclaw/normalization-core";
 import { IDBFactory } from "fake-indexeddb";
 import { expect, it, onTestFinished, vi } from "vitest";
@@ -22,6 +20,8 @@ import {
 import { clearStoredChatSnapshots } from "./session-snapshot-invalidation.ts";
 import { resolveChatSnapshotKey } from "./session-snapshot-key.ts";
 import { SessionSnapshotStore } from "./session-snapshot-store.ts";
+/* @vitest-environment jsdom */
+import { writeSnapshotFixture } from "./session-snapshot.test-support.ts";
 import { openSlot } from "./sidebar-layout.ts";
 import "../../components/board/board-view.tsx";
 
@@ -106,16 +106,20 @@ async function persistBoard(pane: BoardTestPane, snapshot: unknown, cleanup: Cle
   };
   const store = new SessionSnapshotStore(pane.state.chatMessagesBySession);
   pane.sessionSnapshotStore = store;
-  store.write(resolveChatSnapshotKey(pane.state, { sessionKey: pane.state.sessionKey }), {
-    ...transcript,
-    board: { snapshot, receivedAtMs: Date.now() },
-  });
+  writeSnapshotFixture(
+    store,
+    resolveChatSnapshotKey(pane.state, { sessionKey: pane.state.sessionKey }),
+    {
+      ...transcript,
+      board: { snapshot, receivedAtMs: Date.now() },
+    },
+  );
   await store.flush();
   return store;
 }
 
 it.each([false, true])(
-  "paints saved rows before connect while board restoration waits (route pending: %s)",
+  "paints saved rows and board while the socket cannot open (route pending: %s)",
   async (routePending) => {
     const sessionKey = "agent:main:dispatch-cached-board";
     const { pane, request, snapshot, cleanup } = createGatewayBoardPane(sessionKey);
@@ -133,19 +137,15 @@ it.each([false, true])(
     const store = await persistBoard(pane, snapshot, cleanup);
     const provider = pane.resolveBoardProvider();
     const reading = vi.spyOn(store, "read");
+    vi.useFakeTimers({
+      toFake: ["requestAnimationFrame", "cancelAnimationFrame", "setTimeout", "clearTimeout"],
+    });
     pane.hydrateStoredChatSnapshot(pane.state, sessionKey);
     const hydration = chatHistoryRequests(pane.state).initialSnapshotHydration!;
     await expectDefined(reading.mock.results[0], "snapshot read").value;
-    await new Promise<void>((resolve) => {
-      setTimeout(resolve, 0);
-    });
+    await vi.advanceTimersByTimeAsync(0);
     expect(pane.state.chatMessages).toEqual(transcript.messages);
-    expect(provider.hasLoadedSnapshot).toBe(false);
-    vi.useFakeTimers();
-    dispatch.resolve();
-    await dispatch.promise;
     expect(provider.hasLoadedSnapshot).toBe(true);
-    expect(pane.state.chatMessages).toEqual(transcript.messages);
     await vi.runAllTimersAsync();
     await hydration.promise;
     expect(pane.state.chatMessages).toEqual(transcript.messages);

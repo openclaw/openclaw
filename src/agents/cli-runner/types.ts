@@ -19,7 +19,7 @@ import type { SpawnSecretInput } from "../../process/supervisor/types.js";
 import type { AdmittedRunContext } from "../admitted-run-context.js";
 import type { AuthProfileStore } from "../auth-profiles/types.js";
 import type { ResolvedCliBackend } from "../cli-backends.js";
-import type { CliSessionReuseResult } from "../cli-session.js";
+import type { resolveCliSessionReuse } from "../cli-session.js";
 import type { AgentRunExecutionContext } from "../command/shared-types.js";
 import type { ContextWindowInfo } from "../context-window-guard.js";
 import type { EmbeddedAgentExecutionPhase } from "../embedded-agent-runner/execution-phase.js";
@@ -199,7 +199,7 @@ type CliPreparedBackend = Awaited<ReturnType<typeof prepareCliBundleMcpConfig>> 
 
 /** Reusable CLI session id, soft content drift, or hard invalidation. */
 export type CliReusableSession =
-  | CliSessionReuseResult
+  | ReturnType<typeof resolveCliSessionReuse>
   | {
       mode: "invalidate";
       invalidatedReason: "system-prompt" | "missing-transcript" | "orphaned-tool-use";
@@ -249,7 +249,11 @@ export type PreparedCliRunContext = {
   contextWindowInfo?: ContextWindowInfo;
   systemPrompt: string;
   systemPromptReport: SessionSystemPromptReport;
-  claudeSkillsPluginArgs: string[];
+  /** Native skill plugin launch args and its Skill command map, for usage receipts. */
+  claudeSkillsPlugin: Pick<
+    import("./claude-skills-plugin.js").ClaudeCliSkillsPlugin,
+    "args" | "skillCommands"
+  >;
   /** Host-held, policy-selected personal Workshop tool for the paired-node adapter. */
   nodeSkillWorkshop?: import("../tools/common.js").AnyAgentTool;
   openClawHistoryPrompt?: string;

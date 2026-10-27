@@ -1376,12 +1376,6 @@ textarea.settings-input {
 }
 
 /* Full Settings navigation loads with the sidebar; fallback geometry stays in layout.css. */
-.settings-save-indicator__claw {
-  display: inline-flex;
-  width: 15px;
-  height: 15px;
-}
-
 .settings-sidebar__esc {
   margin-left: auto;
   padding: 2px 6px;
@@ -1638,54 +1632,9 @@ openclaw-settings-save-indicator:empty {
   color: var(--danger);
 }
 
-.settings-save-indicator--saved {
-  animation: settingsSaveIndicatorFade 2s ease-out both;
-}
-
 .settings-save-indicator svg {
   width: 15px;
   height: 15px;
-}
-
-.settings-save-indicator__claw svg {
-  fill: currentColor;
-  stroke: none;
-  animation: chatWorkingClawFlex 2.4s ease-out infinite;
-}
-
-.settings-save-indicator__claw svg .claw-icon__jaw {
-  transform-box: view-box;
-  transform-origin: 8.6px 11px;
-  animation: chatWorkingClawSnip 2.4s ease-out infinite;
-}
-
-.settings-save-indicator__claw--saved svg,
-.settings-save-indicator__claw--saved svg .claw-icon__jaw {
-  animation-duration: 650ms;
-  animation-iteration-count: 1;
-}
-
-.settings-save-indicator__check {
-  color: var(--ok);
-}
-
-@keyframes settingsSaveIndicatorFade {
-  0%,
-  88% {
-    opacity: 1;
-  }
-
-  100% {
-    opacity: 0;
-  }
-}
-
-@media (prefers-reduced-motion: reduce) {
-  .settings-save-indicator--saved,
-  .settings-save-indicator__claw svg,
-  .settings-save-indicator__claw svg .claw-icon__jaw {
-    animation: none;
-  }
 }
 
 .settings-sidebar__footer .sidebar-footer-build {

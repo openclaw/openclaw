@@ -494,15 +494,16 @@ export function captureGatewayStateOwner(databasePath: string) {
   }
   const assertCurrent = () => {
     owner.lost.signal.throwIfAborted();
+    const identity = resolveStateOwnerIdentity(databasePath);
     if (
       owners.get(key) !== owner ||
       !owner.accepting ||
-      resolveStateOwnerIdentity(databasePath).key !== key ||
+      identity.key !== key ||
       (owner.getProjection && !owner.getProjection()?.verifyStillHeld())
     ) {
       throw new GatewayStateOwnerContentionError(databasePath);
     }
-    assertStateDatabaseAccessAllowed(databasePath);
+    assertStateDatabaseAccessAtOwnerPath(databasePath, identity, undefined);
   };
   assertCurrent();
   return {

@@ -7,6 +7,7 @@ import { useSessionStoreTempDirs } from "../../test-utils/session-state-cleanup.
 import { finalizeAgentToolAvailability } from "../agent-tool-availability.js";
 import { createAgentsWaitTool } from "./agents-wait-tool.js";
 import type { InProcessGatewayCaller } from "./in-process-gateway.js";
+import { registerSessionsSpawnAccessProgramTests } from "./sessions-spawn-tool.access-program.test-support.js";
 import type { createSessionsSpawnTool as SpawnToolFactory } from "./sessions-spawn-tool.js";
 
 const requireRecord = createRequireRecord("record", "expected-label");
@@ -27,6 +28,13 @@ export function registerSessionsSpawnInputTests({
     inProcessCreationMock: Mock;
   };
 }) {
+  registerSessionsSpawnAccessProgramTests({
+    createTool,
+    registerAcpBackendForTest,
+    mockGateway,
+    mocks: hoisted,
+  });
+
   it.each([false, true])(
     "keeps collector inputs within the declared spawn contract (placement=%s)",
     (workerPlacement) => {

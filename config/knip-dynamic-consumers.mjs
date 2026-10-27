@@ -113,6 +113,41 @@ function loadedNamespaceMemberNames(source, loaderName) {
   return members;
 }
 
+function lazyRuntimeModuleMemberEdges(source, consumerFile, targetSpecifier) {
+  const specifiersByLoader = new Map(
+    [
+      ...source.matchAll(
+        /\bconst\s+([A-Za-z_$][\w$]*)\s*=\s*createLazyRuntimeModule\(\s*\(\s*\)\s*=>\s*import\(\s*["']([^"'\r\n]+)["']\s*\)\s*,?\s*\)\s*;/gu,
+      ),
+    ]
+      .filter(([, , specifier]) => specifier === targetSpecifier)
+      .map(([, loader, specifier]) => [loader, specifier]),
+  );
+  const edges = new Map();
+
+  for (const match of source.matchAll(
+    /\bconst\s*\{([^{}]+)\}\s*=\s*await\s+([A-Za-z_$][\w$]*)\(\s*\)\s*;/gu,
+  )) {
+    const specifier = specifiersByLoader.get(match[2]);
+    if (!specifier) {
+      continue;
+    }
+    const targetFile = path.resolve(path.dirname(consumerFile), specifier);
+    const names = edges.get(targetFile) ?? new Set();
+    for (const binding of match[1].split(",")) {
+      const name = binding.trim().split(/\s*:\s*/u)[0];
+      if (/^[A-Za-z_$][\w$]*$/u.test(name)) {
+        names.add(name);
+      }
+    }
+    if (names.size > 0) {
+      edges.set(targetFile, names);
+    }
+  }
+
+  return edges;
+}
+
 function computedCheckoutNamespaceMemberEdges(source) {
   const sourceDirectories = new Map(
     [
@@ -254,6 +289,12 @@ function sideEffectImport(targetFile, consumerFile) {
  */
 export function compileDynamicConsumerEdges(source, filePath, scriptEntrypoints = {}) {
   const imports = [];
+  // Empty recognizers must not create a module edge or consume an alias index.
+  const addNamedImport = (names, targetFile) => {
+    if (names.length > 0) {
+      imports.push(namedImport(names, targetFile, filePath, imports.length));
+    }
+  };
 
   const tsdownPath = "tsdown.config.ts";
   const runtimeManifestSpecifier = "./src/infra/runtime-process-manifest.ts";
@@ -261,23 +302,12 @@ export function compileDynamicConsumerEdges(source, filePath, scriptEntrypoints 
     fs.readFileSync(tsdownPath, "utf8"),
     runtimeManifestSpecifier,
   );
-  if (manifestNames.length > 0) {
-    imports.push(
-      namedImport(
-        manifestNames,
-        path.resolve(path.dirname(tsdownPath), runtimeManifestSpecifier),
-        filePath,
-        imports.length,
-      ),
-    );
-  }
+  addNamedImport(manifestNames, path.resolve(path.dirname(tsdownPath), runtimeManifestSpecifier));
 
   const benchmarkGeneratorPath = "scripts/lib/gateway-bench-worker-messages.ts";
   const benchmarkGenerator = fs.readFileSync(benchmarkGeneratorPath, "utf8");
   const generatedNames = emittedSelfNamedImportNames(benchmarkGenerator);
-  if (generatedNames.length > 0) {
-    imports.push(namedImport(generatedNames, benchmarkGeneratorPath, filePath, imports.length));
-  }
+  addNamedImport(generatedNames, benchmarkGeneratorPath);
 
   const transportPath = "extensions/team-reports/src/report-fixture-transport.test-support.ts";
   const redirectedSpecifier = fs
@@ -290,16 +320,7 @@ export function compileDynamicConsumerEdges(source, filePath, scriptEntrypoints 
   if (redirectedSpecifier && fixtureSpecifier) {
     const runtimeConsumer = fs.readFileSync("extensions/team-reports/src/sources/http.ts", "utf8");
     const names = importedNames(runtimeConsumer, redirectedSpecifier);
-    if (names.length > 0) {
-      imports.push(
-        namedImport(
-          names,
-          path.resolve(path.dirname(benchmarkPath), fixtureSpecifier),
-          filePath,
-          imports.length,
-        ),
-      );
-    }
+    addNamedImport(names, path.resolve(path.dirname(benchmarkPath), fixtureSpecifier));
   }
 
   const doctorConsumerPath = "src/commands/config-preflight-snapshot.ts";
@@ -308,16 +329,10 @@ export function compileDynamicConsumerEdges(source, filePath, scriptEntrypoints 
     fs.readFileSync(doctorConsumerPath, "utf8"),
     doctorLegacySpecifier,
   );
-  if (doctorLegacyNames.length > 0) {
-    imports.push(
-      namedImport(
-        doctorLegacyNames,
-        path.resolve(path.dirname(doctorConsumerPath), doctorLegacySpecifier),
-        filePath,
-        imports.length,
-      ),
-    );
-  }
+  addNamedImport(
+    doctorLegacyNames,
+    path.resolve(path.dirname(doctorConsumerPath), doctorLegacySpecifier),
+  );
 
   const mcpLoaderPath = "src/agents/agent-bundle-mcp-runtime-modules.ts";
   const mcpRuntimePath = "src/agents/agent-bundle-mcp-runtime.ts";
@@ -331,16 +346,7 @@ export function compileDynamicConsumerEdges(source, filePath, scriptEntrypoints 
       continue;
     }
     const names = [...(mcpMembers.get(namespace) ?? [])];
-    if (names.length > 0) {
-      imports.push(
-        namedImport(
-          names,
-          path.resolve(path.dirname(mcpLoaderPath), specifier),
-          filePath,
-          imports.length,
-        ),
-      );
-    }
+    addNamedImport(names, path.resolve(path.dirname(mcpLoaderPath), specifier));
   }
 
   const rowChurnInstrumenter = fs.readFileSync(
@@ -357,11 +363,7 @@ export function compileDynamicConsumerEdges(source, filePath, scriptEntrypoints 
     fs.readFileSync(runtimeAssetGeneratorPath, "utf8"),
     materializerSpecifier,
   );
-  if (materializerNames.length > 0) {
-    imports.push(
-      namedImport(materializerNames, path.resolve(materializerSpecifier), filePath, imports.length),
-    );
-  }
+  addNamedImport(materializerNames, path.resolve(materializerSpecifier));
 
   const prepareHooksPath = "scripts/prepare-git-hooks.mjs";
   const bootstrapSpecifier = "../runtime-process-bootstrap.generated.mjs";
@@ -369,16 +371,7 @@ export function compileDynamicConsumerEdges(source, filePath, scriptEntrypoints 
     fs.readFileSync(prepareHooksPath, "utf8"),
     bootstrapSpecifier,
   );
-  if (bootstrapNames.length > 0) {
-    imports.push(
-      namedImport(
-        bootstrapNames,
-        path.resolve(path.dirname(prepareHooksPath), bootstrapSpecifier),
-        filePath,
-        imports.length,
-      ),
-    );
-  }
+  addNamedImport(bootstrapNames, path.resolve(path.dirname(prepareHooksPath), bootstrapSpecifier));
 
   const workerArtifactsPath = "test/scripts/vitest-worker-artifacts.test.ts";
   const emittedWorkerEdges = emittedFileNamedImportEdges(
@@ -386,9 +379,7 @@ export function compileDynamicConsumerEdges(source, filePath, scriptEntrypoints 
   );
   const sqliteFacadePath = path.resolve("node-sqlite.mjs");
   const sqliteFacadeNames = [...(emittedWorkerEdges.get(sqliteFacadePath) ?? [])];
-  if (sqliteFacadeNames.length > 0) {
-    imports.push(namedImport(sqliteFacadeNames, sqliteFacadePath, filePath, imports.length));
-  }
+  addNamedImport(sqliteFacadeNames, sqliteFacadePath);
 
   for (const entry of Object.values(scriptEntrypoints)) {
     if (generatesRuntimeScriptAsset(entry) && entry.sourceBinding) {
@@ -448,11 +439,7 @@ export function compileDynamicConsumerEdges(source, filePath, scriptEntrypoints 
   const trajectoryFlushNames = emittedSelfNamedImportNames(
     fs.readFileSync(trajectoryFlushPreloadPath, "utf8"),
   );
-  if (trajectoryFlushNames.length > 0) {
-    imports.push(
-      namedImport(trajectoryFlushNames, trajectoryFlushPreloadPath, filePath, imports.length),
-    );
-  }
+  addNamedImport(trajectoryFlushNames, trajectoryFlushPreloadPath);
 
   const poolLifecyclePath = "scripts/perf/pg-pool-lifecycle.mts";
   const poolFixtureSpecifier = fs
@@ -482,6 +469,34 @@ export function compileDynamicConsumerEdges(source, filePath, scriptEntrypoints 
   for (const [targetFile, names] of computedCheckoutNamespaceMemberEdges(
     publishedUpgradeScenario,
   )) {
+    imports.push(namedImport([...names], targetFile, filePath, imports.length));
+  }
+
+  const codexLazyConsumers = [
+    ["extensions/codex/src/native-plugin-tool.ts", "./app-server/binding-connection.js"],
+    ["extensions/codex/src/native-thread-tool.ts", "./app-server/binding-connection.js"],
+    [
+      "extensions/codex/src/session-catalog-list-operation.ts",
+      "./session-catalog-node-adoption.js",
+    ],
+    ["extensions/codex/src/session-catalog-control.ts", "./app-server/shared-client.js"],
+  ];
+  const codexLazyEdges = new Map();
+  for (const [consumerPath, targetSpecifier] of codexLazyConsumers) {
+    const consumerSource = fs.readFileSync(consumerPath, "utf8");
+    for (const [targetFile, memberNames] of lazyRuntimeModuleMemberEdges(
+      consumerSource,
+      consumerPath,
+      targetSpecifier,
+    )) {
+      const names = codexLazyEdges.get(targetFile) ?? new Set();
+      for (const name of memberNames) {
+        names.add(name);
+      }
+      codexLazyEdges.set(targetFile, names);
+    }
+  }
+  for (const [targetFile, names] of codexLazyEdges) {
     imports.push(namedImport([...names], targetFile, filePath, imports.length));
   }
 

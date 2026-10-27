@@ -16,6 +16,7 @@ import {
   safePlainTextAttachmentHref,
   safeMediaAttachmentHref,
 } from "./chat-attachment-href.ts";
+import { FileDownloadButton } from "./chat-file-download-button.tsx";
 import type { FileSessionAttachment } from "./chat-file-session-attachment.ts";
 import { FileSessionMenu } from "./chat-file-session-menu.tsx";
 import { openResolvedImage } from "./chat-image-presentation.ts";
@@ -103,10 +104,19 @@ export function SidebarAttachment(props: SidebarAttachmentProps) {
   // Download-only attachments never resolve preview sources.
   return (
     <>
-      <Show when={!props.mobile && props.attachment}>
+      <Show when={!props.mobile && (props.attachment || props.content.file)}>
         <div class="sidebar-file-view__path-bar session-panel-rail" data-presentation="desktop">
           <span class="sidebar-file-view__path-field">{props.content.title}</span>
           <div class="session-panel-rail__actions">
+            <Show when={props.content.file}>
+              {(file) => (
+                <FileDownloadButton
+                  scopeKey={props.content.sourceIdentity ?? file().path}
+                  download={file().download}
+                  class="btn btn--sm session-panel-rail__button"
+                />
+              )}
+            </Show>
             <FileSessionMenu attachment={props.attachment} />
           </div>
         </div>
@@ -199,7 +209,7 @@ function AttachmentPreview(props: SidebarAttachmentProps) {
     >
       <Match
         when={
-          (model().src || model().pending) &&
+          (model().src || model().pending || props.content.file) &&
           model().kind === "document" &&
           isPdfAttachment(model().mimeType, props.content.title) &&
           !isCrossOriginHttpSource(model().src ?? "")
@@ -211,6 +221,10 @@ function AttachmentPreview(props: SidebarAttachmentProps) {
           label={props.content.title}
           mimeType={props.content.mimeType ?? ""}
           sizeBytes={model().source?.sizeBytes ?? props.content.sizeBytes}
+          file={
+            // Existing attachment sources keep their bounded media read, not a full-file download.
+            props.content.src || props.content.resolveSource ? undefined : props.content.file
+          }
         />
       </Match>
       <Match
@@ -283,20 +297,28 @@ function AttachmentPreview(props: SidebarAttachmentProps) {
           back={props.back}
           attachment={props.attachment}
           actions={
-            <Show when={model().src}>
-              {(src) => (
-                <a
-                  class="sidebar-file-mobile__button"
-                  href={src()}
-                  download={props.content.title}
-                  target="_blank"
-                  rel="noreferrer"
-                  aria-label={t("chat.mediaPlayer.download", { filename: props.content.title })}
-                >
-                  <Icon name="download" />
-                </a>
-              )}
-            </Show>
+            props.content.file ? (
+              <FileDownloadButton
+                scopeKey={props.content.sourceIdentity ?? props.content.file.path}
+                download={props.content.file.download}
+                class="sidebar-file-mobile__button"
+              />
+            ) : (
+              <Show when={model().src}>
+                {(src) => (
+                  <a
+                    class="sidebar-file-mobile__button"
+                    href={src()}
+                    download={props.content.title}
+                    target="_blank"
+                    rel="noreferrer"
+                    aria-label={t("chat.mediaPlayer.download", { filename: props.content.title })}
+                  >
+                    <Icon name="download" />
+                  </a>
+                )}
+              </Show>
+            )
           }
         />
       </Show>

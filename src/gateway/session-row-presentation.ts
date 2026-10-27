@@ -18,7 +18,10 @@ import {
 import { retainSessionListBaseMiss } from "./session-list-diagnostics.js";
 import type { SessionEntrySelection, SessionListFilteredEntries } from "./session-list-filters.js";
 import type { SessionListView } from "./session-list-view-cache.js";
-import { tryResolveSessionCompatibilityOwnerAgentId } from "./session-request-agent.js";
+import {
+  resolveRequestedSessionAgentId,
+  tryResolveSessionCompatibilityOwnerAgentId,
+} from "./session-request-agent.js";
 import {
   sessionRowId,
   sessionRowsRevision,
@@ -26,6 +29,8 @@ import {
 } from "./session-row-identity.js";
 import {
   projectPreparedSessionRunState,
+  toProjectedSessionSharingTarget,
+  prepareLinkedSessionEntryFilter,
   type SessionRowReadView,
 } from "./session-row-prepared-read.js";
 import type * as records from "./session-row-projection-record.js";
@@ -35,11 +40,7 @@ import {
   type PublicationView,
   type SessionRowView,
 } from "./session-row-publication.js";
-import {
-  registerSessionRowEncoding,
-  serializeSessionRow,
-  sessionRowEncodingBytes,
-} from "./session-row-serialization.js";
+import { serializeSessionRow, sessionRowEncodingBytes } from "./session-row-serialization.js";
 import {
   authorizeIncognitoSessionTarget,
   authorizeSessionAgentRun,
@@ -82,21 +83,10 @@ function sameFacts(previous: readonly unknown[] | undefined, current: readonly u
   return true;
 }
 
-function toProjectedSessionSharingTarget(record: records.MaterializedRow): SessionSharingTarget {
-  return {
-    agentId: record.agentId,
-    canonicalKey: record.key,
-    entry: record.entry,
-    storeKey: record.key,
-    storeKeys: [record.key],
-    storePath: record.storeTarget.storePath,
-  };
-}
-
 /** Immutable row identities own field preparation; fact indexes stay response-local. */
 function createSessionRowFactSharing<T extends GatewaySessionRow>() {
   type Fact = { encoded: string; fact: Partial<T>; rows: number | number[] };
-  const prepared = new WeakMap<T, { facts: Fact[]; bytes: number }>();
+  const prepared = new WeakMap<T, { facts: Fact[]; bytes: number; rawBytes: number }>();
   const share = (sessions: T[]) => {
     // Empty and single-row deltas cannot share facts; keep their prepared wire rows.
     if (sessions.length < 2) {
@@ -107,7 +97,8 @@ function createSessionRowFactSharing<T extends GatewaySessionRow>() {
     const rows: GatewaySessionRow[] = [];
     sessions.forEach((row, index) => {
       const { key, kind, updatedAt, sessionId, rowMode } = row;
-      rows.push({ key, kind, updatedAt, sessionId, rowMode });
+      const required = { key, kind, updatedAt, sessionId, rowMode };
+      rows.push(required);
       let facts = prepared.get(row)?.facts;
       if (!facts) {
         facts = [];
@@ -127,7 +118,10 @@ function createSessionRowFactSharing<T extends GatewaySessionRow>() {
           facts.push({ encoded, fact, rows: 0 });
           bytes += encoded.length * 2;
         }
-        prepared.set(row, { facts, bytes });
+        // Reserve a possible singleton delta without retaining its unused raw JSON.
+        // Each optional one-field object contributes its property and one comma.
+        const rawBytes = JSON.stringify(required).length * 2 + bytes - facts.length * 2;
+        prepared.set(row, { facts, bytes, rawBytes });
       }
       for (const fact of facts) {
         const candidate = candidates.get(fact.encoded);
@@ -172,7 +166,12 @@ function createSessionRowFactSharing<T extends GatewaySessionRow>() {
   };
   return {
     share,
-    encodingBytes: (row: T) => prepared.get(row)?.bytes ?? 0,
+    encodingBytes: (row: T) => {
+      const retained = prepared.get(row);
+      return retained
+        ? retained.bytes + Math.max(0, retained.rawBytes - sessionRowEncodingBytes(row))
+        : 0;
+    },
   };
 }
 
@@ -296,6 +295,7 @@ export function prepareProjectedSessionPresentation(
   recipient = prepareSessionRowRecipient(projection, client),
 ) {
   const { cfg, policyConfig, rowContext, presentFastMode, publicationState, sharing } = recipient;
+  const entryFilter = client === undefined ? undefined : sharing.entryFilter;
   const models =
     client === undefined
       ? undefined
@@ -327,6 +327,11 @@ export function prepareProjectedSessionPresentation(
   const profileId = profile
     ? projectSessionParticipant({ type: "profile", id: profile.id }, profiles).identity.id
     : undefined;
+  const canReadLinkedEntry = prepareLinkedSessionEntryFilter(
+    projection,
+    sharing.entryFilter,
+    sharing.identity?.id,
+  );
   const listView = (opts: SessionsListParams, selection = false): SessionListView => {
     const { source: _source, ifRowsRevision: _ifRowsRevision, ...query } = opts;
     if (selection) {
@@ -406,28 +411,43 @@ export function prepareProjectedSessionPresentation(
       subagentRuns,
     });
     let excludedChildKeys = options.excludedChildKeys;
-    if (!excludedChildKeys && client !== undefined) {
+    if (!excludedChildKeys && entryFilter) {
       let excluded: Set<string> | undefined;
-      for (const { key, entry } of record.materialized.source.childLinks ?? []) {
-        if (sharing.entryFilter?.(key, entry) === false) {
+      for (const { key, entry, agentId, storePath } of record.materialized.source.childLinks ??
+        []) {
+        const owner = agentId ? undefined : resolveRequestedSessionAgentId(cfg, key);
+        if (
+          !canReadLinkedEntry(
+            key,
+            entry,
+            agentId ?? (owner?.ok ? owner.agentId : undefined),
+            storePath,
+          )
+        ) {
           (excluded ??= new Set()).add(key);
         }
       }
       excludedChildKeys = excluded;
     }
-    const sourceSwarm =
-      options.rowMode === "sidebar" || options.rowMode === "dashboard"
-        ? undefined
-        : record.materialized.row.swarm;
+    const fullRow = options.rowMode !== "sidebar" && options.rowMode !== "dashboard";
+    const sourceSwarm = fullRow ? record.materialized.row.swarm : undefined;
     let excludedSwarmKeys: Set<string> | undefined;
     for (const group of sourceSwarm?.groups ?? []) {
       for (const { sessionKey } of group.children ?? []) {
         if (
           excludedChildKeys?.has(sessionKey) ||
-          (client !== undefined &&
+          (entryFilter &&
             projection
               .selectEntries({ key: sessionKey })
-              .some((child) => sharing.entryFilter?.(child.key, child.entry) === false))
+              .some(
+                (child) =>
+                  !canReadLinkedEntry(
+                    child.key,
+                    child.entry,
+                    child.agentId,
+                    child.storeTarget.storePath,
+                  ),
+              ))
         ) {
           (excludedSwarmKeys ??= new Set()).add(sessionKey);
         }
@@ -505,8 +525,9 @@ export function prepareProjectedSessionPresentation(
     const views = published?.views;
     const value = published?.target ?? toProjectedSessionSharingTarget(record);
     const recipientView = client === undefined ? undefined : viewer(value, options.rowMode);
+    const includeActivitySummary = options.includeActivitySummary !== false && fullRow;
     const canEnsure =
-      client !== undefined && preparedFacts?.activitySummary
+      includeActivitySummary && client !== undefined && preparedFacts?.activitySummary
         ? !authorizeIncognitoSessionTarget({
             client: client ?? null,
             sessionKey: value.canonicalKey,
@@ -567,7 +588,7 @@ export function prepareProjectedSessionPresentation(
         run.runIds === undefined ? {} : { activeRunIds: run.runIds },
       );
     }
-    if (options.includeActivitySummary === false) {
+    if (!includeActivitySummary) {
       row.activitySummary = undefined;
     }
     if (recipientView) {
@@ -597,10 +618,8 @@ export function prepareProjectedSessionPresentation(
       }
     }
     if (signature !== undefined) {
-      // Publish the wire snapshot and its bytes together; mutable source aliases stay private.
-      const encoded = JSON.stringify(row);
+      // Shared-fact replies never send this raw row; encode only at the wire boundary.
       const snapshot = freezeTrustedJsonSnapshot(row);
-      registerSessionRowEncoding(snapshot, encoded);
       const view = { facts: recipientFacts, row: snapshot };
       if (variants) {
         variants.push(view);
@@ -628,8 +647,9 @@ export function prepareProjectedSessionPresentation(
       opts: SessionsListParams,
       select: (retained?: WeakMap<object, SessionListFilteredEntries>) => SessionEntrySelection,
     ) {
-      // These queries consume clock or transient run facts independently of row publications.
-      if (opts.search || opts.spawnedBy || opts.activeOnly || opts.activityPulseBoundaries) {
+      // Membership, clocks, and transient runs are not owned by metadata partitions.
+      const live = opts.activeOnly || opts.activityPulseBoundaries;
+      if (sharing.sessionCap === "invited" || opts.search || opts.spawnedBy || live) {
         return select();
       }
       const view = listView(opts, true);

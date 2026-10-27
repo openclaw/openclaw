@@ -1,5 +1,6 @@
 import { performance } from "node:perf_hooks";
 import { isMainThread, threadId } from "node:worker_threads";
+import * as stringCoerce from "@openclaw/normalization-core/string-coerce";
 import { afterEach, expect, it, vi } from "vitest";
 import * as snapshotRevisions from "./list-snapshot-revision.js";
 import { createMockCronStateForJobs } from "./service.test-harness.js";
@@ -208,6 +209,41 @@ it("applies schedule, status, trigger, and cross-field phrase filters before pag
   });
   expect(page).toMatchObject({ jobs: [{ id: "job-3" }], total: 1, hasMore: false });
 });
+it("prepares search text once per row generation while rechecking visibility", async () => {
+  const state = listState(
+    { id: "one", name: "Alpha", description: "Report", displayName: "日本語 🦞" },
+    { id: "two", name: "Beta", agentId: "ops" },
+  );
+  state.schedulerStarted = true;
+  const normalize = vi.spyOn(stringCoerce, "normalizeLowercaseStringOrEmpty");
+  let visible = true;
+  const matchesJob = vi.fn(() => visible);
+  const first = await listPage(state, { query: " ALPHA " }, matchesJob);
+  expect(first.jobs.map((job) => job.id)).toEqual(["one"]);
+  expect((await listPage(state, { query: "日本語 🦞" }, matchesJob)).jobs[0]).toBe(first.jobs[0]);
+  expect((await listPage(state, { query: "ops" })).jobs.map((job) => job.id)).toEqual(["two"]);
+  visible = false;
+  expect(await listPage(state, { query: "report" }, matchesJob)).toMatchObject({ total: 0 });
+  expect(matchesJob).toHaveBeenCalledTimes(3);
+  expect(
+    normalize.mock.calls.filter(([value]) => value === "one Alpha Report  日本語 🦞"),
+  ).toHaveLength(1);
+  expect(normalize.mock.calls.filter(([value]) => value === "two Beta  ops")).toHaveLength(1);
+
+  await locked(state, async () => {
+    const job = state.store!.jobs[0]!;
+    applyCronRuntimeRowsToState(state, [
+      { ...job, name: "Renamed", description: "Changed", displayName: undefined },
+    ]);
+  });
+  expect(await listPage(state, { query: "alpha" })).toMatchObject({ total: 0 });
+  expect(await listPage(state, { query: "日本語" })).toMatchObject({ total: 0 });
+  const changed = await listPage(state, { query: "changed" });
+  expect(changed.jobs.map((job) => job.id)).toEqual(["one"]);
+  expect(changed.snapshotRevision).not.toBe(first.snapshotRevision);
+  expect(first.jobs[0]?.name).toBe("Alpha");
+});
+
 it("preserves callback failure and subsequent reads when the logger throws", async () => {
   let now = 0;
   vi.spyOn(performance, "now").mockImplementation(() => now);

@@ -6,10 +6,14 @@ import type { CronConfig } from "../../config/types.cron.js";
 import type { GatewayScheduler, GatewaySchedulerScope } from "../../infra/gateway-scheduler.js";
 import { LEGACY_IMPLICIT_AGENT_ID } from "../../routing/session-key.js";
 import type { ReplyOperationObservation } from "../../sessions/reply-operation-state.js";
-import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.js";
+import {
+  captureOpenClawStateReadContext,
+  captureOpenClawStateWorkerContext,
+} from "../../state/openclaw-state-worker-context.js";
 import { runOpenClawStateWorkerOperation } from "../../state/openclaw-state-worker-store.js";
 import type { DeliveryContext } from "../../utils/delivery-context.types.js";
 import type { CronAgentAvailability } from "../agent-availability.js";
+import { resolveCronJobConfigRevision } from "../config-revision.js";
 import type { CronCompletionDeliveryFence } from "../delivery-attempt-fence.js";
 import type { PluginCommandScheduleHost } from "../plugin-command-schedule.types.js";
 import { toPublicCronJob } from "../public-job.js";
@@ -328,6 +332,7 @@ export type CronServiceDeps = {
    */
   runCronFailureRepair?: (request: CronFailureRepairRequest) => Promise<void>;
   onEvent?: (evt: CronEvent, context?: CronEventContext) => void;
+  onDefinitionChange?: (previous: CronJob | undefined, next: CronJob | undefined) => void;
   onProvisionedJobsReloaded?: () => Promise<void>;
 };
 
@@ -377,6 +382,7 @@ export type CronServiceState = {
     }[];
     /** Requested rows are detached and frozen once for this list generation. */
     readJobs: WeakMap<CronJob, CronJob>;
+    searchText: WeakMap<CronJob, string>;
   };
   /** Last known durable wake for each persisted job. Map presence distinguishes
    * a durably unscheduled job from one that is not part of durable topology. */
@@ -478,11 +484,12 @@ const preparedStoreSelections = new WeakMap<
 
 /** Resolve once per admission; warm callers enter their operation queue without yielding. */
 export function prepareCronServiceStore(state: CronServiceState): Promise<void> | undefined {
-  const context = captureOpenClawStateWorkerContext();
+  const { admission } = captureOpenClawStateReadContext();
   const previous = preparedStoreSelections.get(state);
-  if (previous?.admission === context.admission) {
+  if (previous?.admission === admission) {
     return previous.ready ? undefined : previous.promise;
   }
+  const context = captureOpenClawStateWorkerContext();
   if (previous) {
     state.store = null;
     state.readSnapshot = undefined;
@@ -520,6 +527,38 @@ export function emit(state: CronServiceState, evt: CronEvent, context?: CronEven
     }
   } catch {
     /* ignore */
+  }
+}
+
+/** Publish committed membership/configuration changes independently of runtime events. */
+export function emitCronDefinitionChanges(
+  state: CronServiceState,
+  previousJobs: readonly CronJob[],
+  nextJobs: readonly CronJob[],
+) {
+  if (!state.deps.onDefinitionChange) {
+    return;
+  }
+  const previousById = new Map(previousJobs.map((job) => [job.id, job]));
+  const publish = (previous: CronJob | undefined, next: CronJob | undefined) => {
+    try {
+      state.deps.onDefinitionChange?.(previous, next);
+    } catch {
+      /* Observers cannot undo committed jobs. */
+    }
+  };
+  for (const next of nextJobs) {
+    const previous = previousById.get(next.id);
+    previousById.delete(next.id);
+    if (
+      previous !== next &&
+      (!previous || resolveCronJobConfigRevision(previous) !== resolveCronJobConfigRevision(next))
+    ) {
+      publish(previous, next);
+    }
+  }
+  for (const previous of previousById.values()) {
+    publish(previous, undefined);
   }
 }
 

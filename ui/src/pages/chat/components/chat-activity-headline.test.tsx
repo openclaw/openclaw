@@ -238,7 +238,8 @@ it.each([
   ["exec", { title: "Inspect", code: "return null" }, "start", "Inspect…"],
   ["web_search", { query: "new plugin APIs" }, "start", 'for "new plugin APIs"…'],
   ["lookup_record", { query: "release notes" }, "start", "release notes…"],
-  ["exec", { title: "Inspect source", code: "return null" }, "result", "Outcome unknown"],
+  ["exec", { title: "Inspect source", code: "return null" }, "result", "Inspect source"],
+  ["exec", {}, "result", "Exec"],
   ["session_status", {}, "result", "1 other operation"],
 ] as const)("renders accessible %s activity", async (name, args, phase, expected) => {
   const activity = projectAgentToolActivity({
@@ -256,7 +257,8 @@ it.each([
   const summary = query("summary")!;
   const icon = summary.querySelector('.chat-activity-group__icon[role="img"]');
   expect(label()).toBe(expected);
-  expect([icon?.getAttribute("aria-label"), icon?.getAttribute("title")]).toEqual([name, name]);
+  expect(icon?.getAttribute("aria-label")).toBe(name);
+  expect(icon?.hasAttribute("title")).toBe(false);
   expect(icon?.querySelector("svg")).not.toBeNull();
   if (phase === "start") {
     expect(summary.textContent?.trim()).toBe(expected);

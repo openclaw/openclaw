@@ -15,6 +15,7 @@ import { defaultRuntime } from "../../runtime.js";
 import * as stateReadOnly from "../../state/openclaw-state-db-readonly.js";
 import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
 import { withStateMigrationBackupForTest } from "../../state/openclaw-state-schema.test-support.js";
+import { writeFixtureJsonSync } from "../cli-fixtures.test-support.js";
 import * as schemaPreflight from "./schema-preflight.js";
 import { updateAdmitCommand } from "./update-command-admit.js";
 import { snapshotUpdateFixtureFiles } from "./update-command-filesystem-snapshot.test-support.js";
@@ -51,7 +52,7 @@ function fixture(scenario: Scenario, withDatabase = true) {
   const config = {
     agents: { entries: { main: { workspace, heartbeat: { every: "30m", target: "none" } } } },
   };
-  fs.writeFileSync(configPath, JSON.stringify(config));
+  writeFixtureJsonSync(configPath, config);
   fs.writeFileSync(path.join(root, "package.json"), '{"name":"openclaw","version":"2026.9.8"}');
   const sourcePath = path.join(workspace, "HEARTBEAT.md");
   if (scenario.invalidSource) {
@@ -95,7 +96,7 @@ function fixture(scenario: Scenario, withDatabase = true) {
     supervisor: { version: "2026.9.9", host: "fixture", pid: process.pid },
   };
   const contextPath = path.join(home, "context.json");
-  fs.writeFileSync(contextPath, JSON.stringify(context));
+  writeFixtureJsonSync(contextPath, context);
   if (withDatabase) {
     const database = new DatabaseSync(path.join(state, "state", "openclaw.sqlite"));
     try {
@@ -145,12 +146,9 @@ it.each(["absent", "file", "unreadable"] as const)(
       scratch: source,
       invalidSource: sourceKind === "unreadable",
     });
-    fs.writeFileSync(
-      f.configPath,
-      JSON.stringify({
-        agents: { entries: { main: { workspace: path.dirname(f.sourcePath) } } },
-      }),
-    );
+    writeFixtureJsonSync(f.configPath, {
+      agents: { entries: { main: { workspace: path.dirname(f.sourcePath) } } },
+    });
     if (sourceKind === "absent") {
       fs.unlinkSync(f.sourcePath);
     }
@@ -290,19 +288,16 @@ it.each([
     },
   };
   if (kind === "included") {
-    fs.writeFileSync(path.join(path.dirname(f.configPath), "agents.json"), JSON.stringify(agents));
+    writeFixtureJsonSync(path.join(path.dirname(f.configPath), "agents.json"), agents);
   }
-  fs.writeFileSync(
-    f.configPath,
-    JSON.stringify({
-      agents: kind === "included" ? { $include: "agents.json" } : agents,
-      ...(kind === "retired July reasoning"
-        ? { meta: { lastTouchedVersion: "2026.7.1-beta.1" } }
-        : {}),
-      ...(kind === "unrelated invalid field" ? { gateway: { port: "private-invalid-value" } } : {}),
-      ...(kind === "future-written" ? { meta: { lastTouchedVersion: "9999.1.1" } } : {}),
-    }),
-  );
+  writeFixtureJsonSync(f.configPath, {
+    agents: kind === "included" ? { $include: "agents.json" } : agents,
+    ...(kind === "retired July reasoning"
+      ? { meta: { lastTouchedVersion: "2026.7.1-beta.1" } }
+      : {}),
+    ...(kind === "unrelated invalid field" ? { gateway: { port: "private-invalid-value" } } : {}),
+    ...(kind === "future-written" ? { meta: { lastTouchedVersion: "9999.1.1" } } : {}),
+  });
   vi.stubEnv("OPENCLAW_CONFIG_READONLY", kind === "read-only" ? "1" : undefined);
   vi.stubEnv("OPENCLAW_ALLOW_OLDER_BINARY_DESTRUCTIVE_ACTIONS", undefined);
   fs.writeFileSync(`${f.configPath}.bak`, "retained pre-upgrade backup\n");
@@ -311,10 +306,7 @@ it.each([
     const capture = schemaPreflight.captureTargetDatabaseSchemaContext;
     vi.spyOn(schemaPreflight, "captureTargetDatabaseSchemaContext").mockImplementationOnce(
       async (...args) => {
-        fs.writeFileSync(
-          f.configPath,
-          JSON.stringify({ agents, gateway: { port: "private-invalid-value" } }),
-        );
+        writeFixtureJsonSync(f.configPath, { agents, gateway: { port: "private-invalid-value" } });
         before = f.snapshot();
         return capture(...args);
       },
@@ -406,18 +398,15 @@ it.each([false, true])(
     anchor.exec("CREATE TABLE openclaw_engine_anchor (engine TEXT)");
     anchor.close();
     vi.stubEnv("TEST_DATABASE_DSN", "postgresql://127.0.0.1:1/heartbeat_admission");
-    fs.writeFileSync(
-      f.configPath,
-      JSON.stringify({
-        ...f.config,
-        database: {
-          engine: "postgres",
-          postgres: {
-            connection: { source: "env", provider: "default", id: "TEST_DATABASE_DSN" },
-          },
+    writeFixtureJsonSync(f.configPath, {
+      ...f.config,
+      database: {
+        engine: "postgres",
+        postgres: {
+          connection: { source: "env", provider: "default", id: "TEST_DATABASE_DSN" },
         },
-      }),
-    );
+      },
+    });
     vi.spyOn(schemaPreflight, "checkTargetDatabaseSchemasForContexts").mockResolvedValue({
       incompatible: [],
       indeterminate: [],

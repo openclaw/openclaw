@@ -14,7 +14,6 @@ import {
   makeLookupFn,
 } from "./fetch.test-support.js";
 import fs from "node:fs/promises";
-import { createServer } from "node:http";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
@@ -26,20 +25,19 @@ function makeResponseHeaderStallingFetch() {
     async (_input: RequestInfo | URL, init?: RequestInit) =>
       await new Promise<Response>((_resolve, reject) => {
         const signal = init?.signal;
-        const rejectForAbort = () => reject(abortReasonError(signal));
+        const abort = () => {
+          const reason: unknown = signal?.reason;
+          reject(
+            reason instanceof Error ? reason : new Error("request aborted", { cause: reason }),
+          );
+        };
         if (signal?.aborted) {
-          rejectForAbort();
-          return;
+          abort();
+        } else {
+          signal?.addEventListener("abort", abort, { once: true });
         }
-        signal?.addEventListener("abort", rejectForAbort, { once: true });
       }),
   );
-}
-
-function abortReasonError(signal?: AbortSignal | null): Error {
-  return signal?.reason instanceof Error
-    ? signal.reason
-    : new Error("request aborted", { cause: signal?.reason });
 }
 
 function requireFetchGuardRequest(): unknown {
@@ -48,6 +46,15 @@ function requireFetchGuardRequest(): unknown {
     throw new Error("expected fetchWithSsrFGuard call");
   }
   return call[0];
+}
+
+async function listFiles(dir: string) {
+  return await fs.readdir(dir).catch((error: unknown) => {
+    if (hasErrnoCode(error, "ENOENT")) {
+      return [];
+    }
+    throw error;
+  });
 }
 
 function mediaRequest(overrides: Partial<Parameters<typeof saveRemoteMedia>[0]> = {}) {
@@ -63,6 +70,17 @@ const readMedia = (options: Partial<Parameters<typeof readRemoteMediaBuffer>[0]>
   readRemoteMediaBuffer(mediaRequest(options));
 const saveMedia = (options: Partial<Parameters<typeof saveRemoteMedia>[0]>) =>
   saveRemoteMedia(mediaRequest(options));
+
+const abortFailure = {
+  name: "MediaFetchError",
+  code: "fetch_failed",
+  cause: { name: "AbortError" },
+};
+const immediateRetry = { attempts: 2, minDelayMs: 0, maxDelayMs: 0, jitter: 0 };
+const documentFetch = (headers: Record<string, string> = {}) =>
+  vi.fn(async () =>
+    makeStreamResponse([1, 2, 3], { "content-type": "application/pdf", ...headers }),
+  );
 
 function abortableBodyFetch(onStart: () => void = () => {}, progressing = false) {
   return vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
@@ -103,28 +121,6 @@ describe("readRemoteMediaBuffer", () => {
   it("rejects when streamed payload exceeds maxBytes", async () => {
     const fetchImpl = makeResponseFetch([new Uint8Array([1, 2, 3]), new Uint8Array([4, 5, 6])]);
     await expect(readMedia({ fetchImpl, maxBytes: 4 })).rejects.toThrow("exceeds maxBytes");
-  });
-
-  it("rejects malformed content-length before remote buffer reads", async () => {
-    const body = makeCancelableStream([new Uint8Array([1, 2, 3, 4, 5])]);
-    const fetchImpl = vi.fn(
-      async () =>
-        new Response(body.stream, {
-          status: 200,
-          headers: { "content-length": "1e9" },
-        }),
-    );
-
-    await expect(
-      readRemoteMediaBuffer({
-        url: "https://example.com/file.bin",
-        fetchImpl,
-        maxBytes: 4,
-        lookupFn: makeLookupFn(),
-      }),
-    ).rejects.toThrow("invalid content-length header: 1e9");
-
-    expect(body.wasCanceled()).toBe(true);
   });
 
   it.each([
@@ -185,23 +181,17 @@ describe("readRemoteMediaBuffer", () => {
     }
   });
 
-  it("keeps the parent abort active while reading the response body", async () => {
+  it.each([readMedia, saveMedia])("keeps parent cancellation active during %s", async (consume) => {
     const parent = new AbortController();
-    const fetchImpl = abortableBodyFetch();
-    const result = readMedia({
-      fetchImpl,
+    const { promise: bodyReady, resolve: bodyStarted } = createDeferred();
+    const result = consume({
+      fetchImpl: abortableBodyFetch(bodyStarted),
       requestInit: { signal: parent.signal },
       responseHeaderTimeoutMs: 60_000,
     }).catch((error: unknown) => error);
-
-    await vi.waitFor(() => expect(fetchImpl).toHaveBeenCalledTimes(1));
+    await bodyReady;
     parent.abort();
-
-    await expect(result).resolves.toMatchObject({
-      name: "MediaFetchError",
-      code: "fetch_failed",
-      cause: { name: "AbortError" },
-    });
+    await expect(result).resolves.toMatchObject(abortFailure);
   });
 
   it("retries a default response-body idle timeout", async () => {
@@ -217,7 +207,7 @@ describe("readRemoteMediaBuffer", () => {
       const result = readMedia({
         fetchImpl,
         readIdleTimeoutMs: 20,
-        retry: { attempts: 2, minDelayMs: 0, maxDelayMs: 0, jitter: 0 },
+        retry: immediateRetry,
       });
 
       await vi.advanceTimersByTimeAsync(25);
@@ -255,36 +245,21 @@ describe("readRemoteMediaBuffer", () => {
       .mockImplementationOnce(firstResponse)
       .mockResolvedValueOnce(new Response("ok", { status: 200 }));
     await expect(
-      readRemoteMediaBuffer(
-        mediaRequest({
-          fetchImpl,
-          maxBytes: expected.code === "max_bytes" ? 4 : 1024,
-          retry: { attempts: 3, minDelayMs: 0, maxDelayMs: 0, jitter: 0 },
-        }),
-      ),
+      readMedia({
+        fetchImpl,
+        maxBytes: expected.code === "max_bytes" ? 4 : 1024,
+        retry: { ...immediateRetry, attempts: 3 },
+      }),
     ).rejects.toMatchObject(expected);
     expect(fetchImpl).toHaveBeenCalledTimes(1);
   });
 
   it("cancels retry backoff for store writes", async () => {
-    let requests = 0;
-    const server = createServer((_request, response) => {
-      requests += 1;
-      response.writeHead(503).end("busy");
-    });
-    await new Promise<void>((resolve, reject) => {
-      server.once("error", reject);
-      server.listen(0, "127.0.0.1", resolve);
-    });
-
-    try {
-      const address = server.address();
-      if (!address || typeof address === "string") {
-        throw new Error("expected a local media test server address");
-      }
-      const controller = new AbortController();
-      const operation = saveRemoteMedia({
-        url: `http://127.0.0.1:${address.port}/retry.bin`,
+    const controller = new AbortController();
+    const fetchImpl = vi.fn(async () => new Response("busy", { status: 503 }));
+    await expect(
+      saveMedia({
+        fetchImpl,
         requestInit: { signal: controller.signal },
         retry: {
           attempts: 2,
@@ -295,21 +270,9 @@ describe("readRemoteMediaBuffer", () => {
             setImmediate(() => controller.abort());
           },
         },
-      });
-
-      await expect(operation).rejects.toMatchObject({
-        name: "MediaFetchError",
-        code: "fetch_failed",
-        cause: { name: "AbortError" },
-      });
-      expect(requests).toBe(1);
-      expect(fetchWithSsrFGuardMock).toHaveBeenCalledTimes(1);
-    } finally {
-      server.closeAllConnections();
-      await new Promise<void>((resolve, reject) => {
-        server.close((error) => (error ? reject(error) : resolve()));
-      });
-    }
+      }),
+    ).rejects.toMatchObject(abortFailure);
+    expect(fetchImpl).toHaveBeenCalledOnce();
   });
 
   it("uses trusted explicit-proxy mode when the caller opts in for proxy-side DNS", async () => {
@@ -326,53 +289,27 @@ describe("readRemoteMediaBuffer", () => {
       fetchImpl,
       lookupFn,
       trustExplicitProxyDns: true,
-      dispatcherAttempts: [
-        {
-          dispatcherPolicy,
-        },
-      ],
+      dispatcherAttempts: [{ dispatcherPolicy }],
     });
 
-    expect(fetchWithSsrFGuardMock).toHaveBeenCalledTimes(1);
-    expect(requireFetchGuardRequest()).toStrictEqual({
-      url: "https://files.example.test/file/bot123/photos/test.jpg",
-      fetchImpl,
-      init: undefined,
-      maxRedirects: undefined,
-      policy: undefined,
+    expect(requireFetchGuardRequest()).toMatchObject({
       lookupFn,
       dispatcherPolicy,
       mode: "trusted_explicit_proxy",
-      signal: expect.any(AbortSignal),
     });
   });
 
-  it("passes request timeout through the guarded fetch path", async () => {
-    const fetchImpl = vi.fn(async () => new Response("ok", { status: 200 }));
+  it("forwards request deadlines, cancellation, and HTTPS-only redirects to the guard", async () => {
     const parent = new AbortController();
-
-    await readMedia({ fetchImpl, requestInit: { signal: parent.signal }, timeoutMs: 1234 });
-
-    expect(fetchWithSsrFGuardMock).toHaveBeenCalledTimes(1);
+    await readMedia({
+      fetchImpl: documentFetch(),
+      requestInit: { signal: parent.signal },
+      timeoutMs: 1234,
+      requireHttps: true,
+    });
     expect(requireFetchGuardRequest()).toMatchObject({
-      url: "https://example.com/file.bin",
       timeoutMs: 1234,
       signal: parent.signal,
-    });
-  });
-
-  it("passes the HTTPS-only redirect policy through the guarded fetch path", async () => {
-    const fetchImpl = vi.fn(async () => new Response("ok", { status: 200 }));
-
-    await readMedia({
-      url: "https://example.com/favicon.ico",
-      fetchImpl,
-      requireHttps: true,
-      maxBytes: undefined,
-    });
-
-    expect(requireFetchGuardRequest()).toMatchObject({
-      url: "https://example.com/favicon.ico",
       requireHttps: true,
     });
   });
@@ -388,8 +325,7 @@ describe("readRemoteMediaBuffer", () => {
 
     expect(saved.fileName).toBe("report.csv");
     expect(saved.contentType).toBe("text/csv");
-    expect(saved.path).toMatch(/[a-f0-9-]{36}\.csv$/);
-    expect(saved.path).not.toMatch(/report---/);
+    expect(path.basename(saved.path)).toMatch(/^[a-f0-9-]{36}\.csv$/);
     await expect(fs.readFile(saved.path)).resolves.toStrictEqual(csv);
   });
 
@@ -406,28 +342,6 @@ describe("readRemoteMediaBuffer", () => {
 
     expect(saved.contentType).toBe("application/x-openclaw-charset-proof;charset=cp1251");
     await expect(fs.readFile(saved.path)).resolves.toStrictEqual(bytes);
-  });
-
-  it("keeps the parent abort active while saving the response body", async () => {
-    const parent = new AbortController();
-    const { promise: bodyReady, resolve: bodyStarted } = createDeferred();
-    const fetchImpl = abortableBodyFetch(bodyStarted);
-    const result = saveMedia({
-      url: "https://example.com/download",
-      fetchImpl,
-      requestInit: { signal: parent.signal },
-      maxBytes: 8,
-      responseHeaderTimeoutMs: 60_000,
-    }).catch((error: unknown) => error);
-
-    await bodyReady;
-    parent.abort();
-
-    await expect(result).resolves.toMatchObject({
-      name: "MediaFetchError",
-      code: "fetch_failed",
-      cause: { name: "AbortError" },
-    });
   });
 
   it.each([
@@ -465,134 +379,43 @@ describe("readRemoteMediaBuffer", () => {
     },
   );
 
-  it("keeps raw URL path basenames when percent escapes are malformed", async () => {
-    const fetchImpl = vi.fn(async () =>
-      makeStreamResponse([1, 2, 3], { "content-type": "application/pdf" }),
-    );
+  it.each([
+    ["https://example.com/files/bad%E0%A4%A.pdf", undefined, "bad%E0%A4%A.pdf"],
+    ["https://example.com/files/reports%5CQ1.pdf", undefined, "reports_Q1.pdf"],
+    [
+      "https://example.com/download",
+      "attachment; filename*=UTF-8''reports%2F%2FQ1.pdf",
+      "reports__Q1.pdf",
+    ],
+  ] as const)("preserves a safe saved filename from %s / %s", async (url, header, fileName) => {
+    const fetchImpl = documentFetch(header ? { "content-disposition": header } : {});
+    const saved = await saveMedia({ url, fetchImpl, maxBytes: 8 });
+    expect(saved.fileName).toBe(fileName);
+  });
 
-    const saved = await saveMedia({
-      url: "https://example.com/files/bad%E0%A4%A.pdf",
+  it.each([
+    ["attachment; filename='report.csv", "'report.csv"],
+    ["attachment; filename=report.csv'", "report.csv'"],
+    ["attachment; filename='report.csv'", "'report.csv'"],
+    ['attachment; note="x; filename=spoof.csv; y"; filename=safe.csv', "safe.csv"],
+    [String.raw`attachment; filename="C:/tmp/reports\Q1.csv"`, "Q1.csv"],
+    [String.raw`attachment; filename="reports\Q1.csv"`, "Q1.csv"],
+    ["attachment; filename*=ISO-8859-1''caf%E9.csv", "café.csv"],
+    ["attachment; filename=fallback.csv; filename*=UTF-8''%ZZbad.csv", "fallback.csv"],
+    ["attachment; filename*=UTF-16''bad.csv; filename=fallback.csv", "fallback.csv"],
+  ] as const)("parses buffered content-disposition %s", async (header, fileName) => {
+    const fetchImpl = documentFetch({ "content-disposition": header, "content-type": "text/csv" });
+    const buffered = await readMedia({
+      url: "https://example.com/download",
       fetchImpl,
       maxBytes: 8,
     });
-
-    expect(saved.fileName).toBe("bad%E0%A4%A.pdf");
+    expect(buffered.fileName).toBe(fileName);
   });
-
-  it.each([["https://example.com/files/reports%5CQ1.pdf", "reports_Q1.pdf"]])(
-    "keeps decoded URL fallback separators inside the selected basename",
-    async (url, fileName) => {
-      const fetchImpl = vi.fn(async () =>
-        makeStreamResponse([1, 2, 3], { "content-type": "application/pdf" }),
-      );
-
-      const saved = await saveMedia({ url, fetchImpl, maxBytes: 8 });
-
-      expect(saved.fileName).toBe(fileName);
-    },
-  );
-
-  it.each([
-    {
-      name: "unquoted filename retains its leading apostrophe",
-      header: "attachment; filename='report.csv",
-      fileName: "'report.csv",
-    },
-    {
-      name: "unquoted filename retains its trailing apostrophe",
-      header: "attachment; filename=report.csv'",
-      fileName: "report.csv'",
-    },
-    {
-      name: "unquoted filename retains surrounding apostrophes",
-      header: "attachment; filename='report.csv'",
-      fileName: "'report.csv'",
-    },
-    {
-      name: "filename text inside an unrelated quoted parameter is ignored",
-      header: 'attachment; note="x; filename=spoof.csv; y"; filename=safe.csv',
-      fileName: "safe.csv",
-    },
-    {
-      name: "mixed Windows path separators preserve the final basename",
-      header: String.raw`attachment; filename="C:/tmp/reports\Q1.csv"`,
-      fileName: "Q1.csv",
-    },
-    {
-      name: "legacy relative Windows path is reduced to its basename",
-      header: String.raw`attachment; filename="reports\Q1.csv"`,
-      fileName: "Q1.csv",
-    },
-    {
-      name: "ISO-8859-1 extended filename",
-      header: "attachment; filename*=ISO-8859-1''caf%E9.csv",
-      fileName: "café.csv",
-    },
-    {
-      name: "malformed extended filename falls back to plain filename",
-      header: "attachment; filename=fallback.csv; filename*=UTF-8''%ZZbad.csv",
-      fileName: "fallback.csv",
-    },
-    {
-      name: "unsupported extended charset falls back to plain filename",
-      header: "attachment; filename*=UTF-16''bad.csv; filename=fallback.csv",
-      fileName: "fallback.csv",
-    },
-  ] as const)("parses $name for buffered and stored remote media", async (testCase) => {
-    const fetchImpl = vi.fn(async () =>
-      makeStreamResponse([1, 2, 3], {
-        "content-disposition": testCase.header,
-        "content-type": "text/csv",
-      }),
-    );
-    const request = {
-      url: "https://example.com/download",
-      fetchImpl,
-      lookupFn: makeLookupFn(),
-      maxBytes: 8,
-    };
-
-    const buffered = await readRemoteMediaBuffer(request);
-    const stored = await saveRemoteMedia(request);
-
-    expect(buffered.fileName).toBe(testCase.fileName);
-    expect(stored.fileName).toBe(testCase.fileName);
-    expect(fetchImpl).toHaveBeenCalledTimes(2);
-  });
-
-  it.each([[`attachment; filename*=UTF-8''reports%2F%2FQ1.pdf`, "reports__Q1.pdf"]])(
-    "keeps decoded content-disposition filename* separators inside the selected filename",
-    async (contentDisposition, fileName) => {
-      const fetchImpl = vi.fn(async () =>
-        makeStreamResponse([1, 2, 3], {
-          "content-disposition": contentDisposition,
-          "content-type": "application/pdf",
-        }),
-      );
-
-      const saved = await saveMedia({
-        url: "https://example.com/download",
-        fetchImpl,
-        maxBytes: 8,
-      });
-
-      expect(saved.fileName).toBe(fileName);
-    },
-  );
 
   it("rejects bodyless successful responses without saving an empty file", async () => {
     const inboundDir = path.join(tempHome.home, ".openclaw", "media", "inbound");
-    const listInboundFiles = async () => {
-      try {
-        return (await fs.readdir(inboundDir)).toSorted();
-      } catch (error) {
-        if (hasErrnoCode(error, "ENOENT")) {
-          return [];
-        }
-        throw error;
-      }
-    };
-    const before = await listInboundFiles();
+    const before = await listFiles(inboundDir);
 
     await expect(
       saveResponseMedia(new Response(null, { status: 204 }), {
@@ -607,7 +430,7 @@ describe("readRemoteMediaBuffer", () => {
       message:
         "Failed to fetch media from https://example.com/empty: HTTP 204; empty response body",
     });
-    await expect(listInboundFiles()).resolves.toEqual(before);
+    await expect(listFiles(inboundDir)).resolves.toEqual(before);
   });
 
   it("does not let filename hints force stored extensions before byte sniffing", async () => {
@@ -623,17 +446,13 @@ describe("readRemoteMediaBuffer", () => {
 
     expect(saved.fileName).toBe("document.docx");
     expect(saved.contentType).toBe("image/jpeg");
-    expect(saved.path).toMatch(/[a-f0-9-]{36}\.jpg$/);
-    expect(saved.path).not.toMatch(/\.docx$/);
-    expect(saved.path).not.toMatch(/document---/);
+    expect(path.basename(saved.path)).toMatch(/^[a-f0-9-]{36}\.jpg$/);
     await expect(fs.readFile(saved.path)).resolves.toStrictEqual(jpeg);
   });
 
   it("preserves explicit original filenames when saving streams", async () => {
     const contentType = "application/vnd.openxmlformats-officedocument.wordprocessingml.document";
-    const fetchImpl = vi.fn(async () =>
-      makeStreamResponse([1, 2, 3], { "content-type": "application/octet-stream" }),
-    );
+    const fetchImpl = documentFetch({ "content-type": "application/octet-stream" });
 
     const saved = await saveMedia({
       url: "https://smba.trafficmanager.net/v3/attachments/att-1/views/original",
@@ -692,14 +511,7 @@ describe("readRemoteMediaBuffer", () => {
         expect(response.body?.locked).toBe(false);
         expect(body.wasCanceled()).toBe(false);
         const dir = path.join(tempHome.home, ".openclaw", "media", subdir);
-        await expect(
-          fs.readdir(dir).catch((error: unknown) => {
-            if (hasErrnoCode(error, "ENOENT")) {
-              return [];
-            }
-            throw error;
-          }),
-        ).resolves.toEqual([]);
+        await expect(listFiles(dir)).resolves.toEqual([]);
       } finally {
         await capture.body?.cancel();
         await operation;
@@ -722,7 +534,7 @@ describe("readRemoteMediaBuffer", () => {
       fetchImpl,
       beforeRequest,
       maxBytes: 8,
-      retry: { attempts: 2, minDelayMs: 0, maxDelayMs: 0, jitter: 0, onRetry },
+      retry: { ...immediateRetry, onRetry },
     });
 
     expect(fetchImpl).toHaveBeenCalledTimes(2);

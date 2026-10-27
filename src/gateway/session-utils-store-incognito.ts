@@ -1,5 +1,6 @@
 import { captureMemoryExactSessionReader } from "../config/sessions/session-accessor.memory-exact-read.js";
 import type { SessionEntryReadScope } from "../config/sessions/session-accessor.types.js";
+import { createGatewaySessionStore } from "./session-utils-store-read.js";
 import type { GatewaySessionStorePlan } from "./session-utils-store-selection.js";
 import type { GatewaySessionStoreTargetWithStore } from "./session-utils-store.types.js";
 
@@ -27,7 +28,7 @@ export function prepareIncognitoGatewaySessionStoreTarget(params: {
         canonicalKey,
         storePath: memory.path,
         storeKeys: [canonicalKey],
-        store: entry ? { [canonicalKey]: entry } : {},
+        store: createGatewaySessionStore(entry ? [{ sessionKey: canonicalKey, entry }] : []),
         readSource: { agentId, path: memory.path },
         ...(memory.source ? { capturedReadSource: memory.source } : {}),
         capturedReadSources: memory.source ? [memory.source] : [],

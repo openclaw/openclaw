@@ -15,7 +15,7 @@ import {
 import type { EmbeddedRunAttemptResult } from "./types.js";
 
 const CONTINUATION =
-  "Your turn ended without a final reply. If the user still needs a reply, write it now. If your completed actions already answered the request, answer exactly NO_REPLY. Continue from the current transcript. Do not repeat completed tool calls or restart from scratch. Tools are unavailable in this step: it is a text-only pass, so reply with plain text and do not attempt any tool call.";
+  "Your turn ended without a final reply. If the user still needs a reply, write it now. If your completed actions already answered the request, answer exactly NO_REPLY. Continue from the current transcript. Do not repeat completed tool calls or restart from scratch. Do not call tools in this step. Summarize the recorded results in plain text.";
 
 function continuation(
   attemptOverrides: Partial<EmbeddedRunAttemptResult> = {},
@@ -146,20 +146,6 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
       expect(instruction?.instruction ?? null).toBe(continues ? CONTINUATION : null);
     },
   );
-
-  it("tells the finalizer that tools are unavailable", () => {
-    // The settled-turn finalization pass runs with disableTools: true. If the instruction
-    // does not say so, the model reaches for a tool, the denied call registers as capability
-    // activity, and projectSettledTurnFinalizationAttemptResult throws away the whole result
-    // -- including a perfectly good answer produced in the same completion.
-    const instruction = continuation(makeSettledIdleWriteAttempt(), {
-      timedOut: true,
-    });
-
-    expect(instruction?.instruction).toContain("Tools are unavailable in this step");
-    expect(instruction?.instruction).toContain("do not attempt any tool call");
-    expect(instruction?.disableTools).toBe(true);
-  });
 
   it.each(["tool_1", "tool_stale"])(
     "matches terminal metadata to the current call (%s)",

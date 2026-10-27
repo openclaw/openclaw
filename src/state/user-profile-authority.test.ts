@@ -1,7 +1,10 @@
+import fs from "node:fs";
 import { expect, it, vi } from "vitest";
 import { observeHostDataSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
+import { createDeferredCore } from "../shared/deferred.js";
 import { requireNativeSqliteDatabase } from "../test-utils/native-sqlite.js";
 import { assertExistingOpenClawStateRuntimeSchema as assertRuntimeSchema } from "./openclaw-state-db-existing-schema.js";
+import * as stateReads from "./openclaw-state-db-readonly.js";
 import { ensureSecretStoreSchema } from "./openclaw-state-db-schema-additive.js";
 import {
   closeOpenClawStateDatabaseByPathAsync as closeDatabase,
@@ -14,7 +17,8 @@ import {
   captureUserProfileAuthorityRead as captureAuthority,
   fenceUserProfileMutationAuthority as fenceAuthority,
 } from "./user-profile-events.js";
-import { setUserProfileRole } from "./user-profile-writes.worker.js";
+import { prepareCurrentUserProfileIdentity } from "./user-profile-reads.js";
+import { mergeProfiles, setUserProfileRole } from "./user-profile-writes.worker.js";
 import { ensureProfileForEmail } from "./user-profiles.js";
 import { useUserStateFixture } from "./user-state.test-support.js";
 
@@ -188,4 +192,89 @@ it("retires pre-creation authority when the same admission becomes a physical fi
   setUserProfileRole(profile.id, "member", options);
   expect(boundAfter()).toBe(false);
   expectRetired(boundAfter.transferable);
+});
+
+it("prepares current canonical aliases outside an inherited snapshot without host profile SQL", async () => {
+  const options = stateOptions();
+  const person = ensureProfileForEmail("person@example.test", options);
+  const alias = ensureProfileForEmail("alias@example.test", options);
+  await stateReads.withOpenClawStateDatabaseReadSnapshot(async () => {
+    mergeProfiles(alias.id, person.id, options);
+    const old = await stateReads.executeExistingOpenClawStateRead(options, {
+      type: "userProfiles.identity",
+      profileId: person.id,
+    });
+    expect(old?.profile?.aliases.has(alias.id)).toBe(false);
+    const sql = observeHostDataSql();
+    try {
+      const current = await prepareCurrentUserProfileIdentity(person.id, options);
+      expect(current.profile?.aliases).toEqual(new Set([person.id, alias.id]));
+      expect(() => current.assertCurrent()).not.toThrow();
+      expect(sql.queries.some((query) => /\buser_profiles\b/i.test(query))).toBe(false);
+    } finally {
+      sql.restore();
+    }
+  }, options);
+});
+
+it("rejects a local identity mutation after the worker snapshot but before binding", async () => {
+  const options = stateOptions();
+  const person = ensureProfileForEmail("person@example.test", options);
+  const alias = ensureProfileForEmail("alias@example.test", options);
+  const entered = createDeferredCore();
+  const release = createDeferredCore();
+  const read = stateReads.executeExistingOpenClawStateRead;
+  const held = vi.spyOn(stateReads, "executeExistingOpenClawStateRead").mockImplementation((async (
+    ...args: Parameters<typeof read>
+  ) => {
+    const result = await read(...args);
+    if (args[1].type === "userProfiles.identity") {
+      entered.resolve();
+      await release.promise;
+    }
+    return result;
+  }) as typeof read);
+  const preparing = prepareCurrentUserProfileIdentity(person.id, options);
+  const settled = preparing.catch(() => undefined);
+  try {
+    await Promise.race([
+      entered.promise,
+      preparing.then(() => {
+        throw new Error("Identity read was not held");
+      }),
+    ]);
+    mergeProfiles(alias.id, person.id, options);
+    release.resolve();
+    await expect(preparing).rejects.toThrow("Profile identity changed");
+  } finally {
+    release.resolve();
+    await settled;
+    held.mockRestore();
+  }
+});
+
+it("invalidates a prepared alias cohort on an incoming merge, not an unrelated profile change", async () => {
+  const options = stateOptions();
+  const person = ensureProfileForEmail("person@example.test", options);
+  const alias = ensureProfileForEmail("alias@example.test", options);
+  const other = ensureProfileForEmail("other@example.test", options);
+  const prepared = await prepareCurrentUserProfileIdentity(person.id, options);
+  expect(prepared.profile?.aliases).toEqual(new Set([person.id]));
+  setUserProfileRole(other.id, "member", options);
+  expect(() => prepared.assertCurrent()).not.toThrow();
+  mergeProfiles(alias.id, person.id, options);
+  expect(() => prepared.assertCurrent()).toThrow("Profile identity changed");
+});
+
+it("keeps missing identity storage absent and invalidates a prepared identity on close", async () => {
+  const options = stateOptions();
+  const absent = await prepareCurrentUserProfileIdentity("missing", options);
+  expect(absent.profile).toBeUndefined();
+  expect(fs.existsSync(options.path)).toBe(false);
+  expect(() => absent.assertCurrent()).not.toThrow();
+  const person = ensureProfileForEmail("person@example.test", options);
+  expect(() => absent.assertCurrent()).toThrow("Profile identity changed");
+  const current = await prepareCurrentUserProfileIdentity(person.id, options);
+  await closeDatabase(options.path);
+  expect(() => current.assertCurrent()).toThrow();
 });

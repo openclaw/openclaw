@@ -514,9 +514,15 @@
 }
 
 /* Keep the expanded row visually attached to its drawer. */
-.session-data-row--expanded > td,
-.session-data-row--menu-open > td {
-  background: var(--bg-hover);
+.sessions-table .session-data-row:is(.session-data-row--expanded, .session-data-row--menu-open) {
+  --data-table-row-bg: var(--data-table-selected-bg);
+
+  background: var(--data-table-row-bg);
+}
+
+.sessions-table
+  .session-data-row:is(.session-data-row--expanded, .session-data-row--menu-open):hover {
+  --data-table-row-bg: var(--data-table-selected-hover-bg);
 }
 
 /* The row loses :hover once the pointer moves into the menu; keep its kebab lit. */
@@ -552,11 +558,10 @@
   width: 100%;
 }
 
-.session-actions .icon-btn svg,
-.session-details-toggle svg {
+.session-actions .icon-btn .session-css-icon,
+.session-details-toggle .session-css-icon {
   width: 14px;
   height: 14px;
-  stroke-width: 2px;
 }
 
 .session-key-cell__text {
@@ -745,7 +750,7 @@
     border-color var(--duration-fast) ease;
 }
 
-.session-details-toggle svg {
+.session-details-toggle .session-css-icon {
   transition: transform var(--duration-normal) var(--ease-out);
 }
 
@@ -753,7 +758,7 @@
   color: var(--text);
 }
 
-.session-data-row--expanded .session-details-toggle svg {
+.session-data-row--expanded .session-details-toggle .session-css-icon {
   transform: rotate(180deg);
 }
 

@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
+import { serialize } from "node:v8";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { expect, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
@@ -33,6 +34,8 @@ import { withoutHostSql } from "./session-accessor.observation.test-support.js";
 import { memorySessionActorOwners } from "./session-actor-memory-owner.js";
 import { sessionTests } from "./session-entry-fixture.test-support.js";
 import { resolveSqliteTargetFromSessionStorePath } from "./session-sqlite-target.js";
+import { prepareSessionStoreTargetInventory } from "./session-store-target-inventory.js";
+import { prepareSessionStoreTargetInventoryRead } from "./session-store-target-runtime.js";
 import {
   historyLane,
   projectionLane,
@@ -113,6 +116,80 @@ function interceptReads(hooks: {
   });
   return { [Symbol.dispose]: () => spies.forEach((spy) => spy.mockRestore()) };
 }
+
+it("keeps discovery payloads bounded by routing config while preserving shared ACP stores", async ({
+  state,
+}) => {
+  const storePath = state.statePath("shared.sqlite");
+  const cfg: OpenClawConfig = {
+    agents: {
+      ownership: "explicit",
+      entries: { main: {}, ops: {} },
+      defaults: { sessionStore: { agentId: "main" } },
+    },
+    acp: { defaultAgent: "coder", allowedAgents: ["coder"] },
+    session: { store: storePath },
+    plugins: {
+      entries: Object.fromEntries(
+        Array.from({ length: 40 }, (_, index) => [
+          `fixture-${index}`,
+          { config: { description: "synthetic plugin metadata ".repeat(100) } },
+        ]),
+      ),
+    },
+    models: {
+      providers: {
+        fixture: {
+          baseUrl: "https://models.example.invalid",
+          models: [],
+          headers: { "X-Fixture": "synthetic provider config ".repeat(1_000) },
+        },
+      },
+    },
+  };
+  openOpenClawAgentDatabase({ agentId: "main", path: storePath });
+  seedAgents(["main", "ops", "coder"], () => ({}), storePath);
+  const configBytes = new Map<string, number[]>();
+  using _ = interceptReads({
+    beforeRequest(request) {
+      if (
+        isRecord(request) &&
+        (request.kind === "combined-store-topology" ||
+          request.kind === "session-target-inventory") &&
+        isRecord(request.request)
+      ) {
+        const sizes = configBytes.get(request.kind) ?? [];
+        sizes.push(serialize(request.request.config).byteLength);
+        configBytes.set(request.kind, sizes);
+      }
+    },
+  });
+  const combined = await loadCombinedStoreAsync(cfg, { configuredAgentsOnly: true });
+  expect(Object.keys(combined.store).toSorted()).toEqual([
+    "agent:coder:main",
+    "agent:main:main",
+    "agent:ops:main",
+  ]);
+  expect(combined.targetsBySessionKey.get("agent:coder:main")?.storeTarget).toEqual({
+    agentId: "main",
+    storePath,
+  });
+  const inventory = prepareSessionStoreTargetInventory(cfg, ["main", "ops", "coder"], state.env);
+  await prepareSessionStoreTargetInventoryRead(inventory).withRead(async (result) => {
+    expect(result.agents.map(({ agentId, result: found }) => [agentId, found.available])).toEqual([
+      ["main", true],
+      ["ops", true],
+      ["coder", true],
+    ]);
+  });
+  expect([...configBytes.keys()].toSorted()).toEqual([
+    "combined-store-topology",
+    "session-target-inventory",
+  ]);
+  for (const [kind, sizes] of configBytes) {
+    expect(Math.max(...sizes), `${kind} config bytes`).toBeLessThan(4_096);
+  }
+});
 
 it.for([
   ["separate", "before-read"],

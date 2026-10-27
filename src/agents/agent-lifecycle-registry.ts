@@ -41,7 +41,7 @@ import { invalidateOpenClawAgentDatabaseValidationsForAgent } from "../state/ope
 import { isStateDatabaseReadAdmissionInvalidatedError } from "../state/openclaw-state-db-async-lifecycle.js";
 import { openClawStateDatabaseCache } from "../state/openclaw-state-db-cache.js";
 import type { OpenClawStateDatabaseOptions } from "../state/openclaw-state-db-contract.js";
-import { withCurrentOpenClawStateReadScope } from "../state/openclaw-state-db-readonly.js";
+import { resolveOpenClawStateReadPath } from "../state/openclaw-state-db-readonly.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { withOpenClawStateLeaseWorkerAdmission } from "../state/openclaw-state-lease-worker-owner.js";
 import { withOpenClawStateLeaseAsync } from "../state/openclaw-state-lease.js";
@@ -512,14 +512,13 @@ export function isAgentDeletionBlocked(
   if (database) {
     return Boolean(readAgentDeletionJournalInDatabase({ db: database }, agentId, "runtime"));
   }
-  return withCurrentOpenClawStateReadScope(options, (statePath) => {
-    const opened = openClawStateDatabaseCache.getCachedOpenClawStateDatabase(statePath, {
-      readOnly: true,
-    });
-    // Native writers publish transaction-local facts before their committed receipt exists.
-    if (opened?.db.isTransaction) {
-      return getAgentDeletionJournalStatus(opened.db, agentId) !== "absent";
-    }
-    return getOrLoadAgentDeletionJournalStatus(statePath, agentId, () => undefined) !== "absent";
+  const statePath = resolveOpenClawStateReadPath(options);
+  const opened = openClawStateDatabaseCache.getCachedOpenClawStateDatabase(statePath, {
+    readOnly: true,
   });
+  // Native writers publish transaction-local facts before their committed receipt exists.
+  if (opened?.db.isTransaction) {
+    return getAgentDeletionJournalStatus(opened.db, agentId) !== "absent";
+  }
+  return getOrLoadAgentDeletionJournalStatus(statePath, agentId, () => undefined) !== "absent";
 }

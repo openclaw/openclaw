@@ -235,6 +235,10 @@ function persistExecutionIdentityAdmissionEnvelope(
     createdAt: envelope.createdAt,
   });
   const plannedContextJson = JSON.stringify(plannedContext);
+  const plannedContextBytes = Buffer.byteLength(plannedContextJson, "utf8");
+  if (plannedContextBytes > EXECUTION_IDENTITY_CONTEXT_MAX_BYTES) {
+    throw new Error("prepared execution identity context exceeds 16 KiB");
+  }
   let transactionDatabase: EngineConnection | undefined;
   try {
     return runOpenClawStateWriteTransaction(
@@ -252,17 +256,15 @@ function persistExecutionIdentityAdmissionEnvelope(
         }
         executeSqliteQuerySync(
           db,
-          executionIdentityDb(db)
-            .insertInto("execution_identity_contexts")
-            .values({
-              context_id: plannedContext.contextId,
-              execution_id: plannedContext.executionId,
-              run_id: plannedContext.runId,
-              created_at: plannedContext.createdAt,
-              coverage_state: plannedContext.coverageState,
-              context_bytes: Buffer.byteLength(plannedContextJson, "utf8"),
-              context_json: plannedContextJson,
-            }),
+          executionIdentityDb(db).insertInto("execution_identity_contexts").values({
+            context_id: plannedContext.contextId,
+            execution_id: plannedContext.executionId,
+            run_id: plannedContext.runId,
+            created_at: plannedContext.createdAt,
+            coverage_state: plannedContext.coverageState,
+            context_bytes: plannedContextBytes,
+            context_json: plannedContextJson,
+          }),
         );
         pruneExecutionIdentityContextsAfterInsert(
           db,

@@ -18,9 +18,8 @@ import { findChatSubmissionMessage } from "../../lib/chat/history-message-identi
 import { clampText } from "../../lib/format.ts";
 import { registerEnglishCatalog, t } from "../../lib/reactive/i18n.ts";
 import type { ChatProviderReviewOwner } from "./chat-provider-review-controller.tsx";
-import type { SubagentRoster, SubagentRowContext } from "./chat-spawned-subagent.ts";
+import { isChatSendReconnecting } from "./chat-send-presentation.ts";
 import { ChatGPTUsageLimit } from "./chatgpt-usage-limit.tsx";
-import { ChatChildAttention } from "./components/chat-child-attention.tsx";
 import { ChatConversationMobile } from "./components/chat-conversation-presentation.ts";
 import { renderGuestWelcomeStatus } from "./components/chat-guest-welcome-status.tsx";
 import { ChatSendStatus } from "./components/chat-message-send-status-view.tsx";
@@ -54,22 +53,19 @@ type ChatViewNoticesProps = {
   onDismissError?: () => void;
 };
 
-type ChatComposerNoticesProps = ChatPlacementStartupNoticeProps &
-  SubagentRowContext &
-  Pick<SubagentRoster, "subagentSessionsRead"> & {
-    sessionKey?: string;
-    presented?: boolean;
-    onSessionSelect?: (key: string) => void;
-    connected?: boolean;
-    messages: readonly unknown[];
-    providerPolicyNotice?: ProviderPolicyNotice | null;
-    // Resolve after the first pane frame prepares the Solid owner's permission facts.
-    readProviderReview?: () => ChatProviderReviewOwner | undefined;
-    runError?: ChatRunError | null;
-    onRefresh?: () => void;
-    onDismissWorkspaceConflict?: () => void;
-    workspaceConflict?: WorkspaceResultConflict | null;
-  };
+type ChatComposerNoticesProps = ChatPlacementStartupNoticeProps & {
+  sessionKey?: string;
+  presented?: boolean;
+  connected?: boolean;
+  messages: readonly unknown[];
+  providerPolicyNotice?: ProviderPolicyNotice | null;
+  // Resolve after the first pane frame prepares the Solid owner's permission facts.
+  readProviderReview?: () => ChatProviderReviewOwner | undefined;
+  runError?: ChatRunError | null;
+  onRefresh?: () => void;
+  onDismissWorkspaceConflict?: () => void;
+  workspaceConflict?: WorkspaceResultConflict | null;
+};
 
 function renderStatusNotice(
   className: string,
@@ -312,15 +308,6 @@ export function renderChatComposerNotices(props: ChatComposerNoticesProps) {
   );
   return (
     <>
-      {/* Seeded rows can name children the gateway no longer links; wait for its child read. */}
-      <Show when={props.subagentParentKey && props.subagentSessionsRead}>
-        <ChatChildAttention
-          sessionKey={props.subagentParentKey ?? ""}
-          sessions={props.subagentSessions ?? []}
-          onOpenSubagent={props.onOpenSubagent}
-          onOpenSession={props.onSessionSelect}
-        />
-      </Show>
       <Show when={props.readProviderReview?.()}>
         {(owner) => (
           <Loading>
@@ -421,7 +408,12 @@ function ChatPlacementStartupNotice(props: {
   return (
     <>
       <Show
-        when={props.status?.phase !== "failed" && !hasInlineTurn() && props.status?.initialTurn}
+        when={
+          props.status?.phase !== "failed" &&
+          !hasInlineTurn() &&
+          isChatSendReconnecting(props.status?.initialTurn?.sendState, props.connected) &&
+          props.status?.initialTurn
+        }
       >
         {(turn) => (
           <div class="chat-composer-neighbor-card chat-composer-neighbor-card--info" role="status">
@@ -432,7 +424,7 @@ function ChatPlacementStartupNotice(props: {
               <ChatSendStatus
                 status={{
                   id: turn().id,
-                  state: turn().sendState === "waiting-reconnect" ? "waiting-reconnect" : "sending",
+                  state: "waiting-reconnect",
                   error: turn().sendError,
                 }}
                 actions={{

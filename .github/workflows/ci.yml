@@ -162,6 +162,7 @@ jobs:
       run_skills_python_job: ${{ steps.manifest.outputs.run_skills_python_job }}
       run_windows: ${{ steps.manifest.outputs.run_windows }}
       run_build_artifacts: ${{ steps.manifest.outputs.run_build_artifacts }}
+      run_built_source_verifiers: ${{ steps.manifest.outputs.run_built_source_verifiers }}
       run_proof_tier: ${{ steps.manifest.outputs.run_proof_tier }}
       run_browser_native_host: ${{ steps.manifest.outputs.run_browser_native_host }}
       run_doctor_plugin_index: ${{ steps.manifest.outputs.run_doctor_plugin_index }}
@@ -1868,6 +1869,15 @@ jobs:
           NODE_OPTIONS: --max-old-space-size=8192
         run: pnpm build:ci-artifacts
 
+      # This build already seals SDK-only records that the full warmer does not emit.
+      - name: Save build-all cache
+        if: ${{ success() && github.repository == 'openclaw/openclaw' && github.ref == 'refs/heads/main' && github.event_name == 'schedule' && !inputs.release_gate && needs.preflight.outputs.candidate_trust == 'main' && needs.preflight.outputs.cache_write_allowed == 'true' && needs.preflight.outputs.cache_mode != 'off' && needs.preflight.outputs.frozen_target != 'true' && needs.preflight.outputs.compatibility_target != 'true' && steps.dist_build.outcome == 'success' && steps.node_setup.outputs.build-all-cache-key != '' }}
+        continue-on-error: true
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: .artifacts/build-all-cache
+          key: ${{ steps.node_setup.outputs.build-all-cache-key }}
+
       # Reuse the public build before singleton/watch checks mutate its outputs.
       - name: Install Playwright Chromium for public-build browser tests
         id: browser_chromium
@@ -1883,6 +1893,7 @@ jobs:
           OPENCLAW_UI_E2E_SKIP_REAL_GATEWAY: "1"
           OPENCLAW_BROWSER_EXTENSION_E2E: "1"
           OPENCLAW_E2E_WORKERS: "1"
+          OPENCLAW_VITEST_WORKER_CACHE: "1"
         run: |
           node --import ./scripts/tsx.mjs scripts/ensure-playwright-chromium.mts --require-playwright-chromium
           node scripts/run-vitest.mjs run \
@@ -1894,6 +1905,7 @@ jobs:
         if: ${{ !cancelled() && needs.preflight.outputs.reuse_browser_extension_build == 'true' && (steps.dist_build.outcome == 'success' || steps.dist_build_cache.outputs.cache-hit == 'true') && steps.browser_chromium.outcome == 'success' && needs.preflight.outputs.run_ui_e2e == 'true' && needs.preflight.outputs.compatibility_target != 'true' }}
         env:
           OPENCLAW_UI_E2E_SKIP_REAL_GATEWAY: "1"
+          OPENCLAW_VITEST_WORKER_CACHE: "1"
           OPENCLAW_UI_E2E_PRODUCTION_ARTIFACT_ROOT: ${{ github.workspace }}/dist/control-ui
           OPENCLAW_UI_E2E_DIAGNOSTIC_DIR: .artifacts/control-ui-e2e-timeouts/production-artifact-attempt-${{ github.run_attempt }}
         run: |
@@ -2013,6 +2025,7 @@ jobs:
         env:
           FROZEN_TARGET: &frozen_target ${{ needs.preflight.outputs.frozen_target }}
           OPENCLAW_E2E_USE_PREBUILT_DIST: "1"
+          OPENCLAW_VITEST_WORKER_CACHE: "1"
           OPENCLAW_VITEST_MAX_WORKERS: "1"
         run: |
           set -euo pipefail
@@ -2064,6 +2077,19 @@ jobs:
           console.log(JSON.stringify({ proof: "browser-native-host", fullNames: expectedNames, passed: expectedNames.length, failed: 0, pending: 0 }));
           BROWSER_PROOF_REPORT
 
+      # Only this producer consumes a full worker generation captured after build.
+      # Runtime checks use separate slots and cannot replace the restored full seed.
+      - name: Restore built-source compiled Vitest workers
+        id: built_worker_cache
+        if: ${{ !cancelled() && needs.preflight.outputs.cache_mode != 'off' && runner.os == 'Linux' && (steps.dist_build.outcome == 'success' || steps.dist_build_cache.outputs.cache-hit == 'true') && ((needs.preflight.outputs.run_proof_tier == 'true' && needs.preflight.outputs.run_checks == 'true') || needs.preflight.outputs.run_checks_node_core_dist == 'true' || needs.preflight.outputs.run_built_source_verifiers == 'true') }}
+        continue-on-error: true
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: .artifacts/vitest-worker-cache/run-cache-0
+          key: ${{ github.repository }}-vitest-workers-built-v1-protected-${{ steps.node_setup.outputs.node-toolchain-cache-key }}-${{ github.run_id }}-${{ github.run_attempt }}
+          restore-keys: |
+            ${{ github.repository }}-vitest-workers-built-v1-protected-${{ steps.node_setup.outputs.node-toolchain-cache-key }}-
+
       - name: Run built artifact checks
         if: ${{ !cancelled() && (steps.dist_build.outcome == 'success' || steps.dist_build_cache.outputs.cache-hit == 'true') }}
         id: built_artifact_checks
@@ -2072,12 +2098,13 @@ jobs:
           PARALLEL_BUILT_VERIFIERS: ${{ runner.environment != 'github-hosted' && 'true' || 'false' }}
           # Hosted Linux has a higher RSS baseline; keep Blacksmith tighter.
           OPENCLAW_STARTUP_MEMORY_PLUGINS_LIST_MB: ${{ runner.environment == 'github-hosted' && '425' || '400' }}
-          RUN_CHANNELS: ${{ needs.preflight.outputs.run_proof_tier == 'true' && needs.preflight.outputs.run_checks == 'true' }}
+          RUN_CHANNELS: ${{ (needs.preflight.outputs.run_proof_tier == 'true' && needs.preflight.outputs.run_checks == 'true') || needs.preflight.outputs.run_built_source_verifiers == 'true' }}
           CHANNEL_NODE_OPTIONS: ${{ fromJSON(needs.preflight.outputs.source_channel_test_env_json).NODE_OPTIONS }}
           CHANNEL_MAX_WORKERS: ${{ fromJSON(needs.preflight.outputs.source_channel_test_env_json).OPENCLAW_VITEST_MAX_WORKERS }}
+          SOURCE_VERIFIER_CACHE: ${{ steps.built_worker_cache.outputs.cache-matched-key != '' && '1' || '0' }}
           RUN_DOCTOR_PLUGIN_INDEX: ${{ needs.preflight.outputs.run_doctor_plugin_index }}
           RUN_DISCORD_COMPONENT_PROOF: ${{ needs.preflight.outputs.run_discord_component_proof }}
-          RUN_CORE_SUPPORT_BOUNDARY: ${{ needs.preflight.outputs.run_checks_node_core_dist }}
+          RUN_CORE_SUPPORT_BOUNDARY: ${{ needs.preflight.outputs.run_checks_node_core_dist == 'true' || needs.preflight.outputs.run_built_source_verifiers == 'true' }}
           RUN_GATEWAY_WATCH: ${{ needs.preflight.outputs.run_gateway_watch }}
           RUN_SQLITE_SESSION_LIFECYCLE: ${{ needs.preflight.outputs.run_sqlite_session_lifecycle }}
           RUN_TUI_PTY: ${{ needs.preflight.outputs.run_tui_pty }}
@@ -2092,6 +2119,7 @@ jobs:
           declare -A results=(
             ["channels"]="skipped"
             ["core-support-boundary"]="skipped"
+            ["source-support"]="skipped"
             ["discord-component-attachments"]="skipped"
             ["doctor-plugin-index"]="skipped"
             ["gateway-watch"]="skipped"
@@ -2156,7 +2184,7 @@ jobs:
               return 0
             fi
             rm -f "${RUNNER_TEMP}/discord-component-attachments.json" || return
-            env OPENCLAW_E2E_USE_PREBUILT_DIST=1 OPENCLAW_E2E_WORKERS=1 OPENCLAW_E2E_VERBOSE=1 OPENCLAW_VITEST_MAX_WORKERS=1 \
+            env OPENCLAW_VITEST_WORKER_CACHE=1 OPENCLAW_E2E_USE_PREBUILT_DIST=1 OPENCLAW_E2E_WORKERS=1 OPENCLAW_E2E_VERBOSE=1 OPENCLAW_VITEST_MAX_WORKERS=1 \
               node scripts/run-vitest.mjs run --config test/vitest/vitest.e2e.config.ts \
               "$test_file" \
               --testNamePattern "preserves component attachment filenames through the public Gateway message action" \
@@ -2240,18 +2268,25 @@ jobs:
               test/scripts/sqlite-sessions-transcripts-flip-proof.built-cli.e2e.test.ts
           fi
 
-          if [ "$RUN_CHANNELS" = "true" ]; then
-            start_check "channels" env \
-              NODE_OPTIONS="$CHANNEL_NODE_OPTIONS" \
-              OPENCLAW_VITEST_MAX_WORKERS="$CHANNEL_MAX_WORKERS" \
-              pnpm test:channels
-          fi
+          if [ "$RUN_CHANNELS" = "true" ] && [ "$RUN_CORE_SUPPORT_BOUNDARY" = "true" ] && [ "$CHANNEL_NODE_OPTIONS" = "--max-old-space-size=8192" ] && [[ -f scripts/test-built-source-verifiers.mts ]]; then
+            start_check "source-support" env OPENCLAW_VITEST_WORKER_CACHE="$SOURCE_VERIFIER_CACHE" \
+              node --import ./scripts/tsx.mjs scripts/test-built-source-verifiers.mts
+          else
+            if [ "$RUN_CHANNELS" = "true" ]; then
+              start_check "channels" env \
+                OPENCLAW_VITEST_WORKER_CACHE="$SOURCE_VERIFIER_CACHE" \
+                NODE_OPTIONS="$CHANNEL_NODE_OPTIONS" \
+                OPENCLAW_VITEST_MAX_WORKERS="$CHANNEL_MAX_WORKERS" \
+                pnpm test:channels
+            fi
 
-          if [ "$RUN_CORE_SUPPORT_BOUNDARY" = "true" ]; then
-            start_check "core-support-boundary" env \
-              NODE_OPTIONS=--max-old-space-size=8192 \
-              OPENCLAW_VITEST_MAX_WORKERS=2 \
-              node scripts/run-vitest.mjs run --config test/vitest/vitest.full-core-support-boundary.config.ts
+            if [ "$RUN_CORE_SUPPORT_BOUNDARY" = "true" ]; then
+              start_check "core-support-boundary" env \
+                OPENCLAW_VITEST_WORKER_CACHE="$SOURCE_VERIFIER_CACHE" \
+                NODE_OPTIONS=--max-old-space-size=8192 \
+                OPENCLAW_VITEST_MAX_WORKERS=2 \
+                node scripts/run-vitest.mjs run --config test/vitest/vitest.full-core-support-boundary.config.ts
+            fi
           fi
 
           if [ "$RUN_DISCORD_COMPONENT_PROOF" = "true" ] && [ "$PARALLEL_BUILT_VERIFIERS" = "true" ]; then
@@ -2298,7 +2333,7 @@ jobs:
             echo "::error title=startup assets failed::cli startup asset build failed"
             failures=1
           fi
-          for name in channels core-support-boundary discord-component-attachments doctor-plugin-index gateway-watch plugin-singleton sqlite-session-lifecycle startup-memory tui-pty; do
+          for name in channels core-support-boundary source-support discord-component-attachments doctor-plugin-index gateway-watch plugin-singleton sqlite-session-lifecycle startup-memory tui-pty; do
             if [ "${results[$name]}" = "failure" ]; then
               echo "::error title=${name} failed::${name} failed"
               failures=1
@@ -2567,13 +2602,9 @@ jobs:
 
       - *install_playwright_chromium
 
-      - name: Test Control UI end-to-end
+      - name: Decode Control UI E2E selection
         if: matrix.task == 'control-ui'
         env:
-          OPENCLAW_UI_E2E_DIAGNOSTIC_DIR: .artifacts/control-ui-e2e-timeouts/shard-${{ matrix.shard }}-attempt-${{ github.run_attempt }}
-          VITEST_SHARD_INDEX: ${{ matrix.shard }}
-          VITEST_SHARD_COUNT: ${{ matrix.vitest_shard_count }}
-          OPENCLAW_VITEST_MAX_WORKERS: ${{ matrix.vitest_max_workers || 2 }}
           OPENCLAW_NODE_TEST_GROUPS_GZIP_BASE64: ${{ needs.preflight.outputs.ui_e2e_test_groups_gzip_base64 }}
         run: |
           if [[ -n "${OPENCLAW_NODE_TEST_GROUPS_GZIP_BASE64:-}" ]]; then
@@ -2589,8 +2620,19 @@ jobs:
           }
           NODE
           )"
-            export OPENCLAW_VITEST_INCLUDE_FILE
+            printf 'OPENCLAW_VITEST_INCLUDE_FILE=%s\n' "$OPENCLAW_VITEST_INCLUDE_FILE" >> "$GITHUB_ENV"
           fi
+
+      - name: Discover Control UI E2E requirements
+        id: ui_e2e_requirements
+        if: matrix.task == 'control-ui'
+        timeout-minutes: 20
+        env:
+          OPENCLAW_UI_E2E_DIAGNOSTIC_DIR: .artifacts/control-ui-e2e-timeouts/shard-${{ matrix.shard }}-attempt-${{ github.run_attempt }}
+          VITEST_SHARD_INDEX: ${{ matrix.shard }}
+          VITEST_SHARD_COUNT: ${{ matrix.vitest_shard_count }}
+          OPENCLAW_VITEST_MAX_WORKERS: ${{ matrix.vitest_max_workers || 2 }}
+        run: |
           requirements="$(node --input-type=module <<'NODE'
           import { existsSync } from "node:fs";
           import { resolve } from "node:path";
@@ -2622,15 +2664,30 @@ jobs:
           process.stdout.write([requiresWebkit && "webkit", requiresRuntime && "runtime"].filter(Boolean).join(" "));
           NODE
           )"
-          if [[ "$requirements" == *webkit* ]]; then
-            pnpm --dir ui exec playwright install --with-deps webkit
-          fi
-          if [[ "$requirements" == *runtime* ]]; then
-            # Run the helper's cold preparation before Vitest starts its subprocess budget.
-            preparation_started=$SECONDS
-            VITEST=1 node scripts/run-node.mjs --help
-            echo "Control UI Gateway runtime preparation: $((SECONDS - preparation_started))s"
-          fi
+          printf 'requirements=%s\n' "$requirements" >> "$GITHUB_OUTPUT"
+
+      - name: Install selected Control UI E2E WebKit
+        if: matrix.task == 'control-ui' && contains(steps.ui_e2e_requirements.outputs.requirements, 'webkit')
+        run: pnpm --dir ui exec playwright install --with-deps webkit
+
+      - name: Prepare selected Control UI E2E Gateway runtime
+        if: matrix.task == 'control-ui' && contains(steps.ui_e2e_requirements.outputs.requirements, 'runtime')
+        run: |
+          # Run the helper's cold preparation before Vitest starts its subprocess budget.
+          preparation_started=$SECONDS
+          VITEST=1 node scripts/run-node.mjs --help
+          echo "Control UI Gateway runtime preparation: $((SECONDS - preparation_started))s"
+
+      - name: Test Control UI end-to-end
+        if: matrix.task == 'control-ui'
+        # Fail the step before the job deadline so progress diagnostics can upload.
+        timeout-minutes: 20
+        env:
+          OPENCLAW_UI_E2E_DIAGNOSTIC_DIR: .artifacts/control-ui-e2e-timeouts/shard-${{ matrix.shard }}-attempt-${{ github.run_attempt }}
+          VITEST_SHARD_INDEX: ${{ matrix.shard }}
+          VITEST_SHARD_COUNT: ${{ matrix.vitest_shard_count }}
+          OPENCLAW_VITEST_MAX_WORKERS: ${{ matrix.vitest_max_workers || 2 }}
+        run: |
           node scripts/run-vitest.mjs run \
             --config test/vitest/vitest.ui-e2e.config.ts \
             --configLoader runner \
@@ -2726,6 +2783,7 @@ jobs:
           node-version: "24.22.1"
           install-bun: "false"
           dependency-cache: *trusted_first_attempt_dependency_cache
+          build-all-cache-scope: full
 
       - *install_playwright_chromium
 
@@ -3603,7 +3661,7 @@ jobs:
         if: matrix.requires_go == true
         uses: actions/setup-go@90ad2b35f69faf97585ad74d28fa006d2739b7af # v7.0.0 + post-release fixes
         with:
-          go-version: "1.27.2"
+          go-version: "1.27.3"
           cache: false
 
       - name: Resolve docs i18n Go cache
@@ -3637,7 +3695,7 @@ jobs:
 
       - name: Verify docs i18n Go toolchain
         if: matrix.requires_go == true
-        run: test "$(go env GOVERSION)" = "go1.27.2"
+        run: test "$(go env GOVERSION)" = "go1.27.3"
 
       - name: Checkout trusted Node shard runner
         if: ${{ hashFiles('scripts/ci-run-node-test-shard.mts') == '' }}
@@ -6059,7 +6117,7 @@ jobs:
       - *platform_checkout_step
 
       - name: Setup Ruby
-        uses: ruby/setup-ruby@651ff0d62c5c79bed6d53ec518387aae20e72c1a # v1.329.0
+        uses: ruby/setup-ruby@824c0e29fdfc7d689c191c27acc969d2d04b7dd8 # v1.331.0
         with:
           ruby-version: "4.0.7"
           bundler: "4.0.23"

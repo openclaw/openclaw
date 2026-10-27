@@ -13,6 +13,7 @@ import { runOutsideOperatorToolGatewayAuthority } from "../../../gateway/operato
 import { waitForGatewayDispatch } from "../../../gateway/server-in-process-dispatch.js";
 import type { GatewayRecoveryTypingParams } from "../../../gateway/server-instance-runtime.types.js";
 import { getGatewayRecoveryRuntime } from "../../../gateway/server-recovery-runtime-context.js";
+import { materializeErrorStack } from "../../../infra/error-graph-internal.js";
 import { normalizeOutboundReplyPayloadCore } from "../../../infra/outbound/reply-payload-normalize.js";
 import { sourceDeliveryTargetsMatch } from "../../../infra/outbound/source-delivery-plan.js";
 import { splitMediaFromOutput } from "../../../media/parse.js";
@@ -89,10 +90,11 @@ export async function runAnnounceAgentCall(params: {
   const timer =
     params.timeoutMs === undefined
       ? undefined
-      : setTimeout(
-          () => deadline.abort(new Error("gateway request timeout for agent")),
-          params.timeoutMs,
-        );
+      : setTimeout(() => {
+          const reason = new Error("gateway request timeout for agent");
+          materializeErrorStack(reason);
+          deadline.abort(reason);
+        }, params.timeoutMs);
   timer?.unref();
   try {
     signal.throwIfAborted();
@@ -132,6 +134,7 @@ export async function runAnnounceAgentCall(params: {
               sessionMutationCommitGuard: () => {
                 if (!isSourceSessionAdmissionAllowed()) {
                   const error = new SourceOwnerChangedError();
+                  materializeErrorStack(error);
                   sourceLifecycle.abort(error);
                   throw error;
                 }
@@ -154,7 +157,9 @@ export async function runAnnounceAgentCall(params: {
         onExecutionStarted: () => {
           executionSignal.throwIfAborted();
           if (!params.isExecutionAllowed()) {
-            sourceLifecycle.abort(new SourceOwnerChangedError());
+            const reason = new SourceOwnerChangedError();
+            materializeErrorStack(reason);
+            sourceLifecycle.abort(reason);
             // Classify execution immediately, before Gateway observes cancellation.
             throw createAgentRunDirectAbortError();
           }

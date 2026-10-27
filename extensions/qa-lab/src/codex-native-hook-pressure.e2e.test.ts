@@ -407,6 +407,7 @@ export default {
           }
           const gateway = await owner.start({
             repoRoot: REPO_ROOT,
+            initializeCurrentRuntimeState: true,
             command: {
               executablePath: process.execPath,
               argsPrefix: [path.join(REPO_ROOT, "dist/index.js")],

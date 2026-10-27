@@ -26,7 +26,8 @@ import type {
 } from "./session-actor-contract.js";
 import { createSessionActorFactory } from "./session-actor-durable.js";
 import { memorySessionActorOwners } from "./session-actor-memory-owner.js";
-import { acquireSessionActorStorage } from "./session-actor-storage-binding.js";
+import { readSessionActorEntryFacts } from "./session-actor-replica.js";
+import { acquireSessionActorStorage } from "./session-actor-storage-acquisition.js";
 import { withActor } from "./session-actor-transport.test-support.js";
 import { seedSessionActorOutcomeTransferEntry } from "./session-actor-worker.test-support.js";
 import { createSessionCompoundWorkerFixture } from "./session-compound-worker.test-support.js";
@@ -367,13 +368,16 @@ it("serves installed state without a request and reconciles a retired worker gen
   await withActor(async ({ actor, commands, retireGeneration }) => {
     const initial = await actor.read(authority);
     expect(actor.snapshot(authority)).toEqual(initial);
+    expect(actor.snapshotEntry(authority)?.entry).toEqual(initial.entry);
     expect(await actor.read(authority)).toEqual(initial);
     expect(commands).toEqual(["session.actor.read"]);
     retireGeneration();
+    expect(actor.snapshotEntry(authority)?.entry).toEqual(initial.entry);
     expect(actor.snapshot(authority)).toBeUndefined();
     const restored = await actor.read(authority);
     expect(restored.entry?.sessionId).toBe(initial.entry?.sessionId);
     expect(restored.version.epoch).not.toBe(initial.version.epoch);
+    expect(actor.snapshotEntry(authority)?.entry).toEqual(restored.entry);
     expect(commands).toEqual(["session.actor.read", "session.actor.read"]);
   });
 });
@@ -517,8 +521,8 @@ it("keeps concurrent commands in FIFO order across a rolled-back mutation", asyn
   });
 });
 
-it("installs the full append receipt and releases FIFO before retained follow-up work", async () => {
-  await withActor(async ({ actor, fault }) => {
+it("installs the full append receipt without empty reducer work and releases FIFO before follow-up", async () => {
+  await withActor(async ({ actor, fault, emptyReducerCommands }) => {
     const before = await actor.read(authority);
     fault.afterCommitted = async () => {
       expect((await actor.read(authority)).transcript.watermark.maxSeq).not.toBe(
@@ -549,6 +553,7 @@ it("installs the full append receipt and releases FIFO before retained follow-up
     const installed = actor.snapshot(authority);
     expect(installed).toEqual(result.receipt.postimage);
     expect(installed?.transcript.watermark.maxSeq).not.toBe(before.transcript.watermark.maxSeq);
+    expect(emptyReducerCommands).toEqual([]);
   });
 });
 
@@ -567,6 +572,35 @@ it("releases the writer queue across phase awaits and flushes reducers on an exc
     await expect(operation).rejects.toThrow("Provider failed");
     expect(actor.snapshot(authority)?.entry?.updatedAt).toBe(987);
     expect(commands).toEqual(["session.actor.read", "session.actor.patch"]);
+  });
+});
+
+it("restores only queued phase reducers after rollback and keeps explicit reducers last", async () => {
+  await withActor(async ({ actor, fault, readEntry }) => {
+    await actor.withPhase("turn", authority, async (phase) => {
+      phase.patch([{ kind: "group-intro", needsSystemIntro: true }]);
+      fault.transactionError = new Error("synthetic rollback");
+      const explicit = {
+        commandId: "rolled-back",
+        phaseId: "turn",
+        reducers: [{ kind: "group-intro" as const, needsSystemIntro: false }],
+      };
+      expect(await phase.actor.patch(explicit, authority)).toMatchObject({ kind: "rolled-back" });
+      expect(explicit.reducers).toEqual([{ kind: "group-intro", needsSystemIntro: false }]);
+      delete fault.transactionError;
+      const restored = await phase.actor.patch(
+        { commandId: "restored", phaseId: "turn", reducers: [] },
+        authority,
+      );
+      assert(restored.kind === "committed");
+      expect(restored.receipt.reducers).toHaveLength(1);
+      expect(readEntry()?.groupActivationNeedsSystemIntro).toBe(true);
+      phase.patch([{ kind: "group-intro", needsSystemIntro: true }]);
+      const ordered = await phase.actor.patch({ ...explicit, commandId: "ordered" }, authority);
+      assert(ordered.kind === "committed");
+      expect(ordered.receipt.reducers).toHaveLength(2);
+      expect(readEntry()?.groupActivationNeedsSystemIntro).toBe(false);
+    });
   });
 });
 
@@ -772,7 +806,7 @@ it.each([
     Object.assign(new Error("database or disk is full during settlement"), { code: "SQLITE_FULL" }),
   ],
 ] as const)("retains uncertainty with %s (%s)", async (cause, reply, rollback, settlementError) => {
-  await withActor(async ({ actor, commands, fault }) => {
+  await withActor(async ({ actor, commands, fault, nativePatch, readEntry }) => {
     const initial = await actor.read(authority);
     if (actor.target.database.kind !== "file") {
       throw new Error("Fixture requires durable storage");
@@ -842,10 +876,16 @@ it.each([
       (error: unknown) => classifyGatewayStorageFailure(error) === "session_actor_reconciliation",
     );
     expect(commands).toHaveLength(before);
+    expect(readEntry()?.updatedAt).toBe(rollback ? initial.entry?.updatedAt : 456);
+    nativePatch(789);
+    expect(
+      readSessionActorEntryFacts({ ...actor.target, database: actor.target.database })?.entry
+        ?.updatedAt,
+    ).toBe(789);
+    expect(actor.snapshotEntry(authority)).toBeUndefined();
     fault.reply = "normal";
-    expect((await actor.read(authority)).entry?.updatedAt).toBe(
-      rollback ? initial.entry?.updatedAt : 456,
-    );
+    expect((await actor.read(authority)).entry?.updatedAt).toBe(789);
+    expect(actor.snapshotEntry(authority)?.entry?.updatedAt).toBe(789);
   });
 });
 

@@ -27,13 +27,26 @@ export function ToolIcon(props: {
   return (
     <Show when={activityIcon()} fallback={<Icon name={fallbackIcon()} />}>
       {(icon) => (
-        <span
-          class="chat-tool-activity-icon"
-          aria-hidden="true"
-          style={{ "mask-image": `url("${icon().url}")` }}
+        <Show
+          when={icon().branding}
+          fallback={
+            <span
+              class="chat-tool-activity-icon"
+              aria-hidden="true"
+              style={{ "mask-image": `url("${icon().url}")` }}
+            >
+              <img hidden src={icon().url} alt="" onError={() => icon().onError()} />
+            </span>
+          }
         >
-          <img hidden src={icon().url} alt="" onError={() => icon().onError()} />
-        </span>
+          <img
+            class="chat-tool-brand-icon"
+            src={icon().url}
+            alt=""
+            aria-hidden="true"
+            onError={() => icon().onError()}
+          />
+        </Show>
       )}
     </Show>
   );

@@ -22,6 +22,24 @@ export class UpdateCommandAbort extends Error {
 
 export type WindowsTaskAutoStartRecovery = ReturnType<typeof createWindowsTaskAutoStartRecovery>;
 
+export async function abortWindowsTaskUpdateIfInterrupted(
+  recovery: WindowsTaskAutoStartRecovery,
+): Promise<void> {
+  if (!recovery.interrupted()) {
+    return;
+  }
+  await restoreAndCompleteWindowsTask(recovery);
+  throw new UpdateCommandAbort();
+}
+
+export async function restoreAndCompleteWindowsTask(recovery: WindowsTaskAutoStartRecovery) {
+  try {
+    await recovery.restore();
+  } finally {
+    await recovery.complete();
+  }
+}
+
 export function createWindowsTaskAutoStartRecovery(params: {
   serviceEnv: NodeJS.ProcessEnv;
   assertCurrentService?: () => Promise<void>;

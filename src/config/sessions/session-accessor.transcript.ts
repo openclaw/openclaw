@@ -5,10 +5,8 @@ import type {
   SessionTranscriptManualTrimResult,
   SessionTranscriptManualTrimPreflightResult,
 } from "./session-accessor.types.js";
-import {
-  captureSessionActorStorageOwner,
-  withSessionActorStorage,
-} from "./session-actor-storage-binding.js";
+import { withSessionActorStorage } from "./session-actor-storage-acquisition.js";
+import { captureSessionActorStorageOwner } from "./session-actor-storage-binding.js";
 import { readSessionActorStorageResult } from "./session-actor-storage-result.js";
 import type { CapturedSessionEntryReadSource } from "./session-entry-read-source.types.js";
 import { trimSessionTranscriptInWorker } from "./session-manual-compact.js";
@@ -52,12 +50,12 @@ export {
 export {
   appendTranscriptEvent,
   appendTranscriptMessage,
-  appendTranscriptMessageSync,
   replaceTranscriptSuffixEventsSync,
   rewriteTranscriptEventRowsExact,
   withTranscriptWriteLock,
   withTranscriptWriteSequence,
 } from "./session-accessor.sqlite-transcript-write.js";
+export { appendTranscriptMessageSync } from "./session-accessor.sqlite-transcript-write.kernel.js";
 
 export { emitSessionTranscriptUpdate as emitTranscriptUpdate } from "../../sessions/transcript-events.js";
 

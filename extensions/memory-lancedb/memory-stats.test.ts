@@ -12,13 +12,11 @@ import { installTmpDirHarness } from "./test-helpers.js";
 const { getDbPath, getTmpDir } = installTmpDirHarness({ prefix: "openclaw-memory-stats-" });
 
 // Source children do not inherit the host's plugin SDK resolver.
+const fileLockUrl = new URL("../../src/plugin-sdk/file-lock.ts", import.meta.url).href;
 const sdkHook = registerHooks({
   resolve(specifier, context, nextResolve) {
     return specifier === "openclaw/plugin-sdk/file-lock"
-      ? {
-          shortCircuit: true,
-          url: new URL("../../src/plugin-sdk/file-lock.ts", import.meta.url).href,
-        }
+      ? { shortCircuit: true, url: fileLockUrl }
       : nextResolve(specifier, context);
   },
 });
@@ -26,7 +24,6 @@ afterAll(() => sdkHook.deregister());
 
 const readStats = (dbPath: string) => readMemoryStats({ dbPath }, "main");
 const transport = vi.hoisted(() => ({
-  moduleUrl: "",
   tsconfigPath: undefined as string | undefined,
   onOutput: undefined as ((chunk: Buffer) => void) | undefined,
   controller: new AbortController(),
@@ -41,7 +38,7 @@ vi.mock("openclaw/plugin-sdk/process-runtime", async (importOriginal) => {
       assert(typeof options !== "number", "Expected the stats reader's process options");
       const script = `
         import { runMemoryStatsReader } from ${JSON.stringify(new URL("./memory-stats-reader.ts", import.meta.url).href)};
-        const { loadLanceDbModule } = await import(${JSON.stringify(transport.moduleUrl)});
+        const { loadLanceDbModule } = await import(${JSON.stringify(fixtureModuleUrl)});
         await runMemoryStatsReader(loadLanceDbModule);
       `;
       const entryIndex = argv.findIndex((argument) => argument.endsWith("memory-stats.worker.ts"));
@@ -64,39 +61,46 @@ vi.mock("openclaw/plugin-sdk/process-runtime", async (importOriginal) => {
 
 // Only the native dependency is fake; the stats command and child lifecycle remain real.
 const fixtureModuleUrl = `data:text/javascript,${encodeURIComponent(`
-import { writeSync } from "node:fs";
+import { readdirSync, readFileSync, writeSync } from "node:fs";
+import { join } from "node:path";
 function hold() {
   writeSync(2, "ready:" + process.pid + "\\n");
   Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0);
 }
 export async function connect(dbPath, options) {
-  const mode = new URL(dbPath).hostname;
-  if (mode === "connect-stall") hold();
+  const local = !dbPath.startsWith("fixture:");
+  const mode = local ? "populated" : new URL(dbPath).hostname;
+  function assertChildLease() {
+    if (!local) return;
+    const directory = join(dbPath, ".openclaw-custody");
+    const leases = readdirSync(directory).filter((name) => name.startsWith("use-"));
+    if (leases.length !== 1) throw new Error("missing child lease");
+    const lease = JSON.parse(readFileSync(join(directory, leases[0]), "utf8"));
+    if (lease.pid !== process.pid) throw new Error("lease is not child-owned");
+  }
+  if (mode === "connect") hold();
   return {
     tableNames: async () => mode === "empty" ? [] : ["memories"],
     openTable: async () => ({
       schema: async () => ({ fields: mode === "legacy" ? [] : [{ name: "agentId" }] }),
       countRows: async (predicate) => {
-        if (mode === "count-stall") hold();
+        assertChildLease();
+        if (mode === "count") hold();
         if (mode === "failed") throw new Error("fixture database unavailable");
         if (mode === "legacy") throw new Error("unknown column agentId");
         if (predicate !== "agentId = 'main''s'") throw new Error("incorrect agent scope");
         if (options.storageOptions?.fixture !== "stdin-only") throw new Error("missing storage options");
         return 7;
       },
-      close() {},
+      close: assertChildLease,
     }),
-    createEmptyTable() { throw new Error("stats must never create a table"); },
-    close() {},
+    close: assertChildLease,
   };
 }
 export async function loadLanceDbModule() { return { connect }; }
 `)}`;
 
-transport.moduleUrl = fixtureModuleUrl;
-
 afterEach(async () => {
-  transport.moduleUrl = fixtureModuleUrl;
   transport.tsconfigPath = undefined;
   transport.controller.abort();
   await Promise.allSettled(transport.pending);
@@ -105,15 +109,28 @@ afterEach(async () => {
   vi.restoreAllMocks();
 });
 
-it("runs the registered stats command outside the shared database and keeps agent scope", async () => {
+it("stats preserves agent scope and child-owned custody", async () => {
+  transport.tsconfigPath = path.join(getTmpDir(), "tsconfig.json");
+  const configUrl = new URL("../../tsconfig.json", import.meta.url);
+  const { compilerOptions }: { compilerOptions: { paths: Record<string, string[]> } } = JSON.parse(
+    await fs.readFile(configUrl, "utf8"),
+  );
+  delete compilerOptions.paths["openclaw/plugin-sdk/*"];
+  for (const [specifier, targets] of Object.entries(compilerOptions.paths)) {
+    compilerOptions.paths[specifier] = targets.map((target) =>
+      fileURLToPath(new URL(target, configUrl)),
+    );
+  }
+  await fs.writeFile(transport.tsconfigPath, JSON.stringify({ compilerOptions }));
   const log = vi.spyOn(console, "log").mockImplementation(() => {});
   const { run, embed } = createMemoryCliHarness({
-    statsSource: { dbPath: "fixture://populated", storageOptions: { fixture: "stdin-only" } },
+    statsSource: { dbPath: getDbPath(), storageOptions: { fixture: "stdin-only" } },
   });
   await run("stats", "--agent", "main's");
 
   expect(log).toHaveBeenCalledWith("Total memories: 7");
   expect(embed).not.toHaveBeenCalled();
+  await expect(fs.readdir(path.join(getDbPath(), ".openclaw-custody"))).resolves.toEqual([]);
 });
 
 it("reports an empty database without creating a table", async () => {
@@ -127,34 +144,30 @@ it.each([
   await expect(readStats(dbPath)).rejects.toThrow(message);
 });
 
-it.each(["fixture://connect-stall", "fixture://count-stall"])(
-  "terminates %s before reporting timeout",
-  async (dbPath) => {
-    const timers = vi.spyOn(globalThis, "setTimeout");
-    const ready = createDeferred<number>();
-    let output = "";
-    transport.onOutput = (chunk) => {
-      output += chunk.toString();
-      const match = /ready:(\d+)\n/.exec(output);
-      if (match) {
-        ready.resolve(Number(match[1]));
-      }
-    };
-    const rejected = expect(readStats(dbPath)).rejects.toThrow(
-      "statistics timed out after 60 seconds",
-    );
-    const pid = await ready.promise;
-    expect(isPidAlive(pid)).toBe(true);
+it.each(["fixture://connect", "fixture://count"])("kills %s on timeout", async (dbPath) => {
+  const timers = vi.spyOn(globalThis, "setTimeout");
+  const ready = createDeferred<number>();
+  let output = "";
+  transport.onOutput = (chunk) => {
+    output += chunk.toString();
+    const match = /ready:(\d+)\n/.exec(output);
+    if (match) {
+      ready.resolve(Number(match[1]));
+    }
+  };
+  const rejected = expect(readStats(dbPath)).rejects.toThrow(
+    "statistics timed out after 60 seconds",
+  );
+  const pid = await ready.promise;
+  expect(isPidAlive(pid)).toBe(true);
 
-    const deadline = timers.mock.calls.find(([, delay]) => delay === 60_000);
-    expect(deadline).toBeDefined();
-    // Advance only the command deadline. OS teardown still uses its real exit events.
-    const [fire, , ...args] = deadline!;
-    fire(...args);
-    await rejected;
-    expect(isPidAlive(pid)).toBe(false);
-  },
-);
+  const deadline = timers.mock.calls.find(([, delay]) => delay === 60_000);
+  // Advance only the command deadline. OS teardown still uses its real exit events.
+  const [fire, , ...args] = deadline!;
+  fire(...args);
+  await rejected;
+  expect(isPidAlive(pid)).toBe(false);
+});
 
 it("does not claim cancellation succeeded when process cleanup is uncertain", async () => {
   vi.mocked(runUtf8CommandWithTimeout).mockResolvedValueOnce({
@@ -169,48 +182,4 @@ it("does not claim cancellation succeeded when process cleanup is uncertain", as
   await expect(readStats("fixture://unavailable")).rejects.toThrow(
     "process cleanup could not be confirmed",
   );
-});
-
-it("keeps the table lease in the stats child until its native read closes", async () => {
-  transport.tsconfigPath = path.join(getTmpDir(), "tsconfig.json");
-  const configUrl = new URL("../../tsconfig.json", import.meta.url);
-  const config: { compilerOptions: { paths: Record<string, string[]> } } = JSON.parse(
-    await fs.readFile(configUrl, "utf8"),
-  );
-  const paths = Object.fromEntries(
-    Object.entries(config.compilerOptions.paths)
-      .filter(([specifier]) => specifier !== "openclaw/plugin-sdk/*")
-      .map(([specifier, targets]) => [
-        specifier,
-        targets.map((target) => fileURLToPath(new URL(target, configUrl))),
-      ]),
-  );
-  await fs.writeFile(transport.tsconfigPath, JSON.stringify({ compilerOptions: { paths } }));
-  transport.moduleUrl = `data:text/javascript,${encodeURIComponent(`
-import { readdirSync, readFileSync } from "node:fs";
-import { join } from "node:path";
-function assertChildLease(dbPath) {
-  const directory = join(dbPath, ".openclaw-custody");
-  const leases = readdirSync(directory).filter((name) => name.startsWith("use-"));
-  if (leases.length !== 1) throw new Error("missing child lease");
-  const lease = JSON.parse(readFileSync(join(directory, leases[0]), "utf8"));
-  if (lease.pid !== process.pid) throw new Error("lease is not child-owned");
-}
-export async function loadLanceDbModule() {
-  return { connect: async (dbPath) => ({
-    tableNames: async () => ["memories"],
-    openTable: async () => ({
-      schema: async () => ({ fields: [{ name: "agentId" }] }),
-      countRows: async () => {
-        assertChildLease(dbPath);
-        return 3;
-      },
-      close() { assertChildLease(dbPath); },
-    }),
-    close() { assertChildLease(dbPath); },
-  }) };
-}
-`)}`;
-  await expect(readStats(getDbPath())).resolves.toBe(3);
-  await expect(fs.readdir(path.join(getDbPath(), ".openclaw-custody"))).resolves.toEqual([]);
 });

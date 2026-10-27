@@ -84,6 +84,25 @@ function mountPicker(optionsReady = true) {
   return { params, update, picker, trigger, composer, toggle, modelOptions, open };
 }
 
+it("leaves touch pointerdown uncancelled for native model-picker activation", () => {
+  const { composer, trigger } = mountPicker();
+  composer.value = "Keep this draft";
+  composer.focus();
+  const touch = new PointerEvent("pointerdown", {
+    bubbles: true,
+    cancelable: true,
+    composed: true,
+    button: 0,
+    pointerType: "touch",
+  });
+
+  // Native tap activation needs browser proof; this guards its uncancelled first event.
+  trigger.dispatchEvent(touch);
+
+  expect(touch.defaultPrevented).toBe(false);
+  expect(composer.value).toBe("Keep this draft");
+});
+
 it("opens during activation and preserves filter focus and query across catalog rerenders", async () => {
   const { composer, open, params, update, trigger } = mountPicker();
   expect(container.querySelector<HTMLElement>(modelControlSelector("option"))).toBeNull();
@@ -191,6 +210,103 @@ it("focuses the filter on keyboard open and reopen, and returns Escape to the tr
     expect(document.activeElement).toBe(trigger);
   }
   expect(params.onModelSelect).not.toHaveBeenCalled();
+});
+
+it("preserves composition ownership and ordinary model-search keyboard behavior", async () => {
+  const { picker, trigger, params, update, open, toggle } = mountPicker();
+  const onModelSelect = vi.fn(async () => {});
+  params.onModelSelect = onModelSelect;
+  params.modelOptions = [
+    modelOption("example", "alpha", { label: "Alpha" }),
+    modelOption("other", "gamma", { label: "Gamma" }),
+  ];
+  update();
+  for (const composition of ["active", "keyCode229", "none"]) {
+    for (const key of ["Enter", "Escape", "ArrowDown", "ArrowUp"]) {
+      const label = `${composition} ${key}`;
+      await open();
+      await vi.waitFor(() =>
+        expect(picker.querySelectorAll("[data-chat-model-option]"), label).toHaveLength(1),
+      );
+      const other = picker.querySelector<HTMLButtonElement>(
+        '[data-chat-model-provider-group="other"] [data-chat-model-provider-toggle]',
+      )!;
+      if (key.startsWith("Arrow")) {
+        await userEvent.click(other);
+      }
+      const search = getSearch();
+      const query = key.startsWith("Arrow") ? "" : "other";
+      if (query) {
+        search.value = query;
+        search.dispatchEvent(new InputEvent("input", { bubbles: true }));
+        flush();
+      }
+      await vi.waitFor(() =>
+        expect(picker.querySelectorAll("[data-chat-model-option]"), label).toHaveLength(
+          key.startsWith("Arrow") ? 2 : 1,
+        ),
+      );
+      search.focus();
+      const highlighted = search.getAttribute("aria-activedescendant");
+      expect(highlighted, label).toBeTruthy();
+      // Exercise browser event ownership, not a native OS IME candidate window.
+      const event = new KeyboardEvent("keydown", {
+        key,
+        isComposing: composition === "active",
+        keyCode: composition === "keyCode229" ? 229 : 0,
+        bubbles: true,
+        cancelable: true,
+        composed: true,
+      });
+      onModelSelect.mockClear();
+      const dispatch = async () => {
+        search.dispatchEvent(event);
+        flush();
+      };
+      if (composition === "none" && key === "Enter") {
+        await toggle(dispatch);
+      } else {
+        await dispatch();
+      }
+      if (composition !== "none") {
+        expect.soft(event.defaultPrevented, label).toBe(false);
+        expect.soft(picker.open, label).toBe(true);
+        expect.soft(search.value, label).toBe(query);
+        expect.soft(search.getAttribute("aria-activedescendant"), label).toBe(highlighted);
+        expect.soft(onModelSelect, label).not.toHaveBeenCalled();
+      } else {
+        expect(event.defaultPrevented, label).toBe(true);
+        if (key === "Enter") {
+          expect(onModelSelect, label).toHaveBeenCalledExactlyOnceWith(
+            "other/gamma",
+            "main",
+            undefined,
+          );
+          expect(picker.open, label).toBe(false);
+        } else {
+          expect(picker.open, label).toBe(true);
+          expect(onModelSelect, label).not.toHaveBeenCalled();
+          if (key === "Escape") {
+            expect(search.value, label).toBe("");
+            await toggle(() => userEvent.keyboard("{Escape}"));
+            expect(picker.open, label).toBe(false);
+          } else {
+            expect(search.getAttribute("aria-activedescendant"), label).not.toBe(highlighted);
+          }
+        }
+      }
+      if (picker.open) {
+        search.value = "";
+        search.dispatchEvent(new InputEvent("input", { bubbles: true }));
+        flush();
+        if (other.ariaExpanded === "true") {
+          await userEvent.click(other);
+        }
+        await toggle(() => userEvent.click(trigger));
+        expect(picker.open, label).toBe(false);
+      }
+    }
+  }
 });
 
 it.each([

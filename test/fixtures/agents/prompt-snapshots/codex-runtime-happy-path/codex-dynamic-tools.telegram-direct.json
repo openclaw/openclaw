@@ -249,6 +249,11 @@
           "description": "Child working directory. Workspace-contained file tools (apply_patch/file writes) resolve and contain paths against cwd; set cwd for edits outside the agent workspace. Visible paths outside configured agent workspaces require operator.admin. Mutually exclusive with projectId/projectGitUrl. With no source selector and worktree=true: inherit the same-agent parent managed repository; otherwise use the target agent workspace.",
           "type": "string"
         },
+        "cyberAccessProgram": {
+          "description": "Child OpenAI cyber Access (Blue=daybreak_blue, Red=daybreak_red). Omit: same-agent, same-model child keeps requester Access. Child run fails if its account/model lacks the program. Subagent only.",
+          "enum": ["standard", "daybreak_blue", "daybreak_red"],
+          "type": "string"
+        },
         "expectsCompletionMessage": {
           "description": "false: fire-and-forget; requester gets no completion handoff when the child finishes.",
           "type": "boolean"
@@ -1753,11 +1758,11 @@
     "name": "openclaw_direct",
     "tools": [
       {
-        "description": "End this turn to await pending child completions, not submit a final result. Return completed work normally. Does not message other sessions; use sessions_send. Omit waitFor when yielding for your own children; their completions resume this session. Set waitFor:\"message\" only when a subagent has no pending children and waits for its requester to send it a continuation. For background tools, follow their continuation instructions. Collector runs require agents_wait instead.",
+        "description": "End this turn to await pending child completions, not submit a final result. Return completed work normally. Does not message other sessions; use sessions_send. Omit waitFor when yielding for your own children; their completions resume this session. Set waitFor:\"message\" only when a subagent has no pending children and waits for its requester to send it a continuation. For background tools, follow their continuation instructions. Automation turns end here; the scheduler delivers child output under the job delivery policy. Collector runs require agents_wait instead.",
         "inputSchema": {
           "properties": {
             "acknowledgment": {
-              "description": "Optional waiting reply in this session; with waitFor, text for an eligible task pause notice. Not an inter-session message.",
+              "description": "Optional brief waiting status shown to the user as your message; put answers in normal assistant text. With waitFor, also the task pause notice. Not an inter-session message.",
               "type": "string"
             },
             "message": {

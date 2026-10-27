@@ -1,5 +1,6 @@
 import { chromium, type Browser, type Locator, type Page } from "playwright";
 import { afterAll, beforeAll, describe, expect, it, onTestFinished } from "vitest";
+import { makeBootRoster } from "../../app/bootstrap.test-support.ts";
 import {
   canRunPlaywrightChromium,
   installMockGateway,
@@ -33,12 +34,7 @@ const researchClaw = {
 };
 const soulExcerpt = "Keep the owner informed about approved workflows. ".repeat(24);
 const config = { gateway: { controlUi: { experimental: { claws: true } } } };
-const agentsList = {
-  defaultId: "main",
-  mainKey: "main",
-  scope: "per-sender",
-  agents: [{ id: "main", name: "Main" }],
-};
+const agentsList = makeBootRoster({ agents: [{ id: "main", name: "Main" }] });
 
 let browser: Browser;
 let server: ControlUiE2eServer;

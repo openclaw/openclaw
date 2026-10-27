@@ -312,6 +312,7 @@ export async function startGatewayWithClient(
     scopes?: string[];
     onEvent?: (evt: { event?: string; payload?: unknown }) => void;
     beforeConnect?: (server: GatewayServer) => void | Promise<void>;
+    sidecarStartup?: GatewayServerOptions["sidecarStartup"];
     hotReloadRecovery?: GatewayServerOptions["hotReloadRecovery"];
     channelAutostartSuppression?: GatewayServerOptions["channelAutostartSuppression"];
     tryRecoverChannelAutostartSuppression?: GatewayServerOptions["tryRecoverChannelAutostartSuppression"];
@@ -344,6 +345,7 @@ export async function startGatewayWithClient(
         bind: "loopback",
         auth: params.auth ?? { mode: "token", token: params.token },
         controlUiEnabled: false,
+        sidecarStartup: params.sidecarStartup,
         hotReloadRecovery: params.hotReloadRecovery,
         channelAutostartSuppression: params.channelAutostartSuppression,
         tryRecoverChannelAutostartSuppression: params.tryRecoverChannelAutostartSuppression,

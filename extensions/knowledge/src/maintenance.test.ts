@@ -1,8 +1,11 @@
 import { randomUUID } from "node:crypto";
 import { Check } from "typebox/value";
-import { expect, it } from "vitest";
+import { expect, it, vi } from "vitest";
 import { contract } from "./contract.js";
+import { Maintenance } from "./maintenance.js";
+import { RegistryClient } from "./registry-client.js";
 import { createKnowledgeService } from "./service.js";
+import { Stores } from "./stores.js";
 import {
   adopt,
   createVault,
@@ -86,6 +89,84 @@ const remember = (service: any, context: any, text: any) =>
   );
 const page = (service: any, context: any, title: any, type = "company") =>
   service.save_page({ requestId: randomUUID(), title, type, body: "Page.\n" }, context);
+
+it("stopping the service ends maintenance: a pass in flight neither re-arms nor records state afterwards", async () => {
+  const f = await fixture(),
+    scheduler = fakeScheduler(Date.parse("2026-10-20T10:20:00Z")),
+    service = await f.boot(scheduler);
+  await remember(service, toolContext(f.host.api, "main"), "Atlas Labs moved its launch to March.");
+  const warnings: string[] = [];
+  f.host.api.logger = { info() {}, warn: (m: string) => warnings.push(m), error() {} };
+  const pass = scheduler.fire("knowledge-maintenance");
+  await f.lifecycles[0].stop();
+  await pass;
+  expect(scheduler.jobs.size, "no job is armed on the stopped scheduler").toBe(0);
+  expect(
+    warnings.filter((m) => m.includes("schedule was not recorded")),
+    "the stopped service records no maintenance state",
+  ).toStrictEqual([]);
+});
+
+it("stopping during a paused review enqueue settles maintenance before closing the registry", async () => {
+  // Passthrough spies record each call's receiver, result and global call order.
+  const callSpy = vi.spyOn(RegistryClient.prototype, "call"),
+    closeSpy = vi.spyOn(RegistryClient.prototype, "close"),
+    storesStopSpy = vi.spyOn(Stores.prototype, "stop"),
+    maintenanceStopSpy = vi.spyOn(Maintenance.prototype, "stop");
+  afterTest(() => {
+    for (const spy of [callSpy, closeSpy, storesStopSpy, maintenanceStopSpy]) {
+      spy.mockRestore();
+    }
+  });
+  const f = await fixture({ reviewJobId: "review-job" }),
+    scheduler = fakeScheduler(Date.parse("2026-10-22T10:20:00Z"));
+  let entered!: () => void, release!: () => void;
+  const enqueued = new Promise<void>((resolve) => {
+      entered = resolve;
+    }),
+    paused = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+  // A failed assertion must not leave the pass, and so its service stop, paused.
+  afterTest(() => release());
+  const enqueueSettled = vi.fn();
+  const cron = {
+    enqueueRun: async () => {
+      entered();
+      await paused;
+      enqueueSettled();
+      return { ok: true, enqueued: true, runId: "run-1" };
+    },
+  };
+  const service = await f.boot(scheduler, { getCron: () => cron });
+  await remember(service, toolContext(f.host.api, "main"), "I prefer short replies.");
+  const pass = scheduler.fire("knowledge-maintenance");
+  await enqueued;
+  const stopped = f.lifecycles[0].stop();
+  expect(maintenanceStopSpy, "stop asks maintenance to settle").toHaveBeenCalledOnce();
+  expect(
+    storesStopSpy.mock.calls.map(([gate]) => gate),
+    "the registry closes only after maintenance settles",
+  ).toStrictEqual(maintenanceStopSpy.mock.results.map((result) => result.value));
+  expect(closeSpy, "nothing closes while the enqueue is paused").not.toHaveBeenCalled();
+  release();
+  await stopped;
+  await pass;
+  expect(closeSpy).toHaveBeenCalledOnce();
+  const [closedAt] = closeSpy.mock.invocationCallOrder,
+    [closed] = closeSpy.mock.contexts;
+  expect(enqueueSettled.mock.invocationCallOrder[0]).toBeLessThan(closedAt!);
+  callSpy.mock.contexts.forEach((registry, index) => {
+    if (registry === closed) {
+      expect(callSpy.mock.invocationCallOrder[index], "no registry call after close").toBeLessThan(
+        closedAt!,
+      );
+    }
+  });
+  for (const registry of new Set<RegistryClient>(callSpy.mock.contexts as RegistryClient[])) {
+    expect(Reflect.get(registry, "worker"), "no registry worker after stop").toBeUndefined();
+  }
+});
 
 it("a scheduled pass links across every store and partition, skips unprovisioned stores, repeats as a no-op, and catches up after a miss", async () => {
   const f = await fixture(),
@@ -243,4 +324,72 @@ it("a pass that leaves private claims unlinked queues the review automation once
   const status = await service.maintenance_status({}, operatorContext(host.api));
   expect(Check(contract.operations.maintenance_status.output, status)).toBeTruthy();
   expect(status.reviewJobId).toBe("review-job");
+});
+
+it("without reviewJobId, the pass queues the review scribe's automation found by declaration key", async () => {
+  const f = await fixture(),
+    host = f.host,
+    scheduler = fakeScheduler(Date.parse("2026-10-22T10:20:00Z"));
+  const calls: any[] = [];
+  let jobs: any[] = [{ id: "other", declarationKey: "knowledge:scribe:conversations" }];
+  const cron = {
+    list: async (opts: any) => {
+      expect(opts, "a paused scribe is found so the pass can report it").toStrictEqual({
+        includeDisabled: true,
+      });
+      return jobs;
+    },
+    enqueueRun: async (id: any, mode: any) => {
+      calls.push([id, mode]);
+      return id === "paused"
+        ? { ok: true, ran: false, reason: "disabled" }
+        : { ok: true, enqueued: true, runId: "run-1" };
+    },
+  };
+  const service = await f.boot(scheduler, { getCron: () => cron });
+  const review = async () => {
+    await scheduler.fire("knowledge-maintenance");
+    return (await service.maintenance_status({}, operatorContext(host.api))).lastRun!.review;
+  };
+  await remember(service, toolContext(host.api, "main"), "I prefer short replies.");
+
+  expect(await review(), "No scribe job: no review, as when nothing is configured").toBe(undefined);
+  expect(calls).toStrictEqual([]);
+
+  jobs = [
+    ...jobs,
+    { id: "paused", declarationKey: "knowledge:scribe:unlinked-review", enabled: false },
+    { id: "scribe", declarationKey: "knowledge:scribe:unlinked-review", enabled: true },
+  ];
+  expect(await review(), "The enabled scribe job is preferred").toStrictEqual({
+    jobId: "scribe",
+    pending: 1,
+    outcome: "enqueued",
+    runId: "run-1",
+  });
+  jobs = jobs.filter((job) => job.id !== "scribe");
+  expect((await review())!.outcome, "A paused scribe job is reported, not forced").toBe("skipped");
+  expect(calls).toStrictEqual([
+    ["scribe", "if-enabled"],
+    ["paused", "if-enabled"],
+  ]);
+  const status = await service.maintenance_status({}, operatorContext(host.api));
+  expect(status.reviewJobId, "Status reports only the configured job").toBe(null);
+});
+
+it("a configured reviewJobId wins over the review scribe's automation", async () => {
+  const f = await fixture({ reviewJobId: "review-job" }),
+    scheduler = fakeScheduler(Date.parse("2026-10-22T10:20:00Z"));
+  const calls: any[] = [];
+  const cron = {
+    list: async () => expect.unreachable("the configured job needs no lookup"),
+    enqueueRun: async (id: any) => {
+      calls.push(id);
+      return { ok: true, enqueued: true, runId: "run-1" };
+    },
+  };
+  const service = await f.boot(scheduler, { getCron: () => cron });
+  await remember(service, toolContext(f.host.api, "main"), "I prefer short replies.");
+  await scheduler.fire("knowledge-maintenance");
+  expect(calls).toStrictEqual(["review-job"]);
 });

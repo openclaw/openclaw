@@ -46,7 +46,7 @@ import {
   ExpectedExistingSessionChangedError,
 } from "../server-methods/agent-expected-session.js";
 import type { AgentRunRequest } from "../server-methods/agent-request-types.js";
-import type { AgentSessionPatchBuild } from "../server-methods/agent-session-patch.js";
+import type { buildAgentSessionPatch } from "../server-methods/agent-session-patch.js";
 import type { GatewayOperatorRoleActor } from "../server-methods/shared-types.js";
 import type { GatewayRequestHandlerOptions } from "../server-methods/types.js";
 import type { TrustedSessionCreation } from "../session-creation-provenance.js";
@@ -116,8 +116,10 @@ export type AgentSessionPersistParams = {
     RestoredCronContinuation,
     "lifecycleRevision" | "sessionId"
   >;
-  initialPatchBuild: AgentSessionPatchBuild;
-  buildSessionPatch: (entry: SessionEntry | undefined) => Promise<AgentSessionPatchBuild>;
+  initialPatchBuild: Awaited<ReturnType<typeof buildAgentSessionPatch>>;
+  buildSessionPatch: (
+    entry: SessionEntry | undefined,
+  ) => Promise<Awaited<ReturnType<typeof buildAgentSessionPatch>>>;
   state: AgentSessionPersistResult;
   touchInteraction: boolean;
   requestedBestEffortDeliver?: boolean;

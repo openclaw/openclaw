@@ -25,40 +25,102 @@ import {
 } from "../utils/provider-error.js";
 import { isTransientNetworkError } from "../utils/retryable-network-errors.js";
 import { sanitizeSurrogates } from "../utils/sanitize-unicode.js";
-import { createZeroUsage } from "../utils/usage.js";
+import { createZeroUsage, isUnbilledFailedTurn } from "../utils/usage.js";
 import { parseJsonObjectPreservingUnsafeIntegers } from "./json-unsafe-integers.js";
 
 /** Decodes frame boundaries; callers retain reader lifetime and protocol admission. */
 export async function* iterateSseFrames(
   read: () => Promise<ReadableStreamReadResult<Uint8Array>>,
-  assertWithinLimit?: (pending: string) => void,
+  limit?: { max: number; unit: "characters" | "bytes"; message: string },
 ): AsyncGenerator<{ frame: string; terminated: boolean }> {
   const decoder = new TextDecoder();
-  let buffer = "";
-  // CRLF remains one line ending even when the delimiter expression backtracks.
-  const delimiter = /(?:\r\n|\r(?!\n)|\n)(?:\r\n|\r(?!\n)|\n)/g;
-  let scanOffset = 0;
+  const parts: string[] = [];
+  let partsLength = 0;
+  let tail = "";
+  const lengthOf =
+    limit?.unit === "bytes"
+      ? (text: string) => Buffer.byteLength(text, "utf8")
+      : (text: string) => text.length;
+  const assertWithinLimit = (length: number) => {
+    if (limit && length > limit.max) {
+      throw new Error(limit.message);
+    }
+  };
   for (;;) {
     const { done, value } = await read();
-    buffer += decoder.decode(value, { stream: !done });
-    delimiter.lastIndex = scanOffset;
+    const buffer = tail + decoder.decode(value, { stream: !done });
+    let start = 0;
+    let cr = buffer.indexOf("\r");
+    let lf = buffer.indexOf("\n");
     for (;;) {
-      const boundary = delimiter.exec(buffer);
-      if (!boundary && (!done || !buffer)) {
+      let frameEnd = buffer.length;
+      let boundaryEnd = -1;
+      let previousStart = -1;
+      let previousEnd = -1;
+      while (cr >= 0 || lf >= 0) {
+        const next = cr < 0 ? lf : lf < 0 ? cr : Math.min(cr, lf);
+        // Consume CRLF together, including its LF in the cached search cursor.
+        const end = next + (buffer[next] === "\r" && buffer[next + 1] === "\n" ? 2 : 1);
+        if (cr >= 0 && cr < end) {
+          cr = buffer.indexOf("\r", end);
+        }
+        if (lf >= 0 && lf < end) {
+          lf = buffer.indexOf("\n", end);
+        }
+        if (previousEnd === next) {
+          frameEnd = previousStart;
+          boundaryEnd = end;
+          break;
+        }
+        previousStart = next;
+        previousEnd = end;
+      }
+      if (boundaryEnd < 0 && (!done || (!parts.length && start === buffer.length))) {
         break;
       }
-      const frameEnd = boundary?.index ?? buffer.length;
-      const frame = buffer.slice(0, frameEnd);
-      assertWithinLimit?.(frame);
-      buffer = boundary ? buffer.slice(frameEnd + boundary[0].length) : "";
-      delimiter.lastIndex = 0;
-      yield { frame, terminated: boundary !== null };
+      let frame = buffer.slice(start, frameEnd);
+      if (limit) {
+        assertWithinLimit(partsLength + lengthOf(frame));
+      }
+      if (parts.length) {
+        parts.push(frame);
+        frame = parts.join("");
+        parts.length = 0;
+        partsLength = 0;
+      }
+      start = boundaryEnd < 0 ? buffer.length : boundaryEnd;
+      yield { frame, terminated: boundaryEnd >= 0 };
+      if (boundaryEnd < 0) {
+        break;
+      }
     }
-    assertWithinLimit?.(buffer);
+    const pending = buffer.slice(start);
+    // Scan only new text plus the maximum delimiter overlap; scanning an ever-growing
+    // concatenated string would flatten/copy the entire pending frame on every read.
+    // Keep only trailing newline characters, so UTF-8 length accounting never
+    // splits a surrogate pair between a retained fragment and the overlap.
+    let split = pending.length;
+    while (split > 0 && pending.length - split < 3) {
+      const last = pending.charCodeAt(split - 1);
+      if (last !== 10 && last !== 13) {
+        break;
+      }
+      split--;
+    }
+    if (split > 0) {
+      const part = pending.slice(0, split);
+      parts.push(part);
+      if (limit) {
+        partsLength += lengthOf(part);
+      }
+    }
+    tail = pending.slice(split);
+    if (limit) {
+      assertWithinLimit(partsLength + lengthOf(tail));
+    }
     if (done) {
       return;
     }
-    scanOffset = Math.max(0, buffer.length - 3);
   }
 }
 
@@ -256,14 +318,14 @@ export function throwIfModelStreamAborted(signal?: AbortSignal): void {
 
 function waitForModelStreamTurn(signal?: AbortSignal, work = 1): Promise<void> | undefined {
   throwIfModelStreamAborted(signal);
-  // All streams share the main loop. Recheck after waking so a swarm cannot
+  // Callers recheck admission after this shared wakeup so a swarm cannot
   // spend a fresh per-stream budget in the same microtask burst.
   if (
     nextStreamTurn &&
     (streamWorkThisTurn + work > MODEL_STREAM_COOPERATIVE_YIELD_BUDGET ||
       Date.now() - streamTurnStartedAt >= MODEL_STREAM_COOPERATIVE_YIELD_INTERVAL_MS)
   ) {
-    return nextStreamTurn.then(() => waitForModelStreamTurn(signal, work));
+    return nextStreamTurn;
   }
   if (!nextStreamTurn) {
     streamTurnStartedAt = Date.now();
@@ -285,8 +347,7 @@ export async function* iterateModelStream<T>(
   signal?: AbortSignal,
 ): AsyncGenerator<T> {
   for await (const event of events) {
-    const wait = waitForModelStreamTurn(signal);
-    if (wait) {
+    for (let wait; (wait = waitForModelStreamTurn(signal));) {
       await wait;
     }
     yield event;
@@ -491,8 +552,7 @@ export function withProviderResponseHook<T = never>(params: {
       try {
         await awaitProviderLifecycleCallback(params.hook, params.signal);
         // Hooks may finish together after waiting through earlier work budgets.
-        const wait = waitForModelStreamTurn(params.signal, MODEL_STREAM_START_WORK);
-        if (wait) {
+        for (let wait; (wait = waitForModelStreamTurn(params.signal, MODEL_STREAM_START_WORK));) {
           await wait;
         }
       } catch (error) {
@@ -526,15 +586,22 @@ export function finalizeTransportStream(params: {
   stream.end();
 }
 
+type TransportFailureDiagnostic = {
+  abortReason?: string;
+  incompleteReason?: string;
+};
+
 /** Assign terminal fields and record silent transport failures before partial-call cleanup. */
 export function assignTransportErrorDetails(
   output: AssistantMessage,
   error: unknown,
   signal?: AbortSignal,
+  diagnostic?: TransportFailureDiagnostic,
 ): ProviderErrorProjection {
-  if (!signal?.aborted) {
-    // Provider prose and response bodies can echo prompts and tool results.
-    try {
+  try {
+    const host = getAiTransportHost();
+    if (!signal?.aborted && host.isLogEnabled?.("provider-error", "warn") !== false) {
+      // Provider prose and response bodies can echo prompts and tool results.
       const record = asOptionalRecord(error);
       const response = asOptionalRecord(record?.response);
       const cause = asOptionalRecord(record?.cause);
@@ -542,9 +609,11 @@ export function assignTransportErrorDetails(
         asOptionalRecord(record?.error) ??
         asOptionalRecord(response?.error) ??
         asOptionalRecord(asOptionalRecord(record?.payload)?.error);
-      getAiTransportHost().logWarn("provider-error", "Model request failed", {
+      const metadata: Record<string, string | number | undefined> = {
         provider: output.provider,
         model: output.model,
+        name: readTransportDiagnosticLabel(record?.name),
+        ...diagnostic,
         status: readTransportDiagnosticLabel(
           record?.status ?? record?.statusCode ?? response?.status,
         ),
@@ -556,10 +625,16 @@ export function assignTransportErrorDetails(
         responseId: readTransportDiagnosticLabel(
           record?.responseId ?? response?.id ?? output.responseId,
         ),
-      });
-    } catch {
-      // Diagnostic accessors and log sinks cannot replace the original failure.
+      };
+      for (const key in metadata) {
+        if (metadata[key] === undefined) {
+          delete metadata[key];
+        }
+      }
+      host.logWarn("provider-error", "Model request failed", metadata);
     }
+  } catch {
+    // Diagnostic accessors and log sinks cannot replace the original failure.
   }
   const projection = projectProviderError(error, signal);
   Object.assign(output, projection);
@@ -569,11 +644,19 @@ export function assignTransportErrorDetails(
     output.usage.usageReport = { state: "unavailable" };
     output.usage.contextUsage = { state: "unavailable" };
   }
+  if (isUnbilledFailedTurn(output)) {
+    // The provider did no billable work; record its usage as a complete zero.
+    output.usage = {
+      ...createZeroUsage(),
+      usageReport: { state: "available" },
+      contextUsage: output.usage.contextUsage,
+    };
+  }
   if (
     projection.stopReason === "error" &&
     output.content.length === 0 &&
     isTransientNetworkError(projectDiagnosticValue(error)) &&
-    !output.diagnostics?.some((diagnostic) => diagnostic.type === "provider_transport_failure")
+    !output.diagnostics?.some((entry) => entry.type === "provider_transport_failure")
   ) {
     // Recovery consumes this fact, not error-text guesses. Reuse the bounded,
     // redacted terminal message so diagnostics cannot expose the original throw.
@@ -593,10 +676,11 @@ export function failTransportStream(params: {
   output: AssistantMessage;
   signal?: AbortSignal;
   error: unknown;
+  diagnostic?: TransportFailureDiagnostic;
   cleanup?: () => void;
 }): void {
   const { stream, output, signal, error, cleanup } = params;
-  const projection = assignTransportErrorDetails(output, error, signal);
+  const projection = assignTransportErrorDetails(output, error, signal, params.diagnostic);
   cleanup?.();
   stream.push({ type: "error", reason: projection.stopReason, error: output });
   stream.end();

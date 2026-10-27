@@ -170,8 +170,8 @@ Markdown-only or Git-only copy is not a complete backup.
   step.
 - Corrections, withdrawals, and identity merges are explicit agent operations
   that preserve history. See [Corrections and merges](/plugins/knowledge/corrections).
-- The Control UI is read-only. It hands change requests to chat instead of
-  editing records.
+- The Control UI is read-only. **Ask** sends change requests to the agent in a
+  new chat instead of editing records.
 - Operators cannot save knowledge through operator read access. Changing store
   assignments needs `operator.admin`.
 
@@ -217,7 +217,8 @@ See [Ingestion workflows](/plugins/knowledge/ingestion).
 
 The **Knowledge** page has Recent and Browse views, keyword Search, entity pages
 with linked claims and evidence, typed connections, retained originals, and file
-history. **Settings** holds Stores & sharing, Vocabulary, Vault status, and
+history. **Scribes** starts and controls [scribes](/plugins/knowledge/scribes).
+**Settings** holds Stores & sharing, Vocabulary, Vault status, and
 Maintenance. A **Knowledge** chat side panel lists the records an agent found,
 read, or changed in the current conversation.
 
@@ -240,6 +241,15 @@ It never calls a model or creates pages. It runs only while `writesEnabled` is
 `true`. It uses the plugin service scheduler, not OpenClaw automations.
 
 See [Maintenance](/plugins/knowledge/maintenance).
+
+## Scribes
+
+The **Scribes** tab starts conversations that keep a store up to date on their
+own: reviewing unlinked claims after maintenance, learning from conversations
+once or daily, and importing Memory once. Each follows a bundled skill; ongoing
+scribes schedule themselves as OpenClaw automations.
+
+See [Scribes](/plugins/knowledge/scribes).
 
 ## Capabilities and limits
 
@@ -333,5 +343,6 @@ and [Uninstall](/cli/plugins/uninstall-and-update#uninstall).
 - [Corrections and merges](/plugins/knowledge/corrections)
 - [Local history](/plugins/knowledge/local-history)
 - [Maintenance](/plugins/knowledge/maintenance)
+- [Scribes](/plugins/knowledge/scribes)
 - [Control UI](/plugins/knowledge/control-ui)
 - [Memory overview](/concepts/memory)

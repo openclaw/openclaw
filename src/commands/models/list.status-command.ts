@@ -84,7 +84,7 @@ import {
   resolveProviderAuthOverview,
 } from "./list.auth-overview.js";
 import { groupByProvider, isRich } from "./list.format.js";
-import type { AuthProbeSummary } from "./list.probe.js";
+import type { runAuthProbes } from "./list.probe.js";
 import type { ProviderAuthOverview, StatusRuntimeAuthRoute } from "./list.types.js";
 import { loadModelsConfig } from "./load-config.js";
 import {
@@ -980,7 +980,7 @@ export async function modelsStatusCommand(
         "integer",
       );
 
-      let probeSummary: AuthProbeSummary | undefined;
+      let probeSummary: Awaited<ReturnType<typeof runAuthProbes>> | undefined;
       if (opts.probe) {
         const [{ withProgressTotals }, { runAuthProbes }] = await Promise.all([
           import("../../cli/progress.js"),

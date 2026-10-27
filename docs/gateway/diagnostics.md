@@ -268,6 +268,14 @@ keys or request values. Worktree preparation measures only work required before
 the response; provisioning already deferred to an initial turn stays with that
 turn's lifecycle.
 
+At trace log level, chat startup diagnostics break `detail.attempt.system-prompt`
+into sandbox policy,
+tool catalog text, session entry, runtime facts, reference paths, provider
+contributions, memory and watched-session context, project memory, TTS preferences,
+rendering, and reporting. These `detail.attempt.system-prompt.*` phases measure
+elapsed preparation time, including awaited work, without recording prompt content.
+The parent and nested phase totals overlap; do not add them together as CPU time.
+
 Managed worktree preparation emits one info-level `managed worktree preparation`
 record on return or failure. `kind=managed` covers checkout creation;
 `kind=sandbox` covers a managed guest projection through backend readiness,
@@ -686,7 +694,11 @@ sample suppression, never per scrape. Names come from V8's finite space set,
 including spaces added by future V8 versions; each space contributes four gauges
 under the exporter's existing series cap.
 
-Heap and CPU profiles label dependency frames as `[dep:<pkg>]` with URL
+Heap and CPU profiles preserve safe function names for OpenClaw code under the
+installation root, with URLs such as `openclaw:src/...`, `openclaw:dist/...`, and
+`openclaw:packages/<name>/src/...` or `openclaw:packages/<name>/dist/...` for
+workspace packages. Paths outside the installation root are not OpenClaw code.
+Profiles label dependency frames as `[dep:<pkg>]` with URL
 `node_modules/<pkg>`, including scoped packages and pnpm layouts; symbols,
 versions, filenames, and absolute paths stay hidden. URLs with query or fragment
 markers remain redacted. Frames with script ID `0`,
@@ -791,6 +803,11 @@ memory, so do not add those values together. Other direct workers use native hea
 statistics and leave ArrayBuffer bytes unavailable. Nested workers are outside
 the parent registry's coverage.
 
+Worker script labels come from the runtime entrypoint manifest. Source and sealed
+entrypoints use their canonical built names; unknown dependency workers and eval
+sources remain `other`. Knowledge registry and storage workers participate in the
+same census, labeled `registry-worker.js` and `storage-worker.js`.
+
 The prepared-model catalog worker also reports `workerHeaps[].retainedData`: bounded, size-only
 censuses with fixed structure labels, entry counts, approximate bytes, and
 aggregate generation, provider, and account counts where applicable. They never
@@ -848,11 +865,16 @@ No stored data, database schema, or update procedure changes.
 
 When a task pool recreates an idle-retired Worker within five minutes, it keeps
 one replacement warm for five minutes of inactivity. Other slots retain their
-normal idle timeout. Git metadata readers use a two-minute idle timeout so the
-one-minute PR polling and repository-discovery refreshes can reuse both readers.
-Node Code Mode likewise retains at most one completed
-Worker for five minutes, reusing it only when its runtime entry and heap limit
-match. Code Mode relies on V8's normal garbage collection rather than inspector
+normal idle timeout. Git content and workspace-computation pools instead keep their
+most recently used idle worker warm after their first task. Git metadata, summary,
+worktree preparation, and maintenance pools keep their existing expiry because they
+retain repository observations. All surplus Git workers keep their existing timeout.
+Node Code Mode keeps one compatible completed worker warm for each host,
+runtime entry, and heap limit within its eight-worker warm-cache budget; surplus
+workers expire after 30 seconds. Neither owner starts workers before use.
+Critical memory pressure can evict these warm floors, and normal health,
+rotation, drain, and shutdown cleanup still retires them.
+Code Mode relies on V8's normal garbage collection rather than inspector
 collection at idle task boundaries. Other warm task workers still collect released payloads in place; critical
 pressure, cancellation, rotation, and shutdown retain their existing cleanup
 paths. No configuration setting is needed.

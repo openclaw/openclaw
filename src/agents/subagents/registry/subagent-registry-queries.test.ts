@@ -70,14 +70,30 @@ describe("subagent registry query regressions", () => {
     expect(iterations).toBe(0);
   });
 
+  it.each([undefined, 0, -1, Number.NaN, Infinity, -Infinity])(
+    "distinguishes active descendants from pending results with endedAt=%s",
+    (endedAt) => {
+      const now = Date.UTC(2026, 9, 25);
+      const child = makeRun({
+        createdAt: now,
+        execution: { status: "terminal", startedAt: now, endedAt },
+      });
+      const index = buildSubagentRunReadIndexFromRuns({ runs: toRunMap([child]), now });
+      const active = endedAt === undefined || !Number.isFinite(endedAt) ? 1 : 0;
+      expect(index.countActiveDescendantRuns(child.requesterSessionKey)).toBe(active);
+      expect(index.countPendingDescendantRuns(child.requesterSessionKey)).toBe(1);
+      expect(index.countActiveDescendantRuns(child.requesterSessionKey)).toBe(active);
+    },
+  );
+
   it("keeps cached parent groups current across status, generation, move, insert and removal churn", () => {
     const now = Date.UTC(2026, 9, 25);
-    const roots = ["parent-a", "parent-b"];
+    const roots = ["parent-a", "parent-b", "child-0", "child-1"];
     const originals = Array.from({ length: 12 }, (_, index) =>
       makeRun({
         runId: `run-${index}`,
         childSessionKey: `child-${Math.floor(index / 2)}`,
-        requesterSessionKey: roots[Math.floor(index / 2) % 2]!,
+        requesterSessionKey: roots[Math.floor(index / 2) % roots.length]!,
         generation: index % 2,
         createdAt: now,
         execution: { status: "running", startedAt: now },
@@ -100,7 +116,7 @@ describe("subagent registry query regressions", () => {
           ? undefined
           : {
               ...previous,
-              ...(operation === 1 ? { requesterSessionKey: roots[step % 2]! } : {}),
+              ...(operation === 1 ? { requesterSessionKey: roots[step % roots.length]! } : {}),
               ...(operation === 2 ? { generation: step + 2 } : {}),
               execution:
                 step % 2
@@ -123,7 +139,21 @@ describe("subagent registry query regressions", () => {
         latest.set(row.childSessionKey, row);
       }
       for (const root of roots) {
-        const rows = [...latest.values()].filter((row) => row.requesterSessionKey === root);
+        const rows: SubagentRunRecord[] = [];
+        const visited = new Set([root]);
+        const pending = [root];
+        for (const parent of pending) {
+          for (const row of latest.values()) {
+            if (row.requesterSessionKey !== parent) {
+              continue;
+            }
+            rows.push(row);
+            if (!visited.has(row.childSessionKey)) {
+              visited.add(row.childSessionKey);
+              pending.push(row.childSessionKey);
+            }
+          }
+        }
         const byId = (left: SubagentRunRecord, right: SubagentRunRecord) =>
           left.runId.localeCompare(right.runId);
         expect(index.listDescendantRunsForRequester(root).toSorted(byId)).toEqual(

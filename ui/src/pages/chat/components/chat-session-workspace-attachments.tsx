@@ -131,14 +131,84 @@ function TranscriptAttachmentRow(props: {
   presentation: "desktop" | "mobile";
   renderName?: (name: string) => JSX.Element;
 }) {
-  const render = (action: () => MessageMediaAction) => (
-    <AttachmentActionRow
-      entry={props.entry}
-      action={action}
-      presentation={props.presentation}
-      renderName={props.renderName}
-    />
-  );
+  const render = (action: () => MessageMediaAction) => <AttachmentActionRow action={action} />;
+  function AttachmentActionRow(childProps: { action: () => MessageMediaAction }) {
+    const mobile = () => props.presentation === "mobile";
+    const parts = createMemo(() => splitWorkspaceFilename(props.entry.label));
+    return (
+      <div
+        role="listitem"
+        class={mobile() ? "chat-workspace-mobile__item" : "workspace-desktop__item"}
+      >
+        <button
+          type="button"
+          class={mobile() ? "chat-workspace-mobile__row" : "workspace-desktop__row"}
+          ref={(element) => childProps.action().observeElement?.(element)}
+          onFocus={() => childProps.action().onFocus?.()}
+          onClick={() => (childProps.action().onOpen ?? childProps.action().onFocus)?.()}
+          title={props.entry.label}
+          aria-label={props.entry.label}
+          aria-busy={childProps.action().pending ? "true" : "false"}
+          aria-disabled={
+            !childProps.action().onOpen && !childProps.action().onFocus ? "true" : undefined
+          }
+        >
+          <Show when={!mobile()}>
+            <span class="workspace-desktop__disclosure" />
+          </Show>
+          <Icon
+            name={
+              props.entry.kind === "image" || props.entry.mimeType?.startsWith("image/")
+                ? "image"
+                : "paperclip"
+            }
+          />
+          <span
+            class={mobile() ? "chat-workspace-mobile__identity" : "workspace-desktop__identity"}
+          >
+            <Show
+              when={props.renderName}
+              fallback={
+                <span
+                  class={mobile() ? "chat-workspace-mobile__name" : "workspace-desktop__filename"}
+                >
+                  <span
+                    ref={createTextOverflow(() => parts().stem)}
+                    class={mobile() ? "chat-workspace-mobile__stem" : "workspace-desktop__stem"}
+                    title={props.entry.label}
+                  >
+                    {parts().stem}
+                  </span>
+                  <span class={mobile() ? "chat-workspace-mobile__extension" : undefined}>
+                    {parts().extension}
+                  </span>
+                </span>
+              }
+            >
+              {(renderName) => renderName()(props.entry.label)}
+            </Show>
+          </span>
+          <Show when={mobile()}>
+            <Icon name="chevronRight" />
+          </Show>
+        </button>
+        <Show when={childProps.action().reason}>
+          {(reason) => <span role="status">{reason()}</span>}
+        </Show>
+        <Show when={childProps.action().onAllow}>
+          <button type="button" onClick={() => childProps.action().onAllow?.()}>
+            {t("chat.attachments.allowImage")}
+          </button>
+        </Show>
+        <Show when={childProps.action().onRetry}>
+          <button type="button" onClick={() => childProps.action().onRetry?.()}>
+            {t("common.retry")}
+          </button>
+        </Show>
+      </div>
+    );
+  }
+
   return (
     <Show
       when={props.entry.kind === "image" && props.entry}
@@ -159,81 +229,5 @@ function TranscriptAttachmentRow(props: {
         <MessageImageAction image={entry().image} options={entry().options} render={render} />
       )}
     </Show>
-  );
-}
-
-function AttachmentActionRow(props: {
-  entry: TranscriptAttachmentEntry;
-  action: () => MessageMediaAction;
-  presentation: "desktop" | "mobile";
-  renderName?: (name: string) => JSX.Element;
-}) {
-  const mobile = () => props.presentation === "mobile";
-  const parts = createMemo(() => splitWorkspaceFilename(props.entry.label));
-  return (
-    <div
-      role="listitem"
-      class={mobile() ? "chat-workspace-mobile__item" : "workspace-desktop__item"}
-    >
-      <button
-        type="button"
-        class={mobile() ? "chat-workspace-mobile__row" : "workspace-desktop__row"}
-        ref={(element) => props.action().observeElement?.(element)}
-        onFocus={() => props.action().onFocus?.()}
-        onClick={() => (props.action().onOpen ?? props.action().onFocus)?.()}
-        title={props.entry.label}
-        aria-label={props.entry.label}
-        aria-busy={props.action().pending ? "true" : "false"}
-        aria-disabled={!props.action().onOpen && !props.action().onFocus ? "true" : undefined}
-      >
-        <Show when={!mobile()}>
-          <span class="workspace-desktop__disclosure" />
-        </Show>
-        <Icon
-          name={
-            props.entry.kind === "image" || props.entry.mimeType?.startsWith("image/")
-              ? "image"
-              : "paperclip"
-          }
-        />
-        <span class={mobile() ? "chat-workspace-mobile__identity" : "workspace-desktop__identity"}>
-          <Show
-            when={props.renderName}
-            fallback={
-              <span
-                class={mobile() ? "chat-workspace-mobile__name" : "workspace-desktop__filename"}
-              >
-                <span
-                  ref={createTextOverflow(() => parts().stem)}
-                  class={mobile() ? "chat-workspace-mobile__stem" : "workspace-desktop__stem"}
-                  title={props.entry.label}
-                >
-                  {parts().stem}
-                </span>
-                <span class={mobile() ? "chat-workspace-mobile__extension" : undefined}>
-                  {parts().extension}
-                </span>
-              </span>
-            }
-          >
-            {(renderName) => renderName()(props.entry.label)}
-          </Show>
-        </span>
-        <Show when={mobile()}>
-          <Icon name="chevronRight" />
-        </Show>
-      </button>
-      <Show when={props.action().reason}>{(reason) => <span role="status">{reason()}</span>}</Show>
-      <Show when={props.action().onAllow}>
-        <button type="button" onClick={() => props.action().onAllow?.()}>
-          {t("chat.attachments.allowImage")}
-        </button>
-      </Show>
-      <Show when={props.action().onRetry}>
-        <button type="button" onClick={() => props.action().onRetry?.()}>
-          {t("common.retry")}
-        </button>
-      </Show>
-    </div>
   );
 }

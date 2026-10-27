@@ -153,9 +153,9 @@ where to run the Gateway see
   </Accordion>
 
   <Accordion title="What runtime do I need?">
-    Node **24.16+** or **26.1+** is the primary and default runtime (Node 26 recommended); see
+    Node **24.22.1+** or **26.12.1+** is the primary and default runtime (Node 26 recommended); see
     [Node.js](/install/node) for the maintained requirement. `pnpm` is the repo package manager.
-    Bun 1.4.3+ builds with WAL-reset-safe `node:sqlite` can run the CLI, Gateway, and managed node host as an explicit opt-in.
+    Bun 1.4.4+ builds with WAL-reset-safe `node:sqlite` can run the CLI, Gateway, and managed node host as an explicit opt-in.
   </Accordion>
 
   <Accordion title="Does it run on Raspberry Pi?">

@@ -6,6 +6,8 @@
  * node --import ./scripts/tsx.mjs scripts/perf/plugins-list-measure.ts --state-dir .local/plugins-list --prepare
  * node --import ./scripts/tsx.mjs scripts/perf/plugins-list-measure.ts --state-dir .local/plugins-list --output .local/plugins-list-base --revision BASE --mode timing
  * Optional --start-file FILE pauses after warmup until FILE exists.
+ * Use --preload scripts/perf/plugins-list-catalog-preload.mjs to reproduce a
+ * five-second hosted-catalog read with synthetic data, without external HTTP.
  * Repeat with --mode allocation separately; allocation sampling distorts timing.
  * Default 1,000 requests supplies enough samples for p99. The 64 sockets remain
  * connected; this targeted list workload does not claim concurrent-turn stress.
@@ -53,6 +55,7 @@ const { values } = parseArgs({
     entry: { type: "string", default: "dist/entry.js" },
     revision: { type: "string" },
     "start-file": { type: "string" },
+    preload: { type: "string" },
     mode: { type: "string", default: "timing" },
     samples: { type: "string", default: "1000" },
     clients: { type: "string", default: "64" },
@@ -192,6 +195,7 @@ const gateway = spawn(
     path.resolve("scripts/perf/team-shape-stress-loader.mjs"),
     "--import",
     path.resolve("scripts/lib/gateway-bench-profile-preload.ts"),
+    ...(values.preload ? ["--import", path.resolve(values.preload)] : []),
   ]),
   {
     detached: true,
@@ -323,6 +327,9 @@ try {
   }
   const diagnostics = await stopDiagnostics();
   const after = await readGatewayResources(gateway);
+  const settled = await rpc(client, "plugins.list", {});
+  writeFileSync(path.join(output, "settled-response.json"), JSON.stringify(settled, null, 2));
+  const settledResponseSha256 = createHash("sha256").update(JSON.stringify(settled)).digest("hex");
   const result = {
     revision: values.revision,
     mode: values.mode,
@@ -332,6 +339,7 @@ try {
     startupReadyMs,
     firstRpcMs,
     responseSha256,
+    settledResponseSha256,
     latencyMs: summarize(times),
     diagnostics,
     cpu: measureGatewayCpuUsage(before, after),

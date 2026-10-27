@@ -91,7 +91,6 @@ export function runCiManifestFixture(options: {
   nativeI18nCapabilities?: boolean;
   macosNodeParts?: boolean | 2;
   windowsPlanner?: boolean;
-  openClawKitTests?: boolean;
   protocolCoverage?: boolean;
   packageVersion?: string;
   qaSmokePlan?: boolean;
@@ -108,7 +107,6 @@ export function runCiManifestFixture(options: {
   runnerBackend?: "blacksmith" | "github" | "hybrid" | "runson";
   nodeRunnerBackend?: "blacksmith" | "github" | "hybrid" | "runson";
   runnerProfile?: "blacksmith" | "github" | "hybrid";
-  targetHostedRunnerProfileContract?: boolean;
   targetFiles?: string[];
   missingTargetFiles?: string[];
   uiE2eProjectsCapability?: boolean;
@@ -549,10 +547,10 @@ export function runCiManifestFixture(options: {
       [
         [options.formatCheck, "pnpm format:check\npnpm format:check"],
         [options.androidCiCapabilities, "android-ci-contract-v2"],
-        [options.openClawKitTests, "openclawkit-tests-contract-v1"],
+        [options.bundledPlanner, "openclawkit-tests-contract-v1"],
         [options.bundledPlanner, "docker-seed-e2e-contract-v1"],
         [options.publishedDriverUpdateCapability, "published-driver-update-contract-v1"],
-        [options.targetHostedRunnerProfileContract, "hosted-runner-profile-contract-v1"],
+        [options.bundledPlanner, "hosted-runner-profile-contract-v1"],
       ]
         .filter(([enabled]) => enabled ?? options.bundledPlanner)
         .map(([, marker]) => marker)

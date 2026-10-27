@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, expect, it, vi, type MockInstance } from "vitest";
+import { acknowledgeInternalToolResult } from "../../packages/agent-core/src/internal-hooks.js";
 import { enqueueSessionEventForHost as enqueueSessionEvent } from "../auto-reply/reply/session-event-handoff.js";
 import {
   clearRuntimeConfigSnapshot,
@@ -21,7 +22,6 @@ import {
 import { resetProcessRegistryForTests } from "./bash-process-registry.test-support.js";
 import { startDeferredNotifyRun } from "./bash-tools.notify-on-exit-ack.test-support.js";
 import { createProcessTool } from "./bash-tools.process.js";
-import { acknowledgeInternalToolResult } from "./runtime/internal-hooks.js";
 
 const supervisorSpawnMock = vi.hoisted(() => vi.fn());
 vi.mock("../auto-reply/reply/session-event-handoff.js", async (importOriginal) => {
@@ -62,7 +62,7 @@ const startNotifyRun = async (
   return { id: process.run.session.id, receipt: result.value };
 };
 const processTool = createProcessTool();
-const execute = (action: "poll" | "clear", sessionId: string) =>
+const execute = (action: "poll" | "log" | "clear", sessionId: string) =>
   processTool.execute(`${action}-${sessionId}`, { action, sessionId });
 const contexts = () => peekSystemEventEntries(QUEUE_KEY).map((event) => event.contextKey);
 
@@ -151,4 +151,22 @@ it("keeps an identical successor queued when an earlier consumer settles", async
   expect(queued[0]?.id).not.toBe(snapshot[0]?.id);
   await pollAndAcknowledge(successor.id, queued);
   expect(peekSystemEventEntries(QUEUE_KEY)).toEqual([]);
+});
+
+it("consumes a finished completion that the model reads with process log", async () => {
+  const { id } = await startNotifyRun();
+  const queued = peekSystemEventEntries(QUEUE_KEY);
+  expect(queued).toHaveLength(1);
+
+  const log = await execute("log", id);
+  expect(peekSystemEventEntries(QUEUE_KEY)).toEqual(queued);
+  acknowledgeInternalToolResult(log);
+  expect(peekSystemEventEntries(QUEUE_KEY)).toEqual([]);
+  // The read retires the completion only because it shows how the process ended.
+  expect(log.content).toEqual([
+    {
+      type: "text",
+      text: expect.stringMatching(/producer output\n\nProcess exited with code 0\.$/),
+    },
+  ]);
 });

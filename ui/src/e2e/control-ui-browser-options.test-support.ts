@@ -17,3 +17,12 @@ export function createLightDesktopControlUiContextOptions(): BrowserContextOptio
     viewport: { height: 800, width: 1180 },
   };
 }
+
+export function createLocalNetworkControlUiContextOptions(): BrowserContextOptions {
+  return {
+    locale: "en-US",
+    viewport: { width: 1440, height: 1000 },
+    serviceWorkers: "block",
+    permissions: ["local-network-access"],
+  };
+}

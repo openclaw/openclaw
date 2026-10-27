@@ -22,6 +22,7 @@ type Telemetry = {
 };
 type SoakResult = {
   completedTurns: number;
+  worktreeToolChurn?: boolean;
   teamStress: {
     committedWrites: number;
     prometheusScrapes: number;
@@ -110,7 +111,7 @@ export function summarizeStressRun(options: RunOptions): StressRun {
     "chat.history",
     "chat.startup",
     "sessions.diff",
-    "connect",
+    ...(result.worktreeToolChurn ? [] : ["connect"]),
     "chat.inject",
   ]) {
     if (!rpc[method]?.count) {

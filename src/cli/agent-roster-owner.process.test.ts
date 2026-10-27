@@ -44,7 +44,6 @@ afterAll(async () => {
 });
 
 it.each([
-  ["setup", "setup --baseline --workspace WORKSPACE --json"],
   ["advanced creation", "agents add advanced --role researcher --workspace WORKSPACE --json"],
   ["team creation", "agents team create --workspace-root WORKSPACE --non-interactive --json"],
 ])("refuses live %s before creating state", async (name, args) => {

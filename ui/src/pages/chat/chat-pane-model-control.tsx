@@ -1,3 +1,4 @@
+import { createMemo } from "solid-js";
 import { t } from "../../i18n/index.ts";
 import { ChatModelControls } from "./components/chat-model-controls.tsx";
 import type { ChatComposerSnapshot } from "./session-message-cache.ts";
@@ -5,14 +6,27 @@ import type { ChatComposerSnapshot } from "./session-message-cache.ts";
 export function ChatPaneModelControl(props: {
   model: Parameters<typeof ChatModelControls>[0] & { snapshot?: ChatComposerSnapshot };
 }) {
-  const savedSession = () =>
-    props.model.snapshot
+  const snapshot = createMemo(() => props.model.snapshot);
+  const sessionKey = createMemo(() => props.model.sessionKey);
+  // Unrelated pane frames must not manufacture a new offline catalog and selection.
+  const savedModel = createMemo(() => {
+    const saved = snapshot();
+    return saved
       ? {
-          ...props.model.snapshot,
-          model: props.model.snapshot.id,
-          modelProvider: props.model.snapshot.provider,
+          catalog: [saved],
+          catalogState: { hasSnapshot: true, status: "offline" } as const,
+          thinkingSession: { ...saved, model: saved.id, modelProvider: saved.provider },
+          session: {
+            key: sessionKey(),
+            kind: "direct" as const,
+            updatedAt: 0,
+            model: saved.id,
+            modelProvider: saved.provider,
+            modelOverrideSource: "user" as const,
+          },
         }
       : undefined;
+  });
   return (
     <div
       class="chat-composer-model-control"
@@ -22,26 +36,11 @@ export function ChatPaneModelControl(props: {
       <ChatModelControls
         {...props.model}
         connected={props.model.snapshot ? false : props.model.connected}
-        modelCatalog={props.model.snapshot ? [props.model.snapshot] : props.model.modelCatalog}
-        modelCatalogState={
-          props.model.snapshot
-            ? { hasSnapshot: true, status: "offline" }
-            : props.model.modelCatalogState
-        }
-        thinkingSession={savedSession() ?? props.model.thinkingSession}
-        fastModeDisplay={props.model.snapshot?.speed}
-        selectedSession={
-          props.model.snapshot
-            ? {
-                key: props.model.sessionKey,
-                kind: "direct",
-                updatedAt: 0,
-                model: props.model.snapshot.id,
-                modelProvider: props.model.snapshot.provider,
-                modelOverrideSource: "user",
-              }
-            : props.model.selectedSession
-        }
+        modelCatalog={savedModel()?.catalog ?? props.model.modelCatalog}
+        modelCatalogState={savedModel()?.catalogState ?? props.model.modelCatalogState}
+        thinkingSession={savedModel()?.thinkingSession ?? props.model.thinkingSession}
+        fastModeDisplay={snapshot()?.speed}
+        selectedSession={savedModel()?.session ?? props.model.selectedSession}
       />
     </div>
   );

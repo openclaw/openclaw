@@ -31,6 +31,7 @@ import type { ResolvedGlobalInstallTarget } from "./update-global.js";
 import { resolveNativePackageProjectRoot } from "./update-native-package-owner.js";
 import {
   projectRetainedRuntimePath,
+  readRetainedRuntimeFileList,
   RetainedRuntimeFilesSchema,
 } from "./update-retained-runtime-files.js";
 import { retainUpdateRuntimeImports } from "./update-retained-runtime-imports.js";
@@ -245,7 +246,9 @@ async function runWithRetainedUpdateRuntime<T>(
             );
             return undefined;
           }
-          const { relocations: retainedRelocations, files, ...metrics } = retained;
+          const { relocations: retainedRelocations, fileCount, ...metrics } = retained;
+          const files = await readRetainedRuntimeFileList(privateRoot, { fileCount });
+          assertCurrent();
           const relocations = prepareRuntimeRelocations(
             [
               ...retainedRelocations,

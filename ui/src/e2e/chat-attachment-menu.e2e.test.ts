@@ -165,7 +165,7 @@ suite.define(() => {
           await trigger.click();
           const pending = page.waitForEvent("filechooser");
           if (cameraFallback) {
-            await page.getByRole("menuitem", { name: "Take photo", exact: true }).click();
+            await page.getByRole("menuitem", { name: "Camera", exact: true }).click();
             await cameraButton(page, width === 932 ? "Use device camera" : "Upload photo").click();
           } else {
             await attachmentOption(page, "file").click();
@@ -189,7 +189,7 @@ suite.define(() => {
     ({ route, availability }) =>
       withChat({ route, preview: availability }, async (page, chooserCount) => {
         await page.getByRole("button", { name: "Add attachment", exact: true }).click();
-        await page.getByRole("menuitem", { name: "Take photo", exact: true }).click();
+        await page.getByRole("menuitem", { name: "Camera", exact: true }).click();
         const nativeCapture = cameraButton(page, "Use device camera");
         await nativeCapture.waitFor();
         expect(chooserCount()).toBe(0);
@@ -208,7 +208,7 @@ suite.define(() => {
   it.each(["chat", "new"])("captures a camera photo without opening a picker in %s", (route) =>
     withChat({ route, cameraPermission: true }, async (page, fileChoosers) => {
       await page.getByRole("button", { name: "Add attachment", exact: true }).click();
-      await page.getByRole("menuitem", { name: "Take photo", exact: true }).click();
+      await page.getByRole("menuitem", { name: "Camera", exact: true }).click();
       expect(await page.locator("html").getAttribute("data-camera-activation")).toBe("true");
       const capture = cameraButton(page, "Capture");
       await expect.poll(() => capture.isEnabled()).toBe(true);
@@ -249,9 +249,7 @@ suite.define(() => {
           await trigger.press("Enter");
           await attachmentOption(page, "file").waitFor({ state: "visible" });
           expect((await items.allTextContents()).map((text) => text.trim())).toEqual(
-            fixture.single
-              ? ["Photos & videos", "Attach…"]
-              : ["Take photo", "Photos & videos", "File"],
+            fixture.single ? ["Media", "Attach…"] : ["Camera", "Media", "File"],
           );
           await page.keyboard.press("Escape");
           await attachmentOption(page, "file").waitFor({ state: "hidden" });
@@ -276,7 +274,7 @@ suite.define(() => {
           expect(await page.locator(".agent-chat__camera-input").inputValue()).toBe("");
         } else if (!fixture.single) {
           await trigger.press("Enter");
-          await page.getByRole("menuitem", { name: "Take photo", exact: true }).press("Enter");
+          await page.getByRole("menuitem", { name: "Camera", exact: true }).press("Enter");
           const dialog = page.getByRole("dialog", { name: "Take photo", exact: true });
           await dialog.waitFor();
           expect(await page.locator("html").getAttribute("data-camera-requested")).toBe("true");

@@ -25,6 +25,7 @@ import {
   acquireStateDatabaseSchemaLease,
   assertStateDatabaseAccessAllowed,
   assertStateDatabaseReadAllowed,
+  captureGatewayStateOwner,
   captureStateDatabaseAccess,
   GatewayStateOwnerContentionError,
   hasActiveGatewayStateOwner,
@@ -98,6 +99,32 @@ function expectExistence(present: boolean, ...paths: string[]) {
 }
 
 describe("Gateway state ownership", () => {
+  it("resolves the selected database once per captured owner assertion and rejects successors", () => {
+    const owner = gatewayOwner(databasePath, root);
+    fs.mkdirSync(path.dirname(databasePath), { recursive: true });
+    fs.writeFileSync(databasePath, "synthetic database");
+    const captured = captureGatewayStateOwner(databasePath)!;
+    const realpath = vi.spyOn(fs.realpathSync, "native");
+    captured.assertCurrent();
+    expect(realpath.mock.calls.filter(([pathname]) => pathname === databasePath)).toHaveLength(1);
+    realpath.mockRestore();
+    owner.release();
+    gatewayOwner(databasePath, root);
+    expect(() => captured.assertCurrent()).toThrow();
+  });
+
+  it.skipIf(process.platform === "win32")("rejects a retargeted captured owner alias", () => {
+    gatewayOwner(databasePath, root);
+    const alias = path.join(directories.make("openclaw-owner-alias-"), "root");
+    fs.symlinkSync(root, alias);
+    const captured = captureGatewayStateOwner(path.join(alias, "state", "openclaw.sqlite"))!;
+    const otherRoot = directories.make("openclaw-owner-successor-");
+    gatewayOwner(path.join(otherRoot, "state", "openclaw.sqlite"), otherRoot);
+    fs.unlinkSync(alias);
+    fs.symlinkSync(otherRoot, alias);
+    expect(() => captured.assertCurrent()).toThrow(GatewayStateOwnerContentionError);
+  });
+
   it.skipIf(process.platform === "win32")(
     "acquires Gateway ownership on healthy state storage when system tmp is exhausted",
     async () => {

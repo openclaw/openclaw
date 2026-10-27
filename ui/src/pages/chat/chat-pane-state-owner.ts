@@ -478,7 +478,6 @@ export abstract class ChatPaneStateOwner {
       subagentSessions: sessions,
       subagentSessionsHydrated: Boolean(target && this.swarm.hydrator?.hydrated),
       subagentSessionsPending: Boolean(target && this.swarm.hydrator?.pendingChildRead),
-      subagentSessionsRead: Boolean(target && this.swarm.hydrator?.childrenRead),
       // Carry the admitted owner forward; route aliases do not identify child ancestry.
       subagentParentKey: target
         ? scopedSessionArtifactKey(target.sessionKey, target.agentId)

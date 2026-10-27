@@ -15,7 +15,7 @@ import type {
 } from "../../../../packages/gateway-protocol/src/index.ts";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { ApplicationContext } from "../../app/context-types.ts";
-import { hasOperatorReadAccess } from "../../app/operator-access.ts";
+import { hasOperatorSelfReadAccess } from "../../app/operator-access.ts";
 import { SettingsEmpty, SettingsSection } from "../../components/solid/settings-ui.tsx";
 import { registerPersonalInstructionsEnglish } from "../../i18n/locales/en-personal-instructions.ts";
 import { formatUiError } from "../../lib/format-error.ts";
@@ -73,7 +73,7 @@ class PersonalInstructionsState {
       connected &&
       this.multipleProfiles &&
       Boolean(snapshot.selfUser?.id) &&
-      hasOperatorReadAccess(snapshot.hello?.auth ?? null);
+      hasOperatorSelfReadAccess(snapshot.hello?.auth ?? null);
     const identityChanged = profileId !== this.profileId || gatewayUrl !== this.gatewayUrl;
     const sourceChanged =
       identityChanged ||

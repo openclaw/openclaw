@@ -7,6 +7,7 @@ import {
   createSqliteFileGenerationReader,
   readStableSqliteFileGeneration,
   sameSqliteFileGeneration,
+  serializeSqliteFileGeneration,
   type SqliteFileGeneration,
 } from "./sqlite-file-generation.js";
 import { runWithSqliteCleanup } from "./sqlite-lifecycle-errors.js";
@@ -19,6 +20,11 @@ import {
 } from "./sqlite-worker-identity.js";
 
 export type UpdateDatabaseGenerations = Record<string, string | null>;
+export type UpdateDatabaseGenerationPair = {
+  committed: UpdateDatabaseGenerations;
+  physical: UpdateDatabaseGenerations;
+  emptyReaderAlternates: Record<string, string>;
+};
 export type UpdateDatabaseWriteReceipt = {
   unchanged: boolean;
   fromGenerations?: UpdateDatabaseGenerations;
@@ -102,6 +108,7 @@ function readWalIndexHeader(pathname: string): Buffer | null {
 
 type DatabaseGenerationObservation = {
   generation: string | null;
+  physical: string | null;
   emptyReaderAlternate?: string;
 };
 
@@ -118,7 +125,7 @@ function readDatabaseGeneration(
     ) {
       throw new Error(`Database is absent but retained journal data exists: ${pathname}`);
     }
-    return { generation: null };
+    return { generation: null, physical: null };
   }
   if (!entry.isFile()) {
     throw new Error(`Database generation requires a regular file: ${pathname}`);
@@ -156,6 +163,15 @@ function readDatabaseGeneration(
     (after === null || (change === "00000000" && checksum === "0000000000000000"));
   return {
     generation: fingerprint(change, checksum),
+    // Published 2026.9.33/34 parents bind the physical family and full WAL header.
+    physical: sha256Hex(
+      JSON.stringify([
+        serializeSqliteFileGeneration(
+          current.wal?.size === 0n ? { ...current, wal: undefined } : current,
+        ),
+        after?.toString("hex") ?? null,
+      ]),
+    ),
     // The first read-only native open can create this zero-write WAL index;
     // closing the last writer can remove it. Neither changes committed content.
     ...(emptyReader
@@ -174,9 +190,26 @@ export function readUpdateDatabaseGenerations(
   paths: readonly string[],
   inspectImage?: (imagePath: string, sourcePath: string) => void,
 ): UpdateDatabaseGenerations {
-  return Object.fromEntries(
-    paths.map((pathname) => [pathname, readDatabaseGeneration(pathname, inspectImage).generation]),
-  );
+  return readUpdateDatabaseGenerationPair(paths, inspectImage).committed;
+}
+
+/** Both wire formats come from the same verified family observation. */
+export function readUpdateDatabaseGenerationPair(
+  paths: readonly string[],
+  inspectImage?: (imagePath: string, sourcePath: string) => void,
+): UpdateDatabaseGenerationPair {
+  const committed: UpdateDatabaseGenerations = {};
+  const physical: UpdateDatabaseGenerations = {};
+  const emptyReaderAlternates: Record<string, string> = {};
+  for (const pathname of paths) {
+    const observation = readDatabaseGeneration(pathname, inspectImage);
+    committed[pathname] = observation.generation;
+    physical[pathname] = observation.physical;
+    if (observation.emptyReaderAlternate) {
+      emptyReaderAlternates[pathname] = observation.emptyReaderAlternate;
+    }
+  }
+  return { committed, physical, emptyReaderAlternates };
 }
 
 /** Same raw-close restrictions as readUpdateDatabaseGenerations; never under native exclusion. */

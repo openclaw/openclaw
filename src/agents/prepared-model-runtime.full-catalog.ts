@@ -409,6 +409,7 @@ export function createPreparedModelRuntimeSnapshot(
   bindPreparedModelRuntimeAuth(snapshot, {
     labels: catalogAccess.initialAuth.providerAuthLabels,
     store: catalogAccess.initialAuth.authStore,
+    readUsage: catalogAccess.readUsage,
     load: catalogAccess.loadAuth,
     materializations: Object.freeze([...getPreparedRuntimeAuthMaterializations(input.agentDir)]),
   });

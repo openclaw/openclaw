@@ -327,6 +327,7 @@ export function renderChatComposerView(
                   <ChatGoal
                     goal={goal}
                     resumeRecovery={resumeRecovery()}
+                    resumeBusy={props.goalResumeBusy}
                     connected={props.connected}
                     expanded={context().state.presentation.goalExpandedId === goal.id}
                     canAct={

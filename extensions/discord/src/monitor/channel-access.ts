@@ -1,15 +1,5 @@
 import { asOptionalObjectRecord, readStringField } from "openclaw/plugin-sdk/string-coerce-runtime";
 
-type DiscordChannelInfoSafe = {
-  id?: string;
-  name?: string;
-  topic?: string;
-  type?: number;
-  parentId?: string;
-  ownerId?: string;
-  parentName?: string;
-};
-
 export function resolveDiscordChannelNameSafe(channel: unknown): string | undefined {
   return readStringField(asOptionalObjectRecord(channel), "name");
 }
@@ -18,7 +8,7 @@ export function resolveDiscordChannelTopicSafe(channel: unknown): string | undef
   return readStringField(asOptionalObjectRecord(channel), "topic");
 }
 
-export function resolveDiscordChannelInfoSafe(channel: unknown): DiscordChannelInfoSafe {
+export function resolveDiscordChannelInfoSafe(channel: unknown) {
   const record = asOptionalObjectRecord(channel);
   const raw = asOptionalObjectRecord(record?.rawData);
   const readAlias = (camel: string, snake: string) =>

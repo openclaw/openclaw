@@ -339,13 +339,10 @@ describe("meeting realtime engine output ownership", () => {
   });
 
   it("resets provider continuity without replaying old output or tool work", async () => {
-    let releaseTool: (() => void) | undefined;
-    const toolGate = new Promise<void>((resolve) => {
-      releaseTool = resolve;
-    });
+    const toolGate = createDeferredCore();
     const fixture = await createEngineFixture({
       handleToolCall: async ({ session, event, onTalkEvent }) => {
-        await toolGate;
+        await toolGate.promise;
         await session.submitToolResult(event.callId, { text: "stale result" });
         onTalkEvent({
           type: "tool.result",
@@ -381,7 +378,7 @@ describe("meeting realtime engine output ownership", () => {
         .recentTalkEvents.filter((event) => event.type === "turn.cancelled"),
     ).toHaveLength(1);
 
-    releaseTool?.();
+    toolGate.resolve();
     await Promise.resolve();
     await Promise.resolve();
     expect(fixture.submitToolResult).not.toHaveBeenCalled();
@@ -436,8 +433,7 @@ describe("meeting realtime engine output ownership", () => {
       }
       fixture.callbacks.onAudio(fresh);
 
-      await fixture.expectWrite(1);
-      expect(fixture.writeOutput).toHaveBeenCalledWith(fresh);
+      await fixture.expectWrite(1, fresh);
       expect(fixture.writeOutput).not.toHaveBeenCalledWith(stale);
       expect(fixture.clearOutput).toHaveBeenCalledOnce();
       expect(fixture.beginOutput).toHaveBeenCalledOnce();

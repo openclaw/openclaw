@@ -131,6 +131,16 @@ describe("node worker workspace origin fallback", () => {
     expect(exec.mock.calls.some(([command]) => command.seed?.action === "store")).toBe(false);
   });
 
+  it("refuses the transfer fallback when failed origin cleanup is unavailable", async () => {
+    const exec = vi.fn<WorkspaceExec>(async ({ argv, resetWorkspace }) => {
+      if (resetWorkspace && !argv.includes("clone")) {
+        return remoteResult("", 1);
+      }
+      return remoteResult("", argv.includes("clone") ? 1 : 0);
+    });
+    await expect(fixture(exec).sync()).rejects.toThrow("failed");
+  });
+
   it.each(["none", "remote-mismatch", "fetch-failed", "manifest-mismatch", "apply-error"] as const)(
     "uses the seed when valid and recovers by cloning after %s",
     async (failure) => {

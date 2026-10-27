@@ -2,6 +2,11 @@
 // config-health recovery reads. Seed with --case teamBoot --fixture-root <path> --seed-only;
 // measure a fresh copy per boot with --runs 1 --warmup 0 and --output <json>.
 // Compare >=5 boots per revision; --heap-prof-dir collects allocations in a separate pass.
+// slowAgentDatabase measures authenticated connect and sessions.list while one real
+// integrity scan is held by --agent-gate-delay-ms. Seed separate fixtures per arm;
+// use --agent-database-mib 8 for an inexpensive controlled startup-recovery probe.
+// Every agent starts unsealed; ready-agent scans wait at most 6s, exceeding the
+// 5s foreground admission budget, so their migrations overlap the slow inspection.
 import assert from "node:assert/strict";
 import { execFileSync, spawn, type ChildProcess } from "node:child_process";
 import { createCipheriv } from "node:crypto";
@@ -16,7 +21,7 @@ import {
   statSync,
   writeFileSync,
 } from "node:fs";
-import { tmpdir } from "node:os";
+import { loadavg, tmpdir } from "node:os";
 import path from "node:path";
 import { performance } from "node:perf_hooks";
 import { fileURLToPath } from "node:url";
@@ -104,13 +109,20 @@ type GatewaySample = {
   exitedBeforeTeardown?: boolean;
   exitCode: number | null;
   firstOutputMs: number | null;
-  firstSessionRpc: { ms: number | null; attempts: number; lastError: string | null };
+  firstSessionRpc: {
+    ms: number | null;
+    connectMs: number | null;
+    attempts: number;
+    lastError: string | null;
+  };
   gatewayReadyLogLine: string | null;
   gatewayReadyLogMs: number | null;
   healthz: InitialProbeResult;
   heapProfilePath?: string;
   httpListenLogLine: string | null;
   httpListenLogMs: number | null;
+  hostLoadBefore: number[];
+  hostLoadAfter: number[];
   maxRssMb: number | null;
   outputTail: string;
   readyz: InitialProbeResult;
@@ -257,6 +269,7 @@ const GATEWAY_CASES: readonly GatewayBenchCase[] = [
     runByDefault: false,
     config: {
       ...BASE_CONFIG,
+      gateway: { ...BASE_CONFIG.gateway, auth: { mode: "token", token: TEAM_BOOT_AUTH_TOKEN } },
       plugins: { enabled: false },
       cron: { enabled: false },
     },
@@ -591,6 +604,7 @@ function summarizeCase(benchCase: GatewayBenchCase, samples: GatewaySample[]) {
     summary: {
       completionMs: summarize((sample) => sample.completionMs),
       firstOutputMs: summarize((sample) => sample.firstOutputMs),
+      firstConnectMs: summarize((sample) => sample.firstSessionRpc.connectMs),
       firstSessionRpcMs: summarize((sample) => sample.firstSessionRpc.ms),
       cpuCoreRatio: summarize((sample) => sample.cpuCoreRatio),
       cpuMs: summarize((sample) => sample.cpuMs),
@@ -1603,7 +1617,9 @@ async function seedSlowAgentFixture(root: string, mib: number, gateDelayMs: numb
       await stateDb.closeOpenClawStateDatabaseAsync();
     }
     // Exclusive offline fixture custody: the next owner must perform its real full scan.
-    rmSync(`${slowPath}.seal`, { force: true });
+    for (const database of databases) {
+      rmSync(`${database.path}.seal`, { force: true });
+    }
     writeFileSync(
       path.join(root, "slow-agent-fixture.json"),
       JSON.stringify(
@@ -1613,6 +1629,7 @@ async function seedSlowAgentFixture(root: string, mib: number, gateDelayMs: numb
             bytes: statSync(databasePath).size,
           })),
           gateDelayMs,
+          readyAgentGateDelayMs: Math.min(6_000, gateDelayMs),
         },
         null,
         2,
@@ -1624,16 +1641,18 @@ async function seedSlowAgentFixture(root: string, mib: number, gateDelayMs: numb
 import { DatabaseSync } from 'node:sqlite';
 import { isMainThread } from 'node:worker_threads';
 const slowPath = ${JSON.stringify(slowPath)};
+const databasePaths = new Set(${JSON.stringify(databases.map((database) => database.path))});
 const original = DatabaseSync.prototype.prepare;
 DatabaseSync.prototype.prepare = function(sql) {
-  if (this.location() === slowPath && /^PRAGMA integrity_check;?$/i.test(sql.trim())) {
-    console.log('[slow-agent-bench] gate-start');
-    Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ${gateDelayMs});
+  if (databasePaths.has(this.location()) && /^PRAGMA integrity_check(?:\\(\\d+\\))?;?$/i.test(sql.trim())) {
+    const slow = this.location() === slowPath;
+    if (slow) console.log('[slow-agent-bench] gate-start');
+    Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, slow ? ${gateDelayMs} : ${Math.min(6_000, gateDelayMs)});
     const statement = original.call(this, sql);
     const all = statement.all;
     statement.all = function(...args) {
       const rows = all.apply(this, args);
-      if (rows.length === 1 && rows[0].integrity_check === 'ok') {
+      if (slow && rows.length === 1 && rows[0].integrity_check === 'ok') {
         console.log('[slow-agent-bench] gate-passed');
       }
       return rows;
@@ -1664,10 +1683,12 @@ async function waitForFirstSessionRpc(params: {
   deadlineAt: number;
   isDone: () => boolean;
   requireSeededSession: boolean;
+  readyAgentId?: string;
   authToken?: string;
 }): Promise<GatewaySample["firstSessionRpc"]> {
   let attempts = 0;
   let lastError: string | null = null;
+  let connectMs: number | null = null;
   while (performance.now() < params.deadlineAt && !params.isDone()) {
     attempts++;
     const remaining = () => Math.max(1, params.deadlineAt - performance.now());
@@ -1700,10 +1721,11 @@ async function waitForFirstSessionRpc(params: {
       if (!connected.ok) {
         throw new Error(`connect: ${JSON.stringify(connected.error)}`);
       }
+      connectMs ??= performance.now() - params.startAt;
       const response = await client.request(
         "sessions.list",
         {
-          limit: 1,
+          limit: params.readyAgentId ? 100 : 1,
           ...(params.requireSeededSession
             ? { agentId: "incident-agent-01", label: "Synthetic startup session 0" }
             : {}),
@@ -1733,7 +1755,18 @@ async function waitForFirstSessionRpc(params: {
       ) {
         throw new Error("sessions.list has not returned the seeded session");
       }
-      return { ms: performance.now() - params.startAt, attempts, lastError };
+      if (
+        params.readyAgentId &&
+        !response.payload.sessions.some(
+          (session: unknown) =>
+            isRecord(session) &&
+            typeof session.key === "string" &&
+            session.key.startsWith(`agent:${params.readyAgentId}:`),
+        )
+      ) {
+        throw new Error("sessions.list has not returned a ready agent's session");
+      }
+      return { ms: performance.now() - params.startAt, connectMs, attempts, lastError };
     } catch (error) {
       lastError = error instanceof Error ? error.message : String(error);
     } finally {
@@ -1752,7 +1785,7 @@ async function waitForFirstSessionRpc(params: {
     }
     await delay(25);
   }
-  return { ms: null, attempts, lastError };
+  return { ms: null, connectMs, attempts, lastError };
 }
 
 async function captureStartupHeapProfile(
@@ -1870,6 +1903,7 @@ async function runGatewaySample(
       }
       await delay(remaining);
     }
+    const hostLoadBefore = loadavg();
     const startAt = performance.now();
     const deadlineAt = startAt + options.timeoutMs;
     const startupTrace: Record<string, number> = {};
@@ -1901,7 +1935,7 @@ async function runGatewaySample(
         options.entry,
         port,
         nodeOptions,
-        options.benchCase.id === "teamBoot" ? "token" : "none",
+        options.benchCase.id === "teamBoot" || slowAgent ? "token" : "none",
       );
       const command = buildGatewayBenchCommand(childArgs, options);
       child = spawn(command.command, command.args, {
@@ -2003,9 +2037,12 @@ async function runGatewaySample(
                 deadlineAt,
                 isDone: () => childExited,
                 requireSeededSession: options.benchCase.id === "teamBoot",
-                ...(options.benchCase.id === "teamBoot" ? { authToken: TEAM_BOOT_AUTH_TOKEN } : {}),
+                ...(slowAgent ? { readyAgentId: SLOW_DATABASE_AGENT_IDS[0] } : {}),
+                ...(options.benchCase.id === "teamBoot" || slowAgent
+                  ? { authToken: TEAM_BOOT_AUTH_TOKEN }
+                  : {}),
               })
-            : { ms: null, attempts: 0, lastError: "Gateway never became healthy" },
+            : { ms: null, connectMs: null, attempts: 0, lastError: "Gateway never became healthy" },
         ),
       ]);
       if (slowAgent || interruptedRegistry) {
@@ -2102,6 +2139,8 @@ async function runGatewaySample(
         ...(heapProfilePath ? { heapProfilePath } : {}),
         httpListenLogLine,
         httpListenLogMs,
+        hostLoadBefore,
+        hostLoadAfter: loadavg(),
         maxRssMb,
         outputTail: output.join("").split(/\r?\n/u).slice(-20).join("\n"),
         readyz,

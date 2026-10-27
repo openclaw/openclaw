@@ -1,5 +1,4 @@
 import { loadWebMedia } from "openclaw/plugin-sdk/web-media";
-// WhatsApp tests prove filename-derived media facts reach native delivery.
 import { describe, expect, it, vi } from "vitest";
 import { createAcceptedWhatsAppSendResult } from "../inbound/send-result.test-helper.js";
 import { createTestWebInboundMessage } from "../inbound/test-message.test-helper.js";
@@ -41,12 +40,7 @@ describe("WhatsApp filename-only media delivery", () => {
         buffer: Buffer.from("filename-only-media"),
         contentType,
         fileName,
-        kind:
-          contentType === "application/octet-stream" || contentType === "application/pdf"
-            ? "document"
-            : contentType === "image/jpeg"
-              ? "image"
-              : undefined,
+        kind: contentType ? "document" : undefined,
       });
       const sendMedia = vi
         .fn<AdmittedWebInboundMessage["platform"]["sendMedia"]>()
@@ -55,11 +49,7 @@ describe("WhatsApp filename-only media delivery", () => {
         .fn<AdmittedWebInboundMessage["platform"]["reply"]>()
         .mockResolvedValue(createAcceptedWhatsAppSendResult("text", "text-1"));
       const msg = createTestWebInboundMessage({
-        event: { id: "msg-1" },
-        payload: { body: "hello" },
         platform: {
-          chatJid: "15551234567@s.whatsapp.net",
-          recipientJid: "+20000000000",
           senderJid: "222@s.whatsapp.net",
           reply,
           sendMedia,

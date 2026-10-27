@@ -393,6 +393,15 @@ export function formatSkillsWorkshopList(result: SkillsWorkshopListResult): stri
       lines.push(`${sanitizeForLog(entry.name)}  versions=${entry.versions.length}`);
     }
   }
+  const drafts = result.drafts ?? [];
+  if (drafts.length > 0) {
+    lines.push("", theme.heading("Drafts (review with /learn drafts):"));
+    for (const draft of drafts) {
+      lines.push(
+        `${sanitizeForLog(draft.id)}  for ${sanitizeForLog(draft.skillName)}  ${sanitizeForLog(draft.summary)}`,
+      );
+    }
+  }
   return `${lines.join("\n")}\n`;
 }
 

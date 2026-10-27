@@ -13,14 +13,16 @@ import {
   getOfficialExternalPluginCatalogManifest as manifest,
   resolveOfficialExternalPluginInstall as install,
   loadConfiguredHostedOfficialExternalPluginCatalogEntries as loadHostedCatalogImpl,
-  type OfficialExternalPluginCatalogFeed,
 } from "./official-external-plugin-catalog.js";
 import {
   createInMemoryHostedCatalogSnapshotStore as memoryStore,
   installableEntry,
   hostedCatalogFeed as makeFeed,
 } from "./official-external-plugin-catalog.test-support.js";
-import type { HostedOfficialExternalPluginCatalogSnapshot } from "./official-external-plugin-catalog.types.js";
+import type {
+  HostedOfficialExternalPluginCatalogSnapshot,
+  OfficialExternalPluginCatalogFeed,
+} from "./official-external-plugin-catalog.types.js";
 
 const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
   afterEach(async () => {
@@ -96,6 +98,7 @@ function signFeed(params: {
 }) {
   const key = createSigningKey(params.keyId ?? "acme-root", params.privateKeyPem);
   return {
+    feed: params.feed,
     body: JSON.stringify(signCatalogEnvelope(params.feed, [key])),
     keyId: key.keyId,
     privateKeyPem: key.privateKey.export({ type: "pkcs8", format: "pem" }),
@@ -318,26 +321,18 @@ describe("official external plugin catalog", () => {
   it("ignores an invalid recovered sequence when repairing a signed SQLite snapshot", async () => {
     const malformedBody =
       '{"schemaVersion":1,"id":"openclaw-official-external-plugins","generatedAt":"not-a-date","sequence":1e999,"entries":[]}';
-    const validFeed = makeFeed({
-      sequence: 10,
-      pluginName: "@openclaw/repaired-sequence",
-    });
-    const valid = signFeed({ feed: validFeed });
+    const valid = signedFeed(10, "@openclaw/repaired-sequence");
     const snapshotStore = sqliteStore();
 
     await snapshotStore.write(snapshot(malformedBody, { sequence: 10, generatedAt: "not-a-date" }));
-    await snapshotStore.write(snapshot(valid.body, validFeed));
+    await snapshotStore.write(snapshot(valid.body, valid.feed));
 
     await expect(snapshotStore.read(FEED_URL)).resolves.toMatchObject({ body: valid.body });
   });
 
   it("allows re-signing but retains the accepted payload on same-sequence equivocation", async () => {
-    const acceptedFeed = makeFeed({
-      sequence: 10,
-      pluginName: "@openclaw/signed-v10",
-    });
-    const accepted = signFeed({ feed: acceptedFeed });
-    const resigned = signFeed({ feed: acceptedFeed, keyId: "acme-rotated" });
+    const accepted = signedFeed(10, "@openclaw/signed-v10");
+    const resigned = signFeed({ feed: accepted.feed, keyId: "acme-rotated" });
     const conflicting = signedFeed(10, "@openclaw/conflicting-v10", {
       privateKeyPem: resigned.privateKeyPem,
       keyId: "acme-rotated",
@@ -436,12 +431,7 @@ describe("official external plugin catalog", () => {
 
   it("repairs malformed timestamp snapshots after trusted signing keys rotate", async () => {
     const malformed = malformedFeed("acme-root-2026-q2");
-    const repairedFeed = makeFeed({
-      sequence: 10,
-      pluginName: "@openclaw/repaired-current",
-    });
-    const repaired = signFeed({
-      feed: repairedFeed,
+    const repaired = signedFeed(10, "@openclaw/repaired-current", {
       keyId: "acme-root-2026-q3",
     });
     const snapshotStore = sqliteStore();

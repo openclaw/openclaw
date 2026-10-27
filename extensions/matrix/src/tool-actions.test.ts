@@ -556,4 +556,44 @@ describe("Matrix action composition", () => {
     );
     expect(mocks.applyMatrixProfileUpdate).not.toHaveBeenCalled();
   });
+
+  it("rejects an omitted profile update when the configured default account disables profile", async () => {
+    const restricted: CoreConfig = {
+      channels: {
+        matrix: {
+          defaultAccount: "ops",
+          accounts: {
+            ops: {
+              homeserver: "https://matrix.example.org",
+              actions: { profile: false },
+            },
+            alerts: { homeserver: "https://matrix.example.org" },
+          },
+        },
+      },
+    };
+    await expectError(
+      run("set-profile", { displayName: "Ops Bot" }, { senderIsOwner: true }, restricted),
+      "Matrix profile updates are disabled.",
+    );
+    expect(mocks.applyMatrixProfileUpdate).not.toHaveBeenCalled();
+  });
+
+  it("updates the configured default account when a profile action omits the account", async () => {
+    const allowed: CoreConfig = {
+      channels: {
+        matrix: {
+          defaultAccount: "ops",
+          accounts: {
+            ops: { homeserver: "https://matrix.example.org", actions: { profile: true } },
+            alerts: { homeserver: "https://matrix.example.org" },
+          },
+        },
+      },
+    };
+    await run("set-profile", { displayName: "Ops Bot" }, { senderIsOwner: true }, allowed);
+    expect(mocks.applyMatrixProfileUpdate).toHaveBeenCalledWith(
+      expect.objectContaining({ account: "ops", displayName: "Ops Bot" }),
+    );
+  });
 });

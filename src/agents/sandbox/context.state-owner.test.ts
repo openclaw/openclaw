@@ -1,3 +1,4 @@
+import fs from "node:fs";
 import path from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement, createDeferred } from "../../../test/helpers/promise.js";
@@ -17,6 +18,54 @@ vi.mock("../../skills/loading/workspace-skill-sync.runtime.js", () => ({
 }));
 
 const roots = useAutoCleanupTempDirTracker(afterEach);
+afterEach(() => vi.clearAllMocks());
+
+it("checks physical custody once per runtime assertion and refuses a successor owner", async () => {
+  const root = roots.make("sandbox-owner-assertion-");
+  await withEnvAsync({ OPENCLAW_STATE_DIR: root }, async () => {
+    const owner = custody.acquireOwner(root);
+    let assertCurrent: (() => void) | undefined;
+    const restore = registerSandboxBackend("owner-assertion", async (params) => {
+      assertCurrent = params.assertRuntimeCurrent;
+      return {
+        id: "owner-assertion",
+        runtimeId: "synthetic-owner-assertion",
+        runtimeLabel: "Synthetic owner assertion",
+        workdir: "/workspace",
+        buildExecSpec: vi.fn(),
+        runShellCommand: vi.fn(),
+      };
+    });
+    let successor: ReturnType<typeof custody.acquireOwner> | undefined;
+    try {
+      registry.readRegisteredSandboxRuntimeIds.mockResolvedValueOnce([]);
+      await custody.prepareContext(
+        custody.createConfig({ backend: "owner-assertion" }),
+        "agent:main:subagent:owner-assertion",
+        path.join(root, "workspace"),
+      );
+      expect(assertCurrent).toBeDefined();
+      const stat = vi.spyOn(fs, "lstatSync");
+      try {
+        assertCurrent!();
+        // fs-safe brackets one physical custody verification with two leaf observations.
+        expect(stat.mock.calls.filter(([pathname]) => pathname === owner.path)).toHaveLength(2);
+      } finally {
+        stat.mockRestore();
+      }
+      fs.unlinkSync(owner.path);
+      expect(assertCurrent).toThrow();
+      owner.release();
+      successor = custody.acquireOwner(root);
+      expect(assertCurrent).toThrow();
+      expect(() => successor?.assertCurrent()).not.toThrow();
+    } finally {
+      successor?.release();
+      owner.release();
+      restore();
+    }
+  });
+});
 
 it("rejects released hosted custody before ordinary sandbox backend provisioning", async () => {
   const root = roots.make("sandbox-owner-lifetime-");

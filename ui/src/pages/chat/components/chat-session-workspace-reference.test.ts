@@ -31,6 +31,54 @@ function createReferenceState(
 }
 
 describe("session workspace file reference resolution", () => {
+  it.each(["application/pdf", "application/octet-stream"])(
+    "previews only detected PDFs and retains message-qualified downloads (%s)",
+    async (mimeType) => {
+      const getFile = vi.fn<SessionWorkspaceHost["sessions"]["getFile"]>(async (sessionKey) => ({
+        sessionKey,
+        root: "/original-workspace",
+        file: {
+          path: "report.pdf",
+          workspacePath: "reports/report.pdf",
+          name: "report.pdf",
+          kind: "read",
+          missing: false,
+          previewKind: "unsupported",
+          mimeType,
+          size: 300_000,
+        },
+      }));
+      const state = createReferenceState(createSessionCapabilityFixture({ getFile }));
+      const target = {
+        path: "report.pdf",
+        sessionKey: "agent:other:original",
+        messageEntryId: "original-message",
+      };
+      await openSessionWorkspaceFile(state, target);
+      const content = await loadedSidebarContent(state);
+      expect(content.kind).toBe(mimeType === "application/pdf" ? "attachment" : "markdown");
+      if (content.kind !== "attachment" && content.kind !== "markdown") {
+        throw new Error("Expected a PDF preview or unsupported-file fallback");
+      }
+      expect(content.file).toMatchObject({
+        path: "reports/report.pdf",
+        absolutePath: "/original-workspace/reports/report.pdf",
+        root: "/original-workspace",
+      });
+      await content.file!.download(new AbortController().signal);
+      expect(downloadSessionFile).toHaveBeenLastCalledWith(
+        state,
+        {
+          sessionKey: target.sessionKey,
+          agentId: "other",
+          path: target.path,
+          messageEntryId: target.messageEntryId,
+        },
+        expect.any(AbortSignal),
+      );
+    },
+  );
+
   it("preserves a null file-capability result as an unavailable preview", async () => {
     const getFile = vi.fn<SessionWorkspaceHost["sessions"]["getFile"]>(async () => null);
     const listFiles = vi.fn();

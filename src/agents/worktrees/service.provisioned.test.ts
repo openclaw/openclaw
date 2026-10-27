@@ -17,7 +17,7 @@ import {
   setRuntimeConfigSnapshot,
 } from "../../config/runtime-snapshot.js";
 import * as gitExec from "../../infra/git-exec.js";
-import { runGitWorkerOperation } from "../../infra/git-worker.js";
+import * as gitWorker from "../../infra/git-worker.js";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../../infra/kysely-sync.js";
 import { SqliteWorkerError } from "../../infra/sqlite-worker-contract.js";
 import * as commandRunner from "../../process/exec-runner.js";
@@ -147,7 +147,7 @@ describe("ManagedWorktreeService provisioned state", () => {
       });
 
     // Exercise the typed worker used for capacity estimates, then the registered service flow.
-    const inspection = await runGitWorkerOperation({
+    const inspection = await gitWorker.runGitWorkerOperation({
       type: "worktree.provisioning-inspection",
       input: { sourceRoot: repo },
     });
@@ -181,12 +181,75 @@ describe("ManagedWorktreeService provisioned state", () => {
     const destination = path.join(root, "destination");
     await fs.mkdir(destination);
     await fs.writeFile(path.join(destination, ".env.local"), "destination-owned\n");
+    const { executeGitWorktreeOperation } = await import("./git-worktree-operations.runtime.js");
+    using stats = vi.spyOn(fs, "lstat");
+    expect(
+      await executeGitWorktreeOperation({
+        type: "worktree.provisioning-inspection",
+        input: { sourceRoot: repo, estimateBytes: false },
+      }),
+    ).toEqual({ paths: inspection.paths, estimatedBytes: 0 });
+    expect(
+      stats.mock.calls.filter(([target]) => target === path.join(dependencies, "settings.local")),
+    ).toHaveLength(0);
+    stats.mockClear();
+    using requests = vi.spyOn(gitWorker, "runGitWorkerOperation");
     expect(await provisionIncludedFiles(repo, destination)).toEqual([
       "dependencies/package/settings.local",
     ]);
+    expect(
+      requests.mock.calls.filter(
+        ([operation]) =>
+          operation.type === "worktree.provisioning-inspection" &&
+          operation.input.estimateBytes !== false,
+      ),
+    ).toHaveLength(0);
+    expect(
+      stats.mock.calls.filter(([target]) => target === path.join(dependencies, "settings.local")),
+    ).toHaveLength(1);
     expect(await fs.readFile(path.join(destination, ".env.local"), "utf8")).toBe(
       "destination-owned\n",
     );
+    // Copy-time inspection keeps skipping sources that cannot be inspected.
+    stats.mockRestore();
+    const lstat = fs.lstat;
+    const unreadable = Object.assign(new Error("synthetic unreadable source"), { code: "EACCES" });
+    vi.spyOn(fs, "lstat").mockImplementation((target, options) =>
+      target === path.join(dependencies, "settings.local")
+        ? Promise.reject(unreadable)
+        : lstat(target, options),
+    );
+    await expect(provisionIncludedFiles(repo, destination)).resolves.toEqual([]);
+  });
+
+  it("preserves modification times when provisioning prepared build inputs and outputs", async () => {
+    await fs.writeFile(path.join(repo, ".gitignore"), "prepared/\n");
+    await fs.writeFile(path.join(repo, ".worktreeinclude"), "prepared/**\n");
+    await git(repo, "add", ".gitignore", ".worktreeinclude");
+    await git(repo, "commit", "-m", "include prepared build state");
+    const prepared = path.join(repo, "prepared");
+    await fs.mkdir(prepared);
+    // The output sorts first; recreating times would make its input appear newer.
+    const entries = [
+      { name: "artifact", content: "compiled output\n", seconds: 1_700_000_010 },
+      { name: "input", content: "build input\n", seconds: 1_700_000_000 },
+    ];
+    for (const entry of entries) {
+      const source = path.join(prepared, entry.name);
+      await fs.writeFile(source, entry.content);
+      await fs.utimes(source, entry.seconds, entry.seconds);
+    }
+
+    const created = await service.create({ repoRoot: repo, name: "prepared", baseRef: "HEAD" });
+
+    for (const entry of entries) {
+      const target = path.join(created.path, "prepared", entry.name);
+      expect(await fs.readFile(target, "utf8")).toBe(entry.content);
+      expect((await fs.stat(target)).mtimeMs).toBe(entry.seconds * 1000);
+    }
+    const output = await fs.stat(path.join(created.path, "prepared", "artifact"));
+    const input = await fs.stat(path.join(created.path, "prepared", "input"));
+    expect(output.mtimeMs).toBeGreaterThan(input.mtimeMs);
   });
 
   it.skipIf(process.platform === "win32")(
@@ -217,7 +280,7 @@ describe("ManagedWorktreeService provisioned state", () => {
       using commands = vi.spyOn(gitExec, "executeGitCommandBuffered");
 
       expect(
-        await runGitWorkerOperation({
+        await gitWorker.runGitWorkerOperation({
           type: "worktree.provisioning-inspection",
           input: { sourceRoot: repo },
         }),

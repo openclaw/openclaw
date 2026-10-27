@@ -348,6 +348,19 @@ export function buildSubagentRunReadIndexFromRuns<T extends SubagentRunReadRecor
       if (counts.has(root)) {
         return counts.get(root) ?? 0;
       }
+      if (options?.activeOnly) {
+        let index = 0;
+        while (
+          index < descendants.length &&
+          hasSubagentRunEnded(latestRunsByChildSessionKey.get(descendants[index]!)!)
+        ) {
+          index++;
+        }
+        // Settled topology stays inactive until a row patch creates a fresh query window.
+        if (index === descendants.length) {
+          return 0;
+        }
+      }
       const count = countDescendantRuns(descendants, options);
       counts.set(root, count);
       return count;

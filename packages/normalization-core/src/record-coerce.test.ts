@@ -3,6 +3,7 @@ import {
   asNonArrayRecord,
   asNullableRecord,
   asOptionalRecord,
+  ensureRecord,
   filterStringRecord,
   isStringArray,
   isStringRecord,
@@ -14,14 +15,32 @@ describe("record-coerce", () => {
   sparse.length = 2;
   it.each([
     [[], true],
-    [["", "  ", "same", "same"], true],
+    [["", "  ", " padded ", "same", "same"], true],
     [sparse, true],
+    [["ok", 1], false],
     [["ok", undefined], false],
     [null, false],
-    [{ 0: "ok" }, false],
+    [{ 0: "ok", length: 1 }, false],
     ["ok", false],
   ])("accepts only all-string arrays without normalizing entries %#", (value, expected) => {
     expect(isStringArray(value)).toBe(expected);
+  });
+
+  it("retains existing records without assigning to their parent", () => {
+    const record = { value: 1 };
+    expect(ensureRecord(Object.freeze({ nested: record }), "nested")).toBe(record);
+    const instance = new Date(0);
+    expect(ensureRecord({ nested: instance }, "nested")).toBe(instance);
+    expect(ensureRecord({}, "__proto__")).toBe(Object.prototype);
+  });
+
+  it.each([undefined, null, [], 1, "value"])("replaces non-record values: %j", (value) => {
+    const root = { nested: value };
+    const record = ensureRecord(root, "nested");
+    expect(record).toEqual({});
+    expect(root.nested).toBe(record);
+    expect(Object.getPrototypeOf(record)).toBe(Object.prototype);
+    expect(ensureRecord({}, "nested")).not.toBe(record);
   });
 
   it("removes only undefined projection fields in place without traversing nested records", () => {

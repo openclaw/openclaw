@@ -1,3 +1,4 @@
+import { createPluginConfigParser } from "openclaw/plugin-sdk/plugin-config-runtime";
 import { buildSecretInputSchema } from "openclaw/plugin-sdk/secret-input";
 import { asNullableRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { detectWindowsSpawnCommandInlineArgs } from "openclaw/plugin-sdk/windows-spawn";
@@ -196,7 +197,12 @@ export type ParsedCodexPluginConfig = Omit<
   codexPlugins?: z.infer<typeof codexPluginsConfigSchema>;
 };
 
-export function readCodexPluginConfig(value: unknown): ParsedCodexPluginConfig {
+export const readCodexPluginConfig = createPluginConfigParser<ParsedCodexPluginConfig>(
+  "codex",
+  parseCodexPluginConfig,
+);
+
+function parseCodexPluginConfig(value: unknown): ParsedCodexPluginConfig {
   const appServer = asNullableRecord(asNullableRecord(value)?.appServer);
   if (appServer?.approvalPolicy === "untrusted") {
     throw new Error(

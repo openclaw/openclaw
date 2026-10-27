@@ -79,7 +79,133 @@ directory and the same chunk count for the production sqlite-vec KNN control.
 Both benchmarks create synthetic state; stop and remove only their disposable
 database state after collecting results.
 
+## Control UI Talk
+
+`scripts/bench-control-ui-talk.ts` compares frozen production UI bundles with a
+synthetic microphone and provider. The default transport is `webrtc`; use
+`--transport gateway-relay` to exercise native PCM capture and playback:
+
+```sh
+node --import ./scripts/tsx.mjs scripts/bench-control-ui-talk.ts \
+  --transport gateway-relay \
+  --bundle-dir <baseline> --compare-bundle-dir <candidate> \
+  --states listening,speaking,responding,idle,hidden \
+  --viewport both --cpu-throttle 1,4 --pairs 10 --aa --duration-ms 5000 \
+  --output .artifacts/control-ui-talk-pcm
+```
+
+PCM mode requires an explicit supported state list: the default includes the
+WebRTC-only `transcribing` state. PCM `responding` means native output playback
+while the UI remains listening, rather than the WebRTC thinking animation.
+PCM mode rejects `--startup-latency`, `--startup-warm-cache`,
+`--compare-suspend-native-audio`, and transcript states. `--aa` adds same-baseline
+control pairs; alternate pair order reduces first/second browser bias.
+
+Ordinary comparisons use main-thread CPU counters with native clocks and
+service-worker precache/network quiet before each measurement. `--trace`,
+`--counters`, `--frames`, and `--process-wakeups` collect separate diagnostics;
+`--frames` adds its own animation loop and cannot measure idle or hidden states.
+PCM observations retain native input-callback/append timing, output scheduling
+and completion, and UI status/level endpoints. After Stop, the probe requires
+closed contexts, ended tracks, and stable callback/append/playback counts.
+Before PCM responding starts, the probe waits for silent input to reach level
+zero. Cancellation retires matching synthetic output and records its reason;
+an applied cancellation during measurement fails the observation. Failure
+artifacts include document visibility, native window bounds, audio context
+states, and the captured PCM activity.
+
+Use identical harness sources and flags for both sides. The synthetic PCM
+provider and native observers add measurement overhead. Callback-to-append and
+event-to-schedule timings are browser-local; they do not measure hardware,
+acoustic, real-provider, or network latency. Cadence bounds prove sustained
+delivery, not a latency acceptance threshold. Reports retain source and bundle
+hashes, failed samples, and per-cell results.
+
 ## Control UI warm interactions
+
+The headless Chromium/WebKit companion reuses the current interaction catalog and
+adds cold boot, persisted-state warm reload, 2,000-message open and 645-delta
+streaming. It alternates engines and bundles within each pair:
+
+```sh
+NODE_DISABLE_COMPILE_CACHE=1 node --import ./scripts/tsx.mjs scripts/bench-control-ui-engines.ts \
+  --bundle-dir dist/control-ui --pairs 10 --viewport both
+```
+
+Use `--steps chat-typing,session-switch` for focused comparisons and `--trace`
+for separate Playwright/Inspector attribution runs. `--compare-bundle-dir` and
+`--control-bundle-dir` add candidate and A/A control builds. Repeat the control
+option for interleaved base/head/base/head observations. For Workboard, repeat
+`--control-source-root` in the same order as the control bundles. Reports retain the
+metric time domain: WebKit Inspector durations are wall time, while Chromium
+CDP uses thread CPU. Untraced WebKit runs leave those counters null. `--cpu-only`
+collects WebKit's sampled process utilization without Timeline or ScriptProfiler;
+its estimate requires at least one second of interior sample coverage. The explicit
+`provider-model-picker-cycles`, `session-switch-cycles`, `sidebar-toggle-cycles`,
+and `cron-held-typing-cycles` steps repeat eight fixed actions for longer CPU
+intervals, retaining their selection, focus, and held-request contracts. Use
+separate untraced runs for timing. Compare automation wall time
+across engines; do not divide their script or CPU measurements as though they
+were the same metric. Mock routing
+disables HTTP caching; warm reload measures persisted state in the same context.
+Boot observations include browser-local transcript/composer readiness, navigation
+and optional paint milestones, completed-by-ready JavaScript/CSS/font requests,
+and connect/history RPC timings. Resource totals exclude requests still in flight
+at readiness; unavailable byte or paint values are omitted. Font loading status
+is sampled when evidence is collected, not at the earlier readiness milestone.
+The synthetic RPC timings include browser scheduling and fixture delivery; they
+do not measure a real Gateway's network latency.
+Mobile transcript-top uses a native scrollport jump because Playwright's mobile
+WebKit driver has no wheel input; it is not a wheel-latency measurement. Tracing
+omits DOM snapshots so snapshot traversal does not dominate attribution.
+
+Streaming coverage is selectable with `--steps streaming-645-deltas`,
+`streaming-645-deltas-slow`, `streaming-large-transcript`, `streaming-two-panes`,
+and `streaming-tool-code`. The slow case delivers the same 645 snapshots at
+15 Hz instead of 30 Hz; this throttles delivery, not CPU (WebKit has no matching
+Chromium CPU-throttling API). Every pane must retain native typing, render the
+complete reply, and follow its growing tail; the tool/code case keeps its tool
+output expanded. `large-transcript-fast-scroll` traverses 2,000 messages over
+120 animation frames and reports frame gaps, estimated dropped frames, mounted
+rows, and viewport-center blank samples. These are DOM geometry samples, not a
+paint filmstrip. `large-transcript-return-bottom` measures the native Scroll to
+latest action separately. WebKit lacks long-animation-frame entries; unsupported
+counters are reported explicitly rather than interpreted as zero work.
+
+Style/layout census can select the existing `settings-open`, `settings-sections`,
+and `data-*` actions together with `theme-switch-cycles` and
+`sidebar-live-style-cycles`. The latter exercise real preference and session
+lifecycle publications. `workboard-style-cycles` loads the native plugin and its
+1,000-card fixture, preserving its virtual window; use `--source-root`, `--compare-source-root`, and
+`--control-source-root` to bind its plugin assets to the corresponding bundle's
+source checkout. The manifest records each plugin tree and asset hash.
+
+Use `--steps memory --viewport desktop --pairs 1` for the opt-in cross-engine
+retention census, or select individual `memory-route-usage`,
+`memory-long-session`, `memory-workboard-updates`, and
+`memory-mcp-relay-updates` steps. Route scenes make 20 same-document visits;
+the long-session scene switches among ten 2,000-message sessions and streams
+three replies; plugin scenes retire five mounts after 50 verified updates each.
+`memory-workboard-idle-control` and `memory-workboard-mounts-control` prime the
+same 50-update warmup, then capture four rounds without updates (idle or repeated
+mount/retirement). Compare these with the update workload to distinguish
+Inspector/allocator footprint from surviving application data.
+Each checkpoint drains intentional retirement timers, clears synthetic request
+history, requests two GCs and saves a heap snapshot. Each observation gets its
+own browser process. Reports include process-tree RSS, WebKit resource categories,
+heap class counts, detached DOM and active resource counters.
+
+Memory captures are excluded from the latency table. Compare warm and later
+checkpoints within each engine before attributing growth: Inspector/JIT warmup,
+retained Chat panes and bounded caches are not leaks. WebKit snapshot self sizes
+omit some backing stores, and its DOM counts cover JavaScript wrappers;
+Chromium supplies native DOM counters and snapshot detachedness. RSS can retain
+allocator capacity after GC and excludes platform services reparented outside
+the owned browser process tree. Native Workboard/MCP fixtures build from the
+current checkout; bundle comparisons alone do not compare plugin revisions.
+The collector clears WebKit Inspector's retained snapshot history after every
+capture, so WebKit heap object IDs are checkpoint-local. Raw snapshots remain
+available for class/edge inspection; use Chromium for stable cross-snapshot IDs.
 
 Build with `pnpm ui:build`, then collect the production renderer's desktop and
 mobile interactions against the synthetic Gateway:

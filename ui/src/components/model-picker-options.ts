@@ -5,7 +5,7 @@ export type ModelPickerOption = {
   value: string;
   label: string;
   provider?: string;
-  detail?: string;
+  description?: string;
   disabled?: boolean;
 };
 
@@ -42,8 +42,8 @@ export function modelPickerOptions(
       customValue += "_";
     }
   }
-  const options: Array<ModelPickerOption & { description?: string }> = [
-    ...params.options.map((option) => ({ ...option, description: option.detail })),
+  const options: ModelPickerOption[] = [
+    ...params.options,
     ...(params.custom ? [{ value: customValue, label: params.custom.label }] : []),
   ];
   const selectedIndex = options.findIndex((option) => option.value === params.value);
@@ -83,7 +83,7 @@ export function decisionModelPickerParams(
     options.push({
       value: selected,
       label: selected,
-      detail: translate("chat.modelControls.decisionUnavailable"),
+      description: translate("chat.modelControls.decisionUnavailable"),
       disabled: true,
     });
   }
@@ -103,7 +103,7 @@ export function decisionModelPickerParams(
               }),
               ...(inherited &&
               !params.models.some((model) => `${model.provider}/${model.id}` === inherited)
-                ? { detail: translate("chat.modelControls.decisionUnavailable") }
+                ? { description: translate("chat.modelControls.decisionUnavailable") }
                 : {}),
             },
           ]

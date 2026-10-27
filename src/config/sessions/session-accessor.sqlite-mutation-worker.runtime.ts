@@ -55,10 +55,6 @@ import {
 } from "./session-accessor.sqlite-worker-coordination.js";
 import type { SqliteMutationWorkerMessage } from "./session-accessor.sqlite-worker-request.js";
 import type { ValidatedCanonicalSessionValidationBatch } from "./session-canonical-validation.js";
-import {
-  prepareSessionColdSourceGuard,
-  SessionColdSourceRefusedError,
-} from "./session-cold-storage-source-guard.worker.js";
 import type { SessionColdWorkerData } from "./session-cold-storage-worker.js";
 import type { SessionColdMutationResult } from "./session-cold-storage.types.js";
 
@@ -139,6 +135,8 @@ async function runColdMutationWorker(
 ) {
   const { mutateSessionColdTranscriptInWorker, prepareSessionColdRestoreInWorker } =
     await import("./session-cold-storage-worker.js");
+  const { prepareSessionColdSourceGuard, SessionColdSourceRefusedError } =
+    await import("./session-cold-storage-source-guard.worker.js");
   // Restore materialization must finish before requesting any write admission.
   const coldRecords =
     data.plan.kind === "cold-restore"

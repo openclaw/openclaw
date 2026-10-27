@@ -1,6 +1,11 @@
 import { setImmediate as nextEventLoopTurn } from "node:timers/promises";
 import { afterEach, beforeEach, describe, expect, it, vi, type Mock } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
+import { createPreparedAccountCatalogAccess } from "../agents/prepared-model-runtime.catalog-auth.js";
+import {
+  notifyPreparedModelRuntimePublication,
+  registerPreparedModelRuntimePublicationListener,
+} from "../agents/prepared-model-runtime.publication-events.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   getSessionCostUsageUpdatedAt,
@@ -109,6 +114,59 @@ function expectMetadataBroadcast(broadcast: Mock, payload: Record<string, unknow
     dropIfSlow: true,
   });
 }
+
+it("broadcasts only downgrade onset and recovery for alternating service-tier responses", async () => {
+  vi.useFakeTimers({ now: 1_000 });
+  mocks.registerModelListener.mockImplementation(registerPreparedModelRuntimePublicationListener);
+  const broadcast = vi.fn();
+  await attachLifecycle({ broadcast });
+  const retirement = new AbortController();
+  const catalog = createPreparedAccountCatalogAccess(
+    () => true,
+    retirement.signal,
+    {},
+    () => {
+      notifyPreparedModelRuntimePublication({
+        phase: "catalog-observation",
+        modelFactsChanged: false,
+        agentId: "main",
+      });
+    },
+  );
+  try {
+    const record = catalog.prepareServiceTierObserver({
+      selectedCredential: { source: "direct", provider: "openai", identityKey: "direct:openai" },
+    });
+    const route = {
+      modelId: "fixture-model",
+      runtimeId: "openclaw",
+      api: "openai-responses",
+      baseUrl: "https://api.openai.com/v1",
+      requestedTier: "ultrafast",
+    };
+    for (let index = 0; index < 100; index++) {
+      record({ ...route, responseTier: index % 2 === 0 ? "priority" : "ultrafast" });
+      vi.advanceTimersByTime(500);
+    }
+    const payload = {
+      agentId: "main",
+      modelCatalogChanged: true,
+      authChanged: false,
+      commandsChanged: false,
+    };
+    expectMetadataBroadcast(broadcast, payload);
+    expect(mocks.refresh).toHaveBeenCalledOnce();
+    vi.advanceTimersByTime(60_000);
+    expect(broadcast).toHaveBeenCalledTimes(2);
+    expect(broadcast).toHaveBeenLastCalledWith("chat.metadata.changed", payload, {
+      dropIfSlow: true,
+    });
+    vi.advanceTimersByTime(60_000);
+    expect(broadcast).toHaveBeenCalledTimes(2);
+  } finally {
+    retirement.abort();
+  }
+});
 
 it.each([false, true])(
   "publishes usage completion (failed: %s) without rebuilding metadata and retires its listener on stop",
@@ -237,6 +295,39 @@ it("retires model choices at its config commit before pending metadata settles",
 });
 
 describe("gateway chat metadata lifecycle", () => {
+  it("coalesces availability flips without delaying credential changes and cancels on stop", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    const { sidecarOwner } = await attachLifecycle({ broadcast: vi.fn() });
+    mocks.refresh.mockClear();
+    const listener = mocks.registerAuthListener.mock.calls[0]![0];
+    for (let index = 0; index < 100; index++) {
+      listener({ availabilityOnly: true });
+    }
+    expect(mocks.refresh).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(499);
+    listener({ availabilityOnly: true });
+    await vi.advanceTimersByTimeAsync(1);
+    expect(mocks.refresh).toHaveBeenCalledOnce();
+
+    listener({ availabilityOnly: true });
+    listener({ availabilityOnly: false });
+    expect(mocks.refresh).toHaveBeenCalledTimes(2);
+    await vi.advanceTimersByTimeAsync(500);
+    expect(mocks.refresh).toHaveBeenCalledTimes(2);
+    listener({ availabilityOnly: true });
+    const modelListener = mocks.registerModelListener.mock.calls[0]![0];
+    modelListener({ phase: "invalidated" });
+    modelListener({ phase: "failed", error: new Error("replacement failed") });
+    await vi.advanceTimersByTimeAsync(500);
+    expect(mocks.refresh).toHaveBeenCalledTimes(2);
+    modelListener({ phase: "published" });
+    expect(mocks.refresh).toHaveBeenCalledTimes(3);
+    listener({ availabilityOnly: true });
+    await sidecarOwner.stop();
+    await vi.advanceTimersByTimeAsync(500);
+    expect(mocks.refresh).toHaveBeenCalledTimes(3);
+  });
+
   it("ignores watcher availability but refreshes published skill changes", async () => {
     await attachLifecycle();
     mocks.refresh.mockClear();
@@ -322,7 +413,7 @@ describe("gateway chat metadata lifecycle", () => {
           expect(mocks.invalidate).toHaveBeenCalledOnce();
           modelListener({ phase: "catalog-published" });
           modelListener({ phase: "catalog-failed" });
-          authListener();
+          authListener({ availabilityOnly: false });
           skillsListener({ reason: "watch" });
           expect(mocks.refresh).toHaveBeenCalledOnce();
           expect(warn).not.toHaveBeenCalled();
@@ -330,7 +421,7 @@ describe("gateway chat metadata lifecycle", () => {
           expect(mocks.refresh).toHaveBeenCalledTimes(2);
           expect(warn).not.toHaveBeenCalled();
         } else {
-          authListener();
+          authListener({ availabilityOnly: false });
           expect(mocks.refresh).toHaveBeenCalledTimes(2);
           skillsListener({ reason: "watch" });
           expect(mocks.refresh).toHaveBeenCalledTimes(3);

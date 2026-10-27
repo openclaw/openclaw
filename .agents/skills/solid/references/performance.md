@@ -70,6 +70,13 @@ These are results for the cited workloads, not universal speedups.
 - **Boot and CSS:** keep component/content renderers and locale namespaces behind their owning lazy boundaries. Consolidating sheets already fetched together cut Chat from eight to three CSS requests ([#181255](https://github.com/openclaw/openclaw/pull/181255)). At 100 ms latency, readiness medians improved 36–58%; zero-latency results stayed within the acceptance band. Measure local and remote profiles before judging transport changes; ratchet budgets to the measured head, never below it.
 - **Memory:** callbacks, fallback providers, and unstarted bootstrap work outlived their owners ([#181259](https://github.com/openclaw/openclaw/pull/181259)). Fix the retaining owner. Dependency-owned select/pending-computation retention needed exact-version patches and prepared upstream reports ([#182101](https://github.com/openclaw/openclaw/pull/182101)); that PR did not publish the reports upstream.
 
+### WebKit
+
+- Keep container queries and size containment on the smallest element that needs them. Moving containment from repeated Board reports to their toolbars cut WebKit opening time by 60% ([#185587](https://github.com/openclaw/openclaw/pull/185587)).
+- Avoid relational `:has()` selectors over frequently mutated elements. Derive the state in the existing owner: replacing position-rail sibling queries halved the median scroll frame gap ([#185727](https://github.com/openclaw/openclaw/pull/185727)).
+- Check for redundant `content-visibility` alongside containment. Removing it from virtualized transcript rows improved WebKit fast scrolling ([#185665](https://github.com/openclaw/openclaw/pull/185665)); preserve offscreen geometry and verify both engines.
+- WebKit CPUProfiler `cpuMs` is aged utilization, not CPU consumed by the action ([#185466](https://github.com/openclaw/openclaw/pull/185466)). Attribute with Timeline elapsed time and measure untraced wall time separately.
+
 ## Measuring
 
 - State the workload and acceptance rule before measurement. Use the existing [warm-interaction harness](../../control-ui-e2e/references/interaction-performance.md), [cold-load/streaming/session-switch benchmarks](../../../../scripts/bench-control-ui-cold-load.ts), and [retention proof](testing.md). Synthetic fixtures measure renderer cost, not live Gateway or provider latency.

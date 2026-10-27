@@ -36,20 +36,6 @@ import {
   type TrustedGroupMetadata,
 } from "./agent-subagent-registration.js";
 
-export type AgentSessionPatchBuild = {
-  patch: Partial<SessionEntry>;
-  automaticResetReason?: "idle" | "daily";
-  spawnedBy: string | undefined;
-  groupId: string | undefined;
-  groupChannel: string | undefined;
-  groupSpace: string | undefined;
-  freshSessionRotatedSinceLoad: boolean;
-  isNewSession: boolean;
-  rotatedSessionId: boolean;
-  usableRequestedSessionId: string | undefined;
-  freshness: SessionFreshness | undefined;
-};
-
 export async function buildAgentSessionPatch(params: {
   freshEntry: SessionEntry | undefined;
   cfg: OpenClawConfig;
@@ -71,7 +57,7 @@ export async function buildAgentSessionPatch(params: {
   pluginOwnerId?: string;
   fallbackSessionId?: string;
   touchInteraction: boolean;
-}): Promise<AgentSessionPatchBuild> {
+}) {
   // Re-evaluate each read; callers retain admission and concurrent-rotation fencing.
   const lifecycleTimestamps = params.freshEntry
     ? await resolveSessionLifecycleTimestampsAsync({
@@ -86,7 +72,7 @@ export async function buildAgentSessionPatch(params: {
     params.hasRestoredCronContinuation ||
     params.freshEntry?.modelSelectionLocked === true ||
     (params.resetPolicy.configured !== true && hasProviderOwnedSession(params.freshEntry));
-  const freshness = params.freshEntry
+  const freshness: SessionFreshness | undefined = params.freshEntry
     ? skipImplicitExpiry
       ? ({ fresh: true } satisfies SessionFreshness)
       : evaluateSessionFreshness({

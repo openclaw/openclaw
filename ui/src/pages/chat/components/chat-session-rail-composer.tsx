@@ -35,7 +35,8 @@ import {
 import { createComposerEmojiMenu } from "./chat-composer-emoji-state.ts";
 import { EmojiMenu } from "./chat-composer-emoji.tsx";
 import { ChatComposerPlusMenu } from "./chat-composer-plus-menu.tsx";
-import { ChatModelControls, type ChatModelControlsProps } from "./chat-model-controls.tsx";
+import { ChatModelControls } from "./chat-model-controls.tsx";
+import type { ChatModelControlsProps } from "./chat-model-controls.types.ts";
 import { ComposerDictationStatus } from "./chat-voice-activity.tsx";
 import { DirectDictationView } from "./direct-dictation-view.tsx";
 
@@ -48,7 +49,9 @@ export function sessionRailQuestion(companion: ChatSessionCompanionThread): stri
     companion.draft.trim() ||
     (companion.attachments?.some((attachment) => attachment.mimeType.startsWith("image/"))
       ? t("chat.rail.askImageQuestion")
-      : "")
+      : companion.attachments?.some((attachment) => attachment.selectionAnnotation)
+        ? t("chat.rail.askSelectionQuestion")
+        : "")
   );
 }
 
@@ -173,6 +176,11 @@ export function SessionRailComposer(props: {
       />
       <div class="agent-chat__composer-lede">
         <ComposerDictationStatus readDictation={() => dictation.read().dictation} />
+        <Show when={props.companion.commentsSaving}>
+          <div class="muted chat-session-rail__save-status" role="status">
+            {t("common.saving")}
+          </div>
+        </Show>
       </div>
       <div class="agent-chat__composer-input-row">
         <label class="agent-chat__composer-combobox chat-session-rail__prompt">

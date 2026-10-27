@@ -616,7 +616,8 @@ describe("GitHub preview decoration cache", () => {
     await read(identity, transport, 1, true);
     rejectAuth = false;
     await read(identity, transport, 1, true);
-    expect(itemHeaders).toEqual([null, null, null, null, null, null, null]);
+    // Reader scopes share a representation only under the same transport and credential.
+    expect(itemHeaders).toEqual([null, null, null, null, '"item"', null, '"item"']);
     expect(avatarHeaders).toEqual([null, null]);
   });
 

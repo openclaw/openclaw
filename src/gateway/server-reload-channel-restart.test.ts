@@ -5,7 +5,7 @@ import { createDeferred, withinTest, withTestTimeout } from "../../test/helpers/
 import type { ChannelPlugin } from "../channels/plugins/types.plugin.js";
 import { readConfigFileSnapshot } from "../config/config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { withPluginLifecycleLease } from "../plugins/plugin-lifecycle-lease.js";
+import { withPluginLifecycleLeaseAsync } from "../plugins/plugin-lifecycle-lease.js";
 import { writeProviderAuthConfig } from "../plugins/provider-auth-config.js";
 import {
   createPluginRegistryOwner,
@@ -163,7 +163,7 @@ it("the config watcher restarts a channel that can save provider settings after 
       warn: vi.fn(),
       error: vi.fn((message: string) => restarted.reject(new Error(message))),
     };
-    let assertReloadOwned: (() => void) | undefined;
+    let assertReloadOwned: (() => Promise<void>) | undefined;
     const reloader = startGatewayConfigReloader({
       scheduler: createTestGatewayScheduler({
         ...reloadClock.clock,
@@ -183,8 +183,8 @@ it("the config watcher restarts a channel that can save provider settings after 
       onWatcherReady: watcherReady.resolve,
       onNoopConfigCommit: async () => {},
       onHotReload: async (plan, next, ownership) => {
-        await withPluginLifecycleLease({}, async (lease) => {
-          assertReloadOwned = () => lease.assertOwned();
+        await withPluginLifecycleLeaseAsync({}, async (lease) => {
+          assertReloadOwned = async () => lease.assertOwned();
         });
         await reloadChannels(owner, plan.restartChannels, {
           log,
@@ -214,9 +214,9 @@ it("the config watcher restarts a channel that can save provider settings after 
       await withinTest(Promise.resolve(reload), signal);
       expect(reloader.isReloading()).toBe(false);
       assert(assertReloadOwned);
-      expect(assertReloadOwned).toThrow(
-        "plugin lifecycle lease core:plugin-lifecycle/global was lost",
-      );
+      await expect(assertReloadOwned()).rejects.toMatchObject({
+        code: "OPENCLAW_STATE_LEASE_LOST",
+      });
       login.resolve();
       await expect(
         withTestTimeout(savedResult, 10_000, "provider settings write did not settle"),

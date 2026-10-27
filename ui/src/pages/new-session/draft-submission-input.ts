@@ -56,6 +56,9 @@ export function prepareDraftSubmission(
   if (!client || !context.gateway.snapshot.hello) {
     return null;
   }
+  if (!startup && !pendingPlacement) {
+    place.modelControl.initializeAccessProgram();
+  }
   const completeInBackground = prepareBackgroundSessionCompletion({
     enabled: background,
     agentId: submissionAgentId,

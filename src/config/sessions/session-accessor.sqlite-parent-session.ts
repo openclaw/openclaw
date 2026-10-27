@@ -18,10 +18,10 @@ import {
   formatLegacySqliteSessionMarkerForScope,
   prepareSqliteScope,
 } from "./session-accessor.sqlite-scope.js";
+import { withSessionActorStorage } from "./session-actor-storage-acquisition.js";
 import {
   captureSessionActorStorageOwner,
   getSessionActorStorageBinding,
-  withSessionActorStorage,
   type SessionActorStorageBinding,
 } from "./session-actor-storage-binding.js";
 import { readSessionActorStorageResult } from "./session-actor-storage-result.js";

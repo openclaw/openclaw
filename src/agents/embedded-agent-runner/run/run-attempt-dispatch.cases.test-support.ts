@@ -1,4 +1,57 @@
+import { assert, expect } from "vitest";
+import {
+  loadSessionEntry,
+  loadTranscriptEventsSync,
+} from "../../../config/sessions/session-accessor.js";
+import { isIndexedSessionEntry } from "../../../config/sessions/session-entry-codec.js";
+import { runWithoutOwnedSessionTranscriptWrites } from "../../../config/sessions/transcript-write-context-store.js";
+import type { createAgentHarnessHostCapabilities } from "../../harness/host-capability.js";
 import type { AgentHarnessAttemptParamsV2 } from "../../harness/types.js";
+import { SessionManager } from "../../sessions/session-manager.js";
+import { prepareEmbeddedAttemptTranscriptLifecycle } from "./attempt-transcript-lifecycle-prepare.js";
+
+export async function assertDurableTranscriptRevocation(
+  attempt: Parameters<typeof createAgentHarnessHostCapabilities>[0]["attempt"],
+  workspaceDir: string,
+  revoke: () => void,
+) {
+  assert(attempt.sessionId);
+  assert(attempt.sessionFile);
+  assert(attempt.preparedSessionTarget);
+  const transcript = await prepareEmbeddedAttemptTranscriptLifecycle({
+    attempt: { ...attempt, sessionId: attempt.sessionId, sessionFile: attempt.sessionFile },
+    externalAbortController: { arm() {}, async throwIfFiredAfterPrepCleanup() {} },
+  });
+  try {
+    expect(transcript.ownedTranscriptWriteContext.sessionActor?.actor.target.database.kind).toBe(
+      "file",
+    );
+    await transcript.withOwnedTranscriptWrite(async () => {
+      const target = transcript.ownedTranscriptWriteContext.sessionTarget;
+      const manager = await SessionManager.openAsync(target, workspaceDir);
+      const message = { role: "user" as const, content: "authorized append", timestamp: 1 };
+      await manager.appendMessageAsync(message);
+      const readEvents = () =>
+        runWithoutOwnedSessionTranscriptWrites(() => loadTranscriptEventsSync(target));
+      const readEntry = () =>
+        runWithoutOwnedSessionTranscriptWrites(() => loadSessionEntry(target));
+      const before = readEvents();
+      const entryBefore = readEntry();
+      expect(
+        before.filter((entry) => isIndexedSessionEntry(entry) && entry.type === "message"),
+      ).toEqual([expect.objectContaining({ message })]);
+      expect(entryBefore?.activeWriterRunId).toBe(attempt.runId);
+      revoke();
+      await expect(
+        manager.appendMessageAsync({ ...message, content: "revoked append" }),
+      ).rejects.toThrow("Session target preparation outlived its attempt");
+      expect(readEvents()).toEqual(before);
+      expect(readEntry()).toEqual(entryBefore);
+    });
+  } finally {
+    await transcript.transcriptLifecycle.dispose();
+  }
+}
 
 type DispatchCase = {
   cyberAccessProgram?: AgentHarnessAttemptParamsV2["cyberAccessProgram"];
@@ -20,9 +73,14 @@ type DispatchCase = {
   retryPreparation?: "omit" | "mutate" | "change-cwd";
   cancelTrajectory?: boolean;
   preparedAuth?: "explicit-header" | "no-auth";
+  transcriptTargetInvalidation?: "closed" | "replaced" | "target" | "policy";
 };
 
 export const dispatchCases: DispatchCase[] = [
+  ...(["closed", "replaced", "target", "policy"] as const).map((transcriptTargetInvalidation) => ({
+    agentId: "main",
+    transcriptTargetInvalidation,
+  })),
   { agentId: "main", cyberAccessProgram: "standard" },
   { agentId: "main", cyberAccessProgram: "daybreak_blue" },
   ...(["explicit-header", "no-auth"] as const).map((preparedAuth) => ({

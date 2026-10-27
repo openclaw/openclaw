@@ -133,6 +133,9 @@ describe("serialized Gateway response arrays", () => {
       const frame = { type: "res", id: "list", ok: true, payload };
       const serialized = serializeGatewayFrame(frame);
       expect(toJSON).not.toHaveBeenCalled();
+      expect(serialized).toBeInstanceOf(SerializedGatewayFrame);
+      // One envelope prefix and suffix around the borrowed rows, including nested lists.
+      expect((serialized as SerializedGatewayFrame).segments).toHaveLength(3);
       expect(JSON.parse(serialized.toString())).toEqual({
         ...frame,
         payload: subscription

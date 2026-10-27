@@ -14,6 +14,18 @@ const replaceFilter = (token: string, pattern: RegExp, replacement = ""): text.T
   activationTokens: [token],
   transform: (value) => value.replace(pattern, replacement),
 });
+const checkpointFilter = (
+  token: string,
+  transform: (value: string) => string,
+): text.TextFilter => ({
+  activationTokens: [token],
+  transform,
+  checkpoint: (value, boundary) => ({
+    text: transform(value),
+    retainStart: boundary,
+    retainedOutputStart: boundary,
+  }),
+});
 function replay(filter: text.TextFilter, chunks: string[], expected: string, strict = false) {
   const projection = project(filter);
   let delivered = "";
@@ -62,16 +74,7 @@ it("preserves an append when downstream filtering cancels an intermediate correc
 });
 
 it("keeps settled equal-length rewrites when later checkpoint windows are unchanged", () => {
-  const rewrite = (value: string) => value.replaceAll("@", "!");
-  const projection = project({
-    activationTokens: ["@"],
-    transform: rewrite,
-    checkpoint: (value, settleBefore) => ({
-      text: rewrite(value),
-      retainStart: settleBefore,
-      retainedOutputStart: settleBefore,
-    }),
-  });
+  const projection = project(checkpointFilter("@", (value) => value.replaceAll("@", "!")));
   expectUpdate(projection.append("@first\n"), "!first\n");
   expectUpdate(projection.append("second\n"), "!first\nsecond\n", "second\n");
   expectUpdate(projection.append("third\n"), "!first\nsecond\nthird\n", "third\n");
@@ -80,30 +83,13 @@ it("keeps settled equal-length rewrites when later checkpoint windows are unchan
 });
 
 it("restores a transformed prefix through chained checkpoints", () => {
-  const rewrite = (value: string) => value.replaceAll("A", "@");
   const projection = project(
-    {
-      activationTokens: ["secret"],
-      transform: (value) => value,
-      checkpoint: (value, boundary) => ({
-        text: value,
-        retainStart: boundary,
-        retainedOutputStart: boundary,
-      }),
-    },
+    checkpointFilter("secret", (value) => value),
     {
       activationTokens: ["secret"],
       transform: (value) => (value.endsWith("!") ? value : value.replace("secret ", "")),
     },
-    {
-      activationTokens: ["A"],
-      transform: rewrite,
-      checkpoint: (value, boundary) => ({
-        text: rewrite(value),
-        retainStart: boundary,
-        retainedOutputStart: boundary,
-      }),
-    },
+    checkpointFilter("A", (value) => value.replaceAll("A", "@")),
   );
   expectUpdate(projection.append("secret A\n\nB\n\nC"), "@\n\nB\n\nC");
   expectUpdate(projection.append("!"), "secret @\n\nB\n\nC!", null);

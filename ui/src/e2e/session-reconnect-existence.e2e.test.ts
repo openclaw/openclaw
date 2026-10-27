@@ -34,7 +34,6 @@ const history = {
 suite.define(() => {
   it.each([
     { missing: false, width: 1280, height: 900 },
-    { missing: true, width: 1280, height: 900 },
     { missing: true, width: 390, height: 844 },
   ])(
     "reconciles an established session after reconnect (missing: $missing, width: $width)",

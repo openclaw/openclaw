@@ -368,11 +368,11 @@ it.each([
     expected: `Worked · 1 tool call · 1 ${kind === "blocked" ? "blocked" : "skipped"}`,
   })),
   {
-    name: "unresolved anonymous raw call",
+    name: "unpaired anonymous raw call does not claim an unknown outcome",
     messages: [
       createAssistantMessage([{ type: "toolCall", name: "exec", arguments: { command: "pwd" } }]),
     ],
-    expected: "Worked · 1 tool call · 1 unknown",
+    expected: "Worked · 1 tool call",
   },
 ])("summarizes work outcomes: $name", async ({ messages, expected }) => {
   expect(await workSummaryText(messages)).toBe(expected);

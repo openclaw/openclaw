@@ -104,7 +104,8 @@ function isActiveDraft(record: StoredDurableComposerDraft): boolean {
     record.replyTarget ||
     record.modelSelection ||
     record.attachments.length > 0 ||
-    record.questionDrafts?.length,
+    record.questionDrafts?.length ||
+    record.selectionAnnotations?.length,
   );
 }
 
@@ -122,6 +123,7 @@ function tombstone(record: StoredDurableComposerDraft, now: number): StoredDurab
     questionDrafts: undefined,
     updatedAt: now,
     writeId: `fence:${revision}`,
+    selectionAnnotations: undefined,
   };
 }
 
@@ -240,6 +242,7 @@ function isLegacyChatDraft(record: StoredDurableComposerDraft): boolean {
   return (
     !record.scopeKey.startsWith(CHAT_SCOPE_PREFIX) &&
     !record.scopeKey.startsWith("questions:v1:") &&
+    !record.scopeKey.startsWith("comments:v1:") &&
     record.scopeKey.includes("\u0000agent:") &&
     isActiveDraft(record)
   );
@@ -470,6 +473,9 @@ export async function readDurableComposerDraft(
         ...(current.modelSelection ? { modelSelection: current.modelSelection } : {}),
         attachments: current.attachments,
         ...(current.questionDrafts?.length ? { questionDrafts: current.questionDrafts } : {}),
+        ...(current.selectionAnnotations?.length
+          ? { selectionAnnotations: current.selectionAnnotations }
+          : {}),
       },
     };
   });
@@ -535,6 +541,9 @@ export async function writeDurableComposerDraft(
       ...(draft.modelSelection ? { modelSelection: draft.modelSelection } : {}),
       attachments: draft.attachments,
       ...(draft.questionDrafts?.length ? { questionDrafts: draft.questionDrafts } : {}),
+      ...(draft.selectionAnnotations?.length
+        ? { selectionAnnotations: draft.selectionAnnotations }
+        : {}),
       updatedAt: now,
       writeId: options.writeId,
     };
@@ -582,6 +591,13 @@ async function retireDurableDraftInStore(
     await retireDurableDraftInStore(
       store,
       { ...scope, scopeKey: `questions:v1:${scope.scopeKey}` },
+      minimumRevision,
+      retireBeforeRevision,
+      now,
+    );
+    await retireDurableDraftInStore(
+      store,
+      { ...scope, scopeKey: `comments:v1:${scope.scopeKey}` },
       minimumRevision,
       retireBeforeRevision,
       now,

@@ -13,17 +13,16 @@ export const recoveryRun = {
   sessionId: "session-1",
 };
 
-export function interruptedRecoveryEntry(
+export const interruptedRecoveryEntry = (
   overrides: Partial<SessionEntry> = {},
   recovery: Partial<MainRestartRecoveryState> = {},
-): SessionEntry {
-  return recoveryEntry({
+): SessionEntry =>
+  recoveryEntry({
     status: "interrupted",
     abortedLastRun: true,
     mainRestartRecovery: recoveryState(recovery),
     ...overrides,
   });
-}
 
 export function prepareRecoveryAttempt(
   entry: SessionEntry,
@@ -85,15 +84,13 @@ export function recoveryState(
   return { cycleId: "cycle-1", revision: 1, chargedAttempts: 0, ...overrides };
 }
 
-export function recoveryEntry(overrides: Partial<SessionEntry> = {}): SessionEntry {
-  return {
-    sessionId: "session-1",
-    updatedAt: 100,
-    abortedLastRun: false,
-    mainRestartRecovery: recoveryState(),
-    ...overrides,
-  };
-}
+export const recoveryEntry = (overrides: Partial<SessionEntry> = {}): SessionEntry => ({
+  sessionId: "session-1",
+  updatedAt: 100,
+  abortedLastRun: false,
+  mainRestartRecovery: recoveryState(),
+  ...overrides,
+});
 
 export function claimForeground(entry: SessionEntry, runId?: string) {
   return transitionMainSessionRecovery(entry, {
