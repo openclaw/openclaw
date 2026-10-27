@@ -46,7 +46,7 @@ it("retains a frequently read sidebar baseline beyond 32 views and evicts the co
     const release = retainSessionListForegroundWork();
     try {
       const cold = await read(2);
-      const hot = await read(3);
+      let hot = await read(3);
       const partitionCounts = () =>
         getSessionRowSelectionMetrics().partitions.reduce(
           (sum, counter) => ({
@@ -57,7 +57,11 @@ it("retains a frequently read sidebar baseline beyond 32 views and evicts the co
         );
       const before = partitionCounts();
       sessionChanges.emit({ ...scope, scope: "transcript", facts: { kind: "unchanged" } });
-      expect((await read(3, hot.rowsRevision)).rowsUnchanged).toBe(true);
+      hot = await read(3);
+      expect(hot.sessions.map((row) => row.key)).toEqual([
+        "agent:main:retained-0",
+        "agent:main:retained-1",
+      ]);
       const after = partitionCounts();
       expect(after.misses).toBe(before.misses);
       expect(after.hits).toBeGreaterThan(before.hits);

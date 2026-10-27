@@ -435,6 +435,7 @@ try {
   await run(iterations, true);
   const used = process.threadCpuUsage(before);
   const elapsedMs = performance.now() - started;
+  const afterSelections = workMetrics.getSessionRowSelectionMetrics();
   const allocation =
     values.mode === "allocation"
       ? (await inspector.post("HeapProfiler.stopSampling")).profile
@@ -456,7 +457,6 @@ try {
   }
   writeFileSync(path.join(root, "golden.json"), JSON.stringify(golden, null, 2));
   const bytes = allocation ? sampledBytes(allocation) : undefined;
-  const afterSelections = workMetrics.getSessionRowSelectionMetrics();
   const partitionTotals = (metrics: typeof beforeSelections) =>
     metrics.partitions.reduce(
       (total, part) => ({ hits: total.hits + part.hits, misses: total.misses + part.misses }),
