@@ -9,6 +9,7 @@ import {
 import type { EngineConnection } from "../../infra/sql-connection.js";
 import { runSqliteReadSnapshotSync } from "../../infra/sqlite-transaction.js";
 import { stagedInputPathDirectory } from "../../media/staged-inputs.js";
+import { shellEscape } from "../../shared/shell-quote.js";
 import type { DB } from "../../state/openclaw-state-db.generated.js";
 import {
   localWorkspaceDigestBytes,
@@ -108,6 +109,7 @@ function readManifestRowsInSnapshot(db: EngineConnection, input: LocalWorkspaceM
         "canonical_fingerprints",
         "projection_fingerprints",
         "pending_ref",
+        "checkpoint_json",
       ])
       .where("worktree_id", "=", input.id),
   );
@@ -208,6 +210,36 @@ export async function executeLocalWorkspaceManifestRead(
       ? localWorkspaceDigestReference(row.tree_root_digest)
       : row.baseline_ref;
     const retained = buildCacheInputPaths(parseLocalWorkspaceSourcePaths(row.source_paths_json));
+    // A pending receipt can name an intact result after both live sides have
+    // moved beyond the baseline. Its saved delta can reconstruct the merge base.
+    const checkpoint = row.checkpoint_json
+      ? (JSON.parse(row.checkpoint_json) as LocalWorkspaceManifestCheckpoint) // SAFETY: Owner-written checkpoint.
+      : undefined;
+    const documents = checkpoint
+      ? [
+          parseWorkerWorkspaceManifest(
+            checkpoint.baseManifestRaw,
+            checkpoint.baseManifestRef,
+            [...retained],
+            "stored",
+          ),
+          parseWorkerWorkspaceManifest(
+            checkpoint.currentManifestRaw,
+            checkpoint.currentManifestRef,
+            [...retained],
+            "stored",
+          ),
+        ].map(
+          (manifest) =>
+            new Map<string, LocalWorkspaceManifestNode>([
+              ...manifest.entries.map((node) => [node.path, node] as const),
+              ...(manifest.directories ?? []).map(
+                (entryPath) =>
+                  [entryPath, { path: entryPath, type: "directory" as const }] as const,
+              ),
+            ]),
+        )
+      : [];
     let scanFailure: unknown;
     for (const root of [row.projection_path, action.canonicalRoot]) {
       const nodes: LocalWorkspaceManifestNode[] = [];
@@ -220,6 +252,13 @@ export async function executeLocalWorkspaceManifestRead(
                 assertCurrent: () => undefined,
               })
             : undefined;
+        if (includePaths) {
+          for (const document of documents) {
+            for (const entryPath of document.keys()) {
+              includePaths.add(entryPath);
+            }
+          }
+        }
         await scanActualWorkspaceManifest({
           root,
           baseCommit: row.base_commit,
@@ -232,11 +271,28 @@ export async function executeLocalWorkspaceManifestRead(
         continue;
       }
       const records = createLocalWorkspaceManifestTree(nodes);
+      if (
+        checkpoint &&
+        records.get("")!.treeRef === checkpoint.treeRoot &&
+        expectedRoot === checkpoint.previousTreeRoot
+      ) {
+        const [base, result] = documents;
+        updateLocalWorkspaceManifestTree(
+          records,
+          [...new Set([...base!.keys(), ...result!.keys()])].map((entryPath) => ({
+            path: entryPath,
+            node: base!.get(entryPath),
+          })),
+        );
+      }
       const treeRoot = records.get("")!.treeRef;
+      const repairedNodes = [...records.values()]
+        .map(({ node }) => node)
+        .filter((node) => node.path !== "");
       const rebuiltRoot = row.tree_root_digest
         ? treeRoot
         : row.baseline_json
-          ? manifestDocument(nodes, row.base_commit, undefined, "stored").manifestRef
+          ? manifestDocument(repairedNodes, row.base_commit, undefined, "stored").manifestRef
           : localWorkspaceManifestRootReference(records, row.base_commit);
       // Reconstruct only the exact saved merge base. Divergent live files remain edits.
       if (rebuiltRoot === expectedRoot) {
@@ -259,7 +315,11 @@ export async function executeLocalWorkspaceManifestRead(
       }
     }
     throw new Error(
-      "Local workspace baseline nodes are missing and neither workspace matches the saved baseline. Preserve both workspaces and restore a verified baseline backup before retrying.",
+      "Local workspace baseline nodes are missing and neither workspace matches the saved baseline or a verified checkpoint. " +
+        `Both workspaces were preserved: canonical ${action.canonicalRoot}; sandbox ${row.projection_path}. ` +
+        "A Gateway administrator must recover the saved baseline inventory before retrying the session. Inspect the preserved changes with: " +
+        `diff -ru -- ${shellEscape(action.canonicalRoot)} ${shellEscape(row.projection_path)}. ` +
+        "Do not recreate or delete either workspace; retrying cannot safely choose between divergent edits.",
       { cause: scanFailure },
     );
   }

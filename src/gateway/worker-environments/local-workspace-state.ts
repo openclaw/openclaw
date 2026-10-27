@@ -124,8 +124,8 @@ export function projectionOperations(
       ) {
         throw error;
       }
-      // A preparation stalled across GC epochs can lose unaccepted content. Restore
-      // only an exact digest match; divergent files must never replace the merge base.
+      // Repair older missing packs only from a verified baseline or checkpoint;
+      // divergent files must never replace the merge base.
       await repairBaseline();
       return await store.manifest(current(), action);
     }
