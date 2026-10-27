@@ -1,3 +1,4 @@
+import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 import { z } from "zod";
 import { SecretInputSchema } from "./zod-schema.secret-input.js";
 import { sensitive } from "./zod-schema.sensitive.js";
@@ -22,7 +23,10 @@ export const MemorySearchSchema = z
       })
       .optional(),
     experimental: z.strictObject({ sessionMemory: z.boolean().optional() }).optional(),
-    provider: z.string().optional(),
+    // Provider ids are case-insensitive at the config boundary: the runtime sentinel
+    // check ("none") and the embedding-provider registry lookup are case-sensitive,
+    // so authored casing such as "None" must be normalized here.
+    provider: z.string().transform(normalizeOptionalLowercaseString).optional(),
     remote: z
       .strictObject({
         baseUrl: z.string().optional(),
@@ -35,7 +39,7 @@ export const MemorySearchSchema = z
           .optional(),
       })
       .optional(),
-    fallback: z.string().optional(),
+    fallback: z.string().transform(normalizeOptionalLowercaseString).optional(),
     model: z.string().optional(),
     inputType: z.string().min(1).optional(),
     queryInputType: z.string().min(1).optional(),

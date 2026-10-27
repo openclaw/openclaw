@@ -5,6 +5,7 @@ import {
   type MemoryEmbeddingProviderCreateOptions,
   type MemoryEmbeddingProviderRuntime,
 } from "openclaw/plugin-sdk/memory-core-host-engine-embeddings";
+import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { formatErrorMessage } from "../dreaming-shared.js";
 import type { MemoryCoreAcquireLocalService } from "./embedding-local-service.js";
 import { MemoryManagerReloadError } from "./lifecycle.js";
@@ -104,7 +105,9 @@ export function resolveEmbeddingProviderAdapterTransport(
 
 export function resolveEmbeddingProviderIndexIdentity(options: CreateEmbeddingProviderOptions) {
   const provider =
-    options.provider === "auto" ? DEFAULT_MEMORY_EMBEDDING_PROVIDER : options.provider;
+    normalizeLowercaseStringOrEmpty(options.provider) === "auto"
+      ? DEFAULT_MEMORY_EMBEDDING_PROVIDER
+      : options.provider;
   try {
     const adapter = getAdapter(provider, options.config);
     const createOptions = resolveAdapterCreateOptions(adapter, { ...options, provider });
@@ -139,7 +142,9 @@ export async function createEmbeddingProvider(
   options: CreateEmbeddingProviderOptions,
 ): Promise<EmbeddingProviderResult> {
   const provider =
-    options.provider === "auto" ? DEFAULT_MEMORY_EMBEDDING_PROVIDER : options.provider;
+    normalizeLowercaseStringOrEmpty(options.provider) === "auto"
+      ? DEFAULT_MEMORY_EMBEDDING_PROVIDER
+      : options.provider;
   const primaryAdapter = getAdapter(provider, options.config);
   try {
     return await createWithAdapter(primaryAdapter, {
@@ -151,7 +156,12 @@ export async function createEmbeddingProvider(
       throw primaryErr;
     }
     let reason = formatProviderError(primaryAdapter, primaryErr);
-    if (options.fallback && options.fallback !== "none" && options.fallback !== provider) {
+    const normalizedFallback = normalizeLowercaseStringOrEmpty(options.fallback);
+    if (
+      normalizedFallback &&
+      normalizedFallback !== "none" &&
+      normalizedFallback !== normalizeLowercaseStringOrEmpty(provider)
+    ) {
       const fallbackAdapter = getAdapter(options.fallback, options.config);
       try {
         const fallbackResult = await createWithAdapter(fallbackAdapter, {

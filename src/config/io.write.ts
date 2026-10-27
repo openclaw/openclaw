@@ -81,6 +81,7 @@ import {
   createConfigValidationFailedError,
   type ConfigWriteRollbackStatus,
 } from "./io.write-errors.js";
+import { canonicalizeExplicitMemorySearchProviderSlots } from "./io.write-memory-search-provider.js";
 import { injectExplicitlySetPaths, resolvePersistCandidateForWrite } from "./io.write-prepare.js";
 import {
   assertBaseSnapshotStillCurrent,
@@ -235,6 +236,14 @@ export async function writeConfigFileFromContext(
       });
     }
   }
+  // The config boundary normalizes memory-search provider ids in memory, so an explicitly
+  // set provider id has to reach the file in that same canonical form. Only the slots this
+  // write explicitly sets are canonicalized; every other value stays byte-identical.
+  persistCandidate = canonicalizeExplicitMemorySearchProviderSlots(
+    persistCandidate,
+    explicitSetPaths,
+    explicitSetValueSource,
+  );
   const validationEnvBase = createConfigRuntimeEnvBase(
     snapshot.sourceConfigBeforeMigrations ?? snapshot.sourceConfig,
     deps.env,

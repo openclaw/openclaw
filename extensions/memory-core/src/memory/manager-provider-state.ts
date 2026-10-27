@@ -2,6 +2,7 @@ import type {
   OpenClawConfig,
   ResolvedMemorySearchConfig,
 } from "openclaw/plugin-sdk/memory-core-host-engine-foundation";
+import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   resolveEmbeddingProviderFallbackModel,
   resolveEmbeddingProviderFallbackRemote,
@@ -94,7 +95,7 @@ export function resolveMemoryFallbackProviderRequest(params: {
   const fallback = params.settings.fallback;
   if (
     !fallback ||
-    fallback === "none" ||
+    normalizeLowercaseStringOrEmpty(fallback) === "none" ||
     !params.currentProviderId ||
     fallback === params.currentProviderId
   ) {

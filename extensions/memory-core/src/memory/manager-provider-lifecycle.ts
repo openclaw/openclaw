@@ -19,6 +19,7 @@ import type {
 } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 import { normalizeAgentId } from "openclaw/plugin-sdk/routing";
 import { redactSensitiveText } from "openclaw/plugin-sdk/security-runtime";
+import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   resolveEmbeddingProviderAdapterTransport,
   type EmbeddingProvider,
@@ -58,7 +59,10 @@ export type MemoryEmbeddingBootstrapDebug = NonNullable<
 export function resolveEffectiveMemorySearchSettings(
   settings: ResolvedMemorySearchConfig,
 ): ResolvedMemorySearchConfig {
-  if (settings.provider !== "none" || !settings.store.vector.enabled) {
+  if (
+    normalizeLowercaseStringOrEmpty(settings.provider) !== "none" ||
+    !settings.store.vector.enabled
+  ) {
     return settings;
   }
   return {
@@ -79,10 +83,13 @@ export function resolveMemoryEmbeddingProviderRequirement(params: {
   settings: ResolvedMemorySearchConfig;
 }): MemoryEmbeddingProviderRequirement {
   const agentEntry = resolveAgentConfig(params.cfg, normalizeAgentId(params.agentId));
-  const configuredProvider = (
-    agentEntry?.memory?.search?.provider ?? params.cfg.memory?.search?.provider
-  )?.trim();
-  if (params.settings.provider === "none" || configuredProvider === "none") {
+  const configuredProvider = normalizeLowercaseStringOrEmpty(
+    agentEntry?.memory?.search?.provider ?? params.cfg.memory?.search?.provider,
+  );
+  if (
+    normalizeLowercaseStringOrEmpty(params.settings.provider) === "none" ||
+    configuredProvider === "none"
+  ) {
     return { mode: "fts-only", provider: params.settings.provider };
   }
   const adapterTransport = resolveEmbeddingProviderAdapterTransport(
@@ -412,7 +419,7 @@ export abstract class MemoryProviderLifecycle extends MemoryManagerEmbeddingOps 
       }
       this.resetProviderInitializationForRetry();
     }
-    if (this.settings.provider === "none") {
+    if (normalizeLowercaseStringOrEmpty(this.settings.provider) === "none") {
       this.applyProviderResult({
         provider: null,
         requestedProvider: "none",
@@ -579,7 +586,7 @@ export abstract class MemoryProviderLifecycle extends MemoryManagerEmbeddingOps 
   }) {
     // Provider retirement preserves configured identity for both search and status.
     const provider =
-      this.settings.provider === "none"
+      normalizeLowercaseStringOrEmpty(this.settings.provider) === "none"
         ? null
         : this.providerInitialized && this.providerLifecycle.mode !== "degraded"
           ? this.provider
@@ -598,7 +605,10 @@ export abstract class MemoryProviderLifecycle extends MemoryManagerEmbeddingOps 
     const meta = indexState ? indexState.meta : this.readMeta();
     const state = this.resolveCurrentIndexIdentityState({
       meta,
-      provider: meta && meta.provider !== "none" ? { id: meta.provider, model: meta.model } : null,
+      provider:
+        meta && normalizeLowercaseStringOrEmpty(meta.provider) !== "none"
+          ? { id: meta.provider, model: meta.model }
+          : null,
       providerKeyKnown: false,
       vectorReady: false,
       ...(indexState ? { hasIndexedChunks: indexState.hasIndexedChunks } : {}),
