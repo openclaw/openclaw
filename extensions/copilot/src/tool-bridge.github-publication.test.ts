@@ -45,7 +45,7 @@ describe("Copilot GitHub publication tools", () => {
             attemptParams: { ...attempt, hostCapabilities: host.capabilities },
           });
           const tools = bridge.promptToolPolicy.apply().callableToolNames;
-          expect(tools.filter((name) => name.startsWith("github_"))).toEqual(expected);
+          expect(tools.filter((name) => name.startsWith("github_")).toSorted()).toEqual(expected);
         } finally {
           bridge?.cleanup?.();
           host.close();

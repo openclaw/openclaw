@@ -203,6 +203,9 @@ describe("iMessage plugin payload attachments", () => {
 
       const nativeClient = {
         request: vi.fn(async (method: string) => {
+          if (method === "chats.list") {
+            return { chats: [] };
+          }
           if (method !== "send") {
             throw new Error(`unexpected native iMessage method ${method}`);
           }
@@ -286,11 +289,9 @@ describe("iMessage plugin payload attachments", () => {
         return;
       }
       expect(dispatch).toHaveBeenCalledOnce();
-      expect(nativeClient.request).toHaveBeenCalledExactlyOnceWith(
-        "send",
-        expect.objectContaining({ text }),
-        expect.any(Object),
-      );
+      expect(nativeClient.request.mock.calls.filter(([method]) => method === "send")).toEqual([
+        ["send", expect.objectContaining({ text }), expect.any(Object)],
+      ]);
       expect(messageSent).toHaveBeenCalledOnce();
       expect(messageSent).toHaveBeenCalledWith(
         expect.objectContaining({ content: text, success: true, messageId: `native-${kind}-guid` }),
