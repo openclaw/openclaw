@@ -4,14 +4,21 @@ import {
   commandResult,
   githubPublicationTestMocks,
   installGitHubPublicationTestHarness,
+  persistPublicationTestSession,
+  root,
 } from "./github-publication.test-support.js";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { expect, it, vi } from "vitest";
+import { withinTest } from "../../test/helpers/promise.js";
+import { upsertSessionEntryCore } from "../config/sessions/session-accessor.js";
 import * as sqliteQueries from "../infra/kysely-sync.js";
 import * as stateReads from "../state/openclaw-state-db-readonly.js";
 import { GitHubPublicationRecoveryPendingError } from "./github-publication-git-index.js";
+import { createRealPublicationWorkspace } from "./github-publication-git.test-support.js";
 import {
+  createRequesterPolicyFixture,
+  capturePublicationGuest,
   createRequesterPublicationFixture,
   holdWorkerTurn,
 } from "./github-publication-requester.test-support.js";
@@ -70,6 +77,128 @@ installGitHubPublicationTestHarness({
   creatorEmail: "publication-guest@example.test",
   sandbox: "required",
   realWorktree: true,
+});
+
+it("recovers independent worktrees while preserving each worktree's publication order", async ({
+  signal,
+}) => {
+  vi.stubEnv("GIT_AUTHOR_DATE", "2026-10-27T00:00:00Z");
+  vi.stubEnv("GIT_COMMITTER_DATE", "2026-10-27T00:00:00Z");
+  const first = await fixture("local");
+  const firstWorktree = mocks.findWorktree("session", first.session.sessionKey);
+  const firstTransport = mocks.runCommand.getMockImplementation()!;
+  const secondSession = {
+    sessionId: "session-publication",
+    sessionKey: "agent:main:dashboard:independent-publication",
+  };
+  await persistPublicationTestSession(secondSession.sessionKey);
+  const secondRoot = path.join(root, "independent");
+  await fs.mkdir(secondRoot);
+  mocks.findWorktree.mockReturnValue({
+    ...firstWorktree,
+    id: "independent-worktree",
+    ownerId: secondSession.sessionKey,
+    branch: "openclaw/independent-publication",
+    repoFingerprint: "independent-fingerprint",
+  });
+  await createRealPublicationWorkspace({
+    root: secondRoot,
+    branch: "openclaw/independent-publication",
+    sessionKey: secondSession.sessionKey,
+    realWorktree: true,
+    mocks,
+    commandResult,
+  });
+  const secondWorktree = mocks.findWorktree("session", secondSession.sessionKey);
+  await upsertSessionEntryCore(
+    { agentId: "main", sessionKey: secondSession.sessionKey },
+    {
+      worktree: {
+        id: secondWorktree.id,
+        branch: secondWorktree.branch,
+        repoRoot: secondWorktree.repoRoot,
+      },
+    },
+  );
+  const secondTransport = mocks.runCommand.getMockImplementation()!;
+  const second = await createRequesterPolicyFixture(secondSession);
+  mocks.findWorktree.mockImplementation((_kind, ownerId) =>
+    ownerId === first.session.sessionKey ? firstWorktree : secondWorktree,
+  );
+  mocks.findWorktreeById.mockImplementation((id) =>
+    id === firstWorktree.id ? firstWorktree : secondWorktree,
+  );
+  mocks.resolveRepository.mockImplementation(async (cwd) => {
+    const worktree = cwd === first.local!.cwd ? firstWorktree : secondWorktree;
+    return {
+      checkoutRoot: cwd,
+      repoRoot: cwd,
+      fingerprint: worktree.repoFingerprint,
+      originUrl: "git@github.com:openclaw/openclaw.git",
+    };
+  });
+  const firstDispatched = Promise.withResolvers<void>();
+  const independentDispatched = Promise.withResolvers<void>();
+  const firstResponse = Promise.withResolvers<void>();
+  const titles: string[] = [];
+  mocks.runCommand.mockImplementation(
+    async (argv: string[], options?: { cwd?: string; input?: string }) => {
+      if (isPullCreation(argv)) {
+        const title = JSON.parse(options!.input!).title as string;
+        titles.push(title);
+        if (title === "first") {
+          firstDispatched.resolve();
+          await firstResponse.promise;
+        } else if (title === "independent") {
+          independentDispatched.resolve();
+        }
+      }
+      return await (options?.cwd === first.local!.cwd ? firstTransport : secondTransport)(
+        argv,
+        options,
+      );
+    },
+  );
+  for (const session of [first.session, secondSession]) {
+    await first.placements.startDispatch({
+      ...session,
+      agentId: "main",
+      profileId: "development",
+      executionMode: "worker-turn",
+    });
+  }
+  const firstGuest = await capturePublicationGuest(first);
+  const secondGuest = await capturePublicationGuest(second);
+  const requests = [
+    await first.coordinator.requestForSessionV2(first.request("first", firstGuest.requester)),
+    await first.coordinator.requestForSessionV2(first.request("next", firstGuest.requester)),
+    await first.coordinator.requestForSessionV2({
+      sessionKey: secondSession.sessionKey,
+      agentId: "main",
+      idempotencyKey: "independent",
+      title: "independent",
+      requester: secondGuest.requester,
+    }),
+  ];
+  expect(requests.map(({ status }) => status)).toEqual(["requested", "requested", "requested"]);
+  const recovery = first.coordinator.resumeSessionRequests();
+  try {
+    await withinTest(Promise.race([firstDispatched.promise, recovery]), signal);
+    await withinTest(Promise.race([independentDispatched.promise, recovery]), signal);
+    expect(titles).toContain("independent");
+    expect(titles).not.toContain("next");
+  } finally {
+    firstResponse.resolve();
+    await recovery;
+  }
+  expect(requests.map(({ requestId }) => first.readReceipt(requestId)?.status)).toEqual([
+    "published",
+    "published",
+    "published",
+  ]);
+  const calls = mocks.runCommand.mock.calls.length;
+  await first.restart().resumeSessionRequests();
+  expect(mocks.runCommand.mock.calls.slice(calls).filter(([argv]) => argv[0] === "gh")).toEqual([]);
 });
 
 it.each(["local", "repository"] as const)(
