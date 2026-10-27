@@ -30,6 +30,7 @@ import { buildDeviceAuthPayloadV3 } from "../../packages/gateway-client/src/devi
 import { PROTOCOL_VERSION } from "../../packages/gateway-protocol/src/version.ts";
 import { isRecord } from "../../packages/normalization-core/src/record-coerce.ts";
 import type { OpenClawConfig } from "../../src/config/types.openclaw.ts";
+import type { OperatorScope } from "../../src/gateway/operator-scopes.ts";
 import {
   publicKeyRawBase64UrlFromEd25519Pem,
   signEd25519Payload,
@@ -180,7 +181,7 @@ const residentIdentities = Array.from(
   (_, i) => `${identityPrefix}-resident-${i}@example.com`,
 );
 const allowedIdentities = [...identities, ...residentIdentities];
-const scopes = ["operator.admin", "operator.read", "operator.write"];
+const scopes: OperatorScope[] = ["operator.admin", "operator.read", "operator.write"];
 const cfg: OpenClawConfig = JSON.parse(readFileSync(path.join(stateDir, "openclaw.json"), "utf8"));
 const agentIds = ["main", "reviewer", "researcher", "planner"];
 cfg.agents = {
@@ -334,6 +335,7 @@ let spawnError: Error | undefined;
 child.once("error", (error) => {
   spawnError = error;
 });
+assert(child.stdout && child.stderr, "Gateway stdout and stderr pipes are required");
 for (const stream of [child.stdout, child.stderr]) {
   stream.pipe(log, { end: false });
   createInterface({ input: stream }).on("line", (line) => {
