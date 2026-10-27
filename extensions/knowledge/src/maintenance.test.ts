@@ -2,8 +2,10 @@ import { randomUUID } from "node:crypto";
 import { Check } from "typebox/value";
 import { expect, it, vi } from "vitest";
 import { contract } from "./contract.js";
+import { Maintenance } from "./maintenance.js";
 import { RegistryClient } from "./registry-client.js";
 import { createKnowledgeService } from "./service.js";
+import { Stores } from "./stores.js";
 import {
   adopt,
   createVault,
@@ -105,39 +107,67 @@ it("stopping the service ends maintenance: a pass in flight neither re-arms nor 
   ).toStrictEqual([]);
 });
 
-it("stopping during a paused review enqueue leaves no registry worker running", async () => {
-  // Capture the service's registry client to observe its private worker handle.
-  const registries = new Set<RegistryClient>();
-  const call = RegistryClient.prototype.call;
-  const spy = vi.spyOn(RegistryClient.prototype, "call").mockImplementation(function (
+it("stopping during a paused review enqueue settles maintenance before closing the registry", async () => {
+  // Record registry calls and closes, per client, to check their order.
+  const events: string[] = [],
+    closedClients = new Set<RegistryClient>(),
+    registries = new Set<RegistryClient>();
+  const call = RegistryClient.prototype.call,
+    close = RegistryClient.prototype.close;
+  const callSpy = vi.spyOn(RegistryClient.prototype, "call").mockImplementation(function (
     this: RegistryClient,
     ...args: Parameters<RegistryClient["call"]>
   ) {
     registries.add(this);
+    if (closedClients.has(this)) {
+      events.push("registry-call-after-close");
+    }
     return call.apply(this, args);
   });
-  afterTest(() => spy.mockRestore());
-  // The review enqueue settles only once stop has closed the registry, the
-  // latest point a slow enqueue can settle while stop is still in progress.
-  let closed!: () => void;
-  const registryClosed = new Promise<void>((resolve) => (closed = resolve));
-  const close = RegistryClient.prototype.close;
-  const closeSpy = vi.spyOn(RegistryClient.prototype, "close").mockImplementation(async function (
+  const closeSpy = vi.spyOn(RegistryClient.prototype, "close").mockImplementation(function (
     this: RegistryClient,
   ) {
-    await close.call(this);
-    closed();
+    closedClients.add(this);
+    events.push("registry-close");
+    return close.call(this);
   });
-  afterTest(() => closeSpy.mockRestore());
+  // Stores.stop must receive maintenance's settlement as the registry's gate.
+  const stopGates: unknown[] = [];
+  const stop = Stores.prototype.stop;
+  const stopSpy = vi.spyOn(Stores.prototype, "stop").mockImplementation(function (
+    this: Stores,
+    ...args: Parameters<Stores["stop"]>
+  ) {
+    stopGates.push(args[0]);
+    return stop.apply(this, args);
+  });
+  const maintenanceStops: Promise<void>[] = [];
+  const maintenanceStop = Maintenance.prototype.stop;
+  const maintenanceSpy = vi.spyOn(Maintenance.prototype, "stop").mockImplementation(function (
+    this: Maintenance,
+  ) {
+    const settled = maintenanceStop.call(this);
+    maintenanceStops.push(settled);
+    return settled;
+  });
+  afterTest(() => {
+    callSpy.mockRestore();
+    closeSpy.mockRestore();
+    stopSpy.mockRestore();
+    maintenanceSpy.mockRestore();
+  });
   const f = await fixture({ reviewJobId: "review-job" }),
     scheduler = fakeScheduler(Date.parse("2026-10-22T10:20:00Z"));
   let entered!: () => void, release!: () => void;
   const enqueued = new Promise<void>((resolve) => (entered = resolve)),
     paused = new Promise<void>((resolve) => (release = resolve));
+  // A failed assertion must not leave the pass, and so its service stop, paused.
+  afterTest(() => release());
   const cron = {
     enqueueRun: async () => {
       entered();
       await paused;
+      events.push("enqueue-settled");
       return { ok: true, enqueued: true, runId: "run-1" };
     },
   };
@@ -146,10 +176,15 @@ it("stopping during a paused review enqueue leaves no registry worker running", 
   const pass = scheduler.fire("knowledge-maintenance");
   await enqueued;
   const stopped = f.lifecycles[0].stop();
-  await Promise.race([registryClosed, new Promise((resolve) => setTimeout(resolve, 2_000))]);
+  expect(maintenanceStops, "stop asks maintenance to settle").toHaveLength(1);
+  expect(stopGates, "the registry closes only after maintenance settles").toStrictEqual(
+    maintenanceStops,
+  );
+  expect(events, "nothing closes while the enqueue is paused").toStrictEqual([]);
   release();
   await stopped;
   await pass;
+  expect(events).toStrictEqual(["enqueue-settled", "registry-close"]);
   expect(registries.size).toBeGreaterThan(0);
   for (const registry of registries) {
     expect(Reflect.get(registry, "worker"), "no registry worker after stop").toBeUndefined();
