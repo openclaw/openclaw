@@ -23,6 +23,14 @@ then return to OpenClaw. The page refreshes its saved status and shows **Connect
 after authorization is saved. **Edit** opens the MCP settings page. Sign-in requires
 an administrator connection.
 
+If sign-in fails, the dialog distinguishes an expired attempt, provider refusal,
+an unverifiable provider, rejected connection settings, and network failures.
+Close the dialog and follow its recovery message before starting sign-in again.
+Provider-supplied error descriptions, callback codes, and tokens are not shown.
+If credentials were saved before cleanup failed, the dialog says so; check the
+account status before repeating sign-in. Gateway logs record a bounded failure
+category without copying the provider's response into the message.
+
 Plugin declarations work directly after installation and enablement; no duplicate
 `mcp.servers` entry is needed. An explicit `mcp.servers.<name>` entry overrides the
 plugin's definition, including `enabled: false` to disable that server.
