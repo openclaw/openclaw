@@ -683,6 +683,26 @@ describe("GatewayRelayRealtimeTalkTransport", () => {
     void transport.stop();
   });
 
+  it("detaches after rejected provider tool-result submission and keeps the visible error", async () => {
+    const onStatus = vi.fn();
+    const client = consultReply("talk.session.submitToolResult", async () => {
+      throw new Error("Provider rejected the tool result");
+    });
+    const { transport } = await startRelay(client, { onStatus });
+    await emitConsultAndWait(client);
+    emitFinal("All systems green.");
+
+    await waitForFast(() =>
+      expect(onStatus).toHaveBeenCalledWith("error", "Provider rejected the tool result"),
+    );
+    expect(onStatus).toHaveBeenLastCalledWith("error", "Provider rejected the tool result");
+    expect(onStatus).not.toHaveBeenCalledWith("listening");
+    expect(requestCallsFor(client, "talk.session.submitToolResult")).toHaveLength(1);
+    expectClose(client, "detach");
+    await transport.stop();
+    expect(requestCallsFor(client, "chat.abort")).toHaveLength(0);
+  });
+
   it("submits an interim working result for forced consult tool calls", async () => {
     const { client, transport } = await startRelay(createConsultClient());
     emitForcedConsult();

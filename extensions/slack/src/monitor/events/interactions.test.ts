@@ -18,6 +18,7 @@ import {
 } from "./interactions.test-support.js";
 const {
   enqueueSessionEventMock: enqueueEvent,
+  captureSessionEventTargetMock,
   ack,
   respond,
   readSlackMessagesMock: readMessages,
@@ -890,6 +891,7 @@ describe("registerSlackInteractionEvents", () => {
       );
       if (allowed) {
         expect(respond).not.toHaveBeenCalled();
+        expect(enqueueEvent).toHaveBeenCalledOnce();
         return;
       }
       expectNotCalled(enqueueEvent, app.client.chat.update);

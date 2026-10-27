@@ -466,13 +466,17 @@ describe("matrix monitor handler pairing account scope", () => {
     expect(finalizeInboundContext).toHaveBeenCalledTimes(1);
   });
 
-  it.each([true, false])(
-    "admits native mention metadata only with visible mention=%s",
-    async (visible) => {
+  it.each([
+    ["another homeserver", "hello @bot:evil.example", false, false, false],
+    ["Unicode display name", "@欢欢 please reply", true, false, true],
+    ["forged metadata only", "hello there", false, true, false],
+  ] as const)(
+    "validates native mentions: %s",
+    async (_name, body, formatted, metadataOnly, accepted) => {
       const { handler, recordInboundSession } = createHarness({
         isDirectMessage: false,
-        mentionRegexes: visible ? [] : [/@bot/i],
-        getMemberDisplayName: async () => (visible ? "欢欢" : "sender"),
+        mentionRegexes: metadataOnly ? [/@bot/i] : [],
+        getMemberDisplayName: async () => (formatted ? "欢欢" : "sender"),
       });
       await handler(
         ROOM,
@@ -480,8 +484,8 @@ describe("matrix monitor handler pairing account scope", () => {
           eventId: "$native-mention",
           content: {
             msgtype: "m.text",
-            body: visible ? "@欢欢 please reply" : "hello there",
-            ...(visible
+            body,
+            ...(formatted
               ? {
                   formatted_body:
                     '<a href="https://matrix.to/#/@bot:example.org">@欢欢</a> please reply',
@@ -491,7 +495,7 @@ describe("matrix monitor handler pairing account scope", () => {
           },
         }),
       );
-      if (visible) {
+      if (accepted) {
         expect(recordInboundSession).toHaveBeenCalledOnce();
       } else {
         expect(recordInboundSession).not.toHaveBeenCalled();

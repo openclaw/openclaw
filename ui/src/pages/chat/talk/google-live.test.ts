@@ -293,6 +293,21 @@ describe("GoogleLiveRealtimeTalkTransport", () => {
     expect(createdSources).toHaveLength(4_096);
   });
 
+  it("rejects an oversized first frame before decoding provider audio", async () => {
+    const onStatus = vi.fn();
+    const { ws } = await startFixture({ onStatus });
+    ws.emitContent(audioParts(1, "!".repeat(3_904_000)));
+
+    await waitForFast(() =>
+      expect(onStatus).toHaveBeenCalledWith(
+        "error",
+        "Realtime Talk playback exceeded the browser audio buffer limit",
+      ),
+    );
+    expect(createdSources).toHaveLength(0);
+    expect(ws.readyState).toBe(3);
+  });
+
   it("publishes transcripts and plays Google Live audio frames", async () => {
     const onTranscript = vi.fn();
     const { ws } = await startFixture({ onTranscript });
@@ -449,9 +464,9 @@ describe("GoogleLiveRealtimeTalkTransport", () => {
     ws.emitCalls({ id: "call-unknown", name: "unknown_tool", args: { value: 2 } });
     await flushMicrotasks();
     expect(
-      ws.messages.filter(
-        (payload) => payload.toolResponse?.functionResponses?.[0]?.id === "call-unknown",
-      ),
+      ws.sent
+        .map((payload) => JSON.parse(payload))
+        .filter((payload) => payload.toolResponse?.functionResponses?.[0]?.id === "call-unknown"),
     ).toHaveLength(1);
     transport.stop();
   });
