@@ -1,4 +1,5 @@
 import { afterEach, expect, it, vi } from "vitest";
+import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import { replaceSessionEntrySync } from "../config/sessions/session-accessor.js";
 import { sessionChanges } from "../sessions/session-row-changes.js";
 import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
@@ -36,6 +37,7 @@ it("publishes cold archived ancestor placement and moves only to authorized chil
       ensureProfileForEmail("viewer@ancestor-placement.test"),
     ];
     const cfg = { ...rolePolicyConfig(), agents: { entries: { main: {} } } };
+    setRuntimeConfigSnapshot(cfg);
     const root = "agent:main:root";
     const gateway = "agent:main:gateway";
     const parent = "agent:main:parent";

@@ -202,7 +202,7 @@ try {
           const projected = project(peer.client);
           assert(projected, "Shared synthetic row must reach each recipient");
           if (verifyAncestors) {
-            const payload = projected.payload;
+            const payload: unknown = projected.payload;
             assert(payload && typeof payload === "object" && "ancestorSessions" in payload);
             assert(Array.isArray(payload.ancestorSessions));
             assert.equal(
@@ -213,7 +213,7 @@ try {
           }
           if (digest) {
             // Only randomly generated reference tokens vary between equivalent publications.
-            const payload = projected.payload;
+            const payload: unknown = projected.payload;
             assert(isRecord(payload));
             digest.update(
               JSON.stringify({
