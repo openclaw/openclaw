@@ -1314,7 +1314,6 @@
 ["src/agents/cli-runner/prepare.web-search.test.ts","../tools/gateway.js","1691b9251bdf21a1da4e1f820a511a6505c317ea8fb99066b6c00360e1ff9b40",1]
 ["src/agents/cli-session-store.test.ts","./model-selection.js","c16be4a7bfe9a4c152cedc014045af71c6abc4ed84bb1a48843abc7df26b0d03",1]
 ["src/agents/code-mode-executor.test.ts","../plugins/code-mode-executor.js","c12f9311bf695d8b987e966cb2f9439aed7cdd20e72c9881d16d739952079d33",1]
-["src/agents/code-mode-node.lifecycle.test.ts","../infra/runtime-worker-url.js","4423e746829ce417e7df67fc87bc03960ca9fbe2411bcdafe10fe9c808b8fa64",1]
 ["src/agents/code-mode-swarm.lazy.test.ts","./code-mode-swarm.runtime.js","4c5df8df2f2d97e45e38783e3cfc90096eaffc765053c55aa42a6167e0a13186",1]
 ["src/agents/code-mode-swarm.lazy.test.ts","./subagents/registry/subagent-registry.js","efe17eea321152030b35223b03dbaba21d4362510340da188fcc175fd69cb62d",1]
 ["src/agents/code-mode-swarm.test.ts","./subagents/spawn/subagent-spawn.js","3a9a5926f454ac071d769c28cb3970e6ac5ee54e890f5ecda926b8575ad3298f",1]
