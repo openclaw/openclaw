@@ -344,6 +344,7 @@ const repositoryScriptEntries = [
   "scripts/perf/queued-input-retention.ts!",
   "scripts/perf/queued-input-retention-preload.mjs!",
   "scripts/perf/pty-session-scan-measure.mjs!",
+  "scripts/perf/publication-empty-recovery-measure.ts!",
   "scripts/perf/publication-spawn-measure.ts!",
   "scripts/perf/replay-history-measure.ts!",
   "scripts/perf/run-tool-validation-retention.ts!",
