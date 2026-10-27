@@ -373,7 +373,11 @@ function restoreEnv(name: string, value: string | undefined) {
   }
 }
 
+let cleanupHeldListing: (() => Promise<void>) | undefined;
 afterEach(async () => {
+  // Timeout teardown must join the fixture before resetting its mocks and environment.
+  await cleanupHeldListing?.();
+  cleanupHeldListing = undefined;
   acpRuntimeMocks.resolveAcpSessionAvailability.mockReset().mockReturnValue({ available: true });
   nodeHostMocks.runNodePtyCommand.mockClear();
   processRuntimeMocks.runCommandBuffered.mockClear();
@@ -992,16 +996,20 @@ describe("OpenCode session catalog", () => {
     );
 
     const listing = provider!.list({ hostIds: ["node:node-a", "node:node-b"] });
-    const settledListing = Promise.allSettled([listing]);
+    const fanOut = vi.waitFor(() => expect(invoke).toHaveBeenCalledTimes(2));
+    const settledWork = Promise.allSettled([listing, fanOut]);
+    let cleanupPromise: Promise<void> | undefined;
+    const cleanup = () =>
+      (cleanupPromise ??= (async () => {
+        // The held mock ignores cancellation; join both node tasks and the polling assertion.
+        releaseSlow(page("session-a"));
+        await settledWork;
+      })());
+    cleanupHeldListing = cleanup;
     try {
-      await withinTest(
-        vi.waitFor(() => expect(invoke).toHaveBeenCalledTimes(2)),
-        context.signal,
-      );
+      await withinTest(fanOut, context.signal);
     } finally {
-      // The held mock ignores cancellation; release it and join both node tasks before teardown.
-      releaseSlow(page("session-a"));
-      await settledListing;
+      await cleanup();
     }
     await expect(listing).resolves.toEqual([
       expect.objectContaining({ nodeId: "node-a", sessions: [expect.any(Object)] }),

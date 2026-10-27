@@ -6,7 +6,7 @@ import {
 } from "openclaw/plugin-sdk/llm";
 import { registerSingleProviderPlugin } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { makeAgentAssistantMessage, withinTest } from "openclaw/plugin-sdk/test-fixtures";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 import plugin from "./index.js";
 
 function toolCallMessage(
@@ -117,6 +117,13 @@ const recordTool = (name: string, field: string, valueSchema: Record<string, unk
   tool(name, field, { type: "object", patternProperties: { "^.*$": valueSchema } });
 
 describe("OpenCode stream adapter", () => {
+  let cleanupHeldStream: (() => Promise<void>) | undefined;
+  afterEach(async () => {
+    // Timeout teardown can start before the suspended body finishes its finally block.
+    await cleanupHeldStream?.();
+    cleanupHeldStream = undefined;
+  });
+
   it("aliases the reserved web_search function across OpenCode Responses requests", async (context) => {
     const existingAlias = "openclaw_web_search";
     const wireAlias = "openclaw_web_search_2";
@@ -141,6 +148,15 @@ describe("OpenCode stream adapter", () => {
     const iterator = stream[Symbol.asyncIterator]();
     const result = stream.result();
     const settledResult = Promise.allSettled([result]);
+    let cleanupPromise: Promise<void> | undefined;
+    const cleanup = () =>
+      (cleanupPromise ??= (async () => {
+        // Wake any pending next() before returning the iterator after failure or timeout.
+        fixture.source.end(producerTerminal);
+        await iterator.return?.();
+        await settledResult;
+      })());
+    cleanupHeldStream = cleanup;
     try {
       const first = await withinTest(iterator.next(), context.signal);
       if (first.done) {
@@ -178,10 +194,7 @@ describe("OpenCode stream adapter", () => {
       await expect(withinTest(result, context.signal)).resolves.toMatchObject(restoredContent);
       expect([producerPartial, producerTerminal]).toMatchObject([producerContent, producerContent]);
     } finally {
-      // Wake any pending next() before returning the iterator after failure or timeout.
-      fixture.source.end(producerTerminal);
-      await iterator.return?.();
-      await settledResult;
+      await cleanup();
     }
   });
 
