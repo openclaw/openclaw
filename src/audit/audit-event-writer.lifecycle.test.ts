@@ -15,14 +15,10 @@ import { input } from "./audit-event-writer.test-support.js";
 import type { AuditWriterResult } from "./audit-event-writer.types.js";
 import type { AuditWriterOperations } from "./audit-event-writer.worker.js";
 
-const { execute } = vi.hoisted(() => ({
-  execute:
-    vi.fn<
-      (
-        command: SqliteWorkerCommand<AuditWriterOperations>,
-      ) => Promise<AuditWriterResult[] | undefined>
-    >(),
-}));
+type AuditExecutor = (
+  command: SqliteWorkerCommand<AuditWriterOperations>,
+) => Promise<AuditWriterResult[] | undefined>;
+const { execute } = vi.hoisted(() => ({ execute: vi.fn<AuditExecutor>() }));
 
 // mock-isolation: Exercise FIFO scheduling without opening the shared-state worker.
 vi.mock("../state/openclaw-state-worker-store.js", () => ({
@@ -36,7 +32,6 @@ beforeEach(() => {
   execute.mockReset();
   vi.useFakeTimers({
     toFake: [
-      "performance",
       "setImmediate",
       "clearImmediate",
       "setTimeout",
@@ -92,9 +87,7 @@ function mockEventRequests(handler: (sourceId: string) => Promise<AuditWriterRes
 }
 
 async function stopWriter(writer: ReturnType<typeof startWriter>) {
-  const stopping = writer.stop();
-  await vi.advanceTimersByTimeAsync(10_000);
-  await stopping;
+  await Promise.all([writer.stop(), vi.advanceTimersByTimeAsync(10_000)]);
 }
 
 async function advanceDispatch() {
@@ -104,7 +97,10 @@ async function advanceDispatch() {
 
 describe("audit writer async settlement", () => {
   it.each([false, true])("coalesces neighboring turns (early shutdown: %s)", async (stopEarly) => {
-    const requests = mockEventRequests(async () => ({ status: "settled" }));
+    const first = createDeferred<AuditWriterResult>();
+    const requests = mockEventRequests(async (id) =>
+      id === "first" ? first.promise : { status: "settled" },
+    );
     const writer = startWriter();
     try {
       await vi.advanceTimersByTimeAsync(5);
@@ -112,6 +108,9 @@ describe("audit writer async settlement", () => {
       execute.mockClear();
       for (const sourceId of ["first", "second", "third"]) {
         expect(writer.record(event(sourceId))).toBe(true);
+        if (sourceId === "second") {
+          first.resolve({ status: "settled" });
+        }
         await vi.advanceTimersByTimeAsync(1);
       }
       expect(requests).toEqual(["first"]);
@@ -122,6 +121,7 @@ describe("audit writer async settlement", () => {
       expect(requests).toEqual(["first", "second", "third"]);
       expect(execute).toHaveBeenCalledTimes(stopEarly ? 3 : 2);
     } finally {
+      first.resolve({ status: "settled" });
       await stopWriter(writer);
     }
   });
