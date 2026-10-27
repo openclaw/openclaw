@@ -496,6 +496,7 @@ const repositoryScriptEntries = [
   "scripts/perf/subagent-runtime-registry-measure.ts!",
   "scripts/perf/transcript-payload-prepare-measure.ts!",
   "scripts/perf/transcript-resident-hydration-measure.ts!",
+  "scripts/perf/transcript-selected-payload-measure.ts!",
   "scripts/perf/worker-task-input-measure.mjs!",
   "scripts/perf/worktree-provisioning-gateway-measure.ts!",
   "scripts/perf/worktree-provisioning-measure.ts!",
