@@ -31,6 +31,7 @@ import { DEPLOYED_FTS_ROWS_SCHEMA } from "../../src/state/openclaw-agent-transcr
 import { withLegacyStateHeadLayout } from "../../src/state/openclaw-state-db-schema-v26-layout.js";
 import { withLegacyStateWriteIndexes } from "../../src/state/openclaw-state-db-schema-v27-indexes.js";
 import { withLegacyLocalWorkspaceManifests } from "../../src/state/openclaw-state-db-schema-v31-workspace-manifests.js";
+import { withLegacyLocalWorkspaceCas } from "../../src/state/openclaw-state-db-schema-v35-workspace-cas.js";
 import {
   getOpenClawStateFeatureSchemaSql,
   listOpenClawStateFeatureSchemas,
@@ -57,7 +58,9 @@ export function listSqliteSchemaInputs(): SqliteSchemaInput[] {
     inputs.push({ id, store, sql });
   };
   add("state", "state", OPENCLAW_STATE_SCHEMA_SQL);
-  const stateBeforeV31 = withLegacyLocalWorkspaceManifests(OPENCLAW_STATE_SCHEMA_SQL);
+  const stateBeforeV35 = withLegacyLocalWorkspaceCas(OPENCLAW_STATE_SCHEMA_SQL);
+  add("state-before-v35", "state", stateBeforeV35);
+  const stateBeforeV31 = withLegacyLocalWorkspaceManifests(stateBeforeV35);
   add("state-before-v31", "state", stateBeforeV31);
   const stateBeforeV27 = withLegacyStateWriteIndexes(stateBeforeV31);
   add("state-before-v27", "state", stateBeforeV27);
