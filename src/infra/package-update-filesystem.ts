@@ -144,8 +144,10 @@ async function renamePackageRootWithWindowsRetries(
   options: { operation: string; warn?: (message: string) => void },
 ): Promise<void> {
   const sourceIdentity = fsSync.lstatSync(source, { bigint: true });
-  const parent = path.dirname(source);
-  const parentIdentity = fsSync.lstatSync(parent, { bigint: true });
+  // Activation crosses parents; pin both so a retry cannot follow a swapped junction.
+  const parents = [...new Set([path.dirname(source), path.dirname(destination)])].map(
+    (directory) => ({ directory, identity: fsSync.lstatSync(directory, { bigint: true }) }),
+  );
   let renameFailure: unknown;
   let attempts = 0;
   try {
@@ -153,7 +155,9 @@ async function renamePackageRootWithWindowsRetries(
       async () => {
         renameFailure = undefined;
         assertCurrent();
-        assertPackagePathIdentity(parent, parentIdentity);
+        for (const { directory, identity } of parents) {
+          assertPackagePathIdentity(directory, identity);
+        }
         assertPackagePathIdentity(source, sourceIdentity);
         assertPackagePathIdentity(destination, undefined);
         attempts++;

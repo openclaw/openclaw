@@ -633,6 +633,35 @@ it("stops Windows rollback rename retries when the retained backup changes ident
   await expectFile(path.join(`${backupRoot}.retained`, "marker.txt"), "original");
 });
 
+it("stops Windows activation retries when the live parent is replaced", async () => {
+  const stage = path.join(root, "stage", "openclaw");
+  const scope = path.join(root, "live", "@scope");
+  const live = path.join(scope, "openclaw");
+  await writeFiles({ "stage/openclaw/marker.txt": "candidate", "live/@scope/.keep": "" });
+  const wait = restoreRenameRetryHarness();
+  const rename = fs.rename.bind(fs);
+  let attempts = 0;
+  vi.spyOn(fs, "rename").mockImplementation(async (from, to) => {
+    if (String(from) === stage) {
+      attempts++;
+      throw errno("EPERM: staged package is in use", "EPERM");
+    }
+    return rename(from, to);
+  });
+  wait.mockImplementationOnce(async () => {
+    await rename(scope, `${scope}.retained`);
+    await fs.mkdir(scope);
+  });
+
+  await expect(
+    activateStagedNpmPackageRoot(stage, live, undefined, { warnings: [], platform: "win32" }),
+  ).rejects.toThrow("package path changed");
+
+  expect(attempts).toBe(1);
+  await expectFile(path.join(stage, "marker.txt"), "candidate");
+  await expectMissing(live);
+});
+
 it.each(["copy", "cleanup"] as const)(
   "retains an undefined %s failure through private copy cleanup",
   async (phase) => {
