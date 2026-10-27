@@ -4172,6 +4172,11 @@ SDK callbacks retain their existing owners; incognito forks use the memory actor
 Lifecycle builders run once outside SQL, while their prepared upserts, resets,
 removals, and maintenance commit together in the existing agent executor.
 Creation continues to use its existing typed replacement operation.
+For a single-row upsert with complete host entry facts, preparation validates the
+existing scoped write token and acknowledges the retained row instead of sending
+its snapshots back to the host. Changed tokens and uncovered related rows use the
+ordinary worker read. Builders still receive detached copies, archive recovery is
+read in the worker, and commit retains its exact preimage and live-authority checks.
 
 Reply initialization prepares the current row, declared related rows, and stored
 model parent in one snapshot through the existing session reader. Preprocessing,
