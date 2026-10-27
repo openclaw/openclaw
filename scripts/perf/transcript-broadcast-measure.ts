@@ -39,6 +39,9 @@
 // Add --list-filter-churn to --scenario memory-soak --mixed-rpc to rotate sidebar/search filters.
 // --gateway-preload <file> imports benchmark instrumentation after tsx for source or dist entries;
 // result.json records its resolved path and SHA-256. Use the same instrumentation on both arms.
+// --chat-active-after-tool with --chat-active-hold-ms waits for the first text delta
+// after a committed tool result before sending queued/steering inputs. Requires --runs 1;
+// the stream continues during admission and holds completion for the requested interval.
 // Add --worktree-tool-churn to memory-soak --stress-tools --mixed-rpc to give each
 // foreground session its own managed worktree, read/grep its README, and cycle list searches.
 // This mode keeps a fixed viewer set instead of adding reconnect churn.
@@ -254,6 +257,7 @@ const { values } = parseArgs({
     "prompt-kib": { type: "string", default: "128" },
     "chat-attachment-kib": { type: "string", default: "0" },
     "chat-active-hold-ms": { type: "string", default: "0" },
+    "chat-active-after-tool": { type: "boolean", default: false },
     "heap-snapshot": { type: "boolean", default: false },
     "session-census": { type: "boolean", default: false },
     "fingerprint-retention": { type: "boolean", default: false },
@@ -584,6 +588,9 @@ if (
   );
 }
 const runCount = integer(values.runs ?? (scenario === "chat.send" ? "1" : "20"), "--runs");
+if (values["chat-active-after-tool"] && (!chatActiveHoldMs || runCount !== 1)) {
+  throw new Error("--chat-active-after-tool requires --chat-active-hold-ms and --runs 1");
+}
 const sessionCount = idleScenario ? integer(values.sessions, "--sessions") : runCount;
 const historyBytesPerTurn = 16 * 1024;
 const historyReasoningBytes = 4 * 1024;
@@ -2180,6 +2187,8 @@ let cohort:
       incompleteReasoningSignatures: Map<string, string>;
       phases: StreamStartPhases;
       beforeRelease?: () => Promise<void>;
+      afterToolStreamStart?: () => Promise<void>;
+      activeInputAdmission?: Promise<void>;
       ready: Promise<void>;
       release: () => void;
       reject: (error: Error) => void;
@@ -2618,6 +2627,9 @@ const mock = createServer((req, res) => {
         if (res.destroyed) {
           break;
         }
+        if (continuation && event.type === "response.completed") {
+          await cohort?.activeInputAdmission;
+        }
         if (primary && cohort) {
           cohort.phases.firstPrimarySseWrittenAtEpochMs ??= epochNow();
         }
@@ -2663,6 +2675,16 @@ const mock = createServer((req, res) => {
           );
         } else {
           res.write(`data: ${JSON.stringify(event)}\n\n`);
+        }
+        if (
+          continuation &&
+          event.type === "response.output_text.delta" &&
+          cohort?.afterToolStreamStart
+        ) {
+          const beginActiveInputs = cohort.afterToolStreamStart;
+          cohort.afterToolStreamStart = undefined;
+          cohort.activeInputAdmission = beginActiveInputs();
+          void cohort.activeInputAdmission.catch(cohort.reject);
         }
         if ((primary || continuation) && event.type === "response.output_text.delta") {
           await delay(chunkIntervalMs);
@@ -4115,11 +4137,11 @@ async function runRound(
   };
   const activeAckLatenciesMs: number[] = [];
   let activeAcksBeforeRelease = 0;
+  let activeHoldEnded = false;
   let activeInputWork: Promise<void>[] = [];
   if (chatActiveHoldMs) {
     const beforeRelease = current.beforeRelease;
-    current.beforeRelease = async () => {
-      await beforeRelease?.();
+    const admitActiveInputs = async () => {
       // An older queued input must own custody before later steering attempts arrive.
       await Promise.all(
         roundKeys.map(async (sessionKey) => {
@@ -4137,7 +4159,19 @@ async function runRound(
               queueMode: "followup",
               deliver: false,
             });
-            await Promise.race([queued.promise, current.ready]);
+            if (values["chat-active-after-tool"]) {
+              const queuedTimeout = setTimeout(
+                () => queued.reject(new Error("active predecessor was not queued within 170s")),
+                170_000,
+              );
+              try {
+                await queued.promise;
+              } finally {
+                clearTimeout(queuedTimeout);
+              }
+            } else {
+              await Promise.race([queued.promise, current.ready]);
+            }
           } finally {
             queuedChatInputs.delete(input.runId);
           }
@@ -4158,7 +4192,7 @@ async function runRound(
             deliver: false,
           });
           activeAckLatenciesMs.push(performance.now() - started);
-          if (current.phases.streamsReleasedAtEpochMs === undefined) {
+          if (!activeHoldEnded) {
             activeAcksBeforeRelease++;
           }
         }),
@@ -4168,7 +4202,16 @@ async function runRound(
       }
       // Release independently of ACKs: a blocked baseline reports the held-turn delay.
       await delay(chatActiveHoldMs);
+      activeHoldEnded = true;
     };
+    if (values["chat-active-after-tool"]) {
+      current.afterToolStreamStart = admitActiveInputs;
+    } else {
+      current.beforeRelease = async () => {
+        await beforeRelease?.();
+        await admitActiveInputs();
+      };
+    }
   }
   // Include the first response processing after the mock releases the whole cohort.
   const captureWork =
@@ -4354,6 +4397,11 @@ async function runRound(
       : undefined;
     await Promise.all([cohortReady, captureWork, turns, subagentCompletion]);
     if (chatActiveHoldMs) {
+      if (values["chat-active-after-tool"] && activeInputs.length !== roundKeys.length * 3) {
+        throw new Error(
+          "after-tool streaming did not admit the expected queued and steering inputs",
+        );
+      }
       await Promise.all(activeInputWork);
       // agent.wait reports queued custody immediately; wait for each public terminal event first.
       const terminalDeadline = Promise.withResolvers<never>();
@@ -7588,6 +7636,7 @@ try {
           ...(chatActiveHoldMs
             ? {
                 chatActiveHoldMs,
+                chatActiveAfterTool: values["chat-active-after-tool"],
                 activeChatSendAck: {
                   ...latencySummary(
                     samples.flatMap(
