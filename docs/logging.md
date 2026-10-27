@@ -123,6 +123,11 @@ openclaw doctor
 The Control UI's **Logs** tab tails the same file using `logs.tail`.
 See [Control UI](/web/control-ui) for how to open it.
 
+The tab retains the latest 2,000 lines and renders a window around the current
+scroll position. Filter and Export cover the entire retained history; browser
+Find and native text selection cover the rendered window. Use Filter to find an
+older retained line, or Export to copy all matching lines.
+
 ### Channel-only logs
 
 To filter channel activity (WhatsApp/Telegram/etc), use:

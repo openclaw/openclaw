@@ -296,6 +296,12 @@ If a visible spawn's creation receipt omits that identity, the spawn reports an
 error with the child and run identifiers instead of accepting an undeliverable
 child. Inspect that retained child before retrying; do not spawn a replacement.
 
+After a completed task, an ordinary human turn in the same retained child starts
+a new task using the child identity admitted for that execution, including after
+an administrator resets the session. Input acknowledgement alone does not replace the task owner.
+Previous tasks retain their original identity; paused and interrupted task
+continuations keep their existing task custody.
+
 Historical records with a valid agent-qualified key retain that recorded
 ownership without migration. An explicit
 owner must agree with the key's namespace. Current defaults and the requester's

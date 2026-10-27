@@ -42,7 +42,7 @@ export async function prepareReplySubagentContinuation(
       readChannelContextGatewayContextResolver(turn.sessionCtx) ??
       getPluginRuntimeGatewayRequestScope()?.resolveGatewayContext,
     assertCurrent,
-    acpSession: { cfg, activeSessionAgentId: turn.followupRun.run.agentId, sessionEntry: entry },
+    session: { cfg, activeSessionAgentId: turn.followupRun.run.agentId, sessionEntry: entry },
   });
   assertCurrent();
 }

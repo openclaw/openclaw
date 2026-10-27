@@ -558,6 +558,15 @@ const repositoryScriptEntries = [
   "scripts/perf/installed-plugin-index-fingerprint-measure.ts!",
   "scripts/perf/knowledge-worker-diagnostics-measure.mjs!",
   "scripts/perf/knowledge-worker-heap-measure.mjs!",
+  // These source headers document standalone measurement commands.
+  "scripts/perf/agent-deletion-blocked-measure.ts!",
+  "scripts/perf/chat-history-response-page-measure.mjs!",
+  "scripts/perf/chat-metadata-auth-check-measure.ts!",
+  "scripts/perf/config-schema-retention-measure.ts!",
+  "scripts/perf/sandbox-retirement-authority.ts!",
+  "scripts/perf/subagent-registration-retention.ts!",
+  "scripts/perf/system-prompt-request-measure.ts!",
+  "scripts/perf/worktree-index-metadata-measure.ts!",
   // Maintained source headers invoke these standalone commands by exact path.
   "scripts/perf/archive-worker-startup-measure.mjs!",
   "scripts/perf/archive-canonical-worker-measure.ts!",
@@ -1766,6 +1775,7 @@ const config = {
         "openclaw",
         "sleep",
         "swiftlint",
+        "uptime",
         "xcrun",
       ],
       // The stylelint config lives under config/, not a root default path.

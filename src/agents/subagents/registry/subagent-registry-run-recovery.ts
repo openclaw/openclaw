@@ -313,6 +313,8 @@ export class SubagentRecoveryManager extends SubagentWaitManager {
     allowEndedSource?: boolean;
     /** Ordinary next turns retain the completed execution's independent delivery. */
     preserveCompletedRun?: boolean;
+    /** Current admitted child identity for a new task, never a historical task rebind. */
+    sessionEntry?: SubagentRunRecord["childSessionIdentity"];
     preserveFrozenResultFallback?: boolean;
     // A follow-up that continues a paused run inherits the original requester's
     // wake credential. An operator steer intentionally drops it: the operator is
@@ -457,11 +459,19 @@ export class SubagentRecoveryManager extends SubagentWaitManager {
                 }
               : {}),
           });
-          const childAuthority = preserveCompletedRun
-            ? resolveSubagentChildAuthority(source)
-            : undefined;
+          // A reused key must not transfer the old controller's custody to a different child.
+          const admittedChild =
+            preserveCompletedRun &&
+            replaceParams.sessionEntry?.sessionId === source.childSessionIdentity?.sessionId
+              ? replaceParams.sessionEntry
+              : undefined;
+          const childSessionIdentity =
+            admittedChild ?? absorbed?.childSessionIdentity ?? source.childSessionIdentity;
+          const childAuthority = resolveSubagentChildAuthority(
+            preserveCompletedRun ? { ...source, childSessionIdentity } : (absorbed ?? source),
+          );
           const followupRecoverySource =
-            childAuthority?.status === "verified"
+            preserveCompletedRun && childAuthority.status === "verified"
               ? createOperatorInputRecoverySource({
                   authority: authority?.operatorAuthority,
                   agentId: childAuthority.childAgentId,
@@ -487,12 +497,7 @@ export class SubagentRecoveryManager extends SubagentWaitManager {
             task: nextTask,
             generation,
             createdAt: now,
-            ...(absorbed
-              ? {
-                  childSessionIdentity:
-                    absorbed.childSessionIdentity ?? source.childSessionIdentity,
-                }
-              : {}),
+            ...(childSessionIdentity ? { childSessionIdentity } : {}),
             sessionStartedAt,
             accumulatedRuntimeMs,
             endedReason: undefined,
@@ -511,7 +516,7 @@ export class SubagentRecoveryManager extends SubagentWaitManager {
                 lifecycleGeneration,
                 transcriptTarget: replaceParams.transcriptTarget,
               }),
-              ...(resolveSubagentChildAuthority(absorbed ?? source).status === "legacy-unverified"
+              ...(childAuthority.status === "legacy-unverified"
                 ? { suppressSessionEffects: true }
                 : {}),
             },

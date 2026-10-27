@@ -25,6 +25,8 @@ import {
   resolveOpenClawAgentSqlitePath,
 } from "../../state/openclaw-agent-db.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
+import { gatewayProfile } from "../server/client-fixtures.test-support.js";
+import { createSessionGoalFixture } from "../session-goal.test-support.js";
 import { closeSessionSqliteDatabasesForTest } from "../session-utils.test-support.js";
 import { testState } from "../test-helpers.js";
 import {
@@ -87,10 +89,6 @@ async function expectRead(
   payload: unknown,
 ) {
   expect(await directSessionReq(method, params)).toMatchObject({ ok: true, payload });
-}
-
-async function expectSession(params: Record<string, unknown>, session: unknown) {
-  await expectRead("sessions.describe", params, { session });
 }
 
 async function expectInvalidRead(
@@ -216,12 +214,7 @@ function avatarRosterClient(): GatewayClient {
   const profileId = "reader-profile";
   client.connect.scopes = ["operator.read"];
   client.preparedSessionProfile = { profileId, aliases: new Set([profileId]), role: "reader" };
-  client.authenticatedUserProfile = {
-    profileId,
-    displayName: "Reader",
-    hasAvatar: false,
-    updatedAt: 1,
-  };
+  client.authenticatedUserProfile = gatewayProfile(profileId, "Reader");
   return client;
 }
 
@@ -417,7 +410,7 @@ test("sessions.resolve short IDs retain archived child-owner selection", async (
 });
 
 test("unknown-agent session reads return missing results without provisioning an agent", async () => {
-  await expectSession({ key: UNKNOWN_SESSION_KEY }, null);
+  await expectRead("sessions.describe", { key: UNKNOWN_SESSION_KEY }, { session: null });
   await expectRead("sessions.get", { key: UNKNOWN_SESSION_KEY }, { messages: [] });
 
   expect(await previews([UNKNOWN_SESSION_KEY])).toEqual([
@@ -527,19 +520,11 @@ test("searches rich displayed fields before selecting a page across visible agen
       category: "Nebula category",
       displayName: "Stored comet",
       status: "done",
-      goal: {
-        schemaVersion: 1,
-        id: "goal-target",
-        tokenStart: 0,
-        continuationTurns: 0,
-        objective: "Map distant galaxies",
-        status: "active",
-        createdAt: 1,
-        updatedAt: 1,
+      goal: createSessionGoalFixture("goal-target", "Map distant galaxies", {
         tokensUsed: 12000,
         tokenBudget: 50000,
         lastStatusNote: "Telescope calibrated",
-      },
+      }),
     });
     await put("work", "hidden", {
       label: "Quasar label",

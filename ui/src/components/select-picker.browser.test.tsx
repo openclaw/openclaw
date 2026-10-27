@@ -79,6 +79,28 @@ async function mountPickers(content: () => JSX.Element, style = "", direction = 
 }
 
 describe.runIf("__vitest_browser__" in globalThis)("searchable model menu layout", () => {
+  it("retains virtual rows when a search edit leaves the choices unchanged", async () => {
+    const { page, role } = await browser(390);
+    const { picker } = await mountModel(numberedModels(1000), "width:320px;margin:24px", {
+      windowed: true,
+    });
+    await role("button", "Model: Model 0").click();
+    const first = () => picker.querySelector('[role="option"][data-value="fixture/model-0"]');
+    await expect.poll(first).not.toBeNull();
+    const original = first();
+    const search = picker.querySelector<HTMLInputElement>(".picker-select__search")!;
+    await page.elementLocator(search).fill("Model");
+    await new Promise<void>((resolve) => {
+      requestAnimationFrame(() => requestAnimationFrame(() => resolve()));
+    });
+    expect(first()).toBe(original);
+    await page.elementLocator(search).fill("Model 999");
+    await expect.poll(() => picker.querySelectorAll('[role="option"]').length).toBe(1);
+    expect(picker.querySelector('[role="option"]')?.getAttribute("data-value")).toBe(
+      "fixture/model-999",
+    );
+  });
+
   it.each([false, true])(
     "keeps the scroll position on clipped edge hover (windowed=%s)",
     async (windowed) => {

@@ -87,6 +87,49 @@ describe("prepared reply fallback ownership", () => {
     expect(mocks.ensureOpenClawModelsJson).toHaveBeenCalledTimes(1);
   });
 
+  it("prepares a reply on the current generation when its captured dispatch generation was replaced", async () => {
+    const previous = { messages: { responsePrefix: "before" } };
+    const current = { messages: { responsePrefix: "after" } };
+    mocks.configuredAgentIds = ["default"];
+    const options = { gatewayLifecycle: true, catalogMode: "static" as const };
+    await refreshPreparedModelRuntimeSnapshots(previous, options);
+    const captured = (await loadPublishedGatewayReplyDispatchRuntime({ agentId: "default" }))!;
+    await refreshPreparedModelRuntimeSnapshots(current, options);
+    const published = (await loadPublishedGatewayReplyDispatchRuntime({ agentId: "default" }))!;
+    reply.context.mockResolvedValue({
+      kind: "ready",
+      workspaceDir: captured.workspaceDir,
+      thinkingRuntime: "openclaw",
+    });
+    reply.execute.mockImplementation(async () => {
+      const pluginGeneration = getPreparedModelRuntimePluginGeneration()!;
+      expect(pluginGeneration).not.toBe(captured.pluginGeneration);
+      await using nested = await acquireAgentRunPreparedModelRuntime(
+        {
+          config: current,
+          agentId: published.agentId,
+          agentDir: published.agentDir,
+          workspaceDir: published.workspaceDir,
+        },
+        { pluginGeneration },
+      );
+      expect(nested.snapshot.config).toEqual(current);
+      return { text: "reply completed after reload" };
+    });
+    const execute = bindPreparedReplyDispatchRuntime(captured, () =>
+      runPreparedReply({
+        provider: "custom",
+        model: "model",
+        ctx: {},
+        sessionCtx: {},
+        cfg: previous,
+        agentId: captured.agentId,
+      } as RunPreparedReplyParams),
+    );
+    await expect(execute()).resolves.toEqual({ text: "reply completed after reload" });
+    expect(reply.execute).toHaveBeenCalledOnce();
+  });
+
   it("admits a nested reply after its configured context engine falls back to legacy", async () => {
     const config: OpenClawConfig = {
       agents: { defaults: { model: "initial/model" } },

@@ -75,14 +75,6 @@ export class TranscriptViewportRect {
       }
       delivered = true;
       const railGeometry = this.owner.positionRail.read();
-      if (railGeometry) {
-        this.owner.layout.restoreRows(
-          instance,
-          railGeometry.columnWidth,
-          rect.width,
-          railGeometry.gutter,
-        );
-      }
       this.owner.commitComposerResize();
       const widthChanged =
         this.observedWidth !== null && !sameDimension(this.observedWidth, rect.width);
@@ -93,6 +85,14 @@ export class TranscriptViewportRect {
       // The host supplies only the header height already compensated by its render.
       syncScrollMargin(instance, scrollMargin);
       callback(rect);
+      if (railGeometry) {
+        this.owner.layout.restoreRows(
+          instance,
+          railGeometry.columnWidth,
+          rect.width,
+          railGeometry.gutter,
+        );
+      }
       if (widthChanged) {
         // Preserve offscreen estimates; connected resizeItem measurements own scroll compensation.
         this.owner.measureConnectedRows();

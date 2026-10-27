@@ -153,7 +153,12 @@ export function PickerContent<Option extends PickerOption>(props: {
   );
   const rows = createMemo(
     () => sections().flatMap((section) => (section.expanded ? section.options : [])),
-    { lazy: true },
+    {
+      lazy: true,
+      // A search edit that keeps the same choices must not restart row measurement.
+      // A revived lazy memo can have no previous value after reconnect.
+      equals: (a, b) => a?.length === b.length && a.every((option, index) => option === b[index]),
+    },
   );
   const selected = createMemo(() =>
     options().find((option) => option.value === props.params.value),
@@ -393,9 +398,7 @@ export function PickerContent<Option extends PickerOption>(props: {
     } else {
       setQuery("");
       setSearching(false);
-      setCollapsed((draft) => {
-        draft.length = 0;
-      });
+      setCollapsed(() => []);
       hoverOpened = false;
       if (sheetScroll) {
         sheetScroll.root.scrollTop = sheetScroll.top;

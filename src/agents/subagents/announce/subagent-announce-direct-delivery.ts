@@ -443,13 +443,6 @@ async function sendSubagentAnnounceDirectlyBound(
     // A private completion gets its own serialized turn. Steering into a public
     // turn would inherit that turn's delivery policy and expose child output.
     let directAgentParams: Record<string, unknown> = {
-      ...(requesterSessionBound
-        ? {
-            expectedExistingSessionId: params.completionRequesterSessionId,
-            expectedExistingSessionLifecycleRevision:
-              params.completionRequesterLifecycleRevision ?? null,
-          }
-        : {}),
       sessionKey: canonicalRequesterSessionKey,
       ...(requesterAgentId ? { agentId: requesterAgentId } : {}),
       message: turnMessage,
@@ -471,11 +464,21 @@ async function sendSubagentAnnounceDirectlyBound(
         : {}),
       idempotencyKey: params.directIdempotencyKey,
     };
-    if (requesterSessionBound && params.completionRequesterSessionId) {
+    // Public completions bind the selected requester, including a nested fallback.
+    // Private and settle completions keep their captured incarnation checked above.
+    const boundRequesterSessionId = requesterSessionBound
+      ? params.completionRequesterSessionId
+      : isSubagentCompletion
+        ? requesterSessionId
+        : undefined;
+    if (boundRequesterSessionId) {
       directAgentParams = bindInProcessSessionRun(directAgentParams, {
         sessionKey: canonicalRequesterSessionKey,
-        sessionId: params.completionRequesterSessionId,
-        lifecycleRevision: params.completionRequesterLifecycleRevision ?? null,
+        sessionId: boundRequesterSessionId,
+        lifecycleRevision:
+          (requesterSessionBound
+            ? params.completionRequesterLifecycleRevision
+            : requesterLifecycleRevision) ?? null,
         runId: params.directIdempotencyKey,
       });
     }
