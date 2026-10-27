@@ -403,8 +403,9 @@ describe("dream narrative publication", () => {
         run({
           data: { phase: "rem", snippets: ["A detached fragment."] },
           runInBackground: (job) => {
-            publication = job();
-            return publication;
+            const pending = job();
+            publication = pending;
+            return pending;
           },
         }),
       ).resolves.toEqual({ status: "pending" });
