@@ -28,7 +28,7 @@ export type ScribeDefinition = {
   id: ScribeId;
   title: string;
   blurb: string;
-  skill: "knowledge-unlinked-claims" | "knowledge-ingest";
+  skill: "knowledge-maintenance" | "knowledge-ingest";
   icon: IconName;
   tone: "blue" | "teal" | "amber";
   modes: readonly ScribeMode[];
@@ -53,7 +53,7 @@ export const SCRIBES: readonly ScribeDefinition[] = [
     title: "Review unlinked claims",
     blurb:
       "Weekly or nightly, files claims that name no page, creates pages for subjects that deserve one, and folds outcomes into page State.",
-    skill: "knowledge-unlinked-claims",
+    skill: "knowledge-maintenance",
     icon: "link",
     tone: "blue",
     modes: ["ongoing"],
@@ -185,7 +185,7 @@ const PURPOSE: Record<ScribeId, string> = {
 // The work step: the skill section that does it, applied to the settings.
 const WORK: Record<ScribeId, string> = {
   "unlinked-review":
-    'Follow the "Scribe runs" section of the knowledge-unlinked-claims skill: review every claim that names no page until none is left to decide.',
+    'Follow the "Scribe runs" section of the knowledge-maintenance skill: review every claim that names no page until none is left to decide.',
   conversations:
     'Follow "Learn from conversations" in the "Scribe runs" section of the knowledge-ingest skill, for the conversations in the settings.',
   memory:

@@ -73,7 +73,7 @@ describe("scribes catalog", () => {
       scribeSetup("unlinked-review", "ongoing", defaultOptions("unlinked-review"), "UTC"),
     );
     expect(review).toContain("- Runs weekly, Sundays at 3:45 AM UTC (cron `45 3 * * 0`).");
-    expect(review).toContain("The knowledge-unlinked-claims skill does the work on each run.");
+    expect(review).toContain("The knowledge-maintenance skill does the work on each run.");
   });
 
   it("writes a repair prompt that keeps the automation's schedule and run message", () => {

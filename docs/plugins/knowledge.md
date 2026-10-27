@@ -198,17 +198,17 @@ See [Tools](/plugins/knowledge/tools) for inputs, limits, and pagination.
 Knowledge ships nine skills. They are agent workflows over the tools above, not
 an autonomous ingestion engine.
 
-| Skill                       | Use                                                                                                 |
-| --------------------------- | --------------------------------------------------------------------------------------------------- |
-| `knowledge-automation`      | Create and verify scheduled ingestion through the host scheduler with a retained authorized worker. |
-| `knowledge-capture`         | Save decisions, preferences, facts, and short notes with attribution and readback.                  |
-| `knowledge-correct`         | Correct or withdraw exact records and inspect affected knowledge.                                   |
-| `knowledge-entities`        | Resolve and enrich people, companies, projects, and concepts with sourced profiles.                 |
-| `knowledge-ingest`          | Ingest documents, articles, and conversations; learn lessons from sets of sources (`/learn`).       |
-| `knowledge-meeting-ingest`  | Ingest meeting transcripts with attendee enrichment, decisions, commitments, and chronology checks. |
-| `knowledge-recall`          | Answer from saved knowledge with inspectable citations. Read-only.                                  |
-| `knowledge-source-ingest`   | Incrementally ingest enumerable sources with snapshot manifests and diffing.                        |
-| `knowledge-unlinked-claims` | Review and consolidate claims: unlinked, on one page, or about one subject; supersede snapshots.    |
+| Skill                      | Use                                                                                                 |
+| -------------------------- | --------------------------------------------------------------------------------------------------- |
+| `knowledge-automation`     | Create and verify scheduled ingestion through the host scheduler with a retained authorized worker. |
+| `knowledge-capture`        | Save decisions, preferences, facts, and short notes with attribution and readback.                  |
+| `knowledge-correct`        | Correct or withdraw exact records and inspect affected knowledge.                                   |
+| `knowledge-entities`       | Resolve and enrich people, companies, projects, and concepts with sourced profiles.                 |
+| `knowledge-ingest`         | Ingest documents, articles, and conversations; learn lessons from sets of sources (`/learn`).       |
+| `knowledge-maintenance`    | Review and consolidate claims: unlinked, on one page, or about one subject; supersede snapshots.    |
+| `knowledge-meeting-ingest` | Ingest meeting transcripts with attendee enrichment, decisions, commitments, and chronology checks. |
+| `knowledge-recall`         | Answer from saved knowledge with inspectable citations. Read-only.                                  |
+| `knowledge-source-ingest`  | Incrementally ingest enumerable sources with snapshot manifests and diffing.                        |
 
 See [Ingestion workflows](/plugins/knowledge/ingestion).
 
