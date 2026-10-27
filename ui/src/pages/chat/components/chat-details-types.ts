@@ -99,6 +99,7 @@ export type ChatDetailsProps = ChatSessionProgressProps &
     retainOutputs?: () => (() => void) | undefined;
     /** Details consumes the unfiltered progress projection, independently of Show in chat. */
     progressCardError?: "access-denied" | "unavailable";
+    progressCardRefreshReserved?: boolean;
     showTaskProgress?: boolean;
     onShowTaskProgressChange?: (shown: boolean) => void;
     onSessionSelect?: (sessionKey: string) => void;

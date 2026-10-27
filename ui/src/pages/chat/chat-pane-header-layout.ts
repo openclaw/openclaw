@@ -46,6 +46,7 @@ export type PaneDetailsActions = Pick<
   | "onOpenTaskProgressSettings"
   | "onClearSavedProgressCard"
   | "progressCardRefresh"
+  | "progressCardRefreshReserved"
 >;
 
 export abstract class ChatPaneHeaderLayout extends ChatPaneBrowserAnnotationRender {
