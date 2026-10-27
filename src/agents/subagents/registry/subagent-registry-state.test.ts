@@ -1,5 +1,4 @@
 import { AsyncLocalStorage } from "node:async_hooks";
-// Subagent registry state tests cover hot read caching over the persisted SQLite snapshot.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { readSqliteUserVersion } from "../../../infra/sqlite-user-version.js";
 import { AsyncWorkScope } from "../../../shared/async-work-scope.js";
@@ -46,14 +45,24 @@ import { holdFirstCompactRead } from "./subagent-registry-state.read.test-suppor
 import { registerSubagentRestoreCacheCases } from "./subagent-registry-state.restore.test-support.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
 
-function createRun(runId: string, overrides: Partial<SubagentRunRecord> = {}): SubagentRunRecord {
+function record(
+  runId: string,
+  overrides: Omit<Parameters<typeof createSubagentRunRecord>[0], "runId"> = {},
+) {
   return createSubagentRunRecord({
     runId,
     childSessionKey: `agent:main:subagent:${runId}`,
+    completion: { required: false },
+    delivery: { status: "not_required" },
+    ...overrides,
+  });
+}
+
+function createRun(runId: string, overrides: Partial<SubagentRunRecord> = {}): SubagentRunRecord {
+  return record(runId, {
     task: `task ${runId}`,
     createdAt: 1,
     execution: { status: "running", startedAt: 1 },
-    completion: { required: false },
     delivery: { status: "pending" },
     ...overrides,
   });
@@ -94,45 +103,6 @@ describe("subagent registry state", () => {
           throw new Error("write refused");
         });
       },
-    });
-
-    it("keeps control selection grouped and distinguishes agents sharing a child key", async () => {
-      const parent = "agent:main:parent";
-      const old = createRun("old", {
-        childSessionKey: "global",
-        childAgentId: "main",
-        requesterSessionKey: parent,
-        generation: 1,
-      });
-      const sibling = createRun("sibling", { requesterSessionKey: parent });
-      const latest = { ...old, runId: "latest", generation: 2 };
-      const foreign = {
-        ...old,
-        runId: "foreign",
-        childAgentId: "research",
-        requesterSessionKey: "agent:main:other",
-        generation: 3,
-      };
-      save(runMap(old, sibling, latest, foreign));
-      await prepare();
-      const read = () =>
-        listControlledSubagentRunFacts(parent, "main", {}).map((entry) => entry.runId);
-      expect(read()).toEqual([latest.runId, sibling.runId]);
-      const controlled = { ...latest, controllerSessionKey: "agent:main:controller" };
-      publish(runMap(controlled), [controlled.runId]);
-      expect(read()).toEqual([latest.runId, sibling.runId]);
-      expect(
-        listControlledSubagentRunFacts("agent:main:controller", "main", {}).map((run) => run.runId),
-      ).toEqual([latest.runId]);
-      const moved = {
-        ...controlled,
-        controllerSessionKey: undefined,
-        runId: "moved",
-        requesterSessionKey: foreign.requesterSessionKey,
-        generation: 4,
-      };
-      publish(runMap(moved), [moved.runId]);
-      expect(read()).toEqual([sibling.runId]);
     });
 
     it("scopes compact reads while preserving owner writes and live controller moves", async () => {
@@ -184,120 +154,100 @@ describe("subagent registry state", () => {
       }
     });
 
-    it.each(["global"])(
-      "retains all child generations when a newer %s requester vetoes old descendants",
-      async (requesterSessionKey) => {
-        await prepareEmptyReadCaches();
-        const root = "agent:main:tree";
-        const older = createRun("older", { requesterSessionKey: root });
-        const descendant = createRun("descendant", {
-          requesterSessionKey: older.childSessionKey,
-        });
-        const newer = createRun("newer", {
-          childSessionKey: older.childSessionKey,
-          requesterSessionKey,
-          createdAt: 2,
-          execution: { status: "running", startedAt: 2 },
-        });
-        publish(runMap(older, descendant, newer));
+    it("retains all child generations when a newer global requester vetoes old descendants", async () => {
+      const requesterSessionKey = "global";
+      await prepareEmptyReadCaches();
+      const root = "agent:main:tree";
+      const older = createRun("older", { requesterSessionKey: root });
+      const descendant = createRun("descendant", {
+        requesterSessionKey: older.childSessionKey,
+      });
+      const newer = createRun("newer", {
+        childSessionKey: older.childSessionKey,
+        requesterSessionKey,
+        createdAt: 2,
+        execution: { status: "running", startedAt: 2 },
+      });
+      publish(runMap(older, descendant, newer));
 
-        const selected = readTree(new Map(), [root]);
-        expect([...selected.keys()]).toEqual([older.runId, descendant.runId, newer.runId]);
-        const index = buildSubagentRunReadIndexFromRuns({ runs: selected, now: Date.now() });
-        expect(index.latestRunsByChildSessionKey.get(older.childSessionKey)?.runId).toBe(
-          newer.runId,
+      const selected = readTree(new Map(), [root]);
+      expect([...selected.keys()]).toEqual([older.runId, descendant.runId, newer.runId]);
+      const index = buildSubagentRunReadIndexFromRuns({ runs: selected, now: Date.now() });
+      expect(index.latestRunsByChildSessionKey.get(older.childSessionKey)?.runId).toBe(newer.runId);
+      expect(index.listDescendantRunsForRequester(root)).toEqual([]);
+      expect(
+        index.listDescendantRunsForRequester(requesterSessionKey).map((run) => run.runId),
+      ).toEqual([newer.runId, descendant.runId]);
+    });
+
+    it.each(["compact", "full"] as const)(
+      "keeps %s child snapshots current through publication and live moves",
+      async (kind) => {
+        const old = createRun("old");
+        const successor = createRun("successor", {
+          childSessionKey: old.childSessionKey,
+          generation: 2,
+          requesterSessionKey: "agent:main:other",
+        });
+        const moved = { ...successor, childSessionKey: "agent:main:moved" };
+        save(runMap(old, successor, createRun("unrelated")));
+        const read = () =>
+          kind === "full"
+            ? getSubagentRunsSnapshotForChildSession(subagentRuns, old.childSessionKey)
+            : Promise.resolve(
+                readChildren([`  ${old.childSessionKey}  `, old.childSessionKey, " "]),
+              );
+        const ids = async () => [...(await read()).keys()];
+        const listener = vi.fn();
+        const stop = subscribeSubagentRunChanges("persistence", ({ sessionKeys }) =>
+          listener(sessionKeys),
         );
-        expect(index.listDescendantRunsForRequester(root)).toEqual([]);
-        expect(
-          index.listDescendantRunsForRequester(requesterSessionKey).map((run) => run.runId),
-        ).toEqual([newer.runId, descendant.runId]);
+        try {
+          if (kind === "compact") {
+            publish(runMap(old), [old.runId]);
+            subagentRuns.set(old.runId, { ...old, childSessionKey: moved.childSessionKey });
+            expect(readChildren([" "])).toEqual(new Map());
+            expect(() => readChildren([old.childSessionKey])).toThrow("must be prepared");
+            await prepare();
+            expect(await ids()).toEqual(["successor"]);
+            expect([...readChildren([moved.childSessionKey]).keys()]).toEqual(["old"]);
+            subagentRuns.delete(old.runId);
+          } else {
+            await restoreSubagentRunsFromDisk({ runs: new Map() });
+          }
+          expect(await ids()).toEqual(["old", "successor"]);
+          const retained = (await read()).get("successor")!;
+          expect(retained.generation).toBe(2);
+          expect(() => {
+            retained.generation = 3;
+          }).toThrow(TypeError);
+          expect((await read()).get("successor")?.generation).toBe(2);
+          publish(runMap(moved), [moved.runId]);
+          expect(await ids()).toEqual(["old"]);
+          expect(listener).toHaveBeenLastCalledWith(
+            expect.arrayContaining([old.childSessionKey, moved.childSessionKey]),
+          );
+          subagentRuns.set(successor.runId, successor);
+          expect(await ids()).toEqual(["old", "successor"]);
+          subagentRuns.delete(successor.runId);
+          subagentRuns.set(old.runId, { ...old, childSessionKey: moved.childSessionKey });
+          expect(await ids()).toEqual([]);
+          subagentRuns.delete(old.runId);
+          publish(new Map(), [old.runId]);
+          expect(await ids()).toEqual([]);
+          publish(runMap(successor), [successor.runId]);
+          publish(runMap(old), [old.runId]);
+          expect(await ids()).toEqual(["successor", "old"]);
+          publish(runMap(old));
+          expect(await ids()).toEqual(["old"]);
+          expect(listener).toHaveBeenLastCalledWith(undefined);
+        } finally {
+          stop();
+          subagentRuns.delete(old.runId);
+          subagentRuns.delete(successor.runId);
+        }
       },
     );
-
-    it("keeps exact child generations current through named moves, deletion, and live overlays", async () => {
-      const old = createRun("old");
-      const successor = createRun("successor", {
-        childSessionKey: old.childSessionKey,
-        generation: 2,
-        requesterSessionKey: "agent:main:other",
-      });
-      const unrelated = createRun("unrelated");
-      save(runMap(old, successor, unrelated));
-      await prepare();
-      const read = () => [
-        ...readChildren([`  ${old.childSessionKey}  `, old.childSessionKey, " "]).keys(),
-      ];
-      const listener = vi.fn();
-      const stop = subscribeSubagentRunChanges("persistence", ({ sessionKeys }) =>
-        listener(sessionKeys),
-      );
-      try {
-        expect(read()).toEqual(["old", "successor"]);
-        expect(readChildren([old.childSessionKey]).get("successor")?.generation).toBe(2);
-        const moved = { ...successor, childSessionKey: "agent:main:moved" };
-        publish(runMap(moved), [moved.runId]);
-        expect(read()).toEqual(["old"]);
-        expect(listener).toHaveBeenLastCalledWith(
-          expect.arrayContaining([old.childSessionKey, moved.childSessionKey]),
-        );
-        subagentRuns.set(old.runId, { ...old, childSessionKey: moved.childSessionKey });
-        expect(read()).toEqual([]);
-        subagentRuns.delete(old.runId);
-        publish(new Map(), [old.runId]);
-        expect(read()).toEqual([]);
-        publish(runMap(old));
-        expect(read()).toEqual(["old"]);
-        expect(listener).toHaveBeenLastCalledWith(undefined);
-      } finally {
-        stop();
-        subagentRuns.delete(old.runId);
-      }
-    });
-
-    it("requires prepared exact-child facts and keeps live moves authoritative", async () => {
-      const persisted = createRun("cold-move");
-      publish(runMap(persisted), [persisted.runId]);
-      save(runMap(persisted));
-      subagentRuns.set(persisted.runId, { ...persisted, childSessionKey: "agent:main:moved" });
-      try {
-        expect(readChildren([" "])).toEqual(new Map());
-        expect(() => readChildren([persisted.childSessionKey])).toThrow("must be prepared");
-        await prepare();
-        expect(readChildren([persisted.childSessionKey])).toEqual(new Map());
-        expect([...readChildren(["agent:main:moved"]).keys()]).toEqual([persisted.runId]);
-      } finally {
-        subagentRuns.delete(persisted.runId);
-      }
-    });
-
-    it("keeps warm child lookups scoped through cache publications and live moves", async () => {
-      const key = "agent:main:selected";
-      const first = createRun("first", { childSessionKey: key });
-      const second = createRun("second", { childSessionKey: key });
-      const unrelated = createRun("unrelated");
-      save(runMap(first, unrelated, second));
-      await restoreSubagentRunsFromDisk({ runs: new Map() });
-      const read = getSubagentRunsSnapshotForChildSession;
-      expect([...(await read(new Map(), key)).keys()]).toEqual([first.runId, second.runId]);
-      const retained = (await read(new Map(), key)).get(first.runId)!;
-      expect(() => {
-        retained.task = "caller-local change";
-      }).toThrow(TypeError);
-      expect((await read(new Map(), key)).get(first.runId)?.task).toBe(first.task);
-
-      const moved = { ...first, childSessionKey: "agent:main:elsewhere" };
-      publish(runMap(moved), [moved.runId]);
-      expect([...(await read(new Map(), key)).keys()]).toEqual([second.runId]);
-      const live = runMap(first);
-      expect([...(await read(live, key)).keys()]).toEqual([second.runId, first.runId]);
-      publish(runMap(first), [first.runId]);
-      expect([...(await read(new Map(), key)).keys()]).toEqual([first.runId, second.runId]);
-      const movedLive = runMap({ ...first, childSessionKey: "agent:main:elsewhere" });
-      expect([...(await read(movedLive, key)).keys()]).toEqual([second.runId]);
-      publish(new Map(), [first.runId]);
-      publish(runMap(first), [first.runId]);
-      expect([...(await read(new Map(), key)).keys()]).toEqual([second.runId, first.runId]);
-    });
 
     registerSubagentCollectorPublicationCases({
       createRun,
@@ -305,28 +255,9 @@ describe("subagent registry state", () => {
     });
   });
   describe("worker snapshots", () => {
-    function snapshot() {
-      return readSnapshot(new Map());
-    }
-
-    function record(
-      runId: string,
-      overrides: Omit<Parameters<typeof createSubagentRunRecord>[0], "runId"> = {},
-    ) {
-      return createSubagentRunRecord({
-        runId,
-        childSessionKey: `agent:main:subagent:${runId}`,
-        completion: { required: false },
-        delivery: { status: "not_required" },
-        ...overrides,
-      });
-    }
-    function runs(model: string, runId = "one") {
-      return runMap(record(runId, { model }));
-    }
-    function models(rows = snapshot()) {
-      return [...rows].map(([id, row]) => `${id}:${row.model}`);
-    }
+    const snapshot = () => readSnapshot(new Map());
+    const runs = (model: string, runId = "one") => runMap(record(runId, { model }));
+    const models = (rows = snapshot()) => [...rows].map(([id, row]) => `${id}:${row.model}`);
     function cleanupFailure() {
       return new AggregateError(
         [new Error("query failed"), new Error("reader cleanup failed")],
@@ -335,61 +266,100 @@ describe("subagent registry state", () => {
     }
 
     it.each(["maintenance", "schema"] as const)(
-      "rejects resident session-list reads from an ended %s scope",
+      "keeps published facts but rejects readers from an ended %s scope",
       async (kind) => {
-        publish(runs("retained"));
+        const changed = record("changed", { model: "before", createdAt: 20 });
+        publish(runMap(changed, record("other", { model: "retained", createdAt: 10 })));
+        const initial = snapshot();
         const identity = snapshotIdentity();
+        const admission = captureOpenClawStateWorkerContext().admission;
         const maintenance = createOpenClawDatabaseMaintenanceScope();
-        const bind = () => {
-          const prepared = readView({ env: state.env });
-          expect(prepared.snapshotIdentity()).toBe(identity);
-          return { current: AsyncLocalStorage.bind(snapshot), prepared };
-        };
-        const read =
-          kind === "maintenance"
-            ? maintenance.run(bind)
-            : withExistingOpenClawStateSchema(
-                { path: captureOpenClawStateWorkerContext().admission.databasePath },
-                bind,
-              );
-        await maintenance.close();
-        const failure = kind === "maintenance" ? "scope is closed" : "admission has ended";
-        expect(read.current).toThrow(failure);
-        expect(read.prepared.runs).toThrow(failure);
-        await expect(read.prepared.prepare()).rejects.toThrow(failure);
-        expect(snapshotIdentity()).toBe(identity);
+        const observed: string[][] = [];
+        const stop = subscribeSubagentRunChanges("persistence", () => observed.push(models()));
+        try {
+          const bind = () => {
+            const prepared = readView({ env: state.env });
+            expect(prepared.snapshotIdentity()).toBe(identity);
+            return { current: AsyncLocalStorage.bind(snapshot), prepared };
+          };
+          const read =
+            kind === "maintenance"
+              ? maintenance.run(bind)
+              : withExistingOpenClawStateSchema(
+                  { path: captureOpenClawStateWorkerContext().admission.databasePath },
+                  bind,
+                );
+          maintenance.run(() => publish(runMap({ ...changed, model: "after" }), [changed.runId]));
+          await maintenance.close();
+          admission.assertCurrent();
+          expect(observed).toEqual([["changed:after", "other:retained"]]);
+          expect(models()).toEqual(["changed:after", "other:retained"]);
+          expect(initial.get("changed")?.model).toBe("before");
+          const failure = kind === "maintenance" ? "scope is closed" : "admission has ended";
+          expect(read.current).toThrow(failure);
+          expect(read.prepared.runs).toThrow(failure);
+          await expect(read.prepared.prepare()).rejects.toThrow(failure);
+          expect(snapshotIdentity()).toBe(identity);
+        } finally {
+          stop();
+          await maintenance.close();
+        }
       },
     );
 
-    it("hydrates latest controlled payloads with requester descendant topology", async () => {
+    it("keeps per-agent control selection and hydrated descendant topology current", async () => {
       const requesterSessionKey = "agent:main:parent";
       const latest = record("latest", {
-        childSessionKey: "agent:main:subagent:visible",
+        childSessionKey: "global",
+        childAgentId: "main",
         requesterSessionKey,
         generation: 2,
+        createdAt: 1,
       });
       const old = { ...latest, runId: "old", generation: 1, task: "retained historical payload" };
+      const sibling = record("sibling", { requesterSessionKey, createdAt: 1 });
+      const foreign = {
+        ...latest,
+        runId: "foreign",
+        childAgentId: "research",
+        requesterSessionKey: "agent:main:other",
+        generation: 3,
+      };
       const descendant = record("descendant", {
         requesterSessionKey: latest.childSessionKey,
         controllerSessionKey: latest.childSessionKey,
       });
-      save(runMap(old, latest, descendant));
+      save(runMap(old, sibling, latest, foreign, descendant));
 
       const context = await readContext(requesterSessionKey);
 
-      expect(context.runs.map((entry) => entry.runId)).toEqual([latest.runId]);
+      const read = () =>
+        listControlledSubagentRunFacts(requesterSessionKey, "main", {}).map((entry) => entry.runId);
+      expect(read()).toEqual([latest.runId, sibling.runId]);
+      expect(context.runs.map((entry) => entry.runId)).toEqual([latest.runId, sibling.runId]);
       expect(context.list.pendingDescendants.get(latest.childSessionKey)).toBe(1);
       expect(context.list.childSessionsByController.get(latest.childSessionKey)).toEqual([
         descendant.childSessionKey,
       ]);
+      const controlled = { ...latest, controllerSessionKey: "agent:main:controller" };
+      publish(runMap(controlled), [controlled.runId]);
+      expect(read()).toEqual([latest.runId, sibling.runId]);
+      expect(
+        listControlledSubagentRunFacts(controlled.controllerSessionKey, "main", {}).map(
+          (entry) => entry.runId,
+        ),
+      ).toEqual([latest.runId]);
       const moved = {
         ...latest,
         runId: "moved",
-        generation: 3,
+        generation: 4,
         requesterSessionKey: "agent:main:moved",
       };
       publish(runMap(moved), [moved.runId]);
-      expect((await readContext(requesterSessionKey)).runs).toEqual([]);
+      expect(read()).toEqual([sibling.runId]);
+      expect((await readContext(requesterSessionKey)).runs.map((entry) => entry.runId)).toEqual([
+        sibling.runId,
+      ]);
     });
 
     it("captures parent and yielded-child facts after the final scoped hydration", async () => {
@@ -516,31 +486,26 @@ describe("subagent registry state", () => {
             clearCache();
             const admission = captureOpenClawStateWorkerContext().admission;
             expect(admission.identity.key).toMatch(/^path:/);
-            const gate = creation === "during" ? holdFirstCompactRead() : undefined;
-            const prepared = prepare();
-            try {
-              if (gate) {
-                await gate.entered;
-              } else {
-                await prepared;
-                expect(snapshot().size).toBe(0);
-              }
+            const createDatabase = () => {
               save(runs("created"));
               admission.assertCurrent();
               expect(admission.identity.key).toMatch(/^file:/);
-              if (creation === "after a named publication") {
+            };
+            try {
+              if (creation === "during") {
+                await holdFirstCompactRead().during(prepare(), createDatabase);
+              } else {
+                await prepare();
+                expect(snapshot().size).toBe(0);
+                createDatabase();
                 publish(runs("published", "own"), ["own"]);
               }
-              gate?.release();
-              await prepared;
               await prepare();
               expect(snapshot().get("one")?.model).toBe("created");
               if (creation === "after a named publication") {
                 expect(snapshot().get("own")?.model).toBe("published");
               }
             } finally {
-              gate?.release();
-              await prepared.catch(() => {});
               clearCache();
             }
           },
@@ -563,28 +528,6 @@ describe("subagent registry state", () => {
       });
       await prepare();
       expect(snapshot().get("one")?.model).toBe("canonical");
-    });
-
-    it("keeps published compact facts through a temporary writer scope without reloading", async () => {
-      const changed = record("changed", { model: "before", createdAt: 20 });
-      publish(runMap(changed, record("other", { model: "retained", createdAt: 10 })));
-      const initial = snapshot();
-      const admission = captureOpenClawStateWorkerContext().admission;
-      const observed: string[][] = [];
-      const stop = subscribeSubagentRunChanges("persistence", () => observed.push(models()));
-      const writer = createOpenClawDatabaseMaintenanceScope();
-      try {
-        writer.run(() => publish(runMap({ ...changed, model: "after" }), [changed.runId]));
-        await writer.close();
-        admission.assertCurrent();
-        const current = snapshot();
-        expect(observed).toEqual([["changed:after", "other:retained"]]);
-        expect(models(current)).toEqual(["changed:after", "other:retained"]);
-        expect(initial.get("changed")?.model).toBe("before");
-      } finally {
-        stop();
-        await writer.close();
-      }
     });
 
     it("keeps unrelated publication context failures visible", () => {

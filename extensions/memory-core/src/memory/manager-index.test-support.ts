@@ -550,18 +550,14 @@ export function memoryIndexFixtureWriter(manager: MemoryIndexManager): DatabaseS
 }
 
 export function countMemoryIndexFtsMatches(databasePath: string, marker: string): number {
-  const observer = new DatabaseSync(databasePath, { readOnly: true });
-  try {
-    return (
-      observer
-        .prepare(
-          "SELECT COUNT(*) AS count FROM memory_index_chunks_fts WHERE memory_index_chunks_fts MATCH ?",
-        )
-        .get(`"${marker}"`) as { count: number }
-    ).count;
-  } finally {
-    observer.close();
-  }
+  using observer = new DatabaseSync(databasePath, { readOnly: true });
+  return (
+    observer
+      .prepare(
+        "SELECT COUNT(*) AS count FROM memory_index_chunks_fts WHERE memory_index_chunks_fts MATCH ?",
+      )
+      .get(`"${marker}"`) as { count: number }
+  ).count;
 }
 
 export function holdMemoryTestOperation<T>(value: () => T) {

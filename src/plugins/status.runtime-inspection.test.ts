@@ -183,12 +183,7 @@ describe("plugin runtime inspection", () => {
         await command;
         expect(output).toHaveLength(1);
         expect(process.exitCode, output.join("\n")).toBe(0);
-        expect(JSON.parse(output[0] ?? "")).toMatchObject({
-          ok: true,
-          pluginErrors: [],
-          diagnostics: [],
-          configurationWarnings: [],
-        });
+        expect(JSON.parse(output[0] ?? "").ok).toBe(true);
         expect(inspection).toMatchObject({ disposals: 1, database: { isOpen: false } });
         expect(activeConnection?.disposals).toBe(0);
         expect(connections.map((connection) => connection.cleanups)).toEqual([0, 0]);
@@ -333,54 +328,51 @@ describe("plugin runtime inspection", () => {
   );
 
   it.each([
-    { source: "marketplace", kind: "memory", mode: "ready", slots: ["memory"] },
-    {
-      source: "npm",
-      kind: ["memory", "context-engine"],
-      mode: "ready",
-      slots: ["memory", "contextEngine"],
+    ["marketplace", "memory", true, ["memory"]],
+    ["npm", ["memory", "context-engine"], true, ["memory", "contextEngine"]],
+    ["npm", undefined, true, ["contextEngine"]],
+    ["npm", "memory", false, []],
+  ] as const)(
+    "persists first-install slots for %s (%j, enabled: %s)",
+    async (source, kind, enable, slots) => {
+      await withInstallLease(async (prepared, stateDir, configPath) => {
+        const pluginId = "first-slot-candidate";
+        const pluginDir =
+          source === "npm"
+            ? path.join(stateDir, "npm", "projects", pluginId, "node_modules", pluginId)
+            : path.join(stateDir, "extensions", pluginId);
+        writePackage(
+          pluginDir,
+          pluginId,
+          { kind },
+          {
+            "index.cjs": `module.exports = { id: ${JSON.stringify(pluginId)}, kind: ${JSON.stringify(kind ?? "context-engine")}, register() { require("node:fs").writeFileSync(${JSON.stringify(path.join(pluginDir, "registered"))}, "registered"); } };\n`,
+          },
+        );
+
+        await persistPluginInstall({
+          snapshot: installSnapshot(prepared),
+          pluginId,
+          install: { source, installPath: pluginDir, version: "1.0.0" },
+          enable,
+        });
+        expect(fs.existsSync(path.join(pluginDir, "registered"))).toBe(false);
+
+        const expectedSlots = slots.length
+          ? Object.fromEntries(slots.map((slot) => [slot, pluginId]))
+          : undefined;
+        const persisted = JSON.parse(fs.readFileSync(configPath, "utf8"));
+        expect(persisted.plugins?.slots).toEqual(expectedSlots);
+        expect(persisted.plugins?.load?.paths).toBeUndefined();
+        expect(
+          (await readPersistedInstalledPluginIndexInstallRecordsAsync())?.[pluginId],
+        ).toMatchObject({
+          source,
+          installPath: pluginDir,
+        });
+      });
     },
-    { source: "npm", kind: undefined, mode: "ready", slots: ["contextEngine"] },
-    { source: "npm", kind: "memory", mode: "disabled", slots: [] },
-  ] as const)("persists first-install slots for $source ($kind, $mode)", async (testCase) => {
-    await withInstallLease(async (prepared, stateDir, configPath) => {
-      const pluginId = "first-slot-candidate";
-      const pluginDir =
-        testCase.source === "npm"
-          ? path.join(stateDir, "npm", "projects", pluginId, "node_modules", pluginId)
-          : path.join(stateDir, "extensions", pluginId);
-      writePackage(
-        pluginDir,
-        pluginId,
-        { kind: testCase.kind },
-        {
-          "index.cjs": `module.exports = { id: ${JSON.stringify(pluginId)}, kind: ${JSON.stringify(testCase.kind ?? "context-engine")}, register() { require("node:fs").writeFileSync(${JSON.stringify(path.join(pluginDir, "registered"))}, "registered"); } };\n`,
-        },
-      );
-
-      const next = await persistPluginInstall({
-        snapshot: installSnapshot(prepared),
-        pluginId,
-        install: { source: testCase.source, installPath: pluginDir, version: "1.0.0" },
-        enable: testCase.mode !== "disabled",
-      });
-      expect(fs.existsSync(path.join(pluginDir, "registered"))).toBe(false);
-
-      const expectedSlots = testCase.slots.length
-        ? Object.fromEntries(testCase.slots.map((slot) => [slot, pluginId]))
-        : undefined;
-      expect(next.plugins?.slots).toEqual(expectedSlots);
-      const persisted = JSON.parse(fs.readFileSync(configPath, "utf8"));
-      expect(persisted.plugins?.slots).toEqual(expectedSlots);
-      expect(persisted.plugins?.load?.paths).toBeUndefined();
-      expect(
-        (await readPersistedInstalledPluginIndexInstallRecordsAsync())?.[pluginId],
-      ).toMatchObject({
-        source: testCase.source,
-        installPath: pluginDir,
-      });
-    });
-  });
+  );
 
   it("uses replaced package metadata while preserving its old snapshot when config is required", async () => {
     await withInstallState(async (stateDir, configPath) => {

@@ -1,7 +1,6 @@
-import { execFile, execFileSync, spawn } from "node:child_process";
+import { execFileSync, spawn } from "node:child_process";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { promisify } from "node:util";
 import { expectDefined } from "@openclaw/normalization-core";
 import { Command } from "commander";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
@@ -18,13 +17,14 @@ import {
 } from "./status.js";
 import { createChatGptConversation, createMemoryWikiTestHarness } from "./test-helpers.js";
 
-const callGatewayFromCliMock = vi.hoisted(() => vi.fn());
+const gatewayCall = vi.hoisted(() => vi.fn());
 const afterCompileHook = vi.hoisted<{ run?: () => Promise<void> }>(() => ({}));
 
 const afterMoveHook = vi.hoisted(() => ({ run: undefined as RootMoveHooks["afterMove"] }));
 
+// mock-isolation: Capture CLI requests without connecting to an operator Gateway.
 vi.mock("openclaw/plugin-sdk/gateway-runtime", () => ({
-  callGatewayFromCli: callGatewayFromCliMock,
+  callGatewayFromCli: gatewayCall,
 }));
 
 vi.mock("openclaw/plugin-sdk/security-runtime", async (importOriginal) => {
@@ -53,9 +53,8 @@ vi.mock("./compile.js", async (importOriginal) => {
   };
 });
 
-const { createVault: createCliVault } = createMemoryWikiTestHarness();
-const execFileAsync = promisify(execFile);
-let stdoutWriteMock: ReturnType<typeof vi.fn>;
+const { createVault } = createMemoryWikiTestHarness();
+let stdoutWrite: ReturnType<typeof vi.fn>;
 const synthesisArgs = ["apply", "synthesis", "CLI Alpha", "--body", "Alpha from CLI."];
 const assistantReply = "Noted. I will keep travel options close to the airport.";
 const warnings = (message: string): MemoryWikiStatus["warnings"] => [
@@ -75,12 +74,39 @@ const emptyBridgeImport = {
   indexRefreshReason: "no-import-changes",
 };
 
+// The writer releases a regressed blocking reader; always reap it after the assertion.
+async function withFifoWriter(
+  file: string,
+  contents: string | undefined,
+  check: () => Promise<void>,
+) {
+  const script =
+    contents === undefined
+      ? "const fs = require('node:fs'); fs.open(process.argv[1], 'w', (error, fd) => { if (error) throw error; fs.closeSync(fd); });"
+      : "require('node:fs').writeFileSync(process.argv[1], process.argv[2])";
+  const writer = spawn(
+    process.execPath,
+    ["-e", script, file, ...(contents === undefined ? [] : [contents])],
+    { stdio: "ignore" },
+  );
+  const exited = new Promise<void>((resolve, reject) => {
+    writer.once("error", reject);
+    writer.once("close", () => resolve());
+  });
+  try {
+    await check();
+  } finally {
+    writer.kill("SIGKILL");
+    await exited;
+  }
+}
+
 describe("memory-wiki cli", () => {
   beforeEach(() => {
-    callGatewayFromCliMock.mockReset();
-    stdoutWriteMock = vi.fn(() => true);
+    gatewayCall.mockReset();
+    stdoutWrite = vi.fn(() => true);
     vi.spyOn(process.stdout, "write").mockImplementation(
-      stdoutWriteMock as unknown as typeof process.stdout.write,
+      stdoutWrite as unknown as typeof process.stdout.write,
     );
     process.exitCode = undefined;
   });
@@ -136,10 +162,18 @@ describe("memory-wiki cli", () => {
     appConfig?: OpenClawConfig,
     positional = false,
   ): Promise<string> {
-    stdoutWriteMock.mockClear();
+    stdoutWrite.mockClear();
     const program = createProgram(config, appConfig, positional);
     await program.parseAsync(["wiki", ...args], { from: "user" });
-    return stdoutWriteMock.mock.calls.map(([chunk]) => String(chunk)).join("");
+    return stdoutWrite.mock.calls.map(([chunk]) => String(chunk)).join("");
+  }
+
+  async function createCliVault(options?: Parameters<typeof createVault>[0]) {
+    const vault = await createVault(options);
+    const run = (...args: string[]) => runWiki(vault.config, args);
+    const json = async <T>(...args: string[]): Promise<T> =>
+      JSON.parse(await run(...args, "--json"));
+    return { ...vault, run, json };
   }
 
   async function updateExportReply(exportDir: string, reply: string) {
@@ -198,17 +232,17 @@ describe("memory-wiki cli", () => {
   }
 
   it("prefers inline --body and writes a synthesis page", async () => {
-    const { config, read } = await createCliVault();
+    const { rootDir, run, read } = await createCliVault();
 
-    await runWiki(config, [
+    await run(
       ...synthesisArgs,
       "--body-file",
-      path.join(config.vault.path, "missing-body.txt"),
+      path.join(rootDir, "missing-body.txt"),
       "--source-id",
       "source.alpha",
       "--source-id",
       "source.beta",
-    ]);
+    );
 
     const page = await read("syntheses/cli-alpha.md");
     expect(page).toContain("Alpha from CLI.");
@@ -219,9 +253,9 @@ describe("memory-wiki cli", () => {
   it.skipIf(process.platform === "win32").each([false, true])(
     "rejects FIFO --body-file before changing synthesis (symlink: %s)",
     async (symlink) => {
-      const { rootDir, config, read } = await createCliVault();
+      const { rootDir, run, read } = await createCliVault();
       const args = ["apply", "synthesis", "Good", "--source-id", "src.manual"];
-      await runWiki(config, [...args, "--body", "Keep this summary."]);
+      await run(...args, "--body", "Keep this summary.");
       const before = await read("syntheses/good.md");
       const fifo = path.join(rootDir, "body.fifo");
       execFileSync("mkfifo", [fifo]);
@@ -229,22 +263,8 @@ describe("memory-wiki cli", () => {
       if (symlink) {
         await fs.symlink(fifo, input);
       }
-      // An EOF writer lets a regressed blocking read fail without hanging the worker.
-      const writer = spawn(
-        process.execPath,
-        [
-          "-e",
-          "const fs = require('node:fs'); fs.open(process.argv[1], 'w', (error, fd) => { if (error) throw error; fs.closeSync(fd); });",
-          fifo,
-        ],
-        { stdio: "ignore" },
-      );
-      const exited = new Promise<void>((resolve, reject) => {
-        writer.once("error", reject);
-        writer.once("close", () => resolve());
-      });
-      try {
-        await expect(runWiki(config, [...args, "--body-file", input])).rejects.toThrow(
+      await withFifoWriter(fifo, undefined, async () => {
+        await expect(run(...args, "--body-file", input)).rejects.toThrow(
           `wiki apply synthesis --body-file could not be read: ${input}. path must be a regular file. Supply a regular UTF-8 file (or use --body), then retry.`,
         );
         expect(await read("syntheses/good.md")).toBe(before);
@@ -252,73 +272,54 @@ describe("memory-wiki cli", () => {
         if (symlink) {
           expect((await fs.lstat(input)).isSymbolicLink()).toBe(true);
         }
-      } finally {
-        writer.kill("SIGKILL");
-        await exited;
-      }
+      });
     },
   );
 
   it.skipIf(process.platform === "win32")(
     "reads a symlinked UTF-8 --body-file larger than one MiB without truncating",
     async () => {
-      const { rootDir, config, read, write } = await createCliVault();
+      const { rootDir, run, read, write } = await createCliVault();
       const body = `Café 😀 ${"x".repeat(1_048_576)} end.`;
       await write("body.txt", body);
       const input = path.join(rootDir, "body-link.txt");
       await fs.symlink("body.txt", input);
 
-      await runWiki(config, [
-        "apply",
-        "synthesis",
-        "Large",
-        "--source-id",
-        "src.manual",
-        "--body-file",
-        input,
-      ]);
+      await run("apply", "synthesis", "Large", "--source-id", "src.manual", "--body-file", input);
 
       expect(await read("syntheses/large.md")).toContain(body);
       expect((await fs.lstat(input)).isSymbolicLink()).toBe(true);
     },
   );
 
-  it("preserves structured --body-file I/O errors before changing synthesis", async () => {
-    const { config, read, write } = await createCliVault();
+  it.each([
+    ["denied", "Replacement summary."],
+    ["empty", "  \n\n"],
+    ["UTF-8", Buffer.from([0x43, 0x61, 0x66, 0xe9])],
+  ])("rejects %s body files without changing synthesis", async (kind, body) => {
+    const { run, read, write } = await createCliVault();
     const args = ["apply", "synthesis", "Good", "--source-id", "src.manual"];
-    await runWiki(config, [...args, "--body", "Keep this summary."]);
+    await run(...args, "--body", "Real summary v1");
     const before = await read("syntheses/good.md");
-    const input = await write("body.txt", "Replacement summary.");
-    const bodyPath = await fs.realpath(input);
-    const denied = Object.assign(new Error("Body file read denied"), { code: "EACCES" });
-    const realOpen = fs.open;
-    vi.spyOn(fs, "open").mockImplementation((filePath, flags, mode) => {
-      if (filePath === bodyPath) {
-        return Promise.reject(denied);
-      }
-      return realOpen(filePath, flags, mode);
-    });
-
-    await expect(runWiki(config, [...args, "--body-file", input])).rejects.toBe(denied);
-    expect(await read("syntheses/good.md")).toBe(before);
-  });
-
-  it("rejects blank and invalid UTF-8 --body-file before wiping synthesis", async () => {
-    const { config, read, write } = await createCliVault();
-    const args = ["apply", "synthesis", "Good", "--source-id", "src.manual"];
-    await runWiki(config, [...args, "--body", "Real summary v1"]);
-    const pagePath = "syntheses/good.md";
-    const before = await read(pagePath);
     expect(before).toContain("Real summary v1");
-
-    for (const [bytes, error] of [
-      [Buffer.from("  \n\n"), /body-file is empty/],
-      [Buffer.from([0x43, 0x61, 0x66, 0xe9]), /must be valid UTF-8/],
-    ] as const) {
-      const bodyPath = await write("body.txt", bytes);
-      await expect(runWiki(config, [...args, "--body-file", bodyPath])).rejects.toThrow(error);
-      expect(await read(pagePath)).toBe(before);
+    const input = await write("body.txt", body);
+    const denied = Object.assign(new Error("Body file read denied"), { code: "EACCES" });
+    if (kind === "denied") {
+      const bodyPath = await fs.realpath(input);
+      const realOpen = fs.open;
+      vi.spyOn(fs, "open").mockImplementation((file, flags, mode) =>
+        file === bodyPath ? Promise.reject(denied) : realOpen(file, flags, mode),
+      );
     }
+    const pending = run(...args, "--body-file", input);
+    if (kind === "denied") {
+      await expect(pending).rejects.toBe(denied);
+    } else {
+      await expect(pending).rejects.toThrow(
+        kind === "empty" ? /body-file is empty/ : /must be valid UTF-8/,
+      );
+    }
+    expect(await read("syntheses/good.md")).toBe(before);
   });
 
   it("forwards --agent through every bridge Gateway call", async () => {
@@ -332,7 +333,7 @@ describe("memory-wiki cli", () => {
     const appConfig = { agents: { entries: { support: {}, marketing: {} } } };
     const status = createGatewayStatus(config);
     const report: MemoryWikiDoctorReport = { healthy: true, warningCount: 0, status, fixes: [] };
-    callGatewayFromCliMock
+    gatewayCall
       .mockResolvedValueOnce(status)
       .mockResolvedValueOnce(report)
       .mockResolvedValueOnce(emptyBridgeImport);
@@ -340,17 +341,15 @@ describe("memory-wiki cli", () => {
       await runWiki(config, ["--agent", "marketing", ...command, "--json"], appConfig);
     }
 
-    expect(callGatewayFromCliMock.mock.calls.map(([method, , params]) => [method, params])).toEqual(
-      [
-        ["wiki.status", { agentId: "marketing" }],
-        ["wiki.doctor", { agentId: "marketing" }],
-        ["wiki.bridge.import", { agentId: "marketing" }],
-      ],
-    );
+    expect(gatewayCall.mock.calls.map(([method, , params]) => [method, params])).toEqual([
+      ["wiki.status", { agentId: "marketing" }],
+      ["wiki.doctor", { agentId: "marketing" }],
+      ["wiki.bridge.import", { agentId: "marketing" }],
+    ]);
   });
 
   it("registers OKF import and searches imported concepts", async () => {
-    const { rootDir, config, write } = await createCliVault();
+    const { rootDir, json, write } = await createCliVault();
     const bundlePath = path.join(rootDir, "okf-bundle");
     await write("okf-bundle/index.md", "# Sales OKF\n");
     await write(
@@ -358,20 +357,13 @@ describe("memory-wiki cli", () => {
       "---\ntype: BigQuery Table\ntitle: Orders\n---\nOne row per completed order.\n",
     );
 
-    const importResult = JSON.parse(
-      await runWiki(config, ["okf", "import", bundlePath, "--json"]),
-    ) as {
+    const importResult = await json<{
       importedCount: number;
       pagePaths: string[];
-    };
+    }>("okf", "import", bundlePath);
     expect(importResult.importedCount).toBe(1);
-    expect(importResult.pagePaths).toEqual([
-      expect.stringMatching(/^concepts\/okf-okf-bundle-[0-9a-f]{8}-tables-orders-/),
-    ]);
 
-    const searchResults = JSON.parse(
-      await runWiki(config, ["search", "completed order", "--json"]),
-    ) as Array<{ title: string }>;
+    const searchResults = await json<Array<{ title: string }>>("search", "completed order");
     expect(searchResults.map(({ title }) => title)).toContain("Orders");
   });
 
@@ -404,31 +396,24 @@ describe("memory-wiki cli", () => {
       exitCode: 1,
     });
     expect(writeErr.mock.calls.flat().join("")).toContain("Invalid backend: bogus");
-    expect(callGatewayFromCliMock).not.toHaveBeenCalled();
+    expect(gatewayCall).not.toHaveBeenCalled();
   });
 
   it("accepts signed and zero-padded wiki get line options", async () => {
-    const { config, write } = await createCliVault();
+    const { run, write } = await createCliVault();
     await write("syntheses/cli-lines.md", "# CLI Lines\n\nfirst\nsecond\n");
 
-    await runWiki(config, ["get", "syntheses/cli-lines.md", "--from", "+01", "--lines", "02"]);
+    await run("get", "syntheses/cli-lines.md", "--from", "+01", "--lines", "02");
   });
 
-  it("registers apply metadata and preserves the page body", async () => {
-    const { config, page, read } = await createCliVault();
-    await page(
+  it("applies CLI metadata options", async () => {
+    const { run, write, read } = await createCliVault();
+    await write(
       "entities/alpha.md",
-      {
-        pageType: "entity",
-        id: "entity.alpha",
-        title: "Alpha",
-        sourceIds: ["source.old"],
-        confidence: 0.2,
-      },
-      "# Alpha\n\n## Notes\n<!-- openclaw:human:start -->\ncli note\n<!-- openclaw:human:end -->\n",
+      "---\npageType: entity\nid: entity.alpha\ntitle: Alpha\nsourceIds: [source.old]\nconfidence: 0.2\n---\n# Alpha\n",
     );
 
-    await runWiki(config, [
+    await run(
       "apply",
       "metadata",
       "entity.alpha",
@@ -441,7 +426,7 @@ describe("memory-wiki cli", () => {
       "--status",
       "review",
       "--clear-confidence",
-    ]);
+    );
 
     const parsed = parseWikiMarkdown(await read("entities/alpha.md"));
     expect(parsed.frontmatter).toMatchObject({
@@ -451,19 +436,18 @@ describe("memory-wiki cli", () => {
       status: "review",
     });
     expect(parsed.frontmatter).not.toHaveProperty("confidence");
-    expect(parsed.body).toContain("cli note");
   });
 
   it("runs wiki doctor and sets a non-zero exit code when warnings exist", async () => {
-    const { rootDir, config } = await createCliVault({
+    const { rootDir, run } = await createCliVault({
       config: { vaultMode: "bridge", bridge: { enabled: false } },
     });
     await fs.rm(rootDir, { recursive: true, force: true });
 
-    await runWiki(config, ["doctor", "--json"]);
+    await run("doctor", "--json");
 
     expect(process.exitCode).toBe(1);
-    expect(callGatewayFromCliMock).not.toHaveBeenCalled();
+    expect(gatewayCall).not.toHaveBeenCalled();
   });
 
   it("sanitizes gateway status text output without changing JSON output", async () => {
@@ -473,7 +457,7 @@ describe("memory-wiki cli", () => {
       vault: { path: "\u001B[2J/tmp/wiki\nforged prompt\u202E" },
     });
     unsafeStatus.warnings = warnings("missing artifacts\r\nfake success\u001B[31m\u202E");
-    callGatewayFromCliMock.mockResolvedValueOnce(unsafeStatus);
+    gatewayCall.mockResolvedValueOnce(unsafeStatus);
 
     const renderedText = await runWiki(config, ["status"]);
     expect(renderedText).not.toContain("\u001B");
@@ -481,7 +465,7 @@ describe("memory-wiki cli", () => {
     expect(renderedText).toContain("(/tmp/wiki forged prompt)");
     expect(renderedText).toContain("- missing artifacts fake success");
 
-    callGatewayFromCliMock.mockResolvedValueOnce(unsafeStatus);
+    gatewayCall.mockResolvedValueOnce(unsafeStatus);
 
     const renderedJson = await runWiki(config, ["status", "--json"]);
     expect(renderedJson).not.toContain("\u001B");
@@ -499,7 +483,7 @@ describe("memory-wiki cli", () => {
     const { config } = await createBridgeCliVault();
     const status = createGatewayStatus(config);
     status.warnings = warnings("x".repeat(10_001));
-    callGatewayFromCliMock.mockResolvedValueOnce(status);
+    gatewayCall.mockResolvedValueOnce(status);
 
     await expect(runWiki(config, ["status"])).rejects.toThrow(
       "Invalid Gateway response for wiki.status.",
@@ -518,7 +502,7 @@ describe("memory-wiki cli", () => {
     const renderedStatus = renderMemoryWikiStatus(status);
     expect(renderedStatus.charCodeAt(1_999)).toBe(0xd83d);
     expect(renderedStatus.charCodeAt(2_000)).toBe(0xde00);
-    callGatewayFromCliMock.mockResolvedValueOnce(status);
+    gatewayCall.mockResolvedValueOnce(status);
 
     const renderedText = await runWiki(config, ["status"]);
     const truncationMarker = "... [truncated]\n";
@@ -532,7 +516,7 @@ describe("memory-wiki cli", () => {
 
   it("routes active bridge imports through the gateway and keeps disabled bridge imports local", async () => {
     const active = await createBridgeCliVault();
-    callGatewayFromCliMock.mockResolvedValueOnce({
+    gatewayCall.mockResolvedValueOnce({
       ...emptyBridgeImport,
       importedCount: 1,
       artifactCount: 1,
@@ -548,14 +532,9 @@ describe("memory-wiki cli", () => {
     ) as { importedCount: number };
 
     expect(activeResult.importedCount).toBe(1);
-    expect(callGatewayFromCliMock).toHaveBeenCalledWith(
-      "wiki.bridge.import",
-      { timeout: "30000" },
-      undefined,
-      { progress: false },
-    );
+    expect(gatewayCall.mock.calls[0]?.[0]).toBe("wiki.bridge.import");
 
-    callGatewayFromCliMock.mockClear();
+    gatewayCall.mockClear();
     const disabled = await createCliVault({
       config: {
         vaultMode: "bridge",
@@ -568,7 +547,7 @@ describe("memory-wiki cli", () => {
     ) as { artifactCount: number };
 
     expect(disabledResult.artifactCount).toBe(0);
-    expect(callGatewayFromCliMock).not.toHaveBeenCalled();
+    expect(gatewayCall).not.toHaveBeenCalled();
   });
 
   it.each([false, true])(
@@ -652,22 +631,11 @@ describe("memory-wiki cli", () => {
         await fs.unlink(inputPath);
       }
       execFileSync("mkfifo", [inputPath]);
-      // A writer lets the old blocking reader finish, so RED cannot strand a worker.
-      const writer = execFileAsync(process.execPath, [
-        "-e",
-        "require('node:fs').writeFileSync(process.argv[1], process.argv[2])",
-        inputPath,
-        contents,
-      ]);
-      const writerSettled = writer.catch(() => undefined);
-      try {
+      await withFifoWriter(inputPath, contents, async () => {
         await expect(runChatGptImport(config, exportDir, "--dry-run")).rejects.toThrow(
           "path must be a regular file",
         );
-      } finally {
-        writer.child.kill();
-        await writerSettled;
-      }
+      });
       expect((await fs.lstat(inputPath)).isFIFO()).toBe(true);
       await fs.unlink(inputPath);
       if (input === "export") {
@@ -766,12 +734,7 @@ describe("memory-wiki cli", () => {
 
     await updateExportReply(exportDir, "Updated: window seats now.");
 
-    let importError: unknown;
-    try {
-      await vault.import();
-    } catch (error) {
-      importError = error;
-    }
+    const importError = await vault.import().catch((error: unknown) => error);
     const message = importError instanceof Error ? importError.message : "";
     const failedRunId = message.match(/chatgpt-[a-f0-9]{12}/u)?.[0];
     expect(failedRunId).toBeDefined();

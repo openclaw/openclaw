@@ -1,6 +1,4 @@
-// Memory Core tests cover generic embedding provider.integration plugin behavior.
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
-import { DatabaseSync } from "node:sqlite";
 import { text as readText } from "node:stream/consumers";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import {
@@ -12,10 +10,7 @@ import { withOpenClawTestState } from "openclaw/plugin-sdk/test-state";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { listenOnLoopback } from "../../../test-support/hanging-loopback-server.js";
 import { createEmbeddingProvider, resolveEmbeddingProviderIndexIdentity } from "./embeddings.js";
-import type { IndexedMemoryChunk } from "./manager-chunk-writer.js";
-import { MemoryIndexDatabase } from "./manager-database-context.js";
 import { MemoryManagerEmbeddingOps } from "./manager-embedding-ops.js";
-import type { MemoryIndexWorkItem, MemorySemanticProviderGeneration } from "./manager-sync-base.js";
 
 type CapturedRequest = {
   method: string | undefined;
@@ -35,50 +30,39 @@ const servers: TestServer[] = [];
 let registeredEmbeddingProvidersSnapshot: ReturnType<typeof listRegisteredEmbeddingProviders>;
 
 async function startEmbeddingServer(options?: {
-  reject?: (inputCount: number) => { status: number; body: string } | undefined;
+  reject?: (inputCount: number) => { status: number; body: unknown } | undefined;
   authorization?: string;
 }): Promise<TestServer> {
   const requests: CapturedRequest[] = [];
   const server = createServer((req: IncomingMessage, res: ServerResponse) => {
+    const respond = (status: number, body: unknown) => {
+      res.writeHead(status, { "content-type": "application/json" });
+      res.end(JSON.stringify(body));
+    };
     void (async () => {
       try {
         const rawBody = await readText(req);
         const body = JSON.parse(rawBody) as Record<string, unknown>;
-        requests.push({
-          method: req.method,
-          url: req.url,
-          headers: req.headers,
-          body,
-          rawBody,
-        });
+        requests.push({ method: req.method, url: req.url, headers: req.headers, body, rawBody });
         if (options?.authorization && req.headers.authorization !== options.authorization) {
-          res.writeHead(401, { "content-type": "application/json" });
-          res.end(JSON.stringify({ error: { message: "Invalid fixture credential" } }));
+          respond(401, { error: { message: "Invalid fixture credential" } });
           return;
         }
         const input = body.input;
         const texts = Array.isArray(input) ? input : [input];
         const rejection = options?.reject?.(texts.length);
         if (rejection) {
-          res.writeHead(rejection.status, { "content-type": "application/json" });
-          res.end(rejection.body);
+          respond(rejection.status, rejection.body);
           return;
         }
-        res.writeHead(200, { "content-type": "application/json" });
-        res.end(
-          JSON.stringify({
-            object: "list",
-            data: texts.map((text, index) => ({
-              object: "embedding",
-              embedding: [String(text).length, index + 0.5, 3],
-              index,
-            })),
-            model: body.model,
-          }),
-        );
+        respond(200, {
+          data: texts.map((text, index) => ({
+            embedding: [String(text).length, index + 0.5, 3],
+            index,
+          })),
+        });
       } catch (error) {
-        res.writeHead(500, { "content-type": "application/json" });
-        res.end(JSON.stringify({ error: error instanceof Error ? error.message : String(error) }));
+        respond(500, { error: error instanceof Error ? error.message : String(error) });
       }
     })();
   });
@@ -114,11 +98,7 @@ function createMemoryEmbeddingOptions(overrides?: {
   outputDimensionality?: number;
 }) {
   return {
-    config: {
-      plugins: {
-        enabled: false,
-      },
-    } as OpenClawConfig,
+    config: { plugins: { enabled: false } } as OpenClawConfig,
     agentDir: "/tmp/openclaw-agent",
     provider: overrides?.provider ?? "openai-compatible",
     fallback: "none",
@@ -254,88 +234,61 @@ describe("memory-core generic embedding provider contract", () => {
 });
 
 // Keep batching, splitting, retry classification, and timeout ownership real.
-function createMemoryEmbeddingOwner(generation: MemorySemanticProviderGeneration) {
-  return Object.assign(Object.create(MemoryManagerEmbeddingOps.prototype), {
-    provider: generation.provider,
-    providerRuntime: generation.runtime,
-    publishedDatabase: generation.database,
-    syncProviderGeneration: generation,
-    cache: { enabled: false },
-    settings: { sync: {} },
-    markLocalEmbeddingProviderDegraded: () => {},
-  }) as {
-    settings: {
-      sync: object;
-      queryInstruction?: string;
-      inputFormat?: { query: string; document: string };
-    };
-    embedQueryWithRetry: (text: string) => Promise<number[]>;
-    embedBatchWithRetry: (texts: string[]) => Promise<number[][]>;
-    embedChunksInBatches: (
-      candidates: Array<MemoryIndexWorkItem & { chunk: IndexedMemoryChunk }>,
-      generation: MemorySemanticProviderGeneration,
-      maxTokens: number,
-    ) => Promise<number[][]>;
-  };
-}
+type EmbeddingOverrides = Partial<
+  Pick<
+    Parameters<typeof createEmbeddingProvider>[0],
+    "provider" | "model" | "config" | "outputDimensionality"
+  >
+>;
 
 async function createMemoryEmbeddingOwnerForServer(
   baseUrl: string,
-  database: DatabaseSync,
-  overrides?: {
-    provider?: string;
-    model?: string;
-    config?: OpenClawConfig;
-    outputDimensionality?: number;
-  },
+  overrides?: EmbeddingOverrides,
 ) {
-  const options = { ...createMemoryEmbeddingOptions({ baseUrl, ...overrides }), ...overrides };
+  const options = {
+    config: { plugins: { enabled: false } },
+    agentDir: "/tmp/openclaw-agent",
+    provider: "openai-compatible",
+    fallback: "none",
+    model: "text-embedding-bge-m3",
+    remote: { baseUrl, apiKey: "fixture-token" },
+    outputDimensionality: 3,
+    ...overrides,
+  };
   const created = await createEmbeddingProvider(options);
   const provider = created.provider;
   if (!provider) {
     throw new Error("expected the OpenAI-compatible embedding provider to be created");
   }
-  const indexDatabase = new MemoryIndexDatabase(database);
-  const generation: MemorySemanticProviderGeneration = {
-    kind: "semantic",
+  // Index/cache mapping is covered by index.test.ts; keep the real retry/HTTP boundary here.
+  const owner = Object.assign(Object.create(MemoryManagerEmbeddingOps.prototype), {
     provider,
-    runtime: created.runtime,
-    database: indexDatabase,
-    cacheWritesInvalidated: false,
-    providerKey: "integration-proof",
-    identities: [],
+    providerRuntime: created.runtime,
+    settings: {},
+    markLocalEmbeddingProviderDegraded: () => {},
+  }) as {
+    settings: { queryInstruction?: string; inputFormat?: { query: string; document: string } };
+    embedQueryWithRetry: (text: string) => Promise<number[]>;
+    embedBatchWithRetry: (texts: string[]) => Promise<number[][]>;
   };
-  return {
-    owner: createMemoryEmbeddingOwner(generation),
-    generation,
-    options,
-  };
+  return { owner, provider, runtime: created.runtime, options };
 }
 
-// Unique text lengths make each vector identify its own input, because the
-// fixture server answers with `[text.length, indexWithinRequest + 0.5, 3]`.
-function distinctCandidates(
+const distinctInputs = (count: number) =>
+  Array.from({ length: count }, (_, index) => "x".repeat(index + 1));
+
+async function expectBatchEmbedding(
+  server: TestServer,
+  owner: Awaited<ReturnType<typeof createMemoryEmbeddingOwnerForServer>>["owner"],
   count: number,
-): Array<MemoryIndexWorkItem & { chunk: IndexedMemoryChunk }> {
-  return Array.from({ length: count }, (_, index) => ({
-    chunk: {
-      text: "x".repeat(index + 1),
-      hash: `hash-${index}`,
-      startLine: index + 1,
-      endLine: index + 1,
-      importance: null,
-      triggers: null,
-      projectKey: null,
-    },
-    entry: {
-      path: `memory/chunk-${index}.md`,
-      absPath: `/fixture/memory/chunk-${index}.md`,
-      mtimeMs: 0,
-      size: index + 1,
-      hash: `hash-${index}`,
-    },
-    source: "memory",
-  }));
+  limit: number,
+  requests: number[],
+) {
+  const embeddings = await owner.embedBatchWithRetry(distinctInputs(count));
+  expect(server.requests.map(({ body }) => (body.input as unknown[]).length)).toEqual(requests);
+  expect(embeddings).toEqual(
+    Array.from({ length: count }, (_, index) => [index + 1, (index % limit) + 0.5, 3]),
+  );
 }
 
 describe("memory query instructions over real transport", () => {
@@ -345,149 +298,79 @@ describe("memory query instructions over real transport", () => {
     { model: "generic-embedding-alias", inputFormat: { query: "query: ", document: "passage: " } },
   ])("formats both retrieval roles for $model", async ({ model, inputFormat }) => {
     const server = await startEmbeddingServer();
-    const database = new DatabaseSync(":memory:");
-    try {
-      const { owner } = await createMemoryEmbeddingOwnerForServer(server.baseUrl, database, {
-        model,
-      });
-      owner.settings.inputFormat = inputFormat;
-      await owner.embedBatchWithRetry(["remember this"]);
-      await owner.embedQueryWithRetry("find this");
-      owner.settings.queryInstruction = "custom: ";
-      await owner.embedQueryWithRetry("find this");
-      expect(server.requests.map(({ body }) => body.input)).toEqual([
-        ["passage: remember this"],
-        ["query: find this"],
-        ["custom: find this"],
-      ]);
-    } finally {
-      database.close();
-    }
+    const { owner } = await createMemoryEmbeddingOwnerForServer(server.baseUrl, {
+      model,
+    });
+    owner.settings.inputFormat = inputFormat;
+    const documents = await owner.embedBatchWithRetry(["remember this"]);
+    await owner.embedQueryWithRetry("find this");
+    owner.settings.queryInstruction = "custom: ";
+    await expect(owner.embedQueryWithRetry("find this")).resolves.toEqual([17, 0.5, 3]);
+    expect(await owner.embedBatchWithRetry(["remember this"])).toEqual(documents);
+    expect(server.requests[0]?.rawBody).toBe(server.requests[3]?.rawBody);
+    expect(server.requests.map(({ body }) => body.input)).toEqual([
+      ["passage: remember this"],
+      ["query: find this"],
+      ["custom: find this"],
+      ["passage: remember this"],
+    ]);
   });
 
   it("keeps other Nemotron families raw and supports explicit empty prefixes", async () => {
     const server = await startEmbeddingServer();
-    const database = new DatabaseSync(":memory:");
-    try {
-      const { owner } = await createMemoryEmbeddingOwnerForServer(server.baseUrl, database, {
-        model: "nvidia/llama-embed-nemotron-8b",
-      });
-      await owner.embedBatchWithRetry(["remember this"]);
-      await owner.embedQueryWithRetry("find this");
-      owner.settings.inputFormat = { query: "", document: "" };
-      await owner.embedBatchWithRetry(["remember this"]);
-      await owner.embedQueryWithRetry("find this");
-      expect(server.requests[0]?.rawBody).toBe(server.requests[2]?.rawBody);
-      expect(server.requests[1]?.rawBody).toBe(server.requests[3]?.rawBody);
-      expect(server.requests.map(({ body }) => body.input)).toEqual([
-        ["remember this"],
-        ["find this"],
-        ["remember this"],
-        ["find this"],
-      ]);
-    } finally {
-      database.close();
-    }
-  });
-
-  it("changes generic query bytes and vectors while preserving document requests", async () => {
-    const server = await startEmbeddingServer();
-    const database = new DatabaseSync(":memory:");
-    try {
-      const { owner } = await createMemoryEmbeddingOwnerForServer(server.baseUrl, database, {
-        model: "generic-embedding-alias",
-      });
-      const documents = await owner.embedBatchWithRetry(["remember this"]);
-      const bare = await owner.embedQueryWithRetry("find this");
-      owner.settings.queryInstruction = "search_query: ";
-      const instructed = await owner.embedQueryWithRetry("find this");
-      expect(instructed).toEqual([23, 0.5, 3]);
-      expect(bare).toEqual([9, 0.5, 3]);
-      expect(await owner.embedBatchWithRetry(["remember this"])).toEqual(documents);
-      owner.settings.queryInstruction = "";
-      expect(await owner.embedQueryWithRetry("find this")).toEqual(bare);
-      expect(server.requests[0]?.rawBody).toBe(server.requests[3]?.rawBody);
-      expect(server.requests[1]?.rawBody).toBe(server.requests[4]?.rawBody);
-      expect(server.requests.map(({ body }) => body.input)).toEqual([
-        ["remember this"],
-        ["find this"],
-        ["search_query: find this"],
-        ["remember this"],
-        ["find this"],
-      ]);
-      expect(server.requests[2]?.body).toEqual({
-        ...server.requests[1]?.body,
-        input: ["search_query: find this"],
-      });
-    } finally {
-      database.close();
-    }
+    const { owner } = await createMemoryEmbeddingOwnerForServer(server.baseUrl, {
+      model: "nvidia/llama-embed-nemotron-8b",
+    });
+    await owner.embedBatchWithRetry(["remember this"]);
+    await owner.embedQueryWithRetry("find this");
+    owner.settings.queryInstruction = "custom: ";
+    await owner.embedQueryWithRetry("find this");
+    owner.settings.queryInstruction = "";
+    owner.settings.inputFormat = { query: "", document: "" };
+    await owner.embedBatchWithRetry(["remember this"]);
+    await owner.embedQueryWithRetry("find this");
+    expect(server.requests[0]?.rawBody).toBe(server.requests[3]?.rawBody);
+    expect(server.requests[1]?.rawBody).toBe(server.requests[4]?.rawBody);
+    expect(server.requests.slice(0, 2).map(({ body }) => body.input)).toEqual([
+      ["remember this"],
+      ["find this"],
+    ]);
   });
 });
 
 describe("memory-core embedding batch recovery over real transport", () => {
-  it.each([
-    { model: "bge-large-zh", limit: 16, requests: [16, 16, 1] },
-    {
-      model: "qianfan/bge-large-en",
-      resolvedModel: "bge-large-en",
-      limit: 16,
-      requests: [16, 16, 1],
-    },
-    { model: "Embedding-V1", limit: 16, requests: [16, 16, 1] },
-    { model: "custom-embedding-model", limit: 33, requests: [33] },
+  it.each<[model: string, limit: number, requests: number[], resolvedModel?: string]>([
+    ["qianfan/bge-large-en", 16, [16, 16, 1], "bge-large-en"],
+    ["Embedding-V1", 16, [16, 16, 1]],
+    ["custom-embedding-model", 33, [33]],
   ])(
-    "indexes 33 inputs using Qianfan's documented cap for $model",
-    async ({ model, resolvedModel, limit, requests }) => {
+    "batches 33 inputs using Qianfan's documented cap for %s",
+    async (model, limit, requests, resolvedModel) => {
       const server = await startEmbeddingServer({
         reject: (count) =>
           count > limit
             ? {
                 status: 400,
-                body: JSON.stringify({
-                  error: {
-                    code: "InvalidParameter",
-                    message:
-                      "The parameter inputspecified in the request are not valid: ... Request id: ...",
-                    param: "input",
-                    type: "BadRequest",
-                  },
-                }),
+                body: { error: { message: "batch exceeds fixture limit" } },
               }
             : undefined,
       });
-      const database = new DatabaseSync(":memory:");
-      try {
-        const { owner, generation, options } = await createMemoryEmbeddingOwnerForServer(
-          server.baseUrl,
-          database,
-          {
-            provider: "qianfan",
-            model,
-            config: createQianfanConfig(server.baseUrl),
-          },
-        );
-        const embeddings = await owner.embedChunksInBatches(
-          distinctCandidates(33),
-          generation,
-          8000,
-        );
-        expect(generation.provider.id).toBe("qianfan");
-        expect(generation.runtime?.id).toBe("qianfan");
-        expect(resolveEmbeddingProviderIndexIdentity(options)?.provider).toEqual({
-          id: "qianfan",
-          model: resolvedModel ?? model,
-        });
+      const { owner, provider, runtime, options } = await createMemoryEmbeddingOwnerForServer(
+        server.baseUrl,
+        {
+          provider: "qianfan",
+          model,
+          config: createQianfanConfig(server.baseUrl),
+        },
+      );
+      expect(provider.id).toBe("qianfan");
+      expect(runtime?.id).toBe("qianfan");
+      expect(resolveEmbeddingProviderIndexIdentity(options)?.provider).toEqual({
+        id: "qianfan",
+        model: resolvedModel ?? model,
+      });
 
-        expect(server.requests.map((request) => (request.body.input as unknown[]).length)).toEqual(
-          requests,
-        );
-        expect(embeddings).toEqual(
-          Array.from({ length: 33 }, (_, index) => [index + 1, (index % limit) + 0.5, 3]),
-        );
-      } finally {
-        database.close();
-      }
+      await expectBatchEmbedding(server, owner, 33, limit, requests);
     },
   );
 
@@ -545,135 +428,51 @@ describe("memory-core embedding batch recovery over real transport", () => {
     });
   });
 
-  it.each([
-    {
-      message: "input array max 10",
-      count: 33,
-      limit: 10,
-      maxInputsPerRequest: 10,
-      requests: [10, 10, 10, 3],
-    },
-    {
-      message: "input array max 10",
-      count: 33,
-      limit: 10,
-      maxInputsPerRequest: 20,
-      requests: [20, 10, 10, 13, 10, 3],
-    },
-    {
-      message: "batch size is invalid, it should not be larger than 10",
-      count: 33,
-      limit: 10,
-      requests: [33, 10, 10, 10, 3],
-    },
-    { message: "input array max 64", count: 100, limit: 64, requests: [100, 64, 36] },
-    {
-      message: "input数组最大不得超过10条",
-      count: 33,
-      limit: 10,
-      requests: [33, 10, 10, 10, 3],
-    },
-    {
-      message: "Embeddings API input limit exceeded: max 10, got 33",
-      count: 33,
-      limit: 10,
-      requests: [33, 10, 10, 10, 3],
-    },
-    {
-      message: "request header fields too large",
-      count: 100,
-      limit: 50,
-      requests: [100, 50, 50],
-    },
-  ])(
-    "embeds in order for $message with declared cap $maxInputsPerRequest",
-    async ({ message, count, limit, requests, maxInputsPerRequest }) => {
-      const server = await startEmbeddingServer({
-        reject: (inputCount) =>
-          inputCount > limit
-            ? { status: 400, body: JSON.stringify({ error: { message } }) }
-            : undefined,
-      });
-      const database = new DatabaseSync(":memory:");
-      try {
-        const { owner, generation } = await createMemoryEmbeddingOwnerForServer(
-          server.baseUrl,
-          database,
-        );
-        generation.provider.maxInputsPerRequest = maxInputsPerRequest;
-        const embeddings = await owner.embedChunksInBatches(
-          distinctCandidates(count),
-          generation,
-          8000,
-        );
+  // Declared and corrected caps are covered by the paired-input policy tests.
+  it("halves a rejected HTTP batch when the endpoint gives no numeric cap", async () => {
+    const server = await startEmbeddingServer({
+      reject: (count) =>
+        count > 50
+          ? {
+              status: 400,
+              body: { error: { message: "request header fields too large" } },
+            }
+          : undefined,
+    });
+    const { owner } = await createMemoryEmbeddingOwnerForServer(server.baseUrl);
+    await expectBatchEmbedding(server, owner, 100, 50, [100, 50, 50]);
+  });
 
-        expect(server.requests.map((request) => (request.body.input as unknown[]).length)).toEqual(
-          requests,
-        );
-        expect(embeddings).toEqual(
-          Array.from({ length: count }, (_, index) => [index + 1, (index % limit) + 0.5, 3]),
-        );
-      } finally {
-        database.close();
-      }
-    },
-  );
-
-  it.each([
-    "input array must contain strings",
-    "input array item max length 64",
-    "input array max 64 tokens",
-    "input array max 64tokens",
-    "input array max 64.5",
-  ])("does not split a terminal provider rejection: %s", async (message) => {
+  it("does not split a terminal provider rejection", async () => {
     const server = await startEmbeddingServer({
       reject: () => ({
         status: 400,
-        body: JSON.stringify({
-          error: { code: "1214", message },
-        }),
+        body: {
+          error: { code: "1214", message: "input array must contain strings" },
+        },
       }),
     });
-    const database = new DatabaseSync(":memory:");
-    try {
-      const { owner, generation } = await createMemoryEmbeddingOwnerForServer(
-        server.baseUrl,
-        database,
-      );
-      await expect(
-        owner.embedChunksInBatches(distinctCandidates(100), generation, 8000),
-      ).rejects.toMatchObject({
-        code: "MEMORY_EMBEDDING_OPERATION_FAILED",
-        operation: "batch",
-      });
-      expect(server.requests).toHaveLength(1);
-    } finally {
-      database.close();
-    }
+    const { owner } = await createMemoryEmbeddingOwnerForServer(server.baseUrl);
+    await expect(owner.embedBatchWithRetry(distinctInputs(100))).rejects.toMatchObject({
+      code: "MEMORY_EMBEDDING_OPERATION_FAILED",
+      operation: "batch",
+    });
+    expect(server.requests).toHaveLength(1);
   });
 
   it("does not retry or split when the endpoint ignores requested dimensions", async () => {
     // The fixture server always answers with three dimensions.
     const server = await startEmbeddingServer();
-    const database = new DatabaseSync(":memory:");
-    try {
-      const { owner, generation } = await createMemoryEmbeddingOwnerForServer(
-        server.baseUrl,
-        database,
-        { outputDimensionality: 2 },
-      );
-      await expect(
-        owner.embedChunksInBatches(distinctCandidates(4), generation, 8000),
-      ).rejects.toMatchObject({
-        code: "MEMORY_EMBEDDING_OPERATION_FAILED",
-        operation: "batch",
-        message: expect.stringContaining(
-          "expected 2 dimensions, got 3 at index 0; the endpoint did not honor the requested dimensions",
-        ),
-      });
-      expect(server.requests.map((request) => request.body.dimensions)).toEqual([2]);
-    } finally {
-      database.close();
-    }
+    const { owner } = await createMemoryEmbeddingOwnerForServer(server.baseUrl, {
+      outputDimensionality: 2,
+    });
+    await expect(owner.embedBatchWithRetry(distinctInputs(4))).rejects.toMatchObject({
+      code: "MEMORY_EMBEDDING_OPERATION_FAILED",
+      operation: "batch",
+      message: expect.stringContaining(
+        "expected 2 dimensions, got 3 at index 0; the endpoint did not honor the requested dimensions",
+      ),
+    });
+    expect(server.requests.map((request) => request.body.dimensions)).toEqual([2]);
   });
 });

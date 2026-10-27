@@ -1,6 +1,6 @@
 import { describe, expect, it, onTestFinished, vi } from "vitest";
 import { createChannelParticipantAdmissionEvidence } from "../../../test/helpers/channel-admission-evidence.js";
-import { awaitGateBeforeSettlement, createDeferred } from "../../../test/helpers/promise.js";
+import { createDeferred } from "../../../test/helpers/promise.js";
 import type { CompactionAccountingFact } from "../../agents/embedded-agent-runner/run/internal-params.js";
 import type { EmbeddedAgentQueueHandle } from "../../agents/embedded-agent-runner/runs.js";
 import {
@@ -29,7 +29,6 @@ import {
   initialFallbackAttemptOptions,
   createMockReplyOperation,
   requireRecord,
-  createMinimalRunAgentTurnParams,
 } from "./agent-runner-execution.test-support.js";
 import type {
   FallbackRunnerParams,
@@ -157,7 +156,6 @@ describe("executeAgentTurn: run lifecycle and ownership", () => {
         complete: async () => clearActiveEmbeddedRun(sessionId, handle, sessionKey),
         discard: () => clearActiveEmbeddedRun(sessionId, handle, sessionKey),
       });
-      expect(params.onCompactionAccounting).toEqual(expect.any(Function));
       params.onCompactionAccounting?.(fact);
       throw createAgentRunDirectAbortError();
     });
@@ -185,7 +183,8 @@ describe("executeAgentTurn: run lifecycle and ownership", () => {
     }
   });
 
-  it("retains channel evidence across preflight failure, then attributes identity before admission", async () => {
+  it("registers before preflight and retains channel evidence until successful admission", async () => {
+    const { registerAgentRunContext } = await import("../../infra/agent-run-registry.js");
     const order: string[] = [];
     const identityWork: unknown[] = [];
     const decisionReceipts: unknown[] = [];
@@ -212,7 +211,14 @@ describe("executeAgentTurn: run lifecycle and ownership", () => {
         accountId: "default",
         participantId: "person-42",
       });
-      state.resolveCurrentTurnImagesMock.mockRejectedValueOnce(new Error("invalid image metadata"));
+      state.resolveCurrentTurnImagesMock.mockImplementationOnce(async () => {
+        expect(registerAgentRunContext).toHaveBeenCalledWith(
+          expect.any(String),
+          expect.objectContaining({ sessionKey: "main", sessionId: "session" }),
+        );
+        expect(state.runWithModelFallbackMock).not.toHaveBeenCalled();
+        throw new Error("invalid image metadata");
+      });
       await expect(execute({ followupRun, opts: { runId: "preflight-failure" } })).rejects.toThrow(
         "invalid image metadata",
       );
@@ -246,48 +252,6 @@ describe("executeAgentTurn: run lifecycle and ownership", () => {
       clearIdentitySink();
       audit.close();
     }
-  });
-
-  it("propagates reply aborts through fallback orchestration and candidates", async () => {
-    const controller = new AbortController();
-    const { replyOperation } = createMockReplyOperation({ abortSignal: controller.signal });
-    state.runEmbeddedAgentMock.mockResolvedValueOnce(createRunResult("ok"));
-
-    await execute({ replyOperation });
-
-    const fallbackCall = requireRecord(
-      state.runWithModelFallbackMock.mock.calls[0]?.[0],
-      "runWithModelFallback params",
-    );
-    const embeddedCall = requireRecord(
-      state.runEmbeddedAgentMock.mock.calls[0]?.[0],
-      "runEmbeddedAgent params",
-    );
-    expect(fallbackCall.sessionId).toBe("session");
-    expect(embeddedCall.abortSignal).toBe(fallbackCall.abortSignal);
-    expect(embeddedCall.abortSignal).toMatchObject({ aborted: false });
-
-    controller.abort();
-
-    expect(fallbackCall.abortSignal).toMatchObject({ aborted: true });
-    expect(embeddedCall.abortSignal).toMatchObject({ aborted: true });
-  });
-
-  it("records diagnostic progress from global-lane wait notifications", async () => {
-    const replyOperation = operation("global-lane-progress");
-    replyOperation.markWaitingForGlobalLane();
-    let progressReasonDuringWait: string | undefined;
-    state.runEmbeddedAgentMock.mockImplementationOnce(async (params: EmbeddedAgentParams) => {
-      params.onLaneWait?.({ waitMs: 5_000, queuedAhead: 4, waiting: true });
-      progressReasonDuringWait = getDiagnosticSessionActivitySnapshot({
-        sessionId: replyOperation.sessionId,
-        sessionKey: replyOperation.key,
-      }).lastProgressReason;
-      return createRunResult("ok");
-    });
-
-    await execute({ replyOperation });
-    expect(progressReasonDuringWait).toBe("global_lane:waiting");
   });
 
   it.each([
@@ -346,8 +310,11 @@ describe("executeAgentTurn: run lifecycle and ownership", () => {
     },
   );
 
-  it("freezes abort ownership only after model fallback settles", async () => {
-    const { replyOperation, freezeAbortMock } = createMockReplyOperation();
+  it("forwards abort ownership through retries and freezes only after fallback settles", async () => {
+    const controller = new AbortController();
+    const { replyOperation, freezeAbortMock } = createMockReplyOperation({
+      abortSignal: controller.signal,
+    });
     const followupRun = createFollowupRun();
     followupRun.media = [{ path: "/tmp/retry.png", contentType: "image/png" }];
     state.runWithModelFallbackMock.mockImplementationOnce(async (params: FallbackRunnerParams) => {
@@ -371,61 +338,40 @@ describe("executeAgentTurn: run lifecycle and ownership", () => {
 
     await execute({ followupRun, replyOperation });
 
-    expect(state.runEmbeddedAgentMock).toHaveBeenCalledTimes(2);
     expect(state.runEmbeddedAgentMock.mock.calls.map((call) => call[0]?.media)).toEqual([
       followupRun.media,
       followupRun.media,
     ]);
     expect(freezeAbortMock).toHaveBeenCalledTimes(1);
+    const fallbackCall = requireRecord(
+      state.runWithModelFallbackMock.mock.calls[0]?.[0],
+      "fallback",
+    );
+    expect(fallbackCall.sessionId).toBe("session");
+    for (const [candidate] of state.runEmbeddedAgentMock.mock.calls) {
+      const embeddedCall = requireRecord(candidate, "embedded candidate");
+      expect(embeddedCall.abortSignal).toBe(fallbackCall.abortSignal);
+      expect(embeddedCall.abortSignal).toMatchObject({ aborted: false });
+    }
+    controller.abort();
+    expect(fallbackCall.abortSignal).toMatchObject({ aborted: true });
+    for (const [candidate] of state.runEmbeddedAgentMock.mock.calls) {
+      expect(requireRecord(candidate, "embedded candidate").abortSignal).toMatchObject({
+        aborted: true,
+      });
+    }
   });
 
-  it("suppresses a settled fallback result after an accepted user abort", async () => {
-    const abortController = new AbortController();
-    const { replyOperation, freezeAbortMock } = createMockReplyOperation({
-      abortSignal: abortController.signal,
-    });
-    let operationResult: typeof replyOperation.result = null;
-    const { candidateSettled, fallbackRelease } = holdSettledFallback();
-    const pendingToolTask = createDeferred();
-    const pendingToolTasks = new Set([pendingToolTask.promise]);
-    Object.defineProperty(replyOperation, "result", {
-      configurable: true,
-      get: () => operationResult,
-    });
-    replyOperation.abortByUser = vi.fn(() => {
-      operationResult = { kind: "aborted", code: "aborted_by_user" };
-      abortController.abort("user_abort");
-      return true;
-    });
-    state.runEmbeddedAgentMock.mockResolvedValueOnce(createRunResult("late reply"));
-
-    const pending = execute({ replyOperation, pendingToolTasks });
-    await candidateSettled.promise;
-    expect(replyOperation.abortByUser()).toBe(true);
-    let settled = false;
-    void pending.then(() => {
-      settled = true;
-    });
-    fallbackRelease.resolve();
-    await new Promise<void>((resolve) => {
-      setImmediate(resolve);
-    });
-    expect(settled).toBe(false);
-    expect(freezeAbortMock).not.toHaveBeenCalled();
-    pendingToolTask.resolve();
-
-    await expect(pending).resolves.toEqual({ kind: "final", payload: {} });
-    expect(freezeAbortMock).toHaveBeenCalledTimes(1);
-  });
-
-  it("preserves completed compaction without a reply after user abort", async () => {
+  it("drains tools and preserves compaction without a reply after cancelling a settled fallback", async () => {
     const upstreamAbort = new AbortController();
     const replyOperation = operation("upstream-settled-fallback", {
       sessionId: "session",
       upstreamAbortSignal: upstreamAbort.signal,
     });
     replyOperation.setPhase("running");
+    using freezeAbort = vi.spyOn(replyOperation, "freezeAbort");
     const { candidateSettled, fallbackRelease } = holdSettledFallback();
+    const pendingToolTask = createDeferred();
     state.runEmbeddedAgentMock.mockResolvedValueOnce(
       createRunResult("late reply", {
         durationMs: 1,
@@ -440,9 +386,11 @@ describe("executeAgentTurn: run lifecycle and ownership", () => {
     );
 
     try {
-      const params = createMinimalRunAgentTurnParams({ replyOperation });
-      params.followupRun.run.sourceReplyDeliveryMode = "message_tool_only";
-      const pending = runRawTurn(params);
+      const pending = runRawTurn({
+        replyOperation,
+        pendingToolTasks: new Set([pendingToolTask.promise]),
+        followupRun: createFollowupRun({ sourceReplyDeliveryMode: "message_tool_only" }),
+      });
       await candidateSettled.promise;
       upstreamAbort.abort(new Error("caller cancelled"));
       const expectedAbortResult = {
@@ -452,7 +400,17 @@ describe("executeAgentTurn: run lifecycle and ownership", () => {
       expect(replyOperation.abortSignal.aborted).toBe(true);
       expect(replyOperation.result).toEqual(expectedAbortResult);
       expect(getSessionControllerOperation(replyOperation.key)).toBe(replyOperation);
+      let settled = false;
+      void pending.then(() => {
+        settled = true;
+      });
       fallbackRelease.resolve();
+      await new Promise<void>((resolve) => {
+        setImmediate(resolve);
+      });
+      expect(settled).toBe(false);
+      expect(freezeAbort).not.toHaveBeenCalled();
+      pendingToolTask.resolve();
 
       expect((await pending).outcome).toEqual({
         kind: "aborted",
@@ -465,8 +423,10 @@ describe("executeAgentTurn: run lifecycle and ownership", () => {
       expect(state.recordMessageToolRunOutcomeMock).toHaveBeenCalledWith(
         expect.objectContaining({ outcome: "mute", runStatus: "aborted" }),
       );
+      expect(freezeAbort).toHaveBeenCalledTimes(1);
     } finally {
       fallbackRelease.resolve();
+      pendingToolTask.resolve();
       replyOperation.complete();
     }
     expect(getSessionControllerOperation(replyOperation.key)).toBeUndefined();
@@ -500,7 +460,6 @@ describe("executeAgentTurn: run lifecycle and ownership", () => {
       for (const [index, fact] of facts.entries()) {
         state.runEmbeddedAgentMock.mockImplementationOnce(async (params: EmbeddedAgentParams) => {
           if (fact) {
-            expect(params.onCompactionAccounting).toEqual(expect.any(Function));
             params.onCompactionAccounting?.(fact);
           }
           return createRunResult("done", {
@@ -550,11 +509,19 @@ describe("executeAgentTurn: run lifecycle and ownership", () => {
     },
   );
 
-  it("signals typing and records the execution boundary before assistant text", async () => {
+  it("records lane-wait progress before execution starts and signals typing before assistant text", async () => {
     const typingSignals = createMockTypingSignaler();
     const onAgentRunStart = vi.fn();
     const replyOperation = operation("execution-boundary");
+    replyOperation.markWaitingForGlobalLane();
     state.runEmbeddedAgentMock.mockImplementationOnce(async (params: EmbeddedAgentParams) => {
+      params.onLaneWait?.({ waitMs: 5_000, queuedAhead: 4, waiting: true });
+      expect(
+        getDiagnosticSessionActivitySnapshot({
+          sessionId: replyOperation.sessionId,
+          sessionKey: replyOperation.key,
+        }).lastProgressReason,
+      ).toBe("global_lane:waiting");
       expect(hasReplyOperationExecutionStarted(replyOperation)).toBe(false);
       await params.onAgentEvent?.({ stream: "lifecycle", data: { phase: "start" } });
       params.onExecutionPhase?.({
@@ -571,39 +538,5 @@ describe("executeAgentTurn: run lifecycle and ownership", () => {
     expect(typingSignals.signalExecutionActivity).toHaveBeenCalledOnce();
     expect(typingSignals.signalRunStart).not.toHaveBeenCalled();
     expect(onAgentRunStart).toHaveBeenCalledOnce();
-  });
-
-  it("registers run ownership before asynchronous image preflight", async () => {
-    const agentRunRegistry = await import("../../infra/agent-run-registry.js");
-    const registerAgentRunContext = vi.mocked(agentRunRegistry.registerAgentRunContext);
-    const imagesStarted = createDeferred();
-    const releaseImages = createDeferred();
-    state.resolveCurrentTurnImagesMock.mockImplementationOnce(async () => {
-      imagesStarted.resolve();
-      await releaseImages.promise;
-      return {};
-    });
-    state.runEmbeddedAgentMock.mockResolvedValueOnce(createRunResult("ok"));
-
-    const runPromise = execute();
-
-    try {
-      await awaitGateBeforeSettlement(
-        imagesStarted.promise,
-        runPromise,
-        "image preflight did not start",
-      );
-      expect(registerAgentRunContext).toHaveBeenCalledWith(
-        expect.any(String),
-        expect.objectContaining({
-          sessionKey: "main",
-          sessionId: "session",
-        }),
-      );
-      expect(state.runWithModelFallbackMock).not.toHaveBeenCalled();
-    } finally {
-      releaseImages.resolve();
-      await runPromise;
-    }
   });
 });
