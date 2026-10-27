@@ -419,11 +419,21 @@ describe("SQLite trajectory runtime store", () => {
         const statement = prepare(sql);
         if (sql.includes('from "trajectory_runtime_events"')) {
           const iterate = statement.iterate.bind(statement);
-          statement.iterate = function* (...parameters) {
-            for (const row of iterate(...parameters)) {
-              visited++;
-              yield row;
-            }
+          statement.iterate = (...parameters) => {
+            const iterator: ReturnType<typeof statement.iterate> = Reflect.apply(
+              iterate,
+              statement,
+              parameters,
+            );
+            const next = iterator.next.bind(iterator);
+            iterator.next = (...args) => {
+              const row = next(...args);
+              if (!row.done) {
+                visited++;
+              }
+              return row;
+            };
+            return iterator;
           };
         }
         return statement;
