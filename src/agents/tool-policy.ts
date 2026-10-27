@@ -8,6 +8,7 @@ import { IMPLICIT_ALLOW_ALL_FROM_ALSO_ALLOW } from "./sandbox-tool-policy.js";
 import {
   attachToolAllowlistIntersection,
   expandToolGroups,
+  isCoreToolGroupEntry,
   normalizeToolList,
   normalizeToolPolicyName,
   readToolAllowlistIntersection,
@@ -16,6 +17,7 @@ export {
   attachToolAllowlistIntersection,
   couldNormalizeToolNamePrefixToAllowedTool,
   expandToolGroups,
+  isCoreToolGroupEntry,
   normalizeToolList,
   normalizeToolPolicyName,
   readToolAllowlistIntersection,
@@ -287,7 +289,12 @@ export function analyzeAllowlistByToolType(
       pluginTools.has(entry) ||
       isDeclaredMcpAllowlistEntry(entry, mcpToolPrefixes);
     const expanded = expandToolGroups([entry]);
-    const isCoreEntry = expanded.some((tool) => coreTools.has(tool));
+    // Mirror the evaluator: core group shorthands expand against the whole
+    // runtime tool surface, so a group is recognized when any member tool is
+    // present, including members shipped by bundled plugins.
+    const isCoreEntry =
+      expanded.some((tool) => coreTools.has(tool)) ||
+      (isCoreToolGroupEntry(entry) && expanded.some((tool) => pluginTools.has(tool)));
     if (!isCoreEntry && !isPluginEntry) {
       unknownAllowlist.push(entry);
     }
