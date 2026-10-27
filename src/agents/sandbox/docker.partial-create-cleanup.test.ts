@@ -9,6 +9,8 @@ const registryMocks = vi.hoisted(() => ({
   removeRegistryEntry: vi.fn(),
   updateRegistry: vi.fn(),
   completeSandboxRegistryReservation: vi.fn(),
+  withSandboxRegistryEntryLock: async <T>(_entry: unknown, operation: () => Promise<T>) =>
+    await operation(),
 }));
 
 vi.mock("./container-engine.js", async (importOriginal) => ({

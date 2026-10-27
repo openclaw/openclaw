@@ -181,7 +181,7 @@ export async function completeSandboxRegistryReservation(
 
 /** Serialize provider operations across Gateway/CLI; only dead owners permit lock recovery. */
 export async function withSandboxRegistryEntryLock<T>(
-  entry: SandboxRegistryEntry,
+  entry: Pick<SandboxRegistryEntry, "containerName">,
   operation: () => Promise<T>,
   databasePath = resolveOpenClawStateSqlitePath(),
 ): Promise<T> {
@@ -198,7 +198,7 @@ export async function withSandboxRegistryEntryLock<T>(
   );
 }
 
-/** Persist removal intent before waiting for provisioning, and retain failed cleanup for retry. */
+/** Persist reserved removal intent before waiting for provisioning, and retain failed cleanup for retry. */
 export async function removeSandboxRegistryRuntime(
   entry: SandboxRegistryEntry,
   removeRuntime: (entry: SandboxRegistryEntry) => Promise<void>,
@@ -223,16 +223,16 @@ export async function removeSandboxRegistryRuntime(
     prune: options.prune,
   };
   return withSandboxRegistrySettlement(context, async () => {
-    const selected = await executeRegistry(
-      { type: "sandboxRegistry.beginRemoval", input },
-      options.guard,
-      undefined,
-      context,
-    );
-    assertCurrent();
-    if (!selected) {
-      return;
-    }
+    const beginRemoval = async () => {
+      const selected = await executeRegistry(
+        { type: "sandboxRegistry.beginRemoval", input },
+        options.guard,
+        undefined,
+        context,
+      );
+      assertCurrent();
+      return selected;
+    };
     const remove = async (current: SandboxRegistryEntry) => {
       assertCurrent();
       const identity = { ...context.admission.identity };
@@ -277,8 +277,21 @@ export async function removeSandboxRegistryRuntime(
         await settle();
       }
     };
-    if (!selected.runtimeState) {
-      await remove(selected);
+    if (!options.reserveRuntime) {
+      await withSandboxRegistryEntryLock(
+        entry,
+        async () => {
+          const selected = await beginRemoval();
+          if (selected) {
+            await remove(selected);
+          }
+        },
+        context.admission.databasePath,
+      );
+      return;
+    }
+    const selected = await beginRemoval();
+    if (!selected) {
       return;
     }
     await withSandboxRegistryEntryLock(

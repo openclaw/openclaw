@@ -100,7 +100,9 @@ export function beginSandboxRegistryRemovalInDatabase(
     current.backendId !== entry.backendId ||
     current.sessionKey !== entry.sessionKey ||
     current.createdAtMs !== entry.createdAtMs ||
-    (prune && !shouldPruneSandboxRegistryEntry(current, prune))
+    (prune &&
+      (current.lastUsedAtMs !== entry.lastUsedAtMs ||
+        !shouldPruneSandboxRegistryEntry(current, prune)))
   ) {
     return null;
   }

@@ -64,6 +64,8 @@ vi.mock("./registry.js", () => ({
       }
     },
   ),
+  withSandboxRegistryEntryLock: async <T>(_entry: unknown, operation: () => Promise<T>) =>
+    await operation(),
 }));
 vi.mock("./mount-plan.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./mount-plan.js")>()),
