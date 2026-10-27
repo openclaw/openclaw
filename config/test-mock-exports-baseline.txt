@@ -1583,7 +1583,6 @@
 ["src/agents/embedded-agent-runner/run/attempt-session.test.ts","../../sessions/resource-loader.js","a8d96319f0c6f0444c893516e8cabc3b812d1e60402d76fe0ce69943d0221ab9",1]
 ["src/agents/embedded-agent-runner/run/attempt-session.test.ts","../../sessions/tools/tool-definition-wrapper.js","5a97d0d9dae2acf5471d5420c99264869ebc48bdf77dfd05953c74182ead2039",1]
 ["src/agents/embedded-agent-runner/run/attempt-session.test.ts","../extensions.js","9ae32b6c62ec8d22912d8eef50a22e76bfd7cce68bf83ee566039ddc46d0e451",1]
-["src/agents/embedded-agent-runner/run/attempt-session.test.ts","../logger.js","bd5cfd702fe9d62248a73ac8e3af09ddb7b75cecc7392c4b040d4f30fbe0824e",1]
 ["src/agents/embedded-agent-runner/run/attempt-session.test.ts","./attempt-client-tools.js","a7dfadd7f56b381b75b79f558737a8ba90f8a9fd25f984caba8b68c58a94b5be",1]
 ["src/agents/embedded-agent-runner/run/attempt-skills-mock.test-support.ts","../../../skills/runtime/env-overrides.js","0925b48e9a01961380584e911783523b73abc5f82f80c6d62db5eaaf563a468d",1]
 ["src/agents/embedded-agent-runner/run/attempt-spawn-workspace.session-mocks.test-support.ts","../../transcript-policy.js","0eac7cf97f96ad74c891d9866da48adebf2bacdb8d83530753d14b79d447a5c1",1]
