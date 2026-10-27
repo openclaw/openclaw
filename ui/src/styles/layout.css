@@ -2423,7 +2423,7 @@ openclaw-session-menu[popover] {
   padding: var(--menu-padding);
   border: 1px solid var(--overlay-border);
   border-radius: var(--menu-radius);
-  background: var(--bg-elevated);
+  background: var(--popover);
   box-shadow: var(--overlay-shadow);
   position: fixed;
   z-index: 121;

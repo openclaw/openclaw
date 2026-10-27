@@ -93,7 +93,7 @@ it.each([false, true])(
       texts(page.element, ".daily-chart-legend li", false).map((text) => text.replace(/\s+/g, ""));
     expect(legend()).toEqual(partial ? ["Anthropic", "OpenAI"] : ["Anthropic90%", "OpenAI10%"]);
     barsIn(page)
-      .find((bar) => labelOf(bar) === "May 2")!
+      .find((bar) => bar.getAttribute("aria-label")?.startsWith("May 2, 2026:"))!
       .click();
     await settleUsageTimers(page);
     expect(textOf(page, ".usage-metric-badge strong")).toBe("100");

@@ -637,6 +637,10 @@ do not restrict a role's access.
 One Gateway owns each store. PostgreSQL does not enable multiple active owners of one store,
 external writers, replication management, or connection-pool management.
 
+Session-state history pruning compares sequence watermarks as integers on both
+engines. PostgreSQL batches explicitly cast bound watermark values to `bigint`;
+this does not change the schema or the existing history retention limits.
+
 Writers use `READ COMMITTED` and a transaction-scoped advisory lock derived from
 the store identity. Every PostgreSQL write, including a single statement, uses
 the adapter's `runTransaction` so it retains that lock and publishes its write

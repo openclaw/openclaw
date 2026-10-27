@@ -34,7 +34,7 @@ import {
 } from "../../lib/sessions/session-key.ts";
 import type { SwarmRosterHydrator } from "../../lib/sessions/swarm-roster.ts";
 import { SessionUnreadPatchGuard } from "../../lib/sessions/unread.ts";
-import { ChatComposerCapabilityHost } from "./chat-composer-capability-host.tsx";
+import type { ChatComposerCapabilityHost } from "./chat-composer-capability-host.tsx";
 import { projectChatFields } from "./chat-field-projection.ts";
 import {
   CHAT_PANE_LIFECYCLE_CHANGED_EVENT,
@@ -43,6 +43,7 @@ import {
 import {
   getAcceptedChatHistorySession,
   getChatHistoryLoadState,
+  isChatHistoryLoading,
   isChatHistoryRetrying,
 } from "./chat-history-state.ts";
 import { createMobileSheetScrollFades } from "./chat-mobile-scroll-fades.ts";
@@ -281,8 +282,7 @@ export abstract class ChatPaneStateOwner {
   protected presentedChanged(_presented: boolean): void {}
   /** True while the authoritative transcript for this pane is still being fetched. */
   get transcriptLoading(): boolean {
-    const phase = this.state ? getChatHistoryLoadState(this.state).phase : "idle";
-    return phase === "pending-connection" || phase === "in-flight";
+    return Boolean(this.state && isChatHistoryLoading(getChatHistoryLoadState(this.state)));
   }
   /** Scoped transient recovery is presented once in the shell connection indicator. */
   get historyRecovering(): boolean {
@@ -317,10 +317,10 @@ export abstract class ChatPaneStateOwner {
         : null,
     );
   };
-  protected get headerOutcomeOwner(): string {
+  get headerOutcomeOwner(): string {
     return `${this.connectionGeneration}:${this.headerPresentationGeneration}`;
   }
-  protected ownsHeaderOutcome(owner: string): boolean {
+  ownsHeaderOutcome(owner: string): boolean {
     return this.presented && owner === this.headerOutcomeOwner;
   }
   protected get selected(): boolean {
@@ -412,7 +412,24 @@ export abstract class ChatPaneStateOwner {
   get runActivity() {
     return this.chatState.projectRunActivity(this.state);
   }
-  readonly composerCapabilities = new ChatComposerCapabilityHost();
+  composerCapabilities: ChatComposerCapabilityHost | undefined = undefined;
+
+  ensureComposerCapabilities(create: () => ChatComposerCapabilityHost) {
+    return (this.composerCapabilities ??= create());
+  }
+
+  protected composerCapabilityMenu(
+    state: ChatPageHost,
+    selectedSession: GatewaySessionRow | undefined,
+    currentAgentId: string,
+  ) {
+    return {
+      initialize: (create: () => ChatComposerCapabilityHost) =>
+        this.ensureComposerCapabilities(create),
+      read: () =>
+        this.composerCapabilities?.props(this.context, state, selectedSession, currentAgentId),
+    };
+  }
   readonly transcript = createChatTranscript(() => this.paneId, {
     geometryEventTarget: this.element,
     getComposerFloat: () => (this.usesMobileHost ? this.composerFloat : null),
@@ -500,13 +517,13 @@ export abstract class ChatPaneStateOwner {
   protected connectedClient: GatewayBrowserClient | null = null;
   protected boardProviderLease: (BoardProviderLease & { cacheKey: string }) | undefined;
   protected boardProviderLifecycleConnected = false;
-  protected connectionGeneration = 0;
+  connectionGeneration = 0;
   // Owns the abort signal handed to header-scoped destructive confirm dialogs.
   // Retiring it alongside every connectionGeneration bump lets a dialog open
   // across a reconnect or pane teardown dismiss itself, matching
   // SessionDataController's own epoch-scoped controller for the sidebar.
   protected headerSessionMutationAbortController = new AbortController();
-  protected headerSessionDraftAbortController = new AbortController();
+  headerSessionDraftAbortController = new AbortController();
 
   readonly headerPresentation: {
     renameValue: string;
@@ -594,7 +611,7 @@ export abstract class ChatPaneStateOwner {
     requests: new Map<SessionPanelToggleSlot, PendingSessionPanelToggle>(),
   };
   protected readonly sessionDiscussionProbes = new Set<string>();
-  protected readonly sessionDiscussionPanels = new Map<
+  readonly sessionDiscussionPanels = new Map<
     string,
     {
       generation: number;

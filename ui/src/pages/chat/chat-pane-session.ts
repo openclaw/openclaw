@@ -76,6 +76,36 @@ export abstract class ChatPaneSession extends ChatPaneTaskSuggestions {
   }
 
   deferredSessionHydration: { resume?: () => void } | null = null;
+  private catalogRead: { controller: AbortController; older: boolean } | undefined;
+  private catalogReadPending = false;
+
+  protected retireCatalogRead(resume = false): void {
+    const read = this.catalogRead;
+    if (!read) {
+      if (!resume) {
+        this.catalogReadPending = false;
+      }
+      return;
+    }
+    this.catalogRead = undefined;
+    // Continuation writes share catalogLoadGeneration. Hiding a read must not
+    // retire their adopted-send intent or change the reader's pagination.
+    this.catalogReadPending = resume && !read.older;
+    if (!read.older) {
+      this.history.catalogLoading = false;
+      if (this.state) {
+        this.state.chatLoading = false;
+      }
+    }
+    read.controller.abort();
+  }
+
+  protected resumeCatalogRead(): void {
+    const key = parseCatalogSessionKey(this.state?.sessionKey);
+    if (key && this.catalogReadPending) {
+      void this.loadCatalogSession(key, false);
+    }
+  }
   /** Hidden-run acknowledgements in flight or sent, keyed by run and activity revision. */
   private readonly hiddenRunReadRequests = new Map<
     string,
@@ -559,12 +589,16 @@ export abstract class ChatPaneSession extends ChatPaneTaskSuggestions {
     if (older && !this.history.catalogCursor) {
       return false;
     }
+    this.retireCatalogRead();
+    const read = { controller: new AbortController(), older };
+    this.catalogRead = read;
+    this.catalogReadPending = false;
     const agentId = resolveChatAgentId(state);
-    const generation = older ? this.catalogLoadGeneration : ++this.catalogLoadGeneration;
     const requestedSessionKey = this.sessionKey;
     const isCurrent = () =>
+      !read.controller.signal.aborted &&
+      this.catalogRead === read &&
       this.isConnectionScopeCurrent(scope) &&
-      generation === this.catalogLoadGeneration &&
       this.sessionKey === requestedSessionKey &&
       resolveChatAgentId(state) === agentId;
     if (!older) {
@@ -578,7 +612,13 @@ export abstract class ChatPaneSession extends ChatPaneTaskSuggestions {
     }
     try {
       if (!older) {
-        const lookup = await lookupCatalogSession({ agentId, client, key, isCurrent });
+        const lookup = await lookupCatalogSession({
+          agentId,
+          client,
+          key,
+          isCurrent,
+          signal: read.controller.signal,
+        });
         if (!lookup || !isCurrent()) {
           return false;
         }
@@ -586,22 +626,28 @@ export abstract class ChatPaneSession extends ChatPaneTaskSuggestions {
         this.history.catalogSession = lookup.session;
       }
       const requestedOlderCursor = older ? this.history.catalogCursor : undefined;
-      if (requestedOlderCursor) {
-        this.olderCursorsSeen.add(requestedOlderCursor);
-      }
-      const page = await client.request<SessionsCatalogReadResult>("sessions.catalog.read", {
-        agentId,
-        catalogId: key.catalogId,
-        hostId: key.hostId,
-        threadId: key.threadId,
-        ...(this.history.catalogSession?.sourceHomeId
-          ? { sourceHomeId: this.history.catalogSession.sourceHomeId }
-          : {}),
-        limit: 50,
-        ...(older && this.history.catalogCursor ? { cursor: this.history.catalogCursor } : {}),
-      });
+      const page = await client.request<SessionsCatalogReadResult>(
+        "sessions.catalog.read",
+        {
+          agentId,
+          catalogId: key.catalogId,
+          hostId: key.hostId,
+          threadId: key.threadId,
+          ...(this.history.catalogSession?.sourceHomeId
+            ? { sourceHomeId: this.history.catalogSession.sourceHomeId }
+            : {}),
+          limit: 50,
+          ...(older && this.history.catalogCursor ? { cursor: this.history.catalogCursor } : {}),
+        },
+        { signal: read.controller.signal },
+      );
       if (!isCurrent()) {
         return false;
+      }
+      // Only accepted pages advance progress. A cancelled read must leave its
+      // cursor reusable instead of falsely exhausting a later retry.
+      if (requestedOlderCursor) {
+        this.olderCursorsSeen.add(requestedOlderCursor);
       }
       const messages = page.items
         .toReversed()
@@ -633,6 +679,9 @@ export abstract class ChatPaneSession extends ChatPaneTaskSuggestions {
       if (isCurrent() && !older) {
         this.history.catalogLoading = false;
         state.chatLoading = false;
+      }
+      if (this.catalogRead === read) {
+        this.catalogRead = undefined;
       }
     }
   }

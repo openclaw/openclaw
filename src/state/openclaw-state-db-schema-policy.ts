@@ -93,6 +93,9 @@ export function isExistingOpenClawStateSchema(
   const scopedPath = getExistingOpenClawStateSchemaPath();
   const scope = schemaPolicies.scopes.getStore();
   const admittedPath = database && schemaPolicies.existingDatabases.get(database);
+  if (!scope && !admittedPath) {
+    return false;
+  }
   const resolvedPath = resolveDatabasePath({ path: pathname });
   const existing =
     scopedPath !== undefined &&
@@ -133,7 +136,7 @@ export function assertExistingOpenClawStateSchemaCacheAdmission(
 ): void {
   const scopedPath = getExistingOpenClawStateSchemaPath();
   const scope = schemaPolicies.scopes.getStore();
-  const requested = resolveDatabasePath({ path: pathname });
+  const requested = scope ? resolveDatabasePath({ path: pathname }) : undefined;
   let resolved =
     scope && (scopedPath === requested || scope.canonicalPath === requested)
       ? scope.canonicalPath

@@ -62,7 +62,7 @@ const HANDOFF_STATUS_ORDER: readonly ChatHandoffSession["status"][] = [
  * "Needs your input" is the child's own declared attention; the Gateway row
  * does not distinguish a child paused for a continuation from a finished one.
  */
-export function listHandoffSessions(
+function listHandoffSessions(
   children: readonly GatewaySessionRow[],
   window: { from: number; to?: number },
   now = Date.now(),
@@ -98,7 +98,7 @@ export function listHandoffSessions(
 }
 
 /** Where a handoff's child name leads: its session route, opened in this app. */
-export type HandoffSessionLink = { href: string; open: () => void };
+type HandoffSessionLink = { href: string; open: () => void };
 export type HandoffSessionLinks = (sessionKey: string) => HandoffSessionLink | undefined;
 
 /**
@@ -196,7 +196,7 @@ export type ChatSubagentActivity = {
 
 // A count or a name says which children are left, so it waits for the pane's
 // own child query. Rows seeded from another list can hold only some of them.
-export function directChildren(
+function directChildren(
   session: Pick<GatewaySessionRow, "key" | "childSessions">,
   roster: Pick<SubagentRoster, "subagentSessions" | "subagentSessionsHydrated">,
 ) {

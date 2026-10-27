@@ -71,6 +71,10 @@ While automatic reconnection is running, the indicator shows **Reconnecting…**
 with the sidebar's standard spinner and without a Retry button. **Retry** remains available when automatic recovery stops.
 A required page refresh keeps its separate refresh action.
 
+A saved chat can restore its archived or read-only composer and parent breadcrumb
+while reconnecting. These saved display facts never authorize actions; live session
+state replaces them when the connection returns.
+
 If a chat side panel fails to load, its Close control remains available independently of the failed panel. Closing it keeps the conversation and its draft in place without reloading the page. Retry still respects unsaved work that blocks document reloads.
 
 Gateway actions, including saving edits and approving requests, require a live
@@ -125,6 +129,8 @@ Saved pin labels remain visible while their details refresh, even when those ses
 Inline widgets and MCP Apps reserve their last rendered height when a cached conversation reloads, so loading their content does not move the surrounding messages. New widgets use their declared size until the content reports its height. Changed content or a different window width can still resize a widget.
 
 On a dashboard reload, a saved widget with an unexpired view ticket can load its document while the first Gateway connection is pending. Gateway-backed actions still wait for the connection, and loading pauses if the Gateway goes offline. Expired tickets require a fresh ticket from the Gateway.
+
+Fixed-height Board reports render their content as you scroll near them, while reserving their full card size. Once loaded, reports stay mounted when you switch tabs. Auto-sized reports render immediately so their content determines their size.
 
 Transcript history loads in parallel with the browser cache. An unchanged history response keeps the cached message rows and widget sizes in place. The transcript restores its saved reading position, or opens at the end, before showing its initial measured rows. Measured rows become visible once their selected geometry is committed, without an extra layout frame.
 

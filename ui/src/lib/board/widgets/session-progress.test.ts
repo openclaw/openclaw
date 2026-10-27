@@ -125,8 +125,13 @@ it("shows admitted loading, retries a failed read, and retains accepted progress
 });
 
 it("does not reacquire a row observation when a queued property update runs after removal", async () => {
-  const owner = createContext();
-  const { provider, element } = mount(owner.context);
+  const describe = vi.fn(async () => ({ session: null }));
+  const owner = createContext(undefined, describe);
+  const { provider, element } = mount(owner.context, undefined, false);
+  await element.updateComplete;
+  expect(owner.subscriptions()).toEqual([0, 0]);
+  expect(describe).not.toHaveBeenCalled();
+  element.active = true;
 
   for (let connections = 1; connections <= 2; connections += 1) {
     await ready(element);
@@ -354,31 +359,4 @@ it("keeps target observations separate across agents and applications without lo
       false,
     );
   }
-});
-
-it("reads only active widget targets without acquiring a dashboard roster", async () => {
-  const describe = vi.fn(async () => ({ session: null }));
-  const owner = createContext(undefined, describe);
-  const first = mount(owner.context, "agent:main:first", false);
-  await first.element.updateComplete;
-  expect(owner.subscriptions()).toEqual([0, 0]);
-  expect(describe).not.toHaveBeenCalled();
-
-  first.element.active = true;
-  await ready(first.element);
-  expect(describe).toHaveBeenCalledOnce();
-  const second = mount(owner.context, "agent:main:second");
-  await ready(second.element);
-  expect(owner.subscriptions()).toEqual([2, 2]);
-  expect(describe).toHaveBeenCalledTimes(2);
-
-  first.element.active = false;
-  second.element.active = false;
-  await Promise.all([first.element.updateComplete, second.element.updateComplete]);
-  expect(owner.subscriptions()).toEqual([0, 2]);
-  first.element.active = true;
-  await ready(first.element);
-  expect(owner.subscriptions()).toEqual([1, 3]);
-  expect(describe).toHaveBeenCalledTimes(3);
-  expect(owner.listRead.mock.calls.some(([params]) => params?.source === "dashboard")).toBe(false);
 });

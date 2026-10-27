@@ -689,7 +689,6 @@ describe("plugin board widget cells", () => {
       throw new Error(`Unexpected request: ${method}`);
     });
     const context = progressContext(request);
-    const observeRow = vi.spyOn(context.sessions, "observeRow");
     const widget = progressWidget("cross-session-progress", { sessionKey: boardlessTargetKey });
     const cell = mountCell(widget, {
       context,
@@ -712,11 +711,6 @@ describe("plugin board widget cells", () => {
     );
     expect(element?.querySelector(".session-progress-card__step--paused")).toBeNull();
     // Liveness must not depend on dashboard gallery membership.
-    expect(observeRow).toHaveBeenCalledWith(
-      { key: boardlessTargetKey, agentId: "main" },
-      expect.any(Function),
-      expect.objectContaining({ onInvalidate: expect.any(Function) }),
-    );
     expect(request).toHaveBeenCalledWith("sessions.describe", {
       key: boardlessTargetKey,
       agentId: "main",

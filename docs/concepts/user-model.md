@@ -364,6 +364,8 @@ Shared publication progress comes from Gateway-owned receipts. **Check status** 
 
 Queued shared publication also retains the person who requested it, their original permission ceiling, and any access grant required when the request was accepted. Expired or revoked guest access prevents further GitHub writes, including after a restart. A new invitation or later staff role does not authorize the old guest request. Saved work, existing PRs, and separately authorized requests remain intact. The Gateway can still record a GitHub result accepted before access ended; an unavailable readback keeps that original outcome pending for reconciliation.
 
+Restart recovery does not hold Gateway readiness while waiting for GitHub. Independent local worktrees recover with bounded concurrency; requests within each worktree remain ordered, and an unconfirmed request keeps later recovery requests for that worktree waiting. Completed receipts are read from durable state without confirming them again with GitHub.
+
 For requests backed by an access grant, moving one of the person's original email aliases to another profile also ends publication authority. Restoring the alias does not revive the old request. Display changes and aliases added after the request, including their later removal, do not cancel it.
 
 Older unfinished shared requests without this requester binding require a new authorized publication request. Inspect their recorded or unconfirmed GitHub effects first. Published receipts remain readable, and a plugin that is still starting defers recovery until its original grant can be checked.

@@ -273,6 +273,7 @@ const { values } = parseArgs({
     "warm-reload": { type: "boolean", default: false },
     "row-facts": { type: "boolean", default: false },
     "pane-chrome-probe": { type: "boolean", default: false },
+    "archived-session": { type: "boolean", default: false },
     "large-snapshot": { type: "boolean", default: false },
     "dashboard-widget": { type: "boolean", default: false },
     "connect-not-before-ms": { type: "string" },
@@ -798,6 +799,7 @@ const fixture = createControlUiTeamScaleFixture({
   largeSnapshot: values["large-snapshot"],
   rowFacts: values["row-facts"],
   offRosterSession: values["off-roster-route"],
+  archivedSession: values["archived-session"],
   transcriptMessages,
   dashboardWidgetFontUrl: dashboardFont
     ? `http://127.0.0.1:${address.port}${dashboardFontPath}`
@@ -2975,15 +2977,28 @@ try {
       : undefined;
     let sessionSwitch;
     if (values["session-switch"]) {
+      if (await page.locator(".shell--mobile-nav:not(.shell--nav-drawer-open)").count()) {
+        await navigationDrawerToggle(page).click();
+        await page.locator(".shell--nav-drawer-open").waitFor();
+      }
       if (sidebarView !== "sessions") {
         await page.locator('[data-navigation-view="sessions"]').click();
       }
+      // Cold runs keep the default My sessions filter until this phase.
+      await page.locator("#sidebar-session-owner-title").click();
+      await page
+        .locator('.sidebar-session-owner-filter [role="option"][data-value="involving-me"]')
+        .click();
       // The first non-main chat is in the initial Involving me page.
       const target = fixture.scenario.sessions![1]!;
       const link = page.locator(
         `.sidebar-recent-session[data-session-key="${target.key}"] a.sidebar-recent-session__link`,
       );
       await link.scrollIntoViewIfNeeded();
+      await page.waitForFunction(() => {
+        const state = Reflect.get(window, "__coldLoad").read();
+        return !state.pending && !state.queued && state.idleMs > 750;
+      });
       const rpcOffset = await page.evaluate(
         () => Reflect.get(window, "__coldLoad").read().rpcs.length,
       );

@@ -31,10 +31,16 @@ it.each([
   "proves the cold-storage kernel %s:%s only through reviewed entries",
   (file, operation, primitive) => {
     const relative = `src/config/sessions/${file}`;
+    const worker =
+      operation === "readSessionColdChunks"
+        ? "session-cold-storage-read.worker.ts"
+        : operation === "iterateSessionColdRecords"
+          ? "session-transcript-hydration.worker.ts"
+          : "session-accessor.sqlite-archive.worker.ts";
     const sources = new Map([
       [relative, `export function ${operation}() { return ${primitive}(query); }`],
       [
-        "src/config/sessions/session-accessor.sqlite-archive.worker.ts",
+        `src/config/sessions/${worker}`,
         `export async function dispatchColdPreparation() {
           const { ${operation} } = await import('./${file.replace(/\.ts$/, ".js")}');
           return scope.run(options, () => ${operation}());
@@ -43,6 +49,11 @@ it.each([
     ]);
     const tiers = () => inventory(process.cwd(), "", false, sources).map(({ tier }) => tier);
     expect(tiers()).toEqual(["W"]);
+    sources.set(
+      "scripts/perf/session-cold-selection.ts",
+      `(await import('../../src/config/sessions/${file.replace(/\.ts$/, ".js")}')).${operation}();`,
+    );
+    expect(tiers()).toEqual(["T3"]);
     sources.set(
       "src/plugin-sdk/runtime.ts",
       `import { ${operation} } from '../config/sessions/${file.replace(/\.ts$/, ".js")}';

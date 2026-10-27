@@ -26,14 +26,16 @@ fixture.describe("personal background style scope", () => {
               (selector) => getComputedStyle(document.querySelector(selector)!).backgroundImage,
             ),
           );
-        expect(await backgrounds()).toEqual(["none", "none"]);
+        const initialBackgrounds = await backgrounds();
+        expect(initialBackgrounds[0]).toBe("none");
         const finishTrace = await traceCss(page);
         await page.locator(".shell").evaluate((shell) => {
           shell.setAttribute("data-background-managed", "");
         });
         const painted = await backgrounds();
         const recalculated = await finishTrace();
-        expect(painted.every((background) => background.startsWith("linear-gradient("))).toBe(true);
+        expect(painted[0]).toMatch(/^linear-gradient\(/u);
+        expect(painted[1]).toBe(initialBackgrounds[1]);
         expect(recalculated.length).toBeGreaterThan(0);
         // Fewer computations than sidebar rows excludes a sidebar-wide invalidation.
         expect(recalculated.reduce((total, count) => total + count, 0)).toBeLessThan(64);

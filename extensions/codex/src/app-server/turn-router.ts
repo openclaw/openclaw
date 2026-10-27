@@ -1,5 +1,6 @@
 import { AsyncResource } from "node:async_hooks";
 import { embeddedAgentLog } from "openclaw/plugin-sdk/agent-harness-runtime";
+import { materializeErrorStack } from "openclaw/plugin-sdk/error-runtime";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import type { CodexAppServerClient } from "./client.js";
 import { redactCodexEventKind } from "./event-projector-diagnostics.js";
@@ -280,6 +281,7 @@ class ClientTurnRouter {
     const closeError = cause
       ? new Error("codex app-server turn router closed", { cause })
       : new Error("codex app-server turn router closed");
+    materializeErrorStack(closeError);
     this.closeError = closeError;
     this.mcpRequests.close(closeError);
     for (const route of this.routes.values()) {

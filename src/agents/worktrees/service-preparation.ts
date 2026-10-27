@@ -22,8 +22,13 @@ import {
   WorktreePendingContentionError,
   WorktreeRepositoryError,
 } from "./errors.js";
-import { indexWorktreePaths } from "./gc-dependencies.js";
-import { commandError, listGitWorktrees, worktreePathExists, requireGit, runGit } from "./git.js";
+import {
+  commandError,
+  readGitWorktreePathInventory,
+  worktreePathExists,
+  requireGit,
+  runGit,
+} from "./git.js";
 import { appendNameOrdinal, validateName } from "./name.js";
 import { assertOwnerWorktreeReuse, worktreeOwnerMatches } from "./owner.js";
 import { readPendingWorktrees, releasePendingWorktree } from "./pending-slots.js";
@@ -42,7 +47,11 @@ import {
   resolveRepositoryFromRealPath,
   type ResolvedRepository,
 } from "./repository-paths.js";
-import { captureWorktreeRunEndContext, withWorktreeRunEnd } from "./run-end-lifecycle.js";
+import {
+  captureWorktreeRunEndContext,
+  prepareWorktreeSourcePaths,
+  withWorktreeRunEnd,
+} from "./run-end-lifecycle.js";
 import { acquireWorktreeRunLease } from "./run-lease.js";
 import type {
   CreateManagedWorktreeParams,
@@ -62,11 +71,11 @@ export type RepositoryCreationParams = CreateManagedWorktreeParams &
 export async function readWorktreeGitInventory(repoRoot: string, suppliedName?: string) {
   const [branches, worktrees] = await Promise.all([
     requireGit(repoRoot, ["for-each-ref", "--format=%(refname)", "refs/heads/openclaw/"]),
-    suppliedName === undefined ? listGitWorktrees(repoRoot) : [],
+    suppliedName === undefined ? readGitWorktreePathInventory(repoRoot) : undefined,
   ]);
   return {
     branches: new Set(branches.split("\n")),
-    paths: new Set(worktrees.map((entry) => path.resolve(entry.path))),
+    paths: worktrees,
   };
 }
 
@@ -283,7 +292,7 @@ export async function withWorktreeSources<T>(
           "Managed worktree source Git storage cannot be inspected safely. Repair its Git metadata before retrying.",
         );
       }
-      const ancestors = indexWorktreePaths(source.ownedPaths);
+      const ancestors = prepareWorktreeSourcePaths(context, source.ownedPaths);
       const reuseTargets = records.filter(
         (record) =>
           (params.ownerId && worktreeOwnerMatches(record, params)) ||
@@ -442,7 +451,7 @@ async function resolveWorktreeName(
       ) &&
       !(await worktreePathExists(worktreePath)) &&
       !gitInventory.branches.has(`refs/heads/openclaw/${candidate}`) &&
-      !gitInventory.paths.has(path.resolve(worktreePath))
+      !gitInventory.paths?.has(path.resolve(worktreePath))
     ) {
       return candidate;
     }

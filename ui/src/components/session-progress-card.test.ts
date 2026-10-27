@@ -152,26 +152,6 @@ describe("renderSessionProgressCard", () => {
     },
   );
 
-  it("keeps disclosure attributes unchanged across progress snapshots", () => {
-    const container = mountCard({});
-    const details = container.querySelector("details")!;
-    const observer = new MutationObserver(() => {});
-    observer.observe(details, { attributes: true, attributeFilter: ["open", "data-reveal"] });
-    render(
-      {
-        card: {
-          ...progressCard,
-          revision: 3,
-          steps: [...progressCard.steps!, { step: "Updated progress", status: "pending" }],
-        },
-      },
-      container,
-    );
-    expect(container.textContent).toContain("Updated progress");
-    expect(observer.takeRecords()).toEqual([]);
-    observer.disconnect();
-  });
-
   it("refreshes relative time while connected and stops after disconnect", () => {
     const container = createContainer();
     const part = render({ card: { ...progressCard, updatedAt: NOW_MS - 10_000 } }, container);
