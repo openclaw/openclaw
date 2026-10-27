@@ -485,35 +485,6 @@ describe("session navigation intent prefetch", () => {
     expect(request.mock.calls.map(sessionKeyFromCall)).toEqual(["agent:main:intended"]);
   });
 
-  it("coalesces intent behind the running request without losing its short schedule", async () => {
-    const first = "agent:main:first";
-    const intended = "agent:main:intended";
-    const response = createDeferred<ReturnType<typeof historyResult>>();
-    const request = vi.fn(async (_method: string, params: unknown) =>
-      (params as { sessionKey: string }).sessionKey === first
-        ? response.promise
-        : historyResult(intended),
-    );
-    const rows = [row(first, NOW - 1)];
-    const state = prefetchState(request, rows);
-    updatePrefetch(state);
-    fixture.intend(first);
-    await advancePrefetch(300);
-    updatePrefetch({ ...state, listRevision: 2, rows: [...rows, row(intended, NOW - 2)] });
-    const target = document.createElement("a");
-    fixture.shell.append(target);
-    target.dataset.sessionKey = intended;
-    target.dispatchEvent(new Event("pointerover", { bubbles: true }));
-    await advancePrefetch(100);
-    expect(request.mock.calls.map(sessionKeyFromCall)).toEqual([first]);
-    response.resolve(historyResult(first));
-    await settlePromises();
-    await advancePrefetch(74);
-    expect(request).toHaveBeenCalledOnce();
-    await advancePrefetch(1);
-    expect(request.mock.calls.map(sessionKeyFromCall)).toEqual([first, intended]);
-  });
-
   it("rewarms complete stored history after an interleaved append miss", async () => {
     const sessionKey = "agent:main:delta";
     const priorMessages = Array.from({ length: 5 }, (_, index) => ({

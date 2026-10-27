@@ -1,13 +1,18 @@
 /**
- * Empty publication recovery through the actual coordinator and placement read worker.
+ * Publication recovery through the actual coordinator and placement read worker.
  * node --expose-gc --import ./scripts/tsx.mjs scripts/perf/publication-empty-recovery-measure.ts \
  *   --state-dir "$PWD/.local/publication-probe" --pending 10000 --iterations 2000
  * Repeat with --allocations for a separate main-thread allocation pass, and with
  * --pending 0. Alternate base/candidate order. --owner selects a historical
  * github-publication-coordinator-methods.ts copied beside its original imports.
- * The owner receives the already-proven empty startup publication snapshot. Pending
+ * By default, the owner receives the proven-empty startup publication snapshot. Pending
  * workspace results are real synthetic SQLite rows, read through the normal worker.
- * This measures the redundant recovery read, not Gateway admission or Git/network.
+ * Add --publications 8 to measure nonempty recovery scheduling and real SQLite reads.
+ * Its injected processor only returns a synthetic result; --delay-ms 500 adds a
+ * fixed external wait (use --iterations 5 --warmup 0 for delayed passes).
+ * This does not measure Git/network, authority, or admission. Use --pending 0
+ * for scheduling cost; 10000 pending results is a separate backlog-heavy case,
+ * not a claim that a 10000-session Gateway has 10000 pending publications.
  * Fixture preparation, warmup and unchanged-state verification are outside timing.
  */
 import assert from "node:assert/strict";
@@ -16,16 +21,19 @@ import { mkdir, readFile, rm } from "node:fs/promises";
 import { Session, type HeapProfiler } from "node:inspector/promises";
 import { loadavg } from "node:os";
 import path from "node:path";
-import { setImmediate as nextTurn } from "node:timers/promises";
+import { setImmediate as nextTurn, setTimeout as delay } from "node:timers/promises";
 import { pathToFileURL } from "node:url";
 import { parseArgs } from "node:util";
 import type { DB as StateDatabase } from "../../src/state/openclaw-state-db.generated.js";
+import type { OpenClawStateDatabase } from "../../src/state/openclaw-state-db.js";
 import { parseStrictIntegerOption } from "../lib/strict-integer-option.ts";
 
 const { values } = parseArgs({
   options: {
     "state-dir": { type: "string" },
     pending: { type: "string", default: "10000" },
+    publications: { type: "string", default: "0" },
+    "delay-ms": { type: "string", default: "0" },
     iterations: { type: "string", default: "2000" },
     warmup: { type: "string", default: "20" },
     allocations: { type: "boolean", default: false },
@@ -34,9 +42,13 @@ const { values } = parseArgs({
 });
 assert(values["state-dir"], "--state-dir must name a fresh synthetic directory");
 assert(global.gc, "Run with --expose-gc");
-const integer = (key: "pending" | "iterations" | "warmup", min: number) =>
-  parseStrictIntegerOption({ raw: values[key], label: `--${key}`, min, fallback: min });
+const integer = (
+  key: "pending" | "publications" | "delay-ms" | "iterations" | "warmup",
+  min: number,
+) => parseStrictIntegerOption({ raw: values[key], label: `--${key}`, min, fallback: min });
 const pending = integer("pending", 0);
+const publications = integer("publications", 0);
+const delayMs = integer("delay-ms", 0);
 const iterations = integer("iterations", 1);
 const warmup = integer("warmup", 0);
 const stateDir = path.resolve(values["state-dir"]);
@@ -107,6 +119,7 @@ try {
       { database },
     ),
   );
+  await seedPublicationRequests(database, publications);
   const placements = withEngineStoreAdmission(() =>
     createWorkerSessionPlacementStore({ database, now: () => 1000 }),
   );
@@ -120,6 +133,9 @@ try {
   const unexpected = (): never => {
     throw new Error("Empty publication recovery attempted a publication effect");
   };
+  let processed = 0;
+  let active = 0;
+  let maxActive = 0;
   const coordinator = createGitHubPublicationCoordinatorMethods({
     placements,
     assertCurrent: () => context.admission.assertCurrent(),
@@ -127,20 +143,39 @@ try {
     getCommittedRuntimeConfig: () => ({}),
     signal: new AbortController().signal,
     sameWorktree: unexpected,
-    processRow: unexpected,
+    processRow: async (row) => {
+      processed++;
+      maxActive = Math.max(maxActive, ++active);
+      if (delayMs) {
+        await delay(delayMs);
+      } else {
+        await Promise.resolve();
+      }
+      active--;
+      return {
+        requestId: row.request_id,
+        status: "published",
+        url: "https://github.com/synthetic/recovery/pull/1",
+        repository: "synthetic/recovery",
+        branch: row.branch,
+        headCommit: "a".repeat(40),
+      };
+    },
     recordRequestingRun: unexpected,
   });
   const before = await readPending();
   assert.equal(before.length, pending);
   const run = async (count: number) => {
     for (let index = 0; index < count; index++) {
-      await coordinator.resumeSessionRequests(undefined, () => true);
+      await coordinator.resumeSessionRequests(undefined, () => publications === 0);
     }
   };
   await run(warmup);
   global.gc();
   await nextTurn();
   pendingReads = 0;
+  processed = 0;
+  maxActive = 0;
   const loadBefore = loadavg();
   const memoryBefore = process.memoryUsage();
   if (values.allocations) {
@@ -166,11 +201,16 @@ try {
   const allocated = (node: HeapProfiler.SamplingHeapProfileNode): number =>
     node.selfSize + node.children.reduce((sum, child) => sum + allocated(child), 0);
   assert.deepEqual(await readPending(), before);
+  assert.equal(processed, publications * iterations);
   console.log(
     JSON.stringify({
-      workload: "empty publication recovery; real pending-workspace read worker",
+      workload: "publication recovery scheduler; real pending-workspace read worker",
       ownerSourceSha256,
       pending,
+      publications,
+      delayMs,
+      processed,
+      maxActive,
       iterations,
       warmup,
       allocationSampling: values.allocations,
@@ -192,4 +232,57 @@ try {
   inspector.disconnect();
   await state.closeOpenClawStateDatabaseAsync();
   await rm(stateDir, { recursive: true });
+}
+
+/** Offline synthetic requests; the benchmark injects a processor with no effects. */
+async function seedPublicationRequests(database: OpenClawStateDatabase, count: number) {
+  if (count === 0) {
+    return;
+  }
+  const { withEngineStoreAdmission } =
+    await import("../../src/infra/database-engine/admission-scope.js");
+  const { insertGitHubPublicationRequest } =
+    await import("../../src/gateway/github-publication-store.worker.js");
+  const { digestGitHubPublicationRequest } =
+    await import("../../src/gateway/github-publication-receipt.js");
+  withEngineStoreAdmission(() =>
+    state.runOpenClawStateWriteTransaction(
+      ({ db }) => {
+        for (let index = 0; index < count; index++) {
+          const sessionId = `publication-${index}`;
+          const request = {
+            sessionKey: `agent:main:${sessionId}`,
+            agentId: "main",
+            idempotencyKey: sessionId,
+          };
+          insertGitHubPublicationRequest(db, {
+            request,
+            requestId: sessionId,
+            requestDigest: digestGitHubPublicationRequest({ ...request, sessionId }),
+            sessionId,
+            lifecycleRevision: null,
+            requester: {
+              version: 1,
+              actor: { kind: "system" },
+              scopes: ["operator.admin"],
+              grant: null,
+            },
+            now: 1000 + index,
+            worktree: {
+              id: `worktree-${index}`,
+              repoFingerprint: `repository-${index}`,
+              branch: `publication-${index}`,
+            },
+            identity: {
+              source: "system-configured",
+              profileId: "synthetic",
+              account: { accountId: 1, login: "synthetic", avatarUrl: null },
+            },
+            assertCurrent() {},
+          });
+        }
+      },
+      { database },
+    ),
+  );
 }
