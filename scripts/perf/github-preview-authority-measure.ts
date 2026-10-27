@@ -9,13 +9,18 @@
  *   sampled allocation separately. Results include stable display-fact digests.
  * --shared-options: the same display workload across 40 agents with a shared OAuth
  *   profile and real synthetic OAuth-record worker reads; publication expiry is unused.
+ * --service-preview --api-owner=src/gateway/<frozen-base>.ts: alternate five
+ *   base/candidate samples through the host facade and real preview cache, with
+ *   64 concurrent synthetic clients sharing 200 links over 10k session references.
+ *   Warm reads must issue zero HTTP requests and preserve the response digest;
+ *   compare main-thread CPU and, in a separate --allocations pass, bytes/call.
  * Cold p95 with five samples is context only. Mock delays honor the real preview
  * 2s deadline, so failures at 800ms/hop are reported rather than excluded.
  * Run base/candidate AB/BA. The optional owner is a frozen source file adjacent to
  * github-tool-identity.ts so its relative imports retain the same dependency graph.
  * Acceptance: byte-identical previews and unchanged upstream/auth counts, lower
  * CPU/allocation per warm read. Timing and allocation passes remain separate.
- * Default mode: 10k synthetic session references share 100 issue/PR links across eight repos and
+ * Default mode: 10k synthetic session references share 200 issue/PR links across eight repos and
  * 40 agents. Measures cache/load, live authority, mock fetch/parse and projection;
  * it does not measure sessions.list, socket churn, or whole-Gateway latency.
  */
@@ -28,6 +33,7 @@ import path from "node:path";
 import { performance } from "node:perf_hooks";
 import { setTimeout as delay } from "node:timers/promises";
 import { pathToFileURL } from "node:url";
+import { Worker } from "node:worker_threads";
 import { loadControlUiGitHubPreview } from "../../extensions/github/api.js";
 import type { ControlUiGitHubPreviewIdentity } from "../../extensions/github/src/preview-contract.js";
 import type { ControlUiGitHubPreviewTarget } from "../../extensions/github/src/preview.js";
@@ -50,6 +56,7 @@ const sharedOptions = process.argv.includes("--shared-options");
 if (
   process.argv.includes("--cold") ||
   process.argv.includes("--personal-display") ||
+  process.argv.includes("--service-preview") ||
   sharedOptions
 ) {
   const args = process.argv.slice(2);
@@ -429,6 +436,117 @@ if (
     }
   }
 
+  if (process.argv.includes("--service-preview")) {
+    const baseline = value("api-owner", "");
+    assert(baseline, "--service-preview requires --api-owner=<frozen-base.ts>");
+    const apis: Array<{
+      arm: string;
+      api: typeof import("../../src/gateway/github-public-api.js");
+    }> = [
+      { arm: "base", api: await import(pathToFileURL(path.resolve(baseline)).href) },
+      { arm: "candidate", api: await import("../../src/gateway/github-public-api.js") },
+    ];
+    const sessions = Array.from(
+      { length: 10_000 },
+      (_, index) =>
+        ({
+          owner: "synthetic",
+          repo: `repo-${index % 8}`,
+          kind: index % 2 ? "pull" : "issue",
+          number: (index % 100) + 1,
+        }) satisfies ControlUiGitHubPreviewTarget,
+    );
+    const inspector = new Session();
+    let expectedDigest: string | undefined;
+    let workerPosts = 0;
+    // eslint-disable-next-line @typescript-eslint/unbound-method -- The probe forwards the original Worker receiver and restores the method afterward.
+    const postMessage = Worker.prototype.postMessage;
+    Worker.prototype.postMessage = function (this: Worker, ...messageArgs) {
+      workerPosts++;
+      return postMessage.apply(this, messageArgs);
+    };
+    setRuntimeConfigSnapshot({
+      gateway: { controlUi: { github: { token: "synthetic-service-preview" } } },
+    });
+    try {
+      if (allocations) {
+        inspector.connect();
+      }
+      for (let sample = 0; sample < samples; sample++) {
+        for (const { arm, api } of sample % 2 ? apis.toReversed() : apis) {
+          const transport = previewTransport(0);
+          const read = (index: number) =>
+            api.gitHubPublicApi.loadControlUiGitHubPreview(
+              sessions[index % sessions.length]!,
+              undefined,
+              transport.fetcher,
+            );
+          // Populate every key and warm JIT separately from the measured work.
+          for (let index = 0; index < 1_000; index++) {
+            await read(index);
+          }
+          transport.reset(0);
+          workerPosts = 0;
+          if (allocations) {
+            await inspector.post("HeapProfiler.startSampling", {
+              samplingInterval: 4096,
+              includeObjectsCollectedByMajorGC: true,
+              includeObjectsCollectedByMinorGC: true,
+            });
+          }
+          const hostLoad = loadavg();
+          const responseDigest = createHash("sha256");
+          const cpu = process.threadCpuUsage();
+          const started = performance.now();
+          for (let index = 0; index < iterations; index += 64) {
+            const replies = await Promise.all(
+              Array.from({ length: Math.min(64, iterations - index) }, (_, offset) =>
+                read(index + offset),
+              ),
+            );
+            for (const reply of replies) {
+              responseDigest.update(JSON.stringify(reply));
+            }
+          }
+          const elapsedMs = performance.now() - started;
+          const used = process.threadCpuUsage(cpu);
+          const sampledBytes = allocations
+            ? (await inspector.post("HeapProfiler.stopSampling")).profile.samples.reduce(
+                (sum, entry) => sum + entry.size,
+                0,
+              )
+            : undefined;
+          assert.equal(transport.counts().requests, 0, "warm preview unexpectedly fetched");
+          assert.equal(workerPosts, 0, "warm preview unexpectedly posted to a worker");
+          const resultDigest = responseDigest.digest("hex");
+          expectedDigest ??= resultDigest;
+          assert.equal(resultDigest, expectedDigest, "preview payload changed between samples");
+          console.log(
+            JSON.stringify({
+              workload: "service-preview",
+              arm,
+              sample,
+              iterations,
+              allocations,
+              hostLoad,
+              elapsedMs,
+              cpuUsPerCall: (used.user + used.system) / iterations,
+              sampledBytesPerCall:
+                sampledBytes === undefined ? undefined : sampledBytes / iterations,
+              fetches: transport.counts().requests,
+              workerPosts,
+              responseDigest: resultDigest,
+              memory: process.memoryUsage(),
+            }),
+          );
+        }
+      }
+    } finally {
+      Worker.prototype.postMessage = postMessage;
+      inspector.disconnect();
+      clearRuntimeConfigSnapshot();
+    }
+  }
   if (process.argv.includes("--cold")) {
     await measurePreviews();
   }
