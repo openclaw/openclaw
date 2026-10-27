@@ -106,8 +106,9 @@ it.each([false, true])("uses Code Mode skill access only when admitted (%s)", (a
     expect(prompt).toContain("skills.search(query)");
     expect(prompt).not.toContain("read exact <location> with `read`");
   } else {
-    expect(prompt).not.toContain("skills.read(");
-    expect(prompt).not.toContain("skills.search(");
+    expect(prompt).not.toMatch(
+      /## Skills|<available_skills>|read exact <location>|skills\.(read|search)\(/,
+    );
   }
 });
 

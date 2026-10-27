@@ -215,7 +215,8 @@ describe("buildSystemPromptReport", () => {
 describe("rendered skills diagnostics", () => {
   it.each<[Partial<Parameters<typeof buildAgentSystemPrompt>[0]>, boolean, boolean?]>([
     [{ toolNames: ["skills_read"] }, true],
-    [{ codeModeActive: true, toolNames: ["exec"] }, true],
+    [{ codeModeActive: true, toolNames: ["exec"] }, false],
+    [{ codeModeActive: true, toolNames: ["exec"], capabilityToolNames: ["skills_read"] }, true],
     [{ promptSurface: "cli_backend" }, true],
     [{ promptMode: "minimal", toolNames: ["read"] }, true],
     [{ promptMode: "none", toolNames: ["read"] }, false],

@@ -26,6 +26,7 @@ import { prepareSystemAgentRunAdmission } from "../../admitted-run-context.js";
 import { addSession, deleteSession } from "../../bash-process-registry.js";
 import { createProcessSessionFixture } from "../../bash-process-registry.test-helpers.js";
 import * as referencePaths from "../../docs-path.js";
+import { createAgentHarnessToolSurfaceRuntimeCore } from "../../harness/tool-surface-bridge.js";
 import * as runtimePrompt from "../../runtime-prompt.js";
 import type { AgentTool } from "../../runtime/index.js";
 import { convertToLlm } from "../../sessions/messages.js";
@@ -91,6 +92,7 @@ const tool = (name: string): AgentTool => ({
 });
 
 async function preparePermissionPrompt({
+  codeModeActive = false,
   isRawModelRun = false,
   thinkLevel,
   requireExplicitMessageTarget,
@@ -104,6 +106,7 @@ async function preparePermissionPrompt({
   additionalToolNames = [],
 }: {
   additionalToolNames?: string[];
+  codeModeActive?: boolean;
   isRawModelRun?: boolean;
   thinkLevel?: EmbeddedRunAttemptParams["thinkLevel"];
   requireExplicitMessageTarget?: boolean;
@@ -155,16 +158,39 @@ async function preparePermissionPrompt({
     modelId: attempt.modelId,
     prepared: true as const,
   }));
-  const allowedTools = applyEmbeddedAttemptToolsAllow(tools, attempt.toolsAllow);
-  const capabilityToolNames = new Set(allowedTools.map(({ name }) => name));
+  const toolSurface = codeModeActive
+    ? createAgentHarnessToolSurfaceRuntimeCore({
+        config: { tools: { codeMode: true, toolSearch: false } },
+        modelToolsEnabled: true,
+        toolsAllow: attempt.toolsAllow,
+        runtimeToolAllowlist: attempt.toolsAllow,
+      })
+    : undefined;
+  if (toolSurface) {
+    onTestFinished(() => toolSurface.cleanup());
+  }
+  const projectTools = (input: AgentTool[]) => {
+    const allowedTools = applyEmbeddedAttemptToolsAllow(
+      input,
+      toolSurface?.runtimeToolAllowlist ?? attempt.toolsAllow,
+    );
+    return toolSurface
+      ? toolSurface
+          .compactTools(allowedTools, { localModelLeanApplied: true })
+          .promptToolPolicy.apply()
+      : { tools: allowedTools, callableToolNames: allowedTools.map(({ name }) => name) };
+  };
+  const projected = projectTools(tools);
+  let effectiveTools = projected.tools;
+  const capabilityToolNames = new Set(projected.callableToolNames);
   const prepared = await prepareEmbeddedAttemptSystemPrompt({
     attempt,
     activeContextEngine: undefined,
     bootstrap: createEmptyPromptBootstrap(),
     capabilityToolNames,
     effectiveTools: skills?.initialToolNames
-      ? allowedTools.filter(({ name }) => skills.initialToolNames?.includes(name))
-      : allowedTools,
+      ? effectiveTools.filter(({ name }) => skills.initialToolNames?.includes(name))
+      : effectiveTools,
     setup: createAttemptSetupFixture({
       effectiveCwd: "/tmp/openclaw",
       effectiveWorkspace: "/tmp/openclaw",
@@ -175,24 +201,34 @@ async function preparePermissionPrompt({
     isRawModelRun,
     modelToolsEnabled: true,
     skillsPrompt: skills?.prompt ?? "",
+    codeModeActive: toolSurface?.codeModeControlsEnabled ?? false,
     webSearchUnconfigured,
     toolSearchDirectoryEnabled: false,
     toolSearchRuntimeConfig: attempt.config,
-    toolSearchCatalogRef,
+    toolSearchCatalogRef: toolSurface?.toolSearchCatalogRef ?? toolSearchCatalogRef,
   });
   return {
     attempt,
     capabilityToolNames,
+    get effectiveTools() {
+      return effectiveTools;
+    },
     prepared,
     getProviderRuntimeHandle,
     read,
-    refreshSystemPrompt: async (prompt: string, refreshedTools: AgentTool[]) =>
-      (
-        await prepared.prepareToolPrompt!(
-          applyEmbeddedAttemptToolsAllow(refreshedTools, attempt.toolsAllow),
-          { permissionChanged: true },
-        )
-      )(prompt),
+    refreshSystemPrompt: async (prompt: string, refreshedTools: AgentTool[]) => {
+      const refreshed = projectTools(refreshedTools);
+      effectiveTools = refreshed.tools;
+      if (toolSurface) {
+        capabilityToolNames.clear();
+        for (const name of refreshed.callableToolNames) {
+          capabilityToolNames.add(name);
+        }
+      }
+      return (await prepared.prepareToolPrompt!(effectiveTools, { permissionChanged: true }))(
+        prompt,
+      );
+    },
     write,
   };
 }
@@ -449,7 +485,7 @@ describe("buildAttemptSystemPrompt", () => {
   ] as const)(
     "includes routine skills only with an executable reader: %s",
     async (_label, toolsAllow, toolNames, expected) => {
-      const { prepared } = await preparePermissionPrompt({
+      const { prepared, effectiveTools } = await preparePermissionPrompt({
         session: { sessionKey: "agent:main:cron:skill-reader:run:fixture" },
         suppliedTools: toolNames.map(tool),
         skills: { prompt: skillsCatalog, toolsAllow: [...toolsAllow] },
@@ -457,16 +493,77 @@ describe("buildAttemptSystemPrompt", () => {
       const { payload } = await captureAnthropicRequest("transport", {
         context: {
           systemPrompt: prepared.systemPromptText,
+          tools: effectiveTools,
           messages: [{ role: "user", content: "Check the weather.", timestamp: 1 }],
         },
       });
 
       expect(JSON.stringify(payload.system).includes(skillsCatalog)).toBe(expected);
+      expect(/"name":"(?:read|skills_read)"/.test(JSON.stringify(payload.tools))).toBe(expected);
       expect(prepared.systemPromptReport?.skills.entries.map(({ name }) => name)).toEqual(
         expected ? ["weather"] : [],
       );
     },
   );
+
+  it.each([false, true])(
+    "advertises Code Mode skills only with an admitted reader (%s)",
+    async (admitted) => {
+      const { prepared, effectiveTools, capabilityToolNames } = await preparePermissionPrompt({
+        codeModeActive: true,
+        session: { sessionKey: "agent:main:cron:skill-reader:run:fixture" },
+        suppliedTools: ["write", "read", "skills_read"].map(tool),
+        skills: {
+          prompt: skillsCatalog,
+          toolsAllow: admitted ? ["write", "skills_read"] : ["write"],
+        },
+      });
+      const { payload } = await captureAnthropicRequest("transport", {
+        context: {
+          systemPrompt: prepared.systemPromptText,
+          tools: effectiveTools,
+          messages: [{ role: "user", content: "Check the weather.", timestamp: 1 }],
+        },
+      });
+
+      expect(payload.tools).toEqual(
+        expect.arrayContaining([expect.objectContaining({ name: "exec" })]),
+      );
+      expect(capabilityToolNames.has("write")).toBe(true);
+      expect(capabilityToolNames.has("read")).toBe(false);
+      const system = JSON.stringify(payload.system);
+      expect(system.includes(skillsCatalog)).toBe(admitted);
+      expect(system.includes("skills.read(")).toBe(admitted);
+      expect(system).not.toContain("read exact <location>");
+      expect(prepared.systemPromptReport?.skills.entries.map(({ name }) => name)).toEqual(
+        admitted ? ["weather"] : [],
+      );
+    },
+  );
+
+  it("refreshes Code Mode skills when the reader changes while exec remains available", async () => {
+    const write = tool("write");
+    const reader = tool("skills_read");
+    const fixture = await preparePermissionPrompt({
+      codeModeActive: true,
+      suppliedTools: [write, reader],
+      skills: { prompt: skillsCatalog, toolsAllow: ["write", "skills_read"] },
+    });
+    expect(fixture.prepared.systemPromptText).toContain(skillsCatalog);
+
+    const hidden = await fixture.refreshSystemPrompt(fixture.prepared.systemPromptText, [write]);
+    expect(fixture.effectiveTools.some(({ name }) => name === "exec")).toBe(true);
+    expect(hidden).not.toContain(skillsCatalog);
+    expect(hidden).not.toContain("read exact <location>");
+    expect(fixture.prepared.systemPromptReport?.skills.promptChars).toBe(0);
+
+    const restored = await fixture.refreshSystemPrompt(hidden, [write, reader]);
+    expect(fixture.effectiveTools.some(({ name }) => name === "exec")).toBe(true);
+    expect(restored).toContain(skillsCatalog);
+    expect(fixture.prepared.systemPromptReport?.skills.entries.map(({ name }) => name)).toEqual([
+      "weather",
+    ]);
+  });
 
   it("refreshes skill diagnostics when read visibility changes or hooks replace the prompt", async () => {
     const { prepared, read, refreshSystemPrompt } = await preparePermissionPrompt({
