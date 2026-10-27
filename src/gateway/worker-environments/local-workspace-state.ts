@@ -3,7 +3,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import type { SandboxConfig } from "../../agents/sandbox/types.js";
 import type { WorktreeAllocationGuard } from "../../agents/worktrees/allocation.js";
-import { requireGit, requireGitBuffer, runGit } from "../../agents/worktrees/git.js";
+import { requireGit, runGit } from "../../agents/worktrees/git.js";
 import { timeWorktreePreparationPhase } from "../../agents/worktrees/preparation-timing.js";
 import type { WorktreeWorkerAuthority } from "../../agents/worktrees/types.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
@@ -15,8 +15,8 @@ import {
 import {
   admitLocalWorkspaceSourcePaths,
   captureLocalWorkspaceArchiveBaseline,
-  decodeLocalWorkspaceGitPaths,
   parseLocalWorkspaceSourcePaths,
+  prepareLocalWorkspaceBuildInputs,
   selectLocalWorkspaceCanonicalPaths,
 } from "./local-workspace-inventory.js";
 import type {
@@ -158,42 +158,16 @@ export function projectionOperations(
   let inputPaths: Promise<string[]> | undefined;
   let preparedInputPaths: Set<string> | undefined;
   const buildCacheInputs = () =>
-    (inputPaths ??= (async () => {
-      const selected = current();
-      const admitted = parseLocalWorkspaceSourcePaths(selected.source_paths_json);
-      const paths =
-        owner.worktree.removedAt === undefined
-          ? await selectLocalWorkspaceCanonicalPaths({
-              root: owner.worktree.path,
-              admittedPaths: selected.source_paths_json,
-              signal,
-              assertCurrent,
-            })
-          : new Set(admitted);
-      preparedInputPaths = paths;
-      const retained = buildCacheInputPaths(paths);
-      if (owner.worktree.snapshotRef && selected.baseline_ref) {
-        const archived = await requireGitBuffer(
-          owner.worktree.repoRoot,
-          ["ls-tree", "-r", "-z", "--name-only", owner.worktree.snapshotRef],
-          { signal, beforeRun: assertCurrent },
-        );
-        current();
-        // Older archives lost later index membership. The snapshot owns these exact
-        // inputs, including derived-looking names, but not future directory contents.
-        for (const entryPath of buildCacheInputPaths(decodeLocalWorkspaceGitPaths(archived))) {
-          retained.add(entryPath);
-          paths.add(entryPath);
-        }
-      }
-      const known = new Set(admitted);
-      const added = [...retained].filter((entryPath) => !known.has(entryPath));
-      // Keep acquired input custody when later recovery no longer has the checkout or archive.
-      if (added.length) {
-        await update({ source_paths_json: JSON.stringify([...admitted, ...added]) });
-      }
-      return [...retained];
-    })());
+    (inputPaths ??= prepareLocalWorkspaceBuildInputs({
+      worktree: owner.worktree,
+      projection: current(),
+      signal,
+      assertCurrent,
+      retainSourcePaths: (sourcePaths) => update({ source_paths_json: sourcePaths }),
+    }).then((inventory) => {
+      preparedInputPaths = inventory.paths;
+      return inventory.retained;
+    }));
   const canonicalPaths = async () => {
     const retained = await buildCacheInputs();
     const selected = current();
@@ -340,15 +314,39 @@ export function projectionOperations(
         snapshot = await scan(target);
         await update({ checkpoint_json: JSON.stringify(snapshot) });
       }
-      const legacy = snapshot ? undefined : await capture(target);
       const baseline = snapshot ? undefined : await baselineDocument();
+      const baselineManifest =
+        baseline &&
+        parseWorkerWorkspaceManifest(
+          baseline.rawManifest,
+          baseline.manifestRef,
+          await buildCacheInputs(),
+        );
+      const legacy =
+        baselineManifest && (await capture(target, new Set(baselineManifest.directories)));
+      // Eviction can retain an archive reservation after staging fails. The
+      // restored Git snapshot omits the accepted overlay, unlike the saved baseline.
+      const stagingBase =
+        baselineManifest && owner.worktree.removedAt !== undefined && owner.worktree.snapshotRef
+          ? await captureLocalWorkspaceArchiveBaseline({
+              root: owner.worktree.repoRoot,
+              snapshotCommit: await requireGit(
+                owner.worktree.repoRoot,
+                ["rev-parse", `${owner.worktree.snapshotRef}^{commit}`],
+                { signal, beforeRun: assertCurrent },
+              ),
+              manifest: baselineManifest,
+              signal,
+              assertCurrent,
+            })
+          : baseline;
       await workerWorkspaceResultStaging.stageWorkerWorkspaceResult({
         root: owner.worktree.path,
         stagingRoot: sourcePath(target),
         stagedResultRef: selected.pending_ref,
-        baseManifestRef: snapshot?.baseManifestRef ?? baseline!.manifestRef,
+        baseManifestRef: snapshot?.baseManifestRef ?? stagingBase!.manifestRef,
         currentManifestRef: snapshot?.currentManifestRef ?? legacy!.manifestRef,
-        baseManifestRaw: snapshot?.baseManifestRaw ?? baseline!.rawManifest,
+        baseManifestRaw: snapshot?.baseManifestRaw ?? stagingBase!.rawManifest,
         currentManifestRaw: snapshot?.currentManifestRaw ?? legacy!.rawManifest,
         buildCacheInputs: snapshot?.buildCacheInputs ?? (await buildCacheInputs()),
         assertCurrent,
@@ -610,32 +608,31 @@ export function projectionOperations(
           "Workspace integration is pending; finish the original github_publish prepare_pr or refresh_base action before archiving this worktree. Saved files and merge state were preserved.",
         );
       }
-      const accepted = await capture("canonical");
       const baseline = await baselineDocument();
+      const manifest = parseWorkerWorkspaceManifest(
+        baseline.rawManifest,
+        baseline.manifestRef,
+        await buildCacheInputs(),
+      );
+      const accepted = await capture("canonical", new Set(manifest.directories));
       if (accepted.manifestRef !== baseline.manifestRef) {
         throw new Error("Local workspace changed before archive capture");
       }
-      const manifest = parseWorkerWorkspaceManifest(
-        accepted.rawManifest,
-        accepted.manifestRef,
-        await buildCacheInputs(),
-      );
       const projection = current().projection_path;
-      const { rawManifest: base, manifestRef: baseRef } =
-        await captureLocalWorkspaceArchiveBaseline({
-          root: owner.worktree.repoRoot,
-          snapshotCommit,
-          manifest,
-          signal,
-          assertCurrent,
-        });
-      if (baseRef === accepted.manifestRef) {
+      const archiveBase = await captureLocalWorkspaceArchiveBaseline({
+        root: owner.worktree.repoRoot,
+        snapshotCommit,
+        manifest,
+        signal,
+        assertCurrent,
+      });
+      if (archiveBase.manifestRef === accepted.manifestRef) {
         return;
       }
       const resultRef = workerWorkspaceResultRef(randomUUID());
-      // Reservation precedes the Git effect. Interrupted staging recaptures the
-      // still-owned projection against this same reduced base on ordinary recovery.
-      await replaceBaseline(base, baseRef, {
+      // Keep accepted directory membership until the receipt owns it. Recovery
+      // must not mistake derived children for deletion after interrupted staging.
+      await update({
         pending_ref: resultRef,
         pending_target: "canonical",
         checkpoint_json: null,
@@ -644,8 +641,8 @@ export function projectionOperations(
         root: owner.worktree.repoRoot,
         stagingRoot: projection,
         stagedResultRef: resultRef,
-        baseManifestRaw: base,
-        baseManifestRef: baseRef,
+        baseManifestRaw: archiveBase.rawManifest,
+        baseManifestRef: archiveBase.manifestRef,
         currentManifestRaw: accepted.rawManifest,
         currentManifestRef: accepted.manifestRef,
         buildCacheInputs: await buildCacheInputs(),
@@ -676,7 +673,10 @@ export function projectionOperations(
             await buildCacheInputs(),
           );
           current();
-          if (receipt.baseManifestRef !== baseline?.manifestRef) {
+          if (
+            receipt.baseManifestRef !== baseline?.manifestRef &&
+            receipt.currentManifestRef !== baseline?.manifestRef
+          ) {
             throw new Error("Archive retention receipt changed");
           }
           accepted = {
