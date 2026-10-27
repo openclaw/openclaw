@@ -225,8 +225,6 @@ describe("production lint suppressions", () => {
         "scripts/perf/tools-catalog-copy-measure.ts|no-extend-native|2",
         // The browser probe forwards IndexedDB writes with each store receiver and restores both methods.
         "scripts/perf/ui-streaming-render-measure.ts|typescript/unbound-method|2",
-        // The payload census supplies the native MessagePort receiver through Reflect.apply.
-        "scripts/perf/worker-payload-census-preload.mjs|typescript/unbound-method|1",
         // These owners sort only fresh private arrays, preserving their source collections.
         "src/agents/agent-bundle-lsp-env.ts|unicorn/no-array-sort|1",
         "src/agents/agent-bundle-mcp-runtime.ts|unicorn/prefer-add-event-listener|1",

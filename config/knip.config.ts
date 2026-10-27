@@ -208,7 +208,6 @@ const repositoryScriptEntries = [
   "scripts/perf/session-prepared-list-measure.ts!",
   "scripts/perf/transcript-boot-preload.mjs!",
   "scripts/perf/worker-pool-churn-preload.mjs!",
-  "scripts/perf/worker-payload-census-preload.mjs!",
   "scripts/perf/worktree-prompt-native-measure.ts!",
   "scripts/perf/worktree-prompt-overlap-measure.ts!",
   "scripts/perf/code-mode-worker-burst-measure.ts!",
