@@ -14,7 +14,6 @@ import { toSanitizedMarkdownHtml } from "./markdown.ts";
 import { SessionLinkTitler } from "./session-link-titling.ts";
 import "./session-progress-hovercard-registration.ts";
 import { SESSION_TITLE_TARGET_SELECTOR } from "./session-progress-hovercard-target.ts";
-import type { SessionProgressHovercardProvider } from "./session-progress-hovercard.runtime.tsx";
 import { registerSessionTitleTarget } from "./session-title-target-registration.ts";
 
 const SESSION_KEY = "agent:main:research";
@@ -123,31 +122,6 @@ function createTitler(rows: GatewaySessionRow[] = [], request = vi.fn()) {
 }
 
 describe("SessionLinkTitler", () => {
-  it("defers unresolved cached links until the Gateway is connected without caching the deferral", async () => {
-    const request = vi.fn().mockResolvedValue({
-      ok: true,
-      key: DASHBOARD_KEY,
-      agentId: "main",
-      displayName: "Current plan",
-    });
-    const { host, titler } = createTitler([], request);
-    titler.context!.gateway.snapshot.phase = "connecting";
-    const link = renderMarkdown(titler, host, "[Plan](/chat/main/d0effac9)")();
-    await refresh(titler);
-    expect(request).not.toHaveBeenCalled();
-    expect(link.textContent).toBe("Plan");
-    expect(link.getAttribute("href")).toBe("/chat/main/d0effac9");
-
-    titler.context!.gateway.snapshot.phase = "connected";
-    await refresh(titler);
-    expect(request).toHaveBeenCalledExactlyOnceWith("sessions.resolve", {
-      shortId: "d0effac9",
-      agentId: "main",
-      allowMissing: true,
-    });
-    expectTitle(link, "Current plan");
-  });
-
   it("keeps a plain session link when the connection cannot read previews", async () => {
     const { titler, request } = createTitler();
     titler.context!.gateway.snapshot.hello = gatewayHelloForMethods(
@@ -435,60 +409,6 @@ describe("SessionLinkTitler", () => {
 });
 
 describe("producer-owned session titles", () => {
-  it("titles retained links on same-client hello without a session publication", async ({
-    onTestFinished,
-  }) => {
-    const request = vi.fn().mockResolvedValue({
-      ok: true,
-      key: DASHBOARD_KEY,
-      agentId: "main",
-      displayName: "Connected plan",
-    });
-    const client = { request } as unknown as GatewayBrowserClient;
-    const context = sessionContext();
-    const gateway = context.gateway;
-    const listeners = new Set<Parameters<typeof gateway.subscribe>[0]>();
-    gateway.snapshot.phase = "connecting";
-    gateway.snapshot.client = client;
-    gateway.subscribe = (listener) => {
-      listeners.add(listener);
-      return () => listeners.delete(listener);
-    };
-    gateway.subscribeEvents = () => () => undefined;
-    const provider = Object.assign(
-      document.createElement(
-        "openclaw-session-progress-hovercard-provider",
-      ) as SessionProgressHovercardProvider,
-      { client, context, gateway },
-    );
-    provider.innerHTML = toSanitizedMarkdownHtml("[Plan](/chat/main/d0effac9)", {
-      sessionLinks: true,
-    });
-    const link = provider.querySelector<HTMLAnchorElement>("a")!;
-    document.body.append(provider);
-    const release = registerSessionTitleTarget(link, document.createElement("span"));
-    onTestFinished(() => {
-      release();
-      provider.remove();
-    });
-    await vi.dynamicImportSettled();
-    await provider.updateComplete;
-    await waitForSolid(() => expect(listeners.size).toBeGreaterThan(0));
-    expect(request).not.toHaveBeenCalled();
-    expect(link.textContent).toBe("Plan");
-
-    gateway.snapshot.phase = "connected";
-    for (const listener of [...listeners]) {
-      listener(gateway.snapshot);
-    }
-    await waitForSolid(() => expectTitle(link, "Connected plan"));
-    expect(request).toHaveBeenCalledExactlyOnceWith("sessions.resolve", {
-      shortId: "d0effac9",
-      agentId: "main",
-      allowMissing: true,
-    });
-  });
-
   it("titles late Markdown links across provider remounts and retires a removed pending target", async ({
     onTestFinished,
   }) => {

@@ -176,15 +176,16 @@ suite.define(() => {
             .waitFor();
         }
         await page.waitForFunction(() =>
-          Object.keys(localStorage).some((key) =>
-            key.startsWith("openclaw.control.bootRecord.v1:"),
+          Object.keys(localStorage).some((storageKey) =>
+            storageKey.startsWith("openclaw.control.bootRecord.v1:"),
           ),
         );
+        const warmInput: Parameters<typeof persistColdLoadWarmState>[0] = {
+          sessionKey: key,
+          sidebarView: "sessions",
+        };
         for (let reload = 0; reload < 2; reload++) {
-          await page.evaluate(persistColdLoadWarmState, {
-            sessionKey: key,
-            sidebarView: "sessions",
-          });
+          await page.evaluate(persistColdLoadWarmState, warmInput);
           if (reload === 0) {
             await page.evaluate(() => sessionStorage.setItem("warm-connect-hold-identity", "1"));
           }
