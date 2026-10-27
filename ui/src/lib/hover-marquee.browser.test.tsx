@@ -4,6 +4,7 @@ import { userEvent } from "vitest/browser";
 import "../test-helpers/load-styles.ts";
 import { mountSolid } from "../test-helpers/mount-solid.ts";
 import { HoverMarquee } from "./solid/hover-marquee.tsx";
+import "../styles/chat/summary-automations.css";
 
 let container: HTMLDivElement;
 let setTitle: (title: string) => void;
@@ -43,6 +44,34 @@ afterEach(() => {
 });
 
 describe("hover marquee lifecycle", () => {
+  it("keeps Automation title fades stable from the first attached layout", async () => {
+    unmount();
+    let host!: HTMLAnchorElement;
+    const [title, updateTitle] = createSignal(longTitle);
+    ({ unmount } = mountSolid(
+      () => (
+        <a ref={(element) => (host = element)} href="#automation" style="display:flex;width:180px">
+          <HoverMarquee
+            content={title()}
+            class="chat-summary__automation-title"
+            options={{ host: () => host }}
+          />
+        </a>
+      ),
+      { container },
+    ));
+    flush();
+    const label = container.querySelector<HTMLElement>(".chat-summary__automation-title")!;
+    const firstMask = getComputedStyle(label).maskImage;
+    expect(firstMask).not.toBe("none");
+    await expect.poll(() => label.classList.contains("hover-marquee--overflowing")).toBe(true);
+    expect(getComputedStyle(label).maskImage).toBe(firstMask);
+    updateTitle("Notes");
+    flush();
+    await expect.poll(() => label.classList.contains("hover-marquee--overflowing")).toBe(false);
+    expect(getComputedStyle(label).maskImage).toBe(firstMask);
+  });
+
   it("updates the resting fade when its viewport or title changes", async () => {
     const label = show(longTitle);
     const mask = () => getComputedStyle(label).maskImage;

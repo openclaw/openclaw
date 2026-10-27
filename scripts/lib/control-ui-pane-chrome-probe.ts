@@ -41,6 +41,10 @@ export function installPaneChromeProbe() {
               section.querySelector(".chat-details-desktop-section__count")?.textContent?.trim() ??
               null,
             refresh: Boolean(section.querySelector(".task-progress-details__refresh")),
+            titleMasks: Array.from(
+              section.querySelectorAll(".chat-summary__automation-title"),
+              (title) => getComputedStyle(title).maskImage,
+            ),
             visible: box.height > 0 && box.top < panelBox.bottom && box.bottom > panelBox.top,
             nodes: section.querySelectorAll("*").length,
             images: Array.from(section.querySelectorAll("img")).map((image) => ({
