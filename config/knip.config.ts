@@ -235,6 +235,7 @@ const repositoryScriptEntries = [
   "scripts/perf/provider-prompt-state-worker-measure.mjs!",
   "scripts/perf/session-diff-metadata-measure.ts!",
   "scripts/perf/session-file-workspace-measure.ts!",
+  "scripts/perf/session-files-list-measure.ts!",
   // The performance guide and transcript driver invoke these tools and preloads by path.
   "scripts/lib/gateway-bench-transport-preload.ts!",
   "scripts/perf/async-store-measure.mjs!",
