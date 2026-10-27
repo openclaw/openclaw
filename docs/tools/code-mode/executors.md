@@ -141,7 +141,9 @@ still retire the worker.
 Node keeps at most eight completed workers warm. Their combined nominal heap
 budget is 512 MiB at the default 64 MiB per worker, or 8 GiB when every worker
 uses the maximum 1 GiB configuration. This is not an RSS limit. Surplus workers
-expire after 30 seconds. Within that eight-worker budget, the most recently used
+expire three minutes after their last completion. This cooldown keeps recent
+burst capacity warm; serial traffic reuses the newest worker without extending
+the surplus workers' deadlines. Within that eight-worker budget, the most recently used
 idle worker for each compatible host and heap limit remains warm until pressure,
 health, runtime rotation, or host shutdown retires it. Workers start only when a
 cell needs one; unused Code Mode creates no warm workers. Critical memory

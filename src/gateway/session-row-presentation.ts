@@ -344,7 +344,8 @@ export function prepareProjectedSessionPresentation(
       client === undefined,
       sharing.getCacheKey(),
       presentFastMode("ultrafast"),
-      Object.entries(query).toSorted(([left], [right]) => left.localeCompare(right)),
+      // oxlint-disable-next-line unicorn/no-array-sort -- Object.entries creates a private array.
+      Object.entries(query).sort(([left], [right]) => left.localeCompare(right)),
     ]);
     return publicationState?.lists.get(key) ?? { key, refs: 0, bytes: 0, historyRefs: 0 };
   };
@@ -572,7 +573,7 @@ export function prepareProjectedSessionPresentation(
     row.childOwnerSessionKeys = [...childOwnerSessionKeys];
     row.fastMode = presentFastMode(row.fastMode);
     row.effectiveFastMode = presentFastMode(row.effectiveFastMode);
-    if (sourceSwarm) {
+    if (sourceSwarm && excludedSwarmKeys) {
       row.swarm = { ...sourceSwarm, groups: [] };
       for (const group of sourceSwarm.groups) {
         row.swarm.groups.push({

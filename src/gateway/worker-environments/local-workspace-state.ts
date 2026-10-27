@@ -63,12 +63,13 @@ export function projectionOperations(
   initialRow: LocalWorkspaceProjection | undefined,
 ) {
   const signal = store.signal;
+  const projectionPath = localWorkspaceProjectionPath(owner);
   let row = initialRow;
-  const selectCurrent = (assertCurrent: () => void) => {
+  const selectCurrent = (assertCurrent: (() => void) | undefined) => {
     if (!row) {
       throw new Error("Local workspace binding is missing");
     }
-    assertCurrent();
+    assertCurrent?.();
     if (
       row.worktree_id !== owner.worktree.id ||
       row.agent_id !== owner.agentId ||
@@ -80,22 +81,21 @@ export function projectionOperations(
         "Local sandbox workspace belongs to a different session incarnation; pending edits were preserved",
       );
     }
-    if (
-      row.projection_path !== localWorkspaceProjectionPath(owner) ||
-      store.get()?.revision !== row.revision
-    ) {
+    if (row.projection_path !== projectionPath || store.get()?.revision !== row.revision) {
       throw new Error("Local workspace binding changed");
     }
     return row;
   };
-  const current = () => selectCurrent(() => owner.assertCurrent());
-  const assertCurrent = () => {
-    current();
-  };
+  const current = () => selectCurrent(owner.assertCurrent);
+  // Subprocess input admission requires an undefined result.
+  const assertCurrent = () => void current();
   const workerAuthority: WorktreeWorkerAuthority = {
-    ...owner.workerAuthority,
+    ...store.workerAuthority,
+    predicates: owner.workerAuthority?.predicates ?? store.workerAuthority.predicates,
     assertCurrent: () => {
-      selectCurrent(() => owner.workerAuthority?.assertCurrent?.());
+      selectCurrent(
+        owner.workerAuthority ? owner.workerAuthority.assertCurrent : owner.assertCurrent,
+      );
     },
   };
   const update = async (
@@ -497,7 +497,7 @@ export function projectionOperations(
           session_key: owner.sessionKey,
           session_id: owner.sessionId,
           lifecycle_revision: owner.lifecycleRevision,
-          projection_path: localWorkspaceProjectionPath(owner),
+          projection_path: projectionPath,
           base_commit: baseCommit,
           source_paths_json: sourcePaths,
           baseline_json: null,

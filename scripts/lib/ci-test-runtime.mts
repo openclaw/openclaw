@@ -109,6 +109,7 @@ const nodeRequiredFiles = new Set([
   "ui/src/lib/reactive/session-progress-roster.test.ts",
   "ui/src/pages/chat/chat-pane-retention.test.ts",
   "ui/src/pages/chat/chat-thread-retention.test.ts",
+  "ui/src/pages/chat/session-message-cache-retention.test.ts",
   "ui/src/pages/chat/session-snapshot-store.test.ts",
   "ui/src/pages/usage/usage-page-retention.test.ts",
 ]);
