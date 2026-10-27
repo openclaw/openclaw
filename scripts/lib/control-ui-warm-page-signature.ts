@@ -58,5 +58,13 @@ export function readWarmPageSignature() {
   const readiness = Reflect.get(window, "__readWidgetReadiness")?.();
   const dashboardContentsVerified =
     signatures.dashboard === "[]" || typeof readiness?.firstBoardReadyMs === "number";
-  return { signatures, missing, skeletons, imagesReady, dashboardContentsVerified };
+  return {
+    signatures,
+    // Dashboard layouts use the right rail for the transcript instead of Details.
+    missing:
+      signatures.dashboard === "[]" ? missing : missing.filter((region) => region !== "details"),
+    skeletons,
+    imagesReady,
+    dashboardContentsVerified,
+  };
 }
