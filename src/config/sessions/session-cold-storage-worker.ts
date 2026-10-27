@@ -152,10 +152,11 @@ export function mutateSessionColdTranscriptInWorker(
         return result;
       }
       if (plan.kind === "cold-batch") {
-        const protectionKeys = readSessionAdmissionProtectionKeys(database, [
+        const sessionIds = [
           ...plan.prepared.map((item) => item.plan.sessionId),
           ...plan.externalizations.map((item) => item.archive.session_id),
-        ]);
+        ];
+        const protectionKeys = readSessionAdmissionProtectionKeys(database, sessionIds);
         if ([...protectionKeys].some((key) => !plan.protectionKeys.includes(key))) {
           throw new Error("Transcript ownership changed; cold archival was canceled");
         }
@@ -163,6 +164,7 @@ export function mutateSessionColdTranscriptInWorker(
           database,
           plan.beforeMs,
           new Set(plan.liveSessionKeys),
+          sessionIds,
         );
         const archivedIds: string[] = [];
         for (const prepared of plan.prepared) {

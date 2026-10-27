@@ -8,15 +8,16 @@ type NativeMermaidJob = {
   theme: MermaidTheme;
 };
 
-declare global {
-  interface Window {
-    renderMermaid: (job: NativeMermaidJob) => Promise<void>;
-    ChatMermaidBridge?: { postMessage: (message: string) => void };
-    webkit?: {
-      messageHandlers: { ChatMermaidBridge?: { postMessage: (message: string) => void } };
-    };
-  }
-}
+export type NativeMermaidWindow = Window & {
+  renderMermaid: (job: NativeMermaidJob) => Promise<void>;
+  ChatMermaidBridge?: { postMessage: (message: string) => void };
+  webkit?: {
+    messageHandlers: { ChatMermaidBridge?: { postMessage: (message: string) => void } };
+  };
+};
+
+// These bridges belong to the standalone native Mermaid document, not every Window.
+declare const window: NativeMermaidWindow;
 
 function postResult(result: object) {
   const bridge = window.ChatMermaidBridge ?? window.webkit?.messageHandlers.ChatMermaidBridge;

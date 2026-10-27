@@ -203,7 +203,7 @@ known task segment from RPC handlers, scheduled jobs, diagnostic phases, timelin
 worker message handling, with elapsed and task milliseconds. Time awaiting I/O
 does not count as task execution. Prepared session-row reads carry the enclosing
 operation across waits and append `session-rows:select`, `session-rows:prepare`, or
-`session-rows:consume`; agent roster batches append `agent-roster`. For example,
+`session-rows:consume`; roster fact batches preserve their caller's task label. For example,
 `gateway:rpc:sessions.list:session-rows:select` identifies list selection, and
 scheduled work retains its `scheduler:<lane>:<task>` prefix. Labels contain only
 code-owned operation names, never session keys or request content. Labels cover

@@ -184,6 +184,11 @@ requests share the existing archive-worker queue across agent stores.
 One large window can exceed the normal background byte budget because its removal
 is atomic; the worker yields between windows.
 
+Selection reads window metadata and transcript endpoints. The worker checks event sizes
+only when preparation reaches that window within the pass's byte budget, outside the
+batch selection transaction. Commit protection reads selected window owners and
+cross-generation references; unrelated canonical entries stay encoded.
+
 Before building an archive, the worker checks the largest original event. An event above
 64 MiB skips envelope preparation and leaves the transcript in SQLite, while
 the batch continues with later candidates. The warning includes the session ID

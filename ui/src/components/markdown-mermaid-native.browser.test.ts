@@ -1,9 +1,12 @@
 import { asRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, assert, beforeAll, beforeEach, expect, it, vi } from "vitest";
+import type { NativeMermaidWindow } from "../../../packages/mermaid-renderer/src/native.ts";
 import peleScriptUrl from "../../../packages/mermaid-renderer/src/pele-script-url.ts";
 import "../../../packages/mermaid-renderer/src/native.ts";
 import { createDeferred } from "../../../test/helpers/promise.ts";
 import { parsePassiveSvg, theme } from "./markdown-mermaid.test-support.ts";
+
+declare const window: NativeMermaidWindow;
 
 type NativeReply = {
   id: string;
