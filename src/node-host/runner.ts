@@ -22,6 +22,7 @@ import { throwCollectedErrors } from "../infra/error-graph-internal.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { getMachineDisplayName } from "../infra/machine-name.js";
 import { logInfo } from "../logger.js";
+import { getAsyncWorkSignal } from "../shared/async-work-scope.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { VERSION } from "../version.js";
 import { configureNodeHost, loadNodeHostConfig, type NodeHostGatewayConfig } from "./config.js";
@@ -168,6 +169,10 @@ export async function loadResumableNodeHostGateway(): Promise<NodeHostGatewayCon
 }
 
 export async function runNodeHost(opts: NodeHostRunOptions): Promise<void> {
+  const workSignal = getAsyncWorkSignal();
+  if (workSignal?.aborted) {
+    return;
+  }
   const { initializeSqliteRuntimeCapabilities } = await import("../infra/bun-sqlite-library.js");
   await initializeSqliteRuntimeCapabilities();
   await ensureNodeHostStateReady();
@@ -505,6 +510,7 @@ export async function runNodeHost(opts: NodeHostRunOptions): Promise<void> {
     stopWatchingParent();
     process.off("SIGINT", onSigint);
     process.off("SIGTERM", onSigterm);
+    workSignal?.removeEventListener("abort", onWorkAbort);
   };
   const stopClientAndMcp = async () => {
     stopping = true;
@@ -546,10 +552,17 @@ export async function runNodeHost(opts: NodeHostRunOptions): Promise<void> {
   };
   const onSigint = AsyncLocalStorage.bind(() => void finish(130));
   const onSigterm = AsyncLocalStorage.bind(() => void finish(143));
+  // Startup can outlive CLI cancellation; the outer CLI retains its signal exit code.
+  const onWorkAbort = AsyncLocalStorage.bind(() => void finish(0));
   process.on("SIGINT", onSigint);
   process.on("SIGTERM", onSigterm);
+  workSignal?.addEventListener("abort", onWorkAbort, { once: true });
   if (opts.parentStdin && !isNodeHostLauncherChild()) {
     stopWatchingParent = watchNodeHostParentStdin(onSigterm);
+  }
+  if (workSignal?.aborted) {
+    await finish(0);
+    return;
   }
 
   const readinessPromise = startGatewayClientWhenEventLoopReady(client);

@@ -206,7 +206,7 @@ function shareConnection(
 
 function snapshotRecord(h: ReturnType<typeof mountPane>, snapshot: ChatSessionSnapshot) {
   return {
-    projectionVersion: 5,
+    projectionVersion: 6,
     savedAt: Date.now(),
     sessionKey: resolveChatSnapshotKey(h.state, { sessionKey }),
     sessionId: snapshot.sessionId,
@@ -779,7 +779,7 @@ describe("first chat startup snapshot ordering", () => {
         commands: startupCommands(),
       };
       vi.spyOn(snapshotDatabase, "readStoredChatSnapshotRecord").mockResolvedValueOnce({
-        projectionVersion: 5,
+        projectionVersion: 6,
         savedAt: 0,
         sessionKey: cacheKey,
         sessionId: stored.sessionId,

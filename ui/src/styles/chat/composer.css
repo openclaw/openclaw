@@ -1846,9 +1846,13 @@ html[dir="rtl"] .chat-attachment-loading > span {
     transform var(--duration-fast) ease;
 }
 
-.chat-attachment-thumb--pasted-text .chat-attachment-remove {
-  opacity: 1;
-  transform: none;
+.chat-attachment-remove::before {
+  content: "";
+  position: absolute;
+  inset: 12px;
+  border: 1px solid var(--border-strong);
+  border-radius: inherit;
+  pointer-events: none;
 }
 
 .chat-attachment-thumb:is(:hover, :focus-within) .chat-attachment-remove {

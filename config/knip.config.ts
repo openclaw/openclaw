@@ -67,6 +67,7 @@ const repositoryScriptEntries = [
   // Its header documents the paired operator-role currency-check benchmark.
   "scripts/perf/operator-role-source-policy-measure.mjs!",
   "scripts/perf/access-authority-callback-measure.mjs!",
+  "scripts/perf/plugin-registry-binding-measure.mjs!",
   // Its header documents the config-wide admission metadata benchmark.
   "scripts/perf/config-wide-metadata-measure.ts!",
   // Its header documents the sandbox/workspace ownership assertion benchmark.
@@ -430,6 +431,7 @@ const repositoryScriptEntries = [
   "scripts/perf/cron-history-plan-measure.ts!",
   "scripts/perf/cron-list-projection-measure.mjs!",
   "scripts/perf/cron-list-revision-measure.ts!",
+  "scripts/perf/cron-delivery-context-measure.mjs!",
   "scripts/perf/cron-refresh-measure.ts!",
   "scripts/perf/cron-session-bindings-measure.ts!",
   "scripts/perf/embedded-runner-array-copies.ts!",
@@ -519,6 +521,7 @@ const repositoryScriptEntries = [
   "scripts/perf/reef-device-sign-measure.ts!",
   "scripts/perf/session-actor-admission-measure.ts!",
   "scripts/perf/session-input-custody-measure.ts!",
+  "scripts/perf/chat-send-persist-measure.ts!",
   "scripts/perf/session-pin-policy-measure.ts!",
   "scripts/perf/session-prompt-begin-measure.ts!",
   "scripts/perf/session-store-target-inventory-measure.ts!",
