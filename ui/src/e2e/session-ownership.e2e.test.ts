@@ -286,15 +286,15 @@ suite.define(() => {
           toggle: box("[data-child-session-toggle]"),
         };
       });
-    const header = await page
-      .locator("#sidebar-session-owner-title")
+    const groupsBottom = await page
+      .locator(".sidebar-sessions > .personal-session-groups")
       .evaluate((element) => element.getBoundingClientRect().bottom);
     const [idle, unread, running] = await Promise.all([
       rowGeometry("idle"),
       rowGeometry("unread"),
       rowGeometry("running"),
     ]);
-    expect(idle.top - header).toBeLessThanOrEqual(12);
+    expect(idle.top - groupsBottom).toBeLessThanOrEqual(12);
     expect(idle.indicator).toBeUndefined();
     for (const status of [unread, running]) {
       expect(status.text?.left).toBeCloseTo(idle.text?.left ?? 0, 5);
