@@ -157,6 +157,7 @@ type Observation = {
   retiredProcess?: ReturnType<typeof processMemory>;
   memory?: Array<{
     checkpoint: string;
+    timeOrigin: { initial: number; current: number };
     clearedFixtureRequests: number;
     metrics: Awaited<
       ReturnType<Awaited<ReturnType<typeof createEngineMemoryCollector>>["capture"]>
@@ -429,6 +430,12 @@ try {
                 observation.memory = [];
               }
               const timeOrigin = await page.evaluate(() => performance.timeOrigin);
+              if (memory) {
+                // Bind checkpoints to this document, independently of wall-clock adjustments.
+                await page.evaluate((identity) => {
+                  Reflect.set(window, "openclawMemoryDocumentIdentity", identity);
+                }, artifactPrefix);
+              }
               observation.evidence =
                 (await scenario.run(
                   page,
@@ -438,19 +445,25 @@ try {
                         // MCP retirement and reconnect feedback own intentional timers up to 4 s.
                         await page.waitForTimeout(4_100);
                         await frames(page);
-                        const checkpointState = await page.evaluate((expectedTimeOrigin) => {
-                          if (performance.timeOrigin !== expectedTimeOrigin) {
-                            throw new Error("Memory workload reloaded the document");
-                          }
-                          const requests = (window as MockGatewayWindow)
-                            .openclawControlUiE2eGateway!.requests;
-                          const clearedFixtureRequests = requests.length;
-                          requests.length = 0;
-                          return {
-                            clearedFixtureRequests,
-                            resources: Reflect.get(window, "openclawResourceCounts")(),
-                          };
-                        }, timeOrigin);
+                        const checkpointState = await page.evaluate(
+                          ({ identity, timeOrigin }) => {
+                            if (
+                              Reflect.get(window, "openclawMemoryDocumentIdentity") !== identity
+                            ) {
+                              throw new Error("Memory workload reloaded the document");
+                            }
+                            const requests = (window as MockGatewayWindow)
+                              .openclawControlUiE2eGateway!.requests;
+                            const clearedFixtureRequests = requests.length;
+                            requests.length = 0;
+                            return {
+                              timeOrigin: { initial: timeOrigin, current: performance.timeOrigin },
+                              clearedFixtureRequests,
+                              resources: Reflect.get(window, "openclawResourceCounts")(),
+                            };
+                          },
+                          { identity: artifactPrefix, timeOrigin },
+                        );
                         const metrics = await memory!.capture(
                           path.join(artifactDir, `${artifactPrefix}-${checkpoint}.heapsnapshot`),
                         );
