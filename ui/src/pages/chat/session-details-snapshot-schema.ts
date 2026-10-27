@@ -32,7 +32,7 @@ export const detailsSnapshotSchema = json.optional(
             name: json.text,
             disabled: json.optional(json.boolean),
             autoDisabled: json.optional(json.boolean),
-            running: json.boolean,
+            running: json.optional(json.boolean),
             state: json.text,
             timezone: json.optional(json.text),
             result: json.object({

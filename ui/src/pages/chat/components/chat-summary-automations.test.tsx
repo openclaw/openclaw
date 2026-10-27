@@ -219,7 +219,7 @@ it("keeps a bounded live preview when desktop rows close before cached props cat
   current.update({ desktop: { ...desktop, expanded: false } });
   await waitForSolid(() =>
     expect(remember.mock.lastCall?.[0].automations?.rows).toEqual([
-      expect.objectContaining({ id: "summary-job", name: "Check the task" }),
+      expect.objectContaining({ id: "summary-job", name: "Check the task", running: undefined }),
     ]),
   );
   expect(current.find(".chat-summary__automation")).toBeNull();

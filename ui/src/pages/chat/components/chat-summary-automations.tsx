@@ -403,10 +403,9 @@ export function ChatSummaryAutomations(props: ChatSummaryAutomationsProps) {
             disabled: !job.enabled || undefined,
             autoDisabled: job.autoDisabled ? true : undefined,
             running:
-              inventory.connected() &&
-              job.enabled &&
-              !job.autoDisabled &&
-              job.runningAtMs !== undefined,
+              job.runningAtMs === undefined
+                ? undefined
+                : (inventory.connected() && job.enabled && !job.autoDisabled) || undefined,
             state: jobState(job),
             result: automationResultData(job),
             timezone: job.schedule?.kind === "cron" ? job.schedule.tz : undefined,
