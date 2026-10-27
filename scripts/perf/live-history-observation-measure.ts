@@ -11,6 +11,7 @@ import { performance, PerformanceObserver } from "node:perf_hooks";
 import { setImmediate } from "node:timers/promises";
 import { pathToFileURL } from "node:url";
 import { parseArgs } from "node:util";
+import type { ResponsesThinkingBlock } from "../../packages/ai/src/transports/openai-responses-stream-terminal-internal.js";
 import { beginPromptCacheObservation } from "../../src/agents/embedded-agent-runner/prompt-cache-observability.js";
 import { guardSessionManager } from "../../src/agents/session-tool-result-guard-wrapper.js";
 import { SessionManager } from "../../src/agents/sessions/session-manager.js";
@@ -37,6 +38,24 @@ const {
 const messages: Message[] = [];
 const manager = guardSessionManager(SessionManager.inMemory(), { allowedToolNames: ["read"] });
 for (let index = 0; index < 20; index++) {
+  const reasoning: ResponsesThinkingBlock = {
+    type: "thinking",
+    thinking: "Synthetic reasoning ".repeat(100),
+    thinkingSignature: JSON.stringify({
+      type: "reasoning",
+      id: `rs_${index}`,
+      summary: [],
+      encrypted_content: "synthetic-ciphertext",
+    }),
+    openclawReasoningReplay: {
+      v: 1,
+      source: "openai-responses",
+      provider: "openai",
+      api: "openai-responses",
+      model: "fixture-model",
+      baseUrlHash: "abc123",
+    },
+  };
   messages.push(
     {
       role: "assistant",
@@ -44,24 +63,7 @@ for (let index = 0; index < 20; index++) {
       provider: "openai",
       model: "fixture-model",
       content: [
-        {
-          type: "thinking",
-          thinking: "Synthetic reasoning ".repeat(100),
-          thinkingSignature: JSON.stringify({
-            type: "reasoning",
-            id: `rs_${index}`,
-            summary: [],
-            encrypted_content: "synthetic-ciphertext",
-          }),
-          openclawReasoningReplay: {
-            v: 1,
-            source: "openai-responses",
-            provider: "openai",
-            api: "openai-responses",
-            model: "fixture-model",
-            baseUrlHash: "abc123",
-          },
-        },
+        reasoning,
         {
           type: "toolCall",
           id: `call_${index}`,
