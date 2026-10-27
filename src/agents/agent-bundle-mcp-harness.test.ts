@@ -12,15 +12,12 @@ type Requester = { sessionId: string; requesterSenderId?: string | null };
 
 const mocks = vi.hoisted(() => {
   const advertised = new Map<string, McpToolCatalog>();
-  let resolveImpl: ((params: Requester) => Promise<SessionMcpRuntime | undefined>) | undefined;
+  const resolveRuntime = vi.fn<(params: Requester) => Promise<SessionMcpRuntime | undefined>>();
 
   return {
-    advertised,
-    setResolveImpl(impl?: typeof resolveImpl) {
-      resolveImpl = impl;
-    },
+    resolveRuntime,
     acquireRequesterScopedMcpRuntime: vi.fn(async (params: Requester) => {
-      const runtime = await resolveImpl?.(params);
+      const runtime = await resolveRuntime(params);
       return runtime
         ? {
             runtime,
@@ -36,10 +33,10 @@ const mocks = vi.hoisted(() => {
         advertised.set(handle.runtime.sessionId, catalog);
       },
     ),
-    getAdvertisedScopedMcpCatalog: vi.fn((sessionId: string) => advertised.get(sessionId) ?? null),
+    getAdvertisedScopedMcpCatalog: (sessionId: string) => advertised.get(sessionId) ?? null,
     reset() {
       advertised.clear();
-      resolveImpl = undefined;
+      resolveRuntime.mockReset();
     },
   };
 });
@@ -98,7 +95,6 @@ beforeEach(() => {
   mocks.acquireSessionMcpRuntime.mockReset();
   mocks.retireSessionMcpRuntime.mockClear();
   mocks.rememberAdvertisedScopedMcpCatalog.mockClear();
-  mocks.getAdvertisedScopedMcpCatalog.mockClear();
   readCredentialsStatus.mockReset().mockResolvedValue([{ state: "unauthenticated" }]);
   startAuthorization.mockReset();
 });
@@ -114,7 +110,7 @@ function makeStaticRuntime(sessionId: string) {
 }
 
 function resolveRequesterRuntime() {
-  mocks.setResolveImpl(async ({ sessionId, requesterSenderId }) =>
+  mocks.resolveRuntime.mockImplementation(async ({ sessionId, requesterSenderId }) =>
     typeof requesterSenderId === "string" && requesterSenderId
       ? makeRuntime({ sessionId, requesterSenderId })
       : undefined,
@@ -128,6 +124,18 @@ const toolNames = (tools: { name: string }[]) => tools.map((tool) => tool.name);
 function setCatalog(runtime: SessionMcpRuntime, catalog: McpToolCatalog) {
   runtime.peekCatalog = () => catalog;
   runtime.getCatalog = async () => catalog;
+}
+function approvalGate(deniedId = "denied") {
+  type Approval = NonNullable<
+    Parameters<
+      typeof materializeStaticMcpToolsForHarnessRunCore
+    >[0]["requestInteractiveCodexApproval"]
+  >;
+  return vi.fn<Approval>(async ({ toolCallId }) => {
+    if (toolCallId === deniedId) {
+      throw new Error("operator denied");
+    }
+  });
 }
 
 const heartbeatPolicy = {
@@ -257,13 +265,7 @@ describe("materializeStaticMcpToolsForHarnessRunCore", () => {
   it("gates interactive configured MCP before the original executor", async () => {
     const runtime = makeStaticRuntime("interactive");
     const callTool = vi.spyOn(runtime, "callTool");
-    let active: (() => boolean) | undefined;
-    const requestInteractiveCodexApproval = vi.fn(async (request) => {
-      active = request.isActive;
-      if (request.toolCallId === "denied") {
-        throw new Error("operator denied");
-      }
-    });
+    const requestInteractiveCodexApproval = approvalGate();
 
     const result = await staticTools("interactive", {
       toolsAllow: ["user-mail__inbox"],
@@ -285,7 +287,7 @@ describe("materializeStaticMcpToolsForHarnessRunCore", () => {
         mode: "auto",
       }),
     );
-    expect(active?.()).toBe(false);
+    expect(requestInteractiveCodexApproval.mock.lastCall?.[0].isActive()).toBe(false);
     await result.dispose();
   });
 
@@ -457,7 +459,7 @@ describe("materializeRequesterScopedMcpToolsForHarnessRunCore", () => {
   });
 
   it("bootstraps a requester connect tool without starting OAuth during materialization", async () => {
-    mocks.setResolveImpl(async (params) =>
+    mocks.resolveRuntime.mockImplementation(async (params) =>
       makeConnectRuntime({
         sessionId: params.sessionId,
         requesterSenderId: params.requesterSenderId ?? "alice",
@@ -483,7 +485,7 @@ describe("materializeRequesterScopedMcpToolsForHarnessRunCore", () => {
 
   it("releases the live runtime when pre-return catalog publication fails", async () => {
     const runtime = makeRuntime({ sessionId: "session-cleanup", requesterSenderId: "authed" });
-    mocks.setResolveImpl(async () => runtime);
+    mocks.resolveRuntime.mockImplementation(async () => runtime);
     mocks.rememberAdvertisedScopedMcpCatalog.mockImplementationOnce(() => {
       throw new Error("catalog publication failed");
     });
@@ -498,7 +500,7 @@ describe("materializeRequesterScopedMcpToolsForHarnessRunCore", () => {
     const specs = (
       tools: NonNullable<Awaited<ReturnType<typeof requesterTools>>>["advertisedTools"],
     ) => tools.map(({ name, description, parameters }) => ({ name, description, parameters }));
-    mocks.setResolveImpl(async (params) => {
+    mocks.resolveRuntime.mockImplementation(async (params) => {
       const senderId = params.requesterSenderId;
       if (senderId !== "authed" && senderId !== "bob") {
         return undefined;
@@ -586,7 +588,7 @@ describe("materializeRequesterScopedMcpToolsForHarnessRunCore", () => {
     }
     catalog.servers["user-mail"]!.codexApprovalMode = "prompt";
     const callTool = vi.spyOn(runtime, "callTool");
-    mocks.setResolveImpl(async () => runtime);
+    mocks.resolveRuntime.mockImplementation(async () => runtime);
 
     const failClosed = await requesterTools("session-connect-provenance", {
       requesterSenderId: "authed",
@@ -596,11 +598,7 @@ describe("materializeRequesterScopedMcpToolsForHarnessRunCore", () => {
     expect(toolNames(failClosed!.advertisedTools)).toEqual(names);
     await failClosed!.dispose();
 
-    const requestInteractiveCodexApproval = vi.fn(async (request) => {
-      if (request.toolCallId === "denied-connect") {
-        throw new Error("operator denied");
-      }
-    });
+    const requestInteractiveCodexApproval = approvalGate("denied-connect");
     const gated = await requesterTools("session-connect-provenance", {
       requesterSenderId: "authed",
       requestInteractiveCodexApproval,

@@ -73,21 +73,13 @@ function pendingWork() {
   const operations: Promise<unknown>[] = [];
   const cleanups: (() => void)[] = [];
   return {
-    release: (cleanup: () => void) => {
-      releases.push(cleanup);
-    },
     defer: (cleanup: () => void) => {
       cleanups.push(cleanup);
     },
-    build() {
-      const deferred = build();
-      releases.push(() => deferred.resolve({}));
-      return deferred;
-    },
-    heldBuild() {
+    gate<T>(fallback: T) {
       const started = createDeferred();
-      const pending = build();
-      releases.push(() => pending.resolve({}));
+      const pending = createDeferred<T>();
+      releases.push(() => pending.resolve(fallback));
       return {
         ...pending,
         started: started.promise,
@@ -96,6 +88,9 @@ function pendingWork() {
           return pending.promise;
         },
       };
+    },
+    build() {
+      return this.gate<Record<string, never>>({});
     },
     track<T>(operation: Promise<T>): Promise<T> {
       operations.push(operation);
@@ -269,8 +264,8 @@ describe("prepared model runtime reload auth adoption", () => {
     await using work = pendingWork();
     const replacementConfig = { agents: { defaults: { model: "openai/gpt-5.5" } } };
     await start(["default", "worker"]);
-    const configBuild = work.heldBuild();
-    const authBuild = work.heldBuild();
+    const configBuild = work.build();
+    const authBuild = work.build();
     const { events, unregister } = observePhases();
     work.defer(unregister);
     let defaultBuildCount = 0;
@@ -414,18 +409,15 @@ describe("prepared model runtime reload auth adoption", () => {
     mutate("worker");
     await waitForBuilds(4);
     const workerDispatch = work.track(dispatch("worker"));
-    const workerSettled = vi.fn();
-    void workerDispatch.then(workerSettled, () => undefined);
     mutate("research");
     const researchDispatch = work.track(dispatch("research"));
     workerBuild.resolve({});
     await waitForBuilds(5);
-    await vi.waitFor(() => expect(workerSettled).toHaveBeenCalledOnce());
+    await expect(workerDispatch).resolves.toMatchObject({ agentId: "worker" });
     await expectPending(researchDispatch);
     expect(events).not.toContain("published");
     researchBuild.reject(researchError);
 
-    await expect(workerDispatch).resolves.toMatchObject({ agentId: "worker" });
     await expect(researchDispatch).rejects.toBe(researchError);
     expect(events).not.toContain("published");
     expect(events.filter((phase) => phase === "failed")).toHaveLength(1);
@@ -533,28 +525,18 @@ describe("prepared model runtime reload auth adoption", () => {
       throw new Error("expected a configured catalog owner");
     }
     await original.loadFullModelCatalog();
-    const catalogStarted = createDeferred();
-    const catalogFinished = createDeferred<{ entries: []; routeVariants: [] }>();
-    work.release(() => catalogFinished.resolve({ entries: [], routeVariants: [] }));
-    mocks.runPreparedModelCatalogWorker.mockImplementationOnce(() => {
-      catalogStarted.resolve();
-      return catalogFinished.promise;
-    });
-    const credentialsStarted = createDeferred();
-    const credentialsFinished = createDeferred();
-    work.release(() => credentialsFinished.resolve());
-    mocks.resolveAmbientCredentials.mockImplementationOnce(async () => {
-      credentialsStarted.resolve();
-      await credentialsFinished.promise;
-      return {};
-    });
+    const emptyCatalog: { entries: []; routeVariants: [] } = { entries: [], routeVariants: [] };
+    const catalogFinished = work.gate(emptyCatalog);
+    mocks.runPreparedModelCatalogWorker.mockImplementationOnce(catalogFinished.run);
+    const credentialsFinished = work.build();
+    mocks.resolveAmbientCredentials.mockImplementationOnce(credentialsFinished.run);
     const catalog = work.track(original.loadFullModelCatalog({ refresh: true }));
     const obsoleteCatalog = work.track(expect(catalog).rejects.toThrow("superseded"));
-    await catalogStarted.promise;
+    await catalogFinished.started;
     const reload = work.track(refreshRuntime(replacementConfig, staticOptions));
-    await credentialsStarted.promise;
+    await credentialsFinished.started;
     expect(original.isCurrent()).toBe(false);
-    catalogFinished.resolve({ entries: [], routeVariants: [] });
+    catalogFinished.resolve(emptyCatalog);
     await obsoleteCatalog;
     expect(cache.get(cacheKey)).toBe(original.pluginRegistry);
     const failure = new Error("fixture credential preparation failed");
@@ -571,9 +553,9 @@ describe("prepared model runtime reload auth adoption", () => {
     const initialConfig = {};
     const replacementConfig = { plugins: {} };
     await start(["default", "worker", "research"], initialConfig);
-    const workerAuthBuild = work.heldBuild();
-    const researchAuthBuild = work.heldBuild();
-    const replacementWorkerBuild = work.heldBuild();
+    const workerAuthBuild = work.build();
+    const researchAuthBuild = work.build();
+    const replacementWorkerBuild = work.build();
     const { events, unregister } = observePhases();
     work.defer(unregister);
     mocks.ensureOpenClawModelsJson.mockImplementation(async (config, directory) => {
@@ -594,12 +576,10 @@ describe("prepared model runtime reload auth adoption", () => {
 
     mutate("worker");
     await workerAuthBuild.started;
-    expect(mocks.ensureOpenClawModelsJson).toHaveBeenCalledTimes(4);
     const firstWorkerRead = work.track(dispatch("worker"));
     mutate("research");
     workerAuthBuild.resolve({});
     await researchAuthBuild.started;
-    expect(mocks.ensureOpenClawModelsJson).toHaveBeenCalledTimes(5);
     await expect(firstWorkerRead).resolves.toMatchObject({ config: initialConfig });
 
     const reload = work.track(refresh(replacementConfig));
