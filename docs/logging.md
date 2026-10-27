@@ -1164,13 +1164,17 @@ nested inside `admission.work`, so their values must not be added together or
 treated as SQLite execution time.
 
 Admission subphases separate operator retention (`operator`), lifecycle preparation
-through the session writer barrier (`lifecycle_prepare`), the initial session read
-(`session_read`), ACP metadata (`acp_metadata`), placement preparation and refresh
+through the session writer barrier (`lifecycle_prepare`), ACP metadata
+(`acp_metadata`), placement preparation and refresh
 (`placement_prepare`, `placement_refresh`), and current session/retry validation
 (`current_session`). Lifecycle preparation includes agent admission checks and
 queue waits; it is not a pure SQLite lock timer. These fields use the
 `detail.admission.` prefix. Sends without restart-safe recovery skip the unused
 transcript lifecycle-header read; current session and caller checks still run.
+Restart-safe admission reuses the request's prepared session entry for ACP metadata.
+Final `current_session` validation stays ordered; a changed lifecycle causes ACP metadata to be prepared
+again before that validation repeats. Durable input custody still completes before
+acknowledgement.
 
 After acknowledgement, `runAdmission` also covers steering into an active turn.
 Its `detail.run_admission.steer_*` subphases separate authority, continuation and
