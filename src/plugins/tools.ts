@@ -258,8 +258,17 @@ function preparePluginToolRegistry(registry: PluginRegistry, snapshot: PluginMet
   if (cached) {
     return cached;
   }
+  const registrations = new Map<string, PluginToolRegistration[]>();
+  for (const entry of registry.tools) {
+    const entries = registrations.get(entry.pluginId);
+    if (entries) {
+      entries.push(entry);
+    } else {
+      registrations.set(entry.pluginId, [entry]);
+    }
+  }
   const facts: PluginToolRegistryFacts = {
-    registrations: Map.groupBy(registry.tools, (entry) => entry.pluginId),
+    registrations,
     findOwner: createRuntimePluginManifestLookup(registry, snapshot.plugins),
     settledOutcomes: new Set(
       registry.plugins
