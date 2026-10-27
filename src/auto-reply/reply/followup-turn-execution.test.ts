@@ -3,7 +3,7 @@ import { awaitGateBeforeSettlement, createDeferred } from "../../../test/helpers
 import { createAgentRunRestartAbortError } from "../../agents/run-termination.js";
 import { markReplyOperationExecutionStarted } from "../../sessions/session-controller.state.js";
 import { expectNoCalls } from "../../test-utils/mock-call-assertions.js";
-import type { ReplyPayload } from "../types.js";
+import type { GetReplyOptions, ReplyPayload } from "../types.js";
 import type { AgentTurnExecutionResult, AgentTurnParams } from "./agent-runner-execution.types.js";
 import {
   createFollowupTurnTestTurn as createTurn,
@@ -54,37 +54,6 @@ function executeTestTurn(
     onToolResult: params.onToolResult ?? vi.fn(async () => {}),
     onCompactionNoticePayload: params.onCompactionNoticePayload ?? vi.fn(async () => {}),
   });
-}
-
-async function runFastAutoProgressCase(params: {
-  verboseLevel?: "on" | "off";
-  sourceReplyDeliveryMode?: "message_tool_only";
-  callbackResult?: boolean;
-  opts?: NonNullable<Parameters<typeof executeFollowupTurn>[0]["defaults"]["opts"]>;
-}) {
-  const payload = {
-    text: "💨Fast: auto-on",
-    channelData: { openclawProgressKind: "fast-mode-auto" },
-  } satisfies ReplyPayload;
-  const onChannelToolResult = vi.fn(() => params.callbackResult);
-  const onDurableToolResult = vi.fn(async () => {});
-  const turn = sessionTurn(() => ({
-    sessionId: "session",
-    updatedAt: 1,
-    verboseLevel: params.verboseLevel ?? "on",
-  }));
-  turn.queued.run.sourceReplyDeliveryMode = params.sourceReplyDeliveryMode;
-  mockExecution(async (turnParams) => {
-    await turnParams.opts?.onToolResult?.(payload);
-  });
-
-  const result = await executeTestTurn({
-    turn,
-    opts: { ...params.opts, onToolResult: onChannelToolResult },
-    onToolResult: onDurableToolResult,
-  });
-  await result.progress.drain();
-  return { onChannelToolResult, onDurableToolResult, payload };
 }
 
 describe("executeFollowupTurn", () => {
@@ -317,51 +286,58 @@ describe("executeFollowupTurn", () => {
     );
   });
 
-  it.each([
-    ["hidden at verbosity off", { verboseLevel: "off" }, false, false],
+  it.each<[string, "on" | "off", GetReplyOptions, boolean | undefined, [boolean, boolean]]>([
+    ["hidden at verbosity off", "off", {}, undefined, [false, false]],
     [
       "callback owns source-suppressed delivery",
+      "on",
       {
-        callbackResult: true,
         sourceReplyDeliveryMode: "message_tool_only",
-        opts: { allowProgressCallbacksWhenSourceDeliverySuppressed: true },
+        allowProgressCallbacksWhenSourceDeliverySuppressed: true,
       },
       true,
-      false,
+      [true, false],
     ],
     [
       "declined callback falls back once",
-      { callbackResult: false, opts: { forceToolResultProgress: true } },
-      true,
-      true,
+      "on",
+      { forceToolResultProgress: true },
+      false,
+      [true, true],
     ],
     [
       "explicit suppression hides callbacks",
+      "off",
       {
-        verboseLevel: "off",
-        callbackResult: false,
-        opts: {
-          forceToolResultProgress: true,
-          suppressToolProgressMessages: true,
-          allowToolLifecycleWhenProgressHidden: true,
-        },
+        forceToolResultProgress: true,
+        suppressToolProgressMessages: true,
+        allowToolLifecycleWhenProgressHidden: true,
       },
       false,
-      false,
+      [false, false],
     ],
-  ] as const)("queued fast auto progress: %s", async (_name, params, channel, durable) => {
-    const { onChannelToolResult, onDurableToolResult, payload } =
-      await runFastAutoProgressCase(params);
-    for (const [callback, delivered] of [
-      [onChannelToolResult, channel],
-      [onDurableToolResult, durable],
-    ] as const) {
-      if (delivered) {
-        expect(callback).toHaveBeenCalledExactlyOnceWith(payload);
-      } else {
-        expect(callback).not.toHaveBeenCalled();
-      }
-    }
+  ])("queued fast auto progress: %s", async (_name, verboseLevel, opts, accepted, deliveries) => {
+    const payload = {
+      text: "💨Fast: auto-on",
+      channelData: { openclawProgressKind: "fast-mode-auto" },
+    } satisfies ReplyPayload;
+    const onChannelToolResult = vi.fn(() => accepted);
+    const onDurableToolResult = vi.fn(async () => {});
+    const turn = sessionTurn(() => ({ sessionId: "session", updatedAt: 1, verboseLevel }));
+    const { sourceReplyDeliveryMode, ...progressOpts } = opts;
+    turn.queued.run.sourceReplyDeliveryMode = sourceReplyDeliveryMode;
+    mockExecution(async (params) => {
+      await params.opts?.onToolResult?.(payload);
+    });
+    const result = await executeTestTurn({
+      turn,
+      opts: { ...progressOpts, onToolResult: onChannelToolResult },
+      onToolResult: onDurableToolResult,
+    });
+    await result.progress.drain();
+    expect([onChannelToolResult.mock.calls, onDurableToolResult.mock.calls]).toEqual(
+      deliveries.map((delivered) => (delivered ? [[payload]] : [])),
+    );
   });
 
   it("keeps lifecycle-only progress separate from generic summaries", async () => {

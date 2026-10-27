@@ -13,6 +13,7 @@ import { renderPluginDetailShell } from "./detail-shell.tsx";
 import type { PluginInstallProgress } from "./install-progress.ts";
 import { renderPluginContentCapabilities } from "./overview.tsx";
 import baseStyles from "../../styles/base.css?inline";
+import carapaceStyles from "../../styles/carapace-control-ui.css?inline";
 import componentStyles from "../../styles/components.css?inline";
 import pluginStyles from "../../styles/plugins.css?inline";
 import settingsStyles from "../../styles/settings.css?inline";
@@ -56,7 +57,13 @@ let styles: HTMLStyleElement;
 beforeEach(async () => {
   await page.viewport(1440, 900);
   styles = document.createElement("style");
-  styles.textContent = [baseStyles, componentStyles, settingsStyles, pluginStyles].join("\n");
+  styles.textContent = [
+    baseStyles,
+    componentStyles,
+    settingsStyles,
+    carapaceStyles,
+    pluginStyles,
+  ].join("\n");
   document.head.append(styles);
   container = document.createElement("div");
   document.body.append(container);

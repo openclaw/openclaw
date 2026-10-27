@@ -85,20 +85,26 @@ describeControlUiE2e("Plugin overview", () => {
         );
         writeFileSync(path.join(artifactDir, `alert-${width}.png`), frame.png);
       }
-      const geometry = await alert.evaluate((element) => {
-        const style = getComputedStyle(element);
-        const next = element.nextElementSibling;
-        return {
-          paddingTop: Number.parseFloat(style.paddingTop),
-          paddingBottom: Number.parseFloat(style.paddingBottom),
-          gap: next ? next.getBoundingClientRect().top - element.getBoundingClientRect().bottom : 0,
-          contained: element.scrollWidth <= element.clientWidth,
-        };
-      });
-      expect(geometry.paddingTop).toBeGreaterThanOrEqual(14);
-      expect(geometry.paddingBottom).toBeGreaterThanOrEqual(14);
-      expect(geometry.gap).toBeGreaterThanOrEqual(16);
-      expect(geometry.contained).toBe(true);
+      await expect
+        .poll(async () => {
+          const geometry = await alert.evaluate((element) => {
+            const style = getComputedStyle(element);
+            const next = element.nextElementSibling;
+            return {
+              paddingTop: Number.parseFloat(style.paddingTop),
+              paddingBottom: Number.parseFloat(style.paddingBottom),
+              gap: next
+                ? next.getBoundingClientRect().top - element.getBoundingClientRect().bottom
+                : 0,
+              contained: element.scrollWidth <= element.clientWidth,
+            };
+          });
+          expect(geometry.paddingTop).toBeGreaterThanOrEqual(14);
+          expect(geometry.paddingBottom).toBeGreaterThanOrEqual(14);
+          expect(geometry.gap).toBeGreaterThanOrEqual(16);
+          return geometry.contained;
+        })
+        .toBe(true);
     }
     expect((await gateway.getRequests("plugins.setEnabled"))[0]?.params).toEqual({
       pluginId: "calendar-plus",

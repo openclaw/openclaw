@@ -540,7 +540,8 @@ const ask = (
   sessionKey: string,
   question: string,
   agentId = "main",
-) => service.ask({ agentId, sessionKey, question, connId: `conn-${agentId}` });
+  // Unauthenticated direct requests resolve to the shared Side chat owner.
+) => service.ask({ agentId, sessionKey, question, connId: `conn-${agentId}`, ownerId: "shared" });
 
 async function readState(service: SessionCompanionService, sessionKey: string, agentId = "main") {
   const response = await directSessionReq<SessionsCompanionStateResult>(

@@ -361,6 +361,8 @@ When the public artifact build is already selected, current-target browser exten
 
 Build, QA and test orchestration restore the same [protected Node compile cache](/ci/scope-and-routing/node-test-lanes). The trusted warmer populates build tools before collecting test imports. Scheduled and push warming use ordinary CI's Bun policy, retaining the runtime owner's Node-only exceptions; explicit workflow dispatches prime both runtimes for full validation. Optional full Node runs may start colder between manual dual-runtime warmings. Both Linux cache backends retain the same seven Control UI seed files on Node and the pinned Bun fork, and hosted tooling and contract seeds keep their existing runtime owners. Ordinary CI remains restore-only.
 
+Scheduled current-main artifact builds also [publish their completed build-all cache](/ci/pipeline#job-ordering-and-failure-reporting) without another declaration compile. The full warmer keeps its release profile; PRs and manual runs do not publish this archive.
+
 In-process Gateway test configs use [exclusive plan admission within existing packed jobs](/ci/capacity#measured-shard-weights).
 
 Changed-owner Node rows use existing file/group timing evidence with a

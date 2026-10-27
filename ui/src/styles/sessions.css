@@ -514,9 +514,15 @@
 }
 
 /* Keep the expanded row visually attached to its drawer. */
-.session-data-row--expanded > td,
-.session-data-row--menu-open > td {
-  background: var(--bg-hover);
+.sessions-table .session-data-row:is(.session-data-row--expanded, .session-data-row--menu-open) {
+  --data-table-row-bg: var(--data-table-selected-bg);
+
+  background: var(--data-table-row-bg);
+}
+
+.sessions-table
+  .session-data-row:is(.session-data-row--expanded, .session-data-row--menu-open):hover {
+  --data-table-row-bg: var(--data-table-selected-hover-bg);
 }
 
 /* The row loses :hover once the pointer moves into the menu; keep its kebab lit. */

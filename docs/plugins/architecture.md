@@ -174,6 +174,8 @@ Runs outside the agent's resolved workspace reuse the agent's prepared plugin ge
 
 Tool resolution treats plugins that the prepared generation recorded as disabled or failed (for example, a memory plugin outside the selected memory slot) as settled outcomes and does not load them again for each turn.
 
+Completed plugin generations reuse their registration grouping and manifest-owner lookup across turns. These facts belong to the registry publication and metadata snapshot; registration in progress stays uncached. Tool factories still receive fresh turn contexts, and returned tools retain that turn's authority, delivery, memory, and sandbox bindings rather than borrowing a later turn's permissions.
+
 Plugin reload reconciles config watcher events after asynchronous metadata preparation. An unchanged source event does not cancel the operation; newer writes or changed config, install records, or source ownership still supersede it.
 
 Ordinary plugin source captures use independent files, including copies reached through aliases. On filesystems with copy-on-write support, these captures can share storage without sharing file identity, reducing data writes for large plugins. File containment and receipt validation run during capture; later source edits take effect on the next reload rather than invalidating the existing snapshot.

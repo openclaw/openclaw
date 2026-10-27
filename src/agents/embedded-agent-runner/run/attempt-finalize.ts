@@ -16,6 +16,7 @@ import { isSignalTimeoutReason } from "../../failover-error.js";
 import { runAgentEndSideEffectsAsync } from "../../harness/agent-end-side-effects.js";
 import { finalizeHarnessContextEngineTurn } from "../../harness/context-engine-lifecycle.js";
 import { bindAgentHarnessHookMessages } from "../../harness/lifecycle-hook-messages.js";
+import { captureAgentPluginRuntimeRefresh } from "../../plugin-runtime-refresh.js";
 import type { AgentSession, SessionMessageEntry } from "../../sessions/index.js";
 import { withSessionManagerAppend } from "../../sessions/session-manager-append-admission.js";
 import {
@@ -338,7 +339,12 @@ export async function completeEmbeddedAttemptAfterTurn(
   if (
     attempt.operation !== "settled-tool-finalization" &&
     attempt.sessionPersistence !== "detached" &&
-    !beforeAgentFinalizeRevisionReason
+    !beforeAgentFinalizeRevisionReason &&
+    // A refresh continues this logical turn; agent_end fires once, after its final attempt.
+    !(
+      executionState.terminal.kind === "ok" &&
+      captureAgentPluginRuntimeRefresh().continuesAfterAttempt()
+    )
   ) {
     const lifecycleForAgentEnd = projectAgentRunAttemptTerminal(executionState.terminal);
     // Abort outranks failure in terminal-outcome precedence: teardown races can

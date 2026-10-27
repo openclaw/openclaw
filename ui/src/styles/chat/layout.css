@@ -1107,7 +1107,7 @@ openclaw-pending-session-create {
   box-shadow: inset 0 0 0 1px color-mix(in oklab, var(--muted) 40%, transparent);
 }
 .context-usage__plan-badge:hover {
-  background: var(--bg-hover);
+  background: var(--surface-hover);
   text-decoration: none;
 }
 .context-usage__limits {

@@ -6100,6 +6100,63 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
     );
   });
 
+  it("publishes build records only after trusted scheduled-main compilation", () => {
+    const steps = readCiWorkflow().jobs["build-artifacts"].steps;
+    const save = requiredWorkflowStep(steps, "Save build-all cache");
+    expect(save.uses).toBe(CACHE_SAVE_V5);
+    expect(save.with).toEqual({
+      path: ".artifacts/build-all-cache",
+      key: "${{ steps.node_setup.outputs.build-all-cache-key }}",
+    });
+    expect(save["continue-on-error"]).toBe(true);
+    expect(steps.indexOf(save)).toBeGreaterThan(
+      steps.indexOf(requiredWorkflowStep(steps, "Build dist")),
+    );
+    const context: Parameters<typeof evaluateWorkflowExpression>[1] = {
+      eventName: "schedule",
+      repository: "openclaw/openclaw",
+      ref: "refs/heads/main",
+      preflightOutputs: {
+        candidate_trust: "main",
+        cache_write_allowed: "true",
+        cache_mode: "restore",
+        frozen_target: "false",
+        compatibility_target: "false",
+      },
+      steps: {
+        dist_build: { outputs: {}, outcome: "success" },
+        node_setup: { outputs: { "build-all-cache-key": "completed-main-build" } },
+      },
+    };
+    expect(evaluateWorkflowExpression(save.if, context)).toBe(true);
+    for (const rejected of [
+      { eventName: "push" as const },
+      { eventName: "workflow_dispatch" as const },
+      { eventName: "pull_request" as const },
+      { repository: "contributor/openclaw" },
+      { ref: "refs/heads/feature" },
+      { failed: true },
+      { cancelled: true },
+      { releaseGate: true },
+      { preflightOutputs: { ...context.preflightOutputs, candidate_trust: "release" } },
+      { preflightOutputs: { ...context.preflightOutputs, cache_write_allowed: "false" } },
+      { preflightOutputs: { ...context.preflightOutputs, cache_mode: "off" } },
+      { preflightOutputs: { ...context.preflightOutputs, frozen_target: "true" } },
+      { preflightOutputs: { ...context.preflightOutputs, compatibility_target: "true" } },
+      {
+        steps: {
+          ...context.steps,
+          node_setup: { outputs: { "build-all-cache-key": "" } },
+        },
+      },
+      ...(["failure", "cancelled", "skipped"] as const).map((outcome) => ({
+        steps: { ...context.steps, dist_build: { outputs: {}, outcome } },
+      })),
+    ]) {
+      expect(evaluateWorkflowExpression(save.if, { ...context, ...rejected })).toBe(false);
+    }
+  });
+
   it("keeps the AI runtime in Testbox build artifact caches", () => {
     const workflow = readBuildArtifactsTestboxWorkflow();
     const steps = workflow.jobs["build-artifacts"].steps;
