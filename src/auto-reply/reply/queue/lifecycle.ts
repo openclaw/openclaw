@@ -1,30 +1,20 @@
 import { defaultRuntime } from "../../../runtime.js";
 import { completeSessionControllerSourceLifecycle } from "../../../sessions/session-controller.mailbox-source.js";
 import { submitSessionControllerInput } from "../../../sessions/session-controller.mailbox.js";
-import type { ReplyOperationRunState } from "../reply-operation-run-state.js";
 import {
   startFollowupRunPreAdoptionHeartbeatWithCustody,
   updateFollowupRetryHeartbeatsWithCustody,
 } from "./pre-adoption-heartbeat.js";
 import type { FollowupRun } from "./types.js";
 
-type FollowupLifecycleSource = Pick<
-  FollowupRun,
-  "operatorAuthority" | "turnAdoptionLifecycle" | "userTurnTranscriptRecorder" | "controllerClaim"
-> & { controllerInput: NonNullable<FollowupRun["controllerInput"]> };
-
-function custody(run: FollowupRun | FollowupLifecycleSource) {
+function custody(run: FollowupRun) {
   if (run.controllerClaim) {
     return run.controllerClaim.custody;
   }
-  const input =
-    "run" in run
-      ? (run.controllerInput ??
-        submitSessionControllerInput(run.run.sessionKey ?? run.run.sessionId, run, {
-          mode: "followup",
-        }))
-      : run.controllerInput;
-  return input.custody;
+  return (
+    run.controllerInput ??
+    submitSessionControllerInput(run.run.sessionKey ?? run.run.sessionId, run, { mode: "followup" })
+  ).custody;
 }
 
 // Native consumption can finish without adoption; disposal alone cannot infer that outcome.
@@ -137,9 +127,7 @@ export function retireFollowupRunCancellation(run: FollowupRun): void {
   state.cancellationRetired = true;
   run.turnAdoptionLifecycle?.onCancellationRetired?.();
 }
-export async function admitFollowupRunLifecycle(
-  run: FollowupRun | FollowupLifecycleSource,
-): Promise<void> {
+export async function admitFollowupRunLifecycle(run: FollowupRun): Promise<void> {
   const state = custody(run);
   run.operatorAuthority?.assertCurrent();
   if (state.adopted) {
@@ -171,38 +159,10 @@ export async function admitFollowupRunLifecycle(
 }
 
 /** Adapter registers source identity before the canonical custody owner settles it. */
-export function completeFollowupRunLifecycle(
-  run: FollowupRun | FollowupLifecycleSource,
-  disposition?: "consumed",
-): void {
+export function completeFollowupRunLifecycle(run: FollowupRun, disposition?: "consumed"): void {
   const state = custody(run);
   if (!state.completed && disposition === "consumed") {
     abandonedDeliveryCorrelations.delete(state);
   }
   completeSessionControllerSourceLifecycle(run, state, disposition);
-}
-
-/** A policy refusal consumes transport custody without granting execution custody. */
-export async function refuseCollaborativeSteering(
-  run: FollowupRun | FollowupLifecycleSource,
-  state: ReplyOperationRunState | undefined,
-  consumeParked?: () => void,
-): Promise<void> {
-  if (state) {
-    state.admission = { status: "skipped", reason: "collaborative-steering-disabled" };
-  }
-  const recorder = run.userTurnTranscriptRecorder;
-  recorder?.markBlocked();
-  try {
-    recorder?.finishPendingInput?.("cancelled");
-    await recorder?.waitForPendingInputSettlement?.();
-    await admitFollowupRunLifecycle(run);
-  } finally {
-    // Abandonment reopens ingress for replay; this input has a terminal policy decision.
-    if (consumeParked) {
-      consumeParked();
-    } else {
-      completeFollowupRunLifecycle(run, "consumed");
-    }
-  }
 }

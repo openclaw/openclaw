@@ -17,7 +17,6 @@ import {
   finalizeReplyMessageInjectionAttempt,
   type ReplyOperation,
 } from "../../sessions/session-controller.js";
-import { canInjectReplyMessageTarget } from "../../sessions/session-controller.message-injection.js";
 import {
   hasReplySteeringRequesterMismatch,
   prepareReplyMessageJoin,
@@ -42,7 +41,6 @@ import {
   scheduleFollowupDrain,
   type FollowupRun,
 } from "./queue.js";
-import { refuseCollaborativeSteering } from "./queue/lifecycle.js";
 import type { ReplyOperationRunState } from "./reply-operation-run-state.js";
 import { refreshReplyOperationTyping } from "./reply-run-typing.js";
 import { resolveInboundReplyToolAuthorityOverlay } from "./reply-tool-authority.js";
@@ -238,14 +236,8 @@ export async function runActiveReplySteer(
       followupRun.run.config.messages?.queue?.allowCollaborativeSteering !== true &&
       hasReplySteeringRequesterMismatch(followupRun, activeReplyOperation)
     ) {
-      if (!canInjectReplyMessageTarget(injectionTarget)) {
-        return await fallback("injection_unavailable", injectionTarget.runId);
-      }
-      await refuseCollaborativeSteering(followupRun, replyOperationRunState, () => {
-        custodyFinished = true;
-        parked.consume("consumed");
-      });
-      return "handled";
+      // Another person's input becomes their own turn; it never joins this execution.
+      return await fallback("requester-mismatch", injectionTarget.runId);
     }
     delivery = prepareSteeringDelivery({
       agentId: followupRun.run.agentId,

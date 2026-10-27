@@ -26,7 +26,6 @@ import {
   settleProofScenario,
   requesterCase,
   FOLLOWUP_REPLY,
-  STEERING_REFUSED_REPLY,
   type RunResult,
   type ProofModelRequest,
   type ProofModelReply,
@@ -598,7 +597,7 @@ async function verifyCrossHumanAdmission(
   const id = `mixed_human_${conversation === "same" ? (allowCollaborativeSteering ?? "default") : "foreign"}`;
   const scenario = createScenario(
     {
-      name: `cross-human ${collaborative ? "steer" : "explicit followup"}`,
+      name: `cross-human ${collaborative ? "steer" : "followup"}`,
       id,
       sender: "bob",
       agent: "main",
@@ -657,22 +656,11 @@ async function verifyCrossHumanAdmission(
     // The receipt waits for transcript commitment, which needs Alice's held
     // tool to finish. Observe real admission before releasing that tool.
     await steering.waitForAdmission(running.bob, signal);
-  } else if (allowCollaborativeSteering !== true) {
-    expect(await running.bob).toMatchObject({ collaborativeSteeringRefused: true });
-    expect(scenario.sourceRequests).toEqual([]);
-    expect(scenario.incumbentCompleted).toBe(false);
-    const followup = `/followup ${scenario.sourcePrompt}`;
-    running.bob = runHuman(scenario, "bob", followup, "steer", signal, "text");
-    expect((await running.bob).deferredToActiveRun).toBe("followup");
   } else {
+    // Without collaboration, Bob's message becomes his own queued turn.
     expect((await running.bob).deferredToActiveRun).toBe("followup");
   }
-  const expectedReplies = collaborative
-    ? []
-    : (allowCollaborativeSteering === true
-        ? [FOLLOWUP_REPLY]
-        : [STEERING_REFUSED_REPLY, FOLLOWUP_REPLY]
-      ).map((text) => ({ sender: "bob", text }));
+  const expectedReplies = collaborative ? [] : [{ sender: "bob", text: FOLLOWUP_REPLY }];
   expect(humanReplies.slice(firstReply).filter((reply) => reply.sender === "bob")).toEqual(
     expectedReplies,
   );

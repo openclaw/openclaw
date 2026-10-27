@@ -88,52 +88,38 @@ export function registerQueuedFollowupNoticeCases(): void {
     },
   );
 
-  it.each([
-    {
-      reason: "collaborative-steering-disabled",
-      notice:
-        "Someone else’s turn is still running, and collaborative steering is disabled. Your message wasn’t queued. Resend it as /followup <message> to run it afterward.\n\nAdmins can enable collaborative steering with messages.queue.allowCollaborativeSteering: true.",
-      fallbackDelivered: undefined,
-    },
-    { reason: "queue-cap", notice: QUEUE_CAP_REJECTION_TEXT, fallbackDelivered: true },
-  ] as const)(
-    "reports $reason without claiming queueing or cancellation",
-    async ({ reason, notice, fallbackDelivered }) => {
-      setNoAbort();
-      diagnosticMocks.logMessageDispatchCompleted.mockClear();
-      const sessionKey = `test:${reason}`;
-      const deliveredTexts: string[] = [];
-      const dispatcher = createReplyDispatcher({
-        deliver: async (payload) => {
-          deliveredTexts.push(payload.text ?? "");
-        },
-      });
-      const result = await dispatchReplyFromConfig({
-        ctx: buildTestCtx({ ChatType: "direct", SessionKey: sessionKey, Body: "stop" }),
-        cfg: { diagnostics: { enabled: true } },
-        dispatcher,
-        replyResolver: async (_ctx, opts) => {
-          const state = resolveReplyOperationRunState(opts);
-          if (!state) {
-            throw new Error("expected reply operation state");
-          }
-          state.admission = { status: "skipped", reason };
-          return undefined;
-        },
-      });
-      dispatcher.markComplete();
-      await dispatcher.waitForIdle();
-      expect(deliveredTexts).toEqual([notice]);
-      expect(result.noVisibleReplyFallbackDelivered).toBe(fallbackDelivered);
-      expect(result.deferredToActiveRun).toBeUndefined();
-      if (reason === "collaborative-steering-disabled") {
-        expect(result.collaborativeSteeringRefused).toBe(true);
-      }
-      expect(diagnosticMocks.logMessageDispatchCompleted).toHaveBeenCalledWith(
-        expect.objectContaining({ outcome: "skipped", reason, sessionKey }),
-      );
-    },
-  );
+  it("reports queue-cap without claiming queueing or cancellation", async () => {
+    setNoAbort();
+    diagnosticMocks.logMessageDispatchCompleted.mockClear();
+    const sessionKey = "test:queue-cap";
+    const deliveredTexts: string[] = [];
+    const dispatcher = createReplyDispatcher({
+      deliver: async (payload) => {
+        deliveredTexts.push(payload.text ?? "");
+      },
+    });
+    const result = await dispatchReplyFromConfig({
+      ctx: buildTestCtx({ ChatType: "direct", SessionKey: sessionKey, Body: "stop" }),
+      cfg: { diagnostics: { enabled: true } },
+      dispatcher,
+      replyResolver: async (_ctx, opts) => {
+        const state = resolveReplyOperationRunState(opts);
+        if (!state) {
+          throw new Error("expected reply operation state");
+        }
+        state.admission = { status: "skipped", reason: "queue-cap" };
+        return undefined;
+      },
+    });
+    dispatcher.markComplete();
+    await dispatcher.waitForIdle();
+    expect(deliveredTexts).toEqual([QUEUE_CAP_REJECTION_TEXT]);
+    expect(result.noVisibleReplyFallbackDelivered).toBe(true);
+    expect(result.deferredToActiveRun).toBeUndefined();
+    expect(diagnosticMocks.logMessageDispatchCompleted).toHaveBeenCalledWith(
+      expect.objectContaining({ outcome: "skipped", reason: "queue-cap", sessionKey }),
+    );
+  });
 
   it.each([
     { phase: "still queued", reason: "steering-unavailable" },

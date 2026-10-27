@@ -66,7 +66,6 @@ import {
   enqueueFollowupRun,
   scheduleFollowupDrain,
 } from "./queue.js";
-import { refuseCollaborativeSteering } from "./queue/lifecycle.js";
 import { bindReplyOperationQueueDisposition, resolveFollowupAbortSignal } from "./queue/types.js";
 import { prepareReplyAgentTurn } from "./reply-agent-turn-preparation.js";
 import * as replyRunState from "./reply-operation-run-state.js";
@@ -251,14 +250,6 @@ export async function runReplyAgent(
     const activeReplyOperation = controllerInput.mailbox.owner.active;
     const steeringRequesterMismatch =
       isActiveSteer && hasReplySteeringRequesterMismatch(followupRun, activeReplyOperation);
-    if (messageInjectionDisposition === "collaborative-steering-disabled") {
-      try {
-        await refuseCollaborativeSteering(followupRun, replyOperationRunState);
-      } finally {
-        typing.cleanup();
-      }
-      return undefined;
-    }
     // A rejected or vanished target leaves input with the follow-up queue,
     // independently of whether the incoming requester could collaborate.
     const shouldQueueUnavailableSteer =

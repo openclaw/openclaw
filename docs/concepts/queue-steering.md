@@ -12,7 +12,7 @@ When a prompt from the active turn’s requester arrives in the same conversatio
 
 This page covers queue-mode steering for normal inbound messages in `steer` mode. In `followup` or `collect` mode, normal messages skip this path and wait until the active run finishes. For the explicit `/steer <message>` command, see [Steer](/tools/steer).
 
-An older followup does not disable steering for later input. OpenClaw tries each new steer against the active run after earlier steering attempts settle. When the runtime cannot accept steering, messages remain queued in their original order; accepted steering goes to the active turn. A cross-requester attempt refused because collaborative steering is disabled is not queued.
+An older followup does not disable steering for later input. OpenClaw tries each new steer against the active run after earlier steering attempts settle. When the runtime cannot accept steering, messages remain queued in their original order; accepted steering goes to the active turn. With collaborative steering disabled, another person’s message is queued as that person’s own turn.
 
 ## Runtime boundary
 
@@ -78,7 +78,7 @@ Messages with separate durable ingress admission, including Discord and Telegram
 
 If several messages arrive while the agent is executing a tool call:
 
-- With collaborative steering enabled, messages from another admitted participant can join the active turn under its original requester and prepared permissions. With `messages.queue.allowCollaborativeSteering: false` (the default), another person’s steering attempt is refused without queueing; they can resend it with `/followup <message>` for their own turn.
+- With collaborative steering enabled, messages from another admitted participant can join the active turn under its original requester and prepared permissions. With `messages.queue.allowCollaborativeSteering: false` (the default), another person’s message does not join the active turn. It is queued as a new turn under that person’s identity and runs after the active turn ends.
 - For accepted steering, OpenClaw preserves the runtime's configured steering drain mode and FIFO order. One-at-a-time consumers keep later messages for later boundaries; `all` consumers inject the queued FIFO batch together. Codex receives messages collected during its quiet window as one batched `turn/steer`.
 - With `/queue collect`, OpenClaw does not steer. It waits until the active run ends, then creates followup turns after the debounce window, combining only compatible queued messages.
 - With `/queue interrupt`, OpenClaw aborts the active run and starts the newest message instead of steering.
@@ -87,19 +87,13 @@ If several messages arrive while the agent is executing a tool call:
 
 `messages.queue.allowCollaborativeSteering` defaults to `false`. Operators can set it to `true` to allow collaboration. When Bob's admitted human input joins Alice's active turn in the same conversation, the execution keeps Alice's identity and prepared permissions. Bob can influence actions using permissions Alice has that Bob does not. Bob remains identified as the message author; steering does not switch the execution to Bob, combine their permissions, or attribute subsequent actions to individual messages.
 
-With the option omitted or set to `false`, another person’s steering attempt is refused without queueing it. Same-requester steering still requires compatible permissions. Unidentified input cannot borrow the active execution's authority. Conversation access, backend compatibility, cancellation, and current-owner checks always apply.
+With the option omitted or set to `false`, another person’s message never steers the active turn. OpenClaw queues it as that person’s own followup turn: a new execution under their identity, with policy resolved when it is admitted. It runs after the active turn ends and does not change the work already in progress. Same-requester steering still requires compatible permissions. Unidentified input cannot borrow the active execution's authority. Conversation access, backend compatibility, queue cap, cancellation, and current-owner checks always apply.
 
-The runtime sends this refusal without invoking the model:
-
-> Someone else’s turn is still running, and collaborative steering is disabled. Your message wasn’t queued. Resend it as `/followup <message>` to run it afterward.
->
-> Admins can enable collaborative steering with messages.queue.allowCollaborativeSteering: true.
-
-The refused message is settled without executable queue or recovery custody. It does not run after the active turn ends, and redelivery does not turn it into new work. This does not require removing conversation history. `/followup <message>` is a fresh, one-message request for a new execution under its submitter’s identity. It respects existing queued work and resolves current policy at admission, without changing the persistent queue mode.
+`/followup <message>` explicitly requests a fresh, one-message execution under its submitter’s identity. It respects existing queued work and resolves current policy at admission, without changing the persistent queue mode.
 
 This option permits steering only when the queue mode attempts it. `followup`, `collect`, and `interrupt` keep their existing behavior. If steering is unavailable, Bob's input remains Bob's when it starts a new execution. Conversation history stays shared; queueing does not isolate future turns from that history.
 
-When `/followup` or unavailable steering actually enters the followup queue, the runtime acknowledges that decision:
+When `/followup`, another person’s message, or unavailable steering actually enters the followup queue, the runtime acknowledges that decision:
 
 > Your message is queued for a new turn after the current turn finishes. It hasn’t changed the work already in progress.
 

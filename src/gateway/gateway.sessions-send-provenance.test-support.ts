@@ -73,8 +73,6 @@ export const requesterCase = (
 ): ProofCase => ({ id, name, sender: "trusted", agent: "main", denied: false, ...overrides });
 export const FOLLOWUP_REPLY =
   "Your message is queued for a new turn after the current turn finishes. It hasn’t changed the work already in progress.";
-export const STEERING_REFUSED_REPLY =
-  "Someone else’s turn is still running, and collaborative steering is disabled. Your message wasn’t queued. Resend it as /followup <message> to run it afterward.\n\nAdmins can enable collaborative steering with messages.queue.allowCollaborativeSteering: true.";
 type Outbound = { to: string; text: string; accountId?: string };
 export type RunResult = { runId?: string; status?: string; error?: unknown };
 type ModelRequest = { tools: string[]; output: unknown };

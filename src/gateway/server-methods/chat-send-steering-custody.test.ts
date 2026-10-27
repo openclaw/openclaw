@@ -205,7 +205,6 @@ describe("steering input custody", () => {
         sharedSecretOwner ||
         scenario === "same grant" ||
         (collaborative && scenario !== "no native admission across profiles");
-      const refused = acrossProfiles && allowCollaborativeSteering !== true;
       const forwarded = !accepted && scenario !== "revoked grant";
       const originalGrant = new AbortController();
       const incomingGrant = new AbortController();
@@ -537,9 +536,7 @@ describe("steering input custody", () => {
             expect(dispatchInboundMessageMock).toHaveBeenCalledOnce();
             expect(dispatchInboundMessageMock.mock.calls[0]?.[0]).toMatchObject({
               replyOptions: {
-                messageInjectionDisposition: refused
-                  ? "collaborative-steering-disabled"
-                  : "rejected",
+                messageInjectionDisposition: "rejected",
                 operatorAuthority: { profileId: incomingProfile.id },
               },
             });

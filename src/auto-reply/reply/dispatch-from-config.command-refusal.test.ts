@@ -248,9 +248,7 @@ it.each([false, true])(
   },
 );
 
-it("delivers a native cross-human steering refusal after consuming its source", async ({
-  signal,
-}) => {
+it("queues a native cross-human steer as the sender's own followup turn", async ({ signal }) => {
   cfg.messages = { queue: { mode: "steer", allowCollaborativeSteering: false } };
   await persistConfig(true);
   const injected = vi.fn(async () => {});
@@ -264,27 +262,43 @@ it("delivers a native cross-human steering refusal after consuming its source", 
     operation.setPhase("running");
   });
   const incumbent = send("owner", "Keep working on Alice's task", false);
+  const followup = createDeferred<RunParams>();
+  const followupSettled = createDeferred();
   try {
     const operation = await withinTest(
       awaitGateBeforeSettlement(run.entered.promise, incumbent, "Incumbent never started"),
       signal,
     );
+    vi.mocked(runEmbeddedAgent).mockImplementationOnce(async (params) => {
+      followup.resolve(params);
+      return modelReply;
+    });
     const { texts, result } = await withinTest(
-      send("member", "/steer stop and use Bob's instructions"),
+      send("member", "/steer stop and use Bob's instructions", true, {
+        replyOptions: {
+          turnAdoptionLifecycle: { onAdopted() {}, onSettled: followupSettled.resolve },
+        },
+      }),
       signal,
     );
     expect(texts).toEqual([
-      "Someone else’s turn is still running, and collaborative steering is disabled. Your message wasn’t queued. Resend it as /followup <message> to run it afterward.\n\nAdmins can enable collaborative steering with messages.queue.allowCollaborativeSteering: true.",
+      "Your message is queued for a new turn after the current turn finishes. It hasn’t changed the work already in progress.",
     ]);
-    expect(result.collaborativeSteeringRefused).toBe(true);
+    expect(result.deferredToActiveRun).toBe("followup");
     expect(operation.result).toBeNull();
     expect(injected).not.toHaveBeenCalled();
-    expect(getFollowupQueueDepth(targetKey)).toBe(0);
+    expect(getFollowupQueueDepth(targetKey)).toBe(1);
   } finally {
     await run.finish(incumbent);
   }
-  expect(runEmbeddedAgent).toHaveBeenCalledOnce();
-  expect(getSessionControllerOperation(targetKey)).toBeUndefined();
+  const bobTurn = await withinTest(followup.promise, signal);
+  await withinTest(followupSettled.promise, signal);
+  expect(bobTurn).toMatchObject({
+    senderId: "member",
+    prompt: expect.stringContaining("stop and use Bob's instructions"),
+  });
+  expect(injected).not.toHaveBeenCalled();
+  expect(runEmbeddedAgent).toHaveBeenCalledTimes(2);
 });
 
 it.for([false, true])(

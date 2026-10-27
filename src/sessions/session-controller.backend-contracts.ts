@@ -313,7 +313,6 @@ export type ReplyMessageInjectionRejectionReason =
   | "guarded_injection_unsupported"
   | "requester_origin_mismatch"
   | "audio_input_unsupported"
-  | "collaborative_steering_disabled"
   | ReplyBackendQueueMessageMismatch
   | "runtime_rejected";
 

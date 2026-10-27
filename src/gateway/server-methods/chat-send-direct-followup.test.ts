@@ -25,10 +25,7 @@ import { clearSessionQueues } from "../../auto-reply/reply/queue/cleanup.js";
 import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
 import * as sessions from "../../config/sessions/session-accessor.sqlite-entry.js";
 import { listSessionPendingInputs } from "../../config/sessions/session-pending-input-history.js";
-import {
-  getAgentEventLifecycleGeneration,
-  rotateAgentEventLifecycleGeneration,
-} from "../../infra/agent-events.js";
+import { getAgentEventLifecycleGeneration } from "../../infra/agent-events.js";
 import { createRestartRecoveryClaimChangedError } from "../../infra/agent-lifecycle-error.js";
 import * as runAuthority from "../../infra/agent-run-registry.js";
 import { withSessionTurn } from "../../sessions/session-controller.admission.js";
@@ -105,19 +102,20 @@ function expectChat(fixture: Fixture, runId: string, state: string, content: unk
   );
 }
 
-it("refuses cross-requester steering by default and admits only an explicit fresh followup", async ({
+it("queues cross-requester input as the sender's own followup turn by default", async ({
   signal,
 }) => {
-  const refusal =
-    "Someone else’s turn is still running, and collaborative steering is disabled. Your message wasn’t queued. Resend it as /followup <message> to run it afterward.\n\nAdmins can enable collaborative steering with messages.queue.allowCollaborativeSteering: true.";
   const fixture = await createFixture({ preserveContent: true });
   const operation = expectDefined(fixture.activeRun, "incumbent reply operation");
   const alice = ensureProfileForEmail("strict-steer-alice@example.test");
   const bob = ensureProfileForEmail("strict-steer-bob@example.test");
   setClientProfile(fixture.client, bob);
+  const runId = "strict-steer-bob-input";
   fixture.params.queueMode = "steer";
-  fixture.params.idempotencyKey = "strict-steer-bob-input";
+  fixture.params.idempotencyKey = runId;
+  fixture.params.message = "Answer Bob's separate request.";
   const config = steeringConfig(fixture);
+  config.tools = { ...config.tools, deny: ["write"] };
   setRuntimeConfigSnapshot(config, config);
   const fingerprint = "strict-steer-incumbent-tools";
   operation.bindToolAuthoritySnapshot({
@@ -136,110 +134,62 @@ it("refuses cross-requester steering by default and admits only an explicit fres
     messageInjectionV2: { version: 2, isAvailable: () => true, queueMessage: injected },
   });
   const dispatchActual = await loadRealChatDispatch();
-  const dispatched = createDeferred();
-  const followupId = "strict-steer-bob-explicit-followup";
   const queued = createDeferred();
-  const followupDispatched = createDeferred();
+  const dispatched = createDeferred();
   const started = createDeferred();
   const release = createDeferred();
   const settled = createDeferred();
   const consumed: Parameters<typeof executeAgentTurn>[0][] = [];
   runtime.execute.mockReset();
-  runtime.execute.mockRejectedValue(new Error("Refused input must not execute"));
+  runtime.execute.mockImplementation(async (params) => {
+    const { followupRun, opts } = params;
+    const executionRunId = expectDefined(opts?.runId, "followup run ID");
+    opts?.onAgentRunStart?.(executionRunId);
+    await expectDefined(followupRun.userTurnTranscriptRecorder, "input recorder").persistApproved();
+    consumed.push(params);
+    started.resolve();
+    await withinTest(release.promise, signal);
+    return successfulChatTurn(executionRunId, "Bob's followup answered.");
+  });
   dispatchInboundMessageMock.mockImplementation(async (raw: unknown) => {
     const params = raw as DispatchParams;
-    const isExplicitFollowup = params.replyOptions?.runId === followupId;
-    if (isExplicitFollowup) {
-      observeAdmission(params, queued, settled);
-    }
+    observeAdmission(params, queued, settled);
     try {
       return await dispatchActual({ ...params, cfg: config });
     } finally {
-      (isExplicitFollowup ? followupDispatched : dispatched).resolve();
+      dispatched.resolve();
     }
+  });
+  const queuedNotice = createDeferred();
+  const broadcast = vi.mocked(fixture.context.broadcast);
+  const originalBroadcast = broadcast.getMockImplementation();
+  broadcast.mockImplementation((event, payload, opts) => {
+    const result = originalBroadcast?.call(fixture.context, event, payload, opts);
+    if (
+      event === "chat" &&
+      isRecord(payload) &&
+      payload.runId === runId &&
+      (payload.state === "delta" || payload.state === "final" || payload.state === "error")
+    ) {
+      queuedNotice.resolve();
+    }
+    return result;
   });
   try {
     const ack = await fixture.send();
     expect(ack.mock.calls[0]?.[1]).toMatchObject({ status: "started" });
-    await withinTest(dispatched.promise, signal);
-    await rpcSourceTesting.get(fixture.params.idempotencyKey)?.input.settlement.promise;
-    expect(injected).not.toHaveBeenCalled();
-    expect(operation.result).toBeNull();
-    expect(isRpcSourceQueued(rpcSourceTesting.get(fixture.params.idempotencyKey))).toBe(false);
-    expect(runtime.execute).not.toHaveBeenCalled();
-    expectChat(fixture, fixture.params.idempotencyKey, "final", [
-      { type: "text", text: refusal, openclawStatusNotice: true },
-    ]);
-    const pending = await listSessionPendingInputs(fixture.scope);
-    expect(pending).toMatchObject({
-      total: 1,
-      items: [{ runId: fixture.params.idempotencyKey, state: "cancelled" }],
-    });
-    const duplicate = await fixture.send();
-    expect(duplicate.mock.calls[0]?.[0]).toBe(false);
-    expect(duplicate.mock.calls[0]?.[1]).toMatchObject({
-      status: "error",
-      summary: refusal,
-    });
-    fixture.context.dedupe.clear();
-    const durableRetry = await fixture.send();
-    expect(durableRetry.mock.calls[0]).toMatchObject({
-      0: true,
-      1: { status: "ok", runId: fixture.params.idempotencyKey },
-      3: { cached: true },
-    });
-    expect(runtime.execute).not.toHaveBeenCalled();
-    expect((await listSessionPendingInputs(fixture.scope)).items).toEqual(pending.items);
-
-    runtime.execute.mockImplementation(async (params) => {
-      const { followupRun, opts } = params;
-      const runId = expectDefined(opts?.runId, "followup run ID");
-      opts?.onAgentRunStart?.(runId);
-      await expectDefined(
-        followupRun.userTurnTranscriptRecorder,
-        "input recorder",
-      ).persistApproved();
-      consumed.push(params);
-      started.resolve();
-      await withinTest(release.promise, signal);
-      return successfulChatTurn(runId, "Bob's explicit followup answered.");
-    });
-    const followupOutcome = createDeferred();
-    const broadcast = vi.mocked(fixture.context.broadcast);
-    const originalBroadcast = broadcast.getMockImplementation();
-    broadcast.mockImplementation((event, payload, opts) => {
-      const result = originalBroadcast?.call(fixture.context, event, payload, opts);
-      if (
-        event === "chat" &&
-        isRecord(payload) &&
-        payload.runId === followupId &&
-        (payload.state === "delta" || payload.state === "final" || payload.state === "error")
-      ) {
-        followupOutcome.resolve();
-      }
-      return result;
-    });
-    config.tools = { ...config.tools, deny: ["write"] };
-    setRuntimeConfigSnapshot(config, config);
-    fixture.params.idempotencyKey = followupId;
-    fixture.params.message = "/followup Answer Bob's separate request.";
-    const explicitAck = await fixture.send();
-    expect(explicitAck.mock.calls[0]?.[1]).toMatchObject({ status: "started" });
     await withinTest(
-      awaitGateBeforeSettlement(
-        queued.promise,
-        followupDispatched.promise,
-        "Explicit followup did not queue",
-      ),
+      awaitGateBeforeSettlement(queued.promise, dispatched.promise, "Bob's input did not queue"),
       signal,
     );
-    await withinTest(followupDispatched.promise, signal);
-    expect(isRpcSourceQueued(rpcSourceTesting.get(followupId))).toBe(true);
-    expect(operation.result).toBeNull();
+    await withinTest(dispatched.promise, signal);
+    expect(isRpcSourceQueued(rpcSourceTesting.get(runId))).toBe(true);
+    // Bob's input never joins Alice's live execution.
     expect(injected).not.toHaveBeenCalled();
+    expect(operation.result).toBeNull();
     expect(consumed).toEqual([]);
-    await withinTest(followupOutcome.promise, signal);
-    expectChat(fixture, followupId, "delta", [
+    await withinTest(queuedNotice.promise, signal);
+    expectChat(fixture, runId, "delta", [
       {
         type: "text",
         text: "Your message is queued for a new turn after the current turn finishes. It hasn’t changed the work already in progress.",
@@ -250,39 +200,22 @@ it("refuses cross-requester steering by default and admits only an explicit fres
     setRuntimeConfigSnapshot(config, config);
     operation.complete();
     await withinTest(
-      awaitGateBeforeSettlement(
-        started.promise,
-        settled.promise,
-        "Explicit followup settled without execution",
-      ),
+      awaitGateBeforeSettlement(started.promise, settled.promise, "Followup settled unexecuted"),
       signal,
     );
     expect(consumed).toHaveLength(1);
     const run = consumed[0]!.followupRun;
     expect(run.prompt).toContain("Answer Bob's separate request.");
-    expect(run.prompt).not.toContain("/followup");
     expect(run.operatorAuthority?.profileId).toBe(bob.id);
     expect(run.run.requesterOrigin?.operatorProfileId).toBe(bob.id);
     expect(run.run.config.tools?.deny).toEqual(["exec"]);
     expect(consumed[0]!.replyOperation?.requesterPrincipalKey).toBe(
       resolveRequesterPrincipalKey({ operatorProfileId: bob.id }),
     );
+    expect(injected).not.toHaveBeenCalled();
     release.resolve();
     await withinTest(settled.promise, signal);
     await fixture.finishDispatch();
-    expect((await listSessionPendingInputs(fixture.scope)).items).toEqual(pending.items);
-    fixture.params.idempotencyKey = "strict-steer-bob-input";
-    fixture.params.message = "Raw follow-up awaiting approval.";
-    fixture.context.dedupe.clear();
-    rotateAgentEventLifecycleGeneration();
-    const afterRestart = await fixture.send();
-    expect(afterRestart.mock.calls[0]).toMatchObject({
-      0: true,
-      1: { status: "ok", runId: fixture.params.idempotencyKey },
-      3: { cached: true },
-    });
-    expect(runtime.execute).toHaveBeenCalledOnce();
-    expect((await listSessionPendingInputs(fixture.scope)).items).toEqual(pending.items);
   } finally {
     release.resolve();
     clearFixtureQueues(fixture);

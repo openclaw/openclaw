@@ -20,9 +20,7 @@ import { hasInboundAudio } from "../../auto-reply/reply/inbound-media.js";
 import { buildInboundUserContextPrefix } from "../../auto-reply/reply/inbound-meta.js";
 import { MessageInjectionTargetUnavailableError } from "../../auto-reply/reply/message-injection-authority.js";
 import { emitMessageReceivedHooks } from "../../auto-reply/reply/message-received-hooks.js";
-import { refuseCollaborativeSteering } from "../../auto-reply/reply/queue/lifecycle.js";
 import { resolveQueueSettings } from "../../auto-reply/reply/queue/settings-runtime.js";
-import type { ReplyOperationRunState } from "../../auto-reply/reply/reply-operation-run-state.js";
 import { resolveInboundReplyToolAuthorityOverlay } from "../../auto-reply/reply/reply-tool-authority.js";
 import { prepareSteeringDelivery } from "../../auto-reply/reply/steering-delivery-preparation.js";
 import type { RuntimeMsgContext } from "../../auto-reply/templating.js";
@@ -317,36 +315,6 @@ export function createChatSendMessageInjectionStarter(params: {
         release();
       }
     }
-  };
-}
-
-/** Keep a terminal injection decision through detached preparation and reply dispatch. */
-export function createChatSendInjectionDisposition(
-  run: Parameters<typeof refuseCollaborativeSteering>[0],
-) {
-  let refused = false;
-  const runState: ReplyOperationRunState = {};
-  const isRefused = () =>
-    refused ||
-    (runState.admission?.status === "skipped" &&
-      runState.admission.reason === "collaborative-steering-disabled");
-  return {
-    runState,
-    isRefused,
-    async observe(attempt: ReplyMessageInjectionAttempt | undefined) {
-      const outcome = await attempt?.outcome;
-      if (outcome?.status === "rejected" && outcome.reason === "collaborative_steering_disabled") {
-        refused = true;
-        runState.admission = { status: "skipped", reason: "collaborative-steering-disabled" };
-        return undefined;
-      }
-      return attempt;
-    },
-    async settleRefusal() {
-      if (isRefused()) {
-        await refuseCollaborativeSteering(run, runState);
-      }
-    },
   };
 }
 

@@ -356,8 +356,8 @@ async function beginPreparedReplyMessageInjectionTarget(
     incomingRequester !== owner.requesterPrincipalKey
   ) {
     assertSourceCurrent?.();
-    // Refusal belongs to this live target. A vanished or unavailable backend still
-    // returns its existing fallback decision, without lending another turn's identity.
+    // Another requester's input never joins this execution; callers queue it as that
+    // requester's own turn. A vanished or unavailable backend keeps its own reason.
     const availability =
       canAdmit?.() === false
         ? { reason: "injection_unavailable" as const }
@@ -369,8 +369,7 @@ async function beginPreparedReplyMessageInjectionTarget(
       acceptance,
       outcome: Promise.resolve({
         status: "rejected",
-        reason:
-          "injection" in availability ? "collaborative_steering_disabled" : availability.reason,
+        reason: "injection" in availability ? "requester_origin_mismatch" : availability.reason,
       }),
     };
   }
