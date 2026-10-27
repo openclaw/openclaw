@@ -44,8 +44,8 @@ export function createGatewayMatrixConfig(params: {
       (agent) => agent.tools?.codeMode !== undefined,
     ) ||
     modelOverrides.some((model) => model.codeMode !== undefined) ||
-    Object.values(patch?.models?.providers ?? {}).some((provider) =>
-      provider.models?.some((model) => model.compat?.codeMode !== undefined),
+    Object.values(patch?.models?.providers ?? {}).some((providerConfig) =>
+      providerConfig.models?.some((model) => model.compat?.codeMode !== undefined),
     )
   ) {
     throw new Error("Fixture configuration cannot override the selected Code Mode treatment.");
