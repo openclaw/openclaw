@@ -179,12 +179,15 @@ it("keeps a failed avatar on its fallback until the image changes", async () => 
   expect(avatarSrc(element)).toBe(replacementAvatar);
 });
 
-it("does not let a removed option's image error poison its replacement lease", async () => {
+it("retires a missing-option fallback without poisoning its replacement image", async () => {
   const avatar = "data:image/png;base64,cmV0YWluZWQ=";
   const element = await createAvatarSelect(avatar);
   const retired = avatarImage(element, "trigger")!;
   expect(retired.getAttribute("src")).toBe(avatar);
   element.options = options.filter((option) => option.value === "beta");
+  await element.updateComplete;
+  await waitForSolid(() => expect(avatarSrc(element, "trigger")).toBe(avatar));
+
   element.value = "beta";
   await element.updateComplete;
   await waitForSolid(() => expect(avatarImage(element, "trigger")).toBeNull());
