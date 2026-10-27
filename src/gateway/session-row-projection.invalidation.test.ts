@@ -182,6 +182,21 @@ it("reuses resident rows across plugin reloads while adopting changed model norm
       await projection.ensureMaterialized();
       expect(original.sessions.map((row) => row.model)).toEqual(Array(4).fill("original"));
       const materialized = sequences();
+      const thinkingFacts = projection.state.rowContext.thinkingFactsByModelRef;
+      expect(thinkingFacts.size).toBeGreaterThan(0);
+      const originalBytes = JSON.stringify(original.sessions);
+      for (let publication = 0; publication < 3; publication++) {
+        catalog = view("original");
+        notifyPreparedModelRuntimePublication({ phase: "published" });
+        await projection.ensureMaterialized();
+        // An ordinary exact refresh must reuse the retained catalog's prepared facts too.
+        sessionChanges.emit({ agentId: "main", sessionKey: keys[0]!, scope: "automation" });
+        await projection.ensureMaterialized();
+        expect(projection.state.rowContext.thinkingFactsByModelRef).toBe(thinkingFacts);
+        expect(sequences().slice(1)).toEqual(materialized.slice(1));
+        expect(JSON.stringify((await list()).sessions)).toBe(originalBytes);
+      }
+      const afterEquivalent = sequences();
       for (const entry of [
         { enabled: true, hooks: { allowPromptInjection: false } },
         { enabled: false },
@@ -197,15 +212,17 @@ it("reuses resident rows across plugin reloads while adopting changed model norm
         expect(
           concurrent.every((result) => result.sessions.every((row) => row.model === "original")),
         ).toBe(true);
-        expect(sequences()).toEqual(materialized);
+        expect(sequences()).toEqual(afterEquivalent);
         expect(projection.dirtyRowCount).toBe(0);
       }
       // Captured code changes still invalidate policy even with the same registration shape.
+      const beforeCodeChange = projection.state.rowContext.thinkingFactsByModelRef;
       catalog = view("original", "changed-code");
       notifyPreparedModelRuntimePublication({ phase: "published" });
       await projection.ensureMaterialized();
       expect((await list()).sessions.map((row) => row.model)).toEqual(Array(4).fill("original"));
-      expect(sequences()).not.toEqual(materialized);
+      expect(sequences()).not.toEqual(afterEquivalent);
+      expect(projection.state.rowContext.thinkingFactsByModelRef).not.toBe(beforeCodeChange);
       const beforeNormalization = sequences();
       // A manifest policy edit still changes rows even when catalog entries stay identical.
       catalog = view("replacement", "changed-code");

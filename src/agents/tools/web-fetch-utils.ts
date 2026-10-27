@@ -355,7 +355,7 @@ export function htmlToMarkdown(
   };
 }
 
-export function normalizeWhitespace(value: string): string {
+function normalizeWhitespace(value: string): string {
   return value
     .replace(/\r/g, "")
     .replace(/[ \t]+\n/g, "\n")
