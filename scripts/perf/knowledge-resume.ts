@@ -15,8 +15,7 @@
  * outbox/drain while retaining real file publication and durable SQL settlement.
  * There is one accepted request at a time, as the publisher contract requires.
  * Authority is a no-op counter here: main-thread authority IPC delay and Gateway
- * behavior are not measured. SQL time covers prepare and statement execution;
- * directory sync time is a subset of filesystem work, not all file fsync time.
+ * behavior are not measured. SQL time covers prepare and statement execution.
  * Transaction holds include application work between BEGIN and COMMIT. Heap
  * sampling includes collected objects, excluding native SQLite allocations;
  * instrumentation overhead is present in both arms. Tails with few samples are
@@ -90,24 +89,9 @@ const counters = () => ({
   holds: [] as number[],
   sqlMs: 0,
   sqlCalls: 0,
-  syncMs: 0,
-  syncCalls: 0,
   authorityCalls: 0,
 });
 let measured: ReturnType<typeof counters> | undefined;
-// oxlint-disable-next-line typescript/unbound-method -- Instrumentation calls with the live receiver and restores the original method.
-const sync = PublicationFiles.prototype.sync;
-PublicationFiles.prototype.sync = function (directory: string) {
-  const start = performance.now();
-  try {
-    return sync.call(this, directory);
-  } finally {
-    if (measured) {
-      measured.syncMs += performance.now() - start;
-      measured.syncCalls++;
-    }
-  }
-};
 class MeasuredStore extends SqliteIdentityStore {
   override withDatabase<T>(run: (db: DatabaseSync) => T): T {
     return super.withDatabase((db) => {
@@ -226,8 +210,6 @@ async function measure(name: string, operations: number, run: () => void) {
     cpuMs: (cpu.user + cpu.system) / 1000,
     sqlMs: stats.sqlMs,
     sqlCalls: stats.sqlCalls,
-    directorySyncMs: stats.syncMs,
-    directorySyncCalls: stats.syncCalls,
     authorityCalls: stats.authorityCalls,
     transactions: stats.holds.length,
     transactionTotalMs: sum(stats.holds),
@@ -420,7 +402,6 @@ try {
       cpuMs: sum(results.map((r) => r.cpuMs)),
       maxHoldPerPublicationMs: results.map((r) => r.transactionMaxMs),
       sqlMs: sum(results.map((r) => r.sqlMs)),
-      directorySyncMs: sum(results.map((r) => r.directorySyncMs)),
       gcTotalMs: sum(results.map((r) => r.gcTotalMs)),
       gcMaxMs: maximum(results.map((r) => r.gcMaxMs)),
       ...(values.sample ? { sampledBytes: sum(results.map((r) => r.sampledBytes ?? 0)) } : {}),
@@ -440,6 +421,5 @@ try {
     ),
   );
 } finally {
-  PublicationFiles.prototype.sync = sync;
   fs.rmSync(scratch, { recursive: true, force: true });
 }
