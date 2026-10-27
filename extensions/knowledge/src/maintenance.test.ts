@@ -108,64 +108,54 @@ it("stopping the service ends maintenance: a pass in flight neither re-arms nor 
   ).toStrictEqual([]);
 });
 
-it("stopping during a paused state save settles maintenance before closing the registry", async () => {
+it("stopping while a pass is paused settles maintenance before closing the registry", async () => {
   // Passthrough spies record each call's receiver, result and global call order.
-  const originalCall = RegistryClient.prototype.call;
-  let pauseSave = false;
+  const callSpy = vi.spyOn(RegistryClient.prototype, "call"),
+    closeSpy = vi.spyOn(RegistryClient.prototype, "close"),
+    storesStopSpy = vi.spyOn(Stores.prototype, "stop"),
+    maintenanceStopSpy = vi.spyOn(Maintenance.prototype, "stop"),
+    releaseSpy = vi.spyOn(Stores.prototype, "releaseIdle");
+  afterTest(() => {
+    for (const spy of [callSpy, closeSpy, storesStopSpy, maintenanceStopSpy, releaseSpy]) {
+      spy.mockRestore();
+    }
+  });
+  const f = await fixture(),
+    scheduler = fakeScheduler(Date.parse("2026-10-22T10:20:00Z"));
   let entered!: () => void, release!: () => void;
-  const saving = new Promise<void>((resolve) => {
+  const reached = new Promise<void>((resolve) => {
       entered = resolve;
     }),
     paused = new Promise<void>((resolve) => {
       release = resolve;
     });
-  const saveSettled = vi.fn();
-  // Once armed, the pass's own state save pauses so stop() lands while it is in flight.
-  const callSpy = vi.spyOn(RegistryClient.prototype, "call").mockImplementation(async function (
-      this: RegistryClient,
-      ...args: any[]
-    ) {
-      if (pauseSave && args[0] === "maintenance" && args.length > 1) {
-        pauseSave = false;
-        entered();
-        await paused;
-        const result = await Reflect.apply(originalCall, this, args);
-        saveSettled();
-        return result;
-      }
-      return Reflect.apply(originalCall, this, args);
-    }),
-    closeSpy = vi.spyOn(RegistryClient.prototype, "close"),
-    storesStopSpy = vi.spyOn(Stores.prototype, "stop"),
-    maintenanceStopSpy = vi.spyOn(Maintenance.prototype, "stop");
-  afterTest(() => {
-    for (const spy of [callSpy, closeSpy, storesStopSpy, maintenanceStopSpy]) {
-      spy.mockRestore();
-    }
-  });
   // A failed assertion must not leave the pass, and so its service stop, paused.
   afterTest(() => release());
-  const f = await fixture(),
-    scheduler = fakeScheduler(Date.parse("2026-10-22T10:20:00Z"));
+  const pauseSettled = vi.fn();
   const service = await f.boot(scheduler);
   await remember(service, toolContext(f.host.api, "main"), "I prefer short replies.");
-  pauseSave = true;
+  // The pass pauses after relink, before it records its state.
+  releaseSpy.mockImplementationOnce(async () => {
+    entered();
+    await paused;
+    pauseSettled();
+  });
   const pass = scheduler.fire("knowledge-maintenance");
-  await saving;
+  await reached;
   const stopped = f.lifecycles[0].stop();
   expect(maintenanceStopSpy, "stop asks maintenance to settle").toHaveBeenCalledOnce();
   expect(
     storesStopSpy.mock.calls.map(([gate]) => gate),
     "the registry closes only after maintenance settles",
   ).toStrictEqual(maintenanceStopSpy.mock.results.map((result) => result.value));
-  expect(closeSpy, "nothing closes while the save is paused").not.toHaveBeenCalled();
+  expect(closeSpy, "nothing closes while the pass is paused").not.toHaveBeenCalled();
   release();
   await stopped;
   await pass;
   expect(closeSpy).toHaveBeenCalledOnce();
   const [closedAt] = closeSpy.mock.invocationCallOrder,
     [closed] = closeSpy.mock.contexts;
-  expect(saveSettled.mock.invocationCallOrder[0]).toBeLessThan(closedAt!);
+  expect(pauseSettled.mock.invocationCallOrder[0]).toBeLessThan(closedAt!);
   callSpy.mock.contexts.forEach((registry, index) => {
     if (registry === closed) {
       expect(callSpy.mock.invocationCallOrder[index], "no registry call after close").toBeLessThan(
