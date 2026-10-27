@@ -3533,7 +3533,6 @@
 ["src/commands/configure.gateway.test.ts","./configure.shared.js","6c477c6fa7fc9e0c5d56558f5415cd942e293e21012902abb9b6f674f53c378c",1]
 ["src/commands/configure.wizard.test-support.ts","../../packages/terminal-core/src/note.js","9fc93b47963ebf0c35c58bb277fb106622b87f5be1f102bc5e2872cabcfadede",1]
 ["src/commands/configure.wizard.test-support.ts","../agents/codex-native-web-search.js","5b1842b012528eb4539b90d56bd462df79c711435067cbf8e7d9ccf739438f8b",1]
-["src/commands/configure.wizard.test-support.ts","../config/config.js","32ce3e238db7a31edcd20ae1e6d65213bf0888c443fbefcfc6efa83ce674bdde",1]
 ["src/commands/configure.wizard.test-support.ts","../flows/search-setup.js","ce56502fbe666f53b093bfca012b7de76774e5e5b801bfa230be71b3ba57a9e5",1]
 ["src/commands/configure.wizard.test-support.ts","../infra/windows-gateway-firewall-diagnostics.js","092d1d52e6fcf3e819ee4246735eb0071884e1a4878576ac28a916e3380aa260",1]
 ["src/commands/configure.wizard.test-support.ts","../plugins/plugin-registry.js","4c1f5f8d8dc837b24b01680fc971539ae7ff27f0236c448cfbb001286c2962b3",1]
