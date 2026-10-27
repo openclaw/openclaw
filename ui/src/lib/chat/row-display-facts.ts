@@ -6,7 +6,7 @@ import { removePairingQrContent } from "./pairing-qr.ts";
 
 export const MAX_CHAT_THUMBNAILS = 32;
 export const MAX_CHAT_THUMBNAIL_BYTES = 8 * 1024 * 1024;
-export const MAX_CHAT_THUMBNAIL_SIZE = 256 * 1024;
+const MAX_CHAT_THUMBNAIL_SIZE = 256 * 1024;
 
 export function isChatThumbnail(value: Blob | undefined): value is Blob {
   return Boolean(

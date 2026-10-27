@@ -28,9 +28,7 @@ suite.define(() => {
       await suite.withPage(createControlUiE2eContextOptions(), async ({ page }) => {
         const gateway = await installMockGateway(page, {
           sessionKey: sourceKey,
-          featureMethods: defaultControlUiFeatureMethods.filter(
-            (method) => method !== "sessions.resolve",
-          ),
+          featureMethods: [...defaultControlUiFeatureMethods],
           sessions: [createControlUiSessionRow(sourceKey, "Source conversation", 1)],
           sessionTranscripts: {
             [sourceKey]: transcript(`Open [Linked conversation](${destinationPath}).`),
