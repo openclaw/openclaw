@@ -169,26 +169,6 @@ export const sessionReadHandlers: GatewayRequestHandlers = {
             ),
           )
         : undefined;
-      const entries = new Map<string, SessionEntry>();
-      if (restrictVisibility) {
-        for (const rows of entriesByTarget ?? []) {
-          for (const { sessionKey, entry } of rows) {
-            const parsed = parseAgentSessionKey(sessionKey);
-            if (
-              isIncognitoSessionKey(sessionKey) ||
-              (parsed && normalizeAgentId(parsed.agentId) !== agentId)
-            ) {
-              continue;
-            }
-            if (entries.has(sessionKey)) {
-              throw canonicalSessionKeyMigrationRequiredError(
-                `duplicate rows resolve to canonical session key ${sessionKey}`,
-              );
-            }
-            entries.set(sessionKey, entry);
-          }
-        }
-      }
       // Selection runs in the caller's synchronous publication frame, after all worker waits.
       return () => {
         const currentPolicyConfig =
@@ -196,6 +176,28 @@ export const sessionReadHandlers: GatewayRequestHandlers = {
         const roleVisibilityFilter = hasOperatorBoundary(client, currentPolicyConfig)
           ? createSessionListEntryFilter({ client, cfg: currentPolicyConfig })
           : undefined;
+        const entries = new Map<string, SessionEntry>();
+        // Role checks need one canonical metadata row. Unrestricted retired-store
+        // searches retain copied-transcript deduplication below.
+        if (roleVisibilityFilter) {
+          for (const rows of entriesByTarget ?? []) {
+            for (const { sessionKey, entry } of rows) {
+              const parsed = parseAgentSessionKey(sessionKey);
+              if (
+                isIncognitoSessionKey(sessionKey) ||
+                (parsed && normalizeAgentId(parsed.agentId) !== agentId)
+              ) {
+                continue;
+              }
+              if (entries.has(sessionKey)) {
+                throw canonicalSessionKeyMigrationRequiredError(
+                  `duplicate rows resolve to canonical session key ${sessionKey}`,
+                );
+              }
+              entries.set(sessionKey, entry);
+            }
+          }
+        }
         const profileId = gatewayClientSessionCreator(client)?.id;
         const canSearchSessionKey = (
           sessionKey: string,
