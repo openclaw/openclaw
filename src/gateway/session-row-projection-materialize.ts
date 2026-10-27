@@ -15,7 +15,10 @@ import { projectSessionDeliveryFields } from "../utils/delivery-context.shared.j
 import { readSessionRowFacts } from "./server-methods/session-placement-read-projection.js";
 import { readPreparedGatewayModelMetadata } from "./server-model-catalog-view.js";
 import { materializeSessionRowIfChanged } from "./session-row-materialization.js";
-import { readSessionRowModelFacts } from "./session-row-model-facts.js";
+import {
+  mayMatchSessionRowModelSearch,
+  readSessionRowModelFacts,
+} from "./session-row-model-facts.js";
 import { SessionRowFactsPending } from "./session-row-prepared-read.js";
 import { isColdArchivedSessionRow } from "./session-row-projection-archive.js";
 import { createSessionRowCapabilityReader } from "./session-row-projection-identities.js";
@@ -33,6 +36,7 @@ import { parseGroupKey } from "./session-utils-store.js";
 
 /** Bind live projection state to the same prepared or resident source-read boundary. */
 export function createSessionRowModelFactsReader(params: {
+  rows: () => Iterable<records.Row>;
   lookup: (query: records.Lookup) => records.Row | undefined;
   dirty: ReadonlySet<string>;
   readSourceEntry: (row: records.Row, key: string, prepared: boolean) => records.Row["storedEntry"];
@@ -41,7 +45,7 @@ export function createSessionRowModelFactsReader(params: {
     "cfg" | "modelCatalog" | "rowContext"
   >;
 }) {
-  return (query: records.Lookup, metadataPrepared = false) => {
+  const read = (query: records.Lookup, metadataPrepared = false) => {
     const row = params.lookup(query);
     if (!row?.entry) {
       throw new Error("Session changed while preparing search facts; retry the request");
@@ -62,6 +66,11 @@ export function createSessionRowModelFactsReader(params: {
         readSourceEntry: (key) => params.readSourceEntry(row, key, metadataPrepared),
       },
     });
+  };
+  return {
+    modelFacts: read,
+    modelSearchMayMatch: (search: string) =>
+      mayMatchSessionRowModelSearch({ ...params.state(), rows: params.rows() }, search),
   };
 }
 

@@ -92,6 +92,7 @@ export type SessionListFilterParams = {
   entriesSorted?: boolean;
   getTarget: SessionListTargetLookup;
   getModelFacts?: SessionListModelFactsLookup;
+  modelSearchMayMatch?: (search: string) => boolean;
   modelCatalog?: SessionListModelCatalog | ModelCatalogEntry[];
   opts: SessionsListParams;
   now: number;
@@ -273,6 +274,7 @@ export function filterSessionEntries(
   let identityMatches: Map<string, boolean> | undefined;
   let modelMatches: Map<string, boolean> | undefined;
   let runtimeMatches: Map<string, boolean> | undefined;
+  let searchModels: boolean | undefined;
   const matchesSearch = search
     ? (
         key: string,
@@ -358,6 +360,12 @@ export function filterSessionEntries(
         if (identityMatch) {
           return true;
         }
+        searchModels ??=
+          search.startsWith("agent:") ||
+          expectDefined(params.modelSearchMayMatch, "prepared search model vocabulary")(search);
+        if (!searchModels) {
+          return false;
+        }
         // Derived model aliases are not agent-key matches.
         if (!search.startsWith("agent:")) {
           const subagentRun = getRowContext().subagentRuns.getDisplaySubagentRun(storeKey);
@@ -418,11 +426,11 @@ export function filterSessionEntries(
             return true;
           }
         }
-        const runtimeLabel = formatAgentRuntimeLabel(source.thinkingProjection.agentRuntime);
-        let runtimeMatch = runtimeMatches?.get(runtimeLabel);
+        const runtime = source.thinkingProjection.agentRuntime;
+        let runtimeMatch = runtimeMatches?.get(runtime.id);
         if (runtimeMatch === undefined) {
-          runtimeMatch = matchesSessionListSearch([runtimeLabel], search);
-          (runtimeMatches ??= new Map()).set(runtimeLabel, runtimeMatch);
+          runtimeMatch = matchesSessionListSearch([formatAgentRuntimeLabel(runtime)], search);
+          (runtimeMatches ??= new Map()).set(runtime.id, runtimeMatch);
         }
         return runtimeMatch;
       }

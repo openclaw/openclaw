@@ -39,6 +39,7 @@ const { values } = parseArgs({
     "sort-workload": { type: "boolean", default: false },
     "collector-presentation": { type: "boolean", default: false },
     "search-workload": { type: "boolean", default: false },
+    "search-profile": { type: "boolean", default: false },
   },
 });
 assert(values["state-dir"], "--state-dir must name a new synthetic directory");
@@ -205,7 +206,14 @@ if (values["search-workload"]) {
     "idle",
     "zz-no-match",
   ]) {
-    cases.push({ source: "agent-roster", rowMode: "sidebar", archived: "all", limit: 50, search });
+    cases.push({
+      source: "agent-roster",
+      rowMode: "sidebar",
+      archived: "all",
+      limit: 50,
+      search,
+      ...(values["search-profile"] ? { involvingProfileId: profileId } : {}),
+    });
   }
 }
 
@@ -285,16 +293,52 @@ function sampledBytes(profile: HeapProfiler.SamplingHeapProfile) {
 }
 
 function sampledCpu(profile: Profiler.Profile) {
-  const targets = new Set(["withPreparedExactRows", "withAgentRosterFactsBatch", "selectPage"]);
-  const nodes = new Map(profile.nodes.map((node) => [node.id, node.callFrame.functionName]));
+  const targets = new Set([
+    "withPreparedExactRows",
+    "withAgentRosterFactsBatch",
+    "selectPage",
+    "matchesSearch",
+    "filterSessionEntries",
+    "matchesSessionArchiveFilter",
+    "readSessionRowModelFacts",
+    "mayMatchSessionRowModelSearch",
+    "resolveGatewaySessionThinkingProjectionInternal",
+    "resolveAvailableAgentHarnessPolicy",
+    "projectGatewaySessionRunState",
+  ]);
+  const nodes = new Map(profile.nodes.map((node) => [node.id, node]));
+  const parents = new Map(
+    profile.nodes.flatMap((node) => (node.children ?? []).map((id) => [id, node.id] as const)),
+  );
   const selfMicros: Record<string, number> = {};
+  const inclusiveMicros: Record<string, number> = {};
+  const weights = new Map<number, number>();
   for (const [index, id] of (profile.samples ?? []).entries()) {
-    const name = nodes.get(id);
-    if (name && targets.has(name)) {
-      selfMicros[name] = (selfMicros[name] ?? 0) + (profile.timeDeltas?.[index] ?? 0);
+    weights.set(id, (weights.get(id) ?? 0) + (profile.timeDeltas?.[index] ?? 0));
+  }
+  for (const [id, weight] of weights) {
+    const seen = new Set<string>();
+    let current: number | undefined = id;
+    while (current !== undefined) {
+      const frame = nodes.get(current)?.callFrame;
+      const name = frame?.functionName;
+      if (
+        name &&
+        (targets.has(name) ||
+          (name === "entries" && frame.url.endsWith("/session-row-selection.ts")))
+      ) {
+        seen.add(name);
+        if (current === id) {
+          selfMicros[name] = (selfMicros[name] ?? 0) + weight;
+        }
+      }
+      current = parents.get(current);
+    }
+    for (const name of seen) {
+      inclusiveMicros[name] = (inclusiveMicros[name] ?? 0) + weight;
     }
   }
-  return selfMicros;
+  return { selfMicros, inclusiveMicros };
 }
 
 try {
@@ -635,6 +679,7 @@ try {
     );
   const runningCandidateSelections =
     candidateSelections(afterSelections) - candidateSelections(beforeSelections);
+  const sampled = cpu ? sampledCpu(cpu) : undefined;
   const result = {
     mode: values.mode,
     runningCandidateWorkload: values["running-candidates"],
@@ -665,7 +710,8 @@ try {
     allocatedBytesPerList:
       bytes &&
       Object.fromEntries(Object.entries(bytes).map(([key, value]) => [key, value / iterations])),
-    targetSelfCpuMicros: cpu ? sampledCpu(cpu) : undefined,
+    targetSelfCpuMicros: sampled?.selfMicros,
+    targetInclusiveCpuMicros: sampled?.inclusiveMicros,
     bySearch: Object.fromEntries(bySearch),
     golden,
     cases,

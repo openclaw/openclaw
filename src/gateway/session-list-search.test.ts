@@ -1,9 +1,13 @@
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { expect, test, vi } from "vitest";
 import { SessionRunStatusSchema } from "../../packages/gateway-protocol/src/schema/sessions-row.js";
+import type { AgentHarnessSessionRuntimeOwnership } from "../agents/harness/types.js";
 import { resolveSessionModelIdentityRef } from "../agents/session-model-ref.js";
 import { buildSubagentRunReadIndexFromRuns } from "../agents/subagents/registry/subagent-registry-queries.js";
 import { isTerminalSessionStatus, type SessionEntry } from "../config/sessions/types.js";
+import type { ProviderNormalizeModelIdContext } from "../plugins/provider-runtime.types.js";
+import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
+import { withPluginRuntimeRegistryScope } from "../plugins/runtime/gateway-request-scope.js";
 import { formatAgentRuntimeLabel } from "../shared/agent-runtime-display.js";
 import { formatGoalSummary } from "../shared/session-goal-display.js";
 import { isSessionRunStateActive } from "../shared/session-run-state.js";
@@ -13,6 +17,7 @@ import {
   readSessionListSelectionFacts,
   type SessionListModelFactsLookup,
 } from "./session-list-target.js";
+import * as modelFacts from "./session-row-model-facts.js";
 import {
   projectGatewaySessionActiveRun,
   projectGatewaySessionRunState,
@@ -20,16 +25,22 @@ import {
   resolveGatewaySessionKind,
   resolveGatewaySessionGoal,
 } from "./session-utils-display.js";
+import { resolveSessionSelectedModelRef } from "./session-utils-model-selection.js";
 import { buildSessionListRowMetadataContext } from "./session-utils-projection.js";
 
-test("non-status searches do not project run state for every static miss", () => {
+test("non-status vocabulary misses skip per-row run state and model facts", () => {
   const now = 1_800_000_000_000;
   const rowContext = buildSessionListRowMetadataContext({ now });
   const display = vi.spyOn(rowContext.subagentRuns, "getDisplaySubagentRun");
   const projectActiveRun = vi.fn(() => ({ active: false }));
   const rows = Array.from({ length: 40 }, (_, index): [string, SessionEntry] => [
     `agent:main:thread-${index}`,
-    { sessionId: `session-${index}`, updatedAt: index, modelProvider: "openai", model: "gpt-4.1" },
+    {
+      sessionId: `session-${index}`,
+      updatedAt: index,
+      providerOverride: "fixture",
+      modelOverride: "raw-alias",
+    },
   ]);
   const targets = new Map(
     rows.map(([key, entry]) => [
@@ -41,28 +52,184 @@ test("non-status searches do not project run state for every static miss", () =>
       },
     ]),
   );
-  const params: SessionListFilterParams = {
-    cfg: { agents: { entries: { main: {} } } },
-    opts: { search: "zz-no-match" },
-    now,
-    entries: () => rows,
-    getTarget: (key) => targets.get(key),
-    getModelFacts: () => ({
-      selectedModel: { provider: "openai", model: "gpt-4.1", storedOverrideSource: null },
-      rowModelIdentity: { provider: "openai", model: "gpt-4.1" },
+  const normalizeModelId = vi.fn(({ modelId }: ProviderNormalizeModelIdContext) =>
+    modelId === "raw-alias" ? "hidden-canonical" : modelId,
+  );
+  const registry = createEmptyPluginRegistry();
+  registry.providers.push({
+    pluginId: "fixture",
+    source: "fixture.ts",
+    provider: { id: "fixture", label: "Fixture", auth: [], normalizeModelId },
+  });
+  const getModelFacts = vi.fn<SessionListModelFactsLookup>((key) => {
+    const entry = targets.get(key)!.entry;
+    const selectedModel = resolveSessionSelectedModelRef({
+      cfg: params.cfg,
+      agentId: "main",
+      sessionKey: key,
+      rowContext,
+      source: { entry, readSourceEntry: () => undefined },
+      preparedRuntimeOwnership: null,
+      manifestPlugins: [],
+    });
+    return {
+      selectedModel,
+      rowModelIdentity: selectedModel,
       thinkingProjection: {
         agentRuntime: { id: "openclaw", source: "implicit" },
         acpMeta: undefined,
       },
-    }),
+    };
+  });
+  const params: SessionListFilterParams = {
+    cfg: { agents: { defaults: { model: "openai/gpt-4.1" }, entries: { main: {} } } },
+    opts: { search: "zz-no-match" },
+    now,
+    entries: () => rows,
+    getTarget: (key) => targets.get(key),
+    getModelFacts,
+    modelCatalog: [{ provider: "fixture", id: "raw-alias", name: "Fixture" }],
+    modelSearchMayMatch: (search) =>
+      modelFacts.mayMatchSessionRowModelSearch(
+        {
+          cfg: params.cfg,
+          modelCatalog: params.modelCatalog,
+          rowContext,
+          rows: rows.map(([, entry]) => ({ agentId: "main", entry })),
+        },
+        search,
+      ),
     configuredAgentIds: new Set(["main"]),
     getRowContext: () => rowContext,
     involvementKeys: () => new Set(),
     projectActiveRun,
   };
-  expect(filterSessionEntries(params).entries).toEqual([]);
-  expect(projectActiveRun).not.toHaveBeenCalled();
-  expect(display.mock.calls.length).toBeLessThanOrEqual(rows.length);
+  withPluginRuntimeRegistryScope(registry, () => {
+    expect(filterSessionEntries(params).entries).toEqual([]);
+    expect(projectActiveRun).not.toHaveBeenCalled();
+    expect(getModelFacts).not.toHaveBeenCalled();
+    expect(normalizeModelId).toHaveBeenCalledOnce();
+    expect(display.mock.calls.length).toBeLessThanOrEqual(rows.length);
+    normalizeModelId.mockClear();
+    params.opts.search = "hidden-canonical";
+    expect(filterSessionEntries(params).entries.map(([key]) => key)).toEqual(
+      rows.map(([key]) => key),
+    );
+    expect(getModelFacts).toHaveBeenCalledTimes(rows.length);
+    expect(normalizeModelId).toHaveBeenCalledTimes(rows.length + 1);
+  });
+});
+
+test("native models and prepared runtime labels outside the catalog retain their matches", () => {
+  const now = 1_800_000_000_000;
+  const cfg = {
+    agents: {
+      defaults: { model: "short", models: { "openai/gpt-4.1": { alias: "short" } } },
+      entries: { main: {} },
+    },
+  };
+  const key = "agent:main:fixture";
+  const entry: SessionEntry = { sessionId: "fixture", updatedAt: now, status: "done" };
+  const ownership: AgentHarnessSessionRuntimeOwnership = {
+    model: "native",
+    auth: "native",
+    modelRef: { provider: "fixture-native", model: "native-only-target" },
+  };
+  const acp: NonNullable<SessionEntry["acp"]> = {
+    backend: "fixture-runtime",
+    agent: "main",
+    runtimeSessionName: key,
+    mode: "persistent",
+    state: "idle",
+    lastActivityAt: now,
+  };
+  const rowContext = buildSessionListRowMetadataContext({ now });
+  const getModelFacts = vi.fn(() =>
+    modelFacts.readSessionRowModelFacts({
+      cfg,
+      key,
+      agentId: "main",
+      entry,
+      rowContext,
+      modelCatalog: [],
+      preparedRuntimeOwnership: ownership,
+      preparedAcpMeta: acp,
+      preparedModelMetadata: null,
+      source: { entry, readSourceEntry: () => undefined },
+    }),
+  );
+  const params: SessionListFilterParams = {
+    cfg,
+    opts: {},
+    now,
+    entries: () => [[key, entry]],
+    getTarget: () => ({
+      agentId: "main",
+      entry,
+      selection: readSessionListSelectionFacts(key, entry),
+    }),
+    getModelFacts,
+    modelSearchMayMatch: (search) =>
+      modelFacts.mayMatchSessionRowModelSearch(
+        {
+          cfg,
+          rowContext,
+          modelCatalog: [],
+          rows: [
+            { agentId: "main", entry, preparedRuntimeOwnership: ownership, preparedAcpMeta: acp },
+          ],
+        },
+        search,
+      ),
+    configuredAgentIds: new Set(["main"]),
+    getRowContext: () => rowContext,
+    involvementKeys: () => new Set(),
+    projectActiveRun: () => ({ active: false }),
+  };
+  for (const model of ["native-only-target", "different-native-target"]) {
+    ownership.modelRef = { provider: "fixture-native", model };
+    for (const search of [
+      model,
+      `fixture-native/${model}`,
+      "fixture-runtime",
+      "running",
+      "idle",
+      "zz-no-match",
+    ]) {
+      params.opts = { search };
+      const expected = eagerSearch(params, key, entry);
+      getModelFacts.mockClear();
+      expect(
+        filterSessionEntries(params).entries.map(([value]) => value),
+        search,
+      ).toEqual(expected ? [key] : []);
+      expect(getModelFacts.mock.calls.length, search).toBe(
+        search === model || search === `fixture-native/${model}` || search === "fixture-runtime"
+          ? 1
+          : 0,
+      );
+    }
+  }
+  ownership.modelRef = undefined;
+  for (const search of ["gpt-4.1", "openai/gpt-4.1", "short"]) {
+    params.opts = { search };
+    const expected = eagerSearch(params, key, entry);
+    expect(expected, search).toBe(search !== "short");
+    getModelFacts.mockClear();
+    expect(
+      filterSessionEntries(params).entries.map(([value]) => value),
+      search,
+    ).toEqual(expected ? [key] : []);
+    expect(getModelFacts).toHaveBeenCalledOnce();
+  }
+  params.projectActiveRun = () => ({ active: true, status: "running" });
+  params.opts = { search: "running" };
+  getModelFacts.mockClear();
+  expect(filterSessionEntries(params).entries.map(([value]) => value)).toEqual([key]);
+  expect(getModelFacts).not.toHaveBeenCalled();
+  acp.backend = "agent:fixture-runtime";
+  params.opts = { search: acp.backend };
+  expect(filterSessionEntries(params).entries.map(([value]) => value)).toEqual([key]);
 });
 
 // The original eager predicate is the oracle for query gates and per-call memo keys.
@@ -250,6 +417,19 @@ test("search preserves the eager predicate's rows and order across vocabulary su
     entries: () => rows,
     getTarget: (key) => targets.get(key),
     getModelFacts: (key) => facts.get(key)!,
+    modelSearchMayMatch: (search) =>
+      modelFacts.mayMatchSessionRowModelSearch(
+        {
+          cfg: params.cfg,
+          rowContext,
+          rows: rows.map(([key, entry]) => ({
+            agentId: targets.get(key)!.agentId,
+            entry,
+            materialized: { source: facts.get(key)! },
+          })),
+        },
+        search,
+      ),
     configuredAgentIds: new Set(["main", "research"]),
     identityNames: new Map([
       ["main", "Helpful Assistant"],
