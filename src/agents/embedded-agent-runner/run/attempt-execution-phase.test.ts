@@ -7,7 +7,10 @@ import { claimResponsesCompactRequest } from "../../../../packages/ai/src/transp
 import { summarizeOpenAITransportError } from "../../../../packages/ai/src/transports/openai-responses-debug.js";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import { setRuntimeConfigSnapshot } from "../../../config/runtime-snapshot.js";
-import { replaceSessionEntrySync } from "../../../config/sessions/session-accessor.js";
+import {
+  loadTranscriptEventsSync,
+  replaceSessionEntrySync,
+} from "../../../config/sessions/session-accessor.js";
 import { fetchWithSsrFGuard } from "../../../infra/net/fetch-guard.js";
 import { captureGuardedFetchRequestAuthority } from "../../../infra/net/fetch-request-authority.js";
 import { createDiagnosticEmbeddedRunOwner } from "../../../logging/diagnostic-run-activity.js";
@@ -111,11 +114,12 @@ describe("runEmbeddedAttemptExecutionPhase", () => {
     "scopes the provider generation guard after writer admission (%s, %s)",
     async (kind, change) => {
       await withOpenClawTestState({ label: "cron-root-provider-fence" }, async (testState) => {
-        const { fixture, target, original, transcript } = await createOwnedTranscript(
+        const { fixture, target, original, selected, transcript } = await createOwnedTranscript(
           testState,
           `agent:main:${kind}:provider-fence`,
           { sessionId: "cron-run-1", lifecycleRevision: "generation-1" },
         );
+        const manager = SessionManager.open(selected);
         const fetchImpl = vi.fn(async () => new Response("ok"));
         fixture.activeSession.prompt.mockImplementation(async () => {
           const requestAuthority = captureGuardedFetchRequestAuthority();
@@ -149,11 +153,24 @@ describe("runEmbeddedAttemptExecutionPhase", () => {
           if (change === "current") {
             await execution;
             expect(fetchImpl).toHaveBeenCalledOnce();
+            await transcript.withOwnedTranscriptWrite(() =>
+              manager.appendMessage({ role: "user", content: "allowed", timestamp: 1 }),
+            );
+            expect(loadTranscriptEventsSync(target)).toMatchObject([
+              { type: "session" },
+              { type: "message", message: { role: "user", content: "allowed" } },
+            ]);
           } else {
             await expect(execution).rejects.toThrow(
               "original session generation no longer accepts",
             );
             expect(fetchImpl).not.toHaveBeenCalled();
+            await expect(
+              transcript.withOwnedTranscriptWrite(() =>
+                manager.appendMessage({ role: "user", content: "stale", timestamp: 1 }),
+              ),
+            ).rejects.toThrow();
+            expect(loadTranscriptEventsSync(target)).toEqual([]);
           }
         } finally {
           await transcript.transcriptLifecycle.dispose();
@@ -386,13 +403,11 @@ describe("runEmbeddedAttemptExecutionPhase", () => {
     },
   );
 
-  it.each(["active", "cleanup-failed", "replaced", "closed"] as const)(
-    "preserves automatic compaction ownership and publication (%s)",
+  it.each(["active", "replaced", "closed"] as const)(
+    "fences automatic memory compaction with %s admission during summarization",
     async (owner) => {
       const fixture = await createFixture({ exerciseTerminalMerges: false });
       const { admission } = fixture;
-      const active = owner === "active" || owner === "cleanup-failed";
-      const cleanupError = new Error("attempt cleanup failed after compaction committed");
       const replacement = prepareSystemAgentRunAdmission({}, "run-1", "main", "compaction-test");
       const admittedRunContext = await admission.admit("embedded");
       const model = { ...testModel, api: "compaction-test-api", contextWindow: 4_096 };
@@ -426,7 +441,7 @@ describe("runEmbeddedAttemptExecutionPhase", () => {
         if (event.type === "compaction_end") {
           ends.push(event);
           if (event.outcome.status === "completed") {
-            expect(events).toEqual([{ kind: "compaction", tokensAfter: expect.any(Number) }]);
+            expect(events).toHaveLength(1);
             expect(fixture.skillInstructionDeliveryCache.size).toBe(0);
           }
         }
@@ -474,9 +489,6 @@ describe("runEmbeddedAttemptExecutionPhase", () => {
       mocks.installStreamGuards.mockImplementation(installEmbeddedAttemptStreamGuards);
       mocks.runSettledPhase.mockImplementation(async ({ preparedStreamRuntime }) => {
         await preparedStreamRuntime.promptActiveSession("Continue Blue Heron");
-        if (owner === "cleanup-failed") {
-          throw cleanupError;
-        }
         return fixture.result;
       });
       const retireAdmission = async () => {
@@ -499,22 +511,22 @@ describe("runEmbeddedAttemptExecutionPhase", () => {
         const messagesBefore = structuredClone(session.messages);
         await retireAdmission();
         releaseSummary.resolve();
-        expect(await outcome).toBe(owner === "cleanup-failed" ? cleanupError : undefined);
+        expect(await outcome).toBeUndefined();
         expect(summarySignalAborted).toBe(false);
         const compacted = sessionManager
           .getEntries()
           .filter((entry) => entry.type === "compaction");
-        expect(compacted).toHaveLength(active ? 1 : 0);
+        expect(compacted).toHaveLength(owner === "active" ? 1 : 0);
         expect(ends).toMatchObject([
           {
             type: "compaction_end",
             reason: "threshold",
-            outcome: { status: active ? "completed" : "failed" },
+            outcome: { status: owner === "active" ? "completed" : "failed" },
           },
         ]);
-        expect(events).toHaveLength(active ? 1 : 0);
-        expect(fixture.skillInstructionDeliveryCache.size).toBe(active ? 0 : 1);
-        if (!active) {
+        expect(events).toHaveLength(owner === "active" ? 1 : 0);
+        expect(fixture.skillInstructionDeliveryCache.size).toBe(owner === "active" ? 0 : 1);
+        if (owner !== "active") {
           expect(sessionManager.getEntries()).toEqual(entriesBefore);
           expect(session.messages).toEqual(messagesBefore);
         }
@@ -527,6 +539,30 @@ describe("runEmbeddedAttemptExecutionPhase", () => {
       }
     },
   );
+
+  it("publishes the replacement fact and invalidates the skill cache before attempt cleanup throws", async () => {
+    const fixture = await createFixture({ exerciseTerminalMerges: false });
+    const events: EmbeddedContextAccountingEvent[] = [];
+    fixture.input.attempt.onContextAccountingEvent = (event) => events.push(event);
+    const cleanupError = new Error("attempt cleanup failed after compaction committed");
+    let eventsBeforeCleanup: EmbeddedContextAccountingEvent[] | undefined;
+    let cacheSizeBeforeCleanup: number | undefined;
+    mocks.runSettledPhase.mockImplementationOnce(async () => {
+      const replacementHook = fixture.setContextReplacementHook.mock.calls[0]?.[0];
+      if (typeof replacementHook !== "function") {
+        throw new Error("expected the attempt-owned context replacement hook");
+      }
+      replacementHook(40, 120);
+      eventsBeforeCleanup = [...events];
+      cacheSizeBeforeCleanup = fixture.skillInstructionDeliveryCache.size;
+      throw cleanupError;
+    });
+
+    await expect(runEmbeddedAttemptExecutionPhase(fixture.input)).rejects.toBe(cleanupError);
+
+    expect(eventsBeforeCleanup).toEqual([{ kind: "compaction", tokensAfter: 40 }]);
+    expect(cacheSizeBeforeCleanup).toBe(0);
+  });
 
   it("does not start a prompt after external cancellation", async () => {
     const fixture = await createFixture();

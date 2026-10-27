@@ -22,6 +22,7 @@ import {
   advancePlacementFixtureToActive,
   writePlacementEnvironmentFixture,
 } from "./placement-test-fixtures.js";
+import { canRedispatchFailedWorkerPlacement } from "./session-placement-lifecycle.js";
 import type { WorkerTurnTunnelHandle } from "./tunnel-contract.js";
 import { createWorkerPlacementRedispatch } from "./worker-placement-redispatch.js";
 import {
@@ -56,17 +57,8 @@ import { createWorkerWorkspaceOperationCoordinator } from "./workspace-operation
 
 installLauncherTest();
 
-function operationTurn(runId: string) {
-  const operation = createReplyOperation({
-    sessionId: SESSION_ID,
-    sessionKey: SESSION_KEY,
-    resetTriggered: false,
-  });
-  return {
-    operation,
-    params: { ...turn(runId), replyOperation: operation, abortSignal: operation.abortSignal },
-  };
-}
+const createOperation = () =>
+  createReplyOperation({ sessionId: SESSION_ID, sessionKey: SESSION_KEY, resetTriggered: false });
 const unexpectedLocalExecution = async () => {
   throw new Error("unexpected local execution");
 };
@@ -93,6 +85,7 @@ async function underRetiredParent(
       await task();
     },
   );
+  expect(assertParent).toBeTypeOf("function");
   expect(assertParent).toThrow("settlement is closed");
 }
 
@@ -114,7 +107,7 @@ function createLane(initialParams: SessionPlacementTurnParams) {
 }
 
 describe("local claim recovery before backend registration", () => {
-  it.each(["local", "standalone", "embedded", "CLI"] as const)(
+  it.each(["local", "standalone", "remote", "embedded", "CLI"] as const)(
     "admits a %s child after its inherited parent claim closes",
     async (execution) => {
       const provider = createProvider();
@@ -125,6 +118,12 @@ describe("local claim recovery before backend registration", () => {
         }
         return { meta: { durationMs: 1 } };
       });
+      const remoteTask = vi.fn<typeof provider.executeTurn>(
+        async (_claim, _params, _runLocal, onAdmitted) => {
+          onAdmitted?.();
+          return { meta: { durationMs: 2 } };
+        },
+      );
       const queued = execution !== "embedded" && execution !== "CLI";
       let uninstall = queued ? installSessionPlacementAdmissionProvider(provider) : () => {};
       let child: Promise<unknown> | undefined;
@@ -150,9 +149,20 @@ describe("local claim recovery before backend registration", () => {
           uninstall();
           uninstall = () => {};
         }
+        if (execution === "remote") {
+          uninstall = installSessionPlacementAdmissionProvider({
+            assertCompactionSuccessorAllowed: () => {},
+            executeLocalTurn: provider.executeLocalTurn,
+            executeTurn: remoteTask,
+          });
+        }
         gate.resolve();
-        await expect(child).resolves.toMatchObject({ meta: { durationMs: 1 } });
-        expect(localTask).toHaveBeenCalledOnce();
+        await expect(child).resolves.toMatchObject({
+          meta: { durationMs: execution === "remote" ? 2 : 1 },
+        });
+        expect([localTask.mock.calls.length, remoteTask.mock.calls.length]).toEqual(
+          execution === "remote" ? [0, 1] : [1, 0],
+        );
         expect((await placements.getAsync(SESSION_ID))?.turnClaim ?? null).toBeNull();
       } finally {
         gate.resolve();
@@ -168,7 +178,12 @@ describe("local claim recovery before backend registration", () => {
       const provider = createProvider();
       const uninstall = installSessionPlacementAdmissionProvider(provider);
       const clock = vi.spyOn(Date, "now");
-      const { operation, params } = operationTurn("run-preflight");
+      const operation = createOperation();
+      const params = {
+        ...turn("run-preflight"),
+        replyOperation: operation,
+        abortSignal: operation.abortSignal,
+      };
       const lane = createLane(params);
       const started = createDeferred();
       const resume = createDeferred();
@@ -224,11 +239,20 @@ describe("local claim recovery before backend registration", () => {
         expect(currentClaim() ?? null).toBeNull();
         await operation.ownerSettlement;
         await expectSuccessorAdmission();
-        replacement = withSessionTurn(sessionTarget, () =>
-          provider.executeLocalTurn({ ...sessionTarget, runId: "replacement" }, async () => {
-            replacementStarted.resolve();
-            await finishReplacement.promise;
-          }),
+        expect(oldSettled).toBe(false);
+        expect(getCommandLaneSnapshot("claim-recovery-global").activeCount).toBe(1);
+        replacement = withSessionTurn(
+          {
+            sessionKey: SESSION_KEY,
+            sessionId: SESSION_ID,
+            agentId: "main",
+            storePath: sessionTarget.storePath,
+          },
+          () =>
+            provider.executeLocalTurn({ ...sessionTarget, runId: "replacement" }, async () => {
+              replacementStarted.resolve();
+              await finishReplacement.promise;
+            }),
         );
         await awaitGateBeforeSettlement(
           replacementStarted.promise,
@@ -263,7 +287,12 @@ describe("local claim recovery before backend registration", () => {
     async (timing) => {
       const provider = createProvider();
       const uninstall = installSessionPlacementAdmissionProvider(provider);
-      const { operation, params } = operationTurn("run-cleared-before-admission");
+      const operation = createOperation();
+      const params = {
+        ...turn("run-cleared-before-admission"),
+        replyOperation: operation,
+        abortSignal: operation.abortSignal,
+      };
       const run = vi.fn(localResult);
       try {
         if (timing === "before") {
@@ -337,13 +366,15 @@ describe("worker pre-launch claim recovery", () => {
       await placements.markWorkspaceResultPending(request.turnClaim);
       return result;
     });
-    const nodeEnvironment = () => ({
+    let environment: ReturnType<typeof attachedEnvironment> = {
       ...attachedEnvironment(),
       nodeDeviceId: "worker-node",
       sshEndpoint: null,
-    });
-    let environment = nodeEnvironment();
+    };
     const destroy = vi.fn(async () => {
+      if (environment.leaseId === null) {
+        throw new Error("expected leased worker environment");
+      }
       environment = {
         ...environment,
         state: "destroyed" as const,
@@ -380,19 +411,25 @@ describe("worker pre-launch claim recovery", () => {
       }),
       dispatch: async (request, _onTransition, assertCurrent) => {
         assertCurrent?.();
-        const target = {
-          environmentId: `${ENVIRONMENT_ID}-recovered`,
-          ownerEpoch: OWNER_EPOCH + 1,
-        };
+        const recoveredEnvironmentId = `${ENVIRONMENT_ID}-recovered`;
+        const recoveredOwnerEpoch = OWNER_EPOCH + 1;
         const recovered = await advancePlacementFixtureToActive(placements, database, request, {
-          ...target,
+          environmentId: recoveredEnvironmentId,
+          ownerEpoch: recoveredOwnerEpoch,
           remoteWorkspaceDir: "/workspace/recovered",
           workspaceBaseManifestRef: MANIFEST_REF,
         });
+        const recoveredEnvironment = attachedEnvironment();
+        if (recoveredEnvironment.leaseId === null) {
+          throw new Error("expected leased worker environment");
+        }
         environment = {
-          ...nodeEnvironment(),
-          ...target,
+          ...recoveredEnvironment,
+          environmentId: recoveredEnvironmentId,
+          ownerEpoch: recoveredOwnerEpoch,
+          nodeDeviceId: "worker-node",
           leaseId: "lease-worker-turn-recovered",
+          sshEndpoint: null,
         };
         writePlacementEnvironmentFixture(database, environment);
         return recovered;
@@ -484,6 +521,7 @@ describe("worker pre-launch claim recovery", () => {
         stage === "dispatch" ||
         stage === "uncertain dispatch" ||
         stage === "pending result";
+      expect(launch).toHaveBeenCalledTimes(dispatched ? 2 : 1);
       let settled = false;
       void outcome.then(() => {
         settled = true;
@@ -528,6 +566,10 @@ describe("worker pre-launch claim recovery", () => {
           environmentId: ENVIRONMENT_ID,
           activeOwnerEpoch: OWNER_EPOCH,
         });
+        if (failed?.state !== "failed") {
+          throw new Error("expected failed custody fence");
+        }
+        expect(canRedispatchFailedWorkerPlacement(failed, environment)).toBe(true);
         expect(environments.stopTunnel).toHaveBeenCalledOnce();
         expect(destroy).toHaveBeenCalledOnce();
         blockSecond = false;

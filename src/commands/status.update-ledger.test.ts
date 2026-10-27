@@ -478,6 +478,9 @@ describe("status update ledger evidence", () => {
     );
     expect(formatUpdateOneLiner(update)).toContain("cached: ahead 0, behind 0");
     expect(formatUpdateOneLiner(update)).not.toContain("up to date");
+    expect(mocks.checkUpdateStatus).toHaveBeenCalledWith(
+      expect.objectContaining({ fetchGit: false }),
+    );
   });
 
   it("retains the failure across later runs that never reached fetch, beyond a history page", async () => {
@@ -573,6 +576,9 @@ describe("status update ledger evidence", () => {
   it("leaves fresh checks to Git without clearing the recorded failure", async () => {
     recordRun({ status: "failed", reason: "fetch-failed" });
     expect((await readStatus(true)).git).not.toHaveProperty("stale");
+    expect(mocks.checkUpdateStatus).toHaveBeenLastCalledWith(
+      expect.objectContaining({ fetchGit: true }),
+    );
     expect((await readStatus()).git?.stale).toBeDefined();
   });
 });
