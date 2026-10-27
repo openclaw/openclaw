@@ -44,9 +44,18 @@ export function boundChatThumbnails<S extends Pick<ChatSessionSnapshot, "rowDisp
   snapshot: S,
   budget = { count: MAX_CHAT_THUMBNAILS, bytes: MAX_CHAT_THUMBNAIL_BYTES },
 ): S {
-  let rowDisplay = snapshot.rowDisplay;
-  for (const [id, row] of Object.entries(rowDisplay ?? {}).toReversed()) {
-    for (const [key, image] of Object.entries(row.images ?? {}).toReversed()) {
+  const originalRows = snapshot.rowDisplay;
+  if (!originalRows) {
+    return snapshot;
+  }
+  let rowDisplay = originalRows;
+  for (const [id, row] of Object.entries(originalRows).toReversed()) {
+    const originalImages = row.images;
+    if (!originalImages) {
+      continue;
+    }
+    let images = originalImages;
+    for (const [key, image] of Object.entries(originalImages).toReversed()) {
       const blob = image.thumbnail;
       if (!blob) {
         continue;
@@ -56,12 +65,18 @@ export function boundChatThumbnails<S extends Pick<ChatSessionSnapshot, "rowDisp
         budget.bytes -= blob.size;
       } else {
         const { thumbnail: _thumbnail, ...dimensions } = image;
-        rowDisplay = {
-          ...rowDisplay,
-          [id]: { ...row, images: { ...rowDisplay?.[id]?.images, [key]: dimensions } },
-        };
+        if (images === originalImages) {
+          images = { ...originalImages };
+        }
+        images[key] = dimensions;
       }
     }
+    if (images !== originalImages) {
+      if (rowDisplay === originalRows) {
+        rowDisplay = { ...originalRows };
+      }
+      rowDisplay[id] = { ...row, images };
+    }
   }
-  return rowDisplay === snapshot.rowDisplay ? snapshot : { ...snapshot, rowDisplay };
+  return rowDisplay === originalRows ? snapshot : { ...snapshot, rowDisplay };
 }

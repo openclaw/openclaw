@@ -379,7 +379,7 @@ describe("message attachment image gallery projection", () => {
         ],
       },
     ].flatMap((fixture) =>
-      [false, true].map((cachedDimensions) => ({ ...fixture, cachedDimensions })),
+      [false, true].map((cachedDimensions) => Object.assign({}, fixture, { cachedDimensions })),
     ),
   )(
     "keeps assistant $format in one gallery with cached dimensions=$cachedDimensions",
@@ -403,7 +403,10 @@ describe("message attachment image gallery projection", () => {
             ? {
                 forRow: (id) =>
                   id === "cached-gallery"
-                    ? { read: () => ({ images }), write: vi.fn() }
+                    ? {
+                        read: () => ({ scope: "cached-gallery", facts: { images } }),
+                        write: vi.fn(),
+                      }
                     : undefined,
               }
             : undefined,

@@ -115,7 +115,9 @@ export function ChatImageActions(props: {
             "aria-disabled": props.disabled ? "true" : undefined,
           }}
           onBeforeShow={(event) => {
-            if (props.disabled) event.preventDefault();
+            if (props.disabled) {
+              event.preventDefault();
+            }
           }}
           trigger={<Icon name="moreHorizontal" />}
           items={[

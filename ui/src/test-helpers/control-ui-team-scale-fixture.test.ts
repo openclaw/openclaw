@@ -6,6 +6,7 @@ import { ChatHistoryDeltaResultSchema } from "../../../packages/gateway-protocol
 import { SessionRowSchema } from "../../../packages/gateway-protocol/src/schema/sessions-row.ts";
 import { GatewaySessionRowEvents } from "../api/gateway-session-row-events.ts";
 import type { GatewaySessionRow } from "../api/types.ts";
+import { readChatThreadMessageIdentity } from "../lib/chat/history-message-identity.ts";
 import { canApplySessionListSnapshot } from "../lib/sessions/session-list-query.ts";
 import { sessionGatewayTest } from "./control-ui-e2e.sessions.test-support.ts";
 import { createTeamScaleSidebarListOwner } from "./control-ui-sidebar-list-fixture.ts";
@@ -45,7 +46,7 @@ describe("Team-scale Gateway fixture", () => {
       const messages = Array.isArray(history?.messages) ? history.messages : [];
       const lastAnswer = messages
         .map(asOptionalRecord)
-        .find((message) => asOptionalRecord(message?.__openclaw)?.id === "team-message-240");
+        .find((message) => readChatThreadMessageIdentity(message)?.id === "team-message-240");
       const images = (Array.isArray(lastAnswer?.content) ? lastAnswer.content : [])
         .map(asOptionalRecord)
         .filter((block) => block?.type === "image");

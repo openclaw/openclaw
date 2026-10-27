@@ -66,7 +66,7 @@ export function warmReloadProbe(
           links: ".markdown-session-link, .markdown-github-item",
           images: ".chat-image-frame",
           canonicalNotices: ".chat-notice",
-          avatars: ".chat-avatar, .chat-author-avatar",
+          avatars: ".chat-avatar-slot, .chat-avatar, .chat-author-avatar",
         }
       : {}),
   };
@@ -493,7 +493,10 @@ export function warmReloadProbe(
           avatars: [...thread.querySelectorAll<HTMLElement>(factSelectors.avatars!)].map((avatar) =>
             JSON.stringify([
               avatar.className,
-              [...avatar.querySelectorAll("img")].map(imageFact),
+              (avatar instanceof HTMLImageElement
+                ? [avatar]
+                : [...avatar.querySelectorAll("img")]
+              ).map(imageFact),
               avatar.textContent,
             ]),
           ),

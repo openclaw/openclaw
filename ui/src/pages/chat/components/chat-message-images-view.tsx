@@ -1,7 +1,9 @@
 import type { JSX } from "@solidjs/web";
 import { For, Show, createMemo, useContext } from "solid-js";
+import { chatImageDisplayKey } from "../../../lib/chat/row-display-facts.ts";
 import { ContentPresentation } from "../../../lib/solid/presentation.ts";
 import { ImageFrame } from "./chat-image-frame.tsx";
+import { chatImageRenditionWidth } from "./chat-image-rendition.ts";
 import { openMessageImage } from "./chat-message-image-open.ts";
 import {
   createMessageImagePresentation,
@@ -10,6 +12,7 @@ import {
 } from "./chat-message-images-solid.tsx";
 import { isCanonicalInboundMediaSource } from "./chat-message-local-media.ts";
 import type { ImageBlock, ImageRenderOptions, MessageMediaAction } from "./chat-message-media.ts";
+import { ChatRowDisplayContext } from "./chat-row-display-context.ts";
 
 export type MessageImagesProps = {
   images: ImageBlock[];
@@ -18,7 +21,13 @@ export type MessageImagesProps = {
 };
 
 export function MessageImages(props: MessageImagesProps): JSX.Element {
-  let slots: { image: ImageBlock; key: symbol; options: ImageRenderOptions }[] = [];
+  const display = useContext(ChatRowDisplayContext);
+  let slots: {
+    image: ImageBlock;
+    key: symbol;
+    options: ImageRenderOptions;
+    display?: { scope: string; key: string; thumbnail: Blob };
+  }[] = [];
   let scope = "";
   let policyKey: string | undefined;
   let canonicalMessageKey: string | undefined;
@@ -26,6 +35,7 @@ export function MessageImages(props: MessageImagesProps): JSX.Element {
   const projection = createMemo(() => {
     const images = props.images;
     const options = props.options;
+    const row = display?.()?.read();
     const nextScope = JSON.stringify([
       options?.connectionEpoch,
       options?.authToken?.trim(),
@@ -55,6 +65,20 @@ export function MessageImages(props: MessageImagesProps): JSX.Element {
     const imageOptions = { ...options, galleryImages: options?.galleryImages ?? images };
     slots = images.map((image, index) => {
       const slot = slots[index];
+      const displayKey = row && chatImageDisplayKey(image, chatImageRenditionWidth("inline"));
+      const thumbnail = displayKey ? row?.facts?.images?.[displayKey]?.thumbnail : undefined;
+      const cached =
+        row && displayKey && thumbnail
+          ? { scope: row.scope, key: displayKey, thumbnail }
+          : undefined;
+      const previousDisplay = slot?.display;
+      const sameDisplay =
+        cached &&
+        previousDisplay &&
+        cached.scope === previousDisplay.scope &&
+        cached.key === previousDisplay.key &&
+        cached.thumbnail === previousDisplay.thumbnail;
+      const sameScope = !previousDisplay || previousDisplay.scope === row?.scope;
       const previous =
         image.factIndex !== undefined
           ? previousSlots.get(image.factIndex)
@@ -67,8 +91,12 @@ export function MessageImages(props: MessageImagesProps): JSX.Element {
         (image.url !== undefined && isCanonicalInboundMediaSource(image.url));
       return {
         image,
-        key: (continuing && preservePresentation && previous) || Symbol("image-slot"),
+        // Hello changes read authority; identical scoped display bytes keep their native IMG.
+        key:
+          (sameScope && ((continuing && preservePresentation) || sameDisplay) && previous) ||
+          Symbol("image-slot"),
         options: imageOptions,
+        display: cached,
       };
     });
     scope = nextScope;

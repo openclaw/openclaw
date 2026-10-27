@@ -17,15 +17,17 @@ export function registerSessionTitleTarget(
   label: HTMLElement,
   display?: SessionTitleDisplay,
 ): () => void {
+  const registeredTarget = display?.title ? sessionTitleAnchor(target, true) : target;
   if (display?.title) {
-    target = sessionTitleAnchor(target, true);
-    stampSessionTitleLabel(target, label, display.title);
+    stampSessionTitleLabel(registeredTarget, label, display.title);
   }
   let active = true;
   let release: (() => void) | undefined;
   void registrar.then((register) => {
     if (active) {
-      release = display ? register(target, label, display) : register(target, label);
+      release = display
+        ? register(registeredTarget, label, display)
+        : register(registeredTarget, label);
     }
   });
   return () => {

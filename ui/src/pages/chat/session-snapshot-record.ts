@@ -11,7 +11,7 @@ import {
 } from "../../lib/protocol-validators.generated/transcript.js";
 import * as json from "../../lib/snapshot-json.ts";
 import { chatSessionStateSnapshotSchema } from "./chat-session-state-snapshot.ts";
-import { type ChatSessionSnapshot } from "./session-message-cache.ts";
+import type { ChatSessionSnapshot } from "./session-message-cache.ts";
 import { chatThumbnailWeight } from "./session-message-display-facts.ts";
 
 const nonnegative = json.refine(json.number, (value) => value >= 0);

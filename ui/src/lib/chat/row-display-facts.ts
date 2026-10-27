@@ -15,7 +15,7 @@ export type ChatRowDisplayFacts = {
 };
 
 export type ChatRowDisplay = {
-  read: () => ChatRowDisplayFacts | undefined;
+  read: () => { scope: string; facts: ChatRowDisplayFacts | undefined } | undefined;
   write: (update: Partial<ChatRowDisplayFacts>) => void;
 };
 
@@ -43,6 +43,16 @@ export function chatDisplaySourceKey(source: string): string | undefined {
   } catch {
     return undefined;
   }
+}
+
+export function chatImageDisplayKey(
+  image: { url?: string; artifactId?: string },
+  rendition: 480 | 960,
+): string | undefined {
+  const source = image.url && chatDisplaySourceKey(image.url);
+  return image.url && !source
+    ? undefined
+    : JSON.stringify([image.artifactId ?? null, source ?? null, rendition]);
 }
 export type ChatLinkDisplay = {
   title?: string;
