@@ -2,7 +2,6 @@ import { expect, it, vi } from "vitest";
 import { modelDefinition } from "../../agents/model-auth.fixtures.test-support.js";
 import type { AgentMessage } from "../../agents/runtime/index.js";
 import { makeAgentAssistantMessage } from "../../agents/test-helpers/agent-message-fixtures.js";
-import { projectCompactionAccountingPatch } from "../../config/sessions/session-entry-projection.js";
 import { SESSION_TOTAL_TOKENS_VERSION } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { runSessionCompactionIfNeeded } from "./agent-runner-memory.js";
@@ -29,19 +28,9 @@ vi.mock("../../agents/sessions/session-manager.js", () => ({
 vi.mock("../../agents/embedded-agent.js", () => ({ compactEmbeddedAgentSession: compact }));
 // mock-isolation: This preflight test must not load or execute the model-turn entry point.
 vi.mock("../../agents/embedded-agent-runner/run-entry.js", () => ({}));
-// mock-isolation: Publish the real accounting patch without opening a database.
+// mock-isolation: A declined compaction never publishes session accounting.
 vi.mock("./session-updates.js", () => ({
-  incrementCompactionCount: async (
-    params: Parameters<typeof import("./session-updates.js").incrementCompactionCount>[0],
-  ) => {
-    if (params.sessionStore && params.sessionKey && params.expectedSession) {
-      params.sessionStore[params.sessionKey] = {
-        ...params.expectedSession,
-        ...projectCompactionAccountingPatch(params.expectedSession, params),
-      };
-    }
-    return params.amount ?? 1;
-  },
+  incrementCompactionCount: vi.fn(),
 }));
 
 const model = "claude-sonnet-5-5";
