@@ -1,7 +1,7 @@
 /** Compare real Usage model filters from the repository root; see scripts/README.md. */
 import assert from "node:assert/strict";
 import { execFileSync, type ChildProcess } from "node:child_process";
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { closeSync, constants, openSync, writeSync } from "node:fs";
 import { cp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
@@ -55,6 +55,7 @@ const { values } = parseArgs({
     base: { type: "string" },
     head: { type: "string" },
     ui: { type: "string" },
+    "head-ui": { type: "string" },
     out: { type: "string" },
     pairs: { type: "string", default: "20" },
     "warm-cpu": { type: "string" },
@@ -73,7 +74,7 @@ const { values } = parseArgs({
 });
 if (values.help) {
   console.log(
-    "Usage: node --import ./scripts/tsx.mjs scripts/bench-usage-gateway.ts --base <checkout> --head <checkout> --ui <frozen-build> --out <new-directory> [--sessions 12000] [--pairs 20] [--warm-cpu 1|4] [--warm-sequence] [--smoke | --cold | --cold-backend [--cold-pairs 20] | --diagnostic | --structure [--structure-rtt 0|100] [--trace-adverse]]",
+    "Usage: node --import ./scripts/tsx.mjs scripts/bench-usage-gateway.ts --base <checkout> --head <checkout> --ui <frozen-build> --out <new-directory> [--head-ui <frozen-candidate-build>] [--sessions 12000] [--pairs 20] [--warm-cpu 1|4] [--warm-sequence] [--smoke | --cold | --cold-backend [--cold-pairs 20] | --diagnostic | --structure [--structure-rtt 0|100] [--trace-adverse]]",
   );
   process.exit(0);
 }
@@ -83,6 +84,7 @@ for (const key of ["base", "head", "ui", "out"] as const) {
 const base = path.resolve(values.base!);
 const head = path.resolve(values.head!);
 const ui = path.resolve(values.ui!);
+const headUi = values["head-ui"] ? path.resolve(values["head-ui"]) : ui;
 const out = path.resolve(values.out!);
 const tooling = path.dirname(fileURLToPath(import.meta.url));
 const helperFiles = [
@@ -149,7 +151,7 @@ type Ready = UsageBenchFixture & { port: number; token: string };
 type Dispatch = { kind: string; rows: number; contextRows: number; packedBytes: number };
 type Snapshot = { channel: "usage-volume-fixture"; action: "snapshot"; dispatches: Dispatch[] };
 type Owner = {
-  role: string;
+  role: keyof typeof roleUiBuilds;
   child: ChildProcess;
   ready: Ready;
   snapshot: () => Promise<Dispatch[]>;
@@ -201,9 +203,15 @@ await writeFile(
 );
 const helperSources = await helperHashes();
 const uiBuild = { root: ui, ...(await hashInstall(ui)) };
+const headUiBuild = headUi === ui ? uiBuild : { root: headUi, ...(await hashInstall(headUi)) };
+const roleUiBuilds = { "base-a": uiBuild, head: headUiBuild, "base-b": uiBuild };
 await writeFile(
   path.join(out, "helper-sources.json"),
-  JSON.stringify({ root: tooling, files: helperSources, ui: uiBuild }, null, 2),
+  JSON.stringify(
+    { root: tooling, files: helperSources, ui: uiBuild, uiByRole: roleUiBuilds },
+    null,
+    2,
+  ),
 );
 
 async function inspectBuild(root: string) {
@@ -244,7 +252,7 @@ async function inspectBuild(root: string) {
   return { root, source, entry, buildInfo, files, preloads, dist: await hashInstall(dist) };
 }
 
-async function start(root: string, role: string, coldPair?: number): Promise<Owner> {
+async function start(root: string, role: Owner["role"], coldPair?: number): Promise<Owner> {
   const retained = coldFixtures.get(role);
   if (retained) {
     assert(retained.available, `${role} previous Gateway must drain before restoration`);
@@ -330,7 +338,7 @@ async function start(root: string, role: string, coldPair?: number): Promise<Own
       claim = await acquireGatewayE2ePortBlock();
       await writeFile(
         setup,
-        JSON.stringify({ uiRoot: ui, sessions: population, port: claim.port }),
+        JSON.stringify({ uiRoot: roleUiBuilds[role].root, sessions: population, port: claim.port }),
       );
       const seeded = Promise.withResolvers<UsageBenchFixture>();
       const seedStarted = performance.now();
@@ -923,7 +931,7 @@ async function startUsageDiagnostic(entry: PageEntry, prefix: string) {
     const clipped = clipInteractionCpuProfile(profile, action.startUs, action.endUs);
     const mapped = await mapColdLoadCpuProfile(clipped, {
       assetBaseUrl: new URL("assets/", page.url()).href,
-      assetDirectory: path.join(ui, "assets"),
+      assetDirectory: path.join(roleUiBuilds[entry.owner.role].root, "assets"),
     });
     await writeFile(
       path.join(out, `${prefix}.attribution.json`),
@@ -1307,7 +1315,7 @@ try {
             token: owner.ready.token,
           });
         }
-        for (const { owner, page, cdp, processSession, proxy, responses } of pages) {
+        for (const { owner, page, context, cdp, processSession, proxy, responses } of pages) {
           const url = new URL(`http://127.0.0.1:${proxy?.port ?? owner.ready.port}/usage`);
           const defaultRendererBefore = await rendererProbe(processSession);
           const defaultCpuBefore = await readGatewayCpuUsage(owner.child);
@@ -1398,6 +1406,53 @@ try {
             response: coldResponse,
             load: os.loadavg(),
           });
+          if (values.structure) {
+            // Served-build proof only; no requests or observers enter warm timing runs.
+            const build = roleUiBuilds[owner.role];
+            const observed = await page.evaluate(() => ({
+              buildScript: document.getElementById("openclaw-control-ui-build-info")?.textContent,
+              resources: performance.getEntriesByType("resource").map((resource) => resource.name),
+            }));
+            const index = await readFile(path.join(build.root, "index.html"), "utf8");
+            const frozenScript =
+              /<script[^>]*id="openclaw-control-ui-build-info"[^>]*>(.*?)<\/script>/u.exec(
+                index,
+              )?.[1];
+            assert(frozenScript, "Frozen UI build identity missing");
+            assert.equal(observed.buildScript, frozenScript, `${owner.role} served build identity`);
+            const assetUrls = [...new Set(observed.resources)]
+              .filter((resource) => {
+                const asset = new URL(resource);
+                return (
+                  asset.origin === url.origin && /^\/assets\/.*\.(?:js|css)$/u.test(asset.pathname)
+                );
+              })
+              .toSorted();
+            assert(assetUrls.length > 0, `${owner.role} loaded no UI assets`);
+            const assets = [];
+            for (const assetUrl of assetUrls) {
+              const relative = new URL(assetUrl).pathname.slice(1);
+              const response = await context.request.get(assetUrl);
+              assert.equal(response.status(), 200, `${owner.role} served ${relative}`);
+              const bytes = await response.body();
+              const sha256 = createHash("sha256").update(bytes).digest("hex");
+              assert.equal(
+                sha256,
+                await hashFile(path.join(build.root, relative)),
+                `${owner.role} served ${relative} bytes`,
+              );
+              assets.push({ path: relative, sha256, bytes: bytes.length });
+              await response.dispose();
+            }
+            await writeFile(
+              path.join(out, `served-ui-${owner.role}-${cpu}x-${rtt}ms.json`),
+              JSON.stringify(
+                { role: owner.role, build, buildScript: observed.buildScript, assets },
+                null,
+                2,
+              ),
+            );
+          }
         }
         // Keep background GC between repeated filters inside the sequence interval.
         // Single-action samples stay unchanged; this does not force GC or wait for it.
@@ -1666,11 +1721,13 @@ try {
       helperSources,
       "Shared benchmark helpers changed during proof",
     );
-    assert.deepEqual(
-      { root: ui, ...(await hashInstall(ui)) },
-      uiBuild,
-      "Frozen UI changed during proof",
-    );
+    for (const build of new Set(Object.values(roleUiBuilds))) {
+      assert.deepEqual(
+        { root: build.root, ...(await hashInstall(build.root)) },
+        build,
+        "Frozen UI changed during proof",
+      );
+    }
   } catch (error) {
     failures.push(`Helper identity after cleanup: ${errorText(error)}`);
   }
@@ -1726,7 +1783,11 @@ try {
           ? `Backend-only at native CPU and localhost: the first sessions.usage RPC requests the full 180 days with the browser's specific-UTC date mode and ordinary overview/sort options; no preceding browser/default-range request. Exactly one Gateway is alive at a time, including startup and drain. Startup backfill remains enabled. Every partial response is retained; successful Usage publications trigger coalesced re-reads within one unchanged 60-second deadline. First-response and complete-ready wall/CPU metrics are separate, and every request retains its CPU snapshots and aggregation dispatches. ${coldPairs === undefined ? "One fresh triple, fixed A/H/C order, not repeated qualification." : `${coldPairs} serial A/H/C triples; seed-once pristine snapshots restored at the exact original absolute path only after process-tree drain. Every role keeps its port/token and launches a fresh compiled process per triple. File bytes and symlink targets match the pre-Gateway snapshot; filesystem cache is not cold.`} Worker CPU snapshots include newly observed or retired workers without claiming complete interval coverage. Resources follow the response with main-only forced GC and asynchronously cached worker heaps. No browser measurements.`
           : values.structure
             ? `Structural attribution only, native CPU and ${structureRtt}ms added RTT. Each role warms model00/model01, traces a natural model00 return, resets model01 outside the traced action, then traces a model00 return after forced browser GC. The second trace has forced-GC heap/DOM counters before and after, outside timing. Passive mutation counts and local node IDs contain no DOM text or attributes; metadata-only wire records contain no payloads. Instrumented timing is not acceptance evidence. Preserve earlier warm and cold regressions.`
-            : "Backend runs at native CPU; 1x/4x applies only to Chromium. Non-navigation browser metrics use threadTicks; default-readiness document CPU is unavailable because navigation resets those counters. Each role owns an isolated browser. Whole-renderer CPU and RSS probes bracket each action; their recorded bounds include collection overhead outside wall/main-thread intervals. Heap and RSS are sampled endpoints, not retained heap, peaks, or GPU memory. Same frozen UI for all roles. Population has one/two actual turns per session spread over180days. Durable source seeding and compiled startup recorded separately; no source server or report prewarming. Setup logs retained. No provider calls. " +
+            : "Backend runs at native CPU; 1x/4x applies only to Chromium. Non-navigation browser metrics use threadTicks; default-readiness document CPU is unavailable because navigation resets those counters. Each role owns an isolated browser. Whole-renderer CPU and RSS probes bracket each action; their recorded bounds include collection overhead outside wall/main-thread intervals. Heap and RSS are sampled endpoints, not retained heap, peaks, or GPU memory. " +
+              (headUi === ui
+                ? "Same frozen UI for all roles. "
+                : "The head uses --head-ui; both controls use --ui. Per-role build hashes are recorded in helper-sources.json. ") +
+              "Population has one/two actual turns per session spread over180days. Durable source seeding and compiled startup recorded separately; no source server or report prewarming. Setup logs retained. No provider calls. " +
               (values.cold
                 ? "One fresh, independently seeded Gateway/browser per role, measuring default then first full-range request at native CPU and localhost. One invocation is one triple, not repeated cold qualification."
                 : "Gateway reused across CPU/RTT cells; default/readiness and population-range phases are not independent cold-process samples.") +

@@ -85,8 +85,13 @@ database state after collecting results.
 
 `bench-usage-gateway.ts` measures the production Usage page against isolated
 Gateways with durable synthetic session transcripts. Build both clean source
-checkouts with `pnpm build sourcePerformance` first, and supply one frozen
-production UI build. The driver verifies each source commit against build-info
+checkouts with `pnpm build sourcePerformance` first, and supply a frozen
+production UI build with `--ui`. By default all three roles use that build.
+For a renderer change, add `--head-ui <frozen-candidate-ui-build>`: the candidate
+uses that build while both baseline controls keep `--ui`. Each role's complete
+UI tree hash is recorded in `helper-sources.json` and checked again after cleanup.
+Gateway and UI build identities are separate; do not attribute a new renderer to
+a backend-only build. The driver verifies each source commit against build-info
 and both local build stamps, then hashes the complete runtime output before and
 after the experiment. It does not build, install, contact a provider, or use an
 operator's Gateway state.
@@ -155,8 +160,8 @@ interpreting HTTP or WebSocket messages; scheduling delay and backpressure may
 add more, and TCP handshakes are undelayed. Localhost bypasses the relay.
 Automation-to-visible-assertion wall time is not INP. Population activation is
 recorded separately from warm filters; per-cell memory snapshots do not establish
-bounded multi-snapshot retention. The unchanged UI cannot demonstrate a renderer
-optimization from a backend-only change. Keep failed output for diagnosis.
+bounded multi-snapshot retention. Runs without `--head-ui` cannot demonstrate a
+renderer change because all roles share the same UI. Keep failed output for diagnosis.
 
 For a fresh compiled cold comparison, add `--cold`. One invocation starts one
 fresh baseline/candidate/baseline triple, using separately seeded durable state,
@@ -223,6 +228,11 @@ They retain no frame payloads or DOM text/attribute values. Added/removed counts
 refer to mutation-record roots, not every descendant. The observer and profiler
 add work, so these runs diagnose extra rendering or garbage collection; they
 never replace the earlier untraced timing results or establish a performance win.
+After population timing, this mode also checks the document's build identity and
+fetches the same-origin JavaScript and CSS assets observed by the browser. It
+compares their bytes with the selected frozen UI tree and writes one
+`served-ui-<role>-<cpu>x-<rtt>ms.json` receipt per role. This verifies the served
+build; it is not timing evidence, and ordinary warm runs do not make these requests.
 
 ### Synthetic Gateway interactions
 

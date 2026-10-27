@@ -311,7 +311,7 @@ export function createUsagePage(context: ApplicationContext) {
   }
 
   function usageCacheIncomplete(): boolean {
-    return isUsageCacheIncomplete(usageResult()?.cacheStatus, usageCalendarSummary()?.cacheStatus);
+    return isUsageCacheIncomplete(usageResult()?.cacheStatus, usageResult("calendar")?.cacheStatus);
   }
 
   function currentQuery(): SessionUsageQuery {
@@ -365,13 +365,10 @@ export function createUsagePage(context: ApplicationContext) {
       : null;
   }
 
-  function usageResult(): SessionsUsageResult | null {
-    return usageSnapshot && isCurrentQuery(usageSnapshot.query) ? usageSnapshot.result : null;
-  }
-
-  function usageCalendarSummary(): SessionsUsageResult | null {
-    // Day selection changes totals, but the same calendar remains available for Shift-click.
-    return usageSnapshot && isCurrentQuery(usageSnapshot.query, "calendar")
+  function usageResult(
+    projection: "all" | "calendar" | "filterOptions" = "all",
+  ): SessionsUsageResult | null {
+    return usageSnapshot && isCurrentQuery(usageSnapshot.query, projection)
       ? usageSnapshot.result
       : null;
   }
@@ -538,7 +535,9 @@ export function createUsagePage(context: ApplicationContext) {
         selectedSession: details.session.data ?? selectedSession,
         totals: usageResult()?.totals ?? null,
         aggregates: usageResult()?.aggregates ?? null,
-        costDaily: usageCalendarSummary()?.aggregates.costDaily ?? [],
+        costDaily: usageResult("calendar")?.aggregates.costDaily ?? [],
+        // Keep raw chart data outside the view projection that clears current-query rows.
+        readChartSnapshot: (projection: "calendar" | "filterOptions") => usageResult(projection),
         cacheRefresh: usageCacheIncomplete()
           ? usageRefreshFailed()
             ? ("failed" as const)

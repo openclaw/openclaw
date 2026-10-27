@@ -171,6 +171,15 @@ it("keeps the same calendar interactive while day totals are pending", async () 
     [dailyEntry("2026-05-02", 100), dailyEntry("2026-05-04", 900)],
     true,
   );
+  changeUsageControl(
+    page.querySelector<HTMLInputElement>('input[aria-label="Start date"]')!,
+    "2026-01-01",
+  );
+  await settleUsageTimers(page, 400);
+  const trend = page.querySelector<HTMLElement>(".usage-trend-section")!;
+  const heatmap = page.querySelector<HTMLElement>(".usage-heatmap")!;
+  const heatmapHost = heatmap.closest(".settings-section")!.parentElement!;
+  const lastCell = [...heatmap.querySelectorAll(".usage-heatmap__cell")].at(-1);
   const bars = () => barsIn(page);
   const first = bars()[0]!;
   const last = bars().at(-1)!;
@@ -178,11 +187,16 @@ it("keeps the same calendar interactive while day totals are pending", async () 
   await page.updateComplete;
   expect(texts(page.element, ".usage-metric-badge strong", false)).toEqual(["—", "—", "—"]);
   expect(bars()).toContain(last);
+  expect(trend.hidden).toBe(false);
+  expect(trend.hasAttribute("inert")).toBe(false);
+  expect(heatmapHost.hidden).toBe(false);
+  expect(heatmapHost.hasAttribute("inert")).toBe(false);
+  expect([...heatmap.querySelectorAll(".usage-heatmap__cell")].at(-1)).toBe(lastCell);
   shiftClick(last);
   await page.updateComplete;
   const days = request.mock.calls.findLast(([method]) => method === "sessions.usage")?.[1]
     ?.selectedDays;
-  expect(days).toEqual(expect.arrayContaining(["2026-04-05", "2026-05-04"]));
+  expect(days).toEqual(expect.arrayContaining(["2026-01-01", "2026-05-04"]));
   expect(Array.isArray(days) && days.length > 1).toBe(true);
 });
 
