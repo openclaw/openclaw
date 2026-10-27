@@ -608,8 +608,12 @@ Cold transcript references and file-artifact paths remain in place. Rebuildable
 memory indexes are omitted from the agent port; canonical memory origins,
 tombstones, and the embedding cache are retained. After publication releases
 port ownership, the command acquires fresh offline ownership and rebuilds each
-ported agent through the selected memory plugin. Unchanged cached chunks reuse
-their embeddings. Per-agent results appear in the command output and `--json`.
+ported agent through the selected memory plugin. Agents rebuild concurrently, up
+to four at a time, bounded by the host's CPU count and free memory; hosts with
+two or fewer CPUs or under 2 GiB of free memory rebuild one agent at a time.
+Unchanged cached chunks reuse their embeddings. Per-agent results appear in the
+command output and `--json`. The rebuild stays offline, so start the Gateway
+after the command finishes.
 
 A rebuild failure warns without failing the completed port and includes
 `openclaw memory index --agent <id>` to retry while the Gateway remains stopped.

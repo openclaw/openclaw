@@ -12,12 +12,13 @@ import { readUserProfileAliasRevision } from "../../state/user-profile-events.js
 import type { UserModelAccountSelection } from "../model-account-authority.js";
 import { ModelAccountConnectAuthorityError } from "../model-account-connect-errors.js";
 import { prepareOperatorModelPresentation } from "../operator-model-presentation.js";
-import { readOperatorRolePolicyRevision } from "../operator-role-policy.js";
+import { operatorSessionCap, readOperatorRolePolicyRevision } from "../operator-role-policy.js";
 import { SESSION_READ_SCOPE } from "../operator-scopes.js";
 import { projectModelFastModeCatalog } from "../session-fast-mode-presentation.js";
 import { SessionMutationAuthorizationChangedError } from "../session-mutation-authorization-error.js";
 import { resolveRequestedSessionAgentId } from "../session-request-agent.js";
 import { hiddenSessionNotFound } from "../session-sharing-policy.js";
+import { prepareSessionSharingRead } from "../session-sharing-target-read.js";
 import { createSessionListEntryFilter } from "../session-sharing.js";
 import { readWorkerPlacementIdentity } from "../worker-environments/placement-projector.js";
 import { readSessionWorkerPlacementAsync } from "../worker-environments/session-placement-lifecycle.js";
@@ -81,11 +82,18 @@ export async function resolveChatMetadataReadParams(
       assertRequestCurrent,
     });
     const session = read.selected;
+    let sharing: Awaited<ReturnType<typeof prepareSessionSharingRead>> | undefined;
+    const release = () => {
+      sharing?.release();
+      read.release();
+    };
     const isCurrent = () => isRequestCurrent() && read.isCurrent();
     const assertVisible = () => {
+      const currentConfig = (context.getCommittedRuntimeConfig ?? context.getRuntimeConfig)();
       const visible = createSessionListEntryFilter({
         client,
-        cfg: (context.getCommittedRuntimeConfig ?? context.getRuntimeConfig)(),
+        cfg: currentConfig,
+        membership: sharing?.readCurrent(currentConfig).membership,
       });
       if (
         session.entry &&
@@ -95,6 +103,9 @@ export async function resolveChatMetadataReadParams(
       }
     };
     try {
+      if (operatorSessionCap(client, cfg) === "invited") {
+        sharing = await prepareSessionSharingRead({ cfg, sessionKey, agentId: requested.agentId });
+      }
       assertVisible();
       const sessionId = session.entry?.sessionId;
       const placement =
@@ -123,17 +134,21 @@ export async function resolveChatMetadataReadParams(
           assertRequestCurrent();
           read.assertCurrent();
         },
-        withCurrent: (consume) => read.withCurrent(consume),
+        withCurrent: (consume) =>
+          read.withCurrent(() => {
+            assertVisible();
+            return consume();
+          }),
         beforeRequest: () => {
           assertVisible();
           assertRequestCurrent();
           read.beforeRequest();
         },
-        release: read.release,
+        release,
         requesterProfileId,
       };
     } catch (error) {
-      read.release();
+      release();
       throw error;
     }
   }

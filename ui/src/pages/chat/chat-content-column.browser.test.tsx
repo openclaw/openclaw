@@ -1,6 +1,7 @@
 import { createSignal, For } from "solid-js";
 import { expect, it, onTestFinished, vi } from "vitest";
 import { page } from "vitest/browser";
+import { syncControlUiSystemChrome } from "../../app/control-ui-presentation.ts";
 import type { MessageGroup as MessageGroupData } from "../../lib/chat/chat-types.ts";
 import { mountSolid } from "../../test-helpers/mount-solid.ts";
 import { flush, waitForSolid } from "../../test-helpers/solid-settle.ts";
@@ -266,5 +267,116 @@ it.each([1440, 1024, 390].flatMap((width) => ["light", "dark"].map((theme) => ({
         }
       }
     }
+  },
+);
+
+it.each(["light", "dark"])(
+  "updates viewer and link colors without recoloring peers (%s)",
+  async (mode) => {
+    const root = document.body.appendChild(document.createElement("div"));
+    root.className = "chat";
+    const documentRoot = document.documentElement;
+    const previousAttributes = ["data-theme", "data-theme-mode", "style"].map(
+      (name) => [name, documentRoot.getAttribute(name)] as const,
+    );
+    documentRoot.dataset.theme = mode;
+    documentRoot.dataset.themeMode = mode;
+    const style = documentRoot.style;
+    onTestFinished(() => {
+      root.remove();
+      for (const [name, value] of previousAttributes) {
+        if (value === null) documentRoot.removeAttribute(name);
+        else documentRoot.setAttribute(name, value);
+      }
+      syncControlUiSystemChrome(true);
+    });
+    const groups = ["alice", "bob"].map((id) =>
+      group(
+        id,
+        "user",
+        "A message. [Guide](https://example.com/guide) [#1](https://github.com/openclaw/openclaw/issues/1)",
+        {
+          sender: { id, name: id, identity: { type: "profile", id } },
+        },
+      ),
+    );
+    mountSolid(
+      () => (
+        <div class="chat-thread">
+          <For each={groups}>{(item) => <MessageGroup group={item} options={options} />}</For>
+        </div>
+      ),
+      { container: root },
+    );
+    const colors = (id: string) => {
+      const entry = root.querySelector('[data-chat-row-key="' + id + '"]')!;
+      return {
+        bubble: getComputedStyle(entry.querySelector(".chat-bubble")!).backgroundColor,
+        name: getComputedStyle(entry.querySelector(".chat-sender-name")!).color,
+      };
+    };
+    style.setProperty("--accent", "#a04c29");
+    syncControlUiSystemChrome(true);
+    await waitForSolid(() => expect(root.querySelectorAll(".chat-bubble")).toHaveLength(2));
+    const viewer = colors("alice");
+    const peer = colors("bob");
+    expect(peer.bubble).not.toBe(viewer.bubble);
+    style.setProperty("--accent", "#367f9b");
+    syncControlUiSystemChrome(true);
+    await waitForSolid(() => expect(colors("alice").bubble).not.toBe(viewer.bubble));
+    expect(colors("alice").name).not.toBe(viewer.name);
+    expect(colors("bob")).toEqual(peer);
+
+    const link = root.querySelector<HTMLElement>(".chat-group.user .chat-text a")!;
+    const colorProbe = root.appendChild(document.createElement("span"));
+    colorProbe.hidden = true;
+    const luminance = (color: string) => {
+      colorProbe.style.color = "color(from " + color + " srgb-linear r g b)";
+      const resolved = getComputedStyle(colorProbe).color;
+      expect(resolved.startsWith("color(srgb-linear ")).toBe(true);
+      const [r, g, b] = resolved
+        .slice(resolved.indexOf(" ") + 1, -1)
+        .split(/\s+/u)
+        .map(Number);
+      return 0.2126 * r! + 0.7152 * g! + 0.0722 * b!;
+    };
+    const contrast = (ink: string, fill: string) => {
+      const [first, second] = [ink, fill].map(luminance);
+      return (Math.max(first!, second!) + 0.05) / (Math.min(first!, second!) + 0.05);
+    };
+    for (const bubble of root.querySelectorAll<HTMLElement>(".chat-bubble")) {
+      const fill = getComputedStyle(bubble).backgroundColor;
+      expect(
+        contrast(getComputedStyle(bubble.querySelector(".chat-text")!).color, fill),
+      ).toBeGreaterThanOrEqual(4.5);
+      const chip = bubble.querySelector<HTMLElement>(".markdown-github-item")!;
+      chip.focus();
+      expect(chip.matches(":focus-visible")).toBe(true);
+      expect(contrast(getComputedStyle(chip).outlineColor, fill)).toBeGreaterThanOrEqual(3);
+    }
+    expect(
+      contrast(colors("bob").name, getComputedStyle(document.body).backgroundColor),
+    ).toBeGreaterThanOrEqual(4.5);
+    const unchanged = colors("alice");
+    for (const hover of [false, true]) {
+      if (hover) await page.elementLocator(link).hover();
+      const token = hover ? "--link-hover" : "--link";
+      style.setProperty(token, "#888888");
+      syncControlUiSystemChrome(true);
+      flush();
+      const previousInk = getComputedStyle(link).color;
+      style.setProperty(token, "#6688bb");
+      syncControlUiSystemChrome(true);
+      await waitForSolid(() => expect(getComputedStyle(link).color).not.toBe(previousInk));
+      await Promise.all(link.getAnimations().map((animation) => animation.finished));
+      expect(
+        contrast(
+          getComputedStyle(link).color,
+          getComputedStyle(link.closest(".chat-bubble")!).backgroundColor,
+        ),
+      ).toBeGreaterThanOrEqual(7);
+      expect(colors("alice")).toEqual(unchanged);
+    }
+    await page.elementLocator(document.body).hover({ position: { x: 0, y: 0 } });
   },
 );
