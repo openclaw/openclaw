@@ -195,6 +195,9 @@ async function deliverSubagentAnnouncementBound(
         );
         internalEvents = params.internalEvents?.map((event) => ({
           ...event,
+          // Delivered files must not seed the completion run's pending tool media.
+          mediaUrls: undefined,
+          attachments: undefined,
           replyInstruction: `${event.replyInstruction}\n\n${deliveredMediaContext}`,
         }));
       }
