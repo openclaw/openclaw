@@ -266,123 +266,27 @@ async function writeIndexedDesktopSession(
   });
 }
 
-function encodeVarint(value: number): Buffer {
-  const bytes: number[] = [];
-  let remaining = value;
-  while (remaining >= 0x80) {
-    bytes.push((remaining & 0x7f) | 0x80);
-    remaining = Math.floor(remaining / 0x80);
-  }
-  bytes.push(remaining);
-  return Buffer.from(bytes);
-}
-
-function snappyLiteralChunk(value: Buffer): Buffer {
-  if (value.length <= 60) {
-    return Buffer.concat([Buffer.from([(value.length - 1) << 2]), value]);
-  }
-  const length = value.length - 1;
-  const lengthBytes: number[] = [];
-  let remaining = length;
-  while (remaining > 0) {
-    lengthBytes.push(remaining & 0xff);
-    remaining = Math.floor(remaining / 0x100);
-  }
-  return Buffer.concat([Buffer.from([(59 + lengthBytes.length) << 2, ...lengthBytes]), value]);
-}
-
-const CLAUDE_GROUP_USER_KEY = Buffer.from("_https://claude.ai\0\x01dframe-store", "latin1");
 const DESKTOP_SESSION_ID = "local_11111111-1111-1111-1111-111111111111";
-const DESKTOP_GROUP_ID = "cg-22222222-2222-2222-2222-222222222222";
 
-function levelDbInternalKey(sequence: number, kind = 1): Buffer {
-  const trailer = Buffer.alloc(8);
-  trailer.writeBigUInt64LE((BigInt(sequence) << 8n) | BigInt(kind));
-  return Buffer.concat([CLAUDE_GROUP_USER_KEY, trailer]);
-}
+// Fixed SSTables from the synthetic Desktop store. The first three use Snappy
+// literal/copy records; the others exercise invalid labels and last-sequence wins.
+const DESKTOP_TABLES = {
+  Release:
+    "0gHwoAAongFfaHR0cHM6Ly9jbGF1ZGUuYWkAAWRmcmFtZS1zdG9yZQEBAAAAAAAAeyJpZCI6ImNnLTIyMjIyMjIyLTIyMjItMjIyMi0yMjIyLTIyMjIyMjIyMjIyMiIsIm5hbWUiOiJSZWxlYXNlIn17ImNvZGU6bG9jYWxfMTExMTExMTEtMTExMS0xMTExLTExMTEtMTExMTExMTExMTExIjoimm4AJCJ9AAAAAAEAAAABAAAAAAABA3gAswEAAAAAAQAAAAAAAAAAAAC4AQ8AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+  Changed:
+    "0gHwoAAongFfaHR0cHM6Ly9jbGF1ZGUuYWkAAWRmcmFtZS1zdG9yZQEBAAAAAAAAeyJpZCI6ImNnLTIyMjIyMjIyLTIyMjItMjIyMi0yMjIyLTIyMjIyMjIyMjIyMiIsIm5hbWUiOiJDaGFuZ2VkIn17ImNvZGU6bG9jYWxfMTExMTExMTEtMTExMS0xMTExLTExMTEtMTExMTExMTExMTExIjoimm4AJCJ9AAAAAAEAAAABAAAAAAABA3gAswEAAAAAAQAAAAAAAAAAAAC4AQ8AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+  "Normal poll update":
+    "3QHwqwAoqQFfaHR0cHM6Ly9jbGF1ZGUuYWkAAWRmcmFtZS1zdG9yZQEBAAAAAAAAeyJpZCI6ImNnLTIyMjIyMjIyLTIyMjItMjIyMi0yMjIyLTIyMjIyMjIyMjIyMiIsIm5hbWUiOiJOb3JtYWwgcG9sbCB1cGRhdGUifXsiY29kZTpsb2NhbF8xMTExMTExMS0xMTExLTExMTEtMTExMS0xMTExMTExMTExMTEiOiKaeQAkIn0AAAAAAQAAAAEAAAAAAAEDeAC+AQAAAAABAAAAAAAAAAAAAMMBDwAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
+  "decoder garbage":
+    "ACjiAV9odHRwczovL2NsYXVkZS5haQABZGZyYW1lLXN0b3JlAQEAAAAAAAB7ImlkIjoiY2ctMjIyMjIyMjItMjIyMi0yMjIyLTIyMjItMjIyMjIyMjIyMjIyIiwibmFtZSI6IlJlbGUSKQxhc2UifXsiaWQiOiJjZy0yMjIyMjIyMi0yMjIyLTIyMjItMjIyMi0yMjIyMjIyMjIyMjIiLCJuYW1lIjoiUmVsZWFzZSJ9eyJjb2RlOmxvY2FsXzExMTExMTExLTExMTEtMTExMS0xMTExLTExMTExMTExMTExMSI6ImNnLTIyMjIyMjIyLTIyMjItMjIyMi0yMjIyLTIyMjIyMjIyMjIyMiJ9AAAAAAEAAAAAAAAAAAABA3gAlgIAAAAAAQAAAAAAAAAAAACbAg8AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+  "newer empty entry":
+    "ACieAV9odHRwczovL2NsYXVkZS5haQABZGZyYW1lLXN0b3JlAQEAAAAAAAB7ImlkIjoiY2ctMjIyMjIyMjItMjIyMi0yMjIyLTIyMjItMjIyMjIyMjIyMjIyIiwibmFtZSI6IlJlbGVhc2UifXsiY29kZTpsb2NhbF8xMTExMTExMS0xMTExLTExMTEtMTExMS0xMTExMTExMTExMTEiOiJjZy0yMjIyMjIyMi0yMjIyLTIyMjItMjIyMi0yMjIyMjIyMjIyMjIifSEHAgIAAAAAAAB7fQAAAAABAAAAAAAAAAAAAQN4AN4BAAAAAAEAAAAAAAAAAAAA4wEPAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA==",
+};
 
-const LEVELDB_RESTART = Buffer.from([0, 0, 0, 0, 1, 0, 0, 0]);
-
-function levelDbDataBlock(
-  entries: Array<{ sequence: number; value: string | Buffer; kind?: number }>,
-): Buffer {
-  const encoded: Buffer[] = [];
-  let previousKey: Uint8Array = Buffer.alloc(0);
-  for (const entry of entries) {
-    const key = levelDbInternalKey(entry.sequence, entry.kind ?? 1);
-    let shared = 0;
-    while (shared < previousKey.length && previousKey[shared] === key[shared]) {
-      shared += 1;
-    }
-    const value = Buffer.from(entry.value);
-    encoded.push(
-      encodeVarint(shared),
-      encodeVarint(key.length - shared),
-      encodeVarint(value.length),
-      key.subarray(shared),
-      value,
-    );
-    previousKey = key;
-  }
-  return Buffer.concat([...encoded, LEVELDB_RESTART]);
-}
-
-function snappyGroupRecords(groupName: string): Buffer {
-  const groupId = DESKTOP_GROUP_ID;
-  const group = `{"id":"${groupId}","name":"${groupName}"}`;
-  const assignmentPrefix = `{"code:${DESKTOP_SESSION_ID}":"`;
-  const key = levelDbInternalKey(1);
-  const valueLength =
-    Buffer.byteLength(group) + Buffer.byteLength(assignmentPrefix) + groupId.length + 2;
-  const firstChunk = Buffer.concat([
-    encodeVarint(0),
-    encodeVarint(key.length),
-    encodeVarint(valueLength),
-    key,
-    Buffer.from(`${group}${assignmentPrefix}`),
-  ]);
-  const groupIdOffset = firstChunk.length - firstChunk.indexOf(groupId);
-  const tail = Buffer.concat([Buffer.from('"}'), LEVELDB_RESTART]);
-  const decodedLength = firstChunk.length + groupId.length + tail.length;
-  return Buffer.concat([
-    encodeVarint(decodedLength),
-    snappyLiteralChunk(firstChunk),
-    Buffer.from([((groupId.length - 1) << 2) | 2, groupIdOffset & 0xff, groupIdOffset >> 8]),
-    snappyLiteralChunk(tail),
-  ]);
-}
-
-function levelDbTable(data: Buffer, compression: 0 | 1): Buffer {
-  const dataWithTrailer = Buffer.concat([data, Buffer.from([compression, 0, 0, 0, 0])]);
-  const handle = Buffer.concat([encodeVarint(0), encodeVarint(data.length)]);
-  const indexEntry = Buffer.concat([Buffer.from([0, 1, handle.length, 0x78]), handle]);
-  const index = Buffer.concat([indexEntry, LEVELDB_RESTART]);
-  const indexWithTrailer = Buffer.concat([index, Buffer.alloc(5)]);
-  const footer = Buffer.alloc(48);
-  Buffer.concat([
-    encodeVarint(0),
-    encodeVarint(0),
-    encodeVarint(dataWithTrailer.length),
-    encodeVarint(index.length),
-  ]).copy(footer);
-  return Buffer.concat([dataWithTrailer, indexWithTrailer, footer]);
-}
-
-function writeDesktopGroupStore(home: string, groupName: string): Promise<void> {
-  return writeDesktopTable(home, snappyGroupRecords(groupName), 1);
-}
-
-async function writeDesktopGroupStoreEntries(
-  home: string,
-  entries: Array<{ sequence: number; value: string | Buffer; kind?: number }>,
-): Promise<void> {
-  return writeDesktopTable(home, levelDbDataBlock(entries), 0);
-}
-
-async function writeDesktopTable(home: string, data: Buffer, compression: 0 | 1): Promise<void> {
+async function writeDesktopGroupStore(home: string, fixture: keyof typeof DESKTOP_TABLES) {
   const dir = path.join(home, "Library/Application Support/Claude/Local Storage/leveldb");
   await fs.mkdir(dir, { recursive: true });
-  await fs.writeFile(path.join(dir, "000001.ldb"), levelDbTable(data, compression));
+  await fs.writeFile(path.join(dir, "000001.ldb"), Buffer.from(DESKTOP_TABLES[fixture], "base64"));
 }
 
 async function writeBrokenClaudeNpmShim(binDir: string): Promise<string> {
@@ -1124,19 +1028,8 @@ describe("Claude session catalog", () => {
     async (scenario) => {
       const home = await createHome();
       const sessionId = "desktop-group";
-      const groupId = DESKTOP_GROUP_ID;
       await writeIndexedDesktopSession(home, sessionId);
-      await writeDesktopGroupStoreEntries(home, [
-        {
-          sequence: 1,
-          value:
-            (scenario === "decoder garbage"
-              ? `{"id":"${groupId}","name":"Rele\u0012)\fase"}`
-              : "") +
-            `{"id":"${groupId}","name":"Release"}{"code:${DESKTOP_SESSION_ID}":"${groupId}"}`,
-        },
-        ...(scenario === "newer empty entry" ? [{ sequence: 2, value: "{}" }] : []),
-      ]);
+      await writeDesktopGroupStore(home, scenario);
       const page = await listPage({}, home);
       expect(page.sessions[0]).toMatchObject({ threadId: sessionId, source: "claude-desktop" });
       if (scenario === "decoder garbage") {
