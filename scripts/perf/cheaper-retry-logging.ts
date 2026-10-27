@@ -47,7 +47,6 @@ const iterations = parseStrictIntegerOption({
 });
 assert(["timing", "allocation", "both"].includes(values.mode));
 let scenario = values.scenario;
-let mode = values.mode;
 assert(
   [
     "all",
@@ -203,7 +202,7 @@ for (scenario of scenarios) {
     consoleLevel: scenario === "provider-429" ? "warn" : "silent",
     consoleStyle: "json",
   });
-  for (mode of modes) {
+  for (const mode of modes) {
     await run(Math.min(iterations, scenario === "provider-429" ? 100 : 500));
     globalThis.gc();
     await nextTurn();
