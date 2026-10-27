@@ -2,7 +2,7 @@
 // vi.mock calls live here so sibling suites share one config-write/daemon/health surface.
 import fs from "node:fs/promises";
 import { afterAll, afterEach, beforeAll, vi } from "vitest";
-import type { ConfigFileSnapshot, OpenClawConfig } from "../config/types.openclaw.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { makeTempWorkspace } from "../test-helpers/workspace.js";
 import { setTestEnvValue } from "../test-utils/env.js";
 import {
@@ -25,9 +25,6 @@ export const {
   resolveConfigPath: resolveTestConfigPath,
   readConfig: readTestConfig,
 } = onboardTestConfigStore;
-const gatewayOnboardConfigSnapshotMock = vi.hoisted(() =>
-  vi.fn<() => Promise<ConfigFileSnapshot>>(),
-);
 const pluginLifecycleLeaseState = vi.hoisted(() => ({ depth: 0 }));
 export const configWritePluginLeaseDepths: number[] = [];
 type InstallGatewayDaemonResult = Awaited<ReturnType<typeof installGatewayDaemonNonInteractive>>;
@@ -59,17 +56,13 @@ const readLastGatewayErrorLineMock = vi.hoisted(() =>
 /** Suites swap reachability behavior per test; the hoisted mock factory reads the current value. */
 export const gatewayReachableState: { mock: WaitForGatewayReachableMock } = { mock: undefined };
 
-gatewayOnboardConfigSnapshotMock.mockImplementation(async () =>
-  onboardTestConfigStore.readSnapshot(),
-);
-
 vi.mock("../config/io.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../config/io.js")>()),
   createConfigIO: () => ({
     configPath: resolveTestConfigPath(),
   }),
   loadConfig: () => readTestConfig(),
-  readConfigFileSnapshot: gatewayOnboardConfigSnapshotMock,
+  readConfigFileSnapshot: async () => onboardTestConfigStore.readSnapshot(),
 }));
 
 vi.mock("../plugins/plugin-lifecycle-lease.js", async (importOriginal) => {
@@ -115,7 +108,7 @@ vi.mock("../config/config.js", async (importActual) => {
     transformConfigFileWithRetry: async (
       params: Parameters<typeof import("../config/config.js").transformConfigFileWithRetry>[0],
     ) => {
-      const snapshot = await gatewayOnboardConfigSnapshotMock();
+      const snapshot = onboardTestConfigStore.readSnapshot();
       const previousHash = snapshot.hash ?? null;
       const transformed = await params.transform(
         snapshot.sourceConfig,
@@ -238,7 +231,6 @@ export {
   gatewayServiceMock,
   healthCommandMock,
   installGatewayDaemonNonInteractiveMock,
-  gatewayOnboardConfigSnapshotMock,
   readLastGatewayErrorLineMock,
   waitForGatewayReachableMock,
 };

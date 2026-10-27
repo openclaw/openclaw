@@ -47,6 +47,15 @@ existing standing-grant references to the restricted definition. Stale captures
 stay stale; runtime authorization, conversation identity and revocation checks
 remain required. The candidate must contain this repair.
 
+An external supervisor's accepted native update (`update migrate`, then
+`update finish`) is recorded in update history as a succeeded run that started
+at migration. A later recorded update therefore lets `openclaw update cleanup`
+retire rollback originals that earlier migrations left, while the latest
+update's own originals stay protected. The candidate must contain this change;
+the supervisor needs none. A failed history write leaves a retry warning in the
+`update finish` result. Releases swapped without the native protocol are not
+recorded.
+
 Background discovery failures are logged and retried at the next scheduled check.
 Gateway shutdown cancellation stays quiet; unexpected scheduled task failures
 are reported by the scheduler without restarting the Gateway.
@@ -314,6 +323,11 @@ Run `openclaw channels status --probe` to investigate channel warnings. This
 requires the repaired installed updater; a new candidate cannot change the
 checks of an updater already running.
 
+Before post-core plugin work, the updater releases its temporary Doctor database
+ownership before rechecking profile-backed requester authority. Service custody
+remains with the updater; the next Doctor acquires its own database ownership.
+This avoids refusing the updater's own policy reads during its maintenance window.
+
 After a Doctor child settles, the updater drains its retained handles for the
 affected shared-state database and revokes their schema admission, even when
 Doctor exits unsuccessfully. The next parent access admits the resulting schema
@@ -488,20 +502,14 @@ imports before continuing. Doctor imports channel state only for enabled channel
 and accounts. If needed, temporarily enable those channels while the Gateway is
 stopped, rerun the bridge Doctor, then restore their previous enabled settings.
 Install the affected plugins before running their migrations.
-Then install the current release and restart:
+Then install the current release with the
+[manual update procedure](/install/updating/update-methods#alternative-manual-npm-pnpm-or-bun).
+The Gateway is already stopped, and the backup above covers its first step.
 
-```bash
-npm install -g openclaw@latest --allow-scripts=openclaw &&
-  openclaw doctor --fix &&
-  openclaw gateway start &&
-  openclaw gateway status --deep
-```
-
-These npm commands are for npm 12 or npm 11.16+; on npm 11.15 and earlier, omit
-`--allow-scripts=openclaw`. For a pnpm-owned installation, replace each install
-command with `pnpm add -g --allow-build=openclaw openclaw@2026.9.5`, then
-`pnpm add -g --allow-build=openclaw openclaw@latest`. For Bun, use
-`bun add -g --trust openclaw@2026.9.5`, then `bun add -g --trust openclaw@latest`.
+The npm command above is for npm 12 or npm 11.16+; on npm 11.15 and earlier, omit
+`--allow-scripts=openclaw`. For a pnpm-owned installation, replace the bridge
+install command with `pnpm add -g --allow-build=openclaw openclaw@2026.9.5`. For
+Bun, use `bun add -g --trust openclaw@2026.9.5`.
 Keep any normal `--profile` selector on every `openclaw` command. For a custom
 service or foreground Gateway, stop and start it through its actual owner
 instead of the managed-service commands above.
@@ -1411,21 +1419,10 @@ post-install verification. After package commit, the old package backup is gone:
 finish `openclaw doctor --fix` with the installed compatible build, then run
 `openclaw gateway start`. Package rollback cannot undo migrated state.
 
-If the compatible package still needs installation, run
-the manual update from a shell outside the Gateway, replacing `<target>` with
-the exact target version from the refusal:
-
-```bash
-openclaw gateway stop
-npm install -g openclaw@<target> --allow-scripts=openclaw
-openclaw doctor --fix
-openclaw gateway start
-```
-
-Run each command only after the previous one succeeds. On npm 11.15 and earlier,
-omit `--allow-scripts=openclaw`. For a pnpm-owned install, replace the install
-command with `pnpm add -g --allow-build=openclaw openclaw@<target>`; for Bun, use
-`bun add -g --trust openclaw@<target>`.
+If the compatible package still needs installation, follow the
+[manual update procedure](/install/updating/update-methods#alternative-manual-npm-pnpm-or-bun) from a shell
+outside the Gateway, using the exact target version from the refusal instead of
+`latest`.
 
 Same-schema updates, earlier ledger-less updaters such as 2026.9.1, and fenced
 transactional updaters from 2026.9.3 onward keep their existing behavior. The

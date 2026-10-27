@@ -433,15 +433,13 @@ it("filters active sentinels only after selecting their physical store winner", 
       };
     });
     projection.selectEntries = (query) => {
-      if (!query?.sessionIdOrKey) {
+      const identities = query?.candidateSessionIdsOrKeys;
+      if (!identities) {
         return rows;
       }
       const keys = new Set(
         rows
-          .filter(
-            (row) =>
-              row.key === query.sessionIdOrKey || row.entry.sessionId === query.sessionIdOrKey,
-          )
+          .filter((row) => identities.has(row.key) || identities.has(row.entry.sessionId))
           .map((row) => row.key),
       );
       return rows.filter((row) => keys.has(row.key));

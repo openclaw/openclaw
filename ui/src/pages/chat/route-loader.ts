@@ -547,7 +547,8 @@ export async function loadChatRoute(
           preferenceDerived: false,
           shortId: target.shortId,
         });
-        return canonical?.canonicalLocation ?? null;
+        // A successful no-op confirmation still releases provisional route admission.
+        return canonical ? (canonical.canonicalLocation ?? routeLocation) : null;
       })
       .catch(() => null);
     return {

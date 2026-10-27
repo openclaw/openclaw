@@ -207,7 +207,10 @@ also retain the prepared display label after secret redaction and the
 128-character bound. A resolved durable profile, including one established by
 verified trusted-proxy or Tailscale identity, supplies a pseudonymized person
 invoker. A paired device adds device assurance but never becomes a person.
-Shared tokens, passwords, auth-none connections, and other profileless clients
+Unidentified operator connections can receive the Gateway's durable
+[shared owner profile](/concepts/user-model), including authenticated ephemeral
+CLI and backend clients. That profile supplies attribution, not a verified
+personal login or additional permissions. Connections without a durable profile
 remain unattributed. If authenticated user evidence promises a durable profile
 but profile resolution fails, the invoker is `unknown` rather than guessed from
 headers, device ids, connection ids, or credentials.

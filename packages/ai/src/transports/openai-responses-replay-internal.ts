@@ -24,6 +24,7 @@ import { log } from "./openai-transport-shared.js";
 import { iterateSseFrames } from "./transport-stream-shared.js";
 
 type ResponsesClientLike = ReturnType<typeof createOpenAIResponsesClient>;
+const PRELUDE_TYPES = new Set(["response.created", "response.in_progress", "response.queued"]);
 
 function isAsyncIterable(value: unknown): value is AsyncIterable<unknown> {
   return (
@@ -43,9 +44,7 @@ export function readResponsesRecoveryEvent(event: unknown) {
           ? (record.error ?? record)
           : undefined,
     hasResponseOutput: Array.isArray(response?.output) && response.output.length > 0,
-    isPrelude:
-      record !== undefined &&
-      ["response.created", "response.in_progress", "response.queued"].includes(String(record.type)),
+    isPrelude: record !== undefined && PRELUDE_TYPES.has(String(record.type)),
   };
 }
 

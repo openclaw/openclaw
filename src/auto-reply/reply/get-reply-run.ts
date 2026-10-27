@@ -63,7 +63,8 @@ async function runPreparedReplyWithOwner(
           agentId: dispatchRuntime.agentId,
           agentDir: dispatchRuntime.agentDir,
           allowGatewaySubagentBinding: true,
-          workspaceDir: context.workspaceDir,
+          // Inventory is agent-owned; context.workspaceDir remains the execution boundary.
+          workspaceDir: dispatchRuntime.workspaceDir,
           runtimePluginSelections: [
             {
               provider: params.provider,

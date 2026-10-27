@@ -14,7 +14,11 @@ import {
   readFooterGeometry,
   sampleMetadataReveal,
 } from "./chat-attributed-identity.test-support.ts";
-import { requireRecord, waitForChatScrollIdle } from "./chat-flow.test-support.ts";
+import {
+  requireRecord,
+  scrollChatThreadToTop,
+  waitForChatScrollIdle,
+} from "./chat-flow.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
 const suite = createControlUiE2eSuite({
@@ -334,11 +338,7 @@ suite.define(() => {
             if (height === 430) {
               // The first message can leave the virtual window after new turns.
               // Return to it before checking its attributed identity.
-              await waitForChatScrollIdle(page);
-              await thread.focus();
-              await thread.press("Home");
-              // Chromium drops a keyboard scroll that lands in the tail of the
-              // previous smooth one, so End must wait for Home to settle.
+              await scrollChatThreadToTop(page);
               await waitForChatScrollIdle(page);
               expect(await thread.evaluate((element) => element.scrollTop), label).toBe(0);
             }

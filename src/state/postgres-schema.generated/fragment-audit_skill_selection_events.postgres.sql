@@ -21,12 +21,12 @@ CREATE TABLE "audit_skill_selection_events" (
   UNIQUE ("source_id")
 );
 
-CREATE INDEX "idx_audit_skill_selection_events_agent_sequence" ON "audit_skill_selection_events" (("agent_id") ASC NULLS FIRST, ("sequence") DESC NULLS LAST);
+CREATE INDEX "idx_audit_skill_selection_events_agent_sequence" ON "audit_skill_selection_events" (("agent_id") ASC, ("sequence") DESC);
 
-CREATE INDEX "idx_audit_skill_selection_events_occurred_sequence" ON "audit_skill_selection_events" (("occurred_at") ASC NULLS FIRST, ("sequence") ASC NULLS FIRST);
+CREATE INDEX "idx_audit_skill_selection_events_occurred_sequence" ON "audit_skill_selection_events" (("occurred_at") ASC, ("sequence") ASC);
 
-CREATE INDEX "idx_audit_skill_selection_events_run_sequence" ON "audit_skill_selection_events" (("run_id") ASC NULLS FIRST, ("sequence") DESC NULLS LAST);
+CREATE INDEX "idx_audit_skill_selection_events_run_sequence" ON "audit_skill_selection_events" (("run_id") ASC, ("sequence") DESC);
 
-CREATE INDEX "idx_audit_skill_selection_events_session_sequence" ON "audit_skill_selection_events" (("session_key") ASC NULLS FIRST, ("sequence") DESC NULLS LAST);
+CREATE INDEX "idx_audit_skill_selection_events_session_sequence" ON "audit_skill_selection_events" (("session_key") ASC NULLS FIRST, ("sequence") DESC);
 
-CREATE INDEX "idx_audit_skill_selection_events_status_sequence" ON "audit_skill_selection_events" (("status") ASC NULLS FIRST, ("sequence") DESC NULLS LAST);
+CREATE INDEX "idx_audit_skill_selection_events_status_sequence" ON "audit_skill_selection_events" (("status") ASC, ("sequence") DESC);
