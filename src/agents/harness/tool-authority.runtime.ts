@@ -157,6 +157,27 @@ async function withPreparedEmbeddedRunToolAuthorityOwned<T, Attempt extends Tool
       : undefined;
   const assertHostActive = attempt.hostCapabilities?.assertActive;
   let live = true;
+  const assertActive = () => {
+    if (!live || admitted.operationalRunInstance !== instance || instance.runId !== runId) {
+      throw new Error("embedded tool authority is no longer active");
+    }
+    assertAdmitted();
+    if (turn) {
+      assertSessionControllerOperation(turn);
+    }
+    assertHostActive?.();
+    if (
+      (source && (source.agentId !== agentId || source.sessionKey !== sessionKey)) ||
+      (source?.workerTurnClaim &&
+        (source.workerTurnClaim.sessionId !== sessionId ||
+          source.workerTurnClaim.runId !== runId ||
+          !source.receiptAuthority)) ||
+      source?.receiptAuthority?.() === false ||
+      (source?.gatewayContextResolver && !source.gatewayContextResolver())
+    ) {
+      throw new Error("embedded tool authority lost its source execution claim");
+    }
+  };
   // Preserve the complete admitted snapshot, but bind its hash and projection
   // only after hooks or native ownership have selected the actual model.
   const direct = operation
@@ -214,27 +235,6 @@ async function withPreparedEmbeddedRunToolAuthorityOwned<T, Attempt extends Tool
   const personalToolParticipants = operation
     ? operation.personalToolParticipants
     : createReplyTurnParticipants(direct?.personalToolOwner);
-  function assertActive() {
-    if (!live || admitted.operationalRunInstance !== instance || instance.runId !== runId) {
-      throw new Error("embedded tool authority is no longer active");
-    }
-    assertAdmitted();
-    if (turn) {
-      assertSessionControllerOperation(turn);
-    }
-    assertHostActive?.();
-    if (
-      (source && (source.agentId !== agentId || source.sessionKey !== sessionKey)) ||
-      (source?.workerTurnClaim &&
-        (source.workerTurnClaim.sessionId !== sessionId ||
-          source.workerTurnClaim.runId !== runId ||
-          !source.receiptAuthority)) ||
-      source?.receiptAuthority?.() === false ||
-      (source?.gatewayContextResolver && !source.gatewayContextResolver())
-    ) {
-      throw new Error("embedded tool authority lost its source execution claim");
-    }
-  }
   const assertReplyActive = () => {
     assertActive();
     operatorAuthority?.assertCurrent();
