@@ -182,14 +182,22 @@ describe("handleChatSendSetupError", () => {
 describe("createChatSendDispatchErrorLifecycle", () => {
   it.each([
     { missingProfile: false, policyFailure: false, sessionChanged: false },
+    { unstarted: true },
     { stateContention: true },
     { restartFailure: true },
     { missingProfile: true, policyFailure: false, sessionChanged: false },
     { missingProfile: false, policyFailure: true, sessionChanged: false },
     { missingProfile: false, policyFailure: false, sessionChanged: true },
   ])(
-    "records the rejected input and bounded error (missing profile: $missingProfile, policy refusal: $policyFailure, session changed: $sessionChanged)",
-    async ({ missingProfile, policyFailure, sessionChanged, stateContention, restartFailure }) => {
+    "records the rejected input and bounded error (missing profile: $missingProfile, policy refusal: $policyFailure, session changed: $sessionChanged, unstarted: $unstarted)",
+    async ({
+      missingProfile,
+      policyFailure,
+      sessionChanged,
+      stateContention,
+      restartFailure,
+      unstarted,
+    }) => {
       await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
         setRuntimeConfigSnapshot({});
         const target = {
@@ -206,7 +214,7 @@ describe("createChatSendDispatchErrorLifecycle", () => {
           sessionId: target.sessionId,
           updatedAt: 1_000,
           startedAt: 1_000,
-          lifecycleRunId: runId,
+          ...(unstarted ? {} : { lifecycleRunId: runId }),
         });
         let userPersisted = false;
         const persistUserTurnTranscript = async () => {
@@ -629,9 +637,13 @@ describe("createChatSendDispatchErrorLifecycle", () => {
     },
   );
 
-  it.each([true, false])(
-    "does not overwrite a lifecycle terminal after persistence success=%s",
-    async (persisted) => {
+  it.each([
+    { persisted: true, delegated: false },
+    { persisted: false, delegated: false },
+    { persisted: true, delegated: true },
+  ])(
+    "retains native terminal ownership (persistence success=$persisted, delegated error=$delegated)",
+    async ({ persisted, delegated }) => {
       const runId = "agent-owned-terminal-before-dispatch-rejection";
       const sessionKey = "agent:main:main";
       const registration = registerRpcSourceForTest({
@@ -644,12 +656,19 @@ describe("createChatSendDispatchErrorLifecycle", () => {
       }
       markChatAbortTerminalOutcome(registration.entry);
       registration.entry.adapter.projectSessionTerminalPersisted = persisted;
+      const terminalPersistence = createDeferred();
+      if (delegated) {
+        registration.entry.adapter.projectSessionTerminalPersistence =
+          terminalPersistence.promise.then(() => {
+            registration.entry.adapter.chatErrorDispatchOwned = true;
+          });
+      }
       const terminalEntry = {
         ts: Date.now(),
         ok: true,
         payload: { runId, status: "ok" as const },
       };
-      const dedupe = new Map([[`chat:${runId}`, terminalEntry]]);
+      const dedupe = new Map(delegated ? [] : [[`chat:${runId}`, terminalEntry]]);
       const broadcast = vi.fn();
       const chatRunState = createChatRunState();
       chatRunState.getOrCreate(runId).buffer = "Native-owned output";
@@ -684,16 +703,34 @@ describe("createChatSendDispatchErrorLifecycle", () => {
         userTurnRecorder: { hasPersisted: () => true, isBlocked: () => false },
       });
 
-      await lifecycle.handleError(new Error("dispatch rejected after agent terminal"));
+      const rejected = lifecycle.handleError(new Error("dispatch rejected after agent terminal"));
+      if (delegated) {
+        expect(dedupe.size).toBe(0);
+        expect(broadcast).not.toHaveBeenCalled();
+      }
+      terminalPersistence.resolve();
+      await rejected;
       await lifecycle.finalize();
 
-      expect(dedupe.get(`chat:${runId}`)).toBe(terminalEntry);
       expect(chatRunState.runs.get(runId)?.buffer).toBe("Native-owned output");
-      expect(broadcast).not.toHaveBeenCalledWith(
-        "chat",
-        expect.objectContaining({ runId, state: "error" }),
-        expect.anything(),
-      );
+      if (delegated) {
+        expect(dedupe.get(`chat:${runId}`)).toMatchObject({
+          ok: false,
+          payload: { runId, status: "error" },
+        });
+        expect(broadcast).toHaveBeenCalledExactlyOnceWith(
+          "chat",
+          expect.objectContaining({ runId, state: "error" }),
+          expect.anything(),
+        );
+      } else {
+        expect(dedupe.get(`chat:${runId}`)).toBe(terminalEntry);
+        expect(broadcast).not.toHaveBeenCalledWith(
+          "chat",
+          expect.objectContaining({ runId, state: "error" }),
+          expect.anything(),
+        );
+      }
     },
   );
 
@@ -792,10 +829,12 @@ describe("createChatSendDispatchErrorLifecycle", () => {
         sessionKey: "global",
         agentId: "ops",
         expectedWriter: {
+          allowUnstartedFailure: true,
           runId: clientRunId,
           sessionId: "sess-ops",
           lifecycleRevision: undefined,
         },
+        assertCommitAllowed: expect.any(Function),
         event: expect.objectContaining({
           runId: clientRunId,
           sessionId: "sess-ops",

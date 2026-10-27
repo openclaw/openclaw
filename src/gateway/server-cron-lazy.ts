@@ -3,6 +3,7 @@ import { DEFAULT_CRON_ENABLED } from "../config/cron-limits.js";
 import { captureSqliteReadOnlyWorkerScope } from "../infra/sqlite-readonly-worker-context.js";
 import { getSpawnBroker, runWithSpawnBroker } from "../process/spawn-broker/context.js";
 import { createLazyPromiseLoader, createLazyRuntimeMethodBinder } from "../shared/lazy-runtime.js";
+import { measureGatewayCloseStep } from "./restart-trace.js";
 import type {
   GatewayCronServiceContract,
   GatewayCronExitWatcherHandoff,
@@ -76,9 +77,11 @@ export function createLazyGatewayCronState(
     lifecycleGeneration += 1;
     exitWatcherHandoff ??= handoff;
     const loading = cronStateLoader.peek();
-    const resolved = loaded ?? (loading ? await loading : null);
+    const resolved =
+      loaded ??
+      (loading ? await measureGatewayCloseStep("restart.close.cron-load", () => loading) : null);
     if (resolved) {
-      await stopResolvedCron(resolved);
+      await measureGatewayCloseStep("restart.close.cron-owner", () => stopResolvedCron(resolved));
     }
   };
 

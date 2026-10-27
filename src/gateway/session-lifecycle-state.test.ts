@@ -4,7 +4,11 @@ import {
   setRuntimeConfigSnapshot,
 } from "../config/runtime-snapshot.js";
 import type { InternalSessionEntry as SessionEntry } from "../config/sessions.js";
-import { isStaleLifecycleEventForSession } from "../config/sessions/session-run-lifecycle-projection.js";
+import {
+  isStaleLifecycleEventForSession,
+  projectSessionLifecyclePatch,
+  type SessionLifecyclePatchInput,
+} from "../config/sessions/session-run-lifecycle-projection.js";
 import { getAgentEventLifecycleGeneration } from "../infra/agent-events.js";
 
 const persistenceMocks = vi.hoisted(() => ({
@@ -189,6 +193,53 @@ describe("session lifecycle state", () => {
     ]) {
       expect((await persistLifecycle(goalEntry, event)).goal).toEqual(goalEntry.goal);
     }
+  });
+
+  it("records an explicitly captured preparation failure only on its unowned session revision", () => {
+    const entry: SessionEntry = {
+      sessionId: "preparation-session",
+      lifecycleRevision: "preparation-revision",
+      updatedAt: 900,
+    };
+    const input: SessionLifecyclePatchInput = {
+      canonicalKey: "agent:main:preparation",
+      currentLifecycleGeneration: getAgentEventLifecycleGeneration(),
+      lifecycleRevision: entry.lifecycleRevision,
+      exactCronRun: false,
+      expectedWriter: {
+        allowUnstartedFailure: true,
+        runId: "preparation-run",
+        sessionId: entry.sessionId,
+        lifecycleRevision: entry.lifecycleRevision,
+      },
+      event: lifecycleEvent(
+        { phase: "error", startedAt: 1_000, endedAt: 2_000, error: "Checkout failed" },
+        { sessionId: entry.sessionId, runId: "preparation-run" },
+      ),
+    };
+    expect(projectSessionLifecyclePatch(entry, input).patch).toMatchObject({
+      status: "failed",
+      lastRunId: "preparation-run",
+    });
+    for (const replacement of [
+      { ...entry, activeWriterRunId: "other-run" },
+      { ...entry, lifecycleRunId: "other-run" },
+      { ...entry, sessionId: "replaced-session" },
+      { ...entry, lifecycleRevision: "replaced-revision" },
+      { ...entry, startedAt: 1_500 },
+    ]) {
+      expect(projectSessionLifecyclePatch(replacement, input).patch).toBeNull();
+    }
+    expect(
+      projectSessionLifecyclePatch(entry, {
+        ...input,
+        expectedWriter: {
+          runId: "preparation-run",
+          sessionId: entry.sessionId,
+          lifecycleRevision: entry.lifecycleRevision,
+        },
+      }).patch,
+    ).toBeNull();
   });
 
   it("does not guard when the owning sessionId is unknown (preserves legacy behavior)", () => {

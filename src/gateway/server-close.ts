@@ -634,6 +634,8 @@ async function closeGatewayResources(
                     () =>
                       drainGlobalSingletonLifecycleState(restart ? "restart" : "close", {
                         retainSharedState: params.retainSharedState,
+                        measureReset: (name, reset) =>
+                          measureGatewayCloseStep(`restart.close.global-singleton.${name}`, reset),
                       }),
                     PERSISTENCE_CLOSE_GRACE_MS,
                   );

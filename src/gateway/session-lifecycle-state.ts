@@ -31,6 +31,7 @@ type GatewaySessionLifecycleEventParams = {
   event: LifecycleEventLike;
   assertCommitAllowed?: () => void;
   expectedWriter?: {
+    allowUnstartedFailure?: true;
     requireYielded?: true;
     runId: string;
     sessionId: string;

@@ -5,9 +5,14 @@ import { loadSessionEntry, loadTranscriptEventsSync } from "../config/sessions/s
 import { captureSessionControllerSettlement } from "../sessions/session-controller.lifecycle.js";
 import { rpcSourceTesting } from "../sessions/session-lifecycle-admission.test-support.js";
 import { onSessionTranscriptUpdate } from "../sessions/transcript-events.js";
+import { waitForChatAbortTerminalPersistence } from "./chat-abort-lifecycle-internal.js";
 import { createChatAbortOps } from "./chat-abort-ops.js";
 import { abortChatRunById } from "./chat-abort.js";
-import { createDirectChatContext } from "./server-chat.agent-events.test-helpers.js";
+import {
+  createDirectChatContext,
+  subscribeAgentEvents,
+} from "./server-chat.agent-events.test-helpers.js";
+import type { createAgentEventHandler } from "./server-chat.js";
 import type { GatewayRequestContext, RespondFn } from "./server-methods/shared-types.js";
 import { captureChatResult } from "./server.chat-response.test-support.js";
 import { dispatchInboundMessageMock } from "./test-helpers.runtime-state.js";
@@ -15,6 +20,9 @@ import { dispatchInboundMessageMock } from "./test-helpers.runtime-state.js";
 type ChatScope = { agentId: string; sessionId: string; sessionKey: string; storePath: string };
 
 export function registerChatAdmissionRetryTests(harness: {
+  createAgentEventHandler: (
+    context: GatewayRequestContext,
+  ) => Promise<ReturnType<typeof createAgentEventHandler>>;
   withCommittedChatSession: (run: (scope: ChatScope) => Promise<void>) => Promise<void>;
   sendControlUiChat: (params: {
     context: GatewayRequestContext;
@@ -54,8 +62,16 @@ export function registerChatAdmissionRetryTests(harness: {
     const runId = "idem-admission-committed-abort";
     await harness.withCommittedChatSession(async (scope) => {
       const context = createDirectChatContext();
+      const handler = await harness.createAgentEventHandler(context);
+      let admittedSource: ReturnType<typeof rpcSourceTesting.get>;
+      const stopAgentEvents = subscribeAgentEvents((event) => {
+        if (event.runId === runId) {
+          return handler(event);
+        }
+      });
       const abortCommittedTurn = vi.fn(() => {
         const activeRun = expectDefined(rpcSourceTesting.get(runId), "expected admitted chat run");
+        admittedSource = activeRun;
         expect(
           abortChatRunById(createChatAbortOps(context), {
             runId,
@@ -92,7 +108,11 @@ export function registerChatAdmissionRetryTests(harness: {
             }),
           },
         ]);
+        await stopAgentEvents.drain();
         await settle(scope);
+        const source = expectDefined(admittedSource, "expected captured aborted source");
+        // Event delivery returns before the lifecycle owner's terminal write settles.
+        await waitForChatAbortTerminalPersistence(source);
         expect(dispatchInboundMessageMock).not.toHaveBeenCalled();
         expect(loadSessionEntry(scope)).toMatchObject({
           abortedLastRun: true,
@@ -111,6 +131,8 @@ export function registerChatAdmissionRetryTests(harness: {
         expectOneInput(scope, runId);
       } finally {
         stopListening();
+        await stopAgentEvents();
+        await handler.dispose();
       }
     });
   });

@@ -24,6 +24,7 @@ export type SessionLifecyclePatchInput = {
   exactCronRun: boolean;
   providerReview?: SessionLifecycleProviderReview;
   expectedWriter?: {
+    allowUnstartedFailure?: true;
     requireYielded?: true;
     runId: string;
     sessionId: string;
@@ -332,11 +333,21 @@ export function projectSessionLifecyclePatch(
     return { patch: null };
   }
   const expected = params.expectedWriter;
+  // Preparation can fail before a writer starts. Only its captured input may
+  // terminalize an otherwise unowned row; session, revision and time fences remain.
+  const unstartedFailure =
+    expected?.allowUnstartedFailure === true &&
+    phase === "error" &&
+    params.event.runId === expected.runId &&
+    entry.activeWriterRunId === undefined &&
+    entry.lifecycleRunId === undefined;
   if (
     expected &&
     (entry.sessionId !== expected.sessionId ||
       entry.lifecycleRevision !== expected.lifecycleRevision ||
-      (entry.activeWriterRunId !== expected.runId && entry.lifecycleRunId !== expected.runId) ||
+      (!unstartedFailure &&
+        entry.activeWriterRunId !== expected.runId &&
+        entry.lifecycleRunId !== expected.runId) ||
       (entry.activeWriterRunId !== undefined && entry.activeWriterRunId !== expected.runId) ||
       (entry.lifecycleRunId !== undefined && entry.lifecycleRunId !== expected.runId))
   ) {

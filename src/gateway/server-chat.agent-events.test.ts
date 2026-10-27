@@ -2154,7 +2154,7 @@ describe("agent event handler", () => {
       const h = createHarness({
         resolveSessionKeyForRun: () => sessionKey,
         lifecycleErrorRetryGraceMs: 100,
-        isChatSendRunActive: (id) => id === runId,
+        delegateChatError: (id) => id === runId,
       });
       if (linked) {
         h.register(runId, sessionKey, runId);

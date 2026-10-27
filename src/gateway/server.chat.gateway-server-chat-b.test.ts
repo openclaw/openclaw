@@ -50,6 +50,7 @@ import { readWarmChatStartup } from "./server-chat-startup.test-support.js";
 import {
   createChatVisionModelCatalogSnapshot,
   createDirectChatContext,
+  createHistoryEventHandler,
   createOversizedReplayTranscriptEvent,
   createTextTranscriptEvent,
   registerChatConnectionIdentityTest,
@@ -308,27 +309,6 @@ async function holdSessionMutation(
   });
   await started.promise;
   return { mutation };
-}
-
-async function createHistoryEventHandler(context: GatewayRequestContext) {
-  const {
-    createAgentEventHandler,
-    createSessionEventSubscriberRegistry,
-    createSessionMessageSubscriberRegistry,
-  } = await import("./server-chat.js");
-  return createAgentEventHandler({
-    broadcast: context.broadcast,
-    broadcastToConnIds: context.broadcastToConnIds,
-    nodeHasSessionSubscribers: () => false,
-    nodeSendToSession: context.nodeSendToSession,
-    agentRunSeq: context.agentRunSeq,
-    chatRunState: context.chatRunState,
-    resolveSessionKeyForRun: () => "main",
-    clearAgentRunContext: vi.fn(),
-    toolEventRecipients: context.chatRunState.toolEventRecipients,
-    sessionEventSubscribers: createSessionEventSubscriberRegistry(),
-    sessionMessageSubscribers: createSessionMessageSubscriberRegistry(),
-  });
 }
 
 function readOpenClawSeq(message: unknown): number | undefined {
@@ -1848,6 +1828,7 @@ describe("gateway server chat", () => {
   });
 
   registerChatAdmissionRetryTests({
+    createAgentEventHandler: createHistoryEventHandler,
     withCommittedChatSession: (run) =>
       withDirectChatSession(async (_sessionDir, storePath) => {
         await writeStoredMainSession(makeDoneSessionEntry());

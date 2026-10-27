@@ -262,11 +262,14 @@ export function startGatewayEventSubscriptions(params: GatewayEventSubscriptionP
             clearTrackedActiveRun,
             settleTrackedTerminal,
             trackTrackedRunTerminalPersistence,
-            isChatSendRunActive: (runId) => {
+            delegateChatError: (runId) => {
               const entry = getScopedRpcSource(runId);
-              // This callback identifies the terminal-response owner, not the
-              // sessions.list activity projection. Retain it while the source settles.
-              return entry !== undefined && entry.adapter.kind !== "agent";
+              if (!entry || entry.adapter.kind === "agent") {
+                return false;
+              }
+              // Source dispatch owns this response while native terminal persistence settles.
+              entry.adapter.chatErrorDispatchOwned = true;
+              return true;
             },
             resolveActiveLifecycleGenerationForRun: (runId) => {
               const entry = getScopedRpcSource(runId);

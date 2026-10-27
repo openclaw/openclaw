@@ -168,7 +168,7 @@ export type AgentEventHandlerOptions = {
   getSessionRowProjection?: () => SessionRowProjection | undefined;
   persistGatewaySessionLifecycleEventForEvent?: typeof persistGatewaySessionLifecycleEvent;
   lifecycleErrorRetryGraceMs?: number;
-  isChatSendRunActive?: (runId: string) => boolean;
+  delegateChatError?: (runId: string) => boolean;
   clearTrackedActiveRun?: (params: {
     runId: string;
     clientRunId: string;
@@ -238,7 +238,7 @@ export function createAgentEventHandler({
   getSessionRowProjection,
   persistGatewaySessionLifecycleEventForEvent = persistGatewaySessionLifecycleEvent,
   lifecycleErrorRetryGraceMs = AGENT_RUN_TERMINAL_RETRY_GRACE_MS,
-  isChatSendRunActive = () => false,
+  delegateChatError = () => false,
   clearTrackedActiveRun,
   settleTrackedTerminal,
   trackTrackedRunTerminalPersistence,
@@ -1377,7 +1377,7 @@ export function createAgentEventHandler({
     }
 
     if (lifecyclePhase === "error") {
-      const skipChatErrorFinal = isChatSendRunActive(evt.runId) && !chatLink;
+      const skipChatErrorFinal = !chatLink && delegateChatError(evt.runId);
       const definitiveTerminal = isDefinitiveRunLifecycle({
         phase: lifecyclePhase,
         data: evt.data,

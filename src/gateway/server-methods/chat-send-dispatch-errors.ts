@@ -19,7 +19,10 @@ import {
 import { resolveStateContentionPresentation } from "../../sessions/session-run-error-presentation.js";
 import type { UserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.js";
 import { captureAgentJobSession, setGatewayDedupeEntry } from "../agent-turn/agent-job.js";
-import { waitForChatAbortTerminalPersistence } from "../chat-abort-lifecycle-internal.js";
+import {
+  captureChatAbortRegistrationGuard,
+  waitForChatAbortTerminalPersistence,
+} from "../chat-abort-lifecycle-internal.js";
 import { errorShapeFromError } from "../error-shape.js";
 import { ExpectedProfileMismatchError } from "../expected-profile.js";
 import { chatAbortMarkerTimestampMs, type ChatAbortMarker } from "../server-chat-state.js";
@@ -118,6 +121,7 @@ export function resolveChatSendReturnedOutcome(params: {
 }
 
 type PendingDispatchLifecycleError = {
+  allowUnstartedFailure?: true;
   terminationFields: ReturnType<typeof resolveAgentRunErrorLifecycleFields>;
   endedAt: number;
   error: string;
@@ -283,6 +287,9 @@ export function createChatSendDispatchErrorLifecycle(params: {
   } = params;
   const { activeRunAbort, cleanupAdmittedRun, lifecycleGeneration } = admission;
   const { agentId, clientRunId, now, sessionKey } = session;
+  const isSourceCurrent = captureChatAbortRegistrationGuard([
+    { runId: clientRunId, entry: activeRunAbort.entry },
+  ]);
   const captureJobSession = () =>
     captureAgentJobSession({
       ...getRpcSourceIdentity(activeRunAbort.entry),
@@ -316,6 +323,7 @@ export function createChatSendDispatchErrorLifecycle(params: {
     if (
       !hidden &&
       (params.isReplyDispatchRun?.() ||
+        activeRunAbort.entry.adapter.chatErrorDispatchOwned === true ||
         activeRunAbort.entry.adapter.terminalOutcomeObserved !== true)
     ) {
       if (error.stopReason === "restart") {
@@ -356,6 +364,16 @@ export function createChatSendDispatchErrorLifecycle(params: {
         `webchat dispatch failed after followup queue admission: ${formatForLog(err)}`,
       );
       return;
+    }
+
+    if (activeRunAbort.entry.adapter.terminalOutcomeObserved === true) {
+      // Lifecycle observation precedes lazy delivery. Join only that accepted
+      // terminal, not this dispatch's own source-completion receipt.
+      await waitForChatAbortTerminalPersistence(activeRunAbort.entry).catch((error: unknown) => {
+        context.logGateway.warn(
+          `webchat terminal lifecycle settlement failed: ${formatForLog(error)}`,
+        );
+      });
     }
 
     // Capture ownership before cleanup yields. Preparation also aborts this
@@ -409,6 +427,7 @@ export function createChatSendDispatchErrorLifecycle(params: {
       !agentTerminalOwnedAtDispatchReject
     ) {
       pendingDispatchLifecycleError = {
+        allowUnstartedFailure: !params.isAgentRunStarted() ? true : undefined,
         terminationFields,
         endedAt: Date.now(),
         error: errorMessage,
@@ -419,10 +438,17 @@ export function createChatSendDispatchErrorLifecycle(params: {
         startedAt: getRpcSourceStartedAt(activeRunAbort.entry) ?? now,
       };
     }
-    if (!agentTerminalOwnedAtDispatchReject || params.isReplyDispatchRun?.()) {
+    if (
+      !agentTerminalOwnedAtDispatchReject ||
+      params.isReplyDispatchRun?.() ||
+      activeRunAbort.entry.adapter.chatErrorDispatchOwned === true
+    ) {
       // Native lifecycle owns its replay result; dispatched runtimes leave
       // failure projection to this owner, including transcript-write failures.
       const publish = () => {
+        if (!isSourceCurrent()) {
+          return;
+        }
         const restart = terminationFields.stopReason === "restart";
         const error = errorShapeFromError(ErrorCodes.UNAVAILABLE, err, { message: errorMessage });
         setGatewayDedupeEntry({
@@ -524,9 +550,15 @@ export function createChatSendDispatchErrorLifecycle(params: {
           sessionKey,
           ...(agentId ? { agentId } : {}),
           expectedWriter: {
+            ...(dispatchError.allowUnstartedFailure ? { allowUnstartedFailure: true } : {}),
             runId: clientRunId,
             sessionId: dispatchError.sessionId,
             lifecycleRevision: dispatchError.lifecycleRevision,
+          },
+          assertCommitAllowed: () => {
+            if (!isSourceCurrent()) {
+              throw new Error("Chat input was replaced before its failure could be persisted");
+            }
           },
           event: {
             runId: clientRunId,
