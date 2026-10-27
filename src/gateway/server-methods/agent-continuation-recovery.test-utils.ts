@@ -8,7 +8,7 @@ import {
   getActiveGatewayRootWorkCount,
   resetGatewayWorkAdmission,
 } from "../../process/gateway-work-admission.js";
-import { registerCronContinuationRecoveryCase } from "./agent.task-settlement.test-utils.js";
+import { registerCronContinuationRecoveryCase } from "./agent.settlement.test-utils.js";
 import {
   getAgentTestMocks,
   makeContext,

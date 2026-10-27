@@ -26,7 +26,7 @@ import {
   type GatewayCallOptions,
 } from "./gateway.js";
 import { getInProcessGatewayToolContext } from "./in-process-gateway.js";
-import { listNodes, type NodeListNode } from "./nodes-utils.js";
+import { invokeAgentNodeCommand, listNodes, type NodeListNode } from "./nodes-utils.js";
 
 export type ComputerBinding = {
   host: ComputerHost;
@@ -52,39 +52,6 @@ const COMPUTER_NODE_MESSAGES: EligibleNodeMessages<NodeListNode> = {
       .map((node) => node.nodeId)
       .join(", ")}`,
 };
-
-async function resolveComputerNode(
-  gatewayOpts: GatewayCallOptions,
-  query?: string,
-  signal?: AbortSignal,
-): Promise<NodeListNode> {
-  const nodes = await listNodes(gatewayOpts, signal);
-  return resolveEligibleNodeFromList(nodes, query, isEligibleComputerNode, COMPUTER_NODE_MESSAGES);
-}
-
-async function invokeNodeCommand(params: {
-  gatewayOpts: GatewayCallOptions;
-  nodeId: string;
-  command: string;
-  commandParams: Record<string, unknown>;
-  timeoutMs?: number;
-  idempotencyKey?: string;
-  signal?: AbortSignal;
-}): Promise<unknown> {
-  const raw = await callGatewayTool<{ payload: unknown }>(
-    "node.invoke",
-    params.gatewayOpts,
-    {
-      nodeId: params.nodeId,
-      command: params.command,
-      params: params.commandParams,
-      timeoutMs: params.timeoutMs,
-      idempotencyKey: params.idempotencyKey ?? crypto.randomUUID(),
-    },
-    { signal: params.signal },
-  );
-  return raw && typeof raw === "object" && Object.hasOwn(raw, "payload") ? raw.payload : raw;
-}
 
 export async function resolveComputerBinding(params: {
   executionId: string;
@@ -218,7 +185,7 @@ export async function resolveComputerBinding(params: {
       (prepared?.configured === false && params.target !== "gateway");
     const gateway =
       (usePrepared ? prepared : undefined) ??
-      (await loadGatewayComputerStatus(params.gatewayOpts, params.signal));
+      (await loadGatewayComputerStatus(params.gatewayOpts, params.signal, true));
     if (gateway.available) {
       assertHostedCaller();
       const close = await bindGatewayComputerCleanup({
@@ -260,17 +227,24 @@ export async function resolveComputerBinding(params: {
     }
     if (gateway.configured || params.target === "gateway") {
       throw new Error(
-        (gateway.configured ? gateway.error : undefined) ??
-          "Gateway computer is unavailable; enable its computer provider and desktop session",
+        gateway.configured
+          ? (gateway.error ??
+              "Gateway computer is unavailable; enable its computer provider and desktop session")
+          : "Gateway computer is not configured on this host. Omit target, or use target: node, to select a paired computer-capable node.",
       );
     }
   }
-  const node = await resolveComputerNode(params.gatewayOpts, params.node, params.signal);
+  const node = resolveEligibleNodeFromList(
+    await listNodes(params.gatewayOpts, params.signal),
+    params.node,
+    isEligibleComputerNode,
+    COMPUTER_NODE_MESSAGES,
+  );
   return {
     host: { host: "node", nodeId: node.nodeId },
     gatewayOpts: params.gatewayOpts,
     capabilities: node.computerUse,
     invoke: (request) =>
-      invokeNodeCommand({ ...request, nodeId: node.nodeId, gatewayOpts: params.gatewayOpts }),
+      invokeAgentNodeCommand({ ...request, nodeId: node.nodeId, gatewayOpts: params.gatewayOpts }),
   };
 }

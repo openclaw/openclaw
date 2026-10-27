@@ -286,8 +286,12 @@ Use `bindings` to route Yuanbao DMs or groups to different agents:
 ```json5
 {
   agents: {
+    ownership: "explicit",
+    defaults: {
+      systemAgent: { agentId: "main" },
+    },
     entries: {
-      main: { default: true },
+      main: { workspace: "~/.openclaw/workspace" },
       "agent-a": { workspace: "/home/user/agent-a" },
       "agent-b": { workspace: "/home/user/agent-b" },
     },
@@ -307,7 +311,9 @@ Use `bindings` to route Yuanbao DMs or groups to different agents:
         peer: { kind: "group", id: "group_zzz" },
       },
     },
+    { agentId: "main", match: { channel: "yuanbao", accountId: "*" } },
   ],
+  talk: { agentId: "main" },
 }
 ```
 

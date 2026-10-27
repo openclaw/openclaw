@@ -3,8 +3,11 @@ import { createServer as createHttpsServer } from "node:https";
 import net from "node:net";
 import { rawDataToString } from "@openclaw/gateway-client/websocket-data";
 import { Value } from "typebox/value";
-import { describe, expect, it, vi } from "vitest";
-import { WebSocket, WebSocketServer } from "ws";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import {
+  WebSocket,
+  WebSocketServer,
+} from "../../packages/gateway-client/src/websocket.test-support.js";
 import {
   GATEWAY_CLIENT_IDS,
   GATEWAY_CLIENT_MODES,
@@ -22,15 +25,18 @@ import type {
 } from "../../packages/gateway-protocol/src/schema/worker-inference.js";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { TEST_TLS_CERT_PEM, TEST_TLS_KEY_PEM } from "../../test/helpers/tls-fixture.js";
+import { PRESENCE_QUERY_TIMEOUT_MS } from "../agents/tools/presence-tool-contract.js";
 import {
-  toWorkerConnectionError,
   WorkerAdmissionDeadlineExceededError,
   WorkerAdmissionError,
+  WorkerConnectionInterruptedError,
   WorkerConnectionStoppedError,
   WorkerFencedError,
+  type WorkerConnectionOptions,
 } from "./worker-connection-contract.js";
 import { WorkerConnectionEndpointError } from "./worker-connection-endpoint.js";
 import { WorkerConnectionFrameDispatcher } from "./worker-connection-frames.js";
+import { registerWorkerGatewayToolTransportTests } from "./worker-connection-gateway-tools.suite.js";
 import { createWorkerConnection, type WorkerConnectionState } from "./worker-connection.js";
 
 const FRAME_CONNECT_PARAMS: WorkerConnectParams = {
@@ -58,18 +64,30 @@ const FRAME_CONNECT_PARAMS: WorkerConnectParams = {
   },
 };
 
-function createIdleConnection() {
-  return createWorkerConnection({
+const activeConnections: ReturnType<typeof createWorkerConnection>[] = [];
+const servers: WebSocketServer[] = [];
+const cleanups: (() => Promise<void>)[] = [];
+afterEach(async () => {
+  vi.useRealTimers();
+  await Promise.all(activeConnections.splice(0).map((connection) => connection.stop()));
+  await Promise.all(servers.splice(0).map(closeServer));
+  for (const cleanup of cleanups.splice(0)) {
+    await cleanup();
+  }
+});
+
+function makeConnection(options: Partial<WorkerConnectionOptions> = {}) {
+  const connection = createWorkerConnection({
     endpoint: { kind: "unix", socketPath: "/tmp/worker-listener-isolation.sock" },
-    connectParams: {
-      ...FRAME_CONNECT_PARAMS,
-      admission: {
-        ...FRAME_CONNECT_PARAMS.admission,
-        sessionId: null,
-        runId: null,
-      },
-    },
+    connectParams: FRAME_CONNECT_PARAMS,
+    ...options,
   });
+  activeConnections.push(connection);
+  return connection;
+}
+
+function reply(socket: WebSocket, id: string, payload: unknown) {
+  socket.send(JSON.stringify({ type: "res", id, ok: true, payload }));
 }
 
 function sendWorkerHello(
@@ -77,221 +95,142 @@ function sendWorkerHello(
   id: string,
   admission: WorkerConnectParams["admission"],
 ) {
-  socket.send(
-    JSON.stringify({
-      type: "res",
-      id,
-      ok: true,
-      payload: {
-        type: "worker-hello-ok",
-        environmentId: admission.environmentId,
-        sessionId: admission.sessionId,
-        ownerEpoch: admission.ownerEpoch,
-        rpcSetVersion: admission.rpcSetVersion,
-        protocolFeatures: [...admission.handshake.protocolFeatures],
-        credentialExpiresAtMs: Date.now() + 60_000,
-        policy: { heartbeatIntervalMs: 60_000, maxPayload: 25 * 1024 * 1024 },
-      },
-    }),
-  );
+  reply(socket, id, {
+    type: "worker-hello-ok",
+    environmentId: admission.environmentId,
+    sessionId: admission.sessionId,
+    ownerEpoch: admission.ownerEpoch,
+    rpcSetVersion: admission.rpcSetVersion,
+    protocolFeatures: [...admission.handshake.protocolFeatures],
+    credentialExpiresAtMs: Date.now() + 60_000,
+    policy: { heartbeatIntervalMs: 60_000, maxPayload: 25 * 1024 * 1024 },
+  });
 }
 
-async function createAdmissionWriteFixture(onAdmissionRequestSent: () => void) {
-  type WriteCallback = NonNullable<Parameters<WebSocket["send"]>[2]>;
-  type WriteOptions = Parameters<WebSocket["send"]>[1];
+async function listen(autoClose = true) {
   const server = new WebSocketServer({ host: "127.0.0.1", port: 0 });
+  if (autoClose) {
+    servers.push(server);
+  }
+  return { server, endpoint: await listeningEndpoint(server) };
+}
+
+async function listeningEndpoint(server: WebSocketServer | net.Server, secure = false) {
   await once(server, "listening");
   const address = server.address();
   if (!address || typeof address === "string") {
     throw new Error("test gateway did not allocate a TCP port");
   }
-  const slot = () => ({
-    written: createDeferred<WriteCallback>(),
-    received: createDeferred<{ peer: WebSocket; id: string }>(),
-  });
-  let expected: ReturnType<typeof slot> | undefined;
-  const connection = createWorkerConnection({
-    endpoint: {
-      kind: "websocket",
-      url: `ws://127.0.0.1:${address.port}${WORKER_PUBLIC_INGRESS_PATH}`,
-    },
-    connectParams: FRAME_CONNECT_PARAMS,
-    reconnectBackoff: { initialMs: 1, maxMs: 1, factor: 1, jitter: 0 },
-    onAdmissionRequestSent,
-    createSocket: (url, options) => {
-      const attempt = expected;
-      if (!attempt) {
-        throw new Error("unexpected worker connection attempt");
-      }
-      expected = undefined;
-      const socket = new WebSocket(url, options);
-      const send = socket.send.bind(socket);
-      socket.send = (
-        data: Parameters<WebSocket["send"]>[0],
-        optionsOrCallback?: WriteOptions | WriteCallback,
-        callback?: WriteCallback,
-      ) => {
-        const onWritten = typeof optionsOrCallback === "function" ? optionsOrCallback : callback;
-        const holdCompletion: WriteCallback = (error) => {
-          if (error) {
-            onWritten?.(error);
-            attempt.written.reject(error);
-            return;
-          }
-          // Bytes really crossed the socket; admission observes completion only when released.
-          attempt.written.resolve((writeError) => onWritten?.(writeError));
-        };
-        if (typeof optionsOrCallback === "function" || optionsOrCallback === undefined) {
-          send(data, holdCompletion);
-        } else {
-          send(data, optionsOrCallback, holdCompletion);
-        }
-      };
-      return socket;
-    },
-  });
-  const nextAttempt = () => {
-    if (expected) {
-      throw new Error("worker connection attempt is already expected");
-    }
-    const attempt = slot();
-    expected = attempt;
-    server.once("connection", (peer) => {
-      peer.once("message", (data) => {
-        try {
-          const frame: unknown = JSON.parse(rawDataToString(data));
-          if (!Value.Check(WorkerConnectRequestFrameSchema, frame)) {
-            throw new Error("expected the worker admission request");
-          }
-          attempt.received.resolve({ peer, id: frame.id });
-        } catch (error) {
-          attempt.received.reject(error);
-        }
-      });
-    });
-    return Promise.all([attempt.written.promise, attempt.received.promise]).then(
-      ([completeWrite, received]) => ({ completeWrite, ...received }),
-    );
-  };
-  const first = nextAttempt();
-  const starting = connection.start();
-  const settled = starting.catch((error: unknown) => error);
   return {
-    connection,
-    first,
-    starting,
-    settled,
-    nextAttempt,
-    async close() {
-      await connection.stop();
-      for (const peer of server.clients) {
-        peer.terminate();
-      }
-      await new Promise<void>((resolve, reject) => {
-        server.close((error) => (error ? reject(error) : resolve()));
-      });
-      await settled;
-    },
+    kind: "websocket" as const,
+    url: `${secure ? "wss" : "ws"}://127.0.0.1:${address.port}${WORKER_PUBLIC_INGRESS_PATH}`,
   };
 }
 
-describe("worker admission write completion", () => {
-  it.each([false, true])(
-    "notifies only after the request write completes, isolating observer failure: %s",
-    async (throws) => {
-      const sent = vi.fn(() => {
-        if (throws) {
-          throw new Error("induced admission observer failure");
-        }
-      });
-      const f = await createAdmissionWriteFixture(sent);
+function acceptHello(server: WebSocketServer) {
+  const admitted = createDeferred<WebSocket>();
+  server.once("connection", (peer) => {
+    peer.once("message", (data) => {
       try {
-        const attempt = await f.first;
-        expect(sent).not.toHaveBeenCalled();
-        expect(f.connection.state.kind).toBe("admitting");
-        expect(() => attempt.completeWrite()).not.toThrow();
-        expect(sent).toHaveBeenCalledOnce();
-        expect(f.connection.state.kind).toBe("admitting");
-        sendWorkerHello(attempt.peer, attempt.id, FRAME_CONNECT_PARAMS.admission);
-        await f.starting;
-        expect(f.connection.state.kind).toBe("ready");
-        expect(sent).toHaveBeenCalledOnce();
-      } finally {
-        await f.close();
+        const frame: unknown = JSON.parse(rawDataToString(data));
+        if (!Value.Check(WorkerConnectRequestFrameSchema, frame)) {
+          throw new Error("expected the worker admission request");
+        }
+        sendWorkerHello(peer, frame.id, FRAME_CONNECT_PARAMS.admission);
+        admitted.resolve(peer);
+      } catch (error) {
+        admitted.reject(error);
       }
-    },
-  );
+    });
+  });
+  return admitted.promise;
+}
 
-  it.each(["stop", "denied hello", "accepted hello"] as const)(
-    "ignores late request-write completion after %s",
-    async (boundary) => {
-      const sent = vi.fn();
-      const f = await createAdmissionWriteFixture(sent);
-      try {
-        const attempt = await f.first;
-        if (boundary === "stop") {
-          await f.connection.stop();
-          expect(await f.settled).toBeInstanceOf(WorkerConnectionStoppedError);
-        } else if (boundary === "denied hello") {
-          attempt.peer.send(
-            JSON.stringify({
-              type: "res",
-              id: attempt.id,
-              ok: false,
-              error: {
-                code: "INVALID_REQUEST",
-                message: "invalid admission",
-                details: { reason: "invalid-handshake" },
-                retryable: false,
-              },
-            }),
-          );
-          expect(await f.settled).toBeInstanceOf(WorkerAdmissionError);
-        } else {
-          sendWorkerHello(attempt.peer, attempt.id, FRAME_CONNECT_PARAMS.admission);
-          await f.starting;
-          expect(f.connection.state.kind).toBe("ready");
-        }
-        expect(() => attempt.completeWrite()).not.toThrow();
-        expect(sent).not.toHaveBeenCalled();
-      } finally {
-        await f.close();
-      }
-    },
-  );
+async function closeServer(server: WebSocketServer) {
+  for (const peer of server.clients) {
+    peer.terminate();
+  }
+  await closeListener(server);
+}
 
-  it.each(["failed write", "replaced socket"] as const)(
-    "only notifies for the current successful attempt after %s",
-    async (interruption) => {
-      const sent = vi.fn();
-      const f = await createAdmissionWriteFixture(sent);
-      try {
-        const first = await f.first;
-        const replacement = f.nextAttempt();
-        if (interruption === "failed write") {
-          first.completeWrite(new Error("induced admission write failure"));
-        } else {
-          first.peer.close(1012, "gateway-unavailable");
-        }
-        const second = await replacement;
-        expect(second.peer).not.toBe(first.peer);
-        expect(f.connection.state).toEqual({ kind: "admitting", attempt: 1 });
-        if (interruption === "replaced socket") {
-          first.completeWrite();
-        }
-        expect(sent).not.toHaveBeenCalled();
-        second.completeWrite();
-        expect(sent).toHaveBeenCalledOnce();
-        sendWorkerHello(second.peer, second.id, FRAME_CONNECT_PARAMS.admission);
-        await f.starting;
-        expect(f.connection.state.kind).toBe("ready");
-      } finally {
-        await f.close();
-      }
+function closeListener(server: WebSocketServer | net.Server) {
+  return new Promise<void>((resolve, reject) => {
+    server.close((error) => (error ? reject(error) : resolve()));
+  });
+}
+
+it("keeps a presence read pending through both cold geolocation download windows", async () => {
+  const { server, endpoint } = await listen();
+  const admitted = acceptHello(server);
+  const connection = makeConnection({ endpoint });
+  const [peer] = await Promise.all([admitted, connection.start()]);
+  vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+  const received = once(peer, "message");
+  const pending = connection.invokeGatewayTool(
+    {
+      generation: "presence-surface",
+      toolId: "presence",
+      toolCallId: "cold-presence",
+      arguments: { action: "list", include: ["location"] },
+    },
+    { timeoutMs: PRESENCE_QUERY_TIMEOUT_MS },
+  );
+  let settled = false;
+  void pending.then(
+    () => {
+      settled = true;
+    },
+    () => {
+      settled = true;
     },
   );
+  const [data] = await received;
+  const frame = JSON.parse(rawDataToString(data));
+  await vi.advanceTimersByTimeAsync(240_001);
+  expect(settled).toBe(false);
+  reply(peer, frame.id, { content: [], details: { status: "ok" } });
+  await expect(pending).resolves.toMatchObject({ ok: true });
 });
-
+it("settles admitted heartbeat work before stop releases cleanup", async () => {
+  const { server, endpoint } = await listen();
+  const admitted = acceptHello(server);
+  const entered = createDeferred<() => void>();
+  const release = createDeferred();
+  const connection = makeConnection({
+    endpoint,
+    onHeartbeat: async (_result, assertCurrent) => {
+      entered.resolve(assertCurrent);
+      await release.promise;
+    },
+  });
+  vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+  try {
+    const [peer] = await Promise.all([admitted, connection.start()]);
+    const heartbeat = once(peer, "message");
+    await vi.advanceTimersByTimeAsync(60_000);
+    const [data] = await heartbeat;
+    const frame = JSON.parse(rawDataToString(data));
+    reply(peer, frame.id, {
+      receivedAtMs: Date.now(),
+      status: "ok",
+      ownerEpoch: FRAME_CONNECT_PARAMS.admission.ownerEpoch,
+    });
+    const assertCurrent = await entered.promise;
+    let stopped = false;
+    const stopping = connection.stop().then(() => {
+      stopped = true;
+    });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(connection.state.kind).toBe("stopped");
+    expect(assertCurrent).toThrow(WorkerConnectionInterruptedError);
+    expect(stopped).toBe(false);
+    release.resolve();
+    await stopping;
+    expect(stopped).toBe(true);
+  } finally {
+    release.resolve();
+  }
+});
 function createFrameDispatcher() {
   return new WorkerConnectionFrameDispatcher({
     connectParams: () => FRAME_CONNECT_PARAMS,
@@ -304,52 +243,30 @@ function createFrameDispatcher() {
   });
 }
 
-function inferenceEventFrame(seq: number): WorkerInferenceEventFrame {
-  return {
-    type: "event",
-    event: "worker.inference.event",
-    payload: {
-      runEpoch: 1,
-      sessionId: "session-1",
-      runId: "run-1",
-      turnId: "turn-1",
-      seq,
-      event: { type: "text_delta", contentIndex: 0, delta: `chunk-${seq}` },
-    },
-  };
-}
-
-function inferenceTerminalFrame(seq: number): WorkerInferenceTerminalFrame {
-  return {
-    type: "event",
-    event: "worker.inference.terminal",
-    payload: {
-      runEpoch: 1,
-      sessionId: "session-1",
-      runId: "run-1",
-      turnId: "turn-1",
-      seq,
-      outcome: {
-        type: "error",
-        reason: "provider-error",
-        message: `failure-${seq}`,
-      },
-    },
-  };
-}
-
-function installThrowingThenHealthyListeners(connection: ReturnType<typeof createIdleConnection>) {
-  let throwingCalls = 0;
-  const observed: WorkerConnectionState["kind"][] = [];
-  connection.onStateChange(() => {
-    throwingCalls += 1;
-    throw new Error("induced observer failure");
-  });
-  connection.onStateChange((state) => {
-    observed.push(state.kind);
-  });
-  return { observed, throwingCalls: () => throwingCalls };
-}
+const inferenceIdentity = {
+  runEpoch: 1,
+  sessionId: "session-1",
+  runId: "run-1",
+  turnId: "turn-1",
+};
+const inferenceEventFrame = (seq: number): WorkerInferenceEventFrame => ({
+  type: "event",
+  event: "worker.inference.event",
+  payload: {
+    ...inferenceIdentity,
+    seq,
+    event: { type: "text_delta", contentIndex: 0, delta: `chunk-${seq}` },
+  },
+});
+const inferenceTerminalFrame = (seq: number): WorkerInferenceTerminalFrame => ({
+  type: "event",
+  event: "worker.inference.terminal",
+  payload: {
+    ...inferenceIdentity,
+    seq,
+    outcome: { type: "error", reason: "provider-error", message: `failure-${seq}` },
+  },
+});
 
 describe("worker connection endpoint failures", () => {
   it("rejects a TLS pin mismatch before upgrade without retrying admission", async () => {
@@ -359,16 +276,13 @@ describe("worker connection endpoint failures", () => {
     let connections = 0;
     let httpBytes = 0;
     let connectFrames = 0;
-    let resolvePeerClosed!: () => void;
-    const peerClosed = new Promise<void>((resolve) => {
-      resolvePeerClosed = resolve;
-    });
+    const peerClosed = createDeferred();
     server.on("connection", (peer) => {
       connections += 1;
       peers.add(peer);
       peer.once("close", () => {
         peers.delete(peer);
-        resolvePeerClosed();
+        peerClosed.resolve();
       });
     });
     server.on("secureConnection", (peer) => {
@@ -381,20 +295,21 @@ describe("worker connection endpoint failures", () => {
         connectFrames += 1;
       });
     });
+    cleanups.push(async () => {
+      for (const peer of peers) {
+        peer.destroy();
+      }
+      await closeServer(websocketServer);
+      await closeListener(server);
+    });
     server.listen(0, "127.0.0.1");
-    await once(server, "listening");
-    const address = server.address();
-    if (!address || typeof address === "string") {
-      throw new Error("test gateway did not allocate a TCP port");
-    }
-    const connection = createWorkerConnection({
+    const endpoint = await listeningEndpoint(server, true);
+    const connection = makeConnection({
       endpoint: {
-        kind: "websocket",
-        url: `wss://127.0.0.1:${address.port}${WORKER_PUBLIC_INGRESS_PATH}`,
+        ...endpoint,
         tlsFingerprint: "ab".repeat(32),
         cloudflareAccess: { clientId: "fixture-client-id", clientSecret: "fixture-client-secret" },
       },
-      connectParams: FRAME_CONNECT_PARAMS,
       admissionTimeoutMs: 1_000,
       admissionDeadlineMs: 3_000,
       reconnectBackoff: { initialMs: 10, maxMs: 10, factor: 1, jitter: 0 },
@@ -402,114 +317,79 @@ describe("worker connection endpoint failures", () => {
     const states: WorkerConnectionState["kind"][] = [];
     connection.onStateChange((state) => states.push(state.kind));
 
-    try {
-      const error = await connection.start().catch((cause: unknown) => cause);
-      await peerClosed;
-      expect(error).toBeInstanceOf(WorkerConnectionEndpointError);
-      expect(error).toMatchObject({ message: "gateway tls fingerprint mismatch" });
-      expect(states).toEqual(["connecting", "failed"]);
-      await expect(connection.waitForExit()).resolves.toEqual({ kind: "failed", error });
-      expect(connections).toBe(1);
-      expect(httpBytes).toBe(0);
-      expect(connectFrames).toBe(0);
-    } finally {
-      await connection.stop();
-      for (const socket of websocketServer.clients) {
-        socket.terminate();
-      }
-      for (const peer of peers) {
-        peer.destroy();
-      }
-      await new Promise<void>((resolve) => {
-        websocketServer.close(() => resolve());
-      });
-      await new Promise<void>((resolve, reject) => {
-        server.close((error) => (error ? reject(error) : resolve()));
-      });
-    }
+    const error = await connection.start().catch((cause: unknown) => cause);
+    await peerClosed.promise;
+    expect(error).toBeInstanceOf(WorkerConnectionEndpointError);
+    expect(error).toMatchObject({ message: "gateway tls fingerprint mismatch" });
+    expect(states).toEqual(["connecting", "failed"]);
+    await expect(connection.waitForExit()).resolves.toEqual({ kind: "failed", error });
+    expect({ connections, httpBytes, connectFrames }).toEqual({
+      connections: 1,
+      httpBytes: 0,
+      connectFrames: 0,
+    });
   });
 
   it.each([
-    "connect failure",
-    "no hello",
-    "retryable rejection",
-    "redacted connect failure",
-  ] as const)("retains the last %s diagnosis at the admission deadline", async (scenario) => {
-    vi.useFakeTimers();
-    const sockets: EventEmitter[] = [];
-    const diagnostics: Array<Error | undefined> = [];
-    const endpointUrl =
-      "wss://fixture-user:fixture-password@gateway.example:8443/private/__openclaw__/worker?token=fixture-token";
-    const connection = createWorkerConnection({
-      endpoint: {
-        kind: "websocket",
-        url: endpointUrl,
-        cloudflareAccess: { clientId: "fixture-client-id", clientSecret: "fixture-client-secret" },
-      },
-      connectParams: FRAME_CONNECT_PARAMS,
-      admissionTimeoutMs: 300,
-      admissionDeadlineMs: 1_000,
-      reconnectBackoff: { initialMs: 100, maxMs: 100, factor: 1, jitter: 0 },
-      onConnectionFailure: (error) => diagnostics.push(error),
-      createSocket: () => {
-        const socket = Object.assign(new EventEmitter(), {
-          readyState: 0,
-          send: (raw: string) => {
-            if (scenario === "retryable rejection") {
-              socket.emit(
-                "message",
-                Buffer.from(
-                  JSON.stringify({
-                    type: "res",
-                    id: JSON.parse(raw).id,
-                    ok: false,
-                    error: {
-                      code: "INVALID_REQUEST",
-                      message: "unavailable",
-                      details: { reason: "gateway-unavailable" },
-                      retryable: true,
-                    },
-                  }),
-                ),
-              );
-            }
+    ["no hello", 0],
+    ["redacted connect failure", 0],
+    ["no hello", -60_000],
+    ["no hello", 60_000],
+  ] as const)(
+    "retains the last %s diagnosis at the admission deadline (wall-clock shift: %dms)",
+    async (scenario, wallClockShiftMs) => {
+      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date", "performance"] });
+      const sockets: EventEmitter[] = [];
+      const diagnostics: Array<Error | undefined> = [];
+      const endpointUrl =
+        "wss://fixture-user:fixture-password@gateway.example:8443/private/__openclaw__/worker?token=fixture-token";
+      const connection = makeConnection({
+        endpoint: {
+          kind: "websocket",
+          url: endpointUrl,
+          cloudflareAccess: {
+            clientId: "fixture-client-id",
+            clientSecret: "fixture-client-secret",
           },
-          close: () => socket.emit("close", 1006, Buffer.alloc(0)),
-          terminate: () => socket.emit("close", 1006, Buffer.alloc(0)),
-        });
-        sockets.push(socket);
-        setTimeout(() => {
-          if (scenario === "connect failure" || scenario === "redacted connect failure") {
-            const detail =
-              scenario === "redacted connect failure"
-                ? `Opening handshake has timed out ${FRAME_CONNECT_PARAMS.admission.credential} fixture-client-secret ${endpointUrl} ${"x".repeat(4_096)}`
-                : "Opening handshake has timed out";
-            socket.emit("error", new Error(sockets.length === 1 ? "ECONNREFUSED" : detail));
-            socket.emit("close", 1006, Buffer.alloc(0));
-          } else {
-            socket.readyState = 1;
-            socket.emit("open");
-          }
-        }, 0);
-        return socket as unknown as WebSocket;
-      },
-    });
-    const expected =
-      scenario === "connect failure" || scenario === "redacted connect failure"
-        ? "connect failed: Opening handshake has timed out"
-        : scenario === "no hello"
-          ? "no hello within deadline"
-          : "worker admission rejected: gateway-unavailable";
-    try {
+        },
+        admissionTimeoutMs: 300,
+        admissionDeadlineMs: 1_000,
+        reconnectBackoff: { initialMs: 100, maxMs: 100, factor: 1, jitter: 0 },
+        onConnectionFailure: (error) => diagnostics.push(error),
+        createSocket: () => {
+          const socket = Object.assign(new EventEmitter(), {
+            readyState: 0,
+            send: () => {},
+            close: () => socket.emit("close", 1006, Buffer.alloc(0)),
+            terminate: () => socket.emit("close", 1006, Buffer.alloc(0)),
+          });
+          sockets.push(socket);
+          setTimeout(() => {
+            if (scenario === "redacted connect failure") {
+              const detail = `Opening handshake has timed out ${FRAME_CONNECT_PARAMS.admission.credential} fixture-client-secret ${endpointUrl} ${"x".repeat(4_096)}`;
+              socket.emit("error", new Error(sockets.length === 1 ? "ECONNREFUSED" : detail));
+              socket.emit("close", 1006, Buffer.alloc(0));
+            } else {
+              socket.readyState = 1;
+              socket.emit("open");
+            }
+          }, 0);
+          return socket as unknown as WebSocket;
+        },
+      });
+      const expected =
+        scenario === "redacted connect failure"
+          ? "connect failed: Opening handshake has timed out"
+          : "no hello within deadline";
       const starting = connection.start().catch((error: unknown) => error);
+      vi.setSystemTime(Date.now() + wallClockShiftMs);
       await vi.advanceTimersByTimeAsync(1_000);
+      expect(connection.state.kind).toBe("failed");
       const error = await starting;
       expect(error).toBeInstanceOf(WorkerAdmissionDeadlineExceededError);
-      expect(error).toMatchObject({ message: expect.stringContaining(expected) });
-      expect(error).toMatchObject({ message: expect.stringContaining("gateway.example:8443") });
-      expect(error).toMatchObject({
-        message: expect.stringContaining(`after ${sockets.length} attempts`),
-      });
+      for (const part of [expected, "gateway.example:8443", `after ${sockets.length} attempts`]) {
+        expect(error).toMatchObject({ message: expect.stringContaining(part) });
+      }
       expect(sockets.length).toBeGreaterThan(1);
       expect(diagnostics.at(-1)).toBe(error);
       const message = (error as Error).message;
@@ -524,101 +404,18 @@ describe("worker connection endpoint failures", () => {
         expect(message).not.toContain(secret);
       }
       await expect(connection.waitForExit()).resolves.toEqual({ kind: "failed", error });
-    } finally {
-      await connection.stop();
-      vi.useRealTimers();
-    }
-  });
-
-  it("fails insecure public endpoints without entering reconnect backoff", async () => {
-    const createSocket = vi.fn();
-    const connection = createWorkerConnection({
-      endpoint: {
-        kind: "websocket",
-        url: "ws://gateway.example/__openclaw__/worker",
-      },
-      connectParams: FRAME_CONNECT_PARAMS,
-      createSocket,
-      admissionDeadlineMs: 60_000,
-      reconnectBackoff: { initialMs: 30_000, maxMs: 30_000, factor: 1, jitter: 0 },
-    });
-    const terminalErrors: Error[] = [];
-    connection.onTerminalError((error) => terminalErrors.push(error));
-
-    await expect(connection.start()).rejects.toBeInstanceOf(WorkerConnectionEndpointError);
-    expect(terminalErrors).toHaveLength(1);
-    expect(connection.state).toEqual({ kind: "failed", error: terminalErrors[0] });
-    expect(createSocket).not.toHaveBeenCalled();
-  });
-
-  it("reports the last unreachable gateway cause with an operator hint", async () => {
-    const port = await new Promise<number>((resolve, reject) => {
-      const server = net.createServer();
-      server.once("error", reject);
-      server.listen(0, "127.0.0.1", () => {
-        const address = server.address();
-        if (!address || typeof address === "string") {
-          reject(new Error("test server did not allocate a TCP port"));
-          return;
-        }
-        server.close((error) => (error ? reject(error) : resolve(address.port)));
-      });
-    });
-    const endpoint = {
-      kind: "websocket" as const,
-      url: `ws://127.0.0.1:${port}${WORKER_PUBLIC_INGRESS_PATH}`,
-    };
-    const failures: string[] = [];
-    const connection = createWorkerConnection({
-      endpoint,
-      connectParams: FRAME_CONNECT_PARAMS,
-      admissionTimeoutMs: 25,
-      admissionDeadlineMs: 100,
-      reconnectBackoff: { initialMs: 1, maxMs: 1, factor: 1, jitter: 0 },
-      onConnectionFailure: (error) => {
-        if (error) {
-          failures.push(error.message);
-        }
-      },
-    });
-
-    try {
-      await expect(connection.start()).rejects.toBeInstanceOf(WorkerAdmissionDeadlineExceededError);
-      expect(failures.at(-2)).toMatch(
-        new RegExp(
-          `^worker could not reach gateway 127\\.0\\.0\\.1:${port}: .*ECONNREFUSED.*; check TLS pin/publicUrl configuration$`,
-          "u",
-        ),
-      );
-    } finally {
-      await connection.stop();
-    }
-  });
+    },
+  );
 
   it("does not report local cancellation as a gateway connection failure", async () => {
-    let acceptConnection!: (socket: net.Socket) => void;
-    const accepted = new Promise<net.Socket>((resolve) => {
-      acceptConnection = resolve;
-    });
-    const server = net.createServer(acceptConnection);
-    const port = await new Promise<number>((resolve, reject) => {
-      server.once("error", reject);
-      server.listen(0, "127.0.0.1", () => {
-        const address = server.address();
-        if (!address || typeof address === "string") {
-          reject(new Error("test server did not allocate a TCP port"));
-          return;
-        }
-        resolve(address.port);
-      });
-    });
+    const accepted = createDeferred<net.Socket>();
+    const server = net.createServer(accepted.resolve);
+    cleanups.push(() => closeListener(server));
+    server.listen(0, "127.0.0.1");
+    const endpoint = await listeningEndpoint(server);
     const failures: Error[] = [];
-    const connection = createWorkerConnection({
-      endpoint: {
-        kind: "websocket",
-        url: `ws://127.0.0.1:${port}${WORKER_PUBLIC_INGRESS_PATH}`,
-      },
-      connectParams: FRAME_CONNECT_PARAMS,
+    const connection = makeConnection({
+      endpoint,
       onConnectionFailure: (error) => {
         if (error) {
           failures.push(error);
@@ -626,25 +423,14 @@ describe("worker connection endpoint failures", () => {
       },
     });
     const starting = connection.start();
-    const peer = await accepted;
-
-    try {
-      await connection.stop();
-      await expect(starting).rejects.toBeInstanceOf(WorkerConnectionStoppedError);
-      expect(failures).toEqual([]);
-    } finally {
+    const peer = await accepted.promise;
+    cleanups.unshift(async () => {
       peer.destroy();
-      await connection.stop();
-      await new Promise<void>((resolve, reject) => {
-        server.close((error) => {
-          if (error) {
-            reject(error);
-            return;
-          }
-          resolve();
-        });
-      });
-    }
+    });
+
+    await connection.stop();
+    await expect(starting).rejects.toBeInstanceOf(WorkerConnectionStoppedError);
+    expect(failures).toEqual([]);
   });
 
   it.each([
@@ -655,20 +441,11 @@ describe("worker connection endpoint failures", () => {
     ),
     { terminal: "failed", boundary: "invalid frame" } as const,
   ])("keeps $terminal workers closed after $boundary", async ({ terminal, boundary }) => {
-    const server = new WebSocketServer({ host: "127.0.0.1", port: 0 });
-    await once(server, "listening");
-    const address = server.address();
-    if (!address || typeof address === "string") {
-      throw new Error("test gateway did not allocate a TCP port");
-    }
+    const { server, endpoint } = await listen();
     let clientClosed = Promise.resolve();
     let peerClosed = Promise.resolve();
-    const connection = createWorkerConnection({
-      endpoint: {
-        kind: "websocket",
-        url: `ws://127.0.0.1:${address.port}${WORKER_PUBLIC_INGRESS_PATH}`,
-      },
-      connectParams: FRAME_CONNECT_PARAMS,
+    const connection = makeConnection({
+      endpoint,
       createSocket: (url, options) => {
         const socket = new WebSocket(url, options);
         clientClosed = once(socket, "close").then(() => {});
@@ -711,257 +488,223 @@ describe("worker connection endpoint failures", () => {
     });
 
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
-    try {
-      if (boundary === "completed startup") {
-        await connection.start();
-        ready.mockClear();
-        terminate();
-      }
-      const result = await connection.start().catch((error: unknown) => error);
-      await Promise.all([clientClosed, peerClosed]);
-      expect.soft(result).toBeInstanceOf(
-        {
-          stopped: WorkerConnectionStoppedError,
-          fenced: WorkerFencedError,
-          failed: WorkerAdmissionError,
-        }[terminal],
-      );
-      expect.soft(connection.state.kind).toBe(terminal);
-      expect.soft(ready).not.toHaveBeenCalled();
-      expect.soft(vi.getTimerCount()).toBe(0);
-    } finally {
-      await connection.stop();
-      for (const socket of server.clients) {
-        socket.terminate();
-      }
-      await new Promise<void>((resolve, reject) => {
-        server.close((error) => (error ? reject(error) : resolve()));
-      });
-      vi.useRealTimers();
+    const pendingReady = Promise.allSettled([connection.waitForReady(), connection.waitForReady()]);
+    if (boundary === "completed startup") {
+      await connection.start();
+      ready.mockClear();
+      terminate();
     }
+    const result = await connection.start().catch((error: unknown) => error);
+    await Promise.all([clientClosed, peerClosed]);
+    const terminalError = {
+      stopped: WorkerConnectionStoppedError,
+      fenced: WorkerFencedError,
+      failed: WorkerAdmissionError,
+    }[terminal];
+    expect.soft(result).toBeInstanceOf(terminalError);
+    for (const outcome of await pendingReady) {
+      if (boundary === "ready observer" || boundary === "completed startup") {
+        expect.soft(outcome.status).toBe("fulfilled");
+      } else {
+        expect.soft(outcome).toMatchObject({
+          status: "rejected",
+          reason: expect.any(terminalError),
+        });
+      }
+    }
+    expect.soft(connection.state.kind).toBe(terminal);
+    expect.soft(ready).not.toHaveBeenCalled();
+    expect.soft(vi.getTimerCount()).toBe(0);
   });
 });
 
-describe("worker connection reconnect backoff", () => {
-  it("staggers twenty workers recovering from transient Gateway transport loss", async () => {
-    const server = new WebSocketServer({ host: "127.0.0.1", port: 0 });
-    await once(server, "listening");
-    const address = server.address();
-    if (!address || typeof address === "string") {
-      throw new Error("test gateway did not allocate a TCP port");
-    }
+it("staggers twenty workers recovering from transient Gateway transport loss", async () => {
+  const { server, endpoint } = await listen(false);
 
-    let available = true;
-    let transportInterrupted = false;
-    const unavailableWorkers = new Set<string>();
-    const recoveredWorkers = new Set<string>();
-    server.on("connection", (socket) => {
-      socket.on("message", (data) => {
-        const frame = JSON.parse(rawDataToString(data)) as {
-          id: string;
-          params: { admission: WorkerConnectParams["admission"] };
-        };
-        const admission = frame.params.admission;
-        if (!available) {
-          unavailableWorkers.add(admission.environmentId);
-          socket.send(
-            JSON.stringify({
-              type: "res",
-              id: frame.id,
-              ok: false,
-              error: {
-                code: "INVALID_REQUEST",
-                message: "gateway temporarily unavailable",
-                details: { reason: "gateway-unavailable" },
-                retryable: true,
-              },
-            }),
-          );
-          return;
-        }
-        if (transportInterrupted) {
-          recoveredWorkers.add(admission.environmentId);
-        }
-        sendWorkerHello(socket, frame.id, admission);
-      });
+  let available = true;
+  let transportInterrupted = false;
+  const unavailableWorkers = new Set<string>();
+  const recoveredWorkers = new Set<string>();
+  server.on("connection", (socket) => {
+    socket.on("message", (data) => {
+      const frame = JSON.parse(rawDataToString(data)) as {
+        id: string;
+        params: { admission: WorkerConnectParams["admission"] };
+      };
+      const admission = frame.params.admission;
+      if (!available) {
+        unavailableWorkers.add(admission.environmentId);
+        socket.send(
+          JSON.stringify({
+            type: "res",
+            id: frame.id,
+            ok: false,
+            error: {
+              code: "INVALID_REQUEST",
+              message: "gateway temporarily unavailable",
+              details: { reason: "gateway-unavailable" },
+              retryable: true,
+            },
+          }),
+        );
+        return;
+      }
+      if (transportInterrupted) {
+        recoveredWorkers.add(admission.environmentId);
+      }
+      sendWorkerHello(socket, frame.id, admission);
+    });
+  });
+
+  const workers = Array.from({ length: 20 }, (_, index) =>
+    makeConnection({
+      endpoint,
+      connectParams: {
+        ...FRAME_CONNECT_PARAMS,
+        admission: {
+          ...FRAME_CONNECT_PARAMS.admission,
+          environmentId: `reconnect-worker-${index}`,
+        },
+      },
+      admissionDeadlineMs: 10_000,
+    }),
+  );
+
+  let randomDraw = 0;
+  const random = vi.spyOn(Math, "random").mockImplementation(() => ((randomDraw++ % 20) + 1) / 21);
+  const retryDelays: number[] = [];
+  const originalSetTimeout = globalThis.setTimeout;
+  const timeout = vi
+    .spyOn(globalThis, "setTimeout")
+    .mockImplementation((callback, delay, ...args) => {
+      if (typeof delay === "number" && delay >= 250 && delay <= 275) {
+        retryDelays.push(delay);
+      }
+      return originalSetTimeout(callback, delay, ...args);
     });
 
-    const workers = Array.from({ length: 20 }, (_, index) =>
-      createWorkerConnection({
-        endpoint: {
-          kind: "websocket",
-          url: `ws://127.0.0.1:${address.port}${WORKER_PUBLIC_INGRESS_PATH}`,
-        },
-        connectParams: {
-          ...FRAME_CONNECT_PARAMS,
-          admission: {
-            ...FRAME_CONNECT_PARAMS.admission,
-            environmentId: `reconnect-worker-${index}`,
-          },
-        },
-        admissionDeadlineMs: 10_000,
-      }),
+  try {
+    await Promise.all(workers.map((worker) => worker.start()));
+    const readyAgain = workers.map(
+      (worker) =>
+        new Promise<void>((resolve) => {
+          const unsubscribe = worker.onReady(() => {
+            unsubscribe();
+            resolve();
+          });
+        }),
     );
 
-    let randomDraw = 0;
-    const random = vi
-      .spyOn(Math, "random")
-      .mockImplementation(() => ((randomDraw++ % 20) + 1) / 21);
-    const retryDelays: number[] = [];
-    const originalSetTimeout = globalThis.setTimeout;
-    const timeout = vi
-      .spyOn(globalThis, "setTimeout")
-      .mockImplementation((callback, delay, ...args) => {
-        if (typeof delay === "number" && delay >= 250 && delay <= 275) {
-          retryDelays.push(delay);
-        }
-        return originalSetTimeout(callback, delay, ...args);
-      });
+    available = false;
+    transportInterrupted = true;
+    for (const socket of server.clients) {
+      socket.close(1012, "gateway-unavailable");
+    }
+    await vi.waitFor(() => expect(unavailableWorkers.size).toBe(20), {
+      timeout: 3_000,
+      interval: 5,
+    });
+    available = true;
+    await Promise.all(readyAgain);
 
-    try {
-      await Promise.all(workers.map((worker) => worker.start()));
-      const readyAgain = workers.map(
-        (worker) =>
-          new Promise<void>((resolve) => {
-            const unsubscribe = worker.onReady(() => {
-              unsubscribe();
-              resolve();
-            });
-          }),
-      );
-
-      available = false;
-      transportInterrupted = true;
-      for (const socket of server.clients) {
-        socket.close(1012, "gateway-unavailable");
-      }
-      await vi.waitFor(() => expect(unavailableWorkers.size).toBe(20), {
-        timeout: 3_000,
-        interval: 5,
-      });
-      available = true;
-      await Promise.all(readyAgain);
-
-      expect(recoveredWorkers.size).toBe(20);
-      expect(retryDelays).toHaveLength(20);
-      expect(new Set(retryDelays).size).toBeGreaterThanOrEqual(10);
-      expect(Math.max(...retryDelays)).toBeLessThanOrEqual(30_000);
-    } finally {
-      random.mockRestore();
-      timeout.mockRestore();
-      await Promise.all(workers.map((worker) => worker.stop()));
-      await new Promise<void>((resolve, reject) => {
-        server.close((error) => (error ? reject(error) : resolve()));
-      });
+    expect(recoveredWorkers.size).toBe(20);
+    expect(retryDelays).toHaveLength(20);
+    expect(new Set(retryDelays).size).toBeGreaterThanOrEqual(10);
+    expect(Math.max(...retryDelays)).toBeLessThanOrEqual(30_000);
+  } finally {
+    random.mockRestore();
+    timeout.mockRestore();
+    await Promise.all(workers.map((worker) => worker.stop()));
+    await closeListener(server);
+  }
+});
+it("isolates listener failures and binds terminal errors during nested transitions", async () => {
+  const connection = makeConnection({
+    connectParams: {
+      ...FRAME_CONNECT_PARAMS,
+      admission: { ...FRAME_CONNECT_PARAMS.admission, sessionId: null, runId: null },
+    },
+  });
+  const observed: WorkerConnectionState["kind"][] = [];
+  const throwing = vi.fn(() => {
+    throw new Error("induced observer failure");
+  });
+  connection.onStateChange(throwing);
+  connection.onStateChange((state) => observed.push(state.kind));
+  const terminalErrors: Error[] = [];
+  connection.onStateChange((state) => {
+    if (state.kind === "fenced") {
+      void connection.stop();
     }
   });
+  connection.onTerminalError((error) => terminalErrors.push(error));
+
+  connection.fence("owner-epoch-mismatch");
+
+  expect(terminalErrors).toEqual([
+    new WorkerConnectionStoppedError(),
+    new WorkerFencedError("owner-epoch-mismatch"),
+  ]);
+  await expect(connection.waitForExit()).resolves.toEqual({
+    kind: "fenced",
+    reason: "owner-epoch-mismatch",
+  });
+  await expect(connection.stop()).resolves.toBeUndefined();
+  expect(connection.state).toEqual({ kind: "stopped" });
+  expect(throwing).toHaveBeenCalledTimes(2);
+  expect(observed).toEqual(["fenced", "stopped"]);
 });
 
-describe("worker connection error coercion", () => {
-  it("preserves structured non-Error causes", () => {
-    const cause = { code: "ECONNRESET", status: 503 };
+describe("WorkerConnection inference callback isolation", () => {
+  it.each([
+    ["invalid payload", { ...inferenceEventFrame(1), payload: {} }],
+    [
+      "wrong session",
+      {
+        ...inferenceEventFrame(1),
+        payload: { ...inferenceEventFrame(1).payload, sessionId: "other" },
+      },
+    ],
+    [
+      "wrong epoch",
+      {
+        ...inferenceTerminalFrame(1),
+        payload: { ...inferenceTerminalFrame(1).payload, runEpoch: 2 },
+      },
+    ],
+  ])("rejects %s before notifying the inference callback", (_label, frame) => {
+    const dispatcher = createFrameDispatcher();
+    const listener = vi.fn();
+    dispatcher.onInferenceFrame = listener;
+    const close = vi.fn();
+    const socket = { readyState: WebSocket.OPEN, close };
 
-    const error = toWorkerConnectionError(cause);
+    dispatcher.dispatchReadyFrame(frame, socket);
 
-    expect(error.message).toBe("[object Object]");
-    expect(error.cause).toBe(cause);
-    expect(error).toMatchObject(cause);
-  });
-});
-
-describe("WorkerConnection state listener isolation", () => {
-  it("settles stop and reaches later listeners when an earlier listener throws", async () => {
-    const connection = createIdleConnection();
-    const listeners = installThrowingThenHealthyListeners(connection);
-    const terminalErrors: Error[] = [];
-    connection.onTerminalError((error) => terminalErrors.push(error));
-    const exit = connection.waitForExit();
-
-    await expect(connection.stop()).resolves.toBeUndefined();
-    await expect(exit).resolves.toEqual({ kind: "stopped" });
-    await expect(connection.stop()).resolves.toBeUndefined();
-
-    expect(connection.state).toEqual({ kind: "stopped" });
-    expect(listeners.throwingCalls()).toBe(1);
-    expect(listeners.observed).toEqual(["stopped"]);
-    expect(terminalErrors).toEqual([new WorkerConnectionStoppedError()]);
-  });
-
-  it("settles fencing and reaches later listeners when an earlier listener throws", async () => {
-    const connection = createIdleConnection();
-    const listeners = installThrowingThenHealthyListeners(connection);
-    const terminalErrors: Error[] = [];
-    connection.onTerminalError((error) => terminalErrors.push(error));
-
-    expect(() => connection.fence("owner-epoch-mismatch")).not.toThrow();
-    await expect(connection.waitForExit()).resolves.toEqual({
-      kind: "fenced",
-      reason: "owner-epoch-mismatch",
-    });
-
-    expect(connection.state).toEqual({ kind: "fenced", reason: "owner-epoch-mismatch" });
-    expect(listeners.throwingCalls()).toBe(1);
-    expect(listeners.observed).toEqual(["fenced"]);
-    expect(terminalErrors).toEqual([new WorkerFencedError("owner-epoch-mismatch")]);
+    expect(close).toHaveBeenCalledWith(1008, "invalid-frame");
+    expect(listener).not.toHaveBeenCalled();
   });
 
-  it("keeps terminal errors bound to their emitted state during nested transitions", () => {
-    const connection = createIdleConnection();
-    const terminalErrors: Error[] = [];
-    connection.onStateChange((state) => {
-      if (state.kind === "fenced") {
-        void connection.stop();
+  it.each(["event", "terminal"] as const)(
+    "continues %s delivery after observer failures",
+    (kind) => {
+      const dispatcher = createFrameDispatcher();
+      const makeFrame = kind === "event" ? inferenceEventFrame : inferenceTerminalFrame;
+      const observed: number[] = [];
+      const socket = { readyState: WebSocket.OPEN, close: vi.fn() };
+      dispatcher.onInferenceFrame = () => {
+        throw new Error("induced observer failure");
+      };
+      expect(() => dispatcher.dispatchReadyFrame(makeFrame(1), socket)).not.toThrow();
+      dispatcher.onInferenceFrame = (frame) => {
+        observed.push(frame.payload.seq);
+      };
+      for (const seq of [1, 2]) {
+        expect(() => dispatcher.dispatchReadyFrame(makeFrame(seq), socket)).not.toThrow();
       }
-    });
-    connection.onTerminalError((error) => terminalErrors.push(error));
-
-    connection.fence("owner-epoch-mismatch");
-
-    expect(terminalErrors).toEqual([
-      new WorkerConnectionStoppedError(),
-      new WorkerFencedError("owner-epoch-mismatch"),
-    ]);
-  });
+      expect(observed).toEqual([1, 2]);
+    },
+  );
 });
 
-describe("WorkerConnection inference listener isolation", () => {
-  it("continues event delivery and processes later frames after an observer throws", () => {
-    const dispatcher = createFrameDispatcher();
-    const observed: number[] = [];
-    dispatcher.onInferenceEvent(() => {
-      throw new Error("induced event observer failure");
-    });
-    dispatcher.onInferenceEvent((frame) => {
-      observed.push(frame.payload.seq);
-    });
-
-    expect(() =>
-      dispatcher.dispatchReadyFrame(inferenceEventFrame(1), {} as WebSocket),
-    ).not.toThrow();
-    expect(() =>
-      dispatcher.dispatchReadyFrame(inferenceEventFrame(2), {} as WebSocket),
-    ).not.toThrow();
-
-    expect(observed).toEqual([1, 2]);
-  });
-
-  it("continues terminal delivery and processes later frames after an observer throws", () => {
-    const dispatcher = createFrameDispatcher();
-    const observed: number[] = [];
-    dispatcher.onInferenceTerminal(() => {
-      throw new Error("induced terminal observer failure");
-    });
-    dispatcher.onInferenceTerminal((frame) => {
-      observed.push(frame.payload.seq);
-    });
-
-    expect(() =>
-      dispatcher.dispatchReadyFrame(inferenceTerminalFrame(1), {} as WebSocket),
-    ).not.toThrow();
-    expect(() =>
-      dispatcher.dispatchReadyFrame(inferenceTerminalFrame(2), {} as WebSocket),
-    ).not.toThrow();
-
-    expect(observed).toEqual([1, 2]);
-  });
-});
+registerWorkerGatewayToolTransportTests(FRAME_CONNECT_PARAMS);

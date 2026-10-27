@@ -7,7 +7,7 @@ import Foundation
 
 struct RemotePortTunnelTests {
     @Test func `tunnel owns its SSH process instead of multiplexing`() {
-        let options = RemotePortTunnel._testSSHOptions(localPort: 28789, remotePort: 18789)
+        let options = RemotePortTunnel.sshOptions(localPort: 28789, remotePort: 18789, hostKeyPolicy: .strict)
 
         #expect(options.contains("ControlMaster=no"))
         #expect(options.contains("ControlPath=none"))
@@ -19,7 +19,7 @@ struct RemotePortTunnelTests {
     }
 
     @Test func `tunnel requires explicit opt in to use SSH config host key policy`() {
-        let options = RemotePortTunnel._testSSHOptions(
+        let options = RemotePortTunnel.sshOptions(
             localPort: 28789,
             remotePort: 18789,
             hostKeyPolicy: .openssh)
@@ -124,7 +124,7 @@ struct RemotePortTunnelSocketTests {
         guard got == 0 else { return }
 
         let port = UInt16(bigEndian: name.sin_port)
-        #expect(RemotePortTunnel._testPortIsFree(port) == false)
+        #expect(RemotePortTunnel.portIsFree(port) == false)
 
         _ = Darwin.close(fd)
         fd = -1
@@ -134,7 +134,7 @@ struct RemotePortTunnelSocketTests {
         let deadline = Date().addingTimeInterval(0.5)
         var free = false
         while Date() < deadline {
-            if RemotePortTunnel._testPortIsFree(port) {
+            if RemotePortTunnel.portIsFree(port) {
                 free = true
                 break
             }

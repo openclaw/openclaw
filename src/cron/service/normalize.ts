@@ -1,6 +1,4 @@
 import { truncateWithMarker } from "@openclaw/normalization-core/utf16-slice";
-/** Name, agent id, and payload text normalization helpers for cron service ops. */
-import type { CronPayload } from "../types.js";
 /** Normalizes optional cron agent ids through the canonical session-key agent id rules. */
 export { normalizeOptionalAgentId } from "../../routing/session-key.js";
 
@@ -55,14 +53,4 @@ export function inferCronJobName(job: {
     return "One-shot";
   }
   return "Automation";
-}
-
-/** Extracts the executable text from cron payload variants for main-session queueing. */
-export function normalizePayloadToSystemText(payload: CronPayload) {
-  if (payload.kind === "systemEvent") {
-    return typeof payload.text === "string" ? payload.text.trim() : "";
-  }
-  return payload.kind === "agentTurn" && typeof payload.message === "string"
-    ? payload.message.trim()
-    : "";
 }

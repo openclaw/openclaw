@@ -1,0 +1,458 @@
+import {
+  AbortMultipartUploadCommand,
+  CompleteMultipartUploadCommand,
+  CreateMultipartUploadCommand,
+  DeleteObjectCommand,
+  GetObjectCommand,
+  HeadBucketCommand,
+  HeadObjectCommand,
+  ListObjectsV2Command,
+  PutObjectCommand,
+  S3ServiceException,
+  UploadPartCommand,
+  type CompletedPart,
+  type GetObjectCommandOutput,
+  type S3Client,
+} from "@aws-sdk/client-s3";
+import type { StorageBackend } from "openclaw/plugin-sdk/plugin-entry";
+import { racePromiseWithAbortSignal } from "openclaw/plugin-sdk/time-runtime";
+import { describeR2Target, type R2Settings } from "./settings.js";
+
+const PART_BYTES = 64 * 1024 * 1024;
+const MAX_PARTS = 10_000;
+// Scale recovery with object size, not elapsed time on a slow connection.
+const DOWNLOAD_RETRIES_PER_PART = 8;
+
+class R2StorageError extends Error {}
+
+function downloadRetryReason(error: unknown): string | undefined {
+  if (error instanceof S3ServiceException) {
+    const code = error.$metadata.httpStatusCode;
+    return code === 500 || code === 502 || code === 503 || code === 504
+      ? `HTTP ${code}`
+      : undefined;
+  }
+  if (error instanceof Error) {
+    const code = "code" in error ? error.code : error.name;
+    if (
+      typeof code === "string" &&
+      [
+        "ECONNRESET",
+        "ETIMEDOUT",
+        "ESOCKETTIMEDOUT",
+        "ECONNABORTED",
+        "EPIPE",
+        "ERR_STREAM_PREMATURE_CLOSE",
+        "TimeoutError",
+        "RequestTimeout",
+      ].includes(code)
+    ) {
+      return code;
+    }
+  }
+  return undefined;
+}
+
+function missingObject(error: unknown): boolean {
+  return (
+    error instanceof S3ServiceException &&
+    error.name !== "NoSuchBucket" &&
+    (error.$metadata.httpStatusCode === 404 ||
+      error.name === "NoSuchKey" ||
+      error.name === "NotFound")
+  );
+}
+
+function storageError(error: unknown, settings: R2Settings, operation: string): Error {
+  if (error instanceof R2StorageError) {
+    return error;
+  }
+  if (error instanceof Error && error.name === "AbortError") {
+    const aborted = new Error("R2 operation aborted; retry when ready.");
+    aborted.name = "AbortError";
+    return aborted;
+  }
+  if (error instanceof S3ServiceException) {
+    const code = error.$metadata.httpStatusCode;
+    if (code === 401 || code === 403) {
+      return new R2StorageError(
+        `R2 access denied: the R2 token needs Object Read & Write on bucket ${settings.bucket}.`,
+      );
+    }
+    if (error.name === "NoSuchBucket" || (operation === "probe" && code === 404)) {
+      return new R2StorageError(
+        `R2 bucket is missing; create bucket ${settings.bucket} in account ${settings.accountId}.`,
+      );
+    }
+    if (code === 409 || code === 412) {
+      return new R2StorageError(
+        "R2 object already exists or a concurrent write conflicted; use a new object key.",
+      );
+    }
+  }
+  // SDK, stream, and abort-reason errors may contain credentials or signed URLs.
+  return new R2StorageError(
+    `R2 ${operation} failed; check the bucket settings, credentials, and connection, then retry.`,
+  );
+}
+
+function assertSize(sizeBytes: number | undefined, actual: number): void {
+  if (sizeBytes !== undefined && sizeBytes !== actual) {
+    throw new R2StorageError(
+      "R2 object does not match its declared size; provide the exact byte count or omit sizeBytes.",
+    );
+  }
+}
+
+async function* uploadChunks(body: AsyncIterable<Uint8Array>, signal?: AbortSignal) {
+  signal?.throwIfAborted();
+  const iterator = body[Symbol.asyncIterator]();
+  let exhausted = false;
+  try {
+    while (true) {
+      const next = await racePromiseWithAbortSignal(
+        () => iterator.next(),
+        signal,
+        () => {
+          const error = new Error("R2 upload aborted; retry when ready.");
+          error.name = "AbortError";
+          return error;
+        },
+      );
+      if (next.done) {
+        exhausted = true;
+        return;
+      }
+      yield next.value;
+    }
+  } finally {
+    const closing = iterator.return?.();
+    if (!exhausted) {
+      // A producer blocked in next() or finally cannot delay multipart cleanup.
+      // Observe its eventual close without retaining the upload or leaking a rejection.
+      void closing?.catch(() => {});
+    } else {
+      await closing;
+    }
+  }
+}
+
+export function createR2Backend(
+  settings: R2Settings,
+  client: Pick<S3Client, "send" | "destroy">,
+): StorageBackend {
+  const namespace = settings.prefix ? `${settings.prefix}/` : "";
+  const keyFor = (key: string) => {
+    const joined = namespace + key;
+    if (Buffer.byteLength(joined) > 1024) {
+      throw new R2StorageError(
+        "R2 object key exceeds 1024 bytes; shorten the configured prefix or object key.",
+      );
+    }
+    return joined;
+  };
+
+  async function multipart(
+    Key: string,
+    body: AsyncIterable<Uint8Array>,
+    opts: { sizeBytes?: number; signal?: AbortSignal },
+  ): Promise<{ sizeBytes: number }> {
+    const { UploadId } = await client.send(
+      new CreateMultipartUploadCommand({ Bucket: settings.bucket, Key }),
+      { abortSignal: opts.signal },
+    );
+    if (!UploadId) {
+      throw new R2StorageError(
+        "R2 did not return an upload ID; check the service status and retry.",
+      );
+    }
+    const upload = { Bucket: settings.bucket, Key, UploadId };
+    try {
+      const parts: CompletedPart[] = [];
+      let sizeBytes = 0;
+      let used = 0;
+      // Upload sequentially and reuse one part buffer; no queue can retain extra parts.
+      const buffer = Buffer.allocUnsafe(PART_BYTES);
+      const sendPart = async () => {
+        opts.signal?.throwIfAborted();
+        if (parts.length === MAX_PARTS) {
+          throw new R2StorageError(
+            "R2 upload exceeds 10000 parts; split the object into smaller objects.",
+          );
+        }
+        const PartNumber = parts.length + 1;
+        const { ETag } = await client.send(
+          new UploadPartCommand({
+            ...upload,
+            PartNumber,
+            Body: buffer.subarray(0, used),
+            ContentLength: used,
+          }),
+          { abortSignal: opts.signal },
+        );
+        if (!ETag) {
+          throw new R2StorageError("R2 did not acknowledge an uploaded part; retry the upload.");
+        }
+        parts.push({ PartNumber, ETag });
+        used = 0;
+      };
+      for await (const chunk of uploadChunks(body, opts.signal)) {
+        opts.signal?.throwIfAborted();
+        sizeBytes += chunk.byteLength;
+        if (opts.sizeBytes !== undefined && sizeBytes > opts.sizeBytes) {
+          assertSize(opts.sizeBytes, sizeBytes);
+        }
+        for (let offset = 0; offset < chunk.byteLength;) {
+          const count = Math.min(PART_BYTES - used, chunk.byteLength - offset);
+          buffer.set(chunk.subarray(offset, offset + count), used);
+          offset += count;
+          used += count;
+          if (used === PART_BYTES) {
+            await sendPart();
+          }
+        }
+      }
+      assertSize(opts.sizeBytes, sizeBytes);
+      if (used > 0 || parts.length === 0) {
+        await sendPart();
+      }
+      opts.signal?.throwIfAborted();
+      // R2 supports conditional multipart publish (release notes, 2023-08-11).
+      // If-None-Match makes completion atomic; a HeadObject pre-check would race.
+      await client.send(
+        new CompleteMultipartUploadCommand({
+          ...upload,
+          MultipartUpload: { Parts: parts },
+          IfNoneMatch: "*",
+        }),
+        { abortSignal: opts.signal },
+      );
+      return { sizeBytes };
+    } catch (error) {
+      try {
+        // Cleanup must still run when the caller's signal has already aborted.
+        await client.send(new AbortMultipartUploadCommand(upload));
+      } catch (cleanupError) {
+        if (!(cleanupError instanceof S3ServiceException && cleanupError.name === "NoSuchUpload")) {
+          throw new R2StorageError(
+            `${storageError(error, settings, "upload").message} Multipart cleanup also failed; remove incomplete uploads in bucket ${settings.bucket}.`,
+          );
+        }
+      }
+      throw error;
+    }
+  }
+
+  return {
+    displayTarget: describeR2Target(settings) ?? `r2://${settings.bucket}`,
+    async probe(opts) {
+      try {
+        await client.send(new HeadBucketCommand({ Bucket: settings.bucket }), {
+          abortSignal: opts?.signal,
+        });
+        return {};
+      } catch (error) {
+        throw storageError(error, settings, "probe");
+      }
+    },
+    async putObject(key, body, opts) {
+      try {
+        opts.signal?.throwIfAborted();
+        if (
+          opts.sizeBytes !== undefined &&
+          (!Number.isSafeInteger(opts.sizeBytes) || opts.sizeBytes < 0)
+        ) {
+          throw new R2StorageError("R2 sizeBytes must be a nonnegative safe integer.");
+        }
+        const Key = keyFor(key);
+        if (opts.sizeBytes === undefined || opts.sizeBytes > PART_BYTES) {
+          return await multipart(Key, body, opts);
+        }
+        const buffer = Buffer.allocUnsafe(opts.sizeBytes);
+        let sizeBytes = 0;
+        for await (const chunk of uploadChunks(body, opts.signal)) {
+          opts.signal?.throwIfAborted();
+          if (sizeBytes + chunk.byteLength > buffer.length) {
+            assertSize(opts.sizeBytes, sizeBytes + chunk.byteLength);
+          }
+          buffer.set(chunk, sizeBytes);
+          sizeBytes += chunk.byteLength;
+        }
+        assertSize(opts.sizeBytes, sizeBytes);
+        opts.signal?.throwIfAborted();
+        await client.send(
+          new PutObjectCommand({
+            Bucket: settings.bucket,
+            Key,
+            Body: buffer,
+            ContentLength: sizeBytes,
+            IfNoneMatch: "*",
+          }),
+          { abortSignal: opts.signal },
+        );
+        return { sizeBytes };
+      } catch (error) {
+        throw storageError(error, settings, "upload");
+      }
+    },
+    async getObject(key, opts) {
+      let offset = 0;
+      let size: number | undefined;
+      const failed = (error: unknown) => {
+        const failure = storageError(error, settings, "download");
+        const reason = downloadRetryReason(error);
+        failure.message += ` Download stopped after ${offset} of ${size ?? "unknown"} bytes (next offset ${offset}${reason ? `; ${reason}` : ""}).`;
+        return failure;
+      };
+      try {
+        const target = { Bucket: settings.bucket, Key: keyFor(key) };
+        const { ETag, ContentLength } = await client.send(new HeadObjectCommand(target), {
+          abortSignal: opts?.signal,
+        });
+        size = ContentLength;
+        if (!ETag || size === undefined || !Number.isSafeInteger(size) || size < 0) {
+          throw new R2StorageError("R2 returned no valid object size or ETag; retry the download.");
+        }
+        const totalBytes = size;
+        return (async function* () {
+          try {
+            while (offset < totalBytes) {
+              const end = Math.min(offset + PART_BYTES, totalBytes) - 1;
+              let retries = 0;
+              while (offset <= end) {
+                opts?.signal?.throwIfAborted();
+                try {
+                  const result: GetObjectCommandOutput = await client.send(
+                    new GetObjectCommand({
+                      ...target,
+                      Range: `bytes=${offset}-${end}`,
+                      IfMatch: ETag,
+                    }),
+                    { abortSignal: opts?.signal },
+                  );
+                  opts?.signal?.throwIfAborted();
+                  if (!result.Body) {
+                    throw new R2StorageError("R2 returned no object body; retry the download.");
+                  }
+                  const stream = result.Body.transformToWebStream();
+                  if (
+                    result.ETag !== ETag ||
+                    result.ContentRange !== `bytes ${offset}-${end}/${totalBytes}`
+                  ) {
+                    await stream.cancel();
+                    throw new R2StorageError(
+                      result.ETag !== ETag
+                        ? "R2 object changed during download; restart the download."
+                        : "R2 returned an unexpected byte range; retry the download.",
+                    );
+                  }
+                  for await (const chunk of stream) {
+                    opts?.signal?.throwIfAborted();
+                    if (offset + chunk.byteLength > end + 1) {
+                      throw new R2StorageError(
+                        "R2 returned more bytes than requested; retry the download.",
+                      );
+                    }
+                    offset += chunk.byteLength;
+                    yield chunk;
+                  }
+                  if (offset <= end) {
+                    throw Object.assign(new Error("Incomplete R2 range"), {
+                      code: "ERR_STREAM_PREMATURE_CLOSE",
+                    });
+                  }
+                } catch (error) {
+                  if (
+                    error instanceof S3ServiceException &&
+                    error.$metadata.httpStatusCode === 412
+                  ) {
+                    throw new R2StorageError(
+                      "R2 object changed during download; restart the download.",
+                    );
+                  }
+                  if (
+                    opts?.signal?.aborted ||
+                    !downloadRetryReason(error) ||
+                    retries++ >= DOWNLOAD_RETRIES_PER_PART
+                  ) {
+                    throw error;
+                  }
+                }
+              }
+            }
+          } catch (error) {
+            throw failed(error);
+          }
+        })();
+      } catch (error) {
+        if (missingObject(error)) {
+          return undefined;
+        }
+        throw failed(error);
+      }
+    },
+    async statObject(key, opts) {
+      try {
+        const result = await client.send(
+          new HeadObjectCommand({ Bucket: settings.bucket, Key: keyFor(key) }),
+          { abortSignal: opts?.signal },
+        );
+        if (result.ContentLength === undefined) {
+          throw new R2StorageError("R2 returned no object size; retry the metadata request.");
+        }
+        return { key, sizeBytes: result.ContentLength, modifiedAt: result.LastModified?.getTime() };
+      } catch (error) {
+        if (missingObject(error)) {
+          return undefined;
+        }
+        throw storageError(error, settings, "stat");
+      }
+    },
+    async *listObjects(prefix, opts) {
+      try {
+        const Prefix = keyFor(prefix);
+        let ContinuationToken: string | undefined;
+        do {
+          opts?.signal?.throwIfAborted();
+          const page = await client.send(
+            new ListObjectsV2Command({ Bucket: settings.bucket, Prefix, ContinuationToken }),
+            { abortSignal: opts?.signal },
+          );
+          for (const object of page.Contents ?? []) {
+            if (
+              object.Key === undefined ||
+              object.Size === undefined ||
+              !object.Key.startsWith(Prefix)
+            ) {
+              throw new R2StorageError("R2 returned invalid object metadata; retry the listing.");
+            }
+            yield {
+              key: object.Key.slice(namespace.length),
+              sizeBytes: object.Size,
+              modifiedAt: object.LastModified?.getTime(),
+            };
+          }
+          const next = page.IsTruncated ? page.NextContinuationToken : undefined;
+          if (page.IsTruncated && (!next || next === ContinuationToken)) {
+            throw new R2StorageError("R2 did not advance its listing cursor; retry the listing.");
+          }
+          ContinuationToken = next;
+        } while (ContinuationToken);
+      } catch (error) {
+        throw storageError(error, settings, "list");
+      }
+    },
+    async deleteObject(key, opts) {
+      try {
+        await client.send(new DeleteObjectCommand({ Bucket: settings.bucket, Key: keyFor(key) }), {
+          abortSignal: opts?.signal,
+        });
+      } catch (error) {
+        throw storageError(error, settings, "delete");
+      }
+    },
+    async close() {
+      client.destroy();
+    },
+  };
+}

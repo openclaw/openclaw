@@ -6,7 +6,13 @@ export {
   restoreEnvChangesIfUnchanged,
   snapshotEnv,
 } from "./io.read-helpers.js";
+export type {
+  ConfigIoDeps,
+  ConfigSnapshotReadMeasure,
+  ParseConfigJson5Result,
+} from "./io.read.types.js";
 export {
+  captureRuntimeConfigAsyncReader,
   clearConfigCache,
   getRuntimeConfig,
   loadConfig,
@@ -29,14 +35,11 @@ export {
 export {
   ConfigRuntimeRefreshError,
   type BestEffortConfigSnapshot,
-  type ConfigIoDeps,
-  type ConfigSnapshotReadMeasure,
   type ConfigSnapshotReadOptions,
   type ConfigWriteAuditOrigin,
   type ConfigWriteNotification,
   type ConfigWriteOptions,
   type ConfigWriteResult,
-  type ParseConfigJson5Result,
   type ReadConfigFileSnapshotForWriteResult,
   type ReadConfigFileSnapshotWithPluginMetadataResult,
 } from "./io.types.js";
@@ -46,10 +49,12 @@ export {
   getRuntimeConfigSnapshot,
   getRuntimeConfigSnapshotMetadata,
   getRuntimeConfigSourceSnapshot,
+  readRuntimeConfig,
   registerManagedRuntimeConfigWriteOwner,
   resetConfigRuntimeState,
   resolveRuntimeConfigCacheKey,
   selectApplicableRuntimeConfig,
+  selectLiveRuntimeConfig,
   setAppliedRuntimeConfigSnapshot,
   setRuntimeConfigSnapshot,
   setRuntimeConfigSnapshotRefreshHandler,

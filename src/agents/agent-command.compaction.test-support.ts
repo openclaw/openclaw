@@ -72,7 +72,8 @@ vi.mock("../sessions/session-diff.js", async (importOriginal) => ({
     compactionTestState.captureSessionDiffBaselineMock(params),
 }));
 
-vi.mock("../config/io.js", () => ({
+vi.mock("../config/io.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../config/io.js")>()),
   getRuntimeConfig: () => compactionTestState.cfg,
   readConfigFileSnapshotForWrite: async () => ({ snapshot: { valid: false } }),
 }));
@@ -82,14 +83,15 @@ vi.mock("./agent-runtime-config.js", () => ({
 }));
 
 vi.mock("../plugins/plugin-metadata-snapshot.js", async (importOriginal) => {
-  const { rebasePluginMetadataSnapshotManifestRegistry } =
-    await importOriginal<typeof import("../plugins/plugin-metadata-snapshot.js")>();
+  const actual = await importOriginal<typeof import("../plugins/plugin-metadata-snapshot.js")>();
   const { createPluginMetadataSnapshot } =
     await import("../config/plugin-auto-enable.test-helpers.js");
   return {
+    ...actual,
     isPluginMetadataSnapshotCompatible: () => false,
-    rebasePluginMetadataSnapshotManifestRegistry,
     resolvePluginMetadataSnapshot: () =>
+      createPluginMetadataSnapshot({ manifestRegistry: { plugins: [], diagnostics: [] } }),
+    resolvePluginMetadataSnapshotAsync: async () =>
       createPluginMetadataSnapshot({ manifestRegistry: { plugins: [], diagnostics: [] } }),
   };
 });
@@ -165,6 +167,7 @@ vi.mock("./auth-profiles/store-runtime.js", async () => {
   return {
     ...actual,
     ensureAuthProfileStore: () => ({ profiles: {} }),
+    ensureAuthProfileStoreAsync: async () => ({ profiles: {} }),
     saveAuthProfileStore: vi.fn(),
     updateAuthProfileStoreWithLock: vi.fn(async () => ({ profiles: {} })),
   };
@@ -172,7 +175,7 @@ vi.mock("./auth-profiles/store-runtime.js", async () => {
 
 vi.mock("../acp/control-plane/manager.js", () => ({
   getAcpSessionManager: () => ({
-    resolveSession: () => null,
+    resolveSessionAsync: async () => null,
   }),
 }));
 
@@ -192,8 +195,9 @@ vi.mock("../skills/runtime/session-snapshot.js", () => ({
   }),
 }));
 
+// mock-isolation: Compaction fixtures must not open the host approval store or discover executable nodes.
 vi.mock("./exec-defaults.js", () => ({
-  resolveNodeExecEligibility: () => ({ canExec: false }),
+  resolveNodeExecEligibilityAsync: () => ({ canExec: false }),
 }));
 
 vi.mock("./model-fallback-runner.js", () => ({

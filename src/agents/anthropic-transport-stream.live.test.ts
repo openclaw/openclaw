@@ -15,12 +15,14 @@ import { afterEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { upsertSessionEntryCore } from "../config/sessions/session-accessor.js";
 import { isTruthyEnvValue } from "../infra/env.js";
-import { disposeOpenClawAgentDatabaseByPath } from "../state/openclaw-agent-db.js";
+import { disposeOpenClawAgentDatabaseByPath } from "../state/openclaw-agent-db-disposal.js";
+import { closeOpenClawAgentDatabaseByPathAsync } from "../state/openclaw-agent-db.js";
 import { isLiveTestEnabled } from "./live-test-helpers.js";
 import { shouldSkipLiveProviderDrift } from "./live-test-provider-drift.js";
 import { isLiveBillingDrift } from "./live-test-provider-drift.test-support.js";
 import { withSessionManagerWrite } from "./sessions/session-manager-write-admission.js";
 import { SessionManager } from "./sessions/session-manager.js";
+import { makeProviderModelFixture } from "./test-helpers/provider-model-fixture.js";
 
 const LIVE = isLiveTestEnabled(["ANTHROPIC_TRANSPORT_LIVE_TEST"]);
 const describeLive = LIVE ? describe : describe.skip;
@@ -128,18 +130,16 @@ describeLive("anthropic transport stream live", () => {
 
     const port = await waitForServerListening(server);
     try {
-      const model: AnthropicMessagesModel = {
+      const model: AnthropicMessagesModel = makeProviderModelFixture({
         id: "claude-sonnet-4-6",
         name: "Claude Sonnet 4.6",
         api: "anthropic-messages",
         provider: "anthropic",
         baseUrl: `http://127.0.0.1:${port}/v1`,
         reasoning: true,
-        input: ["text"],
-        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
         contextWindow: 200000,
         maxTokens: 8192,
-      };
+      });
       const streamFn = createAnthropicMessagesTransportStreamFn();
       const stream = await Promise.resolve(
         streamFn(
@@ -186,18 +186,16 @@ describeLive("anthropic transport stream live", () => {
 
 describeOpusTupleLive("anthropic Opus tuple schema provider live", () => {
   it("accepts a draft-07 tuple tool after Anthropic projection", async ({ skip }) => {
-    const model: AnthropicMessagesModel = {
+    const model: AnthropicMessagesModel = makeProviderModelFixture({
       id: "claude-opus-4-8",
       name: "Claude Opus 4.8",
       api: "anthropic-messages",
       provider: "anthropic",
       baseUrl: "https://api.anthropic.com",
       reasoning: false,
-      input: ["text"],
-      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
       contextWindow: 200_000,
       maxTokens: 512,
-    };
+    });
     const streamFn = createAnthropicMessagesTransportStreamFn();
     const stream = await Promise.resolve(
       streamFn(
@@ -262,18 +260,16 @@ describeProviderLive("anthropic transport stream provider live", () => {
         sessionKey: `agent:main:anthropic-compaction:${sessionId}`,
         storePath: path.join(root, "openclaw-agent.sqlite"),
       };
-      const model: AnthropicMessagesModel = {
+      const model: AnthropicMessagesModel = makeProviderModelFixture({
         id: "claude-sonnet-4-6",
         name: "Claude Sonnet 4.6",
         api: "anthropic-messages",
         provider: "anthropic",
         baseUrl: "https://api.anthropic.com/v1",
         reasoning: true,
-        input: ["text"],
-        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
         contextWindow: 200_000,
         maxTokens: 1_024,
-      };
+      });
       const tool: Tool = {
         name: "read_synthetic_context",
         description: "Read the synthetic records and their durable verification marker.",
@@ -367,7 +363,7 @@ describeProviderLive("anthropic transport stream provider live", () => {
           throw new Error("Anthropic did not emit a native compaction checkpoint");
         }
         expect(checkpoint.data).toContain(marker);
-        disposeOpenClawAgentDatabaseByPath(target.storePath);
+        await closeOpenClawAgentDatabaseByPathAsync(target.storePath);
         manager = SessionManager.open(target, root);
         const saved = messages().findLast(
           (message) => message.role === "assistant" && message.providerReplay,
@@ -408,58 +404,78 @@ describeProviderLive("anthropic transport stream provider live", () => {
           `[anthropic-compaction-live] sqliteReplay=passed toolMarker=preserved summaryChars=${checkpoint.data.length} encryptedField=${"encryptedContent" in checkpoint}\n`,
         );
       } finally {
-        disposeOpenClawAgentDatabaseByPath(target.storePath);
+        await disposeOpenClawAgentDatabaseByPath(target.storePath);
       }
     },
     8 * 60 * 1000,
   );
 
-  it("keeps a healthy forced tool when a sibling descriptor is unreadable", async ({ skip }) => {
+  it.for([
+    {
+      name: "keeps a healthy forced tool when a sibling descriptor is unreadable",
+      sdk: false,
+      value: "LIVE_OK",
+      errorPrefix: "forced",
+    },
+    {
+      name: "keeps a healthy forced tool through the Anthropic SDK provider",
+      sdk: true,
+      value: "SDK_OK",
+      errorPrefix: "SDK forced",
+    },
+  ])("$name", { timeout: 45_000 }, async ({ sdk, value, errorPrefix }, { skip }) => {
     const modelId = process.env.OPENCLAW_LIVE_ANTHROPIC_TOOL_MODEL || "claude-haiku-4-5-20251001";
-    const model: AnthropicMessagesModel = {
+    const model: AnthropicMessagesModel = makeProviderModelFixture({
       id: modelId,
       name: modelId,
       api: "anthropic-messages",
       provider: "anthropic",
       baseUrl: "https://api.anthropic.com",
       reasoning: false,
-      input: ["text"],
-      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
       contextWindow: 200_000,
       maxTokens: 512,
+    });
+    const context = {
+      messages: [
+        {
+          role: "user",
+          content: `Call healthy_probe with value ${value}.`,
+          ...(sdk ? { timestamp: Date.now() } : {}),
+        },
+      ],
+      tools: [
+        {
+          name: "unreadable_probe",
+          description: "Unreadable probe",
+          get parameters() {
+            throw new Error("live unreadable parameters getter");
+          },
+        },
+        {
+          name: "healthy_probe",
+          description: "Return the requested probe value.",
+          parameters: {
+            type: "object",
+            properties: { value: { type: "string" } },
+            required: ["value"],
+          },
+        },
+      ],
     };
-    const streamFn = createAnthropicMessagesTransportStreamFn();
-    const stream = await Promise.resolve(
-      streamFn(
-        model,
-        {
-          messages: [{ role: "user", content: "Call healthy_probe with value LIVE_OK." }],
-          tools: [
-            {
-              name: "unreadable_probe",
-              description: "Unreadable probe",
-              get parameters() {
-                throw new Error("live unreadable parameters getter");
-              },
-            },
-            {
-              name: "healthy_probe",
-              description: "Return the requested probe value.",
-              parameters: {
-                type: "object",
-                properties: { value: { type: "string" } },
-                required: ["value"],
-              },
-            },
-          ],
-        } as unknown as AnthropicStreamContext,
-        {
-          apiKey: ANTHROPIC_KEY,
-          maxTokens: 128,
-          toolChoice: { type: "tool", name: "healthy_probe" },
-        } as AnthropicStreamOptions,
-      ),
-    );
+    const options = {
+      apiKey: ANTHROPIC_KEY,
+      maxTokens: 128,
+      toolChoice: { type: "tool", name: "healthy_probe" },
+    } as AnthropicStreamOptions;
+    const stream = sdk
+      ? streamAnthropic(model, context as unknown as Parameters<typeof streamAnthropic>[1], options)
+      : await Promise.resolve(
+          createAnthropicMessagesTransportStreamFn()(
+            model,
+            context as unknown as AnthropicStreamContext,
+            options,
+          ),
+        );
 
     const result = await stream.result();
     if (result.stopReason === "error" && isLiveBillingDrift(result.errorMessage ?? "")) {
@@ -471,77 +487,12 @@ describeProviderLive("anthropic transport stream provider live", () => {
 
     expect(
       result.stopReason,
-      `forced tool projection failed; errorClass=${classifyProviderError(result.errorMessage)}`,
+      `${errorPrefix} tool projection failed; errorClass=${classifyProviderError(result.errorMessage)}`,
     ).toBe("toolUse");
     expect(toolCall).toMatchObject({
       type: "toolCall",
       name: "healthy_probe",
-      arguments: { value: "LIVE_OK" },
+      arguments: { value },
     });
-  }, 45_000);
-
-  it("keeps a healthy forced tool through the Anthropic SDK provider", async ({ skip }) => {
-    const modelId = process.env.OPENCLAW_LIVE_ANTHROPIC_TOOL_MODEL || "claude-haiku-4-5-20251001";
-    const model: AnthropicMessagesModel = {
-      id: modelId,
-      name: modelId,
-      api: "anthropic-messages",
-      provider: "anthropic",
-      baseUrl: "https://api.anthropic.com",
-      reasoning: false,
-      input: ["text"],
-      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-      contextWindow: 200_000,
-      maxTokens: 512,
-    };
-    const stream = streamAnthropic(
-      model,
-      {
-        messages: [
-          { role: "user", content: "Call healthy_probe with value SDK_OK.", timestamp: Date.now() },
-        ],
-        tools: [
-          {
-            name: "unreadable_probe",
-            description: "Unreadable probe",
-            get parameters() {
-              throw new Error("live unreadable parameters getter");
-            },
-          },
-          {
-            name: "healthy_probe",
-            description: "Return the requested probe value.",
-            parameters: {
-              type: "object",
-              properties: { value: { type: "string" } },
-              required: ["value"],
-            },
-          },
-        ],
-      } as unknown as Parameters<typeof streamAnthropic>[1],
-      {
-        apiKey: ANTHROPIC_KEY,
-        maxTokens: 128,
-        toolChoice: { type: "tool", name: "healthy_probe" },
-      },
-    );
-
-    const result = await stream.result();
-    if (result.stopReason === "error" && isLiveBillingDrift(result.errorMessage ?? "")) {
-      skip("Anthropic billing drift");
-    }
-    const toolCall = result.content.find(
-      (block) => block.type === "toolCall" && block.name === "healthy_probe",
-    );
-
-    expect(
-      result.stopReason,
-      `SDK forced tool projection failed; errorClass=${classifyProviderError(result.errorMessage)}`,
-    ).toBe("toolUse");
-    expect(toolCall).toMatchObject({
-      type: "toolCall",
-      name: "healthy_probe",
-      arguments: { value: "SDK_OK" },
-    });
-  }, 45_000);
+  });
 });

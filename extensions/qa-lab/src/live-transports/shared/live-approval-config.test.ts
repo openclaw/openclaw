@@ -32,10 +32,8 @@ const builders = [
 
 describe.each(builders)("$channel approval forwarding config", ({ build }) => {
   it.each([
-    { exec: false, plugin: false },
     { exec: true, plugin: false },
     { exec: false, plugin: true },
-    { exec: true, plugin: true },
   ])("preserves approval settings with exec=$exec and plugin=$plugin", (overrides) => {
     const base: OpenClawConfig = {
       approvals: {

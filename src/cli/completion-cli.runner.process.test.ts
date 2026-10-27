@@ -1,4 +1,5 @@
 import * as childProcess from "node:child_process";
+import { once } from "node:events";
 import { writeFileSync } from "node:fs";
 import path from "node:path";
 import { setImmediate } from "node:timers/promises";
@@ -8,44 +9,95 @@ import { createDeferred } from "../../test/helpers/promise.js";
 import { createTempDirTracker } from "../../test/helpers/temp-dir.js";
 
 type ChildExit = { code: number | null; signal: NodeJS.Signals | null };
-type Settlement =
-  | { state: "pending" }
-  | { state: "fulfilled" }
-  | { state: "rejected"; error: unknown };
-
 function observeSettlement(promise: Promise<unknown>) {
-  const observed: { value: Settlement } = { value: { state: "pending" } };
-  void promise.then(
-    () => {
-      observed.value = { state: "fulfilled" };
-    },
-    (error: unknown) => {
-      observed.value = { state: "rejected", error };
-    },
-  );
+  const observed = vi.fn<(value: unknown) => void>();
+  void promise.then(observed, observed);
   return observed;
 }
 
-it.skipIf(process.platform === "win32")(
-  "rejects queued completions and settles close when a real child exits before READY",
-  async () => {
+function rejection(settlement: ReturnType<typeof observeSettlement>) {
+  const error = settlement.mock.calls[0]?.[0];
+  if (!(error instanceof Error)) {
+    throw new Error("Completion and caller cleanup must reject with an Error");
+  }
+  return error;
+}
+
+it.skipIf(process.platform === "win32").each([
+  {
+    label: "exits before READY",
+    script: "#!/bin/sh\nexit 23\n",
+    outcome: { code: 23, signal: null },
+    message: "code 23 signal null",
+  },
+  {
+    label: "emits unexpected output before READY",
+    script: `#!${process.execPath}\nprocess.stdin.resume();\nprocess.stdout.write("completion primary failure\\n");\n`,
+    outcome: { code: null, signal: "SIGTERM" },
+    message: "Unexpected PowerShell completion stdout: completion primary failure",
+  },
+  {
+    label: "never emits READY after partial stdout",
+    script: `#!${process.execPath}
+process.stdin.resume();
+process.stdout.write("x".repeat(5000) + "partial READY");
+`,
+    outcome: { code: null, signal: "SIGTERM" },
+    message: "PowerShell completion runner did not become ready",
+  },
+  {
+    label: "ignores termination after its first failure",
+    script: `#!${process.execPath}
+process.on("SIGTERM", () => process.stdout.write("completion fixture received SIGTERM\\n"));
+setInterval(() => {}, 1000);
+process.stdin.resume();
+process.stdout.write("completion primary failure\\n");
+`,
+    outcome: { code: null, signal: "SIGKILL" },
+    message: "Unexpected PowerShell completion stdout: completion primary failure",
+  },
+])(
+  "rejects queued completions and preserves the first failure when a real child $label",
+  async ({ script, outcome, message }) => {
     const tempDirs = createTempDirTracker();
     const children: Promise<ChildExit>[] = [];
+    const liveChildren: childProcess.ChildProcess[] = [];
+    let childStdout = "";
+    const readinessTimeout = message === "PowerShell completion runner did not become ready";
     try {
       const executable = path.join(tempDirs.make("openclaw-completion-exit-"), "pwsh");
-      writeFileSync(executable, "#!/bin/sh\nexit 23\n", { mode: 0o700 });
+      writeFileSync(executable, script, { mode: 0o700 });
       const closed = createDeferred<ChildExit>();
       vi.resetModules();
       vi.stubEnv("OPENCLAW_TEST_PWSH", executable);
+      if (readinessTimeout) {
+        vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "performance"] });
+      }
+      const partialStdout = createDeferred();
       vi.doMock("node:child_process", () => ({
         ...childProcess,
         spawn(...args: Parameters<typeof childProcess.spawn>) {
           const child = childProcess.spawn(...args);
           if (args[0] === executable) {
+            liveChildren.push(child);
+            if (!child.stdout || !child.stderr) {
+              throw new Error("Completion fixture requires both output pipes");
+            }
+            child.stdout.on("data", (chunk: string | Buffer) => {
+              childStdout += chunk.toString();
+              if (childStdout.endsWith("partial READY")) {
+                partialStdout.resolve();
+              }
+            });
             const exit = createDeferred<ChildExit>();
             child.once("close", (code, signal) => exit.resolve({ code, signal }));
-            children.push(exit.promise);
-            void exit.promise.then(closed.resolve);
+            const drained = Promise.all([
+              exit.promise,
+              once(child.stdout, "end"),
+              once(child.stderr, "end"),
+            ]).then(([result]) => result);
+            children.push(drained);
+            void drained.then(closed.resolve, closed.reject);
           }
           return child;
         },
@@ -53,27 +105,57 @@ it.skipIf(process.platform === "win32")(
       const { PowerShellCompletionRunner } = await import("./completion-cli.test-support.js");
       const runner = new PowerShellCompletionRunner();
       const program = new Command().name("openclaw");
-      const first = observeSettlement(runner.complete(program, "openclaw "));
+      const firstCompletion = runner.complete(program, "openclaw ");
+      const first = observeSettlement(firstCompletion);
       const second = observeSettlement(runner.complete(program, "openclaw --"));
+      const caller = observeSettlement(
+        (async () => {
+          try {
+            await firstCompletion;
+          } finally {
+            await runner.close();
+          }
+        })(),
+      );
 
-      expect(await closed.promise).toEqual({ code: 23, signal: null });
+      if (readinessTimeout) {
+        await partialStdout.promise;
+        await vi.advanceTimersByTimeAsync(14_999);
+        expect(first).not.toHaveBeenCalled();
+        expect(liveChildren[0]?.killed).toBe(false);
+        await vi.advanceTimersByTimeAsync(1);
+      }
+      expect(await closed.promise).toEqual(outcome);
       // The real child is closed; only promise continuations remain.
       // Node drains those before setImmediate's check phase, regardless of chain depth.
       await setImmediate();
-      const exitFailure = expect.objectContaining({
-        message: expect.stringContaining("code 23 signal null"),
-      });
-      expect(first.value).toEqual({ state: "rejected", error: exitFailure });
-      expect(second.value).toEqual(first.value);
+      const primaryFailure = rejection(first);
+      expect(primaryFailure).toMatchObject({ message: expect.stringContaining(message) });
       expect(children).toHaveLength(1);
-
-      const closing = observeSettlement(runner.close());
-      // The exit promise is settled; observe close's remaining promise continuations.
-      await setImmediate();
-      expect(closing.value).toEqual({ state: "rejected", error: exitFailure });
+      for (const completion of [second, caller]) {
+        expect(rejection(completion)).toBe(primaryFailure);
+      }
+      if (readinessTimeout) {
+        const diagnostic = JSON.parse(primaryFailure.message.split("\nStartup: ")[1] ?? "null");
+        expect(diagnostic).toMatchObject({
+          elapsedMs: 15_000,
+          stdoutTail: "x".repeat(4096 - "partial READY".length) + "partial READY",
+        });
+        expect(primaryFailure.message.length).toBeLessThan(6_000);
+      }
+      if (outcome.signal === "SIGKILL") {
+        expect(childStdout).toContain("completion fixture received SIGTERM");
+      }
     } finally {
-      // Joining the actual close latches also cleans up when the pre-fix readiness assertion fails.
+      for (const child of liveChildren) {
+        if (child.exitCode === null && child.signalCode === null) {
+          child.kill("SIGKILL");
+        }
+      }
+      // Real close and EOF, rather than the runner's exit latch, prove fixture completion.
       await Promise.all(children);
+      vi.useRealTimers();
+      vi.restoreAllMocks();
       vi.doUnmock("node:child_process");
       vi.unstubAllEnvs();
       vi.resetModules();

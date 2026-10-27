@@ -1,4 +1,5 @@
 import type { WorkerInferenceTerminalOutcome } from "../../../packages/gateway-protocol/src/schema/worker-inference.js";
+import { sanitizeOpenAIReasoningSignature } from "../../agents/transcript-sanitize.js";
 import type { AssistantMessage, Usage } from "../../llm/types.js";
 import {
   projectWorkerAssistantContent,
@@ -31,12 +32,14 @@ export function inferenceError(
   reason: Extract<WorkerInferenceTerminalOutcome, { type: "error" }>["reason"],
   usage?: Usage,
   message: string = ERROR_MESSAGES[reason],
+  retryAfterMs?: number | null,
 ): WorkerInferenceTerminalOutcome {
   return {
     type: "error",
     reason,
     message,
     ...(usage ? { usage: structuredClone(usage) } : {}),
+    ...(retryAfterMs === undefined ? {} : { retryAfterMs }),
   };
 }
 
@@ -52,7 +55,13 @@ export function projectWorkerInferenceTerminalMessage(params: {
       if (part.type !== "text" && part.type !== "thinking" && part.type !== "toolCall") {
         throw new Error("Unsupported assistant terminal content");
       }
-      return projectWorkerAssistantContent(part);
+      const content = projectWorkerAssistantContent(part);
+      if (content.type === "thinking" && content.thinkingSignature) {
+        content.thinkingSignature =
+          sanitizeOpenAIReasoningSignature(content.thinkingSignature, params.modelIdentity) ??
+          content.thinkingSignature;
+      }
+      return content;
     }),
     api: params.modelIdentity.api,
     provider: params.modelIdentity.provider,

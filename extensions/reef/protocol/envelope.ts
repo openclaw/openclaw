@@ -3,8 +3,8 @@ import { ed25519, x25519 } from "@noble/curves/ed25519.js";
 import { hkdf } from "@noble/hashes/hkdf.js";
 import { sha256 } from "@noble/hashes/sha2.js";
 import { randomBytes } from "@noble/hashes/utils.js";
-import { canonicalBytes } from "./canonical.js";
-import { base64, decodeUtf8, fromBase64, fromBase64url, hex, utf8 } from "./encoding.js";
+import { canonicalBytes, sha256Hex } from "./canonical.js";
+import { base64, decodeUtf8, fromBase64, fromBase64url, utf8 } from "./encoding.js";
 import { parseHandleEpoch } from "./identity.js";
 import type { SignedReceipt } from "./receipts.js";
 
@@ -22,7 +22,6 @@ export interface ReplayStore {
   /** Renews an in-flight claim while slow guard or review work is active. */
   refresh?(peer: string, id: string): Promise<void>;
   complete(peer: string, id: string, receipt: SignedReceipt, body?: MessageBody): Promise<void>;
-  consume(peer: string, id: string): Promise<void>;
   release(peer: string, id: string): Promise<void>;
   completed(peer: string, id: string): Promise<CompletedReplay | undefined>;
 }
@@ -61,52 +60,46 @@ export class ProtocolError extends Error {
   constructor(
     readonly code: ProtocolErrorCode,
     message: string = code,
+    name = "ProtocolError",
   ) {
     super(message);
-    this.name = "ProtocolError";
+    this.name = name;
   }
 }
 
 export class BadSignatureError extends ProtocolError {
   constructor(message?: string) {
-    super("bad_signature", message);
-    this.name = "BadSignatureError";
+    super("bad_signature", message, "BadSignatureError");
   }
 }
 export class NotPinnedError extends ProtocolError {
   constructor(message?: string) {
-    super("not_pinned", message);
-    this.name = "NotPinnedError";
+    super("not_pinned", message, "NotPinnedError");
   }
 }
 class WrongRecipientError extends ProtocolError {
   constructor(message?: string) {
-    super("wrong_recipient", message);
-    this.name = "WrongRecipientError";
+    super("wrong_recipient", message, "WrongRecipientError");
   }
 }
 export class ExpiredError extends ProtocolError {
   constructor(message?: string) {
-    super("expired", message);
-    this.name = "ExpiredError";
+    super("expired", message, "ExpiredError");
   }
 }
 export class ReplayedError extends ProtocolError {
   constructor(message?: string) {
-    super("replayed", message);
-    this.name = "ReplayedError";
+    super("replayed", message, "ReplayedError");
   }
 }
 export class TooLargeError extends ProtocolError {
   constructor(message?: string) {
-    super("too_large", message);
-    this.name = "TooLargeError";
+    super("too_large", message, "TooLargeError");
   }
 }
 export class MalformedError extends ProtocolError {
   constructor(message?: string) {
-    super("malformed", message);
-    this.name = "MalformedError";
+    super("malformed", message, "MalformedError");
   }
 }
 
@@ -144,12 +137,8 @@ const HKDF_INFO = utf8("reef-v1");
 const ULID_PATTERN = /^[0-7][0-9A-HJKMNP-TV-Z]{25}$/;
 
 export function seal(options: SealOptions): Envelope {
-  validateEnvelopeMetadata(
-    options.id,
-    options.from,
-    options.to,
-    options.ts ?? Math.floor(Date.now() / 1000),
-  );
+  const ts = options.ts ?? Math.floor(Date.now() / 1000);
+  validateEnvelopeMetadata(options.id, options.from, options.to, ts);
   validateMessageBody(options.body);
   const plaintext = canonicalBytes(options.body);
   if (plaintext.length > REEF_MAX_PLAINTEXT_BYTES) {
@@ -170,7 +159,7 @@ export function seal(options: SealOptions): Envelope {
     id: options.id,
     from: options.from,
     to: options.to,
-    ts: options.ts ?? Math.floor(Date.now() / 1000),
+    ts,
     epk: base64(ephemeral.publicKey),
     n: base64(nonce),
     ct: base64(gcm(key, nonce).encrypt(plaintext)),
@@ -179,21 +168,6 @@ export function seal(options: SealOptions): Envelope {
     ...unsigned,
     sig: base64(ed25519.sign(canonicalBytes(unsigned), decodeKey(options.senderSigningSecretKey))),
   };
-}
-
-export async function open(options: OpenOptions): Promise<MessageBody> {
-  const result = await openClaimed(options);
-  if (result.claim === "duplicate") {
-    throw new ReplayedError("duplicate envelope");
-  }
-  const peer = parseHandleEpoch(options.envelope.from).handle;
-  try {
-    await options.replayStore.consume(peer, options.envelope.id);
-    return result.body;
-  } catch (error) {
-    await options.replayStore.release(peer, options.envelope.id);
-    throw error;
-  }
 }
 
 export async function openClaimed(options: OpenOptions): Promise<ClaimedOpenResult> {
@@ -209,7 +183,9 @@ export async function openClaimed(options: OpenOptions): Promise<ClaimedOpenResu
       canonicalBytes(unsigned),
       decodeKey(options.senderSigningPublicKey),
     );
-  } catch {}
+  } catch {
+    // Malformed signature/key material follows the same BadSignatureError path as a mismatch.
+  }
   if (!validSignature) {
     throw new BadSignatureError();
   }
@@ -221,7 +197,7 @@ export async function openClaimed(options: OpenOptions): Promise<ClaimedOpenResu
     throw new WrongRecipientError();
   }
   const peer = parseHandleEpoch(envelope.from).handle;
-  const hash = hex(sha256(canonicalBytes(envelope)));
+  const hash = sha256Hex(canonicalBytes(envelope));
   const claim = await options.replayStore.claim(peer, envelope.id, hash);
   if (claim === "mismatch") {
     throw new ReplayedError("replay id binding mismatch");
@@ -266,12 +242,8 @@ export async function openClaimed(options: OpenOptions): Promise<ClaimedOpenResu
   }
 }
 
-export function envelopeHash(envelope: Envelope): string {
-  return hex(sha256(canonicalBytes(envelope)));
-}
-
 export function bodyHash(body: MessageBody): string {
-  return hex(sha256(canonicalBytes(body)));
+  return sha256Hex(canonicalBytes(body));
 }
 
 function decodeKey(value: string): Uint8Array {

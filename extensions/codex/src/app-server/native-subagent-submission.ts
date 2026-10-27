@@ -7,7 +7,55 @@ import {
 } from "./native-subagent-history-owner.js";
 
 const identifier = z.string().refine((value) => Boolean(value.trim()));
-const submissionSchema = z
+export const CODEX_NATIVE_SUBAGENT_SUBMISSION_HOOK_TOOL = "multi_agent_v1send_input";
+const nativeSubmissionHookSchema = z.object({
+  agent_id: identifier.optional(),
+  turn_id: identifier,
+  hook_event_name: z.literal("PostToolUse"),
+  tool_name: z.literal(CODEX_NATIVE_SUBAGENT_SUBMISSION_HOOK_TOOL),
+  tool_use_id: identifier,
+  tool_input: z.object({ target: identifier }),
+  tool_response: z.string(),
+});
+const nativeSubmissionResultSchema = z.object({ submission_id: identifier });
+
+function canonicalizeNativeThreadId(value: string): string {
+  // Successful send_input accepts UUID aliases but collaboration items serialize canonical IDs.
+  const hex = value
+    .replace(/^urn:uuid:/i, "")
+    .replace(/^\{(.*)\}$/, "$1")
+    .replaceAll("-", "")
+    .toLowerCase();
+  return hex.replace(
+    /^([0-9a-f]{8})([0-9a-f]{4})([0-9a-f]{4})([0-9a-f]{4})([0-9a-f]{12})$/,
+    "$1-$2-$3-$4-$5",
+  );
+}
+
+export type CodexNativeSubagentSubmissionAcknowledgement = {
+  senderThreadId?: string;
+  parentTurnId: string;
+  callId: string;
+  childThreadId: string;
+  submissionId: string;
+};
+
+/** Successful native results retain their nested call identity before Code Mode wraps them. */
+export function readCodexNativeSubagentSubmissionAcknowledgement(
+  rawPayload: unknown,
+): CodexNativeSubagentSubmissionAcknowledgement {
+  const payload = nativeSubmissionHookSchema.parse(rawPayload);
+  const result = nativeSubmissionResultSchema.parse(JSON.parse(payload.tool_response));
+  return {
+    senderThreadId: payload.agent_id,
+    parentTurnId: payload.turn_id,
+    callId: payload.tool_use_id,
+    childThreadId: canonicalizeNativeThreadId(payload.tool_input.target),
+    submissionId: result.submission_id,
+  };
+}
+
+export const submissionSchema = z
   .object({
     parentTurnId: identifier,
     callId: identifier,
@@ -34,8 +82,12 @@ export type CodexNativeSubagentSubmission = z.infer<typeof submissionSchema>;
 export type CodexNativeSubagentSubmissions = z.infer<typeof submissionsSchema>;
 
 export type CodexNativeSubagentSubmissionStore = {
+  /** Retained source facts belong to the monitor until detached work settles. */
+  release?: () => void;
+  /** In-process binding ownership; use the async check before recovered work escapes. */
   assertCurrent(): void;
-  read(): readonly CodexNativeSubagentSubmission[];
+  assertCurrentAsync(): Promise<void>;
+  read(): Promise<readonly CodexNativeSubagentSubmission[]>;
   record(receipt: CodexNativeSubagentSubmission, assertCurrent: () => void): Promise<boolean>;
   consume(receipt: CodexNativeSubagentSubmission, assertCurrent: () => void): Promise<boolean>;
 };
@@ -70,8 +122,7 @@ export function mutateCodexNativeSubagentSubmissions(params: {
   consume: boolean;
 }): { applied: boolean; next?: CodexNativeSubagentSubmissions } {
   const current = readCodexNativeSubagentSubmissions(params.current);
-  const owner = codexNativeSubagentHistoryOwnerSchema.parse(params.owner);
-  const receipt = submissionSchema.parse(params.receipt);
+  const { owner, receipt } = params;
   if (current && !matchesCodexNativeSubagentSubmissionOwner(current.owner, owner)) {
     return { applied: false };
   }
@@ -82,25 +133,19 @@ export function mutateCodexNativeSubagentSubmissions(params: {
   if (existing && !isDeepStrictEqual(existing, receipt)) {
     return { applied: false };
   }
-  if (params.consume) {
-    if (!current) {
-      return { applied: false };
-    }
-    const remaining = receipts.filter((entry) => entry !== existing);
-    return {
-      applied: true,
-      ...(remaining.length
-        ? { next: { version: 1, owner: current.owner, receipts: remaining } }
-        : {}),
-    };
+  if (params.consume && !current) {
+    return { applied: false };
   }
+  const nextReceipts = params.consume
+    ? receipts.filter((entry) => entry !== existing)
+    : existing
+      ? receipts
+      : [...receipts, receipt];
   return {
     applied: true,
-    next: {
-      version: 1,
-      owner: current?.owner ?? owner,
-      receipts: existing ? receipts : [...receipts, receipt],
-    },
+    ...(nextReceipts.length
+      ? { next: { version: 1, owner: current?.owner ?? owner, receipts: nextReceipts } }
+      : {}),
   };
 }
 

@@ -1,18 +1,47 @@
 import fs from "node:fs";
 import path from "node:path";
+import type { SQLInputValue } from "node:sqlite";
 import { expectDefined } from "@openclaw/normalization-core";
-import { afterEach, aroundEach, beforeEach, expect, vi } from "vitest";
+import { afterAll, afterEach, aroundEach, beforeEach, expect, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type { ActiveSessionSqliteMigrationRun } from "../infra/session-sqlite-migration-manifest.js";
 import { resolveTargetSqlitePath } from "../infra/session-sqlite-migration-readers.js";
 import { withSqliteReadOnlyWorkerScope } from "../infra/sqlite-readonly-worker.js";
 import { ExitError } from "../runtime.js";
-import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
-import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
+import {
+  closeOpenClawAgentDatabasesAsync,
+  closeOpenClawAgentDatabasesForTest,
+} from "../state/openclaw-agent-db.js";
+import { withExistingOpenClawStateDatabaseReadOnly } from "../state/openclaw-state-db-readonly.js";
+import { runOpenClawStateWriteTransaction } from "../state/openclaw-state-db.js";
+import { closeStateDatabaseForTest } from "../test-utils/database-cleanup.js";
+import { captureEnv } from "../test-utils/env.js";
+import { useSessionStoreTempDirs } from "../test-utils/session-state-cleanup.js";
 import { runDoctorSessionSqlite, type DoctorSessionSqliteReport } from "./doctor-session-sqlite.js";
 import { doctorCommand } from "./doctor.js";
 
 export type SessionSqliteMigrationManifest = ActiveSessionSqliteMigrationRun["manifest"];
+
+export function stateRows(env: NodeJS.ProcessEnv, query: string) {
+  return withExistingOpenClawStateDatabaseReadOnly(({ db }) => db.prepare(query).all(), { env });
+}
+
+export function writeState(env: NodeJS.ProcessEnv, ...statements: [string, ...SQLInputValue[]][]) {
+  return runOpenClawStateWriteTransaction(
+    ({ db }) => {
+      for (const [query, ...values] of statements) {
+        db.prepare(query).run(...values);
+      }
+    },
+    { env },
+  );
+}
+
+export function expectNoIssue(report: DoctorSessionSqliteReport, code: string) {
+  expect(report.targets.flatMap((target) => target.issues)).not.toContainEqual(
+    expect.objectContaining({ code }),
+  );
+}
 
 export type TestStore = {
   configPath: string;
@@ -27,20 +56,18 @@ export type TestStore = {
 };
 
 export const RECOVERY_TRANSCRIPT_LINES = Object.freeze([
-  JSON.stringify({
-    type: "session",
-    id: "session-1",
-    version: 3,
-    timestamp: "2026-08-30T00:00:00Z",
-    cwd: "/fixture",
-  }),
-  JSON.stringify({
-    type: "message",
-    id: "one",
-    parentId: null,
-    message: { role: "user", content: "preserved history" },
-  }),
+  '{"type":"session","id":"session-1","version":3,"timestamp":"2026-08-30T00:00:00Z","cwd":"/fixture"}',
+  '{"type":"message","id":"one","parentId":null,"message":{"role":"user","content":"preserved history"}}',
 ]);
+
+const legacyEntry = {
+  channel: "cli",
+  chatType: "direct",
+  sessionFile: "session-1.jsonl",
+  sessionId: "session-1",
+  sessionStartedAt: 1000,
+  updatedAt: 2000,
+};
 
 export async function runPublicSessionSqlite(
   store: TestStore,
@@ -83,20 +110,15 @@ export function isDirectoryDescriptor(fd: number, directory: string): boolean {
 }
 
 export function importLegacyStore(store: TestStore): Promise<DoctorSessionSqliteReport> {
-  return runDoctorSessionSqlite({
-    env: store.env,
-    mode: "import",
-    store: store.storePath,
-  });
+  return runDoctorSessionSqlite({ env: store.env, mode: "import", store: store.storePath });
 }
 
 export function readMigrationManifest(
   manifestPath: string | undefined,
 ): SessionSqliteMigrationManifest {
-  if (!manifestPath) {
-    throw new Error("expected migration manifest path");
-  }
-  return JSON.parse(fs.readFileSync(manifestPath, "utf-8")) as SessionSqliteMigrationManifest;
+  return JSON.parse(
+    fs.readFileSync(requireMigrationManifestPath(manifestPath), "utf-8"),
+  ) as SessionSqliteMigrationManifest;
 }
 
 export function requireMigrationManifestPath(manifestPath: string | undefined): string {
@@ -126,32 +148,50 @@ export function canonicalTestPath(filePath: string): string {
   }
 }
 
-function restoreEnvValue(key: keyof NodeJS.ProcessEnv, value: string | undefined): void {
-  if (value === undefined) {
-    delete process.env[key];
-    return;
-  }
-  process.env[key] = value;
+function writePrivate(file: string, contents: string) {
+  fs.writeFileSync(file, contents, { mode: 0o600 });
 }
 
 export function useDoctorSessionSqliteTestFixture() {
-  const previousEnv = {
-    OPENCLAW_CONFIG_PATH: process.env.OPENCLAW_CONFIG_PATH,
-    OPENCLAW_STATE_DIR: process.env.OPENCLAW_STATE_DIR,
+  const previousEnv = captureEnv(["OPENCLAW_CONFIG_PATH", "OPENCLAW_STATE_DIR"]);
+  const sessionDirs = useSessionStoreTempDirs(afterAll, "openclaw-doctor-session-sqlite-");
+  // Platform-alias cases keep their requested lexical root; drain its canonical owner path.
+  const explicitRoots = new Set<string>();
+  const explicitTempDirs = useAutoCleanupTempDirTracker((cleanup) =>
+    afterAll(async () => {
+      if (explicitRoots.size === 0) {
+        return;
+      }
+      for (const root of explicitRoots) {
+        await closeOpenClawAgentDatabasesAsync(root);
+      }
+      await closeStateDatabaseForTest();
+      cleanup();
+    }),
+  );
+  const autoCleanupTempDirs = {
+    make(prefix: string, tempRoot?: string) {
+      if (!tempRoot) {
+        return sessionDirs.make();
+      }
+      const root = explicitTempDirs.make(prefix, tempRoot);
+      explicitRoots.add(fs.realpathSync.native(root));
+      return root;
+    },
   };
-  const autoCleanupTempDirs = useAutoCleanupTempDirTracker(afterEach);
   // Reuse child imports within each case; snapshots still admit and read fresh state.
   aroundEach((runTest) => withSqliteReadOnlyWorkerScope(runTest));
-  beforeEach(() => {
+  beforeEach(async () => {
+    await closeOpenClawAgentDatabasesAsync();
+    await closeStateDatabaseForTest();
     closeOpenClawAgentDatabasesForTest();
-    closeOpenClawStateDatabaseForTest();
   });
 
-  afterEach(() => {
+  afterEach(async () => {
+    await closeOpenClawAgentDatabasesAsync();
+    await closeStateDatabaseForTest();
     closeOpenClawAgentDatabasesForTest();
-    closeOpenClawStateDatabaseForTest();
-    restoreEnvValue("OPENCLAW_CONFIG_PATH", previousEnv.OPENCLAW_CONFIG_PATH);
-    restoreEnvValue("OPENCLAW_STATE_DIR", previousEnv.OPENCLAW_STATE_DIR);
+    previousEnv.restore();
   });
 
   function createLegacyStore(
@@ -174,37 +214,15 @@ export function useDoctorSessionSqliteTestFixture() {
     const trajectoryPath = path.join(sessionDir, "session-1.trajectory.jsonl");
     const unreferencedJsonlPath = path.join(sessionDir, "orphan.jsonl");
     fs.mkdirSync(sessionDir, { recursive: true });
-    fs.writeFileSync(configPath, "{}\n", { mode: 0o600 });
-    fs.writeFileSync(
-      storePath,
-      JSON.stringify(
-        {
-          "agent:main:main": {
-            channel: "cli",
-            chatType: "direct",
-            sessionFile: "session-1.jsonl",
-            sessionId: "session-1",
-            sessionStartedAt: 1000,
-            updatedAt: 2000,
-            ...params.entryOverrides,
-          },
-        },
-        null,
-        2,
-      ),
-      { mode: 0o600 },
-    );
-    fs.writeFileSync(
+    writePrivate(configPath, "{}\n");
+    const entries = { "agent:main:main": { ...legacyEntry, ...params.entryOverrides } };
+    writePrivate(storePath, JSON.stringify(entries, null, 2));
+    writePrivate(
       transcriptPath,
       `${(params.transcriptLines ?? ['{"type":"session","sessionId":"session-1"}', '{"type":"event","id":"evt-1"}']).join("\n")}\n`,
-      { mode: 0o600 },
     );
-    fs.writeFileSync(trajectoryPath, `${JSON.stringify({ type: "trajectory" })}\n`, {
-      mode: 0o600,
-    });
-    fs.writeFileSync(unreferencedJsonlPath, '{"type":"event"}\n', {
-      mode: 0o600,
-    });
+    writePrivate(trajectoryPath, '{"type":"trajectory"}\n');
+    writePrivate(unreferencedJsonlPath, '{"type":"event"}\n');
     const env = {
       ...process.env,
       OPENCLAW_CONFIG_PATH: configPath,
@@ -231,10 +249,7 @@ export function useDoctorSessionSqliteTestFixture() {
   }> {
     const store = createLegacyStore({ agentDirName: shared ? "alpha" : undefined });
     const report = await importLegacyStore(store);
-    let sqlitePath = report.targets[0]?.sqlitePath;
-    if (!sqlitePath) {
-      throw new Error("expected imported agent SQLite path");
-    }
+    let sqlitePath = expectDefined(report.targets[0]?.sqlitePath, "imported agent SQLite path");
     closeOpenClawAgentDatabasesForTest();
     if (shared) {
       const sharedPath = path.join(store.stateDir, "shared.sqlite");
@@ -281,7 +296,7 @@ export function useDoctorSessionSqliteTestFixture() {
       ],
     };
     const manifestPath = path.join(runsDir, `${manifest.runId}.json`);
-    fs.writeFileSync(manifestPath, `${JSON.stringify(manifest)}\n`, { mode: 0o600 });
+    writePrivate(manifestPath, `${JSON.stringify(manifest)}\n`);
     const archivePath = expectDefined(
       moves.find((move) => move.kind === "transcript"),
       "historical transcript archive",
@@ -295,12 +310,14 @@ export function useDoctorSessionSqliteTestFixture() {
     const store = createLegacyStore({ transcriptLines });
     const imported = await importLegacyStore(store);
     expect(imported.targets[0]?.issues).toEqual([]);
-    const manifest = readMigrationManifest(imported.migrationRun?.manifestPath);
-    const archivePath = manifest.targets[0]!.completedMoves.find(
+    const manifestPath = requireMigrationManifestPath(imported.migrationRun?.manifestPath);
+    const manifest = readMigrationManifest(manifestPath);
+    const target = manifest.targets[0]!;
+    const archivePath = target.completedMoves.find(
       (move) => move.kind === "transcript",
     )!.archivePath;
     closeOpenClawAgentDatabasesForTest();
-    return { store, imported, archivePath };
+    return { store, imported, archivePath, manifestPath, manifest, target };
   }
 
   return {

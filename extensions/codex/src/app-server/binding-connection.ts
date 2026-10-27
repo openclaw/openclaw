@@ -1,11 +1,16 @@
 // Codex helper module selects an app-server connection from private binding ownership.
 import { AgentHarnessPreflightError } from "openclaw/plugin-sdk/agent-harness-registration";
 import type { EmbeddedRunAttemptParamsV2 } from "openclaw/plugin-sdk/agent-harness-runtime";
+import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import { createPluginRuntimeStore } from "openclaw/plugin-sdk/runtime-store";
 import type { CodexCatalogHome } from "../session-catalog-types.js";
 import type { CodexAppServerRuntimeOptions } from "./config-contracts.js";
 import type { resolveCodexAppServerRuntimeOptions } from "./config-runtime.js";
 import type { CodexAppServerThreadBinding } from "./session-binding.js";
+
+const loadBindingConnectionRuntime = createLazyRuntimeModule(
+  () => import("./binding-connection.runtime.js"),
+);
 
 export type CodexCatalogHomeDiscovery = (agentDir: string) => Promise<readonly CodexCatalogHome[]>;
 
@@ -22,13 +27,7 @@ type CodexAppServerRuntimeOptionsParams = NonNullable<
 export type CodexBindingAppServerConnection = {
   appServer: CodexAppServerRuntimeOptions;
   usesSupervisionConnection: boolean;
-  requestAuthProfileId: string | undefined;
   clientAuthProfileId: string | null | undefined;
-};
-
-type CodexSupervisionModelSelection = {
-  model: string;
-  modelProvider: string;
 };
 
 /** Connection selection excludes independently updated thread bookkeeping. */
@@ -75,7 +74,7 @@ export function assertCodexSessionRuntimeOwnership(
 /** Requires the native model pair after a supervised pending branch has materialized. */
 export function requireCodexSupervisionModelSelection(
   binding: Pick<CodexAppServerThreadBinding, "connectionScope" | "model" | "modelProvider">,
-): CodexSupervisionModelSelection {
+) {
   const model = binding.model?.trim();
   const modelProvider = binding.modelProvider?.trim();
   if (binding.connectionScope !== "supervision" || !model || !modelProvider) {
@@ -93,12 +92,13 @@ export type CodexBindingAppServerConnectionParams = CodexAppServerRuntimeOptions
   >;
   authProfileId?: string;
   assertCurrent?: () => void;
+  assertCurrentAsync?: () => Promise<void>;
 };
 
 /** Registration publishes the resolver; connection policy loads only for an actual request. */
 export async function resolveCodexBindingAppServerConnection(
   params: CodexBindingAppServerConnectionParams,
 ): Promise<CodexBindingAppServerConnection> {
-  const runtime = await import("./binding-connection.runtime.js");
+  const runtime = await loadBindingConnectionRuntime();
   return runtime.resolveCodexBindingAppServerConnection(params, catalogHomes.tryGetRuntime());
 }

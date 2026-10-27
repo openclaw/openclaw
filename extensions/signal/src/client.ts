@@ -1,18 +1,14 @@
-// Signal plugin module implements client behavior.
 import { Buffer } from "node:buffer";
 import http, { type ClientRequest, type IncomingMessage } from "node:http";
 import https from "node:https";
 import { generateSecureUuid } from "openclaw/plugin-sdk/core";
-import { formatErrorMessage, toErrorObject } from "openclaw/plugin-sdk/error-runtime";
-import { resolveTimerTimeoutMs } from "openclaw/plugin-sdk/number-runtime";
+import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
+import { captureEffectAuthority } from "openclaw/plugin-sdk/fetch-runtime";
+import { asPositiveFiniteNumber, resolveTimerTimeoutMs } from "openclaw/plugin-sdk/number-runtime";
+import type { SignalRpcOptions, SignalSseEvent } from "./client-types.js";
 import { signalUnixRpcRequest, streamSignalUnixEvents } from "./client-unix.js";
 
-export type SignalRpcOptions = {
-  baseUrl: string;
-  timeoutMs?: number;
-  maxResponseBytes?: number;
-  assertDirectAdapterHandoff?: () => void;
-};
+export type { SignalRpcOptions } from "./client-types.js";
 
 type SignalRpcError = {
   code?: number;
@@ -36,12 +32,6 @@ export class SignalSseRejectionError extends Error {
     super(`Signal SSE failed (${status} ${statusText})`);
   }
 }
-
-type SignalSseEvent = {
-  event?: string;
-  data?: string;
-  id?: string;
-};
 
 const DEFAULT_TIMEOUT_MS = 10_000;
 const DEFAULT_SIGNAL_HTTP_RESPONSE_MAX_BYTES = 1_048_576;
@@ -107,19 +97,6 @@ function parseSignalRpcResponse<T>(text: string, status: number): SignalRpcRespo
   return rpc;
 }
 
-function assertSignalHttpProtocol(url: URL, label: string): void {
-  if (url.protocol !== "http:" && url.protocol !== "https:") {
-    throw new Error(`Signal ${label} unsupported protocol: ${url.protocol}`);
-  }
-}
-
-function normalizeSignalHttpResponseMaxBytes(value: number | undefined): number {
-  if (typeof value !== "number" || !Number.isFinite(value) || value <= 0) {
-    return DEFAULT_SIGNAL_HTTP_RESPONSE_MAX_BYTES;
-  }
-  return Math.floor(value);
-}
-
 function normalizeSignalSseTimeoutMs(timeoutMs: number): number | null {
   if (!Number.isFinite(timeoutMs) || timeoutMs <= 0) {
     return null;
@@ -138,37 +115,28 @@ function requestSignalHttp(
     assertDirectAdapterHandoff?: () => void;
   },
 ): Promise<SignalHttpResponse> {
-  assertSignalHttpProtocol(url, "HTTP");
+  return captureEffectAuthority().initiate(() => initiateSignalHttp(url, options));
+}
+
+function initiateSignalHttp(
+  url: URL,
+  options: Parameters<typeof requestSignalHttp>[1],
+): Promise<SignalHttpResponse> {
   const timeoutMs = resolveTimerTimeoutMs(options.timeoutMs, DEFAULT_TIMEOUT_MS);
   const client = url.protocol === "https:" ? https : http;
   options.assertDirectAdapterHandoff?.();
   return new Promise((resolve, reject) => {
-    let settled = false;
     const deadline = setTimeout(() => {
       request?.destroy(new Error(`Signal HTTP exceeded deadline after ${timeoutMs}ms`));
     }, timeoutMs);
     deadline.unref?.();
-    const cleanup = () => {
+    const rejectResponse = (error: Error) => {
       clearTimeout(deadline);
-      request?.setTimeout(0);
+      reject(error);
     };
-    const rejectOnce = (error: unknown) => {
-      if (settled) {
-        return;
-      }
-      settled = true;
-      cleanup();
-      reject(toErrorObject(error, "Non-Error rejection"));
-    };
-    const resolveOnce = (response: SignalHttpResponse) => {
-      if (settled) {
-        return;
-      }
-      settled = true;
-      cleanup();
-      resolve(response);
-    };
-    const maxResponseBytes = normalizeSignalHttpResponseMaxBytes(options.maxResponseBytes);
+    const maxResponseBytes = Math.floor(
+      asPositiveFiniteNumber(options.maxResponseBytes) ?? DEFAULT_SIGNAL_HTTP_RESPONSE_MAX_BYTES,
+    );
     const request: ClientRequest | undefined = client.request(
       url,
       {
@@ -185,24 +153,22 @@ function requestSignalHttp(
             const error = new Error("Signal HTTP response exceeded size limit");
             request?.destroy(error);
             res.destroy(error);
-            rejectOnce(error);
+            rejectResponse(error);
             return;
           }
           chunks.push(next);
         });
-        res.on("error", rejectOnce);
+        res.on("error", rejectResponse);
         res.on("end", () => {
-          resolveOnce({
+          clearTimeout(deadline);
+          resolve({
             status: res.statusCode ?? 0,
             body: Buffer.concat(chunks),
           });
         });
       },
     );
-    request.setTimeout(timeoutMs, () => {
-      request?.destroy(new Error(`Signal HTTP timed out after ${timeoutMs}ms`));
-    });
-    request.on("error", rejectOnce);
+    request.on("error", rejectResponse);
     if (options.body !== undefined) {
       request.write(options.body);
     }
@@ -279,18 +245,33 @@ export async function signalCheck(
   }
 }
 
-function openSignalEventStream(
-  url: URL,
-  abortSignal?: AbortSignal,
-  timeoutMs = DEFAULT_TIMEOUT_MS,
-): Promise<{ response: IncomingMessage; cleanup: () => void }> {
-  assertSignalHttpProtocol(url, "SSE");
+export async function streamSignalEvents(params: {
+  baseUrl: string;
+  account?: string;
+  abortSignal?: AbortSignal;
+  timeoutMs?: number;
+  onEvent: (event: SignalSseEvent) => unknown;
+  onStreamOpen?: () => void;
+}): Promise<void> {
+  if (params.baseUrl.trim().startsWith("unix:")) {
+    return streamSignalUnixEvents(params);
+  }
+  const url = resolveSignalEndpointUrl(params.baseUrl, "/api/v1/events");
+  if (params.account) {
+    url.searchParams.set("account", params.account);
+  }
+
+  const abortSignal = params.abortSignal;
+  const timeoutMs = params.timeoutMs ?? DEFAULT_TIMEOUT_MS;
   if (abortSignal?.aborted) {
     throw createSignalSseAbortError();
   }
 
   const client = url.protocol === "https:" ? https : http;
-  return new Promise((resolve, reject) => {
+  const { response: streamResponse, cleanup: cleanupStream } = await new Promise<{
+    response: IncomingMessage;
+    cleanup: () => void;
+  }>((resolve, reject) => {
     let settled = false;
     let response: IncomingMessage | undefined;
     let onAbort: () => void = () => {};
@@ -313,13 +294,13 @@ function openSignalEventStream(
       }
       abortSignal?.removeEventListener("abort", onAbort);
     };
-    const rejectOnce = (error: unknown) => {
+    const rejectOnce = (error: Error) => {
       if (settled) {
         return;
       }
       settled = true;
       cleanup();
-      reject(toErrorObject(error, "Non-Error rejection"));
+      reject(error);
     };
     const request: ClientRequest = client.request(
       url,
@@ -357,29 +338,6 @@ function openSignalEventStream(
     request.on("error", rejectOnce);
     request.end();
   });
-}
-
-export async function streamSignalEvents(params: {
-  baseUrl: string;
-  account?: string;
-  abortSignal?: AbortSignal;
-  timeoutMs?: number;
-  onEvent: (event: SignalSseEvent) => unknown;
-  onStreamOpen?: () => void;
-}): Promise<void> {
-  if (params.baseUrl.trim().startsWith("unix:")) {
-    return streamSignalUnixEvents(params);
-  }
-  const url = resolveSignalEndpointUrl(params.baseUrl, "/api/v1/events");
-  if (params.account) {
-    url.searchParams.set("account", params.account);
-  }
-
-  const { response, cleanup } = await openSignalEventStream(
-    url,
-    params.abortSignal,
-    params.timeoutMs ?? DEFAULT_TIMEOUT_MS,
-  );
   params.onStreamOpen?.();
   const decoder = new TextDecoder();
   let buffer = "";
@@ -444,7 +402,7 @@ export async function streamSignalEvents(params: {
   };
 
   try {
-    for await (const chunk of response as AsyncIterable<Buffer | string>) {
+    for await (const chunk of streamResponse as AsyncIterable<Buffer | string>) {
       const value = typeof chunk === "string" ? Buffer.from(chunk) : chunk;
       bufferedBytes += value.byteLength;
       if (bufferedBytes > MAX_SIGNAL_SSE_BUFFER_BYTES) {
@@ -463,7 +421,7 @@ export async function streamSignalEvents(params: {
     }
     await drainCompleteLines();
   } finally {
-    cleanup();
+    cleanupStream();
   }
 
   await flushEvent();

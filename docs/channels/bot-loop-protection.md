@@ -7,7 +7,9 @@ title: "Bot loop protection"
 sidebarTitle: "Bot loop protection"
 ---
 
-OpenClaw can accept messages written by other bots on channels that support `allowBots`. When that path is enabled, pair loop protection prevents two bot identities from replying to each other indefinitely.
+OpenClaw can accept messages written by other bots on channels that support `allowBots`. Discord and Slack default to accepting them under the normal mention and access rules; an explicit `allowBots: false` still disables bot-triggered turns. Bot messages can remain visible as conversation context independently of turn admission.
+
+Pair loop protection bounds rapid exchanges between two bot identities. It is a sliding-window rate guard, so slower exchanges below the budget can continue.
 
 The guard is enforced by the core inbound reply runner. Each supporting channel maps its inbound event into generic facts: account or scope, conversation id, sender bot id, and receiver bot id. Core tracks the participant pair in both directions (A to B and B to A count as the same pair), applies a sliding-window budget, and suppresses the pair during a cooldown after the budget is exceeded.
 

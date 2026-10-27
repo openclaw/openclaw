@@ -12,14 +12,15 @@ import {
   listUpdateRuns,
 } from "../../infra/update-run-ledger.js";
 import { defaultRuntime } from "../../runtime.js";
-import { classifyUpdateOutcome } from "../../shared/update-outcome.js";
+import { classifyUpdateOutcome } from "../../shared/update-outcome-classification.js";
 import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
 import { VERSION } from "../../version.js";
+import { cleanupUpdateCommandTest } from "./update-command-cleanup.test-support.js";
 import { updateFinalizeCommand } from "./update-command-finalize.js";
 import * as finalizationDoctor from "./update-command-fresh-doctor.js";
 import * as pluginUpdate from "./update-command-plugins.js";
-import { admitUpdateCommandRun } from "./update-command-run.js";
+import { admitUpdateCommandRun, completeUpdateCommandRun } from "./update-command-run.js";
 import * as sourceRuntime from "./update-command-runtime.js";
 import { updateCommand } from "./update-command.js";
 import { UpdateFinalizationLifecycle } from "./update-finalization-lifecycle.js";
@@ -38,14 +39,11 @@ vi.mock("../../daemon/service.js", () => ({
 vi.mock("./shared.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./shared.js")>()),
   resolveUpdateRoot: async () => fixture.root,
+  resolveGlobalManager: async () => "npm",
 }));
 
 const dirs = useAutoCleanupTempDirTracker(afterEach);
-afterEach(() => {
-  closeOpenClawStateDatabaseForTest();
-  vi.restoreAllMocks();
-  vi.unstubAllEnvs();
-});
+afterEach(cleanupUpdateCommandTest);
 
 function state() {
   fixture.serviceMutation.mockClear();
@@ -66,10 +64,19 @@ function state() {
   return { filename: resolveOpenClawStateSqlitePath(), before };
 }
 
-it.each(["dry-run", "update", "repair"] as const)(
+it.each(["update", "repair", "completion", "repair completion"] as const)(
   "admits %s after a writer exceeds the general SQLite wait",
   async (mode) => {
     const { filename, before } = state();
+    const admitted =
+      mode === "completion"
+        ? await admitUpdateCommandRun({ opts: { timeout: "10" }, root: fixture.root })
+        : undefined;
+    const lifecycle =
+      mode === "repair completion"
+        ? new UpdateFinalizationLifecycle(true, 10_000, () => {})
+        : undefined;
+    const repairRunId = lifecycle?.attachLedger(true);
     const writer = new Worker(
       `
     const { parentPort, workerData } = require('node:worker_threads');
@@ -83,16 +90,25 @@ it.each(["dry-run", "update", "repair"] as const)(
     );
     try {
       await once(writer, "message");
+      lifecycle?.complete(0);
       const runId =
-        mode === "repair"
-          ? new UpdateFinalizationLifecycle(true, undefined, () => {}).attachLedger(true)
-          : (
-              await admitUpdateCommandRun({
-                opts: { dryRun: mode === "dry-run" },
-                root: fixture.root,
-              })
-            ).runId;
-      expect(getUpdateRun(runId)).toMatchObject({ status: "running" });
+        repairRunId ??
+        (admitted
+          ? completeUpdateCommandRun(
+              { status: "ok", mode: "npm", durationMs: 1, steps: [] },
+              admitted,
+            ).runId
+          : mode === "repair"
+            ? new UpdateFinalizationLifecycle(true, undefined, () => {}).attachLedger(true)
+            : (
+                await admitUpdateCommandRun({
+                  opts: {},
+                  root: fixture.root,
+                })
+              ).runId);
+      expect(getUpdateRun(runId!)).toMatchObject({
+        status: admitted || lifecycle ? "succeeded" : "running",
+      });
       expect(getUpdateRun(before!.runId)).toEqual(before);
     } finally {
       await writer.terminate();
@@ -121,11 +137,13 @@ it.each(["dry-run", "update", "repair", "finalize"] as const)(
             ? updateRepairCommand(opts)
             : updateCommand({ ...opts, dryRun: mode === "dry-run" }),
       ).rejects.toMatchObject({ name: "ExitError", code: mode === "finalize" ? 1 : 0 });
-      expect(json).toHaveBeenCalledWith(
+      expect(json).toHaveBeenLastCalledWith(
         expect.objectContaining({
           status: "skipped",
           reason: "update-ledger-busy",
           notes: [expect.stringContaining("busy")],
+          ...(mode === "finalize" ? { mode: "finalize" } : {}),
+          ...(mode === "dry-run" ? { dryRun: true } : {}),
         }),
       );
       const result = json.mock.calls.at(-1)?.[0];
@@ -135,12 +153,6 @@ it.each(["dry-run", "update", "repair", "finalize"] as const)(
       expect(doctor).not.toHaveBeenCalled();
       expect(plugins).not.toHaveBeenCalled();
       expect(fixture.serviceMutation).not.toHaveBeenCalled();
-      if (mode === "finalize") {
-        expect(result).toMatchObject({ mode: "finalize" });
-      }
-      if (mode === "dry-run") {
-        expect(result).toMatchObject({ dryRun: true, notes: [expect.stringContaining("busy")] });
-      }
       expect(classifyUpdateOutcome({ status: "skipped", reason: "update-ledger-busy" })).toBe(
         "noop",
       );

@@ -5,10 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { withWorktreeAllocationLease } from "../../src/agents/worktrees/allocation.js";
-import {
-  estimateWorktreeGitBytes,
-  requireWorktreeDiskSpace,
-} from "../../src/agents/worktrees/capacity.js";
+import { estimateWorktreeGitBytes } from "../../src/agents/worktrees/capacity.js";
 import { addManagedWorktree } from "../../src/agents/worktrees/checkout.js";
 import { WORKTREE_CHECKOUT_TIMEOUT_MS } from "../../src/agents/worktrees/git.js";
 import {
@@ -19,6 +16,7 @@ import {
   requireGitCommandOutput,
 } from "../../src/infra/git-exec.js";
 import { isDirectRunUrl } from "../lib/direct-run.mjs";
+import { formatProvisionError } from "./worktree-provision-error.mjs";
 
 type ProvisionParams = {
   root: string;
@@ -123,6 +121,73 @@ async function needsNativeGit(git: GitPolicyReader, env: NodeJS.ProcessEnv): Pro
 
 let advertisedCleanupGrace = false;
 
+/** The private registry upgrades through the same captured owner as standalone Doctor. */
+async function preparePrStateSchema(
+  env: NodeJS.ProcessEnv,
+  assertCurrent: () => void,
+  signal?: AbortSignal,
+): Promise<void> {
+  const { preflightOpenClawDatabaseSchemas } =
+    await import("../../src/state/openclaw-database-preflight.js");
+  assertCurrent();
+  const preflight = await preflightOpenClawDatabaseSchemas({
+    env,
+    signal,
+    scope: "state",
+    preserveSourceArtifacts: false,
+  });
+  assertCurrent();
+  // An unclassified store is never assumed current: guarded preparation re-inspects it
+  // instead of leaving a pending migration to the uncaptured lease open.
+  const migration =
+    preflight.pendingMigrations?.find(({ kind }) => kind === "state") ??
+    preflight.indeterminate.find(({ kind }) => kind === "state");
+  // Missing/current stores keep ordinary allocation concurrency and admission.
+  if (!migration) {
+    return;
+  }
+  const { acquireGatewayStateOwner } = await import("../../src/infra/gateway-state-owner.js");
+  const { createOpenClawDatabaseMaintenanceScope } =
+    await import("../../src/state/openclaw-state-db-async-lifecycle.js");
+  const { runWithDoctorMigrationBackup } =
+    await import("../../src/infra/update-doctor-migration-attribution.js");
+  const { captureFreshDoctorMigrationTables } =
+    await import("../../src/commands/doctor-migration-backup.js");
+  const { completeDoctorMigrationBackups } =
+    await import("../../src/commands/doctor-migration-backup-artifacts.js");
+  const { prepareOpenClawStateDatabaseSchema } =
+    await import("../../src/state/openclaw-state-db.js");
+  assertCurrent();
+  const owner = acquireGatewayStateOwner({ databasePath: migration.path });
+  const resources = createOpenClawDatabaseMaintenanceScope({
+    schemaMaintenance: true,
+    assertOwnerCurrent() {
+      owner.assertCurrent();
+      assertCurrent();
+    },
+    assertDatabaseAccess: owner.assertDatabaseAccess,
+  });
+  try {
+    await resources.run(() =>
+      runWithDoctorMigrationBackup(captureFreshDoctorMigrationTables, async () => {
+        const result = await prepareOpenClawStateDatabaseSchema({ env }, "doctor-preparation");
+        assertCurrent();
+        if (result.warnings.length) {
+          throw new Error(result.warnings.join("\n"));
+        }
+        completeDoctorMigrationBackups(env, [migration.path], true);
+      }),
+    );
+  } finally {
+    try {
+      await resources.close();
+      assertCurrent();
+    } finally {
+      owner.release();
+    }
+  }
+}
+
 async function provisionPrWorktree(params: ProvisionParams): Promise<void> {
   if (
     !/^[1-9][0-9]*$/.test(params.pr) ||
@@ -166,8 +231,21 @@ async function provisionPrWorktree(params: ProvisionParams): Promise<void> {
     }
   };
   assertPrAuthority();
+  await preparePrStateSchema(
+    storageEnv,
+    () => {
+      params.signal?.throwIfAborted();
+      assertPrAuthority();
+    },
+    params.signal,
+  );
   await withWorktreeAllocationLease(
-    { env: storageEnv, signal: params.signal, commitGuard: assertPrAuthority },
+    {
+      env: storageEnv,
+      signal: params.signal,
+      commitGuard: assertPrAuthority,
+      rollbackGuard: assertPrAuthority,
+    },
     async (guard) => {
       const assertCurrent = () => {
         guard.signal?.throwIfAborted();
@@ -255,9 +333,8 @@ async function provisionPrWorktree(params: ProvisionParams): Promise<void> {
         );
         advertisedCleanupGrace = true;
       }
-      const requireSpace = (cloneBytes?: number) => {
-        assertCurrent();
-        requireWorktreeDiskSpace(
+      const requireSpace = (cloneBytes?: number) =>
+        guard.requireDiskSpace(
           [
             { path: destination, bytes: cloneBytes ?? 2 * gitBytes },
             { path: commonDir, bytes: 0 },
@@ -266,9 +343,9 @@ async function provisionPrWorktree(params: ProvisionParams): Promise<void> {
           ],
           "worktree allocation",
         );
-      };
       assertCurrent();
-      requireSpace(0);
+      await requireSpace(0);
+      assertCurrent();
       await fs.mkdir(worktreeRoot, { recursive: true });
       assertCurrent();
       if ((await fs.realpath(worktreeRoot)) !== resolvedWorktreeRoot) {
@@ -278,7 +355,8 @@ async function provisionPrWorktree(params: ProvisionParams): Promise<void> {
       let templateCloned = false;
       if (native) {
         // Exclusive reservation proves custody; an old damaged checkout is never adopted.
-        requireSpace();
+        await requireSpace();
+        assertCurrent();
         await fs.mkdir(destination);
         const reserved = await fs.lstat(destination);
         const removeReservation = async (recursive: boolean) => {
@@ -429,7 +507,7 @@ if (isDirectRunUrl(process.argv[1], import.meta.url)) {
     }
     await provisionPrWorktree({ root, pr, seed, lockRef, ownerOid, signal: controller.signal });
   } catch (error) {
-    console.error(error instanceof Error ? error.message : String(error));
+    console.error(formatProvisionError(error));
     process.exitCode = 1;
     console.error("[pr-worktree-provision] FAILED (exit 1)");
   } finally {

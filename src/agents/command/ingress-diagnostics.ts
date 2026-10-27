@@ -1,29 +1,16 @@
 import { getRuntimeConfig } from "../../config/io.js";
 import { isDiagnosticsEnabled, emitTrustedDiagnosticEvent } from "../../infra/diagnostic-events.js";
 import { estimateAggregateUsageCost } from "../../utils/usage-format.js";
-import { hasBillableUsage, toDiagnosticUsage, type NormalizedUsage } from "../usage.js";
+import type { EmbeddedAgentMeta, EmbeddedAgentRunMeta } from "../embedded-agent-runner/types.js";
+import { hasBillableUsage, toDiagnosticUsage } from "../usage.js";
 import type { AgentCommandIngressOpts } from "./types.js";
 
 type AgentCommandResult = {
   meta?: {
-    agentMeta?: {
-      provider?: string;
-      model?: string;
-      sessionId?: string;
-      usage?: NormalizedUsage;
-      diagnosticUsage?: NormalizedUsage;
-      lastCallUsage?: NormalizedUsage;
-      contextTokens?: number;
-      promptTokens?: number;
-    };
-    durationMs?: number;
+    agentMeta?: Partial<EmbeddedAgentMeta>;
+    durationMs?: EmbeddedAgentRunMeta["durationMs"];
   };
 };
-
-/** Resolve the channel label for model.usage diagnostics from ingress run options. */
-function ingressDiagnosticChannel(opts: AgentCommandIngressOpts): string {
-  return opts.runContext?.messageChannel ?? opts.messageChannel ?? opts.channel ?? "http";
-}
 
 /** Emit the ingress-only model usage diagnostic after a completed agent run. */
 export function emitIngressModelUsageDiagnostic(
@@ -55,7 +42,7 @@ export function emitIngressModelUsageDiagnostic(
     type: "model.usage",
     sessionKey: opts.sessionKey,
     sessionId: agentMeta.sessionId,
-    channel: ingressDiagnosticChannel(opts),
+    channel: opts.runContext?.messageChannel ?? opts.messageChannel ?? opts.channel ?? "http",
     agentId: opts.agentId,
     provider: providerUsed,
     model: modelUsed,

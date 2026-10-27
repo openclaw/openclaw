@@ -1,10 +1,12 @@
 import type { Locator } from "playwright";
 import { expect, it } from "vitest";
+import { controlUiE2eWaitTimeoutMs } from "../test-helpers/control-ui-e2e-readiness.ts";
 import {
   expectForegroundUnchanged,
   openFromForeground,
   scenario,
 } from "./command-palette.test-support.ts";
+import { controlUiE2eBuiltModuleRequest } from "./control-ui-built-module.test-support.ts";
 import {
   createControlUiE2eContextOptions,
   createControlUiE2eSuite,
@@ -84,7 +86,7 @@ suite.define(() => {
       const gateway = await installMockGateway(page, mentionScenario());
       const heldModule = await holdModuleResponse(
         page,
-        /\/assets\/command-palette-[^/?]+\.js(?:\?.*)?$/u,
+        controlUiE2eBuiltModuleRequest("ui/src/components/command-palette.tsx"),
       );
       try {
         await page.goto(`${suite.server.baseUrl}chat`);
@@ -143,11 +145,16 @@ suite.define(() => {
             }
           }
           await palette.locator(".composer-context-strip__more").waitFor({ state: "visible" });
-          expect(
-            await palette
-              .locator(".composer-context-strip__people")
-              .evaluate((element) => element.scrollWidth <= element.clientWidth),
-          ).toBe(true);
+          // The existing +more chip can stay visible until ResizeObserver sizes the new person.
+          await expect
+            .poll(
+              () =>
+                palette
+                  .locator(".composer-context-strip__people")
+                  .evaluate((element) => element.scrollWidth <= element.clientWidth),
+              { timeout: controlUiE2eWaitTimeoutMs },
+            )
+            .toBe(true);
           await input.press("@");
           const menu = palette.getByRole("listbox", { name: "Mention a person" });
           await menu.getByText(/10 people/u).waitFor();

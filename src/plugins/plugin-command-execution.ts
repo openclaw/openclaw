@@ -3,7 +3,6 @@ import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/st
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { resolveBoundAgentIdForSession } from "../agents/session-agent-binding.js";
 import { resolveCommandConversationResolution } from "../channels/conversation-resolution.js";
-import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { ADMIN_SCOPE, isOperatorScope } from "../gateway/operator-scopes.js";
 import { logVerbose } from "../globals.js";
 import { withPluginCommandExecution } from "./command-execution-lock.js";
@@ -20,6 +19,7 @@ import {
 } from "./conversation-binding.js";
 import { pluginCommandSupportsChannel } from "./plugin-command-metadata.js";
 import type { PluginCommandDispatchContext } from "./plugin-command-runtime.js";
+import { capturePluginLifecycleAuthority } from "./registry-lifecycle.js";
 import type { PluginRegistry } from "./registry-types.js";
 import type { PluginCommandContext, PluginCommandResult } from "./types.js";
 
@@ -46,49 +46,14 @@ function sanitizeArgs(args: string | undefined): string | undefined {
   return sanitized;
 }
 
-function resolveBindingConversation(params: {
-  registry: PluginRegistry;
-  config: OpenClawConfig;
-  channel: string;
-  senderId?: string;
-  from?: string;
-  to?: string;
-  originatingTo?: string;
-  accountId?: string;
-  messageThreadId?: string | number;
-  threadParentId?: string;
-}) {
-  const channelPlugin = params.registry.channels.find(
-    (entry) => entry.plugin.id === params.channel,
-  )?.plugin;
-  if (!channelPlugin?.bindings?.resolveCommandConversation) {
-    return null;
-  }
-  return resolveCommandConversationResolution({
-    cfg: params.config,
-    plugin: channelPlugin,
-    channel: params.channel,
-    accountId: params.accountId,
-    threadId: params.messageThreadId,
-    threadParentId: params.threadParentId,
-    senderId: params.senderId,
-    originatingTo: params.originatingTo ?? params.from,
-    commandTo: params.to,
-    fallbackTo: params.to ?? params.from,
-  });
-}
-
-type PluginCommandRuntimeLlm = NonNullable<PluginCommandContext["runtimeContext"]>["llm"];
-type PluginCommandLlmCompleteParams = Parameters<
-  NonNullable<PluginCommandRuntimeLlm>["complete"]
->[0];
-
-function buildRuntimeContext(
+async function buildRuntimeContext(
+  registry: PluginRegistry,
   command: RegisteredPluginCommand,
   params: PluginCommandDispatchContext,
   invocationSignal: AbortSignal,
   assertOwnerCurrent?: () => void,
-): PluginCommandContext["runtimeContext"] {
+  scheduled?: true,
+): Promise<PluginCommandContext["runtimeContext"]> {
   const sessionKey = params.sessionKey?.trim();
   const agentId = resolveBoundAgentIdForSession({
     config: params.config,
@@ -99,9 +64,67 @@ function buildRuntimeContext(
   if (!sessionKey && !agentId) {
     return undefined;
   }
+  const pluginAuthority = capturePluginLifecycleAuthority(
+    registry,
+    registry.plugins.find((record) => record.id === command.pluginId),
+    { scopedRuntime: true },
+  );
+  const assertInvocationCurrent = () => {
+    invocationSignal.throwIfAborted();
+    if (!pluginAuthority?.()) {
+      throw new Error("Plugin command runtime is no longer active.");
+    }
+    params.assertOwnerCurrent?.();
+  };
+  const subagents =
+    command.runtimeCapabilities?.includes("subagents") &&
+    command.requireAuth === true &&
+    params.isAuthorizedSender
+      ? await params.runtimeContext?.createSubagents?.({
+          pluginId: command.pluginId,
+          command: {
+            requireAuth: command.requireAuth,
+            runtimeCapabilities: command.runtimeCapabilities,
+          },
+          signal: invocationSignal,
+          assertCurrent: assertInvocationCurrent,
+        })
+      : undefined;
+  if (subagents) {
+    assertInvocationCurrent();
+  } else if (scheduled) {
+    throw new Error("Scheduled command requires current native subagent eligibility.");
+  }
   return {
+    ...(subagents
+      ? {
+          // Project the public helpers only: scheduling stays outside the subagents object.
+          subagents: {
+            spawn: (request) => subagents.spawn(request),
+            collect: (request) => subagents.collect(request),
+            ...(subagents.list ? { list: subagents.list } : {}),
+          },
+        }
+      : {}),
+    ...(subagents?.scheduledTurns && command.runtimeCapabilities?.includes("scheduledTurns")
+      ? { scheduledTurns: subagents.scheduledTurns }
+      : {}),
+    ...(command.runtimeCapabilities?.includes("models") && params.isAuthorizedSender
+      ? {
+          models: params.runtimeContext?.createModels?.({
+            signal: invocationSignal,
+            assertCurrent: assertInvocationCurrent,
+          }),
+        }
+      : {}),
     llm: {
-      complete: async (request: PluginCommandLlmCompleteParams) => {
+      complete: async (request) => {
+        assertInvocationCurrent();
+        if (scheduled) {
+          throw new Error(
+            "Scheduled commands must use their admitted native subagent runtime for model work.",
+          );
+        }
         const { createRuntimeLlm } = await import("./runtime/runtime-llm.runtime.js");
         return await createRuntimeLlm({
           getConfig: () => params.config,
@@ -140,30 +163,40 @@ function buildRuntimeContext(
 export async function executeRegisteredPluginCommand(
   registry: PluginRegistry,
   params: PluginCommandExecutionParams,
+  scheduled?: { abortSignal: AbortSignal },
 ): Promise<PluginCommandResult> {
   const assertAdmittedOwner = params.assertOwnerCurrent;
+  scheduled?.abortSignal.throwIfAborted();
+  const refuse = (text: string): PluginCommandResult => {
+    if (scheduled) {
+      throw new Error(text);
+    }
+    return { text };
+  };
   const { command, args, senderId, channel, isAuthorizedSender, commandBody, config } = params;
   if (!pluginCommandSupportsChannel(command, channel)) {
     logVerbose(`Plugin command /${command.name} skipped on unsupported channel ${channel}`);
+    if (scheduled) {
+      throw new Error("Scheduled command channel is unavailable.");
+    }
     return { continueAgent: true };
   }
   if (command.requireAuth !== false && !isAuthorizedSender) {
     logVerbose(
       `Plugin command /${command.name} blocked: unauthorized sender ${senderId || "<unknown>"}`,
     );
-    return { text: "⚠️ This command requires authorization." };
+    return refuse("⚠️ This command requires authorization.");
   }
   if (command.requiredScopes !== undefined && !Array.isArray(command.requiredScopes)) {
     logVerbose(`Plugin command /${command.name} blocked: invalid requiredScopes configuration`);
-    return { text: "⚠️ This command has invalid gateway scope configuration." };
+    return refuse("⚠️ This command has invalid gateway scope configuration.");
   }
   const requiredScopes = command.requiredScopes ?? [];
-  const unknownScope = (requiredScopes as readonly unknown[]).find(
-    (scope) => !isOperatorScope(scope),
-  );
-  if (unknownScope) {
-    logVerbose(`Plugin command /${command.name} blocked: unknown gateway scope`);
-    return { text: "⚠️ This command has invalid gateway scope configuration." };
+  for (const scope of requiredScopes) {
+    if (!isOperatorScope(scope)) {
+      logVerbose(`Plugin command /${command.name} blocked: unknown gateway scope`);
+      return refuse("⚠️ This command has invalid gateway scope configuration.");
+    }
   }
   if (requiredScopes.length > 0) {
     const scopes = Array.isArray(params.gatewayClientScopes)
@@ -175,22 +208,25 @@ export async function executeRegisteredPluginCommand(
       : requiredScopes[0];
     if (missingScope && (scopes !== undefined || params.senderIsOwner !== true)) {
       logVerbose(`Plugin command /${command.name} blocked: missing gateway scope ${missingScope}`);
-      return { text: `⚠️ This command requires gateway scope: ${missingScope}.` };
+      return refuse(`⚠️ This command requires gateway scope: ${missingScope}.`);
     }
   }
 
-  const bindingConversation = resolveBindingConversation({
-    registry,
-    config,
-    channel,
-    senderId,
-    from: params.from,
-    to: params.to,
-    originatingTo: params.originatingTo,
-    accountId: params.accountId,
-    messageThreadId: params.messageThreadId,
-    threadParentId: params.threadParentId,
-  });
+  const channelPlugin = registry.channels.find((entry) => entry.plugin.id === channel)?.plugin;
+  const bindingConversation = channelPlugin?.bindings?.resolveCommandConversation
+    ? resolveCommandConversationResolution({
+        cfg: config,
+        plugin: channelPlugin,
+        channel,
+        accountId: params.accountId,
+        threadId: params.messageThreadId,
+        threadParentId: params.threadParentId,
+        senderId,
+        originatingTo: params.originatingTo ?? params.from,
+        commandTo: params.to,
+        fallbackTo: params.to ?? params.from,
+      })
+    : null;
   const trustedReservedOwner =
     isTrustedReservedCommandOwner(command) &&
     command.ownership === "reserved" &&
@@ -199,6 +235,9 @@ export async function executeRegisteredPluginCommand(
   const senderIsOwner =
     canExposeSenderIsOwner(command) || trustedReservedOwner ? params.senderIsOwner : undefined;
   const commandInvocationAbort = new AbortController();
+  const invocationSignal = scheduled
+    ? AbortSignal.any([commandInvocationAbort.signal, scheduled.abortSignal])
+    : commandInvocationAbort.signal;
   const assertOwnerCurrent =
     senderIsOwner === true
       ? () => {
@@ -230,12 +269,6 @@ export async function executeRegisteredPluginCommand(
     messageThreadId: params.messageThreadId,
     threadParentId: params.threadParentId,
     diagnosticsSessions: params.diagnosticsSessions,
-    runtimeContext: buildRuntimeContext(
-      command,
-      params,
-      commandInvocationAbort.signal,
-      assertOwnerCurrent,
-    ),
     ...(trustedReservedOwner && params.diagnosticsUploadApproved !== undefined
       ? { diagnosticsUploadApproved: params.diagnosticsUploadApproved }
       : {}),
@@ -276,26 +309,44 @@ export async function executeRegisteredPluginCommand(
   };
 
   try {
-    if (requiredScopes.length > 0 && !Array.isArray(params.gatewayClientScopes)) {
-      assertOwnerCurrent?.();
-    }
-    const execution = await withPluginCommandExecution(registry, () => command.handler(ctx));
+    const execution = await withPluginCommandExecution(registry, async () => {
+      ctx.runtimeContext = await buildRuntimeContext(
+        registry,
+        command,
+        params,
+        invocationSignal,
+        assertOwnerCurrent,
+        scheduled ? true : undefined,
+      );
+      if (requiredScopes.length > 0 && !Array.isArray(params.gatewayClientScopes)) {
+        assertOwnerCurrent?.();
+      }
+      invocationSignal.throwIfAborted();
+      if (scheduled) {
+        assertAdmittedOwner?.();
+      }
+      const result = await command.handler(ctx);
+      if (scheduled) {
+        invocationSignal.throwIfAborted();
+        assertAdmittedOwner?.();
+      }
+      return result;
+    });
     if (!execution.admitted) {
-      return {
-        text: "⚠️ This command is no longer available after the plugin registry changed. Please try again.",
-      };
+      return refuse(
+        "⚠️ This command is no longer available after the plugin registry changed. Please try again.",
+      );
     }
     const result = execution.value;
-    logVerbose(
-      `Plugin command /${command.name} executed successfully for ${senderId || "unknown"}`,
-    );
     if (!result || typeof result !== "object") {
-      logVerbose(`Plugin command /${command.name} returned no reply payload`);
       return {};
     }
     return result;
   } catch (error) {
-    logVerbose(`Plugin command /${command.name} error: ${(error as Error).message}`);
+    if (scheduled) {
+      throw error;
+    }
+    logVerbose(`Plugin command /${command.name} execution failed (plugin=${command.pluginId})`);
     return { text: "⚠️ Command failed. Please try again later." };
   } finally {
     commandInvocationAbort.abort("command invocation closed");

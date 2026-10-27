@@ -3,6 +3,10 @@ import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
 export type DirectoryEntry = {
   name: string;
   isDirectory: boolean;
+  /** Optional no-follow metadata from the same directory listing. */
+  isFile?: boolean;
+  size?: number;
+  mtimeMs?: number;
 };
 
 /** Decode the sandbox directory command's metadata, never file contents. */

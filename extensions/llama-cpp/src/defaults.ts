@@ -4,19 +4,15 @@ import type {
   ModelDefinitionConfig,
   ModelProviderConfig,
 } from "openclaw/plugin-sdk/provider-model-shared";
-import { resolveStateDir } from "openclaw/plugin-sdk/state-paths";
+import { resolveManagedResourceStateDir } from "openclaw/plugin-sdk/state-paths";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 
 export const LLAMA_CPP_PROVIDER_ID = "llama-cpp";
 export const LLAMA_CPP_PROVIDER_LABEL = "llama.cpp";
-const LLAMA_CPP_LOCAL_AUTH_MARKER = "llama-cpp-local";
+export const LLAMA_CPP_LOCAL_AUTH_MARKER = "llama-cpp-local";
 export const LLAMA_CPP_DEFAULT_PORT = 19_432;
 const LLAMA_CPP_READY_TIMEOUT_MS = 30_000;
 const LLAMA_CPP_IDLE_STOP_MS = 10 * 60_000;
-
-export function resolveLlamaCppSyntheticApiKey(): string {
-  return LLAMA_CPP_LOCAL_AUTH_MARKER;
-}
 
 export const DEFAULT_LLAMA_CPP_MODEL_ID = "gemma-4-e4b-it-q4_k_m";
 export const DEFAULT_LLAMA_CPP_MODEL_URI =
@@ -37,6 +33,7 @@ export const DEFAULT_LLAMA_CPP_EMBEDDING_MODEL =
 export const DEFAULT_LLAMA_CPP_EMBEDDING_MODEL_REVISION =
   "66f974f8cd48cc3b9c41c516b95508e75b4bee64";
 export const DEFAULT_LLAMA_CPP_EMBEDDING_MODEL_ID = "embeddinggemma-300m-qat-q8_0";
+export const DEFAULT_LLAMA_CPP_EMBEDDING_CONTEXT_SIZE = 2048;
 export const DEFAULT_LLAMA_CPP_EMBEDDING_CACHE_FILE =
   "hf_ggml-org_embeddinggemma-300m-qat-Q8_0.gguf";
 export const DEFAULT_LLAMA_CPP_EMBEDDING_MODEL_SIZE_BYTES = 328_577_056;
@@ -44,14 +41,14 @@ export const DEFAULT_LLAMA_CPP_EMBEDDING_MODEL_SHA256 =
   "6fa0c02a9c302be6f977521d399b4de3a46310a4f2621ee0063747881b673f67";
 
 export function resolveLlamaCppDataDir(): string {
-  return path.join(resolveStateDir(), "tools", "llama.cpp");
+  return path.join(resolveManagedResourceStateDir(), "tools", "llama.cpp");
 }
 
 export function resolveLlamaCppModelCacheDir(provider?: ModelProviderConfig): string {
   const configured = provider?.params?.modelCacheDir;
   return typeof configured === "string" && configured.trim()
     ? resolveHomePath(configured.trim())
-    : path.join(resolveStateDir(), "models", "llama.cpp");
+    : path.join(resolveManagedResourceStateDir(), "models", "llama.cpp");
 }
 
 export function resolveLegacyLlamaCppModelCacheDir(): string {
@@ -115,19 +112,25 @@ export function resolveCachedLlamaCppModelPath(params: {
   return path.isAbsolute(source) ? source : path.resolve(cacheDir, source);
 }
 
-function buildDefaultLlamaCppModel(): ModelDefinitionConfig {
+export function buildLlamaCppModel(
+  model: Pick<ModelDefinitionConfig, "id" | "name"> & {
+    source: string;
+    reasoning?: boolean;
+    maxTokens?: number;
+  },
+): ModelDefinitionConfig {
   return {
-    id: DEFAULT_LLAMA_CPP_MODEL_ID,
-    name: "Gemma 4 E4B (Q4_K_M)",
+    id: model.id,
+    name: model.name,
     api: "openai-completions",
-    reasoning: false,
+    reasoning: model.reasoning ?? false,
     input: ["text"],
     cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
     contextWindow: DEFAULT_LLAMA_CPP_CONTEXT_SIZE,
     contextTokens: DEFAULT_LLAMA_CPP_CONTEXT_SIZE,
-    maxTokens: 2048,
+    maxTokens: model.maxTokens ?? 2048,
     params: {
-      modelPath: DEFAULT_LLAMA_CPP_MODEL_URI,
+      modelPath: model.source,
       contextSize: DEFAULT_LLAMA_CPP_CONTEXT_SIZE,
     },
     compat: {
@@ -151,7 +154,11 @@ export function buildLlamaCppProviderConfig(
   } = {},
 ): ModelProviderConfig {
   const { existing, managed, modelInventory } = params;
-  const defaultModel = buildDefaultLlamaCppModel();
+  const defaultModel = buildLlamaCppModel({
+    id: DEFAULT_LLAMA_CPP_MODEL_ID,
+    name: "Gemma 4 E4B (Q4_K_M)",
+    source: DEFAULT_LLAMA_CPP_MODEL_URI,
+  });
   const configuredModels = existing?.models ?? [];
   const models =
     modelInventory ??
@@ -162,20 +169,29 @@ export function buildLlamaCppProviderConfig(
     ...existing,
     baseUrl:
       managed?.baseUrl ?? existing?.baseUrl ?? `http://127.0.0.1:${LLAMA_CPP_DEFAULT_PORT}/v1`,
-    apiKey: existing?.apiKey ?? resolveLlamaCppSyntheticApiKey(),
     api: "openai-completions",
     timeoutSeconds: existing?.timeoutSeconds ?? 600,
     ...(managed
       ? {
           localService: {
+            ...existing?.localService,
             command: managed.command,
             args: managed.args,
             healthUrl: managed.healthUrl,
-            readyTimeoutMs: LLAMA_CPP_READY_TIMEOUT_MS,
-            idleStopMs: LLAMA_CPP_IDLE_STOP_MS,
+            readyTimeoutMs: existing?.localService?.readyTimeoutMs ?? LLAMA_CPP_READY_TIMEOUT_MS,
+            idleStopMs: existing?.localService?.idleStopMs ?? LLAMA_CPP_IDLE_STOP_MS,
           },
         }
       : {}),
-    models,
+    // Every setup mode can move the managed router. Retain independent endpoints,
+    // but move model rows that explicitly used the previous provider endpoint.
+    models:
+      managed && existing?.localService
+        ? models.map((model) =>
+            model.baseUrl === existing.baseUrl
+              ? Object.assign({}, model, { baseUrl: managed.baseUrl })
+              : model,
+          )
+        : models,
   };
 }

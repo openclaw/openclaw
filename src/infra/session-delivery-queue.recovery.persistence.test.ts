@@ -1,5 +1,5 @@
-// Covers real session-delivery retry failures against the persistent SQLite queue.
-import { describe, expect, it, vi } from "vitest";
+import { expect, it, vi } from "vitest";
+import { createInfoWarnErrorLogger } from "../../test/helpers/mock-logger.js";
 import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import {
   drainPendingSessionDelivery,
@@ -9,71 +9,69 @@ import {
   enqueueSessionDelivery,
   loadPendingSessionDeliveries,
 } from "./session-delivery-queue-storage.js";
+import { SessionDeliveryDeadLetteredError } from "./session-delivery-queue.records.js";
 import { withSessionDeliveryQueue } from "./session-delivery-queue.test-helpers.js";
 
-describe("session-delivery recovery persistence", () => {
-  it.each(["startup", "targeted drain"] as const)(
-    "surfaces real SQLite retry-persistence failures during %s recovery",
-    async (mode) => {
-      await withSessionDeliveryQueue(async (tempDir, queueContext) => {
-        const id = await enqueueSessionDelivery(
-          {
-            kind: "systemEvent",
-            sessionKey: "agent:main:main",
-            text: "recover after retry writes are allowed",
-          },
-          queueContext,
+it.each([
+  { mode: "startup", phase: "retry" },
+  { mode: "targeted drain", phase: "retry" },
+  { mode: "startup", phase: "settlement" },
+  { mode: "targeted drain", phase: "settlement" },
+] as const)("preserves $phase failures during $mode recovery", async ({ mode, phase }) => {
+  await withSessionDeliveryQueue(async (tempDir, queueContext) => {
+    const terminal = phase === "settlement";
+    const id = await enqueueSessionDelivery(
+      { kind: "systemEvent", sessionKey: "agent:main:main", text: "pending delivery" },
+      queueContext,
+    );
+    const { db } = openOpenClawStateDatabase({
+      env: { ...process.env, OPENCLAW_STATE_DIR: tempDir },
+    });
+    const deliver = vi.fn(async () => {
+      // A real trigger is visible to the worker's existing connection.
+      db.exec(`CREATE TRIGGER main.reject_session_delivery_${phase}
+    BEFORE UPDATE ON delivery_queue_entries
+    WHEN OLD.queue_name = 'session' AND OLD.id = '${id.replaceAll("'", "''")}'
+    BEGIN
+      SELECT RAISE(ABORT, 'synthetic session delivery ${phase} write failure');
+    END;`);
+      throw terminal
+        ? new SessionDeliveryDeadLetteredError("ambiguous side effects")
+        : new Error("session delivery interrupted");
+    });
+    const log = createInfoWarnErrorLogger();
+    try {
+      const options = { deliver, queueContext, log };
+      const recovery =
+        mode === "startup"
+          ? recoverPendingSessionDeliveries(options)
+          : drainPendingSessionDelivery({ ...options, id, logLabel: "Session delivery" });
+      if (terminal) {
+        await expect(recovery).resolves.toMatchObject(
+          mode === "startup" ? { recovered: 0, failed: 0 } : { id },
         );
-        const { db } = openOpenClawStateDatabase({
-          env: { ...process.env, OPENCLAW_STATE_DIR: tempDir },
-        });
-        const deliver = vi.fn(async () => {
-          // An ordinary schema trigger is visible to the worker's existing connection.
-          db.exec(`
-            CREATE TRIGGER main.reject_session_delivery_retry
-            BEFORE UPDATE ON delivery_queue_entries
-            WHEN OLD.queue_name = 'session' AND OLD.id = '${id.replaceAll("'", "''")}'
-            BEGIN
-              SELECT RAISE(ABORT, 'synthetic session delivery retry write failure');
-            END;
-          `);
-          throw new Error("session delivery interrupted");
-        });
-        const log = { info: vi.fn(), warn: vi.fn(), error: vi.fn() };
-
-        try {
-          const recovery =
-            mode === "startup"
-              ? recoverPendingSessionDeliveries({ deliver, queueContext, log })
-              : drainPendingSessionDelivery({
-                  id,
-                  logLabel: "test rejected retry persistence",
-                  deliver,
-                  queueContext,
-                  log,
-                });
-
-          await expect(recovery).rejects.toThrow("synthetic session delivery retry write failure");
-        } finally {
-          db.exec("DROP TRIGGER IF EXISTS main.reject_session_delivery_retry");
-        }
-
-        expect(deliver).toHaveBeenCalledTimes(1);
-        const [pending] = await loadPendingSessionDeliveries(queueContext);
-        expect(pending).toEqual(expect.objectContaining({ id, retryCount: 0 }));
-        expect(pending?.lastAttemptAt).toBeUndefined();
-
-        const retryDelivery = vi.fn(async () => undefined);
-        await expect(
-          recoverPendingSessionDeliveries({
-            deliver: retryDelivery,
-            queueContext,
-            log,
-          }),
-        ).resolves.toMatchObject({ recovered: 1 });
-        expect(retryDelivery).toHaveBeenCalledTimes(1);
-        expect(await loadPendingSessionDeliveries(queueContext)).toEqual([]);
-      });
-    },
-  );
+      } else {
+        await expect(recovery).rejects.toThrow("synthetic session delivery retry write failure");
+      }
+    } finally {
+      db.exec(`DROP TRIGGER IF EXISTS main.reject_session_delivery_${phase}`);
+    }
+    expect(deliver).toHaveBeenCalledTimes(1);
+    const [pending] = await loadPendingSessionDeliveries(queueContext);
+    expect(pending).toMatchObject({ id, retryCount: 0 });
+    if (terminal) {
+      expect(log.warn).toHaveBeenCalledExactlyOnceWith(
+        `Session delivery: dead-letter decision for entry ${id}: ambiguous side effects`,
+      );
+      expect([pending?.settlementOutcome, pending?.lastError]).toEqual([undefined, undefined]);
+    } else {
+      expect(pending?.lastAttemptAt).toBeUndefined();
+      const retryDelivery = vi.fn(async () => undefined);
+      await expect(
+        recoverPendingSessionDeliveries({ deliver: retryDelivery, queueContext, log }),
+      ).resolves.toMatchObject({ recovered: 1 });
+      expect(retryDelivery).toHaveBeenCalledTimes(1);
+      expect(await loadPendingSessionDeliveries(queueContext)).toEqual([]);
+    }
+  });
 });

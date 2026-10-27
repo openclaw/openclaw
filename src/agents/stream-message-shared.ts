@@ -56,7 +56,6 @@ export function buildAssistantMessage(params: {
 export function buildStreamErrorAssistantMessage(params: {
   model: StreamModelDescriptor;
   errorMessage: string;
-  timestamp?: number;
 }): AssistantMessage & { stopReason: "error"; errorMessage: string } {
   return {
     ...buildAssistantMessage({
@@ -64,7 +63,6 @@ export function buildStreamErrorAssistantMessage(params: {
       content: [{ type: "text", text: STREAM_ERROR_FALLBACK_TEXT }],
       stopReason: "error",
       usage: buildUsageWithNoCost({}),
-      timestamp: params.timestamp,
     }),
     stopReason: "error",
     errorMessage: params.errorMessage,

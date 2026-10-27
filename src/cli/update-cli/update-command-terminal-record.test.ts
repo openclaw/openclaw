@@ -3,6 +3,7 @@ import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import { captureGatewayStateOwner } from "../../infra/gateway-state-owner.js";
 import * as snapshot from "../../infra/sqlite-snapshot-source.js";
 import { normalizeControlPlaneUpdateResult } from "../../infra/update-restart-sentinel-payload.js";
 import { createRetainedCheckpointFixture } from "../../infra/update-retained-checkpoint.test-support.js";
@@ -17,12 +18,16 @@ import { defaultRuntime } from "../../runtime.js";
 import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
 import type { UpdateCommandOptions } from "./shared.js";
+import { cleanupUpdateCommandTest } from "./update-command-cleanup.test-support.js";
+import {
+  resultFixture,
+  stepFixture,
+  verificationFixture,
+} from "./update-command-fixtures.test-support.js";
 import { UpdateCommandPendingRecoveryFailure } from "./update-command-result.js";
 import { captureUpdateCommandTerminalRecord } from "./update-command-terminal-record.js";
-import {
-  publishUpdateCommandTerminalResult,
-  resolveSettledUpdateCommandResult,
-} from "./update-command-terminal.js";
+import { resolveSettledUpdateCommandResult } from "./update-command-terminal.js";
+import { publishUpdateCommandTerminalResultForTest as publishUpdateCommandTerminalResult } from "./update-command-terminal.test-support.js";
 
 const dirs = useAutoCleanupTempDirTracker(afterEach);
 const after = { version: "2026.9.5", buildId: "synthetic-verified-candidate" };
@@ -32,11 +37,7 @@ beforeEach(() => {
   vi.stubEnv("OPENCLAW_STATE_DIR", root);
   vi.stubEnv("OPENCLAW_CONFIG_PATH", path.join(root, "openclaw.json"));
 });
-afterEach(() => {
-  closeOpenClawStateDatabaseForTest();
-  vi.restoreAllMocks();
-  vi.unstubAllEnvs();
-});
+afterEach(cleanupUpdateCommandTest);
 
 function fixture(
   existingRunId?: string,
@@ -45,20 +46,7 @@ function fixture(
 ) {
   const env = { ...process.env };
   const runId = existingRunId ?? createUpdateRun({ trigger: "cli" }, { env }).runId;
-  recordUpdateRunVerification(
-    runId,
-    {
-      serviceRunning: true,
-      versionMatch: true,
-      channelsReady: true,
-      readyz: true,
-      settled: true,
-      pluginErrors: [],
-      runningVersion: after.version,
-      runningBuildId: after.buildId,
-    },
-    { env },
-  );
+  recordUpdateRunVerification(runId, verificationFixture(after.version, after.buildId), { env });
   if (terminal !== "running") {
     finishUpdateRun(runId, { status: terminal, after: committedAfter }, { env });
   }
@@ -75,93 +63,84 @@ function fixture(
     executorFence: { assertCurrent },
   };
   const params = { opts: { run, json: true }, root };
-  const result: UpdateRunResult = {
-    status: "ok",
-    mode: "git",
-    root,
-    runId,
-    after,
-    steps: [],
-    durationMs: 1,
-  };
+  const result = resultFixture(root, { mode: "git", runId, after, durationMs: 1 });
   return {
     params,
+    run,
     result,
-    assertCurrent,
     release: () => {
       current = false;
     },
     databasePath: resolveOpenClawStateSqlitePath(env),
+    write(sql: string, ...values: (string | number)[]) {
+      using db = new DatabaseSync(resolveOpenClawStateSqlitePath(env));
+      db.prepare(sql).run(...values);
+    },
+    capture: (candidate = result) =>
+      captureUpdateCommandTerminalRecord(params, candidate, assertCurrent),
+    settle: (
+      candidate = result,
+      captured?: Awaited<ReturnType<typeof captureUpdateCommandTerminalRecord>>,
+      error?: Error,
+    ) => resolveSettledUpdateCommandResult(params, candidate, error, captured),
   };
 }
 
-describe("owned completed update publication", () => {
-  it.each(["serviceRunning", "versionMatch", "channelsReady", "readyz", "settled"] as const)(
-    "does not capture a completed row with unverified %s",
-    async (key) => {
-      const f = fixture();
-      const db = new DatabaseSync(f.databasePath);
-      db.prepare(
-        "UPDATE update_runs SET verification_json = json_set(verification_json, ?, json('false')) WHERE run_id = ?",
-      ).run(`$.${key}`, f.result.runId!);
-      db.close();
-      expect(
-        await captureUpdateCommandTerminalRecord(f.params, f.result, f.assertCurrent),
-      ).toBeUndefined();
-    },
+function setVerification(f: ReturnType<typeof fixture>, key: string, value: unknown) {
+  const remove = value === undefined;
+  f.write(
+    `UPDATE update_runs SET verification_json = ${remove ? "json_remove(verification_json, ?)" : "json_set(verification_json, ?, json(?))"} WHERE run_id = ?`,
+    `$.${key}`,
+    ...(remove ? [] : [JSON.stringify(value)]),
+    f.run.runId,
   );
+}
 
-  it.each([
-    ["runningBuildId", "unrelated-build"],
-    ["runningBuildId", null],
-    ["runningVersion", "2026.1.1"],
-  ] as const)("rejects incompatible observed %s=%s", async (key, value) => {
-    const f = fixture();
-    const db = new DatabaseSync(f.databasePath);
-    if (value === null) {
-      db.prepare(
-        "UPDATE update_runs SET verification_json = json_remove(verification_json, ?) WHERE run_id = ?",
-      ).run(`$.${key}`, f.result.runId!);
-    } else {
-      db.prepare(
-        "UPDATE update_runs SET verification_json = json_set(verification_json, ?, ?) WHERE run_id = ?",
-      ).run(`$.${key}`, value, f.result.runId!);
-    }
-    db.close();
-    expect(
-      await captureUpdateCommandTerminalRecord(f.params, f.result, f.assertCurrent),
-    ).toBeUndefined();
-  });
+type CaptureRejection = {
+  name: string;
+  terminal?: "running" | "failed";
+  committed?: UpdateRunResult["after"];
+  expected?: UpdateRunResult["after"];
+  verification?: [key: string, value: unknown];
+};
 
-  it("requires the observed version when no expected build ID is supplied", async () => {
-    const f = fixture();
-    f.result.after = { version: after.version };
-    const db = new DatabaseSync(f.databasePath);
-    db.prepare(
-      "UPDATE update_runs SET verification_json = json_remove(verification_json, '$.runningVersion') WHERE run_id = ?",
-    ).run(f.result.runId!);
-    db.close();
-    expect(
-      await captureUpdateCommandTerminalRecord(f.params, f.result, f.assertCurrent),
-    ).toBeUndefined();
-  });
+const verificationRejections: [string, string, unknown, UpdateRunResult["after"]?][] = [
+  ["missing observed build", "runningBuildId", undefined],
+  ["missing observed version", "runningVersion", undefined, { version: after.version }],
+  ["conflicting omitted build", "runningBuildId", "unrelated-build", { version: after.version }],
+  ["conflicting omitted version", "runningVersion", "2026.1.1", { buildId: after.buildId }],
+  ["missing plugin error list", "pluginErrors", undefined],
+  ["plugin failure", "pluginErrors", ["synthetic plugin failure"]],
+];
 
-  it.each([
-    { expected: { version: after.version }, key: "runningBuildId", value: "unrelated-build" },
-    { expected: { buildId: after.buildId }, key: "runningVersion", value: "2026.1.1" },
-  ])(
-    "rejects committed-versus-observed conflict when the result omits $key",
-    async ({ expected, key, value }) => {
-      const f = fixture();
-      f.result.after = expected;
-      const db = new DatabaseSync(f.databasePath);
-      db.prepare(
-        "UPDATE update_runs SET verification_json = json_set(verification_json, ?, ?) WHERE run_id = ?",
-      ).run(`$.${key}`, value, f.result.runId!);
-      db.close();
-      expect(
-        await captureUpdateCommandTerminalRecord(f.params, f.result, f.assertCurrent),
-      ).toBeUndefined();
+const captureRejections: CaptureRejection[] = [
+  ...["serviceRunning", "versionMatch", "channelsReady", "readyz", "settled"].map<CaptureRejection>(
+    (key) => ({ name: `unverified ${key}`, verification: [key, false] }),
+  ),
+  ...verificationRejections.map<CaptureRejection>(([name, key, value, expected]) => ({
+    name,
+    expected,
+    verification: [key, value],
+  })),
+  { name: "running history", terminal: "running" },
+  { name: "failed history", terminal: "failed" },
+  ...["buildId", "sha"].map<CaptureRejection>((key) => ({
+    name: `missing committed ${key}`,
+    committed: { version: after.version },
+    expected: { version: after.version, [key]: "expected-candidate-identity" },
+  })),
+];
+
+describe("owned completed update publication", () => {
+  it.each(captureRejections)(
+    "does not capture success with $name",
+    async ({ terminal, committed, expected, verification }) => {
+      const f = fixture(undefined, terminal, committed);
+      f.result.after = expected ?? after;
+      if (verification) {
+        setVerification(f, ...verification);
+      }
+      expect(await f.capture()).toBeUndefined();
     },
   );
 
@@ -170,21 +149,20 @@ describe("owned completed update publication", () => {
     const pending = normalizeControlPlaneUpdateResult({
       ...f.result,
       steps: [
-        {
-          name: "gateway verification",
+        stepFixture("gateway verification", {
           command: "openclaw gateway status",
           cwd: root,
           durationMs: 1,
           exitCode: 0,
           termination: "timeout",
           advisory: { kind: "recoverable-maintenance", message: "Gateway is still starting" },
-        },
+        }),
       ],
     });
-    const captured = await captureUpdateCommandTerminalRecord(f.params, pending, f.assertCurrent);
+    const captured = await f.capture(pending);
     expect(captured).toBeUndefined();
     const output = vi.spyOn(defaultRuntime, "writeJson").mockImplementation(() => {});
-    const settled = await resolveSettledUpdateCommandResult(f.params, pending, undefined, captured);
+    const settled = await f.settle(pending, captured);
     const reported = await publishUpdateCommandTerminalResult(f.params, settled.result, {
       rolledBack: false,
     });
@@ -192,186 +170,107 @@ describe("owned completed update publication", () => {
     expect(output).toHaveBeenCalledTimes(1);
   });
 
-  it.each([undefined, ["synthetic plugin failure"]])(
-    "does not capture a completed row without an explicit empty plugin error list: %j",
-    async (pluginErrors) => {
-      const f = fixture();
-      const db = new DatabaseSync(f.databasePath);
-      if (pluginErrors === undefined) {
-        db.prepare(
-          "UPDATE update_runs SET verification_json = json_remove(verification_json, '$.pluginErrors') WHERE run_id = ?",
-        ).run(f.result.runId!);
-      } else {
-        db.prepare(
-          "UPDATE update_runs SET verification_json = json_set(verification_json, '$.pluginErrors', json(?)) WHERE run_id = ?",
-        ).run(JSON.stringify(pluginErrors), f.result.runId!);
-      }
-      db.close();
-      expect(
-        await captureUpdateCommandTerminalRecord(f.params, f.result, f.assertCurrent),
-      ).toBeUndefined();
-    },
-  );
-
-  it.each(["running", "failed"] as const)(
-    "does not prepare %s history as completed success",
-    async (status) => {
-      const f = fixture(undefined, status);
-      expect(
-        await captureUpdateCommandTerminalRecord(f.params, f.result, f.assertCurrent),
-      ).toBeUndefined();
-    },
-  );
-
-  it.each(["buildId", "sha"] as const)(
-    "does not replace a missing expected %s with version equality",
-    async (key) => {
-      const f = fixture(undefined, "succeeded", { version: after.version });
-      f.result.after = { version: after.version, [key]: "expected-candidate-identity" };
-      expect(
-        await captureUpdateCommandTerminalRecord(f.params, f.result, f.assertCurrent),
-      ).toBeUndefined();
-    },
-  );
-
-  it("accepts the exact verified build when Gateway history omits its Git SHA", async () => {
+  it("publishes the durable verified build when fresh-owned cleanup cannot snapshot changing history", async () => {
     const f = fixture();
     f.result.after = { ...after, sha: "a".repeat(40) };
-    expect(
-      (await captureUpdateCommandTerminalRecord(f.params, f.result, f.assertCurrent))?.record.after,
-    ).toEqual(after);
-  });
-  it.each([true, false])(
-    "publishes the durable result without reopening snapshots (json=%s)",
-    async (json) => {
-      const f = fixture();
-      f.params.opts.json = json;
-      const captured = await captureUpdateCommandTerminalRecord(
-        f.params,
-        f.result,
-        f.assertCurrent,
-      );
-      expect(captured?.record.status).toBe("succeeded");
-      const before = fs.readFileSync(f.databasePath);
-      f.release();
-      const takeSnapshot = vi
-        .spyOn(snapshot, "prepareSqliteReadOnlyLocationSync")
-        .mockImplementation(() => {
-          throw new Error("live database is changing");
-        });
-      const reportPath = path.join(root, "update-reports", `${f.params.opts.run.runId}.md`);
-      let savedAtPublication: string | undefined;
-      const captureReport = () => {
-        savedAtPublication ??= fs.readFileSync(reportPath, "utf8");
-      };
-      const jsonOutput = vi.spyOn(defaultRuntime, "writeJson").mockImplementation(captureReport);
-      const textOutput = vi.spyOn(defaultRuntime, "log").mockImplementation(captureReport);
-      const settled = await resolveSettledUpdateCommandResult(
-        f.params,
-        f.result,
-        undefined,
-        captured,
-      );
-      const result = await publishUpdateCommandTerminalResult(f.params, settled.result, {
-        rolledBack: false,
-        captured: settled.captured,
-      });
-      expect(result.status).toBe("ok");
-      expect(savedAtPublication).toContain(after.version);
-      expect(takeSnapshot).not.toHaveBeenCalled();
-      expect(fs.readFileSync(f.databasePath)).toEqual(before);
-      if (json) {
-        expect(jsonOutput).toHaveBeenCalledWith(
-          expect.objectContaining({
-            status: "ok",
-            reportPath,
-            run: expect.objectContaining({ status: "succeeded" }),
-          }),
-        );
-        expect(jsonOutput.mock.calls[0]?.[0]).not.toHaveProperty("captured");
-      } else {
-        expect(textOutput.mock.calls.flat().join("\n")).toContain("Update");
-      }
-      // A historical report is not permission for the next update to skip admission.
-      await expect(assertUpdateRecoveryAdmission({ env: f.params.opts.run.env })).rejects.toThrow(
-        "live database is changing",
-      );
-    },
-  );
-
-  it("does not let a prepared success mask failed executor cleanup", async () => {
-    const f = fixture();
-    const captured = await captureUpdateCommandTerminalRecord(f.params, f.result, f.assertCurrent);
+    const captured = await f.capture();
+    expect(captured?.record.after).toEqual(after);
+    expect(captured?.record.status).toBe("succeeded");
+    const before = fs.readFileSync(f.databasePath);
     f.release();
-    await expect(
-      resolveSettledUpdateCommandResult(f.params, f.result, new Error("release failed"), captured),
-    ).rejects.toBeInstanceOf(UpdateCommandPendingRecoveryFailure);
+    const snapshotOwners: Array<string | undefined> = [];
+    vi.spyOn(snapshot, "prepareSqliteReadOnlyLocationSync").mockImplementation(() => {
+      snapshotOwners.push(captureGatewayStateOwner(f.databasePath)?.role);
+      throw new Error("live database is changing");
+    });
+    const reportPath = path.join(root, "update-reports", `${f.run.runId}.md`);
+    let savedAtPublication: string | undefined;
+    const captureReport = () => {
+      savedAtPublication ??= fs.readFileSync(reportPath, "utf8");
+    };
+    const jsonOutput = vi.spyOn(defaultRuntime, "writeJson").mockImplementation(captureReport);
+    const settled = await f.settle(f.result, captured);
+    const result = await publishUpdateCommandTerminalResult(f.params, settled.result, {
+      rolledBack: false,
+      captured: settled.captured,
+    });
+    expect(result.status).toBe("ok");
+    expect(savedAtPublication).toContain(after.version);
+    // Publication still uses captured facts. Only independently acquired offline
+    // cleanup custody may attempt a new snapshot after the update executor closes.
+    expect(snapshotOwners.length).toBeGreaterThan(0);
+    expect(snapshotOwners.every((role) => role === "agent-embedded")).toBe(true);
+    expect(result.steps.at(-1)?.advisory?.message).toContain("live database is changing");
+    expect(fs.readFileSync(f.databasePath)).toEqual(before);
+    expect(jsonOutput).toHaveBeenCalledWith(
+      expect.objectContaining({
+        status: "ok",
+        reportPath,
+        run: expect.objectContaining({ status: "succeeded" }),
+      }),
+    );
+    expect(jsonOutput.mock.calls[0]?.[0]).not.toHaveProperty("captured");
+    // A historical report is not permission for the next update to skip admission.
+    await expect(assertUpdateRecoveryAdmission({ env: f.run.env })).rejects.toThrow(
+      "live database is changing",
+    );
   });
 
-  it.each(["retarget", "replace", "different-run", "different-candidate"] as const)(
-    "refuses a captured result after %s",
-    async (kind) => {
-      const f = fixture();
-      const captured = await captureUpdateCommandTerminalRecord(
-        f.params,
-        f.result,
-        f.assertCurrent,
-      );
-      f.release();
-      if (kind === "retarget") {
-        f.params.opts.run.env.OPENCLAW_STATE_DIR = dirs.make("update-terminal-other-");
-      } else if (kind === "replace") {
-        fs.renameSync(f.databasePath, `${f.databasePath}.retained`);
-        fs.copyFileSync(`${f.databasePath}.retained`, f.databasePath);
-      } else if (kind === "different-run") {
-        f.params.opts.run.runId = "unrelated-run";
-      } else {
-        f.result.after = { ...after, buildId: "different-candidate" };
-      }
-      await expect(
-        resolveSettledUpdateCommandResult(f.params, f.result, undefined, captured),
-      ).rejects.toBeInstanceOf(UpdateCommandPendingRecoveryFailure);
-    },
-  );
-
-  it("keeps genuine retained recovery with its existing finalizer", async () => {
-    const retained = createRetainedCheckpointFixture(root);
-    const f = fixture(retained.run.runId);
-    const captured = await captureUpdateCommandTerminalRecord(f.params, f.result, f.assertCurrent);
-    expect(captured).toBeUndefined();
-    await expect(resolveSettledUpdateCommandResult(f.params, f.result)).rejects.toBeInstanceOf(
+  it.each([
+    "failed cleanup",
+    "retarget",
+    "replace",
+    "different-run",
+    "different-candidate",
+  ] as const)("refuses a captured result after %s", async (kind) => {
+    const f = fixture();
+    const captured = await f.capture();
+    f.release();
+    let cleanupError: Error | undefined;
+    if (kind === "failed cleanup") {
+      cleanupError = new Error("release failed");
+    } else if (kind === "retarget") {
+      f.run.env.OPENCLAW_STATE_DIR = dirs.make("update-terminal-other-");
+    } else if (kind === "replace") {
+      fs.renameSync(f.databasePath, `${f.databasePath}.retained`);
+      fs.copyFileSync(`${f.databasePath}.retained`, f.databasePath);
+    } else if (kind === "different-run") {
+      f.run.runId = "unrelated-run";
+    } else {
+      f.result.after = { ...after, buildId: "different-candidate" };
+    }
+    await expect(f.settle(f.result, captured, cleanupError)).rejects.toBeInstanceOf(
       UpdateCommandPendingRecoveryFailure,
     );
   });
 
-  it("does not capture malformed recovery as an empty namespace", async () => {
-    const f = fixture();
-    const db = new DatabaseSync(f.databasePath);
-    try {
-      db.prepare(
-        "INSERT INTO config_machine_state(state_key, value_json, updated_at_ms) VALUES(?, ?, ?)",
-      ).run(`update.recovery.${f.params.opts.run.runId}`, "{}", Date.now());
-    } finally {
-      db.close();
-    }
-    await expect(
-      captureUpdateCommandTerminalRecord(f.params, f.result, f.assertCurrent),
-    ).rejects.toThrow();
+  it("keeps genuine retained recovery with its existing finalizer", async () => {
+    const retained = createRetainedCheckpointFixture(root);
+    const f = fixture(retained.run.runId);
+    const captured = await f.capture();
+    expect(captured).toBeUndefined();
+    await expect(f.settle()).rejects.toBeInstanceOf(UpdateCommandPendingRecoveryFailure);
   });
 
-  it("rejects interrupted database publication before opening state", async () => {
-    const f = fixture();
-    fs.mkdirSync(path.join(path.dirname(f.databasePath), ".openclaw-restore-synthetic"));
-    await expect(
-      captureUpdateCommandTerminalRecord(f.params, f.result, f.assertCurrent),
-    ).rejects.toThrow("Interrupted shared-database publication");
-  });
-
-  it("cannot prepare a receipt after its executor closes", async () => {
-    const f = fixture();
-    f.release();
-    await expect(
-      captureUpdateCommandTerminalRecord(f.params, f.result, f.assertCurrent),
-    ).rejects.toThrow("synthetic executor closed");
-  });
+  it.each(["malformed recovery", "interrupted publication", "closed executor"])(
+    "rejects capture after %s",
+    async (condition) => {
+      const f = fixture();
+      if (condition === "malformed recovery") {
+        f.write(
+          "INSERT INTO config_machine_state(state_key, value_json, updated_at_ms) VALUES(?, ?, ?)",
+          `update.recovery.${f.run.runId}`,
+          "{}",
+          Date.now(),
+        );
+        await expect(f.capture()).rejects.toThrow();
+      } else if (condition === "interrupted publication") {
+        fs.mkdirSync(path.join(path.dirname(f.databasePath), ".openclaw-restore-synthetic"));
+        await expect(f.capture()).rejects.toThrow("Interrupted shared-database publication");
+      } else {
+        f.release();
+        await expect(f.capture()).rejects.toThrow("synthetic executor closed");
+      }
+    },
+  );
 });

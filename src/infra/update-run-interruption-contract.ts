@@ -1,7 +1,5 @@
-import type { z } from "zod";
-import type { UpdateRunRecordSchema } from "./update-run-schema.js";
-
-type UpdateRunRecord = z.infer<typeof UpdateRunRecordSchema>;
+import type { UpdateResultPayload } from "./update-result-payload.js";
+import type { UpdateRunRecord } from "./update-run-record.js";
 
 export type InterruptedUpdateSettlement = {
   expected: UpdateRunRecord;
@@ -10,4 +8,8 @@ export type InterruptedUpdateSettlement = {
   cleanup?: "pending" | "unknown" | "confirmed";
 };
 
-export type InterruptedUpdateSettlementResult = { accepted: boolean; run?: UpdateRunRecord };
+export type InterruptedUpdateSettlementResult = {
+  accepted: boolean;
+  run?: UpdateRunRecord;
+  updateResult?: UpdateResultPayload;
+};

@@ -7,7 +7,7 @@ status: active
 
 Manage sandbox runtimes for isolated agent execution: Docker/Podman containers, SSH targets, or OpenShell backends.
 
-[`openclaw agent exec`](/cli/agent#agent-exec) does not use these configured runtimes. Its isolated implicit policy config turns the agent sandbox off, allows full Gateway-host execution, and restricts filesystem tools to `--cwd`.
+[`openclaw agent exec`](/cli/agent#agent-exec) preserves a sandbox selected by the inherited config or `--config`, including its execution routing. Without a configured sandbox, its defaults allow full Gateway-host execution and restrict filesystem tools to `--cwd`. `--isolated` and `--auth-env-only` skip config inheritance and use those defaults.
 
 ## Commands
 
@@ -47,7 +47,73 @@ Options:
 
 Pass exactly one of `--all`, `--session`, or `--agent`.
 
-For `ssh` and OpenShell `remote`, recreate matters more than with Docker: the remote workspace is canonical after the initial seed, `recreate` deletes that canonical remote workspace for the selected scope, and the next run reseeds it from the current local workspace.
+Recreation requires exclusive offline ownership of the selected state directory.
+If its Gateway is running, the command refuses before inspecting or removing
+runtimes. Stop the Gateway through its service owner, wait for ownership to
+release, then rerun the command. Offline ownership stays held through confirmation
+and accepted teardown; a starting Gateway waits until cleanup settles. `--force`
+does not bypass this ownership check.
+
+See [local state owner routing](/gateway/protocol/versioning#local-state-owner-routing)
+for owner discovery, refusal states, and compatibility boundaries.
+
+Scoped recreation selects registry entries before inspecting their backends. An
+unrelated runtime on another Podman connection or an unavailable backend does not
+block `--session` or `--agent`. The selected runtime still requires its recorded
+target to be active and reachable; `--force` only skips the confirmation prompt.
+Browser-only recreation does not inspect regular sandbox runtimes.
+
+When recorded Podman targets differ, an unscoped `sandbox list` can still fail its
+target check. Restore the affected runtime's original connection, use its known
+exact scope key with `recreate --session`, and review the preview before confirming.
+If you do not know the exact scope, keep the registry intact; do not guess a key,
+broaden to `--all`, or rewrite its recorded target to bypass validation.
+
+For `ssh` and OpenShell `remote`, recreate matters more than with Docker: the remote workspace becomes the source of truth after the initial seed, `recreate` deletes that remote workspace for the selected scope, and the next run reseeds it from the current local workspace.
+
+### `openclaw sandbox recover`
+
+When a newly generated guest file exceeds the 64 MiB reconciliation limit, its
+pending checkpoint is preserved and later messages cannot prepare the workspace.
+When that file is eligible for recovery, the local workspace error includes the
+exact recovery command and asks for a Gateway administrator. Use explicit
+recovery to move that selected file out of synchronization without losing its
+bytes:
+
+```bash
+openclaw sandbox recover --session agent:main:dashboard:example --path artifacts/archive.tgz
+```
+
+The command routes to the running Gateway with administrator authorization, or
+holds exclusive state ownership when run offline. It pauses the selected local
+sandbox while moving the file and leaves other source edits and the pending
+checkpoint intact. Retry the session afterward to settle the remaining changes;
+repeat for another oversized file if needed.
+
+Only new retained regular files larger than 64 MiB qualify. Already-admitted source
+files, excluded caches, Git metadata, symlinks, and hardlinks are refused. This
+command does not increase limits, change ignore rules, delete files, or reset the
+workspace. Remote-worker workspaces and already-staged reconciliation receipts
+are not supported by this recovery operation.
+
+The checkout-root `.openclaw/tmp/` scratch directory is excluded from workspace
+synchronization, including recovery of older pending results. Toolchains and
+temporary files there stay in the runtime that created them and do not need this
+command. Save files that must synchronize outside that scratch directory.
+
+Recovered files live under
+`<state-dir>/workspace-recovery/<worktree-id>/<recovery-id>/<original-path>`,
+outside synchronization and automatic worktree cleanup. The command prints the
+exact destination; you own its subsequent storage and cleanup. Use the preserved
+file directly or move it to storage appropriate for its purpose rather than
+copying it back into the synchronized workspace unchanged.
+
+A recovery ID is printed before relocation. If a response is interrupted, inspect
+that destination first, then reuse the ID with `--recovery-id <uuid>`. A completed
+move is reported again without replacing files. If both source and destination
+exist, recovery refuses further mutation so you can inspect both copies.
+`--json` returns the destination, byte count, and recovery ID; supply your own
+`--recovery-id` when a machine caller must know the ID before dispatch.
 
 ### `openclaw sandbox explain`
 
@@ -62,8 +128,9 @@ openclaw sandbox explain --agent work
 openclaw sandbox explain --json
 ```
 
-Unlike `recreate --session`, this accepts short session names (for example `main`) and expands them against the resolved agent.
+Unlike `recreate --session`, this accepts short session names (for example `main`) and channel-prefixed aliases (for example `telegram:slash:123`) and expands them against the resolved agent. The `main` alias uses the configured `session.mainKey`.
 An explicit `--agent` is sufficient for multi-agent fleets with no implicit owner; sandbox explanation does not require or guess a default first.
+Channel inference describes the applicable elevated-tool configuration; it does not establish sender authorization.
 
 ## Why recreate is needed
 
@@ -110,7 +177,7 @@ Sandbox settings live in `~/.openclaw/openclaw.json` under `agents.defaults.sand
         "backend": "docker", // docker, podman, ssh; openshell is plugin-provided
         "scope": "agent", // session, agent, shared
         "docker": {
-          "image": "openclaw-sandbox:bookworm-slim",
+          "image": "openclaw-sandbox:trixie-slim",
           "containerPrefix": "openclaw-sbx-",
           // ... more Docker options
         },

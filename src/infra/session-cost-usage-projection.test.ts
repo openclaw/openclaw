@@ -91,6 +91,56 @@ function createSource(
 }
 
 describe("usage cache projections", () => {
+  it.each(["missing", "truncated"])(
+    "repairs %s bodies despite partition budget deferral",
+    async (mode) => {
+      const file = createFile("corrupt-deferred");
+      const row = createRow(file, [{ timestamp: dayStart, cost: 1 }]);
+      const invalid: string[] = [];
+      const result = await projectSessionCostSummaries({
+        ...createSource(
+          [{ ...row, bodyBytes: mode === "missing" ? 0 : row.blob.byteLength - 1 }],
+          [file],
+        ),
+        deferredPaths: new Set([row.key]),
+        onInvalidBody: (key) => invalid.push(key),
+        files: [file],
+        sessions: [{ sessionFile: file.filePath }],
+        pricingFingerprint,
+      });
+      expect(result).toMatchObject({
+        summaries: [null],
+        staleSessionFiles: [file.sourcePath],
+        cacheStatus: { staleFiles: 1 },
+      });
+      expect(invalid).toEqual([row.key]);
+    },
+  );
+
+  it.each([false, true])(
+    "refreshes a budget-deferred aggregate only when stale=%s",
+    async (stale) => {
+      const file = createFile("deferred");
+      const row = createRow(file, [{ timestamp: dayStart, cost: 1 }]);
+      const result = await projectCostUsageSummary({
+        ...createSource([row], [file]),
+        readEntry: async () => null,
+        files: [stale ? { ...file, size: file.size + 1, mtimeMs: file.mtimeMs + 1 } : file],
+        pricingFingerprint,
+        startMs: dayStart,
+        endMs: dayStart + 86_400_000 - 1,
+        dayBucket: utcDayBucket,
+      });
+      expect(result.cacheStatus).toMatchObject({
+        status: stale ? "stale" : "partial",
+        cachedFiles: 0,
+        pendingFiles: 1,
+        staleFiles: stale ? 1 : 0,
+      });
+      expect(result.totals.totalTokens).toBe(0);
+    },
+  );
+
   it("requests a refresh for rollups computed before pricing availability was preserved", async () => {
     const file = createFile("old-pricing");
     const rows = [createRow(file, [{ timestamp: dayStart, cost: 0 }], 100, 5)];
@@ -100,7 +150,6 @@ describe("usage cache projections", () => {
       files: [file],
       pricingFingerprint,
       dayBucket: utcDayBucket,
-      refreshing: false,
     });
     expect(result.summaries).toEqual([null]);
     expect(result.staleSessionFiles).toEqual([file.sourcePath]);
@@ -131,7 +180,6 @@ describe("usage cache projections", () => {
       startMs: dayStart,
       endMs: dayStart + 3,
       dayBucket: utcDayBucket,
-      refreshing: false,
     });
 
     // Each cost-1 addition rounds away; grouping a pair would instead add 2.
@@ -168,7 +216,6 @@ describe("usage cache projections", () => {
       startMs,
       endMs,
       dayBucket: { mode: "utc-offset", utcOffsetMinutes: 12 * 60 },
-      refreshing: false,
     });
 
     expect(result.days).toBe(3);
@@ -180,7 +227,7 @@ describe("usage cache projections", () => {
     ]);
   });
 
-  it("keeps selected identities and strict freshness for duplicate canonical files", async () => {
+  it("keeps committed totals and freshness for duplicate canonical files", async () => {
     const file = createFile("selected");
     const rows = [createRow(file, [{ timestamp: dayStart, cost: 0.5 }, { cost: 0.25 }], 300)];
     const sessions = [
@@ -203,12 +250,17 @@ describe("usage cache projections", () => {
         files,
         pricingFingerprint,
         dayBucket: utcDayBucket,
-        refreshing: true,
       });
 
       expect(result.summaries).toMatchObject([
         { sessionId: "first", sessionFile: "first-archive-alias", totalCost: expectedCost },
-        null,
+        {
+          sessionId: "stale",
+          totalCost: expectedCost,
+          computedAt: 300,
+          refreshing: false,
+          staleSince: file.mtimeMs,
+        },
         { sessionId: "second", sessionFile: "second-archive-alias", totalCost: expectedCost },
         null,
         null,
@@ -217,8 +269,8 @@ describe("usage cache projections", () => {
       expect(result.summaries[0]?.dailyBreakdown).not.toBe(result.summaries[2]?.dailyBreakdown);
       expect(result.staleSessionFiles).toEqual([file.sourcePath, "missing-transcript"]);
       expect(result.cacheStatus).toEqual({
-        status: "refreshing",
-        cachedFiles: 2,
+        status: "partial",
+        cachedFiles: 3,
         pendingFiles: 2,
         staleFiles: 2,
         refreshedAt: 300,
@@ -230,7 +282,6 @@ describe("usage cache projections", () => {
       files: [file],
       pricingFingerprint,
       dayBucket: utcDayBucket,
-      refreshing: true,
     });
     expect(fresh.cacheStatus.status).toBe("fresh");
   });

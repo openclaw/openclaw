@@ -7,6 +7,9 @@ import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { normalizeAgentId } from "openclaw/plugin-sdk/routing";
 import type { PluginDoctorStateMigration } from "openclaw/plugin-sdk/runtime-doctor-migrations";
 import { asOptionalRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { escapeRegExp } from "openclaw/plugin-sdk/text-utility-runtime";
+import { resolveDefaultDbPath, resolveEnvVars } from "./config.js";
+import { acquireMemoryTableUsage } from "./lancedb-custody.js";
 import {
   hasAgentScopeColumn,
   memoryAgentPredicate,
@@ -53,9 +56,7 @@ const LEGACY_ENVELOPE_SENTINELS = [
   "Chat history since last reply (untrusted, for context):",
 ] as const;
 const LEGACY_ENVELOPE_SENTINEL_LINE_RE = new RegExp(
-  `^(?:${LEGACY_ENVELOPE_SENTINELS.map((sentinel) =>
-    sentinel.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"),
-  ).join("|")})[^\\n]*$`,
+  `^(?:${LEGACY_ENVELOPE_SENTINELS.map(escapeRegExp).join("|")})[^\\n]*$`,
   "m",
 );
 const LEGACY_ENVELOPE_LABEL_JSON_BLOCK_RE =
@@ -105,11 +106,12 @@ function resolveConfiguredDbPath(
   config: OpenClawConfig,
   env: NodeJS.ProcessEnv,
   pluginRoot: string,
+  stateDir: string,
 ): string {
   const pluginConfig = asOptionalRecord(config.plugins?.entries?.["memory-lancedb"]?.config);
   const configured = typeof pluginConfig?.dbPath === "string" ? pluginConfig.dbPath.trim() : "";
   if (!configured) {
-    return path.join(resolveHome(env), ".openclaw", "memory", "lancedb");
+    return resolveDefaultDbPath(stateDir);
   }
   if (configured.includes("://")) {
     return configured;
@@ -135,16 +137,7 @@ function resolveStorageOptions(
       if (typeof value !== "string") {
         throw new Error(`memory-lancedb storageOptions.${key} must be a string`);
       }
-      return [
-        key,
-        value.replace(/\$\{([^}]+)\}/g, (_match, envName: string) => {
-          const resolved = env[envName];
-          if (!resolved) {
-            throw new Error(`Environment variable ${envName} is not set`);
-          }
-          return resolved;
-        }),
-      ];
+      return [key, resolveEnvVars(value, env)];
     }),
   );
 }
@@ -153,25 +146,54 @@ async function openMemoryTable(params: {
   config: OpenClawConfig;
   env: NodeJS.ProcessEnv;
   pluginRoot: string;
+  stateDir: string;
 }): Promise<{
   connection: LanceDbConnection | null;
   table: LanceDbTable | null;
   dbPath: string;
+  usage?: Awaited<ReturnType<typeof acquireMemoryTableUsage>>;
 }> {
-  const dbPath = resolveConfiguredDbPath(params.config, params.env, params.pluginRoot);
+  const dbPath = resolveConfiguredDbPath(
+    params.config,
+    params.env,
+    params.pluginRoot,
+    params.stateDir,
+  );
   if (!dbPath.includes("://") && !fs.existsSync(dbPath)) {
     return { connection: null, table: null, dbPath };
   }
-  const lancedb = await import("@lancedb/lancedb");
-  const storageOptions = resolveStorageOptions(params.config, params.env);
-  const connection = await lancedb.connect(dbPath, storageOptions ? { storageOptions } : {});
-  const table = (await connection.tableNames()).includes(MEMORY_TABLE_NAME)
-    ? await connection.openTable(MEMORY_TABLE_NAME)
-    : null;
-  return { connection, table, dbPath };
+  const usage = await acquireMemoryTableUsage(dbPath);
+  let connection: LanceDbConnection | null = null;
+  try {
+    const lancedb = await import("@lancedb/lancedb");
+    const storageOptions = resolveStorageOptions(params.config, params.env);
+    connection = await lancedb.connect(dbPath, storageOptions ? { storageOptions } : {});
+    const table = (await connection.tableNames()).includes(MEMORY_TABLE_NAME)
+      ? await connection.openTable(MEMORY_TABLE_NAME)
+      : null;
+    return { connection, table, dbPath, usage };
+  } catch (error) {
+    connection?.close();
+    await usage?.release();
+    throw error;
+  }
 }
 
 type StateMigrationParams = Parameters<PluginDoctorStateMigration["detectLegacyState"]>[0];
+
+async function withMemoryTable<T>(
+  params: Parameters<typeof openMemoryTable>[0],
+  run: (opened: Awaited<ReturnType<typeof openMemoryTable>>) => Promise<T>,
+): Promise<T> {
+  const opened = await openMemoryTable(params);
+  try {
+    return await run(opened);
+  } finally {
+    opened.table?.close();
+    opened.connection?.close();
+    await opened.usage?.release();
+  }
+}
 
 export function createMemoryLanceDbStateMigrations(
   pluginRoot = DEFAULT_PLUGIN_ROOT,
@@ -181,8 +203,7 @@ export function createMemoryLanceDbStateMigrations(
       id: "memory-lancedb-agent-scope",
       label: "Memory LanceDB per-agent isolation",
       async detectLegacyState(params: StateMigrationParams) {
-        const opened = await openMemoryTable({ ...params, pluginRoot });
-        try {
+        return await withMemoryTable({ ...params, pluginRoot }, async (opened) => {
           if (!opened.table || hasAgentScopeColumn(await opened.table.schema())) {
             return null;
           }
@@ -193,14 +214,10 @@ export function createMemoryLanceDbStateMigrations(
               `- Memory LanceDB: assign ${count} legacy ${count === 1 ? "row" : "rows"} at ${opened.dbPath} to ${owner.label} agent ${owner.agentId}`,
             ],
           };
-        } finally {
-          opened.table?.close();
-          opened.connection?.close();
-        }
+        });
       },
       async migrateLegacyState(params: StateMigrationParams) {
-        const opened = await openMemoryTable({ ...params, pluginRoot });
-        try {
+        return await withMemoryTable({ ...params, pluginRoot }, async (opened) => {
           if (!opened.table || hasAgentScopeColumn(await opened.table.schema())) {
             return { changes: [], warnings: [] };
           }
@@ -224,10 +241,7 @@ export function createMemoryLanceDbStateMigrations(
             ],
             warnings: [],
           };
-        } finally {
-          opened.table?.close();
-          opened.connection?.close();
-        }
+        });
       },
     },
     {
@@ -237,8 +251,7 @@ export function createMemoryLanceDbStateMigrations(
       // startup auto-migration never purges memories without operator intent.
       doctorOnly: true,
       async detectLegacyState(params: StateMigrationParams) {
-        const opened = await openMemoryTable({ ...params, pluginRoot });
-        try {
+        return await withMemoryTable({ ...params, pluginRoot }, async (opened) => {
           if (!opened.table) {
             return null;
           }
@@ -251,14 +264,10 @@ export function createMemoryLanceDbStateMigrations(
               `- Memory LanceDB: delete ${contaminatedIds.length} memory ${contaminatedIds.length === 1 ? "row" : "rows"} contaminated with legacy envelope metadata at ${opened.dbPath}`,
             ],
           };
-        } finally {
-          opened.table?.close();
-          opened.connection?.close();
-        }
+        });
       },
       async migrateLegacyState(params: StateMigrationParams) {
-        const opened = await openMemoryTable({ ...params, pluginRoot });
-        try {
+        return await withMemoryTable({ ...params, pluginRoot }, async (opened) => {
           if (!opened.table) {
             return { changes: [], warnings: [] };
           }
@@ -285,10 +294,7 @@ export function createMemoryLanceDbStateMigrations(
             ],
             warnings: [],
           };
-        } finally {
-          opened.table?.close();
-          opened.connection?.close();
-        }
+        });
       },
     },
   ];

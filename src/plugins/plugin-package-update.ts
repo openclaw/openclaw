@@ -8,7 +8,7 @@ import {
 import {
   hasMatchingPluginLoadPath,
   removePluginRuntimePolicyFromConfig,
-  resolveComparableUninstallPathInternal,
+  resolveComparableUninstallPath,
 } from "./uninstall-package-config.js";
 
 type PluginPackageUpdateSnapshot = ReadonlyMap<string, InstalledPluginLifecycleOwnership>;
@@ -90,14 +90,20 @@ export function reconcilePluginPackageUpdateConfig(params: {
       [
         after.value.installRecord.installPath,
         after.value.installRecord.sourcePath,
-        ...params.afterIndex.plugins
-          .filter((plugin) => afterPluginIds.has(plugin.pluginId))
-          .flatMap((plugin) => [plugin.source, plugin.rootDir]),
+        ...params.afterIndex.plugins.flatMap((plugin) =>
+          afterPluginIds.has(plugin.pluginId) ? [plugin.source, plugin.rootDir] : [],
+        ),
       ]
         .filter((value): value is string => Boolean(value))
-        .map(resolveComparableUninstallPathInternal),
+        .map(resolveComparableUninstallPath),
     );
     const retainedContributionKeys = contributionKeys(params.afterIndex, afterPluginIds);
+    const retainedEngineIds = new Set([
+      ...params.afterIndex.plugins.flatMap((plugin) => plugin.contextEngineIds ?? []),
+      ...Object.values(params.afterIndex.installRecords).flatMap((record) =>
+        Object.values(record.contextEngineIdsByPlugin ?? {}).flat(),
+      ),
+    ]);
     for (const pluginId of removedPluginIds) {
       const oldRecord = params.beforeIndex.plugins.find((plugin) => plugin.pluginId === pluginId);
       const channelIds = [
@@ -106,15 +112,17 @@ export function reconcilePluginPackageUpdateConfig(params: {
       ].filter((channelId) => !retainedContributionKeys.has(channelId));
       config = removePluginRuntimePolicyFromConfig(config, pluginId, {
         channelIds,
+        contextEngineIds: (
+          before.installRecord.contextEngineIdsByPlugin?.[pluginId] ??
+          oldRecord?.contextEngineIds ?? [pluginId]
+        ).filter((id) => !retainedEngineIds.has(id)),
         loadPaths: [
           oldRecord?.source,
           before.installRecord.installPath,
           before.installRecord.sourcePath,
         ]
           .filter((value): value is string => Boolean(value))
-          .filter(
-            (value) => !retainedOwnedPaths.has(resolveComparableUninstallPathInternal(value)),
-          ),
+          .filter((value) => !retainedOwnedPaths.has(resolveComparableUninstallPath(value))),
       }).config;
     }
   }
@@ -146,7 +154,10 @@ export function pluginPackageUpdateMayMutateConfig(params: {
         plugins?.deny?.includes(pluginId) ||
         Object.hasOwn(plugins?.entries ?? {}, pluginId) ||
         plugins?.slots?.memory === pluginId ||
-        plugins?.slots?.contextEngine === pluginId
+        plugins?.slots?.contextEngine === pluginId ||
+        ownership.installRecord.contextEngineIdsByPlugin?.[pluginId]?.includes(
+          plugins?.slots?.contextEngine ?? "",
+        )
       ) {
         return true;
       }

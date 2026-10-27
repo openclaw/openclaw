@@ -1,5 +1,6 @@
 // Discord plugin module owns raw gateway-message durable ingress and replay draining.
 import { GatewayDispatchEvents, type APIMessage } from "discord-api-types/v10";
+import { prepareChannelIngressEvent } from "openclaw/plugin-sdk/channel-ingress-runtime";
 import {
   createChannelIngressError,
   createChannelIngressMonitor,
@@ -61,7 +62,7 @@ function inspectDiscordMessage(rawMessage: unknown): { eventId: string; laneKey:
 }
 
 function decodeDiscordIngressPayload(
-  payload: DiscordIngressPayload,
+  payload: unknown,
   claimedId: string,
 ): { version: unknown; body: DiscordIngressBody } {
   if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
@@ -117,6 +118,23 @@ export function createDiscordIngressMonitor(params: {
   >({
     queue,
     inspect: inspectDiscordMessage,
+    prepareAdmission: async (rawMessage, { receivedAt, signal }) => {
+      const prepared = await prepareChannelIngressEvent(rawMessage, {
+        channelId: "discord",
+        accountId: params.accountId,
+        signal,
+      });
+      if (!prepared) {
+        return undefined;
+      }
+      // The existing provider decoder admits transformed values under the same
+      // identity contract as replayed transport payloads.
+      const decoded = decodeDiscordIngressPayload(
+        { version: DISCORD_INGRESS_PAYLOAD_VERSION, receivedAt, rawMessage: prepared.event },
+        rawMessage.id,
+      );
+      return { raw: decoded.body.rawMessage, assertCurrent: prepared.assertCurrent };
+    },
     payload: {
       version: DISCORD_INGRESS_PAYLOAD_VERSION,
       serialize: (rawMessage, { receivedAt }) => ({ receivedAt, rawMessage }),
@@ -148,6 +166,7 @@ export function createDiscordIngressMonitor(params: {
     },
     appendRetryDelaysMs: [0],
     drain: {
+      deferredLaneOccupancy: "release",
       retryPolicy: {
         maxAttempts: DEFAULT_INGRESS_RETRY_MAX_ATTEMPTS,
         deadLetterMinAgeMs: 0,

@@ -8,6 +8,9 @@ import type { OperationalRunInstanceRef } from "./admitted-run-context.js";
 export type AcceptedSessionSpawn = {
   runId: string;
   childSessionKey: string;
+  sessionUrl?: string;
+  publicRead?: boolean;
+  label?: string;
   /** True only when this child owns a terminal completion for its requester. */
   expectsCompletionMessage?: boolean;
 };
@@ -29,11 +32,27 @@ export function mergeAcceptedSessionSpawnsForRun(
     acceptedSpawnsByRun.set(instance, receipts);
   }
   for (const spawn of accepted) {
-    // Acceptance is immutable for this run; later harness projections cannot
-    // erase the producer's completion obligation.
+    // The producer owns acceptance and completion retirement; a later harness
+    // projection cannot erase acceptance or revive a cancelled obligation.
     receipts?.set(spawn.runId, receipts.get(spawn.runId) ?? spawn);
   }
   return receipts ? [...receipts.values()] : [];
+}
+
+/** A confirmed cancellation preserves acceptance but ends its owed completion. */
+export function retireAcceptedSessionSpawnCompletionForRun(
+  instance: OperationalRunInstanceRef,
+  spawn: Pick<AcceptedSessionSpawn, "runId" | "childSessionKey">,
+): void {
+  const receipts = acceptedSpawnsByRun.get(instance);
+  const accepted = receipts?.get(spawn.runId);
+  if (
+    receipts &&
+    accepted?.childSessionKey === spawn.childSessionKey &&
+    accepted.expectsCompletionMessage === true
+  ) {
+    receipts.set(spawn.runId, { ...accepted, expectsCompletionMessage: false });
+  }
 }
 
 /** Normalize a tool result that accepted a child session spawn. */
@@ -47,9 +66,15 @@ export function normalizeAcceptedSessionSpawnResult(result: unknown): AcceptedSe
   if (!runId || !childSessionKey) {
     return null;
   }
+  const sessionUrl = normalizeOptionalString(details.sessionUrl);
+  const url = sessionUrl ? URL.parse(sessionUrl) : null;
+  const label = normalizeOptionalString(details.label);
   return {
     runId,
     childSessionKey,
+    ...(url?.protocol === "http:" || url?.protocol === "https:" ? { sessionUrl } : {}),
+    ...(label ? { label } : {}),
+    ...(details.publicRead === true ? { publicRead: true } : {}),
     expectsCompletionMessage: details.expectsCompletionMessage === true,
   };
 }

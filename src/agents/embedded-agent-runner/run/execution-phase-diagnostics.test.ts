@@ -1,6 +1,4 @@
-// Covers the run.execution_phase diagnostic bridge for embedded-runner
-// execution milestones.
-import { afterEach, beforeEach, describe, expect, test } from "vitest";
+import { afterEach, beforeEach, expect, test } from "vitest";
 import {
   emitDiagnosticEvent,
   onDiagnosticEvent,
@@ -11,148 +9,58 @@ import {
 } from "../../../infra/diagnostic-events.js";
 import { withExecutionPhaseDiagnostics } from "./execution-phase-diagnostics.js";
 
-function collectEvents(types: string[]): {
-  events: DiagnosticEventPayload[];
-  stop: () => void;
-} {
-  const events: DiagnosticEventPayload[] = [];
-  const stop = onDiagnosticEvent((event) => {
-    if (types.includes(event.type)) {
+let events: DiagnosticEventPayload[];
+let stop: () => void;
+beforeEach(() => {
+  resetDiagnosticEventsForTest();
+  events = [];
+  stop = onDiagnosticEvent((event) => {
+    if (event.type === "model.call.started" || event.type === "run.execution_phase") {
       events.push(event);
     }
   });
-  return { events, stop };
-}
+});
+afterEach(() => {
+  stop();
+  setDiagnosticsEnabledForProcess(false);
+  resetDiagnosticEventsForTest();
+});
 
-describe("withExecutionPhaseDiagnostics", () => {
-  beforeEach(() => {
-    resetDiagnosticEventsForTest();
-    setDiagnosticsEnabledForProcess(true);
+test.each([true, false])("orders phases across rotation (enabled=%s)", async (enabled) => {
+  setDiagnosticsEnabledForProcess(enabled);
+  const identity = { runId: "run-1", sessionId: "sid-before", sessionKey: "test" };
+  const forwarded: unknown[] = [];
+  const params = withExecutionPhaseDiagnostics({
+    ...identity,
+    onExecutionPhase: (phase) => {
+      forwarded.push(phase);
+    },
+    onSessionIdChanged: (id) => {
+      forwarded.push(id);
+    },
   });
-
-  afterEach(() => {
-    setDiagnosticsEnabledForProcess(false);
-    resetDiagnosticEventsForTest();
+  const before = { phase: "context_assembled" } as const;
+  const after = { phase: "model_call_started", firstModelCallStarted: true } as const;
+  emitDiagnosticEvent({
+    type: "model.call.started",
+    runId: identity.runId,
+    callId: "run-1:model:1",
+    provider: "anthropic",
+    model: "claude",
   });
-
-  test("publishes run.execution_phase and forwards to the wrapped callback", async () => {
-    const { events, stop } = collectEvents(["run.execution_phase"]);
-    const seen: unknown[] = [];
-    const params = withExecutionPhaseDiagnostics({
-      runId: "run-1",
-      sessionId: "sid-1",
-      sessionKey: "agent:main:mattermost:channel:town-square",
-      onExecutionPhase: (info) => {
-        seen.push(info);
-      },
-    });
-
-    params.onExecutionPhase({ phase: "model_call_started", firstModelCallStarted: true });
-    await waitForDiagnosticEventsDrained();
-    stop();
-
-    expect(seen).toEqual([{ phase: "model_call_started", firstModelCallStarted: true }]);
-    expect(events).toMatchObject([
-      {
-        type: "run.execution_phase",
-        runId: "run-1",
-        sessionId: "sid-1",
-        sessionKey: "agent:main:mattermost:channel:town-square",
-        phase: "model_call_started",
-        firstModelCallStarted: true,
-      },
-    ]);
-  });
-
-  test("emits milestones even when no downstream callback is registered", async () => {
-    const { events, stop } = collectEvents(["run.execution_phase"]);
-    const params = withExecutionPhaseDiagnostics({
-      runId: "run-2",
-      sessionId: "sid-2",
-    });
-
-    params.onExecutionPhase({ phase: "context_assembled" });
-    await waitForDiagnosticEventsDrained();
-    stop();
-
-    expect(events).toMatchObject([
-      {
-        type: "run.execution_phase",
-        runId: "run-2",
-        sessionId: "sid-2",
-        phase: "context_assembled",
-      },
-    ]);
-  });
-
-  test("delivers phases through the async lane, ordered after earlier model events", async () => {
-    const { events, stop } = collectEvents(["model.call.started", "run.execution_phase"]);
-    const params = withExecutionPhaseDiagnostics({
-      runId: "run-3",
-      sessionId: "sid-3",
-      sessionKey: "sk-3",
-    });
-
-    emitDiagnosticEvent({
-      type: "model.call.started",
-      runId: "run-3",
-      callId: "run-3:model:1",
-      provider: "anthropic",
-      model: "claude",
-    });
-    params.onExecutionPhase({ phase: "model_call_started", firstModelCallStarted: true });
-    // Nothing is delivered synchronously: both event kinds ride the async lane.
-    expect(events).toEqual([]);
-    await waitForDiagnosticEventsDrained();
-    stop();
-
-    expect(events.map((event) => event.type)).toEqual([
-      "model.call.started",
-      "run.execution_phase",
-    ]);
-  });
-
-  test("tracks session rotation so later phases carry the current session id", async () => {
-    const { events, stop } = collectEvents(["run.execution_phase"]);
-    const adopted: string[] = [];
-    const params = withExecutionPhaseDiagnostics({
-      runId: "run-4",
-      sessionId: "sid-before",
-      onSessionIdChanged: (sessionId) => {
-        adopted.push(sessionId);
-      },
-    });
-
-    params.onExecutionPhase({ phase: "context_assembled" });
-    params.onSessionIdChanged("sid-after");
-    params.onExecutionPhase({ phase: "model_call_started", firstModelCallStarted: true });
-    await waitForDiagnosticEventsDrained();
-    stop();
-
-    expect(adopted).toEqual(["sid-after"]);
-    expect(events).toMatchObject([
-      { phase: "context_assembled", sessionId: "sid-before" },
-      { phase: "model_call_started", sessionId: "sid-after" },
-    ]);
-  });
-
-  test("stays silent when process diagnostics are disabled", async () => {
-    setDiagnosticsEnabledForProcess(false);
-    const { events, stop } = collectEvents(["run.execution_phase"]);
-    const seen: unknown[] = [];
-    const params = withExecutionPhaseDiagnostics({
-      runId: "run-5",
-      sessionId: "sid-5",
-      onExecutionPhase: (info) => {
-        seen.push(info);
-      },
-    });
-
-    params.onExecutionPhase({ phase: "auth" });
-    await waitForDiagnosticEventsDrained();
-    stop();
-
-    expect(events).toEqual([]);
-    expect(seen).toEqual([{ phase: "auth" }]);
-  });
+  params.onExecutionPhase(before);
+  params.onSessionIdChanged("sid-after");
+  params.onExecutionPhase(after);
+  expect(events).toEqual([]);
+  await waitForDiagnosticEventsDrained();
+  expect(forwarded).toEqual([before, "sid-after", after]);
+  expect(events).toMatchObject(
+    enabled
+      ? [
+          { type: "model.call.started" },
+          { type: "run.execution_phase", ...identity, ...before },
+          { type: "run.execution_phase", ...identity, sessionId: "sid-after", ...after },
+        ]
+      : [],
+  );
 });

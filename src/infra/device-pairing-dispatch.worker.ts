@@ -2,110 +2,100 @@ import {
   runOpenClawStateWriteTransaction,
   type OpenClawStateDatabase,
 } from "../state/openclaw-state-db.js";
-import { executeDeviceBootstrapMutation } from "./device-bootstrap.worker-kernel.js";
+import type { WorkerOperationContext } from "../state/worker-operation-registry.js";
 import { prepareDevicePairingBinding } from "./device-pairing-binding.js";
-import { executeDevicePairingCoreMutation } from "./device-pairing-core.worker.js";
 import { withDevicePairingMutationAdmission } from "./device-pairing-mutation.worker.js";
-import { executeDevicePairingNodeMutation } from "./device-pairing-node.worker.js";
 import type { DevicePairingCommitReceipt } from "./device-pairing-read.types.js";
-import { resolveDevicePairingStoreRevision } from "./device-pairing-store-cache.js";
 import {
-  readDevicePairingStoreStateFromDatabase,
+  readPairedDevicePairingSnapshotFromDatabase,
   withDevicePairingStoreDatabase,
 } from "./device-pairing-store.js";
-import type { DevicePairingMutationCommand } from "./device-pairing-worker-contract.js";
 import { deferSqliteWorkerCommitReceipt } from "./sqlite-worker-operation-admission.js";
 import { getSqliteWorkerStateContext } from "./sqlite-worker-state-context.js";
 
-function execute(
-  command: DevicePairingMutationCommand,
-  database: OpenClawStateDatabase,
+type DevicePairingMutationContext = {
+  database: OpenClawStateDatabase;
   recordTokenReplacement: (
     facts: NonNullable<DevicePairingCommitReceipt["tokensReplaced"]>,
-  ) => void,
+  ) => void;
   recordWorkerEnvironment: (
     facts: NonNullable<DevicePairingCommitReceipt["workerEnvironment"]>,
-  ) => void,
-) {
-  switch (command.type) {
-    case "devicePairing.request":
-    case "devicePairing.reject":
-    case "devicePairing.remove":
-    case "devicePairing.pruneSilent":
-    case "devicePairing.removeRole":
-    case "devicePairing.updateMetadata":
-    case "devicePairing.updatePresence":
-    case "devicePairing.approve":
-    case "devicePairing.verifyToken":
-    case "devicePairing.ensureToken":
-    case "devicePairing.rotateToken":
-    case "devicePairing.revokeToken":
-      return executeDevicePairingCoreMutation(command, database);
-    case "devicePairing.approveBootstrap": {
-      const result = executeDevicePairingCoreMutation(command, database);
-      if (result.result?.status === "approved" && result.replacedRoles.length > 0) {
-        recordTokenReplacement({
-          deviceId: result.result.device.deviceId,
-          roles: result.replacedRoles,
-        });
-      }
-      return result;
-    }
-    case "node.request":
-    case "node.finalizeCleanup":
-    case "node.approve":
-    case "node.reject":
-    case "node.recordConnection":
-    case "node.recordDisconnection":
-    case "node.recordHostStats":
-    case "node.updateBins":
-    case "node.updateSessionHost":
-    case "node.rename":
-      return executeDevicePairingNodeMutation(command, database);
-    default:
-      return executeDeviceBootstrapMutation(command, database, recordWorkerEnvironment);
-  }
-}
+  ) => void;
+  recordNodeApproval: (facts: NonNullable<DevicePairingCommitReceipt["nodeApproval"]>) => void;
+  recordRetiredNodeToken: (
+    facts: NonNullable<DevicePairingCommitReceipt["retiredNodeToken"]>,
+  ) => void;
+};
 
-export function executeDevicePairingMutationInWorker(
-  command: DevicePairingMutationCommand,
-  database: OpenClawStateDatabase,
+export function devicePairingMutation<Input, Result>(
+  operation: (input: Input, context: DevicePairingMutationContext) => Result,
+  {
+    publishPairing = true,
+    pairedDeviceId,
+  }: { publishPairing?: boolean; pairedDeviceId?: (input: Input) => string } = {},
 ) {
-  return runOpenClawStateWriteTransaction(
-    () =>
-      withDevicePairingStoreDatabase(database, () =>
+  return (input: Input, { open }: WorkerOperationContext): Result => {
+    const database = open();
+    return runOpenClawStateWriteTransaction(
+      () =>
         withDevicePairingMutationAdmission(() => {
-          const before = readDevicePairingStoreStateFromDatabase(database.db).pairedByDeviceId;
-          let tokensReplaced: DevicePairingCommitReceipt["tokensReplaced"];
-          let workerEnvironment: DevicePairingCommitReceipt["workerEnvironment"];
-          const result = execute(
-            command,
+          const snapshot = publishPairing
+            ? readPairedDevicePairingSnapshotFromDatabase(
+                database.db,
+                pairedDeviceId?.(input).trim(),
+              )
+            : undefined;
+          const before = snapshot?.pairedByDeviceId;
+          const after = before ? structuredClone(before) : undefined;
+          const revision = { value: snapshot?.revision ?? "0" };
+          return withDevicePairingStoreDatabase(
             database,
-            (facts) => {
-              tokensReplaced = facts;
+            () => {
+              let tokensReplaced: DevicePairingCommitReceipt["tokensReplaced"];
+              let workerEnvironment: DevicePairingCommitReceipt["workerEnvironment"];
+              let nodeApproval: DevicePairingCommitReceipt["nodeApproval"];
+              let retiredNodeToken: DevicePairingCommitReceipt["retiredNodeToken"];
+              const result = operation(input, {
+                database,
+                recordTokenReplacement: (facts) => {
+                  tokensReplaced = facts;
+                },
+                recordWorkerEnvironment: (facts) => {
+                  workerEnvironment = facts;
+                },
+                recordRetiredNodeToken: (facts) => {
+                  retiredNodeToken = facts;
+                },
+                recordNodeApproval: (facts) => {
+                  nodeApproval = facts;
+                },
+              });
+              if (!before || !after) {
+                return result;
+              }
+              const changed: DevicePairingCommitReceipt["changed"] = [];
+              for (const deviceId of new Set([...Object.keys(before), ...Object.keys(after)])) {
+                if (JSON.stringify(before[deviceId]) !== JSON.stringify(after[deviceId])) {
+                  changed.push(prepareDevicePairingBinding(deviceId, after[deviceId] ?? null));
+                }
+              }
+              deferSqliteWorkerCommitReceipt(database.db, {
+                kind: "devicePairing",
+                beforeRevision: snapshot!.revision,
+                revision: revision.value,
+                changed,
+                ...(tokensReplaced ? { tokensReplaced } : {}),
+                ...(retiredNodeToken ? { retiredNodeToken } : {}),
+                ...(workerEnvironment ? { workerEnvironment } : {}),
+                ...(nodeApproval ? { nodeApproval } : {}),
+              } satisfies DevicePairingCommitReceipt);
+              return result;
             },
-            (facts) => {
-              workerEnvironment = facts;
-            },
+            after,
+            revision,
           );
-          const after = readDevicePairingStoreStateFromDatabase(database.db).pairedByDeviceId;
-          const changed: DevicePairingCommitReceipt["changed"] = [];
-          for (const deviceId of new Set([...Object.keys(before), ...Object.keys(after)])) {
-            if (JSON.stringify(before[deviceId]) !== JSON.stringify(after[deviceId])) {
-              changed.push(prepareDevicePairingBinding(deviceId, after[deviceId] ?? null));
-            }
-          }
-          deferSqliteWorkerCommitReceipt(database.db, {
-            kind: "devicePairing",
-            beforeRevision: resolveDevicePairingStoreRevision(before),
-            revision: resolveDevicePairingStoreRevision(after),
-            changed,
-            ...(tokensReplaced ? { tokensReplaced } : {}),
-            ...(workerEnvironment ? { workerEnvironment } : {}),
-          } satisfies DevicePairingCommitReceipt);
-          return result;
         }),
-      ),
-    { database, env: getSqliteWorkerStateContext().environment },
-  );
+      { database, env: getSqliteWorkerStateContext().environment },
+    );
+  };
 }

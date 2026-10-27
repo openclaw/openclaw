@@ -1,3 +1,7 @@
+import {
+  formatDeferredPluginMigration,
+  type DeferredPluginMigration,
+} from "../infra/deferred-plugin-migrations.js";
 import { collectErrorGraphCandidates, extractErrorCode, readErrorCause } from "../infra/errors.js";
 import { parseBooleanValue } from "../utils/boolean.js";
 import { VERSION } from "../version.js";
@@ -5,6 +9,7 @@ import { isBundleCapabilitySupported } from "./bundle-capability-support.js";
 import type { PluginCompatCode } from "./compat/registry.js";
 import type { PluginActivationState } from "./config-state.js";
 import { recordPluginLoadDiagnostic } from "./load-diagnostics.js";
+import { createManifestProviderIdLists } from "./manifest-provider-ids.js";
 import type {
   PluginBundleFormat,
   PluginDiagnostic,
@@ -18,6 +23,7 @@ import type {
   PluginManifestMcpServer,
 } from "./manifest.js";
 import { isPluginLifecycleTraceEnabled } from "./plugin-lifecycle-trace.js";
+import { groupPluginRecords } from "./record-groups.js";
 import type { PluginRecord, PluginRegistry } from "./registry.js";
 import {
   formatPluginVerificationDiagnostic,
@@ -50,10 +56,13 @@ export function createPluginRecord(params: {
   syntheticAuthRefs?: string[];
   channelIds?: readonly string[];
   providerIds?: readonly string[];
+  declaredContextEngineIds?: readonly string[];
+  turnHandover?: boolean;
   configSchema: boolean;
   contracts?: PluginManifestContracts;
   dashboard?: PluginManifestDashboard;
   controlUi?: PluginManifestControlUi;
+  uiCapabilities?: PluginRecord["uiCapabilities"];
   mcpServers?: Record<string, PluginManifestMcpServer>;
 }): PluginRecord {
   return {
@@ -88,19 +97,10 @@ export function createPluginRecord(params: {
     channelIds: [...(params.channelIds ?? [])],
     cliBackendIds: [],
     providerIds: [...(params.providerIds ?? [])],
-    embeddingProviderIds: [...(params.contracts?.embeddingProviders ?? [])],
-    speechProviderIds: [...(params.contracts?.speechProviders ?? [])],
-    realtimeTranscriptionProviderIds: [...(params.contracts?.realtimeTranscriptionProviders ?? [])],
-    realtimeVoiceProviderIds: [...(params.contracts?.realtimeVoiceProviders ?? [])],
-    mediaUnderstandingProviderIds: [...(params.contracts?.mediaUnderstandingProviders ?? [])],
-    transcriptSourceProviderIds: [...(params.contracts?.transcriptSourceProviders ?? [])],
-    imageGenerationProviderIds: [...(params.contracts?.imageGenerationProviders ?? [])],
-    videoGenerationProviderIds: [...(params.contracts?.videoGenerationProviders ?? [])],
-    musicGenerationProviderIds: [...(params.contracts?.musicGenerationProviders ?? [])],
-    webFetchProviderIds: [...(params.contracts?.webFetchProviders ?? [])],
-    webSearchProviderIds: [...(params.contracts?.webSearchProviders ?? [])],
-    migrationProviderIds: [...(params.contracts?.migrationProviders ?? [])],
+    ...createManifestProviderIdLists(params.contracts),
     contextEngineIds: [],
+    declaredContextEngineIds: params.declaredContextEngineIds,
+    ...(params.turnHandover ? { turnHandover: true } : {}),
     agentHarnessIds: [],
     cliCommands: [],
     services: [],
@@ -114,6 +114,7 @@ export function createPluginRecord(params: {
     contracts: params.contracts,
     dashboard: params.dashboard,
     controlUi: params.controlUi,
+    uiCapabilities: params.uiCapabilities,
     mcpServers: params.mcpServers,
   };
 }
@@ -127,28 +128,37 @@ export function markPluginActivationDisabled(record: PluginRecord, reason?: stri
   record.activationReason = reason;
 }
 
-/** Records a boot-time payload quarantine without importing or activating the plugin. */
-export function recordPluginConfiguredUnavailable(params: {
-  registry: PluginRegistry;
-  record: PluginRecord;
-  seenIds: Map<string, PluginRecord["origin"]>;
-  degradedPlugin: DegradedPlugin;
-}): void {
-  const error = formatPluginVerificationDiagnostic(params.degradedPlugin.diagnostic);
+/** Records runtime admission refusal without importing or activating the plugin. */
+export function recordPluginConfiguredUnavailable(
+  params: {
+    registry: PluginRegistry;
+    record: PluginRecord;
+    seenIds: Map<string, PluginRecord["origin"]>;
+  } & (
+    | { degradedPlugin: DegradedPlugin }
+    | { pendingStateMigration: DeferredPluginMigration; env: NodeJS.ProcessEnv }
+  ),
+): string {
+  const pending = "pendingStateMigration" in params;
+  const error = pending
+    ? formatDeferredPluginMigration(params.pendingStateMigration, params.env)
+    : formatPluginVerificationDiagnostic(params.degradedPlugin.diagnostic);
+  const reason = pending ? "pending-state-migration" : params.degradedPlugin.diagnostic.reason;
   params.record.status = "error";
   params.record.error = error;
   params.record.failurePhase = "validation";
   params.record.activated = false;
-  params.record.activationReason = `configured-unavailable: ${params.degradedPlugin.diagnostic.reason}`;
+  params.record.activationReason = `configured-unavailable: ${reason}`;
   params.registry.plugins.push(params.record);
   params.seenIds.set(params.record.id, params.record.origin);
   params.registry.diagnostics.push({
     level: "error",
     pluginId: params.record.id,
     source: params.record.source,
-    code: "plugin-verification",
+    code: pending ? "plugin-state-migration" : "plugin-verification",
     message: error,
   });
+  return error;
 }
 
 /** Joins auto-enable reasons into the single registry field shown by status surfaces. */
@@ -280,14 +290,9 @@ export function recordPluginError(params: {
 
 /** Groups failed plugin ids by loader phase for compact startup summaries. */
 export function formatPluginFailureSummary(failedPlugins: PluginRecord[]): string {
-  const grouped = new Map<NonNullable<PluginRecord["failurePhase"]>, string[]>();
-  for (const plugin of failedPlugins) {
-    const phase = plugin.failurePhase ?? "load";
-    const ids = grouped.get(phase) ?? [];
-    ids.push(plugin.id);
-    grouped.set(phase, ids);
-  }
-  return [...grouped.entries()].map(([phase, ids]) => `${phase}: ${ids.join(", ")}`).join("; ");
+  return [...groupPluginRecords(failedPlugins, (plugin) => plugin.failurePhase ?? "load")]
+    .map(([phase, plugins]) => `${phase}: ${plugins.map((plugin) => plugin.id).join(", ")}`)
+    .join("; ");
 }
 
 function describePluginModuleExportShape(
@@ -340,18 +345,20 @@ export function recordBundleDiagnostics(params: {
   registry: PluginRegistry;
   inspectMcp: typeof import("./bundle-mcp.js").inspectBundleMcpRuntimeSupport;
 }): void {
+  const warn = (message: string) =>
+    params.registry.diagnostics.push({
+      level: "warn",
+      pluginId: params.record.id,
+      source: params.record.source,
+      message,
+    });
   const unsupportedCapabilities = (params.record.bundleCapabilities ?? []).filter(
     (capability) =>
       !params.record.bundleFormat ||
       !isBundleCapabilitySupported(params.record.bundleFormat, capability),
   );
   for (const capability of unsupportedCapabilities) {
-    params.registry.diagnostics.push({
-      level: "warn",
-      pluginId: params.record.id,
-      source: params.record.source,
-      message: `bundle capability detected but not wired into OpenClaw yet: ${capability}`,
-    });
+    warn(`bundle capability detected but not wired into OpenClaw yet: ${capability}`);
   }
   if (
     params.record.enabled &&
@@ -365,22 +372,13 @@ export function recordBundleDiagnostics(params: {
       bundleFormat: params.record.bundleFormat,
     });
     for (const message of runtimeSupport.diagnostics) {
-      params.registry.diagnostics.push({
-        level: "warn",
-        pluginId: params.record.id,
-        source: params.record.source,
-        message,
-      });
+      warn(message);
     }
     if (runtimeSupport.unsupportedServerNames.length > 0) {
-      params.registry.diagnostics.push({
-        level: "warn",
-        pluginId: params.record.id,
-        source: params.record.source,
-        message:
-          "bundle MCP servers use unsupported transports or incomplete configs " +
+      warn(
+        "bundle MCP servers use unsupported transports or incomplete configs " +
           `(${runtimeSupport.unsupportedServerNames.join(", ")})`,
-      });
+      );
     }
   }
   params.registry.plugins.push(params.record);

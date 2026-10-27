@@ -1,8 +1,10 @@
+import { createChangeListeners } from "../../../src/shared/listeners.js";
+
 export type ChatInputRegion = "page" | "dock";
 
 class ChatInputOwner {
   private region: ChatInputRegion = "page";
-  private readonly listeners = new Set<() => void>();
+  private readonly listeners = createChangeListeners();
 
   get current(): ChatInputRegion {
     return this.region;
@@ -13,15 +15,10 @@ class ChatInputOwner {
       return;
     }
     this.region = region;
-    for (const listener of this.listeners) {
-      listener();
-    }
+    this.listeners.publish();
   }
 
-  subscribe(listener: () => void): () => void {
-    this.listeners.add(listener);
-    return () => this.listeners.delete(listener);
-  }
+  readonly subscribe = this.listeners.subscribe;
 }
 
 // Focus belongs to one application, not a document-global singleton or a route.

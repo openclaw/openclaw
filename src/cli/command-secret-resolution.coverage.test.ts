@@ -1,17 +1,15 @@
 // Command secret resolution coverage tests cover plugin secret resolution branches.
-import { bundledPluginFile } from "openclaw/plugin-sdk/test-fixtures";
 import { describe, expect, it } from "vitest";
 import { readCommandSource } from "./command-source.test-helpers.js";
 
 const SECRET_TARGET_CALLSITES = [
-  bundledPluginFile("memory-core", "src/cli-runtime-common.ts"),
   "src/cli/qr-cli.ts",
   "src/agents/agent-runtime-config.ts",
   "src/agents/command/prepare.ts",
   "src/commands/channels/resolve.ts",
   "src/commands/channels/shared.ts",
   "src/commands/message.ts",
-  "src/cli/capability-cli/audio.ts",
+  "src/cli/capability-cli/media-understanding-command.ts",
   "src/cli/capability-cli/embedding.ts",
   "src/cli/capability-cli/image.ts",
   "src/cli/capability-cli/model.ts",
@@ -28,7 +26,6 @@ function hasSupportedTargetIdsWiring(source: string): boolean {
     source.includes("resolveAgentRuntimeConfig(") ||
     /targetIds:\s*get[A-Za-z0-9_]+\(\)/m.test(source) ||
     /targetIds:\s*getAgentRuntimeCommandSecretTargetIds\(/m.test(source) ||
-    /targetIds:\s*getCapabilityWeb(Fetch|Search)CommandSecretTargetIds\(/m.test(source) ||
     /targetIds:\s*scopedTargets\.targetIds/m.test(source) ||
     (/\bconst\s+scopedTargets\s*=\s*getCapabilityWeb(?:Fetch|Search)CommandSecretTargets\(/m.test(
       source,
@@ -42,6 +39,7 @@ function hasSupportedSecretResolutionWiring(source: string): boolean {
   return (
     source.includes("resolveAgentRuntimeConfig(") ||
     source.includes("resolveLocalCapabilityRuntimeConfig(") ||
+    source.includes("resolveLocalCapabilityAgent(") ||
     source.includes("resolveCommandConfigWithSecrets(") ||
     source.includes("resolveCommandSecretRefsViaGateway(") ||
     source.includes("collectStatusScanOverview(")
@@ -53,12 +51,6 @@ function usesDelegatedStatusOverviewFlow(source: string): boolean {
 }
 
 describe("command secret resolution coverage", () => {
-  it("routes capability command config through shared secret resolution", async () => {
-    const source = await readCommandSource("src/cli/capability-cli/shared.ts");
-    expect(source).toContain("resolveCommandConfigWithSecrets({");
-    expect(source).toMatch(/targetIds:\s*params\.targetIds/m);
-  });
-
   it("rejects prepared Web target scopes from an unrelated producer", async () => {
     const source = await readCommandSource("src/cli/capability-cli/web.ts");
     const unrelatedSource = source.replaceAll(

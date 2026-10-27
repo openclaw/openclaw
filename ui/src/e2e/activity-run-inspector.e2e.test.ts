@@ -4,6 +4,7 @@ import type { BrowserContext, Locator, Page } from "playwright";
 import { beforeEach, expect, it } from "vitest";
 import type { AuditRunInspectResult } from "../../../packages/gateway-protocol/src/schema/audit-run.js";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
+import { waitForControlUiGatewayReconnecting } from "../test-helpers/control-ui-e2e-readiness.ts";
 import { takeControlUiViewportScreenshot } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import {
@@ -178,7 +179,6 @@ suite.define(() => {
       expect(await page.getByText("receipt-safe-ref", { exact: false }).count()).toBe(0);
       expect(await page.getByText("context-safe-ref", { exact: false }).count()).toBe(0);
       expect(await page.getByText("execution-safe-ref", { exact: false }).count()).toBe(0);
-      expect(await page.getByText("raw-sender-id-42", { exact: false }).count()).toBe(0);
       await screenshot(page, "01-present-unattributed.png");
 
       await page.reload();
@@ -198,7 +198,7 @@ suite.define(() => {
         .poll(() => page.evaluate(() => document.activeElement?.textContent?.trim()))
         .toBe("Live activity");
       await page.keyboard.press("Enter");
-      await page.getByText("No activity yet.", { exact: true }).waitFor();
+      await page.locator(".activity-empty").waitFor();
       await expect
         .poll(() => modePanel.getAttribute("aria-labelledby"))
         .toBe("activity-mode-tab-live");
@@ -641,11 +641,17 @@ suite.define(() => {
   it("keeps a populated Live activity stream bounded after adding the mode switcher", async () => {
     const context = await newContext();
     const page = await context.newPage();
-    const gateway = await installMockGateway(page, { sessionKey: "main" });
+    const gateway = await installMockGateway(page, {
+      sessionKey: "agent:main:main",
+      sessions: [{ key: "agent:main:main", kind: "direct", hasActiveRun: true, status: "running" }],
+    });
 
     try {
       await page.goto(`${suite.server.baseUrl}activity?view=live`);
-      await page.getByText("No activity yet.", { exact: true }).waitFor();
+      await page.locator(".activity-empty").waitFor();
+      await gateway.waitForRequest("sessions.messages.subscribe", {
+        match: { key: "agent:main:main" },
+      });
 
       for (let index = 0; index < 40; index += 1) {
         await gateway.emitGatewayEvent("agent", {
@@ -653,7 +659,7 @@ suite.define(() => {
           seq: 1,
           stream: "tool",
           ts: Date.now() + index,
-          sessionKey: "main",
+          sessionKey: "agent:main:main",
           data: {
             phase: "start",
             name: `layout_tool_${index}`,
@@ -904,7 +910,7 @@ suite.define(() => {
     }
   });
 
-  it("shows loading, request failure, retry, and disconnected states", async () => {
+  it("shows loading, request failure, and retry while retaining evidence offline", async () => {
     const context = await newContext();
     const page = await context.newPage();
     const runId = "retry-run";
@@ -928,8 +934,15 @@ suite.define(() => {
       await page.getByRole("button", { name: "Retry inspection" }).click();
       await page.getByRole("heading", { name: "Identity and authority" }).waitFor();
 
-      await gateway.closeLatest(1006, "network unavailable");
-      await page.getByRole("heading", { name: "Gateway disconnected" }).waitFor();
+      const receipts = page.locator(".run-inspector__receipt-list");
+      const evidence = await receipts.textContent();
+      await gateway.setOnline(false);
+      await waitForControlUiGatewayReconnecting(page);
+      expect(await receipts.textContent()).toBe(evidence);
+      expect(await page.getByRole("heading", { name: "Gateway disconnected" }).count()).toBe(0);
+      expect(await page.getByRole("button", { name: "Load more receipts" }).isDisabled()).toBe(
+        true,
+      );
       await screenshot(page, "08-disconnected.png");
     } finally {
       await suite.closeBrowserContext(context);

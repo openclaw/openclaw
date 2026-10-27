@@ -5,7 +5,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import * as sharedAuthBootstrap from "../agents/auth-profiles/shared-store-bootstrap.js";
 import * as sessionTargets from "../config/sessions/targets.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { readChannelPairingState } from "../pairing/pairing-store-sqlite.js";
+import { readChannelPairingStateSnapshot } from "../pairing/pairing-store-sqlite.test-helpers.js";
 import { EMPTY_LEGACY_SESSION_SURFACES } from "../plugins/legacy-session-surfaces.types.js";
 import { readConfigMachineState } from "../state/config-machine-state.js";
 import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
@@ -14,13 +14,17 @@ import {
   openOpenClawStateDatabase,
 } from "../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
+import { withStateMigrationBackupForTest } from "../state/openclaw-state-schema.test-support.js";
 import { createTrackedTempDirs } from "../test-utils/tracked-temp-dirs.js";
 import {
+  createCallerModeExecutionFixture,
   createCallerModeSnapshot,
   expectBlockedTailInPlanOrder,
   snapshotFiles,
+  writeLegacyDoctorAndTuiSources as writeLegacyDoctorSources,
   writeLegacyStateSchemaV1,
 } from "./state-migrations.caller-mode.test-helpers.js";
+import * as deviceIdentityMigrations from "./state-migrations.device-identity.js";
 import {
   autoMigrateLegacyState,
   planLegacyStateMigrationsReadOnly,
@@ -39,50 +43,9 @@ function candidateAt(
   return { root, version: "test" };
 }
 
-function writeLegacyDoctorSources(
-  stateDir: string,
-  tuiValue: unknown,
-): {
-  execPath: string;
-  tuiPath: string;
-} {
-  const execPath = path.join(stateDir, "exec-approvals.json");
-  const tuiPath = path.join(stateDir, "tui", "last-session.json");
-  fs.mkdirSync(path.dirname(tuiPath), { recursive: true });
-  fs.writeFileSync(
-    execPath,
-    `${JSON.stringify({
-      version: 1,
-      defaults: { security: "allowlist", ask: "on-miss" },
-      agents: { main: { allowlist: [{ pattern: "/usr/bin/rg" }] } },
-    })}\n`,
-  );
-  fs.writeFileSync(tuiPath, `${JSON.stringify(tuiValue)}\n`);
-  return { execPath, tuiPath };
-}
-
 async function makeFixture() {
   const root = await tempDirs.make("openclaw-doctor-caller-refusal-");
-  const homeDir = path.join(root, "home");
-  const stateDir = path.join(root, "copied-state");
-  const configPath = path.join(root, "copied-openclaw.json");
-  fs.mkdirSync(homeDir, { recursive: true });
-  fs.mkdirSync(stateDir, { recursive: true });
-  fs.symlinkSync(
-    path.resolve("extensions"),
-    path.join(root, "extensions"),
-    process.platform === "win32" ? "junction" : "dir",
-  );
-  fs.writeFileSync(configPath, "{}\n");
-  const env: NodeJS.ProcessEnv = {
-    ...process.env,
-    HOME: homeDir,
-    OPENCLAW_BUNDLED_PLUGINS_DIR: path.resolve("extensions"),
-    OPENCLAW_CONFIG_PATH: configPath,
-    OPENCLAW_STATE_DIR: stateDir,
-    OPENCLAW_TEST_TRUST_BUNDLED_PLUGINS_DIR: "1",
-  };
-  return { root, homeDir, stateDir, configPath, env };
+  return createCallerModeExecutionFixture(root, true);
 }
 
 async function makeCallerModeFixture() {
@@ -92,6 +55,15 @@ async function makeCallerModeFixture() {
     `${JSON.stringify({ plugins: { entries: { "candidate-plugin": { enabled: true } } } })}\n`,
   );
   return fixture;
+}
+
+function planFixture(fixture: Awaited<ReturnType<typeof makeFixture>>) {
+  return planLegacyStateMigrationsReadOnly({
+    mode: "doctor",
+    candidate: candidateAt(fixture.root),
+    snapshot: createCallerModeSnapshot(fixture),
+    env: fixture.env,
+  });
 }
 
 afterEach(async () => {
@@ -229,7 +201,7 @@ describe("legacy state migration read-only refusals", () => {
     expect(snapshotFiles(fixture.root)).toEqual(before);
   });
 
-  it.each(["absolute", "tilde", "snapshot-bound"] as const)(
+  it.each(["tilde", "snapshot-bound"] as const)(
     "binds the selected %s shared-auth source without inspecting external state",
     async (pathStyle) => {
       const fixture = await makeFixture();
@@ -277,6 +249,30 @@ describe("legacy state migration read-only refusals", () => {
     },
   );
 
+  it("refuses a configured auth owner outside the copied snapshot without reading it", async () => {
+    const fixture = await makeFixture();
+    const ownerDir = path.join(fixture.homeDir, "ops-agent");
+    fs.writeFileSync(
+      fixture.configPath,
+      JSON.stringify({
+        agents: {
+          ownership: "explicit",
+          defaults: { authInheritance: { agentId: "ops" } },
+          entries: { ops: { agentDir: ownerDir } },
+        },
+      }),
+    );
+    const inspect = vi.spyOn(sharedAuthBootstrap, "inspectSharedAuthLegacyRowsReadOnly");
+    const plan = await planFixture(fixture);
+
+    expect(plan.refusal?.code).toBe("shared-auth-source-outside-snapshot");
+    expect(plan.steps.find((step) => step.id === "migration-detection")?.source).toContainEqual({
+      kind: "sqlite",
+      path: path.join(ownerDir, "openclaw-agent.sqlite"),
+    });
+    expect(inspect).not.toHaveBeenCalled();
+  });
+
   it("preserves a snapshot-bound OAuth directory in the read-only plan", async () => {
     const fixture = await makeFixture();
     const oauthDir = path.join(fixture.stateDir, "operator-credentials");
@@ -319,12 +315,7 @@ describe("legacy state migration read-only refusals", () => {
     fs.unlinkSync(walPath);
     fs.symlinkSync(externalDirectory, walPath);
 
-    const plan = await planLegacyStateMigrationsReadOnly({
-      mode: "doctor",
-      candidate: candidateAt(fixture.root),
-      snapshot: createCallerModeSnapshot(fixture),
-      env: fixture.env,
-    });
+    const plan = await planFixture(fixture);
 
     expect(plan.snapshot.stateDigest).toBeUndefined();
     expect(plan.warnings).toEqual([
@@ -381,7 +372,7 @@ describe("legacy state migration read-only refusals", () => {
     fs.writeFileSync(pairingPath, pairingBytes);
     const cfg: OpenClawConfig = { channels: { telegram: { enabled: true } } };
     fs.writeFileSync(fixture.configPath, `${JSON.stringify(cfg)}\n`);
-    const pairingBefore = readChannelPairingState("telegram", fixture.env);
+    const pairingBefore = readChannelPairingStateSnapshot("telegram", fixture.env);
 
     const plan = await planLegacyStateMigrationsReadOnly({
       mode: "automatic",
@@ -402,7 +393,7 @@ describe("legacy state migration read-only refusals", () => {
     const automatic = await autoMigrateLegacyState(params);
     expect(automatic.stepReceipts.map((step) => step.id)).not.toContain("skill-workshop");
     expect(automatic.stepReceipts.map((step) => step.id)).not.toContain("channel-pairing");
-    expect(readChannelPairingState("telegram", fixture.env)).toEqual(pairingBefore);
+    expect(readChannelPairingStateSnapshot("telegram", fixture.env)).toEqual(pairingBefore);
     expect(fs.readFileSync(pairingPath, "utf8")).toBe(pairingBytes);
 
     const result = await autoMigrateLegacyState({ ...params, doctorOnlyStateMigrations: true });
@@ -413,7 +404,7 @@ describe("legacy state migration read-only refusals", () => {
       changes: ["Migrated 1 telegram/default allowFrom entry → shared SQLite state"],
     });
     expect(pairing?.refusal).toBeUndefined();
-    expect(readChannelPairingState("telegram", fixture.env).allowFrom).toEqual({
+    expect(readChannelPairingStateSnapshot("telegram", fixture.env).allowFrom).toEqual({
       default: ["legacy-user"],
     });
     expect(fs.existsSync(pairingPath)).toBe(false);
@@ -514,12 +505,7 @@ module.exports = { stateMigrations: [{
     const cfg: OpenClawConfig = { session: { store: configuredPath } };
     fs.writeFileSync(fixture.configPath, `${JSON.stringify(cfg)}\n`);
 
-    const plan = await planLegacyStateMigrationsReadOnly({
-      mode: "doctor",
-      candidate: candidateAt(fixture.root),
-      snapshot: createCallerModeSnapshot(fixture),
-      env: fixture.env,
-    });
+    const plan = await planFixture(fixture);
 
     expect(plan).toMatchObject({
       mutationAllowed: false,
@@ -532,32 +518,6 @@ module.exports = { stateMigrations: [{
       expect.stringContaining(`Snapshot tree contains a symbolic link: ${linkedDir}`),
     ]);
     expect(fs.readFileSync(externalDatabase, "utf8")).toBe("external-bytes\n");
-  });
-
-  it("records named-profile workspace endpoints without authorizing unbound writes", async () => {
-    const fixture = await makeFixture();
-    fixture.env.OPENCLAW_PROFILE = "work";
-    const source = path.join(fixture.homeDir, ".openclaw", "workspace-work");
-    const target = path.join(fixture.homeDir, ".openclaw-work", "workspace");
-    fs.mkdirSync(source, { recursive: true });
-    fs.writeFileSync(path.join(source, "AGENTS.md"), "profile workspace\n");
-    const before = snapshotFiles(fixture.root);
-
-    const plan = await planLegacyStateMigrationsReadOnly({
-      mode: "doctor",
-      candidate: candidateAt(fixture.root),
-      snapshot: createCallerModeSnapshot(fixture),
-      env: fixture.env,
-    });
-
-    expect(plan.steps.find((step) => step.id === "profile-workspace")).toMatchObject({
-      source: [{ kind: "path", path: source }],
-      target: [{ kind: "path", path: target }],
-      requiredness: "conditional",
-      outcome: "deferred",
-      refusal: { code: "profile-workspace-snapshot-deferred" },
-    });
-    expect(snapshotFiles(fixture.root)).toEqual(before);
   });
 
   it.runIf(process.platform !== "win32")(
@@ -636,7 +596,7 @@ module.exports = { stateMigrations: [{
     fs.writeFileSync(
       fixture.configPath,
       `${JSON.stringify({
-        agents: { list: [{ id: "legacy", default: true }] },
+        agents: { entries: { legacy: {} } },
         plugins: { entries: { "candidate-plugin": { enabled: true } } },
       })}\n`,
     );
@@ -660,27 +620,14 @@ module.exports = { stateMigrations: [{
     const legacy = new DatabaseSync(stateDatabasePath);
     try {
       legacy.exec(`
-        ALTER TABLE agent_databases RENAME TO agent_databases_current;
-        CREATE TABLE agent_databases (
-          agent_id TEXT NOT NULL PRIMARY KEY,
-          path TEXT NOT NULL,
-          schema_version INTEGER NOT NULL,
-          last_seen_at INTEGER NOT NULL,
-          size_bytes INTEGER
-        );
-        INSERT INTO agent_databases SELECT * FROM agent_databases_current;
-        DROP TABLE agent_databases_current;
+        PRAGMA user_version = 8;
+        UPDATE schema_meta SET schema_version = 8;
       `);
     } finally {
       legacy.close();
     }
 
-    const plan = await planLegacyStateMigrationsReadOnly({
-      mode: "doctor",
-      candidate: candidateAt(fixture.root),
-      snapshot: createCallerModeSnapshot(fixture),
-      env: fixture.env,
-    });
+    const plan = await planFixture(fixture);
 
     expect(plan.steps[0]).toMatchObject({ id: "state-schema", requiredness: "required" });
     expect(
@@ -697,18 +644,13 @@ module.exports = { stateMigrations: [{
     const externalDatabasePath = path.join(fixture.root, "registered", "agent.sqlite");
     fs.mkdirSync(path.dirname(externalDatabasePath), { recursive: true });
     fs.writeFileSync(externalDatabasePath, "external\n");
-    const cfg: OpenClawConfig = { agents: { list: [{ id: "legacy", default: true }] } };
+    const cfg: OpenClawConfig = { agents: { entries: { legacy: {} } } };
     fs.writeFileSync(fixture.configPath, `${JSON.stringify(cfg)}\n`);
     vi.spyOn(sessionTargets, "resolveConfiguredAgentDatabaseTargets").mockReturnValue([
       { agentId: "legacy", path: externalDatabasePath },
     ]);
 
-    const plan = await planLegacyStateMigrationsReadOnly({
-      mode: "doctor",
-      candidate: candidateAt(fixture.root),
-      snapshot: createCallerModeSnapshot(fixture),
-      env: fixture.env,
-    });
+    const plan = await planFixture(fixture);
 
     const blockerIndex = plan.steps.findIndex((step) => step.id === "agent-migration-targets");
     expect(plan.steps[blockerIndex]).toMatchObject({
@@ -731,12 +673,7 @@ module.exports = { stateMigrations: [{
   it("returns thrown-step receipts and stops later Doctor mutations", async () => {
     const fixture = await makeCallerModeFixture();
     const { execPath } = writeLegacyDoctorSources(fixture.stateDir, {});
-    const plan = await planLegacyStateMigrationsReadOnly({
-      mode: "doctor",
-      candidate: candidateAt(fixture.root),
-      snapshot: createCallerModeSnapshot(fixture),
-      env: fixture.env,
-    });
+    const plan = await planFixture(fixture);
     const pluginDoctorConfig = Object.defineProperty({}, "meta", {
       get() {
         throw new Error("synthetic config migration failure");
@@ -778,21 +715,26 @@ module.exports = { stateMigrations: [{
 
   it.each([
     { blockerId: "config-machine-state", property: "meta" },
-    { blockerId: "agent-migration-targets", property: "session" },
     { blockerId: "state-schema", property: null },
   ] as const)(
     "closes receipts before rethrowing automatic $blockerId failure",
     async ({ blockerId, property }) => {
       const fixture = await makeCallerModeFixture();
-      const sourcePath = path.join(fixture.stateDir, "settings", "voicewake.json");
-      const sourceBytes = '{"triggers":["hey fixture"]}\n';
+      const sourcePath = path.join(fixture.stateDir, "logs", "config-health.json");
+      const sourceBytes = `${JSON.stringify({
+        entries: {
+          [path.join(fixture.stateDir, "openclaw.json")]: {
+            lastObservedSuspiciousSignature: "leave-me",
+          },
+        },
+      })}\n`;
       fs.mkdirSync(path.dirname(sourcePath), { recursive: true });
       fs.writeFileSync(sourcePath, sourceBytes);
       if (!property) {
         const databasePath = resolveOpenClawStateSqlitePath(fixture.env);
         fs.mkdirSync(path.dirname(databasePath), { recursive: true });
         const database = new DatabaseSync(databasePath);
-        database.exec("CREATE TABLE agent_databases (broken TEXT)");
+        database.exec("CREATE TABLE audit_events (broken TEXT)");
         database.close();
       }
       const plan = await planLegacyStateMigrationsReadOnly({
@@ -811,7 +753,7 @@ module.exports = { stateMigrations: [{
         : {};
       const emittedReceipts: LegacyStateMigrationStepReceipt[] = [];
       const execution = autoMigrateLegacyState({
-        cfg: property === "session" ? config : {},
+        cfg: {},
         pluginDoctorConfig: property === "meta" ? config : undefined,
         env: fixture.env,
         homedir: () => fixture.homeDir,
@@ -838,12 +780,7 @@ module.exports = { stateMigrations: [{
     const fixture = await makeCallerModeFixture();
     const { execPath } = writeLegacyDoctorSources(fixture.stateDir, {});
     writeLegacyStateSchemaV1(resolveOpenClawStateSqlitePath(fixture.env));
-    const plan = await planLegacyStateMigrationsReadOnly({
-      mode: "doctor",
-      candidate: candidateAt(fixture.root),
-      snapshot: createCallerModeSnapshot(fixture),
-      env: fixture.env,
-    });
+    const plan = await planFixture(fixture);
     const lastTouchedAt = "2026-09-02T00:00:00.000Z";
     const cfg = Object.defineProperty({ meta: { lastTouchedAt } }, "session", {
       get() {
@@ -851,13 +788,15 @@ module.exports = { stateMigrations: [{
       },
     }) as OpenClawConfig;
 
-    const result = await autoMigrateLegacyState({
-      cfg,
-      doctorOnlyStateMigrations: true,
-      env: fixture.env,
-      homedir: () => fixture.homeDir,
-      legacySessionSurfaces: EMPTY_LEGACY_SESSION_SURFACES,
-    });
+    const result = await withStateMigrationBackupForTest({ env: fixture.env }, () =>
+      autoMigrateLegacyState({
+        cfg,
+        doctorOnlyStateMigrations: true,
+        env: fixture.env,
+        homedir: () => fixture.homeDir,
+        legacySessionSurfaces: EMPTY_LEGACY_SESSION_SURFACES,
+      }),
+    );
 
     expectBlockedTailInPlanOrder({
       plan,
@@ -875,7 +814,7 @@ module.exports = { stateMigrations: [{
     expect(result.stepReceipts[0]).toMatchObject({ outcome: "completed" });
     expect(result.stepReceipts[0]?.changes.length).toBeGreaterThan(0);
     expect(result.stepReceipts[1]).toMatchObject({
-      id: "plugin-install-index",
+      id: "retired-core-state",
       outcome: "skipped",
     });
     expect(result.stepReceipts[2]).toMatchObject({
@@ -891,29 +830,18 @@ module.exports = { stateMigrations: [{
   it("returns detection refusal after preludes and stops later Doctor mutations", async () => {
     const fixture = await makeCallerModeFixture();
     const { execPath } = writeLegacyDoctorSources(fixture.stateDir, {});
-    const plan = await planLegacyStateMigrationsReadOnly({
-      mode: "doctor",
-      candidate: candidateAt(fixture.root),
-      snapshot: createCallerModeSnapshot(fixture),
-      env: fixture.env,
+    const plan = await planFixture(fixture);
+    vi.spyOn(deviceIdentityMigrations, "detectLegacyDeviceIdentity").mockImplementationOnce(() => {
+      throw new Error("synthetic execution detection failure");
     });
-    const params = Object.defineProperty(
-      {
-        cfg: {},
-        doctorOnlyStateMigrations: true,
-        env: fixture.env,
-        homedir: () => fixture.homeDir,
-        legacySessionSurfaces: EMPTY_LEGACY_SESSION_SURFACES,
-      } as Parameters<typeof autoMigrateLegacyState>[0],
-      "allowLegacyDeviceIdentityImport",
-      {
-        get() {
-          throw new Error("synthetic execution detection failure");
-        },
-      },
-    );
 
-    const result = await autoMigrateLegacyState(params);
+    const result = await autoMigrateLegacyState({
+      cfg: {},
+      doctorOnlyStateMigrations: true,
+      env: fixture.env,
+      homedir: () => fixture.homeDir,
+      legacySessionSurfaces: EMPTY_LEGACY_SESSION_SURFACES,
+    });
 
     expectBlockedTailInPlanOrder({
       plan,

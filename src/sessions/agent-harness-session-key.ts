@@ -91,10 +91,7 @@ function sessionLockOwnerMatches(
   }
   const previousOwner = normalizeOptionalString(previous.agentHarnessId)?.toLowerCase();
   const nextOwner = normalizeOptionalString(next.agentHarnessId)?.toLowerCase();
-  return (
-    previousOwner === nextOwner &&
-    normalizeOptionalAgentRuntimeId(previousOwner) === normalizeOptionalAgentRuntimeId(nextOwner)
-  );
+  return previousOwner === nextOwner;
 }
 
 function hasEquivalentRelocatedLockedEntry(params: {
@@ -120,7 +117,6 @@ function hasEquivalentRelocatedLockedEntry(params: {
 
 /** Preserves durable harness ownership across whole-store compatibility projections. */
 export function resolveAgentHarnessSessionStoreTransitionError(params: {
-  allowedRemovals?: ReadonlyMap<string, AgentHarnessSessionStoreEntry>;
   before?: ReadonlyMap<string, AgentHarnessSessionStoreEntry>;
   store: Record<string, AgentHarnessSessionStoreEntry>;
 }): string | undefined {
@@ -133,14 +129,6 @@ export function resolveAgentHarnessSessionStoreTransitionError(params: {
       if (nextEntry.sessionId !== previousEntry.sessionId) {
         return AGENT_HARNESS_SESSION_ID_LOCKED_MESSAGE;
       }
-      continue;
-    }
-    const allowedRemoval = params.allowedRemovals?.get(sessionKey);
-    if (
-      nextEntry === undefined &&
-      allowedRemoval !== undefined &&
-      JSON.stringify(previousEntry) === JSON.stringify(allowedRemoval)
-    ) {
       continue;
     }
     if (

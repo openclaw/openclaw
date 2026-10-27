@@ -1,4 +1,3 @@
-// Shared node-selection policy for bundled plugin runtime code.
 import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
 
 const loadNodeExecRuntime = createLazyRuntimeModule(

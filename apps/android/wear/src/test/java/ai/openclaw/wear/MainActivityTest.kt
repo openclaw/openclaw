@@ -346,16 +346,6 @@ class MainActivityTest {
   fun conversationSnapshotExposesPulseOnlyForConnectedCapablePhone() {
     val pulse =
       WearAgentPulseSnapshot(
-        tasks =
-          WearAgentPulseTasks(
-            state = WearAgentPulseTaskState.Ready,
-            queued = 2,
-            running = 3,
-            completed = 5,
-            failed = 1,
-            activeAtLimit = false,
-            recentAtLimit = false,
-          ),
         swarm =
           WearAgentPulseSwarm(
             state = WearAgentPulseSwarmState.Active,

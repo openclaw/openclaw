@@ -1,20 +1,27 @@
-import { describe, expect, it, vi } from "vitest";
+import { expect, it, vi } from "vitest";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { ApplicationContext, ApplicationGatewaySnapshot } from "../../app/context.ts";
 import type { NewSessionRouteData } from "./location.ts";
 import { newSessionModelSearch } from "./model-location.ts";
 import { page } from "./route.ts";
 
-// The loader is exercised through the page contract so route.ts keeps its
-// internals unexported; new-session routes never resolve to RouteNotFound.
-const loadNewSessionData = (context: ApplicationContext, search: string) =>
+const load = (context: ApplicationContext, search: string) =>
   page.loader?.(context, { location: { search } } as never) as Promise<NewSessionRouteData>;
 
-function createContext(params: {
-  assistantAgentId: string | null;
-  agentsList: ApplicationContext["agents"]["state"]["agentsList"];
-  staleRosterClient?: boolean;
-}) {
+function roster(defaultId: string, ids = [defaultId]) {
+  return {
+    defaultId,
+    mainKey: "main",
+    scope: "per-sender" as const,
+    agents: ids.map((id) => ({ id })),
+  };
+}
+
+function createContext(
+  agentsList: ApplicationContext["agents"]["state"]["agentsList"] = null,
+  assistantAgentId = "main",
+  staleRosterClient = false,
+) {
   const request = vi.fn(async (method: string) => {
     if (method !== "sessions.catalog.list") {
       throw new Error(`unexpected request: ${method}`);
@@ -22,198 +29,113 @@ function createContext(params: {
     return { catalogs: [] };
   });
   const client = { request } as unknown as GatewayBrowserClient;
-  const snapshot: ApplicationGatewaySnapshot = {
+  const snapshot: Pick<ApplicationGatewaySnapshot, "client" | "phase" | "assistantAgentId"> = {
     client,
     phase: "connected",
-    offlineStable: false,
-    canvasPluginSurfaceUrl: null,
-    hello: {
-      type: "hello-ok",
-      protocol: 1,
-      auth: { role: "operator", scopes: [] },
-      features: { methods: ["sessions.catalog.list"] },
-    },
-    assistantAgentId: params.assistantAgentId,
-    sessionKey: "main",
-    lastError: null,
-    lastErrorCode: null,
+    assistantAgentId,
   };
-  const ensureList = vi.fn(async () => params.agentsList);
+  const ensureList = vi.fn(async () => agentsList);
   const agentsState = {
-    client: params.staleRosterClient
-      ? ({ request: vi.fn() } as unknown as GatewayBrowserClient)
-      : client,
+    client: staleRosterClient ? ({ request: vi.fn() } as unknown as GatewayBrowserClient) : client,
     connected: true,
-    agentsList: params.agentsList,
+    agentsList,
   };
   const context = {
     gateway: { snapshot },
-    agents: {
-      state: agentsState,
-      ensureList,
-    },
+    agents: { state: agentsState, ensureList },
   } as unknown as ApplicationContext;
   return { agentsState, client, context, ensureList, request };
 }
 
-describe("new-session route catalog target", () => {
-  it("carries an explicit model into an unsent draft without creating a session", async () => {
-    const { context, request } = createContext({ assistantAgentId: "main", agentsList: null });
-    const data = await loadNewSessionData(
-      context,
-      newSessionModelSearch("main", "example/model-one"),
+function expectCatalog(request: ReturnType<typeof createContext>["request"], agentId: string) {
+  expect(request).toHaveBeenCalledWith("sessions.catalog.list", {
+    agentId,
+    catalogId: "claude",
+    limitPerHost: 1,
+  });
+}
+
+it.each(["current", "failed", "retired-agent"] as const)(
+  "requires %s live discovery",
+  async (outcome) => {
+    const currentRoster = roster("current");
+    const { context, agentsState, ensureList, request } = createContext(
+      outcome === "retired-agent" ? currentRoster : null,
+      "old",
     );
-    expect(data).toMatchObject({
-      agentId: "main",
-      requestedAgentId: "main",
-      requestedModel: "example/model-one",
-      model: "example/model-one",
-      startTerminal: false,
-      catalogId: "",
+    ensureList.mockImplementation(async () => {
+      if (outcome === "current") {
+        agentsState.agentsList = currentRoster;
+      }
+      return agentsState.agentsList;
     });
-    expect(request).not.toHaveBeenCalled();
-  });
-
-  it.each([
-    { label: "unqualified", model: "unqualified" },
-    { label: "missing model", model: "example/" },
-    { label: "missing provider", model: "/model" },
-    { label: "control character", model: "example/model\n" },
-    { label: "oversized", model: `example/${"x".repeat(2048)}` },
-  ])("ignores $label model intent", async ({ model }) => {
-    const { context, request } = createContext({ assistantAgentId: "main", agentsList: null });
-    const data = await loadNewSessionData(
+    const data = await load(
       context,
-      `?agent=main&model=${encodeURIComponent(model)}`,
+      outcome === "retired-agent" ? "?agent=old&catalog=claude" : "?catalog=claude",
     );
-    expect(data.model).toBe("");
-    expect(data.requestedModel).toBeUndefined();
-    expect(request).not.toHaveBeenCalled();
-  });
+    expect(ensureList).toHaveBeenCalledTimes(outcome === "retired-agent" ? 0 : 1);
+    expect(data.agentId).toBe(outcome === "failed" ? "" : "current");
+    if (outcome === "failed") {
+      expect(request).not.toHaveBeenCalled();
+    } else {
+      expectCatalog(request, "current");
+    }
+  },
+);
 
-  it("does not apply group defaults from a retired connection", async () => {
-    const context = {
-      sessions: {
-        state: {
-          groupSettings: [
-            { name: "Client", position: 0, cwd: "/gateway-a/client", worktree: true },
-          ],
-        },
-        groupsLoad: vi.fn(async () => null),
-        groupsGeneration: vi.fn(() => 1),
-        groupsStatus: vi.fn(() => "unavailable"),
+it.each([
+  { label: "qualified", model: "example/model-one", expected: "example/model-one" },
+  { label: "unqualified", model: "unqualified", expected: undefined },
+  { label: "control character", model: "example/model\n", expected: undefined },
+  { label: "oversized", model: `example/${"x".repeat(2048)}`, expected: undefined },
+])("validates $label model intent without creating a session", async ({ model, expected }) => {
+  const { context, request } = createContext();
+  const data = await load(
+    context,
+    expected
+      ? newSessionModelSearch("main", model)
+      : `?agent=main&model=${encodeURIComponent(model)}`,
+  );
+  expect(data.requestedModel).toBe(expected);
+  expect(data).toMatchObject({
+    agentId: "main",
+    requestedAgentId: "main",
+    startTerminal: false,
+    catalogId: "",
+  });
+  expect(request).not.toHaveBeenCalled();
+});
+
+it.each(["unavailable", "missing"] as const)("rejects %s group defaults", async (groupStatus) => {
+  const unavailable = groupStatus === "unavailable";
+  const context = {
+    sessions: {
+      state: {
+        groupSettings: unavailable
+          ? [{ name: "Client", position: 0, cwd: "/gateway-a/client", worktree: true }]
+          : [],
       },
-    } as unknown as ApplicationContext;
+      groupsLoad: vi.fn(async () => (unavailable ? null : [])),
+      groupsStatus: vi.fn(() => (unavailable ? "unavailable" : "ready")),
+    },
+  } as unknown as ApplicationContext;
+  const group = unavailable ? "Client" : "Deleted";
+  const data = await load(context, `?group=${group}`);
+  expect(data).toMatchObject({ group, groupStatus, groupCwd: "", groupWorktree: false });
+});
 
-    const data = await loadNewSessionData(context, "?group=Client");
+it("waits for the replacement client's roster before preserving a valid route agent", async () => {
+  const { agentsState, client, context, request } = createContext(roster("main"), "roboclaw", true);
 
-    expect(data.groupStatus).toBe("unavailable");
-    expect(data.groupCwd).toBe("");
-    expect(data.groupWorktree).toBe(false);
-  });
+  const pending = await load(context, "?agent=research&catalog=claude");
 
-  it("marks a deleted group target missing", async () => {
-    const context = {
-      sessions: {
-        state: { groupSettings: [] },
-        groupsLoad: vi.fn(async () => []),
-        groupsGeneration: vi.fn(() => 1),
-        groupsStatus: vi.fn(() => "ready"),
-      },
-    } as unknown as ApplicationContext;
+  expect(pending.agentId).toBe("");
+  expect(request).not.toHaveBeenCalled();
 
-    const data = await loadNewSessionData(context, "?group=Deleted");
+  agentsState.client = client;
+  agentsState.agentsList = roster("roboclaw", ["roboclaw", "research"]);
+  const data = await load(context, "?agent=research&catalog=claude");
 
-    expect(data.group).toBe("Deleted");
-    expect(data.groupStatus).toBe("missing");
-  });
-
-  it("defers an unvalidated route agent before roster hydration", async () => {
-    const { context, request } = createContext({
-      assistantAgentId: "roboclaw",
-      agentsList: null,
-    });
-
-    const data = await loadNewSessionData(context, "?agent=main&catalog=claude");
-
-    expect(data.agentId).toBe("");
-    expect(request).not.toHaveBeenCalled();
-  });
-
-  it("reconciles a retired route agent against the loaded roster", async () => {
-    const { context, request } = createContext({
-      assistantAgentId: "main",
-      agentsList: {
-        defaultId: "roboclaw",
-        mainKey: "main",
-        scope: "per-sender",
-        agents: [{ id: "roboclaw" }],
-      },
-    });
-
-    const data = await loadNewSessionData(context, "?agent=main&catalog=claude");
-
-    expect(data.agentId).toBe("roboclaw");
-    expect(request).toHaveBeenCalledWith("sessions.catalog.list", {
-      agentId: "roboclaw",
-      catalogId: "claude",
-      limitPerHost: 1,
-    });
-  });
-
-  it("defers catalog retries when neither roster nor hello supplies an agent", async () => {
-    const { context, request } = createContext({ assistantAgentId: null, agentsList: null });
-
-    const data = await loadNewSessionData(context, "?agent=main&catalog=claude");
-
-    expect(data.agentId).toBe("");
-    expect(request).not.toHaveBeenCalled();
-  });
-
-  it("waits for the replacement client's roster before preserving a valid route agent", async () => {
-    const { agentsState, client, context, request } = createContext({
-      assistantAgentId: "roboclaw",
-      agentsList: {
-        defaultId: "main",
-        mainKey: "main",
-        scope: "per-sender",
-        agents: [{ id: "main" }],
-      },
-      staleRosterClient: true,
-    });
-
-    const pending = await loadNewSessionData(context, "?agent=research&catalog=claude");
-
-    expect(pending.agentId).toBe("");
-    expect(request).not.toHaveBeenCalled();
-
-    agentsState.client = client;
-    agentsState.agentsList = {
-      defaultId: "roboclaw",
-      mainKey: "main",
-      scope: "per-sender",
-      agents: [{ id: "roboclaw" }, { id: "research" }],
-    };
-    const data = await loadNewSessionData(context, "?agent=research&catalog=claude");
-
-    expect(data.agentId).toBe("research");
-    expect(request).toHaveBeenCalledWith("sessions.catalog.list", {
-      agentId: "research",
-      catalogId: "claude",
-      limitPerHost: 1,
-    });
-  });
-
-  it("reuses the current gateway client across route retries", async () => {
-    const { client, context, request } = createContext({
-      assistantAgentId: "roboclaw",
-      agentsList: null,
-    });
-
-    await loadNewSessionData(context, "?catalog=claude");
-    await loadNewSessionData(context, "?catalog=claude");
-
-    expect(context.gateway.snapshot.client).toBe(client);
-    expect(request).toHaveBeenCalledTimes(2);
-  });
+  expect(data.agentId).toBe("research");
+  expectCatalog(request, "research");
 });

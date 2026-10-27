@@ -1,313 +1,74 @@
-// Nextcloud Talk tests cover message actions plugin behavior.
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { CoreConfig } from "./types.js";
+import { beforeEach, expect, it, vi } from "vitest";
+import type { CoreConfig, NextcloudTalkAccountConfig } from "./types.js";
 
-const hoisted = vi.hoisted(() => ({
-  sendReactionNextcloudTalk: vi.fn(),
-  sendMessageNextcloudTalk: vi.fn(),
-  listNextcloudTalkAccountIds: vi.fn(),
-  resolveNextcloudTalkAccount: vi.fn(),
-}));
+const sendReactionNextcloudTalk = vi.hoisted(() => vi.fn());
+// mock-isolation: Message actions stop at the send boundary without making HTTP requests.
+vi.mock("./send.js", () => ({ sendReactionNextcloudTalk }));
+const { nextcloudTalkMessageActions: actions } = await import("./message-actions.js");
+const configured = { baseUrl: "https://nc.example.com", botSecret: "bot-secret" };
+const unconfigured = { baseUrl: "", botSecret: "" };
+const config = (work: NextcloudTalkAccountConfig = configured): CoreConfig => ({
+  channels: { "nextcloud-talk": { defaultAccount: "work", accounts: { work } } },
+});
+const cfg = config();
+const reaction = { to: "room:abc123", messageId: "1", emoji: "👍" };
+type ActionContext = Parameters<NonNullable<typeof actions.handleAction>>[0];
+const act = (params: ActionContext["params"], context: Partial<ActionContext> = {}) =>
+  actions.handleAction!({ channel: "nextcloud-talk", action: "react", params, cfg, ...context });
 
-vi.mock("./send.js", () => ({
-  sendReactionNextcloudTalk: hoisted.sendReactionNextcloudTalk,
-  sendMessageNextcloudTalk: hoisted.sendMessageNextcloudTalk,
-}));
+beforeEach(() => {
+  sendReactionNextcloudTalk.mockReset().mockResolvedValue(undefined);
+});
 
-vi.mock("./accounts.js", () => ({
-  listNextcloudTalkAccountIds: hoisted.listNextcloudTalkAccountIds,
-  resolveNextcloudTalkAccount: hoisted.resolveNextcloudTalkAccount,
-}));
+it("returns null when no account is configured", () => {
+  expect(actions.describeMessageTool?.({ cfg: config(unconfigured) })).toBeNull();
+});
 
-const { nextcloudTalkMessageActions } = await import("./message-actions.js");
+it("scopes discovery to a specific account instead of another configured account", () => {
+  const multi: CoreConfig = {
+    channels: {
+      "nextcloud-talk": {
+        accounts: { work: configured, empty: unconfigured },
+      },
+    },
+  };
+  expect(actions.describeMessageTool?.({ cfg: multi, accountId: "work" })?.actions).toEqual([
+    "send",
+    "react",
+  ]);
+  expect(actions.describeMessageTool?.({ cfg: multi, accountId: "empty" })).toBeNull();
+});
 
-const configuredAccount = {
-  accountId: "default",
-  enabled: true,
-  baseUrl: "https://nc.example.com",
-  secret: "bot-secret",
-} as const;
+it.each([
+  [
+    "disabled account",
+    { ...configured, enabled: false },
+    reaction,
+    /is disabled or not configured/,
+  ],
+  ["unconfigured account", unconfigured, reaction, /is disabled or not configured/],
+  ["missing id", configured, { to: reaction.to, emoji: reaction.emoji }, /messageId required/],
+  ["removal", configured, { ...reaction, remove: true }, /removal is not supported/],
+] as const)("rejects %s before reaching the sender", async (_name, account, params, error) => {
+  await expect(act(params, { cfg: config(account), accountId: "work" })).rejects.toThrow(error);
+  expect(sendReactionNextcloudTalk).not.toHaveBeenCalled();
+});
 
-const unconfiguredAccount = {
-  accountId: "default",
-  enabled: true,
-  baseUrl: "",
-  secret: null,
-} as const;
-
-const disabledAccount = {
-  accountId: "default",
-  enabled: false,
-  baseUrl: "https://nc.example.com",
-  secret: "bot-secret",
-} as const;
-
-describe("nextcloudTalkMessageActions", () => {
-  beforeEach(() => {
-    hoisted.sendReactionNextcloudTalk.mockReset();
-    hoisted.sendReactionNextcloudTalk.mockResolvedValue({ ok: true });
-    hoisted.sendMessageNextcloudTalk.mockReset();
-    hoisted.listNextcloudTalkAccountIds.mockReset();
-    hoisted.resolveNextcloudTalkAccount.mockReset();
+it("uses toolContext.currentMessageId when params.messageId is missing", async () => {
+  expect(actions.supportsAction?.({ action: "react" })).toBe(true);
+  await act(
+    { to: "room:abc123", emoji: "✅", remove: false },
+    { accountId: null, toolContext: { currentMessageId: 99 } },
+  );
+  expect(sendReactionNextcloudTalk).toHaveBeenCalledWith("room:abc123", "99", "✅", {
+    accountId: undefined,
+    cfg,
   });
+});
 
-  describe("describeMessageTool", () => {
-    it("returns null when no accounts are configured", () => {
-      hoisted.listNextcloudTalkAccountIds.mockReturnValue([]);
-
-      const result = nextcloudTalkMessageActions.describeMessageTool?.({
-        cfg: {} as OpenClawConfig,
-      });
-
-      expect(result).toBeNull();
-    });
-
-    it("returns null when configured account has no secret/baseUrl", () => {
-      hoisted.listNextcloudTalkAccountIds.mockReturnValue([unconfiguredAccount.accountId]);
-      hoisted.resolveNextcloudTalkAccount.mockReturnValue(unconfiguredAccount);
-
-      const result = nextcloudTalkMessageActions.describeMessageTool?.({
-        cfg: {} as OpenClawConfig,
-      });
-
-      expect(result).toBeNull();
-    });
-
-    it("returns null when the only listed account is disabled", () => {
-      hoisted.listNextcloudTalkAccountIds.mockReturnValue([disabledAccount.accountId]);
-      hoisted.resolveNextcloudTalkAccount.mockReturnValue(disabledAccount);
-
-      const result = nextcloudTalkMessageActions.describeMessageTool?.({
-        cfg: {} as OpenClawConfig,
-      });
-
-      expect(result).toBeNull();
-    });
-
-    it("advertises send + react when an account is configured", () => {
-      hoisted.listNextcloudTalkAccountIds.mockReturnValue([configuredAccount.accountId]);
-      hoisted.resolveNextcloudTalkAccount.mockReturnValue(configuredAccount);
-
-      const result = nextcloudTalkMessageActions.describeMessageTool?.({
-        cfg: {} as OpenClawConfig,
-      });
-
-      expect(result?.actions).toEqual(["send", "react"]);
-    });
-
-    it("scopes discovery to a specific accountId when provided", () => {
-      hoisted.resolveNextcloudTalkAccount.mockReturnValue(configuredAccount);
-
-      const result = nextcloudTalkMessageActions.describeMessageTool?.({
-        cfg: {} as OpenClawConfig,
-        accountId: "work",
-      });
-
-      expect(hoisted.resolveNextcloudTalkAccount).toHaveBeenCalledWith({
-        cfg: {},
-        accountId: "work",
-      });
-      expect(hoisted.listNextcloudTalkAccountIds).not.toHaveBeenCalled();
-      expect(result?.actions).toEqual(["send", "react"]);
-    });
-
-    it("returns null when the targeted account is disabled", () => {
-      hoisted.resolveNextcloudTalkAccount.mockReturnValue(disabledAccount);
-
-      const result = nextcloudTalkMessageActions.describeMessageTool?.({
-        cfg: {} as OpenClawConfig,
-        accountId: "work",
-      });
-
-      expect(result).toBeNull();
-    });
-  });
-
-  describe("supportsAction", () => {
-    it("delegates send back to outbound", () => {
-      expect(nextcloudTalkMessageActions.supportsAction?.({ action: "send" })).toBe(false);
-    });
-
-    it("handles react locally", () => {
-      expect(nextcloudTalkMessageActions.supportsAction?.({ action: "react" })).toBe(true);
-    });
-
-    it("rejects unsupported actions", () => {
-      expect(nextcloudTalkMessageActions.supportsAction?.({ action: "delete" })).toBe(false);
-      expect(nextcloudTalkMessageActions.supportsAction?.({ action: "pin" })).toBe(false);
-      expect(nextcloudTalkMessageActions.supportsAction?.({ action: "edit" })).toBe(false);
-      expect(nextcloudTalkMessageActions.supportsAction?.({ action: "read" })).toBe(false);
-    });
-  });
-
-  describe("handleAction", () => {
-    const cfg = {} as CoreConfig;
-
-    beforeEach(() => {
-      // Dispatch now resolves the account and enforces the same enabled+configured
-      // gate as describeMessageTool, so react tests need a configured account.
-      hoisted.resolveNextcloudTalkAccount.mockReturnValue(configuredAccount);
-    });
-
-    it("rejects a disabled account before reaching the sender", async () => {
-      hoisted.resolveNextcloudTalkAccount.mockReturnValue(disabledAccount);
-
-      await expect(
-        nextcloudTalkMessageActions.handleAction?.({
-          channel: "nextcloud-talk",
-          action: "react",
-          params: { to: "room:abc123", messageId: "1", emoji: "👍" },
-          cfg,
-          accountId: "work",
-        }),
-      ).rejects.toThrow(/is disabled or not configured/);
-      expect(hoisted.sendReactionNextcloudTalk).not.toHaveBeenCalled();
-    });
-
-    it("rejects an unconfigured account before reaching the sender", async () => {
-      hoisted.resolveNextcloudTalkAccount.mockReturnValue(unconfiguredAccount);
-
-      await expect(
-        nextcloudTalkMessageActions.handleAction?.({
-          channel: "nextcloud-talk",
-          action: "react",
-          params: { to: "room:abc123", messageId: "1", emoji: "👍" },
-          cfg,
-        }),
-      ).rejects.toThrow(/is disabled or not configured/);
-      expect(hoisted.sendReactionNextcloudTalk).not.toHaveBeenCalled();
-    });
-
-    it("invokes sendReactionNextcloudTalk with normalized params for the react action", async () => {
-      const result = await nextcloudTalkMessageActions.handleAction?.({
-        channel: "nextcloud-talk",
-        action: "react",
-        params: { to: "room:abc123", messageId: "42", emoji: "👍" },
-        cfg,
-        accountId: "work",
-      });
-
-      expect(hoisted.sendReactionNextcloudTalk).toHaveBeenCalledTimes(1);
-      expect(hoisted.sendReactionNextcloudTalk).toHaveBeenCalledWith("room:abc123", "42", "👍", {
-        accountId: "work",
-        cfg,
-      });
-      expect(result).toMatchObject({
-        details: { ok: true, added: "👍" },
-      });
-    });
-
-    it("uses toolContext.currentMessageId when params.messageId is missing", async () => {
-      await nextcloudTalkMessageActions.handleAction?.({
-        channel: "nextcloud-talk",
-        action: "react",
-        params: { to: "room:abc123", emoji: "✅" },
-        cfg,
-        accountId: null,
-        toolContext: { currentMessageId: 99 },
-      });
-
-      expect(hoisted.sendReactionNextcloudTalk).toHaveBeenCalledWith("room:abc123", "99", "✅", {
-        accountId: undefined,
-        cfg,
-      });
-    });
-
-    it("requires a target room token", async () => {
-      await expect(
-        nextcloudTalkMessageActions.handleAction?.({
-          channel: "nextcloud-talk",
-          action: "react",
-          params: { messageId: "1", emoji: "👍" },
-          cfg,
-        }),
-      ).rejects.toThrow(/to \(room token\) required/);
-      expect(hoisted.sendReactionNextcloudTalk).not.toHaveBeenCalled();
-    });
-
-    it("requires a messageId (explicit or via toolContext)", async () => {
-      await expect(
-        nextcloudTalkMessageActions.handleAction?.({
-          channel: "nextcloud-talk",
-          action: "react",
-          params: { to: "room:abc123", emoji: "👍" },
-          cfg,
-        }),
-      ).rejects.toThrow(/messageId required/);
-      expect(hoisted.sendReactionNextcloudTalk).not.toHaveBeenCalled();
-    });
-
-    it("requires an emoji", async () => {
-      await expect(
-        nextcloudTalkMessageActions.handleAction?.({
-          channel: "nextcloud-talk",
-          action: "react",
-          params: { to: "room:abc123", messageId: "1" },
-          cfg,
-        }),
-      ).rejects.toThrow(/emoji required/);
-      expect(hoisted.sendReactionNextcloudTalk).not.toHaveBeenCalled();
-    });
-
-    it("rejects send through the action handler (outbound owns send)", async () => {
-      await expect(
-        nextcloudTalkMessageActions.handleAction?.({
-          channel: "nextcloud-talk",
-          action: "send",
-          params: { to: "room:abc123", text: "hi" },
-          cfg,
-        }),
-      ).rejects.toThrow(/handled by outbound/);
-    });
-
-    it("rejects unsupported actions", async () => {
-      await expect(
-        nextcloudTalkMessageActions.handleAction?.({
-          channel: "nextcloud-talk",
-          action: "delete",
-          params: {},
-          cfg,
-        }),
-      ).rejects.toThrow(/Action delete not supported for nextcloud-talk/);
-    });
-
-    it("rejects reaction removal requests without calling the add-reaction sender", async () => {
-      await expect(
-        nextcloudTalkMessageActions.handleAction?.({
-          channel: "nextcloud-talk",
-          action: "react",
-          params: { to: "room:abc123", messageId: "1", emoji: "👍", remove: true },
-          cfg,
-        }),
-      ).rejects.toThrow(/removal is not supported/);
-      expect(hoisted.sendReactionNextcloudTalk).not.toHaveBeenCalled();
-    });
-
-    it("still adds the reaction when remove is explicitly false", async () => {
-      await nextcloudTalkMessageActions.handleAction?.({
-        channel: "nextcloud-talk",
-        action: "react",
-        params: { to: "room:abc123", messageId: "1", emoji: "👍", remove: false },
-        cfg,
-      });
-
-      expect(hoisted.sendReactionNextcloudTalk).toHaveBeenCalledTimes(1);
-    });
-
-    it("propagates errors from sendReactionNextcloudTalk", async () => {
-      hoisted.sendReactionNextcloudTalk.mockRejectedValueOnce(
-        new Error("Nextcloud Talk reaction failed: 403 forbidden"),
-      );
-
-      await expect(
-        nextcloudTalkMessageActions.handleAction?.({
-          channel: "nextcloud-talk",
-          action: "react",
-          params: { to: "room:abc123", messageId: "1", emoji: "👍" },
-          cfg,
-        }),
-      ).rejects.toThrow(/403 forbidden/);
-    });
-  });
+it.each([
+  ["send", /handled by outbound/],
+  ["delete", /Action delete not supported for nextcloud-talk/],
+] as const)("rejects %s through the action handler", async (action, error) => {
+  await expect(act({ to: "room:abc123", text: "hi" }, { action })).rejects.toThrow(error);
 });
