@@ -196,6 +196,7 @@ it.for([
     vi.resetModules();
     startTurn.mockImplementation(async ({ io }) => accept(io, "guarded-run"));
     waitForTurn.mockResolvedValue({ result: { status: "timeout" } });
+    // mock-isolation: Hold service loading at the cold-admission boundary without real runtime state.
     vi.doMock("./agent-turn-service.js", async () => {
       await pause();
       return service();
