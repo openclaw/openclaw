@@ -158,7 +158,7 @@ export function registerGatewayRequestTests(fixtures: UpdateRespawnFixtures): vo
     });
   });
 
-  it("joins FIFO signal consumption and defers durable restart upgrades through close", async () => {
+  it("joins FIFO signal consumption through close and keeps a queued Stop over a later update", async () => {
     process.env.OPENCLAW_SUPERVISOR_MODE = "external";
     const first = createDeferredCore<null>();
     const second = createDeferredCore<null>();
@@ -194,7 +194,9 @@ export function registerGatewayRequestTests(fixtures: UpdateRespawnFixtures): vo
         closing.release();
         await expect(exited).resolves.toBe(0);
       }
-      expect(writeHandoff.mock.calls[0]?.[0].reason).toBe("update.run");
+      // The Stop queued behind the restart ends it; the later durable update cannot revive it.
+      expect(consumeIntent).toHaveBeenCalledTimes(3);
+      expectCallCount(0, restartProcess, writeHandoff);
     });
   });
 

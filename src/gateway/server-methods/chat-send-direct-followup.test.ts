@@ -41,7 +41,6 @@ import type { UserTurnTranscriptRecorder } from "../../sessions/user-turn-transc
 import { ensureProfileForEmail } from "../../state/user-profiles.js";
 import { dispatchInboundMessageMock, installGatewayTestHooks } from "../test-helpers.js";
 import { handleChatAbortRequest } from "./chat-abort-handler.js";
-import * as chatReplyMedia from "./chat-reply-media.js";
 import { loadRealChatDispatch, successfulChatTurn } from "./chat-send-authority.test-support.js";
 import {
   setClientProfile,
@@ -80,7 +79,11 @@ function steeringConfig({ context }: Fixture) {
   const config = withFullRuntimeReplyConfig(context.getRuntimeConfig());
   config.messages = {
     ...config.messages,
-    queue: { mode: "steer", debounceMsByChannel: { webchat: 0 } },
+    queue: {
+      mode: "steer",
+      allowCollaborativeSteering: false,
+      debounceMsByChannel: { webchat: 0 },
+    },
   };
   context.getRuntimeConfig = () => config;
   return config;
@@ -113,9 +116,101 @@ async function recordInput({ followupRun, opts }: Parameters<typeof executeAgent
   return runId;
 }
 
-it("refuses cross-requester steering by default and admits only an explicit fresh followup", async ({
+it("quietly queues another requester and drains once with their current policy", async ({
   signal,
 }) => {
+  const fixture = await createFixture({ preserveContent: true });
+  const operation = expectDefined(fixture.activeRun, "incumbent reply operation");
+  const alice = ensureProfileForEmail("queued-steer-alice@example.test");
+  const bob = ensureProfileForEmail("queued-steer-bob@example.test");
+  setClientProfile(fixture.client, bob);
+  fixture.params.queueMode = "steer";
+  fixture.params.idempotencyKey = "queued-steer-bob";
+  fixture.params.message = "Answer Bob's separate request.";
+  const config = steeringConfig(fixture);
+  setRuntimeConfigSnapshot(config, config);
+  const fingerprint = "queued-steer-alice-tools";
+  operation.bindToolAuthoritySnapshot({
+    requesterPrincipalKey: resolveRequesterPrincipalKey({ operatorProfileId: alice.id }),
+    fingerprint: () => fingerprint,
+    project: () => fingerprint,
+  });
+  operation.bindToolAuthorityRoute({ provider: "openai", model: "gpt-test" });
+  operation.setPhase("running");
+  const injected = vi.fn(async () => {});
+  operation.attachBackend({
+    kind: "embedded",
+    runId: "queued-steer-alice-run",
+    toolAuthorityFingerprint: fingerprint,
+    cancel() {},
+    messageInjectionV2: { version: 2, isAvailable: () => true, queueMessage: injected },
+  });
+  const dispatchActual = await loadRealChatDispatch();
+  const queued = createDeferred();
+  const dispatched = createDeferred();
+  const started = createDeferred();
+  const settled = createDeferred();
+  const release = createDeferred();
+  const consumed: Parameters<typeof executeAgentTurn>[0][] = [];
+  runtime.execute.mockReset();
+  runtime.execute.mockImplementation(async (params) => {
+    params.opts?.onAgentRunStart?.(fixture.params.idempotencyKey);
+    await params.followupRun.userTurnTranscriptRecorder?.persistApproved();
+    consumed.push(params);
+    started.resolve();
+    await withinTest(release.promise, signal);
+    return successfulChatTurn(fixture.params.idempotencyKey, "Bob's separate answer.");
+  });
+  dispatchInboundMessageMock.mockImplementation(async (raw: unknown) => {
+    const params = raw as DispatchParams;
+    observeAdmission(params, queued, settled);
+    try {
+      return await dispatchActual({ ...params, cfg: config });
+    } finally {
+      dispatched.resolve();
+    }
+  });
+  try {
+    await fixture.send();
+    await withinTest(
+      awaitGateBeforeSettlement(queued.promise, dispatched.promise, "Input did not queue"),
+      signal,
+    );
+    await withinTest(dispatched.promise, signal);
+    expect(injected).not.toHaveBeenCalled();
+    expect(consumed).toEqual([]);
+    expect(isRpcSourceQueued(rpcSourceTesting.get(fixture.params.idempotencyKey))).toBe(true);
+    const messages = vi
+      .mocked(fixture.context.broadcast)
+      .mock.calls.filter(([event]) => event === "chat")
+      .map(([, payload]) => JSON.stringify(payload));
+    expect(messages.join(" ")).not.toMatch(/collaborative steering|followup|queued for a new turn/);
+    config.tools = { ...config.tools, deny: ["exec"] };
+    setRuntimeConfigSnapshot(config, config);
+    operation.complete();
+    await withinTest(
+      awaitGateBeforeSettlement(started.promise, settled.promise, "Queued input did not execute"),
+      signal,
+    );
+    expect(consumed).toHaveLength(1);
+    const run = consumed[0]!.followupRun;
+    expect(run.operatorAuthority?.profileId).toBe(bob.id);
+    expect(run.run.requesterOrigin?.operatorProfileId).toBe(bob.id);
+    expect(run.run.config.tools?.deny).toEqual(["exec"]);
+    expect(consumed[0]!.replyOperation?.requesterPrincipalKey).toBe(
+      resolveRequesterPrincipalKey({ operatorProfileId: bob.id }),
+    );
+    release.resolve();
+    await withinTest(settled.promise, signal);
+    expect(runtime.execute).toHaveBeenCalledOnce();
+  } finally {
+    release.resolve();
+    operation.complete();
+    clearFixtureQueues(fixture);
+  }
+});
+
+it("preserves opt-in strict refusal and admits an explicit fresh followup", async ({ signal }) => {
   const wait = <T>(pending: PromiseLike<T>) => withinTest(pending, signal);
   const waitForGate = (...args: Parameters<typeof awaitGateBeforeSettlement>) =>
     wait(awaitGateBeforeSettlement(...args));
@@ -129,6 +224,7 @@ it("refuses cross-requester steering by default and admits only an explicit fres
   fixture.params.queueMode = "steer";
   fixture.params.idempotencyKey = "strict-steer-bob-input";
   const config = steeringConfig(fixture);
+  config.messages!.queue!.collaborativeSteeringFallback = "reject";
   setRuntimeConfigSnapshot(config, config);
   const fingerprint = "strict-steer-incumbent-tools";
   operation.bindToolAuthoritySnapshot({
@@ -322,23 +418,7 @@ it.for([false, true])(
     const queued = createDeferred();
     const dispatched = createDeferred();
     const settled = createDeferred();
-    const mediaGate = createEnteredGate();
     const stopped = createDeferred();
-    let dispatchReturned = false;
-    let mediaHeld = false;
-    const captureMedia = chatReplyMedia.captureWebchatReplyMediaScope;
-    const mediaCapture = cancel
-      ? vi
-          .spyOn(chatReplyMedia, "captureWebchatReplyMediaScope")
-          .mockImplementation(async (params) => {
-            const media = await captureMedia(params);
-            if (dispatchReturned && !mediaHeld && params.sessionKey === scope.sessionKey) {
-              mediaHeld = true;
-              await mediaGate.wait();
-            }
-            return media;
-          })
-      : undefined;
     const clearRun = context.chatRunState.clearRun;
     const clearStoppedRun = cancel
       ? vi.spyOn(context.chatRunState, "clearRun").mockImplementation((runId) => {
@@ -361,7 +441,6 @@ it.for([false, true])(
       recorder = params.replyOptions?.userTurnTranscriptRecorder;
       observeAdmission(params, queued, settled);
       return dispatchActual({ ...params, cfg: config }).finally(() => {
-        dispatchReturned = true;
         dispatched.resolve();
       });
     });
@@ -443,7 +522,6 @@ it.for([false, true])(
       expect(consumed).toEqual([]);
       expect(injected).not.toHaveBeenCalled();
       if (cancel) {
-        await wait(mediaGate.entered);
         const abortParams = { sessionKey: scope.sessionKey, runId: sendParams.idempotencyKey };
         const respond = vi.fn<RespondFn>();
         stop = handleChatAbortRequest({
@@ -457,7 +535,6 @@ it.for([false, true])(
         void stop.catch(() => {});
         await waitForGate(stopped.promise, stop, "Stop completed without clearing its chat buffer");
         broadcastsAtStop = vi.mocked(context.broadcast).mock.calls.length;
-        mediaGate.release();
         await wait(stop);
         expect(respond).toHaveBeenCalledWith(true, {
           ok: true,
@@ -493,7 +570,6 @@ it.for([false, true])(
       expect(consumed).toEqual([expect.stringContaining(sendParams.message)]);
       expect((await listSessionPendingInputs(scope)).total).toBe(0);
     } finally {
-      mediaGate.release();
       directGate.release();
       cleanupGate.release();
       try {
@@ -504,7 +580,6 @@ it.for([false, true])(
         await stop?.catch(() => {});
         await fixture.cleanup();
       } finally {
-        mediaCapture?.mockRestore();
         clearStoppedRun?.mockRestore();
         runtimeLoader.mockRestore();
       }

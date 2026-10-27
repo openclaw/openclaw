@@ -10,6 +10,7 @@ import { ContentPresentation } from "../../../lib/solid/presentation.ts";
 import { mediaTicketPayload } from "../../../test-helpers/control-ui-attachment-fixtures.ts";
 import { cleanupSolid, mountSolid } from "../../../test-helpers/mount-solid.ts";
 import { flush } from "../../../test-helpers/solid-settle.ts";
+import { stubManualIntersectionObserver } from "./chat-media-observer.test-support.ts";
 import { resolveAssistantAttachmentAvailability } from "./chat-message-attachment-availability.ts";
 import { MessageImages, type MessageImagesProps } from "./chat-message-images-solid.tsx";
 import {
@@ -876,6 +877,57 @@ describe("chat media resource lifecycle", () => {
     expect(imageSrc(container)).toBe(blobUrl);
   });
 });
+
+it.each([true, false])(
+  "reserves canonical image dimensions before loading (slot layout: %s)",
+  (withLayout) => {
+    stubManualIntersectionObserver(() => {});
+    const message = {
+      role: "user",
+      content: [
+        { type: "image", url: "media://inbound/landscape.png" },
+        { type: "image", url: "media://inbound/portrait.png" },
+      ],
+      __openclaw: {
+        media: [
+          {
+            path: "media://inbound/landscape.png",
+            contentType: "image/png",
+            width: 1600,
+            height: 900,
+          },
+          {
+            path: "media://inbound/portrait.png",
+            contentType: "image/png",
+            width: 900,
+            height: 1600,
+          },
+        ],
+        ...(withLayout
+          ? {
+              mediaImageLayout: {
+                slots: [
+                  { kind: "inline", factIndex: 0 },
+                  { kind: "inline", factIndex: 1 },
+                ],
+              },
+            }
+          : {}),
+      },
+    };
+    const media = projectMessageMedia(message, normalizeMessage(message).content);
+    const container = document.createElement("div");
+    renderImages(container, media.images);
+    const frames = [...container.querySelectorAll<HTMLElement>(".chat-image-frame")];
+    expect(frames).toHaveLength(2);
+    expect(frames.map((frame) => frame.style.getPropertyValue("--chat-image-ratio"))).toEqual([
+      "400 / 225",
+      "202.5 / 360",
+    ]);
+    expect(container.querySelectorAll(".chat-image-skeleton")).toHaveLength(2);
+    expect(container.querySelector("img")).toBeNull();
+  },
+);
 
 describe("pairing QR expiry resource lifecycle", () => {
   it.each(["ordinary", "expired QR"])("does not schedule expiry for %s messages", (kind) => {

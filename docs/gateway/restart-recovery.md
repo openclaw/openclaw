@@ -95,6 +95,13 @@ The next visible message preserves an interrupted turn's recovery claim even
 when its saved status is failed, timed out, or killed. Recovery resumes the
 interrupted work before the new message takes foreground ownership.
 
+For non-Stop `chat.send` requests carrying a main-session recovery cycle, the Gateway logs
+one structured `chat.send recovery admission` event. It records the admission
+outcome (`rejected`, `admitted`, or `retried`), a session ID hash, the request and
+recovery run IDs, and `chargedAttempts` observed before admitting the request.
+It contains no message content. Rejected stale-session, permission, tool-setting,
+or changed-input requests leave that recovery custody unchanged.
+
 This page describes what survives a restart, how interrupted work is detected,
 and what the automatic resume looks like.
 
@@ -373,6 +380,11 @@ a restart, or a gateway update) does not kill in-flight work immediately. The
 gateway stops accepting new work, then waits for active agent turns and
 background tasks to finish, up to a drain budget (5 minutes by default). Most
 restarts therefore interrupt nothing at all.
+
+A plain stop (`SIGTERM` or `SIGINT`, such as a service stop) that arrives while
+a restart drains turns that restart into a stop: the Gateway exits after the
+drain instead of starting again. Managed update handoffs keep their own stop
+handling.
 
 A confirmed unavailable child Node runtime follows this same graceful drain when
 the effective native service command's Node can still start. The lifecycle owner
@@ -1167,25 +1179,21 @@ A failed child-completion group does not stop startup recovery for unrelated
 groups. The original group keeps its ownership checks and retries with bounded
 backoff; already-started restored runs are not launched again by those retries.
 
-When a recovered turn starts with an eligible channel delivery route, OpenClaw
-sends a resumption notice to that conversation, retaining its account and topic.
-The final reply uses the same delivery route. Transcript-only turns stay private,
-and a turn that has already finished does not receive a late resumption notice.
-Channel-less turns started through the `agent` RPC remain channel-less after
-recovery. Control UI and `chat.send` / `sessions.send` WebChat turns retain their
-WebChat context. In-flight claims from older builds that did not record the
-original channel retain the previous WebChat fallback for session keys without
-an external channel route; no migration is needed.
-A failed notice does not restart or replay the recovered work. Main-session
-resumption notices are best-effort and live-only: automatic-delivery permission and the recovery
-owner are rechecked immediately before the channel send. They are not replayed
-from the outbound queue; terminal-failure notice retries and normal final-reply
-delivery are unchanged.
+Channel recovery stays silent while a turn waits or resumes. It does not send a
+separate resumption notice. The final reply uses the original delivery route,
+retaining its account and topic. Terminal-failure notices keep their existing
+retry and deduplication behavior. When a replacement session is needed, the
+notice explains how to start one and asks the user to describe the unfinished work.
+Transcript-only turns stay private. Channel-less turns started through the
+`agent` RPC remain channel-less after recovery. Control UI and `chat.send` /
+`sessions.send` WebChat turns retain their WebChat context. In-flight claims from
+older builds that did not record the original channel retain the previous WebChat
+fallback for session keys without an external channel route; no migration is needed.
 
 Telegram renews its typing indicator while the recovered turn runs. Typing stops
 when the turn settles, its recovery owner changes, or the gateway closes, and
 respects `typingMode: "never"`. Other channels can opt in through the guarded
-typing hook; unsupported channels still receive the resumption notice.
+typing hook.
 
 Channel plugins opt in with `heartbeat.sendTypingGuarded(...)`. Alongside the
 recovery delivery target, core supplies an `AbortSignal` and an

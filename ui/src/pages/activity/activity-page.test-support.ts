@@ -1,6 +1,6 @@
 import type { RouteLocation } from "@openclaw/uirouter";
 import { createComponent, createEffect, createSignal } from "solid-js";
-import { vi } from "vitest";
+import { expect, vi } from "vitest";
 import type { GatewayBrowserClient, GatewayHelloOk } from "../../api/gateway.ts";
 import type { GatewaySessionRow, SessionsListResult } from "../../api/types.ts";
 import type { ApplicationContext } from "../../app/context.ts";
@@ -9,7 +9,7 @@ import { loadSettings } from "../../app/settings.ts";
 import { ApplicationProvider } from "../../lib/reactive/context.ts";
 import { createApplicationGateway } from "../../test-helpers/application-context-fixtures.ts";
 import { mountSolid } from "../../test-helpers/mount-solid.ts";
-import { flush } from "../../test-helpers/solid-settle.ts";
+import { flush, waitForSolid } from "../../test-helpers/solid-settle.ts";
 import { createActivityPageState } from "./activity-page-state.ts";
 import { ActivityPageView } from "./activity-page-view.tsx";
 
@@ -102,13 +102,12 @@ export function createActivityPage(context: ApplicationContext, initial?: RouteL
 }
 
 export function previews(page: TestActivityPage) {
-  flush();
   const entries = page.container.querySelectorAll(".activity-entry__preview");
   return Array.from(entries, (entry) => entry.textContent);
 }
 
-export function expandFirst(page: TestActivityPage) {
-  flush();
+export async function expandFirst(page: TestActivityPage) {
+  await waitForSolid(() => expect(page.container.querySelector(".activity-entry")).not.toBeNull());
   const row = page.container.querySelector<HTMLDetailsElement>(".activity-entry")!;
   row.open = true;
   row.dispatchEvent(new Event("toggle"));

@@ -1,15 +1,13 @@
 import { mkdirSync, readFileSync } from "node:fs";
 import { createServer } from "node:http";
 import path from "node:path";
+import { setTimeout as delay } from "node:timers/promises";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement } from "../../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
-import { readGatewayLockProcessNamespace } from "../../infra/gateway-lock-payload.js";
-import { acquireGatewayStateOwner } from "../../infra/gateway-state-owner.js";
 import { withServer } from "../../plugin-sdk/test-helpers/http-test-server.js";
 import { createDeferredCore } from "../../shared/deferred.js";
-import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
 import { withEnvAsync } from "../../test-utils/env.js";
 import { computeSandboxBrowserConfigHash } from "./config-hash.js";
 import { resolveSandboxBrowserDockerCreateConfig, resolveSandboxConfigForAgent } from "./config.js";
@@ -19,6 +17,7 @@ import {
   SANDBOX_DOCKER_CREATE_ARGS_EPOCH,
 } from "./constants.js";
 import { DOCKER_SANDBOX_ENGINE } from "./container-engine.js";
+import { acquireSandboxGatewayOwner } from "./registry.test-support.js";
 import { captureSandboxStateOwner } from "./state-owner.js";
 import { collectDockerFlagValues, findDockerArgsCall } from "./test-args.js";
 import type { SandboxConfig } from "./types.js";
@@ -54,17 +53,6 @@ const runtimeMocks = vi.hoisted(() => ({ log: vi.fn() }));
 async function createDockerMock() {
   const actual = await vi.importActual<typeof import("./docker.js")>("./docker.js");
   return { ...actual, ...dockerMocks };
-}
-
-async function createNamespaceMock() {
-  const actual = await vi.importActual<typeof import("./docker-mount-source.js")>(
-    "./docker-mount-source.js",
-  );
-  return {
-    parseInspectedSandboxMounts: actual.parseInspectedSandboxMounts,
-    translateSandboxMountSources: actual.translateSandboxMountSources,
-    resolveDockerSourceNamespace: namespaceMocks.resolveDockerSourceNamespace,
-  };
 }
 
 async function createEngineMock() {
@@ -111,7 +99,12 @@ beforeAll(async () => {
   vi.resetModules();
   vi.doMock("./docker.js", createDockerMock);
   // mock-isolation: retain real mount parsing/translation while pinning the Docker source namespace.
-  vi.doMock("./docker-mount-source.js", createNamespaceMock);
+  vi.doMock("./docker-mount-source.js", async () => ({
+    ...(await vi.importActual<typeof import("./docker-mount-source.js")>(
+      "./docker-mount-source.js",
+    )),
+    resolveDockerSourceNamespace: namespaceMocks.resolveDockerSourceNamespace,
+  }));
   vi.doMock("./container-engine.js", createEngineMock);
   // mock-isolation: keep sandbox registry reads and writes in the suite fixture.
   vi.doMock("./registry.js", () => registryMocks);
@@ -205,11 +198,10 @@ function requireDockerCreateEnvEntries(): string[] {
 }
 
 function envValue(key: string, entries = requireDockerCreateEnvEntries()) {
-  const value = expectDefined(
+  return expectDefined(
     entries.find((entry) => entry.startsWith(`${key}=`)),
     key,
-  );
-  return value.slice(key.length + 1);
+  ).slice(key.length + 1);
 }
 
 function reuseCreatedBrowser() {
@@ -530,23 +522,14 @@ describe("sandbox browser lifecycle", () => {
     const requestReceived = createDeferredCore();
     const responseClosed = createDeferredCore();
     const probeAdmitted = createDeferredCore();
-    const realSetTimeout = setTimeout;
-    const realClearTimeout = clearTimeout;
-    const waitForNetwork = async <T>(pending: Promise<T>, message: string): Promise<T> => {
-      let timer: ReturnType<typeof setTimeout> | undefined;
-      try {
-        return await Promise.race([
-          pending,
-          new Promise<never>((_resolve, reject) => {
-            timer = realSetTimeout(() => reject(new Error(message)), 2_000);
-            timer.unref();
-          }),
-        ]);
-      } finally {
-        if (timer) {
-          realClearTimeout(timer);
-        }
-      }
+    const waitForNetwork = <T>(pending: Promise<T>, message: string): Promise<T> => {
+      const controller = new AbortController();
+      return Promise.race([
+        pending,
+        delay(2_000, undefined, { signal: controller.signal, ref: false }).then(() => {
+          throw new Error(message);
+        }),
+      ]).finally(() => controller.abort());
     };
     let requestPath: string | undefined;
     await withServer(
@@ -735,82 +718,102 @@ describe("sandbox browser lifecycle", () => {
     expect(protectedMountIdx).toBeGreaterThan(workspaceMountIdx);
   });
 
-  it.each(["startup", "publication", "publication rejection", "CDP readiness"] as const)(
-    "rejects lost custody or failed publication at %s",
-    async (phase) => {
-      await withEnvAsync({ OPENCLAW_STATE_DIR: testWorkspaceDir }, async () => {
-        const owner = acquireGatewayStateOwner({
-          databasePath: resolveOpenClawStateSqlitePath(),
-          payload: {
-            pid: process.pid,
-            processNamespace: readGatewayLockProcessNamespace(),
-            createdAt: new Date().toISOString(),
-            configPath: "openclaw.json",
-            role: "gateway",
-          },
-        });
-        const entered = createDeferredCore();
-        const resume = createDeferredCore();
-        const publicationError = new Error("synthetic registry publication failure");
-        const waitForRelease = async () => {
-          entered.resolve();
-          await resume.promise;
-          if (phase === "publication rejection") {
-            throw publicationError;
-          }
-        };
-        const server = createServer();
-        const assertCurrent = await captureSandboxStateOwner();
-        let preparation: Promise<unknown> | undefined;
-        try {
+  it.each([
+    "startup",
+    "publication",
+    "publication rejection",
+    "CDP readiness",
+    "quota create",
+    "quota start",
+    "quota attach",
+  ])("rejects lost custody or failed publication at %s", async (phase) => {
+    await withEnvAsync({ OPENCLAW_STATE_DIR: testWorkspaceDir }, async () => {
+      const owner = acquireSandboxGatewayOwner(testWorkspaceDir);
+      const entered = createDeferredCore();
+      const resume = createDeferredCore();
+      const publicationError = new Error("synthetic registry publication failure");
+      const waitForRelease = async () => {
+        entered.resolve();
+        await resume.promise;
+        if (phase === "publication rejection") {
+          throw publicationError;
+        }
+      };
+      const server = createServer();
+      const assertCurrent = await captureSandboxStateOwner();
+      const retry = vi.fn();
+      const quotaRecovery = phase.startsWith("quota");
+      let preparation: Promise<unknown> | undefined;
+      try {
+        if (phase === "quota attach") {
+          await ensureTestSandboxBrowser({ assertCurrent });
+        }
+        if (quotaRecovery) {
+          const original = execDocker.getMockImplementation()!;
+          execDocker.mockImplementation(async (args, opts) => {
+            if (args[0] === (phase === "quota create" ? "create" : "start")) {
+              // The engine awaits idle-container reclamation after its EDQUOT result.
+              await waitForRelease();
+              opts?.assertCurrent?.();
+              retry();
+            }
+            return await original(args, opts);
+          });
+        }
+        if (phase === "CDP readiness" || phase === "quota attach") {
           if (phase === "CDP readiness") {
             await ensureTestSandboxBrowser({ assertCurrent });
-            dockerContainerState.mockResolvedValue({ exists: true, running: true });
-            vi.spyOn(globalThis, "fetch").mockImplementationOnce(async () => {
+          }
+          dockerContainerState.mockResolvedValue({
+            exists: true,
+            running: phase === "CDP readiness",
+          });
+          vi.spyOn(globalThis, "fetch").mockImplementationOnce(async () => {
+            await waitForRelease();
+            return new Response("{}");
+          });
+          preparation = Promise.resolve(attach());
+        } else {
+          startBrowserBridgeServer.mockImplementationOnce(async ({ resolved }) => {
+            if (phase === "startup") {
               await waitForRelease();
-              return new Response("{}");
-            });
-            preparation = Promise.resolve(attach());
-          } else {
-            startBrowserBridgeServer.mockImplementationOnce(async ({ resolved }) => {
-              if (phase === "startup") {
-                await waitForRelease();
-              }
-              return { ...bridgeFixture(resolved), server };
-            });
-            if (phase !== "startup") {
-              updateBrowserRegistry.mockImplementationOnce(waitForRelease);
             }
-            preparation = ensureTestSandboxBrowser({ assertCurrent });
+            return { ...bridgeFixture(resolved), server };
+          });
+          if (phase.startsWith("publication")) {
+            updateBrowserRegistry.mockImplementationOnce(waitForRelease);
           }
-          await awaitGateBeforeSettlement(
-            entered.promise,
-            preparation,
-            "Browser lifecycle barrier not reached",
-          );
-          if (phase !== "publication rejection") {
-            owner.release();
-          }
-          resume.resolve();
-          const error = await preparation.catch((failure: unknown) => failure);
-          if (phase !== "CDP readiness") {
-            expect(stopBrowserBridgeServer).toHaveBeenCalledExactlyOnceWith(server);
-            expect(BROWSER_BRIDGES.size).toBe(0);
-            expect(updateBrowserRegistry).toHaveBeenCalledTimes(phase === "startup" ? 0 : 1);
-          }
-          if (phase === "publication rejection") {
-            expect(error).toBe(publicationError);
-          } else {
-            expect(error).toMatchObject({ code: "GATEWAY_STATE_OWNER_REQUIRED" });
-          }
-        } finally {
-          resume.resolve();
-          await preparation?.catch(() => {});
+          preparation = ensureTestSandboxBrowser({ assertCurrent });
+        }
+        await awaitGateBeforeSettlement(
+          entered.promise,
+          preparation,
+          "Browser lifecycle barrier not reached",
+        );
+        if (phase !== "publication rejection") {
           owner.release();
         }
-      });
-    },
-  );
+        resume.resolve();
+        const error = await preparation.catch((failure: unknown) => failure);
+        if (quotaRecovery) {
+          expect(retry).not.toHaveBeenCalled();
+        } else if (phase !== "CDP readiness") {
+          expect(stopBrowserBridgeServer).toHaveBeenCalledExactlyOnceWith(server);
+          expect(BROWSER_BRIDGES.size).toBe(0);
+          expect(updateBrowserRegistry).toHaveBeenCalledTimes(phase === "startup" ? 0 : 1);
+        }
+        if (phase === "publication rejection") {
+          expect(error).toBe(publicationError);
+        } else {
+          expect(error).toMatchObject({ code: "GATEWAY_STATE_OWNER_REQUIRED" });
+        }
+      } finally {
+        resume.resolve();
+        await preparation?.catch(() => {});
+        owner.release();
+      }
+    });
+  });
 
   it.each([false, true])("rejoins custody for late start (revoked=%s)", async (revoked) => {
     let current = true;

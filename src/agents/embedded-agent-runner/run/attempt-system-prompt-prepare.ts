@@ -6,6 +6,7 @@ import {
   resolveProviderSystemPromptContribution,
   transformProviderSystemPrompt,
 } from "../../../plugins/provider-runtime.js";
+import { isSubagentSessionKey } from "../../../routing/session-key.js";
 import { getReplyOperationSessionReader } from "../../../sessions/session-controller.session-reader.js";
 import { joinPresentTextSegments } from "../../../shared/text/join-segments.js";
 import { prepareTtsPreferences } from "../../../tts/tts-preferences.js";
@@ -20,12 +21,16 @@ import {
 } from "../../bootstrap-budget.js";
 import { buildCodeModeCatalogPrompt } from "../../code-mode.js";
 import { resolveOpenClawReferencePaths } from "../../docs-path.js";
-import type { RuntimeContextFragment } from "../../internal-runtime-context.js";
+import {
+  splitExtraSystemPrompt,
+  type RuntimeContextFragment,
+} from "../../internal-runtime-context.js";
 import { prepareAgentMemoryPrompt } from "../../memory-prompt-prepare.js";
 import { buildModelToolsUnavailablePrompt } from "../../model-tool-support.js";
 import { prepareProjectMemoryBootstrap } from "../../project-memory-bootstrap.js";
 import { resolveAgentPromptSurfaceForSessionKey } from "../../prompt-surface.js";
 import { resolveAgentRuntimePrompt } from "../../runtime-prompt.js";
+import { buildSubagentStandingInstructions } from "../../subagents/spawn/subagent-system-prompt.js";
 import type { buildConfiguredAgentSystemPrompt } from "../../system-prompt-config.js";
 import { buildSystemPromptReport } from "../../system-prompt-report.js";
 import { toolPolicyRestrictsTools } from "../../tool-policy.js";
@@ -232,7 +237,6 @@ export async function prepareEmbeddedAttemptSystemPrompt(params: {
   const promptSurface = resolveAgentPromptSurfaceForSessionKey(attempt.sessionKey);
   const toolPolicyRestricted = toolPolicyRestrictsTools({ allow: attempt.toolsAllow });
   const effectivePromptMode = toolPolicyRestricted ? ("minimal" as const) : promptMode;
-  const effectiveSkillsPrompt = toolPolicyRestricted ? undefined : params.skillsPrompt;
   phases?.mark("attempt.system-prompt.references");
   const openClawReferences =
     params.referencePaths ??
@@ -337,8 +341,54 @@ export async function prepareEmbeddedAttemptSystemPrompt(params: {
     attempt.preparedTtsPreferences ??
     (effectivePromptMode === "full" ? await prepareTtsPreferences() : undefined);
   phases?.mark("attempt.system-prompt.render");
+  const extraPrompt = splitExtraSystemPrompt(attempt);
+  const subagent = isSubagentSessionKey(attempt.sessionKey);
+  let subagentInstructions: string | undefined;
+  if (subagent && attempt.sessionKey) {
+    const [
+      { getSubagentDepthFromSessionStoreInWorker },
+      { getLatestSubagentRunByChildSessionKey },
+    ] = await Promise.all([
+      import("../../subagents/spawn/subagent-depth.js"),
+      import("../../subagents/registry/subagent-registry-read.js"),
+    ]);
+    const [childDepth, recordedRun] = await Promise.all([
+      preparedSessionEntry?.spawnDepth ??
+        getSubagentDepthFromSessionStoreInWorker(attempt.sessionKey, {
+          cfg: attempt.config,
+          agentId: params.setup.sessionAgentId,
+        }),
+      getLatestSubagentRunByChildSessionKey(attempt.sessionKey, params.setup.sessionAgentId),
+    ]);
+    // Ordinary launches precede registry registration; their cleanup flag carries
+    // the producer's mode until the retained child record is available.
+    subagentInstructions = buildSubagentStandingInstructions({
+      childDepth,
+      maxSpawnDepth: attempt.config?.agents?.defaults?.subagents?.maxSpawnDepth,
+      spawnMode:
+        recordedRun?.spawnMode ?? (attempt.cleanupBundleMcpOnRunEnd === false ? "session" : "run"),
+    });
+  }
+  // The spawn envelope also serves harnesses that do not render embedded prompts.
+  // Embedded sessions supply the same standing policy on launch and follow-up.
+  const persistent =
+    subagentInstructions &&
+    (extraPrompt.persistent === subagentInstructions ||
+      extraPrompt.persistent?.startsWith(`${subagentInstructions}\n\n`))
+      ? extraPrompt.persistent.slice(subagentInstructions.length).trimStart()
+      : extraPrompt.persistent;
+  const turnInstructions: RuntimeContextFragment[] =
+    !params.isRawModelRun && extraPrompt.turn
+      ? [
+          {
+            kind: "runtime-instruction",
+            text: `Current turn instructions (apply only to this turn):\n\n${extraPrompt.turn}`,
+          },
+        ]
+      : [];
   const extraSystemPrompt = joinPresentTextSegments([
-    attempt.extraSystemPrompt,
+    subagentInstructions,
+    persistent,
     buildModelToolsUnavailablePrompt(params.modelToolsEnabled),
   ]);
 
@@ -362,7 +412,8 @@ export async function prepareEmbeddedAttemptSystemPrompt(params: {
       extraSystemPrompt,
       ownerNumbers: attempt.ownerNumbers,
       reasoningTagHint,
-      skillsPrompt: effectiveSkillsPrompt,
+      // Finite caps can still read skills; the renderer gates on the callable tools.
+      skillsPrompt: params.skillsPrompt,
       codeModeActive: params.codeModeActive,
       webSearchUnconfigured: params.webSearchUnconfigured?.(),
       docsPath: openClawReferences.docsPath ?? undefined,
@@ -453,18 +504,18 @@ export async function prepareEmbeddedAttemptSystemPrompt(params: {
     runtimeInfo: runtimePrompt.runtimeInfo,
     systemPromptReport,
     systemPromptText: attemptSystemPrompt.systemPrompt,
-    // A watch snapshot belongs beside its turn, not ahead of all prior history.
+    // Current run facts belong beside their turn, not ahead of all prior history.
     get runtimeContextFragments(): RuntimeContextFragment[] {
-      return currentWatchedSessions
-        ? [
-            {
-              kind: "conversation-data",
-              text: currentWatchedSessions.sessions.length
-                ? buildWatchedSessionsPromptLines(currentWatchedSessions).join("\n").trim()
-                : "## Watched Sessions\nnone",
-            },
-          ]
-        : [];
+      const fragments = [...turnInstructions];
+      if (currentWatchedSessions) {
+        fragments.push({
+          kind: "conversation-data",
+          text: currentWatchedSessions.sessions.length
+            ? buildWatchedSessionsPromptLines(currentWatchedSessions).join("\n").trim()
+            : "## Watched Sessions\nnone",
+        });
+      }
+      return fragments;
     },
     prepareToolPrompt: (
       effectiveTools: PromptTools = params.effectiveTools,

@@ -28,8 +28,6 @@ import {
 } from "../config/sessions/session-accessor.js";
 import { runWithSessionEntryCreationPublication } from "../config/sessions/session-accessor.sqlite-entry-cache.js";
 import type { SessionEntryCreationOperation } from "../config/sessions/session-accessor.sqlite-entry-cache.types.js";
-import { withSessionActorStorage } from "../config/sessions/session-actor-storage-acquisition.js";
-import { captureSessionActorStorageOwner } from "../config/sessions/session-actor-storage-binding.js";
 import { createSessionDiffBaselineCaptureClaim } from "../config/sessions/session-diff-baseline-capture.js";
 import { buildSessionParentLink } from "../config/sessions/session-entry-lineage.js";
 import { projectPublicSessionEntry } from "../config/sessions/session-entry-projection.js";
@@ -65,7 +63,10 @@ import {
   prepareSessionCreateFilesystemRoot,
   prepareSessionForkFilesystemRoot,
 } from "./server-methods/session-create-root.js";
-import { refreshSessionPatchQueuedSelection } from "./server-methods/sessions-patch-model-selection.js";
+import {
+  createSessionAccessProgramValidation,
+  refreshSessionPatchQueuedSelection,
+} from "./server-methods/sessions-patch-model-selection.js";
 import { completeGatewaySessionCreation } from "./session-create-completion.js";
 import {
   buildSessionCreateSettingsPatch,
@@ -137,50 +138,7 @@ import { projectSessionsPatchEntry } from "./sessions-patch.js";
 export function createGatewaySession(
   params: CreateGatewaySessionParams,
 ): Promise<CreateGatewaySessionResult> {
-  return withSessionCreateAdmission(params, createAdmittedGatewaySession);
-}
-
-async function createAdmittedGatewaySession(
-  params: CreateGatewaySessionParams,
-  agentId: string,
-): Promise<CreateGatewaySessionResult> {
-  const incognito = params.incognito === true || isIncognitoSessionKey(params.parentSessionKey);
-  const generatedKey =
-    !params.key?.trim() && incognito
-      ? buildDashboardSessionKey(agentId, { incognito: true })
-      : undefined;
-  const sessionKey =
-    generatedKey ??
-    resolveSessionCreateTargetKey({
-      cfg: params.cfg,
-      agentId,
-      requestedKey: normalizeOptionalString(params.key),
-    });
-  const assertCurrent = () => params.commitGuard?.();
-  const created = await withSessionActorStorage(
-    { sessionKey, agentId },
-    {
-      create: true,
-      lifetime: { assertCurrent, assertReadable: assertCurrent },
-      authority: { assertCurrent, authorize() {} },
-    },
-    async (memory) => {
-      try {
-        return await createGatewaySessionInScope(params, agentId, generatedKey);
-      } finally {
-        const captured = captureSessionActorStorageOwner({ sessionActor: memory });
-        // Failed creation may outlive its caller's authority; only empty state is discarded.
-        const entry = captured?.owner?.readSession(memory.actor.target.sessionKey, {
-          assertCurrent() {},
-          authorize() {},
-        })?.entry;
-        if (!entry) {
-          captured?.owner?.closeSession(memory.actor.target.sessionKey);
-        }
-      }
-    },
-  );
-  return created ?? createGatewaySessionInScope(params, agentId, generatedKey);
+  return withSessionCreateAdmission(params, createGatewaySessionInScope);
 }
 
 async function createGatewaySessionInScope(
@@ -924,6 +882,16 @@ async function createGatewaySessionInScope(
             }
           }
         }
+        const validateSelection = createSessionAccessProgramValidation({
+          operatorAuthority,
+          entry,
+          validateModelSelection:
+            validateAccountModel ?? patched.validateModelSelection ?? modelSelection.validate,
+        });
+        const accessError = validateSelection();
+        if (accessError) {
+          return { ok: false, error: accessError };
+        }
         const runtimeSelection = await prepareSessionCreateRuntimeSelection({
           request: params,
           agentId: target.agentId,
@@ -932,8 +900,7 @@ async function createGatewaySessionInScope(
           existingEntry,
           entry,
           catalog: preparedModelCatalog,
-          validateModelSelection:
-            validateAccountModel ?? patched.validateModelSelection ?? modelSelection.validate,
+          validateModelSelection: validateSelection,
         });
         if (!runtimeSelection.ok) {
           return runtimeSelection;

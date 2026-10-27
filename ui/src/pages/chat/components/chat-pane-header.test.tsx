@@ -271,7 +271,7 @@ describe("chat pane header", () => {
     });
     const menu = container.querySelector(".chat-pane__layout-menu")!;
     expect(readShortcut).not.toHaveBeenCalled();
-    await openNativeMenu(menu);
+    await openNativeMenu(menu, "terminal");
     const shortcut = menu.querySelector('[data-value="terminal"] kbd');
     expect(shortcut).not.toBeNull();
     update({ panelMenuActions: [action("Open terminal")] });

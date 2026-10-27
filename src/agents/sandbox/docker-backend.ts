@@ -1,4 +1,5 @@
 import { createContainerEnvFile } from "../../infra/container-env-file.js";
+import { observeDiagnosticsTimelinePhases } from "../../infra/diagnostics-timeline.js";
 import type { AdmittedRunOperatorAuthority } from "../admitted-run-context.js";
 import { buildGitHubExecLaunchArgv } from "../github-exec-launch.js";
 import { CLEARED_GITHUB_CREDENTIALS } from "../github-host.js";
@@ -54,6 +55,7 @@ async function createContainerSandboxBackend(
   operatorAuthority?: AdmittedRunOperatorAuthority,
   githubIdentity?: PreparedGitHubToolEnvironment,
 ): Promise<SandboxBackendHandle> {
+  using phases = observeDiagnosticsTimelinePhases("attempt.setup.sandbox.backend.target");
   const assertCurrent = () => {
     operatorAuthority?.assertCurrent();
     params.assertRuntimeCurrent?.();
@@ -73,6 +75,7 @@ async function createContainerSandboxBackend(
     : dockerTarget
       ? bindDockerPersistentTarget(dockerTarget)
       : engine;
+  phases.mark("attempt.setup.sandbox.backend.container");
   const { containerName, containerId, configHash, mountPlan, currentConfig } =
     await ensureSandboxContainer({
       engine: boundEngine,
@@ -94,14 +97,17 @@ async function createContainerSandboxBackend(
   assertCurrent();
   // Allocation pins the generation under its lifecycle lock; never rediscover it
   // by reusable name after another admission or recreation can acquire the lock.
+  phases.mark("attempt.setup.sandbox.backend.mount_snapshot");
   const containerOnlyMounts = await resolveSandboxContainerOnlyMounts({
     engine: boundEngine,
     containerName: containerId,
     assertCurrent,
   });
   assertCurrent();
+  phases.mark("attempt.setup.sandbox.backend.bridge_import");
   const { createSandboxFsBridge } = await import("./fs-bridge.js");
   assertCurrent();
+  phases.mark("attempt.setup.sandbox.backend.handle");
   const { workdir: defaultWorkdir, env: configuredEnv, image } = params.cfg.docker;
   const engineTarget =
     podmanTarget ?? (dockerTarget ? dockerPersistentTargetToEngineTarget(dockerTarget) : undefined);
@@ -253,6 +259,7 @@ async function createContainerSandboxBackend(
     return bridge;
   };
   if (dockerTarget && configHash && currentConfig) {
+    phases.mark("attempt.setup.sandbox.backend.persistent_generation");
     const container = await readDockerPersistentContainer(
       boundEngine,
       containerId,
@@ -262,6 +269,7 @@ async function createContainerSandboxBackend(
     if (container.kind !== "running") {
       throw new Error("The admitted Docker sandbox container ended during preparation.");
     }
+    phases.mark("attempt.setup.sandbox.backend.persistent_capability");
     const allocation = structuredClone({
       cfg: params.cfg.docker,
       dockerTmpfsSource: params.cfg.dockerTmpfsSource,

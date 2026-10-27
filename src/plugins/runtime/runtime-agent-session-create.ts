@@ -15,6 +15,7 @@ import {
 } from "../../config/sessions/session-entry-read-runtime.js";
 import { sessionEntryCommitGuardOptions } from "../../config/sessions/session-source-authority.js";
 import type { SessionAcpMeta, SessionEntry } from "../../config/sessions/types.js";
+import { copyMutableSessionEntry } from "../../plugin-sdk/session-store-runtime-internal.js";
 import {
   isSessionControllerWorkActive,
   runSessionMutation,
@@ -439,7 +440,7 @@ export async function createRuntimeSessionEntry(
             key: created.key,
             agentId: created.agentId,
             sessionId: finalEntry.sessionId,
-            entry: finalEntry,
+            entry: copyMutableSessionEntry(finalEntry),
           };
         } catch (error) {
           if (!callbackContext) {

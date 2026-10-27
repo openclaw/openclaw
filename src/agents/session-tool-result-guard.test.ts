@@ -156,8 +156,10 @@ describe("installSessionToolResultGuard", () => {
         aggregated: "x".repeat(80_000),
         timedOut: false,
       },
+      warningText: "w".repeat(80_000),
       aggregateOutputDropped: true,
     });
+    expect(output.details).toMatchObject({ aggregated: "x".repeat(80_000) });
     const content = output.content[0];
     if (!content || content.type !== "text") {
       throw new Error("expected text result");

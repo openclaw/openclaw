@@ -5,6 +5,7 @@ import {
   resolveLocalWorkspaceOwner,
   withLocalWorkspaceProjection,
 } from "../../gateway/worker-environments/local-workspace-projection.js";
+import { observeDiagnosticsTimelinePhases } from "../../infra/diagnostics-timeline.js";
 import { withWorktreeAllocationLease } from "../worktrees/allocation.js";
 import {
   markManagedWorktreePreparation,
@@ -37,6 +38,9 @@ export async function prepareLocalSandboxWorkspace(params: {
   assertCurrent?: () => void;
   assertHost?: () => void;
 }) {
+  using phases = observeDiagnosticsTimelinePhases(
+    "attempt.setup.sandbox.workspace_selection.owner",
+  );
   params.assertCurrent?.();
   const owner = await resolveLocalWorkspaceOwner({ ...params, assertCurrent: params.assertHost });
   if (!owner) {
@@ -79,14 +83,31 @@ export async function prepareLocalSandboxWorkspace(params: {
     assertCurrent();
     markManagedWorktreePreparation();
     assertLocalSandboxWorkspaceBackend(params.sandbox.backend);
-    const existing = await withLocalWorkspaceProjection(executionOwner, (state) => state.reuse());
+    phases.mark("attempt.setup.sandbox.workspace_selection.reuse.acquire");
+    const existing = await withLocalWorkspaceProjection(executionOwner, async (state) => {
+      phases.mark("attempt.setup.sandbox.workspace_selection.reuse.reconcile");
+      try {
+        return await state.reuse();
+      } finally {
+        phases.mark("attempt.setup.sandbox.workspace_selection.reuse.release");
+      }
+    });
     let workspaceDir: string;
     if (existing) {
       setWorktreePreparationTemplate("reused");
       workspaceDir = existing;
     } else if (params.cfg.worktreeAcceleration === false) {
-      workspaceDir = await withLocalWorkspaceProjection(executionOwner, (state) => state.prepare());
+      phases.mark("attempt.setup.sandbox.workspace_selection.prepare.acquire");
+      workspaceDir = await withLocalWorkspaceProjection(executionOwner, async (state) => {
+        phases.mark("attempt.setup.sandbox.workspace_selection.prepare.reconcile");
+        try {
+          return await state.prepare();
+        } finally {
+          phases.mark("attempt.setup.sandbox.workspace_selection.prepare.release");
+        }
+      });
     } else {
+      phases.mark("attempt.setup.sandbox.workspace_selection.allocation");
       const allocated = startWorktreePreparationPhase("allocate");
       try {
         workspaceDir = await withWorktreeAllocationLease(
@@ -98,9 +119,21 @@ export async function prepareLocalSandboxWorkspace(params: {
           },
           (allocation) => {
             allocated();
+            phases.mark("attempt.setup.sandbox.workspace_selection.prepare.acquire");
             return withLocalWorkspaceProjection(
-              { ...executionOwner, workerAuthority: allocation.workerAuthority },
-              (state) => state.prepare({ sandbox: params.sandbox, allocation }),
+              {
+                ...executionOwner,
+                assertCurrent: allocation.commitGuard,
+                workerAuthority: allocation.workerAuthority,
+              },
+              async (state) => {
+                phases.mark("attempt.setup.sandbox.workspace_selection.prepare.reconcile");
+                try {
+                  return await state.prepare({ sandbox: params.sandbox, allocation });
+                } finally {
+                  phases.mark("attempt.setup.sandbox.workspace_selection.prepare.release");
+                }
+              },
             );
           },
         );

@@ -53,6 +53,8 @@ export async function handoffSessionTool(
     requestOwners?: readonly ExecRequestOwner[];
     onYield?: SessionsYieldCallback;
     signal?: AbortSignal;
+    /** The yielding turn was admitted as an owner; its resume keeps that decision. */
+    senderIsOwner?: boolean;
     formatResult: (payload: Record<string, unknown>) => string;
   },
 ) {
@@ -121,6 +123,7 @@ export async function handoffSessionTool(
     }
     const target = await captureSessionEventTargetForHost(caller.agentId, caller.sessionKey, {
       operatorAuthority: continuation.operatorAuthority,
+      ...(params.senderIsOwner === true ? { ownerContinuation: true as const } : {}),
     });
     const storePath = target.storePath;
     if (target.sessionId !== params.sessionId || !storePath) {

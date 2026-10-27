@@ -55,7 +55,10 @@ are globally disabled, if `knowledge` is in `plugins.deny`, or if
 `plugins.entries.knowledge.enabled` is `false`. When the slot points elsewhere,
 the memory-slot gate keeps Knowledge disabled.
 
-Slot changes reload the plugin runtime without a Gateway restart. Verify the
+Slot changes reload the plugin runtime without a Gateway restart. Knowledge
+declares `reload.turnHandover`, so a reload does not wait for running agent
+turns: each turn moves to the new version at its next model step
+([reload-safe plugins](/plugins/sdk-runtime#reload-safe-plugins)). Verify the
 runtime registration and the live service:
 
 ```bash
@@ -101,17 +104,16 @@ optional.
 }
 ```
 
-| Key                       | Type     | Default           | Meaning                                                                                                                             |
-| ------------------------- | -------- | ----------------- | ----------------------------------------------------------------------------------------------------------------------------------- |
-| `operatorRead`            | boolean  | `true`            | Let authenticated operators with `operator.read` (or higher) inspect stores in the Control UI and operator RPC.                     |
-| `writesEnabled`           | boolean  | `true`            | Allow agent writes. When `false`, write tools reject, the memory prompt omits save guidance, and no flush plan is offered.          |
-| `stores`                  | object   | `{}`              | Named shared stores. Keys match `^[a-z][a-z0-9-]{0,47}$`. Agents not listed use their own isolated store.                           |
-| `stores.<name>.label`     | string   | the store key     | Display name in the Control UI (1–80 characters). Not a path or identity.                                                           |
-| `stores.<name>.agents`    | string[] | required          | Agent IDs that use this store (at most 100). An empty list keeps the store without members.                                         |
-| `maintenance.enabled`     | boolean  | `true`            | Run the scheduled maintenance pass.                                                                                                 |
-| `maintenance.schedule`    | string   | `"30 3 * * *"`    | Five-field cron expression for the pass.                                                                                            |
-| `maintenance.timezone`    | string   | Gateway host zone | IANA time zone for the schedule.                                                                                                    |
-| `maintenance.reviewJobId` | string   | none              | Automation queued after a pass that leaves private claims unlinked. See [Maintenance](/plugins/knowledge/maintenance#agent-review). |
+| Key                    | Type     | Default           | Meaning                                                                                                                    |
+| ---------------------- | -------- | ----------------- | -------------------------------------------------------------------------------------------------------------------------- |
+| `operatorRead`         | boolean  | `true`            | Let authenticated operators with `operator.read` (or higher) inspect stores in the Control UI and operator RPC.            |
+| `writesEnabled`        | boolean  | `true`            | Allow agent writes. When `false`, write tools reject, the memory prompt omits save guidance, and no flush plan is offered. |
+| `stores`               | object   | `{}`              | Named shared stores. Keys match `^[a-z][a-z0-9-]{0,47}$`. Agents not listed use their own isolated store.                  |
+| `stores.<name>.label`  | string   | the store key     | Display name in the Control UI (1–80 characters). Not a path or identity.                                                  |
+| `stores.<name>.agents` | string[] | required          | Agent IDs that use this store (at most 100). An empty list keeps the store without members.                                |
+| `maintenance.enabled`  | boolean  | `true`            | Run the scheduled maintenance pass.                                                                                        |
+| `maintenance.schedule` | string   | `"30 3 * * *"`    | Five-field cron expression for the pass.                                                                                   |
+| `maintenance.timezone` | string   | Gateway host zone | IANA time zone for the schedule.                                                                                           |
 
 `operatorRead` and `writesEnabled` are plugin-wide gates. Changes to
 `plugins.entries.knowledge.config.stores` do not reload the plugin; Knowledge

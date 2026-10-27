@@ -197,6 +197,7 @@ export function composerFixture(
     options: () => container.querySelectorAll('[role="option"]'),
     search: async (text: string, options?: Parameters<typeof edit>[1]) => {
       edit(text, options);
+      await vi.dynamicImportSettled();
       await vi.advanceTimersByTimeAsync(150);
       await vi.dynamicImportSettled();
     },

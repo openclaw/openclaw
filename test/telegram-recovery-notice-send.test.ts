@@ -5,10 +5,7 @@ import { setImmediate as nextTurn } from "node:timers/promises";
 import { expect, it } from "vitest";
 import { telegramOutbound, telegramPlugin } from "../extensions/telegram/api.js";
 import { getOrCreateAccountThrottler } from "../extensions/telegram/test-api.js";
-import {
-  announceRestartRecoveryResumption,
-  prepareRestartRecoveryDeliveryCurrent,
-} from "../src/agents/main-session-recovery/main-session-restart-recovery-delivery.js";
+import { prepareRestartRecoveryDeliveryCurrent } from "../src/agents/main-session-recovery/main-session-restart-recovery-delivery.js";
 import type { ChannelHeartbeatAdapter } from "../src/channels/plugins/types.adapters.js";
 import { replaceSessionEntry } from "../src/config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../src/config/types.openclaw.js";
@@ -157,7 +154,7 @@ it.each([
   await withOpenClawTestState({ prefix: "notice-http-" }, async ({ stateDir }) => {
     const preDispatch = createDeferredCore();
     const productionPredicate = !["allowed", "gateway closed", "policy revoked"].includes(mode);
-    const noticeText = "Recovery resumed";
+    const noticeText = "Recovery result";
     const api = await startApi(stateDir, "notice");
     const { cfg, blocked, blockerText } = api;
     const { scope, runtime, settings, restore, writeEntry } = await createRecovery(
@@ -170,6 +167,9 @@ it.each([
     let policyCurrent = true;
     let checks = 0;
     let held: ServerResponse | undefined;
+    let deliveryCurrent:
+      | Awaited<ReturnType<typeof prepareRestartRecoveryDeliveryCurrent>>
+      | undefined;
     const blocker = sendText({ cfg, to: "123", accountId: "default", text: blockerText });
     let notice: Promise<{ result?: { suppressed: boolean }; error?: unknown }> | undefined;
     try {
@@ -185,21 +185,16 @@ it.each([
             return payload.isCurrent?.(...args) ?? true;
           },
         });
-      const operation = productionPredicate
-        ? announceRestartRecoveryResumption({
-            ...scope,
-            cfg,
-            gatewayRuntime: { ...runtime.recovery, sendRecoveryNotice: observedSend },
-          })
-        : observedSend({
-            channel: "telegram",
-            to: "123",
-            accountId: "default",
-            text: noticeText,
-            idempotencyKey: "notice-" + mode,
-            liveOnly: true,
-            isCurrent: () => policyCurrent,
-          });
+      if (productionPredicate) {
+        deliveryCurrent = await prepareRestartRecoveryDeliveryCurrent({ ...scope, cfg });
+      }
+      const operation = observedSend({
+        ...scope.deliveryContext,
+        text: noticeText,
+        idempotencyKey: "notice-" + mode,
+        liveOnly: true,
+        isCurrent: deliveryCurrent?.isCurrent ?? (() => policyCurrent),
+      });
       notice = operation.then(
         (result) => ({ result: result ?? undefined }),
         (error: unknown) => ({ error }),
@@ -235,25 +230,19 @@ it.each([
       await blocker;
       const outcome = await notice;
       const allowed = mode === "allowed" || mode === "production allowed";
-      if (mode === "allowed") {
+      if (allowed) {
         expect(outcome).toEqual({ result: { suppressed: false } });
-      } else if (!allowed && !productionPredicate) {
+      } else {
         expect(outcome.error).toBeDefined();
       }
-      const expected = allowed
-        ? [
-            blockerText,
-            productionPredicate
-              ? expect.stringContaining("OpenClaw admitted a continuation")
-              : noticeText,
-          ]
-        : [blockerText];
+      const expected = allowed ? [blockerText, noticeText] : [blockerText];
       expect([api.visible, api.texts()]).toEqual([expected, expected]);
     } finally {
       if (held && !held.writableEnded) {
         api.release(held);
       }
       await Promise.allSettled([blocker, ...(notice ? [notice] : [])]);
+      deliveryCurrent?.release();
       runtime.close();
       restore();
       await api.close();

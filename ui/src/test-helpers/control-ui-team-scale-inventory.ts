@@ -47,10 +47,12 @@ export function createTeamScaleSessionInventory({
   people,
   counts,
   offRosterSession = false,
+  archivedSession = false,
   sidebarPersistentChildren = false,
 }: {
   now: number;
   offRosterSession?: boolean;
+  archivedSession?: boolean;
   sidebarPersistentChildren?: boolean;
   people: ControlUiMockPresenceUser[];
   counts: Record<
@@ -112,6 +114,11 @@ export function createTeamScaleSessionInventory({
   });
   prepareTeamScaleSessionOwnership(sessions, people.slice(0, counts.owners));
   const pinnedRows = sessions.slice(-counts.pinned);
+  Object.assign(pinnedRows[0]!, {
+    sharingRole: "admin",
+    visibility: "shared",
+    ...(archivedSession ? { archived: true, parentSessionKey: pinnedRows[1]!.key } : {}),
+  });
   const selectedSessionKey = pinnedRows[0]!.key;
   if (offRosterSession) {
     pinnedRows[0]!.pinned = false;

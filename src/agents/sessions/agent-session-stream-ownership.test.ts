@@ -1,11 +1,14 @@
+import * as crypto from "node:crypto";
 import { createAssistantMessageEventStream } from "@openclaw/ai/event-stream";
 import type { Message, Model } from "@openclaw/llm-core";
+import { Type } from "typebox";
 import { assert, expect, it, vi } from "vitest";
 import {
   captureToolLoop,
   finishMessageStream,
   makeTool,
   model as baseModel,
+  reply,
 } from "../../../packages/agent-core/src/agent-loop.test-support.js";
 import type { AgentMessage } from "../../../packages/agent-core/src/types.js";
 import { createAssistantOutput } from "../../../packages/ai/src/transports/assistant-output.js";
@@ -19,12 +22,88 @@ import {
   wireMessage,
 } from "../../../packages/ai/src/transports/openai-stream-cases.test-support.js";
 import { createDeferred } from "../../../test/helpers/promise.js";
+import { createPromptCacheRequestObserver } from "../embedded-agent-runner/prompt-cache-request-observer.js";
+import { guardSessionManager } from "../session-tool-result-guard-wrapper.js";
 import { persistAgentSessionMessage } from "./agent-session-transcript.js";
 import { SessionManager } from "./session-manager.js";
+
+// mock-isolation: Keep native hashes while counting repeated history serialization.
+vi.mock("node:crypto", { spy: true });
 
 function isModelMessage(message: AgentMessage): message is Message {
   return message.role === "user" || message.role === "assistant" || message.role === "toolResult";
 }
+
+it("does not rehash retained tool history after persistence projects reasoning metadata", async () => {
+  const model: Model = { ...baseModel, api: "openai-responses", provider: "openai" };
+  const manager = guardSessionManager(SessionManager.inMemory());
+  const observer = createPromptCacheRequestObserver(
+    { sessionId: "mutable-history-ownership", streamStrategy: "test" },
+    () => {},
+  );
+  const wire = (messages: Message[]) =>
+    JSON.stringify(convertResponsesMessages(model, { messages }, new Set(["openai"])));
+  let turn = 0;
+  try {
+    const loop = captureToolLoop({
+      config: { model },
+      tools: [{ ...makeTool("lookup"), parameters: Type.Object({ nested: Type.Any() }) }],
+      onMessage: async (message) => {
+        if (isModelMessage(message)) {
+          const before = wire([message]);
+          await persistAgentSessionMessage(manager, message, {
+            invalidateSerializedPrefixCache: false,
+          });
+          expect(wire([message])).toBe(before);
+        }
+      },
+      streamFn: async (_, context) => {
+        vi.mocked(crypto.hash).mockClear();
+        await observer.onModelRequest(model, context);
+        for (let previous = 1; previous < turn; previous++) {
+          expect(
+            vi
+              .mocked(crypto.hash)
+              .mock.calls.filter(
+                ([, input]) =>
+                  typeof input === "string" && input.includes(`retained-argument-${previous}`),
+              ),
+          ).toHaveLength(0);
+        }
+        turn++;
+        return reply({
+          ...createAssistantOutput(model),
+          stopReason: turn < 4 ? "toolUse" : "stop",
+          content:
+            turn < 4
+              ? [
+                  {
+                    type: "thinking",
+                    thinking: "Inspect the fixture",
+                    thinkingSignature: JSON.stringify({
+                      type: "reasoning",
+                      id: `rs_${turn}`,
+                      summary: [{ type: "summary_text", text: "Inspect the fixture" }],
+                      encrypted_content: "synthetic-ciphertext",
+                    }),
+                  },
+                  {
+                    type: "toolCall",
+                    id: `call_${turn}`,
+                    name: "lookup",
+                    arguments: { nested: { marker: `retained-argument-${turn}` } },
+                  },
+                ]
+              : [{ type: "text", text: "Done." }],
+        });
+      },
+    });
+    await loop.run;
+    expect(turn).toBe(4);
+  } finally {
+    manager.clearTranscriptRunCallbacks?.();
+  }
+});
 
 it.each([
   "item-done",

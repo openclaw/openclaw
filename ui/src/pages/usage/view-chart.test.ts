@@ -49,6 +49,43 @@ function renderDailyChart(
 }
 
 describe("DailyChartCompact", () => {
+  it("formats only visible axis labels while keeping every day accessible across ranges", () => {
+    const dates = Array.from({ length: 180 }, (_, index) =>
+      new Date(Date.UTC(2026, 0, index + 1)).toISOString().slice(0, 10),
+    );
+    const [count, setCount] = createSignal(180);
+    const { container } = mountSolid(() =>
+      DailyChartCompact({
+        get dailyEntries() {
+          return dates.slice(0, count()).map((date) => dailyEntry(date, 100));
+        },
+        selectedDays: [],
+        chartMode: "tokens",
+        dailyChartMode: "total",
+        onDailyChartModeChange: () => {},
+        providerSeries: [],
+        onSelectDay: () => {},
+        get range() {
+          return { startDate: dates[0]!, endDate: dates[count() - 1]!, complete: true };
+        },
+      }),
+    );
+    const bars = () => [...container.querySelectorAll(".daily-bar-wrapper")];
+    const labels = () => [...container.querySelectorAll(".daily-bar-label")];
+    flush();
+    expect(bars()).toHaveLength(180);
+    expect(bars().every((bar) => bar.getAttribute("aria-label")?.includes("100"))).toBe(true);
+    expect(labels().filter((label) => label.textContent)).toHaveLength(7);
+    expect(
+      labels().filter((label) => !label.classList.contains("daily-bar-label--hidden")),
+    ).toHaveLength(7);
+
+    setCount(4);
+    flush();
+    expect(bars()).toHaveLength(4);
+    expect(labels().every((label) => label.textContent)).toBe(true);
+  });
+
   it("keeps day selection operable with mouse and keyboard", () => {
     const entry = dailyEntry("2026-05-04", 500, 0.2);
     const { usage, setFilters } = usageState(

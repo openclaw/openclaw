@@ -5,7 +5,7 @@ import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { deserialize, serialize } from "node:v8";
 import { Worker } from "node:worker_threads";
-import { inflateRawSync } from "node:zlib";
+import { inflateRawSync, zstdDecompressSync } from "node:zlib";
 import { afterAll, afterEach, beforeAll, expect, it, vi } from "vitest";
 import {
   observeHostDataSql,
@@ -299,6 +299,31 @@ it("cancels an accepted manifest read when the workspace lease ends", async () =
     completion.reject(reason);
     expect(await outcome).toMatchObject({ code: "OPENCLAW_STATE_LEASE_ABORTED" });
   }
+});
+
+it("releases the state reader with captured manifest facts before filesystem discovery", async () => {
+  const worktreeId = randomUUID();
+  const fixture = localWorkspaceProjectionFixture(worktreeId, root);
+  await withLocalWorkspaceStore({ worktreeId, env }, (store) => store.create(fixture));
+  // Neither path exists: the database reader must not try to discover its files.
+  const action = {
+    kind: "scan" as const,
+    target: "canonical" as const,
+    canonicalRoot: path.join(root, worktreeId, "canonical"),
+  };
+  const result = await executeExistingOpenClawStateRead(
+    { env },
+    { type: "localWorkspace.manifest", input: { id: worktreeId, revision: 0, action } },
+    { current: true, live: true },
+  );
+  assert(result);
+  expect(deserialize(zstdDecompressSync(result.snapshot))).toEqual([
+    {
+      row: expect.objectContaining({ revision: 0, projection_path: fixture.projection_path }),
+      records: new Map(),
+    },
+    action,
+  ]);
 });
 
 it("materializes a manifest snapshot after its database closes", async () => {

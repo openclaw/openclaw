@@ -8,7 +8,7 @@ title: "Exec tool"
 
 Run shell commands in the workspace. `exec` is a mutating shell surface: commands can create, edit, or delete files wherever the selected host or sandbox filesystem permits. Disabling OpenClaw filesystem tools such as `write`, `edit`, or `apply_patch` does not make `exec` read-only.
 
-Gateway, sandbox, and worker-local execution support foreground and background execution via `process`. Remote `host=node` execution uses synchronous `system.run` and never creates a `process` session, even when `process` is enabled. If `process` is disallowed, local `exec` also runs synchronously and ignores `yieldMs`/`background`. Background sessions are scoped per agent. `process` only sees sessions from the same agent.
+Gateway, sandbox, and worker-local execution support foreground and background execution via `process`. Remote `host=node` execution uses synchronous `system.run` and never creates a `process` session, even when `process` is enabled. If `process` is disallowed, local `exec` also runs synchronously and ignores `yieldMs`/`background`. Background sessions are scoped to their originating session. Child sessions can also manage ancestor processes within the same agent; unrelated session trees and other agents cannot access them.
 
 Completed calls return command output directly. Use `process` only when `exec` reports that a command is still running and provides a `sessionId`; an identifier printed by the command is ordinary output, not a process handle.
 
@@ -356,7 +356,7 @@ Notes:
 - `deny: ["write"]` does not deny `apply_patch`. Deny `apply_patch` explicitly or use `deny: ["group:fs"]` when patch writes should also be blocked.
 - Config lives under `tools.exec.applyPatch`.
 - `tools.exec.applyPatch.enabled` defaults to `true`. Set it to `false` to disable the tool.
-- `tools.exec.applyPatch.workspaceOnly` defaults to `true` (workspace-contained). Set it to `false` only if you intentionally want `apply_patch` to write/delete outside the workspace directory.
+- `tools.exec.applyPatch.workspaceOnly` defaults to `false` in the personal preset and `true` in corporate. An explicit `true` keeps workspace containment independently of exec mode; required roots still apply. See [security presets](/gateway/security/presets).
 - `tools.exec.applyPatch.allowModels` is an optional allowlist of model ids (raw, like `gpt-5.4`, or full, like `openai/gpt-5.4`). When set, only matching models get the tool. When unset, all models get it.
 
 ## Related

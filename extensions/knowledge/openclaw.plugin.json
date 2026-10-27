@@ -5,6 +5,7 @@
   "name": "Knowledge",
   "description": "Evidence-backed knowledge, inspectable in OpenClaw.",
   "version": "0.1.0",
+  "reload": { "turnHandover": true },
   "configSchema": {
     "type": "object",
     "properties": {
@@ -60,18 +61,15 @@
             "minLength": 1,
             "maxLength": 100,
             "description": "IANA time zone for the schedule. Default: the Gateway host's time zone."
-          },
-          "reviewJobId": {
-            "type": "string",
-            "minLength": 1,
-            "maxLength": 100,
-            "description": "Automation run after each maintenance pass that leaves private claims reachable from no page. Its agent turn follows the knowledge-unlinked-claims skill. When unset, maintenance runs the automation with declaration key knowledge:scribe:unlinked-review. Disable the automation to pause the review."
           }
         },
         "additionalProperties": false
       }
     },
     "additionalProperties": false
+  },
+  "doctorContract": {
+    "configRepair": true
   },
   "activation": {
     "onStartup": true

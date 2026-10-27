@@ -38,6 +38,7 @@ import {
   resolveSessionListProfileReference,
 } from "./session-identity-projection.js";
 import type { SessionEntryPair } from "./session-list-order.js";
+import { addSessionListSearchModelFields } from "./session-list-search-fields.js";
 import type {
   SessionListModelFactsLookup,
   SessionListTargetLookup,
@@ -132,18 +133,6 @@ function resolveSessionListSearchDisplayName(
     });
   }
   return entry?.label ?? sessionDeliveryOrigin(entry)?.label;
-}
-
-function addSessionListSearchModelFields(
-  fields: Array<string | undefined>,
-  identity: { provider?: string; model?: string },
-) {
-  const provider = normalizeOptionalString(identity.provider);
-  const model = normalizeOptionalString(identity.model);
-  fields.push(provider, model);
-  if (provider && model) {
-    fields.push(`${provider}/${model}`);
-  }
 }
 
 function matchesSessionListSearch(fields: Array<string | undefined>, search: string): boolean {
@@ -266,6 +255,8 @@ export function filterSessionEntries(
   const agentFilter = typeof opts.agentId === "string" ? normalizeAgentId(opts.agentId) : "";
   // Excluded rows must not participate in search or ownership resolution.
   const titleSearch = search && normalizeSessionSearchText(search);
+  const matchesLiteralField = (field: string) => field.includes(search);
+  const matchesTitleField = (field: string) => field.includes(titleSearch);
   const searchRunState =
     search &&
     [...SessionRunStatusSchema.anyOf.map((status) => status.const), "live running", "idle"].some(
@@ -316,16 +307,24 @@ export function filterSessionEntries(
             provider: entry.modelProvider,
             model: entry.model,
           });
+          // Goal search uses entry usage, not elapsed time or display-only timestamps.
+          const goal = entry.goal && resolveGatewaySessionGoal(entry, now);
+          if (goal) {
+            rawFields.push(
+              `${goal.objective} ${goal.status} ${formatGoalSummary(goal)} ${goal.lastStatusNote ?? ""}`,
+            );
+          }
           fields = {
             key: storeKey,
-            literal: rawFields.map(normalizeLowercaseStringOrEmpty),
-            titles: titles.map(normalizeSessionSearchText),
+            // Both matchers run only for nonempty queries; empty fields can never match.
+            literal: rawFields.map(normalizeLowercaseStringOrEmpty).filter(Boolean),
+            titles: titles.map(normalizeSessionSearchText).filter(Boolean),
           };
           staticSearchFields.set(entry, fields);
         }
         if (
-          fields.literal.some((field) => field.includes(search)) ||
-          (titleSearch && fields.titles.some((field) => field.includes(titleSearch)))
+          fields.literal.some(matchesLiteralField) ||
+          (titleSearch && fields.titles.some(matchesTitleField))
         ) {
           return true;
         }
@@ -354,18 +353,6 @@ export function filterSessionEntries(
           ) {
             return true;
           }
-        }
-        const goal = entry.goal && resolveGatewaySessionGoal(entry, now);
-        if (
-          goal &&
-          matchesSessionListSearch(
-            [
-              `${goal.objective} ${goal.status} ${formatGoalSummary(goal)} ${goal.lastStatusNote ?? ""}`,
-            ],
-            search,
-          )
-        ) {
-          return true;
         }
         let identityMatch = identityMatches?.get(agentId);
         if (identityMatch === undefined) {
@@ -425,11 +412,11 @@ export function filterSessionEntries(
             return true;
           }
         }
-        const runtime = source.thinkingProjection.agentRuntime;
-        let runtimeMatch = runtimeMatches?.get(runtime.id);
+        const runtimeLabel = formatAgentRuntimeLabel(source.thinkingProjection.agentRuntime);
+        let runtimeMatch = runtimeMatches?.get(runtimeLabel);
         if (runtimeMatch === undefined) {
-          runtimeMatch = matchesSessionListSearch([formatAgentRuntimeLabel(runtime)], search);
-          (runtimeMatches ??= new Map()).set(runtime.id, runtimeMatch);
+          runtimeMatch = matchesSessionListSearch([runtimeLabel], search);
+          (runtimeMatches ??= new Map()).set(runtimeLabel, runtimeMatch);
         }
         return runtimeMatch;
       }

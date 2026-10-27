@@ -259,6 +259,11 @@ function summarizeSidebarWindows(
 
 const { values } = parseArgs({
   options: {
+    "new-session-first-token": { type: "boolean", default: false },
+    "new-session-token-ms": { type: "string", default: "1500" },
+    "new-session-worker": { type: "boolean", default: false },
+    "new-session-filmstrip": { type: "boolean", default: false },
+    "new-session-list-mode": { type: "string", default: "normal" },
     "cpu-profile": { type: "boolean", default: false },
     "selector-stats": { type: "boolean", default: false },
     "cpu-profile-compare": { type: "string" },
@@ -268,6 +273,7 @@ const { values } = parseArgs({
     "warm-reload": { type: "boolean", default: false },
     "row-facts": { type: "boolean", default: false },
     "pane-chrome-probe": { type: "boolean", default: false },
+    "archived-session": { type: "boolean", default: false },
     "large-snapshot": { type: "boolean", default: false },
     "dashboard-widget": { type: "boolean", default: false },
     "connect-not-before-ms": { type: "string" },
@@ -793,6 +799,7 @@ const fixture = createControlUiTeamScaleFixture({
   largeSnapshot: values["large-snapshot"],
   rowFacts: values["row-facts"],
   offRosterSession: values["off-roster-route"],
+  archivedSession: values["archived-session"],
   transcriptMessages,
   dashboardWidgetFontUrl: dashboardFont
     ? `http://127.0.0.1:${address.port}${dashboardFontPath}`
@@ -861,6 +868,14 @@ try {
   const settingsCoreSchema = values["settings-core-schema"]
     ? (await import("../src/config/schema.ts")).buildConfigSchemaCore()
     : undefined;
+  const agentsResponse = fixture.scenario.methodResponses?.["agents.list"];
+  const workerAgents =
+    values["new-session-worker"] && agentsResponse && typeof agentsResponse === "object"
+      ? {
+          ...agentsResponse,
+          sessionPlacement: { requiredProfile: { id: "l247-worker", providerId: "crabbox" } },
+        }
+      : undefined;
   const prepared = await prepareControlUiMockGatewayScenario({
     ...fixture.scenario,
     ...(streamingSplitLayout
@@ -877,14 +892,11 @@ try {
         }
       : {}),
     subscriptionInitialHistory: true,
-    ...(settingsCoreSchema
-      ? {
-          methodResponses: {
-            ...fixture.scenario.methodResponses,
-            "config.schema": settingsCoreSchema,
-          },
-        }
-      : {}),
+    methodResponses: {
+      ...fixture.scenario.methodResponses,
+      ...(workerAgents ? { "agents.list": workerAgents } : {}),
+      ...(settingsCoreSchema ? { "config.schema": settingsCoreSchema } : {}),
+    },
     terminalEnabled,
     serverBuildId: buildId,
     serverVersion: JSON.parse(await readFile("package.json", "utf8")).version,
@@ -1783,7 +1795,9 @@ try {
   }
   for (let run = 0; run < runs; run++) {
     const bundleIndex = run % bundleSlots.length;
-    const layoutCell = layoutCells[Math.floor(run / bundleSlots.length) % layoutCells.length];
+    // Compare every bundle under the same route and roster conditions.
+    const bundleCycle = Math.floor(run / bundleSlots.length);
+    const layoutCell = layoutCells[bundleCycle % layoutCells.length];
     const runRoute = layoutCell?.route ?? bootRoute;
     const cold = layoutCell?.cold ?? firstLoad;
     const runUrl =
@@ -2005,6 +2019,7 @@ try {
       layoutCell ||
       firstLoad ||
       values["critical-path"] ||
+      values["new-session-first-token"] ||
       bootRoute !== "chat" ||
       // Typing in the second pane changes the URL; restore the fixture's primary route.
       streamingPanes > 1 ||
@@ -2962,15 +2977,28 @@ try {
       : undefined;
     let sessionSwitch;
     if (values["session-switch"]) {
+      if (await page.locator(".shell--mobile-nav:not(.shell--nav-drawer-open)").count()) {
+        await navigationDrawerToggle(page).click();
+        await page.locator(".shell--nav-drawer-open").waitFor();
+      }
       if (sidebarView !== "sessions") {
         await page.locator('[data-navigation-view="sessions"]').click();
       }
+      // Cold runs keep the default My sessions filter until this phase.
+      await page.locator("#sidebar-session-owner-title").click();
+      await page
+        .locator('.sidebar-session-owner-filter [role="option"][data-value="involving-me"]')
+        .click();
       // The first non-main chat is in the initial Involving me page.
       const target = fixture.scenario.sessions![1]!;
       const link = page.locator(
         `.sidebar-recent-session[data-session-key="${target.key}"] a.sidebar-recent-session__link`,
       );
       await link.scrollIntoViewIfNeeded();
+      await page.waitForFunction(() => {
+        const state = Reflect.get(window, "__coldLoad").read();
+        return !state.pending && !state.queued && state.idleMs > 750;
+      });
       const rpcOffset = await page.evaluate(
         () => Reflect.get(window, "__coldLoad").read().rpcs.length,
       );
@@ -3147,8 +3175,23 @@ try {
         await page.screenshot({ path: path.join(artifactDir, `run-${run + 1}.${route}.png`) });
       }
     }
+    const newSessionFirstToken = values["new-session-first-token"]
+      ? await (
+          await import("./lib/control-ui-new-session-first-token.ts")
+        ).measureNewSession(page, artifactDir, run + 1, {
+          initialHistory: fixture.scenario.methodResponses?.["chat.startup"],
+          viewerId: fixture.sidebarListInput.viewerProfileId,
+          tokenDelayMs: Number(values["new-session-token-ms"]),
+          worker: values["new-session-worker"],
+          filmstrip: values["new-session-filmstrip"],
+          held:
+            values["new-session-list-mode"] === "held" ||
+            (values["new-session-list-mode"] === "alternate" && bundleCycle % 2 === 1),
+        })
+      : undefined;
     await cdp.detach();
     const result = {
+      newSessionFirstToken,
       layoutCell,
       run: run + 1,
       hostLoadAverage,

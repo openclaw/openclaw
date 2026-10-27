@@ -239,6 +239,70 @@ it.for(["restore", "expired restore", "sweep"] as const)(
   },
 );
 
+it(
+  "admits parent input after restoring a paused child and delivers its later completion",
+  { timeout: 5_000 },
+  async ({ signal }) => {
+    await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+      setRuntimeConfigSnapshot({});
+      const sessionKey = "agent:main:main";
+      const logicalStore = path.join(state.sessionsDir(), "sessions.json");
+      await replaceSessionEntry(
+        { agentId: "main", sessionKey, storePath: logicalStore },
+        { sessionId: "requester-session", updatedAt: 1, status: "done" },
+      );
+      const paused = child({
+        requesterSessionKey: sessionKey,
+        requesterStorePath: state.statePath("agents", "main", "agent", "openclaw-agent.sqlite"),
+        execution: {
+          status: "terminal",
+          endedAt: Date.now(),
+          lifecycleGeneration: `previous-${getAgentEventLifecycleGeneration()}`,
+        },
+        pauseReason: "sessions_yield",
+        delivery: { status: "pending" },
+        cleanupHandled: false,
+      });
+      subagentRuns.set(paused.runId, paused);
+      inputs.push(...(await reserveRestoredSubagentControllerSources([paused])));
+      const controller = new AbortController();
+      const turn = {
+        sessionKey,
+        sessionId: "requester-session",
+        storePath: logicalStore,
+        agentId: "main",
+        abortSignal: controller.signal,
+      };
+      const delivered: string[] = [];
+      const parent = withSessionTurn(turn, async () => {
+        delivered.push("parent reply");
+      });
+      try {
+        await withinTest(parent, signal);
+        expect(delivered).toEqual(["parent reply"]);
+        expect(subagentRuns.get(paused.runId)).toBe(paused);
+        const completed = child({
+          ...paused,
+          pauseReason: undefined,
+          execution: { status: "terminal", endedAt: Date.now(), outcome: { status: "ok" } },
+        });
+        subagentRuns.set(completed.runId, completed);
+        const restored = await reserveRestoredSubagentControllerSources([completed]);
+        inputs.push(...restored);
+        const completion = expectDefined(restored[0], "ready completion reservation");
+        await withSessionTurn({ ...turn, controllerInput: completion }, async () => {
+          delivered.push("child completion");
+        });
+        expect(delivered).toEqual(["parent reply", "child completion"]);
+      } finally {
+        controller.abort();
+        inputs.forEach((input) => retireSessionControllerInput(input));
+        await parent.catch(() => {});
+      }
+    });
+  },
+);
+
 const batchIds = ["child-a", "child-b", "child-c"];
 it.for(["queued", "delete"] as const)(
   "preserves the expired delivery's %s owner",
