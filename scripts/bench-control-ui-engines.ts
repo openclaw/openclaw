@@ -107,6 +107,7 @@ type Observation = {
   errorEvents?: Array<{ message: string; phase: string }>;
   resizeErrorCount?: number;
   artifactPrefix: string;
+  diagnostic?: string;
 };
 const observations: Observation[] = [];
 const writeJson = (name: string, value: unknown) =>
@@ -188,11 +189,12 @@ try {
       "Census ranks >1.5x WebKit/Chromium. Fix proof: ten interleaved pairs plus A/A control; median regression <=5% and p95 no worse, otherwise ten more pairs. Profile/CPU and structural counts decide on a noisy host; >20% attributable regression blocks.",
     boundary:
       "Production bundle and HTTP owner; synthetic Gateway. Cold means fresh context; warm means same-context document reload. Mock routing disables HTTP cache in both engines. Mobile transcript-top uses a native scrollport jump, not wheel input. No live Gateway/provider latency.",
-    scenarios: scenarios.map(({ id, route, expected, navigation }) => ({
+    scenarios: scenarios.map(({ id, route, expected, navigation, diagnostic }) => ({
       id,
       route,
       expected,
       navigation,
+      diagnostic,
     })),
   });
   for (const viewport of viewports) {
@@ -215,6 +217,7 @@ try {
               status: "failed",
               hostLoadAverage: os.loadavg(),
               artifactPrefix,
+              ...(scenario.diagnostic ? { diagnostic: scenario.diagnostic } : {}),
             };
             const context = await browsers.get(engine)!.newContext({
               viewport: { width: viewport.width, height: viewport.height },
@@ -498,6 +501,14 @@ await writeFile(
     `Synthetic Gateway; production HTTP/bundle. ${values.trace ? "Traced samples include profiler overhead." : values["cpu-only"] ? "Sampled WebKit process CPU; Chromium main-thread CPU. No timeline or script profiler." : "Untraced wall samples; WebKit Inspector counters are unavailable (null)."} Wall time includes automation and assertions, not INP. WebKit Inspector script/layout/style durations are wall time; Chromium CDP uses thread CPU. Do not compare these as CPU ratios. Cold contexts are fresh; warm reload retains IndexedDB but mock routing disables HTTP cache.`,
     "",
     `Completed ${observations.length}/${planned} observations; ${observations.filter(({ status }) => status === "failed").length} failed. Timing summaries retain completed intervals with browser errors; failures are never passing proof. Browser-local boot milestones, metrics, counts, CPU coverage, host load and errors: [observations](observations.json), [summary](summary.json), [manifest](manifest.json).`,
+    ...[
+      ...new Set(
+        observations.flatMap((row) => (row.diagnostic ? [`${row.step}: ${row.diagnostic}`] : [])),
+      ),
+    ].map(
+      (diagnostic) =>
+        `Diagnostic instrumentation: ${diagnostic} These timings are not uninstrumented latency.`,
+    ),
     "",
     "| Viewport | Scenario | Bundle | Chromium wall median/p95 (ms) | WebKit wall median/p95 (ms) | WebKit/Chromium |",
     "| --- | --- | --- | --- | --- | --- |",
