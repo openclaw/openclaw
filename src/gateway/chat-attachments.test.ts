@@ -280,9 +280,7 @@ describe("persistInboundImagesForTranscript", () => {
         kind === "offloaded" ||
         kind.startsWith("bounded-")
       ) {
-        expect(
-          from.mock.calls.some(([value, encoding]) => value === base64 && encoding === "base64"),
-        ).toBe(false);
+        expect(from).not.toHaveBeenCalledWith(base64, "base64");
       }
       const persisted = await persist(parsed);
       const message = buildPersistedUserTurnMessage({
@@ -580,11 +578,10 @@ describe("attachment validation", () => {
           maxBytes: limit === "image" ? policy.maxBytes : 16,
         }),
       ).rejects.toThrow(limit === "image" ? /image exceeds size limit/i : /exceeds size limit/i);
-      const decodes = from.mock.calls.filter(([, encoding]) => encoding === "base64");
       if (limit === "request") {
-        expect(decodes).toHaveLength(0);
+        expect(from).not.toHaveBeenCalledWith(expect.anything(), "base64");
       }
-      expect(decodes.some(([value]) => value === content)).toBe(false);
+      expect(from).not.toHaveBeenCalledWith(content, "base64");
       expect(saveMediaBufferMock).not.toHaveBeenCalled();
     },
   );
