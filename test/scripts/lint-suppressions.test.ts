@@ -160,6 +160,8 @@ describe("production lint suppressions", () => {
         // Thread assembly orders fresh Map-spread arrays without mutating posts or caller inputs.
         "extensions/x/src/thread.ts|unicorn/no-array-reverse|1",
         "extensions/x/src/thread.ts|unicorn/no-array-sort|2",
+        // The memory census attributes RSS only to the pinned Playwright browser's child tree.
+        "scripts/bench-control-ui-engines.ts|no-underscore-dangle|1",
         // The Talk readiness probe calls the saved media method with its original receiver.
         "scripts/bench-control-ui-talk.ts|typescript/unbound-method|1",
         // The fault observer preserves methods for restoration and supplies each database receiver through .call.
@@ -168,6 +170,7 @@ describe("production lint suppressions", () => {
         "scripts/e2e/lib/upgrade-survivor/probe-volume-gateway.mjs|preserve-caught-error|1",
         "scripts/e2e/parallels/host-command.ts|no-warning-comments|1",
         // Pinned Playwright exposes WebKit Inspector only through its private connection/session fields.
+        "scripts/lib/control-ui-engine-memory.ts|no-underscore-dangle|3",
         "scripts/lib/control-ui-engine-metrics.ts|no-underscore-dangle|3",
         // The scheduling probe forwards native methods with the original call receiver through Reflect.apply.
         "scripts/lib/control-ui-resource-counts.ts|typescript/unbound-method|8",

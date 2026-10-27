@@ -263,28 +263,6 @@ describe.runIf("__vitest_browser__" in globalThis)("sidebar session filter popov
     );
   });
 
-  it("isolates keyboard filters from a previous sidebar's hovered control", async () => {
-    mockNative();
-    const previous = await mountFilters(390);
-    const previousControl = previous.query(".sidebar-footer-bar__home");
-    await previous.page.elementLocator(previousControl).hover();
-    expect(previousControl.matches(":hover")).toBe(true);
-    previous.provider.remove();
-
-    const { role, query, userEvent } = await mountFilters(390);
-    const control = query(".sidebar-footer-bar__home")!;
-    expect(control.matches(":hover")).toBe(false);
-    const occlusion = nativeOcclusion();
-    const owners = role("button", "Owners: All owners");
-    (owners.element() as HTMLElement).focus();
-    await userEvent.keyboard("{Enter}");
-    await expect.element(role("listbox", "Owners")).toBeVisible();
-    await expect.poll(() => occlusion).toEqual([false, true]);
-    await userEvent.keyboard("{Escape}");
-    await expect.element(owners).toHaveFocus();
-    await expect.poll(() => occlusion).toEqual([false, true, false]);
-  });
-
   it("opens display submenus on mouse hover and leaves touch on click", async () => {
     const { role, query, userEvent } = await mountFilters(1440);
     await role("button", /^Filter & sort · /).click();

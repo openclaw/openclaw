@@ -1,5 +1,6 @@
 // Owner-level Team-shaped list workload; transport/tool-turn proof stays in team-shape-stress.ts.
 // Run on an approved quiet host with --expose-gc --import ./scripts/tsx.mjs.
+// --collector-presentation adds prepared event rows for an unrestricted operator.
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { readFileSync, writeFileSync } from "node:fs";
@@ -14,7 +15,10 @@ import { PROTOCOL_VERSION } from "../../packages/gateway-protocol/src/version.js
 import type { SubagentRunRecord } from "../../src/agents/subagents/registry/subagent-registry.types.js";
 import type { OpenClawConfig } from "../../src/config/types.openclaw.js";
 import type { GatewayClient } from "../../src/gateway/server-methods/types.js";
-import type { SessionsListResult } from "../../src/gateway/session-utils.types.js";
+import type {
+  GatewaySessionRow,
+  SessionsListResult,
+} from "../../src/gateway/session-utils.types.js";
 import { parseStrictIntegerOption } from "../lib/strict-integer-option.ts";
 import { generateTeamShapeStressFixture } from "./team-shape-stress-fixture.ts";
 
@@ -26,12 +30,14 @@ const { values } = parseArgs({
     warmup: { type: "string", default: "48" },
     "updates-per-list": { type: "string", default: "33" },
     mode: { type: "string", default: "timing" },
+    "running-candidates": { type: "boolean", default: false },
     reconciliation: { type: "boolean", default: false },
     "metadata-churn": { type: "boolean", default: false },
     "cpu-profile": { type: "boolean", default: false },
     golden: { type: "string" },
     "sort-rows": { type: "string" },
     "sort-workload": { type: "boolean", default: false },
+    "collector-presentation": { type: "boolean", default: false },
   },
 });
 assert(values["state-dir"], "--state-dir must name a new synthetic directory");
@@ -101,24 +107,34 @@ Date.now = () => clock;
 
 const cases: SessionsListParams[] = [];
 const profileId = "team-shape-profile-0";
-const viewer: GatewayClient | undefined = values["sort-workload"]
-  ? {
-      connect: {
-        minProtocol: PROTOCOL_VERSION,
-        maxProtocol: PROTOCOL_VERSION,
-        client: { id: "openclaw-control-ui", version: "bench", platform: "bench", mode: "webchat" },
-        role: "operator",
-        scopes: ["operator.read", "operator.write"],
-      },
-      authenticatedUserProfile: {
-        profileId,
-        displayName: null,
-        hasAvatar: false,
-        updatedAt: anchor,
-      },
-      preparedSessionProfile: { profileId, aliases: new Set([profileId]), role: null },
-    }
-  : undefined;
+const viewer: GatewayClient | undefined =
+  values["sort-workload"] || values["collector-presentation"]
+    ? {
+        connect: {
+          minProtocol: PROTOCOL_VERSION,
+          maxProtocol: PROTOCOL_VERSION,
+          client: {
+            id: "openclaw-control-ui",
+            version: "bench",
+            platform: "bench",
+            mode: "webchat",
+          },
+          role: "operator",
+          scopes: [
+            "operator.read",
+            "operator.write",
+            ...(values["collector-presentation"] ? ["operator.admin"] : []),
+          ],
+        },
+        authenticatedUserProfile: {
+          profileId,
+          displayName: null,
+          hasAvatar: false,
+          updatedAt: anchor,
+        },
+        preparedSessionProfile: { profileId, aliases: new Set([profileId]), role: null },
+      }
+    : undefined;
 for (const archived of [false, true, "all"] as const) {
   for (const agentId of ["main", undefined]) {
     for (const offset of [0, 50]) {
@@ -160,6 +176,17 @@ if (values["sort-workload"]) {
   }
 }
 
+if (values["running-candidates"]) {
+  cases.splice(0, cases.length, {
+    source: "agent-roster",
+    rowMode: "sidebar",
+    archived: "all",
+    limit: 50,
+    includeOwnerSessionCounts: true,
+    excludeSubagents: true,
+  });
+}
+
 if (values.mode === "verify") {
   let seed = 224;
   const choose = <T>(items: readonly T[]): T => {
@@ -187,7 +214,7 @@ if (values.mode === "verify") {
   }
 }
 
-function canonicalResult(result: SessionsListResult): string {
+function canonicalResult(result: SessionsListResult | GatewaySessionRow): string {
   const omitted = new Set(["ts", "rowsRevision", "rowRevision", "runtimeMs", "snapshotAt"]);
   return JSON.stringify(result, (key, value: unknown) => {
     if (omitted.has(key)) {
@@ -259,19 +286,36 @@ try {
     );
   }
   const children = rows.filter((row) => row.key.startsWith("agent:main:subagent:")).slice(0, 8);
-  const parent = rows.find((row) => row.key.startsWith("agent:main:dashboard:") && row.entry);
+  const collectorParent = fixture.summary.stressTargets?.[0]?.sessionKey;
+  const parent = rows.find(
+    (row) =>
+      row.entry &&
+      (values["collector-presentation"]
+        ? row.key === collectorParent
+        : row.key.startsWith("agent:main:dashboard:")),
+  );
   assert(parent && children.length > 0, "Team fixture must contain child and dashboard rows");
+  const requesterParents = values["running-candidates"]
+    ? rows.filter(
+        (row) =>
+          row.key.startsWith("agent:main:dashboard:") &&
+          row.entry &&
+          row.entry.archivedAt === undefined,
+      )
+    : [parent];
+  assert(requesterParents.length > 0, "Running candidates require unarchived parent rows");
   for (const [index, child] of children.entries()) {
     assert(child.entry);
+    const requesterParent = requesterParents[index % requesterParents.length]!;
     active.push({
       runId: `prepared-list-live-${index}`,
       childSessionKey: child.key,
       childAgentId: "main",
       childSessionIdentity: { sessionId: child.entry.sessionId },
-      requesterSessionKey: parent.key,
+      requesterSessionKey: requesterParent.key,
       requesterAgentId: "main",
-      requesterDisplayKey: parent.key,
-      controllerSessionKey: parent.key,
+      requesterDisplayKey: requesterParent.key,
+      controllerSessionKey: requesterParent.key,
       task: "Synthetic list preparation churn",
       cleanup: "keep",
       generation: 1,
@@ -342,11 +386,25 @@ try {
     }
     return digest.digest("hex");
   };
+  const { withPreparedEventRow } = await import("../../src/gateway/session-event-prepared-row.js");
+  const { prepareProjectedSessionPresentation } =
+    await import("../../src/gateway/session-row-presentation.js");
+  const { getSessionRowSelectionMetrics } = await import("../../src/infra/gateway-work-metrics.js");
+  const exactCalls = () =>
+    getSessionRowSelectionMetrics().selections.reduce(
+      (total, value) => total + (value.kind === "exact" ? value.calls : 0),
+      0,
+    );
   const initialGolden = await capture();
   let sequence = 0;
   let listCpuMicros = 0;
   let updateCpuMicros = 0;
   let returnedRows = 0;
+  let presentationCpuMicros = 0;
+  let presentationSelections = 0;
+  let collectorChildren = 0;
+  const eventResponses =
+    values.mode === "verify" && values["collector-presentation"] ? createHash("sha256") : undefined;
   const responses = values.mode === "verify" ? createHash("sha256") : undefined;
   const run = async (count: number, measured: boolean) => {
     for (let index = 0; index < count; index++) {
@@ -400,9 +458,46 @@ try {
       if (measured) {
         updateCpuMicros += used.user + used.system;
       }
+      if (values["collector-presentation"]) {
+        await withPreparedEventRow(projection, { agentId: "main", key: parent.key }, (prepared) => {
+          assert(prepared);
+          const calls = exactCalls();
+          const presentationBefore = process.threadCpuUsage();
+          const row = prepareProjectedSessionPresentation(prepared, viewer, clock).snapshot({
+            agentId: "main",
+            key: parent.key,
+          }).row;
+          const presentationUsed = process.threadCpuUsage(presentationBefore);
+          assert(
+            row?.swarm?.groups[0]?.children?.length,
+            "Collector fixture must expose child detail",
+          );
+          eventResponses?.update(canonicalResult(row));
+          if (measured) {
+            presentationCpuMicros += presentationUsed.user + presentationUsed.system;
+            presentationSelections += exactCalls() - calls;
+            collectorChildren += row.swarm.groups[0].children.length;
+          }
+        });
+      }
       before = process.threadCpuUsage();
       const result = await read(sequence++);
       used = process.threadCpuUsage(before);
+      if (
+        values.mode === "verify" &&
+        values["running-candidates"] &&
+        (sequence - 1) % cases.length === 0
+      ) {
+        assert(result.ownerSessionCounts);
+        assert.equal(
+          result.ownerSessionCounts.reduce((total, owner) => total + owner.running, 0),
+          new Set(
+            active
+              .filter((subagentRun) => subagentRun.execution?.status === "running")
+              .map((subagentRun) => subagentRun.requesterSessionKey),
+          ).size,
+        );
+      }
       assert.equal(result.count, result.sessions.length);
       assert(typeof result.totalCount === "number");
       assert(result.totalCount >= result.count);
@@ -451,6 +546,7 @@ try {
     initial: initialGolden,
     final: await capture(),
     ...(responses ? { responses: responses.digest("hex") } : {}),
+    ...(eventResponses ? { collectorRows: eventResponses.digest("hex") } : {}),
   };
   if (values.golden) {
     assert.deepEqual(golden, JSON.parse(readFileSync(values.golden, "utf8")));
@@ -464,8 +560,16 @@ try {
     );
   const firstPartitions = partitionTotals(beforeSelections);
   const lastPartitions = partitionTotals(afterSelections);
+  const candidateSelections = (snapshot: typeof beforeSelections) =>
+    snapshot.selections.reduce(
+      (total, metric) => total + (metric.kind === "running-candidate" ? metric.calls : 0),
+      0,
+    );
+  const runningCandidateSelections =
+    candidateSelections(afterSelections) - candidateSelections(beforeSelections);
   const result = {
     mode: values.mode,
+    runningCandidateWorkload: values["running-candidates"],
     cpuProfile: values["cpu-profile"],
     reconciliation: values.reconciliation,
     metadataChurn: values["metadata-churn"],
@@ -474,10 +578,16 @@ try {
       misses: lastPartitions.misses - firstPartitions.misses,
     },
     sortWorkload: values["sort-workload"],
+    collectorPresentation: values["collector-presentation"],
+    presentationCpuMsPerCall: presentationCpuMicros / 1000 / iterations,
+    presentationSelectionsPerCall: presentationSelections / iterations,
+    collectorChildrenPerCall: collectorChildren / iterations,
     sessions,
     iterations,
     warmup,
     updatesPerList,
+    runningCandidateSelections,
+    runningCandidateSelectionsPerList: runningCandidateSelections / iterations,
     returnedRows,
     elapsedMs,
     threadCpuMs: (used.user + used.system) / 1000,

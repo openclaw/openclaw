@@ -79,7 +79,11 @@ export type CronJobsProjection<Row extends CronInventoryJob> = {
 
 const cronInventoryScopes = new WeakMap<
   CronJobsState<unknown>,
-  { scope: CronJobsState["cronAgentId" | "cronSessionFilter"]; query?: string }
+  {
+    scope: CronJobsState["cronAgentId" | "cronSessionFilter"];
+    query?: string;
+    requestedQuery: string;
+  }
 >();
 const cronInventoryRequests = new WeakMap<CronJobsState<unknown>, object>();
 
@@ -255,6 +259,7 @@ export async function loadCronJobsProjectionPage<Row extends CronInventoryJob>(
   cronInventoryScopes.set(state, {
     scope,
     query: previous?.scope === scope ? previous.query : undefined,
+    requestedQuery: query,
   });
   if (state.cronLoading || state.cronJobsLoadingMore) {
     if (!append) {
@@ -276,7 +281,8 @@ export async function loadCronJobsProjectionPage<Row extends CronInventoryJob>(
       refresh: opts?.refresh,
       canRead: state.canRefresh,
     });
-    if (!isCurrentScope()) {
+    // A queued filter owns the next page. Keep the accepted rows until it arrives.
+    if (!isCurrentScope() || cronInventoryScopes.get(state)?.requestedQuery !== query) {
       return;
     }
     const page = readCanonicalCronListPage<Row>(res, params.limit ?? state.cronJobsLimit);
@@ -291,7 +297,7 @@ export async function loadCronJobsProjectionPage<Row extends CronInventoryJob>(
       return;
     }
     resolveCronListPageNextOffset(page, offset);
-    cronInventoryScopes.set(state, { scope, query });
+    cronInventoryScopes.set(state, { scope, query, requestedQuery: query });
     state.cronJobs = append ? [...state.cronJobs, ...page.jobs] : page.jobs;
     state.cronJobsSnapshotRevision = page.snapshotRevision;
     state.cronJobsTotal = page.total;

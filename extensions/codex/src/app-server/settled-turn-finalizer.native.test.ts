@@ -265,6 +265,7 @@ type SummaryScenario = {
   hidden?: boolean;
   promptSuppressed?: boolean;
   continuation?: boolean;
+  terminalReasoning?: boolean;
   live?: boolean;
 };
 
@@ -465,6 +466,7 @@ it.skipIf(process.platform === "win32")(
 it.skipIf(process.platform === "win32").for<SummaryScenario>([
   { label: "preserveNativeModel-only host profile", preserveNativeModel: true, prepared: false },
   { label: "ordinary user-home private host profile", homeScope: "user", prepared: false },
+  { label: "checkpointed work before terminal aggregate reasoning", terminalReasoning: true },
   { label: "unfinished prior turn", unfinishedPrior: "ordinary" },
   { label: "unfinished oversized prior turn", unfinishedPrior: "oversized" },
   { label: "hidden background notification", hidden: true },
@@ -503,6 +505,7 @@ async function runSummary(
     hidden = false,
     promptSuppressed = false,
     continuation = false,
+    terminalReasoning = false,
   }: SummaryScenario,
 ) {
   const pluginConfig = {
@@ -581,7 +584,7 @@ async function runSummary(
       });
     }
   }
-  fixture.setPhase("action");
+  fixture.setPhase(terminalReasoning ? "action-reasoning" : "action");
   params.runId = "run-settled-action";
   if (hidden || promptSuppressed || continuation) {
     params.prompt =
@@ -639,6 +642,16 @@ async function runSummary(
   cleanups.push(async () => closeHost());
   const settledAttempt = await run();
   expect(settledAttempt.terminal).toEqual({ kind: "ok" });
+  if (terminalReasoning) {
+    const persisted = (await readTranscript(params)).map((entry) => entry.message);
+    const reasoning = persisted.findIndex(
+      (message) =>
+        message.role === "assistant" && message.content.some((part) => part.type === "thinking"),
+    );
+    const lastTool = persisted.findLastIndex((message) => message.role === "toolResult");
+    expect(lastTool).toBeGreaterThan(-1);
+    expect(reasoning).toBeGreaterThan(lastTool);
+  }
   const context = settledAttempt.settledTurnFinalizationContext;
   if (!(context instanceof settledContext.CodexSettledTurnContext)) {
     throw new Error("Native turn lost its settled-tool evidence");

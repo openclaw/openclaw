@@ -285,6 +285,12 @@ suite.define(() => {
       await expect.poll(shellWidth).toBe(0);
 
       await voice.hover();
+      // Assert the settled hover reveal, including its delayed CSS transitions.
+      await microphonePickerShell.evaluate((node) => {
+        for (const animation of node.getAnimations({ subtree: true })) {
+          animation.finish();
+        }
+      });
       await expect.poll(shellWidth).toBe(0);
       await polledVisible(microphonePicker).toBe(false);
     });

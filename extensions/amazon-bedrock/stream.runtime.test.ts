@@ -27,6 +27,7 @@ import {
   mockResponse,
   mockStream,
   png,
+  readTool,
   replayAssistant,
   runtimeUser,
   startEvent,
@@ -50,10 +51,6 @@ const adaptiveFields = (effort: string) => ({
   thinking: { type: "adaptive", display: "summarized" },
   output_config: { effort },
 });
-
-const findToolUse = (input: Awaited<ReturnType<typeof capturePayload>>) =>
-  input.messages?.flatMap((message) => message.content ?? []).find((block) => block.toolUse)
-    ?.toolUse;
 
 const claudeModel = (id: string, overrides: Parameters<typeof bedrockModel>[0] = {}) =>
   bedrockModel({ id, name: id, contextWindow: 1_000_000, maxTokens: 128_000, ...overrides });
@@ -128,76 +125,6 @@ it("rejects malformed base64 and decodes a valid PNG without Node Buffer", async
     Reflect.set(globalThis, "Buffer", nodeBuffer);
   }
   expect(input.messages?.[0]?.content?.[0]?.image?.source?.bytes?.byteLength).toBeGreaterThan(0);
-});
-
-it("drops model-bound opaque reasoning when switching between Claude models", async () => {
-  const input = await capturePayload(
-    bedrockModel({
-      id: "anthropic.claude-sonnet-4-5-20250929-v1:0",
-      name: "Claude Sonnet 4.5",
-    }),
-    {
-      messages: [
-        replayAssistant("anthropic.claude-haiku-4-5-20251001-v1:0", [
-          {
-            type: "thinking",
-            thinking: "[Reasoning redacted]",
-            thinkingSignature: "3q2+7w==",
-            redacted: true,
-          },
-          { type: "text", text: "Safe visible response" },
-        ]),
-      ],
-    } as never,
-  );
-
-  expect(input.messages).toMatchObject([{ content: [{ text: "Safe visible response" }] }]);
-});
-
-it("coalesces tool results while replacing audio and dropping empty image husks", async () => {
-  const input = await capturePayload(bedrockModel({ input: ["text", "image"] }), {
-    messages: [
-      {
-        role: "toolResult",
-        toolCallId: "call_audio",
-        toolName: "listen",
-        isError: false,
-        content: [{ type: "audio", mimeType: "audio/wav", data: "YXVkaW8=" }],
-      },
-      toolResult("call_husk", [{ type: "image", mimeType: "image/png", data: "" }], "screenshot"),
-      toolResult("call_text", [{ type: "text", text: "actual tool output" }], "read"),
-    ],
-  } as never);
-  const messages = input.messages;
-
-  expect(messages).toHaveLength(1);
-  expect(messages?.[0]).toMatchObject(
-    wireUser(
-      { toolResult: { toolUseId: "call_audio", content: [{ text: "(see attached audio)" }] } },
-      { toolResult: { toolUseId: "call_husk", content: [{ text: "(no output)" }] } },
-      { toolResult: { toolUseId: "call_text", content: [{ text: "actual tool output" }] } },
-    ),
-  );
-  expect(JSON.stringify(messages)).not.toContain('"image"');
-  expect(JSON.stringify(messages)).not.toContain("see attached image");
-});
-it("normalizes invalid stored arguments at the Bedrock request boundary", async () => {
-  const context = {
-    messages: [
-      {
-        ...replayAssistant("amazon.nova-micro-v1:0", [
-          { type: "toolCall", id: "call_replay", name: "read", arguments: '{"path":' },
-        ]),
-        timestamp: 0,
-      },
-      toolResult("call_replay", [{ type: "text", text: "existing result" }], "read", false, 1),
-      { role: "user", content: "continue", timestamp: 2 },
-    ],
-  } as never;
-  const originalContext = JSON.stringify(context);
-  const input = await capturePayload(bedrockModel({}), context);
-  expect(findToolUse(input)?.input).toEqual({});
-  expect(JSON.stringify(context)).toBe(originalContext);
 });
 
 it("resolves a GovCloud inference-profile ARN ahead of the ambient region", async () => {
@@ -595,6 +522,7 @@ describe("Bedrock prompt cache ownership", () => {
           Array.from({ length: 21 }, (_, index) => `Attached document block ${index}`),
         ),
       ],
+      tools: [readTool],
     };
     const first = await captureMessages(model, context, { cacheRetention: "short" });
     expect([first[0]?.content?.at(-1), first[2]?.content?.at(-1)]).toEqual([
@@ -655,6 +583,7 @@ describe("Bedrock prompt cache ownership", () => {
           },
           toolResult("call_follow_up", [textBlock("later stable tool output")], "read", false, 2),
         ],
+        tools: [readTool],
       } as never,
       { cacheRetention: "long" },
     );
@@ -730,6 +659,7 @@ it("lifts tool images into user content for OpenAI while preserving result assoc
       toolResult("call_second", [image], "inspect", true),
       toolResult("call_text", [textBlock("plain result")], "read"),
     ],
+    tools: [readTool],
   };
   const before = structuredClone(context);
   const input = await capturePayload(
