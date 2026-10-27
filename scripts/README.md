@@ -169,11 +169,16 @@ reporting the cold baseline controls. Neither this native/localhost comparison
 nor reused later cells establish cold 4× or 100 ms RTT performance.
 
 For the backend's first full-range read, add `--cold-backend`. It starts fresh
-baseline/candidate/baseline Gateways and makes each one's first `sessions.usage`
+baseline/candidate/baseline Gateways one at a time and makes each one's first `sessions.usage`
 RPC request all 180 days through the canonical Usage request helper. No browser
 or default 30-day request warms this path. The three observations retain actual
-request parameters, complete response payloads, Gateway process/main-thread and
-worker CPU snapshots, aggregation dispatches, and post-request resources. The
+request parameters, every response payload including partials, Gateway process/main-thread and
+worker CPU snapshots, aggregation dispatches, and post-request resources. First-response
+and complete-ready wall/CPU metrics are separate. If Usage is still being summarized,
+successful `chat.metadata.changed` publications trigger coalesced re-reads, matching
+the page's session refresh path; no timed session polling occurs. All reads and
+publication waits share the same 60-second deadline from the first request. Startup
+backfill stays enabled, and each Gateway fully drains before the next role starts. The
 client must run with `TZ=UTC`; it asserts the resolved timezone and offset before
 starting Gateways. The canonical helper then emits the browser fixture's exact
 date parameters (`mode: "specific"`, `timeZone: "UTC"`, `utcOffset: "UTC+0"`),
@@ -186,8 +191,8 @@ readiness or establish repeated cold performance.
 
 For repeated fresh-process backend reads, use `--cold-backend --cold-pairs 20`.
 Each role seeds once and snapshots its synthetic state after its seed writers
-exit, before any compiled Gateway opens it. Between triples, all Gateway process
-trees stop before the snapshot is restored at the same absolute path; each role
+exit, before any compiled Gateway opens it. Each Gateway process tree stops before
+the next role starts, and snapshots are restored at the same absolute path; each role
 keeps its port and token. File bytes and symlink targets are checked after each
 restore. Every sample starts a fresh compiled process with the pristine report
 state, and output files retain the pair number. This does not flush the operating
@@ -206,7 +211,9 @@ must not be summed as CPU. These traced actions are diagnostic evidence, never
 samples for the untraced timing acceptance table. The narrow modes are mutually
 exclusive with `--smoke` and each other.
 
-For warm renderer attribution, `--structure` runs only 1×/localhost. Each role
+For warm renderer attribution, `--structure` runs at 1×/localhost by default.
+Use `--structure --structure-rtt 100` for the same diagnostic with 100 ms added
+RTT; the selector is valid only with `--structure` and accepts `0` or `100`. Each role
 warms model00/model01, traces a natural return to model00, resets to model01,
 then traces a separate model00 return after browser GC. Only that second return
 has forced-GC heap and DOM counters before and after; GC stays outside timing.
