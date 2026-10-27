@@ -26,6 +26,7 @@ import {
 import * as sessionReads from "../../config/sessions/session-entry-read-runtime.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { CliBackendPlugin } from "../../plugins/cli-backend.types.js";
+import type { InputProvenance } from "../../sessions/input-provenance.js";
 import {
   beginReplyMessageInjectionTarget,
   captureCurrentReplyMessageInjectionTarget,
@@ -50,6 +51,8 @@ import {
   prepareReplyToolAuthorityCallerRead,
 } from "../harness/host-private-capabilities.js";
 import { bindPreparedToolAuthority } from "../harness/tool-authority-preparation.js";
+import { buildAgentInternalEventContext } from "../internal-events.js";
+import { RUNTIME_EVENT_USER_PROMPT } from "../internal-runtime-context.js";
 import { captureRequesterOrigin } from "../requester-origin.js";
 import { executePluginOwnedProcess } from "./execute-plugin.js";
 import { closePluginTestAdmissions, createExecution } from "./execute-plugin.test-support.js";
@@ -74,6 +77,7 @@ for await (const line of createInterface({ input: process.stdin })) {
   } else if (message.type === "user") {
     const text = message.message.content;
     appendFileSync("received.ndjson", JSON.stringify(text) + "\n");
+    appendFileSync("received-origins.ndjson", JSON.stringify(message.isSynthetic === true) + "\n");
     inputs.set(message.uuid, { text, initial });
     if (initial) send({ type: "system", subtype: "init", capabilities: ["msg_lifecycle_v1"] });
     send({ type: "command_lifecycle", state: "started", command_uuid: message.uuid });
@@ -85,6 +89,7 @@ for await (const line of createInterface({ input: process.stdin })) {
   } else if (message.type === "control_response") {
     const input = inputs.get(message.response.request_id);
     if (!input) continue;
+    appendFileSync("received-contexts.ndjson", JSON.stringify(message.response.response) + "\n");
     if (input.text === "started-exit") process.exit(1);
     if (!input.initial) send({ type: "command_lifecycle", state: input.text === "started-cancelled" ? "cancelled" : "completed", command_uuid: message.response.request_id });
     send({ type: "system", subtype: "fixture_input", text: input.text });
@@ -144,9 +149,10 @@ it("steers configured, session and explicit inputs through current authority int
     });
     context.workspaceDir = root;
     context.cwd = root;
-    const recordInput = (text: string) =>
+    params.inputProvenance = { kind: "internal_system", sourceTool: "future_wake" };
+    const recordInput = (text: string, provenance?: InputProvenance, idempotencyKey = text) =>
       createUserTurnTranscriptRecorder({
-        input: { text, idempotencyKey: text },
+        input: { text, idempotencyKey, provenance },
         target: createTestUserTurnTranscriptTarget({ sessionKey, sessionId, cwd: root }),
       });
     const followupRun = createQueueTestRun({ prompt: "initial", originatingChannel: "webchat" });
@@ -168,9 +174,11 @@ it("steers configured, session and explicit inputs through current authority int
     const execute = expectDefined(prepared?.execute, "Claude native transport");
     const ready = createDeferred();
     const cleanupInputObserved = createDeferred();
+    const completionObserved = createDeferred();
     const observations = new Map([
       ["initial", ready],
       ["post-submit-cleanup", cleanupInputObserved],
+      [RUNTIME_EVENT_USER_PROMPT, completionObserved],
     ]);
     const run = executePluginOwnedProcess({
       context,
@@ -290,6 +298,84 @@ it("steers configured, session and explicit inputs through current authority int
       expect(followup).not.toHaveBeenCalled();
       expect(await readInputs()).toEqual(["initial", ...routeInputs]);
 
+      // The same text can be a human steer, host wake, or forwarded peer input.
+      // Each origin belongs to that input, not to the already-running turn.
+      const hostProvenances: InputProvenance[] = [
+        { kind: "internal_system", sourceTool: "future_wake" },
+        { kind: "inter_session", sourceTool: "sessions_send" },
+      ];
+      for (const provenance of hostProvenances) {
+        const recorder = recordInput("global", provenance, provenance.kind);
+        const queued = await beginReplyMessageInjectionTarget(target, "global", {
+          userTurnTranscriptRecorder: recorder,
+        });
+        await expect(queued.outcome).resolves.toMatchObject({ status: "accepted" });
+        expect(recorder.hasPersisted()).toBe(true);
+        routeInputs.push("global");
+      }
+      const completion = recordInput(RUNTIME_EVENT_USER_PROMPT, {
+        kind: "inter_session",
+        sourceTool: "subagent_announce",
+      });
+      const fragments = buildAgentInternalEventContext([
+        {
+          type: "task_completion",
+          source: "subagent",
+          childSessionKey: "agent:main:subagent:proof",
+          announceType: "subagent task",
+          taskLabel: "Check fixtures",
+          status: "ok",
+          statusLabel: "completed",
+          result: "The fixture count is 42.",
+          replyInstruction: "Summarize the result for the requester.",
+        },
+      ]);
+      const queuedCompletion = await beginReplyMessageInjectionTarget(
+        target,
+        RUNTIME_EVENT_USER_PROMPT,
+        {
+          userTurnTranscriptRecorder: completion,
+          currentInboundContext: {
+            text: fragments.map((part) => part.text).join("\n\n"),
+            fragments,
+          },
+        },
+      );
+      await expect(queuedCompletion.outcome).resolves.toMatchObject({ status: "accepted" });
+      await completionObserved.promise;
+      routeInputs.push(RUNTIME_EVENT_USER_PROMPT);
+      const contexts = (await readFile(path.join(root, "received-contexts.ndjson"), "utf8"))
+        .trim()
+        .split("\n")
+        .map((line) => JSON.parse(line));
+      expect(contexts.at(-1)?.hookSpecificOutput?.additionalContext).toContain(
+        "The fixture count is 42.",
+      );
+      expect(await readInputs()).toEqual(["initial", ...routeInputs]);
+      const nativeOrigins = (await readFile(path.join(root, "received-origins.ndjson"), "utf8"))
+        .trim()
+        .split("\n")
+        .map((line) => JSON.parse(line));
+      expect(nativeOrigins).toEqual([true, ...routes.map(() => false), true, true, true]);
+
+      // A recorder preflight failure must reject before native acceptance, not lose input.
+      const unresolvedRecorder = recordInput("unresolved input");
+      const resolveMessage = vi
+        .spyOn(unresolvedRecorder, "resolveMessage")
+        .mockRejectedValueOnce(new Error("Recorder preflight failed"));
+      const unresolved = await beginReplyMessageInjectionTarget(target, "unresolved input", {
+        userTurnTranscriptRecorder: unresolvedRecorder,
+      });
+      await expect(unresolved.acceptance).resolves.toBe(false);
+      await expect(unresolved.outcome).resolves.toMatchObject({ status: "rejected" });
+      expect(await readInputs()).toEqual(["initial", ...routeInputs]);
+      expect(unresolvedRecorder.hasPersisted()).toBe(false);
+      expect(unresolvedRecorder.isBlocked()).toBe(false);
+      resolveMessage.mockRestore();
+      await expect(unresolvedRecorder.resolveMessage()).resolves.toMatchObject({
+        content: "unresolved input",
+      });
+
       // Revoke stored policy after selection but before the ordered final worker read.
       const read = sessionReads.withSessionEntriesFromStoresInWorker;
       let revoked = false;
@@ -362,6 +448,9 @@ it("steers configured, session and explicit inputs through current authority int
         storePath: resolveSessionStorePathCore(undefined, { agentId: "main" }),
       });
       expect(messages.map((message) => message.content)).toEqual(expectedInputs);
+      expect(
+        messages.slice(routes.length, routes.length + 2).map((message) => message.provenance),
+      ).toEqual(hostProvenances);
       expect(followup).not.toHaveBeenCalled();
     } finally {
       operation.abortByUser();

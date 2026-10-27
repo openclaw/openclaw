@@ -195,11 +195,14 @@ describe("plugin-owned CLI execution host boundary", () => {
   it.each([
     [{ kind: "internal_system", sourceTool: "exec" }, "host"],
     [{ kind: "internal_system", sourceTool: "cron" }, "host"],
-    [{ kind: "inter_session" }, undefined],
+    [{ kind: "internal_system", sourceTool: "future_wake" }, "host"],
+    [{ kind: "inter_session", sourceTool: "subagent_announce" }, "host"],
+    [{ kind: "inter_session", sourceTool: "sessions_send" }, "host"],
+    [{ kind: "external_user", sourceTool: "exec" }, undefined],
     [{ kind: "external_user" }, undefined],
     [undefined, undefined],
   ] as const)(
-    "marks only internal system turns as host prompts (%j)",
+    "preserves input provenance instead of classifying prompt text (%j)",
     async (provenance, origin) => {
       const { context } = await createExecution();
       context.params.inputProvenance = provenance;
