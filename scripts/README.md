@@ -146,6 +146,13 @@ separate untraced runs for timing. Compare automation wall time
 across engines; do not divide their script or CPU measurements as though they
 were the same metric. Mock routing
 disables HTTP caching; warm reload measures persisted state in the same context.
+Boot observations include browser-local transcript/composer readiness, navigation
+and optional paint milestones, completed-by-ready JavaScript/CSS/font requests,
+and connect/history RPC timings. Resource totals exclude requests still in flight
+at readiness; unavailable byte or paint values are omitted. Font loading status
+is sampled when evidence is collected, not at the earlier readiness milestone.
+The synthetic RPC timings include browser scheduling and fixture delivery; they
+do not measure a real Gateway's network latency.
 Mobile transcript-top uses a native scrollport jump because Playwright's mobile
 WebKit driver has no wheel input; it is not a wheel-latency measurement. Tracing
 omits DOM snapshots so snapshot traversal does not dominate attribution.
