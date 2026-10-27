@@ -1,5 +1,5 @@
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { getOAuthProviders, type OAuthCredentials } from "../../llm/oauth.js";
+import { getOAuthApiKey, getOAuthProviders, type OAuthCredentials } from "../../llm/oauth.js";
 import { OAuthProviderConfiguredUnavailableError } from "../../plugins/provider-runtime.errors.js";
 import {
   formatProviderAuthProfileApiKeyWithPlugin,
@@ -8,7 +8,7 @@ import {
 } from "../../plugins/provider-runtime.runtime.js";
 import type { OAuthCredential } from "./types.js";
 
-const OAUTH_PROVIDERS = new Map(getOAuthProviders().map((provider) => [provider.id, provider]));
+const OAUTH_PROVIDER_IDS = new Set(getOAuthProviders().map((provider) => provider.id));
 
 export async function refreshOAuthCredential(
   credential: OAuthCredential,
@@ -27,15 +27,15 @@ export async function refreshOAuthCredential(
     throw new OAuthProviderConfiguredUnavailableError(credential.provider);
   }
 
-  const provider = OAUTH_PROVIDERS.get(credential.provider);
-  if (!provider) {
+  if (!OAUTH_PROVIDER_IDS.has(credential.provider)) {
     return null;
   }
-  try {
-    return await provider.refreshToken(credential);
-  } catch (error) {
-    throw new Error(`Failed to refresh OAuth token for ${credential.provider}`, { cause: error });
-  }
+  const result = await getOAuthApiKey(
+    credential.provider,
+    { [credential.provider]: credential },
+    { forceRefresh: true },
+  );
+  return result?.newCredentials ?? null;
 }
 
 export async function buildOAuthApiKey(
@@ -64,5 +64,5 @@ export async function canRefreshOAuthCredential(
   if (capability.status === "configured-unavailable") {
     throw new OAuthProviderConfiguredUnavailableError(provider);
   }
-  return OAUTH_PROVIDERS.has(provider);
+  return OAUTH_PROVIDER_IDS.has(provider);
 }
