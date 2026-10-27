@@ -6,6 +6,11 @@ import {
   createSubagentRunRecord,
   type SubagentRunRecordOverrides,
 } from "../../subagent-test-fixtures.test-helpers.js";
+import {
+  bindSwarmRunReservation,
+  holdQueuedSwarmRun,
+  reserveSwarmRun,
+} from "../swarm/swarm-scheduler.js";
 import { subagentRuns } from "./subagent-registry-memory.js";
 import {
   buildSubagentRunReadIndexFromRuns,
@@ -15,6 +20,7 @@ import {
   shouldIgnorePostCompletionAnnounceForSessionFromRuns,
 } from "./subagent-registry-queries.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
+import { getSubagentRunRuntimeKey } from "./subagent-run-generation.js";
 
 const STALE_UNENDED_SUBAGENT_RUN_MS = 2 * 60 * 60 * 1_000;
 
@@ -68,6 +74,33 @@ describe("subagent registry query regressions", () => {
     expect(active).toBe(0);
     expect(pending).toBe(2);
     expect(iterations).toBe(0);
+  });
+
+  it.each([50, 150, 500])("repairs active descendants without reading %i siblings", (size) => {
+    const now = Date.UTC(2026, 9, 25);
+    const children = Array.from({ length: size }, (_, i) =>
+      makeRun({ runId: `child-${i}`, createdAt: now, endedAt: now }),
+    );
+    const child = children[0]!;
+    const root = child.requesterSessionKey;
+    let index = buildSubagentRunReadIndexFromRuns({ runs: toRunMap(children), now });
+    expect(index.countActiveDescendantRuns(root)).toBe(0);
+    const reads = vi.spyOn(index.latestRunsByChildSessionKey, "get");
+    try {
+      for (let event = 1; event <= 20; event++) {
+        const changed = {
+          ...child,
+          execution: { ...child.execution, endedAt: event % 2 ? undefined : now },
+        };
+        index = index.patch(toRunMap([changed]), new Map(), now + event);
+        reads.mockClear();
+        expect(index.countActiveDescendantRuns(root)).toBe(event % 2);
+        expect(index.atTime(now + event + 1).countActiveDescendantRuns(root)).toBe(event % 2);
+        expect(reads.mock.calls.length).toBeLessThanOrEqual(1);
+      }
+    } finally {
+      reads.mockRestore();
+    }
   });
 
   it.each([undefined, 0, -1, Number.NaN, Infinity, -Infinity])(
@@ -337,6 +370,7 @@ describe("subagent registry query regressions", () => {
       subagentRuns.set(sibling.runId, sibling);
       const params = { runs: toRunMap([running, ended, sibling]), now };
       const index = buildSubagentRunReadIndexFromRuns(params);
+      expect(index.atTime(now).countActiveDescendantRuns(root)).toBe(1);
       for (const [id, claim] of claims) {
         releaseAgentRunContext(id, claim);
       }
@@ -368,6 +402,53 @@ describe("subagent registry query regressions", () => {
     expect(countActiveRunsForSessionFromRuns(runs, owner, { collect: false })).toBe(0);
   });
 
+  it("retains unended descendant invalidation after queued ownership expires", async () => {
+    const now = Date.UTC(2026, 9, 25);
+    const parent = makeRun({ runId: "queued-parent", endedAt: now - 1 });
+    const child = makeRun({
+      runId: "queued-descendant",
+      requesterSessionKey: parent.childSessionKey,
+      createdAt: now - STALE_UNENDED_SUBAGENT_RUN_MS - 1,
+      collect: true,
+      execution: { status: "queued" },
+    });
+    subagentRuns.set(child.runId, child);
+    const resident = subagentRuns.get(child.runId)!;
+    let index = buildSubagentRunReadIndexFromRuns({ runs: toRunMap([parent, resident]), now });
+    let hold: ReturnType<typeof holdQueuedSwarmRun>;
+    try {
+      expect(index.countActiveDescendantRuns(parent.childSessionKey)).toBe(0);
+      expect(index.hasUnendedRuns(parent.childSessionKey)).toBe(true);
+      expect(index.hasUnendedRuns(child.childSessionKey)).toBe(true);
+      expect(
+        reserveSwarmRun({
+          groupId: child.runId,
+          runId: child.runId,
+          maxConcurrent: 1,
+          activeRunIds: [],
+        }),
+      ).toBe(true);
+      bindSwarmRunReservation(child.runId, getSubagentRunRuntimeKey(resident));
+      hold = holdQueuedSwarmRun(child.runId);
+      expect(index.atTime(now).countActiveDescendantRuns(parent.childSessionKey)).toBe(1);
+      expect(hold?.withdraw()).toBe(true);
+      index = index.atTime(now);
+      expect(index.countActiveDescendantRuns(parent.childSessionKey)).toBe(0);
+      expect(index.hasUnendedRuns(parent.childSessionKey)).toBe(true);
+      index = index.patch(
+        toRunMap([{ ...resident, execution: { status: "terminal", endedAt: now } }]),
+        new Map(),
+        now,
+      );
+      expect(index.hasUnendedRuns(parent.childSessionKey)).toBe(false);
+      expect(index.hasUnendedRuns(child.childSessionKey)).toBe(false);
+    } finally {
+      hold?.withdraw();
+      await hold?.release();
+      subagentRuns.delete(child.runId);
+    }
+  });
+
   it("uses the admission snapshot time for descendants at the stale boundary", () => {
     const capturedAt = Date.now();
     const parent = makeRun({ runId: "ended-parent", endedAt: capturedAt - 1 });
@@ -380,7 +461,11 @@ describe("subagent registry query regressions", () => {
     const runs = toRunMap([parent, child]);
     const index = buildSubagentRunReadIndexFromRuns({ runs, now: capturedAt });
     expect(index.countActiveDescendantRuns(parent.childSessionKey)).toBe(1);
-    expect(index.atTime(capturedAt + 1).countActiveDescendantRuns(parent.childSessionKey)).toBe(0);
+    expect(index.nextChangeAt(parent.childSessionKey)).toBe(capturedAt);
+    const expired = index.atTime(capturedAt + 1);
+    expect(expired.countActiveDescendantRuns(parent.childSessionKey)).toBe(0);
+    expect(expired.nextChangeAt(parent.childSessionKey)).toBe(Infinity);
+    expect(expired.atTime(capturedAt).countActiveDescendantRuns(parent.childSessionKey)).toBe(1);
     const clock = vi
       .spyOn(Date, "now")
       .mockReturnValueOnce(capturedAt)

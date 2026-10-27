@@ -26,7 +26,13 @@ import {
   type SessionActorProfileIdentity,
   type SessionListRowContext,
 } from "./session-utils-contracts.js";
-import { resolveEstimatedSessionCostUsd, type SessionChildLink } from "./session-utils-core.js";
+import {
+  resolveEstimatedSessionCostUsd,
+  resolveSessionChildOwners,
+  shouldPropagateChildActivity,
+  type SessionChildLink,
+} from "./session-utils-core.js";
+import { projectGatewaySessionRunState } from "./session-utils-display.js";
 import { resolveWorkerPlacementModelRuntime } from "./worker-environments/placement-session-runtime.js";
 
 export function buildSessionListRowMetadataContext(params: {
@@ -268,5 +274,25 @@ export function resolveGatewaySessionRuntimeProjection(params: {
     acpMeta,
     agentRuntime,
     runtimeSelectionLocked: resolveGatewaySessionRuntimeSelectionLocked(entry, acpMeta),
+  };
+}
+
+/** One child contribution serves retained aggregates and standalone row presentation. */
+export function projectPreparedSessionChild(
+  child: NonNullable<ReturnType<typeof projectSessionRowChildLinks>>[number],
+  parentKey: string,
+  now: number,
+  rowContext: NonNullable<Parameters<typeof projectGatewaySessionRunState>[0]["rowContext"]>,
+) {
+  const active = projectGatewaySessionRunState({ ...child, now, rowContext }).fields
+    .hasActiveSubagentRun;
+  return {
+    included: resolveSessionChildOwners({
+      ...child,
+      now,
+      subagentRuns: rowContext.subagentRuns,
+      hasActiveRun: active,
+    }).includes(parentKey),
+    active: active && shouldPropagateChildActivity(child.key, child.entry, parentKey),
   };
 }

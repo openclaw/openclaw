@@ -22,6 +22,7 @@ import type { SessionRepositoryWorkspaceRecord } from "../state/session-reposito
 import type { readSessionRowFacts } from "./server-methods/session-placement-read-projection.js";
 import { compareSessionEntryPairs } from "./session-list-order.js";
 import { readSessionListSelectionFacts } from "./session-list-target.js";
+import type { SessionChildActivity } from "./session-row-child-activity.js";
 import { selectStoredSessionLineage } from "./session-store-key.js";
 import { sessionTitleRequests } from "./session-title-state.js";
 import type { SessionListRowContext } from "./session-utils-contracts.js";
@@ -176,6 +177,7 @@ export type Query = {
 };
 export type Inputs = Parameters<typeof rowProjection.readSessionRowInputs>[0];
 export type SnapshotOptions = Pick<Inputs, "now" | "excludedChildKeys"> & {
+  childActivity?: SessionChildActivity;
   includeDerivedTitles?: boolean;
   includeLastMessage?: boolean;
   active?: boolean;
@@ -483,6 +485,7 @@ export function present(
     projectedSubagentActivity: context.projectedSubagentActivity,
     activeModel: active ? (live ?? undefined) : record.fallbackModel,
     excludedChildKeys: options.excludedChildKeys,
+    childActivity: options.childActivity,
   });
   Object.assign(row, options.preparedFacts ?? record.facts?.present());
   row.hasBoard = record.hasBoard;

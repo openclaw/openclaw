@@ -1,14 +1,34 @@
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, expect, it, vi } from "vitest";
+import { createSubagentRunRecord } from "../agents/subagent-test-fixtures.test-helpers.js";
 import { subagentRuns } from "../agents/subagents/registry/subagent-registry-memory.js";
+import { getSubagentRunRuntimeKey } from "../agents/subagents/registry/subagent-run-generation.js";
+import {
+  bindSwarmRunReservation,
+  holdQueuedSwarmRun,
+  reserveSwarmRun,
+} from "../agents/subagents/swarm/swarm-scheduler.js";
 import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
 import { replaceSessionEntrySync } from "../config/sessions/session-accessor.js";
+import {
+  addSessionMember,
+  removeSessionMember,
+} from "../config/sessions/session-sharing-store.native.js";
 import type { InternalSessionEntry } from "../config/sessions/types.js";
+import { registerAgentRunCapacityWait } from "../infra/agent-run-capacity-wait.js";
+import {
+  claimAgentRunContext,
+  getAgentRunLifecycleGeneration,
+  releaseAgentRunContext,
+} from "../infra/agent-run-registry.js";
 import { rpcSourceTesting } from "../sessions/session-lifecycle-admission.test-support.js";
+import { prepareUserProfileCatalog } from "../state/user-profile-list.js";
+import { setUserProfileRole } from "../state/user-profile-writes.worker.js";
 import { ensureProfileForEmail } from "../state/user-profiles.js";
 import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
+import { prepareGatewayRecipientProfile } from "./expected-profile.js";
 import { createGatewayConnectionState } from "./server-connection-state.js";
 import { createActiveRpcSourceForTest } from "./server-methods/rpc-source-fixtures.test-support.js";
 import { createVisibleActiveSessionRunProjector } from "./server-methods/session-active-runs.js";
@@ -19,12 +39,23 @@ import {
 } from "./server-methods/sessions-read-cache.test-support.js";
 import { createLifecycleEventBroadcastHandler } from "./server-session-lifecycle-events.js";
 import { buildGatewaySessionSnapshot } from "./session-event-payload.js";
+import { withPreparedEventRow } from "./session-event-prepared-row.js";
 import { beginSessionPermissionChange } from "./session-permission-change.js";
 import { createSessionRowEventPeer } from "./session-row-event.test-support.js";
-import { prepareSessionRowPublication } from "./session-row-presentation.js";
+import {
+  prepareProjectedSessionPresentation,
+  prepareSessionRowPublication,
+} from "./session-row-presentation.js";
 import { getSessionRowProjection } from "./session-row-projection-access.js";
 import { publishTranscriptFields } from "./session-row-projection-record.js";
-import { rolePolicyConfig } from "./session-sharing.test-utils.js";
+import { createSessionRowProjection } from "./session-row-projection.js";
+import {
+  createTestProjection,
+  holdSubagentExecution,
+  seedRow,
+} from "./session-row-projection.read-fixture.test-support.js";
+import { rolePolicyConfig, sharingPolicyClient } from "./session-sharing.test-utils.js";
+import { listProjectedSessions } from "./session-utils-list.js";
 
 afterEach(() => vi.restoreAllMocks());
 
@@ -398,3 +429,319 @@ it("delivers nested event rows identical to the full list for each viewer and cl
     }
   });
 });
+
+it.each([50, 150, 500])(
+  "bounds ancestor membership reads with %i children and 20 viewers",
+  async (count) => {
+    await withOpenClawTestState({ scenario: "minimal", prepareProfileCatalog: true }, async () => {
+      const owner = ensureProfileForEmail("ancestor-owner@presentation.test");
+      const viewers = Array.from({ length: 20 }, (value, i) =>
+        ensureProfileForEmail(`ancestor-${i}@presentation.test`),
+      );
+      setUserProfileRole(viewers[0]!.id, "invited");
+      using _ = { [Symbol.dispose]: (await prepareUserProfileCatalog()).release };
+      const cfg = rolePolicyConfig();
+      cfg.gateway!.roles!.definitions.invited = {
+        sessions: { others: "invited" },
+        agents: "*",
+        scopes: ["operator.read", "operator.write"],
+      };
+      const clients = viewers.map((viewer) => {
+        const client = sharingPolicyClient({ user: viewer.id });
+        prepareGatewayRecipientProfile(client);
+        return client;
+      });
+      const parent = "agent:main:ancestor-membership";
+      const keys = Array.from({ length: count }, (value, i) => `agent:main:subagent:ancestor-${i}`);
+      const entry = {
+        updatedAt: Date.now(),
+        visibility: "shared" as const,
+        createdActor: { type: "human" as const, source: "profile" as const, id: owner.id },
+      };
+      seedRow(parent, { ...entry, sessionId: parent });
+      for (const key of keys) {
+        seedRow(key, { ...entry, sessionId: key, parentSessionKey: parent });
+      }
+      const scope = { agentId: "main", sessionKey: keys[0]! };
+      for (const sessionKey of [parent, scope.sessionKey]) {
+        addSessionMember(
+          { ...scope, sessionKey },
+          { identityId: viewers[0]!.id, addedBy: owner.id },
+        );
+      }
+      using projection = await createTestProjection({ cfg, modelCatalog: [] });
+      await projection.ensureMaterialized();
+      const memberships = vi.spyOn(projection, "readMembership");
+      const publish = () =>
+        withPreparedEventRow(projection, { agentId: "main", key: keys[1]! }, (read, ancestors) => {
+          expect(ancestors?.map((row) => row.key)).toEqual([parent]);
+          return clients.map(
+            (client) =>
+              prepareProjectedSessionPresentation(read!, client).present(ancestors![0]!)
+                ?.childSessions,
+          );
+        });
+      await publish();
+      for (let event = 0; event < 3; event++) {
+        memberships.mockClear();
+        await publish();
+        expect(memberships.mock.calls.length).toBeLessThanOrEqual(40);
+      }
+      const visible = () =>
+        clients.map(
+          (client) =>
+            prepareProjectedSessionPresentation(projection, client).snapshot({
+              agentId: "main",
+              key: parent,
+            }).row?.childSessions,
+        );
+      expect(visible()[0]).toEqual([scope.sessionKey]);
+      expect(visible()[1]).toHaveLength(count);
+      const publishedMemberRow = () =>
+        prepareSessionRowPublication(
+          projection,
+          Date.now(),
+        )(clients[0]!)
+          .getPresentation()
+          .snapshot({ agentId: "main", key: parent }).row;
+      const originalMemberRow = publishedMemberRow();
+      removeSessionMember(scope, viewers[0]!.id);
+      await projection.ensureMaterialized();
+      memberships.mockClear();
+      await publish();
+      expect(memberships.mock.calls.length).toBeLessThanOrEqual(80);
+      expect(visible()[0]).toBeUndefined();
+      expect(visible()[1]).toHaveLength(count);
+      addSessionMember(scope, { identityId: viewers[0]!.id, addedBy: owner.id });
+      await projection.ensureMaterialized();
+      await publish();
+      expect(visible()[0]).toEqual([scope.sessionKey]);
+      expect(publishedMemberRow()).toBe(originalMemberRow);
+      const other = { ...scope, sessionKey: keys[1]! };
+      addSessionMember(other, { identityId: viewers[0]!.id, addedBy: owner.id });
+      await projection.ensureMaterialized();
+      publishedMemberRow();
+      removeSessionMember(other, viewers[0]!.id);
+      await projection.ensureMaterialized();
+      expect(publishedMemberRow()).toBe(originalMemberRow);
+    });
+  },
+);
+
+it.each(["running", "queued", "capacity-wait"] as const)(
+  "projects %s follow-up activity through completed subagent lineage outside the selected list page",
+  async (state) => {
+    using _ = vi.spyOn(Date, "now").mockReturnValue(1_800_000_000_000);
+    await withOpenClawTestState({ scenario: "minimal", prepareProfileCatalog: true }, async () => {
+      const cfg = rolePolicyConfig();
+      const parent = "agent:main:parent";
+      const child = "agent:main:subagent:child";
+      const grandchild = "agent:main:subagent:grandchild";
+      const movedParent = "agent:main:moved-parent";
+      const endedAt = Date.now() - 3_600_000;
+      const recordCompleted = (
+        runId: string,
+        childSessionKey: string,
+        requesterSessionKey: string,
+      ) => {
+        const entry = createSubagentRunRecord({
+          runId,
+          childSessionKey,
+          requesterSessionKey,
+          requesterDisplayKey: requesterSessionKey,
+          createdAt: endedAt - 1_000,
+          startedAt: endedAt - 1_000,
+          endedAt,
+          outcome: { status: "ok" },
+          ...(runId.startsWith("retained-") ? { delivery: { status: "not_required" } } : {}),
+        });
+        subagentRuns.set(runId, entry);
+        subagentRuns.commitOwnership(entry);
+        return runId;
+      };
+      for (const [key, owner] of [
+        [parent],
+        [movedParent],
+        [child, parent],
+        [grandchild, child],
+      ] as const) {
+        seedRow(key, {
+          sessionId: key,
+          updatedAt: endedAt,
+          label: key === parent ? "Selected parent" : "Hidden child",
+          status: "done",
+          endedAt,
+          ...(owner ? { spawnedBy: owner } : {}),
+        });
+        if (owner) {
+          recordCompleted(`original:${key}`, key, owner);
+        }
+      }
+      const retainedRunIds: string[] = [];
+      if (state === "running") {
+        for (let index = 0; index < 2_048; index++) {
+          retainedRunIds.push(
+            recordCompleted(
+              `retained-history-${index}`,
+              `agent:main:subagent:retained-${index}`,
+              "agent:main:unrelated-parent",
+            ),
+          );
+        }
+      }
+      const projection = await createSessionRowProjection({ cfg });
+      const connection = createGatewayConnectionState({
+        scheduler: createTestGatewayScheduler(),
+        bootId: "follow-up",
+        cfg,
+      });
+      const runId = "follow-up";
+      const claim = claimAgentRunContext(
+        runId,
+        {
+          agentId: "main",
+          sessionKey: grandchild,
+          sessionId: grandchild,
+          ...(state === "capacity-wait" ? {} : { projectSessionActive: true }),
+        },
+        { trackOwner: true, ownsContext: true },
+      );
+      const releaseWait =
+        state === "running"
+          ? undefined
+          : registerAgentRunCapacityWait(runId, getAgentRunLifecycleGeneration());
+      try {
+        const list = () =>
+          listProjectedSessions({
+            projection,
+            opts: { search: "Selected parent", limit: 1 },
+          });
+        const active = await list();
+        expect(active.sessions).toHaveLength(1);
+        expect(active.sessions[0]).toMatchObject({
+          key: parent,
+          hasActiveSubagentRun: true,
+          childSessions: [child],
+        });
+        if (retainedRunIds.length) {
+          const history = projection.state.rowContext.subagentRuns.latestRunsByChildSessionKey;
+          const iterate = history[Symbol.iterator].bind(history);
+          let visited = 0;
+          const historyIterator = vi
+            .spyOn(history, Symbol.iterator)
+            .mockImplementation(function* () {
+              for (const entry of iterate()) {
+                visited++;
+                yield entry;
+              }
+              return undefined;
+            });
+          seedRow(movedParent, {
+            sessionId: movedParent,
+            updatedAt: endedAt + 1,
+            label: "Unrelated update",
+          });
+          expect((await list()).sessions[0]?.hasActiveSubagentRun).toBe(true);
+          expect(visited).toBeLessThan(16);
+          historyIterator.mockRestore();
+        }
+        const presentation = prepareProjectedSessionPresentation(
+          projection,
+          undefined,
+          Date.now(),
+          createVisibleActiveSessionRunProjector(projection.state.rowContext.projectedAgentRuns),
+        );
+        expect(presentation.snapshot({ key: child, agentId: "main" }).row).toMatchObject({
+          hasActiveSubagentRun: true,
+          childSessions: [grandchild],
+        });
+        expect(presentation.snapshot({ key: grandchild, agentId: "main" }).row).toMatchObject({
+          hasActiveSubagentRun: true,
+          subagentRunState: "historical",
+        });
+        if (state === "queued") {
+          releaseWait?.();
+          releaseAgentRunContext(runId, claim);
+          const queued = createSubagentRunRecord({
+            runId: "reserved-grandchild",
+            generation: 2,
+            childSessionKey: grandchild,
+            requesterSessionKey: child,
+            collect: true,
+            createdAt: Date.now() - 3 * 3_600_000,
+            execution: { status: "queued" },
+          });
+          subagentRuns.set(queued.runId, queued);
+          subagentRuns.commitOwnership(queued);
+          reserveSwarmRun({
+            runId: queued.runId,
+            groupId: "lineage",
+            maxConcurrent: 1,
+            activeRunIds: [],
+          });
+          const held = holdQueuedSwarmRun(queued.runId)!;
+          try {
+            await projection.ensureMaterialized();
+            const activeParent = () =>
+              prepareProjectedSessionPresentation(projection).snapshot({
+                key: parent,
+                agentId: "main",
+              }).row?.hasActiveSubagentRun;
+            expect(activeParent()).not.toBe(true);
+            bindSwarmRunReservation(queued.runId, getSubagentRunRuntimeKey(queued));
+            expect(activeParent()).toBe(true);
+            expect(held.withdraw()).toBe(true);
+            expect(activeParent()).not.toBe(true);
+          } finally {
+            held.withdraw();
+            await held.release();
+            subagentRuns.delete(queued.runId);
+          }
+        }
+        const originalChild = subagentRuns.get(`original:${child}`)!;
+        const movedChild = {
+          ...originalChild,
+          generation: 2,
+          requesterSessionKey: movedParent,
+          controllerSessionKey: movedParent,
+          execution: { status: "running" as const, startedAt: Date.now() },
+        };
+        using movedExecution = holdSubagentExecution(movedChild.runId, child);
+        subagentRuns.set(movedChild.runId, movedChild);
+        subagentRuns.commitOwnership(movedChild);
+        expect((await list()).sessions[0]?.hasActiveSubagentRun).not.toBe(true);
+        expect(projection.snapshot({ key: movedParent, agentId: "main" }).row).toMatchObject({
+          hasActiveSubagentRun: true,
+          childSessions: [child],
+        });
+        releaseWait?.();
+        releaseAgentRunContext(runId, claim);
+        movedExecution[Symbol.dispose]();
+        const finishedChild = {
+          ...movedChild,
+          execution: { ...movedChild.execution, status: "terminal" as const, endedAt: Date.now() },
+        };
+        subagentRuns.set(finishedChild.runId, finishedChild);
+        subagentRuns.commitOwnership(finishedChild);
+        const stopped = await list();
+        expect(stopped.sessions[0]?.hasActiveSubagentRun).not.toBe(true);
+        expect(stopped.sessions[0]?.childSessions).toEqual([child]);
+        const movedRow = projection.snapshot({ key: movedParent, agentId: "main" }).row;
+        expect(movedRow?.hasActiveSubagentRun).not.toBe(true);
+        expect(movedRow?.childSessions).toBeUndefined();
+        expect(subagentRuns.get(`original:${grandchild}`)?.execution.endedAt).toBe(endedAt);
+      } finally {
+        releaseWait?.();
+        releaseAgentRunContext(runId, claim);
+        projection.dispose();
+        await connection.mentionInbox.dispose();
+        for (const key of [child, grandchild]) {
+          subagentRuns.delete(`original:${key}`);
+        }
+        for (const retainedRunId of retainedRunIds) {
+          subagentRuns.delete(retainedRunId);
+        }
+      }
+    });
+  },
+);
