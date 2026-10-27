@@ -58,8 +58,8 @@ function createFixture(method: (typeof methods)[number]) {
       return socket;
     },
     createRequestId: () => "startup-request",
-    createRequestTimeoutError: (method, timeoutMs, requestSent) =>
-      new GatewayClientRequestTimeoutError({ method, timeoutMs, requestSent }),
+    createRequestTimeoutError: (requestMethod, timeoutMs, requestSent) =>
+      new GatewayClientRequestTimeoutError({ method: requestMethod, timeoutMs, requestSent }),
     buildConnectPlan: () => ({}),
     buildConnectParams: (plan) => plan,
     resolveClose: () => ({ retry: false, notify: false }),
