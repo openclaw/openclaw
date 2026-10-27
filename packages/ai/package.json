@@ -131,16 +131,16 @@
     "@anthropic-ai/sdk": "0.135.0",
     "@google/genai": "2.30.0",
     "@opentelemetry/semantic-conventions": "1.43.0",
-    "openai": "7.35.0",
+    "openai": "7.39.0",
     "partial-json": "0.1.7",
     "proxy-from-env": "2.1.0",
-    "typebox": "1.4.1",
+    "typebox": "1.4.2",
     "zod": "4.6.7",
     "zod-to-json-schema": "3.25.2"
   },
   "peerDependencies": {
     "@opentelemetry/api": "^1.9.0",
-    "@opentelemetry/exporter-trace-otlp-http": "^0.220.0",
+    "@opentelemetry/exporter-trace-otlp-http": "^0.220.0 || ^0.223.0",
     "@opentelemetry/resources": "^2.9.0",
     "@opentelemetry/sdk-trace-base": "^2.9.0"
   },

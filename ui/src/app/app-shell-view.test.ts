@@ -571,7 +571,11 @@ it("keeps status in navigation across web layouts without replacing the content 
     publish({ phase, offlineStable: false });
     refresh();
     await owner.navigationSidebar.updateComplete;
-    expect(footer(), phase).toBeNull();
+    if (phase === "connected") {
+      expect(footer()?.textContent).toBe("Connected");
+    } else {
+      expect(footer(), phase).toBeNull();
+    }
   }
   publish({ phase: "offline", offlineStable: true });
   for (const layout of [
@@ -627,7 +631,7 @@ it("keeps connection retry in the minimal footer when the Settings renderer is u
   expect(connect).toHaveBeenCalledOnce();
 });
 
-it("briefly reveals collapsed status transitions and a recovery footer without extending their timers", async () => {
+it("briefly reveals collapsed status transitions without removing the stable status footer", async () => {
   vi.stubGlobal("innerWidth", 1280);
   const { owner, runtime, gateway, query, settle } = await mountShell();
   await vi.dynamicImportSettled();
@@ -641,7 +645,7 @@ it("briefly reveals collapsed status transitions and a recovery footer without e
   const footer = () => query(".sidebar-shell__footer .gateway-status");
   await settle();
   expect(flag()?.hasAttribute("data-open")).toBe(false);
-  expect(footer()).toBeNull();
+  expect(footer()?.textContent).toBe("Connected");
   publish({ ...connected, phase: "offline", offlineStable: true });
   await settle();
   expect(flag()?.hasAttribute("data-open")).toBe(true);
@@ -667,7 +671,7 @@ it("briefly reveals collapsed status transitions and a recovery footer without e
   expect(footer()?.textContent).toBe("Connected");
   vi.advanceTimersByTime(2_000);
   await settle();
-  expect(footer()).toBeNull();
+  expect(footer()?.textContent).toBe("Connected");
   expect(flag()?.hasAttribute("data-open")).toBe(true);
   vi.advanceTimersByTime(2_000);
   await settle();

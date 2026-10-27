@@ -3,7 +3,11 @@ import path from "node:path";
 import { expect, it } from "vitest";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import { createControlUiSessionRow } from "../test-helpers/control-ui-session-fixtures.ts";
-import { createChatFlowE2eSuite, installMockGateway } from "./chat-flow.test-support.ts";
+import {
+  captureUiProofEnabled,
+  createChatFlowE2eSuite,
+  installMockGateway,
+} from "./chat-flow.test-support.ts";
 import { createControlUiE2eContextOptions } from "./control-ui-e2e-suite.test-support.ts";
 
 const suite = createChatFlowE2eSuite();
@@ -59,7 +63,9 @@ suite.define(() => {
         message: { role: "assistant", content: fullText },
       });
       await expect.poll(() => reply.textContent()).toContain(keyword);
-      await page.screenshot({ path: path.join(artifactDir, "recovered.png") });
+      if (captureUiProofEnabled) {
+        await page.screenshot({ path: path.join(artifactDir, "recovered.png") });
+      }
 
       const composer = pane.locator(".agent-chat__composer-combobox textarea");
       await composer.focus();
@@ -72,14 +78,18 @@ suite.define(() => {
       // The unrelated prompt leaving the DOM proves the filter has committed.
       await expect.poll(() => prompt.count()).toBe(0);
       const filteredReplyTexts = await reply.allTextContents();
-      await page.screenshot({ path: path.join(artifactDir, "search.png") });
+      if (captureUiProofEnabled) {
+        await page.screenshot({ path: path.join(artifactDir, "search.png") });
+      }
 
       await pane.getByRole("button", { name: "Close search", exact: true }).click();
       await expect.poll(() => reply.textContent()).toContain(keyword);
       expect(await search.count()).toBe(0);
       expect(await composer.evaluate((element) => document.activeElement === element)).toBe(true);
       expect(await gateway.getRequests("chat.message.get")).toHaveLength(1);
-      await page.screenshot({ path: path.join(artifactDir, "cleared.png") });
+      if (captureUiProofEnabled) {
+        await page.screenshot({ path: path.join(artifactDir, "cleared.png") });
+      }
       await writeFile(
         path.join(artifactDir, "result.json"),
         JSON.stringify(

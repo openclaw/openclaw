@@ -3,6 +3,7 @@ import path from "node:path";
 import { collectNestedErrorCandidates } from "@openclaw/normalization-core/error-coercion";
 import { Command } from "commander";
 import { afterAll, afterEach, expect, it, onTestFinished, vi } from "vitest";
+import { awaitGateBeforeSettlement } from "../../test/helpers/promise.js";
 import { registerNodesCli } from "../cli/nodes-cli/register.js";
 import { CliPluginInvocationResources } from "../cli/plugin-invocation-resources.js";
 import { configureProgramHelp } from "../cli/program/help.js";
@@ -102,13 +103,9 @@ it("skips aliases without suppressing unrelated CLI registrations", () =>
     expect(fs.existsSync(registered)).toBe(false);
   }));
 
-it.each([
-  { mode: "eager" as const, primary: undefined },
-  { mode: "lazy" as const, primary: "memory" },
-  { mode: "lazy" as const, primary: undefined },
-])("applies machine-output metadata in $mode registration", ({ mode, primary }) =>
+it("applies machine-output metadata to lazy placeholders", () =>
   withCommandFixture(async ({ program }) => {
-    await registerCli(program, { mode, primary });
+    await registerCli(program, { mode: "lazy" });
     expect(
       isCommandJsonOutputMode(child(program, "memory"), [
         "node",
@@ -117,8 +114,7 @@ it.each([
         "--machine",
       ]),
     ).toBe(true);
-  }),
-);
+  }));
 
 it("eagerly registers roots missing from lazy descriptors", () =>
   withCommandFixture(
@@ -126,6 +122,14 @@ it("eagerly registers roots missing from lazy descriptors", () =>
       await registerCli(program, { mode: "lazy" });
       expect(commandNames(program)).toEqual(["memory", "memory-admin", "other"]);
       expect(fs.readFileSync(registered, "utf8")).toBe("registered");
+      expect(
+        isCommandJsonOutputMode(child(program, "memory"), [
+          "node",
+          "openclaw",
+          "memory",
+          "--machine",
+        ]),
+      ).toBe(true);
     },
     ["memory-admin"],
   ));
@@ -688,12 +692,11 @@ it.each([
       () => markReleased({ ok: true as const }),
       (error: unknown) => markReleased({ ok: false as const, error }),
     );
-    await Promise.race([
+    await awaitGateBeforeSettlement(
       removalStarted.promise,
-      outcome.then(() => {
-        throw new Error("CLI invocation released before metadata disposal started");
-      }),
-    ]);
+      outcome,
+      "CLI invocation released before metadata disposal started",
+    );
     expect([released, disposals, siblingDisposals]).toEqual([false, 1, 0]);
     finishRemoval.resolve();
     const result = await outcome;

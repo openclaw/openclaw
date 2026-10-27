@@ -1163,6 +1163,23 @@ no diagnostic flag. Durations include awaited work: `admission.revalidate` is
 nested inside `admission.work`, so their values must not be added together or
 treated as SQLite execution time.
 
+Admission subphases separate operator retention (`operator`), lifecycle preparation
+through the session writer barrier (`lifecycle_prepare`), the initial session read
+(`session_read`), ACP metadata (`acp_metadata`), placement preparation and refresh
+(`placement_prepare`, `placement_refresh`), and current session/retry validation
+(`current_session`). Lifecycle preparation includes agent admission checks and
+queue waits; it is not a pure SQLite lock timer. These fields use the
+`detail.admission.` prefix. Sends without restart-safe recovery skip the unused
+transcript lifecycle-header read; current session and caller checks still run.
+
+After acknowledgement, `runAdmission` also covers steering into an active turn.
+Its `detail.run_admission.steer_*` subphases separate authority, continuation and
+delivery preparation, ordered admission (`steer_admit`), waiting for the backend
+outcome (`steer_settlement`), and finalization (`steer_finalize`). `steer_prepare`
+encloses preparation through ordered admission. A long `stage=steer` interval
+can therefore be an intentional wait behind older input or for its transcript
+commit, rather than slow startup of a new turn. Nested totals overlap.
+
 When a reply spends a long time preparing, inspect the normal Gateway logs:
 
 ```bash

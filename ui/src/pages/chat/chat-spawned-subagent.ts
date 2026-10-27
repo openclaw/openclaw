@@ -19,11 +19,6 @@ export type SubagentRoster = {
   subagentSessionsHydrated?: boolean;
   /** A newly named child is still awaiting a covering read before the wait can count it. */
   subagentSessionsPending?: boolean;
-  /**
-   * True once the pane's own child query answered at least once. Seeded rows
-   * take ancestry from the broad list, which outlives the child-link retention.
-   */
-  subagentSessionsRead?: boolean;
 };
 
 /** What a launch row needs to show its subagent's session and open it. */

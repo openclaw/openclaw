@@ -639,10 +639,10 @@ Windows host-wide legacy capture cleanup remains report-only.
   same installed updater repeats them. Install the target once with the
   [manual package-manager procedure](/install/updating/update-methods#alternative-manual-npm-pnpm-or-bun),
   run `openclaw doctor --fix`, and restart the Gateway. This manual install
-  bypasses the installed updater once. No published release contains both fixes
-  yet: `openclaw update` runs through a repaired updater only after installing a
-  release later than 2026.9.4 that contains [#145282](https://github.com/openclaw/openclaw/pull/145282)
-  and [#144758](https://github.com/openclaw/openclaw/pull/144758).
+  bypasses the installed updater once. Releases 2026.9.5 and later contain both
+  fixes ([#145282](https://github.com/openclaw/openclaw/pull/145282) and
+  [#144758](https://github.com/openclaw/openclaw/pull/144758)), so later
+  `openclaw update` runs use the repaired updater.
   Other causes show the package manager's error:
   `EACCES`, `EPERM`, or a prefix mismatch mean the global prefix is custom or
   not writable by the invoking user; fix ownership and permissions, then retry.

@@ -125,6 +125,88 @@ it.each([
   }
 });
 
+it("changes the footprint revision when the same message ID receives new content", () => {
+  const before = indexFor(projectHistory([finalAnswer("answer", 2, { content: "Before" })]))
+    .rows[0]!;
+  const replay = indexFor(projectHistory([finalAnswer("answer", 2, { content: "Before" })]))
+    .rows[0]!;
+  const after = indexFor(projectHistory([finalAnswer("answer", 2, { content: "After" })])).rows[0]!;
+  expect(after.key).toBe(before.key);
+  expect(after.kind === "item" && after.revision).not.toBe(
+    before.kind === "item" && before.revision,
+  );
+  expect(replay.kind === "item" && replay.revision).toBe(before.kind === "item" && before.revision);
+});
+
+it("invalidates only a changed reaction row while retaining other cached footprints", () => {
+  const chain = projectHistory([
+    finalAnswer("answer", 2),
+    makeMessage("neighbor", 3, { role: "user" }),
+  ]);
+  const expanded = new Map<string, boolean>();
+  const summaries = [{ emoji: "👍", count: 1, identities: [{ id: "peer" }] }];
+  const project = (reactions: Map<string, typeof summaries>) =>
+    projectTranscriptIndex(chain, expanded, { ...labels, messageReactions: reactions }).rows.filter(
+      (row) => row.kind === "item",
+    );
+  const before = project(new Map());
+  const reacted = project(new Map([["answer", summaries]]));
+  expect(reacted.map((row) => row.key)).toEqual(before.map((row) => row.key));
+  expect(reacted[0]!.revision).not.toBe(before[0]!.revision);
+  expect(reacted[1]!.revision).toBe(before[1]!.revision);
+  const replay = project(
+    new Map([
+      ["answer", summaries],
+      ["outside-window", summaries],
+    ]),
+  );
+  expect(replay.map((row) => row.revision)).toEqual(reacted.map((row) => row.revision));
+  expect(project(new Map([["answer", []]])).map((row) => row.revision)).toEqual(
+    before.map((row) => row.revision),
+  );
+});
+
+it("leaves an attached live continuation out of reusable row geometry", () => {
+  const items = chatItems({
+    messages: [
+      { role: "assistant", content: "Answer", timestamp: 10, __openclaw: { id: "answer", seq: 1 } },
+    ],
+  });
+  const settled = chainFor(items);
+  const active = chainFor([...items, { kind: "reading-indicator", key: "waiting", startedAt: 32 }]);
+  expect(active.continuations.size).toBe(1);
+  const before = indexFor(settled).rows[0]!;
+  const during = indexFor(active).rows[0]!;
+  expect(during.key).toBe(before.key);
+  expect(before.kind === "item" && before.revision).toEqual(expect.any(String));
+  expect(during.kind === "item" && during.revision).toBeUndefined();
+});
+
+it("distinguishes terminal frame geometry when a hidden terminal changes its outcome", () => {
+  const messages = [
+    history[0],
+    makeMessage("call", 2, {
+      content: [{ type: "toolCall", id: "read", name: "read", arguments: {} }],
+      stopReason: "toolUse",
+    }),
+    makeTool("read", 3, "run-1", 30),
+  ];
+  const stopped = [...messages, makeMessage("terminal", 4, { content: [], stopReason: "stop" })];
+  const before = chainFor(chatItems({ messages }), { messages });
+  const after = chainFor(chatItems({ messages: stopped }), { messages: stopped });
+  const first = onlyFrame(before);
+  const last = onlyFrame(after);
+  expect(first.outcome.kind).toBe("interrupted");
+  expect(last.outcome.kind).toBe("completed");
+  expect(last.key).toBe(first.key);
+  expect(messagesIn([last])).toEqual(messagesIn([first]));
+  const beforeRow = indexFor(before).rows.find((row) => row.key === first.key)!;
+  const afterRow = indexFor(after).rows.find((row) => row.key === last.key)!;
+  expect(afterRow.kind === "item" && afterRow.revision).not.toBe(
+    beforeRow.kind === "item" && beforeRow.revision,
+  );
+});
+
 describe("completed reply frame ownership", () => {
   function replyHistory(workRunIds: (string | undefined)[] = ["run-1"], prompt = true): unknown[] {
     return [
@@ -506,6 +588,11 @@ describe("subagent handoff", () => {
       : waiting;
     const chain = projectHistory(messages, options);
     const frame = onlyFrame(chain);
+    const indexed = indexFor(chain).rows.find((row) => row.key === frame.key);
+    expect(indexed?.kind).toBe("item");
+    expect(indexed?.kind === "item" && indexed.revision).toEqual(
+      statusShape ? undefined : expect.any(String),
+    );
     expect(frame).toMatchObject({
       key: waitingKey,
       ...(runId ? { runId } : {}),

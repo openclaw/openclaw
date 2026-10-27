@@ -182,6 +182,7 @@ export async function spawnSubagentDirect(
       modelPlan: plan,
       launchAuthorization,
       resolvedModelMetadata,
+      acceptedModelFields,
     } = childPlan.resolved;
     let { childSessionOrigin } = childPlan.resolved;
     const sessionError = (error: string): SpawnSubagentResult => ({
@@ -690,8 +691,7 @@ export async function spawnSubagentDirect(
       note:
         [envelope.acceptedNote, preparedSpawnContext.forkFallbackNote].filter(Boolean).join(" ") ||
         undefined,
-      ...resolvedModelMetadata,
-      modelApplied: plan.modelApplied || undefined,
+      ...acceptedModelFields,
       attachments: materializedAttachments?.receipt,
     };
   } finally {
