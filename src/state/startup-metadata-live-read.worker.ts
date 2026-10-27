@@ -1,7 +1,7 @@
 import { configHealthReadOperations } from "../config/io.health-state.kernel.js";
 import { StateDatabaseAdmissionPendingError } from "../infra/gateway-state-owner-record.js";
 import { assertStateDatabaseAccessAllowed } from "../infra/gateway-state-owner.js";
-import { resolveImmutableSqliteFileUri } from "../infra/node-sqlite.js";
+import { openNodeSqliteDatabase, resolveImmutableSqliteFileUri } from "../infra/node-sqlite.js";
 import type { EngineConnection } from "../infra/sql-connection.js";
 import { readSqliteDatabaseCleanClose } from "../infra/sqlite-database-admission.js";
 import { runWithSqliteCleanup } from "../infra/sqlite-lifecycle-errors.js";
@@ -13,7 +13,7 @@ import {
   withStateDatabaseSchemaMaintenance,
 } from "../infra/state-database-maintenance.js";
 import { pluginMetadataReadOperations } from "../plugins/plugin-metadata-state.read.worker.js";
-import { openOpenClawStateReadConnection } from "./openclaw-state-db-read-connection.js";
+import { OPENCLAW_SQLITE_BUSY_TIMEOUT_MS } from "./openclaw-state-db-contract.js";
 import {
   admitStateSchemaFacts,
   assertSupportedStateSchemaVersion,
@@ -69,18 +69,18 @@ export const startupMetadataReadOperations = {
           if (!readSqliteDatabaseCleanClose(context.path)) {
             return undefined;
           }
-          const connection = openOpenClawStateReadConnection(
-            context.path,
-            resolveImmutableSqliteFileUri(context.path),
-          );
+          const database = openNodeSqliteDatabase(resolveImmutableSqliteFileUri(context.path), {
+            readOnly: true,
+            timeout: OPENCLAW_SQLITE_BUSY_TIMEOUT_MS,
+          });
           return runWithSqliteCleanup(
             {
               release: () => {
-                connection.close();
+                database.close();
               },
             },
             "Sealed startup metadata inspection",
-            () => ({ value: inspect(connection.database.db) }),
+            () => ({ value: inspect(database) }),
           );
         },
       );
