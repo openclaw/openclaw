@@ -244,6 +244,17 @@ export async function checkpointLocalWorkspacePath(params: {
   const worktree = await readLiveRegistryWorktreeByPath(context, params.cwd);
   params.assertCurrent?.();
   if (worktree) {
+    const projection = await executeExistingOpenClawStateRead(
+      { path: context.admission.databasePath, env },
+      { type: "localWorkspace.exists", input: { id: worktree.id } },
+      { context, current: true, live: true },
+    );
+    context.admission.assertCurrent();
+    params.assertCurrent?.();
+    // An absent projection has no checkpoint; custody callbacks still own absent rows.
+    if (projection?.exists === false) {
+      return;
+    }
     const checkpoint = { worktree, env, assertCurrent: params.assertCurrent };
     await joinLocalWorkspaceCheckpoint(checkpoint, undefined, (beginCapture) =>
       settleLocalWorkspace(checkpoint, async () => {}, beginCapture),

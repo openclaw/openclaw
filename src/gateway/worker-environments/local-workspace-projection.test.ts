@@ -36,6 +36,8 @@ import {
 import {
   observeAcknowledgedUpdate,
   prepareLocalWorkspaceArchiveFixture,
+  proveAbsentProjectionCheckpoints,
+  proveHostAdmittedBuildInputs,
   proveInterruptedWorkspaceCheckpoint,
   proveIncrementalWorkspaceEdits,
   proveSandboxMutationCheckpoints,
@@ -163,6 +165,9 @@ afterEach(async () => {
 
 it("checkpoints sandbox file writes once", () => proveSandboxMutationCheckpoints(owner));
 
+it("avoids lease requests for absent projections and checkpoints a later projection", () =>
+  proveAbsentProjectionCheckpoints(owner));
+
 it("joins waiting sandbox checkpoints across handles without losing later writes", ({ signal }) =>
   proveSharedSandboxCheckpoints(owner, signal));
 
@@ -191,54 +196,8 @@ it.each([1, 2] as const)(
   },
 );
 
-it("preserves host-admitted build-root inputs while excluding guest cache churn", async () => {
-  const inputs = [
-    ".artifacts/build-all-cache/compile/outputs/dist/authored.txt",
-    ".artifacts/build-cache-inputs/authored.json",
-  ];
-  await writeText(canonical, ".gitignore", ".env.local\n.artifacts/\n");
-  for (const entryPath of inputs) {
-    await fs.mkdir(path.dirname(path.join(canonical, entryPath)), { recursive: true });
-    await writeText(canonical, entryPath, "original input\n");
-  }
-  await git(canonical, "add", "--force", "--", ...inputs);
-  const projection = await prepare();
-  for (const entryPath of inputs) {
-    await expectText(projection, entryPath, "original input\n");
-    await writeText(projection, entryPath, "guest input edit\n");
-  }
-  const cache = ".artifacts/build-all-cache/other/outputs/generated.js";
-  await fs.mkdir(path.dirname(path.join(projection, cache)), { recursive: true });
-  await writeText(projection, cache, "disposable cache\n");
-  // The guest's independent index cannot turn generated outputs into host-admitted inputs.
-  await git(projection, "add", "--force", "--", cache);
-  if (process.platform !== "win32" && process.getuid?.() !== 0) {
-    await fs.chmod(path.join(projection, cache), 0);
-  }
-  await synchronize();
-  await closeOpenClawStateDatabaseAsync();
-  await prepare();
-  for (const entryPath of inputs) {
-    await expectText(canonical, entryPath, "guest input edit\n");
-    await expectText(projection, entryPath, "guest input edit\n");
-  }
-  await expectMissing(canonical, cache);
-  await writeText(canonical, inputs[0]!, "human input edit\n");
-  await writeText(projection, inputs[0]!, "conflicting guest edit\n");
-  await expect(synchronize()).rejects.toThrow("conflict");
-  await expectText(canonical, inputs[0]!, "human input edit\n");
-  await writeText(canonical, inputs[0]!, "guest input edit\n");
-  await settleProjection();
-  await expectText(canonical, inputs[0]!, "conflicting guest edit\n");
-  if (process.platform !== "win32" && process.getuid?.() !== 0) {
-    await fs.chmod(path.join(projection, inputs[1]!), 0);
-    try {
-      await expect(synchronize()).rejects.toThrow("EACCES");
-    } finally {
-      await fs.chmod(path.join(projection, inputs[1]!), 0o644);
-    }
-  }
-});
+it("preserves host-admitted build-root inputs while excluding guest cache churn", () =>
+  proveHostAdmittedBuildInputs(owner));
 
 it("expires an old runtime-file baseline while preserving unaccepted source", async () => {
   const { proveGeneratedWorkspaceExpiry } =
