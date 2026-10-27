@@ -57,6 +57,7 @@ function completedStream(model: Parameters<StreamFn>[0]) {
     type: "done",
     reason: "stop",
     message: makeAgentAssistantMessage({
+      content: [],
       api: model.api,
       provider: model.provider,
       model: model.id,
