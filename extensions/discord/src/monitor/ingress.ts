@@ -1,5 +1,5 @@
 // Discord plugin module owns raw gateway-message durable ingress and replay draining.
-import { GatewayDispatchEvents, Routes, type APIMessage } from "discord-api-types/v10";
+import { GatewayDispatchEvents, type APIMessage } from "discord-api-types/v10";
 import { prepareChannelIngressEvent } from "openclaw/plugin-sdk/channel-ingress-runtime";
 import {
   createChannelIngressError,
@@ -104,6 +104,7 @@ export function createDiscordIngressMonitor(params: {
   client: Client;
   runtime: Pick<RuntimeEnv, "error" | "log">;
   dispatch: DiscordIngressDispatch;
+  onDeadLetter?: (event: DiscordMessageEvent, signal: AbortSignal) => Promise<void>;
   queue?: ChannelIngressQueue<DiscordIngressPayload>;
 }): DiscordIngressMonitor {
   const queue =
@@ -180,15 +181,16 @@ export function createDiscordIngressMonitor(params: {
         }
         return null;
       },
-      onDeadLetter: async (claim) => {
+      onDeadLetter: async (claim, _failure, signal) => {
         const { rawMessage } = decodeDiscordIngressPayload(claim.payload, claim.id).body;
-        await params.client.rest.post(Routes.channelMessages(rawMessage.channel_id), {
-          body: {
-            content: "⚠️ Couldn't process this message after repeated failures. Please try again.",
-            message_reference: { message_id: rawMessage.id, fail_if_not_exists: false },
-            allowed_mentions: { parse: [], replied_user: false },
-          },
-        });
+        await params.onDeadLetter?.(
+          mapGatewayDispatchData(
+            params.client,
+            GatewayDispatchEvents.MessageCreate,
+            rawMessage,
+          ) as DiscordMessageEvent,
+          signal,
+        );
       },
       onLog: (message) => params.runtime.error?.(danger(`discord ingress: ${message}`)),
     },

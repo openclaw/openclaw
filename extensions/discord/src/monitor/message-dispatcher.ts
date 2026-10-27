@@ -1,3 +1,4 @@
+import { Routes } from "discord-api-types/v10";
 import {
   createChannelInboundDebouncer,
   resolveInboundDebounceMs,
@@ -49,6 +50,11 @@ type DiscordMessageDispatcher = (
 
 type DiscordMessageDispatcherWithLifecycle = DiscordMessageDispatcher & {
   deactivate: () => Promise<void>;
+  notifyDeadLetter: (
+    data: DiscordMessageEvent,
+    client: Client,
+    signal: AbortSignal,
+  ) => Promise<void>;
 };
 
 export function createDiscordMessageDispatcher(
@@ -107,6 +113,30 @@ export function createDiscordMessageDispatcher(
   }
   const dispatcherShutdown = new AbortController();
   const avatarResolver = createDiscordAvatarResolver();
+  const preflightMessage = async (
+    data: DiscordMessageEvent,
+    client: Client,
+    options: Pick<
+      DiscordMessagePreflightParams,
+      "abortSignal" | "precedingMessages" | "turnAdoptionLifecycle"
+    >,
+  ) => {
+    const policy = await readPolicy();
+    const { preflightDiscordMessage } = await loadMessagePreflightRuntime();
+    return await preflightDiscordMessage({
+      ...params,
+      ...policy,
+      ...options,
+      isPolicyCurrent: policy.isCurrent,
+      avatarResolver,
+      ackReactionScope:
+        params.discordConfig?.ackReactionScope ??
+        policy.cfg.messages?.ackReactionScope ??
+        "group-mentions",
+      data,
+      client,
+    });
+  };
 
   type DiscordDebounceEntry = {
     data: DiscordMessageEvent;
@@ -173,28 +203,17 @@ export function createDiscordMessageDispatcher(
           }
           try {
             // A retired attempt must release its debounce slot even if external I/O ignores abort.
-            const ctx = await racePromiseWithAbortSignal(async () => {
-              const policy = await readPolicy();
-              const { cfg } = policy;
-              const { preflightDiscordMessage } = await loadMessagePreflightRuntime();
-              return await preflightDiscordMessage({
-                ...params,
-                ...policy,
-                isPolicyCurrent: policy.isCurrent,
-                avatarResolver,
-                ackReactionScope:
-                  params.discordConfig?.ackReactionScope ??
-                  cfg.messages?.ackReactionScope ??
-                  "group-mentions",
-                abortSignal,
-                data: last.data,
-                client: last.client,
-                // Preflight hydrates each original before deriving mention facts
-                // or rendering the batch, so neither text nor metadata is lost.
-                precedingMessages: entries.slice(0, -1).map((entry) => entry.data.message),
-                turnAdoptionLifecycle: admissionLifecycle,
-              });
-            }, abortSignal);
+            const ctx = await racePromiseWithAbortSignal(
+              () =>
+                preflightMessage(last.data, last.client, {
+                  abortSignal,
+                  // Preflight hydrates each original before deriving mention facts
+                  // or rendering the batch, so neither text nor metadata is lost.
+                  precedingMessages: entries.slice(0, -1).map((entry) => entry.data.message),
+                  turnAdoptionLifecycle: admissionLifecycle,
+                }),
+              abortSignal,
+            );
             if (abortSignal?.aborted) {
               await ingress.cancel();
               return;
@@ -356,6 +375,31 @@ export function createDiscordMessageDispatcher(
   const handler: DiscordMessageDispatcherWithLifecycle = (data, client, options) => {
     const result = dispatchMessage(data, client, options);
     return options?.turnAdoptionLifecycle ? result : result.then(() => undefined);
+  };
+
+  handler.notifyDeadLetter = async (data, client, signal) => {
+    const abortSignal = AbortSignal.any([
+      signal,
+      dispatcherShutdown.signal,
+      ...(params.abortSignal ? [params.abortSignal] : []),
+    ]);
+    const ctx = await preflightMessage(data, client, { abortSignal });
+    // Durable receipt is not send authority; use current preflight policy at the effect.
+    if (!ctx || abortSignal.aborted || !lifecycleActive || ctx.isPolicyCurrent?.() !== true) {
+      params.runtime.error(
+        danger(
+          `discord ingress: dead-letter notice suppressed for ${data.message.id} (access denied or authority expired)`,
+        ),
+      );
+      return;
+    }
+    await client.rest.post(Routes.channelMessages(ctx.messageChannelId), {
+      body: {
+        content: "⚠️ Couldn't process this message after repeated failures. Please try again.",
+        message_reference: { message_id: data.message.id, fail_if_not_exists: false },
+        allowed_mentions: { parse: [], replied_user: false },
+      },
+    });
   };
 
   handler.deactivate = async () => {

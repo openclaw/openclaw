@@ -48,6 +48,12 @@ function payloadFor(rawMessage: APIMessage): DiscordIngressPayload {
   return { version: 1, receivedAt: Date.now(), rawMessage };
 }
 
+function installIngressTransform(handler: (...args: unknown[]) => unknown) {
+  initializeGlobalHookRunner(
+    createMockPluginRegistry([{ hookName: "before_channel_ingress", handler }]),
+  );
+}
+
 let stateDir: string;
 let queue: ChannelIngressQueue<DiscordIngressPayload>;
 const monitors = new Set<ReturnType<typeof createDiscordIngressMonitor>>();
@@ -103,22 +109,15 @@ describe("Discord durable ingress", () => {
     const prepared = createDeferred<void>();
     const release = createDeferred<void>();
     const policyOrder: string[] = [];
-    initializeGlobalHookRunner(
-      createMockPluginRegistry([
-        {
-          hookName: "before_channel_ingress",
-          handler: async (input) => {
-            const message = (input as { event: APIMessage }).event;
-            policyOrder.push(message.id);
-            if (message.id === raw.id) {
-              prepared.resolve();
-              await release.promise;
-            }
-            return { event: { ...message, content: "[redacted]", attachments: [] } };
-          },
-        },
-      ]),
-    );
+    installIngressTransform(async (input) => {
+      const message = (input as { event: APIMessage }).event;
+      policyOrder.push(message.id);
+      if (message.id === raw.id) {
+        prepared.resolve();
+        await release.promise;
+      }
+      return { event: { ...message, content: "[redacted]", attachments: [] } };
+    });
     const dispatch = vi.fn();
     const monitor = createPausedMonitor(dispatch);
     const admission = monitor.accept(raw);
@@ -162,16 +161,9 @@ describe("Discord durable ingress", () => {
   });
 
   it("rejects an ingress policy failure without storing its raw payload or error", async () => {
-    initializeGlobalHookRunner(
-      createMockPluginRegistry([
-        {
-          hookName: "before_channel_ingress",
-          handler: () => {
-            throw new Error("PRIVATE_SCOPE_LOOKUP_SENTINEL");
-          },
-        },
-      ]),
-    );
+    installIngressTransform(() => {
+      throw new Error("PRIVATE_SCOPE_LOOKUP_SENTINEL");
+    });
     const monitor = createPausedMonitor(vi.fn());
     await expect(monitor.accept(createRawMessage("denied"))).rejects.toThrow(
       "Channel ingress transform failed",
@@ -180,20 +172,18 @@ describe("Discord durable ingress", () => {
   });
 
   it.each(["id", "channel_id"] as const)(
-    "refuses a transform that changes the provider %s",
+    "rejects missing or transformed provider %s before durable allocation",
     async (field) => {
       const raw = createRawMessage("identity-event");
-      initializeGlobalHookRunner(
-        createMockPluginRegistry([
-          {
-            hookName: "before_channel_ingress",
-            handler: () => ({ event: { ...raw, [field]: "changed" } }),
-          },
-        ]),
+      const dispatch = vi.fn();
+      const monitor = createMonitor(dispatch);
+      await expect(monitor.accept({ ...raw, [field]: undefined } as never)).rejects.toThrow(
+        field === "id" ? "snowflake" : "channel_id",
       );
-      const monitor = createPausedMonitor(vi.fn());
+      installIngressTransform(() => ({ event: { ...raw, [field]: "changed" } }));
       await expect(monitor.accept(raw)).rejects.toThrow("changed event identity or lane");
       expect(await queue.listPending()).toEqual([]);
+      expect(dispatch).not.toHaveBeenCalled();
     },
   );
 
@@ -322,18 +312,6 @@ describe("Discord durable ingress", () => {
       appendGate.resolve();
       await accepted;
     }
-  });
-
-  it("rejects unstable message identity before durable allocation", async () => {
-    const dispatch = vi.fn();
-    const monitor = createMonitor(dispatch);
-    const missingMessageId = { ...createRawMessage("missing"), id: undefined };
-    const missingChannelId = { ...createRawMessage("missing"), channel_id: undefined };
-
-    await expect(monitor.accept(missingMessageId as never)).rejects.toThrow("snowflake");
-    await expect(monitor.accept(missingChannelId as never)).rejects.toThrow("channel_id");
-    expect(await queue.listPending({ limit: "all" })).toEqual([]);
-    expect(dispatch).not.toHaveBeenCalled();
   });
 
   it("recovers a claimed row with a fresh drain and dispatches it exactly once", async () => {

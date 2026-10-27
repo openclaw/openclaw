@@ -90,10 +90,11 @@ openclaw logs --follow
     Before a turn is adopted, durable ingress retries attempts that stall for five
     minutes. A timed-out attempt releases its Discord dispatch slots so the retry
     can run. After eight failed attempts, OpenClaw dead-letters the message and
-    posts a short failure reply asking you to try again. The log records the
-    failure cause; if Discord refuses the notice, it also records that delivery
-    failure. A process crash between dead-lettering and sending the notice can
-    still prevent the reply.
+    attempts a short failure reply asking you to try again. The reply requires
+    fresh Discord access checks and current account authority. If those checks
+    fail or the notice takes more than 15 seconds, OpenClaw logs the suppressed
+    or failed notice alongside the original failure cause. A process crash
+    between dead-lettering and sending the notice can still prevent the reply.
 
   </Accordion>
 

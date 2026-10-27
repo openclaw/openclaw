@@ -5,6 +5,7 @@ import type { IngressNonRetryableFailure } from "./ingress-retry-policy.js";
 export type IngressDeadLetterNotice<TPayload, TMetadata> = (
   claim: ChannelIngressQueueClaim<TPayload, TMetadata>,
   failure: IngressNonRetryableFailure,
+  signal: AbortSignal,
 ) => void | Promise<void>;
 
 /** Bound transport delivery after a committed dead letter; never retry the inbound event. */
@@ -20,12 +21,15 @@ export function createIngressDeadLetterNotifier<TPayload, TMetadata>(
     if (!onDeadLetter) {
       return;
     }
+    const controller = new AbortController();
     try {
       await raceWithTimeout(
-        () => Promise.resolve(onDeadLetter(claim, failure)),
+        () => Promise.resolve(onDeadLetter(claim, failure, controller.signal)),
         15_000,
         () => {
-          throw new Error("dead-letter notice timed out after 15000ms");
+          const error = new Error("dead-letter notice timed out after 15000ms");
+          controller.abort(error);
+          throw error;
         },
         { ref: false },
       );
