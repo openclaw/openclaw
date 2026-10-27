@@ -73,7 +73,7 @@ describe("scribes catalog", () => {
       scribeSetup("claim-consolidation", "ongoing", defaultOptions("claim-consolidation"), "UTC"),
     );
     expect(review).toContain("- Runs weekly, Sundays at 3:45 AM UTC (cron `45 3 * * 0`).");
-    expect(review).toContain("The knowledge-maintenance skill does the work on each run.");
+    expect(review).toContain("The knowledge-claim-consolidation skill does the work on each run.");
   });
 
   it("writes a repair prompt that keeps the automation's schedule and run message", () => {
@@ -81,7 +81,7 @@ describe("scribes catalog", () => {
       schedule: { kind: "cron", expr: "45 3 * * *", tz: "UTC" },
       runMessage: "Edited run message",
     });
-    expect(prompt).toMatch(/^Repair the Knowledge scribe "Consolidate unlinked claims"/);
+    expect(prompt).toMatch(/^Repair the Knowledge scribe "Knowledge Consolidation"/);
     expect(prompt).toContain("- Runs nightly at 3:45 AM UTC (cron `45 3 * * *`).");
     expect(prompt).toContain("leave it as it is and go to the last step");
     expect(prompt.endsWith("```text\nEdited run message\n```")).toBe(true);
@@ -226,7 +226,7 @@ describe("scribes state", () => {
     expect(snapshots[2]!.result).toEqual({ state: "done", summary: "Saved 4" });
     expect(request).toHaveBeenCalledWith("sessions.list", {
       agentId: "main",
-      search: "Scribe · Consolidate unlinked claims",
+      search: "Scribe · Knowledge Consolidation",
       archived: "all",
       limit: 20,
     });

@@ -114,9 +114,9 @@ afterEach(() => document.body.replaceChildren());
 it("lists On and Available scribes with honest detection and a tab count", async () => {
   const { render, scribesTab } = fixture({
     sessions: {
-      "Scribe · Consolidate unlinked claims": {
+      "Scribe · Knowledge Consolidation": {
         key: "s-review",
-        displayName: "Scribe · Consolidate unlinked claims",
+        displayName: "Scribe · Knowledge Consolidation",
       },
     },
     jobs: [reviewJob],
@@ -328,9 +328,9 @@ it("disables starting without write access", async () => {
 it("runs, pauses, turns off and opens an On scribe from its detail", async () => {
   const { render, ui, calls, open, load, page } = fixture({
     sessions: {
-      "Scribe · Consolidate unlinked claims": {
+      "Scribe · Knowledge Consolidation": {
         key: "s-review",
-        displayName: "Scribe · Consolidate unlinked claims",
+        displayName: "Scribe · Knowledge Consolidation",
       },
     },
     jobs: [reviewJob],
@@ -367,9 +367,9 @@ it("runs, pauses, turns off and opens an On scribe from its detail", async () =>
 it("reports a skipped run that could not complete as failed", async () => {
   const { render, ui } = fixture({
     sessions: {
-      "Scribe · Consolidate unlinked claims": {
+      "Scribe · Knowledge Consolidation": {
         key: "s-review",
-        displayName: "Scribe · Consolidate unlinked claims",
+        displayName: "Scribe · Knowledge Consolidation",
       },
     },
     jobs: [reviewJob],
@@ -394,10 +394,10 @@ it("reports a skipped run that could not complete as failed", async () => {
 it("repairs a scribe whose conversation was archived, keeping its run message", async () => {
   const { render, ui, calls } = fixture({
     sessions: {
-      "Scribe · Consolidate unlinked claims": {
+      "Scribe · Knowledge Consolidation": {
         key: "s-review",
         sessionId: "sid-review",
-        displayName: "Scribe · Consolidate unlinked claims",
+        displayName: "Scribe · Knowledge Consolidation",
         archived: true,
       },
     },
@@ -462,7 +462,7 @@ it("forces an ongoing scribe's first run once after its setup turn reports on", 
 });
 
 it("tries the first run again on the next load when forcing it failed", async () => {
-  const label = "Scribe · Consolidate unlinked claims";
+  const label = "Scribe · Knowledge Consolidation";
   const setup = scribeSetup(
     "claim-consolidation",
     "ongoing",
@@ -507,7 +507,7 @@ it("tries the first run again on the next load when forcing it failed", async ()
 });
 
 it("does not force a run after a repair, or for a job that already ran", async () => {
-  const label = "Scribe · Consolidate unlinked claims";
+  const label = "Scribe · Knowledge Consolidation";
   const setup = scribeSetup(
     "claim-consolidation",
     "ongoing",
@@ -571,7 +571,7 @@ it("starts a failed one-time scribe again from the start dialog with a new attem
 
 it("recovers a conversation whose setup never arrived or whose setup turn stopped", async () => {
   const memoryLabel = "Scribe · Learn from Memory";
-  const reviewLabel = "Scribe · Consolidate unlinked claims";
+  const reviewLabel = "Scribe · Knowledge Consolidation";
   const setup = scribeSetup("memory", "once", { sources: ["memory-md"] }, "UTC");
   const { render, ui, calls, create, page } = fixture({
     sessions: {
@@ -598,7 +598,7 @@ it("recovers a conversation whose setup never arrived or whose setup turn stoppe
 });
 
 it("shows a Run now the scheduler refused instead of reporting it running", async () => {
-  const label = "Scribe · Consolidate unlinked claims";
+  const label = "Scribe · Knowledge Consolidation";
   const { render, ui, request, load } = fixture({
     sessions: { [label]: { key: "s-review", displayName: label } },
     jobs: [reviewJob],
@@ -615,6 +615,6 @@ it("shows a Run now the scheduler refused instead of reporting it running", asyn
       "the automation lost its owner",
     ),
   );
-  expect(ui.announce).not.toHaveBeenCalledWith("Consolidate unlinked claims is running.");
+  expect(ui.announce).not.toHaveBeenCalledWith("Knowledge Consolidation is running.");
   expect(load).not.toHaveBeenCalled();
 });

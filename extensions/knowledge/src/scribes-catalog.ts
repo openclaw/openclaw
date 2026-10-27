@@ -28,7 +28,7 @@ export type ScribeDefinition = {
   id: ScribeId;
   title: string;
   blurb: string;
-  skill: "knowledge-maintenance" | "knowledge-ingest";
+  skill: "knowledge-claim-consolidation" | "knowledge-ingest";
   icon: IconName;
   tone: "blue" | "teal" | "amber";
   modes: readonly ScribeMode[];
@@ -50,16 +50,16 @@ export const REVIEW_NIGHTLY_SCHEDULE = "45 3 * * *";
 export const SCRIBES: readonly ScribeDefinition[] = [
   {
     id: "claim-consolidation",
-    title: "Consolidate unlinked claims",
+    title: "Knowledge Consolidation",
     blurb:
-      "Weekly or nightly, files claims that name no page on their subject pages, creates pages for subjects that deserve one, supersedes status snapshots by their outcome, and folds outcomes into page State.",
-    skill: "knowledge-maintenance",
+      "Weekly or nightly, reviews the claims that name no page: files each on its subject page, creates pages for subjects that deserve one, supersedes status snapshots by their outcome, and folds outcomes into page State.",
+    skill: "knowledge-claim-consolidation",
     icon: "link",
     tone: "blue",
     modes: ["ongoing"],
     cadence: "Ongoing",
     startLabel: "Turn on…",
-    dialogTitle: "Consolidate unlinked claims",
+    dialogTitle: "Knowledge Consolidation",
     submitLabel: "Turn on",
   },
   {
@@ -185,7 +185,7 @@ const PURPOSE: Record<ScribeId, string> = {
 // The work step: the skill section that does it, applied to the settings.
 const WORK: Record<ScribeId, string> = {
   "claim-consolidation":
-    'Follow the "Scribe runs" section of the knowledge-maintenance skill: consolidate every claim that names no page until none is left to decide.',
+    'Follow the "Scribe runs" section of the knowledge-claim-consolidation skill: consolidate every claim that names no page until none is left to decide.',
   conversations:
     'Follow "Learn from conversations" in the "Scribe runs" section of the knowledge-ingest skill, for the conversations in the settings.',
   memory:
