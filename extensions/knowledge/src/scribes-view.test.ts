@@ -168,6 +168,31 @@ it("starts a conversations scribe: creates its titled conversation and sends the
   expect(page.querySelector("dialog")).toBeNull();
 });
 
+it.each([
+  ["weekly by default", undefined, "45 3 * * 0"],
+  ["nightly when chosen", "#scribe-review-nightly", "45 3 * * *"],
+] as const)("starts the review scribe %s", async (_name, pick, schedule) => {
+  const timezone = Intl.DateTimeFormat().resolvedOptions().timeZone;
+  const { render, calls, page } = fixture({});
+  const view = await render();
+  buttonNamed(view, "Turn on…").click();
+  const dialog = page.querySelector("dialog")!;
+  expect(dialog.querySelector("legend")?.textContent).toBe("How often");
+  expect((dialog.querySelector("#scribe-review-weekly") as HTMLInputElement).checked).toBe(true);
+  expect(dialog.textContent).toContain("Sundays at 3:45 AM.");
+  expect(dialog.textContent).toContain("Each run is an agent turn over every unlinked claim");
+  if (pick) {
+    (dialog.querySelector(pick) as HTMLInputElement).click();
+  }
+  buttonNamed(dialog, "Turn on").click();
+  await vi.waitFor(() => expect(calls.some(([method]) => method === "chat.send")).toBe(true));
+  const send = calls.find(([method]) => method === "chat.send")![1]!;
+  expect(send.message).toBe(
+    setupMessage(scribeSetup("unlinked-review", "ongoing", { schedule }, "main", timezone)),
+  );
+  expect(String(send.message)).toContain(`"options":{"schedule":"${schedule}"}`);
+});
+
 it("restarts a turned-off scribe in its existing conversation with a fresh attempt key", async () => {
   const label = "Scribe · Learn from conversations";
   const { render, create, calls, page } = fixture({
@@ -406,7 +431,13 @@ it("forces an ongoing scribe's first run once after its setup turn reports on", 
 
 it("tries the first run again on the next load when forcing it failed", async () => {
   const label = "Scribe · Review unlinked claims";
-  const setup = scribeSetup("unlinked-review", "ongoing", {}, "main", "America/Los_Angeles");
+  const setup = scribeSetup(
+    "unlinked-review",
+    "ongoing",
+    { schedule: "45 3 * * 0" },
+    "main",
+    "America/Los_Angeles",
+  );
   const { render, ui, calls, request } = fixture({
     sessions: { [label]: { key: "s-review", displayName: label } },
     jobs: [{ ...reviewJob, id: "job-retry-first", state: {} }],
@@ -448,7 +479,13 @@ it("tries the first run again on the next load when forcing it failed", async ()
 
 it("does not force a run after a repair, or for a job that already ran", async () => {
   const label = "Scribe · Review unlinked claims";
-  const setup = scribeSetup("unlinked-review", "ongoing", {}, "main", "America/Los_Angeles");
+  const setup = scribeSetup(
+    "unlinked-review",
+    "ongoing",
+    { schedule: "45 3 * * 0" },
+    "main",
+    "America/Los_Angeles",
+  );
   const fresh = { ...reviewJob, id: "job-repaired", state: {} };
   const { render, calls } = fixture({
     sessions: { [label]: { key: "s-review", displayName: label } },

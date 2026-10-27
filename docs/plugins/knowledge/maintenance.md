@@ -105,36 +105,27 @@ an unsupported guess.
 
 ## Agent review
 
-Relink leaves claims that name no page, or more than one. An agent review
-handles them: an automation whose agent turn follows the
-`knowledge-unlinked-claims` skill. After a pass that leaves private claims with
-no linked page and no source page, whichever tool saved them, maintenance
-queues that automation once. It does not queue it when nothing is left, and a
-disabled automation does not run. The last pass reports the review's job ID,
-outcome (`enqueued`, `not_needed`, `skipped`, `unavailable`, or `failed`), and
-how many claims were left.
-
-Maintenance picks the automation in this order:
-
-1. `maintenance.reviewJobId`, when set.
-2. Otherwise, the automation with declaration key
-   `knowledge:scribe:unlinked-review`, which the **Review unlinked claims**
-   scribe creates for itself. An enabled job is preferred; a paused one is
-   reported as `skipped`.
-
-With neither, the pass reports no review.
+Relink leaves claims that name no page, or more than one. Maintenance does not
+review them: it runs relink only and never starts an agent turn. An agent
+review handles them on its own schedule: an automation whose agent turn follows
+the `knowledge-unlinked-claims` skill over every private claim with no linked
+page and no source page, whichever tool saved it. It runs weekly by default
+(Sundays at 3:45 AM) or, if you choose, nightly at 3:45 AM, after the default
+3:30 AM maintenance pass. Each run is an agent turn over every unlinked claim,
+so nightly costs more; a run that finds nothing left stops right away.
 
 The review edits private knowledge, so its automation must run in a session
 with the owner's private access. Turn on **Review unlinked claims** from the
 [Scribes](/plugins/knowledge/scribes) tab of the Knowledge page. To start it
 without the Control UI, open a new conversation in the owner's direct chat and
-send its setup message, with your agent ID and IANA time zone:
+send its setup message, with your agent ID, IANA time zone, and schedule
+(`45 3 * * 0` weekly or `45 3 * * *` nightly):
 
 ````text
 Knowledge scribe setup: unlinked-review
 Follow the "Scribe setup" section of the knowledge-unlinked-claims skill with these options.
 ```json
-{"scribe":"unlinked-review","mode":"ongoing","options":{},"timezone":"America/Los_Angeles","agentId":"main"}
+{"scribe":"unlinked-review","mode":"ongoing","options":{"schedule":"45 3 * * 0"},"timezone":"America/Los_Angeles","agentId":"main"}
 ```
 ````
 

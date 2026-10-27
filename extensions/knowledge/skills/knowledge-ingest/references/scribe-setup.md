@@ -77,9 +77,8 @@ After adding, `get` the job and check that its `sessionTarget` is this
 conversation.
 
 Do not start a run yourself: a run started from this turn is skipped once the
-turn ends. The first scheduled run is the test; for the review scribe, the next
-maintenance pass that leaves claims unlinked queues it. Report the job ID and
-its next run time.
+turn ends. The first scheduled run is the test. Report the job ID and its next
+run time.
 
 ## 3. Repair
 
