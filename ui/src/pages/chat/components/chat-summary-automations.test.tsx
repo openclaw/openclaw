@@ -870,11 +870,15 @@ it("describes cron weekdays and non-uniform minute steps without inventing a fix
   await vi.dynamicImportSettled();
   const weekday = current.element.querySelector<HTMLAnchorElement>('a[href$="job=weekdays"]')!;
   const minutes = current.element.querySelector<HTMLAnchorElement>('a[href$="job=minute-grid"]')!;
-  await waitForSolid(() => {
-    expect(weekday.textContent).toContain("Weekdays at 9:00 AM");
-    expect(minutes.textContent).toContain(
-      "At minutes 0, 7, 14, 21, 28, 35, 42, 49, and 56 of every hour",
-    );
-  });
+  // Inventory readiness does not include the first lazy cron formatter import.
+  await waitForSolid(
+    () => {
+      expect(weekday.textContent).toContain("Weekdays at 9:00 AM");
+      expect(minutes.textContent).toContain(
+        "At minutes 0, 7, 14, 21, 28, 35, 42, 49, and 56 of every hour",
+      );
+    },
+    { timeout: 5_000 },
+  );
   expect(minutes.textContent).not.toContain("Every 7 minutes");
 });

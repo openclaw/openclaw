@@ -18,6 +18,7 @@ import os from "node:os";
 import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { parseArgs } from "node:util";
+import { prepareModelCatalogWorkerContext } from "../../src/agents/prepared-model-catalog-fingerprints.js";
 import type {
   PreparedModelCatalogWorkerTask,
   PreparedModelWorkerResult,
@@ -231,9 +232,11 @@ try {
     };
     for (const [index, input] of inputs.entries()) {
       const started = performance.now();
+      const value = { ...input, remoteCatalog };
       const result = await pool.run(
         {
-          value: { ...input, remoteCatalog },
+          context: prepareModelCatalogWorkerContext(value),
+          value,
           request: {
             kind: "catalog",
             syntheticAuth: [],

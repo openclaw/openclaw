@@ -242,7 +242,7 @@
   color: var(--muted);
 }
 
-.exec-approval-shortcut {
+.exec-approval-card .exec-approval-shortcut {
   background: color-mix(in srgb, currentColor 8%, transparent);
   color: inherit;
 }

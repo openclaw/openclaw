@@ -64,6 +64,10 @@ release is ready. The Inbox also shows an update notice; dismissing it does not 
 the account-menu badge. The `dev` channel never shows new-update notifications.
 Home toggles the Home panel and shows the active agent’s Home activity and attention state.
 Home navigation and agent switching remain available before a Home session has loaded.
+For roles with `sessions.others: "none"`, opening Home first checks whether the
+Gateway can resolve that conversation. An unavailable Home offers **New conversation**
+without repeatedly requesting its transcript or sidebar ancestry. Home sessions
+that the caller can access still open normally; session visibility does not change.
 Home stays a navigation root regardless of its stored session ancestry.
 On desktop, opening Home or a rail shortcut for a session, page, plugin, or person collapses
 the list while leaving the rail available. The mobile drawer keeps its normal

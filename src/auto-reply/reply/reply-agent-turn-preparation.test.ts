@@ -618,6 +618,12 @@ it.each([
 ] as const)(
   "binds $kind Access at admission (saved=$saved, provided=$provided)",
   async ({ kind, saved, expected, provided }) => {
+    const replyOperation = createReplyOperation({
+      sessionKey: "main",
+      sessionId: "queued-session",
+      turnKind: kind,
+      resetTriggered: false,
+    });
     const queued = createRun();
     queued.run.cyberAccessProgram = "daybreak_blue";
     const initialEntry = makeEntry({
@@ -627,27 +633,31 @@ it.each([
     state.admitReply.mockImplementation(async ({ captureRunSelection }) => {
       // The preference committed before this source entered the queue, so no queue refresh saw it.
       captureRunSelection();
-      return { status: "owned", operation, sessionEntry: admittedEntry };
+      return { status: "owned", operation: replyOperation, sessionEntry: admittedEntry };
     });
 
-    const turn = await admitted(
-      prepare(
-        queued,
-        {
-          sessionEntry: initialEntry,
-          sessionStore: { main: initialEntry },
-          opts: {
-            onQueuedFollowupAdmitted: async () => {
-              admittedEntry.cyberAccessProgram = "daybreak_red";
-              queued.run.cyberAccessProgram = "daybreak_red";
+    try {
+      const turn = await admitted(
+        prepare(
+          queued,
+          {
+            sessionEntry: initialEntry,
+            sessionStore: { main: initialEntry },
+            opts: {
+              onQueuedFollowupAdmitted: async () => {
+                admittedEntry.cyberAccessProgram = "daybreak_red";
+                queued.run.cyberAccessProgram = "daybreak_red";
+              },
             },
           },
-        },
-        { kind, ...(provided ? { providedReplyOperation: operation } : {}) },
-      ),
-    );
+          { kind, ...(provided ? { providedReplyOperation: replyOperation } : {}) },
+        ),
+      );
 
-    expect(turn.queued.run.cyberAccessProgram).toBe(expected);
+      expect(turn.queued.run.cyberAccessProgram).toBe(expected);
+    } finally {
+      replyOperation.complete();
+    }
   },
 );
 

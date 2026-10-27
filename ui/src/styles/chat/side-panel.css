@@ -473,16 +473,6 @@ openclaw-chat-detail-panel,
   cursor: not-allowed;
 }
 
-.sidebar-region--desktop :is(.side-panel-launcher__card, .side-panel-launcher__item) .shortcut-kbd {
-  padding: 0;
-  border: 0;
-  background: transparent;
-  font-size: calc(10px * var(--control-ui-text-scale));
-  font-weight: 500;
-  line-height: 1.4;
-  white-space: nowrap;
-}
-
 .side-panel-launcher__card .side-panel-type-option__label {
   grid-row: 2;
   grid-column: 1 / -1;

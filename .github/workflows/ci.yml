@@ -2726,6 +2726,7 @@ jobs:
           node-version: "24.22.1"
           install-bun: "false"
           dependency-cache: *trusted_first_attempt_dependency_cache
+          build-all-cache-scope: full
 
       - *install_playwright_chromium
 

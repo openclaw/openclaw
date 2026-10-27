@@ -556,11 +556,6 @@ function createBundledControlUiE2eConfig(
     ...config,
     base: "/",
     configFile: false,
-    // Vite preview serves raw assets; shipped-artifact jobs own sidecar proof.
-    plugins: config.plugins?.filter(
-      (plugin) =>
-        !(plugin && "name" in plugin && plugin.name === "control-ui-precompressed-assets"),
-    ),
     logLevel: "error" as const,
     root: uiRoot,
   };
@@ -578,7 +573,7 @@ async function buildControlUiE2e(
   outDir: string,
   buildId: string,
   options: ControlUiE2eBuildOptions,
-  command: "--production-build" | "--bundled-build",
+  command: "--production-build" | "--production-preview-build" | "--bundled-build",
 ): Promise<void> {
   // Compile outside Vitest so its NODE_ENV=test cannot disable production
   // behavior or select development dependencies in the shared browser artifact.
@@ -669,18 +664,27 @@ await refreshControlUiBuildOutput(process.argv[2], resolveControlUiBuildInfo());
 async function runProductionControlUiBuild(
   outDir: string,
   options: ControlUiE2eBuildOptions = {},
-  bundled = false,
+  buildKind: "production" | "production-preview" | "bundled" = "production",
 ): Promise<void> {
   const [{ build }, { default: controlUiViteConfig }] = await Promise.all([
     import("vite"),
     import("../../vite.config.ts"),
   ]);
-  const config = bundled
-    ? createBundledControlUiE2eConfig(controlUiViteConfig, outDir)
-    : controlUiViteConfig({ outDir });
+  const config =
+    buildKind === "bundled"
+      ? createBundledControlUiE2eConfig(controlUiViteConfig, outDir)
+      : controlUiViteConfig({ outDir });
+  // Vite preview serves raw assets; direct production builds retain sidecar proof.
+  const plugins =
+    buildKind === "production"
+      ? config.plugins
+      : config.plugins?.filter(
+          (plugin) =>
+            !(plugin && "name" in plugin && plugin.name === "control-ui-precompressed-assets"),
+        );
   await build({
     ...config,
-    plugins: [config.plugins, ...(await controlUiE2eBuildPlugins(options))],
+    plugins: [plugins, ...(await controlUiE2eBuildPlugins(options))],
     configFile: false,
     logLevel: "info",
     root: path.join(resolveRepoRoot(), "ui"),
@@ -735,7 +739,7 @@ export async function startProductionControlUiE2eServer(
   bootstrapConfig?: Record<string, unknown>,
   options: ControlUiE2eBuildOptions = {},
 ): Promise<ControlUiE2eProductionServer> {
-  await buildProductionControlUiE2e(outDir, buildId, options);
+  await buildControlUiE2e(outDir, buildId, options, "--production-preview-build");
   return startBuiltControlUiE2eServer(outDir, bootstrapConfig);
 }
 
@@ -2710,7 +2714,9 @@ if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.me
   const [command, outDir, ...flags] = process.argv.slice(2);
   const protocolFlag = flags.find((flag) => flag.startsWith("--protocol-version="));
   if (
-    (command !== "--production-build" && command !== "--bundled-build") ||
+    (command !== "--production-build" &&
+      command !== "--production-preview-build" &&
+      command !== "--bundled-build") ||
     !outDir ||
     flags.some(
       (flag) =>
@@ -2718,7 +2724,7 @@ if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.me
     )
   ) {
     throw new Error(
-      "Usage: control-ui-e2e.ts <--production-build|--bundled-build> <out-dir> [--individual-boot-modules] [--protocol-version=N]",
+      "Usage: control-ui-e2e.ts <--production-build|--production-preview-build|--bundled-build> <out-dir> [--individual-boot-modules] [--protocol-version=N]",
     );
   }
   await runProductionControlUiBuild(
@@ -2727,7 +2733,11 @@ if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.me
       includeBootGroups: !flags.includes("--individual-boot-modules"),
       protocolVersion: protocolFlag ? Number(protocolFlag.split("=")[1]) : undefined,
     },
-    command === "--bundled-build",
+    command === "--bundled-build"
+      ? "bundled"
+      : command === "--production-preview-build"
+        ? "production-preview"
+        : "production",
   );
 }
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

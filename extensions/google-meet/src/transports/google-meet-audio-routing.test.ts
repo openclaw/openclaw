@@ -235,3 +235,37 @@ it.each([
     }
   },
 );
+
+it.each([false, true])(
+  "keeps routing Meet media after one element rejects setSinkId (audio rejects=%s)",
+  async (audioRejects) => {
+    const rejection = "AbortError: The operation could not be performed";
+    const { health } = await inspectAudioPage(nativeMicrophone, {
+      setup(document) {
+        for (const [tag, rejects] of [
+          ["video", true],
+          ["audio", audioRejects],
+        ] as const) {
+          const media = document.createElement(tag);
+          media.setSinkId = async (value) => {
+            if (rejects) {
+              throw new Error(rejection);
+            }
+            Object.defineProperty(media, "sinkId", { value, configurable: true });
+          };
+          document.body.append(media);
+        }
+      },
+    });
+    expect(health).toMatchObject({
+      audioOutputRouted: !audioRejects,
+      audioOutputRouteError: rejection,
+    });
+    expect(health.notes).toContain(
+      audioRejects
+        ? `Could not route Meet speaker output to the virtual audio device: ${rejection}`
+        : `1 Meet media element(s) rejected the speaker route: ${rejection}`,
+    );
+    expect(ready(health)).toBe(!audioRejects);
+  },
+);

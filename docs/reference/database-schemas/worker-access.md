@@ -565,6 +565,8 @@ and outgoing public reads remain detached from the resident state.
 Internal hot-state projections also retain the actor's replace-only target,
 version, participants, and members. Read replies and committed receipt capture
 own detachment before those facts leave the worker.
+Cold hydration decodes each participant aggregate once; the selected entry and
+hot participant records share their actor-owned identity objects.
 
 Actor commands retain their immutable replica preimage for admission transport.
 The worker sends a reference only after matching its authoritative write token,

@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { writeFixtureJson } from "../cli/cli-fixtures.test-support.js";
 import { recordDeferredPluginMigrations } from "../infra/deferred-plugin-migrations.js";
 import { resolveInstallationTarget } from "../infra/installation-target-context.js";
 import { readPackageVersion } from "../infra/package-json.js";
@@ -293,18 +294,15 @@ describe("triage --run", () => {
     let updateResult: string | undefined;
     if (newer.startsWith("explicit")) {
       updateResult = path.join(stateDir, "explicit-failure.json");
-      await fs.writeFile(
-        updateResult,
-        JSON.stringify({
-          result: {
-            runId: failed.runId,
-            status: "error",
-            mode: "npm",
-            reason: "finalize:doctor",
-            steps: [],
-          },
-        }),
-      );
+      await writeFixtureJson(updateResult, {
+        result: {
+          runId: failed.runId,
+          status: "error",
+          mode: "npm",
+          reason: "finalize:doctor",
+          steps: [],
+        },
+      });
     }
     const command = runEmbedded({ updateResult });
     if (updateResult || newer.includes("restoration")) {
@@ -435,10 +433,9 @@ describe("triage --run", () => {
   );
 
   it("keeps an older owned update continuation diagnostics-only even on a terminal", async () => {
-    await fs.writeFile(
-      path.join(stateDir, "openclaw.json"),
-      JSON.stringify({ agents: { defaults: { model: "openai/gpt-5.6-luna" } } }),
-    );
+    await writeFixtureJson(path.join(stateDir, "openclaw.json"), {
+      agents: { defaults: { model: "openai/gpt-5.6-luna" } },
+    });
     mocks.confirm.mockResolvedValue(false);
     await withTriageTerminal(true, () =>
       triageCommand(

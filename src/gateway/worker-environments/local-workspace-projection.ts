@@ -214,10 +214,6 @@ async function runLocalWorkspaceProjection<T>(
   const workerAuthority: WorktreeWorkerAuthority = {
     ...store.workerAuthority,
     predicates: owner.workerAuthority?.predicates ?? store.workerAuthority.predicates,
-    assertCurrent: () => {
-      store.workerAuthority.assertCurrent?.();
-      owner.workerAuthority?.assertCurrent?.();
-    },
   };
   let previous = store.get();
   // A reset may recover its prior result; another session incarnation cannot adopt it.

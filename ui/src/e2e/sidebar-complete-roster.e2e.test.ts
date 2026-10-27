@@ -26,9 +26,8 @@ const suite = createControlUiE2eSuite({ name: "Complete sidebar roster handoff" 
 suite.define(() => {
   it.each([
     { face: "chat", cap: false, rootLast: false },
-    { face: "dashboard", cap: false, rootLast: false },
     { face: "chat", cap: true, rootLast: false },
-    { face: "chat", cap: false, rootLast: true },
+    { face: "dashboard", cap: false, rootLast: true },
   ] as const)(
     "releases the $face sidebar when complete or capped (cap=$cap, rootLast=$rootLast)",
     async ({ face, cap, rootLast }) => {

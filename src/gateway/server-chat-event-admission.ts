@@ -94,10 +94,14 @@ export function createAgentEventAdmission({
       Boolean(evt.runId.trim() && evt.lifecycleGeneration?.trim()) &&
       (phase === "start" ||
         (terminal?.reason === "cancelled" && terminal.stopReason === "restart"));
+    const previous = pendingEvents.get(evt.runId);
+    // Only an async boundary needs a routing snapshot; the synchronous handler resolves it once.
+    if (!needsRecoveryRead && !previous) {
+      return handleEvent(evt);
+    }
     const source = resolveEventSession(evt);
     const sessionKey = source.eventSessionKey ?? source.sessionKey;
     const agentId = evt.agentId ?? source.sessionAgentId;
-    const previous = pendingEvents.get(evt.runId);
     // Capture live memory ownership now; durable recovery reads wait for earlier
     // events and then read once. Display enrichment stays separate.
     const prepared =

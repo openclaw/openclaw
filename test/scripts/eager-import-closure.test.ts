@@ -467,6 +467,12 @@ it.each([
     ],
   },
   {
+    name: "shared-state read command handlers",
+    entrypoints: ["src/state/openclaw-state-read-handlers.ts"],
+    dynamic: false,
+    deferredOwners: ["src/state/openclaw-agent-db.ts"],
+  },
+  {
     name: "Git operation workers",
     entrypoints: ["src/infra/git-operation.worker.ts"],
     dynamic: true,
