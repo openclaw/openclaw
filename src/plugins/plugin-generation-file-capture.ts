@@ -62,11 +62,8 @@ export function linkPluginGenerationDependency(link: string, target: string): bo
 export function createPluginSourceLinkCapture() {
   const links = new Set<string>();
   return {
-    defer(filename: string, root: string, source = filename): boolean {
-      if (
-        !fs.lstatSync(filename).isSymbolicLink() ||
-        isPathInside(root, fs.realpathSync(filename))
-      ) {
+    defer(filename: string, root: string, source: string, entry: fs.BigIntStats): boolean {
+      if (!entry.isSymbolicLink() || isPathInside(root, fs.realpathSync(filename))) {
         return false;
       }
       links.add(source);
@@ -118,6 +115,7 @@ export function createPluginGenerationFileCapture({
     copyFile: RootFileCopyBatchSync["copyFile"],
     openFile: RootFileOpenBatchSync["openFile"],
     realParent?: string,
+    sourceEntry?: fs.BigIntStats,
   ) => {
     // Metadata can precede its package body; promotion never replaces those captured bytes.
     if (capturedPaths.get(path.resolve(source)) === target) {
@@ -126,8 +124,9 @@ export function createPluginGenerationFileCapture({
     const prepared = nativeAdmission.resolvePreparedSource(source);
     const input = prepared?.path ?? source;
     const inputBoundary = prepared?.boundary ?? boundary;
-    // Directory recursion already resolved the parent; only links need another path walk.
-    const entry = !prepared && realParent ? fs.lstatSync(input, { bigint: true }) : undefined;
+    // Directory recursion shares child metadata and the real parent; only links need a path walk.
+    const entry =
+      !prepared && realParent ? (sourceEntry ?? fs.lstatSync(input, { bigint: true })) : undefined;
     const ordinary = entry && !entry.isSymbolicLink();
     const real = ordinary ? path.join(realParent!, path.basename(input)) : fs.realpathSync(input);
     const retainedNative = nativeAdmission.isRetainedReference(source, real);
@@ -159,14 +158,14 @@ export function createPluginGenerationFileCapture({
       ancestors.add(real);
       fs.mkdirSync(target, { recursive: true, mode: 0o700 });
       for (const name of readPluginSourceDirectory(real)) {
-        if (
-          !(
-            deferExternalLinks &&
-            !nativeAdmission.isRetainedReference(path.join(source, name)) &&
-            sourceLinks.defer(path.join(input, name), inputBoundary, path.join(source, name))
-          )
-        ) {
-          copy(path.join(source, name), path.join(target, name), copyFile, openFile, real);
+        const childSource = path.join(source, name);
+        const childInput = path.join(input, name);
+        const childEntry =
+          deferExternalLinks && !nativeAdmission.isRetainedReference(childSource)
+            ? fs.lstatSync(childInput, { bigint: true })
+            : undefined;
+        if (!childEntry || !sourceLinks.defer(childInput, inputBoundary, childSource, childEntry)) {
+          copy(childSource, path.join(target, name), copyFile, openFile, real, childEntry);
         }
       }
       ancestors.delete(real);

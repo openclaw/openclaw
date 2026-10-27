@@ -257,7 +257,18 @@ async function recoverStartup(
     await button(alert, "Retry").click();
     documentReachable = true;
   }
-  expect(await gateway.waitForRequest("chat.send")).toMatchObject({
+  const initialSend = await gateway.waitForRequest("chat.send").catch(async (cause: unknown) => {
+    const requestCount = (await gateway.getRequests("chat.send")).length;
+    const recoveryPresent = await page.evaluate(
+      (key) => sessionStorage.getItem(key) !== null,
+      storageKey,
+    );
+    throw new Error(
+      `Initial saved replay did not send (requests=${requestCount}, recoveryPresent=${recoveryPresent})`,
+      { cause },
+    );
+  });
+  expect(initialSend).toMatchObject({
     params: {
       sessionKey,
       sessionId,
@@ -281,11 +292,25 @@ async function recoverStartup(
     runId: messageId,
     text: "Initial turn finished.",
   });
-  expect(await gateway.waitForRequest("chat.send", { after: 1 })).toMatchObject({
+  const queuedSend = await gateway
+    .waitForRequest("chat.send", { after: 1 })
+    .catch(async (cause: unknown) => {
+      const requestCount = (await gateway.getRequests("chat.send")).length;
+      const recoveryPresent = await page.evaluate(
+        (key) => sessionStorage.getItem(key) !== null,
+        storageKey,
+      );
+      throw new Error(
+        `Queued follow-up did not send (requests=${requestCount}, recoveryPresent=${recoveryPresent})`,
+        { cause },
+      );
+    });
+  expect(queuedSend).toMatchObject({
     params: { sessionKey, message: "later ordinary turn" },
   });
   expect(await gateway.getRequests("sessions.dispatch")).toHaveLength(0);
   expect(await gateway.getRequests("chat.send")).toHaveLength(2);
+  expect(await gateway.getSocketCount()).toBe(1);
   expect(failure.documentCount()).toBe(2);
   if (incognito) {
     expect(

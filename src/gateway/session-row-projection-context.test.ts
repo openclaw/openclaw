@@ -1,8 +1,7 @@
 import { afterEach, expect, it, vi } from "vitest";
 import { createSubagentRunRecord } from "../agents/subagent-test-fixtures.test-helpers.js";
 import { subagentRuns } from "../agents/subagents/registry/subagent-registry-memory.js";
-import { buildSubagentRunReadIndexFromRuns } from "../agents/subagents/registry/subagent-registry-queries.js";
-import * as registryRead from "../agents/subagents/registry/subagent-registry-read.js";
+import * as registryQueries from "../agents/subagents/registry/subagent-registry-queries.js";
 import { createSubagentSessionListReadView } from "../agents/subagents/registry/subagent-registry-state.js";
 import {
   registerAgentRunContext,
@@ -85,9 +84,7 @@ it("refreshes time-sensitive subagent reads while retaining unchanged ancestor m
     createdAt: startedAt,
     startedAt,
   });
-  vi.spyOn(registryRead, "buildSubagentSessionListReadIndex").mockImplementation((now) =>
-    buildSubagentRunReadIndexFromRuns({ runs: new Map([[run.runId, run]]), now }),
-  );
+  subagentRuns.set(run.runId, run);
   const { context, prepare } = fixture();
   const initial = context.current;
   expect(initial.subagentRuns.countActiveDescendantRuns(parent)).toBe(1);
@@ -100,7 +97,7 @@ it("refreshes time-sensitive subagent reads while retaining unchanged ancestor m
 it("patches list facts after keyed publications without rebuilding for progress-only updates", () => {
   let run = subagent("changed");
   subagentRuns.set(run.runId, run);
-  const builds = vi.spyOn(registryRead, "buildSubagentSessionListReadIndex");
+  const builds = vi.spyOn(registryQueries, "buildSubagentRunReadIndexFromRuns");
   const { context, prepare } = fixture();
   const initialRevision = context.materializedRevisions.subagentRevision;
   const initialRun = run;

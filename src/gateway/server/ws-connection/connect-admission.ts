@@ -217,10 +217,10 @@ export async function admitGatewayConnect(context: GatewayConnectPhaseContext) {
   } = context;
 
   const isNodeClient = isStartupNodeConnect(connectParams);
-  const startupPending = isStartupPending?.() === true;
-  // Node enrollment is an awaited startup dependency: authenticated node admission
-  // must complete while ordinary methods and other clients remain startup-gated.
-  if (startupPending && !isNodeClient) {
+  const startupPending = isNodeClient && isStartupPending?.() === true;
+  // Operator hello needs prepared auth and request snapshots, not autonomous recovery.
+  // Nodes retain their stricter startup enrollment policy until sidecars are ready.
+  if (context.handler.isConnectPending?.() && !isNodeClient) {
     await rejectGatewayStartupConnect(context);
     return undefined;
   }

@@ -38,11 +38,14 @@ import {
 import { insertSharedWorktreeReceipt } from "./github-shared-publication.test-support.js";
 import { createWorkerSessionPlacementStore } from "./worker-environments/placement-store.js";
 
-function createRecoveryRuntime(warn = vi.fn()) {
+function createRecoveryRuntime(
+  warn = vi.fn(),
+  placements = withEngineStoreAdmission(() =>
+    createWorkerSessionPlacementStore({ database: openOpenClawStateDatabase() }),
+  ),
+) {
   return createTestGitHubPublicationRuntime({
-    placements: withEngineStoreAdmission(() =>
-      createWorkerSessionPlacementStore({ database: openOpenClawStateDatabase() }),
-    ),
+    placements,
     loadSessionRuntime: async () => {
       throw new Error("transcript reporting unavailable");
     },
@@ -266,10 +269,15 @@ function installPublicationRecoveryTests(engine: "sqlite" | "postgres") {
   });
 
   it("reads each pending queue once during empty startup and still reads unreported results", async () => {
-    const runtime = createRecoveryRuntime();
+    const placements = withEngineStoreAdmission(() =>
+      createWorkerSessionPlacementStore({ database: openOpenClawStateDatabase() }),
+    );
+    const pendingResults = vi.spyOn(placements, "listPendingWorkspaceResultsAsync");
+    const runtime = createRecoveryRuntime(vi.fn(), placements);
     const repositoryReads = vi.spyOn(publicationStore, "listRepositoryGitHubPublicationsAsync");
     const sharedReads = vi.spyOn(publicationStore, "listSharedGitHubPublicationsAsync");
     await runtime.reconcilePublications();
+    expect(pendingResults).not.toHaveBeenCalled();
     expect(repositoryReads.mock.calls.map(([input]) => input)).toEqual([
       { ownerProfileId: null, pending: true },
       { pending: false, unreported: true },

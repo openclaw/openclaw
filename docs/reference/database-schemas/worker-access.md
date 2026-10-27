@@ -4172,6 +4172,11 @@ SDK callbacks retain their existing owners; incognito forks use the memory actor
 Lifecycle builders run once outside SQL, while their prepared upserts, resets,
 removals, and maintenance commit together in the existing agent executor.
 Creation continues to use its existing typed replacement operation.
+For a single-row upsert with complete host entry facts, preparation validates the
+existing scoped write token and acknowledges the retained row instead of sending
+its snapshots back to the host. Changed tokens and uncovered related rows use the
+ordinary worker read. Builders still receive detached copies, archive recovery is
+read in the worker, and commit retains its exact preimage and live-authority checks.
 
 Reply initialization prepares the current row, declared related rows, and stored
 model parent in one snapshot through the existing session reader. Preprocessing,
@@ -6897,12 +6902,19 @@ bounded connection-owned results reuse its current revision, invalidating on loc
 writer receipts, schema changes, and disposal. Synchronous projection
 preserves actor order, missing profiles, merge aliases, and secondary GitHub logins.
 Released synchronous SDK projectors remain available through the next SDK major.
-Final source-session disclosure guards still read selected session keys on the host:
-raw synchronous SDK writers do not publish complete revocation facts.
-Retained agent readers share admission and synchronous consumption without a
-foreign-observation scope or added transaction around the final guard.
-These guards retire when the next SDK major removes those writers and session-owner
-publications cover all revocations. Schemas, stored bytes, permissions, retention,
+Final source-session disclosure prepares the selected stores through the ordered
+worker cohort, then retains the existing native selected-key guard on the host.
+While those sources remain retained, the shared-state worker selects the chosen
+profile and canonical aliases in a fresh snapshot. It bypasses resident catalogs
+and inherited inspection snapshots, so a source Gateway's already committed merges
+are visible. Local profile authority is captured before that read and bound afterward;
+an intervening local mutation or lifecycle change rejects consumption. This binding
+does not certify commits from another process after the profile snapshot.
+After the last await, bounded native reads select current session rows. The
+synchronous callback rechecks configuration, groups, source identity, and exact
+session IDs before serialization. Profile and session reads are separate snapshots,
+not atomic cross-database serialization. No retained catalog or returned metadata
+grants later authority. Schemas, stored bytes, permissions, retention,
 durability, and update behavior are unchanged.
 
 Secret-store expiry runs in that worker for scheduled Gateway cleanup and

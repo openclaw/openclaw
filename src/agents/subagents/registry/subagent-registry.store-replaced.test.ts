@@ -50,6 +50,7 @@ import {
   bindSubagentRunGatewayOwners,
   retryDeferredSubagentCompletionSource,
 } from "./subagent-registry-gateway-owner.js";
+import { suspendReplacedStoreNotifications } from "./subagent-registry-lifecycle-cleanup.js";
 import { getSubagentActivationRuns, subagentRuns } from "./subagent-registry-memory.js";
 import { markSubagentRunPausedAfterYield } from "./subagent-registry-run-pause.js";
 import {
@@ -115,6 +116,38 @@ afterEach(async () => {
   closeOpenClawStateDatabaseForTest();
   vi.unstubAllEnvs();
   vi.useRealTimers();
+});
+
+it("retires pending notifications without traversing settled history", async () => {
+  publishSystemEventStoreResolver(() => "replacement-store");
+  await settleRootWork(true);
+  const { subagent } = records();
+  subagent.requesterStorePath = "original-store";
+  // Delivery still needs retirement even when cleanup was already recorded.
+  subagent.cleanupCompletedAt = Date.now();
+  subagent.delivery = { status: "pending" };
+  publishCommittedRecords(subagent);
+  for (let index = 0; index < 100; index++) {
+    const history = createSubagentStoreRunFixture({
+      runId: `history-${index}`,
+      childSessionKey: `agent:main:subagent:history-${index}`,
+      cleanup: "keep",
+      cleanupCompletedAt: Date.now(),
+      delivery: { status: "delivered" },
+    });
+    subagentRuns.set(history.runId, history);
+  }
+  using traversal = vi.spyOn(subagentRuns, "values");
+  const retirement = suspendReplacedStoreNotifications({
+    runs: subagentRuns,
+    resumedRuns: new Set(),
+  });
+  expect(subagentRuns.isCompletionAuthorityRetired(subagent)).toBe(true);
+  await retirement;
+  expect(traversal).not.toHaveBeenCalled();
+  expect(loadSubagentRegistryFromSqlite().get(subagent.runId)?.delivery).toMatchObject(
+    retiredDelivery,
+  );
 });
 
 it("leaves yielded tasks with their owner until a final result needs store retirement", async () => {

@@ -1,5 +1,8 @@
 import { expect, it } from "vitest";
-import { summarizeRestartStress } from "../../scripts/perf/team-shape-restart-report.ts";
+import {
+  stressAnswerMessages,
+  summarizeRestartStress,
+} from "../../scripts/perf/team-shape-restart-report.ts";
 
 const input = {
   id: "original",
@@ -27,6 +30,87 @@ const capture = {
   provider: { firstActivity: { original: 30 } },
   errors: [],
 };
+
+it("requires an unquoted completion marker on the final line of a final assistant message", () => {
+  for (const content of [
+    "I cannot truthfully send `DONE_original` yet.",
+    "> DONE_original",
+    "DONE_original\nThe task is incomplete.",
+    "Not DONE_original",
+  ]) {
+    const history = { messages: [{ role: "assistant", phase: "final_answer", content }] };
+    expect(stressAnswerMessages(history, input.id)).toEqual([]);
+  }
+  expect(
+    stressAnswerMessages(
+      {
+        messages: [
+          { role: "assistant", phase: "commentary", content: "DONE_original" },
+          { role: "assistant", phase: "final_answer", content: "Checks passed.\nDONE_original\n" },
+        ],
+      },
+      input.id,
+    ),
+  ).toHaveLength(1);
+});
+
+it("reports newcomer routing separately and makes unsettled inputs explicit at the deadline", () => {
+  const newcomer = { ...input, id: "rate-newcomer", sentAt: 50, phase: "rate-newcomer" };
+  const snapshot = {
+    ...capture,
+    inputs: [input, newcomer],
+    settlement: { startedAt: 60, deadline: 100, finishedAt: 100, timedOut: true },
+    sharedRateLimit: { first429At: 40, resetAt: 90 },
+    provider: {
+      requests: [
+        { at: 51, id: newcomer.id, primary: false, streaming: false, status: 200 },
+        { at: 55, id: newcomer.id, primary: true, streaming: true, status: 429 },
+      ],
+    },
+  };
+  const limited = summarizeRestartStress(snapshot).report;
+  expect(limited.inputs[0]?.outcome).toBe("timed-out");
+  expect(limited.invariants.find((item) => item.id === 9)?.status).toBe("fail");
+  for (const request of [
+    { at: 55, primary: false },
+    { at: 90, primary: true },
+  ]) {
+    const result = summarizeRestartStress({
+      ...snapshot,
+      events: [
+        {
+          at: 52,
+          event: "agent",
+          payload: {
+            runId: newcomer.id,
+            stream: "run_status",
+            data: { reason: "rate_limit", retryAt: 90 },
+          },
+        },
+      ],
+      provider: { requests: [{ ...request, id: newcomer.id, streaming: true, status: 200 }] },
+    }).report;
+    expect(result.invariants.find((item) => item.id === 9)?.status).toBe("pass");
+  }
+  const delayed = summarizeRestartStress({
+    ...snapshot,
+    events: [
+      {
+        at: 92,
+        event: "agent",
+        payload: {
+          runId: newcomer.id,
+          stream: "run_status",
+          data: { reason: "rate_limit", retryAt: 93 },
+        },
+      },
+    ],
+    provider: {
+      requests: [{ at: 95, id: newcomer.id, primary: true, streaming: true, status: 200 }],
+    },
+  }).report;
+  expect(delayed.invariants.find((item) => item.id === 9)?.status).toBe("unknown");
+});
 
 it("reports consumed input without an answer as unresolved, retaining actual request latency", () => {
   const { report } = summarizeRestartStress({

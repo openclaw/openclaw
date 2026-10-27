@@ -159,8 +159,9 @@ export function serializeGatewayFrame(value: unknown): string | SerializedGatewa
     return JSON.stringify(value);
   }
   const chunks: Uint8Array[] = [];
+  let json = "";
   const appendObject = (record: Record<string, unknown>): void => {
-    chunks.push(Buffer.from("{"));
+    json += "{";
     let separator = "";
     for (const key of Object.keys(record)) {
       const field = record[key];
@@ -177,16 +178,18 @@ export function serializeGatewayFrame(value: unknown): string | SerializedGatewa
       if (!encoded) {
         continue;
       }
-      chunks.push(Buffer.from(`${separator}${encoded}`));
+      json += `${separator}${encoded}`;
       separator = ",";
       if (rawArray) {
-        chunks.push(rawArray);
+        chunks.push(Buffer.from(json), rawArray);
+        json = "";
       } else if (nestedPayload) {
         appendObject(nestedPayload);
       }
     }
-    chunks.push(Buffer.from("}"));
+    json += "}";
   };
   appendObject(frame);
+  chunks.push(Buffer.from(json));
   return new SerializedGatewayFrame(chunks);
 }

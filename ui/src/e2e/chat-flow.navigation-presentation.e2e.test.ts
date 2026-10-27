@@ -688,6 +688,7 @@ suite.define(() => {
     );
     const gateway = await installMockGateway(page, {
       featureMethods: ["chat.metadata", "chat.startup", "sessions.patch"],
+      sessions,
       methodResponses: {
         "sessions.list": {
           cases: [

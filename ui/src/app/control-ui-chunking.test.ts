@@ -389,7 +389,10 @@ describe("Control UI build chunking", () => {
   it("lets snapshot prewarming load independently of the measured boot groups", () => {
     const database = new URL("../pages/chat/session-snapshot-database.ts", import.meta.url)
       .pathname;
-    const stableGroup = controlUiCodeSplitting.groups[0];
+    const stableGroup = controlUiCodeSplitting.groups.find(
+      (group) =>
+        typeof group.name === "function" && group.name(database) === "session-snapshot-database",
+    );
     const bootGroup = controlUiCodeSplitting.groups.find(
       (group) =>
         typeof group.name === "string" &&
