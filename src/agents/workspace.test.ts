@@ -59,6 +59,7 @@ beforeEach(async () => {
 });
 
 afterEach(async () => {
+  vi.unstubAllEnvs();
   vi.restoreAllMocks();
   closeOpenClawStateDatabaseForTest();
   resetLegacyWorkspaceStateCheckForTest();
@@ -617,3 +618,4 @@ describe.runIf(process.platform !== "win32" && process.getuid?.() !== 0)(
     );
   },
 );
+
