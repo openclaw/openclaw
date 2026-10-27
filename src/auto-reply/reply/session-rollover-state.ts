@@ -13,7 +13,7 @@ import { isAcpSessionKey, isSubagentSessionKey } from "../../routing/session-key
 
 /** Builds the durable session fields retained across a reply-session rollover. */
 export function resolveReplySessionRolloverState(
-  entry: SessionEntry,
+  entry: InternalSessionEntry,
   sessionKey: string,
 ): Partial<InternalSessionEntry> {
   const preservedSelection = resolveResetPreservedSelection({ entry });
@@ -55,6 +55,7 @@ export function resolveReplySessionRolloverState(
           spawnedBySessionId: entry.spawnedBySessionId,
           spawnedWorkspaceDir: entry.spawnedWorkspaceDir,
           spawnedCwd: entry.spawnedCwd,
+          inheritedWorktreeId: entry.inheritedWorktreeId,
           spawnDepth: entry.spawnDepth,
           subagentRole: entry.subagentRole,
           subagentControlScope: entry.subagentControlScope,

@@ -170,6 +170,8 @@ export async function proveSandboxMutationCheckpoints(owner: LocalWorkspaceOwner
   ]);
   vi.spyOn(projectionOwner, "resolveLocalWorkspaceOwner").mockResolvedValue({
     ...owner,
+    workspaceRelativePath: "",
+    sourceSessionKeys: [],
     [Symbol.dispose]() {},
   });
   using projection = await prepareLocalSandboxWorkspace({

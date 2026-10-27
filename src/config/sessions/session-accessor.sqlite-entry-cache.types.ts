@@ -93,6 +93,7 @@ function selectSessionSharingEntry(entry: InternalSessionEntry) {
     sessionRoot: entry.sessionRoot,
     spawnedCwd: entry.spawnedCwd,
     spawnedWorkspaceDir: entry.spawnedWorkspaceDir,
+    inheritedWorktreeId: entry.inheritedWorktreeId,
     toolOverrides: entry.toolOverrides,
   };
 }

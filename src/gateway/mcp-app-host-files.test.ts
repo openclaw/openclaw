@@ -45,6 +45,8 @@ vi.mock("./server-methods/sessions-files.js", () => ({
     const root = state.root;
     return {
       root,
+      [Symbol.dispose]() {},
+      async settle() {},
       assertCurrent: () => {
         if (root !== state.root) {
           throw new Error("App file workspace authority changed");

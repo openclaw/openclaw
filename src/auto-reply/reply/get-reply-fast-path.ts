@@ -8,7 +8,11 @@ import { resolveResetPreservedSelection } from "../../config/sessions/reset-pres
 import { loadReplySessionInitializationSnapshot } from "../../config/sessions/session-accessor.js";
 import { buildSessionCreationStamp } from "../../config/sessions/session-entry-provenance.js";
 import { resolveSessionKey } from "../../config/sessions/session-key.js";
-import { DEFAULT_RESET_TRIGGERS, type SessionEntry } from "../../config/sessions/types.js";
+import {
+  DEFAULT_RESET_TRIGGERS,
+  type InternalSessionEntry,
+  type SessionEntry,
+} from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { isVitestRuntimeEnv } from "../../infra/env.js";
 import {
@@ -96,7 +100,7 @@ export async function initFastReplySessionState(params: {
     sessionKey,
     relatedSessionKeys,
   });
-  const existingEntry = snapshot.currentEntry;
+  const existingEntry: InternalSessionEntry | undefined = snapshot.currentEntry;
   const sessionStore: Record<string, SessionEntry> = {};
   for (const key of [...relatedSessionKeys, existingEntry?.parentSessionKey]) {
     const entry = key ? snapshot.readEntry(key) : undefined;
@@ -137,7 +141,7 @@ export async function initFastReplySessionState(params: {
   const channel = normalizeOptionalString(ctx.Provider);
   const subject = normalizeOptionalString(ctx.GroupSubject);
   const groupChannel = normalizeOptionalString(ctx.GroupChannel);
-  const sessionEntry: SessionEntry = {
+  const sessionEntry: InternalSessionEntry = {
     ...(!resetTriggered ? existingEntry : undefined),
     sessionId,
     ...(!existingEntry && ctx.SessionCreation
@@ -151,6 +155,7 @@ export async function initFastReplySessionState(params: {
           spawnedBySessionId: existingEntry.spawnedBySessionId,
           spawnedWorkspaceDir: existingEntry.spawnedWorkspaceDir,
           spawnedCwd: existingEntry.spawnedCwd,
+          inheritedWorktreeId: existingEntry.inheritedWorktreeId,
           parentSessionKey: existingEntry.parentSessionKey,
           parentSessionId: existingEntry.parentSessionId,
           parentSessionLifecycleRevision: existingEntry.parentSessionLifecycleRevision,

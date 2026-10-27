@@ -15,6 +15,9 @@ function generationValidPrivateFieldsForSameSession(
     return undefined;
   }
   const state: Partial<InternalSessionEntry> = {
+    ...(existingEntry.inheritedWorktreeId
+      ? { inheritedWorktreeId: existingEntry.inheritedWorktreeId }
+      : {}),
     ...(existingEntry.priorWorkspace ? { priorWorkspace: existingEntry.priorWorkspace } : {}),
     ...(existingEntry.cliHistoryBoundary
       ? { cliHistoryBoundary: existingEntry.cliHistoryBoundary }

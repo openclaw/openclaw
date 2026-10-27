@@ -1,5 +1,6 @@
 import { expectDefined } from "@openclaw/normalization-core/expect";
 import type { Result } from "@openclaw/normalization-core/result";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import {
   ErrorCodes,
   errorShape,
@@ -332,11 +333,20 @@ export function projectPreparedSessionWorkspace(
     pendingProjectGitUrl?: string;
     pendingWorktree?: SessionEntry["pendingWorktree"];
     spawnedCwd?: string;
+    execNode?: string;
+    execCwd?: string;
     preparedLifecycle?: PreparedGatewaySessionLifecycle;
   },
 ): Partial<SessionEntry> {
-  const { projectId, pendingProjectGitUrl, pendingWorktree, spawnedCwd, preparedLifecycle } =
-    params;
+  const {
+    projectId,
+    pendingProjectGitUrl,
+    pendingWorktree,
+    spawnedCwd,
+    execNode,
+    preparedLifecycle,
+  } = params;
+  const execCwd = normalizeOptionalString(params.execCwd);
   const createdNewEntry = existingEntry === undefined;
   const recovered =
     preparedLifecycle?.worktree &&
@@ -348,6 +358,12 @@ export function projectPreparedSessionWorkspace(
     // Creation owns cwd adoption; public patching does not grant this authority.
     ...(spawnedCwd ? { spawnedCwd } : {}),
     ...(preparedLifecycle?.worktree ? { worktree: preparedLifecycle.worktree } : {}),
+    ...(execNode ? { execHost: "node", execNode, ...(execCwd ? { execCwd } : {}) } : {}),
+    // Replacing the source retires both the borrowed path and its authority reference.
+    ...(existingEntry?.inheritedWorktreeId &&
+    (spawnedCwd || preparedLifecycle?.worktree || execNode)
+      ? { inheritedWorktreeId: undefined, spawnedWorkspaceDir: undefined }
+      : {}),
     ...(preparedLifecycle?.repositoryWorkspaceId
       ? { repositoryWorkspaceId: preparedLifecycle.repositoryWorkspaceId }
       : {}),
@@ -427,6 +443,7 @@ export async function commitPreparedSessionWorkspace(params: {
           sessionRoot: prepared.sessionRoot,
           spawnedCwd: prepared.spawnedCwd,
           spawnedWorkspaceDir: undefined,
+          inheritedWorktreeId: undefined,
           ...(prepared.worktree ? { worktree: prepared.worktree } : {}),
           ...(params.priorWorkspace ? { priorWorkspace: params.priorWorkspace } : {}),
           ...(params.clearPendingIntent

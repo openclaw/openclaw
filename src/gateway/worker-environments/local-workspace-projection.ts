@@ -1,3 +1,4 @@
+import path from "node:path";
 import { timeWorktreePreparationPhase } from "../../agents/worktrees/preparation-timing.js";
 import {
   captureWorktreeRegistryReadGuard,
@@ -14,8 +15,10 @@ import { resolveSessionStorePathCore } from "../../config/sessions/paths.js";
 import { retainPreparedSessionEntryPredicate } from "../../config/sessions/session-accessor.sqlite-entry-cache-publication-state.js";
 import { withSessionEntryReadOnlyInWorker } from "../../config/sessions/session-entry-read-runtime.js";
 import { captureSessionEntryMetadataRead } from "../../config/sessions/session-entry-source-authority.js";
+import type { InternalSessionEntry as SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { isPathInside } from "../../infra/path-guards.js";
+import { isSubagentSessionKey, parseAgentSessionKey } from "../../routing/session-key.js";
 import { registerOpenClawAgentDatabaseAsyncResource } from "../../state/openclaw-agent-db-resources.js";
 import { executeExistingOpenClawStateRead } from "../../state/openclaw-state-db-readonly.js";
 import { projectionOperations } from "./local-workspace-state.js";
@@ -323,25 +326,19 @@ export async function expireLocalWorkspaceProjection(params: {
   );
 }
 
-/** Bind only a live session-owned managed checkout, never an arbitrary host path. */
-export async function resolveLocalWorkspaceOwner(params: {
+/** Retain the exact workspace selection, including the producer's native spawn receipt. */
+async function retainLocalWorkspaceSession(params: {
   cfg: OpenClawConfig;
   agentId: string;
   sessionKey: string;
-  workspaceDir?: string;
-  env?: NodeJS.ProcessEnv;
+  env: NodeJS.ProcessEnv;
   assertCurrent?: () => void;
-}): Promise<(LocalWorkspaceOwner & Disposable) | undefined> {
-  const context = captureWorktreeRunEndContext(params.env ?? process.env);
-  const env = { ...(params.env ?? process.env), ...context.environment };
+}) {
   const scope = {
     agentId: params.agentId,
     sessionKey: params.sessionKey,
-    storePath: resolveSessionStorePathCore(params.cfg.session?.store, {
-      agentId: params.agentId,
-      env,
-    }),
-    env,
+    storePath: resolveSessionStorePathCore(params.cfg.session?.store, params),
+    env: params.env,
   };
   const lifetime = new DisposableStack();
   let retained: ReturnType<typeof retainPreparedSessionEntryPredicate> | undefined;
@@ -357,6 +354,20 @@ export async function resolveLocalWorkspaceOwner(params: {
       throw new Error("Local sandbox workspace authority changed");
     }
   };
+  const matches = (before: SessionEntry | undefined, after: SessionEntry | undefined) =>
+    after !== undefined &&
+    before?.sessionId === after.sessionId &&
+    before?.lifecycleRevision === after.lifecycleRevision &&
+    after.archivedAt === undefined &&
+    before?.worktree?.id === after.worktree?.id &&
+    before?.worktree?.branch === after.worktree?.branch &&
+    before?.worktree?.repoRoot === after.worktree?.repoRoot &&
+    before?.spawnedBy === after.spawnedBy &&
+    before?.spawnedBySessionId === after.spawnedBySessionId &&
+    before?.parentSessionLifecycleRevision === after.parentSessionLifecycleRevision &&
+    before?.inheritedWorktreeId === after.inheritedWorktreeId &&
+    before?.spawnedWorkspaceDir === after.spawnedWorkspaceDir &&
+    before?.spawnedCwd === after.spawnedCwd;
   const metadata = captureSessionEntryMetadataRead(scope, assertActive);
   try {
     let databaseIdentity: string | undefined;
@@ -375,12 +386,7 @@ export async function resolveLocalWorkspaceOwner(params: {
                 databaseIdentity,
                 sessionKey: scope.sessionKey,
                 entry: preparedEntry,
-                matches: (before, after) =>
-                  after !== undefined &&
-                  before?.sessionId === after.sessionId &&
-                  before?.lifecycleRevision === after.lifecycleRevision &&
-                  after.archivedAt === undefined &&
-                  before?.worktree?.id === after.worktree?.id,
+                matches,
               });
             }
             return preparedEntry;
@@ -395,63 +401,205 @@ export async function resolveLocalWorkspaceOwner(params: {
             });
           },
         );
-    if (!entry?.worktree?.id) {
-      release();
-      return undefined;
+    // Retained predicates observe later publications; admission must also reject an archived snapshot.
+    if (entry?.archivedAt !== undefined) {
+      throw new Error("Local sandbox workspace authority changed");
     }
-    const accept = captureWorktreeRegistryReadGuard(context, "lifecycle");
-    const worktree = await readRegistryWorktree(context, entry.worktree.id);
-    const assertWorktreeCurrent = accept(worktree);
-    if (
-      !worktree ||
-      worktree.removedAt !== undefined ||
-      worktree.ownerKind !== "session" ||
-      worktree.ownerId !== params.sessionKey ||
-      worktree.repoRoot !== entry.worktree.repoRoot ||
-      worktree.branch !== entry.worktree.branch ||
-      (params.workspaceDir && !isPathInside(worktree.path, params.workspaceDir))
-    ) {
-      throw new Error("Local sandbox managed workspace owner changed");
-    }
-    const assertSessionCurrent = () => {
-      if (!metadata) {
+    return {
+      entry,
+      assertCurrent: () => {
         assertActive();
-        if (!retained?.isCurrent()) {
+        if (metadata ? !matches(entry, metadata.readCurrent()) : !retained?.isCurrent()) {
           throw new Error("Local sandbox workspace authority changed");
         }
-        return;
-      }
-      const now = metadata.readCurrent();
-      if (
-        now?.sessionId !== entry.sessionId ||
-        now?.lifecycleRevision !== entry.lifecycleRevision ||
-        now?.archivedAt !== undefined ||
-        now?.worktree?.id !== worktree.id
-      ) {
-        throw new Error("Local sandbox workspace authority changed");
-      }
-    };
-    const assertCurrent = () => {
-      assertSessionCurrent();
-      assertWorktreeCurrent();
-    };
-    assertCurrent();
-    return {
-      agentId: params.agentId,
-      sessionKey: params.sessionKey,
-      sessionId: entry.sessionId,
-      lifecycleRevision: entry.lifecycleRevision ?? null,
-      worktree,
-      assertCurrent,
-      workerAuthority: {
-        assertCurrent: assertSessionCurrent,
-        predicates: [{ kind: "live-binding", record: worktree }],
       },
-      env,
       [Symbol.dispose]: release,
     };
   } catch (error) {
     release();
+    throw error;
+  }
+}
+
+/** Resolve admitted project access; publication and cleanup keep direct ownership by default. */
+export async function resolveLocalWorkspaceOwner(params: {
+  cfg: OpenClawConfig;
+  agentId: string;
+  sessionKey: string;
+  workspaceDir?: string;
+  inheritWorkspace?: boolean;
+  env?: NodeJS.ProcessEnv;
+  assertCurrent?: () => void;
+}): Promise<
+  | (LocalWorkspaceOwner &
+      Disposable & {
+        workspaceRelativePath: string;
+        sourceSessionKeys: readonly string[];
+      })
+  | undefined
+> {
+  const context = captureWorktreeRunEndContext(params.env ?? process.env);
+  const env = { ...(params.env ?? process.env), ...context.environment };
+  const lifetime = new DisposableStack();
+  const sessions: Array<Awaited<ReturnType<typeof retainLocalWorkspaceSession>>> = [];
+  const assertSessionsCurrent = () => {
+    params.assertCurrent?.();
+    if (lifetime.disposed) {
+      throw new Error("Local sandbox workspace authority changed");
+    }
+    for (const session of sessions) {
+      session.assertCurrent();
+    }
+  };
+  try {
+    let sessionKey = params.sessionKey;
+    let expectedParent: { sessionId: string; lifecycleRevision: string | undefined } | undefined;
+    const visited = new Set<string>();
+    const sourceSessionKeys: string[] = [];
+    let inheritedWorktreeId: string | undefined;
+    const inheritedSelections: Array<{ workspaceDir: string; cwd?: string }> = [];
+    while (true) {
+      if (visited.has(sessionKey)) {
+        throw new Error("Local sandbox workspace lineage changed");
+      }
+      visited.add(sessionKey);
+      const session = lifetime.use(
+        await retainLocalWorkspaceSession({ ...params, env, sessionKey }),
+      );
+      const entry = session.entry;
+      if (!entry) {
+        if (expectedParent) {
+          throw new Error("Local sandbox workspace parent changed");
+        }
+        lifetime.dispose();
+        return undefined;
+      }
+      sessions.push(session);
+      assertSessionsCurrent();
+      if (
+        expectedParent &&
+        (entry.sessionId !== expectedParent.sessionId ||
+          entry.lifecycleRevision !== expectedParent.lifecycleRevision)
+      ) {
+        throw new Error("Local sandbox workspace parent changed");
+      }
+      if (!entry.worktree?.id) {
+        // Old helpers keep their private workspace; a path or lineage alone is not admission.
+        if (!params.inheritWorkspace || !entry.inheritedWorktreeId) {
+          if (inheritedWorktreeId) {
+            throw new Error("Local sandbox inherited workspace binding changed");
+          }
+          lifetime.dispose();
+          return undefined;
+        }
+        if (
+          (inheritedWorktreeId && entry.inheritedWorktreeId !== inheritedWorktreeId) ||
+          !isSubagentSessionKey(sessionKey) ||
+          !entry.spawnedBy ||
+          parseAgentSessionKey(entry.spawnedBy)?.agentId !== params.agentId ||
+          !entry.spawnedBySessionId ||
+          !entry.spawnedWorkspaceDir
+        ) {
+          throw new Error("Local sandbox inherited workspace binding changed");
+        }
+        inheritedWorktreeId = entry.inheritedWorktreeId;
+        inheritedSelections.push({
+          workspaceDir: entry.spawnedWorkspaceDir,
+          cwd: entry.spawnedCwd,
+        });
+        expectedParent = {
+          sessionId: entry.spawnedBySessionId,
+          lifecycleRevision: entry.parentSessionLifecycleRevision,
+        };
+        sessionKey = entry.spawnedBy;
+        sourceSessionKeys.push(sessionKey);
+        continue;
+      }
+      const accept = captureWorktreeRegistryReadGuard(context, "lifecycle");
+      const worktree = await readRegistryWorktree(context, entry.worktree.id);
+      const assertWorktreeCurrent = accept(worktree);
+      assertSessionsCurrent();
+      if (
+        !worktree ||
+        (inheritedWorktreeId && worktree.id !== inheritedWorktreeId) ||
+        worktree.removedAt !== undefined ||
+        worktree.ownerKind !== "session" ||
+        worktree.ownerId !== sessionKey ||
+        worktree.repoRoot !== entry.worktree.repoRoot ||
+        worktree.branch !== entry.worktree.branch
+      ) {
+        throw new Error("Local sandbox managed workspace owner changed");
+      }
+      const workspaceDir =
+        params.workspaceDir ?? inheritedSelections[0]?.workspaceDir ?? worktree.path;
+      const paths = [
+        workspaceDir,
+        ...inheritedSelections.flatMap((selection) =>
+          selection.cwd ? [selection.workspaceDir, selection.cwd] : [selection.workspaceDir],
+        ),
+      ];
+      let projectionPath: string | undefined;
+      if (paths.some((selected) => !isPathInside(worktree.path, selected))) {
+        if (!params.inheritWorkspace) {
+          throw new Error("Local sandbox managed workspace owner changed");
+        }
+        const reply = await executeExistingOpenClawStateRead(
+          { path: context.admission.databasePath, env },
+          { type: "localWorkspace.get", input: { id: worktree.id } },
+          { context, current: true, live: true },
+        );
+        assertSessionsCurrent();
+        assertWorktreeCurrent();
+        const projection = reply?.type === "localWorkspace.get" && reply.ok ? reply.row : undefined;
+        if (
+          !projection ||
+          projection.agent_id !== params.agentId ||
+          projection.session_key !== sessionKey ||
+          projection.session_id !== entry.sessionId ||
+          projection.lifecycle_revision !== (entry.lifecycleRevision ?? null)
+        ) {
+          throw new Error("Local sandbox inherited workspace binding changed");
+        }
+        projectionPath = projection.projection_path;
+      }
+      const relativePath = (selected: string) => {
+        if (isPathInside(worktree.path, selected)) {
+          return path.relative(worktree.path, selected);
+        }
+        if (projectionPath && isPathInside(projectionPath, selected)) {
+          return path.relative(projectionPath, selected);
+        }
+        throw new Error("Local sandbox managed workspace owner changed");
+      };
+      const workspaceRelativePath = relativePath(workspaceDir);
+      // Runtime paths and recorded source paths use different coordinates for the same root.
+      if (paths.some((selected) => relativePath(selected) !== workspaceRelativePath)) {
+        throw new Error("Local sandbox inherited workspace binding changed");
+      }
+      const assertCurrent = () => {
+        assertSessionsCurrent();
+        assertWorktreeCurrent();
+      };
+      assertCurrent();
+      return {
+        agentId: params.agentId,
+        sessionKey,
+        sessionId: entry.sessionId,
+        lifecycleRevision: entry.lifecycleRevision ?? null,
+        workspaceRelativePath,
+        sourceSessionKeys,
+        worktree,
+        assertCurrent,
+        workerAuthority: {
+          assertCurrent: assertSessionsCurrent,
+          predicates: [{ kind: "live-binding", record: worktree }],
+        },
+        env,
+        [Symbol.dispose]: () => lifetime.dispose(),
+      };
+    }
+  } catch (error) {
+    lifetime.dispose();
     throw error;
   }
 }

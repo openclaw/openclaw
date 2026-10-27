@@ -20,7 +20,7 @@ export async function respondSessionFileDownload(params: {
   path: string;
   loaded: LoadedSessionFiles;
   repository: Awaited<ReturnType<typeof resolveRepositoryWorkspaceAccess>>;
-  hostRead: ReturnType<typeof createSessionFileReadAuthority>;
+  hostRead: Awaited<ReturnType<typeof createSessionFileReadAuthority>>;
   assertSessionCurrent: () => void;
   release: () => void;
   onGrantCreated: () => void;

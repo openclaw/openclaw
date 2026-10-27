@@ -5,6 +5,7 @@ import { resolveSandboxConfigForAgent } from "../../agents/sandbox/config.js";
 import { hashTextSha256 } from "../../agents/sandbox/hash.js";
 import { resolveSandboxRuntimeStatus } from "../../agents/sandbox/runtime-status.js";
 import { resolveSandboxWorkspaceLayoutPaths } from "../../agents/sandbox/shared.js";
+import { createInitialSubagentSession } from "../../agents/subagents/spawn/subagent-spawn-session-patch.js";
 import { resolveSubagentSessionAttachmentRootDir } from "../../agents/subagents/subagent-attachment-paths.js";
 import { requireGit } from "../../agents/worktrees/git.js";
 import { ManagedWorktreeService } from "../../agents/worktrees/service.js";
@@ -18,6 +19,7 @@ import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { createDirectChatContext } from "../server-chat.agent-events.test-helpers.js";
 import { handleGatewayRequest } from "../server-methods.js";
 import { roleClient, rolePolicyConfig } from "../session-sharing.test-utils.js";
+import { resolveGatewaySessionStoreTargetInWorker } from "../session-utils-store-worker.js";
 import { sessionsDiffHandlers } from "./sessions-diff.js";
 import { sessionsFilesHandlers } from "./sessions-files.js";
 import {
@@ -51,6 +53,9 @@ it("keeps real guest file requests in their session's private sandbox", async ()
       owner.connectionSignal = connection.signal;
       const viewer = roleClient("view", "files-viewer");
       viewer.connect.scopes = ["operator.sessions.write"];
+      const viewerConnection = new AbortController();
+      viewer.connId = "files-viewer";
+      viewer.connectionSignal = viewerConnection.signal;
       const admin = roleClient("write", "files-admin");
       admin.connect.scopes = ["operator.admin"];
       const createdBy = (client: typeof owner) => ({
@@ -100,7 +105,7 @@ it("keeps real guest file requests in their session's private sandbox", async ()
       });
       const context = createDirectChatContext({ getRuntimeConfig: () => cfg });
       const request = async (
-        operation: "list" | "get" | "download" | "assets" | "diff",
+        operation: "list" | "get" | "set" | "download" | "assets" | "diff",
         params: Record<string, unknown> = {},
         client = owner,
       ) => {
@@ -346,22 +351,167 @@ it("keeps real guest file requests in their session's private sandbox", async ()
         cfg.agents!.defaults!.sandbox!.mode = "off";
         cfg.agents!.defaults!.sandbox!.workspaceAccess = "none";
         // Normal required-sandbox provisioning leaves host-only inputs out of its own project.
-        const guestManaged = await provision("guest-files", false);
         const guestManagedKey = "agent:main:dashboard:managed-guest-files";
         const guestManagedSessionId = "managed-guest-files-session";
-        await save(guestManagedKey, {
+        const guestManaged = await service.create({
+          repoRoot: repo,
+          name: "guest-files",
+          baseRef: "HEAD",
+          provisionIgnoredFiles: false,
+          ownerKind: "session",
+          ownerId: guestManagedKey,
+        });
+        const guestManagedEntry: InternalSessionEntry = {
           ...managedEntry,
           sessionId: guestManagedSessionId,
+          lifecycleRevision: "guest-files-generation",
           sandbox: "required",
           createdActor: entry.createdActor,
           spawnedCwd: guestManaged.path,
           worktree: { id: guestManaged.id, branch: guestManaged.branch, repoRoot: repo },
-        });
+        };
+        await save(guestManagedKey, guestManagedEntry);
         await expectContent("README.md", "base\n", viewer, guestManagedKey);
         await error("get", { sessionKey: guestManagedKey, path: ".env.local" }, viewer);
+        // Persist the child through native creation: path/lineage alone never grant this source.
+        const childKey = "agent:main:subagent:files-native-child";
+        const spawnChild = async (childSessionKey: string, workspaceDir = guestManaged.path) =>
+          createInitialSubagentSession({
+            cfg,
+            requesterAgentId: "main",
+            targetAgentId: "main",
+            childSessionKey,
+            requesterInternalKey: guestManagedKey,
+            parentTarget: await resolveGatewaySessionStoreTargetInWorker({
+              cfg,
+              key: guestManagedKey,
+              agentId: "main",
+              projection: "full",
+            }),
+            expectedParentSessionId: guestManagedSessionId,
+            incognito: false,
+            creationPolicy: { actor: createdBy(owner), sandbox: "required" },
+            completionOwnerSessionKey: guestManagedKey,
+            spawnedWorkspaceDir: workspaceDir,
+            sessionPermissionPolicy: { mode: "workspace", root: workspaceDir },
+            modelPatch: {},
+            collect: false,
+          });
+        const child = await spawnChild(childKey);
+        expect(child.status).toBe("ok");
+        await write(guestManaged.path, "accepted.txt", "parent accepted bytes\n");
+        for (const client of [owner, viewer, admin]) {
+          await expectContent("accepted.txt", "parent accepted bytes\n", client, childKey);
+          await error("get", { sessionKey: childKey, path: ".env.local" }, client);
+          await error("get", { sessionKey: childKey, path: hostFile }, client);
+        }
+        expect((await ok("list", { sessionKey: childKey })).root).toBe(guestManaged.path);
+        expect((await ok("diff", { sessionKey: childKey })).root).toBe(guestManaged.path);
+        const selectedFolder = path.join(guestManaged.path, "selected-folder");
+        await fs.mkdir(selectedFolder);
+        await write(selectedFolder, "scoped.txt", "selected source\n");
+        const scopedChildKey = "agent:main:subagent:files-scoped-child";
+        expect((await spawnChild(scopedChildKey, selectedFolder)).status).toBe("ok");
+        await expectContent("scoped.txt", "selected source\n", owner, scopedChildKey);
+        await error("get", { sessionKey: scopedChildKey, path: "../accepted.txt" });
+
+        await write(guestManaged.path, "editable.txt", "before child edit\n");
+        const editable = await ok("get", { sessionKey: childKey, path: "editable.txt" }, admin);
+        await ok(
+          "set",
+          {
+            sessionKey: childKey,
+            path: "editable.txt",
+            content: "after child edit\n",
+            expectedHash: editable.file.hash,
+            expectedSource: editable.source,
+          },
+          admin,
+        );
+        await expectContent("editable.txt", "after child edit\n", owner, childKey);
+        await expectContent("editable.txt", "after child edit\n", owner, guestManagedKey);
+        const childDownload = await ok("download", { sessionKey: childKey, path: "accepted.txt" });
+        // Routine completion/activity is not a revocation of the child's accepted source.
+        await save(guestManagedKey, { ...guestManagedEntry, updatedAt: 2, lastActivityAt: 2 });
+        const childBytes = await openSessionFileDownload(owner, childDownload.url);
+        expect(childBytes.status).toBe(200);
+        expect(await childBytes.text()).toBe("parent accepted bytes\n");
+        const childEntry = (
+          await resolveGatewaySessionStoreTargetInWorker({
+            cfg,
+            key: childKey,
+            agentId: "main",
+            projection: "full",
+          })
+        ).store[childKey]!;
+        const oldChildKey = "agent:main:subagent:files-legacy-child";
+        const legacyChild: InternalSessionEntry = {
+          ...childEntry,
+          sessionId: "legacy-child-files",
+          inheritedWorktreeId: undefined,
+        };
+        await save(oldChildKey, legacyChild);
+        const { resolveSandboxSession } = await import("../../agents/sandbox/session-selection.js");
+        const legacySandbox = await resolveSandboxSession({
+          config: cfg,
+          agentId: "main",
+          sessionKey: oldChildKey,
+          preparedRuntimeStatus: resolveSandboxRuntimeStatus({
+            cfg,
+            agentId: "main",
+            sessionKey: oldChildKey,
+            preparedSessionEntry: legacyChild,
+          }),
+        });
+        expect(legacySandbox).not.toBeNull();
+        const legacyRoot = resolveSandboxWorkspaceLayoutPaths({
+          cfg: legacySandbox!.cfg,
+          rawSessionKey: legacySandbox!.rawSessionKey,
+          agentId: legacySandbox!.runtime.agentId,
+          isolationSubject: legacySandbox!.runtime.isolationSubject,
+          workspaceDir: guestManaged.path,
+        }).workspaceDir;
+        await fs.mkdir(legacyRoot, { recursive: true });
+        await write(legacyRoot, "legacy-child.txt", "existing private child bytes\n");
+        await expectContent(
+          "legacy-child.txt",
+          "existing private child bytes\n",
+          owner,
+          oldChildKey,
+        );
+        await error("get", { sessionKey: oldChildKey, path: "accepted.txt" });
+        const privateDownload = await ok(
+          "download",
+          { sessionKey: childKey, path: "accepted.txt" },
+          viewer,
+        );
+        // A child may be visible while its source is private to someone else.
+        await save(guestManagedKey, {
+          ...guestManagedEntry,
+          visibility: "draft",
+        });
+        await error("get", { sessionKey: childKey, path: "accepted.txt" }, viewer);
+        expect((await openSessionFileDownload(viewer, privateDownload.url)).status).toBe(404);
+        await expectContent("accepted.txt", "parent accepted bytes\n", owner, childKey);
+        await expectContent("accepted.txt", "parent accepted bytes\n", admin, childKey);
+        await save(guestManagedKey, guestManagedEntry);
+        const resetDownload = await ok("download", { sessionKey: childKey, path: "accepted.txt" });
+        await save(guestManagedKey, {
+          ...guestManagedEntry,
+          lifecycleRevision: "reset-guest-files-generation",
+        });
+        expect((await openSessionFileDownload(owner, resetDownload.url)).status).toBe(404);
+        await error("get", { sessionKey: childKey, path: "accepted.txt" });
+        await expectContent(
+          "legacy-child.txt",
+          "existing private child bytes\n",
+          owner,
+          oldChildKey,
+        );
         readOnlyRole.sandbox = "required";
         expect((await openSessionFileDownload(readOnly, readableDownload.url)).status).toBe(404);
       } finally {
+        viewerConnection.abort();
         connection.abort();
       }
     },

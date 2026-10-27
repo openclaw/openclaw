@@ -372,15 +372,24 @@ describe("getReplyFromConfig fast test bootstrap", () => {
     });
   });
 
-  it("preserves node provenance, lineage, and usage preferences during fast reset bootstrap", async () => {
-    const preserved = { ...FAST_RESET_LINEAGE_FIXTURE, responseUsage: "full" as const };
-    await seedSession({ sessionId: "existing-fast-reset-lineage", ...preserved });
-    const result = await bootstrap();
-    expect(result).toMatchObject({
-      resetTriggered: true,
-      sessionEntry: { previousSessionId: "existing-fast-reset-lineage", ...preserved },
-    });
-  });
+  it.each([false, true])(
+    "preserves node provenance, lineage, and usage preferences during fast reset bootstrap (inherited workspace=%s)",
+    async (inheritedWorkspace) => {
+      const preserved = {
+        ...FAST_RESET_LINEAGE_FIXTURE,
+        responseUsage: "full" as const,
+        ...(inheritedWorkspace
+          ? { spawnedCwd: undefined, inheritedWorktreeId: "managed-parent-worktree" }
+          : {}),
+      };
+      await seedSession({ sessionId: "existing-fast-reset-lineage", ...preserved });
+      const result = await bootstrap();
+      expect(result).toMatchObject({
+        resetTriggered: true,
+        sessionEntry: { previousSessionId: "existing-fast-reset-lineage", ...preserved },
+      });
+    },
+  );
 
   it("rejects a fast reset bootstrap for a model-locked session", async () => {
     const entry = {

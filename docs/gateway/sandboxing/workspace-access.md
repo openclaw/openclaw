@@ -48,7 +48,28 @@ source preparation, not direct access to that host directory. Arbitrary external
 `cwd` values and direct project bindings remain restricted.
 
 Visible child sessions keep their managed worktree as the sandbox workspace on
-later turns, including sessions created before an update.
+later turns, including sessions created before an update. Newly spawned
+same-agent native helpers inherit an admitted reference to the current managed
+project when they do not select another workspace. They use that project's
+existing write policy and inherited tool restrictions; the parent remains the
+managed worktree owner, and helper changes settle through its reconciliation
+owner. Files uses the same source with the current viewer's permissions.
+Publication and worktree removal remain with the owning session.
+
+Inherited access requires the original parent session and project binding to
+remain current. Parent yield or normal turn completion does not revoke it;
+reset, archive, replacement, or source detachment does. A helper explicitly
+created with `worktree: true` owns its separate checkout and retains that
+checkout's independent lifetime.
+
+Existing helpers without an admitted project reference keep their previous
+private workspace, saved output, and file links. They are not automatically
+moved into the parent's project. Start a new helper from the managed parent to
+use inherited project access. New helpers require a supporting OpenClaw build:
+older builds do not understand the reference and can fall back to a separate
+private workspace. Output written there stays separate from the managed project
+when a supporting build resumes. Keep these helper sessions on supporting builds;
+there is no automatic copy or merge of older private output.
 
 The private checkout contains the selected source commit, not the host's shared
 Git configuration, credential helpers, other branches, or ignored files selected

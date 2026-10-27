@@ -256,6 +256,7 @@ describe("plugin session extension SessionEntry projection", () => {
       "custom-icon": "icon",
       "context-window-source": "contextTokensSource",
       "sandbox-policy": "sandbox",
+      "inherited-project": "inheritedWorktreeId",
       "pending-final-text": "pendingFinalDeliveryText",
       "completion-custody": "restartRecoveryHarnessCompletion",
       "retired-execsecurity": "execSecurity",

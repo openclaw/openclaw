@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import path from "node:path";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { acquireSessionActorStorage } from "../../../config/sessions/session-actor-storage-acquisition.js";
 import {
@@ -9,6 +10,7 @@ import {
   buildSessionCreationStamp,
   inheritSessionGitContributorProfileIds,
 } from "../../../config/sessions/session-entry-provenance.js";
+import { captureSessionEntrySourceAssertion } from "../../../config/sessions/session-entry-source-authority.js";
 import {
   sessionEntryCommitGuardOptions,
   composeSessionSourceAssertion,
@@ -33,6 +35,7 @@ import {
   prepareSessionWorktreeCreation,
   resolveSessionProjectRoot,
 } from "../../../gateway/session-worktree-preparation.js";
+import { isPathInside } from "../../../infra/path-guards.js";
 import {
   captureSessionTarget,
   type SessionTarget,
@@ -178,6 +181,71 @@ export async function createInitialSubagentSession(input: {
             expectedParentSessionId: params.expectedParentSessionId,
             senderIsOwner: params.senderIsOwner,
           });
+          const inheritWorkspace =
+            params.requesterAgentId === params.targetAgentId &&
+            parentTarget.agentId === params.targetAgentId &&
+            !params.worktree &&
+            !params.spawnedCwd &&
+            Boolean(params.spawnedWorkspaceDir) &&
+            Boolean(parentEntry?.worktree?.id || parentEntry?.inheritedWorktreeId);
+          using inheritedWorkspace = inheritWorkspace
+            ? await (
+                await import("../../../gateway/worker-environments/local-workspace-projection.js")
+              ).resolveLocalWorkspaceOwner({
+                cfg: params.cfg,
+                agentId: params.requesterAgentId,
+                sessionKey: params.requesterInternalKey,
+                workspaceDir: params.spawnedWorkspaceDir,
+                inheritWorkspace: true,
+                assertCurrent: params.assertActive,
+              })
+            : undefined;
+          if (inheritWorkspace && !inheritedWorkspace) {
+            throw new Error("Spawn parent managed workspace is no longer available");
+          }
+          const spawnedWorkspaceDir = inheritedWorkspace
+            ? path.join(inheritedWorkspace.worktree.path, inheritedWorkspace.workspaceRelativePath)
+            : params.spawnedWorkspaceDir;
+          const requesterRoot = params.sessionPermissionPolicy?.root;
+          const inheritedSessionRoot =
+            inheritedWorkspace &&
+            spawnedWorkspaceDir &&
+            params.spawnedWorkspaceDir &&
+            requesterRoot &&
+            isPathInside(params.spawnedWorkspaceDir, requesterRoot)
+              ? path.join(
+                  spawnedWorkspaceDir,
+                  path.relative(params.spawnedWorkspaceDir, requesterRoot),
+                )
+              : requesterRoot;
+          // The captured requester supplies lineage; the retained workspace owner may
+          // be an ancestor. Keep both selections current through the child's commit.
+          const inheritedWorkspaceSource = inheritedWorkspace
+            ? captureSessionEntrySourceAssertion({
+                scope: {
+                  agentId: params.requesterAgentId,
+                  sessionKey: parentTarget.canonicalKey,
+                  storePath: parentTarget.storePath,
+                },
+                readSource: parentTarget.capturedReadSource,
+                expected: parentEntry,
+                fields: [
+                  "sessionId",
+                  "lifecycleRevision",
+                  "archivedAt",
+                  "worktree",
+                  "inheritedWorktreeId",
+                  "spawnedWorkspaceDir",
+                  "spawnedCwd",
+                  "sessionRoot",
+                ],
+                assertCurrent: inheritedWorkspace.assertCurrent,
+                assertHostCurrent: params.assertActive,
+                refuse: () => {
+                  throw new Error("Spawn parent managed workspace changed before child creation");
+                },
+              })
+            : undefined;
           if (params.incognito) {
             const assertCurrent = () => {
               params.assertActive?.();
@@ -277,6 +345,7 @@ export async function createInitialSubagentSession(input: {
                 },
                 {
                   ...initialChildSessionPatch,
+                  ...(inheritedWorkspace ? { spawnedWorkspaceDir } : {}),
                   // Native spawn keeps agent RPC label semantics, not sessions.patch's uniqueness policy.
                   ...(params.label ? { label: params.label } : {}),
                   ...(params.sessionPermissionPolicy
@@ -286,9 +355,8 @@ export async function createInitialSubagentSession(input: {
                           ? {
                               sessionRoot: resolveUserPath(
                                 params.inheritedToolPolicySource === "sender"
-                                  ? params.sessionPermissionPolicy.root
-                                  : (params.spawnedWorkspaceDir ??
-                                      params.sessionPermissionPolicy.root),
+                                  ? (inheritedSessionRoot ?? params.sessionPermissionPolicy.root)
+                                  : (spawnedWorkspaceDir ?? params.sessionPermissionPolicy.root),
                               ),
                             }
                           : {}),
@@ -297,6 +365,7 @@ export async function createInitialSubagentSession(input: {
                   ...childSessionIdentity,
                   // Stamp after all request patches so model input cannot create a grant.
                   ...parentLineage,
+                  inheritedWorktreeId: inheritedWorkspace?.worktree.id,
                   ...(parentEntry?.skillLibrarySelections
                     ? {
                         // Committed pins belong to the admitted turn, even if the parent refreshes.
@@ -322,7 +391,11 @@ export async function createInitialSubagentSession(input: {
                   }),
                 },
                 sessionEntryCommitGuardOptions(
-                  composeSessionSourceAssertion([params.assertActive, assertSourceCurrent]),
+                  composeSessionSourceAssertion([
+                    params.assertActive,
+                    inheritedWorkspaceSource,
+                    assertSourceCurrent,
+                  ]),
                 ),
               );
             const entry = childMemory

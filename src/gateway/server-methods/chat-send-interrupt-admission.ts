@@ -4,17 +4,27 @@ import {
   type SessionControllerStopCapture,
 } from "../../sessions/session-controller.stop.js";
 import { retainGatewayOperatorRun } from "../operator-run-cancellation.js";
+import type { ChatSendAdmissionParams } from "./chat-send-pre-admission.types.js";
 
 /** Retain the caller before an interrupt can change session state. */
 export async function prepareChatSendInterruptAdmission(params: {
-  operator: Parameters<typeof retainGatewayOperatorRun>[0];
+  operator: ChatSendAdmissionParams;
   interruptCapture?: SessionControllerStopCapture;
   entry?: RpcSourceRef;
   assertCurrent?: () => void;
   assertSessionTargetCurrent: () => void;
   abortSignal: AbortSignal;
 }) {
-  const operator = await retainGatewayOperatorRun({ ...params.operator, entry: params.entry });
+  const { session } = params.operator;
+  const operator = await retainGatewayOperatorRun({
+    ...params.operator,
+    runId: session.clientRunId,
+    spawnedBy: session.entry?.spawnedBy,
+    workspaceSession: session.entry
+      ? { agentId: session.agentId, sessionKey: session.sessionKey, entry: session.entry }
+      : undefined,
+    entry: params.entry,
+  });
   const assertCurrent = () => {
     params.assertCurrent?.();
     params.abortSignal.throwIfAborted();

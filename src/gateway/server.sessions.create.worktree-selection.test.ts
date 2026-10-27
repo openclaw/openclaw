@@ -4,13 +4,24 @@ import os from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
 import { afterEach, expect, onTestFinished, test, vi } from "vitest";
+import type {
+  SessionsCreateResult,
+  SessionsFilesGetResult,
+} from "../../packages/gateway-protocol/src/schema/sessions.js";
 import { captureMethodCall } from "../../test/helpers/capture-method-call.js";
 import { withinTest } from "../../test/helpers/promise.js";
+import { runQaGatewayFixture } from "../../test/helpers/qa-gateway-cleanup.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { mintSpawnSessionKey } from "../agents/spawn-plan.js";
+import { createInitialSubagentSession } from "../agents/subagents/spawn/subagent-spawn-session-patch.js";
 import * as registryReads from "../agents/worktrees/registry-read.js";
-import { findLiveRegistryWorktreeByOwner } from "../agents/worktrees/registry.test-support.js";
+import {
+  findLiveRegistryWorktreeByOwner,
+  getRegistryWorktree,
+} from "../agents/worktrees/registry.test-support.js";
 import { ManagedWorktreeService } from "../agents/worktrees/service.js";
 import type { ManagedWorktreeRecord } from "../agents/worktrees/types.js";
+import { captureRuntimeConfigAsyncReader } from "../config/config.js";
 import { loadSessionEntry } from "../config/sessions/session-accessor.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
@@ -32,14 +43,22 @@ import {
   removeSessionWorktree,
 } from "./server.sessions.create.test-support.js";
 import { expectNonAdminWorktreeSetupIsSkipped } from "./server.sessions.create.worktree-scope.test-support.js";
+import { resolveGatewaySessionStoreTargetInWorker } from "./session-utils-store-worker.js";
 import {
   agentDiscoveryMock,
   dispatchInboundMessageMock,
+  rpcReq,
+  startConnectedServerWithClient,
   testState,
   writeSessionStore,
 } from "./test-helpers.js";
 import { createClaudeCliRegistrationFixture } from "./test-helpers.plugin-registry.js";
-import { sessionStoreEntry, directSessionReq } from "./test/server-sessions.test-helpers.js";
+import { releaseGatewaySessionStoreFixture } from "./test/server-sessions-resources.test-helpers.js";
+import {
+  sessionStoreEntry,
+  directSessionReq,
+  getGatewayConfigModule,
+} from "./test/server-sessions.test-helpers.js";
 
 let gitWorkspaceTemplate: string;
 const { createSessionStoreDir, withSessionTestState } = setupSessionCreateHandlerTestHarness(
@@ -379,3 +398,193 @@ test("sessions.create skips the worktree setup script for non-admin callers", as
     prepareSessionStore: createSessionStoreDir,
   });
 });
+
+test.each(["newly owned worktree", "execution node"] as const)(
+  "sessions.create switches inherited helper files to its %s",
+  async (destination) => {
+    const workspace = await copyGitWorkspace(
+      gitWorkspaceTemplate,
+      tempDirs.make("openclaw-inherited-helper-adoption-"),
+    );
+    testState.agentConfig = { workspace };
+    const { dir, storePath } = await createSessionStoreDir();
+    let parentKey = "agent:main:dashboard:workspace-adoption-parent";
+    const childKey = mintSpawnSessionKey({ targetAgentId: "main", backend: "subagent" });
+    // The real Gateway must commit this store selection before serving retained file reads.
+    const gateway = await startConnectedServerWithClient(undefined, {
+      auth: { mode: "none" },
+      bind: "loopback",
+      controlUiEnabled: false,
+    });
+    const { ws } = gateway;
+    const exercise = async () => {
+      const parent = await rpcReq<SessionsCreateResult>(ws, "sessions.create", {
+        agentId: "main",
+        key: parentKey,
+        cwd: workspace,
+        worktree: true,
+        worktreeName: "workspace-adoption-parent",
+      });
+      expect(parent.ok, JSON.stringify(parent.error)).toBe(true);
+      parentKey = requireNonEmptyString(parent.payload?.key, "created parent session key");
+      const parentWorkspace = parent.payload?.worktree;
+      const parentEntry = loadSessionEntry({ agentId: "main", sessionKey: parentKey, storePath });
+      if (!parentWorkspace || !parentEntry) {
+        throw new Error("expected the parent's persisted managed workspace");
+      }
+      const cfg = (await getGatewayConfigModule()).getRuntimeConfig();
+      const child = await createInitialSubagentSession({
+        cfg,
+        requesterAgentId: "main",
+        targetAgentId: "main",
+        childSessionKey: childKey,
+        requesterInternalKey: parentKey,
+        parentTarget: await resolveGatewaySessionStoreTargetInWorker({
+          cfg,
+          key: parentKey,
+          agentId: "main",
+          projection: "full",
+        }),
+        expectedParentSessionId: parentEntry.sessionId,
+        incognito: false,
+        creationPolicy: { actor: { type: "agent", id: "main" } },
+        completionOwnerSessionKey: parentKey,
+        spawnedWorkspaceDir: parentWorkspace.path,
+        sessionPermissionPolicy: { mode: "workspace", root: parentWorkspace.path },
+        modelPatch: {},
+        collect: false,
+      });
+      expect(child.status).toBe("ok");
+      expect(loadSessionEntry({ agentId: "main", sessionKey: childKey, storePath })).toMatchObject({
+        inheritedWorktreeId: parentWorkspace.id,
+        spawnedWorkspaceDir: parentWorkspace.path,
+      });
+      await fs.writeFile(path.join(parentWorkspace.path, "selection.txt"), "parent source\n");
+      const parentFile = await rpcReq<SessionsFilesGetResult>(ws, "sessions.files.get", {
+        sessionKey: parentKey,
+        path: "selection.txt",
+      });
+      expect(parentFile.ok, `parent Files get: ${JSON.stringify(parentFile.error)}`).toBe(true);
+      expect(parentFile.payload?.file.content).toBe("parent source\n");
+      // Downloads retain even an admin's row, as an inherited-source read must do.
+      const parentDownload = await rpcReq(ws, "sessions.files.download", {
+        sessionKey: parentKey,
+        path: "selection.txt",
+      });
+      expect(
+        parentDownload.ok,
+        `parent Files download: ${JSON.stringify(parentDownload.error)}`,
+      ).toBe(true);
+      const read = () =>
+        rpcReq<SessionsFilesGetResult>(ws, "sessions.files.get", {
+          sessionKey: childKey,
+          path: "selection.txt",
+        });
+      const inherited = await read();
+      expect(inherited.ok, JSON.stringify(inherited.error)).toBe(true);
+      expect(inherited.payload?.file.content).toBe("parent source\n");
+
+      const inheritedChoice = {
+        inheritedWorktreeId: parentWorkspace.id,
+        spawnedWorkspaceDir: parentWorkspace.path,
+        permissionMode: "workspace",
+      };
+      const retry = await rpcReq<SessionsCreateResult>(ws, "sessions.create", {
+        agentId: "main",
+        key: childKey,
+      });
+      expect(retry.ok, JSON.stringify(retry.error)).toBe(true);
+      const retriedEntry = loadSessionEntry({ agentId: "main", sessionKey: childKey, storePath });
+      expect(retriedEntry).toMatchObject({
+        ...inheritedChoice,
+        sessionRoot: await fs.realpath(workspace),
+      });
+      const afterRetry = await read();
+      expect(afterRetry.ok, JSON.stringify(afterRetry.error)).toBe(true);
+      expect(afterRetry.payload?.file.content).toBe("parent source\n");
+
+      const reset = await rpcReq(ws, "sessions.reset", { key: childKey, agentId: "main" });
+      expect(reset.ok, JSON.stringify(reset.error)).toBe(true);
+      const resetEntry = loadSessionEntry({ agentId: "main", sessionKey: childKey, storePath });
+      expect(resetEntry).toMatchObject({
+        ...inheritedChoice,
+        sessionRoot: retriedEntry?.sessionRoot,
+      });
+      expect(resetEntry?.lifecycleRevision).not.toBe(retriedEntry?.lifecycleRevision);
+      expect(resetEntry?.worktree).toBeUndefined();
+      expect(findLiveRegistryWorktreeByOwner(process.env, "session", childKey)).toBeUndefined();
+      expect(findLiveRegistryWorktreeByOwner(process.env, "session", parentKey)).toMatchObject({
+        id: parentWorkspace.id,
+        path: parentWorkspace.path,
+      });
+      const afterReset = await read();
+      expect(afterReset.ok, JSON.stringify(afterReset.error)).toBe(true);
+      expect(afterReset.payload?.file.content).toBe("parent source\n");
+
+      if (destination === "execution node") {
+        const nodeCwd = "C:\\Users\\test\\Projects";
+        const moved = await rpcReq<SessionsCreateResult>(ws, "sessions.create", {
+          agentId: "main",
+          key: childKey,
+          execNode: "windows-box",
+          cwd: nodeCwd,
+        });
+        expect(moved.ok, JSON.stringify(moved.error)).toBe(true);
+        const stored = loadSessionEntry({ agentId: "main", sessionKey: childKey, storePath });
+        expect(stored).toMatchObject({
+          sessionId: requireNonEmptyString(resetEntry?.sessionId, "reset helper session id"),
+          execHost: "node",
+          execNode: "windows-box",
+          execCwd: nodeCwd,
+        });
+        expect(stored?.inheritedWorktreeId).toBeUndefined();
+        expect(stored?.spawnedWorkspaceDir).toBeUndefined();
+        expect(stored?.worktree).toBeUndefined();
+        expect(findLiveRegistryWorktreeByOwner(process.env, "session", childKey)).toBeUndefined();
+        return;
+      }
+
+      const adopted = await rpcReq<SessionsCreateResult>(ws, "sessions.create", {
+        agentId: "main",
+        key: childKey,
+        cwd: workspace,
+        worktree: true,
+        worktreeName: "workspace-adoption-child",
+      });
+      expect(adopted.ok, JSON.stringify(adopted.error)).toBe(true);
+      const ownWorkspace = adopted.payload?.worktree;
+      if (!ownWorkspace) {
+        throw new Error("expected the helper's newly selected managed workspace");
+      }
+      expect(ownWorkspace.id).not.toBe(parentWorkspace.id);
+      expect(getRegistryWorktree(process.env, ownWorkspace.id)).toMatchObject({
+        ownerKind: "session",
+        ownerId: childKey,
+      });
+      await fs.writeFile(path.join(ownWorkspace.path, "selection.txt"), "helper owned source\n");
+      const selected = await read();
+      expect(selected.ok, JSON.stringify(selected.error)).toBe(true);
+      expect(selected.payload?.file.content).toBe("helper owned source\n");
+      expect(selected.payload?.root).toBe(ownWorkspace.path);
+      const stored = loadSessionEntry({ agentId: "main", sessionKey: childKey, storePath });
+      expect(stored).toBeDefined();
+      expect(stored?.inheritedWorktreeId).toBeUndefined();
+      expect(stored?.spawnedWorkspaceDir).toBeUndefined();
+    };
+    await runQaGatewayFixture(exercise, async () => {
+      ws.close();
+      await gateway.server.close();
+      gateway.envSnapshot.restore();
+      await captureRuntimeConfigAsyncReader()();
+      await runQaGatewayFixture(
+        () => removeSessionWorktree(childKey),
+        () => removeSessionWorktree(parentKey),
+        disposeSessionReadContexts,
+        () => releaseGatewaySessionStoreFixture(dir),
+        () => {
+          testState.agentConfig = undefined;
+        },
+      );
+    });
+  },
+);

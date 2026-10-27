@@ -583,6 +583,8 @@ it.for([false, true])(
     const execution = new AbortController();
     vi.spyOn(projectionOwner, "resolveLocalWorkspaceOwner").mockResolvedValue({
       ...owner,
+      workspaceRelativePath: "",
+      sourceSessionKeys: [],
       assertCurrent: () => {
         owner.assertCurrent();
         if (!ownerActive) {
@@ -1039,3 +1041,10 @@ it.each(["lifecycle reset", "replacement session"] as const)(
     }
   },
 );
+
+it("keeps native same-agent helpers on the inherited managed projection", async () => {
+  await archiveFixture();
+  const { proveInheritedLocalWorkspace } =
+    await import("./local-workspace-inheritance.test-support.js");
+  await proveInheritedLocalWorkspace(owner, canonical);
+});

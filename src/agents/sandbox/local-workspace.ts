@@ -37,7 +37,11 @@ export async function prepareLocalSandboxWorkspace(params: {
   assertHost?: () => void;
 }) {
   params.assertCurrent?.();
-  const owner = await resolveLocalWorkspaceOwner({ ...params, assertCurrent: params.assertHost });
+  const owner = await resolveLocalWorkspaceOwner({
+    ...params,
+    inheritWorkspace: true,
+    assertCurrent: params.assertHost,
+  });
   if (!owner) {
     params.assertCurrent?.();
     return undefined;
@@ -127,10 +131,7 @@ export async function prepareLocalSandboxWorkspace(params: {
     assertCurrent();
     return {
       workspaceDir,
-      workspaceCwd: path.join(
-        workspaceDir,
-        path.relative(owner.worktree.path, params.workspaceDir ?? owner.worktree.path),
-      ),
+      workspaceCwd: path.join(workspaceDir, owner.workspaceRelativePath),
       assertCurrent,
       retain: () => {
         assertCurrent();

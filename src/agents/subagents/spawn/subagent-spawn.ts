@@ -172,7 +172,6 @@ export async function spawnSubagentDirect(
     const {
       spawnedCwd,
       toolSpawnMetadata,
-      spawnedWorkspaceDir,
       requesterOrigin,
       incognito,
       childSessionKey,
@@ -184,7 +183,7 @@ export async function spawnSubagentDirect(
       resolvedModelMetadata,
       acceptedModelFields,
     } = childPlan.resolved;
-    let { childSessionOrigin } = childPlan.resolved;
+    let { childSessionOrigin, spawnedWorkspaceDir } = childPlan.resolved;
     const sessionError = (error: string): SpawnSubagentResult => ({
       status: "error",
       error,
@@ -274,6 +273,7 @@ export async function spawnSubagentDirect(
       return sessionError(preparedSpawnContext.error);
     }
     const childEntry = preparedSpawnContext.childEntry ?? initialSession.entry;
+    spawnedWorkspaceDir = childEntry?.spawnedWorkspaceDir ?? spawnedWorkspaceDir;
     if (childEntry) {
       // Only preparation's committed entry can advance cleanup ownership. A reread
       // of the key could capture a reset/rebound successor that this spawn does not own.

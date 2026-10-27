@@ -1,3 +1,7 @@
+import { missingScopeErrorShape } from "../../packages/gateway-protocol/src/index.js";
+import { createAdmittedRunOperatorAuthority } from "../agents/admitted-run-context.js";
+import { composeSessionSourceAssertion } from "../config/sessions/session-source-authority.js";
+import type { InternalSessionEntry } from "../config/sessions/types.js";
 import { isAgentEventLifecycleGenerationCurrent } from "../infra/agent-events.js";
 import { throwIfSettledRejected } from "../infra/error-graph-internal.js";
 import { captureSessionControllerSourceSettlement } from "../sessions/session-controller.mailbox.js";
@@ -13,6 +17,7 @@ import { waitForChatAbortTerminalPersistence } from "./chat-abort-lifecycle-inte
 import { createChatAbortOps } from "./chat-abort-ops.js";
 import { abortChatRunById } from "./chat-abort.js";
 import { retainGatewayDeviceRevocation } from "./device-revocation.js";
+import { authorizeOperatorScopesForRequiredScope } from "./method-scopes.js";
 import { captureGatewayOperatorRunAuthority } from "./operator-run-authority.js";
 import {
   captureAbortedPartial,
@@ -22,6 +27,7 @@ import {
   type ChatAbortSessionSnapshot,
 } from "./server-methods/chat-aborted-partial.js";
 import type { GatewayRequestContext } from "./server-methods/types.js";
+import { SessionMutationAuthorizationChangedError } from "./session-mutation-authorization-error.js";
 import { formatForLog } from "./ws-log.js";
 
 type OperatorRunCancellationContext = Pick<
@@ -39,30 +45,154 @@ export async function retainGatewayOperatorRun(
     runId: string;
     /** Canonical child relationship from the admitted session. */
     spawnedBy?: string;
+    /** Canonical admission snapshot; public/plugin projections omit the private workspace reference. */
+    workspaceSession?: {
+      agentId: string;
+      sessionKey: string;
+      entry: InternalSessionEntry;
+    };
     entry?: RpcSourceRef;
     abortSession?: Extract<ChatAbortSessionSnapshot, { ok: true }>["value"];
   },
 ) {
-  const captured = await captureGatewayOperatorRunAuthority({
+  let captured = await captureGatewayOperatorRunAuthority({
     ...params,
     // Every child owns its accepted work beyond the requester's recovery turn.
     independentContinuation: params.spawnedBy ? true : undefined,
   });
+  const workspaceSession = params.workspaceSession;
+  if (workspaceSession?.entry.inheritedWorktreeId) {
+    const resources = new DisposableStack();
+    const capturedSource = captured;
+    resources.defer(() => capturedSource?.release());
+    try {
+      const context = params.context.resolveGatewayContext?.();
+      if (!context) {
+        throw new Error("Inherited project access requires its current Gateway binding");
+      }
+      const assertSourceCurrent = () => {
+        capturedSource?.authority.assertCurrent();
+        if (params.context.resolveGatewayContext?.() !== context) {
+          throw new Error("Inherited project Gateway authority changed");
+        }
+      };
+      const { resolveLocalWorkspaceOwner } =
+        await import("./worker-environments/local-workspace-projection.js");
+      const owner = await resolveLocalWorkspaceOwner({
+        cfg: context.getRuntimeConfig(),
+        agentId: workspaceSession.agentId,
+        sessionKey: workspaceSession.sessionKey,
+        workspaceDir: workspaceSession.entry.spawnedWorkspaceDir,
+        inheritWorkspace: true,
+        assertCurrent: assertSourceCurrent,
+      });
+      if (!owner || owner.worktree.id !== workspaceSession.entry.inheritedWorktreeId) {
+        owner?.[Symbol.dispose]();
+        throw new Error("Inherited project workspace is no longer available");
+      }
+      resources.use(owner);
+      const { resolveSessionMutationAuthorizationAsync } =
+        await import("./session-sharing-authorization-async.js");
+      // Chat and native child admission choose broad write before the own-session alternative. The
+      // retained source already intersects the initiating caller and transport ceilings.
+      const scope = authorizeOperatorScopesForRequiredScope(
+        "operator.write",
+        capturedSource?.authority.scopes ?? params.client?.connect.scopes ?? [],
+        "operator.sessions.write",
+      );
+      if (capturedSource && !scope.allowed) {
+        throw new SessionMutationAuthorizationChangedError(
+          missingScopeErrorShape({
+            missingScope: scope.missingScope,
+            requiredScopes: [scope.missingScope],
+          }),
+        );
+      }
+      const assertions: Array<() => void> = [owner.assertCurrent];
+      for (const sessionKey of owner.sourceSessionKeys) {
+        const { authorization, error } = await resolveSessionMutationAuthorizationAsync({
+          client: params.client,
+          context,
+          method: "agent",
+          requestParams: { agentId: workspaceSession.agentId, sessionKey },
+          sessionScope: scope.allowed ? scope.sessionScope : undefined,
+          assertInvocationCurrent: assertSourceCurrent,
+        });
+        if (error) {
+          throw new SessionMutationAuthorizationChangedError(error);
+        }
+        if (authorization) {
+          resources.defer(() => authorization.release?.());
+          assertions.push(authorization.assertCurrent);
+        }
+      }
+      let references = 1;
+      const assertCurrent = composeSessionSourceAssertion(
+        [assertSourceCurrent, ...assertions],
+        (assertSources) => {
+          if (resources.disposed) {
+            throw new Error("Inherited project run authority is no longer active");
+          }
+          assertSources();
+        },
+      );
+      const releaseHold = () => {
+        let released = false;
+        return () => {
+          if (!released) {
+            released = true;
+            if (--references === 0) {
+              resources.dispose();
+            }
+          }
+        };
+      };
+      assertCurrent();
+      // Accepted descendants retain the source policy and session chain, never the parent's turn.
+      if (capturedSource) {
+        const authority = createAdmittedRunOperatorAuthority({
+          ...capturedSource.authority,
+          assertCurrent,
+          retain: () => {
+            authority.assertCurrent();
+            references++;
+            return releaseHold();
+          },
+          get modelPolicy() {
+            return capturedSource.authority.modelPolicy;
+          },
+        });
+        captured = { authority, release: releaseHold() };
+      } else {
+        // Trusted system runs have no operator to bind. Their runtime keeps the same workspace owner.
+        resources.dispose();
+      }
+    } catch (error) {
+      resources.dispose();
+      throw error;
+    }
+  }
   const releaseSource =
     captured?.release ?? retainGatewayDeviceRevocation(params.hasCurrentClientAuthority);
   const signal = captured?.authority.signal;
-  const partialSession =
-    signal && params.entry
-      ? retainChatAbortSessionSnapshot(
-          params.abortSession
-            ? { ok: true, value: params.abortSession }
-            : await prepareChatAbortSessionSnapshot({
-                cfg: params.context.getRuntimeConfig(),
-                key: getRpcSourceIdentity(params.entry).sessionKey,
-                agentId: getRpcSourceIdentity(params.entry).agentId,
-              }),
-        )
-      : undefined;
+  let partialSession: ReturnType<typeof retainChatAbortSessionSnapshot> | undefined;
+  try {
+    partialSession =
+      signal && params.entry
+        ? retainChatAbortSessionSnapshot(
+            params.abortSession
+              ? { ok: true, value: params.abortSession }
+              : await prepareChatAbortSessionSnapshot({
+                  cfg: params.context.getRuntimeConfig(),
+                  key: getRpcSourceIdentity(params.entry).sessionKey,
+                  agentId: getRpcSourceIdentity(params.entry).agentId,
+                }),
+          )
+        : undefined;
+  } catch (error) {
+    releaseSource?.();
+    throw error;
+  }
   const cancellation =
     signal && params.entry && partialSession
       ? createGatewayOperatorRunCancellation({

@@ -227,6 +227,7 @@ it("persists private source and workspace facts but excludes runtime-only resolv
   const entry: InternalSessionEntry = {
     sessionId: "runtime-skills-session",
     updatedAt: 42,
+    inheritedWorktreeId: "11111111-1111-4111-8111-111111111111",
     pendingProjectGitUrl: "https://github.com/openclaw/openclaw.git",
     pendingWorktree: { name: "session-startup", titleSource: "Start work" },
     restartRecoveryRequesterSource: {
@@ -242,6 +243,7 @@ it("persists private source and workspace facts but excludes runtime-only resolv
   await upsertEntry(scope, entry);
   const persisted = JSON.parse(String(readRow()?.entry_json)) as InternalSessionEntry;
   for (const key of [
+    "inheritedWorktreeId",
     "pendingProjectGitUrl",
     "pendingWorktree",
     "restartRecoveryRequesterSource",

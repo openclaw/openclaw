@@ -11,6 +11,13 @@ export function buildResetWorkspaceFields(
 ) {
   return {
     spawnedWorkspaceDir: currentEntry?.spawnedWorkspaceDir,
+    inheritedWorktreeId:
+      params.clearSpawnedCwd ||
+      params.spawnedCwd !== undefined ||
+      preparedLifecycle?.spawnedCwd !== undefined ||
+      preparedLifecycle?.worktree !== undefined
+        ? undefined
+        : currentEntry?.inheritedWorktreeId,
     spawnedCwd: params.clearSpawnedCwd
       ? undefined
       : (preparedLifecycle?.spawnedCwd ?? params.spawnedCwd ?? currentEntry?.spawnedCwd),

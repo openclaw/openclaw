@@ -31,7 +31,6 @@ import {
 import { createChatAbortOps } from "../chat-abort-ops.js";
 import { abortChatRunById, registerChatAbortController } from "../chat-abort.js";
 import { readInProcessSubagentResume } from "../in-process-subagent-resume.js";
-import { retainGatewayOperatorRun } from "../operator-run-cancellation.js";
 import { prepareGatewayCronCreatorAuthorityAdmission } from "../server-methods/cron-creator-authority-admission.js";
 import { assertParentSubagentResumeSuccessorCurrent } from "../session-subagent-resume.js";
 import { formatForLog } from "../ws-log.js";
@@ -54,6 +53,7 @@ import type {
   PreparedAgentRunDispatch,
 } from "./agent-run-admission-types.js";
 import { isGatewayAgentAbortRejection } from "./agent-run-dispatch-outcome.js";
+import { retainAgentRunOperator } from "./agent-run-operator-admission.js";
 import { admitAgentRestartRecovery } from "./agent-run-recovery-admission.js";
 import {
   consumeGatewaySubagentCompletionToolHandoff,
@@ -287,7 +287,7 @@ export async function prepareAgentRunDispatch(
   });
   let preparedModelRuntimeLease: PreparedModelRuntimeLease | undefined;
   let dispatchRuntimeLease: ReturnType<typeof scopePreparedModelRuntimeLease> | undefined;
-  let capturedOperator: Awaited<ReturnType<typeof retainGatewayOperatorRun>> | undefined;
+  let capturedOperator: Awaited<ReturnType<typeof retainAgentRunOperator>> | undefined;
   let cronCreatorAuthority: ReturnType<typeof prepareGatewayCronCreatorAuthorityAdmission>;
   let callerAuthorityReleased = false;
   const releaseCallerAuthority = () => {
@@ -573,20 +573,7 @@ export async function prepareAgentRunDispatch(
   }
   try {
     // Accepted work retains this caller; the shared owner derives continuation from child lineage.
-    capturedOperator = await retainGatewayOperatorRun({
-      ...params,
-      spawnedBy: params.sessionEntry?.spawnedBy,
-      entry: activeRunAbort.entry,
-      abortSession: params.resolvedSessionKey
-        ? {
-            cfg: params.cfg,
-            storePath: params.lifecycleStorePath,
-            entry: params.sessionEntry,
-            canonicalKey: params.resolvedSessionKey,
-            agentId: params.activeSessionAgentId,
-          }
-        : undefined,
-    });
+    capturedOperator = await retainAgentRunOperator(params, activeRunAbort.entry);
     const operatorAdmission = revalidateAdmission(userTurn);
     if (operatorAdmission !== true) {
       return await operatorAdmission;

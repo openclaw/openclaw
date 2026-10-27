@@ -17,6 +17,7 @@ import {
 import { openOpenClawAgentDatabase } from "../../../state/openclaw-agent-db.js";
 import { resolveOpenClawAgentSqlitePath } from "../../../state/openclaw-agent-db.paths.js";
 import { withOpenClawTestState } from "../../../test-utils/openclaw-test-state.js";
+import { insertRegistryWorktree } from "../../worktrees/registry.js";
 import { prepareSubagentSessionContext } from "./subagent-spawn-context.js";
 import { createInitialSubagentSession } from "./subagent-spawn-session-patch.js";
 import * as spawnRuntime from "./subagent-spawn.runtime.js";
@@ -50,6 +51,121 @@ async function spawn(patch: Partial<SpawnInput> = {}) {
     }));
   return createInitialSubagentSession({ ...input, parentTarget });
 }
+
+async function seedManagedParent(workspaceDir: string, storePath: string) {
+  const worktree = {
+    id: "managed-parent-worktree",
+    name: "managed-parent",
+    repoFingerprint: "synthetic-source",
+    repoRoot: workspaceDir,
+    path: workspaceDir,
+    branch: "openclaw/parent",
+    baseRef: "main",
+    ownerKind: "session" as const,
+    ownerId: sessionKey,
+    createdAt: 1,
+    lastActiveAt: 1,
+  };
+  await insertRegistryWorktree(process.env, worktree);
+  await upsertSessionEntryCore(
+    { agentId: "main", storePath, sessionKey },
+    {
+      sessionId: "managed-parent-session",
+      lifecycleRevision: "managed-parent-generation",
+      worktree: { id: worktree.id, branch: worktree.branch, repoRoot: worktree.repoRoot },
+    },
+  );
+}
+
+it("records managed workspace inheritance only for new selector-free same-agent helpers", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+    const storePath = resolveOpenClawAgentSqlitePath({ agentId: "main" });
+    await seedManagedParent(state.workspaceDir, storePath);
+    const inherited = {
+      spawnedWorkspaceDir: state.workspaceDir,
+      sessionPermissionPolicy: { mode: "workspace" as const, root: state.workspaceDir },
+    };
+    const child = await spawn(inherited);
+    expect(child).toMatchObject({ status: "ok" });
+    expect(readEntry(storePath, childSessionKey)).toMatchObject({
+      inheritedWorktreeId: "managed-parent-worktree",
+      spawnedBySessionId: "managed-parent-session",
+      parentSessionLifecycleRevision: "managed-parent-generation",
+      spawnedWorkspaceDir: state.workspaceDir,
+      sessionRoot: state.workspaceDir,
+      permissionMode: "workspace",
+    });
+    expect(readEntry(storePath, childSessionKey)).not.toHaveProperty("worktree");
+
+    const nestedKey = "agent:main:subagent:nested";
+    expect(
+      await spawn({
+        ...inherited,
+        requesterInternalKey: childSessionKey,
+        childSessionKey: nestedKey,
+      }),
+    ).toMatchObject({ status: "ok" });
+    expect(readEntry(storePath, nestedKey)).toMatchObject({
+      inheritedWorktreeId: "managed-parent-worktree",
+      spawnedBy: childSessionKey,
+    });
+
+    for (const [key, selection] of [
+      ["agent:main:subagent:explicit", { targetAgentId: "main", spawnedCwd: state.workspaceDir }],
+      ["agent:worker:subagent:other-agent", { targetAgentId: "worker" }],
+    ] as const) {
+      expect(await spawn({ ...inherited, ...selection, childSessionKey: key })).toMatchObject({
+        status: "ok",
+      });
+      expect(
+        loadSessionEntry({
+          agentId: selection.targetAgentId,
+          storePath: resolveOpenClawAgentSqlitePath({ agentId: selection.targetAgentId }),
+          sessionKey: key,
+        }),
+      ).not.toHaveProperty("inheritedWorktreeId");
+    }
+
+    // An old helper's path and lineage alone must not opt its descendants into sharing.
+    await upsertSessionEntryCore(
+      { agentId: "main", storePath, sessionKey: childSessionKey },
+      { inheritedWorktreeId: undefined },
+    );
+    const legacyDescendant = "agent:main:subagent:legacy-descendant";
+    expect(
+      await spawn({
+        ...inherited,
+        requesterInternalKey: childSessionKey,
+        childSessionKey: legacyDescendant,
+      }),
+    ).toMatchObject({ status: "ok" });
+    expect(readEntry(storePath, legacyDescendant)).not.toHaveProperty("inheritedWorktreeId");
+  });
+});
+
+it("refuses managed inheritance when the captured requester changes before child commit", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+    const storePath = resolveOpenClawAgentSqlitePath({ agentId: "main" });
+    await seedManagedParent(state.workspaceDir, storePath);
+    const preparePhysical = sessionStorePaths.preparePhysicalSessionStorePath;
+    using _ = vi
+      .spyOn(sessionStorePaths, "preparePhysicalSessionStorePath")
+      .mockImplementation(async (...args) => {
+        if (args[0].sessionKey === childSessionKey) {
+          await upsertSessionEntryCore(
+            { agentId: "main", storePath, sessionKey },
+            { lifecycleRevision: "replaced-parent-generation" },
+          );
+        }
+        return preparePhysical(...args);
+      });
+    expect(await spawn({ spawnedWorkspaceDir: state.workspaceDir })).toMatchObject({
+      status: "error",
+      error: expect.stringContaining("workspace"),
+    });
+    expect(readEntry(storePath, childSessionKey)).toBeUndefined();
+  });
+});
 
 it.each(["creation", "fork"] as const)(
   "keeps the selected physical store when its alias changes before child %s",

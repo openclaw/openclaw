@@ -18,6 +18,7 @@ import { retainGatewayDeviceRevocation } from "./device-revocation.js";
 import { requireMcpAppInteraction, resolveMcpAppRequesterId } from "./mcp-app-operations.js";
 import {
   assertSessionFileReadPolicy,
+  retainSessionFileSourceReads,
   sessionFileWorkspaceMatches,
 } from "./server-methods/session-file-read-authority.js";
 import { retainSessionScopedRead } from "./server-methods/session-scoped-read.js";
@@ -28,6 +29,7 @@ import {
   readWorkspaceFile,
   resolveWorkspacePath,
 } from "./server-methods/workspace-fs.js";
+import { hasSessionReadAccessChanged } from "./session-sharing-policy.js";
 import { captureSessionMutationRouting } from "./session-sharing-preparation.js";
 import { loadGatewaySessionEntryReadOnlyAsync } from "./session-utils.js";
 import { WORKSPACE_PREVIEW_MAX_BYTES } from "./workspace-file-limits.js";
@@ -77,34 +79,77 @@ async function captureHostFileSession(
           },
         )?.entries.find((row) => row.sessionKey === loaded.canonicalKey)?.entry;
   const initial = readEntry();
-  const workspace = await prepareLocalSessionWorkspaceRoot({
-    ...target,
-    source: { entry: initial, cfg: config },
-  });
+  const assertCurrent = () => {
+    assertRoutingCurrent(getConfig());
+    if (!sessionFileWorkspaceMatches(initial, readEntry())) {
+      throw new Error("App file session workspace changed");
+    }
+  };
   return {
-    assertCurrent() {
-      assertRoutingCurrent(getConfig());
-      const current = readEntry();
-      if (!sessionFileWorkspaceMatches(initial, current)) {
-        throw new Error("App file session workspace changed");
-      }
-    },
+    assertCurrent,
     readEntry,
-    readRoot: (options?: GatewayRequestHandlerOptions) => {
-      const current = readEntry();
-      if (!current) {
-        return undefined;
-      }
-      workspace?.assertCurrent(getConfig(), current);
-      if (options) {
-        assertSessionFileReadPolicy(options, {
-          agentId: target.agentId,
-          canonicalKey: target.sessionKey,
-          entry: current,
-          unscopedHostRoot: workspace?.unscopedHostRoot,
+    async prepareWorkspace(options?: GatewayRequestHandlerOptions, mutation = false) {
+      const lifetime = new DisposableStack();
+      try {
+        assertCurrent();
+        const workspace = await prepareLocalSessionWorkspaceRoot({
+          ...target,
+          source: { entry: readEntry(), cfg: getConfig() },
         });
+        if (!workspace) {
+          return undefined;
+        }
+        lifetime.use(workspace);
+        const read =
+          options &&
+          (await retainSessionScopedRead(options, target.sessionKey, target.agentId, {
+            requireMaterialized: true,
+            retain: true,
+            entryMatches: (previous, current) =>
+              !hasSessionReadAccessChanged(previous, current) &&
+              sessionFileWorkspaceMatches(previous, current),
+          }));
+        if (read) {
+          lifetime.defer(read.release);
+        }
+        const sourceReads =
+          options &&
+          lifetime.use(
+            await retainSessionFileSourceReads(options, target.agentId, workspace, mutation),
+          );
+        const assertWorkspaceCurrent = () => {
+          assertCurrent();
+          read?.assertCurrent();
+          sourceReads?.assertCurrent();
+          const current = readEntry();
+          if (!current) {
+            throw new Error("App file session workspace changed");
+          }
+          workspace.assertCurrent(getConfig(), current);
+          if (options) {
+            assertSessionFileReadPolicy(options, {
+              agentId: target.agentId,
+              canonicalKey: target.sessionKey,
+              entry: current,
+              unscopedHostRoot: workspace.unscopedHostRoot,
+            });
+          }
+        };
+        assertWorkspaceCurrent();
+        return {
+          root: workspace.root,
+          assertCurrent: assertWorkspaceCurrent,
+          settle: (assertOperationCurrent: () => void) =>
+            workspace.settle(() => {
+              assertWorkspaceCurrent();
+              assertOperationCurrent();
+            }),
+          [Symbol.dispose]: () => lifetime.dispose(),
+        };
+      } catch (error) {
+        lifetime.dispose();
+        throw error;
       }
-      return workspace?.root;
     },
   };
 }
@@ -115,54 +160,48 @@ export async function prepareMcpAppHostFile(
   target: { sessionKey: string; agentId: string; path: string },
 ): Promise<McpAppHostFile> {
   const session = await captureHostFileSession(target, () => options.context.getRuntimeConfig());
-  const read = await retainSessionScopedRead(options, target.sessionKey, target.agentId, {
-    requireMaterialized: true,
-  });
-  try {
-    const rootDir = session.readRoot(options);
-    const entry = session.readEntry();
-    if (!rootDir || !entry?.sessionId) {
-      throw new Error("Local workspace file access is unavailable");
-    }
-    const requesterId = resolveMcpAppRequesterId(options.client);
-    const sessionId = entry.sessionId;
-    const assertCurrent = () => {
-      session.assertCurrent();
-      read?.assertCurrent();
-      if (
-        options.hasCurrentClientAuthority?.() === false ||
-        resolveMcpAppRequesterId(options.client) !== requesterId ||
-        session.readEntry()?.sessionId !== sessionId ||
-        session.readRoot(options) !== rootDir
-      ) {
-        throw new Error("App file workspace authority changed");
-      }
-    };
-    const resolved = resolveWorkspacePath(rootDir, target.path);
-    if (!resolved) {
-      throw new Error("File is outside the session workspace");
-    }
-    const browserPath = path.relative(rootDir, resolved);
-    const result = await readWorkspaceFile(rootDir, browserPath, {
-      assertCurrent,
-    });
-    assertCurrent();
-    if (!result || result === "too-large") {
-      throw new Error("File is missing, unsafe, or too large");
-    }
-    const file = {
-      resourceUri: "openclaw-file://" + randomUUID(),
-      name: path.basename(result.canonicalPath),
-      rootDir,
-      path: result.canonicalPath,
-      sessionId,
-      requesterId,
-    };
-    fileSources.set(file, session);
-    return file;
-  } finally {
-    read?.release();
+  using workspace = await session.prepareWorkspace(options);
+  const rootDir = workspace?.root;
+  const entry = session.readEntry();
+  if (!rootDir || !entry?.sessionId) {
+    throw new Error("Local workspace file access is unavailable");
   }
+  const requesterId = resolveMcpAppRequesterId(options.client);
+  const sessionId = entry.sessionId;
+  const assertCurrent = () => {
+    session.assertCurrent();
+    workspace?.assertCurrent();
+    if (
+      options.hasCurrentClientAuthority?.() === false ||
+      resolveMcpAppRequesterId(options.client) !== requesterId ||
+      session.readEntry()?.sessionId !== sessionId ||
+      workspace?.root !== rootDir
+    ) {
+      throw new Error("App file workspace authority changed");
+    }
+  };
+  const resolved = resolveWorkspacePath(rootDir, target.path);
+  if (!resolved) {
+    throw new Error("File is outside the session workspace");
+  }
+  await workspace?.settle(assertCurrent);
+  assertCurrent();
+  const browserPath = path.relative(rootDir, resolved);
+  const result = await readWorkspaceFile(rootDir, browserPath, { assertCurrent });
+  assertCurrent();
+  if (!result || result === "too-large") {
+    throw new Error("File is missing, unsafe, or too large");
+  }
+  const file = {
+    resourceUri: "openclaw-file://" + randomUUID(),
+    name: path.basename(result.canonicalPath),
+    rootDir,
+    path: result.canonicalPath,
+    sessionId,
+    requesterId,
+  };
+  fileSources.set(file, session);
+  return file;
 }
 
 async function withHostFile<T>(
@@ -182,13 +221,11 @@ async function withHostFile<T>(
     (await captureHostFileSession({ sessionKey, agentId: view.agentId }, () =>
       options.context.getRuntimeConfig(),
     ));
-  const read = await retainSessionScopedRead(options, sessionKey, view.agentId, {
-    requireMaterialized: true,
-  });
+  using workspace = await session.prepareWorkspace(options, mutation);
   const assertCurrent = () => {
     view.runtime.assertOwnerCurrent?.();
     session.assertCurrent();
-    read?.assertCurrent();
+    workspace?.assertCurrent();
     options.sessionMutationAuthorization?.assertCurrent();
     if (
       options.signal?.aborted ||
@@ -199,7 +236,7 @@ async function withHostFile<T>(
       view.allowedAppToolNames === undefined ||
       resolveMcpAppRequesterId(options.client) !== file.requesterId ||
       session.readEntry()?.sessionId !== file.sessionId ||
-      session.readRoot(options) !== file.rootDir
+      workspace?.root !== file.rootDir
     ) {
       throw new Error("MCP App file authority expired");
     }
@@ -215,18 +252,16 @@ async function withHostFile<T>(
       }
     }
   };
-  try {
+  await requireMcpAppInteraction(view);
+  assertCurrent();
+  await workspace?.settle(assertCurrent);
+  assertCurrent();
+  const result = await operation(file, assertCurrent);
+  if (!mutation) {
     await requireMcpAppInteraction(view);
     assertCurrent();
-    const result = await operation(file, assertCurrent);
-    if (!mutation) {
-      await requireMcpAppInteraction(view);
-      assertCurrent();
-    }
-    return result;
-  } finally {
-    read?.release();
   }
+  return result;
 }
 
 export async function readMcpAppHostFile(
@@ -372,10 +407,14 @@ export async function subscribeMcpAppHostFile(
       (await captureHostFileSession({ sessionKey, agentId: view.agentId }, () =>
         options.context.getRuntimeConfig(),
       ));
+    using resources = new DisposableStack();
+    const workspace = resources.use(await session.prepareWorkspace(options));
+    let retainedResources: DisposableStack | undefined;
     let closed = false;
     let notifying = false;
     const isCurrent = () => {
       session.assertCurrent();
+      workspace?.assertCurrent();
       return (
         !closed &&
         !client.connectionSignal?.aborted &&
@@ -386,7 +425,7 @@ export async function subscribeMcpAppHostFile(
         resolveMcpAppRequesterId(client) === file.requesterId &&
         options.context.getRuntimeConfig().mcp?.apps?.enabled === true &&
         session.readEntry()?.sessionId === file.sessionId &&
-        session.readRoot(options) === file.rootDir
+        workspace?.root === file.rootDir
       );
     };
     const notify = async () => {
@@ -463,6 +502,7 @@ export async function subscribeMcpAppHostFile(
         `mcp-app: file subscription closed view=${view.viewId}: ${formatErrorMessage(reason)}`,
       );
       releaseAuthority?.();
+      (retainedResources ?? resources).dispose();
       watcher.close();
       unwatchFile(filePath, rearm);
       client.connectionSignal?.removeEventListener("abort", onDisconnect);
@@ -486,8 +526,16 @@ export async function subscribeMcpAppHostFile(
     subscriptions.set(view, watchers);
     view.disposeCallbacks ??= new Set();
     view.disposeCallbacks.add(close);
-    if (!isCurrent()) {
-      close("authority changed while installing the subscription");
+    try {
+      if (!isCurrent()) {
+        close("authority changed while installing the subscription");
+      }
+      if (!closed) {
+        retainedResources = resources.move();
+      }
+    } catch (error) {
+      close(error);
+      throw error;
     }
     return {};
   });
@@ -499,7 +547,8 @@ export async function canOpenMcpAppFiles(view: McpAppViewLease): Promise<boolean
     return false;
   }
   const session = await captureHostFileSession({ sessionKey, agentId: view.agentId });
-  return Boolean(session.readRoot());
+  using workspace = await session.prepareWorkspace();
+  return Boolean(workspace?.root);
 }
 
 export async function openMcpAppFile(

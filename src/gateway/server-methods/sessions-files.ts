@@ -3,7 +3,6 @@ import { isDeepStrictEqual } from "node:util";
 import {
   ErrorCodes,
   errorShape,
-  isCloudWorkerPlacementState,
   type SessionsFilesGetParams,
   type SessionsFilesListParams,
   type SessionsFilesAssetsParams,
@@ -34,17 +33,10 @@ import {
 import type { SessionTranscriptReadScope } from "../session-transcript-readers.js";
 import { retainGatewaySessionEntryReadOnly } from "../session-utils-read-lifetime.js";
 import type { GatewaySessionEntryRead } from "../session-utils-store.js";
-import { readSessionWorkerPlacementAsync } from "../worker-environments/session-placement-lifecycle.js";
 import { WORKSPACE_PREVIEW_MAX_BYTES } from "../workspace-file-limits.js";
 import {
-  execOpenPath,
-  formatOpenPathError,
-  isHeadlessOpenPathError,
-  resolveOpenPathCommand,
-  sanitizePathForLog,
-} from "./open-path.js";
-import {
   createSessionFileReadAuthority,
+  retainSessionFileSourceReads,
   sessionFileWorkspaceMatches,
 } from "./session-file-read-authority.js";
 import {
@@ -63,6 +55,7 @@ import { retainSessionScopedRead } from "./session-scoped-read.js";
 import { loadSessionTouchedFiles } from "./session-touched-files.js";
 import { getSessionWorkspaceAssets } from "./sessions-file-assets.js";
 import { respondSessionFileDownload } from "./sessions-file-download.js";
+import { respondSessionWorkspaceReveal } from "./sessions-file-reveal.js";
 import type {
   GatewayRequestContext,
   GatewayRequestHandlerOptions,
@@ -78,7 +71,11 @@ import {
   type LoadedSessionFiles,
 } from "./workspace-files.js";
 
-async function loadSessionFileRoot(loaded: GatewaySessionEntryRead, messageEntryId?: string) {
+async function loadSessionFileRoot(
+  loaded: GatewaySessionEntryRead,
+  messageEntryId?: string,
+  inheritWorkspace?: boolean,
+) {
   if (!loaded.entry?.sessionId || loaded.entry.repositoryWorkspaceId) {
     const unavailable = {
       source: undefined,
@@ -97,12 +94,14 @@ async function loadSessionFileRoot(loaded: GatewaySessionEntryRead, messageEntry
     loaded.canonicalKey,
     loaded.entry,
     messageEntryId ? { entryId: messageEntryId, storePath: loaded.storePath } : undefined,
+    { inheritWorkspace },
   );
   const { spawnedCwd, root, diffCwd } = fileWorkspace;
   const fileRoot = resolveFileRoot({ root, spawnedCwd });
+  const workspaceId = loaded.entry.worktree?.id ?? fileWorkspace.inheritedWorkspaceId;
   const source =
-    !fileWorkspace.historical && loaded.entry.worktree?.id
-      ? { workspaceId: loaded.entry.worktree.id, root: root ?? null, fileRoot: fileRoot ?? null }
+    !fileWorkspace.historical && workspaceId
+      ? { workspaceId, root: root ?? null, fileRoot: fileRoot ?? null }
       : undefined;
   return {
     ...loaded,
@@ -132,8 +131,14 @@ export async function prepareLocalSessionWorkspaceRoot(params: {
     params.agentId ?? resolveAgentIdFromSessionKey(params.sessionKey),
     params.sessionKey,
     entry,
+    undefined,
+    { inheritWorkspace: true },
   );
-  return workspace.root && !getAgentWorkspaceAccess(workspace.root) ? workspace : undefined;
+  if (workspace.root && !getAgentWorkspaceAccess(workspace.root)) {
+    return workspace;
+  }
+  workspace[Symbol.dispose]();
+  return undefined;
 }
 
 /** Retain workspace authority independently of the evictable planning-row cache. */
@@ -145,6 +150,8 @@ export async function withSessionFileRoot<T>(
     getRuntimeConfig?: () => OpenClawConfig;
     messageEntryId?: string;
     retained?: Awaited<ReturnType<typeof retainGatewaySessionEntryReadOnly>>;
+    inheritWorkspace?: boolean;
+    workspaceLifetime?: DisposableStack;
   },
   cfg: OpenClawConfig,
   consume: (
@@ -167,8 +174,14 @@ export async function withSessionFileRoot<T>(
             : "full",
       },
     ));
+  const workspaceLifetime = params.workspaceLifetime ?? new DisposableStack();
   try {
-    const loaded = await loadSessionFileRoot(session, params.messageEntryId);
+    const loaded = await loadSessionFileRoot(
+      session,
+      params.messageEntryId,
+      params.inheritWorkspace,
+    );
+    workspaceLifetime.use(loaded.fileWorkspace);
     const assertCurrent = () => {
       if (!session.isCurrentAtResponse()) {
         throw new SessionMutationAuthorizationChangedError(
@@ -185,6 +198,9 @@ export async function withSessionFileRoot<T>(
     assertCurrent();
     return result;
   } finally {
+    if (!params.workspaceLifetime) {
+      workspaceLifetime.dispose();
+    }
     if (!params.retained) {
       session.release();
     }
@@ -294,16 +310,23 @@ async function handleSessionFilesRead(
       sessionFileWorkspaceMatches(previous, current),
   });
   let downloadOwnsRead = false;
-  let readAuthority: ReturnType<typeof createSessionFileReadAuthority> | undefined;
+  const workspaceLifetime = new DisposableStack();
+  let readAuthority: Awaited<ReturnType<typeof createSessionFileReadAuthority>> | undefined;
   return withSessionFileRoot(
-    { ...params, agentId, getRuntimeConfig: context.getRuntimeConfig },
+    {
+      ...params,
+      agentId,
+      getRuntimeConfig: context.getRuntimeConfig,
+      inheritWorkspace: true,
+      workspaceLifetime,
+    },
     context.getRuntimeConfig(),
     async (source, assertSourceCurrent, readEntry) => {
       if (rejectDeviceFolderFiles(source.entry, respond)) {
         return;
       }
       // HTTP delivery borrows the download grant's retained row, not this shorter callback.
-      const hostRead = createSessionFileReadAuthority(options, {
+      const hostRead = await createSessionFileReadAuthority(options, {
         ...source,
         agentId,
         readEntry: read?.prepared.readRetainedEntry ?? readEntry,
@@ -318,6 +341,7 @@ async function handleSessionFilesRead(
       let retainedRepository: Awaited<ReturnType<typeof resolveRepositoryWorkspaceAccess>>;
       try {
         assertCurrent();
+        await source.fileWorkspace?.settle(assertCurrent);
         // A download grant outlives this request's planning-row borrow, including
         // memory-backed repositories. Its retained read owns all later assertions.
         const loaded = await loadSessionFiles(
@@ -347,6 +371,7 @@ async function handleSessionFilesRead(
             release: () => {
               repository?.[Symbol.dispose]();
               hostRead.release();
+              workspaceLifetime.dispose();
               read?.release();
             },
             onGrantCreated: () => {
@@ -463,6 +488,7 @@ async function handleSessionFilesRead(
   )
     .finally(() => {
       if (!downloadOwnsRead) {
+        workspaceLifetime.dispose();
         read?.release();
       }
     })
@@ -503,7 +529,8 @@ export const sessionsFilesHandlers: GatewayRequestHandlers = {
     validateSessionsFilesGetParams,
     (options) => handleSessionFilesRead(options, { kind: "get", params: options.params }),
   ),
-  "sessions.files.set": async ({ params, respond, context, sessionMutationAuthorization }) => {
+  "sessions.files.set": async (options) => {
+    const { params, respond, context, sessionMutationAuthorization } = options;
     if (!assertValidParams(params, validateSessionsFilesSetParams, "sessions.files.set", respond)) {
       return;
     }
@@ -518,7 +545,7 @@ export const sessionsFilesHandlers: GatewayRequestHandlers = {
       return;
     }
     return withSessionFileRoot(
-      { ...params, agentId, getRuntimeConfig: context.getRuntimeConfig },
+      { ...params, agentId, getRuntimeConfig: context.getRuntimeConfig, inheritWorkspace: true },
       context.getRuntimeConfig(),
       async (loaded, assertSourceCurrent) => {
         if (rejectDeviceFolderFiles(loaded.entry, respond)) {
@@ -529,8 +556,15 @@ export const sessionsFilesHandlers: GatewayRequestHandlers = {
           return;
         }
         const source = loaded.source;
+        using sourceReads = await retainSessionFileSourceReads(
+          options,
+          agentId,
+          loaded.fileWorkspace,
+          true,
+        );
         const authorize = () => {
           assertSourceCurrent();
+          sourceReads.assertCurrent();
           sessionMutationAuthorization?.assertCurrent();
           if (
             (params.expectedSource !== undefined ||
@@ -548,6 +582,7 @@ export const sessionsFilesHandlers: GatewayRequestHandlers = {
           }
         };
         authorize();
+        await loaded.fileWorkspace?.settle(authorize);
         using repository = await resolveRepositoryWorkspaceAccess(loaded, context, authorize);
         if (repository?.kind === "stored") {
           throw new Error("Start this cloud session before editing its repository files.");
@@ -564,7 +599,7 @@ export const sessionsFilesHandlers: GatewayRequestHandlers = {
               fileRoot: loaded.fileRoot,
               assertCurrent: authorize,
             });
-        assertSourceCurrent();
+        authorize();
         if (update.status === "missing") {
           respondSessionFileNotFound(respond, params.path);
           return;
@@ -614,7 +649,8 @@ export const sessionsFilesHandlers: GatewayRequestHandlers = {
   "sessions.files.reveal": defineValidatedGatewayHandler(
     "sessions.files.reveal",
     validateSessionsFilesRevealParams,
-    async ({ params, respond, context }) => {
+    async (options) => {
+      const { params, respond, context } = options;
       const agentId = requireSessionFilesAgentId({
         cfg: context.getRuntimeConfig(),
         sessionKey: params.key,
@@ -625,67 +661,15 @@ export const sessionsFilesHandlers: GatewayRequestHandlers = {
         return;
       }
       return withSessionFileRoot(
-        { sessionKey: params.key, agentId, getRuntimeConfig: context.getRuntimeConfig },
-        context.getRuntimeConfig(),
-        async (loaded, assertCurrent) => {
-          if (rejectDeviceFolderFiles(loaded.entry, respond)) {
-            return;
-          }
-          if (loaded.entry?.repositoryWorkspaceId) {
-            respond(true, {
-              ok: false,
-              error:
-                "This repository exists only on the cloud session runner. Use the Files panel to browse it; there is no Gateway checkout to reveal.",
-            });
-            return;
-          }
-          const workspaceRoot = loaded.root;
-          if (!workspaceRoot) {
-            respond(true, {
-              ok: false,
-              error: "No workspace root is available for this session.",
-            });
-            return;
-          }
-          if (loaded.entry?.execNode || getAgentWorkspaceAccess(workspaceRoot)) {
-            respond(true, {
-              ok: false,
-              path: workspaceRoot,
-              error: loaded.entry?.execNode
-                ? "Cannot reveal this workspace because the session runs on an exec node."
-                : "Cannot reveal this workspace because its files live on a remote host.",
-            });
-            return;
-          }
-          const placement = await readSessionWorkerPlacementAsync({
-            context,
-            sessionId: loaded.entry?.sessionId,
-          });
-          if (isCloudWorkerPlacementState(placement?.state)) {
-            respond(true, {
-              ok: false,
-              path: workspaceRoot,
-              error: `Cannot reveal this workspace because the session runs remotely (${placement.state}).`,
-            });
-            return;
-          }
-          const command = resolveOpenPathCommand(workspaceRoot);
-          try {
-            assertCurrent();
-            await execOpenPath(command);
-            assertCurrent();
-            respond(true, { ok: true, path: workspaceRoot });
-          } catch (error) {
-            const errorMessage = formatOpenPathError(error);
-            const detailedError = isHeadlessOpenPathError(error, command)
-              ? `Cannot open path in headless environment. Path: ${workspaceRoot}. This environment appears to lack a graphical or terminal browser handler.`
-              : `Failed to reveal session workspace: ${errorMessage}`;
-            context.logGateway.warn(
-              `sessions.files.reveal failed path=${sanitizePathForLog(workspaceRoot)}: ${errorMessage}`,
-            );
-            respond(true, { ok: false, path: workspaceRoot, error: detailedError });
-          }
+        {
+          sessionKey: params.key,
+          agentId,
+          getRuntimeConfig: context.getRuntimeConfig,
+          inheritWorkspace: true,
         },
+        context.getRuntimeConfig(),
+        (loaded, assertCurrent) =>
+          respondSessionWorkspaceReveal({ options, agentId, loaded, assertCurrent }),
       );
     },
   ),

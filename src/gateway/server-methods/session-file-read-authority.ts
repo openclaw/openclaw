@@ -6,11 +6,16 @@ import {
   SessionMutationAuthorizationChangedError,
   sessionMutationForbiddenError,
 } from "../session-mutation-authorization-error.js";
-import { authorizeSessionAgentRun, isSessionOwnRequester } from "../session-sharing-policy.js";
+import {
+  authorizeSessionAgentRun,
+  hasSessionReadAccessChanged,
+  isSessionOwnRequester,
+} from "../session-sharing-policy.js";
 import type { GatewaySessionEntryRead } from "../session-utils-store.js";
 import { resolveSessionWorkspaceRoots } from "../session-workspace-roots.js";
 import type { WorkerSessionPlacementStore } from "../worker-environments/placement-store.js";
 import { readGatewayRequestMutationAuthority } from "./session-mutation-guards.js";
+import { retainSessionScopedRead } from "./session-scoped-read.js";
 import type { GatewayRequestHandlerOptions } from "./types.js";
 import { resolveFileRoot } from "./workspace-files.js";
 
@@ -78,9 +83,14 @@ export function sessionFileWorkspaceMatches(
     "sandbox",
     "sandboxMode",
     "createdActor",
+    "inheritedWorktreeId",
   ] as const;
   return (
     fields.every((field) => isDeepStrictEqual(previous?.[field], current?.[field])) &&
+    ((!previous?.inheritedWorktreeId && !current?.inheritedWorktreeId) ||
+      (previous?.spawnedBy === current?.spawnedBy &&
+        previous?.spawnedBySessionId === current?.spawnedBySessionId &&
+        previous?.parentSessionLifecycleRevision === current?.parentSessionLifecycleRevision)) &&
     previous?.worktree?.id === current?.worktree?.id &&
     isDeepStrictEqual(previous?.priorWorkspace, current?.priorWorkspace) &&
     isDeepStrictEqual(
@@ -90,8 +100,76 @@ export function sessionFileWorkspaceMatches(
   );
 }
 
+/** Runtime lineage identifies the source; the actual viewer must independently see each owner. */
+export async function retainSessionFileSourceReads(
+  options: GatewayRequestHandlerOptions,
+  agentId: string,
+  workspace: Awaited<ReturnType<typeof prepareSessionFileWorkspace>> | undefined,
+  mutation = false,
+) {
+  const lifetime = new DisposableStack();
+  const reads: Array<NonNullable<Awaited<ReturnType<typeof retainSessionScopedRead>>>> = [];
+  const mutations: Array<
+    NonNullable<GatewayRequestHandlerOptions["sessionMutationAuthorization"]>
+  > = [];
+  const assertCurrent = () => {
+    for (const authorization of mutations) {
+      authorization.assertCurrent();
+    }
+    for (const read of reads) {
+      read.assertCurrent();
+      assertSessionFileReadPolicy(options, {
+        agentId,
+        canonicalKey: read.prepared.canonicalKey,
+        entry: read.prepared.readRetainedEntry(),
+        unscopedHostRoot: true,
+      });
+    }
+  };
+  try {
+    for (const sessionKey of workspace?.sourceSessionKeys ?? []) {
+      const read = await retainSessionScopedRead(options, sessionKey, agentId, {
+        requireMaterialized: true,
+        retain: true,
+        entryMatches: (previous, current) =>
+          !hasSessionReadAccessChanged(previous, current) &&
+          sessionFileWorkspaceMatches(previous, current),
+      });
+      if (read) {
+        lifetime.defer(read.release);
+        reads.push(read);
+      }
+      if (mutation) {
+        const { resolveSessionMutationAuthorizationAsync } =
+          await import("../session-sharing-authorization-async.js");
+        const { authorization, error } = await resolveSessionMutationAuthorizationAsync({
+          client: options.client,
+          context: options.context,
+          method: "sessions.files.set",
+          requestParams: { sessionKey, agentId },
+          sessionScope: readGatewayRequestMutationAuthority(options).sessionScope,
+          assertInvocationCurrent: () =>
+            readGatewayRequestMutationAuthority(options).assertCurrent(),
+        });
+        if (error) {
+          throw new SessionMutationAuthorizationChangedError(error);
+        }
+        if (authorization) {
+          lifetime.defer(() => authorization.release?.());
+          mutations.push(authorization);
+        }
+      }
+      assertCurrent();
+    }
+    return { assertCurrent, [Symbol.dispose]: () => lifetime.dispose() };
+  } catch (error) {
+    lifetime.dispose();
+    throw error;
+  }
+}
+
 /** Host reads borrow the turn owner's prepared facts and the placement owner's live observation. */
-export function createSessionFileReadAuthority(
+export async function createSessionFileReadAuthority(
   options: GatewayRequestHandlerOptions,
   source: Pick<GatewaySessionEntryRead, "agentId" | "canonicalKey" | "storePath" | "readSource"> & {
     entry?: InternalSessionEntry;
@@ -104,6 +182,7 @@ export function createSessionFileReadAuthority(
 ) {
   const { context } = options;
   const { agentId } = source;
+  const sourceReads = await retainSessionFileSourceReads(options, agentId, source.fileWorkspace);
   let placement:
     | Awaited<ReturnType<WorkerSessionPlacementStore["prepareRuntimeRefresh"]>>
     | undefined;
@@ -173,6 +252,7 @@ export function createSessionFileReadAuthority(
     // and the placement owner's current observation immediately before HTTP delivery.
     assertCurrent: () => {
       source.assertSourceCurrent();
+      sourceReads.assertCurrent();
       const current = source.readEntry();
       if (current && source.fileWorkspace) {
         source.fileWorkspace.assertCurrent(context.getRuntimeConfig(), current);
@@ -197,6 +277,9 @@ export function createSessionFileReadAuthority(
       }
     },
     hasHostRead: () => usedHostRead,
-    release: () => placement?.release(),
+    release: () => {
+      sourceReads[Symbol.dispose]();
+      placement?.release();
+    },
   };
 }

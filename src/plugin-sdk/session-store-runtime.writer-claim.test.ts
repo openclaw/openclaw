@@ -18,6 +18,7 @@ const sessionDirs = useSessionStoreTempDirs(afterAll, "openclaw-sdk-publication-
 function privateGenerationEntry(): InternalSessionEntry {
   return {
     activeWriterRunId: "writer-run",
+    inheritedWorktreeId: "11111111-1111-4111-8111-111111111111",
     lifecycleRevision: "generation-1",
     lifecycleRunId: "lifecycle-run",
     sessionDiffBaselineCapture: { version: 1, captureId: "capture-1", status: "pending" },
@@ -33,6 +34,7 @@ function privateGenerationEntry(): InternalSessionEntry {
 
 function expectGenerationPrivateFieldsCleared(entry: InternalSessionEntry | undefined): void {
   expect(entry?.activeWriterRunId).toBeUndefined();
+  expect(entry?.inheritedWorktreeId).toBeUndefined();
   expect(entry?.lifecycleRunId).toBeUndefined();
   expect(entry?.sessionDiffBaselineCapture).toBeUndefined();
   expect(entry?.transcriptByteCompactionLatch).toBeUndefined();
@@ -41,6 +43,7 @@ function expectGenerationPrivateFieldsCleared(entry: InternalSessionEntry | unde
 expectTypeOf<
   Extract<
     keyof SessionEntry,
+    | "inheritedWorktreeId"
     | "activeWriterRunId"
     | "sessionDiffBaselineCapture"
     | "transcriptByteCompactionLatch"

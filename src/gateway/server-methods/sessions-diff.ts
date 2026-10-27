@@ -24,6 +24,7 @@ import { startSlowRequestDiagnostics } from "../slow-request-diagnostics.js";
 import {
   sessionFileWorkspaceMatches,
   assertSessionFileReadPolicy,
+  retainSessionFileSourceReads,
   type SessionFileReadPolicyTarget,
 } from "./session-file-read-authority.js";
 import { readGatewayRequestMutationAuthority } from "./session-mutation-guards.js";
@@ -31,7 +32,11 @@ import { loadRepositoryArtifactDiff } from "./session-repository-artifacts.js";
 import { resolveRepositoryWorkspaceAccess } from "./session-repository-workspace-access.js";
 import { retainSessionScopedRead } from "./session-scoped-read.js";
 import { withSessionFileRoot } from "./sessions-files.js";
-import type { GatewayRequestContext, GatewayRequestHandlers } from "./types.js";
+import type {
+  GatewayRequestContext,
+  GatewayRequestHandlerOptions,
+  GatewayRequestHandlers,
+} from "./types.js";
 import { assertValidParams } from "./validation.js";
 
 type DiffMetadataFlight = {
@@ -41,6 +46,11 @@ type DiffMetadataFlight = {
   handoff?: ReturnType<typeof setTimeout>;
 };
 const metadataFlights = new WeakMap<OpenClawConfig, Map<string, DiffMetadataFlight>>();
+type SessionDiffFileRead = {
+  options: GatewayRequestHandlerOptions;
+  lifetime: DisposableStack;
+  assertCurrent?: () => void;
+};
 
 /** Only metadata preparation is shared; every poll keeps its own disclosure authority. */
 function prepareDiffMetadata(params: SessionsDiffParams, cfg: OpenClawConfig) {
@@ -131,6 +141,7 @@ export async function loadSessionDiff(
   diffTiming?: DiffReadTiming,
   assertWorkspaceRead: (target: SessionFileReadPolicyTarget) => void = () => {},
   retained?: Awaited<ReturnType<typeof retainGatewaySessionEntryReadOnly>>,
+  fileRead?: SessionDiffFileRead,
 ): Promise<SessionsDiffResult> {
   const resolveStarted = diffTiming ? performance.now() : 0;
   let worktreeCount = 0;
@@ -159,12 +170,21 @@ export async function loadSessionDiff(
       projection: ["sessionDiffBaseline"],
       getRuntimeConfig: context ? () => context.getRuntimeConfig() : getRuntimeConfig,
       retained,
+      inheritWorkspace: Boolean(fileRead),
+      workspaceLifetime: fileRead?.lifetime,
     },
     context?.getRuntimeConfig() ?? getRuntimeConfig(),
     async (loaded, assertSourceCurrent) => {
       const { agentId, entry, storePath } = loaded;
+      const sourceReads =
+        fileRead && agentId
+          ? fileRead.lifetime.use(
+              await retainSessionFileSourceReads(fileRead.options, agentId, loaded.fileWorkspace),
+            )
+          : undefined;
       const assertCurrent = () => {
         assertSourceCurrent();
+        sourceReads?.assertCurrent();
         assertAuthorized();
         if (agentId) {
           assertWorkspaceRead({
@@ -174,7 +194,11 @@ export async function loadSessionDiff(
           });
         }
       };
+      if (fileRead) {
+        fileRead.assertCurrent = assertCurrent;
+      }
       assertCurrent();
+      await loaded.fileWorkspace?.settle(assertCurrent);
       // Same session scoping as sessions.files.*: an unknown session must not fall
       // back to some agent workspace and surface another checkout's diff.
       if (!entry?.sessionId || !storePath || !agentId) {
@@ -322,6 +346,8 @@ export const sessionsDiffHandlers: GatewayRequestHandlers = {
         })
       : undefined;
     let read: Awaited<typeof scopedRead>;
+    using fileLifetime = new DisposableStack();
+    const fileRead: SessionDiffFileRead = { options, lifetime: fileLifetime };
     try {
       const preparation = Promise.all([metadata.pending, scopedRead]);
       const ready = params.poll
@@ -352,8 +378,10 @@ export const sessionsDiffHandlers: GatewayRequestHandlers = {
         diffTiming,
         (target) => assertSessionFileReadPolicy(options, target),
         retained,
+        fileRead,
       );
       read?.assertCurrent();
+      fileRead.assertCurrent?.();
       timing?.mark("send");
       const encodeStarted = diffTiming ? performance.now() : 0;
       respond(true, result);

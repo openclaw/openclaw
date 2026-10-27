@@ -61,6 +61,7 @@ export const SESSION_ROLLOVER_LINEAGE_CASES = [
     subagentRole: "leaf" as const,
     subagentControlScope: "none" as const,
     preservesSpawnLineage: true,
+    inheritedWorktreeId: "managed-parent-worktree",
   },
 ];
 
@@ -72,7 +73,9 @@ export function createSessionRolloverSpawnLineage(
     spawnedBySenderIsOwner: true,
     spawnedBySessionId: "parent-session",
     spawnedWorkspaceDir: "/tmp/child-workspace",
-    spawnedCwd: "/tmp/task-repo",
+    ...(testCase.inheritedWorktreeId
+      ? { inheritedWorktreeId: testCase.inheritedWorktreeId }
+      : { spawnedCwd: "/tmp/task-repo" }),
     spawnDepth: 1,
     inheritedToolPolicyVersion: 1 as const,
     inheritedToolPolicySource: "sender" as const,

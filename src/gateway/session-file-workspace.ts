@@ -1,3 +1,4 @@
+import path from "node:path";
 import { isDeepStrictEqual } from "node:util";
 import { resolveSandboxConfigForAgent } from "../agents/sandbox/config.js";
 import { resolveSandboxRuntimeStatus } from "../agents/sandbox/runtime-status.js";
@@ -8,6 +9,7 @@ import type { InternalSessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { sessionMutationForbiddenError } from "./session-mutation-authorization-error.js";
 import { resolveSessionWorkspaceRoots } from "./session-workspace-roots.js";
+import type { resolveLocalWorkspaceOwner } from "./worker-environments/local-workspace-projection.js";
 
 /** File readers consume sandbox selection without preparing or provisioning its workspace. */
 export async function prepareSessionFileWorkspace(
@@ -16,7 +18,13 @@ export async function prepareSessionFileWorkspace(
   sessionKey: string,
   entry: Partial<InternalSessionEntry>,
   message?: { entryId: string; storePath: string },
+  options: { inheritWorkspace?: boolean } = {},
 ) {
+  if (entry.inheritedWorktreeId && !entry.worktree?.id && !options.inheritWorkspace) {
+    throw sessionMutationForbiddenError(
+      "This operation requires its own workspace; open the source conversation's workspace instead.",
+    );
+  }
   const policy = (config: OpenClawConfig, current: Partial<InternalSessionEntry>) => ({
     roots: resolveSessionWorkspaceRoots(config, agentId, current),
     runtime: resolveSandboxRuntimeStatus({
@@ -28,6 +36,7 @@ export async function prepareSessionFileWorkspace(
     sandbox: resolveSandboxConfigForAgent(config, agentId),
     librarySelections: current.skillsSnapshot?.librarySelections,
     worktreeId: current.worktree?.id,
+    inheritedWorktreeId: current.inheritedWorktreeId,
   });
   const selection = (value: ReturnType<typeof policy>) => ({
     roots: value.roots,
@@ -42,6 +51,7 @@ export async function prepareSessionFileWorkspace(
     workspaceRoot: value.sandbox.workspaceRoot,
     librarySelections: value.librarySelections,
     worktreeId: value.worktreeId,
+    inheritedWorktreeId: value.inheritedWorktreeId,
   });
   const prior =
     entry.priorWorkspace?.worktreeId === entry.worktree?.id ? entry.priorWorkspace : undefined;
@@ -94,10 +104,49 @@ export async function prepareSessionFileWorkspace(
   const expected = structuredClone(selection(selected));
   const expectedCurrent = historical ? structuredClone(selection(policy(cfg, entry))) : expected;
   let roots = selected.roots;
+  let inherited: Awaited<ReturnType<typeof resolveLocalWorkspaceOwner>>;
+  if (
+    options.inheritWorkspace &&
+    !historical &&
+    selectedEntry.inheritedWorktreeId &&
+    !selectedEntry.worktree?.id
+  ) {
+    if (!roots.root || selectedEntry.repositoryWorkspaceId || selectedEntry.execNode) {
+      throw sessionMutationForbiddenError("The inherited workspace is no longer available.");
+    }
+    try {
+      const { resolveLocalWorkspaceOwner } =
+        await import("./worker-environments/local-workspace-projection.js");
+      inherited = await resolveLocalWorkspaceOwner({
+        cfg,
+        agentId,
+        sessionKey,
+        workspaceDir: roots.root,
+        inheritWorkspace: true,
+      });
+    } catch {
+      inherited?.[Symbol.dispose]();
+      throw sessionMutationForbiddenError("The inherited workspace is no longer available.");
+    }
+    if (!inherited) {
+      throw sessionMutationForbiddenError("The inherited workspace is no longer available.");
+    }
+  }
+  if (inherited) {
+    const cwd = path.resolve(inherited.worktree.path, inherited.workspaceRelativePath);
+    roots = {
+      ...roots,
+      root: cwd,
+      spawnedCwd: cwd,
+      diffCwd: cwd,
+      readScope: "root",
+    };
+  }
   // Managed projects retain their established checkpoint/publication owner.
   // Explicit ro/rw already admits the selected agent workspace to the sandbox.
   if (
     roots.root &&
+    !inherited &&
     !selectedEntry.worktree?.id &&
     !selectedEntry.repositoryWorkspaceId &&
     !selectedEntry.execNode &&
@@ -136,13 +185,45 @@ export async function prepareSessionFileWorkspace(
   return {
     ...roots,
     historical,
+    inheritedWorkspaceId: inherited?.worktree.id,
+    sourceSessionKeys: inherited?.sourceSessionKeys ?? [],
+    [Symbol.dispose]() {
+      inherited?.[Symbol.dispose]();
+    },
+    async settle(assertCurrent: () => void) {
+      const owner = inherited;
+      if (!owner) {
+        return;
+      }
+      const { withSettledLocalWorkspace } =
+        await import("./worker-environments/local-workspace-projection.js");
+      const assertOwnerCurrent = () => {
+        assertCurrent();
+        owner.assertCurrent();
+      };
+      await withSettledLocalWorkspace(
+        {
+          worktree: owner.worktree,
+          env: owner.env,
+          assertCurrent: assertOwnerCurrent,
+          workerAuthority: { ...owner.workerAuthority, assertCurrent: assertOwnerCurrent },
+        },
+        async () => {},
+      );
+      assertOwnerCurrent();
+    },
     unscopedHostRoot: Boolean(
       roots.root &&
       !selectedEntry.repositoryWorkspaceId &&
       !selectedEntry.execNode &&
-      (!selected.runtime.sandboxed || Boolean(selectedEntry.worktree?.id)),
+      (!selected.runtime.sandboxed || Boolean(selectedEntry.worktree?.id) || Boolean(inherited)),
     ),
     assertCurrent(config: OpenClawConfig, current: Partial<InternalSessionEntry>) {
+      try {
+        inherited?.assertCurrent();
+      } catch {
+        throw sessionMutationForbiddenError("The inherited workspace changed during file access.");
+      }
       if (
         !isDeepStrictEqual(expectedCurrent, selection(policy(config, current))) ||
         !isDeepStrictEqual(entry.priorWorkspace, current.priorWorkspace) ||

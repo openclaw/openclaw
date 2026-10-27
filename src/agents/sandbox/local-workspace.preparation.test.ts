@@ -1,6 +1,7 @@
 import path from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import type { resolveLocalWorkspaceOwner } from "../../gateway/worker-environments/local-workspace-projection.js";
 import type { projectionOperations } from "../../gateway/worker-environments/local-workspace-state.js";
 import type { LocalWorkspaceOwner } from "../../gateway/worker-environments/local-workspace-types.js";
 import type { DiagnosticPhaseSnapshot } from "../../infra/diagnostic-events.js";
@@ -11,7 +12,9 @@ import { prepareLocalSandboxWorkspace } from "./local-workspace.js";
 type Projection = Pick<ReturnType<typeof projectionOperations>, "reuse" | "prepare">;
 const fixture = vi.hoisted(() => {
   const release = vi.fn();
-  const owner: LocalWorkspaceOwner & Disposable = {
+  const owner: NonNullable<Awaited<ReturnType<typeof resolveLocalWorkspaceOwner>>> = {
+    workspaceRelativePath: "src",
+    sourceSessionKeys: [],
     agentId: "main",
     sessionKey: "agent:main:fixture",
     sessionId: "fixture-session",
