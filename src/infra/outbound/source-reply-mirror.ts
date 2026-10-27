@@ -584,16 +584,12 @@ export async function mirrorDeliveredSourceReplyToTranscript(
       params.sourceReplyFinal === true && params.idempotencyKey && sourceTurnId
         ? `${params.idempotencyKey}:terminal-receipt:${sourceTurnId}`
         : params.idempotencyKey,
-    ...(params.sourceReplyFinal !== undefined
-      ? {
-          deliveryMirror: {
-            kind: "message-tool-source-reply" as const,
-            final: params.sourceReplyFinal,
-            ...(params.toolCallId ? { toolCallId: params.toolCallId } : {}),
-            ...(sourceTurnId ? { sourceTurnId } : {}),
-          },
-        }
-      : {}),
+    deliveryMirror: {
+      kind: "message-tool-source-reply",
+      ...(params.sourceReplyFinal !== undefined ? { final: params.sourceReplyFinal } : {}),
+      ...(params.toolCallId ? { toolCallId: params.toolCallId } : {}),
+      ...(sourceTurnId ? { sourceTurnId } : {}),
+    },
     config: params.cfg,
   });
   return result.ok;

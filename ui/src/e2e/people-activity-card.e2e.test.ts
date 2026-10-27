@@ -12,6 +12,7 @@ import {
   controlUiSessionUrl,
   createChatFlowE2eSuite,
   installMockGateway,
+  pauseVirtualClock,
 } from "./chat-flow.test-support.ts";
 
 const suite = createChatFlowE2eSuite();
@@ -307,6 +308,7 @@ suite.define(() => {
     withPage(
       { hasTouch: false, colorScheme: "light", serviceWorkers: "block" },
       async ({ page }) => {
+        await page.clock.install();
         const gateway = await openPeople(page);
         const row = page
           .locator(".sidebar-online__row")
@@ -331,14 +333,20 @@ suite.define(() => {
           );
         expect(await card.innerHTML()).not.toContain("agent:private:hidden");
         await expectInlineLastActivity(card);
+        // Browser RPC latency must not consume the 220ms pointer-exit bridge.
+        await pauseVirtualClock(page);
         const bounds = await row.boundingBox();
         const cardBounds = await card.boundingBox();
         if (!bounds || !cardBounds) {
           throw new Error("Expected person row and card bounds");
         }
         await page.mouse.move(bounds.x + bounds.width + 4, bounds.y + bounds.height / 2);
-        await page.mouse.move(cardBounds.x + 8, cardBounds.y + 20);
+        await page.clock.runFor(219);
         await expectCount(card, 1);
+        await page.mouse.move(cardBounds.x + 8, cardBounds.y + 20);
+        await page.clock.runFor(1);
+        await expectCount(card, 1);
+        await page.clock.resume();
         const recent = card
           .getByRole("heading", { name: "Recent sessions" })
           .locator("..")

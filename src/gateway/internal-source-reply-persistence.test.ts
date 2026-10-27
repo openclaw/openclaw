@@ -15,6 +15,7 @@ import {
 } from "../config/sessions/session-accessor.sqlite-read.js";
 import { replaceTranscriptEvents } from "../config/sessions/session-accessor.sqlite-transcript-write.test-support.js";
 import { withOwnedSessionTranscriptWrites } from "../config/sessions/transcript-write-context.js";
+import { mirrorDeliveredSourceReplyToTranscript } from "../infra/outbound/source-reply-mirror.js";
 import * as operationAdmission from "../infra/sqlite-worker-operation-admission.js";
 import { sqliteWorkerOwnerProbe as probe } from "../infra/sqlite-worker-owner-probe.test-support.js";
 import {
@@ -38,6 +39,7 @@ import {
   listManagedImageRecordEntries,
 } from "./managed-image-record-store.js";
 import { managedImageRecordReadOperations } from "./managed-image-record-store.kernel.js";
+import { readSessionMessagesAsync } from "./session-transcript-readers.js";
 
 const TINY_PNG_BASE64 =
   "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9Y9ZQmcAAAAASUVORK5CYII=";
@@ -386,4 +388,76 @@ it.each([
       expect(updates).toEqual([]);
       await expectOriginalBytes(records);
     }),
+);
+
+// Exercise both producers through SQLite persistence and the history reader, not an append mock.
+it.each([undefined, false, true])(
+  "retains explicit source replies with final=%s in history",
+  async (final) => {
+    await withFixture(async ({ scope }) => {
+      const cfg = { session: { store: scope.storePath } };
+      const correlation = { toolCallId: "reply-call", sourceTurnId: "source-turn" };
+      const persist = () =>
+        persistInternalSourceReply({
+          cfg,
+          sessionKey: scope.sessionKey,
+          expectedSessionId: scope.sessionId,
+          agentId: "main",
+          payload: { text: "Direct source reply" },
+          idempotencyKey: "direct-reply",
+          runId: "source-run",
+          ...correlation,
+          ...(final === undefined ? {} : { sourceReplyFinal: final }),
+        });
+      const mirror = () =>
+        mirrorDeliveredSourceReplyToTranscript({
+          cfg,
+          sessionKey: scope.sessionKey,
+          sessionId: scope.sessionId,
+          agentId: "main",
+          action: "send",
+          channel: "discord",
+          actionParams: { target: "user-1", message: "Channel source reply" },
+          toolContext: {
+            currentChannelProvider: "discord",
+            currentChannelId: "user-1",
+            currentSourceTurnId: correlation.sourceTurnId,
+          },
+          deliveredPayload: { ok: true, messageId: "provider-receipt", channelId: "user-1" },
+          toolCallId: correlation.toolCallId,
+          idempotencyKey: "channel-reply",
+          ...(final === undefined ? {} : { sourceReplyFinal: final }),
+        });
+      await persist();
+      await expect(mirror()).resolves.toBe(true);
+      const read = () => readSessionMessagesAsync(scope, { mode: "recent", maxMessages: 20 });
+      const first = await read();
+      await persist();
+      await expect(mirror()).resolves.toBe(true);
+      const history = await read();
+      expect(history).toEqual(first);
+      expect(history).toHaveLength(2);
+      expect(history.map((message) => isRecord(message) && message.openclawDeliveryMirror)).toEqual(
+        [
+          {
+            kind: "message-tool-source-reply",
+            ...correlation,
+            ...(final === undefined ? {} : { final }),
+          },
+          {
+            kind: "message-tool-source-reply",
+            ...correlation,
+            ...(final === undefined ? {} : { final }),
+          },
+        ],
+      );
+      expect(history.map((message) => isRecord(message) && message.idempotencyKey)).toEqual([
+        "direct-reply",
+        final === true ? "channel-reply:terminal-receipt:source-turn" : "channel-reply",
+      ]);
+      expect(isRecord(history[0]) && history[0]["__openclaw"]).toEqual(
+        expect.objectContaining({ runId: "source-run" }),
+      );
+    });
+  },
 );

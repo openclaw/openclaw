@@ -217,16 +217,12 @@ export async function persistInternalSourceReply(params: {
         mediaUrls: media.map((item) => item.url),
         idempotencyKey: params.idempotencyKey,
         runId: params.runId,
-        ...(params.sourceReplyFinal !== undefined
-          ? {
-              deliveryMirror: {
-                kind: "message-tool-source-reply" as const,
-                final: params.sourceReplyFinal,
-                ...(params.toolCallId ? { toolCallId: params.toolCallId } : {}),
-                ...(params.sourceTurnId ? { sourceTurnId: params.sourceTurnId } : {}),
-              },
-            }
-          : {}),
+        deliveryMirror: {
+          kind: "message-tool-source-reply",
+          ...(params.sourceReplyFinal !== undefined ? { final: params.sourceReplyFinal } : {}),
+          ...(params.toolCallId ? { toolCallId: params.toolCallId } : {}),
+          ...(params.sourceTurnId ? { sourceTurnId: params.sourceTurnId } : {}),
+        },
         config: params.cfg,
         onMessageCommitted: (result, acceptCompletion) => {
           // Publication can fail after commit; cleanup must never delete owned media.

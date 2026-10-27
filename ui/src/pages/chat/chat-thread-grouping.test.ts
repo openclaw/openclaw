@@ -1,7 +1,7 @@
 // @vitest-environment node
 import { beforeEach, expect, it } from "vitest";
 import type { MessageClientSource } from "../../../../src/chat/message-client-source.js";
-import type { ChatQueueItem, MessageGroup } from "../../lib/chat/chat-types.ts";
+import type { ChatItem, ChatQueueItem, MessageGroup } from "../../lib/chat/chat-types.ts";
 import { assistantGroupCanOwnActiveRunStatus } from "./chat-assistant-reply.ts";
 import {
   groupsOf,
@@ -368,4 +368,192 @@ it("retains prepared tool outcomes without content blocks as activity", () => {
   expect(buildItems({ messages: [outcome] })).toMatchObject([
     { kind: "group", role: "tool", messages: [{ message: outcome }] },
   ]);
+});
+
+it.each([undefined, false, true, "legacy"] as const)(
+  "keeps delivered source replies outside completed work (final=%s)",
+  (final) => {
+    const runId = "source-run";
+    const row = (id: string, content: unknown, extra: object = {}) =>
+      nativeMessage(
+        "assistant",
+        content,
+        2,
+        { id, runId },
+        { ...(final === false ? { phase: "commentary" } : {}), ...extra },
+      );
+    const delivered = (id: string) =>
+      row(
+        id,
+        id,
+        final === "legacy"
+          ? {
+              api: "openclaw-transcript",
+              provider: "openclaw",
+              model: "delivery-mirror",
+              idempotencyKey: runId + ":message-tool:abcdefghijklmnopqrstuvwx:" + id,
+            }
+          : {
+              openclawDeliveryMirror: {
+                kind: "message-tool-source-reply",
+                ...(final === undefined ? {} : { final }),
+              },
+            },
+      );
+    const messages = [
+      nativeMessage("user", "Prepare replies", 1, {
+        id: "prompt",
+        idempotencyKey: runId + ":user",
+      }),
+      row("ordinary-before", "Private work before"),
+      delivered("delivered-one"),
+      delivered("delivered-two"),
+      row("ordinary-after", "Private work after"),
+      tool("read-call", 3, { __openclaw: { id: "tool-result", runId } }),
+      row("answer", [signed("Acknowledged", "final_answer")]),
+    ];
+    const speech = row("speech", "Spoken acknowledgment", {
+      __openclaw: { id: "speech", runId, voiceTranscript: "provider-owned" },
+    });
+    const initial = cachedGroups(messages);
+    expect(
+      visible(collapseCompletedTurnWork(initial, { sessionKey, runWorking: true })),
+    ).toContainEqual(messages[2]);
+    let deliveryKeys: string[] | undefined;
+    for (const history of [
+      messages,
+      [...messages, speech],
+      structuredClone([...messages, speech]),
+    ]) {
+      const items = projected(history);
+      expect(visible(items)).toEqual([
+        history[0],
+        history[2],
+        history[3],
+        history[6],
+        ...(history.length > 7 ? [history[7]] : []),
+      ]);
+      expect(work(items)).toEqual([history[1], history[4], history[5]]);
+      const deliveredGroups = groupsOf(items).filter((group) =>
+        group.messages.some(({ message: value }) => value === history[2]),
+      );
+      const keys = deliveredGroups.flatMap((group) => [
+        group.key,
+        ...group.messages.map(({ key }) => key),
+      ]);
+      deliveryKeys ??= keys;
+      expect(keys).toEqual(deliveryKeys);
+      expect(deliveredGroups[0]?.visibleContent).toBe("text");
+      expect(deliveredGroups[0]?.replyTurnSource?.message).toEqual(history[0]);
+      expect([...visible(items), ...work(items)]).toHaveLength(history.length);
+    }
+    for (const opts of [
+      { bubbleMode: true },
+      { searchActive: true },
+      { sessionKey: "agent:main:main" },
+    ]) {
+      expect(
+        collapseCompletedTurnWork(initial, { sessionKey, runWorking: false, ...opts }),
+      ).toEqual(initial);
+    }
+  },
+);
+
+it.each([
+  { api: "other" },
+  { provider: "other" },
+  { model: "realtime-voice" },
+  { __openclaw: { id: "legacy", runId: "different-run" } },
+  { idempotencyKey: "source-run:message-tool:short:call" },
+  { __openclaw: { id: "legacy", runId: "source-run", idempotencyKey: "conflicting-key" } },
+  { openclawDeliveryMirror: { kind: "system-notice" } },
+  { openclawDeliveryMirror: null },
+  { __openclaw: { id: "legacy" } },
+  { idempotencyKey: "source-run:message-tool:abcdefghijklmnopqrstuvwx:" },
+])("does not infer legacy source delivery from ambiguous metadata: %j", (extra) => {
+  const legacy = nativeMessage(
+    "assistant",
+    "Ordinary mirror",
+    2,
+    { id: "legacy", runId: "source-run" },
+    {
+      api: "openclaw-transcript",
+      provider: "openclaw",
+      model: "delivery-mirror",
+      idempotencyKey: "source-run:message-tool:abcdefghijklmnopqrstuvwx:call",
+      ...extra,
+    },
+  );
+  const items = projected([
+    message("user", "Prepare", 1),
+    legacy,
+    message("assistant", [signed("Final", "final_answer")], 3),
+  ]);
+  expect(work(items)).toEqual([legacy]);
+});
+
+it.each([
+  { kind: "inter_session", sourceTool: "sessions_send", sourceSessionKey: "agent:other:main" },
+  {
+    kind: "internal_system",
+    sourceTool: "cron",
+    jobId: "synthetic-job",
+    runId: "cron-run",
+    sourceSessionKey: "agent:other:main",
+  },
+])("retains independent foreign boundaries for marked source replies: %j", (provenance) => {
+  const groups = cachedGroups([
+    message("assistant", "Foreign reply", 1, {
+      provenance,
+      openclawDeliveryMirror: { kind: "message-tool-source-reply", final: false },
+    }),
+    message("assistant", "Local answer", 2),
+  ]);
+  expect(collapseCompletedTurnWork(groups, { sessionKey, runWorking: false })).toEqual(groups);
+});
+
+it("does not repartition preserved final-answer groups or handoff turns", () => {
+  const delivered = message("assistant", "Delivered", 2, {
+    openclawDeliveryMirror: { kind: "message-tool-source-reply", final: false },
+  });
+  const groups = cachedGroups([message("assistant", "Narration", 1), delivered]);
+  const handoff: Extract<ChatItem, { kind: "notice" }> = {
+    kind: "notice",
+    key: "handoff",
+    label: "Waiting",
+    timestamp: 3,
+    text: "Waiting for work",
+    handoffBoundary: true,
+  };
+  const turn = [...groups, handoff];
+  expect(collapseCompletedTurnWork(turn, { sessionKey, runWorking: false })).toEqual(turn);
+  const answers = cachedGroups([
+    message("assistant", [signed("Answer", "final_answer")], 1),
+    { ...delivered, phase: "final_answer" },
+  ]);
+  expect(collapseCompletedTurnWork(answers, { sessionKey, runWorking: false })).toEqual(answers);
+});
+
+it("recomputes slice visibility without exposing narration beside a delivered image", () => {
+  const narration = message("assistant", "Internal narration", 2);
+  const image = message(
+    "assistant",
+    [{ type: "image", url: "https://example.com/result.png" }],
+    3,
+    {
+      openclawDeliveryMirror: { kind: "message-tool-source-reply" },
+    },
+  );
+  const items = projected([
+    message("user", "Prepare an image", 1),
+    narration,
+    image,
+    message("assistant", [signed("Acknowledged", "final_answer")], 4),
+  ]);
+  expect(work(items)).toEqual([narration]);
+  expect(
+    groupsOf(items).find((group) => group.messages.some(({ message: value }) => value === image))
+      ?.visibleContent,
+  ).toBe("non-text");
+  expect(visible(items)).toContain(image);
 });

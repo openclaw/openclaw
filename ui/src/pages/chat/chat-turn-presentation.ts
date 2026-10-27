@@ -3,6 +3,8 @@ import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/st
 import type { GatewaySessionRow } from "../../api/types.ts";
 import type { ChatItem, MessageGroup } from "../../lib/chat/chat-types.ts";
 import { userTurnRunId } from "../../lib/chat/history-message-identity.ts";
+import { normalizeMessage } from "../../lib/chat/message-normalizer.ts";
+import { resolveMessageVisibleContent } from "../../lib/chat/message-visibility.ts";
 import { extractToolCardsCached, isToolCardError } from "../../lib/chat/tool-cards.ts";
 import {
   assistantGroupCanOwnActiveRunStatus,
@@ -97,12 +99,99 @@ function isTurnOutputGroup(item: TurnRenderItem): item is MessageGroup {
   );
 }
 
+// Delivery identity is independent of answer phase and optional turn finality.
+function isDeliveredSourceReply(message: unknown): boolean {
+  const record = asRecord(message);
+  if (record?.role !== "assistant") {
+    return false;
+  }
+  if (record.openclawDeliveryMirror !== undefined) {
+    return asRecord(record.openclawDeliveryMirror)?.kind === "message-tool-source-reply";
+  }
+  // Read-only compatibility for observed pre-marker transcript rows. Retire this
+  // only after those retained rows expire or are migrated to explicit markers.
+  // Unrelated mirrors and arbitrary keys must not gain a visibility exemption.
+  if (
+    record.api !== "openclaw-transcript" ||
+    record.provider !== "openclaw" ||
+    record.model !== "delivery-mirror"
+  ) {
+    return false;
+  }
+  const metadata = asRecord(record["__openclaw"]);
+  const runId = metadata?.runId;
+  const topKey = record.idempotencyKey;
+  const nestedKey = metadata?.idempotencyKey;
+  if (
+    typeof runId !== "string" ||
+    !runId.trim() ||
+    (topKey !== undefined && nestedKey !== undefined && topKey !== nestedKey)
+  ) {
+    return false;
+  }
+  const key = topKey ?? nestedKey;
+  const prefix = runId.trim().replace(/[^A-Za-z0-9._:-]+/gu, "_") + ":message-tool:";
+  return (
+    typeof key === "string" &&
+    key.startsWith(prefix) &&
+    /^[A-Za-z0-9_-]{24}:[A-Za-z0-9._:-]+$/u.test(key.slice(prefix.length))
+  );
+}
+
+// Same-phase grouping may mix delivery with ordinary narration. Separate only
+// completed-work presentation, retaining attribution and original message wrappers.
+function splitDeliveredSourceReplyGroup(item: TurnRenderItem): TurnRenderItem[] {
+  if (
+    item.kind !== "group" ||
+    item.role !== "assistant" ||
+    hasForwardedSource(item) ||
+    assistantMessageKind(item.messages[0]?.message, item.visibleContent) === "final_answer"
+  ) {
+    return [item];
+  }
+  const delivered = item.messages.map(({ message }) => isDeliveredSourceReply(message));
+  if (!delivered.some(Boolean) || delivered.every(Boolean)) {
+    return [item];
+  }
+  const slices: MessageGroup["messages"][] = [];
+  for (const [index, source] of item.messages.entries()) {
+    if (index === 0 || delivered[index] !== delivered[index - 1]) {
+      slices.push([]);
+    }
+    slices.at(-1)!.push(source);
+  }
+  const groups: MessageGroup[] = [];
+  for (const messages of slices) {
+    const first = normalizeMessage(messages[0]!.message);
+    const visibility = new Set(
+      messages.map(({ message }) =>
+        resolveMessageVisibleContent(message, normalizeMessage(message)),
+      ),
+    );
+    groups.push({
+      ...item,
+      key:
+        messages[0] === item.messages[0] ? item.key : "group:" + item.role + ":" + messages[0]!.key,
+      messages,
+      timestamp: first.timestamp || item.timestamp,
+      visibleContent: visibility.has("non-text")
+        ? "non-text"
+        : visibility.has("text")
+          ? "text"
+          : "none",
+    });
+  }
+  return groups;
+}
+
 function isCollapsibleWorkGroup(item: TurnRenderItem): item is MessageGroup {
   if (
     item.kind !== "group" ||
     item.isStreaming ||
     groupHasVisibleReplyContent(item, false) ||
-    item.messages.some(({ message }) => isProviderVoiceTranscript(message))
+    item.messages.some(
+      ({ message }) => isProviderVoiceTranscript(message) || isDeliveredSourceReply(message),
+    )
   ) {
     return false;
   }
@@ -210,17 +299,19 @@ export function collapseCompletedTurnWork(
     : -1;
 
   const result: Array<TurnRenderItem | WorkGroupRenderItem> = [];
-  for (const [turnIndex, turn] of turns.entries()) {
+  for (const [turnIndex, originalTurn] of turns.entries()) {
     // A trailing steer names the still-working turn above it; it does not own that work.
     const isLive =
       turnIndex === liveTurnIndex ||
-      turn.some(
+      originalTurn.some(
         (item) => item.kind === "stream-run" || (item.kind === "group" && item.isStreaming),
       );
     if (isLive) {
-      result.push(...turn);
+      result.push(...originalTurn);
       continue;
     }
+    const hasHandoff = originalTurn.some((item) => item.kind === "notice" && item.handoffBoundary);
+    const turn = hasHandoff ? originalTurn : originalTurn.flatMap(splitDeliveredSourceReplyGroup);
     const terminalReply = turn.findLast(isFinalReplyGroup);
     // Without a final reply, the tool rows are the turn's only visible result.
     // Keep them exposed instead of replacing the result with an opaque rollup.
@@ -240,7 +331,7 @@ export function collapseCompletedTurnWork(
     // the wait ending and the resume, and once the resumed run has answered in
     // the same block. Its closing line reports the whole request instead of a
     // rollup timed for the last run.
-    if (turn.some((item) => item.kind === "notice" && item.handoffBoundary)) {
+    if (hasHandoff) {
       // Work the answering run recorded after its answer, such as the step
       // that sent it, still goes above that answer, where a rollup puts it, so
       // the answer stays last. Nothing moves past a handoff, which keeps a

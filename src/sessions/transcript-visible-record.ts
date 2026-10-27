@@ -39,7 +39,7 @@ export function isAssistantResultEventForRun(event: unknown, runId: string): boo
     return false;
   }
   const mirror = event.message.openclawDeliveryMirror;
-  if (isRecord(mirror) && mirror.kind === "message-tool-source-reply" && mirror.final !== true) {
+  if (isRecord(mirror) && mirror.kind === "message-tool-source-reply" && mirror.final === false) {
     return false;
   }
   return true;

@@ -1,4 +1,5 @@
 import { execFile } from "node:child_process";
+import { randomUUID } from "node:crypto";
 import { mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { promisify } from "node:util";
@@ -189,7 +190,9 @@ export async function startProofRecording(
       now();
       finished = true;
       await context.close();
-      const videoPath = await video.path();
+      // The E2E suite can connect to a browser server; path() is local-only.
+      const videoPath = path.join(dir, "recording-" + randomUUID() + ".webm");
+      await video.saveAs(videoPath);
       const { stdout } = await promisify(execFile)(ffprobe, [
         "-v",
         "error",

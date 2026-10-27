@@ -2,8 +2,12 @@ import path from "node:path";
 import { setImmediate as yieldToEventLoop } from "node:timers/promises";
 import { afterEach, expect, it } from "vitest";
 import { observeHostDataSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
+import { prepareAgentRunTerminalReply } from "../../agents/agent-run-terminal-reply.js";
 import { createSubagentRunRecord } from "../../agents/subagent-test-fixtures.test-helpers.js";
-import { readSubagentRunAnnounceResultUsing } from "../../agents/subagents/announce/subagent-announce-result.js";
+import {
+  readSubagentRunAnnounceResultUsing,
+  readSubagentRunFinalAnswerUsing,
+} from "../../agents/subagents/announce/subagent-announce-result.js";
 import { readSessionMessageByIdAsync } from "../../gateway/session-transcript-readers.js";
 import { listDirectoryTreeStrict } from "../../infra/directory-walk.js";
 import { openOpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
@@ -13,7 +17,10 @@ import {
   type OpenClawTestState,
 } from "../../test-utils/openclaw-test-state.js";
 import { captureRuntimeConfigAsyncReader } from "../io.runtime.js";
-import { createSessionEntryWithTranscript } from "./session-accessor.js";
+import {
+  createSessionEntryWithTranscript,
+  deleteSessionEntryLifecycle,
+} from "./session-accessor.js";
 import { findSessionTranscriptArchiveEventReadOnly } from "./session-accessor.sqlite-history.js";
 import { historyActivity } from "./session-accessor.sqlite-history.test-support.js";
 import { seedUnindexedTranscriptForTest } from "./session-accessor.sqlite-import.test-support.js";
@@ -167,6 +174,103 @@ it("recovers the exact complete child answer without preventing host event progr
     expect(hostSql.queries).toEqual([]);
     expect(old).toMatchObject({ prepared: { text: fullAnswer }, hostProgressBeforeResult: true });
     expect(old.prepared.isCurrent()).toBe(true);
+  }));
+
+it("preserves complete omitted-final source replies through active and archived child answer reads", () =>
+  withOpenClawTestState({ label: "source-reply-final-answer" }, async (state) => {
+    const target = transcriptScope(state, "source-reply-child");
+    const fullAnswer = "Complete source reply " + "complete ".repeat(1024) + "required-tail";
+    const { terminalReply } = prepareAgentRunTerminalReply({ rawText: fullAnswer });
+    if (terminalReply.disposition !== "visible") {
+      throw new Error("Expected visible child completion evidence");
+    }
+    expect(terminalReply.text).toHaveLength(4096);
+    expect(terminalReply.text).not.toContain("required-tail");
+    const marker = { kind: "message-tool-source-reply" };
+    const cases: Array<{
+      id: string;
+      message?: Record<string, unknown>;
+      expected?: string;
+      silent?: boolean;
+    }> = [
+      { id: "unmarked", expected: fullAnswer },
+      { id: "omitted", message: { openclawDeliveryMirror: marker }, expected: fullAnswer },
+      { id: "false", message: { openclawDeliveryMirror: { ...marker, final: false } } },
+      {
+        id: "true",
+        message: { openclawDeliveryMirror: { ...marker, final: true } },
+        expected: fullAnswer,
+      },
+      { id: "interim", message: { openclawDeliveryMirror: marker, endTurn: false } },
+      { id: "commentary", message: { openclawDeliveryMirror: marker, phase: "commentary" } },
+      { id: "silenced", message: { openclawDeliveryMirror: marker }, silent: true },
+      {
+        id: "foreign",
+        message: { openclawDeliveryMirror: marker, __openclaw: { runId: "other" } },
+      },
+    ];
+    await createSessionEntryWithTranscript(target, () => ({
+      ok: true,
+      entry: { sessionId: target.sessionId, updatedAt: 1 },
+      transcriptEvents: [
+        { type: "session", id: target.sessionId, version: 3 },
+        ...cases.flatMap(({ id, message, silent }) => [
+          assistant(id, id, { content: fullAnswer, ...message }),
+          ...(silent ? [assistant(`${id}-silent`, id, { content: "NO_REPLY" })] : []),
+        ]),
+      ],
+    }));
+    const deps = {
+      getRuntimeConfig: () => ({}),
+      readSubagentSessionEntry: () => {
+        throw new Error("Unexpected session fallback");
+      },
+      resolveSessionStorePathCore: () => {
+        throw new Error("Unexpected store fallback");
+      },
+      findTranscriptEvent: (scope, match) =>
+        findTranscriptEvent({ ...scope, env: state.env }, match),
+      findSessionTranscriptArchiveEventReadOnly,
+    } satisfies Parameters<typeof readSubagentRunFinalAnswerUsing>[1];
+    const readAnswers = async (phase: string) => {
+      for (const { id, expected } of cases) {
+        const child = createSubagentRunRecord({
+          runId: id,
+          childSessionKey: target.sessionKey,
+          execution: {
+            status: "terminal",
+            outcome: { status: "ok" },
+            transcriptTarget: target,
+          },
+          completion: { required: true, terminalReply },
+        });
+        expect
+          .soft(await readSubagentRunFinalAnswerUsing(child, deps), `${phase}: ${id}`)
+          .toBe(expected);
+        const prepared = await readSubagentRunAnnounceResultUsing(child, {
+          ...deps,
+          readSubagentRun: () => child,
+        });
+        expect
+          .soft(prepared.text, `${phase} announcement: ${id}`)
+          .toBe(
+            expected ??
+              `[truncated-by-retention: complete child answer unavailable]\n${terminalReply.text}`,
+          );
+      }
+    };
+    await readAnswers("active");
+    const deletion = await deleteSessionEntryLifecycle({
+      ...target,
+      target: { canonicalKey: target.sessionKey, storeKeys: [target.sessionKey] },
+      archiveTranscript: true,
+    });
+    expect(deletion).toMatchObject({
+      deleted: true,
+      archivedTranscripts: [{ sessionId: target.sessionId }],
+    });
+    await expectMatch(target, { kind: "visible-final", runId: "unmarked" });
+    await readAnswers("archive");
   }));
 
 it("keeps match filters and active anchors authoritative across worker payload encodings", () =>

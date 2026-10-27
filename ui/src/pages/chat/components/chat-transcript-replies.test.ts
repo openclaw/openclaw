@@ -484,3 +484,73 @@ it.each(["group", "frame"] as const)(
     }
   },
 );
+
+it.each([undefined, false, true, "legacy"] as const)(
+  "renders delivered source replies once with work closed through completion, speech, and reload (final=%s)",
+  async (final) => {
+    const runId = "source-reply-run";
+    const delivered = {
+      ...turn("delivered", "assistant", "Explicit delivered reply", { runId }, 2_000),
+      ...(final === "legacy"
+        ? {
+            api: "openclaw-transcript",
+            provider: "openclaw",
+            model: "delivery-mirror",
+            idempotencyKey: runId + ":message-tool:abcdefghijklmnopqrstuvwx:send-call",
+          }
+        : {
+            openclawDeliveryMirror: {
+              kind: "message-tool-source-reply",
+              ...(final === undefined ? {} : { final }),
+            },
+          }),
+    };
+    const history = [
+      turn("prompt", "user", "Prepare a reply", { idempotencyKey: runId + ":user" }, 1_000),
+      turn("work-before", "assistant", "Ordinary work before", { runId }, 1_500),
+      delivered,
+      turn("work-after", "assistant", "Ordinary work after", { runId }, 2_500),
+      { ...turn("final", "assistant", "Acknowledged", { runId }, 3_000), phase: "final_answer" },
+    ];
+    const props = threadProps("source-reply-pane", "agent:main:dashboard:source-reply", history, {
+      runId,
+      runActive: true,
+      runWorking: true,
+    });
+    const { container, rerender, start } = threadView(props);
+    await start();
+    expectEntryText(container, "delivered", "Explicit delivered reply");
+    props.runActive = false;
+    props.runWorking = false;
+    const expectClosed = async () => {
+      rerender();
+      await flushDeferredRowPrune();
+      expect(
+        requireElement(container, ".chat-work-group button").getAttribute("aria-expanded"),
+      ).toBe("false");
+      expect(container.querySelectorAll('[data-entry-id="delivered"]')).toHaveLength(1);
+      expectEntryText(container, "delivered", "Explicit delivered reply");
+      expect(container.querySelector('[data-entry-id="work-before"]')).toBeNull();
+      expect(container.querySelector('[data-entry-id="work-after"]')).toBeNull();
+    };
+    await expectClosed();
+    props.messages = [
+      ...history,
+      turn(
+        "speech",
+        "assistant",
+        "Spoken acknowledgment",
+        { runId, voiceTranscript: "provider-owned" },
+        4_000,
+      ),
+    ];
+    await expectClosed();
+    props.messages = structuredClone(props.messages);
+    await expectClosed();
+    const reloaded = threadView({ ...props, paneId: "reloaded-source-reply-pane" });
+    await reloaded.start();
+    expectEntryText(reloaded.container, "delivered", "Explicit delivered reply");
+    expect(reloaded.container.querySelectorAll('[data-entry-id="delivered"]')).toHaveLength(1);
+    expect(reloaded.container.querySelector('[data-entry-id="work-before"]')).toBeNull();
+  },
+);

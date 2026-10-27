@@ -102,7 +102,7 @@ type InternalSessionTranscriptDeliveryMirror =
   | SubagentCompletionDirectDeliveryMirror
   | {
       kind: "message-tool-source-reply";
-      final: boolean;
+      final?: boolean;
       sourceTurnId?: string;
       toolCallId?: string;
     }
