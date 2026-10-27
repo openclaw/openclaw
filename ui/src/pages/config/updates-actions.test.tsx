@@ -51,7 +51,6 @@ it.each([
       status: "failed",
       phase: "finished",
       reason: "build-failed",
-      before: { version: "2026.8.1" },
     });
     renderUpdates({
       [operation]: command,

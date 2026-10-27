@@ -88,6 +88,7 @@ const candidate = { ...target, buildId: "candidate" };
 const rejected = { ...target, buildId: "rejected" };
 const failedRollback = { status: "failed", reason: "Candidate remains active" } as const;
 const observed = (identity: { version: string; buildId?: string }, versionMatch: boolean) => ({
+  serviceRunning: true,
   runningVersion: identity.version,
   runningBuildId: identity.buildId,
   versionMatch,
@@ -230,7 +231,7 @@ describe("status update ledger evidence", () => {
         rollbackOutcome: failedRollback,
       },
       server: rejected,
-      historical: true,
+      detail: "the intended build for 2026.9.7 is unverified",
     },
     {
       name: "rollback observation without an independent target",
@@ -245,12 +246,10 @@ describe("status update ledger evidence", () => {
       name: "matching version and build",
       after: candidate,
       server: candidate,
-      historical: true,
     },
     {
       name: "matching version with no exposed serving build",
       after: candidate,
-      historical: true,
     },
     {
       name: "unhealthy target version",
@@ -323,6 +322,25 @@ describe("status update ledger evidence", () => {
       server: { version: "2026.9.4", buildId: "original" },
       historical: false,
     },
+    {
+      name: "a Gateway already behind the installed package when the update failed",
+      before: { version: "2026.10.1", buildId: "installed" },
+      server: { version: "2026.9.4", buildId: "original" },
+      historical: false,
+    },
+    {
+      name: "an installed-versus-serving mismatch without a saved serving observation",
+      before: { version: "2026.10.1", buildId: "installed" },
+      verification: {},
+      server: { version: "2026.9.4", buildId: "original" },
+      historical: false,
+    },
+    {
+      name: "no saved serving observation on a newer version",
+      verification: {},
+      server: { version: "2026.10.1" },
+      historical: false,
+    },
     { name: "an unknown identity", server: { version: null }, historical: false },
     {
       name: "an unhealthy Gateway",
@@ -330,30 +348,50 @@ describe("status update ledger evidence", () => {
       healthy: false,
       historical: false,
     },
-  ])("reports a preflight failure with $name", async ({ server, historical, healthy = true }) => {
-    const run = recordRun({
-      status: "failed",
-      reason: "preflight-no-good-commit",
-      target: { kind: "git", channel: "dev" },
-      before: { version: "2026.9.4", sha: "37ea9f110bad", buildId: "original" },
-    });
-    const saved = getUpdateRun(run.runId);
-    const rows = await buildStatusUpdateRows(null, {
-      localGatewayHealthy: healthy,
-      gatewayServer: server,
-    });
-    expect(rows).toHaveLength(1);
-    if (historical) {
-      expect(rows[0]?.Value).toContain("Last update run failed (preflight-no-good-commit)");
-      expect(rows[0]?.Value).not.toContain("openclaw update");
-    } else {
-      expect(rows[0]?.Value).toContain("⚠️ OpenClaw update failed: preflight-no-good-commit.");
-      if (healthy) {
-        expect(rows[0]?.Value).toContain("run `openclaw update`");
+    {
+      name: "a recorded stopped Gateway",
+      verification: { serviceRunning: false, runningVersion: "2026.9.4" },
+      server: { version: "2026.10.1" },
+      historical: false,
+    },
+  ])(
+    "reports a preflight failure with $name",
+    async ({
+      server,
+      historical,
+      healthy = true,
+      before = { version: "2026.9.4", sha: "37ea9f110bad", buildId: "original" },
+      verification = {
+        serviceRunning: true,
+        runningVersion: "2026.9.4",
+        runningBuildId: "original",
+      },
+    }) => {
+      const run = recordRun({
+        status: "failed",
+        reason: "preflight-no-good-commit",
+        target: { kind: "git", channel: "dev" },
+        before,
+        verification,
+      });
+      const saved = getUpdateRun(run.runId);
+      const rows = await buildStatusUpdateRows(null, {
+        localGatewayHealthy: healthy,
+        gatewayServer: server,
+      });
+      expect(rows).toHaveLength(1);
+      if (historical) {
+        expect(rows[0]?.Value).toContain("Last update run failed (preflight-no-good-commit)");
+        expect(rows[0]?.Value).not.toContain("openclaw update");
+      } else {
+        expect(rows[0]?.Value).toContain("⚠️ OpenClaw update failed: preflight-no-good-commit.");
+        if (healthy) {
+          expect(rows[0]?.Value).toContain("run `openclaw update`");
+        }
       }
-    }
-    expect(getUpdateRun(run.runId)).toEqual(saved);
-  });
+      expect(getUpdateRun(run.runId)).toEqual(saved);
+    },
+  );
 
   it("reports a newer fetch failure using cached counts", async () => {
     recordRun({ status: "succeeded", steps: [{ step: "git fetch", status: "completed" }] });

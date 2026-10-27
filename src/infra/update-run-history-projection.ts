@@ -9,27 +9,28 @@ export type UpdateRunServingIdentity = {
 
 /** Project saved failures against the serving process, without rewriting history. */
 export function projectUpdateRunHistory(
-  run: Pick<UpdateRunRecord, "status" | "reason" | "before">,
+  run: Pick<UpdateRunRecord, "status" | "reason" | "verification">,
   serving?: UpdateRunServingIdentity,
 ): string | null {
-  if (run.status !== "failed" || !serving) {
+  if (run.status !== "failed" || !serving || run.verification.serviceRunning !== true) {
     return null;
   }
+  // The installed package can already be ahead of the process serving requests.
   const version = normalizeOptionalString(serving.version);
-  const beforeVersion = normalizeOptionalString(run.before.version);
+  const recordedVersion = normalizeOptionalString(run.verification.runningVersion);
   const build = normalizeOptionalString(serving.buildId);
-  const beforeBuild = normalizeOptionalString(run.before.buildId);
+  const recordedBuild = normalizeOptionalString(run.verification.runningBuildId);
   const label = (value: string) => sanitizeTerminalText(value).slice(0, 240);
   let current: string;
-  let starting: string;
-  if (version && beforeVersion && version !== beforeVersion) {
+  let recorded: string;
+  if (version && recordedVersion && version !== recordedVersion) {
     current = label(version);
-    starting = `version was ${label(beforeVersion)}`;
-  } else if (build && beforeBuild && build !== beforeBuild) {
+    recorded = `version was ${label(recordedVersion)}`;
+  } else if (build && recordedBuild && build !== recordedBuild) {
     current = `build ${label(build)}`;
-    starting = `build was ${label(beforeBuild)}`;
+    recorded = `build was ${label(recordedBuild)}`;
   } else {
     return null;
   }
-  return `Last update run failed (${label(run.reason?.trim() || "unknown reason")}) — Gateway is serving ${current}; recorded starting ${starting}.`;
+  return `Last update run failed (${label(run.reason?.trim() || "unknown reason")}) — Gateway is serving ${current}; recorded serving ${recorded}.`;
 }

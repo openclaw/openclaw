@@ -63,29 +63,21 @@ Channels without a check, such as WhatsApp, report lifecycle health instead.
 In the Health table, `healthy` is `OK`; degraded lifecycle states and failed
 checks remain `WARN`. A lifecycle `OK` does not mean a live check ran.
 
-The Update run row preserves the last recorded update outcome. When the local
-Gateway passes the current readiness and connection checks and its serving
-version matches the recorded update target, a previous failure is labeled as
-historical: `Last update run failed (post-update-failed) — Gateway is serving
-2026.9.7.` Build IDs must also match when
-both the target and the live check expose them. A healthy old version, a different
-build, or unknown identity keeps the warning and its recorded failure details,
-with the serving and target versions when known. Rollback and recovery observations
-cannot by themselves establish the intended candidate identity. A
-same-version rollback stays warned when the intended candidate build cannot be
-verified. A failed or interrupted run is also historical when its recorded
-starting version or build ID differs from the serving Gateway: `Last update run
-failed (preflight-no-good-commit) — Gateway is serving 2026.10.1; recorded starting
-version was 2026.9.4.` This includes legacy preflight failures with no saved
-serving observation or selected target. The comparison uses recorded identities,
-not the age of the run or the CLI's installed package. A failure on the same
-build, or without comparable identities, keeps its warning.
+The Update run row preserves the last recorded update outcome. A failed run is
+historical only when its saved observation of a running Gateway has a version or
+build ID that differs from the healthy local Gateway now serving requests:
+`Last update run failed (preflight-no-good-commit) — Gateway is serving 2026.10.1;
+recorded serving version was 2026.9.4.` The installed package's starting identity
+alone cannot establish that the serving process changed. Missing comparable
+observations, unknown live identities, and a still-matching serving identity keep
+the failure actionable, including when the installed package is newer than the
+Gateway. The comparison uses recorded identities, not the age of the run.
+
 `openclaw update status` and the Control UI use the same comparison: historical
 failures do not prescribe another update, and the UI omits their retry action.
 Status does not rewrite the failed run or claim the update succeeded.
-Starting, unreachable, degraded, and
-remote Gateways do not qualify for this note. Use
-`openclaw update status` to inspect the saved verification failure.
+Starting, unreachable, degraded, and remote Gateways do not qualify for this note.
+Use `openclaw update status` to inspect the saved verification failure.
 
 `--deep` also asks the running Gateway whether the Node executable it still holds can be started. A Homebrew upgrade can delete that Cellar path while the LaunchAgent plist still points at a valid symlink and the Gateway port stays reachable. Status then warns:
 

@@ -68,21 +68,54 @@ it("keeps explicit dev update progress and errors visible", () => {
   expect(resolveSidebarUpdateAttention(context)).not.toBeNull();
 });
 
-it.each(["2026.9.4", "2026.10.1"])("keeps only current failed-run attention on %s", (version) => {
-  const context = contextWithGitStatus("current");
-  context.overlays.snapshot.updateRun = createUpdateRunFixture({
-    status: "failed",
-    before: { version: "2026.9.4" },
-    finishedAtMs: Date.now(),
-  });
-  context.gateway.snapshot.hello = {
-    type: "hello-ok",
-    protocol: 1,
-    server: { version },
-    features: { methods: [] },
-  };
-  expect(resolveSidebarUpdateAttention(context) !== null).toBe(version === "2026.9.4");
-});
+it.each([
+  {
+    name: "installed package ahead of serving Gateway",
+    installed: "2026.10.1",
+    serving: "2026.9.4",
+    recorded: "2026.9.4",
+    historical: false,
+  },
+  {
+    name: "serving Gateway moved past the failure",
+    installed: "2026.9.4",
+    serving: "2026.10.1",
+    recorded: "2026.9.4",
+    historical: true,
+  },
+  {
+    name: "installed package ahead without a saved observation",
+    installed: "2026.10.1",
+    serving: "2026.9.4",
+    recorded: undefined,
+    historical: false,
+  },
+  {
+    name: "newer Gateway without a saved observation",
+    installed: "2026.9.4",
+    serving: "2026.10.1",
+    recorded: undefined,
+    historical: false,
+  },
+])(
+  "keeps only current failed-run attention: $name",
+  ({ installed, serving: version, recorded, historical }) => {
+    const context = contextWithGitStatus("current");
+    context.overlays.snapshot.updateRun = createUpdateRunFixture({
+      status: "failed",
+      before: { version: installed },
+      verification: recorded ? { serviceRunning: true, runningVersion: recorded } : {},
+      finishedAtMs: Date.now(),
+    });
+    context.gateway.snapshot.hello = {
+      type: "hello-ok",
+      protocol: 1,
+      server: { version },
+      features: { methods: [] },
+    };
+    expect(resolveSidebarUpdateAttention(context) !== null).toBe(!historical);
+  },
+);
 
 it.each([
   ["stable admin update", "operator.admin", false, true],

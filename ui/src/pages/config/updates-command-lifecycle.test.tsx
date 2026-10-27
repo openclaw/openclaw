@@ -32,7 +32,6 @@ it.each([
       status: "failed",
       phase: "finished",
       reason: "build-failed",
-      before: { version: "1.0.0" },
     });
     const request = vi.fn<RequestFn>((method) =>
       method === "update.report" ? preview.promise : Promise.resolve({ lastRun: run }),

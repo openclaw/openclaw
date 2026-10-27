@@ -18,9 +18,38 @@ beforeEach(async () => {
 });
 
 describe("running update status", () => {
-  it.each(["2026.9.4", "2026.10.1"])(
-    "projects past failures against serving %s",
-    (gatewayVersion) => {
+  it.each([
+    {
+      name: "installed package ahead of serving Gateway",
+      installed: "2026.10.1",
+      serving: "2026.9.4",
+      recorded: "2026.9.4",
+      historical: false,
+    },
+    {
+      name: "serving Gateway moved past the failure",
+      installed: "2026.9.4",
+      serving: "2026.10.1",
+      recorded: "2026.9.4",
+      historical: true,
+    },
+    {
+      name: "installed package ahead without a saved observation",
+      installed: "2026.10.1",
+      serving: "2026.9.4",
+      recorded: undefined,
+      historical: false,
+    },
+    {
+      name: "newer Gateway without a saved observation",
+      installed: "2026.9.4",
+      serving: "2026.10.1",
+      recorded: undefined,
+      historical: false,
+    },
+  ])(
+    "projects past failures: $name",
+    ({ installed, serving: gatewayVersion, recorded, historical }) => {
       mountUpdates(
         createProps({
           gatewayVersion,
@@ -30,13 +59,14 @@ describe("running update status", () => {
               phase: "finished",
               reason: "preflight-no-good-commit",
               target: { kind: "git", channel: "dev" },
-              before: { version: "2026.9.4" },
+              before: { version: installed },
+              verification: recorded ? { serviceRunning: true, runningVersion: recorded } : {},
               origin: { nextAction: "Run openclaw update." },
             }),
           },
         }),
       );
-      if (gatewayVersion === "2026.10.1") {
+      if (historical) {
         expect(container.textContent).toContain(
           "Last update run failed (preflight-no-good-commit)",
         );

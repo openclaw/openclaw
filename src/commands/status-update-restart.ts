@@ -76,13 +76,6 @@ function renderStatusReport(
     (!afterIdentityAvailable && targetVersion === afterVersion) ||
     (rollbackAttempted && (!previousVersion || targetVersion === previousVersion));
   const observedFailure = run.status === "failed" && !reconciled && opts.localGatewayHealthy;
-  const historicalFailure = Boolean(
-    observedFailure &&
-    targetVersion &&
-    servingVersion === targetVersion &&
-    !buildMismatch &&
-    !targetIdentityUnavailable,
-  );
   const message =
     run.status === "failed" && !reconciled
       ? run.steps
@@ -94,10 +87,7 @@ function renderStatusReport(
   const label = (value: string) => sanitizeTerminalText(value).slice(0, 240);
   const servingLabel = label(servingVersion ?? "an unknown version");
   const targetLabel = label(targetVersion ?? "an unknown target");
-  const reasonLabel = label(run.reason?.trim() || "unknown reason");
-  if (historicalFailure) {
-    headline = `Last update run failed (${reasonLabel}) — Gateway is serving ${servingLabel}.`;
-  } else if (observedFailure) {
+  if (observedFailure) {
     const current =
       (buildMismatch || targetIdentityUnavailable) && servingBuild
         ? `${servingLabel} (build ${label(servingBuild)})`
@@ -116,7 +106,7 @@ function renderStatusReport(
   return {
     ...report,
     reconciled,
-    historicalFailure,
+    historicalFailure: false,
     headline,
   };
 }

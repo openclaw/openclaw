@@ -23,6 +23,7 @@ import {
   getUpdateRun,
   listUpdateRuns,
   recordUpdateRunPhase,
+  recordUpdateRunVerification,
 } from "../../infra/update-run-ledger.js";
 import * as reportHealth from "../../infra/update-run-report-health.js";
 import { ABANDONED_UPDATE_RUN_MS } from "../../infra/update-run-timeouts.js";
@@ -120,22 +121,54 @@ beforeEach(() => {
   vi.stubEnv("OPENCLAW_CONFIG_PATH", path.join(stateDir, "openclaw.json"));
 });
 
-it.each(["2026.9.4", "2026.10.1"])(
-  "projects failed history against serving %s",
-  async (version) => {
+it.each([
+  {
+    name: "installed package ahead of serving Gateway",
+    installed: "2026.10.1",
+    serving: "2026.9.4",
+    recorded: "2026.9.4",
+    historical: false,
+  },
+  {
+    name: "serving Gateway moved past the failure",
+    installed: "2026.9.4",
+    serving: "2026.10.1",
+    recorded: "2026.9.4",
+    historical: true,
+  },
+  {
+    name: "installed package ahead without a saved observation",
+    installed: "2026.10.1",
+    serving: "2026.9.4",
+    recorded: undefined,
+    historical: false,
+  },
+  {
+    name: "newer Gateway without a saved observation",
+    installed: "2026.9.4",
+    serving: "2026.10.1",
+    recorded: undefined,
+    historical: false,
+  },
+])(
+  "projects failed history: $name",
+  async ({ installed, serving: version, recorded, historical }) => {
     const run = createUpdateRun({
       trigger: "chat",
       target: { kind: "git", channel: "dev" },
-      before: { version: "2026.9.4" },
+      before: { version: installed },
       origin: { nextAction: "Run openclaw update." },
     });
+    if (recorded) {
+      recordUpdateRunVerification(run.runId, { serviceRunning: true, runningVersion: recorded });
+    }
     finishUpdateRun(run.runId, { status: "failed", reason: "preflight-no-good-commit" });
     vi.spyOn(reportHealth, "readUpdateRunReportHealth").mockResolvedValue({
       kind: "responding",
       version,
     });
     await updateStatus({});
-    if (version === "2026.10.1") {
+    if (historical) {
       expectOutput("Last update run failed (preflight-no-good-commit)");
       expect(outputText()).not.toContain("Run openclaw update.");
     } else {

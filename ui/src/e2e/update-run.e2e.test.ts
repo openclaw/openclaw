@@ -15,9 +15,38 @@ function text(root: Page | Locator, value: string, exact = true) {
 }
 
 suite.define(() => {
-  it.each(["2026.9.4", "2026.10.1"])(
-    "projects saved update failures on serving %s",
-    async (serverVersion) => {
+  it.each([
+    {
+      name: "installed package ahead of serving Gateway",
+      installed: "2026.10.1",
+      serving: "2026.9.4",
+      recorded: "2026.9.4",
+      historical: false,
+    },
+    {
+      name: "serving Gateway moved past the failure",
+      installed: "2026.9.4",
+      serving: "2026.10.1",
+      recorded: "2026.9.4",
+      historical: true,
+    },
+    {
+      name: "installed package ahead without a saved observation",
+      installed: "2026.10.1",
+      serving: "2026.9.4",
+      recorded: undefined,
+      historical: false,
+    },
+    {
+      name: "newer Gateway without a saved observation",
+      installed: "2026.9.4",
+      serving: "2026.10.1",
+      recorded: undefined,
+      historical: false,
+    },
+  ])(
+    "projects saved update failures: $name",
+    async ({ installed, serving: serverVersion, recorded, historical }) => {
       await suite.withPage(
         { locale: "en-US", serviceWorkers: "block", viewport: { height: 1200, width: 1440 } },
         async ({ page }) => {
@@ -26,9 +55,9 @@ suite.define(() => {
             phase: "finished",
             status: "failed",
             reason: "preflight-no-good-commit",
-            before: { version: "2026.9.4", sha: "37ea9f110bad" },
+            before: { version: installed, sha: "37ea9f110bad" },
             after: {},
-            verification: {},
+            verification: recorded ? { serviceRunning: true, runningVersion: recorded } : {},
             target: { kind: "git", channel: "dev" },
             finishedAtMs: Date.now(),
             origin: { nextAction: "Run openclaw update." },
@@ -56,7 +85,6 @@ suite.define(() => {
           await page.goto(`${suite.server.baseUrl}settings/updates`);
           await gateway.waitForRequest("update.status");
           const surface = page.locator("openclaw-update-run-view");
-          const historical = serverVersion === "2026.10.1";
           await surface
             .getByText(historical ? /Last update run failed/ : /OpenClaw update failed/)
             .first()
@@ -75,7 +103,7 @@ suite.define(() => {
           await writeFile(
             path.join(
               suite.artifactDir,
-              historical ? "historical-after.png" : "unresolved-before.png",
+              `${installed}-${serverVersion}-${recorded ?? "unknown"}.png`,
             ),
             frame.png,
           );
