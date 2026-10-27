@@ -258,19 +258,23 @@ export function registerTimeoutSuccessAnnouncementTest({
           terminalReply: { disposition: "visible", text: "Finished successfully." },
         },
       });
-      await waitForFast(async () => {
-        const prepared = await prepareSubagentRunsSnapshotForRunIds(subagentRuns, [
-          "run-timeout-then-ok",
-        ]);
-        expect(prepared.consume((rows) => rows.get("run-timeout-then-ok"))).toMatchObject({
-          ready: true,
-          value: {
-            execution: { outcome: { status: "ok", endedAt: 1_250 } },
-            completion: {
-              terminalReply: { disposition: "visible", text: "Finished successfully." },
-            },
-          },
+      await waitForFast(() => {
+        expect(findRequesterRun("run-timeout-then-ok")?.execution.outcome).toMatchObject({
+          status: "ok",
+          endedAt: 1_250,
         });
+      });
+      const prepared = await prepareSubagentRunsSnapshotForRunIds(subagentRuns, [
+        "run-timeout-then-ok",
+      ]);
+      expect(prepared.consume((rows) => rows.get("run-timeout-then-ok"))).toMatchObject({
+        ready: true,
+        value: {
+          execution: { outcome: { status: "ok", endedAt: 1_250 } },
+          completion: {
+            terminalReply: { disposition: "visible", text: "Finished successfully." },
+          },
+        },
       });
 
       operation.complete();
