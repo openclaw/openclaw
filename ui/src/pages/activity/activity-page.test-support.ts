@@ -102,7 +102,7 @@ export function createActivityPage(context: ApplicationContext, initial?: RouteL
 }
 
 export async function settleActivity() {
-  // Wait behind the feed's queued presentation update.
+  // Live Activity publishes in a queued task, which need not precede the next frame.
   await new Promise<void>((resolve) => {
     setTimeout(resolve, 0);
   });
