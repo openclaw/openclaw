@@ -68,7 +68,7 @@ async function withPersistedOrphanBoundary(
     excludeFromContext?: boolean;
     selectedOwner?: boolean;
     recoveryNotice?: "tail" | "before-metadata";
-    history?: AgentMessage[];
+    history?: Parameters<SessionManager["appendMessageAsync"]>[0][];
     metadataBytes?: number;
   },
   run: (fixture: {
@@ -217,7 +217,7 @@ describe("prepareEmbeddedAttemptSessionBoundary orphan recovery", () => {
         baseUrl: "https://api.openai.com/v1",
         reasoning: true,
       });
-      const history: AgentMessage[] = Array.from({ length: 6 }, (_, index) => [
+      const history = Array.from({ length: 6 }, (_, index) => [
         {
           role: "user" as const,
           content: `question ${index} ` + "q".repeat(400),
