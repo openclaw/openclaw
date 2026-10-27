@@ -535,7 +535,7 @@ export class ChatSessionVirtualizerHost implements ChatTranscriptSession {
           getContent: (index) => renderRow(rows[index]!),
           virtualizer,
           overlay,
-          header: header?.props ?? null,
+          header: header?.content ?? null,
           scrollElementRef: this.scrollElementRef,
           captureInteractionResize: this.captureInteractionResize,
           measureRowRefFor: (key) => this.rowRefs.forKey(key),

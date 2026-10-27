@@ -317,46 +317,40 @@ export function seedLocalPublication(
   },
 ): void {
   ensureGitHubPublicationSchema(database.db);
+  // Omitted nullable columns retain the schema's NULL defaults.
+  const row = {
+    request_id: params.requestId,
+    idempotency_key: `idempotency-${params.requestId}`,
+    request_digest: `digest-${params.requestId}`,
+    session_id: SESSION_ID,
+    session_key: SESSION_KEY,
+    agent_id: "main",
+    worktree_id: "worktree-1",
+    repository_fingerprint: params.repositoryFingerprint ?? "fingerprint-1",
+    identity_source: "system-configured",
+    identity_profile_id: "ghp_11111111111111111111111111111111",
+    identity_account_id: 42,
+    identity_login: "roboclaw-bot",
+    title: "Resume the publication",
+    body: "Recovered after Gateway restart.",
+    status: params.status,
+    gateway_instance_id: params.headCommit === null ? null : "previous-gateway-instance",
+    repository: params.headCommit === null ? null : "openclaw/openclaw",
+    branch: BRANCH,
+    base_branch: params.headCommit === null ? null : "main",
+    source_head_commit: OLD_HEAD,
+    source_index_tree: WORKSPACE_TREE,
+    workspace_tree: WORKSPACE_TREE,
+    head_commit: params.headCommit === undefined ? NEW_HEAD : params.headCommit,
+    created_at_ms: 1_000,
+    updated_at_ms: 1_001,
+  };
+  const columns = Object.keys(row);
   database.db
     .prepare(
-      `INSERT INTO github_publication_requests (
-        request_id, idempotency_key, request_digest, session_id, session_key, agent_id,
-        worktree_id, repository_fingerprint, claim_id, run_id, environment_id, owner_epoch,
-        placement_generation, identity_source, identity_profile_id, identity_account_id,
-        identity_login, title, body, status, gateway_instance_id, repository, branch,
-        base_branch, source_head_commit, source_index_tree, workspace_tree, head_commit,
-        pull_request_url,
-        error_code, next_action, created_at_ms, updated_at_ms, reported_at_ms
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL, NULL, NULL, NULL, ?, ?, ?, ?, ?, ?,
-        ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL, NULL, ?, ?, NULL)`,
+      `INSERT INTO github_publication_requests (${columns.join(", ")}) VALUES (${columns.map(() => "?").join(", ")})`,
     )
-    .run(
-      params.requestId,
-      `idempotency-${params.requestId}`,
-      `digest-${params.requestId}`,
-      SESSION_ID,
-      SESSION_KEY,
-      "main",
-      "worktree-1",
-      params.repositoryFingerprint ?? "fingerprint-1",
-      "system-configured",
-      "ghp_11111111111111111111111111111111",
-      42,
-      "roboclaw-bot",
-      "Resume the publication",
-      "Recovered after Gateway restart.",
-      params.status,
-      params.headCommit === null ? null : "previous-gateway-instance",
-      params.headCommit === null ? null : "openclaw/openclaw",
-      BRANCH,
-      params.headCommit === null ? null : "main",
-      OLD_HEAD,
-      WORKSPACE_TREE,
-      WORKSPACE_TREE,
-      params.headCommit === undefined ? NEW_HEAD : params.headCommit,
-      1_000,
-      1_001,
-    );
+    .run(...Object.values(row));
   insertGitHubPublicationSessionLifecycle(database.db, {
     publicationKind: "shared",
     requestId: params.requestId,

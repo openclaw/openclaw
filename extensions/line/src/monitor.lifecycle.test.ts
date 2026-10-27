@@ -411,49 +411,26 @@ describe("monitorLineProvider lifecycle", () => {
     },
   );
 
-  it("refreshes direct-chat loading until a failed inbound turn settles", async () => {
+  it("leaves direct-chat loading to the admitted reply lifecycle", async () => {
     const { messagingApi } = await import("@line/bot-sdk");
-    const { setLineRuntime } = await import("./runtime.js");
-    const entered = createDeferred<void>();
-    const finished = createDeferred<void>();
     const loading = vi
       .spyOn(messagingApi.MessagingApiClient.prototype, "showLoadingAnimation")
       .mockResolvedValue({});
-    setLineRuntime({
-      channel: {
-        inbound: {
-          run: async () => {
-            entered.resolve();
-            await finished.promise;
-            throw new Error("turn failed");
-          },
-        },
-      },
-    } as unknown as Parameters<typeof setLineRuntime>[0]);
+    const resolvedTurn = await captureTurn();
     const monitor = await startMonitor();
-    vi.useFakeTimers();
-    const task = dispatchInbound(
-      { from: `line:${directUserId}`, sessionKey: `line:${directUserId}`, userId: directUserId },
-      { channels: { line: { channelAccessToken: "token" } } },
-    );
     try {
-      await entered.promise;
-      expect(loading).toHaveBeenCalledWith({
-        chatId: directUserId,
-        loadingSeconds: 20,
-      });
-      await vi.advanceTimersByTimeAsync(18_000);
-      expect(loading).toHaveBeenCalledTimes(2);
-      finished.resolve();
-      await expect(task).rejects.toThrow("turn failed");
-      await vi.advanceTimersByTimeAsync(18_000);
-      expect(loading).toHaveBeenCalledTimes(2);
+      await dispatchInbound(
+        { from: `line:${directUserId}`, sessionKey: `line:${directUserId}`, userId: directUserId },
+        { channels: { line: { channelAccessToken: "token" } } },
+      );
+      // Core starts typing only for an admitted reply, so a denied send stays silent.
+      expect(loading).not.toHaveBeenCalled();
+      const typing = expectDefined(resolvedTurn()?.replyPipeline?.typing, "LINE reply typing");
+      await typing.start();
+      expect(loading).toHaveBeenCalledWith({ chatId: directUserId, loadingSeconds: 20 });
     } finally {
-      finished.resolve();
-      await Promise.resolve(task).catch(() => {});
       await monitor.stop();
       loading.mockRestore();
-      vi.useRealTimers();
     }
   });
 

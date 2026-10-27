@@ -14,6 +14,11 @@ import type { MSTeamsTurnContext } from "../sdk-types.js";
 // Preserve module setup before modules that consume it.
 // oxfmt-ignore
 import { getRuntimeApiMockState } from "./message-handler-mock-support.test-support.js";
+import {
+  keepConfiguredMSTeamsAllowlistActive,
+  projectStableMSTeamsGroupAllowlist,
+  projectStableMSTeamsTeamsConfig,
+} from "../resolve-allowlist.js";
 import { createMSTeamsMessageHandler } from "./message-handler.js";
 import {
   buildChannelActivity,
@@ -347,6 +352,104 @@ describe("msteams message authorization and supplemental context", () => {
     });
     await handle({ channelData: { team: { id: "team123" } } });
     expect(readAllowFromStore).not.toHaveBeenCalled();
+    expectBlocked(conversationStore);
+  });
+
+  it.each([
+    {
+      name: "name-keyed teams allowlist that did not resolve",
+      raw: {
+        groupPolicy: "open",
+        requireMention: false,
+        teams: { Engineering: {} },
+      } as MSTeamsConfig,
+    },
+    {
+      name: "name-only channels under a conversation-id team",
+      raw: {
+        groupPolicy: "open",
+        requireMention: false,
+        teams: { "19:product@thread.tacv2": { channels: { Roadmap: {} } } },
+      } as MSTeamsConfig,
+      // Probe an unlisted channel inside the configured team so the channel gate decides.
+      probe: { teamId: "19:product@thread.tacv2", channelId: "19:product-random@thread.tacv2" },
+    },
+    {
+      name: "name-only channels under a wildcard team",
+      raw: {
+        groupPolicy: "open",
+        requireMention: false,
+        teams: { "*": { channels: { Roadmap: {} } } },
+      } as MSTeamsConfig,
+    },
+    {
+      name: "names-only groupAllowFrom with open DMs",
+      raw: {
+        dmPolicy: "open",
+        allowFrom: ["*"],
+        groupPolicy: "allowlist",
+        requireMention: false,
+        groupAllowFrom: ["Bob Builder"],
+      } as MSTeamsConfig,
+    },
+  ])("does not admit an unlisted channel for a $name", async ({ raw, probe }) => {
+    // Same startup projection monitor.ts applies before the handler sees the config.
+    const projected: MSTeamsConfig = {
+      ...raw,
+      teams: projectStableMSTeamsTeamsConfig(raw.teams),
+      groupAllowFrom: keepConfiguredMSTeamsAllowlistActive(
+        raw.groupAllowFrom,
+        projectStableMSTeamsGroupAllowlist(raw.groupAllowFrom),
+      ),
+    };
+    const { handle, conversationStore } = setup(projected);
+    await handle({
+      conversation: {
+        id: probe?.channelId ?? "19:outsider-random@thread.tacv2",
+        conversationType: "channel",
+      },
+      channelData: { team: { id: probe?.teamId ?? "19:outsider-general@thread.tacv2" } },
+    });
+    expectBlocked(conversationStore);
+  });
+
+  it("does not let an operator-defined access group grant a names-only groupAllowFrom", async () => {
+    const raw: MSTeamsConfig = {
+      dmPolicy: "allowlist",
+      allowFrom: ["11111111-1111-1111-1111-111111111111"],
+      groupPolicy: "allowlist",
+      requireMention: false,
+      groupAllowFrom: ["Bob Builder"],
+    };
+    const projected: MSTeamsConfig = {
+      ...raw,
+      groupAllowFrom: keepConfiguredMSTeamsAllowlistActive(
+        raw.groupAllowFrom,
+        projectStableMSTeamsGroupAllowlist(raw.groupAllowFrom),
+      ),
+    };
+    // The names the earlier access-group placeholder used; a same-named group must not matter.
+    const { handle, conversationStore } = setup(
+      projected,
+      {},
+      {
+        accessGroups: {
+          "openclaw-msteams-unresolved-allowlist": {
+            type: "message.senders",
+            members: { msteams: ["22222222-2222-2222-2222-222222222222"] },
+          },
+        },
+      },
+    );
+    await handle({
+      from: {
+        id: "29:second",
+        aadObjectId: "22222222-2222-2222-2222-222222222222",
+        name: "Second",
+      },
+      conversation: { id: "19:outsider-random@thread.tacv2", conversationType: "channel" },
+      channelData: { team: { id: "19:outsider-general@thread.tacv2" } },
+    });
     expectBlocked(conversationStore);
   });
 

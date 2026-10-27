@@ -131,7 +131,9 @@ type ReplayInference =
  * The runtime a bound job's existing run picks from the entry its cron session copies
  * (a `current` job's creating conversation, a `session:` job's row). The model comes
  * from the scheduled-model selection owner the run and capture use; when it cannot be
- * resolved for the bound provider, the comparison is reported unresolved.
+ * resolved for the bound provider, the comparison is reported unresolved. A job with a
+ * recorded runtime no longer copies its creating conversation's model, so its scheduled
+ * model is compared with the one the copy selects.
  */
 export async function replayInferenceRuntimes(
   job: CronStoredJob,
@@ -152,32 +154,49 @@ export async function replayInferenceRuntimes(
       ? resolveCarriedCronModelSelection(currentRow)
       : undefined;
   const provider = binding.provider;
-  let selected;
-  try {
+  const { payload } = job;
+  const select = async (sessionEntry: Partial<SessionEntry>) => {
     const owner = await resolveCronModelSelectionOwner({ cfg, agentId, requiredAgentId: agentId });
-    selected = await resolveCronModelSelection({
+    return await resolveCronModelSelection({
       cfg: owner.config,
       owner,
       agentConfigOverride: resolveAgentConfig(owner.config, agentId),
       agentId,
       agentDir: owner.agentDir,
       workspaceDir: owner.workspaceDir,
-      payloadModel: job.payload.model,
-      sessionEntry: entry ?? {},
-      isGmailHook: job.payload.externalContentSource === "gmail",
+      payloadModel: payload.model,
+      sessionEntry,
+      isGmailHook: payload.externalContentSource === "gmail",
     });
+  };
+  let selected;
+  let scheduled;
+  try {
+    selected = await select(entry ?? {});
+    scheduled = currentRow && binding.runtime ? await select({}) : undefined;
   } catch (error) {
     return { unresolved: error instanceof Error ? error.message : String(error) };
   }
   if (!selected.ok) {
     return { unresolved: selected.error };
   }
-  if (selected.provider !== provider) {
+  if (scheduled && !scheduled.ok) {
+    return { unresolved: scheduled.error };
+  }
+  // The existing run refuses a copied model on another provider before it starts.
+  const legacyRefused = selected.provider !== provider;
+  if (legacyRefused && scheduled?.provider !== provider) {
     return {
       unresolved: `selected provider ${selected.provider} is not bound provider ${provider}`,
     };
   }
-  const model = selected.model;
+  const model = legacyRefused && scheduled ? scheduled.model : selected.model;
+  const models = scheduled
+    ? {
+        legacy: `${selected.provider}/${selected.model}${legacyRefused ? " (refused: not the bound provider)" : ""}`,
+        context: `${scheduled.provider}/${scheduled.model}`,
+      }
+    : undefined;
   const deps = { isCliProvider, resolveEffectiveAgentRuntime };
   const legacy = resolveCronCandidateExecution(
     {
@@ -190,7 +209,7 @@ export async function replayInferenceRuntimes(
     },
     deps,
   ).runtime;
-  return { runtimes: { legacy } };
+  return { runtimes: { legacy, ...(models ? { models } : {}) } };
 }
 
 // Keeps the discriminators the builder reads from a stored operator source. A

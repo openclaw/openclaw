@@ -61,6 +61,12 @@ function selectionTask(task: string | undefined): string {
     case "gateway:rpc:status":
     case "gateway:rpc:health":
       return "status";
+    case "gateway.chat.history.session_info":
+      return "chat.history";
+    case "gateway.chat.startup.session_info":
+      return "chat.startup";
+    case "gateway:session-event":
+      return "session-event";
     case "gateway:task-pr-lineage":
       return "task-pr-lineage";
     case "gateway:rpc:controlUi.sessionPullRequests.subscribe":

@@ -2653,8 +2653,6 @@
 ["src/cli/command-config-resolution.test.ts","../config/plugin-auto-enable.js","54b1e6f1039daf96006a1808ffa82bffe931c3ed42c57832cec6b5059ccf28ac",1]
 ["src/cli/command-config-resolution.test.ts","./command-secret-gateway.js","a955943c63802b41900b126eeb12d6e19cc18587b1c26747ba9a524595a3fa25",1]
 ["src/cli/command-execution-startup.test.ts","./plugin-registry-loader.js","6f8d9712ebaa9d2078811b0a44b5eed577fd1792b82d757487e4cadc1ad1630f",1]
-["src/cli/command-secret-gateway.test.ts","../gateway/call.js","64011d40301330b379e7aea54e4e35d6dfa3da206700467657e3fa35f1e31c87",1]
-["src/cli/command-secret-gateway.test.ts","../secrets/runtime-web-tools.js","1792ae4e142ab9bca4f7e1df35190d1f511170f7073b740291549381343465e3",1]
 ["src/cli/command-secret-targets.import.test.ts","../channels/plugins/read-only.js","9c25189a5931b672343ae0336e0a23d7a754c0bd9edd4d88b8c6bb5d56c3de08",1]
 ["src/cli/command-secret-targets.import.test.ts","../secrets/target-registry.js","b842e091a53cfcb324df1582c8fdbb64064d879eeee48c4af4f31f64862e8faf",1]
 ["src/cli/config-cli-path.reference-intent.test.ts","../config/value-tree.js","54ac9ec653b28c1cfba5814b1cc227e90e01ff275c3e5f22a0e3ddfeb4d20594",1]

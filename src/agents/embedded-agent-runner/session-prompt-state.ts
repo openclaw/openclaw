@@ -222,7 +222,7 @@ export function beginSessionSystemPrompt(params: {
   state: EmbeddedSessionPromptState;
   routeKey: string;
   enabled: boolean;
-  entries: SessionEntry[];
+  getEntries: () => SessionEntry[];
 }): boolean {
   params.state.pendingSystemPrompt = undefined;
   if (params.enabled) {
@@ -230,9 +230,9 @@ export function beginSessionSystemPrompt(params: {
   }
   params.state.systemPrompt = undefined;
   params.state.systemPromptRouteKey = params.routeKey;
-  const previous = params.entries.findLast(
-    (entry) => entry.type === "custom" && entry.customType === "openclaw.system-prompt",
-  );
+  const previous = params
+    .getEntries()
+    .findLast((entry) => entry.type === "custom" && entry.customType === "openclaw.system-prompt");
   return (
     previous?.type === "custom" &&
     isRecord(previous.data) &&
