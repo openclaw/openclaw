@@ -14,6 +14,7 @@ import {
   detectSources,
   loadRuns,
   loadScribes,
+  resultFromText,
   type ScribeDetection,
   type ScribeJob,
   type ScribeRun,
@@ -351,7 +352,8 @@ function runText(run: ScribeRun) {
   if (run.status === "skipped") {
     return run.error ? `Skipped: ${run.error}` : "Skipped";
   }
-  return run.summary ?? "Finished";
+  // A scribe run's summary is its final reply; its result line is the one-sentence summary.
+  return run.summary ? (resultFromText(run.summary)?.summary ?? run.summary) : "Finished";
 }
 
 function detail(ui: Page, snapshot: ScribeSnapshot, runs: ScribeRun[]) {

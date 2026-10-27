@@ -113,37 +113,45 @@ function messageText(message: unknown): string {
   return "";
 }
 
-/** The last valid `SCRIBE_RESULT` line in assistant messages, newest first. */
-function parseScribeResult(messages: readonly unknown[]): ScribeResult | undefined {
-  for (const message of [...messages].toReversed()) {
-    if (!isRecord(message) || message.role !== "assistant") {
+/** The last valid `SCRIBE_RESULT` line in one reply or run summary. */
+export function resultFromText(text: string): ScribeResult | undefined {
+  for (const line of text.split("\n").toReversed()) {
+    const match = /^\s*SCRIBE_RESULT\s+(\{.*\})\s*$/.exec(line);
+    if (!match) {
       continue;
     }
-    const lines = messageText(message).split("\n").toReversed();
-    for (const line of lines) {
-      const match = /^\s*SCRIBE_RESULT\s+(\{.*\})\s*$/.exec(line);
-      if (!match) {
-        continue;
+    try {
+      const value: unknown = JSON.parse(match[1]!);
+      if (
+        isRecord(value) &&
+        typeof value.scribe === "string" &&
+        (value.state === "on" || value.state === "done" || value.state === "failed") &&
+        (typeof value.jobId === "string" || value.jobId === null) &&
+        typeof value.summary === "string"
+      ) {
+        return {
+          scribe: value.scribe,
+          state: value.state,
+          jobId: value.jobId,
+          summary: value.summary,
+        };
       }
-      try {
-        const value: unknown = JSON.parse(match[1]!);
-        if (
-          isRecord(value) &&
-          typeof value.scribe === "string" &&
-          (value.state === "on" || value.state === "done" || value.state === "failed") &&
-          (typeof value.jobId === "string" || value.jobId === null) &&
-          typeof value.summary === "string"
-        ) {
-          return {
-            scribe: value.scribe,
-            state: value.state,
-            jobId: value.jobId,
-            summary: value.summary,
-          };
-        }
-      } catch {
-        // Not JSON: keep looking at earlier lines.
-      }
+    } catch {
+      // Not JSON: keep looking at earlier lines.
+    }
+  }
+  return undefined;
+}
+
+// The newest assistant message that carries a valid result line.
+function parseScribeResult(messages: readonly unknown[]): ScribeResult | undefined {
+  for (const message of [...messages].toReversed()) {
+    const result =
+      isRecord(message) && message.role === "assistant"
+        ? resultFromText(messageText(message))
+        : undefined;
+    if (result) {
+      return result;
     }
   }
   return undefined;

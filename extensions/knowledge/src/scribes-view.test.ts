@@ -59,7 +59,8 @@ function fixture(world: {
             {
               ts: 1_793_000_000_000,
               status: "ok",
-              summary: "9 filed · 2 pages created",
+              summary:
+                'Filed claims.\nSCRIBE_RESULT {"scribe":"unlinked-review","state":"on","jobId":"job-review","summary":"9 filed · 2 pages created"}',
               model: "anthropic/claude",
             },
           ],
@@ -249,7 +250,7 @@ it("runs, pauses, turns off and opens an On scribe from its detail", async () =>
   ui.s.scribe = "unlinked-review";
   const view = await render();
   expect(view.textContent).toContain("1 recent run, all succeeded");
-  expect(view.textContent).toContain("9 filed · 2 pages created");
+  expect(view.querySelector(".scribe-run span")?.textContent).toBe("9 filed · 2 pages created");
   expect(view.textContent).toContain("Alert after 2 failed runs");
   buttonNamed(view, "Run now").click();
   await flush();
