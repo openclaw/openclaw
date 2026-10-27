@@ -30,7 +30,7 @@ async function navigate(page: Page, routeId: RouteId) {
 // share the config owner; appearance exercises its top-level entry/retirement.
 const routes: Array<{ id: RouteId; ready?: string }> = [
   { id: "new-session" },
-  { id: "terminal", ready: "openclaw-terminal-page .tp-viewport" },
+  { id: "terminal", ready: "openclaw-terminal-page .tp-header" },
   { id: "dashboards" },
   { id: "dashboard", ready: "openclaw-chat-page" },
   { id: "custodian", ready: "openclaw-custodian-page .custodian-surface" },
