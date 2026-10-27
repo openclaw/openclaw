@@ -21,11 +21,16 @@ import { loadavg } from "node:os";
 import { parseArgs } from "node:util";
 import { deserialize, serialize } from "node:v8";
 import { replaceSessionEntrySync } from "../../src/config/sessions/session-accessor.sqlite-entry.js";
-import { buildProjectedLifecycleUpserts } from "../../src/config/sessions/session-accessor.sqlite-lifecycle-state.js";
+import {
+  buildProjectedLifecycleUpserts,
+  readProjectedLifecycleStore,
+  selectProjectedLifecycleRemovals,
+} from "../../src/config/sessions/session-accessor.sqlite-lifecycle-state.js";
 import type { ProjectedLifecycleMutation } from "../../src/config/sessions/session-accessor.sqlite-lifecycle-types.js";
 import { bindSqliteWorkerBackend } from "../../src/config/sessions/session-lifecycle-projection.worker.js";
 import { runWithSqliteWorkerStateContext } from "../../src/infra/sqlite-worker-state-context.js";
 import { classifyWorkerRequest } from "../../src/infra/worker-request-diagnostics.js";
+import { readOpenClawAgentDatabaseIdentity } from "../../src/state/openclaw-agent-db-identity.js";
 import { openOpenClawAgentDatabase } from "../../src/state/openclaw-agent-db.js";
 import { withOpenClawTestState } from "../../src/test-utils/openclaw-test-state.js";
 
@@ -79,14 +84,21 @@ try {
         ),
     );
     try {
-      const prepared = backend.execute({
-        type: "prepare",
-        input: {
-          removals: [{ sessionKey: removedKey, expectedSessionId: "synthetic-removed" }],
-          upserts: [{ sessionKey }],
-          archiveDirectory: "/synthetic/archives",
+      const preparationInput = {
+        removals: [{ sessionKey: removedKey, expectedSessionId: "synthetic-removed" }],
+        upserts: [{ sessionKey }],
+        archiveDirectory: "/synthetic/archives",
+      };
+      const store = readProjectedLifecycleStore(database, preparationInput);
+      const prepared = {
+        store,
+        selected: selectProjectedLifecycleRemovals(database, store, preparationInput.removals),
+        archiveRecovery: {
+          pending: false,
+          databaseIdentity: readOpenClawAgentDatabaseIdentity(database).identity,
         },
-      });
+      };
+      assert.deepEqual(backend.execute({ type: "prepare", input: preparationInput }), prepared);
       assert.equal(prepared.selected.projectedRemovals.length, 1);
       const upsertedEntries = await buildProjectedLifecycleUpserts(
         prepared.store,
