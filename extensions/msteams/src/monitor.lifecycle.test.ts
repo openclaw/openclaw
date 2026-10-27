@@ -30,7 +30,6 @@ import {
 import { createNativeSsoProcessor, createSigninEvent } from "./monitor-sso.test-helpers.js";
 import { monitorMSTeamsProvider } from "./monitor.js";
 import { createMSTeamsPollStoreState, type MSTeamsPollStore } from "./polls.js";
-import { MSTEAMS_UNMATCHABLE_ALLOW_ENTRY } from "./resolve-allowlist.js";
 
 function runProvider(
   abort: AbortController,
@@ -494,7 +493,9 @@ describe("monitorMSTeamsProvider lifecycle", () => {
     expect(cfg.channels?.msteams?.teams).toEqual({ Engineering: {} });
 
     const registered = registeredDeps().cfg.channels?.msteams;
-    expect(registered?.groupAllowFrom).toEqual([MSTEAMS_UNMATCHABLE_ALLOW_ENTRY]);
+    expect(registered?.groupAllowFrom).toEqual([
+      "19:openclaw-unresolved-allowlist@thread.unresolved",
+    ]);
     expect(Object.keys(registered?.teams ?? {})).toHaveLength(1);
     expect(Object.keys(registered?.teams ?? {})).not.toContain("*");
   });

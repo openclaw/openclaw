@@ -201,7 +201,7 @@ export type SessionStoreTargetInventoryRequest = {
   env: NodeJS.ProcessEnv;
   paths: CapturedSessionStorePaths;
   candidates: SessionStoreReadCandidate[];
-  recoveryExclusions?: { agentIds: string[]; storePaths: string[] };
+  recoveryExclusions?: { agentIds: string[]; storePaths: string[]; databasePaths: string[] };
   registryDiscovery?: {
     agentIds: string[];
     roots: Array<{ path: string; physicalPath: string }>;
@@ -486,6 +486,7 @@ export function prepareSessionStoreTargetInventory(
       ? {
           recoveryExclusions: {
             agentIds: [...excludedAgentIds],
+            databasePaths: [...excludedDatabasePaths],
             storePaths: excludedStorePaths,
           },
         }

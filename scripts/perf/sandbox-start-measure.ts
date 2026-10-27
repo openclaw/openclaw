@@ -15,6 +15,8 @@
  * use the same current-source sandbox config factory, whose hash is reported.
  * --cold-create makes the synthetic engine report each container absent, measuring
  * image admission/create/start work without real daemon latency or image pulls.
+ * --backend selects an owner exporting createSandboxBackend instead, including
+ * backend dispatch, daemon identity, filesystem-bridge setup and registry publication.
  */
 import assert from "node:assert/strict";
 import { hash } from "node:crypto";
@@ -34,6 +36,7 @@ const { values } = parseArgs({
     iterations: { type: "string", default: "2000" },
     allocations: { type: "boolean", default: false },
     "cold-create": { type: "boolean", default: false },
+    backend: { type: "boolean", default: false },
   },
 });
 assert(values.owner, "--owner must select an already-built Docker owner");
@@ -65,9 +68,20 @@ Object.assign(process.env, {
 await fs.writeFile(
   path.join(bin, "docker"),
   `#!/bin/sh
+if [ "$1" = --host ]; then shift 2; fi
 printf '%s\n' "$1" >> "$SANDBOX_MEASURE_CALLS"
 case "$1" in
+  context) printf '{"Host":"unix:///synthetic-sandbox.sock"}\n' ;;
+  info) printf 'synthetic-daemon\n' ;;
   inspect)
+    if [ "$3" = '{"Mounts":{{json .Mounts}},"Tmpfs":{{json .HostConfig.Tmpfs}}}' ]; then
+      printf '{"Mounts":[],"Tmpfs":{}}\n'
+      exit 0
+    fi
+    if [ "$3" = '{{json .State}}' ]; then
+      printf '{"Running":true,"Paused":false,"Pid":123,"StartedAt":"2026-01-01T00:00:00Z"}\n'
+      exit 0
+    fi
     if [ "$SANDBOX_MEASURE_COLD" = 1 ] || [ ! -f "$SANDBOX_MEASURE_CONTAINER" ]; then
       printf 'No such container\n' >&2
       exit 1
@@ -88,6 +102,7 @@ case "$1" in
       esac
     done
     printf '%s\n' "$SANDBOX_MEASURE_ID" ;;
+  exec) printf '1 0 8:1 / / rw - ext4 /dev/synthetic rw\n' ;;
   image|start) ;;
   *) printf 'Unsupported fixture operation\n' >&2; exit 2 ;;
 esac
@@ -128,9 +143,7 @@ const gc = new PerformanceObserver((list) => {
 });
 try {
   const { resolveSandboxConfigForAgent } = await import("../../src/agents/sandbox/config.js");
-  const owner = (await import(
-    pathToFileURL(path.resolve(values.owner)).href
-  )) as typeof import("../../src/agents/sandbox/docker.js");
+  const owner = await import(pathToFileURL(path.resolve(values.owner)).href);
   const readOnlyResourceMounts: Array<{ hostPath: string; containerPath: string }> = [];
   for (let index = 0; index < 40; index++) {
     const hostPath = path.join(root, `resource-${index}`);
@@ -141,17 +154,29 @@ try {
   const cfg = resolveSandboxConfigForAgent({
     agents: { defaults: { sandbox: { mode: "all", scope: "shared", workspaceAccess: "rw" } } },
   });
-  const invoke = () =>
-    owner.ensureSandboxContainer({
-      engine: owner.DOCKER_SANDBOX_ENGINE,
-      scopeKey: "sandbox-start-measure",
-      workspaceDir,
-      agentWorkspaceDir: workspaceDir,
-      readOnlyResourceMounts,
-      cfg,
-    });
+  const params = {
+    scopeKey: "sandbox-start-measure",
+    workspaceDir,
+    agentWorkspaceDir: workspaceDir,
+    readOnlyResourceMounts,
+    cfg,
+  };
+  const invoke = values.backend
+    ? async () => {
+        const { createSandboxBackend } =
+          owner as typeof import("../../src/agents/sandbox/backend.js");
+        const result = await createSandboxBackend({ ...params, sessionKey: params.scopeKey });
+        assert.equal(result.runtimeId, `${cfg.docker.containerPrefix}shared`);
+      }
+    : async () => {
+        const { ensureSandboxContainer, DOCKER_SANDBOX_ENGINE } =
+          owner as typeof import("../../src/agents/sandbox/docker.js");
+        const result = await ensureSandboxContainer({ ...params, engine: DOCKER_SANDBOX_ENGINE });
+        assert.equal(result.containerId, containerId);
+        assert.equal(result.currentConfig, true);
+      };
   for (let index = 0; index < 10; index++) {
-    assert.equal((await invoke()).containerId, containerId);
+    await invoke();
   }
   await fs.writeFile(callsFile, "");
   global.gc();
@@ -176,10 +201,8 @@ try {
   const durations: number[] = [];
   for (let index = 0; index < iterations; index++) {
     const start = performance.now();
-    const result = await invoke();
+    await invoke();
     durations.push(performance.now() - start);
-    assert.equal(result.containerId, containerId);
-    assert.equal(result.currentConfig, true);
   }
   measuredEnd = performance.now();
   const elapsedMs = measuredEnd - measuredStart;
@@ -199,7 +222,7 @@ try {
   }
   const calls = (await fs.readFile(callsFile, "utf8")).trim().split("\n");
   const callsByOperation = Object.fromEntries(
-    ["inspect", "image", "create", "start"].map((operation) => [
+    ["inspect", "image", "create", "start", "context", "info", "exec"].map((operation) => [
       operation,
       calls.filter((call) => call === operation).length / iterations,
     ]),
@@ -209,7 +232,7 @@ try {
     assert.equal(callsByOperation.start, 1);
   } else {
     assert(
-      calls.every((call) => call === "inspect"),
+      calls.every((call) => ["inspect", "context", "info", "exec"].includes(call)),
       "Warm reuse must not mutate the container",
     );
   }
@@ -227,6 +250,7 @@ try {
       resourceMounts: readOnlyResourceMounts.length,
       allocations: values.allocations,
       coldCreate: values["cold-create"],
+      backend: values.backend,
       callsByOperation,
       timingAndGcDiagnosticOnly: values.allocations,
       postWarmBarrierMs: 100,

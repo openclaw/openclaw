@@ -330,10 +330,18 @@ exec "$CRABBOX_TEST_NODE" "$@"
     ]);
     expect((await warmImage())?.capture).toEqual(capture);
 
-    // Operator recovery closes the persisted claim; the next eligible teardown can capture.
+    // Recovery releases the stopped source; only a new dispatch may capture again.
     blocked = false;
     await recoverCrabboxWarmImageCapture(crabboxState, capture!.selector, true);
+    expect(await f.allocation()).toBeUndefined();
     await destroyAndWait(provider, lease);
+    expect(commandCount(calls, "create")).toBe(1);
+    const fresh = await provider.provision(PROFILE, "post-recovery", options);
+    expect(fresh.leaseId).not.toBe(lease.leaseId);
+    expect(commandCount(calls, "create")).toBe(2);
+    expect((await warmImage())?.checkpointId).toBe(CHECKPOINT_ID);
+    expect(options.beginNodeEnrollment).toHaveBeenCalledOnce();
+    await destroyAndWait(provider, { ...fresh, profile: PROFILE });
     expect(commandCount(calls, "create")).toBe(2);
     expect((await warmImage())?.capture).toBeUndefined();
   });

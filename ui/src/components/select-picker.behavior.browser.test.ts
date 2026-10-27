@@ -236,6 +236,30 @@ describe("Picker", () => {
     },
   );
 
+  it("starts revealing a windowed selection before animation frames resume", async () => {
+    const frames = vi.spyOn(window, "requestAnimationFrame").mockReturnValue(0);
+    try {
+      const p = await mount({
+        options: Array.from({ length: 1000 }, (_, index) => ({
+          value: `model-${index}`,
+          label: `Model ${index}`,
+        })),
+        value: "model-750",
+        windowed: () => "",
+      });
+      p.container.style.width = "420px";
+      await p.open();
+      await waitForSolid(() =>
+        expect(
+          p.picker.querySelector<HTMLElement>(".picker-select__options")!.scrollTop,
+        ).toBeGreaterThan(0),
+      );
+    } finally {
+      cleanupSolid();
+      frames.mockRestore();
+    }
+  });
+
   it("windows a caller-sized large catalog without truncating keyboard selection", async () => {
     const choices = Array.from({ length: 1000 }, (_, index) => ({
       value: `model-${index}`,

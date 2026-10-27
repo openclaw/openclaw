@@ -258,6 +258,7 @@ scripts/lib/vitest-worker-descriptor.mts
 scripts/lib/vitest-worker-run.mts
 scripts/lib/tooling-dependencies.mjs
 scripts/lib/watch-pr-ci-rollup.mts
+scripts/lib/watch-pr-ci-run.mts
 scripts/lib/windows-taskkill.mjs
 scripts/pnpm-runner.mts
 scripts/pr-crabbox-gate-publisher.mjs
@@ -871,6 +872,7 @@ src/gateway/model-account-connect-errors.ts
 src/gateway/operator-scopes.ts
 src/gateway/security-path.ts
 src/gateway/server-methods/workspace-fs.ts
+src/gateway/worker-environments/local-workspace-fingerprints.ts
 src/gateway/worker-environments/placement-authority-owner.ts
 src/gateway/worker-environments/placement-inventory-changed-error.ts
 src/gateway/worker-environments/placement-read-authority.ts
@@ -1577,7 +1579,6 @@ src/plugins/official-external-plugin-catalog-hosted.ts
 src/plugins/official-external-plugin-catalog-snapshot-store.ts
 src/plugins/official-external-plugin-catalog-source.ts
 src/plugins/official-external-plugin-catalog.ts
-src/plugins/official-external-provider-endpoints.ts
 src/plugins/package-compat.ts
 src/plugins/package-entry-resolution.ts
 src/plugins/package-entrypoints.ts
@@ -1597,7 +1598,6 @@ src/plugins/plugin-generation-file-capture.ts
 src/plugins/plugin-generation-receipt.ts
 src/plugins/plugin-generation-source-lookup.ts
 src/plugins/plugin-install-default-choice.ts
-src/plugins/plugin-instance-argument-views.ts
 src/plugins/plugin-instance-background.ts
 src/plugins/legacy-sdk-resource-host.ts
 src/plugins/provider-claude-thinking.ts
@@ -1616,6 +1616,7 @@ src/plugins/plugin-instance-scope.ts
 src/plugins/plugin-instance-settlement.ts
 src/plugins/plugin-instance-bindings.ts
 src/plugins/plugin-instance.ts
+src/plugins/plugin-replacement-watchers.ts
 src/plugins/plugin-lifecycle-trace.ts
 src/plugins/plugin-manifest-id-normalizer.ts
 src/plugins/plugin-metadata-contributions.ts
@@ -1629,7 +1630,6 @@ src/plugins/plugin-metadata-snapshot-required.ts
 src/plugins/plugin-metadata-snapshot.runtime.ts
 src/plugins/plugin-metadata-snapshot.ts
 src/plugins/plugin-metadata-state-worker.ts
-src/plugins/plugin-metadata-live-read.worker.ts
 src/plugins/plugin-metadata-state.read.worker.ts
 src/plugins/plugin-metadata-state.kernel.ts
 src/plugins/plugin-module-loader-cache.ts
@@ -2046,6 +2046,7 @@ src/state/openclaw-state-db-schema-v12-foldin.ts
 src/state/openclaw-state-db-schema-v13-widerow.ts
 src/state/openclaw-state-db-schema-v21-columns.ts
 src/state/openclaw-state-db-schema-v31-workspace-manifests.ts
+src/state/openclaw-state-db-schema-v35-workspace-cas.ts
 src/state/openclaw-state-db-schema-v22-columns.ts
 src/state/openclaw-state-db-schema-v24-indexes.ts
 src/state/openclaw-state-db-schema-v26-layout.ts
@@ -2531,6 +2532,7 @@ src/config/sessions/session-actor-memory-pending.ts
 src/config/sessions/session-actor-memory-publication.ts
 src/config/sessions/session-actor-memory-reactions.ts
 src/config/sessions/session-actor-memory-recovery.ts
+src/config/sessions/session-actor-memory-registry.ts
 src/config/sessions/session-actor-memory-reports.ts
 src/config/sessions/session-actor-memory-search.ts
 src/config/sessions/session-actor-memory-side-effects-contract.ts
@@ -2551,6 +2553,7 @@ src/config/sessions/session-actor-phase.ts
 src/config/sessions/session-actor-receipt.ts
 src/config/sessions/session-actor-read-error.ts
 src/config/sessions/session-actor-reducers.ts
+src/config/sessions/session-actor-storage-acquisition.ts
 src/config/sessions/session-actor-storage-binding.ts
 src/config/sessions/session-bounded-context-selection.ts
 src/config/sessions/session-cache-ttl-prefix-values.ts
@@ -2671,6 +2674,7 @@ src/config/sessions/session-lifecycle-worker-publication.ts
 src/config/sessions/session-native-binding.ts
 src/plugin-state/plugin-state-publication.ts
 src/config/sessions/transcript-recent-text.ts
+src/state/startup-metadata-live-read.worker.ts
 src/state/state-domain-publication.ts
 src/state/user-model-account-authority.ts
 src/state/user-model-account-id.ts
@@ -2770,3 +2774,6 @@ src/canvas/wrap.ts
 src/plugin-sdk/widget-html.ts
 src/shared/html-escape.ts
 src/shared/widget-media.ts
+src/gateway/worker-environments/local-workspace-cas.ts
+src/gateway/worker-environments/local-workspace-cas.kernel.ts
+src/gateway/worker-environments/local-workspace-gc.ts

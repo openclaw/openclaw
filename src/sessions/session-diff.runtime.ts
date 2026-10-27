@@ -352,8 +352,9 @@ async function collectTrackedFiles(
       continue;
     }
     // Like the deleted-file exemption, two-revision commit diffs read every
-    // path from the object DB. Only working-tree content needs the hardlink guard.
+    // path from the object DB. Only emitted working-tree content needs the hardlink guard.
     const safe =
+      !chunk ||
       revisions.length === 2 ||
       entry.status === "deleted" ||
       (await isPatchableWorkingTreePath(realRoot, entry.path));

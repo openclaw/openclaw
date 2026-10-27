@@ -789,6 +789,10 @@ Leave **From** empty to fetch `origin` when creating the worktree and use its de
 
 ### Start a native coding CLI
 
+The actions beside **Codex** and **Claude Code** appear on hover or keyboard
+focus, and stay visible on touch screens. The main **Filter & sort** button
+stays visible independently of these catalog actions.
+
 The **+** beside **Codex** or **Claude Code** opens a native CLI draft, not an
 OpenClaw Chat. Choose the machine and folder, optionally enter a first prompt,
 and press **Start in terminal** or Enter (or your configured submit shortcut).

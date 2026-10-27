@@ -1,11 +1,10 @@
 import type { Page } from "playwright";
+import type { UiSettings } from "../../ui/src/app/settings-contract.ts";
 import type { ColdLoadRpcRecord } from "../../ui/src/test-helpers/control-ui-cold-load-probe-init.ts";
 import { createColdLoadProbeInitScript } from "../../ui/src/test-helpers/control-ui-cold-load-probes.ts";
+import type { MockGatewayControls } from "../../ui/src/test-helpers/control-ui-e2e.ts";
 import { controlUiSessionPath } from "../../ui/src/test-helpers/control-ui-e2e.ts";
-import {
-  createControlUiStreamingReply,
-  createStreamingReplyProbeInitScript,
-} from "../../ui/src/test-helpers/control-ui-streaming-reply.ts";
+import { createStreamingReplyProbeInitScript } from "../../ui/src/test-helpers/control-ui-streaming-reply.ts";
 import { frames } from "./control-ui-interaction-navigation.ts";
 import type {
   InteractionEvidence,
@@ -13,18 +12,25 @@ import type {
 } from "./control-ui-interaction-scenarios.ts";
 
 const sessionKey = "agent:main:interaction-a";
-const runId = "engine-streaming-run";
 const activePane = ".chat-pane-cache__pane--active";
 const composerSelector = `${activePane} .agent-chat__composer-combobox textarea`;
 
-export type EngineScenario = InteractionScenario & {
+export type EngineScenario = Omit<InteractionScenario, "run"> & {
   /** A fresh context stays unnavigated until the measured action starts. */
   navigation?: "measured" | "reload";
   /** Append to the mock Gateway's init script, preserving WebSocket wrapper order. */
   initScript?: string;
+  settings?: Partial<UiSettings>;
+  /** Opt-in post-GC checkpoints; excluded from latency comparisons. */
+  memory?: boolean;
+  run: (
+    page: Page,
+    gateway: MockGatewayControls,
+    checkpoint?: (label: string) => Promise<void>,
+  ) => Promise<void | InteractionEvidence>;
 };
 
-function transcript(messages: number) {
+export function createEngineTranscript(messages: number) {
   return Array.from({ length: messages }, (_, index) => ({
     role: index % 2 === 0 ? "user" : "assistant",
     content: `Transcript 0 message ${index}.\n${"Synthetic transcript detail.\n".repeat(4)}`,
@@ -62,12 +68,12 @@ function installEngineBootReadiness() {
   requestAnimationFrame(sample);
 }
 
-function initScript(streaming = false) {
+export function engineProbeInitScript(streaming = false, gatewayLatencyMs = 0) {
   return `;if (window === window.top && location.protocol !== "about:") {
     ${createColdLoadProbeInitScript({
       ownerProbes: false,
       sidebarCounters: false,
-      latencyMs: 0,
+      latencyMs: gatewayLatencyMs,
       frameGapMs: 0,
       events: [],
     })}
@@ -76,7 +82,10 @@ function initScript(streaming = false) {
   }`;
 }
 
-async function ready(page: Page, messageCount = 400): Promise<InteractionEvidence> {
+export async function waitForEngineTranscript(
+  page: Page,
+  messageCount = 400,
+): Promise<InteractionEvidence> {
   await page
     .locator(activePane)
     .getByText(`Transcript 0 message ${messageCount - 1}.`, { exact: false })
@@ -165,6 +174,13 @@ async function ready(page: Page, messageCount = 400): Promise<InteractionEvidenc
         }
       }
     }
+    const approvalReplay = rpcs
+      .filter((entry) => entry.method === "sessions.messages.subscribe")
+      .at(1);
+    if (approvalReplay) {
+      phases.approvalReplayRequestMs = approvalReplay.requestMs;
+      phases.approvalReplayResponseMs = approvalReplay.responseMs;
+    }
     return {
       ...milestones,
       ...phases,
@@ -205,10 +221,13 @@ async function persistTranscript(page: Page) {
   });
 }
 
-export function createEngineBootScenarios(baseUrl: string): readonly EngineScenario[] {
+export function createEngineBootScenarios(
+  baseUrl: string,
+  gatewayLatencyMs = 0,
+): readonly EngineScenario[] {
   const route = controlUiSessionPath(sessionKey);
   const url = new URL(route, baseUrl).href;
-  const bootScript = initScript();
+  const bootScript = engineProbeInitScript(false, gatewayLatencyMs);
   return [
     {
       id: "cold-boot",
@@ -219,7 +238,7 @@ export function createEngineBootScenarios(baseUrl: string): readonly EngineScena
       prepare: async () => {},
       run: async (page) => {
         await page.goto(url, { waitUntil: "domcontentloaded" });
-        return ready(page);
+        return waitForEngineTranscript(page);
       },
     },
     {
@@ -229,12 +248,12 @@ export function createEngineBootScenarios(baseUrl: string): readonly EngineScena
       expected: "A same-context reload restores the persisted transcript and enabled composer.",
       initScript: bootScript,
       prepare: async (page) => {
-        await ready(page);
+        await waitForEngineTranscript(page);
         await persistTranscript(page);
       },
       run: async (page) => {
         await page.reload({ waitUntil: "domcontentloaded" });
-        return ready(page);
+        return waitForEngineTranscript(page);
       },
     },
     {
@@ -244,114 +263,12 @@ export function createEngineBootScenarios(baseUrl: string): readonly EngineScena
       navigation: "measured",
       initScript: bootScript,
       fixtureOverrides: () => ({
-        sessionTranscripts: { [sessionKey]: { messages: transcript(2_000) } },
+        sessionTranscripts: { [sessionKey]: { messages: createEngineTranscript(2_000) } },
       }),
       prepare: async () => {},
       run: async (page) => {
         await page.goto(url, { waitUntil: "domcontentloaded" });
-        return ready(page, 2_000);
-      },
-    },
-    {
-      id: "streaming-645-deltas",
-      route,
-      expected: "All 645 standard Markdown deltas render at 30 Hz while native input survives.",
-      initScript: initScript(true),
-      fixtureOverrides: () => ({
-        sessionTranscripts: {
-          [sessionKey]: {
-            messages: transcript(400),
-            inFlightRun: { runId, text: "", startedAt: 1_800_000_400_000 },
-          },
-        },
-      }),
-      prepare: async (page) => {
-        await ready(page);
-        await page.locator(composerSelector).focus();
-      },
-      run: async (page) => {
-        const reply = createControlUiStreamingReply(30);
-        if (reply.deltas.length !== 645) {
-          throw new Error(`Standard streaming fixture changed to ${reply.deltas.length} deltas`);
-        }
-        const composer = page.locator(composerSelector);
-        const draft = await composer.inputValue();
-        await page.evaluate((input) => Reflect.get(window, "__streamingReply").start(input), {
-          ...reply,
-          sessionKey,
-          runId,
-          burstSize: 1,
-          observeTextVisibility: false,
-        });
-        const typing = new AbortController();
-        let characters = 0;
-        const input = (async () => {
-          while (!typing.signal.aborted) {
-            await page.keyboard.press("x");
-            characters++;
-            await new Promise((resolve) => {
-              setTimeout(resolve, 500);
-            });
-          }
-        })();
-        try {
-          await page.waitForFunction(
-            (count) => Reflect.get(window, "__streamingReply").read().delivered === count,
-            reply.deltas.length,
-            { timeout: 60_000, polling: 50 },
-          );
-          await page
-            .locator(`${activePane} .chat-bubble.streaming .chat-text`)
-            .getByText("The result is ready for the next checkpoint.", { exact: true })
-            .nth(23)
-            .waitFor();
-          await frames(page);
-        } finally {
-          typing.abort();
-          await input;
-          await page.evaluate(() => Reflect.get(window, "__streamingReply").stop());
-        }
-        const result = await page.evaluate(() => Reflect.get(window, "__streamingReply").finish());
-        const retainedDraft = await composer.inputValue();
-        if (!characters || retainedDraft !== draft + "x".repeat(characters)) {
-          throw new Error("Streaming lost native composer input");
-        }
-        if (
-          !result.finalHtml ||
-          result.deltas.length !== 645 ||
-          result.tailPosition.scrollHeight <= result.tailPosition.initialScrollHeight ||
-          Math.abs(result.tailPosition.distanceFromBottom) > 2
-        ) {
-          throw new Error(
-            `Streaming failed delivery/render/follow assertions: ${JSON.stringify(result.tailPosition)}`,
-          );
-        }
-        return {
-          deltas: result.deltas.length,
-          streamElapsedMs: result.elapsedMs,
-          parseCalls: result.deltas.reduce(
-            (sum: number, delta: { parseCalls: number }) => sum + delta.parseCalls,
-            0,
-          ),
-          parseMs: result.deltas.reduce(
-            (sum: number, delta: { parseMs: number }) => sum + delta.parseMs,
-            0,
-          ),
-          geometryReads: result.deltas.reduce(
-            (sum: number, delta: { geometryReads: number }) => sum + delta.geometryReads,
-            0,
-          ),
-          resizeDeliveries: result.pipeline.rowResizeDeliveries,
-          railObservations: result.pipeline.railObservations,
-          paneRenders: result.pipeline.paneRenders,
-          frameGapMedianMs: result.frameGapsMs.median,
-          frameGapP95Ms: result.frameGapsMs.p95,
-          inputDelayP95Ms: result.inputDelayMs.p95,
-          inputToNextFrameP95Ms: result.inputToNextFrameMs.p95,
-          characters,
-          inputPreserved: true,
-          tailFollowed: true,
-        };
+        return waitForEngineTranscript(page, 2_000);
       },
     },
   ];

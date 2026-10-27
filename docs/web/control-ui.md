@@ -57,7 +57,8 @@ Reloading or leaving the app does not preserve this in-memory draft.
 
 New Dashboard conversations receive a title from their opening task. Later messages
 keep that title. Only an explicit rename by you or the agent through `sessions.patch`
-changes it.
+changes it. The open conversation URL updates when its name arrives or changes,
+without reloading the page or adding a browser-history entry.
 
 ## Temporary disconnections
 
@@ -127,6 +128,8 @@ On a dashboard reload, a saved widget with an unexpired view ticket can load its
 
 Transcript history loads in parallel with the browser cache. An unchanged history response keeps the cached message rows and widget sizes in place. The transcript restores its saved reading position, or opens at the end, before showing its initial measured rows. Measured rows become visible once their selected geometry is committed, without an extra layout frame.
 
+When saved row sizes match the current content, appearance, and pane width, the initial viewport and its nearby rows mount together. Rows without matching saved sizes are measured incrementally.
+
 Consecutive informational system, recovery, and model-fallback events appear as a collapsed **system events** row in chat. Expand it with a click, Enter, or Space to read the original events in order. An amber **Updates not delivered** summary stays visible when delivery needs attention; event counts do not imply a count of undelivered updates. Human and assistant messages, actionable notices, and search results remain separate. This changes presentation only, not retry or delivery behavior.
 
 During connection recovery, Send shows its busy state and explains why sending is unavailable without inserting a temporary notice above the composer.
@@ -142,6 +145,8 @@ If the Gateway's request queue is full, automatic sidebar session discovery keep
 While the initial connection or a route loads, shimmer placeholders reserve the chat layout. Home and System busyness open directly in their destination panels, with working headers and Close controls while the content loads. Brief loads do not flash placeholders; slower loads show placeholders inside the panel, and load errors offer Retry in the same place. The rest of the page stays usable. Drag the System busyness title bar to move the panel; its position is remembered in this browser. You can also focus the title bar and use the arrow keys (Shift moves farther). Compact/expanded transitions animate briefly, respect reduced motion, and keep the panel inside the window. Loading indicators respect your theme and reduced-motion preference; Gateway startup progress remains visible when available.
 
 The selected chat loads before automatic sidebar session lists refresh. Live events remain subscribed during startup, and explicit sidebar actions remain available. Background lists resume after the transcript loads or reports an error. Accepted new sessions refresh the visible sidebar immediately, including **Involving me** and owner filters, without waiting for the chat to finish loading or the agent to finish working.
+
+A foreground create uses its reply to keep the confirmed title and an actionless current-session display row available independently of the sidebar refresh. This display row does not add the session to filtered membership or counts; those still come from the Gateway. The first message and run status appear from local submission facts and live events without waiting for the list refresh.
 
 After the current page and transcript are ready, the browser can prepare code for
 Pages, New Session, and common dialogs during idle time. Hovering or focusing a

@@ -1,3 +1,4 @@
+import type { CyberAccessProgram } from "../../../packages/gateway-protocol/src/schema/sessions-row.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { ContextEngineHostSupport } from "../../context-engine/host-compat.js";
 import type { PluginHookAgentContext } from "../../plugins/hook-agent-context.types.js";
@@ -74,6 +75,7 @@ export type EmbeddedAgentRunEntryParams<T extends EmbeddedAgentRunResult> = {
     fallbacksOverride?: string[];
     agentDir?: string;
     userLockedAuthProfileId?: string;
+    cyberAccessProgram?: CyberAccessProgram;
   } & ModelManifestNormalizationContext;
   identity: {
     runId: string;

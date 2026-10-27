@@ -2,6 +2,7 @@ import "../config/sessions/session-entry-patch-delivery.test-support.js";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, assert, expect, it, onTestFinished, vi } from "vitest";
+import { acknowledgeInternalToolResult } from "../../packages/agent-core/src/internal-hooks.js";
 import { makeTextToolResult } from "../../test/helpers/text-tool-result.js";
 import { makeUserMessage } from "../../test/helpers/user-message.js";
 import { getSession, waitForExecScope } from "../agents/bash-process-registry.js";
@@ -13,7 +14,6 @@ import {
 } from "../agents/bash-tools.lifecycle.test-support.js";
 import { createProcessTool } from "../agents/bash-tools.process.js";
 import { truncateOversizedToolResultsInSessionManager } from "../agents/embedded-agent-runner/tool-result-truncation.js";
-import { acknowledgeInternalToolResult } from "../agents/runtime/internal-hooks.js";
 import * as sandboxContext from "../agents/sandbox/context.js";
 import { createSandboxTestContext } from "../agents/sandbox/test-fixtures.js";
 import { SessionManager } from "../agents/sessions/session-manager.js";

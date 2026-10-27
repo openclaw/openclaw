@@ -24,7 +24,7 @@ import {
   extractToolResultText,
 } from "../providers/tool-result-text.js";
 import { shortHash } from "../utils/hash.js";
-import { stripSystemPromptCacheBoundary } from "../utils/system-prompt-cache-boundary.js";
+import { prepareSystemPrompt } from "../utils/system-prompt-cache-boundary.js";
 import {
   buildOpenAIResponsesCompactionReplayPlan,
   isSafeResponsesReplayItemId,
@@ -353,7 +353,8 @@ function convertResponsesMessagesWithStyle(
       buildResponsesInputMessage(resolveResponsesInstructionRole(model), [
         {
           type: "input_text",
-          text: sanitizeTransportPayloadText(stripSystemPromptCacheBoundary(context.systemPrompt)),
+          text: prepareSystemPrompt(context.systemPrompt, context.preparedSystemPrompt)
+            .instructions,
         },
       ]),
     );
@@ -484,6 +485,11 @@ function convertResponsesMessagesWithStyle(
             );
             if (!shouldReplayResponsesItemIds) {
               delete replayableReasoningItem.id;
+              // Summaries alone cannot verify stateless reasoning and poison
+              // the next cached continuation, even if this request succeeds.
+              if (!replayableReasoningItem.encrypted_content) {
+                continue;
+              }
             }
             if (
               shouldReplayResponsesItemIds &&

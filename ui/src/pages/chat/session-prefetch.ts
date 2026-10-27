@@ -13,7 +13,7 @@ import {
 } from "./chat-history-events.ts";
 import { requestChatSessionSnapshot } from "./chat-history-request.ts";
 import { chatPanesWithin } from "./chat-pane-elements.ts";
-import { MAX_CACHED_CHAT_SESSIONS } from "./session-cache.ts";
+import { getSessionCacheValue, MAX_CACHED_CHAT_SESSIONS } from "./session-cache.ts";
 import {
   appendChatMessageToCache,
   cacheChatSessionSnapshot,
@@ -200,12 +200,10 @@ class SessionPrefetcher {
     // Refresh presented snapshots through their LRU owner before background writes
     // so a full cache evicts stale entries instead of visible conversation panes.
     for (const sessionKey of snapshot.openSessionKeys) {
-      const presented = readChatSessionSnapshot(this.cache, snapshot.snapshotHost, { sessionKey });
+      const snapshotKey = resolveChatSnapshotKey(snapshot.snapshotHost, { sessionKey });
+      const presented = getSessionCacheValue(this.cache, snapshotKey);
       if (presented && this.cache.size === MAX_CACHED_CHAT_SESSIONS) {
-        this.snapshotStore.write(
-          resolveChatSnapshotKey(snapshot.snapshotHost, { sessionKey }),
-          presented,
-        );
+        this.snapshotStore.write(snapshotKey, presented.snapshot, presented.weight);
       }
     }
     const candidate = this.selectCandidate(snapshot);

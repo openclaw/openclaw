@@ -109,11 +109,7 @@ function isBotCommandsTooMuchError(err: unknown): boolean {
 export function buildPluginTelegramMenuCommands<TSpec extends TelegramPluginCommandSpec>(params: {
   specs: readonly TSpec[];
   existingCommands: Set<string>;
-}): {
-  commands: TelegramMenuCommand[];
-  selectedCommands: TelegramSelectedPluginMenuCommand<TSpec>[];
-  issues: string[];
-} {
+}) {
   const { specs, existingCommands } = params;
   const selectedCommands: TelegramSelectedPluginMenuCommand<TSpec>[] = [];
   const issues: string[] = [];

@@ -245,12 +245,19 @@ async function handleRequest(
   throw new Error("Unknown Claude CLI hook callback.");
 }
 
-function createUserInput(context: CliBackendExecuteContext, text: string, uuid: string) {
+function createUserInput(
+  context: CliBackendExecuteContext,
+  text: string,
+  uuid: string,
+  hostGenerated = false,
+) {
   return {
     type: "user",
     message: { role: "user", content: text },
     parent_tool_use_id: null,
     uuid,
+    // Claude saves synthetic input as a meta row: the model reads it, history never shows it.
+    ...(hostGenerated ? { isSynthetic: true } : {}),
     ...(context.sessionId ? { session_id: context.sessionId } : {}),
   };
 }
@@ -735,7 +742,8 @@ export async function* executeClaudeCli(
           await session.handle.waitForExit();
         },
       });
-      await transport.send(createUserInput(context, context.prompt, turn.inputUuid));
+      const hostGenerated = context.promptOrigin === "host";
+      await transport.send(createUserInput(context, context.prompt, turn.inputUuid, hostGenerated));
       context.registerMessageInjection?.({
         isAvailable: () =>
           session.hasInputLifecycle &&

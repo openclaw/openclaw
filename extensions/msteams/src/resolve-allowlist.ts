@@ -37,7 +37,6 @@ const MSTEAMS_GROUP_CONVERSATION_ID = /^19:.+@thread\.(?:tacv2|skype|v2)$/i;
 // grant. A thread-shaped ID with a reserved suffix cannot equal a real sender ID, display name, or
 // conversation ID: Teams conversation IDs end in tacv2, v2, or skype.
 const MSTEAMS_UNMATCHABLE_THREAD_ID = "19:openclaw-unresolved-allowlist@thread.unresolved";
-export const MSTEAMS_UNMATCHABLE_ALLOW_ENTRY = MSTEAMS_UNMATCHABLE_THREAD_ID;
 
 /** Keeps a configured but fully unresolvable sender allowlist configured and matching nothing. */
 export function keepConfiguredMSTeamsAllowlistActive(
@@ -47,7 +46,7 @@ export function keepConfiguredMSTeamsAllowlistActive(
   if (!Array.isArray(configured) || configured.every((entry) => !entry?.trim())) {
     return projected;
   }
-  return projected && projected.length > 0 ? projected : [MSTEAMS_UNMATCHABLE_ALLOW_ENTRY];
+  return projected && projected.length > 0 ? projected : [MSTEAMS_UNMATCHABLE_THREAD_ID];
 }
 
 function findExactMatches<T extends GraphUser>(

@@ -4,6 +4,7 @@ import { build, transform } from "esbuild";
 import { afterEach, describe, expect, it } from "vitest";
 import {
   compareCpuTables,
+  controlUiScriptAssetUrl,
   formatCpuTables,
   medianCpuTables,
   readCpuProfileReport,
@@ -57,6 +58,22 @@ function event(
 }
 
 describe("cold-load trace accounting", () => {
+  it("recognizes bundle scripts beneath root and deep-link paths", () => {
+    const assets = new URL(assetBaseUrl);
+    for (const pathname of [
+      "/assets/entry.js",
+      "/chat/main/topic/assets/entry.js",
+      "/dashboard/main/dashboard/assets/worker.mjs",
+    ]) {
+      const url = new URL(pathname, assets.origin).href;
+      expect(controlUiScriptAssetUrl(url, assets)?.href).toBe(url);
+    }
+    expect(controlUiScriptAssetUrl("http://other.invalid/assets/entry.js", assets)).toBeNull();
+    expect(controlUiScriptAssetUrl("http://localhost/chat/entry.js", assets)).toBeNull();
+    expect(controlUiScriptAssetUrl("http://localhost/assets/style.css", assets)).toBeNull();
+    expect(controlUiScriptAssetUrl("not a URL", assets)).toBeNull();
+  });
+
   it("counts fetched JavaScript independently of observed V8 scripts", () => {
     const resources = [
       {

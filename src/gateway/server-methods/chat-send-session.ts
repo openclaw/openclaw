@@ -9,11 +9,11 @@ import {
   type ErrorShape,
 } from "../../../packages/gateway-protocol/src/index.js";
 import { resolveAgentEntry } from "../../agents/agent-scope-config.js";
+import { getRegisteredAgentHarness } from "../../agents/harness/registry.js";
 import {
   modelFallbackOverrideFromAvailability,
   resolveModelFallbackAvailability,
-} from "../../agents/agent-scope.js";
-import { getRegisteredAgentHarness } from "../../agents/harness/registry.js";
+} from "../../agents/model-selection-config.js";
 import {
   findNormalizedProviderValue,
   parseModelRef,
@@ -92,6 +92,7 @@ function chatSendPreparationConfig(
         cfg,
         agentId,
         sessionKey,
+        selectedModel: selected,
         hasSessionModelOverride: Boolean(entry?.modelOverride),
         modelOverrideSource:
           entry?.modelOverrideSource === "default" ? undefined : entry?.modelOverrideSource,

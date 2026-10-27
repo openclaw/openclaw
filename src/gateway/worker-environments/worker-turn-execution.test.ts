@@ -69,9 +69,8 @@ afterAll(closeStateDatabaseForTest);
 function unusedTunnel<T extends Partial<WorkerTunnelHandle>>(overrides: T) {
   return createWorkerTurnTunnel({
     runWorkspaceCommand: vi.fn(),
-    quiesceWorkspace: vi.fn(),
     syncWorkspace: vi.fn(),
-    reconcileWorkspace: vi.fn(),
+    reconcileWorkspace: vi.fn(reconcileUnchangedLocalWorkspace),
     stop: vi.fn(),
     launchTurn: vi.fn(),
     ...overrides,

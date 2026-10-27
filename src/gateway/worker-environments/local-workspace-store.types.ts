@@ -9,6 +9,9 @@ export type LocalWorkspaceManifestMutation = {
   previousRoot: string | null;
   resultingRoot: string;
   replace?: boolean;
+  treeRoot?: string;
+  previousTreeRoot?: string | null;
+  fingerprints?: { target: "canonical" | "projection"; blob: string };
 };
 export type LocalWorkspaceMutation =
   | { kind: "create"; row: Omit<LocalWorkspaceProjection, "revision"> }
@@ -25,4 +28,5 @@ export type LocalWorkspacePreparedUpdate = {
   revision: number;
   patch: Updateable<DB["local_workspace_projections"]>;
   mutation: Uint8Array;
+  preparations?: Uint8Array[];
 };

@@ -99,8 +99,10 @@ export async function withPreparedEmbeddedRunToolAuthority<T, Attempt extends To
     },
     (replyOperation, abortSignal) =>
       withPreparedEmbeddedRunToolAuthorityOwned(
-        { ...internal, replyOperation },
-        { ...attempt, abortSignal },
+        internal,
+        attempt,
+        replyOperation,
+        abortSignal,
         narrow,
         run,
       ),
@@ -110,12 +112,14 @@ export async function withPreparedEmbeddedRunToolAuthority<T, Attempt extends To
 async function withPreparedEmbeddedRunToolAuthorityOwned<T, Attempt extends ToolAuthorityAttempt>(
   internal: Parameters<typeof withPreparedEmbeddedRunToolAuthority>[0],
   attempt: Attempt,
+  turn: EmbeddedRunAttemptInternalParams["replyOperation"],
+  abortSignal: AbortSignal,
   narrow: ReplyToolAuthorityNarrow | undefined,
   run: Parameters<typeof withPreparedEmbeddedRunToolAuthority<T, Attempt>>[3],
 ): Promise<T> {
   const admitted = internal.admittedRunContext;
   const instance = admitted.operationalRunInstance;
-  const assertAdmitted = resolveAdmittedRunActiveAssertion(admitted, attempt.abortSignal);
+  const assertAdmitted = resolveAdmittedRunActiveAssertion(admitted, abortSignal);
   const inherited = getGatewayToolCallerIdentity();
   const source = inherited?.operationalRunInstance === instance ? inherited : undefined;
   const { sessionId, sessionKey, sessionFile, agentId, runId } = attempt;
@@ -142,7 +146,6 @@ async function withPreparedEmbeddedRunToolAuthorityOwned<T, Attempt extends Tool
   });
   const route = { provider: attempt.provider, model: attempt.modelId };
   // Maintenance borrows an operation for cancellation, not its injection snapshot.
-  const turn = internal.replyOperation;
   const turnState = readSessionControllerOperationState(turn);
   const ownsDirectPolicy = turnState?.turnKind === "direct" && internal.trigger !== "memory";
   let operation =
@@ -265,6 +268,7 @@ async function withPreparedEmbeddedRunToolAuthorityOwned<T, Attempt extends Tool
   // Retained authority assertions share this scope, but do not own the run payload.
   let executeAttempt: (() => Promise<T>) | undefined = run.bind(undefined, {
     ...attempt,
+    abortSignal,
     replyOperation: turn,
     toolAuthorityFingerprint: fingerprint,
   });

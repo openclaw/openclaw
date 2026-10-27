@@ -3732,9 +3732,8 @@ describe("subagent registry lifecycle hardening", () => {
         await waitForLifecycleState(() =>
           expect(readLifecycleRun(entry).delivery?.status).toBe("delivered"),
         );
-        expect
-          .soft(readLifecycleRun(entry).delivery)
-          .toMatchObject({ payload: undefined, attemptCount: undefined });
+        expect.soft(readLifecycleRun(entry).delivery?.payload).toBeUndefined();
+        expect.soft(readLifecycleRun(entry).delivery?.attemptCount).toBeUndefined();
         await waitForLifecycleState(() =>
           expect(readLifecycleRun(entry).requesterSettleWake).toBeUndefined(),
         );
@@ -3765,10 +3764,10 @@ describe("subagent registry lifecycle hardening", () => {
           disposition: "delivered",
           deliveredAt: 12_345,
           announcedAt: 12_345,
-          payload: undefined,
           lastError: undefined,
           attemptCount: undefined,
         });
+        expect(readLifecycleRun(entry).delivery?.payload).toBeUndefined();
       } finally {
         announce.resolve();
         mirror.resolve({ messages: [] });

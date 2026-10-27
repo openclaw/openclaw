@@ -119,6 +119,7 @@ export function createGitHubPublicationCoordinatorMethods(params: {
     validateExecution: () => boolean,
     assertInvocationCurrent?: () => void,
     invocationSignal?: AbortSignal,
+    recoveryResult?: SessionGitHubPublicationResult,
   ) => Promise<SessionGitHubPublicationResult>;
   recordRequestingRun: (requestId: string, runId: string) => void;
 }) {
@@ -420,7 +421,7 @@ export function createGitHubPublicationCoordinatorMethods(params: {
         : await listSharedGitHubPublicationsAsync({ claimNull: true, pending: true });
       params.recovery?.shared.retain(rows.map((row) => row.request_id));
       params.assertCurrent();
-      if (isStopping?.()) {
+      if (isStopping?.() || rows.length === 0) {
         return;
       }
       const pending = new Set(
@@ -447,13 +448,19 @@ export function createGitHubPublicationCoordinatorMethods(params: {
         }
         try {
           // An executing publication keeps its custody through durable settlement.
-          const execute = () =>
-            processRow(row, () => {
-              const placement = params.placements.get(row.session_id);
-              return !placement?.turnClaim && !pending.has(row.session_id);
-            });
+          const execute = (recoveryResult?: SessionGitHubPublicationResult) =>
+            processRow(
+              row,
+              () => {
+                const placement = params.placements.get(row.session_id);
+                return !placement?.turnClaim && !pending.has(row.session_id);
+              },
+              undefined,
+              undefined,
+              recoveryResult,
+            );
           const result = params.recovery
-            ? await params.recovery.shared.run(row.request_id, execute)
+            ? await params.recovery.shared.run(row, execute, execute)
             : await execute();
           // Cooldown must not let another request overtake this worktree's unsettled effects.
           if (!result || result.status === "requested" || result.status === "publishing") {

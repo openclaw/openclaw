@@ -251,12 +251,20 @@ test.each([
   (row) =>
     withFixture([row.scope, row.selection !== "none", row.origin], async (fixture) => {
       const links = listUserProfileAuthLinks(fixture.owner.id);
+      if (row.selection === "none") {
+        vi.mocked(fixture.context.loadGatewayModelCatalogSnapshot)
+          .mockImplementation(() => new Promise(() => {}))
+          .mockClear();
+      }
       await fixture.create(
         row.selection === "explicit"
           ? `${model}@${expectDefined(fixture.authProfileId, "owned account")}`
           : undefined,
         row.idempotent,
       );
+      if (row.selection === "none") {
+        expect(fixture.context.loadGatewayModelCatalogSnapshot).not.toHaveBeenCalled();
+      }
 
       expect(fixture.respond.mock.calls[0]?.slice(0, 2)).toEqual([
         true,
@@ -476,47 +484,18 @@ test.each(["deadline", "disconnect", "authority revocation"])(
   },
 );
 
-test("sessions.create without catalog-dependent fields never waits on catalog publication", async () => {
-  const fixture = await createCatalogFixture();
-  vi.mocked(fixture.context.loadGatewayModelCatalogSnapshot).mockImplementation(
-    () => new Promise(() => {}),
-  );
-  await fixture.create();
-  expect(fixture.respond.mock.calls[0]?.[0]).toBe(true);
-  expect(fixture.context.loadGatewayModelCatalogSnapshot).not.toHaveBeenCalled();
-  expect(fixture.entry()).toBeDefined();
-});
-
-test("sessions.create does not await unused thinking catalog hydration", async () => {
-  const fixture = await createCatalogFixture();
-  const entered = createDeferredCore();
-  const release = createDeferredCore();
-  const hydration = vi
-    .spyOn(modelCatalogRuntime, "loadProviderScopedThinkingCatalog")
-    .mockImplementationOnce(async () => {
-      entered.resolve();
-      await release.promise;
-      return [];
-    });
-  const creating = fixture.create(model);
-  try {
-    expect(
-      await Promise.race([creating.then(() => "created"), entered.promise.then(() => "hydrating")]),
-    ).toBe("created");
-    expect(fixture.respond.mock.calls[0]?.[0]).toBe(true);
-    expect(fixture.entry()).toBeDefined();
-  } finally {
-    release.resolve();
-    await creating;
-    hydration.mockRestore();
-  }
-});
-
 test.each([-3_600_000, 3_600_000])(
   "sessions.create shares its catalog deadline across reads despite a %s ms clock step",
   async (clockStep) => {
     const fixture = await createCatalogFixture();
+    const thinking = vi
+      .spyOn(modelCatalogRuntime, "loadProviderScopedThinkingCatalog")
+      .mockResolvedValueOnce([]);
+    onTestFinished(() => thinking.mockRestore());
     await fixture.create(model, "seed");
+    expect(fixture.respond.mock.calls[0]?.[0]).toBe(true);
+    expect(fixture.entry()).toBeDefined();
+    expect(thinking).not.toHaveBeenCalled();
     const before = fixture.entry();
     const gates = [holdCatalog(fixture.context), holdCatalog(fixture.context)];
     fixture.respond.mockClear();

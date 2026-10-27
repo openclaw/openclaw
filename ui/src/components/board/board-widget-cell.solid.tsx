@@ -586,40 +586,42 @@ function BoardWidgetCellContent(
         onKeyDown={keyDown}
       >
         <Show when={!props.pageChrome}>
-          <header class="board-widget__bar">
-            <Show when={canMutate()}>
-              <span
-                class="board-widget__drag-handle"
-                aria-hidden="true"
-                title={t("board.widget.moveHandle", { title: label() })}
-                onPointerDown={(event) => props.callbacks!.movePointerDown(props.widget!, event)}
-              >
-                <span aria-hidden="true">⠿</span>
+          <div class="board-widget__chrome">
+            <header class="board-widget__bar">
+              <Show when={canMutate()}>
+                <span
+                  class="board-widget__drag-handle"
+                  aria-hidden="true"
+                  title={t("board.widget.moveHandle", { title: label() })}
+                  onPointerDown={(event) => props.callbacks!.movePointerDown(props.widget!, event)}
+                >
+                  <span aria-hidden="true">⠿</span>
+                </span>
+              </Show>
+              <span class="board-widget__title" title={label()}>
+                {label()}
               </span>
-            </Show>
-            <span class="board-widget__title" title={label()}>
-              {label()}
-            </span>
-            <span class="board-widget__kind">
-              {props.widget!.contentKind === "mcp-app"
-                ? t("board.widget.kindMcp")
-                : props.widget!.contentKind === "plugin"
-                  ? contribution()?.label || t("board.widget.kindPlugin")
-                  : t("board.widget.kindHtml")}
-            </span>
-            <BoardGrantedCapabilities widget={props.widget!} />
-            <Show when={canMutate()}>
-              <BoardWidgetMenu
-                widget={props.widget!}
-                tabs={props.tabs ?? []}
-                disabled={props.busy || actionPending()}
-                onSelect={selectMenuItem}
-                ref={(handle) => {
-                  menu = handle;
-                }}
-              />
-            </Show>
-          </header>
+              <span class="board-widget__kind">
+                {props.widget!.contentKind === "mcp-app"
+                  ? t("board.widget.kindMcp")
+                  : props.widget!.contentKind === "plugin"
+                    ? contribution()?.label || t("board.widget.kindPlugin")
+                    : t("board.widget.kindHtml")}
+              </span>
+              <BoardGrantedCapabilities widget={props.widget!} />
+              <Show when={canMutate()}>
+                <BoardWidgetMenu
+                  widget={props.widget!}
+                  tabs={props.tabs ?? []}
+                  disabled={props.busy || actionPending()}
+                  onSelect={selectMenuItem}
+                  ref={(handle) => {
+                    menu = handle;
+                  }}
+                />
+              </Show>
+            </header>
+          </div>
         </Show>
         <div
           class={[
@@ -627,6 +629,8 @@ function BoardWidgetCellContent(
             {
               "board-widget__body--scrollable": scrollable(),
               "board-widget__body--card": presentation() === "card",
+              "board-widget__body--fixed-report":
+                props.widget!.heightMode === "fixed" && contribution()?.kind === "session:report",
             },
           ]}
         >

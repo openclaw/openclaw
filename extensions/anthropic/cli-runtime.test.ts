@@ -605,6 +605,7 @@ describe("Claude native stdio boundary", () => {
       initialize: { appendSystemPrompt: SYSTEM, excludeDynamicSections: true },
       turn: 1,
       user: INPUT,
+      synthetic: false,
       privateContext: "private prefix\n\nprivate suffix",
       permission: { behavior: "deny" },
     });
@@ -613,11 +614,13 @@ describe("Claude native stdio boundary", () => {
       await runDetail(context, {
         prompt: "Which color?",
         promptContext: { prependContext: "second private context" },
+        promptOrigin: "host",
         useResume: true,
       }),
     ).toMatchObject({
       turn: 2,
       user: "Which color?",
+      synthetic: true,
       privateContext: "second private context",
       pid: detail.pid,
     });

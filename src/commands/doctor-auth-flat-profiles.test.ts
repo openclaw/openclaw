@@ -284,11 +284,11 @@ function expectNoMigratedArchive(sourcePath: string): void {
 
 afterEach(async () => {
   clearRuntimeAuthProfileStoreSnapshots();
-  closeOpenClawAgentDatabasesForTest();
-  closeOpenClawStateDatabaseForTest();
   for (const state of states.splice(0)) {
     await state.cleanup();
   }
+  closeOpenClawAgentDatabasesForTest();
+  closeOpenClawStateDatabaseForTest();
 });
 
 describe("maybeMigrateAuthProfileJsonStoresToSqlite", () => {

@@ -172,8 +172,6 @@ async function loadAgentCompoundOperations() {
   const turn = await import("../config/sessions/session-turn.worker.js");
   const reset = await import("../config/sessions/session-reset.worker.js");
   const lifecycle = await import("../config/sessions/session-lifecycle-projection.worker.js");
-  const predicates = await import("../config/sessions/session-turn-predicate.js");
-  await predicates.prepareSessionTurnPredicates();
   return {
     "session.turn.prepare": turn.prepareSessionTurn,
     "session.turn.commit": turn.commitSessionTurn,

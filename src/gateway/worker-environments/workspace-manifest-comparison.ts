@@ -88,15 +88,15 @@ export function changedPaths(
   signal?: AbortSignal,
 ): Set<string> {
   signal?.throwIfAborted();
-  return changedNodePaths(manifestNodes(base), manifestNodes(current));
+  return diffNodePaths(manifestNodes(base), manifestNodes(current));
 }
 
-function changedNodePaths(baseNodes: ManifestNodes, currentNodes: ManifestNodes): Set<string> {
+export function diffNodePaths(baseNodes: ManifestNodes, currentNodes: ManifestNodes): Set<string> {
   const changed = new Set<string>();
   // Preserve base order followed by newly introduced current paths.
-  for (const [entryPath, entry] of baseNodes) {
-    if (!sameEntry(entry, currentNodes.get(entryPath))) {
-      changed.add(entryPath);
+  for (const entry of baseNodes.values()) {
+    if (!sameEntry(entry, currentNodes.get(entry.path))) {
+      changed.add(entry.path);
     }
   }
   for (const entryPath of currentNodes.keys()) {
@@ -114,7 +114,7 @@ export function prepareWorkspaceReconciliation(
 ) {
   const baseNodes = manifestNodes(base);
   const currentNodes = manifestNodes(current);
-  const changed = changedNodePaths(baseNodes, currentNodes);
+  const changed = diffNodePaths(baseNodes, currentNodes);
   const inspected = new Set(changed);
   for (const entryPath of changed) {
     for (const ancestor of workspacePathAncestors(entryPath)) {

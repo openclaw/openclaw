@@ -66,7 +66,6 @@ function policyReceipt(
         : [],
     ),
     retiredRunIds: [...postimages].flatMap(([id, entry]) => (entry ? [] : [id])),
-    queueIds: [],
   };
 }
 
@@ -175,7 +174,7 @@ export function mockBlockedCompletionDeliveryOwner(completionDeliveryMocks: {
   mutateRequesterCompletionBatch: Mock<typeof mutateRequesterCompletionBatch>;
   ownersByEntry: CompletionPolicyOwners;
 }): void {
-  // Policy fixtures use the real row owner; native worker suites own queue receipts.
+  // Policy fixtures use the real row owner; native worker suites own committed receipts.
   const mutateWake = createRequesterSettleWakeMutationFixture(
     completionDeliveryMocks.ownersByEntry,
   );

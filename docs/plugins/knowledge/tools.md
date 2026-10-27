@@ -14,6 +14,9 @@ Reference for the `knowledge_*` agent tools. Part of the
 Every tool acts on the calling agent's effective store and authorized partition.
 Tools take no store, agent, path, or scope argument. The Control UI and the tools
 use the same typed service and access checks.
+When Knowledge is enabled, its declared tools are included in the built-in
+`coding` and `full` tool profiles. This does not enable other plugins or
+override explicit tool denies, narrower policies, or Knowledge store access.
 
 ## Ontology
 

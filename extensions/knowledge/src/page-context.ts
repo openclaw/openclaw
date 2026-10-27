@@ -20,6 +20,7 @@ export type Page = {
   announcer: HTMLElement;
   updates: HTMLButtonElement;
   browseTab: HTMLButtonElement;
+  scribesTab: HTMLButtonElement;
   recentBack: RecentCursor[];
   recentExpanded: Set<number | string>;
   evidenceLoaders: WeakMap<HTMLDetailsElement, () => Promise<void>>;
