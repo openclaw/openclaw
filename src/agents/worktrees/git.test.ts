@@ -63,19 +63,41 @@ describe("Git ref mutation ownership", () => {
   }
 
   it.each([false, true])(
-    "disables automatic maintenance on an unregistered repository (sourceOnly=%s)",
+    "preserves Git configuration policy (sourceOnly=%s)",
     async (sourceOnly) => {
       const root = await repository();
-      for (const [key, disabled, enabled] of [
-        ["gc.auto", "0", "1"],
-        ["maintenance.auto", "false", "true"],
-      ] as const) {
-        await git(root, "config", "--local", key, enabled);
-        await withWorktreeGitConfig(root, sourceOnly, {}, async (policy) => {
-          expect(await policy.require(root, ["config", "--get", key])).toBe(disabled);
-        });
-        expect(await git(root, "config", "--local", "--get", key)).toBe(enabled);
+      const layout = new Map([
+        ["core.symlinks", String(process.platform === "win32")],
+        ["core.excludesfile", ' leading "quote"\\path\n\t\b#; trailing '],
+        ["core.eol", "lf"],
+      ]);
+      for (const [key, value] of layout) {
+        await git(root, "config", key, value);
       }
+      await git(root, "config", "gc.auto", "1");
+      await git(root, "config", "maintenance.auto", "true");
+      await git(root, "config", "--add", "core.eol", "crlf");
+      layout.set("core.eol", "crlf").set("gc.auto", "0").set("maintenance.auto", "false");
+      await git(root, "config", "filter.unsafe.clean", "must-not-run");
+      const original = await fs.readFile(path.join(root, ".git", "config"));
+      const commands = vi.spyOn(processExec, "runCommandWithTimeout");
+      await withWorktreeGitConfig(root, sourceOnly, {}, async (policy) => {
+        const result = await policy.run(root, ["config", "--null", "--list"]);
+        expect(result.code).toBe(0);
+        const values = Object.fromEntries(
+          result.stdout
+            .split("\0")
+            .filter(Boolean)
+            .map((field) => {
+              const split = field.indexOf("\n");
+              return [field.slice(0, split), field.slice(split + 1)];
+            }),
+        );
+        expect(values).toMatchObject(Object.fromEntries(layout));
+        expect(values["filter.unsafe.clean"]).toBe(sourceOnly ? undefined : "must-not-run");
+      });
+      expect(commands.mock.calls.filter(([argv]) => argv.includes("--file"))).toHaveLength(0);
+      expect(await fs.readFile(path.join(root, ".git", "config"))).toEqual(original);
     },
   );
 
@@ -412,23 +434,15 @@ describe("Git ref mutation ownership", () => {
 });
 
 describe("Git execution environment", () => {
-  it("preserves literal commit revisions only for Windows worktree Git", () => {
-    expect(
-      gitEnvironment(
-        {
-          MSYS: "winsymlinks:nativestrict",
-          CYGWIN: "disable_pcon",
-        },
-        ["rev-parse", "--verify", "HEAD^{commit}"],
-        "win32",
-      ),
-    ).toMatchObject({
-      MSYS: "winsymlinks:nativestrict noglob",
-      CYGWIN: "disable_pcon noglob",
+  it.each([
+    ["win32", ["rev-parse", "--verify", "HEAD^{commit}"], "winsymlinks:nativestrict", " noglob"],
+    ["win32", ["status"], "winsymlinks:nativestrict", ""],
+    ["linux", ["rev-parse", "HEAD^{commit}"], "winsymlinks:native", ""],
+  ] as const)("preserves revisions on %s for %j", (platform, args, msys, suffix) => {
+    expect(gitEnvironment({ MSYS: msys, CYGWIN: "disable_pcon" }, args, platform)).toMatchObject({
+      MSYS: `${msys}${suffix}`,
+      CYGWIN: `disable_pcon${suffix}`,
     });
-    expect(gitEnvironment({ MSYS: "winsymlinks:nativestrict" }, ["status"], "win32").MSYS).toBe(
-      "winsymlinks:nativestrict",
-    );
   });
 
   it.each([
@@ -453,9 +467,6 @@ describe("Git execution environment", () => {
       MSYS: "winsymlinks:native noglob",
       CYGWIN: "noglob",
     });
-    expect(
-      gitEnvironment({ MSYS: "winsymlinks:native" }, ["rev-parse", "HEAD^{commit}"], "linux").MSYS,
-    ).toBe("winsymlinks:native");
   });
 });
 
@@ -479,6 +490,8 @@ describe("Git checkout discovery", () => {
   it("returns the nearest checkout root for nested paths", async () => {
     const root = tempDirs.make("openclaw-git-root-");
     const nested = path.join(root, "packages", "nested");
+    expect(findGitCheckoutRoot(root)).toBeNull();
+    expect(insideGitCheckout(root)).toBe(false);
     await fs.mkdir(path.join(root, ".git"));
     await fs.mkdir(nested, { recursive: true });
 
@@ -488,13 +501,6 @@ describe("Git checkout discovery", () => {
 
     expect(findGitCheckoutRoot(nested)).toBe(root);
     expect(insideGitCheckout(nested)).toBe(true);
-  });
-
-  it("returns null outside a checkout", async () => {
-    const root = tempDirs.make("openclaw-no-git-root-");
-
-    expect(findGitCheckoutRoot(root)).toBeNull();
-    expect(insideGitCheckout(root)).toBe(false);
   });
 
   it("distinguishes contained metadata from linked checkout pointers", async () => {

@@ -715,6 +715,7 @@ const repositoryScriptEntries = [
   "scripts/perf/session-skill-snapshot-intern.ts!",
   "scripts/perf/session-skill-snapshot-intern.preload.mjs!",
   "scripts/perf/git-read-sharing-measure.ts!",
+  "scripts/perf/worktree-git-config-measure.ts!",
   // Live proof and test owners spawn or preload these children through computed paths.
   "scripts/perf/bench-ingress-bridge.mjs!",
   "scripts/perf/child-memory-fixture.cjs!",
