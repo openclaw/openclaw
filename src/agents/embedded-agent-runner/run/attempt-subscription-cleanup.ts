@@ -1,4 +1,3 @@
-/** Cleans up embedded attempt subscription resources. */
 import { parseStrictPositiveInteger } from "@openclaw/normalization-core/number-coercion";
 import { isFastTestRuntimeEnv } from "../../../infra/test-runtime-env.js";
 import { recordAgentCleanupFailure, runAgentCleanupStep } from "../../run-cleanup-timeout.js";
@@ -80,14 +79,11 @@ export async function cleanupEmbeddedAttemptResources(params: {
   } catch {
     recordAgentCleanupFailure();
   }
-  try {
-    await params.bundleMcpRuntime?.dispose();
-  } catch {
-    recordAgentCleanupFailure();
-  }
-  try {
-    await params.bundleLspRuntime?.dispose();
-  } catch {
-    recordAgentCleanupFailure();
+  for (const key of ["bundleMcpRuntime", "bundleLspRuntime"] as const) {
+    try {
+      await params[key]?.dispose();
+    } catch {
+      recordAgentCleanupFailure();
+    }
   }
 }

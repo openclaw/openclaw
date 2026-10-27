@@ -4,20 +4,36 @@ use std::ffi::OsString;
 use std::fmt;
 use std::fs::{self, File, OpenOptions};
 use std::io::{Read, Seek};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Output, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::thread;
 use std::time::{Duration, Instant};
 
+// AppImage libraries belong to the companion and WebKit, not its host programs.
+pub(crate) fn host_command(program: impl AsRef<std::ffi::OsStr>) -> Command {
+    let mut command = Command::new(program);
+    if !cfg!(target_os = "windows") && env::var_os("APPDIR").is_some() {
+        command.env_remove("LD_LIBRARY_PATH");
+    }
+    command
+}
+
 pub(crate) type SpawnCommand<'a> = dyn Fn(&mut Command) -> Result<Child, String> + 'a;
+
+const DEFAULT_EXECUTABLE: &str = if cfg!(target_os = "windows") {
+    "openclaw.cmd"
+} else {
+    "openclaw"
+};
 
 #[derive(Clone, Debug)]
 pub struct OpenClawCli {
     executable: PathBuf,
     openclaw_home: PathBuf,
     available: Arc<AtomicBool>,
+    allow_runtime_management: bool,
 }
 
 #[derive(Debug)]
@@ -48,7 +64,7 @@ impl OpenClawCli {
         let cli = Self::locate()?;
         match cli.verify() {
             Ok(()) => Ok(cli),
-            Err(_) if cli.executable == PathBuf::from("openclaw") => Err(CliError::Missing),
+            Err(_) if cli.executable == PathBuf::from(DEFAULT_EXECUTABLE) => Err(CliError::Missing),
             Err(error) => Err(error),
         }
     }
@@ -57,15 +73,17 @@ impl OpenClawCli {
     pub(crate) fn locate() -> Result<Self, CliError> {
         let home = openclaw_home()?;
         if let Some(override_path) = env::var_os("OPENCLAW_DESKTOP_CLI") {
-            return Ok(Self::new(PathBuf::from(override_path), home));
+            let mut cli = Self::new(PathBuf::from(override_path), home);
+            cli.allow_runtime_management = false;
+            return Ok(cli);
         }
 
-        let managed = home.join("bin/openclaw");
+        let managed = managed_launcher(&home);
         if managed.is_file() {
             return Ok(Self::new(managed, home));
         }
 
-        Ok(Self::new(PathBuf::from("openclaw"), home))
+        Ok(Self::new(PathBuf::from(DEFAULT_EXECUTABLE), home))
     }
 
     fn new(executable: PathBuf, openclaw_home: PathBuf) -> Self {
@@ -73,18 +91,17 @@ impl OpenClawCli {
             executable,
             openclaw_home,
             available: Arc::new(AtomicBool::new(true)),
+            allow_runtime_management: true,
         }
     }
 
-    #[cfg(not(target_os = "windows"))]
     pub(crate) fn browser_runtime(prefix: PathBuf) -> Result<Self, CliError> {
         // The install prefix supplies executable/PATH only; the user’s config and state stay unchanged.
-        let cli = Self::new(prefix.join("bin/openclaw"), prefix);
+        let cli = Self::new(managed_launcher(&prefix), prefix);
         cli.verify()?;
         Ok(cli)
     }
 
-    #[cfg(not(target_os = "windows"))]
     pub(crate) fn matches_version(&self, version: &str) -> bool {
         self.output(["--version"]).is_ok_and(|output| {
             let stdout = String::from_utf8_lossy(&output.stdout);
@@ -114,10 +131,21 @@ impl OpenClawCli {
         I: IntoIterator<Item = S>,
         S: AsRef<std::ffi::OsStr>,
     {
-        let mut command = Command::new(&self.executable);
+        #[cfg(target_os = "windows")]
+        let mut command = crate::runtime_action::managed_command(self)
+            .map_err(CliError::Environment)?
+            .unwrap_or_else(|| host_command(&self.executable));
+        #[cfg(not(target_os = "windows"))]
+        let mut command = host_command(&self.executable);
         command.args(args);
         command.env("PATH", self.command_path()?);
         command.stdin(Stdio::null());
+        #[cfg(target_os = "windows")]
+        {
+            use std::os::windows::process::CommandExt;
+            // Background Gateway inspection must not flash a console window.
+            command.creation_flags(0x0800_0000);
+        }
         Ok(command)
     }
 
@@ -231,6 +259,11 @@ impl OpenClawCli {
             .map_err(|_| CliError::InvalidJson("Chrome setup returned no valid result.".into()))
     }
 
+    pub(crate) fn managed_wrapper(&self) -> Option<PathBuf> {
+        let managed = managed_launcher(&self.openclaw_home);
+        (self.allow_runtime_management && self.executable == managed).then_some(managed)
+    }
+
     fn command_path(&self) -> Result<OsString, CliError> {
         let mut paths = vec![
             self.openclaw_home.join("bin"),
@@ -242,6 +275,15 @@ impl OpenClawCli {
         env::join_paths(paths)
             .map_err(|error| CliError::Environment(format!("Could not construct PATH: {error}")))
     }
+}
+
+/// Keep discovery, installation, and runtime binding on the same launcher path.
+pub(crate) fn managed_launcher(prefix: &Path) -> PathBuf {
+    prefix.join(if cfg!(target_os = "windows") {
+        "bin/openclaw.cmd"
+    } else {
+        "bin/openclaw"
+    })
 }
 
 struct ChromeSetupOutput {
@@ -406,4 +448,62 @@ mod tests {
         assert!(cli.output(["--version"]).is_err());
         assert!(!cli.is_available());
     }
+    /// Runs the calling test again in a child test process with the given APPDIR
+    /// and LD_LIBRARY_PATH; returns true in the child, which runs the body.
+    #[cfg(not(target_os = "windows"))]
+    fn in_child_process_with(appdir: Option<&str>, library_path: &str) -> bool {
+        const CHILD: &str = "OPENCLAW_HOST_LIBRARIES_CHILD";
+        if std::env::var_os(CHILD).is_some() {
+            return true;
+        }
+        let mut command = std::process::Command::new(std::env::current_exe().unwrap());
+        command
+            .args(["--exact", std::thread::current().name().unwrap()])
+            .env(CHILD, "1")
+            .env("LD_LIBRARY_PATH", library_path);
+        match appdir {
+            Some(appdir) => command.env("APPDIR", appdir),
+            None => command.env_remove("APPDIR"),
+        };
+        let output = command.output().unwrap();
+        assert!(
+            output.status.success(),
+            "{}\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert!(String::from_utf8_lossy(&output.stdout).contains("test result: ok. 1 passed"));
+        false
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    fn library_path_seen_by_cli_program() -> String {
+        let cli = OpenClawCli::new(PathBuf::from("/bin/sh"), PathBuf::new());
+        let output = cli
+            .output(["-c", "printf '%s' \"${LD_LIBRARY_PATH-unset}\""])
+            .unwrap();
+        assert!(output.status.success(), "probe failed: {output:?}");
+        String::from_utf8_lossy(&output.stdout).into_owned()
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    #[test]
+    fn cli_programs_do_not_inherit_the_appimage_libraries() {
+        let bundle = "/tmp/.mount_oc/usr/lib/:/tmp/.mount_oc/usr/lib/x86_64-linux-gnu/:";
+        if in_child_process_with(Some("/tmp/.mount_oc"), bundle) {
+            assert_eq!(library_path_seen_by_cli_program(), "unset");
+        }
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    #[test]
+    fn outside_an_appimage_cli_programs_keep_their_library_path() {
+        if in_child_process_with(None, "/opt/cuda/lib64") {
+            assert_eq!(library_path_seen_by_cli_program(), "/opt/cuda/lib64");
+        }
+    }
 }
+
+#[cfg(all(test, target_os = "windows"))]
+#[path = "cli_windows_tests.rs"]
+mod windows_tests;

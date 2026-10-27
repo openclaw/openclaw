@@ -1,52 +1,62 @@
 import fs from "node:fs";
 import path from "node:path";
-import { vi } from "vitest";
+import { fixtureReceiptWorkerClientSource } from "../../../test/helpers/fixture-receipts.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { loadPluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.js";
 import { saveAuthProfileStore } from "../auth-profiles/store-runtime.js";
+import { apiKey, authStore } from "../model-catalog-fixtures.test-support.js";
+import { stubCatalogEnv } from "../prepared-model-catalog-worker.shared.test-support.js";
 import {
-  EXTERNAL_AUTH_PATH_ENV,
-  REF_ONLY_API_ENV,
-  REF_ONLY_TOKEN_ENV,
   createCatalogFixture,
   PROVIDER_ID,
+  writeFixtureFiles,
 } from "../prepared-model-catalog-worker.test-support.js";
 import {
   getPreparedModelRuntimeSnapshot,
+  publishPreparedModelRuntimeSnapshot,
   refreshPreparedModelRuntimeSnapshots,
 } from "../prepared-model-runtime.js";
+import type { PreparedModelRuntimeSnapshot } from "../prepared-model-runtime.types.js";
 
-export function createCatalogFleetFixture(makeTempDir: (prefix: string) => string) {
+export function createCatalogFleetFixture(
+  makeTempDir: (prefix: string) => string,
+  receiptBroadcastName?: () => string,
+) {
   return async function createFleetFixture(
-    onBeforePublication?: (fixture: ReturnType<typeof createCatalogFixture>) => void,
+    onBeforePublication?: (fixture: Awaited<ReturnType<typeof createCatalogFixture>>) => void,
     stableCatalog = false,
-    options: { asyncSyntheticAuth?: boolean; agentCount?: number } = {},
+    options: {
+      asyncSyntheticAuth?: boolean;
+      agentCount?: number;
+      publication?: "individual";
+    } = {},
   ) {
-    const fixture = createCatalogFixture(
+    const broadcastName = receiptBroadcastName?.();
+    const fixture = await createCatalogFixture(
       makeTempDir,
       0,
       {},
-      { asyncSyntheticAuth: options.asyncSyntheticAuth },
+      { asyncSyntheticAuth: options.asyncSyntheticAuth, receiptBroadcastName: broadcastName },
     );
+    const { root, agentDir, workspaceDir, env } = fixture;
+    const individual = options.publication === "individual";
     if (stableCatalog) {
-      fs.writeFileSync(
-        path.join(fixture.root, "plugin", "openclaw.plugin.json"),
-        JSON.stringify({
+      writeFixtureFiles(path.join(root, "plugin"), {
+        "openclaw.plugin.json": {
           id: PROVIDER_ID,
           providers: [PROVIDER_ID],
           configSchema: { type: "object", additionalProperties: false },
-        }),
-      );
-      fs.writeFileSync(
-        path.join(fixture.root, "plugin", "index.cjs"),
-        `const fs = require("node:fs");
+        },
+        "index.cjs": `const fs = require("node:fs");
 module.exports = { id: ${JSON.stringify(PROVIDER_ID)}, register(api) {
   api.registerProvider({ id: ${JSON.stringify(PROVIDER_ID)}, label: "Retained catalog", auth: [],
     catalog: { async run(ctx) {
+      ${broadcastName ? `const { sendReceipt } = await import(${JSON.stringify("data:text/javascript," + encodeURIComponent(fixtureReceiptWorkerClientSource(broadcastName) + "\nexport { sendReceipt };"))});` : ""}
       const marker = process.env.OPENCLAW_WORKER_CATALOG_MARKER;
       fs.writeFileSync(marker + ".worker", JSON.stringify({ pid: process.pid, cwd: process.cwd(),
         threadId: require("node:worker_threads").threadId, agentDir: ctx.agentDir }));
       fs.appendFileSync(marker, "start\\n");
+      ${broadcastName ? 'sendReceipt(marker, "start");' : ""}
       const barrier = marker + ".hold";
       if (fs.existsSync(barrier)) await new Promise(resolve => {
         const check = () => {
@@ -61,32 +71,24 @@ module.exports = { id: ${JSON.stringify(PROVIDER_ID)}, register(api) {
     } },
   });
 } };`,
-      );
-      saveAuthProfileStore({ version: 1, profiles: {} }, fixture.agentDir);
+      });
+      saveAuthProfileStore(authStore(), agentDir);
     }
-    for (const name of [
-      "OPENCLAW_DISABLE_BUNDLED_PLUGINS",
-      "OPENCLAW_STATE_DIR",
-      "OPENCLAW_WORKER_CATALOG_MARKER",
-      EXTERNAL_AUTH_PATH_ENV,
-      REF_ONLY_API_ENV,
-      REF_ONLY_TOKEN_ENV,
-    ] as const) {
-      vi.stubEnv(name, fixture.env[name]);
-    }
+    stubCatalogEnv(env);
     const agentIds = ["fleet-a", "fleet-b", "fleet-c", "fleet-d"].slice(0, options.agentCount ?? 4);
-    const entries = Object.fromEntries(
-      agentIds.map(
-        (id) =>
-          [
-            id,
-            {
-              agentDir: path.join(fixture.env.OPENCLAW_STATE_DIR!, "agents", id, "agent"),
-              workspace: path.join(fixture.root, `${id}-workspace`),
-            },
-          ] as const,
-      ),
-    );
+    const entries: Record<string, { agentDir: string; workspace: string }> = {};
+    for (const id of agentIds) {
+      const entry = (entries[id] = {
+        agentDir: path.join(env.OPENCLAW_STATE_DIR!, "agents", id, "agent"),
+        workspace: individual ? workspaceDir : path.join(root, `${id}-workspace`),
+      });
+      fs.mkdirSync(entry.workspace, { recursive: true });
+      const profiles = { [`fleet:${id}`]: apiKey("fleet-proof", `synthetic-${id}`) };
+      if (stableCatalog) {
+        profiles[`${PROVIDER_ID}:default`] = apiKey(PROVIDER_ID, `synthetic-catalog-${id}`);
+      }
+      saveAuthProfileStore(authStore(profiles), entry.agentDir);
+    }
     const config = {
       ...fixture.config,
       agents: {
@@ -95,45 +97,36 @@ module.exports = { id: ${JSON.stringify(PROVIDER_ID)}, register(api) {
         entries,
       },
     } satisfies OpenClawConfig;
-    for (const id of agentIds) {
-      fs.mkdirSync(entries[id]!.workspace, { recursive: true });
-      saveAuthProfileStore(
-        {
-          version: 1,
-          profiles: {
-            [`fleet:${id}`]: { type: "api_key", provider: "fleet-proof", key: `synthetic-${id}` },
-            ...(stableCatalog
-              ? {
-                  [`${PROVIDER_ID}:default`]: {
-                    type: "api_key" as const,
-                    provider: PROVIDER_ID,
-                    key: `synthetic-catalog-${id}`,
-                  },
-                }
-              : {}),
-          },
-        },
-        entries[id]!.agentDir,
+    onBeforePublication?.(fixture);
+    const snapshots: PreparedModelRuntimeSnapshot[] = [];
+    // Cold scoped tests publish individually; fleet refresh renews all credentialed providers.
+    if (!individual) {
+      await refreshPreparedModelRuntimeSnapshots(config, {
+        gatewayLifecycle: true,
+        allowGatewaySubagentBinding: true,
+        catalogMode: "static",
+        pluginMetadataSnapshot: loadPluginMetadataSnapshot({
+          config,
+          env: process.env,
+          workspaceDir,
+        }),
+      });
+    }
+    for (const agentId of agentIds) {
+      const input = { agentId, agentDir: entries[agentId]!.agentDir, config };
+      snapshots.push(
+        individual
+          ? await publishPreparedModelRuntimeSnapshot(
+              {
+                ...input,
+                workspaceDir: entries[agentId]!.workspace,
+                allowGatewaySubagentBinding: true,
+              },
+              { provenance: "configured", catalogMode: "static" },
+            )
+          : getPreparedModelRuntimeSnapshot(input)!,
       );
     }
-    onBeforePublication?.(fixture);
-    await refreshPreparedModelRuntimeSnapshots(config, {
-      gatewayLifecycle: true,
-      allowGatewaySubagentBinding: true,
-      catalogMode: "static",
-      pluginMetadataSnapshot: loadPluginMetadataSnapshot({
-        config,
-        env: process.env,
-        workspaceDir: fixture.workspaceDir,
-      }),
-    });
-    const snapshots = agentIds.map((agentId) =>
-      getPreparedModelRuntimeSnapshot({
-        agentId,
-        agentDir: entries[agentId]!.agentDir,
-        config,
-      })!,
-    );
     return { ...fixture, config, entries, snapshots, agentIds };
   };
 }

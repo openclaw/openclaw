@@ -1,22 +1,17 @@
+import {
+  attachInternalToolBatchLifecycle,
+  type InternalBeforeToolBatchHook,
+} from "../../../../packages/agent-core/src/internal-hooks.js";
 import { clearBatchAdmittedToolCallsForRun } from "../../agent-tools.before-tool-call.state.js";
 import type { HookContext } from "../../agent-tools.before-tool-call.types.js";
 import { normalizeCodeModeExecBeforeHookParams } from "../../code-mode-control-tools.js";
 import type { Agent } from "../../runtime/index.js";
-import {
-  attachInternalToolBatchLifecycle,
-  type InternalBeforeToolBatchHook,
-} from "../../runtime/internal-hooks.js";
 import { admitToolCallBatch } from "../../tool-loop-admission.js";
-import { hashToolCall } from "../../tool-loop-detection.js";
+import { hashToolCall, observeRepeatedToolError } from "../../tool-loop-detection.js";
 import { log } from "../logger.js";
 
 /** Build the embedded-runner's private bridge into agent-core loop recovery. */
-export function createToolLoopBatchAdmission(
-  ctx: HookContext,
-): InternalBeforeToolBatchHook | undefined {
-  if (ctx.loopDetection?.enabled !== true) {
-    return undefined;
-  }
+export function createToolLoopBatchAdmission(ctx: HookContext): InternalBeforeToolBatchHook {
   return async ({ calls }) => {
     const canonicalCalls = calls.map((call) => ({
       ...call,
@@ -27,12 +22,24 @@ export function createToolLoopBatchAdmission(
     try {
       const admission = await admitToolCallBatch(canonicalCalls, ctx);
       const { commitReadyCalls, releaseSkippedCalls, ...result } = admission;
-      return commitReadyCalls && releaseSkippedCalls
-        ? attachInternalToolBatchLifecycle(result, {
-            commitReadyCalls,
-            releaseSkippedCalls,
-          })
-        : result;
+      return attachInternalToolBatchLifecycle(result, {
+        commitReadyCalls,
+        releaseSkippedCalls,
+        observeOutcome(outcome, state) {
+          const tool = canonicalCalls.find(
+            (call) => call.toolCall.id === outcome.toolCall.id,
+          )?.tool;
+          return observeRepeatedToolError(
+            {
+              ...outcome,
+              args: tool
+                ? normalizeCodeModeExecBeforeHookParams({ tool, params: outcome.args })
+                : outcome.args,
+            },
+            state,
+          );
+        },
+      });
     } catch (error) {
       const first = canonicalCalls[0];
       log.error(`tool-loop batch admission failed: ${String(error)}`);

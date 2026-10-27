@@ -1,4 +1,3 @@
-/** Runtime SDK subpath for prepared completions and assistant text extraction. */
 import type {
   PreparedSimpleCompletionModelForAgent,
   PrepareSimpleCompletionModelForAgentParams,
@@ -26,7 +25,11 @@ export const prepareSimpleCompletionModelForAgent = async (
     const claim = { release: async () => await acquired[Symbol.asyncDispose]() };
     try {
       host.assertOpen();
-      const { [Symbol.asyncDispose]: _dispose, ...prepared } = acquired;
+      const {
+        [Symbol.asyncDispose]: _dispose,
+        authProfiles: _authProfiles,
+        ...prepared
+      } = acquired;
       const model = bindModelCompletionOwner(prepared.model, {
         run: (run) => host.track(run),
         assertCurrent: () => host.assertOpen(),

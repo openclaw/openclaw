@@ -29,6 +29,12 @@ command reads governed declarations and `policy.jsonc` from that agent's
 workspace. A sole-agent or retained legacy-owner configuration still resolves
 without the flag; OpenClaw never selects an arbitrary first agent.
 
+`policy check`, `policy compare`, and `policy watch` emit JSON when `--json` is
+set or stdout is piped. Command-owned failures after option parsing emit `ok: false` and
+`error: { type: "cli_error", message: "..." }` on stdout, preserve the diagnostic
+on stderr, and exit with `2`. `watch` emits one JSON object per line, including
+failures after any earlier reports.
+
 Compare an operator policy file against an authored baseline:
 
 ```bash
@@ -47,9 +53,9 @@ organization-authored policy; the checked policy may add stricter values or
 extra rules. A top-level checked rule can satisfy a scoped baseline rule when
 it is equally or more restrictive. Scope names do not need to match between
 files; comparison is keyed by selector (`agentIds`/`channelIds`) and field.
-For routing probes, every baseline probe id must remain with the same route
-and expected agent. A checked policy may add probes or narrow `matchedBy`, but
-removing a probe, changing its route or agent, or widening its accepted match
+For routing checks, every baseline check id must remain with the same route
+and expected agent. A checked policy may add checks or narrow `matchedBy`, but
+removing a check, changing its route or agent, or widening its accepted match
 kinds is weaker.
 When the checked policy path comes from the plugin configuration and is
 relative, `--agent <id>` selects the workspace used to resolve it. Absolute

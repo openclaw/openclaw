@@ -1,9 +1,11 @@
-// Resolves Windows system and Program Files install roots.
 import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
+import { escapeRegExp } from "../shared/regexp.js";
+import { canAccessSync } from "./path-existence.js";
 import { resolveDiagnosticProcessEnv } from "./process-env.js";
+import { assertAppContainerSpawnSupported } from "./windows-appcontainer-spawn.js";
 
 const DEFAULT_WINDOWS_SYSTEM_ROOT = "C:\\Windows";
 const DEFAULT_PROGRAM_FILES = "C:\\Program Files";
@@ -12,8 +14,6 @@ const WINDOWS_NT_CURRENT_VERSION_KEY = "HKLM\\SOFTWARE\\Microsoft\\Windows NT\\C
 const WINDOWS_CURRENT_VERSION_KEY = "HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion";
 const REG_QUERY_TIMEOUT_MS = 5_000;
 
-type QueryRegistryValue = (key: string, valueName: string, deadlineMs?: number) => string | null;
-type IsReadableFile = (filePath: string) => boolean;
 type WindowsInstallRoots = {
   systemRoot: string;
   programFiles: string;
@@ -27,17 +27,11 @@ type WindowsProcessRoots = {
   installRoots?: WindowsInstallRoots;
 };
 
-const queryRegistryValueFn: QueryRegistryValue = defaultQueryRegistryValue;
-const isReadableFileFn: IsReadableFile = defaultIsReadableFile;
 let cachedProcessRoots: WindowsProcessRoots | null = null;
 
-function defaultIsReadableFile(filePath: string): boolean {
-  try {
-    fs.accessSync(filePath, fs.constants.R_OK);
-    return true;
-  } catch {
-    return false;
-  }
+function locateWindowsRegExe(): string | null {
+  const filePath = path.win32.join(DEFAULT_WINDOWS_SYSTEM_ROOT, "System32", "reg.exe");
+  return canAccessSync(filePath, fs.constants.R_OK) ? filePath : null;
 }
 
 function trimTrailingSeparators(value: string): string {
@@ -94,50 +88,8 @@ function getEnvValueCaseInsensitive(
   return actualKey ? env[actualKey] : undefined;
 }
 
-function getWindowsRegExeCandidates(): readonly string[] {
-  return [path.win32.join(DEFAULT_WINDOWS_SYSTEM_ROOT, "System32", "reg.exe")];
-}
-
-function locateWindowsRegExe(): string | null {
-  for (const candidate of getWindowsRegExeCandidates()) {
-    if (isReadableFileFn(candidate)) {
-      return candidate;
-    }
-  }
-  return null;
-}
-
-function escapeRegex(value: string): string {
-  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-}
-
-function parseRegQueryValue(stdout: string, valueName: string): string | null {
-  const pattern = new RegExp(`^\\s*${escapeRegex(valueName)}\\s+REG_[A-Z0-9_]+\\s+(.+)$`, "im");
-  const match = stdout.match(pattern);
-  return match?.[1]?.trim() || null;
-}
-
-function runRegQuery(
-  regExe: string,
-  key: string,
-  valueName: string,
-  use64BitView: boolean,
-  timeoutMs: number,
-): string {
-  const args = ["query", key, "/v", valueName];
-  if (use64BitView) {
-    args.push("/reg:64");
-  }
-  return execFileSync(regExe, args, {
-    env: resolveDiagnosticProcessEnv(),
-    encoding: "utf8",
-    stdio: ["ignore", "pipe", "ignore"],
-    timeout: timeoutMs,
-    windowsHide: true,
-  });
-}
-
-function defaultQueryRegistryValue(
+/** Queries one Windows registry string value via reg.exe; null when absent or unreadable. */
+export function queryWindowsRegistryValue(
   key: string,
   valueName: string,
   deadlineMs?: number,
@@ -147,7 +99,7 @@ function defaultQueryRegistryValue(
     return null;
   }
 
-  for (const use64BitView of [true, false]) {
+  for (const viewArgs of [["/reg:64"], []]) {
     const timeoutMs =
       deadlineMs === undefined
         ? REG_QUERY_TIMEOUT_MS
@@ -155,9 +107,20 @@ function defaultQueryRegistryValue(
     if (timeoutMs <= 0) {
       return null;
     }
+    assertAppContainerSpawnSupported();
     try {
-      const stdout = runRegQuery(regExe, key, valueName, use64BitView, timeoutMs);
-      const parsed = parseRegQueryValue(stdout, valueName);
+      const stdout = execFileSync(regExe, ["query", key, "/v", valueName, ...viewArgs], {
+        env: resolveDiagnosticProcessEnv(),
+        encoding: "utf8",
+        stdio: ["ignore", "pipe", "ignore"],
+        timeout: timeoutMs,
+        windowsHide: true,
+      });
+      const pattern = new RegExp(
+        `^\\s*${escapeRegExp(valueName)}\\s+REG_[A-Z0-9_]+\\s+(.+)$`,
+        "im",
+      );
+      const parsed = stdout.match(pattern)?.[1]?.trim();
       if (parsed) {
         return parsed;
       }
@@ -169,19 +132,14 @@ function defaultQueryRegistryValue(
 }
 
 function getRegistryProgramFilesRoots(): Partial<WindowsInstallRoots> {
+  const readRoot = (valueName: string) =>
+    normalizeWindowsInstallRoot(
+      queryWindowsRegistryValue(WINDOWS_CURRENT_VERSION_KEY, valueName) ?? undefined,
+    ) ?? undefined;
   return {
-    programFiles:
-      normalizeWindowsInstallRoot(
-        queryRegistryValueFn(WINDOWS_CURRENT_VERSION_KEY, "ProgramFilesDir") ?? undefined,
-      ) ?? undefined,
-    programFilesX86:
-      normalizeWindowsInstallRoot(
-        queryRegistryValueFn(WINDOWS_CURRENT_VERSION_KEY, "ProgramFilesDir (x86)") ?? undefined,
-      ) ?? undefined,
-    programW6432:
-      normalizeWindowsInstallRoot(
-        queryRegistryValueFn(WINDOWS_CURRENT_VERSION_KEY, "ProgramW6432Dir") ?? undefined,
-      ) ?? undefined,
+    programFiles: readRoot("ProgramFilesDir"),
+    programFilesX86: readRoot("ProgramFilesDir (x86)"),
+    programW6432: readRoot("ProgramW6432Dir"),
   };
 }
 
@@ -233,7 +191,7 @@ function getProcessRoots(deadlineMs?: number) {
       env,
       systemRoot:
         normalizeWindowsInstallRoot(
-          queryRegistryValueFn(WINDOWS_NT_CURRENT_VERSION_KEY, "SystemRoot", deadlineMs) ??
+          queryWindowsRegistryValue(WINDOWS_NT_CURRENT_VERSION_KEY, "SystemRoot", deadlineMs) ??
             undefined,
         ) ?? resolveSystemRootFromEnv(env),
     };
@@ -296,11 +254,6 @@ export function getWindowsCmdExePath(
   env: Record<string, string | undefined> = process.env,
 ): string {
   return getWindowsSystem32ExePath("cmd.exe", env);
-}
-
-/** Queries one Windows registry string value via reg.exe; null when absent or unreadable. */
-export function queryWindowsRegistryValue(key: string, valueName: string): string | null {
-  return queryRegistryValueFn(key, valueName);
 }
 
 export function getWindowsSystem32ExePath(

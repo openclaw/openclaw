@@ -3,7 +3,6 @@
 import { safeParseJson } from "@openclaw/normalization-core";
 import {
   ErrorCodes,
-  errorShape,
   missingScopeErrorShape,
   validateFsListDirParams,
   validateFsListDirResult,
@@ -12,28 +11,29 @@ import { listHostDirectories } from "../../infra/host-directory-listing.js";
 import { NODE_FS_LIST_DIR_COMMAND } from "../../infra/node-commands.js";
 import { errorShapeFromError } from "../error-shape.js";
 import { isNodeCommandAllowed, resolveNodeCommandAllowlist } from "../node-command-policy.js";
-import { ADMIN_SCOPE } from "../operator-scopes.js";
+import { ADMIN_SCOPE, hasGatewayAdminScope } from "../operator-scopes.js";
+import { respondError } from "./response.js";
 import type { GatewayRequestHandlers } from "./types.js";
 import { resolveWorkspacePathContainment } from "./workspace-path-containment.js";
 
 export const fsHandlers: GatewayRequestHandlers = {
   "fs.listDir": async ({ params, respond, context, client }) => {
     if (!validateFsListDirParams(params)) {
-      respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "invalid fs parameters"));
+      respondError(respond, ErrorCodes.INVALID_REQUEST, "invalid fs parameters");
       return;
     }
     try {
       if (params.nodeId) {
         const node = context.nodeRegistry.get(params.nodeId);
         if (!node) {
-          respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, "node not connected"));
+          respondError(respond, ErrorCodes.UNAVAILABLE, "node not connected");
           return;
         }
         if (!node.commands.includes(NODE_FS_LIST_DIR_COMMAND)) {
-          respond(
-            false,
-            undefined,
-            errorShape(ErrorCodes.INVALID_REQUEST, "node does not support directory browsing"),
+          respondError(
+            respond,
+            ErrorCodes.INVALID_REQUEST,
+            "node does not support directory browsing",
           );
           return;
         }
@@ -46,16 +46,13 @@ export const fsHandlers: GatewayRequestHandlers = {
           }),
         });
         if (!allowed.ok) {
-          respond(
-            false,
-            undefined,
-            errorShape(
-              ErrorCodes.INVALID_REQUEST,
-              `node command not allowed: ${NODE_FS_LIST_DIR_COMMAND} (${allowed.reason})`,
-              {
-                details: { command: NODE_FS_LIST_DIR_COMMAND, reason: allowed.reason },
-              },
-            ),
+          respondError(
+            respond,
+            ErrorCodes.INVALID_REQUEST,
+            `node command not allowed: ${NODE_FS_LIST_DIR_COMMAND} (${allowed.reason})`,
+            {
+              details: { command: NODE_FS_LIST_DIR_COMMAND, reason: allowed.reason },
+            },
           );
           return;
         }
@@ -67,27 +64,30 @@ export const fsHandlers: GatewayRequestHandlers = {
           params: params.path ? { path: params.path } : {},
         });
         if (!result.ok) {
-          respond(
-            false,
-            undefined,
-            errorShape(ErrorCodes.UNAVAILABLE, result.error?.message ?? "node browse failed"),
+          // Keep node request errors (missing or non-directory paths) as request errors so the
+          // picker can fall back to the device home; transport failures stay unavailable.
+          respondError(
+            respond,
+            result.error?.code === "INVALID_REQUEST"
+              ? ErrorCodes.INVALID_REQUEST
+              : ErrorCodes.UNAVAILABLE,
+            result.error?.message ?? "node browse failed",
           );
           return;
         }
         const payload = result.payloadJSON ? safeParseJson(result.payloadJSON) : result.payload;
         if (!validateFsListDirResult(payload)) {
-          respond(
-            false,
-            undefined,
-            errorShape(ErrorCodes.UNAVAILABLE, "node returned an invalid directory listing"),
+          respondError(
+            respond,
+            ErrorCodes.UNAVAILABLE,
+            "node returned an invalid directory listing",
           );
           return;
         }
         respond(true, payload, undefined);
         return;
       }
-      const scopes = Array.isArray(client?.connect.scopes) ? client.connect.scopes : [];
-      if (scopes.includes(ADMIN_SCOPE)) {
+      if (hasGatewayAdminScope(client)) {
         respond(true, await listHostDirectories(params.path), undefined);
         return;
       }

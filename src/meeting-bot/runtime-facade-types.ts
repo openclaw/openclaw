@@ -2,6 +2,10 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginRuntime, RuntimeLogger } from "../plugins/runtime/types.js";
 import type { MeetingAudioBackend } from "./audio-backend.js";
 import type {
+  MeetingChromeLaunchParams,
+  MeetingChromeRecoveryParams,
+} from "./chrome-transport-types.js";
+import type {
   MeetingBrowserJoinSession,
   MeetingPlatformAdapter,
   MeetingPlatformRuntimeMetadata,
@@ -31,17 +35,6 @@ export type MeetingRuntimeParams<Config extends MeetingPluginConfig> = {
   logger: RuntimeLogger;
 };
 
-type MeetingRuntimePlatform<
-  Mode extends string,
-  Health extends MeetingBrowserHealth,
-> = MeetingPlatformAdapter<
-  MeetingBrowserJoinSession<Mode>,
-  Mode,
-  Health,
-  MeetingTranscriptSnapshot
-> &
-  MeetingPlatformRuntimeMetadata;
-
 export type MeetingRuntimeAudioBridge<Health extends MeetingBrowserHealth> =
   MeetingSessionRuntimeHandles<Health> & {
     providerId?: string;
@@ -57,83 +50,9 @@ type MeetingRuntimeLaunchResult<Health extends MeetingBrowserHealth> = {
   tab?: MeetingBrowserTab;
 };
 
-type MeetingRuntimeLaunchParams<Config extends MeetingPluginConfig, Mode extends string> = {
-  runtime: PluginRuntime;
-  config: Config;
-  fullConfig: OpenClawConfig;
-  meetingSessionId: string;
-  requesterSessionKey?: string;
-  mode: Mode;
-  trackedTargetId?: string;
-  url: string;
-  logger: RuntimeLogger;
-};
-
-type MeetingRuntimeTransport<
-  Config extends MeetingPluginConfig,
-  Mode extends string,
-  Health extends MeetingBrowserHealth,
-> = {
-  launchInChrome(
-    params: MeetingRuntimeLaunchParams<Config, Mode>,
-  ): Promise<MeetingRuntimeLaunchResult<Health>>;
-  launchOnNode(
-    params: MeetingRuntimeLaunchParams<Config, Mode>,
-  ): Promise<MeetingRuntimeLaunchResult<Health> & { nodeId: string }>;
-  leaveInBrowser(params: {
-    runtime: PluginRuntime;
-    config: Config;
-    meetingSessionId: string;
-    meetingUrl: string;
-    nodeId?: string;
-    tab: MeetingBrowserTab;
-  }): Promise<{ left: boolean; note: string }>;
-  readTranscript(params: {
-    runtime: PluginRuntime;
-    config: Config;
-    finalize?: boolean;
-    meetingUrl: string;
-    meetingSessionId: string;
-    nodeId?: string;
-    tab: MeetingBrowserTab;
-  }): Promise<MeetingTranscriptSnapshot>;
-  recoverCurrentTab(params: {
-    runtime: PluginRuntime;
-    config: Config;
-    fullConfig?: OpenClawConfig;
-    meetingSessionId?: string;
-    mode: Mode;
-    nodeId?: string;
-    readOnly?: boolean;
-    trackedMeetingUrl?: string;
-    trackedTargetId?: string;
-    transport: "chrome" | "chrome-node";
-    timeoutMs?: number;
-    url?: string;
-  }): Promise<{
-    browser?: Health;
-    found: boolean;
-    message: string;
-    tab?: MeetingBrowserCandidateTab;
-  }>;
-};
-
-type MeetingRuntimeManualActionReason<Health extends MeetingBrowserHealth> = NonNullable<
-  Health["manualAction"]
->["reason"];
 export type MeetingRuntimeSpeechBlockedReason<Health extends MeetingBrowserHealth> = NonNullable<
   Health["speechBlockedReason"]
 >;
-
-export type MeetingRuntimeSession<
-  Transport extends string,
-  Mode extends string,
-  Health extends MeetingBrowserHealth,
-> = MeetingPluginSession<Transport, Mode, Health>;
-export type MeetingRuntimeRequest<
-  Transport extends string,
-  Mode extends string,
-> = MeetingPluginJoinRequest<Transport, Mode>;
 
 export type MeetingRuntimeProbeResults = {
   setup: unknown;
@@ -141,28 +60,23 @@ export type MeetingRuntimeProbeResults = {
   speech: unknown;
 };
 
-export type MeetingRuntimeOwner<
-  Transport extends "chrome" | "chrome-node",
-  Mode extends string,
-  Health extends MeetingBrowserHealth,
-> = MeetingSessionRuntime<
-  MeetingRuntimeSession<Transport, Mode, Health>,
-  MeetingRuntimeRequest<Transport, Mode>,
-  Transport,
-  Mode,
-  Health,
-  MeetingBrowserTab,
-  MeetingRuntimeManualActionReason<Health>,
-  MeetingRuntimeSpeechBlockedReason<Health>
->;
-
-type MeetingRuntimeFacadeInstance<
+export type MeetingRuntimeFacadeConstructor<
+  Config extends MeetingPluginConfig,
   Transport extends "chrome" | "chrome-node",
   Mode extends string,
   Health extends MeetingPluginChromeHealth<string, string>,
   Results extends MeetingRuntimeProbeResults,
-> = Pick<
-  MeetingRuntimeOwner<Transport, Mode, Health>,
+> = new (params: MeetingRuntimeParams<Config>) => Pick<
+  MeetingSessionRuntime<
+    MeetingPluginSession<Transport, Mode, Health>,
+    MeetingPluginJoinRequest<Transport, Mode>,
+    Transport,
+    Mode,
+    Health,
+    MeetingBrowserTab,
+    NonNullable<Health["manualAction"]>["reason"],
+    MeetingRuntimeSpeechBlockedReason<Health>
+  >,
   | "join"
   | "leave"
   | "reconcileTranscriptPolicy"
@@ -172,7 +86,7 @@ type MeetingRuntimeFacadeInstance<
   | "stopTranscriptSource"
   | "transcript"
 > & {
-  list(): MeetingRuntimeSession<Transport, Mode, Health>[];
+  list(): MeetingPluginSession<Transport, Mode, Health>[];
   ownsSession(agentId: string, sessionId: string): boolean;
   setupStatus(options?: { mode?: Mode; transport?: Transport }): Promise<Results["setup"]>;
   statusForAgent(
@@ -180,22 +94,12 @@ type MeetingRuntimeFacadeInstance<
     sessionId?: string,
   ): Promise<{
     found: boolean;
-    session?: MeetingRuntimeSession<Transport, Mode, Health>;
-    sessions?: MeetingRuntimeSession<Transport, Mode, Health>[];
+    session?: MeetingPluginSession<Transport, Mode, Health>;
+    sessions?: MeetingPluginSession<Transport, Mode, Health>[];
   }>;
-  testListen(request: MeetingRuntimeRequest<Transport, Mode>): Promise<Results["listening"]>;
-  testSpeech(request: MeetingRuntimeRequest<Transport, Mode>): Promise<Results["speech"]>;
+  testListen(request: MeetingPluginJoinRequest<Transport, Mode>): Promise<Results["listening"]>;
+  testSpeech(request: MeetingPluginJoinRequest<Transport, Mode>): Promise<Results["speech"]>;
 };
-
-export type MeetingRuntimeFacadeConstructor<
-  Config extends MeetingPluginConfig,
-  Transport extends "chrome" | "chrome-node",
-  Mode extends string,
-  Health extends MeetingPluginChromeHealth<string, string>,
-  Results extends MeetingRuntimeProbeResults,
-> = new (
-  params: MeetingRuntimeParams<Config>,
-) => MeetingRuntimeFacadeInstance<Transport, Mode, Health, Results>;
 
 export type MeetingRuntimeHookContext<
   Session extends MeetingPluginSession<Transport, Mode, Health>,
@@ -244,21 +148,6 @@ type MeetingRuntimeHooks<
   validateLaunchResult?(result: MeetingRuntimeLaunchResult<Health>): void;
 };
 
-type MeetingRuntimeMessages<Health extends MeetingBrowserHealth> = {
-  browserReadinessFailed?(error: string): string;
-  durableTranscripts: { providerId: string; providerName: string };
-  joined: {
-    local: string;
-    node: string;
-    transcribe: string;
-    waiting: string;
-  };
-  leaveFailed(error: string): string;
-  noTrackedTab: string;
-  sessionRuntime: MeetingSessionRuntimeMessages<MeetingRuntimeSpeechBlockedReason<Health>>;
-  sharedTab: string;
-};
-
 type MeetingRuntimeProbeContext<
   Config extends MeetingPluginConfig & { defaultMode: Mode },
   Transport extends "chrome" | "chrome-node",
@@ -269,8 +158,8 @@ type MeetingRuntimeProbeContext<
   Mode,
   Transport,
   Health,
-  MeetingRuntimeSession<Transport, Mode, Health>,
-  MeetingRuntimeRequest<Transport, Mode>
+  MeetingPluginSession<Transport, Mode, Health>,
+  MeetingPluginJoinRequest<Transport, Mode>
 >;
 
 export type MeetingRuntimeFacadeOptions<
@@ -281,14 +170,33 @@ export type MeetingRuntimeFacadeOptions<
   Results extends MeetingRuntimeProbeResults,
 > = {
   hooks?: MeetingRuntimeHooks<
-    MeetingRuntimeSession<Transport, Mode, Health>,
-    MeetingRuntimeRequest<Transport, Mode>,
+    MeetingPluginSession<Transport, Mode, Health>,
+    MeetingPluginJoinRequest<Transport, Mode>,
     Transport,
     Mode,
     Health
   >;
-  messages: MeetingRuntimeMessages<Health>;
-  platform: MeetingRuntimePlatform<Mode, Health>;
+  messages: {
+    browserReadinessFailed?(error: string): string;
+    durableTranscripts: { providerId: string; providerName: string };
+    joined: {
+      local: string;
+      node: string;
+      transcribe: string;
+      waiting: string;
+    };
+    leaveFailed(error: string): string;
+    noTrackedTab: string;
+    sessionRuntime: MeetingSessionRuntimeMessages<MeetingRuntimeSpeechBlockedReason<Health>>;
+    sharedTab: string;
+  };
+  platform: MeetingPlatformAdapter<
+    MeetingBrowserJoinSession<Mode>,
+    Mode,
+    Health,
+    MeetingTranscriptSnapshot
+  > &
+    MeetingPlatformRuntimeMetadata;
   probes: {
     setupStatus(
       params: MeetingRuntimeParams<Config> & {
@@ -297,12 +205,42 @@ export type MeetingRuntimeFacadeOptions<
     ): Promise<Results["setup"]>;
     testListening(
       context: MeetingRuntimeProbeContext<Config, Transport, Mode, Health>,
-      request: MeetingRuntimeRequest<Transport, Mode>,
+      request: MeetingPluginJoinRequest<Transport, Mode>,
     ): Promise<Results["listening"]>;
     testSpeech(
       context: MeetingRuntimeProbeContext<Config, Transport, Mode, Health>,
-      request: MeetingRuntimeRequest<Transport, Mode>,
+      request: MeetingPluginJoinRequest<Transport, Mode>,
     ): Promise<Results["speech"]>;
   };
-  transport: MeetingRuntimeTransport<Config, Mode, Health>;
+  transport: {
+    launchInChrome(
+      params: MeetingChromeLaunchParams<Config, Mode>,
+    ): Promise<MeetingRuntimeLaunchResult<Health>>;
+    launchOnNode(
+      params: MeetingChromeLaunchParams<Config, Mode>,
+    ): Promise<MeetingRuntimeLaunchResult<Health> & { nodeId: string }>;
+    leaveInBrowser(params: {
+      runtime: PluginRuntime;
+      config: Config;
+      meetingSessionId: string;
+      meetingUrl: string;
+      nodeId?: string;
+      tab: MeetingBrowserTab;
+    }): Promise<{ left: boolean; note: string }>;
+    readTranscript(params: {
+      runtime: PluginRuntime;
+      config: Config;
+      finalize?: boolean;
+      meetingUrl: string;
+      meetingSessionId: string;
+      nodeId?: string;
+      tab: MeetingBrowserTab;
+    }): Promise<MeetingTranscriptSnapshot>;
+    recoverCurrentTab(params: MeetingChromeRecoveryParams<Config, Mode>): Promise<{
+      browser?: Health;
+      found: boolean;
+      message: string;
+      tab?: MeetingBrowserCandidateTab;
+    }>;
+  };
 };

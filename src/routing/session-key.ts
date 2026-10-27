@@ -3,7 +3,6 @@ import {
   normalizeAgentId,
   normalizeAgentIdStrict,
 } from "@openclaw/normalization-core/agent-id";
-// Routing session key helpers build stable session keys from route targets.
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
@@ -47,36 +46,6 @@ export const DEFAULT_AGENT_ID = LEGACY_IMPLICIT_AGENT_ID;
 export { buildAgentMainSessionKey, DEFAULT_MAIN_KEY, normalizeMainKey };
 type SessionKeyShape = "missing" | "agent" | "legacy_or_alias" | "malformed_agent";
 
-function normalizeToken(value: string | undefined | null): string {
-  return normalizeLowercaseStringOrEmpty(value);
-}
-
-export function scopedHeartbeatWakeOptions<T extends object>(
-  sessionKey: string,
-  wakeOptions: T,
-  mainKey?: string,
-  scope?: "per-sender" | "global",
-): T | (T & { sessionKey: string }) | (T & { agentId: string }) {
-  const parsed = parseAgentSessionKey(sessionKey);
-  if (!parsed) {
-    return wakeOptions;
-  }
-  if (isCronRunSessionKey(sessionKey)) {
-    // Global-scope agents drain the literal "global" queue, not agent-main;
-    // a targeted wake on agent:<id>:main would be unresolvable. Drop the
-    // sessionKey but carry the agent target so multi-agent global-scope
-    // setups still wake the originating agent's heartbeat.
-    if (scope === "global") {
-      return { ...wakeOptions, agentId: parsed.agentId };
-    }
-    return {
-      ...wakeOptions,
-      sessionKey: buildAgentMainSessionKey({ agentId: parsed.agentId, mainKey }),
-    };
-  }
-  return { ...wakeOptions, sessionKey };
-}
-
 export function resolveEventSessionKey(
   sessionKey: string,
   mainKey?: string,
@@ -111,8 +80,11 @@ export function agentSessionKeysMatchByRequestKey(
   if (!leftRaw || !rightRaw) {
     return false;
   }
+  const leftKey = parseAgentSessionKey(leftRaw);
+  const rightKey = parseAgentSessionKey(rightRaw);
   return (
-    leftRaw === rightRaw || toAgentRequestSessionKey(leftRaw) === toAgentRequestSessionKey(rightRaw)
+    (!leftKey || !rightKey || leftKey.agentId === rightKey.agentId) &&
+    (leftKey?.rest ?? leftRaw) === (rightKey?.rest ?? rightRaw)
   );
 }
 
@@ -276,20 +248,10 @@ export function resolveLinkedDirectPeerId(params: {
   if (!peerId) {
     return null;
   }
-  const candidates = new Set<string>();
-  const rawCandidate = normalizeToken(peerId);
-  if (rawCandidate) {
-    candidates.add(rawCandidate);
-  }
-  const channel = normalizeToken(params.channel);
+  const candidates = new Set([normalizeLowercaseStringOrEmpty(peerId)]);
+  const channel = normalizeLowercaseStringOrEmpty(params.channel);
   if (channel) {
-    const scopedCandidate = normalizeToken(`${channel}:${peerId}`);
-    if (scopedCandidate) {
-      candidates.add(scopedCandidate);
-    }
-  }
-  if (candidates.size === 0) {
-    return null;
+    candidates.add(normalizeLowercaseStringOrEmpty(`${channel}:${peerId}`));
   }
   for (const [canonical, ids] of Object.entries(identityLinks)) {
     const canonicalName = canonical.trim();
@@ -300,7 +262,7 @@ export function resolveLinkedDirectPeerId(params: {
       continue;
     }
     for (const id of ids) {
-      const normalized = normalizeToken(id);
+      const normalized = normalizeLowercaseStringOrEmpty(id);
       if (normalized && candidates.has(normalized)) {
         return canonicalName;
       }
@@ -315,7 +277,7 @@ export function buildGroupHistoryKey(params: {
   peerKind: "group" | "channel";
   peerId: string;
 }): string {
-  const channel = normalizeToken(params.channel) || "unknown";
+  const channel = normalizeLowercaseStringOrEmpty(params.channel) || "unknown";
   const accountId = normalizeAccountId(params.accountId);
   const peerId =
     normalizeSessionPeerId({

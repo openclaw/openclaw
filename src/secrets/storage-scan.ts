@@ -4,12 +4,7 @@ import path from "node:path";
 import { listAgentIds, resolveAgentDir } from "../agents/agent-scope.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveUserPath } from "../utils.js";
-import { parseEnvValue } from "./shared.js";
-
-/** Parses one .env assignment value using the shared shell-ish env parser. */
-export function parseEnvAssignmentValue(raw: string): string {
-  return parseEnvValue(raw);
-}
+export { parseEnvValue as parseEnvAssignmentValue } from "./shared.js";
 
 /** Lists global dotenv files that can supply secrets for the selected config and state roots. */
 export function listSecretsDotEnvPaths(params: { configPath: string; stateDir: string }): string[] {

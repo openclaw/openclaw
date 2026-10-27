@@ -1,35 +1,23 @@
 import type { AssistantMessage, Context, Model } from "@openclaw/llm-core";
-import { stableStringify } from "@openclaw/normalization-core";
+import { sha256StableValue } from "@openclaw/normalization-core/node-crypto";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { isOpenAIResponsesReplayContext } from "./openai-responses-compaction-replay.js";
 import {
   responsesContinuationPrefixFingerprint,
   type ResponsesContinuationRequest,
 } from "./openai-responses-continuation.js";
+import { OPENAI_RESPONSES_TOOL_CALL_PROVIDERS } from "./openai-responses-contracts.js";
+import { readResponsesInputReplayState } from "./openai-responses-input-replay.js";
 import {
   convertProviderResponsesMessages,
   convertResponsesMessages,
 } from "./openai-responses-replay-messages-internal.js";
 import {
   buildProviderReplayContext,
+  isProviderReplayContext,
   providerReplayContextMatches,
 } from "./provider-replay-context.js";
-import { sha256Hex } from "./transport-utils.js";
 
-type ReplayIdentity = { sessionId?: string; authProfileId?: string };
-type Projection = "transport" | "provider";
-const TOOL_CALL_PROVIDERS = new Set([
-  "openai",
-  "opencode",
-  "azure-openai-responses",
-  "github-copilot",
-]);
-
-function inputReplay(message: AssistantMessage) {
-  const value =
-    "openclawResponsesInputReplay" in message ? message.openclawResponsesInputReplay : undefined;
-  return isRecord(value) ? value : undefined;
-}
+type ReplayIdentity = NonNullable<Parameters<typeof buildProviderReplayContext>[1]>;
 
 function contextFingerprint(input: readonly unknown[], output: readonly unknown[] = []): string {
   // Continuation normalizes provider output into replayable input. Context accounting
@@ -41,9 +29,10 @@ function contextFingerprint(input: readonly unknown[], output: readonly unknown[
     const { id: _id, status: _status, ...content } = item;
     return [content];
   });
-  return sha256Hex(
-    stableStringify({ prefix: responsesContinuationPrefixFingerprint(input, output), reasoning }),
-  );
+  return sha256StableValue({
+    prefix: responsesContinuationPrefixFingerprint(input, output),
+    reasoning,
+  }).digest;
 }
 
 /** Bind measured usage to the admitted replay prefix, without copying its content. */
@@ -53,7 +42,7 @@ export function recordResponsesContextUsage(
   identity: ReplayIdentity | undefined,
   request: ResponsesContinuationRequest,
   output: readonly unknown[],
-  projection: Projection,
+  projection: "transport" | "provider",
 ): void {
   const usage = message.usage.contextUsage;
   if (
@@ -77,10 +66,15 @@ export function recordResponsesContextUsage(
     projection === "transport" ? convertResponsesMessages : convertProviderResponsesMessages;
   // Standalone projection repairs unmatched calls; those synthetic results are
   // not response output and remain outside the measured prefix.
-  const replayOutput = convert(model, { messages: [message] }, TOOL_CALL_PROVIDERS, {
-    ...identity,
-    includeSystemPrompt: false,
-  }).filter((item) => item.type !== "function_call_output");
+  const replayOutput = convert(
+    model,
+    { messages: [message] },
+    OPENAI_RESPONSES_TOOL_CALL_PROVIDERS,
+    {
+      ...identity,
+      includeSystemPrompt: false,
+    },
+  ).filter((item) => item.type !== "function_call_output");
   const firstInput = request.input[0];
   const contextUsage = {
     ...buildProviderReplayContext(model, identity),
@@ -95,7 +89,7 @@ export function recordResponsesContextUsage(
     totalTokens: usage.totalTokens,
   };
   Object.assign(message, {
-    openclawResponsesInputReplay: { ...inputReplay(message), contextUsage },
+    openclawResponsesInputReplay: { ...readResponsesInputReplayState(message), contextUsage },
   });
 }
 
@@ -111,7 +105,7 @@ export function resolveResponsesContextUsageBoundary(
     if (!message || !isAssistant(message)) {
       continue;
     }
-    const state = inputReplay(message)?.contextUsage;
+    const state = readResponsesInputReplayState(message)?.contextUsage;
     const usage = message.usage.contextUsage;
     if (!isRecord(state) || usage?.state !== "available") {
       continue;
@@ -119,7 +113,7 @@ export function resolveResponsesContextUsageBoundary(
     const { projection, prefixHash, prefixLength, promptTokens, totalTokens, includeSystemPrompt } =
       state;
     if (
-      !isOpenAIResponsesReplayContext(state) ||
+      !isProviderReplayContext(state) ||
       !providerReplayContextMatches(state, buildProviderReplayContext(model, identity)) ||
       message.provider !== model.provider ||
       message.api !== model.api ||
@@ -141,7 +135,7 @@ export function resolveResponsesContextUsageBoundary(
     const input = convert(
       model,
       { messages: messages.filter(isProviderMessage), systemPrompt },
-      TOOL_CALL_PROVIDERS,
+      OPENAI_RESPONSES_TOOL_CALL_PROVIDERS,
       { ...identity, includeSystemPrompt: includeSystemPrompt === true },
     );
     if (

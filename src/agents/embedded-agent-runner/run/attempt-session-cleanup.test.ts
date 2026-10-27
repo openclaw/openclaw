@@ -32,7 +32,7 @@ const attempt = {
 
 function createInput(overrides: Record<string, unknown> = {}) {
   const transcriptLifecycle = {
-    beginCleanup: vi.fn(async () => undefined),
+    beginCleanup: vi.fn(async (onDrained?: () => void) => onDrained?.()),
     dispose: vi.fn(async () => undefined),
   };
   const emitDiagnosticRunCompleted = vi.fn();
@@ -47,7 +47,7 @@ function createInput(overrides: Record<string, unknown> = {}) {
   return {
     attempt,
     transcriptLifecycle,
-    sessionAgentId: "main",
+    toolSearchCatalogRef: {},
     buildAbortSettlePromise: () => null,
     trajectoryRecorder,
     trajectoryEndRecorded: false,
@@ -65,7 +65,11 @@ describe("cleanupEmbeddedAttemptSessionPhase", () => {
   });
 
   it("records the terminal event before transcript-safe resource cleanup", async () => {
-    const input = createInput();
+    const clearTranscriptRunCallbacks = vi.fn();
+    const input = createInput({ sessionManager: { clearTranscriptRunCallbacks } });
+    hoisted.cleanupEmbeddedAttemptResources.mockImplementation(async () => {
+      expect(clearTranscriptRunCallbacks).toHaveBeenCalledOnce();
+    });
 
     await cleanupEmbeddedAttemptSessionPhase(input as never);
 
@@ -80,9 +84,9 @@ describe("cleanupEmbeddedAttemptSessionPhase", () => {
         trajectoryRecorder: input.trajectoryRecorder,
       }),
     );
-    expect(hoisted.clearToolSearchCatalog).toHaveBeenCalledWith(
-      expect.objectContaining({ runId: "run-1", sessionId: "session-1", agentId: "main" }),
-    );
+    expect(hoisted.clearToolSearchCatalog).toHaveBeenCalledWith({
+      catalogRef: input.toolSearchCatalogRef,
+    });
     expect(hoisted.cleanupEmbeddedAttemptResources).toHaveBeenCalledWith(
       expect.objectContaining({ aborted: false }),
     );

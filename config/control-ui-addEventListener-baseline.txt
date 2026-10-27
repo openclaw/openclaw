@@ -1,0 +1,17 @@
+# Control UI addEventListener calls; shrink only.
+# Run pnpm check:control-ui-controllers --prune after removing calls.
+ui/src/api/gateway.ts	1
+ui/src/app/native-bridge.ts	1
+ui/src/components/desktop/desktop-session-owner.ts	1
+ui/src/components/terminal/terminal-connection.ts	1
+ui/src/lib/board/gateway-provider.ts	1
+ui/src/lib/reactive/listener.ts	1
+ui/src/main.ts	2
+ui/src/pages/chat/components/chat-attachment-image.worker.ts	1
+ui/src/pages/chat/components/chat-attachment-video.worker.ts	1
+ui/src/pages/chat/composer-dictation-session.ts	2
+ui/src/pages/chat/session-snapshot-database.ts	1
+ui/src/pages/chat/talk/gateway-relay.ts	1
+ui/src/pages/chat/talk/shared.ts	1
+ui/src/pages/chat/talk/voice-selection.ts	1
+ui/src/pages/plugins/plugins-consent.ts	1

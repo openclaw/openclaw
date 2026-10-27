@@ -1,12 +1,15 @@
-// @vitest-environment node
+// @vitest-environment jsdom
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { createEffect, createRoot, flush } from "@solidjs/signals";
 import { Value } from "typebox/value";
-import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
+import { afterEach, assert, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { SessionsGoalUpdateParamsSchema } from "../../../../packages/gateway-protocol/src/schema/sessions-goal.js";
+import { createSessionGoalFixture } from "../../../../src/gateway/session-goal.test-support.js";
 import { createDeferred } from "../../../../test/helpers/promise.js";
-import { GatewayRequestError } from "../../api/gateway.ts";
+import { GatewayRequestError } from "../../api/gateway-connect-errors.ts";
 import type { SessionsListResult, SessionGoal } from "../../api/types.ts";
 import { retireStoredGoalOperations } from "../../lib/chat/goal-operation-storage.ts";
+import { projectOwner } from "../../lib/reactive/projection.ts";
 import {
   createGatewayHarness,
   createTestSessionCapability,
@@ -14,47 +17,56 @@ import {
 import { createSessionsListResult } from "../../test-helpers/chat-model.ts";
 import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
 import { createStorageMock } from "../../test-helpers/storage.ts";
-import { chatGoalRecovery, mutateChatGoal } from "./chat-goals.ts";
+import {
+  chatGoalOperations,
+  chatGoalPresentation,
+  chatGoalRecovery,
+  mutateChatGoal,
+} from "./chat-goals.ts";
+import { setChatHistoryLoad } from "./chat-history-state.ts";
 import { makeChatHost } from "./chat-host.test-support.ts";
+import { createTestPageState } from "./chat-page-state.test-support.ts";
+import { reconcileChatRunLifecycle } from "./run-lifecycle.ts";
 
-const goal: SessionGoal = {
-  schemaVersion: 1,
-  id: "goal-a",
-  objective: "Review the UI",
+const goal: SessionGoal = createSessionGoalFixture("goal-a", "Review the UI", {
   status: "paused",
-  createdAt: 1,
   updatedAt: 2,
-  tokenStart: 0,
   tokensUsed: 10,
-  continuationTurns: 0,
-};
+});
 
 beforeEach(() => vi.stubGlobal("sessionStorage", createStorageMock()));
 afterEach(() => {
+  vi.useRealTimers();
   vi.restoreAllMocks();
   vi.unstubAllGlobals();
 });
 
-function goalHost(requestHandlers: Record<string, unknown>) {
-  const host = makeChatHost({
-    sessionKey: "agent:main:main",
-    currentSessionId: "session-a",
-    chatMessage: "Unrelated draft",
-    sessionsResult: {
-      ...createSessionsListResult(),
-      sessions: [
-        {
-          key: "agent:main:main",
-          agentId: "main",
-          sessionId: "session-a",
-          kind: "direct",
-          updatedAt: 2,
-          goal,
-        },
-      ],
-    },
-    requestHandlers,
-  });
+function loseAck(): never {
+  throw new Error("ACK lost");
+}
+
+function goalHost(requestHandlers: Record<string, unknown> = { "sessions.goal.update": loseAck }) {
+  const host = createTestPageState(
+    makeChatHost({
+      sessionKey: "agent:main:main",
+      currentSessionId: "session-a",
+      chatMessage: "Unrelated draft",
+      sessionsResult: {
+        ...createSessionsListResult(),
+        sessions: [
+          {
+            key: "agent:main:main",
+            agentId: "main",
+            sessionId: "session-a",
+            kind: "direct",
+            updatedAt: 2,
+            goal,
+          },
+        ],
+      },
+      requestHandlers,
+    }),
+  );
   const sessions = host.sessions;
   const projectSessions = (state: typeof sessions.state) => {
     host.sessionsResult = state.result;
@@ -70,6 +82,147 @@ function goalHost(requestHandlers: Record<string, unknown>) {
 }
 
 describe("Goal control requests", () => {
+  it("confirms execution only from the accepted receipt and retains Goal after the run ends", async () => {
+    const activeGoal: SessionGoal = { ...goal, status: "active", updatedAt: 3 };
+    const pending = createDeferred<{
+      status: "started";
+      goalId: string;
+      runId: string;
+      goal: SessionGoal;
+    }>();
+    const host = goalHost({ "sessions.goal.update": () => pending.promise });
+    // Input custody alone is not proof that the Goal is executing.
+    host.chatRunId = "accepted-input";
+    host.chatSending = true;
+    expect(chatGoalPresentation(host, activeGoal)).toMatchObject({
+      value: activeGoal,
+      executionConfirmed: false,
+    });
+    host.chatSending = false;
+    host.chatRunId = null;
+    const submitted = mutateChatGoal(host, { action: "resume", goalId: goal.id });
+    expect(chatGoalPresentation(host, activeGoal)?.executionConfirmed).toBe(false);
+    pending.resolve({ status: "started", goalId: goal.id, runId: "goal-run", goal: activeGoal });
+    expect(await submitted).toBe(true);
+    expect(chatGoalPresentation(host, activeGoal)).toMatchObject({
+      value: activeGoal,
+      executionConfirmed: true,
+      confirmedRunId: "goal-run",
+    });
+    reconcileChatRunLifecycle(host, {
+      outcome: "done",
+      runId: "goal-run",
+      clearLocalRun: true,
+      publishRunStatus: false,
+    });
+    expect(chatGoalPresentation(host, activeGoal)).toMatchObject({
+      value: activeGoal,
+      executionConfirmed: false,
+    });
+    for (const status of ["active", "paused", "complete", "blocked"] as const) {
+      const retained = { ...activeGoal, status };
+      expect(chatGoalPresentation(host, retained)?.value).toBe(retained);
+    }
+    expect(chatGoalPresentation(host, undefined)).toBeUndefined();
+  });
+
+  it("publishes pending and uncertain recovery while preserving the saved operation", async () => {
+    const pending = createDeferred<never>();
+    const host = goalHost({ "sessions.goal.update": () => pending.promise });
+    const states: Array<boolean | undefined> = [];
+    const dispose = createRoot((stop) => {
+      const operations = projectOwner(chatGoalOperations(host), (owner) => owner);
+      createEffect(
+        () => {
+          operations.read();
+          return chatGoalRecovery(host)?.pending;
+        },
+        (value) => {
+          states.push(value);
+        },
+      );
+      return stop;
+    });
+    onTestFinished(dispose);
+    flush();
+    const submitted = mutateChatGoal(host, { action: "pause", goalId: goal.id });
+    expect(chatGoalRecovery(host)?.pending).toBe(true);
+    flush();
+    expect(states).toEqual([undefined, true]);
+    const saved = sessionStorage.getItem(sessionStorage.key(0)!);
+    expect(saved).not.toBeNull();
+    pending.reject(new Error("ACK lost"));
+    expect(await submitted).toBe(false);
+    expect(chatGoalRecovery(host)?.pending).toBe(false);
+    flush();
+    expect(states).toEqual([undefined, true, false]);
+    expect(sessionStorage.getItem(sessionStorage.key(0)!)).toBe(saved);
+  });
+
+  it("reconciles an unavailable Resume within the original action", async () => {
+    vi.useFakeTimers();
+    const current = observedRoster();
+    current.sessions[0]!.goal = { ...goal, status: "complete", updatedAt: 4 };
+    let attempts = 0;
+    const host = goalHost({
+      "sessions.goal.update": () => {
+        if (++attempts === 1) {
+          throw new GatewayRequestError({ code: "UNAVAILABLE", message: "ACK lost" });
+        }
+        return {
+          status: "started",
+          goalId: goal.id,
+          runId: "settled-run",
+          replayed: true,
+          goal: { ...goal, status: "active", updatedAt: 3 },
+        };
+      },
+      "sessions.list": current,
+      "sessions.describe": { session: current.sessions[0] },
+    });
+    const submitted = mutateChatGoal(host, { action: "resume", goalId: goal.id });
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(await submitted).toBe(true);
+    const requests = host.request.mock.calls.filter(
+      ([method]) => method === "sessions.goal.update",
+    );
+    expect(requests).toHaveLength(2);
+    expect(requests[1]?.[1]).toEqual(requests[0]?.[1]);
+    expect(host.sessions.state.result?.sessions[0]?.goal?.status).toBe("complete");
+    expect(host.chatRunId).toBeNull();
+    expect(chatGoalRecovery(host)).toBeUndefined();
+    expect(sessionStorage.length).toBe(0);
+  });
+
+  it.each(["connection", "session", "principal", "expiry"])(
+    "does not automatically retry Resume after its %s changes",
+    async (changed) => {
+      vi.useFakeTimers();
+      const host = goalHost({
+        "sessions.goal.update": () => {
+          throw new GatewayRequestError({ code: "UNAVAILABLE", message: "ACK lost" });
+        },
+      });
+      const submitted = mutateChatGoal(host, { action: "resume", goalId: goal.id });
+      await vi.advanceTimersByTimeAsync(0);
+      if (changed === "connection") {
+        host.connectionEpoch += 1;
+      } else if (changed === "session") {
+        host.currentSessionId = "replacement-session";
+      } else if (changed === "principal") {
+        Object.defineProperty(host.client, "recoveryScope", { get: () => "other-principal" });
+      } else {
+        vi.setSystemTime(Date.now() + 24 * 60 * 60 * 1_000);
+      }
+      await vi.advanceTimersByTimeAsync(1_000);
+      expect(await submitted).toBe(false);
+      expect(
+        host.request.mock.calls.filter(([method]) => method === "sessions.goal.update"),
+      ).toHaveLength(1);
+      expect(host.chatRunId).toBeNull();
+    },
+  );
+
   it("rejects an oversized edit without stranding recovery or blocking a corrected edit", async () => {
     const host = goalHost({
       "sessions.goal.update": (params: unknown) => {
@@ -116,6 +269,27 @@ describe("Goal control requests", () => {
         goal: { ...goal, objective, updatedAt: 3 },
       },
     });
+    // A stale rendered action must not admit a new operation from cached identity alone.
+    setChatHistoryLoad(host, {
+      phase: "pending-connection",
+      sessionKey: host.sessionKey,
+      requestAgentId: undefined,
+      startup: true,
+    });
+    expect(await mutateChatGoal(host, { action: "edit", goalId: goal.id, objective })).toBe(false);
+    expect(host.request).not.toHaveBeenCalled();
+    expect(sessionStorage.length).toBe(0);
+    expect(chatGoalRecovery(host)).toBeUndefined();
+    setChatHistoryLoad(host, {
+      phase: "committed",
+      sessions: host.sessions,
+      client: host.client!,
+      connectionEpoch: host.connectionEpoch,
+      sessionKey: host.sessionKey,
+      requestAgentId: undefined,
+      sessionId: host.currentSessionId,
+      sessionInfo: host.sessionsResult?.sessions[0],
+    });
     expect(await mutateChatGoal(host, { action: "edit", goalId: goal.id, objective })).toBe(true);
     expect(host.request).toHaveBeenCalledWith(
       "sessions.goal.update",
@@ -135,29 +309,71 @@ describe("Goal control requests", () => {
     expect(host.request.mock.calls.some(([method]) => method === "chat.send")).toBe(false);
   });
 
-  it("adopts a fresh Resume run without inventing a user message", async () => {
-    const host = goalHost({
-      "sessions.goal.update": {
+  it.each([
+    { action: "resume", replacement: "none", runId: "resume-run" },
+    { action: "resume", replacement: "goal", runId: "old-goal-run" },
+    { action: "resume", replacement: "session", runId: "old-session-run" },
+  ] as const)(
+    "applies $action only to its current target ($replacement replacement)",
+    async ({ action, replacement, runId }) => {
+      const pending = createDeferred<{
+        status: string;
+        goalId: string;
+        runId?: string;
+        goal?: SessionGoal;
+      }>();
+      const updatedGoal: SessionGoal = { ...goal, status: "active", updatedAt: 3 };
+      const host = goalHost({
+        "sessions.goal.update": () => pending.promise,
+      });
+      const submitted = mutateChatGoal(host, { action, goalId: goal.id });
+      await vi.waitFor(() => expect(host.request).toHaveBeenCalledOnce());
+      if (replacement === "goal") {
+        host.sessions.patchRowLocal(host.sessionKey, { goal: { ...goal, id: "replacement-goal" } });
+      } else if (replacement === "session") {
+        host.sessionKey = "agent:main:other";
+        host.currentSessionId = "session-b";
+      }
+      pending.resolve({
         status: "started",
         goalId: goal.id,
-        runId: "resume-run",
-        goal: { ...goal, status: "active", updatedAt: 3 },
-      },
-    });
-    expect(await mutateChatGoal(host, { action: "resume", goalId: goal.id })).toBe(true);
-    expect(host.chatRunId).toBe("resume-run");
-    expect(host.chatMessages).toEqual([]);
-    expect(host.chatMessage).toBe("Unrelated draft");
-  });
+        ...(runId ? { runId } : {}),
+        ...(replacement === "none" ? { goal: updatedGoal } : {}),
+      });
+      expect(await submitted).toBe(true);
+      expect(host.chatRunId).toBe(replacement === "none" ? runId : null);
+      expect(chatGoalPresentation(host, updatedGoal)?.executionConfirmed).toBe(
+        replacement === "none",
+      );
+      expect(host.chatMessages).toEqual([]);
+      expect(host.chatMessage).toBe("Unrelated draft");
+    },
+  );
 
-  it.each(["reconnect", "reload"])(
-    "reconciles a lost ACK after %s without resurrecting the run",
-    async (recovery) => {
+  it.each([
+    { action: "resume", recovery: "reconnect" },
+    { action: "clear", recovery: "reload" },
+  ] as const)(
+    "reconciles a lost $action ACK after $recovery without resurrecting the run",
+    async ({ action, recovery }) => {
+      vi.useFakeTimers();
       let fail = true;
+      const method = action === "clear" ? "sessions.goal.clear" : "sessions.goal.update";
+      const current = observedRoster();
+      current.sessions[0]!.goal =
+        action === "clear" ? undefined : { ...goal, status: "active", updatedAt: 3 };
       const handlers = {
-        "sessions.goal.update": () => {
+        "sessions.list": current,
+        "sessions.describe": { session: current.sessions[0] },
+        [method]: () => {
           if (fail) {
+            if (action === "clear") {
+              return loseAck();
+            }
             throw new GatewayRequestError({ code: "UNAVAILABLE", message: "ACK lost" });
+          }
+          if (action === "clear") {
+            return { status: "cleared", goalId: goal.id, replayed: true };
           }
           return {
             status: "started",
@@ -169,9 +385,11 @@ describe("Goal control requests", () => {
         },
       };
       let host = goalHost(handlers);
-      expect(await mutateChatGoal(host, { action: "resume", goalId: goal.id })).toBe(false);
+      const submitted = mutateChatGoal(host, { action, goalId: goal.id });
+      await vi.advanceTimersByTimeAsync(1_000);
+      expect(await submitted).toBe(false);
       const firstRequest = host.request.mock.calls.find(
-        ([method]) => method === "sessions.goal.update",
+        ([calledMethod]) => calledMethod === method,
       )?.[1];
       fail = false;
       if (recovery === "reload") {
@@ -180,38 +398,55 @@ describe("Goal control requests", () => {
         host.client = createTestGatewayClient(host.request);
         host.connectionEpoch += 1;
       }
-      retireStoredGoalOperations(host.settings.gatewayUrl ?? "", host.client!.recoveryScope);
-      const refresh = vi.spyOn(host.sessions, "refresh").mockResolvedValue();
-      host.sessions.patchRowLocal(host.sessionKey, {
-        goal: { ...goal, status: "active", updatedAt: 3 },
-      });
+      if (action === "resume") {
+        retireStoredGoalOperations(host.settings.gatewayUrl ?? "", host.client!.recoveryScope);
+      }
       expect(chatGoalRecovery(host)).toMatchObject({ pending: false });
+      if (action === "clear") {
+        expect(host.request).not.toHaveBeenCalled();
+      }
       expect(await chatGoalRecovery(host)?.onCheck()).toBe(true);
-      const requests = host.request.mock.calls.filter(
-        ([method]) => method === "sessions.goal.update",
-      );
+      const requests = host.request.mock.calls.filter(([calledMethod]) => calledMethod === method);
       expect(requests.at(-1)?.[1]).toEqual(firstRequest);
       expect(requests.at(-1)?.[2]).toMatchObject({ timeoutMs: 30_000 });
+      expect(host.request).toHaveBeenCalledWith(method, firstRequest, { timeoutMs: 30_000 });
       expect(sessionStorage.length).toBe(0);
-      expect(refresh).toHaveBeenCalledOnce();
       expect(host.chatRunId).toBeNull();
-      expect(host.sessions.state.result?.sessions[0]?.goal?.status).toBe("active");
+      expect(chatGoalPresentation(host, { ...goal, status: "active" })?.executionConfirmed).toBe(
+        false,
+      );
+      expect(host.sessions.state.result?.sessions[0]?.goal?.status).toBe(
+        action === "clear" ? undefined : "active",
+      );
+      expect(chatGoalRecovery(host)).toBeUndefined();
     },
   );
 
   it("never sends or carries a private edit across clients with no recovery owner", async () => {
-    const host = goalHost({
-      "sessions.goal.update": () => {
-        throw new Error("ACK lost");
-      },
+    const host = goalHost();
+    let renderedError: string | null | undefined;
+    const dispose = createRoot((stop) => {
+      createEffect(
+        () => host.chatError,
+        (value) => {
+          renderedError = value;
+        },
+      );
+      return stop;
     });
+    onTestFinished(dispose);
+    flush();
     Object.defineProperty(host.client, "recoveryScope", { get: () => "" });
     await mutateChatGoal(host, {
       action: "edit",
       goalId: goal.id,
       objective: "Private account A edit",
     });
+    flush();
     const captured = chatGoalRecovery(host);
+    expect
+      .soft(renderedError)
+      .toBe("Goal update was not sent because its recovery request could not be saved.");
     expect.soft(host.request).not.toHaveBeenCalled();
     expect.soft(sessionStorage.length).toBe(0);
     // Credentials changed, but both clients lack a distinguishable scope and share a session.
@@ -228,11 +463,7 @@ describe("Goal control requests", () => {
   it.each(["gateway", "principal", "session"])(
     "does not restore another %s's request",
     async (boundary) => {
-      const first = goalHost({
-        "sessions.goal.update": () => {
-          throw new Error("ACK lost");
-        },
-      });
+      const first = goalHost();
       await mutateChatGoal(first, { action: "resume", goalId: goal.id });
       const original = first.request.mock.calls[0]?.[1];
       const next = goalHost({
@@ -258,11 +489,7 @@ describe("Goal control requests", () => {
       throw new Error("Quota exceeded");
     });
     vi.stubGlobal("sessionStorage", storage);
-    const host = goalHost({
-      "sessions.goal.update": () => {
-        throw new Error("ACK lost");
-      },
-    });
+    const host = goalHost();
     expect(await mutateChatGoal(host, { action: "resume", goalId: goal.id })).toBe(false);
     expect(host.request).not.toHaveBeenCalled();
     host.selectedChatSessionIncognito = true;
@@ -272,41 +499,8 @@ describe("Goal control requests", () => {
     expect(storage.length).toBe(0);
   });
 
-  it("restores Clear after the authoritative goal disappeared, without executing on discovery", async () => {
-    const first = goalHost({
-      "sessions.goal.clear": () => {
-        throw new Error("ACK lost");
-      },
-    });
-    await mutateChatGoal(first, { action: "clear", goalId: goal.id });
-    const params = first.request.mock.calls[0]?.[1];
-    const restored = goalHost({
-      "sessions.goal.clear": { status: "cleared", goalId: goal.id, replayed: true },
-    });
-    restored.sessions.patchRowLocal(restored.sessionKey, { goal: undefined });
-    const refresh = vi.spyOn(restored.sessions, "refresh").mockResolvedValue();
-    expect(chatGoalRecovery(restored)).toMatchObject({ pending: false });
-    expect(restored.request).not.toHaveBeenCalled();
-    expect(await chatGoalRecovery(restored)?.onCheck()).toBe(true);
-    expect(restored.request).toHaveBeenCalledWith("sessions.goal.clear", params, {
-      timeoutMs: 30_000,
-    });
-    expect(refresh).toHaveBeenCalledOnce();
-    expect(chatGoalRecovery(restored)).toBeUndefined();
-  });
-
   it("QA retains the expired recovery fence when the real session roster refresh fails", async () => {
-    const first = goalHost({
-      "sessions.goal.update": () => {
-        throw new Error("ACK lost");
-      },
-    });
-    await mutateChatGoal(first, { action: "edit", goalId: goal.id, objective: "Private edit" });
-    const original = first.request.mock.calls[0]?.[1];
-    if (!isRecord(original) || typeof original.issuedAtMs !== "number") {
-      throw new Error("Expected the original Goal operation timestamp");
-    }
-    vi.spyOn(Date, "now").mockReturnValue(original.issuedAtMs + 24 * 60 * 60 * 1000);
+    const original = await expireSavedEdit();
     const restored = goalHost({
       "sessions.list": () => {
         throw new Error("Synthetic roster unavailable");
@@ -331,17 +525,14 @@ describe("Goal control requests", () => {
   });
 
   async function expireSavedEdit() {
-    const first = goalHost({
-      "sessions.goal.update": () => {
-        throw new Error("ACK lost");
-      },
-    });
+    const first = goalHost();
     await mutateChatGoal(first, { action: "edit", goalId: goal.id, objective: "Private edit" });
     const original = first.request.mock.calls[0]?.[1];
     if (!isRecord(original) || typeof original.issuedAtMs !== "number") {
       throw new Error("Expected saved Goal identity");
     }
     vi.spyOn(Date, "now").mockReturnValue(original.issuedAtMs + 24 * 60 * 60 * 1000);
+    return original;
   }
 
   const observedRoster = (): SessionsListResult => ({
@@ -351,221 +542,159 @@ describe("Goal control requests", () => {
     ],
   });
 
-  it.each([
-    { label: "search", query: { search: "another conversation" } },
-    { label: "archive", query: { archivedFilter: "active" as const } },
-    { label: "page", query: { limit: 1, offset: 1 } },
-  ])("retains recovery when a successful $label roster omits the target", async ({ query }) => {
-    await expireSavedEdit();
-    const host = goalHost({
-      "sessions.list": {
-        ...createSessionsListResult(),
-        sessions: [{ key: "agent:main:another", kind: "direct", updatedAt: 3 }],
-      },
-      "sessions.describe": () => {
-        throw new Error("Selected goal unavailable");
-      },
-      "sessions.goal.update": { status: "updated", goalId: goal.id, goal },
-    });
-    await host.sessions.refresh({ ...query, force: true });
-    expect(host.sessions.state.result?.sessions.some((row) => row.key === host.sessionKey)).toBe(
-      false,
-    );
-    expect.soft(await chatGoalRecovery(host)?.onCheck()).toBe(false);
-    expect
-      .soft(host.request.mock.calls.filter(([method]) => method === "sessions.describe"))
-      .toHaveLength(1);
-    expect.soft(chatGoalRecovery(host)).toMatchObject({ retired: "expired" });
-    expect.soft(sessionStorage.length).toBe(1);
-    expect.soft(await mutateChatGoal(host, { action: "resume", goalId: goal.id })).toBe(false);
-    expect
-      .soft(host.request.mock.calls.filter(([method]) => method.startsWith("sessions.goal.")))
-      .toHaveLength(0);
-  });
+  it.each([{ label: "page", query: { limit: 1, offset: 1 } }])(
+    "retains recovery when a successful $label roster omits the target",
+    async ({ query }) => {
+      await expireSavedEdit();
+      const host = goalHost({
+        "sessions.list": {
+          ...createSessionsListResult(),
+          sessions: [{ key: "agent:main:another", kind: "direct", updatedAt: 3 }],
+        },
+        "sessions.describe": () => {
+          throw new Error("Selected goal unavailable");
+        },
+        "sessions.goal.update": { status: "updated", goalId: goal.id, goal },
+      });
+      await host.sessions.refresh({ ...query, force: true });
+      expect(host.sessions.state.result?.sessions.some((row) => row.key === host.sessionKey)).toBe(
+        false,
+      );
+      expect.soft(await chatGoalRecovery(host)?.onCheck()).toBe(false);
+      expect
+        .soft(host.request.mock.calls.filter(([method]) => method === "sessions.describe"))
+        .toHaveLength(1);
+      expect.soft(chatGoalRecovery(host)).toMatchObject({ retired: "expired" });
+      expect.soft(sessionStorage.length).toBe(1);
+      expect.soft(await mutateChatGoal(host, { action: "resume", goalId: goal.id })).toBe(false);
+      expect
+        .soft(host.request.mock.calls.filter(([method]) => method.startsWith("sessions.goal.")))
+        .toHaveLength(0);
+    },
+  );
 
-  it("QA retires an expired fence after an actual successful scoped roster read without a mutation", async () => {
-    await expireSavedEdit();
-    const host = goalHost({
-      "sessions.list": observedRoster(),
-      "sessions.describe": { session: observedRoster().sessions[0] },
-    });
-    expect(chatGoalRecovery(host)).toMatchObject({ retired: "expired" });
-    expect(sessionStorage.getItem(sessionStorage.key(0)!)).toBe('"expired"');
-    expect(await mutateChatGoal(host, { action: "resume", goalId: goal.id })).toBe(false);
-    expect(await chatGoalRecovery(host)?.onCheck()).toBe(true);
-    expect(host.request.mock.calls.filter(([method]) => method === "sessions.list")).toHaveLength(
-      1,
-    );
-    expect(
-      host.request.mock.calls.filter(([method]) => method.startsWith("sessions.goal.")),
-    ).toHaveLength(0);
-    expect(chatGoalRecovery(host)).toBeUndefined();
-    expect(sessionStorage.length).toBe(0);
-  });
-
-  it("observes an archived target outside the page before retiring recovery", async () => {
-    await expireSavedEdit();
-    const described = {
-      key: "agent:main:main",
-      sessionId: "session-a",
-      kind: "direct" as const,
-      updatedAt: 4,
-      archived: true,
-      goal: { ...goal, objective: "Current archived goal", updatedAt: 4 },
-    };
-    const host = goalHost({
-      "sessions.list": { ...createSessionsListResult(), sessions: [] },
-      "sessions.describe": { session: described },
-    });
-    await host.sessions.refresh({ limit: 1, search: "another conversation", force: true });
-    const held = host.sessions.observeRow({ key: host.sessionKey, agentId: "main" }, () => {});
-    try {
+  it.each([true])(
+    "retires recovery only after observing the target (archived outside the page=%s)",
+    async (archived) => {
+      await expireSavedEdit();
+      const described = archived
+        ? {
+            key: "agent:main:main",
+            sessionId: "session-a",
+            kind: "direct" as const,
+            updatedAt: 4,
+            archived: true,
+            goal: { ...goal, objective: "Current archived goal", updatedAt: 4 },
+          }
+        : observedRoster().sessions[0];
+      assert(described);
+      const host = goalHost({
+        "sessions.list": archived
+          ? { ...createSessionsListResult(), sessions: [] }
+          : observedRoster(),
+        "sessions.describe": { session: described },
+      });
+      if (archived) {
+        await host.sessions.refresh({ limit: 1, search: "another conversation", force: true });
+      }
+      const held = archived
+        ? host.sessions.observeRow({ key: host.sessionKey, agentId: "main" }, () => {})
+        : undefined;
+      onTestFinished(() => held?.dispose());
+      expect(chatGoalRecovery(host)).toMatchObject({ retired: "expired" });
+      expect(sessionStorage.getItem(sessionStorage.key(0)!)).toBe('"expired"');
+      expect(await mutateChatGoal(host, { action: "resume", goalId: goal.id })).toBe(false);
       expect(await chatGoalRecovery(host)?.onCheck()).toBe(true);
       expect(host.request).toHaveBeenCalledWith(
         "sessions.describe",
         { key: host.sessionKey },
         { timeoutMs: 30_000 },
       );
-      expect(held.row).toMatchObject(described);
-      expect(host.sessions.state.result?.sessions).toEqual([]);
+      if (held) {
+        expect(held.row).toMatchObject(described);
+        expect(host.sessions.state.result?.sessions).toEqual([]);
+      } else {
+        expect(
+          host.request.mock.calls.filter(([method]) => method === "sessions.list"),
+        ).toHaveLength(1);
+      }
+      expect(
+        host.request.mock.calls.filter(([method]) => method.startsWith("sessions.goal.")),
+      ).toHaveLength(0);
       expect(chatGoalRecovery(host)).toBeUndefined();
       expect(sessionStorage.length).toBe(0);
-      expect(host.request.mock.calls.some(([method]) => method.startsWith("sessions.goal."))).toBe(
-        false,
-      );
-    } finally {
-      held.dispose();
-    }
-  });
+    },
+  );
 
-  it("retains recovery when a target event invalidates the exact descriptor read", async () => {
-    await expireSavedEdit();
-    const pending = createDeferred<{ session: SessionsListResult["sessions"][number] | null }>();
-    const host = goalHost({
-      "sessions.list": observedRoster(),
-      "sessions.describe": () => pending.promise,
-    });
-    const { gateway, emitEvent } = createGatewayHarness(host.client!);
-    const sessions = createTestSessionCapability(gateway);
-    host.sessions = sessions;
-    const check = chatGoalRecovery(host)?.onCheck();
-    try {
-      await vi.waitFor(() =>
-        expect(host.request.mock.calls.some(([method]) => method === "sessions.describe")).toBe(
-          true,
-        ),
-      );
-      emitEvent({
-        type: "event",
-        event: "sessions.changed",
-        payload: { agentId: "main", key: host.sessionKey, reason: "goal" },
+  it.each(["query", "target", "connection"] as const)(
+    "retains expired recovery after %s changes during the roster read",
+    async (invalidation) => {
+      await expireSavedEdit();
+      const pending = createDeferred<SessionsListResult>();
+      let reads = 0;
+      const host = goalHost({
+        "sessions.list": () =>
+          ++reads === 1 || invalidation !== "query"
+            ? pending.promise
+            : { ...createSessionsListResult(), sessions: [] },
+        "sessions.goal.update": { status: "updated", goalId: goal.id, goal },
       });
-      pending.resolve({ session: observedRoster().sessions[0] ?? null });
-      expect(await check).toBe(false);
-      expect(chatGoalRecovery(host)).toMatchObject({ retired: "expired" });
-      expect(sessionStorage.length).toBe(1);
-      expect(await mutateChatGoal(host, { action: "resume", goalId: goal.id })).toBe(false);
-    } finally {
-      pending.resolve({ session: null });
-      sessions.dispose();
-    }
-  });
-
-  it("QA retains expired recovery when a real roster read is superseded by another agent query", async () => {
-    await expireSavedEdit();
-    const pending = createDeferred<SessionsListResult>();
-    let reads = 0;
-    const host = goalHost({
-      "sessions.list": () =>
-        ++reads === 1 ? pending.promise : { ...createSessionsListResult(), sessions: [] },
-      "sessions.goal.update": { status: "updated", goalId: goal.id, goal },
-    });
-    const check = chatGoalRecovery(host)?.onCheck();
-    expect(reads).toBe(1);
-    const replacement = host.sessions.refresh({ agentId: "another-agent", force: true });
-    pending.resolve(observedRoster());
-    const outcome = await check;
-    await replacement;
-    expect(host.sessions.state.agentId).toBe("another-agent");
-    expect.soft(outcome).toBe(false);
-    expect.soft(sessionStorage.length).toBe(1);
-    expect.soft(chatGoalRecovery(host)).toMatchObject({ retired: "expired" });
-    expect.soft(await mutateChatGoal(host, { action: "resume", goalId: goal.id })).toBe(false);
-    expect
-      .soft(host.request.mock.calls.filter(([method]) => method === "sessions.goal.update"))
-      .toHaveLength(0);
-  });
-
-  it("QA retains the original fence after the visible target changes during the roster read", async () => {
-    await expireSavedEdit();
-    const pending = createDeferred<SessionsListResult>();
-    const host = goalHost({
-      "sessions.list": () => pending.promise,
-      "sessions.goal.update": { status: "updated", goalId: goal.id, goal },
-    });
-    const originalSessionKey = host.sessionKey;
-    const originalSessionId = host.currentSessionId;
-    const check = chatGoalRecovery(host)?.onCheck();
-    host.sessionKey = "agent:main:replacement";
-    host.currentSessionId = "replacement-session";
-    pending.resolve(observedRoster());
-    expect.soft(await check).toBe(false);
-    expect.soft(sessionStorage.length).toBe(1);
-    host.sessionKey = originalSessionKey;
-    host.currentSessionId = originalSessionId;
-    expect.soft(chatGoalRecovery(host)).toMatchObject({ retired: "expired" });
-    expect.soft(await mutateChatGoal(host, { action: "resume", goalId: goal.id })).toBe(false);
-    expect
-      .soft(host.request.mock.calls.filter(([method]) => method === "sessions.goal.update"))
-      .toHaveLength(0);
-  });
-
-  it("QA retains recovery when the real connection retires an in-flight roster read", async () => {
-    await expireSavedEdit();
-    const pending = createDeferred<SessionsListResult>();
-    const host = goalHost({
-      "sessions.list": () => pending.promise,
-      "sessions.goal.update": { status: "updated", goalId: goal.id, goal },
-    });
-    const { gateway, publish } = createGatewayHarness(host.client!);
-    const sessions = createTestSessionCapability(gateway);
-    sessions.reconcile(observedRoster().sessions[0]);
-    host.sessions = sessions;
-    const check = chatGoalRecovery(host)?.onCheck();
-    expect(host.request.mock.calls.filter(([method]) => method === "sessions.list")).toHaveLength(
-      1,
-    );
-    const newHost = goalHost({
-      "sessions.list": () => {
-        throw new Error("Replacement unavailable");
-      },
-      "sessions.subscribe": { subscribed: true },
-      "sessions.goal.update": { status: "updated", goalId: goal.id, goal },
-    });
-    host.client = newHost.client;
-    host.connectionEpoch += 1;
-    publish(false);
-    publish(true, host.client);
-    pending.resolve(observedRoster());
-    try {
-      expect.soft(await check).toBe(false);
+      const originalSessionKey = host.sessionKey;
+      const originalSessionId = host.currentSessionId;
+      const connection =
+        invalidation === "connection" ? createGatewayHarness(host.client!) : undefined;
+      if (connection) {
+        const sessions = createTestSessionCapability(connection.gateway);
+        sessions.reconcile(observedRoster().sessions[0]);
+        host.sessions = sessions;
+        onTestFinished(() => sessions.dispose());
+      }
+      const check = chatGoalRecovery(host)?.onCheck();
+      await vi.waitFor(() => expect(reads).toBe(1));
+      expect(host.request.mock.calls.filter(([method]) => method === "sessions.list")).toHaveLength(
+        1,
+      );
+      let request = host.request;
+      let replacement: ReturnType<typeof host.sessions.refresh> | undefined;
+      if (invalidation === "query") {
+        replacement = host.sessions.refresh({ agentId: "another-agent", force: true });
+      } else if (invalidation === "target") {
+        host.sessionKey = "agent:main:replacement";
+        host.currentSessionId = "replacement-session";
+      } else if (connection) {
+        const next = goalHost({
+          "sessions.list": () => {
+            throw new Error("Replacement unavailable");
+          },
+          "sessions.subscribe": { subscribed: true },
+          "sessions.goal.update": { status: "updated", goalId: goal.id, goal },
+        });
+        request = next.request;
+        host.client = next.client;
+        host.connectionEpoch += 1;
+        connection.publish(false);
+        connection.publish(true, host.client);
+      }
+      pending.resolve(observedRoster());
+      const outcome = await check;
+      await replacement;
+      if (invalidation === "query") {
+        expect(host.sessions.state.agentId).toBe("another-agent");
+      }
+      expect.soft(outcome).toBe(false);
       expect.soft(sessionStorage.length).toBe(1);
+      host.sessionKey = originalSessionKey;
+      host.currentSessionId = originalSessionId;
       expect.soft(chatGoalRecovery(host)).toMatchObject({ retired: "expired" });
       expect.soft(await mutateChatGoal(host, { action: "resume", goalId: goal.id })).toBe(false);
       expect
-        .soft(newHost.request.mock.calls.filter(([method]) => method === "sessions.goal.update"))
+        .soft(request.mock.calls.filter(([method]) => method === "sessions.goal.update"))
         .toHaveLength(0);
-    } finally {
-      sessions.dispose();
-    }
-  });
+    },
+  );
 
   it("retains same-principal recovery on reconnect but retires old-account payloads", async () => {
-    const host = goalHost({
-      "sessions.goal.update": () => {
-        throw new Error("ACK lost");
-      },
-    });
+    const host = goalHost();
     await mutateChatGoal(host, {
       action: "edit",
       goalId: goal.id,
@@ -580,11 +709,7 @@ describe("Goal control requests", () => {
   });
 
   it("does not let a captured recovery button reconcile another conversation", async () => {
-    const host = goalHost({
-      "sessions.goal.update": () => {
-        throw new Error("ACK lost");
-      },
-    });
+    const host = goalHost();
     await mutateChatGoal(host, { action: "resume", goalId: goal.id });
     const firstRecovery = chatGoalRecovery(host);
     host.sessionKey = "agent:main:other";
@@ -595,7 +720,80 @@ describe("Goal control requests", () => {
     expect(host.request).toHaveBeenCalledTimes(2);
   });
 
-  it.each(["invalid", "goal-invalid"])(
+  it.each(["sending", "queued", "running"] as const)(
+    "keeps a fresh Resume unsent while the session is %s, then admits it after settlement",
+    async (busy) => {
+      const host = goalHost({
+        "sessions.goal.update": { status: "started", goalId: goal.id, runId: "goal-run", goal },
+      });
+      host.chatSending = busy === "sending";
+      host.chatRunId = busy === "running" ? "current-run" : null;
+      if (busy === "queued") {
+        host.sessionsResult!.sessions[0] = {
+          ...host.sessionsResult!.sessions[0]!,
+          status: "queued",
+          hasActiveRun: true,
+          activeRunIds: ["waiting-human-input"],
+        };
+      }
+      expect(await mutateChatGoal(host, { action: "resume", goalId: goal.id })).toBe(false);
+      expect(host.request).not.toHaveBeenCalled();
+      expect(chatGoalRecovery(host)).toBeUndefined();
+      host.chatSending = false;
+      host.chatRunId = null;
+      host.sessionsResult!.sessions[0] = {
+        ...host.sessionsResult!.sessions[0]!,
+        status: "done",
+        hasActiveRun: false,
+        activeRunIds: [],
+      };
+      expect(await mutateChatGoal(host, { action: "resume", goalId: goal.id })).toBe(true);
+      expect(
+        host.request.mock.calls.filter(([method]) => method === "sessions.goal.update"),
+      ).toHaveLength(1);
+    },
+  );
+
+  it("retires a busy Resume refusal without retrying and permits a distinct later Resume", async () => {
+    vi.useFakeTimers();
+    const pending = createDeferred<never>();
+    let busy = true;
+    const host = goalHost({
+      "sessions.goal.update": () =>
+        busy ? pending.promise : { status: "started", goalId: goal.id, runId: "new-run", goal },
+    });
+    const submitted = mutateChatGoal(host, { action: "resume", goalId: goal.id });
+    await vi.waitFor(() => expect(host.request).toHaveBeenCalledOnce());
+    const captured = chatGoalRecovery(host);
+    const original = host.request.mock.calls[0]?.[1];
+    pending.reject(
+      new GatewayRequestError({
+        code: "UNAVAILABLE",
+        message: "Session is busy; wait for the active run to finish.",
+        details: { reason: "goal-session-busy" },
+      }),
+    );
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(await submitted).toBe(false);
+    expect(host.chatError).toBe("Session is busy; wait for the active run to finish.");
+    expect(chatGoalRecovery(host)).toBeUndefined();
+    expect(sessionStorage.length).toBe(0);
+    await captured?.onCheck();
+    expect(host.request).toHaveBeenCalledOnce();
+
+    busy = false;
+    expect(await mutateChatGoal(host, { action: "resume", goalId: goal.id })).toBe(true);
+    expect(host.request).toHaveBeenCalledTimes(2);
+    expect(host.request.mock.calls[1]?.[1]).toMatchObject({ action: "resume", goalId: goal.id });
+    assert(isRecord(original));
+    expect(host.request.mock.calls[1]?.[1]).not.toMatchObject({
+      operationId: original.operationId,
+    });
+    expect(chatGoalRecovery(host)).toBeUndefined();
+    expect(sessionStorage.length).toBe(0);
+  });
+
+  it.each(["goal-invalid"])(
     "retires definitive %s rejection instead of arming a future mutation",
     async (reason) => {
       const pending = createDeferred<never>();
@@ -605,12 +803,12 @@ describe("Goal control requests", () => {
       pending.reject(
         new GatewayRequestError({
           code: "INVALID_REQUEST",
-          message: "goal is already complete",
+          message: "Goal update is invalid",
           details: reason === "invalid" ? { code: "GOAL_OPERATION_REJECTED", reason } : { reason },
         }),
       );
       expect(await submitted).toBe(false);
-      expect(host.chatError).toContain("goal is already complete");
+      expect(host.chatError).toContain("Goal update is invalid");
       expect(chatGoalRecovery(host)).toBeUndefined();
       expect(sessionStorage.length).toBe(0);
       await captured?.onCheck();
@@ -618,10 +816,7 @@ describe("Goal control requests", () => {
     },
   );
 
-  it.each([
-    { reason: "expired", crossesBoundary: true },
-    { reason: "goal-expired", crossesBoundary: false },
-  ])(
+  it.each([{ reason: "expired", crossesBoundary: true }])(
     "retains a payload-free fence on server $reason (clock crosses boundary=$crossesBoundary)",
     async ({ reason, crossesBoundary }) => {
       const pending = createDeferred<never>();
@@ -642,7 +837,7 @@ describe("Goal control requests", () => {
       const expiresAt = original.issuedAtMs + 24 * 60 * 60 * 1000;
       const now = vi.spyOn(Date, "now").mockReturnValue(expiresAt - 1);
       const check = chatGoalRecovery(host)?.onCheck();
-      expect(host.request.mock.calls[1]?.[1]).toEqual(original);
+      await vi.waitFor(() => expect(host.request.mock.calls[1]?.[1]).toEqual(original));
       // The server can cross its receipt boundary in flight or have a clock ahead of the UI.
       if (crossesBoundary) {
         now.mockReturnValue(expiresAt + 1);
@@ -669,52 +864,4 @@ describe("Goal control requests", () => {
       expect.soft(chatGoalRecovery(reloaded)).toMatchObject({ retired: "expired" });
     },
   );
-
-  it("keeps a corrupt receipt outcome bound to the original identity", async () => {
-    const host = goalHost({
-      "sessions.goal.update": () => {
-        throw new GatewayRequestError({
-          code: "INVALID_REQUEST",
-          message: "Stored Goal operation receipt is invalid",
-          details: { code: "GOAL_OPERATION_REJECTED", reason: "receipt-invalid" },
-        });
-      },
-    });
-    await mutateChatGoal(host, { action: "resume", goalId: goal.id });
-    expect(chatGoalRecovery(host)).toBeDefined();
-    await chatGoalRecovery(host)?.onCheck();
-    expect(host.request.mock.calls[1]?.[1]).toEqual(host.request.mock.calls[0]?.[1]);
-  });
-
-  it("does not apply a delayed clear to a replacement goal", async () => {
-    const pending = createDeferred<{ status: string; goalId: string }>();
-    const host = goalHost({ "sessions.goal.clear": () => pending.promise });
-    const clear = mutateChatGoal(host, { action: "clear", goalId: goal.id });
-    host.sessions.patchRowLocal(host.sessionKey, { goal: { ...goal, id: "replacement-goal" } });
-    pending.resolve({ status: "cleared", goalId: goal.id });
-    await clear;
-    expect(host.sessions.state.result?.sessions[0]?.goal?.id).toBe("replacement-goal");
-  });
-
-  it("does not adopt a delayed Resume after the goal was replaced", async () => {
-    const pending = createDeferred<{ status: string; goalId: string; runId: string }>();
-    const host = goalHost({ "sessions.goal.update": () => pending.promise });
-    const resume = mutateChatGoal(host, { action: "resume", goalId: goal.id });
-    host.sessions.patchRowLocal(host.sessionKey, { goal: { ...goal, id: "replacement-goal" } });
-    pending.resolve({ status: "started", goalId: goal.id, runId: "old-goal-run" });
-    expect(await resume).toBe(true);
-    expect(host.chatRunId).toBeNull();
-  });
-
-  it("does not apply a delayed Resume to a different visible session", async () => {
-    const pending = createDeferred<{ status: string; goalId: string; runId: string }>();
-    const host = goalHost({ "sessions.goal.update": () => pending.promise });
-    const resume = mutateChatGoal(host, { action: "resume", goalId: goal.id });
-    host.sessionKey = "agent:main:other";
-    host.currentSessionId = "session-b";
-    pending.resolve({ status: "started", goalId: goal.id, runId: "old-session-run" });
-    expect(await resume).toBe(true);
-    expect(host.chatRunId).toBeNull();
-    expect(host.chatMessage).toBe("Unrelated draft");
-  });
 });

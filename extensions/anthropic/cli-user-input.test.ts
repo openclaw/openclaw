@@ -1,11 +1,9 @@
 import type { CliBackendExecuteContext } from "openclaw/plugin-sdk/cli-backend";
-import { describe, expect, it, vi } from "vitest";
+import { expect, it, vi } from "vitest";
 import { createClaudeCliUserInputAuthorizer } from "./cli-user-input.js";
 
-function createContext(
-  requestUserInput: CliBackendExecuteContext["requestUserInput"],
-): CliBackendExecuteContext {
-  return {
+function authorizerFor(requestUserInput: CliBackendExecuteContext["requestUserInput"]) {
+  return createClaudeCliUserInputAuthorizer({
     command: "/usr/local/bin/claude",
     args: [],
     cwd: "/tmp",
@@ -15,242 +13,129 @@ function createContext(
     systemPrompt: "test",
     useResume: false,
     timeoutMs: 30_000,
-    requestToolPermission: vi.fn(async () => ({
-      behavior: "allow" as const,
-      updatedInput: {},
-    })),
+    requestToolPermission: async () => ({ behavior: "allow", updatedInput: {} }),
     requestUserInput,
-  };
+  });
 }
 
-const validOptions = [
-  { label: "A", description: "First option." },
-  { label: "B", description: "Second option." },
-];
-
+const options = (...labels: string[]) =>
+  labels.map((label) => ({ label, description: "Use " + label }));
+const validOptions = options("A", "B");
+const question = (overrides: Record<string, unknown> = {}) => ({
+  header: "Stack",
+  question: "Q?",
+  options: validOptions,
+  multiSelect: false,
+  ...overrides,
+});
+const malformed = (overrides: Record<string, unknown>) => ({ questions: [question(overrides)] });
+const mappedAnswers = (proof: string) => ({ "Runner?": "A", "Proof?": proof });
+const answered = (...proof: string[]) =>
+  vi.fn<CliBackendExecuteContext["requestUserInput"]>(async () => ({
+    status: "answered",
+    answers: { question_1: ["A"], question_2: proof },
+  }));
 const input = {
   questions: [
-    {
-      header: "Test stack",
-      question: "Which test runner should we use?",
-      options: [
-        { label: "Vitest", description: "Use the existing test stack." },
-        { label: "Node test", description: "Use the built-in runner." },
-      ],
-      multiSelect: false,
-    },
-    {
-      header: "Proof",
-      question: "Which proof should we collect?",
-      options: [
-        { label: "Unit tests", description: "Exercise the adapter." },
-        { label: "UI proof", description: "Capture the Control UI." },
-      ],
-      multiSelect: true,
-    },
+    question({ question: "Runner?" }),
+    question({ question: "Proof?", multiSelect: true }),
   ],
 };
-
-describe("Claude CLI user input adapter", () => {
-  it("maps Claude questions and answers while deduplicating the CLI callbacks", async () => {
-    const requestUserInput = vi.fn(async () => ({
-      status: "answered" as const,
-      answers: {
-        question_1: ["Vitest"],
-        question_2: ["Unit tests", "UI proof"],
-      },
-    }));
-    const authorizer = createClaudeCliUserInputAuthorizer(createContext(requestUserInput));
-    const signal = new AbortController().signal;
-
-    const first = authorizer.authorize({ input, signal, toolUseId: "claude-question-1" });
-    const second = authorizer.authorize({ input, signal, toolUseId: "claude-question-1" });
-
-    await expect(first).resolves.toEqual({
-      behavior: "allow",
-      updatedInput: {
-        ...input,
-        answers: {
-          "Which test runner should we use?": "Vitest",
-          "Which proof should we collect?": "Unit tests, UI proof",
-        },
-      },
-    });
-    await expect(second).resolves.toEqual(await first);
-    expect(requestUserInput).toHaveBeenCalledOnce();
-    expect(requestUserInput).toHaveBeenCalledWith({
-      toolName: "AskUserQuestion",
-      intro: "Claude needs input:",
-      toolCallId: "claude-question-1",
-      abortSignal: signal,
-      questions: [
-        {
-          id: "question_1",
-          header: "Test stack",
-          question: "Which test runner should we use?",
-          multiSelect: false,
-          isOther: true,
-          options: [
-            { label: "Vitest", description: "Use the existing test stack." },
-            { label: "Node test", description: "Use the built-in runner." },
-          ],
-        },
-        {
-          id: "question_2",
-          header: "Proof",
-          question: "Which proof should we collect?",
-          multiSelect: true,
-          isOther: true,
-          options: [
-            { label: "Unit tests", description: "Exercise the adapter." },
-            { label: "UI proof", description: "Capture the Control UI." },
-          ],
-        },
-      ],
-    });
+const allowed = (proof: string) => ({
+  behavior: "allow",
+  updatedInput: { ...input, answers: mappedAnswers(proof) },
+});
+const withDescription = (description: string) => [
+  { ...input.questions[0], options: [{ label: "A", description }, ...options("B")] },
+  input.questions[1],
+];
+const rejectedQuestions = (detail: string) => ({
+  behavior: "deny",
+  message: `OpenClaw rejected malformed Claude user questions: ${detail}. Correct the invalid field and retry AskUserQuestion.`,
+});
+function ask(
+  authorizer: ReturnType<typeof authorizerFor>,
+  payload: Record<string, unknown> = input,
+  toolUseId?: string,
+) {
+  return authorizer.authorize({ input: payload, toolUseId, signal: new AbortController().signal });
+}
+async function expectRejected(payload: Record<string, unknown>, field: string) {
+  const requestUserInput = vi.fn();
+  expect(await ask(authorizerFor(requestUserInput), payload)).toMatchObject({
+    behavior: "deny",
+    message: expect.stringContaining(field),
   });
+  expect(requestUserInput).not.toHaveBeenCalled();
+}
 
-  it("returns actionable denial guidance when the operator skips", async () => {
-    const authorizer = createClaudeCliUserInputAuthorizer(
-      createContext(
-        vi.fn(async () => ({
-          status: "cancelled" as const,
-          message: "The operator skipped this question.",
-        })),
-      ),
-    );
+it("maps single and multi-select questions and answers", async () => {
+  const requestUserInput = answered("A", "B");
+  await expect(ask(authorizerFor(requestUserInput))).resolves.toEqual(allowed("A, B"));
+  expect(requestUserInput.mock.calls[0]![0].questions).toMatchObject([
+    { id: "question_1", multiSelect: false, isOther: true },
+    { id: "question_2", multiSelect: true, isOther: true },
+  ]);
+});
 
-    await expect(
-      authorizer.authorize({ input, signal: new AbortController().signal }),
-    ).resolves.toEqual({
-      behavior: "deny",
-      message: "The operator skipped this question. Continue with your best judgment.",
-    });
+it.each([
+  ["an oversized description", "x".repeat(2_000), `${"x".repeat(1_023)}…`],
+  ["a surrogate at the boundary", `${"x".repeat(1_022)}🌍 tail`, `${"x".repeat(1_022)}…`],
+  ["the exact display limit", "x".repeat(1_024), "x".repeat(1_024)],
+])("preserves the question set and answers with %s", async (_case, description, displayed) => {
+  const requestUserInput = answered("A");
+  const payload = { questions: withDescription(description) };
+
+  const result = await ask(authorizerFor(requestUserInput), payload);
+
+  expect(payload.questions[0]!.options[0]!.description).toBe(description);
+  const questions = requestUserInput.mock.calls[0]![0].questions;
+  expect(questions).toHaveLength(2);
+  expect(questions[0]?.options?.[0]?.description).toBe(displayed);
+  expect(result).toMatchObject({ behavior: "allow" });
+});
+
+it("returns actionable denial guidance when the operator skips", async () => {
+  const authorizer = authorizerFor(async () => ({
+    status: "cancelled",
+    message: "The operator skipped this question.",
+  }));
+
+  await expect(ask(authorizer)).resolves.toEqual({
+    behavior: "deny",
+    message: "The operator skipped this question. Continue with your best judgment.",
   });
+});
 
-  it("guides a malformed question retry without replaying the rejected call", async () => {
-    const requestUserInput = vi.fn(async () => ({
-      status: "answered" as const,
-      answers: { question_1: ["Vitest"], question_2: ["Unit tests"] },
-    }));
-    const authorizer = createClaudeCliUserInputAuthorizer(createContext(requestUserInput));
-    const signal = new AbortController().signal;
-    const rejected = {
-      behavior: "deny",
-      message:
-        "OpenClaw rejected malformed Claude user questions: questions[0].header must be at most 12 characters. Correct the invalid field and retry AskUserQuestion.",
-    };
+it("guides a malformed question retry without replaying the rejected call", async () => {
+  const requestUserInput = answered("A");
+  const authorizer = authorizerFor(requestUserInput);
+  const rejected = rejectedQuestions("questions[0].header must be at most 12 characters");
+  const invalid = malformed({ header: "Too long for Claude" });
 
-    await expect(
-      authorizer.authorize({
-        input: { questions: [{ ...input.questions[0], header: "Too long for Claude" }] },
-        signal,
-        toolUseId: "rejected-question",
-      }),
-    ).resolves.toEqual(rejected);
-    await expect(
-      authorizer.authorize({ input, signal, toolUseId: "rejected-question" }),
-    ).resolves.toEqual(rejected);
-    expect(requestUserInput).not.toHaveBeenCalled();
+  await expect(ask(authorizer, invalid, "rejected-question")).resolves.toEqual(rejected);
+  await expect(ask(authorizer, input, "rejected-question")).resolves.toEqual(rejected);
+  expect(requestUserInput).not.toHaveBeenCalled();
 
-    await expect(
-      authorizer.authorize({ input, signal, toolUseId: "corrected-question" }),
-    ).resolves.toMatchObject({
-      behavior: "allow",
-      updatedInput: {
-        answers: {
-          "Which test runner should we use?": "Vitest",
-          "Which proof should we collect?": "Unit tests",
-        },
-      },
-    });
-    expect(requestUserInput).toHaveBeenCalledOnce();
-  });
+  await expect(ask(authorizer, input, "corrected-question")).resolves.toEqual(allowed("A"));
+  expect(requestUserInput).toHaveBeenCalledOnce();
+});
 
-  it.each([
-    ["missing questions array", {}, "questions must be an array of 1 to 4 questions"],
-    [
-      "too many questions",
-      {
-        questions: [
-          { header: "A", question: "Q?", options: validOptions, multiSelect: false },
-          { header: "B", question: "Q?", options: validOptions, multiSelect: false },
-          { header: "C", question: "Q?", options: validOptions, multiSelect: false },
-          { header: "D", question: "Q?", options: validOptions, multiSelect: false },
-          { header: "E", question: "Q?", options: validOptions, multiSelect: false },
-        ],
-      },
-      "questions must be an array of 1 to 4 questions",
-    ],
-    [
-      "non-boolean multiSelect",
-      {
-        questions: [{ header: "Stack", question: "Q?", options: validOptions, multiSelect: "no" }],
-      },
-      "questions[0].multiSelect must be a boolean",
-    ],
-    [
-      "too few options",
-      {
-        questions: [
-          {
-            header: "Stack",
-            question: "Q?",
-            options: [{ label: "A", description: "a" }],
-            multiSelect: false,
-          },
-        ],
-      },
-      "questions[0].options must be an array of 2 to 4 options",
-    ],
-    [
-      "empty option description",
-      {
-        questions: [
-          {
-            header: "Stack",
-            question: "Q?",
-            options: [
-              { label: "A", description: "a" },
-              { label: "B", description: "" },
-            ],
-            multiSelect: false,
-          },
-        ],
-      },
-      "questions[0].options[1].description must not be empty",
-    ],
-    [
-      "missing option label",
-      {
-        questions: [
-          {
-            header: "Stack",
-            question: "Q?",
-            options: validOptions.map((option) => ({ description: option.description })),
-            multiSelect: false,
-          },
-        ],
-      },
-      "questions[0].options[0].label must be a string",
-    ],
-    ["non-record question", { questions: ["not a question"] }, "questions[0] must be an object"],
-  ])(
-    "reports the failed constraint for %s without echoing payload text",
-    async (_case, malformedInput, expectedDetail) => {
-      const requestUserInput = vi.fn();
-      const authorizer = createClaudeCliUserInputAuthorizer(createContext(requestUserInput));
+it.each([
+  [undefined, "questions"],
+  [Array.from({ length: 5 }, () => question()), "questions"],
+  [["not a question"], "questions[0]"],
+] as const)("rejects invalid question lists: %j", async (questions, field) => {
+  await expectRejected({ questions }, field);
+});
 
-      const result = await authorizer.authorize({
-        input: malformedInput as Record<string, unknown>,
-        signal: new AbortController().signal,
-      });
-
-      expect(result).toEqual({
-        behavior: "deny",
-        message: `OpenClaw rejected malformed Claude user questions: ${expectedDetail}. Correct the invalid field and retry AskUserQuestion.`,
-      });
-      expect(requestUserInput).not.toHaveBeenCalled();
-    },
-  );
+it.each([
+  ["multiSelect", "no", "multiSelect"],
+  ["options", options("A"), "options"],
+  ["options", [...options("A"), { label: "B", description: "" }], "options[1].description"],
+  ["options", options("A".repeat(257), "B"), "options[0].label"],
+  ["question", "Q".repeat(4_097), "question"],
+  ["options", validOptions.map(({ description }) => ({ description })), "options[0].label"],
+] as const)("identifies invalid %s before asking the user", async (field, value, detail) => {
+  await expectRejected(malformed({ [field]: value }), `questions[0].${detail}`);
 });

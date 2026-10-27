@@ -1,41 +1,35 @@
 import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
 import { hasTerminalControl } from "../../../../packages/terminal-core/src/safe-text.js";
+import { shellEscapeBackslash as shellQuote } from "../../../../src/shared/shell-quote.js";
 import type { GatewaySessionRow } from "../../api/types.ts";
 
 const CLOUD_WORKSPACE_CONFLICT_TRANSCRIPT_TYPE = "cloud-workspace-conflict";
 const WORKSPACE_CONFLICT_VISIBLE_PATH_LIMIT = 5;
 
-export type WorkspaceResultConflict = {
-  paths: string[];
-  stagedResultRef: string;
-  totalCount?: number;
-};
+export type WorkspaceResultConflict = NonNullable<
+  ReturnType<typeof normalizeWorkspaceResultConflict>
+>;
 
 function isWorkspaceConflictPath(entryPath: string): boolean {
-  if (!entryPath || entryPath.startsWith("/") || entryPath.includes("\0")) {
-    return false;
-  }
-  return entryPath
-    .split("/")
-    .every((segment) => segment !== "" && segment !== "." && segment !== "..");
+  return (
+    !entryPath.includes("\0") &&
+    entryPath.split("/").every((segment) => segment !== "" && segment !== "." && segment !== "..")
+  );
 }
 
 export function workspaceConflictPathForDisplay(entryPath: string): string {
-  return Array.from(entryPath)
-    .map((character) => {
-      if (character === "\\") {
-        return "\\\\";
-      }
-      const codePoint = character.codePointAt(0);
-      return codePoint !== undefined &&
-        (codePoint <= 0x1f || (codePoint >= 0x7f && codePoint <= 0x9f))
-        ? `\\u{${codePoint.toString(16).padStart(4, "0")}}`
-        : character;
-    })
-    .join("");
+  return Array.from(entryPath, (character) => {
+    if (character === "\\") {
+      return "\\\\";
+    }
+    const codeUnit = character.charCodeAt(0);
+    return codeUnit <= 0x1f || (codeUnit >= 0x7f && codeUnit <= 0x9f)
+      ? `\\u{${codeUnit.toString(16).padStart(4, "0")}}`
+      : character;
+  }).join("");
 }
 
-function normalizeWorkspaceResultConflict(value: unknown): WorkspaceResultConflict | undefined {
+function normalizeWorkspaceResultConflict(value: unknown) {
   const record = asNullableRecord(value);
   if (!record || !Array.isArray(record.paths) || record.paths.length === 0) {
     return undefined;
@@ -92,10 +86,6 @@ export function visibleWorkspaceConflictPaths(conflict: WorkspaceResultConflict)
     paths,
     remaining: Math.max(0, workspaceConflictCount(conflict) - paths.length),
   };
-}
-
-function shellQuote(value: string): string {
-  return `'${value.replaceAll("'", `'\\''`)}'`;
 }
 
 export function workspaceConflictGitCommands(

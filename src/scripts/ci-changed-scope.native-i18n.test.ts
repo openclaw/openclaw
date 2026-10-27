@@ -3,24 +3,48 @@ import { describe, expect, it } from "vitest";
 const { assertNativeGeneratedArtifactsIsolated, shouldRunNativeI18n, shouldStrictNativeI18n } =
   await import("../../scripts/ci-changed-scope.mjs");
 
-describe("native i18n changed scope", () => {
-  it.each([
-    "scripts/android-app-i18n.ts",
-    "scripts/apple-app-i18n.ts",
-    "scripts/native-app-i18n.ts",
-    "scripts/native-i18n-locales.ts",
-  ])("routes native locale source %s without requiring generated parity", (sourcePath) => {
-    expect(shouldRunNativeI18n([sourcePath])).toBe(true);
-    expect(shouldStrictNativeI18n([sourcePath])).toBe(false);
-  });
+const nativeSource = "apps/.i18n/native-source.json";
+const androidLookup =
+  "apps/android/app/src/main/java/ai/openclaw/app/i18n/NativeStringResources.kt";
+const mainActivity = "apps/android/app/src/main/java/ai/openclaw/app/MainActivity.kt";
+const canonicalArtifacts = [
+  "apps/.i18n/native/sv.json",
+  "apps/android/app/src/main/res/values-sv/strings.xml",
+  "apps/android/wear/src/main/res/values-sv/strings.xml",
+  "apps/ios/Resources/Localizable.xcstrings",
+  "apps/macos/Sources/OpenClaw/Resources/Localizable.xcstrings",
+];
+const sharedOwners = [
+  "scripts/ci-changed-scope.mjs",
+  "scripts/native-app-i18n.ts",
+  "scripts/android-app-i18n.ts",
+  "test/scripts/native-app-i18n.test.ts",
+  "src/scripts/ci-changed-scope.native-i18n.test.ts",
+];
 
-  it("routes Android flavor sources through native i18n", () => {
-    expect(
-      shouldRunNativeI18n([
-        "apps/android/app/src/play/java/ai/openclaw/app/PlayBilling.kt",
-        "apps/android/app/src/thirdParty/res/values/accessibility_strings.xml",
-      ]),
-    ).toBe(true);
+function expectAllowed(paths: string[], branch?: string) {
+  expect(() => assertNativeGeneratedArtifactsIsolated(paths, branch)).not.toThrow();
+}
+
+function expectMixed(paths: string[]) {
+  expect(() => assertNativeGeneratedArtifactsIsolated(paths)).toThrow(
+    "Native generated locale artifacts must be isolated from source changes",
+  );
+}
+
+describe("native i18n changed scope", () => {
+  it.each<[string[] | null, boolean]>([
+    [["scripts/native-app-i18n.ts"], false],
+    [["scripts/native-i18n-inventory.ts"], false],
+    [["apps/android/app/src/play/java/ai/openclaw/app/PlayBilling.kt"], false],
+    [["apps/android/app/src/thirdParty/res/values/accessibility_strings.xml"], false],
+    [["apps/ios/Sources/RootTabs.swift", nativeSource], false],
+    [null, true],
+    ...canonicalArtifacts.map((file): [string[], boolean] => [[file], true]),
+    [["apps/android/app/src/thirdParty/res/values-sv/accessibility_strings.xml"], true],
+  ])("routes %j with strict parity %s", (paths, strict) => {
+    expect(shouldRunNativeI18n(paths)).toBe(true);
+    expect(shouldStrictNativeI18n(paths)).toBe(strict);
   });
 
   it("keeps generated artifacts in isolated automation PRs", () => {
@@ -29,97 +53,53 @@ describe("native i18n changed scope", () => {
       "apps/android/app/src/main/res/values/assistant.xml",
     ];
     const generatedPaths = [
-      "apps/.i18n/native/sv.json",
-      "apps/android/app/src/main/java/ai/openclaw/app/i18n/NativeStringResources.kt",
-      "apps/android/app/src/main/res/values-sv/strings.xml",
+      ...canonicalArtifacts,
+      androidLookup,
       "apps/android/app/src/thirdParty/res/values-sv/accessibility_strings.xml",
-      "apps/android/wear/src/main/res/values-sv/strings.xml",
-      "apps/ios/Resources/Localizable.xcstrings",
-      "apps/macos/Sources/OpenClaw/Resources/Localizable.xcstrings",
       "apps/ios/WatchApp/sv.lproj/InfoPlist.strings",
     ];
 
-    expect(() => assertNativeGeneratedArtifactsIsolated(generatedPaths)).not.toThrow();
-    expect(() =>
-      assertNativeGeneratedArtifactsIsolated([...generatedPaths, ...generatedCompanionPaths]),
-    ).not.toThrow();
-    expect(() =>
-      assertNativeGeneratedArtifactsIsolated([...generatedPaths, "apps/.i18n/native-source.json"]),
-    ).toThrow("Native generated locale artifacts must be isolated from source changes");
-    expect(() =>
-      assertNativeGeneratedArtifactsIsolated(
-        [...generatedPaths, "apps/ios/Sources/RootTabs.swift"],
-        "main",
-      ),
-    ).not.toThrow();
-    expect(() =>
-      assertNativeGeneratedArtifactsIsolated([
-        ...generatedCompanionPaths,
-        "apps/.i18n/native-source.json",
-      ]),
-    ).not.toThrow();
-    expect(() =>
-      assertNativeGeneratedArtifactsIsolated([
-        ...generatedPaths,
-        ...generatedCompanionPaths,
-        "apps/.i18n/native-source.json",
-      ]),
-    ).toThrow("Native generated locale artifacts must be isolated from source changes");
-    expect(() =>
-      assertNativeGeneratedArtifactsIsolated([
-        ...generatedPaths,
-        ...generatedCompanionPaths,
-        "apps/android/app/src/main/java/ai/openclaw/app/MainActivity.kt",
-      ]),
-    ).toThrow("Native generated locale artifacts must be isolated from source changes");
+    expectAllowed(generatedPaths);
+    expectAllowed([...generatedPaths, ...generatedCompanionPaths]);
+    expectAllowed([...generatedPaths, "apps/ios/Sources/RootTabs.swift"], "main");
+    expectAllowed([...generatedCompanionPaths, nativeSource]);
+    expectMixed([...generatedPaths, ...generatedCompanionPaths, nativeSource]);
   });
 
   it("allows only the owner-complete one-time native v2 artifact migration", () => {
-    const owners = [
+    const migration = [
       ".gitattributes",
-      "scripts/ci-changed-scope.mjs",
-      "scripts/native-app-i18n.ts",
-      "scripts/android-app-i18n.ts",
+      ...sharedOwners,
       "scripts/apple-app-i18n.ts",
-      "test/scripts/native-app-i18n.test.ts",
       "test/scripts/apple-app-i18n.test.ts",
-      "src/scripts/ci-changed-scope.native-i18n.test.ts",
+      nativeSource,
+      ...canonicalArtifacts,
     ];
-    const generated = [
-      "apps/.i18n/native/sv.json",
-      "apps/android/app/src/main/res/values-sv/strings.xml",
-      "apps/android/wear/src/main/res/values-sv/strings.xml",
-      "apps/ios/Resources/Localizable.xcstrings",
-      "apps/macos/Sources/OpenClaw/Resources/Localizable.xcstrings",
-    ];
-    const migration = [...owners, "apps/.i18n/native-source.json", ...generated];
 
-    expect(() => assertNativeGeneratedArtifactsIsolated(migration)).not.toThrow();
-    expect(() => assertNativeGeneratedArtifactsIsolated(migration.slice(1))).toThrow(
-      "Native generated locale artifacts must be isolated from source changes",
-    );
-    expect(() =>
-      assertNativeGeneratedArtifactsIsolated([
-        ...migration,
-        "apps/android/app/src/main/java/ai/openclaw/app/i18n/NativeStringResources.kt",
-      ]),
-    ).toThrow("Native generated locale artifacts must be isolated from source changes");
+    expectAllowed(migration);
+    expectMixed(migration.slice(1));
+    expectMixed([...migration, androidLookup]);
   });
 
-  it("runs strict parity only for manual or generated-artifact checks", () => {
-    expect(shouldStrictNativeI18n(null)).toBe(true);
-    expect(shouldStrictNativeI18n(["apps/.i18n/native/sv.json"])).toBe(true);
-    expect(
-      shouldStrictNativeI18n([
-        "apps/android/app/src/thirdParty/res/values-sv/accessibility_strings.xml",
-      ]),
-    ).toBe(true);
-    expect(shouldStrictNativeI18n(["apps/ios/Resources/Localizable.xcstrings"])).toBe(true);
-    expect(
-      shouldStrictNativeI18n(["apps/macos/Sources/OpenClaw/Resources/Localizable.xcstrings"]),
-    ).toBe(true);
-    expect(
-      shouldStrictNativeI18n(["apps/ios/Sources/RootTabs.swift", "apps/.i18n/native-source.json"]),
-    ).toBe(false);
+  it("admits the Android projection retirement only with its complete input migration", () => {
+    const migration = [
+      androidLookup,
+      ".github/workflows/native-app-locale-refresh.yml",
+      nativeSource,
+      "apps/android/app/build.gradle.kts",
+      ...sharedOwners,
+      "test/scripts/android-app-i18n.test.ts",
+      "apps/.i18n/native/de.json",
+      "apps/android/app/src/main/res/values-de/strings.xml",
+    ];
+    expectAllowed(migration);
+    for (const incomplete of [
+      migration.slice(1),
+      migration.filter((filePath) => filePath !== "apps/android/app/build.gradle.kts"),
+      [...migration, "apps/ios/Resources/Localizable.xcstrings"],
+      [...migration, mainActivity],
+    ]) {
+      expectMixed(incomplete);
+    }
   });
 });

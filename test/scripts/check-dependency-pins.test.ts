@@ -1,8 +1,7 @@
-// Check Dependency Pins tests cover check dependency pins script behavior.
 import { execFileSync } from "node:child_process";
 import { mkdirSync, rmSync, writeFileSync } from "node:fs";
 import path from "node:path";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, expect, it, vi } from "vitest";
 import { collectDependencyPinViolations } from "../../scripts/check-dependency-pins.mts";
 import { cleanupTempDirs, makeTempDir as makeTempRepoRoot } from "../helpers/temp-dir.js";
 import { createNestedGitEnv } from "../helpers/temp-repo.js";
@@ -10,6 +9,7 @@ import { createNestedGitEnv } from "../helpers/temp-repo.js";
 const tempDirs: string[] = [];
 const itUnix = process.platform === "win32" ? it.skip : it;
 const hangingGitTimeoutMs = 1_000;
+const revision = "0123456789abcdef0123456789abcdef01234567";
 
 function git(cwd: string, args: string[]) {
   execFileSync("git", args, {
@@ -19,8 +19,8 @@ function git(cwd: string, args: string[]) {
   });
 }
 
-function writeJson(filePath: string, value: unknown) {
-  writeFileSync(filePath, `${JSON.stringify(value, null, 2)}\n`, "utf8");
+function violations(file: string, section: string, specs: [string, string][]) {
+  return specs.map(([name, spec]) => ({ file, section, name, spec }));
 }
 
 function stubHangingGit(cwd: string, stalledSubcommand: "ls-files" | "show") {
@@ -40,9 +40,18 @@ fi
   vi.stubEnv("PATH", `${binDir}${path.delimiter}${process.env.PATH ?? ""}`);
 }
 
-function makeRepo() {
+function makeRepo(manifests: Record<string, unknown> = { "package.json": {} }, workspace?: string) {
   const dir = makeTempRepoRoot(tempDirs, "openclaw-dependency-pins-");
   git(dir, ["init", "-q", "--initial-branch=main"]);
+  for (const [file, value] of Object.entries(manifests)) {
+    const target = path.join(dir, file);
+    mkdirSync(path.dirname(target), { recursive: true });
+    writeFileSync(target, JSON.stringify(value));
+  }
+  if (workspace) {
+    writeFileSync(path.join(dir, "pnpm-workspace.yaml"), workspace);
+  }
+  git(dir, ["add", "."]);
   return dir;
 }
 
@@ -51,36 +60,27 @@ afterEach(() => {
   cleanupTempDirs(tempDirs);
 });
 
-describe("check-dependency-pins", () => {
-  it("accepts exact dependency specs and intentionally ranged peer contracts", () => {
-    const dir = makeRepo();
-    writeJson(path.join(dir, "package.json"), {
-      dependencies: {
-        exact: "1.2.3",
-        prerelease: "1.2.3-beta.1",
-        alias: "npm:@scope/real-package@2.3.4",
-        workspace: "workspace:*",
-        linked: "link:../linked",
-        local: "file:../local",
-        gitPinned: "github:owner/repo#0123456789abcdef0123456789abcdef01234567",
-        gitPinnedPath:
-          "github:owner/repo#0123456789abcdef0123456789abcdef01234567&path:packages/pkg",
-        tarballPinned:
-          "https://codeload.github.com/owner/repo/tar.gz/0123456789abcdef0123456789abcdef01234567",
+it("accepts exact dependency specs and intentionally ranged peer contracts", () => {
+  const dir = makeRepo(
+    {
+      "package.json": {
+        dependencies: {
+          exact: "1.2.3",
+          prerelease: "1.2.3-beta.1",
+          alias: "npm:@scope/real-package@2.3.4",
+          workspace: "workspace:*",
+          linked: "link:../linked",
+          local: "file:../local",
+          gitPinned: `github:owner/repo#${revision}`,
+          gitPinnedPath: `github:owner/repo#${revision}&path:packages/pkg`,
+          tarballPinned: `https://codeload.github.com/owner/repo/tar.gz/${revision}`,
+        },
+        devDependencies: { devExact: "4.5.6" },
+        optionalDependencies: { optionalExact: "7.8.9" },
+        peerDependencies: { peerCanRange: "^1.0.0" },
       },
-      devDependencies: {
-        devExact: "4.5.6",
-      },
-      optionalDependencies: {
-        optionalExact: "7.8.9",
-      },
-      peerDependencies: {
-        peerCanRange: "^1.0.0",
-      },
-    });
-    writeFileSync(
-      path.join(dir, "pnpm-workspace.yaml"),
-      `overrides:
+    },
+    `overrides:
   exact: 1.2.3
   alias: "npm:@scope/real-package@2.3.4"
   parent>unused-adapter: "-"
@@ -89,17 +89,14 @@ packageExtensions:
     dependencies:
       child: 3.2.1
 `,
-      "utf8",
-    );
-    git(dir, ["add", "package.json", "pnpm-workspace.yaml"]);
+  );
 
-    expect(collectDependencyPinViolations(dir)).toEqual([]);
-  });
+  expect(collectDependencyPinViolations(dir)).toEqual([]);
+});
 
-  it("rejects floating dependency specs in tracked package manifests", () => {
-    const dir = makeRepo();
-    mkdirSync(path.join(dir, "extensions", "demo"), { recursive: true });
-    writeJson(path.join(dir, "package.json"), {
+it("rejects floating dependency specs in tracked package manifests", () => {
+  const dir = makeRepo({
+    "package.json": {
       dependencies: {
         caret: "^1.2.3",
         tilde: "~1.2.3",
@@ -108,113 +105,64 @@ packageExtensions:
         broad: ">=1 <2",
         malformedSemver: "01.2.3",
         gitFloating: "github:owner/repo#main",
-        fragmentlessGitPath:
-          "git+https://github.com/owner/repo/commit/0123456789abcdef0123456789abcdef01234567",
+        fragmentlessGitPath: `git+https://github.com/owner/repo/commit/${revision}`,
         invalidRemoval: "-",
       },
-    });
-    writeJson(path.join(dir, "extensions", "demo", "package.json"), {
-      devDependencies: {
-        devCaret: "^4.5.6",
-      },
-      optionalDependencies: {
-        optionalTilde: "~7.8.9",
-      },
-      peerDependencies: {
-        peerCanRange: "^10.0.0",
-      },
-    });
-    git(dir, ["add", "package.json", "extensions/demo/package.json"]);
-
-    expect(collectDependencyPinViolations(dir)).toEqual([
-      {
-        file: "extensions/demo/package.json",
-        section: "devDependencies",
-        name: "devCaret",
-        spec: "^4.5.6",
-      },
-      {
-        file: "extensions/demo/package.json",
-        section: "optionalDependencies",
-        name: "optionalTilde",
-        spec: "~7.8.9",
-      },
-      { file: "package.json", section: "dependencies", name: "caret", spec: "^1.2.3" },
-      { file: "package.json", section: "dependencies", name: "tilde", spec: "~1.2.3" },
-      { file: "package.json", section: "dependencies", name: "wildcard", spec: "*" },
-      { file: "package.json", section: "dependencies", name: "tag", spec: "latest" },
-      { file: "package.json", section: "dependencies", name: "broad", spec: ">=1 <2" },
-      {
-        file: "package.json",
-        section: "dependencies",
-        name: "malformedSemver",
-        spec: "01.2.3",
-      },
-      {
-        file: "package.json",
-        section: "dependencies",
-        name: "gitFloating",
-        spec: "github:owner/repo#main",
-      },
-      {
-        file: "package.json",
-        section: "dependencies",
-        name: "fragmentlessGitPath",
-        spec: "git+https://github.com/owner/repo/commit/0123456789abcdef0123456789abcdef01234567",
-      },
-      { file: "package.json", section: "dependencies", name: "invalidRemoval", spec: "-" },
-    ]);
-  });
-
-  it("reads tracked package manifests from the index when sparse checkout omits them", () => {
-    const dir = makeRepo();
-    mkdirSync(path.join(dir, "qa", "convex-credential-broker"), { recursive: true });
-    writeJson(path.join(dir, "package.json"), {});
-    writeJson(path.join(dir, "qa", "convex-credential-broker", "package.json"), {
-      dependencies: {
-        exact: "1.2.3",
-      },
-    });
-    git(dir, ["add", "package.json", "qa/convex-credential-broker/package.json"]);
-    rmSync(path.join(dir, "qa"), { recursive: true, force: true });
-
-    expect(collectDependencyPinViolations(dir)).toEqual([]);
-  });
-
-  itUnix("terminates a SIGTERM-resistant git ls-files at the dependency-pin timeout", () => {
-    const dir = makeTempRepoRoot(tempDirs, "openclaw-dependency-pins-ls-files-timeout-");
-    stubHangingGit(dir, "ls-files");
-
-    expect(() =>
-      collectDependencyPinViolations(dir, { gitTimeoutMs: hangingGitTimeoutMs }),
-    ).toThrow(
-      `dependency pin guard: git ls-files -z -- *package.json timed out after ${hangingGitTimeoutMs}ms.`,
-    );
-  });
-
-  itUnix(
-    "terminates a SIGTERM-resistant sparse-index git show at the dependency-pin timeout",
-    () => {
-      const dir = makeRepo();
-      writeJson(path.join(dir, "package.json"), {});
-      git(dir, ["add", "package.json"]);
-      rmSync(path.join(dir, "package.json"));
-      stubHangingGit(dir, "show");
-
-      expect(() =>
-        collectDependencyPinViolations(dir, { gitTimeoutMs: hangingGitTimeoutMs }),
-      ).toThrow(
-        `dependency pin guard: git show :package.json timed out after ${hangingGitTimeoutMs}ms.`,
-      );
     },
-  );
+    "extensions/demo/package.json": {
+      devDependencies: { devCaret: "^4.5.6" },
+      optionalDependencies: { optionalTilde: "~7.8.9" },
+      peerDependencies: { peerCanRange: "^10.0.0" },
+    },
+  });
 
-  it("rejects floating workspace overrides and package extension dependencies", () => {
-    const dir = makeRepo();
-    writeJson(path.join(dir, "package.json"), {});
-    writeFileSync(
-      path.join(dir, "pnpm-workspace.yaml"),
-      `overrides:
+  expect(collectDependencyPinViolations(dir)).toEqual([
+    ...violations("extensions/demo/package.json", "devDependencies", [["devCaret", "^4.5.6"]]),
+    ...violations("extensions/demo/package.json", "optionalDependencies", [
+      ["optionalTilde", "~7.8.9"],
+    ]),
+    ...violations("package.json", "dependencies", [
+      ["caret", "^1.2.3"],
+      ["tilde", "~1.2.3"],
+      ["wildcard", "*"],
+      ["tag", "latest"],
+      ["broad", ">=1 <2"],
+      ["malformedSemver", "01.2.3"],
+      ["gitFloating", "github:owner/repo#main"],
+      ["fragmentlessGitPath", `git+https://github.com/owner/repo/commit/${revision}`],
+      ["invalidRemoval", "-"],
+    ]),
+  ]);
+});
+
+it("reads tracked package manifests from the index when sparse checkout omits them", () => {
+  const dir = makeRepo({
+    "package.json": {},
+    "qa/convex-credential-broker/package.json": { dependencies: { exact: "1.2.3" } },
+  });
+  rmSync(path.join(dir, "qa"), { recursive: true, force: true });
+
+  expect(collectDependencyPinViolations(dir)).toEqual([]);
+});
+
+itUnix.each(["ls-files", "show"] as const)("terminates SIGTERM-resistant git %s", (command) => {
+  const dir =
+    command === "show"
+      ? makeRepo()
+      : makeTempRepoRoot(tempDirs, "openclaw-dependency-pins-timeout-");
+  if (command === "show") {
+    rmSync(path.join(dir, "package.json"));
+  }
+  stubHangingGit(dir, command);
+  expect(() => collectDependencyPinViolations(dir, { gitTimeoutMs: hangingGitTimeoutMs })).toThrow(
+    `dependency pin guard: git ${command === "show" ? "show :package.json" : "ls-files -z -- *package.json"} timed out after ${hangingGitTimeoutMs}ms.`,
+  );
+});
+
+it("rejects floating workspace overrides and package extension dependencies", () => {
+  const dir = makeRepo(
+    undefined,
+    `overrides:
   exact: 1.2.3
   floating: ^2.0.0
 packageExtensions:
@@ -223,23 +171,12 @@ packageExtensions:
       exact-child: 3.2.1
       floating-child: ~4.0.0
 `,
-      "utf8",
-    );
-    git(dir, ["add", "package.json", "pnpm-workspace.yaml"]);
+  );
 
-    expect(collectDependencyPinViolations(dir)).toEqual([
-      {
-        file: "pnpm-workspace.yaml",
-        section: "overrides",
-        name: "floating",
-        spec: "^2.0.0",
-      },
-      {
-        file: "pnpm-workspace.yaml",
-        section: "packageExtensions.parent@1.0.0.dependencies",
-        name: "floating-child",
-        spec: "~4.0.0",
-      },
-    ]);
-  });
+  expect(collectDependencyPinViolations(dir)).toEqual([
+    ...violations("pnpm-workspace.yaml", "overrides", [["floating", "^2.0.0"]]),
+    ...violations("pnpm-workspace.yaml", "packageExtensions.parent@1.0.0.dependencies", [
+      ["floating-child", "~4.0.0"],
+    ]),
+  ]);
 });

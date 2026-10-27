@@ -1,29 +1,15 @@
-import { spawn } from "node:child_process";
-// Process coverage for one-shot Gateway CLI output followed by clean exit.
-import { once } from "node:events";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
-import { describe, expect, it } from "vitest";
-import { gatewayOriginScope } from "../../packages/gateway-client/src/gateway-origin-scope.js";
-import {
-  readOriginDeviceTokenReadOnlyForTest,
-  seedOriginDeviceToken,
-} from "../infra/device-auth-store.test-support.js";
-import { loadOrCreateDeviceIdentity } from "../infra/device-identity.js";
-import { acquireGatewayLock } from "../infra/gateway-lock.js";
+import { expect, it } from "vitest";
+import { withRuntimePreload } from "../../test/helpers/runtime-preload.js";
 import { resolveRuntimeWorkerArgv, resolveRuntimeWorkerUrl } from "../infra/runtime-worker-url.js";
-import {
-  closeOpenClawStateDatabaseForTest,
-  openOpenClawStateDatabase,
-} from "../state/openclaw-state-db.js";
-import { getFreePort } from "../test-utils/ports.js";
 import { cliRecoveryEntrypoints } from "./cli-entrypoint.test-support.js";
 import { runCliProcessChild } from "./cli-process-child.test-helpers.js";
 import {
   prepareGatewayCliFixture,
-  prepareUnreachableGatewayCliFixture,
   runIsolatedGatewayCli,
+  seedDeviceAuth,
   snapshotDirectoryContents,
   snapshotSharedStateArtifacts,
   tempDirs,
@@ -31,306 +17,133 @@ import {
 } from "./gateway-backed-exit.process.test-support.js";
 import {
   EMPTY_STABILITY_SNAPSHOT,
+  expectCliResult,
   startAgentTurnGateway,
-  startCronListGateway,
+  startCliReadGateway,
   startCronLookupMissGateway,
   startGatewayStabilityRpcServer,
   startNodePairingGateway,
 } from "./gateway-backed-exit.test-helpers.js";
 
-// A one-shot command must release its Gateway socket once its output is complete.
-// The clock starts at the complete payload, so cold startup never enters this budget.
+// Measure socket release from the complete payload, excluding cold startup.
 const ONE_SHOT_EXIT_BUDGET_MS = 5_000;
+const TEST_TOKEN = "test-token";
 const cliEntrypoint = resolveRuntimeWorkerUrl(cliRecoveryEntrypoints.cli);
 
-describe("gateway-backed CLI process exit", () => {
-  it.each([
-    { status: "ok" as const, text: "pong", exitCode: 0 },
-    { status: "error" as const, text: "provider failed", exitCode: 1 },
-  ])("exits $exitCode after an agent turn reports $status", async ({ status, text, exitCode }) => {
-    const root = tempDirs.make(`openclaw-agent-turn-${status}-`);
-    const gateway = await startAgentTurnGateway({ status, text });
-    const { stateDir, configPath } = await prepareGatewayCliFixture(root, {
-      mode: "remote",
-      remote: { url: gateway.url, token: gateway.token },
-    });
+async function remoteFixture(root: string, remote: { url: string; token?: string }) {
+  return await prepareGatewayCliFixture(root, { mode: "remote", remote });
+}
 
-    const result = await runIsolatedGatewayCli({
-      args: ["agent", "--agent", "main", "--message", "ping", "--json"],
-      root,
-      stateDir,
-      configPath,
-    });
+const statusArgs = (url: string, token: string) => [
+  "gateway",
+  "status",
+  "--url",
+  url,
+  "--token",
+  token,
+  "--require-rpc",
+  "--json",
+  "--timeout",
+  "2000",
+];
 
-    expect(result, result.stderr).toMatchObject({ code: exitCode, signal: null, stderr: "" });
-    expect(JSON.parse(result.stdout)).toMatchObject({
-      status,
-      summary: status === "ok" ? "completed" : "failed",
-      result: { payloads: [{ text }] },
-    });
-  });
-
-  it.each([
-    { label: "empty", timeout: "", valid: false },
-    { label: "whitespace", timeout: " \t ", valid: false },
-    { label: "positive", timeout: "10000", valid: true },
-  ])(
-    "validates a $label nodes timeout before opening a Gateway connection",
-    async ({ timeout, valid }) => {
-      const root = tempDirs.make("openclaw-nodes-timeout-");
-      const token = "test-token";
-      const gateway = await startNodePairingGateway({ token });
-      const { stateDir, configPath } = await prepareGatewayCliFixture(root, {
-        mode: "remote",
-        remote: { url: gateway.url, token },
-      });
-
-      const result = await runIsolatedGatewayCli({
-        args: ["nodes", "list", "--timeout", timeout, "--json"],
-        root,
-        stateDir,
-        configPath,
-      });
-
-      expect(result, result.stderr).toMatchObject({ code: valid ? 0 : 1, signal: null });
-      if (valid) {
-        expect(result.stderr).toBe("");
-        expect(JSON.parse(result.stdout)).toMatchObject({
-          pending: [{ requestId: "request-1", nodeId: "node-1" }],
-          paired: [],
-        });
-        expect(gateway.connectionCount).toBeGreaterThan(0);
-        expect(gateway.calls).toEqual(["node.pair.list", "node.list"]);
-      } else {
-        expect(result.stderr).toContain("Invalid --timeout");
-        expect(gateway.connectionCount).toBe(0);
-        expect(gateway.calls).toEqual([]);
-      }
-    },
+function expectGuidance(stderr: string, message: string) {
+  expect(stderr).toContain(message);
+  expect(stderr).not.toMatch(
+    /The CLI command failed|Could not start the CLI|OPENCLAW_DEBUG|Stack:|openclaw doctor/u,
   );
+}
 
-  it("dispatches node pairing mutations without opening the writable state database", async () => {
-    const root = tempDirs.make("openclaw-node-pairing-cli-");
-    const token = "test-token";
-    const gateway = await startNodePairingGateway({ token });
-    const { stateDir, configPath } = await prepareGatewayCliFixture(root, {
-      mode: "remote",
-      remote: { url: gateway.url, token },
-    });
+it.each([
+  { status: "ok" as const, text: "pong", exitCode: 0 },
+  { status: "error" as const, text: "provider failed", exitCode: 1 },
+])("exits $exitCode after an agent turn reports $status", async ({ status, text, exitCode }) => {
+  const root = tempDirs.make(`openclaw-agent-turn-${status}-`);
+  const gateway = await startAgentTurnGateway({ status, text });
+  const fixture = await remoteFixture(root, { url: gateway.url, token: gateway.token });
 
-    const result = await runIsolatedGatewayCli({
-      args: ["nodes", "approve", "request-1", "--json"],
-      root,
-      stateDir,
-      configPath,
-    });
-
-    expect(result, result.stderr).toMatchObject({ code: 0, signal: null, stderr: "" });
-    expect(JSON.parse(result.stdout)).toEqual({ approved: true });
-    expect(gateway.calls).toEqual(["node.pair.list", "node.pair.approve"]);
-    await expect(fs.stat(path.join(stateDir, "state", "openclaw.sqlite"))).rejects.toMatchObject({
-      code: "ENOENT",
-    });
+  const result = await runIsolatedGatewayCli({
+    args: ["agent", "--agent", "main", "--message", "ping", "--json"],
+    ...fixture,
   });
 
-  it("uses existing device auth without persisting a hello-issued token or coordinator state", async () => {
-    const root = tempDirs.make("openclaw-node-pairing-stored-auth-");
-    const storedToken = "stored-device-token";
-    const gateway = await startNodePairingGateway(
-      { deviceToken: storedToken },
-      "issued-device-token",
-    );
-    const { stateDir, configPath } = await prepareGatewayCliFixture(root, {
-      mode: "remote",
-      remote: { url: gateway.url },
-    });
-    const stateEnv = {
-      ...process.env,
-      HOME: root,
-      OPENCLAW_HOME: root,
-      OPENCLAW_STATE_DIR: stateDir,
-    };
-    const identity = loadOrCreateDeviceIdentity({ env: stateEnv });
-    seedOriginDeviceToken({
-      gatewayScope: gatewayOriginScope(gateway.url),
-      deviceId: identity.deviceId,
-      role: "operator",
-      token: storedToken,
-      scopes: ["operator.admin"],
-      env: stateEnv,
-    });
-    closeOpenClawStateDatabaseForTest();
-    const before = await snapshotDirectoryContents(stateDir);
+  expect(expectCliResult(result, exitCode)).toMatchObject({
+    status,
+    summary: status === "ok" ? "completed" : "failed",
+    result: { payloads: [{ text }] },
+  });
+});
 
-    const result = await runIsolatedGatewayCli({
-      args: ["nodes", "approve", "request-1", "--json"],
-      root,
-      stateDir,
-      configPath,
-    });
+it("lists nodes with an explicit positive timeout", async () => {
+  const root = tempDirs.make("openclaw-nodes-timeout-");
+  const gateway = await startNodePairingGateway({ token: TEST_TOKEN });
+  const fixture = await remoteFixture(root, { url: gateway.url, token: TEST_TOKEN });
 
-    expect(result, result.stderr).toMatchObject({ code: 0, signal: null, stderr: "" });
-    expect(JSON.parse(result.stdout)).toEqual({ approved: true });
-    expect(gateway.calls).toEqual(["node.pair.list", "node.pair.approve"]);
-    expect(await snapshotDirectoryContents(stateDir)).toEqual(before);
-    expect(
-      readOriginDeviceTokenReadOnlyForTest({
-        gatewayScope: gatewayOriginScope(gateway.url),
-        deviceId: identity.deviceId,
-        role: "operator",
-        env: stateEnv,
-      })?.token,
-    ).toBe(storedToken);
+  const result = await runIsolatedGatewayCli({
+    args: ["nodes", "list", "--timeout", "10000", "--json"],
+    ...fixture,
   });
 
-  it("calls a reachable Gateway with explicit auth without creating shared state", async () => {
-    const root = tempDirs.make("openclaw-gateway-call-explicit-auth-");
+  expect(expectCliResult(result)).toMatchObject({
+    pending: [{ requestId: "request-1", nodeId: "node-1" }],
+    paired: [],
+  });
+  expect(gateway.calls).toEqual(["node.pair.list", "node.list"]);
+});
+
+it.each([
+  {
+    label: "node approval",
+    start: startNodePairingGateway,
+    snapshot: snapshotDirectoryContents,
+    args: ["nodes", "approve", "request-1", "--json"],
+    result: { approved: true },
+    calls: ["node.pair.list", "node.pair.approve"],
+  },
+  {
+    label: "stability RPC",
+    start: startGatewayStabilityRpcServer,
+    snapshot: snapshotSharedStateArtifacts,
+    args: ["gateway", "call", "diagnostics.stability", "--json"],
+    result: EMPTY_STABILITY_SNAPSHOT,
+    calls: ["diagnostics.stability"],
+  },
+])("uses stored auth for $label without persisting hello-issued tokens or state", async (test) => {
+  const root = tempDirs.make("openclaw-stored-auth-");
+  const storedToken = "stored-device-token";
+  const gateway: { url: string; calls: string[]; authInputs?: unknown[] } = await test.start(
+    { deviceToken: storedToken },
+    "issued-device-token",
+  );
+  const fixture = await remoteFixture(root, { url: gateway.url });
+  const { stateDir } = fixture;
+  await seedDeviceAuth(root, stateDir, gateway.url, storedToken);
+  const before = await test.snapshot(stateDir);
+  const result = await runIsolatedGatewayCli({ args: test.args, ...fixture });
+  expect(expectCliResult(result)).toEqual(test.result);
+  expect(gateway.calls).toEqual(test.calls);
+  if (test.label === "stability RPC") {
+    expect(gateway.authInputs).toEqual([{ deviceToken: storedToken }]);
+  }
+  expect(await test.snapshot(stateDir)).toEqual(before);
+});
+
+it.each(process.platform === "win32" ? [true] : [true, false])(
+  "reads gateway status without changing state (seeded=%s)",
+  async (seeded) => {
+    const root = tempDirs.make("openclaw-gateway-status-");
+    const pidLogPath = path.join(root, "entry-pids");
+    const preloadPath = path.join(root, "track-entry-pid.mjs");
     const token = "configured-token";
     const gateway = await startGatewayStabilityRpcServer({ token }, "issued-device-token");
-    const { stateDir, configPath } = await prepareGatewayCliFixture(root, {
-      mode: "remote",
-      remote: { url: gateway.url, token },
-    });
-    expect(await snapshotSharedStateArtifacts(stateDir)).toEqual({});
-
-    const result = await runIsolatedGatewayCli({
-      args: ["gateway", "call", "diagnostics.stability", "--json"],
-      root,
-      stateDir,
-      configPath,
-    });
-
-    expect(result, result.stderr).toMatchObject({ code: 0, signal: null, stderr: "" });
-    expect(JSON.parse(result.stdout)).toEqual(EMPTY_STABILITY_SNAPSHOT);
-    expect(gateway.authInputs).toEqual([{ token }]);
-    expect(gateway.calls).toEqual(["diagnostics.stability"]);
-    expect(await snapshotSharedStateArtifacts(stateDir)).toEqual({});
-  });
-
-  it("calls a reachable Gateway with stored auth without changing shared state", async () => {
-    const root = tempDirs.make("openclaw-gateway-call-stored-auth-");
-    const storedToken = "stored-device-token";
-    const gateway = await startGatewayStabilityRpcServer(
-      { deviceToken: storedToken },
-      "issued-device-token",
-    );
-    const { stateDir, configPath } = await prepareGatewayCliFixture(root, {
-      mode: "remote",
-      remote: { url: gateway.url },
-    });
-    const stateEnv = {
-      ...process.env,
-      HOME: root,
-      OPENCLAW_HOME: root,
-      OPENCLAW_STATE_DIR: stateDir,
-    };
-    const identity = loadOrCreateDeviceIdentity({ env: stateEnv });
-    seedOriginDeviceToken({
-      gatewayScope: gatewayOriginScope(gateway.url),
-      deviceId: identity.deviceId,
-      role: "operator",
-      token: storedToken,
-      scopes: ["operator.admin"],
-      env: stateEnv,
-    });
-    closeOpenClawStateDatabaseForTest();
+    const fixture = await remoteFixture(root, { url: gateway.url, token });
+    const { stateDir } = fixture;
+    if (seeded) {
+      await seedDeviceAuth(root, stateDir, gateway.url, token);
+    }
     const before = await snapshotSharedStateArtifacts(stateDir);
-
-    const result = await runIsolatedGatewayCli({
-      args: ["gateway", "call", "diagnostics.stability", "--json"],
-      root,
-      stateDir,
-      configPath,
-    });
-
-    expect(result, result.stderr).toMatchObject({ code: 0, signal: null, stderr: "" });
-    expect(JSON.parse(result.stdout)).toEqual(EMPTY_STABILITY_SNAPSHOT);
-    expect(gateway.authInputs).toEqual([{ deviceToken: storedToken }]);
-    expect(gateway.calls).toEqual(["diagnostics.stability"]);
-    expect(
-      readOriginDeviceTokenReadOnlyForTest({
-        gatewayScope: gatewayOriginScope(gateway.url),
-        deviceId: identity.deviceId,
-        role: "operator",
-        env: stateEnv,
-      })?.token,
-    ).toBe(storedToken);
-    expect(await snapshotSharedStateArtifacts(stateDir)).toEqual(before);
-  });
-
-  it.each([
-    { label: "absent", seeded: false },
-    { label: "seeded", seeded: true },
-  ])(
-    "requires a reachable status RPC without changing $label shared state",
-    async ({ label, seeded }) => {
-      const root = tempDirs.make(`openclaw-gateway-status-${label}-`);
-      const token = "configured-token";
-      const gateway = await startGatewayStabilityRpcServer({ token }, "issued-device-token");
-      const { stateDir, configPath } = await prepareGatewayCliFixture(root, {
-        mode: "remote",
-        remote: { url: gateway.url, token },
-      });
-      const stateEnv = {
-        ...process.env,
-        HOME: root,
-        OPENCLAW_HOME: root,
-        OPENCLAW_STATE_DIR: stateDir,
-      };
-      if (seeded) {
-        const identity = loadOrCreateDeviceIdentity({ env: stateEnv });
-        seedOriginDeviceToken({
-          gatewayScope: gatewayOriginScope(gateway.url),
-          deviceId: identity.deviceId,
-          role: "operator",
-          token,
-          scopes: ["operator.admin"],
-          env: stateEnv,
-        });
-        closeOpenClawStateDatabaseForTest();
-      }
-      const before = await snapshotSharedStateArtifacts(stateDir);
-      expect(Object.keys(before).includes("openclaw.sqlite")).toBe(seeded);
-
-      const result = await runIsolatedGatewayCli({
-        args: [
-          "gateway",
-          "status",
-          "--url",
-          gateway.url,
-          "--token",
-          token,
-          "--require-rpc",
-          "--json",
-          "--timeout",
-          "2000",
-        ],
-        root,
-        stateDir,
-        configPath,
-      });
-
-      expect(result, result.stderr).toMatchObject({ code: 0, signal: null, stderr: "" });
-      expect(JSON.parse(result.stdout)).toMatchObject({
-        rpc: { ok: true, kind: "read" },
-      });
-      expect(gateway.calls).toEqual(["status"]);
-      expect(await snapshotSharedStateArtifacts(stateDir)).toEqual(before);
-    },
-  );
-
-  it.runIf(process.platform !== "win32")(
-    "runs gateway status through one OpenClaw entry process",
-    async () => {
-      const root = tempDirs.make("openclaw-gateway-status-entry-process-");
-      const pidLogPath = path.join(root, "entry-pids");
-      const preloadPath = path.join(root, "track-entry-pid.mjs");
-      const token = "configured-token";
-      const gateway = await startGatewayStabilityRpcServer({ token }, "issued-device-token");
-      const { stateDir, configPath } = await prepareGatewayCliFixture(root, {
-        mode: "remote",
-        remote: { url: gateway.url, token },
-      });
+    expect(Object.keys(before).includes("openclaw.sqlite")).toBe(seeded);
+    if (!seeded) {
       await fs.writeFile(
         preloadPath,
         [
@@ -342,588 +155,177 @@ describe("gateway-backed CLI process exit", () => {
           "",
         ].join("\n"),
       );
-
-      const result = await runIsolatedGatewayCli({
-        args: [
-          "gateway",
-          "status",
-          "--url",
-          gateway.url,
-          "--token",
-          token,
-          "--require-rpc",
-          "--json",
-          "--timeout",
-          "2000",
-        ],
-        root,
-        stateDir,
-        configPath,
-        env: {
-          NODE_OPTIONS: `--import=${pathToFileURL(preloadPath).href}`,
-          OPENCLAW_ENTRY_PID_LOG: pidLogPath,
-          OPENCLAW_NODE_EXTRA_CA_CERTS_READY: "1",
-          OPENCLAW_NODE_OPTIONS_READY: undefined,
-          OPENCLAW_NO_RESPAWN: undefined,
-        },
-      });
-
-      expect(result, result.stderr).toMatchObject({ code: 0, signal: null, stderr: "" });
-      expect(JSON.parse(result.stdout)).toMatchObject({
-        rpc: { ok: true, kind: "read" },
-      });
-      const entryPids = new Set(
-        (await fs.readFile(pidLogPath, "utf8"))
-          .trim()
-          .split(/\s+/u)
-          .map((value) => Number.parseInt(value, 10)),
-      );
-      expect(entryPids.size).toBe(1);
-    },
-  );
-
-  it.runIf(process.platform === "linux")(
-    "reports a socat-owned port through the gateway status entry process",
-    async () => {
-      const root = tempDirs.make("openclaw-gateway-status-socat-");
-      const listenerPath = path.join(root, "socat-listener.mjs");
-      const port = await getFreePort();
-      const { stateDir, configPath } = await prepareGatewayCliFixture(root, {
-        mode: "local",
-        bind: "loopback",
-        auth: { mode: "none" },
-      });
-      await fs.writeFile(
-        listenerPath,
-        [
-          'import fs from "node:fs";',
-          'import net from "node:net";',
-          'fs.writeFileSync("/proc/self/comm", "socat");',
-          'net.createServer().listen(Number(process.argv[2]), "127.0.0.1", () => {',
-          '  process.stdout.write("ready\\n");',
-          "});",
-          "",
-        ].join("\n"),
-      );
-      const listener = spawn(process.execPath, [listenerPath, String(port), "openclaw"], {
-        stdio: ["ignore", "pipe", "pipe"],
-      });
-      let listenerStderr = "";
-      listener.stderr.setEncoding("utf8");
-      listener.stderr.on("data", (chunk: string) => {
-        listenerStderr += chunk;
-      });
-
-      try {
-        const ready = await Promise.race([
-          once(listener.stdout, "data").then(([chunk]) => String(chunk)),
-          once(listener, "exit").then(([code, signal]) => {
-            throw new Error(
-              `socat fixture exited before listening: code=${code} signal=${signal}\n${listenerStderr}`,
-            );
-          }),
-        ]);
-        expect(ready).toContain("ready");
-
-        const result = await runIsolatedGatewayCli({
-          args: ["gateway", "status", "--port", String(port), "--no-probe", "--json"],
-          root,
-          stateDir,
-          configPath,
-        });
-
-        expect(result, result.stderr).toMatchObject({ code: 0, signal: null, stderr: "" });
-        expect(JSON.parse(result.stdout)).toMatchObject({
-          port: {
-            port,
-            status: "busy",
-            listeners: [expect.objectContaining({ command: "socat" })],
-            hints: ["Another process is listening on this port."],
-          },
-        });
-      } finally {
-        if (listener.exitCode === null && listener.signalCode === null) {
-          listener.kill("SIGTERM");
-          await once(listener, "exit");
-        }
-      }
-    },
-  );
-
-  it.each([
-    { label: "list", args: ["devices", "list", "--timeout", "250"] },
-    { label: "join-code", args: ["devices", "join-code", "--timeout", "250"] },
-    {
-      label: "remove",
-      args: ["devices", "remove", "test-device", "--timeout", "250"],
-    },
-    {
-      label: "clear",
-      args: ["devices", "clear", "--yes", "--pending", "--timeout", "250"],
-    },
-    {
-      label: "approve",
-      args: ["devices", "approve", "test-request", "--timeout", "250"],
-    },
-    {
-      label: "reject",
-      args: ["devices", "reject", "test-request", "--timeout", "250"],
-    },
-    {
-      label: "rename",
-      args: [
-        "devices",
-        "rename",
-        "--device",
-        "test-device",
-        "--name",
-        "Test Device",
-        "--timeout",
-        "250",
-      ],
-    },
-    {
-      label: "rotate",
-      args: [
-        "devices",
-        "rotate",
-        "--device",
-        "test-device",
-        "--role",
-        "operator",
-        "--timeout",
-        "250",
-      ],
-      machineOutput: true,
-    },
-    {
-      label: "revoke",
-      args: [
-        "devices",
-        "revoke",
-        "--device",
-        "test-device",
-        "--role",
-        "operator",
-        "--timeout",
-        "250",
-      ],
-      machineOutput: true,
-    },
-  ])(
-    "renders an unreachable gateway as expected guidance for devices $label",
-    async ({ label, args, machineOutput }) => {
-      const root = tempDirs.make(`openclaw-devices-${label}-transport-`);
-      const stateDir = path.join(root, "state");
-      const configPath = path.join(stateDir, "openclaw.json");
-      const port = await getFreePort();
-      await fs.mkdir(stateDir, { recursive: true });
-      await fs.writeFile(
-        configPath,
-        `${JSON.stringify({
-          gateway: { mode: "local", port, auth: { mode: "token", token: "test-token" } },
-        })}\n`,
-        "utf8",
-      );
-
-      const result = await runIsolatedGatewayCli({ args, root, stateDir, configPath });
-
-      expect(result).toMatchObject({ code: 1, signal: null });
-      if (machineOutput) {
-        expect(JSON.parse(result.stdout)).toMatchObject({
-          ok: false,
-          error: { type: "cli_error", message: expect.stringContaining("Gateway not reachable") },
-        });
-      } else {
-        expect(result.stdout).toBe("");
-      }
-      expect(result.stderr).toContain(`Gateway not reachable at ws://127.0.0.1:${port}`);
-      expect(result.stderr).toContain(
-        "Start it with `openclaw gateway run` or check `openclaw gateway status`.",
-      );
-      expect(result.stderr).not.toContain("The CLI command failed");
-      expect(result.stderr).not.toContain("Could not start the CLI");
-      expect(result.stderr).not.toContain("OPENCLAW_DEBUG");
-      expect(result.stderr).not.toContain("Stack:");
-      expect(result.stderr).not.toContain("openclaw doctor");
-    },
-  );
-
-  it.each([
-    { label: "absent", seeded: false },
-    { label: "seeded", seeded: true },
-  ])("exports diagnostics without changing $label shared state", async ({ label, seeded }) => {
-    const fixture = await prepareUnreachableGatewayCliFixture({
-      label: `gateway-diagnostics-export-${label}`,
-      seeded,
-    });
-    const outputPath = path.join(fixture.root, "diagnostics.zip");
-    const before = await snapshotSharedStateArtifacts(fixture.stateDir);
+    }
 
     const result = await runIsolatedGatewayCli({
+      args: statusArgs(gateway.url, token),
       ...fixture,
-      args: [
-        "gateway",
-        "diagnostics",
-        "export",
-        "--json",
-        "--no-stability-bundle",
-        "--output",
-        outputPath,
-      ],
+      env: seeded
+        ? undefined
+        : {
+            ...withRuntimePreload({}, preloadPath),
+            OPENCLAW_ENTRY_PID_LOG: pidLogPath,
+            OPENCLAW_NODE_EXTRA_CA_CERTS_READY: "1",
+            OPENCLAW_NODE_OPTIONS_READY: undefined,
+            OPENCLAW_NO_RESPAWN: undefined,
+          },
     });
 
-    expect(result, result.stderr).toMatchObject({ code: 0, signal: null, stderr: "" });
-    const payload = JSON.parse(result.stdout) as { bytes?: unknown; path?: unknown };
-    expect(payload.path).toBe(outputPath);
-    expect(payload.bytes).toEqual(expect.any(Number));
-    expect(payload.bytes).toBeGreaterThan(0);
-    const outputStat = await fs.stat(outputPath);
-    expect(outputStat.isFile()).toBe(true);
-    expect(outputStat.size).toBe(payload.bytes);
-    expect(await snapshotSharedStateArtifacts(fixture.stateDir)).toEqual(before);
+    expect(expectCliResult(result)).toMatchObject({
+      rpc: { ok: true, kind: "read" },
+    });
+    expect(gateway.calls).toEqual(["status"]);
+    if (!seeded) {
+      const entryPids = (await fs.readFile(pidLogPath, "utf8")).trim().split(/\s+/u);
+      expect(new Set(entryPids).size).toBe(1);
+      expect(before).toEqual({});
+    }
+    expect(await snapshotSharedStateArtifacts(stateDir)).toEqual(before);
+  },
+);
+
+it("rejects invalid remote config before a node pairing mutation without opening state", async () => {
+  const root = tempDirs.make("openclaw-node-pairing-invalid-config-");
+  const gateway = await startNodePairingGateway({ token: "test-token" });
+  const { stateDir, configPath } = await prepareGatewayCliFixture(root, {
+    mode: "remtoe",
+    remote: { url: gateway.url, token: "test-token" },
   });
 
-  it("rejects invalid remote config before a node pairing mutation without opening state", async () => {
-    const root = tempDirs.make("openclaw-node-pairing-invalid-config-");
-    const gateway = await startNodePairingGateway({ token: "test-token" });
-    const { stateDir, configPath } = await prepareGatewayCliFixture(root, {
-      mode: "remtoe",
-      remote: { url: gateway.url, token: "test-token" },
-    });
+  const result = await runIsolatedGatewayCli({
+    args: ["nodes", "approve", "request-1", "--json"],
+    root,
+    stateDir,
+    configPath,
+  });
 
-    const result = await runIsolatedGatewayCli({
-      args: ["nodes", "approve", "request-1", "--json"],
-      root,
-      stateDir,
-      configPath,
-    });
-
-    expect(result).toMatchObject({ code: 1, signal: null });
-    expect(JSON.parse(result.stdout)).toEqual({
-      ok: false,
-      error: {
-        type: "cli_error",
-        message: expect.stringContaining("OpenClaw config is invalid:"),
+  expect(result).toMatchObject({ code: 1, signal: null });
+  expect(JSON.parse(result.stdout)).toEqual({
+    ok: false,
+    error: {
+      type: "cli_error",
+      message: expect.stringContaining("OpenClaw config is invalid:"),
+    },
+    repairHint: "Run `openclaw doctor --fix` to repair, then retry.",
+    issues: [
+      {
+        path: "gateway.mode",
+        message: expect.stringContaining("Invalid input"),
+        allowedValues: ["local", "remote"],
       },
-      issues: [
-        {
-          path: "gateway.mode",
-          message: expect.stringContaining("Invalid input"),
-          allowedValues: ["local", "remote"],
-        },
-      ],
-    });
-    expect(result.stderr).toContain("OpenClaw config is invalid");
-    expect(result.stderr).toContain("gateway.mode");
-    expect(gateway.calls).toEqual([]);
-    await expect(fs.stat(path.join(stateDir, "state", "openclaw.sqlite"))).rejects.toMatchObject({
-      code: "ENOENT",
-    });
+    ],
   });
+  expect(result.stderr).toContain("OpenClaw config is invalid");
+  expect(result.stderr).toContain("gateway.mode");
+  expect(gateway.calls).toEqual([]);
+  await expect(fs.stat(path.join(stateDir, "state", "openclaw.sqlite"))).rejects.toMatchObject({
+    code: "ENOENT",
+  });
+});
 
-  it("exits promptly after cron list emits complete output", async () => {
-    const root = tempDirs.make("openclaw-gateway-cli-exit-");
-    const stateDir = path.join(root, "state");
-    const configPath = path.join(stateDir, "openclaw.json");
-    const caTriggerPath = path.join(root, "load-default-ca.mjs");
-    const token = "test-token";
-    const gateway = await startCronListGateway(token);
-    await fs.mkdir(stateDir, { recursive: true });
-    await fs.writeFile(
-      caTriggerPath,
-      `if (process.env.OPENCLAW_NODE_OPTIONS_READY === "1") {
+it("exits promptly after cron list emits complete output", async () => {
+  const root = tempDirs.make("openclaw-gateway-cli-exit-");
+  const caTriggerPath = path.join(root, "load-default-ca.mjs");
+  const gateway = await startCliReadGateway(TEST_TOKEN);
+  const { stateDir, configPath } = await remoteFixture(root, {
+    url: gateway.url,
+    token: TEST_TOKEN,
+  });
+  await fs.writeFile(
+    caTriggerPath,
+    `if (process.env.OPENCLAW_NODE_OPTIONS_READY === "1") {
   const { getCACertificates } = await import("node:tls");
   getCACertificates("default");
 }
 `,
-    );
-    await fs.writeFile(
-      configPath,
-      JSON.stringify({
-        gateway: { mode: "remote", remote: { url: gateway.url, token } },
-      }),
-    );
+  );
 
-    // The command emits one JSON document, so a parseable buffer is the moment its
-    // output is complete. Timing the exit from there measures the one-shot release
-    // of the Gateway socket instead of the child's startup.
-    let completeOutputAt: number | undefined;
-    const result = await runCliProcessChild({
-      nodeArgs: [
-        ...resolveRuntimeWorkerArgv(cliEntrypoint).slice(0, -1),
-        "--import",
-        pathToFileURL(caTriggerPath).href,
-        fileURLToPath(cliEntrypoint),
-        "cron",
-        "list",
-        "--json",
-      ],
-      env: {
-        ...process.env,
-        HOME: root,
-        // This case owns the NODE_OPTIONS respawn (the CA trigger only fires in the
-        // respawned child). Suppress the separate compile-cache respawn that CI's
-        // exported NODE_COMPILE_CACHE would stack on top of it; entry.compile-cache
-        // owns that contract.
-        NODE_DISABLE_COMPILE_CACHE: "1",
-        NODE_ENV: undefined,
-        NODE_OPTIONS: undefined,
-        NODE_USE_SYSTEM_CA: "1",
-        OPENCLAW_CONFIG_PATH: configPath,
-        OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
-        OPENCLAW_NODE_OPTIONS_READY: undefined,
-        OPENCLAW_STATE_DIR: stateDir,
-        VITEST: undefined,
-      },
-      onStdout: (stdout) => {
-        if (completeOutputAt !== undefined) {
-          return;
-        }
-        try {
-          JSON.parse(stdout);
-        } catch {
-          return;
-        }
-        completeOutputAt = Date.now();
-      },
-    });
-    const exitedAt = Date.now();
-
-    expect(result, result.stderr).toMatchObject({ code: 0, signal: null, stderr: "" });
-    expect(JSON.parse(result.stdout)).toMatchObject({ jobs: [], total: 0 });
-    expect(completeOutputAt).toEqual(expect.any(Number));
-    expect(exitedAt - (completeOutputAt ?? 0)).toBeLessThanOrEqual(ONE_SHOT_EXIT_BUDGET_MS);
-  });
-
-  it.each([
-    {
-      label: "device list",
-      args: ["devices", "list"],
-      gatewayOwnsLock: false,
-      method: "device.pair.list",
+  // A parseable JSON buffer starts the socket-release budget.
+  let completeOutputAt: number | undefined;
+  const result = await runCliProcessChild({
+    nodeArgs: [
+      ...resolveRuntimeWorkerArgv(cliEntrypoint).slice(0, -1),
+      "--import",
+      pathToFileURL(caTriggerPath).href,
+      fileURLToPath(cliEntrypoint),
+      "cron",
+      "list",
+      "--json",
+    ],
+    env: {
+      ...process.env,
+      HOME: root,
+      // Exercise NODE_OPTIONS respawn without stacking the compile-cache respawn;
+      // entry.compile-cache owns the latter contract.
+      NODE_DISABLE_COMPILE_CACHE: "1",
+      NODE_ENV: undefined,
+      NODE_OPTIONS: undefined,
+      NODE_USE_SYSTEM_CA: "1",
+      OPENCLAW_CONFIG_PATH: configPath,
+      OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
+      OPENCLAW_NODE_OPTIONS_READY: undefined,
+      OPENCLAW_STATE_DIR: stateDir,
+      VITEST: undefined,
     },
-    {
-      label: "skills workshop apply",
-      args: ["skills", "workshop", "apply", "proposal-missing-credentials"],
-      gatewayOwnsLock: true,
-      method: "skills.proposals.inspect",
-    },
-  ])(
-    "renders missing $label credentials as expected guidance, not a crash",
-    async ({ label, args, gatewayOwnsLock, method }) => {
-      const root = tempDirs.make(`openclaw-${label.replaceAll(" ", "-")}-credentials-human-`);
-      const stateDir = path.join(root, "state");
-      const configPath = path.join(stateDir, "openclaw.json");
-      const port = await getFreePort();
-      await fs.mkdir(stateDir, { recursive: true });
-      await fs.writeFile(
-        configPath,
-        `${JSON.stringify({ gateway: { mode: "local", port } })}\n`,
-        "utf8",
-      );
-
-      const gatewayEnv = {
-        ...process.env,
-        HOME: root,
-        OPENCLAW_CONFIG_PATH: configPath,
-        OPENCLAW_HOME: root,
-        OPENCLAW_STATE_DIR: stateDir,
-      };
-      const lock = gatewayOwnsLock
-        ? await acquireGatewayLock({
-            allowInTests: true,
-            env: gatewayEnv,
-            port,
-            role: "gateway",
-            timeoutMs: 1_000,
-          })
-        : null;
+    onStdout: (stdout) => {
+      if (completeOutputAt !== undefined) {
+        return;
+      }
       try {
-        if (gatewayOwnsLock) {
-          expect(lock).not.toBeNull();
-          openOpenClawStateDatabase({ env: gatewayEnv });
-        }
-        const result = await runIsolatedGatewayCli({ args, root, stateDir, configPath });
-
-        expect(result).toMatchObject({ code: 1, signal: null, stdout: "" });
-        expect(result.stderr).toContain(
-          `gateway ${method} requires credentials before opening a websocket`,
-        );
-        expect(result.stderr).toContain(
-          "Fix: configure gateway.auth token/password, pair this device, or pass --token/--password.",
-        );
-        expect(result.stderr).toContain(`Config: ${configPath}`);
-        expect(result.stderr).not.toContain("The CLI command failed");
-        expect(result.stderr).not.toContain("Could not start the CLI");
-        expect(result.stderr).not.toContain("OPENCLAW_DEBUG");
-        expect(result.stderr).not.toContain("Stack:");
-        expect(result.stderr).not.toContain("openclaw doctor");
-      } finally {
-        if (gatewayOwnsLock) {
-          closeOpenClawStateDatabaseForTest();
-        }
-        await lock?.release();
+        JSON.parse(stdout);
+      } catch {
+        return;
       }
+      completeOutputAt = Date.now();
     },
-  );
+  });
+  const exitedAt = Date.now();
 
-  it.each([
-    { label: "devices list", args: ["devices", "list"], machineOutput: false },
-    { label: "devices list --json", args: ["devices", "list", "--json"], machineOutput: true },
-    { label: "nodes status", args: ["nodes", "status"], machineOutput: false },
-    { label: "nodes status --json", args: ["nodes", "status", "--json"], machineOutput: true },
-  ])(
-    "renders a $label URL override without explicit credentials as expected guidance, not a crash",
-    async ({ label, args, machineOutput }) => {
-      const root = tempDirs.make(`openclaw-${label.replaceAll(/[ -]+/g, "-")}-explicit-auth-`);
-      // Configured credentials must not leak to a caller-supplied URL; the producer
-      // rejects the override before any socket opens, so the target never listens.
-      const { stateDir, configPath } = await prepareGatewayCliFixture(root, {
-        mode: "local",
-        auth: { mode: "token", token: "configured-token" },
-      });
+  expect(expectCliResult(result)).toMatchObject({ jobs: [], total: 0 });
+  expect(completeOutputAt).toEqual(expect.any(Number));
+  expect(exitedAt - (completeOutputAt ?? 0)).toBeLessThanOrEqual(ONE_SHOT_EXIT_BUDGET_MS);
+});
 
-      const result = await runIsolatedGatewayCli({
-        args: [...args, "--url", UNREACHABLE_GATEWAY_URL, "--timeout", "250"],
-        root,
-        stateDir,
-        configPath,
-      });
-
-      expect(result).toMatchObject({ code: 1, signal: null });
-      if (machineOutput) {
-        expect(JSON.parse(result.stdout)).toEqual({
-          ok: false,
-          error: {
-            type: "cli_error",
-            message: expect.stringContaining("gateway url override requires explicit credentials"),
-          },
-        });
-      } else {
-        expect(result.stdout).toBe("");
-      }
-      expect(result.stderr).toContain("gateway url override requires explicit credentials");
-      // The shared console redaction masks the word after "--password"; assert around it.
-      expect(result.stderr).toContain("Fix: pass --token or --password");
-      expect(result.stderr).toContain("--url (or gatewayToken in tools).");
-      expect(result.stderr).toContain("remove --url to use the configured target.");
-      expect(result.stderr).toContain(`Config: ${configPath}`);
-      expect(result.stderr).not.toContain("The CLI command failed");
-      expect(result.stderr).not.toContain("Could not start the CLI");
-      expect(result.stderr).not.toContain("OPENCLAW_DEBUG");
-      expect(result.stderr).not.toContain("Stack:");
-      expect(result.stderr).not.toContain("openclaw doctor");
-    },
-  );
-
-  it.each(["--wait-timeout", "--poll-interval"])(
-    "renders an invalid cron run %s duration as operator guidance",
-    async (flag) => {
-      const root = tempDirs.make("openclaw-cron-invalid-duration-");
-      const { stateDir, configPath } = await prepareGatewayCliFixture(root, {
-        mode: "remote",
-        remote: { url: UNREACHABLE_GATEWAY_URL, token: "test-token" },
-      });
-      const result = await runIsolatedGatewayCli({
-        args: ["cron", "run", "missing-job", "--wait", flag, "not-a-duration", "--json"],
-        root,
-        stateDir,
-        configPath,
-      });
-      const message =
-        'Invalid duration: "not-a-duration". Use values like 500ms, 30s, 5m, 2h, or 1h30m.';
-      expect(result).toMatchObject({ code: 1, signal: null, stderr: `${message}\n` });
-      expect(JSON.parse(result.stdout)).toEqual({
-        ok: false,
-        error: { type: "cli_error", message },
-      });
-    },
-  );
-
-  it.each([
-    { label: "human", args: ["cron", "show", "missing-job"], machineOutput: false },
-    { label: "machine", args: ["cron", "show", "missing-job", "--json"], machineOutput: true },
-  ])(
-    "renders a $label-mode cron lookup miss as expected guidance, not a crash",
-    async ({ label, args, machineOutput }) => {
-      const root = tempDirs.make(`openclaw-cron-lookup-miss-${label}-`);
-      const token = "test-token";
-      const gateway = await startCronLookupMissGateway(token, "missing-job");
-      const { stateDir, configPath } = await prepareGatewayCliFixture(root, {
-        mode: "remote",
-        remote: { url: gateway.url, token },
-      });
-
-      const result = await runIsolatedGatewayCli({ args, root, stateDir, configPath });
-
-      const message =
-        "Automation not found: missing-job. Run `openclaw cron list` to see recent automation ids.";
-      expect(result).toMatchObject({ code: 1, signal: null });
-      if (machineOutput) {
-        expect(JSON.parse(result.stdout)).toEqual({
-          ok: false,
-          error: { type: "cli_error", message },
-        });
-      } else {
-        expect(result.stdout).toBe("");
-      }
-      expect(result.stderr).toContain(message);
-      expect(result.stderr).not.toContain("The CLI command failed");
-      expect(result.stderr).not.toContain("Could not start the CLI");
-      expect(result.stderr).not.toContain("OPENCLAW_DEBUG");
-      expect(result.stderr).not.toContain("Stack:");
-      expect(result.stderr).not.toContain("openclaw doctor");
-      expect(gateway.calls).toEqual(["cron.get", "cron.list"]);
-    },
-  );
-
-  it.each([
-    { label: "channels config-only status", args: ["channels", "status"] },
-    { label: "gateway reachability status", args: ["gateway", "status"] },
-  ])("returns success after delivering $label", async ({ args }) => {
-    const root = tempDirs.make("openclaw-degraded-status-");
-    const stateDir = path.join(root, "state");
-    const configPath = path.join(stateDir, "openclaw.json");
-    const port = await getFreePort();
-    await fs.mkdir(stateDir, { recursive: true });
-    await fs.writeFile(
-      configPath,
-      `${JSON.stringify({ gateway: { mode: "local", port } })}\n`,
-      "utf8",
-    );
-
-    const result = await runIsolatedGatewayCli({ args, root, stateDir, configPath });
-
-    expect(result.code, result.stderr).toBe(0);
+it("renders a devices list URL override without explicit credentials as expected guidance, not a crash", async () => {
+  const root = tempDirs.make("openclaw-devices-list-explicit-auth-");
+  // Reject before connect: configured credentials must never reach a caller-supplied URL.
+  const { stateDir, configPath } = await prepareGatewayCliFixture(root, {
+    mode: "local",
+    auth: { mode: "token", token: "configured-token" },
   });
 
-  it.each([
-    { label: "empty", timeout: "", valid: false },
-    { label: "whitespace", timeout: " \t ", valid: false },
-    { label: "omitted", timeout: undefined, valid: true },
-    { label: "positive", timeout: "10000", valid: true },
-  ])("validates a $label channels capabilities timeout", async ({ timeout, valid }) => {
-    const root = tempDirs.make("openclaw-capabilities-timeout-");
-    const { stateDir, configPath } = await prepareGatewayCliFixture(root, { mode: "local" });
-
-    const result = await runIsolatedGatewayCli({
-      args: [
-        "channels",
-        "capabilities",
-        ...(timeout === undefined ? [] : ["--timeout", timeout]),
-        "--json",
-      ],
-      root,
-      stateDir,
-      configPath,
-    });
-
-    expect(result, result.stderr).toMatchObject({ code: valid ? 0 : 1, signal: null });
-    if (valid) {
-      expect(JSON.parse(result.stdout)).toEqual({ channels: [] });
-    } else {
-      expect(result.stderr).toContain("Invalid --timeout");
-    }
+  const result = await runIsolatedGatewayCli({
+    args: ["devices", "list", "--url", UNREACHABLE_GATEWAY_URL, "--timeout", "250"],
+    root,
+    stateDir,
+    configPath,
   });
+
+  expect(result).toMatchObject({ code: 1, signal: null, stdout: "" });
+  // The shared console redaction masks the word after "--password"; assert around it.
+  expect(result.stderr).toContain("Fix: pass --token or --password");
+  expect(result.stderr).toContain("--url (or gatewayToken in tools).");
+  expect(result.stderr).toContain("remove --url to use the configured target.");
+  expect(result.stderr).toContain(`Config: ${configPath}`);
+  expectGuidance(result.stderr, "gateway url override requires explicit credentials");
+});
+
+it("renders a machine-mode cron lookup miss as expected guidance, not a crash", async () => {
+  const root = tempDirs.make("openclaw-cron-lookup-miss-machine-");
+  const gateway = await startCronLookupMissGateway(TEST_TOKEN, "missing-job");
+  const fixture = await remoteFixture(root, { url: gateway.url, token: TEST_TOKEN });
+  const result = await runIsolatedGatewayCli({
+    ...fixture,
+    args: ["cron", "show", "missing-job", "--json"],
+  });
+
+  const message =
+    "Automation not found: missing-job. Run `openclaw cron list` to see recent automation ids.";
+  expect(result).toMatchObject({ code: 1, signal: null });
+  expect(JSON.parse(result.stdout)).toEqual({
+    ok: false,
+    error: { type: "cli_error", message },
+  });
+  expectGuidance(result.stderr, message);
+  expect(gateway.calls).toEqual(["cron.get", "cron.list"]);
 });

@@ -12,12 +12,10 @@ export {
   collectHooksHardeningFindings,
   collectLikelyMultiUserSetupFindings,
   collectMinimalProfileOverrideFindings,
-  collectModelHygieneFindings,
   collectNodeDangerousAllowCommandFindings,
   collectNodeDenyCommandPatternFindings,
   collectSandboxDangerousConfigFindings,
   collectSandboxDockerNoopFindings,
-  collectSecretsInConfigFindings,
   collectSyncedFolderFindings,
 } from "./audit-extra.sync.js";
 
@@ -29,3 +27,4 @@ export {
 } from "./audit-extra.async.js";
 export { collectWorkspaceSkillSymlinkEscapeFindings } from "../skills/security/workspace-audit.js";
 export { collectPluginsTrustFindings } from "./audit-plugins-trust.js";
+export { collectSecretsInConfigFindings } from "./audit-secrets.js";

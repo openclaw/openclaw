@@ -1,13 +1,15 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { installDatabaseEngineSelection } from "./database-engine/context.js";
+import { resetDatabaseEngineSelectionForTest } from "./database-engine/context.test-support.js";
+import { createSqliteFamilyEngines } from "./database-engine/selection-fixture.test-support.js";
+import type { DatabaseEngineSelection } from "./database-engine/types.js";
 import type { SqliteWorkerStateContext } from "./sqlite-worker-state-context.js";
 
 const firstContext: SqliteWorkerStateContext = {
   environment: { OPENCLAW_STATE_DIR: "/fixture/first" },
-  coordinatorRuntime: { directory: "/fixture/first/coordinator", keepAlive: false },
 };
 const secondContext: SqliteWorkerStateContext = {
   environment: { OPENCLAW_STATE_DIR: "/fixture/second" },
-  coordinatorRuntime: { directory: "/fixture/second/coordinator", keepAlive: false },
 };
 
 async function loadModuleCopies() {
@@ -19,7 +21,38 @@ async function loadModuleCopies() {
   return { first, second };
 }
 
+afterEach(resetDatabaseEngineSelectionForTest);
+
 describe("SQLite worker state context across module copies", () => {
+  it.each(["sqlite", "postgres"] as const)(
+    "hands the installed %s state selection to workers without losing SQLite family choices",
+    async (state) => {
+      const selection: DatabaseEngineSelection = {
+        effectiveEngines: createSqliteFamilyEngines({ state }),
+        ...(state === "postgres"
+          ? { postgres: { connection: "postgresql://localhost/synthetic", schemaPrefix: "test" } }
+          : {}),
+      };
+      installDatabaseEngineSelection(selection);
+      const { first } = await loadModuleCopies();
+      const captured = first.captureSqliteWorkerStateContext(firstContext);
+      expect(captured.databaseEngineSelection).toEqual(selection);
+      expect(first.captureSqliteWorkerStateContext(captured).databaseEngineSelection).toEqual(
+        selection,
+      );
+      expect(first.sqliteWorkerRequestBytes(new Uint8Array(), captured)).toBeGreaterThan(
+        first.sqliteWorkerRequestBytes(new Uint8Array(), firstContext),
+      );
+    },
+  );
+
+  it("keeps an uninstalled selection absent", async () => {
+    const { first } = await loadModuleCopies();
+    expect(
+      first.captureSqliteWorkerStateContext(firstContext).databaseEngineSelection,
+    ).toBeUndefined();
+  });
+
   it("shares the current actor facts and restores nested scopes", async () => {
     const { first, second } = await loadModuleCopies();
     first.runWithSqliteWorkerStateContext(firstContext, () => {

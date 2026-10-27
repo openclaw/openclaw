@@ -38,7 +38,8 @@ export type {
   DiscordModalSpec,
 } from "./components.types.js";
 export { buildDiscordInteractiveComponents } from "./shared-interactive.js";
-export { Modal, type ComponentData } from "./internal/discord.js";
+export type { ComponentData } from "./internal/components.base.js";
+export { Modal } from "./internal/components.modal.js";
 
 export function formatDiscordComponentEventText(params: {
   kind: "button" | "select";

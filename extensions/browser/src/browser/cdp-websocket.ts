@@ -172,12 +172,6 @@ function createCdpSender(ws: WebSocket, opts?: CdpSocketOptions) {
       ? normalizeBrowserTimerDelayMs(opts.commandTimeoutMs)
       : undefined;
 
-  const clearPendingTimer = (p: Pending) => {
-    if (p.timer !== undefined) {
-      clearTimeout(p.timer);
-    }
-  };
-
   const send: CdpSendFn = (
     method: string,
     params?: Record<string, unknown>,
@@ -208,7 +202,7 @@ function createCdpSender(ws: WebSocket, opts?: CdpSocketOptions) {
         ws.send(JSON.stringify(msg));
       } catch (err) {
         pending.delete(id);
-        clearPendingTimer(entry);
+        clearTimeout(entry.timer);
         reject(toStringifiedError(err));
       }
     });
@@ -216,7 +210,7 @@ function createCdpSender(ws: WebSocket, opts?: CdpSocketOptions) {
 
   const closeWithError = (err: Error) => {
     for (const [, p] of pending) {
-      clearPendingTimer(p);
+      clearTimeout(p.timer);
       p.reject(err);
     }
     pending.clear();
@@ -232,11 +226,6 @@ function createCdpSender(ws: WebSocket, opts?: CdpSocketOptions) {
   };
 
   ws.on("error", (err) => {
-    // The `err instanceof Error` guard is defensive: Node's `ws` library
-    // always emits Error instances on the 'error' event. Triggering the
-    // non-Error branch would require synthetically emitting on the socket,
-    // which the library treats as an unhandled error and hangs the test.
-    /* c8 ignore next */
     closeWithError(toStringifiedError(err));
   });
 
@@ -251,7 +240,7 @@ function createCdpSender(ws: WebSocket, opts?: CdpSocketOptions) {
         return;
       }
       pending.delete(parsed.id);
-      clearPendingTimer(p);
+      clearTimeout(p.timer);
       if (parsed.error?.message) {
         p.reject(new CdpSocketError("protocol", parsed.error.message));
         return;
@@ -318,38 +307,12 @@ type CdpSocketOptions = {
   headers?: Record<string, string>;
   handshakeTimeoutMs?: number;
   commandTimeoutMs?: number;
-  handshakeRetries?: number;
-  handshakeRetryDelayMs?: number;
-  handshakeMaxRetryDelayMs?: number;
+  handshakeRetries?: 0;
   lookup?: CdpSocketLookup;
   signal?: AbortSignal;
   /** Read-only probes can cancel commands; write callers retain the socket for compensation. */
   abortScope?: "operation";
 };
-
-function normalizeRetryCount(value: number | undefined, fallback: number): number {
-  if (typeof value !== "number" || !Number.isFinite(value)) {
-    return fallback;
-  }
-  return Math.max(0, Math.floor(value));
-}
-
-function computeHandshakeRetryDelayMs(attempt: number, opts?: CdpSocketOptions): number {
-  const baseDelayMs =
-    typeof opts?.handshakeRetryDelayMs === "number" && Number.isFinite(opts.handshakeRetryDelayMs)
-      ? Math.max(1, Math.floor(opts.handshakeRetryDelayMs))
-      : 200;
-  const maxDelayMs =
-    typeof opts?.handshakeMaxRetryDelayMs === "number" &&
-    Number.isFinite(opts.handshakeMaxRetryDelayMs)
-      ? Math.max(baseDelayMs, Math.floor(opts.handshakeMaxRetryDelayMs))
-      : 3000;
-  const raw = Math.min(maxDelayMs, baseDelayMs * 2 ** Math.max(0, attempt - 1));
-  // Jitter keeps several browser sessions from retrying handshakes in lockstep
-  // after a shared Chrome or network hiccup.
-  const jitterScale = 0.8 + Math.random() * 0.4;
-  return Math.max(1, Math.floor(raw * jitterScale));
-}
 
 function shouldRetryCdpHandshakeError(err: unknown): boolean {
   if (!(err instanceof Error)) {
@@ -385,7 +348,7 @@ export async function withCdpSocket<T>(
   fn: (send: CdpSendFn) => Promise<T>,
   opts?: CdpSocketOptions,
 ): Promise<T> {
-  const maxHandshakeRetries = normalizeRetryCount(opts?.handshakeRetries, 2);
+  const maxHandshakeRetries = opts?.handshakeRetries ?? 2;
   for (let attempt = 0; ; attempt += 1) {
     opts?.signal?.throwIfAborted();
     const ws = openCdpWebSocket(wsUrl, opts);
@@ -416,12 +379,10 @@ export async function withCdpSocket<T>(
           throw err;
         }
         // Retry only before commands can have side effects.
-        await sleepWithAbort(computeHandshakeRetryDelayMs(attempt + 1, opts), opts?.signal).catch(
-          (error: unknown) => {
-            opts?.signal?.throwIfAborted();
-            throw error;
-          },
-        );
+        await sleepWithAbort(200 * 2 ** attempt, opts?.signal).catch((error: unknown) => {
+          opts?.signal?.throwIfAborted();
+          throw error;
+        });
         continue;
       }
       if (opts?.abortScope !== "operation") {

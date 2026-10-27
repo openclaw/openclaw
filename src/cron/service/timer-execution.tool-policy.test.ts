@@ -1,9 +1,17 @@
 import { describe, expect, it, vi } from "vitest";
+import { createCronRegressionState } from "../../../test/helpers/cron/service-regression-fixtures.js";
 import { makeCronJob } from "../delivery.test-helpers.js";
-import { createNoopLogger } from "../service.test-harness.js";
 import type { CronStoredJob } from "../types.js";
-import { createCronServiceState } from "./state.js";
+import type { CronServiceDeps } from "./state.js";
 import { executeJobCore } from "./timer-execution.js";
+
+function makeState(overrides: Partial<CronServiceDeps> = {}) {
+  return createCronRegressionState({
+    storePath: "/tmp/cron-tool-policy.json",
+    runIsolatedAgentJob: vi.fn(async () => ({ status: "ok" as const })),
+    ...overrides,
+  });
+}
 
 function damagedPinnedJob(kind: "trigger" | "script" | "agentTurn"): CronStoredJob {
   const payload: CronStoredJob["payload"] =
@@ -27,18 +35,9 @@ describe("scheduled exec target recovery", () => {
   it.each(["trigger", "script", "agentTurn"] as const)(
     "stops a damaged pinned %s job before executable work",
     async (kind) => {
-      const evaluateCronTrigger = vi.fn(async () => ({ kind: "evaluated" as const, fire: true }));
-      const runScriptJob = vi.fn(async () => ({ status: "ok" as const }));
-      const runIsolatedAgentJob = vi.fn(async () => ({ status: "ok" as const }));
-      const state = createCronServiceState({
-        storePath: `/tmp/cron-exec-target-recovery-${kind}.json`,
-        cronEnabled: true,
-        log: createNoopLogger(),
-        enqueueSystemEvent: vi.fn(),
-        requestHeartbeat: vi.fn(),
-        evaluateCronTrigger,
-        runScriptJob,
-        runIsolatedAgentJob,
+      const state = makeState({
+        evaluateCronTrigger: vi.fn(async () => ({ kind: "evaluated" as const, fire: true })),
+        runScriptJob: vi.fn(async () => ({ status: "ok" as const })),
       });
 
       const result = await executeJobCore(state, damagedPinnedJob(kind));
@@ -47,41 +46,29 @@ describe("scheduled exec target recovery", () => {
         status: "error",
         error: expect.stringContaining("captured exec restriction is missing or invalid"),
       });
-      expect(evaluateCronTrigger).not.toHaveBeenCalled();
-      expect(runScriptJob).not.toHaveBeenCalled();
-      expect(runIsolatedAgentJob).not.toHaveBeenCalled();
+      expect(state.deps.evaluateCronTrigger).not.toHaveBeenCalled();
+      expect(state.deps.runScriptJob).not.toHaveBeenCalled();
+      expect(state.deps.runIsolatedAgentJob).not.toHaveBeenCalled();
     },
   );
 
   it("keeps legacy unmarked exec grants on baseline policy", async () => {
-    const runIsolatedAgentJob = vi.fn(async () => ({ status: "ok" as const }));
-    const state = createCronServiceState({
-      storePath: "/tmp/cron-exec-target-legacy.json",
-      cronEnabled: true,
-      log: createNoopLogger(),
-      enqueueSystemEvent: vi.fn(),
-      requestHeartbeat: vi.fn(),
-      runIsolatedAgentJob,
-    });
+    const state = makeState();
     const job = makeCronJob({
       payload: { kind: "agentTurn", message: "run", toolsAllow: ["exec"] },
     });
 
     await expect(executeJobCore(state, job)).resolves.toMatchObject({ status: "ok" });
-    expect(runIsolatedAgentJob).toHaveBeenCalledOnce();
+    expect(state.deps.runIsolatedAgentJob).toHaveBeenCalledOnce();
   });
 });
 
 describe("scheduled agent admission", () => {
-  it.each<{
-    name: string;
-    overrides: Partial<CronStoredJob>;
-    admissionSource: "operator-schedule" | "requester-schedule";
-  }>([
-    { name: "operator", overrides: {}, admissionSource: "operator-schedule" },
-    {
-      name: "account requester",
-      overrides: {
+  it.each<[string, Partial<CronStoredJob>]>([
+    ["operator", {}],
+    [
+      "account requester",
+      {
         owner: { agentId: "main", accountId: "work" },
         scheduledToolPolicy: {
           version: 1,
@@ -90,11 +77,10 @@ describe("scheduled agent admission", () => {
           ownerAccountId: "work",
         },
       },
-      admissionSource: "requester-schedule",
-    },
-    {
-      name: "channel requester",
-      overrides: {
+    ],
+    [
+      "channel requester",
+      {
         toolsAllowProvenance: {
           version: 1,
           source: "authenticated-requester",
@@ -106,34 +92,25 @@ describe("scheduled agent admission", () => {
           },
         },
       },
-      admissionSource: "requester-schedule",
-    },
-    {
-      name: "external content",
-      overrides: {
+    ],
+    [
+      "external content",
+      {
         payload: { kind: "agentTurn", message: "run", externalContentSource: "webhook" },
       },
-      admissionSource: "requester-schedule",
-    },
-  ])(
-    "records $name admission without an audit identity",
-    async ({ overrides, admissionSource }) => {
-      const runIsolatedAgentJob = vi.fn(async () => ({ status: "ok" as const }));
-      const state = createCronServiceState({
-        storePath: "/tmp/cron-admission-source.json",
-        cronEnabled: true,
-        log: createNoopLogger(),
-        enqueueSystemEvent: vi.fn(),
-        requestHeartbeat: vi.fn(),
-        runIsolatedAgentJob,
-      });
-      const job: CronStoredJob = { ...makeCronJob({}), ...overrides };
+    ],
+  ])("records %s admission without an audit identity", async (name, overrides) => {
+    const state = makeState();
+    const job: CronStoredJob = { ...makeCronJob({}), ...overrides };
 
-      await expect(executeJobCore(state, job)).resolves.toMatchObject({ status: "ok" });
+    await expect(executeJobCore(state, job)).resolves.toMatchObject({ status: "ok" });
 
-      expect(runIsolatedAgentJob).toHaveBeenCalledExactlyOnceWith(
-        expect.objectContaining({ job, admissionSource, executionIdentity: undefined }),
-      );
-    },
-  );
+    expect(state.deps.runIsolatedAgentJob).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({
+        job,
+        admissionSource: name === "operator" ? "operator-schedule" : "requester-schedule",
+        executionIdentity: undefined,
+      }),
+    );
+  });
 });

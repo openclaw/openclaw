@@ -3,7 +3,10 @@ import {
   isGatewayEventFrame,
   isGatewayResponseFrame,
 } from "@openclaw/gateway-protocol/frame-guards";
-import { RetrySupervisor, sleepWithAbort } from "@openclaw/retry";
+import { toStringifiedError } from "@openclaw/normalization-core";
+import { asRecord } from "@openclaw/normalization-core/record-coerce";
+import { filterStringEntries } from "@openclaw/normalization-core/string-normalization";
+import { resolveSleepDelayMs, RetrySupervisor, sleepWithAbort } from "@openclaw/retry";
 import { GatewayEventListeners } from "./event-listeners.js";
 import { GatewayPendingRequests, type GatewayProtocolRequestTiming } from "./pending-request.js";
 import type {
@@ -36,6 +39,10 @@ export type {
   GatewayProtocolSocketHandlers,
   GatewayProtocolTiming,
 } from "./protocol-client-contract.js";
+
+const DEFAULT_CONNECT_FAILURE: Readonly<
+  ReturnType<NonNullable<GatewayProtocolClientOptions<unknown>["onConnectPlanError"]>>
+> = Object.freeze({ closeCode: 1008, closeReason: "connect failed" });
 
 /**
  * Browser-safe gateway wire client. Environment adapters own transport and auth
@@ -92,6 +99,11 @@ export class GatewayProtocolClient<TPlan> {
 
   get connecting(): boolean {
     return this.connectSent && !this.helloReceived;
+  }
+
+  /** A transport upgrade is in flight; the socket adapter bounds how long it may stay open. */
+  get opening(): boolean {
+    return this.socket !== null && !this.socketOpened;
   }
 
   get hasUnboundedPendingRequests(): boolean {
@@ -202,13 +214,96 @@ export class GatewayProtocolClient<TPlan> {
     let socket: GatewayProtocolSocket;
     try {
       socket = this.opts.createSocket({
-        open: () => this.handleOpen(socket, generation),
+        open: () => {
+          if (!this.isActive(socket, generation)) {
+            return;
+          }
+          this.socketOpened = true;
+          this.recordTiming("socket-open", generation);
+          if (this.connectNonce) {
+            this.sendConnect(socket, generation);
+            return;
+          }
+          this.clearHandshakeTimer();
+          const armedAt = Date.now();
+          this.handshakeTimer = setTimeout(() => {
+            this.handshakeTimer = null;
+            if (!this.isActive(socket, generation) || this.connectSent || !socket.isOpen()) {
+              return;
+            }
+            if (this.opts.handshake.mode === "fallback") {
+              this.recordTiming("fallback", generation);
+              this.sendConnect(socket, generation);
+              return;
+            }
+            const elapsedMs = Date.now() - armedAt;
+            const error = new Error(
+              this.opts.handshake.timeoutMessage?.(elapsedMs) ??
+                `gateway connect challenge timeout after ${elapsedMs}ms`,
+            );
+            this.opts.onConnectError?.(error);
+            socket.close(1008, "connect challenge timeout");
+          }, this.opts.handshake.timeoutMs);
+          this.handshakeTimer.unref?.();
+        },
         message: (data) => this.handleMessage(socket, generation, data),
-        close: (code, reason) => this.handleClose(socket, generation, code, reason),
-        error: (error) => this.handleSocketError(socket, generation, error),
+        close: (code, reason) => {
+          if (this.socket !== socket) {
+            if (this.stoppedSocket?.socket === socket) {
+              const context = { ...this.stoppedSocket.context, code, reason };
+              this.stoppedSocket = undefined;
+              this.invoke("close", () =>
+                this.opts.onClose?.(context, { retry: false, notify: true }),
+              );
+            }
+            return;
+          }
+          this.socket = null;
+          this.connectionAbort?.abort();
+          this.clearHandshakeTimer();
+          const context: GatewayProtocolCloseContext = {
+            ...this.closeContext(),
+            code,
+            reason,
+            generation,
+          };
+          this.connectFailure = undefined;
+          const decision = this.opts.resolveClose(context);
+          this.requests.flush(
+            decision.pendingError ??
+              context.connectFailure?.error ??
+              new Error(`gateway closed (${code}): ${reason}`),
+          );
+          this.invoke("close", () => this.opts.onClose?.(context, decision));
+          // A close callback can reconnect synchronously and already own the next socket or retry.
+          if (decision.retry && !this.stopped && !this.socket && !this.reconnectSignal) {
+            const error = context.connectFailure?.error;
+            // Apply server timing only after adapter policy admits retry; a hint
+            // must never turn terminal authentication failures into reconnects.
+            const retryAfterMs =
+              error instanceof GatewayProtocolRequestError &&
+              error.retryable &&
+              error.retryAfterMs !== undefined &&
+              Number.isFinite(error.retryAfterMs) &&
+              error.retryAfterMs > 0
+                ? error.retryAfterMs
+                : undefined;
+            this.scheduleReconnect(
+              decision.reconnectDelayMs ?? context.connectFailure?.reconnectDelayMs,
+              retryAfterMs,
+            );
+          }
+        },
+        error: (error) => {
+          if (!this.isActive(socket, generation) || this.connectSent) {
+            return;
+          }
+          this.connectFailure = { error };
+          this.opts.onConnectError?.(error);
+        },
       });
     } catch (error) {
-      const normalized = error instanceof Error ? error : new Error(String(error));
+      const normalized = toStringifiedError(error);
       this.opts.onSocketFactoryError?.(normalized);
       this.opts.onConnectError?.(normalized);
       if (this.opts.rethrowSocketFactoryError?.(normalized)) {
@@ -241,43 +336,6 @@ export class GatewayProtocolClient<TPlan> {
       hasChallenge: false,
       usedFallback: false,
     };
-  }
-
-  private handleOpen(socket: GatewayProtocolSocket, generation: number): void {
-    if (!this.isActive(socket, generation)) {
-      return;
-    }
-    this.socketOpened = true;
-    this.recordTiming("socket-open", generation);
-    if (this.connectNonce) {
-      this.sendConnect(socket, generation);
-      return;
-    }
-    this.armHandshakeTimer(socket, generation);
-  }
-
-  private armHandshakeTimer(socket: GatewayProtocolSocket, generation: number): void {
-    this.clearHandshakeTimer();
-    const armedAt = Date.now();
-    this.handshakeTimer = setTimeout(() => {
-      this.handshakeTimer = null;
-      if (!this.isActive(socket, generation) || this.connectSent || !socket.isOpen()) {
-        return;
-      }
-      if (this.opts.handshake.mode === "fallback") {
-        this.recordTiming("fallback", generation);
-        this.sendConnect(socket, generation);
-        return;
-      }
-      const elapsedMs = Date.now() - armedAt;
-      const error = new Error(
-        this.opts.handshake.timeoutMessage?.(elapsedMs) ??
-          `gateway connect challenge timeout after ${elapsedMs}ms`,
-      );
-      this.opts.onConnectError?.(error);
-      socket.close(1008, "connect challenge timeout");
-    }, this.opts.handshake.timeoutMs);
-    this.handshakeTimer.unref?.();
   }
 
   private sendConnect(socket: GatewayProtocolSocket, generation: number): void {
@@ -323,11 +381,8 @@ export class GatewayProtocolClient<TPlan> {
     if (!this.isConnectCurrent(socket, generation)) {
       return;
     }
-    const normalized = error instanceof Error ? error : new Error(String(error));
-    const outcome = this.opts.onConnectPlanError?.(normalized) ?? {
-      closeCode: 1008,
-      closeReason: "connect failed",
-    };
+    const normalized = toStringifiedError(error);
+    const outcome = this.opts.onConnectPlanError?.(normalized) ?? DEFAULT_CONNECT_FAILURE;
     this.opts.onConnectError?.(outcome.error ?? normalized);
     if (outcome.stop) {
       this.stopped = true;
@@ -347,9 +402,12 @@ export class GatewayProtocolClient<TPlan> {
       plan,
     };
     this.recordTiming("connect-plan-ready", generation, plan);
-    this.recordTiming("request-sent", generation, plan);
-    this.connectRequestSent = true;
-    void this.request<HelloOk>("connect", this.opts.buildConnectParams(plan))
+    void this.request<HelloOk>("connect", this.opts.buildConnectParams(plan), {
+      onSent: () => {
+        this.connectRequestSent = true;
+        this.recordTiming("request-sent", generation, plan);
+      },
+    })
       .then((hello) => {
         // Closing transports remain current until their close callback runs;
         // a late response must not publish readiness or reset reconnect backoff.
@@ -357,6 +415,7 @@ export class GatewayProtocolClient<TPlan> {
           return;
         }
         this.helloReceived = true;
+        this.requests.setSuspensionPhase(hello.snapshot?.suspension?.phase);
         this.clearHandshakeTimer();
         this.connectFailure = undefined;
         this.reconnectSupervisor.reset();
@@ -383,10 +442,8 @@ export class GatewayProtocolClient<TPlan> {
             : new GatewayProtocolRequestError({ message: String(error) });
         // Close can arrive while adapter cleanup is pending; retain the received error now.
         this.connectFailure = { error: requestError };
-        const outcome = this.opts.onConnectFailure?.(requestError, context) ?? {
-          closeCode: 1008,
-          closeReason: "connect failed",
-        };
+        const outcome =
+          this.opts.onConnectFailure?.(requestError, context) ?? DEFAULT_CONNECT_FAILURE;
         const applyFailure = (decision: Awaited<typeof outcome>) => {
           if (!this.isActive(socket, generation)) {
             return;
@@ -395,6 +452,10 @@ export class GatewayProtocolClient<TPlan> {
             error: requestError,
             reconnectDelayMs: decision.reconnectDelayMs,
           };
+          if (decision.keepOpen) {
+            this.clearHandshakeTimer();
+            return;
+          }
           if (decision.stop) {
             this.stopped = true;
           }
@@ -410,13 +471,13 @@ export class GatewayProtocolClient<TPlan> {
         if (!this.isConnectCurrent(socket, generation)) {
           return;
         }
-        this.opts.onConnectError?.(error instanceof Error ? error : new Error(String(error)));
-        this.closeSocket(1008, "connect failed");
+        this.opts.onConnectError?.(toStringifiedError(error));
+        this.closeSocket(DEFAULT_CONNECT_FAILURE.closeCode, DEFAULT_CONNECT_FAILURE.closeReason);
       });
   }
 
   private handleMessage(socket: GatewayProtocolSocket, generation: number, raw: string): void {
-    if (!this.isActive(socket, generation)) {
+    if (!this.isActive(socket, generation) || this.connectionAbort?.signal.aborted) {
       return;
     }
     let parsed: unknown;
@@ -442,9 +503,7 @@ export class GatewayProtocolClient<TPlan> {
           return;
         }
         this.connectNonce = nonce;
-        this.serverCapabilities = Array.isArray(payload?.capabilities)
-          ? payload.capabilities.filter((value): value is string => typeof value === "string")
-          : [];
+        this.serverCapabilities = filterStringEntries(payload?.capabilities);
         const challengeTs = payload?.ts;
         this.connectChallengeTs =
           typeof challengeTs === "number" && Number.isSafeInteger(challengeTs) && challengeTs >= 0
@@ -454,31 +513,32 @@ export class GatewayProtocolClient<TPlan> {
         this.sendConnect(socket, generation);
         return;
       }
-      const seq = typeof parsed.seq === "number" ? parsed.seq : null;
-      if (seq !== null) {
+      const seq = parsed.seq;
+      if (seq !== undefined) {
         if (this.lastSeq !== null && seq > this.lastSeq + 1) {
           const expected = this.lastSeq + 1;
-          this.invoke("gap", () => this.opts.onGap?.({ expected, received: seq }));
-          // Gap recovery can retire this socket synchronously. Never advance a
-          // replacement's sequence or dispatch a frame from the retired owner.
-          if (!this.isActive(socket, generation)) {
+          const state = asRecord(parsed.payload).state;
+          if (
+            parsed.event === "chat" &&
+            (state === "final" || state === "error" || state === "aborted")
+          ) {
+            // Terminal snapshots settle runs even when an earlier append was lost.
+            this.dispatchEvent(socket, generation, parsed);
+          }
+          if (!this.isActive(socket, generation) || this.connectionAbort?.signal.aborted) {
             return;
           }
+          this.invoke("gap", () => this.opts.onGap?.({ expected, received: seq }));
+          // An adapter may already have replaced the socket. Otherwise reconnect
+          // here: a lost append cannot be repaired by the next append-only frame.
+          if (this.isActive(socket, generation) && !this.connectionAbort?.signal.aborted) {
+            this.closeSocket(4000, "event sequence gap");
+          }
+          return;
         }
         this.lastSeq = seq;
       }
-      // An owner may replace the socket while handling this frame. Snapshot
-      // first so replacement listeners cannot inherit a retired event.
-      const listeners = this.listeners.snapshot();
-      this.invoke("event", () => this.opts.onEvent?.(parsed));
-      for (const [listener, subscription] of listeners) {
-        if (!this.isActive(socket, generation)) {
-          return;
-        }
-        if (this.listeners.isCurrent(listener, subscription)) {
-          this.invoke("event listener", () => listener(parsed));
-        }
-      }
+      this.dispatchEvent(socket, generation, parsed);
       return;
     }
     if (!isGatewayResponseFrame(parsed)) {
@@ -488,63 +548,30 @@ export class GatewayProtocolClient<TPlan> {
     this.requests.handleResponse(parsed);
   }
 
-  private handleClose(
+  private dispatchEvent(
     socket: GatewayProtocolSocket,
     generation: number,
-    code: number,
-    reason: string,
+    event: EventFrame,
   ): void {
-    if (this.socket !== socket) {
-      if (this.stoppedSocket?.socket === socket) {
-        const context = { ...this.stoppedSocket.context, code, reason };
-        this.stoppedSocket = undefined;
-        this.invoke("close", () => this.opts.onClose?.(context, { retry: false, notify: true }));
+    // Snapshot before callbacks so replacement listeners cannot inherit a retired event.
+    const listeners = this.listeners.snapshot();
+    if (event.event === "gateway.suspension") {
+      this.requests.setSuspensionPhase(asRecord(event.payload).phase);
+    } else if (
+      event.event === "shutdown" &&
+      typeof asRecord(event.payload).restartExpectedMs === "number"
+    ) {
+      this.requests.setSuspensionPhase("draining");
+    }
+    this.invoke("event", () => this.opts.onEvent?.(event));
+    for (const [listener, subscription] of listeners) {
+      if (!this.isActive(socket, generation) || this.connectionAbort?.signal.aborted) {
+        return;
       }
-      return;
+      if (this.listeners.isCurrent(listener, subscription)) {
+        this.invoke("event listener", () => listener(event));
+      }
     }
-    this.socket = null;
-    this.connectionAbort?.abort();
-    this.clearHandshakeTimer();
-    const context: GatewayProtocolCloseContext = {
-      ...this.closeContext(),
-      code,
-      reason,
-      generation,
-    };
-    this.connectFailure = undefined;
-    const decision = this.opts.resolveClose(context);
-    this.requests.flush(
-      decision.pendingError ??
-        context.connectFailure?.error ??
-        new Error(`gateway closed (${code}): ${reason}`),
-    );
-    this.invoke("close", () => this.opts.onClose?.(context, decision));
-    // A close callback can reconnect synchronously and already own the next socket or retry.
-    if (decision.retry && !this.stopped && !this.socket && !this.reconnectSignal) {
-      const error = context.connectFailure?.error;
-      // Apply server timing only after adapter policy admits retry; a hint
-      // must never turn terminal authentication failures into reconnects.
-      const retryAfterMs =
-        error instanceof GatewayProtocolRequestError &&
-        error.retryable &&
-        error.retryAfterMs !== undefined &&
-        Number.isFinite(error.retryAfterMs) &&
-        error.retryAfterMs > 0
-          ? error.retryAfterMs
-          : undefined;
-      this.scheduleReconnect(
-        decision.reconnectDelayMs ?? context.connectFailure?.reconnectDelayMs,
-        retryAfterMs,
-      );
-    }
-  }
-
-  private handleSocketError(socket: GatewayProtocolSocket, generation: number, error: Error): void {
-    if (!this.isActive(socket, generation) || this.connectSent) {
-      return;
-    }
-    this.connectFailure = { error };
-    this.opts.onConnectError?.(error);
   }
 
   private scheduleReconnect(overrideMs?: number, minimumMs = 0): void {
@@ -560,7 +587,20 @@ export class GatewayProtocolClient<TPlan> {
     // Ignore cancelled sleeps only; reconnect start failures stay observable.
     // Wire Retry-After is a floor: repeated short hints must still advance
     // normal backoff, while adapter-owned startup overrides stay independent.
-    const delayMs = overrideMs ?? Math.max(retry.delayMs, minimumMs);
+    let delayMs = overrideMs;
+    if (delayMs === undefined) {
+      const base = Math.max(retry.delayMs, minimumMs);
+      const ceiling = Math.max(
+        this.opts.reconnect.maxMs,
+        Math.min(Number.MAX_VALUE, minimumMs * 1.2),
+      );
+      // Shift the interval before sampling: clamping a draw would synchronize
+      // clients at the cap or a shared server floor.
+      const lower = Math.max(minimumMs, Math.min(base, ceiling / 1.2));
+      const upper = Math.min(base * 1.2, ceiling);
+      delayMs = Math.ceil(lower + Math.random() * (upper - lower));
+    }
+    delayMs = resolveSleepDelayMs(delayMs);
     void sleepWithAbort(delayMs, retry.signal).then(
       () => {
         if (this.reconnectSignal !== retry.signal) {
@@ -575,6 +615,9 @@ export class GatewayProtocolClient<TPlan> {
           this.reconnectSignal = null;
         }
       },
+    );
+    this.invoke("reconnect scheduled", () =>
+      this.opts.onReconnectScheduled?.(delayMs, retry.signal),
     );
   }
 

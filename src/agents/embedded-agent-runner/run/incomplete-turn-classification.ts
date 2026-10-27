@@ -1,10 +1,16 @@
-/** Classifies terminal assistant visibility and provider retry eligibility. */
-import { asFiniteNumber } from "@openclaw/normalization-core/number-coercion";
+import { asPositiveFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { getReplyPayloadMetadata } from "../../../auto-reply/reply-payload.js";
 import { parseReplyDirectives } from "../../../auto-reply/reply/reply-directives.js";
+import type { AssistantMessage } from "../../../llm/types.js";
 import { resolveRawAssistantAnswerText } from "../../../shared/assistant-answer-text.js";
-import { extractEmbeddedAssistantText } from "../../embedded-agent-utils.js";
+import { prepareAgentRunTerminalReply } from "../../agent-run-terminal-reply.js";
+import type { CompletedAssistantAnswer } from "../../embedded-agent-subscribe.handlers.types.js";
+import {
+  extractAssistantVisibleText,
+  extractEmbeddedAssistantText,
+  sanitizeAssistantVisibleStreamText,
+} from "../../embedded-agent-utils.js";
 import {
   isStrictAgenticSupportedProviderModel,
   stripProviderPrefix,
@@ -18,12 +24,13 @@ import type { EmbeddedRunAttemptResult } from "./types.js";
 export type IncompleteTurnAttempt = Pick<
   EmbeddedRunAttemptResult,
   | "assistantTexts"
+  | "preparedTerminalReply"
+  | "textToolCallAttempt"
   | "clientToolCalls"
   | "currentAttemptAssistant"
   | "currentAttemptCompletedAssistant"
   | "yieldDetected"
   | "didSendDeterministicApprovalPrompt"
-  | "heartbeatToolResponse"
   | "toolMediaUrls"
   | "toolAudioAsVoice"
   | "toolTrustedLocalMedia"
@@ -45,7 +52,9 @@ export type IncompleteTurnAttempt = Pick<
   | "terminal"
   | "toolMetas"
 > &
-  Partial<Pick<EmbeddedRunAttemptResult, "acceptedSessionSpawns">>;
+  Partial<Pick<EmbeddedRunAttemptResult, "acceptedSessionSpawns">> & {
+    keptAnswer?: CompletedAssistantAnswer;
+  };
 
 function readAssistantSnapshotText(message: AgentMessage): string {
   return message.role === "assistant"
@@ -63,6 +72,19 @@ export function hasComposedVisibleAnswerAfterSettledTools(params: {
     (message) => message.role === "user",
   );
   const currentMessages = params.messagesSnapshot.slice(latestUserIndex + 1);
+  const hasMediaOutput = (text: string): boolean => {
+    const parsed = parseReplyDirectives(text);
+    return Boolean(parsed.mediaUrls?.length || parsed.audioAsVoice);
+  };
+  if (
+    params.assistantTexts.some(hasMediaOutput) ||
+    currentMessages.some(
+      (message) =>
+        message.role === "assistant" && hasMediaOutput(resolveRawAssistantAnswerText(message)),
+    )
+  ) {
+    return true;
+  }
   const lastToolResultIndex = currentMessages.findLastIndex(
     (message) => message.role === "toolResult",
   );
@@ -86,15 +108,16 @@ export function hasComposedVisibleAnswerAfterSettledTools(params: {
   });
 }
 
-/** Excludes only plain progress text; structured or tool-owned payloads remain delivery evidence. */
+/** Excludes pre-tool progress and generated failures; structured delivery remains evidence. */
 export function countSettledTurnDeliveryPayloads(params: {
   payloads: EmbeddedAgentRunResult["payloads"];
   attempt: IncompleteTurnAttempt;
 }): number {
-  const hasNoAssistantText = params.attempt.assistantTexts.every(
-    (text) => !parseReplyDirectives(text).text.trim(),
-  );
-  const hasComposedVisibleAnswer = hasComposedVisibleAnswerAfterSettledTools(params.attempt);
+  // A completed answer the subscriber kept for a later silent stop is this turn's answer, even
+  // though it precedes the tool results that settled after it.
+  const hasComposedVisibleAnswer =
+    params.attempt.keptAnswer !== undefined ||
+    hasComposedVisibleAnswerAfterSettledTools(params.attempt);
   const canFinalizeProviderError =
     params.attempt.settledTurnFinalizationContext && !hasComposedVisibleAnswer;
   return (params.payloads ?? []).filter((payload) => {
@@ -102,7 +125,7 @@ export function countSettledTurnDeliveryPayloads(params: {
     const syntheticFallback =
       payload.isError === true &&
       Object.keys(payload).every((key) => key === "text" || key === "isError") &&
-      ((hasNoAssistantText && metadata?.toolErrorWarning) ||
+      ((!hasComposedVisibleAnswer && metadata?.toolErrorWarning) ||
         (canFinalizeProviderError && metadata?.terminalProviderError));
     if (syntheticFallback) {
       return false;
@@ -131,16 +154,8 @@ export function countSettledTurnDeliveryPayloads(params: {
   }).length;
 }
 
-export function hasPositiveOutputTokenUsage(message: AgentMessage | null): boolean {
-  if (!message || typeof message !== "object") {
-    return false;
-  }
-  const usage = (message as { usage?: unknown }).usage;
-  if (!usage || typeof usage !== "object") {
-    return false;
-  }
-  const output = asFiniteNumber((usage as { output?: unknown }).output);
-  return output !== undefined && output > 0;
+export function hasPositiveOutputTokenUsage(message: AssistantMessage | null): boolean {
+  return asPositiveFiniteNumber(message?.usage?.output) !== undefined;
 }
 
 export function isIncompleteTerminalAssistantTurn(params: {
@@ -189,28 +204,7 @@ const RETRY_GUARD_MODEL_APIS = new Set([
   "openclaw-azure-openai-responses-transport",
 ]);
 export function joinAssistantTexts(assistantTexts?: readonly string[]): string {
-  return (assistantTexts ?? []).join("\n\n").trim();
-}
-
-export function isReasoningOnlyAssistantTurn(message: unknown): boolean {
-  if (!message || typeof message !== "object") {
-    return false;
-  }
-  return assessLastAssistantMessage(message as AgentMessage) === "incomplete-text";
-}
-
-// Unsigned thinking blocks have no cryptographic signature; assessLastAssistantMessage
-// returns "incomplete-thinking" for them. Empty content also returns "incomplete-thinking",
-// so the content.length > 0 guard is required to distinguish the two cases.
-export function isUnsignedThinkingOnlyAssistantTurn(message: unknown): boolean {
-  if (message == null || typeof message !== "object") {
-    return false;
-  }
-  const content = (message as { content?: unknown }).content;
-  if (!Array.isArray(content) || content.length === 0) {
-    return false;
-  }
-  return assessLastAssistantMessage(message as AgentMessage) === "incomplete-thinking";
+  return (assistantTexts ?? []).join("\n\n");
 }
 
 export function shouldApplyNonVisibleTurnRetryGuard(params: {
@@ -219,58 +213,48 @@ export function shouldApplyNonVisibleTurnRetryGuard(params: {
   modelApi?: string;
   executionContract?: string;
 }): boolean {
-  if (
+  // These guards use provider output structure, never user or assistant prose.
+  return (
     params.executionContract === "strict-agentic" ||
-    isIncompleteTurnRecoverySupportedProviderModel({
-      provider: params.provider,
-      modelId: params.modelId,
-    })
-  ) {
-    return true;
-  }
-  if (RETRY_GUARD_MODEL_APIS.has(normalizeLowercaseStringOrEmpty(params.modelApi ?? ""))) {
-    return true;
-  }
-  // This path uses provider output structure only: no user or assistant prose classification.
-  return isOllamaIncompleteTurnProvider(params.provider);
-}
-
-function isIncompleteTurnRecoverySupportedProviderModel(params: {
-  provider?: string;
-  modelId?: string;
-}): boolean {
-  if (
-    isStrictAgenticSupportedProviderModel({
-      provider: params.provider,
-      modelId: params.modelId,
-    })
-  ) {
-    return true;
-  }
-  const provider = normalizeLowercaseStringOrEmpty(params.provider ?? "");
-  if (!GEMINI_INCOMPLETE_TURN_PROVIDER_IDS.has(provider)) {
-    return false;
-  }
-  const modelId = typeof params.modelId === "string" ? params.modelId : "";
-  return GEMINI_INCOMPLETE_TURN_MODEL_ID_PATTERN.test(stripProviderPrefix(modelId));
+    isStrictAgenticSupportedProviderModel(params) ||
+    (GEMINI_INCOMPLETE_TURN_PROVIDER_IDS.has(
+      normalizeLowercaseStringOrEmpty(params.provider ?? ""),
+    ) &&
+      GEMINI_INCOMPLETE_TURN_MODEL_ID_PATTERN.test(stripProviderPrefix(params.modelId ?? ""))) ||
+    RETRY_GUARD_MODEL_APIS.has(normalizeLowercaseStringOrEmpty(params.modelApi ?? "")) ||
+    isOllamaIncompleteTurnProvider(params.provider)
+  );
 }
 
 export function classifyAssistantTurn(params: {
   payloadCount: number;
   attempt: Pick<
     IncompleteTurnAttempt,
-    "assistantTexts" | "currentAttemptAssistant" | "currentAttemptCompletedAssistant"
+    | "assistantTexts"
+    | "preparedTerminalReply"
+    | "textToolCallAttempt"
+    | "currentAttemptAssistant"
+    | "currentAttemptCompletedAssistant"
   >;
 }) {
   const assistant = resolveCurrentAttemptAssistant(params.attempt);
-  const output = parseReplyDirectives(
-    assistant
-      ? resolveRawAssistantAnswerText(assistant)
-      : joinAssistantTexts(params.attempt.assistantTexts),
+  const rawAnswerText = assistant
+    ? resolveRawAssistantAnswerText(assistant)
+    : joinAssistantTexts(params.attempt.assistantTexts);
+  const prepared =
+    params.attempt.preparedTerminalReply ??
+    prepareAgentRunTerminalReply({ rawText: rawAnswerText });
+  const renderedText = params.attempt.preparedTerminalReply
+    ? prepared.text
+    : assistant
+      ? extractAssistantVisibleText(assistant, (_text, final) => (final ? prepared.text : ""))
+      : sanitizeAssistantVisibleStreamText(prepared.text);
+  const visibleText = parseReplyDirectives(renderedText).text.trim();
+  const reasoningOnly = Boolean(
+    assistant && assessLastAssistantMessage(assistant) === "incomplete-text",
   );
-  const visibleText = output.text.trim();
-  const reasoningOnly = isReasoningOnlyAssistantTurn(assistant);
   const nonVisibleEligibleForSilentReply =
+    !params.attempt.textToolCallAttempt &&
     params.payloadCount === 0 &&
     visibleText.length === 0 &&
     assistant?.stopReason !== "error" &&
@@ -282,7 +266,10 @@ export function classifyAssistantTurn(params: {
   return {
     assistant,
     visibleText,
-    silent: output.isSilent,
+    silent:
+      prepared.terminalReply.disposition === "silent" &&
+      assistant?.stopReason === "stop" &&
+      !assistant.content.some((block) => block.type === "toolCall"),
     reasoningOnly,
     emptyResponse: nonVisibleEligibleForSilentReply && !reasoningOnly,
     nonVisibleEligibleForSilentReply,

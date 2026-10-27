@@ -1,17 +1,22 @@
 import type { AgentHarnessRuntimeArtifactBinding } from "openclaw/plugin-sdk/agent-harness-runtime";
+import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import type { CodexAppServerClient } from "./client.js";
+import type { CodexAppServerStartOptions } from "./config.js";
 import { retireSharedCodexAppServerClientIfCurrent } from "./shared-client.js";
+
+const loadRuntimeArtifact = createLazyRuntimeModule(() => import("./runtime-artifact.js"));
 
 export async function verifyStartupArtifact(params: {
   client: CodexAppServerClient;
   request?: Readonly<{ expected?: AgentHarnessRuntimeArtifactBinding }>;
   signal: AbortSignal;
+  startOptions: CodexAppServerStartOptions;
 }): Promise<AgentHarnessRuntimeArtifactBinding | undefined> {
   if (!params.request) {
     return undefined;
   }
   const { readCodexAppServerClientRuntimeArtifact, validateCodexAppServerRuntimeArtifact } =
-    await import("./runtime-artifact.js");
+    await loadRuntimeArtifact();
   const runtimeArtifact = readCodexAppServerClientRuntimeArtifact(params.client);
   const expected = params.request.expected;
   const matchesExpected =
@@ -20,7 +25,11 @@ export async function verifyStartupArtifact(params: {
   if (
     !runtimeArtifact ||
     !matchesExpected ||
-    !(await validateCodexAppServerRuntimeArtifact(runtimeArtifact, params.signal))
+    !(await validateCodexAppServerRuntimeArtifact(
+      runtimeArtifact,
+      params.signal,
+      params.startOptions,
+    ))
   ) {
     // Never let an unattested physical generation reach Computer Use,
     // plugin discovery, or a native thread request.

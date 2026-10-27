@@ -15,11 +15,17 @@ export type SessionTranscriptSearchResult = {
   archivedTranscriptsExcluded?: number;
 };
 
+export type SessionTranscriptSearchReadResult = Omit<SessionTranscriptSearchResult, "indexing"> & {
+  found: boolean;
+};
+
 export type SessionTranscriptSearchParams = {
   agentId: string;
   env?: NodeJS.ProcessEnv;
   limit?: number;
   query: string;
+  /** Interactive search completes the final word; tool queries retain exact terms. */
+  match?: "prefix";
   role?: "assistant" | "user";
   sessionId?: string;
   sessionKeys?: string[];

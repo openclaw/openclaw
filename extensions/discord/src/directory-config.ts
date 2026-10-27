@@ -1,4 +1,3 @@
-// Discord helper module supports directory config behavior.
 import { normalizeAccountId } from "openclaw/plugin-sdk/account-id";
 import {
   createResolvedDirectoryEntriesLister,
@@ -17,10 +16,8 @@ function resolveDiscordDirectoryConfigAccount(
   const resolvedAccountId = normalizeAccountId(accountId ?? resolveDefaultDiscordAccountId(cfg));
   const config = mergeDiscordAccountConfig(cfg, resolvedAccountId);
   return {
-    accountId: resolvedAccountId,
     config,
     allowFrom: resolveDiscordAccountAllowFrom({ cfg, accountId: resolvedAccountId }) ?? [],
-    dm: config.dm,
   };
 }
 
@@ -28,7 +25,7 @@ export const listDiscordDirectoryPeersFromConfig = createResolvedDirectoryEntrie
   ReturnType<typeof resolveDiscordDirectoryConfigAccount>
 >({
   kind: "user",
-  resolveAccount: (cfg, accountId) => resolveDiscordDirectoryConfigAccount(cfg, accountId),
+  resolveAccount: resolveDiscordDirectoryConfigAccount,
   resolveSources: (account) => {
     const guildUsers = Object.values(account.config.guilds ?? {}).flatMap((guild) =>
       (guild.users ?? []).concat(
@@ -48,7 +45,7 @@ export const listDiscordDirectoryGroupsFromConfig = createResolvedDirectoryEntri
   ReturnType<typeof resolveDiscordDirectoryConfigAccount>
 >({
   kind: "group",
-  resolveAccount: (cfg, accountId) => resolveDiscordDirectoryConfigAccount(cfg, accountId),
+  resolveAccount: resolveDiscordDirectoryConfigAccount,
   resolveSources: (account) =>
     Object.values(account.config.guilds ?? {}).map((guild) => Object.keys(guild.channels ?? {})),
   normalizeId: (raw) => {

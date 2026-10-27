@@ -5,7 +5,6 @@ repositories and process groups; the real v3 shell and supervisor are exercised.
 """
 import ctypes
 import errno
-import hashlib
 import importlib.util
 import json
 import os
@@ -26,7 +25,7 @@ RUNNER = ROOT / 'scripts/pr-lib/process-group-runner.mjs'
 spec = importlib.util.spec_from_file_location('pr_identity', PROVIDER)
 identity = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(identity)
-BASH = shutil.which('bash')
+BASH = '/bin/bash' if sys.platform == 'darwin' else shutil.which('bash')
 NODE = shutil.which('node')
 GIT = shutil.which('git')
 
@@ -141,11 +140,12 @@ class LockTests(unittest.TestCase):
         self.repo = self.root/'repo'; self.repo.mkdir()
         self.git('init', '-q', '-b', 'main')
         self.sources = self.root/'source'/'pr-lib';self.sources.mkdir(parents=True)
-        for file in (LOCK, RUNNER, PROVIDER, LOCK.with_name('host-tools.sh'), LOCK.with_name('github.sh'), LOCK.with_name('github.mjs'), LOCK.with_name('gh-api-preflight.mjs')):
+        for file in (LOCK, RUNNER, RUNNER.with_name('materialized-anchor.mjs'), PROVIDER, LOCK.with_name('host-tools.sh'), LOCK.with_name('github.sh'), LOCK.with_name('github.mjs'), LOCK.with_name('gh-api-preflight.mjs')):
             shutil.copyfile(file,self.sources/file.name)
         library = self.sources.parent/'lib';library.mkdir()
         # Preserve the supervisor's eager script imports without copying an app graph.
         for name in ('plain-gh.mjs', 'direct-run.mjs', 'managed-child-process.mts',
+                     'managed-cleanup-handoff.mts',
                      'vitest-resource-ownership.mts', 'windows-taskkill.mjs'):
             shutil.copyfile(ROOT/'scripts'/'lib'/name,library/name)
         shutil.copyfile(ROOT/'scripts'/'windows-cmd-helpers.mjs',
@@ -176,6 +176,36 @@ class LockTests(unittest.TestCase):
         self.addCleanup(self.stop, p)
         return p
 
+    def supervise_anchor(self, body, handoff='valid'):
+        anchor = self.root/'openclaw-pr-anchor.fixture'
+        anchor.mkdir(mode=0o700)
+        shutil.copytree(self.sources.parent, anchor/'scripts')
+        script = anchor/'scripts'/'pr'
+        script.write_text('#!/bin/bash\nset -eu\nsource "$(dirname "$0")/pr-lib/operation-lock.sh"\n'
+                          '_fixture_root="$1"; repo_root() { printf "%s\\n" "$_fixture_root"; }\n'+body+'\n')
+        script.chmod(0o755)
+        outside = self.root/'external-dependency'; outside.mkdir()
+        (outside/'preserved').write_text('dependency bytes\n')
+        (anchor/'node_modules').symlink_to(outside, target_is_directory=True)
+        opened = anchor
+        if handoff == 'foreign':
+            opened = self.root/'foreign'; opened.mkdir(mode=0o700)
+        prepare = 'exec 9< "$1"; export OPENCLAW_PR_ANCHOR_CREATOR_PID=$$ OPENCLAW_PR_ANCHOR_FD=9; '
+        if handoff == 'missing':
+            prepare = ''
+        elif handoff == 'closed':
+            prepare += 'exec 9<&-; '
+        elif handoff == 'wrong-pid':
+            prepare += 'export OPENCLAW_PR_ANCHOR_CREATOR_PID=1; '
+        command = [BASH, '-c', prepare+'exec "$2" "$3" "$4" "$5" "$4"',
+                   'anchor-fixture', str(opened.resolve()), NODE,
+                   str(anchor.resolve()/'scripts'/'pr-lib'/'process-group-runner.mjs'),
+                   str(self.repo.resolve()), str(script.resolve())]
+        p = subprocess.Popen(command, env=self.env, text=True, stdout=subprocess.PIPE,
+                             stderr=subprocess.PIPE, start_new_session=True)
+        self.addCleanup(self.stop, p)
+        return p, anchor, outside
+
     def stop(self, p):
         if p.poll() is None:
             os.killpg(p.pid, signal.SIGTERM)
@@ -195,14 +225,98 @@ class LockTests(unittest.TestCase):
         self.assertFalse(self.exists())
         self.assertFalse((self.repo/'node_modules').exists())
 
+    @unittest.skipUnless(sys.platform == 'darwin', 'Darwin interpreter compatibility')
+    def test_helpers_use_system_bash_independently_of_path(self):
+        tools = self.root/'tools'; tools.mkdir()
+        intercepted = self.root/'intercepted'
+        bash = tools/'bash'
+        self.env['PATH'] = str(tools)+os.pathsep+self.env['PATH']
+        for helper in ('pr-identity-preflight', 'operation-lock-release'):
+            with self.subTest(helper=helper):
+                # The operation uses absolute BASH. Reject just one supervisor
+                # helper at a time so preflight cannot hide a release regression.
+                bash.write_text('#!/bin/sh\nif [ "$3" = "'+helper+'" ]; then\n'
+                                '  printf "%s\\n" "$3" > "'+str(intercepted)+'"\n'
+                                '  exit 97\nfi\nexec /bin/bash "$@"\n')
+                bash.chmod(0o755)
+                self.complete(self.supervise('acquire_pr_operation_lock 42'), 0)
+                self.assertFalse(intercepted.exists())
+                self.assertFalse(self.exists())
+                self.assertFalse(list(self.root.glob('openclaw-pr-lock-release-*')))
+
+    def test_anchor_cleanup_after_clean_completion_preserves_dependency_target(self):
+        p, anchor, outside = self.supervise_anchor('acquire_pr_operation_lock 42')
+        self.complete(p, 0)
+        self.assertFalse(self.exists())
+        self.assertFalse(anchor.exists())
+        self.assertEqual((outside/'preserved').read_text(), 'dependency bytes\n')
+
+    def test_anchor_authority_not_inherited_by_operation(self):
+        p, anchor, _ = self.supervise_anchor(
+            'acquire_pr_operation_lock 42\n'
+            'test -z "${OPENCLAW_PR_ANCHOR_CREATOR_PID:-}${OPENCLAW_PR_ANCHOR_FD:-}"\n'
+            'if { : <&9; } 2>/dev/null; then exit 8; fi')
+        self.complete(p, 0)
+        self.assertFalse(self.exists())
+        self.assertFalse(anchor.exists())
+
+    def test_anchor_cleanup_after_validation_failure(self):
+        p, anchor, outside = self.supervise_anchor(
+            'acquire_pr_operation_lock 42\nbegin_pr_operation_validation_phase\nexit 1')
+        self.complete(p, 1)
+        self.assertFalse(self.exists())
+        self.assertFalse(anchor.exists())
+        self.assertTrue((outside/'preserved').exists())
+
+    def test_anchor_retired_after_drained_operation_failure(self):
+        p, anchor, _ = self.supervise_anchor('acquire_pr_operation_lock 42\nexit 7')
+        self.complete(p, 7)
+        self.assertFalse(self.exists())
+        self.assertFalse(anchor.exists())
+
+    def test_anchor_retained_without_creation_authority(self):
+        for handoff in ('missing', 'closed', 'wrong-pid', 'foreign'):
+            with self.subTest(handoff=handoff):
+                p, anchor, outside = self.supervise_anchor('acquire_pr_operation_lock 42', handoff)
+                self.complete(p, 0)
+                self.assertFalse(self.exists())
+                self.assertTrue(anchor.exists())
+                self.assertTrue((outside/'preserved').exists())
+                shutil.rmtree(anchor); shutil.rmtree(outside)
+
+    def test_anchor_replacement_retained(self):
+        ready, go = self.root/'ready', self.root/'go'
+        p, anchor, _ = self.supervise_anchor('acquire_pr_operation_lock 42\n: > "'+str(ready)+'"\n'
+            'while [ ! -f "'+str(go)+'" ]; do sleep 0.02; done')
+        deadline = time.monotonic()+5
+        while not ready.exists():
+            self.assertIsNone(p.poll()); self.assertLess(time.monotonic(), deadline); time.sleep(.02)
+        original = anchor.with_name('original-anchor')
+        anchor.rename(original); anchor.mkdir(mode=0o700)
+        (anchor/'replacement').write_text('foreign bytes\n')
+        go.touch(); self.complete(p, 0)
+        self.assertTrue(original.exists())
+        self.assertEqual((anchor/'replacement').read_text(), 'foreign bytes\n')
+
+    def test_anchor_retired_after_interruption(self):
+        ready = self.root/'ready'
+        p, anchor, _ = self.supervise_anchor('acquire_pr_operation_lock 42\n: > "'+str(ready)+'"\nsleep 30')
+        deadline = time.monotonic()+5
+        while not ready.exists():
+            self.assertIsNone(p.poll()); self.assertLess(time.monotonic(), deadline); time.sleep(.02)
+        p.send_signal(signal.SIGTERM)
+        self.complete(p, 128+signal.SIGTERM)
+        self.assertFalse(anchor.exists())
+        self.assertTrue(self.exists())
+
     @unittest.skipUnless(sys.platform == 'darwin', 'Darwin sandbox')
     def test_sandbox_lock_completion_without_app_graph(self):
         self.complete(self.supervise('acquire_pr_operation_lock 42', sandbox=True), 0)
         self.assertFalse(self.exists())
         self.assertFalse((self.repo/'node_modules').exists())
 
-    def test_failure_stays_sticky_and_exact_cas_recovery(self):
-        self.complete(self.supervise('acquire_pr_operation_lock 42\nexit 7'),7)
+    def test_interruption_stays_sticky_and_exact_cas_recovery(self):
+        self.complete(self.supervise('acquire_pr_operation_lock 42\nkill -TERM "$$"'),128+signal.SIGTERM)
         self.assertTrue(self.exists()); old=self.git('rev-parse',self.ref)
         successor=self.git('hash-object','-w','--stdin',input='successor fixture\n')
         self.git('update-ref',self.ref,successor,old)
@@ -233,13 +347,13 @@ class LockTests(unittest.TestCase):
         self.assertNotEqual(p.returncode, 0, out+err)
         self.assertTrue(self.exists())
 
-    def test_validation_failure_release_and_sticky_side_effects(self):
+    def test_drained_failure_releases_after_validation_or_side_effects(self):
         for mutated in (False, True):
             body = 'acquire_pr_operation_lock 42\nbegin_pr_operation_validation_phase\n'
             if mutated:
                 body += 'mark_pr_operation_side_effects_started\n'
             self.complete(self.supervise(body+'exit 1'), 1)
-            self.assertEqual(self.exists(), mutated)
+            self.assertFalse(self.exists())
 
     def test_live_owner_blocks_then_clean_drain_releases(self):
         ready=self.root/'ready'; go=self.root/'go'

@@ -1,51 +1,37 @@
-/** Resolves gateway dist entrypoints used by installed daemon command lines. */
 import path from "node:path";
+import { fileURLToPath } from "node:url";
+import {
+  runtimeProcessExternalPackageEntrypoints,
+  runtimeProcessGatewayEntrypointNames,
+} from "../infra/runtime-process-manifest.js";
+import { resolveExternalPackageRuntimeEntrypointUrl } from "../infra/runtime-process-url.js";
 import { pathExists } from "../utils.js";
 
-const GATEWAY_DIST_ENTRYPOINT_BASENAMES = [
-  "index.js",
-  "index.mjs",
-  "entry.js",
-  "entry.mjs",
-] as const;
+const GATEWAY_DIST_ENTRYPOINT_BASENAMES = runtimeProcessGatewayEntrypointNames.map((name) =>
+  path.basename(runtimeProcessExternalPackageEntrypoints[name]),
+);
 
-/** Detects built gateway dist entrypoints from service command arguments. */
 export function isGatewayDistEntrypointPath(inputPath: string): boolean {
   return /[/\\]dist[/\\].+\.(cjs|js|mjs)$/.test(inputPath);
 }
 
-function buildGatewayInstallEntrypointCandidates(root?: string): string[] {
+export function buildGatewayInstallEntrypointCandidates(root?: string): string[] {
   if (!root) {
     return [];
   }
-  return GATEWAY_DIST_ENTRYPOINT_BASENAMES.map((basename) => path.join(root, "dist", basename));
+  return runtimeProcessGatewayEntrypointNames.map((name) =>
+    fileURLToPath(resolveExternalPackageRuntimeEntrypointUrl(name, root)),
+  );
 }
 
 export function buildGatewayDistEntrypointCandidates(...inputs: string[]): string[] {
-  const distDirs: string[] = [];
-  const seenDirs = new Set<string>();
-
-  for (const inputPath of inputs) {
-    if (!isGatewayDistEntrypointPath(inputPath)) {
-      continue;
-    }
-    const distDir = path.dirname(inputPath);
-    if (seenDirs.has(distDir)) {
-      continue;
-    }
-    seenDirs.add(distDir);
-    distDirs.push(distDir);
-  }
+  const distDirs = new Set(inputs.filter(isGatewayDistEntrypointPath).map(path.dirname));
 
   // Prefer canonical basenames across every observed dist dir before falling
   // through, so repaired services converge on the same entrypoint order.
-  const candidates: string[] = [];
-  for (const basename of GATEWAY_DIST_ENTRYPOINT_BASENAMES) {
-    for (const distDir of distDirs) {
-      candidates.push(path.join(distDir, basename));
-    }
-  }
-  return candidates;
+  return GATEWAY_DIST_ENTRYPOINT_BASENAMES.flatMap((basename) =>
+    Array.from(distDirs, (distDir) => path.join(distDir, basename)),
+  );
 }
 
 export async function findFirstAccessibleGatewayEntrypoint(
@@ -62,10 +48,6 @@ export async function findFirstAccessibleGatewayEntrypoint(
 
 export async function resolveGatewayInstallEntrypoint(
   root: string | undefined,
-  exists: (candidate: string) => Promise<boolean> = pathExists,
 ): Promise<string | undefined> {
-  return findFirstAccessibleGatewayEntrypoint(
-    buildGatewayInstallEntrypointCandidates(root),
-    exists,
-  );
+  return findFirstAccessibleGatewayEntrypoint(buildGatewayInstallEntrypointCandidates(root));
 }

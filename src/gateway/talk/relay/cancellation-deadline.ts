@@ -36,6 +36,6 @@ export function scheduleRelayCancellationDeadline(
       ) {
         session.failSession("Realtime provider never ended a cancelled response. Reconnecting.");
       }
-    }, STALE_OUTPUT_FENCE_MAX_MS).unref?.();
-  }, TURN_BOUND_CANCELLATION_DRAIN_MS).unref?.();
+    }, STALE_OUTPUT_FENCE_MAX_MS).unref();
+  }, TURN_BOUND_CANCELLATION_DRAIN_MS).unref();
 }

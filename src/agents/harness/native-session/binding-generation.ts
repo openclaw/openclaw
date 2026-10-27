@@ -1,8 +1,9 @@
 import { resolveSessionStorePathCore } from "../../../config/sessions/paths.js";
 import { loadSessionEntryReadOnly } from "../../../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
+import { warnPluginSdkDeprecation } from "../../../plugins/sdk-deprecation.js";
 
-/** Resolve host lineage before selecting a native queue, catalog, or connection. */
+/** @deprecated Use resolvePreparedNativeSessionBinding. Supported through 2026-12-31. Removal in the first January 2027 stable release. */
 export async function resolveNativeSessionBinding<TBinding>(
   params: Omit<NativeSessionGenerationParams, "target"> & {
     target?: NativeSessionGenerationTarget;
@@ -13,6 +14,11 @@ export async function resolveNativeSessionBinding<TBinding>(
     assertBinding?: (binding: TBinding | undefined) => void;
   },
 ): Promise<{ binding: TBinding | undefined; assertCurrent: () => void }> {
+  warnPluginSdkDeprecation({
+    family: "native-session-binding",
+    method: "resolveNativeSessionBinding",
+    replacement: "resolvePreparedNativeSessionBinding",
+  });
   let assertCurrent = params.assertCurrent ?? (() => {});
   const assertAdmissionCurrent = () => {
     // Cancellation errors and cleanup behavior remain with each backend caller.
@@ -46,7 +52,7 @@ export async function resolveNativeSessionBinding<TBinding>(
   return { binding, assertCurrent };
 }
 
-/** Let the authoritative OpenClaw generation adopt its predecessor or reclaim a stale row. */
+/** @deprecated Use reclaimNativeSessionGenerationWithAuthority. Supported through 2026-12-31. Removal in the first January 2027 stable release. */
 export async function reclaimNativeSessionGeneration(
   params: NativeSessionGenerationParams & {
     generation: NativeSessionGenerationOperations;
@@ -54,6 +60,11 @@ export async function reclaimNativeSessionGeneration(
     reclaimStale?: boolean;
   },
 ): Promise<boolean> {
+  warnPluginSdkDeprecation({
+    family: "native-session-binding",
+    method: "reclaimNativeSessionGeneration",
+    replacement: "reclaimNativeSessionGenerationWithAuthority",
+  });
   params.assertCurrent?.();
   if (!params.target.sessionKey?.trim()) {
     return true;
@@ -65,8 +76,13 @@ export async function reclaimNativeSessionGeneration(
   return reclaimPreparedGeneration(params, authority);
 }
 
-/** Capture the host generation and predecessor together, then revalidate both after waits. */
+/** @deprecated Await retainNativeSessionGenerationAuthority. Supported through 2026-12-31. Removal in the first January 2027 stable release. */
 export function captureNativeSessionGenerationAuthority(params: NativeSessionGenerationParams) {
+  warnPluginSdkDeprecation({
+    family: "native-session-binding",
+    method: "captureNativeSessionGenerationAuthority",
+    replacement: "await retainNativeSessionGenerationAuthority()",
+  });
   const readEntry = () => {
     try {
       return readBindingSessionEntry(params);
@@ -111,7 +127,7 @@ type NativeSessionGenerationTarget = {
   sessionKey?: string;
 };
 
-type NativeSessionGenerationParams = {
+export type NativeSessionGenerationParams = {
   target: NativeSessionGenerationTarget;
   config?: OpenClawConfig;
   storePath?: string;
@@ -127,7 +143,7 @@ export type NativeSessionGenerationReclaimPlan =
 
 export type NativeSessionGenerationAdoptionResult = "absent" | "current" | "adopted" | "conflict";
 
-/** Backend storage translates these decisions into its own record schema and native policy. */
+/** @deprecated Use NativeSessionGenerationOperationsV2. Supported through 2026-12-31. Removal in the first January 2027 stable release. */
 export type NativeSessionGenerationOperations = {
   prepareReclaim: () => Promise<NativeSessionGenerationReclaimPlan>;
   adopt: (

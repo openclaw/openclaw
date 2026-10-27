@@ -46,16 +46,14 @@ type MeetingPluginShellPlatform = {
   };
 };
 
-type MeetingPluginNodeHostOptions = {
+export function createMeetingPluginNodeHostHandler(options: {
   browserPageName: string;
   defaultAudioInputCommand: readonly string[];
   defaultAudioOutputCommand: readonly string[];
   meetingLabel: string;
   platform: MeetingPluginShellPlatform;
   sharePrerequisiteDeadline: boolean;
-};
-
-export function createMeetingPluginNodeHostHandler(options: MeetingPluginNodeHostOptions) {
+}) {
   const platform = options.platform;
   return createMeetingConfiguredNodeHost({
     ...options,

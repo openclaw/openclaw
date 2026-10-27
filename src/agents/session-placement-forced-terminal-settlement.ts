@@ -1,17 +1,17 @@
-import { AsyncLocalStorage } from "node:async_hooks";
-import { resolveGlobalSingleton } from "../shared/global-singleton.js";
+import type { SessionSourceAssertion } from "../config/sessions/session-source-authority.js";
+import { AsyncContext } from "../shared/async-context.js";
 
-// Carry exact local-turn cleanup to its reply and backend owners; never recover by session id.
-const forcedTerminalSettlement = resolveGlobalSingleton(
-  Symbol.for("openclaw.sessionPlacementForcedTerminalSettlement"),
-  () => new AsyncLocalStorage<{ settle: () => Promise<void>; assertCurrent: () => void }>(),
-);
+// Carry exact turn cleanup to its reply and backend owners; never recover by session id.
+const forcedTerminalSettlement = new AsyncContext<{
+  settle: () => Promise<void>;
+  assertCurrent: SessionSourceAssertion;
+}>(Symbol.for("openclaw.sessionPlacementForcedTerminalSettlement"));
 
 export function withSessionPlacementForcedTerminalSettlement<T>(
   settle: () => Promise<void>,
-  assertClaimCurrent: () => void,
-  task: () => Promise<T>,
-): Promise<T> {
+  assertClaimCurrent: SessionSourceAssertion,
+  task: () => T,
+): T {
   return forcedTerminalSettlement.run({ settle, assertCurrent: assertClaimCurrent }, task);
 }
 
@@ -21,7 +21,9 @@ export function resolveSessionPlacementForcedTerminalSettlement():
   return forcedTerminalSettlement.getStore()?.settle;
 }
 
-export function resolveSessionPlacementTurnSettlementAssertion(): (() => void) | undefined {
+export function resolveSessionPlacementTurnSettlementAssertion():
+  | SessionSourceAssertion
+  | undefined {
   return forcedTerminalSettlement.getStore()?.assertCurrent;
 }
 

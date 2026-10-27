@@ -13,9 +13,6 @@ export function projectAssistantCommentaryFallbacks(
   message: unknown,
   maxChars: number,
 ): { fallbacks: unknown[]; message: unknown } {
-  if (!message || typeof message !== "object") {
-    return { fallbacks: [], message };
-  }
   const entry = readRecord(message);
   if (
     !entry ||
@@ -123,16 +120,16 @@ export function projectAssistantCommentaryFallbacks(
   if (commentaryContent.size === 0) {
     return { fallbacks, message };
   }
+  const remainingContent = entry.content.filter((block) => !commentaryContent.has(block));
   const remaining: Record<string, unknown> = {
     ...entry,
-    content: entry.content.filter((block) => !commentaryContent.has(block)),
+    content: remainingContent,
   };
   if (
     projectedUnphasedText &&
-    Array.isArray(remaining.content) &&
-    remaining.content.some((block) => isToolHistoryBlockType(readRecord(block)?.type))
+    remainingContent.some((block) => isToolHistoryBlockType(readRecord(block)?.type))
   ) {
-    remaining.content = remaining.content.filter((block) => !commentaryBlocks.has(block));
+    remaining.content = remainingContent.filter((block) => !commentaryBlocks.has(block));
     delete remaining.phase;
   }
   return { fallbacks, message: remaining };

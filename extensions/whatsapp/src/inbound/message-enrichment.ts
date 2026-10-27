@@ -1,12 +1,10 @@
-// Whatsapp plugin module prepares inbound text, context, and downloaded media.
 import type { proto, WAMessage, WASocket } from "baileys";
 import {
   formatInboundMediaUnavailableText,
   formatLocationText,
-  type MediaPlaceholderTextFact,
 } from "openclaw/plugin-sdk/channel-inbound";
-import { createSubsystemLogger, redactToolPayloadText } from "openclaw/plugin-sdk/logging-core";
-import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
+import { createSubsystemLogger } from "openclaw/plugin-sdk/logging-core";
+import { resolveWhatsAppMediaMaxBytes } from "../accounts.js";
 import { getStatusCode } from "../session-errors.js";
 import {
   describeReplyContext,
@@ -22,19 +20,6 @@ import { resolveInboundMediaMimetype } from "./media-mimetype.js";
 import { downloadInboundMedia, downloadQuotedInboundMedia } from "./media.js";
 
 const inboundMediaLogger = createSubsystemLogger("gateway/channels/whatsapp").child("inbound");
-const MAX_MEDIA_ERROR_MESSAGE_CHARS = 256;
-
-function sanitizeMediaErrorMessage(error: unknown): string {
-  const rawMessage = error instanceof Error ? error.message : String(error);
-  const redacted = redactToolPayloadText(rawMessage)
-    .replace(/https?:\/\/\S+/giu, "[redacted-url]")
-    .replace(/\b[^@\s]+@[a-z][a-z\d.-]*\b/giu, "[redacted-jid]")
-    .replace(/\+?\d[\d ().-]{6,}\d/gu, "[redacted-phone]");
-  return truncateUtf16Safe(
-    redacted.split("\n", 1)[0]?.trim() || "unknown error",
-    MAX_MEDIA_ERROR_MESSAGE_CHARS,
-  );
-}
 
 function logMediaMaterializationFailure(params: {
   messageId?: string | null;
@@ -43,14 +28,16 @@ function logMediaMaterializationFailure(params: {
   failureStage: "direct" | "quoted";
   error: unknown;
 }): void {
+  const errorName = params.error instanceof Error ? params.error.name : undefined;
   const errorClass =
-    params.error instanceof Error && /^[A-Za-z][A-Za-z0-9_.-]{0,63}$/u.test(params.error.name)
-      ? params.error.name
+    errorName &&
+    ["AbortError", "TimeoutError", "TypeError", "RangeError", "SyntaxError"].includes(errorName)
+      ? errorName
       : "Error";
   const statusCode = getStatusCode(params.error);
-  const errorMessage = sanitizeMediaErrorMessage(params.error);
   const failureDetails = [
     `stage=${params.failureStage}`,
+    `class=${errorClass}`,
     ...(params.mediaKind ? [`kind=${params.mediaKind}`] : []),
     ...(typeof statusCode === "number" ? [`status=${statusCode}`] : []),
   ].join(" ");
@@ -63,32 +50,15 @@ function logMediaMaterializationFailure(params: {
     failureStage: params.failureStage,
     errorClass,
     ...(typeof statusCode === "number" ? { statusCode } : {}),
-    errorMessage,
-    consoleMessage: `WhatsApp inbound media materialization failed (${failureDetails}): ${errorMessage}`,
+    consoleMessage: `WhatsApp inbound media materialization failed (${failureDetails})`,
   });
 }
-
-export type WhatsAppEnrichedInboundMessage = {
-  body: string;
-  commandBody: string;
-  location?: ReturnType<typeof extractLocationData>;
-  contactContext?: ReturnType<typeof extractContactContext>;
-  externalAdReplyContext?: ReturnType<typeof extractExternalAdReplyContext>;
-  replyContext?: ReturnType<typeof describeReplyContext>;
-  mediaPath?: string;
-  mediaType?: string;
-  mediaFileName?: string;
-  mediaKind?: NonNullable<ReturnType<typeof extractMediaKind>>;
-  nativeMedia?: MediaPlaceholderTextFact;
-  mentionedJids?: string[];
-};
 
 export async function enrichWhatsAppInboundMessage(params: {
   msg: WAMessage;
   sock: WASocket;
   mediaMaxMb?: number;
-  logVerbose: (message: string) => void;
-}): Promise<WhatsAppEnrichedInboundMessage | null> {
+}) {
   const { msg, sock } = params;
   const messageProjection = projectWhatsAppInboundMessage(msg.message ?? undefined);
   const location = extractLocationData(messageProjection);
@@ -113,23 +83,21 @@ export async function enrichWhatsAppInboundMessage(params: {
     : undefined;
   const nativeMedia = mediaKind ? { contentType: mediaType, kind: mediaKind } : undefined;
   let mediaFileName: string | undefined;
-  const maxMb =
-    typeof params.mediaMaxMb === "number" && params.mediaMaxMb > 0 ? params.mediaMaxMb : 50;
-  const maxBytes = maxMb * 1024 * 1024;
-  const saveInboundMedia = async (
-    inboundMedia: Awaited<ReturnType<typeof downloadInboundMedia>>,
-  ) => {
+  let savedContentType: string | undefined;
+  const maxBytes = resolveWhatsAppMediaMaxBytes(params);
+  const saveInboundMedia = (inboundMedia: Awaited<ReturnType<typeof downloadInboundMedia>>) => {
     if (!inboundMedia) {
       return;
     }
     mediaPath = inboundMedia.saved.path;
     mediaType = inboundMedia.mimetype;
     mediaFileName = inboundMedia.fileName;
+    savedContentType = inboundMedia.saved.contentType;
   };
   try {
     // Entry zero is exactly the Baileys normalization that downloadInboundMedia performed here
     // previously; later projection entries are extraction-only future-proof payloads.
-    await saveInboundMedia(
+    saveInboundMedia(
       await downloadInboundMedia(
         msg as proto.IWebMessageInfo,
         sock,
@@ -145,7 +113,6 @@ export async function enrichWhatsAppInboundMessage(params: {
       failureStage: "direct",
       error,
     });
-    params.logVerbose(`Inbound media download failed: ${String(error)}`);
     body = formatInboundMediaUnavailableText({
       body,
       notice: "[whatsapp attachment unavailable]",
@@ -153,7 +120,7 @@ export async function enrichWhatsAppInboundMessage(params: {
   }
   if (!mediaPath && !mediaKind && replyContext?.media) {
     try {
-      await saveInboundMedia(
+      saveInboundMedia(
         await downloadQuotedInboundMedia(msg as proto.IWebMessageInfo, sock, maxBytes),
       );
       mediaKind = replyContext.media.kind ?? undefined;
@@ -166,12 +133,15 @@ export async function enrichWhatsAppInboundMessage(params: {
         failureStage: "quoted",
         error,
       });
-      params.logVerbose(`Quoted media download failed: ${String(error)}`);
       body = formatInboundMediaUnavailableText({
         body,
         notice: "[whatsapp quoted attachment unavailable]",
       });
     }
+  }
+
+  if (mediaKind === "document" && savedContentType?.startsWith("image/")) {
+    mediaKind = "image";
   }
 
   return {

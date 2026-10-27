@@ -22,7 +22,7 @@ const { sweepCronRunSessions } = await import("../src/cron/session-reaper.js");
 
 const now = Date.now();
 const hour = 3_600_000;
-const targets: Array<{ agentId: string; storePath: string; databasePath: string }> = [];
+const targets: Array<{ agentId: string; storePath: string }> = [];
 const warnings: unknown[][] = [];
 const log = {
   debug: () => {},
@@ -116,12 +116,12 @@ try {
     for (const { sessionKey, entry } of expectedEntries(agentId)) {
       await replaceSessionEntry({ agentId, storePath, sessionKey }, entry);
     }
-    targets.push({ agentId, storePath, databasePath: database.path });
+    targets.push({ agentId, storePath });
   }
   closeOpenClawAgentDatabasesForTest();
   closeOpenClawStateDatabaseForTest();
   const databaseBytes = targets.reduce(
-    (sum, target) => sum + fs.statSync(target.databasePath).size,
+    (sum, target) => sum + fs.statSync(target.storePath).size,
     0,
   );
   const discovery = await sweep(now, 0);

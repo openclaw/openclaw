@@ -1,14 +1,6 @@
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 
-type SlackModalPrivateMetadata = {
-  sessionKey?: string;
-  channelId?: string;
-  channelType?: string;
-  userId?: string;
-  pluginInteractiveData?: string;
-};
-
-export function parseSlackModalPrivateMetadata(raw: unknown): SlackModalPrivateMetadata {
+export function parseSlackModalPrivateMetadata(raw: unknown) {
   if (typeof raw !== "string" || raw.trim().length === 0) {
     return {};
   }

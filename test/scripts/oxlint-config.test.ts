@@ -1,23 +1,134 @@
-// Oxlint Config tests cover oxlint config script behavior.
-import { spawnSync } from "node:child_process";
+import assert from "node:assert/strict";
+import { spawnSync, type SpawnSyncOptionsWithStringEncoding } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import JSON5 from "json5";
+import type { OxlintConfig } from "oxlint";
 import { describe, expect, it } from "vitest";
-import { createScriptTestHarness } from "./test-helpers.js";
+import { resolveRepoToolBinPath } from "../../scripts/lib/local-check-runtime.mts";
+import { createChangedOxlintEnv } from "../../scripts/lib/oxlint-changed-scope.mts";
+import { copyOxlintConfigFixture, createScriptTestHarness } from "./test-helpers.js";
 
 const { createTempDir } = createScriptTestHarness();
 
-type OxlintConfig = {
-  ignorePatterns?: string[];
-  overrides?: Array<{
-    excludeFiles?: string[];
-    files?: string[];
-    rules?: Record<string, unknown>;
+function runTool(
+  root: string,
+  args: string[],
+  options: Omit<SpawnSyncOptionsWithStringEncoding, "encoding"> = {},
+) {
+  return spawnSync(process.execPath, args, { cwd: root, encoding: "utf8", ...options });
+}
+
+function writeFixture(root: string, file: string, content: string) {
+  const target = path.join(root, file);
+  fs.mkdirSync(path.dirname(target), { recursive: true });
+  fs.writeFileSync(target, content);
+}
+
+function linkDependencies(root: string) {
+  fs.symlinkSync(path.resolve("node_modules"), path.join(root, "node_modules"), "junction");
+}
+
+function git(root: string, args: string[]) {
+  const result = spawnSync("git", args, { cwd: root, encoding: "utf8" });
+  expect(result.status, result.stdout + result.stderr).toBe(0);
+  return result.stdout.trim();
+}
+
+function makeFixture(name: string, config?: unknown, copyConfig = !config) {
+  const root = fs.realpathSync(createTempDir(`openclaw-oxlint-${name}-`));
+  const write = (file: string, content: string) => writeFixture(root, file, content);
+  const copy = (file: string) => write(file, fs.readFileSync(file, "utf8"));
+  const json = (file: string, value: unknown) => write(file, JSON.stringify(value));
+  if (copyConfig) {
+    copyOxlintConfigFixture(root);
+  }
+  if (config) {
+    fs.mkdirSync(path.join(root, ".git"));
+    json(".oxlintrc.json", config);
+  }
+  return { root, write, copy, json };
+}
+
+type LintReport = {
+  number_of_files: number;
+  diagnostics: Array<{
+    filename: string;
+    code: string;
+    severity: string;
+    help?: string;
+    labels: Array<{ span: { line: number } }>;
   }>;
-  plugins?: string[];
-  rules?: Record<string, unknown>;
 };
+
+function checked(result: ReturnType<typeof runTool>, status: number) {
+  expect(result.error).toBeUndefined();
+  expect(result.status, result.stdout + result.stderr).toBe(status);
+  return result.stdout;
+}
+
+const parseReport = (output: string): LintReport => JSON.parse(output);
+const normalized = (value: string) => value.replaceAll("\\", "/");
+const byFile = (report: LintReport, file: string) =>
+  report.diagnostics.filter((item) => normalized(item.filename) === file);
+const tsgolint = resolveRepoToolBinPath(process.platform === "win32" ? "tsgolint.CMD" : "tsgolint");
+
+function runLint(
+  root: string,
+  files: string[],
+  env: NodeJS.ProcessEnv = {},
+  args: string[] = [],
+  timeout = 10_000,
+) {
+  return runTool(root, [oxlintBin, "--threads=1", "--format=json", ...args, ...files], {
+    timeout,
+    env: { ...process.env, OXLINT_TSGOLINT_PATH: tsgolint, ...env },
+  });
+}
+
+function runFocused(root: string, files: string[], env: NodeJS.ProcessEnv) {
+  return runTool(
+    root,
+    [oxlintRunner, "--openclaw-focused-config", "--threads=1", "--format=json", ...files],
+    {
+      env: { ...process.env, ...env },
+    },
+  );
+}
+
+const oxlintBin = path.resolve("node_modules/oxlint/bin/oxlint");
+const oxlintRunner = path.resolve("scripts/run-oxlint.mts");
+
+const sourceProjectOwners = [
+  "agents",
+  "gateway",
+  "infra",
+  "commands",
+  "plugins",
+  "config",
+  "cli",
+  "auto-reply",
+];
+const sourceAugmentations = [
+  "src/agents/sessions/keybindings.ts",
+  "src/cli/program/openclaw-command.ts",
+  "src/agents/bash-tools.exec.resolve-env-hook.test.ts",
+  "src/plugin-sdk/channel-inbound.test.ts",
+  "src/infra/host-env-security-policy.d.ts",
+];
+
+function writeSourceProjectFixture(root: string) {
+  for (const file of [
+    "config/tsconfig/oxlint.source.json",
+    ...sourceProjectOwners.map((owner) => `src/${owner}/tsconfig.json`),
+  ]) {
+    writeFixture(root, file, fs.readFileSync(file, "utf8"));
+  }
+  writeSessionCompatibilityFixture(root);
+  for (const file of sourceAugmentations) {
+    writeFixture(root, file, "export {};\n");
+  }
+}
 
 type OxlintTsconfig = {
   compilerOptions?: {
@@ -27,152 +138,69 @@ type OxlintTsconfig = {
   exclude?: string[];
 };
 
-const ZERO_BASELINE_RULES = [
-  "eslint/array-callback-return",
-  "eslint/no-div-regex",
-  "eslint/no-constructor-return",
-  "eslint/no-extra-label",
-  "eslint/no-lone-blocks",
-  "eslint/no-multi-str",
-  "eslint/no-proto",
-  "eslint/no-regex-spaces",
-  "eslint/no-sequences",
-  "eslint/no-self-compare",
-  "eslint/no-var",
-  "eslint/no-param-reassign",
-  "eslint/no-implicit-coercion",
-  "eslint/no-label-var",
-  "eslint/no-prototype-builtins",
-  "eslint/no-redeclare",
-  "eslint/no-useless-rename",
-  "eslint/no-useless-return",
-  "eslint/no-new-wrappers",
-  "eslint/no-else-return",
-  "eslint/no-lonely-if",
-  "eslint/no-case-declarations",
-  "eslint/object-shorthand",
-  "eslint/prefer-exponentiation-operator",
-  "eslint/prefer-const",
-  "eslint/prefer-numeric-literals",
-  "eslint/prefer-object-has-own",
-  "eslint/prefer-promise-reject-errors",
-  "eslint/radix",
-  "eslint/symbol-description",
-  "eslint/unicode-bom",
-  "eslint/yoda",
-  "import/no-absolute-path",
-  "import/first",
-  "import/no-duplicates",
-  "import/no-empty-named-blocks",
-  "import/no-self-import",
-  "node/no-exports-assign",
-  "promise/no-new-statics",
-  "typescript/adjacent-overload-signatures",
-  "typescript/ban-tslint-comment",
-  "typescript/no-import-type-side-effects",
-  "typescript/no-inferrable-types",
-  "typescript/no-non-null-asserted-nullish-coalescing",
-  "typescript/no-unnecessary-qualifier",
-  "typescript/prefer-enum-initializers",
-  "typescript/prefer-find",
-  "typescript/prefer-for-of",
-  "typescript/prefer-function-type",
-  "typescript/prefer-includes",
-  "typescript/prefer-reduce-type-parameter",
-  "typescript/prefer-return-this-type",
-  "unicorn/consistent-date-clone",
-  "unicorn/consistent-empty-array-spread",
-  "unicorn/explicit-timer-delay",
-  "unicorn/no-console-spaces",
-  "unicorn/no-length-as-slice-end",
-  "unicorn/no-instanceof-array",
-  "unicorn/no-negation-in-equality-check",
-  "unicorn/no-new-buffer",
-  "unicorn/no-this-assignment",
-  "unicorn/no-typeof-undefined",
-  "unicorn/no-unreadable-array-destructuring",
-  "unicorn/no-useless-error-capture-stack-trace",
-  "unicorn/no-zero-fractions",
-  "unicorn/prefer-array-flat",
-  "unicorn/prefer-array-some",
-  "unicorn/prefer-blob-reading-methods",
-  "unicorn/prefer-dom-node-text-content",
-  "unicorn/prefer-keyboard-event-key",
-  "unicorn/prefer-math-min-max",
-  "unicorn/prefer-negative-index",
-  "unicorn/prefer-node-protocol",
-  "unicorn/prefer-number-properties",
-  "unicorn/prefer-optional-catch-binding",
-  "unicorn/prefer-prototype-methods",
-  "unicorn/prefer-regexp-test",
-  "unicorn/prefer-set-has",
-  "unicorn/prefer-structured-clone",
-  "unicorn/prefer-string-slice",
-  "unicorn/prefer-string-trim-start-end",
-  "unicorn/require-array-join-separator",
-  "unicorn/require-module-attributes",
-  "unicorn/require-number-to-fixed-digits-argument",
-  "unicorn/throw-new-error",
-  "vitest/no-import-node-test",
-  "vitest/consistent-vitest-vi",
-  "vitest/prefer-called-once",
-  "vitest/prefer-called-times",
-  "vitest/prefer-expect-type-of",
-];
-
-const DEFERRED_IMPORT_RULES = [
-  "import/default",
-  "import/namespace",
-  "import/no-named-as-default",
-  "import/no-named-as-default-member",
-  "import/no-unassigned-import",
-];
-
 function readJson(filePath: string): unknown {
   return JSON5.parse(fs.readFileSync(filePath, "utf8"));
 }
 
+function writeSessionCompatibilityFixture(root: string) {
+  // Keep the real augmentation but avoid importing the whole session graph.
+  const compatibility = "src/config/sessions/session-entry.test-compat.d.ts";
+  writeFixture(root, compatibility, fs.readFileSync(compatibility, "utf8"));
+  for (const [file, interfaces] of Object.entries({
+    "types.ts": ["SessionEntry", "InternalSessionEntry"],
+    "session-accessor.types.ts": [
+      "SessionTranscriptRuntimeTarget",
+      "SessionTranscriptTurnPersistResult",
+      "SessionTranscriptReadTarget",
+    ],
+  })) {
+    writeFixture(
+      root,
+      `src/config/sessions/${file}`,
+      interfaces.map((name) => "export interface " + name + " { id: string; }").join("\n"),
+    );
+  }
+}
+
 describe("oxlint config", () => {
   it("enforces namespace, evaluation, and unused-binding policies with the installed binary", () => {
-    const tempRoot = fs.realpathSync(createTempDir("openclaw-oxlint-policy-"));
+    const { root: tempRoot, write } = makeFixture("policy");
     const typescriptExtensions = ["ts", "tsx", "mts", "cts"];
     const javascriptExtensions = ["js", "jsx", "cjs", "mjs"];
+    const allExtensions = [...typescriptExtensions, ...javascriptExtensions];
     const evaluation = 'eval("1 + 1");\nglobalThis.eval("1 + 1");\n';
+    const variants = (name: string, source: string, rules: string[], extensions = allExtensions) =>
+      extensions.map((extension) => ({ file: `src/${name}.${extension}`, source, rules }));
     const fixtures = [
-      ...typescriptExtensions.map((extension) => ({
-        file: `src/namespaces.${extension}`,
-        source: [
+      ...variants(
+        "namespaces",
+        [
           "export type Profile = { ready: boolean };",
           "export const Profile = { ready: true };",
           "export interface Adapter { ready: boolean; }",
           "export const Adapter: Adapter = { ready: true };",
         ].join("\n"),
-        rules: [],
-      })),
-      ...javascriptExtensions.map((extension) => ({
-        file: `src/redeclaration.${extension}`,
-        source:
-          "var duplicateBinding = 1;\nvar duplicateBinding = 2;\nconsole.log(duplicateBinding);\n",
-        rules: ["eslint(no-redeclare)", "eslint(no-var)", "eslint(no-var)"],
-      })),
-      ...typescriptExtensions.map((extension) => ({
-        file: `src/no-var.${extension}`,
-        source: "export var legacyBinding = 1;\n",
-        rules: ["eslint(no-var)"],
-      })),
-      ...[...typescriptExtensions, ...javascriptExtensions].flatMap((extension) => [
-        {
-          file: `src/evaluation.${extension}`,
-          source: evaluation,
-          rules: ["eslint(no-eval)", "eslint(no-eval)"],
-        },
-        {
-          file: `src/unused.${extension}`,
-          source:
-            "function meaningful(_event) { return true; }\nfunction bare(_) { return true; }\nmeaningful(1);\nbare(1);\n",
-          rules: ["eslint(no-unused-vars)"],
-        },
-      ]),
+        [],
+        typescriptExtensions,
+      ),
+      ...variants(
+        "redeclaration",
+        "var duplicateBinding = 1;\nvar duplicateBinding = 2;\nconsole.log(duplicateBinding);\n",
+        ["eslint(no-redeclare)", "eslint(no-var)", "eslint(no-var)"],
+        javascriptExtensions,
+      ),
+      ...variants(
+        "no-var",
+        "export var legacyBinding = 1;\n",
+        ["eslint(no-var)"],
+        typescriptExtensions,
+      ),
+      ...variants("evaluation", evaluation, ["eslint(no-eval)", "eslint(no-eval)"]),
+      ...variants(
+        "unused",
+        "function meaningful(_event) { return true; }\nfunction bare(_) { return true; }\nmeaningful(1);\nbare(1);\n",
+        ["eslint(no-unused-vars)"],
+      ),
       ...[
         "extensions/qa-lab/src/web-runtime.ts",
         "extensions/qa-lab/src/web-runtime.test.ts",
@@ -187,284 +215,49 @@ describe("oxlint config", () => {
             : ["eslint(no-eval)", "eslint(no-eval)"],
       })),
     ];
-    fs.copyFileSync(".oxlintrc.json", path.join(tempRoot, ".oxlintrc.json"));
     for (const fixture of fixtures) {
-      const target = path.join(tempRoot, fixture.file);
-      fs.mkdirSync(path.dirname(target), { recursive: true });
-      fs.writeFileSync(target, fixture.source);
+      write(fixture.file, fixture.source);
     }
-    // These syntax-rule fixtures need no type program; one batch uses the real config and paths.
-    const result = spawnSync(
-      process.execPath,
-      [
-        path.resolve("node_modules/oxlint/bin/oxlint"),
-        "--config",
-        ".oxlintrc.json",
-        "--format",
-        "json",
-        "--threads=1",
-        "--report-unused-disable-directives-severity",
-        "error",
-        ...fixtures.map((fixture) => fixture.file),
-      ],
-      { cwd: tempRoot, encoding: "utf8", timeout: 10_000 },
+    const result = runLint(
+      tempRoot,
+      fixtures.map((fixture) => fixture.file),
+      {},
+      ["--config", ".oxlintrc.json", "--report-unused-disable-directives-severity", "error"],
     );
-    expect(result.error).toBeUndefined();
-    expect(result.status, result.stderr).toBe(1);
-    const report = JSON.parse(result.stdout) as {
-      number_of_files: number;
-      diagnostics: Array<{
-        filename: string;
-        code: string;
-        severity: string;
-        labels: Array<{ span: { line: number } }>;
-      }>;
-    };
+    const report = parseReport(checked(result, 1));
     expect(report.number_of_files).toBe(fixtures.length);
     for (const fixture of fixtures) {
-      const diagnostics = report.diagnostics.filter(
-        (diagnostic) => diagnostic.filename.replaceAll("\\", "/") === fixture.file,
-      );
-      expect(diagnostics.map((diagnostic) => diagnostic.code).toSorted(), fixture.file).toEqual(
-        fixture.rules.toSorted(),
-      );
+      const diagnostics = byFile(report, fixture.file);
       expect(
-        diagnostics.every((diagnostic) => diagnostic.severity === "error"),
+        diagnostics
+          .map(({ code, severity }) => [code, severity])
+          .toSorted((left, right) => left.join(",").localeCompare(right.join(","))),
         fixture.file,
-      ).toBe(true);
+      ).toEqual(
+        fixture.rules
+          .map((code) => [code, "error"])
+          .toSorted((left, right) => left.join(",").localeCompare(right.join(","))),
+      );
     }
-    const ownerDiagnostics = report.diagnostics.filter(
-      (diagnostic) =>
-        diagnostic.filename.replaceAll("\\", "/") === "extensions/qa-lab/src/web-runtime.ts",
-    );
+    const ownerDiagnostics = byFile(report, "extensions/qa-lab/src/web-runtime.ts");
     expect(ownerDiagnostics.map((diagnostic) => diagnostic.labels[0]?.span.line)).toEqual([1]);
     const unusedDiagnostics = report.diagnostics.filter(
       (diagnostic) => diagnostic.code === "eslint(no-unused-vars)",
     );
     expect(unusedDiagnostics.map((diagnostic) => diagnostic.labels[0]?.span.line)).toEqual(
-      [...typescriptExtensions, ...javascriptExtensions].map(() => 2),
+      allExtensions.map(() => 2),
     );
-  });
-
-  it("keeps plugin tests in a bounded type-aware project without losing their types", () => {
-    const tempRoot = fs.realpathSync(createTempDir("openclaw-oxlint-extension-project-"));
-    for (const file of [
-      ".oxlintrc.json",
-      "tsconfig.json",
-      "extensions/tsconfig.package-boundary.base.json",
-      "extensions/tsconfig.package-boundary.paths.json",
-      "extensions/tsconfig.json",
-    ]) {
-      // A missing discovery config must fail on the selected project, not fixture setup.
-      if (fs.existsSync(file)) {
-        const target = path.join(tempRoot, file);
-        fs.mkdirSync(path.dirname(target), { recursive: true });
-        fs.copyFileSync(file, target);
-      }
-    }
-    fs.symlinkSync(path.resolve("node_modules"), path.join(tempRoot, "node_modules"), "junction");
-    const fixtures = {
-      "src/imported.ts": "export function work(): Promise<void> { return Promise.resolve(); }",
-      "src/unrelated.ts": "export const unrelated = 1;",
-      "src/contracts.d.ts": "declare function fromCore(): Promise<void>;",
-      "ui/contracts.d.ts": "declare function fromUi(): Promise<void>;",
-      "packages/contracts.d.ts": "declare function fromPackage(): Promise<void>;",
-      "extensions/contracts.d.ts": "declare function fromPlugin(): Promise<void>;",
-      "extensions/sample/tsconfig.json": JSON.stringify({
-        extends: "../tsconfig.package-boundary.base.json",
-      }),
-      "extensions/sample/src/runtime.ts": "export const stable = 1;",
-      "extensions/sample/src/owner.test.ts": [
-        'import { work } from "../../../src/imported.js";',
-        "work(); fromCore(); fromUi(); fromPackage(); fromPlugin();",
-      ].join("\n"),
-      "extensions/sample/src/test-support/helper.ts":
-        'export { work } from "../../../../src/imported.js";',
-    };
-    for (const [file, source] of Object.entries(fixtures)) {
-      const target = path.join(tempRoot, file);
-      fs.mkdirSync(path.dirname(target), { recursive: true });
-      fs.writeFileSync(target, source);
-    }
-    const selected = [
-      "extensions/sample/src/runtime.ts",
-      "extensions/sample/src/owner.test.ts",
-      "extensions/sample/src/test-support/helper.ts",
-    ];
-    const result = spawnSync(
-      process.execPath,
-      [
-        path.resolve("node_modules/oxlint/bin/oxlint"),
-        "--config",
-        ".oxlintrc.json",
-        "--type-aware",
-        "--format",
-        "json",
-        "--threads=1",
-        ...selected,
-      ],
-      {
-        cwd: tempRoot,
-        encoding: "utf8",
-        timeout: 10_000,
-        env: {
-          ...process.env,
-          OXC_LOG: "debug",
-          GOMAXPROCS: "2",
-          OXLINT_TSGOLINT_PATH: path.resolve(
-            "node_modules/.bin",
-            process.platform === "win32" ? "tsgolint.CMD" : "tsgolint",
-          ),
-        },
-      },
-    );
-    expect(result.error).toBeUndefined();
-    expect(result.status, result.stderr).toBe(1);
-    const report = JSON.parse(result.stdout) as {
-      number_of_files: number;
-      diagnostics: Array<{ code: string }>;
-    };
-    expect(report.number_of_files).toBe(selected.length);
-    expect(
-      report.diagnostics.map((diagnostic) => diagnostic.code),
-      result.stdout,
-    ).toEqual(Array.from({ length: 5 }, () => "typescript(no-floating-promises)"));
-    for (const file of selected) {
-      const config = file.endsWith("/runtime.ts")
-        ? "extensions/sample/tsconfig.json"
-        : "extensions/tsconfig.json";
-      expect(result.stderr.replaceAll("\\", "/")).toContain(
-        `Got tsconfig for file ${path.join(tempRoot, file).replaceAll("\\", "/")}: ${path.join(tempRoot, config).replaceAll("\\", "/")}`,
-      );
-    }
-    const project = spawnSync(
-      process.execPath,
-      [
-        path.resolve("node_modules/typescript-native/bin/tsc"),
-        "--showConfig",
-        "--project",
-        "extensions/tsconfig.json",
-      ],
-      { cwd: tempRoot, encoding: "utf8", timeout: 10_000 },
-    );
-    expect(project.error).toBeUndefined();
-    expect(project.status, project.stdout + project.stderr).toBe(0);
-    const parsedProject = JSON.parse(project.stdout) as { files: string[] };
-    expect(parsedProject.files).not.toContain("../src/unrelated.ts");
-    expect(parsedProject.files).toEqual(
-      expect.arrayContaining([
-        "../src/contracts.d.ts",
-        "../ui/contracts.d.ts",
-        "../packages/contracts.d.ts",
-        "./contracts.d.ts",
-        ...selected.map((file) => `./${file.slice("extensions/".length)}`),
-      ]),
-    );
-  });
-
-  it("keeps source and UI lint projects bounded with imported and ambient types", () => {
-    const tempRoot = fs.realpathSync(createTempDir("openclaw-oxlint-core-projects-"));
-    for (const file of [
-      ".oxlintrc.json",
-      "tsconfig.json",
-      "src/tsconfig.json",
-      "ui/tsconfig.json",
-    ]) {
-      if (fs.existsSync(file)) {
-        const target = path.join(tempRoot, file);
-        fs.mkdirSync(path.dirname(target), { recursive: true });
-        fs.copyFileSync(file, target);
-      }
-    }
-    fs.symlinkSync(path.resolve("node_modules"), path.join(tempRoot, "node_modules"), "junction");
-    const source = [
-      'import { work } from "../packages/imported.js";',
-      "work(); fromCore(); fromUi(); fromPackage(); fromPlugin(); fromMts(); fromCts();",
-    ].join("\n");
-    for (const [file, content] of Object.entries({
-      "src/owner.ts": source,
-      "ui/owner.ts": source,
-      "packages/imported.ts": "export function work(): Promise<void> { return Promise.resolve(); }",
-      "src/contracts.d.ts": "declare function fromCore(): Promise<void>;",
-      "ui/contracts.d.ts": "declare function fromUi(): Promise<void>;",
-      "packages/contracts.d.ts": "declare function fromPackage(): Promise<void>;",
-      "extensions/contracts.d.ts": "declare function fromPlugin(): Promise<void>;",
-      "packages/contracts.d.mts":
-        "export {}; declare global { function fromMts(): Promise<void>; }",
-      "packages/contracts.d.cts":
-        "export {}; declare global { function fromCts(): Promise<void>; }",
-    })) {
-      const target = path.join(tempRoot, file);
-      fs.mkdirSync(path.dirname(target), { recursive: true });
-      fs.writeFileSync(target, content);
-    }
-    const selected = ["src/owner.ts", "ui/owner.ts"];
-    const result = spawnSync(
-      process.execPath,
-      [
-        path.resolve("node_modules/oxlint/bin/oxlint"),
-        "--type-aware",
-        "--format",
-        "json",
-        "--threads=1",
-        ...selected,
-      ],
-      {
-        cwd: tempRoot,
-        encoding: "utf8",
-        timeout: 10_000,
-        env: {
-          ...process.env,
-          OXC_LOG: "debug",
-          GOMAXPROCS: "2",
-          OXLINT_TSGOLINT_PATH: path.resolve(
-            "node_modules/.bin",
-            process.platform === "win32" ? "tsgolint.CMD" : "tsgolint",
-          ),
-        },
-      },
-    );
-    expect(result.error).toBeUndefined();
-    expect(result.status, result.stderr).toBe(1);
-    const report = JSON.parse(result.stdout) as {
-      diagnostics: Array<{ filename: string; code: string }>;
-    };
-    for (const file of selected) {
-      expect(
-        report.diagnostics
-          .filter((diagnostic) => diagnostic.filename.replaceAll("\\", "/") === file)
-          .map((diagnostic) => diagnostic.code),
-      ).toEqual(Array.from({ length: 7 }, () => "typescript(no-floating-promises)"));
-      const owner = path.dirname(file);
-      expect(result.stderr.replaceAll("\\", "/")).toContain(
-        `Got tsconfig for file ${path.join(tempRoot, file).replaceAll("\\", "/")}: ${path.join(tempRoot, owner, "tsconfig.json").replaceAll("\\", "/")}`,
-      );
-      const project = spawnSync(
-        process.execPath,
-        [
-          path.resolve("node_modules/typescript-native/bin/tsc"),
-          "--showConfig",
-          "-p",
-          `${owner}/tsconfig.json`,
-        ],
-        { cwd: tempRoot, encoding: "utf8", timeout: 10_000 },
-      );
-      expect(project.status, project.stdout + project.stderr).toBe(0);
-      const parsed = JSON.parse(project.stdout) as { files: string[] };
-      expect(parsed.files).not.toContain(`../${owner === "src" ? "ui" : "src"}/owner.ts`);
-    }
   });
 
   it("checks unbound methods in TypeScript and CommonJS source test support", () => {
-    const tempRoot = fs.realpathSync(createTempDir("openclaw-oxlint-source-support-"));
-    for (const file of [".oxlintrc.json", "tsconfig.json", "src/tsconfig.json"]) {
+    const { root: tempRoot, write, copy } = makeFixture("source-support");
+    for (const file of ["tsconfig.json", "src/tsconfig.json"]) {
       if (fs.existsSync(file)) {
-        const target = path.join(tempRoot, file);
-        fs.mkdirSync(path.dirname(target), { recursive: true });
-        fs.copyFileSync(file, target);
+        copy(file);
       }
     }
-    fs.symlinkSync(path.resolve("node_modules"), path.join(tempRoot, "node_modules"), "junction");
+    writeSourceProjectFixture(tempRoot);
+    linkDependencies(tempRoot);
     const supportFiles = [
       "src/cli/diagnostics.test-support.ts",
       "src/cli/diagnostics.test-support.cjs",
@@ -472,255 +265,500 @@ describe("oxlint config", () => {
     const files = [...supportFiles, "src/cli/unrelated.cjs", "ui/unrelated.test-support.cjs"];
     const source = 'const emit = process.emit;\nemit("lint-fixture");\n';
     for (const file of files) {
-      const target = path.join(tempRoot, file);
-      fs.mkdirSync(path.dirname(target), { recursive: true });
-      fs.writeFileSync(target, source);
+      write(file, source);
     }
     const lint = () =>
-      spawnSync(
-        process.execPath,
-        [
-          path.resolve("node_modules/oxlint/bin/oxlint"),
-          "--type-aware",
-          "--format",
-          "json",
-          "--threads=1",
-          ...files,
-        ],
+      runLint(
+        tempRoot,
+        files,
         {
-          cwd: tempRoot,
-          encoding: "utf8",
-          timeout: 10_000,
-          env: {
-            ...process.env,
-            OXLINT_TSGOLINT_PATH: path.resolve(
-              "node_modules/.bin",
-              process.platform === "win32" ? "tsgolint.CMD" : "tsgolint",
-            ),
-          },
+          OXLINT_TSGOLINT_PATH: path.resolve(
+            "node_modules/.bin",
+            process.platform === "win32" ? "tsgolint.CMD" : "tsgolint",
+          ),
         },
+        ["--type-aware"],
       );
     const broken = lint();
-    expect(broken.error).toBeUndefined();
-    expect(broken.status, broken.stdout + broken.stderr).toBe(1);
-    const report = JSON.parse(broken.stdout) as {
-      diagnostics: Array<{ filename: string; code: string }>;
-    };
-    expect(
-      report.diagnostics.map(({ filename, code }) => ({
-        filename: filename.replaceAll("\\", "/"),
-        code,
-      })),
-    ).toEqual(
+    const report = parseReport(checked(broken, 1));
+    expect(report.diagnostics.map(({ filename, code }) => [normalized(filename), code])).toEqual(
       expect.arrayContaining(
-        supportFiles.map((filename) => ({ filename, code: "typescript(unbound-method)" })),
+        supportFiles.map((filename) => [filename, "typescript(unbound-method)"]),
       ),
     );
     expect(report.diagnostics).toHaveLength(supportFiles.length);
     for (const file of supportFiles) {
-      fs.writeFileSync(
-        path.join(tempRoot, file),
-        source.replace("process.emit;", "process.emit.bind(process);"),
-      );
+      write(file, source.replace("process.emit;", "process.emit.bind(process);"));
     }
     const fixed = lint();
-    expect(fixed.error).toBeUndefined();
-    expect(fixed.status, fixed.stdout + fixed.stderr).toBe(0);
-    expect(JSON.parse(fixed.stdout).diagnostics).toEqual([]);
+    expect(parseReport(checked(fixed, 0)).diagnostics).toEqual([]);
   });
 
-  it("includes bundled extensions in type-aware lint coverage", () => {
-    const tsconfig = readJson("config/tsconfig/oxlint.json") as OxlintTsconfig;
-
-    expect(tsconfig.include).toContain("../../extensions/**/*");
-    expect(tsconfig.exclude ?? []).not.toContain("../../extensions");
-  });
-
-  it("includes scripts in root type-aware lint coverage", () => {
-    const tsconfig = readJson("config/tsconfig/oxlint.json") as OxlintTsconfig;
-
-    expect(tsconfig.include).toContain("../../scripts/**/*");
+  it("bounds package fallback roots while preserving existing projects and ambient types", () => {
+    const { root, write, copy } = makeFixture("package-project");
+    const packageOwners = [
+      "ai",
+      "llm-core",
+      "model-catalog-core",
+      "normalization-core",
+      "plugin-sdk",
+    ];
+    for (const file of [
+      "tsconfig.json",
+      "ui/src/css.d.ts",
+      ...packageOwners.map((owner) => `packages/${owner}/tsconfig.json`),
+    ]) {
+      copy(file);
+    }
+    write("package.json", '{"type":"module"}');
+    writeSourceProjectFixture(root);
+    linkDependencies(root);
+    // The original repository graph acquires ESNext through unrelated roots.
+    write("src/library-owner.ts", '/// <reference lib="esnext" />\nexport {};');
+    write("ui/unrelated.ts", "export {};");
+    write("extensions/unrelated.ts", "export {};");
+    const contract = "packages/example/contract.ts";
+    write(contract, "export interface Contract {} export declare const contract: Contract;");
+    for (const [index, file] of sourceAugmentations.entries()) {
+      const imported = path
+        .relative(path.dirname(file), contract)
+        .replaceAll("\\", "/")
+        .replace(/\.ts$/, ".js");
+      write(
+        file,
+        `import ${JSON.stringify(imported)}; declare module ${JSON.stringify(imported)} { interface Contract { action${index}(): Promise<void>; } }`,
+      );
+    }
+    const declarations = ["src", "packages", "ui", "extensions"].flatMap((directory) =>
+      ["ts", "mts", "cts"].map((suffix) => `${directory}/ambient.d.${suffix}`),
+    );
+    for (const [index, file] of declarations.entries()) {
+      write(file, `export {}; declare global { function ambient${index}(): Promise<void>; }`);
+    }
+    const fallback = [
+      "packages/example/owner.ts",
+      "packages/example/owner.test.ts",
+      "packages/normalization-core/src/owner.test.ts",
+      "packages/plugin-sdk/tests/owner.test.ts",
+    ];
+    for (const file of fallback) {
+      let imported = path
+        .relative(path.dirname(file), contract)
+        .replaceAll("\\", "/")
+        .replace(/\.ts$/, ".js");
+      if (!imported.startsWith(".")) {
+        imported = "./" + imported;
+      }
+      write(
+        file,
+        [
+          `import { contract } from ${JSON.stringify(imported)};`,
+          ...sourceAugmentations.map((_file, index) => `contract.action${index}();`),
+          ...declarations.map((_file, index) => `ambient${index}();`),
+          "Promise.try(() => undefined);",
+        ].join("\n"),
+      );
+    }
+    const configured = packageOwners
+      .filter((owner) => owner !== "plugin-sdk")
+      .map((owner) => `packages/${owner}/src/owner.ts`);
+    const inferred = [
+      "packages/example/frame.js",
+      "packages/example/probe.test-support.mjs",
+      "packages/example/other.test-support.mjs",
+    ];
+    for (const file of [...configured, ...inferred]) {
+      write(file, "Promise.resolve();");
+    }
+    write(
+      "packages/example/ambient-contract.ts",
+      [
+        'import type { SessionEntry } from "../../src/config/sessions/types.js";',
+        'import asset from "./frame.js?url&no-inline";',
+        'export const hasCompatibility: "sessionFile" extends keyof SessionEntry ? true : false = false;',
+        "export const assetUrl: string = asset;",
+      ].join("\n"),
+    );
+    const selected = [...fallback, ...configured, ...inferred];
+    const lint = () =>
+      runLint(root, selected, { OXC_LOG: "debug", GOMAXPROCS: "2" }, ["--type-aware"], 30_000);
+    const baseline = lint();
+    copy("packages/tsconfig.json");
+    const narrowed = lint();
+    const reports = [baseline, narrowed].map((result) => parseReport(checked(result, 1)));
+    expect(reports.map((report) => report.number_of_files)).toEqual([
+      selected.length,
+      selected.length,
+    ]);
+    expect(reports[0]!.diagnostics.map((item) => JSON.stringify(item)).toSorted()).toEqual(
+      reports[1]!.diagnostics.map((item) => JSON.stringify(item)).toSorted(),
+    );
+    const expectProject = (result: ReturnType<typeof runTool>, file: string, project: string) => {
+      expect(normalized(result.stderr)).toContain(
+        `Got tsconfig for file ${normalized(path.join(root, file))}: ${normalized(path.join(root, project))}`,
+      );
+    };
+    for (const file of fallback) {
+      expect(byFile(reports[1]!, file).map((item) => item.code)).toEqual(
+        Array.from(
+          { length: sourceAugmentations.length + declarations.length + 1 },
+          () => "typescript(no-floating-promises)",
+        ),
+      );
+      expectProject(baseline, file, "tsconfig.json");
+      expectProject(narrowed, file, "packages/tsconfig.json");
+    }
+    for (const result of [baseline, narrowed]) {
+      for (const file of configured) {
+        expectProject(result, file, file.split("/").slice(0, 2).join("/") + "/tsconfig.json");
+      }
+      for (const file of inferred) {
+        expect(normalized(result.stderr)).toContain(
+          `Unmatched file: ${normalized(path.join(root, file))}`,
+        );
+      }
+    }
+    const expanded = spawnSync(
+      resolveRepoToolBinPath("tsgo"),
+      ["--showConfig", "--project", "packages/tsconfig.json"],
+      { cwd: root, encoding: "utf8", timeout: 10_000 },
+    );
+    const roots = (JSON.parse(checked(expanded, 0)) as { files: string[] }).files.map((file) =>
+      path.resolve(root, "packages", file),
+    );
+    for (const file of [...fallback, ...configured, ...sourceAugmentations, ...declarations]) {
+      expect(roots, file).toContain(path.resolve(root, file));
+    }
+    for (const file of [
+      "src/library-owner.ts",
+      "ui/unrelated.ts",
+      "extensions/unrelated.ts",
+      "src/config/sessions/session-entry.test-compat.d.ts",
+      ...inferred,
+    ]) {
+      expect(roots, file).not.toContain(path.resolve(root, file));
+    }
+    const typecheck = spawnSync(
+      resolveRepoToolBinPath("tsgo"),
+      ["--project", "packages/tsconfig.json", "--noEmit", "--pretty", "false"],
+      { cwd: root, encoding: "utf8", timeout: 10_000 },
+    );
+    checked(typecheck, 0);
   });
 
   it("has a discoverable scripts tsconfig for type-aware linting", () => {
     const tsconfig = readJson("scripts/tsconfig.json") as OxlintTsconfig;
 
-    expect(tsconfig.compilerOptions?.allowJs).toBe(true);
-    expect(tsconfig.include).toContain("**/*.ts");
-    expect(tsconfig.include).toContain("**/*.mts");
+    expect(tsconfig).toMatchObject({
+      compilerOptions: { allowJs: true },
+      include: expect.arrayContaining(["**/*.ts", "**/*.mts"]),
+    });
     expect(tsconfig.exclude ?? []).not.toContain("**/*.ts");
     expect(tsconfig.exclude ?? []).not.toContain("**/*.mts");
   });
 
-  it("does not ignore the bundled extensions tree", () => {
+  it("keeps native cap scopes and correctness while warning on untouched local line debt", () => {
     const config = readJson(".oxlintrc.json") as OxlintConfig;
-
-    expect(config.ignorePatterns ?? []).not.toContain("extensions/");
-  });
-
-  it("keeps generated and vendored extension outputs ignored", () => {
-    const config = readJson(".oxlintrc.json") as OxlintConfig;
-    const ignorePatterns = config.ignorePatterns ?? [];
-
-    expect(ignorePatterns).toEqual([
-      "dist/",
-      "dist-runtime/",
-      ".agents/skills/autoreview/tests/fixtures/**",
-      "test/fixtures/oxlint-boundary-guards/**",
-      "**/a2ui.bundle.js",
-      "extensions/diffs/assets/viewer-runtime.js",
-      "extensions/diffs-language-pack/assets/viewer-runtime.js",
-      "node_modules/",
-      "patches/",
-      "pnpm-lock.yaml",
-      "skills/**",
-      "src/auto-reply/reply/export-html/template.js",
-      "vendor/",
-      "**/.cache/**",
-      "**/.openclaw-runtime-deps-copy-*/**",
-      "**/build/**",
-      "**/coverage/**",
-      "**/dist/**",
-      "**/dist-runtime/**",
-      "**/node_modules/**",
-    ]);
-  });
-
-  it("allows ecosystem contract fields with leading underscores", () => {
-    const config = readJson(".oxlintrc.json") as OxlintConfig;
-
-    expect(config.rules?.["eslint/no-underscore-dangle"]).toEqual([
-      "error",
-      { allow: ["__typename", "_meta"] },
-    ]);
-  });
-
-  it("preserves the indexed-access and test-file policies", () => {
-    const config = readJson(".oxlintrc.json") as OxlintConfig;
-
-    expect(config.overrides?.slice(0, 3)).toEqual([
+    const { root, write, json } = makeFixture(
+      "ci-limits",
       {
-        files: ["extensions/browser/src/browser/routes/*.ts"],
-        rules: {
-          "oxc/no-async-endpoint-handlers": "off",
-        },
-      },
-      {
-        files: [
-          "packages/markdown-core/**/*.ts",
-          "packages/net-policy/**/*.ts",
-          "packages/media-understanding-common/**/*.ts",
-          "packages/terminal-core/**/*.ts",
-          "packages/normalization-core/**/*.ts",
-          "packages/model-catalog-core/**/*.ts",
-          "packages/agent-core/**/*.ts",
-          "packages/acp-core/**/*.ts",
-          "packages/ai/**/*.ts",
-          "packages/gateway-client/**/*.ts",
-          "packages/gateway-protocol/**/*.ts",
-          "packages/llm-core/**/*.ts",
-          "packages/media-core/**/*.ts",
-          "packages/media-generation-core/**/*.ts",
-          "packages/plugin-package-contract/**/*.ts",
-          "packages/sdk/**/*.ts",
+        ...config,
+        env: { browser: true },
+        globals: { configuredGlobal: "readonly" },
+        rules: { ...config.rules, "no-undef": "error" },
+        ignorePatterns: [...(config.ignorePatterns ?? []), "src/ignored-by-config.ts"],
+        overrides: [
+          ...(config.overrides ?? []),
+          {
+            files: ["src/disabled/**"],
+            rules: { "max-lines": "off" },
+          },
         ],
-        rules: {
-          "typescript/no-non-null-assertion": "error",
-        },
       },
-      {
-        files: [
-          "**/*.{test,suite}.ts",
-          "**/*.{test,suite}.tsx",
-          "**/*.e2e.test.ts",
-          "**/*.live.test.ts",
-          "**/*test-harness.ts",
-          "**/*test-helpers.ts",
-          "**/*test-support.ts",
-        ],
-        rules: {
-          "import/first": "off",
-          "typescript/no-explicit-any": "off",
-        },
-      },
-    ]);
-  });
-
-  it("warns on scoped max-lines budgets while excluding generated output", () => {
-    const config = readJson(".oxlintrc.json") as OxlintConfig;
-    const maxLinesOverrides = (config.overrides ?? []).filter(
-      (override) => override.rules?.["max-lines"],
+      true,
     );
-    const scopedBudgets = maxLinesOverrides.filter((override) => override.excludeFiles);
-    const exactExceptions = maxLinesOverrides.filter((override) => !override.excludeFiles);
+    linkDependencies(root);
+    const sources = {
+      "src/oversized.ts": 702,
+      "src/within-cap.test.ts": 902,
+      "extensions/copilot/src/event-bridge.ts": 902,
+      "src/generated/ignored.ts": 1402,
+      "src/ignored-by-config.ts": 1402,
+      "src/disabled/ignored.ts": 1402,
+    };
+    for (const [file, lines] of Object.entries(sources)) {
+      write(file, `export const values = [\n${"  0,\n".repeat(lines - 2)}];\n`);
+    }
+    write("src/correctness.ts", "export var legacy = 1;\n");
+    write("src/globals.js", "window.console.log(configuredGlobal);\n");
+    const ownConfig = readJson(path.join(root, ".oxlintrc.json")) as OxlintConfig;
+    json("base.json", {});
+    type Scenario = [
+      severity: "error" | "warning",
+      github?: boolean,
+      correctness?: boolean,
+      evidence?: boolean,
+      changedPaths?: string[],
+      inherited?: boolean,
+    ];
+    const scenarios: Scenario[] = [
+      ["error"],
+      ["warning", true],
+      ["warning", true, true],
+      ["warning", true, true, true],
+      ["error", false, false, true, ["src/globals.js"], true],
+      ...[false, true].flatMap((evidence) =>
+        [false, true].map((correctness): Scenario => [
+          "warning",
+          false,
+          correctness,
+          evidence,
+          ["src/globals.js"],
+        ]),
+      ),
+      ...[
+        [],
+        ["src/oversized.ts"],
+        [".oxlintrc.json"],
+        ["src/.oxlintrc.json"],
+        ["package.json"],
+        ["pnpm-lock.yaml"],
+        ["pnpm-workspace.yaml"],
+        ["patches/oxlint.patch"],
+        ["scripts/run-oxlint.mts"],
+      ].map((changedPaths): Scenario => ["error", false, false, false, changedPaths]),
+    ];
+    for (const [index, scenario] of scenarios.entries()) {
+      const [severity, github, correctness, evidence, changedPaths, inherited] = scenario;
+      json(".oxlintrc.json", inherited ? { ...ownConfig, extends: ["./base.json"] } : ownConfig);
+      const summary = path.join(root, `summary-${index}.md`);
+      const result = runFocused(
+        root,
+        [...Object.keys(sources), "src/globals.js", ...(correctness ? ["src/correctness.ts"] : [])],
+        {
+          CI: "true",
+          GITHUB_ACTIONS: github ? "true" : "false",
+          GITHUB_STEP_SUMMARY: summary,
+          OPENCLAW_OXLINT_CHANGED_PATHS: changedPaths && JSON.stringify(changedPaths),
+          OPENCLAW_CI_STATIC_EVIDENCE: evidence ? "1" : "0",
+          OPENCLAW_CI_STATIC_EVIDENCE_ID: "limits:0",
+        },
+      );
+      const expectedStatus = severity === "warning" && !correctness ? 0 : 1;
+      const marker = "\n[ci-static:oxlint:leaf] ";
+      const [output, receipt] = checked(result, expectedStatus).split(marker);
+      assert.ok(output !== undefined, "Missing lint diagnostic output");
+      const report = parseReport(output);
+      if (evidence) {
+        assert.ok(receipt !== undefined, "Missing lint evidence receipt");
+        expect(JSON.parse(receipt)).toMatchObject({
+          version: 1,
+          id: "limits:0",
+          config: ".oxlintrc.json",
+          exitCode: expectedStatus,
+          stdout: output,
+          stderr: "",
+        });
+        expect(fs.readdirSync(root).filter((file) => file.startsWith(".oxlint-limits-"))).toEqual(
+          [],
+        );
+      } else {
+        expect(receipt).toBeUndefined();
+      }
+      expect(report.diagnostics).toHaveLength(correctness ? 2 : 1);
+      expect(
+        report.diagnostics.find((diagnostic) => diagnostic.code === "eslint(max-lines)"),
+      ).toMatchObject({
+        severity,
+        help: "Maximum allowed is 700.",
+      });
+      if (github) {
+        expect(result.stderr).toContain("::warning file=src/oversized.ts,");
+        expect(fs.readFileSync(summary, "utf8")).toContain("Maximum allowed is 700.");
+      }
+      if (correctness) {
+        expect(
+          report.diagnostics.find((diagnostic) => diagnostic.code === "eslint(no-var)")?.severity,
+        ).toBe("error");
+      }
+    }
+  });
 
-    expect(scopedBudgets).toHaveLength(4);
-    expect(scopedBudgets.map((override) => override.rules?.["max-lines"])).toEqual([
-      ["warn", { max: 700, skipBlankLines: true, skipComments: true }],
-      ["warn", { max: 700, skipBlankLines: true, skipComments: true }],
-      ["warn", { max: 800, skipBlankLines: true, skipComments: true }],
-      ["warn", { max: 1000, skipBlankLines: true, skipComments: true }],
+  it("matches changed paths literally and keeps inherited config limits strict", () => {
+    const config = { categories: { correctness: "off" }, rules: { "max-lines": ["error", 2] } };
+    const { root, write, json } = makeFixture("changed-paths", config);
+    linkDependencies(root);
+    const sources = [
+      "!root.ts",
+      "src/!root.ts",
+      "src/special[ab]{x,y}!file.ts",
+      "src/specialax!file.ts",
+      "src/wild-star.ts",
+      "src/wild-question.ts",
+    ];
+    for (const file of sources) {
+      write(file, "export const values = [\n  0,\n  1,\n];\n");
+    }
+    const changedPaths = [
+      "!root.ts",
+      "src/special[ab]{x,y}!file.ts",
+      "src/wild*.ts",
+      "src/wild-questio?.ts",
+    ];
+    for (const inherited of [false, true]) {
+      if (inherited) {
+        json("base.json", config);
+        json(".oxlintrc.json", { extends: ["./base.json"] });
+      }
+      const result = runFocused(root, sources, {
+        GITHUB_ACTIONS: "false",
+        OPENCLAW_OXLINT_CHANGED_PATHS: JSON.stringify(changedPaths),
+      });
+      const report = parseReport(checked(result, 1));
+      expect(report.diagnostics).toHaveLength(sources.length);
+      for (const file of sources) {
+        expect(byFile(report, file)[0], file).toMatchObject({
+          code: "eslint(max-lines)",
+          severity: inherited || changedPaths.includes(file) ? "error" : "warning",
+        });
+      }
+    }
+  });
+
+  it("keeps untouched limits advisory for release-version-only manifest changes", () => {
+    const config = { categories: { correctness: "off" }, rules: { "max-lines": ["error", 2] } };
+    const { root, write, json } = makeFixture("release-version-scope", config);
+    linkDependencies(root);
+    write("src/changed.ts", "export const changed = [\n  0,\n  1,\n];\n");
+    write("src/untouched.ts", "export const untouched = [\n  0,\n  1,\n];\n");
+    json("package.json", { name: "fixture", version: "2026.10.10-beta.3" });
+    git(root, ["init", "--quiet"]);
+    git(root, ["add", "."]);
+    git(root, [
+      "-c",
+      "user.name=Test",
+      "-c",
+      "user.email=test@example.com",
+      "commit",
+      "--quiet",
+      "-m",
+      "base",
     ]);
-    for (const override of scopedBudgets) {
-      expect(override.excludeFiles).toContain("**/protocol-gen/**");
-      expect(override.excludeFiles).toContain("**/*.generated.*");
-      expect(override.excludeFiles).toContain("ui/src/i18n/locales/**");
-      expect(override.excludeFiles).toContain("src/wizard/i18n/locales/**");
-    }
-    for (const override of scopedBudgets.slice(0, 3)) {
-      expect(override.excludeFiles).toContain("**/*.{test,spec,suite}.*");
-    }
-    expect(scopedBudgets[3]?.files).toEqual(
-      expect.arrayContaining([
-        "src/**/*.{test,spec,suite}.*",
-        "ui/src/**/*.{test,spec,suite}.*",
-        "packages/**/*.{test,spec,suite}.*",
-        "extensions/**/*.{test,spec,suite}.*",
-      ]),
+    const base = git(root, ["rev-parse", "HEAD"]);
+    json("package.json", { name: "fixture", version: "2026.10.10-beta.4" });
+
+    const result = runFocused(root, ["src/changed.ts", "src/untouched.ts"], {
+      GITHUB_ACTIONS: "false",
+      OPENCLAW_OXLINT_CHANGED_PATHS: JSON.stringify(["package.json", "src/changed.ts"]),
+      OPENCLAW_OXLINT_CHANGED_BASE: base,
+    });
+    const report = parseReport(checked(result, 1));
+    expect(byFile(report, "src/changed.ts")[0]?.severity).toBe("error");
+    expect(byFile(report, "src/untouched.ts")[0]?.severity).toBe("warning");
+  });
+
+  it("trusts changed lint policy files only when they match authoritative main", () => {
+    const config = { categories: { correctness: "off" }, rules: { "max-lines": ["error", 2] } };
+    const { root, write, json } = makeFixture("trusted-release-policy", config);
+    linkDependencies(root);
+    write("src/changed.ts", "export const changed = [\n  0,\n  1,\n];\n");
+    write("src/untouched.ts", "export const untouched = [\n  0,\n  1,\n];\n");
+    write("scripts/lib/oxlint-changed-scope.mts", 'export const policy = "base";\n');
+    json("package.json", { name: "fixture", version: "2026.10.10-beta.3" });
+    git(root, ["init", "--quiet"]);
+    git(root, ["add", "."]);
+    git(root, [
+      "-c",
+      "user.name=Test",
+      "-c",
+      "user.email=test@example.com",
+      "commit",
+      "--quiet",
+      "-m",
+      "base",
+    ]);
+    const base = git(root, ["rev-parse", "HEAD"]);
+    write("scripts/lib/oxlint-changed-scope.mts", 'export const policy = "trusted";\n');
+    git(root, ["add", "scripts/lib/oxlint-changed-scope.mts"]);
+    git(root, [
+      "-c",
+      "user.name=Test",
+      "-c",
+      "user.email=test@example.com",
+      "commit",
+      "--quiet",
+      "-m",
+      "trusted policy",
+    ]);
+    const trustedPolicyRef = git(root, ["rev-parse", "HEAD"]);
+    json("package.json", { name: "fixture", version: "2026.10.10-beta.4" });
+
+    const changedPaths = ["package.json", "scripts/lib/oxlint-changed-scope.mts", "src/changed.ts"];
+    const trustedEnv = createChangedOxlintEnv(
+      changedPaths,
+      {
+        CHECKOUT_BASE_SHA: base,
+        GITHUB_ACTIONS: "false",
+        OPENCLAW_OXLINT_TRUSTED_POLICY_REF: trustedPolicyRef,
+      },
+      { cwd: root },
     );
-    expect(exactExceptions).toEqual([
-      {
-        files: ["extensions/copilot/src/event-bridge.ts"],
-        rules: {
-          "max-lines": ["warn", { max: 950, skipBlankLines: true, skipComments: true }],
-        },
-      },
-      {
-        files: ["extensions/copilot/src/attempt-transcript-journal.test.ts"],
-        rules: {
-          "max-lines": ["warn", { max: 1200, skipBlankLines: true, skipComments: true }],
-        },
-      },
-    ]);
+    expect(trustedEnv.OPENCLAW_OXLINT_CHANGED_BASE).toBe(base);
+    expect(trustedEnv.OPENCLAW_OXLINT_CHANGED_PATHS).toBe(JSON.stringify(changedPaths));
+    const trusted = runFocused(root, ["src/changed.ts", "src/untouched.ts"], {
+      GITHUB_ACTIONS: "false",
+      ...trustedEnv,
+    });
+    const trustedReport = parseReport(checked(trusted, 1));
+    expect(byFile(trustedReport, "src/changed.ts")[0]?.severity).toBe("error");
+    expect(byFile(trustedReport, "src/untouched.ts")[0]?.severity).toBe("warning");
+
+    write("scripts/lib/oxlint-changed-scope.mts", 'export const policy = "untrusted";\n');
+    const untrusted = runFocused(root, ["src/changed.ts", "src/untouched.ts"], {
+      GITHUB_ACTIONS: "false",
+      OPENCLAW_OXLINT_CHANGED_PATHS: JSON.stringify(changedPaths),
+      OPENCLAW_OXLINT_CHANGED_BASE: base,
+      OPENCLAW_OXLINT_TRUSTED_POLICY_REF: trustedPolicyRef,
+    });
+    const untrustedReport = parseReport(checked(untrusted, 1));
+    expect(byFile(untrustedReport, "src/changed.ts")[0]?.severity).toBe("error");
+    expect(byFile(untrustedReport, "src/untouched.ts")[0]?.severity).toBe("error");
   });
 
-  it("enables strict empty object type lint with named single-extends interfaces allowed", () => {
-    const config = readJson(".oxlintrc.json") as OxlintConfig;
-
-    expect(config.rules?.["typescript/no-empty-object-type"]).toEqual([
-      "error",
-      { allowInterfaces: "with-single-extends" },
-    ]);
-  });
-
-  it("enables exhaustive switch linting", () => {
-    const config = readJson(".oxlintrc.json") as OxlintConfig;
-
-    expect(config.rules?.["typescript/switch-exhaustiveness-check"]).toEqual([
-      "error",
-      { considerDefaultExhaustiveForUnions: true },
-    ]);
-  });
-
-  it("enables clean zero-baseline lint rules and keeps deferred import rules off", () => {
-    const config = readJson(".oxlintrc.json") as OxlintConfig;
-
-    expect(config.plugins).toContain("import");
-    for (const rule of ZERO_BASELINE_RULES) {
-      expect(config.rules?.[rule]).toBe("error");
-    }
-    for (const rule of DEFERRED_IMPORT_RULES) {
-      expect(config.rules?.[rule]).toBe("off");
+  it("preserves native config validation locally and in Actions", () => {
+    const { root, write } = makeFixture("invalid-limit", {});
+    linkDependencies(root);
+    write("fixture.ts", "console.log(1);\n");
+    const invalidConfigs = [
+      ...["not-a-severity", 3, null].map((severity) =>
+        JSON.stringify({
+          categories: { correctness: "off" },
+          rules: { "max-lines": [severity, { max: 1 }] },
+        }),
+      ),
+      '{categories: {correctness: "off"}, rules: {"max-lines": ["error", {max: 1}]}}',
+    ];
+    for (const config of invalidConfigs) {
+      write(".oxlintrc.json", config);
+      for (const { github, changedPaths } of [
+        { github: false, changedPaths: undefined },
+        { github: true, changedPaths: undefined },
+        { github: false, changedPaths: ["src/changed.ts"] },
+      ]) {
+        const result = runTool(root, [oxlintRunner, "--openclaw-focused-config", "fixture.ts"], {
+          env: {
+            ...process.env,
+            CI: github ? "true" : "false",
+            GITHUB_ACTIONS: github ? "true" : "false",
+            OPENCLAW_OXLINT_CHANGED_PATHS: changedPaths && JSON.stringify(changedPaths),
+            OPENCLAW_CI_STATIC_EVIDENCE: "1",
+            OPENCLAW_CI_STATIC_EVIDENCE_ID: "invalid:0",
+          },
+        });
+        checked(result, 1);
+        expect(result.stdout + result.stderr).toMatch(/Failed to (?:parse|load)[^\n]*config/u);
+        expect(result.stdout).not.toContain("[ci-static:oxlint:leaf]");
+      }
     }
   });
 });

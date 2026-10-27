@@ -23,11 +23,8 @@ import {
   PROTOCOL_VERSION,
 } from "../../../../packages/gateway-protocol/src/index.js";
 import type { OpenClawConfig } from "../../../../src/config/types.openclaw.js";
-import {
-  MAX_BUFFERED_BYTES,
-  MAX_PAYLOAD_BYTES,
-  TICK_INTERVAL_MS,
-} from "../../../../src/gateway/server-constants.js";
+import { MAX_PAYLOAD_BYTES } from "../../../../src/gateway/payload-limits.js";
+import { MAX_BUFFERED_BYTES, TICK_INTERVAL_MS } from "../../../../src/gateway/server-constants.js";
 import { formatErrorMessage } from "../../../../src/infra/errors.js";
 import { stopQaGatewayFixture } from "../../../helpers/qa-gateway-cleanup.js";
 import { createQaScriptEvidenceWriter, type QaScriptEvidenceStatus } from "./script-evidence.ts";
@@ -522,6 +519,7 @@ async function runProof(options: ProducerOptions): Promise<string> {
   try {
     gateway = await gatewayOwner.start({
       repoRoot: options.repoRoot,
+      initializeCurrentRuntimeState: true,
       useRepoCli: true,
       transportBaseUrl: "http://127.0.0.1",
       controlUiEnabled: false,

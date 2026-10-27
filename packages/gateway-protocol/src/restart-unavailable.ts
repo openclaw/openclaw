@@ -2,6 +2,8 @@
 export const GATEWAY_RESTART_UNAVAILABLE_REASON = "gateway-restarting";
 /** Structured error reason used while the gateway drains for a suspension. */
 export const GATEWAY_SUSPEND_UNAVAILABLE_REASON = "gateway-suspending";
+/** Identity reads wait for resume, with a bounded probe if that event is missed. */
+export const GATEWAY_SUSPEND_IDENTITY_RETRY_AFTER_MS = 60_000;
 
 /** Detects the structured retryable error emitted while a restart drain refuses work. */
 export function isGatewayRestartUnavailableError(error: unknown): boolean {

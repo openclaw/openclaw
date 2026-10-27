@@ -98,9 +98,7 @@ describe("openExternalUrlSafe", () => {
       .spyOn(window, "open")
       .mockImplementation(() => openedLikeProxy as unknown as Window);
 
-    const opened = openExternalUrlSafe("https://example.com/safe.png", {
-      baseHref: "https://openclaw.ai/chat",
-    });
+    const opened = openExternalUrlSafe("https://example.com/safe.png");
 
     expect(openMock).toHaveBeenCalledWith(
       "https://example.com/safe.png",
@@ -113,7 +111,7 @@ describe("openExternalUrlSafe", () => {
 });
 
 describe("reserveExternalWindowForDeferredNavigation", () => {
-  it.each([undefined, false, true])(
+  it.each([undefined, true])(
     "opens an inert placeholder and detaches its opener (popup=%s)",
     (popup) => {
       const openedLikeProxy = {

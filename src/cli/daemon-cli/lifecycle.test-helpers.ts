@@ -1,17 +1,27 @@
+import { expect } from "vitest";
 import type { GatewayLockIdentity } from "../../infra/gateway-lock.js";
 import type { SafeGatewayRestartRequestResult } from "../../infra/restart-coordinator.js";
 
-type RestartPostCheckContext = {
-  activationAccepted: boolean;
-  json: boolean;
-  stdout: NodeJS.WritableStream;
-  warnings: string[];
-  fail: (message: string, hints?: string[]) => void;
-};
+export function createGatewayProcessExpectations(
+  listeners: typeof import("../../infra/gateway-processes.js").findVerifiedGatewayListenerPidsOnPortSync,
+  signalPid: typeof import("../../infra/gateway-processes.js").signalVerifiedGatewayPidSync,
+) {
+  return {
+    listeners(port: number, env?: NodeJS.ProcessEnv) {
+      expect(listeners).toHaveBeenCalledWith(port, { env });
+    },
+    signal(pid: number, signal: "SIGTERM" | "SIGUSR1", port: number, env?: NodeJS.ProcessEnv) {
+      expect(signalPid).toHaveBeenCalledWith(pid, signal, { env, port });
+    },
+    noSignal(pid: number, signal: "SIGTERM" | "SIGUSR1", port: number, env?: NodeJS.ProcessEnv) {
+      expect(signalPid).not.toHaveBeenCalledWith(pid, signal, { env, port });
+    },
+  };
+}
 
-export type RestartParams = {
-  opts?: { json?: boolean };
-  beforeServiceMutation?: () => void;
+type CoreRestartParams = Parameters<typeof import("./lifecycle-core.js").runServiceRestart>[0];
+type RestartPostCheckContext = Parameters<NonNullable<CoreRestartParams["postRestartCheck"]>>[0];
+export type RestartParams = Pick<CoreRestartParams, "opts" | "beforeServiceMutation"> & {
   repairLoadedService?: (ctx: {
     json: boolean;
     stdout: NodeJS.WritableStream;
@@ -36,12 +46,12 @@ export function requireMockCallArg(
 export async function expectRestartError(
   promise: Promise<unknown>,
 ): Promise<Error & { hints?: string[] }> {
-  try {
-    await promise;
-  } catch (error) {
-    return error as Error & { hints?: string[] };
-  }
-  throw new Error("expected restart to fail");
+  return promise.then(
+    () => {
+      throw new Error("expected restart to fail");
+    },
+    (error: unknown) => error as Error & { hints?: string[] },
+  );
 }
 
 export type RestartHealthSnapshot = {
@@ -74,35 +84,19 @@ export function createGatewayLockIdentity(
   };
 }
 
-export function createDeferredSafeRestartResult(): SafeGatewayRestartRequestResult {
+type SafeRestartResponse = Pick<SafeGatewayRestartRequestResult, "status"> & {
+  preflight: Pick<SafeGatewayRestartRequestResult["preflight"], "blockers" | "summary">;
+  restart: Pick<SafeGatewayRestartRequestResult["restart"], "pid">;
+};
+
+export function createDeferredSafeRestartResult(): SafeRestartResponse {
   return {
-    ok: true,
     status: "deferred",
     preflight: {
-      safe: false,
-      counts: {
-        queueSize: 1,
-        pendingReplies: 0,
-        embeddedRuns: 0,
-        cronRuns: 0,
-        backgroundExecSessions: 0,
-        rootRequests: 0,
-        activeTasks: 0,
-        totalActive: 1,
-      },
       blockers: [{ kind: "queue", count: 1, message: "1 queued or active operation(s)" }],
       summary: "restart deferred: 1 queued or active operation(s)",
     },
-    restart: {
-      ok: true,
-      pid: 123,
-      signal: "SIGUSR2",
-      delayMs: 0,
-      mode: "emit",
-      coalesced: false,
-      cooldownMsApplied: 0,
-      emitHooksQueued: false,
-    },
+    restart: { pid: 123 },
   };
 }
 
@@ -112,12 +106,8 @@ export async function runRestartPostCheck(params: RestartParams, activationAccep
     json: Boolean(params.opts?.json),
     stdout: process.stdout,
     warnings: [],
-    fail: failRestartCheck,
+    fail: (message, hints) => {
+      throw Object.assign(new Error(message), { hints });
+    },
   });
-}
-
-function failRestartCheck(message: string, hints?: string[]) {
-  const error: Error & { hints?: string[] } = new Error(message);
-  error.hints = hints;
-  throw error;
 }

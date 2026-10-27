@@ -6,7 +6,30 @@ import type {
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { formatErrorMessage } from "../errors.js";
 import { resolveOutboundChannelMessageAdapter } from "./channel-resolution.js";
+import type { OutboundDeliveryResult } from "./deliver-types.js";
+import { isPermanentDeliveryError } from "./delivery-queue-recovery-policy.js";
 import type { QueuedDelivery } from "./delivery-queue-types.js";
+
+export function buildReconciledSentResult(
+  entry: QueuedDelivery,
+  reconciliation: Extract<ChannelMessageUnknownSendReconciliationResult, { status: "sent" }>,
+) {
+  return {
+    channel: entry.channel,
+    messageId:
+      reconciliation.messageId ??
+      reconciliation.receipt.primaryPlatformMessageId ??
+      reconciliation.receipt.platformMessageIds[0] ??
+      "",
+    receipt: reconciliation.receipt,
+  } satisfies OutboundDeliveryResult;
+}
+
+export function needsUnknownSendReconciliation(entry: QueuedDelivery): boolean {
+  return (
+    entry.recoveryState === "send_attempt_started" || entry.recoveryState === "unknown_after_send"
+  );
+}
 
 type UnknownSendQueueEntry = Pick<
   QueuedDelivery,
@@ -70,10 +93,10 @@ export async function reconcileUnknownQueuedDelivery(params: {
     assertCurrent: params.assertCurrent,
   });
   params.assertCurrent?.();
-  if (adapter?.durableFinal?.capabilities?.reconcileUnknownSend !== true) {
-    return null;
-  }
-  const reconcileUnknownSend = adapter.durableFinal.reconcileUnknownSend;
+  const reconcileUnknownSend =
+    adapter?.durableFinal?.capabilities?.reconcileUnknownSend === true
+      ? adapter.durableFinal.reconcileUnknownSend
+      : undefined;
   if (!reconcileUnknownSend) {
     return null;
   }
@@ -83,6 +106,8 @@ export async function reconcileUnknownQueuedDelivery(params: {
   } catch (error) {
     const message = formatErrorMessage(error);
     params.warn(`Delivery entry ${entry.id} unknown-send reconciliation failed: ${message}`);
-    return { status: "unresolved", error: message, retryable: true };
+    // A thrown reconciler gives no verdict on the send; classify it like a direct-send failure so a
+    // permanent target error settles now instead of spending the retry budget.
+    return { status: "unresolved", error: message, retryable: !isPermanentDeliveryError(message) };
   }
 }

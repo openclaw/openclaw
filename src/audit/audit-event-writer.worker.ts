@@ -1,20 +1,26 @@
-import type { SqliteWorkerCommand } from "../infra/sqlite-worker-contract.js";
-import {
-  runWithOpenClawStateBusyTimeout,
-  type OpenClawStateDatabase,
-  type OpenClawStateDatabaseOptions,
+import type {
+  OpenClawStateDatabase,
+  OpenClawStateDatabaseOptions,
 } from "../state/openclaw-state-db.js";
 import { isOpenClawStateWriteContentionError } from "../state/openclaw-state-ownership.js";
+import type {
+  WorkerOperationContext,
+  WorkerOperationHandlers,
+  WorkerOperations,
+} from "../state/worker-operation-registry.js";
+import { listAuditEventsInDatabase } from "./audit-event-read.kernel.js";
 import {
   pruneExpiredAuditEventsInDatabase,
   recordAuditEventInDatabase,
+  recordAuditRunInDatabase,
 } from "./audit-event-store.js";
+import type { AuditEventListQuery } from "./audit-event-types.js";
 import { isOutboundMessageProgressInput } from "./audit-event-types.js";
 import {
   formatAuditWriterError,
   formatAuditWriterRequestError,
 } from "./audit-event-writer.errors.js";
-import type { AuditWriterOperations, AuditWriterResult } from "./audit-event-writer.types.js";
+import type { AuditWriterRequest, AuditWriterResult } from "./audit-event-writer.types.js";
 import {
   pruneExpiredExecutionDecisionFactsInDatabase,
   recordExecutionDecisionFactInDatabase,
@@ -29,54 +35,86 @@ import {
   recordOutboundMessageProgressInDatabase,
 } from "./message-delivery-progress-store.js";
 
-/** Execute one FIFO attempt on the shared actor, including fail-fast first use. */
-export function executeAuditWriterCommand(
-  command: SqliteWorkerCommand<AuditWriterOperations>,
-  options: OpenClawStateDatabaseOptions,
-  retainDatabase: () => OpenClawStateDatabase,
+// Opening can also encounter contention, so it shares the write retry boundary.
+function executeAuditAttempt(
+  { stateOptions, open }: WorkerOperationContext,
+  execute: (
+    database: OpenClawStateDatabaseOptions & { database: OpenClawStateDatabase },
+  ) => AuditWriterResult,
+  formatError: (error: unknown) => string,
 ): AuditWriterResult {
+  const options = stateOptions();
   try {
-    return runWithOpenClawStateBusyTimeout(
-      () => {
-        const database = { ...options, database: retainDatabase() };
-        if (command.type === "audit.writer.prune") {
-          const maintenance = {
-            events: pruneExpiredAuditEventsInDatabase,
-            identity: pruneExpiredExecutionIdentityContextsInDatabase,
-            decisions: pruneExpiredExecutionDecisionFactsInDatabase,
-            progress: pruneExpiredOutboundMessageProgressInDatabase,
-          }[command.input];
-          return { status: "settled", deleted: maintenance({ database }) };
-        }
-        const request = command.input;
-        if (request.type === "record-event") {
-          if (isOutboundMessageProgressInput(request.input)) {
-            recordOutboundMessageProgressInDatabase(request.input, database);
-          } else {
-            recordAuditEventInDatabase(request.input, database);
-          }
-        } else if (request.type === "record-execution-identity") {
-          processExecutionIdentityAdmissionWorkInDatabase(request.work, database);
-        } else if (request.type === "record-execution-decision-work") {
-          processExecutionDecisionWorkInDatabase(request.work, database);
-        } else {
-          recordExecutionDecisionFactInDatabase(request.receipt, database);
-        }
-        return { status: "settled" };
-      },
-      options,
-      0,
-    );
+    return execute({ ...options, database: open() });
   } catch (error) {
     if (isOpenClawStateWriteContentionError(error)) {
       return { status: "retry" };
     }
-    return {
-      status: "settled",
-      error:
-        command.type === "audit.writer.process"
-          ? formatAuditWriterRequestError(command.input, error)
-          : formatAuditWriterError(error),
-    };
+    return { status: "settled", error: formatError(error) };
   }
 }
+
+export const auditOperations = {
+  "audit.events.list": (input: AuditEventListQuery, { open }) =>
+    listAuditEventsInDatabase(open().db, input),
+  "audit.writer.prune": (_input: undefined, context) => {
+    const results: AuditWriterResult[] = [];
+    // Each family keeps its own transaction; only contention stops the ordered pass.
+    for (const maintenance of [
+      pruneExpiredAuditEventsInDatabase,
+      pruneExpiredExecutionIdentityContextsInDatabase,
+      pruneExpiredExecutionDecisionFactsInDatabase,
+      pruneExpiredOutboundMessageProgressInDatabase,
+    ]) {
+      const result = executeAuditAttempt(
+        context,
+        (database) => ({ status: "settled", deleted: maintenance({ database }) }),
+        formatAuditWriterError,
+      );
+      results.push(result);
+      if (result.status === "retry") {
+        break;
+      }
+    }
+    return results;
+  },
+  "audit.writer.process": (requests: AuditWriterRequest[], context) => {
+    const results: AuditWriterResult[] = [];
+    // Keep independent commits and FIFO order; contention leaves the suffix unattempted.
+    for (const request of requests) {
+      const result = executeAuditAttempt(
+        context,
+        (database) => {
+          if (request.type === "record-event") {
+            if (isOutboundMessageProgressInput(request.input)) {
+              recordOutboundMessageProgressInDatabase(request.input, database);
+            } else {
+              recordAuditEventInDatabase(request.input, database, request.eventId);
+            }
+          } else if (request.type === "record-run") {
+            recordAuditRunInDatabase(request.start, request.finish, database, request.eventIds);
+          } else if (request.type === "record-execution-identity") {
+            processExecutionIdentityAdmissionWorkInDatabase(request.work, database);
+          } else if (request.type === "record-execution-decision-work") {
+            processExecutionDecisionWorkInDatabase(request.work, database);
+          } else {
+            recordExecutionDecisionFactInDatabase(request.receipt, database);
+          }
+          return { status: "settled" };
+        },
+        (error) => formatAuditWriterRequestError(request, error),
+      );
+      results.push(result);
+      if (result.status === "retry") {
+        break;
+      }
+    }
+    return results;
+  },
+} satisfies WorkerOperationHandlers;
+
+export type AuditWorkerOperations = WorkerOperations<typeof auditOperations>;
+export type AuditWriterOperations = Pick<
+  AuditWorkerOperations,
+  "audit.writer.process" | "audit.writer.prune"
+>;

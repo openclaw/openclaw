@@ -1,0 +1,40 @@
+# Use with compose.host.yaml for a host-native OpenClaw Gateway, or merge with
+# the repository's docker-compose.yml for an unpublished container-only endpoint.
+services:
+  lightpanda:
+    # Optional external AGPL engine, not an MIT-only image. Upstream declarations
+    # disagree on -only vs -or-later; see README.md for the source evidence.
+    # See README.md before mirroring, bundling, or modifying this distribution.
+    # Official 1.0.2 multi-platform index: linux/amd64 and linux/arm64.
+    image: docker.io/lightpanda/browser:1.0.2@sha256:5d1d724c476957d8c2f8393a51fd089477523b0e5aa9c783c48688785d934fb9
+    environment:
+      LIGHTPANDA_DISABLE_TELEMETRY: "1"
+      LIGHTPANDA_DISABLE_CORE_DUMP: "1"
+    command: ["/bin/lightpanda", "serve", "--host", "0.0.0.0", "--port", "9222"]
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    # This probe requires Bash /dev/tcp in the pinned distribution. Test the CDP
+    # WebSocket upgrade, not a separate `lightpanda version` process. This probe
+    # opens/closes its own session and does not touch an agent's active session.
+    healthcheck:
+      test:
+        - CMD
+        - /bin/bash
+        - -ec
+        - >-
+          exec 3<>/dev/tcp/127.0.0.1/9222;
+          printf 'GET / HTTP/1.1\r\nHost: 127.0.0.1:9222\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\nSec-WebSocket-Version: 13\r\n\r\n' >&3;
+          IFS= read -r response <&3;
+          [[ "$$response" == *" 101 "* ]]
+      interval: 30s
+      timeout: 5s
+      start_period: 10s
+      retries: 3
+    # Override the upstream image's SIGKILL so Tini can forward graceful stop.
+    stop_signal: SIGTERM
+    stop_grace_period: 10s
+    # The official image already runs as its lightpanda user under tini.
+    # Docker restarts exited processes, not a still-running unhealthy process.
+    restart: unless-stopped

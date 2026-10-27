@@ -7,20 +7,11 @@ import {
 } from "../test-report-utils.mts";
 import { formatMs } from "./vitest-report-cli-utils.mts";
 
-type GroupedCounter = {
-  configs: string[];
-  durationMs: number;
-  fileCount: number;
-  key: string;
-  testCount: number;
-};
+type GroupedCounter = ReturnType<typeof finalizeCounter>;
 
-type GroupedFile = {
+type GroupedFile = ReturnType<typeof collectVitestFileDurations>[number] & {
   config: string;
-  durationMs: number;
-  file: string;
   group: string;
-  testCount: number;
 };
 
 type NumericCounter = {
@@ -55,12 +46,8 @@ type RunSnapshot = {
   status: number | null;
 };
 
-type SlowTestEntry = {
+type SlowTestEntry = ReturnType<typeof collectVitestAssertionDurations>[number] & {
   config: string;
-  durationMs: number;
-  file: string;
-  fullName: string;
-  status: string;
 };
 
 type ComparisonStatus = "added" | "changed" | "removed";
@@ -91,36 +78,18 @@ function formatSignedBytesAsMb(valueBytes: number): string {
   return `${valueBytes > 0 ? "+" : ""}${formatBytesAsMb(valueBytes)}`;
 }
 
-/**
- * Shortens a Vitest config path into the label used by timing reports.
- */
 export function normalizeConfigLabel(config: string): string {
   return config.replace(/^test\/vitest\/vitest\./u, "").replace(/\.config\.ts$/u, "");
 }
 
-/**
- * Derives a top-level test area from a repo-relative file path.
- */
 export function resolveTestArea(file: string): string {
   const normalized = normalizeTrackedRepoPath(file);
   const parts = normalized.split("/");
-  if (parts[0] === "extensions" && parts[1]) {
-    return `extensions/${parts[1]}`;
-  }
-  if (parts[0] === "src" && parts[1]) {
-    return `src/${parts[1]}`;
-  }
-  if (parts[0] === "packages" && parts[1]) {
-    return `packages/${parts[1]}`;
-  }
-  if (parts[0] === "apps" && parts[1]) {
-    return `apps/${parts[1]}`;
+  if (["extensions", "src", "packages", "apps", "test"].includes(parts[0] ?? "") && parts[1]) {
+    return `${parts[0]}/${parts[1]}`;
   }
   if (parts[0] === "ui") {
     return parts[3] ? `ui/${parts[3]}` : "ui";
-  }
-  if (parts[0] === "test" && parts[1]) {
-    return `test/${parts[1]}`;
   }
   return parts[0] || normalized;
 }
@@ -134,9 +103,6 @@ function resolveTestFolder(file: string, depth = 2): string {
   return dir.split("/").slice(0, Math.max(1, depth)).join("/");
 }
 
-/**
- * Derives the grouping key for area, folder, or top-level reports.
- */
 export function resolveGroupKey(file: string, mode = "area"): string {
   if (mode === "folder") {
     return resolveTestFolder(file, 3);
@@ -168,7 +134,7 @@ function addFileEntry(
   target.configs.add(config);
 }
 
-function finalizeCounter(counter: CounterAccumulator): GroupedCounter {
+function finalizeCounter(counter: CounterAccumulator) {
   return {
     key: counter.key,
     durationMs: counter.durationMs,
@@ -178,9 +144,6 @@ function finalizeCounter(counter: CounterAccumulator): GroupedCounter {
   };
 }
 
-/**
- * Aggregates Vitest report files into grouped timing counters and slow tests.
- */
 export function buildGroupedTestReport(params: {
   groupBy: string;
   maxTestMs?: number;
@@ -387,17 +350,11 @@ function compareOptionalNumber(
 }
 
 function normalizeRun(run?: ComparableRun): RunSnapshot {
-  return run
-    ? {
-        elapsedMs: typeof run.elapsedMs === "number" ? run.elapsedMs : null,
-        maxRssBytes: typeof run.maxRssBytes === "number" ? run.maxRssBytes : null,
-        status: typeof run.status === "number" ? run.status : null,
-      }
-    : {
-        elapsedMs: null,
-        maxRssBytes: null,
-        status: null,
-      };
+  return {
+    elapsedMs: typeof run?.elapsedMs === "number" ? run.elapsedMs : null,
+    maxRssBytes: typeof run?.maxRssBytes === "number" ? run.maxRssBytes : null,
+    status: typeof run?.status === "number" ? run.status : null,
+  };
 }
 
 function compareRuns(beforeRuns: ComparableRun[] = [], afterRuns: ComparableRun[] = []) {
@@ -423,9 +380,6 @@ function compareRuns(beforeRuns: ComparableRun[] = [], afterRuns: ComparableRun[
     });
 }
 
-/**
- * Compares baseline and current grouped test reports.
- */
 export function buildGroupedTestComparison(params: {
   after: GroupedTestReportInput;
   afterPath?: string;
@@ -494,10 +448,12 @@ function formatOptionalSignedBytes(value: number | null): string {
 
 function pushRows<Entry>(
   lines: string[],
+  label: string,
   entries: Entry[],
   limit: number,
   formatRow: (entry: Entry, index: number) => string,
 ): void {
+  lines.push("", `${label} (${Math.min(limit, entries.length)} of ${entries.length})`);
   const selected = entries.slice(0, limit);
   if (selected.length === 0) {
     lines.push("  (none)");
@@ -514,9 +470,6 @@ const formatChangeRow = (entry: GroupedTestComparison["groups"][number], index: 
 const formatFileChangeRow = (entry: GroupedTestComparison["files"][number], index: number) =>
   `${String(index + 1).padStart(2, " ")}. ${formatSignedMs(entry.delta.durationMs).padStart(11, " ")} (${formatPercent(entry.percent.durationMs).padStart(7, " ")}) | before=${formatMs(entry.before.durationMs).padStart(10, " ")} after=${formatMs(entry.after.durationMs).padStart(10, " ")} | tests=${formatCountDelta(entry.delta.testCount).padStart(4, " ")} | ${entry.config} | ${entry.file}`;
 
-/**
- * Renders a grouped test comparison as CLI-friendly text.
- */
 export function renderGroupedTestComparison(
   comparison: GroupedTestComparison,
   options: { limit?: number; topFiles?: number } = {},
@@ -537,20 +490,11 @@ export function renderGroupedTestComparison(
     lines.push(`[test-group-report:compare] warning: ${warning}`);
   }
 
-  lines.push(
-    "",
-    `Top group regressions (${Math.min(limit, groupRegressions.length)} of ${groupRegressions.length})`,
-  );
-  pushRows(lines, groupRegressions, limit, formatChangeRow);
+  pushRows(lines, "Top group regressions", groupRegressions, limit, formatChangeRow);
 
-  lines.push("", `Top group gains (${Math.min(limit, groupGains.length)} of ${groupGains.length})`);
-  pushRows(lines, groupGains, limit, formatChangeRow);
+  pushRows(lines, "Top group gains", groupGains, limit, formatChangeRow);
 
-  lines.push(
-    "",
-    `Config duration deltas (${Math.min(limit, comparison.configs.length)} of ${comparison.configs.length})`,
-  );
-  pushRows(lines, comparison.configs, limit, formatChangeRow);
+  pushRows(lines, "Config duration deltas", comparison.configs, limit, formatChangeRow);
 
   if (comparison.runs.length > 0) {
     lines.push(
@@ -564,21 +508,13 @@ export function renderGroupedTestComparison(
     }
   }
 
-  lines.push(
-    "",
-    `Top file regressions (${Math.min(topFiles, fileRegressions.length)} of ${fileRegressions.length})`,
-  );
-  pushRows(lines, fileRegressions, topFiles, formatFileChangeRow);
+  pushRows(lines, "Top file regressions", fileRegressions, topFiles, formatFileChangeRow);
 
-  lines.push("", `Top file gains (${Math.min(topFiles, fileGains.length)} of ${fileGains.length})`);
-  pushRows(lines, fileGains, topFiles, formatFileChangeRow);
+  pushRows(lines, "Top file gains", fileGains, topFiles, formatFileChangeRow);
 
   return lines.join("\n");
 }
 
-/**
- * Renders a grouped test report as CLI-friendly text.
- */
 export function renderGroupedTestReport(
   report: GroupedTestReport,
   options: { limit?: number; topFiles?: number } = {},
@@ -588,24 +524,18 @@ export function renderGroupedTestReport(
   const slowTests = report.slowTests ?? [];
   const lines = [
     `[test-group-report] groupBy=${report.groupBy} files=${report.totals.fileCount} tests=${report.totals.testCount} file-sum=${formatMs(report.totals.durationMs)}`,
-    "",
-    `Top groups (${Math.min(limit, report.groups.length)} of ${report.groups.length})`,
   ];
 
-  for (const [index, group] of report.groups.slice(0, limit).entries()) {
-    lines.push(
-      `${String(index + 1).padStart(2, " ")}. ${formatMs(group.durationMs).padStart(10, " ")} | files=${String(group.fileCount).padStart(4, " ")} | tests=${String(group.testCount).padStart(5, " ")} | ${group.key}`,
-    );
-  }
-
-  lines.push(
-    "",
-    `Top configs (${Math.min(limit, report.configs.length)} of ${report.configs.length})`,
-  );
-  for (const [index, config] of report.configs.slice(0, limit).entries()) {
-    lines.push(
-      `${String(index + 1).padStart(2, " ")}. ${formatMs(config.durationMs).padStart(10, " ")} | files=${String(config.fileCount).padStart(4, " ")} | tests=${String(config.testCount).padStart(5, " ")} | ${config.key}`,
-    );
+  for (const [label, entries] of [
+    ["groups", report.groups],
+    ["configs", report.configs],
+  ] as const) {
+    lines.push("", `Top ${label} (${Math.min(limit, entries.length)} of ${entries.length})`);
+    for (const [index, entry] of entries.slice(0, limit).entries()) {
+      lines.push(
+        `${String(index + 1).padStart(2, " ")}. ${formatMs(entry.durationMs).padStart(10, " ")} | files=${String(entry.fileCount).padStart(4, " ")} | tests=${String(entry.testCount).padStart(5, " ")} | ${entry.key}`,
+      );
+    }
   }
 
   lines.push(

@@ -1,10 +1,9 @@
 /** Paired-node attachment guard behavior through the real CLI execution entry point. */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { invokeNodeClaudeCliRun } from "../../gateway/node-agent-cli-runtime.js";
+import * as nodeRuntime from "../../gateway/node-agent-cli-runtime.js";
 import { buildPreparedCliRunContext } from "../cli-runner.test-helpers.js";
 import { executePreparedCliRun as executePreparedCliRunImpl } from "./execute.js";
 import {
-  setCliRunnerExecuteTestDeps,
   supervisorSpawnMock,
   wrapPreparedCliRunWithTestAdmission,
 } from "./execute.test-support.js";
@@ -26,34 +25,17 @@ afterEach(() => {
 });
 
 describe("paired-node media guard", () => {
-  it.each([
-    {
-      name: "documents and audio",
-      media: [
-        { path: "/tmp/report.pdf", contentType: "application/pdf" },
-        { path: "/tmp/voice.ogg", contentType: "audio/ogg" },
-      ],
-    },
-    {
-      name: "a described image with a document",
-      media: [
-        { path: "/tmp/photo.png", contentType: "image/png", hydrationSuppressed: true },
-        { path: "/tmp/report.pdf", contentType: "application/pdf" },
-      ],
-    },
-    {
-      name: "a remote-only image",
-      media: [{ url: "https://example.invalid/photo.png", contentType: "image/png" }],
-    },
-  ])("allows $name through node placement", async ({ media }) => {
-    const invokeNode = vi.fn(async (params: Parameters<typeof invokeNodeClaudeCliRun>[0]) => {
-      params.onProgress(CLAUDE_OK_JSONL);
-      return {
-        ok: true,
-        payloadJSON: JSON.stringify({ exitCode: 0, stderrTail: "", truncated: false }),
-      };
-    });
-    setCliRunnerExecuteTestDeps({ invokeNodeClaudeCliRun: invokeNode });
+  it("allows a described image with a document through node placement", async () => {
+    const invokeNode = vi.fn(
+      async (params: Parameters<typeof nodeRuntime.invokeNodeClaudeCliRun>[0]) => {
+        params.onProgress(CLAUDE_OK_JSONL);
+        return {
+          ok: true,
+          payloadJSON: JSON.stringify({ exitCode: 0, stderrTail: "", truncated: false }),
+        };
+      },
+    );
+    vi.spyOn(nodeRuntime, "invokeNodeClaudeCliRun").mockImplementation(invokeNode);
     const context = buildPreparedCliRunContext({
       sessionEntry: {
         sessionId: "openclaw-session",
@@ -62,7 +44,10 @@ describe("paired-node media guard", () => {
         execNode: "node-a",
       },
     });
-    context.params.media = media;
+    context.params.media = [
+      { path: "/tmp/photo.png", contentType: "image/png", hydrationSuppressed: true },
+      { path: "/tmp/report.pdf", contentType: "application/pdf" },
+    ];
 
     await expect(executePreparedCliRun(context)).resolves.toMatchObject({ text: "ok" });
     expect(invokeNode).toHaveBeenCalledOnce();

@@ -1,11 +1,12 @@
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
 import type { GatewayRequestHandler } from "../gateway/server-methods/types.js";
-import type { PluginCapabilityCatalogContext } from "./capability-catalog-context.types.js";
+import type { PluginCapabilityCatalogHostContext } from "./capability-catalog-context.types.js";
 import type { PluginCapabilityCatalog } from "./capability-catalog.types.js";
 import type { PluginDiscoveryResult } from "./discovery.js";
 import type { PluginManifestRegistry } from "./manifest-registry.js";
 import type { PluginModuleLoaderRecovery } from "./plugin-instance.types.js";
+import type { PluginMetadataSnapshot } from "./plugin-metadata-snapshot.types.js";
 import type { PluginRuntimeArtifact } from "./plugin-runtime-artifact-selection.js";
 import type { PluginRecord, PluginRegistry, PluginRegistryParams } from "./registry-types.js";
 import type { CreatePluginRuntimeOptions } from "./runtime/types.js";
@@ -25,6 +26,8 @@ export type PluginRuntimeRecovery = {
 /** Inputs shared by runtime, snapshot, and CLI-metadata plugin loading. */
 export type PluginLoadOptions = {
   config?: OpenClawConfig;
+  /** Provider lookup config before activation copies; only captured generations may share. */
+  registrationConfigOrigin?: OpenClawConfig;
   activationSourceConfig?: OpenClawConfig;
   autoEnabledReasons?: Readonly<Record<string, string[]>>;
   workspaceDir?: string;
@@ -42,11 +45,12 @@ export type PluginLoadOptions = {
   runtimeOptions?: CreatePluginRuntimeOptions;
   startupTrace?: {
     detail: (name: string, metrics: ReadonlyArray<readonly [string, number | string]>) => void;
+    run?: <T>(name: string, run: () => T) => T;
   };
   pluginSdkResolution?: PluginSdkResolutionPreference;
   cache?: boolean;
   mode?: "full" | "validate" | "cli-metadata";
-  onlyPluginIds?: string[];
+  onlyPluginIds?: readonly string[];
   includeSetupOnlyChannelPlugins?: boolean;
   forceSetupOnlyChannelPlugins?: boolean;
   /** Select full runtime registration or the lightweight unconfigured-channel setup path. */
@@ -55,16 +59,21 @@ export type PluginLoadOptions = {
   preferBuiltPluginArtifacts?: boolean;
   toolDiscovery?: boolean;
   /** Native host operations supplied by a runtime composition root. */
-  capabilityCatalogContext?: PluginCapabilityCatalogContext;
+  capabilityCatalogContext?: PluginCapabilityCatalogHostContext;
   /** Resolve declared descriptors for this family without full runtime registration. */
   capabilityCatalog?: {
     family: keyof PluginCapabilityCatalog;
-    context: PluginCapabilityCatalogContext;
+    context: PluginCapabilityCatalogHostContext;
   };
   activate?: boolean;
   /** Staged Gateway candidates expose runtime APIs only after publication or owner preparation. */
   runtimeSideEffects?: boolean;
   previousRegistry?: PluginRegistry;
+  /**
+   * Live runtime registry whose unchanged records a non-activating load lists without
+   * loading its own copies. The lender keeps custody and retirement of those instances.
+   */
+  borrowRegistry?: PluginRegistry;
   replacePluginIds?: readonly string[];
   moduleRecoveries?: ReadonlyMap<string, PluginRuntimeRecovery>;
   /** Preserve host cleanup hooks before failed registration removes its contributions. */
@@ -73,6 +82,8 @@ export type PluginLoadOptions = {
   expectedSourceDigests?: Readonly<Record<string, string>>;
   loadModules?: boolean;
   throwOnLoadError?: boolean;
+  /** Exact lifecycle inventory supplied by a prepared load owner. */
+  metadataSnapshot?: PluginMetadataSnapshot;
   manifestRegistry?: PluginManifestRegistry;
   discovery?: PluginDiscoveryResult;
 };
