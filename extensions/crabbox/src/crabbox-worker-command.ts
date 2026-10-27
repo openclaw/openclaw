@@ -283,6 +283,7 @@ export async function stopCrabboxLease(params: {
   provider: string;
   warn: (message: string) => void;
   onCleanupAccepted?: () => void;
+  signal?: AbortSignal;
 }): Promise<void> {
   const deadline = performance.now() + CRABBOX_STOP_TIMEOUT_MS;
   const stop = async (wait: boolean): Promise<"released" | "accepted" | "blocking"> => {
@@ -302,6 +303,7 @@ export async function stopCrabboxLease(params: {
       ],
       binary: params.binary,
       timeoutMs,
+      signal: params.signal,
     });
     if (
       !wait &&
@@ -339,6 +341,7 @@ export async function stopCrabboxLease(params: {
         ],
         binary: params.binary,
         timeoutMs: remainingMs,
+        signal: params.signal,
       });
     }
     if (isUnrecognizedLease(result, params.id, "stop")) {

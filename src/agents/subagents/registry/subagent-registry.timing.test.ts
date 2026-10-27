@@ -158,24 +158,21 @@ it("persists overlapping completion timing without warnings or duplicate announc
     }
     const lifecycleQueued = createDeferred();
     const push = queue.pending.push.bind(queue.pending);
-    const enqueueObserver = vi.spyOn(queue.pending, "push").mockImplementation((...tasks) => {
+    using _ = vi.spyOn(queue.pending, "push").mockImplementation((...tasks) => {
       const depth = push(...tasks);
       if (depth === 1) {
         lifecycleQueued.resolve();
       }
       return depth;
     });
-    try {
-      expect(queue.pending.length).toBe(0);
-      emitTerminal();
-      await racePromiseWithAbortSignal(lifecycleQueued.promise, signal);
-      expect(queue.pending.length).toBe(1);
-      // Overlap the wait result with the blocked lifecycle callback.
-      waiting.resolve(terminal);
-      await waitReturned.promise;
-    } finally {
-      enqueueObserver.mockRestore();
-    }
+
+    expect(queue.pending.length).toBe(0);
+    emitTerminal();
+    await racePromiseWithAbortSignal(lifecycleQueued.promise, signal);
+    expect(queue.pending.length).toBe(1);
+    // Overlap the wait result with the blocked lifecycle callback.
+    waiting.resolve(terminal);
+    await waitReturned.promise;
   } finally {
     waiting.resolve(terminal);
     released.resolve();

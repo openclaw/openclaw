@@ -361,13 +361,13 @@ openclaw skills workshop restore release-notes
 openclaw skills workshop restore release-notes --version <version-id>
 ```
 
-| Command                                        | Description                                                                                                                     |
-| ---------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------- |
-| `list`                                         | Lists live learned skills with usage counts, plus archived skills. Shows the autonomous mode and skills root.                   |
-| `changes [--limit <n>]`                        | Shows recent changes, newest first: who made them (`agent`, `review`, `curator`, `user`), the action, and the saved version id. |
-| `show <name> [--file <path>] [--version <id>]` | Prints `SKILL.md` or one support file, from the live skill or a saved version.                                                  |
-| `archive <name> [--reason <text>]`             | Hides the skill from its agent. The skill stays restorable.                                                                     |
-| `restore <name> [--version <id>]`              | Restores the newest saved version, or the named one. The current live copy is saved first, so restore is undoable.              |
+| Command                                        | Description                                                                                                                      |
+| ---------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------- |
+| `list`                                         | Lists live learned skills with usage counts, plus archived skills and waiting drafts. Shows the autonomous mode and skills root. |
+| `changes [--limit <n>]`                        | Shows recent changes, newest first: who made them (`agent`, `review`, `curator`, `user`), the action, and the saved version id.  |
+| `show <name> [--file <path>] [--version <id>]` | Prints `SKILL.md` or one support file, from the live skill or a saved version.                                                   |
+| `archive <name> [--reason <text>]`             | Hides the skill from its agent. The skill stays restorable.                                                                      |
+| `restore <name> [--version <id>]`              | Restores the newest saved version, or the named one. The current live copy is saved first, so restore is undoable.               |
 
 Every Workshop command accepts `--agent <id>` and `--json`. `archive` and
 `restore` act as `user` in the change feed. The printed archive Undo command

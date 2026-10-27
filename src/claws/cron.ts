@@ -261,6 +261,7 @@ export async function installClawCronJobsStateless(
       };
       let result: { id: string } | undefined;
       try {
+        await options.prepareEffect?.();
         assertCurrent();
         result = clawCronSchedulerJobFromResult(
           await options.gateway.add(clawCronGatewayInput(plan.agent.finalId, ref), {
@@ -298,6 +299,7 @@ export async function installClawCronJobsStateless(
             refs,
           );
         }
+        await options.prepareEffect?.();
         assertCurrent();
         scratchWriteAttempted = true;
         await options.gateway.writeScratch(result.id, action.scratch, assertCurrent);
@@ -312,6 +314,8 @@ export async function installClawCronJobsStateless(
           if (!revision || !clawCronGatewayJobMatchesRef(plan.agent.finalId, ref, live)) {
             throw new Error("Claw automation changed before scratch activation.");
           }
+          await options.prepareEffect?.();
+          assertCurrent();
           await options.gateway.enable(result.id, revision, assertCurrent);
           ref = { ...ref, job: { automation: action.automation } };
           refs[refs.length - 1] = { ...ref, status: "complete", schedulerJobId: result.id };

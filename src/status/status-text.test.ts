@@ -1,5 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { observeHostDataSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
+import { createModelRuntimeChoiceOwnerFixture } from "../agents/model-runtime-choice.test-support.js";
+import * as preparedCatalog from "../agents/prepared-model-catalog.js";
 import {
   seedSubagentRunForReadTest,
   resetSubagentRegistryForTests,
@@ -26,6 +28,7 @@ import type { InternalSessionEntry as Entry } from "../config/sessions/types.js"
 import * as transcriptTail from "../gateway/session-transcript-readers.js";
 import * as transcriptUsage from "../gateway/session-transcript-usage.js";
 import { clearAgentRunContext, registerAgentRunContext } from "../infra/agent-run-registry.js";
+import * as providerPolicySurface from "../plugins/provider-policy-surface.js";
 import { attachSessionTranscriptRunId } from "../sessions/transcript-events.js";
 import { openOpenClawAgentDatabase } from "../state/openclaw-agent-db.js";
 import {
@@ -143,6 +146,52 @@ describe("prepared status", () => {
     vi.restoreAllMocks();
     clearRuntimeConfigSnapshot();
     await state.cleanup();
+  });
+
+  it("bounds catalog identity work per status reply and renews changed provider policies", async () => {
+    const entries = Array.from({ length: 24 }, (_, index) => ({
+      provider: "fixture",
+      id: `model-${index}`,
+      name: `Model ${index}`,
+    }));
+    const routeVariants = entries.map((row) => ({
+      ...row,
+      id: `vendor/${row.id}`,
+      nativeRuntime: "fixture-native",
+      contextWindow: 128_000,
+      contextTokens: 128_000,
+    }));
+    const cfg = {};
+    const owner = createModelRuntimeChoiceOwnerFixture(cfg, undefined, {
+      modelCatalog: { entries, routeVariants },
+    });
+    vi.spyOn(preparedCatalog, "getPreparedModelCatalogOwnerSnapshot").mockReturnValue(owner);
+    const normalize = vi.fn(({ modelId }: { modelId: string }) =>
+      modelId.replace(/^vendor\//u, ""),
+    );
+    const policy = vi
+      .spyOn(providerPolicySurface, "resolveDirectBundledProviderPolicySurface")
+      .mockImplementation((provider) =>
+        provider === "fixture" ? { normalizeModelCatalogId: normalize } : null,
+      );
+    const reply = () =>
+      prepared({
+        cfg,
+        provider: "fixture",
+        model: "model-0",
+        resolvedHarness: "fixture-native",
+      });
+    await expectText(reply(), ["Context: 45k/128k"]);
+    // Include all status consumers, with headroom for the selected/active model lookups.
+    expect(normalize.mock.calls.length).toBeLessThan(entries.length * 10);
+    policy.mockImplementation((provider) =>
+      provider === "fixture"
+        ? {
+            normalizeModelCatalogId: ({ modelId }) => modelId,
+          }
+        : null,
+    );
+    await expectText(reply(), ["Context: 45k/?"], ["45k/128k"]);
   });
 
   it.each([

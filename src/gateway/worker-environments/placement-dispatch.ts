@@ -573,6 +573,7 @@ export function createWorkerPlacementDispatchService(options: WorkerPlacementDis
     },
     move: moveService.move,
     reclaim,
+    subscribeOrphanWorkspaceChanges: recovery.subscribeOrphanWorkspaceChanges,
     reconcile: recovery.reconcile,
     reconcileActive: recovery.reconcileActive,
     isInterruptedTurn: recovery.isInterruptedTurn,

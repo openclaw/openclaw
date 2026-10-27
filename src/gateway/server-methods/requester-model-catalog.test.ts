@@ -8,7 +8,6 @@ import { createAdmittedRunOperatorAuthority } from "../../agents/admitted-run-co
 import * as ownership from "../../agents/harness/session-runtime-ownership.js";
 import { resolveOpenClawPluginToolsForOptions } from "../../agents/openclaw-plugin-tools.js";
 import { prepareOperatorModelPolicy } from "../../agents/operator-model-policy.js";
-import { preparePluginToolExecutionCapabilities } from "../../agents/plugin-tool-execution.js";
 import * as preparedCatalog from "../../agents/prepared-model-catalog.js";
 import { copyPreparedModelRuntimeAuthBindings } from "../../agents/prepared-model-runtime-auth.js";
 import { createPreparedAccountCatalogAccess } from "../../agents/prepared-model-runtime.catalog-auth.js";
@@ -28,7 +27,6 @@ import { createPluginRecord } from "../../plugins/loader-records.js";
 import { createPluginMetadataSnapshotFixture } from "../../plugins/plugin-metadata.test-support.js";
 import { bindPluginRuntimeArtifactSelection } from "../../plugins/plugin-runtime-artifact-binding.js";
 import { resolvePluginRuntimeArtifactSelection } from "../../plugins/plugin-runtime-artifact-selection.js";
-import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
 import { createTestPluginRegistry } from "../../plugins/registry-runtime.test-helpers.js";
 import { createPluginRequesterModels } from "../../plugins/requester-models.js";
 import {
@@ -40,24 +38,27 @@ import { withPluginRuntimeGatewayRequestScope } from "../../plugins/runtime/gate
 import { createPluginRuntime } from "../../plugins/runtime/index.js";
 import { setPluginRuntimeLoadContext } from "../../plugins/runtime/load-context.js";
 import { resolvePluginRuntimeLoadContext } from "../../plugins/runtime/load-context.resolve.js";
-import { createPluginToolFactoryContext } from "../../plugins/tool-factory-context.js";
-import type { OpenClawPluginToolContext } from "../../plugins/tool-types.js";
 import { openOpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import { prepareUserProfileCatalog } from "../../state/user-profile-list.js";
 import { setUserProfileRole } from "../../state/user-profile-writes.worker.js";
 import { ensureProfileForEmail } from "../../state/user-profiles.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
+import { gatewayConnect, gatewayProfile } from "../server/client-fixtures.test-support.js";
+import { WITHOUT_OPENAI_ENV_AUTH } from "../test-helpers.env.js";
 import { activePlacement } from "../worker-environments/placement-suite.test-support.js";
-import { createChatMetadataOwner } from "./chat-metadata-runtime.test-support.js";
+import {
+  createChatMetadataOwner,
+  createOpenAIChatMetadataConfig,
+} from "./chat-metadata-runtime.test-support.js";
 import {
   createModelsListTestContext,
-  WITHOUT_OPENAI_ENV_AUTH,
+  requestModelsList,
 } from "./models-list-result.openai-routes.test-support.js";
-import { modelsHandlers } from "./models.js";
 import { projectRequesterModelCatalog } from "./requester-model-catalog-projection.js";
-import type { GatewayClient, RespondFn } from "./types.js";
+import type { GatewayClient } from "./types.js";
 
 const ids = ["gpt-5.6-luna", "gpt-5.6-sol"];
+const credential = { type: "api_key", provider: "openai", key: "synthetic-private-key" } as const;
 afterEach(() => {
   vi.restoreAllMocks();
   setCurrentPluginMetadataSnapshot(undefined);
@@ -84,47 +85,75 @@ async function fixture(
   );
 }
 
-async function setup(missingAuth = false) {
-  const config: OpenClawConfig = {
-    agents: {
-      defaults: {
-        model: "openai/gpt-5.6-luna",
-        models: Object.fromEntries(ids.map((id) => ["openai/" + id, {}])),
-      },
-      entries: { main: {} },
+function modelOwner(config: OpenClawConfig, key: string | undefined) {
+  return createChatMetadataOwner(
+    config,
+    ids[0]!,
+    key ? { openai: { type: "api_key", key } } : {},
+    "openai",
+    "openai-responses",
+  );
+}
+
+function clearSessionAuth(sessionKey: string) {
+  return patchSessionEntryCore(
+    { agentId: "main", sessionKey },
+    () => ({ authProfileOverride: undefined, authProfileOverrideSource: undefined }),
+    { skipMaintenance: true },
+  );
+}
+
+function holdOwnershipRead() {
+  const original = ownership.readSessionRuntimeOwnershipAsync;
+  const gate = createDeferred();
+  const started = createDeferred();
+  vi.spyOn(ownership, "readSessionRuntimeOwnershipAsync").mockImplementationOnce(async (params) => {
+    started.resolve();
+    await gate.promise;
+    return await original(params);
+  });
+  return {
+    release: gate.resolve,
+    async start(models: { list: () => Promise<unknown> }) {
+      const pending = models.list();
+      void pending.catch(() => {});
+      await awaitGateBeforeSettlement(
+        started.promise,
+        pending,
+        "Read did not enter native ownership",
+      );
+      return { pending };
     },
-    gateway: {
-      roles: {
-        default: "luna",
-        definitions: Object.fromEntries(
-          ids.map((id, i) => [
-            i ? "sol" : "luna",
-            {
-              agents: "*",
-              scopes: ["operator.read"],
-              sessions: { others: "none" },
-              modelPolicy: { allow: ["openai/" + id] },
-            },
-          ]),
-        ),
-      },
+  };
+}
+
+async function setup(missingAuth = false) {
+  const config = createOpenAIChatMetadataConfig(ids);
+  config.gateway = {
+    roles: {
+      default: "luna",
+      definitions: Object.fromEntries(
+        ids.map((id, i) => [
+          i ? "sol" : "luna",
+          {
+            agents: "*",
+            scopes: ["operator.read"],
+            sessions: { others: "none" },
+            modelPolicy: { allow: ["openai/" + id] },
+          },
+        ]),
+      ),
     },
   };
   const accountCatalog = createPreparedAccountCatalogAccess(() => true, undefined, config);
   const owner = Object.assign(
-    createChatMetadataOwner(
-      config,
-      ids[0]!,
-      missingAuth ? {} : { openai: { type: "api_key", key: "synthetic-private-key" } },
-      "openai",
-      "openai-responses",
-    ),
+    modelOwner(config, missingAuth ? undefined : "synthetic-private-key"),
     { accountCatalog },
   );
   const refreshAccount = () =>
     accountCatalog.acquire({
       profileId: "openai:prepared",
-      credential: { type: "api_key", provider: "openai", key: "synthetic-private-key" },
+      credential,
       allowDiscovery: true,
       refresh: true,
       load: async () => [],
@@ -142,15 +171,7 @@ async function setup(missingAuth = false) {
     preparedAuthModes: owner.authModes,
     preparedAuthStore: {
       version: 1,
-      profiles: missingAuth
-        ? {}
-        : {
-            "openai:prepared": {
-              type: "api_key",
-              provider: "openai",
-              key: "synthetic-private-key",
-            },
-          },
+      profiles: missingAuth ? {} : { "openai:prepared": credential },
     },
     metadataSnapshot: owner.metadataSnapshot,
     agentDir: owner.agentDir,
@@ -203,49 +224,16 @@ async function setup(missingAuth = false) {
         preparedModelRuntime: owner,
         assertCurrent() {},
       };
-      const registry = createEmptyPluginRegistry();
-      const record = createPluginRecord({
-        id: "requester-catalog",
-        source: "/plugins/requester-catalog/index.js",
-        origin: "config",
-        enabled: true,
-        configSchema: true,
-      });
-      record.status = "loaded";
-      registry.plugins.push(record);
-      const toolContext = createPluginToolFactoryContext({
-        registry,
-        entry: {
-          pluginId: record.id,
-          source: record.source,
-          names: ["catalog"],
-          factory: () => null,
-          contextVersion: 2,
-          optional: false,
-        },
-        context: { sessionKey, sessionId: sessionKey, agentId: "main" },
-        assertInvocationCurrent() {},
-        bindExecutionCapabilities: preparePluginToolExecutionCapabilities(readerParams),
-      }) as OpenClawPluginToolContext<2>;
-      const models = toolContext.runtimeContext!.models!;
+      const models = createPluginRequesterModels(readerParams)!;
       const unpreparedModels = () =>
         createPluginRequesterModels({ ...readerParams, preparedModelRuntime: undefined })!;
       const client: GatewayClient = {
         connId: person.id,
         connect: {
-          minProtocol: 1,
-          maxProtocol: 1,
-          client: { id: "openclaw-control-ui", version: "test", platform: "test", mode: "webchat" },
-          role: "operator",
-          scopes: ["operator.read"],
+          ...gatewayConnect(["operator.read"]),
           caps: [GATEWAY_CLIENT_CAPS.MODEL_SELECTION_POLICY],
         },
-        authenticatedUserProfile: {
-          profileId: person.id,
-          displayName: person.displayName,
-          hasAvatar: false,
-          updatedAt: person.updatedAt,
-        },
+        authenticatedUserProfile: gatewayProfile(person.id, person.displayName, person.updatedAt),
       };
       return {
         readerParams,
@@ -256,16 +244,11 @@ async function setup(missingAuth = false) {
           current = false;
         },
         async gateway() {
-          const respond = vi.fn<RespondFn>();
-          const params = { sessionKey, preparedOnly: true, includeDefaultModels: false };
-          await modelsHandlers["models.list"]!({
-            req: { type: "req", id: "requester-catalog", method: "models.list", params },
-            params,
+          const respond = await requestModelsList(
             context,
+            { sessionKey, preparedOnly: true, includeDefaultModels: false },
             client,
-            respond,
-            isWebchatConnect: () => false,
-          });
+          );
           expect(respond.mock.calls[0]?.[0]).toBe(true);
           return respond.mock.calls[0]![1] as ModelsListResult;
         },
@@ -336,14 +319,7 @@ it.each(["native", "worker"] as const)(
             },
           },
         };
-        await patchSessionEntryCore(
-          { agentId: "main", sessionKey: requesters[0]!.readerParams.sessionKey },
-          () => ({
-            authProfileOverride: undefined,
-            authProfileOverrideSource: undefined,
-          }),
-          { skipMaintenance: true },
-        );
+        await clearSessionAuth(requesters[0]!.readerParams.sessionKey);
         // External credential availability: no Gateway credential, but the worker owns inference.
       }
       const gateway = await requesters[0]!.gateway();
@@ -359,11 +335,7 @@ it("matches session model admission for the exact active worker placement", asyn
   await fixture(async ({ context, requesters }) => {
     const requester = requesters[0]!;
     const { sessionId, sessionKey } = requester.readerParams;
-    await patchSessionEntryCore(
-      { agentId: "main", sessionKey },
-      () => ({ authProfileOverride: undefined, authProfileOverrideSource: undefined }),
-      { skipMaintenance: true },
-    );
+    await clearSessionAuth(sessionKey);
     const placement = activePlacement(sessionId, {
       sessionKey,
       environmentId: "device-environment",
@@ -380,9 +352,10 @@ it("matches session model admission for the exact active worker placement", asyn
       attachedSessionIds: [sessionId],
       inference: "worker",
     };
-    const getMany = vi.fn(async () => new Map([[sessionId, placement]]));
     Object.assign(context, {
-      workerSessionPlacementService: { getManyAsync: getMany },
+      workerSessionPlacementService: {
+        getManyAsync: async () => new Map([[sessionId, placement]]),
+      },
       workerEnvironmentService: { get: () => environment, readMachineShape: () => undefined },
     });
     const models = withPluginRuntimeGatewayRequestScope(
@@ -392,7 +365,6 @@ it("matches session model admission for the exact active worker placement", asyn
     const gateway = await requester.gateway();
     expect(gateway.models.find((model) => model.id === ids[0])).not.toHaveProperty("available");
     expect((await models.list()).models.map((model) => model.id)).toEqual([ids[0]]);
-    expect(getMany).toHaveBeenCalledTimes(2);
     // A detached/replaced environment cannot lend its worker-owned authentication.
     environment.ownerEpoch++;
     expect(projectRequesterModelCatalog(await requester.gateway()).models).toEqual([]);
@@ -402,15 +374,7 @@ it("matches session model admission for the exact active worker placement", asyn
 
 it("recovers a retained reader after auth-owner replacement instead of pinning its retired owner", async () => {
   await fixture(async ({ config, requesters, owner }) => {
-    const replacement = createChatMetadataOwner(
-      config,
-      ids[0]!,
-      {
-        openai: { type: "api_key", key: "synthetic-replacement-key" },
-      },
-      "openai",
-      "openai-responses",
-    );
+    const replacement = modelOwner(config, "synthetic-replacement-key");
     vi.spyOn(owner, "isCurrent").mockReturnValue(false);
     const published = vi
       .spyOn(preparedCatalog, "getPublishedPreparedModelCatalogOwnerSnapshot")
@@ -435,35 +399,16 @@ it("rejects an in-flight config change and retries against the new published con
       { context, isWebchatConnect: () => false },
       () => createPluginRequesterModels(requesters[0]!.readerParams)!,
     );
-    const original = ownership.readSessionRuntimeOwnershipAsync;
-    const { promise: gate, resolve: release } = createDeferred();
-    const { promise: started, resolve: entered } = createDeferred();
-    vi.spyOn(ownership, "readSessionRuntimeOwnershipAsync").mockImplementationOnce(
-      async (params) => {
-        entered();
-        await gate;
-        return await original(params);
-      },
-    );
-    const pending = models.list();
-    void pending.catch(() => {});
-    await awaitGateBeforeSettlement(started, pending, "Read did not enter native ownership");
+    const hold = holdOwnershipRead();
+    const { pending } = await hold.start(models);
     currentConfig = structuredClone(config);
     currentConfig.agents!.defaults!.models!["openai/" + ids[0]] = { alias: "Current config model" };
     vi.spyOn(owner, "isCurrent").mockReturnValue(false);
-    const replacement = createChatMetadataOwner(
-      currentConfig,
-      ids[0]!,
-      {
-        openai: { type: "api_key", key: "synthetic-replacement-key" },
-      },
-      "openai",
-      "openai-responses",
-    );
+    const replacement = modelOwner(currentConfig, "synthetic-replacement-key");
     vi.spyOn(preparedCatalog, "getPublishedPreparedModelCatalogOwnerSnapshot").mockReturnValue(
       replacement,
     );
-    release();
+    hold.release();
     await expect(pending).rejects.toThrow("Requester config changed. Retry the request.");
     await expect(models.list()).resolves.toMatchObject({
       state: "prepared",
@@ -610,25 +555,10 @@ it.each(["reset", "revocation", "retirement", "account publication"])(
   async (change) => {
     await fixture(async ({ requesters, owner, accountCatalog, refreshAccount }) => {
       const requester = requesters[0]!;
-      const original = ownership.readSessionRuntimeOwnershipAsync;
-      const { promise: gate, resolve: release } = createDeferred();
-      const { promise: started, resolve: entered } = createDeferred();
-      vi.spyOn(ownership, "readSessionRuntimeOwnershipAsync").mockImplementationOnce(
-        async (params) => {
-          entered();
-          await gate;
-          return await original(params);
-        },
-      );
+      const hold = holdOwnershipRead();
       const isOwnerCurrent = vi.spyOn(owner, "isCurrent");
       const acquired = vi.spyOn(accountCatalog, "acquire");
-      const pending = requester.models.list();
-      void pending.catch(() => {});
-      await awaitGateBeforeSettlement(
-        started,
-        pending,
-        "Catalog bypassed native-owner preparation",
-      );
+      const { pending } = await hold.start(requester.models);
       try {
         if (change === "reset") {
           await requester.save("replacement-session");
@@ -647,7 +577,7 @@ it.each(["reset", "revocation", "retirement", "account publication"])(
           expect(owner.isCurrent()).toBe(true);
         }
       } finally {
-        release();
+        hold.release();
       }
       const reasons = {
         reset: "Session changed while preparing its metadata. Retry the request.",

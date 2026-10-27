@@ -1,26 +1,20 @@
 import http from "node:http";
-import type { AddressInfo } from "node:net";
 import { assert, describe, expect, it } from "vitest";
+import * as httpFixtures from "../../../../test/helpers/gateway-integration-fixtures.js";
 import { createBoundedMistralFetcher, streamMistral } from "./mistral.js";
 import { makeProviderModel } from "./provider-model.test-support.js";
-import { serializeSse } from "./provider-stream.test-support.js";
+import { makeStallingStream, serializeSse } from "./provider-stream.test-support.js";
 
 const MAX = 16 * 1024 * 1024;
 const TOTAL = 18 * 1024 * 1024;
 
 async function withServer<T>(handler: http.RequestListener, run: (url: string) => Promise<T>) {
   const server = http.createServer(handler);
-  await new Promise<void>((resolve, reject) => {
-    server.once("error", reject);
-    server.listen(0, "127.0.0.1", resolve);
-  });
+  const url = await httpFixtures.listenLoopback(server);
   try {
-    return await run(`http://127.0.0.1:${(server.address() as AddressInfo).port}`);
+    return await run(url);
   } finally {
-    server.closeAllConnections();
-    await new Promise<void>((resolve, reject) => {
-      server.close((error) => (error ? reject(error) : resolve()));
-    });
+    await httpFixtures.closeHttpServer(server);
   }
 }
 
@@ -58,13 +52,8 @@ describe("Mistral bounded-stream-read real wire proof (loopback http.createServe
         }, 1);
       },
       async (url) => {
-        let captured: unknown;
         const response = await fetcher(url);
-        try {
-          await response.arrayBuffer();
-        } catch (err) {
-          captured = err;
-        }
+        const captured = await response.arrayBuffer().catch((error: unknown) => error);
         assert.instanceOf(captured, Error);
         const match = captured.message.match(
           /mistral: stream body exceeds \d+ bytes \(got (\d+)\)/,
@@ -82,11 +71,9 @@ describe("Mistral bounded-stream-read real wire proof (loopback http.createServe
 describe("Mistral bounded-stream-read direct (synthetic ReadableStream)", () => {
   it("finishes wrapped response cancellation after handing cleanup upstream", async () => {
     let cancelStarted = false;
-    const upstreamBody = new ReadableStream<Uint8Array>({
-      cancel() {
-        cancelStarted = true;
-        return new Promise<void>(() => {});
-      },
+    const upstreamBody = makeStallingStream([], () => {
+      cancelStarted = true;
+      return new Promise<void>(() => {});
     });
     const fetcher = createBoundedMistralFetcher(
       async () => new Response(upstreamBody, { status: 200 }),
@@ -199,19 +186,11 @@ describe("Mistral terminal ownership through the installed SDK and real HTTP/SSE
       { type: "text", text: "after" },
     ]);
     expect(textIndexes).toEqual([0, 2]);
-    expect(events).toEqual([
-      "start",
-      "text_start",
-      "text_delta",
-      "text_end",
-      "toolcall_start",
-      "toolcall_delta",
-      "text_start",
-      "text_delta",
-      "text_end",
-      "toolcall_end",
-      "done",
-    ]);
+    expect(events).toEqual(
+      "start text_start text_delta text_end toolcall_start toolcall_delta text_start text_delta text_end toolcall_end done".split(
+        " ",
+      ),
+    );
   });
 
   const partial = { type: "text", text: "Safe partial answer" };

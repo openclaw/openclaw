@@ -2,6 +2,7 @@ import { Buffer } from "node:buffer";
 import { gatewayOriginScope } from "@openclaw/gateway-client/browser";
 import type { Page } from "playwright";
 import { expect, it } from "vitest";
+import { createDeferred } from "../../../test/helpers/promise.js";
 import { controlUiE2eBuiltModuleRequest } from "./control-ui-built-module.test-support.ts";
 import {
   WORKSPACE,
@@ -247,11 +248,8 @@ suite.define(() => {
     const sessionId = "cloned-project-session";
     const runId = "run-cloned-project-e2e";
     const message = "inspect the cloned project";
-    let releaseChatModule!: () => void;
     let chatModuleRequested = false;
-    const chatModuleBlocked = new Promise<void>((resolve) => {
-      releaseChatModule = resolve;
-    });
+    const { promise: chatModuleBlocked, resolve: releaseChatModule } = createDeferred();
     await page.route(
       controlUiE2eBuiltModuleRequest("ui/src/pages/chat/route-entry.ts"),
       async (route) => {
@@ -305,6 +303,7 @@ suite.define(() => {
       },
     };
     const gateway = await installMockGateway(page, {
+      subscriptionInitialHistory: false,
       deferredMethods: ["chat.startup"],
       workspace: WORKSPACE,
       workspaceGit: !missingCheckout,

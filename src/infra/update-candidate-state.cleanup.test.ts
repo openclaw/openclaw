@@ -19,6 +19,7 @@ import { createCommandResult } from "../test-utils/npm-spec-install-test-helpers
 import { hasErrnoCode } from "./errno.js";
 import { openNodeSqliteDatabase } from "./node-sqlite.js";
 import { runtimeProcessEntrypoints } from "./runtime-process-entrypoints.js";
+import { runtimeProcessScriptEntrypoints } from "./runtime-process-manifest.js";
 import { resolveRuntimeWorkerArgv, resolveRuntimeWorkerUrl } from "./runtime-worker-url.js";
 import { prepareUpdateCandidateStateSnapshot } from "./update-candidate-snapshot.js";
 import { readUpdateStateSchemaVersions } from "./update-candidate-state.js";
@@ -236,6 +237,12 @@ it.each([
   30_000,
 );
 
+function isMetadataInventoryCommand(argv: readonly string[]): boolean {
+  return argv.some(
+    (arg) => path.basename(arg) === runtimeProcessScriptEntrypoints.updateStateSizes.fileName,
+  );
+}
+
 function inspectionResult(
   value: unknown,
   error?: string,
@@ -279,7 +286,7 @@ it.each([false, true].flatMap((legacy) => [false, true].map((expires) => ({ lega
     const release = createDeferredCore();
     const run = commands.runUtf8CommandWithTimeout;
     vi.spyOn(commands, "runUtf8CommandWithTimeout").mockImplementation(async (argv, options) => {
-      if (argv.includes("--eval")) {
+      if (isMetadataInventoryCommand(argv)) {
         return run(argv, options);
       }
       if (typeof options === "number") {
@@ -363,7 +370,7 @@ it.each(["versions array", "output limit", "non-exit"] as const)(
     const worker = vi
       .spyOn(commands, "runUtf8CommandWithTimeout")
       .mockImplementation((argv, options) => {
-        if (argv.includes("--eval")) {
+        if (isMetadataInventoryCommand(argv)) {
           return run(argv, options);
         }
         const result = inspectionResult(
@@ -383,7 +390,7 @@ it.each(["versions array", "output limit", "non-exit"] as const)(
         config: {},
       }),
     ).rejects.toThrow();
-    expect(worker.mock.calls.filter(([argv]) => !argv.includes("--eval"))).toHaveLength(1);
+    expect(worker.mock.calls.filter(([argv]) => !isMetadataInventoryCommand(argv))).toHaveLength(1);
   },
 );
 
@@ -429,7 +436,7 @@ import path from "node:path";
 import { spawnSync } from "node:child_process";
 ${fixtureReceiptClientSource(receipts.endpoint)}
 // Metadata probes use the real core program; only the schema worker should hang.
-if (process.argv.includes("--eval")) {
+if (process.argv.some((arg) => path.basename(arg) === ${JSON.stringify(runtimeProcessScriptEntrypoints.updateStateSizes.fileName)})) {
   process.exit(spawnSync(process.execPath, process.argv.slice(2), { stdio: "inherit" }).status ?? 1);
 }
 let input = "";

@@ -36,6 +36,7 @@ const ownedBrokers: SqliteWorkerBroker[] = [];
 const databases: DatabaseSync[] = [];
 const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
   afterEach(async () => {
+    vi.restoreAllMocks();
     try {
       await Promise.all(ownedBrokers.splice(0).map((broker) => broker.close()));
     } finally {
@@ -64,6 +65,17 @@ function openDatabase(...args: Parameters<typeof openNodeSqliteDatabase>) {
 
 function openStore(broker: SqliteWorkerBroker, databasePath: string) {
   return broker.open<AdmissionOperations>({ moduleUrl, databasePath, input: undefined });
+}
+
+function createTaskPool(retainedTransport = false) {
+  return createOwnedWorkerTaskPool<AdmissionTaskInput, AdmissionTaskResult>(
+    {
+      workerUrl: new URL("./sqlite-database-admission.task.test-support.ts", import.meta.url),
+      maxWorkers: 1,
+      idleTimeoutMs: 0,
+    },
+    retainedTransport ? { retainedTransport: true } : undefined,
+  );
 }
 
 function hostAdmission(
@@ -353,56 +365,6 @@ function createDatabase(location: string, value: number): void {
   database.prepare("INSERT INTO proof VALUES (?)").run(value);
 }
 
-it("keeps per-operation admission replies scoped to the requested database", async () => {
-  const root = tempDirs.make("sqlite-admission-fleet-");
-  const location = path.join(root, "target.sqlite");
-  createDatabase(location, 42);
-  const broker = createBroker();
-
-  const store = await openStore(broker, path.join(root, "control.sqlite"));
-  const unrelated = Array.from({ length: 3 }, (_, index) =>
-    path.join(root, `unrelated-${index}.sqlite`),
-  );
-  for (const filename of unrelated) {
-    createDatabase(filename, 0);
-    const database = openDatabase(filename);
-    admitSqliteSchema(database);
-  }
-  const replies: string[][] = [];
-  // oxlint-disable-next-line typescript/unbound-method -- call restores the sending port below.
-  const postMessage = MessagePort.prototype.postMessage;
-  const post = vi.spyOn(MessagePort.prototype, "postMessage").mockImplementation(function (
-    this: MessagePort,
-    message: unknown,
-    transferList,
-  ) {
-    const admissions = readSqliteDatabaseAdmissions(message);
-    if (admissions) {
-      replies.push(admissions.map((record) => record.location));
-    }
-    return postMessage.call(this, message, transferList);
-  });
-  try {
-    const result = await broker.runOperation(
-      store!,
-      (scope) => scope.execute({ type: "read", input: { path: location, awaitPublication: true } }),
-      undefined,
-      undefined,
-      hostAdmission(location, (_request, grant) => {
-        const database = openDatabase(location);
-        admitSqliteSchema(database);
-        grant();
-      }),
-    );
-    expect(result.values).toEqual([42]);
-    expect(result.sql).toEqual([]);
-    expect(replies.flat()).toContain(location);
-    expect(replies.flat().filter((filename) => unrelated.includes(filename))).toEqual([]);
-  } finally {
-    post.mockRestore();
-  }
-});
-
 it("publishes through a retained physical database after its original pathname is replaced", async () => {
   const root = tempDirs.make("sqlite-retained-admission-");
   const location = path.join(root, "original.sqlite");
@@ -481,7 +443,7 @@ it("preserves a sibling writer's POSIX lock when an unhosted worker retires", as
   }
 });
 
-it("shares admission published after dispatch with existing isolates and revalidates replaced files", async () => {
+it("scopes admission replies to one database, shares them across isolates, and revalidates replacements", async () => {
   const root = tempDirs.make("sqlite-admission-workers-");
   const location = path.join(root, "shared.sqlite");
   createDatabase(location, 42);
@@ -495,6 +457,27 @@ it("shares admission published after dispatch with existing isolates and revalid
   );
 
   const [first, second] = stores;
+  const unrelated = Array.from({ length: 3 }, (_, index) =>
+    path.join(root, `unrelated-${index}.sqlite`),
+  );
+  for (const filename of unrelated) {
+    createDatabase(filename, 0);
+    admitSqliteSchema(openDatabase(filename));
+  }
+  const replies: string[][] = [];
+  // oxlint-disable-next-line typescript/unbound-method -- call retains the sending port.
+  const postMessage = MessagePort.prototype.postMessage;
+  const post = vi.spyOn(MessagePort.prototype, "postMessage").mockImplementation(function (
+    this: MessagePort,
+    message: unknown,
+    transferList,
+  ) {
+    const admissions = readSqliteDatabaseAdmissions(message);
+    if (admissions) {
+      replies.push(admissions.map((record) => record.location));
+    }
+    return postMessage.call(this, message, transferList);
+  });
   const firstRead = await brokers[0]!.runOperation(
     first!,
     (scope) => scope.execute({ type: "read", input: { path: location, awaitPublication: true } }),
@@ -506,6 +489,9 @@ it("shares admission published after dispatch with existing isolates and revalid
       grant();
     }),
   );
+  post.mockRestore();
+  expect(replies.flat()).toContain(location);
+  expect(replies.flat().filter((filename) => unrelated.includes(filename))).toEqual([]);
   const secondRead = await second!.execute({ type: "read", input: { path: location } });
   const reopened = await first!.execute({ type: "read", input: { path: location } });
   expect(firstRead.threadId).not.toBe(secondRead.threadId);
@@ -586,16 +572,7 @@ it("shares facts with retained task workers across awaited host exchanges", asyn
   const location = path.join(root, "shared.sqlite");
   createDatabase(location, 1);
   let retained: DatabaseSync | undefined;
-  const pools = Array.from({ length: 2 }, () =>
-    createOwnedWorkerTaskPool<AdmissionTaskInput, AdmissionTaskResult>(
-      {
-        workerUrl: new URL("./sqlite-database-admission.task.test-support.ts", import.meta.url),
-        maxWorkers: 1,
-        idleTimeoutMs: 0,
-      },
-      { retainedTransport: true },
-    ),
-  );
+  const pools = Array.from({ length: 2 }, () => createTaskPool(true));
   try {
     const ready = await Promise.all(pools.map((pool) => pool.run({}, {})));
     expect(new Set(ready.map((result) => result.threadId)).size).toBe(2);
@@ -666,11 +643,7 @@ it("shares facts with retained task workers across awaited host exchanges", asyn
 it("keeps 5,000 task messages bounded while unrelated session receipts change", async () => {
   const location = path.join(tempDirs.make("sqlite-task-payload-"), "unrelated.sqlite");
   const database = openDatabase(location);
-  const pool = createOwnedWorkerTaskPool<AdmissionTaskInput, AdmissionTaskResult>({
-    workerUrl: new URL("./sqlite-database-admission.task.test-support.ts", import.meta.url),
-    maxWorkers: 1,
-    idleTimeoutMs: 0,
-  });
+  const pool = createTaskPool();
   let taskMessages = 0;
   // oxlint-disable-next-line typescript/unbound-method -- Reflect.apply preserves the actual worker receiver.
   const postMessage = Worker.prototype.postMessage;

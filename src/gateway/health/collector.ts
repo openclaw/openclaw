@@ -21,6 +21,7 @@ import { isDiagnosticFlagEnabled } from "../../infra/diagnostic-flags.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import {
   projectHeartbeatSummary,
+  readHeartbeatSummaryForStatus,
   readHeartbeatSummarySnapshot,
 } from "../../infra/heartbeat-summary-snapshot.js";
 import { redactToolPayloadTextWithConfig } from "../../logging/redact.js";
@@ -32,7 +33,7 @@ import {
 } from "../../plugins/runtime-degraded-state.js";
 import { getActivePluginRegistry } from "../../plugins/runtime.js";
 import { listPluginServiceHealthFailures } from "../../plugins/service-health.js";
-import { buildChannelAccountBindings, resolvePreferredAccountId } from "../../routing/bindings.js";
+import { buildChannelAccountBindings } from "../../routing/bindings.js";
 import { normalizeAgentId } from "../../routing/session-key.js";
 import { trackAsyncWork } from "../../shared/async-work-scope.js";
 import { createPermitPool } from "../../shared/permit-pool.js";
@@ -49,6 +50,7 @@ import {
 } from "../channel-health-policy.js";
 import type { GatewayHotReloadStatus } from "../config-reload-status.types.js";
 import type { ChannelRuntimeSnapshot } from "../server-channel-runtime.types.js";
+import type { GatewayCronState } from "../server-cron-contract.js";
 import type { SessionRowProjection } from "../session-row-projection.js";
 import { buildNonSensitiveProbeFailure, resolveHealthAccountContext } from "./account-context.js";
 import { buildContextEngineHealthSummary } from "./context-engine.js";
@@ -139,16 +141,17 @@ async function prepareHealthAgentSummaries(
   cfg: OpenClawConfig,
   { defaultAgentId, ordered }: ReturnType<typeof resolveHealthAgentOrder>,
   projection?: SessionRowProjection,
-  cronStorePath?: string,
+  cronState?: Pick<GatewayCronState, "storePath" | "readHeartbeatSummary">,
 ) {
   const { prepareStatusSessionStores } = await import("../../status/session-stores.js");
   const { isTransientSqliteError } = await import("../../infra/unhandled-rejections.js");
   // Receipts list the primary job first; retain it when converted siblings share an agent.
-  const heartbeatJobs = new Map(
-    (await readHeartbeatSummarySnapshot(cfg, cronStorePath))
-      .toReversed()
-      .map((job) => [job.agentId, job]),
+  const heartbeat = await readHeartbeatSummaryForStatus(
+    () =>
+      cronState?.readHeartbeatSummary?.(cfg) ??
+      readHeartbeatSummarySnapshot(cfg, cronState?.storePath),
   );
+  const heartbeatJobs = new Map(heartbeat.jobs.toReversed().map((job) => [job.agentId, job]));
   const sessionStores = await prepareStatusSessionStores(
     cfg,
     ordered,
@@ -176,7 +179,7 @@ async function prepareHealthAgentSummaries(
         agentId: agent.id,
         name: agent.name,
         isDefault: agent.id === displayDefaultId,
-        heartbeat: projectHeartbeatSummary(heartbeatJobs.get(agent.id)),
+        heartbeat: projectHeartbeatSummary(heartbeatJobs.get(agent.id), heartbeat.selectionWarning),
         sessions: projectHealthSessions(store.path, store),
       }));
       return {
@@ -216,11 +219,13 @@ function buildPluginHealthSummary(cfg: OpenClawConfig): PluginHealthSummary | un
       state,
       diagnostic: toPublicPluginVerificationDiagnostic(diagnostic),
     }))
-    .toSorted((left, right) => left.id.localeCompare(right.id));
+    // oxlint-disable-next-line unicorn/no-array-sort -- The mapped health summaries are private to this collection.
+    .sort((left, right) => left.id.localeCompare(right.id));
   const loaded = (registry?.plugins ?? [])
     .filter((plugin) => plugin.status === "loaded")
     .map((plugin) => plugin.id)
-    .toSorted((left, right) => left.localeCompare(right));
+    // oxlint-disable-next-line unicorn/no-array-sort -- The mapped plugin IDs are private to this collection.
+    .sort((left, right) => left.localeCompare(right));
   const loadErrors = (registry?.plugins ?? [])
     .filter(
       (plugin) =>
@@ -258,7 +263,8 @@ function buildPluginHealthSummary(cfg: OpenClawConfig): PluginHealthSummary | un
         ),
       )
     : [];
-  const errors = [...loadErrors, ...serviceErrors].toSorted(
+  // oxlint-disable-next-line unicorn/no-array-sort -- The combined error array is private to this collection.
+  const errors = [...loadErrors, ...serviceErrors].sort(
     (left, right) => left.id.localeCompare(right.id) || left.error.localeCompare(right.error),
   );
   if (loaded.length === 0 && errors.length === 0 && unavailable.length === 0) {
@@ -510,7 +516,7 @@ export async function collectGatewayHealthSnapshot(params: {
   eventLoop?: HealthSummary["eventLoop"];
   configReloadHotReloadStatus?: GatewayHotReloadStatus;
   sessionRowProjection?: SessionRowProjection;
-  cronStorePath?: string;
+  cronState?: Pick<GatewayCronState, "storePath" | "readHeartbeatSummary">;
 }): Promise<HealthSummary> {
   const stateContext = captureDeliveryQueueHealthContext();
   const start = performance.now();
@@ -522,7 +528,7 @@ export async function collectGatewayHealthSnapshot(params: {
     cfg,
     { defaultAgentId, ordered },
     params.sessionRowProjection,
-    params.cronStorePath,
+    params.cronState,
   );
 
   const includeSensitive = params.audience === "admin";
@@ -546,10 +552,7 @@ export async function collectGatewayHealthSnapshot(params: {
     const boundAccounts = defaultAgentId
       ? (channelBindings.get(plugin.id)?.get(defaultAgentId) ?? [])
       : [];
-    const preferredAccountId = resolvePreferredAccountId({
-      defaultAccountId,
-      boundAccounts,
-    });
+    const preferredAccountId = boundAccounts[0] ?? defaultAccountId;
     const boundAccountIdsAll = Array.from(
       new Set(Array.from(channelBindings.get(plugin.id)?.values() ?? []).flat()),
     );

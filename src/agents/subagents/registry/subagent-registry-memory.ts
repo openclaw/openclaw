@@ -144,49 +144,46 @@ export function freezeSubagentRunReadRecord<T extends SubagentRunReadRecord>(rec
   return record;
 }
 
-class SubagentRunIndex extends Map<string, Map<string, SubagentRunRecord>> {
-  private readonly latest = new Map<string, SubagentRunRecord>();
+const emptyRunBucket: readonly SubagentRunRecord[] = Object.freeze([]);
 
+class SubagentRunIndex extends Map<string, SubagentRunRecord[]> {
   constructor(private readonly keyFor: (entry: SubagentRunRecord) => string | undefined) {
     super();
   }
 
-  update(runId: string, entry: SubagentRunRecord, operation: "add" | "remove"): void {
-    const key = this.keyFor(entry);
-    if (!key) {
-      return;
-    }
-    const indexedRuns = this.get(key);
-    if (operation === "remove") {
-      if (indexedRuns?.get(runId) !== entry) {
-        return;
-      }
-      indexedRuns.delete(runId);
-      if (indexedRuns.size === 0) {
-        this.delete(key);
-        this.latest.delete(key);
-      } else if (this.latest.get(key) === entry) {
-        for (const remaining of indexedRuns.values()) {
-          this.latest.set(key, remaining);
+  update(previous?: SubagentRunRecord, entry?: SubagentRunRecord): void {
+    const previousKey = previous && this.keyFor(previous);
+    const key = entry && this.keyFor(entry);
+    if (previousKey && previousKey !== key) {
+      const bucket = this.get(previousKey);
+      const position = bucket && previous ? bucket.indexOf(previous) : -1;
+      if (bucket && position >= 0) {
+        bucket.splice(position, 1);
+        if (bucket.length === 0) {
+          this.delete(previousKey);
         }
       }
-    } else {
-      if (indexedRuns) {
-        indexedRuns.set(runId, entry);
-      } else {
-        this.set(key, new Map([[runId, entry]]));
+    }
+    if (!key || !entry) {
+      return;
+    }
+    const bucket = this.get(key);
+    if (bucket?.length === 1 && bucket[0] === previous) {
+      bucket[0] = entry;
+    } else if (bucket) {
+      // Replacement moves to the end, preserving the collector's last-published lookup.
+      const position = previous ? bucket.indexOf(previous) : -1;
+      if (position >= 0) {
+        bucket.splice(position, 1);
       }
-      this.latest.set(key, entry);
+      bucket.push(entry);
+    } else {
+      this.set(key, [entry]);
     }
   }
 
   getLatest(key: string): SubagentRunRecord | undefined {
-    return this.latest.get(key);
-  }
-
-  override clear(): void {
-    super.clear();
-    this.latest.clear();
+    return this.get(key)?.at(-1);
   }
 }
 
@@ -625,15 +622,10 @@ class SubagentRunMap extends Map<string, SubagentRunRecord> {
     if (prev && prev !== entry && isSameSubagentRunOwner(prev, entry)) {
       this.publishRuntimeOwner(prev, entry);
     }
-    if (prev) {
-      for (const index of runIndexes) {
-        index.update(runId, prev, "remove");
-      }
-    }
     super.set(runId, entry);
     this.readLookup.set(runId, entry);
     for (const index of runIndexes) {
-      index.update(runId, entry, "add");
+      index.update(prev, entry);
     }
     this.workIndex.set(runId, entry);
     return this;
@@ -645,7 +637,7 @@ class SubagentRunMap extends Map<string, SubagentRunRecord> {
     const prev = this.get(runId);
     if (prev) {
       for (const index of runIndexes) {
-        index.update(runId, prev, "remove");
+        index.update(prev);
       }
     }
     return super.delete(runId);
@@ -725,24 +717,24 @@ export function getCurrentSubagentRunOwner(
 
 export function getSubagentChildSessionCandidates(
   childSessionKey: string,
-): Iterable<SubagentRunRecord> {
-  return childSessionCandidatesByKey.get(childSessionKey)?.values() ?? [];
+): readonly SubagentRunRecord[] {
+  return childSessionCandidatesByKey.get(childSessionKey) ?? emptyRunBucket;
 }
 
 /** Iterate live generations for one child session without scanning the registry. */
-export function* getSubagentRunsForChildSession(
+export function getSubagentRunsForChildSession(
   childSessionKey: string,
   childAgentId?: string,
 ): Iterable<SubagentRunRecord> {
   const key = childSessionOwnerKey({ childSessionKey, childAgentId });
-  yield* (key ? runsByChildSessionOwner.get(key)?.values() : undefined) ?? [];
+  return (key ? runsByChildSessionOwner.get(key) : undefined) ?? emptyRunBucket;
 }
 
 /** Current requester-owned generations, without restoring or scanning retained rows. */
 export function getSubagentRunsForRequesterSession(
   requesterSessionKey: string,
 ): Iterable<SubagentRunRecord> {
-  return runsByRequesterSessionKey.get(requesterSessionKey)?.values() ?? [];
+  return runsByRequesterSessionKey.get(requesterSessionKey) ?? emptyRunBucket;
 }
 
 /** Iterate live collector members for one requester/group archive decision. */
@@ -753,9 +745,9 @@ export function getSubagentRunsForCollectorGroup(
 ): Iterable<[string, SubagentRunRecord]> {
   const key = JSON.stringify([requesterSessionKey, groupId]);
   // Restore can backfill agent ownership after index insertion; read the live owner.
-  return [...(runsByCollectorGroupKey.get(key)?.entries() ?? [])].filter(
-    ([, entry]) => entry.requesterAgentId === requesterAgentId,
-  );
+  return (runsByCollectorGroupKey.get(key) ?? emptyRunBucket)
+    .filter((entry) => entry.requesterAgentId === requesterAgentId)
+    .map((entry) => [entry.runId, entry]);
 }
 
 /** Resolve a collector tombstone that reserves its child session from ordinary turns. */

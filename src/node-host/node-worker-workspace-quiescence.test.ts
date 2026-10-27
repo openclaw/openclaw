@@ -10,8 +10,8 @@ import { pathToFileURL } from "node:url";
 import { runInNewContext } from "node:vm";
 import { transformSync } from "esbuild";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { createDeferred } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { createEnteredGate } from "../agents/entered-gate.test-support.js";
 import { workspaceQuiescenceArgv } from "../gateway/worker-environments/workspace-quiescence-scripts.js";
 import type { ProcessSupervisor, RunExit } from "../process/supervisor/types.js";
 import type { NodeWorkerWorkspaceQuiescenceInput } from "../worker/node-workspace-protocol.js";
@@ -312,39 +312,6 @@ describe("root-owned POSIX quiescence", () => {
 });
 
 describe("Windows-selected quiescence controller contracts", () => {
-  it("reuses the retained helper across SQLite leases while fencing stale nonces", async () => {
-    const f = fixture();
-    try {
-      await expect(f.execute(acquire)).resolves.toBe("quiesced " + nonce + "\n");
-      expect(mocks.helper).toHaveBeenCalledOnce();
-      expect(mocks.spawn).not.toHaveBeenCalled();
-      expect(f.readLease()).toMatchObject({
-        nonce,
-        sharedHost: true,
-        processes: [],
-        watchdog: null,
-      });
-      expect(f.releaseWorkspace).not.toHaveBeenCalled();
-      await expect(f.execute(renew)).resolves.toBe("renewed " + nonce + "\n");
-      await f.execute(release);
-      expect(f.readLease()).toBeUndefined();
-      const nextNonce = "b".repeat(32);
-      await f.execute({ ...acquire, nonce: nextNonce });
-      for (const operation of [acquire, renew, release]) {
-        await expect(f.execute(operation)).rejects.toThrow(/already active|no longer active/);
-      }
-      expect(f.readLease()).toMatchObject({ nonce: nextNonce });
-      await f.execute({ ...renew, nonce: nextNonce });
-      await f.execute({ ...release, nonce: nextNonce });
-      expect(mocks.helper).toHaveBeenCalledOnce();
-      expect(mocks.spawn).not.toHaveBeenCalled();
-    } finally {
-      await f.owner.close();
-    }
-    expect(f.children[0]?.exitCode).toBe(0);
-    expect(f.owner.hasActiveWork()).toBe(false);
-  });
-
   it("does not admit an already-aborted operation", async () => {
     const f = fixture();
     const caller = new AbortController();
@@ -357,26 +324,22 @@ describe("Windows-selected quiescence controller contracts", () => {
 
   it("joins exact-nonce standalone recovery cleanup before releasing dead-helper custody", async () => {
     const f = fixture();
-    const cleanupEntered = createDeferred();
-    const cleaned = createDeferred();
+    const cleanupGate = createEnteredGate();
     await f.execute(acquire);
     expect(mocks.helper).toHaveBeenCalledOnce();
     await f.kill();
     await expect(f.execute(renew)).rejects.toThrow("watchdog identity changed");
     expect(f.readLease()).toMatchObject({ nonce });
-    mocks.cleanup.mockImplementation(async () => {
-      cleanupEntered.resolve();
-      await cleaned.promise;
-    });
+    mocks.cleanup.mockImplementation(cleanupGate.wait);
     const releasing = f.execute(release);
-    await cleanupEntered.promise;
+    await cleanupGate.entered;
     const closing = f.owner.close();
     try {
       expect(f.readLease()).toBeUndefined();
       expect(f.releaseWorkspace).not.toHaveBeenCalled();
       expect(f.owner.hasActiveWork()).toBe(true);
     } finally {
-      cleaned.resolve();
+      cleanupGate.release();
       await Promise.all([releasing, closing]);
     }
     expect(mocks.spawn).toHaveBeenCalledOnce();

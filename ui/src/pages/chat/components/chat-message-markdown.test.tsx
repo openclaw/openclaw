@@ -209,11 +209,27 @@ describe("user message disclosure", () => {
     vi.stubGlobal(
       "ResizeObserver",
       class {
-        constructor(private readonly notify: () => void) {}
-        observe() {
+        private readonly targets = new Set<Element>();
+        constructor(private readonly callback: ResizeObserverCallback) {}
+        private readonly notify = () => {
+          // SAFETY: The overflow owner reads layout from its registered elements.
+          this.callback(
+            [...this.targets].map((target) => ({ target }) as ResizeObserverEntry),
+            this as unknown as ResizeObserver,
+          );
+        };
+        observe(target: Element) {
+          this.targets.add(target);
           pendingObservers.add(this.notify);
         }
+        unobserve(target: Element) {
+          this.targets.delete(target);
+          if (this.targets.size === 0) {
+            pendingObservers.delete(this.notify);
+          }
+        }
         disconnect() {
+          this.targets.clear();
           pendingObservers.delete(this.notify);
         }
       },

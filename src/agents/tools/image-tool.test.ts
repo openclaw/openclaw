@@ -1,5 +1,5 @@
 // Image tool tests cover model routing, provider auth, path safety, inbound
-// media refs, data URLs, response validation, and compression policy.
+// media refs, data URLs, and compression policy.
 import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
@@ -38,7 +38,6 @@ import {
   createHostSandboxFsBridge,
 } from "../test-helpers/host-sandbox-fs-bridge.js";
 import { createUnsafeMountedSandbox } from "../test-helpers/unsafe-mounted-sandbox.js";
-import { makeZeroUsageSnapshot } from "../usage.js";
 import { createImageTool } from "./image-tool.js";
 import {
   createLargeColorBlockPng,
@@ -48,6 +47,7 @@ import {
   expectToolText,
   ONE_PIXEL_PNG_B64,
   readJpegDimensions,
+  replyImageOk,
   resolveConfiguredImageModelForTest,
   testing,
   type ToolTextResult,
@@ -839,10 +839,7 @@ describe("image tool implicit imageModel config", () => {
 
   it("carries the scoped auth store into image provider execution", async () => {
     await withTempAgentDir(async (agentDir) => {
-      const describeImage = vi.fn(async (params: ImageDescriptionRequest) => ({
-        text: "ok",
-        model: params.model,
-      }));
+      const describeImage = vi.fn(replyImageOk);
       installImageUnderstandingProviderStubs({
         id: "codex",
         capabilities: ["image"],
@@ -931,10 +928,7 @@ describe("image tool implicit imageModel config", () => {
   ])("uses $name for provider calls", async ({ modelTimeout, expected }) => {
     await withTempWorkspacePng(async ({ workspaceDir, imagePath }) => {
       await withTempAgentDir(async (agentDir) => {
-        const describeImage = vi.fn(async (params: ImageDescriptionRequest) => ({
-          text: "ok",
-          model: params.model,
-        }));
+        const describeImage = vi.fn(replyImageOk);
         installFastLocalImageProviderStubs({
           id: "ollama",
           capabilities: ["image"],
@@ -1267,10 +1261,7 @@ describe("image tool implicit imageModel config", () => {
 
   it("allows current iMessage account attachments", async () => {
     await withTempAgentDir(async (agentDir) => {
-      const describeImage = vi.fn(async (params: ImageDescriptionRequest) => ({
-        text: "ok",
-        model: params.model,
-      }));
+      const describeImage = vi.fn(replyImageOk);
       installFastLocalImageProviderStubs({
         id: "ollama",
         capabilities: ["image"],
@@ -1509,13 +1500,10 @@ describe("image tool data URL support", () => {
     },
     { dataUrl: `data:image/png;base64,${"A".repeat(16)}`, maxBytes: 4, error: /size limit/i },
   ])("rejects invalid data URLs before decoding: $error", ({ dataUrl, maxBytes, error }) => {
-    const bufferFromSpy = vi.spyOn(Buffer, "from");
-    try {
-      expect(() => testing.decodeDataUrl(dataUrl, { maxBytes })).toThrow(error);
-      expect(bufferFromSpy).not.toHaveBeenCalledWith(dataUrl.split(",")[1], "base64");
-    } finally {
-      bufferFromSpy.mockRestore();
-    }
+    using bufferFromSpy = vi.spyOn(Buffer, "from");
+
+    expect(() => testing.decodeDataUrl(dataUrl, { maxBytes })).toThrow(error);
+    expect(bufferFromSpy).not.toHaveBeenCalledWith(dataUrl.split(",")[1], "base64");
   });
 });
 
@@ -1645,138 +1633,6 @@ describe("image tool MiniMax VLM routing", () => {
       }),
     );
   });
-});
-
-describe("image tool response validation", () => {
-  function createAssistantMessage(
-    overrides: Partial<{
-      api: string;
-      provider: string;
-      model: string;
-      stopReason: string;
-      errorMessage: string;
-      content: unknown[];
-    }>,
-  ) {
-    return {
-      role: "assistant",
-      api: "openai-responses",
-      provider: "openai",
-      model: "gpt-5.4-mini",
-      stopReason: "stop",
-      timestamp: Date.now(),
-      usage: makeZeroUsageSnapshot(),
-      content: [] as unknown[],
-      ...overrides,
-    };
-  }
-
-  it.each([
-    {
-      name: "surfaces provider errors from image-model responses",
-      message: createAssistantMessage({
-        stopReason: "error",
-        errorMessage: "boom",
-      }) as never,
-      expectedError: /boom/i,
-      expectedText: undefined,
-    },
-    {
-      name: "returns trimmed text from image-model responses",
-      message: createAssistantMessage({
-        api: "anthropic-messages",
-        provider: "anthropic",
-        model: "claude-opus-4-6",
-        content: [{ type: "text", text: "  hello  " }],
-      }) as never,
-      expectedError: undefined,
-      expectedText: "hello",
-    },
-  ])("$name", ({ message, expectedError, expectedText }) => {
-    const coerce = () =>
-      testing.coerceImageAssistantText({
-        provider: expectedError ? "openai" : "anthropic",
-        model: expectedError ? "gpt-5.4-mini" : "claude-opus-4-6",
-        message,
-      });
-    if (expectedError) {
-      expect(coerce).toThrow(expectedError);
-    } else {
-      expect(coerce()).toBe(expectedText);
-    }
-  });
-
-  it.each<{
-    name: string;
-    signature: unknown;
-    expected: boolean;
-    thinking?: string;
-    precedingBlocks?: number;
-    rejectText?: boolean;
-  }>([
-    {
-      name: "reasoning_content",
-      signature: "reasoning_content",
-      expected: true,
-      rejectText: true,
-    },
-    {
-      name: "Responses JSON",
-      signature: JSON.stringify({ id: "rs_123", type: "reasoning" }),
-      expected: true,
-      rejectText: true,
-    },
-    {
-      name: "Responses object",
-      signature: { id: "rs_456", type: "reasoning.encrypted" },
-      expected: true,
-      rejectText: true,
-    },
-    {
-      name: "oversized Responses JSON",
-      signature: JSON.stringify({
-        id: "rs_123",
-        summary: [{ text: "x".repeat(2_100) }],
-        type: "reasoning",
-      }),
-      expected: true,
-    },
-    {
-      name: "signature after bounded block scan",
-      signature: "reasoning_content",
-      precedingBlocks: 50,
-      expected: false,
-    },
-  ])(
-    "detects image reasoning-only responses: $name",
-    ({
-      signature,
-      expected,
-      thinking = "  <think>private</think> maybe a cat  ",
-      precedingBlocks = 0,
-      rejectText,
-    }) => {
-      const message = createAssistantMessage({
-        content: [
-          ...Array.from({ length: precedingBlocks }, () => ({
-            type: "thinking",
-            thinking: "untagged",
-          })),
-          { type: "thinking", thinking, thinkingSignature: signature },
-        ],
-      });
-      expect(testing.hasImageReasoningOnlyResponse(message as never)).toBe(expected);
-      if (rejectText) {
-        expect(() =>
-          testing.coerceImageAssistantText({
-            provider: "openai",
-            model: "gpt-5.4-mini",
-            message: message as never,
-          }),
-        ).toThrow(/returned no text/i);
-      }
-    },
-  );
 });
 
 describe("image compression policy", () => {

@@ -100,6 +100,7 @@ export function createRecoveryRuntimeFixture(params: {
     }
   };
   return {
+    prepareFailedWorkerPlacement: async () => undefined,
     prepareRestartRecovery: () => undefined,
     async expectAdmission(
       expectedGatewayCalls: number,

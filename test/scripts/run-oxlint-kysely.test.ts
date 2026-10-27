@@ -51,6 +51,8 @@ function createLintFixture() {
         encoding: "utf8",
         env: {
           ...process.env,
+          CI: "false",
+          OPENCLAW_LINT_TOOL: "oxlint",
           GITHUB_ACTIONS: "false",
           OPENCLAW_CI_STATIC_EVIDENCE: "0",
           OPENCLAW_OXLINT_SKIP_PREPARE: "0",

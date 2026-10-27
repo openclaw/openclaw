@@ -1,10 +1,10 @@
 import "./update-command-execution.test-support.js";
-import fs from "node:fs/promises";
 import path from "node:path";
 import { expect, it, vi } from "vitest";
 import { createUpdateRun, getUpdateRun } from "../../infra/update-run-ledger.js";
 import { prepareGitMutation } from "../../infra/update-runner-git-target.js";
 import * as databaseBackup from "../../snapshot/database-backup.js";
+import { writeFixtureJson } from "../cli-fixtures.test-support.js";
 import { executeMutableUpdate } from "./update-command-execution.js";
 import { withUpdateCommandExecutor } from "./update-command-executor.js";
 import { useExecutorFixture } from "./update-command-executor.test-support.js";
@@ -93,10 +93,7 @@ it.each(["package", "staged", "git"] as const)(
     const schemaVersions = { state: 15, agent: 19 };
     const firstSha = "1".repeat(40);
     const nextSha = "2".repeat(40);
-    await fs.writeFile(
-      path.join(dir, "package.json"),
-      JSON.stringify({ openclaw: { databaseEngines } }),
-    );
+    await writeFixtureJson(path.join(dir, "package.json"), { openclaw: { databaseEngines } });
     if (route === "staged") {
       params.packageInstallSpec = path.join(dir, "candidate.tgz");
     }

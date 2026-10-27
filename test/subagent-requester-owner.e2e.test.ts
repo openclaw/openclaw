@@ -18,16 +18,14 @@ import {
 import { loadSessionEntry } from "../src/config/sessions/session-accessor.js";
 import { getSessionKysely } from "../src/config/sessions/session-accessor.sqlite-scope.js";
 import type { OpenClawConfig } from "../src/config/types.openclaw.js";
-import {
-  readProviderBody,
-  writeToolCall,
-} from "../src/gateway/gateway-provider-fixture.test-support.js";
+import { writeToolCall } from "../src/gateway/gateway-provider-fixture.test-support.js";
 import { connectGatewayClient, disconnectGatewayClient } from "../src/gateway/test-helpers.e2e.js";
 import { buildMockOpenAiResponsesProvider } from "../src/gateway/test-openai-responses-model.js";
 import { executeSqliteQuerySync } from "../src/infra/kysely-sync.js";
 import { extractFirstTextBlock } from "../src/shared/chat-message-content.js";
 import { withOpenClawAgentDatabaseReadOnly } from "../src/state/openclaw-agent-db-readonly.js";
 import { closeOpenClawStateDatabaseForTest } from "../src/state/openclaw-state-db.js";
+import { readRequestText } from "./helpers/gateway-integration-fixtures.js";
 import { startOpenAiResponsesModelServer } from "./helpers/openai-responses-model-fixture.js";
 import { writeOpenAiResponsesText } from "./helpers/openai-responses-sse.js";
 import {
@@ -461,7 +459,7 @@ async function startProofModelServer(options?: {
     modelId: "requester-owner",
     bindError: "Requester model fixture did not bind a loopback port",
     onRequest: async (request, response) => {
-      const body = await readProviderBody(request);
+      const body = await readRequestText(request);
       requestBodies.push(body);
       const requestBody = JSON.parse(body) as { tools?: Array<{ type?: string; name?: string }> };
       const respondWithTool = (name: string, args: Record<string, unknown>) => {

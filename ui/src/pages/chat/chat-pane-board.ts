@@ -4,7 +4,7 @@ import { gatewayPresentationScope } from "../../app/gateway-presentation-scope.t
 import {
   hasOperatorApprovalsAccess,
   hasOperatorReadAccess,
-  hasOperatorWriteAccess,
+  hasOperatorSelfReadAccess,
 } from "../../app/operator-access.ts";
 import { loadSettings, patchSettings } from "../../app/settings.ts";
 import type { BoardWidgetPageMenu } from "../../components/board/board-widget-cell-options.ts";
@@ -26,8 +26,11 @@ import {
   isGatewayCapabilityAdvertised,
   isGatewayMethodAdvertised,
 } from "../../lib/gateway-methods.ts";
-import { readSessionMethodAccess } from "../../lib/session-method-access.ts";
-import { resolveSessionKey } from "../../lib/sessions/index.ts";
+import {
+  readSessionMethodAccess,
+  readSessionMethodScopeAccess,
+} from "../../lib/session-method-access.ts";
+import { resolveSessionKey } from "../../lib/sessions/navigation.ts";
 import { resolveSessionPreferredFace } from "../../lib/sessions/route-navigation.ts";
 import {
   buildAgentMainSessionKey,
@@ -268,12 +271,19 @@ export abstract class ChatPaneBoard extends ChatPaneHistory {
       return this.boardProvider;
     }
     const gateway = this.context?.gateway.snapshot;
+    const auth = gateway?.hello?.auth ?? null;
     const available =
       !gateway ||
-      (hasOperatorReadAccess(gateway.hello?.auth ?? null) &&
+      (hasOperatorSelfReadAccess(auth) &&
         isGatewayMethodAdvertised(gateway, "board.get") !== false);
-    const canMutate = !gateway || hasOperatorWriteAccess(gateway.hello?.auth ?? null);
-    const canGrant = !gateway || hasOperatorApprovalsAccess(gateway.hello?.auth ?? null);
+    const canMutate =
+      !auth?.scopes ||
+      readSessionMethodScopeAccess(auth, {
+        method: "board.update",
+        requiredScope: "operator.sessions.write",
+        session: this.state ? selectedChatSessionRow(this.state) : undefined,
+      }).allowed;
+    const canGrant = !gateway || hasOperatorApprovalsAccess(auth);
     const canPinWidgets =
       canMutate &&
       (!gateway ||
@@ -282,7 +292,8 @@ export abstract class ChatPaneBoard extends ChatPaneHistory {
     const canPinMcpApps =
       canMutate &&
       (!gateway ||
-        (isGatewayMethodAdvertised(gateway, "board.widget.appView") === true &&
+        (hasOperatorReadAccess(auth) &&
+          isGatewayMethodAdvertised(gateway, "board.widget.appView") === true &&
           isGatewayMethodAdvertised(gateway, "board.widget.put") === true));
     const client = gateway?.client;
     if (this.boardProviderLifecycleConnected && client && available) {
@@ -556,7 +567,7 @@ export abstract class ChatPaneBoard extends ChatPaneHistory {
       snapshot,
       available:
         Boolean(this.boardProvider) ||
-        (hasOperatorReadAccess(this.context.gateway.snapshot.hello?.auth ?? null) &&
+        (hasOperatorSelfReadAccess(this.context.gateway.snapshot.hello?.auth ?? null) &&
           isGatewayMethodAdvertised(this.context.gateway.snapshot, "board.get") !== false),
       hasBoard,
       face: this.routeFace ?? "chat",

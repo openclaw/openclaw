@@ -3,7 +3,7 @@ import { closedObject } from "./closed-object.js";
 import { CronDateTimestampMsSchema } from "./cron-shared.js";
 import { stringLiteralUnion } from "./string-literal-union.js";
 
-export const AutomationMeaningfulOutcomeSchema = stringLiteralUnion([
+const AutomationMeaningfulOutcomeSchema = stringLiteralUnion([
   "progress",
   "done",
   "blocked",
@@ -18,7 +18,7 @@ export const AutomationResultSummarySchema = Type.String({
   maxLength: 2000,
   pattern: "\\S",
 });
-export const AutomationMeaningfulResultSchema = closedObject({
+const AutomationMeaningfulResultSchema = closedObject({
   outcome: AutomationMeaningfulOutcomeSchema,
   summary: AutomationResultSummarySchema,
 });

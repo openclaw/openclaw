@@ -31,7 +31,6 @@ import {
   closeOpenClawAgentDatabasesForTest,
 } from "../../state/openclaw-agent-db.js";
 import { runOpenClawAgentWriteAdmission } from "../../state/openclaw-agent-write-admission.js";
-import { cleanupSessionStateForTest } from "../../test-utils/session-state-cleanup.js";
 import { MAX_OVERFLOW_COMPACTION_ATTEMPTS } from "../agent-compaction-constants.js";
 import { compactWithSafetyTimeout } from "../embedded-agent-runner/compaction-safety-timeout.js";
 import { subscribeEmbeddedAgentSession } from "../embedded-agent-subscribe.js";
@@ -62,17 +61,18 @@ import {
   testModel,
 } from "./agent-session-loop-correctness.test-support.js";
 import { createCompactionExtension } from "./agent-session-loop-resource-loader.test-support.js";
-import type { AgentSessionEvent } from "./agent-session-types.js";
+import {
+  agentSessionRunProviderCompaction,
+  type AgentSessionEvent,
+} from "./agent-session-types.js";
 import type { ExtensionFactory, ExtensionEvent } from "./extensions/types.js";
 import { SessionManager } from "./session-manager.js";
+import { cleanupTrackedSessionState } from "./session-state-cleanup.test-support.js";
 import { SettingsManager } from "./settings-manager.js";
 
 const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
   afterEach(async () => {
-    for (const stateDir of tempDirs.dirs) {
-      await cleanupSessionStateForTest({ stateDir });
-    }
-    cleanup();
+    await cleanupTrackedSessionState(tempDirs.dirs, cleanup);
   }),
 );
 registerAgentSessionLoopTestLifecycle();
@@ -149,6 +149,23 @@ type AgentEventHandler = NonNullable<
 >;
 
 describe("AgentSession compaction", () => {
+  it("removes the context replacement listener when disposed during provider compaction", async () => {
+    const { session } = await createTestSession();
+    const released = createDeferred();
+    const replaced = vi.fn();
+    session[agentSessionSetContextReplacementHook](replaced);
+    const compaction = session[agentSessionRunProviderCompaction](async (_signal, committed) => {
+      await released.promise;
+      committed(100, 50);
+    });
+
+    session.dispose();
+    released.resolve();
+    await compaction;
+
+    expect(replaced).not.toHaveBeenCalled();
+  });
+
   it.each([
     {
       name: "long untrusted focus",

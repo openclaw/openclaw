@@ -39,6 +39,7 @@ import {
 import { AsyncWorkScope, trackAsyncWork } from "../shared/async-work-scope.js";
 import { runInDetachedAsyncContext } from "../shared/detached-async-context.js";
 import { resolveVisibleActiveSessionRunState } from "./server-methods/session-active-runs.js";
+import { createActivitySummaryAuthority } from "./session-activity-summary-authority.js";
 import {
   beginActivitySummaryCompletion,
   type PendingSessionActivitySummaryCompletion,
@@ -319,6 +320,7 @@ export function createSessionActivitySummaries(deps: {
     }
     const ref = modelRef(state);
     const priorBackoff = ref ? modelBackoffs.get(ref) : undefined;
+    let authority: ReturnType<typeof createActivitySummaryAuthority> | undefined;
     let partial = false;
     const ownedWork = new AsyncWorkScope();
     try {
@@ -326,11 +328,17 @@ export function createSessionActivitySummaries(deps: {
         publish(state, "unavailable");
         return;
       }
-      assertCurrentOwner(state, ref);
+      const recapAuthority = createActivitySummaryAuthority({
+        agentId: state.agentId,
+        getEntry: () => state.entry,
+        getConfig: deps.getConfig,
+        assertCurrent: () => assertCurrentOwner(state, ref),
+      });
+      authority = recapAuthority;
       const source = await readActivitySummarySource({
         scope: { ...scope(state), sessionId: state.sessionId },
         previous: readSessionActivitySummary(state.entry),
-        assertCurrent: () => assertCurrentOwner(state, ref),
+        assertCurrent: recapAuthority.assertCurrent,
       });
       if (!source) {
         state.dirty = true;
@@ -367,18 +375,21 @@ export function createSessionActivitySummaries(deps: {
             if (controller.signal.aborted || state.controller !== controller) {
               throw controller.signal.reason ?? new ActivitySummaryCancelledError();
             }
-            assertCurrentOwner(state, ref);
+            recapAuthority.assertCurrent();
             assertCurrentEntry(state, state.entry);
           };
           const execute = async () => {
+            const operatorAuthority = await recapAuthority.prepare();
             const { hasAvailableUtilityCompletionAuth } =
               await import("../agents/utility-completion.js");
+            assertRequestCurrent();
             const prepared = await defaultPrepareModel({
               cfg: deps.getConfig(),
               agentId: state.agentId,
               modelRef: ref,
               useUtilityModel: true,
             });
+            assertRequestCurrent();
             const available = await hasAvailableUtilityCompletionAuth(prepared);
             assertRequestCurrent();
             if (!available) {
@@ -392,6 +403,7 @@ export function createSessionActivitySummaries(deps: {
             state.calls += 1;
             const result = await defaultCompleteModel({
               ...prepared,
+              operatorAuthority,
               purpose: "session-activity-summary",
               sessionId: state.sessionId,
               sessionKey: state.key,
@@ -408,6 +420,7 @@ export function createSessionActivitySummaries(deps: {
               answerTokenBudget: 240,
               streamParams: { temperature: 0.2 },
             });
+            assertRequestCurrent();
             return result.text;
           };
           const completed = await racePromiseWithAbortSignal(
@@ -451,7 +464,7 @@ export function createSessionActivitySummaries(deps: {
           {
             preserveActivity: true,
             workerGuard: {
-              assertCurrent: () => assertCurrentOwner(state, ref),
+              assertCurrent: recapAuthority.assertCurrent,
             },
           },
         ));
@@ -509,7 +522,7 @@ export function createSessionActivitySummaries(deps: {
         }
         state.retryAt = now() + delay;
         publish(state, state.retryPending ? "updating" : "unavailable");
-        log.debug("Activity recap deferred", {
+        log[authority?.operatorOwned ? "info" : "debug"]("Activity recap deferred", {
           agentId: state.agentId,
           error: formatErrorMessage(error),
           retryScheduled: state.retryPending,
@@ -522,6 +535,7 @@ export function createSessionActivitySummaries(deps: {
         () => [ownedWork],
         () => ownedWork.drain(),
       );
+      authority?.release();
       state.controller = undefined;
       state.inFlight = false;
       if (current(state) && (state.retryPending || (!state.retryAt && (partial || state.dirty)))) {

@@ -3,11 +3,11 @@
 import { createComponent, createSignal } from "solid-js";
 import { afterEach, beforeEach, expect, it, onTestFinished, vi } from "vitest";
 import type {
-  ControlUiHost,
   ControlUiReplacement,
   ControlUiSurface,
 } from "../../../../src/plugin-sdk/control-ui.js";
 import type { ApplicationContext } from "../../app/context.ts";
+import { createInertViewHost } from "../../plugins/control-ui-view.test-support.ts";
 import {
   createApplicationContextProvider,
   createApplicationGateway,
@@ -51,14 +51,7 @@ function createPluginChat(
 ) {
   installTranscriptDomMocks();
   const lifetime = new AbortController();
-  const pluginHost = {
-    signal: lifetime.signal,
-    sessions: {},
-    agents: {},
-    navigation: {},
-    ui: {},
-    components: {},
-  } as unknown as ControlUiHost;
+  const pluginHost = createInertViewHost(lifetime.signal);
   const reportError = vi.fn();
   const registration = replacement && {
     key: `questions/${replacement.id}`,

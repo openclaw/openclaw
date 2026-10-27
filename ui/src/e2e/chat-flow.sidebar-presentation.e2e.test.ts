@@ -44,7 +44,12 @@ function rowLayout(locator: Locator) {
       lead: get(".sidebar-session-indicator"),
       unread: get(".sidebar-session-indicator .session-unread-dot"),
       endcap: get(".sidebar-recent-session__details-endcap"),
-      atoms: Array.from(row.querySelectorAll(".sidebar-recent-session__details-endcap svg"), rect),
+      atoms: Array.from(
+        row.querySelectorAll(
+          ".sidebar-recent-session__details-endcap svg,.sidebar-recent-session__details-endcap .session-css-icon",
+        ),
+        rect,
+      ),
       nameOverflowing: name.scrollWidth > name.clientWidth,
       singleLine: row.classList.contains("sidebar-recent-session--single-line"),
     };
@@ -379,7 +384,7 @@ suite.define(() => {
     const sidebar = page.locator("openclaw-app-sidebar");
     expect(await sidebar.getByRole("img", { name: "Dashboard available" }).count()).toBe(0);
     expect(await sidebar.getByRole("img", { name: "Automation attached" }).count()).toBe(0);
-    const ordinaryBadge = busyRow.locator(".session-row-badge--incognito svg");
+    const ordinaryBadge = busyRow.locator(".session-row-badge--incognito .session-css-icon");
     for (const colorScheme of ["dark", "light"] as const) {
       await page.emulateMedia({ colorScheme });
       await expect.poll(() => page.locator("html").getAttribute("data-theme")).toBe(colorScheme);

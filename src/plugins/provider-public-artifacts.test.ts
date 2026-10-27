@@ -7,6 +7,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type { ModelCatalogSnapshot } from "../agents/model-catalog.types.js";
 import type { ModelProviderConfig } from "../config/types.models.js";
+import { captureEnv } from "../test-utils/env.js";
 import { createPluginCache, retirePluginCache, withPluginCache } from "./plugin-cache.js";
 import { bindPluginInstanceModuleLoader } from "./plugin-instance-module-loader.js";
 import { getPluginValueInstance } from "./plugin-instance-scope.js";
@@ -51,7 +52,7 @@ function writeExternalPolicyFixture(): string {
       '    ? { provider, reason: "setup missing", requirement: "fixture-setup" }',
       "    : null;",
       "}",
-      "export function projectConfiguredModelRow() { return null; }",
+      "export function projectRealtimeVoicePublicProjection() { return null; }",
       "",
     ].join("\n"),
     "utf8",
@@ -84,21 +85,10 @@ async function loadPolicyResolver(scope: string, loader: (params: { dirName: str
 }
 
 describe("provider public artifacts", () => {
-  const originalBundledPluginsDir = process.env.OPENCLAW_BUNDLED_PLUGINS_DIR;
-  const originalTrustBundledPluginsDir = process.env.OPENCLAW_TEST_TRUST_BUNDLED_PLUGINS_DIR;
-
-  function restoreBundledPluginEnv() {
-    if (originalBundledPluginsDir === undefined) {
-      delete process.env.OPENCLAW_BUNDLED_PLUGINS_DIR;
-    } else {
-      process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = originalBundledPluginsDir;
-    }
-    if (originalTrustBundledPluginsDir === undefined) {
-      delete process.env.OPENCLAW_TEST_TRUST_BUNDLED_PLUGINS_DIR;
-    } else {
-      process.env.OPENCLAW_TEST_TRUST_BUNDLED_PLUGINS_DIR = originalTrustBundledPluginsDir;
-    }
-  }
+  const bundledPluginEnv = captureEnv([
+    "OPENCLAW_BUNDLED_PLUGINS_DIR",
+    "OPENCLAW_TEST_TRUST_BUNDLED_PLUGINS_DIR",
+  ]);
 
   beforeEach(() => {
     vi.resetModules();
@@ -106,7 +96,7 @@ describe("provider public artifacts", () => {
   });
 
   afterEach(() => {
-    restoreBundledPluginEnv();
+    bundledPluginEnv.restore();
     vi.doUnmock("./bundled-dir.js");
     vi.doUnmock("./manifest-registry.js");
     vi.doUnmock("./public-surface-loader.js");
@@ -154,20 +144,8 @@ describe("provider public artifacts", () => {
 
   it("loads a lightweight bundled provider policy artifact smoke", () => {
     const surface = resolveBundledProviderPolicySurface("openai");
-    expect(surface?.normalizeConfig).toBeTypeOf("function");
-    expect(surface?.projectConfiguredModelRow).toBeTypeOf("function");
+    expect(surface?.projectRealtimeVoicePublicProjection).toBeTypeOf("function");
 
-    const providerConfig: ModelProviderConfig = {
-      baseUrl: "https://api.openai.com/v1",
-      api: "openai-completions",
-      models: [],
-    };
-    expect(
-      surface?.normalizeConfig?.({
-        provider: "openai",
-        providerConfig,
-      }),
-    ).toBe(providerConfig);
     expect(
       surface
         ?.resolveThinkingProfile?.({ provider: "openai", modelId: "gpt-5.5" })
@@ -329,7 +307,7 @@ describe("provider public artifacts", () => {
           ?.resolveThinkingProfile?.({ provider: "fixture-provider", modelId: "legacy" })
           ?.levels.map((level) => level.label),
       ).toEqual([undefined, "on"]);
-      expect(surface).not.toHaveProperty("projectConfiguredModelRow");
+      expect(surface).not.toHaveProperty("projectRealtimeVoicePublicProjection");
       expect(
         resolveProviderPolicySurface("fixture-embedding", {
           manifestRegistry: { plugins: [fixturePlugin as never] },
@@ -345,7 +323,7 @@ describe("provider public artifacts", () => {
         requirement: "fixture-setup",
       });
     } finally {
-      restoreBundledPluginEnv();
+      bundledPluginEnv.restore();
       fs.rmSync(pluginRoot, { recursive: true, force: true });
       fs.rmSync(bundledPluginsDir, { recursive: true, force: true });
     }
@@ -594,7 +572,7 @@ describe("provider public artifacts", () => {
           ?.levels.map((level) => level.id),
       ).toEqual(["off", "high", "max"]);
     } finally {
-      restoreBundledPluginEnv();
+      bundledPluginEnv.restore();
       fs.rmSync(pluginRoot, { recursive: true, force: true });
       fs.rmSync(bundledPluginsDir, { recursive: true, force: true });
     }

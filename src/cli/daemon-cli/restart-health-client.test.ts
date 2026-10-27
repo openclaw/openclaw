@@ -1,5 +1,4 @@
 import { once } from "node:events";
-import fs from "node:fs/promises";
 import type { AddressInfo } from "node:net";
 import { describe, expect, it, vi } from "vitest";
 import { WebSocketServer } from "ws";
@@ -27,6 +26,7 @@ import {
   storeDeviceAuthToken,
 } from "../../infra/device-auth-store.js";
 import { loadOrCreateDeviceIdentity } from "../../infra/device-identity.js";
+import { listDirectoryTreeStrict } from "../../infra/directory-walk.js";
 import { captureEnv } from "../../test-utils/env.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { withGatewayMaintenanceDrain } from "../update-cli/update-command-service-drain.js";
@@ -239,7 +239,9 @@ describe("restart verifier local control identity", () => {
           const service = createMockGatewayService({
             readRuntime: async () => ({ status: "running", pid: process.pid }),
           });
-          const before = (await fs.readdir(state.stateDir, { recursive: true })).toSorted();
+          const before = (await listDirectoryTreeStrict(state.stateDir))
+            .map((walkEntry) => walkEntry.relativePath)
+            .toSorted();
           const callerEnv = captureEnv(["OPENCLAW_STATE_DIR"]);
           if (paired) {
             process.env.OPENCLAW_STATE_DIR = state.path("unrelated-caller");
@@ -279,9 +281,11 @@ describe("restart verifier local control identity", () => {
                   }),
                 ).toMatchObject({ token: "fixture-paired-token" });
               }
-              expect((await fs.readdir(state.stateDir, { recursive: true })).toSorted()).toEqual(
-                before,
-              );
+              expect(
+                (await listDirectoryTreeStrict(state.stateDir))
+                  .map((walkEntry) => walkEntry.relativePath)
+                  .toSorted(),
+              ).toEqual(before);
               return;
             }
             const result = await waitForGatewayHealthyRestart({
@@ -325,9 +329,11 @@ describe("restart verifier local control identity", () => {
                 : { id: "cli", mode: "cli" },
             );
             expect(connections[0]?.scopes).toEqual(["operator.read"]);
-            expect((await fs.readdir(state.stateDir, { recursive: true })).toSorted()).toEqual(
-              before,
-            );
+            expect(
+              (await listDirectoryTreeStrict(state.stateDir))
+                .map((walkEntry) => walkEntry.relativePath)
+                .toSorted(),
+            ).toEqual(before);
           } finally {
             callerEnv.restore();
             await closeMinimalGatewayServer(gateway);

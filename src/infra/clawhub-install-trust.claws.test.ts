@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { checkClawHubPackageTrust } from "./clawhub-install-trust.js";
+import { captureClawHubResponse } from "./clawhub.test-support.js";
 
 const subject = { kind: "claw" as const, packageName: "@openclaw/research-briefing" };
 const version = "1.0.0";
@@ -56,11 +57,7 @@ afterEach(() => vi.restoreAllMocks());
 
 describe("ClawHub Claw trust", () => {
   it("checks the exact Claw release through the current package security route", async () => {
-    let requestedUrl = "";
-    vi.spyOn(globalThis, "fetch").mockImplementation(async (input) => {
-      requestedUrl = input instanceof Request ? input.url : String(input);
-      return securityResponse("claw");
-    });
+    const request = captureClawHubResponse(() => securityResponse("claw"));
     const result = await checkClawHubPackageTrust({
       subject,
       version,
@@ -72,7 +69,7 @@ describe("ClawHub Claw trust", () => {
       ok: true,
       trustInstallRecordFields: { clawhubTrustDisposition: "clean" },
     });
-    expect(new URL(requestedUrl).pathname).toBe(
+    expect(request.url().pathname).toBe(
       "/api/v1/packages/%40openclaw%2Fresearch-briefing/versions/1.0.0/security",
     );
   });

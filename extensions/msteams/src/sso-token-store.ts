@@ -8,11 +8,7 @@
 
 import { sha256Hex } from "openclaw/plugin-sdk/node-crypto-runtime";
 import { getMSTeamsRuntime } from "./runtime.js";
-import {
-  resolveMSTeamsAccountStateNamespace,
-  toPluginJsonValue,
-  withMSTeamsSqliteMutationLock,
-} from "./sqlite-state.js";
+import { resolveMSTeamsAccountStateNamespace, toPluginJsonValue } from "./sqlite-state.js";
 
 type MSTeamsSsoStoredToken = {
   /** Connection name from the Bot Framework OAuth connection setting. */
@@ -58,18 +54,14 @@ export function createMSTeamsSsoTokenStoreFs(params?: {
     },
 
     async save(token) {
-      await withMSTeamsSqliteMutationLock(namespace, async () => {
-        await tokenStore.register(
-          makeMSTeamsSsoTokenStoreKey(token.connectionName, token.userId),
-          toPluginJsonValue(token),
-        );
-      });
+      await tokenStore.register(
+        makeMSTeamsSsoTokenStoreKey(token.connectionName, token.userId),
+        toPluginJsonValue(token),
+      );
     },
 
     async remove({ connectionName, userId }) {
-      return withMSTeamsSqliteMutationLock(namespace, () =>
-        tokenStore.delete(makeMSTeamsSsoTokenStoreKey(connectionName, userId)),
-      );
+      return tokenStore.delete(makeMSTeamsSsoTokenStoreKey(connectionName, userId));
     },
   };
 }

@@ -227,3 +227,9 @@ export function installGoogleLiveTestFixture(): void {
 
   afterEach(() => vi.unstubAllGlobals());
 }
+
+export async function beginFakeTimedTransport(transport: GoogleLiveRealtimeTalkTransport) {
+  const start = transport.start();
+  await vi.advanceTimersByTimeAsync(0);
+  return { start, ws: latestWebSocket() };
+}

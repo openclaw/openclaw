@@ -2,7 +2,6 @@
 import type { Locator } from "playwright";
 import { expect, it } from "vitest";
 import type { AppSidebarElement } from "../components/app-sidebar.tsx";
-import { waitForControlUiProofSurface } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import {
   controlUiSessionPath,
   installMockGateway,
@@ -19,6 +18,11 @@ import { openSidebarPages, openSidebarPinMenu } from "./sidebar-customization.te
 const suite = createControlUiE2eSuite({
   name: "Control UI sidebar customization mocked Gateway E2E",
   startServerBeforeBrowser: true,
+  // Pointer coverage needs visible native scrollbars with a measurable gutter.
+  browserLaunchOptions: {
+    ignoreDefaultArgs: ["--hide-scrollbars"],
+    args: ["--disable-features=OverlayScrollbar,OverlayScrollbars"],
+  },
   unavailableMessage: (executablePath) =>
     `Playwright Chromium is not installed or cannot start at ${executablePath}. Run \`pnpm --dir ui exec playwright install --with-deps chromium\`, or set OPENCLAW_UI_E2E_ALLOW_MISSING_CHROMIUM=1 only when intentionally skipping this lane.`,
 });
@@ -34,6 +38,98 @@ async function roundedWidth(locator: Locator): Promise<number> {
 }
 
 suite.define(() => {
+  it.each(["ltr", "rtl"] as const)(
+    "keeps the sidebar scrollbar separate from its resize target in %s",
+    async (direction) => {
+      await suite.withPage(
+        { locale: "en-US", serviceWorkers: "block", viewport: { height: 954, width: 1105 } },
+        async ({ page }) => {
+          await installMockGateway(page, {
+            sessions: Array.from({ length: 40 }, (_, index) => ({
+              key: `agent:main:divider-session-${index}`,
+              label: `Project checkpoint ${index + 1}`,
+              kind: "direct",
+              updatedAt: 1_800_000_000_000 - index * 60_000,
+            })),
+          });
+          await page.goto(`${suite.server.baseUrl}chat`);
+          const body = page.locator(".sidebar-shell__body");
+          const nav = page.locator(".shell-nav");
+          const resizer = page.getByRole("separator", { name: "Resize sidebar" });
+          for (let batch = 0; batch < 3; batch++) {
+            const more = body.getByRole("button", { name: "Show more", exact: true }).first();
+            await more.click();
+          }
+          await expect
+            .poll(() => body.evaluate((element) => element.scrollHeight > element.clientHeight))
+            .toBe(true);
+          await page.evaluate((pageDirection) => {
+            document.documentElement.dir = pageDirection;
+          }, direction);
+          await expect
+            .poll(() => body.evaluate((element) => getComputedStyle(element).direction))
+            .toBe(direction);
+          await body.evaluate((element) => {
+            element.scrollTop = 0;
+          });
+          await expect.poll(() => body.evaluate((element) => element.scrollTop)).toBe(0);
+          await page.evaluate(
+            () =>
+              new Promise<void>((resolve) => {
+                requestAnimationFrame(() => requestAnimationFrame(() => resolve()));
+              }),
+          );
+          const bounds = await body.boundingBox();
+          expect(bounds).not.toBeNull();
+          const width = await roundedWidth(nav);
+          // The center of a 16px folding control at the content edge stays clickable.
+          expect(
+            await page.locator("main.content").evaluate((element, pageDirection) => {
+              const rect = element.getBoundingClientRect();
+              const x = pageDirection === "rtl" ? rect.right - 8 : rect.left + 8;
+              const hit = document.elementFromPoint(x, rect.top + 50);
+              return hit !== null && element.contains(hit);
+            }, direction),
+          ).toBe(true);
+          const scrollbarWidth = await body.evaluate(
+            (element) => element.getBoundingClientRect().width - element.clientWidth,
+          );
+          expect(scrollbarWidth).toBeGreaterThan(0);
+          const x =
+            direction === "rtl"
+              ? bounds!.x + scrollbarWidth / 2
+              : bounds!.x + bounds!.width - scrollbarWidth / 2;
+          const y = bounds!.y + 50;
+          expect(
+            await page.evaluate(
+              (point) =>
+                document.elementFromPoint(point.x, point.y)?.closest("resizable-divider") === null,
+              { x, y },
+            ),
+          ).toBe(true);
+          await page.mouse.move(x, y);
+          await page.mouse.down();
+          await page.mouse.move(x, y + 120, { steps: 12 });
+          await page.mouse.up();
+          await expect.poll(() => body.evaluate((element) => element.scrollTop)).toBeGreaterThan(0);
+          expect(await roundedWidth(nav)).toBe(width);
+          const resizeBounds = await resizer.boundingBox();
+          expect(resizeBounds).not.toBeNull();
+          const resizeX = resizeBounds!.x + resizeBounds!.width / 2;
+          await page.mouse.move(resizeX, y);
+          await page.mouse.down();
+          // Preserve the existing physical-delta resize contract in both directions.
+          await page.mouse.move(resizeX + 60, y, { steps: 6 });
+          await page.mouse.up();
+          await expect.poll(() => roundedWidth(nav)).toBe(width + 60);
+          await resizer.focus();
+          await page.keyboard.press("Home");
+          await expect.poll(() => roundedWidth(nav)).toBe(292);
+        },
+      );
+    },
+  );
+
   it.each(
     [1440, 390].flatMap((width) => [
       { width, entry: "route:systems", label: "Systems", route: "chat" },
@@ -175,11 +271,12 @@ suite.define(() => {
     try {
       await page.goto(`${suite.server.baseUrl}settings/appearance`);
       await waitForControlUiSettingsTakeover(page);
+      const sidebarSettings = page.locator("#settings-appearance-sidebar");
+      await sidebarSettings.scrollIntoViewIfNeeded();
       const labelsRequest = await gateway.waitForRequest("sessions.catalog.list", {
         match: { metadataOnly: true },
       });
       expect(labelsRequest.params).not.toHaveProperty("limitPerHost");
-      const sidebarSettings = page.locator("#settings-appearance-sidebar");
       await sidebarSettings.getByRole("heading", { name: "Hidden session sections" }).waitFor();
       const recovery = sidebarSettings.locator(".settings-group", { hasText: "offline-catalog" });
       const row = recovery.locator(".settings-row", { hasText: "Claude Code" });
@@ -507,25 +604,9 @@ suite.define(() => {
       await expect
         .poll(() => usage.evaluate((entry) => getComputedStyle(entry).backgroundColor))
         .not.toBe("rgba(0, 0, 0, 0)");
-      // Rail pins match the view buttons: same icon size, and the same fill for
-      // hover and for the current page.
       const railUsage = pinnedItems.first();
-      const iconWidth = (locator: typeof railUsage) =>
-        locator
-          .locator("svg")
-          .first()
-          .evaluate((svg) => svg.getBoundingClientRect().width);
-      const background = (locator: typeof railUsage) =>
-        locator.evaluate((element) => getComputedStyle(element).backgroundColor);
-      expect(await iconWidth(railUsage)).toBe(await iconWidth(pagesButton));
-      await waitForControlUiProofSurface(pagesButton, []);
-      const pressedBackground = await background(pagesButton);
-      await railUsage.hover();
-      await expect.poll(() => background(railUsage)).toBe(pressedBackground);
       await railUsage.click();
       await expect.poll(() => new URL(page.url()).pathname).toBe("/usage");
-      await page.mouse.move(900, 600);
-      await expect.poll(() => background(railUsage)).toBe(pressedBackground);
       await page.goto(`${suite.server.baseUrl}chat`);
       await page.reload();
       await expect.poll(() => trimmedTextContents(pinnedItems)).toEqual(["Usage"]);

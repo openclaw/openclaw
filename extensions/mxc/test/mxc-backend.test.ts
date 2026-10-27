@@ -26,8 +26,10 @@ import { loadSandboxBaselinePolicy } from "../src/sandbox-policy-loader.js";
 
 const { spawnCommandMock } = vi.hoisted(() => ({ spawnCommandMock: vi.fn() }));
 
-// mock-isolation: backend fixtures control command results without launching sandbox processes.
-vi.mock("openclaw/plugin-sdk/process-runtime", () => ({ runCommandBuffered: spawnCommandMock }));
+vi.mock("openclaw/plugin-sdk/process-runtime", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("openclaw/plugin-sdk/process-runtime")>()),
+  runCommandBuffered: spawnCommandMock,
+}));
 
 vi.mock("../src/binary-resolver.js", () => ({
   resolveMxcBinaryPath: (configuredPath?: string) => configuredPath ?? "mxc-test-binary",

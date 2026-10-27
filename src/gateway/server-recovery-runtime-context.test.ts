@@ -12,6 +12,7 @@ type DispatchArgs = Parameters<GatewayRecoveryRuntime["dispatchAgent"]>;
 function createRecoveryRuntime(result: string) {
   const dispatchAgent = vi.fn(async (..._args: DispatchArgs) => result);
   const runtime: GatewayRecoveryRuntime = {
+    prepareFailedWorkerPlacement: async () => undefined,
     prepareRestartRecovery: () => undefined,
     resumeChatInput: async () => {
       throw new Error("Unexpected chat input recovery");

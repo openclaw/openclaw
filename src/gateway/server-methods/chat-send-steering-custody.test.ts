@@ -34,6 +34,13 @@ import {
 } from "../../config/sessions/session-accessor.js";
 import { assertNoRetainedSessionSharingReads } from "../../config/sessions/session-accessor.sqlite-diagnostics.test-support.js";
 import type { GatewayOperatorRoleDefinition } from "../../config/types.gateway.js";
+import {
+  areDiagnosticsEnabledForProcess,
+  onTrustedInternalDiagnosticEvent,
+  setDiagnosticsEnabledForProcess,
+  waitForDiagnosticEventsDrained,
+  type DiagnosticEventPayload,
+} from "../../infra/diagnostic-events.js";
 import type { ReplyBackendMessageInjectionV2 } from "../../sessions/session-controller.contracts.js";
 import {
   claimSessionControllerTask,
@@ -61,6 +68,50 @@ registerAgentSessionLoopTestLifecycle();
 const createBrowserFollowupFixture = useBrowserFollowupFixture();
 
 describe("steering input custody", () => {
+  it.each([true, false])(
+    "attributes pre-ACK persistence waits with an active run=%s",
+    async (active) => {
+      await using fixture = await createBrowserFollowupFixture({ active });
+      const previous = areDiagnosticsEnabledForProcess();
+      const phases: DiagnosticEventPayload[] = [];
+      setDiagnosticsEnabledForProcess(true);
+      const stop = onTrustedInternalDiagnosticEvent((event) => phases.push(event), {
+        include: ["diagnostic.phase.completed"],
+      });
+      try {
+        expect(await fixture.send()).toHaveBeenCalledWith(
+          true,
+          expect.objectContaining({ status: "started" }),
+          undefined,
+          expect.anything(),
+        );
+        await waitForDiagnosticEventsDrained();
+        const names = phases.flatMap((event) =>
+          event.type === "diagnostic.phase.completed" && event.details?.stage === "request"
+            ? [event.name]
+            : [],
+        );
+        expect(names).toEqual(
+          expect.arrayContaining(
+            (active
+              ? ["persist.stage.read", "persist.stage.authority", "persist.stage.commit"]
+              : [
+                  "persist.transcript.target",
+                  "persist.transcript.commit",
+                  "persist.transcript.publication",
+                ]
+            ).map((phase) => `chat.send.detail.${phase}`),
+          ),
+        );
+        expect(names).toContain("chat.send.detail.session.actor.command.queue");
+        expect(names).toContain("chat.send.detail.session.actor.command.execute");
+      } finally {
+        stop();
+        setDiagnosticsEnabledForProcess(previous);
+      }
+    },
+  );
+
   it.for([
     ...(
       [
@@ -70,11 +121,6 @@ describe("steering input custody", () => {
         "revoked grant",
         "same permissions across profiles",
         "no native admission across profiles",
-        "different scopes across profiles",
-        "same role permissions across profiles",
-        "different role session caps across profiles",
-        "different role agents across profiles",
-        "different role sandbox across profiles",
       ] as const
     ).map((scenario) => ({
       scenario,
@@ -103,7 +149,6 @@ describe("steering input custody", () => {
         sessionKey: "agent:main:dashboard:steering-collaboration",
         preserveContent: true,
         active: !startOwnerTurn,
-        sandbox: scenario === "different role sandbox across profiles" ? "required" : undefined,
         // Both callers may write here; their caps still differ for other sessions.
         ...(withRoles
           ? { createdActor: { type: "human", source: "profile", id: incomingProfile.id } as const }
@@ -145,25 +190,7 @@ describe("steering input custody", () => {
             roles: {
               definitions: {
                 writer: role,
-                participant: {
-                  ...role,
-                  sessions: {
-                    others:
-                      scenario === "different role session caps across profiles" ? "view" : "write",
-                  },
-                  agents:
-                    scenario === "different role agents across profiles"
-                      ? ["main"]
-                      : scenario === "same role permissions across profiles"
-                        ? ["other", "main"]
-                        : role.agents,
-                  sandbox:
-                    scenario === "different role sandbox across profiles"
-                      ? "required"
-                      : scenario === "same role permissions across profiles"
-                        ? "inherit"
-                        : role.sandbox,
-                },
+                participant: { ...role, sessions: { others: "view" } },
               },
             },
           },

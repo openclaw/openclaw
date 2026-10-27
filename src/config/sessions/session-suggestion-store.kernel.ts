@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { engineUnboundedRowLimit } from "../../infra/database-engine/row-limit.js";
 import {
   executeSqliteQuerySync,
   executeSqliteQueryTakeFirstSync,
@@ -93,8 +94,7 @@ function pruneResolvedSessionSuggestions(
         .where("state", "!=", "pending")
         .orderBy("created_at", "desc")
         .orderBy("id", "desc")
-        // SQLite requires LIMIT for OFFSET; -1 preserves the unbounded deletion tail.
-        .limit((eb) => eb.lit(-1))
+        .limit(engineUnboundedRowLimit(database.db))
         .offset((eb) => eb.lit(MAX_RETAINED_RESOLVED_SESSION_SUGGESTIONS)),
     ),
   );

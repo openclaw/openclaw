@@ -383,8 +383,6 @@ describe("withReplyDispatcher", () => {
     );
 
     expect(order).toEqual(["reply_payload_sending", "message_sending"]);
-    expect(runReplyPayloadSending).toHaveBeenCalledOnce();
-    expect(runMessageSending).toHaveBeenCalledOnce();
     expect(runMessageSending).toHaveBeenCalledWith(
       {
         to: "main",

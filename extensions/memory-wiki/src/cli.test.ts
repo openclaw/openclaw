@@ -1,5 +1,7 @@
+import { execFile, execFileSync, spawn } from "node:child_process";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { promisify } from "node:util";
 import { expectDefined } from "@openclaw/normalization-core";
 import { Command } from "commander";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
@@ -52,6 +54,7 @@ vi.mock("./compile.js", async (importOriginal) => {
 });
 
 const { createVault: createCliVault } = createMemoryWikiTestHarness();
+const execFileAsync = promisify(execFile);
 let stdoutWriteMock: ReturnType<typeof vi.fn>;
 const synthesisArgs = ["apply", "synthesis", "CLI Alpha", "--body", "Alpha from CLI."];
 const assistantReply = "Noted. I will keep travel options close to the airport.";
@@ -194,11 +197,13 @@ describe("memory-wiki cli", () => {
     };
   }
 
-  it("registers apply synthesis and writes a synthesis page", async () => {
+  it("prefers inline --body and writes a synthesis page", async () => {
     const { config, read } = await createCliVault();
 
     await runWiki(config, [
       ...synthesisArgs,
+      "--body-file",
+      path.join(config.vault.path, "missing-body.txt"),
       "--source-id",
       "source.alpha",
       "--source-id",
@@ -209,6 +214,93 @@ describe("memory-wiki cli", () => {
     expect(page).toContain("Alpha from CLI.");
     expect(page).toContain("source.alpha");
     await expect(read("index.md")).resolves.toContain("[CLI Alpha](syntheses/cli-alpha.md)");
+  });
+
+  it.skipIf(process.platform === "win32").each([false, true])(
+    "rejects FIFO --body-file before changing synthesis (symlink: %s)",
+    async (symlink) => {
+      const { rootDir, config, read } = await createCliVault();
+      const args = ["apply", "synthesis", "Good", "--source-id", "src.manual"];
+      await runWiki(config, [...args, "--body", "Keep this summary."]);
+      const before = await read("syntheses/good.md");
+      const fifo = path.join(rootDir, "body.fifo");
+      execFileSync("mkfifo", [fifo]);
+      const input = symlink ? path.join(rootDir, "body-link.fifo") : fifo;
+      if (symlink) {
+        await fs.symlink(fifo, input);
+      }
+      // An EOF writer lets a regressed blocking read fail without hanging the worker.
+      const writer = spawn(
+        process.execPath,
+        [
+          "-e",
+          "const fs = require('node:fs'); fs.open(process.argv[1], 'w', (error, fd) => { if (error) throw error; fs.closeSync(fd); });",
+          fifo,
+        ],
+        { stdio: "ignore" },
+      );
+      const exited = new Promise<void>((resolve, reject) => {
+        writer.once("error", reject);
+        writer.once("close", () => resolve());
+      });
+      try {
+        await expect(runWiki(config, [...args, "--body-file", input])).rejects.toThrow(
+          `wiki apply synthesis --body-file could not be read: ${input}. path must be a regular file. Supply a regular UTF-8 file (or use --body), then retry.`,
+        );
+        expect(await read("syntheses/good.md")).toBe(before);
+        expect((await fs.lstat(fifo)).isFIFO()).toBe(true);
+        if (symlink) {
+          expect((await fs.lstat(input)).isSymbolicLink()).toBe(true);
+        }
+      } finally {
+        writer.kill("SIGKILL");
+        await exited;
+      }
+    },
+  );
+
+  it.skipIf(process.platform === "win32")(
+    "reads a symlinked UTF-8 --body-file larger than one MiB without truncating",
+    async () => {
+      const { rootDir, config, read, write } = await createCliVault();
+      const body = `Café 😀 ${"x".repeat(1_048_576)} end.`;
+      await write("body.txt", body);
+      const input = path.join(rootDir, "body-link.txt");
+      await fs.symlink("body.txt", input);
+
+      await runWiki(config, [
+        "apply",
+        "synthesis",
+        "Large",
+        "--source-id",
+        "src.manual",
+        "--body-file",
+        input,
+      ]);
+
+      expect(await read("syntheses/large.md")).toContain(body);
+      expect((await fs.lstat(input)).isSymbolicLink()).toBe(true);
+    },
+  );
+
+  it("preserves structured --body-file I/O errors before changing synthesis", async () => {
+    const { config, read, write } = await createCliVault();
+    const args = ["apply", "synthesis", "Good", "--source-id", "src.manual"];
+    await runWiki(config, [...args, "--body", "Keep this summary."]);
+    const before = await read("syntheses/good.md");
+    const input = await write("body.txt", "Replacement summary.");
+    const bodyPath = await fs.realpath(input);
+    const denied = Object.assign(new Error("Body file read denied"), { code: "EACCES" });
+    const realOpen = fs.open;
+    vi.spyOn(fs, "open").mockImplementation((filePath, flags, mode) => {
+      if (filePath === bodyPath) {
+        return Promise.reject(denied);
+      }
+      return realOpen(filePath, flags, mode);
+    });
+
+    await expect(runWiki(config, [...args, "--body-file", input])).rejects.toBe(denied);
+    expect(await read("syntheses/good.md")).toBe(before);
   });
 
   it("rejects blank and invalid UTF-8 --body-file before wiping synthesis", async () => {
@@ -543,6 +635,78 @@ describe("memory-wiki cli", () => {
         .then((entries) => entries.filter((entry) => entry !== "index.md")),
     ).resolves.toStrictEqual([]);
   });
+
+  it.skipIf(process.platform === "win32").each(["export", "existing page"] as const)(
+    "refuses a FIFO ChatGPT %s and releases the vault for a retry",
+    async (input) => {
+      const { rootDir, config, exportDir } = await createChatGptVault();
+      const inputPath =
+        input === "export"
+          ? path.join(exportDir, "conversations.json")
+          : path.join(rootDir, "sources/chatgpt-2024-04-06-123456781234123412341234567890ab.md");
+      const contents =
+        input === "export"
+          ? await fs.readFile(inputPath, "utf8")
+          : "# Existing page\n\n## Notes\n<!-- openclaw:human:start -->\nKeep my note.\n<!-- openclaw:human:end -->\n";
+      if (input === "export") {
+        await fs.unlink(inputPath);
+      }
+      execFileSync("mkfifo", [inputPath]);
+      // A writer lets the old blocking reader finish, so RED cannot strand a worker.
+      const writer = execFileAsync(process.execPath, [
+        "-e",
+        "require('node:fs').writeFileSync(process.argv[1], process.argv[2])",
+        inputPath,
+        contents,
+      ]);
+      const writerSettled = writer.catch(() => undefined);
+      try {
+        await expect(runChatGptImport(config, exportDir, "--dry-run")).rejects.toThrow(
+          "path must be a regular file",
+        );
+      } finally {
+        writer.child.kill();
+        await writerSettled;
+      }
+      expect((await fs.lstat(inputPath)).isFIFO()).toBe(true);
+      await fs.unlink(inputPath);
+      if (input === "export") {
+        await fs.writeFile(inputPath, contents);
+      }
+      const retried = await runChatGptImport(config, exportDir);
+      expect(retried.createdCount).toBe(1);
+      const page = await fs.readFile(
+        path.join(rootDir, "sources", await findImportedSourceFile(rootDir)),
+        "utf8",
+      );
+      expect(page).toContain("I prefer aisle seats");
+    },
+  );
+
+  it.skipIf(process.platform === "win32")(
+    "imports symlinked ChatGPT exports and previews symlinked pages with handwritten notes",
+    async () => {
+      const { rootDir, config, exportDir } = await createChatGptVault();
+      const linkedExport = path.join(rootDir, "linked-conversations.json");
+      await fs.symlink(path.join(exportDir, "conversations.json"), linkedExport);
+      const applied = await runChatGptImport(config, linkedExport);
+      expect(applied.createdCount).toBe(1);
+      const pagePath = path.join(rootDir, "sources", await findImportedSourceFile(rootDir));
+      const notes = (await fs.readFile(pagePath, "utf8")).replace(
+        "<!-- openclaw:human:start -->\n<!-- openclaw:human:end -->",
+        "<!-- openclaw:human:start -->\nKeep my handwritten note.\n<!-- openclaw:human:end -->",
+      );
+      const targetPath = path.join(exportDir, "source-page.md");
+      await fs.writeFile(targetPath, notes);
+      await fs.unlink(pagePath);
+      await fs.symlink(targetPath, pagePath);
+
+      const preview = await runChatGptImport(config, linkedExport, "--dry-run");
+
+      expect(preview).toMatchObject({ createdCount: 0, updatedCount: 0, skippedCount: 1 });
+      await expect(fs.readFile(targetPath, "utf8")).resolves.toBe(notes);
+    },
+  );
 
   it.each(["compile", "lint"])(
     "runs one compile cycle when `wiki %s` finds indexes missing after its source import",

@@ -145,56 +145,46 @@ it("stops the real gateway client's referenced reconnect after a localhost conne
     expect(mocks.runtimeRequest).not.toHaveBeenCalled();
   } finally {
     await Promise.all(mocks.actualClients.map((client) => client.stopAndWait()));
-    await new Promise<void>((resolve, reject) => {
-      server.close((error) => (error ? reject(error) : resolve()));
-    });
+    await server[Symbol.asyncDispose]();
   }
 });
 
 const connectionError = new Error("external voice gateway refused the connection");
 it.each([
-  [
-    "connection",
-    connectionError,
-    () => mocks.stopAndWait.mockRejectedValueOnce(new Error("gateway teardown failed")),
-    () => mocks.clientOptions?.onConnectError?.(connectionError),
-  ],
-  [
-    "readiness",
-    "gateway event loop readiness timeout",
-    () => mocks.startClient.mockResolvedValueOnce({ ...ready, ready: false }),
-    () => {},
-  ],
-  [
-    "deadline",
-    "gateway connect timeout",
-    () => vi.useFakeTimers(),
-    () => vi.advanceTimersByTimeAsync(25),
-  ],
-] satisfies Array<[string, Error | string, () => unknown, () => unknown]>)(
-  "cleans up a failed %s without losing its error",
-  async (failure, expected, prepare, settle) => {
-    mocks.autoHello = false;
-    prepare();
-    const request = getCall(
-      failure === "deadline" ? voiceConfig({ requestTimeoutMs: 25 }) : undefined,
-    );
-    const rejected =
-      expected instanceof Error
-        ? expect(request).rejects.toBe(expected)
-        : expect(request).rejects.toThrow(expected);
-    await settle();
-    await rejected;
-    expect(mocks.stopAndWait).toHaveBeenCalledOnce();
-    expect(mocks.startClient.mock.calls[0]?.[1]?.signal?.aborted).toBe(true);
-    if (failure === "connection") {
-      expect(mocks.request).not.toHaveBeenCalled();
-    }
-    if (failure === "deadline") {
-      expect(vi.getTimerCount()).toBe(0);
-    }
-  },
-);
+  ["connection", connectionError],
+  ["readiness", "gateway event loop readiness timeout"],
+  ["deadline", "gateway connect timeout"],
+] as const)("cleans up a failed %s without losing its error", async (failure, expected) => {
+  mocks.autoHello = false;
+  if (failure === "connection") {
+    mocks.stopAndWait.mockRejectedValueOnce(new Error("gateway teardown failed"));
+  } else if (failure === "readiness") {
+    mocks.startClient.mockResolvedValueOnce({ ...ready, ready: false });
+  } else {
+    vi.useFakeTimers();
+  }
+  const request = getCall(
+    failure === "deadline" ? voiceConfig({ requestTimeoutMs: 25 }) : undefined,
+  );
+  const rejected =
+    expected instanceof Error
+      ? expect(request).rejects.toBe(expected)
+      : expect(request).rejects.toThrow(expected);
+  if (failure === "connection") {
+    mocks.clientOptions?.onConnectError?.(connectionError);
+  } else if (failure === "deadline") {
+    await vi.advanceTimersByTimeAsync(25);
+  }
+  await rejected;
+  expect(mocks.stopAndWait).toHaveBeenCalledOnce();
+  expect(mocks.startClient.mock.calls[0]?.[1]?.signal?.aborted).toBe(true);
+  if (failure === "connection") {
+    expect(mocks.request).not.toHaveBeenCalled();
+  }
+  if (failure === "deadline") {
+    expect(vi.getTimerCount()).toBe(0);
+  }
+});
 
 it("starts Twilio Meet calls with pre-connect DTMF, then speaks the intro without TwiML fallback", async () => {
   const config = voiceConfig({ postDtmfSpeechDelayMs: 2 });

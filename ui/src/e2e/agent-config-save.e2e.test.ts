@@ -1,14 +1,15 @@
 // Control UI E2E proves per-agent config writes use the canonical keyed shape.
 import { expect, it } from "vitest";
 import { createRequireRecord } from "../../../test/helpers/record.js";
+import { sourceConfigSnapshot } from "../lib/config/config-snapshot.test-support.ts";
 import { createSkill } from "../pages/skills/view.test-support.ts";
 import { installMockGateway, reconnectMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { pickerValue, selectPickerValue } from "../test-helpers/select-picker-e2e.ts";
+import { agentRoster as createAgentRoster } from "./agent-roster.test-support.ts";
 import {
   createControlUiE2eContextOptions,
   createControlUiE2eSuite,
 } from "./control-ui-e2e-suite.test-support.ts";
-import { configSnapshot } from "./model-setup-fixtures.test-support.ts";
 
 const suite = createControlUiE2eSuite({
   name: "Control UI agent config save",
@@ -17,14 +18,9 @@ const suite = createControlUiE2eSuite({
 });
 
 const requireRecord = createRequireRecord("record", "expected-object-value");
-const agentRoster = {
-  agents: [{ id: "main", name: "Main agent" }],
-  defaultId: "main",
-  mainKey: "main",
-  scope: "agent",
-};
+const agentRoster = createAgentRoster({ main: "Main agent" }, "main", "agent");
 function configResponse(config: Record<string, unknown>, hash = "agent-config-hash-1") {
-  return { ...configSnapshot(config, hash), runtimeConfig: config };
+  return { ...sourceConfigSnapshot(config, hash), runtimeConfig: config };
 }
 async function saveParams(gateway: Awaited<ReturnType<typeof installMockGateway>>, after = 0) {
   return requireRecord((await gateway.waitForRequest("config.set", { after })).params);
@@ -137,7 +133,7 @@ suite.define(() => {
       });
       await expect.poll(() => pickerValue(primary)).toBe("openai/after-reload");
       expect(await pickerValue(decision)).toBe("__openclaw_inherit_decision__");
-      await expect.poll(() => indicator.textContent()).toContain("Saved");
+      await expect.poll(() => indicator.textContent()).toContain("Apply changes");
     });
   });
 

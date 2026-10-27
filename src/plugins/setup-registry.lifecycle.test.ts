@@ -268,7 +268,18 @@ describe("plugin setup registry artifact lifecycle", () => {
       expect(retained?.resolveConfigApiKey?.({ provider: "repeated-setup", env: {} })).toBe(
         "ready:1",
       );
-      const second = withPluginCache(cache, () => resolvePluginSetupRegistry({ manifestRegistry }));
+      // Registrations are cached per record; a new record generation re-registers the module.
+      const nextGeneration = {
+        plugins: manifestRegistry.plugins.map((record) => ({ ...record })),
+        diagnostics: [],
+      };
+      expect(
+        withPluginCache(cache, () => resolvePluginSetupRegistry({ manifestRegistry })).providers[0]
+          ?.provider,
+      ).toBe(retained);
+      const second = withPluginCache(cache, () =>
+        resolvePluginSetupRegistry({ manifestRegistry: nextGeneration }),
+      );
       expect(second.providers).toEqual([]);
       expect(second.diagnostics).toMatchObject([
         {

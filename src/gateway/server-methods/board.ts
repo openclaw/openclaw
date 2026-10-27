@@ -1,6 +1,8 @@
 import { isDeepStrictEqual } from "node:util";
 import {
   type BoardWidgetMaterializedPutParams,
+  ErrorCodes,
+  errorShape,
   validateBoardActionParams,
   validateBoardDataReadParams,
   validateBoardEventParams,
@@ -28,6 +30,7 @@ import {
 } from "../../config/sessions/session-actor-storage-binding.js";
 import { composeSessionSourceAssertion } from "../../config/sessions/session-source-authority.js";
 import { isIncognitoSessionKey } from "../../routing/session-key.js";
+import { operatorScopeSatisfied } from "../../shared/operator-scope-compat.js";
 import {
   boardDataBindingCapability,
   captureBoardCapabilityAuthority,
@@ -61,6 +64,7 @@ import {
   projectBoardSnapshot,
   broadcastBoardChanged,
 } from "./board-handler-context.js";
+import { retainCanvasWidgetRead } from "./canvas-widget-read.js";
 import { emitSessionsChanged } from "./session-change-event.js";
 import type { GatewayRequestHandlers } from "./types.js";
 import { assertValidParams } from "./validation.js";
@@ -178,6 +182,7 @@ export function createBoardHandlers(store: BoardStore): GatewayRequestHandlers {
         }
         const boardAuthority = captureBoardRequestAuthority(invocation);
         let requester: Awaited<ReturnType<typeof captureGatewayOperatorRunAuthority>>;
+        let canvasRead: Awaited<ReturnType<typeof retainCanvasWidgetRead>> | undefined;
         const authority = {
           ...boardAuthority,
           assertActive: composeSessionSourceAssertion(
@@ -185,6 +190,7 @@ export function createBoardHandlers(store: BoardStore): GatewayRequestHandlers {
             (assertSources) => {
               assertSources();
               requester?.authority.assertCurrent();
+              canvasRead?.read.assertCurrent();
             },
           ),
         };
@@ -212,6 +218,26 @@ export function createBoardHandlers(store: BoardStore): GatewayRequestHandlers {
           let declared = requestDeclared;
           let resolveMcpAppInteraction: (() => Promise<boolean>) | undefined;
           if (requestParams.content.kind === "canvas-doc") {
+            if (
+              invocation.client?.connect &&
+              !operatorScopeSatisfied("operator.read", invocation.client.connect.scopes ?? [])
+            ) {
+              canvasRead = await retainCanvasWidgetRead(invocation, {
+                ...boardSession,
+                docId: requestParams.content.docId,
+              });
+            }
+            authority.assertActive();
+            if (canvasRead?.pending) {
+              respond(
+                false,
+                undefined,
+                errorShape(ErrorCodes.UNAVAILABLE, "Waiting for the widget result.", {
+                  retryable: true,
+                }),
+              );
+              return;
+            }
             const document = await readCanvasDocumentHtmlSource(requestParams.content.docId);
             authority.assertActive();
             if (document.cspSandbox !== "scripts") {
@@ -435,6 +461,7 @@ export function createBoardHandlers(store: BoardStore): GatewayRequestHandlers {
           try {
             await memory?.actor.release();
           } finally {
+            canvasRead?.read.release();
             requester?.release();
           }
         }

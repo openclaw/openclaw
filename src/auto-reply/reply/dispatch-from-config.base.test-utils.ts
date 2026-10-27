@@ -36,6 +36,7 @@ import {
   hookMocks,
   messageAuditMocks,
   mocks,
+  mockSessionStorePath,
   runtimePluginMocks,
   sessionStoreMocks,
   transcriptMocks,
@@ -130,7 +131,7 @@ describe("dispatchReplyFromConfig", () => {
       sessionKey,
       sessionId,
       expectedSessionId: sessionId,
-      storePath: "/tmp/mock-sessions.json",
+      storePath: mockSessionStorePath,
       kind: "visible",
       resetTriggered: false,
       routeThreadId: "500.000",
@@ -446,7 +447,7 @@ describe("dispatchReplyFromConfig", () => {
         kind: "channel-final",
         sourceMessageId: "slack-message-1",
       },
-      storePath: "/tmp/mock-sessions.json",
+      storePath: mockSessionStorePath,
       updateMode: "inline",
       config: emptyConfig,
       beforeMessageWrite: expect.any(Function),
@@ -834,11 +835,11 @@ describe("dispatchReplyFromConfig", () => {
     let inBandMutationRan = false;
     const rotatedSessionId = "rotated-session";
     const replyResolver = vi.fn(async (_ctx: MsgContext, opts?: GetReplyOptions) => {
-      expect(
-        isSessionControllerWorkActive("/tmp/mock-sessions.json", [sessionKey, sessionId]),
-      ).toBe(true);
+      expect(isSessionControllerWorkActive(mockSessionStorePath, [sessionKey, sessionId])).toBe(
+        true,
+      );
       await runSessionMutation({
-        scope: "/tmp/mock-sessions.json",
+        scope: mockSessionStorePath,
         identities: [sessionKey, sessionId],
         run: async () => {
           inBandMutationRan = true;
@@ -859,7 +860,7 @@ describe("dispatchReplyFromConfig", () => {
           )?.onSessionPrepared?.({
             sessionKey,
             sessionId: rotatedSessionId,
-            storePath: "/tmp/mock-sessions.json",
+            storePath: mockSessionStorePath,
           });
         },
       });
@@ -937,7 +938,7 @@ describe("dispatchReplyFromConfig", () => {
     const mutation = externalLifecycleRequest.runInAsyncScope(
       async () =>
         await runSessionMutation({
-          scope: "/tmp/mock-sessions.json",
+          scope: mockSessionStorePath,
           identities: [sessionKey, sessionId],
           kind: "reset",
           policy: "preempt",
@@ -948,9 +949,7 @@ describe("dispatchReplyFromConfig", () => {
         }),
     );
     expect(mutationRan).toBe(false);
-    expect(isSessionControllerWorkActive("/tmp/mock-sessions.json", [sessionKey, sessionId])).toBe(
-      true,
-    );
+    expect(isSessionControllerWorkActive(mockSessionStorePath, [sessionKey, sessionId])).toBe(true);
 
     await resolverAborted;
     releaseResolver();
@@ -959,7 +958,7 @@ describe("dispatchReplyFromConfig", () => {
 
     expect(result.queuedFinal).toBe(false);
     expect(mutationRan).toBe(true);
-    expect(isSessionControllerWorkActive("/tmp/mock-sessions.json", [sessionKey, sessionId])).toBe(
+    expect(isSessionControllerWorkActive(mockSessionStorePath, [sessionKey, sessionId])).toBe(
       false,
     );
     expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();
@@ -1018,9 +1017,9 @@ describe("dispatchReplyFromConfig", () => {
       activeOperation.complete();
       await vi.waitFor(
         () => {
-          expect(
-            isSessionControllerWorkActive("/tmp/mock-sessions.json", [sessionKey, sessionId]),
-          ).toBe(false);
+          expect(isSessionControllerWorkActive(mockSessionStorePath, [sessionKey, sessionId])).toBe(
+            false,
+          );
         },
         { timeout: 500 },
       );
@@ -1139,7 +1138,7 @@ describe("dispatchReplyFromConfig", () => {
       undefined,
       undefined,
       undefined,
-      { storeScope: "/tmp/mock-sessions.json" },
+      { storeScope: mockSessionStorePath },
     );
     sessionStoreMocks.currentEntry = { sessionId, updatedAt: Date.now() };
     const dispatcher = createDispatcher();
@@ -1202,7 +1201,7 @@ describe("dispatchReplyFromConfig", () => {
       undefined,
       undefined,
       undefined,
-      { storeScope: "/tmp/mock-sessions.json" },
+      { storeScope: mockSessionStorePath },
     );
     sessionStoreMocks.currentEntry = { sessionId, updatedAt: Date.now() };
     hookMocks.runner.hasHooks.mockImplementation((hookName) => hookName === "before_dispatch");

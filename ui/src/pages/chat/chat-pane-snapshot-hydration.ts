@@ -1,3 +1,4 @@
+import { listen } from "../../lib/reactive/listener.ts";
 import { areUiSessionKeysEquivalent } from "../../lib/sessions/session-key.ts";
 import { mergeStoredChatSessionSnapshot } from "./chat-board-snapshot.ts";
 import { projectChatFields } from "./chat-field-projection.ts";
@@ -10,6 +11,7 @@ import {
   resolveChatSnapshotKey,
   type ChatSessionSnapshot,
 } from "./session-message-cache.ts";
+import { snapshotStoreGeneration } from "./session-snapshot-invalidation-events.ts";
 
 export abstract class ChatPaneSnapshotHydration extends ChatPaneReplyNavigation {
   protected hydrateStoredChatSnapshot(
@@ -22,9 +24,11 @@ export abstract class ChatPaneSnapshotHydration extends ChatPaneReplyNavigation 
     const target = { sessionKey };
     const cache = state.chatMessagesBySession;
     const cacheKey = resolveChatSnapshotKey(state, target);
+    const generation = snapshotStoreGeneration;
     const requests = chatHistoryRequests(state);
     const isCurrent = () =>
       requests.initialSnapshotHydration === hydration &&
+      generation === snapshotStoreGeneration &&
       this.state === state &&
       this.ownsChatSnapshot(target) &&
       areUiSessionKeysEquivalent(state.sessionKey, sessionKey) &&
@@ -46,43 +50,76 @@ export abstract class ChatPaneSnapshotHydration extends ChatPaneReplyNavigation 
         this.boardProviderLease?.restoreSnapshot(board.snapshot, board.receivedAtMs);
       }
     };
-    const reading = this.sessionSnapshotStore.read(cacheKey, (board) => {
-      void restoreBoard(board);
-    });
+    let readySnapshot: ChatSessionSnapshot | null | undefined;
+    let adoption: Promise<void> | undefined;
+    const reading = this.sessionSnapshotStore.read(
+      cacheKey,
+      (board) => void restoreBoard(board),
+      (snapshot) => (readySnapshot = snapshot),
+    );
+    const adoptSnapshot = (afterPaint: boolean) => {
+      if (readySnapshot === undefined) {
+        return Promise.resolve();
+      }
+      const storedSnapshot = readySnapshot;
+      return (adoption ??= (async () => {
+        if (storedSnapshot && afterPaint && !document.hidden) {
+          // Visible adoption waits for paint; hiding must release pending history.
+          await new Promise<void>((resolve) => {
+            const release = () => {
+              stopVisibility();
+              resolve();
+            };
+            const stopVisibility = listen(document, "visibilitychange", release);
+            requestAnimationFrame(() => window.setTimeout(release, 0));
+          });
+        }
+        delete hydration.adoptReadySnapshot;
+        delete hydration.readReadyHistory;
+        if (!isCurrent()) {
+          return;
+        }
+        const cached = mergeStoredChatSessionSnapshot(cache, state, target, storedSnapshot);
+        if (requests.acceptedHistory || !cached) {
+          return;
+        }
+        // A sibling may already own a newer base in the shared cache.
+        applyChatCacheSnapshot(state, cached);
+        cacheChatSessionSnapshot(cache, state, target, { ...cached, messages: state.chatMessages });
+        this.syncSessionReactions();
+        if (cached.progressCard !== undefined) {
+          const progressTarget = this.resolveChatReadTarget();
+          if (progressTarget) {
+            this.progressCards.hydrate(progressTarget, cached.progressCard);
+          }
+        }
+      })());
+    };
     const hydration: InitialChatSnapshotHydration = {
       titlePending: true,
       sessionKey,
       connected: this.context.gateway.snapshot.phase === "connected",
+      readReadyHistory: () =>
+        isCurrent() && !requests.acceptedHistory && readySnapshot?.deltaCursor
+          ? { deltaCursor: readySnapshot.deltaCursor, historyState: readySnapshot.historyState }
+          : undefined,
+      adoptReadySnapshot: () => adoptSnapshot(true),
       promise: reading
         .then(async (storedSnapshot) => {
-          // Let the initial composer commit before the saved rows do their layout work.
-          if (!hydration.connected && storedSnapshot && !storedSnapshot.board) {
-            await new Promise<void>((resolve) => {
-              window.setTimeout(resolve, 0);
-            });
+          readySnapshot = storedSnapshot;
+          const gateway = this.context.gateway.snapshot;
+          if (
+            gateway.client &&
+            (gateway.phase === "connecting" || gateway.phase === "reconnecting")
+          ) {
+            await gateway.client.connectSent;
           }
-          // Scoped snapshots can paint while the route awaits live revalidation.
-          // The pending route still gates commands and authenticated resources.
+          // Cached rows can paint before live route confirmation, which still gates commands.
           if (!isCurrent()) {
             return;
           }
-          const snapshot = mergeStoredChatSessionSnapshot(cache, state, target, storedSnapshot);
-          const boardRestored = restoreBoard(snapshot?.board);
-          if (requests.acceptedHistory || !snapshot) {
-            return boardRestored;
-          }
-          // A sibling can fill the shared cache while this pane still needs its
-          // own transcript. Adopt those messages before revalidating their cursor.
-          applyChatCacheSnapshot(state, snapshot);
-          const mergedSnapshot = { ...snapshot, messages: state.chatMessages };
-          cacheChatSessionSnapshot(cache, state, target, mergedSnapshot);
-          if (snapshot.progressCard !== undefined) {
-            const progressTarget = this.resolveChatReadTarget();
-            if (progressTarget) {
-              this.progressCards.hydrate(progressTarget, snapshot.progressCard);
-            }
-          }
-          return boardRestored;
+          await adoptSnapshot(this.context.gateway.snapshot.phase === "connected");
+          return restoreBoard(storedSnapshot?.board);
         })
         .catch(() => undefined)
         .finally(() => {

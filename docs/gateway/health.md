@@ -271,7 +271,10 @@ its CPU and delay readings. If the sampler resets, health responses omit
 The optional `cpuBreakdown` separates independent native counters:
 
 - `hostUtilization` is the busy fraction of the host CPU time reported by
-  `os.cpus()`, from `0` to `1` across `hostCpuCount` logical CPUs. This includes
+  the aggregate `/proc/stat` counters on Linux and `os.cpus()` elsewhere, from
+  `0` to `1` across `hostCpuCount` online logical CPUs. Linux counts user, nice,
+  system, idle, and hard IRQ time, matching `os.cpus()`; iowait, softirq, and
+  steal are excluded, and guest time is not counted twice. This includes
   other processes and is not the Gateway's CPU quota or container allowance.
 - `mainThreadCoreRatio` measures the Gateway main thread with
   `process.threadCpuUsage()`, not event-loop utilization.
@@ -315,7 +318,7 @@ with a code-owned task label where available. On Node 26, a bounded CPU flight
 recorder writes one additional bounded `main-thread stall profile` line with a
 trailing window's top inclusive frames, sample count, and truncation status.
 Several callbacks can finish before a sample, so this window is not assigned to
-an individual task. It samples every 10 ms and rotates five-second windows without
+an individual task. It samples every 25 ms and rotates five-second windows without
 stopping the sampler. At most two windows are retained; no profile files are
 written. Symbols and locations use the same redaction policy as on-demand
 diagnostic profiles. Inclusive counts overlap when a sampled stack contains
@@ -376,6 +379,10 @@ session-store summary, and check duration. Live checks use bounded account concu
 and a Gateway-owned deadline, so one slow account returns a structured timeout while
 completed sibling results remain available. The command exits non-zero if the gateway is
 unreachable or the Gateway call itself times out.
+
+Cron heartbeat summaries reuse the running scheduler's last successful read until
+jobs or configuration change. Failed reads are retried on the next refresh. Before
+the scheduler loads, health reads the selected cron store directly.
 
 ### Queue warnings
 

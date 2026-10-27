@@ -10,7 +10,7 @@ import {
   installMockGateway,
 } from "./session-management.test-support.ts";
 
-const suite = createSessionManagementE2eSuite(true);
+const suite = createSessionManagementE2eSuite();
 const rows = ["main", "writer"].flatMap((agentId) =>
   Array.from({ length: 200 }, (_, index) =>
     createControlUiSessionRow(
@@ -45,6 +45,7 @@ suite.define(() => {
       },
       async ({ page }) => {
         const gateway = await installMockGateway(page, {
+          subscriptionInitialHistory: false,
           sessions: rows,
           historyMessages: [{ role: "assistant", content: "Synthetic agent-switch conversation." }],
           methodResponses: {

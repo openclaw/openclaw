@@ -173,11 +173,11 @@ Authenticated operator requests share a bounded queue for starting RPC handlers.
 Ordinary requests have both aggregate and per-connection waiting limits, so
 concurrent Control UI setup can queue without giving one connection the entire
 request allowance. The aggregate serialized-byte bound still applies.
-Small `sessions.messages.subscribe` requests without approval replay and
+Small `sessions.messages.subscribe` requests without approval replay or initial history and
 `sessions.messages.unsubscribe` requests have separate bounded waiting capacity,
 including a per-connection limit. All requests share the same yielding budget.
 Roster subscriptions requesting a snapshot, catalog reads, and message subscriptions with approval
-replay share four preparation slots. A slot remains occupied until its request
+replay or initial history share four preparation slots. A slot remains occupied until its request
 settles, and each start yields to ready socket I/O. A request waiting for a
 preparation slot stays in the bounded queue while eligible requests start:
 Event-only `sessions.subscribe` calls do not reserve preparation slots. A waiting

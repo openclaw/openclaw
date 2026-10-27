@@ -61,11 +61,11 @@ export async function withAdmissionFixture(
     fs.mkdirSync(bundledPluginsDir);
     await withServer(
       (request, response) => {
-        const incoming = {
+        const incoming: CapturedRequest = {
           url: request.url,
           method: request.method,
           authorization: request.headers.authorization,
-          body: undefined as unknown,
+          body: undefined,
         };
         received.push(incoming);
         void json(request)

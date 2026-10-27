@@ -73,37 +73,37 @@ function DiscoveryCard(props: { entry: SkillDiscoveryEntry; skills: SkillsProps 
           <div class="installed-plugins-card__identity">
             <div class="plugin-card-title-row">
               <h2>{props.entry.name}</h2>
+              <div class="plugin-catalog-card__action">
+                {installed() ? (
+                  <SkillStateStatus
+                    skill={props.entry.skill ?? { disabled: !props.entry.library!.enabled }}
+                    verdict={
+                      props.entry.skill
+                        ? verdictForSkill(props.entry.skill, props.skills.state.clawhubVerdicts)
+                        : null
+                    }
+                  />
+                ) : (
+                  <button
+                    type="button"
+                    class="btn btn--sm plugin-catalog-card__install oc-action oc-action-secondary"
+                    disabled={
+                      props.skills.saving ||
+                      !props.skills.state.connected ||
+                      !props.skills.canInstall ||
+                      props.skills.loading ||
+                      props.skills.state.skillOperation !== null
+                    }
+                    aria-label={t("skillsPage.installNamed", { name: props.entry.name })}
+                    onClick={() => props.skills.onClawHubInstall(reference())}
+                  >
+                    {t(busy() ? "skillsPage.installing" : "skillsPage.install")}
+                  </button>
+                )}
+              </div>
             </div>
             <span class="plugin-card-author">{props.entry.attribution}</span>
           </div>
-        </div>
-        <div class="plugin-catalog-card__action">
-          {installed() ? (
-            <SkillStateStatus
-              skill={props.entry.skill ?? { disabled: !props.entry.library!.enabled }}
-              verdict={
-                props.entry.skill
-                  ? verdictForSkill(props.entry.skill, props.skills.state.clawhubVerdicts)
-                  : null
-              }
-            />
-          ) : (
-            <button
-              type="button"
-              class="btn btn--sm plugin-catalog-card__install oc-action oc-action-secondary"
-              disabled={
-                props.skills.saving ||
-                !props.skills.state.connected ||
-                !props.skills.canInstall ||
-                props.skills.loading ||
-                props.skills.state.skillOperation !== null
-              }
-              aria-label={t("skillsPage.installNamed", { name: props.entry.name })}
-              onClick={() => props.skills.onClawHubInstall(reference())}
-            >
-              {t(busy() ? "skillsPage.installing" : "skillsPage.install")}
-            </button>
-          )}
         </div>
       </div>
       <PluginCardSummary summary={props.entry.description} />

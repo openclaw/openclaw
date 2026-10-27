@@ -14,10 +14,8 @@ export type NativeCancellation = "close";
 type Outcome = PromiseSettledResult<number> | undefined;
 
 function assertRejected(result: Outcome, expected: Error | string) {
-  assert.equal(result?.status, "rejected");
-  if (result?.status === "rejected") {
-    assert.equal(typeof expected === "string" ? result.reason.code : result.reason, expected);
-  }
+  assert.ok(result?.status === "rejected");
+  assert.equal(typeof expected === "string" ? result.reason.code : result.reason, expected);
 }
 
 if (!isMainThread) {

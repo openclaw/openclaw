@@ -64,6 +64,7 @@ it("omits empty linked-work disclosures and opens arriving pull requests", async
   await element.updateComplete;
   const group = element.querySelector<HTMLDetailsElement>('[data-details-group="pull-requests"]')!;
   expect(group.open).toBe(true);
+  expect(group.querySelector("summary")?.textContent).toContain("Pull requests");
   group.open = false;
   group.dispatchEvent(new Event("toggle"));
   flush();
@@ -226,7 +227,10 @@ it("keeps immutable creator, mutable owner and participants distinct without cla
     label: "Projected owner",
     identity: { type: "profile", id: "projected" },
   });
-  expect(element.querySelector(".chat-details-people")?.textContent).toContain("Projected owner");
+  await vi.dynamicImportSettled();
+  await waitForSolid(() =>
+    expect(element.querySelector(".chat-details-people")?.textContent).toContain("Projected owner"),
+  );
   expect(element.querySelector(".chat-details__person")).toBeNull();
 });
 it("shows participant controls only while the session has participants", async () => {
@@ -272,9 +276,7 @@ it("uses the current PR renderer and preserves CI session identity and branch di
   );
   const link = element.querySelector(".chat-pr__link")!;
   expect(link.getAttribute("href")).toBe("https://github.com/example/project/pull/7");
-  const automation = element.querySelector("openclaw-chat-ci-automation");
-  expect(automation).toHaveProperty("sessionId", "incarnation-7");
-  expect(automation).toHaveProperty("presented", false);
+  expect(element.querySelector("openclaw-chat-ci-automation")).toBeNull();
   element.querySelector<HTMLButtonElement>(".chat-pr__actions button")!.click();
   flush();
   const menu = element.querySelector(".chat-pr__actions")!;
@@ -285,9 +287,18 @@ it("uses the current PR renderer and preserves CI session identity and branch di
     expect(menu.querySelector("button")?.getAttribute("aria-expanded")).toBe("true"),
   );
   menu.querySelector<HTMLButtonElement>('[data-value="monitoring"]')!.click();
-  flush();
-  expect(element.querySelector("openclaw-chat-ci-automation")).toBe(automation);
+  await vi.dynamicImportSettled();
+  await waitForSolid(() =>
+    expect(
+      element.querySelector('openclaw-chat-ci-automation input[type="checkbox"]'),
+    ).not.toBeNull(),
+  );
+  const automation = element.querySelector("openclaw-chat-ci-automation");
+  expect(automation).toHaveProperty("sessionId", "incarnation-7");
   expect(automation).toHaveProperty("presented", true);
+  menu.querySelector<HTMLButtonElement>("button")!.click();
+  await waitForSolid(() => expect(automation).toHaveProperty("presented", false));
+  expect(element.querySelector("openclaw-chat-ci-automation")).toBe(automation);
   const branch = {
     owner: "example",
     repo: "project",
@@ -318,8 +329,10 @@ it("projects direct active children through the live observer with stable rounde
     subagentSessions: [child],
     subagentSessionsHydrated: true,
   });
-  await waitForSolid(() =>
-    expect(element.querySelector("openclaw-chat-subagent-activity")).not.toBeNull(),
+  // The live activity module is loaded on the first visible child group.
+  await waitForSolid(
+    () => expect(element.querySelector("openclaw-chat-subagent-activity")).not.toBeNull(),
+    { timeout: 5_000 },
   );
   const live = element.querySelector<ChatSubagentActivityLive>("openclaw-chat-subagent-activity")!;
   await live.updateComplete;
@@ -458,8 +471,9 @@ it("shows live environment facts without duplicating composer context", async ()
       outputTokens: 450,
     },
   });
+  await vi.dynamicImportSettled();
   const environment = element.querySelector('[data-details-group="environment"]')!;
-  expect(environment.textContent).toContain("feature/details");
+  await waitForSolid(() => expect(environment.textContent).toContain("feature/details"));
   expect(environment.textContent).not.toContain("Design workstation");
   expect(environment.textContent).not.toContain("/workspace/project");
   expect(environment.querySelector('[aria-label="Copy path"]')).toBeNull();
@@ -474,7 +488,7 @@ it.each([
     detailsWorkspace: { root, label: null, branch: "feature/details" },
   });
   const environment = element.querySelector('[data-details-group="environment"]')!;
-  expect(environment.textContent).toContain("feature/details");
+  await waitForSolid(() => expect(environment.textContent).toContain("feature/details"));
   expect(environment.textContent).not.toContain(root);
   expect(environment.textContent).not.toContain("private-user");
   const openProject = vi.fn();
@@ -654,6 +668,9 @@ it("keeps local Changes after publication and accepts a confirmed clean working 
     }),
   });
   const environment = element.querySelector('[data-details-group="environment"]')!;
+  await waitForSolid(() =>
+    expect(environment.querySelector(".chat-pr__diff")?.textContent).toContain("+7"),
+  );
   expect(environment.textContent).toContain(branch.branch);
   expect(environment.querySelector(".chat-pr__publication-actions")).toBeNull();
   expect(environment.querySelector(".chat-pr__diff")?.textContent).toContain("+7");
@@ -715,7 +732,7 @@ it("keeps unresolved publication recovery and a different unpublished branch ava
 
 it.each([false, true])(
   "shows only textual Changes facts without binary metadata (mobile=%s)",
-  (mobile) => {
+  async (mobile) => {
     // jsdom has no Web Animations API; arrival motion has separate browser proof.
     const animate = Object.getOwnPropertyDescriptor(Element.prototype, "animate");
     Object.defineProperty(Element.prototype, "animate", {
@@ -782,7 +799,7 @@ it.each([false, true])(
     ]) {
       setUncommitted(data);
       flush();
-      expect(row()).toBeDefined();
+      await waitForSolid(() => expect(row()).toBeDefined());
       expect(row()?.querySelector('[aria-label="Binary file"]')).toBeNull();
       expect(row()?.textContent).not.toContain("…");
       row()!.click();

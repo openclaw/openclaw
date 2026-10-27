@@ -1,5 +1,6 @@
 import { findMediaGenerationOperation } from "../media-generation-activity.js";
 import { resetGeneratedMediaTaskActivityForTests } from "../media-generation-activity.test-support.js";
+import { observeSettlement } from "../promise-settlement.test-support.js";
 vi.mock("../media-generation-activity.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../media-generation-activity.js")>();
   const { observeMediaActivity } =
@@ -23,6 +24,7 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { ImageGenerationProvider } from "../../image-generation/types.js";
 import { encodePngRgba } from "../../media/png-encode.js";
 import { formatMediaSize } from "../../media/store.shared.js";
+import { configWithDefaults } from "./media-config.test-support.js";
 import {
   defineMediaGenerationCancellationTests,
   defineMediaGenerationDuplicateTests,
@@ -106,14 +108,6 @@ function mockReferenceImage(bytes: string, contentType = "image/png") {
     buffer: Buffer.from(bytes),
     contentType,
   });
-}
-
-function configWithDefaults(
-  defaults: NonNullable<NonNullable<OpenClawConfig["agents"]>["defaults"]>,
-): OpenClawConfig {
-  const config = { agents: { defaults } };
-  setRuntimeConfigSnapshot(config, config);
-  return config;
 }
 
 const GENERATION_PROVIDER_ENV_VARS = [
@@ -786,18 +780,10 @@ describe("createImageGenerateTool", () => {
     const tool = createToolWithPrimaryImageModel("openai/gpt-image-1");
 
     const execution = tool.execute("call-partial-save", { prompt: "three images", count: 3 });
-    let executionSettled = false;
-    void execution.then(
-      () => {
-        executionSettled = true;
-      },
-      () => {
-        executionSettled = true;
-      },
-    );
+    const executionSettled = observeSettlement(execution);
     await vi.waitFor(() => expect(saveMediaBuffer).toHaveBeenCalledTimes(3));
     await Promise.resolve();
-    expect(executionSettled).toBe(false);
+    expect(executionSettled()).toBe(false);
 
     resolveLateSave(lateSavedMedia);
     await expect(execution).rejects.toBe(terminalError);

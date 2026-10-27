@@ -51,3 +51,26 @@ export function createBaseParams(overrides: Partial<Params> = {}): Params {
     ...overrides,
   };
 }
+
+export function createReadToolCatalog(): ToolsCatalogResult {
+  return {
+    agentId: "main",
+    profiles: [{ id: "full", label: "Full" }],
+    groups: [
+      {
+        id: "files",
+        label: "Files",
+        source: "core",
+        tools: [
+          {
+            id: "read",
+            label: "read",
+            description: "Read file contents",
+            source: "core",
+            defaultProfiles: ["full"],
+          },
+        ],
+      },
+    ],
+  };
+}

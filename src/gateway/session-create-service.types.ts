@@ -113,6 +113,7 @@ export type CreateGatewaySessionParams = {
   label?: string;
   /** Creation-only title seed; never renames an existing session. */
   displayName?: string;
+  displayNameGenerated?: boolean;
   category?: string;
   model?: string;
   agentRuntime?: string;
@@ -121,6 +122,7 @@ export type CreateGatewaySessionParams = {
   personalAccountDefaults?: ModelAccountConnectAction;
   contextWindow?: string;
   thinkingLevel?: string;
+  cyberAccessProgram?: SessionEntry["cyberAccessProgram"] | null;
   fastMode?: FastMode;
   /** Registry identity for a new session or a successfully recovered pending worktree. */
   projectId?: string;

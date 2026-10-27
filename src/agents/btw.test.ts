@@ -3,6 +3,7 @@ import { setImmediate as nextTurn } from "node:timers/promises";
 import { expectDefined } from "@openclaw/normalization-core";
 import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
 import { describe, expect, it, vi } from "vitest";
+import { awaitGateBeforeSettlement } from "../../test/helpers/promise.js";
 import type { ReplyPayload } from "../auto-reply/reply-payload.js";
 import { consumeReplyUsageState } from "../auto-reply/reply/reply-usage-state.js";
 import type { SessionEntry } from "../config/sessions.js";
@@ -290,12 +291,11 @@ describe("runBtwSideQuestion", () => {
           );
         }
         const outcome = operation.catch((error: unknown) => error);
-        await Promise.race([
+        await awaitGateBeforeSettlement(
           entered.promise,
-          operation.then(() => {
-            throw new Error("Side question completed before its controlled operation");
-          }),
-        ]);
+          operation,
+          "Side question completed before its controlled operation",
+        );
         await source.release();
         expect(database.isOpen).toBe(true);
         expect(disposals).toBe(0);

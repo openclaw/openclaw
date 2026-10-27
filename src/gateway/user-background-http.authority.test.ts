@@ -3,7 +3,7 @@ import {
   listenLoopback,
   closeHttpServer,
 } from "../../test/helpers/gateway-integration-fixtures.js";
-import { createDeferred } from "../../test/helpers/promise.js";
+import { awaitGateBeforeSettlement, createDeferred } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { getRuntimeConfig } from "../config/io.js";
 import type { GatewayOperatorRoleDefinition } from "../config/types.gateway.js";
@@ -60,6 +60,64 @@ vi.mock("../state/user-background-image.js", async (importOriginal) => ({
   })),
 }));
 const directories = useAutoCleanupTempDirTracker(afterEach);
+const imageBytes = new Uint8Array([255, 216, 255, 217]);
+
+async function upload(profileId: string, imageBase64 = "fixture") {
+  const result = await uploadUserBackground(profileId, {
+    expectedAssetId: null,
+    expectedPreference: null,
+    imageBase64,
+  });
+  if (result.status !== "ok" || !result.asset) {
+    throw new Error("Missing background fixture");
+  }
+  return result.asset;
+}
+
+function holdRead(imageStage: boolean) {
+  const entered = createDeferred();
+  const release = createDeferred();
+  const hold = async () => {
+    entered.resolve();
+    await release.promise;
+  };
+  if (imageStage) {
+    imageWait.mockImplementation(async (image) => {
+      expect(image).toEqual(imageBytes);
+      await hold();
+    });
+  } else {
+    profileWait.mockImplementation(hold);
+  }
+  return {
+    release: release.resolve,
+    wait: (response: Promise<Response>) =>
+      awaitGateBeforeSettlement(
+        entered.promise,
+        response,
+        "Read finished before authority barrier",
+      ),
+  };
+}
+
+async function startServer(
+  auth: Parameters<typeof createTestGatewayServer>[0]["resolvedAuth"],
+  getResolvedAuth = () => auth,
+) {
+  const server = createTestGatewayServer({
+    resolvedAuth: auth,
+    overrides: { controlUiBasePath: "/control", getResolvedAuth, getRuntimeConfig },
+  });
+  return { server, origin: await listenLoopback(server) };
+}
+
+async function expectPrivateBytesWithheld(response: Response) {
+  expect(response.status).toBe(401);
+  expect(response.headers.get("content-type")).not.toMatch(/^image\//);
+  const bytes = new Uint8Array(await response.arrayBuffer());
+  expect(bytes).not.toEqual(imageBytes);
+  return bytes;
+}
 beforeEach(() => {
   profileWait.mockReset().mockResolvedValue(undefined);
   imageWait.mockReset().mockResolvedValue(undefined);
@@ -87,14 +145,7 @@ it.each([
       gateway: { auth: currentAuth, trustedProxies: [], controlUi: { allowedOrigins } },
     }));
     const profile = ensureGatewayOwnerProfile("Background owner");
-    const uploaded = await uploadUserBackground(profile.id, {
-      expectedAssetId: null,
-      expectedPreference: null,
-      imageBase64: "fixture",
-    });
-    if (uploaded.status !== "ok" || !uploaded.asset) {
-      throw new Error("Missing background fixture");
-    }
+    const asset = await upload(profile.id);
     const request = await requestDevicePairing({
       deviceId: "background-reader",
       publicKey: "fixture-key",
@@ -116,45 +167,16 @@ it.each([
     if (!token) {
       throw new Error("Missing paired credential fixture");
     }
-    const entered = createDeferred();
-    const release = createDeferred();
-    const hold = async () => {
-      entered.resolve();
-      await release.promise;
-    };
-    if (stage === "image preparation") {
-      imageWait.mockImplementation(async (image) => {
-        expect(image).toEqual(new Uint8Array([255, 216, 255, 217]));
-        await hold();
-      });
-    } else {
-      profileWait.mockImplementation(hold);
-    }
-    const server = createTestGatewayServer({
-      resolvedAuth: currentAuth,
-      overrides: {
-        controlUiBasePath: "/control",
-        getResolvedAuth: () => currentAuth,
-        getRuntimeConfig,
-      },
-    });
-    const origin = await listenLoopback(server);
+    const gate = holdRead(stage === "image preparation");
+    const { server, origin } = await startServer(currentAuth, () => currentAuth);
     try {
-      const response = fetch(
-        origin + "/control/__openclaw__/users/background/" + uploaded.asset.assetId,
-        {
-          headers: {
-            Authorization: "Bearer " + token.token,
-            Origin: change === "origin-revoked" ? "https://control.example.test" : origin,
-          },
+      const response = fetch(origin + "/control/__openclaw__/users/background/" + asset.assetId, {
+        headers: {
+          Authorization: "Bearer " + token.token,
+          Origin: change === "origin-revoked" ? "https://control.example.test" : origin,
         },
-      );
-      await Promise.race([
-        entered.promise,
-        response.then((result) => {
-          throw new Error("Request completed before " + stage + " barrier: " + result.status);
-        }),
-      ]);
+      });
+      await gate.wait(response);
       if (change === "revoked") {
         await revokeDeviceToken({ deviceId: "background-reader", role: "operator" });
       } else if (change === "scope-reduced") {
@@ -172,7 +194,7 @@ it.each([
       } else if (change === "gateway-rotated") {
         currentAuth = { ...AUTH_TOKEN, token: "rotated-fixture-secret" };
       }
-      release.resolve();
+      gate.release();
       const result = await response;
       // Explicit credentials still authorize the HTTP owner; CORS controls
       // whether the browser may expose that response to the requesting origin.
@@ -180,22 +202,17 @@ it.each([
         expect(result.headers.get("access-control-allow-origin")).toBeNull();
         expect(result.headers.get("access-control-allow-credentials")).toBeNull();
       }
-      expect(result.status).toBe(change === "unchanged" || change === "origin-revoked" ? 200 : 401);
       if (change === "unchanged" || change === "origin-revoked") {
-        expect(new Uint8Array(await result.arrayBuffer())).toEqual(
-          new Uint8Array([255, 216, 255, 217]),
-        );
+        expect(result.status).toBe(200);
+        expect(new Uint8Array(await result.arrayBuffer())).toEqual(imageBytes);
       } else {
-        expect(result.headers.get("content-type")).not.toMatch(/^image\//);
-        expect(new Uint8Array(await result.arrayBuffer())).not.toEqual(
-          new Uint8Array([255, 216, 255, 217]),
-        );
+        await expectPrivateBytesWithheld(result);
       }
       if (stage === "image preparation") {
         expect(imageWait).toHaveBeenCalledOnce();
       }
     } finally {
-      release.resolve();
+      gate.release();
       await closeHttpServer(server);
     }
   },
@@ -229,14 +246,7 @@ it.each(["role-reduced", "profile-reassigned"] as const)(
     };
     vi.mocked(getRuntimeConfig).mockImplementation(() => config);
     const profile = ensureProfileForEmail("reader@example.test");
-    const uploaded = await uploadUserBackground(profile.id, {
-      expectedAssetId: null,
-      expectedPreference: null,
-      imageBase64: "fixture",
-    });
-    if (uploaded.status !== "ok" || !uploaded.asset) {
-      throw new Error("Missing role fixture");
-    }
+    const asset = await upload(profile.id);
     const foreignBytes = Buffer.from([255, 216, 17, 217]);
     const replacement =
       change === "profile-reassigned"
@@ -249,54 +259,21 @@ it.each(["role-reduced", "profile-reassigned"] as const)(
         width: 1,
         height: 1,
       });
-      const foreign = await uploadUserBackground(replacement.id, {
-        expectedAssetId: null,
-        expectedPreference: null,
-        imageBase64: "foreign-fixture",
-      });
-      if (foreign.status !== "ok" || !foreign.asset) {
-        throw new Error("Missing foreign profile fixture");
-      }
-      foreignAssetId = foreign.asset.assetId;
+      foreignAssetId = (await upload(replacement.id, "foreign-fixture")).assetId;
     }
-    const entered = createDeferred();
-    const release = createDeferred();
-    const hold = async () => {
-      entered.resolve();
-      await release.promise;
-    };
-    if (change === "profile-reassigned") {
-      imageWait.mockImplementation(async (image) => {
-        expect(image).toEqual(new Uint8Array([255, 216, 255, 217]));
-        await hold();
-      });
-    } else {
-      profileWait.mockImplementation(hold);
-    }
-    const server = createTestGatewayServer({
-      resolvedAuth: auth,
-      overrides: { controlUiBasePath: "/control", getResolvedAuth: () => auth, getRuntimeConfig },
-    });
-    const origin = await listenLoopback(server);
+    const gate = holdRead(change === "profile-reassigned");
+    const { server, origin } = await startServer(auth);
     try {
-      const response = fetch(
-        origin + "/control/__openclaw__/users/background/" + uploaded.asset.assetId,
-        {
-          headers: {
-            "x-forwarded-for": "198.51.100.23",
-            "x-forwarded-user": "reader@example.test",
-            "x-forwarded-proto": "https",
-            "x-openclaw-scopes": "operator.read",
-            Origin: "https://control.example.test",
-          },
+      const response = fetch(origin + "/control/__openclaw__/users/background/" + asset.assetId, {
+        headers: {
+          "x-forwarded-for": "198.51.100.23",
+          "x-forwarded-user": "reader@example.test",
+          "x-forwarded-proto": "https",
+          "x-openclaw-scopes": "operator.read",
+          Origin: "https://control.example.test",
         },
-      );
-      await Promise.race([
-        entered.promise,
-        response.then((result) => {
-          throw new Error("Read finished before authority barrier: " + result.status);
-        }),
-      ]);
+      });
+      await gate.wait(response);
       if (replacement) {
         const reassigned = await linkCanonicalUserProfileEmail(
           "reader@example.test",
@@ -313,16 +290,12 @@ it.each(["role-reduced", "profile-reassigned"] as const)(
           },
         };
       }
-      release.resolve();
+      gate.release();
       const result = await response;
-      expect(result.status).toBe(401);
-      expect(result.headers.get("content-type")).not.toMatch(/^image\//);
-      const responseBytes = new Uint8Array(await result.arrayBuffer());
-      expect(responseBytes).not.toEqual(new Uint8Array([255, 216, 255, 217]));
-      expect(responseBytes).not.toEqual(new Uint8Array(foreignBytes));
+      expect(await expectPrivateBytesWithheld(result)).not.toEqual(new Uint8Array(foreignBytes));
       expect(replacement ? imageWait : profileWait).toHaveBeenCalledOnce();
     } finally {
-      release.resolve();
+      gate.release();
       await closeHttpServer(server);
     }
   },

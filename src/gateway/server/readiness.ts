@@ -7,7 +7,6 @@ import {
   DEFAULT_CHANNEL_STALE_EVENT_THRESHOLD_MS,
   evaluateChannelHealth,
   type ChannelHealthPolicy,
-  type ChannelHealthEvaluation,
 } from "../channel-health-policy.js";
 import type { ChannelManager } from "../server-channels.js";
 import type { GatewayPluginReloadStatus } from "../server-plugin-reload-status.types.js";
@@ -75,7 +74,7 @@ export function createStartupChecker(
 
 function shouldIgnoreReadinessFailure(
   accountSnapshot: ChannelAccountSnapshot,
-  health: ChannelHealthEvaluation,
+  health: ReturnType<typeof evaluateChannelHealth>,
 ): boolean {
   if (health.reason === "unmanaged" || health.reason === "stale-socket") {
     return true;

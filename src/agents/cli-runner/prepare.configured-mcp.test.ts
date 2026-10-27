@@ -27,6 +27,7 @@ import {
   testing as cliBackendsTesting,
 } from "../cli-backends.test-support.js";
 import {
+  createPersistedCompletionHandoff,
   createCliRunnerPrepareFixture,
   createTestMcpLoopbackClientGrant,
 } from "../cli-runner.test-helpers.js";
@@ -241,22 +242,11 @@ describe("configured MCP servers on CLI turns", () => {
             sourceReplyDeliveryMode: "automatic",
             config,
             ...(completion
-              ? {
-                  trustedInternalHandoff: {
-                    kind: "subagent-completion" as const,
-                    sourceSessionKey: childSessionKey,
-                    sourceSessionId: "configured-mcp-child",
-                    targetSessionKey: sessionTarget.sessionKey,
-                    targetSessionId: sessionTarget.sessionId,
-                    provider: "claude-cli",
-                    model: "opus",
-                  },
-                  inputProvenance: {
-                    kind: "inter_session" as const,
-                    sourceTool: "subagent_announce",
-                    sourceSessionKey: childSessionKey,
-                  },
-                }
+              ? createPersistedCompletionHandoff(
+                  childSessionKey,
+                  "configured-mcp-child",
+                  sessionTarget,
+                )
               : {}),
           });
           try {

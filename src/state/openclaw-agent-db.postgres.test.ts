@@ -203,6 +203,21 @@ describe.skipIf(!connection)("PostgreSQL agent database owner", () => {
     });
   });
 
+  it("reuses one idle PostgreSQL backend across sequential read-only session opens", async () => {
+    await createSession("readonly-reuse");
+    const backend = () =>
+      admit(() => {
+        const opened = owners.openOpenClawAgentDatabaseReadOnly({ agentId: "actor" });
+        assert(opened.found);
+        try {
+          return opened.database.db.prepare("SELECT pg_backend_pid() AS pid").get()?.pid;
+        } finally {
+          opened.database.close();
+        }
+      });
+    expect(backend()).toBe(backend());
+  });
+
   it("migrates version 27 indexes and revision triggers while retaining rows and search", async () => {
     const target = targetFor("migration-session", "migration", "main");
     const memorySearch: SearchSchema = {

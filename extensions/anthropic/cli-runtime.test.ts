@@ -300,26 +300,20 @@ describe("Claude native stdio boundary", () => {
   });
 
   it.each(["late-child", "late-child-run-ids"])(
-    "keeps a prior turn's resumed Agent and late child out of later inputs for %s",
+    "retires the process when a prior turn's Agent child outlives it for %s",
     async (scenario) => {
       const liveSession = createLiveSession();
       const context = await createContext(scenario, { liveSession });
-      const turns: Record<string, unknown>[][] = [];
-      for (const prompt of ["first input", "warm input", "next input"]) {
-        turns.push(await collect({ ...context, prompt, useResume: turns.length > 0 }));
-        expect(liveSession.current()?.isIdle()).toBe(true);
-      }
-      // The old child resumes its Agent during the warm input and that Agent's deferred
-      // answer arrives during the next one; neither settles nor holds a later input.
-      const counts = [2, 1, scenario.endsWith("ids") ? 3 : 2];
-      turns.forEach((records, index) => expectFinalResults(records, counts[index]));
-      const [first, warm, next] = turns.map((records) => resultDetail(records));
-      if (!first) {
-        throw new Error("Expected a first-turn result.");
-      }
+      const first = resultDetail(await collect({ ...context, prompt: "first input" }));
       expect(first.childLaunched).toBe(true);
-      expect(warm).toMatchObject({ warmAnswer: true, turn: 2, user: "warm input", pid: first.pid });
-      expect(next).toMatchObject({ finalBackgroundAnswer: true, turn: 3, pid: first.pid });
+      // The child would resume its Agent during a later input and act with that input's
+      // tool and MCP authority, so the process cannot stay warm.
+      expect(liveSession.current()).toBeUndefined();
+      const next = resultDetail(
+        await collect({ ...context, prompt: "next input", useResume: true }),
+      );
+      expect(next).toMatchObject({ childLaunched: true, turn: 1 });
+      expect(next.pid).not.toBe(first.pid);
     },
   );
 

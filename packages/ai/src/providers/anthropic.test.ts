@@ -575,6 +575,7 @@ describe("Anthropic provider", () => {
     expect(result.usage).toMatchObject({
       cacheWrite: 1_000_000,
       cacheWrite1h: 400_000,
+      cacheWrite5m: 600_000,
     });
     expect(result.usage.cost.cacheWrite).toBeCloseTo(7.75, 10);
   });

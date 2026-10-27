@@ -32,16 +32,8 @@ function primeOpenAiAuthProfile(mode: "api-key" | "token" = "api-key"): void {
 type LocalAudioSelection = Awaited<ReturnType<typeof inspectLocalAudioSelection>>;
 
 const closeEmbeddingProviderMock = vi.hoisted(() => vi.fn(async () => {}));
-const mocks = vi.hoisted(() => ({
-  runtime: {
-    log: vi.fn(),
-    error: vi.fn(),
-    exit: vi.fn((code: number) => {
-      throw new Error(`exit ${code}`);
-    }),
-    writeJson: vi.fn(),
-    writeStdout: vi.fn(),
-  },
+const mocks = await vi.hoisted(async () => ({
+  runtime: (await import("./test-runtime-mock.js")).createInertRuntime(vi),
   loadConfig: vi.fn(() => ({})),
   getRuntimeConfigSourceSnapshot: vi.fn(() => null),
   setRuntimeConfigSnapshot: vi.fn(),

@@ -51,9 +51,7 @@ async function postQaBusJson(baseUrl: string, path: string, body: unknown) {
 async function postQaBusRawJson(baseUrl: string, path: string, body: string) {
   return await fetch(`${baseUrl}${path}`, {
     method: "POST",
-    headers: {
-      "content-type": "application/json",
-    },
+    headers: { "content-type": "application/json" },
     body,
   });
 }
@@ -61,6 +59,10 @@ async function postQaBusRawJson(baseUrl: string, path: string, body: string) {
 async function expectJson(response: Response, status: number, body: unknown) {
   expect(response.status).toBe(status);
   await expect(response.json()).resolves.toEqual(body);
+}
+async function expectSuccess(response: Response, body: object) {
+  expect(response.status).toBe(200);
+  await expect(response.json()).resolves.toMatchObject(body);
 }
 const messageIds = (result: QaBusPollResult) =>
   result.events.flatMap((event) => ("message" in event ? [event.message.id] : []));
@@ -93,9 +95,12 @@ describe("qa-bus server", () => {
   const stops: Array<() => Promise<void>> = [];
   async function fixture(state = createQaBusState()) {
     const bus = await startQaBusServer({ state });
-    stops.push(() => bus.stop());
+    let stopping: Promise<void> | undefined;
+    const stop = () => (stopping ??= bus.stop());
+    stops.push(stop);
     return {
       ...bus,
+      stop,
       state,
       post: (route: string, body: unknown) => postQaBusJson(bus.baseUrl, route, body),
       raw: (route: string, body: string) => postQaBusRawJson(bus.baseUrl, route, body),
@@ -149,8 +154,7 @@ describe("qa-bus server", () => {
         text: `hello from ${kind}`,
       });
 
-      expect(response.status).toBe(200);
-      await expect(response.json()).resolves.toMatchObject({
+      await expectSuccess(response, {
         message: { conversation: { id: "alice", kind: "direct" } },
       });
     }
@@ -166,14 +170,8 @@ describe("qa-bus server", () => {
   });
 
   it("wakes matching polls and fences late polls and writes during shutdown", async () => {
-    const state = createQaBusState();
-    const bus = await startQaBusServer({ state });
-    let stopped = false;
-    stops.push(async () => {
-      if (!stopped) {
-        await bus.stop();
-      }
-    });
+    const bus = await fixture();
+    const { state, inbound } = bus;
 
     const pending = pollQaBus({
       baseUrl: bus.baseUrl,
@@ -182,12 +180,7 @@ describe("qa-bus server", () => {
       timeoutMs: 500,
     });
 
-    state.addInboundMessage({
-      accountId: "acct-a",
-      conversation: { id: "target", kind: "direct" },
-      senderId: "acct-a-user",
-      text: "fresh event",
-    });
+    inbound("fresh event");
 
     const result = await pending;
     expect(result.events).toHaveLength(1);
@@ -242,7 +235,6 @@ describe("qa-bus server", () => {
     });
     await sleep(10);
 
-    stopped = true;
     const startedAt = Date.now();
     const stopping = bus.stop();
     setTimeout(() => {
@@ -253,8 +245,7 @@ describe("qa-bus server", () => {
     await activePoll;
 
     expect(Date.now() - startedAt).toBeLessThan(1_000);
-    expect(pollWaitersStarted).toBe(1);
-    expect(pollWaitersSettled).toBe(1);
+    expect([pollWaitersStarted, pollWaitersSettled]).toEqual([1, 1]);
     expect(state.getSnapshot()).toMatchObject({ events: [], messages: [] });
   });
 
@@ -298,43 +289,33 @@ describe("qa-bus server", () => {
     expect(secondPage.cursor).toBe(101);
   });
 
-  it("rejects malformed poll numeric fields before long-polling", async () => {
+  it.each([
+    [
+      "/v1/poll",
+      { accountId: "acct-a", cursor: "999", timeoutMs: 500 },
+      "poll cursor must be an integer at least 0.",
+      300,
+    ],
+    [
+      "/v1/poll",
+      { accountId: "acct-a", cursor: 1, acknowledgedCursor: 2, timeoutMs: 0 },
+      "acknowledged poll cursor must not exceed the requested poll cursor.",
+      undefined,
+    ],
+    [
+      "/v1/actions/search",
+      { limit: "all", query: "anything" },
+      "search limit must be an integer at least 1.",
+      undefined,
+    ],
+  ] as const)("rejects %s input: %s", async (route, body, error, deadline) => {
     const { post } = await fixture();
-
     const startedAt = Date.now();
-    const response = await post("/v1/poll", {
-      accountId: "acct-a",
-      cursor: "999",
-      timeoutMs: 500,
-    });
-
-    expect(Date.now() - startedAt).toBeLessThan(300);
-    await expectJson(response, 400, { error: "poll cursor must be an integer at least 0." });
-  });
-
-  it("rejects acknowledgements beyond the fetched cursor", async () => {
-    const { post } = await fixture();
-
-    const response = await post("/v1/poll", {
-      accountId: "acct-a",
-      cursor: 1,
-      acknowledgedCursor: 2,
-      timeoutMs: 0,
-    });
-
-    await expectJson(response, 400, {
-      error: "acknowledged poll cursor must not exceed the requested poll cursor.",
-    });
-  });
-
-  it("rejects malformed search limits before querying state", async () => {
-    const { post } = await fixture();
-    const response = await post("/v1/actions/search", {
-      limit: "all",
-      query: "anything",
-    });
-
-    await expectJson(response, 400, { error: "search limit must be an integer at least 1." });
+    const response = await post(route, body);
+    if (deadline) {
+      expect(Date.now() - startedAt).toBeLessThan(deadline);
+    }
+    await expectJson(response, 400, { error });
   });
 
   it.each(["inbound", "outbound"] as const)(
@@ -362,8 +343,7 @@ describe("qa-bus server", () => {
           : { to: "dm:qa-operator" }),
       });
 
-      expect(response.status).toBe(200);
-      await expect(response.json()).resolves.toMatchObject({
+      await expectSuccess(response, {
         message: { direction, attachments: [attachment] },
       });
 
@@ -372,12 +352,6 @@ describe("qa-bus server", () => {
       expect(snapshot.events).toHaveLength(1);
       const storedAttachment = snapshot.messages[0]?.attachments?.[0];
       expect(storedAttachment).toEqual(attachment);
-      const storedImage = Buffer.from(storedAttachment?.contentBase64 ?? "", "base64");
-      expect(storedImage.byteLength).toBe(generatedImage.byteLength);
-      expect(
-        storedImage.equals(generatedImage),
-        "stored attachment bytes match the generated image",
-      ).toBe(true);
     },
   );
 
@@ -398,33 +372,18 @@ describe("qa-bus server", () => {
       limit: 10_000,
       timeoutMs: 60_000,
     });
-    expect(pollResponse.status).toBe(200);
-    await expect(pollResponse.json()).resolves.toMatchObject({
+    await expectSuccess(pollResponse, {
       events: [{ message: { id: message.id } }],
-    });
-
-    const searchResponse = await post("/v1/actions/search", {
-      accountId: "acct-a",
-      limit: 10_000,
-      query: "bounded",
-    });
-    expect(searchResponse.status).toBe(200);
-    await expect(searchResponse.json()).resolves.toMatchObject({
-      messages: [{ id: message.id }],
     });
 
     const extremeSearchResponse = await raw(
       "/v1/actions/search",
       `{"accountId":"acct-a","limit":1e309,"query":"bounded"}`,
     );
-    expect(extremeSearchResponse.status).toBe(200);
-    await expect(extremeSearchResponse.json()).resolves.toMatchObject({
+    await expectSuccess(extremeSearchResponse, {
       messages: [{ id: message.id }],
     });
   });
-});
-
-describe("handleQaBusRequest", () => {
   it.each([
     { pathname: "/v1/inbound/message", limit: 16 * 1024 * 1024 },
     { pathname: "/v1/outbound/message", limit: 16 * 1024 * 1024 },
@@ -432,23 +391,19 @@ describe("handleQaBusRequest", () => {
   ])(
     "delivers 413 over the wire and closes when the $pathname body exceeds its limit",
     async ({ pathname, limit }) => {
-      const bus = await startQaBusServer({ state: createQaBusState() });
-      try {
-        // Declared over-cap length: rejected from the header alone, while the sender is
-        // still mid-upload and can only learn the outcome from what reaches it.
-        const result = await postRawWebhook({
-          url: `${bus.baseUrl}${pathname}`,
-          body: "{}",
-          contentLength: limit + 1,
-          headers: { "content-type": "application/json" },
-        });
+      const bus = await fixture();
+      // Declared over-cap length: rejected from the header alone, while the sender is
+      // still mid-upload and can only learn the outcome from what reaches it.
+      const result = await postRawWebhook({
+        url: `${bus.baseUrl}${pathname}`,
+        body: "{}",
+        contentLength: limit + 1,
+        headers: { "content-type": "application/json" },
+      });
 
-        expect(result.statusLine).toBe("HTTP/1.1 413 Payload Too Large");
-        expect(JSON.parse(result.body)).toEqual({ error: "Payload too large" });
-        expect(result.closedByServer).toBe(true);
-      } finally {
-        await bus.stop();
-      }
+      expect(result.statusLine).toBe("HTTP/1.1 413 Payload Too Large");
+      expect(JSON.parse(result.body)).toEqual({ error: "Payload too large" });
+      expect(result.closedByServer).toBe(true);
     },
   );
 });

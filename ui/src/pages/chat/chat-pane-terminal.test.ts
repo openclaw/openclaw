@@ -6,14 +6,14 @@ import { decodeResumeHandoff } from "../../../../src/shared/resume-handoff.js";
 import type { GatewaySessionRow } from "../../api/types.ts";
 import { gatewayHelloForMethods as desktopHello } from "../../test-helpers/gateway-methods.ts";
 import { waitForSolid } from "../../test-helpers/solid-settle.ts";
+import { createGatewayBrowserClientFixture as gateway } from "./chat-application-context.test-support.ts";
 import {
   activePlacementSession,
   createPaneHeaderWorkspaceFixture,
-  createGatewayBrowserClientFixture as gateway,
-  createSessionCapabilityFixture,
   createTestChatPane,
   getPaneTestRuntime,
 } from "./chat-pane.test-support.ts";
+import { createSessionCapabilityFixture } from "./chat-session-capability.test-support.ts";
 import {
   openNativeMenu,
   renderPaneHeaderInto,
@@ -169,7 +169,9 @@ it("offers Desktop in the compact fallback only for observable session targets",
   const snapshot = pane.context.gateway.snapshot;
   snapshot.hello = desktopHello([], ["operator.admin"]);
   paint(localSession);
+  await openPanelMenu(container);
   expect(topButton("Toggle desktop panel")).toBeNull();
+  expect(panelActionIds()).not.toContain("desktop");
 
   snapshot.hello = desktopHello(["desktop.observe"], ["operator.admin"]);
   const onToggleDesktop = vi.fn();
@@ -209,7 +211,9 @@ it("offers Desktop in the compact fallback only for observable session targets",
 
   snapshot.hello = desktopHello(["desktop.observe"], ["operator.read"]);
   renderDesktopHeader(localSession);
+  await openPanelMenu(container);
   expect(topButton("Toggle desktop panel")).toBeNull();
+  expect(panelActionIds()).not.toContain("desktop");
 });
 
 it("keeps Browser reachable through the compact fallback", async () => {

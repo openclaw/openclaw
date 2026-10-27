@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
+import { UPDATE_NATIVE_GATE_SOURCE } from "../cli/update-cli/update-command-native-gate.generated.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { resolveCommandProcessSignal } from "../process/exec-spawn.js";
 import { resolveIdentityPathViaExistingAncestorSync } from "./boundary-path.js";
@@ -10,7 +11,10 @@ import { formatErrorMessage } from "./errors.js";
 import { withUserPathBaseDirectory } from "./home-dir.js";
 import { resolveOpenClawPackageRoot } from "./openclaw-root.js";
 import { isPathInside } from "./path-guards.js";
+import { runtimeProcessEntrypoints } from "./runtime-process-entrypoints.js";
+import { resolveRuntimeScriptEntrypointUrl } from "./runtime-process-url.js";
 import { withRuntimeWorkerGeneration } from "./runtime-worker-generation.js";
+import { resolveRuntimeWorkerUrl } from "./runtime-worker-url.js";
 import { tryProcessCwd } from "./safe-cwd.js";
 import {
   maintainRetainedUpdateRuntimes,
@@ -27,6 +31,7 @@ import type { ResolvedGlobalInstallTarget } from "./update-global.js";
 import { resolveNativePackageProjectRoot } from "./update-native-package-owner.js";
 import {
   projectRetainedRuntimePath,
+  readRetainedRuntimeFileList,
   RetainedRuntimeFilesSchema,
 } from "./update-retained-runtime-files.js";
 import { retainUpdateRuntimeImports } from "./update-retained-runtime-imports.js";
@@ -187,6 +192,14 @@ async function runWithRetainedUpdateRuntime<T>(
           if (!outsideMutation(privateRoot)) {
             throw new Error("Retained updater directory overlaps an installation being replaced");
           }
+          const nativeGateSource = resolveRuntimeWorkerUrl(
+            runtimeProcessEntrypoints.updateNativeGate,
+          );
+          const nativeGate = resolveRuntimeScriptEntrypointUrl("updateNativeGate", privateRoot);
+          await fs.writeFile(nativeGate, UPDATE_NATIVE_GATE_SOURCE, { mode: 0o600, flag: "wx" });
+          assertCurrent();
+          // Native recovery still runs when full rollback retention is unavailable.
+          bind((url) => (url.href === nativeGateSource.href ? nativeGate : url));
           const candidateRoot = projectRetainedRuntimePath(privateRoot, sourceRoot);
           const roots: string[] = [];
           for (const name of ["package.json", "dist", "node_modules"]) {
@@ -233,7 +246,9 @@ async function runWithRetainedUpdateRuntime<T>(
             );
             return undefined;
           }
-          const { relocations: retainedRelocations, files, ...metrics } = retained;
+          const { relocations: retainedRelocations, fileCount, ...metrics } = retained;
+          const files = await readRetainedRuntimeFileList(privateRoot, { fileCount });
+          assertCurrent();
           const relocations = prepareRuntimeRelocations(
             [
               ...retainedRelocations,
@@ -243,7 +258,9 @@ async function runWithRetainedUpdateRuntime<T>(
             ].map((entry) => Object.freeze({ ...entry })),
           );
           const resolve = (url: URL) =>
-            pathToFileURL(relocateRuntimePath(fileURLToPath(url), relocations));
+            url.href === nativeGateSource.href
+              ? nativeGate
+              : pathToFileURL(relocateRuntimePath(fileURLToPath(url), relocations));
           bind(resolve);
           // Workers and the parent must use the same generation after activation
           // replaces dist; preserving URLs also preserves already-loaded singletons.

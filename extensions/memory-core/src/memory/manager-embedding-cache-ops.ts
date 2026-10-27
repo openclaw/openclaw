@@ -40,7 +40,7 @@ export abstract class MemoryManagerEmbeddingCacheOps extends MemoryManagerSyncOp
     cacheCandidates?: MemoryEmbeddingCacheCandidate[],
   ): Promise<number[][]>;
 
-  protected async pruneEmbeddingCacheIfNeeded(): Promise<void> {
+  protected async pruneEmbeddingCacheIfNeeded(recount = false): Promise<void> {
     const max = this.cache.maxEntries;
     if (!this.cache.enabled || !max || max <= 0) {
       return;
@@ -54,8 +54,14 @@ export abstract class MemoryManagerEmbeddingCacheOps extends MemoryManagerSyncOp
     const unreferencedFirst = {
       identities: this.syncProviderGeneration?.identities ?? this.resolveProviderIndexIdentities(),
     };
+    // Deletion may fence new writes before close. Stop optional maintenance between
+    // batches so retiring a suspended rebuild only drains and releases its resources.
     while (
-      await database.pruneEmbeddingCache({ maxEntries: max, unreferencedFirst }, assertCurrent)
+      !this.closing &&
+      (await database.pruneEmbeddingCache(
+        { maxEntries: max, unreferencedFirst, ...(recount ? { recount: true } : {}) },
+        assertCurrent,
+      ))
     ) {
       await yieldToEventLoop();
     }
@@ -66,13 +72,34 @@ export abstract class MemoryManagerEmbeddingCacheOps extends MemoryManagerSyncOp
     generation: MemorySemanticProviderGeneration,
   ) {
     const hashes = candidates.map((candidate) => candidate.chunk.hash);
+    const meta = generation.database.facts.meta;
+    // Only the published index can bind an alias to this vector space.
+    const providerIdentities = generation.identities.filter(
+      (identity, index) =>
+        index === 0 ||
+        (identity.provider === meta?.provider &&
+          identity.model === meta.model &&
+          identity.providerKey === meta.providerKey),
+    );
     const cached = this.cache.enabled
       ? await generation.database.read(
           {
             type: "cache.read",
             input: {
-              providerIdentities: generation.identities,
+              providerIdentities,
               hashes,
+              ...(this.reindexProgress
+                ? {
+                    rebuild: {
+                      chunks: candidates.map(({ source, entry, chunk }) => ({
+                        source,
+                        path: entry.path,
+                        hash: chunk.hash,
+                      })),
+                      dimensions: generation.embeddingDimensions,
+                    },
+                  }
+                : {}),
             },
           },
           () => {
@@ -254,13 +281,22 @@ export abstract class MemoryManagerEmbeddingCacheOps extends MemoryManagerSyncOp
       if (accepted.length === 0) {
         return;
       }
+      const reindex = this.reindexProgress;
+      if (reindex) {
+        reindex.cachePrunePending = true;
+      }
       await this.withGeneratedEmbeddingCacheWrite(generation, {
         kind: "upsert",
         header: {
           agentId: this.agentId,
           provider: { id: generation.provider.id, model: generation.provider.model },
           providerKey: generation.providerKey,
-          maxEntries: this.cache.maxEntries,
+          // Rebuilds reserve at most 2× maxEntries. Live completion/abort trims to
+          // the cap; retirement leaves this bounded cache for later admitted writes.
+          maxEntries:
+            this.cache.maxEntries === undefined
+              ? undefined
+              : this.cache.maxEntries * (this.reindexProgress ? 2 : 1),
           unreferencedFirst: { identities: generation.identities },
         },
         entries: accepted,

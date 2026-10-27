@@ -42,6 +42,7 @@ export type TeamShapeExtrasOptions = {
   projects: number;
   localPlacements?: number;
   worktreeFiles?: number;
+  worktreeLocalOrigin?: boolean;
   worktreeFileBytes?: number;
   worktreeInstallFailure?: boolean;
   worktreeColdCommits?: number;
@@ -241,6 +242,14 @@ async function seedProjects(options: TeamShapeExtrasOptions) {
         await git("update-ref", ref, commit);
         coldBaseRefs.push(ref);
       }
+    }
+    if (options.worktreeLocalOrigin) {
+      // Keep the advertised default branch separate from the managed local refs.
+      const origin = path.join(options.stateDir, "fixture-remotes", `${projectId}.git`);
+      await fs.mkdir(path.dirname(origin), { recursive: true });
+      await git("clone", "--bare", "--local", repoRoot, origin);
+      await git("-C", origin, "symbolic-ref", "HEAD", "refs/heads/main");
+      await git("remote", "add", "origin", origin);
     }
     const repository = await resolveRepositoryIdentity(repoRoot);
     const project = runOpenClawStateWriteTransaction(({ db }) => {

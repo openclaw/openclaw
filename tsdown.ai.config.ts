@@ -1,8 +1,12 @@
 // Builds the reusable AI package separately to keep provider bundling out of
 // the already-parallel main package graph.
 import type { UserConfig } from "tsdown";
+import { resolveRepoRoot } from "./scripts/lib/repo-root.mjs";
+import { createStandaloneSourceModuleUrlPlugin } from "./scripts/lib/standalone-source-module-urls.mjs";
 import { createDeclarationBoundaryHooks } from "./scripts/lib/tsdown-declaration-boundary.mts";
 import { cacheTsdownRuntimeConfigs } from "./scripts/lib/tsdown-runtime-cache.mts";
+
+const repoRoot = resolveRepoRoot(import.meta.url);
 
 const externalDependencies = [
   "@anthropic-ai/sdk",
@@ -43,6 +47,9 @@ const config = {
     "internal/openai-responses-payload-policy":
       "packages/ai/src/internal/openai-responses-payload-policy.ts",
     "internal/retry-after": "packages/ai/src/internal/retry-after.ts",
+    // Keep namespace helpers out of the deferred parser's entry chunk.
+    "internal/reasoning-tag-text-partitioner":
+      "packages/ai/src/utils/reasoning-tag-text-partitioner.ts",
     "internal/runtime": "packages/ai/src/internal/runtime.ts",
     "internal/shared": "packages/ai/src/internal/shared.ts",
     "internal/tool-schema": "packages/ai/src/internal/tool-schema.ts",
@@ -50,6 +57,7 @@ const config = {
   env: { NODE_ENV: "production" },
   format: "esm",
   outDir: "packages/ai/dist",
+
   copy: [{ from: "node_modules/@mistralai/mistralai/LICENSE", rename: "mistral.LICENSE" }],
   platform: "node",
   target: "node22",
@@ -64,4 +72,9 @@ const config = {
   },
 } satisfies UserConfig;
 
-export default cacheTsdownRuntimeConfigs([config])[0]!;
+export default cacheTsdownRuntimeConfigs([
+  {
+    ...config,
+    plugins: [createStandaloneSourceModuleUrlPlugin({ rootDir: repoRoot })],
+  },
+])[0]!;

@@ -51,6 +51,7 @@ import {
   isAudioOnlyModelErrorMessage,
   isUnsupportedThinkingToggleErrorMessage,
 } from "../agents/live-test-provider-drift.test-support.js";
+import { modelDefinition } from "../agents/model-auth.fixtures.test-support.js";
 import { getApiKeyForModelCore, type ResolvedProviderAuth } from "../agents/model-auth.js";
 import { normalizeProviderId } from "../agents/model-selection.js";
 import { resolveBuiltInModelSuppressionFromManifest } from "../agents/model-suppression.js";
@@ -2026,15 +2027,11 @@ describe("buildLiveGatewayConfig", () => {
               api: "google-generative-ai",
               baseUrl: "https://generativelanguage.googleapis.com",
               models: [
-                {
-                  id: "gemini-3-flash-preview",
-                  name: "gemini-3-flash-preview",
-                  input: ["text"],
-                  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+                modelDefinition("gemini-3-flash-preview", {
                   contextWindow: 1_000,
                   maxTokens: 100,
                   reasoning: false,
-                },
+                }),
               ],
             },
           },
@@ -4812,15 +4809,11 @@ describe("loadAuthBackedLiveModelRegistry", () => {
                   api: "openai-completions",
                   baseUrl: "https://example.test/v1",
                   models: [
-                    {
-                      id: "configured-model",
+                    modelDefinition("configured-model", {
                       name: "Configured Model",
                       reasoning: false,
-                      input: ["text"],
-                      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
                       contextWindow: 128000,
-                      maxTokens: 8192,
-                    },
+                    }),
                   ],
                 },
               },

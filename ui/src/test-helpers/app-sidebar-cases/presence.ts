@@ -19,6 +19,8 @@ await import("../../components/solid/viewer-facepile.tsx");
 async function mountOnlineSidebar(...args: Parameters<typeof mountSidebar>) {
   const mounted = await mountSidebar(...args);
   await selectSidebarView(mounted.sidebar, "online");
+  await vi.dynamicImportSettled();
+  await mounted.sidebar.updateComplete;
   return mounted;
 }
 
@@ -262,7 +264,7 @@ describe("AppSidebar viewer presence", () => {
     expect(aliceRow.getAttribute("href")).toBe("/activity/alice");
     expect(aliceRow.closest(".sidebar-online__row")?.querySelectorAll("a")).toHaveLength(1);
     expect(
-      aliceRow.closest(".sidebar-online__row")?.querySelector('button[aria-label="Pin"]'),
+      aliceRow.closest(".sidebar-online__row")?.querySelector('button[aria-haspopup="menu"]'),
     ).not.toBeNull();
     expect(document.querySelector(".person-activity-hovercard")).toBeNull();
 

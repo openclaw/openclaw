@@ -9,41 +9,33 @@ import { HoverMarquee } from "./solid/hover-marquee.tsx";
 
 function measurementClock() {
   const framesClock = createFrameClock();
-
-  const observers = new Set<ControlledResizeObserver>();
-  const visibilityObservers = new Set<ControlledIntersectionObserver>();
   const motion = Object.assign(new EventTarget(), { matches: false });
-  class ControlledResizeObserver implements ResizeObserver {
-    readonly targets = new Set<Element>();
-    constructor(readonly callback: ResizeObserverCallback) {
-      observers.add(this);
+  function observerClass<Callback>() {
+    const instances = new Set<Observer>();
+    class Observer {
+      readonly targets = new Set<Element>();
+      constructor(readonly callback: Callback) {
+        instances.add(this);
+      }
+      observe(target: Element) {
+        this.targets.add(target);
+      }
+      unobserve(target: Element) {
+        this.targets.delete(target);
+      }
+      disconnect() {
+        this.targets.clear();
+      }
     }
-    observe(target: Element) {
-      this.targets.add(target);
-    }
-    unobserve(target: Element) {
-      this.targets.delete(target);
-    }
-    disconnect() {
-      this.targets.clear();
-    }
+    return { Observer, instances };
   }
-  class ControlledIntersectionObserver {
-    readonly targets = new Set<Element>();
-    constructor(readonly callback: (entries: { isIntersecting: boolean }[]) => void) {
-      visibilityObservers.add(this);
-    }
-    observe(target: Element) {
-      this.targets.add(target);
-    }
-    disconnect() {
-      this.targets.clear();
-    }
-  }
-  vi.stubGlobal("ResizeObserver", ControlledResizeObserver);
+  const resize = observerClass<ResizeObserverCallback>();
+  const visibility =
+    observerClass<(entries: { target: Element; isIntersecting: boolean }[]) => void>();
+  vi.stubGlobal("ResizeObserver", resize.Observer);
   vi.stubGlobal("requestAnimationFrame", framesClock.request);
   vi.stubGlobal("cancelAnimationFrame", framesClock.cancel);
-  vi.stubGlobal("IntersectionObserver", ControlledIntersectionObserver);
+  vi.stubGlobal("IntersectionObserver", visibility.Observer);
   vi.stubGlobal("matchMedia", () => motion);
   const flushFrames = () => {
     framesClock.flush(0);
@@ -55,22 +47,27 @@ function measurementClock() {
       flushFrames();
     },
     visible(isIntersecting: boolean, target?: Element) {
-      for (const observer of visibilityObservers) {
+      for (const observer of visibility.instances) {
         if (target ? observer.targets.has(target) : observer.targets.size > 0) {
-          observer.callback([{ isIntersecting }]);
+          observer.callback(
+            [...observer.targets]
+              .filter((element) => !target || element === target)
+              .map((element) => ({ target: element, isIntersecting })),
+          );
         }
       }
       flushFrames();
     },
     observesSize(target: Element) {
-      return [...observers].some((observer) => observer.targets.has(target));
+      return [...resize.instances].some((observer) => observer.targets.has(target));
     },
     flush: flushFrames,
     resize(...targets: Element[]) {
       for (const target of targets) {
-        for (const observer of observers) {
+        for (const observer of resize.instances) {
           if (observer.targets.has(target)) {
-            observer.callback([], observer);
+            // SAFETY: Only target is consumed by the resize delivery router.
+            observer.callback([{ target } as ResizeObserverEntry], observer);
           }
         }
       }
@@ -189,19 +186,6 @@ describe("hover marquee measurement budget", () => {
     expect(label.textContent).toBe("Short");
   });
 
-  it("reads a dense title batch before writing overflow styles", () => {
-    const { clock, labels, operations } = denseTitles(100);
-    reveal(clock);
-    expect(labels.every(overflows)).toBe(true);
-    expect(operations.lastIndexOf("read")).toBeLessThan(operations.indexOf("write"));
-    Object.defineProperty(labels[0]!, "clientWidth", { configurable: true, value: 0 });
-    operations.length = 0;
-    clock.resize(labels[0]!, labels[1]!);
-    expect(overflows(labels[0]!)).toBe(false);
-    expect(overflows(labels[1]!)).toBe(true);
-    expect(operations).toEqual(["read", "write", "write"]);
-  });
-
   it("avoids style resolution at zero width and resumes through the existing resize observer", () => {
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
     const { clock, label, host } = denseTitles();
@@ -250,14 +234,21 @@ describe("hover marquee measurement budget", () => {
     }
   });
 
-  it("skips unchanged titles but refreshes content, class, direction, and viewport changes", async () => {
-    const { clock, show, labels, operations } = denseTitles(100);
+  it("batches geometry reads and only remeasures invalidated titles", async () => {
+    const { clock, show, labels, operations, host } = denseTitles(100);
     reveal(clock);
+    expect(labels.every(overflows)).toBe(true);
+    expect(operations.lastIndexOf("read")).toBeLessThan(operations.indexOf("write"));
     operations.length = 0;
     for (let index = 0; index < 5; index += 1) {
       show();
       await clock.settle();
     }
+    expect(operations).toHaveLength(0);
+    const elapsed = document.createElement("span");
+    host.append(elapsed);
+    elapsed.textContent = "1s";
+    await clock.settle();
     expect(operations).toHaveLength(0);
     show("Short");
     await clock.settle();

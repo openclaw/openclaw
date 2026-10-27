@@ -48,7 +48,7 @@ const TEXT_TOOL_CALL_RETRY_INSTRUCTION =
 const TOOL_USE_WITHOUT_CALL_RETRY_INSTRUCTION =
   "The previous assistant turn stopped for tool use but contained no tool call, so nothing ran. Continue from the current state: call the tool you need through the tool interface instead of writing the call as text, or produce the visible answer now. Do not restart from scratch.";
 const REJECTED_TOOL_CALL_RETRY_INSTRUCTION =
-  "The previous assistant turn's tool call was rejected before it ran because the provider returned incomplete or malformed tool-call arguments, so nothing ran for that call. Continue from the current state: re-issue the call you need through the tool interface with complete, valid JSON arguments, or produce the visible answer now. Do not repeat completed tool calls or restart from scratch.";
+  "The previous assistant turn's tool call was rejected before it ran because the provider returned incomplete or malformed tool-call arguments, so nothing ran for that call. Any visible text from that turn has already been shown; do not repeat it. Continue from the current state: re-issue the call you need through the tool interface with complete, valid JSON arguments, or produce the visible answer now. Do not repeat completed tool calls or restart from scratch.";
 const SETTLED_TOOL_TERMINAL_CONTINUATION_INSTRUCTION =
   "Your turn ended without a final reply. If the user still needs a reply, write it now. If your completed actions already answered the request, answer exactly NO_REPLY. Continue from the current transcript. Do not repeat completed tool calls or restart from scratch. Tools are unavailable in this step: it is a text-only pass, so reply with plain text and do not attempt any tool call.";
 const REQUIRED_RESULT_TOOL_TERMINAL_CONTINUATION_INSTRUCTION =
@@ -91,6 +91,7 @@ export function shouldRetrySilentErrorAssistantTurn(params: {
   // harnesses retain the cumulative, fail-closed behavior.
   if (
     joinAssistantTexts(params.attempt.assistantTexts).length > 0 ||
+    params.attempt.lastToolError ||
     hasAttemptTerminalState(params.attempt) ||
     !isCurrentAttemptReplaySafe(params.attempt)
   ) {
@@ -392,6 +393,10 @@ export function resolveSettledToolTerminalContinuation(
     intentionalTermination ||
     parkedCodeModeRun ||
     hasUnsettledToolError ||
+    // A denied action must not reopen tools after an empty stop. Settled execution
+    // failures retain their existing continuation and text-only summary contracts.
+    (attempt.lastToolError?.executionStarted === false &&
+      assistantState.assistant?.stopReason !== "toolUse") ||
     hasAsyncActivity(attempt.toolMetas) ||
     hasAcceptedSessionSpawn(attempt.acceptedSessionSpawns) ||
     attempt.clientToolCalls ||
@@ -442,9 +447,11 @@ function resolveEmptyResponseRetryInstruction(
   const assistant = assistantState.assistant ?? null;
   // A pre-dispatch rejection ran nothing. Error turns are never silent replies,
   // so inspect model output directly rather than the host's failure notice.
+  // Visible progress text from the rejected turn does not make the replay
+  // unsafe: the call never ran, and replyDeliveryState still vetoes a delivered
+  // final answer.
   const rejectedBeforeDispatch =
     params.attempt.itemLifecycle.completedCount > 0 &&
-    assistantState.visibleText.length === 0 &&
     !params.attempt.hasToolMediaBlockReply &&
     params.replyDeliveryState === "missing" &&
     assistant?.stopReason === "error" &&

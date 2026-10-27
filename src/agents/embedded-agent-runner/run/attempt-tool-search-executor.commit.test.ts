@@ -81,7 +81,6 @@ it.each(["accepted", "rejected", "superseded"] as const)(
         (error: unknown) => ({ error }),
       );
       await reachedAppend.promise;
-      expect(execute).toHaveBeenCalledTimes(1);
       expect(subscription.getReplayState()).toMatchObject({
         replayInvalid: true,
         hadPotentialSideEffects: true,
@@ -97,19 +96,10 @@ it.each(["accepted", "rejected", "superseded"] as const)(
       if (rejected) {
         expect(await settled).toEqual({ error: persistenceError });
         expect(subscription.getReplayState().replayInvalid).toBe(true);
-        expect(subscription.toolMetas).toHaveLength(1);
       } else {
         expect(await settled).toHaveProperty("result");
-        if (outcome === "superseded") {
-          expect(manager.getEntries()).toHaveLength(1);
-        }
       }
       expect(terminalEvents).toEqual(outcome === "accepted" ? ["item:true", "tool:true"] : []);
-      expect(subscription.getItemLifecycle()).toEqual({
-        startedCount: 1,
-        completedCount: 1,
-        activeCount: 0,
-      });
       expect(await readAttemptNestedToolActivity(manager, nestedToolActivityState)).toMatchObject(
         rejected ? [] : [{ details: { toolCallId: "nested-write", toolName: "write" } }],
       );

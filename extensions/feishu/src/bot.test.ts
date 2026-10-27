@@ -840,6 +840,83 @@ describe("handleFeishuMessage command authorization", () => {
     },
   );
 
+  it.each(["/status", "/btw progress?"])(
+    "keeps DM %s separate from agent mention context",
+    async (command) => {
+      computeCommandAccess.mockReturnValue(true);
+      await receiveConfigured(
+        {
+          messageId: `msg-dm-mention-${command}`,
+          text: `@_bot ${command}`,
+          message: { mentions: [{ key: "@_bot", id: { open_id: "ou-bot" }, name: "Bot" }] },
+        },
+        createFeishuTestConfig({ dmPolicy: "open", allowFrom: ["*"] }),
+        { botOpenId: "ou-bot" },
+      );
+      const context = inboundContext();
+      expect(context).toMatchObject({
+        RawBody: `<at user_id="ou-bot">Bot</at> ${command}`,
+        CommandBody: command,
+        BodyForCommands: command,
+      });
+      expect(context.BodyForAgent).toContain(`<at user_id="ou-bot">Bot</at> ${command}`);
+      expect(dispatchReply).toHaveBeenCalledOnce();
+    },
+  );
+
+  it.each([
+    ["ou-attacker", false],
+    ["ou-admin", true],
+  ] as const)("computes group command authorization for %s", async (senderOpenId, authorized) => {
+    botRuntime.channel.commands.isControlCommandMessage = isControlCommandMessage;
+    const allowFrom = authorized ? [senderOpenId] : undefined;
+    const mentions = [{ key: "@_user_1", id: { open_id: "ou-bot" }, name: "Bot" }];
+    const text = "@_user_1/status";
+    computeCommandAccess.mockReturnValue(true);
+    await receiveGroup(
+      {
+        messageId: `msg-group-command-${senderOpenId}`,
+        senderOpenId,
+        text,
+        message: { mentions },
+      },
+      {},
+      { allowFrom },
+      { commands: { useAccessGroups: true } },
+    );
+    expect(computeCommandAccess).toHaveBeenCalledWith("/status", currentRuntimeConfig);
+    if (!authorized) {
+      expect(sendMessage).toHaveBeenCalledExactlyOnceWith(
+        expect.objectContaining({ text: expect.stringMatching(/not authorized.*allowFrom/s) }),
+      );
+      expect(buildInboundContext).not.toHaveBeenCalled();
+      expect(dispatchReply).not.toHaveBeenCalled();
+      return;
+    }
+    const context = inboundContext();
+    expect(context).toMatchObject({
+      ChatType: "group",
+      RawBody: '<at user_id="ou-bot">Bot</at>/status',
+      CommandBody: "/status",
+      BodyForCommands: "/status",
+      CommandAuthorized: authorized,
+      SenderId: senderOpenId,
+      GroupRequireMention: false,
+      From: `feishu:${senderOpenId}`,
+      To: "chat:oc-group",
+      OriginatingChannel: "feishu",
+      OriginatingTo: "chat:oc-group",
+      NativeChannelId: "oc-group",
+    });
+    expect(context.BodyForAgent).toContain('<at user_id="ou-bot">Bot</at>/status');
+    expect(resolveGroupSessionKey(context as never)).toMatchObject({
+      channel: "feishu",
+      id: "oc-group",
+      key: "feishu:group:oc-group",
+    });
+    expect(dispatchReply).toHaveBeenCalledTimes(1);
+  });
+
   it("verifies app-scoped bot mention ids before admitting bot-authored events", async () => {
     const dispatchBot = (event: FeishuMessageEvent, allowBots = true) =>
       dispatchMessage({

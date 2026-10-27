@@ -53,6 +53,7 @@ import {
   wrapToolWithBeforeToolCallHook,
 } from "./agent-tools.before-tool-call.js";
 import { createExecTool } from "./bash-tools.exec-run.js";
+import { nodeCommand as currentNodeEvalCommand } from "./bash-tools.lifecycle.test-support.js";
 import { createWriteTool } from "./sessions/index.js";
 import type { AnyAgentTool } from "./tools/common.js";
 import { callGatewayTool } from "./tools/gateway.js";
@@ -60,13 +61,6 @@ import { callGatewayTool } from "./tools/gateway.js";
 const CRITICAL_THRESHOLD = 20;
 const GLOBAL_CIRCUIT_BREAKER_THRESHOLD = 30;
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
-
-function currentNodeEvalCommand(source: string): string {
-  const shellQuote = (value: string) =>
-    `'${value.replaceAll("'", process.platform === "win32" ? "''" : "'\\''")}'`;
-  const command = `${shellQuote(process.execPath)} -e ${shellQuote(source)}`;
-  return process.platform === "win32" ? `& ${command}` : command;
-}
 
 vi.mock("../plugins/hook-runner-global.js", async () => {
   const actual = await vi.importActual<typeof import("../plugins/hook-runner-global.js")>(
@@ -152,6 +146,25 @@ describe("before_tool_call loop detection behavior", () => {
     mockGetGlobalHookRunner.mockReturnValue(hookRunner);
     hookRunner.hasHooks.mockReturnValue(false);
   });
+
+  function createObservedChurnWriteTool(sessionId: string, sessionKey: string, runId: string) {
+    const progressReasonsDuringExecution: Array<string | undefined> = [];
+    const execute = vi.fn().mockImplementation(async (_toolCallId: string, _params: unknown) => {
+      progressReasonsDuringExecution.push(
+        getDiagnosticSessionActivitySnapshot({ sessionId, sessionKey }).lastProgressReason,
+      );
+      return createStableNoProgressWriteResult();
+    });
+    const loopDetectionContext = {
+      ...enabledLoopDetectionContext,
+      sessionId,
+      sessionKey,
+      runId,
+    };
+    markDiagnosticEmbeddedRunStarted({ sessionId, sessionKey, runId });
+    const tool = createWrappedTool("write", execute, loopDetectionContext);
+    return { progressReasonsDuringExecution, execute, tool };
+  }
 
   function createWrappedTool(
     name: string,
@@ -780,21 +793,11 @@ describe("before_tool_call loop detection behavior", () => {
     const sessionId = "write-churn-rewrite-session";
     const sessionKey = "main";
     const runId = "write-churn-rewrite-run";
-    const progressReasonsDuringExecution: Array<string | undefined> = [];
-    const execute = vi.fn().mockImplementation(async (_toolCallId: string, _params: unknown) => {
-      progressReasonsDuringExecution.push(
-        getDiagnosticSessionActivitySnapshot({ sessionId, sessionKey }).lastProgressReason,
-      );
-      return createStableNoProgressWriteResult();
-    });
-    const loopDetectionContext = {
-      ...enabledLoopDetectionContext,
+    const { progressReasonsDuringExecution, execute, tool } = createObservedChurnWriteTool(
       sessionId,
       sessionKey,
       runId,
-    };
-    markDiagnosticEmbeddedRunStarted({ sessionId, sessionKey, runId });
-    const tool = createWrappedTool("write", execute, loopDetectionContext);
+    );
     const paths = ["/tmp/a.md", "/tmp/b.md", "/tmp/a.md", "/tmp/a.md", "/tmp/b.md"];
 
     for (let index = 0; index < GLOBAL_CIRCUIT_BREAKER_THRESHOLD; index += 1) {
@@ -830,21 +833,11 @@ describe("before_tool_call loop detection behavior", () => {
     const sessionId = "write-churn-below-threshold-session";
     const sessionKey = "main";
     const runId = "write-churn-below-threshold-run";
-    const progressReasonsDuringExecution: Array<string | undefined> = [];
-    const execute = vi.fn().mockImplementation(async (_toolCallId: string, _params: unknown) => {
-      progressReasonsDuringExecution.push(
-        getDiagnosticSessionActivitySnapshot({ sessionId, sessionKey }).lastProgressReason,
-      );
-      return createStableNoProgressWriteResult();
-    });
-    const loopDetectionContext = {
-      ...enabledLoopDetectionContext,
+    const { progressReasonsDuringExecution, tool } = createObservedChurnWriteTool(
       sessionId,
       sessionKey,
       runId,
-    };
-    markDiagnosticEmbeddedRunStarted({ sessionId, sessionKey, runId });
-    const tool = createWrappedTool("write", execute, loopDetectionContext);
+    );
     const paths = ["/tmp/a.md", "/tmp/b.md", "/tmp/a.md", "/tmp/b.md", "/tmp/a.md", "/tmp/b.md"];
 
     for (const [index, targetPath] of paths.entries()) {

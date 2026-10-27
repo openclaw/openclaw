@@ -24,6 +24,9 @@ afterEach(() => {
 function fixtureOptions(...rows: Array<[string, string, boolean?]>): MultiSelectOption[] {
   return rows.map(([value, label, disabled]) => ({ value: `fixture/${value}`, label, disabled }));
 }
+function createFixture(rows: Array<[string, string, boolean?]>, value: string[] = []) {
+  return createMultiSelect({ options: fixtureOptions(...rows), value, isExcluded: () => false });
+}
 async function createMultiSelect(overrides: MultiSelectInput = {}) {
   const props = {
     options,
@@ -46,11 +49,10 @@ async function createMultiSelect(overrides: MultiSelectInput = {}) {
   };
 }
 function input(element: HTMLElement): HTMLInputElement {
-  const found = element.querySelector<HTMLInputElement>("input.multi-select__input");
-  if (!found) {
-    throw new Error("multi-select input missing");
-  }
-  return found;
+  return element.querySelector<HTMLInputElement>("input.multi-select__input")!;
+}
+function highlighted(element: HTMLElement) {
+  return element.querySelector('[aria-selected="true"]')?.getAttribute("data-value");
 }
 function values(element: HTMLElement, kind: "option" | "chip") {
   return Array.from(element.querySelectorAll(`.multi-select__${kind}`), (node) =>
@@ -76,11 +78,10 @@ async function clickField(element: HTMLElement) {
   flush();
 }
 it("does not commit a disabled choice but keeps available choices usable", async () => {
-  const { element, props } = await createMultiSelect({
-    value: [],
-    isExcluded: () => false,
-    options: fixtureOptions(["blocked", "Blocked", true], ["ready", "Ready"]),
-  });
+  const { element, props } = await createFixture([
+    ["blocked", "Blocked", true],
+    ["ready", "Ready"],
+  ]);
   await clickField(element);
   const blocked = element.querySelector<HTMLElement>('[data-value="fixture/blocked"]');
   blocked?.click();
@@ -110,15 +111,14 @@ it.each(["content", "trigger"])(
   },
 );
 it("keeps disabled choices out of typed additions without discarding saved chips", async () => {
-  const { element, props } = await createMultiSelect({
-    value: ["fixture/saved"],
-    isExcluded: () => false,
-    options: fixtureOptions(
+  const { element, props } = await createFixture(
+    [
       ["saved", "Saved", true],
       ["blocked", "Blocked", true],
       ["ready", "Ready"],
-    ),
-  });
+    ],
+    ["fixture/saved"],
+  );
   await typeText(element, "fixture/blocked, fixture/ready");
   await pressKey(element, ",");
   expect(props.onChange).toHaveBeenCalledWith(["fixture/saved", "fixture/ready"]);
@@ -127,26 +127,18 @@ it("keeps disabled choices out of typed additions without discarding saved chips
   expect(props.onChange).toHaveBeenLastCalledWith([]);
 });
 it("skips disabled choices in both keyboard directions", async () => {
-  const { element, props } = await createMultiSelect({
-    value: [],
-    isExcluded: () => false,
-    options: fixtureOptions(["first", "First"], ["blocked", "Blocked", true], ["last", "Last"]),
-  });
+  const { element, props } = await createFixture([
+    ["first", "First"],
+    ["blocked", "Blocked", true],
+    ["last", "Last"],
+  ]);
   await clickField(element);
-  await waitForSolid(() =>
-    expect(element.querySelector('[aria-selected="true"]')?.getAttribute("data-value")).toBe(
-      "fixture/first",
-    ),
-  );
+  await waitForSolid(() => expect(highlighted(element)).toBe("fixture/first"));
   await pressKey(element, "ArrowDown");
   expect(document.activeElement).toBe(input(element));
-  expect(element.querySelector('[aria-selected="true"]')?.getAttribute("data-value")).toBe(
-    "fixture/last",
-  );
+  expect(highlighted(element)).toBe("fixture/last");
   await pressKey(element, "ArrowUp");
-  expect(element.querySelector('[aria-selected="true"]')?.getAttribute("data-value")).toBe(
-    "fixture/first",
-  );
+  expect(highlighted(element)).toBe("fixture/first");
   await pressKey(element, "ArrowUp");
   await pressKey(element, "Enter");
   expect(props.onChange).toHaveBeenCalledExactlyOnceWith(["fixture/last"]);
@@ -158,20 +150,12 @@ it("removes chips with Backspace on empty text and with the chip button", async 
   element.querySelector<HTMLButtonElement>(".multi-select__chip .chip-remove")?.click();
   expect(props.onChange).toHaveBeenLastCalledWith([gemini]);
 });
-it("moves the highlight with arrow keys and closes on Escape", async () => {
+it("closes on Escape and clears the unconfirmed query", async () => {
   const { element, props } = await createMultiSelect();
   await pressKey(element, "Enter");
   expect(props.onChange).not.toHaveBeenCalled();
   await pressKey(element, "ArrowDown");
   expect(isOpen(element)).toBe(true);
-  await pressKey(element, "ArrowDown");
-  const highlighted = () =>
-    Array.from(element.querySelectorAll(".multi-select__option")).findIndex(
-      (row) => row.getAttribute("aria-selected") === "true",
-    );
-  expect(highlighted()).toBe(1);
-  await pressKey(element, "ArrowUp");
-  expect(highlighted()).toBe(0);
   await typeText(element, "op");
   await pressKey(element, "Escape");
   expect(isOpen(element)).toBe(false);
@@ -224,13 +208,12 @@ it("keeps a bare fallback separate from a real alternate model", async () => {
   const existing = "gpt-5.4-mini";
   const alternate = "local/gpt-5.4-mini";
   const models = { [alternate]: {} };
-  const primaryModelRef = "openai/gpt-5.4";
   const { element, props } = await createMultiSelect({
     options: [{ value: alternate, label: "Alternate model" }],
     value: [existing],
     isExcluded: createPrimaryModelExclusion(
-      { agents: { defaults: { model: { primary: primaryModelRef }, models } } },
-      primaryModelRef,
+      { agents: { defaults: { model: { primary }, models } } },
+      primary,
     ),
     getValueKey: normalizeAgentModelRefForConfig,
   });
@@ -247,12 +230,23 @@ it("selects the visible highlight when a catalog refresh shortens the open list"
   await pressKey(element, "ArrowDown");
   update({ options: options.filter((option) => option.value !== gemini) });
   flush();
-  await waitForSolid(() => {
-    const highlighted = element.querySelector('.multi-select__option[aria-selected="true"]');
-    expect(highlighted?.getAttribute("data-value")).toBe(opus);
-  });
+  await waitForSolid(() => expect(highlighted(element)).toBe(opus));
   await pressKey(element, "Enter");
   expect(props.onChange).toHaveBeenCalledExactlyOnceWith([sonnet, opus]);
+});
+it("finds and selects a model by its displayed description", async () => {
+  const { element, props } = await createMultiSelect({
+    options: [{ value: "fixture/backup", label: "Backup", description: "Regional endpoint" }],
+    value: [],
+    allowCustom: false,
+  });
+  await typeText(element, "endpoint");
+  expect(values(element, "option")).toEqual(["fixture/backup"]);
+  expect(element.querySelector(".picker-select__description")?.textContent).toBe(
+    "Regional endpoint",
+  );
+  await pressKey(element, "Enter");
+  expect(props.onChange).toHaveBeenCalledExactlyOnceWith(["fixture/backup"]);
 });
 it("leaves composing input untouched until the operator confirms the completed value", async () => {
   const { element, props } = await createMultiSelect();

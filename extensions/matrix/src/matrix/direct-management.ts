@@ -44,12 +44,6 @@ type MatrixDirectRoomPromotionResult =
       reason: "not-strict" | "local-explicit-false";
     };
 
-type MatrixDirectRoomMappingWriteResult = {
-  changed: boolean;
-  directContentBefore: MatrixDirectAccountData;
-  directContentAfter: MatrixDirectAccountData;
-};
-
 const directAccountDataWriteQueues = new WeakMap<MatrixClient, Promise<void>>();
 
 async function readMatrixDirectAccountData(client: MatrixClient): Promise<MatrixDirectAccountData> {
@@ -69,7 +63,7 @@ async function writeMatrixDirectRoomMappings(params: {
   client: MatrixClient;
   remoteUserId: string;
   roomIds: readonly string[];
-}): Promise<MatrixDirectRoomMappingWriteResult> {
+}) {
   return await enqueueKeyedTask({
     tails: directAccountDataWriteQueues,
     key: params.client,

@@ -9,16 +9,11 @@ import { resolveDiagnosticModelContentCapturePolicy } from "../infra/diagnostic-
 
 // Callers pass message facts without the discriminant; this owner stamps the
 // event type so listeners' type guards match the dispatched event.
-type MessageProcessedDiagnosticParams = Omit<
-  Extract<DiagnosticEventInput, { type: "message.processed" }>,
-  "type"
-> & {
-  userPrompt?: string;
-  finalResponse?: string;
-};
-
 export function emitMessageProcessedDiagnosticEvent(
-  params: MessageProcessedDiagnosticParams,
+  params: Omit<Extract<DiagnosticEventInput, { type: "message.processed" }>, "type"> & {
+    userPrompt?: string;
+    finalResponse?: string;
+  },
 ): void {
   // Gate each message content field on its own captureContent policy field so that
   // enabling input capture does not leak output text and vice versa.

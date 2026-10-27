@@ -1,3 +1,5 @@
+import "../styles/sidebar-attention-floating.css";
+import "../styles/session-title-placeholder.css";
 import { getObserver } from "@solidjs/signals";
 import type { JSX } from "@solidjs/web";
 import { createEffect, createMemo, onCleanup, onSettled } from "solid-js";
@@ -166,7 +168,11 @@ function AppSidebarContent(
   });
   const narrationState = createParkedProjection(
     () => narrationProjection()?.read(),
-    () => props.navigationVisible,
+    () => {
+      projection.revision();
+      // Preserve live narration for reactivation without preparing hidden previews.
+      return props.navigationVisible && owner.sessionsShowPreview;
+    },
   );
   onSettled(() => context.gateway.subscribeEvents((event) => owner.narration?.handleEvent(event)));
   const presentationRevision = createParkedProjection(
@@ -238,7 +244,7 @@ function AppSidebarContent(
   [owner.sessionData, owner.sessionOrganizer, owner.people].forEach(observe);
   owner.sessionPullRequests = createSessionPullRequestIndicators({
     getConnected: () => prepared().isConnected && props.connected,
-    getPresented: () => props.navigationVisible,
+    getPresented: () => props.navigationVisible && !prepared().sidebarSnapshot,
     getRows: () => prepared().readSessionPullRequestRows(),
     getSelectedAgentId: () => prepared().selectedAgentIdForSessions(),
     getGateway: () => prepared().sessionDataContext?.gateway,

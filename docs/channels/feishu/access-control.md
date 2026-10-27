@@ -47,6 +47,8 @@ openclaw pairing approve feishu <CODE>
 
 Mentions of other people stay readable in the text sent to the agent,
 including when consecutive messages are combined.
+The receiving bot's own mention is kept as well. Command matching ignores addressing
+without removing it from the agent's context.
 
 ### Mentions in bot-started threads
 

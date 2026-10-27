@@ -419,7 +419,8 @@ export async function finishGatewayStartup(params: {
     configRevisionProjector: gatewayRequestContext.configRevisionProjector,
     resolveGatewayContext: resolvePluginGatewayContext,
     minimalTestGateway,
-    initialConfig: cfgAtStart,
+    // Preserve the published startup authority, including plugin activation or a no-op publish.
+    initialConfig: getRuntimeConfig(),
     initialPluginInstallRecords: pluginMetadataSnapshot?.index.installRecords,
     initialCompareConfig: configSnapshot.sourceConfig,
     initialSnapshotRawHash: configSnapshot.exists ? hashConfigRaw(configSnapshot.raw) : null,

@@ -21,6 +21,7 @@ import {
 } from "../config/sessions/session-accessor.sqlite-scope.js";
 import { reduceSessionEntryPatch } from "../config/sessions/session-entry-patch-operation.js";
 import { withInstallationTarget } from "../infra/installation-target-context.js";
+import { useBundledProviderPolicyArtifactsForTest } from "../plugin-sdk/test-helpers/provider-policy-artifacts.test-support.js";
 import { createPluginMetadataSnapshotFixture } from "../plugins/plugin-metadata.test-support.js";
 import { startSessionControllerInterruption } from "../sessions/session-controller.lifecycle.js";
 import { createUserTurnTranscriptRecorder } from "../sessions/user-turn-transcript.js";
@@ -73,6 +74,7 @@ import {
   createAgentRunDirectAbortError,
   createAgentRunRestartAbortError,
 } from "./run-termination.js";
+import { rejectOnNextAbort } from "./test-helpers/abort-signal.js";
 
 const state = vi.hoisted(() => ({
   defaultRuntimeConfig: {
@@ -562,14 +564,11 @@ vi.mock("./agent-scope.js", async () => {
   });
 });
 
-vi.mock("./auth-profiles.js", async () => {
-  const actual = await vi.importActual<typeof import("./auth-profiles.js")>("./auth-profiles.js");
-  return {
-    ...actual,
-    ensureAuthProfileStore: () => ({ profiles: {} }),
-    ensureAuthProfileStoreAsync: async () => ({ profiles: {} }),
-  };
-});
+vi.mock("./auth-profiles.js", async () => ({
+  ...(await vi.importActual<typeof import("./auth-profiles.js")>("./auth-profiles.js")),
+  ensureAuthProfileStore: () => ({ profiles: {} }),
+  ensureAuthProfileStoreAsync: async () => ({ profiles: {} }),
+}));
 
 vi.mock("./auth-profiles/store-runtime.js", async () => {
   const actual = await vi.importActual<typeof import("./auth-profiles/store-runtime.js")>(
@@ -729,6 +728,8 @@ let agentCommand: typeof import("./agent-command.js").agentCommand;
 let prepareAgentCommandExecution: typeof import("./command/prepare.js").prepareAgentCommandExecution;
 let agentCommandFromSystem: typeof import("./agent-command.js").agentCommandFromSystem;
 
+useBundledProviderPolicyArtifactsForTest(["openai", "anthropic"]);
+
 beforeAll(async () => {
   const mod = await import("./agent-command.js");
   agentCommand ??= mod.agentCommand;
@@ -865,6 +866,13 @@ function setupSameModelFallback() {
     );
     return { result, provider: params.provider, model: params.model, attempts: [first] };
   });
+}
+
+function mockSuccessfulModelAttempts(): void {
+  state.runAgentAttemptMock.mockImplementation(
+    async (params: { providerOverride: string; modelOverride: string }) =>
+      makeSuccessResult(params.providerOverride, params.modelOverride),
+  );
 }
 
 function setupSuccessfulAttempt(provider = "openai", model = "gpt-5.4"): void {
@@ -2285,10 +2293,7 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
         attempts: [],
       };
     });
-    state.runAgentAttemptMock.mockImplementation(
-      async (params: { providerOverride: string; modelOverride: string }) =>
-        makeSuccessResult(params.providerOverride, params.modelOverride),
-    );
+    mockSuccessfulModelAttempts();
 
     await runBasicAgentCommand();
 
@@ -2386,10 +2391,7 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
         attempts: [],
       };
     });
-    state.runAgentAttemptMock.mockImplementation(
-      async (params: { providerOverride: string; modelOverride: string }) =>
-        makeSuccessResult(params.providerOverride, params.modelOverride),
-    );
+    mockSuccessfulModelAttempts();
 
     await runBasicAgentCommand();
 
@@ -2463,10 +2465,7 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
       const result = await runSubsequentFallbackAttempt(params, "gmn", "gpt-5.4", "unknown");
       return { result, provider: "gmn", model: "gpt-5.4", attempts: [] };
     });
-    state.runAgentAttemptMock.mockImplementation(
-      async (params: { providerOverride: string; modelOverride: string }) =>
-        makeSuccessResult(params.providerOverride, params.modelOverride),
-    );
+    mockSuccessfulModelAttempts();
 
     await runBasicAgentCommand();
 
@@ -3138,22 +3137,22 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
     state.runtimeConfigMock = createConfiguredModelCompatRuntimeConfig(true, true);
     setupSuccessfulAttempt("gmn", "gpt-5.4");
 
-    await runBasicAgentCommand({
-      thinking: "xhigh",
-    });
+    await runBasicAgentCommand({ thinking: "xhigh" });
 
     const thinkingArgs = requireRecord(
       mockCallArg(state.isThinkingLevelSupportedMock),
       "thinking args",
     );
-    expect(thinkingArgs.provider).toBe("gmn");
-    expect(thinkingArgs.model).toBe("gpt-5.4");
+    expect([thinkingArgs.provider, thinkingArgs.model]).toEqual(["gmn", "gpt-5.4"]);
     expect(thinkingArgs.level).toBe("xhigh");
     const catalog = requireArray(thinkingArgs.catalog, "thinking catalog");
     expectRecordFields(catalog[0], {
       provider: "gmn",
       id: "gpt-5.4",
-      compat: { supportedReasoningEfforts: ["low", "medium", "high", "xhigh"] },
+      compat: {
+        supportsReasoningEffort: true,
+        supportedReasoningEfforts: ["low", "medium", "high", "xhigh"],
+      },
     });
   });
 
@@ -3410,18 +3409,7 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
         commandSignal = signal;
         entered.resolve();
         signal.throwIfAborted();
-        return await new Promise((_, reject) => {
-          signal.addEventListener(
-            "abort",
-            () =>
-              reject(
-                signal.reason instanceof Error
-                  ? signal.reason
-                  : new Error("Agent command aborted without an Error reason"),
-              ),
-            { once: true },
-          );
-        });
+        return await rejectOnNextAbort(signal, "Agent command aborted without an Error reason");
       });
       const reason = createReason();
       const command = agentCommand({
@@ -3477,14 +3465,13 @@ describe("agentCommand – LiveSessionModelSwitchError retry", () => {
 
     await runBasicAgentCommand();
 
-    const autoPinnedSwitchWrites = persistedEntries().filter((entry) => {
-      return (
+    const autoPinnedSwitchWrites = persistedEntries().filter(
+      (entry) =>
         entry?.providerOverride === "openai" &&
         entry?.modelOverride === "gpt-5.4" &&
         entry?.modelOverrideSource === "auto" &&
-        entry?.modelOverrideFallbackOriginProvider === "anthropic"
-      );
-    });
+        entry?.modelOverrideFallbackOriginProvider === "anthropic",
+    );
     expect(autoPinnedSwitchWrites).toHaveLength(0);
     expectRecordFields(mockCallArg(state.updateSessionStoreAfterAgentRunMock), {
       fallbackProvider: "openai",

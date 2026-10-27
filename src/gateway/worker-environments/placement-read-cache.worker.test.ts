@@ -284,16 +284,22 @@ describe("worker placement read cache", () => {
     });
     await writer.releaseTurnIfOwned(claim);
     const unchanged = await reader.prepareMaintenancePlacements();
-    expect(unchanged.placements).toEqual([]);
+    expect([...unchanged.placements]).toEqual([]);
     expect(reads).not.toHaveBeenCalled();
     const remote = await writer.startDispatch(sessionIdentity("remote"));
-    expect(unchanged.placements).toEqual([remote]);
+    expect([...unchanged.placements]).toEqual([remote]);
     unchanged.assertCurrent();
     unchanged.release();
     const changed = await reader.prepareMaintenancePlacements();
-    expect(changed.placements).toEqual([remote]);
+    expect([...changed.placements]).toEqual([remote]);
+    expect([...changed.placements][0]).toBe([...changed.placements][0]);
+    const callerSnapshot = [...changed.placements];
+    expect(Reflect.set(callerSnapshot[0]!, "sessionKey", "caller-change")).toBe(false);
+    callerSnapshot.length = 0;
+    expect([...changed.placements]).toEqual([remote]);
     changed.assertCurrent();
     changed.release();
+    expect(() => changed.placements).toThrow();
     expect(
       reads.mock.calls.filter(([, command]) => command.type === "workers.placementPreservation"),
     ).toHaveLength(1);

@@ -1,22 +1,20 @@
 import { sql } from "kysely";
-import { executeSqliteQueryTakeFirstSync } from "../../infra/kysely-sync.js";
+import {
+  executeSqliteQuerySync,
+  executeSqliteQueryTakeFirstSync,
+} from "../../infra/kysely-sync.js";
 import { isPostgresSqlConnection } from "../../infra/sql-connection.js";
 import { getSqliteReadScopeRevision } from "../../infra/sqlite-schema-facts.js";
 import { assertTransactionUsable } from "../../infra/sqlite-transaction.js";
-import {
-  openOpenClawAgentDatabase,
-  type OpenClawAgentDatabase,
-} from "../../state/openclaw-agent-db.js";
+import type { OpenClawAgentDatabase } from "../../state/openclaw-agent-db-contract.js";
 import {
   selectActiveTranscriptIdentityRows,
   type CurrentTranscriptProjection,
 } from "./session-accessor.sqlite-projection-read.js";
-import {
-  resolveSqliteTranscriptScope,
-  toDatabaseOptions,
-  type ResolvedTranscriptReadScope,
-  type ResolvedTranscriptScope,
-} from "./session-accessor.sqlite-scope.js";
+import type {
+  ResolvedTranscriptReadScope,
+  ResolvedTranscriptScope,
+} from "./session-accessor.sqlite-scope-helpers.js";
 import { parseSessionEntryJson } from "./session-accessor.sqlite-status.js";
 import { readSessionActorTransactionState } from "./session-actor-transaction.js";
 import { canonicalSessionValidationQuery } from "./session-canonical-key.js";
@@ -32,6 +30,7 @@ import {
   type TranscriptEntryAnchor,
 } from "./transcript-entry-anchor.js";
 import { readMessageIdempotencyKey } from "./transcript-message-identity.js";
+import { TRANSCRIPT_INSERT_BATCH_SIZE } from "./transcript-payload.js";
 import type { InternalSessionEntry } from "./types.js";
 
 export type TranscriptSourceAuthority = Pick<
@@ -186,10 +185,7 @@ function readActiveTranscriptEntryFacts(
       return undefined;
     }
   }
-  const row = executeSqliteQueryTakeFirstSync(
-    params.database.db,
-    selectActiveTranscriptEntryAnchor(params, projection, includeVersion),
-  );
+  const row = readActiveTranscriptEntryRows(params, projection, includeVersion)[0];
   return row
     ? {
         ...row,
@@ -199,23 +195,38 @@ function readActiveTranscriptEntryFacts(
     : undefined;
 }
 
+function readActiveTranscriptEntryRows(
+  params: TranscriptEntryRead,
+  projection?: CurrentTranscriptProjection,
+  includeVersion = false,
+  entryIds?: readonly string[],
+) {
+  return executeSqliteQuerySync(
+    params.database.db,
+    selectActiveTranscriptEntryAnchor(params, projection, includeVersion, entryIds),
+  ).rows;
+}
+
 /** Compose final authority predicates into the anchor's single-statement snapshot. */
 function selectActiveTranscriptEntryAnchor(
   params: TranscriptEntryRead,
   projection?: CurrentTranscriptProjection,
   includeVersion = false,
+  entryIds?: readonly string[],
 ) {
   const query = selectActiveTranscriptIdentityRows(params.database)
     .select([
+      "identity.event_id",
       "identity.seq",
       "identity.parent_id",
       "identity.message_idempotency_key",
       "active.message_position",
     ])
-    .where("identity.session_id", "=", params.resolved.sessionId)
-    .where("identity.event_id", "=", params.entryId)
-    .limit(1);
-  return query.$if(!projection, (selected) =>
+    .where("identity.session_id", "=", params.resolved.sessionId);
+  const selectedIds = entryIds
+    ? query.where("identity.event_id", "in", entryIds)
+    : query.where("identity.event_id", "=", params.entryId).limit(1);
+  return selectedIds.$if(!projection, (selected) =>
     selected
       .innerJoin("transcript_rewrite_watermarks as rewrite", (join) =>
         join.onRef("rewrite.session_id", "=", "identity.session_id"),
@@ -255,27 +266,84 @@ export function readActiveTranscriptEntryAnchorInTransaction(
 /** The append receipt shares its anchor read with the subsequent visible-tail consumer. */
 export function readTranscriptMessageAppendMetadataInTransaction(params: TranscriptEntryRead) {
   const revision = getSqliteReadScopeRevision(params.database.db);
-  const row = readActiveTranscriptEntryFacts(params, undefined, true);
+  return createTranscriptMessageAppendMetadata(
+    params,
+    readActiveTranscriptEntryFacts(params, undefined, true),
+    revision,
+  );
+}
+
+function createTranscriptMessageAppendMetadata(
+  params: TranscriptEntryRead,
+  row: ReturnType<typeof readActiveTranscriptEntryFacts>,
+  revision: ReturnType<typeof getSqliteReadScopeRevision>,
+) {
   const anchor = createTranscriptEntryAnchor({ ...params, row });
-  const postimage: TranscriptAppendPostimage | undefined =
-    revision && anchor && typeof row?.latestSeq === "number"
+  const version =
+    anchor && typeof row?.latestSeq === "number"
       ? {
-          revision,
-          anchor,
-          version: {
-            generation: anchor.generation,
-            rawSeq: row.latestSeq,
-            updatedAt: row.transcriptUpdatedAt ?? null,
-          },
+          generation: anchor.generation,
+          rawSeq: row.latestSeq,
+          updatedAt: row.transcriptUpdatedAt ?? null,
         }
       : undefined;
+  const postimage: TranscriptAppendPostimage | undefined =
+    revision && anchor && version ? { revision, anchor, version } : undefined;
   return retainTranscriptAppendPostimage(
     {
       anchor,
+      version,
       visibleTailEntryId: anchor && row?.seq === row?.latestSeq ? params.entryId : undefined,
     },
     postimage,
   );
+}
+
+/** Fresh linear turns share one final projection read per bounded message chunk. */
+export function readTranscriptMessageAppendMetadataBatchInTransaction(
+  database: TranscriptEntryRead["database"],
+  resolved: ResolvedTranscriptScope,
+  messages: readonly { messageId: string; message: unknown }[],
+): Map<string, ReturnType<typeof readTranscriptMessageAppendMetadataInTransaction>> {
+  const result = new Map<
+    string,
+    ReturnType<typeof readTranscriptMessageAppendMetadataInTransaction>
+  >();
+  const revision = getSqliteReadScopeRevision(database.db);
+  for (let offset = 0; offset < messages.length; offset += TRANSCRIPT_INSERT_BATCH_SIZE) {
+    const chunk = messages.slice(offset, offset + TRANSCRIPT_INSERT_BATCH_SIZE);
+    const first = chunk[0];
+    if (!first) {
+      continue;
+    }
+    const byId = new Map(chunk.map((message) => [message.messageId, message]));
+    const rows = readActiveTranscriptEntryRows(
+      { database, resolved, entryId: first.messageId },
+      undefined,
+      true,
+      chunk.map((message) => message.messageId),
+    );
+    for (const row of rows) {
+      const message = byId.get(row.event_id);
+      if (!message) {
+        continue;
+      }
+      result.set(
+        row.event_id,
+        createTranscriptMessageAppendMetadata(
+          {
+            database,
+            resolved,
+            entryId: row.event_id,
+            message: message.message,
+          },
+          { ...row, generation: row.generation ?? null, latestSeq: row.latestSeq },
+          revision,
+        ),
+      );
+    }
+  }
+  return result;
 }
 
 /** Projects anchor fields after the caller verifies readiness in the same snapshot. */
@@ -314,22 +382,5 @@ export function createTranscriptEntryAnchor(params: {
     effectiveParentId: row.parent_id,
     activeMessagePosition: row.message_position,
     ...(idempotencyKey ? { idempotencyKey } : {}),
-  });
-}
-
-/** Reads one active message identity from the authoritative SQLite projection. */
-export function readActiveTranscriptEntryAnchor(params: {
-  agentId?: string;
-  sessionId: string;
-  sessionKey: string;
-  storePath?: string;
-  entryId: string;
-}): TranscriptEntryAnchor | undefined {
-  const resolved = resolveSqliteTranscriptScope(params);
-  const database = openOpenClawAgentDatabase(toDatabaseOptions(resolved));
-  return readActiveTranscriptEntryAnchorInTransaction({
-    database,
-    resolved,
-    entryId: params.entryId,
   });
 }

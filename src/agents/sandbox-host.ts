@@ -2,10 +2,8 @@ import { createHash } from "node:crypto";
 import { asOptionalRecord as asRecord } from "@openclaw/normalization-core/record-coerce";
 import { containsAsciiControlCharacter } from "@openclaw/normalization-core/string-normalization";
 import { LruCache } from "../infra/lru-cache.js";
-import {
-  COMMAND_PALETTE_SHORTCUTS,
-  createKeyboardShortcutMatcher,
-} from "../shared/keyboard-shortcuts.js";
+import { KEYBOARD_SHORTCUT_MATCHER_SOURCE } from "../shared/keyboard-shortcuts.generated.js";
+import { COMMAND_PALETTE_SHORTCUTS } from "../shared/keyboard-shortcuts.js";
 import { WIDGET_THEME_MESSAGE_TYPE } from "../shared/widget-theme.js";
 import { buildSandboxWidgetScrollBridgeHtml } from "./sandbox-widget-scroll-bridge.js";
 
@@ -48,7 +46,7 @@ function buildSandboxShortcutBridgeHtml(): string {
   const fields=["key","code","keyCode","isComposing","metaKey","ctrlKey","altKey","shiftKey"];
   const getters=fields.map(name=>descriptor(KeyboardEvent.prototype,name).get);
   const combos=${JSON.stringify(COMMAND_PALETTE_SHORTCUTS)};
-  const matcher=(${createKeyboardShortcutMatcher.toString()})();
+  const matcher=(${KEYBOARD_SHORTCUT_MATCHER_SOURCE})();
   const applePlatform=matcher.isApplePlatform();
   let nonce="";
   let returnFocus=null;
@@ -315,9 +313,11 @@ function buildSandboxHostProxyHtml(csp?: SandboxHostCsp): string {
   if (window.self === window.top) throw new Error("invalid MCP App sandbox host");
   let hostOrigin;
   try {
-    const referrer = new URL(document.referrer);
-    if (referrer.protocol !== "http:" && referrer.protocol !== "https:") throw new Error();
-    hostOrigin = referrer.origin;
+    // WebKit sends no referrer when an attached iframe is navigated later, so bind
+    // the browser-reported parent origin; browsers without it keep the referrer.
+    const parent = new URL(location.ancestorOrigins?.[0] ?? document.referrer);
+    if (parent.protocol !== "http:" && parent.protocol !== "https:") throw new Error();
+    hostOrigin = parent.origin;
   } catch { throw new Error("invalid MCP App sandbox parent"); }
   try { void window.top.document; throw new Error("MCP App sandbox isolation failed"); } catch (error) {
     if (error instanceof Error && error.message === "MCP App sandbox isolation failed") throw error;

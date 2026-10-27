@@ -6,13 +6,17 @@ import { Command } from "commander";
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
-import { createTestConfigSnapshot } from "../commands/test-runtime-config-helpers.js";
+import {
+  createPluginPackagingConfigIssues,
+  createTestConfigSnapshot,
+} from "../commands/test-runtime-config-helpers.js";
 import { ConfigMutationConflictError } from "../config/mutation-conflict.js";
 import type { ConfigFileSnapshot, OpenClawConfig } from "../config/types.js";
 import {
   createPluginManifestRecordFixture as createPluginManifestRecord,
   createPluginMetadataSnapshotFixture as createPluginMetadataSnapshot,
 } from "../plugins/plugin-metadata.test-support.js";
+import { expectNoCalls, mockCall } from "../test-utils/mock-call-assertions.js";
 import { configCliMutationRejectionCases } from "./config-cli-rejections.test-support.js";
 import { registerConfigJsonOutputTests } from "./config-cli.json-output.test-support.js";
 import { registerConfigMutationSchemaTests } from "./config-cli.mutation-schema.test-support.js";
@@ -23,6 +27,7 @@ import {
 } from "./config-cli.snapshot.test-support.js";
 import type { ConfigSetDryRunResult } from "./config-set-dryrun.js";
 import { applyCliProfileEnv } from "./profile.js";
+import { getMockCallOutput } from "./test-runtime-capture.js";
 
 // The metadata fixture can reach the runtime mock before ordinary imports finish.
 const { defaultRuntime, resetRuntimeCapture, mockRuntimeModule } = await vi.hoisted(async () => {
@@ -251,32 +256,15 @@ function makeInvalidSnapshot(params: {
   };
 }
 
-function firstMockArg(mock: { mock: { calls: ReadonlyArray<ReadonlyArray<unknown>> } }): unknown {
-  const call = mock.mock.calls[0];
-  if (!call) {
-    throw new Error("expected mock to have at least one call");
-  }
-  return call[0];
-}
-
-function lastMockArg(mock: { mock: { calls: ReadonlyArray<ReadonlyArray<unknown>> } }): unknown {
-  const calls = mock.mock.calls;
-  const call = calls[calls.length - 1];
-  if (!call) {
-    throw new Error("expected mock to have at least one call");
-  }
-  return call[0];
-}
-
 function parseLastLogPayload(): unknown {
-  const raw = lastMockArg(mockLog);
+  const raw = mockCall(mockLog, -1)[0];
   expect(typeof raw).toBe("string");
   return JSON.parse(String(raw)) as unknown;
 }
 
 async function runValidateJsonAndGetPayload() {
   await expect(runConfigCommand(["config", "validate", "--json"])).rejects.toThrow(ExitError);
-  const raw = firstMockArg(mockLog);
+  const raw = mockCall(mockLog)[0];
   expect(typeof raw).toBe("string");
   return JSON.parse(String(raw)) as {
     valid: boolean;
@@ -291,7 +279,7 @@ async function runValidateJsonAndGetPayload() {
 }
 
 function firstWrittenConfig(): OpenClawConfig {
-  const written = firstMockArg(mockWriteConfigFile);
+  const written = mockCall(mockWriteConfigFile)[0];
   if (!written) {
     throw new Error("expected written config");
   }
@@ -311,15 +299,15 @@ function requireWriteOptions(): NonNullable<Parameters<ConfigCliWriter>[1]> {
 }
 
 function expectLogIncludes(text: string) {
-  expect(mockLog.mock.calls.map((call) => String(call[0])).join("\n")).toContain(text);
+  expect(getMockCallOutput(mockLog)).toContain(text);
 }
 
 function expectLogExcludes(text: string) {
-  expect(mockLog.mock.calls.map((call) => String(call[0])).join("\n")).not.toContain(text);
+  expect(getMockCallOutput(mockLog)).not.toContain(text);
 }
 
 function expectErrorIncludes(text: string) {
-  expect(mockError.mock.calls.map((call) => String(call[0])).join("\n")).toContain(text);
+  expect(getMockCallOutput(mockError)).toContain(text);
 }
 
 const requireRecord = createRequireRecord("record", "expected-label-object");
@@ -345,12 +333,6 @@ function runConfigSet(...args: string[]) {
 
 function runConfigPatch(file: string, ...args: string[]) {
   return runConfigCommand(["config", "patch", "--file", file, ...args]);
-}
-
-function expectNoCalls(...mocks: Array<{ mock: { calls: unknown[][] } }>) {
-  for (const mock of mocks) {
-    expect(mock).not.toHaveBeenCalled();
-  }
 }
 
 function runDiscordRef(provider: string, source: string, id: string, ...options: string[]) {
@@ -476,7 +458,7 @@ describe("config cli", () => {
       } catch {
         // Tolerated: any downstream rejection. Inspected below.
       }
-      const errorMessages = mockError.mock.calls.map((call) => String(call[0])).join("\n");
+      const errorMessages = getMockCallOutput(mockError);
       expect(errorMessages).not.toContain("auto-managed");
     });
 
@@ -631,22 +613,7 @@ describe("config cli", () => {
     it.each([
       {
         name: "plugin packaging compiled-output failures",
-        snapshot: () =>
-          makeInvalidSnapshot({
-            issues: [
-              {
-                path: "plugins.slots.memory",
-                message: "plugin not found: source-only-pack",
-              },
-            ],
-            warnings: [
-              {
-                path: "plugins",
-                message:
-                  "plugin source-only-pack: installed plugin package requires compiled runtime output for TypeScript entry index.ts: expected ./dist/index.js. This is a plugin packaging issue, not a local config problem.",
-              },
-            ],
-          }),
+        snapshot: () => makeInvalidSnapshot(createPluginPackagingConfigIssues()),
         messages: [
           "plugin not found: source-only-pack",
           "This is a plugin packaging issue, not a local config problem.",
@@ -672,9 +639,7 @@ describe("config cli", () => {
         await expect(runConfigCommand(["config", "validate"])).rejects.toThrow(ExitError);
         messages.forEach(expectErrorIncludes);
         for (const text of excludes) {
-          expect(mockError.mock.calls.map((call) => String(call[0])).join("\n")).not.toContain(
-            text,
-          );
+          expect(getMockCallOutput(mockError)).not.toContain(text);
         }
         expect(mockLog).not.toHaveBeenCalled();
       },
@@ -1000,7 +965,7 @@ describe("config cli", () => {
           await run;
         } else {
           await expect(run).rejects.toThrow(ExitError);
-          const payload = lastMockArg(defaultRuntime.writeJson) as ConfigSetDryRunResult;
+          const payload = mockCall(defaultRuntime.writeJson, -1)[0] as ConfigSetDryRunResult;
           const messages = payload.errors?.map((error) => error.message) ?? [];
           expect(messages).toEqual(
             expect.arrayContaining([

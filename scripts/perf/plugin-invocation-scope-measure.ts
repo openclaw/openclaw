@@ -94,6 +94,8 @@ const { getPluginRuntimeGatewayRequestScope, withPluginRuntimeRegistryScope } =
   await import("../../src/plugins/runtime/gateway-request-scope.js");
 const { getPluginInstance } = await import("../../src/plugins/plugin-instance-scope.js");
 const { PluginInstance } = await import("../../src/plugins/plugin-instance.js");
+const { withPluginRetentionOwner } =
+  await import("../../src/plugins/plugin-retention-diagnostics.js");
 const { acquirePluginRegistryForInspection } = await import("../../src/plugins/loader.js");
 type Registry = Awaited<ReturnType<typeof acquirePluginRegistryForInspection>>["registry"];
 let registry: Registry;
@@ -293,7 +295,10 @@ try {
     const before = { factories, assemblies, disposals };
     for (let index = 0; index < count; index++) {
       const started = performance.now();
-      await turn();
+      await withPluginRetentionOwner(
+        { agentId: "main", sessionKey: "synthetic-turn", runId: "synthetic-run" },
+        () => turn(),
+      );
       latencies?.push(performance.now() - started);
       await (yieldMs ? delay(yieldMs) : nextTurn());
     }

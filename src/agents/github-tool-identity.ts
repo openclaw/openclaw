@@ -19,7 +19,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { GitHubToolIdentityConfig } from "../config/types.tools.js";
 import { hasErrnoCode } from "../infra/errno.js";
 import { AGENT_GIT_CONFIG_PARAMETERS } from "../infra/git-maintenance-env.js";
-import { resolveAgentConfig, resolveAgentWorkspaceDir } from "./agent-scope.js";
+import { resolveAgentEntry, resolveAgentWorkspaceDir } from "./agent-scope-config.js";
 import {
   prepareAppGitHubIdentity,
   configuredAppGitHubIdentityFacts,
@@ -89,7 +89,7 @@ export function resolveConfiguredGitHubToolIdentity(params: {
   scope: "system" | "agent";
 }): GitHubToolIdentityConfig | undefined {
   return params.scope === "agent"
-    ? resolveAgentConfig(params.config, params.agentId)?.tools?.github
+    ? resolveAgentEntry(params.config, params.agentId)?.tools?.github
     : params.config.tools?.github;
 }
 
@@ -549,7 +549,7 @@ export async function prepareGitHubPublicationOptionsIdentity(
   let nativeStale = false;
   const { prepared, stale } = await prepareSharedGitHubIdentity(
     { ...params, allowStale: true },
-    resolveGitHubToolIdentity(params),
+    selected,
     (env, requireAbsentProof, host) =>
       readCachedNativeGitHubToken(env, requireAbsentProof, host, {
         onStale: () => {
@@ -663,6 +663,7 @@ export async function refreshManagedGitHubProfile(params: {
   token: string;
   expectedAccountId: number;
   assertCurrent?: () => void;
+  prepareEffect?: () => Promise<void>;
 }): Promise<GitHubToolAccount> {
   if (!(await isPrivateManagedGitHubProfile(params.profileDir))) {
     throw new Error("The configured GitHub identity profile is unavailable.");
@@ -678,6 +679,8 @@ export async function refreshManagedGitHubProfile(params: {
     throw new Error("The configured GitHub identity profile is unavailable.");
   }
   const profile = await fsRoot(params.profileDir);
+  await params.prepareEffect?.();
+  params.assertCurrent?.();
   await profile.write(
     "hosts.yml",
     managedGitHubHosts({ login: account.login, token: credential }),
@@ -702,6 +705,7 @@ export async function installManagedGitHubProfile(params: {
   commitConfig: (account: GitHubToolAccount) => Promise<void>;
   retainProfileOnCommitFailure?: boolean;
   assertCurrent?: () => void;
+  prepareEffect?: () => Promise<void>;
 }): Promise<GitHubToolAccount> {
   const parent = path.dirname(params.profileDir);
   await fs.mkdir(parent, { recursive: true, mode: 0o700 });
@@ -716,9 +720,11 @@ export async function installManagedGitHubProfile(params: {
       login: account.login,
       token: credential,
     });
+    await params.prepareEffect?.();
     params.assertCurrent?.();
     await fs.rename(stagedProfile, params.profileDir);
     published = true;
+    await params.prepareEffect?.();
     params.assertCurrent?.();
     await params.commitConfig(account);
     clearNativeGitHubTokenCache();

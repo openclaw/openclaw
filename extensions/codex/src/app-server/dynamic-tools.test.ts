@@ -1421,10 +1421,7 @@ it("records the hook-selected file after remote Slack upload preparation", async
 });
 describe("Codex automation tool references", () => {
   function setup(options: { registeredSpecs?: CodexDynamicToolSpec[] } = {}) {
-    const execute = vi.fn(async (_id: string, args: unknown) => ({
-      content: [{ type: "text" as const, text: "observed" }],
-      details: args,
-    }));
+    const execute = vi.fn(async (_id: string, args: unknown) => textToolResult("observed", args));
     const tools = [
       createTool("automations", { execute }),
       createTool("sandbox_exec", { catalogMode: "direct-only" }),
@@ -1558,7 +1555,8 @@ describe("Codex tool operator hints", () => {
       );
       const response = await bridge.handleToolCall(call, { onAgentToolResult });
       const hint = "workspace-contained by configuration";
-      const message = `Path escapes sandbox root (${root}): ${outside}`;
+      // Host root escapes carry model-visible cwd rebinding guidance (#184901).
+      const message = `Path escapes sandbox root (${root}): ${outside}. Keep patch paths within the bound root. For an authorized task in another repository, ask the parent to respawn the worker with sessions_spawn and cwd set to that repository. Changing exec workdir does not rebind file tools.`;
       expect(logError).toHaveBeenCalledExactlyOnceWith(expect.stringContaining(hint));
       expect(JSON.stringify(logError.mock.calls)).not.toContain(outside);
       expect(toCodexDynamicToolProtocolResponse(response)).toEqual({

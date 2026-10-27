@@ -32,6 +32,27 @@ function present<const T extends unknown[]>(...blocks: T) {
   return { blocks };
 }
 
+const buttons = (label: string, value: string) => ({
+  type: "buttons",
+  buttons: [{ label, value }],
+});
+const select = (placeholder: string, label: string, value: string) => ({
+  type: "select",
+  placeholder,
+  options: [{ label, value }],
+});
+const wideTable = (rows = 1) => {
+  const headers = Array.from({ length: 21 }, (_, index) => `Column ${index}`);
+  return {
+    type: "table",
+    caption: "Wide pipeline",
+    headers,
+    rows: Array.from({ length: rows }, (_entry, row) =>
+      headers.map((_header, column) => (rows === 1 ? `Value ${column}` : `Value ${row}-${column}`)),
+    ),
+  };
+};
+
 function slackConfig() {
   return { channels: { slack: { botToken: "tok" } } };
 }
@@ -109,19 +130,15 @@ describe("Slack action adapter", () => {
     );
   });
   afterEach(() => resetPluginRuntimeStateForTest());
+  const send = (params: ActionContext["params"], context: Partial<ActionContext> = {}) =>
+    dispatch(invoke, "send", params, context);
+  const edit = (params: ActionContext["params"], context: Partial<ActionContext> = {}) =>
+    dispatch(invoke, "edit", params, context);
 
   it("defaults reactions to the current inbound Slack message", async () => {
     const toolContext = { currentMessageId: "171234.567" };
 
-    await dispatch(
-      invoke,
-      "react",
-      {
-        channelId: "C1",
-        emoji: "✅",
-      },
-      { toolContext },
-    );
+    await dispatch(invoke, "react", { channelId: "C1", emoji: "✅" }, { toolContext });
 
     expect(firstAction(invoke)).toMatchObject({
       action: "react",
@@ -133,13 +150,15 @@ describe("Slack action adapter", () => {
   });
 
   it("sends an exact mirrored portable control row once", async () => {
-    const buttons = [{ label: "Approve", action: { type: "callback" as const, value: "approve" } }];
+    const controls = [
+      { label: "Approve", action: { type: "callback" as const, value: "approve" } },
+    ];
 
-    await dispatch(invoke, "send", {
+    await send({
       to: "channel:C1",
       message: "Deploy?",
-      presentation: present({ type: "buttons", buttons }),
-      interactive: present({ type: "buttons", buttons }),
+      presentation: present({ type: "buttons", buttons: controls }),
+      interactive: present({ type: "buttons", buttons: controls }),
     });
 
     const action = firstAction(invoke);
@@ -151,65 +170,6 @@ describe("Slack action adapter", () => {
     expect(elementAt(actions[0]!, 0).value).toBe("approve");
   });
 
-  it("sends native charts with a complete accessible text representation", async () => {
-    await dispatch(invoke, "send", {
-      to: "channel:C1",
-      message: "Revenue summary",
-      presentation: present({
-        type: "chart",
-        chartType: "pie",
-        title: "Revenue mix",
-        segments: [
-          { label: "Product", value: 60 },
-          { label: "Services", value: 40 },
-        ],
-      }),
-    });
-
-    const action = firstAction(invoke);
-    expect(action.content).toBe("Revenue summary");
-    expect(action).not.toHaveProperty("blocks");
-    expect(action).not.toHaveProperty("nativeDataFallbackBaseText");
-    const message = preparedMessages(invoke)[0]!;
-    expect(message.text).toBe(
-      "Revenue summary\n\nRevenue mix (pie chart)\n- Product: 60\n- Services: 40",
-    );
-    expect(blockAt(message, 1)).toEqual({
-      type: "data_visualization",
-      title: "Revenue mix",
-      chart: {
-        type: "pie",
-        segments: [
-          { label: "Product", value: 60 },
-          { label: "Services", value: 40 },
-        ],
-      },
-    });
-  });
-
-  it("sends native tables with a complete accessible text representation", async () => {
-    await dispatch(invoke, "send", {
-      to: "channel:C1",
-      message: "Pipeline summary",
-      presentation: present({
-        type: "table",
-        caption: "Pipeline",
-        headers: ["Account", "ARR"],
-        rows: [
-          ["Acme", 125000],
-          ["Globex", 82000],
-        ],
-      }),
-    });
-
-    const action = firstAction(invoke);
-    expect(action.content).toBe("Pipeline summary");
-    const message = preparedMessages(invoke)[0]!;
-    expect(message.text).toBe(
-      "Pipeline summary\n\nPipeline (table)\nAccount\tARR\nAcme\t125000\nGlobex\t82000",
-    );
-  });
-
   it.each([
     { name: "ASCII", message: `${"x".repeat(4_000)}TAIL` },
     { name: "multibyte", message: `${"😀".repeat(1_000)}TAIL` },
@@ -219,7 +179,7 @@ describe("Slack action adapter", () => {
       message: paddedMarkdownTable,
     },
   ])("rejects oversized $name text-only edits before sending", async ({ message }) => {
-    await expect(dispatch(invoke, "edit", { message })).rejects.toThrow(
+    await expect(edit({ message })).rejects.toThrow(
       "Slack edit exceeds the 4000-byte edit limit. Send a new message instead.",
     );
 
@@ -229,9 +189,7 @@ describe("Slack action adapter", () => {
   it.each(["off", "bullets"] as const)(
     "measures the account's %s table rendering before rejecting an edit",
     async (tables) => {
-      await dispatch(
-        invoke,
-        "edit",
+      await edit(
         { message: paddedMarkdownTable },
         {
           cfg: {
@@ -258,7 +216,7 @@ describe("Slack action adapter", () => {
   it("accepts a text-only edit at Slack's exact byte limit", async () => {
     const message = "x".repeat(4_000);
 
-    await dispatch(invoke, "edit", { message });
+    await edit({ message });
 
     expect(firstAction(invoke)).toMatchObject({ action: "editMessage", content: message });
   });
@@ -266,7 +224,7 @@ describe("Slack action adapter", () => {
   it("keeps oversized notification fallback for visibly rendered block edits", async () => {
     const message = "x".repeat(4_001);
 
-    await dispatch(invoke, "edit", {
+    await edit({
       message,
       presentation: present({ type: "text", text: "Visible block content" }),
     });
@@ -276,7 +234,7 @@ describe("Slack action adapter", () => {
   });
 
   it("edits native tables with a complete accessible text representation", async () => {
-    await dispatch(invoke, "edit", {
+    await edit({
       message: "Updated pipeline",
       presentation: present({
         type: "table",
@@ -295,7 +253,7 @@ describe("Slack action adapter", () => {
   });
 
   it("routes non-native tables through Slack-safe text with native controls", async () => {
-    await dispatch(invoke, "send", {
+    await send({
       to: "channel:C1",
       message: "Summary",
       presentation: present(
@@ -306,65 +264,48 @@ describe("Slack action adapter", () => {
           segments: [{ label: "Product", value: 60 }],
         },
         ...largeTablePresentation().blocks,
-        {
-          type: "buttons",
-          buttons: [{ label: "Stage", value: "stage" }],
-        },
-        {
-          type: "select",
-          placeholder: "Lane",
-          options: [{ label: "Production", value: "production" }],
-        },
+        buttons("Stage", "stage"),
+        select("Lane", "Production", "production"),
       ),
-      interactive: present(
-        {
-          type: "buttons",
-          buttons: [{ label: "Refresh", value: "refresh" }],
-        },
-        {
-          type: "select",
-          placeholder: "Window",
-          options: [{ label: "Recent", value: "recent" }],
-        },
-      ),
+      interactive: present(buttons("Refresh", "refresh"), select("Window", "Recent", "recent")),
     });
 
     const action = firstAction(invoke);
+    expect(action.content).toBe("Summary");
+    expect(action).not.toHaveProperty("nativeDataFallbackBaseText");
     expect(action).not.toHaveProperty("separateTextAndBlocks");
     expect(action).not.toHaveProperty("blocks");
     const messages = preparedMessages(invoke);
     expect(messages).toHaveLength(3);
     expect(messages[0]?.text).toBe("Summary\n\nRevenue mix (pie chart)\n- Product: 60");
-    expect(blockAt(messages[0]!, 1).type).toBe("data_visualization");
+    expect(blockAt(messages[0]!, 1)).toEqual({
+      type: "data_visualization",
+      title: "Revenue mix",
+      chart: { type: "pie", segments: [{ label: "Product", value: 60 }] },
+    });
     expect(messages[1]?.text).toContain("- Account: <@U123>");
     expect(messages[1]?.text).toContain("- Account: account-99");
     expect(messages[1]?.textIsSlackPlainText).toBe(true);
     const controls = messages[2]!;
-    const presentationButtons = blockAt(controls, 0);
-    expect(presentationButtons.block_id).toBe("openclaw_reply_buttons_1");
-    expect(elementAt(presentationButtons, 0)).toMatchObject({
-      action_id: "openclaw:reply_button:1:1",
-      value: "stage",
-    });
-    const presentationSelect = blockAt(controls, 1);
-    expect(presentationSelect.block_id).toBe("openclaw_reply_select_1");
-    expect(elementAt(presentationSelect, 0).action_id).toBe("openclaw:reply_select:1");
-    const legacyButtons = blockAt(controls, 2);
-    expect(legacyButtons.block_id).toBe("openclaw_reply_buttons_2");
-    expect(elementAt(legacyButtons, 0)).toMatchObject({
-      action_id: "openclaw:reply_button:2:1",
-      value: "refresh",
-    });
-    const legacySelect = blockAt(controls, 3);
-    expect(legacySelect.block_id).toBe("openclaw_reply_select_2");
-    expect(elementAt(legacySelect, 0).action_id).toBe("openclaw:reply_select:2");
+    expect(controls.blocks).toMatchObject([
+      {
+        block_id: "openclaw_reply_buttons_1",
+        elements: [{ action_id: "openclaw:reply_button:1:1", value: "stage" }],
+      },
+      { block_id: "openclaw_reply_select_1", elements: [{ action_id: "openclaw:reply_select:1" }] },
+      {
+        block_id: "openclaw_reply_buttons_2",
+        elements: [{ action_id: "openclaw:reply_button:2:1", value: "refresh" }],
+      },
+      { block_id: "openclaw_reply_select_2", elements: [{ action_id: "openclaw:reply_select:2" }] },
+    ]);
     expect(String(messages[1]?.text).length).toBeGreaterThan(8000);
   });
 
   it("keeps an oversized portable control label complete in literal fallback", async () => {
     const label = `Deploy ${"x".repeat(80)}`;
 
-    await dispatch(invoke, "send", {
+    await send({
       to: "channel:C1",
       presentation: present({ type: "buttons", buttons: [{ label, value: "deploy" }] }),
     });
@@ -376,15 +317,8 @@ describe("Slack action adapter", () => {
   });
 
   it("uses text-only edits for non-native tables that fit one message", async () => {
-    const headers = Array.from({ length: 21 }, (_entry, index) => `Column ${String(index)}`);
-
-    await dispatch(invoke, "edit", {
-      presentation: present({
-        type: "table",
-        caption: "Wide pipeline",
-        headers,
-        rows: [headers.map((_header, index) => `Value ${String(index)}`)],
-      }),
+    await edit({
+      presentation: present(wideTable()),
     });
 
     const action = firstAction(invoke);
@@ -393,27 +327,13 @@ describe("Slack action adapter", () => {
   });
 
   it("rejects non-native table edits whose complete fallback cannot fit", async () => {
-    const headers = Array.from({ length: 21 }, (_entry, index) => `Column ${String(index)}`);
-    const presentation = {
-      blocks: [
-        {
-          type: "table" as const,
-          caption: "Wide pipeline",
-          headers,
-          rows: Array.from({ length: 10 }, (_row, rowIndex) =>
-            headers.map(
-              (_header, columnIndex) => `Value ${String(rowIndex)}-${String(columnIndex)}`,
-            ),
-          ),
-        },
-      ],
-    };
+    const presentation = present({ ...wideTable(10), type: "table" as const });
     const fallback = renderSlackMessagePresentationFallbackText({ presentation });
     expect(fallback.length).toBeGreaterThan(4000);
     expect(fallback.length).toBeLessThan(8000);
 
     await expect(
-      dispatch(invoke, "edit", {
+      edit({
         presentation,
       }),
     ).rejects.toThrow("Slack presentation fallback exceeds the 4000-byte edit limit");
@@ -440,7 +360,7 @@ describe("Slack action adapter", () => {
       4000,
     );
 
-    await expect(dispatch(invoke, "edit", { presentation })).rejects.toThrow(
+    await expect(edit({ presentation })).rejects.toThrow(
       "Slack presentation fallback exceeds the 4000-byte edit limit",
     );
     expect(invoke).not.toHaveBeenCalled();
@@ -449,7 +369,7 @@ describe("Slack action adapter", () => {
   it("keeps an unrenderable control label complete in text-only edits", async () => {
     const label = `Deploy ${"x".repeat(80)}`;
 
-    await dispatch(invoke, "edit", {
+    await edit({
       presentation: present({ type: "buttons", buttons: [{ label, value: "deploy" }] }),
     });
 
@@ -461,7 +381,7 @@ describe("Slack action adapter", () => {
     async (type) => {
       const text = "x".repeat(3_001);
 
-      await dispatch(invoke, "edit", {
+      await edit({
         presentation: present({ type, text }),
       });
 
@@ -474,7 +394,7 @@ describe("Slack action adapter", () => {
     { name: "UTF-8 expansion", text: "😀".repeat(1_501) },
   ])("rejects presentation fallback edits that overflow after $name", async ({ text }) => {
     await expect(
-      dispatch(invoke, "edit", {
+      edit({
         presentation: present({ type: "text", text }),
       }),
     ).rejects.toThrow(
@@ -492,7 +412,7 @@ describe("Slack action adapter", () => {
       })),
     };
 
-    await dispatch(invoke, "edit", { presentation });
+    await edit({ presentation });
 
     const action = firstAction(invoke);
     expect(action.blocks).toBeUndefined();
@@ -503,9 +423,7 @@ describe("Slack action adapter", () => {
   it("passes media and rendered interactive blocks through for split Slack delivery", async () => {
     const cfg = slackConfig();
 
-    await dispatch(
-      invoke,
-      "send",
+    await send(
       {
         to: "channel:C1",
         message: "Approval required",
@@ -549,7 +467,7 @@ describe("Slack action adapter", () => {
     ["null thread", { threadId: null }, { threadTs: undefined, topLevel: true }],
   ] as const)("routes send: %s", async (_name, params, expected) => {
     const cfg = slackConfig();
-    await dispatch(invoke, "send", { to: "channel:C1", message: "Reply", ...params }, { cfg });
+    await send({ to: "channel:C1", message: "Reply", ...params }, { cfg });
     expect(firstAction(invoke)).toMatchObject({
       action: "sendMessage",
       to: "channel:C1",

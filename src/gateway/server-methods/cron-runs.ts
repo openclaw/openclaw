@@ -35,7 +35,7 @@ export const cronRunsHandler: GatewayRequestHandler = async (options) => {
   const visibilityRead = createCronSessionVisibility(client, context);
   const assertCurrent = (storeKey: string) => {
     assertCronReadCurrent(options);
-    if (cronStoreKey(context.cronStorePath) !== storeKey) {
+    if ((context.cron.getStoreKey?.() ?? cronStoreKey(context.cronStorePath)) !== storeKey) {
       throw new Error("Cron history store changed; retry the request");
     }
   };
@@ -52,7 +52,7 @@ export const cronRunsHandler: GatewayRequestHandler = async (options) => {
       scope === "all"
         ? await context.cron.list({ includeDisabled: true })
         : [await context.cron.readJob(jobId!)].filter((job) => job !== undefined);
-    const storeKey = cronStoreKey(context.cronStorePath);
+    const storeKey = context.cron.getStoreKey?.() ?? cronStoreKey(context.cronStorePath);
     await visibilityRead.prepare();
     const resolvePageOptions = (): ReadCronRunHistoryPageOptions | undefined => {
       const visibility = visibilityRead.resolve();

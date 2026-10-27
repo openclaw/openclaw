@@ -185,6 +185,8 @@ describe("PostgreSQL schema generation", () => {
   it("preserves mapped types, keys, defaults, index ordering, and foreign-key timing", async () => {
     const directory = fixture(`
       CREATE TABLE parent (id INTEGER PRIMARY KEY AUTOINCREMENT, title TEXT NOT NULL UNIQUE) STRICT;
+      CREATE INDEX parent_id ON parent(id);
+      CREATE INDEX parent_title_length ON parent(length(title) DESC);
       CREATE TABLE child (
         parent_id INTEGER REFERENCES parent(id) ON UPDATE CASCADE ON DELETE SET NULL DEFERRABLE INITIALLY DEFERRED,
         position INTEGER NOT NULL,
@@ -194,7 +196,8 @@ describe("PostgreSQL schema generation", () => {
         payload BLOB,
         PRIMARY KEY (position, alias), UNIQUE (parent_id, label)
       ) STRICT, WITHOUT ROWID;
-      CREATE INDEX child_label ON child(label DESC, position ASC) WHERE parent_id IS NOT NULL;
+      CREATE INDEX child_label ON child(label DESC, position ASC, alias DESC) WHERE parent_id IS NOT NULL;
+      CREATE INDEX child_parent ON child(parent_id);
     `);
     const { files, report } = await generatePostgresSchemas(directory, 'proof"scope');
     const sql = files["state.postgres.sql"]!;
@@ -208,7 +211,10 @@ describe("PostgreSQL schema generation", () => {
     expect(sql).toContain('"ratio" double precision DEFAULT 1.5');
     expect(sql).toContain('"payload" bytea');
     expect(sql).toContain('("label") DESC NULLS LAST');
-    expect(sql).toContain('("position") ASC NULLS FIRST');
+    expect(sql).toContain('(("id") ASC);');
+    expect(sql).toContain('(char_length("title")) DESC NULLS LAST');
+    expect(sql).toContain('(("parent_id") ASC NULLS FIRST);');
+    expect(sql).toContain('("label") DESC NULLS LAST, ("position") ASC, ("alias") DESC');
     expect(sql).toContain('WHERE "parent_id" IS NOT NULL');
     expect(sql).toContain(
       'REFERENCES "parent" ("id") ON UPDATE CASCADE ON DELETE SET NULL DEFERRABLE INITIALLY DEFERRED',
@@ -224,6 +230,31 @@ describe("PostgreSQL schema generation", () => {
     });
     expect(report.catalogs.state!.notes.join("\n")).toContain("sqlite_sequence");
     expect(fs.readdirSync(directory)).toEqual(["src"]);
+  });
+
+  it("uses native ordering only when partial predicates prove a nullable key non-null", () => {
+    withDatabase((db) => {
+      db.exec(`CREATE TABLE entries (value TEXT, other TEXT, required TEXT NOT NULL) STRICT;`);
+      const predicates = [
+        ["direct", "value IS NOT NULL", false],
+        ["conjunction", "other IS NULL AND (value IS NOT NULL)", false],
+        ["both_branches", "value IS NOT NULL OR (other IS NULL AND value IS NOT NULL)", false],
+        ["one_branch", "value IS NOT NULL OR other IS NOT NULL", true],
+        ["negated", "NOT (value IS NOT NULL)", true],
+        ["nullable", "value IS NULL", true],
+        ["literal", "other = 'value IS NOT NULL'", true],
+        ["different_key", "other IS NOT NULL", true],
+      ] as const;
+      for (const [name, predicate] of predicates) {
+        db.exec(`CREATE INDEX ${name} ON entries(value DESC, required) WHERE ${predicate};`);
+      }
+      const indexes = readCatalog(db, "").objects;
+      for (const [name, , nullable] of predicates) {
+        expect(indexes.find((index) => index.name === name)?.sql, name).toContain(
+          `(("value") DESC${nullable ? " NULLS LAST" : ""}, ("required") ASC)`,
+        );
+      }
+    });
   });
 
   it("translates the explicit expression subset and records refusals without weakening indexes", async () => {

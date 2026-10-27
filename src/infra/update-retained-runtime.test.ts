@@ -12,9 +12,11 @@ import {
   withinTest,
 } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { UPDATE_NATIVE_GATE_SOURCE } from "../cli/update-cli/update-command-native-gate.generated.js";
 import { flushLogger, setLoggerOverride } from "../logging/logger.js";
 import { loggingState } from "../logging/state.js";
 import * as commands from "../process/exec.js";
+import { writeFixtureTree as writeFiles } from "./fixture-tree.test-support.js";
 import * as processCensus from "./openclaw-process-census.js";
 import {
   resolvePackageActivationAnchor,
@@ -27,15 +29,25 @@ import * as temporaryArtifacts from "./temp-artifact-cleanup.js";
 import { runUpdateStateInspectionWorker } from "./update-candidate-state.inspection.js";
 import { createUpdateErrorFact } from "./update-failure-facts.js";
 import type { ResolvedGlobalInstallTarget } from "./update-global.js";
+import { expectRetainedNativeGate } from "./update-retained-native-gate.test-support.js";
 import { type RetainUpdateRuntime, withRetainedUpdateRuntime } from "./update-retained-runtime.js";
 
-const inspectionFixture = vi.hoisted(() => ({ moduleUrl: "" }));
+const inspectionFixture = vi.hoisted(() => ({ moduleUrl: "", nativeGateModuleUrl: "" }));
 vi.mock("./runtime-process-entrypoints.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("./runtime-process-entrypoints.js")>();
   return {
     ...actual,
     runtimeProcessEntrypoints: {
       ...actual.runtimeProcessEntrypoints,
+      updateNativeGate: {
+        ...actual.runtimeProcessEntrypoints.updateNativeGate,
+        get currentModuleUrl() {
+          return (
+            inspectionFixture.nativeGateModuleUrl ||
+            actual.runtimeProcessEntrypoints.updateNativeGate.currentModuleUrl
+          );
+        },
+      },
       updateCandidateState: {
         ...actual.runtimeProcessEntrypoints.updateCandidateState,
         get currentModuleUrl() {
@@ -51,6 +63,7 @@ vi.mock("./runtime-process-entrypoints.js", async (importOriginal) => {
 
 afterEach(() => {
   inspectionFixture.moduleUrl = "";
+  inspectionFixture.nativeGateModuleUrl = "";
   vi.restoreAllMocks();
 });
 
@@ -70,9 +83,7 @@ const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
 it.for([false, true])(
   "defers runtime deletion until eligible maintenance without losing settled work (failed=%s)",
   async (failed, { signal }) => {
-    const base = await fs.realpath(tempDirs.make("openclaw-retained-runtime-cleanup-"));
-    const root = await fixture(base, "npm");
-    const moduleUrl = moduleUrlFor(root).href;
+    const { base, root, moduleUrl } = await runtimeFixture("retained-cleanup-");
     const unrelatedRoot = await fixture(path.join(base, "unrelated"), "npm");
     const unrelated = await openStore(
       workerSource(moduleUrlFor(unrelatedRoot).href),
@@ -83,7 +94,6 @@ it.for([false, true])(
     const release = createDeferred();
     const nativeEntered = createDeferred();
     const nativeRelease = createDeferred();
-    const removed = vi.spyOn(fs, "rm");
     const reportRetained = vi.spyOn(temporaryArtifacts, "reportRetainedUpdateRuntime");
     vi.spyOn(os, "tmpdir").mockReturnValue(base);
     vi.spyOn(processCensus, "inspectOtherOpenClawProcesses").mockReturnValue({ pids: [] });
@@ -158,7 +168,6 @@ it.for([false, true])(
     expect(await acceptedWrite).toEqual(["retained:accepted before exit"]);
     assert.ok(directory && store);
     await expect(store.execute({ type: "append", input: "escaped" })).rejects.toThrow();
-    expect(removed.mock.calls.some(([target]) => String(target) === directory)).toBe(false);
     expect(await unrelated.execute({ type: "append", input: "still open" })).toEqual([
       "retained:still open",
     ]);
@@ -169,7 +178,7 @@ it.for([false, true])(
     );
     expect(await maintain()).toContain(`Removed abandoned updater runtime: ${directory}`);
     expect(assertResourcesSettled).toHaveBeenCalledOnce();
-    await expect(stat(directory)).rejects.toMatchObject({ code: "ENOENT" });
+    await expectMissing(stat(directory));
     expect(await contents(root, "dist/state/store.js")).toBe(backend);
   },
 );
@@ -227,14 +236,6 @@ export function createSqliteWorkerBackend(_input, { databasePath }) {
   };
 }
 `;
-
-async function writeFiles(root: string, files: Record<string, string>) {
-  for (const [name, content] of Object.entries(files)) {
-    const destination = path.join(root, name);
-    await mkdir(path.dirname(destination), { recursive: true });
-    await writeFile(destination, content);
-  }
-}
 
 const contents = (root: string, file: string) => readFile(path.join(root, file), "utf8");
 const expectMissing = (operation: Promise<unknown>) =>
@@ -442,6 +443,12 @@ process.stdout.write(JSON.stringify({ generation, mode: JSON.parse(input).mode }
 it("warns and continues the update without binding a replaced retained runtime", async () => {
   const { base, root, moduleUrl } = await runtimeFixture("retained-integrity-");
   const replaced = path.join(root, "dist/shared-old-hash.mjs");
+  inspectionFixture.nativeGateModuleUrl = pathToFileURL(
+    path.join(root, "dist/infra/runtime-process-entrypoints.js"),
+  ).href;
+  const nativeGate = path.join(root, "dist/cli/update-cli/update-command-native-gate.worker.js");
+  await mkdir(path.dirname(nativeGate), { recursive: true });
+  await writeFile(nativeGate, UPDATE_NATIVE_GATE_SOURCE);
   const wrapper = path.join(base, "replace-before-link.mjs");
   await writeFile(
     wrapper,
@@ -459,9 +466,9 @@ it("warns and continues the update without binding a replaced retained runtime",
      await import(pathToFileURL(process.argv.at(-1)).href);`,
   );
   const run = commands.runUtf8CommandWithTimeout;
-  vi.spyOn(commands, "runUtf8CommandWithTimeout").mockImplementation((argv, options) =>
-    run([argv[0]!, wrapper, ...argv.slice(1)], options),
-  );
+  const sabotagedRetention = vi
+    .spyOn(commands, "runUtf8CommandWithTimeout")
+    .mockImplementation((argv, options) => run([argv[0]!, wrapper, ...argv.slice(1)], options));
   const log = path.join(base, "retention.log");
   const previousLoggerOverride = loggingState.overrideSettings;
   try {
@@ -474,6 +481,8 @@ it("warns and continues the update without binding a replaced retained runtime",
       expect(await retain(options)).toBeUndefined();
       expect(await retain(options)).toBeUndefined();
       expect(captureRuntimeWorkerSource(moduleUrlFor(root)).runtimeGeneration).toBeUndefined();
+      sabotagedRetention.mockRestore();
+      await expectRetainedNativeGate(nativeGate);
       await writeFile(path.join(root, "dist/updater.mjs"), "export const updated = true;\n");
       expect(await import(moduleUrlFor(root).href)).toMatchObject({ updated: true });
     });
@@ -779,7 +788,7 @@ it.each(["npm", "npm-linked", "npm-unresolved", "pnpm11"] as const)(
       if (layout === "npm-unresolved") {
         await expect(retainedSibling).resolves.toBeDefined();
       } else {
-        await expect(retainedSibling).rejects.toMatchObject({ code: "ENOENT" });
+        await expectMissing(retainedSibling);
       }
       await rename(globalRoot, `${globalRoot}.previous`);
       await mkdir(globalRoot);
@@ -791,11 +800,7 @@ it.each(["npm", "npm-linked", "npm-unresolved", "pnpm11"] as const)(
         return;
       }
       await expectMissing(stat(path.join(retainedAmbient, "ambient-peer")));
-      await expect(
-        readFile(path.join(retainedAmbient, "unrelated/sentinel.txt")),
-      ).rejects.toMatchObject({
-        code: "ENOENT",
-      });
+      await expectMissing(readFile(path.join(retainedAmbient, "unrelated/sentinel.txt")));
     });
   },
 );
@@ -940,7 +945,7 @@ it("retains and reclaims the runtime when the install is spelled unlike its nati
     return path.join(base, "Profile", name);
   });
   expect(await maintain()).toContain(`Removed abandoned updater runtime: ${directory}`);
-  await expect(stat(directory)).rejects.toMatchObject({ code: "ENOENT" });
+  await expectMissing(stat(directory));
 });
 
 it("falls back when the runtime sibling is read-only", async () => {

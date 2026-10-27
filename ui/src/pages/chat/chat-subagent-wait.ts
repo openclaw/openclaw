@@ -81,25 +81,6 @@ function byLaunch(a: GatewaySessionRow, b: GatewaySessionRow) {
   );
 }
 
-function toActivity(
-  row: GatewaySessionRow,
-  status: ChatSubagentActivity["status"],
-): ChatSubagentActivity {
-  const digest = row.observerDigest;
-  return {
-    session: row,
-    key: row.key,
-    label: resolveSessionDisplayName(row.key, row),
-    status,
-    // A retained headline from the previous run is not current activity.
-    activity:
-      status === "running" && digest?.runId && row.activeRunIds?.includes(digest.runId)
-        ? digest.headline.trim() || undefined
-        : undefined,
-    listed: isSubagentsPanelSession(row),
-  };
-}
-
 function unfinishedStatus(row: GatewaySessionRow): ChatSubagentActivity["status"] {
   return row.status === "queued" ? "queued" : isSessionRunStateActive(row) ? "running" : "waiting";
 }
@@ -116,14 +97,25 @@ export function listSubagents(input: SubagentSession): ChatSubagentActivity[] {
   return directChildren(session, input)
     .filter((row) => !isDashboardSessionKey(row.key))
     .toSorted(byLaunch)
-    .map((row) =>
-      toActivity(
-        row,
+    .map((row): ChatSubagentActivity => {
+      const status =
         row.status === "queued" || isUnfinishedSubagent(row)
           ? unfinishedStatus(row)
-          : (endedWithoutFinishing(row) ?? "done"),
-      ),
-    );
+          : (endedWithoutFinishing(row) ?? "done");
+      const digest = row.observerDigest;
+      return {
+        session: row,
+        key: row.key,
+        label: resolveSessionDisplayName(row.key, row),
+        status,
+        // A retained headline from the previous run is not current activity.
+        activity:
+          status === "running" && digest?.runId && row.activeRunIds?.includes(digest.runId)
+            ? digest.headline.trim() || undefined
+            : undefined,
+        listed: isSubagentsPanelSession(row),
+      };
+    });
 }
 
 /**

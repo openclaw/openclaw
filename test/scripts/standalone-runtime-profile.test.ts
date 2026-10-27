@@ -1,5 +1,4 @@
 import { afterEach, expect, it, vi } from "vitest";
-import { resolveRuntimeExecutionProfile } from "../../standalone-runtime-profile.mjs";
 
 afterEach(() => {
   vi.unstubAllGlobals();
@@ -11,8 +10,10 @@ it.each([
   [{ mode: "jit" as const }, "dynamic-execution"],
   [{ mode: "bytecode" as const }, "dynamic-execution"],
   [{ mode: "aot" as const }, "embedded-aot"],
-] as const)("selects the execution profile from image build facts %j", (build, expected) => {
-  expect(resolveRuntimeExecutionProfile(build)).toBe(expected);
+] as const)("selects the execution profile from image build facts %j", async (build, expected) => {
+  vi.stubGlobal("__openclawStandaloneBuildInfo", build);
+  const { getRuntimeExecutionProfile } = await import("../../standalone-runtime-profile.mjs");
+  expect(getRuntimeExecutionProfile()).toBe(expected);
 });
 
 it("keeps the selected image profile if later metadata changes", async () => {

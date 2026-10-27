@@ -1,4 +1,8 @@
 // Exact owner publication proof over synthetic records; no native SQLite or Gateway claims.
+// install-scope-reference follows each scope import with a reference-only install, using
+// 40 databases with 1,000 session/context keys. Example (also use allocation or counts):
+// node --expose-gc scripts/perf/sqlite-admission-release-measure.mjs "$PWD" \
+//   src/infra/sqlite-database-admission-record.ts candidate timing 3000 100 1 install-scope-reference
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
@@ -19,12 +23,14 @@ const [
   count = "1000",
   warmupCount = "50",
   touchedCount,
+  operation = "release",
 ] = process.argv.slice(2);
 assert(
   sourceRoot && ownerFile,
-  "usage: node --expose-gc SCRIPT SOURCE_ROOT OWNER_FILE LABEL [timing|allocation|counts] [OPERATIONS] [WARMUP] [TOUCHED]",
+  "usage: node --expose-gc SCRIPT SOURCE_ROOT OWNER_FILE LABEL [timing|allocation|counts] [OPERATIONS] [WARMUP] [TOUCHED] [release|install|install-scope|install-scope-reference]",
 );
 assert(["timing", "allocation", "counts"].includes(mode));
+assert(["release", "install", "install-scope", "install-scope-reference"].includes(operation));
 assert(globalThis.gc, "--expose-gc required for cleanup outside measurement");
 const operations = Number(count);
 const warmup = Number(warmupCount);
@@ -64,7 +70,11 @@ const { SqliteDatabaseAdmissionRegistry, SqliteDatabaseGenerationSlot } = await 
   pathToFileURL(moduleFile).href
 );
 const databaseCount = 40;
-const scopesPerDatabase = 3000;
+const scopesPerDatabase = operation === "install-scope-reference" ? 1000 : 3000;
+const scopeKey = (name) =>
+  operation === "install-scope-reference"
+    ? JSON.stringify(["session", name, "model-context"])
+    : name;
 const worker = 100;
 function fixture() {
   const registry = new SqliteDatabaseAdmissionRegistry();
@@ -86,7 +96,7 @@ function fixture() {
       facts: new Map(),
     };
     for (let j = 0; j < scopesPerDatabase; j++) {
-      record.writeScopes.set(`session-${j}`, {
+      record.writeScopes.set(scopeKey(`session-${j}`), {
         identity: `scope-${j}`,
         state: new Int32Array(new SharedArrayBuffer(12)),
       });
@@ -110,12 +120,42 @@ for (const touched of scenarios) {
   const { registry, records } = fixture();
   const targets = records.slice(0, touched);
   const refs = new SharedArrayBuffer(8);
+  let installedScopes = 0;
   const run = () => {
     Atomics.store(new Int32Array(refs), 0, 1);
-    for (const record of targets) {
-      record.references.set(worker, refs);
+    if (operation === "release") {
+      for (const record of targets) {
+        record.references.set(worker, refs);
+      }
+      registry.releaseWorker(worker);
+    } else {
+      const incoming = targets.map((record) => {
+        record.references.delete(worker);
+        const writeScopes = new Map();
+        if (operation.startsWith("install-scope")) {
+          const scope = scopeKey(`installed-${installedScopes++}`);
+          writeScopes.set(scope, {
+            identity: scope,
+            state: new Int32Array(new SharedArrayBuffer(12)),
+          });
+        }
+        return { ...record, facts: new Map(), writeScopes, references: new Map([[worker, refs]]) };
+      });
+      registry.install(incoming);
+      if (operation === "install-scope-reference") {
+        registry.install(
+          targets.map((record) => {
+            record.references.delete(worker + 1);
+            return {
+              ...record,
+              facts: new Map(),
+              writeScopes: new Map(),
+              references: new Map([[worker + 1, refs]]),
+            };
+          }),
+        );
+      }
     }
-    registry.releaseWorker(worker);
   };
   for (let i = 0; i < warmup; i++) {
     run();
@@ -182,18 +222,31 @@ for (const touched of scenarios) {
   await yieldTurn();
   observer.disconnect();
   for (const record of records) {
-    assert(!record.references.has(worker), "departed worker must be absent");
+    assert.equal(
+      record.references.has(worker),
+      operation !== "release" && targets.includes(record),
+    );
     assert.equal(
       Atomics.load(new Int32Array(record.generation), SqliteDatabaseGenerationSlot.retired),
       0,
     );
   }
   if (touched > 0) {
-    assert.equal(Atomics.load(new Int32Array(refs), 0), -1);
+    assert.equal(Atomics.load(new Int32Array(refs), 0), operation === "release" ? -1 : 1);
   }
   const snapshot = getEnvironmentData("openclaw.sqliteDatabaseAdmissions.v1");
   assert.equal(snapshot.length, databaseCount);
-  assert(snapshot.every((record) => !record.references.has(worker)));
+  assert.equal(
+    snapshot.filter((record) => record.references.has(worker)).length,
+    operation !== "release" ? touched : 0,
+  );
+  if (operation.startsWith("install-scope") && touched > 0) {
+    assert(
+      snapshot.some((record) =>
+        record.writeScopes.has(scopeKey(`installed-${installedScopes - 1}`)),
+      ),
+    );
+  }
   const measuredGC = gc.filter((entry) => entry.start >= start && entry.start <= end);
   results.push({
     touched,
@@ -237,6 +290,7 @@ console.log(
   JSON.stringify({
     label,
     mode,
+    operation,
     node: process.version,
     platform: process.platform,
     sourceSha256: createHash("sha256").update(source).digest("hex"),

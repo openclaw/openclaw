@@ -377,6 +377,20 @@ describe("Memory overview request presentation", () => {
     await waitForSolid(() => expect(f.container.textContent).toContain(id));
   }
 
+  it("loads initial and changed locales without replacing accepted controls or reading again", async () => {
+    const f = fixture(snapshot({ locale: "fr" }));
+    await waitForSolid(() => expect(f.container.textContent).toContain("Réveil de la mémoire"));
+    await settle(f, 0, "accepted-engine");
+    const refresh = findButton(f.container, /^Actualiser l’état$/)!;
+    expect(refresh).toBeDefined();
+    f.update({ locale: "de" });
+    await waitForSolid(() =>
+      expect(findButton(f.container, /^Status aktualisieren$/)).toBe(refresh),
+    );
+    expect(f.container.textContent).toContain("accepted-engine");
+    expect(f.request).toHaveBeenCalledTimes(1);
+  });
+
   it("deduplicates ordinary reads and retains cards while an explicit embedding test runs", async () => {
     const f = fixture();
     f.update({ locale: "en" });

@@ -3,6 +3,7 @@ import type { Page } from "playwright";
 import { assert, expect, it } from "vitest";
 import type { CommandEntry } from "../../../packages/gateway-protocol/src/index.js";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
+import { agentRoster } from "./agent-roster.test-support.ts";
 import { polledAttribute, polledText } from "./chat-presentation.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 import { setupPages } from "./model-setup-fixtures.test-support.ts";
@@ -39,12 +40,7 @@ async function installCommands(
   return installMockGateway(page, {
     methodResponses: {
       "chat.startup": {
-        agentsList: {
-          agents: [{ id: "main", name: "OpenClaw" }],
-          defaultId: "main",
-          mainKey: "main",
-          scope: "agent",
-        },
+        agentsList: agentRoster({ main: "OpenClaw" }, "main", "agent"),
         messages: [],
         metadata: { commands, models: [] },
         sessionId,
@@ -58,7 +54,7 @@ async function installCommands(
 
 async function openChat(page: Page, gateway: Awaited<ReturnType<typeof installMockGateway>>) {
   await page.goto(`${suite.server.baseUrl}chat`);
-  await gateway.waitForRequest("chat.startup");
+  await gateway.waitForRequest("sessions.messages.subscribe");
   const composer = page.locator(".agent-chat__composer-combobox textarea");
   await composer.waitFor({ state: "visible" });
   return composer;

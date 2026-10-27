@@ -534,7 +534,7 @@ it.each(["disabled", "needs-setup"] as const)(
         )?.href,
       ).toContain("view=settings");
     } else {
-      expect(page.querySelector('[aria-label="Connect account"]')).not.toBeNull();
+      expect(page.querySelector('[aria-label="Sign in to account"]')).not.toBeNull();
       expect(page.textContent).toContain("Credentials");
     }
     expect(page.querySelector(".plugin-catalog-detail__sidebar")?.textContent).toContain("1.2.3");

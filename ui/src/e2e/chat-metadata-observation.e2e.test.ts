@@ -8,6 +8,7 @@ import {
   type MockGatewayControls,
   type ControlUiMockGatewayScenario,
 } from "../test-helpers/control-ui-e2e.ts";
+import { agentRoster } from "./agent-roster.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
 const suite = createControlUiE2eSuite({ name: "Control UI metadata observation" });
@@ -174,15 +175,7 @@ suite.define(() => {
           sessionKey: "global",
           sessionScope: "global",
           methodResponses: {
-            "agents.list": {
-              agents: [
-                { id: "main", name: "Main" },
-                { id: "work", name: "Work" },
-              ],
-              defaultId: "main",
-              mainKey: "main",
-              scope: "global",
-            },
+            "agents.list": agentRoster({ main: "Main", work: "Work" }, "main", "global"),
             "agent.identity.get": {
               cases: ["main", "work"].map((agentId) => ({
                 match: { agentId },

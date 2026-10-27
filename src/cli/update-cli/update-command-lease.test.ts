@@ -38,6 +38,7 @@ import {
 import {
   cleanupUpdateLeaseHarness,
   entrypoint,
+  events,
   invoke,
   mocks,
   pluginResult,
@@ -123,18 +124,6 @@ registerLeaseServiceRestorationTests({
   expectSuccess: () => expectSuccess("repair"),
   expectRecoveredRun,
 });
-
-async function events(): Promise<string[]> {
-  return (await fs.readFile(state.statePath("events.jsonl"), "utf8"))
-    .trim()
-    .split("\n")
-    .filter(Boolean)
-    .map((line) => {
-      const event = JSON.parse(line) as { event: string; pid: number };
-      expect(event.pid).not.toBe(process.pid);
-      return event.event;
-    });
-}
 
 function expectDoctorDiagnostics(): void {
   expect(defaultRuntime.log).not.toHaveBeenCalledWith(expect.stringContaining("doctor fixture"));

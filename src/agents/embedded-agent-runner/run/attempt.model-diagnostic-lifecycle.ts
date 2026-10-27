@@ -199,7 +199,7 @@ export function createModelLifecycle(params: {
 }) {
   const callId = params.ctx.nextCallId();
   const runContext = getAgentRunContext(params.ctx.runId);
-  const transportContext = {
+  const transportContext: Parameters<typeof withModelTransportContext>[0] = {
     sessionKey: params.ctx.sessionKey,
     runId: params.ctx.runId,
     requestId: callId,
@@ -457,7 +457,7 @@ export function createModelLifecycle(params: {
         durationMs,
         ...providerTimingFields,
         ...sizeTimingFields,
-        ...observer.usageField(),
+        ...observer.terminalFields(),
       },
       ownerGeneration,
       modelContentPrivateData(observer.completedContent()),
@@ -476,6 +476,7 @@ export function createModelLifecycle(params: {
   const notifyFinished = () => {
     if (!finishedNotified) {
       finishedNotified = true;
+      transportContext.onRateLimitWait = undefined;
       clearWait();
       signal?.removeEventListener("abort", clearWait);
       params.ctx.onFinished?.(callId);

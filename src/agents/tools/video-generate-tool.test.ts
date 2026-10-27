@@ -32,6 +32,7 @@ import * as videoGenerationRuntime from "../../video-generation/runtime.js";
 import type { VideoGenerationProvider } from "../../video-generation/types.js";
 import type { AuthProfileStore } from "../auth-profiles/types.js";
 import { formatAgentInternalEventsForPrompt } from "../internal-events.js";
+import { configWithDefaults } from "./media-config.test-support.js";
 import * as videoGenerateBackground from "./media-generate-background.js";
 import {
   defineMediaGenerationCancellationTests,
@@ -59,14 +60,6 @@ function videoAsset(bytes: string | Buffer, fileName: string, mimeType = "video/
 
 function savedMedia(fileName: string, size: number, contentType = "video/mp4") {
   return { path: `/tmp/${fileName}`, id: fileName, size, contentType };
-}
-
-function configWithDefaults(
-  defaults: NonNullable<NonNullable<OpenClawConfig["agents"]>["defaults"]>,
-): OpenClawConfig {
-  const config = { agents: { defaults } };
-  setRuntimeConfigSnapshot(config, config);
-  return config;
 }
 
 const mediaActivityMocks = vi.hoisted(() => ({ listOperations: vi.fn() }));
@@ -281,19 +274,12 @@ describe("createVideoGenerateTool", () => {
         }
       }
       const bytes = JSON.stringify(cold.parameters);
-      const publish = vi.spyOn(toolSchema, "publishRuntimeToolInputSchema");
-      try {
-        for (const sessionId of [
-          "video-schema-first",
-          "video-schema-second",
-          "video-schema-third",
-        ]) {
-          expect(JSON.stringify(construct(sessionId).parameters)).toBe(bytes);
-        }
-        expect(publish).not.toHaveBeenCalled();
-      } finally {
-        publish.mockRestore();
+      using publish = vi.spyOn(toolSchema, "publishRuntimeToolInputSchema");
+
+      for (const sessionId of ["video-schema-first", "video-schema-second", "video-schema-third"]) {
+        expect(JSON.stringify(construct(sessionId).parameters)).toBe(bytes);
       }
+      expect(publish).not.toHaveBeenCalled();
     },
   );
 

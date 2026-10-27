@@ -1,3 +1,4 @@
+import { sanitizeTerminalText } from "../../packages/terminal-core/src/safe-text.js";
 import { createAgentTeam } from "../agents/agent-team.js";
 import { formatCliCommand } from "../cli/command-format.js";
 import { throwExpectedCliError } from "../cli/failure-output.js";
@@ -44,10 +45,10 @@ export async function agentsTeamCreateCommand(opts: {
   }
   runtime.log(`Created team with coordinator "${result.coordinatorId}":`);
   for (const agent of agents) {
-    runtime.log(`- ${agent.agentId}: ${shortenHomePath(agent.workspace)}`);
+    runtime.log(`- ${agent.agentId}: ${sanitizeTerminalText(shortenHomePath(agent.workspace))}`);
   }
   if (note) {
-    runtime.log(note);
+    runtime.log(sanitizeTerminalText(note));
   }
   runtime.log(
     `Talk to the coordinator: ${formatCliCommand(`openclaw agent --agent ${result.coordinatorId} --message "Describe your task"`)}`,

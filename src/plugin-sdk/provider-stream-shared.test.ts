@@ -5,18 +5,18 @@ import { expect, it, vi } from "vitest";
 import { makeProviderModelFixture } from "../agents/test-helpers/provider-model-fixture.js";
 import { createAssistantMessageEventStream } from "../llm/utils/event-stream.js";
 import {
-  createDeepSeekV4OpenAICompatibleThinkingWrapper,
-  createAnthropicThinkingPrefillPayloadWrapper,
-  createOpenAICompatibleCompletionsThinkingOffWrapper,
-  createPayloadPatchStreamWrapper,
-  createPlainTextToolCallCompatWrapper,
-  defaultToolStreamExtraParams,
-  isOpenAICompatibleThinkingEnabled,
-  normalizeOpenAICompatibleReasoningPayload,
-  normalizeOpenAICompatibleReasoningReplay,
-  setQwenChatTemplateThinking,
-  stripTrailingAnthropicAssistantPrefillWhenThinking,
-  transformProviderStreamMessages,
+  createDeepSeekV4OpenAICompatibleThinkingWrapper as deepSeekWrapper,
+  createAnthropicThinkingPrefillPayloadWrapper as prefillWrapper,
+  createOpenAICompatibleCompletionsThinkingOffWrapper as thinkingOffWrapper,
+  createPayloadPatchStreamWrapper as patchWrapper,
+  createPlainTextToolCallCompatWrapper as toolCallWrapper,
+  defaultToolStreamExtraParams as toolStreamParams,
+  isOpenAICompatibleThinkingEnabled as thinkingEnabled,
+  normalizeOpenAICompatibleReasoningPayload as normalizeReasoning,
+  normalizeOpenAICompatibleReasoningReplay as normalizeReplay,
+  setQwenChatTemplateThinking as setQwenThinking,
+  stripTrailingAnthropicAssistantPrefillWhenThinking as stripPrefill,
+  transformProviderStreamMessages as transformMessages,
 } from "./provider-stream-shared.js";
 
 type StreamEvent = { type: string } & Record<string, unknown>;
@@ -164,7 +164,7 @@ async function collectEvents(events: EventFixture[], toolNames = ["read"]): Prom
     }
     outputSource.end();
   });
-  const wrapped = createPlainTextToolCallCompatWrapper(() => outputSource);
+  const wrapped = toolCallWrapper(() => outputSource);
   const stream = await wrapped(
     streamTestModel,
     { tools: toolNames.map((name) => ({ name })) } as never,
@@ -191,7 +191,7 @@ async function nextEvent(iterator: AsyncIterator<unknown>, label: string): Promi
   return result.value as StreamEvent;
 }
 
-it("transformProviderStreamMessages: transforms checkpoint and done result messages while preserving sparse deltas", async () => {
+it("transforms checkpoints and final results while preserving sparse deltas", async () => {
   const partial: AssistantMessage = {
     role: "assistant",
     api: "openai-completions",
@@ -202,16 +202,13 @@ it("transformProviderStreamMessages: transforms checkpoint and done result messa
     stopReason: "stop",
     timestamp: 1,
   };
-  const final: AssistantMessage = {
-    ...partial,
-    usage: createZeroUsageFixture(),
-  };
+  const final: AssistantMessage = { ...partial, usage: createZeroUsageFixture() };
   const source = createAssistantMessageEventStream();
   source.push({ type: "start", partial });
   source.push({ type: "text_delta", contentIndex: 0, delta: "reply" });
   source.push({ type: "done", reason: "stop", message: final });
   source.end();
-  const stream = transformProviderStreamMessages(source, (message) => {
+  const stream = transformMessages(source, (message) => {
     message.usage.cacheTelemetry = { state: "available" };
   });
   const eventTypes: string[] = [];
@@ -227,58 +224,53 @@ it("transformProviderStreamMessages: transforms checkpoint and done result messa
   expect((await stream.result()).usage.cacheTelemetry).toEqual({ state: "available" });
 });
 
-it("defaultToolStreamExtraParams: defaults tool_stream on when absent", () => {
-  expect(defaultToolStreamExtraParams()).toEqual({ tool_stream: true });
-  expect(defaultToolStreamExtraParams({ fastMode: true })).toEqual({
+it("defaults tool_stream on when absent", () => {
+  expect(toolStreamParams()).toEqual({ tool_stream: true });
+  expect(toolStreamParams({ fastMode: true })).toEqual({
     fastMode: true,
     tool_stream: true,
   });
 });
 
-it("defaultToolStreamExtraParams: preserves explicit tool_stream values", () => {
+it("preserves explicit tool_stream values", () => {
   const enabled = { tool_stream: true, fastMode: true };
   const disabled = { tool_stream: false, fastMode: true };
 
-  expect(defaultToolStreamExtraParams(enabled)).toBe(enabled);
-  expect(defaultToolStreamExtraParams(disabled)).toBe(disabled);
+  expect(toolStreamParams(enabled)).toBe(enabled);
+  expect(toolStreamParams(disabled)).toBe(disabled);
 });
 
 it.each([
   { thinkingLevel: undefined, options: {}, enabled: true },
   { thinkingLevel: "off", options: { reasoning: { effort: "off" } }, enabled: true },
 ] as const)(
-  "isOpenAICompatibleThinkingEnabled: resolves thinking $thinkingLevel with request $options to $enabled",
+  "resolves thinking $thinkingLevel with request $options to $enabled",
   ({ thinkingLevel, options, enabled }) => {
-    expect(isOpenAICompatibleThinkingEnabled({ thinkingLevel, options: options as never })).toBe(
-      enabled,
-    );
+    expect(thinkingEnabled({ thinkingLevel, options: options as never })).toBe(enabled);
   },
 );
 
-it.each([true, false])(
-  "setQwenChatTemplateThinking: preserves kwargs when present, enabled=%s",
-  (enabled) => {
-    const payload: Record<string, unknown> = enabled
-      ? { chat_template_kwargs: { custom_flag: "keep", preserve_thinking: false } }
-      : {};
-    setQwenChatTemplateThinking(payload, enabled);
-    expect(payload).toEqual({
-      chat_template_kwargs: enabled
-        ? { custom_flag: "keep", preserve_thinking: false, enable_thinking: true }
-        : { enable_thinking: false, preserve_thinking: true },
-    });
-  },
-);
+it.each([true, false])("preserves kwargs when present, enabled=%s", (enabled) => {
+  const payload: Record<string, unknown> = enabled
+    ? { chat_template_kwargs: { custom_flag: "keep", preserve_thinking: false } }
+    : {};
+  setQwenThinking(payload, enabled);
+  expect(payload).toEqual({
+    chat_template_kwargs: enabled
+      ? { custom_flag: "keep", preserve_thinking: false, enable_thinking: true }
+      : { enable_thinking: false, preserve_thinking: true },
+  });
+});
 it.each([{ max_tokens: 256 }, { effort: "low", summary: "auto" }])(
-  "normalizeOpenAICompatibleReasoningPayload: preserves explicit %j controls",
+  "preserves explicit %j controls",
   (reasoning) => {
     const payload = { reasoning_effort: "high", reasoning };
-    normalizeOpenAICompatibleReasoningPayload(payload, "high");
+    normalizeReasoning(payload, "high");
     expect(payload).toEqual({ reasoning });
   },
 );
 
-it("normalizeOpenAICompatibleReasoningReplay: honors provider-owned tool-call replay selection", () => {
+it("honors provider-owned tool-call replay selection", () => {
   const payload = {
     messages: [
       { role: "assistant", content: "plain" },
@@ -286,7 +278,7 @@ it("normalizeOpenAICompatibleReasoningReplay: honors provider-owned tool-call re
     ],
   };
 
-  normalizeOpenAICompatibleReasoningReplay(payload, {
+  normalizeReplay(payload, {
     thinkingEnabled: true,
     shouldBackfillAssistantMessage: (message) => Array.isArray(message.tool_calls),
   });
@@ -297,7 +289,7 @@ it("normalizeOpenAICompatibleReasoningReplay: honors provider-owned tool-call re
   ]);
 });
 
-it("normalizeOpenAICompatibleReasoningReplay: normalizes nullable reasoning for providers requiring string replay", () => {
+it("normalizes nullable reasoning for providers requiring string replay", () => {
   const payload = {
     messages: [
       { role: "assistant", reasoning_content: null },
@@ -305,7 +297,7 @@ it("normalizeOpenAICompatibleReasoningReplay: normalizes nullable reasoning for 
     ],
   };
 
-  normalizeOpenAICompatibleReasoningReplay(payload, {
+  normalizeReplay(payload, {
     thinkingEnabled: true,
     replaceNullReasoningContent: true,
   });
@@ -316,7 +308,7 @@ it("normalizeOpenAICompatibleReasoningReplay: normalizes nullable reasoning for 
   ]);
 });
 
-it("normalizeOpenAICompatibleReasoningReplay: strips disabled reasoning with assistant-only policy", () => {
+it("strips disabled reasoning with assistant-only policy", () => {
   const payload = {
     messages: [
       { role: "user", reasoning_content: "preserve user" },
@@ -324,7 +316,7 @@ it("normalizeOpenAICompatibleReasoningReplay: strips disabled reasoning with ass
       { role: "tool", reasoning_content: "preserve tool" },
     ],
   };
-  normalizeOpenAICompatibleReasoningReplay(payload, {
+  normalizeReplay(payload, {
     thinkingEnabled: false,
     stripAssistantMessagesOnly: true,
   });
@@ -336,7 +328,7 @@ it("normalizeOpenAICompatibleReasoningReplay: strips disabled reasoning with ass
   ]);
 });
 
-it("createDeepSeekV4OpenAICompatibleThinkingWrapper: backfills reasoning_content on every replayed assistant message when thinking is enabled", () => {
+it("backfills reasoning_content on every replayed assistant message when thinking is enabled", () => {
   const payload = {
     messages: [
       { role: "user", content: "read file" },
@@ -348,7 +340,7 @@ it("createDeepSeekV4OpenAICompatibleThinkingWrapper: backfills reasoning_content
   };
   const baseStreamFn = payloadStream(payload);
 
-  const wrapped = createDeepSeekV4OpenAICompatibleThinkingWrapper({
+  const wrapped = deepSeekWrapper({
     baseStreamFn,
     thinkingLevel: "high",
     shouldPatchModel: () => true,
@@ -362,10 +354,10 @@ it("createDeepSeekV4OpenAICompatibleThinkingWrapper: backfills reasoning_content
   expect(payload.messages[4]).toHaveProperty("reasoning_content", "native reasoning");
 });
 
-it("createPayloadPatchStreamWrapper: calls the underlying stream directly when shouldPatch rejects the model", () => {
+it("calls the underlying stream directly when shouldPatch rejects the model", () => {
   const baseStreamFn = vi.fn<StreamFn>(() => ({}) as ReturnType<StreamFn>);
 
-  const wrapped = createPayloadPatchStreamWrapper(
+  const wrapped = patchWrapper(
     baseStreamFn,
     ({ payload }) => {
       payload.unexpected = true;
@@ -378,9 +370,9 @@ it("createPayloadPatchStreamWrapper: calls the underlying stream directly when s
   expect(baseStreamFn.mock.calls[0]?.[2]?.onPayload).toBeUndefined();
 });
 
-it("createOpenAICompatibleCompletionsThinkingOffWrapper: uses per-call thinking before the undefined default", () => {
+it("uses per-call thinking before the undefined default", () => {
   const { baseStreamFn, payloads } = createPayloadCapture("high");
-  const wrapped = createOpenAICompatibleCompletionsThinkingOffWrapper(baseStreamFn);
+  const wrapped = thinkingOffWrapper(baseStreamFn);
   for (const reasoning of ["off", "max", undefined] as const) {
     void wrapped(lmstudioBinaryModel, { messages: [] }, { reasoning });
   }
@@ -391,17 +383,14 @@ it("createOpenAICompatibleCompletionsThinkingOffWrapper: uses per-call thinking 
 it.each([
   ["no disabled effort", lmstudioBareModel, "high"],
   ["no effort sent", lmstudioBinaryModel, undefined],
-] as const)(
-  "createOpenAICompatibleCompletionsThinkingOffWrapper: omits reasoning_effort with %s",
-  (_name, model, initialEffort) => {
-    const { baseStreamFn, payloads } = createPayloadCapture(initialEffort);
-    const wrapped = createOpenAICompatibleCompletionsThinkingOffWrapper(baseStreamFn, "off");
-    void wrapped(model, { messages: [] }, {});
-    expect(payloads[0]).not.toHaveProperty("reasoning_effort");
-  },
-);
+] as const)("omits reasoning_effort with %s", (_name, model, initialEffort) => {
+  const { baseStreamFn, payloads } = createPayloadCapture(initialEffort);
+  const wrapped = thinkingOffWrapper(baseStreamFn, "off");
+  void wrapped(model, { messages: [] }, {});
+  expect(payloads[0]).not.toHaveProperty("reasoning_effort");
+});
 
-it("createPlainTextToolCallCompatWrapper: does not promote complete-looking text tool calls after a length stop", async () => {
+it("does not promote complete-looking text tool calls after a length stop", async () => {
   const rawToolText = '[tool:read] {"path":"/tmp/file.txt"}';
   const events = await collectEvents([doneEvent(rawToolText, "length")]);
 
@@ -412,7 +401,7 @@ it("createPlainTextToolCallCompatWrapper: does not promote complete-looking text
   });
 });
 
-it("createPlainTextToolCallCompatWrapper: flushes false-positive buffered prefixes around interleaved events in source order", async () => {
+it("flushes false-positive buffered prefixes around interleaved events in source order", async () => {
   const firstText = "[tool:re";
   const secondText = " not a call";
   const events = await collectEvents([
@@ -428,7 +417,7 @@ it("createPlainTextToolCallCompatWrapper: flushes false-positive buffered prefix
   expect(events[2]).toHaveProperty("delta", secondText);
 });
 
-it("createPlainTextToolCallCompatWrapper: keeps possible tool-call text buffered across interleaved non-text events", async () => {
+it("keeps possible tool-call text buffered across interleaved non-text events", async () => {
   const rawToolText = "[tool:read]\n<parameter=path>\nsrc/index.ts\n</parameter>\n</function>";
   const events = await collectEvents([
     { type: "text_delta", contentIndex: 1, delta: rawToolText },
@@ -444,7 +433,7 @@ it("createPlainTextToolCallCompatWrapper: keeps possible tool-call text buffered
   expect(JSON.stringify(events)).not.toContain(rawToolText);
 });
 
-it("createPlainTextToolCallCompatWrapper: scrubs compacted error partials when an emoji crosses the safe prefix boundary", async () => {
+it("scrubs compacted error partials when an emoji crosses the safe prefix boundary", async () => {
   const toolPrefix = "[tool:read]\n<parameter=path>\n";
   const emojiIndex = 255_999;
   const firstChunk = `${toolPrefix}${"x".repeat(emojiIndex - toolPrefix.length)}😀${"y".repeat(70_000)}`;
@@ -465,7 +454,7 @@ it("createPlainTextToolCallCompatWrapper: scrubs compacted error partials when a
   expect(JSON.stringify(events)).not.toContain("[tool:read]");
 });
 
-it("createPlainTextToolCallCompatWrapper: scrubs mixed under-cap calls from multi-block errors without partials", async () => {
+it("scrubs mixed under-cap calls from multi-block errors without partials", async () => {
   const rawCall = "<function=read></function>";
   const visibleText = "Visible answer before the stream error.";
   const rawText = `${rawCall}\n${visibleText}`;
@@ -484,9 +473,9 @@ it("createPlainTextToolCallCompatWrapper: scrubs mixed under-cap calls from mult
   expect(JSON.stringify(events)).not.toContain("<function=read>");
 });
 
-it("createPlainTextToolCallCompatWrapper: promotes split zero-argument XML function calls without leaking partials", async () => {
+it("promotes split zero-argument XML function calls without leaking partials", async () => {
   const source = createAssistantMessageEventStream();
-  const wrapped = createPlainTextToolCallCompatWrapper(() => source);
+  const wrapped = toolCallWrapper(() => source);
   const stream = await wrapped(
     streamTestModel,
     {
@@ -541,29 +530,26 @@ it.each([
   { content: [{ type: "tool_use", id: "toolu_1", name: "Read" }] },
   { content: [{ type: "toolCall", id: "call_1", name: "Read" }] },
   { tool_calls: [{ id: "call_1", name: "Read" }] },
-])(
-  "stripTrailingAnthropicAssistantPrefillWhenThinking: preserves assistant tool-use turns in %j",
-  (message) => {
-    const payload = {
-      thinking: { type: "adaptive" },
-      messages: [{ role: "assistant", ...message }],
-    };
-    expect(stripTrailingAnthropicAssistantPrefillWhenThinking(payload)).toBe(0);
-  },
-);
-it("stripTrailingAnthropicAssistantPrefillWhenThinking: keeps assistant prefill when Anthropic thinking is disabled", () => {
+])("preserves assistant tool-use turns in %j", (message) => {
+  const payload = {
+    thinking: { type: "adaptive" },
+    messages: [{ role: "assistant", ...message }],
+  };
+  expect(stripPrefill(payload)).toBe(0);
+});
+it("keeps assistant prefill when Anthropic thinking is disabled", () => {
   const payload = prefillPayload("disabled");
 
-  expect(stripTrailingAnthropicAssistantPrefillWhenThinking(payload)).toBe(0);
+  expect(stripPrefill(payload)).toBe(0);
   expect(payload.messages).toHaveLength(2);
 });
 
-it("createAnthropicThinkingPrefillPayloadWrapper: reports stripped assistant prefill count", () => {
+it("reports stripped assistant prefill count", () => {
   const payload = prefillPayload("enabled");
   let strippedCount = 0;
   const baseStreamFn = payloadStream(payload);
 
-  const wrapped = createAnthropicThinkingPrefillPayloadWrapper(
+  const wrapped = prefillWrapper(
     baseStreamFn,
     (stripped) => {
       strippedCount = stripped;

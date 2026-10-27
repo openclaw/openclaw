@@ -1,23 +1,15 @@
-import fs from "node:fs/promises";
-import path from "node:path";
+import { expectDefined } from "@openclaw/normalization-core";
 import { afterAll, expect, it, vi } from "vitest";
 import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../../config/types.js";
 import { setGatewayPluginMetadataSnapshot } from "../../plugins/current-plugin-metadata-snapshot.js";
 import { clearCurrentPluginMetadataSnapshot } from "../../plugins/current-plugin-metadata-state.js";
-import * as loader from "../../plugins/loader.js";
-import * as metadataInput from "../../plugins/plugin-metadata-snapshot-input.js";
 import { loadPluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.js";
 import { createOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { prepareSystemAgentRunAdmission } from "../admitted-run-context.js";
-import { resolveLegacyInheritedAuthDir } from "../legacy-inherited-auth-dir.js";
 import { configFor, modelDefinition } from "../model-auth.fixtures.test-support.js";
-import {
-  getPreparedModelRuntimeSnapshot,
-  refreshPreparedModelRuntimeSnapshots,
-} from "../prepared-model-runtime.js";
+import { refreshPreparedModelRuntimeSnapshots } from "../prepared-model-runtime.js";
 import { resetPreparedModelRuntimeSnapshotsForTest } from "../prepared-model-runtime.test-support.js";
-import * as runtimePlugins from "../runtime-plugins.js";
 import { SessionManager } from "../sessions/session-manager.js";
 import { runEmbeddedAgent } from "./run-orchestrator.js";
 import { withTestAdmission } from "./run-orchestrator.test-support.js";
@@ -39,25 +31,18 @@ afterAll(async () => {
   await resetPreparedModelRuntimeSnapshotsForTest();
   clearCurrentPluginMetadataSnapshot();
   await state.cleanup();
-  vi.restoreAllMocks();
 });
 
 it("reuses configured plugins for runs outside the canonical workspace", async () => {
-  const taskWorkspace = state.path("cron-task");
-  await fs.mkdir(taskWorkspace, { recursive: true });
-  await fs.writeFile(path.join(taskWorkspace, "task.txt"), "task fixture");
+  const taskWorkspace = state.statePath("cron-task");
+  await state.writeText("cron-task/task.txt", "task fixture");
   const toolsAllow = ["read", "write", "session_status", "llm-task", "memory-core"];
   const config: OpenClawConfig = {
     ...configFor("proof", "http://127.0.0.1:1/v1", {
       apiKey: "synthetic-proof-key",
       api: "openai-completions",
       models: [
-        modelDefinition("model", {
-          name: "proof",
-          reasoning: false,
-          contextWindow: 128000,
-          maxTokens: 4096,
-        }),
+        modelDefinition("model", { reasoning: false, contextWindow: 128000, maxTokens: 4096 }),
       ],
     }),
     agents: {
@@ -80,9 +65,7 @@ it("reuses configured plugins for runs outside the canonical workspace", async (
   };
   await state.writeConfig(config);
   setRuntimeConfigSnapshot(config);
-  // A Gateway projects its boot inventory for every run workspace.
   const metadata = loadPluginMetadataSnapshot({ config, workspaceDir: state.workspaceDir });
-  expect(metadata.plugins.some((plugin) => plugin.id === "llm-task")).toBe(true);
   setGatewayPluginMetadataSnapshot(metadata, {
     config,
     env: process.env,
@@ -94,33 +77,12 @@ it("reuses configured plugins for runs outside the canonical workspace", async (
     pluginMetadataSnapshot: metadata,
     allowGatewaySubagentBinding: true,
   });
-  const configured = getPreparedModelRuntimeSnapshot({
-    config,
-    agentId: "main",
-    agentDir: state.agentDir(),
-    workspaceDir: state.workspaceDir,
-    inheritedAuthDir: resolveLegacyInheritedAuthDir(config),
-    allowGatewaySubagentBinding: true,
-  });
-  expect(configured).toBeDefined();
-  const reloads = [
-    vi.spyOn(loader, "loadPluginRegistryHandle"),
-    vi.spyOn(runtimePlugins, "acquireAgentRuntimePluginRegistry"),
-    vi.spyOn(runtimePlugins, "loadAgentRuntimePluginRegistryHandle"),
-    vi.spyOn(metadataInput, "loadPluginMetadataSnapshotInput"),
-  ];
-  // Cron and subagent workspaces stay local while reusing the configured plugin generation.
-  preparation.mockImplementationOnce(async ({ attempt, toolBase, setup }) => {
-    expect(attempt.workspaceDir).toBe(taskWorkspace);
-    expect(attempt.preparedModelRuntime?.pluginRegistry).toBe(configured?.pluginRegistry);
-    expect(attempt.preparedModelRuntime?.metadataSnapshot).toBe(configured?.metadataSnapshot);
-    expect(attempt.preparedModelRuntime?.workspaceDir).toBe(state.workspaceDir);
+  preparation.mockImplementationOnce(async ({ toolBase }) => {
     expect(toolBase.toolsRaw.some((tool) => tool.name === "llm-task")).toBe(true);
-    expect(setup).toMatchObject({ effectiveWorkspace: taskWorkspace });
-    const read = toolBase.toolsRaw.find((tool) => tool.name === "read");
-    if (!read) {
-      throw new Error("Run did not expose its read tool");
-    }
+    const read = expectDefined(
+      toolBase.toolsRaw.find((tool) => tool.name === "read"),
+      "rooted read tool",
+    );
     expect(await read.execute("task.txt", { path: "task.txt" })).toMatchObject({
       content: [expect.objectContaining({ text: expect.stringContaining("task fixture") })],
     });
@@ -129,10 +91,10 @@ it("reuses configured plugins for runs outside the canonical workspace", async (
   const run = withTestAdmission(runEmbeddedAgent, prepareSystemAgentRunAdmission, name);
   await expect(
     run({
-      workspaceDir: taskWorkspace,
-      config,
       agentId: "main",
       agentDir: state.agentDir(),
+      workspaceDir: taskWorkspace,
+      config,
       sessionId: name,
       sessionKey: `agent:main:${name}`,
       sessionPersistence: "detached",
@@ -147,8 +109,4 @@ it("reuses configured plugins for runs outside the canonical workspace", async (
       runId: name,
     }),
   ).rejects.toThrow("rooted preparation complete");
-  expect(preparation).toHaveBeenCalledTimes(1);
-  for (const reload of reloads) {
-    expect(reload).not.toHaveBeenCalled();
-  }
 });

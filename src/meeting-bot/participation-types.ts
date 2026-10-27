@@ -48,10 +48,6 @@ export type MeetingParticipationAttempt = {
   correctionOf?: string;
   result?: MeetingParticipationResult;
 };
-type MeetingParticipationStore = Pick<
-  PluginStateKeyedStore<MeetingParticipationAttempt>,
-  "lookup" | "registerIfAbsent" | "register" | "entries" | "delete"
->;
 export type MeetingBrowserParticipationAdapter = {
   capabilities: readonly string[];
   validateAction(action: MeetingParticipationAction): string | undefined;
@@ -79,7 +75,10 @@ export type MeetingBrowserParticipationAdapter = {
   ): MeetingParticipationEffectResult;
 };
 export type MeetingParticipationOptions<TSession> = {
-  store: MeetingParticipationStore;
+  store: Pick<
+    PluginStateKeyedStore<MeetingParticipationAttempt>,
+    "lookup" | "registerIfAbsent" | "register" | "entries" | "delete"
+  >;
   capabilities(session: TSession): readonly string[];
   validateAction(action: MeetingParticipationAction): string | undefined;
   execute(

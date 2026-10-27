@@ -31,6 +31,7 @@ import {
 import {
   appendSqliteTrajectoryRuntimeEvents,
   createTrajectoryEvent,
+  trajectoryEventBytes as eventBytes,
 } from "./runtime-store.test-support.js";
 import type { TrajectoryEvent } from "./types.js";
 
@@ -78,13 +79,6 @@ function appendEvents(
   options: Pick<SqliteTrajectoryRuntimeAppend, "maxRuntimeBytes" | "discardPrevious"> = {},
 ) {
   appendSqliteTrajectoryRuntimeEvents({ sessionId: "session-1", storePath, ...options }, events);
-}
-
-function eventBytes(events: TrajectoryEvent[], initial = 0) {
-  return events.reduce(
-    (bytes, event) => bytes + Buffer.byteLength(JSON.stringify(event)) + 1,
-    initial,
-  );
 }
 
 function serialized(event: TrajectoryEvent) {

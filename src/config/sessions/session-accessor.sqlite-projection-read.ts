@@ -50,21 +50,22 @@ type ActiveTranscriptDatabase = Pick<
 >;
 
 type TranscriptReadDatabase = Pick<OpenClawAgentDatabase, "agentId" | "db" | "path">;
+type ReadonlyFacts<T> = { readonly [K in keyof T]: ReadonlyFacts<T[K]> };
 
 export type CurrentTranscriptProjection = {
   database: TranscriptReadDatabase;
   generation: string | undefined;
   version: SessionTranscriptContextVersion;
   hasUnindexedPrefix: boolean;
-  latestIndexedReset?: SessionTranscriptProjectionFacts["latestIndexedReset"];
+  latestIndexedReset?: ReadonlyFacts<SessionTranscriptProjectionFacts["latestIndexedReset"]>;
   unindexedHistoryControls?: {
     coveredThrough: number;
     rows: readonly UnindexedHistoryControl[];
   };
   resolved: ReturnType<typeof resolveSqliteTranscriptReadScope>;
-  state: SessionTranscriptProjectionState;
-  contextMetadata?: SessionTranscriptContextMetadata;
-  contextStats?: SessionTranscriptContextStats;
+  state: ReadonlyFacts<SessionTranscriptProjectionState>;
+  contextMetadata?: ReadonlyFacts<SessionTranscriptContextMetadata>;
+  contextStats?: ReadonlyFacts<SessionTranscriptContextStats>;
   /** Installed by the history worker; accounting-only snapshots never resolve markers. */
   resolveVisibleHistory?: (projection: CurrentTranscriptProjection) => VisibleHistoryProjection;
 };

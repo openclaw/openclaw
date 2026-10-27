@@ -4,6 +4,7 @@ import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { createComponent, flush, merge } from "solid-js";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { GatewaySessionRow } from "../../api/types.ts";
+import { makeBootRoster } from "../../app/bootstrap.test-support.ts";
 import { loadSettings } from "../../app/settings.ts";
 import { t } from "../../i18n/index.ts";
 import { sessionsResult } from "../../lib/sessions/session-capability.test-support.ts";
@@ -18,16 +19,16 @@ import {
 } from "../../test-helpers/modal-dialog.ts";
 import { mountSolid } from "../../test-helpers/mount-solid.ts";
 import { openSubmenu } from "../../test-helpers/session-menu.ts";
+import { createGatewayBrowserClientFixture } from "./chat-application-context.test-support.ts";
 import { projectChatFields } from "./chat-field-projection.ts";
 import { createMountedPanes, refreshPane } from "./chat-pane-mounted.test-support.ts";
 import {
-  createGatewayBrowserClientFixture,
   createPaneHeaderWorkspaceFixture,
-  createSessionCapabilityFixture,
   createTestChatPane,
   getPaneTestRuntime,
   type TestChatPane,
 } from "./chat-pane.test-support.ts";
+import { createSessionCapabilityFixture } from "./chat-session-capability.test-support.ts";
 import { selectedChatSessionRow } from "./chat-state-route.ts";
 import { renderPaneHeaderInto } from "./components/chat-pane-header.test-support.ts";
 import { PaneHeaderView } from "./components/chat-pane-header.tsx";
@@ -773,15 +774,13 @@ describe("chat pane session menu boundary", () => {
     const patch = vi.fn(async () => ({}));
     const { pane, state } = createTestChatPane({
       client: createGatewayBrowserClientFixture({
-        request: async (method) => {
+        request: async (method, params) => {
           switch (method) {
+            case "agent.identity.get":
+              expect(params).toEqual({ agentId: "research" });
+              return { agentId: "research", name: "Research" };
             case "agents.list":
-              return {
-                defaultId: "main",
-                mainKey: "main",
-                scope: "per-sender",
-                agents: [{ id: "main" }, { id: "research" }],
-              };
+              return makeBootRoster({ agents: [{ id: "main" }, { id: "research" }] });
             case "sessions.describe":
               return { session: null };
             default:

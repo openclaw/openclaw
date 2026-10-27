@@ -65,7 +65,7 @@ import { resolveFeishuMessageDedupeKey } from "./dedupe-key.js";
 import { maybeCreateDynamicAgent } from "./dynamic-agent.js";
 import type { FeishuMessageEvent } from "./event-types.js";
 import type { FeishuIngressLifecycle } from "./feishu-ingress.js";
-import { isFeishuBroadcastMention } from "./mention.js";
+import { isFeishuBroadcastMention, normalizeMentions } from "./mention.js";
 import {
   hasExplicitFeishuGroupConfig,
   normalizeFeishuAllowEntry,
@@ -81,11 +81,7 @@ import { createFeishuReplyDispatcher } from "./reply-dispatcher.js";
 import { getFeishuRuntime } from "./runtime.js";
 import { getMessageFeishu, listFeishuThreadMessages, sendMessageFeishu } from "./send.js";
 import { getFeishuSyntheticDirectPreDispatchTarget } from "./synthetic-event-target.js";
-import {
-  isFeishuGroupChatType,
-  type FeishuMessageContext,
-  type FeishuMessageInfo,
-} from "./types.js";
+import { isFeishuGroupChatType, type FeishuMessageContext } from "./types.js";
 export { parseFeishuMessageEvent } from "./bot-content.js";
 export type { FeishuBotAddedEvent, FeishuMessageEvent } from "./event-types.js";
 
@@ -131,29 +127,6 @@ async function shouldIncludeFetchedGroupContextMessage(params: {
     kind: params.kind,
     senderAllowed,
   }).include;
-}
-
-async function filterFetchedGroupContextMessages<
-  T extends Pick<FeishuMessageInfo, "senderId" | "senderType">,
->(
-  messages: readonly T[],
-  params: Omit<
-    Parameters<typeof shouldIncludeFetchedGroupContextMessage>[0],
-    "senderId" | "senderType"
-  >,
-): Promise<T[]> {
-  const results: Array<T | undefined> = await Promise.all(
-    messages.map(async (message) =>
-      (await shouldIncludeFetchedGroupContextMessage({
-        ...params,
-        senderId: message.senderId,
-        senderType: message.senderType,
-      }))
-        ? message
-        : undefined,
-    ),
-  );
-  return results.filter((message): message is T => message !== undefined);
 }
 
 export async function handleFeishuMessage(params: {
@@ -235,7 +208,9 @@ export async function handleFeishuMessage(params: {
     // bot was addressed. Re-read mismatched mentions with this app's token because open_ids are
     // app-scoped (#40768); names are not stable recipient identities.
     if (isGroup && !ctx.mentionedBot) {
-      let verifiedEvent: FeishuMessageEvent | undefined;
+      let verifiedBotMention:
+        | NonNullable<FeishuMessageEvent["message"]["mentions"]>[number]
+        | undefined;
       try {
         const response = (await createFeishuClient(account).im.message.get({
           params: { user_id_type: "open_id" },
@@ -260,16 +235,9 @@ export async function handleFeishuMessage(params: {
             (mention) => mention.key === verifiedKey && !isFeishuBroadcastMention(mention),
           );
           if (eventMention) {
-            verifiedEvent = {
-              ...event,
-              message: {
-                ...event.message,
-                mentions: event.message.mentions?.map((mention) =>
-                  mention === eventMention
-                    ? { ...mention, id: { ...mention.id, open_id: localBotOpenId } }
-                    : mention,
-                ),
-              },
+            verifiedBotMention = {
+              ...eventMention,
+              id: { ...eventMention.id, open_id: localBotOpenId },
             };
           }
         }
@@ -278,17 +246,18 @@ export async function handleFeishuMessage(params: {
           `feishu[${account.accountId}]: failed to verify bot mention for ${ctx.messageId}: ${String(err)}`,
         );
       }
-      if (!verifiedEvent) {
+      if (!verifiedBotMention) {
         log(
           `feishu[${account.accountId}]: dropping bot message ${ctx.messageId} (local mention not verifiable)`,
         );
         return;
       }
-      const deliveredCtx = parseFeishuMessageEvent(verifiedEvent, localBotOpenId, preparedContent);
       ctx = {
-        ...deliveredCtx,
+        ...ctx,
         mentionedBot: true,
-        content: normalizeFeishuCommandProbeBody(deliveredCtx.content),
+        // Only this receiving bot's identity was verified with the local app.
+        content:
+          `${normalizeMentions(verifiedBotMention.key, [verifiedBotMention])} ${normalizeFeishuCommandProbeBody(ctx.content)}`.trim(),
         // App-scoped IDs cannot safely identify additional recipients here.
         mentionTargets: undefined,
       };
@@ -554,7 +523,7 @@ export async function handleFeishuMessage(params: {
       channel: "feishu",
       accountId: account.accountId,
     });
-    const commandProbeBody = isGroup ? normalizeFeishuCommandProbeBody(ctx.content) : ctx.content;
+    const commandProbeBody = normalizeFeishuCommandProbeBody(ctx.content);
     const shouldComputeCommandAuthorized = core.channel.commands.shouldComputeCommandAuthorized(
       commandProbeBody,
       cfg,
@@ -920,9 +889,7 @@ export async function handleFeishuMessage(params: {
     const effectiveCommandProbeBody =
       audioTranscript === undefined
         ? commandProbeBody
-        : isGroup
-          ? normalizeFeishuCommandProbeBody(audioTranscript)
-          : audioTranscript;
+        : normalizeFeishuCommandProbeBody(audioTranscript);
     const shouldComputeEffectiveCommandAuthorized =
       audioTranscript === undefined
         ? effectiveShouldComputeCommandAuthorized
@@ -1106,10 +1073,19 @@ export async function handleFeishuMessage(params: {
         const senderIds = new Set(
           [ctx.senderOpenId, senderUserId].filter((id): id is string => Boolean(id)),
         );
-        const allowlistedMessages = await filterFetchedGroupContextMessages(threadMessages, {
-          ...fetchedContextPolicy,
-          kind: "history",
-        });
+        const contextResults = await Promise.all(
+          threadMessages.map(async (message) =>
+            (await shouldIncludeFetchedGroupContextMessage({
+              ...fetchedContextPolicy,
+              kind: "history",
+              senderId: message.senderId,
+              senderType: message.senderType,
+            }))
+              ? message
+              : undefined,
+          ),
+        );
+        const allowlistedMessages = contextResults.filter((message) => message !== undefined);
         const relevantMessages = senderScoped
           ? allowlistedMessages.filter(
               (msg) =>
@@ -1234,7 +1210,7 @@ export async function handleFeishuMessage(params: {
           bodyForAgent: messageBody,
           inboundHistory,
           rawBody: commandFacingContent,
-          commandBody: commandFacingContent,
+          commandBody: effectiveCommandProbeBody,
         },
         sessionTranscript: { historyLimit: isGroup ? historyLimit : 0 },
         access: {

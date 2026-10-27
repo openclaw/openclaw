@@ -1,6 +1,7 @@
 {
   "$schema": "./node_modules/oxlint/configuration_schema.json",
   "plugins": ["unicorn", "typescript", "oxc", "import"],
+  "jsPlugins": ["./scripts/oxlint-boundary-guards.mjs"],
   "settings": { "solid": { "version": 2 } },
   "categories": {
     "correctness": "error",
@@ -8,6 +9,7 @@
     "suspicious": "error"
   },
   "rules": {
+    "openclaw-boundaries/no-recursive-readdir": "error",
     "curly": "error",
     "eslint/array-callback-return": "error",
     "eslint/no-underscore-dangle": ["error", { "allow": ["__typename", "_meta"] }],
@@ -368,6 +370,8 @@
       "files": [
         "src/cli/cli-process-diagnostics.test-support.cjs",
         "scripts/perf/async-context-probe.cjs",
+        "scripts/perf/gateway-ui-rpc-preload.mjs",
+        "scripts/perf/session-delete-phases-loader.mjs",
         "scripts/perf/sqlite-reply-census-preload.mjs"
       ],
       "rules": {

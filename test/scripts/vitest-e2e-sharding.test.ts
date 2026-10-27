@@ -63,9 +63,10 @@ function uiSequencer(
   getTestSpecificationResult = (
     _file: TestSpecification,
   ): { failed: boolean; duration: number } | undefined => undefined,
+  shard?: { count: number; index: number },
 ) {
   return new UiE2eSequencer({
-    config: { root: repoRoot },
+    config: { root: repoRoot, shard },
     cache: { getTestSpecificationResult },
   } as unknown as ConstructorParameters<typeof UiE2eSequencer>[0]);
 }
@@ -112,6 +113,47 @@ it("keeps shared UI/Gateway partition ties deterministic without collapsing spec
   expect(shards.map((shard) => shard.length)).toEqual([2, 2]);
   expect(shards.flat()).toHaveLength(discovered.length);
   expect(new Set(shards.flat())).toEqual(new Set(discovered));
+});
+
+it("keeps the UI worker borrowers together without changing discovered or selected files", async () => {
+  const ui = createUiE2eVitestConfig({ OPENCLAW_UI_E2E_SKIP_REAL_GATEWAY: "1" }, []).test!;
+  const discovered = (ui.projects ?? []).flatMap((project) => {
+    if (typeof project !== "object" || project === null || !("test" in project) || !project.test) {
+      return [];
+    }
+    const config = project.test;
+    return globSync(config.include ?? [], { cwd: repoRoot, exclude: config.exclude }).map((file) =>
+      Object.assign({ moduleId: path.join(repoRoot, file) } as TestSpecification, {
+        project: { name: config.name, config },
+      }),
+    );
+  });
+  const borrowerPaths = new Set(
+    [
+      "model-providers-profile-outcomes",
+      "post-deploy-session-entry",
+      "question-guest",
+      "screen-requester-routing",
+    ].map((name) => path.join(repoRoot, "ui/src/e2e", `${name}.e2e.test.ts`)),
+  );
+  expect(discovered.filter((file) => borrowerPaths.has(file.moduleId))).toHaveLength(4);
+  const partition = (files: TestSpecification[]) =>
+    Promise.all(
+      Array.from({ length: 6 }, (_, offset) =>
+        uiSequencer(undefined, { count: 6, index: offset + 1 }).shard(files),
+      ),
+    );
+  const selected = discovered.filter(
+    (file) => !file.moduleId.endsWith("post-deploy-session-entry.e2e.test.ts"),
+  );
+  for (const files of [discovered, selected]) {
+    const shards = await partition(files);
+    expect(shards.flat()).toHaveLength(files.length);
+    expect(new Set(shards.flat())).toEqual(new Set(files));
+    const owners = shards.filter((shard) => shard.some((file) => borrowerPaths.has(file.moduleId)));
+    expect(owners).toHaveLength(1);
+    expect(await partition(files.toReversed())).toEqual(shards);
+  }
 });
 
 it("starts expensive standalone UI work early without crossing serial phase barriers", async () => {

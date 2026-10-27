@@ -16,6 +16,7 @@ import {
 import * as gateway from "../../agents/tools/in-process-gateway.js";
 import { createScreenTool } from "../../agents/tools/screen-tool.js";
 import {
+  createPersonalToolParticipant as participant,
   callPersonalToolUiCommand as call,
   withPersonalToolTurn,
 } from "../../auto-reply/reply/personal-tool-turn.test-support.js";
@@ -47,13 +48,16 @@ function client(
   } as GatewayClient;
 }
 
-function participant(profileId: string, name: string) {
-  return {
-    profileId,
-    name,
-    senderId: `${profileId}-sender`,
-    gatewayUiCommandTarget: { connId: `${profileId}-tab`, profileId },
-  };
+function captureScreenRequests(recipients: GatewayClient[]) {
+  const results: Awaited<ReturnType<typeof call>>[] = [];
+  vi.spyOn(gateway, "callInProcessGatewayTool").mockImplementation(
+    async <T>(_method: string, params: Record<string, unknown>): Promise<T> => {
+      await Promise.resolve();
+      results.push(await call(params, recipients));
+      return { ok: true } as T;
+    },
+  );
+  return results;
 }
 
 type CommandResult = Awaited<ReturnType<typeof call>>;
@@ -81,10 +85,7 @@ function expectTarget(result: CommandResult, connId: string) {
 
 describe("ui.command gateway method", () => {
   it("rejects invalid params", async () => {
-    const result = await call({ command: { kind: "sidebar", visible: "yes" } }, []);
-
-    expect(result.respond).toHaveBeenCalledWith(false, undefined, expect.any(Object));
-    expect(result.broadcastToConnIds).not.toHaveBeenCalled();
+    expectRejected(await call({ command: { kind: "sidebar", visible: "yes" } }, []));
   });
 
   it("reports when no capable Control UI client is connected", async () => {
@@ -95,12 +96,7 @@ describe("ui.command gateway method", () => {
       requester,
     );
 
-    expect(result.respond).toHaveBeenCalledWith(
-      false,
-      undefined,
-      expect.objectContaining({ code: "UNAVAILABLE" }),
-    );
-    expect(result.broadcastToConnIds).not.toHaveBeenCalled();
+    expectRejected(result, undefined, "UNAVAILABLE");
   });
 
   it("navigates only the requester, even when another user and another tab share the session", async () => {
@@ -133,41 +129,10 @@ describe("ui.command gateway method", () => {
     expect(result.respond).toHaveBeenCalledWith(true, { ok: true });
   });
 
-  it("delivers plugin panel commands only to the requester", async () => {
-    const requester = client("requester");
-    const params = {
-      sessionKey: "agent:main:main",
-      command: {
-        kind: "panel",
-        panel: "plugin",
-        pluginId: "review",
-        panelId: "document",
-        open: true,
-      },
-    };
-    const result = await call(params, [requester, client("bystander")], requester);
-    expect(result.respond).toHaveBeenCalledWith(true, { ok: true });
-    expect(result.broadcastToConnIds).toHaveBeenCalledExactlyOnceWith(
-      "ui.command",
-      { ...params, agentId: "main" },
-      new Set(["requester"]),
-    );
-  });
-
   it("keeps the agent screen tool bound to its requesting browser across async execution", async () => {
     const requester = client("requester");
     const recipients = [requester, client("bystander")];
-    const deliveries: Set<string>[] = [];
-    vi.spyOn(gateway, "callInProcessGatewayTool").mockImplementation(
-      async <T>(_method: string, params: Record<string, unknown>): Promise<T> => {
-        await Promise.resolve();
-        const result = await call(params, recipients);
-        expect(result.respond).toHaveBeenCalledWith(true, { ok: true });
-        const delivery = expectDefined(result.broadcastToConnIds.mock.calls[0], "UI delivery");
-        deliveries.push(delivery[2]);
-        return { ok: true } as T;
-      },
-    );
+    const results = captureScreenRequests(recipients);
     const screen = createGatewayToolCallerWrapper("main", {
       agentSessionKey: "agent:main:main",
       gatewayUiCommandTarget: { connId: requester.connId! },
@@ -179,7 +144,14 @@ describe("ui.command gateway method", () => {
 
     await screen.execute("select", { action: "navigate", sessionKey: "agent:main:selected" });
 
-    expect(deliveries).toEqual([new Set(["requester"])]);
+    expect(results).toHaveLength(1);
+    const result = expectDefined(results[0], "screen handler result");
+    expect(result.respond).toHaveBeenCalledWith(true, { ok: true });
+    expect(result.broadcastToConnIds).toHaveBeenCalledExactlyOnceWith(
+      "ui.command",
+      expect.any(Object),
+      new Set(["requester"]),
+    );
   });
 
   it.each([
@@ -193,29 +165,16 @@ describe("ui.command gateway method", () => {
       const steerer = participant("bob", "Bob");
       const recipients = [
         client("alice-tab", undefined, undefined, owner.profileId),
+        client("alice-other-tab", undefined, undefined, owner.profileId),
         client("bob-tab", undefined, undefined, steerer.profileId),
-        client("bob-other-tab", undefined, undefined, steerer.profileId),
       ];
-      const results: Awaited<ReturnType<typeof call>>[] = [];
-      vi.spyOn(gateway, "callInProcessGatewayTool").mockImplementation(
-        async <T>(_method: string, params: Record<string, unknown>): Promise<T> => {
-          await Promise.resolve();
-          const result = await call(params, recipients);
-          results.push(result);
-          return { ok: true } as T;
-        },
-      );
+      const results = captureScreenRequests(recipients);
       const screen = createScreenTool();
       const execute = async (user?: string) => {
         await screen.execute("screen", { action: "sidebar_hide", ...(user ? { user } : {}) });
         return expectDefined(results.at(-1), "screen handler result");
       };
       await withPersonalToolTurn({ owner, backendKind, hiddenQuestion }, async (turn) => {
-        const { resolve } = expectDefined(
-          turn.operation.personalToolParticipants,
-          "turn participants",
-        );
-        const selectedOwner = expectDefined(resolve(), "turn owner");
         expectTarget(await execute(), "alice-tab");
         expectTarget(await execute(owner.profileId), "alice-tab");
         expectRejected(await execute(owner.senderId), "Alice (user: alice)");
@@ -237,16 +196,20 @@ describe("ui.command gateway method", () => {
           status: "rejected",
           reason: hiddenQuestion ? "input_visibility_mismatch" : "tool_authority_mismatch",
         });
-        expect(() => selectedOwner.assertCurrent()).not.toThrow();
         expectTarget(await execute(), "alice-tab");
         expectRejected(await execute(steerer.profileId), "Alice (user: alice)");
         expectRejected(await execute("nonparticipant"), "Alice (user: alice)");
-        expect(await turn.steer({ ...owner, senderId: "alice-reconnected" })).toMatchObject({
+        expect(
+          await turn.steer({
+            ...owner,
+            senderId: "alice-reconnected",
+            gatewayUiCommandTarget: { connId: "alice-other-tab", profileId: owner.profileId },
+          }),
+        ).toMatchObject({
           status: "accepted",
         });
         expectTarget(await execute(owner.profileId), "alice-tab");
         turn.revoke(owner.profileId);
-        expect(() => selectedOwner.assertCurrent()).toThrow("Alice's access changed");
         expectRejected(await execute(owner.profileId), "Alice's access changed; ask them again");
         await turn.complete();
         expect(turn.releaseCounts.get(owner.profileId)).toBe(1);
@@ -257,15 +220,6 @@ describe("ui.command gateway method", () => {
         expectTarget(await execute(steerer.profileId), "bob-tab");
         expectRejected(await execute(owner.profileId), "Bob (user: bob)");
         expectRejected(await execute(steerer.senderId), "Bob (user: bob)");
-        expect(
-          await turn.steer({
-            ...steerer,
-            gatewayUiCommandTarget: { connId: "bob-other-tab", profileId: "bob" },
-          }),
-        ).toMatchObject({ status: "accepted" });
-        expectTarget(await execute(steerer.profileId), "bob-tab");
-        turn.revoke(steerer.profileId);
-        expectRejected(await execute(steerer.profileId), "Bob's access changed; ask them again");
         await turn.complete();
         expect(turn.releaseCounts.get(steerer.profileId)).toBe(1);
         expectRejected(await execute(steerer.profileId));

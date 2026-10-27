@@ -235,6 +235,16 @@ it("retains cumulative worker work, messages, selections and GC across retiremen
       sessionRowSelections: {
         selections: [{ kind: "parent" as const, task: "control-ui-pr", calls: 4, rows: 12 }],
         resets: 2,
+        partitions: [{ task: "sessions.list", hits: 63, misses: 1 }],
+        partitionRevisions: [{ reason: "metadata", changes: 3 }],
+        materialization: {
+          created: 0,
+          reused: 0,
+          rebuilt: 0,
+          skipped: 0,
+          deepComparisons: 0,
+          sampledFirstDifferences: {},
+        },
       },
     });
     if (!retired) {
@@ -266,7 +276,10 @@ openclaw_worker_message_payload_bytes_total{direction="from_worker",kind="sqlite
 openclaw_worker_message_unmeasured_total{direction="from_worker",kind="sqlite_reply"} 2
 openclaw_session_row_selections_total{kind="parent",task="control-ui-pr"} 4
 openclaw_session_row_selection_rows_total{kind="parent",task="control-ui-pr"} 12
-openclaw_session_row_selection_resets_total 2`);
+openclaw_session_row_selection_resets_total 2
+openclaw_session_row_partition_cache_total{outcome="hit",task="sessions.list"} 63
+openclaw_session_row_partition_cache_total{outcome="miss",task="sessions.list"} 1
+openclaw_session_row_partition_revisions_total{reason="metadata"} 3`);
 });
 
 it("exports native memory, missing workers, lifecycle totals and attributed spawns", () => {

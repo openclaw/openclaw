@@ -112,7 +112,7 @@ describe("authenticated Gateway RPC diagnostics", () => {
     setDiagnosticsEnabledForProcess(false);
     await fixture.dispatch();
     expect(monitor.drain().stalls).toEqual([
-      { elapsedMs: 250, task: "gateway:rpc:health", taskMs: 250 },
+      { elapsedMs: 250, task: "gateway:rpc:health", taskMs: 250, startedAt: 0, endedAt: 250 },
     ]);
     expect(fixture.events).toEqual([]);
   });

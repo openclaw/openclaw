@@ -220,18 +220,25 @@ describe("device-pair notify persistence", () => {
   }
 
   it("reports live subscriber counts", async () => {
-    vi.useFakeTimers();
-    vi.setSystemTime(1_000);
     const subscriber: NotifySubscription = {
       to: "chat-123",
       mode: "persistent",
       addedAtMs: 1,
     };
-    const subscriberStore = openSubscriberStore();
-    await subscriberStore.register(notifySubscriberStoreKey(subscriber), subscriber);
-    await subscriberStore.register("expired", subscriber, { ttlMs: 1 });
-    await openStore({ namespace: "other", maxEntries: 10 }).register("sibling", subscriber);
-    vi.setSystemTime(1_001);
+    const { db } = openOpenClawStateDatabase({ env });
+    // Seed cold rows with absolute expiry; fake host time does not control the writer worker.
+    const insert = db.prepare(
+      "INSERT INTO plugin_state_entries (plugin_id, namespace, entry_key, value_json, created_at, expires_at) VALUES ('device-pair', ?, ?, ?, 1, ?)",
+    );
+    const value = JSON.stringify(subscriber);
+    insert.run(
+      DEVICE_PAIR_NOTIFY_SUBSCRIBER_NAMESPACE,
+      notifySubscriberStoreKey(subscriber),
+      value,
+      null,
+    );
+    insert.run(DEVICE_PAIR_NOTIFY_SUBSCRIBER_NAMESPACE, "expired", value, 1);
+    insert.run("other", "sibling", value, null);
     const api = createApi();
     for (const [senderId, mode] of [
       ["chat-123", "persistent"],
@@ -257,19 +264,15 @@ describe("device-pair notify persistence", () => {
       selected ? "{" : JSON.stringify(subscriber),
     );
     insert.run(DEVICE_PAIR_NOTIFY_SUBSCRIBER_NAMESPACE, "unrelated", "{");
-    const command = {
-      api: createApi(),
-      ctx: { channel: "telegram", senderId: "chat-123" },
-      action: "status",
-    };
+    const api = createApi();
     if (selected) {
-      await expect(handleNotifyCommand(command)).rejects.toMatchObject({
+      await expect(notifyCommand(api, "status")).rejects.toMatchObject({
         code: "PLUGIN_STATE_CORRUPT",
         operation: "lookup",
       });
       return;
     }
-    const status = await handleNotifyCommand(command);
+    const status = await notifyCommand(api, "status");
     expect(status.text).toContain("Mode: once");
     expect(status.text).toContain("Subscribers: 2");
   });
@@ -284,13 +287,7 @@ describe("device-pair notify persistence", () => {
       },
       entries,
     }));
-    await expect(
-      handleNotifyCommand({
-        api,
-        ctx: { channel: "telegram", senderId: "chat-123" },
-        action: "status",
-      }),
-    ).rejects.toBe(failure);
+    await expect(notifyCommand(api, "status")).rejects.toBe(failure);
     expect(entries).not.toHaveBeenCalled();
   });
 
@@ -624,13 +621,7 @@ describe("device-pair notify persistence", () => {
     const storage = observeNotifyStorage();
     const api = createApi(sendText, storage.openKeyedStore);
     api.logger.warn = storage.pollFailed;
-    const command = {
-      api,
-      ctx: { channel: "telegram", senderId: "chat-123" },
-      action: "once" as const,
-    };
-
-    await handleNotifyCommand(command);
+    await notifyCommand(api, "once");
     const key = notifySubscriberStoreKey({ to: "chat-123" });
     const first = await openSubscriberStore().lookup(key);
     await notifyCommand(api, "once");

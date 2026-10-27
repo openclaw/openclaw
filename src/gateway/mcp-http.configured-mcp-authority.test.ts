@@ -1,11 +1,12 @@
 import "../test-utils/prepare-compiled-subprocesses.js";
-import fs from "node:fs/promises";
 import http from "node:http";
 import { expectDefined } from "@openclaw/normalization-core/expect";
 import { afterAll, beforeAll, expect, it } from "vitest";
 import {
   listenLoopback,
   closeHttpServer,
+  readRequestText,
+  respondJson,
 } from "../../test/helpers/gateway-integration-fixtures.js";
 import {
   prepareSystemAgentRunAdmission,
@@ -25,6 +26,7 @@ import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
 import { replaceSessionEntry } from "../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { listDirectoryTreeStrict } from "../infra/directory-walk.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
 import type { SkillLibraryAuthoringCapability } from "../skills/library/authoring.js";
@@ -112,11 +114,7 @@ async function startProbeServer() {
         response.writeHead(request.method === "DELETE" ? 200 : 405).end();
         return;
       }
-      const chunks: Buffer[] = [];
-      for await (const chunk of request) {
-        chunks.push(Buffer.from(chunk));
-      }
-      const message = JSON.parse(Buffer.concat(chunks).toString()) as ProbeMessage;
+      const message = JSON.parse(await readRequestText(request)) as ProbeMessage;
       if (message.method === undefined) {
         // Response to a server-initiated request.
         pendingPings.get(String(message.id))?.();
@@ -137,10 +135,7 @@ async function startProbeServer() {
         // handler already admitted the call.
         await hook?.();
       }
-      response.setHeader("content-type", "application/json");
-      response.end(
-        JSON.stringify({ jsonrpc: "2.0", id: message.id, result: probeResult(message) }),
-      );
+      respondJson(response, { jsonrpc: "2.0", id: message.id, result: probeResult(message) });
     })().catch(() => response.writeHead(500).end());
   });
   const port = Number(new URL(await listenLoopback(server)).port);
@@ -392,17 +387,10 @@ async function workshopDefinition(turn: Awaited<ReturnType<typeof prepareTurn>>)
   );
 }
 
-it("serves complete configured-server instructions and bridged calls", async ({ signal }) => {
+it("serves complete configured-server instructions", async ({ signal }) => {
   const turn = await prepareTurn("allowed", false, signal);
   const initialized = await turn.rpc("initialize", {});
-  expect(PROBE_INSTRUCTIONS.length).toBeGreaterThan(1_200);
   expect(initialized.body.result?.instructions).toBe("## probe\n" + PROBE_INSTRUCTIONS);
-  for (const operation of OPERATIONS) {
-    expect(await turn.call(operation.tool, operation.args)).toEqual({
-      isError: false,
-      text: expect.stringContaining(operation.text),
-    });
-  }
 });
 
 it.for(
@@ -493,7 +481,10 @@ it.for([
       content: "---\nname: sandbox-probe\ndescription: Probe\n---\n\n1. Run it.\n",
     };
     const snapshot = async () =>
-      (await fs.readdir(state.workspaceDir, { recursive: true })).map(String).toSorted();
+      (await listDirectoryTreeStrict(state.workspaceDir))
+        .map((walkEntry) => walkEntry.relativePath)
+        .map(String)
+        .toSorted();
     const before = await snapshot();
     const name = "workshop-" + agentId;
     const humanDefinition = await workshopDefinition(

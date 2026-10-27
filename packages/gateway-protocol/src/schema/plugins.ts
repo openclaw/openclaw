@@ -268,6 +268,8 @@ export const PluginCatalogEntrySchema = closedObject({
   order: Type.Optional(Type.Number()),
   /** True when the gateway can resolve a manifest or catalog icon for this plugin identity. */
   hasIcon: Type.Optional(Type.Boolean()),
+  /** Usable branding for tools: nonbundled, with a proven non-OpenClaw ClawHub publisher. */
+  hasToolBrandIcon: Type.Optional(Type.Boolean()),
   /** True when the installed package supplies a default compact activity glyph. */
   hasActivityIcon: Type.Optional(Type.Boolean()),
   /** Exact effective tool IDs with package-owned activity glyph overrides. */

@@ -77,6 +77,10 @@ async function writeIdentityFile(workspace: string, lines: string[]) {
   return identityPath;
 }
 
+function expectLogLines(...lines: string[]) {
+  expect(runtime.log.mock.calls.flat()).toEqual(expect.arrayContaining(lines));
+}
+
 async function expectIdentityCommandFailure(options: IdentityOptions, expected: string | RegExp) {
   const message = typeof expected === "string" ? expected : expect.stringMatching(expected);
   await expect(agentsSetIdentityCommand(options)).rejects.toMatchObject({
@@ -176,20 +180,20 @@ describe("agents set-identity command", () => {
     const { root, workspace } = await createIdentityWorkspace();
     const storedWorkspace = path.join(root, "stored");
     await fs.mkdir(storedWorkspace, { recursive: true });
-    const identityPath = await writeIdentityFile(workspace, [
-      "- **Name:** C-3PO",
-      "- **Creature:** Flustered Protocol Droid",
-      "- **Emoji:** 🤖",
-      "- **Avatar:** avatars/c3po.png",
-      "",
-    ]);
-    setAgents({ entries: { main: { workspace: storedWorkspace } } });
     const identity = {
       name: "C-3PO",
       theme: "Flustered Protocol Droid",
       emoji: "🤖",
       avatar: "avatars/c3po.png",
     };
+    const identityPath = await writeIdentityFile(workspace, [
+      `- **Name:** ${identity.name}`,
+      `- **Creature:** ${identity.theme}`,
+      `- **Emoji:** ${identity.emoji}`,
+      `- **Avatar:** ${identity.avatar}`,
+      "",
+    ]);
+    setAgents({ entries: { main: { workspace: storedWorkspace } } });
     const options = { agent: "main", identityFile: identityPath };
     expect(await jsonIdentity(options)).toEqual({
       agentId: "main",
@@ -201,26 +205,28 @@ describe("agents set-identity command", () => {
 
     expect(writtenAgent()).toMatchObject({ workspace: storedWorkspace, identity });
     await agentsSetIdentityCommand(options);
-    expect(runtime.log).toHaveBeenCalledWith(`Workspace: ${storedWorkspace}`);
-    expect(runtime.log).toHaveBeenCalledWith(`Identity source: ${workspace}`);
+    expectLogLines(`Workspace: ${storedWorkspace}`, `Identity source: ${workspace}`);
     expect(runtime.log.mock.calls.flat().join("\n")).not.toContain("Relocate with");
   });
 
-  it("rejects an invalid agent id without changing config", async () => {
-    const agent = "агент✨";
-    await expectIdentityCommandFailure(
-      { agent, name: "Ghost", json: true },
-      `Agent "${agent}" not found. Create it with \`openclaw agents add\`.`,
-    );
+  it.each([
+    [{ identityFile: " " }, "--identity-file must not be blank"],
+    [{ workspace: "\t" }, "--workspace must not be blank"],
+  ] as const)("rejects an explicitly blank path %j", async (options, message) => {
+    const { workspace } = await createIdentityWorkspace();
+    await writeIdentityFile(workspace, ["- Name: Fallback identity"]);
+    setAgents({ entries: { main: { workspace } } });
+    await expectIdentityCommandFailure({ agent: "main", ...options, json: true }, message);
   });
 
-  it("rejects absent main before reading its identity file", async () => {
-    const agentId = "main";
+  it.each([
+    { agent: "агент✨", name: "Ghost", json: true },
+    { agent: "main", identityFile: "/missing/IDENTITY.md" },
+  ])("rejects unknown agent $agent before reading or writing identity", async (options) => {
     setAgents({ entries: { ops: {} } });
-
     await expectIdentityCommandFailure(
-      { agent: agentId, identityFile: "/missing/IDENTITY.md" },
-      `Agent "${agentId}" not found. Create it with \`openclaw agents add\`.`,
+      options,
+      `Agent "${options.agent}" not found. Create it with \`openclaw agents add\`.`,
     );
   });
 
@@ -271,9 +277,9 @@ describe("agents set-identity command", () => {
       identity: { name: "Worker" },
     });
     await agentsSetIdentityCommand(options);
-    expect(runtime.log).toHaveBeenCalledWith(`Workspace: ${storedWorkspace}`);
-    expect(runtime.log).toHaveBeenCalledWith(`Workspace locator: ${workspaceLocator}`);
-    expect(runtime.log).toHaveBeenCalledWith(
+    expectLogLines(
+      `Workspace: ${storedWorkspace}`,
+      `Workspace locator: ${workspaceLocator}`,
       `Stored workspace unchanged. Relocate with ${formatCliCommand(
         `openclaw config set agents.entries.worker.workspace ${quoteCliArg(workspaceLocator)}`,
       )}.`,
@@ -284,19 +290,16 @@ describe("agents set-identity command", () => {
 
 describe("agents helpers", () => {
   it("applyAgentConfig clears a model override", async () => {
-    const cfg: OpenClawConfig = {
-      agents: {
-        defaults: { model: { primary: "openai/gpt-5.6-luna" } },
-        entries: {
-          work: { workspace: "/work-ws", model: "anthropic/claude" },
+    const next = applyAgentConfig(
+      {
+        agents: {
+          defaults: { model: { primary: "openai/gpt-5.6-luna" } },
+          entries: { work: { model: "anthropic/claude" } },
         },
       },
-    };
-
-    const next = applyAgentConfig(cfg, { agentId: "work", model: null });
-    const work = next.agents?.entries?.work;
-
-    expect(work).not.toHaveProperty("model");
+      { agentId: "work", model: null },
+    );
+    expect(next.agents?.entries?.work).not.toHaveProperty("model");
     expect(await buildAgentSummaries(next)).toMatchObject([
       { id: "work", model: "openai/gpt-5.6-luna" },
     ]);

@@ -31,6 +31,10 @@ export type StreamGroupPart = Extract<
 >;
 
 export type StreamGroupOptions = MessageRenderOptions & {
+  /** Only the mounted streaming bubble observes text-only publications. */
+  resolveLiveStream?: (
+    part: Extract<ChatItem, { kind: "stream" }>,
+  ) => Extract<ChatItem, { kind: "stream" }>;
   resolveReplyPreview?: ReplyPreviewLookup;
   branding?: ThemeBranding;
   bubbleMode?: boolean;
@@ -74,11 +78,6 @@ export function StreamGroupParts(props: {
   );
 }
 
-/** A streaming answer already ends its turn: reserve its footer row before the footer content exists. */
-export function renderSolidEmptyGroupFooter() {
-  return <div class="chat-group-footer" aria-hidden="true" />;
-}
-
 export function UnplacedSubagentWait(props: {
   sessionKey: string;
   wait: ChatSubagentWait;
@@ -101,57 +100,53 @@ export function StreamPartView(props: {
   presentation: "standalone" | "continuation";
 }) {
   const stream = () => (props.part.kind === "stream" ? props.part : undefined);
-  return (
-    <Show when={stream()} fallback={<NonstreamPart {...props} />}>
-      <StreamingMessage part={stream} options={props.options} />
-    </Show>
-  );
-}
+  function NonstreamPart() {
+    const indicator = () => (props.part.kind === "reading-indicator" ? props.part : undefined);
+    const question = () =>
+      props.part.kind === "question"
+        ? props.options.questionPrompts?.get(props.part.questionId)
+        : undefined;
+    return (
+      <Show
+        when={indicator()}
+        fallback={
+          <Show when={question()}>
+            {(prompt) => (
+              <ChatLazyBoundary>
+                <ChatQuestionSummary prompt={prompt()} />
+              </ChatLazyBoundary>
+            )}
+          </Show>
+        }
+      >
+        {(part) => (
+          <ChatWorkingIndicator
+            part={part()}
+            options={{
+              bubbleMode: props.options.bubbleMode,
+              bubbleActivityActive: props.options.bubbleActivityActive,
+              mascot: props.options.branding?.mascot,
+              workingIndicator: props.options.branding?.workingIndicator,
+              workingPhrases: props.options.branding?.workingPhrases,
+              waitingApproval: props.options.waitingApproval === true,
+              waitingSubagents:
+                part().waitingOn === "subagents" ? props.options.waitingSubagents : undefined,
+              runningSubagents: props.options.runningSubagents,
+              onOpenSubagents: props.options.onOpenSubagents,
+              startupLabel: props.options.startupLabel,
+              retryAt: props.options.retryAt,
+              outputTokens: props.options.runOutputTokens,
+              presentation: props.presentation,
+            }}
+          />
+        )}
+      </Show>
+    );
+  }
 
-function NonstreamPart(props: {
-  part: StreamGroupPart;
-  options: StreamGroupOptions;
-  presentation: "standalone" | "continuation";
-}) {
-  const indicator = () => (props.part.kind === "reading-indicator" ? props.part : undefined);
-  const question = () =>
-    props.part.kind === "question"
-      ? props.options.questionPrompts?.get(props.part.questionId)
-      : undefined;
   return (
-    <Show
-      when={indicator()}
-      fallback={
-        <Show when={question()}>
-          {(prompt) => (
-            <ChatLazyBoundary>
-              <ChatQuestionSummary prompt={prompt()} />
-            </ChatLazyBoundary>
-          )}
-        </Show>
-      }
-    >
-      {(part) => (
-        <ChatWorkingIndicator
-          part={part()}
-          options={{
-            bubbleMode: props.options.bubbleMode,
-            bubbleActivityActive: props.options.bubbleActivityActive,
-            mascot: props.options.branding?.mascot,
-            workingIndicator: props.options.branding?.workingIndicator,
-            workingPhrases: props.options.branding?.workingPhrases,
-            waitingApproval: props.options.waitingApproval === true,
-            waitingSubagents:
-              part().waitingOn === "subagents" ? props.options.waitingSubagents : undefined,
-            runningSubagents: props.options.runningSubagents,
-            onOpenSubagents: props.options.onOpenSubagents,
-            startupLabel: props.options.startupLabel,
-            retryAt: props.options.retryAt,
-            outputTokens: props.options.runOutputTokens,
-            presentation: props.presentation,
-          }}
-        />
-      )}
+    <Show when={stream()} fallback={<NonstreamPart />}>
+      <StreamingMessage part={stream} options={props.options} />
     </Show>
   );
 }
@@ -160,7 +155,10 @@ function StreamingMessage(props: {
   part: () => Extract<StreamGroupPart, { kind: "stream" }> | undefined;
   options: StreamGroupOptions;
 }) {
-  const part = () => props.part()!;
+  const part = () => {
+    const current = props.part()!;
+    return props.options.resolveLiveStream?.(current) ?? current;
+  };
   const prepared = createMemo(() => prepareChatStreamRender(part()));
   const actions = createMemo(() =>
     resolveMessageActionDetails(prepared(), {

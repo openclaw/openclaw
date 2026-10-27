@@ -28,15 +28,16 @@ import { sessionMutationGatewayHello } from "../../test-helpers/gateway-methods.
 import { installModelPickerLayout } from "../../test-helpers/model-picker-layout.ts";
 import { mountSolid } from "../../test-helpers/mount-solid.ts";
 import { flush, waitForSolid } from "../../test-helpers/solid-settle.ts";
+import { createInitializationContext } from "./chat-application-context.test-support.ts";
 import { projectChatFields } from "./chat-field-projection.ts";
 import { makeChatHost } from "./chat-host.test-support.ts";
 import { admitQueuedMessageForSession } from "./chat-outbox-admission.test-support.ts";
 import { ChatPaneModelControl } from "./chat-pane-model-control.tsx";
 import { renderControls } from "./chat-pane-session-controls.test-support.ts";
-import { createInitializationContext, createRenderTestChatPane } from "./chat-pane.test-support.ts";
+import { createRenderTestChatPane } from "./chat-pane.test-support.ts";
 import { steerQueuedChatMessage } from "./chat-send-actions.ts";
 import { getPendingChatPickerPatch } from "./chat-settings-patches.ts";
-import { handlePageGatewayEvent } from "./chat-state-events.ts";
+import { handlePageGatewayEvent } from "./chat-state-events.test-support.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
 import { renderChatModelAccountControl } from "./components/chat-model-account-control.ts";
 import { ChatModelAccountSectionView } from "./components/chat-model-account-control.tsx";
@@ -416,10 +417,10 @@ describe("chat pane composer controls", () => {
     const defaultOption = container.querySelector<HTMLElement>(
       '[data-chat-permission-option="default"]',
     );
-    expect(defaultOption?.textContent).toContain(
-      "Follow the agent's configured execution permissions.",
-    );
-    expect(defaultOption?.textContent).toContain("Default (Guarded)");
+    expect(defaultOption?.textContent).toContain("The agent's configured permissions.");
+    expect(
+      container.querySelector('[data-chat-permission-option="guarded"]')?.textContent,
+    ).toContain("Default");
     expect(
       container.querySelector('[data-chat-permission-select="true"]')?.getAttribute("aria-label"),
     ).toBe("Execution permissions: Full Access");
@@ -477,7 +478,7 @@ describe("chat pane composer controls", () => {
     const selection = controls.permissionPicker.onSelect("workspace");
     flush();
     const trigger = container.querySelector<HTMLButtonElement>("[data-chat-permission-select]")!;
-    expect(trigger.disabled).toBe(true);
+    expect(trigger.getAttribute("aria-busy")).toBe("true");
     expect(trigger.getAttribute("aria-label")).toBe("Execution permissions: Workspace");
     await vi.waitFor(() =>
       expect(patch).toHaveBeenCalledWith(
@@ -744,6 +745,7 @@ describe("chat pane model controls", () => {
       ),
     ).toBe(true);
     const steering = steerQueuedChatMessage(state, steer.id);
+    await vi.dynamicImportSettled();
     await vi.waitFor(() =>
       expect(request).toHaveBeenCalledWith(
         "chat.send",

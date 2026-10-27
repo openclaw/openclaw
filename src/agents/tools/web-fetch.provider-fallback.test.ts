@@ -444,21 +444,15 @@ describe("web_fetch", () => {
     );
 
     let upstreamClosed = false;
-    const server = createServer((request, response) => {
+    const server = createServer((_request, response) => {
       response.writeHead(503, {
         "content-type": "text/plain; charset=utf-8",
         "content-length": "1048576",
       });
       response.write("unread upstream error\n");
-      const timer = setInterval(() => {
-        response.write("x".repeat(2_048));
-      }, 10);
-      const markClosed = () => {
+      response.once("close", () => {
         upstreamClosed = true;
-        clearInterval(timer);
-      };
-      request.once("aborted", markClosed);
-      response.once("close", markClosed);
+      });
     });
     try {
       const baseUrl = await listenLoopback(server);
@@ -639,6 +633,7 @@ describe("web_fetch", () => {
         source: "web_fetch",
         wrapped: true,
       });
+      expect(first.externalContent).not.toHaveProperty("provider");
       expect(first.text).toMatch(/<<<EXTERNAL_UNTRUSTED_CONTENT id="[a-f0-9]{16}">>>/);
       for (const key of ["title", "warning", "spill"]) {
         expect(Object.hasOwn(first, key)).toBe(false);

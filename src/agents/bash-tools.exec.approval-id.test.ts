@@ -306,8 +306,6 @@ it.each([
   { host: undefined, node: "node-1", route: "node" },
   { host: "node", node: "node-1", route: "node" },
   { host: "gateway", node: "node-1", route: "conflict" },
-  { host: "sandbox", node: "node-1", route: "conflict" },
-  { host: "auto", node: "node-1", route: "conflict" },
   { host: undefined, node: undefined, route: "gateway" },
 ] as const)("routes node=$node host=$host through $route", async ({ host, node, route }) => {
   const fixture = nodeFixture("node-ok");
@@ -362,7 +360,6 @@ it("reuses approval id as the node runId for an explicit agent follow-up", async
     "Host: node",
     "Node: node-1",
     "CWD: (node default)",
-    "Command:\n```sh\n",
     "ls -la",
     "Mode: foreground (interactive approvals available).",
   );

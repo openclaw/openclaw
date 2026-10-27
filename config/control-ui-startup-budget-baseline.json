@@ -1,5 +1,5 @@
 {
-  "startupJsGzipBytes": 281702,
-  "reason": "Combined warm transcript and shared visible clocks: measured 281702 B after integrating main. Warm transcript remote median improved from 509.3 to 304.7 ms; shared clocks retain their separately measured CPU win. Startup requests remain 7 JS and 1 CSS; accept the sub-0.5 KB change against main.",
-  "updatedAt": "2026-10-24"
+  "startupJsGzipBytes": 271650,
+  "reason": "Same-host route grouping measures 271528 to 271650 B gzip (+122 B), with five startup JS requests and one CSS request unchanged. In 20 base/A-A/head triplets, 100 ms Cron readiness improves 912.5 to 816.2 ms (paired A/A -10.745%); total CPU is flat. Retain the measured head value under the approved small-byte measured-win policy.",
+  "updatedAt": "2026-10-26"
 }

@@ -6,6 +6,7 @@ import { expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { GatewayBrowserClient, GatewayEventFrame } from "../../api/gateway.ts";
 import type { GatewaySessionRow } from "../../api/types.ts";
+import { makeBootRoster } from "../../app/bootstrap.test-support.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import { sessionProgressCardsForGateway } from "../../lib/session-progress-cards.ts";
 import { resolveUiConversationIdentity } from "../../lib/sessions/session-key.ts";
@@ -13,17 +14,16 @@ import { createSessionsListResult } from "../../test-helpers/chat-model.ts";
 import type { GatewayRequestHandler } from "../../test-helpers/gateway-client.ts";
 import { gatewayHelloForMethods } from "../../test-helpers/gateway-methods.ts";
 import { flush } from "../../test-helpers/solid-settle.ts";
+import {
+  createGatewayBrowserClientFixture,
+  createInitializationContext,
+  createSessionContext,
+} from "./chat-application-context.test-support.ts";
 import type { ChatHistoryResult } from "./chat-history-snapshot.ts";
 import { resetChatHistoryProjection } from "./chat-history-state.ts";
 import { loadChatHistory } from "./chat-history.ts";
 import type { ChatPaneRuntime } from "./chat-pane-render.ts";
-import {
-  createGatewayBrowserClientFixture,
-  createInitializationContext,
-  createRenderTestChatPane,
-  createSessionContext,
-  connectPaneTestView,
-} from "./chat-pane.test-support.ts";
+import { createRenderTestChatPane, connectPaneTestView } from "./chat-pane.test-support.ts";
 import { chatRunPresentation } from "./chat-run-presentation.ts";
 
 const history: ChatHistoryResult = {
@@ -79,12 +79,7 @@ function createHistoryProgressPane(
   state.client = client;
   state.connected = true;
   state.hello = hello;
-  state.agentsList = {
-    defaultId: "main",
-    mainKey: "main",
-    scope: "per-sender",
-    agents: [{ id: "main" }, { id: "research" }],
-  };
+  state.agentsList = makeBootRoster({ agents: [{ id: "main" }, { id: "research" }] });
   context.agents.state.agentsList = state.agentsList;
   state.assistantAgentId = "main";
   pane.sessionKey = "notes";
