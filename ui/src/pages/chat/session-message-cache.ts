@@ -90,6 +90,10 @@ export type ChatWidgetLayout = {
   invalidateRow: (rowKey: string | undefined) => void;
 };
 
+function captureWidgetLayoutReservation(snapshot: ChatSessionSnapshot | undefined) {
+  return snapshot && { sessionId: snapshot.sessionId, widgetHeights: snapshot.widgetHeights };
+}
+
 export function createChatWidgetLayout() {
   const layouts = createTranscriptMemo<ChatWidgetLayout>();
   return (
@@ -100,14 +104,14 @@ export function createChatWidgetLayout() {
     layouts(cache, [resolveChatSnapshotKey(host, target), host.currentSessionId], () => {
       const [rowRevision, setRowRevision] = createSignal(0);
       const cacheKey = resolveChatSnapshotKey(host, target);
-      // Reserve the admitted snapshot; new measurements belong to the next reload.
-      let admitted = cache.get(cacheKey)?.snapshot;
+      // Reserve admitted geometry until reload without retaining replaceable message bodies.
+      let admitted = captureWidgetLayoutReservation(cache.get(cacheKey)?.snapshot);
       const current = () => {
         const snapshot =
           resolveChatSnapshotKey(host, target) === cacheKey
             ? cache.get(cacheKey)?.snapshot
             : undefined;
-        admitted ??= snapshot;
+        admitted ??= captureWidgetLayoutReservation(snapshot);
         return snapshot?.sessionId === admitted?.sessionId ? snapshot : undefined;
       };
       const writeHeights = (heights: Record<string, number>) => {
@@ -139,7 +143,7 @@ export function createChatWidgetLayout() {
         }
         const prune = (heights: typeof snapshot.widgetHeights) =>
           Object.fromEntries(Object.entries(heights ?? {}).filter(retain));
-        admitted = { ...snapshot, widgetHeights: prune(admitted?.widgetHeights) };
+        admitted = { sessionId: snapshot.sessionId, widgetHeights: prune(admitted?.widgetHeights) };
         const widgetHeights = widgetKey ? prune(snapshot.widgetHeights) : snapshot.widgetHeights;
         cacheChatSessionSnapshot(cache, host, target, { ...snapshot, widgetHeights });
         setRowRevision((revision) => revision + 1);

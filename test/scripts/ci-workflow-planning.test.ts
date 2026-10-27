@@ -693,7 +693,14 @@ function runDiffBaseFixture(options: {
 function runCheckShardFixture(options: {
   frozenTarget: boolean;
   scripts: string[];
-  task?: "guards" | "guards-architecture" | "npm-lock" | "prod-types" | "test-types";
+  task?:
+    | "guards"
+    | "guards-architecture"
+    | "npm-lock"
+    | "prod-types"
+    | "test-types"
+    | "dependencies";
+  releaseToolingEntry?: boolean;
   earlyGuards?: boolean;
   splitPrGuards?: boolean;
   madgeImportCycles?: boolean;
@@ -728,6 +735,7 @@ function runCheckShardFixture(options: {
   const callsPath = path.join(root, "pnpm-calls.txt");
   const typeCallsPath = path.join(root, "type-calls.txt");
   const typeCheck = options.task === "test-types" || options.task === "prod-types";
+  const additionalCheck = options.earlyGuards || options.task === "dependencies";
   mkdirSync(fakeBin);
   installCollectChecks(root);
   if (typeCheck) {
@@ -803,10 +811,24 @@ appendFileSync(process.env.TYPE_CALLS, [process.env.TYPE_ROW, process.env.OPENCL
     ).scripts["tsgo:test"]!;
   }
   writeFileSync(path.join(root, "package.json"), `${JSON.stringify({ scripts })}\n`);
+  if (options.releaseToolingEntry) {
+    mkdirSync(path.join(root, "config"), { recursive: true });
+    mkdirSync(path.join(root, "scripts"), { recursive: true });
+    writeFileSync(
+      path.join(root, "config/knip.config.ts"),
+      "const repositoryScriptEntries = [\n] as const;\n",
+    );
+    writeFileSync(path.join(root, "scripts/generate-dependency-release-evidence.mts"), "");
+  }
   writeExecutable(path.join(fakeBin, "pnpm"), [
     "#!/usr/bin/env bash",
     "set -euo pipefail",
     'if [ "$*" = "run --silent" ]; then exit 1; fi',
+    'if [ "${EXPECT_RELEASE_TOOLING_ENTRY:-false}" = "true" ] &&',
+    "  ! grep -Fq '\"scripts/generate-dependency-release-evidence.mts!\"' config/knip.config.ts; then",
+    '  echo "release-only helper is missing from Knip entries" >&2',
+    "  exit 1",
+    "fi",
     'printf "%s\\n" "$*" >> "$PNPM_CALLS"',
     ...(typeCheck
       ? [
@@ -816,7 +838,7 @@ appendFileSync(process.env.TYPE_CALLS, [process.env.TYPE_ROW, process.env.OPENCL
     'if [ "$*" = "${FAIL_PACKAGE_SCRIPT:-}" ]; then exit 17; fi',
   ]);
   const workflow = readCiWorkflow();
-  const checkShardStep = options.earlyGuards
+  const checkShardStep = additionalCheck
     ? workflow.jobs["check-additional-shard"].steps.find(
         (step: WorkflowStep) => step.name === "Run independent checks",
       )
@@ -843,7 +865,7 @@ appendFileSync(process.env.TYPE_CALLS, [process.env.TYPE_ROW, process.env.OPENCL
       split_pr_guards: String(options.splitPrGuards ?? false),
       changed_core_test_paths_json: options.types?.changedPathsJson ?? "",
       narrow_check_paths_json:
-        options.types?.narrowPathsJson ?? (options.earlyGuards ? '["src/shared/runtime.ts"]' : ""),
+        options.types?.narrowPathsJson ?? (additionalCheck ? '["src/shared/runtime.ts"]' : ""),
       ...(options.types?.compose
         ? {
             core_type_matrix: expectDefined(
@@ -874,7 +896,7 @@ appendFileSync(process.env.TYPE_CALLS, [process.env.TYPE_ROW, process.env.OPENCL
     step: checkShardStep,
     matrix: {
       task: options.task ?? "guards",
-      ...(options.earlyGuards ? { group: options.task ?? "guards" } : {}),
+      ...(additionalCheck ? { group: options.task ?? "guards" } : {}),
       ...options.types?.matrix,
     },
   });
@@ -904,6 +926,7 @@ appendFileSync(process.env.TYPE_CALLS, [process.env.TYPE_ROW, process.env.OPENCL
         linuxWorkflow: true,
         env: {
           ...process.env,
+          EXPECT_RELEASE_TOOLING_ENTRY: options.releaseToolingEntry ? "true" : "false",
           FROZEN_TARGET: options.frozenTarget ? "true" : "false",
           FORMAT_CHECK: "false",
           HISTORICAL_TARGET: options.frozenTarget ? "true" : "false",
@@ -920,7 +943,7 @@ appendFileSync(process.env.TYPE_CALLS, [process.env.TYPE_ROW, process.env.OPENCL
             resolveValue(row.step.env?.RUN_PR_KYSELY_GUARDRAILS) ?? "",
           ),
           SPLIT_PR_GUARDS: String(resolveValue(row.step.env?.SPLIT_PR_GUARDS) ?? ""),
-          ...(typeCheck || options.earlyGuards
+          ...(typeCheck || additionalCheck
             ? {
                 OPENCLAW_LOCAL_CHECK: undefined,
                 TYPE_ROW: row.name,
@@ -964,74 +987,6 @@ appendFileSync(process.env.TYPE_CALLS, [process.env.TYPE_ROW, process.env.OPENCL
       : [],
     rows: runs.map(({ name, status }) => ({ name, status })),
   };
-}
-
-function runDependencyCheckFixture(options: {
-  historicalTarget: boolean;
-  releaseToolingEntry?: boolean;
-  scripts: string[];
-}): {
-  calls: string[];
-  output: string;
-  status: number | null;
-} {
-  const root = mkdtempSync(path.join(tmpdir(), "openclaw-ci-deadcode-"));
-  try {
-    const fakeBin = path.join(root, "bin");
-    const callsPath = path.join(root, "pnpm-calls.txt");
-    mkdirSync(fakeBin);
-    installCollectChecks(root);
-    writeFileSync(
-      path.join(root, "package.json"),
-      `${JSON.stringify({
-        scripts: Object.fromEntries(options.scripts.map((name) => [name, "true"])),
-      })}\n`,
-    );
-    if (options.releaseToolingEntry) {
-      mkdirSync(path.join(root, "config"), { recursive: true });
-      mkdirSync(path.join(root, "scripts"), { recursive: true });
-      writeFileSync(
-        path.join(root, "config/knip.config.ts"),
-        "const repositoryScriptEntries = [\n] as const;\n",
-      );
-      writeFileSync(path.join(root, "scripts/generate-dependency-release-evidence.mts"), "");
-    }
-    writeExecutable(path.join(fakeBin, "pnpm"), [
-      "#!/usr/bin/env bash",
-      "set -euo pipefail",
-      'if [ "${EXPECT_RELEASE_TOOLING_ENTRY:-false}" = "true" ] &&',
-      "  ! grep -Fq '\"scripts/generate-dependency-release-evidence.mts!\"' config/knip.config.ts; then",
-      '  echo "release-only helper is missing from Knip entries" >&2',
-      "  exit 1",
-      "fi",
-      'printf "%s\\n" "$*" >> "$PNPM_CALLS"',
-    ]);
-    const checkShardRun = readCiWorkflow().jobs["check-additional-shard"].steps.find(
-      (step: WorkflowStep) => step.name === "Run independent checks",
-    ).run;
-    const run = runWorkflowCommand("bash", ["-c", checkShardRun], {
-      cwd: root,
-      env: {
-        ...process.env,
-        EXPECT_RELEASE_TOOLING_ENTRY: options.releaseToolingEntry ? "true" : "false",
-        FROZEN_TARGET: options.historicalTarget ? "true" : "false",
-        FORMAT_CHECK: "false",
-        HISTORICAL_TARGET: options.historicalTarget ? "true" : "false",
-        PATH: `${fakeBin}:${process.env.PATH ?? ""}`,
-        PNPM_CALLS: callsPath,
-        TASK: "dependencies",
-      },
-    });
-    return {
-      calls: existsSync(callsPath)
-        ? readFileSync(callsPath, "utf8").trim().split("\n").filter(Boolean)
-        : [],
-      output: `${run.stdout}${run.stderr}`,
-      status: run.status,
-    };
-  } finally {
-    rmSync(root, { force: true, recursive: true });
-  }
 }
 
 function runControlUiI18nSourceFixture(options: {
@@ -7802,33 +7757,26 @@ describe("ci workflow guards", () => {
     expect(concreteBase.emittedBaseIsCommit).toBe(true);
   });
 
-  it("uses stable deadcode checks for current and frozen checkouts", () => {
-    const modern = runDependencyCheckFixture({
-      historicalTarget: false,
+  it.each([false, true])("uses all three stable deadcode checks for frozen=%s", (frozenTarget) => {
+    const result = runCheckShardFixture({
+      task: "dependencies",
+      frozenTarget,
+      releaseToolingEntry: frozenTarget,
       scripts: ["deadcode:dependencies", "deadcode:unused-files", "deadcode:exports"],
     });
-    expect(modern.status, modern.output).toBe(0);
+    expect(result.status, result.output).toBe(0);
     // The scripts launch concurrently; completion order is nondeterministic.
-    expect(modern.calls.toSorted()).toEqual([
+    expect(result.calls.toSorted()).toEqual([
       "deadcode:dependencies",
       "deadcode:exports",
       "deadcode:unused-files",
     ]);
+  });
 
-    const frozenWithExports = runDependencyCheckFixture({
-      historicalTarget: true,
-      releaseToolingEntry: true,
-      scripts: ["deadcode:dependencies", "deadcode:unused-files", "deadcode:exports"],
-    });
-    expect(frozenWithExports.status, frozenWithExports.output).toBe(0);
-    expect(frozenWithExports.calls.toSorted()).toEqual([
-      "deadcode:dependencies",
-      "deadcode:exports",
-      "deadcode:unused-files",
-    ]);
-
-    const frozen = runDependencyCheckFixture({
-      historicalTarget: true,
+  it("preserves historical deadcode routes and rejects incomplete current targets", () => {
+    const frozen = runCheckShardFixture({
+      task: "dependencies",
+      frozenTarget: true,
       scripts: [
         "deadcode:ci",
         "deadcode:dependencies",
@@ -7839,8 +7787,9 @@ describe("ci workflow guards", () => {
     expect(frozen.status, frozen.output).toBe(0);
     expect(frozen.calls.toSorted()).toEqual(["deadcode:dependencies", "deadcode:unused-files"]);
 
-    const currentWithoutExports = runDependencyCheckFixture({
-      historicalTarget: false,
+    const currentWithoutExports = runCheckShardFixture({
+      task: "dependencies",
+      frozenTarget: false,
       scripts: ["deadcode:dependencies", "deadcode:unused-files"],
     });
     expect(currentWithoutExports.status).toBe(1);
@@ -7851,15 +7800,17 @@ describe("ci workflow guards", () => {
       "Current CI targets must provide the deadcode:exports package script.",
     );
 
-    const legacy = runDependencyCheckFixture({
-      historicalTarget: true,
+    const legacy = runCheckShardFixture({
+      task: "dependencies",
+      frozenTarget: true,
       scripts: ["deadcode:ci"],
     });
     expect(legacy.status, legacy.output).toBe(0);
     expect(legacy.calls).toEqual(["deadcode:ci"]);
 
-    const incompleteCurrent = runDependencyCheckFixture({
-      historicalTarget: false,
+    const incompleteCurrent = runCheckShardFixture({
+      task: "dependencies",
+      frozenTarget: false,
       scripts: ["deadcode:dependencies"],
     });
     expect(incompleteCurrent.status).toBe(1);
@@ -13182,6 +13133,52 @@ describe("ci workflow guards", () => {
     );
     expect(compatibilityJob.steps.at(-1)?.run).toContain("src/config/sessions/sessions.test.ts");
   });
+
+  it.skipIf(process.platform === "win32").each(["false", "true", "", "unexpected"])(
+    "runs the minimum-Node compatibility commands once with frozen target %j",
+    (frozenTarget) => {
+      const job = readCiWorkflow().jobs["checks-node-compat"];
+      const setup = job.steps.find((step: WorkflowStep) => step.name === "Setup Node environment");
+      expect(setup.with["node-version"]).toBe("24.22.1");
+      const step = job.steps.at(-1);
+      expect(step.env.CI_COMPAT_FROZEN_TARGET).toBe("${{ needs.preflight.outputs.frozen_target }}");
+      const root = tempDirs.make("openclaw-node-compat-commands-");
+      const bin = path.join(root, "bin");
+      const calls = path.join(root, "calls.log");
+      mkdirSync(bin);
+      for (const command of ["pnpm", "node"]) {
+        writeExecutable(path.join(bin, command), [
+          "#!/bin/sh",
+          `printf '%s:%s\\n' '${command}' "$*" >> "$COMMAND_LOG"`,
+          'if [ "$1" = build ] && [ "${FAIL_BUILD:-}" = 1 ]; then exit 42; fi',
+        ]);
+      }
+      const run = (failBuild = false) =>
+        runWorkflowCommand("/bin/bash", ["-e", "-o", "pipefail", "-c", step.run], {
+          cwd: root,
+          env: {
+            PATH: `${bin}:/usr/bin:/bin`,
+            COMMAND_LOG: calls,
+            CI_COMPAT_FROZEN_TARGET: frozenTarget,
+            FAIL_BUILD: failBuild ? "1" : "0",
+          },
+        });
+      const result = run();
+      expect(result.status, result.stderr).toBe(0);
+      expect(readFileSync(calls, "utf8").trim().split("\n")).toEqual([
+        "pnpm:build",
+        ...(frozenTarget === "false" ? [] : ["pnpm:ui:build"]),
+        "node:openclaw.mjs --help",
+        "node:openclaw.mjs status --json --timeout 1",
+        "pnpm:test:build:singleton",
+        "pnpm:test src/config/sessions/session-accessor.test.ts src/config/sessions/store-writer.test.ts src/config/sessions/sessions.test.ts",
+      ]);
+      rmSync(calls);
+      const failed = run(true);
+      expect(failed.status, failed.stderr).toBe(42);
+      expect(readFileSync(calls, "utf8")).toBe("pnpm:build\n");
+    },
+  );
 
   it.skipIf(process.platform === "win32").each([
     ["schedule", "ios-build", "cancelled", "true", 0],

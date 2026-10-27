@@ -1,29 +1,15 @@
 /** @vitest-environment node */
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import {
-  getLatestWebSocket,
-  MockWebSocket,
-  stubWindowGlobals,
-  useNodeFakeTimers,
-  wsInstances,
-} from "./gateway-socket.test-support.ts";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import { useHandshakeHarness } from "./gateway-handshake.test-support.ts";
+import { getLatestWebSocket } from "./gateway-socket.test-support.ts";
 import { GatewayBrowserClient } from "./gateway.ts";
 
 const DEFAULT_GATEWAY_URL = "ws://127.0.0.1:18789";
+useHandshakeHarness();
 
 describe("GatewayBrowserClient chat delivery", () => {
   beforeEach(() => {
     vi.spyOn(Math, "random").mockReturnValue(0);
-    useNodeFakeTimers();
-    wsInstances.length = 0;
-    stubWindowGlobals();
-    vi.stubGlobal("WebSocket", MockWebSocket);
-  });
-
-  afterEach(() => {
-    vi.restoreAllMocks();
-    vi.useRealTimers();
-    vi.unstubAllGlobals();
   });
 
   it("reconstructs chat once before delivering to existing and newly attached listeners", () => {
@@ -176,6 +162,19 @@ describe("GatewayBrowserClient chat delivery", () => {
         client.start();
         let ws = getLatestWebSocket();
         ws.emitOpen();
+        if (boundary === "unsubscribe") {
+          ws.emitConnectChallenge({ nonce: "chat-events-challenge", ts: 1_800_000_000_000 });
+          await vi.advanceTimersByTimeAsync(0);
+          const connect = JSON.parse(ws.sent.at(-1) ?? "{}");
+          expect(connect.method).toBe("connect");
+          ws.emitMessage({
+            type: "res",
+            id: connect.id,
+            ok: true,
+            payload: { type: "hello-ok", protocol: 4 },
+          });
+          await vi.advanceTimersByTimeAsync(0);
+        }
         ws.emitMessage({
           type: "event",
           event: "chat",

@@ -37,7 +37,7 @@ that dozens of synthetic external plugins would introduce.
 
 The seeded mix is 4,300 finished unarchived subagents, 4,400 archived dashboards,
 400 active dashboards, 200 explicit sessions, and 1,500 other sessions including
-small channel/cron cohorts. Four agents are configured; retained rows initially
+small channel/cron cohorts. Four agents are configured by default (`--agents 8` selects eight); retained rows initially
 belong to `main`. Transcripts contain 128 MiB of deterministic, incompressible
 message content with a skewed size distribution. This reproduces session shape,
 not a byte-for-byte copy of a production database. Retained runs are settled collectors

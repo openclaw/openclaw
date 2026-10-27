@@ -78,7 +78,7 @@ src/infra/session-cost-usage-cache.worker.test.ts	5
 src/infra/state-migrations.workspace-setup-sandbox.test.ts	1
 src/meeting-bot/realtime-node-audio-transport.test.ts	1
 src/plugins/openai-compatible-embedding-provider.test.ts	2
-src/plugins/provider-self-hosted-discovery.test.ts	11
+src/plugins/provider-self-hosted-discovery.test.ts	8
 src/plugins/runtime/runtime-agent.ingress.integration.test.ts	1
 src/process/command-queue.capacity-groups.test.ts	1
 src/process/command-queue.publish-transaction.test.ts	3

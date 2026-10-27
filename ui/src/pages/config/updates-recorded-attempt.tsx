@@ -72,8 +72,9 @@ export function RecordedAttempt(
         <Show when={failed() || props.update.updateStatusBanner?.source === "read"}>
           <SettingsRow
             title={t("updates.page.recoveryActions")}
+            stackedOnNarrow
             control={
-              <div class="updates-status-control">
+              <div class="updates-status-control updates-recovery-actions">
                 <button
                   class="btn btn--sm"
                   type="button"
