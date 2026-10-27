@@ -188,7 +188,7 @@ export function createAgentsPageState(
     canUpdate: (agentId: string) =>
       agentId === state.agentsSelectedId && canCall("config.set", "operator.admin"),
     getReport: () => state.agentSkillsReport,
-    onPrimaryChanged: () => refreshEffectiveToolsForCurrentSession(),
+    onPrimaryChanged: () => effectiveTools.ensure(true),
   });
   const githubIdentity = createGitHubIdentityView({
     runExternalMutation: (task, options) =>
@@ -219,6 +219,7 @@ export function createAgentsPageState(
       }
     },
     ensureInitialData: () => ensureInitialData(),
+    onPageActivation: () => effectiveTools.ensure(),
   });
   const isCurrentToolsRead = (client: GatewayBrowserClient, generation: number, agentId: string) =>
     isCurrentRequest(client, generation, agentId, {});
@@ -229,6 +230,8 @@ export function createAgentsPageState(
   const effectiveTools = createAgentEffectiveTools({
     scope: () => state,
     isCurrent: isCurrentToolsRead,
+    isSessionAgent: (agentId) => agentId === chatAgentId(),
+    isPresented: () => state.agentsPanel === "tools",
     key: (agentId, sessionKey) => buildToolsEffectiveRequestKey(state, { agentId, sessionKey }),
     changed: publish,
   });
@@ -402,7 +405,7 @@ export function createAgentsPageState(
     if (state.agentsPanel === "tools") {
       syncGitHubIdentity(agentId);
       toolsCatalog.ensure(agentId);
-      loadEffectiveToolsForAgent(agentId);
+      effectiveTools.ensure();
       githubIdentity.ensureVerified();
       return;
     }
@@ -471,21 +474,6 @@ export function createAgentsPageState(
       client: state.client,
       connected: state.connected,
     });
-  }
-
-  function loadEffectiveToolsForAgent(agentId: string, refresh = false) {
-    if (agentId !== chatAgentId()) {
-      effectiveTools.reset();
-      return;
-    }
-    effectiveTools.ensure(agentId, state.sessionKey, refresh);
-  }
-
-  function refreshEffectiveToolsForCurrentSession() {
-    const agentId = state.agentsSelectedId;
-    if (state.agentsPanel === "tools" && agentId) {
-      loadEffectiveToolsForAgent(agentId, true);
-    }
   }
 
   async function refreshAgents(mode: "ensure" | "refresh" | "save" = "refresh") {
@@ -691,11 +679,12 @@ export function createAgentsPageState(
         syncGitHubIdentity(state.agentsSelectedId);
         publish();
       }),
-      // Session model receipts replace the tools.effective request key before older results settle.
+      // Local model receipts change the request key; unrelated roster publications reuse it.
       context.sessions.subscribe(() => {
-        refreshEffectiveToolsForCurrentSession();
+        effectiveTools.ensure();
         publish();
       }),
+      effectiveTools.subscribe(context.gateway),
     ];
     applyRoute();
     return () => {

@@ -15,6 +15,7 @@ import {
 } from "./settings-view.tsx";
 import "../../styles.css";
 import "../../styles/settings.css";
+import "../../styles/carapace-control-ui.css";
 import "../../styles/plugins.css";
 
 it("retains focused lifecycle controls across settings reads and uses current mutation state", async () => {

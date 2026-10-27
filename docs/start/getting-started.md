@@ -12,7 +12,7 @@ working chat session.
 
 ## What you need
 
-- **Node.js 24.16+ or 26.1+** (Node 26 is the recommended runtime)
+- **Node.js 24.22.1+ or 26.12.1+** (Node 26 is the recommended runtime)
 - **An existing Claude Code or Codex CLI login, or a provider API key** — onboarding can reuse it
 
 <Tip>

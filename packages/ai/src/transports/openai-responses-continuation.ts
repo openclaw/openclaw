@@ -88,14 +88,24 @@ function projectJsonValue(value: unknown, key: string, ancestors: Set<object>): 
       }
       return result;
     }
-    const fields: [string, unknown][] = [];
+    const result: Record<string, unknown> = {};
     for (const name of Object.keys(value)) {
       const member = projectJsonValue(Reflect.get(value, name), name, ancestors);
       if (member !== undefined) {
-        fields.push([name, member]);
+        if (name in result) {
+          // Match JSON's own data properties, including __proto__ and inherited setters.
+          Object.defineProperty(result, name, {
+            value: member,
+            enumerable: true,
+            configurable: true,
+            writable: true,
+          });
+        } else {
+          result[name] = member;
+        }
       }
     }
-    return Object.fromEntries(fields);
+    return result;
   } finally {
     ancestors.delete(value);
   }

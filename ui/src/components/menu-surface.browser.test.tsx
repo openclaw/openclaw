@@ -230,7 +230,9 @@ describe.skipIf(!hasPopoverApi)("submenu parent highlight", () => {
     const parent = query(container, '[data-value="parent"]');
     const child = query(container, '[data-value="child"]');
     const sibling = query(container, '[data-value="sibling"]');
-    const highlight = colorSwatch("var(--bg-hover)");
+    const highlight = colorSwatch(
+      input === "pointer" ? "var(--surface-selected-hover)" : "var(--surface-selected)",
+    );
 
     await openMenu(container);
     await expect.poll(() => document.activeElement).toBe(parent);
@@ -417,15 +419,16 @@ describe.skipIf(!hasPopoverApi)("platform menu hover", () => {
       const neutral = query(host, '[data-value="neutral"]');
       const disabled = query(host, '[data-value="disabled"]');
       const danger = query(host, '[data-value="danger"]');
+      const menuHighlight = colorSwatch("var(--surface-hover)");
       await openMenu(host);
       await userEvent.keyboard("{ArrowDown}");
       await userEvent.keyboard("{Home}");
       await expect.poll(() => document.activeElement).toBe(neutral);
-      await expect.poll(() => getComputedStyle(neutral).backgroundColor).toBe(highlight);
-      await hoverBackground(neutral, highlight);
+      await expect.poll(() => getComputedStyle(neutral).backgroundColor).toBe(menuHighlight);
+      await hoverBackground(neutral, menuHighlight);
       await hoverBackground(disabled, "rgba(0, 0, 0, 0)");
       const dangerHighlight = colorSwatch("var(--danger-subtle)", danger);
-      expect(dangerHighlight).not.toBe(highlight);
+      expect(dangerHighlight).not.toBe(menuHighlight);
       await hoverBackground(danger, dangerHighlight);
     });
   });

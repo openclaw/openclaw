@@ -1,14 +1,16 @@
 import { dynamic, type JSX as SolidJSX } from "@solidjs/web";
-import { Match, Show, Switch, createSignal, lazy } from "solid-js";
+import { Match, Show, Switch, createMemo, createSignal, lazy } from "solid-js";
 import { resolveControlUiAuthToken } from "../../app/control-ui-auth.ts";
 import { isBrowserPanelAvailable } from "../../app/panel-availability.ts";
 import { EMPTY_LINK_READERS } from "../../components/link-reader-target.ts";
 import { PanelLoadingSkeleton } from "../../components/solid/panel-loading-skeleton.tsx";
-import { registerChatSessionEnglish } from "../../i18n/locales/en-chat-session.ts";
+import { registerChatSessionOptionalEnglish } from "../../i18n/locales/en-chat-session-optional.ts";
 import { elementRef } from "../../lib/reactive/element-ref.ts";
 import { registerEnglishCatalog, t } from "../../lib/reactive/i18n.ts";
 import { ContentPresentation } from "../../lib/solid/presentation.ts";
 import type { ElementProperties } from "../../types/solid-elements.d.ts";
+import { buildChatBoardPanel } from "./chat-pane-board-panel.ts";
+import { buildChatDiscussionPanel } from "./chat-pane-discussion-panel.ts";
 import type { SidebarPanelDefinitionParams, SidebarPanelData } from "./chat-pane-embedded-types.ts";
 import { EmbeddedPluginPanel } from "./chat-pane-plugin-panel.tsx";
 import { usePanePresentation } from "./chat-pane-presentation.ts";
@@ -33,7 +35,7 @@ import { resolveChatLinkFaviconFetcher } from "./link-favicon-loader.ts";
 import type { SidebarSlotId } from "./sidebar-layout-types.ts";
 import { sidebarMainPanel } from "./sidebar-layout.ts";
 
-registerEnglishCatalog(registerChatSessionEnglish);
+registerEnglishCatalog(registerChatSessionOptionalEnglish);
 
 type PanelHostProps = { registerPanelHost?: SidebarPanelHostRegistration };
 type Props = SidebarPanelDefinitionParams & PanelHostProps;
@@ -147,17 +149,18 @@ function DesktopPanel(props: Props) {
 }
 
 function DiscussionPanel(props: Props) {
+  const config = createMemo(() => buildChatDiscussionPanel(props.discussion!));
   return (
     <Discussion
       presentation={props.presentation}
       data-sidebar-panel-host
       ref={[elementRef(props.registerPanelHost)]}
-      sessionKey={props.discussion!.sessionKey}
-      canOpen={props.discussion!.canOpen}
+      sessionKey={config().sessionKey}
+      canOpen={config().canOpen}
       sourceGeneration={props.discussionSourceGeneration}
-      loadInfo={props.discussion!.loadInfo}
-      openDiscussion={props.discussion!.openDiscussion}
-      onStateChange={props.discussion!.onStateChange}
+      loadInfo={config().loadInfo}
+      openDiscussion={config().openDiscussion}
+      onStateChange={config().onStateChange}
     />
   );
 }
@@ -354,7 +357,7 @@ function DetailPanel(props: SidebarPanelData) {
 }
 
 function DashboardPanel(props: SidebarPanelData) {
-  return <ChatBoardPanel {...props.dashboard!} />;
+  return <ChatBoardPanel {...buildChatBoardPanel(props.dashboard!)} />;
 }
 
 const embeddedPanels: Partial<

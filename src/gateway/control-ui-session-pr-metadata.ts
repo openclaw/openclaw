@@ -151,6 +151,8 @@ export function parsePullListItem(value: unknown) {
   const owner = readNonBlankString(baseOwner.login);
   const repo = readNonBlankString(baseRepo.name);
   const head = isRecord(value.head) ? value.head : {};
+  const headRepo = isRecord(head.repo) ? head.repo : {};
+  const headRepository = readNonBlankString(headRepo.full_name);
   if (!number || !Number.isSafeInteger(number) || number < 1 || !title || !url || !owner || !repo) {
     return null;
   }
@@ -166,6 +168,7 @@ export function parsePullListItem(value: unknown) {
     ...(authorLogin ? { author: { login: authorLogin } } : {}),
     branch: readNonBlankString(head.ref),
     headSha: readNonBlankString(head.sha),
+    ...(headRepository ? { headRepository } : {}),
     baseRef: readNonBlankString(base.ref),
     mergeCommitSha: readNonBlankString(value.merge_commit_sha),
   };

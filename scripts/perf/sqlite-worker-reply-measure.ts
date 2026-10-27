@@ -7,6 +7,9 @@
  * Enable the Gateway task monitor so synchronous decode attribution is included.
  * Pass --reply-file <synthetic-reply.bin> to replay a V8-serialized reply captured
  * by sqlite-reply-census-preload.mjs instead of the default synthetic shapes.
+ * Add --acknowledgement-only to replay that sample as an undefined command reply
+ * when the domain already delivers its result through native commit settlement.
+ * This measures receiver cost only; domain tests must prove receipt equivalence.
  */
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
@@ -21,7 +24,13 @@ import type { SqliteWorkerReply } from "../../src/infra/sqlite-worker-contract.j
 import { SqliteWorkerSlotCustody } from "../../src/infra/sqlite-worker-request-custody.js";
 
 const iterations = 10_000;
-const { values } = parseArgs({ options: { "reply-file": { type: "string" } } });
+const { values } = parseArgs({
+  options: {
+    "reply-file": { type: "string" },
+    "acknowledgement-only": { type: "boolean", default: false },
+  },
+});
+assert(!values["acknowledgement-only"] || values["reply-file"], "Provide --reply-file");
 const samplingInterval = 512;
 const gc = global.gc;
 assert(gc, "Run with --expose-gc");
@@ -87,7 +96,8 @@ function entry(index: number) {
     deliveryContext: { channel: "webchat", accountId: "synthetic" },
   };
 }
-const capturedReply = values["reply-file"] ? readFileSync(values["reply-file"]) : undefined;
+const sampledReply = values["reply-file"] ? readFileSync(values["reply-file"]) : undefined;
+const capturedReply = values["acknowledgement-only"] ? serialize(undefined) : sampledReply;
 const fixtures: { name: string; value: unknown }[] = capturedReply
   ? [{ name: "captured-synthetic-reply", value: deserialize(capturedReply) }]
   : [
@@ -135,6 +145,7 @@ try {
     assert.deepEqual(lastValue, fixture.value);
     reports.push({
       name: fixture.name,
+      sampledReplyBytes: sampledReply?.byteLength,
       serializedBytes: reply.value.byteLength,
       iterationsPerPass: iterations,
       timing,

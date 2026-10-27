@@ -5,6 +5,7 @@ import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { listDirectoryTreeStrict } from "../infra/directory-walk.js";
 import type { LegacyStateMigrationPlan } from "../infra/state-migrations.types.js";
 import { CONTROL_PLANE_UPDATE_SENTINEL_META_ENV } from "../infra/update-control-plane-sentinel.js";
 import { getUpdateRun } from "../infra/update-run-ledger.js";
@@ -72,28 +73,20 @@ function runPreview(root: string, command = "update") {
 
 async function snapshotTree(root: string): Promise<string[]> {
   const snapshot: string[] = [];
-  const walk = async (directory: string, relativeDirectory: string): Promise<void> => {
-    const entries = await fs.readdir(directory, { withFileTypes: true });
-    entries.sort((left, right) => left.name.localeCompare(right.name));
-    for (const entry of entries) {
-      const relativePath = path.posix.join(relativeDirectory, entry.name);
-      const absolutePath = path.join(directory, entry.name);
-      if (entry.isDirectory()) {
-        snapshot.push(`d ${relativePath}`);
-        await walk(absolutePath, relativePath);
-        continue;
-      }
-      if (entry.isSymbolicLink()) {
-        snapshot.push(`l ${relativePath} ${await fs.readlink(absolutePath)}`);
-        continue;
-      }
-      const hash = createHash("sha256")
-        .update(await fs.readFile(absolutePath))
-        .digest("hex");
-      snapshot.push(`f ${relativePath} ${hash}`);
+  for (const { relativePath, dirent } of await listDirectoryTreeStrict(root)) {
+    const absolutePath = path.join(root, relativePath);
+    if (dirent.isDirectory()) {
+      snapshot.push(`d ${relativePath}`);
+    } else if (dirent.isSymbolicLink()) {
+      snapshot.push(`l ${relativePath} ${await fs.readlink(absolutePath)}`);
+    } else {
+      snapshot.push(
+        `f ${relativePath} ${createHash("sha256")
+          .update(await fs.readFile(absolutePath))
+          .digest("hex")}`,
+      );
     }
-  };
-  await walk(root, "");
+  }
   return snapshot;
 }
 

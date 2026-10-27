@@ -22,6 +22,8 @@ export type ActivityOperationProps = {
 };
 
 export type MessageRenderOptions = {
+  /** Links a handoff's child sessions; absent where this pane cannot open sessions. */
+  handoffSessionLinks?: import("../chat-subagent-wait.ts").HandoffSessionLinks;
   onOpenReply?: (replyToId: string) => void;
   replyNavigationId?: string | null;
   sessionKey?: string;
@@ -60,7 +62,6 @@ export type GroupedMessageOptions = MessageRenderOptions & {
   /** Search reveals matching transcript text inside disclosures. */
   searchResult?: boolean;
   transcriptVisible?: PresentationValue;
-  duplicateCount?: number;
   showReasoning: boolean;
   bubbleMode?: boolean;
   /** First visible message of the containing group/frame; null means none. */

@@ -6,10 +6,7 @@ import { handleNavigationClick } from "../lib/navigation-click.ts";
  * explicitly because some surfaces (the portaled session hovercard) render outside the
  * application context tree and cannot consume it.
  */
-export type PersonActivityRouting = {
-  basePath: string;
-  navigate: (personId: string, label?: string) => void;
-};
+export type PersonActivityRouting = ReturnType<typeof personActivityRouting>;
 
 /** `beforeNavigate` lets transient hosts (hovercards, popovers) dismiss themselves first. */
 export function personActivityRouting(
@@ -19,7 +16,7 @@ export function personActivityRouting(
     navigate: (routeId: "activity", options: { pathname: string; search: string }) => void;
   },
   beforeNavigate?: () => void,
-): PersonActivityRouting {
+) {
   return {
     basePath: context.basePath,
     navigate: (personId: string, label?: string) => {

@@ -1,5 +1,6 @@
 import { SessionManager } from "openclaw/plugin-sdk/agent-sessions";
 import { afterEach, expect, it } from "vitest";
+import { copyInternalToolResultState as preserveState } from "../../packages/agent-core/src/internal-hooks.js";
 import { setPluginToolMeta } from "../plugins/tool-metadata.js";
 import {
   createCatalogCodeModeHarness,
@@ -8,7 +9,6 @@ import {
 } from "./code-mode.test-support.js";
 import { resolveMainSessionResumePolicy as resumePolicy } from "./main-session-recovery/main-session-restart-recovery-resume-policy.js";
 import type { AgentToolResult } from "./runtime/index.js";
-import { copyInternalToolResultState as preserveState } from "./runtime/internal-hooks.js";
 import { installSessionToolResultGuard } from "./session-tool-result-guard.js";
 import { makeAgentAssistantMessage } from "./test-helpers/agent-message-fixtures.js";
 

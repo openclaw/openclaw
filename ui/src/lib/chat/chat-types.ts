@@ -97,6 +97,8 @@ export type DurableComposerDraft = {
   modelSelection?: DurableDraftModelSelection;
   attachments: DurableComposerDraftAttachment[];
   questionDrafts?: DurableQuestionDraft[];
+  /** Context-only comments have no uploaded file payload. */
+  selectionAnnotations?: ChatSelectionAnnotation[];
 };
 
 export type ChatComposerDraftRetry = {
@@ -217,7 +219,6 @@ export type ChatItem =
       kind: "message";
       key: string;
       message: unknown;
-      duplicateCount?: number;
       /** A distinct input remains a presentation boundary before execution starts. */
       startsTurn?: true;
     }
@@ -372,7 +373,6 @@ export type MessageGroup = {
   messages: Array<{
     message: unknown;
     key: string;
-    duplicateCount?: number;
     replyTarget?: NormalizedMessage["replyTarget"];
     /** Rendered reply content, excluding assistant thinking tags. */
     hasVisibleContent: boolean;

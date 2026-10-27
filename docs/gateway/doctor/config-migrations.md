@@ -24,6 +24,10 @@ Doctor keeps the config from before that hook, reports the failure, and continue
 with the remaining repairs. Warning-only results stay visible without changing
 config. Repair the affected plugin, then run `openclaw doctor --fix` again.
 
+If plugin migration obligations change during repair, Doctor reports the publication
+phase, expected and current plugin IDs, and changed field names. Diagnostic lists
+are bounded and omit configuration values; retained migration inputs stay protected.
+
 Doctor keeps plugin repair and diagnostic contracts available through later health
 checks and service finalization. It releases its private plugin resources when
 the flow ends, including failed runs.

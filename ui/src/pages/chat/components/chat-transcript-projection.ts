@@ -9,7 +9,7 @@ import { chatItemGroups } from "../chat-agent-run-grouping.ts";
 import { assistantGroupCanOwnActiveRunStatus } from "../chat-assistant-reply.ts";
 import { resolveTurnRecap, shouldRenderQueuedSendInThread } from "../chat-progress.ts";
 import { projectChatReasoning } from "../chat-reasoning.ts";
-import { projectSubagentStatus } from "../chat-subagent-wait.ts";
+import { groupReadsHandoffRoster, projectSubagentStatus } from "../chat-subagent-wait.ts";
 import type { SystemEventRenderItem } from "../chat-system-event-grouping.ts";
 import { persistedMessageEntryId } from "../chat-thread-items.ts";
 import {
@@ -281,6 +281,7 @@ export function projectChatTranscript(
     replyNavigationId: props.replyMessageAccess?.navigationId,
     onOpenSidebar: props.onOpenSidebar,
     sessionKey: props.sessionKey,
+    handoffSessionLinks: subagents.links,
     boardProvider: props.boardProvider,
     widgetLayout: props.widgetLayout,
     agentId: assistantAgentId,
@@ -527,6 +528,8 @@ export function projectChatTranscript(
       const hasTools = groups.some((group) =>
         group.messages.some(({ message }) => extractToolCardsCached(message).length > 0),
       );
+      // Launch rows and resume rules read the child roster.
+      const readsRoster = hasTools || groups.some(groupReadsHandoffRoster);
       const hasQuestions =
         asyncQuestions &&
         groups.some((group) => group.messages.some(({ message }) => readAsyncQuestions(message)));
@@ -537,9 +540,9 @@ export function projectChatTranscript(
         // Durable drafts can restore the same map under a new callback generation.
         hasQuestions ? asyncQuestions.drafts : undefined,
         hasQuestions ? asyncQuestionGeneration : undefined,
-        // Tool plugins own foreground activity; launch cards also read the child roster.
+        // Tool plugins own foreground activity.
         hasTools ? presented : undefined,
-        hasTools ? subagents.rowsKey : undefined,
+        readsRoster ? subagents.rowsKey : undefined,
         item.kind === "notice" ? props.onRetryRun : undefined,
         item.kind === "notice" ? props.failureActionsRunId : undefined,
       ];

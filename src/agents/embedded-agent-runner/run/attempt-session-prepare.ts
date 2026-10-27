@@ -34,6 +34,7 @@ import { createAgentSession } from "../../sessions/sdk.js";
 import { withSessionManagerAppend } from "../../sessions/session-manager-append-admission.js";
 import { isOutOfTurnHistoryEntry } from "../../sessions/session-manager-codec.js";
 import { sessionManagerOpenTranscriptCohort } from "../../sessions/session-manager-core.js";
+import { sessionManagerReadInitialContext } from "../../sessions/session-manager-current-turn.js";
 import { wrapToolDefinition } from "../../sessions/tools/tool-definition-wrapper.js";
 import { resolveToolSearchCatalogTool } from "../../tool-search.js";
 import { runContextEngineMaintenance } from "../context-engine-maintenance.js";
@@ -300,7 +301,7 @@ type CurrentUserTimestampOverride = NonNullable<LlmBoundaryOptions["currentUserT
 
 export async function prepareEmbeddedAttemptSessionBoundary(input: {
   abortSignal?: AbortSignal;
-  activeSession: Pick<AgentSession, "agent">;
+  activeSession: Pick<AgentSession, "agent" | "subscribe">;
   appendOnlyRuntimeContext?: boolean;
   inHistorySystemUpdates?: boolean;
   attempt: SessionBoundaryAttempt;
@@ -419,8 +420,10 @@ export async function prepareEmbeddedAttemptSessionBoundary(input: {
     attempt.onUserMessagePersistenceInvalidated?.();
   }
   if (orphanRepair) {
+    // Recovery must use the same model window as startup, not the raw navigation
+    // window where metadata can evict previously sent provider input.
     const repairedMessages = sanitizeCompactionReplayMessages(
-      sessionManager.buildSessionContext().messages,
+      (await sessionManager[sessionManagerReadInitialContext]()).messages,
     );
     // A preserved orphan is the final message in this canonical context. Keep
     // it durable, but omit it from this provider call because prompt assembly includes it.
@@ -551,7 +554,7 @@ export async function prepareEmbeddedAttemptSessionManager(
   const openSessionManager = () =>
     input.withOwnedTranscriptWrite(async () => {
       const target = input.sessionTarget;
-      const limits = resolveEmbeddedSessionContextLimits(attempt.contextTokenBudget);
+      const limits = resolveEmbeddedSessionContextLimits(attempt);
       const initial = prepareInitialPersistedUserTurnCohort({
         target,
         message: preparedUserTurnMessage,

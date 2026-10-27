@@ -14,6 +14,9 @@ Reference for the `knowledge_*` agent tools. Part of the
 Every tool acts on the calling agent's effective store and authorized partition.
 Tools take no store, agent, path, or scope argument. The Control UI and the tools
 use the same typed service and access checks.
+When Knowledge is enabled, its declared tools are included in the built-in
+`coding` and `full` tool profiles. This does not enable other plugins or
+override explicit tool denies, narrower policies, or Knowledge store access.
 
 ## Ontology
 
@@ -60,6 +63,10 @@ to fit is named in `omitted`. Compare hashes across chunks and restart if the
 record changes. Never replace a page from an incomplete body. Missing or
 duplicate IDs return `record: null`. The legacy `includeMetadata` selector
 cannot be combined with `metadataView`.
+
+Claim cards, related statements, and evidence excerpts preserve UTF-16 surrogate
+pairs. A preview may stop one unit before its cap; later source lines do not fill
+that gap.
 
 `knowledge_evidence_read({id, path, sha256})` reads a retained source passage as
 UTF-8 text, with optional `startLine`/`endLine`. It returns a verified source

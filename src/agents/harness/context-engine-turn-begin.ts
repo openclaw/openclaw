@@ -7,6 +7,8 @@ export async function beginContextEngineLogicalTurn(
   },
 ) {
   const { host, ...turn } = params;
+  // A turn handed over by a plugin reload continues on the published generation's engine.
+  await turn.lease.rebind();
   const admission = turn.recorder?.getAdmissionReceipt();
   // An unpersisted recorder has no admission to fence yet; a committed turn must supply its receipt.
   if (turn.recorder && !admission && turn.recorder.hasPersisted()) {

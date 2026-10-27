@@ -7,9 +7,16 @@ import type { EmbeddingProviderAdapter } from "./embedding-provider-types.js";
 import { createPluginRecord } from "./loader-records.js";
 import { activatePluginRegistry } from "./loader-shared.js";
 import { prepareMemoryRuntimeReload as prepareReload } from "./memory-runtime.js";
+import {
+  bindPluginMetadataSnapshotCache,
+  createPluginCache,
+  retirePluginCache,
+} from "./plugin-cache.js";
 import { getPluginInstance } from "./plugin-instance-scope.js";
+import { createPluginMetadataSnapshotFixture } from "./plugin-metadata.test-support.js";
 import type { MemoryPluginRuntime } from "./registry-contribution-types.js";
 import { createEmptyPluginRegistry } from "./registry-empty.js";
+import { getPluginLoaderCacheState } from "./registry-lifecycle.js";
 import { createTestPluginRegistry } from "./registry-runtime.test-helpers.js";
 import { disposePluginRegistryInstances as disposeRegistry } from "./runtime.js";
 import { getPluginRuntimeGatewayRequestScope as currentScope } from "./runtime/gateway-request-scope.js";
@@ -423,4 +430,47 @@ it("unwinds prepared memory admission when another runtime rejects preparation",
   } finally {
     await disposeRegistry(first.registry);
   }
+});
+
+it("restarts a carried-over memory service only when an embedding adapter retires", async () => {
+  const config: OpenClawConfig = {};
+  const owner = createTestPluginRegistry();
+  const record = createPluginRecord({ ...fixture, id: "memory-fixture" });
+  record.kind = "memory";
+  record.memorySlotSelected = true;
+  owner.registry.plugins.push(record);
+  const prepare = vi.fn(() => ({ drain: async () => {}, resume() {} }));
+  owner.createApi(record, { config }).registerMemoryCapability({
+    providerRuntime: { open: async () => ({ provider: null }), prepareReload: prepare },
+  });
+  // A lazily loaded capability registry retires with its plugin cache on every reload.
+  const cache = createPluginCache();
+  const metadata = createPluginMetadataSnapshotFixture();
+  bindPluginMetadataSnapshotCache(metadata, cache);
+  const cached = createTestPluginRegistry();
+  const adapterRecord = createPluginRecord({
+    ...fixture,
+    id: "cached-probe",
+    contracts: { embeddingProviders: ["cached-probe"] },
+  });
+  cached.registry.plugins.push(adapterRecord);
+  cached.createApi(adapterRecord, { config }).registerEmbeddingProvider({
+    id: "cached-probe",
+    create: async () => ({ provider: null }),
+  });
+  getPluginLoaderCacheState(cache).set("cached", cached.registry);
+
+  const unchanged = prepareReload(owner.registry, owner.registry);
+  expect(unchanged.restartPluginIds).toEqual(new Set());
+  expect(prepare).not.toHaveBeenCalled();
+  unchanged.commit();
+
+  const retiring = prepareReload(owner.registry, owner.registry, metadata);
+  expect(retiring.restartPluginIds).toEqual(new Set(["memory-fixture"]));
+  expect(prepare).toHaveBeenCalledWith({
+    retireRuntime: false,
+    retiringEmbeddingProviders: [cached.registry.embeddingProviders[0]!.provider],
+  });
+  retiring.commit();
+  await retirePluginCache(cache);
 });

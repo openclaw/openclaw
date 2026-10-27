@@ -214,35 +214,38 @@ export function resolveSessionChildOwners(params: {
   hasActiveRun?: boolean;
 }): readonly string[] {
   const { key, entry, now, subagentRuns } = params;
-  const parsed = params.parsedKey === undefined ? parseAgentSessionKey(key) : params.parsedKey;
-  const native =
-    !entry.acp &&
-    !parsed?.rest.startsWith("acp:") &&
-    (parsed?.rest.startsWith("subagent:") ||
-      (Boolean(entry.spawnedBy) && (entry.spawnDepth ?? 0) > 0));
-  // Native lineage is a durable relationship, not a retained-run lease. Saved
-  // dashboard navigation keeps its existing lifetime. Other store-only rows
-  // retain the bounded fallback rather than acquiring permanent authority.
-  let keep = native || params.hasActiveRun;
-  if (!keep) {
-    const latest = subagentRuns.getDisplaySubagentRun(key);
-    keep = latest
-      ? shouldKeepSubagentRunChildLink(latest, {
-          activeDescendants: subagentRuns.countActiveDescendantRuns(key),
-          now,
-        })
-      : shouldKeepStoreOnlyChildLink(entry, now);
-  }
   const controller = resolveSessionChildController(key, entry);
-  const explicitParent =
-    keep || parsed?.rest.startsWith("dashboard:")
-      ? normalizeOptionalString(entry.parentSessionKey)
-      : undefined;
-  const spawner = keep ? normalizeOptionalString(entry.spawnedBy) : undefined;
-  // Modern explicit lineage remains readable during foreign control. Legacy
-  // spawnedBy-only facts yield to a verified active controller. Neither grants
-  // permission to take over that execution (delivery checks the current owner).
-  const parent = explicitParent ?? (!controller || controller === spawner ? spawner : undefined);
+  let parent: string | undefined;
+  if (entry.parentSessionKey || entry.spawnedBy) {
+    const parsed = params.parsedKey === undefined ? parseAgentSessionKey(key) : params.parsedKey;
+    const native =
+      !entry.acp &&
+      !parsed?.rest.startsWith("acp:") &&
+      (parsed?.rest.startsWith("subagent:") ||
+        (Boolean(entry.spawnedBy) && (entry.spawnDepth ?? 0) > 0));
+    // Native lineage is a durable relationship, not a retained-run lease. Saved
+    // dashboard navigation keeps its existing lifetime. Other store-only rows
+    // retain the bounded fallback rather than acquiring permanent authority.
+    let keep = native || params.hasActiveRun;
+    if (!keep) {
+      const latest = subagentRuns.getDisplaySubagentRun(key);
+      keep = latest
+        ? shouldKeepSubagentRunChildLink(latest, {
+            activeDescendants: subagentRuns.countActiveDescendantRuns(key),
+            now,
+          })
+        : shouldKeepStoreOnlyChildLink(entry, now);
+    }
+    const explicitParent =
+      keep || parsed?.rest.startsWith("dashboard:")
+        ? normalizeOptionalString(entry.parentSessionKey)
+        : undefined;
+    const spawner = keep ? normalizeOptionalString(entry.spawnedBy) : undefined;
+    // Modern explicit lineage remains readable during foreign control. Legacy
+    // spawnedBy-only facts yield to a verified active controller. Neither grants
+    // permission to take over that execution (delivery checks the current owner).
+    parent = explicitParent ?? (!controller || controller === spawner ? spawner : undefined);
+  }
   const cached = sessionChildOwners.get(entry);
   if (cached?.key === key && cached.controller === controller && cached.parent === parent) {
     return cached.owners;
@@ -264,7 +267,12 @@ export function resolveSessionChildOwners(params: {
   return result;
 }
 
-export type SessionChildLink = { key: string; entry: SessionEntry };
+export type SessionChildLink = {
+  key: string;
+  entry: SessionEntry;
+  agentId?: string;
+  storePath?: string;
+};
 
 /** Select canonical children; retained run results cannot create session links. */
 export function readStoreChildSessionLinks(params: {

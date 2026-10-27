@@ -19,8 +19,8 @@ import { withTeamScaleConfig } from "./control-ui-team-scale-config.ts";
 import { createTeamScaleHistoryFixture } from "./control-ui-team-scale-history-fixture.ts";
 import {
   createTeamScaleCronInventory,
+  createTeamScaleCounts,
   createTeamScaleSessionInventory,
-  TEAM_SCALE_COUNTS,
 } from "./control-ui-team-scale-inventory.ts";
 import {
   createTeamScalePeople,
@@ -71,6 +71,7 @@ type FixtureOptions = {
   largeSnapshot?: boolean;
   rowFacts?: boolean;
   offRosterSession?: boolean;
+  archivedSession?: boolean;
   transcriptMessages?: number;
   dashboardMcpApp?: { font: Buffer };
   /** Opt into a scripted HTML dashboard with an independently fetched web font. */
@@ -80,12 +81,7 @@ type FixtureOptions = {
 
 /** One deterministic inventory shared by browser benchmarks and focused UI proofs. */
 export function createControlUiTeamScaleFixture(options: FixtureOptions = {}) {
-  const counts = {
-    ...TEAM_SCALE_COUNTS,
-    transcriptMessages:
-      options.transcriptMessages ??
-      (options.largeSnapshot ? 1_100 : TEAM_SCALE_COUNTS.transcriptMessages),
-  };
+  const counts = createTeamScaleCounts(options);
   const now = options.now ?? Date.now();
   const baseUrl = options.baseUrl ?? "http://127.0.0.1:19626/";
   const agentNames = ["Harbor", "Forge", "Scout", "Atlas", "Cedar", "Beacon"];
@@ -120,11 +116,10 @@ export function createControlUiTeamScaleFixture(options: FixtureOptions = {}) {
   }
   const { sessions, pinnedRows, pinnedKeys, selectedSessionKey, sidebarPersistentChildren } =
     createTeamScaleSessionInventory({
+      ...options,
       now,
       people,
       counts,
-      offRosterSession: options.offRosterSession,
-      sidebarPersistentChildren: options.sidebarPersistentChildren,
     });
   const duplicateReads = options.duplicateBootReads
     ? createTeamScaleDuplicateReadFixture(selectedSessionKey, now)
@@ -132,8 +127,6 @@ export function createControlUiTeamScaleFixture(options: FixtureOptions = {}) {
   const sidebarPresentation = options.sidebarPresentation
     ? createTeamScaleSidebarPresentation({ agents, pinnedRows, assets, now })
     : undefined;
-  pinnedRows[0]!.sharingRole = "admin";
-  pinnedRows[0]!.visibility = "shared";
   if (duplicateReads) {
     assets.set(duplicateReads.mediaPath, duplicateReads.asset);
     pinnedRows[0]!.worktree = duplicateReads.worktree;

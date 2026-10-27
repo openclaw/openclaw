@@ -8,11 +8,14 @@ import * as nodeSqlite from "../infra/node-sqlite.js";
 import { createSessionSqliteMigrationRun } from "../infra/session-sqlite-migration-manifest.js";
 import type { SqlConnection } from "../infra/sql-connection.js";
 import { corruptSqliteIndexKey } from "../infra/sqlite-index-corruption.test-support.js";
+import * as snapshotSource from "../infra/sqlite-snapshot-source.js";
 import * as snapshots from "../infra/sqlite-snapshot.js";
 import { readDatabasePathIdentitySync } from "../infra/sqlite-worker-identity.js";
 import { autoMigrateLegacyState } from "../infra/state-migrations.doctor.js";
 import { createLegacyDatabaseFixture } from "../infra/state-migrations.media-persistence.test-support.js";
 import { DoctorStateMigrationRefusalError } from "../infra/state-migrations.messages.js";
+import { readUpdateDatabaseGenerations } from "../infra/update-database-generations.js";
+import { createUpdateDoctorDatabaseWriteCapture } from "../infra/update-doctor-result.js";
 import { EMPTY_LEGACY_SESSION_SURFACES } from "../plugins/legacy-session-surfaces.types.js";
 import {
   closeOpenClawAgentDatabasesForTest,
@@ -20,6 +23,7 @@ import {
   openOpenClawAgentDatabase,
 } from "../state/openclaw-agent-db.js";
 import * as quarantine from "../state/openclaw-quarantine-store.js";
+import { createOpenClawDatabaseMaintenanceScope } from "../state/openclaw-state-db-async-lifecycle.js";
 import {
   createOpenClawTestState,
   type OpenClawTestState,
@@ -144,6 +148,63 @@ function snapshotReplacement(legacy: ReturnType<typeof seedEntry>) {
     })
     .then(() => targetPath);
 }
+
+it("closes a captured session inspection reader before removing its private snapshot", async () => {
+  const legacy = seedEntry("captured-inspection", { pendingFinalDelivery: true });
+  closeOpenClawAgentDatabasesForTest();
+  const originalBytes = fs.readFileSync(legacy.databasePath);
+  const generations = readUpdateDatabaseGenerations([legacy.databasePath]);
+  const warnings: string[] = [];
+  const capture = createUpdateDoctorDatabaseWriteCapture(generations, {
+    env: state.env,
+    signal: new AbortController().signal,
+    warn: (message) => warnings.push(message),
+  })!;
+  let snapshot: ReturnType<typeof snapshotSource.prepareSqliteReadOnlyLocationSync> | undefined;
+  let reader: DatabaseSync | undefined;
+  const openAtCleanup: boolean[] = [];
+  const prepare = snapshotSource.prepareSqliteReadOnlyLocationSync;
+  vi.spyOn(snapshotSource, "prepareSqliteReadOnlyLocationSync").mockImplementation((...args) => {
+    snapshot = prepare(...args);
+    const prepared = snapshot;
+    return {
+      ...prepared,
+      cleanup() {
+        openAtCleanup.push(reader?.isOpen ?? true);
+        return prepared.cleanup();
+      },
+    };
+  });
+  const open = nodeSqlite.openNodeSqliteDatabase;
+  vi.spyOn(nodeSqlite, "openNodeSqliteDatabase").mockImplementation((...args) => {
+    const database = open(...args);
+    if (args[0] === snapshot?.location) {
+      reader = database;
+    }
+    return database;
+  });
+  await withMaintenance(async (authority) => {
+    const scope = createOpenClawDatabaseMaintenanceScope({
+      schemaMaintenance: true,
+      assertOwnerCurrent: () => authority.assertCurrent(),
+    });
+    try {
+      await capture.admit();
+      const result = await scope.run(() => capture.run(() => repair(false, authority)));
+      expect(result).toMatchObject({ found: 1, repaired: 0, scannedStores: 1 });
+      expect(reader).toBeDefined();
+      expect(openAtCleanup).toEqual([false]);
+      expect(fs.existsSync(snapshot!.cleanupRoot!)).toBe(false);
+      await capture.settle();
+      expect(capture.receipt).toMatchObject({ unchanged: true, fromGenerations: generations });
+      expect(warnings).toEqual([]);
+      expect(fs.readFileSync(legacy.databasePath)).toEqual(originalBytes);
+    } finally {
+      await scope.close();
+      snapshot?.cleanup();
+    }
+  });
+});
 
 it("backs up and repairs numeric-only legacy rows before canonical reads", async () => {
   const legacy = seedEntry("numeric-only", {

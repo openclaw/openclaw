@@ -110,7 +110,7 @@
 
   /* Navigation recedes; the reading canvas and elevated controls stay distinct. */
   --bg-accent: var(--bg);
-  --bg-elevated: color-mix(in srgb, var(--bg-content) 70%, white);
+  --bg-elevated: color-mix(in srgb, var(--bg-content) 50%, white);
   --bg-hover: color-mix(in srgb, var(--text) 5%, var(--bg-content));
   --bg-content: #f7f6f5;
   --chat-user-surface: color-mix(in srgb, var(--accent) 12%, var(--bg-content));

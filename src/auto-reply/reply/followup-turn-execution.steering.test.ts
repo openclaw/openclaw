@@ -185,11 +185,7 @@ describe("queued turn steering", () => {
             target: captureCurrentReplyMessageInjectionTarget(sessionKey),
             abortSignal: new AbortController().signal,
             request: {
-              p: {
-                sessionKey,
-                message,
-                idempotencyKey: clientRunId,
-              },
+              p: { sessionKey, message, idempotencyKey: clientRunId },
               rawMessage: message,
               supportsTaskSuggestions: false,
             },
@@ -222,10 +218,6 @@ describe("queued turn steering", () => {
             }),
             logGateway: createSubsystemLogger("gateway"),
           })();
-          expect(
-            attempt,
-            "the active followup must retain its admitted source identity",
-          ).toBeDefined();
           await expect(attempt!.outcome).resolves.toMatchObject({ status: "accepted" });
         }
         return { runId, outcome: { kind: "rejected", payload: { text: "done" } } };

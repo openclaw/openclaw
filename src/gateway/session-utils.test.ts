@@ -587,8 +587,7 @@ describe("gateway session utils", () => {
       const patch = applySessionContextWindowPatch({
         next: entry,
         patch: { key: "agent:main:main", contextWindow: String(after) },
-        defaultProvider: "ollama",
-        defaultModel: "qwen3:8b",
+        resolveDefaultModel: () => ({ provider: "ollama", model: "qwen3:8b" }),
         runtimeId: () => "openclaw",
         routeVariants: () => catalog,
         *loadModelCatalog() {

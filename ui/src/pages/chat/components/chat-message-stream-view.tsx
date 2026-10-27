@@ -131,6 +131,7 @@ export function StreamPartView(props: {
               waitingApproval: props.options.waitingApproval === true,
               waitingSubagents:
                 part().waitingOn === "subagents" ? props.options.waitingSubagents : undefined,
+              sessionLinks: props.options.handoffSessionLinks,
               runningSubagents: props.options.runningSubagents,
               onOpenSubagents: props.options.onOpenSubagents,
               startupLabel: props.options.startupLabel,

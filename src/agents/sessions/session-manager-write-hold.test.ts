@@ -7,7 +7,7 @@ import {
   upsertSessionEntryCore,
 } from "../../config/sessions/session-accessor.js";
 import { prepareTranscriptMessageAppend } from "../../config/sessions/session-accessor.sqlite-transcript-message-append.js";
-import { appendTranscriptMessageSnapshotSync } from "../../config/sessions/session-accessor.sqlite-transcript-write.js";
+import { appendTranscriptMessageSnapshotSync } from "../../config/sessions/session-accessor.sqlite-transcript-write.kernel.js";
 import { resolveZstdCodec } from "../../infra/zstd-codec.js";
 import { openOpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import {

@@ -651,7 +651,7 @@ suite.define(() => {
     expect(activeWeight).toBe(inactiveWeight);
     expect(inactiveWeight).toBe("500");
 
-    const filterAndSort = page.getByRole("button", { name: "Filter & sort", exact: true });
+    const filterAndSort = page.getByRole("button", { name: /^Filter & sort · /, exact: true });
     await filterAndSort.click();
     await chooseSidebarMenuOption(page, "Sort by", "Last updated");
     await closeSidebarMenu(page);
@@ -688,6 +688,7 @@ suite.define(() => {
     );
     const gateway = await installMockGateway(page, {
       featureMethods: ["chat.metadata", "chat.startup", "sessions.patch"],
+      sessions,
       methodResponses: {
         "sessions.list": {
           cases: [

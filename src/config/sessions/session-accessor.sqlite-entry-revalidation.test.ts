@@ -36,7 +36,7 @@ import {
 import { assignSessionOwner } from "./session-accessor.sqlite-owner.js";
 import { listSessionParticipantsReadOnly } from "./session-accessor.sqlite-participant-read.js";
 import { recordSessionParticipant } from "./session-accessor.sqlite-participants.native.js";
-import { appendTranscriptMessageSync } from "./session-accessor.sqlite-transcript-write.js";
+import { appendTranscriptMessageSync } from "./session-accessor.sqlite-transcript-write.kernel.js";
 import { setCanonicalSqliteSessionMainKey } from "./session-canonical-key.js";
 import { assertSessionEntryCurrentAdmission } from "./session-entry-current-admission.js";
 import {

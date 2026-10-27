@@ -13,9 +13,9 @@ import { makeChatHost } from "./chat-host.test-support.ts";
 import { renderPaneModelControl } from "./chat-pane-model-control.test-support.ts";
 import { renderControls } from "./chat-pane-session-controls.test-support.ts";
 import { readChatPaneMutationAccess } from "./chat-pane-session-controls.ts";
-import { createRenderTestChatPane } from "./chat-pane.test-support.ts";
 import { switchChatModel, switchChatSetting } from "./chat-session.ts";
 import { getPendingChatPickerPatch, patchChatSessionSettings } from "./chat-settings-patches.ts";
+import { createPageState } from "./chat-state-page.ts";
 import { resolveChatAgentId, selectedChatSessionRow } from "./chat-state-route.ts";
 import { setChatRunOwner } from "./history-merge.ts";
 import { cacheChatSessionSnapshot } from "./session-message-cache.ts";
@@ -78,10 +78,12 @@ async function createControlsFixture(
       "sessions.list": sessionsResult,
     },
   });
-  const pane = createRenderTestChatPane();
-  const state = Object.assign(pane.initialize(createInitializationContext()), fixtureHost, {
-    chatModelCatalogInitialized: true,
-  });
+  const context = createInitializationContext();
+  const state = Object.assign(
+    createPageState(context, { afterCommit: () => () => {} }, { dispatchEvent: () => true }),
+    fixtureHost,
+    { chatModelCatalogInitialized: true },
+  );
   const catalogScope = {
     agentId: resolveChatAgentId(state) ?? undefined,
     sessionKey: state.sessionKey,
@@ -94,7 +96,7 @@ async function createControlsFixture(
   const visibleSession = selectedChatSessionRow(state);
   const access = readChatPaneMutationAccess(
     {
-      ...pane.context.gateway.snapshot,
+      ...context.gateway.snapshot,
       client: state.client,
       phase: "connected",
       hello: state.hello,
@@ -113,12 +115,15 @@ async function createControlsFixture(
   const container = document.createElement("div");
   document.body.append(container);
   renderPaneModelControl(controls.composerControls, container, true);
+  // Await lazy module work before starting the DOM readiness deadline.
+  await import("./components/chat-model-picker-panel.tsx");
   await waitForSolid(() =>
     expect(container.querySelector(".chat-controls__model-menu")).not.toBeNull(),
   );
   const effort = container.querySelector<HTMLDetailsElement>(".chat-controls__effort-picker")!;
   effort.open = true;
   effort.dispatchEvent(new Event("toggle"));
+  await import("./components/chat-effort-picker-panel.tsx");
   await waitForSolid(() =>
     expect(container.querySelector("[data-chat-thinking-slider]")).not.toBeNull(),
   );

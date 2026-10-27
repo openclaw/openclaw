@@ -190,6 +190,7 @@ function updateTextareaOverflow(
   if (el.style.overflowY !== overflow) {
     el.style.overflowY = overflow;
   }
+  el.toggleAttribute("data-composer-scrollable", scrollable);
   el.toggleAttribute("data-scroll-fade-top", fadeTop);
   el.toggleAttribute("data-scroll-fade-bottom", fadeBottom);
   const state = composerTextareaResizeObservers.get(el);
@@ -226,6 +227,7 @@ export function adjustTextareaHeight(
   if (el.closest('[data-composer-layout="single-line"]')) {
     el.style.height = "";
     el.style.overflowY = "";
+    el.removeAttribute("data-composer-scrollable");
     el.removeAttribute("data-scroll-fade-top");
     el.removeAttribute("data-scroll-fade-bottom");
     return;

@@ -21,6 +21,7 @@ import {
   areDiagnosticsEnabledForProcess,
   onTrustedInternalDiagnosticEvent,
   setDiagnosticsEnabledForProcess,
+  waitForDiagnosticEventsDrained,
   type DiagnosticEventPayload,
 } from "../../infra/diagnostic-events.js";
 import {
@@ -205,23 +206,26 @@ describe("terminal-receipt steer fence isolated-gateway proof (#128971)", () => 
     expect(older.mailbox.owner.active).toBe(liveOperation);
     const commit = createDeferred();
     const injected = createDeferred();
-    const reported = createDeferred<DiagnosticEventPayload>();
+    type PhaseEvent = Extract<DiagnosticEventPayload, { type: "diagnostic.phase.completed" }>;
+    const reported = createDeferred<PhaseEvent>();
+    const phases: PhaseEvent[] = [];
     const previousDiagnostics = areDiagnosticsEnabledForProcess();
     setDiagnosticsEnabledForProcess(true);
     const stop = onTrustedInternalDiagnosticEvent(
       (event) => {
-        if (
-          event.type === "diagnostic.phase.completed" &&
-          event.name === "chat.send.runAdmission" &&
-          event.details?.stage === "steer"
-        ) {
+        if (event.type !== "diagnostic.phase.completed") {
+          return;
+        }
+        phases.push(event);
+        if (event.name === "chat.send.runAdmission" && event.details?.stage === "steer") {
           reported.resolve(event);
         }
       },
       { include: ["diagnostic.phase.completed"] },
     );
     let clock = 0;
-    const now = vi.spyOn(performance, "now").mockImplementation(() => clock);
+    const realNow = performance.now.bind(performance);
+    const now = vi.spyOn(performance, "now").mockImplementation(() => realNow() + clock);
     const runIds = ["ordered-steer-first", "ordered-steer-second"];
     const messages = ["First synthetic steering input.", "Second synthetic steering input."];
     queueMessage.mockImplementation(async (_text, options, assertCurrent) => {
@@ -265,11 +269,18 @@ describe("terminal-receipt steer fence isolated-gateway proof (#128971)", () => 
       expect(dispatchInboundMessageMock).not.toHaveBeenCalled();
       clock = 120_001;
       commit.resolve();
-      expect(await withinTest(reported.promise, signal)).toMatchObject({
+      const report = await withinTest(reported.promise, signal);
+      expect(report).toMatchObject({
         name: "chat.send.runAdmission",
-        durationMs: clock,
         details: { stage: "steer" },
       });
+      expect(report.durationMs).toBeGreaterThanOrEqual(clock);
+      await waitForDiagnosticEventsDrained();
+      const settlement = phases.find(
+        (event) => event.name === "chat.send.detail.run_admission.steer_settlement",
+      );
+      expect(settlement).toMatchObject({ details: { stage: "steer" } });
+      expect(settlement?.durationMs).toBeGreaterThanOrEqual(clock);
       expect(dispatchInboundMessageMock).not.toHaveBeenCalled();
     } finally {
       retireSessionControllerInput(older);

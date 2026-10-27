@@ -9,6 +9,7 @@ import type { HookRunner } from "../plugins/hooks.js";
 import type { AssistantPhase } from "../shared/chat-message-content.js";
 import type { BlockChunkMetadata, EmbeddedBlockChunker } from "./embedded-agent-block-chunker.js";
 import type { BlockReplyPayload } from "./embedded-agent-payloads.js";
+import type { AssistantSnapshotReasoning } from "./embedded-agent-subscribe.assistant-snapshot.js";
 import type {
   EmbeddedAgentSubscribeState,
   StreamBlockState,
@@ -96,7 +97,7 @@ export type EmbeddedAgentSubscribeContext = {
   noteCompactionRetry: () => void;
   resolveCompactionRetry: () => void;
   maybeResolveCompactionWait: () => void;
-  captureModelEvent: (evt: AgentSessionEvent) => void;
+  captureModelEvent: (evt: AgentSessionEvent) => AssistantSnapshotReasoning | undefined;
   incrementCompactionCount: () => void;
   noteCompactionTokensAfter: (value: unknown) => void;
   getCompactionCount: () => number;

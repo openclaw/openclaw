@@ -52,6 +52,7 @@ import {
   readControlUiResourceCounts,
   type ControlUiResourceCounts,
 } from "./lib/control-ui-resource-counts.ts";
+import { captureRetention, installRetentionTimers } from "./lib/control-ui-retention.ts";
 import {
   createWorkboardResourceFixture,
   prepareWorkboardResourceSource,
@@ -75,6 +76,7 @@ const { values } = parseArgs({
     theme: { type: "string", default: "light" },
     "thread-cpu-time": { type: "boolean", default: false },
     "function-counts": { type: "boolean", default: false },
+    "graph-counts": { type: "boolean", default: false },
     "first-pair-screenshots": { type: "boolean", default: false },
     "invalidation-tracking": { type: "boolean", default: false },
     "resource-counts": { type: "boolean", default: false },
@@ -89,6 +91,9 @@ const { values } = parseArgs({
   },
 });
 const trace = values.trace || values["selector-stats"];
+if (values["graph-counts"] && (trace || values["function-counts"] || values["projection-counts"])) {
+  throw new Error("Run reactive graph counts separately from CPU/coverage instrumentation");
+}
 if (values["projection-counts"] && !values["projection-fixtures"]) {
   throw new Error("--projection-counts requires --projection-fixtures");
 }
@@ -359,7 +364,13 @@ type Result = {
     error?: string;
   };
   durationBreakdownMs?: Record<string, number>;
-  retainedHeap?: { beforeBytes: number; afterBytes?: number; deltaBytes?: number };
+  retainedHeap?: {
+    beforeBytes: number;
+    afterBytes?: number;
+    deltaBytes?: number;
+    before: Awaited<ReturnType<typeof captureRetention>> & { artifact: string };
+    after?: Awaited<ReturnType<typeof captureRetention>> & { artifact: string };
+  };
   longTasks?: { count: number; totalMs: number; maxMs: number };
   requests?: Record<string, number>;
   scenarioEvidence?: InteractionEvidence;
@@ -374,6 +385,7 @@ type Result = {
   projectionCoverageArtifact?: string;
   functionCoverageArtifact?: string;
   functionCoveragePreparationArtifact?: string;
+  reactiveGraphArtifact?: string;
   projectionScreenshotArtifact?: string;
   measurementClass?:
     | "production-interaction"
@@ -613,9 +625,12 @@ try {
         functionCounts: values["function-counts"]
           ? "Precise coverage starts before navigation and resets after preparation; diagnostic overhead, not timing evidence."
           : false,
+        reactiveGraphCounts: values["graph-counts"]
+          ? "Observe-only Solid build; diagnostic counts, not production timing evidence."
+          : false,
         cpuThrottle,
         retainedHeap: values["retained-heap"]
-          ? "Separate GC-controlled proof: collect before tracing and after action metrics/tracing; not a timing comparison."
+          ? "Separate GC-controlled proof: full heap/DOM snapshots after preparation and after action metrics/tracing, including fixture request history; not a timing comparison."
           : false,
         pairOrder: values["control-bundle-dir"]
           ? values.counterbalance
@@ -893,6 +908,9 @@ try {
                 },
               },
             );
+            if (values["retained-heap"]) {
+              await installRetentionTimers(page);
+            }
             await scenario.setup?.(page);
             await page.goto(new URL(scenario.route, slot.server.baseUrl).href);
             await waitForControlUiInitialRoster(page, 15_000 * cpuThrottle);
@@ -907,7 +925,10 @@ try {
               await cdp.send("Network.disable");
             }
             result.measurementClass =
-              scenario.diagnostic || values["function-counts"]
+              scenario.diagnostic ||
+              values["function-counts"] ||
+              values["graph-counts"] ||
+              values["retained-heap"]
                 ? "diagnostic"
                 : scenario.projectionFamily
                   ? values["projection-counts"]
@@ -944,12 +965,15 @@ try {
               timeDomain: values["thread-cpu-time"] ? "threadTicks" : "timeTicks",
             });
             if (values["retained-heap"]) {
-              await cdp.send("HeapProfiler.collectGarbage");
-              const initial = await metrics(cdp);
-              if (initial.JSHeapUsedSize === undefined) {
-                throw new Error("Missing JSHeapUsedSize after initial garbage collection");
-              }
-              result.retainedHeap = { beforeBytes: initial.JSHeapUsedSize };
+              const artifact = `${artifactPrefix}.before.heapsnapshot`;
+              // Scenarios can retain request-count cursors from preparation.
+              const initial = await captureRetention(page, cdp, path.join(artifactDir, artifact), {
+                preserveFixtureRequests: true,
+              });
+              result.retainedHeap = {
+                beforeBytes: initial.heapUsedBytes,
+                before: { ...initial, artifact },
+              };
             }
             if (values["selector-stats"]) {
               cdp.on(
@@ -1116,6 +1140,15 @@ try {
               preciseCoverage = true;
             }
             await page.evaluate(() => performance.mark("interaction:start"));
+            if (values["graph-counts"]) {
+              await page.evaluate((label) => {
+                const graph = Reflect.get(window, "__openclawReactiveGraph");
+                if (!graph) {
+                  throw new Error("--graph-counts requires the explicit reactive graph build");
+                }
+                graph.start(label);
+              }, scenario.id);
+            }
             const start = performance.now();
             result.scenarioEvidence = (await scenario.run(page, gateway)) ?? undefined;
             if (scenario.visibility !== "hidden") {
@@ -1123,6 +1156,14 @@ try {
             }
             result.wallMs = performance.now() - start;
             await page.evaluate(() => performance.mark("interaction:end"));
+            if (values["graph-counts"]) {
+              const graph = await page.evaluate(() =>
+                Reflect.get(window, "__openclawReactiveGraph").stop(),
+              );
+              const artifact = `${artifactPrefix}.reactive-graph.json`;
+              await writeFile(path.join(artifactDir, artifact), JSON.stringify(graph, null, 2));
+              result.reactiveGraphArtifact = artifact;
+            }
             if (preciseCoverage) {
               const coverage = await cdp.send("Profiler.takePreciseCoverage");
               await cdp.send("Profiler.stopPreciseCoverage");
@@ -1402,13 +1443,18 @@ try {
               const retainedHeap = result.retainedHeap;
               if (values["retained-heap"] && cdp && retainedHeap && result.status === "passed") {
                 await capture(async () => {
-                  await cdp!.send("HeapProfiler.collectGarbage");
-                  const final = await metrics(cdp!);
-                  if (final.JSHeapUsedSize === undefined) {
-                    throw new Error("Missing JSHeapUsedSize after final garbage collection");
-                  }
-                  retainedHeap.afterBytes = final.JSHeapUsedSize;
-                  retainedHeap.deltaBytes = final.JSHeapUsedSize - retainedHeap.beforeBytes;
+                  const artifact = `${artifactPrefix}.after.heapsnapshot`;
+                  const final = await captureRetention(
+                    page,
+                    cdp!,
+                    path.join(artifactDir, artifact),
+                    {
+                      preserveFixtureRequests: true,
+                    },
+                  );
+                  retainedHeap.after = { ...final, artifact };
+                  retainedHeap.afterBytes = final.heapUsedBytes;
+                  retainedHeap.deltaBytes = final.heapUsedBytes - retainedHeap.beforeBytes;
                 });
               }
               if (!values["first-pair-screenshots"] || pair === 0 || result.status === "failed") {
@@ -1549,6 +1595,7 @@ const summary = viewports
               metric,
               !diagnostic &&
               !values["function-counts"] &&
+              !values["retained-heap"] &&
               samples.length &&
               !values["projection-counts"] &&
               samples.every((row) => row[metric] !== undefined)

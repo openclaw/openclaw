@@ -313,25 +313,13 @@ describe("requester settle dispatch deadline", () => {
       const run = () =>
         withGateway(context, () => maybeWakeRequesterAfterAllChildrenSettled(params));
 
-      await expect(run()).resolves.toBe(!undelivered);
+      await expect(run()).resolves.toBe(true);
       expect(startTurn).toHaveBeenCalledOnce();
-      expect(completeBatch).toHaveBeenCalledTimes(undelivered ? 0 : 1);
-      if (undelivered) {
-        expect(consumed.requesterSettleWake).toMatchObject({
-          status: "pending",
-          attemptCount: 1,
-          lastError: "completion agent did not produce a visible reply",
-        });
-        startTurn.mockImplementation(async ({ preflight, io }) => {
-          acceptTurn({ preflight, io });
-          finishTurn(io, "Remaining child result received.");
-        });
-      } else {
-        expect(completeBatch.mock.calls[0]?.[2]).toMatchObject({ delivered: true });
-      }
+      expect(completeBatch).toHaveBeenCalledOnce();
+      expect(completeBatch.mock.calls[0]?.[2]).toMatchObject({ delivered: true });
       await vi.advanceTimersByTimeAsync(30_000);
-      await expect(run()).resolves.toBe(undelivered);
-      expect(startTurn).toHaveBeenCalledTimes(undelivered ? 2 : 1);
+      await expect(run()).resolves.toBe(false);
+      expect(startTurn).toHaveBeenCalledOnce();
       expect(completeBatch).toHaveBeenCalledOnce();
     },
   );

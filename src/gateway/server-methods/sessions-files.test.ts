@@ -30,6 +30,7 @@ import {
   removeWorkspaceFixture,
   writeWorkspaceFile,
 } from "./sessions-files.test-support.js";
+import * as workspaceFs from "./workspace-fs.js";
 
 const { sessionFilesMocks } = await import("./sessions-files.mocks.test-support.js");
 
@@ -310,6 +311,22 @@ describe("sessions.files RPC handlers", () => {
       entries: [{ path: "..notes/readme.md", kind: "file" }],
     });
     await expectFile(folder.browser.entries[0].path, { content: "# Notes\n" });
+  });
+
+  it("lists the admitted local root without a separate metadata probe", async () => {
+    mockVisibleMessages([]);
+    const stat = vi.spyOn(workspaceFs, "statWorkspacePath");
+    try {
+      const payload = await files.ok("list");
+      expect(browserKinds(payload.browser.entries)).toEqual([
+        ["src", "directory", undefined],
+        ["ui", "directory", undefined],
+        ["package.json", "file", undefined],
+      ]);
+      expect(stat).not.toHaveBeenCalled();
+    } finally {
+      stat.mockRestore();
+    }
   });
 
   it.each([

@@ -200,6 +200,7 @@ suite.define(() => {
             providerOpacity: "1",
             toggleFocusVisible: false,
             toggleFocused: true,
+            toolbarButtonVisible: true,
           });
         await page.keyboard.press("Tab");
         await expect

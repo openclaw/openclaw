@@ -1,9 +1,7 @@
 import type { WorkerTranscriptCommitParams } from "../../../packages/gateway-protocol/src/schema/worker-admission.js";
 import type { BoundAgentRunSessionTarget } from "../../agents/run-session-target.types.js";
-import {
-  captureSessionActorStorageOwner,
-  withSessionActorStorage,
-} from "../../config/sessions/session-actor-storage-binding.js";
+import { withSessionActorStorage } from "../../config/sessions/session-actor-storage-acquisition.js";
+import { captureSessionActorStorageOwner } from "../../config/sessions/session-actor-storage-binding.js";
 import { captureSessionTranscriptTargetBinding } from "../../config/sessions/transcript-target-binding.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { KeyedAsyncQueue } from "../../plugin-sdk/keyed-async-queue.js";

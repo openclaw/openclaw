@@ -1,3 +1,4 @@
+import { materializeErrorStack } from "openclaw/plugin-sdk/error-runtime";
 import { sleepWithAbort } from "openclaw/plugin-sdk/retry-runtime";
 import { formatErrorMessage } from "openclaw/plugin-sdk/security-runtime";
 import type { SsrFPolicy } from "openclaw/plugin-sdk/security-runtime";
@@ -189,7 +190,12 @@ async function closeTrackedPlaywrightConnection(connection: ConnectedBrowser): P
   }
   const closing = connection.browser.close();
   closeConnectionPromises.set(connection, closing);
-  return await closing;
+  try {
+    return await closing;
+  } catch (error) {
+    materializeErrorStack(error);
+    throw error;
+  }
 }
 
 async function withPlaywrightCloseTimeout(task: Promise<void>): Promise<void> {

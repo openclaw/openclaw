@@ -104,12 +104,14 @@ function gatewaySample(overrides: Partial<GatewaySample> = {}): GatewaySample {
     cpuMs: 100,
     exitCode: null,
     firstOutputMs: 1,
-    firstSessionRpc: { ms: 19, attempts: 1, lastError: null },
+    firstSessionRpc: { ms: 19, connectMs: 18, attempts: 1, lastError: null },
     gatewayReadyLogLine: "[gateway] ready",
     gatewayReadyLogMs: 20,
     healthz: startupProbe(10, "econnrefused"),
     httpListenLogLine: "[gateway] http server listening (0 plugins)",
     httpListenLogMs: 5,
+    hostLoadBefore: [1, 1, 1],
+    hostLoadAfter: [1, 1, 1],
     maxRssMb: 120,
     outputTail: "",
     readyz: startupProbe(18, "http-503"),
@@ -202,6 +204,58 @@ process.send("fixture-ready");`,
     collect(profile.head);
     expect(functionNames.has("allocateBeforeReady")).toBe(true);
     expect(functionNames.has("allocateAfterReady")).toBe(false);
+  });
+
+  it("gates both full integrity-check forms on unsealed startup fixtures", async ({ signal }) => {
+    const root = tempDirs.make("openclaw-bench-integrity-gate-");
+    const fixture = path.join(root, "fixture");
+    const seeded = await runStartup(root, signal, [
+      "--case",
+      "slowAgentDatabase",
+      "--fixture-root",
+      fixture,
+      "--seed-only",
+      "--agent-database-mib",
+      "0",
+      "--agent-gate-delay-ms",
+      "0",
+    ]);
+    expect(seeded.status, seeded.stderr).toBe(0);
+    for (const agentId of [
+      "bench-fast-01",
+      "bench-fast-02",
+      "bench-fast-03",
+      "bench-fast-04",
+      "bench-slow",
+    ]) {
+      expect(
+        fs.existsSync(
+          path.join(fixture, "state/agents", agentId, "agent/openclaw-agent.sqlite.seal"),
+        ),
+      ).toBe(false);
+    }
+    const database = path.join(fixture, "state/agents/bench-slow/agent/openclaw-agent.sqlite");
+    const checked = await runNodeScript(
+      [
+        "--import",
+        path.join(fixture, "slow-agent-preload.mjs"),
+        "--input-type=module",
+        "--eval",
+        `import { DatabaseSync } from "node:sqlite";
+const db = new DatabaseSync(${JSON.stringify(database)}, { readOnly: true });
+for (const sql of ["PRAGMA integrity_check;", "PRAGMA integrity_check(2147483647);"]) {
+  const rows = db.prepare(sql).all();
+  if (rows.length !== 1 || rows[0].integrity_check !== "ok") throw new Error("Fixture integrity failed");
+}
+db.close();`,
+      ],
+      { ...process.env },
+      undefined,
+      { cwd: root, signal, maxBuffer: 64 * 1024, requireProcessTreeExit: true },
+    );
+    expect(checked.status, checked.stderr).toBe(0);
+    expect(checked.stdout.match(/\[slow-agent-bench\] gate-start/gu)).toHaveLength(2);
+    expect(checked.stdout.match(/\[slow-agent-bench\] gate-passed/gu)).toHaveLength(2);
   });
 
   it.skipIf(process.platform === "win32")(
@@ -364,7 +418,12 @@ server.listen(port, "127.0.0.1", () => {
         expect(report.results).toHaveLength(1);
         expect(report.results[0].samples).toHaveLength(2);
         for (const sample of report.results[0].samples) {
-          expect(sample.firstSessionRpc).toMatchObject({ ms: expect.any(Number), attempts: 2 });
+          expect(sample.firstSessionRpc).toMatchObject({
+            ms: expect.any(Number),
+            connectMs: expect.any(Number),
+            attempts: 2,
+          });
+          expect(sample.firstSessionRpc.connectMs).toBeLessThan(sample.firstSessionRpc.ms);
           expect(sample.startupTraceLines).toHaveLength(2);
         }
         expect(report.results[0].summary.startupTrace).toMatchObject({
@@ -503,6 +562,21 @@ server.listen(port, "127.0.0.1", () => {
       output: "startup.json",
       runs: 2,
     });
+    if (process.platform === "win32") {
+      expect(() => parseOptions("--case teamBoot --publication-api-delay-ms 500")).toThrow("POSIX");
+      return;
+    }
+    expect(parseOptions("--case teamBoot --publication-api-delay-ms 500").cases[0]).toMatchObject({
+      publicationApiDelayMs: 500,
+    });
+    for (const args of [
+      "--case default --publication-api-delay-ms 500",
+      "--case teamBoot --publication-api-delay-ms 199",
+      "--case teamBoot --publication-api-delay-ms 801",
+      "--case teamBoot --publication-api-delay-ms 500 --publication-git-delay-ms 500",
+    ]) {
+      expect(() => parseOptions(args)).toThrow();
+    }
   });
 
   it("selects the Gateway runtime and affinity independently of the controller", () => {
@@ -576,7 +650,7 @@ server.listen(port, "127.0.0.1", () => {
         cpuMs: null,
         exitCode: 1,
         firstOutputMs: 5,
-        firstSessionRpc: { ms: null, attempts: 0, lastError: null },
+        firstSessionRpc: { ms: null, connectMs: null, attempts: 0, lastError: null },
         gatewayReadyLogLine: null,
         gatewayReadyLogMs: null,
         healthz: startupProbe(null, "econnrefused"),

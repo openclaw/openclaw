@@ -117,6 +117,31 @@ function compressedRecord(bytes: Uint8Array, rawBytes = bytes.byteLength): Paylo
 }
 
 describe("transcript payload storage boundary", () => {
+  it("prepares UTF-8 frames without decoding a duplicate event string", () => {
+    using database = openNodeSqliteDatabase(":memory:");
+    admitSqliteSchema(database);
+    const original = JSON.stringify({
+      type: "message",
+      message: { role: "assistant", content: "café 雪 🦞 \ufeff ".repeat(512) },
+    });
+    const decode = vi.spyOn(TextDecoder.prototype, "decode");
+    let prepared: TranscriptPayloadRecord;
+    try {
+      prepared = prepareTranscriptPayload(database, original);
+      expect(decode).not.toHaveBeenCalled();
+    } finally {
+      decode.mockRestore();
+    }
+    expect(prepared.event_zstd).not.toBeNull();
+    expect(readTranscriptPayload(prepared)).toBe(original);
+    for (const surrogate of ["\ud800", "\udfff"]) {
+      const malformed = `{"type":"custom","data":"${"x".repeat(2048)}${surrogate}"}`;
+      const identity = prepareTranscriptPayload(database, malformed);
+      expect(identity.event_json).toBe(malformed);
+      expect(identity.event_zstd).toBeNull();
+    }
+  });
+
   it("reads legacy predicates lazily and uses the next payload write without JSON work", () => {
     using database = openNodeSqliteDatabase(":memory:");
     createTable(database);

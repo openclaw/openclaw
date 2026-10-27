@@ -77,7 +77,9 @@ function buildCacheInputPaths(paths = []) {
 const RUNTIME_WORKSPACE_ROOT_PATHS = ${JSON.stringify(RUNTIME_WORKSPACE_ROOT_PATHS)};
 const DERIVED_WORKSPACE_SEGMENT_RE = new RegExp(${JSON.stringify(DERIVED_WORKSPACE_SEGMENT_PATTERN)});
 function isRuntimeOwnedWorkspacePath(relativePath) {
-  return isManagedSandboxSkillsPath(relativePath) || RUNTIME_WORKSPACE_ROOT_PATHS.some(
+  return relativePath === ".git" || relativePath.startsWith(".git/") ||
+    relativePath.endsWith("/.git") || relativePath.includes("/.git/") ||
+    isManagedSandboxSkillsPath(relativePath) || RUNTIME_WORKSPACE_ROOT_PATHS.some(
     (root) => relativePath === root || relativePath.startsWith(root + "/"),
   );
 }
