@@ -42,3 +42,24 @@ export function isUnbilledFailedTurn(message: {
         ACKNOWLEDGING_APIS.has(message.api)))
   );
 }
+
+// Transports for these APIs keep streamed output on a failed turn; others drop partial tool calls.
+const OUTPUT_KEEPING_APIS = new Set([
+  "openai-responses",
+  "azure-openai-responses",
+  "openai-chatgpt-responses",
+]);
+
+/**
+ * Reads the same rule from a stored turn, after transport cleanup. An empty stored turn proves
+ * that nothing was generated only when its transport keeps streamed output, or when the provider
+ * never accepted the request.
+ */
+export function isUnbilledStoredFailedTurn(message: Parameters<typeof isUnbilledFailedTurn>[0]) {
+  return (
+    isUnbilledFailedTurn(message) &&
+    typeof message.api === "string" &&
+    (OUTPUT_KEEPING_APIS.has(message.api) ||
+      (ACKNOWLEDGING_APIS.has(message.api) && !message.responseId))
+  );
+}

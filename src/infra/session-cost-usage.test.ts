@@ -199,10 +199,18 @@ it("counts a stored request the provider never ran as zero usage, not a lower bo
     messageCounts: { assistant: 2, errors: 1 },
   });
   expect(summary?.usageReport).toBeUndefined();
-  // Accepted then dropped, or failed after output: billed usage may be missing.
+  // Accepted then dropped, failed after output, or tool calls dropped by transport cleanup.
   for (const [sessionId, entry] of [
     ["dropped-after-acceptance", failed("2026-02-05T12:02:00.000Z", [], { responseId: "resp_1" })],
     ["failed-after-output", failed("2026-02-05T12:03:00.000Z", [textBlock("partial answer")])],
+    [
+      "tool-call-dropped",
+      failed("2026-02-05T12:04:00.000Z", [], {
+        api: "anthropic-messages",
+        responseId: "msg_1",
+        errorBody: { type: "overloaded_error" },
+      }),
+    ],
   ] as const) {
     const file = await writeTranscript(sessionId, entry);
     expect((await readSummary({ sessionFile: file }))?.usageReport).toEqual({

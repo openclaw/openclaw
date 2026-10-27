@@ -2,7 +2,7 @@ import { calculateUsageCost, type ModelCostConfig } from "@openclaw/llm-core";
 import { asFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import { asOptionalObjectRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import { isUnbilledFailedTurn } from "../../packages/ai/src/utils/usage.js";
+import { isUnbilledStoredFailedTurn } from "../../packages/ai/src/utils/usage.js";
 import type { NormalizedUsage, UsageLike } from "../agents/usage.js";
 import { hasRecordedUsageCost, normalizeUsage } from "../agents/usage.js";
 import { isToolCallContentType } from "../chat/tool-content.js";
@@ -68,10 +68,9 @@ export const parseUsageCostTranscriptRecord = (
 
   const usageRaw =
     (message.usage as UsageLike | undefined) ?? (entry.usage as UsageLike | undefined);
-  const stopReason = typeof message.stopReason === "string" ? message.stopReason : undefined;
   // Transports record unbilled failures as zero usage; older transcripts still say unavailable.
   const usage =
-    usageRaw && !isUnbilledFailedTurn({ ...message, usage: usageRaw })
+    usageRaw && !isUnbilledStoredFailedTurn({ ...message, usage: usageRaw })
       ? (normalizeUsage(usageRaw) ?? undefined)
       : undefined;
 
@@ -83,6 +82,7 @@ export const parseUsageCostTranscriptRecord = (
     (typeof entry.model === "string" ? entry.model : undefined);
 
   const costBreakdown = extractCostBreakdown(usageRaw);
+  const stopReason = typeof message.stopReason === "string" ? message.stopReason : undefined;
   const durationMs = asFiniteNumber(message.durationMs ?? entry.durationMs);
   const toolNames: string[] = [];
   const toolResultCounts = { total: 0, errors: 0 };
