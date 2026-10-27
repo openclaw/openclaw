@@ -23,6 +23,7 @@ import { loadavg } from "node:os";
 import { DatabaseSync } from "node:sqlite";
 import { parseArgs } from "node:util";
 import { deserialize, serialize } from "node:v8";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import {
   attachSessionEntrySnapshots,
   sessionEntrySnapshotColumnsDefinition,
@@ -44,8 +45,6 @@ assert(Number.isSafeInteger(residentCount) && residentCount > 0, "Invalid reside
 assert(values["reply-file"], "Provide --reply-file from a synthetic Gateway capture");
 const gc = global.gc;
 assert(gc, "Run with --expose-gc");
-const isRecord = (value: unknown): value is Record<string, unknown> =>
-  value !== null && typeof value === "object" && !Array.isArray(value);
 function census(databasePath: string) {
   const database = new DatabaseSync(databasePath, { readOnly: true });
   const fields = new Map<string, { count: number; valueJsonBytes: number }>();
