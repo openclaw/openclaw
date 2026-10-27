@@ -178,6 +178,13 @@ describe("scribes state", () => {
 
   it("derives Available, Starting, On, Paused, Failing, Done and Needs reauthorization", async () => {
     const archived = { ...session, archived: true };
+    const setup = scribeSetup(
+      "conversations",
+      "ongoing",
+      { scope: "active", since: "30d", schedule: "0 4 * * *" },
+      "main",
+      "UTC",
+    );
     const cases: [Parameters<typeof conversationsScribe>[0], string][] = [
       [{}, "available"],
       [{ session }, "starting"],
@@ -197,6 +204,7 @@ describe("scribes state", () => {
       [{ session: archived, job: job() }, "reauth"],
       [{ job: job() }, "reauth"],
       [{ session: archived }, "available"],
+      [{ session, messages: [result("on"), user(setupMessage(setup))] }, "starting"],
     ];
     for (const [world, status] of cases) {
       expect((await conversationsScribe(world)).status, JSON.stringify(world)).toBe(status);

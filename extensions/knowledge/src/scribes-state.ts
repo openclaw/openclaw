@@ -143,23 +143,25 @@ export function resultFromText(text: string): ScribeResult | undefined {
   return undefined;
 }
 
-// The newest assistant message that carries a valid result line.
-function parseScribeResult(messages: readonly unknown[]): ScribeResult | undefined {
-  for (const message of [...messages].toReversed()) {
+// The newest assistant message that carries a valid result line, with its position.
+function parseScribeResult(messages: readonly unknown[]) {
+  for (let index = messages.length - 1; index >= 0; index--) {
+    const message = messages[index];
     const result =
       isRecord(message) && message.role === "assistant"
         ? resultFromText(messageText(message))
         : undefined;
     if (result) {
-      return result;
+      return { result, index };
     }
   }
-  return undefined;
+  return { result: undefined, index: -1 };
 }
 
-/** Options from the newest setup or repair message the page sent this conversation. */
-function parseSetup(messages: readonly unknown[]): ScribeSetup | undefined {
-  for (const message of [...messages].toReversed()) {
+/** Options from the newest setup or repair message the page sent, with its position. */
+function parseSetup(messages: readonly unknown[]) {
+  for (let index = messages.length - 1; index >= 0; index--) {
+    const message = messages[index];
     if (!isRecord(message) || message.role !== "user") {
       continue;
     }
@@ -181,13 +183,13 @@ function parseSetup(messages: readonly unknown[]): ScribeSetup | undefined {
         typeof value.agentId === "string"
       ) {
         // SAFETY: fields checked above; options are the page's own serialized choices.
-        return value as ScribeSetup;
+        return { setup: value as ScribeSetup, index };
       }
     } catch {
       // A hand-edited setup message: treat as unknown options.
     }
   }
-  return undefined;
+  return { setup: undefined, index: -1 };
 }
 
 /**
@@ -286,11 +288,13 @@ export async function loadScribes(host: ScribeReader, agentId: string): Promise<
       const session = sessions[i];
       const job = jobs.get(scribeDeclarationKey(scribe.id));
       const messages = session ? await readMessages(host, session, agentId) : [];
-      const result = parseScribeResult(messages);
-      const setup = parseSetup(messages);
+      const { result, index: resultIndex } = parseScribeResult(messages);
+      const { setup, index: setupIndex } = parseSetup(messages);
+      // A result older than the latest setup or repair message answers an earlier start.
+      const current = resultIndex > setupIndex ? result : undefined;
       const snapshot: ScribeSnapshot = {
         scribe,
-        status: deriveStatus({ scribe, session, job, result }),
+        status: deriveStatus({ scribe, session, job, result: current }),
       };
       Object.assign(snapshot, session && { session }, job && { job }, result && { result });
       return setup ? Object.assign(snapshot, { setup }) : snapshot;
