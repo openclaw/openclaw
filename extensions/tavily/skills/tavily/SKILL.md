@@ -34,7 +34,7 @@ Use when you need fine-grained control over search behavior.
 | `query`           | Search query string (keep under 400 characters)               |
 | `search_depth`    | `basic` (default), `advanced`, `fast`, or `ultra-fast`        |
 | `topic`           | `general` (default), `news` (real-time updates), or `finance` |
-| `max_results`     | Number of results, 0-20 (default: 5)                          |
+| `max_results`     | Number of results, 1-20 (default: 5)                          |
 | `include_answer`  | Include an AI-generated answer summary (default: false)       |
 | `time_range`      | Filter by recency: `day`, `week`, `month`, or `year`          |
 | `include_domains` | Array of domains to restrict results to                       |
@@ -51,7 +51,6 @@ Additional optional Search controls:
 - `exact_match`: match quoted phrases exactly.
 - `include_usage`: include returned credit usage. A cached result retains the original request's usage; it is not a new charge.
 
-`max_results: 0` is useful for answer-only requests with `include_answer: true`.
 The generic `web_search` interface retains its 1–20 result range.
 
 ### Search depth

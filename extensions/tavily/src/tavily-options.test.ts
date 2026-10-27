@@ -58,7 +58,7 @@ it("sends current Search controls through the registered tool and preserves boun
   });
 });
 
-it("keeps omitted Search defaults and permits explicit zero results", async () => {
+it("keeps Search defaults without advertising zero results or coercing direct calls", async () => {
   const fetch = vi
     .spyOn(globalThis, "fetch")
     .mockImplementation(async () => Response.json({ results: [] }));
@@ -69,13 +69,17 @@ it("keeps omitted Search defaults and permits explicit zero results", async () =
     max_results: 5,
   });
   const args = {
-    query: "answer only",
+    query: "direct zero request",
     max_results: 0,
     include_answer: true,
     search_depth: "ultra-fast",
   };
-  expect(Check(tool.parameters, args)).toBe(true);
-  await tool.execute("zero", args);
+  expect(Check(tool.parameters, args)).toBe(false);
+  expect(Check(tool.parameters, { query: "valid", max_results: 1 })).toBe(true);
+  fetch.mockResolvedValueOnce(
+    Response.json({ detail: { error: "Invalid max results." } }, { status: 400 }),
+  );
+  await expect(tool.execute("zero", args)).rejects.toThrow("400");
   expect(requestBody(fetch.mock.calls[1]?.[1])).toEqual(args);
   expect(Check(tool.parameters, { query: "bad", max_results: -1 })).toBe(false);
 });

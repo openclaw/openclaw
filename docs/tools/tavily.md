@@ -81,7 +81,7 @@ Use this when you want Tavily-specific search controls instead of generic `web_s
 | `query`           | string       | required                                            | Search query string.                          |
 | `search_depth`    | enum         | `basic` (default), `advanced`, `fast`, `ultra-fast` | `advanced` is slower but higher relevance.    |
 | `topic`           | enum         | `general` (default), `news`, `finance`              | Filter by topic family.                       |
-| `max_results`     | integer      | 0-20, default `5`                                   | Number of results.                            |
+| `max_results`     | integer      | 1-20, default `5`                                   | Number of results.                            |
 | `include_answer`  | boolean      | default `false`                                     | Include a Tavily AI-generated answer summary. |
 | `time_range`      | enum         | `day`, `week`, `month`, `year`                      | Filter results by recency.                    |
 | `include_domains` | string array | (none)                                              | Only include results from these domains.      |
@@ -97,9 +97,6 @@ Additional optional Search controls:
 - `filter_by_published_date`: with an active `time_range`, `start_date`, or `end_date` window, exclude undated or out-of-window pages; also enables `include_published_date`.
 - `exact_match`: match quoted phrases exactly.
 - `include_usage`: include returned credit usage. A cached result retains the original request's usage; it is not a new charge.
-
-`max_results: 0` is useful for answer-only requests with `include_answer: true`.
-The generic `web_search` interface retains its 1–20 result range.
 
 For publication metadata, use `topic: "news"`. When Tavily supplies a
 `published_date`, OpenClaw returns it as `published`; GMT news timestamps are

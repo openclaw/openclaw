@@ -25,8 +25,8 @@ const TavilySearchToolSchema = Type.Object(
     }),
     max_results: Type.Optional(
       Type.Integer({
-        description: "Number of results to return (0-20; default 5).",
-        minimum: 0,
+        description: "Number of results to return (1-20; default 5).",
+        minimum: 1,
         maximum: 20,
       }),
     ),
