@@ -290,24 +290,7 @@ describe("configured file transcription through Talk RPCs", () => {
     onTestFinished(() => release.resolve());
     await withFileProvider(
       async (requests) => {
-        const { call, open, append, start, events, context } = fileRpc(cfg, talkHandlers);
-        expectRespondOk(await call("talk.catalog"), {
-          transcription: {
-            ready: true,
-            activeProvider: "local-stt",
-            providers: [
-              {
-                id: "local-stt",
-                label: "local-stt",
-                models: ["whisper"],
-                configured: true,
-                modes: ["transcription"],
-                transports: ["gateway-relay"],
-                brains: ["none"],
-              },
-            ],
-          },
-        });
+        const { open, append, start, events, context } = fileRpc();
         const sessionId = await open(
           { transport: "gateway-relay", brain: "none" },
           { provider: "local-stt", mode: "transcription" },
@@ -509,7 +492,15 @@ describe("configured file transcription through Talk RPCs", () => {
           activeProvider: "local-stt",
           providers: [
             expect.objectContaining({ id: "missing-stt", configured: false }),
-            expect.objectContaining({ id: "local-stt", configured: true }),
+            {
+              id: "local-stt",
+              label: "local-stt",
+              models: ["whisper"],
+              configured: true,
+              modes: ["transcription"],
+              transports: ["gateway-relay"],
+              brains: ["none"],
+            },
           ],
         },
       });

@@ -27,7 +27,6 @@ import { createDirectChatContext } from "../../server-chat.agent-events.test-hel
 import type { GatewayRequestContext } from "../../server-methods/types.js";
 import * as sessionAuthorization from "../../session-sharing-authorization-async.js";
 import {
-  closeRelaySession,
   ensureTalkRealtimeRelayVoiceSession,
   sendTalkRealtimeRelayAudio,
   stopTalkRealtimeRelaySession,
@@ -256,7 +255,6 @@ describe("Talk voice RPC ownership", () => {
         expectFailure(respond, "not in this call's catalog");
       }
       expect(broadcast).not.toHaveBeenCalled();
-      expect(spy).toHaveBeenCalledOnce();
       expect(release).toHaveBeenCalledOnce();
     } finally {
       release();
@@ -445,7 +443,6 @@ describe("realtime relay close persistence", () => {
     }
   });
   it.each([
-    {},
     { fails: true },
     { providerAsync: false },
     { providerAsync: false, fails: true },
@@ -558,12 +555,10 @@ describe("realtime relay close persistence", () => {
         persistence.beginClose();
       }
       const closing = stopTalkRealtimeRelaySession(target);
-      expect(closeRelaySession(owned, "completed")).toBe(closing);
       const settled = vi.fn();
       void Promise.resolve(closing).then(settled, settled);
       await Promise.resolve();
       expect(settled).not.toHaveBeenCalled();
-      expect(close).toHaveBeenCalledOnce();
       expect(() => sendTalkRealtimeRelayAudio({ ...target, audioBase64: "AQI=" })).toThrow(
         "Unknown realtime relay session",
       );

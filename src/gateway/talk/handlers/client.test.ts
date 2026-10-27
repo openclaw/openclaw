@@ -8,6 +8,7 @@ import {
   createDeferred,
   withinTest,
 } from "../../../../test/helpers/promise.js";
+import { createEnteredGate } from "../../../agents/entered-gate.test-support.js";
 import {
   clearRuntimeConfigSnapshot,
   setRuntimeConfigSnapshot,
@@ -448,8 +449,7 @@ it("keeps an accepted consult admitted through offer completion and suspension",
   signal,
 }) => {
   const { consult } = await createBrowserConsult();
-  const embeddedEntered = createDeferred();
-  const beforeEnqueue = createDeferred();
+  const gate = createEnteredGate();
   const enqueue = voiceMocks.runEmbeddedAgent.getMockImplementation()!;
   voiceMocks.runEmbeddedAgent.mockImplementationOnce(async (params) => {
     expect(getSessionControllerWorkCount()).toBe(1);
@@ -458,8 +458,7 @@ it("keeps an accepted consult admitted through offer completion and suspension",
       sessionKey,
       voiceSessionId: ownedVoiceSessionId,
     });
-    embeddedEntered.resolve();
-    await beforeEnqueue.promise;
+    await gate.wait();
     return await enqueue(params);
   });
   let work: Promise<{ text: string }> | undefined;
@@ -471,7 +470,7 @@ it("keeps an accepted consult admitted through offer completion and suspension",
       );
       await withinTest(
         awaitGateBeforeSettlement(
-          embeddedEntered.promise,
+          gate.entered,
           work,
           "Talk consult settled before entering the embedded run",
         ),
@@ -482,13 +481,13 @@ it("keeps an accepted consult admitted through offer completion and suspension",
     expect(getSessionControllerWorkCount()).toBe(1);
     suspension = tryBeginGatewaySuspendAdmission(() => {});
     expect(suspension).not.toBeNull();
-    beforeEnqueue.resolve();
+    gate.release();
     await expect(work).resolves.toEqual({ text: "fixture status" });
     expect(getSessionControllerWorkCount()).toBe(0);
     const [run] = voiceMocks.runEmbeddedAgent.mock.calls[0]!;
     expect(resolveClientVoiceRunBinding(run.runId)).toBeUndefined();
   } finally {
-    beforeEnqueue.resolve();
+    gate.release();
     await work?.catch(() => undefined);
     suspension?.rollback();
   }
@@ -554,12 +553,8 @@ it.each([
 ])(
   "keeps accepted work while runtime loading spans $ending (public: $publicOnly)",
   async ({ ending, publicOnly }) => {
-    const loading = createDeferred();
-    const resume = createDeferred();
-    voiceMocks.executionReady.mockImplementationOnce(async () => {
-      loading.resolve();
-      await resume.promise;
-    });
+    const gate = createEnteredGate();
+    voiceMocks.executionReady.mockImplementationOnce(gate.wait);
     const { consult, clients, client, context, cancelBrowserSession } =
       await createBrowserConsult(publicOnly);
     const accepted = consult({ prompt: "Read the project status" });
@@ -568,7 +563,7 @@ it.each([
       (error: unknown) => ({ error }),
     );
     try {
-      await awaitGateBeforeSettlement(loading.promise, accepted, "Consult settled before loading");
+      await awaitGateBeforeSettlement(gate.entered, accepted, "Consult settled before loading");
       expect(rpcSourceTesting.size).toBe(1);
       expect(voiceMocks.runEmbeddedAgent).not.toHaveBeenCalled();
       if (ending === "close") {
@@ -579,7 +574,7 @@ it.each([
       }
       await expect(consult({ prompt: "Start another task" })).rejects.toThrow(/closed|stopped/i);
     } finally {
-      resume.resolve();
+      gate.release();
     }
     expect(await settled).toEqual({ result: { text: "fixture status" } });
     expect(voiceMocks.runEmbeddedAgent).toHaveBeenCalledOnce();
