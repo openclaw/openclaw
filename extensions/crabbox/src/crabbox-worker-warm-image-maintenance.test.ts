@@ -330,6 +330,62 @@ it("deletes across catalogs in executable order", async () => {
   expect(s.warn).not.toHaveBeenCalled();
 });
 
+it.each([false, true])(
+  "retries retained retirement before slow capture reconciliation (fails=%s)",
+  async (fails) => {
+    let monotonicMs = 0;
+    vi.spyOn(performance, "now").mockImplementation(() => monotonicMs);
+    const cause = "SnapshotInUse: fixture snapshot is pending";
+    const s = scenario(({ argv }) => {
+      if (argv[1] === "inspect") {
+        monotonicMs += 60_000;
+        return commandResult({ code: 7, stderr: "fixture inspection timed out" });
+      }
+      if (argv[2] === "delete" && fails) {
+        return commandResult({ code: 7, stderr: cause });
+      }
+      return undefined;
+    });
+    s.store.register(
+      "a-slow-capture",
+      warmRecord({
+        operation: captureOperation("slow", {
+          phase: "uncertain",
+          leaseId: "cbx_slow",
+          provider: "aws",
+        }),
+      }),
+    );
+    const retained = warmRecord({
+      image: warmImage("chk_current", { lastDemandAtMs: Date.now() }),
+      previous: warmImage("chk_previous", {
+        lastDemandAtMs: Date.now(),
+        pinned: { atMs: Date.now() },
+      }),
+      allocations: {
+        cbx_active: warmAllocation({ kind: "checkpoint", checkpointId: "chk_current" }),
+      },
+    });
+    s.store.register("z-retiring", { ...retained, operation: retirement });
+
+    for (let pass = 0; pass < 2; pass++) {
+      await s.provider.maintain!(context());
+      expect(s.store.lookup("z-retiring")).toEqual(
+        fails ? { ...retained, operation: retirement } : retained,
+      );
+    }
+
+    expect(s.checkpoints("delete").map((argv) => argv.slice(1))).toEqual(
+      fails ? [deletion, deletion] : [deletion],
+    );
+    const failures = s.warn.mock.calls.filter(([message]) => message.includes("retirement"));
+    expect(failures).toHaveLength(fails ? 2 : 0);
+    for (const [message] of failures) {
+      expect(message).toContain(cause);
+    }
+  },
+);
+
 it.each(["exit", "command"])("retains deletion on first-catalog %s errors", async (failure) => {
   let fails = true;
   const s = scenario(() => {
@@ -348,14 +404,14 @@ it.each(["exit", "command"])("retains deletion on first-catalog %s errors", asyn
 
   expect(s.store.lookup("expired")?.operation).toEqual(retirement);
   expect(s.calls.map(({ argv }) => argv)).toEqual(deletionArgs("/opt/a/crabbox", "/opt/a/crabbox"));
-  expect(s.warn).toHaveBeenCalledOnce();
+  expect(s.warn).toHaveBeenCalledTimes(2);
   expect(s.warn).toHaveBeenCalledWith(expect.stringContaining("deletion obligation retained"));
   fails = false;
   s.calls.length = 0;
   await s.provider.maintain!(context());
   expect(s.store.lookup("expired")).toBeUndefined();
   expect(s.calls.map(({ argv }) => argv.slice(1))).toEqual([deletion]);
-  expect(s.warn).toHaveBeenCalledOnce();
+  expect(s.warn).toHaveBeenCalledTimes(2);
 });
 
 it.each([

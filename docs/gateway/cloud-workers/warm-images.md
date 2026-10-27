@@ -58,7 +58,7 @@ Set the plugin-wide policy under `plugins.entries.crabbox.config.warmImages`, or
 use **Advanced → Snapshot retention** under **Cloud environments**. These controls
 apply to all repositories. Saving reloads the Crabbox plugin without restarting
 the Gateway. Worker lease lifetimes and the 128-profile capacity limit stay
-unchanged. Unused, unpinned images expire after `retainUnused`; images held by allocations wait for those workers to stop. Replaced snapshots retire after allocations release them unless retained as a previous generation or pinned. Failed deletion stays pending and retries during maintenance.
+unchanged. Unused, unpinned images expire after `retainUnused`; images held by allocations wait for those workers to stop. Replaced snapshots retire after allocations release them unless retained as a previous generation or pinned. Failed deletion stays pending and retries during the Gateway's periodic maintenance (every 60 seconds by default). Pending retirements run before capture reconciliation so a slow capture cannot block their retries. Each failed deletion attempt logs the provider error in the Gateway log; successful deletion clears the pending retirement.
 
 | Key            | Default | Accepted values                                                   |
 | -------------- | ------- | ----------------------------------------------------------------- |

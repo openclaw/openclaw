@@ -150,9 +150,9 @@ export function createCrabboxWarmImageManager(dependencies: {
     } catch (error) {
       assertCurrent(context);
       if (matches(await openStore().lookup(key))) {
-        warnOnce(
-          `checkpoint retirement (${operation.checkpointId} deletion obligation retained; retry during periodic maintenance or next warm-image-enabled worker teardown; inspect with openclaw crabbox warm-images)`,
-          error,
+        // Command errors already bound provider output; report every failed retry.
+        dependencies.warn(
+          `Crabbox warm image checkpoint retirement (${operation.checkpointId} deletion obligation retained; retry during periodic maintenance or next warm-image-enabled worker teardown; inspect with openclaw crabbox warm-images) failed: ${coerceErrorMessage(error)}`,
         );
       }
       return;
@@ -218,7 +218,12 @@ export function createCrabboxWarmImageManager(dependencies: {
     const deadline = performance.now() + WARM_IMAGE_COMMAND_TIMEOUT_MS;
     assertCurrent(context);
     const paused: { selector: string; reason: string }[] = [];
-    for (const { key, value } of entries) {
+    // A slow capture can consume the entire sweep budget. Retry known deletion debt first.
+    const ordered = entries.toSorted(
+      (a, b) =>
+        Number(b.value.operation?.type === "retire") - Number(a.value.operation?.type === "retire"),
+    );
+    for (const { key, value } of ordered) {
       assertCurrent(context);
       const capture = crabboxWarmImageCaptureStatus(value);
       if (capture) {

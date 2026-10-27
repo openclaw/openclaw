@@ -340,7 +340,7 @@ export function registerCrabboxWorkerProviderDoctorChecks(
               ...details,
               message: `Warm-image checkpoint ${image.retirement.checkpointId}${display} is still awaiting deletion.`,
               fixHint:
-                "Cleanup retries during the next warm-image capture or worker teardown. Inspect `openclaw crabbox warm-images --json` and resolve provider deletion errors if it remains pending.",
+                "Cleanup retries during periodic maintenance or the next warm-image capture or worker teardown. Inspect `openclaw crabbox warm-images --json` and the Gateway log for provider deletion errors if it remains pending.",
             });
           }
         }
