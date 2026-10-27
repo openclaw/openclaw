@@ -1,12 +1,12 @@
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
-import {
-  modelFallbackOverrideFromAvailability,
-  resolveModelFallbackAvailability,
-} from "../../agents/agent-scope.js";
 import type { runEmbeddedAgentEntry } from "../../agents/embedded-agent-runner/run-entry.js";
 import type { RunEmbeddedAgentInternalParams } from "../../agents/embedded-agent-runner/run/internal-params.js";
 import { findModelInCatalog, modelSupportsInput } from "../../agents/model-catalog-lookup.js";
 import { modelTransportRoutesMatch } from "../../agents/model-compat-catalog.js";
+import {
+  modelFallbackOverrideFromAvailability,
+  resolveModelFallbackAvailability,
+} from "../../agents/model-selection-config.js";
 import { resolveScheduledToolPolicyContext } from "../../agents/scheduled-tool-policy.js";
 import {
   findConfiguredProviderModel,

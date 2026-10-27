@@ -10,10 +10,10 @@ const hoisted = vi.hoisted(() => ({
   isReasoningTagProviderMock: vi.fn(),
 }));
 
-vi.mock("../../agents/agent-scope.js", async () => ({
+vi.mock("../../agents/model-selection-config.js", async () => ({
   modelFallbackOverrideFromAvailability: (
-    await vi.importActual<typeof import("../../agents/agent-scope.js")>(
-      "../../agents/agent-scope.js",
+    await vi.importActual<typeof import("../../agents/model-selection-config.js")>(
+      "../../agents/model-selection-config.js",
     )
   ).modelFallbackOverrideFromAvailability,
   resolveModelFallbackAvailability: (...args: unknown[]) =>

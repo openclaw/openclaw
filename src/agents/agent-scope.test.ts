@@ -8,7 +8,6 @@ import type { SessionEntry } from "../config/sessions.js";
 import type { AgentModelConfig } from "../config/types.agents-shared.js";
 import { withEnv } from "../test-utils/env.js";
 import { findOverlappingWorkspaceAgentIds } from "./agent-delete-safety.js";
-import type { ModelFallbackAvailability } from "./agent-scope.js";
 import {
   clearAutoFallbackPrimaryProbeSelection,
   hasLegacyAutoFallbackWithoutOrigin,
@@ -19,9 +18,6 @@ import {
   resolveAgentEffectiveModelPrimary,
   resolveAgentExplicitModelPrimary,
   resolveAgentSkillsFilter,
-  modelFallbackOverrideFromAvailability,
-  resolveEffectiveModelFallbacks,
-  resolveModelFallbackAvailability,
   resolveAgentModelFallbacksOverride,
   resolveRunModelFallbacksOverride,
   resolveSubagentModelFallbacksOverride,
@@ -32,6 +28,12 @@ import {
   resolveAgentIdByWorkspacePath,
   setAgentEffectiveModelPrimary,
 } from "./agent-scope.js";
+import type { ModelFallbackAvailability } from "./model-fallback.types.js";
+import {
+  modelFallbackOverrideFromAvailability,
+  resolveEffectiveModelFallbacks,
+  resolveModelFallbackAvailability,
+} from "./model-selection-config.js";
 
 function agentConfig(agents: NonNullable<OpenClawConfig["agents"]>): OpenClawConfig {
   return { agents };

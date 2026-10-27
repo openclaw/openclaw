@@ -21,7 +21,6 @@ import {
   clearAutoFallbackPrimaryProbeSelection,
   entryMatchesAutoFallbackPrimaryProbe,
   markAutoFallbackPrimaryProbe,
-  resolveEffectiveModelFallbacks,
 } from "../agent-scope.js";
 import { buildRunEntryTerminal } from "../embedded-agent-runner/run-entry-terminal.js";
 import {
@@ -37,6 +36,7 @@ import {
   hasNewGeneratedMediaTaskForSessionKey,
 } from "../media-generation-activity.js";
 import { findModelInCatalog, prepareModelRunCapabilities } from "../model-catalog-lookup.js";
+import { resolveEffectiveModelFallbacks } from "../model-selection-config.js";
 import {
   resolveConfiguredThinkingDefault,
   resolveThinkingSelection,

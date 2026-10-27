@@ -24,6 +24,7 @@ import {
 } from "./harness/runtime-plugin-load-plan.js";
 import { ensureSelectedAgentHarnessPlugin } from "./harness/runtime-plugin.js";
 import { resolveModelCandidateChain } from "./model-fallback-candidates.js";
+import * as modelSelectionConfig from "./model-selection-config.js";
 import {
   getPreparedModelRuntimeBorrowedSnapshot,
   getPreparedModelRuntimePluginGeneration,
@@ -56,11 +57,14 @@ describe("prepared reply fallback ownership", () => {
     vi.spyOn(agentScope, "resolveAgentModelFallbacksOverride").mockImplementation(
       actual.resolveAgentModelFallbacksOverride,
     );
-    vi.spyOn(agentScope, "resolveEffectiveModelFallbacks").mockImplementation(
-      actual.resolveEffectiveModelFallbacks,
+    const actualSelection = await vi.importActual<typeof modelSelectionConfig>(
+      "./model-selection-config.js",
     );
-    vi.spyOn(agentScope, "resolveModelFallbackAvailability").mockImplementation(
-      actual.resolveModelFallbackAvailability,
+    vi.spyOn(modelSelectionConfig, "resolveEffectiveModelFallbacks").mockImplementation(
+      actualSelection.resolveEffectiveModelFallbacks,
+    );
+    vi.spyOn(modelSelectionConfig, "resolveModelFallbackAvailability").mockImplementation(
+      actualSelection.resolveModelFallbackAvailability,
     );
     vi.spyOn(agentScope, "resolveSubagentSpawnModelFallbacksOverride").mockImplementation(
       actual.resolveSubagentSpawnModelFallbacksOverride,
