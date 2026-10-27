@@ -33,7 +33,7 @@ const CONTROL_UI_GZIP_BUILD_VARIANCE_BYTES = 64;
 const CONTROL_UI_STARTUP_CSS_GZIP_TARGET_BYTES = 45 * KIB;
 // Immediate Home and diagnostic frames approved in #147574, including shared header styles.
 const CONTROL_UI_CSS_GZIP_GROWTH_BYTES = 1.5 * KIB;
-const MERMAID_RENDERER_GZIP_BYTES = 960 * KIB;
+const MERMAID_RENDERER_GZIP_BYTES = 256 * KIB;
 const CONTROL_UI_LOCALE_GZIP_BYTES = 300 * KIB;
 
 // Small, explicit headroom over the optimized baseline. Budget changes should

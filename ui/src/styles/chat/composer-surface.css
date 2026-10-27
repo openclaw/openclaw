@@ -792,6 +792,14 @@
   color: color-mix(in srgb, var(--icon-interactive, var(--chat-composer-secondary)) 90%, white);
 }
 
+:where(:root[data-theme-mode="light"]) .agent-chat__input .agent-chat__input-btn--attach {
+  color: color-mix(
+    in srgb,
+    var(--icon-interactive, var(--chat-composer-secondary)) 90%,
+    var(--text-strong)
+  );
+}
+
 .agent-chat__input .agent-chat__attach-menu .agent-chat__input-btn.agent-chat__input-btn--attach {
   width: var(--chat-composer-send-size);
   min-width: var(--chat-composer-send-size);

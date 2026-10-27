@@ -15,7 +15,7 @@ function buildEnvelope(overrides: Partial<Parameters<typeof buildSubagentSpawnEn
 
 it("gives child and requester the same collector contract", () => {
   const { systemPrompt, message, acceptedNote } = buildEnvelope({ completionMode: "collector" });
-  for (const guidance of [systemPrompt, acceptedNote ?? ""]) {
+  for (const guidance of [message, acceptedNote ?? ""]) {
     expect(guidance).toMatch(/Collector run: no completion notification/);
     expect(guidance).toContain("collector wait capability");
     expect(guidance).not.toMatch(
@@ -47,7 +47,7 @@ it("preserves leaf worker ownership at depth 2/2", () => {
 
 it("describes private completion consistently for child and parent", () => {
   const envelope = buildEnvelope({ completionTarget: "parent" });
-  for (const text of [envelope.systemPrompt, envelope.acceptedNote]) {
+  for (const text of [envelope.message, envelope.acceptedNote]) {
     expect(text).toContain("No result is automatically sent to a channel");
     expect(text).toContain("continues any unfinished work");
   }
@@ -62,11 +62,11 @@ it("gates ACP guidance without overriding collector restrictions", () => {
     acpEnabled: true,
     nativeCommandGuidanceLines: ["Plugin-owned native command guidance."],
   };
-  const normal = buildEnvelope(options).systemPrompt;
+  const normal = buildEnvelope(options).message;
   expect(normal).toContain("ACP harness:");
   expect(normal).toContain("Plugin-owned native command guidance.");
   expect(normal).toContain("Follow each descendant's accepted completion mode");
-  const collector = buildEnvelope({ ...options, completionMode: "collector" }).systemPrompt;
+  const collector = buildEnvelope({ ...options, completionMode: "collector" }).message;
   expect(collector).toContain("Descendants must also be collectors");
   expect(collector).toContain("Explicitly collect all required results");
   expect(collector).not.toMatch(/ACP|Plugin-owned|turn-yield|auto-announce|push-based/);

@@ -203,7 +203,7 @@ known task segment from RPC handlers, scheduled jobs, diagnostic phases, timelin
 worker message handling, with elapsed and task milliseconds. Time awaiting I/O
 does not count as task execution. Prepared session-row reads carry the enclosing
 operation across waits and append `session-rows:select`, `session-rows:prepare`, or
-`session-rows:consume`; agent roster batches append `agent-roster`. For example,
+`session-rows:consume`; roster fact batches preserve their caller's task label. For example,
 `gateway:rpc:sessions.list:session-rows:select` identifies list selection, and
 scheduled work retains its `scheduler:<lane>:<task>` prefix. Labels contain only
 code-owned operation names, never session keys or request content. Labels cover
@@ -865,11 +865,16 @@ No stored data, database schema, or update procedure changes.
 
 When a task pool recreates an idle-retired Worker within five minutes, it keeps
 one replacement warm for five minutes of inactivity. Other slots retain their
-normal idle timeout. Git metadata readers use a two-minute idle timeout so the
-one-minute PR polling and repository-discovery refreshes can reuse both readers.
-Node Code Mode likewise retains at most one completed
-Worker for five minutes, reusing it only when its runtime entry and heap limit
-match. Code Mode relies on V8's normal garbage collection rather than inspector
+normal idle timeout. Git content and workspace-computation pools instead keep their
+most recently used idle worker warm after their first task. Git metadata, summary,
+worktree preparation, and maintenance pools keep their existing expiry because they
+retain repository observations. All surplus Git workers keep their existing timeout.
+Node Code Mode keeps one compatible completed worker warm for each host,
+runtime entry, and heap limit within its eight-worker warm-cache budget; surplus
+workers expire after 30 seconds. Neither owner starts workers before use.
+Critical memory pressure can evict these warm floors, and normal health,
+rotation, drain, and shutdown cleanup still retires them.
+Code Mode relies on V8's normal garbage collection rather than inspector
 collection at idle task boundaries. Other warm task workers still collect released payloads in place; critical
 pressure, cancellation, rotation, and shutdown retain their existing cleanup
 paths. No configuration setting is needed.

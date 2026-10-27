@@ -1655,6 +1655,7 @@ src/plugins/plugin-return-value.ts
 src/plugins/plugin-tool-execution.ts
 src/plugins/plugin-runtime-artifact-identity.ts
 src/plugins/plugin-runtime-artifact-resolution.ts
+src/plugins/plugin-runtime-artifact-binding.ts
 src/plugins/plugin-runtime-artifact-selection.ts
 src/plugins/plugin-safety-inspected-files.ts
 src/plugins/plugin-scope.ts

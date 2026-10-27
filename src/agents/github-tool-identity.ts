@@ -59,6 +59,7 @@ import {
   resolveGitHubPublicationAccessExpiry,
 } from "./github-tool-identity-lifecycle.js";
 import type {
+  PersonalGitHubIdentityPreparation,
   PreparedGitHubPublicationIdentity,
   PreparedGitHubToolEnvironment,
 } from "./github-tool-identity.types.js";
@@ -378,53 +379,51 @@ async function resolveGitHubIdentityFacts(
   };
 }
 
-/** Only the personal publication broker receives this environment; never agent execution. */
-export async function preparePersonalGitHubPublicationIdentity(params: {
-  profileId: string;
-  accountId: number;
-  assertCurrent: () => void;
-  /** Display reads never use these facts to authorize publication. */
-  forDisplay?: true;
-}): Promise<PreparedGitHubPublicationIdentity> {
-  params.assertCurrent();
+export function preparePersonalGitHubPublicationIdentity(
+  params: PersonalGitHubIdentityPreparation & { forDisplay: true },
+): Promise<Omit<PreparedGitHubPublicationIdentity, "env">>;
+export function preparePersonalGitHubPublicationIdentity(
+  params: PersonalGitHubIdentityPreparation & { forDisplay?: never },
+): Promise<PreparedGitHubPublicationIdentity>;
+/** Only publication needs a credential-bearing child environment; display verifies the account. */
+export async function preparePersonalGitHubPublicationIdentity(
+  params: PersonalGitHubIdentityPreparation,
+): Promise<Omit<PreparedGitHubPublicationIdentity, "env"> & { env?: NodeJS.ProcessEnv }> {
+  const { profileId, accountId, assertCurrent } = params;
+  assertCurrent();
   const host = resolveGitHubHost();
   const apiBaseUrl = resolveGitHubApiBaseUrl();
   const assertSelected = () => {
-    params.assertCurrent();
+    assertCurrent();
     if (resolveGitHubHost() !== host || resolveGitHubApiBaseUrl() !== apiBaseUrl) {
       throw new GitHubIdentityError("changed");
     }
   };
-  const profileDir = resolveManagedGitHubProfileDir({
-    agentId: "",
-    scope: "personal",
-    profileId: params.profileId,
-  });
+  const profileDir = resolveManagedGitHubProfileDir({ agentId: "", scope: "personal", profileId });
   const token = await readManagedGitHubToken(profileDir);
   if (!token) {
     throw new Error("My GitHub profile is unavailable; reconnect My GitHub.");
   }
   assertSelected();
-  const env = {
-    ...withGitHubToken(process.env, token),
-    GH_CONFIG_DIR: profileDir,
-    GH_PROMPT_DISABLED: "1",
-  };
+  const env = params.forDisplay ? undefined : withGitHubToken(process.env, token);
+  if (env) {
+    Object.assign(env, { GH_CONFIG_DIR: profileDir, GH_PROMPT_DISABLED: "1" });
+  }
   const probe = await verifyGitHubCredential(token, { allowStale: params.forDisplay });
   assertSelected();
   if (probe.status !== "available") {
     throw new Error("My GitHub credential could not be verified; reconnect My GitHub.");
   }
-  if (probe.account.accountId !== params.accountId) {
+  if (probe.account.accountId !== accountId) {
     throw new GitHubAccountMismatchError("My GitHub account changed; reconnect My GitHub.");
   }
   return Object.freeze({
     source: "personal",
     ...(probe.stale ? { stale: true as const } : {}),
-    profileId: params.profileId,
+    profileId,
     host: GITHUB_HOST,
     account: probe.account,
-    env: Object.freeze(env),
+    ...(env ? { env: Object.freeze(env) } : {}),
   });
 }
 

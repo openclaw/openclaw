@@ -33,6 +33,11 @@ recorders remain non-enumerable symbol properties, consumed before serialization
 - SQLite format/schema/integrity/index/table checks: once per physical DB per process load, shared across workers/handles; never add repeats, remove when touched. Clean-close seals skip startup validation; Doctor/explicit verification keep checks. [Lifecycle](/reference/database-schemas/integrity-and-recovery#integrity-checks).
 - Gateway owns every DB/state; writer receipts invalidate caches, uncovered reads stay direct. No foreign-commit probes; remove when touched. Outside writers use Gateway or exclusive offline custody. Keep live authority/snapshots; [contract](/reference/database-schemas/integrity-and-recovery#gateway-database-ownership).
 
+Agent schema admission promotes the existing publication owner when another
+worker checks the same physical database. Concurrent session creation and patch
+requests can consume that proof without revoking one another's pending handoffs.
+Explicit invalidation still retires the owner and refuses delayed publications.
+
 Released session sharing, entry-predicate, and generation authorities drop their
 decoded rows even when a caller retains the inactive handle. Predicate comparison
 baselines last only until release; a late acknowledgement cannot restore them.
@@ -46,7 +51,10 @@ retaining an admission must not retain those completed workspace payloads.
 
 Idle session reclamation workers retain their admitted connection, not completed
 deletion plans or the caller's async context. Retirement callbacks capture only
-the worker's registry key. Transport startup and idle timers run outside request
+the worker's registry key. Request handlers release completed replies before
+waiting for the next message, including buffered admission replies. Lazy plugin
+capture imports reuse the shared detached maintenance context rather than
+retaining the importing request. Transport startup and idle timers run outside request
 context while preserving the selected database engine. Each reclamation request
 keeps its own current-source and commit-authority checks.
 
@@ -118,6 +126,12 @@ Use the existing read-only worker scope for descriptive reads and the store's
 writer broker for mutations. Keep multi-statement snapshot reads together; use
 the writer's ordered operation when a read must follow its accepted writes.
 Do not open a second main-thread connection or add a synchronous fallback.
+
+Local workspace reconciliation releases the shared state reader after capturing
+its database snapshot. The existing workspace computation pool scans files and
+prepares manifest results from that compressed snapshot; the Gateway forwards it
+without expanding the tree. The reconciliation lease still checks authority before
+accepting results, and the state writer retains atomic manifest publication.
 
 Long-lived Gateway and local TUI processes reuse the shared-state reader pool for
 early awaited configuration and plugin metadata reads. Standalone CLI inspection
@@ -583,9 +597,13 @@ that command; live policy and revocation checks still run at every admission.
 Plain transcript append and bookkeeping patch receipts use the same command-local
 reference when the entry is unchanged and initialization does not also expose it. Main restores the
 entry by reference to its deeply frozen replica preimage, without cloning it.
-Settlement, publication, and commit observers only read that entry; changed or
-unavailable preimages still transfer the complete entry. A missing or mismatched
-reference refuses receipt restoration. Stored bytes and write authority are
+Bookkeeping patches and plain appends that change the entry send changed fields and removed keys
+against that same token; the host rebuilds the outer entry while reusing unchanged
+frozen fields. Matching metadata publication postimages reuse that reconstructed
+entry instead of transferring a second copy. Settlement, publication, and commit
+observers only read the result.
+Unavailable preimages and other changed-entry phases still transfer the complete
+entry. A missing or mismatched reference refuses receipt restoration. Stored bytes and write authority are
 unchanged.
 
 Replica lookups resolve configured path spellings through the existing admission
@@ -1046,6 +1064,10 @@ or transcript changes, so it does not invalidate unrelated actor facts. Durable
 runtime appends always use the existing agent execution worker. Transcript
 appends, content rewrites, rewind, compaction, archive/restore, deletion, and unknown
 writes retain their session-scoped invalidation or committed actor update.
+When an append has committed window facts, rolling-window overflow reads only
+the oldest events it must expire through the existing session/sequence index.
+A cold window still reconstructs its retained suffix; global retention keeps its
+separate summary and deletion lifecycle. Byte limits and persisted ordering are unchanged.
 
 Activity-summary batches also reuse the actor's complete retained linear context
 at its committed write token, including canonical model snapshots and runtime-context

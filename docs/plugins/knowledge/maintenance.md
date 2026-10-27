@@ -105,45 +105,32 @@ an unsupported guess.
 
 ## Agent review
 
-Relink leaves claims that name no page, or more than one. An agent review
-handles them: an automation whose agent turn follows the
-`knowledge-unlinked-claims` skill. After a pass that leaves private claims with
-no linked page and no source page, whichever tool saved them, maintenance
-queues that automation once. It does not queue it when nothing is left, and a
-disabled automation does not run. The last pass reports the review's job ID,
-outcome (`enqueued`, `not_needed`, `skipped`, `unavailable`, or `failed`), and
-how many claims were left.
-
-Maintenance picks the automation in this order:
-
-1. `maintenance.reviewJobId`, when set.
-2. Otherwise, the automation with declaration key
-   `knowledge:scribe:unlinked-review`, which the **Review unlinked claims**
-   scribe creates for itself. An enabled job is preferred; a paused one is
-   reported as `skipped`.
-
-With neither, the pass reports no review.
+Relink leaves claims that name no page, or more than one. Maintenance does not
+review them: it runs relink only and never starts an agent turn. An agent
+review handles them on its own schedule: an automation whose agent turn follows
+the `knowledge-unlinked-claims` skill over every private claim with no linked
+page and no source page, whichever tool saved it. It runs weekly by default
+(Sundays at 3:45 AM) or, if you choose, nightly at 3:45 AM, after the default
+3:30 AM maintenance pass. Each run is an agent turn over every unlinked claim,
+so nightly costs more; a run that finds nothing left stops right away. The
+retired `maintenance.reviewJobId` setting fails validation; run
+`openclaw doctor --fix` to remove it.
 
 The review edits private knowledge, so its automation must run in a session
 with the owner's private access. Turn on **Review unlinked claims** from the
 [Scribes](/plugins/knowledge/scribes) tab of the Knowledge page. To start it
 without the Control UI, open a new conversation in the owner's direct chat and
-send its setup message, with your agent ID and IANA time zone:
-
-````text
-Knowledge scribe setup: unlinked-review
-Follow the "Scribe setup" section of the knowledge-unlinked-claims skill with these options.
-```json
-{"scribe":"unlinked-review","mode":"ongoing","options":{},"timezone":"America/Los_Angeles","agentId":"main"}
-```
-````
+send the prompt the Scribes tab would send; the
+[example prompt](/plugins/knowledge/scribes#example-prompt) shows it. Its
+settings are plain bullets, so set your schedule (`45 3 * * 0` weekly or
+`45 3 * * *` nightly) and IANA time zone there.
 
 The conversation creates the automation, targets itself, and ends with a
-`SCRIBE_RESULT` line that names the job. To fix a broken setup, send the same
-message in that conversation with `setup` replaced by `repair`. If the scribe's
-conversation is reset or removed, it loses access: send the setup message
-again from a new conversation. The skill's "Scribe setup" section gives the
-steps. Conversation partitions are not reviewed.
+`Scribe status: on — …` line. Each scheduled run receives the automation's run
+message, which you can edit on the Automations page. To fix a broken setup,
+use **Repair** on the Scribes tab. If the scribe's conversation is reset or
+removed, it loses access: start the scribe again from a new conversation.
+Conversation partitions are not reviewed.
 
 The `knowledge-unlinked-claims` skill is the agent workflow for the claims relink
 leaves unlinked. It chooses subject pages with judgment, creates pages for
