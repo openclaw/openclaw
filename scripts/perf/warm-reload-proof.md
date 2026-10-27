@@ -52,6 +52,45 @@ dashboard face; the historical `/chat/.../dashboard/...` shape selects chat.
 No DOM snapshot or
 mock WebSocket replaces the real application, persistence, transport, or RPCs.
 
+Inspect the PNGs to identify the first frame containing the app shell, actual main
+content, and dashboard content. Check each selected frame and its immediate
+predecessor. DOM readiness can precede the compositor image by multiple frames;
+the recorder's candidate timestamps are not paint measurements.
+
+Save the observations as `paint-audit.json`:
+
+```json
+{
+  "observations": [
+    {
+      "route": "chat",
+      "run": "cold",
+      "appFrame": "frame-00003.png",
+      "mainFrame": "frame-00014.png",
+      "inspected": true
+    }
+  ]
+}
+```
+
+Include exactly one observation for every captured run. Dashboard observations
+also require `dashboardFrame`. The app boundary is the first new-document shared
+shell skeleton or app chrome, excluding the public reader and the previous page.
+Main content means actual transcript text; dashboard content means the fixture
+widget rather than its loading skeleton. Then compute observed paint times from
+the selected frames' original navigation-relative clocks:
+
+```sh
+node --import ./scripts/tsx.mjs scripts/perf/warm-reload-proof.ts \
+  --audit-report .local/warm-reload-proof/<run>/report.json \
+  --paint-audit .local/warm-reload-proof/<run>/paint-audit.json
+```
+
+This offline step writes `audited-report.json` and preserves the raw report. It
+records the selected and preceding frames, capture/build identity, and separate
+analysis revision. Its visual inspection attestation is explicit; it does not
+infer content from DOM readiness or claim to observe every display-vsync frame.
+
 To measure a candidate UI against the same built server and fixture definition,
 pass `--ui-root /absolute/path/to/candidate/dist/control-ui`. This uses the existing
 Gateway custom UI root contract. `--dist /absolute/path/to/build/dist` selects a
@@ -78,7 +117,9 @@ headless repo-pinned Chromium. CDP network shaping uses an **80 ms latency setti
 by default, 10 MiB/s throughput, and preserves HTTP caching. Chrome supports
 [WebSocket throttling](https://developer.chrome.com/docs/devtools/network/reference/#throttle-websocket-connections).
 The browser transport emulator is not a fixed-delay wrapper around each RPC;
-use the recorded send/receive timings rather than assuming every RPC takes 80 ms.
+use the recorded send/response event-handler intervals rather than assuming every
+RPC takes 80 ms. These intervals include server work and renderer/CDP dispatch;
+they are not calibrated wire RTT measurements.
 No CPU throttling or CPU profiler runs.
 
 `Page.startScreencast` requests PNG, native viewport size, `everyNthFrame: 1`.
@@ -97,14 +138,19 @@ The report distinguishes these boundaries:
   visible nonempty transcript row in the main region, or the synthetic dashboard
   content's font-ready/two-animation-frame marker when the board occupies main.
   These are DOM milestones. Dashboard content also has a separate
-  `firstDashboardCapturedPaintMs` bound when its board is beside the transcript.
-- `firstAppCapturedPaintMs` and `firstMainCapturedPaintMs`: first delivered frame
-  after the respective DOM milestone and FCP. These are **upper bounds**, not an
-  assertion that every compositor frame was observed. Inspect dashboard sheets
-  to verify the fixture content's paint.
+  `firstDashboardContentDomMs` marker when its board is beside the transcript.
+- `firstAppCandidateFrameMs`, `firstMainCandidateFrameMs`, and
+  `firstDashboardCandidateFrameMs`: first delivered frame after the respective
+  DOM milestone and FCP. They can still show old pixels or skeletons. They are
+  navigation aids for inspection, not paint times or paint upper bounds.
+- `auditedPaint` in the audited report: first visually verified delivered frames
+  for app, main content, and dashboard. Their timestamps bound the observed frame
+  sequence; the preceding frames remain linked for boundary verification.
 - `firstPaintedRowsMs`: Chromium Element Timing for `openclaw-transcript`, when
   emitted. The probe annotates transcript text owners before paint, as the existing
-  benchmark does. `finalRowsDomMs`: last sampled row identity, height, or text-length
+  benchmark does. The first eligible text entry can be later than the first visible
+  rows; use `auditedPaint.main` for the inspected pixel boundary.
+  `finalRowsDomMs`: last sampled row identity, height, or text-length
   change. In-row changes
   and layout shifts are covered separately by pixel analysis and CLS.
 - `helloHandledMs`: microtask after the existing Gateway owner publishes its
@@ -126,7 +172,7 @@ last accepted representative. A revisit to a prior representative is a transitio
 but does not increase the unique state count. Both numbers are reported. Sidebar,
 header, transcript, Details, composer, and dashboard are counted independently
 using their final visible viewport bounding boxes. Final boxes are a spatial
-partition reference: early movement outside them is still counted in the whole
+reference: early movement outside them is still counted in the whole
 viewport. Region boxes may overlap; their counts must not be summed.
 
 Every mask has a name, reason, and exact viewport rectangle in the JSON. Only
@@ -141,7 +187,8 @@ the raw frames and extend an explicit narrow mask rather than raising thresholds
 The **unmasked state census** is always emitted alongside the masked census.
 
 Each reload directory contains `frame-*.png`, `frames.json`, `final.png`,
-`contact-sheet-*.png`, and `reload.json`. The top `report.json` records revision,
+`contact-sheet-*.png`, and `reload.json`. `paint-audit.json` and
+`audited-report.json` add inspected paint observations. The top `report.json` records revision,
 build paths, browser version, host load/resources, shaping, fixture, masks, HTTP
 responses, RPC counts/bytes, errors, metrics, and region timelines. Contact sheets
 contain native-size tiles, up to six per page. Inspect all sheets for cold and

@@ -20,6 +20,7 @@ import { stopChild } from "../lib/gateway-bench-child.ts";
 import { installWarmReloadBrowserProbe, proofRegions } from "./warm-reload-browser-probe.ts";
 import { seedWarmReloadFixture } from "./warm-reload-fixture.ts";
 import { analyzeReloadFrames, type ReloadFrame } from "./warm-reload-frames.ts";
+import { applyWarmReloadPaintAudit } from "./warm-reload-paint-audit.ts";
 
 const { values } = parseArgs({
   options: {
@@ -31,6 +32,8 @@ const { values } = parseArgs({
     "rtt-ms": { type: "string", default: "80" },
     "capture-ms": { type: "string", default: "8000" },
     route: { type: "string", default: "both" },
+    "audit-report": { type: "string" },
+    "paint-audit": { type: "string" },
     help: { type: "boolean", default: false },
   },
 });
@@ -39,7 +42,16 @@ if (values.help) {
   --dist dist --ui-root dist/control-ui --output .local/warm-reload-proof
   --reloads 11 --sessions 3000 --rtt-ms 80 --capture-ms 8000 --route both|chat|dashboard
 Creates fresh isolated state and Chromium, records cold + warm reloads, then stops both.
+Offline paint audit: --audit-report <report.json> --paint-audit <paint-audit.json>
 See scripts/perf/warm-reload-proof.md for metric definitions and limitations.`);
+  process.exit(0);
+}
+if (values["audit-report"] || values["paint-audit"]) {
+  if (!values["audit-report"] || !values["paint-audit"]) {
+    throw new Error("--audit-report and --paint-audit must be supplied together");
+  }
+  await applyWarmReloadPaintAudit(values["audit-report"], values["paint-audit"]);
+  console.info("Wrote audited-report.json beside the immutable capture report");
   process.exit(0);
 }
 function integer(raw: string, name: string, min: number, max: number) {
@@ -393,7 +405,7 @@ async function captureReload(
       masks: probe.masks,
       outputDir,
     });
-    const paintedAfter = (atMs: number | null) =>
+    const candidateFrameAfter = (atMs: number | null) =>
       atMs === null
         ? null
         : (ordered.find((frame) => frame.atMs >= Math.max(atMs, probe.fcpMs ?? 0))?.atMs ?? null);
@@ -401,9 +413,10 @@ async function captureReload(
       warm,
       url: new URL(url).pathname,
       probe,
-      firstAppCapturedPaintMs: paintedAfter(probe.firstAppDomMs),
-      firstMainCapturedPaintMs: paintedAfter(probe.firstMainDomMs),
-      firstDashboardCapturedPaintMs: paintedAfter(probe.firstDashboardContentDomMs),
+      firstAppCandidateFrameMs: candidateFrameAfter(probe.firstAppDomMs),
+      firstMainCandidateFrameMs: candidateFrameAfter(probe.firstMainDomMs),
+      firstDashboardCandidateFrameMs: candidateFrameAfter(probe.firstDashboardContentDomMs),
+      paintMilestoneMethod: "DOM-correlated candidates; first visible paint requires a pixel audit",
       regions,
       visual,
       missingRegions,
@@ -434,7 +447,7 @@ async function captureReload(
       JSON.stringify({
         reload: outputDir,
         helloHandledMs: probe.helloHandledMs,
-        firstMainCapturedPaintMs: report.firstMainCapturedPaintMs,
+        firstMainCandidateFrameMs: report.firstMainCandidateFrameMs,
         cls: probe.cls,
       }),
     );
@@ -683,7 +696,7 @@ try {
           chromium: browser.version(),
         },
         measurement:
-          "PNG screencast diagnostic; compositor frames Chromium delivers, everyNthFrame=1; no guarantee of display-vsync completeness. Paint bounds use first captured frame after DOM readiness/FCP. CDP transport shaping is not a fixed-delay RPC wrapper; observed wire times are retained. No product performance change is compared.",
+          "PNG screencast diagnostic; compositor frames Chromium delivers, everyNthFrame=1; no guarantee of display-vsync completeness. DOM-correlated frame candidates do not prove painted content; use the explicit pixel audit. CDP transport shaping is not a fixed-delay RPC wrapper; observed send/response event-handler intervals are retained. No product performance change is compared.",
         results,
       },
       null,
