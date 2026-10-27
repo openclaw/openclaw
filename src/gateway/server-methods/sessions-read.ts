@@ -112,9 +112,9 @@ export const sessionReadHandlers: GatewayRequestHandlers = {
       const { agentId, configured, requestedAgentId, sessionKeys } = scope;
       const restrictIncognito =
         Boolean(gatewayClientSessionCreator(client)) && !isGatewayAdmin(client);
-      const roleVisibilityFilter = hasOperatorBoundary(client, policyConfig)
-        ? createSessionListEntryFilter({ client, cfg: policyConfig })
-        : undefined;
+      const restrictRoleVisibility =
+        hasOperatorBoundary(client, policyConfig) &&
+        Boolean(createSessionListEntryFilter({ client, cfg: policyConfig }));
       const membershipProjection =
         operatorSessionCap(client, policyConfig) === "invited"
           ? requireSessionRowProjection(context)
@@ -123,33 +123,7 @@ export const sessionReadHandlers: GatewayRequestHandlers = {
         await membershipProjection.prepareSelection();
         await membershipProjection.prepareMembership();
       }
-      const profileId = gatewayClientSessionCreator(client)?.id;
-      const restrictVisibility = restrictIncognito || Boolean(roleVisibilityFilter);
-      const canSearchSessionKey = (
-        sessionKey: string,
-        entry: SessionEntry | undefined,
-        target: SessionStoreTarget,
-      ) => {
-        if (
-          isIncognitoSessionKey(sessionKey) &&
-          authorizeIncognitoSessionTarget({ client: client ?? null, sessionKey, target: null }) !==
-            null
-        ) {
-          return false;
-        }
-        if (!roleVisibilityFilter) {
-          return true;
-        }
-        const membership = membershipProjection?.readMembership({
-          key: sessionKey,
-          agentId: target.agentId,
-          storePath: target.storePath,
-        });
-        return Boolean(
-          entry &&
-          roleVisibilityFilter(sessionKey, entry, Boolean(profileId && membership?.has(profileId))),
-        );
-      };
+      const restrictVisibility = restrictIncognito || restrictRoleVisibility;
       if (requestedAgentId && !params.sessionKeys && configured) {
         respond(
           false,
@@ -196,7 +170,7 @@ export const sessionReadHandlers: GatewayRequestHandlers = {
           )
         : undefined;
       const entries = new Map<string, SessionEntry>();
-      if (roleVisibilityFilter) {
+      if (restrictVisibility) {
         for (const rows of entriesByTarget ?? []) {
           for (const { sessionKey, entry } of rows) {
             const parsed = parseAgentSessionKey(sessionKey);
@@ -215,46 +189,89 @@ export const sessionReadHandlers: GatewayRequestHandlers = {
           }
         }
       }
-      return searchTargets.flatMap((target, index) => {
-        const candidateKeys =
-          scopedSessionKeys ?? entriesByTarget?.[index]?.map(({ sessionKey }) => sessionKey);
-        const targetSessionKeys = candidateKeys?.filter((sessionKey) => {
-          // A shared physical store can include rows owned by another agent.
-          const parsed = parseAgentSessionKey(sessionKey);
-          return (
-            (!parsed || normalizeAgentId(parsed.agentId) === agentId) &&
-            canSearchSessionKey(sessionKey, entries.get(sessionKey), target)
+      // Selection runs in the caller's synchronous publication frame, after all worker waits.
+      return () => {
+        const currentPolicyConfig =
+          context.getCommittedRuntimeConfig?.() ?? context.getRuntimeConfig();
+        const roleVisibilityFilter = hasOperatorBoundary(client, currentPolicyConfig)
+          ? createSessionListEntryFilter({ client, cfg: currentPolicyConfig })
+          : undefined;
+        const profileId = gatewayClientSessionCreator(client)?.id;
+        const canSearchSessionKey = (
+          sessionKey: string,
+          entry: SessionEntry | undefined,
+          target: SessionStoreTarget,
+        ) => {
+          if (
+            isIncognitoSessionKey(sessionKey) &&
+            authorizeIncognitoSessionTarget({
+              client: client ?? null,
+              sessionKey,
+              target: null,
+            }) !== null
+          ) {
+            return false;
+          }
+          if (!roleVisibilityFilter) {
+            return true;
+          }
+          const membership = membershipProjection?.readMembership({
+            key: sessionKey,
+            agentId: target.agentId,
+            storePath: target.storePath,
+          });
+          return Boolean(
+            entry &&
+            roleVisibilityFilter(
+              sessionKey,
+              entry,
+              Boolean(profileId && membership?.has(profileId)),
+            ),
           );
+        };
+        return searchTargets.flatMap((target, index) => {
+          const candidateKeys =
+            scopedSessionKeys ?? entriesByTarget?.[index]?.map(({ sessionKey }) => sessionKey);
+          const targetSessionKeys = candidateKeys?.filter((sessionKey) => {
+            // A shared physical store can include rows owned by another agent.
+            const parsed = parseAgentSessionKey(sessionKey);
+            return (
+              (!parsed || normalizeAgentId(parsed.agentId) === agentId) &&
+              canSearchSessionKey(sessionKey, entries.get(sessionKey), target)
+            );
+          });
+          if (targetSessionKeys?.length === 0) {
+            return [];
+          }
+          return [
+            {
+              ...target,
+              query,
+              // Over-fetch retired multi-store searches so deduplication can still fill the caller's
+              // requested page when the same transcript was copied during a store migration.
+              limit: configured ? params.limit : 25,
+              ...(targetSessionKeys ? { sessionKeys: targetSessionKeys } : {}),
+            },
+          ];
         });
-        if (targetSessionKeys?.length === 0) {
-          return [];
-        }
-        return [
-          {
-            ...target,
-            query,
-            // Over-fetch retired multi-store searches so deduplication can still fill the caller's
-            // requested page when the same transcript was copied during a store migration.
-            limit: configured ? params.limit : 25,
-            ...(targetSessionKeys ? { sessionKeys: targetSessionKeys } : {}),
-          },
-        ];
-      });
+      };
     };
     try {
       for (let attempt = 0; attempt < 2; attempt++) {
-        const requests = await prepareSearch();
-        if (!requests) {
+        const selectRequests = await prepareSearch();
+        if (!selectRequests) {
           return;
         }
+        const requests = selectRequests();
         const targetResults = await Promise.all(
           requests.map((request) => searchSessionTranscripts(request)),
         );
         // Current configuration, identity, and sharing must authorize the whole result page.
-        const current = await prepareSearch();
-        if (!current) {
+        const selectCurrent = await prepareSearch();
+        if (!selectCurrent) {
           return;
         }
+        const current = selectCurrent();
         if (JSON.stringify(current) !== JSON.stringify(requests)) {
           continue;
         }
