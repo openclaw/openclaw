@@ -1,10 +1,8 @@
-import type { Envelope, GuardAdapter, SignedReceipt } from "../protocol/index.js";
+import type { Envelope, GuardAdapter, IdentityKeyPair, SignedReceipt } from "../protocol/index.js";
 import type { ReefChannelConfig } from "./config-schema.js";
 import type { ReefAutonomy, ReefPeerIdentity } from "./friend-types.js";
 
-export interface ReefKeys {
-  signing: { publicKey: string; secretKey: string };
-  encryption: { publicKey: string; secretKey: string };
+export interface ReefKeys extends IdentityKeyPair {
   auditKey: string;
   replayKey: string;
   keyEpoch: number;
@@ -54,7 +52,18 @@ export interface ReefIngressMessage {
   autonomy: ReefAutonomy;
 }
 
+export interface ReefRejectionRecovery {
+  assertCurrent(): void;
+  loadState(): Promise<ReefRejectionNoticeState | undefined>;
+  reserve(
+    state: ReefRejectionNoticeState,
+  ): Promise<{ kind: "reserved" } | { kind: "existing"; state: ReefRejectionNoticeState }>;
+  complete(state: ReefRejectionNoticeState): Promise<boolean>;
+}
+
 export interface ReefDeliveryRejection {
+  /** Runtime-only continuation bound to the source that produced this rejection. */
+  recovery: ReefRejectionRecovery;
   id: string;
   peer: string;
   /** Recipient identity pinned when the rejected envelope was composed. */

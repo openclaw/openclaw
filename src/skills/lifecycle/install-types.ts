@@ -1,4 +1,3 @@
-/** Normalized output returned by skill install flows and command wrappers. */
 export type SkillInstallSkipReason = "brew" | "go" | "uv";
 
 export type SkillInstallResult = {

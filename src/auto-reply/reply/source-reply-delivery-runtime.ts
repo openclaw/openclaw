@@ -10,6 +10,7 @@ export type SourceReplyDeliveryRuntimeOptions = {
 type SourceReplyDeliveryProjection = {
   sourceReplyDeliveryMode?: SourceReplyDeliveryMode;
   extraSystemPrompt?: string;
+  extraSystemPromptTurnContext?: { start: number; text: string };
 };
 
 type SourceReplyDeliveryRuntime = {
@@ -65,19 +66,47 @@ export function createSourceReplyDeliveryRuntime(params: {
         continue;
       }
       const offset = params.promptComponentOffset ?? -1;
-      const currentComponent = [...new Set(Object.values(params.promptComponentByMode))].find(
+      const currentComponent = Object.values(params.promptComponentByMode).find(
         (component) => component && prompt.slice(offset, offset + component.length) === component,
       );
       // Replace only the delivery-owned prompt component. Later context additions
       // must survive prepared harness selection instead of restoring a stale prompt.
       if (currentComponent && currentComponent !== nextComponent && offset >= 0) {
+        const context = projection.extraSystemPromptTurnContext;
+        const end = context ? context.start + context.text.length : -1;
+        const valid =
+          context &&
+          context.text &&
+          Number.isInteger(context.start) &&
+          context.start >= 0 &&
+          prompt.slice(context.start, end) === context.text &&
+          (context.start === 0 || prompt.slice(context.start - 2, context.start) === "\n\n") &&
+          (end === prompt.length || prompt.slice(end, end + 2) === "\n\n");
+        if (valid && context.start <= offset && end >= offset + currentComponent.length) {
+          const relative = offset - context.start;
+          projection.extraSystemPromptTurnContext = {
+            start: context.start,
+            text:
+              context.text.slice(0, relative) +
+              nextComponent +
+              context.text.slice(relative + currentComponent.length),
+          };
+        } else if (valid && context.start >= offset + currentComponent.length) {
+          projection.extraSystemPromptTurnContext = {
+            ...context,
+            start: context.start + nextComponent.length - currentComponent.length,
+          };
+        } else if (!valid || end > offset) {
+          // Never turn a stale annotation into a valid one by replacing its expected bytes.
+          projection.extraSystemPromptTurnContext = undefined;
+        }
         projection.extraSystemPrompt =
           prompt.slice(0, offset) + nextComponent + prompt.slice(offset + currentComponent.length);
       }
     }
     params.onModeResolved?.(mode);
   };
-  const runtime: SourceReplyDeliveryRuntime = {
+  return {
     origin: params.origin,
     get currentMode() {
       return currentMode;
@@ -86,5 +115,4 @@ export function createSourceReplyDeliveryRuntime(params: {
     applyMode: (owner, mode) => applyMode(owner, mode, false),
     applyPreparedMode: (owner, mode) => applyMode(owner, mode, true),
   };
-  return runtime;
 }

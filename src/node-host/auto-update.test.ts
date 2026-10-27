@@ -2,12 +2,13 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import type { OpenClawConfig } from "../config/config.js";
+import { createCommandResult } from "../test-utils/npm-spec-install-test-helpers.js";
 import type { PreparedNodeRuntimeUpdate } from "./auto-update-install.js";
 import { startNodeHostAutoUpdate } from "./auto-update.js";
+import { useNodeUpdateRuntime } from "./auto-update.test-support.js";
 
 const mocks = vi.hoisted(() => ({
   config: {} as OpenClawConfig,
-  configValid: true,
   readConfig: vi.fn(),
   lstat: vi.fn(),
   packageRoot: vi.fn(),
@@ -18,6 +19,8 @@ const mocks = vi.hoisted(() => ({
     vi.fn<typeof import("./auto-update-compatibility.js").assertNodeRuntimeUpdateCompatible>(),
   launcherChild: vi.fn(() => true),
   restart: vi.fn<typeof import("./launcher-client.js").requestNodeHostLauncherRestart>(),
+  exec: vi.fn<typeof import("../process/exec.js").runCommandWithTimeout>(),
+  fetch: vi.fn<typeof fetch>(),
 }));
 
 vi.mock("node:fs/promises", async (importOriginal) => {
@@ -35,6 +38,10 @@ vi.mock("../infra/update-check.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../infra/update-check.js")>()),
   resolveNpmChannelTag: mocks.discover,
   resolveUpdateInstallKind: mocks.installKind,
+}));
+vi.mock("../process/exec.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../process/exec.js")>()),
+  runCommandWithTimeout: mocks.exec,
 }));
 vi.mock("../version.js", () => ({ VERSION: "2026.9.17" }));
 vi.mock("./auto-update-install.js", () => ({ prepareNodeRuntimeUpdate: mocks.prepare }));
@@ -64,7 +71,6 @@ function hold<T>(value: T) {
 }
 
 function start(busy = false) {
-  const abort = new AbortController();
   const runtime = {
     tryPauseForUpdate: vi.fn(async () => !busy),
     resumeAfterUpdate: vi.fn(),
@@ -75,10 +81,45 @@ function start(busy = false) {
     runtime,
     onRestartAccepted,
     log,
-    signal: abort.signal,
+    signal: new AbortController().signal,
   });
   controllers.push(controller);
-  return { abort, runtime, onRestartAccepted, log, controller };
+  const { discover, prepare, compatible, restart } = mocks;
+  const { tryPauseForUpdate: pause, resumeAfterUpdate: resume } = runtime;
+  const calls = {
+    discover,
+    prepare,
+    compatible,
+    restart,
+    pause,
+    resume,
+    accepted: onRestartAccepted,
+  };
+  return {
+    runtime,
+    log,
+    controller,
+    async advance(ms: number, expected: Partial<Record<keyof typeof calls, number>>) {
+      await vi.advanceTimersByTimeAsync(ms);
+      expect(
+        Object.fromEntries(
+          Object.entries(calls).map(([name, mock]) => [name, mock.mock.calls.length]),
+        ),
+      ).toMatchObject(expected);
+    },
+  };
+}
+
+function holdStage(stage: "download" | "preflight" | "idle", host: ReturnType<typeof start>) {
+  const pending = hold<void>(undefined);
+  if (stage === "download") {
+    mocks.prepare.mockImplementationOnce(() => pending.promise.then(() => candidate));
+  } else if (stage === "preflight") {
+    mocks.compatible.mockImplementationOnce(() => pending.promise);
+  } else {
+    host.runtime.tryPauseForUpdate.mockImplementationOnce(() => pending.promise.then(() => true));
+  }
+  return pending;
 }
 
 beforeEach(() => {
@@ -88,9 +129,8 @@ beforeEach(() => {
   vi.stubEnv("OPENCLAW_NO_RESPAWN", "");
   vi.resetAllMocks();
   mocks.config = {};
-  mocks.configValid = true;
   mocks.readConfig.mockImplementation(async () => ({
-    valid: mocks.configValid,
+    valid: true,
     config: mocks.config,
   }));
   mocks.launcherChild.mockReturnValue(true);
@@ -116,229 +156,168 @@ afterEach(async () => {
 });
 
 describe("node auto-update controller", () => {
-  it.each(["disabled", "channel changed"])(
-    "does not install a late discovery after policy is %s",
-    async (change) => {
-      const discovery = hold({ tag: "latest", version: candidate.version });
-      mocks.discover.mockImplementationOnce(async () => await discovery.promise);
-      start();
-      await vi.advanceTimersByTimeAsync(0);
-      expect(mocks.discover).toHaveBeenCalledOnce();
-      mocks.config =
-        change === "disabled"
-          ? { nodeHost: { autoUpdate: { enabled: false } } }
-          : { update: { channel: "beta" } };
-      discovery.resolve({ tag: "latest", version: candidate.version });
-      await vi.advanceTimersByTimeAsync(0);
-      expect(mocks.prepare).not.toHaveBeenCalled();
-      expect(mocks.restart).not.toHaveBeenCalled();
-    },
-  );
-
   it("checks immediately and hourly without repeatedly staging the installed release", async () => {
     mocks.discover.mockResolvedValue({ tag: "latest", version: "2026.9.17" });
-    start();
-    await vi.advanceTimersByTimeAsync(0);
-    expect(mocks.discover).toHaveBeenCalledOnce();
-    await vi.advanceTimersByTimeAsync(HOUR - 1);
-    expect(mocks.discover).toHaveBeenCalledOnce();
-    await vi.advanceTimersByTimeAsync(1);
-    expect(mocks.discover).toHaveBeenCalledTimes(2);
-    await vi.advanceTimersByTimeAsync(HOUR);
-    expect(mocks.discover).toHaveBeenCalledTimes(3);
-    expect(mocks.prepare).not.toHaveBeenCalled();
-    expect(mocks.restart).not.toHaveBeenCalled();
+    const host = start();
+    await host.advance(0, { discover: 1 });
+    await host.advance(HOUR - 1, { discover: 1 });
+    await host.advance(1, { discover: 2 });
+    await host.advance(HOUR, { discover: 3, prepare: 0, restart: 0 });
   });
 
   it.each([
-    { label: "unmanaged process", launcher: false, kind: "package" },
-    { label: "source checkout", launcher: true, kind: "git" },
-    { label: "unknown installation", launcher: true, kind: "unknown" },
-  ])("does not schedule package updates for $label", async ({ launcher, kind }) => {
-    mocks.launcherChild.mockReturnValue(launcher);
-    mocks.installKind.mockResolvedValue(kind);
-    start();
-    await vi.advanceTimersByTimeAsync(24 * HOUR);
-    expect(mocks.discover).not.toHaveBeenCalled();
-    expect(mocks.prepare).not.toHaveBeenCalled();
-  });
-
-  it.each([
-    { label: "node setting", config: { nodeHost: { autoUpdate: { enabled: false } } } },
-    { label: "startup check setting", config: { update: { checkOnStart: false } } },
-    { label: "dev channel", config: { update: { channel: "dev" } } },
-    { label: "extended-stable channel", config: { update: { channel: "extended-stable" } } },
-  ] satisfies Array<{ label: string; config: OpenClawConfig }>)(
-    "honors the disabled $label policy before discovery",
-    async ({ config }) => {
+    ["unmanaged process", false, "package", {}],
+    ["source checkout", true, "git", {}],
+    ["node setting", true, "package", { nodeHost: { autoUpdate: { enabled: false } } }],
+    ["startup check setting", true, "package", { update: { checkOnStart: false } }],
+    ["dev channel", true, "package", { update: { channel: "dev" } }],
+    ["extended-stable channel", true, "package", { update: { channel: "extended-stable" } }],
+  ] satisfies [string, boolean, string, OpenClawConfig][])(
+    "does not schedule updates for %s",
+    async (_label, launcher, kind, config) => {
+      mocks.launcherChild.mockReturnValue(launcher);
+      mocks.installKind.mockResolvedValue(kind);
       mocks.config = config;
-      start();
-      await vi.advanceTimersByTimeAsync(HOUR);
-      expect(mocks.discover).not.toHaveBeenCalled();
-      expect(mocks.prepare).not.toHaveBeenCalled();
+      await start().advance(24 * HOUR, { discover: 0, prepare: 0 });
     },
   );
 
   it("uses the committed runtime pointer time and allows activation at exactly twelve hours", async () => {
     mocks.lstat.mockResolvedValue({ mtimeMs: Date.now() - 11 * HOUR });
     const host = start();
-    await vi.advanceTimersByTimeAsync(0);
+    await host.advance(0, { prepare: 0 });
     expect(mocks.lstat).toHaveBeenCalledWith(
       path.join("/synthetic-node-state", "node-runtime", "current"),
     );
-    expect(mocks.prepare).not.toHaveBeenCalled();
-    await vi.advanceTimersByTimeAsync(HOUR - 1);
-    expect(mocks.prepare).not.toHaveBeenCalled();
-    await vi.advanceTimersByTimeAsync(1);
-    expect(mocks.prepare).toHaveBeenCalledOnce();
+    await host.advance(HOUR - 1, { prepare: 0 });
+    await host.advance(1, { prepare: 1, accepted: 1 });
     expect(mocks.restart).toHaveBeenCalledWith({
       runtimeRoot: candidate.runtimeRoot,
       version: candidate.version,
     });
-    expect(host.onRestartAccepted).toHaveBeenCalledOnce();
   });
 
   it("stages once while busy and waits for the parent acknowledgment before requesting shutdown", async () => {
     const acknowledgment = hold<void>(undefined);
     mocks.restart.mockImplementation(async () => await acknowledgment.promise);
     const host = start(true);
-    await vi.advanceTimersByTimeAsync(0);
-    expect(mocks.prepare).toHaveBeenCalledOnce();
-    expect(mocks.compatible).not.toHaveBeenCalled();
-    expect(mocks.restart).not.toHaveBeenCalled();
-    await vi.advanceTimersByTimeAsync(30_000);
-    expect(host.runtime.tryPauseForUpdate).toHaveBeenCalledTimes(2);
-    expect(mocks.prepare).toHaveBeenCalledOnce();
-    expect(mocks.discover).toHaveBeenCalledOnce();
-    expect(
-      host.log.mock.calls.filter(([message]) => message.includes("waiting for active work")),
-    ).toHaveLength(1);
-
+    await host.advance(0, { prepare: 1, compatible: 0, restart: 0 });
+    await host.advance(30_000, { pause: 2, prepare: 1, discover: 1 });
     host.runtime.tryPauseForUpdate.mockResolvedValue(true);
-    await vi.advanceTimersByTimeAsync(30_000);
-    expect(mocks.restart).toHaveBeenCalledOnce();
-    expect(host.onRestartAccepted).not.toHaveBeenCalled();
-    expect(host.runtime.resumeAfterUpdate).not.toHaveBeenCalled();
+    await host.advance(30_000, { restart: 1, accepted: 0, resume: 0 });
     acknowledgment.resolve();
-    await vi.advanceTimersByTimeAsync(0);
-    expect(host.onRestartAccepted).toHaveBeenCalledOnce();
+    await host.advance(0, { accepted: 1 });
     await host.controller.stop();
     expect(host.runtime.resumeAfterUpdate).not.toHaveBeenCalled();
   });
 
-  it.each([
-    { stage: "download", change: "disabled" },
-    { stage: "download", change: "channel" },
-    { stage: "preflight", change: "disabled" },
-    { stage: "preflight", change: "channel" },
-  ] as const)(
-    "rechecks a $change policy changed during $stage before activation",
-    async ({ stage, change }) => {
-      const downloaded = hold(candidate);
-      const preflight = hold<void>(undefined);
-      if (stage === "download") {
-        mocks.prepare.mockImplementationOnce(async () => await downloaded.promise);
-      } else {
-        mocks.compatible.mockImplementationOnce(async () => await preflight.promise);
-      }
+  it.each(["disabled", "channel", "interval"] as const)(
+    "rechecks %s changed during preflight before activation",
+    async (change) => {
       const host = start();
-      await vi.advanceTimersByTimeAsync(0);
-      expect(stage === "download" ? mocks.prepare : mocks.compatible).toHaveBeenCalledOnce();
-      mocks.config =
-        change === "disabled"
-          ? { nodeHost: { autoUpdate: { enabled: false } } }
-          : { update: { channel: "beta" } };
-      downloaded.resolve(candidate);
-      preflight.resolve();
-      await vi.advanceTimersByTimeAsync(0);
-      expect(mocks.restart).not.toHaveBeenCalled();
-      expect(host.onRestartAccepted).not.toHaveBeenCalled();
-      expect(host.runtime.resumeAfterUpdate).toHaveBeenCalledTimes(stage === "preflight" ? 1 : 0);
+      const pending = holdStage("preflight", host);
+      await host.advance(0, { compatible: 1 });
+      if (change === "interval") {
+        mocks.lstat.mockResolvedValue({ mtimeMs: Date.now() });
+      } else {
+        mocks.config =
+          change === "disabled"
+            ? { nodeHost: { autoUpdate: { enabled: false } } }
+            : { update: { channel: "beta" } };
+      }
+      pending.resolve();
+      await host.advance(0, { restart: 0, accepted: 0, resume: 1 });
     },
   );
 
-  it("rechecks the activation interval after compatibility work", async () => {
-    const preflight = hold<void>(undefined);
-    mocks.compatible.mockImplementationOnce(async () => await preflight.promise);
-    const host = start();
-    await vi.advanceTimersByTimeAsync(0);
-    expect(mocks.compatible).toHaveBeenCalledOnce();
-    mocks.lstat.mockResolvedValue({ mtimeMs: Date.now() });
-    preflight.resolve();
-    await vi.advanceTimersByTimeAsync(0);
-    expect(mocks.restart).not.toHaveBeenCalled();
-    expect(host.runtime.resumeAfterUpdate).toHaveBeenCalledOnce();
-  });
-
-  it.each(["download", "preflight"] as const)(
+  it.each(["download", "preflight", "idle"] as const)(
     "cancels and joins pending $stage cleanup before stop resolves",
     async (stage) => {
-      const downloaded = hold(candidate);
-      const preflight = hold<void>(undefined);
-      if (stage === "download") {
-        mocks.prepare.mockImplementationOnce(async () => await downloaded.promise);
-      } else {
-        mocks.compatible.mockImplementationOnce(async () => await preflight.promise);
-      }
       const host = start();
+      const pending = holdStage(stage, host);
       await vi.advanceTimersByTimeAsync(0);
       const invocation =
         stage === "download" ? mocks.prepare.mock.calls[0] : mocks.compatible.mock.calls[0];
-      expect(invocation?.[0].signal?.aborted).toBe(false);
-      let stopped = false;
-      const stopping = host.controller.stop().then(() => {
-        stopped = true;
-      });
-      expect(invocation?.[0].signal?.aborted).toBe(true);
+      if (stage === "idle") {
+        expect(host.runtime.tryPauseForUpdate).toHaveBeenCalledOnce();
+      } else {
+        expect(invocation?.[0].signal?.aborted).toBe(false);
+      }
+      const stopped = vi.fn();
+      const stopping = host.controller.stop().then(stopped);
+      if (stage !== "idle") {
+        expect(invocation?.[0].signal?.aborted).toBe(true);
+      }
       await vi.advanceTimersByTimeAsync(0);
-      expect(stopped).toBe(false);
-      downloaded.resolve(candidate);
-      preflight.resolve();
+      expect(stopped).not.toHaveBeenCalled();
+      pending.resolve();
       await stopping;
-      expect(stopped).toBe(true);
-      expect(mocks.restart).not.toHaveBeenCalled();
-      expect(host.onRestartAccepted).not.toHaveBeenCalled();
-      expect(host.runtime.resumeAfterUpdate).toHaveBeenCalledTimes(stage === "preflight" ? 1 : 0);
+      if (stage === "idle") {
+        expect(mocks.compatible).not.toHaveBeenCalled();
+      }
+      await host.advance(0, { restart: 0, accepted: 0, resume: stage === "download" ? 0 : 1 });
     },
   );
-
-  it("joins a pending idle check and resumes the node when stopped before admission", async () => {
-    const idle = hold(true);
-    const host = start();
-    host.runtime.tryPauseForUpdate.mockImplementationOnce(async () => await idle.promise);
-    await vi.advanceTimersByTimeAsync(0);
-    expect(host.runtime.tryPauseForUpdate).toHaveBeenCalledOnce();
-    expect(mocks.compatible).not.toHaveBeenCalled();
-    expect(mocks.restart).not.toHaveBeenCalled();
-    const stopping = host.controller.stop();
-    idle.resolve(true);
-    await stopping;
-    expect(mocks.compatible).not.toHaveBeenCalled();
-    expect(mocks.restart).not.toHaveBeenCalled();
-    expect(host.runtime.resumeAfterUpdate).toHaveBeenCalledOnce();
-  });
 
   it.each(["download", "preflight", "restart"] as const)(
     "keeps the running node available after a $stage failure and retries hourly",
     async (stage) => {
       const error = new Error(`${stage} fixture failure`);
-      if (stage === "download") {
-        mocks.prepare.mockRejectedValueOnce(error);
-      } else if (stage === "preflight") {
-        mocks.compatible.mockRejectedValueOnce(error);
-      } else {
-        mocks.restart.mockRejectedValueOnce(error);
-      }
+      const failing = {
+        download: mocks.prepare,
+        preflight: mocks.compatible,
+        restart: mocks.restart,
+      };
+      failing[stage].mockRejectedValueOnce(error);
       const host = start();
-      await vi.advanceTimersByTimeAsync(0);
+      await host.advance(0, { accepted: 0, resume: stage === "download" ? 0 : 1 });
       expect(host.log).toHaveBeenCalledWith(expect.stringContaining(error.message));
-      expect(host.onRestartAccepted).not.toHaveBeenCalled();
-      expect(host.runtime.resumeAfterUpdate).toHaveBeenCalledTimes(stage === "download" ? 0 : 1);
-      await vi.advanceTimersByTimeAsync(HOUR - 1);
-      expect(mocks.prepare).toHaveBeenCalledOnce();
-      await vi.advanceTimersByTimeAsync(1);
-      expect(mocks.prepare).toHaveBeenCalledTimes(2);
-      expect(host.onRestartAccepted).toHaveBeenCalledOnce();
+      await host.advance(HOUR - 1, { prepare: 1 });
+      await host.advance(1, { prepare: 2, accepted: 1 });
     },
   );
+});
+
+describe("node auto-update discovery runtime", () => {
+  const useRuntime = useNodeUpdateRuntime();
+
+  beforeEach(async () => {
+    const actual = await vi.importActual<typeof import("../infra/update-check.js")>(
+      "../infra/update-check.js",
+    );
+    mocks.discover.mockImplementation(actual.resolveNpmChannelTag);
+    vi.stubGlobal("fetch", mocks.fetch);
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it("stages the candidate discovered by npm", async () => {
+    useRuntime("node");
+    mocks.exec.mockResolvedValue(
+      createCommandResult({ stdout: JSON.stringify({ version: candidate.version }) }),
+    );
+    await start().advance(0, { prepare: 1 });
+    expect(mocks.prepare).toHaveBeenCalledWith(
+      expect.objectContaining({ targetVersion: candidate.version }),
+    );
+  });
+
+  it("cancels an in-flight Bun registry read when the node stops", async () => {
+    useRuntime("bun");
+    mocks.fetch.mockImplementation(
+      async (_url, init) =>
+        await new Promise<Response>((_resolve, reject) => {
+          init?.signal?.addEventListener("abort", () => reject(new Error("registry aborted")), {
+            once: true,
+          });
+        }),
+    );
+    const host = start();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(mocks.fetch).toHaveBeenCalledOnce();
+    await host.controller.stop();
+    expect(mocks.prepare).not.toHaveBeenCalled();
+  });
 });

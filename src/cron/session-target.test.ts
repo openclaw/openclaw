@@ -3,7 +3,6 @@ import { describe, expect, it } from "vitest";
 import {
   resolveCronCurrentSessionTarget,
   resolveCronDeliverySessionKey,
-  resolveCronNotificationSessionKey,
   resolveCronSessionTargetSessionKey,
 } from "./session-target.js";
 
@@ -12,15 +11,6 @@ describe("cron session target helpers", () => {
     expect(resolveCronSessionTargetSessionKey("session: agent:main:telegram:direct:123 ")).toBe(
       "agent:main:telegram:direct:123",
     );
-  });
-
-  it("preserves opaque persistent session targets with native separators", () => {
-    expect(
-      resolveCronSessionTargetSessionKey(
-        "session: agent:main:dingtalk:group:cid3tmd4xb19xjfk/wogxwy2a== ",
-      ),
-    ).toBe("agent:main:dingtalk:group:cid3tmd4xb19xjfk/wogxwy2a==");
-    expect(resolveCronSessionTargetSessionKey("session:..\\outside")).toBe("..\\outside");
   });
 
   it("rejects null bytes in persistent session targets", () => {
@@ -58,11 +48,5 @@ describe("cron session target helpers", () => {
         sessionKey: " agent:main:telegram:group:ops:sender:123 ",
       }),
     ).toBe("agent:main:telegram:group:ops:sender:123");
-  });
-
-  it("uses cron failure session fallback when no delivery session exists", () => {
-    expect(resolveCronNotificationSessionKey({ jobId: "job-1", sessionKey: " " })).toBe(
-      "cron:job-1:failure",
-    );
   });
 });

@@ -1,10 +1,61 @@
-import fsSync from "node:fs";
+import fsSync, { type Stats } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { inspectPathPermissions, safeStat } from "../security/audit-fs.js";
-import { trustedPlanPathPolicy } from "./trusted-plan-path-policy.js";
+import { readOwnerAndDaclBatch, type OwnerAndDaclResult } from "@openclaw/fs-safe/permissions";
 
-const { isSafeWindowsDirectoryAclSummary, isTrustedOwner } = trustedPlanPathPolicy;
+const TRUSTED_INSTALLER = "s-1-5-80-956008885-3418522649-1831038044-1853292631-2271478464";
+const TRUSTED_OWNERS = new Set(["s-1-5-18", "s-1-5-32-544"]);
+const WRITE_RIGHTS = 0x500d0156;
+const KNOWN_RIGHTS = 0xf01f01ff;
+// Read/execute plus adding children; executable parents exclude WD and AD.
+const SAFE_DIRECTORY_RIGHTS = 0xa01200af;
+
+function trustedWindowsPlanPathFailure(
+  facts: OwnerAndDaclResult,
+  options: { directory: boolean; allowChildCreation: boolean; allowTrustedInstaller: boolean },
+): string | undefined {
+  if (facts.status !== "supported" || !facts.complete) {
+    return "permissions could not be verified";
+  }
+  const owner = facts.ownerSid.toLowerCase();
+  const user = facts.currentUserSid.toLowerCase();
+  if (
+    !(facts.isLocal && (owner === user || TRUSTED_OWNERS.has(owner))) &&
+    !(options.allowTrustedInstaller && owner === TRUSTED_INSTALLER)
+  ) {
+    return "path is not owned by the current user or root";
+  }
+  const grants = facts.aces.filter((ace) => {
+    const sid = ace.sid.toLowerCase();
+    return (
+      ace.aceType === "allow" &&
+      !ace.flags.inheritOnly &&
+      sid !== user &&
+      !TRUSTED_OWNERS.has(sid) &&
+      sid !== TRUSTED_INSTALLER
+    );
+  });
+  if (!facts.daclPresent) {
+    return "path is writable by another user";
+  }
+  if (!grants.some((ace) => (ace.mask & WRITE_RIGHTS) !== 0)) {
+    return undefined;
+  }
+  const safeRights = options.allowChildCreation
+    ? SAFE_DIRECTORY_RIGHTS
+    : SAFE_DIRECTORY_RIGHTS & ~0x6;
+  // Preserve the inspector's coarse write gate and the rights its summary represented.
+  if (
+    options.directory &&
+    grants.every((ace) => {
+      const rights = ace.mask & KNOWN_RIGHTS;
+      return rights !== 0 && (rights & ~safeRights) === 0;
+    })
+  ) {
+    return undefined;
+  }
+  return "path is writable by another user";
+}
 
 async function readShebangInterpreter(targetPath: string): Promise<string | undefined> {
   const handle = await fs.open(targetPath, "r");
@@ -34,69 +85,68 @@ async function assertTrustedPathChain(
   targetType: "directory" | "file",
   options: { allowWindowsTargetTrustedInstaller?: boolean } = {},
 ): Promise<void> {
-  const validatedEntries: Array<{ path: string; dev: number | bigint; ino: number | bigint }> = [];
-  let currentPath = resolvedPath;
-  let first = true;
+  const entries: Array<{ path: string; before: Stats }> = [];
+  let cursor = resolvedPath;
   for (;;) {
-    const before = await fs.lstat(currentPath);
-    const [stat, permissions] = await Promise.all([
-      safeStat(currentPath),
-      inspectPathPermissions(currentPath),
-    ]);
-    const after = await fs.lstat(currentPath);
-    if (!stat.ok || !permissions.ok || permissions.source === "unknown") {
-      throw new Error(`permissions could not be verified: ${currentPath}`);
+    entries.push({ path: cursor, before: await fs.lstat(cursor) });
+    const parentPath = path.dirname(cursor);
+    if (parentPath === cursor) {
+      break;
     }
+    cursor = parentPath;
+  }
+  let windows: OwnerAndDaclResult[] | undefined;
+  if (process.platform === "win32") {
+    try {
+      windows = await readOwnerAndDaclBatch(entries.map((entry) => entry.path));
+    } catch (cause) {
+      throw new Error(`permissions could not be verified for path chain: ${resolvedPath}`, {
+        cause,
+      });
+    }
+  }
+  for (const [index, entry] of entries.entries()) {
+    const { before, path: currentPath } = entry;
+    const after = await fs.lstat(currentPath);
     if (
       before.isSymbolicLink() ||
       after.isSymbolicLink() ||
-      stat.isSymlink ||
-      permissions.isSymlink ||
       before.dev !== after.dev ||
       before.ino !== after.ino
     ) {
       throw new Error(`path changed during permission verification: ${currentPath}`);
     }
-    const expectedDirectory = !first || targetType === "directory";
-    if (stat.isDir !== expectedDirectory) {
+    const directory = index > 0 || targetType === "directory";
+    if (after.isDirectory() !== directory) {
       throw new Error(`unexpected path type: ${currentPath}`);
     }
-    // TrustedInstaller legitimately owns Windows system paths. Targets remain strict unless a
-    // caller validates a pinned system executable through the dedicated resolver below.
-    const allowWindowsTrustedInstaller =
-      !first || (first && options.allowWindowsTargetTrustedInstaller === true);
-    if (!isTrustedOwner(stat, permissions, process.platform, allowWindowsTrustedInstaller)) {
-      throw new Error(`path is not owned by the current user or root: ${currentPath}`);
-    }
-    const stickyDirectory =
-      stat.isDir && permissions.mode != null && (permissions.mode & 0o1000) !== 0;
-    if ((permissions.groupWritable || permissions.worldWritable) && !stickyDirectory) {
-      const safeWindowsDirectory =
-        process.platform === "win32" &&
-        stat.isDir &&
-        isSafeWindowsDirectoryAclSummary(
-          permissions.aclSummary,
-          targetType === "directory" || currentPath !== path.dirname(resolvedPath),
-        );
-      // Windows directories commonly allow adding new children or carry inherit-only full
-      // control for each child's eventual owner. Executable parents reject child creation.
-      if (!safeWindowsDirectory) {
-        throw new Error(`path is writable by another user: ${currentPath}`);
+    let failure: string | undefined;
+    if (windows) {
+      failure = trustedWindowsPlanPathFailure(windows[index]!, {
+        directory,
+        allowChildCreation: targetType === "directory" || index !== 1,
+        allowTrustedInstaller: index > 0 || options.allowWindowsTargetTrustedInstaller === true,
+      });
+    } else {
+      const uid = typeof process.getuid === "function" ? process.getuid() : undefined;
+      if (uid === undefined || (after.uid !== uid && after.uid !== 0)) {
+        failure = "path is not owned by the current user or root";
+      } else if ((after.mode & 0o022) !== 0 && !(directory && (after.mode & 0o1000) !== 0)) {
+        failure = "path is writable by another user";
       }
     }
-    validatedEntries.push({ path: currentPath, dev: after.dev, ino: after.ino });
-
-    const parentPath = path.dirname(currentPath);
-    if (parentPath === currentPath) {
-      break;
+    if (failure) {
+      throw new Error(`${failure}: ${currentPath}`);
     }
-    currentPath = parentPath;
-    first = false;
   }
   // Recheck from the trusted root toward the target after the full chain is known.
-  for (const entry of validatedEntries.toReversed()) {
+  for (const entry of entries.toReversed()) {
     const current = await fs.lstat(entry.path);
-    if (current.isSymbolicLink() || current.dev !== entry.dev || current.ino !== entry.ino) {
+    if (
+      current.isSymbolicLink() ||
+      current.dev !== entry.before.dev ||
+      current.ino !== entry.before.ino
+    ) {
       throw new Error(`path changed after permission verification: ${entry.path}`);
     }
   }
@@ -129,7 +179,7 @@ async function assertTrustedPath(
     const resolvedInterpreter = await assertTrustedPath(interpreter, validatedScripts);
     // The kernel launches the literal shebang path, so aliases cannot use an unverified link.
     if (resolvedInterpreter !== interpreter) {
-      throw new Error(`script interpreter path must be canonical: ${interpreter}`);
+      throw new Error(`script interpreter path must be fully resolved: ${interpreter}`);
     }
   }
   return resolvedPath;

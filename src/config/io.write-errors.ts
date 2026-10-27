@@ -1,11 +1,30 @@
-// Formats stable user-facing config write failures.
+import { hasErrnoCode } from "../infra/errno.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import type { ConfigValidationIssue } from "./types.js";
 
 const CONFIG_VALIDATION_FAILED_CODE = "CONFIG_VALIDATION_FAILED";
 const CONFIG_INCLUDE_OWNERSHIP_CODE = "CONFIG_INCLUDE_OWNERSHIP";
+const CONFIG_WRITE_REJECTED_CODE = "CONFIG_WRITE_REJECTED";
+
+const CONFIG_WRITE_SAFETY_REJECTION_MESSAGE =
+  "OpenClaw blocked this config update because it looked like it could overwrite or remove existing settings. Your current config was left unchanged. Correct the proposed update so it preserves existing settings, then retry. If the saved config is already invalid, run openclaw doctor --fix first.";
 
 export type ConfigWriteRollbackStatus = "restored" | "not-restored" | "unknown";
+
+/**
+ * Refuses a suspicious root-config replacement without exposing filesystem
+ * paths or byte-level guard diagnostics through user-facing error surfaces.
+ */
+export function createConfigWriteSafetyRejectionError(params: {
+  reasons: readonly string[];
+  rejectedPath?: string;
+}): Error & { code: string; reasons: string[]; rejectedPath?: string } {
+  return Object.assign(new Error(CONFIG_WRITE_SAFETY_REJECTION_MESSAGE), {
+    code: CONFIG_WRITE_REJECTED_CODE,
+    reasons: [...params.reasons],
+    ...(params.rejectedPath ? { rejectedPath: params.rejectedPath } : {}),
+  });
+}
 
 /** A completed file write must not be handled as a retryable pre-write refusal. */
 export class ConfigWritePostCommitError extends Error {
@@ -40,13 +59,34 @@ export class ConfigWritePostCommitError extends Error {
   }
 }
 
-function hasConfigWriteErrorCode(error: unknown, code: string): error is Error {
-  return (
-    error instanceof Error &&
-    "code" in error &&
-    // SAFETY: the `"code" in error` guard proves the property exists; the cast only widens to unknown for comparison.
-    (error as { code?: unknown }).code === code
-  );
+export async function recoverConfigWriteFailure(params: {
+  configPath: string;
+  cause: unknown;
+  publication?: "complete" | "partial";
+  restoreFile: () => Promise<boolean | undefined>;
+  restoreEffects?: () => void | Promise<void>;
+}): Promise<never> {
+  let rollbackStatus: ConfigWriteRollbackStatus = "unknown";
+  let cause = params.cause;
+  try {
+    const restored = await params.restoreFile();
+    rollbackStatus = restored ? "restored" : "not-restored";
+    if (restored) {
+      await params.restoreEffects?.();
+    }
+  } catch (rollbackError) {
+    cause = new AggregateError(
+      [params.cause, rollbackError],
+      `${formatErrorMessage(params.cause)} Recovery failed: ${formatErrorMessage(rollbackError)}`,
+      { cause: rollbackError },
+    );
+  }
+  throw new ConfigWritePostCommitError({
+    configPath: params.configPath,
+    rollbackStatus,
+    cause,
+    publication: params.publication,
+  });
 }
 
 /**
@@ -61,11 +101,10 @@ export function createConfigValidationFailedError(issues: ConfigValidationIssue[
   );
 }
 
-/** True when a config write was refused because the candidate failed schema validation. */
 export function isConfigValidationFailedError(
   error: unknown,
 ): error is Error & { issues: ConfigValidationIssue[] } {
-  return hasConfigWriteErrorCode(error, CONFIG_VALIDATION_FAILED_CODE);
+  return error instanceof Error && hasErrnoCode(error, CONFIG_VALIDATION_FAILED_CODE);
 }
 
 type ConfigIncludeOwnershipRefusal = {
@@ -89,11 +128,10 @@ export function createConfigIncludeOwnershipError(refusal: ConfigIncludeOwnershi
   );
 }
 
-/** True when a config write was refused because it would flatten an included file. */
 export function isConfigIncludeOwnershipError(
   error: unknown,
 ): error is Error & ConfigIncludeOwnershipRefusal {
-  return hasConfigWriteErrorCode(error, CONFIG_INCLUDE_OWNERSHIP_CODE);
+  return error instanceof Error && hasErrnoCode(error, CONFIG_INCLUDE_OWNERSHIP_CODE);
 }
 
 const OPEN_DM_POLICY_ALLOW_FROM_RE =

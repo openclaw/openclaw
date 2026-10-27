@@ -1,17 +1,10 @@
-// Xai tests cover tool config shared plugin behavior.
 import { describe, expect, it } from "vitest";
 import {
-  coerceXaiToolConfig,
   resolveNormalizedXaiToolModel,
   resolvePositiveIntegerToolConfig,
 } from "./tool-config-shared.js";
 
 describe("xai tool config helpers", () => {
-  it("coerces non-record config to an empty object", () => {
-    expect(coerceXaiToolConfig(undefined)).toStrictEqual({});
-    expect(coerceXaiToolConfig([] as unknown as Record<string, unknown>)).toStrictEqual({});
-  });
-
   it("normalizes configured model ids and falls back to the default model", () => {
     expect(
       resolveNormalizedXaiToolModel({

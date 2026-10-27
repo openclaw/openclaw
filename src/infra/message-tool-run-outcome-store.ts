@@ -1,24 +1,14 @@
-import type { Insertable } from "kysely";
 import {
-  resolveSqliteScope,
-  toDatabaseOptions,
-} from "../config/sessions/session-accessor.sqlite-scope.js";
-import type { DB as OpenClawAgentKyselyDatabase } from "../state/openclaw-agent-db.generated.js";
-import {
-  openOpenClawAgentDatabase,
-  runOpenClawAgentWriteTransaction,
-} from "../state/openclaw-agent-db.js";
-import { ensureMessageToolRunOutcomeSchema } from "../state/openclaw-agent-message-tool-outcome-schema.js";
-import { executeSqliteQuerySync, getNodeSqliteKysely } from "./kysely-sync.js";
+  captureSessionActorStorageOwner,
+  withSessionActorStorage,
+  type SessionActorStorageBinding,
+} from "../config/sessions/session-actor-storage-binding.js";
+import { readSessionActorStorageResult } from "../config/sessions/session-actor-storage-result.js";
+import { IncognitoSessionMissingError } from "../state/incognito-session-error.js";
+import type { MessageToolRunOutcomeInsert } from "./message-tool-run-outcome-store.kernel.js";
 
-const MESSAGE_TOOL_RUN_OUTCOME_MAX_ROWS = 10_000;
-
-type MessageToolRunOutcomeTable = OpenClawAgentKyselyDatabase["message_tool_run_outcomes"];
-type MessageToolRunOutcomeDatabase = Pick<OpenClawAgentKyselyDatabase, "message_tool_run_outcomes">;
-type MessageToolRunOutcomeInsert = Insertable<MessageToolRunOutcomeTable>;
-
-/** Records one bounded completion fact for a message-tool-only run. */
-export function recordMessageToolRunOutcome(params: {
+/** Keeps incognito side data; durable diagnostic outcomes have no reader. */
+export async function recordMessageToolRunOutcome(params: {
   runId: string;
   sessionKey: string;
   agentId: string;
@@ -29,7 +19,13 @@ export function recordMessageToolRunOutcome(params: {
   occurredAt: number;
   storePath?: string;
   env?: NodeJS.ProcessEnv;
-}): void {
+  sessionActor?: SessionActorStorageBinding;
+}): Promise<boolean> {
+  const authority = { assertCurrent() {}, authorize() {} };
+  const memory = captureSessionActorStorageOwner(params, authority);
+  if (!memory) {
+    return false;
+  }
   const values: MessageToolRunOutcomeInsert = {
     run_id: params.runId,
     session_key: params.sessionKey,
@@ -40,30 +36,27 @@ export function recordMessageToolRunOutcome(params: {
     run_status: params.runStatus,
     occurred_at: params.occurredAt,
   };
-  const databaseOptions = toDatabaseOptions(resolveSqliteScope(params));
-  ensureMessageToolRunOutcomeSchema(openOpenClawAgentDatabase(databaseOptions).db);
-  runOpenClawAgentWriteTransaction(
-    ({ db }) => {
-      const agentDb = getNodeSqliteKysely<MessageToolRunOutcomeDatabase>(db);
-      executeSqliteQuerySync(db, agentDb.insertInto("message_tool_run_outcomes").values(values));
-      executeSqliteQuerySync(
-        db,
-        agentDb
-          .deleteFrom("message_tool_run_outcomes")
-          .where(
-            "id",
-            "in",
-            agentDb
-              .selectFrom("message_tool_run_outcomes")
-              .select("id")
-              .orderBy("occurred_at", "desc")
-              .orderBy("id", "desc")
-              .limit(2_147_483_647)
-              .offset(MESSAGE_TOOL_RUN_OUTCOME_MAX_ROWS),
-          ),
-      );
+  const recorded = await withSessionActorStorage(
+    params,
+    {
+      authority,
+      lifetime: {
+        assertCurrent: () => authority.assertCurrent(),
+        assertReadable: () => authority.assertCurrent(),
+      },
     },
-    databaseOptions,
-    { operationLabel: "message-tool.run-outcome.record" },
+    async ({ actor, authority: selectedAuthority }) => {
+      const result = await actor.storage.mutate(
+        { type: "session.messageToolOutcome.record", input: values },
+        selectedAuthority,
+      );
+      readSessionActorStorageResult(result);
+      return true;
+    },
   );
+  // Closing an incognito session discards late bookkeeping; the run owner records the warning.
+  if (!recorded) {
+    throw new IncognitoSessionMissingError();
+  }
+  return true;
 }

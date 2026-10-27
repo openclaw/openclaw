@@ -19,10 +19,12 @@ jobs:
     name: Comment on PR
     runs-on: ubuntu-24.04
     if: >
+      (
       github.repository == 'openclaw/openclaw' &&
       github.event.workflow_run.event == 'pull_request' &&
       (github.event.workflow_run.name == 'iOS Periphery Dead Code' ||
       github.event.workflow_run.name == 'macOS Periphery Dead Code')
+      )
     steps:
       - name: Upsert Periphery PR comment
         uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9
@@ -48,6 +50,7 @@ jobs:
                 marker: "<!-- openclaw-macos-periphery-dead-code -->",
                 repoPathPrefix: "apps/macos/",
                 scanJobName: "Scan macOS dead code",
+                producerJobName: "Build macOS Periphery reports",
                 scopeJobName: "Detect macOS scan scope",
                 scopeLabel: "macOS",
               },
@@ -62,6 +65,7 @@ jobs:
               marker,
               repoPathPrefix,
               scanJobName,
+              producerJobName = scanJobName,
               scopeJobName,
               scopeLabel,
             } = workflowConfig;
@@ -108,14 +112,23 @@ jobs:
               owner,
               repo,
               run_id: run.id,
-              filter: "latest",
+              filter: "all",
               per_page: 100,
             });
-            const scopeJob = jobs.find((job) => job.name === scopeJobName);
-            const scanJob = jobs.find((job) => job.name === scanJobName);
+            const latestJob = (name) => {
+              const candidates = jobs.filter((job) => job.name === name);
+              if (!candidates.length || candidates.some((job) => !Number.isSafeInteger(job.run_attempt) || job.run_attempt < 1)) return;
+              const attempt = Math.max(...candidates.map((job) => job.run_attempt));
+              const matches = candidates.filter((job) => job.run_attempt === attempt);
+              return matches.length === 1 && matches[0].status === "completed" ? matches[0] : undefined;
+            };
+            const scopeJob = latestJob(scopeJobName);
+            const scanJob = latestJob(scanJobName);
+            const producerJob = latestJob(producerJobName);
             const skipReason = intent === "draft"
               ? "the pull request is a draft"
-              : scopeJob?.conclusion === "success" && scanJob?.conclusion === "skipped"
+              : scopeJob?.conclusion === "success" && scanJob?.conclusion === "skipped" &&
+                producerJob?.conclusion !== "cancelled"
                 ? `the pull request no longer touches ${scopeLabel} scan scope`
                 : undefined;
             if (skipReason) {
@@ -135,7 +148,14 @@ jobs:
               if (skipReason) {
                 return;
               }
-              const artifactName = `${artifactPrefix}-${run.id}-${run.run_attempt}`;
+              // A failed-job rerun can retain a successful producer from an earlier
+              // attempt. The result job and enclosing run do not own its artifact.
+              const attempt = producerJob?.run_attempt;
+              if (!Number.isSafeInteger(attempt) || attempt < 1) {
+                core.warning(`No producer attempt found for ${producerJobName}.`);
+                return;
+              }
+              const artifactName = `${artifactPrefix}-${run.id}-${attempt}`;
               const artifact = artifacts.find((item) => item.name === artifactName);
               if (!artifact) {
                 core.warning(`No ${artifactName} artifact found.`);

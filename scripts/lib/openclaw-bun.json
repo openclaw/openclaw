@@ -1,0 +1,47 @@
+{
+  "tag": "openclaw-v1.4.4-20261024-807211511f-webkit-a2976f02e6",
+  "commit": "807211511f81e0a6639bc9eb41d67120f6b85316",
+  "revision": "1.4.4-canary.1+807211511",
+  "artifacts": {
+    "darwin-arm64": {
+      "asset": "bun-darwin-aarch64.zip",
+      "sha256": "7573013716353fefa8f834bf71884f21226288710b9403e40912f1a7b5dc5b78",
+      "executable": "bun-darwin-aarch64/bun",
+      "executableSha256": "a64ead586a507f99a190b172ac19f0a72e314ce82c511c7fc204d5bc80ca3873"
+    },
+    "darwin-x64": {
+      "asset": "bun-darwin-x64.zip",
+      "sha256": "3e4637a7fea541a293f52c31040ba46c0f0f4bcdabc4e37c43bb39555e8bdeb4",
+      "executable": "bun-darwin-x64/bun",
+      "executableSha256": "2025e02c7a28a41f1fee69f6a16c7af8c01da796532f870e949721e66a0c3403"
+    },
+    "linux-x64": {
+      "asset": "bun-linux-x64.zip",
+      "sha256": "1ed8c982a6e0600c5850d4e41f8be5abbda9f953f9d4015b44bd21453056bb63",
+      "executable": "bun-linux-x64/bun",
+      "executableSha256": "5bcf675cba3ff588ebd6fdefeffcb9ad70d8baec94fe5f47ddac077f61becf21"
+    },
+    "linux-arm64": {
+      "asset": "bun-linux-aarch64.zip",
+      "sha256": "dad7b188a36380f78281d0d231735d1fb4da5c629a99382b95b5d7dd321a5f45",
+      "executable": "bun-linux-aarch64/bun",
+      "executableSha256": "14eae014ce7fd7c65b936e5b8f17a11e0d63ff17b5ec7409b519f8cd9ae2f177"
+    },
+    "windows-x64": {
+      "asset": "bun-windows-x64.zip",
+      "sha256": "0510ec7676a87784d861e8513f07f9bbc0cd2433ee006a7b26c1d415b73ee0af",
+      "executable": "bun-windows-x64/bun.exe",
+      "executableSha256": "5f74365a40c2d0cb34b3a71e04eb38afb51dd5b39d6afdbaefd4476e1a4b3c72",
+      "authenticodeSigned": true,
+      "testOnly": false
+    },
+    "windows-arm64": {
+      "asset": "bun-windows-aarch64.zip",
+      "sha256": "5116dd4fc52f9c65f9df10cd66a873583ba79adc2a9f489898db7a395887cba6",
+      "executable": "bun-windows-aarch64/bun.exe",
+      "executableSha256": "90252ee5294fd322788a34c54e33faa11ea728ae94624c813cd073dc0dcf18e8",
+      "authenticodeSigned": true,
+      "testOnly": false
+    }
+  }
+}

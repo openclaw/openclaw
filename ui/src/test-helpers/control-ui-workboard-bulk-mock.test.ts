@@ -3,28 +3,37 @@ import { createControlUiMockGatewayInitScript } from "./control-ui-e2e.ts";
 import { installWorkboardBoardMock } from "./control-ui-workboard-mocks.ts";
 import { flushMockTimers, mockGatewayTest as it } from "./mock-gateway-page.test-support.ts";
 
-it.for(["move", "archive", "delete"] as const)(
+const card = {
+  id: "card",
+  title: "Latest title",
+  status: "todo",
+  priority: "normal",
+  labels: [],
+  position: 1000,
+  createdAt: 1,
+  updatedAt: 10,
+  metadata: { automation: { boardId: "default" } },
+};
+
+function installBoard(page: { execute(script: string): void }, cards: (typeof card)[]) {
+  const seed = {
+    boards: [{ id: "default" }],
+    cards,
+    tasks: [],
+    methodResponses: { "workboard.cards.list": { statuses: ["todo", "done"] } },
+  };
+  page.execute(createControlUiMockGatewayInitScript());
+  page.execute(`(${installWorkboardBoardMock.toString()})(${JSON.stringify(seed)})`);
+}
+
+it.for([
+  ["move", { status: "done", position: 2000 }],
+  ["archive", { metadata: { archivedAt: expect.any(Number) } }],
+  ["delete", null],
+] as const)(
   "rejects stale %s through the serialized Workboard mock without changing cards or emitting events",
-  async (action, { gatewayPage }) => {
-    const card = {
-      id: "card",
-      title: "Latest title",
-      status: "todo",
-      priority: "normal",
-      labels: [],
-      position: 1000,
-      createdAt: 1,
-      updatedAt: 10,
-      metadata: { automation: { boardId: "default" } },
-    };
-    const seed = {
-      boards: [{ id: "default" }],
-      cards: [card],
-      tasks: [],
-      methodResponses: { "workboard.cards.list": { statuses: ["todo", "done"] } },
-    };
-    gatewayPage.execute(createControlUiMockGatewayInitScript());
-    gatewayPage.execute(`(${installWorkboardBoardMock.toString()})(${JSON.stringify(seed)})`);
+  async ([action, expectedCard], { gatewayPage }) => {
+    installBoard(gatewayPage, [card]);
     const socket = gatewayPage.connect();
     await flushMockTimers();
     const before = await socket.request("before", "workboard.cards.list", {});
@@ -41,17 +50,12 @@ it.for(["move", "archive", "delete"] as const)(
       ...params,
       expectedUpdatedAt: card.updatedAt,
     });
-    if (action === "delete") {
+    if (expectedCard === null) {
       expect(result).toEqual({ deleted: true });
       expect((await socket.request("deleted", "workboard.cards.list", {})).cards).toEqual([]);
     } else {
-      expect(result).toMatchObject({ card: { updatedAt: expect.any(Number) } });
+      expect(result).toMatchObject({ card: { updatedAt: expect.any(Number), ...expectedCard } });
       expect(result).not.toMatchObject({ card: { updatedAt: card.updatedAt } });
-      if (action === "move") {
-        expect(result).toMatchObject({ card: { status: "done", position: 2000 } });
-      } else {
-        expect(result).toMatchObject({ card: { metadata: { archivedAt: expect.any(Number) } } });
-      }
     }
     expect(socket.frames.filter((frame) => frame.type === "event")).toHaveLength(events.length + 1);
   },
@@ -60,17 +64,7 @@ it.for(["move", "archive", "delete"] as const)(
 it("returns link cleanup revisions so the next guarded mock delete can succeed", async ({
   gatewayPage,
 }) => {
-  const parent = {
-    id: "parent",
-    title: "Parent",
-    status: "todo",
-    priority: "normal",
-    labels: [],
-    position: 1000,
-    createdAt: 1,
-    updatedAt: 10,
-    metadata: { automation: { boardId: "default" } },
-  };
+  const parent = { ...card, id: "parent", title: "Parent" };
   const child = {
     ...parent,
     id: "child",
@@ -79,34 +73,19 @@ it("returns link cleanup revisions so the next guarded mock delete can succeed",
       links: [{ id: "link", type: "parent", targetCardId: parent.id, createdAt: 1 }],
     },
   };
-  const seed = {
-    boards: [{ id: "default" }],
-    cards: [parent, child],
-    tasks: [],
-    methodResponses: { "workboard.cards.list": { statuses: ["todo", "done"] } },
-  };
   gatewayPage.execute("Date.now = () => 10;");
-  gatewayPage.execute(createControlUiMockGatewayInitScript());
-  gatewayPage.execute(`(${installWorkboardBoardMock.toString()})(${JSON.stringify(seed)})`);
+  installBoard(gatewayPage, [parent, child]);
   const socket = gatewayPage.connect();
   await flushMockTimers();
-  expect(
-    await socket.request("parent", "workboard.cards.delete", {
-      id: parent.id,
-      expectedUpdatedAt: 10,
-    }),
-  ).toEqual({
+  const deleteCard = (id: string, expectedUpdatedAt: number) =>
+    socket.request(id, "workboard.cards.delete", { id, expectedUpdatedAt });
+  expect(await deleteCard(parent.id, 10)).toEqual({
     deleted: true,
     referenceUpdates: [{ id: child.id, previousUpdatedAt: 10, updatedAt: 11 }],
   });
   expect((await socket.request("list", "workboard.cards.list", {})).cards).toEqual([
     { ...child, updatedAt: 11, metadata: parent.metadata },
   ]);
-  expect(
-    await socket.request("child", "workboard.cards.delete", {
-      id: child.id,
-      expectedUpdatedAt: 11,
-    }),
-  ).toEqual({ deleted: true });
+  expect(await deleteCard(child.id, 11)).toEqual({ deleted: true });
   expect((await socket.request("empty", "workboard.cards.list", {})).cards).toEqual([]);
 });

@@ -1,8 +1,8 @@
-// Real browser proof that agent model fallbacks follow the Gateway's ownership contract.
-import path from "node:path";
-import { beforeEach, expect, it } from "vitest";
-import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
+import { expect, it } from "vitest";
+import { sourceConfigSnapshot } from "../lib/config/config-snapshot.test-support.ts";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
+import { expectText } from "./activity-assertions.test-support.ts";
+import { captureUiProof } from "./chat-flow.test-support.ts";
 import {
   createControlUiE2eContextOptions,
   createControlUiE2eSuite,
@@ -11,62 +11,34 @@ import {
 const suite = createControlUiE2eSuite({
   name: "Control UI agent model fallback ownership",
   startServerBeforeBrowser: true,
-  unavailableMessage: (executablePath) => `Playwright Chromium is unavailable at ${executablePath}`,
 });
 
 const primaryModel = "openai/gpt-5.4";
 const inheritedFallback = "anthropic/claude-sonnet-4-6";
+const ownFallbacks = ["google/gemini-3-pro"];
+const primary = { primary: primaryModel };
 const writerWorkspace = "/tmp/agents/writer";
-const captureUiProof = process.env.OPENCLAW_CAPTURE_UI_PROOF === "1";
-let proofDir: string;
-beforeEach(() => {
-  if (captureUiProof) {
-    proofDir = createControlUiE2eArtifactDir("agent-context-ownership");
-  }
-});
 
 suite.define(() => {
   it.each([
-    {
-      name: "inherits global fallbacks when the agent has no model override",
-      model: undefined,
-      expectedFallbacks: [inheritedFallback],
-    },
-    {
-      name: "does not inherit global fallbacks for a string primary",
-      model: primaryModel,
-      expectedFallbacks: [],
-    },
-    {
-      name: "does not inherit global fallbacks for an object primary",
-      model: { primary: primaryModel },
-      expectedFallbacks: [],
-    },
-    {
-      name: "preserves explicitly disabled agent fallbacks",
-      model: { primary: primaryModel, fallbacks: [] },
-      expectedFallbacks: [],
-    },
-    {
-      name: "displays the agent's own fallback instead of the global fallback",
-      model: { primary: primaryModel, fallbacks: ["google/gemini-3-pro"] },
-      expectedFallbacks: ["google/gemini-3-pro"],
-    },
-    {
-      name: "combines an inherited primary with agent-only fallback configuration",
-      model: { fallbacks: ["google/gemini-3-pro"] },
-      expectedFallbacks: ["google/gemini-3-pro"],
-    },
-  ])("$name", async ({ model, expectedFallbacks }) => {
+    ["inherits global fallbacks", undefined, [inheritedFallback]],
+    ["isolates a string primary", primaryModel, []],
+    ["isolates an object primary", primary, []],
+    ["preserves disabled fallbacks", { ...primary, fallbacks: [] }, []],
+    ["uses agent-owned fallbacks", { ...primary, fallbacks: ownFallbacks }, ownFallbacks],
+    ["inherits only the primary", { fallbacks: ownFallbacks }, ownFallbacks],
+  ] as const)("%s", async (_name, model, expectedFallbacks) => {
     await suite.withPage(createControlUiE2eContextOptions(), async ({ page }) => {
       const config = {
         agents: {
+          ownership: "explicit",
           defaults: {
+            systemAgent: { agentId: "main" },
             workspace: "/tmp/agents",
             model: { primary: primaryModel, fallbacks: [inheritedFallback] },
           },
           entries: {
-            main: { default: true },
+            main: {},
             writer: model === undefined ? {} : { model },
           },
         },
@@ -88,14 +60,7 @@ suite.define(() => {
               },
             ],
           },
-          "config.get": {
-            config,
-            sourceConfig: config,
-            hash: "agent-model-fallback-ownership",
-            issues: [],
-            raw: JSON.stringify(config),
-            valid: true,
-          },
+          "config.get": sourceConfigSnapshot(config, "agent-model-fallback-ownership"),
         },
       });
 
@@ -107,7 +72,7 @@ suite.define(() => {
       await agentPicker.locator(".agent-select__trigger").click();
       // Switching agents is the user action under test; the Tools panel must survive it.
       await agentPicker
-        .locator("wa-dropdown-item[data-agent-option]")
+        .locator(".agent-select__option[data-agent-option]")
         .filter({ hasText: "Writer" })
         .evaluate((item) => (item as HTMLElement).click());
       await expect
@@ -121,20 +86,16 @@ suite.define(() => {
         .poll(() => new URL(page.url()).pathname)
         .toBe("/settings/agents/writer/overview");
 
-      if (captureUiProof && model && !("primary" in Object(model))) {
-        await page.screenshot({
-          animations: "disabled",
-          fullPage: true,
-          path: path.join(
-            proofDir,
-            `${process.env.OPENCLAW_UI_PROOF_LABEL ?? "agent-context"}.png`,
-          ),
-        });
+      if (model && !("primary" in Object(model))) {
+        await captureUiProof(
+          suite,
+          page,
+          "agent-context",
+          `${process.env.OPENCLAW_UI_PROOF_LABEL ?? "agent-context"}.png`,
+        );
       }
 
-      await expect
-        .poll(() => page.locator(".workspace-link").textContent())
-        .toContain(writerWorkspace);
+      await expectText(page.locator(".workspace-link")).toContain(writerWorkspace);
       const modelDescription = page
         .locator(".settings-kv dt")
         .filter({ hasText: "Primary Model" })
@@ -142,7 +103,7 @@ suite.define(() => {
       const displayedModel = expectedFallbacks.length
         ? `${primaryModel} (+${expectedFallbacks.length} fallback)`
         : primaryModel;
-      await expect.poll(() => modelDescription.textContent()).toContain(displayedModel);
+      await expectText(modelDescription).toContain(displayedModel);
 
       const fallbacks = page.locator("openclaw-multi-select.agent-fallbacks");
       await fallbacks.waitFor({ timeout: 10_000 });

@@ -3,21 +3,12 @@ import { createExecutionIdentityRecoveryAdmission } from "../../agents/admitted-
 import { parseExecutionIdentityAdmissionToken } from "../../audit/execution-identity-admission.js";
 import type { InternalSessionEntry, SessionEntry } from "../../config/sessions.js";
 import { resolveRestartRecoveryChannelAuthority } from "../../config/sessions/restart-recovery-state.js";
+import { parseSessionDeliveryRoute } from "../../routing/session-key.js";
 import {
   INTERNAL_MESSAGE_CHANNEL,
   isDeliverableMessageChannel,
   normalizeMessageChannel,
 } from "../../utils/message-channel.js";
-
-type AgentRestartRecoveryChannelContext = {
-  channel: string;
-  currentChannelId: string;
-  currentThreadTs?: string;
-  requesterAccountId?: string;
-  requesterSenderId?: string;
-  sameChannelThreadRequired: boolean;
-  sourceTurnId: string;
-};
 
 /** Reconstructs source policy, presentation, and delivery facts from one exact recovery claim. */
 export function resolveAgentRestartRecoveryContext(params: {
@@ -25,12 +16,21 @@ export function resolveAgentRestartRecoveryContext(params: {
   canUseInternalRuntimeHandoff: boolean;
   expectedExistingSessionId?: string;
   resolvedSessionId?: string;
+  resolvedSessionKey: string | undefined;
   runId: string;
   sessionEntry?: SessionEntry;
 }):
   | {
       messageChannel: string;
-      channel?: AgentRestartRecoveryChannelContext;
+      channel?: {
+        channel: string;
+        currentChannelId: string;
+        currentThreadTs?: string;
+        requesterAccountId?: string;
+        requesterSenderId?: string;
+        sameChannelThreadRequired: boolean;
+        sourceTurnId: string;
+      };
       pinnedWidgetAuthoring?: true;
     }
   | undefined {
@@ -47,8 +47,25 @@ export function resolveAgentRestartRecoveryContext(params: {
   ) {
     return undefined;
   }
+  // A channel-less agent RPC turn resumes channel-less; recorded channels keep the
+  // ingress-specific restoration below, including channel delivery authority.
+  if (params.isRestartRecoveryResumeRun && entry.restartRecoverySourceMessageChannel === null) {
+    return undefined;
+  }
   if (params.isRestartRecoveryResumeRun && entry.restartRecoverySourceIngress === "control-ui") {
     return { messageChannel: INTERNAL_MESSAGE_CHANNEL, pinnedWidgetAuthoring: true };
+  }
+  if (
+    params.isRestartRecoveryResumeRun &&
+    entry.restartRecoverySourceIngress === "internal" &&
+    !entry.restartRecoveryDeliveryContext
+  ) {
+    // Older in-flight claims omitted the channel; retain their WebChat fallback.
+    // WebChat context can infer recipients, so external session routes stay excluded.
+    const route = parseSessionDeliveryRoute(params.resolvedSessionKey);
+    return !route || route.channel === INTERNAL_MESSAGE_CHANNEL
+      ? { messageChannel: INTERNAL_MESSAGE_CHANNEL }
+      : undefined;
   }
   const messageChannel = normalizeMessageChannel(entry.restartRecoveryDeliveryContext?.channel);
   if (
@@ -95,15 +112,8 @@ export function resolveAgentRestartRecoveryExecutionIdentityAdmission(params: {
   }
   const stored = (params.sessionEntry as InternalSessionEntry | undefined)?.mainRestartRecovery
     ?.executionIdentity;
-  if (!stored) {
-    return createExecutionIdentityRecoveryAdmission({
-      retryOnly: params.retryOnly,
-      expectedOperationalRunId: params.runId,
-    });
-  }
-  const token = parseExecutionIdentityAdmissionToken(stored);
   return createExecutionIdentityRecoveryAdmission({
-    token,
+    ...(stored ? { token: parseExecutionIdentityAdmissionToken(stored) } : {}),
     retryOnly: params.retryOnly,
     expectedOperationalRunId: params.runId,
   });

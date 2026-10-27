@@ -115,7 +115,7 @@ struct DashboardBrowserSignInRecoveryTests {
         }
 
         #expect(controller.webView.url == chatURL)
-        #expect(controller.dashboardBaseURL == baseURL)
+        #expect(controller.currentURL == baseURL)
         #expect(controller.webView.configuration.websiteDataStore === store)
         #expect(receivedIdentityCookie)
         #expect(try await controller.webView.evaluateJavaScript(
@@ -203,7 +203,7 @@ struct DashboardBrowserSignInRecoveryTests {
                 audience: "fixture",
                 subject: subject,
                 token: "synthetic",
-                expiresAt: Date().addingTimeInterval(300))
+                expiresAt: .fixtureSessionExpiry)
         }
         let session = try makeSession(subject: "account")
         let otherAccount = try makeSession(subject: "other-account")

@@ -1,9 +1,8 @@
 // Shared mocks and harness for the non-interactive gateway onboarding suites.
 // vi.mock calls live here so sibling suites share one config-write/daemon/health surface.
 import fs from "node:fs/promises";
-import path from "node:path";
 import { afterAll, afterEach, beforeAll, vi } from "vitest";
-import type { ConfigFileSnapshot, OpenClawConfig } from "../config/types.openclaw.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { makeTempWorkspace } from "../test-helpers/workspace.js";
 import { setTestEnvValue } from "../test-utils/env.js";
 import {
@@ -26,20 +25,25 @@ export const {
   resolveConfigPath: resolveTestConfigPath,
   readConfig: readTestConfig,
 } = onboardTestConfigStore;
-const gatewayOnboardConfigSnapshotMock = vi.hoisted(() =>
-  vi.fn<() => Promise<ConfigFileSnapshot>>(),
-);
 const pluginLifecycleLeaseState = vi.hoisted(() => ({ depth: 0 }));
 export const configWritePluginLeaseDepths: number[] = [];
 type InstallGatewayDaemonResult = Awaited<ReturnType<typeof installGatewayDaemonNonInteractive>>;
 const installGatewayDaemonNonInteractiveMock = vi.hoisted(() =>
   vi.fn(async (): Promise<InstallGatewayDaemonResult> => ({ installed: true })),
 );
-const healthCommandMock = vi.hoisted(() => vi.fn(async () => {}));
+const healthCommandMock = vi.hoisted(() =>
+  vi.fn<typeof import("./health.js").healthCommandNonExiting>(async () => {}),
+);
+const waitForGatewayReachableMock = vi.hoisted(() =>
+  vi.fn<NonNullable<WaitForGatewayReachableMock>>(
+    (params) => gatewayReachableState.mock?.(params) ?? Promise.resolve({ ok: true }),
+  ),
+);
 const gatewayServiceMock = vi.hoisted(() => ({
   label: "LaunchAgent",
   loadedText: "loaded",
   isLoaded: vi.fn(async () => true),
+  readCommand: vi.fn(async () => null),
   readRuntime: vi.fn(async () => ({
     status: "running",
     state: "active",
@@ -52,41 +56,28 @@ const readLastGatewayErrorLineMock = vi.hoisted(() =>
 /** Suites swap reachability behavior per test; the hoisted mock factory reads the current value. */
 export const gatewayReachableState: { mock: WaitForGatewayReachableMock } = { mock: undefined };
 
-gatewayOnboardConfigSnapshotMock.mockImplementation(async () =>
-  onboardTestConfigStore.readSnapshot(),
-);
-
-vi.mock("../config/io.js", () => ({
+vi.mock("../config/io.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../config/io.js")>()),
   createConfigIO: () => ({
     configPath: resolveTestConfigPath(),
   }),
   loadConfig: () => readTestConfig(),
-  readConfigFileSnapshot: gatewayOnboardConfigSnapshotMock,
+  readConfigFileSnapshot: async () => onboardTestConfigStore.readSnapshot(),
 }));
 
-vi.mock("../plugins/plugin-lifecycle-lease.js", () => ({
-  withPluginLifecycleLease: async (
-    _options: unknown,
-    run: (lease: {
-      databasePath: string;
-      signal: AbortSignal;
-      assertOwned: () => void;
-      assertOwnedInTransaction: () => void;
-    }) => Promise<unknown>,
-  ) => {
-    pluginLifecycleLeaseState.depth += 1;
-    try {
-      return await run({
-        databasePath: path.join(path.dirname(resolveTestConfigPath()), "openclaw.sqlite"),
-        signal: new AbortController().signal,
-        assertOwned: () => {},
-        assertOwnedInTransaction: () => {},
-      });
-    } finally {
-      pluginLifecycleLeaseState.depth -= 1;
-    }
-  },
-}));
+vi.mock("../plugins/plugin-lifecycle-lease.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../plugins/plugin-lifecycle-lease.js")>();
+  const withPluginLifecycleLease: typeof actual.withPluginLifecycleLease = (options, run) =>
+    actual.withPluginLifecycleLease(options, async (lease) => {
+      pluginLifecycleLeaseState.depth += 1;
+      try {
+        return await run(lease);
+      } finally {
+        pluginLifecycleLeaseState.depth -= 1;
+      }
+    });
+  return { ...actual, withPluginLifecycleLease };
+});
 
 export const capturedReplaceConfigFileCalls: Array<{
   nextConfig: OpenClawConfig;
@@ -96,6 +87,7 @@ export const capturedReplaceConfigFileCalls: Array<{
 vi.mock("../config/config.js", async (importActual) => {
   const actual = await importActual<typeof import("../config/config.js")>();
   return {
+    ...actual,
     replaceConfigFile: async ({
       nextConfig,
       writeOptions,
@@ -116,7 +108,7 @@ vi.mock("../config/config.js", async (importActual) => {
     transformConfigFileWithRetry: async (
       params: Parameters<typeof import("../config/config.js").transformConfigFileWithRetry>[0],
     ) => {
-      const snapshot = await gatewayOnboardConfigSnapshotMock();
+      const snapshot = onboardTestConfigStore.readSnapshot();
       const previousHash = snapshot.hash ?? null;
       const transformed = await params.transform(
         snapshot.sourceConfig,
@@ -159,13 +151,9 @@ vi.mock("./onboard-helpers.js", () => {
       httpUrl: `http://127.0.0.1:${port}`,
       wsUrl: `ws://127.0.0.1:${port}`,
     }),
-    waitForGatewayReachable: (params: {
-      url: string;
-      token?: string;
-      password?: string;
-      deadlineMs?: number;
-      probeTimeoutMs?: number;
-    }) => gatewayReachableState.mock?.(params) ?? Promise.resolve({ ok: true }),
+    probeGatewayReachable: (params: { url: string; token?: string; password?: string }) =>
+      gatewayReachableState.mock?.(params) ?? Promise.resolve({ ok: true }),
+    waitForGatewayReachable: waitForGatewayReachableMock,
   };
 });
 
@@ -243,6 +231,6 @@ export {
   gatewayServiceMock,
   healthCommandMock,
   installGatewayDaemonNonInteractiveMock,
-  gatewayOnboardConfigSnapshotMock,
   readLastGatewayErrorLineMock,
+  waitForGatewayReachableMock,
 };

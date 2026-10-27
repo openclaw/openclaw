@@ -13,18 +13,28 @@ Who owns compaction on a Codex turn, and what the OpenClaw transcript mirror kee
 
 When the selected model uses the Codex harness, Codex app-server owns native
 token-pressure and manual thread compaction. OpenClaw separately owns its
-transcript mirror. When `agents.defaults.compaction.maxActiveTranscriptBytes`
-is set to a positive value, OpenClaw checks that mirror before ordinary and
-heartbeat turns. When the byte guard trips, OpenClaw requires semantic
-compaction through its selected host context engine before admitting the turn.
-This host compaction does not itself replace or rewrite Codex's canonical
-native thread.
+transcript mirror. Effective Ultrafast turns cap native automatic compaction at
+260,000 total context tokens, preserving lower configured
+`model_auto_compact_token_limit` values. OpenClaw applies this limit through the
+native thread configuration before the turn; changing back to Fast or standard
+restores the configured native limit on the next turn. Other tiers retain their
+native compaction settings.
 
-After host mirror compaction commits, OpenClaw may request
-`thread/compact/start` to synchronize an eligible native thread. This request
-is secondary: OpenClaw does not send it for host-isolated operations or
-bindings with restricted native authority, and unavailable or failed native
-synchronization does not roll back committed host compaction.
+An incognito thread has no persisted resume source, so its creation-time
+compaction settings cannot change in place. If a speed change requires a different
+limit, OpenClaw preserves the conversation and asks you to restore the previous
+speed or start a new incognito conversation. No turn is sent with mismatched settings.
+
+`agents.defaults.compaction.maxActiveTranscriptBytes` bounds older history when
+seeding a **fresh** native thread, not during ordinary or heartbeat turns.
+Before omitting history not covered by a summary, OpenClaw attempts one host
+compaction using the seed's retained-history allowance and reserves a fitting summary.
+Whole turns and tool/result pairs stay intact; required instructions and the
+active request or runtime-refresh exchange are outside the historical cap.
+With compaction disabled, older history is still omitted with a notice;
+no-cap defaults and the full saved transcript are unchanged.
+The notice appears in the seed and user-facing events. Native rollout/token
+fuses and owning-engine compaction with native follow-up remain unchanged.
 
 Explicit compaction requests, such as `/compact` or a plugin-requested manual
 compact operation, start native Codex compaction with `thread/compact/start`.
@@ -38,10 +48,7 @@ period, OpenClaw retires the connection before releasing the fence. Remote
 connections also detach the matching thread binding so later work cannot
 overlap an unconfirmed remote turn. Other turns on a retired connection fail
 and can retry on a fresh client. Client closure, request cancellation, or a
-failed compaction turn returns a failed operation. Automatic native
-token-pressure compaction remains Codex's job. Outside the secondary
-synchronization described above, OpenClaw starts native compaction only for
-explicit manual requests.
+failed compaction turn returns a failed operation.
 
 A standalone cold compact operation does not run prompt-build hooks or establish
 ordinary-turn configuration. It releases its subscription after the operation;
@@ -66,12 +73,12 @@ thread, it includes saved compaction and branch summaries, even when no
 earlier user messages remain. Context-engine projections preserve those
 summary entries too. Summaries stay quoted as prior context, separate from
 the current request, and remain subject to the projection's size limits;
-oversized summaries or older context can be truncated. This handoff does not
+oversized summaries or older whole turns can be omitted. This handoff does not
 change native Codex compaction ownership.
 
 When a context engine requests Codex thread-bootstrap projection, OpenClaw
-projects tool-call names and ids, input shapes, and redacted tool-result
-content into the fresh Codex thread. It does not copy raw tool-call argument
+projects tool-call names and ids, input shapes, and tool-result content
+without secret masking into the fresh Codex thread. It does not copy raw tool-call argument
 values into that projection.
 
 The mirror includes the user prompt, final assistant text, and lightweight
@@ -85,6 +92,6 @@ entries Codex kept after compaction.
 Repeated completion notifications for the same compaction item count once and
 do not repeat completion hooks or active-plan restoration.
 
-Because Codex owns the canonical native thread, `tool_result_persist` does
+Because Codex owns the native thread, `tool_result_persist` does
 not rewrite Codex-native tool result records. It only applies when OpenClaw
 writes an OpenClaw-owned session transcript tool result.

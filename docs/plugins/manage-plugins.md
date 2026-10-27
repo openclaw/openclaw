@@ -121,7 +121,7 @@ registry diagnostics and each plugin's `dependencyStatus` (whether declared
 `dependencies`/`optionalDependencies` resolve on disk).
 
 `plugins search` queries ClawHub for installable plugin packages and prints
-an install hint (`openclaw plugins install clawhub:<package>`) per result.
+an install hint (`openclaw plugins install <package>`) per result.
 
 ## Enable and disable plugins
 
@@ -133,6 +133,7 @@ openclaw plugins disable <plugin-id>
 Toggles a plugin's config entry without touching installed files. Some
 bundled plugins (bundled model/speech providers, the bundled browser plugin)
 are enabled by default; others require `enable` after install.
+Repeating an already-applied enable or disable choice leaves the config file unchanged.
 
 ## Capability consent
 
@@ -188,7 +189,7 @@ retry setup. Noninteractive plugin install, update, and enable commands also
 require the explicit flag when consent is needed:
 
 ```bash
-openclaw plugins install clawhub:<package> --accept-capabilities
+openclaw plugins install <package> --accept-capabilities
 openclaw plugins update <plugin-id> --accept-capabilities
 openclaw plugins enable <plugin-id> --accept-capabilities
 ```
@@ -203,7 +204,7 @@ required, review the capabilities in the reply, then rerun the same command
 with `--accept-capabilities`:
 
 ```text
-/plugins install clawhub:<package> --accept-capabilities
+/plugins install <package> --accept-capabilities
 /plugins install npm:<package> --force --accept-capabilities
 /plugins enable <plugin-id> --accept-capabilities
 ```
@@ -216,6 +217,8 @@ still show declared capabilities.
 `openclaw plugins install --link <path>` creates a managed install record and
 requires capability consent even though it loads the plugin from its source
 directory. It is not the same as adding a bare `plugins.load.paths` entry.
+Both can use their own plugin-scoped keyed and blob state and ingress queues.
+Linking does not grant trust for hook agent turns or Gateway scope elevation.
 
 ## Install plugins
 
@@ -224,9 +227,9 @@ directory. It is not the same as adding a bare `plugins.load.paths` entry.
 openclaw plugins search "calendar"
 
 # Install from ClawHub.
-openclaw plugins install clawhub:<package>
-openclaw plugins install clawhub:<package>@1.2.3
-openclaw plugins install clawhub:<package>@beta
+openclaw plugins install <package>
+openclaw plugins install <package>@1.2.3
+openclaw plugins install <package>@beta
 
 # Install from npm.
 openclaw plugins install npm:<package>
@@ -242,10 +245,10 @@ openclaw plugins install ./my-plugin
 openclaw plugins install --link ./my-plugin
 ```
 
-Bare package specs install from npm, unless the name matches a bundled or
-official plugin id, in which case OpenClaw uses
-that local/official copy instead. Use `clawhub:`, `npm:`, `git:`, or
-`npm-pack:` for deterministic source selection. OpenClaw's bundled and official
+Package specs, including `@openclaw/*`, install from ClawHub by default. Only
+bare plugin ids without a version or tag can select a bundled copy or official
+catalog entry. Use `clawhub:`, `npm:`, `git:`, or
+`npm-pack:` to select the source explicitly. OpenClaw's bundled and official
 catalog packages are trusted alongside ClawHub packages. New arbitrary npm,
 git, local path/archive, `npm-pack:`, or marketplace sources require
 `--force` in noninteractive installs after you review
@@ -301,8 +304,12 @@ owner update. Run `openclaw plugins reload <plugin-id>` after source or manifest
 edits. For API clients, `plugins.reload` takes `plugins: [{ pluginId }]` to reload
 one installed plugin, or multiple targets in the same request, and
 `plugins.refresh` refreshes the inventory.
-Both wait for runtime application and return `restartRequired: false` with a
-generation receipt. Explicit actions also work with `gateway.reload.mode: "off"`.
+Both wait for runtime application and return a generation receipt. Explicit reload
+of a loaded, enabled bundled plugin refreshes registrations and reports
+`restartRequired: true`, even when its files are unchanged. Restart the Gateway to
+load updated bundled code; rebuild compiled output first, and install a new
+executable for embedded code changes. Replacing captured external code returns
+`restartRequired: false`. Explicit actions also work with `gateway.reload.mode: "off"`.
 See [Plugin management RPCs](/gateway/protocol).
 
 Cleanup is best effort: disabling removes the plugin's registered capabilities
@@ -325,6 +332,11 @@ only to ClawHub installs; official installs use the catalog selection. To activa
 already-installed local TypeScript plugin, use `reload` with its plugin ID.
 Installing new local, npm, Git, or archive sources still uses the CLI workflow
 above.
+
+When the current turn uses the plugin being reloaded, use `reloadAndResume`.
+It checks administrator authority before yielding, finishes turn cleanup, then
+reloads and resumes the same conversation with the result. Permission revocation
+still stops the reload; do not repeat a completed mutation.
 
 In the embedded agent runtime, an applied change refreshes tools before the next
 model request after running code programs have settled. A parked program may need
@@ -366,7 +378,7 @@ and memory/context slot selections reconciled before the new package/index
 state commits; retained/new children and unrelated plugins are preserved.
 
 If OpenClaw cannot prove exactly one package owner and a complete child list,
-update and uninstall fail closed without changing package files, config, or the
+update and uninstall are rejected without changing package files, config, or the
 installed index. Run `openclaw plugins registry --refresh`, inspect
 `openclaw plugins doctor`, and use `openclaw doctor --fix` for repairable legacy
 index state. If the ambiguity remains, reinstall the package before retrying.
@@ -376,7 +388,7 @@ exact version pins and explicit tags, including trusted official OpenClaw
 plugin records, because older automatic pins cannot be distinguished from an
 operator's intentional pin. When a newer default-line release exists,
 OpenClaw reports it and prints the explicit command that replaces the pin.
-Floating official records still follow the canonical channel resolver, which
+Floating official records still follow the shared channel resolver, which
 uses both `update.channel` and the installed core version.
 
 For an exact-pinned ClawHub record, deliberately return to the default release
@@ -420,11 +432,9 @@ managed install directory is removed once unless you pass `--keep-files`. With a
 running Gateway, ordinary uninstall waits for the package's runtime owners to
 stop before removing files and returns after the new inventory is applied.
 
-If an installed Claw references the plugin, preview and uninstall print the
-affected Claw package names. Ordinary plugin uninstall can still proceed and
-may break those Claws; use `openclaw claws status` to review ownership first.
-Removing a Claw releases its plugin reference but retains the process-wide
-plugin by default.
+Claw Add installs plugins as shared dependencies. Deleting an agent created by
+Add does not uninstall its plugins. Before uninstalling a plugin, check which
+agents use it; uninstall may break those agents.
 
 In Nix mode (`OPENCLAW_NIX_MODE=1`), plugin install, update, uninstall,
 enable, and disable are all disabled; manage those choices in the Nix source
@@ -434,7 +444,7 @@ for the install instead.
 
 | Source      | Use when                                                                    | Example                                                        |
 | ----------- | --------------------------------------------------------------------------- | -------------------------------------------------------------- |
-| ClawHub     | You want OpenClaw-native discovery, scan summaries, versions, and hints     | `openclaw plugins install clawhub:<package>`                   |
+| ClawHub     | You want OpenClaw-native discovery, scan summaries, versions, and hints     | `openclaw plugins install <package>`                           |
 | git         | You want a branch, tag, or commit from a repository                         | `openclaw plugins install git:github.com/<owner>/<repo>@<ref>` |
 | local path  | You are developing or testing a plugin on the same machine                  | `openclaw plugins install --link ./my-plugin`                  |
 | marketplace | You are installing a Claude-compatible marketplace plugin                   | `openclaw plugins install <plugin> --marketplace <source>`     |
@@ -491,8 +501,9 @@ page as the publishing reference:
 - [Plugin manifest](/plugins/manifest) defines native plugin manifest
   fields.
 
-If the same package is available on both ClawHub and npm, use the explicit
-`clawhub:` or `npm:` prefix to force one source.
+Package specs use ClawHub by default, with bare plugin-id shortcuts
+described in [Install plugins](/cli/plugins/install). Use `npm:`
+to install from npm, or `clawhub:` to select ClawHub explicitly.
 
 ## Related
 

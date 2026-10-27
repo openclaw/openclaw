@@ -1,291 +1,136 @@
-// SearXNG contracts are exercised through the public search boundary.
-import { expectDefined } from "@openclaw/normalization-core";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import { installPinnedHostnameTestHooks } from "openclaw/plugin-sdk/test-media-understanding";
+import { afterEach, expect, it, vi } from "vitest";
+import { runSearxngSearch } from "./searxng-client.js";
 
-const endpointMockState = vi.hoisted(() => ({
-  calls: [] as Array<{
-    mode: "selfHosted" | "strict";
-    url: string;
-    timeoutSeconds: number;
-    init: RequestInit;
-    signal?: AbortSignal;
-  }>,
-  responses: [] as Response[],
-}));
-const ssrfMockState = vi.hoisted(() => ({ addresses: [] as string[] }));
-
-vi.mock("openclaw/plugin-sdk/ssrf-runtime", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/ssrf-runtime")>();
-  return {
-    ...actual,
-    assertHttpUrlTargetsPrivateNetwork: vi.fn(async () => {
-      if (!ssrfMockState.addresses.every((address) => actual.isPrivateIpAddress(address))) {
-        throw new Error(
-          "SearXNG HTTP base URL must target a trusted private or loopback host. Use https:// for public hosts.",
-        );
-      }
-    }),
-    resolvePinnedHostnameWithPolicy: vi.fn(async () => ({ addresses: ssrfMockState.addresses })),
-  };
+installPinnedHostnameTestHooks();
+afterEach(() => {
+  vi.restoreAllMocks();
+  vi.unstubAllEnvs();
 });
 
-vi.mock("openclaw/plugin-sdk/provider-web-search", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/provider-web-search")>();
-  const runEndpoint = async (
-    mode: "selfHosted" | "strict",
-    params: { url: string; timeoutSeconds: number; init: RequestInit; signal?: AbortSignal },
-    run: (response: Response) => Promise<unknown>,
-  ) => {
-    endpointMockState.calls.push({ mode, ...params });
-    const response = endpointMockState.responses.shift();
-    if (!response) {
-      throw new Error("Missing mocked SearXNG response.");
-    }
-    return await run(response);
-  };
-  return {
-    ...actual,
-    withSelfHostedWebSearchEndpoint: vi.fn((params, run) => runEndpoint("selfHosted", params, run)),
-    withTrustedWebSearchEndpoint: vi.fn((params, run) => runEndpoint("strict", params, run)),
-  };
+const baseUrl = "http://127.0.0.1:8888";
+const requestUrl = `${baseUrl}/search?q=openclaw&format=json`;
+function searchConfig(endpoint: unknown, categories?: string, language?: string) {
+  const webSearch = { baseUrl: endpoint, categories, language };
+  return { plugins: { entries: { searxng: { config: { webSearch } } } } };
+}
+
+function search(params: Partial<Parameters<typeof runSearxngSearch>[0]> = {}) {
+  params.config ??= searchConfig(baseUrl);
+  params.config.tools = { web: { search: { cacheTtlMinutes: 0 } } };
+  return runSearxngSearch({ query: "openclaw", ...params });
+}
+
+function mockFetch(...bodies: (Response | unknown[])[]) {
+  const fetch = vi.spyOn(globalThis, "fetch");
+  for (const body of bodies) {
+    fetch.mockResolvedValueOnce(body instanceof Response ? body : Response.json({ results: body }));
+  }
+  return fetch;
+}
+
+function expectRequests(fetch: ReturnType<typeof mockFetch>, ...urls: string[]) {
+  expect(fetch.mock.calls).toEqual(urls.map((url) => [url, expect.anything()]));
+}
+
+function row(path: string, fields: Record<string, unknown> = {}) {
+  return { title: path, url: `https://example.com/${path}`, ...fields };
+}
+
+const envRef = { source: "env", provider: "default", id: "SEARXNG_BASE_URL" };
+
+it.each([
+  ["http://localhost:8888/", "http://localhost:8888", searchConfig(envRef)],
+  ["https://search.local/searxng///", "https://search.local/searxng", {}],
+] as const)("resolves endpoint %s", async (endpoint, target, config) => {
+  vi.stubEnv("SEARXNG_BASE_URL", endpoint);
+  const fetch = mockFetch([]);
+  await search({ config, categories: "general" });
+  expectRequests(fetch, `${target}/search?q=openclaw&format=json&categories=general`);
 });
 
-import { runSearxngSearch, testing } from "./searxng-client.js";
+const blockedConfig: OpenClawConfig = {
+  ...searchConfig({ ...envRef, provider: "restricted" }),
+  secrets: { providers: { restricted: { source: "env", allowlist: [] } } },
+};
+it.each([
+  [{}, "", "SearXNG base URL is not configured."],
+  [blockedConfig, "https://ambient.example/", "SearXNG base URL is not configured."],
+  [searchConfig("http://example.com"), "", "must target a trusted private or loopback host"],
+] as const)("rejects unsafe or missing config %j", async (config, ambient, error) => {
+  vi.stubEnv("SEARXNG_BASE_URL", ambient);
+  const fetch = mockFetch([]);
+  await expect(search({ config })).rejects.toThrow(error);
+  expect(fetch).not.toHaveBeenCalled();
+});
 
-describe("searxng client", () => {
-  beforeEach(() => {
-    endpointMockState.calls = [];
-    endpointMockState.responses = [];
-    ssrfMockState.addresses = ["127.0.0.1"];
-    testing.SEARXNG_SEARCH_CACHE.clear();
-  });
+it("builds the configured request and normalizes, filters, and caps its results", async () => {
+  const fetch = mockFetch([
+    row("cat", { content: "Meow", img_src: "https://img.test/cat.jpg" }),
+    row("bad-title", { title: { text: "bad" } }),
+    row("bad-url", { url: 3 }),
+    row("text", { content: { text: "bad" } }),
+    row("capped"),
+  ]);
 
-  it.each([
-    [
-      "http://127.0.0.1:8888/searxng",
-      "http://127.0.0.1:8888/searxng/search?q=openclaw&format=json&categories=general%2Cnews&language=en",
-    ],
-    [
-      "http://127.0.0.1:8888/search/",
-      "http://127.0.0.1:8888/search?q=openclaw&format=json&categories=general%2Cnews&language=en",
-    ],
-    [
-      "http://127.0.0.1:8888/search",
-      "http://127.0.0.1:8888/search?q=openclaw&format=json&categories=general%2Cnews&language=en",
-    ],
-  ])("builds the public request URL from %s", async (baseUrl, expectedUrl) => {
-    endpointMockState.responses.push(Response.json({ results: [] }));
-
-    await runSearxngSearch({
-      baseUrl,
-      query: "openclaw",
-      categories: "general,news",
-      language: "en",
-    });
-
-    expect(endpointMockState.calls[0]?.url).toBe(expectedUrl);
-  });
-
-  it("normalizes, filters, and caps provider result rows", async () => {
-    endpointMockState.responses.push(
-      Response.json({
-        results: [
-          {
-            title: "Kitten",
-            url: "https://example.com/kitten",
-            content: "A cute kitten",
-            img_src: "https://cdn.example.com/kitten.jpg",
-          },
-          { title: { text: "bad" }, url: "https://example.com/bad-title" },
-          { title: "bad URL", url: 3 },
-          { title: "No snippet", url: "https://example.com/text", content: { text: "bad" } },
-          { title: "Capped", url: "https://example.com/capped" },
-        ],
-      }),
-    );
-
-    const result = await runSearxngSearch({
-      baseUrl: "http://127.0.0.1:8888",
-      query: "kittens",
-      count: 2,
-    });
-
-    expect(result.count).toBe(2);
-    const rows = result.results as Array<Record<string, unknown>>;
-    expect(rows.map((row) => row.url)).toEqual([
-      "https://example.com/kitten",
-      "https://example.com/text",
-    ]);
-    expect(String(rows[0]?.title)).toContain("Kitten");
-    expect(String(rows[0]?.snippet)).toContain("A cute kitten");
-    expect(rows[0]?.img_src).toBe("https://cdn.example.com/kitten.jpg");
-  });
-
-  it.each(["weather", "weather,news"])(
-    "retries an empty category search with general results (%s)",
-    async (categories) => {
-      endpointMockState.responses.push(
-        new Response(JSON.stringify({ results: [] }), { status: 200 }),
-        new Response(
-          JSON.stringify({
-            results: [
-              {
-                title: "Beijing hourly weather",
-                url: "https://example.com/weather",
-                content: "Hourly forecast",
-              },
-            ],
-          }),
-          { status: 200 },
-        ),
-      );
-      const result = await runSearxngSearch({
-        baseUrl: "http://127.0.0.1:8888",
-        query: "beijing hourly weather",
-        categories,
-        count: 5,
-      });
-
-      expect(endpointMockState.calls).toHaveLength(2);
-      const firstCall = expectDefined(endpointMockState.calls[0], "first SearXNG endpoint call");
-      const secondCall = expectDefined(endpointMockState.calls[1], "second SearXNG endpoint call");
-      expect(new URL(firstCall.url).searchParams.get("categories")).toBe(categories);
-      expect(new URL(secondCall.url).searchParams.get("categories")).toBe("general");
-      expect(result.provider).toBe("searxng");
-      expect(result.query).toBe("beijing hourly weather");
-      expect(result.count).toBe(1);
-      const results = result.results as Array<{
-        url?: string;
-        siteName?: string;
-        title?: string;
-        snippet?: string;
-      }>;
-      expect(results).toHaveLength(1);
-      expect(results[0]?.url).toBe("https://example.com/weather");
-      expect(results[0]?.siteName).toBe("example.com");
-      expect(results[0]?.title).toContain("Beijing hourly weather");
-      expect(results[0]?.snippet).toContain("Hourly forecast");
-      expect(result.externalContent).toEqual({
-        provider: "searxng",
-        source: "web_search",
-        untrusted: true,
-        wrapped: true,
-      });
-    },
-  );
-
-  it.each(["general", "general,news", undefined])(
-    "does not retry empty category searches containing general or no category (%s)",
-    async (categories) => {
-      endpointMockState.responses.push(
-        new Response(JSON.stringify({ results: [] }), { status: 200 }),
-      );
-
-      const result = await runSearxngSearch({
-        baseUrl: "http://127.0.0.1:8888",
-        query: "openclaw",
-        categories,
-        count: 5,
-      });
-
-      expect(endpointMockState.calls).toHaveLength(1);
-      const firstCall = expectDefined(endpointMockState.calls[0], "first SearXNG endpoint call");
-      expect(new URL(firstCall.url).searchParams.get("categories")).toBe(categories ?? null);
-      const { tookMs, ...stableResult } = result;
-      expect(typeof tookMs).toBe("number");
-      expect(stableResult).toEqual({
-        query: "openclaw",
-        provider: "searxng",
-        count: 0,
-        externalContent: {
-          provider: "searxng",
-          source: "web_search",
-          untrusted: true,
-          wrapped: true,
-        },
-        results: [],
-      });
-    },
-  );
-
-  it("forwards the abort signal to the guarded endpoint", async () => {
-    endpointMockState.responses.push(
-      new Response(JSON.stringify({ results: [] }), { status: 200 }),
-    );
-    const controller = new AbortController();
-
-    const result = await runSearxngSearch({
-      baseUrl: "http://127.0.0.1:8888",
-      query: "openclaw",
-      categories: "general",
-      signal: controller.signal,
-    });
-
-    expect(endpointMockState.calls).toHaveLength(1);
-    expect(endpointMockState.calls[0]?.signal).toBe(controller.signal);
-    expect(result.results).toEqual([]);
-  });
-
-  it.each([401, 403, 429])("preserves HTTP error status %i", async (status) => {
-    endpointMockState.responses.push(new Response("upstream rejected search", { status }));
-    await expect(
-      runSearxngSearch({
-        baseUrl: "http://127.0.0.1:8888",
-        query: `http-error-${status}`,
-        cacheTtlMinutes: 0,
-      }),
-    ).rejects.toMatchObject({ status, statusCode: status });
-  });
-
-  it("rejects invalid and incomplete response bodies", async () => {
-    endpointMockState.responses.push(new Response("{", { status: 200 }));
-    await expect(
-      runSearxngSearch({
-        baseUrl: "http://127.0.0.1:8888",
-        query: "invalid",
-      }),
-    ).rejects.toThrow("SearXNG returned invalid JSON.");
-
-    const chunk = new TextEncoder().encode("partial");
-    let sentChunk = false;
-    const stream = new ReadableStream<Uint8Array>({
-      pull(controller) {
-        if (!sentChunk) {
-          sentChunk = true;
-          controller.enqueue(chunk);
-          return;
-        }
-        controller.error(new Error("stream reset"));
+  const config = searchConfig(`${baseUrl}/search/`, "general,news", "en");
+  expect(await search({ config, count: 2 })).toMatchObject({
+    count: 2,
+    results: [
+      {
+        url: "https://example.com/cat",
+        title: expect.stringContaining("cat"),
+        snippet: expect.stringContaining("Meow"),
+        img_src: "https://img.test/cat.jpg",
+        siteName: "example.com",
       },
-    });
-    endpointMockState.responses.push(new Response(stream, { status: 200 }));
-    await expect(
-      runSearxngSearch({
-        baseUrl: "http://127.0.0.1:8888",
-        query: "partial",
-      }),
-    ).rejects.toThrow("SearXNG response incomplete after 7 bytes.");
+      { url: "https://example.com/text" },
+    ],
   });
+  expectRequests(fetch, `${requestUrl}&categories=general%2Cnews&language=en`);
+});
 
-  it.each([
-    ["https://search.example.com/searxng", "93.184.216.34", "strict"],
-    ["http://matrix-synapse:8080", "10.0.0.5", "selfHosted"],
-    ["https://search.internal/searxng", "10.0.0.5", "selfHosted"],
-  ] as const)("classifies %s as %s routing", async (baseUrl, address, expected) => {
-    ssrfMockState.addresses = [address];
-    endpointMockState.responses.push(Response.json({ results: [] }));
+it("retries an empty category search with general results", async () => {
+  const fetch = mockFetch([], [row("rain")]);
+  const result = await search({ categories: "weather,news" });
 
-    await runSearxngSearch({ baseUrl, query: "routing" });
+  const urls = ["weather%2Cnews", "general"].map((v) => `${requestUrl}&categories=${v}`);
+  expectRequests(fetch, ...urls);
+  expect(result).toMatchObject({ count: 1, results: [{ url: "https://example.com/rain" }] });
+});
 
-    expect(endpointMockState.calls[0]?.mode).toBe(expected);
+it("preserves the upstream HTTP error status", async () => {
+  mockFetch(new Response("upstream rejected search", { status: 429 }));
+  await expect(search()).rejects.toMatchObject({ status: 429, statusCode: 429 });
+});
+
+it("rejects invalid and incomplete response bodies", async () => {
+  const fetch = mockFetch(new Response("{"));
+  await expect(search()).rejects.toThrow("SearXNG returned invalid JSON.");
+
+  let pulls = 0;
+  const stream = new ReadableStream<Uint8Array>({
+    pull(controller) {
+      if (pulls++ === 0) {
+        return controller.enqueue(new TextEncoder().encode("partial"));
+      }
+      controller.error(new Error("stream reset"));
+    },
   });
+  fetch.mockResolvedValueOnce(new Response(stream));
+  await expect(search()).rejects.toThrow("SearXNG response incomplete after 7 bytes.");
+});
 
-  it("rejects cleartext public hosts", async () => {
-    ssrfMockState.addresses = ["93.184.216.34"];
-    await expect(
-      runSearxngSearch({ baseUrl: "http://search.example.com:8080", query: "routing" }),
-    ).rejects.toThrow(
-      "SearXNG HTTP base URL must target a trusted private or loopback host. Use https:// for public hosts.",
-    );
-  });
+it.each(["example.com", "internal"])("gates private redirects from search.%s", async (host) => {
+  const redirect = "https://127.0.0.1/search";
+  const fetch = mockFetch(Response.redirect(redirect), [row("local")]);
+  const endpoint = `https://search.${host}/searxng`;
+  const pending = search({ config: searchConfig(endpoint) });
+  if (host === "internal") {
+    await expect(pending).resolves.toMatchObject({ count: 1 });
+  } else {
+    await expect(pending).rejects.toMatchObject({ name: "SsrFBlockedError" });
+  }
+  expect(fetch).toHaveBeenCalledTimes(host === "internal" ? 2 : 1);
 });

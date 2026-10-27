@@ -1,6 +1,8 @@
 import { vi } from "vitest";
+import "../test-utils/prepare-compiled-subprocesses.js";
 import type { ChannelPlugin } from "../channels/plugins/types.public.js";
 import { isInternalSessionEffectsKey } from "../config/sessions/internal-session-key.js";
+import { createSessionStoreSummaryReaderStub } from "../config/sessions/session-store-summary.test-support.js";
 import type { collectGatewayHealthSnapshot } from "../gateway/health/collector.js";
 import type { HealthSummary } from "../gateway/health/types.js";
 import { parseAgentSessionKey } from "../routing/session-key.js";
@@ -38,25 +40,12 @@ export async function loadFreshHealthModulesForTest(params: {
     getRuntimeConfig: params.getConfig,
     loadConfig: params.getConfig,
   }));
-  vi.doMock("../config/sessions.js", () => ({
-    resolveSessionStorePathCore: params.getSessionStorePath,
-    resolveSessionFilePathCore: vi.fn(params.getSessionStorePath),
-    loadSessionStore: params.getSessions,
-    saveSessionStore: vi.fn().mockResolvedValue(undefined),
-    readSessionUpdatedAt: vi.fn(() => undefined),
-    recordSessionMetaFromInbound: vi.fn().mockResolvedValue(undefined),
-    updateLastRoute: vi.fn().mockResolvedValue(undefined),
-  }));
   vi.doMock("../config/sessions/paths.js", () => ({
     resolveSessionStorePathCore: params.getSessionStorePath,
   }));
-  vi.doMock("../config/sessions/session-accessor.js", () => ({
-    readSessionStoreSummaryReadOnly: (
-      ...[scope, options]: Parameters<
-        typeof import("../config/sessions/session-accessor.js").readSessionStoreSummaryReadOnly
-      >
-    ) => {
-      params.onSessionRead?.(scope);
+  vi.doMock("../config/sessions/session-entry-read-runtime.js", () => ({
+    withSessionStoreReaderInWorker: createSessionStoreSummaryReaderStub((scope, options) => {
+      params.onSessionRead?.({ agentId: scope.agentId, storePath: scope.storePath });
       const entries = Object.entries(params.getSessions())
         .filter(
           ([sessionKey]) =>
@@ -83,14 +72,7 @@ export async function loadFreshHealthModulesForTest(params: {
           }),
         ),
       };
-    },
-  }));
-  vi.doMock("../plugins/runtime/runtime-web-channel-plugin.js", () => ({
-    webAuthExists: vi.fn(async () => true),
-    getWebAuthAgeMs: vi.fn(() => 1234),
-    readWebSelfId: vi.fn(() => ({ e164: null, jid: null })),
-    logWebSelfId: vi.fn(),
-    logoutWeb: vi.fn(),
+    }),
   }));
   vi.doMock("../channels/plugins/read-only.js", () => ({
     listReadOnlyChannelPluginsForConfig: params.getPlugins,

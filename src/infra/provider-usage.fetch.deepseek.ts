@@ -1,4 +1,3 @@
-// Fetches and normalizes DeepSeek provider usage records.
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import {
   buildUsageErrorSnapshot,
@@ -8,16 +7,14 @@ import {
 import { PROVIDER_LABELS } from "./provider-usage.shared.js";
 import type { ProviderUsageSnapshot } from "./provider-usage.types.js";
 
-type DeepSeekBalanceInfo = {
-  currency?: string;
-  total_balance?: string | number | null;
-  granted_balance?: string | number | null;
-  topped_up_balance?: string | number | null;
-};
-
 type DeepSeekBalanceResponse = {
   is_available?: boolean;
-  balance_infos?: DeepSeekBalanceInfo[];
+  balance_infos?: {
+    currency?: string;
+    total_balance?: string | number | null;
+    granted_balance?: string | number | null;
+    topped_up_balance?: string | number | null;
+  }[];
 };
 
 const DEEPSEEK_BALANCE_URL = "https://api.deepseek.com/user/balance";

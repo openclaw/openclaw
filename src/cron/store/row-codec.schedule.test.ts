@@ -1,173 +1,72 @@
-// Round-trips each CronSchedule kind through canonical SQLite job JSON.
-import { describe, expect, it } from "vitest";
+import { expect, it } from "vitest";
 import { makeCronJob } from "../delivery.test-helpers.js";
-import type { CronSchedule, CronToolsAllowProvenance } from "../types.js";
-import { projectCronJobThroughStorageCodec } from "./row-codec.js";
+import { makeCronStreamSandboxTarget } from "../stream-sandbox.test-support.js";
+import type { CronSchedule } from "../types.js";
+import { projectCronJobThroughStorageCodec as project, rowToCronJob } from "./row-codec.js";
 
-function roundTrip(schedule: CronSchedule): CronSchedule | null {
-  return projectCronJobThroughStorageCodec(makeCronJob({ schedule })).schedule;
+const stream: CronSchedule = {
+  kind: "stream",
+  command: ["node", "events.mjs"],
+  cwd: "/repo",
+  mode: "match",
+  match: "^ready:",
+  batchMs: 100,
+  maxBatchBytes: 2_048,
+};
+const operator = { profileId: "profile-ada", scopes: ["operator.write"], assignedRole: null };
+const target = makeCronStreamSandboxTarget();
+
+function decode(job: Record<string, unknown> & { id: string }) {
+  return rowToCronJob(
+    { job_id: job.id, state_json: "{}", updated_at: 1, runtime_updated_at_ms: 1 },
+    job,
+  );
 }
 
-describe("canonical cron schedule JSON round-trip", () => {
-  it("round-trips the creator account through canonical job JSON", () => {
-    const job = projectCronJobThroughStorageCodec(
-      makeCronJob({
-        owner: {
-          agentId: "main",
-          sessionKey: "agent:main:discord:group:ops",
-          accountId: "work",
-        },
-      }),
-    );
+it.each([
+  ["missing target", undefined],
+  ["unsupported backend", { ...target, backendId: "ssh" }],
+  ["missing session identity", { ...target, sessionId: "" }],
+  ["missing grant observation", { ...target, operator }],
+  ["malformed grant", { ...target, operator: { ...operator, gatewayAccessGrant: {} } }],
+])("rejects a persisted sandbox stream with %s", (_, streamSandbox) => {
+  expect(
+    decode({ ...makeCronJob({}), schedule: { ...stream, kind: "sandbox-stream" }, streamSandbox }),
+  ).toBeNull();
+});
 
-    expect(job.owner).toEqual({
-      agentId: "main",
-      sessionKey: "agent:main:discord:group:ops",
-      accountId: "work",
-    });
+it("requires the persisted sandbox discriminator and preserves the private target", () => {
+  const job = { ...makeCronJob({ schedule: structuredClone(stream) }), streamSandbox: target };
+  expect(decode(job)).toBeNull();
+  expect(decode({ ...job, schedule: { ...job.schedule, kind: "sandbox-stream" } })).toMatchObject({
+    schedule: job.schedule,
+    streamSandbox: target,
   });
+  const projected = project(job);
+  expect(projected.streamSandbox).toEqual(target);
+  expect(projected.streamSandbox).not.toBe(target);
+  expect(projected.streamSandbox?.operator?.scopes).not.toBe(target.operator?.scopes);
+});
 
-  it("round-trips scheduled authority through canonical job JSON", () => {
-    const job = projectCronJobThroughStorageCodec(
-      makeCronJob({
-        owner: {
-          agentId: "main",
-          sessionKey: "agent:main:discord:group:ops",
-          accountId: "work",
-        },
-        payload: { kind: "agentTurn", message: "run", toolsAllow: ["write"] },
-        scheduledToolPolicy: {
-          version: 1,
-          mode: "account",
-          ownerSessionKey: "agent:main:discord:group:ops",
-          ownerAccountId: "work",
-        },
-      }),
-    );
-
-    expect(job.scheduledToolPolicy).toEqual({
-      version: 1,
-      mode: "account",
-      ownerSessionKey: "agent:main:discord:group:ops",
-      ownerAccountId: "work",
-    });
+it("round-trips a paced stream without aliasing input config or runtime state", () => {
+  const triggerState = { cursor: { position: 7 }, items: ["first"] };
+  const input = makeCronJob({
+    schedule: structuredClone(stream),
+    pacing: { min: "15m", max: "4h" },
+    state: { lastStatus: "ok", triggerState, nextRunAtMs: 123_000 },
   });
+  const before = structuredClone(input);
+  const projected = project(input);
 
-  it.each(["final-executable-surface", "authenticated-requester"] as const)(
-    "round-trips private %s provenance through canonical job JSON",
-    (source) => {
-      const channelRequester = {
-        version: 1 as const,
-        channel: "discord",
-        accountId: "work",
-        senderId: "123456789012345678",
-      };
-      const provenance: CronToolsAllowProvenance =
-        source === "final-executable-surface"
-          ? { version: 1, source, callerOrigin: { kind: "local" }, channelRequester }
-          : { version: 1, source, channelRequester };
-      const job = projectCronJobThroughStorageCodec({
-        ...makeCronJob({}),
-        toolsAllowProvenance: provenance,
-      });
-
-      expect(job.toolsAllowProvenance).toEqual(provenance);
-    },
-  );
-
-  it("keeps private runtime authority out of job_json", () => {
-    const runtimeAuthority = {
-      version: 1 as const,
-      runtimeId: "codex",
-      namespace: "codex.apps",
-      payload: { apps: [{ id: "calendar" }] },
-    };
-    const job = projectCronJobThroughStorageCodec({
-      ...makeCronJob({}),
-      runtimeAuthority,
-      runtimeAuthorityRecoveryRequired: true,
-    });
-    expect(job.runtimeAuthority).toBeUndefined();
-    expect(job.runtimeAuthorityRecoveryRequired).toBeUndefined();
-
-    const malformed = projectCronJobThroughStorageCodec({
-      ...makeCronJob({}),
-      runtimeAuthority: { ...runtimeAuthority, version: 2 } as never,
-    });
-    expect(malformed.runtimeAuthority).toBeUndefined();
-  });
-
-  it("round-trips pacing through canonical job JSON", () => {
-    const job = projectCronJobThroughStorageCodec(
-      makeCronJob({ pacing: { min: "15m", max: "4h" } }),
-    );
-
-    expect(job.pacing).toEqual({ min: "15m", max: "4h" });
-  });
-
-  it("round-trips an on-exit schedule with command + cwd", () => {
-    expect(roundTrip({ kind: "on-exit", command: "make build", cwd: "/repo" })).toEqual({
-      kind: "on-exit",
-      command: "make build",
-      cwd: "/repo",
-    });
-  });
-
-  it("round-trips an on-exit schedule without cwd", () => {
-    expect(roundTrip({ kind: "on-exit", command: "./watch.sh" })).toEqual({
-      kind: "on-exit",
-      command: "./watch.sh",
-    });
-  });
-
-  it("round-trips a paced stream without aliasing input config or runtime state", () => {
-    const schedule: CronSchedule = {
-      kind: "stream",
-      command: ["node", "events.mjs"],
-      cwd: "/repo",
-      mode: "match",
-      match: "^ready:",
-      batchMs: 100,
-      maxBatchBytes: 2_048,
-    };
-    const triggerState = { cursor: { position: 7 }, items: ["first"] };
-    const input = makeCronJob({
-      schedule,
-      pacing: { min: "15m", max: "4h" },
-      state: { lastStatus: "ok", triggerState, nextRunAtMs: 123_000 },
-    });
-    const before = structuredClone(input);
-    const projected = projectCronJobThroughStorageCodec(input);
-
-    expect(projected.schedule).toStrictEqual(schedule);
-    expect(projected.pacing).toStrictEqual(input.pacing);
-    expect(projected.state).toStrictEqual({ ...input.state, lastRunStatus: "ok" });
-    expect(input).toStrictEqual(before);
-    expect(Object.is(projected.schedule, input.schedule)).toBe(false);
-    expect(Object.is(projected.pacing, input.pacing)).toBe(false);
-    expect(Object.is(projected.state, input.state)).toBe(false);
-    expect(Object.is(projected.state.triggerState, triggerState)).toBe(false);
-    triggerState.cursor.position = 9;
-    triggerState.items.push("second");
-    expect(projected.state.triggerState).toStrictEqual({
-      cursor: { position: 7 },
-      items: ["first"],
-    });
-  });
-
-  it("keeps existing schedule kinds intact", () => {
-    expect(roundTrip({ kind: "every", everyMs: 60_000 })).toEqual({
-      kind: "every",
-      everyMs: 60_000,
-    });
-    expect(roundTrip({ kind: "cron", expr: "0 9 * * *", tz: "Asia/Shanghai" })).toEqual({
-      kind: "cron",
-      expr: "0 9 * * *",
-      tz: "Asia/Shanghai",
-    });
-    expect(roundTrip({ kind: "at", at: "2026-01-01T00:00:00.000Z" })).toEqual({
-      kind: "at",
-      at: "2026-01-01T00:00:00.000Z",
-    });
-  });
+  expect(projected.schedule).toStrictEqual(stream);
+  expect(projected.pacing).toStrictEqual(input.pacing);
+  expect(projected.state).toStrictEqual({ ...input.state, lastRunStatus: "ok" });
+  expect(input).toStrictEqual(before);
+  expect(Object.is(projected.schedule, input.schedule)).toBe(false);
+  expect(Object.is(projected.pacing, input.pacing)).toBe(false);
+  expect(Object.is(projected.state, input.state)).toBe(false);
+  expect(Object.is(projected.state.triggerState, triggerState)).toBe(false);
+  triggerState.cursor.position = 9;
+  triggerState.items.push("second");
+  expect(projected.state.triggerState).toStrictEqual(before.state.triggerState);
 });

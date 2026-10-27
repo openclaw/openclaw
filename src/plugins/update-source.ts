@@ -9,12 +9,11 @@ import {
 import { parseClawHubPluginSpec } from "../infra/clawhub-spec.js";
 import { unscopedPackageName } from "../infra/install-safe-path.js";
 import type { NpmSpecResolution } from "../infra/install-source-utils.js";
-import { loadNpmPackageVersions, resolveNpmSpecMetadata } from "../infra/install-source-utils.js";
+import { resolveNpmSpecMetadata } from "../infra/install-source-utils.js";
 import {
   compareOpenClawReleaseVersions,
   isExactSemverVersion,
   isPrereleaseResolutionAllowed,
-  isPrereleaseSemverVersion,
   parseRegistryNpmSpec,
 } from "../infra/npm-registry-spec.js";
 import {
@@ -24,7 +23,6 @@ import {
 import type { UpdateChannel } from "../infra/update-channels.js";
 import { resolveCompatibilityHostVersion } from "../version.js";
 import type { PluginCapabilityConsentHandler } from "./capability-consent.js";
-import { isUnavailableClawHubTarget } from "./clawhub-error-codes.js";
 import type { ExternalizedBundledPluginBridge } from "./externalized-bundled-plugins.js";
 import {
   resolveClawHubInstallSpecsForUpdateChannel,
@@ -51,21 +49,11 @@ export type PluginUpdateLogger = {
 
 type PluginUpdateStatus = "updated" | "unchanged" | "skipped" | "error";
 
-export type PluginUpdateChannelFallback = {
-  requestedSpec: string;
-  usedSpec: string;
-  requestedLabel: string;
-  usedLabel: string;
-  reason: "unavailable" | "failed";
-  message: string;
-};
-
 type BasePluginUpdateOutcome = {
   pluginId: string;
   message: string;
   currentVersion?: string;
   nextVersion?: string;
-  channelFallback?: PluginUpdateChannelFallback;
   warning?: string;
 };
 
@@ -84,6 +72,29 @@ export type PluginUpdateOutcome =
       status: Exclude<PluginUpdateStatus, "skipped">;
       code?: string;
     });
+
+export function createOperatorManagedPluginUpdateOutcome(
+  update: OperatorManagedPluginUpdate,
+  coreVersion?: string,
+): PluginUpdateOutcome {
+  const [pluginId] = update.pluginIds;
+  const { source, rootDir, shadowedInstallOwner, shadowedInstallRecord } = update;
+  const shadowed = shadowedInstallRecord
+    ? ` It shadows the ${shadowedInstallRecord.source} install ${shadowedInstallRecord.spec ?? pluginId}${shadowedInstallRecord.installPath ? ` at ${shadowedInstallRecord.installPath}` : ""}.`
+    : "";
+  const guidance = `This copy was not updated; verify it against ${coreVersion ?? "the updated OpenClaw version"} or remove it from plugins.load.paths.`;
+  return {
+    pluginId,
+    status: "skipped",
+    code: "plugin-operator-managed",
+    source,
+    rootDir,
+    shadowedInstallOwner,
+    shadowedInstallRecord,
+    message: `Plugin "${pluginId}" is operator-managed by plugins.load.paths. ${guidance} Source: ${rootDir}.${shadowed}`,
+    guidance: [guidance],
+  };
+}
 
 export type PluginUpdateSummary = {
   config: OpenClawConfig;
@@ -165,7 +176,10 @@ export function pluginInstallRecordMayMigrateConfigId(params: {
     (packageName !== undefined &&
       packageName !== params.pluginId &&
       unscopedPackageName(packageName) === params.pluginId) ||
-    officialInstallRecords.hasOfficialNpmIdReplacement(params)
+    officialInstallRecords.resolveTrustedSourceLinkedOfficialNpmInstall({
+      pluginId: params.pluginId,
+      record: params.record,
+    })?.replacementPluginId !== undefined
   );
 }
 
@@ -180,10 +194,7 @@ export function shouldSkipUnchangedNpmInstall(params: {
   };
   metadata: NpmSpecResolution;
 }): boolean {
-  if (!params.currentVersion || !params.metadata.version) {
-    return false;
-  }
-  if (params.currentVersion !== params.metadata.version) {
+  if (!params.currentVersion || params.currentVersion !== params.metadata.version) {
     return false;
   }
   if (
@@ -191,15 +202,6 @@ export function shouldSkipUnchangedNpmInstall(params: {
     !params.record.resolvedSpec ||
     !params.record.resolvedVersion
   ) {
-    return false;
-  }
-  if (!params.metadata.name || !params.metadata.resolvedSpec) {
-    return false;
-  }
-  if (params.metadata.integrity && !params.record.integrity) {
-    return false;
-  }
-  if (params.metadata.shasum && !params.record.shasum) {
     return false;
   }
   return (
@@ -350,64 +352,6 @@ export async function resolveNewerExactPinnedClawHubDefaultLine(params: {
   return { packageName: parsed.name, registryLine, version };
 }
 
-export async function resolveTrustedOfficialPrereleaseFallbackMetadataForUpdate(params: {
-  metadata: NpmSpecResolution;
-  spec: string;
-  timeoutMs?: number;
-}): Promise<
-  | {
-      kind: "stable" | "prerelease-only";
-      metadata: NpmSpecResolution;
-    }
-  | undefined
-> {
-  const parsedSpec = parseRegistryNpmSpec(params.spec);
-  if (
-    !parsedSpec ||
-    !parsedSpec.name.startsWith("@openclaw/") ||
-    !params.metadata.version ||
-    isPrereleaseResolutionAllowed({
-      spec: parsedSpec,
-      resolvedVersion: params.metadata.version,
-    })
-  ) {
-    return undefined;
-  }
-  const versions = await loadNpmPackageVersions({
-    packageName: parsedSpec.name,
-    timeoutMs: params.timeoutMs,
-  });
-  const stableVersion = versions
-    ?.filter((value) => !isPrereleaseSemverVersion(value))
-    .toSorted(comparePackageUpdateVersions)
-    .at(-1);
-  if (stableVersion) {
-    const stableMetadata = await resolveNpmSpecMetadata({
-      spec: `${parsedSpec.name}@${stableVersion}`,
-      timeoutMs: params.timeoutMs,
-    });
-    return stableMetadata.ok ? { kind: "stable", metadata: stableMetadata.metadata } : undefined;
-  }
-
-  const prereleaseVersion = versions
-    ?.filter(isPrereleaseSemverVersion)
-    .toSorted(comparePackageUpdateVersions)
-    .at(-1);
-  if (!prereleaseVersion || !versions?.every(isPrereleaseSemverVersion)) {
-    return undefined;
-  }
-  if (prereleaseVersion === params.metadata.version) {
-    return { kind: "prerelease-only", metadata: params.metadata };
-  }
-  const prereleaseMetadata = await resolveNpmSpecMetadata({
-    spec: `${parsedSpec.name}@${prereleaseVersion}`,
-    timeoutMs: params.timeoutMs,
-  });
-  return prereleaseMetadata.ok
-    ? { kind: "prerelease-only", metadata: prereleaseMetadata.metadata }
-    : undefined;
-}
-
 export function isNpmMetadataCompatibleWithCurrentHost(
   metadata: NpmSpecResolution,
   options: { hostVersion?: string; allowLegacyBareSemver?: boolean } = {},
@@ -431,14 +375,6 @@ export function isNpmMetadataCompatibleWithCurrentHost(
     return true;
   }
   return satisfiesPluginApiRange(hostVersion, pluginApiRange);
-}
-
-export function isBundledVersionNewer(bundledVersion: string, installedVersion: string): boolean {
-  return comparePackageUpdateVersions(bundledVersion, installedVersion) > 0;
-}
-
-export function shouldFallbackBetaClawHubUpdate(result: { ok: false; code?: string }): boolean {
-  return isUnavailableClawHubTarget(result);
 }
 
 export function formatBetaChannelFallbackOutcomeSuffix(params: {
@@ -475,18 +411,13 @@ function normalizeExactSemverVersion(value: string | undefined): string | undefi
   return trimmed.startsWith("v") ? trimmed.slice(1) : trimmed;
 }
 
-export function resolveNpmResultVersion(result: {
-  npmResolution?: NpmSpecResolution;
-}): string | undefined {
-  return result.npmResolution?.version;
-}
-
 export function isTrustedSourceLinkedOfficialNpmUpdate(params: {
   pluginId: string;
   spec: string | undefined;
   record: PluginInstallRecord;
 }): boolean {
-  const officialSpec = officialInstallRecords.resolveTrustedSourceLinkedOfficialNpmSpec(params);
+  const officialSpec =
+    officialInstallRecords.resolveTrustedSourceLinkedOfficialNpmInstall(params)?.npmSpec;
   const officialPackageName = resolveNpmSpecPackageName(officialSpec);
   const requestedPackageName = resolveNpmSpecPackageName(params.spec);
   return Boolean(officialPackageName && requestedPackageName === officialPackageName);
@@ -619,6 +550,36 @@ export function resolveClawHubUpdateSpecs(params: {
     coreVersion: params.coreVersion,
     versionBoundToCore: params.versionBoundToCore,
   });
+}
+
+/** Only a catalog-declared alternate may satisfy an implicit exact ClawHub target. */
+export function resolveClawHubNpmUpdateFallback(
+  officialInstall: ReturnType<
+    typeof officialInstallRecords.resolveTrustedSourceLinkedOfficialClawHubInstall
+  >,
+  clawhubSpecs: { installSpec?: string; recordSpec?: string } | undefined,
+) {
+  const { npmSpec, expectedIntegrity } = officialInstall ?? {};
+  const target = parseClawHubPluginSpec(clawhubSpecs?.installSpec ?? "");
+  if (
+    !npmSpec ||
+    clawhubSpecs?.installSpec === clawhubSpecs?.recordSpec ||
+    !target?.version ||
+    !isExactSemverVersion(target.version)
+  ) {
+    return undefined;
+  }
+  const installSpec = resolveDefaultNpmSpec(npmSpec)
+    ? `${resolveNpmSpecPackageName(npmSpec)}@${target.version}`
+    : npmSpec;
+  if (resolveExactNpmSpecVersion(installSpec) !== target.version) {
+    return undefined;
+  }
+  return {
+    installSpec,
+    recordSpec: npmSpec,
+    expectedIntegrity: installSpec === npmSpec ? expectedIntegrity : undefined,
+  };
 }
 
 /** Identity matching permits id/path cleanup, never an implicit registry-source switch. */

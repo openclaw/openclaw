@@ -1,117 +1,90 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
+import type { GatewayScheduler } from "../infra/gateway-scheduler.js";
 import {
   GatewayDrainingError,
   markGatewayRestartDraining,
   resetGatewayWorkAdmission,
 } from "../process/gateway-work-admission.js";
+import {
+  createGatewaySchedulerClock,
+  createTestGatewayScheduler,
+} from "../test-utils/gateway-scheduler-clock.js";
 import { scheduleGatewayIdleTask } from "./server-idle-task.js";
 
-afterEach(() => {
-  resetGatewayWorkAdmission();
-  vi.useRealTimers();
+let clock: ReturnType<typeof createGatewaySchedulerClock>;
+let scheduler: GatewayScheduler;
+beforeEach(() => {
+  clock = createGatewaySchedulerClock();
+  scheduler = createTestGatewayScheduler(clock.clock);
 });
 
-describe("scheduleGatewayIdleTask", () => {
-  it("still completes ordinary idle work", async () => {
-    vi.useFakeTimers();
-    const run = vi.fn(async () => {});
-    const handle = scheduleGatewayIdleTask({
-      delayMs: 10,
-      retryDelayMs: 5,
-      isClosing: () => false,
-      isBusy: () => false,
-      run,
-      log: { warn: vi.fn() },
-      errorMessage: "idle task failed",
-    });
+afterEach(async () => {
+  await scheduler.stop();
+  resetGatewayWorkAdmission();
+});
 
-    await vi.advanceTimersByTimeAsync(10);
-    await Promise.resolve();
-    expect(run).toHaveBeenCalledOnce();
-    expect(vi.getTimerCount()).toBe(0);
-    await handle.stop();
+type IdleTaskOptions = Parameters<typeof scheduleGatewayIdleTask>[0];
+function schedule(overrides: Pick<IdleTaskOptions, "run"> & Partial<IdleTaskOptions>) {
+  return scheduleGatewayIdleTask({
+    id: "test:idle",
+    scheduler,
+    delayMs: 10,
+    retryDelayMs: 5,
+    isClosing: () => false,
+    isBusy: () => false,
+    log: { warn: vi.fn() },
+    errorMessage: "idle task failed",
+    ...overrides,
   });
+}
 
-  it("quietly cancels idle work rejected by an active restart drain", async () => {
-    vi.useFakeTimers();
-    const run = vi.fn(async () => {});
-    const warn = vi.fn();
-    const handle = scheduleGatewayIdleTask({
-      delayMs: 10,
-      retryDelayMs: 5,
-      isClosing: () => false,
-      isBusy: () => false,
-      run,
-      log: { warn },
-      errorMessage: "idle task failed",
-    });
-
+it.each(["ordinary", "draining", "error"] as const)("settles %s idle work", async (mode) => {
+  const error = new GatewayDrainingError("unexpected task failure");
+  const run = vi.fn(async () => {
+    if (mode === "error") {
+      throw error;
+    }
+  });
+  const warn = vi.fn();
+  const handle = schedule({ run, log: { warn } });
+  if (mode === "draining") {
     markGatewayRestartDraining();
-    await vi.advanceTimersByTimeAsync(10);
-
-    expect(run).not.toHaveBeenCalled();
-    expect(warn).not.toHaveBeenCalled();
-    expect(vi.getTimerCount()).toBe(0);
-    await handle.stop();
-  });
-
-  it("warns when idle work throws a draining error without an active restart", async () => {
-    vi.useFakeTimers();
-    const error = new GatewayDrainingError("unexpected task failure");
-    const warn = vi.fn();
-    const handle = scheduleGatewayIdleTask({
-      delayMs: 10,
-      retryDelayMs: 5,
-      isClosing: () => false,
-      isBusy: () => false,
-      run: async () => {
-        throw error;
-      },
-      log: { warn },
-      errorMessage: "idle task failed",
-    });
-
-    await vi.advanceTimersByTimeAsync(10);
-
-    expect(warn).toHaveBeenCalledWith(`idle task failed: ${String(error)}`);
-    await handle.stop();
-  });
+  }
+  await clock.advanceBy(10);
+  await Promise.resolve();
+  expect(run).toHaveBeenCalledTimes(mode === "draining" ? 0 : 1);
+  expect(warn.mock.calls).toEqual(mode === "error" ? [[`idle task failed: ${String(error)}`]] : []);
+  expect(scheduler.nextWakeAtMs).toBeNull();
+  await handle.stop();
 });
 
 it("repeats only after completion, defers busy work once, and joins stop", async () => {
-  vi.useFakeTimers();
   const released = createDeferred();
+  const started = createDeferred();
   const run = vi.fn(async () => {
     if (run.mock.calls.length === 2) {
+      started.resolve();
       await released.promise;
     }
   });
   const isBusy = vi.fn(() => false);
-  const handle = scheduleGatewayIdleTask({
-    delayMs: 10,
-    retryDelayMs: 5,
-    repeatDelayMs: 20,
-    isClosing: () => false,
-    isBusy,
-    run,
-    log: { warn: vi.fn() },
-    errorMessage: "idle task failed",
-  });
+  const handle = schedule({ repeatDelayMs: 20, isBusy, run });
   try {
-    await vi.advanceTimersByTimeAsync(10);
+    await clock.advanceBy(10);
     expect(run).toHaveBeenCalledTimes(1);
-    expect(vi.getTimerCount()).toBe(1);
-    // Admission sees idle; newly admitted foreground work wins before execution.
-    isBusy.mockReturnValueOnce(false).mockReturnValueOnce(true);
-    await vi.advanceTimersByTimeAsync(20);
+    expect(scheduler.nextWakeAtMs).not.toBeNull();
+    isBusy.mockReturnValue(true);
+    await clock.advanceBy(20);
     expect(run).toHaveBeenCalledTimes(1);
-    expect(vi.getTimerCount()).toBe(1);
-    await vi.advanceTimersByTimeAsync(5);
+    expect(scheduler.nextWakeAtMs).not.toBeNull();
+    isBusy.mockReturnValue(false);
+    const pendingWake = clock.advanceBy(5);
+    await started.promise;
     expect(run).toHaveBeenCalledTimes(2);
-    await vi.advanceTimersByTimeAsync(100);
+    await clock.advanceBy(100);
     expect(run).toHaveBeenCalledTimes(2);
-    expect(vi.getTimerCount()).toBe(0);
+    expect(scheduler.nextWakeAtMs).toBeNull();
     let stopped = false;
     const stopping = Promise.resolve(handle.stop()).then(() => {
       stopped = true;
@@ -120,9 +93,10 @@ it("repeats only after completion, defers busy work once, and joins stop", async
     expect(stopped).toBe(false);
     released.resolve();
     await stopping;
-    await vi.advanceTimersByTimeAsync(100);
+    await pendingWake;
+    await clock.advanceBy(100);
     expect(run).toHaveBeenCalledTimes(2);
-    expect(vi.getTimerCount()).toBe(0);
+    expect(scheduler.nextWakeAtMs).toBeNull();
   } finally {
     released.resolve();
     await handle.stop();
@@ -130,27 +104,23 @@ it("repeats only after completion, defers busy work once, and joins stop", async
 });
 
 it("does not rearm a periodic task when restart drain begins during its run", async () => {
-  vi.useFakeTimers();
   const released = createDeferred();
-  const run = vi.fn(() => released.promise);
-  const handle = scheduleGatewayIdleTask({
-    delayMs: 0,
-    retryDelayMs: 5,
-    repeatDelayMs: 20,
-    isClosing: () => false,
-    isBusy: () => false,
-    run,
-    log: { warn: vi.fn() },
-    errorMessage: "idle task failed",
+  const started = createDeferred();
+  const run = vi.fn(() => {
+    started.resolve();
+    return released.promise;
   });
+  const handle = schedule({ delayMs: 0, repeatDelayMs: 20, run });
   try {
-    await vi.advanceTimersByTimeAsync(0);
+    const pendingWake = clock.advanceBy(0);
+    await started.promise;
     expect(run).toHaveBeenCalledOnce();
     markGatewayRestartDraining();
     released.resolve();
-    await vi.advanceTimersByTimeAsync(100);
+    await pendingWake;
+    await clock.advanceBy(100);
     expect(run).toHaveBeenCalledOnce();
-    expect(vi.getTimerCount()).toBe(0);
+    expect(scheduler.nextWakeAtMs).toBeNull();
   } finally {
     released.resolve();
     await handle.stop();

@@ -17,6 +17,10 @@ Scanning for Gateway beacons over mDNS and wide-area DNS-SD. Part of the [`openc
 
 Only gateways with Bonjour discovery enabled (default) advertise the beacon.
 
+Human-readable discovery reports strip terminal escape sequences and show embedded
+newlines, tabs, and carriage returns as `\n`, `\t`, and `\r`. Beacon fields in
+`--json` output and resolved connection targets retain their original values.
+
 TXT hints on every beacon: `role` (gateway role hint), `transport` (transport hint, e.g. `gateway`), `gatewayPort` (WebSocket port, usually `18789`), `tailnetDns` (MagicDNS hostname, when available), `gatewayTls` / `gatewayTlsSha256` (TLS enabled + cert fingerprint). `sshPort` and `cliPath` are published only in full discovery mode (`discovery.mdns.mode: "full"`; default is `"minimal"`, which omits them — clients then default SSH targets to port `22`).
 
 ### `gateway discover`
@@ -25,9 +29,13 @@ TXT hints on every beacon: `role` (gateway role hint), `transport` (transport hi
 openclaw gateway discover
 ```
 
+<a id="param-timeout"></a>
+
 <ParamField path="--timeout <ms>" type="number" default="2000">
   Per-command timeout (browse/resolve).
 </ParamField>
+<a id="param-json"></a>
+
 <ParamField path="--json" type="boolean">
   Machine-readable output (also disables styling/spinner).
 </ParamField>

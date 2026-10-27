@@ -1,8 +1,3 @@
-/**
- * Bundled channel plugin loader.
- *
- * Loads generated bundled channel entries, setup metadata, secrets, and legacy migration hooks.
- */
 import path from "node:path";
 import { extractErrorCode, formatErrorMessage } from "../../infra/errors.js";
 import { isPathInside } from "../../infra/path-guards.js";
@@ -22,47 +17,43 @@ import { getPluginCacheRoot, getPluginCacheSource } from "../../plugins/plugin-c
 import { resolveBundledChannelRootScope, type BundledChannelRootScope } from "./bundled-root.js";
 import { normalizeChannelMeta } from "./meta-normalization.js";
 import { loadChannelPluginModule } from "./module-loader.js";
-import type { ChannelPlugin } from "./types.plugin.js";
+import type { AnyChannelPlugin as ChannelPlugin } from "./types.plugin.js";
 import type { ChannelId } from "./types.public.js";
 
 type PluginRuntime = import("../../plugins/runtime/types.js").PluginRuntime;
 
-type BundledChannelEntryRuntimeContract = {
-  kind: "bundled-channel-entry";
-  id: string;
-  name: string;
-  description: string;
-  features?: {
-    accountInspect?: boolean;
-  };
-  register: (api: unknown) => void;
-  loadChannelPlugin: (options?: BundledEntryModuleLoadOptions) => ChannelPlugin;
-  loadChannelSecrets?: (
-    options?: BundledEntryModuleLoadOptions,
-  ) => ChannelPlugin["secrets"] | undefined;
-  loadChannelAccountInspector?: (
-    options?: BundledEntryModuleLoadOptions,
-  ) => NonNullable<ChannelPlugin["config"]["inspectAccount"]>;
-  setChannelRuntime?: (runtime: PluginRuntime) => void;
-};
-
-type BundledChannelSetupEntryRuntimeContract = {
-  kind: "bundled-channel-setup-entry";
-  loadSetupPlugin: (options?: BundledEntryModuleLoadOptions) => ChannelPlugin;
-  loadSetupSecrets?: (
-    options?: BundledEntryModuleLoadOptions,
-  ) => ChannelPlugin["secrets"] | undefined;
-  loadLegacySessionSurface?: (
-    options?: BundledEntryModuleLoadOptions,
-  ) => BundledChannelLegacySessionSurface;
-  features?: {
-    legacySessionSurfaces?: boolean;
-  };
-};
-
 type BundledChannelArtifactValues = {
-  entry: BundledChannelEntryRuntimeContract;
-  setupEntry: BundledChannelSetupEntryRuntimeContract;
+  entry: {
+    kind: "bundled-channel-entry";
+    id: string;
+    name: string;
+    description: string;
+    features?: {
+      accountInspect?: boolean;
+    };
+    register: (api: unknown) => void;
+    loadChannelPlugin: (options?: BundledEntryModuleLoadOptions) => ChannelPlugin;
+    loadChannelSecrets?: (
+      options?: BundledEntryModuleLoadOptions,
+    ) => ChannelPlugin["secrets"] | undefined;
+    loadChannelAccountInspector?: (
+      options?: BundledEntryModuleLoadOptions,
+    ) => NonNullable<ChannelPlugin["config"]["inspectAccount"]>;
+    setChannelRuntime?: (runtime: PluginRuntime) => void;
+  };
+  setupEntry: {
+    kind: "bundled-channel-setup-entry";
+    loadSetupPlugin: (options?: BundledEntryModuleLoadOptions) => ChannelPlugin;
+    loadSetupSecrets?: (
+      options?: BundledEntryModuleLoadOptions,
+    ) => ChannelPlugin["secrets"] | undefined;
+    loadLegacySessionSurface?: (
+      options?: BundledEntryModuleLoadOptions,
+    ) => BundledChannelLegacySessionSurface;
+    features?: {
+      legacySessionSurfaces?: boolean;
+    };
+  };
   plugin: ChannelPlugin;
   setupPlugin: ChannelPlugin;
   secrets: NonNullable<ChannelPlugin["secrets"]>;
@@ -72,10 +63,6 @@ type BundledChannelArtifactValues = {
 
 type BundledChannelArtifactKind = keyof BundledChannelArtifactValues;
 type BundledChannelEntryKind = "entry" | "setupEntry";
-type BundledChannelArtifactLoadParams = {
-  id: ChannelId;
-  rootScope: BundledChannelRootScope;
-};
 
 const log = createSubsystemLogger("channels");
 
@@ -179,28 +166,6 @@ function resolveGeneratedBundledChannelModulePath(params: {
   return realCandidate && isPathInside(pluginRoot, realCandidate) ? realCandidate : null;
 }
 
-function loadGeneratedBundledChannelModule(params: {
-  rootScope: BundledChannelRootScope;
-  metadata: BundledChannelPluginMetadata;
-  entry: BundledChannelPluginMetadata["source"] | BundledChannelPluginMetadata["setupSource"];
-}): unknown {
-  const modulePath = resolveGeneratedBundledChannelModulePath(params);
-  if (!modulePath) {
-    throw new Error(`missing generated module for bundled channel ${params.metadata.manifest.id}`);
-  }
-  const scanDir = params.rootScope.pluginsDir;
-  const boundaryRoot = resolveBundledChannelBoundaryRoot({
-    packageRoot: params.rootScope.packageRoot,
-    ...(scanDir ? { pluginsDir: scanDir } : {}),
-    metadata: params.metadata,
-    modulePath,
-  });
-  return loadChannelPluginModule({
-    modulePath,
-    rootDir: boundaryRoot,
-  });
-}
-
 // Module loaders can wrap missing-dependency errors in a cause chain.
 function findMissingModuleCodeInChain(error: unknown): string | undefined {
   const seen = new Set<unknown>();
@@ -238,12 +203,23 @@ function loadGeneratedBundledChannelEntry<TKind extends BundledChannelEntryKind>
     return undefined;
   }
   try {
+    const modulePath = resolveGeneratedBundledChannelModulePath({
+      rootScope,
+      metadata,
+      entry: source,
+    });
+    if (!modulePath) {
+      throw new Error(`missing generated module for bundled channel ${metadata.manifest.id}`);
+    }
+    const scanDir = rootScope.pluginsDir;
+    const boundaryRoot = resolveBundledChannelBoundaryRoot({
+      packageRoot: rootScope.packageRoot,
+      ...(scanDir ? { pluginsDir: scanDir } : {}),
+      metadata,
+      modulePath,
+    });
     const entry = resolveBundledChannelModuleEntry(
-      loadGeneratedBundledChannelModule({
-        rootScope,
-        metadata,
-        entry: source,
-      }),
+      loadChannelPluginModule({ modulePath, rootDir: boundaryRoot }),
       kind,
     );
     if (!entry) {
@@ -271,8 +247,6 @@ function listBundledChannelMetadata(
   return listBundledChannelPluginMetadata({
     rootDir: rootScope.packageRoot,
     ...(scanDir ? { scanDir } : {}),
-    includeChannelConfigs: false,
-    includeSyntheticChannelConfigs: false,
   }).filter((metadata) => (metadata.manifest.channels?.length ?? 0) > 0);
 }
 
@@ -282,10 +256,6 @@ function listBundledChannelPluginIdsForRoot(
   return listBundledChannelMetadata(rootScope)
     .map((metadata) => metadata.manifest.id)
     .toSorted((left, right) => left.localeCompare(right));
-}
-
-export function listBundledChannelPluginIds(): readonly ChannelId[] {
-  return listBundledChannelPluginIdsForRoot(resolveBundledChannelRootScope());
 }
 
 function resolveBundledChannelMetadata(
@@ -302,8 +272,8 @@ function rememberBundledChannelArtifact<TKind extends BundledChannelArtifactKind
   kind: TKind,
   id: ChannelId,
   artifact: BundledChannelArtifactValues[TKind] | undefined,
+  metadata = resolveBundledChannelMetadata(id, rootScope),
 ): void {
-  const metadata = resolveBundledChannelMetadata(id, rootScope);
   if (metadata) {
     getPluginCacheSource(path.resolve(metadata.rootDir, metadata.source.source)).variants.set(
       `bundled-channel:${kind}:${id}`,
@@ -328,17 +298,9 @@ function getBundledChannelArtifactForRoot<TKind extends BundledChannelArtifactKi
     // SAFETY: rememberBundledChannelArtifact writes this key from the matching typed kind loader.
     return cached.value as BundledChannelArtifactValues[TKind] | undefined;
   }
-  // Keep failure and recursion state separate by artifact kind: broken secrets
-  // must never poison the runtime plugin, setup plugin, or entry contracts.
-  const loadKey = `${kind}\0${id}`;
-  const { artifactLoadsInProgress } = getPluginCacheRoot(metadata.rootDir);
-  if (artifactLoadsInProgress.has(loadKey)) {
-    return undefined;
-  }
-  artifactLoadsInProgress.add(loadKey);
   try {
-    const artifact = bundledChannelArtifactLoaders[kind]({ id, rootScope });
-    rememberBundledChannelArtifact(rootScope, kind, id, artifact);
+    const artifact = bundledChannelArtifactLoaders[kind]({ id, rootScope, metadata });
+    rememberBundledChannelArtifact(rootScope, kind, id, artifact, metadata);
     return artifact;
   } catch (error) {
     if (kind === "entry" || kind === "setupEntry") {
@@ -355,34 +317,26 @@ function getBundledChannelArtifactForRoot<TKind extends BundledChannelArtifactKi
     };
     const detail = describeBundledChannelLoadError(error, id);
     log.warn(`[channels] failed to load bundled channel${descriptions[kind]} ${id}: ${detail}`);
-    rememberBundledChannelArtifact(rootScope, kind, id, undefined);
+    rememberBundledChannelArtifact(rootScope, kind, id, undefined, metadata);
     return undefined;
-  } finally {
-    artifactLoadsInProgress.delete(loadKey);
   }
 }
 
 const bundledChannelArtifactLoaders: {
-  [Kind in BundledChannelArtifactKind]: (
-    params: BundledChannelArtifactLoadParams,
-  ) => BundledChannelArtifactValues[Kind] | undefined;
+  [Kind in BundledChannelArtifactKind]: (params: {
+    id: ChannelId;
+    rootScope: BundledChannelRootScope;
+    metadata: BundledChannelPluginMetadata;
+  }) => BundledChannelArtifactValues[Kind] | undefined;
 } = {
-  entry({ id, rootScope }) {
-    const metadata = resolveBundledChannelMetadata(id, rootScope);
-    if (!metadata) {
-      return undefined;
-    }
+  entry({ id, rootScope, metadata }) {
     const entry = loadGeneratedBundledChannelEntry("entry", rootScope, metadata);
     if (entry && entry.id !== id) {
       rememberBundledChannelArtifact(rootScope, "entry", entry.id, entry);
     }
     return entry;
   },
-  setupEntry({ id, rootScope }) {
-    const metadata = resolveBundledChannelMetadata(id, rootScope);
-    if (!metadata) {
-      return undefined;
-    }
+  setupEntry({ id, rootScope, metadata }) {
     const entry = loadGeneratedBundledChannelEntry("setupEntry", rootScope, metadata);
     const aliases = new Set<ChannelId>([
       metadata.manifest.id,
@@ -394,12 +348,11 @@ const bundledChannelArtifactLoaders: {
     }
     return entry;
   },
-  plugin({ id, rootScope }) {
+  plugin({ id, rootScope, metadata }) {
     const entry = getBundledChannelArtifactForRoot("entry", id, rootScope);
     if (!entry) {
       return undefined;
     }
-    const metadata = resolveBundledChannelMetadata(id, rootScope);
     const plugin = entry.loadChannelPlugin() as ChannelPlugin | undefined;
     return plugin
       ? {
@@ -407,7 +360,7 @@ const bundledChannelArtifactLoaders: {
           meta: normalizeChannelMeta({
             id: plugin.id,
             meta: plugin.meta,
-            existing: metadata?.packageManifest?.channel,
+            existing: metadata.packageManifest?.channel,
           }),
         }
       : undefined;

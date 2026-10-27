@@ -1,22 +1,23 @@
-// ClawHub-backed plugin search command; queries installable plugin families and merges scores.
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { theme } from "../../packages/terminal-core/src/theme.js";
 import type { ClawHubPackageSearchResult } from "../infra/clawhub-packages.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { searchInstallablePluginPackages } from "../plugins/catalog-search.js";
+import { isBareNpmPackageName } from "../plugins/install-source-spec.js";
 import { defaultRuntime, writeRuntimeJson, type RuntimeEnv } from "../runtime.js";
 import { formatCliCommand } from "./command-format.js";
 import { ExpectedCliError } from "./failure-output.js";
 import { formatVersionLabel } from "./version-format.js";
 
-/** Options accepted by `openclaw plugins search`. */
-type PluginsSearchOptions = {
+export type PluginsSearchOptions = {
   json?: boolean;
   limit?: number;
 };
 
 function formatPackageSearchLine(entry: ClawHubPackageSearchResult): string {
   const pkg = entry.package;
+  // A selector keeps legacy unscoped results from resolving as local plugin-ID shortcuts.
+  const installSpec = isBareNpmPackageName(pkg.name) ? `${pkg.name}@latest` : pkg.name;
   const flags = [
     pkg.family,
     pkg.channel,
@@ -24,10 +25,9 @@ function formatPackageSearchLine(entry: ClawHubPackageSearchResult): string {
     pkg.latestVersion ? formatVersionLabel(pkg.latestVersion) : undefined,
   ].filter(Boolean);
   const summary = pkg.summary ? theme.muted(` — ${pkg.summary}`) : "";
-  return `${pkg.name}  ${theme.muted(flags.join(" | "))}${summary}\n  ${theme.muted(`Install: ${formatCliCommand(`openclaw plugins install clawhub:${pkg.name}`)}`)}`;
+  return `${pkg.name}  ${theme.muted(flags.join(" | "))}${summary}\n  ${theme.muted(`Install: ${formatCliCommand(`openclaw plugins install ${installSpec}`)}`)}`;
 }
 
-/** Search ClawHub for installable plugins and write JSON or terminal output. */
 export async function runPluginsSearchCommand(
   queryParts: string[] | string,
   opts: PluginsSearchOptions = {},

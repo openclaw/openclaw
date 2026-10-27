@@ -4,37 +4,71 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { captureClawInstallSchemaVersionFacts } from "../claws/provenance-runtime-read.js";
 import "../claws/tool-policy-runtime.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import * as sqliteSnapshots from "../infra/sqlite-snapshot-source.js";
 import {
   closeOpenClawStateDatabaseByPathAsync,
   openOpenClawStateDatabase,
 } from "../state/openclaw-state-db.js";
-import {
-  registerResolvedAgentDir,
-  resolveRegisteredAgentIdForDir,
-  unregisterResolvedAgentDir,
-} from "./agent-dir-registry.js";
+import { unregisterResolvedAgentDir } from "./agent-dir-registry.js";
 import { resolveAgentDir } from "./agent-scope-config.js";
 import { saveAuthProfileStore } from "./auth-profiles/store-runtime.js";
+import { prepareModelCatalogWorkerContext } from "./prepared-model-catalog-fingerprints.js";
 import { createPreparedModelCatalogWorkerInput } from "./prepared-model-catalog-worker.js";
+import { stubCatalogEnv } from "./prepared-model-catalog-worker.shared.test-support.js";
 import {
   createCatalogFixture,
-  EXTERNAL_AUTH_PATH_ENV,
+  catalogEntry,
   PROVIDER_ID,
-  REF_ONLY_API_ENV,
-  REF_ONLY_TOKEN_ENV,
 } from "./prepared-model-catalog-worker.test-support.js";
-import { runPreparedModelCatalogWorkerRequest } from "./prepared-model-catalog.worker.js";
 import { prepareWorkspaceBuildGroup } from "./prepared-model-runtime.facts.js";
 import { retainPreparedPluginGeneration } from "./prepared-model-runtime.plugin-lifetime.js";
+import {
+  createCatalogInspectionPool,
+  type CatalogInspectionTask,
+} from "./test-helpers/prepared-model-catalog-inspection.js";
 import { usePreparedCatalogWorkerFixtures } from "./test-helpers/prepared-model-catalog-worker-fixture.js";
 
-vi.mock("node:worker_threads", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("node:worker_threads")>()),
-  parentPort: null,
-}));
-
 const { makeTempDir, retireAfterTest } = usePreparedCatalogWorkerFixtures();
+
+async function createFixture() {
+  const fixture = await createCatalogFixture(makeTempDir, 0);
+  stubCatalogEnv(fixture.env);
+  return fixture;
+}
+
+async function prepareInput(input: Parameters<typeof prepareWorkspaceBuildGroup>[0][number]) {
+  const prepared = await prepareWorkspaceBuildGroup([input], "static");
+  retireAfterTest(retainPreparedPluginGeneration(prepared.pluginGeneration));
+  return createPreparedModelCatalogWorkerInput({
+    agentFacts: prepared.agentFacts[0]!,
+    pluginMetadataSnapshot: prepared.pluginGeneration.pluginMetadataSnapshot,
+  });
+}
+
+const catalogResult = {
+  status: "ok",
+  kind: "catalog",
+  snapshot: { entries: expect.arrayContaining([catalogEntry("plugin-generation-v1")]) },
+};
+
+function createInspector(env: NodeJS.ProcessEnv) {
+  const { pool } = createCatalogInspectionPool(env);
+  const request = {
+    kind: "catalog" as const,
+    syntheticAuth: [],
+    clawInstallSchemaVersions: captureClawInstallSchemaVersionFacts({ env }),
+  };
+  return {
+    run: (
+      value: CatalogInspectionTask["value"],
+      inspection?: CatalogInspectionTask["inspection"],
+    ) =>
+      pool.run(
+        { context: prepareModelCatalogWorkerContext(value), value, request, inspection },
+        { timeoutMs: 30_000 },
+      ),
+    [Symbol.asyncDispose]: () => pool.close(),
+  };
+}
 
 describe("catalog request existing directory ownership", () => {
   beforeEach(() => {
@@ -42,49 +76,32 @@ describe("catalog request existing directory ownership", () => {
   });
 
   it("serves repeated catalog requests from prepared provenance without copying shared state", async () => {
-    const fixture = createCatalogFixture(makeTempDir, 0);
-    for (const name of [
-      "OPENCLAW_DISABLE_BUNDLED_PLUGINS",
-      "OPENCLAW_STATE_DIR",
-      "OPENCLAW_WORKER_CATALOG_MARKER",
-      EXTERNAL_AUTH_PATH_ENV,
-      REF_ONLY_API_ENV,
-      REF_ONLY_TOKEN_ENV,
-    ] as const) {
-      vi.stubEnv(name, fixture.env[name]);
-    }
-    const prepared = await prepareWorkspaceBuildGroup(
-      [{ agentId: "main", agentDir: fixture.agentDir, config: fixture.config, env: fixture.env }],
-      "static",
-    );
-    retireAfterTest(retainPreparedPluginGeneration(prepared.pluginGeneration));
-    const value = createPreparedModelCatalogWorkerInput({
-      agentFacts: prepared.agentFacts[0]!,
-      pluginMetadataSnapshot: prepared.pluginGeneration.pluginMetadataSnapshot,
+    const fixture = await createFixture();
+    const value = await prepareInput({
+      agentId: "main",
+      agentDir: fixture.agentDir,
+      config: fixture.config,
+      env: fixture.env,
     });
     const database = openOpenClawStateDatabase({ env: fixture.env });
-    const clawInstallSchemaVersions = captureClawInstallSchemaVersionFacts({ env: fixture.env });
-    await closeOpenClawStateDatabaseByPathAsync(database.path);
-    const copy = vi.spyOn(sqliteSnapshots, "prepareSqliteReadOnlyLocationSync");
     try {
+      await using inspector = createInspector(fixture.env);
+      await closeOpenClawStateDatabaseByPathAsync(database.path);
+      // Worker startup and the copy probe are real; this contract does not measure their latency.
+      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "performance"] });
       for (let tick = 0; tick < 3; tick++) {
-        const result = await runPreparedModelCatalogWorkerRequest(
-          structuredClone(value),
-          structuredClone({ kind: "catalog", syntheticAuth: [], clawInstallSchemaVersions }),
+        const { inspection, ...result } = await inspector.run(
+          value,
+          tick === 0 ? { copyProbePath: database.path } : undefined,
         );
-        expect(result).toMatchObject({
-          status: "ok",
-          kind: "catalog",
-          snapshot: {
-            entries: expect.arrayContaining([
-              expect.objectContaining({ provider: PROVIDER_ID, id: "plugin-generation-v1" }),
-            ]),
-          },
-        });
+        expect(result).toMatchObject(catalogResult);
+        expect(inspection.sqliteCopies).toBe(0);
+        if (tick === 0) {
+          expect(inspection.copyHookObserved).toBe(true);
+        }
       }
-      expect(copy).not.toHaveBeenCalled();
     } finally {
-      copy.mockRestore();
+      vi.useRealTimers();
       await closeOpenClawStateDatabaseByPathAsync(database.path);
     }
   });
@@ -94,17 +111,7 @@ describe("catalog request existing directory ownership", () => {
     { label: "foreign owner", existing: ["foreign"], conflict: true },
     { label: "ambiguous owners", existing: ["main", "foreign"], conflict: true },
   ])("preserves $label across the request", async ({ existing, conflict }) => {
-    const fixture = createCatalogFixture(makeTempDir, 0);
-    for (const name of [
-      "OPENCLAW_DISABLE_BUNDLED_PLUGINS",
-      "OPENCLAW_STATE_DIR",
-      "OPENCLAW_WORKER_CATALOG_MARKER",
-      EXTERNAL_AUTH_PATH_ENV,
-      REF_ONLY_API_ENV,
-      REF_ONLY_TOKEN_ENV,
-    ] as const) {
-      vi.stubEnv(name, fixture.env[name]);
-    }
+    const fixture = await createFixture();
     const config = {
       ...fixture.config,
       agents: {
@@ -130,48 +137,31 @@ describe("catalog request existing directory ownership", () => {
       },
       agentDir,
     );
-    const prepared = await prepareWorkspaceBuildGroup(
-      [{ agentId: "main", agentDir, inheritedAuthDir: agentDir, config, env: fixture.env }],
-      "static",
-    );
-    retireAfterTest(retainPreparedPluginGeneration(prepared.pluginGeneration));
     const value = structuredClone(
-      createPreparedModelCatalogWorkerInput({
-        agentFacts: prepared.agentFacts[0]!,
-        pluginMetadataSnapshot: prepared.pluginGeneration.pluginMetadataSnapshot,
+      await prepareInput({
+        agentId: "main",
+        agentDir,
+        inheritedAuthDir: agentDir,
+        config,
+        env: fixture.env,
       }),
     );
     unregisterResolvedAgentDir({ agentId: "main", agentDir, env: fixture.env });
-    for (const agentId of existing) {
-      registerResolvedAgentDir({ agentId, agentDir, env: fixture.env });
-    }
-    const result = await runPreparedModelCatalogWorkerRequest(value, {
-      kind: "catalog",
-      syntheticAuth: [],
-      clawInstallSchemaVersions: captureClawInstallSchemaVersionFacts({ env: fixture.env }),
-    });
+    await using inspector = createInspector(fixture.env);
+    const { inspection, ...result } = await inspector.run(value, { existingAgentIds: existing });
     if (conflict) {
       expect(result).toEqual({
         status: "failed",
+        authCredentials: [],
         error: `Conflicting registered agent owners for ${agentDir}`,
       });
       expect(fs.existsSync(fixture.marker)).toBe(false);
-      expect(unregisterResolvedAgentDir({ agentId: "foreign", agentDir, env: fixture.env })).toBe(
-        true,
-      );
+      expect(inspection.foreignReleased).toBe(true);
     } else {
-      expect(result).toMatchObject({
-        status: "ok",
-        kind: "catalog",
-        snapshot: {
-          entries: expect.arrayContaining([
-            expect.objectContaining({ provider: PROVIDER_ID, id: "plugin-generation-v1" }),
-          ]),
-        },
-      });
+      expect(result).toMatchObject(catalogResult);
       expect(fs.readFileSync(fixture.marker, "utf8")).toBe("start\ndone\n");
     }
-    expect(resolveRegisteredAgentIdForDir(agentDir, fixture.env)).toBe(
+    expect(inspection.registeredAgentId).toBe(
       existing.some((agentId) => agentId.toLowerCase() === "main") ? "main" : undefined,
     );
   });

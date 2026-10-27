@@ -93,11 +93,21 @@ semantics, use [Tools and custom providers](/gateway/config-tools).
 | Session progress        | Update the parent session's durable progress card; unavailable to sub-agents                 | `progress_card`                                                                                                     | [Progress card](/tools/progress-card)                                                                                         |
 | Messaging and channels  | Send replies or channel actions                                                              | `message`                                                                                                           | [Agent send](/tools/agent-send)                                                                                               |
 | Sessions and agents     | Inspect sessions, delegate work, orchestrate collectors, steer another run, or report status | `sessions_*`, `agents_wait`, `subagents`, `agents_list`, `session_status`, `get_goal`, `create_goal`, `update_goal` | [Goal](/tools/goal), [Swarm](/tools/swarm), [Sub-agents](/tools/subagents), [Session tool](/concepts/session-tool)            |
-| Automation              | Schedule work or respond to background events                                                | `cron`, `heartbeat_respond`                                                                                         | [Automation](/automation)                                                                                                     |
+| Automation              | Schedule work or respond to background events                                                | `automations` (`cron` alias)                                                                                        | [Automation](/automation)                                                                                                     |
 | Gateway and nodes       | Inspect Gateway state or paired target devices                                               | `gateway`, `nodes`                                                                                                  | [Gateway configuration](/gateway/configuration), [Nodes](/nodes)                                                              |
 | Plugin lifecycle        | Inspect, install, enable, disable, remove, or reload plugins                                 | `plugins`                                                                                                           | [Agent plugin management](/plugins/manage-plugins#manage-plugins-from-an-agent-conversation)                                  |
 | Media                   | Analyze, generate, or speak media                                                            | `view_image`, `image_generate`, `music_generate`, `video_generate`, `tts`                                           | [Media overview](/tools/media-overview)                                                                                       |
-| Large OpenClaw catalogs | Search, call, and combine many eligible tools without sending every schema to the model      | `exec`, `wait`, `tool_search_code`, `tool_search`, `tool_describe`                                                  | [Code Mode](/tools/code-mode), [Tool Search](/tools/tool-search)                                                              |
+| Large OpenClaw catalogs | Search, call, and combine many eligible tools without sending every schema to the model      | `exec`, `wait`, `tool_search`, `tool_describe`, `dispatch_action`                                                   | [Code Mode](/tools/code-mode), [Tool Search](/tools/tool-search)                                                              |
+
+Session tools and `sessions_spawn` accept optional `user` (an admitted participant's
+verified `requester_profile.id`) and act with that person's authority. Omitting it
+keeps the execution's original requester, including after collaborative steering.
+Selection does not establish that the person requested or approved the action. See [Session tools](/concepts/session-tool) and [Sub-agent tool reference](/tools/subagents/tool-reference).
+
+On multi-user Gateways, `personal_instructions` reads and updates
+the authenticated requester’s personal `USER.md` through the Gateway, even when
+the chat uses a project worktree. It is included in the coding and messaging
+profiles; it does not widen general file-tool access. See [User model](/concepts/user-model#personal-user-files-on-a-shared-gateway).
 
 The `edit` tool supports targeted formatting changes, including removing trailing
 spaces or replacing Unicode quotes, dashes, and spaces. These changes are applied
@@ -129,8 +139,7 @@ Common plugin-provided tools include:
   output
 - [Tool Search](/tools/tool-search) for discovering and calling large tool
   catalogs without putting every schema in the prompt
-- [Canvas](/plugins/reference/canvas) for the macOS widget-panel presenter and
-  A2UI dashboard content
+- [Canvas](/plugins/reference/canvas) for the macOS widget-panel presenter
 
 ## Configure access and approvals
 
@@ -138,6 +147,35 @@ Tool policy is enforced before the model call. If policy removes a tool, the
 model does not receive that tool's schema for the turn. A run can lose tools
 because of global config, per-agent config, channel policy, provider
 restrictions, sandbox rules, channel/runtime policy, or plugin availability.
+
+The `message` tool also narrows its action list and parameters to the current
+channel and the channels in the agent's [route bindings](/concepts/agent-bindings).
+Multi-channel agents keep the union of those channels' declared actions and
+capabilities. Local sessions without channel bindings and scheduled runs retain
+configured-channel discovery. This reduces prompt overhead without a new setting;
+bindings select what the schema advertises, while normal delivery permissions
+still govern execution. Unchanged bindings and capabilities produce stable schema
+bytes regardless of plugin registration order.
+
+Completion and settle turns with a source-bound `message` grant may send text,
+`media`, or `attachments`, including media-only replies, the optional `caption`,
+and file metadata (`filename`, `contentType`, or `mimeType`).
+`MEDIA:` directives and remote Markdown images use the normal outbound media policy.
+Local files supplied through `media`, `attachments`, or `MEDIA:` must be within
+the allowed `mediaAccess.localRoots`; local Markdown image paths stay literal text.
+The action stays `send`; channel, account, destination, and thread stay locked to
+the current conversation. `replyTo` may name the current message or thread, but
+cannot select another reply target. Inline reply and `audio_as_voice` directives
+remain unavailable on this restricted grant.
+
+In Control UI/Webchat, publish a local HTML report to the current conversation
+with `message(action=send, media=<path>)`, omitting the target. OpenClaw checks the
+current file-read and delivery permissions, validates the HTML, and saves an
+attachment snapshot. A parent agent can publish its final revision of a child
+agent's report using its own read permission. Use self-contained HTML; relative
+assets are not bundled. This explicit send does not grant generated-file
+provenance: automatic `MEDIA:` replies retain their existing HTML restrictions,
+and the preview keeps its existing sandbox and script controls.
 
 OpenClaw exposes one semantic image inspection capability named `view_image`.
 When the active harness supplies its own loader, OpenClaw suppresses its
@@ -203,10 +241,10 @@ the current turn:
 ## Related
 
 - [Automation](/automation) for cron, tasks, heartbeat, hooks,
-  standing orders, and Task Flow
+  standing orders, and workflows
 - [Agents](/concepts/agent) for the agent model, sessions, memory, and
   multi-agent coordination
-- [Tools and custom providers](/gateway/config-tools) for the canonical tool
+- [Tools and custom providers](/gateway/config-tools) for the tool
   policy reference
 - [Plugins](/tools/plugin) for plugin installation and management
 - [Plugin SDK](/plugins/sdk-overview) for plugin author reference

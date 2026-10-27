@@ -1,4 +1,3 @@
-// Qa Lab plugin module owns canonical runtime-pair-lane scenario selection.
 import { uniqueStrings } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { QaCliBackendAuthMode } from "./gateway-child.js";
 import type { QaProviderMode } from "./model-selection.js";
@@ -52,9 +51,10 @@ export function resolveQaRuntimePairLaneScenarioIds(params: {
       `--runtime-pair-lane matched no scenarios for ${params.runtimePairLanes.join(", ")}.`,
     );
   }
-  const compatibleScenarios = params.runtimePair
-    ? matchingScenarios.filter((scenario) => scenario.execution.kind === "flow")
-    : matchingScenarios;
+  const { selectedScenarios: compatibleScenarios, excludedScenarios: excludedNonFlowScenarios } =
+    params.runtimePair
+      ? resolveQaRuntimePairScenarioSupport(matchingScenarios)
+      : { selectedScenarios: matchingScenarios, excludedScenarios: [] };
   const laneCompatibleScenarios = compatibleScenarios.filter((scenario) =>
     scenarioMatchesQaProviderLane({
       scenario,
@@ -72,9 +72,6 @@ export function resolveQaRuntimePairLaneScenarioIds(params: {
   const excludedLaneScenarios = compatibleScenarios.filter(
     (scenario) => !laneCompatibleScenarioSet.has(scenario),
   );
-  const excludedNonFlowScenarios = params.runtimePair
-    ? matchingScenarios.filter((scenario) => scenario.execution.kind !== "flow")
-    : [];
   if (compatibleScenarios.length === 0) {
     throw new Error(
       `--runtime-pair-lane matched no execution.kind: flow scenarios for ${params.runtimePairLanes.join(", ")}; incompatible scenario(s): ${excludedNonFlowScenarios.map((scenario) => `${scenario.id} (${scenario.execution.kind})`).join(", ")}.`,

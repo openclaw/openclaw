@@ -1,8 +1,6 @@
-import fs from "node:fs/promises";
-import path from "node:path";
 import { expect, it } from "vitest";
-import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
+import { createControlUiChatHistoryMessage } from "../test-helpers/control-ui-session-fixtures.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
 const suite = createControlUiE2eSuite({
@@ -93,31 +91,21 @@ function toolsEffectiveResponse() {
 }
 
 suite.define(() => {
-  it("caps every long capability view at 420px and keeps keyboard focus visible", async () => {
+  it("keeps long capability lists within the viewport and keyboard-focused rows visible", async () => {
     await suite.withPage({ viewport: { width: 1280, height: 900 } }, async ({ page }) => {
       const gateway = await installMockGateway(page, {
         featureMethods: ["chat.metadata", "chat.startup", "sessions.patch", "tools.effective"],
         historyMessages: [
-          {
-            role: "user",
-            content: [
-              {
-                type: "text",
-                text: "Review the release dashboard and flag anything that needs attention.",
-              },
-            ],
-            timestamp: Date.now() - 60_000,
-          },
-          {
-            role: "assistant",
-            content: [
-              {
-                type: "text",
-                text: "The rollout is healthy. I found two follow-ups:\n\n- Confirm the mobile smoke lane\n- Review the connector permission changes",
-              },
-            ],
-            timestamp: Date.now() - 30_000,
-          },
+          createControlUiChatHistoryMessage(
+            "user",
+            "Review the release dashboard and flag anything that needs attention.",
+            Date.now() - 60_000,
+          ),
+          createControlUiChatHistoryMessage(
+            "assistant",
+            "The rollout is healthy. I found two follow-ups:\n\n- Confirm the mobile smoke lane\n- Review the connector permission changes",
+            Date.now() - 30_000,
+          ),
         ],
         methodResponses: {
           "config.get": configResponse(),
@@ -132,191 +120,81 @@ suite.define(() => {
       });
 
       await page.goto(`${suite.server.baseUrl}chat`);
-      await gateway.waitForRequest("chat.startup");
+      await gateway.waitForRequest("sessions.messages.subscribe");
       const composer = page.locator(".agent-chat__input");
       await expect.poll(() => composer.isVisible()).toBe(true);
-      const dropdown = composer.locator("wa-dropdown.agent-chat__capability-menu");
+      const dropdown = composer.locator(".agent-chat__capability-menu");
       const attach = composer.locator("button.agent-chat__input-btn--attach");
       await expect.poll(() => attach.isVisible()).toBe(true);
       await attach.click();
-      await dropdown.locator('[value="open-skills"]').click();
+      await dropdown.locator('[data-value="open-skills"]').click();
       await expect.poll(() => dropdown.getAttribute("data-view")).toBe("skills");
 
-      const artifactDirParent = process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR?.trim();
-      const artifactDir = artifactDirParent
-        ? createControlUiE2eArtifactDir("chat-composer-capability-menu-height", artifactDirParent)
-        : undefined;
-      const captureStage = process.env.OPENCLAW_UI_E2E_CAPTURE_STAGE?.trim();
-      const capture = async (view: string, theme: "dark" | "light") => {
-        if (!artifactDir || !captureStage) {
-          return;
-        }
-        await page.evaluate((mode) => {
-          document.documentElement.dataset.themeMode = mode;
-        }, theme);
-        await page.waitForTimeout(50);
-        const menuCenter = await dropdown.evaluate((node) => {
-          const menu = node.shadowRoot?.querySelector<HTMLElement>('[part="menu"]');
-          if (!menu) {
-            throw new Error("expected capability menu bounds");
-          }
-          const rect = menu.getBoundingClientRect();
-          return { x: rect.right - 8, y: rect.top + rect.height / 2 };
-        });
-        await page.mouse.move(menuCenter.x, menuCenter.y);
-        await page.mouse.wheel(0, 1);
-        await page.screenshot({
-          path: path.join(artifactDir, `${view}-${theme}-${captureStage}.png`),
-        });
-      };
-
-      const inspectView = async (view: string) => {
-        const layout = await dropdown.evaluate((node) => {
-          const menu = node.shadowRoot?.querySelector<HTMLElement>('[part="menu"]');
-          const composerElement = node.closest<HTMLElement>(".agent-chat__input");
-          const back = node.querySelector<HTMLElement>('[value="back"]');
-          if (!menu || !composerElement || !back) {
-            throw new Error("expected capability menu layout");
-          }
-          menu.scrollTop = Math.floor((menu.scrollHeight - menu.clientHeight) / 2);
-          const menuRect = menu.getBoundingClientRect();
-          const backRect = back.getBoundingClientRect();
-          const style = getComputedStyle(menu);
-          return {
-            backOffset: backRect.top - menuRect.top,
-            clientHeight: menu.clientHeight,
-            maxHeight: Number.parseFloat(style.maxHeight),
-            overscrollY: style.overscrollBehaviorY,
-            scrollHeight: menu.scrollHeight,
-            scrollTop: menu.scrollTop,
-            token: Number.parseFloat(
-              getComputedStyle(composerElement).getPropertyValue(
-                "--chat-composer-popover-max-height",
-              ),
-            ),
-            viewportHeight: window.innerHeight,
-          };
-        });
-        await capture(view, "dark");
-        await capture(view, "light");
-        return { ...layout, view };
-      };
-
-      const layouts = [await inspectView("skills")];
-
-      const back = dropdown.locator('[value="back"]');
-      const interactionTarget = dropdown.locator('[value="skill:19"]');
-      const captureInteraction = async (state: "focus" | "hover", theme: "dark" | "light") => {
-        await page.evaluate((mode) => {
-          document.documentElement.dataset.themeMode = mode;
-        }, theme);
-        await interactionTarget.scrollIntoViewIfNeeded();
-
-        if (state === "hover") {
-          await interactionTarget.hover();
-          await expect
-            .poll(() => interactionTarget.evaluate((node) => node.matches(":hover")))
-            .toBe(true);
-        } else {
-          await back.focus();
-          await page.keyboard.press("Home");
-          for (let index = 0; index < 20; index += 1) {
-            await page.keyboard.press("ArrowDown");
-          }
-          await page.mouse.move(900, 500);
-          await expect
-            .poll(() =>
-              interactionTarget.evaluate(
-                (node) => document.activeElement === node && node.matches(":focus-visible"),
-              ),
-            )
-            .toBe(true);
-        }
-
+      const panel = dropdown.locator(".oc-menu");
+      const expectVisibleFocus = async (target: import("playwright").Locator) => {
         await expect
           .poll(() =>
-            dropdown.evaluate((node, target) => {
-              const menu = node.shadowRoot?.querySelector<HTMLElement>('[part="menu"]');
-              const backRow = node.querySelector<HTMLElement>('[value="back"]');
-              const targetRow = node.querySelector<HTMLElement>(target);
-              if (!menu || !backRow || !targetRow) {
+            target.evaluate((node) => {
+              const menu = node.closest<HTMLElement>(".oc-menu");
+              if (!menu || document.activeElement !== node) {
                 return false;
               }
-              const menuRect = menu.getBoundingClientRect();
-              const backRect = backRow.getBoundingClientRect();
-              const targetRect = targetRow.getBoundingClientRect();
+              const bounds = menu.getBoundingClientRect();
+              const row = node.getBoundingClientRect();
               return (
-                menu.scrollTop > 0 &&
-                menu.scrollHeight > menu.clientHeight &&
-                backRect.top >= menuRect.top &&
-                backRect.bottom <= menuRect.bottom &&
-                targetRect.top >= menuRect.top &&
-                targetRect.bottom <= menuRect.bottom
+                bounds.top >= 0 &&
+                bounds.bottom <= window.innerHeight &&
+                row.top >= bounds.top &&
+                row.bottom <= bounds.bottom
               );
-            }, '[value="skill:19"]'),
-          )
-          .toBe(true);
-
-        await expect
-          .poll(() =>
-            interactionTarget.evaluate((node) => {
-              const probe = document.createElement("div");
-              probe.style.backgroundColor = "var(--bg-hover)";
-              probe.style.color = "var(--text)";
-              document.body.append(probe);
-              const rowStyle = getComputedStyle(node);
-              const probeStyle = getComputedStyle(probe);
-              const matches =
-                rowStyle.backgroundColor === probeStyle.backgroundColor &&
-                rowStyle.color === probeStyle.color;
-              probe.remove();
-              return matches;
             }),
           )
           .toBe(true);
-
-        if (artifactDir && captureStage === "after") {
-          await page.waitForTimeout(50);
-          await page.screenshot({
-            path: path.join(artifactDir, `skill-20-${state}-${theme}-after.png`),
-          });
-        }
+      };
+      const expectScrollable = async () => {
+        await expect
+          .poll(() =>
+            panel.evaluate((node) => {
+              const bounds = node.getBoundingClientRect();
+              const inner = node.querySelector<HTMLElement>(".agent-chat__capability-menu-scroll");
+              const scroll = inner && inner.scrollHeight > inner.clientHeight ? inner : node;
+              return (
+                bounds.height > 0 &&
+                bounds.top >= 0 &&
+                bounds.bottom <= window.innerHeight &&
+                scroll.scrollHeight > scroll.clientHeight
+              );
+            }),
+          )
+          .toBe(true);
       };
 
-      await captureInteraction("hover", "dark");
-      await captureInteraction("hover", "light");
-      await captureInteraction("focus", "dark");
-      await captureInteraction("focus", "light");
+      await expectScrollable();
+      await dropdown.locator('[data-value="skill:skill-01"]').focus();
+      for (let index = 1; index < 36; index += 1) {
+        await page.keyboard.press("ArrowDown");
+      }
+      await expectVisibleFocus(dropdown.locator('[data-value="skill:skill-36"]'));
 
-      await back.click();
-      await dropdown.locator('[value="open-connectors"]').click();
+      await dropdown.locator('[data-value="back"]').click();
+      await dropdown.locator('[data-value="open-connectors"]').click();
       await expect.poll(() => dropdown.getAttribute("data-view")).toBe("connectors");
-      layouts.push(await inspectView("connectors"));
-
-      await dropdown.locator('[value="tools:0"]').click();
-      await expect.poll(() => dropdown.getAttribute("data-view")).toBe("tools:connector-00");
-      await expect.poll(() => dropdown.getByText("28 of 28 tools on").isVisible()).toBe(true);
-      layouts.push(await inspectView("tool-access"));
-
-      if (artifactDir && captureStage) {
-        await fs.writeFile(
-          path.join(artifactDir, `${captureStage}-layout.json`),
-          `${JSON.stringify(layouts, null, 2)}\n`,
-        );
+      await expectScrollable();
+      await dropdown.locator('[data-value="server:connector-00"]').focus();
+      for (let index = 1; index < 24; index += 1) {
+        await page.keyboard.press("ArrowDown");
       }
+      await expectVisibleFocus(dropdown.locator('[data-value="server:connector-23"]'));
 
-      for (const layout of layouts) {
-        const compactHeightCap = Math.min(layout.token, 420, layout.viewportHeight * 0.5);
-        expect(compactHeightCap).toBe(420);
-        expect(layout.scrollHeight).toBeGreaterThan(layout.clientHeight);
-        expect(layout.scrollTop).toBeGreaterThan(0);
-        expect(layout.maxHeight).toBeGreaterThanOrEqual(compactHeightCap - 1);
-        expect(layout.maxHeight).toBeLessThanOrEqual(compactHeightCap + 1);
-        expect(layout.clientHeight).toBeLessThanOrEqual(compactHeightCap + 1);
-        expect(layout.overscrollY).toBe("contain");
-        expect(layout.backOffset).toBeGreaterThanOrEqual(0);
-        expect(layout.backOffset).toBeLessThanOrEqual(1);
+      await dropdown.locator('[data-value="server:connector-00"]').click();
+      const tools = dropdown.locator('[data-value^="mcp-tool:"]');
+      await expect.poll(() => tools.count()).toBe(28);
+      await expectScrollable();
+      await tools.first().focus();
+      for (let index = 1; index < 28; index += 1) {
+        await page.keyboard.press("ArrowDown");
       }
+      await expectVisibleFocus(dropdown.locator('[data-value="mcp-tool:project-tool-28"]'));
     });
   });
 });

@@ -1,15 +1,10 @@
-/**
- * Channel message adapter definition helper.
- *
- * Supplies manual receive acknowledgement defaults while preserving adapter-specific types.
- */
 import type {
   ChannelMessageAdapter,
   ChannelMessageAdapterShape,
   ChannelMessageReceiveAdapterShape,
 } from "./types.js";
 
-const defaultManualReceiveAdapter = {
+export const defaultManualReceiveAdapter = {
   defaultAckPolicy: "manual",
   supportedAckPolicies: ["manual"],
 } as const satisfies ChannelMessageReceiveAdapterShape;

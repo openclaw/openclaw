@@ -1,5 +1,4 @@
 import path from "node:path";
-import type { ClientOptions } from "ws";
 import { z } from "zod";
 import { normalizeTlsFingerprint } from "../../packages/gateway-client/src/client-address-utils.js";
 import { buildCloudflareAccessHeaders } from "../../packages/gateway-client/src/cloudflare-access.js";
@@ -7,6 +6,7 @@ import {
   GatewayWebSocketTransportConfigurationError,
   resolveGatewayWebSocketTransport,
 } from "../../packages/gateway-client/src/websocket-transport.js";
+import type { GatewayWebSocketClientOptions } from "../../packages/gateway-client/src/websocket.js";
 import { WORKER_PUBLIC_INGRESS_PATH } from "../../packages/gateway-protocol/src/schema/worker-admission.js";
 import { WORKER_PROTOCOL_MAX_IDENTIFIER_LENGTH } from "../../packages/gateway-protocol/src/schema/worker-protocol-primitives.js";
 import { workerProtocolObject } from "./protocol-record.js";
@@ -35,10 +35,7 @@ export const WORKER_CONNECTION_ENDPOINT_MAX_JSON_BYTES = Math.max(
 );
 
 export class WorkerConnectionEndpointError extends Error {
-  constructor(message: string) {
-    super(message);
-    this.name = "WorkerConnectionEndpointError";
-  }
+  override name = "WorkerConnectionEndpointError";
 }
 
 const AccessCredential = z
@@ -91,13 +88,12 @@ export type WorkerConnectionEndpoint = z.infer<typeof EndpointSchema>;
 export function parseWorkerConnectionEndpoint(
   value: unknown,
 ): WorkerConnectionEndpoint | undefined {
-  const parsed = EndpointSchema.safeParse(value);
-  return parsed.success ? parsed.data : undefined;
+  return EndpointSchema.safeParse(value).data;
 }
 
 type WorkerConnectionTarget = {
   url: string;
-  options: ClientOptions;
+  options: GatewayWebSocketClientOptions;
 };
 
 export function resolveWorkerConnectionTarget(

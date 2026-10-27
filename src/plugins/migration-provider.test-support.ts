@@ -2,6 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
 import { createDeferredCore } from "../shared/deferred.js";
+import { pluginFixtureConfig, writeFixtureJson } from "./loader-fixture-builders.test-support.js";
 import {
   makePluginLoaderTempDir,
   useNoBundledPlugins,
@@ -23,6 +24,7 @@ export function createMigrationResourceFixture(
 ) {
   useNoBundledPlugins();
   const id = `migration-resource-${fixtureId++}`;
+  const providerIds = options.secondProvider ? [id, `${id}-second`] : [id];
   const key = `__openclaw_${id}`;
   const root = fs.realpathSync(makePluginLoaderTempDir());
   const state = {
@@ -31,7 +33,6 @@ export function createMigrationResourceFixture(
     planning: createDeferredCore(),
     resumePlan: createDeferredCore(),
     planFinished: createDeferredCore(),
-    planCalls: 0,
     labelError: new Error("Synthetic active provider label failed"),
     failLabel: false,
     failPlan: false,
@@ -54,16 +55,12 @@ export function createMigrationResourceFixture(
     failCleanupOnConnection: 0,
     failEncoding: false,
     planned: undefined as MigrationPlan | undefined,
-    applied: undefined as MigrationPlan | undefined,
   };
   Object.defineProperty(globalThis, key, { value: state, configurable: true });
   const plugin = writePlugin({
     id,
     dir: path.join(root, "plugin"),
-    body: `const { DatabaseSync } = require("node:sqlite");
-module.exports = {
-  id: ${JSON.stringify(id)},
-  register(api) {
+    registration: `const { DatabaseSync } = require("node:sqlite");
     const state = globalThis[${JSON.stringify(key)}];
     const database = new DatabaseSync(${JSON.stringify(path.join(root, "source.sqlite"))});
     database.exec("CREATE TABLE IF NOT EXISTS imports (id INTEGER PRIMARY KEY)");
@@ -75,7 +72,7 @@ module.exports = {
       if (state.failCleanup || state.failCleanupOnConnection === connectionNumber) throw new Error("Synthetic migration cleanup failed");
     }});
     const metadata = { read: () => database.prepare("SELECT 42 AS value").get().value };
-    for (const providerId of ${JSON.stringify(options.secondProvider ? [id, id + "-second"] : [id])}) {
+    for (const providerId of ${JSON.stringify(providerIds)}) {
     api.registerMigrationProvider({
       id: providerId,
       get label() { if (state.failLabel) throw state.labelError; return "Native migration fixture"; },
@@ -90,7 +87,6 @@ module.exports = {
         if (state.failPreparationDisposal) throw state.preparationError;
       }}; },
       async plan() {
-        state.planCalls++;
         if (${options.pausePlan === true}) {
           state.planning.resolve();
           try {
@@ -119,7 +115,6 @@ module.exports = {
         return plan;
       },
       async apply(ctx, plan) {
-        state.applied = plan;
         state.applyCalls++;
         if (${options.secondProvider === true}) {
           state.preparationOwners.push({ providerId, prepared: state.preparedConnections.get(providerId), applied: connection });
@@ -146,33 +141,20 @@ module.exports = {
         };
       },
     });
-    }
-  },
-};`,
+    }`,
   });
-  fs.writeFileSync(
-    path.join(plugin.dir, "openclaw.plugin.json"),
-    JSON.stringify({
-      id,
-      contracts: { migrationProviders: options.secondProvider ? [id, `${id}-second`] : [id] },
-      configSchema: { type: "object", additionalProperties: false, properties: {} },
-    }),
-  );
+  writeFixtureJson(plugin.dir, "openclaw.plugin.json", {
+    id,
+    contracts: { migrationProviders: providerIds },
+    configSchema: { type: "object", additionalProperties: false, properties: {} },
+  });
   return {
     id,
     root,
     state,
     config: {
-      agents: {
-        defaults: { workspace: path.join(root, "workspace") },
-        list: [{ id: "main", default: true }],
-      },
-      plugins: {
-        allow: [id],
-        load: { paths: [plugin.file] },
-        entries: { [id]: { enabled: true } },
-        slots: { memory: "none" },
-      },
+      ...pluginFixtureConfig(plugin, { enabled: true }),
+      agents: { defaults: { workspace: path.join(root, "workspace") }, entries: { main: {} } },
     },
     cleanup() {
       for (const { database } of state.connections) {

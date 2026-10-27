@@ -4,6 +4,7 @@ import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { withServer } from "openclaw/plugin-sdk/test-env";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { ResolvedGoogleChatAccount } from "./accounts.js";
+import { withDurableGoogleChatTransport } from "./durable-transport.test-support.js";
 
 const transport = vi.hoisted(() => ({
   baseUrl: "",
@@ -163,62 +164,56 @@ describe("Google Chat sender authority through real guarded HTTP", () => {
     },
   );
 
-  it.each(["preferred", "generic"] as const)(
-    "%s send stops after an awaited DM lookup without marking preparation as dispatch",
-    async (route) => {
-      const authority = createAuthority();
-      const lookup = createDeferred<ServerResponse>();
-      const dispatch = vi.fn(async () => {});
-      await withChatServer(
-        (request, response) => {
-          if (request.method === "GET") {
-            lookup.resolve(response);
-          } else {
-            respondWithMessage(request, response);
-          }
-        },
-        async (requests) => {
-          const sending = send(
-            route,
-            { assertDirectAdapterHandoff: authority.assert, onPlatformSendDispatch: dispatch },
-            "users/alice@example.test",
-          ).catch((error: unknown) => error);
-          const response = await lookup.promise;
-          expect(dispatch).not.toHaveBeenCalled();
-          authority.revoke();
-          response.end(JSON.stringify({ name: "spaces/AAA" }));
-          expect(await sending).toBe(authority.error);
-          expect(requests.map(({ method, path }) => ({ method, path }))).toEqual([
-            {
-              method: "GET",
-              path: "/v1/spaces:findDirectMessage?name=users%2Falice%40example.test",
-            },
-          ]);
-          expect(dispatch).not.toHaveBeenCalled();
-        },
-      );
-    },
-  );
-
-  it.each(["preferred", "generic"] as const)(
-    "%s send rechecks authority after the asynchronous dispatch callback",
-    async (route) => {
-      const authority = createAuthority();
-      const dispatch = vi.fn(async () => {
-        await Promise.resolve();
+  it("preferred send stops after an awaited DM lookup without marking preparation as dispatch", async () => {
+    const authority = createAuthority();
+    const lookup = createDeferred<ServerResponse>();
+    const dispatch = vi.fn(async () => {});
+    await withChatServer(
+      (request, response) => {
+        if (request.method === "GET") {
+          lookup.resolve(response);
+        } else {
+          respondWithMessage(request, response);
+        }
+      },
+      async (requests) => {
+        const sending = send(
+          "preferred",
+          { assertDirectAdapterHandoff: authority.assert, onPlatformSendDispatch: dispatch },
+          "users/alice@example.test",
+        ).catch((error: unknown) => error);
+        const response = await lookup.promise;
+        expect(dispatch).not.toHaveBeenCalled();
         authority.revoke();
-      });
-      await withChatServer(respondWithMessage, async (requests) => {
-        const outcome = await send(route, {
-          assertDirectAdapterHandoff: authority.assert,
-          onPlatformSendDispatch: dispatch,
-        }).catch((error: unknown) => error);
-        expect(outcome).toBe(authority.error);
-        expect(dispatch).toHaveBeenCalledOnce();
-        expect(requests).toEqual([]);
-      });
-    },
-  );
+        response.end(JSON.stringify({ name: "spaces/AAA" }));
+        expect(await sending).toBe(authority.error);
+        expect(requests.map(({ method, path }) => ({ method, path }))).toEqual([
+          {
+            method: "GET",
+            path: "/v1/spaces:findDirectMessage?name=users%2Falice%40example.test",
+          },
+        ]);
+        expect(dispatch).not.toHaveBeenCalled();
+      },
+    );
+  });
+
+  it("generic send rechecks authority after the asynchronous dispatch callback", async () => {
+    const authority = createAuthority();
+    const dispatch = vi.fn(async () => {
+      await Promise.resolve();
+      authority.revoke();
+    });
+    await withChatServer(respondWithMessage, async (requests) => {
+      const outcome = await send("generic", {
+        assertDirectAdapterHandoff: authority.assert,
+        onPlatformSendDispatch: dispatch,
+      }).catch((error: unknown) => error);
+      expect(outcome).toBe(authority.error);
+      expect(dispatch).toHaveBeenCalledOnce();
+      expect(requests).toEqual([]);
+    });
+  });
 
   it("blocks a redirected POST with only the synchronous handoff callback", async () => {
     const authority = createAuthority();
@@ -245,19 +240,9 @@ describe("Google Chat sender authority through real guarded HTTP", () => {
   });
 
   it("settles an accepted durable message after authority expires while reading its body", async () => {
-    const { withOpenClawTestState } = await import("openclaw/plugin-sdk/test-state");
-    await withOpenClawTestState(
-      { label: "googlechat-authority-settlement", layout: "state-only" },
-      async () => {
-        const [
-          { sendDurableMessageBatch },
-          { createTestRegistry, withPluginRuntimeRegistryScope },
-          { googlechatPlugin },
-        ] = await Promise.all([
-          import("openclaw/plugin-sdk/channel-outbound"),
-          import("openclaw/plugin-sdk/channel-test-helpers"),
-          import("../api.js"),
-        ]);
+    await withDurableGoogleChatTransport(
+      "googlechat-authority-settlement",
+      async (sendDurableMessageBatch) => {
         const authority = createAuthority();
         const accepted = createDeferred<ServerResponse>();
         const dispatch = vi.fn(async () => {});
@@ -268,21 +253,15 @@ describe("Google Chat sender authority through real guarded HTTP", () => {
             accepted.resolve(response);
           },
           async (requests) => {
-            const sending = withPluginRuntimeRegistryScope(
-              createTestRegistry([
-                { pluginId: "googlechat", plugin: googlechatPlugin, source: "test" },
-              ]),
-              () =>
-                sendDurableMessageBatch({
-                  cfg,
-                  channel: "googlechat",
-                  accountId: "default",
-                  to: "spaces/AAA",
-                  payloads: [{ text: "hello" }],
-                  assertDirectAdapterHandoff: authority.assert,
-                  onPlatformSendDispatch: dispatch,
-                }),
-            );
+            const sending = sendDurableMessageBatch({
+              cfg,
+              channel: "googlechat",
+              accountId: "default",
+              to: "spaces/AAA",
+              payloads: [{ text: "hello" }],
+              assertDirectAdapterHandoff: authority.assert,
+              onPlatformSendDispatch: dispatch,
+            });
             const response = await accepted.promise;
             authority.revoke();
             response.end(JSON.stringify({ name: "spaces/AAA/messages/accepted" }));

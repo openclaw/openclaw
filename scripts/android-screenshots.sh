@@ -8,7 +8,7 @@ set -euo pipefail
 usage() {
   cat <<'EOF'
 Usage:
-  scripts/android-screenshots.sh [--form-factor all|phone|wear] [--device <adb-serial>] [--avd <name>] [--locale en-US] [--skip-build] [--skip-install] [--keep-emulator] [--dry-run]
+  scripts/android-screenshots.sh [--form-factor all|phone|wear] [--device <adb-serial>] [--avd <name>] [--locale en-US] [--skip-build] [--skip-install] [--keep-emulator] [--snooze-proof before|after] [--dry-run]
 
 Builds and installs the phone and Wear OS debug apps on matching emulators,
 launches production screens with deterministic local fixture state, and writes
@@ -22,6 +22,9 @@ Capture evidence is saved under:
 By default, the script captures both form factors using retained Pixel 2 and
 Wear OS Large Round AVDs. Use --form-factor with --avd or --device to capture
 one form factor on an explicitly selected emulator.
+
+--snooze-proof captures phone Threads and row menus as PNGs under
+.artifacts/android-snooze-proof/<before|after>/ without changing store screenshots.
 EOF
 }
 
@@ -47,6 +50,7 @@ KEEP_EMULATOR="${ANDROID_SCREENSHOT_KEEP_EMULATOR:-0}"
 SKIP_BUILD=0
 SKIP_INSTALL=0
 DRY_RUN=0
+SNOOZE_PROOF=""
 SCENES=(home chat settings gateway voice-wake)
 OUTPUT_TYPE="phoneScreenshots"
 GRADLE_ASSEMBLE_TASK=":app:assemblePlayDebug"
@@ -107,6 +111,11 @@ while [[ $# -gt 0 ]]; do
       DRY_RUN=1
       shift
       ;;
+    --snooze-proof)
+      SNOOZE_PROOF="${2:-}"
+      FORM_FACTOR=phone
+      shift 2
+      ;;
     -h|--help)
       usage
       exit 0
@@ -118,6 +127,19 @@ while [[ $# -gt 0 ]]; do
       ;;
   esac
 done
+
+if [[ -n "$SNOOZE_PROOF" && "$SNOOZE_PROOF" != "before" && "$SNOOZE_PROOF" != "after" ]]; then
+  echo "--snooze-proof must be before or after." >&2
+  exit 1
+fi
+if [[ -n "$SNOOZE_PROOF" ]]; then
+  if [[ "$FORM_FACTOR" != "phone" || "$DEVICE_EXPLICIT" == "1" ]]; then
+    echo "Snooze proof requires a script-owned phone emulator." >&2
+    exit 1
+  fi
+  ARTIFACT_DIR="${ROOT_DIR}/.artifacts/android-snooze-proof/${SNOOZE_PROOF}"
+  SCENES=(snooze)
+fi
 
 case "$FORM_FACTOR" in
   all)
@@ -239,17 +261,24 @@ restore_device_timezone() {
   fi
 }
 
-cleanup_emulator_log() {
-  if [[ -n "$EMULATOR_LOG" && -f "$EMULATOR_LOG" ]]; then
-    rm -f "$EMULATOR_LOG"
-  fi
-}
-
 cleanup() {
+  local status=$?
+  set +e
+  if [[ "$DRY_RUN" != "1" && -d "$ARTIFACT_DIR" ]]; then
+    {
+      printf 'exit_status=%s\n' "$status"
+      printf 'form_factor=%s\n' "$FORM_FACTOR"
+      printf 'avd=%s\n' "$AVD"
+      printf 'serial=%s\n' "${ADB_SERIAL:-}"
+      if [[ -n "$EMULATOR_PID" ]]; then
+        ps -p "$EMULATOR_PID" -o pid=,ppid=,stat=,etime=,command=
+      fi
+    } >"$ARTIFACT_DIR/process-status.txt" 2>&1
+  fi
   restore_device_display
   restore_device_timezone
   cleanup_started_emulator
-  cleanup_emulator_log
+  return "$status"
 }
 
 trap cleanup EXIT
@@ -500,13 +529,15 @@ boot_emulator() {
 
   ensure_screenshot_avd "$avd"
   emulator="$(emulator_bin)"
-  EMULATOR_LOG="$(mktemp "${TMPDIR:-/tmp}/openclaw-android-screenshot-emulator.XXXXXX.log")"
+  EMULATOR_LOG="$ARTIFACT_DIR/emulator.log"
   echo "No connected Android device found. Booting AVD '${avd}'." >&2
   emulator_args=(-avd "$avd" -no-window -no-audio -no-boot-anim)
   if [[ -n "${ANDROID_SCREENSHOT_EMULATOR_ARGS:-}" ]]; then
     read -r -a extra_args <<<"$ANDROID_SCREENSHOT_EMULATOR_ARGS"
     emulator_args+=(${extra_args[@]+"${extra_args[@]}"})
   fi
+  printf '%q ' "$emulator" "${emulator_args[@]}" >"$ARTIFACT_DIR/emulator-args.txt"
+  printf '\n' >>"$ARTIFACT_DIR/emulator-args.txt"
   "$emulator" "${emulator_args[@]}" >"$EMULATOR_LOG" 2>&1 &
   EMULATOR_PID="$!"
   STARTED_EMULATOR=1
@@ -569,7 +600,8 @@ latest_debug_apk() {
 scene_ready_text() {
   if [[ "$FORM_FACTOR" == "wear" ]]; then
     case "$1" in
-      chat) printf '%s\n' "Release planning" ;;
+      # Chat follows the latest reply, so the session title can be outside the viewport.
+      chat) printf '%s\n' "Ready after the final store checks." ;;
       voice) printf '%s\n' "Dictate" ;;
       controls) printf '%s\n' "Gateway connected" ;;
       *)
@@ -584,7 +616,7 @@ scene_ready_text() {
     # The screenshot fixture seeds chat history and restores at the live edge,
     # so wait for the latest reply instead of empty-chat copy.
     chat) printf '%s\n' "The Android release is close." ;;
-    settings) printf '%s\n' "OpenClaw mobile" ;;
+    settings) printf '%s\n' "Device name and identity" ;;
     voice-wake) printf '%s\n' "Wake listener" ;;
     # Connected fixtures can push Add Gateway below the composed viewport, so
     # wait for the gateway detail's always-visible subtitle instead.
@@ -650,7 +682,7 @@ normalize_capture_for_play() {
   rm -f "$input_path"
 
   description="$(file "$output_path")"
-  if [[ "$description" != *"${SCREENSHOT_SIZE/x/x}"* || "$description" != *"JPEG image data"* ]]; then
+  if [[ "$description" != *"$SCREENSHOT_SIZE"* || "$description" != *"JPEG image data"* ]]; then
     echo "Invalid Google Play screenshot output: ${description}" >&2
     return 1
   fi
@@ -687,6 +719,9 @@ write_artifact_manifest() {
 }
 
 OUTPUT_DIR="${ANDROID_DIR}/fastlane/metadata/android/${LOCALE}/images/${OUTPUT_TYPE}"
+if [[ -n "$SNOOZE_PROOF" ]]; then
+  OUTPUT_DIR="$ARTIFACT_DIR"
+fi
 ADB_SERIAL=""
 ADB_DISPLAY="${DEVICE:-<auto>}"
 
@@ -705,39 +740,50 @@ if [[ "$DRY_RUN" == "1" ]]; then
   exit 0
 fi
 
+rm -rf "$ARTIFACT_DIR"
+mkdir -p "$ARTIFACT_DIR/screenshots" "$ARTIFACT_DIR/ui-dumps" "$ARTIFACT_DIR/activity-start"
 ADB_BIN="$(adb_bin)"
+if [[ -n "$SNOOZE_PROOF" && -n "$("$ADB_BIN" devices | awk 'NR > 1 && NF { print $1 }')" ]]; then
+  echo "Snooze proof stopped: an Android device already exists and is not owned by this run." >&2
+  "$ADB_BIN" devices >&2
+  exit 1
+fi
 resolve_device "$ADB_BIN"
+if [[ -n "$SNOOZE_PROOF" && "$STARTED_EMULATOR" != "1" ]]; then
+  echo "Snooze proof stopped: the selected emulator was not started by this run." >&2
+  exit 1
+fi
 require_emulator_device "$ADB_BIN" "$ADB_SERIAL"
 stabilize_device_for_screenshots "$ADB_BIN" "$ADB_SERIAL"
 configure_screenshot_display "$ADB_BIN" "$ADB_SERIAL"
-mkdir -p "$OUTPUT_DIR"
-rm -f "$OUTPUT_DIR"/*.png "$OUTPUT_DIR"/*.jpg "$OUTPUT_DIR"/*.jpeg
-rm -rf "$ARTIFACT_DIR"
-mkdir -p "$ARTIFACT_DIR/screenshots" "$ARTIFACT_DIR/ui-dumps" "$ARTIFACT_DIR/activity-start"
+if [[ -z "$SNOOZE_PROOF" ]]; then
+  mkdir -p "$OUTPUT_DIR"
+  rm -f "$OUTPUT_DIR"/*.png "$OUTPUT_DIR"/*.jpg "$OUTPUT_DIR"/*.jpeg
+fi
 
+if [[ "$SKIP_BUILD" != "1" ]]; then
+  (
+    cd "$ANDROID_DIR"
+    ./gradlew "$GRADLE_ASSEMBLE_TASK"
+  )
+fi
 if [[ "$SKIP_INSTALL" != "1" ]]; then
-  if [[ "$SKIP_BUILD" != "1" ]]; then
-    (
-      cd "$ANDROID_DIR"
-      ./gradlew "$GRADLE_ASSEMBLE_TASK"
-    )
-  fi
   APK_PATH="$(latest_debug_apk)"
   if [[ -z "$APK_PATH" ]]; then
     echo "No existing ${FORM_FACTOR} debug APK found. Run without --skip-build first." >&2
     exit 1
   fi
   "$ADB_BIN" -s "$ADB_SERIAL" install -r "$APK_PATH" >/dev/null
-elif [[ "$SKIP_BUILD" != "1" ]]; then
-  (
-    cd "$ANDROID_DIR"
-    ./gradlew "$GRADLE_ASSEMBLE_TASK"
-  )
 fi
 
 "$ADB_BIN" -s "$ADB_SERIAL" shell pm clear "$APP_PACKAGE" >/dev/null
 "$ADB_BIN" -s "$ADB_SERIAL" shell pm grant "$APP_PACKAGE" android.permission.RECORD_AUDIO >/dev/null
 "$ADB_BIN" -s "$ADB_SERIAL" logcat -c >/dev/null 2>&1 || true
+
+if [[ -n "$SNOOZE_PROOF" ]]; then
+  python3 "$ANDROID_DIR/scripts/capture-session-snooze.py" "$ADB_BIN" "$ADB_SERIAL" "$SNOOZE_PROOF" "$ARTIFACT_DIR"
+  exit 0
+fi
 
 for scene in "${SCENES[@]}"; do
   output_path="${OUTPUT_DIR}/openclaw-${scene}.jpg"
@@ -761,9 +807,6 @@ for scene in "${SCENES[@]}"; do
 done
 
 "$ADB_BIN" -s "$ADB_SERIAL" logcat -d >"$ARTIFACT_DIR/logcat.txt" 2>&1 || true
-if [[ -n "$EMULATOR_LOG" && -f "$EMULATOR_LOG" ]]; then
-  cp "$EMULATOR_LOG" "$ARTIFACT_DIR/emulator.log"
-fi
 write_artifact_manifest "$ADB_SERIAL"
 
 echo "Android screenshots written to ${OUTPUT_DIR}"

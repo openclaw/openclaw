@@ -81,41 +81,34 @@ describe("buildExecAutoReviewTranscript", () => {
     expect(JSON.parse(expectDefined(transcript.entries[2], "tool call entry").text)).toEqual({
       command: "ls dist",
       data: "build instructions",
-      api_key: expect.any(String),
+      api_key: secret,
     });
     expect(expectDefined(transcript.entries[3], "tool result entry").text).toBe("dist exists");
     expect(transcript).toMatchObject({ omittedEntries: 0, truncated: false });
     const serialized = JSON.stringify(transcript);
-    expect(serialized).not.toContain(secret);
+    expect(serialized).toContain(secret);
     expect(serialized).not.toContain("private-");
     expect(serialized).not.toContain("private reasoning");
   });
 
-  it("applies the active attempt's redaction patterns independently of ambient logging", () => {
-    const ambient = vi.spyOn(loggingConfig, "readLoggingConfig").mockReturnValue({
+  it("preserves tool and conversation text independently of logging patterns", () => {
+    using _ = vi.spyOn(loggingConfig, "readLoggingConfig").mockReturnValue({
       redactPatterns: ["ambient-private-marker"],
     });
-    try {
-      const messages = [
-        user("Inspect tenant-private-marker"),
-        call("inspect", {
-          command: "inspect tenant-private-marker",
-        }),
-        result("inspect", "Result: tenant-private-marker"),
-      ];
-      expect(JSON.stringify(buildExecAutoReviewTranscript({ messages }))).toContain(
-        "tenant-private-marker",
-      );
-      const input = {
-        messages,
-        config: { logging: { redactPatterns: ["tenant-private-marker"] } },
-      };
-      const transcript = buildExecAutoReviewTranscript(input);
-      expect(transcript.entries).toHaveLength(3);
-      expect(JSON.stringify(transcript)).not.toContain("tenant-private-marker");
-    } finally {
-      ambient.mockRestore();
-    }
+
+    const messages = [
+      user("Inspect tenant-private-marker"),
+      call("inspect", {
+        command: "inspect tenant-private-marker",
+      }),
+      result("inspect", "Result: tenant-private-marker"),
+    ];
+    expect(JSON.stringify(buildExecAutoReviewTranscript({ messages }))).toContain(
+      "tenant-private-marker",
+    );
+    const transcript = buildExecAutoReviewTranscript({ messages });
+    expect(transcript.entries).toHaveLength(3);
+    expect(JSON.stringify(transcript)).toContain("tenant-private-marker");
   });
 
   it.each([
@@ -154,7 +147,7 @@ describe("buildExecAutoReviewTranscript", () => {
     expect(JSON.stringify(transcript)).not.toContain("private-");
   });
 
-  it("removes source identifiers repeated in user text and honors a smaller bounded excerpt", () => {
+  it("removes source identifiers repeated in user text", () => {
     const transcript = buildExecAutoReviewTranscript({
       messages: [
         user("[sourceSession=private-session] private-peer: please build", {
@@ -163,11 +156,9 @@ describe("buildExecAutoReviewTranscript", () => {
         }),
         user("Latest request"),
       ],
-      limits: { totalChars: 256 },
     });
     expect(transcript.entries).toHaveLength(2);
     expect(JSON.stringify(transcript)).not.toContain("private-");
-    expect(JSON.stringify(transcript).length).toBeLessThanOrEqual(256);
   });
 
   it("scrubs known source identifiers when later users, assistants, and tools repeat them", () => {

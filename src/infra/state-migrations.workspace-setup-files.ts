@@ -1,4 +1,4 @@
-import { createHash, randomUUID } from "node:crypto";
+import { randomUUID } from "node:crypto";
 import path from "node:path";
 import { TextDecoder } from "node:util";
 import type { Root } from "@openclaw/fs-safe";
@@ -8,9 +8,11 @@ import {
 } from "../agents/workspace-legacy-state.js";
 import { pinDirectory, requireDirectorySync } from "./directory-durability.js";
 import { formatErrorMessage } from "./errors.js";
-import { readFileWindowFully } from "./file-read.js";
-import { LegacyMigrationSourceClaim } from "./state-migrations.source-snapshot.js";
-import type { SourceSnapshot } from "./state-migrations.workspace-setup-store.js";
+import {
+  LegacyMigrationSourceClaim,
+  readLegacyMigrationSourceSnapshot,
+  type LegacyMigrationSourceSnapshot as SourceSnapshot,
+} from "./state-migrations.source-snapshot.js";
 import type { LegacyWorkspaceStateSource } from "./state-migrations.workspace-setup.types.js";
 
 const SETUP_MAX_BYTES = 64 * 1024;
@@ -19,62 +21,23 @@ const utf8Decoder = new TextDecoder("utf-8", { fatal: true });
 
 async function readBoundedRegularFile(params: {
   sourceRoot: Root;
-  relativePath: string;
+  stateDir: string;
   sourcePath: string;
   maxBytes: number;
 }): Promise<SourceSnapshot> {
-  const opened = await params.sourceRoot.open(params.relativePath, {
-    hardlinks: "reject",
-    symlinks: "reject",
+  const snapshot = await readLegacyMigrationSourceSnapshot({
+    stateRoot: params.sourceRoot,
+    stateDir: params.stateDir,
+    sourcePath: params.sourcePath,
+    maxBytes: params.maxBytes,
+    label: "workspace",
   });
   try {
-    const before = opened.stat;
-    if (
-      !before.isFile() ||
-      before.nlink !== 1 ||
-      !Number.isSafeInteger(before.size) ||
-      before.size < 0 ||
-      before.size > params.maxBytes
-    ) {
-      throw new Error("legacy workspace source is not a safe regular file");
-    }
-    const buffer = Buffer.alloc(before.size);
-    const bytesRead = await readFileWindowFully(opened.handle, buffer, 0);
-    if (bytesRead !== buffer.length) {
-      throw new Error("legacy workspace source ended unexpectedly");
-    }
-    const after = await opened.handle.stat();
-    if (
-      !after.isFile() ||
-      after.nlink !== 1 ||
-      after.dev !== before.dev ||
-      after.ino !== before.ino ||
-      after.size !== before.size ||
-      after.mtimeMs !== before.mtimeMs ||
-      after.ctimeMs !== before.ctimeMs ||
-      bytesRead !== after.size
-    ) {
-      throw new Error("legacy workspace source changed while reading");
-    }
-    let raw: string;
-    try {
-      raw = utf8Decoder.decode(buffer);
-    } catch {
-      throw new Error("legacy workspace source is not valid UTF-8");
-    }
-    return {
-      sourcePath: params.sourcePath,
-      dev: after.dev,
-      ino: after.ino,
-      mtimeMs: after.mtimeMs,
-      sha256: createHash("sha256").update(buffer).digest("hex"),
-      size: after.size,
-      raw,
-      buffer,
-    };
-  } finally {
-    await opened[Symbol.asyncDispose]();
+    snapshot.raw = utf8Decoder.decode(snapshot.buffer);
+  } catch {
+    throw new Error("legacy workspace source is not valid UTF-8");
   }
+  return snapshot;
 }
 
 export async function archiveWorkspaceSetupSource(
@@ -95,16 +58,8 @@ export async function archiveWorkspaceSetupSource(
       await sourceRoot.create(relativePath, snapshot.buffer, {
         mode: 0o600,
         renameIdentity: "verify-content-with-lock",
+        durable: "file",
       });
-      const archive = await sourceRoot.open(relativePath, {
-        hardlinks: "reject",
-        symlinks: "reject",
-      });
-      try {
-        await archive.handle.sync();
-      } finally {
-        await archive[Symbol.asyncDispose]();
-      }
       requireDirectorySync(await parent.sync(), "Workspace setup archive directory");
     } finally {
       await parent.close();
@@ -112,7 +67,7 @@ export async function archiveWorkspaceSetupSource(
   }
   const archived = await readBoundedRegularFile({
     sourceRoot,
-    relativePath,
+    stateDir: source.rootDir,
     sourcePath: archivePath,
     maxBytes: SETUP_MAX_BYTES,
   });
@@ -125,7 +80,7 @@ export async function archiveWorkspaceSetupSource(
 export function createLegacySourceClaim(
   sourceRoot: Root,
   source: LegacyWorkspaceStateSource,
-): LegacyMigrationSourceClaim<SourceSnapshot> {
+): LegacyMigrationSourceClaim {
   return new LegacyMigrationSourceClaim({
     stateRoot: sourceRoot,
     stateDir: source.rootDir,
@@ -136,10 +91,7 @@ export function createLegacySourceClaim(
     readSnapshot: (sourcePath) =>
       readBoundedRegularFile({
         sourceRoot,
-        relativePath:
-          sourcePath === source.sourcePath
-            ? source.relativePath
-            : `${source.relativePath}${CLAIM_SUFFIX}`,
+        stateDir: source.rootDir,
         sourcePath,
         maxBytes:
           source.kind === "setup" ? SETUP_MAX_BYTES : LEGACY_WORKSPACE_ATTESTATION_MAX_BYTES,

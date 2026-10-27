@@ -1,7 +1,5 @@
-// Qa Lab tests cover qa credentials admin plugin behavior.
-import http from "node:http";
-import type { AddressInfo } from "node:net";
 import { MAX_TIMER_TIMEOUT_MS } from "openclaw/plugin-sdk/number-runtime";
+import { jsonResponse, withServer } from "openclaw/plugin-sdk/test-env";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   addQaCredentialSet,
@@ -11,48 +9,42 @@ import {
   removeQaCredentialSet,
 } from "./qa-credentials-admin.runtime.js";
 
-function jsonResponse(payload: unknown, status = 200) {
-  return new Response(JSON.stringify(payload), {
-    status,
-    headers: {
-      "content-type": "application/json",
-    },
-  });
+const adminOptions = {
+  siteUrl: "https://first-schnauzer-821.convex.site",
+  env: { OPENCLAW_QA_CONVEX_SECRET_MAINTAINER: "maint-secret" },
+};
+const payload = { groupId: "-100123", driverToken: "driver", sutToken: "sut" };
+const credential = {
+  credentialId: "cred-2",
+  kind: "telegram",
+  status: "active",
+  createdAtMs: 100,
+  updatedAtMs: 100,
+  lastLeasedAtMs: 50,
+};
+function mockFetch(response: unknown, status = 200) {
+  return vi.fn(async (_input: RequestInfo | URL, _init?: RequestInit) =>
+    jsonResponse(response, status),
+  );
 }
 
-function requireFirstFetchCall(fetchImpl: ReturnType<typeof vi.fn>) {
-  const [call] = fetchImpl.mock.calls as unknown[][];
-  if (!call) {
-    throw new Error("expected fetch call");
+function fetchCall(fetchImpl: ReturnType<typeof mockFetch>) {
+  const [call] = fetchImpl.mock.calls;
+  if (!call?.[1]) {
+    throw new Error("expected fetch call and init");
   }
-  return call;
-}
-
-function requireFirstFetchInput(fetchImpl: ReturnType<typeof vi.fn>): RequestInfo | URL {
-  const input = requireFirstFetchCall(fetchImpl)[0] as RequestInfo | URL | undefined;
-  if (!input) {
-    throw new Error("expected fetch input");
-  }
-  return input;
-}
-
-function requireFirstFetchInit(fetchImpl: ReturnType<typeof vi.fn>): RequestInit {
-  const init = requireFirstFetchCall(fetchImpl)[1];
-  if (!init || typeof init !== "object" || Array.isArray(init)) {
-    throw new Error("expected fetch init");
-  }
-  return init as RequestInit;
+  return { input: call[0], init: call[1] };
 }
 
 async function expectQaCredentialAdminError(promise: Promise<unknown>, code: string) {
-  const error = await promise.then(
-    () => undefined,
-    (err: unknown) => err,
-  );
-  expect(error).toBeInstanceOf(QaCredentialAdminError);
-  const adminError = error as QaCredentialAdminError;
-  expect(adminError.name).toBe("QaCredentialAdminError");
-  expect(adminError.code).toBe(code);
+  await expect(promise).rejects.toBeInstanceOf(QaCredentialAdminError);
+  await expect(promise).rejects.toMatchObject({ name: "QaCredentialAdminError", code });
+}
+
+function requestBody(fetchImpl: ReturnType<typeof mockFetch>) {
+  const body = fetchCall(fetchImpl).init.body;
+  expect(typeof body).toBe("string");
+  return JSON.parse(body as string) as Record<string, unknown>;
 }
 
 describe("qa credential admin runtime", () => {
@@ -61,117 +53,53 @@ describe("qa credential admin runtime", () => {
   });
 
   it("adds a credential set through the admin endpoint", async () => {
-    const fetchImpl = vi.fn(async (_input: RequestInfo | URL, _init?: RequestInit) =>
-      jsonResponse({
-        status: "ok",
-        credential: {
-          credentialId: "cred-1",
-          kind: "telegram",
-          status: "active",
-          createdAtMs: 100,
-          updatedAtMs: 100,
-          lastLeasedAtMs: 0,
-          note: "qa",
-        },
-      }),
-    );
+    const fetchImpl = mockFetch({
+      status: "ok",
+      credential: { ...credential, credentialId: "cred-1", lastLeasedAtMs: 0, note: "qa" },
+    });
 
     const result = await addQaCredentialSet({
       kind: "telegram",
-      payload: {
-        groupId: "-100123",
-        driverToken: "driver",
-        sutToken: "sut",
-      },
+      payload,
       note: "qa",
       actorId: "maintainer-local",
-      siteUrl: "https://first-schnauzer-821.convex.site",
-      env: {
-        OPENCLAW_QA_CONVEX_SECRET_MAINTAINER: "maint-secret",
-      },
+      ...adminOptions,
       fetchImpl,
     });
 
-    expect(result.credential.credentialId).toBe("cred-1");
-    expect(result.credential.credentialFingerprint).toMatch(/^sha256:[0-9a-f]{16}$/);
-    expect(requireFirstFetchInput(fetchImpl)).toBe(
+    expect(result.credential).toMatchObject({
+      credentialId: "cred-1",
+      credentialFingerprint: expect.stringMatching(/^sha256:[0-9a-f]{16}$/),
+    });
+    expect(fetchCall(fetchImpl).input).toBe(
       "https://first-schnauzer-821.convex.site/qa-credentials/v1/admin/add",
     );
-    const init = requireFirstFetchInit(fetchImpl);
+    const { init } = fetchCall(fetchImpl);
     const headers = init?.headers as Record<string, string>;
     expect(headers.authorization).toBe("Bearer maint-secret");
-    const bodyText = init?.body;
-    expect(typeof bodyText).toBe("string");
-    const body = JSON.parse(bodyText as string) as Record<string, unknown>;
-    expect(body.kind).toBe("telegram");
-    expect(body.actorId).toBe("maintainer-local");
-    expect(body.payload).toEqual({
-      groupId: "-100123",
-      driverToken: "driver",
-      sutToken: "sut",
-    });
+    const body = requestBody(fetchImpl);
+    expect(body).toMatchObject({ kind: "telegram", actorId: "maintainer-local" });
+    expect(body.payload).toEqual(payload);
   });
 
-  it("rejects admin commands when maintainer secret is missing", async () => {
+  it.each([
+    { options: { env: {} }, code: "MISSING_MAINTAINER_SECRET" },
+    { options: { siteUrl: "http://qa-cred.example.convex.site" }, code: "INVALID_SITE_URL" },
+    { options: { endpointPrefix: "//evil.example" }, code: "INVALID_ARGUMENT" },
+  ])("rejects invalid admin requests: $code", async ({ options, code }) => {
     await expectQaCredentialAdminError(
-      listQaCredentialSets({
-        siteUrl: "https://first-schnauzer-821.convex.site",
-        env: {},
-        fetchImpl: vi.fn(),
-      }),
-      "MISSING_MAINTAINER_SECRET",
-    );
-  });
-
-  it("rejects non-https admin site URLs unless local insecure opt-in is enabled", async () => {
-    await expectQaCredentialAdminError(
-      listQaCredentialSets({
-        siteUrl: "http://qa-cred.example.convex.site",
-        env: {
-          OPENCLAW_QA_CONVEX_SECRET_MAINTAINER: "maint-secret",
-        },
-        fetchImpl: vi.fn(),
-      }),
-      "INVALID_SITE_URL",
-    );
-  });
-
-  it("allows loopback http admin site URLs when OPENCLAW_QA_ALLOW_INSECURE_HTTP is enabled", async () => {
-    const fetchImpl = vi.fn(async (_input: RequestInfo | URL, _init?: RequestInit) =>
-      jsonResponse({
-        status: "ok",
-        count: 0,
-        credentials: [],
-      }),
-    );
-
-    await listQaCredentialSets({
-      siteUrl: "http://127.0.0.1:3210",
-      env: {
-        OPENCLAW_QA_CONVEX_SECRET_MAINTAINER: "maint-secret",
-        OPENCLAW_QA_ALLOW_INSECURE_HTTP: "1",
-      },
-      fetchImpl,
-    });
-
-    expect(requireFirstFetchInput(fetchImpl)).toBe(
-      "http://127.0.0.1:3210/qa-credentials/v1/admin/list",
+      listQaCredentialSets({ ...adminOptions, ...options, fetchImpl: vi.fn() }),
+      code,
     );
   });
 
   it("caps oversized admin HTTP timeouts before creating abort signals", async () => {
     const timeoutController = new AbortController();
     const timeoutSpy = vi.spyOn(AbortSignal, "timeout").mockReturnValue(timeoutController.signal);
-    const fetchImpl = vi.fn(async (_input: RequestInfo | URL, _init?: RequestInit) =>
-      jsonResponse({
-        status: "ok",
-        count: 0,
-        credentials: [],
-      }),
-    );
+    const fetchImpl = mockFetch({ status: "ok", count: 0, credentials: [] });
 
     await listQaCredentialSets({
-      siteUrl: "https://first-schnauzer-821.convex.site",
+      siteUrl: adminOptions.siteUrl,
       env: {
         OPENCLAW_QA_CONVEX_SECRET_MAINTAINER: "maint-secret",
         OPENCLAW_QA_CREDENTIAL_HTTP_TIMEOUT_MS: String(Number.MAX_SAFE_INTEGER),
@@ -180,89 +108,44 @@ describe("qa credential admin runtime", () => {
     });
 
     expect(timeoutSpy).toHaveBeenCalledWith(MAX_TIMER_TIMEOUT_MS);
-    expect(requireFirstFetchInit(fetchImpl).signal).toBe(timeoutController.signal);
-  });
-
-  it("rejects unsafe endpoint-prefix overrides", async () => {
-    await expectQaCredentialAdminError(
-      listQaCredentialSets({
-        siteUrl: "https://first-schnauzer-821.convex.site",
-        endpointPrefix: "//evil.example",
-        env: {
-          OPENCLAW_QA_CONVEX_SECRET_MAINTAINER: "maint-secret",
-        },
-        fetchImpl: vi.fn(),
-      }),
-      "INVALID_ARGUMENT",
-    );
+    expect(fetchCall(fetchImpl).init.signal).toBe(timeoutController.signal);
   });
 
   it("surfaces broker error codes for remove", async () => {
-    const fetchImpl = vi.fn(async (_input: RequestInfo | URL, _init?: RequestInit) =>
-      jsonResponse(
-        {
-          status: "error",
-          code: "LEASE_ACTIVE",
-          message: "Credential is currently leased and cannot be disabled.",
-        },
-        200,
-      ),
+    const fetchImpl = mockFetch(
+      {
+        status: "error",
+        code: "LEASE_ACTIVE",
+        message: "Credential is currently leased and cannot be disabled.",
+      },
+      200,
     );
 
     await expectQaCredentialAdminError(
-      removeQaCredentialSet({
-        credentialId: "cred-1",
-        siteUrl: "https://first-schnauzer-821.convex.site",
-        env: {
-          OPENCLAW_QA_CONVEX_SECRET_MAINTAINER: "maint-secret",
-        },
-        fetchImpl,
-      }),
+      removeQaCredentialSet({ credentialId: "cred-1", ...adminOptions, fetchImpl }),
       "LEASE_ACTIVE",
     );
   });
 
   it("lists credentials and forwards includePayload/status filters", async () => {
-    const fetchImpl = vi.fn(async (_input: RequestInfo | URL, _init?: RequestInit) =>
-      jsonResponse({
-        status: "ok",
-        count: 1,
-        credentials: [
-          {
-            credentialId: "cred-2",
-            kind: "telegram",
-            status: "active",
-            createdAtMs: 100,
-            updatedAtMs: 100,
-            lastLeasedAtMs: 50,
-            payload: {
-              groupId: "-100123",
-              driverToken: "driver",
-              sutToken: "sut",
-            },
-          },
-        ],
-      }),
-    );
+    const fetchImpl = mockFetch({
+      status: "ok",
+      count: 1,
+      credentials: [{ ...credential, payload }],
+    });
 
     const result = await listQaCredentialSets({
       kind: "telegram",
       status: "active",
       includePayload: true,
       limit: 5,
-      siteUrl: "https://first-schnauzer-821.convex.site",
-      env: {
-        OPENCLAW_QA_CONVEX_SECRET_MAINTAINER: "maint-secret",
-      },
+      ...adminOptions,
       fetchImpl,
     });
 
     expect(result.credentials).toHaveLength(1);
     expect(result.credentials[0]?.credentialFingerprint).toMatch(/^sha256:[0-9a-f]{16}$/);
-    const bodyText = requireFirstFetchInit(fetchImpl).body;
-    expect(typeof bodyText).toBe("string");
-    const body = JSON.parse(bodyText as string) as Record<string, unknown>;
-    expect(body).toEqual({
+    expect(requestBody(fetchImpl)).toEqual({
       kind: "telegram",
       status: "active",
       includePayload: true,
@@ -275,85 +158,62 @@ describe("qa credential admin runtime", () => {
     const totalChunks = 64;
     let chunksSent = 0;
     let responseClosed = false;
-    const server = http.createServer((_req, res) => {
-      res.writeHead(200, { "content-type": "application/json" });
-      let nextChunkTimer: ReturnType<typeof setTimeout> | undefined;
-      res.once("close", () => {
-        responseClosed = true;
-        if (nextChunkTimer) {
-          clearTimeout(nextChunkTimer);
-        }
-      });
-      const scheduleNext = () => {
-        nextChunkTimer = setTimeout(sendNext, 2);
-      };
-      const sendNext = () => {
-        if (res.destroyed || chunksSent >= totalChunks) {
-          if (!res.destroyed) {
-            res.end();
+    await withServer(
+      (_req, res) => {
+        res.writeHead(200, { "content-type": "application/json" });
+        let nextChunkTimer: ReturnType<typeof setTimeout> | undefined;
+        res.once("close", () => {
+          responseClosed = true;
+          if (nextChunkTimer) {
+            clearTimeout(nextChunkTimer);
           }
-          return;
-        }
-        chunksSent += 1;
-        if (res.write(chunk)) {
-          scheduleNext();
-        } else {
-          res.once("drain", scheduleNext);
-        }
-      };
-      sendNext();
-    });
-    await new Promise<void>((resolve, reject) => {
-      server.once("error", reject);
-      server.listen(0, "127.0.0.1", resolve);
-    });
-    const port = (server.address() as AddressInfo).port;
+        });
+        const scheduleNext = () => {
+          nextChunkTimer = setTimeout(sendNext, 2);
+        };
+        const sendNext = () => {
+          if (res.destroyed || chunksSent >= totalChunks) {
+            if (!res.destroyed) {
+              res.end();
+            }
+            return;
+          }
+          chunksSent += 1;
+          if (res.write(chunk)) {
+            scheduleNext();
+          } else {
+            res.once("drain", scheduleNext);
+          }
+        };
+        sendNext();
+      },
+      async (baseUrl) => {
+        const error = await listQaCredentialSets({
+          siteUrl: baseUrl,
+          env: {
+            OPENCLAW_QA_ALLOW_INSECURE_HTTP: "1",
+            OPENCLAW_QA_CONVEX_SECRET_MAINTAINER: "maint-secret",
+          },
+        }).then(
+          () => undefined,
+          (err: unknown) => err,
+        );
 
-    try {
-      const error = await listQaCredentialSets({
-        siteUrl: `http://127.0.0.1:${port}`,
-        env: {
-          OPENCLAW_QA_ALLOW_INSECURE_HTTP: "1",
-          OPENCLAW_QA_CONVEX_SECRET_MAINTAINER: "maint-secret",
-        },
-      }).then(
-        () => undefined,
-        (err: unknown) => err,
-      );
-
-      expect(error).toBeInstanceOf(QaCredentialAdminError);
-      const adminError = error as QaCredentialAdminError;
-      expect(adminError.code).toBe("BROKER_REQUEST_FAILED");
-      expect(adminError.message).toMatch(/Convex credential admin response exceeds/);
-      await vi.waitFor(() => expect(responseClosed).toBe(true));
-      expect(chunksSent).toBeLessThan(totalChunks);
-    } finally {
-      await new Promise<void>((resolve) => {
-        server.close(() => resolve());
-      });
-    }
+        expect(error).toBeInstanceOf(QaCredentialAdminError);
+        const adminError = error as QaCredentialAdminError;
+        expect(adminError.code).toBe("BROKER_REQUEST_FAILED");
+        expect(adminError.message).toMatch(/Convex credential admin response exceeds/);
+        await vi.waitFor(() => expect(responseClosed).toBe(true));
+        expect(chunksSent).toBeLessThan(totalChunks);
+      },
+    );
   });
 
   it("doctors credential broker env without exposing secret values", async () => {
-    const fetchImpl = vi.fn(async (_input: RequestInfo | URL, _init?: RequestInit) =>
-      jsonResponse({
-        status: "ok",
-        count: 1,
-        credentials: [
-          {
-            credentialId: "cred-2",
-            kind: "telegram",
-            status: "active",
-            createdAtMs: 100,
-            updatedAtMs: 100,
-            lastLeasedAtMs: 50,
-          },
-        ],
-      }),
-    );
+    const fetchImpl = mockFetch({ status: "ok", count: 1, credentials: [credential] });
 
     const result = await diagnoseQaCredentialBroker({
-      siteUrl: "https://first-schnauzer-821.convex.site",
+      siteUrl: adminOptions.siteUrl,
       env: {
         OPENCLAW_QA_CONVEX_SECRET_CI: "ci-secret",
         OPENCLAW_QA_CONVEX_SECRET_MAINTAINER: "maint-secret",

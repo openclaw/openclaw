@@ -1,6 +1,10 @@
 import path from "node:path";
-import { readAgentDatabaseAdmissionRefusal } from "../../state/agent-database-admission.js";
-import { isSameOpenClawAgentDatabasePath } from "../../state/openclaw-agent-db-registry.js";
+import type { Result } from "@openclaw/normalization-core/result";
+import {
+  AgentDatabaseAdmissionError,
+  readAgentDatabaseAdmissionRefusal,
+} from "../../state/agent-database-admission.js";
+import { isSameOpenClawAgentDatabasePath } from "../../state/openclaw-agent-db.paths.js";
 import { resolveSharedAuthStoreOwnership, resolveSharedAuthStorePath } from "./path-resolve.js";
 import { mergeAuthProfileStores } from "./persisted.js";
 import { getRuntimeAuthProfileStoreSnapshotAtDatabasePath } from "./runtime-snapshots.js";
@@ -8,7 +12,7 @@ import { resolveAuthProfileDatabaseOwnerId, resolveAuthProfileDatabasePath } fro
 import { AuthProfileStoreUnreadableError } from "./store-unreadable-error.js";
 import type { AuthProfileStore } from "./types.js";
 
-/** An unreadable, refused inherited owner cannot make a healthy local store unavailable. */
+/** Keep local auth available while an inherited owner is pending or unreadable and refused. */
 export function loadInheritedAuthProfileStore(
   read: () => AuthProfileStore,
   agentDir?: string,
@@ -17,8 +21,15 @@ export function loadInheritedAuthProfileStore(
   try {
     return read();
   } catch (error) {
+    const failedPaths =
+      error instanceof AuthProfileStoreUnreadableError
+        ? [error.databasePath]
+        : error instanceof AgentDatabaseAdmissionError &&
+            error.refusal.code === "agent-database-inspection-pending"
+          ? error.refusal.paths
+          : undefined;
     if (
-      !(error instanceof AuthProfileStoreUnreadableError) ||
+      !failedPaths ||
       (!agentDir && resolveSharedAuthStoreOwnership(env).location !== "legacy-main")
     ) {
       throw error;
@@ -26,13 +37,15 @@ export function loadInheritedAuthProfileStore(
     const databasePath = agentDir
       ? resolveAuthProfileDatabasePath(agentDir)
       : resolveSharedAuthStorePath(env);
-    const refusal = readAgentDatabaseAdmissionRefusal(
-      resolveAuthProfileDatabaseOwnerId(agentDir ?? path.dirname(databasePath)),
-      { env },
-    );
+    const ownerId = resolveAuthProfileDatabaseOwnerId(agentDir ?? path.dirname(databasePath));
+    const refusal = readAgentDatabaseAdmissionRefusal(ownerId, { env });
+    const isOwnerPath = (pathname: string) =>
+      isSameOpenClawAgentDatabasePath(pathname, databasePath);
     if (
-      !isSameOpenClawAgentDatabasePath(error.databasePath, databasePath) ||
-      !refusal?.paths.some((pathname) => isSameOpenClawAgentDatabasePath(pathname, databasePath))
+      !failedPaths.some(isOwnerPath) ||
+      !refusal?.paths.some(isOwnerPath) ||
+      (error instanceof AgentDatabaseAdmissionError &&
+        (error.refusal.agentId !== ownerId || refusal.code !== "agent-database-inspection-pending"))
     ) {
       throw error;
     }
@@ -40,19 +53,30 @@ export function loadInheritedAuthProfileStore(
   }
 }
 
-/** Compose existing snapshots with fresh persisted reads only for their missing counterpart. */
-export function resolveRuntimeAuthProfileStoreFromSnapshots(params: {
+type RuntimeAuthSnapshotReadScope = {
   agentDir?: string;
   inheritedAuthDir?: string;
   env?: NodeJS.ProcessEnv;
-  loadStore: (agentDir?: string) => AuthProfileStore;
-}): AuthProfileStore | null {
+  sharedPath?: string;
+};
+
+function readResult(result: Result<AuthProfileStore, unknown>): AuthProfileStore {
+  if (!result.ok) {
+    throw result.error;
+  }
+  return result.value;
+}
+
+/** One lazy snapshot policy; adapters supply only the demanded persisted reads. */
+export function* readRuntimeAuthProfileStoreFromSnapshots(
+  params: RuntimeAuthSnapshotReadScope,
+): Generator<{ agentDir?: string }, AuthProfileStore | null, Result<AuthProfileStore, unknown>> {
   const mainKey = params.inheritedAuthDir
     ? resolveAuthProfileDatabasePath(params.inheritedAuthDir)
-    : resolveSharedAuthStorePath(params.env);
+    : (params.sharedPath ?? resolveSharedAuthStorePath(params.env));
   const requestedKey = params.agentDir
     ? resolveAuthProfileDatabasePath(params.agentDir)
-    : resolveSharedAuthStorePath(params.env);
+    : (params.sharedPath ?? resolveSharedAuthStorePath(params.env));
   const mainStore = getRuntimeAuthProfileStoreSnapshotAtDatabasePath(mainKey);
   if (!params.agentDir || requestedKey === mainKey) {
     return mainStore ?? null;
@@ -64,8 +88,9 @@ export function resolveRuntimeAuthProfileStoreFromSnapshots(params: {
     });
   }
   if (requestedStore) {
+    const result = yield { agentDir: params.inheritedAuthDir };
     const persistedMainStore = loadInheritedAuthProfileStore(
-      () => params.loadStore(params.inheritedAuthDir),
+      () => readResult(result),
       params.inheritedAuthDir,
       params.env,
     );
@@ -75,9 +100,11 @@ export function resolveRuntimeAuthProfileStoreFromSnapshots(params: {
         })
       : requestedStore;
   }
-  return mainStore
-    ? mergeAuthProfileStores(mainStore, params.loadStore(params.agentDir), {
-        preserveBaseRuntimeExternalProfiles: true,
-      })
-    : null;
+  if (!mainStore) {
+    return null;
+  }
+  const result = yield { agentDir: params.agentDir };
+  return mergeAuthProfileStores(mainStore, readResult(result), {
+    preserveBaseRuntimeExternalProfiles: true,
+  });
 }

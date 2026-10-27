@@ -1,75 +1,77 @@
 import { coerceErrorMessage } from "@openclaw/normalization-core/error-coercion";
 import { vi } from "vitest";
-import {
-  MeetingSessionRuntime,
-  type MeetingSessionRuntimeHandles,
-  type MeetingSessionRuntimeJoinContext,
-} from "./session-runtime.js";
+import type {
+  MeetingParticipationAttempt,
+  MeetingParticipationOptions,
+} from "./participation-types.js";
+import { MeetingSessionRuntime } from "./session-runtime.js";
 import type {
   MeetingBrowserHealth,
   MeetingBrowserTab,
   MeetingSessionRecord,
+  MeetingTranscriptSnapshot,
 } from "./session-types.js";
 
-type TestTransport = "chrome";
+type TestTransport = "chrome" | "chrome-node";
 type TestMode = "agent";
-type TestRequest = { url: string; agentId: string };
 export type TestSession = MeetingSessionRecord<TestTransport, TestMode> & {
   browser?: {
     launched: boolean;
+    nodeId?: string;
     tab?: MeetingBrowserTab;
     health?: MeetingBrowserHealth;
     hasAudioBridge?: boolean;
   };
 };
-export type TestJoinContext = MeetingSessionRuntimeJoinContext<
+const TestRuntime = MeetingSessionRuntime<
   TestSession,
+  { url: string; agentId: string },
   TestTransport,
   TestMode,
   MeetingBrowserHealth,
-  MeetingBrowserTab
+  MeetingBrowserTab,
+  string,
+  string
 >;
+type RuntimeOptions = ConstructorParameters<typeof TestRuntime>[0];
+export type TestJoinContext = Parameters<RuntimeOptions["joinTransport"]>[0]["context"];
 
-export function createTestRuntime(params: {
-  captureTranscript?: (options?: { finalize?: boolean }) => Promise<
-    | {
-        droppedLines: number;
-        epoch?: string;
-        lines: Array<{ at?: string; speaker?: string; text: string }>;
-      }
-    | undefined
-  >;
-  durableTranscripts?: { stateDir: string };
-  talkBack?: boolean;
-  transcribe?: boolean;
-  refreshReusableSession?(
-    session: TestSession,
-    request: TestRequest,
-    resolved: { agentId: string; mode: TestMode; transport: TestTransport; url: string },
-  ): Promise<{ keepBrowserTab: boolean } | void>;
-  joinTransport(input: {
-    request: TestRequest;
-    session: TestSession;
-    context: TestJoinContext;
-  }): Promise<{ delegatedSpoken?: boolean }>;
-  releaseBrowserTab(session: TestSession): Promise<boolean | undefined>;
-  ensureRealtimeBridge?(
-    this: void,
-    session: TestSession,
-  ): Promise<MeetingSessionRuntimeHandles<MeetingBrowserHealth> | undefined>;
-}) {
+export const testBrowser = (
+  targetId: string,
+  overrides: Partial<NonNullable<TestSession["browser"]>> = {},
+) => ({ launched: true, tab: { targetId, openedByPlugin: true }, ...overrides });
+
+export function releaseTab(session: TestSession) {
+  if (session.browser) {
+    session.browser.tab = undefined;
+  }
+  return true;
+}
+
+export function captionSnapshot(
+  lines: MeetingTranscriptSnapshot["lines"],
+  options: Pick<MeetingTranscriptSnapshot, "epoch" | "pendingLines"> = {},
+): MeetingTranscriptSnapshot {
+  return { droppedLines: 0, epoch: "page-1", ...options, lines };
+}
+
+export function createTestRuntime(
+  params: Pick<RuntimeOptions, "joinTransport" | "releaseBrowserTab"> &
+    Partial<
+      Pick<RuntimeOptions, "participation" | "refreshReusableSession" | "ensureRealtimeBridge">
+    > & {
+      captureTranscript?: (options?: {
+        finalize?: boolean;
+      }) => Promise<MeetingTranscriptSnapshot | undefined>;
+      durableTranscripts?: { stateDir: string };
+      talkBack?: boolean;
+      transcribe?: boolean;
+    },
+) {
   let nextSessionId = 0;
   const createdSessions: TestSession[] = [];
-  const runtime = new MeetingSessionRuntime<
-    TestSession,
-    TestRequest,
-    TestTransport,
-    TestMode,
-    MeetingBrowserHealth,
-    MeetingBrowserTab,
-    string,
-    string
-  >({
+  const runtime = new TestRuntime({
+    participation: params.participation,
     logger: { debug: vi.fn(), error: vi.fn(), info: vi.fn(), warn: vi.fn() },
     logScope: "[meeting-test]",
     formatError: coerceErrorMessage,
@@ -94,12 +96,7 @@ export function createTestRuntime(params: {
     waitForInCallMs: 1,
     joinTimeoutMs: 1,
     transientSpeechBlockedReasons: new Set<string>(),
-    resolveJoin: (request) => ({
-      url: request.url,
-      transport: "chrome",
-      mode: "agent",
-      agentId: request.agentId,
-    }),
+    resolveJoin: ({ url, agentId }) => ({ url, transport: "chrome", mode: "agent", agentId }),
     createSession: ({ resolved, createdAt }) => {
       const session: TestSession = {
         id: `session-${++nextSessionId}`,
@@ -120,15 +117,8 @@ export function createTestRuntime(params: {
     isTranscribeMode: () => params.transcribe === true,
     sameMeetingUrl: (left, right) => left === right,
     normalizeMeetingUrlForReuse: (url) => url,
-    getBrowser: (session) =>
-      session.browser
-        ? {
-            launched: session.browser.launched,
-            tab: session.browser.tab,
-            health: session.browser.health,
-            hasAudioBridge: session.browser.hasAudioBridge === true,
-          }
-        : undefined,
+    getBrowser: ({ browser }) =>
+      browser && { ...browser, hasAudioBridge: browser.hasAudioBridge === true },
     setBrowserTab: (session, tab) => {
       if (session.browser) {
         session.browser.tab = tab;
@@ -143,20 +133,60 @@ export function createTestRuntime(params: {
     releaseBrowserTab: (session) => params.releaseBrowserTab(session),
     refreshBrowserHealth: async () => {},
     refreshStatus: async () => {},
-    refreshReusableSession: async (session, request, resolved) =>
-      await params.refreshReusableSession?.(session, request, resolved),
+    refreshReusableSession: params.refreshReusableSession ?? (async () => undefined),
     ensureRealtimeBridge: params.ensureRealtimeBridge ?? (async () => undefined),
     captureTranscript: async (_session, options) => await params.captureTranscript?.(options),
     speakViaTransport: async () => undefined,
-    ...(params.durableTranscripts
-      ? {
-          durableTranscripts: {
-            providerId: "test-meeting",
-            providerName: "Test Meeting",
-            stateDir: params.durableTranscripts.stateDir,
-          },
-        }
-      : {}),
+    durableTranscripts: params.durableTranscripts && {
+      providerId: "test-meeting",
+      providerName: "Test Meeting",
+      stateDir: params.durableTranscripts.stateDir,
+    },
   });
   return { createdSessions, runtime };
+}
+
+export function createParticipationTestRuntime(
+  params: Pick<
+    Parameters<typeof createTestRuntime>[0],
+    "captureTranscript" | "transcribe" | "durableTranscripts"
+  > = {},
+) {
+  const rows = new Map<string, MeetingParticipationAttempt>();
+  const execute = vi.fn<MeetingParticipationOptions<TestSession>["execute"]>(async () => ({
+    status: "succeeded",
+  }));
+  const store: MeetingParticipationOptions<TestSession>["store"] = {
+    lookup: async (key) => rows.get(key),
+    register: async (key, value) => {
+      rows.set(key, value);
+    },
+    registerIfAbsent: async (key, value) => {
+      if (rows.has(key)) {
+        return false;
+      }
+      rows.set(key, value);
+      return true;
+    },
+    entries: async () => [...rows].map(([key, value]) => ({ key, value, createdAt: 0 })),
+    delete: async (key) => rows.delete(key),
+  };
+  const { runtime } = createTestRuntime({
+    ...params,
+    participation: {
+      store,
+      capabilities: () => ["hand.set"],
+      validateAction: () => undefined,
+      execute,
+    },
+    joinTransport: async ({ session }) => {
+      session.browser = testBrowser("tracked-tab", {
+        tab: { targetId: "tracked-tab", openedByPlugin: false },
+        health: { inCall: true },
+      });
+      return {};
+    },
+    releaseBrowserTab: async () => true,
+  });
+  return { runtime, store, execute };
 }

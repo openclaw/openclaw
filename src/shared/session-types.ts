@@ -3,6 +3,7 @@ import type {
   ModelChoice,
   SessionCreatedActor,
   SessionPerson,
+  SessionOwnerSessionCount,
   SessionsAssignOwnerParams,
 } from "../../packages/gateway-protocol/src/index.js";
 
@@ -43,6 +44,19 @@ export type GatewayAgentRow = Pick<
   | "defaultPermissionMode"
 >;
 
+export type SessionActivityPulse = {
+  since: number;
+  until: number;
+  /** Counts between consecutive caller-supplied boundaries. */
+  buckets: number[];
+  sessions: number;
+  /** Sessions created within `activeMinutes`; omitted for an unbounded time filter. */
+  started?: number;
+  /** Sessions with an active run anywhere in the filtered set. */
+  running: number;
+  people?: number;
+};
+
 /** Generic base for paged session-list responses. */
 export type SessionsListResultBase<TDefaults, TRow> = {
   ts: number;
@@ -55,12 +69,26 @@ export type SessionsListResultBase<TDefaults, TRow> = {
   hasMore?: boolean;
   /** Complete owner facet for the filtered result, independent of pagination. */
   owners?: SessionOwnerFacetIdentity[];
+  /** Complete visible open/running ownership summary, before pagination. */
+  ownerSessionCounts?: SessionOwnerSessionCount[];
   people?: SessionPerson[];
   peopleIncomplete?: boolean;
   peopleSessionCount?: number;
+  /** Earliest activeMinutes boundary among visible candidates, before person filters/pagination. */
+  activityExpiresAt?: number;
+  /** Window-wide statistics and caller-defined activity buckets, before pagination. */
+  activityPulse?: SessionActivityPulse;
   /** Canonical profile selected by the person-association filter. */
   involvingProfileId?: string;
   defaults: TDefaults;
+  /** Response-local display facts referenced by rows that opted into sharing. */
+  sharedFacts?: Partial<TRow>[];
+  /** Opaque identity of the authorized row vector, independent of list facets. */
+  rowsRevision?: string;
+  /** Only the rows are omitted; counts, defaults and facets remain current. */
+  rowsUnchanged?: true;
+  /** Complete window indexes into the base rows followed by this response's changed rows. */
+  rowsDelta?: { baseRevision: string; order: number[] };
   sessions: TRow[];
 };
 

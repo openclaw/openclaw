@@ -1,5 +1,4 @@
 import { normalizeAgentId } from "@openclaw/normalization-core/agent-id";
-import { normalizeNullableString } from "@openclaw/normalization-core/string-coerce";
 import {
   isReservedSessionRest,
   normalizeControlUiBasePath,
@@ -32,15 +31,6 @@ export type ControlUiSessionPathTarget =
       slugCandidate?: string;
     };
 
-function normalizePath(path: string): string {
-  const trimmed = path.trim();
-  if (!trimmed) {
-    return "/";
-  }
-  const withSlash = trimmed.startsWith("/") ? trimmed : `/${trimmed}`;
-  return withSlash.length > 1 && withSlash.endsWith("/") ? withSlash.slice(0, -1) : withSlash;
-}
-
 function decodePathSegment(segment: string): string | null {
   if (segment === "~dot") {
     return ".";
@@ -55,20 +45,15 @@ function decodePathSegment(segment: string): string | null {
   }
 }
 
-function literalSessionKey(agentId: string, restSegments: readonly string[]): string | null {
-  const normalizedAgentId = normalizeNullableString(agentId);
-  if (!normalizedAgentId || restSegments.length === 0 || restSegments.some((segment) => !segment)) {
-    return null;
-  }
-  return `agent:${normalizeAgentId(normalizedAgentId)}:${restSegments.join(":")}`;
-}
-
 export function parseControlUiSessionPath(
   pathname: string,
   basePath = "",
   mainKey?: string,
 ): ControlUiSessionPathTarget | null {
-  const normalizedPath = normalizePath(pathname);
+  const trimmed = pathname.trim();
+  const withSlash = trimmed.startsWith("/") ? trimmed : `/${trimmed}`;
+  const normalizedPath =
+    withSlash.length > 1 && withSlash.endsWith("/") ? withSlash.slice(0, -1) : withSlash;
   for (const namespace of ["chat", "dashboard"] as const) {
     const prefix = `${normalizeControlUiBasePath(basePath)}/${namespace}/`;
     if (!normalizedPath.startsWith(prefix)) {
@@ -85,21 +70,14 @@ export function parseControlUiSessionPath(
     }
     const forceLiteral = rawSegments[1] === "~key";
     const restSegments = rawSegments.slice(forceLiteral ? 2 : 1).map(decodePathSegment);
-    if (restSegments.some((segment) => segment === null)) {
+    if (restSegments.length === 0 || !restSegments.every((segment) => segment !== null)) {
       return null;
     }
-    const literalRestSegments = restSegments as string[];
-    const sessionKey = literalSessionKey(agentId, literalRestSegments);
-    if (!sessionKey) {
-      return null;
-    }
-    if (forceLiteral) {
+    const sessionKey = `agent:${agentId}:${restSegments.join(":")}`;
+    if (forceLiteral || restSegments.length !== 1) {
       return { namespace, kind: "literal", agentId, sessionKey };
     }
-    if (literalRestSegments.length !== 1) {
-      return { namespace, kind: "literal", agentId, sessionKey };
-    }
-    const segment = literalRestSegments[0] ?? "";
+    const segment = restSegments[0] ?? "";
     if (isReservedSessionRest(segment, mainKey)) {
       return { namespace, kind: "literal", agentId, sessionKey };
     }

@@ -31,10 +31,10 @@ export function markCoreTtsAttemptResult<T extends object>(
   mediaUrls: readonly string[],
   operationalRunInstance: object,
 ): T {
-  coreTtsProvenanceByAttemptResult.set(
-    result,
-    Object.freeze({ mediaUrls: Object.freeze([...mediaUrls]), operationalRunInstance }),
-  );
+  coreTtsProvenanceByAttemptResult.set(result, {
+    mediaUrls: [...mediaUrls],
+    operationalRunInstance,
+  });
   return result;
 }
 

@@ -16,61 +16,58 @@ pub struct GatewaySnapshot {
     pub reachable: bool,
     pub status: String,
     pub detail: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub setup_error: Option<String>,
+    #[serde(skip)]
+    pub runtime_path: Option<std::path::PathBuf>,
 }
 
 impl GatewaySnapshot {
-    pub(crate) fn remote_opening() -> Self {
+    fn unavailable(phase: &'static str, status: &str, detail: impl Into<String>) -> Self {
         Self {
-            phase: "remoteOpening",
+            phase,
+            runtime_path: None,
             installed: false,
             running: false,
             reachable: false,
-            status: "Opening remote dashboard".to_string(),
-            detail: Some(
-                "Gateway authentication and readiness are shown in the dashboard.".to_string(),
-            ),
+            status: status.to_string(),
+            detail: Some(detail.into()),
+            setup_error: None,
         }
+    }
+
+    pub(crate) fn remote_opening() -> Self {
+        Self::unavailable(
+            "remoteOpening",
+            "Opening remote dashboard",
+            "Gateway authentication and readiness are shown in the dashboard.",
+        )
     }
 
     pub(crate) fn remote_error(detail: impl Into<String>) -> Self {
-        Self {
-            phase: "remoteError",
-            status: "Remote connection unavailable".to_string(),
-            detail: Some(detail.into()),
-            ..Self::remote_opening()
-        }
+        Self::unavailable("remoteError", "Remote connection unavailable", detail)
     }
 
     pub fn unconfigured() -> Self {
-        Self {
-            phase: "unconfigured",
-            installed: false,
-            running: false,
-            reachable: false,
-            status: "Setup required".to_string(),
-            detail: Some("Choose where your OpenClaw Gateway should run.".to_string()),
-        }
+        Self::unavailable(
+            "unconfigured",
+            "Setup required",
+            "Choose where your OpenClaw Gateway should run.",
+        )
     }
 
     pub fn missing_cli() -> Self {
-        Self {
-            phase: "missingCli",
-            installed: false,
-            running: false,
-            reachable: false,
-            status: "CLI required".to_string(),
-            detail: Some("Install the OpenClaw CLI to continue.".to_string()),
-        }
+        Self::unavailable(
+            "missingCli",
+            "CLI required",
+            "Install the OpenClaw CLI to continue.",
+        )
     }
 
     pub fn reconnecting(detail: impl Into<String>) -> Self {
         Self {
-            phase: "reconnecting",
             installed: true,
-            running: false,
-            reachable: false,
-            status: "Reconnecting".to_string(),
-            detail: Some(detail.into()),
+            ..Self::unavailable("reconnecting", "Reconnecting", detail)
         }
     }
 }
@@ -170,7 +167,7 @@ pub fn status(cli: &OpenClawCli) -> Result<GatewaySnapshot, String> {
             .rpc
             .as_ref()
             .and_then(|rpc| rpc.error.as_deref())
-            .unwrap_or("The Gateway RPC probe did not report a healthy connection.");
+            .unwrap_or("The Gateway RPC check did not report a healthy connection.");
         return Err(format!(
             "{service_detail}\n{rpc_detail}\nRun `openclaw gateway status` in a terminal \
              to inspect service access and Gateway credentials, then retry."
@@ -212,16 +209,26 @@ pub fn status(cli: &OpenClawCli) -> Result<GatewaySnapshot, String> {
             }
         })
         .or_else(|| (!running).then(|| format!("Gateway service is {runtime_status}.")));
+    let runtime_path = value
+        .service
+        .command
+        .as_ref()
+        .and_then(|command| command.pointer("/programArguments/0"))
+        .and_then(serde_json::Value::as_str)
+        .map(std::path::PathBuf::from);
     Ok(GatewaySnapshot {
+        runtime_path,
         phase,
         installed,
         running,
         reachable,
         status: status.to_string(),
         detail,
+        setup_error: None,
     })
 }
 
+#[cfg(not(any(target_os = "linux", target_os = "windows")))]
 pub fn ensure_ready(cli: &OpenClawCli) -> Result<ReadyGateway, String> {
     let mut snapshot = status(cli)?;
     if snapshot.reachable {

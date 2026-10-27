@@ -1,10 +1,12 @@
-// Zero-dependency Node release-version contract shared by source and packaged entry points.
+// Zero-dependency runtime version contract shared by source and packaged entry points.
+export const MINIMUM_BUN_VERSION = { major: 1, minor: 4, patch: 4 };
+
 const NODE_RELEASE_VERSION_RE =
-  /^v?((?:0|[1-9]\d*))\.((?:0|[1-9]\d*))\.((?:0|[1-9]\d*))(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$/u;
+  /^v?((?:0|[1-9]\d*))\.((?:0|[1-9]\d*))\.((?:0|[1-9]\d*))(?:-((?:0|[1-9]\d*|\d*[A-Za-z-][0-9A-Za-z-]*)(?:\.(?:0|[1-9]\d*|\d*[A-Za-z-][0-9A-Za-z-]*))*))?(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$/u;
 
 const NODE_RELEASE_FLOORS = [
-  { major: 24, minor: 16, patch: 0 },
-  { major: 26, minor: 1, patch: 0 },
+  { major: 24, minor: 22, patch: 1 },
+  { major: 26, minor: 12, patch: 1 },
 ];
 const HIGHEST_RELEASE_FLOOR = NODE_RELEASE_FLOORS[NODE_RELEASE_FLOORS.length - 1];
 
@@ -144,7 +146,7 @@ export function canRunOpenClawNodeDiagnostics(value, hasNodeSqlite) {
   );
 }
 
-/** Parses an anchored release SemVer, allowing a leading v and valid build metadata. */
+/** Parses release SemVer; future-major prereleases use their numeric core for admission. */
 export function parseNodeReleaseVersion(value) {
   if (typeof value !== "string") {
     return null;
@@ -158,7 +160,12 @@ export function parseNodeReleaseVersion(value) {
     minor: Number(match[2]),
     patch: Number(match[3]),
   };
-  return Object.values(version).every(Number.isSafeInteger) ? version : null;
+  // Existing lines retain their release floors; development builds of the next
+  // major must not be locked out of installation and updates.
+  return Object.values(version).every(Number.isSafeInteger) &&
+    (!match[4] || version.major > HIGHEST_RELEASE_FLOOR.major)
+    ? version
+    : null;
 }
 
 export function isNodeVersionAtLeast(version, minimum) {
@@ -174,7 +181,7 @@ export function isNodeVersionAtLeast(version, minimum) {
   return version.patch >= minimum.patch;
 }
 
-/** Checks OpenClaw's supported release lines. Older Node lines with lossy SQLite TEXT reads are unsupported. */
+/** Checks release floors for compromised-key rejection and SQLite correctness. */
 export function isSupportedOpenClawNodeVersion(value) {
   const version = parseNodeReleaseVersion(value);
   if (!version) {
@@ -196,6 +203,7 @@ function renderProcessNodeVersionCheck() {
   const version = { major: Number(match[1]), minor: Number(match[2]), patch: Number(match[3]) };
   if (!Object.values(version).every(Number.isSafeInteger)) return false;
   const floors = ${releaseFloors};
+  if (match[4] && version.major <= floors[floors.length - 1].major) return false;
   const minimum = floors.find((floor) => floor.major === version.major);
   const atLeast = (floor) =>
     version.major > floor.major ||

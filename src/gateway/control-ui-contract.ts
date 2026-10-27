@@ -6,12 +6,12 @@ export * from "./control-ui-resource-routes.js";
 export * from "./control-ui-root-assets.js";
 export * from "./control-ui-user-avatar-route.js";
 
-/** Targeted pushed PR snapshot event for subscribed Control UI connections. */
 export const CONTROL_UI_SESSION_PULL_REQUESTS_CHANGED_EVENT =
   "controlUi.sessionPullRequests.changed";
 
-/** Maximum session keys retained by one Control UI PR subscription. */
 export const CONTROL_UI_SESSION_PULL_REQUESTS_MAX_KEYS = 200;
+
+export const SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD = "controlUi.sessionPullRequests.subscribe";
 
 /** Anonymous public-page presentation; remote URLs never cross into the renderer. */
 export type ControlUiLinkPreview = {
@@ -39,7 +39,6 @@ export type ControlUiSessionPreview =
 
 // Control UI ships inside the gateway dist, so these payloads move in
 // lockstep with the server; shapes here are not independently versioned.
-/** Check-run rollup for a PR head commit, chip pill + CI monitoring popover. */
 type ControlUiSessionPullRequestChecks = {
   state: "pending" | "passing" | "failing";
   passed: number;
@@ -49,7 +48,6 @@ type ControlUiSessionPullRequestChecks = {
   running: number;
 };
 
-/** Ordered GitHub Actions step facts; timestamps let the client render live duration. */
 export type ControlUiSessionPullRequestCheckStep = {
   number: number;
   name: string;
@@ -86,16 +84,10 @@ export type ControlUiSessionPullRequestCheckDetails = {
   retryAfterMs?: number;
 };
 
-/** A working-branch PR or a same-repository PR linked in recent assistant replies. */
+/** A pull request associated with the session's working branch. */
 export type ControlUiSessionPullRequest = {
   number: number;
-  /**
-   * Author login from the list payload GitHub already returns; no extra call.
-   * Absent for a ghosted or deleted account. Deliberately login-only: the
-   * sibling GitHub-link hovercard inlines avatars server-side rather than
-   * hotlinking them, so a remote <img> here would leak a browser request to
-   * GitHub on every hover.
-   */
+  /** Login-only to avoid browser avatar requests; absent for deleted accounts. */
   author?: { login: string };
   owner: string;
   repo: string;
@@ -113,10 +105,7 @@ export type ControlUiSessionPullRequest = {
   headSha?: string;
 };
 
-/**
- * The session's working branch, resolved from local git only so the pre-PR
- * "Create PR" row keeps rendering while the GitHub quota is exhausted.
- */
+/** Local Git facts stay available while GitHub quota is exhausted. */
 export type ControlUiSessionBranch = {
   owner: string;
   repo: string;
@@ -125,26 +114,38 @@ export type ControlUiSessionBranch = {
   additions?: number;
   deletions?: number;
   changedFiles?: number;
-  /**
-   * GitHub "open a pull request for this branch" page. Absent while the
-   * branch is unpushed or has nothing to compare — the row then only reports
-   * the session's local changed files.
-   */
+  /** Absent while the branch is unpushed or has nothing to compare. */
   createUrl?: string;
 };
 
-/** Pull requests detected for a session's git branch, chip row payload. */
+/** A PR durably published by this task or an accessible descendant. */
+export type ControlUiSessionTaskPullRequest = {
+  url: string;
+  owner: string;
+  repo: string;
+  number: number;
+  branch: string;
+  title?: string;
+  sourceSessionKey: string;
+  sourceAgentId: string;
+  /** Verified GitHub metadata; absent on a cold lookup failure. */
+  pullRequest?: ControlUiSessionPullRequest;
+};
+
 export type ControlUiSessionPullRequests = {
+  /** The current bound PR could not be verified; discard previously displayed facts. */
+  discardPrevious?: true;
+  /** Branch facts were not refreshed; empty fields do not invalidate retained UI facts. */
+  branchRead?: false;
+  taskPullRequests?: ControlUiSessionTaskPullRequest[];
+  /** Total distinct publications, independent of the bounded preview. */
+  taskPullRequestCount?: number;
+  /** Total distinct task and current-branch PRs; absent when branch membership is unknown. */
+  pullRequestCount?: number;
   pullRequests: ControlUiSessionPullRequest[];
-  /**
-   * Present whenever the session's checkout resolves to a GitHub remote,
-   * independent of whether a PR or branch row exists.
-   */
+  /** GitHub remote identity, independent of whether a PR or branch row exists. */
   repository?: { owner: string; repo: string };
-  /**
-   * Present when the session's non-default GitHub branch has a creatable PR
-   * on origin or local changed files in the working tree.
-   */
+  /** Non-default branch with a creatable PR or local changed files. */
   branch?: ControlUiSessionBranch;
   /** GitHub quota exhausted; entries may be stale until the limit resets. */
   rateLimited: boolean;

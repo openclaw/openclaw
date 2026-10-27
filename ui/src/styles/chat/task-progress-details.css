@@ -1,0 +1,562 @@
+.task-progress-details {
+  --session-progress-marker-size: 14px;
+  --session-progress-neutral: var(--muted);
+
+  min-width: 0;
+  color: var(--text);
+}
+
+.task-progress-details--desktop {
+  margin-block-start: 10px;
+}
+
+/* Explicit desktop variant; the legacy Details wrapper can also be mounted on mobile. */
+.task-progress-details--desktop[data-desktop-details] .task-progress-details__title {
+  color: var(--muted);
+}
+
+.task-progress-details--desktop[data-desktop-details]:not([open]) .task-progress-details__chevron {
+  display: none;
+}
+
+.task-progress-details--desktop[data-desktop-details][open] .task-progress-details__chevron {
+  opacity: 0;
+}
+
+/* Keep inline tooltip/menu wrappers on the same 24px axis as the heading. */
+.task-progress-details--desktop[data-desktop-details] .task-progress-details__actions,
+.task-progress-details--desktop[data-desktop-details] .task-progress-details__actions > *,
+.task-progress-details--desktop[data-desktop-details] .task-progress-details__expanded-refresh > * {
+  align-items: center;
+  line-height: 0;
+}
+
+.task-progress-details--desktop[data-desktop-details]
+  .task-progress-details__actions
+  .task-progress-details__expanded-refresh {
+  display: inline-flex;
+}
+
+/* Keep the same controls above the current step when the desktop card is collapsed. */
+.task-progress-details--desktop[data-desktop-details]:not([open]) .task-progress-details__summary {
+  display: grid;
+  grid-template-columns: var(--details-row-icon-slot, 16px) minmax(0, 1fr) auto;
+  grid-template-rows: 28px auto;
+  gap: 4px var(--details-row-gap, 8px);
+}
+
+.task-progress-details--desktop[data-desktop-details]:not([open]) .task-progress-details__heading {
+  display: contents;
+}
+
+.task-progress-details--desktop[data-desktop-details]:not([open]) .task-progress-details__title {
+  display: block;
+  grid-area: 1 / 1 / 2 / 3;
+}
+
+.task-progress-details--desktop[data-desktop-details]:not([open]) .task-progress-details__actions {
+  grid-area: 1 / 3;
+}
+
+.task-progress-details--desktop[data-desktop-details]:not([open])
+  .task-progress-details__current-marker {
+  grid-area: 2 / 1;
+}
+
+.task-progress-details--desktop[data-desktop-details]:not([open]) .task-progress-details__current {
+  grid-area: 2 / 2 / 3 / 4;
+}
+
+.task-progress-details--desktop[data-desktop-details]:not([open])
+  .task-progress-details__current[data-note] {
+  grid-column: 1 / -1;
+}
+
+.task-progress-details--desktop[data-desktop-details]:not([open])
+  .task-progress-details__refresh-status {
+  grid-column: 1 / -1;
+}
+
+.task-progress-details__menu-group:empty {
+  display: none;
+}
+
+.task-progress-details__menu-group .oc-menu-item__icon svg {
+  width: 16px;
+  height: 16px;
+}
+
+.task-progress-details__menu-group:not(:empty) ~ .task-progress-details__menu-group:not(:empty),
+.task-progress-details__clear-group {
+  margin-block-start: 4px;
+  padding-block-start: 4px;
+  border-block-start: 1px solid var(--border);
+}
+
+.task-progress-details--desktop[data-desktop-details][open]
+  .task-progress-details__heading:hover
+  .task-progress-details__chevron,
+.task-progress-details--desktop[data-desktop-details][open]
+  .task-progress-details__summary:focus-visible
+  .task-progress-details__chevron {
+  opacity: 1;
+}
+
+.task-progress-details--desktop[data-desktop-details][data-details-moving] {
+  box-sizing: border-box;
+  overflow: hidden;
+}
+
+.task-progress-details--desktop[data-desktop-details][data-details-moving]::details-content {
+  content-visibility: visible;
+}
+
+.task-progress-details__summary {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px;
+  min-height: 28px;
+  list-style: none;
+  cursor: var(--cursor-action);
+}
+
+.task-progress-details__summary::-webkit-details-marker {
+  display: none;
+}
+
+.task-progress-details__heading {
+  display: flex;
+  flex: 1;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+  padding-block: 4px;
+  font-size: 13px;
+  line-height: 24px;
+}
+
+.task-progress-details__title {
+  color: color-mix(in srgb, var(--text) 82%, transparent);
+  font-weight: 500;
+}
+
+.task-progress-details__chevron,
+.task-progress-details__current-marker {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+  width: 14px;
+  height: 14px;
+  color: var(--muted);
+}
+
+.task-progress-details__chevron svg,
+.task-progress-details__current-marker svg,
+.task-progress-details__refresh svg {
+  width: 14px;
+  height: 14px;
+}
+
+.task-progress-details__chevron {
+  transform: rotate(-90deg);
+}
+
+.task-progress-details[open] .task-progress-details__chevron {
+  transform: none;
+}
+
+.task-progress-details__current {
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  color: var(--muted);
+  text-overflow: clip;
+  white-space: nowrap;
+}
+
+.task-progress-details:not([open]) .task-progress-details__current {
+  order: 1;
+}
+
+.task-progress-details:not([open]) .task-progress-details__chevron {
+  order: 2;
+}
+
+.task-progress-details:not([open]) .task-progress-details__count {
+  order: 3;
+  margin-inline-start: auto;
+}
+
+.task-progress-details:not([open]) .task-progress-details__title,
+.task-progress-details[open] .task-progress-details__current,
+.task-progress-details[open] .task-progress-details__current-marker,
+.task-progress-details:not([open]) .task-progress-details__expanded-refresh {
+  display: none;
+}
+
+.task-progress-details__count {
+  flex: none;
+  color: color-mix(in srgb, var(--text) 70%, transparent);
+  font-size: 12px;
+  font-weight: 400;
+  line-height: 20px;
+}
+
+.task-progress-details__actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.task-progress-details__actions .session-progress-card__options svg {
+  width: 16px;
+  height: 16px;
+}
+
+.task-progress-details__refresh {
+  display: inline-grid;
+  width: 24px;
+  height: 24px;
+  padding: 4px;
+  place-items: center;
+  border: 0;
+  border-radius: 6px;
+  corner-shape: superellipse(7.5);
+  background: transparent;
+  color: var(--muted);
+}
+
+.task-progress-details__refresh:hover:not(:disabled) {
+  background: var(--bg-hover);
+  color: var(--text);
+}
+
+.task-progress-details__refresh:focus-visible,
+.task-progress-details__retry:focus-visible,
+.task-progress-details__summary:focus-visible,
+.task-progress-details__mobile-options:focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: 2px;
+}
+
+.task-progress-details__refresh[data-pending="true"] svg {
+  animation: btn-spinner-spin 1.2s linear infinite;
+}
+
+.task-progress-details__refresh-tooltip {
+  display: grid;
+  gap: 2px;
+}
+
+.task-progress-details__refresh-tooltip > :last-child {
+  opacity: 0.7;
+}
+
+.task-progress-details__body {
+  padding: 4px 0 0;
+}
+
+.task-progress-details--desktop[data-desktop-details] .task-progress-details__body {
+  margin-top: 2px;
+  padding: 0;
+}
+
+.task-progress-details--desktop[data-desktop-details] .task-progress-details__content {
+  display: flow-root;
+  padding-block-start: 6px;
+}
+
+/* Compact only this non-interactive checklist, without changing shared Details rows. */
+.task-progress-details--desktop[data-desktop-details] .task-progress-details__plan {
+  --details-row-font-size: var(--control-ui-text-sm);
+  --details-row-height: 24px;
+  --details-row-padding-block: 2px;
+  --details-row-list-gap: 2px;
+}
+
+.task-progress-details--desktop[data-desktop-details]
+  .task-progress-details__plan
+  .session-progress-card__markdown
+  + .session-progress-card__steps {
+  margin-block-start: 6px;
+}
+
+.task-progress-details__plan .session-progress-card__markdown {
+  margin: 0;
+  font-family: var(--font-body);
+  font-size: 14px;
+  font-weight: 400;
+  line-height: 20px;
+}
+
+.task-progress-details--desktop
+  .task-progress-details__plan[data-has-steps="true"]
+  .session-progress-card__markdown {
+  font-size: 13px;
+  font-weight: 500;
+}
+
+.task-progress-details__plan .session-progress-card__markdown + .session-progress-card__steps {
+  margin-block-start: 12px;
+}
+
+.task-progress-details__plan .session-progress-card__markdown a {
+  font-weight: 500;
+}
+
+.task-progress-details__plan .session-progress-card__steps {
+  gap: 8px;
+}
+
+.task-progress-details__plan .session-progress-card__step {
+  position: relative;
+  grid-template-columns: 16px minmax(0, 1fr);
+  gap: 10px;
+  font-size: 13px;
+  font-weight: 400;
+  line-height: 20px;
+}
+
+.task-progress-details__plan .session-progress-card__step-text {
+  color: inherit;
+}
+
+.task-progress-details__plan .session-progress-card__step-marker {
+  width: 16px;
+  height: 20px;
+}
+
+/* Preserve the row rhythm and leave space around each original marker. */
+.task-progress-details__plan .session-progress-card__step:not(:last-child)::after {
+  position: absolute;
+  top: calc(var(--details-row-padding-block, 0px) + 14px + var(--session-progress-marker-size) / 2);
+  left: calc(var(--details-row-padding, 0px) + 7.5px);
+  width: 1px;
+  height: calc(100% + var(--details-row-list-gap, 8px) - var(--session-progress-marker-size) - 8px);
+  background: var(--border-strong);
+  opacity: 0.4;
+  content: "";
+}
+
+/* Keep the spinner and pending circle aligned with the other inset glyphs. */
+.task-progress-details
+  :is(.session-progress-card__current-marker, .session-progress-card__step-marker)
+  > .session-run-spinner,
+.task-progress-details .session-progress-card__step-marker[data-status="pending"] > svg {
+  width: calc(var(--session-progress-marker-size) - 2px);
+  height: calc(var(--session-progress-marker-size) - 2px);
+  border-width: 1px;
+}
+
+/* Keep the checklist's smaller type while sharing the desktop row geometry. */
+.chat-details-desktop-body
+  .task-progress-details--desktop[data-desktop-details]
+  .session-progress-card__steps {
+  row-gap: var(--details-row-list-gap, 4px);
+}
+
+.chat-details-desktop-body
+  .task-progress-details--desktop[data-desktop-details]
+  .session-progress-card__step {
+  --details-row-font-size: var(--control-ui-text-sm);
+  --details-row-line-height: 20px;
+  --session-progress-marker-size: var(--details-row-icon-size, 15px);
+
+  grid-template-columns: var(--details-row-icon-slot, 16px) minmax(0, 1fr);
+  min-height: var(--details-row-height, 32px);
+  padding: var(--details-row-padding-block, 4px) var(--details-row-padding);
+  gap: 10px;
+}
+
+.chat-details-desktop-body
+  .task-progress-details--desktop[data-desktop-details]
+  .session-progress-card__step-marker {
+  width: var(--details-row-icon-slot, 16px);
+}
+
+.task-progress-details--desktop[data-desktop-details] .task-progress-details__current-marker {
+  --session-progress-marker-size: var(--details-row-icon-size, 15px);
+
+  width: var(--details-row-icon-slot, 16px);
+  height: var(--details-row-icon-slot, 16px);
+}
+
+.task-progress-details--desktop[data-desktop-details] .task-progress-details__current-marker svg {
+  width: var(--details-row-icon-size, 15px);
+  height: var(--details-row-icon-size, 15px);
+}
+
+.task-progress-details__refresh-status {
+  display: flex;
+  flex-basis: 100%;
+  align-items: center;
+  gap: 8px;
+  min-height: 24px;
+  padding: 2px 8px;
+  border: 1px solid var(--border-strong);
+  border-radius: 6px;
+  background: var(--bg-hover);
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 18px;
+}
+
+.task-progress-details__refresh-status:is([data-state="pending"], [data-state="updated"]) {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  min-height: 0;
+  overflow: hidden;
+  padding: 0;
+  border: 0;
+  clip-path: inset(50%);
+}
+
+.task-progress-details__retry {
+  flex: none;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--text);
+  font: inherit;
+}
+
+.task-progress-details--mobile .session-progress-card__step {
+  font-size: 14px;
+}
+
+.task-progress-details--mobile
+  .task-progress-details__refresh-status:is([data-state="failed"], [data-state="timeout"]) {
+  justify-content: space-between;
+  gap: 16px;
+  margin-block-end: 16px;
+  padding: 12px;
+  border: 0;
+  border-radius: 14px;
+  background: var(--card);
+  font-size: 13px;
+  line-height: 18px;
+}
+
+.task-progress-details--mobile .task-progress-details__retry {
+  min-height: 30px;
+  padding: 5px 12px;
+  border-radius: 999px;
+  background: var(--primary);
+  color: var(--primary-foreground);
+  font-size: 12px;
+  font-weight: 500;
+  line-height: 20px;
+}
+
+.task-progress-details__mobile-controls {
+  position: absolute;
+  inset-inline: 16px;
+  bottom: max(16px, env(safe-area-inset-bottom));
+  z-index: 2;
+  pointer-events: none;
+  background: transparent;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  width: auto;
+}
+
+.task-progress-details__position,
+.task-progress-details__mobile-actions {
+  display: inline-flex;
+  align-items: center;
+  min-height: 40px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--bg-hover);
+  color: var(--muted);
+  pointer-events: auto;
+  box-shadow: var(--shadow-sm);
+}
+
+.task-progress-details__position {
+  padding-inline: 12px;
+  font-size: 13px;
+  line-height: 20px;
+}
+
+.task-progress-details__mobile-actions {
+  margin-inline-start: auto;
+}
+
+.task-progress-details__mobile-actions .task-progress-details__refresh,
+.task-progress-details__mobile-options {
+  display: inline-grid;
+  width: 40px;
+  height: 40px;
+  padding: 10px;
+  place-items: center;
+  border: 0;
+  border-radius: 999px;
+  background: transparent;
+  color: var(--muted);
+}
+
+.task-progress-details__mobile-actions svg {
+  width: var(--mobile-panel-rail-icon, 16px);
+  height: var(--mobile-panel-rail-icon, 16px);
+}
+
+.task-progress-details__switch {
+  position: relative;
+  flex: none;
+  width: 35px;
+  height: 20px;
+  border: 1px solid var(--muted);
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--border-strong) 60%, transparent);
+}
+
+.task-progress-details__switch::before {
+  position: absolute;
+  inset-block-start: 3px;
+  inset-inline-start: 3px;
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  background: var(--muted);
+  content: "";
+}
+
+.task-progress-details__switch[data-checked="true"] {
+  border-color: var(--accent);
+  background: var(--accent);
+}
+
+.task-progress-details__switch[data-checked="true"]::before {
+  inset-inline-start: auto;
+  inset-inline-end: 3px;
+  background: var(--bg);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .task-progress-details__refresh[data-pending="true"] svg {
+    animation: none;
+  }
+}
+
+.sidebar-region--mobile-host .chat-mobile-details-page[data-details-page="task-progress"] {
+  position: relative;
+}
+
+.sidebar-region--mobile-host
+  .chat-mobile-host
+  .chat-mobile-details-page[data-details-page="task-progress"]
+  > .chat-mobile-details-page__body {
+  padding: 16px 16px calc(88px + env(safe-area-inset-bottom));
+  scroll-padding-bottom: calc(88px + env(safe-area-inset-bottom));
+
+  &:has(> .task-progress-details--mobile > openclaw-panel-empty-state) {
+    padding-block-start: 0;
+    padding-inline: 0;
+  }
+}
