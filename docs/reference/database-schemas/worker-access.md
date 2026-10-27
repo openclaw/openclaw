@@ -6052,7 +6052,11 @@ SQLite streams the ordered cursor through a native iterator; PostgreSQL uses
 16-row keyset batches because its bridge buffers results.
 Bounded SQLite context hydration also decodes one payload row at a time, so the
 encoded window does not remain resident alongside its decoded result. Its byte
-selection, event order, and snapshot authority are unchanged. Before a transcript
+selection, event order, and snapshot authority are unchanged. Recent active-event
+and usage-accounting tails decode selected compressed rows directly, without
+returning expanded JSON through SQLite. Payload failures still abort immediately;
+JSON syntax failures retain their existing oldest-row precedence.
+Before a transcript
 worker task starts on V8, usage at or above 80% of the actual heap limit sheds its
 decoded history and memory-export caches through the isolate-local memory-pressure
 channel. Subsequent reads repopulate those caches through their existing owners;
