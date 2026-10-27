@@ -23,6 +23,7 @@ import { applyHttpOperatorRoleScopeCeiling, resolveHttpProfile } from "./http-au
 import type { AuthorizedControlUiReadRequest } from "./http-auth-utils.js";
 import { authorizeOperatorScopesForMethod } from "./method-scopes.js";
 import { resolveRequestedSessionAgentId } from "./session-request-agent.js";
+import { prepareSessionSharingRead } from "./session-sharing-target-read.js";
 import { createProfileSessionEntryFilter } from "./session-sharing.js";
 import type { GatewaySessionEntryRead } from "./session-utils.js";
 import { resolveSessionWorkerPlacementContext } from "./session-worker-placement-context.js";
@@ -126,7 +127,9 @@ type AssistantMediaSessionRead = Pick<
   GatewaySessionEntryRead,
   "cfg" | "agentId" | "canonicalKey" | "entry"
 > &
-  Partial<Pick<GatewaySessionEntryRead, "storePath" | "readSource">>;
+  Partial<Pick<GatewaySessionEntryRead, "storePath" | "readSource">> & {
+    membership?: ReadonlySet<string>;
+  };
 
 async function resolveAssistantMediaSessionPolicy(params: AssistantMediaPolicyParams) {
   let loaded: AssistantMediaSessionRead | undefined;
@@ -193,6 +196,36 @@ async function resolveAssistantMediaSessionPolicy(params: AssistantMediaPolicyPa
       if (!loaded?.entry?.sessionId) {
         return undefined;
       }
+      const auth =
+        params.requestAuth ??
+        (params.reader &&
+          resolveAssistantMediaReaderAuth(
+            params.reader,
+            getRuntimeConfig(),
+            Boolean(params.messageId),
+          ));
+      if (auth?.operatorRolePolicy?.sessions.others === "invited") {
+        const sharing = await prepareSessionSharingRead({
+          cfg: getRuntimeConfig(),
+          sessionKey: params.sessionKey,
+          agentId: owner.agentId,
+        });
+        const releaseEntry = releaseSession;
+        releaseSession = () => {
+          sharing.release();
+          releaseEntry?.();
+        };
+        const readEntry = readSession;
+        readSession = () => {
+          const current = readEntry();
+          const facts = sharing.readCurrent(getRuntimeConfig());
+          if (!current?.entry || facts.target?.entry.sessionId !== current.entry.sessionId) {
+            throw new FsSafeError("path-mismatch", "Media access changed");
+          }
+          return { ...current, membership: facts.membership };
+        };
+        loaded = readSession();
+      }
     }
     policy = resolvePreparedAssistantMediaPolicy(params, loaded, readSession, assertCurrent);
     return policy && { ...policy, releaseSession };
@@ -237,6 +270,13 @@ function resolvePreparedAssistantMediaPolicy(
   if (!auth || !reader) {
     return undefined;
   }
+  if (
+    auth.operatorRolePolicy?.sessions.others === "invited" &&
+    !loaded &&
+    !auth.operatorScopes.includes("operator.admin")
+  ) {
+    return undefined;
+  }
   const standaloneRead = authorizeOperatorScopesForMethod(
     "assistant.media.get",
     auth.operatorScopes,
@@ -273,6 +313,7 @@ function resolvePreparedAssistantMediaPolicy(
           !createProfileSessionEntryFilter({
             profileId,
             sessionCap: auth.operatorRolePolicy?.sessions.others,
+            membership: loaded.membership,
           })(loaded.canonicalKey, entry)
         ) {
           return undefined;

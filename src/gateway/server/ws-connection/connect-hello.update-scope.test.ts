@@ -1,8 +1,10 @@
 import { EventEmitter, once } from "node:events";
+import { Value } from "typebox/value";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { WebSocket, WebSocketServer } from "ws";
 import { GATEWAY_CLIENT_CAPS } from "../../../../packages/gateway-protocol/src/client-info.js";
 import type { ConnectParams, HelloOk } from "../../../../packages/gateway-protocol/src/index.js";
+import { HelloOkSchema } from "../../../../packages/gateway-protocol/src/schema/frames.js";
 import { PROTOCOL_VERSION } from "../../../../packages/gateway-protocol/src/version.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import * as systemPresence from "../../../infra/system-presence.js";
@@ -306,7 +308,7 @@ describe("sendGatewayHello update detail scope", () => {
     expect(projection.prepareMembership).not.toHaveBeenCalled();
   });
 
-  it.each(["write", "suggest", "view", "none", undefined] as const)(
+  it.each(["write", "suggest", "view", "invited", "none", undefined] as const)(
     "projects the current operator session cap %s only when configured",
     async (sessionCap) => {
       const context = makeContext("operator", ["operator.write"], {
@@ -341,6 +343,7 @@ describe("sendGatewayHello update detail scope", () => {
       );
 
       const auth = helloPayload(context)?.auth;
+      expect(Value.Check(HelloOkSchema.properties.auth, auth)).toBe(true);
       if (sessionCap === undefined) {
         expect(auth).not.toHaveProperty("sessionCap");
       } else {

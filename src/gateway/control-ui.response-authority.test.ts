@@ -8,6 +8,7 @@ import {
   registerVirtualTestPlugin,
 } from "openclaw/plugin-sdk/plugin-test-contracts";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { awaitGateBeforeSettlement, withinTest } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import * as avatarFile from "../agents/identity-avatar-file.js";
 import { mockStoppedWorkspaceContainer } from "../agents/sandbox/mount-plan.test-helpers.js";
@@ -21,6 +22,7 @@ import {
 } from "../config/sessions/session-accessor.js";
 import { replaceTranscriptEvents } from "../config/sessions/session-accessor.sqlite-transcript-write.test-support.js";
 import { discardSessionPendingInput } from "../config/sessions/session-pending-input-withdrawal.js";
+import { addSessionMember, removeSessionMember } from "../config/sessions/session-sharing-store.js";
 import type { GatewayOperatorRoleDefinition } from "../config/types.gateway.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import * as devInstallBranch from "../infra/dev-install-branch.js";
@@ -45,6 +47,7 @@ import {
   handleControlUiHttpRequest,
 } from "./control-ui.js";
 import { invalidateOperatorRolePolicy, resolveCreatorSandbox } from "./operator-role-policy.js";
+import * as transcriptReaders from "./session-transcript-readers.js";
 import { withLocalWorkspaceProjection } from "./worker-environments/local-workspace-projection.js";
 import type { LocalWorkspaceOwner } from "./worker-environments/local-workspace-types.js";
 
@@ -284,6 +287,7 @@ describe("saved message attachment response authority", () => {
   const adminEmail = "attachment-admin@example.test";
   const viewerEmail = "attachment-viewer@example.test";
   const unrelatedEmail = "attachment-unrelated@example.test";
+  const invitedEmail = "attachment-invited@example.test";
   const scope = {
     agentId: "main",
     sessionKey: "agent:main:dashboard:attachments",
@@ -394,6 +398,7 @@ describe("saved message attachment response authority", () => {
           definitions: {
             guest: { ...readerRole("none"), sandbox: "required" },
             viewer: readerRole("view"),
+            invited: readerRole("invited"),
             admin: { agents: "*", sessions: { others: "write" }, scopes: ["operator.admin"] },
           },
         },
@@ -406,6 +411,7 @@ describe("saved message attachment response authority", () => {
     for (const [address, role] of [
       [viewerEmail, "viewer"],
       [adminEmail, "admin"],
+      [invitedEmail, "invited"],
     ] as const) {
       const { id } = await ensureCanonicalUserProfileForEmail(address);
       await setCanonicalUserProfileRole(id, role, { onCommitted: invalidateOperatorRolePolicy });
@@ -471,7 +477,7 @@ describe("saved message attachment response authority", () => {
   });
 
   function readerRole(
-    others: "none" | "view",
+    others: "none" | "view" | "invited",
     scopes: GatewayOperatorRoleDefinition["scopes"] = ["operator.sessions.read"],
   ): GatewayOperatorRoleDefinition {
     return { agents: ["main"], sessions: { others }, scopes };
@@ -490,6 +496,7 @@ describe("saved message attachment response authority", () => {
       admin?: boolean;
       viewer?: boolean;
       unrelated?: boolean;
+      invited?: boolean;
       method?: string;
       range?: string;
     } = {},
@@ -509,11 +516,13 @@ describe("saved message attachment response authority", () => {
           : {
               "x-forwarded-user": options.unrelated
                 ? unrelatedEmail
-                : options.admin
-                  ? adminEmail
-                  : options.viewer
-                    ? viewerEmail
-                    : email,
+                : options.invited
+                  ? invitedEmail
+                  : options.admin
+                    ? adminEmail
+                    : options.viewer
+                      ? viewerEmail
+                      : email,
               "x-forwarded-for": "203.0.113.42",
               "x-openclaw-scopes": options.admin ? "operator.admin" : "operator.sessions.read",
             }),
@@ -553,6 +562,57 @@ describe("saved message attachment response authority", () => {
       const range = await request(ticketed, { ticketOnly: true, range: "bytes=0-4" });
       expect([range.status, await range.text()]).toEqual([206, expected!.slice(0, 5)]);
       await metadata(ticketed);
+    }
+  });
+
+  it("revokes an invited reader during attachment preparation and rejects the old ticket", async ({
+    signal,
+  }) => {
+    const guest = ensureProfileForEmail(invitedEmail);
+    const creator = ensureProfileForEmail(email);
+    const query = { source: ordinary, messageId: "ordinary" };
+    expect((await request(query, { invited: true })).status).toBe(404);
+    await addSessionMember(scope, { identityId: guest.id, addedBy: creator.id });
+    const gate = preparationGate();
+    let pending: Promise<Response> | undefined;
+    try {
+      const mediaTicket = await metadata(query, { invited: true });
+      const allowed = await request({ ...query, mediaTicket }, { ticketOnly: true });
+      expect([allowed.status, await allowed.text()]).toEqual([200, "Ordinary attachment"]);
+      const read = transcriptReaders.readSessionMessageByIdAsync;
+      let armed = true;
+      using _ = vi
+        .spyOn(transcriptReaders, "readSessionMessageByIdAsync")
+        .mockImplementation(async (...args) => {
+          const result = await read(...args);
+          if (armed && args[0].sessionId === scope.sessionId && args[1] === "ordinary") {
+            armed = false;
+            return await gate.hold(result);
+          }
+          return result;
+        });
+      pending = request(query, { invited: true });
+      await withinTest(
+        awaitGateBeforeSettlement(
+          gate.entered.promise,
+          pending,
+          "attachment skipped transcript preparation",
+        ),
+        signal,
+      );
+      await removeSessionMember(scope, guest.id);
+      gate.release.resolve();
+      const revoked = await pending;
+      expect(revoked.status).toBe(404);
+      expect(await revoked.text()).not.toContain("Ordinary attachment");
+      const oldTicket = await request({ ...query, mediaTicket }, { ticketOnly: true });
+      expect(oldTicket.status).toBe(404);
+      expect(await oldTicket.text()).not.toContain("Ordinary attachment");
+      expect((await request({ ...query, meta: "1" }, { invited: true })).status).toBe(404);
+    } finally {
+      gate.release.resolve();
+      await Promise.allSettled([pending]);
+      await removeSessionMember(scope, guest.id);
     }
   });
 

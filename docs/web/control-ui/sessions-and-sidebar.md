@@ -722,13 +722,15 @@ accompany text. There is no attachment picker in the palette.
 Type **@** to search eligible people by name or verified GitHub handle, just as
 in the chat composer. Use **↑/↓** or **Home/End**, then **Enter** or **Tab** to
 select a person; **Escape** dismisses the people picker before the palette.
-The compact **Will notify** row shows selected people once each, with **+N**
+The compact **Notify or invite** row shows selected people once each, with **+N**
 when space is tight. You can select up to ten mention references. Editing or
 deleting a selected name removes that reference; **Remove mention** clears all
 recipient selections without deleting the text. Pasted names and email addresses
 remain ordinary text. The picker replaces search results while open, and selected
 mentions keep the palette in composer mode. Mentions travel with the first message
-of the new session; they never share a session, invite people, or grant access.
+of the new session. For roles with `sessions.others: "invited"`, a selected
+mention from the creator or an admin grants membership when that message commits.
+It does not change session visibility or the recipient's operator scopes.
 
 - **Enter** selects a person while the people picker is open; otherwise it opens
   or runs the selected search result. With no result, Enter does not send.

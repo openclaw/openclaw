@@ -82,7 +82,7 @@ const GatewayGitHubEndpointSchema = z
 export const GatewayOperatorRoleDefinitionSchema = z.strictObject({
   sessions: z.strictObject({
     /** Maximum access to another person's sessions without explicit membership. */
-    others: z.enum(["none", "view", "suggest", "write"]),
+    others: z.enum(["none", "invited", "view", "suggest", "write"]),
   }),
   /** Require sandbox isolation for newly created sessions, or inherit agent policy by default. */
   sandbox: z.enum(["inherit", "required"]).optional(),

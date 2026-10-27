@@ -10,6 +10,10 @@ import {
   replaceSessionEntrySync,
 } from "../../config/sessions/session-accessor.js";
 import { runSessionColdStorageMaintenance } from "../../config/sessions/session-cold-storage.js";
+import {
+  addSessionMember,
+  removeSessionMember,
+} from "../../config/sessions/session-sharing-store.js";
 import { readSessionTranscriptIndexStatus } from "../../config/sessions/session-transcript-projection-writer.js";
 import * as transcriptSearch from "../../config/sessions/session-transcript-search.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -421,49 +425,62 @@ test("scope rechecks sharing after readiness and reports FTS failure instead of 
   });
 });
 
-test("search discards hits and page metadata when sharing is revoked during its worker read", async () => {
-  await withSearchState(async () => {
-    const viewer = ensureProfileForEmail("worker-search@example.test").id;
-    const context = requestContext({
-      agents: { entries: { main: {} } },
-      gateway: {
-        roles: {
-          default: "viewer",
-          definitions: {
-            viewer: { sessions: { others: "view" }, agents: "*", scopes: ["operator.read"] },
+test.each(["view", "invited"] as const)(
+  "search discards hits and page metadata when %s sharing is revoked during its worker read",
+  async (others) => {
+    await withSearchState(async () => {
+      const viewer = ensureProfileForEmail("worker-search@example.test").id;
+      const context = requestContext({
+        agents: { entries: { main: {} } },
+        gateway: {
+          roles: {
+            default: "viewer",
+            definitions: {
+              viewer: { sessions: { others }, agents: "*", scopes: ["operator.read"] },
+            },
           },
         },
-      },
-    });
-    setRuntimeConfigSnapshot(context.getRuntimeConfig());
-    const client = identifiedClient(viewer);
-    const read = transcriptSearch.searchSessionTranscripts;
-    for (const scoped of [true, false]) {
-      const key = await seed("main", `worker-revoked-${scoped}`, "foreign", "needle");
-      const spy = vi
-        .spyOn(transcriptSearch, "searchSessionTranscripts")
-        .mockImplementationOnce(async (...args) => {
-          const result = await read(...args);
-          expect(result.hits).toHaveLength(1);
-          await upsertSessionEntryCore(
+      });
+      setRuntimeConfigSnapshot(context.getRuntimeConfig());
+      const client = identifiedClient(viewer);
+      const read = transcriptSearch.searchSessionTranscripts;
+      for (const scoped of [true, false]) {
+        const key = await seed("main", `worker-revoked-${scoped}`, "foreign", "needle");
+        if (others === "invited") {
+          await addSessionMember(
             { agentId: "main", sessionKey: key },
-            { visibility: "draft" },
+            { identityId: viewer, addedBy: "foreign" },
           );
-          return { ...result, indexing: true, truncated: true, archivedTranscriptsExcluded: 7 };
-        });
-      try {
-        const response = await search(context, client, {
-          query: "needle",
-          ...(scoped ? { scope: {} } : { sessionKeys: [key] }),
-        });
-        expect(response.ok).toBe(true);
-        expect(response.payload).toEqual({ results: [], ...(scoped ? { sessions: [] } : {}) });
-      } finally {
-        spy.mockRestore();
+        }
+        const spy = vi
+          .spyOn(transcriptSearch, "searchSessionTranscripts")
+          .mockImplementationOnce(async (...args) => {
+            const result = await read(...args);
+            expect(result.hits).toHaveLength(1);
+            if (others === "invited") {
+              await removeSessionMember({ agentId: "main", sessionKey: key }, viewer);
+            } else {
+              await upsertSessionEntryCore(
+                { agentId: "main", sessionKey: key },
+                { visibility: "draft" },
+              );
+            }
+            return { ...result, indexing: true, truncated: true, archivedTranscriptsExcluded: 7 };
+          });
+        try {
+          const response = await search(context, client, {
+            query: "needle",
+            ...(scoped ? { scope: {} } : { sessionKeys: [key] }),
+          });
+          expect(response.ok).toBe(true);
+          expect(response.payload).toEqual({ results: [], ...(scoped ? { sessions: [] } : {}) });
+        } finally {
+          spy.mockRestore();
+        }
       }
-    }
-  });
-});
+    });
+  },
+);
 
 test("search prepares the full scope and rechecks visibility while materializing archived hits", async () => {
   await withSearchState(async () => {

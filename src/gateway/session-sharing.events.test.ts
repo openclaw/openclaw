@@ -21,9 +21,60 @@ import {
   prepareProjectedSessionSharing,
   prepareSessionSharing,
 } from "./session-sharing.js";
-import { sharingPolicyClient as client } from "./session-sharing.test-utils.js";
+import {
+  roleClient,
+  rolePolicyConfig,
+  sharingPolicyClient as client,
+} from "./session-sharing.test-utils.js";
 
 afterEach(() => closeOpenClawAgentDatabasesForTest());
+
+it.each([["operator.read", "operator.write"], ["operator.sessions.write"]])(
+  "requires a current invitation for foreign session events with scopes %j",
+  async (...scopes) => {
+    await withOpenClawTestState({ scenario: "minimal", prepareProfileCatalog: true }, async () => {
+      const cfg = rolePolicyConfig();
+      setRuntimeConfigSnapshot(cfg);
+      const recipient = roleClient("invited", "event-guest");
+      recipient.connect.scopes = scopes;
+      const identityId = recipient.authenticatedUserProfile!.profileId;
+      const scope = { agentId: "main", sessionKey: "agent:main:invitation-events" };
+      const sessionId = "invitation-events";
+      await upsertSessionEntryCore(scope, {
+        sessionId,
+        updatedAt: 1,
+        visibility: "shared",
+        createdActor: { type: "human", source: "profile", id: "creator" },
+      });
+      const context = requestContext(cfg);
+      await initializeSessionReadContext(context);
+      const projection = getSessionRowProjection(context)!;
+      await projection.ensureMaterialized();
+      await projection.prepareMembership();
+      const receives = () =>
+        canReceiveSessionEvent({
+          cfg,
+          client: recipient,
+          sessionKeys: [scope.sessionKey],
+          event: "session.message",
+          prepared: {
+            sharing: prepareProjectedSessionSharing({
+              cfg,
+              client: recipient,
+              isMember: (target, id) =>
+                projection.hasMembership(target.storePath, target.storeKey, id),
+            }),
+            target: (key) => projection.sharingTarget({ key, agentId: "main" }),
+          },
+        });
+      expect(receives()).toBe(false);
+      addSessionMember(scope, { identityId, addedBy: "creator", expectedSessionId: sessionId });
+      expect(receives()).toBe(true);
+      removeSessionMember(scope, identityId, undefined, sessionId);
+      expect(receives()).toBe(false);
+    });
+  },
+);
 
 it("filters event recipients by draft ownership, suggestion participation, and row existence", async () => {
   await withOpenClawTestState({ scenario: "minimal", prepareProfileCatalog: true }, async () => {

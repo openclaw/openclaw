@@ -4,9 +4,11 @@ import { createServer } from "node:http";
 import path from "node:path";
 import { afterAll, assert, beforeAll, describe, expect, it, vi } from "vitest";
 import { WebSocket, WebSocketServer } from "ws";
+import type { BoardSnapshot } from "../../packages/gateway-protocol/src/index.js";
 import { awaitGateBeforeSettlement, createDeferred } from "../../test/helpers/promise.js";
 import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import { upsertSessionEntryCore } from "../config/sessions/session-accessor.js";
+import { addSessionMember, removeSessionMember } from "../config/sessions/session-sharing-store.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { loadOrCreateDeviceIdentity } from "../infra/device-identity.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
@@ -14,6 +16,7 @@ import { saveMediaBuffer } from "../media/store.js";
 import type {
   GatewayControlUiIngressFactoryV2,
   GatewayControlUiIngressV2,
+  GatewayIngressPrincipalBindingV1,
 } from "../plugins/gateway-ingress.types.js";
 import { withPluginRuntimeGatewayRequestScope } from "../plugins/runtime/gateway-request-scope.js";
 import { uploadUserBackground } from "../state/user-background.js";
@@ -30,6 +33,7 @@ import {
 } from "../test-utils/openclaw-test-state.js";
 import { reserveTestPortListener } from "../test-utils/port-claims.js";
 import type { ResolvedGatewayAuth } from "./auth.js";
+import { boardStore } from "./board-store.js";
 import { createSandboxHostHttpRequestHandler } from "./mcp-app-sandbox-http.js";
 import {
   connect,
@@ -51,7 +55,7 @@ import {
 } from "./remote-control-ui-mcp-relay.test-support.js";
 import { GatewayConnectionWork } from "./server-connection-work.js";
 import { MAX_PREAUTH_PAYLOAD_BYTES } from "./server-constants.js";
-import { getControlUiModule } from "./server-http-modules.js";
+import { getBoardHttpModule, getControlUiModule } from "./server-http-modules.js";
 import { createGatewayHttpRequestHandler } from "./server-http-request.js";
 import { attachGatewayUpgradeHandler } from "./server-http-upgrades.js";
 import { createRequestGatewayMethodRegistry } from "./server-methods.js";
@@ -680,6 +684,120 @@ describe("remote Control UI ingress production composition", () => {
       } finally {
         await binding.close();
       }
+    }
+  });
+
+  it("withholds remote widget bytes when an invited member is removed during preparation", async () => {
+    const previousConfig = config;
+    const previousAuth = auth;
+    const target = { agentId: "main", sessionKey: OWNER_SESSION_KEY };
+    const name = "invited-read-proof";
+    const marker = "Private invited widget";
+    const bindings: GatewayIngressPrincipalBindingV1[] = [];
+    let memberId: string | undefined;
+    try {
+      await configureAuth(
+        { mode: "trusted-proxy", trustedProxy: TRUSTED_PROXY, allowTailscale: false },
+        {
+          ...TEAM_ROLES,
+          definitions: {
+            ...TEAM_ROLES.definitions,
+            invited: {
+              agents: "*",
+              scopes: ["operator.read"],
+              sessions: { others: "invited" },
+            },
+          },
+        },
+      );
+      const member = await createIngressPerson("board-member", "invited", state.workspaceDir);
+      const outsider = await createIngressPerson("board-outsider", "invited", state.workspaceDir);
+      memberId = member.id;
+      await boardStore.putWidget({
+        ...target,
+        name,
+        content: { kind: "html", html: `<p>${marker}</p>` },
+      });
+      await addSessionMember(target, {
+        identityId: member.id,
+        addedBy: "gateway-owner",
+        expectedSessionId: "synthetic-owner-chat",
+      });
+      const memberBinding = await factory.bindPrincipal({
+        ...personOptions(member.id),
+        audienceId: "invited-board-member",
+        operatorScopeCeiling: ["operator.read"],
+      });
+      bindings.push(memberBinding);
+      const outsiderBinding = await factory.bindPrincipal({
+        ...personOptions(outsider.id),
+        audienceId: "invited-board-outsider",
+        operatorScopeCeiling: ["operator.read"],
+      });
+      bindings.push(outsiderBinding);
+      const memberUi = await memberBinding.openControlUi(presentationOptions);
+      const outsiderUi = await outsiderBinding.openControlUi(presentationOptions);
+      const snapshot = await memberBinding.request<BoardSnapshot>("board.get", target);
+      const widget = snapshot.widgets.find((candidate) => candidate.name === name);
+      assert(widget?.frameUrl, "Missing real board view ticket");
+      const url = new URL(widget.frameUrl, PUBLIC_ORIGIN);
+      const route = url.pathname + url.search;
+      await getBoardHttpModule();
+      const allowed = await readRemote(route, memberUi);
+      expect(allowed.status).toBe(200);
+      expect(await allowed.text()).toContain(marker);
+      const forbidden = await readRemote(route, outsiderUi);
+      expect(forbidden.status).toBe(401);
+      expect(await forbidden.text()).not.toContain(marker);
+      const { entered, release } = heldReadBarrier();
+      const readDocument = boardStore.useWidgetDocument.bind(boardStore);
+      using _ = vi
+        .spyOn(boardStore, "useWidgetDocument")
+        .mockImplementationOnce((selected, selectedName, consume) =>
+          readDocument(selected, selectedName, async (document) => {
+            expect(selected.sessionKey).toBe(target.sessionKey);
+            expect(selectedName).toBe(name);
+            assert(document && "html" in document, "Missing persisted widget HTML");
+            expect(document.html).toContain(marker);
+            entered.resolve();
+            await release.promise;
+            return consume(document);
+          }),
+        );
+      const pending = readRemote(route, memberUi);
+      try {
+        await awaitGateBeforeSettlement(
+          entered.promise,
+          pending,
+          "Remote response settled before the document read was held",
+        );
+        expect(await removeSessionMember(target, member.id)).toMatchObject({
+          identityId: member.id,
+        });
+        release.resolve();
+        const withheld = await pending;
+        expect(withheld.status).toBe(401);
+        expect(await withheld.text()).not.toContain(marker);
+        const replay = await readRemote(route, memberUi);
+        expect(replay.status).toBe(401);
+        expect(await replay.text()).not.toContain(marker);
+        // Membership loss must not be confused with losing the authenticated principal.
+        expect(await memberBinding.request("users.self", {})).toHaveProperty(
+          "profile.id",
+          member.id,
+        );
+      } finally {
+        release.resolve();
+        await pending.catch(() => undefined);
+      }
+    } finally {
+      for (const binding of bindings) {
+        await binding.close();
+      }
+      if (memberId) {
+        await removeSessionMember(target, memberId);
+      }
+      await configure(previousConfig, previousAuth);
     }
   });
 

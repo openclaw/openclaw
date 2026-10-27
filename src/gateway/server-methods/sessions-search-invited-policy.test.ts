@@ -32,7 +32,6 @@ it("withholds legacy search hits and page metadata after an invited cap downgrad
         roles: {
           default: "reader",
           definitions: {
-            // @ts-expect-error Runtime invitation policy precedes config enum activation in step 13.
             reader: { sessions: { others }, agents: "*", scopes: ["operator.read"] },
           },
         },

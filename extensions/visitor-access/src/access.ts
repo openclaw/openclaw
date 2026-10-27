@@ -103,7 +103,7 @@ export function createVisitorAccessReader(
         const result = access(target);
         if (!result.invitable) {
           throw new VisitorAccessError(
-            `${result.description}. Configure a default role with isolated own-session work and shared-session viewing before inviting this person.`,
+            `${result.description}. Configure a default role with isolated own-session work and sessions.others: "invited" or "view" before inviting this person.`,
           );
         }
       },

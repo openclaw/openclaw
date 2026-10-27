@@ -154,7 +154,6 @@ export const usageRoleConfig = (
     roles: {
       default: "guest",
       definitions: {
-        // @ts-expect-error Runtime invitation policy precedes config enum activation in step 13.
         guest: { sessions: { others }, agents: "*", scopes: ["operator.read", "operator.write"] },
       },
     },

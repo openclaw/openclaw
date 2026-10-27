@@ -5,12 +5,10 @@ import {
   readErrorName,
 } from "@openclaw/normalization-core/error-coercion";
 import { err, ok, type Result } from "@openclaw/normalization-core/result";
-import {
-  ErrorCodes,
-  errorShape,
-  type ErrorShape,
-  type MentionInboxItem,
-  type MentionsListResult,
+import type {
+  ErrorShape,
+  MentionInboxItem,
+  MentionsListResult,
 } from "../../packages/gateway-protocol/src/index.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { deferSqlitePostCommitPublication } from "../infra/sqlite-post-commit.js";
@@ -31,7 +29,11 @@ import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worke
 import { onUserProfilesChanged, readUserProfileVersion } from "../state/user-profile-events.js";
 import { readGatewayAccessRevision } from "./gateway-access-revision.js";
 import { createHumanMentionPolicy, humanMentionDisplayLabel } from "./human-mention-policy.js";
-import { mentionInboxUnavailable } from "./mention-inbox-presentation.js";
+import {
+  deprecatedMentionInboxError,
+  mentionInboxUnavailable,
+  publishMentionDeliveryFailure,
+} from "./mention-inbox-presentation.js";
 import {
   createMentionProjection,
   createMentionMutationProjection,
@@ -251,6 +253,7 @@ export function createMentionInbox(params: MentionInboxOptions): MentionInbox {
       agentId: resolved.target.agentId,
       sessionKey: resolved.target.canonicalKey,
       entry: resolved.target.entry,
+      membership: resolved.target.membership,
     };
     const recipient = policy.recipientProfile(item.recipientProfileId, target, cfg);
     const sender = policy.readProfile(senderProfileId);
@@ -468,16 +471,6 @@ export function createMentionInbox(params: MentionInboxOptions): MentionInbox {
       : result;
   }
 
-  function legacyError(
-    method: "list" | "dismiss" | "recordCommittedInput" | "invalidate",
-  ): ErrorShape {
-    warnMentionInboxDeprecation(method);
-    return errorShape(
-      ErrorCodes.UNAVAILABLE,
-      `mentionInbox.${method} is unavailable; await mentionInbox.${method}Async instead.`,
-    );
-  }
-
   function dismissItems(draft: InboxState, client: GatewayClient | null, ids: readonly string[]) {
     const current = readView(client, params.getRuntimeConfig(), false, draft);
     if (current.ok) {
@@ -563,7 +556,10 @@ export function createMentionInbox(params: MentionInboxOptions): MentionInbox {
 
   void refresh();
 
-  function recordCommittedInputAsync(committedInput: MentionCommittedInput): Promise<void> {
+  function recordCommittedInputAsync(
+    committedInput: MentionCommittedInput,
+    client?: GatewayClient | null,
+  ): Promise<void> {
     const input = {
       ...committedInput,
       recipientProfileIds: [...committedInput.recipientProfileIds],
@@ -585,16 +581,13 @@ export function createMentionInbox(params: MentionInboxOptions): MentionInbox {
         agentId,
       });
       try {
-        await policy.recordCommittedInvolvementAsync(input, prepared);
+        await policy.recordCommittedInvolvementAsync(input, prepared, client);
         const committed = await mutate<StoredMention[]>(
           (draft, guards, bounds) =>
-            applyCommittedInput(
-              input,
-              draft,
-              guards,
-              bounds,
-              () => prepared.readCurrent(params.getRuntimeConfig()).target,
-            ),
+            applyCommittedInput(input, draft, guards, bounds, () => {
+              const { target, membership } = prepared.readCurrent(params.getRuntimeConfig());
+              return target && { ...target, membership };
+            }),
           () => input.recipientProfileIds.map((id) => policy.readProfile(id)?.profileId ?? id),
         );
         context.admission.assertCurrent();
@@ -604,12 +597,17 @@ export function createMentionInbox(params: MentionInboxOptions): MentionInbox {
       } finally {
         prepared.release();
       }
-    }).catch(() => {
+    }).catch((error: unknown) => {
+      if (client) {
+        const connections = policy.senderConnectionIds(client, input.senderProfileId);
+        throw publishMentionDeliveryFailure(params, input, connections, error);
+      }
       log.warn("Mention delivery could not be completed; the posted message is unchanged.");
     });
   }
 
   return {
+    prepareInvitation: policy.prepareInvitation,
     async mentionable(client, input, publish) {
       let preparationFailure: Result<never, ErrorShape> | undefined;
       try {
@@ -648,8 +646,8 @@ export function createMentionInbox(params: MentionInboxOptions): MentionInbox {
         return mentionInboxUnavailable(log);
       }
     },
-    list: () => err(legacyError("list")),
-    dismiss: () => err(legacyError("dismiss")),
+    list: () => err(deprecatedMentionInboxError("list")),
+    dismiss: () => err(deprecatedMentionInboxError("dismiss")),
     async listAsync(client, publish) {
       let failure: Result<never, ErrorShape> | undefined;
       try {
@@ -727,7 +725,7 @@ export function createMentionInbox(params: MentionInboxOptions): MentionInbox {
     },
     recordCommittedInputAsync,
     invalidate(): never {
-      throw new Error(legacyError("invalidate").message);
+      throw new Error(deprecatedMentionInboxError("invalidate").message);
     },
     invalidateAsync,
     dispose,

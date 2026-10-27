@@ -208,7 +208,7 @@ does not retain their delivered channel message IDs. See
 
 In the transcript, selected mentions show a small inline avatar beside the original name. Missing photos use initials. The badge omits the visible `@`, while copied text keeps it.
 
-In a normal Control UI chat, type `@` and search by a person's display name (including spaces) or any linked verified GitHub handle, then select the person from the picker. The composer shows **Will notify** with your selected recipients. You can select up to ten mentions per message. Typing or pasting `@name` without selecting a person sends ordinary text and does not notify anyone. **Remove mention** clears the recipient selections while keeping the message text.
+In a normal Control UI chat, type `@` and search by a person's display name (including spaces) or any linked verified GitHub handle, then select the person from the picker. The composer shows **Notify or invite** with your selected recipients. You can select up to ten mentions per message. Typing or pasting `@name` without selecting a person sends ordinary text and does not notify anyone. **Remove mention** clears the recipient selections while keeping the message text.
 
 Use Up/Down to move through people, Home/End to jump to the first or last result,
 and Enter or Tab to insert the selected mention. Escape closes the picker. Typing a
@@ -225,12 +225,26 @@ matches, and **Retry** if a search without usable cached results fails temporari
 Permission, profile-verification, and unsupported-conversation rejections clear
 cached people and show guidance instead of Retry. Follow that guidance to restore
 your access or choose a supported conversation.
-**Will notify** reuses the selected person's photo, with initials while it loads or
+**Notify or invite** reuses the selected person's photo, with initials while it loads or
 when the photo is unavailable.
 
 Selected mentions render as distinct person references in the transcript. Hover, focus, or tap a reference to open the same information card used in the sidebar: current name and avatar, observed presence and connection details, visible watched and recent sessions, and the Activity link. The original message label and copied text stay unchanged. Cards follow explicit profile merges; ordinary unselected `@name` text does not become a person reference.
 
-The picker includes known Gateway profiles eligible to read the session, including people who are offline. Its online indicator is only a connection hint, not an eligibility requirement. Sign in with a durable Gateway profile to use human mentions. Guests with session-only permissions can select eligible people in existing conversations they are allowed to write in. A mention adds personal discovery involvement, not authored participation or Git contributor credit. It never adds session membership, changes visibility, or grants access. The Gateway rechecks the recipient's current access when creating and displaying it.
+The picker includes known Gateway profiles eligible to read the session, including people who are offline. Its online indicator is only a connection hint, not an eligibility requirement. Sign in with a durable Gateway profile to use human mentions. Guests with session-only permissions can select eligible people in existing conversations they are allowed to write in. A mention adds personal discovery involvement, not authored participation or Git contributor credit. The Gateway rechecks the recipient's current access when creating and displaying it.
+
+For roles with `sessions.others: "invited"`, the creator or an administrator can
+also select people who are not yet session members. Sending that selected
+@mention grants membership when the original human message is committed.
+Plain text, assistant output, and mentions removed by approval do not grant access.
+Other participants cannot invite new members. Draft and incognito restrictions
+remain in force, and mentions never change the session's visibility.
+
+Remove a person from session members to revoke invitation access. An old message
+retry cannot restore it, even after a restart. A new selected mention from the
+creator or an administrator can invite them again. Access is committed with the message. If the later Inbox notification fails,
+the sender receives a notice that the message was posted but notifications failed.
+Membership does not grant broader operator scopes. See
+[Named operator roles](/gateway/operator-scopes#named-operator-roles).
 
 Mentions work for ordinary messages, queued or steered input, and the first message of a new session, including a remotely placed session. They are unavailable in incognito, Goal, catalog, suggestion-only, command-send, or terminal-launch modes. If selected mentions remain after switching to an unsupported mode, the composer blocks the send. It asks you to remove them, or to return to a normal chat. It does not silently discard selected recipients.
 

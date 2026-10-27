@@ -189,7 +189,7 @@ an access policy supplied by a plugin.
           scopes: ["operator.read", "operator.write", "operator.approvals"],
         },
         guest: {
-          sessions: { others: "view" },
+          sessions: { others: "invited" },
           agents: ["roboclaw"],
           scopes: ["operator.sessions.read", "operator.sessions.write"],
           sandbox: "required",
@@ -266,15 +266,33 @@ For sessions created by other people, `sessions.others` supports these values:
 - `"none"`: hides foreign sessions from lists and targeted access, filters
   session-level usage to visible sessions, and denies Gateway-wide `usage.cost`
   because its aggregate can include hidden sessions.
+- `"invited"`: shows foreign sessions only while the person is a session member.
+  This applies to lists, direct links, search, history, and live session events,
+  even with broad `operator.read` or `operator.write` scopes. Gateway-wide cost
+  and meeting transcript archives remain unavailable because they can include
+  hidden sessions.
 - `"view"`: allows reading but does not allow mutation, even when a session is
   otherwise shared.
 - `"suggest"`: allows viewing and the existing suggestion flow.
 - `"write"`: allows participation in foreign sessions. Draft and incognito
   restrictions remain in force.
 
-A person always owns their own sessions. Explicit session membership can raise
-`"view"` or `"suggest"` access for a specific session, and connections already
-holding `operator.admin` retain their administrative session access.
+A person always has access to their own sessions. Explicit session membership
+can raise `"invited"`, `"view"`, or `"suggest"` access for a specific session.
+It cannot override `"none"`, draft or incognito restrictions, or connection scopes.
+`operator.sessions.write` still permits mutation of the caller's own sessions
+only. Connections holding `operator.admin` retain administrative session access.
+
+To enable invitation-only discovery, set the guest role's `sessions.others` to
+`"invited"` after upgrading. Existing role definitions keep their current behavior.
+Assign the intended profiles to that role, then reconnect them. The creator or an
+admin can add members directly or select a human @mention in an ordinary chat.
+The committed message grants membership to recipients with `"invited"` access.
+Removing a member revokes access; replaying the old message cannot regrant it.
+
+Explicitly published sessions remain readable through their sanitized public
+transcript links. Public access does not grant membership or expose raw history,
+tools, or files. **Shared** visibility alone does not make a session public.
 
 Set `agents: "*"` to allow session creation and agent runs on every agent, list
 agent IDs to allow only those agents, or use an empty array to disallow both.

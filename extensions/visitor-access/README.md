@@ -72,7 +72,8 @@ grants: each invite must then supply positive `days` or explicitly set
 `forever: true`.
 
 For people without an assigned Gateway role, the configured `gateway.roles.default`
-must provide the restricted guest policy: `sessions.others: "view"`,
+must provide the restricted guest policy: `sessions.others: "invited"` (own,
+public, and invited sessions) or `"view"` (all shared sessions),
 `sandbox: "required"`, at least one permitted agent (or `"*"`), and
 `scopes: ["operator.sessions.write"]`. The optional `operator.sessions.read`
 scope is equivalent for reading; broader operator scopes do not meet this

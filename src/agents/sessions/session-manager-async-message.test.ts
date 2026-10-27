@@ -15,23 +15,14 @@ import {
   upsertSessionEntryCore,
 } from "../../config/sessions/session-accessor.js";
 import { stageSessionPendingInput } from "../../config/sessions/session-accessor.pending-inputs.js";
-import { retainPreparedSessionSharingFacts } from "../../config/sessions/session-accessor.sqlite-entry-cache-publication-state.js";
 import { writeSessionEntry } from "../../config/sessions/session-accessor.sqlite-entry-store.js";
 import { kickSessionEntryMaintenanceAfterWrite } from "../../config/sessions/session-accessor.sqlite-maintenance-kick.js";
 import { readTranscriptEventRows } from "../../config/sessions/session-accessor.sqlite-read.js";
 import * as reclamationRun from "../../config/sessions/session-accessor.sqlite-reclamation-run.js";
 import { SqliteTranscriptMutationConflictError } from "../../config/sessions/session-mutation-conflict-error.js";
-import type { SessionMentionInvitation } from "../../config/sessions/session-sharing-authority.types.js";
-import { readSessionMembersInWorker } from "../../config/sessions/session-sharing-store.js";
 import { resolveMaintenanceConfigFromInput } from "../../config/sessions/store-maintenance.js";
-import { readDatabasePathIdentitySync } from "../../infra/sqlite-worker-identity.js";
 import * as workerAdmission from "../../infra/sqlite-worker-operation-admission.js";
 import { sqliteWorkerOwnerProbe as probe } from "../../infra/sqlite-worker-owner-probe.test-support.js";
-import {
-  attachRuntimeUserTurnTranscriptRecorder,
-  withCurrentRuntimeUserTurnTranscriptRecorder,
-} from "../../sessions/user-turn-transcript-runtime-context.js";
-import { createUserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.js";
 import {
   closeOpenClawAgentDatabaseByPathAsync,
   openOpenClawAgentDatabase,
@@ -773,88 +764,6 @@ it("rolls back worker promotion when pending authority retires at commit", async
   }
   expect(await loadTranscriptEvents(target)).toEqual(before);
 });
-
-it.each([false, true])(
-  "publishes appended invitations to retained membership (actor: %s)",
-  async (retainActor) => {
-    const name = `mention-invitation-${retainActor}`;
-    const target = {
-      agentId: "main",
-      sessionId: name,
-      sessionKey: `agent:main:${name}`,
-      storePath: state.statePath(`${name}.sqlite`),
-    };
-    const createdActor = { type: "human", source: "profile", id: "alice" } as const;
-    await upsertSessionEntryCore(target, { sessionId: name, updatedAt: 1, createdActor });
-    await withSelectedTranscriptReader(
-      target,
-      async () => {
-        const manager = await SessionManager.openAsync(target, state.workspaceDir);
-        const before = await readSessionMembersInWorker(target);
-        const retained = retainPreparedSessionSharingFacts({
-          databaseIdentity: readDatabasePathIdentitySync(target.storePath).key,
-          sessionKey: target.sessionKey,
-          entry: before.entry,
-          membership: new Set(before.members.map((member) => member.identityId)),
-        });
-        const acquiring = retainPreparedSessionSharingFacts({
-          databaseIdentity: readDatabasePathIdentitySync(target.storePath).key,
-          sessionKey: target.sessionKey,
-          acquiring: true,
-        });
-        try {
-          expect(retained.readCurrent()?.membership.has("bob")).toBe(false);
-          const message = {
-            ...user(name),
-            content: "@bob please review",
-            __openclaw: { humanMentions: [{ profileId: "bob", start: 0, end: 4 }] },
-          };
-          const mentionInvitation: SessionMentionInvitation = {
-            addedBy: "alice",
-            expectedEntry: {
-              sessionId: name,
-              createdActor,
-              visibility: undefined,
-              incognito: undefined,
-            },
-            profiles: [{ profileId: "bob", aliases: ["bob"], tokens: ["@bob"] }],
-          };
-          const recorder = createUserTurnTranscriptRecorder({
-            target: { ...target, sessionEntry: before.entry },
-            message,
-            prepareMentionInvitation: () => ({
-              invitation: mentionInvitation,
-              assertCurrent: () => {},
-            }),
-          });
-          attachRuntimeUserTurnTranscriptRecorder(message, recorder);
-          const entryId = await withCurrentRuntimeUserTurnTranscriptRecorder(
-            message,
-            (beforeFreshMessageCommit) =>
-              manager.appendMessageAsync(message, { beforeFreshMessageCommit }),
-          );
-          // A fresh read must not be what repairs the already retained authorization facts.
-          expect(retained.readCurrent()?.membership.has("bob")).toBe(true);
-          expect(
-            acquiring
-              .initialize({ entry: before.entry, membership: new Set() })
-              .membership.has("bob"),
-          ).toBe(true);
-          expect((await readSessionMembersInWorker(target)).members).toEqual([
-            expect.objectContaining({ identityId: "bob", addedBy: "alice" }),
-          ]);
-          expect(await loadTranscriptEvents(target)).toContainEqual(
-            expect.objectContaining({ id: entryId, message }),
-          );
-        } finally {
-          retained.release();
-          acquiring.release();
-        }
-      },
-      retainActor,
-    );
-  },
-);
 
 it("lets another session write between actor appends while retaining manager order", async () => {
   const target = {

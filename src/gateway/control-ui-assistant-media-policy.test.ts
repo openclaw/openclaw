@@ -428,6 +428,30 @@ it("denies incognito images to a named profile while preserving administrator ac
   await expectMetadata(source, { available: true });
 });
 
+it("preserves standalone media for administrators with an invited role and revokes their tickets", async () => {
+  const adminScopes = ["operator.admin"] as const;
+  const profile = await namedReader("admin@example.com", {
+    viewer: { ...viewerRole, sessions: { others: "invited" }, scopes: [...adminScopes] },
+  });
+  state.auth.mockResolvedValue({
+    authMethod: "trusted-proxy",
+    operatorScopes: [...adminScopes],
+    ...resolveHttpProfile(profile.id, cfg),
+  });
+  const source = await image("standalone.png", path.join(resolveStateDir(), "media"));
+  const ticket = await mediaTicket(source, { unscoped: true });
+  await expectBytes(source, { ticket, unscoped: true });
+
+  cfg.gateway!.roles!.definitions.viewer!.scopes = readScopes;
+  state.auth.mockResolvedValue({
+    authMethod: "trusted-proxy",
+    operatorScopes: readScopes,
+    ...resolveHttpProfile(profile.id, cfg),
+  });
+  await expectWithheld(source, { unscoped: true });
+  await expectWithheld(source, { ticket, bytes: true, unscoped: true });
+});
+
 it("keeps unscoped readers on the default static roots even when a query selects a full-access agent", async () => {
   cfg.tools = { fs: { workspaceOnly: false } };
   cfg.agents!.entries!.other = { workspace: project };

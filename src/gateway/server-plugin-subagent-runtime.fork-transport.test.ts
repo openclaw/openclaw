@@ -1,8 +1,13 @@
 import fs from "node:fs";
 import { createServer } from "node:http";
 import path from "node:path";
-import { expect, it } from "vitest";
+import { expect, it, vi } from "vitest";
 import { writeOpenAiResponsesSse } from "../../test/helpers/openai-responses-sse.js";
+import {
+  awaitGateBeforeSettlement,
+  createDeferred,
+  withinTest,
+} from "../../test/helpers/promise.js";
 import "../agents/ai-transport-runtime-host.js";
 import { resetPreparedModelRuntimeSnapshotsForTest } from "../agents/prepared-model-runtime.test-support.js";
 import { closeProviderTransportDispatcherPool } from "../agents/provider-transport-dispatcher-pool.js";
@@ -10,7 +15,9 @@ import { SessionManager } from "../agents/sessions/session-manager.js";
 import { makeProviderModelFixture } from "../agents/test-helpers/provider-model-fixture.js";
 import { resetConfigRuntimeState, setRuntimeConfigSnapshot } from "../config/config.js";
 import { upsertSessionEntryCore } from "../config/sessions/session-accessor.js";
+import { addSessionMember, removeSessionMember } from "../config/sessions/session-sharing-store.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import * as ssrf from "../infra/net/ssrf.js";
 import { resetPluginLoaderTestStateForTest } from "../plugins/loader.test-fixtures.js";
 import { clearPluginMetadataLifecycleCaches } from "../plugins/plugin-metadata-lifecycle.js";
 import { withPluginRuntimeGatewayRequestScope } from "../plugins/runtime/gateway-request-scope.js";
@@ -42,7 +49,9 @@ type RecordedRequest = {
   body: unknown;
 };
 
-it("sends no request for another operator's session but lets its owner reach the provider", async () => {
+it("allows invited session forks and rechecks revocation before provider HTTP", async ({
+  signal,
+}) => {
   await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
     const providerDir = state.path("provider");
     fs.mkdirSync(providerDir);
@@ -153,7 +162,7 @@ it("sends no request for another operator's session but lets its owner reach the
                   limited: {
                     agents: ["research"],
                     scopes: ["operator.read", "operator.write"],
-                    sessions: { others: "none" },
+                    sessions: { others: "invited" },
                   },
                 },
               },
@@ -163,6 +172,7 @@ it("sends no request for another operator's session but lets its owner reach the
           setRuntimeConfigSnapshot(config);
           const owner = ensureProfileForEmail("fork-owner@example.test");
           const stranger = ensureProfileForEmail("fork-stranger@example.test");
+          const member = ensureProfileForEmail("fork-member@example.test");
           await upsertSessionEntryCore(
             { agentId: "research", sessionKey: SESSION_KEY },
             {
@@ -256,6 +266,48 @@ it("sends no request for another operator's session but lets its owner reach the
                 ],
               },
             });
+            const scope = { agentId: "research", sessionKey: SESSION_KEY };
+            await addSessionMember(scope, { identityId: member.id, addedBy: owner.id });
+            await expect(forkAs(member.id)).resolves.toMatchObject({ text: "fork-ok" });
+            expect(requests).toHaveLength(2);
+            expect(requests[1]).toEqual(requests[0]);
+
+            const entered = createDeferred();
+            const release = createDeferred();
+            const resolve = ssrf.resolvePinnedHostnameWithPolicy;
+            let armed = true;
+            using _ = vi
+              .spyOn(ssrf, "resolvePinnedHostnameWithPolicy")
+              .mockImplementation(async (...args) => {
+                const result = await resolve(...args);
+                if (armed && args[0] === "127.0.0.1") {
+                  armed = false;
+                  entered.resolve();
+                  await release.promise;
+                }
+                return result;
+              });
+            const pending = forkAs(member.id);
+            void pending.catch(() => {});
+            try {
+              await withinTest(
+                awaitGateBeforeSettlement(
+                  entered.promise,
+                  pending,
+                  "fork skipped provider address preparation",
+                ),
+                signal,
+              );
+              await removeSessionMember(scope, member.id);
+              release.resolve();
+              await expect(pending).rejects.toThrow("admitted run authority is no longer active");
+              expect(requests).toHaveLength(2);
+              await expect(forkAs(member.id)).rejects.toThrow(/not found/i);
+              expect(requests).toHaveLength(2);
+            } finally {
+              release.resolve();
+              await Promise.allSettled([pending]);
+            }
           } finally {
             lifetime.abort();
             await disposeSessionReadContexts();

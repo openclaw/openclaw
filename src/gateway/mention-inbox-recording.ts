@@ -2,7 +2,7 @@ import { createHash, randomUUID } from "node:crypto";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { isIncognitoSessionKey } from "../routing/session-key.js";
-import type { createHumanMentionPolicy } from "./human-mention-policy.js";
+import type { createHumanMentionPolicy, MentionSharingTarget } from "./human-mention-policy.js";
 import { hasValidMentionReferences, type MentionCommittedInput } from "./mention-inbox-input.js";
 import { formatMentionExcerpt } from "./mention-inbox-presentation.js";
 import {
@@ -15,7 +15,6 @@ import {
   type StoredMention,
 } from "./mention-inbox-projection.js";
 import { MAX_MENTION_SOURCES, MENTION_RETENTION_MS } from "./mention-inbox-store.js";
-import type { SessionSharingTarget } from "./session-sharing-policy.js";
 
 const log = createSubsystemLogger("gateway/mentions");
 
@@ -42,7 +41,7 @@ export function createMentionInputRecorder(params: {
     draft: InboxState,
     guards: Array<() => void>,
     bounds: Pick<ReturnType<typeof createMentionMutationProjection>, "sourceIndex" | "itemLimit">,
-    readTarget: () => SessionSharingTarget | null,
+    readTarget: () => MentionSharingTarget | null,
   ): StoredMention[] {
     const { processed, head, dirtySources, items } = draft;
     const cfg = params.getRuntimeConfig();
@@ -97,6 +96,7 @@ export function createMentionInputRecorder(params: {
       agentId: resolved.agentId,
       sessionKey: resolved.canonicalKey,
       entry: resolved.entry,
+      membership: resolved.membership,
     };
     const excerpt = formatMentionExcerpt(input.excerpt);
     // Recipients share immutable message data; consumed sources retain only replay tombstones.
