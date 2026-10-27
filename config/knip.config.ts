@@ -196,6 +196,7 @@ const repositoryScriptEntries = [
   "scripts/perf/subagent-maintenance-capture-measure.ts!",
   "scripts/perf/subagent-sweep-measure.ts!",
   "scripts/perf/tool-schema-preparation-measure.ts!",
+  "scripts/perf/terminal-assistant-snapshot-measure.ts!",
   // Retained source commands and selectable preloads execute directly by exact path.
   "scripts/perf/after-turn-context-measure.ts!",
   "scripts/perf/agent-runtime-dispatch-measure.ts!",
