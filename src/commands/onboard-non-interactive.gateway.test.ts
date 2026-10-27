@@ -65,6 +65,16 @@ type FailureOutput = {
 
 describe("onboard (non-interactive): gateway and remote auth", () => {
   const { withStateDir } = useGatewayOnboardTestHarness("openclaw-onboard-");
+  const unreachable = (detail = "connect ECONNREFUSED 127.0.0.1:18789") => {
+    gatewayReachableState.mock = vi.fn(async () => ({ ok: false, detail }));
+  };
+  async function registeredSecret() {
+    const secret = "qa-onboarding-health-secret";
+    const { registerSecretValueForRedaction } =
+      await import("../logging/secret-redaction-registry.js");
+    registerSecretValueForRedaction(secret);
+    return secret;
+  }
 
   async function jsonFailure(
     stateDir: string,
@@ -115,10 +125,7 @@ describe("onboard (non-interactive): gateway and remote auth", () => {
   it("uses the setup phase's Fix hint in human and JSON output", async () => {
     for (const json of [false, true]) {
       await withStateDir("state-phase-recovery-", async (stateDir) => {
-        gatewayReachableState.mock = vi.fn(async () => ({
-          ok: false,
-          detail: "connect ECONNREFUSED 127.0.0.1:18997",
-        }));
+        unreachable("connect ECONNREFUSED 127.0.0.1:18997");
         const emitted = await captureFailure(stateDir, json, { installDaemon: undefined });
         const hints = json
           ? (JSON.parse(emitted) as { hints: string[] }).hints
@@ -143,46 +150,41 @@ describe("onboard (non-interactive): gateway and remote auth", () => {
 
   it("keeps container precedence on every recovery command in human and JSON output", async () => {
     const env = { OPENCLAW_PROFILE: "work", OPENCLAW_CONTAINER_HINT: "preview" };
+    type Recovery = {
+      detail?: string;
+      loaded?: boolean;
+      runtimeStatus?: string;
+      lastError?: string;
+      json?: boolean;
+    };
+    const recovery = (commands: string[], overrides: Recovery = {}) => ({
+      detail: "connect ECONNREFUSED",
+      loaded: true,
+      runtimeStatus: "running",
+      lastError: "",
+      json: true,
+      commands,
+      ...overrides,
+    });
     const cases = [
-      {
-        detail: "unauthorized: invalid token",
-        commands: ["doctor --fix"],
-        json: false,
-      },
-      {
-        detail: "Cannot find module sqlite-vec",
-        commands: ["doctor --fix"],
-      },
-      {
-        detail: "connect ECONNREFUSED",
+      recovery(["doctor --fix"], { detail: "unauthorized: invalid token", json: false }),
+      recovery(["doctor --fix"], { detail: "Cannot find module sqlite-vec" }),
+      recovery(["doctor --fix"], {
         lastError: "Cannot find package '@openclaw/example' imported from /app/plugin.mjs",
-        commands: ["doctor --fix"],
-      },
-      {
-        detail: "connect ECONNREFUSED",
-        loaded: false,
-        commands: ["gateway install --force"],
-      },
-      {
-        detail: "connect ECONNREFUSED",
-        runtimeStatus: "stopped",
-        commands: ["gateway restart"],
-      },
-      {
+      }),
+      recovery(["gateway install --force"], { loaded: false }),
+      recovery(["gateway restart"], { runtimeStatus: "stopped" }),
+      recovery(["gateway status --deep"], {
         detail: "startup timed out",
         lastError: "configuration parse failed",
-        commands: ["gateway status --deep"],
-      },
-      {
-        detail: "connect ECONNREFUSED",
-        commands: ["gateway run", "gateway restart"],
-      },
+      }),
+      recovery(["gateway run", "gateway restart"]),
     ];
 
     await withEnvAsync(env, async () => {
       for (const { detail, loaded, runtimeStatus, lastError, commands, json = true } of cases) {
         await withStateDir("state-container-recovery-", async (stateDir) => {
-          gatewayReachableState.mock = vi.fn(async () => ({ ok: false, detail }));
+          unreachable(detail);
           gatewayServiceMock.isLoaded.mockResolvedValueOnce(loaded ?? true);
           gatewayServiceMock.readRuntime.mockResolvedValueOnce({
             status: runtimeStatus ?? "running",
@@ -489,10 +491,7 @@ describe("onboard (non-interactive): gateway and remote auth", () => {
 
   it("completes explicit no-daemon setup without a startup wait when no gateway is listening", async () => {
     await withStateDir("state-local-health-hint-", async (stateDir) => {
-      gatewayReachableState.mock = vi.fn(async () => ({
-        ok: false,
-        detail: "connect ECONNREFUSED 127.0.0.1:18789",
-      }));
+      unreachable();
       const log = vi.fn();
 
       await runNonInteractiveSetup(
@@ -553,16 +552,10 @@ describe("onboard (non-interactive): gateway and remote auth", () => {
 
   it("emits structured JSON diagnostics when daemon health fails", async () => {
     await withStateDir("state-local-daemon-health-json-fail-", async (stateDir) => {
-      const registeredSecret = "qa-onboarding-health-secret";
-      const { registerSecretValueForRedaction } =
-        await import("../logging/secret-redaction-registry.js");
-      registerSecretValueForRedaction(registeredSecret);
-      gatewayReachableState.mock = vi.fn(async () => ({
-        ok: false,
-        detail: `gateway closed (1006 abnormal closure (no close frame)): ${registeredSecret}`,
-      }));
+      const secret = await registeredSecret();
+      unreachable(`gateway closed (1006 abnormal closure (no close frame)): ${secret}`);
       readLastGatewayErrorLineMock.mockResolvedValueOnce(
-        `Gateway failed to start: required secrets are unavailable: ${registeredSecret}`,
+        `Gateway failed to start: required secrets are unavailable: ${secret}`,
       );
 
       const { parsed, output } = await jsonFailure(stateDir);
@@ -579,7 +572,7 @@ describe("onboard (non-interactive): gateway and remote auth", () => {
       });
       expect(parsed.hints).toContain("Run `openclaw gateway status --deep` for more detail.");
       expect(parsed.diagnostics?.service?.loadState).toEqual({ status: "loaded" });
-      expect(output).not.toContain(registeredSecret);
+      expect(output).not.toContain(secret);
     });
   }, 60_000);
 
@@ -612,14 +605,9 @@ describe("onboard (non-interactive): gateway and remote auth", () => {
 
   it("routes thrown health-check errors through the onboarding failure owner", async () => {
     await withStateDir("state-local-health-failure-text-", async (stateDir) => {
-      const registeredSecret = "qa-onboarding-health-secret";
-      const { registerSecretValueForRedaction } =
-        await import("../logging/secret-redaction-registry.js");
-      registerSecretValueForRedaction(registeredSecret);
+      const secret = await registeredSecret();
       gatewayReachableState.mock = vi.fn(async () => ({ ok: true }));
-      healthCommandMock.mockRejectedValueOnce(
-        new Error(`health request timed out: ${registeredSecret}`),
-      );
+      healthCommandMock.mockRejectedValueOnce(new Error(`health request timed out: ${secret}`));
 
       const failure = await runNonInteractiveSetup(
         createOnboardLocalDaemonOptions(stateDir),
@@ -627,16 +615,13 @@ describe("onboard (non-interactive): gateway and remote auth", () => {
       ).catch((error: unknown) => error);
       expect(failure).toBeInstanceOf(Error);
       expect(String(failure)).toMatch(/health check failed[\s\S]*health request timed out/);
-      expect(String(failure)).not.toContain(registeredSecret);
+      expect(String(failure)).not.toContain(secret);
     });
   }, 60_000);
 
   it("preserves unknown service inspection in JSON diagnostics", async () => {
     await withStateDir("state-local-daemon-health-unknown-", async (stateDir) => {
-      gatewayReachableState.mock = vi.fn(async () => ({
-        ok: false,
-        detail: "connect ECONNREFUSED 127.0.0.1:18789",
-      }));
+      unreachable();
       gatewayServiceMock.isLoaded.mockRejectedValueOnce(new Error("systemctl timed out"));
 
       const { parsed } = await jsonFailure(stateDir);

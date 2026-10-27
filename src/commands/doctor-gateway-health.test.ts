@@ -12,6 +12,7 @@ import { createDeferred } from "../../test/helpers/promise.js";
 import { waitForGatewayDiagnosticReadiness } from "../cli/daemon-cli/diagnostic-readiness.js";
 import * as restartHealth from "../cli/daemon-cli/restart-health.constants.js";
 import type { OpenClawConfig } from "../config/config.js";
+import { expectText } from "../test-utils/text-assertions.js";
 import {
   GATEWAY_HEALTH_CREDENTIALS_REQUIRED_MESSAGE,
   GATEWAY_HEALTH_CREDENTIALS_REQUIRED_TITLE,
@@ -42,21 +43,14 @@ vi.mock("../gateway/call.js", () => ({
   isGatewayCredentialsRequiredError,
 }));
 
-vi.mock("../gateway/credentials.js", () => ({
-  isGatewaySecretRefUnavailableError,
-}));
-
-vi.mock("../cli/daemon-cli/probe.js", () => ({
-  probeGatewayStatus,
-}));
+vi.mock("../gateway/credentials.js", () => ({ isGatewaySecretRefUnavailableError }));
+vi.mock("../cli/daemon-cli/probe.js", () => ({ probeGatewayStatus }));
 
 vi.mock("../daemon/service.js", () => ({
   resolveGatewayService: () => ({ readCommand: readServiceCommand }),
 }));
 
-vi.mock("../../packages/terminal-core/src/note.js", () => ({
-  note,
-}));
+vi.mock("../../packages/terminal-core/src/note.js", () => ({ note }));
 
 import { checkGatewayHealth, probeGatewayMemoryStatus } from "./doctor-gateway-health.js";
 
@@ -67,6 +61,10 @@ describe("checkGatewayHealth", () => {
     checkGatewayHealth({ runtime: sharedRuntime, cfg: config });
   const noteContains = (message: string, title: string) =>
     expect(note).toHaveBeenCalledWith(expect.stringContaining(message), title);
+  const expectHealthy = async () =>
+    expect(check()).resolves.toMatchObject({ healthOk: true, authenticated: true });
+  const expectFailed = async () =>
+    expect(check()).resolves.toMatchObject({ authenticated: false, healthOk: false });
   const expectUnauthenticated = async () => {
     await expect(check()).resolves.toEqual({ authenticated: false, healthOk: true });
     expect(sharedRuntime.error).not.toHaveBeenCalled();
@@ -110,14 +108,10 @@ describe("checkGatewayHealth", () => {
         staleGatewayPids: [],
       };
     });
-    await expect(check()).resolves.toEqual({
-      healthOk: true,
-      authenticated: false,
-    });
+    await expectUnauthenticated();
     expect(sharedRuntime.log).toHaveBeenCalledWith(
       "Gateway is still starting (phase: startup-sidecars).",
     );
-    expect(sharedRuntime.error).not.toHaveBeenCalled();
     expect(callGateway).not.toHaveBeenCalled();
   });
 
@@ -142,7 +136,7 @@ describe("checkGatewayHealth", () => {
       },
     );
 
-    await expect(check()).resolves.toMatchObject({ authenticated: false, healthOk: false });
+    await expectFailed();
 
     noteContains("CLI and live Gateway use different", "Gateway state directory mismatch");
     noteContains(
@@ -162,10 +156,7 @@ describe("checkGatewayHealth", () => {
       environment: { OPENCLAW_STATE_DIR: "/tmp/doctor-service-state" },
     });
 
-    await expect(check()).resolves.toMatchObject({
-      healthOk: false,
-      authenticated: false,
-    });
+    await expectFailed();
 
     const warning = note.mock.calls.find(
       ([, title]) => title === "Gateway state directory mismatch",
@@ -189,14 +180,9 @@ describe("checkGatewayHealth", () => {
         readServiceCommand.mockRejectedValueOnce(inspectionError);
       }
 
-      await expect(check()).resolves.toMatchObject({
-        healthOk: false,
-      });
+      await expect(check()).resolves.toMatchObject({ healthOk: false });
 
-      expect(note).toHaveBeenCalledWith(
-        expect.stringContaining("could not be verified"),
-        "Gateway state directory",
-      );
+      noteContains("could not be verified", "Gateway state directory");
       const output = JSON.stringify(note.mock.calls);
       expect(output).not.toContain("secret-service-environment-canary");
       expect(output).not.toContain("Gateway state directory mismatch");
@@ -217,9 +203,7 @@ describe("checkGatewayHealth", () => {
       buildGatewayConnectionDetails.mockReturnValue({ url });
       callGateway.mockRejectedValueOnce(new Error("ECONNREFUSED"));
 
-      await expect(check(config)).resolves.toMatchObject({
-        healthOk: false,
-      });
+      await expect(check(config)).resolves.toMatchObject({ healthOk: false });
 
       expect(readServiceCommand).not.toHaveBeenCalled();
     },
@@ -261,7 +245,7 @@ describe("checkGatewayHealth", () => {
     ],
   ] as const)("reports %s without failing healthy RPC", async (title, status, fragments) => {
     callGateway.mockResolvedValueOnce(status).mockResolvedValue({});
-    await expect(check()).resolves.toMatchObject({ healthOk: true, authenticated: true });
+    await expectHealthy();
     for (const fragment of fragments) {
       noteContains(fragment, title);
     }
@@ -310,10 +294,7 @@ describe("checkGatewayHealth", () => {
       ],
     });
 
-    await expect(check()).resolves.toMatchObject({
-      authenticated: true,
-      healthOk: true,
-    });
+    await expectHealthy();
 
     expect(note).toHaveBeenCalledWith(
       `- feishu default: ${message} (resolve the reported channel error, then restart the channel)`,
@@ -395,18 +376,15 @@ describe("checkGatewayHealth", () => {
       await vi.advanceTimersByTimeAsync(21_000);
 
       await expect(result).resolves.toMatchObject({ healthOk: true, authenticated: true });
-      expect(note).toHaveBeenCalledWith(
-        expect.stringContaining(
-          "Gateway answered status in 7s; channel diagnostics did not finish within 21s",
-        ),
-        "Channel warnings",
-      );
-      expect(note).toHaveBeenCalledWith(
-        expect.stringContaining(
-          "Gateway answered status in 7s; exporter diagnostics did not finish within 21s",
-        ),
-        "Telemetry exporters",
-      );
+      for (const [kind, title] of [
+        ["channel", "Channel warnings"],
+        ["exporter", "Telemetry exporters"],
+      ]) {
+        noteContains(
+          `Gateway answered status in 7s; ${kind} diagnostics did not finish within 21s`,
+          title,
+        );
+      }
       expect(
         note.mock.calls.every(([message]) => String(message).includes("host may be slow")),
       ).toBe(true);
@@ -447,10 +425,7 @@ describe("checkGatewayHealth", () => {
       });
       const [message, actualTitle] = note.mock.calls.at(-1) ?? [];
       expect(actualTitle).toBe(title);
-      expect(message).toContain(text);
-      expect(message).toContain(`Retry: ${retry}`);
-      expect(message).not.toContain(token);
-      expect(message).not.toContain("\u001B");
+      expectText(message, [text, `Retry: ${retry}`], [token, "\u001B"]);
       expect(message.split("\n")).toHaveLength(2);
       expect(sharedRuntime.error).not.toHaveBeenCalled();
     },
@@ -481,7 +456,7 @@ describe("checkGatewayHealth", () => {
         ],
       })
       .mockResolvedValue({});
-    await expect(check()).resolves.toMatchObject({ healthOk: true, authenticated: true });
+    await expectHealthy();
     expect(note).toHaveBeenCalledWith(
       `- cold route:legacy-agent (auth-profile-legacy:auth-profiles): ${reason}\n  Retry: openclaw ${command}`,
       "Secret runtime degradation",
