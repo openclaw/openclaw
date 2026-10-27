@@ -16,9 +16,6 @@ const providerConfig = (baseUrl: string, apiKey: string): Provider => ({
   api: "openai-completions",
   models: [],
 });
-const withProviders = (providers: Record<string, Provider>): OpenClawConfig => ({
-  models: { providers },
-});
 function expectBudgets(params: TimeoutParams, idle: number, firstEvent = idle) {
   expect(resolveLlmIdleTimeoutMs(params)).toBe(idle);
   expect(resolveLlmFirstEventTimeoutMs(params)).toBe(firstEvent);
@@ -29,17 +26,13 @@ function configured(
   extra: Partial<Provider> = {},
 ): TimeoutParams {
   const baseUrl = extra.baseUrl ?? "http://gpu-box:8000/v1";
-  return {
-    model: { provider, baseUrl },
-    cfg: withProviders(
-      Object.fromEntries(
-        Object.entries(keys).map(([key, marker]) => [
-          key,
-          { ...providerConfig(baseUrl, marker), ...extra },
-        ]),
-      ),
-    ),
-  };
+  const providers = Object.fromEntries(
+    Object.entries(keys).map(([key, marker]) => [
+      key,
+      { ...providerConfig(baseUrl, marker), ...extra },
+    ]),
+  );
+  return { model: { provider, baseUrl }, cfg: { models: { providers } } };
 }
 type LocalityCase = { params: TimeoutParams; expected: number; cron?: number };
 
@@ -89,10 +82,7 @@ describe("LLM watchdog policy", () => {
 
   it("keeps explicit provider timeoutSeconds ahead of the remote hint", () => {
     const params = {
-      ...configured({ relay: "synthetic-remote" }, "relay", {
-        remote: true,
-        baseUrl: "http://127.0.0.1:8787",
-      }),
+      ...configured({ relay: "synthetic-remote" }, "relay", { remote: true }),
       modelRequestTimeoutMs: 900_000,
     };
     expectBudgets(params, 900_000);
@@ -104,7 +94,7 @@ describe("LLM watchdog policy", () => {
     ["kimi-k2.5:cloud", "http://127.0.0.1:11434", 0],
     ["gpt-oss:120b-cloud", "http://ollama-box:11434", 300_000],
   ])("keeps hosted watchdogs for custom Ollama model %s through %s", (id, baseUrl, localIdle) => {
-    const cfg = withProviders({ "local-ollama": providerConfig(baseUrl, "ollama-local") });
+    const { cfg } = configured({ "local-ollama": "ollama-local" }, "local-ollama", { baseUrl });
     const model = { provider: "local-ollama", id, baseUrl };
     expect({
       idle: resolveLlmIdleTimeoutMs({ cfg, model }),
