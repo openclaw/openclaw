@@ -5,7 +5,7 @@ import type { ChatRowDisplayFacts } from "../../../lib/chat/row-display-facts.ts
 import { mountSolid } from "../../../test-helpers/mount-solid.ts";
 import { flush } from "../../../test-helpers/solid-settle.ts";
 import { GroupedMessage } from "./chat-message-bubble-view.tsx";
-import { MessageImageAction } from "./chat-message-images-solid.tsx";
+import { MessageImageAction } from "./chat-message-images-view.tsx";
 import { prepareChatMessageRender } from "./chat-message-markdown-view.tsx";
 import { managedSource, stubObjectUrls } from "./chat-message-media.test-helpers.ts";
 import { ChatRowDisplayContext } from "./chat-row-display-context.ts";

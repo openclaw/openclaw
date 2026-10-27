@@ -183,10 +183,9 @@ export async function restoreColdLoadWarmState(
   }
   await page.evaluate(
     async ({ storage: saved, url: deepLink }) => {
+      const records: typeof storage.records = JSON.parse(saved.records);
       for (const thumbnail of saved.thumbnails) {
-        const record = saved.records.snapshots.find(
-          (row) => row.sessionKey === thumbnail.sessionKey,
-        );
+        const record = records.snapshots.find((row) => row.sessionKey === thumbnail.sessionKey);
         const image =
           record?.snapshot.rowDisplay?.[thumbnail.messageId]?.images?.[thumbnail.imageKey];
         if (!image) {
@@ -198,7 +197,7 @@ export async function restoreColdLoadWarmState(
         image.thumbnail = new Blob([bytes], { type: thumbnail.mime });
       }
       const databases: Record<string, Record<string, unknown[]>> = {
-        "openclaw-chat-snapshots": saved.records,
+        "openclaw-chat-snapshots": records,
       };
       if ((await indexedDB.databases()).some(({ name }) => name === "openclaw-control-ui")) {
         databases["openclaw-control-ui"] = { composerDrafts: [] };
@@ -242,6 +241,6 @@ export async function restoreColdLoadWarmState(
       }
       history.replaceState(null, "", deepLink);
     },
-    { storage, url },
+    { storage: { ...storage, records: JSON.stringify(storage.records) }, url },
   );
 }

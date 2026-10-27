@@ -48,7 +48,7 @@ import {
   ChatClawHubCard,
   MessageAttachment,
 } from "./chat-message-deferred.tsx";
-import { MessageImages } from "./chat-message-images-solid.tsx";
+import { MessageImages } from "./chat-message-images-view.tsx";
 import type { ChatMessageRenderPreparation } from "./chat-message-markdown-view.tsx";
 import type { MarkdownMedia, PositionedMedia } from "./chat-message-media-markdown.ts";
 import { prepareMarkdownMedia } from "./chat-message-media-markdown.ts";

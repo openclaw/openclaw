@@ -9,7 +9,7 @@ import { mediaTicketPayload } from "../../../test-helpers/control-ui-attachment-
 import { mountSolid } from "../../../test-helpers/mount-solid.ts";
 import { flush, waitForSolid } from "../../../test-helpers/solid-settle.ts";
 import { AssistantAttachments } from "./chat-message-attachments-solid.tsx";
-import { MessageImages } from "./chat-message-images-solid.tsx";
+import { MessageImages } from "./chat-message-images-view.tsx";
 import { stubObjectUrls, ticketResponse } from "./chat-message-media.test-helpers.ts";
 import {
   projectMessageMedia,

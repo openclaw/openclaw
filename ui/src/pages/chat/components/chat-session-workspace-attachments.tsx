@@ -7,7 +7,7 @@ import { registerChatSessionOptionalEnglish } from "../../../i18n/locales/en-cha
 import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
 import { ContentPresentation } from "../../../lib/solid/presentation.ts";
 import { MessageAttachmentAction } from "./chat-message-attachments-solid.tsx";
-import { MessageImageAction } from "./chat-message-images-solid.tsx";
+import { MessageImageAction } from "./chat-message-images-view.tsx";
 import {
   observeChatMediaResourceSubscriber,
   releaseChatMediaResourceOwner,

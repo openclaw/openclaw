@@ -3,7 +3,7 @@ import { parseYouTubeVideoUrl } from "../../../lib/chat/youtube-video.ts";
 import { ChatLazyBoundary } from "./chat-lazy-boundary.tsx";
 import { widgetPreviewHeight } from "./widget-preview-layout.ts";
 
-const Images = lazy(() => import("./chat-message-images-solid.tsx"), {
+const Images = lazy(() => import("./chat-message-images-view.tsx"), {
   export: "MessageImages",
 });
 const Attachments = lazy(() => import("./chat-message-attachments-solid.tsx"), {
@@ -17,10 +17,10 @@ const Recommendation = lazy(() => import("./chat-clawhub-card.tsx"), {
   export: "ChatClawHubCard",
 });
 
-// Chat and pending New Session messages share these boundaries. Empty media
-// collections must not load the renderers or the players they register.
+// Pending New Session images use this adapter; transcript images render with the row.
+// Empty collections keep deferred renderers and their players asleep.
 export function MessageImages(
-  props: Parameters<typeof import("./chat-message-images-solid.tsx").MessageImages>[0],
+  props: Parameters<typeof import("./chat-message-images-view.tsx").MessageImages>[0],
 ) {
   return (
     <Show when={props.images.length + (props.previews?.length ?? 0) > 0}>
