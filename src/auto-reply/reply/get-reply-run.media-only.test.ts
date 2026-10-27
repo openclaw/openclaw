@@ -201,6 +201,7 @@ vi.mock("../../agents/model-selection.js", async (importOriginal) => ({
   resolveModelRefFromString: vi.fn(() => undefined),
 }));
 
+// mock-isolation: fixture runtime overrides must not discover installed host harnesses.
 vi.mock("../../agents/session-runtime-compat.js", () => ({
   resolveSessionRuntimeOverrideForProvider: vi.fn(() => undefined),
 }));
