@@ -1,33 +1,16 @@
-import { AsyncLocalStorage } from "node:async_hooks";
 import { setImmediate as nextTurn } from "node:timers/promises";
-import { queryObjects } from "node:v8";
-import { expect, it, vi } from "vitest";
+import { expect, it } from "vitest";
 import { setRuntimeConfigSnapshot } from "../config/config.js";
-import { replaceSessionEntrySync } from "../config/sessions/session-accessor.js";
 import { sessionChanges } from "../sessions/session-row-changes.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
+import { expectCollected, weak, weakControl } from "./session-collection.test-support.js";
 import { ready } from "./session-row-projection-record.js";
-import { withAcceptedSuffix } from "./session-row-projection.accepted-facts.test-support.js";
 import {
   createTestProjection,
   holdForeground,
   seedRow as writeEntry,
 } from "./session-row-projection.read-fixture.test-support.js";
-import { prepareSessionMutationFacts } from "./session-sharing-preparation.js";
 import { listProjectedSessions, prepareSessionRowSelection } from "./session-utils-list.js";
-
-const weak = (value: object) => new WeakRef(value);
-async function expectCollected(refs: WeakRef<object>[]) {
-  // End the WeakRef creation job; dereferencing before GC would keep targets alive.
-  await nextTurn();
-  queryObjects(WeakRef);
-  for (const ref of refs) {
-    expect(ref.deref()).toBeUndefined();
-  }
-}
-
-const unavailableMessage =
-  "Session access facts are unavailable; retry after session storage is ready.";
 
 it("collects superseded resident rows and their materializations after metadata refreshes", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async () => {
@@ -62,7 +45,7 @@ it("collects superseded resident rows and their materializations after metadata 
         }
       }
     }
-    const control = weak({});
+    const control = weakControl();
     function refreshEntries(revision: number) {
       for (const row of rows()) {
         retired.push(...[row, row.entry, row.materialized].map(weak));
@@ -92,7 +75,7 @@ it("collects superseded resident rows and their materializations after metadata 
       // A publication must release the last list even when no subsequent viewer arrives.
       refreshEntries(5);
       await projection.ensureMaterialized();
-      await expectCollected([control, ...retired, ...selections, ...snapshots]);
+      await expectCollected(control, ...retired, ...selections, ...snapshots);
       expect(rows()).toHaveLength(keys.length);
       await listProjectedSessions({ projection, opts: {}, acceptsSerializedJson: true });
       const materializations = rows().map((row) => weak(row.materialized));
@@ -106,7 +89,7 @@ it("collects superseded resident rows and their materializations after metadata 
       const disposedEntries = projection.selectEntries().map((row) => weak(row.entry));
       captureSelections();
       projection.dispose();
-      await expectCollected([...materializations, ...disposedEntries, ...selections]);
+      await expectCollected(...materializations, ...disposedEntries, ...selections);
     } finally {
       projection.dispose();
       release();
@@ -132,7 +115,7 @@ it("does not retain a superseded child entry through a held parent display row",
     const retiredChild = new WeakRef(projection.describe({ agentId: "main", key: child })!.entry);
     writeChild(2);
     await projection.ensureMaterialized();
-    await expectCollected([retiredChild]);
+    await expectCollected(retiredChild);
     // Retained consumers may still hold the old parent; it needs only child display facts.
     expect(heldParent.materialized.source.childLinks?.[0]?.entry.sessionId).toBe("compact-child");
     expect(
@@ -140,44 +123,3 @@ it("does not retain a superseded child entry through a held parent display row",
     ).toEqual([child]);
   });
 });
-
-it("does not render the accepted suffix after dispose", async () => {
-  const refs: WeakRef<object>[] = [];
-  await withAcceptedSuffix(async ({ projection, suffix, query, resume }) => {
-    const pending = weak(suffix.pendingDatabaseFacts!);
-    refs.push(weak({}), pending);
-    projection.dispose();
-    await resume();
-    expect(projection.isCurrent(suffix)).toBe(false);
-    expect(projection.snapshot(query).row?.label ?? null).toBe(null);
-  });
-  // Restoring spies does not clear their recorded fixture arguments or results.
-  vi.clearAllMocks();
-  await expectCollected(refs);
-});
-
-it("does not retain discovery context in active session authority", () =>
-  withOpenClawTestState({ scenario: "minimal" }, async () => {
-    const cfg = { agents: { entries: { main: {} } } };
-    const sessionKey = "agent:main:retention";
-    const target = { agentId: "main", sessionKey };
-    const prepare = () => prepareSessionMutationFacts({ cfg, ...target });
-    replaceSessionEntrySync(target, { sessionId: "retention", updatedAt: 1 });
-    (await prepare()).release();
-    const scope = new AsyncLocalStorage<object>();
-    async function capture() {
-      const payload = { sessions: [{ sessionId: "completed-unrelated-session" }] };
-      const facts = await scope.run(payload, prepare);
-      return { facts, payload: weak(payload), control: weak({}) };
-    }
-    const retained = await capture();
-    try {
-      await expectCollected([retained.control, retained.payload]);
-      expect(retained.facts.readCurrent(cfg).target.entry.sessionId).toBe("retention");
-      retained.facts.release();
-      expect(() => retained.facts.readCurrent(cfg)).toThrow(unavailableMessage);
-    } finally {
-      retained.facts.release();
-      scope.disable();
-    }
-  }));

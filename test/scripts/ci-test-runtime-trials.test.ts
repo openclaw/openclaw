@@ -17,7 +17,8 @@ const bunFile = "src/process/spawn-broker/context.test.ts";
 // Gateway-core files precede database-worker files for the focused owner assertion.
 const sessionWeakRefFiles = [
   "src/gateway/session-list-history-retention.test.ts",
-  "src/gateway/session-retention.test.ts",
+  "src/gateway/session-row-projection.retention.test.ts",
+  "src/gateway/session-database-retention.test.ts",
 ];
 
 function group(name: string, config: string, includePatterns?: string[]) {
@@ -64,6 +65,7 @@ it.each([
     ["src/gateway/server-methods/diagnostics.heap-snapshot.test.ts", ...sessionWeakRefFiles],
   ],
   ["gateway-core", sessionWeakRefFiles.slice(0, 2)],
+  ["gateway-database-workers", sessionWeakRefFiles.slice(2)],
   ["gateway-methods", ["src/gateway/server-methods/diagnostics.heap-snapshot.test.ts"]],
 ] as const)("preserves Gateway Node contracts for the %s inventory", async (name, files) => {
   const { calls } = await recordRun(group(name, `test/vitest/vitest.${name}.config.ts`));
