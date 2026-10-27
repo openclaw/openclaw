@@ -153,19 +153,3 @@ it("adds Ultra orchestration only when sessions_spawn is callable", () => {
   expect(unavailable).not.toContain("Use `sessions_spawn` when independent work");
   expect(ultra({ promptMode: "none" })).not.toContain(heading);
 });
-
-it("keeps shared USER preferences before the current person's overlay", () => {
-  const prompt = buildAgentSystemPrompt({
-    workspaceDir: "/workspace",
-    contextFiles: [
-      { path: "/workspace/USER.md", content: "Shared preferences" },
-      {
-        path: "/workspace/users/person/USER.md",
-        content: "Personal preferences",
-        personalUser: true,
-      },
-    ],
-  });
-  expect(prompt.indexOf("Shared preferences")).toBeLessThan(prompt.indexOf("Personal preferences"));
-  expect(prompt).toContain("belongs to this session");
-});

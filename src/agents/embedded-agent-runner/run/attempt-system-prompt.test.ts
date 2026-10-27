@@ -4,7 +4,6 @@ import {
   splitSystemPromptRelocatableBoundary,
   stripSystemPromptCacheBoundary,
 } from "@openclaw/ai/internal/shared";
-import { Type } from "typebox";
 import { afterEach, beforeAll, describe, expect, it, onTestFinished, vi } from "vitest";
 import {
   captureAnthropicRequest,
@@ -31,7 +30,13 @@ import * as runtimePrompt from "../../runtime-prompt.js";
 import type { AgentTool } from "../../runtime/index.js";
 import { convertToLlm } from "../../sessions/messages.js";
 import { buildSubagentSpawnEnvelope } from "../../subagents/spawn/subagent-system-prompt.js";
+import { fakeTool } from "../../test-helpers/fake-tool.js";
 import { makeProviderModelFixture } from "../../test-helpers/provider-model-fixture.js";
+import {
+  clearToolSearchCatalog,
+  createToolSearchCatalogRef,
+  registerHeadlessToolSearchCatalog,
+} from "../../tool-search-catalog.js";
 import type { ToolSearchCatalogRef } from "../../tool-search-types.js";
 import { createAttemptSetupFixture } from "./attempt-setup.test-support.js";
 import { createEmptyPromptBootstrap } from "./attempt-system-prompt.test-support.js";
@@ -83,18 +88,11 @@ afterEach(() => {
   providerRegistryMocks.resolvePluginProvidersCore.mockClear();
 });
 
-const tool = (name: string): AgentTool => ({
-  name,
-  label: name,
-  description: name,
-  parameters: Type.Object({}),
-  execute: async () => ({ content: [], details: {} }),
-});
+const tool = (name: string) => fakeTool(name, name);
 
 async function preparePermissionPrompt({
   codeModeActive = false,
   isRawModelRun = false,
-  thinkLevel,
   requireExplicitMessageTarget,
   session,
   skills,
@@ -102,21 +100,18 @@ async function preparePermissionPrompt({
   attemptOverrides,
   toolSearchCatalogRef,
   suppliedTools,
-  setupOverrides,
   additionalToolNames = [],
 }: {
   additionalToolNames?: string[];
   codeModeActive?: boolean;
   isRawModelRun?: boolean;
-  thinkLevel?: EmbeddedRunAttemptParams["thinkLevel"];
   requireExplicitMessageTarget?: boolean;
   session?: Pick<EmbeddedRunAttemptParams, "sessionKey" | "sandboxSessionKey">;
-  skills?: { prompt: string; toolsAllow?: string[]; initialToolNames?: string[] };
+  skills?: { prompt: string; toolsAllow?: string[] };
   webSearchUnconfigured?: () => boolean;
   attemptOverrides?: Partial<EmbeddedRunAttemptParams>;
   toolSearchCatalogRef?: ToolSearchCatalogRef;
   suppliedTools?: AgentTool[];
-  setupOverrides?: Parameters<typeof createAttemptSetupFixture>[0];
 } = {}) {
   const read = tool("read");
   const write = tool("write");
@@ -146,7 +141,6 @@ async function preparePermissionPrompt({
     workspaceDir: "/tmp/openclaw",
     config: {},
     admittedRunContext: await admitPrompt(),
-    thinkLevel,
     toolsAllow: skills?.toolsAllow,
     sourceReplyDeliveryMode:
       requireExplicitMessageTarget === undefined ? undefined : "message_tool_only",
@@ -188,15 +182,12 @@ async function preparePermissionPrompt({
     activeContextEngine: undefined,
     bootstrap: createEmptyPromptBootstrap(),
     capabilityToolNames,
-    effectiveTools: skills?.initialToolNames
-      ? effectiveTools.filter(({ name }) => skills.initialToolNames?.includes(name))
-      : effectiveTools,
+    effectiveTools,
     setup: createAttemptSetupFixture({
       effectiveCwd: "/tmp/openclaw",
       effectiveWorkspace: "/tmp/openclaw",
       getProviderRuntimeHandle,
       sandboxSessionKey: attempt.sandboxSessionKey ?? attempt.sessionKey ?? attempt.sessionId,
-      ...setupOverrides,
     }),
     isRawModelRun,
     modelToolsEnabled: true,
@@ -424,26 +415,9 @@ describe("buildAttemptSystemPrompt", () => {
   });
 
   it("refreshes deferred reporting only when the prepared catalog is accepted", async () => {
-    const deferred = tool("deferred");
-    const catalogRef: ToolSearchCatalogRef = {
-      current: {
-        counterScope: "test",
-        searchCount: 0,
-        describeCount: 0,
-        callCount: 0,
-        entries: [
-          {
-            id: "openclaw:core:deferred",
-            name: deferred.name,
-            source: "openclaw",
-            sourceName: "core",
-            description: deferred.description,
-            parameters: deferred.parameters,
-            tool: deferred,
-          },
-        ],
-      },
-    };
+    const catalogRef = createToolSearchCatalogRef();
+    registerHeadlessToolSearchCatalog({ catalogRef, tools: [tool("deferred")] });
+    onTestFinished(() => clearToolSearchCatalog({ catalogRef }));
     const { prepared } = await preparePermissionPrompt({ toolSearchCatalogRef: catalogRef });
     expect(prepared.systemPromptReport?.tools.deferred?.entries.map((entry) => entry.name)).toEqual(
       ["deferred"],
@@ -477,130 +451,91 @@ describe("buildAttemptSystemPrompt", () => {
   const skillsCatalog = "<available_skills><skill><name>weather</name></skill></available_skills>";
 
   it.each([
-    ["native reader", ["execute_code", "read"], ["execute_code", "read"], true],
-    ["skill reader", ["execute_code", "skills_read"], ["execute_code", "skills_read"], true],
-    ["excluded reader", ["execute_code"], ["execute_code", "read"], false],
-    ["unavailable reader", ["execute_code", "read"], ["execute_code"], false],
-    ["tool-less routine", [], ["execute_code", "read"], false],
+    ["native reader", false, ["read"], ["read"], true],
+    ["skill reader", false, ["skills_read"], ["skills_read"], true],
+    ["excluded reader", false, ["write"], ["write", "read"], false],
+    ["unavailable reader", false, ["write", "read"], ["write"], false],
+    ["tool-less routine", false, [], ["read"], false],
+    ["Code Mode without reader", true, ["write"], ["write", "read", "skills_read"], false],
+    ["Code Mode reader", true, ["write", "skills_read"], ["write", "skills_read"], true],
   ] as const)(
     "includes routine skills only with an executable reader: %s",
-    async (_label, toolsAllow, toolNames, expected) => {
-      const { prepared, effectiveTools } = await preparePermissionPrompt({
+    async (_label, codeModeActive, toolsAllow, toolNames, expected) => {
+      const fixture = await preparePermissionPrompt({
+        codeModeActive,
         session: { sessionKey: "agent:main:cron:skill-reader:run:fixture" },
         suppliedTools: toolNames.map(tool),
         skills: { prompt: skillsCatalog, toolsAllow: [...toolsAllow] },
       });
+      const { prepared, effectiveTools, capabilityToolNames } = fixture;
+      const { systemPromptText, systemPromptReport } = prepared;
       const { payload } = await captureAnthropicRequest("transport", {
         context: {
-          systemPrompt: prepared.systemPromptText,
+          systemPrompt: systemPromptText,
           tools: effectiveTools,
           messages: [{ role: "user", content: "Check the weather.", timestamp: 1 }],
         },
       });
-
-      expect(JSON.stringify(payload.system).includes(skillsCatalog)).toBe(expected);
-      expect(/"name":"(?:read|skills_read)"/.test(JSON.stringify(payload.tools))).toBe(expected);
-      expect(prepared.systemPromptReport?.skills.entries.map(({ name }) => name)).toEqual(
+      const system = JSON.stringify(payload.system);
+      expect(system.includes(skillsCatalog)).toBe(expected);
+      expect(system.includes("skills.read(")).toBe(codeModeActive && expected);
+      expect(systemPromptReport?.skills.entries.map(({ name }) => name)).toEqual(
+        expected ? ["weather"] : [],
+      );
+      if (codeModeActive) {
+        expect(payload.tools).toEqual(
+          expect.arrayContaining([expect.objectContaining({ name: "exec" })]),
+        );
+        expect(capabilityToolNames.has("write")).toBe(true);
+        expect(capabilityToolNames.has("read")).toBe(false);
+        expect(system).not.toContain("read exact <location>");
+      } else {
+        expect(/"name":"(?:read|skills_read)"/.test(JSON.stringify(payload.tools))).toBe(expected);
+      }
+      const refreshed = await fixture.refreshSystemPrompt(systemPromptText, toolNames.map(tool));
+      expect(refreshed.includes(skillsCatalog)).toBe(expected);
+      expect(systemPromptReport?.skills.entries.map(({ name }) => name)).toEqual(
         expected ? ["weather"] : [],
       );
     },
   );
 
   it.each([false, true])(
-    "advertises Code Mode skills only with an admitted reader (%s)",
-    async (admitted) => {
-      const { prepared, effectiveTools, capabilityToolNames } = await preparePermissionPrompt({
-        codeModeActive: true,
-        session: { sessionKey: "agent:main:cron:skill-reader:run:fixture" },
-        suppliedTools: ["write", "read", "skills_read"].map(tool),
-        skills: {
-          prompt: skillsCatalog,
-          toolsAllow: admitted ? ["write", "skills_read"] : ["write"],
-        },
+    "refreshes reader diagnostics and hook overrides (Code Mode=%s)",
+    async (codeModeActive) => {
+      const reader = tool(codeModeActive ? "skills_read" : "read");
+      const write = tool("write");
+      const fixture = await preparePermissionPrompt({
+        codeModeActive,
+        suppliedTools: [write, reader],
+        skills: { prompt: skillsCatalog, toolsAllow: ["write", reader.name] },
       });
-      const { payload } = await captureAnthropicRequest("transport", {
-        context: {
-          systemPrompt: prepared.systemPromptText,
-          tools: effectiveTools,
-          messages: [{ role: "user", content: "Check the weather.", timestamp: 1 }],
-        },
-      });
+      const { prepared, refreshSystemPrompt } = fixture;
+      expect(prepared.systemPromptText).toContain(skillsCatalog);
+      const hidden = await refreshSystemPrompt(prepared.systemPromptText, [write]);
+      expect(hidden).not.toContain(skillsCatalog);
+      expect(hidden).not.toContain("read exact <location>");
+      expect(prepared.systemPromptReport?.skills.promptChars).toBe(0);
+      expect(fixture.effectiveTools.some(({ name }) => name === "exec")).toBe(codeModeActive);
 
-      expect(payload.tools).toEqual(
-        expect.arrayContaining([expect.objectContaining({ name: "exec" })]),
+      const restored = await refreshSystemPrompt(hidden, [write, reader]);
+      expect(restored).toContain(skillsCatalog);
+      expect(fixture.effectiveTools.some(({ name }) => name === "exec")).toBe(codeModeActive);
+      expect(prepared.systemPromptReport?.skills.entries.map(({ name }) => name)).toEqual([
+        "weather",
+      ]);
+      expect(prepared.systemPromptReport?.skills.hash).toBe(
+        createHash("sha256").update(skillsCatalog).digest("hex"),
       );
-      expect(capabilityToolNames.has("write")).toBe(true);
-      expect(capabilityToolNames.has("read")).toBe(false);
-      const system = JSON.stringify(payload.system);
-      expect(system.includes(skillsCatalog)).toBe(admitted);
-      expect(system.includes("skills.read(")).toBe(admitted);
-      expect(system).not.toContain("read exact <location>");
-      expect(prepared.systemPromptReport?.skills.entries.map(({ name }) => name)).toEqual(
-        admitted ? ["weather"] : [],
-      );
+      const overridden = await refreshSystemPrompt("Use the deliberate hook override.", [
+        write,
+        reader,
+      ]);
+      expect(overridden).not.toContain(skillsCatalog);
+      expect(prepared.systemPromptReport?.skills.promptChars).toBe(0);
+      expect(prepared.systemPromptReport?.skills.entries).toEqual([]);
     },
   );
-
-  it("refreshes Code Mode skills when the reader changes while exec remains available", async () => {
-    const write = tool("write");
-    const reader = tool("skills_read");
-    const fixture = await preparePermissionPrompt({
-      codeModeActive: true,
-      suppliedTools: [write, reader],
-      skills: { prompt: skillsCatalog, toolsAllow: ["write", "skills_read"] },
-    });
-    expect(fixture.prepared.systemPromptText).toContain(skillsCatalog);
-
-    const hidden = await fixture.refreshSystemPrompt(fixture.prepared.systemPromptText, [write]);
-    expect(fixture.effectiveTools.some(({ name }) => name === "exec")).toBe(true);
-    expect(hidden).not.toContain(skillsCatalog);
-    expect(hidden).not.toContain("read exact <location>");
-    expect(fixture.prepared.systemPromptReport?.skills.promptChars).toBe(0);
-
-    const restored = await fixture.refreshSystemPrompt(hidden, [write, reader]);
-    expect(fixture.effectiveTools.some(({ name }) => name === "exec")).toBe(true);
-    expect(restored).toContain(skillsCatalog);
-    expect(fixture.prepared.systemPromptReport?.skills.entries.map(({ name }) => name)).toEqual([
-      "weather",
-    ]);
-  });
-
-  it("refreshes skill diagnostics when read visibility changes or hooks replace the prompt", async () => {
-    const { prepared, read, refreshSystemPrompt } = await preparePermissionPrompt({
-      skills: { prompt: skillsCatalog },
-    });
-    const hidden = await refreshSystemPrompt(prepared.systemPromptText, []);
-    expect(hidden).not.toContain(skillsCatalog);
-    expect(prepared.systemPromptReport?.skills.promptChars).toBe(0);
-
-    const restored = await refreshSystemPrompt(hidden, [read]);
-    expect(restored).toContain(skillsCatalog);
-    expect(prepared.systemPromptReport?.skills.entries.map(({ name }) => name)).toEqual([
-      "weather",
-    ]);
-    expect(prepared.systemPromptReport?.skills.hash).toBe(
-      createHash("sha256").update(skillsCatalog).digest("hex"),
-    );
-
-    const overridden = await refreshSystemPrompt("Use the deliberate hook override.", [read]);
-    expect(overridden).not.toContain(skillsCatalog);
-    expect(prepared.systemPromptReport?.skills.promptChars).toBe(0);
-    expect(prepared.systemPromptReport?.skills.entries).toEqual([]);
-  });
-
-  it("reports read becoming visible while preserving attempt tool policy", async () => {
-    const toolsAllow = ["message"];
-    const { prepared, read, refreshSystemPrompt } = await preparePermissionPrompt({
-      skills: { prompt: skillsCatalog, toolsAllow, initialToolNames: [] },
-    });
-    expect(prepared.systemPromptText).not.toContain(skillsCatalog);
-    expect(prepared.systemPromptReport?.skills.promptChars).toBe(0);
-
-    const refreshed = await refreshSystemPrompt(prepared.systemPromptText, [read]);
-    expect(refreshed).not.toContain(skillsCatalog);
-    expect(prepared.systemPromptReport?.skills.promptChars).toBe(0);
-    expect(prepared.systemPromptReport?.skills.entries).toEqual([]);
-  });
 
   it("keeps the system prompt identical when execution-owned processes change", async () => {
     const owned = createProcessSessionFixture({ id: "execution-owned", backgrounded: true });
@@ -629,7 +564,8 @@ describe("buildAttemptSystemPrompt", () => {
     const prompts = [];
     for (const effort of ["low", "high", "medium"] as const) {
       prompts.push(
-        (await preparePermissionPrompt({ thinkLevel: effort })).prepared.systemPromptText,
+        (await preparePermissionPrompt({ attemptOverrides: { thinkLevel: effort } })).prepared
+          .systemPromptText,
       );
     }
     expect(prompts[0]).not.toBe("");
@@ -767,11 +703,6 @@ describe("buildAttemptSystemPrompt", () => {
       const resolveReferences = vi.spyOn(referencePaths, "resolveOpenClawReferencePaths");
       const { prepared, getProviderRuntimeHandle } = await preparePermissionPrompt({
         suppliedTools: [],
-        setupOverrides: {
-          effectiveCwd: "/tmp/workspace",
-          effectiveWorkspace: "/tmp/workspace",
-          sandboxSessionKey: "session",
-        },
         isRawModelRun: modelRun === true || promptMode === "none",
         attemptOverrides: {
           permissionMode: undefined,
