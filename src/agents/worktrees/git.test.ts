@@ -7,6 +7,7 @@ import {
   withinTest,
 } from "../../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import * as gitExec from "../../infra/git-exec.js";
 import * as execRunner from "../../process/exec-runner.js";
 import * as processExec from "../../process/exec.js";
 import type { SpawnResult } from "../../process/exec.js";
@@ -21,7 +22,9 @@ import {
   hasSelfContainedGitMetadata,
   insideGitCheckout,
   listGitWorktrees,
+  readGitWorktreePathInventory,
   requireGit,
+  resolveGitRepositoryPaths,
   runGit,
   runGitBuffered,
   runGitBytes,
@@ -564,6 +567,21 @@ describe("Git checkout discovery", () => {
           { path: await fs.realpath(detached), branch: null, head: initialHead },
         ]),
       );
+      const normalized = vi.spyOn(gitExec, "normalizeGitPathForFilesystem");
+      await expect(resolveGitRepositoryPaths(linked)).resolves.toEqual({
+        canonicalRoot: await fs.realpath(repo),
+        commonDir: await fs.realpath(path.join(repo, ".git")),
+      });
+      // The common directory and primary checkout are the only paths this reader consumes.
+      expect(normalized).toHaveBeenCalledTimes(2);
+      const detachedPath = await fs.realpath(detached);
+      await fs.rm(detached, { recursive: true });
+      const paths = await readGitWorktreePathInventory(repo);
+      normalized.mockClear();
+      expect(paths.has(await fs.realpath(linked))).toBe(true);
+      expect(paths.has(detachedPath)).toBe(true);
+      expect(paths.has(`${detachedPath}-sibling`)).toBe(false);
+      expect(normalized).not.toHaveBeenCalled();
     },
   );
 });

@@ -24,9 +24,9 @@ async function inspectSurfaces(page: Page) {
     const host = conversation.closest<HTMLElement>(".sidebar-region")!;
     const probe = document.createElement("div");
     root.append(probe);
-    const resolve = (value: string) => {
-      probe.style.backgroundColor = value;
-      return getComputedStyle(probe).backgroundColor;
+    const resolve = (value: string, property: "backgroundColor" | "backgroundImage") => {
+      probe.style[property] = value;
+      return getComputedStyle(probe)[property];
     };
     const composerStyle = getComputedStyle(composer);
     const bubbleStyle = getComputedStyle(bubble);
@@ -36,8 +36,11 @@ async function inspectSurfaces(page: Page) {
       const rect = element.getBoundingClientRect();
       return { width: rect.width, height: rect.height };
     };
-    const composerSurface = resolve("var(--chat-composer-surface)");
-    const expectedBubble = resolve("var(--chat-user-surface)");
+    const expectedComposer = resolve(
+      "linear-gradient(var(--chat-composer-surface), var(--chat-composer-surface)), none",
+      "backgroundImage",
+    );
+    const expectedBubble = resolve("var(--chat-user-surface)", "backgroundColor");
     probe.remove();
     return {
       themeSheets: [...document.querySelectorAll<HTMLLinkElement>('link[rel="stylesheet"]')]
@@ -45,7 +48,7 @@ async function inspectSurfaces(page: Page) {
         .map((link) => ({ href: new URL(link.href).pathname, loaded: Boolean(link.sheet) })),
       composer: composerStyle.backgroundImage,
       bubble: bubbleStyle.backgroundColor,
-      expectedComposer: `linear-gradient(${composerSurface}, ${composerSurface}), none`,
+      expectedComposer,
       expectedBubble,
       host: hostStyle.backgroundColor,
       mobileHost: host.classList.contains("sidebar-region--mobile-host"),

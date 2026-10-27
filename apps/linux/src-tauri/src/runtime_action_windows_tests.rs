@@ -8,10 +8,12 @@ fn health_accepts_the_service_owners_ordinary_windows_runtime_path() {
     let bun = root.join("bun.exe");
     fs::write(&bun, "synthetic Bun").unwrap();
     let runtime = BundledRuntime {
-        bun: fs::canonicalize(&bun).unwrap(),
+        executable: fs::canonicalize(&bun).unwrap(),
         sqlite: None,
+        flavor: RuntimeFlavor::Jit,
+        entry: None,
     };
-    let ordinary = windows_process_path(&runtime.bun).unwrap();
+    let ordinary = windows_process_path(&runtime.executable).unwrap();
     let mut health = serde_json::json!({
         "service": {
             "loaded": true, "targetRole": "target",

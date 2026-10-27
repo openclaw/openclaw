@@ -556,7 +556,7 @@ it("leaves the unrelated warm worker running when admission rejects a request be
 });
 
 it.each([false, true])(
-  "joins the history worker when its five-minute idle timer fires (missing=%s)",
+  "joins the transcript worker when its lane idle timer fires (missing=%s)",
   async (missing) => {
     await withHistoryState(async (state) => {
       const a = missing
@@ -567,10 +567,11 @@ it.each([false, true])(
             env: state.env,
           })
         : await seed(state, "main", "idle-a");
+      const idleMs = missing ? 90_000 : 5 * 60_000;
       const beforeRead = observed.timers.mock.calls.length;
       await a.read();
       const worker = observed.workers.at(-1)!;
-      const index = observed.timers.mock.calls.findLastIndex((call) => call[1] === 5 * 60_000);
+      const index = observed.timers.mock.calls.findLastIndex((call) => call[1] === idleMs);
       expect(index).toBeGreaterThanOrEqual(beforeRead);
       const [expire] = observed.timers.mock.calls[index]!;
       const timer = observed.timers.mock.results[index]!.value as NodeJS.Timeout;
@@ -588,17 +589,14 @@ it.each([false, true])(
       if (missing) {
         // No database resource exists to close; the reopened empty worker owns only its idle timer.
         const emptyWorker = observed.workers.at(-1)!;
-        const nextIndex = observed.timers.mock.calls.findLastIndex(
-          (call) => call[1] === 5 * 60_000,
-        );
+        const nextIndex = observed.timers.mock.calls.findLastIndex((call) => call[1] === idleMs);
         expect(nextIndex).toBeGreaterThan(index);
         clearTimeout(observed.timers.mock.results[nextIndex]!.value as NodeJS.Timeout);
         observed.timers.mock.calls[nextIndex]![0]();
         await expect.poll(() => emptyWorker.threadId).toBe(-1);
-        expect(observed.timers.mock.calls.filter((call) => call[1] === 5 * 60_000)).toHaveLength(
-          observed.timers.mock.calls
-            .slice(0, nextIndex + 1)
-            .filter((call) => call[1] === 5 * 60_000).length,
+        expect(observed.timers.mock.calls.filter((call) => call[1] === idleMs)).toHaveLength(
+          observed.timers.mock.calls.slice(0, nextIndex + 1).filter((call) => call[1] === idleMs)
+            .length,
         );
       }
     });

@@ -307,6 +307,13 @@ export function filterSessionEntries(
             provider: entry.modelProvider,
             model: entry.model,
           });
+          // Goal search uses entry usage, not elapsed time or display-only timestamps.
+          const goal = entry.goal && resolveGatewaySessionGoal(entry, now);
+          if (goal) {
+            rawFields.push(
+              `${goal.objective} ${goal.status} ${formatGoalSummary(goal)} ${goal.lastStatusNote ?? ""}`,
+            );
+          }
           fields = {
             key: storeKey,
             literal: rawFields.map(normalizeLowercaseStringOrEmpty),
@@ -345,18 +352,6 @@ export function filterSessionEntries(
           ) {
             return true;
           }
-        }
-        const goal = entry.goal && resolveGatewaySessionGoal(entry, now);
-        if (
-          goal &&
-          matchesSessionListSearch(
-            [
-              `${goal.objective} ${goal.status} ${formatGoalSummary(goal)} ${goal.lastStatusNote ?? ""}`,
-            ],
-            search,
-          )
-        ) {
-          return true;
         }
         let identityMatch = identityMatches?.get(agentId);
         if (identityMatch === undefined) {

@@ -24,8 +24,8 @@ import {
 } from "../../test-utils/channel-plugins.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { normalizeSessionDeliveryState } from "../../utils/delivery-context.shared.js";
+import { splitExtraSystemPrompt } from "../internal-runtime-context.js";
 import { createOperatorRecoveryAuthority } from "../operator-recovery.test-support.js";
-import { buildAgentSystemPrompt } from "../system-prompt.js";
 import {
   prepareCommandSessionRecoveryEntry,
   prepareEmbeddedSessionState,
@@ -114,19 +114,13 @@ it.each([
       }))!;
       const snapshot = { prompt: "skill instructions", skills: [], version: 1 };
       const store: Record<string, SessionEntry> = { [sessionKey]: initial };
-      if (testCase.current === "policy-cleared") {
+      if (testCase.current === "policy-cleared" || testCase.current === "replaced") {
+        const replaced = testCase.current === "replaced";
         await replaceSessionEntry(scope, {
-          sessionId: initial.sessionId,
+          sessionId: replaced ? "replacement-session" : initial.sessionId,
           updatedAt: 2,
-          sessionStartedAt: 1,
-          label: "Renamed while preparing",
-          sendPolicy: "deny",
-        });
-      } else if (testCase.current === "replaced") {
-        await replaceSessionEntry(scope, {
-          sessionId: "replacement-session",
-          updatedAt: 2,
-          label: "Replacement",
+          label: replaced ? "Replacement" : "Renamed while preparing",
+          ...(replaced ? {} : { sessionStartedAt: 1, sendPolicy: "deny" as const }),
         });
       } else if (testCase.current === "deleted") {
         await deleteSessionEntryLifecycle({
@@ -218,14 +212,9 @@ it.each([
       opts: {
         message: "Child completed",
         operatorAuthority,
-        ...(requesterProfileId
-          ? {
-              requesterOrigin: {
-                sessionKey: "agent:main:main",
-                operatorProfileId: requesterProfileId,
-              },
-            }
-          : {}),
+        requesterOrigin: requesterProfileId
+          ? { sessionKey: "agent:main:main", operatorProfileId: requesterProfileId }
+          : undefined,
         inputProvenance: {
           kind: "inter_session",
           sourceTool,
@@ -297,14 +286,13 @@ it.each(["channel", "delegate", "generated-media", "recovery"] as const)(
       opts: {
         message: "continue accepted work",
         requesterOrigin,
-        ...(kind === "channel"
-          ? {}
-          : {
-              inputProvenance: {
-                kind: "inter_session" as const,
+        inputProvenance:
+          kind === "channel"
+            ? undefined
+            : {
+                kind: "inter_session",
                 sourceTool: kind === "generated-media" ? "subagent_settle" : "sessions_send",
               },
-            }),
         ...(kind === "generated-media"
           ? { internalDeliveryMediaUrls: ["/synthetic/result.png"] }
           : {}),
@@ -382,41 +370,58 @@ it.each([
   },
 );
 
-it.each(["agent:main:cron:nightly:run:123", "agent:main:subagent:123"])(
-  "retains the isolated task's prompt for %s",
-  async (sessionKey) => {
+it.each([
+  ["subagent_settle", "persistent"],
+  ["sessions_send", "persistent"],
+  ["sessions_send", "turn"],
+  ["subagent_announce", "turn"],
+  ["sessions_send", "span"],
+])("keeps %s instructions in their %s scope", async (sourceTool, placement) => {
+  const prompt = "Turn instructions.\n\nPersistent policy.";
+  for (const sessionKey of ["agent:main:cron:nightly:run:123", "agent:main:subagent:123"]) {
+    const completion = placement !== "persistent";
     const { opts } = await prepare({
       opts: {
         message: "Child finished.",
-        extraSystemPrompt: "Continue the isolated task.",
-        inputProvenance: { kind: "inter_session", sourceTool: "subagent_settle" },
+        extraSystemPrompt: prompt,
+        inputProvenance: { kind: "inter_session", sourceTool },
         runContext: { messageChannel: "webchat" },
+        replyExpectation: completion && sourceTool === "sessions_send" ? "optional" : undefined,
+        privateCompletion: completion && sourceTool === "subagent_announce" ? true : undefined,
+        extraSystemPromptTurnContext:
+          placement === "span" ? { start: 0, text: "Turn instructions." } : undefined,
       },
       sessionKey,
-      sessionId: "isolated-id",
       isSubagentLaneTurn: sessionKey.includes(":subagent:"),
       sessionEntry: {
-        sessionId: "isolated-id",
+        sessionId: "conversation-id",
         updatedAt: 1,
         chatType: "direct",
         delivery: { kind: "internal" },
       },
     });
-    expect(opts.extraSystemPrompt).toBe("Continue the isolated task.");
+    expect(opts.extraSystemPrompt).toBe(prompt);
     expect(opts.silentReplyPromptMode).toBeUndefined();
-  },
-);
+    expect(splitExtraSystemPrompt(opts)).toEqual({
+      persistent: placement === "turn" ? "" : placement === "span" ? "Persistent policy." : prompt,
+      turn: placement === "turn" ? prompt : placement === "span" ? "Turn instructions." : undefined,
+    });
+  }
+});
 
 it.each([
-  { channel: "webchat", chatType: "direct", privateCompletion: undefined },
-  { channel: "webchat", chatType: "direct", privateCompletion: true },
-  { channel: "slack", chatType: "direct", privateCompletion: undefined },
-  { channel: "slack", chatType: "channel", privateCompletion: undefined },
+  ["webchat", "direct", undefined, false],
+  ["webchat", "direct", true, false],
+  ["slack", "direct", undefined, false],
+  ["slack", "channel", undefined, false],
+  ["webchat", "direct", undefined, true],
 ] as const)(
-  "preserves the $channel $chatType system prompt on completion (private=$privateCompletion)",
-  async ({ channel, chatType, privateCompletion }) => {
+  "preserves %s %s completion context (private=%s, returned=%s)",
+  async (channel, chatType, privateCompletion, returned) => {
     const sessionKey = "agent:main:conversation";
     const shared = chatType === "channel";
+    const sourceTool = returned ? "sessions_send" : "subagent_settle";
+    const guidance = returned ? "Consume this returned result once." : undefined;
     const ctx: TemplateContext = {
       Provider: channel,
       Surface: channel,
@@ -454,26 +459,19 @@ it.each([
         accountId: ctx.AccountId,
         threadId: ctx.MessageThreadId,
         privateCompletion,
-        inputProvenance: { kind: "inter_session", sourceTool: "subagent_settle" },
+        replyExpectation: returned ? "optional" : undefined,
+        extraSystemPrompt: guidance,
+        inputProvenance: { kind: "inter_session", sourceTool },
       },
       sessionEntry: entry,
       sessionKey,
-      sessionId: entry.sessionId,
     });
-    const prompt = (extraSystemPrompt?: string) =>
-      buildAgentSystemPrompt({
-        workspaceDir: "/workspace",
-        toolNames: ["sessions_spawn", "sessions_yield"],
-        extraSystemPrompt,
-        silentReplyPromptMode: "none",
-      });
-    expect(prompt(prepared.opts.extraSystemPrompt)).toBe(prompt(normalContext));
+    const turn = returned ? `${normalContext}\n\n${guidance}` : normalContext;
+    expect(prepared.opts.extraSystemPrompt).toBe(turn);
+    expect(splitExtraSystemPrompt(prepared.opts)).toEqual({ persistent: "", turn });
     expect(prepared.opts.privateCompletion).toBe(privateCompletion);
     expect(prepared.opts.silentReplyPromptMode).toBe("none");
-    expect(prepared.opts.inputProvenance).toEqual({
-      kind: "inter_session",
-      sourceTool: "subagent_settle",
-    });
+    expect(prepared.opts.inputProvenance).toEqual({ kind: "inter_session", sourceTool });
   },
 );
 
