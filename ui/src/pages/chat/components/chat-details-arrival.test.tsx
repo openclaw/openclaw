@@ -256,6 +256,34 @@ function automationGateway(request: ReturnType<typeof createGatewayRequestMock>)
   return { gateway, publish };
 }
 
+it("retains cached Subagents until the live parent is known, then adopts an empty roster", async () => {
+  const remember = vi.fn<NonNullable<ChatDetailsProps["onDetailsSnapshot"]>>();
+  const view = mountDetails({
+    selectedSession: undefined,
+    subagentSessionsHydrated: true,
+    onOpenSubagent() {},
+    onOpenSubagents() {},
+    onDetailsSnapshot: remember,
+    cachedDetails: {
+      locale: "en",
+      subagents: {
+        total: 1,
+        rows: [{ key: "agent:main:subagent:review", label: "Review", status: "done" }],
+        counts: [{ status: "done", count: 1 }],
+      },
+    },
+  });
+  await vi.advanceTimersByTimeAsync(0);
+  flush();
+  expect(remember).not.toHaveBeenCalled();
+  expect(view.group("subagents")?.textContent).toContain("Review");
+  view.update({ selectedSession: { key: view.initial.sessionKey, kind: "direct" } });
+  await vi.advanceTimersByTimeAsync(0);
+  flush();
+  expect(view.group("subagents")).toBeNull();
+  expect(remember).toHaveBeenCalledWith({ subagents: { total: 0, rows: [], counts: [] } });
+});
+
 it("retires an automation page when the logical session changes", async () => {
   const retired = createDeferred<CronJobsListResult<CronCompactJob>>();
   const current = createDeferred<CronJobsListResult<CronCompactJob>>();

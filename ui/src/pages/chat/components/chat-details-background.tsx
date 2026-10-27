@@ -208,7 +208,7 @@ export function ChatDetailsBackground(
   const collection = createMemo(() => roster().filter((row) => row.listed));
   const liveSummary = createMemo(() =>
     desktopPresentation() && props.details.subagentSessionsHydrated
-      ? projectDetailsSubagents(collection())
+      ? props.details.selectedSession && projectDetailsSubagents(collection())
       : undefined,
   );
   const summary = () =>
