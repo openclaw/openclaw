@@ -161,6 +161,7 @@ try {
       visitedRunIds++;
       yield entry;
     }
+    return undefined;
   };
   try {
     runOne(0);
