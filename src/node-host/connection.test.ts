@@ -489,7 +489,6 @@ it.each([
   { kind: "workspace", platform: "win32", bun: false },
   { kind: "workspace", platform: "darwin", bun: false },
   { kind: "prepared", platform: "linux", bun: false },
-  { kind: "prefetch", platform: "linux", bun: false },
   { kind: "folders", platform: "linux", bun: false, folders: false },
   { kind: "folders", platform: "linux", bun: false, folders: true },
 ] as const)("negotiates $kind inventory per connection ($platform, Bun=$bun)", async (scenario) => {
@@ -523,11 +522,8 @@ it.each([
     workspace: [
       GATEWAY_SERVER_CAPS.NODE_WORKER_WORKSPACE_RESULT,
       GATEWAY_SERVER_CAPS.NODE_WORKER_WORKSPACE_QUIESCENCE,
-      GATEWAY_SERVER_CAPS.NODE_WORKER_STATUS_WAIT,
-      GATEWAY_SERVER_CAPS.NODE_WORKER_LAUNCH_TOOL_NAMES,
     ],
     prepared: [GATEWAY_SERVER_CAPS.NODE_WORKER_BUNDLE_PREFETCH],
-    prefetch: [GATEWAY_SERVER_CAPS.NODE_WORKER_BUNDLE_PREFETCH],
     folders: [GATEWAY_SERVER_CAPS.NODE_WORKER_DEVICE_FOLDERS],
   };
   try {
@@ -554,15 +550,12 @@ it.each([
             idle: { idleRetention: true },
             disabled: { reason: disabledReason },
             workspace: {
-              statusWait: 1,
-              launchToolNames: [...CORE_WORKER_LAUNCH_TOOL_NAMES],
               workspaceResultVersion: 2,
               ...((platform === "linux" || platform === "win32") && !bun
                 ? { workspaceQuiescence: 1 }
                 : {}),
             },
             prepared: {},
-            prefetch: { bundlePrefetch: 1 },
             folders: folders ? { deviceFolders: true } : {},
           }[kind];
       expect(declaration).toEqual({
@@ -584,7 +577,7 @@ it.each([
       });
       expect(parseNodeRunnerInventoryDeclaration(declaration)).toEqual(declaration);
     }
-    if (kind === "prepared" || kind === "prefetch") {
+    if (kind === "prepared" || kind === "optional") {
       callbacks.onWorkerHostingDisabled?.("test revoked worker consent");
       await vi.advanceTimersByTimeAsync(0);
       expect(inventory()).toMatchObject({ workerHost: { enabled: false } });
