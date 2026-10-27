@@ -179,9 +179,8 @@ it("retains a visually live continuation button without admitting cached actions
   more.click();
   expect(request).not.toHaveBeenCalled();
   current.publish({ ...current.gateway.snapshot, phase: "connected" });
-  await current.ready();
+  await waitForSolid(() => expect(more.hasAttribute("aria-disabled")).toBe(false));
   expect(current.find(".chat-summary__automation-more")).toBe(more);
-  expect(more.hasAttribute("aria-disabled")).toBe(false);
   more.click();
   flush();
   expect(current.element.querySelectorAll(".chat-summary__automation")).toHaveLength(11);
