@@ -166,8 +166,8 @@ const writeMessages = async (...entries: unknown[]) => {
   return file;
 };
 
-it("counts a request that failed before any output as zero usage, not a lower bound", async () => {
-  const failed = (timestamp: string, content: unknown[]) =>
+it("counts a stored request the provider never ran as zero usage, not a lower bound", async () => {
+  const failed = (timestamp: string, content: unknown[], extra: Record<string, unknown> = {}) =>
     assistant(
       timestamp,
       {
@@ -178,13 +178,16 @@ it("counts a request that failed before any output as zero usage, not a lower bo
         usageReport: { state: "unavailable" },
       },
       {
+        api: "openai-responses",
         provider: "openai",
         model: "gpt-5.5",
         content,
         stopReason: "error",
         errorMessage: "Connection error.",
+        ...extra,
       },
     );
+  // Written before transports recorded unbilled failures as zero usage.
   const sessionFile = await writeMessages(
     modelMessage("2026-02-05T12:00:00.000Z", 10),
     failed("2026-02-05T12:01:00.000Z", []),
@@ -196,14 +199,16 @@ it("counts a request that failed before any output as zero usage, not a lower bo
     messageCounts: { assistant: 2, errors: 1 },
   });
   expect(summary?.usageReport).toBeUndefined();
-  // A failure after output can still have lost billed usage.
-  const partial = await writeTranscript(
-    "failed-after-output",
-    failed("2026-02-05T12:02:00.000Z", [textBlock("partial answer")]),
-  );
-  expect((await readSummary({ sessionFile: partial }))?.usageReport).toEqual({
-    state: "unavailable",
-  });
+  // Accepted then dropped, or failed after output: billed usage may be missing.
+  for (const [sessionId, entry] of [
+    ["dropped-after-acceptance", failed("2026-02-05T12:02:00.000Z", [], { responseId: "resp_1" })],
+    ["failed-after-output", failed("2026-02-05T12:03:00.000Z", [textBlock("partial answer")])],
+  ] as const) {
+    const file = await writeTranscript(sessionId, entry);
+    expect((await readSummary({ sessionFile: file }))?.usageReport).toEqual({
+      state: "unavailable",
+    });
+  }
 });
 
 it("prices and aggregates usage with each row's agent-local registry", async () => {

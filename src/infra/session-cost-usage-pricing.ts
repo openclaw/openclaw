@@ -2,6 +2,7 @@ import { calculateUsageCost, type ModelCostConfig } from "@openclaw/llm-core";
 import { asFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import { asOptionalObjectRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { isUnbilledFailedTurn } from "../../packages/ai/src/utils/usage.js";
 import type { NormalizedUsage, UsageLike } from "../agents/usage.js";
 import { hasRecordedUsageCost, normalizeUsage } from "../agents/usage.js";
 import { isToolCallContentType } from "../chat/tool-content.js";
@@ -67,16 +68,12 @@ export const parseUsageCostTranscriptRecord = (
 
   const usageRaw =
     (message.usage as UsageLike | undefined) ?? (entry.usage as UsageLike | undefined);
-  const normalizedUsage = usageRaw ? (normalizeUsage(usageRaw) ?? undefined) : undefined;
   const stopReason = typeof message.stopReason === "string" ? message.stopReason : undefined;
-  // A request that failed before any output (connection, rate-limit or auth errors) was not
-  // billed: its unreported usage is zero, not unknown, so it does not make totals lower bounds.
-  const failedBeforeOutput =
-    stopReason === "error" &&
-    normalizedUsage?.usageReport?.state === "unavailable" &&
-    (normalizedUsage.output ?? 0) === 0 &&
-    (Array.isArray(message.content) ? message.content.length === 0 : !message.content);
-  const usage = failedBeforeOutput ? undefined : normalizedUsage;
+  // Transports record unbilled failures as zero usage; older transcripts still say unavailable.
+  const usage =
+    usageRaw && !isUnbilledFailedTurn({ ...message, usage: usageRaw })
+      ? (normalizeUsage(usageRaw) ?? undefined)
+      : undefined;
 
   const provider =
     (typeof message.provider === "string" ? message.provider : undefined) ??
