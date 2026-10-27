@@ -490,6 +490,8 @@ const repositoryScriptEntries = [
   "scripts/perf/placement-recovery-reads-bench.ts!",
   "scripts/perf/plain-tool-brace-measure.ts!",
   "scripts/perf/plugin-cache-stat-facts.ts!",
+  // Its header documents the paired metadata-root allocation benchmark.
+  "scripts/perf/plugin-cache-root-measure.ts!",
   "scripts/perf/plugin-preparation-boot.mjs!",
   "scripts/perf/plugin-preparation-boot-preload.mjs!",
   "scripts/perf/plugin-relative-path-measure.ts!",
