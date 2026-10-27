@@ -64,6 +64,10 @@ a.chat-details-people__row:focus-visible {
   text-align: end;
 }
 
+[data-details-group="people"][data-expanded] > .chat-details-desktop-section__heading > svg {
+  visibility: hidden;
+}
+
 [data-details-group="people"]
   > .chat-details-desktop-section__heading
   > .chat-details-desktop-section__metadata,
