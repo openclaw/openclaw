@@ -120,7 +120,7 @@ export async function readCheckoutGitRevision(
     // default-branch checkouts never discover alternate fork heads.
     const trackingRemotes =
       scope === "context" && canDiscoverAlternateForkHeads(selectedBranch, defaultBranchName)
-        ? readBranchTrackingRemotes(checkout, selectedBranch)
+        ? readGitBranchTrackingRemotes(checkout.refsBase, selectedBranch)
         : null;
     return {
       key: JSON.stringify([
@@ -197,20 +197,6 @@ function readDefaultRef(head: ReturnType<typeof readCheckoutHead>): string | nul
 }
 
 /**
- * Remotes whose remote-tracking ref carries `branch`, derived from ref names so
- * a tracking ref is evidence even when `@{push}` cannot resolve.
- */
-function readBranchTrackingRemotes(
-  head: ReturnType<typeof readCheckoutHead>,
-  branch: string,
-): string[] {
-  if (!head?.refsBase) {
-    return [];
-  }
-  return readGitBranchTrackingRemotes(head.refsBase, branch);
-}
-
-/**
  * Resolve head candidates from local refs, not push configuration: contributors keep
  * upstream as origin, fetch their branch from a fork remote, and often have no
  * `pushRemote`, `remote.pushDefault`, or resolvable `@{push}`.
@@ -230,10 +216,13 @@ async function readForkHeadCandidates(
   },
 ): Promise<NonNullable<GitCheckoutContext["forkHeadCandidates"]>> {
   const candidates: NonNullable<GitCheckoutContext["forkHeadCandidates"]> = [];
+  if (!head?.refsBase) {
+    return candidates;
+  }
   const seen = new Set([`${base.owner}/${base.repo}`.toLowerCase()]);
   let remotes: string[];
   try {
-    remotes = readBranchTrackingRemotes(head, branch);
+    remotes = readGitBranchTrackingRemotes(head.refsBase, branch);
   } catch {
     // Unreadable ref metadata degrades to origin-only discovery, not a failed context.
     return candidates;
