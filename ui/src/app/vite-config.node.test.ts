@@ -436,11 +436,11 @@ it.each([
   ).toThrow(`${key} ${error}`);
 });
 
-it("resolves Control UI dev-server source aliases for internal packages", () => {
+it.each(["agent-id", "error-coercion"])("resolves internal source aliases for %s", (subpath) => {
   const aliases = resolveSourcePackageAliasesForVite();
-  const moduleId = "@openclaw/normalization-core/agent-id";
+  const moduleId = `@openclaw/normalization-core/${subpath}`;
   expect(aliases.find((alias) => alias.find === moduleId)?.replacement).toBe(
-    path.join(repoRoot, "packages/normalization-core/src/agent-id.ts"),
+    path.join(repoRoot, `packages/normalization-core/src/${subpath}.ts`),
   );
   expectBefore(
     aliases.map((alias) => alias.find),

@@ -17,7 +17,11 @@ import {
 } from "./session-identity-projection.js";
 import { retainSessionListBaseMiss } from "./session-list-diagnostics.js";
 import type { SessionEntrySelection, SessionListFilteredEntries } from "./session-list-filters.js";
-import type { SessionListView } from "./session-list-view-cache.js";
+import {
+  shareSessionRowFacts,
+  sessionRowFactEncodingBytes,
+  type SessionListView,
+} from "./session-list-view-cache.js";
 import {
   resolveRequestedSessionAgentId,
   tryResolveSessionCompatibilityOwnerAgentId,
@@ -83,100 +87,6 @@ function sameFacts(previous: readonly unknown[] | undefined, current: readonly u
   return true;
 }
 
-/** Immutable row identities own field preparation; fact indexes stay response-local. */
-function createSessionRowFactSharing<T extends GatewaySessionRow>() {
-  type Fact = { encoded: string; fact: Partial<T>; rows: number | number[] };
-  const prepared = new WeakMap<T, { facts: Fact[]; bytes: number; rawBytes: number }>();
-  const share = (sessions: T[]) => {
-    // Empty and single-row deltas cannot share facts; keep their prepared wire rows.
-    if (sessions.length < 2) {
-      return { sessions, sharedFacts: [] };
-    }
-    type SharedFact = { fact: Partial<T>; rows: number[] };
-    const candidates = new Map<string, Fact>();
-    const rows: GatewaySessionRow[] = [];
-    sessions.forEach((row, index) => {
-      const { key, kind, updatedAt, sessionId, rowMode } = row;
-      const required = { key, kind, updatedAt, sessionId, rowMode };
-      rows.push(required);
-      let facts = prepared.get(row)?.facts;
-      if (!facts) {
-        facts = [];
-        let bytes = 0;
-        for (const field in row) {
-          const value = row[field];
-          // Keep required fields and the projection marker readable without expanding the table.
-          if (
-            value === undefined ||
-            ["key", "kind", "updatedAt", "sessionId", "rowMode"].includes(field)
-          ) {
-            continue;
-          }
-          const fact: Partial<T> = {};
-          fact[field] = value;
-          const encoded = JSON.stringify(fact);
-          facts.push({ encoded, fact, rows: 0 });
-          bytes += encoded.length * 2;
-        }
-        // Reserve a possible singleton delta without retaining its unused raw JSON.
-        // Each optional one-field object contributes its property and one comma.
-        const rawBytes = JSON.stringify(required).length * 2 + bytes - facts.length * 2;
-        prepared.set(row, { facts, bytes, rawBytes });
-      }
-      for (const fact of facts) {
-        const candidate = candidates.get(fact.encoded);
-        if (candidate) {
-          if (typeof candidate.rows === "number") {
-            candidate.rows = [candidate.rows, index];
-          } else {
-            candidate.rows.push(index);
-          }
-        } else {
-          fact.rows = index;
-          candidates.set(fact.encoded, fact);
-        }
-      }
-    });
-    // Facts with the same recipients share one reference, including common scalar defaults.
-    const groups = new Map<string, SharedFact>();
-    for (const candidate of candidates.values()) {
-      const recipients = candidate.rows;
-      // Recipient scratch belongs to this response, never to the retained row facts.
-      candidate.rows = 0;
-      if (typeof recipients === "number") {
-        Object.assign(rows[recipients]!, candidate.fact);
-        continue;
-      }
-      const key = recipients.join(",");
-      const group = groups.get(key);
-      if (group) {
-        Object.assign(group.fact, candidate.fact);
-      } else {
-        groups.set(key, { fact: { ...candidate.fact }, rows: recipients });
-      }
-    }
-    const sharedFacts: Partial<T>[] = [];
-    for (const group of groups.values()) {
-      const reference = sharedFacts.push(group.fact) - 1;
-      for (const index of group.rows) {
-        (rows[index]!.sharedFacts ??= []).push(reference);
-      }
-    }
-    return { sessions: rows, sharedFacts };
-  };
-  return {
-    share,
-    encodingBytes: (row: T) => {
-      const retained = prepared.get(row);
-      return retained
-        ? retained.bytes + Math.max(0, retained.rawBytes - sessionRowEncodingBytes(row))
-        : 0;
-    },
-  };
-}
-
-const { share: shareSessionRowFacts, encodingBytes: sessionRowFactEncodingBytes } =
-  createSessionRowFactSharing<GatewaySessionRow>();
 const sharedLists = new WeakMap<
   GatewaySessionRow[],
   ReturnType<typeof shareSessionRowFacts> & { rowsRevision: string }

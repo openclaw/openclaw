@@ -350,7 +350,7 @@ function sampledCpu(profile: Profiler.Profile) {
     "filterSessionEntries",
     "matchesSessionArchiveFilter",
     "readSessionRowModelFacts",
-    "mayMatchSessionRowModelSearch",
+    "prepareSessionRowModelSearch",
     "resolveGatewaySessionThinkingProjectionInternal",
     "resolveAvailableAgentHarnessPolicy",
     "projectGatewaySessionRunState",

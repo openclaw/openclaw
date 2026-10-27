@@ -3,6 +3,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import type { OpenClawConfig } from "../../config/config.js";
 import { resolveStateDir } from "../../config/paths.js";
+import { materializeErrorStack } from "../../infra/error-graph-internal.js";
 import { isMissingPathError } from "../../infra/errors.js";
 import { isPathInside } from "../../infra/path-guards.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
@@ -295,6 +296,7 @@ async function reconcileOrphans(
         assertCurrent();
         const stat = await fs.lstat(candidate).catch(() => undefined);
         if (stat?.dev === source.dev && stat.ino === source.ino) {
+          materializeErrorStack(error);
           orphanFailures.set(candidate, { dev: stat.dev, ino: stat.ino, error });
         }
         progress.error("orphans", error, candidate);
