@@ -1,3 +1,4 @@
+import { toErrorObject } from "@openclaw/normalization-core/error-coercion";
 import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
 // Tests retry backoff timing and cancellation behavior.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -131,6 +132,25 @@ describe("retryAsync", () => {
     }).catch((err: unknown) => err);
 
     expect(failure).toBe(terminalError);
+    expect(getRetryAttemptErrors(failure)).toEqual([firstError, terminalError]);
+  });
+
+  it("retries normalized parsed failures and retains terminal identity and attempt history", async () => {
+    const payload = '{"__proto__":{"tag":"remote"},"code":"E_UPSTREAM","status":503}';
+    const firstError = toErrorObject(JSON.parse(payload), "first attempt");
+    const terminalError = toErrorObject(JSON.parse(payload), "terminal attempt");
+    const fn = vi.fn().mockRejectedValueOnce(firstError).mockRejectedValueOnce(terminalError);
+
+    const failure = await retryAsync(fn, {
+      attempts: 2,
+      minDelayMs: 0,
+      maxDelayMs: 0,
+      shouldRetry: (error) => error instanceof Error && Reflect.get(error, "status") === 503,
+    }).catch((error: unknown) => error);
+
+    expect(fn).toHaveBeenCalledTimes(2);
+    expect(failure).toBe(terminalError);
+    expect(failure).toBeInstanceOf(Error);
     expect(getRetryAttemptErrors(failure)).toEqual([firstError, terminalError]);
   });
 
