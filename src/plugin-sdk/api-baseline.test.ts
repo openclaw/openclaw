@@ -34,6 +34,7 @@ function expectItems(actual: unknown, ...expected: Record<string, unknown>[]) {
 
 const containingItems = (...items: Record<string, unknown>[]) =>
   expect.arrayContaining(items.map((item) => expect.objectContaining(item)));
+const firstExport = (surface: PluginSdkApiBaseline) => surface.modules[0]?.exports[0];
 
 async function renderSourceFixture(
   source: string | Readonly<Record<string, string>>,
@@ -127,13 +128,13 @@ export type FixtureOptionLeaf = { required${params?.optionalOption ? "?" : ""}: 
   });
 }
 
-async function renderDependencyDeclarationFixture(dependencyDeclaration: string) {
+async function renderDependencyDeclarationFixture(fields: string) {
   return renderSourceFixture({
     "fixture.ts":
       'import { fixtureValue } from "fixture-dependency";\nexport const publicValue = fixtureValue;\n',
     "../../node_modules/fixture-dependency/package.json":
       '{"name":"fixture-dependency","type":"module","types":"index.d.ts"}\n',
-    "../../node_modules/fixture-dependency/index.d.ts": dependencyDeclaration,
+    "../../node_modules/fixture-dependency/index.d.ts": `export declare const fixtureValue: { ${fields} };`,
   });
 }
 
@@ -326,12 +327,8 @@ it("validates renderer artifacts at the subprocess boundary", async () => {
 });
 
 it("reports public types resolved from each revision's dependency declarations", async () => {
-  const before = await renderDependencyDeclarationFixture(
-    "export declare const fixtureValue: { oldValue: string };\n",
-  );
-  const after = await renderDependencyDeclarationFixture(
-    "export declare const fixtureValue: { newValue: number };\n",
-  );
+  const before = await renderDependencyDeclarationFixture("oldValue: string");
+  const after = await renderDependencyDeclarationFixture("newValue: number");
   const diff = diffApi(before, after);
   const text = report(diff);
 
@@ -393,7 +390,7 @@ it.skipIf(process.platform === "win32")(
     try {
       const rendered = await renderSourceFixture("export const value = 1;");
       expect(observedOverlay).toBe(true);
-      expect(rendered.modules[0]?.exports[0]?.declaration).toBe("export const value: 1;");
+      expect(firstExport(rendered)?.declaration).toBe("export const value: 1;");
     } finally {
       create.mockRestore();
     }
@@ -408,13 +405,11 @@ it("renders a checkout reached through a symlinked alias", async () => {
     { symlinked: true },
   );
 
-  expectItems(baseline.modules, {
+  expect(baseline.modules).toHaveLength(1);
+  expect(baseline.modules[0]).toMatchObject({
     source: fixtureSource,
     exports: [
-      expect.objectContaining({
-        exportName: "measure",
-        declaration: expect.stringContaining("export function measure(value: string): number;"),
-      }),
+      { exportName: "measure", declaration: "export function measure(value: string): number;" },
     ],
   });
 });
@@ -479,9 +474,7 @@ export {};`,
   expect(baseline.declarationSections.find(({ name }) => name === "global")?.text).toMatch(
     /^declare global \{/u,
   );
-  expect(changed.modules[0]?.exports[0]?.closureHash).not.toBe(
-    baseline.modules[0]?.exports[0]?.closureHash,
-  );
+  expect(firstExport(changed)?.closureHash).not.toBe(firstExport(baseline)?.closureHash);
 });
 
 it("ignores unreachable declarations beside a transitive export", async () => {
@@ -567,7 +560,7 @@ it("captures private shape changes while ignoring documentation and implementati
   expect(fixtureError).not.toContain("return this.status");
   const optionChanged = await renderPrivateDeclarationFixture({ optionalOption: true });
   const resultChanged = await renderPrivateDeclarationFixture({ optionalResult: true });
-  const declaration = baseline.modules[0]?.exports[0];
+  const declaration = firstExport(baseline);
 
   expect(declaration).toMatchObject({
     exportName: "createFixture",
@@ -584,8 +577,8 @@ it("captures private shape changes while ignoring documentation and implementati
   );
 
   for (const changed of [optionChanged, resultChanged]) {
-    expect(changed.modules[0]?.exports[0]?.declaration).toBe(declaration?.declaration);
-    expect(changed.modules[0]?.exports[0]?.closureHash).not.toBe(declaration?.closureHash);
+    expect(firstExport(changed)?.declaration).toBe(declaration?.declaration);
+    expect(firstExport(changed)?.closureHash).not.toBe(declaration?.closureHash);
   }
 
   const combined = await renderPrivateDeclarationFixture({

@@ -102,7 +102,7 @@ const question = (id: string, options: Partial<Question> = {}): Question => ({
 });
 const drained = { aborted: true, drained: true, forceCleared: false };
 const revoked = "Message injection authority is no longer current";
-const captureInjection = () => {
+const captureInjection = (sessionId: string) => {
   let retained: (() => void) | undefined;
   const handle = nativeHandle({
     messageInjectionV2: {
@@ -113,7 +113,14 @@ const captureInjection = () => {
       },
     },
   });
-  return { handle, authority: () => expectDefined(retained, "detached injection authority") };
+  const cleanup = expectDefined(register(sessionId, handle), "native registration");
+  const inject = (text: string) => {
+    expect(queue(sessionId, text)).toBe(true);
+    const authority = expectDefined(retained, "detached injection authority");
+    expect(authority).not.toThrow();
+    return authority;
+  };
+  return { handle, cleanup, inject };
 };
 const cancellationModes = ["single", "all", "compacting", "drain"] as const;
 type CancelMode = (typeof cancellationModes)[number];
@@ -488,15 +495,8 @@ describe("agent harness active-run SDK controls", () => {
   });
 
   it("revokes sessionless V2 injection when its exact native registration is replaced", () => {
-    const { handle, authority } = captureInjection();
-    const firstCleanup = expectDefined(
-      register("sdk-replaced", handle),
-      "first native registration",
-    );
-    expect(queue("sdk-replaced", "first")).toBe(true);
-    const firstAssertion = authority();
-    expect(firstAssertion).not.toThrow();
-
+    const { handle, cleanup: firstCleanup, inject } = captureInjection("sdk-replaced");
+    const firstAssertion = inject("first");
     const secondCleanup = expectDefined(
       register("sdk-replaced", handle),
       "second native registration",
@@ -504,9 +504,7 @@ describe("agent harness active-run SDK controls", () => {
     clear("sdk-replaced", handle, undefined, undefined, "old_cleanup", firstCleanup);
     expect(firstAssertion).toThrow(revoked);
     expect(isActive("sdk-replaced")).toBe(true);
-    expect(queue("sdk-replaced", "second")).toBe(true);
-    const secondAssertion = authority();
-    expect(secondAssertion).not.toThrow();
+    const secondAssertion = inject("second");
     secondCleanup();
     expect(secondAssertion).toThrow(revoked);
     expect(isActive("sdk-replaced")).toBe(false);
@@ -557,11 +555,8 @@ describe("agent harness active-run SDK controls", () => {
   });
 
   it("revokes retained detached injection when a controller takes the same ID", () => {
-    const { handle, authority } = captureInjection();
-    register("sdk-controller-takeover", handle);
-    expect(queue("sdk-controller-takeover", "first")).toBe(true);
-    const assertion = authority();
-    expect(assertion).not.toThrow();
+    const { inject } = captureInjection("sdk-controller-takeover");
+    const assertion = inject("first");
     const operation = admittedRun("sdk-controller-takeover");
     using _ = cleanupWith(() => operation.complete());
     expect(assertion).toThrow(revoked);
@@ -594,14 +589,12 @@ Other: reply with your own answer.`,
   });
 
   it("keeps a comma-containing option label as one multi-select answer", () => {
-    const questions = [
-      question("region", {
-        multiSelect: true,
-        isOther: true,
-        options: [{ label: "Frankfurt, Germany" }, { label: "Dublin, Ireland" }],
-      }),
-    ];
-    expect(buildAnswers(questions, "Frankfurt, Germany")).toEqual({
+    const region = question("region", {
+      multiSelect: true,
+      isOther: true,
+      options: [{ label: "Frankfurt, Germany" }, { label: "Dublin, Ireland" }],
+    });
+    expect(buildAnswers([region], "Frankfurt, Germany")).toEqual({
       answers: { region: { answers: ["Frankfurt, Germany"] } },
     });
   });

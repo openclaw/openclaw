@@ -399,7 +399,7 @@ describe("provider-catalog-live-runtime", () => {
     expect(release).toHaveBeenCalledTimes(1);
   });
 
-  it("shows every listed chat model, excludes non-chat rows and keeps static rows on failure", async () => {
+  it("projects live chat metadata through both builders, caches it and falls back to static rows", async () => {
     const { fetchGuard, fetchGuardMock } = buildFetchGuard([
       { id: "model-a", object: "model", output_modalities: ["image"] },
       { id: "model-b", object: "model" },
@@ -415,6 +415,29 @@ describe("provider-catalog-live-runtime", () => {
         "gpt-3.5-turbo-instruct",
       ),
       { id: "retired-chat", object: "model", shutdown_date: "2000-01-01" },
+      {
+        id: "chat-v2",
+        object: "model",
+        active: true,
+        context_window: 262_144,
+        max_completion_tokens: 32_768,
+        input_modalities: ["text", "image"],
+        features: ["reasoning"],
+      },
+      { id: "inactive-chat", object: "model", active: false },
+      { id: "archived-chat", object: "model", archived: true },
+      { id: "deprecated-chat", object: "model", deprecated: true },
+      {
+        id: "fim-only",
+        object: "model",
+        capabilities: { completion_chat: false, completion_fim: true },
+      },
+      {
+        id: "chat-and-image-v2",
+        object: "model",
+        capabilities: { completion_chat: true },
+        features: ["image_generation"],
+      },
     ]);
     const models = [buildModel("model-a"), buildModel("model-b")];
     const options = {
@@ -430,13 +453,36 @@ describe("provider-catalog-live-runtime", () => {
 
     expect(fetchGuardMock).toHaveBeenCalledTimes(1);
     expect(first.apiKey).toBe("PROVIDER_API_KEY");
-    expect(first.models).toEqual([
+    const expected = [
+      expect.objectContaining({ id: "chat-and-image-v2" }),
+      expect.objectContaining({
+        id: "chat-v2",
+        reasoning: true,
+        input: ["text", "image"],
+        contextWindow: 262_144,
+        maxTokens: 32_768,
+      }),
       models[1],
       expect.objectContaining({ id: "sunsetting-chat" }),
       expect.objectContaining({ id: "unknown-model", input: ["text"], contextWindow: 128_000 }),
       expect.objectContaining({ id: "vision-chat" }),
-    ]);
+    ];
+    expect(first.models).toEqual(expected);
     expect(second.models).toEqual(first.models);
+
+    const compatible = await buildOpenAICompatibleLiveModelProviderConfig({
+      providerId: "provider",
+      providerConfig: {
+        ...providerConfig,
+        baseUrl: `${providerConfig.baseUrl}/`,
+        models: [buildModel("chat-v1"), ...models],
+      },
+      apiKey: "provider-key",
+      fetchGuard,
+    });
+    expect(compatible.models).toEqual(expected);
+    expect(fetchGuardMock.mock.calls[1]?.[0].url).toBe(endpoint);
+    expect(requestHeaders(fetchGuardMock, 1).get("authorization")).toBe("Bearer provider-key");
 
     clearLiveCatalogCacheForTests();
     fetchGuardMock.mockRejectedValueOnce(new Error("network unavailable"));
@@ -470,68 +516,6 @@ describe("provider-catalog-live-runtime", () => {
       expect.objectContaining({ id: "fresh-chat", input: ["text"] }),
       models[0],
     ]);
-  });
-
-  it("builds newly listed text models from OpenAI-compatible catalog metadata", async () => {
-    const { fetchGuard, fetchGuardMock } = buildFetchGuard({
-      data: [
-        {
-          id: "chat-v2",
-          object: "model",
-          active: true,
-          context_window: 262_144,
-          max_completion_tokens: 32_768,
-          input_modalities: ["text", "image"],
-          features: ["reasoning"],
-        },
-        { id: "text-embedding-4", object: "model" },
-        { id: "gpt-image-2-oai", object: "model" },
-        { id: "retired-chat", object: "model", active: false },
-        { id: "archived-chat", object: "model", archived: true },
-        { id: "deprecated-chat", object: "model", deprecated: true },
-        {
-          id: "fim-only",
-          object: "model",
-          capabilities: { completion_chat: false, completion_fim: true },
-        },
-        { id: "image-generation-v2", object: "model", features: ["image_generation"] },
-        {
-          id: "chat-and-image-v2",
-          object: "model",
-          capabilities: { completion_chat: true },
-          features: ["image_generation"],
-        },
-        {
-          id: "image-only",
-          object: "model",
-          output_modalities: ["image"],
-        },
-      ],
-    });
-
-    const provider = await buildOpenAICompatibleLiveModelProviderConfig({
-      providerId: "provider",
-      providerConfig: {
-        api: "openai-completions",
-        baseUrl: "https://provider.example.test/v1/",
-        models: [buildModel("chat-v1")],
-      },
-      apiKey: "provider-key",
-      fetchGuard,
-    });
-
-    expect(provider.models).toEqual([
-      expect.objectContaining({ id: "chat-and-image-v2" }),
-      expect.objectContaining({
-        id: "chat-v2",
-        reasoning: true,
-        input: ["text", "image"],
-        contextWindow: 262_144,
-        maxTokens: 32_768,
-      }),
-    ]);
-    expect(fetchGuardMock.mock.calls[0]?.[0].url).toBe("https://provider.example.test/v1/models");
-    expect(requestHeaders(fetchGuardMock).get("authorization")).toBe("Bearer provider-key");
   });
 
   it("supports provider-specific model-list paths and headers", async () => {
