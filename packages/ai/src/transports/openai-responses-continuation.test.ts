@@ -235,6 +235,31 @@ describe("OpenAI Responses continuation", () => {
     }
   });
 
+  it("compares mutable continuation history without materializing property-entry arrays", () => {
+    const input = Array.from({ length: 64 }, (_, index) => userInput(`message ${index}`));
+    const state: ResponsesContinuationState = {
+      lastRequest: { input },
+      lastResponseId: "resp_previous",
+      lastResponseItems: [],
+    };
+    const current = structuredClone(input);
+    const request = { input: [...current, secondUser] };
+    const fromEntries = vi.spyOn(Object, "fromEntries");
+    try {
+      expect(resolve(state, request)).toMatchObject({
+        continuationStatus: "continued",
+        request: { previous_response_id: "resp_previous", input: [secondUser] },
+      });
+      expect(fromEntries).not.toHaveBeenCalled();
+      current[0].content[0].text = "edited in place";
+      expectHistoryChanged(state, request);
+      input[0].content[0].text = "edited in place";
+      expect(resolve(state, request).continuationStatus).toBe("continued");
+    } finally {
+      fromEntries.mockRestore();
+    }
+  });
+
   it.each([
     {
       name: "omitted fields, sparse arrays, nonfinite numbers and signed zero",
