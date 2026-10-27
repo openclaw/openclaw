@@ -630,8 +630,8 @@ export class DraftSubmissionFlow {
           onAccepted: () => this.callbacks.onAccepted?.({ ...result, agentId: input.agentId }),
           navigate: () =>
             this.startedSession.navigate(context, {
+              ...result,
               client: input.client,
-              key: result.key,
               agentId: input.agentId,
             }),
         });

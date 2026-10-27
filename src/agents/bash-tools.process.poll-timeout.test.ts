@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
+import { acknowledgeInternalToolResult } from "../../packages/agent-core/src/internal-hooks.js";
 import {
   resetDiagnosticSessionStateForTest,
   type SessionState,
@@ -18,7 +19,6 @@ import {
 import { createProcessSessionFixture } from "./bash-process-registry.test-helpers.js";
 import { resetProcessRegistryForTests } from "./bash-process-registry.test-support.js";
 import { createProcessTool } from "./bash-tools.process.js";
-import { acknowledgeInternalToolResult } from "./runtime/internal-hooks.js";
 import {
   detectToolCallLoop,
   recordToolCall,

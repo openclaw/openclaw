@@ -1,10 +1,6 @@
 // Registered executable surfaces retain receiver binding and instance lifetime.
 import { types } from "node:util";
 import {
-  createPluginArgumentView,
-  getPluginMethodArgumentKind,
-} from "./plugin-instance-argument-views.js";
-import {
   createPluginIteratorBindings,
   type PluginIteratorBindingOwner,
 } from "./plugin-instance-iterator.js";
@@ -26,6 +22,64 @@ const DATA_FIELDS = new Set([
   "inputSchema",
   "outputSchema",
 ]);
+
+const arrayCallbacks = new Set([
+  "every",
+  "filter",
+  "find",
+  "findIndex",
+  "findLast",
+  "findLastIndex",
+  "flatMap",
+  "forEach",
+  "map",
+  "reduce",
+  "reduceRight",
+  "some",
+  "sort",
+  "toSorted",
+]);
+
+/** Native signatures distinguish callbacks, stored callables, and function invocation helpers. */
+function getPluginMethodArgumentKind(
+  object: object,
+  key: PropertyKey,
+): 0 | null | "function" | undefined {
+  const array = Array.isArray(object);
+  const intrinsic =
+    typeof object === "function"
+      ? Function.prototype
+      : array
+        ? Array.prototype
+        : types.isMap(object)
+          ? Map.prototype
+          : types.isSet(object)
+            ? Set.prototype
+            : types.isWeakMap(object)
+              ? WeakMap.prototype
+              : types.isWeakSet(object)
+                ? WeakSet.prototype
+                : undefined;
+  if (!intrinsic || !Object.hasOwn(intrinsic, key)) {
+    return undefined;
+  }
+  let prototype: object | null = object;
+  while (prototype && !Object.hasOwn(prototype, key)) {
+    prototype = Object.getPrototypeOf(prototype);
+  }
+  const parent = prototype && Object.getPrototypeOf(prototype);
+  // Intrinsic collection prototypes directly inherit their realm's Object.prototype.
+  // Own/subclass overrides remain ordinary plugin methods, including custom higher-order methods.
+  if (!parent || Object.getPrototypeOf(parent) !== null) {
+    return undefined;
+  }
+  if (typeof object === "function") {
+    return "function";
+  }
+  return key === "forEach" || (array && typeof key === "string" && arrayCallbacks.has(key))
+    ? 0
+    : null;
+}
 
 function pluginMemberDescriptor(object: object, key: PropertyKey) {
   for (let source: object | null = object; source; source = Object.getPrototypeOf(source)) {
@@ -115,12 +169,78 @@ function createPluginBindings(
   const derivedReceivers = new WeakSet<object>();
   const prototypeReceivers = new WeakMap<object, WeakMap<object, object>>();
   const { iterators, admitIterator } = createPluginIteratorBindings(bindings, factory, admit);
-  const wrapArguments = createPluginArgumentView({
-    original: originalValue,
-    setOriginal: (value, source) => setPluginOriginalValue(value, source, bindings.instance),
-    isWrapped: (value) => PluginFactoryBinding.belongsTo(value, factory),
-    invoke: admitCallback,
-  });
+  /** Preserves caller data and caches callback views within one instance. */
+  const restoreHandle = (value: unknown): unknown => {
+    if (value === null || typeof value !== "object") {
+      return value;
+    }
+    let source: object = value;
+    for (let original = originalValue(source); original; original = originalValue(source)) {
+      source = original;
+    }
+    return source;
+  };
+  const argumentCallbacks = new WeakMap<Function, Function>();
+  const argumentFactory = {};
+  const wrapArguments = (
+    args: unknown[],
+    callbackIndex?: 0 | null,
+    field = "",
+  ): {
+    args: unknown[];
+    callerData?: unknown[];
+  } => {
+    if (callbackIndex === null || args.length === 0) {
+      return {
+        args: args.map((value) =>
+          typeof value === "function" ? (originalValue(value) ?? value) : restoreHandle(value),
+        ),
+      };
+    }
+    const callerData =
+      callbackIndex === 0 && (field === "reduce" || field === "reduceRight")
+        ? args.slice(1, 2)
+        : undefined;
+    const prepared = args.map((value, index) => {
+      if (typeof value !== "function" || (callbackIndex !== undefined && index !== callbackIndex)) {
+        return restoreHandle(value);
+      }
+      // Returned handles regain identity only in their own instance. One hop preserves
+      // the guarded callback when the plugin returned an incoming caller callback.
+      if (callbackIndex === undefined && PluginFactoryBinding.belongsTo(value, factory)) {
+        return originalValue(value) ?? value;
+      }
+      let callback = callerData
+        ? undefined
+        : PluginFactoryBinding.belongsTo(value, argumentFactory)
+          ? value
+          : argumentCallbacks.get(value);
+      if (!callback) {
+        // Callback delivery retains its invocation; arguments and receivers stay native.
+        callback = new Proxy(value, {
+          apply: (target, receiver, values) => {
+            const result = admitCallback(() => Reflect.apply(target, receiver, values));
+            // Native reducers deliver this exact caller value as the next and final accumulator.
+            if (callerData) {
+              callerData[0] = result;
+            }
+            return result;
+          },
+          construct: (target, values, newTarget) =>
+            admitCallback(() =>
+              Reflect.construct(target, values, newTarget === callback ? target : newTarget),
+            ),
+        });
+        setPluginOriginalValue(callback, value, bindings.instance);
+        if (!callerData) {
+          argumentCallbacks.set(value, callback);
+          void new PluginFactoryBinding(callback, argumentFactory);
+        }
+      }
+      return callback;
+    });
+    return { args: prepared, callerData };
+  };
   // Executable return contracts keep admission; ordinary result graphs are never inspected.
   const passResult = <T>(value: T): T =>
     typeof value === "function" ||

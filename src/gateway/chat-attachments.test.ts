@@ -1,7 +1,11 @@
+import fs from "node:fs/promises";
+import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createSolidPngBuffer } from "../../test/helpers/image-fixtures.js";
+import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { detectAndLoadPromptImages } from "../agents/embedded-agent-runner/run/images.js";
 import { SessionMutationAuthorizationChangedError } from "./session-mutation-authorization-error.js";
 
 const saveMediaBufferMock = vi.hoisted(() =>
@@ -60,6 +64,7 @@ import { normalizeRpcAttachmentsToChatAttachments } from "./server-methods/attac
 
 const PNG_1x1 =
   "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/woAAn8B9FD5fHAAAAAASUVORK5CYII=";
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 // ISO-BMFF's generic brand identifies the container, not its audio/video tracks.
 const GENERIC_MP4 = Buffer.from(
   "0000001c6674797069736f6d0000020069736f6d69736f326d70343100000008",
@@ -278,7 +283,7 @@ describe("persistInboundImagesForTranscript", () => {
     const warn = vi.fn();
     const result = persist(
       {
-        images: [{ type: "image", data: PNG_1x1, mimeType: "image/png", sourceIndex: 0 }],
+        images: [{ type: "image", data: PNG_1x1, mimeType: "image/png" }],
         offloadedRefs: [],
       },
       { log: { warn }, assertCurrent: () => {} },
@@ -334,6 +339,27 @@ describe("persistInboundImagesForTranscript", () => {
 });
 
 describe("parseMessageWithAttachments", () => {
+  it("serializes warm inline images identically to cold historical images", async () => {
+    const workspaceDir = tempDirs.make("openclaw-warm-image-");
+    const imagePath = path.join(workspaceDir, "photo.png");
+    const bytes = createSolidPngBuffer(2, 1, { r: 12, g: 34, b: 56 });
+    await fs.writeFile(imagePath, bytes);
+    const warm = await parseMessageWithAttachments("inspect", [
+      pngAttachment({ fileName: "photo.png", content: bytes.toString("base64") }),
+    ]);
+    const cold = await detectAndLoadPromptImages({
+      prompt: "",
+      workspaceDir,
+      workspaceOnly: true,
+      model: { input: ["text", "image"] },
+      media: [{ path: imagePath, contentType: "image/png" }],
+    });
+    expect(warm.images).toEqual([
+      { type: "image", data: bytes.toString("base64"), mimeType: "image/png" },
+    ]);
+    expect(JSON.stringify(warm.images)).toBe(JSON.stringify(cold.images));
+  });
+
   it("parses large clipboard data URL images without full base64 decoding on the caller thread", async () => {
     const png = Buffer.concat([Buffer.from(PNG_1x1, "base64"), Buffer.alloc(1_900_000)]);
     const base64 = png.toString("base64");
@@ -362,7 +388,7 @@ describe("parseMessageWithAttachments", () => {
       pngAttachment({ fileName: "big.png", content: bigPng.toString("base64") }),
     ]);
     expect(parsed).toMatchObject({
-      images: [{ sourceIndex: 1 }],
+      images: [{ type: "image", mimeType: "image/png" }],
       offloadedRefs: [
         { mimeType: "application/pdf", sourceIndex: 0 },
         { mimeType: "image/png", sourceIndex: 2 },

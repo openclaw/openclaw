@@ -124,7 +124,7 @@ test("model search reads full model facts only after the resolved identity misse
       ["agent:main:subagent:child", "agent:main:parent"],
       ["agent:main:subagent:child"],
     ],
-    ["zz-no-match", [], ["agent:main:parent", "agent:main:subagent:child"]],
+    ["zz-no-match", [], []],
   ] as const) {
     const prepared = prepareSessionRowSelection(projection, { search });
     const getModelFacts = vi.fn(prepared.getModelFacts);

@@ -40,6 +40,7 @@ type RpcMetric = {
   sessionKey?: string;
   agentId?: string;
   shortId?: string;
+  resolveParams?: Record<string, unknown>;
   limit?: number;
   maxBytes?: number;
   offset?: number;
@@ -338,6 +339,7 @@ suite.define(() => {
                 : {}),
               ...(typeof params.agentId === "string" ? { agentId: params.agentId } : {}),
               ...(typeof params.shortId === "string" ? { shortId: params.shortId } : {}),
+              ...(frame.method === "sessions.resolve" ? { resolveParams: params } : {}),
               ...(typeof historyParams.limit === "number" ? { limit: historyParams.limit } : {}),
               ...(typeof historyParams.maxBytes === "number"
                 ? { maxBytes: historyParams.maxBytes }
@@ -436,6 +438,10 @@ suite.define(() => {
         // Freeze only completed payloads; keep the earlier visibility timings unchanged.
         await waitForStartupResponses();
         const startupMetrics = structuredClone(rpc);
+        await writeFile(
+          path.join(suite.artifactDir, "startup-rpc.json"),
+          JSON.stringify(startupMetrics, null, 2),
+        );
         const images = await page
           .locator(".sidebar-agent-card__avatar img")
           .evaluateAll((elements) =>

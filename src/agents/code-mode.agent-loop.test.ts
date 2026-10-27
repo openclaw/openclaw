@@ -63,6 +63,7 @@ function tool(name: string, execute: AnyAgentTool["execute"]) {
 async function runCodeModeAgent(params: {
   programs: Array<RecoveryProgram | ((context: Context) => RecoveryProgram)>;
   hiddenTools: AnyAgentTool[];
+  execInput?: Record<string, unknown>;
   abortSignal?: AbortSignal;
   configureAgent?: (
     agent: Agent,
@@ -98,7 +99,7 @@ async function runCodeModeAgent(params: {
                 name: waiting ? "wait" : "exec",
                 arguments: waiting
                   ? { runId: code.runId ?? readToolResultDetails(context.messages.at(-1))?.runId }
-                  : { title: "Run the recovery step", code },
+                  : (params.execInput ?? { title: "Run the recovery step", code }),
               },
             ],
       );
@@ -112,6 +113,44 @@ async function runCodeModeAgent(params: {
 
 describe("Code Mode agent-loop error recovery", () => {
   const tempDirs = createTempDirTracker();
+  it.each([
+    { name: "omitted title", metadata: {}, accepted: true },
+    { name: "authored title", metadata: { title: "Record the fixture effect" }, accepted: true },
+    { name: "empty title", metadata: { title: "" }, accepted: false },
+    { name: "blank title", metadata: { title: " \t " }, accepted: false },
+    { name: "object title", metadata: { title: { text: "Record effect" } }, accepted: false },
+    { name: "oversized title", metadata: { title: "x".repeat(121) }, accepted: false },
+  ])("validates $name before executing a cell", async ({ metadata, accepted }) => {
+    const effects: string[] = [];
+    const target = effectTool("record_effect", effects, "recorded", { recorded: true });
+    const code = "return await record_effect({});";
+    const execInput = { ...metadata, code };
+    const { agent } = await runCodeModeAgent({
+      hiddenTools: [target],
+      programs: [code],
+      execInput,
+    });
+    const result = agent.state.messages.find((message) => message.role === "toolResult");
+    expect(result).toMatchObject({ toolName: "exec", isError: !accepted });
+    expect(effects).toEqual(accepted ? ["recorded"] : []);
+    expect(agent.state.messages.find((message) => message.role === "assistant")).toMatchObject({
+      content: [{ type: "toolCall", name: "exec", arguments: execInput }],
+    });
+    if (accepted) {
+      expect(readToolResultDetails(result)).toMatchObject({
+        status: "completed",
+        value: { recorded: true },
+      });
+    } else {
+      expect(result?.content).toEqual([
+        expect.objectContaining({
+          type: "text",
+          text: expect.stringContaining('Validation failed for tool "exec":\n  - title:'),
+        }),
+      ]);
+    }
+  });
+
   it("recovers after a parked read fails without replaying the mutation", async () => {
     const workspace = tempDirs.make("code-mode-wait-");
     const input = join(workspace, "input.txt");

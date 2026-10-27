@@ -74,7 +74,9 @@ export async function refreshScope(ui: Page, replaceLocation = true) {
       root.querySelector(".knowledge-chat-handoff")?.remove();
       if (!s.expectedVault) {
         s.selectedId = "";
-        if (s.tab !== "settings") {
+        // Settings and Scribes are not store content, so they stay open; a first scribe write
+        // that creates the store must not send the operator away from the scribe they watch.
+        if (s.tab !== "settings" && s.tab !== "scribes") {
           s.tab = "recent";
         }
         s.offset = 0;
@@ -114,6 +116,12 @@ export async function refreshScope(ui: Page, replaceLocation = true) {
     status.hidden = true;
     banner.hidden = true;
     banner.textContent = "";
+    // Scribe state lives in sessions and automations, not the vault, so the vault snapshot
+    // cannot tell whether the Scribes tab is current: reload it in the background every resync.
+    if (s.tab === "scribes" && s.viewReady && !s.loadingGeneration && s.displayView === viewKey()) {
+      await load(true);
+      return;
+    }
     if (
       s.loadingGeneration ||
       (s.viewReady &&

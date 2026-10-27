@@ -147,16 +147,19 @@ export function isSidebarAttentionDismissed(
   return dismissals[dismissal.kind]?.includes(dismissal.signature) === true;
 }
 
-/**
- * Drop dismissals whose chip is gone or whose entity set changed, so a state
- * that clears and later recurs surfaces again instead of staying hidden by a
- * stale snooze. Returns the input object when nothing changed.
- */
-function pruneDismissals(
-  dismissals: SidebarAttentionDismissals,
-  active: readonly SidebarAttentionDismissal[],
-  scope?: { cronInventoryComplete: boolean; modelAuthAgentId: string | null },
-): SidebarAttentionDismissals {
+export function reconcileSidebarAttentionDismissals(params: {
+  active: readonly SidebarAttentionDismissal[];
+  key: string | null;
+  scope?: { cronInventoryComplete: boolean; modelAuthAgentId: string | null };
+}): SidebarAttentionDismissals {
+  const dismissals = loadDismissals(params.key);
+  const active = params.active;
+  const scope = params.scope;
+  /**
+   * Drop dismissals whose chip is gone or whose entity set changed, so a state
+   * that clears and later recurs surfaces again instead of staying hidden by a
+   * stale snooze. Returns the input object when nothing changed.
+   */
   const next: SidebarAttentionDismissals = {};
   let changed = false;
   for (const kind of SIDEBAR_ATTENTION_DISMISSAL_KINDS) {
@@ -190,17 +193,8 @@ function pruneDismissals(
       changed = true;
     }
   }
-  return changed ? next : dismissals;
-}
-
-export function reconcileSidebarAttentionDismissals(params: {
-  active: readonly SidebarAttentionDismissal[];
-  key: string | null;
-  scope?: { cronInventoryComplete: boolean; modelAuthAgentId: string | null };
-}): SidebarAttentionDismissals {
-  const stored = loadDismissals(params.key);
-  const pruned = pruneDismissals(stored, params.active, params.scope);
-  if (pruned !== stored) {
+  const pruned = changed ? next : dismissals;
+  if (pruned !== dismissals) {
     saveDismissals(params.key, pruned);
   }
   return pruned;

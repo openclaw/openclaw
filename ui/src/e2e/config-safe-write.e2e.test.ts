@@ -156,38 +156,61 @@ const withPage = pageRunner(suite, () => ({
 }));
 
 suite.define(() => {
-  it("keeps routine autosaves silent while persisting settings", async () => {
-    await withPage(
-      async ({ page }) => {
-        const gateway = await installConfig(page, laboratoryConfig("initial-api"), "quiet-initial");
-        const endpoint = await openLaboratory(page, "initial-api");
-        await gateway.deferNext("config.set");
-        await endpoint.fill("saved-api");
-        const save = mutationParams(await gateway.waitForRequest("config.set"));
-        expect(save.baseHash).toBe("quiet-initial");
-        expect(JSON.parse(String(save.raw))).toEqual(laboratoryConfig("saved-api"));
+  it("keeps autosaves silent and preserves untouched 64-bit identifiers through reload", async () => {
+    await withPage(async ({ page }) => {
+      const identifier = "1048113311314608148";
+      const initialConfig = {
+        ...laboratoryConfig("before-save"),
+        tools: { elevated: { allowFrom: { discord: [identifier, 42] } } },
+      };
+      const gateway = await installConfig(page, initialConfig, "id-snapshot-1");
+      const endpoint = await openLaboratory(page, "before-save", true);
+      await capture(page, "08-id-before-unrelated-save.png", endpoint);
 
-        const indicator = page.locator("openclaw-settings-save-indicator");
-        for (const viewport of [
-          { width: 1440, height: 900 },
-          { width: 1366, height: 768 },
-          { width: 768, height: 1024 },
-          { width: 390, height: 844 },
-        ]) {
-          await page.setViewportSize(viewport);
-          await capture(page, `quiet-autosave-${viewport.width}.png`, endpoint);
-          expect.soft(await indicator.textContent()).toBe("");
-          expect.soft(await indicator.getByRole("status").count()).toBe(0);
-        }
-        await page.setViewportSize({ width: 1440, height: 900 });
-        await gateway.resolveDeferred("config.set");
-        await expectSaveStatus(page, "Apply changes");
-        expect(await indicator.textContent()).not.toMatch(/Saving|Saved/u);
-        await page.reload();
-        await expect.poll(() => endpoint.inputValue()).toBe("saved-api");
-      },
-      { recordVideo: undefined },
-    );
+      await gateway.deferNext("config.set");
+      await endpoint.fill("after-save");
+      const save = mutationParams(await gateway.waitForRequest("config.set"));
+      const submitted = JSON.parse(String(save.raw)) as typeof initialConfig;
+      expect(save.baseHash).toBe("id-snapshot-1");
+      expect(String(save.raw)).toContain(`"${identifier}"`);
+      expect(String(save.raw)).not.toContain(String(Number(identifier)));
+      expect(submitted).toEqual({
+        laboratory: { endpoint: "after-save", retryBudget: 2 },
+        tools: { elevated: { allowFrom: { discord: [identifier, 42] } } },
+      });
+      expect(submitted.tools.elevated.allowFrom.discord[0]).toBe(identifier);
+      expect(typeof submitted.tools.elevated.allowFrom.discord[0]).toBe("string");
+      if (proof.enabled) {
+        await writeFile(
+          path.join(proof.directory(), "09-id-config-set-payload.json"),
+          `${JSON.stringify({ before: initialConfig, submitted }, null, 2)}\n`,
+        );
+      }
+
+      const indicator = page.locator("openclaw-settings-save-indicator");
+      for (const viewport of [
+        { width: 1440, height: 900 },
+        { width: 1366, height: 768 },
+        { width: 768, height: 1024 },
+        { width: 390, height: 844 },
+      ]) {
+        await page.setViewportSize(viewport);
+        await capture(page, `quiet-autosave-${viewport.width}.png`, endpoint);
+        expect.soft(await indicator.textContent()).toBe("");
+        expect.soft(await indicator.getByRole("status").count()).toBe(0);
+      }
+      await page.setViewportSize({ width: 1440, height: 1000 });
+      await gateway.resolveDeferred("config.set");
+      await expectSaveStatus(page, "Apply changes");
+      expect(await indicator.textContent()).not.toMatch(/Saving|Saved/u);
+      await page.reload();
+      await expect.poll(() => endpoint.inputValue()).toBe("after-save");
+      await button(page, "Raw").click();
+      const rawEditor = page.locator(".config-raw-field textarea");
+      await rawEditor.waitFor();
+      await expect.poll(() => rawEditor.inputValue()).toContain(`"${identifier}"`);
+      await capture(page, "10-id-after-unrelated-save.png", rawEditor);
+    });
   });
 
   it.each([
@@ -671,52 +694,6 @@ suite.define(() => {
         hash: "hmac-sha256:v1:opaque-next",
       });
       await expect.poll(() => endpoint.inputValue()).toBe("retained-draft");
-    });
-  });
-
-  it("preserves untouched 64-bit identifier strings during an unrelated form save", async () => {
-    await withPage(async ({ page }) => {
-      const identifier = "1048113311314608148";
-      const initialConfig = {
-        ...laboratoryConfig("before-save"),
-        tools: { elevated: { allowFrom: { discord: [identifier, 42] } } },
-      };
-      const gateway = await installConfig(page, initialConfig, "id-snapshot-1");
-
-      const endpoint = await openLaboratory(page, "before-save", true);
-      await capture(page, "08-id-before-unrelated-save.png", endpoint);
-
-      await gateway.deferNext("config.set");
-      await endpoint.fill("after-save");
-      const save = mutationParams(await gateway.waitForRequest("config.set"));
-      const submitted = JSON.parse(String(save.raw)) as typeof initialConfig;
-      expect(save.baseHash).toBe("id-snapshot-1");
-      expect(String(save.raw)).toContain(`"${identifier}"`);
-      expect(String(save.raw)).not.toContain(String(Number(identifier)));
-      expect(submitted).toEqual({
-        laboratory: { endpoint: "after-save", retryBudget: 2 },
-        tools: { elevated: { allowFrom: { discord: [identifier, 42] } } },
-      });
-      expect(submitted.tools.elevated.allowFrom.discord[0]).toBe(identifier);
-      expect(typeof submitted.tools.elevated.allowFrom.discord[0]).toBe("string");
-
-      if (proof.enabled) {
-        await writeFile(
-          path.join(proof.directory(), "09-id-config-set-payload.json"),
-          `${JSON.stringify({ before: initialConfig, submitted }, null, 2)}\n`,
-        );
-      }
-      await gateway.resolveDeferred("config.set");
-      const saveIndicator = page.locator("openclaw-settings-save-indicator");
-      await expect.poll(() => saveIndicator.textContent()).toContain("Apply changes");
-
-      await page.reload();
-      await expect.poll(() => endpoint.inputValue()).toBe("after-save");
-      await button(page, "Raw").click();
-      const rawEditor = page.locator(".config-raw-field textarea");
-      await rawEditor.waitFor();
-      await expect.poll(() => rawEditor.inputValue()).toContain(`"${identifier}"`);
-      await capture(page, "10-id-after-unrelated-save.png", rawEditor);
     });
   });
 });

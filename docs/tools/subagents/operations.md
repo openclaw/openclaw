@@ -199,6 +199,9 @@ Startup activates only runs with unfinished execution, cleanup, or requester
 obligations. Settled history stays available for listing and result reads without
 reserving completion sources or resuming it. Retention still prunes finished Swarm
 groups, including when no runs need activation.
+When shutdown begins, an active retention sweep finishes its current cleanup
+instead of draining the entire expired backlog. Remaining run records stay saved
+for cleanup after restart, including partially cleaned collector groups.
 Activation waits for source restoration and ordered completion reservations.
 Interrupted child settlement then runs in the background, with at most eight
 recoveries in flight across requester groups. Shutdown waits for accepted recovery
@@ -295,6 +298,12 @@ including agent-qualified child keys, and the original child session identity.
 If a visible spawn's creation receipt omits that identity, the spawn reports an
 error with the child and run identifiers instead of accepting an undeliverable
 child. Inspect that retained child before retrying; do not spawn a replacement.
+
+After a completed task, an ordinary human turn in the same retained child starts
+a new task using the child identity admitted for that execution, including after
+an administrator resets the session. Input acknowledgement alone does not replace the task owner.
+Previous tasks retain their original identity; paused and interrupted task
+continuations keep their existing task custody.
 
 Historical records with a valid agent-qualified key retain that recorded
 ownership without migration. An explicit

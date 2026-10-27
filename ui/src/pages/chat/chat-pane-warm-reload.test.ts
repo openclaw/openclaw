@@ -1,4 +1,3 @@
-/* @vitest-environment jsdom */
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { IDBFactory } from "fake-indexeddb";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -34,6 +33,8 @@ import {
 import { clearStoredChatSnapshots } from "./session-snapshot-invalidation.ts";
 import { resolveChatSnapshotKey } from "./session-snapshot-key.ts";
 import { SessionSnapshotStore } from "./session-snapshot-store.ts";
+/* @vitest-environment jsdom */
+import { writeSnapshotFixture } from "./session-snapshot.test-support.ts";
 import "./chat-pane.tsx";
 
 describe("chat pane warm reload", () => {
@@ -90,7 +91,7 @@ describe("chat pane warm reload", () => {
         { settings: loadSettings(), client: { offlineRecoveryScope: "test-recovery-scope" } },
         { sessionKey },
       );
-      writer.write(snapshotKey, snapshot);
+      writeSnapshotFixture(writer, snapshotKey, snapshot);
       await writer.flush();
       if (priorProjection) {
         const database = await openSessionSnapshotDatabase();

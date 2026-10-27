@@ -97,12 +97,30 @@ it("owns attempt counting, overrides, rebasing, exhaustion, and cancellation", a
   assert(step, "expected a retry");
   expect(step).toMatchObject({ attempt: 1, delayMs: 25 });
   const wait = retry.sleepWithAbort(step.delayMs, step.signal);
-  expectTimers(step.signal, 1);
-  const reason = new Error("stop");
-  supervisor.cancel(reason);
-  const expected = { name: "AbortError", message: "aborted", cause: reason };
-  await expect(wait).rejects.toMatchObject(expected);
-  expectTimers(step.signal);
+  const settled = Promise.allSettled([wait]);
+  try {
+    expectTimers(step.signal, 1);
+    const reason = new Error("stop");
+    supervisor.cancel(reason);
+    const expected = { name: "AbortError", message: "aborted", cause: reason };
+    await expect(wait).rejects.toMatchObject(expected);
+    expectTimers(step.signal);
+  } finally {
+    supervisor.cancel();
+    try {
+      await vi.runOnlyPendingTimersAsync();
+    } finally {
+      try {
+        await settled;
+      } finally {
+        try {
+          vi.restoreAllMocks();
+        } finally {
+          vi.useRealTimers();
+        }
+      }
+    }
+  }
 });
 
 it.each([
@@ -142,33 +160,63 @@ it.each([false, true])("abort during registration=%s", async (duringRegistration
 });
 
 it.each([50, Number.MAX_SAFE_INTEGER])("completes bounded sleep %s", async (input) => {
-  const signal = input === 50 ? new AbortController().signal : undefined;
+  const controller = input === 50 ? new AbortController() : undefined;
+  const signal = controller?.signal;
   const delay = input === 50 ? 50 : TIMER_MAX;
   const sleeper = retry.sleepWithAbort(input, signal);
   const onSettled = vi.fn();
-  void sleeper.then(onSettled);
-  expectTimers(signal, 1);
-  await vi.advanceTimersByTimeAsync(delay - 1);
-  expect(onSettled).not.toHaveBeenCalled();
-  await vi.advanceTimersByTimeAsync(1);
-  await expect(sleeper).resolves.toBeUndefined();
-  expectTimers(signal);
+  const observer = sleeper.then(onSettled);
+  const settled = Promise.allSettled([sleeper, observer]);
+  try {
+    expectTimers(signal, 1);
+    await vi.advanceTimersByTimeAsync(delay - 1);
+    expect(onSettled).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(1);
+    await expect(sleeper).resolves.toBeUndefined();
+    expectTimers(signal);
+  } finally {
+    controller?.abort();
+    try {
+      await vi.runOnlyPendingTimersAsync();
+    } finally {
+      try {
+        await settled;
+      } finally {
+        try {
+          vi.restoreAllMocks();
+        } finally {
+          vi.useRealTimers();
+        }
+      }
+    }
+  }
 });
 
 it.each(["deadline", "sleep"])("can unref the %s timer", async (kind) => {
   vi.useRealTimers();
   const controller = new AbortController();
   const scheduled = vi.spyOn(globalThis, "setTimeout");
+  let settled: Promise<unknown> | undefined;
   try {
     const pending =
       kind === "deadline"
         ? retry.raceWithTimeout(Promise.resolve("done"), 60_000, () => "expired", { ref: false })
-        : retry.sleepWithAbort(60_000, controller.signal, { ref: false });
+        : retry.sleepWithAbort(1, controller.signal, { ref: false });
+    settled = Promise.allSettled([pending]);
     expect(scheduled.mock.results.at(-1)?.value.hasRef()).toBe(false);
     controller.abort();
     await pending.catch(() => {});
   } finally {
     controller.abort();
+    try {
+      await settled;
+    } finally {
+      try {
+        scheduled.mockRestore();
+      } finally {
+        vi.useFakeTimers();
+      }
+    }
   }
 });
 

@@ -39,6 +39,7 @@ import {
 import { clearStoredChatSnapshots } from "./session-snapshot-invalidation.ts";
 import { resolveChatSnapshotKey } from "./session-snapshot-key.ts";
 import { SessionSnapshotStore } from "./session-snapshot-store.ts";
+import { writeSnapshotFixture } from "./session-snapshot.test-support.ts";
 import { buildInitialChatSubmission } from "./user-message-content.ts";
 import "./chat-pane.tsx";
 
@@ -111,7 +112,8 @@ describe("stored chat snapshot hydration", () => {
     messages: ReturnType<typeof nativeHistoryMessage>[],
   ) {
     const writer = new SessionSnapshotStore();
-    writer.write(
+    writeSnapshotFixture(
+      writer,
       resolveChatSnapshotKey(
         { settings: loadSettings(), client: { offlineRecoveryScope: "test-recovery-scope" } },
         { sessionKey: targetSessionKey },
@@ -125,55 +127,34 @@ describe("stored chat snapshot hydration", () => {
     await writer.flush();
   }
 
-  it("holds ready cached rows until connect dispatch and adopts them once", async () => {
-    vi.useFakeTimers();
-    const connect = createDeferred<boolean>();
+  it("displays a prepared cached page while the socket cannot open", async () => {
     const client = createGatewayBrowserClientFixture();
-    Object.defineProperty(client, "connectSent", { get: () => connect.promise });
-    const pane = createMountedPane("agent:main:connecting", new Map(), client);
+    Object.defineProperty(client, "connectSent", { get: () => new Promise(() => {}) });
+    const pane = createMountedPane("agent:main:offline-boot", new Map(), client);
     pane.context.gateway.snapshot.phase = "connecting";
     const snapshot = {
-      messages: [nativeHistoryMessage(1, "saved transcript")],
+      messages: [nativeHistoryMessage(1, "Saved page before socket open")],
       sessionId: "saved-session",
       pagination: { hasMore: false as const },
-      deltaCursor: "saved-cursor",
     };
-    pane.sessionSnapshotStore = { read: async () => snapshot } as never;
+    const read = createDeferred<typeof snapshot>();
+    pane.sessionSnapshotStore = { readReady: () => undefined, read: () => read.promise } as never;
     try {
       const state = startPane(pane);
-      const hydration = expectDefined(
-        chatHistoryRequests(state).initialSnapshotHydration,
-        "pending snapshot hydration",
-      );
+      read.resolve(snapshot);
+      await read.promise;
       await Promise.resolve();
-      expect(state.chatMessages).toEqual([]);
-      expect(hydration.adoptReadySnapshot).toBeTypeOf("function");
-      connect.resolve(true);
-      const adopting = hydration.adoptReadySnapshot?.();
-      expect(hydration.adoptReadySnapshot?.()).toBe(adopting);
-      await vi.advanceTimersByTimeAsync(0);
-      vi.advanceTimersToNextFrame();
-      expect(state.chatMessages).toEqual([]);
-      await vi.advanceTimersByTimeAsync(1);
-      await adopting;
       expect(state.chatMessages).toEqual(snapshot.messages);
-      expect(hydration.adoptReadySnapshot).toBeUndefined();
-      await hydration.promise;
-      expect(state.chatMessages).toEqual(snapshot.messages);
+      expect(state.connected).toBe(false);
     } finally {
       pane.disconnectedCallback();
-      vi.useRealTimers();
     }
   });
 
   it.each(["connecting", "connected"] as const)(
-    "preserves cached first paint before hello and fences post-hello adoption (%s)",
+    "adopts stored history without waiting for connection or paint (%s)",
     async (phase) => {
-      vi.useFakeTimers();
-      const connect = createDeferred<boolean>();
-      const client = createGatewayBrowserClientFixture();
-      Object.defineProperty(client, "connectSent", { get: () => connect.promise });
-      const pane = createMountedPane("agent:main:first-paint", new Map(), client);
+      const pane = createMountedPane("agent:main:first-paint", new Map());
       pane.context.gateway.snapshot.phase = phase;
       const snapshot = {
         messages: [nativeHistoryMessage(1, "cached first paint")],
@@ -185,69 +166,11 @@ describe("stored chat snapshot hydration", () => {
       pane.sessionSnapshotStore = store;
       try {
         const state = startPane(pane);
-        const hydration = expectDefined(
-          chatHistoryRequests(state).initialSnapshotHydration,
-          "pending snapshot hydration",
-        );
-        await vi.advanceTimersByTimeAsync(0);
-        expect(state.chatMessages).toEqual([]);
-        connect.resolve(true);
-        await vi.advanceTimersByTimeAsync(0);
-        if (phase === "connected") {
-          expect(state.chatMessages).toEqual([]);
-          vi.advanceTimersToNextFrame();
-          await vi.advanceTimersByTimeAsync(1);
-        }
+        await chatHistoryRequests(state).initialSnapshotHydration?.promise;
         expect(state.chatMessages).toEqual(snapshot.messages);
-        await hydration.promise;
       } finally {
         pane.disconnectedCallback();
         store.disconnect();
-        vi.useRealTimers();
-      }
-    },
-  );
-
-  it.each(["initially", "while waiting"] as const)(
-    "adopts post-hello history without a paint when hidden %s",
-    async (hiddenAt) => {
-      vi.useFakeTimers();
-      const hidden = vi.spyOn(document, "hidden", "get").mockReturnValue(hiddenAt === "initially");
-      const pane = createMountedPane("agent:main:hidden-history", new Map());
-      pane.context.gateway.snapshot.phase = "connected";
-      const snapshot = {
-        messages: [nativeHistoryMessage(1, "cached hidden transcript")],
-        sessionId: "saved-session",
-        pagination: { hasMore: false as const },
-      };
-      const store = new SessionSnapshotStore();
-      vi.spyOn(store, "read").mockResolvedValue(snapshot);
-      pane.sessionSnapshotStore = store;
-      try {
-        const state = startPane(pane);
-        const hydration = expectDefined(
-          chatHistoryRequests(state).initialSnapshotHydration,
-          "pending snapshot hydration",
-        );
-        await vi.advanceTimersByTimeAsync(0);
-        if (hiddenAt === "while waiting") {
-          expect(state.chatMessages).toEqual([]);
-          hidden.mockReturnValue(true);
-          document.dispatchEvent(new Event("visibilitychange"));
-          await vi.advanceTimersByTimeAsync(0);
-        }
-        expect(state.chatMessages).toEqual(snapshot.messages);
-        await hydration.promise;
-        expect(hydration.adoptReadySnapshot).toBeUndefined();
-        const adopted = state.chatMessages;
-        vi.advanceTimersToNextFrame();
-        await vi.advanceTimersByTimeAsync(1);
-        expect(state.chatMessages).toBe(adopted);
-      } finally {
-        pane.disconnectedCallback();
-        store.disconnect();
-        hidden.mockRestore();
-        vi.useRealTimers();
       }
     },
   );
@@ -491,6 +414,7 @@ describe("stored chat snapshot hydration", () => {
     context.gateway.snapshot.client = client;
     let deliverStoredSnapshot: ((snapshot: unknown) => void) | undefined;
     pane.sessionSnapshotStore = {
+      readReady: () => undefined,
       read: () =>
         new Promise((resolve) => {
           deliverStoredSnapshot = resolve;

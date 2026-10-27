@@ -19,7 +19,7 @@ beforeEach(() => {
 const capture = process.env.OPENCLAW_CAPTURE_UI_PROOF === "1";
 
 suite.define(() => {
-  it("keeps observed run activity out of the next turn's waiting status", async () => {
+  it("keeps observed run activity separate from the next turn", async () => {
     const context = await suite.newBrowserContext({
       locale: "en-US",
       serviceWorkers: "block",
@@ -120,7 +120,9 @@ suite.define(() => {
         .fill("Check the next workspace.");
       await page.getByRole("button", { name: "Send message", exact: true }).click();
       await gateway.waitForRequest("chat.send");
-      await working.getByText("Waiting for turn to start", { exact: true }).waitFor();
+      const workingLabel = working.getByText("Working…", { exact: true });
+      await workingLabel.waitFor({ state: "attached" });
+      expect(await workingLabel.getAttribute("class")).toContain("sr-only");
       // A late event from the previous run must not claim the next run's progress.
       await gateway.emitGatewayEvent("agent", {
         sessionKey,
@@ -136,7 +138,9 @@ suite.define(() => {
             requestAnimationFrame(() => resolve());
           }),
       );
-      expect(await working.textContent()).toContain("Waiting for turn to start");
+      expect(await working.isVisible()).toBe(true);
+      expect(await workingLabel.textContent()).toBe("Working…");
+      expect(await workingLabel.getAttribute("class")).toContain("sr-only");
     } finally {
       await suite.closeBrowserContext(context);
     }

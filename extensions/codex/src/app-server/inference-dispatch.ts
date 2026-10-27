@@ -220,14 +220,27 @@ export function createCodexInferenceModelBinding(params: {
         }
         try {
           const mapping = captured.modelMapping;
-          model = bind(
+          const accessPrograms = body.access_programs;
+          if (accessPrograms !== undefined && !isJsonObject(accessPrograms)) {
+            throw new CodexInferenceAuthorizationError("model");
+          }
+          const cyber = isJsonObject(accessPrograms) ? accessPrograms.cyber : undefined;
+          if (
+            cyber !== undefined &&
+            cyber !== "standard" &&
+            cyber !== "daybreak_blue" &&
+            cyber !== "daybreak_red"
+          ) {
+            throw new CodexInferenceAuthorizationError("model");
+          }
+          const selection =
             params.modelPolicyEnforced === false
               ? undefined
               : mapping?.nativeModel.provider === provider &&
                   mapping.nativeModel.model === body.model
                 ? mapping.authorizedModel
-                : { provider, model: body.model },
-          );
+                : { provider, model: body.model };
+          model = bind(selection && { ...selection, cyberAccessProgram: cyber ?? "standard" });
         } catch {
           cancelNativeTurn();
           throw new CodexInferenceAuthorizationError("model");

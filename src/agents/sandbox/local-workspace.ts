@@ -1,6 +1,7 @@
 import path from "node:path";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
+  checkpointLocalWorkspace,
   resolveLocalWorkspaceOwner,
   withLocalWorkspaceProjection,
 } from "../../gateway/worker-environments/local-workspace-projection.js";
@@ -73,24 +74,7 @@ export async function prepareLocalSandboxWorkspace(params: {
     assertCurrent,
     workerAuthority: { ...owner.workerAuthority, assertCurrent },
   };
-  let pendingCheckpoint: Promise<void> | undefined;
-  const checkpoint = (): Promise<void> => {
-    if (pendingCheckpoint) {
-      return pendingCheckpoint;
-    }
-    const pending = withLocalWorkspaceProjection(owner, (state) => {
-      // Quiescence is now held. Later requests need their own capture; only
-      // requests waiting together for custody can share this checkpoint.
-      pendingCheckpoint = undefined;
-      return state.synchronize("canonical");
-    }).finally(() => {
-      if (pendingCheckpoint === pending) {
-        pendingCheckpoint = undefined;
-      }
-    });
-    pendingCheckpoint = pending;
-    return pending;
-  };
+  const checkpoint = () => checkpointLocalWorkspace(owner);
   try {
     assertCurrent();
     markManagedWorktreePreparation();

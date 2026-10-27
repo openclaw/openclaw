@@ -190,12 +190,11 @@ export async function startGatewaySidecars(params: {
   await measureStartup(params.startupTrace, "sidecars.chat-metadata", async () => {
     await params.refreshChatMetadata?.();
   });
-  // Channel admission may wait for an individual agent database. Keep its producer
-  // in shutdown custody without holding independent services and recovery behind it.
+  // Transports can connect while recovery runs; channel turns retain their per-agent
+  // database and saved-input admission gates. Shutdown still owns this producer.
   void params
     .trackStartupWork(() =>
       measureStartup(params.startupTrace, "sidecars.channels", async () => {
-        await params.waitForMainSessionOrphans?.();
         const shouldStartChannels = params.shouldStartChannels?.() !== false;
         const channelStart = skipChannels
           ? measureStartup(params.startupTrace, "sidecars.channel-skip", () =>

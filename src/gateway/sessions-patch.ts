@@ -77,6 +77,7 @@ import { isUserModelAuthProfileId } from "../state/user-model-account-id.js";
 import type { UserModelAccountSelection } from "./model-account-authority.js";
 import { isSessionUnreadAckOnlyPatch } from "./server-methods/session-unread-ack.js";
 import {
+  createSessionAccessProgramValidation,
   prepareSessionPatchModelSelection,
   resolveSessionPatchModelSelection,
 } from "./server-methods/sessions-patch-model-selection.js";
@@ -115,8 +116,6 @@ type SessionPatchProjectionParams = {
   operatorAuthority?: AdmittedRunOperatorAuthority;
   /** Resolved spawn identity supplied only by the trusted creation owner. */
   preparedModelSelection?: ModelRef;
-  /** Creation snapshots selected models, including the configured default. */
-  pinModelSelection?: boolean;
 };
 
 type SessionPatchProjectionResult =
@@ -555,7 +554,7 @@ function* projectSessionPatchSteps(
       if (!resolved.ok) {
         return invalid(resolved.error);
       }
-      selection = { ...resolved, isDefault: !params.pinModelSelection && resolved.isDefault };
+      selection = resolved;
     }
     if (selection) {
       const prepared = prepareSessionPatchModelSelection({
@@ -725,5 +724,19 @@ function* projectSessionPatchSteps(
     delete next.liveModelSwitchPending;
   }
 
+  if (
+    params.operatorAuthority &&
+    (patch.cyberAccessProgram !== undefined || "model" in patch || "agentRuntime" in patch)
+  ) {
+    validateModelSelection = createSessionAccessProgramValidation({
+      operatorAuthority: params.operatorAuthority,
+      entry: next,
+      validateModelSelection,
+    });
+    const error = validateModelSelection();
+    if (error) {
+      return { ok: false, error };
+    }
+  }
   return { ok: true, entry: next, ...(validateModelSelection ? { validateModelSelection } : {}) };
 }

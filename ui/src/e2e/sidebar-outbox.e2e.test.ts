@@ -117,7 +117,7 @@ suite.define(() => {
       await gateway.setOnline(false);
       await incident.locator(".sidebar-outbox-row__offline").waitFor();
       await expectCompactRow(incident);
-      await page.locator(".sidebar-shell__footer .gateway-status--reconnecting").waitFor();
+      await page.locator(".sidebar-shell__connection .gateway-status--reconnecting").waitFor();
       expect(
         await page
           .locator('[data-attention-kind="scopeUpgrade"], [data-attention-kind="updateAvailable"]')
@@ -139,11 +139,14 @@ suite.define(() => {
       await page.getByRole("button", { name: "Send message", exact: true }).click();
       await page.locator(".chat-queue__item").waitFor();
       await page
-        .locator(".sidebar-shell__footer .gateway-status")
+        .locator(".sidebar-shell__connection .gateway-status")
         .getByText("Reconnecting… · 1 queued", { exact: true })
         .waitFor();
       expect(
-        await page.locator(".sidebar-shell__footer .gateway-status").getByRole("button").count(),
+        await page
+          .locator(".sidebar-shell__connection .gateway-status")
+          .getByRole("button")
+          .count(),
       ).toBe(0);
       await expectReservedInbox(page);
       expect(await gateway.getRequests("chat.send")).toHaveLength(1);
@@ -223,18 +226,20 @@ suite.define(() => {
       await expectCount(page.locator('[data-attention-kind="outbox"]'), 0);
       await page.keyboard.press("Escape");
       await gateway.resolveDeferred("chat.send", { runId, status: "queued" });
-      await page.locator(".chat-send-status").waitFor({ state: "detached" });
+      await expect
+        .poll(() =>
+          page.evaluate(
+            (id) =>
+              Object.entries(sessionStorage).some(
+                ([key, value]) =>
+                  key.startsWith("openclaw.control.chatComposer.") && value.includes(id),
+              ),
+            runId,
+          ),
+        )
+        .toBe(false);
+      expect(await page.locator(".chat-send-status").count()).toBe(0);
       await expectCount(page.locator(".sidebar-issues-button__count"), 0);
-      expect(
-        await page.evaluate(
-          (id) =>
-            Object.entries(sessionStorage).some(
-              ([key, value]) =>
-                key.startsWith("openclaw.control.chatComposer.") && value.includes(id),
-            ),
-          runId,
-        ),
-      ).toBe(false);
       expect(await gateway.getRequests("chat.send")).toHaveLength(2);
     });
   });

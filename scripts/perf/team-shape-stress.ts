@@ -397,5 +397,10 @@ Without --base, run candidate once per mode. See team-shape-stress.md.`);
 }
 
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
-  await main();
+  if (process.argv.includes("--restart-chaos")) {
+    const { runRestartStress } = await import("./team-shape-restart-stress.ts");
+    await runRestartStress(process.argv.slice(2));
+  } else {
+    await main();
+  }
 }

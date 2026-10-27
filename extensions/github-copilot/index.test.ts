@@ -289,7 +289,8 @@ describe("github-copilot plugin", () => {
     };
     runtimeAuth.mockResolvedValue(auth);
     const prepare = (headers?: Record<string, string>) =>
-      provider.prepareRuntimeAuth({
+      provider.prepareRuntimeAuthV2({
+        capability: "chat",
         config: {},
         env: {},
         provider: ID,
@@ -297,7 +298,7 @@ describe("github-copilot plugin", () => {
         model: { id: "gpt-5.4-mini", provider: ID, headers },
         apiKey: auth.apiKey,
         authMode: "token",
-      } as never);
+      });
     await expect(prepare()).resolves.toEqual(auth);
     await expect(prepare({ "X-Opaque": "inline-header-credential" })).resolves.toEqual({
       ...auth,

@@ -1,4 +1,6 @@
 import {
+  decodeSystemOneResponse,
+  encodeSystemOneQuestions,
   validateDecisionBatchV2,
   validateDecisionResultV2,
   type DecisionBatchV2,
@@ -12,7 +14,6 @@ import {
   sanitizeConfiguredModelProviderRequest,
 } from "openclaw/plugin-sdk/provider-http";
 import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
-import { asOptionalRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   OPENROUTER_BASE_URL,
   resolveOpenRouterApiBaseUrl,
@@ -76,91 +77,6 @@ function supportsBatch(batch: DecisionBatchV2, modelId: string): boolean {
   });
 }
 
-function decodeResponse(batch: DecisionBatchV2, response: unknown): unknown {
-  const root = asOptionalRecord(response);
-  const answers = asOptionalRecord(root?.answers);
-  const usage = asOptionalRecord(root?.usage);
-  if (
-    !root ||
-    !answers ||
-    !usage ||
-    !Number.isSafeInteger(usage.input_tokens) ||
-    !Number.isSafeInteger(usage.output_tokens) ||
-    (root.provider !== undefined && typeof root.provider !== "string")
-  ) {
-    return undefined;
-  }
-  const converted = Object.fromEntries(
-    Object.entries(answers).map(([id, value]) => {
-      const answer = asOptionalRecord(value);
-      const question = batch.questions[id];
-      if (!answer) {
-        return [id, undefined];
-      }
-      if (answer.type === "noul") {
-        return [id, { type: "boolean", probabilityTrue: answer.noul }];
-      }
-      if (answer.type !== "choice" && answer.type !== "score" && answer.type !== "box") {
-        return [id, undefined];
-      }
-      if (
-        typeof answer.confidence !== "number" ||
-        !Number.isFinite(answer.confidence) ||
-        answer.confidence < 0 ||
-        answer.confidence > 1
-      ) {
-        return [id, undefined];
-      }
-      if (answer.type === "box") {
-        return [id, { type: "box", box: answer.box, confidence: answer.confidence }];
-      }
-      if (answer.type === "choice") {
-        return [
-          id,
-          {
-            type: "choice",
-            choice: answer.choice,
-            probabilities: answer.probabilities,
-            confidence: answer.confidence,
-          },
-        ];
-      }
-      const probabilities = asOptionalRecord(answer.probabilities);
-      if (
-        question?.type !== "score" ||
-        !probabilities ||
-        Object.keys(probabilities).length !== question.criteria.length ||
-        !question.criteria.every((_, index) => Object.hasOwn(probabilities, String(index)))
-      ) {
-        return [id, undefined];
-      }
-      // Keep the native score and rounded estimates; never recompute either from the other.
-      return [
-        id,
-        {
-          type: "score",
-          score: answer.score,
-          probabilities: question.criteria.map((_, index) => probabilities[String(index)]),
-          confidence: answer.confidence,
-        },
-      ];
-    }),
-  );
-  return {
-    model: root.model,
-    answers: converted,
-    usage: {
-      inputTokens: usage.input_tokens,
-      outputTokens: usage.output_tokens,
-      ...(usage.cost !== undefined ? { costUsd: usage.cost } : {}),
-      ...(Object.keys(usage).some((key) => !["input_tokens", "output_tokens", "cost"].includes(key))
-        ? { raw: usage }
-        : {}),
-    },
-    ...(root.provider !== undefined ? { metadata: { provider: root.provider } } : {}),
-  };
-}
-
 function buildRequest(batch: DecisionBatchV2, context: DecisionProviderContextV2) {
   const extraParams =
     resolveOpenRouterConfiguredExtraParams({
@@ -193,12 +109,7 @@ function buildRequest(batch: DecisionBatchV2, context: DecisionProviderContextV2
                 { type: "image_url", image_url: { url: batch.state.dataUri } },
               ]
             : undefined,
-    questions: Object.fromEntries(
-      Object.entries(batch.questions).map(([id, question]) => [
-        id,
-        { ...question, type: question.type === "boolean" ? "noul" : question.type },
-      ]),
-    ),
+    questions: encodeSystemOneQuestions(batch),
     ...(routed?.provider !== undefined ? { provider: routed.provider } : {}),
   };
 }
@@ -314,7 +225,7 @@ export function buildOpenRouterDecisionProvider(): DecisionProviderV2 {
           return { status: "unavailable", reason: "invalid-response" };
         }
         context.signal.throwIfAborted();
-        const result = decodeResponse(batch, value);
+        const result = decodeSystemOneResponse(batch, value);
         return validateDecisionResultV2(batch, result, context.model.inference?.decision)
           ? { status: "ok", result }
           : { status: "unavailable", reason: "invalid-response" };

@@ -34,7 +34,7 @@ suite.define(() => {
       const sidebar = page.locator("openclaw-app-sidebar");
       const row = sidebar.locator('[data-session-key="' + sessionKey + '"]');
       await row.waitFor({ state: "visible" });
-      const footer = page.locator(".sidebar-shell__footer");
+      const footer = page.locator(".sidebar-shell__connection");
       const before = await takeControlUiScreenshotFrame(page, row, [row], {
         elements: [row],
         animations: "disabled",
@@ -70,7 +70,7 @@ suite.define(() => {
       await gateway.waitForRequest("sessions.patch", {
         match: { key: sessionKey, label: "Renamed offline" },
       });
-      await connectionStatus.getByText("Connected", { exact: true }).waitFor();
+      await connectionStatus.waitFor({ state: "detached" });
       await expect.poll(() => row.textContent()).toContain("Renamed offline");
       expect(await gateway.getRequests("sessions.patch")).toHaveLength(1);
       expect(await page.locator(".shell > .sr-only[role=status]").textContent()).toBe("Connected");

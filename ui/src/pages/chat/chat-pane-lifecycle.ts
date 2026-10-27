@@ -49,7 +49,6 @@ import { focusChatComposerFromKeydown } from "./chat-pane-shared.ts";
 import { resolveSidebarLayoutForBoard } from "./chat-pane-sidebar-layout.ts";
 import { subscribeChatPaneSnapshotInvalidation } from "./chat-pane-startup-subscriptions.ts";
 import type { ChatPaneInputChanges } from "./chat-pane-state-owner.ts";
-import { getChatPendingInputs } from "./chat-pending-inputs.ts";
 import { resumeStoredChatOutboxes } from "./chat-send-actions.ts";
 import { cancelChatModelRecovery } from "./chat-session.ts";
 import { handlePageGatewayEvent } from "./chat-state-events.ts";
@@ -71,7 +70,6 @@ import { openSessionWorkspaceFile } from "./components/chat-session-workspace.ts
 import { resetThreadPresentation } from "./components/chat-thread-interactions.ts";
 import { retainCreatedIncognitoComposerScope } from "./composer-persistence-state.ts";
 import { connectCreatedComposerQueue } from "./creation-composer-recovery.ts";
-import { admitChatSubmission } from "./history-merge.ts";
 import {
   admitInitialChatTurn,
   admitInitialTurnHandoff,
@@ -520,13 +518,18 @@ export abstract class ChatPaneLifecycle extends ChatPaneSessionObservation {
         const state = this.state;
         if (state) {
           // Admit each accepted initial turn before waking followers parked behind recovery.
-          const admitted = admitChatSubmission(state, getChatPendingInputs(state)?.page.items);
+          const admitted = admitInitialChatTurn(state, readAcknowledgedInitialRun(state));
           if (!parseCatalogSessionKey(state.sessionKey)) {
-            // A replay ACK may refer to collected input already outside the loaded user rows.
+            // Fresh history settles replayed runs before their queued followers resume.
             if (admitted) {
-              void loadChatHistory(state);
+              void loadChatHistory(state).then(() => {
+                if (this.state === state) {
+                  void resumeStoredChatOutboxes(state);
+                }
+              });
+            } else {
+              void resumeStoredChatOutboxes(state);
             }
-            void resumeStoredChatOutboxes(state);
           }
         }
       }),
