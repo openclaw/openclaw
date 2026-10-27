@@ -7,6 +7,8 @@
  * use 2 for smoke, 500 for >=1,000 scan and >=2,000 samples per fast read class.
  * OPENCLAW_BENCH_FILES=50 OPENCLAW_BENCH_WORKSPACES=100 reduces fixture setup for smoke;
  * use the same values for prepare/run. Default measurements retain the full shape.
+ * Like reconciliation, scans accept owner observations, including warmup fingerprints;
+ * repeated unchanged scans must not discard those facts and rehash every file.
  * Run allocation and cpu separately in place of timing; neither is a timing gate.
  * OPENCLAW_BENCH_BASELINE_DIR selects a sparse original-source overlay, including during prepare.
  * Accept only identical expected manifest roots/content, no filesystem scan calls on shared
@@ -221,6 +223,9 @@ try {
         assert.equal(value.resultingRoot, fixture.expectedRoot);
         assert.equal(value.currentManifestRaw, value.baseManifestRaw);
         assert.equal(value.currentManifestRef, value.baseManifestRef);
+        if (value.observation) {
+          await store.accept(value.observation);
+        }
         return value;
       };
       const fastReads = {
