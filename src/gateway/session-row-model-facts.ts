@@ -1,6 +1,7 @@
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { normalizeOptionalAgentRuntimeId } from "../agents/agent-runtime-id.js";
 import { DEFAULT_PROVIDER } from "../agents/defaults.js";
+import { listRegisteredAgentHarnesses } from "../agents/harness/registry.js";
 import type { AgentHarnessSessionRuntimeOwnership } from "../agents/harness/types.js";
 import type { ModelCatalogEntry } from "../agents/model-catalog.js";
 import { normalizeStoredOverrideModel } from "../agents/model-selection-persisted.js";
@@ -53,12 +54,12 @@ export function mayMatchSessionRowModelSearch(
   const metadata = new Set<PluginMetadataSnapshot | null>([
     readPreparedGatewayModelMetadata(params.cfg),
   ]);
-  const normalized = new Map<string, string>();
+  const lowercaseFields = new Map<string, string>();
   const lower = (value: string) => {
-    let text = normalized.get(value);
+    let text = lowercaseFields.get(value);
     if (text === undefined) {
       text = normalizeLowercaseStringOrEmpty(value);
-      normalized.set(value, text);
+      lowercaseFields.set(value, text);
     }
     return text;
   };
@@ -86,18 +87,18 @@ export function mayMatchSessionRowModelSearch(
     models.add(lower(model));
     add(model);
     if (provider) {
-      let identities = refs.get(provider);
-      if (!identities) {
-        refs.set(provider, (identities = new Set()));
+      let providerModels = refs.get(provider);
+      if (!providerModels) {
+        refs.set(provider, (providerModels = new Set()));
       }
-      identities.add(model);
+      providerModels.add(model);
     } else {
       bare.add(model);
     }
   };
   function* identities() {
-    for (const [provider, models] of refs) {
-      for (const model of models) {
+    for (const [provider, providerModels] of refs) {
+      for (const model of providerModels) {
         yield { provider, model };
       }
     }
@@ -190,6 +191,9 @@ export function mayMatchSessionRowModelSearch(
   for (const backend of resolveRuntimeCliBackends("metadata")) {
     runtime(backend.id);
   }
+  for (const { harness } of listRegisteredAgentHarnesses()) {
+    runtime(harness.id);
+  }
   for (const snapshot of metadata) {
     for (const plugin of snapshot?.plugins ?? []) {
       for (const id of [...plugin.cliBackends, ...(plugin.setup?.cliBackends ?? [])]) {
@@ -213,7 +217,9 @@ export function mayMatchSessionRowModelSearch(
         ref(normalized?.provider, normalized?.model);
       }
     }
-    for (const identity of [...identities()]) {
+    // Snapshot before adding normalized display refs.
+    const displayIdentities = [...identities()];
+    for (const identity of displayIdentities) {
       const display = resolveSessionDisplayModelIdentityRefCached({
         cfg: params.cfg,
         ...identity,

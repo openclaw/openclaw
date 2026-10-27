@@ -1,6 +1,7 @@
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { expect, test, vi } from "vitest";
 import { SessionRunStatusSchema } from "../../packages/gateway-protocol/src/schema/sessions-row.js";
+import { registerAgentHarness } from "../agents/harness/registry.js";
 import type { AgentHarnessSessionRuntimeOwnership } from "../agents/harness/types.js";
 import { resolveSessionModelIdentityRef } from "../agents/session-model-ref.js";
 import { buildSubagentRunReadIndexFromRuns } from "../agents/subagents/registry/subagent-registry-queries.js";
@@ -120,6 +121,45 @@ test("non-status vocabulary misses skip per-row run state and model facts", () =
   });
 });
 
+test("automatic runtime labels use loaded vocabulary without per-row support checks", () => {
+  const now = 1_800_000_000_000;
+  const cfg = { agents: { defaults: { model: "fixture/auto-model" }, entries: { main: {} } } };
+  const key = "agent:main:fixture";
+  const entry: SessionEntry = { sessionId: "fixture", updatedAt: now };
+  const rowContext = buildSessionListRowMetadataContext({ now });
+  const supports = vi.fn(() => ({ supported: true as const }));
+  withPluginRuntimeRegistryScope(createEmptyPluginRegistry(), () => {
+    registerAgentHarness({
+      id: "dynamic-runtime",
+      label: "Dynamic runtime",
+      supports,
+      runAttempt: () => {
+        throw new Error("Search must not run an agent");
+      },
+    });
+    const facts = modelFacts.readSessionRowModelFacts({
+      cfg,
+      key,
+      agentId: "main",
+      entry,
+      rowContext,
+      preparedRuntimeOwnership: null,
+      preparedAcpMeta: null,
+      preparedModelMetadata: null,
+      source: { entry, readSourceEntry: () => undefined },
+    });
+    expect(facts.thinkingProjection.agentRuntime.id).toBe("dynamic-runtime");
+    supports.mockClear();
+    expect(
+      modelFacts.mayMatchSessionRowModelSearch(
+        { cfg, rowContext, rows: [{ agentId: "main", entry }] },
+        "dynamic-runtime",
+      ),
+    ).toBe(true);
+    expect(supports).not.toHaveBeenCalled();
+  });
+});
+
 test("native models and prepared runtime labels outside the catalog retain their matches", () => {
   const now = 1_800_000_000_000;
   const cfg = {
@@ -222,7 +262,7 @@ test("native models and prepared runtime labels outside the catalog retain their
     ).toEqual(expected ? [key] : []);
     expect(getModelFacts).toHaveBeenCalledOnce();
   }
-  params.projectActiveRun = () => ({ active: true, status: "running" });
+  params.projectActiveRun = () => ({ active: true });
   params.opts = { search: "running" };
   getModelFacts.mockClear();
   expect(filterSessionEntries(params).entries.map(([value]) => value)).toEqual([key]);
