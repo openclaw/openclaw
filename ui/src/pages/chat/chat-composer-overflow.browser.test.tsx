@@ -378,7 +378,8 @@ it.each([
   }
 });
 
-it.each(["classic", "overlay"])(
+// Chromium reserves a stable gutter without a scrollbar; only WebKit can regress classic bars.
+it.each(server.browser === "webkit" ? ["classic", "overlay"] : ["overlay"])(
   "settles %s-scrollbar drafts crossing the height cap",
   async (bar) => {
     await page.viewport(390, 800);
@@ -421,9 +422,26 @@ it.each(["classic", "overlay"])(
       const middle = Math.floor((fits + length) / 2);
       [fits, length] = (await overflows(middle)) ? [fits, middle] : [middle, length];
     }
-    // Wraps the wider text would absorb sit within a line of the cap.
-    for (let step = fits - 4; step < length + 12; step++) {
-      await overflows(step);
+    expect(await overflows(fits)).toBe(false);
+    // Measure synchronously, without frames, which drafts overflow only until
+    // the text gains the 8px gutter swap. Those lengths are the unstable ones.
+    const inset = Number.parseFloat(getComputedStyle(textarea).paddingRight);
+    const fitsWithInset = (draftLength: number, endInset: number) => {
+      textarea.value = draft.slice(0, draftLength);
+      textarea.style.paddingInlineEnd = `${endInset}px`;
+      const result = textarea.scrollHeight <= textarea.clientHeight + 1;
+      textarea.style.paddingInlineEnd = "";
+      textarea.value = draft.slice(0, fits);
+      return result;
+    };
+    let last = length;
+    while (!fitsWithInset(last, inset) && fitsWithInset(last, inset - 8)) {
+      last++;
+    }
+    // Without such a draft this case no longer exercises the defect.
+    expect(last).toBeGreaterThan(length);
+    for (; length <= last; length++) {
+      await overflows(length);
     }
     observer.disconnect();
   },
