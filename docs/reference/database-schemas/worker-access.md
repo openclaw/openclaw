@@ -124,6 +124,12 @@ writer broker for mutations. Keep multi-statement snapshot reads together; use
 the writer's ordered operation when a read must follow its accepted writes.
 Do not open a second main-thread connection or add a synchronous fallback.
 
+Local workspace reconciliation releases the shared state reader after capturing
+its database snapshot. The existing workspace computation pool scans files and
+prepares manifest results from that compressed snapshot; the Gateway forwards it
+without expanding the tree. The reconciliation lease still checks authority before
+accepting results, and the state writer retains atomic manifest publication.
+
 Long-lived Gateway and local TUI processes reuse the shared-state reader pool for
 early awaited configuration and plugin metadata reads. Standalone CLI inspection
 keeps its one-shot reader retirement; failed reads and native cleanup still retire

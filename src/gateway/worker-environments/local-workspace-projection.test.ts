@@ -261,7 +261,7 @@ it.each(["operator", "gateway"] as const)(
   },
 );
 
-it("provisions, synchronizes, and retains reconciliation payloads without caller-thread store SQL", () =>
+it("reconciles during shared state reads without caller-thread store SQL", () =>
   proveWorkerOwnedIncrementalWorkspace(owner));
 
 it.skipIf(process.platform === "win32")(
