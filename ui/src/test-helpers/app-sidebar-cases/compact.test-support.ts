@@ -10,6 +10,7 @@ import {
   mountSidebar,
   type SidebarLifecycleState,
 } from "../app-sidebar.ts";
+import { sessionListResult } from "../chat-model.ts";
 import { waitForFast } from "../wait-for.ts";
 
 const catalogHello = {
@@ -56,12 +57,10 @@ export async function mountCatalog(
   return { ...mounted, gateway };
 }
 
-export function agentList(
+export const agentList = (
   agents: AgentsListResult["agents"],
   defaultId = "main",
-): AgentsListResult {
-  return { defaultId, mainKey: "main", scope: "per-sender", agents };
-}
+): AgentsListResult => ({ defaultId, mainKey: "main", scope: "per-sender", agents });
 
 export function publishQuestion(
   gateway: ReturnType<typeof createGatewayHarness>,
@@ -73,7 +72,7 @@ export function publishQuestion(
     id,
     sessionKey,
     agentId: "main",
-    questions: [{ questionId: "confirm", header: "Confirm", question: "Continue?", options: [] }],
+    questions: [confirmQuestion()],
     createdAtMs: Date.now(),
     expiresAtMs: Date.now() + 60_000,
     status: "pending",
@@ -81,26 +80,22 @@ export function publishQuestion(
   } satisfies QuestionRequestedEvent);
 }
 
-export function confirmQuestion(
+export const confirmQuestion = (
   options: QuestionRequestedEvent["questions"][number]["options"] = [],
   question = "Continue?",
-) {
-  return { questionId: "confirm", header: "Confirm", question, options };
-}
+) => ({ questionId: "confirm", header: "Confirm", question, options });
 
-export function approvalRequest(
+export const approvalRequest = (
   sessionKey: string,
   overrides: Partial<ExecApprovalRequest> = {},
-): ExecApprovalRequest {
-  return {
-    id: "approval-1",
-    kind: "exec",
-    request: { command: "git status", sessionKey },
-    createdAtMs: Date.now(),
-    expiresAtMs: Date.now() + 60_000,
-    ...overrides,
-  };
-}
+): ExecApprovalRequest => ({
+  id: "approval-1",
+  kind: "exec",
+  request: { command: "git status", sessionKey },
+  createdAtMs: Date.now(),
+  expiresAtMs: Date.now() + 60_000,
+  ...overrides,
+});
 
 export function attentionLabel(root: ParentNode | null | undefined, kind?: string) {
   return root
@@ -108,15 +103,8 @@ export function attentionLabel(root: ParentNode | null | undefined, kind?: strin
     ?.getAttribute("aria-label");
 }
 
-export function sessionList(sessions: GatewaySessionRow[], ts = 2): SessionsListResult {
-  return {
-    ts,
-    path: "",
-    count: sessions.length,
-    defaults: { modelProvider: null, model: null, contextTokens: null },
-    sessions,
-  };
-}
+export const sessionList = (sessions: GatewaySessionRow[], ts = 2): SessionsListResult =>
+  sessionListResult(ts, sessions);
 
 export function expectAttention(
   root: () => ParentNode | null | undefined,

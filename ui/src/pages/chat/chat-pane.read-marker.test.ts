@@ -3,12 +3,16 @@
 import { ErrorCodes, GatewayProtocolRequestTimeoutError } from "@openclaw/gateway-client/browser";
 import { describe, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
-import { GatewayRequestError, type GatewayBrowserClient } from "../../api/gateway.ts";
+import { GatewayRequestError } from "../../api/gateway-connect-errors.ts";
+import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { GatewaySessionRow } from "../../api/types.ts";
 import type { ApplicationGatewaySnapshot } from "../../app/gateway.ts";
 import { sessionsResult } from "../../lib/sessions/session-capability.test-support.ts";
+import { withSessionMutationOperations } from "../../lib/sessions/session-mutation-operations.ts";
 import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
-import { createSessionCapabilityFixture, createTestChatPane } from "./chat-pane.test-support.ts";
+import { setChatHistoryLoad } from "./chat-history-state.ts";
+import { createTestChatPane } from "./chat-pane.test-support.ts";
+import { createSessionCapabilityFixture } from "./chat-session-capability.test-support.ts";
 
 const sessionKey = "agent:main:current";
 const unreadRow = (extra: Partial<GatewaySessionRow> = {}): GatewaySessionRow => ({
@@ -52,12 +56,34 @@ const observedSessions = (rows: GatewaySessionRow[]) => ({
   sectionOrder: [],
 });
 
+function commitReadMarkerHistory(
+  pane: ReturnType<typeof createTestChatPane>["pane"],
+  row: GatewaySessionRow = unreadRow({ sessionId: "read-marker-session" }),
+) {
+  const state = pane.state;
+  const client = state.client;
+  if (!client) {
+    throw new Error("Read-marker fixture requires a connected client");
+  }
+  state.currentSessionId = row.sessionId;
+  setChatHistoryLoad(state, {
+    phase: "committed",
+    sessions: state.sessions,
+    client,
+    connectionEpoch: state.connectionEpoch,
+    sessionKey: state.sessionKey,
+    requestAgentId: undefined,
+    sessionInfo: row,
+  });
+}
+
 function createReadMarkerPane(result: Record<string, never> | null = null) {
   const patch = vi.fn().mockResolvedValue(result);
   const { pane, state } = createTestChatPane({
     client: {} as GatewayBrowserClient,
     sessions: createSessionCapabilityFixture({ patch }),
   });
+  commitReadMarkerHistory(pane);
   return { pane, state, patch };
 }
 
@@ -85,9 +111,12 @@ describe("chat pane read markers", () => {
       }),
     });
     onTestFinished(() => sessions.dispose());
+    commitReadMarkerHistory(pane, row);
     await sessions.refresh({ force: true });
     onTestFinished(sessions.subscribe((state) => pane.applySessionsState(state)));
     pane.applySessionsState(sessions.state);
+    expect(sessions.state.result?.sessions[0]?.unread).toBe(false);
+    await withSessionMutationOperations(() => undefined);
     expect(patch).toHaveBeenCalledOnce();
 
     rejected.reject(
@@ -263,6 +292,7 @@ describe("chat pane read markers", () => {
       throw new Error(`Unexpected request: ${method}`);
     });
     const { pane } = createTestChatPane({ client: createTestGatewayClient(request) });
+    commitReadMarkerHistory(pane);
     const { context } = pane;
     const errors = vi.fn();
     onTestFinished(
@@ -291,7 +321,11 @@ describe("chat pane read markers", () => {
     const { pane, patch } = createReadMarkerPane();
     const sessionsState = (presented: boolean) => {
       pane.presented = presented;
-      pane.applySessionsState(observedSessions([unreadRow({ label: "Background activity" })]));
+      Object.assign(
+        pane.context.sessions.state,
+        observedSessions([unreadRow({ label: "Background activity" })]),
+      );
+      pane.applySessionsState(pane.context.sessions.state);
     };
 
     // Hidden retained panes keep the subscription alive but must not mark
@@ -312,7 +346,8 @@ describe("chat pane read markers", () => {
     expect(patch).not.toHaveBeenCalled();
 
     pane.presented = false;
-    pane.applySessionsState(observedSessions([row]));
+    Object.assign(pane.context.sessions.state, observedSessions([row]));
+    pane.applySessionsState(pane.context.sessions.state);
     pane.presented = true;
 
     expectRead(patch, sessionKey, 20);

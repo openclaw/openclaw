@@ -76,7 +76,7 @@ export abstract class MemoryManagerWatchOps extends MemoryManagerSyncBase {
       onDirty: () => this.markMemoryWatchDirty(),
       onChange: () => {
         this.markMemoryWatchDirty();
-        return this.sync({ reason: "watch" });
+        return this.syncBackground({ reason: "watch" });
       },
       onState: ({ health }) => {
         if (health.length && health.every((entry) => entry.state === "ready")) {
@@ -141,7 +141,7 @@ export abstract class MemoryManagerWatchOps extends MemoryManagerSyncBase {
     };
     try {
       this.runInBackgroundContext(() => {
-        void this.runInBackgroundContext(() => this.sync(params)).catch(failed);
+        void this.runInBackgroundContext(() => this.syncBackground(params)).catch(failed);
       });
     } catch (err) {
       failed(err);

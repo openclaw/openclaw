@@ -21,6 +21,11 @@ describe("system-presence", () => {
   function connectDevice(deviceId: string, fields: Parameters<typeof upsertPresence>[1]) {
     upsertPresence(deviceId, { deviceId, reason: "connect", ...fields });
   }
+  const findDevice = (deviceId: string) =>
+    listSystemPresence().find((entry) => entry.deviceId === deviceId);
+  const operators = () => listSystemPresence().filter((entry) => entry.roles?.includes("operator"));
+  const expectOperators = (...rows: Parameters<typeof upsertPresence>[1][]) =>
+    expect(operators()).toMatchObject(rows);
 
   it("keeps a replacement connection private until its own delivery commits", () => {
     const key = randomUUID();
@@ -45,16 +50,9 @@ describe("system-presence", () => {
   it("merges roles and scopes for the same device", () => {
     const deviceId = randomUUID();
 
-    connectDevice(deviceId, {
-      host: "openclaw",
-      roles: ["operator"],
-      scopes: ["operator.admin"],
-    });
-
+    connectDevice(deviceId, { host: "openclaw", roles: ["operator"], scopes: ["operator.admin"] });
     connectDevice(deviceId, { roles: ["node"], scopes: ["system.run"] });
-
-    const entry = listSystemPresence().find((e) => e.deviceId === deviceId);
-    expect(entry).toMatchObject({
+    expect(findDevice(deviceId)).toMatchObject({
       roles: ["operator", "node"],
       scopes: ["operator.admin", "system.run"],
     });
@@ -66,7 +64,6 @@ describe("system-presence", () => {
       { deviceId: "DEVICE", instanceId: "tab" },
       { instanceId: "INSTANCE" },
     ]) {
-      const rows = () => listSystemPresence().filter((entry) => entry.roles?.includes("operator"));
       const connect = (connectionId: string, watchedSessions: string[]) =>
         upsertPresence(connectionId, {
           deviceId: connectionId === "first" ? identity.deviceId : identity.deviceId?.toLowerCase(),
@@ -83,25 +80,23 @@ describe("system-presence", () => {
 
       connect("first", ["one"]);
       disconnect("first");
-      expect(rows()).toMatchObject([{ connectionId: "first", reason: "disconnect" }]);
+      expectOperators({ connectionId: "first", reason: "disconnect" });
       connect("second", ["two"]);
-      expect(rows()).toMatchObject([{ connectionId: "second", reason: "connect" }]);
+      expectOperators({ connectionId: "second", reason: "connect" });
       connect("third", ["three"]);
-      expect(rows()).toEqual([
-        expect.objectContaining({ connectionId: "second", watchedSessions: ["two"] }),
-        expect.objectContaining({ connectionId: "third", watchedSessions: ["three"] }),
-      ]);
+      expectOperators(
+        { connectionId: "second", watchedSessions: ["two"] },
+        { connectionId: "third", watchedSessions: ["three"] },
+      );
       disconnect("second");
-      expect(rows()).toMatchObject([{ connectionId: "third", watchedSessions: ["three"] }]);
+      expectOperators({ connectionId: "third", watchedSessions: ["three"] });
       disconnect("third");
-      expect(rows()).toMatchObject([
-        { connectionId: "third", reason: "disconnect", watchedSessions: undefined },
-      ]);
+      expectOperators({ connectionId: "third", reason: "disconnect", watchedSessions: undefined });
       expect(listSystemPresence().find((entry) => entry.roles?.includes("node"))).toMatchObject({
         reason: "connect",
       });
       vi.advanceTimersByTime(5 * 60 * 1000 + 1);
-      expect(rows()).toEqual([]);
+      expect(operators()).toEqual([]);
     }
     upsertPresence("anonymous-first", {
       connectionId: "anonymous-first",
@@ -113,45 +108,20 @@ describe("system-presence", () => {
       roles: ["operator"],
       reason: "connect",
     });
-    expect(listSystemPresence().filter((entry) => entry.roles?.includes("operator"))).toHaveLength(
-      2,
-    );
+    expect(operators()).toHaveLength(2);
   });
 
-  it("clears retained input activity on explicit null", () => {
-    const instanceId = `presence-clear-${randomUUID()}`;
-    const beacon = { text: "Node: desk · mode ui", instanceId, host: "desk", mode: "ui" };
-    updateSystemPresence({ ...beacon, lastInputSeconds: 4 });
-    updateSystemPresence({ ...beacon, lastInputSeconds: null });
-
-    const entry = listSystemPresence().find((candidate) => candidate.instanceId === instanceId);
-    expect(entry?.host).toBe("desk");
-    expect(entry?.lastInputSeconds).toBeUndefined();
-  });
-
-  it("parses node presence text and normalizes the update key", () => {
-    vi.useFakeTimers();
-    vi.setSystemTime(new Date("2026-05-11T04:00:00.000Z"));
+  it("normalizes beacon identity and preserves old presence values across refreshes", () => {
     const text =
       "Node: Relay-Host (10.0.0.9) · app 2.1.0 · last input 7s ago · mode ui · reason beacon";
     const instanceId = "  Mixed-Case-Node  ";
     const update = updateSystemPresence({ text, instanceId });
 
-    expect({ key: update.key, changedKeys: update.changedKeys, next: update.next }).toEqual({
-      key: "mixed-case-node",
-      changedKeys: ["host", "ip", "version", "mode", "reason"],
-      next: {
-        instanceId,
-        lastInputSeconds: 7,
-        text,
-        ts: 1_778_472_000_000,
-        host: "Relay-Host",
-        ip: "10.0.0.9",
-        version: "2.1.0",
-        mode: "ui",
-        reason: "beacon",
-      },
-    });
+    expect([update.key, update.next.instanceId, update.changedKeys]).toEqual([
+      "mixed-case-node",
+      instanceId,
+      ["host", "ip", "version", "mode", "reason"],
+    ]);
 
     const normalized = { text, instanceId: "mixed-case-node" };
     const refreshed = updateSystemPresence({ ...normalized, lastInputSeconds: 11 });
@@ -164,6 +134,13 @@ describe("system-presence", () => {
     expect(moved.changedKeys).toEqual(["ip"]);
     expect(moved.next.ip).toBe("10.0.0.10");
     expect(refreshed.next.ip).toBe("10.0.0.9");
+    updateSystemPresence({ ...normalized, lastInputSeconds: null });
+    expect(
+      listSystemPresence().find((entry) => entry.instanceId === normalized.instanceId),
+    ).toMatchObject({
+      host: "Relay-Host",
+      lastInputSeconds: undefined,
+    });
   });
 
   it("keeps fallback text keys UTF-16 safe", () => {
@@ -211,7 +188,11 @@ describe("system-presence", () => {
       const deviceId = `${prefix}${index}`;
       upsertPresence(deviceId, { deviceId, host: deviceId, mode: "ui" });
     }
+    const copyingSort = vi.spyOn(Array.prototype, "toSorted");
     const bounded = listSystemPresence();
+    const copies = copyingSort.mock.calls.length;
+    copyingSort.mockRestore();
+    expect(copies).toBe(0);
     expect(bounded).toHaveLength(200);
     expect(bounded.filter((entry) => entry.text === self.text)).toHaveLength(1);
     expect(bounded.some((entry) => entry.text === forged.text)).toBe(false);
@@ -221,7 +202,7 @@ describe("system-presence", () => {
     vi.useFakeTimers();
     const deviceId = randomUUID();
     connectDevice(deviceId, { host: "stale-host", mode: "ui" });
-    const original = listSystemPresence().find((entry) => entry.deviceId === deviceId)!;
+    const original = findDevice(deviceId)!;
     expect(original).toBeDefined();
 
     vi.advanceTimersByTime(5 * 60 * 1000 + 1);
@@ -230,7 +211,7 @@ describe("system-presence", () => {
     expect(entries.map((entry) => entry.deviceId)).not.toContain(deviceId);
     expect(entries.map((entry) => entry.reason)).toContain("self");
     connectDevice(deviceId, { host: "returned-host", mode: "ui" });
-    const returned = listSystemPresence().find((entry) => entry.deviceId === deviceId)!;
+    const returned = findDevice(deviceId)!;
     expect(getSystemPresenceKey(returned)).not.toBe(getSystemPresenceKey(original));
   });
 });

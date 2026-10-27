@@ -8,9 +8,11 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
 import * as pluginInstall from "../plugins/install.js";
 import { writePersistedInstalledPluginIndex } from "../plugins/installed-plugin-index-store-write.js";
+import { resolveInstalledPluginIndexStorePath } from "../plugins/installed-plugin-index-store.js";
 import { markRetainedManagedNpmInstall } from "../plugins/managed-npm-retention.js";
 import { isTrustedOfficialPluginInstallRecord } from "../plugins/official-external-install-records.js";
 import { cleanupTrackedTempDirs, makeTrackedTempDir } from "../plugins/test-helpers/fs-fixtures.js";
+import * as stateDbReadOnly from "../state/openclaw-state-db-readonly.js";
 import { runOpenClawStateWriteTransaction } from "../state/openclaw-state-db.js";
 import {
   detectPluginRegistryHealthIssues,
@@ -126,6 +128,86 @@ async function createStaleLocalFixture() {
 }
 
 describe("maybeRepairPluginRegistryState", () => {
+  it.each([false, true])(
+    "builds missing registry state only with repair enabled (%s)",
+    async (shouldRepair) => {
+      const stateDir = makeTempDir();
+      const pluginDir = path.join(stateDir, "plugins", "demo");
+      fs.mkdirSync(pluginDir, { recursive: true });
+
+      const result = await maybeRepairPluginRegistryState({
+        stateDir,
+        candidates: [createCandidate(pluginDir)],
+        env: hermeticEnv(),
+        config: {},
+        prompter: { shouldRepair },
+      });
+
+      expect(result).toEqual({
+        config: {},
+        ...(shouldRepair ? { pluginInventoryChanged: true } : {}),
+      });
+      if (!shouldRepair) {
+        expect(fs.existsSync(resolveInstalledPluginIndexStorePath({ stateDir }))).toBe(false);
+        return;
+      }
+      const persisted = await readRequiredPersistedInstalledPluginIndex(stateDir);
+      expect(persisted).toMatchObject({ refreshReason: "migration", migrationVersion: 1 });
+      expect(persisted.plugins).toStrictEqual([
+        expectedPluginIndexRecord({ pluginId: "demo", rootDir: pluginDir, origin: "global" }),
+      ]);
+    },
+  );
+
+  it("preserves the original registry read error and stored records before repair", async () => {
+    const stateDir = makeTempDir();
+    const records = { authoritative: { source: "npm", spec: "authoritative@1.0.0" } };
+    runOpenClawStateWriteTransaction(
+      ({ db }) => {
+        db.prepare(
+          "INSERT OR REPLACE INTO config_machine_state (state_key, value_json, updated_at_ms) VALUES ('plugins.installedIndex', ?, 123)",
+        ).run(
+          JSON.stringify({
+            revision: 123,
+            index: { ...createCurrentIndex(), migrationVersion: 0, installRecords: records },
+          }),
+        );
+      },
+      { env: { ...process.env, OPENCLAW_STATE_DIR: stateDir } },
+    );
+    const error = Object.assign(new Error("database is locked"), {
+      code: "ERR_SQLITE_ERROR",
+      errcode: 5,
+    });
+    const readSpy = vi.spyOn(stateDbReadOnly, "withExistingOpenClawStateDatabaseReadOnly");
+    readSpy.mockImplementationOnce(() => {
+      throw error;
+    });
+    const params = {
+      stateDir,
+      candidates: [],
+      env: hermeticEnv(),
+      config: {},
+      prompter: { shouldRepair: true },
+    };
+    await expect(maybeRepairPluginRegistryState(params)).rejects.toBe(error);
+    readSpy.mockRestore();
+    const row = runOpenClawStateWriteTransaction(
+      ({ db }) =>
+        db
+          .prepare(
+            "SELECT updated_at_ms FROM config_machine_state WHERE state_key = 'plugins.installedIndex'",
+          )
+          .get(),
+      { env: { ...process.env, OPENCLAW_STATE_DIR: stateDir } },
+    );
+    expect(row).toEqual({ updated_at_ms: 123 });
+    await maybeRepairPluginRegistryState(params);
+    expect((await readRequiredPersistedInstalledPluginIndex(stateDir)).installRecords).toEqual(
+      records,
+    );
+  });
+
   it("does not warn for uninitialized registry state", async () => {
     const stateDir = makeTempDir();
     await expect(
@@ -448,7 +530,6 @@ describe("maybeRepairPluginRegistryState", () => {
     await markRetainedManagedNpmInstall({
       packageDir: managed.packageDir,
       pluginId: "bundled-demo",
-      retainedAt: "2026-04-25T00:00:00.000Z",
       reason: "test-retained-generation",
     });
     await writePersistedInstalledPluginIndex(

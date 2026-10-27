@@ -14,9 +14,10 @@ model role to TypeSafe AI's hosted Jev models or an explicitly configured
 System One server such as [Kev](https://github.com/jaredpalmer/kev). Its models appear in the separate
 **Decision** picker, never in the conversational model picker.
 
-The adapter and decision model role were added after released OpenClaw
-`2026.9.5`. Packaged installs require a host and plugin API of at least
-`2026.9.6`; the installer rejects older hosts before loading the plugin.
+This adapter requires the prepared Decision V2 API. Released OpenClaw
+`2026.10.4` exposes V1 only. Packaged use requires a supporting paired host/plugin
+release; the older installation floor alone does not establish V2 compatibility.
+The normal release process aligns plugin API and build versions with the host.
 
 See [Decision models](/concepts/decision-models) for the model role, available
 backends, rubric examples, and provider-neutral plugin API.
@@ -41,10 +42,10 @@ openclaw plugins install @openclaw/typesafe
 ```
 
 Until a supporting release is available, use a source checkout containing the
-decision-provider API and `extensions/typesafe`. Build it with
+prepared V2 decision-provider API and `extensions/typesafe`. Build it with
 `pnpm install --frozen-lockfile` and `pnpm build`, then apply the configuration
 below. Source-checkout plugins use the host's co-versioned development API;
-that does not make the packaged plugin compatible with OpenClaw `2026.9.5`.
+that does not make the packaged plugin compatible with a V1-only host.
 
 ## Enable and configure
 
@@ -90,6 +91,45 @@ send their selected evidence to the configured endpoint. Hosted Jev requests
 incur TypeSafe's normal usage charges.
 Consumer scheduling and publication permissions remain unchanged. Clearing the
 role or explicitly disabling the plugin prevents its use by those consumers.
+
+### Hosted model facts
+
+The pinned `typesafe/jev-1.13.0` catalog row declares these
+[TypeSafe model facts](https://docs.typesafe.ai/models), checked October 16, 2026:
+
+| Fact                 | Published value                                    |
+| -------------------- | -------------------------------------------------- |
+| Input price          | $0.042 per million tokens                          |
+| Output price         | Free                                               |
+| Per-request context  | 64,000 tokens: state plus all questions            |
+| Per-question context | 32,000 tokens: state plus each individual question |
+
+These native decision limits are separate from chat context/output limits.
+Billing metadata is labeled `provider-docs`; it is a dated estimate source,
+not a guarantee of future charges. At the published rate, 100 observed input
+tokens cost $0.0000042. An explicit provider-reported charge, including zero,
+takes precedence over an estimate.
+
+As of October 16, 2026, `jev-latest` points to `jev-1.13.0` and `jev-preview`
+points to `jev-1.14.0`, released October 14. Both aliases can move. Their catalog
+rows deliberately omit fixed prices and token limits; selecting an alias does
+not pin or rewrite it. Pin a version when your evaluation thresholds depend on
+that version's behavior. The [API response](https://docs.typesafe.ai/api#response-body)
+identifies the model that answered.
+
+Hosted billing and limits apply only to the matching prepared TypeSafe route.
+A custom endpoint, loopback server, or different API path cannot inherit those
+facts merely by accepting a Jev model ID. Local Kev pricing stays unknown.
+Third-party pricing feeds do not fill TypeSafe's missing prices.
+
+TypeSafe also documents an opt-in `TypeSafe-Danger-Zone-Long-Context: true`
+request header that raises both context limits to 262k tokens at the same
+token rate. It is off by default, slower, and less accurate. The static catalog
+declares the default limits; it does not enable the header or advertise the
+larger limit for ordinary requests. Prepared requests with the effective header
+set to `true` omit the default context limits and retain the hosted token rate.
+Provider headers, per-model headers, and finally `request.headers` determine the
+effective value, with case-insensitive header names.
 
 ## Local System One server
 
@@ -314,6 +354,47 @@ plugin timeouts still apply. Requests use the fixed TypeSafe HTTPS endpoint unle
 provider configuration or the existing loopback `baseUrl` selects a self-hosted server. Both paths reject
 redirects, and do not retry automatically. Consumers decide what to do with
 unavailable decisions; caller cancellation must not start fallback work.
+
+## Experimental image decisions
+
+Hosted Jev accepts one tagged PNG or JPEG image with optional accompanying text
+through Decision V2. The Jev, Jev Preview, and Jev 1.13.0 catalog rows advertise
+image input. Local Kev, custom endpoints, and other model IDs remain text-only.
+
+For example, pass this shape to `decision_evaluate`, replacing the placeholder
+with the base64 bytes of a real PNG:
+
+```json
+{
+  "contractVersion": 2,
+  "state": {
+    "type": "image",
+    "dataUri": "data:image/png;base64,<PNG_BYTES>",
+    "text": "Inspect the delivery area."
+  },
+  "questions": {
+    "package": { "type": "boolean", "instructions": "Is a package visible?" }
+  }
+}
+```
+
+The adapter sends the image once in TypeSafe's referenced `assets` map and enables
+`TypeSafe-Danger-Zone-Images: true` only for image requests. Text-only requests do
+not send this header, even when configured manually. Prepared credentials,
+headers, deadlines, cancellation, and usage accounting follow the same transport
+as text decisions; there is no separate image credential or endpoint.
+
+OpenClaw limits the decoded image to **4 MiB**. PNG and JPEG must be still images;
+WebP, remote image URLs, Box/Tags questions, and images embedded in instructions
+or criteria are not supported by this adapter. TypeSafe additionally requires
+**280–1568 pixels on each side** and rejects invalid or animated images rather
+than resizing them. Ordinary text/JSON guards remain unchanged; the serialized
+image request uses TypeSafe's 32 MiB body limit to allow base64 expansion.
+
+This is TypeSafe's experimental image API, not a production accuracy guarantee.
+Its format, limits, and accuracy may change. See the current
+[TypeSafe image documentation](https://docs.typesafe.ai/images) before use.
+Only send images you are authorized to share with the hosted service.
 
 ## Agent evaluation tool
 

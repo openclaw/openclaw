@@ -26,7 +26,7 @@ The macOS app deliberately uses the native permission flow instead of browser pu
 
 ## Enable browser notifications
 
-The Control UI asks for notification permission automatically the first time you send a chat message. That includes sends from **New Session** or **Start in background**. The prompt appears once per browser and origin. **Settings → Notifications** remains the manual path for enabling or repairing notifications, including after you deny the automatic prompt.
+The Control UI asks for notification permission automatically the first time you send a chat message when your current Gateway access permits browser notification setup. That includes sends from **New Session** or **Start in background**. The prompt appears once per browser and origin. **Settings → Notifications** remains the manual path for enabling or repairing notifications, including after you deny the automatic prompt.
 
 1. Open the Control UI in a browser that supports service workers, `PushManager`, and notifications.
 2. Make sure the Control UI is connected to the Gateway.
@@ -51,7 +51,7 @@ Single-user Gateways use their durable owner profile for account defaults, so th
 
 By default, approval request and resolution notifications are enabled, and every other attention category is opt-in. Quiet hours suppress matching sends rather than queueing stale alerts for later delivery.
 
-Selecting an attention notification opens its question, conversation, or automation run on the Gateway that produced it. **Agent finished** waits for completion. A parent waiting for child agents does not count as finished. Automation failures use **Scheduled task failures**, without also generating a **Background task failures** alert for the same run.
+Selecting an attention notification opens its question, conversation, or automation run on the Gateway that produced it. **Agent finished** waits for completion. A parent waiting for child agents does not count as finished. The device currently showing that conversation does not receive its **Agent finished** push; other subscribed devices still do. Hiding the conversation or opening another one restores normal notification delivery for that device. Automation failures use **Scheduled task failures**, without also generating a **Background task failures** alert for the same run.
 
 The detail levels are:
 
@@ -108,7 +108,9 @@ This is the **New Session** background-start flow, not a native notification for
 
 ### Enable is unavailable
 
-Either the browser lacks the required Web Push APIs or the Control UI is not connected to the Gateway. Try a current browser, check the Gateway connection, and reload the page.
+Check **Browser support**, the Gateway connection, and **Gateway access** separately. Notification setup and preference changes require broad `operator.write` access; session-only guest scopes do not permit them. The page shows **Unavailable** and does not ask for browser permission when this access is missing.
+
+A connection with only `operator.read` can read preferences for an existing subscription, but cannot change them or enable notifications. **Unsubscribe** still removes an existing local browser subscription when remote removal is denied. Browser permission is independent and remains unchanged.
 
 ### Browser permission is blocked
 

@@ -162,6 +162,7 @@ openclaw gateway diagnostics export --json
 
 <ParamField path="--output <path>" type="string">
   Output zip path. Defaults to a support export under the state directory.
+  Existing directories receive an automatically named archive. Quoted non-home paths preserve surrounding whitespace; blank values use the default.
 </ParamField>
 <a id="param-log-lines"></a>
 
@@ -275,6 +276,7 @@ status does not bypass the live Gateway's artifact-publication safeguards.
     - Stays available for diagnostics even when the local CLI config is missing or invalid. Config problems are warnings with `openclaw doctor --fix` guidance; valid connection settings and the recorded service identity remain usable.
     - If service discovery cannot inspect a required file, such as a systemd environment file readable only by root, status reports the native service as unknown and continues with the caller's Gateway target and credentials. Observed service ownership refusals remain errors; status does not change file permissions or relax lifecycle checks.
     - Default output proves service state, WebSocket connect, and the auth capability visible at handshake time — not read/write/admin operations.
+    - Local service checks use loopback, including `bind: "custom"` and `bind: "tailnet"`, so capability reflects the same local device credentials as ordinary CLI calls. Use `--url` with explicit credentials to check another address; its capability can differ.
     - Checks are non-mutating for first-time device auth: they reuse an existing cached device token when one exists, but never create a new CLI device identity or read-only pairing record just to check status.
     - Resolves configured auth SecretRefs for check auth when possible. If a required SecretRef is unresolved, `--json` reports `rpc.authWarning` when check connectivity/auth fails; pass `--token`/`--password` explicitly or fix the secret source. Unresolved-auth warnings are suppressed once the check succeeds.
     - JSON output includes `gateway.version` when the running Gateway reports it; `--require-rpc` can fall back to the `status.runtimeVersion` RPC payload if the handshake check cannot supply version metadata.
@@ -317,6 +319,11 @@ openclaw gateway probe
 openclaw gateway probe --json
 openclaw gateway probe --port 18789
 ```
+
+`--timeout <ms>` (default `3000`) is one shared budget for discovery, SSH setup,
+connections, and read checks. Known targets are checked while discovery runs.
+When the budget expires, unfinished checks report a timeout; connection and SSH
+process cleanup can briefly extend the elapsed command time.
 
 <a id="param-port-2"></a>
 

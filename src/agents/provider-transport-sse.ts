@@ -95,7 +95,7 @@ export function prepareOpenAISdkSseResponse(
     return response;
   }
 
-  const decoder = new TextDecoder();
+  const decoder = options.sanitize ? new TextDecoder() : undefined;
   const encoder = new TextEncoder();
   const reader = response.body.getReader();
   let buffer = "";
@@ -103,6 +103,7 @@ export function prepareOpenAISdkSseResponse(
   let totalBytes = 0;
   // Undefined means the next character starts a line.
   let commentLine: boolean | undefined;
+  let bomBytes = 0;
 
   const enqueueSanitized = (controller: ReadableStreamDefaultController<Uint8Array>): boolean => {
     for (;;) {
@@ -137,7 +138,7 @@ export function prepareOpenAISdkSseResponse(
           }
           const chunk = await reader.read();
           if (chunk.done) {
-            buffer += decoder.decode();
+            buffer += decoder?.decode() ?? "";
             if (synthesizeJson) {
               const data = buffer.trim();
               if (data) {
@@ -159,18 +160,47 @@ export function prepareOpenAISdkSseResponse(
               );
             }
           }
-          const text = decoder.decode(chunk.value, { stream: true });
           // Observe complete comment lines even without event separators. Keep only
           // line state, so an unbounded comment cannot grow observer memory.
           if (isSse && options.onSseComment) {
-            for (const char of text) {
-              if (char === "\n" || char === "\r") {
-                if (commentLine) {
-                  options.onSseComment();
+            // ASCII delimiters cannot occur inside UTF-8 characters. Scan bytes so
+            // observing heartbeats does not decode the entire response before the SDK.
+            let carriageReturn = chunk.value.indexOf(13);
+            let lineFeed = chunk.value.indexOf(10);
+            for (let index = 0; index < chunk.value.length;) {
+              const code = chunk.value[index];
+              // Match TextDecoder's removal of one leading, possibly split UTF-8 BOM.
+              if (bomBytes < 3) {
+                if (code === (bomBytes === 0 ? 0xef : bomBytes === 1 ? 0xbb : 0xbf)) {
+                  bomBytes++;
+                  index++;
+                  continue;
                 }
-                commentLine = undefined;
-              } else {
-                commentLine ??= char === ":";
+                if (bomBytes > 0) {
+                  commentLine = false;
+                }
+                bomBytes = 3;
+              }
+              commentLine ??= code === 58;
+              const end =
+                carriageReturn < 0
+                  ? lineFeed
+                  : lineFeed < 0
+                    ? carriageReturn
+                    : Math.min(carriageReturn, lineFeed);
+              if (end < 0) {
+                break;
+              }
+              if (commentLine) {
+                options.onSseComment();
+              }
+              commentLine = undefined;
+              index = end + 1;
+              if (end === carriageReturn) {
+                carriageReturn = chunk.value.indexOf(13, index);
+              }
+              if (end === lineFeed) {
+                lineFeed = chunk.value.indexOf(10, index);
               }
             }
           }
@@ -178,10 +208,11 @@ export function prepareOpenAISdkSseResponse(
             controller.enqueue(chunk.value);
             return;
           }
-          buffer += text;
+          buffer += decoder?.decode(chunk.value, { stream: true }) ?? "";
         }
       } catch (error) {
-        await cancelReaderBestEffort(reader, error);
+        // An unread response clone can keep tee cancellation pending indefinitely.
+        void cancelReaderBestEffort(reader, error);
         controller.error(error);
       }
     },

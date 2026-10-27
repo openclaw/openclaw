@@ -2,6 +2,7 @@ import { expect as expectBrowser } from "playwright/test";
 import { expect, it } from "vitest";
 import { controlUiSessionUrl, installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
+import { sessionsList } from "./session-ownership-fixtures.test-support.ts";
 import {
   openSidebarSortMenu,
   routeAvatarFixtures,
@@ -15,53 +16,11 @@ import {
 
 const suite = createControlUiE2eSuite({ name: "Control UI toolbar owner filter" });
 
-function sessionsList() {
-  const ada = {
-    type: "human" as const,
-    id: "profile-ada",
-    identity: { type: "profile" as const, id: "profile-ada" },
-    label: "Ada",
-    avatarUrl: "/api/users/profile-ada/avatar?v=1",
-  };
-  const bob = {
-    type: "human" as const,
-    id: "profile-bob",
-    identity: { type: "profile" as const, id: "profile-bob" },
-    label: "Bob",
-    avatarUrl: "/api/users/profile-bob/avatar?v=1",
-  };
-  return {
-    count: 2,
-    owners: [ada, bob],
-    defaults: { contextTokens: null, model: null, modelProvider: null },
-    path: "",
-    sessions: [
-      {
-        key: "agent:main:ada",
-        kind: "direct",
-        label: "Ada research",
-        createdActor: ada,
-        owner: { actor: ada },
-        updatedAt: 2,
-      },
-      {
-        key: "agent:main:bob",
-        kind: "direct",
-        label: "Bob operations",
-        createdActor: bob,
-        owner: { actor: bob },
-        updatedAt: 1,
-      },
-    ],
-    ts: 1,
-  };
-}
-
 suite.define(() => {
   it("filters grouped sessions from the toolbar without duplicate header controls", async () => {
     const context = await suite.browser.newContext({ viewport: { height: 800, width: 1200 } });
     const page = await context.newPage();
-    const response = sessionsList();
+    const response = sessionsList(undefined, true, { categories: false, actorAvatars: true });
     const gateway = await installMockGateway(page, {
       sessionKey: "agent:main:ada",
       presenceUsers: [{ self: true, id: "profile-patrick", name: "Patrick" }],
@@ -97,22 +56,15 @@ suite.define(() => {
       const header = adaSection.locator(".sidebar-recent-sessions__head");
       await header.hover();
       await expectBrowser(header.locator(".sidebar-session-group-actions")).toHaveCount(0);
-      const beforeFilter = (await gateway.getRequests("sessions.list")).length;
+      const filterMatch = { ownerId: "profile-ada" };
+      const beforeFilter = (await gateway.getRequests("sessions.list", filterMatch)).length;
       await chooseSidebarOwner(page, "owner:profile-ada");
       await closeSidebarMenu(page);
-      await expect
-        .poll(async () => (await gateway.getRequests("sessions.list")).slice(beforeFilter))
-        .toEqual(
-          expect.arrayContaining([
-            expect.objectContaining({
-              params: expect.objectContaining({ ownerId: "profile-ada" }),
-            }),
-          ]),
-        );
+      await gateway.waitForRequest("sessions.list", { match: filterMatch, after: beforeFilter });
       await expectBrowser(bobSection).toHaveCount(0);
       await expectBrowser(adaSection.getByText("Ada research", { exact: true })).toBeVisible();
       const ownerChip = page.locator("#sidebar-session-owner-title");
-      const funnel = page.getByRole("button", { name: "Filter & sort", exact: true });
+      const funnel = page.getByRole("button", { name: /^Filter & sort · /, exact: true });
       await expectBrowser(ownerChip).toBeVisible();
       await expectBrowser(ownerChip.locator(".picker-select__label")).toHaveText("Ada");
       await expectBrowser(ownerChip).toHaveAccessibleName("Owners: Ada");

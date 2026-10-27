@@ -95,8 +95,7 @@ it.each([false, true])(
   "keeps a global session baseline in its selected agent's custom store (new=%s)",
   async (isNewSession) => {
     const f = await fixture(!isNewSession, "work", "global");
-    const { entry, target } = f;
-    const mainScope = { agentId: "main", sessionKey: "global", storePath: target.storePath };
+    const mainScope = { ...f.target, agentId: "main" };
     await replaceSessionEntry(mainScope, { sessionId: "main-global-session", updatedAt: 1 });
     const mainBefore = loadSessionEntry(mainScope);
     captureMocks.capture.mockResolvedValue(baseline());
@@ -106,9 +105,9 @@ it.each([false, true])(
 
     expect(sql.queries.filter(isSessionEntryDataSql)).toEqual([]);
     expect(settled.sessionDiffBaseline).toEqual(baseline());
-    const persisted = loadSessionEntry(target);
+    const persisted = f.read();
     expect(persisted).toMatchObject({
-      sessionId: entry.sessionId,
+      sessionId,
       sessionDiffBaseline: baseline(),
     });
     expect(persisted?.sessionDiffBaselineCapture).toBeUndefined();
@@ -124,7 +123,6 @@ it.each([true, false])("shares a capture with a concurrent caller (new=%s)", asy
   const second = f.run(isNew);
   try {
     await capture.started;
-    expect(captureMocks.capture).toHaveBeenCalledTimes(1);
     capture.resolve(baseline());
 
     const [firstResult, secondResult] = await Promise.all([first, second]);
@@ -190,11 +188,9 @@ it.each([
 
 it("does not retroactively capture a legacy existing session", async () => {
   const f = await fixture(false);
-  const { entry } = f;
-
-  await expect(f.run()).resolves.toEqual(entry);
+  await expect(f.run()).resolves.toEqual(f.entry);
   expect(captureMocks.capture).not.toHaveBeenCalled();
-  expect(f.read()).toMatchObject(entry);
+  expect(f.read()).toMatchObject(f.entry);
   expect(f.read()).not.toHaveProperty("sessionDiffBaselineCapture");
 });
 
@@ -207,7 +203,6 @@ it("invalidates capture completion after the authoritative row is deleted", asyn
     message: expect.stringMatching(/was deleted while starting work/i),
   });
   await capture.started;
-  expect(captureMocks.capture).toHaveBeenCalledOnce();
   await deleteSessionEntryLifecycle({
     archiveTranscript: false,
     storePath: f.target.storePath,

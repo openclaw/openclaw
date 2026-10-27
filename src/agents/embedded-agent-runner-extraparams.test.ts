@@ -3,11 +3,13 @@ import assert from "node:assert/strict";
 import type { StreamFn } from "openclaw/plugin-sdk/agent-core";
 import type { Context, Model, SimpleStreamOptions } from "openclaw/plugin-sdk/llm";
 import { createAssistantMessageEventStream } from "openclaw/plugin-sdk/llm";
+import { buildProviderStreamFamilyHooks } from "openclaw/plugin-sdk/provider-stream-family";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   testing as extraParamsTesting,
   type WrapProviderStreamFnParams,
 } from "./embedded-agent-runner/extra-params.test-support.js";
+import { makeProviderModelFixture } from "./test-helpers/provider-model-fixture.js";
 import { createZeroUsageFixture } from "./test-helpers/usage-fixtures.js";
 
 vi.mock("../plugins/provider-hook-runtime.js", () => ({
@@ -20,6 +22,21 @@ vi.mock("../plugins/provider-hook-runtime.js", () => ({
   getModelProviderRuntimePluginHandle: () => undefined,
 }));
 
+function createAuthenticatedNativeSearchConfig(openaiCodex: {
+  enabled: boolean;
+  mode: "live" | "cached";
+  allowedDomains?: string[];
+}) {
+  return {
+    auth: {
+      profiles: {
+        "openai:default": { provider: "openai", mode: "oauth" },
+      },
+    },
+    tools: { web: { search: { enabled: true, openaiCodex } } },
+  };
+}
+
 function firstTransportHookCall(mock: { mock: { calls: unknown[][] } }): Record<string, unknown> {
   const call = mock.mock.calls[0]?.[0];
   if (!call || typeof call !== "object" || Array.isArray(call)) {
@@ -30,17 +47,7 @@ function firstTransportHookCall(mock: { mock: { calls: unknown[][] } }): Record<
 
 import { isAnthropicFamilyCacheTtlEligible } from "../llm/providers/stream-wrappers/anthropic-family-cache-semantics.js";
 import { createMinimaxFastModeWrapper } from "../llm/providers/stream-wrappers/minimax.js";
-import {
-  createCodexNativeWebSearchWrapper,
-  createOpenAIAttributionHeadersWrapper,
-  createOpenAICompletionsStrictMessageKeysWrapper,
-  createOpenAIReasoningCompatibilityWrapper,
-  createOpenAIResponsesContextManagementWrapper,
-  createOpenAIStringContentWrapper,
-  createOpenAITextVerbosityWrapper,
-  createOpenAIThinkingLevelWrapper,
-  resolveOpenAITextVerbosity,
-} from "../llm/providers/stream-wrappers/openai.js";
+import { createOpenAIResponsesContextManagementWrapper } from "../llm/providers/stream-wrappers/openai.js";
 import { createGoogleThinkingPayloadWrapper } from "../plugin-sdk/provider-stream-shared.js";
 import {
   applyExtraParamsToAgent,
@@ -69,11 +76,14 @@ function installFullProviderRuntimeDepsForTest() {
     },
     resolveProviderExtraParamsForTransport: () => undefined,
     wrapProviderStreamFn: (params) => {
-      if (params.provider === "openai") {
-        return createTestOpenAIProviderWrapper(params);
-      }
-      if (params.provider === "azure-openai" || params.provider === "azure-openai-responses") {
-        return createTestOpenAIProviderWrapper(params);
+      if (
+        params.provider === "openai" ||
+        params.provider === "azure-openai" ||
+        params.provider === "azure-openai-responses"
+      ) {
+        return buildProviderStreamFamilyHooks("openai-responses-defaults").wrapStreamFn?.(
+          params.context,
+        );
       }
       if (params.provider === "amazon-bedrock") {
         return isAnthropicFamilyCacheTtlEligible({
@@ -125,31 +135,6 @@ function withMinimalProviderRuntimeDepsForTest<T>(run: () => T): T {
   }
 }
 
-function createTestOpenAIProviderWrapper(params: WrapProviderStreamFnParams): StreamFn {
-  let streamFn = params.context.streamFn;
-  streamFn = createOpenAIAttributionHeadersWrapper(streamFn);
-
-  const textVerbosity = resolveOpenAITextVerbosity(params.context.extraParams);
-  if (textVerbosity) {
-    streamFn = createOpenAITextVerbosityWrapper(streamFn, textVerbosity);
-  }
-
-  streamFn = createCodexNativeWebSearchWrapper(streamFn, {
-    config: params.context.config,
-    agentDir: params.context.agentDir,
-    agentId: params.context.agentId,
-    nativeWebSearchAllowedByToolPolicy: params.context.nativeWebSearchAllowedByToolPolicy,
-  });
-  streamFn = createOpenAIStringContentWrapper(streamFn);
-  streamFn = createOpenAICompletionsStrictMessageKeysWrapper(streamFn);
-  return createOpenAIResponsesContextManagementWrapper(
-    createOpenAIReasoningCompatibilityWrapper(
-      createOpenAIThinkingLevelWrapper(streamFn, params.context.thinkingLevel),
-    ),
-    params.context.extraParams,
-  );
-}
-
 beforeEach(() => {
   installFullProviderRuntimeDepsForTest();
 });
@@ -195,24 +180,16 @@ describe("applyExtraParamsToAgent", () => {
     id: string;
     baseUrl: string;
     compat?: OpenAIResponsesWrapperCompat;
-  }): Model<"openai-responses"> => ({
-    api: "openai-responses",
-    provider: params.provider,
-    id: params.id,
-    name: params.id,
-    baseUrl: params.baseUrl,
-    reasoning: true,
-    input: ["text"],
-    cost: {
-      input: 0,
-      output: 0,
-      cacheRead: 0,
-      cacheWrite: 0,
-    },
-    contextWindow: 128_000,
-    maxTokens: 4096,
-    ...(params.compat ? { compat: params.compat } : {}),
-  });
+  }): Model<"openai-responses"> =>
+    makeProviderModelFixture<"openai-responses">({
+      api: "openai-responses",
+      provider: params.provider,
+      id: params.id,
+      baseUrl: params.baseUrl,
+      reasoning: true,
+      contextWindow: 128_000,
+      ...(params.compat ? { compat: params.compat } : {}),
+    });
 
   const captureOpenAIResponsesWrapperReplay = (params: {
     model: Model<"openai-responses">;
@@ -284,8 +261,6 @@ describe("applyExtraParamsToAgent", () => {
   });
 
   function runResponsesPayloadMutationCase(params: {
-    applyProvider: string;
-    applyModelId: string;
     model:
       | Model<"openai-responses">
       | Model<"azure-openai-responses">
@@ -312,8 +287,8 @@ describe("applyExtraParamsToAgent", () => {
     applyExtraParamsToAgent(
       agent,
       params.cfg as Parameters<typeof applyExtraParamsToAgent>[1],
-      params.applyProvider,
-      params.applyModelId,
+      params.model.provider,
+      params.model.id,
       params.extraParamsOverride,
       params.thinkingLevel,
     );
@@ -333,8 +308,6 @@ describe("applyExtraParamsToAgent", () => {
 
   it("restores explicit MiniMax-M3 maxTokens when rewriting budget thinking", () => {
     const payload = runResponsesPayloadMutationCase({
-      applyProvider: "minimax",
-      applyModelId: "MiniMax-M3",
       thinkingLevel: "adaptive",
       model: {
         api: "anthropic-messages",
@@ -347,16 +320,13 @@ describe("applyExtraParamsToAgent", () => {
     expect(payload).toStrictEqual({ max_tokens: 500, thinking: { type: "adaptive" } });
   });
 
-  it("fills DeepSeek V4 reasoning_content for unowned OpenAI-compatible proxy models", () => {
+  it.each([
+    ["DeepSeek V4", "deepseek-v4-pro"],
+    ["MiMo V2.6", "xiaomi/mimo-v2.6-flash"],
+  ])("fills %s reasoning_content for unowned OpenAI-compatible proxy models", (_name, id) => {
     const payload = runResponsesPayloadMutationCase({
-      applyProvider: "opencode",
-      applyModelId: "deepseek-v4-pro",
       thinkingLevel: "high",
-      model: {
-        api: "openai-completions",
-        provider: "opencode",
-        id: "deepseek-v4-pro",
-      } as Model<"openai-completions">,
+      model: { api: "openai-completions", provider: "opencode", id } as Model<"openai-completions">,
       payload: {
         messages: [
           { role: "user", content: "continue" },
@@ -376,8 +346,6 @@ describe("applyExtraParamsToAgent", () => {
 
   it("does not add DeepSeek V4 thinking params on the Foundry fallback path", () => {
     const payload = runResponsesPayloadMutationCase({
-      applyProvider: "microsoft-foundry",
-      applyModelId: "deepseek-v4-pro",
       thinkingLevel: "high",
       model: {
         api: "openai-completions",
@@ -392,31 +360,6 @@ describe("applyExtraParamsToAgent", () => {
 
     expect(payload.reasoning_effort).toBe("high");
     expect(payload).not.toHaveProperty("thinking");
-  });
-
-  it("fills MiMo V2.6 reasoning_content for unowned OpenAI-compatible proxy models", () => {
-    const payload = runResponsesPayloadMutationCase({
-      applyProvider: "opencode",
-      applyModelId: "xiaomi/mimo-v2.6-flash",
-      thinkingLevel: "high",
-      model: {
-        api: "openai-completions",
-        provider: "opencode",
-        id: "xiaomi/mimo-v2.6-flash",
-      } as Model<"openai-completions">,
-      payload: {
-        messages: [
-          { role: "user", content: "continue" },
-          { role: "assistant", content: "I used a tool" },
-          { role: "tool", content: "ok" },
-        ],
-      },
-    });
-
-    const messages = payload.messages as Array<Record<string, unknown>>;
-    expect(payload.thinking).toEqual({ type: "enabled" });
-    expect(payload.reasoning_effort).toBe("high");
-    expect(messages[1]).toHaveProperty("reasoning_content", "");
   });
 
   it("promotes reasoning-only MiMo V2 proxy finals to visible text", async () => {
@@ -469,8 +412,6 @@ describe("applyExtraParamsToAgent", () => {
 
   it("strips disabled reasoning payloads for native OpenAI responses models that do not support none", () => {
     const payload = runResponsesPayloadMutationCase({
-      applyProvider: "openai",
-      applyModelId: "gpt-5",
       model: {
         api: "openai-responses",
         provider: "openai",
@@ -494,8 +435,6 @@ describe("applyExtraParamsToAgent", () => {
   it.each([
     {
       name: "uses canonical model config keys for provider-prefixed model ids",
-      applyProvider: "openrouter",
-      applyModelId: "openrouter/auto",
       configKey: "openrouter/auto",
       params: { parallel_tool_calls: false },
       extraParamsOverride: undefined,
@@ -508,8 +447,6 @@ describe("applyExtraParamsToAgent", () => {
     },
     {
       name: "keeps legacy double-prefixed model config fallback for provider-prefixed model ids",
-      applyProvider: "openrouter",
-      applyModelId: "openrouter/auto",
       configKey: "openrouter/openrouter/auto",
       params: { parallel_tool_calls: false },
       extraParamsOverride: undefined,
@@ -522,8 +459,6 @@ describe("applyExtraParamsToAgent", () => {
     },
     {
       name: "injects parallel_tool_calls for openai-responses payloads when configured",
-      applyProvider: "openai",
-      applyModelId: "gpt-5",
       configKey: "openai/gpt-5",
       params: { parallelToolCalls: true },
       extraParamsOverride: undefined,
@@ -537,8 +472,6 @@ describe("applyExtraParamsToAgent", () => {
     },
     {
       name: "lets runtime override win across alias styles for parallel_tool_calls",
-      applyProvider: "nvidia-nim",
-      applyModelId: "moonshotai/kimi-k2.5",
       configKey: "nvidia-nim/moonshotai/kimi-k2.5",
       params: { parallel_tool_calls: true },
       extraParamsOverride: { parallelToolCalls: false },
@@ -549,20 +482,15 @@ describe("applyExtraParamsToAgent", () => {
       } as Model<"openai-completions">,
       expected: false,
     },
-  ])(
-    "$name",
-    ({ applyProvider, applyModelId, configKey, params, extraParamsOverride, model, expected }) => {
-      const payload = runParallelToolCallsPayloadMutationCase({
-        applyProvider,
-        applyModelId,
-        cfg: buildModelConfig(configKey, params),
-        extraParamsOverride,
-        model,
-      });
+  ])("$name", ({ configKey, params, extraParamsOverride, model, expected }) => {
+    const payload = runParallelToolCallsPayloadMutationCase({
+      cfg: buildModelConfig(configKey, params),
+      extraParamsOverride,
+      model,
+    });
 
-      expect(payload.parallel_tool_calls).toBe(expected);
-    },
-  );
+    expect(payload.parallel_tool_calls).toBe(expected);
+  });
 
   function createGoogleCompletionsModel(): Model<"openai-completions"> {
     return {
@@ -575,8 +503,6 @@ describe("applyExtraParamsToAgent", () => {
 
   it("keeps store untouched for native openai-completions payloads", () => {
     const payload = runResponsesPayloadMutationCase({
-      applyProvider: "openai",
-      applyModelId: "gpt-4.1",
       model: {
         api: "openai-completions",
         provider: "openai",
@@ -594,8 +520,6 @@ describe("applyExtraParamsToAgent", () => {
 
   it("merges extra_body into openai-completions payloads before proxy store stripping", () => {
     const payload = runResponsesPayloadMutationCase({
-      applyProvider: "google",
-      applyModelId: "gemini-2.5-pro",
       cfg: buildModelConfig("google/gemini-2.5-pro", {
         chat_template_kwargs: { enable_thinking: true, template_only: true },
         extraBody: {
@@ -619,8 +543,6 @@ describe("applyExtraParamsToAgent", () => {
     const warnSpy = vi.spyOn(log, "warn").mockImplementation(() => {});
     try {
       const payload = runResponsesPayloadMutationCase({
-        applyProvider: "deepseek",
-        applyModelId: "deepseek-chat",
         extraParamsOverride: {
           extra_body: {
             thinking: { type: "disabled" },
@@ -652,8 +574,6 @@ describe("applyExtraParamsToAgent", () => {
       const warnSpy = vi.spyOn(log, "warn").mockImplementation(() => {});
       try {
         const payload = runResponsesPayloadMutationCase({
-          applyProvider: "deepseek",
-          applyModelId: "deepseek-chat",
           extraParamsOverride: {
             extra_body: {
               [key]: value,
@@ -685,8 +605,6 @@ describe("applyExtraParamsToAgent", () => {
   it.each([
     {
       name: "warns and skips invalid chat_template_kwargs params",
-      applyProvider: "vllm",
-      applyModelId: "nemotron-3-super",
       configKey: "vllm/nemotron-3-super",
       params: { chat_template_kwargs: "not-an-object" },
       model: {
@@ -701,8 +619,6 @@ describe("applyExtraParamsToAgent", () => {
     },
     {
       name: "warns and skips invalid extra_body params",
-      applyProvider: "google",
-      applyModelId: "gemini-2.5-pro",
       configKey: "google/gemini-2.5-pro",
       params: { extra_body: "not-an-object" },
       model: createGoogleCompletionsModel(),
@@ -710,41 +626,25 @@ describe("applyExtraParamsToAgent", () => {
       missingProperty: "extra_body",
       warning: "ignoring invalid extra_body param: not-an-object",
     },
-  ])(
-    "$name",
-    ({
-      applyProvider,
-      applyModelId,
-      configKey,
-      params,
-      model,
-      payload: initialPayload,
-      missingProperty,
-      warning,
-    }) => {
-      const warnSpy = vi.spyOn(log, "warn").mockImplementation(() => {});
-      try {
-        const payload = runResponsesPayloadMutationCase({
-          applyProvider,
-          applyModelId,
-          cfg: buildModelConfig(configKey, params),
-          model,
-          payload: initialPayload,
-        });
+  ])("$name", ({ configKey, params, model, payload: initialPayload, missingProperty, warning }) => {
+    const warnSpy = vi.spyOn(log, "warn").mockImplementation(() => {});
+    try {
+      const payload = runResponsesPayloadMutationCase({
+        cfg: buildModelConfig(configKey, params),
+        model,
+        payload: initialPayload,
+      });
 
-        expect(payload).not.toHaveProperty(missingProperty);
-        expect(warnSpy).toHaveBeenCalledWith(warning);
-      } finally {
-        warnSpy.mockRestore();
-      }
-    },
-  );
+      expect(payload).not.toHaveProperty(missingProperty);
+      expect(warnSpy).toHaveBeenCalledWith(warning);
+    } finally {
+      warnSpy.mockRestore();
+    }
+  });
 
   it.each([
     {
       name: "does not inject parallel_tool_calls for unsupported APIs",
-      applyProvider: "anthropic",
-      applyModelId: "claude-sonnet-4-6",
       cfg: buildModelConfig("anthropic/claude-sonnet-4-6", {
         parallel_tool_calls: false,
       }),
@@ -757,8 +657,6 @@ describe("applyExtraParamsToAgent", () => {
     },
     {
       name: "lets null runtime override suppress inherited parallel_tool_calls injection",
-      applyProvider: "nvidia-nim",
-      applyModelId: "moonshotai/kimi-k2.5",
       cfg: buildModelConfig("nvidia-nim/moonshotai/kimi-k2.5", {
         parallel_tool_calls: true,
       }),
@@ -769,10 +667,8 @@ describe("applyExtraParamsToAgent", () => {
         id: "moonshotai/kimi-k2.5",
       } as Model<"openai-completions">,
     },
-  ])("$name", ({ applyProvider, applyModelId, cfg, extraParamsOverride, model }) => {
+  ])("$name", ({ cfg, extraParamsOverride, model }) => {
     const payload = runParallelToolCallsPayloadMutationCase({
-      applyProvider,
-      applyModelId,
       cfg,
       extraParamsOverride,
       model,
@@ -785,8 +681,6 @@ describe("applyExtraParamsToAgent", () => {
     const warnSpy = vi.spyOn(log, "warn").mockImplementation(() => undefined);
     try {
       const payload = runParallelToolCallsPayloadMutationCase({
-        applyProvider: "nvidia-nim",
-        applyModelId: "moonshotai/kimi-k2.5",
         cfg: buildModelConfig("nvidia-nim/moonshotai/kimi-k2.5", {
           parallelToolCalls: "false",
         }),
@@ -806,8 +700,6 @@ describe("applyExtraParamsToAgent", () => {
 
   it("normalizes thinking=off to null for SiliconFlow Pro models", () => {
     const payload = runResponsesPayloadMutationCase({
-      applyProvider: "siliconflow",
-      applyModelId: "Pro/MiniMaxAI/MiniMax-M2.7",
       model: {
         api: "openai-completions",
         provider: "siliconflow",
@@ -821,8 +713,6 @@ describe("applyExtraParamsToAgent", () => {
 
   it("sanitizes invalid Atproxy Gemini negative thinking budgets", () => {
     const payload = runResponsesPayloadMutationCase({
-      applyProvider: "atproxy",
-      applyModelId: "gemini-3.1-pro-high",
       model: {
         api: "google-generative-ai",
         provider: "atproxy",
@@ -874,8 +764,6 @@ describe("applyExtraParamsToAgent", () => {
   it("preserves Gemma 4 thinking off instead of rewriting thinkingBudget=0 to MINIMAL", () => {
     const payloads = [
       runResponsesPayloadMutationCase({
-        applyProvider: "google",
-        applyModelId: "gemma-4-26b-a4b-it",
         thinkingLevel: "off",
         model: {
           api: "google-generative-ai",
@@ -893,34 +781,24 @@ describe("applyExtraParamsToAgent", () => {
   it.each([
     {
       name: "passes configured websocket transport through stream options",
-      cfg: buildModelConfig("openai/gpt-5.4", { transport: "websocket" }),
-      modelId: "gpt-5.4",
-      model: {
-        api: "openai-chatgpt-responses",
-        provider: "openai",
-        id: "gpt-5.4",
-      } as Model<"openai-chatgpt-responses">,
       options: {},
       expected: "websocket",
     },
     {
       name: "lets runtime options override configured transport",
-      cfg: buildModelConfig("openai/gpt-5.4", { transport: "websocket" }),
-      modelId: "gpt-5.4",
-      model: {
-        api: "openai-chatgpt-responses",
-        provider: "openai",
-        id: "gpt-5.4",
-      } as Model<"openai-chatgpt-responses">,
       options: { transport: "sse" as const },
       expected: "sse",
     },
-  ])("$name", ({ cfg, modelId, model, options, expected }) => {
+  ])("$name", ({ options, expected }) => {
     const { calls, agent } = createOptionsCaptureAgent();
-    applyExtraParamsToAgent(agent, cfg, "openai", modelId);
-
-    const context: Context = { messages: [] };
-    void agent.streamFn?.(model, context, options);
+    const cfg = buildModelConfig("openai/gpt-5.4", { transport: "websocket" });
+    applyExtraParamsToAgent(agent, cfg, "openai", "gpt-5.4");
+    const model = {
+      api: "openai-chatgpt-responses",
+      provider: "openai",
+      id: "gpt-5.4",
+    } as Model<"openai-chatgpt-responses">;
+    void agent.streamFn?.(model, { messages: [] }, options);
 
     expect(calls).toHaveLength(1);
     expect(calls[0]?.transport).toBe(expected);
@@ -946,90 +824,41 @@ describe("applyExtraParamsToAgent", () => {
     expect(calls[0]?.maxTokens).toBe(0);
   });
 
-  it("injects native Codex web_search for direct openai Responses models", () => {
+  it.each([
+    {
+      name: "injects native Codex web_search for direct openai Responses models",
+      search: { enabled: true, mode: "live" as const, allowedDomains: ["example.com"] },
+      tools: [{ type: "function", name: "read" }],
+      expected: [
+        { type: "function", name: "read" },
+        {
+          type: "web_search",
+          external_web_access: true,
+          filters: { allowed_domains: ["example.com"] },
+        },
+      ],
+    },
+    {
+      name: "does not inject duplicate native Codex web_search tools",
+      search: { enabled: true, mode: "cached" as const },
+      tools: [{ type: "web_search" }],
+      expected: [{ type: "web_search" }],
+    },
+  ])("$name", ({ search, tools, expected }) => {
     const payload = runResponsesPayloadMutationCase({
-      applyProvider: "openai",
-      applyModelId: "gpt-5.4",
-      cfg: {
-        auth: {
-          profiles: {
-            "openai:default": {
-              provider: "openai",
-              mode: "oauth",
-            },
-          },
-        },
-        tools: {
-          web: {
-            search: {
-              enabled: true,
-              openaiCodex: {
-                enabled: true,
-                mode: "live",
-                allowedDomains: ["example.com"],
-              },
-            },
-          },
-        },
-      },
+      cfg: createAuthenticatedNativeSearchConfig(search),
       model: {
         api: "openai-chatgpt-responses",
         provider: "openai",
         id: "gpt-5.4",
       } as Model<"openai-chatgpt-responses">,
-      payload: { tools: [{ type: "function", name: "read" }] },
+      payload: { tools },
     });
-
-    expect(payload.tools).toEqual([
-      { type: "function", name: "read" },
-      {
-        type: "web_search",
-        external_web_access: true,
-        filters: { allowed_domains: ["example.com"] },
-      },
-    ]);
-  });
-
-  it("does not inject duplicate native Codex web_search tools", () => {
-    const payload = runResponsesPayloadMutationCase({
-      applyProvider: "openai",
-      applyModelId: "gpt-5.4",
-      cfg: {
-        auth: {
-          profiles: {
-            "openai:default": {
-              provider: "openai",
-              mode: "oauth",
-            },
-          },
-        },
-        tools: {
-          web: {
-            search: {
-              enabled: true,
-              openaiCodex: {
-                enabled: true,
-                mode: "cached",
-              },
-            },
-          },
-        },
-      },
-      model: {
-        api: "openai-chatgpt-responses",
-        provider: "openai",
-        id: "gpt-5.4",
-      } as Model<"openai-chatgpt-responses">,
-      payload: { tools: [{ type: "web_search" }] },
-    });
-
-    expect(payload.tools).toEqual([{ type: "web_search" }]);
+    expect(payload.tools).toEqual(expected);
   });
 
   it("keeps payload unchanged when Codex native search is inactive", () => {
     const payload = runResponsesPayloadMutationCase({
-      applyProvider: "openai",
-      applyModelId: "gpt-5",
       cfg: {
         tools: {
           web: {
@@ -1054,21 +883,29 @@ describe("applyExtraParamsToAgent", () => {
     expect(payload.tools).toEqual([{ type: "function", name: "read" }]);
   });
 
-  it("composes transport extra-param hooks after provider preparation", () => {
+  it.each([
+    {
+      name: "composes transport extra-param hooks after provider preparation",
+      preparedTransport: "websocket",
+      explicitTransport: false,
+    },
+    {
+      name: "passes explicit settings transport to transport extra-param hooks",
+      preparedTransport: "auto",
+      explicitTransport: true,
+    },
+  ])("$name", ({ preparedTransport, explicitTransport }) => {
     const resolveProviderExtraParamsForTransport = vi.fn((_params) => ({
-      patch: {
-        hookApplied: true,
-      },
+      patch: { hookApplied: true },
     }));
     extraParamsTesting.setProviderRuntimeDepsForTest({
       prepareProviderExtraParams: (params) => ({
         ...params.context.extraParams,
-        transport: "websocket",
+        transport: preparedTransport,
       }),
       resolveProviderExtraParamsForTransport,
       wrapProviderStreamFn: (params) => params.context.streamFn,
     });
-
     const model = {
       api: "openai-responses",
       provider: "openai",
@@ -1078,65 +915,33 @@ describe("applyExtraParamsToAgent", () => {
       cfg: undefined,
       provider: "openai",
       modelId: "gpt-5",
-      agentDir: "/tmp/agent",
-      workspaceDir: "/tmp/workspace",
-      model,
+      ...(explicitTransport
+        ? {
+            resolvedTransport: resolveExplicitSettingsTransport({
+              settingsManager: { getGlobalSettings: () => ({ transport: "websocket" }) },
+              sessionTransport: "websocket",
+            }),
+          }
+        : { model, agentDir: "/tmp/agent", workspaceDir: "/tmp/workspace" }),
     });
 
-    expect(effectiveExtraParams.transport).toBe("websocket");
+    expect(effectiveExtraParams.transport).toBe(preparedTransport);
     expect(effectiveExtraParams.hookApplied).toBe(true);
     expect(resolveProviderExtraParamsForTransport).toHaveBeenCalledTimes(1);
     const hookCall = firstTransportHookCall(resolveProviderExtraParamsForTransport);
-    const hookContext = hookCall.context as
-      | {
-          model?: unknown;
-          transport?: string;
-          agentDir?: string;
-          workspaceDir?: string;
-        }
-      | undefined;
-    expect(hookCall.provider).toBe("openai");
-    expect(hookContext?.model).toBe(model);
-    expect(hookContext?.transport).toBe("websocket");
-    expect(hookContext?.agentDir).toBe("/tmp/agent");
-    expect(hookContext?.workspaceDir).toBe("/tmp/workspace");
-  });
-
-  it("passes explicit settings transport to transport extra-param hooks", () => {
-    const resolveProviderExtraParamsForTransport = vi.fn((_params) => ({
-      patch: {
-        hookApplied: true,
-      },
-    }));
-    extraParamsTesting.setProviderRuntimeDepsForTest({
-      prepareProviderExtraParams: (params) => ({
-        ...params.context.extraParams,
-        transport: "auto",
-      }),
-      resolveProviderExtraParamsForTransport,
-      wrapProviderStreamFn: (params) => params.context.streamFn,
-    });
-
-    const resolvedTransport = resolveExplicitSettingsTransport({
-      settingsManager: {
-        getGlobalSettings: () => ({ transport: "websocket" }),
-        getProjectSettings: () => ({}),
-      },
-      sessionTransport: "websocket",
-    });
-    const effectiveExtraParams = resolvePreparedExtraParams({
-      cfg: undefined,
-      provider: "openai",
-      modelId: "gpt-5",
-      resolvedTransport,
-    });
-
-    expect(effectiveExtraParams.transport).toBe("auto");
-    expect(effectiveExtraParams.hookApplied).toBe(true);
-    expect(resolveProviderExtraParamsForTransport).toHaveBeenCalledTimes(1);
-    const hookCall = firstTransportHookCall(resolveProviderExtraParamsForTransport);
-    const hookContext = hookCall.context as { transport?: string } | undefined;
-    expect(hookContext?.transport).toBe("websocket");
+    const hookContext = hookCall.context as {
+      model?: unknown;
+      transport?: string;
+      agentDir?: string;
+      workspaceDir?: string;
+    };
+    expect(hookContext.transport).toBe("websocket");
+    if (!explicitTransport) {
+      expect(hookCall.provider).toBe("openai");
+      expect(hookContext.model).toBe(model);
+      expect(hookContext.agentDir).toBe("/tmp/agent");
+      expect(hookContext.workspaceDir).toBe("/tmp/workspace");
+    }
   });
 
   it("applies transport hook parallel_tool_calls patches to request payloads", () => {
@@ -1150,8 +955,6 @@ describe("applyExtraParamsToAgent", () => {
       wrapProviderStreamFn: (params) => params.context.streamFn,
     });
     const payload = runResponsesPayloadMutationCase({
-      applyProvider: "test-openai",
-      applyModelId: "gpt-compatible",
       model: {
         api: "openai-responses",
         provider: "test-openai",
@@ -1163,40 +966,31 @@ describe("applyExtraParamsToAgent", () => {
     expect(payload.parallel_tool_calls).toBe(true);
   });
 
-  it("uses prepared transport when session settings did not explicitly set one", () => {
-    const effectiveExtraParams = resolvePreparedExtraParams({
-      cfg: undefined,
-      provider: "openai",
+  it.each([
+    {
+      name: "uses prepared transport when session settings did not explicitly set one",
       modelId: "gpt-5.4",
-    });
-
-    expect(
-      resolveAgentTransportOverride({
-        settingsManager: {
-          getGlobalSettings: () => ({}),
-          getProjectSettings: () => ({}),
-        },
-        effectiveExtraParams,
-      }),
-    ).toBe("auto");
-  });
-
-  it("keeps explicit session transport over prepared OpenAI defaults", () => {
+      settings: {},
+      expected: "auto",
+    },
+    {
+      name: "keeps explicit session transport over prepared OpenAI defaults",
+      modelId: "gpt-5",
+      settings: { transport: "sse" as const },
+      expected: undefined,
+    },
+  ])("$name", ({ modelId, settings, expected }) => {
     const effectiveExtraParams = resolvePreparedExtraParams({
       cfg: undefined,
       provider: "openai",
-      modelId: "gpt-5",
+      modelId,
     });
-
     expect(
       resolveAgentTransportOverride({
-        settingsManager: {
-          getGlobalSettings: () => ({ transport: "sse" }),
-          getProjectSettings: () => ({}),
-        },
+        settingsManager: { getGlobalSettings: () => settings },
         effectiveExtraParams,
       }),
-    ).toBeUndefined();
+    ).toBe(expected);
   });
 
   it("resolves explicit settings transport from the active session transport", () => {
@@ -1204,7 +998,6 @@ describe("applyExtraParamsToAgent", () => {
       resolveExplicitSettingsTransport({
         settingsManager: {
           getGlobalSettings: () => ({}),
-          getProjectSettings: () => ({}),
         },
         sessionTransport: "websocket",
       }),
@@ -1213,7 +1006,6 @@ describe("applyExtraParamsToAgent", () => {
       resolveExplicitSettingsTransport({
         settingsManager: {
           getGlobalSettings: () => ({ transport: "sse" }),
-          getProjectSettings: () => ({}),
         },
         sessionTransport: "websocket",
       }),
@@ -1300,8 +1092,6 @@ describe("applyExtraParamsToAgent", () => {
 
   it("forces store=true for azure-openai provider with openai-responses API (#42800)", () => {
     const payload = runResponsesPayloadMutationCase({
-      applyProvider: "azure-openai",
-      applyModelId: "gpt-5-mini",
       model: {
         api: "openai-responses",
         provider: "azure-openai",
@@ -1312,20 +1102,17 @@ describe("applyExtraParamsToAgent", () => {
     expect(payload.store).toBe(true);
   });
 
-  it("keeps Responses replay item ids enabled for direct OpenAI store-enabled requests", () => {
-    expect(
-      captureOpenAIResponsesWrapperReplay({
-        model: buildResponsesWrapperModel({
-          provider: "openai",
-          id: "gpt-5",
-          baseUrl: "https://api.openai.com/v1",
-        }),
-        options: {},
-      }),
-    ).toBe(true);
-  });
-
   it.each([
+    {
+      name: "direct OpenAI store-enabled requests",
+      model: buildResponsesWrapperModel({
+        provider: "openai",
+        id: "gpt-5",
+        baseUrl: "https://api.openai.com/v1",
+      }),
+      options: {},
+      expectedReplay: true,
+    },
     {
       name: "Azure OpenAI store-enabled requests",
       model: buildResponsesWrapperModel({
@@ -1369,8 +1156,6 @@ describe("applyExtraParamsToAgent", () => {
 
   it("injects configured text verbosity into Codex Responses payloads", () => {
     const payload = runResponsesPayloadMutationCase({
-      applyProvider: "openai",
-      applyModelId: "gpt-5.4",
       cfg: buildModelConfig("openai/gpt-5.4", { text_verbosity: "high" }),
       model: {
         api: "openai-chatgpt-responses",
@@ -1385,8 +1170,6 @@ describe("applyExtraParamsToAgent", () => {
 
   it("lets null runtime override suppress inherited text verbosity injection", () => {
     const payload = runResponsesPayloadMutationCase({
-      applyProvider: "openai",
-      applyModelId: "gpt-5.4",
       cfg: buildModelConfig("openai/gpt-5.4", {
         textVerbosity: "high",
       }),
@@ -1405,8 +1188,6 @@ describe("applyExtraParamsToAgent", () => {
 
   it("keeps existing context_management when stripping store for supportsStore=false models", () => {
     const payload = runResponsesPayloadMutationCase({
-      applyProvider: "custom-openai-responses",
-      applyModelId: "gemini-2.5-pro",
       model: {
         api: "openai-responses",
         provider: "custom-openai-responses",

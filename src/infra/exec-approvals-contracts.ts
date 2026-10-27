@@ -35,11 +35,13 @@ export type ExecApprovalUsageAuthorization = {
 
 export type ExecAuthorizationCommitInput = {
   agentId: string | undefined;
-  matches: readonly ExecAllowlistEntry[];
+  matches: readonly (ExecAllowlistEntry & { resolvedPath?: string })[];
   command: string;
   resolvedPath?: string;
   authorization: ExecApprovalUsageAuthorization;
   allowAlwaysDecision?: AllowAlwaysPersistenceDecision;
+  /** Native spawn consumes this final admission even when no usage row changes. */
+  requireCommit?: true;
 };
 
 export type ExecAuthorizationCommitOutcome =

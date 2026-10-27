@@ -12,6 +12,7 @@ import { hasCommandProcessCleanupError } from "../../process/exec-result.js";
 import { defaultRuntime, ExitError } from "../../runtime.js";
 import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
 import { exitCliAfterOutput } from "../one-shot-exit.js";
+import { automaticallyCleanUpdateRecovery, failedBeforeActivation } from "./automatic-cleanup.js";
 import { prepareResult, printResult } from "./progress.js";
 import type { UpdateCommandOptions } from "./shared.js";
 import { UpdateActivationTimeoutError } from "./update-command-activation.js";
@@ -53,7 +54,9 @@ type Publisher = (
   onTerminalRecord?: PublishedRecord,
 ) => Promise<UpdateRunResult>;
 const terminalOwners = new WeakMap<Run, { publish?: Publisher }>();
-type PreparedPublisher = (onTerminalRecord?: PublishedRecord) => UpdateRunResult;
+type PreparedPublisher = (
+  onTerminalRecord?: PublishedRecord,
+) => UpdateRunResult | Promise<UpdateRunResult>;
 type TerminalOptions = Pick<UpdateCommandOptions, "json" | "onResult"> & {
   /** Internal candidate-worker output, never a serialized continuation grant. */
   onTerminalRecord?: PublishedRecord;
@@ -103,7 +106,7 @@ export function deferUpdateCommandTerminalPreparation(
       throw pending(failure ?? new Error("Update terminal preparation did not settle."));
     }
     try {
-      return prepared(onTerminalRecord);
+      return await prepared(onTerminalRecord);
     } catch (cause) {
       throw pending(cause);
     }
@@ -233,12 +236,7 @@ export async function prepareUnexpectedUpdateCommandFailure(
   };
   const publish: Publisher = async (settlementFailure, onTerminalRecord) => {
     const settled = await resolveSettledUpdateCommandResult(params, result, settlementFailure);
-    return publishUpdateCommandTerminalResult(
-      params,
-      settled.result,
-      { rolledBack: false },
-      onTerminalRecord,
-    );
+    return publishUpdateCommandTerminalResult(params, settled.result, onTerminalRecord);
   };
   const published =
     deferUpdateCommandTerminalPreparation(opts.run, prepare, () => result) ||
@@ -382,7 +380,7 @@ async function settleUpdateCommandTerminalResult<T>(
         },
         failure,
       );
-      return publishUpdateCommandTerminalResult(params, result, { rolledBack: false });
+      return publishUpdateCommandTerminalResult(params, result);
     };
   }
   if (
@@ -600,7 +598,7 @@ export async function resolveSettledUpdateCommandResult(
 
 /** Share verified retirement and unverified recovery retention across finalizers. */
 export async function recordUpdatePackageCompletion(
-  params: Pick<FinishUpdateParams, "packageTransaction" | "root" | "opts">,
+  params: Pick<FinishUpdateParams, "packageTransaction" | "databaseBackup" | "root" | "opts">,
   result: UpdateRunResult,
   assertCurrent: () => void,
 ): Promise<UpdateCommandFailure | void> {
@@ -632,6 +630,11 @@ export async function recordUpdatePackageCompletion(
   // retention outcome as a step, so this line must not leak into machine output.
   if (!params.opts.json) {
     defaultRuntime.log("Finishing update: checking package backup retention and cleanup.");
+  }
+  // Doctor can revoke restoration after capture. Both local and migrated
+  // finalization retire the retained parent's transaction through this boundary.
+  if (params.databaseBackup?.restoreRefusal) {
+    transaction.databaseBackupRoot = undefined;
   }
   const retained: UpdateStepResult | void = await transaction
     .complete({ activationVerified: result.status === "ok" }, assertCurrent)
@@ -685,18 +688,13 @@ export async function recordUpdatePackageCompletion(
 async function publishUpdateCommandTerminalResult(
   params: Pick<FinishUpdateParams, "opts" | "coreAlreadyCurrent" | "ownedManagedUpdateEnv">,
   input: UpdateRunResult,
-  outcome: {
-    rolledBack: boolean;
-    downtimeMs?: number;
-    captured?: UpdateCommandTerminalRecord;
-  },
   onTerminalRecord?: PublishedRecord,
 ): Promise<UpdateRunResult> {
-  const prepared = await prepareUpdateCommandTerminalResult(params, input, outcome);
+  const prepared = await prepareUpdateCommandTerminalResult(params, input, { rolledBack: false });
   return prepared(onTerminalRecord);
 }
 
-/** All state/report effects precede release; the returned closure only emits captured facts. */
+/** Prepare the update outcome under its executor; optional cleanup uses fresh custody after release. */
 export async function prepareUpdateCommandTerminalResult(
   params: Pick<FinishUpdateParams, "opts" | "coreAlreadyCurrent" | "ownedManagedUpdateEnv">,
   input: UpdateRunResult,
@@ -724,14 +722,25 @@ export async function prepareUpdateCommandTerminalResult(
     : completeUpdateCommandRun(input, params.opts.run, outcome);
   const emit = await prepareResult(result, params.opts, { nextAction, record }, assertCurrent);
   assertCurrent?.();
-  return (onTerminalRecord) => {
+  return async (onTerminalRecord) => {
     if (outcome.captured) {
       readCaptured();
     }
-    emit();
+    // The activation executor has settled. Cleanup gets independent state-owner
+    // custody, so its budget/failure cannot turn a committed success into rollback.
+    const cleanup =
+      params.opts.run &&
+      !params.opts.dryRun &&
+      (result.status === "ok" ||
+        (result.status === "skipped" && result.reason === "already-current") ||
+        (result.status === "error" &&
+          failedBeforeActivation(params.opts.run.runId, params.opts.run.env)))
+        ? await automaticallyCleanUpdateRecovery(params.opts.run.runId, params.opts.run.env)
+        : undefined;
+    emit(cleanup ? [cleanup] : []);
     if (record) {
       onTerminalRecord?.(record);
     }
-    return result;
+    return cleanup ? { ...result, steps: [...result.steps, cleanup] } : result;
   };
 }

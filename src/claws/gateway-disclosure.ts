@@ -19,8 +19,6 @@ import { listCoreToolSections } from "../agents/tool-catalog.js";
 import { resolveEffectiveToolFsWorkspaceOnly } from "../agents/tool-fs-policy.js";
 import type { AgentConfig } from "../config/types.agents.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { resolveHeartbeatConfig } from "../infra/heartbeat-config.js";
-import { resolveHeartbeatSummaryForAgent } from "../infra/heartbeat-summary.js";
 import { DEFAULT_AGENT_ID, normalizeAgentId } from "../routing/session-key.js";
 import { isTrustedSecretSurfaceUnavailableError } from "../secrets/runtime-degraded-state.js";
 import { runtimeMemorySecretOwnerId } from "../secrets/runtime-memory-secret-owner.js";
@@ -92,8 +90,6 @@ function configuredSnapshot(config: OpenClawConfig, agentId: string): AccessSnap
     toolNames: listCoreToolSections().flatMap((section) => section.tools.map((tool) => tool.id)),
   });
   const sandbox = resolveSandboxConfigForAgent(config, agentId);
-  const heartbeat = resolveHeartbeatSummaryForAgent(config, agentId);
-  const heartbeatConfig = resolveHeartbeatConfig(config, agentId);
   return {
     tools: {
       allowed: tools.tools
@@ -115,14 +111,7 @@ function configuredSnapshot(config: OpenClawConfig, agentId: string): AccessSnap
         sandbox.backend === "docker" || sandbox.backend === "ssh" ? sandbox.backend : "other",
     },
     filesystem: { workspaceOnly: resolveEffectiveToolFsWorkspaceOnly({ cfg: config, agentId }) },
-    heartbeat: {
-      enabled: heartbeat.enabled,
-      intervalMs: heartbeat.everyMs,
-      ...(heartbeatConfig?.activeHours ? { activeHours: heartbeatConfig.activeHours } : {}),
-      ...(heartbeatConfig?.isolatedSession !== undefined
-        ? { isolatedSession: heartbeatConfig.isolatedSession }
-        : {}),
-    },
+    heartbeat: { enabled: false, intervalMs: null },
     memorySearch: configuredMemorySearch(config, agentId),
     subagentTargets: configuredSubagentTargets(config, agentId),
   };
@@ -193,6 +182,24 @@ export function projectClawAddScheduledJobs(plan: ClawAddPlan): ClawScheduledJob
     jobs: plan.actions
       .filter((action) => action.kind === "cronJob")
       .map((action) => {
+        if (action.automation) {
+          const job = action.automation;
+          if (job.schedule.kind !== "every" || job.payload.kind !== "agentTurn") {
+            throw new Error("Claw migrated schedule preview is unavailable.");
+          }
+          return {
+            id: action.id,
+            action: action.action,
+            blocked: action.blocked,
+            proposed: {
+              schedule: { everyMs: job.schedule.everyMs },
+              session: job.sessionTarget === "isolated" ? ("isolated" as const) : ("main" as const),
+              delivery: "owner" as const,
+              messageDigest: digestClawValue(job.payload.message),
+              message: job.payload.message,
+            },
+          };
+        }
         const details = action.details;
         const parsed = cronJobSchema.safeParse({
           id: details?.id,

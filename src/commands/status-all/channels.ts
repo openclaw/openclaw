@@ -19,7 +19,6 @@ import {
 import { resolveChannelDefaultAccountId } from "../../channels/plugins/helpers.js";
 import { resolveReadOnlyChannelPluginsForConfig } from "../../channels/plugins/read-only.js";
 import { formatChannelStatusState } from "../../channels/plugins/status-state.js";
-import type { AnyChannelPlugin as ChannelPlugin } from "../../channels/plugins/types.plugin.js";
 import type { ChannelId } from "../../channels/plugins/types.public.js";
 import {
   getRuntimeChannelAccounts,
@@ -43,118 +42,6 @@ type ChannelRow = {
 type ChannelAccountRow = ChannelAccountInspectionResult & {
   accountId: string;
 };
-
-const formatAccountLabel = (params: { accountId: string; name?: string }) => {
-  const base = params.accountId || "default";
-  if (params.name?.trim()) {
-    return `${base} (${params.name.trim()})`;
-  }
-  return base;
-};
-
-const buildAccountNotes = async (params: {
-  plugin: ChannelPlugin;
-  cfg: OpenClawConfig;
-  entry: ChannelAccountRow;
-  liveCredentialAvailable?: boolean;
-}) => {
-  const { plugin, cfg, entry } = params;
-  const snapshot = entry.snapshot;
-  const unavailable =
-    entry.kind === "unavailable" || hasConfiguredUnavailableCredentialStatus(entry.account);
-  const notes = buildChannelAccountNotes(
-    snapshot,
-    entry.kind === "unavailable"
-      ? "secret unavailable in this command path"
-      : params.liveCredentialAvailable
-        ? "credential available in gateway runtime"
-        : unavailable
-          ? "secret unavailable in this command path"
-          : undefined,
-  );
-  const allowFrom = unavailable
-    ? snapshot.allowFrom
-    : ((await resolveChannelAllowFrom({ plugin, cfg, accountId: snapshot.accountId })) ??
-      snapshot.allowFrom);
-  if (allowFrom?.length) {
-    // Cap allow-list output so large channel policies do not dominate the status table.
-    const allowInternationalDigits =
-      plugin.configSchema?.uiHints?.allowFrom?.presentation === "phone-number";
-    const formatted = formatChannelAllowFrom({
-      plugin,
-      cfg,
-      accountId: snapshot.accountId,
-      allowFrom,
-    })
-      .slice(0, 3)
-      .map((allowEntry) => formatPhoneNumberForCli(allowEntry, { allowInternationalDigits }));
-    if (formatted.length > 0) {
-      notes.push(`allow:${formatted.join(",")}`);
-    }
-  }
-
-  return notes;
-};
-
-function resolveLinkFields(summary: unknown): {
-  statusState: string | null;
-  linked: boolean | null;
-  authAgeMs: number | null;
-  selfE164: string | null;
-} {
-  // Plugin summaries are optional extension data; normalize only the fields the core table understands.
-  const rec = asRecord(summary);
-  const statusState = typeof rec.statusState === "string" ? rec.statusState : null;
-  const linked = typeof rec.linked === "boolean" ? rec.linked : null;
-  const authAgeMs = typeof rec.authAgeMs === "number" ? rec.authAgeMs : null;
-  const self = asRecord(rec.self);
-  const selfE164 = typeof self.e164 === "string" && self.e164.trim() ? self.e164.trim() : null;
-  return { statusState, linked, authAgeMs, selfE164 };
-}
-
-function collectMissingPaths(accounts: ChannelAccountRow[]): string[] {
-  const missing: string[] = [];
-  for (const entry of accounts) {
-    const accountRec = asRecord(entry.account);
-    const snapshotRec = asRecord(entry.snapshot);
-    for (const key of [
-      "tokenFile",
-      "botTokenFile",
-      "appTokenFile",
-      "cliPath",
-      "dbPath",
-      "authDir",
-    ]) {
-      // Account config and snapshots can each expose file-backed credential paths.
-      const raw = accountRec[key] ?? snapshotRec[key];
-      const path = normalizeOptionalString(raw);
-      if (!path) {
-        continue;
-      }
-      try {
-        if (!fs.existsSync(path)) {
-          missing.push(String(raw));
-        }
-      } catch {
-        // An inspection failure does not establish that the path is missing.
-      }
-    }
-  }
-  return missing;
-}
-
-function isLikelyDependencyTreeCorruption(message: string): boolean {
-  return /(?:cannot find (?:module|package)|module_not_found|err_module_not_found|enoent|enotempty|missing package|failed to resolve)/iu.test(
-    message,
-  );
-}
-
-function formatLoadFailureDetail(message: string): string {
-  const reason = isLikelyDependencyTreeCorruption(message)
-    ? "dependency tree corrupted"
-    : "registration failed";
-  return `plugin load failed: ${reason}; run openclaw doctor --fix`;
-}
 
 function summarizeSources(sources: Array<string | undefined>): string {
   const counts = new Map<string, number>();
@@ -248,8 +135,41 @@ export async function buildChannelsTable(
           })
         : defaultEntry?.snapshot;
 
-    const link = resolveLinkFields(summary);
-    const missingPaths = collectMissingPaths(enabledAccounts);
+    // Plugin summaries are optional extension data; normalize only the fields the core table understands.
+    const linkRecord = asRecord(summary);
+    const statusState = typeof linkRecord.statusState === "string" ? linkRecord.statusState : null;
+    const summaryLinked = typeof linkRecord.linked === "boolean" ? linkRecord.linked : null;
+    const authAgeMs = typeof linkRecord.authAgeMs === "number" ? linkRecord.authAgeMs : null;
+    const self = asRecord(linkRecord.self);
+    const selfE164 = typeof self.e164 === "string" && self.e164.trim() ? self.e164.trim() : null;
+    const link = { statusState, linked: summaryLinked, authAgeMs, selfE164 };
+    const missingPaths: string[] = [];
+    for (const entry of enabledAccounts) {
+      const accountRec = asRecord(entry.account);
+      const snapshotRec = asRecord(entry.snapshot);
+      for (const key of [
+        "tokenFile",
+        "botTokenFile",
+        "appTokenFile",
+        "cliPath",
+        "dbPath",
+        "authDir",
+      ]) {
+        // Account config and snapshots can each expose file-backed credential paths.
+        const raw = accountRec[key] ?? snapshotRec[key];
+        const path = normalizeOptionalString(raw);
+        if (!path) {
+          continue;
+        }
+        try {
+          if (!fs.existsSync(path)) {
+            missingPaths.push(String(raw));
+          }
+        } catch {
+          // An inspection failure does not establish that the path is missing.
+        }
+      }
+    }
     const tokenSummary = ((): { state: "ok" | "setup" | "warn" | null; detail: string | null } => {
       const enabled = accountsForTokenSummary.filter((a) => a.enabled);
       if (enabled.length === 0) {
@@ -459,17 +379,46 @@ export async function buildChannelsTable(
               liveAccounts,
               accountId: entry.accountId,
             });
-            const notes = await buildAccountNotes({
-              plugin,
-              cfg,
-              entry,
-              liveCredentialAvailable,
-            });
+            const snapshot = entry.snapshot;
+            const unavailable =
+              entry.kind === "unavailable" ||
+              hasConfiguredUnavailableCredentialStatus(entry.account);
+            const notes = buildChannelAccountNotes(
+              snapshot,
+              entry.kind === "unavailable"
+                ? "secret unavailable in this command path"
+                : liveCredentialAvailable
+                  ? "credential available in gateway runtime"
+                  : unavailable
+                    ? "secret unavailable in this command path"
+                    : undefined,
+            );
+            const allowFrom = unavailable
+              ? snapshot.allowFrom
+              : ((await resolveChannelAllowFrom({ plugin, cfg, accountId: snapshot.accountId })) ??
+                snapshot.allowFrom);
+            if (allowFrom?.length) {
+              // Cap allow-list output so large channel policies do not dominate the status table.
+              const allowInternationalDigits =
+                plugin.configSchema?.uiHints?.allowFrom?.presentation === "phone-number";
+              const formatted = formatChannelAllowFrom({
+                plugin,
+                cfg,
+                accountId: snapshot.accountId,
+                allowFrom,
+              })
+                .slice(0, 3)
+                .map((allowEntry) =>
+                  formatPhoneNumberForCli(allowEntry, { allowInternationalDigits }),
+                );
+              if (formatted.length > 0) {
+                notes.push(`allow:${formatted.join(",")}`);
+              }
+            }
             return {
-              Account: formatAccountLabel({
-                accountId: entry.accountId,
-                name: entry.snapshot.name,
-              }),
+              Account: entry.snapshot.name?.trim()
+                ? `${entry.accountId || "default"} (${entry.snapshot.name.trim()})`
+                : entry.accountId || "default",
               Status:
                 entry.enabled &&
                 entry.kind !== "unavailable" &&
@@ -509,7 +458,13 @@ export async function buildChannelsTable(
     if (!failure) {
       continue;
     }
-    addFallbackRow(channelId, "warn", formatLoadFailureDetail(failure.message));
+    const reason =
+      /(?:cannot find (?:module|package)|module_not_found|err_module_not_found|enoent|enotempty|missing package|failed to resolve)/iu.test(
+        failure.message,
+      )
+        ? "dependency tree corrupted"
+        : "registration failed";
+    addFallbackRow(channelId, "warn", `plugin load failed: ${reason}; run openclaw doctor --fix`);
   }
 
   const explicitConfiguredChannelIds = new Set([

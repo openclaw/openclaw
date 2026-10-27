@@ -2,6 +2,10 @@ import { createServer, type ServerResponse } from "node:http";
 import path from "node:path";
 import { text as readBody } from "node:stream/consumers";
 import { expect, it } from "vitest";
+import {
+  closeHttpServer,
+  listenLoopback,
+} from "../../../test/helpers/gateway-integration-fixtures.js";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { makeUserMessage } from "../../../test/helpers/user-message.js";
 import {
@@ -10,6 +14,7 @@ import {
   setSessionMcpRuntimeScheduler,
 } from "../../agents/agent-bundle-mcp-manager-api.js";
 import { getSessionMcpRuntimeTestManager } from "../../agents/agent-bundle-mcp-manager.test-support.js";
+import { modelDefinition } from "../../agents/model-auth.fixtures.test-support.js";
 import { waitForSessionMaintenance } from "../../agents/session-maintenance/coordinator.js";
 import { createSessionMaintenanceFollowup } from "../../agents/session-maintenance/run.js";
 import { SessionManager } from "../../agents/sessions/session-manager.js";
@@ -22,7 +27,6 @@ import {
   loadTranscriptEvents,
   replaceSessionEntry,
 } from "../../config/sessions/session-accessor.js";
-import type { ModelDefinitionConfig } from "../../config/types.models.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
   buildTimestampPrefix,
@@ -45,6 +49,7 @@ import {
   installAgentRunnerMemoryFixture,
   isModelRuntimeContextCarrier,
 } from "./agent-runner.test-fixtures.js";
+import { createReplyParams } from "./test-helpers.js";
 import { createTypingController } from "./typing.js";
 
 type ModelRequest = { messages: Array<{ role: string; content: unknown }> };
@@ -54,19 +59,6 @@ const isHumanMessage = (message: ModelRequest["messages"][number]) =>
   message.role === "user" && !isModelRuntimeContextCarrier(message);
 const lastHumanText = (request: ModelRequest) =>
   text(request.messages.findLast(isHumanMessage)?.content);
-
-function model(id: string, name: string, contextTokens: number): ModelDefinitionConfig {
-  return {
-    id,
-    name,
-    reasoning: false,
-    input: ["text"],
-    contextWindow: contextTokens,
-    contextTokens,
-    maxTokens: 8_192,
-    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-  };
-}
 
 function finishModelResponse(response: ServerResponse, content: string): void {
   for (const chunk of [
@@ -81,7 +73,7 @@ function finishModelResponse(response: ServerResponse, content: string): void {
         id: "private-memory-fixture",
         object: "chat.completion.chunk",
         created: 1,
-        model: "test-model",
+        model: "owner-model",
         ...chunk,
       })}\n\n`,
     );
@@ -112,7 +104,8 @@ it.each(["completed", "interrupted"] as const)(
       const stopDiagnostics = onInternalDiagnosticEvent((event) => {
         if (
           event.type === "model.call.started" &&
-          event.model === "test-model" &&
+          event.model === "owner-model" &&
+          event.sessionId !== scope.sessionId &&
           event.contextTokenBudget !== undefined
         ) {
           runtimeBudgets.push(event.contextTokenBudget);
@@ -180,13 +173,7 @@ it.each(["completed", "interrupted"] as const)(
             response.destroy();
           });
       });
-      await new Promise<void>((resolve) => {
-        server.listen(0, "127.0.0.1", resolve);
-      });
-      const address = server.address();
-      if (!address || typeof address === "string") {
-        throw new Error("Missing fixture address");
-      }
+      const baseUrl = await listenLoopback(server);
       const scope = {
         agentId: "main",
         sessionId: "private-memory-source",
@@ -205,7 +192,7 @@ it.each(["completed", "interrupted"] as const)(
         tools: { profile: "coding" },
         mcp: {
           servers: {
-            fixture: { transport: "streamable-http", url: `http://127.0.0.1:${address.port}/mcp` },
+            fixture: { transport: "streamable-http", url: `${baseUrl}/mcp` },
           },
         },
         models: {
@@ -213,10 +200,14 @@ it.each(["completed", "interrupted"] as const)(
             "test-provider": {
               api: "openai-completions",
               apiKey: "synthetic-fixture-key",
-              baseUrl: `http://127.0.0.1:${address.port}/v1`,
+              baseUrl: `${baseUrl}/v1`,
               models: [
-                model("owner-model", "Owner fixture", 128_000),
-                model("test-model", "Fixture", 1_000_000),
+                modelDefinition("owner-model", {
+                  name: "Owner fixture",
+                  reasoning: false,
+                  contextWindow: 128_000,
+                  contextTokens: 128_000,
+                }),
               ],
             },
           },
@@ -285,7 +276,6 @@ it.each(["completed", "interrupted"] as const)(
           prompt: "Checkpoint durable notes. Reply NO_REPLY.",
           systemPrompt: "Write durable notes only.",
           relativePath: "memory/checkpoint.md",
-          model: "test-provider/test-model",
         }));
         admission = await beginSessionEffect({
           scope: scope.storePath,
@@ -307,7 +297,7 @@ it.each(["completed", "interrupted"] as const)(
             sessionStore: { [scope.sessionKey]: entry },
             sessionKey: scope.sessionKey,
             storePath: scope.storePath,
-            isHeartbeat: false,
+
             abortSignal: interrupted.signal,
           }),
         );
@@ -363,34 +353,22 @@ it.each(["completed", "interrupted"] as const)(
         foreground.prompt = human;
         foreground.currentInboundContext = { text: runtimeContext };
         const current = loadSessionEntry(scope)!;
-        const result = await runReplyAgent({
-          commandBody: human,
-          transcriptCommandBody: human,
-          followupRun: foreground,
-          queueKey: scope.sessionKey,
-          resolvedQueue: { mode: "interrupt" },
-          shouldSteer: false,
-          shouldFollowup: false,
-          isActive: false,
-          opts: { runId: "next-human" },
-          typing: createTypingController({}),
-          sessionCtx: {
-            Provider: "webchat",
-            MessageSid: "next-human",
-            SessionKey: scope.sessionKey,
-          },
-          sessionEntry: current,
-          sessionStore: { [scope.sessionKey]: current },
-          sessionKey: scope.sessionKey,
-          storePath: scope.storePath,
-          defaultModel: "owner-model",
-          resolvedVerboseLevel: "off",
-          isNewSession: false,
-          blockStreamingEnabled: false,
-          resolvedBlockStreamingBreak: "message_end",
-          shouldInjectGroupIntro: false,
-          typingMode: "never",
-        });
+        const result = await runReplyAgent(
+          createReplyParams(foreground, {
+            transcriptCommandBody: human,
+            opts: { runId: "next-human" },
+            typing: createTypingController({}),
+            sessionCtx: {
+              Provider: "webchat",
+              MessageSid: "next-human",
+              SessionKey: scope.sessionKey,
+            },
+            sessionEntry: current,
+            sessionStore: { [scope.sessionKey]: current },
+            sessionKey: scope.sessionKey,
+            storePath: scope.storePath,
+          }),
+        );
         expect(result).toMatchObject({ text: "FOREGROUND_READY" });
         const humanRequests = requests.filter((request) => lastHumanText(request).endsWith(human));
         expect(humanRequests).toHaveLength(1);
@@ -439,10 +417,7 @@ it.each(["completed", "interrupted"] as const)(
         clearMemoryPluginState();
         clearRuntimeConfigSnapshot();
         stopDiagnostics();
-        server.closeAllConnections();
-        await new Promise<void>((resolve, reject) => {
-          server.close((error) => (error ? reject(error) : resolve()));
-        });
+        await closeHttpServer(server);
         expect(requestErrors).toEqual([]);
       }
     });

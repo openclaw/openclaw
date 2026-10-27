@@ -28,6 +28,7 @@ import { disposePluginRegistryInstances } from "../plugins/runtime.js";
 import { AsyncWorkScope } from "../shared/async-work-scope.js";
 import { createDeferredCore, type Deferred } from "../shared/deferred.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
+import { captureTurnHandoverRequest } from "./plugin-turn-handover.js";
 import { PreparedModelRuntimePluginGenerationRetiredError } from "./prepared-model-runtime.errors.js";
 import {
   registerPreparedPluginRetirement,
@@ -198,7 +199,12 @@ export function ownPreparedPluginGeneration(
         );
       }
     },
-    () => retainRuntimePluginWork(selectedRegistries),
+    () =>
+      retainRuntimePluginWork(
+        selectedRegistries,
+        "prepared-generation-lease",
+        captureTurnHandoverRequest(selectedRegistries),
+      ),
   );
   try {
     for (const registry of selectedRegistries) {

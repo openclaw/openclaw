@@ -1,150 +1,91 @@
-import type {
-  OpenClawPluginService,
-  OpenClawPluginServiceContext,
-} from "openclaw/plugin-sdk/plugin-entry";
-import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
-import type { CodexAppServerClient } from "./client.js";
+import type { OpenClawPluginServiceContext } from "openclaw/plugin-sdk/plugin-entry";
+import { afterEach, beforeAll, expect, it, vi } from "vitest";
 import { createCodexAppServerConnectionHealthService } from "./connection-health.js";
 import { createClientHarness } from "./test-support.js";
 
-const sharedClientMocks = vi.hoisted(() => ({
-  getLeasedSharedCodexAppServerClient: vi.fn(),
-  releaseLeasedSharedCodexAppServerClient: vi.fn(),
+const lease = vi.hoisted(() => ({ acquire: vi.fn(), release: vi.fn() }));
+// mock-isolation: The fixture owns client leases; never acquire the process-shared client.
+vi.mock("./shared-client.js", () => ({
+  getLeasedSharedCodexAppServerClient: lease.acquire,
+  releaseLeasedSharedCodexAppServerClient: lease.release,
 }));
 
-vi.mock("./shared-client.js", () => sharedClientMocks);
+let stopService: (() => void | Promise<void>) | undefined;
+const clients: ReturnType<typeof createClientHarness>["client"][] = [];
 
-let runningService:
-  | { service: OpenClawPluginService; ctx: OpenClawPluginServiceContext }
-  | undefined;
-
-describe("Codex remote WebSocket connection health", () => {
-  beforeAll(async () => {
-    // Complete lazy-module fixture preparation before measuring connection and retry behavior.
-    await Promise.all([import("./config-runtime.js"), import("./client.js")]);
-  });
-
-  afterEach(async () => {
-    try {
-      if (runningService) {
-        await runningService.service.stop?.(runningService.ctx);
-      }
-    } finally {
-      runningService = undefined;
-      sharedClientMocks.getLeasedSharedCodexAppServerClient.mockReset();
-      sharedClientMocks.releaseLeasedSharedCodexAppServerClient.mockReset();
-      vi.useRealTimers();
-    }
-  });
-
-  it("retries a transient remote connection failure without starting a model", async () => {
-    const client = createClient();
-    sharedClientMocks.getLeasedSharedCodexAppServerClient
-      .mockRejectedValueOnce(new Error("Opening handshake has timed out"))
-      .mockResolvedValueOnce(client.client);
-    const { ctx, service } = createService();
-
-    await startService(service, ctx);
-
-    await vi.waitFor(
-      () => {
-        expect(sharedClientMocks.getLeasedSharedCodexAppServerClient).toHaveBeenCalledTimes(2);
-        expect(client.addCloseHandler).toHaveBeenCalledOnce();
-      },
-      { timeout: 3_000 },
-    );
-    expect(client.request).not.toHaveBeenCalled();
-
-    await service.stop?.(ctx);
-
-    expect(sharedClientMocks.releaseLeasedSharedCodexAppServerClient).toHaveBeenCalledOnce();
-  });
-
-  it("reconnects when a leased client closed before the health observer subscribed", async () => {
-    vi.useFakeTimers();
-    const first = createClientHarness();
-    first.client.close();
-    const next = createClient();
-    sharedClientMocks.getLeasedSharedCodexAppServerClient
-      .mockResolvedValueOnce(first.client)
-      .mockResolvedValueOnce(next.client);
-    const { ctx, service } = createService();
-
-    await startService(service, ctx);
-    await vi.advanceTimersByTimeAsync(1_250);
-
-    expect(sharedClientMocks.getLeasedSharedCodexAppServerClient).toHaveBeenCalledTimes(2);
-    expect(sharedClientMocks.releaseLeasedSharedCodexAppServerClient).toHaveBeenCalledWith(
-      first.client,
-    );
-    expect(next.addCloseHandler).toHaveBeenCalledOnce();
-    expect(first.writes).toEqual([]);
-    expect(next.request).not.toHaveBeenCalled();
-  });
-
-  it("does not retry an HTTP 403 authentication failure", async () => {
-    const statusCode = 403;
-    sharedClientMocks.getLeasedSharedCodexAppServerClient.mockRejectedValueOnce(
-      new Error(`Unexpected server response: ${statusCode}`),
-    );
-    const { ctx, service } = createService();
-
-    await startService(service, ctx);
-
-    await vi.waitFor(() => {
-      expect(ctx.logger.error).toHaveBeenCalledWith(
-        expect.stringContaining(`Unexpected server response: ${statusCode}`),
-      );
-    });
-    expect(sharedClientMocks.getLeasedSharedCodexAppServerClient).toHaveBeenCalledOnce();
-
-    await service.stop?.(ctx);
-
-    expect(sharedClientMocks.releaseLeasedSharedCodexAppServerClient).not.toHaveBeenCalled();
-  });
-
-  it("does not retry an invalid remote app-server configuration", async () => {
-    const { ctx, service } = createService({ appServer: { transport: "websocket" } });
-
-    await startService(service, ctx);
-
-    await vi.waitFor(() => {
-      expect(ctx.logger.error).toHaveBeenCalledWith(
-        expect.stringContaining("configuration is invalid"),
-      );
-    });
-    expect(sharedClientMocks.getLeasedSharedCodexAppServerClient).not.toHaveBeenCalled();
-
-    await service.stop?.(ctx);
-  });
+beforeAll(async () => {
+  // Complete lazy-module fixture preparation before measuring connection and retry behavior.
+  await Promise.all([import("./config-runtime.js"), import("./client.js")]);
 });
 
-function startService(service: OpenClawPluginService, ctx: OpenClawPluginServiceContext) {
-  runningService = { service, ctx };
-  return service.start(ctx);
-}
+afterEach(async () => {
+  try {
+    await stopService?.();
+  } finally {
+    for (const client of clients.splice(0)) {
+      client.close();
+    }
+    stopService = undefined;
+    lease.acquire.mockReset();
+    lease.release.mockReset();
+    vi.useRealTimers();
+  }
+});
 
-function createClient() {
-  const handlers = new Set<(client: CodexAppServerClient) => void>();
-  const request = vi.fn();
-  const addCloseHandler = vi.fn((handler: (client: CodexAppServerClient) => void) => {
-    handlers.add(handler);
-    return () => handlers.delete(handler);
+it.each(["handshake failure", "already-closed lease"])(
+  "reconnects after %s without starting a model",
+  async (reason) => {
+    const closed = reason === "already-closed lease";
+    const first = createClient();
+    const next = createClient();
+    if (closed) {
+      vi.useFakeTimers();
+      first.client.close();
+      lease.acquire.mockResolvedValueOnce(first.client);
+    } else {
+      lease.acquire.mockRejectedValueOnce(new Error("Opening handshake has timed out"));
+    }
+    lease.acquire.mockResolvedValueOnce(next.client);
+    const ctx = await createService();
+    if (closed) {
+      await vi.advanceTimersByTimeAsync(1_250);
+      expect(lease.release).toHaveBeenCalledWith(first.client);
+    } else {
+      await vi.waitFor(() => expect(ctx.logger.info).toHaveBeenCalledOnce(), { timeout: 3_000 });
+    }
+    expect(lease.acquire).toHaveBeenCalledTimes(2);
+    expect(ctx.logger.info).toHaveBeenCalledTimes(closed ? 2 : 1);
+    expect(first.writes).toEqual([]);
+    expect(next.writes).toEqual([]);
+    await stopService?.();
+    expect(lease.release).toHaveBeenCalledTimes(closed ? 2 : 1);
+  },
+);
+
+it.each([
+  { reason: "HTTP 403", error: "Unexpected server response: 403", calls: 1 },
+  { reason: "invalid configuration", error: undefined, calls: 0 },
+])("does not retry $reason", async ({ error, calls }) => {
+  if (error) {
+    lease.acquire.mockRejectedValueOnce(new Error(error));
+  }
+  const ctx = await createService(error ? undefined : { appServer: { transport: "websocket" } });
+  await vi.waitFor(() => {
+    expect(ctx.logger.error).toHaveBeenCalledWith(
+      expect.stringContaining(error ?? "configuration is invalid"),
+    );
   });
-  const client = {
-    addCloseHandler,
-    request,
-    getCloseError: () => undefined,
-  } as unknown as CodexAppServerClient;
-
-  return {
-    client,
-    request,
-    addCloseHandler,
-  };
+  expect(lease.acquire).toHaveBeenCalledTimes(calls);
+  await stopService?.();
+  expect(lease.release).not.toHaveBeenCalled();
+});
+function createClient() {
+  const harness = createClientHarness();
+  clients.push(harness.client);
+  return harness;
 }
 
-function createService(
+async function createService(
   pluginConfig: unknown = {
     appServer: { transport: "websocket", url: "ws://127.0.0.1:39175" },
   },
@@ -152,18 +93,13 @@ function createService(
   const ctx: OpenClawPluginServiceContext = {
     config: {},
     stateDir: "/tmp/openclaw-codex-connection-health-test",
-    logger: {
-      debug: vi.fn(),
-      info: vi.fn(),
-      warn: vi.fn(),
-      error: vi.fn(),
-    },
+    logger: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() },
   };
-  return {
-    ctx,
-    service: createCodexAppServerConnectionHealthService({
-      getPluginConfig: () => pluginConfig,
-      getRuntimeConfig: () => ctx.config,
-    }),
-  };
+  const service = createCodexAppServerConnectionHealthService({
+    getPluginConfig: () => pluginConfig,
+    getRuntimeConfig: () => ctx.config,
+  });
+  stopService = () => service.stop?.(ctx);
+  await service.start(ctx);
+  return ctx;
 }

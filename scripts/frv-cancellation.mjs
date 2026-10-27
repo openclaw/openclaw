@@ -86,7 +86,11 @@ export async function cancelReleaseTree(runId, client, options = {}) {
   assertParent(parent, plan, repository);
   const parentIdentity = identity(parent);
   const jobs = await client.getParentJobs(runId);
-  const sealer = completedJob(jobs, "Seal release execution plan", plan.parentRunAttempt);
+  const sealer = completedJob(
+    jobs,
+    "Seal release execution plan",
+    plan.sealParentRunAttempt ?? plan.parentRunAttempt,
+  );
   const uploads =
     sealer.steps?.filter((step) => step.name === "Upload immutable release execution plan") ?? [];
   const created = Date.parse(retained.artifact.created_at);

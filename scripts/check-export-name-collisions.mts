@@ -56,7 +56,13 @@ export type ModuleExports = {
   valueDefinitions: Map<string, ExportedValueDefinition>;
 };
 
-const extraExcludedFileSuffixes = [".test-support.ts", ".test-helpers.ts", ".d.ts"];
+const extraExcludedFileSuffixes = [
+  ".test-support.ts",
+  ".test-helpers.ts",
+  ".d.ts",
+  ".d.mts",
+  ".d.cts",
+];
 
 function normalizeRelativePath(filePath: string) {
   return filePath.replaceAll(path.sep, "/");
@@ -697,19 +703,11 @@ const sealedRecoveryNativeLoaderModules = [
 const sqliteWorkerProtocolModules = new Map<string, ReadonlySet<string>>([
   [
     "createSqliteWorkerBackend",
-    new Set([
-      "src/state/openclaw-state.worker.ts",
-      "src/state/openclaw-agent-execution.worker.ts",
-      "src/infra/client-credential.worker.ts",
-    ]),
+    new Set(["src/state/openclaw-state.worker.ts", "src/state/openclaw-agent-execution.worker.ts"]),
   ],
   [
     "openExistingSqliteWorkerBackend",
-    new Set([
-      "src/state/openclaw-state.worker.ts",
-      "src/state/openclaw-agent-execution.worker.ts",
-      "src/infra/client-credential.worker.ts",
-    ]),
+    new Set(["src/state/openclaw-state.worker.ts", "src/state/openclaw-agent-execution.worker.ts"]),
   ],
   [
     "bindSqliteWorkerBackend",
@@ -719,7 +717,6 @@ const sqliteWorkerProtocolModules = new Map<string, ReadonlySet<string>>([
       "src/agents/plugin-model-catalog.worker.ts",
       "src/boards/sqlite-board-store.worker.ts",
       "src/agents/sessions/session-manager-metadata.worker.ts",
-      "src/agents/subagents/spawn/acp-parent-stream-store.worker.ts",
       "src/config/sessions/goals-operations.worker.ts",
       "src/config/sessions/session-accessor.sqlite-transcript-reports.worker.ts",
       "src/config/sessions/session-fork-domain.worker.ts",
@@ -728,8 +725,6 @@ const sqliteWorkerProtocolModules = new Map<string, ReadonlySet<string>>([
       "src/config/sessions/session-sharing-store.worker.ts",
       "src/config/sessions/session-transcript-projection-publication.worker.ts",
       "src/gateway/worker-environments/transcript-commit.worker.ts",
-      "src/infra/heartbeat-outcome-store.worker.ts",
-      "src/infra/message-tool-run-outcome-store.worker.ts",
       "src/session-cards/progress-card-store.worker.ts",
     ]),
   ],

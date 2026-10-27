@@ -8,20 +8,10 @@ const contributorsArgs = [
   "repos/openclaw/openclaw/contributors?per_page=100&anon=1",
   "--paginate",
 ];
-const mergedAuthorsArgs = [
-  "pr",
-  "list",
-  "-R",
-  "openclaw/openclaw",
-  "--state",
-  "merged",
-  "--limit",
-  "5000",
-  "--json",
-  "author",
-  "--jq",
-  ".[].author.login",
-];
+const mergedAuthorsArgs =
+  "pr list -R openclaw/openclaw --state merged --limit 5000 --json author --jq .[].author.login".split(
+    " ",
+  );
 const avatar = (alt: string) =>
   `<img src="https://avatars.githubusercontent.com/u/42?v=4&s=48" width="48" height="48" alt="${alt}">`;
 const credit = (login: string, alt: string) =>
@@ -148,33 +138,25 @@ it("bounds every GitHub CLI lookup", async () => {
   expect(fixture.execPlainGh).toHaveBeenNthCalledWith(3, mergedAuthorsArgs, options);
 });
 
-it("resolves renamed seed profiles by stable account id", async () => {
-  const fixture = mockClawtributorsFixture({
-    seedEntry: credit("old-handle", "Original credit"),
-    accountLookup: githubUser("new-handle", 42),
-  });
-
-  await importUpdateClawtributors();
-
-  expect(fixture.execPlainGh).toHaveBeenCalledWith(
-    ["api", "user/42"],
-    expect.objectContaining({ timeout: 120_000, killSignal: "SIGKILL" }),
-  );
-  expect(fixture.readWrittenReadme()).toContain(credit("new-handle", "Original credit"));
-  expect(fixture.readWrittenReadme()).not.toContain('href="https://github.com/old-handle"');
-});
-
-it("keeps deleted seed profiles as unlinked credit on HTTP 404", async () => {
-  const fixture = mockClawtributorsFixture({
-    seedEntry: credit("gone-handle", "Gone contributor"),
-    accountLookup: null,
-  });
-
-  await importUpdateClawtributors();
-
-  expect(fixture.readWrittenReadme()).toContain(avatar("Gone contributor"));
-  expect(fixture.readWrittenReadme()).not.toContain('href="https://github.com/gone-handle"');
-});
+it.each([githubUser("new-handle", 42), null])(
+  "preserves seed credit after account lookup: %j",
+  async (accountLookup) => {
+    const alt = "Original credit";
+    const fixture = mockClawtributorsFixture({
+      seedEntry: credit("old-handle", alt),
+      accountLookup,
+    });
+    await importUpdateClawtributors();
+    expect(fixture.execPlainGh).toHaveBeenCalledWith(
+      ["api", "user/42"],
+      expect.objectContaining({ timeout: 120_000, killSignal: "SIGKILL" }),
+    );
+    expect(fixture.readWrittenReadme()).toContain(
+      accountLookup ? credit(accountLookup.login, alt) : avatar(alt),
+    );
+    expect(fixture.readWrittenReadme()).not.toContain('href="https://github.com/old-handle"');
+  },
+);
 
 it("aborts instead of unlinking credit on transient account lookup failures", async () => {
   const fixture = mockClawtributorsFixture({
@@ -210,10 +192,7 @@ it("cancels stalled avatar probe body reads at the probe timeout", async () => {
   const fixture = mockClawtributorsFixture();
   let signal: AbortSignal | undefined;
   let canceled = false;
-  let markFetchStarted!: () => void;
-  const fetchStarted = new Promise<void>((resolveStarted) => {
-    markFetchStarted = resolveStarted;
-  });
+  const { promise: fetchStarted, resolve: markFetchStarted } = Promise.withResolvers<void>();
   vi.stubGlobal("fetch", ((_url, init) => {
     signal = init?.signal ?? undefined;
     markFetchStarted();

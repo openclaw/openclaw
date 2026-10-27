@@ -1,4 +1,3 @@
-import { once } from "node:events";
 import fs from "node:fs";
 import { createServer, request, type IncomingHttpHeaders, type Server } from "node:http";
 import os from "node:os";
@@ -7,6 +6,7 @@ import { fileURLToPath } from "node:url";
 import { dispatchGatewayMethod } from "openclaw/plugin-sdk/gateway-method-runtime";
 import { resolveRuntimeWorkerUrl } from "openclaw/plugin-sdk/process-runtime";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { listenOnLoopback } from "../../test-support/hanging-loopback-server.js";
 import { createTeamReportsHttpHandler } from "./http.js";
 import { describePeriod } from "./periods.js";
 import { renderMarkdown } from "./render/markdown.js";
@@ -219,13 +219,7 @@ beforeAll(async () => {
       res.destroy(error instanceof Error ? error : new Error(String(error)));
     });
   });
-  server.listen(0, "127.0.0.1");
-  await once(server, "listening");
-  const address = server.address();
-  if (!address || typeof address === "string") {
-    throw new Error("Expected a TCP server address");
-  }
-  port = address.port;
+  port = await listenOnLoopback(server);
 });
 
 afterAll(async () => {

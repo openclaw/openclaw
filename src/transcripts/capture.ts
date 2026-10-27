@@ -49,7 +49,7 @@ export function formatTranscriptAccountId(accountId: string): string {
   return JSON.stringify(truncateUtf16Safe(accountId, ACCOUNT_ID_OUTPUT_MAX_CHARS));
 }
 
-export type TranscriptsLogger = {
+type TranscriptsLogger = {
   warn: (message: string) => void;
 };
 

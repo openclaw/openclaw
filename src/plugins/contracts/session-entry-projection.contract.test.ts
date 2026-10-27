@@ -1,16 +1,8 @@
 import path from "node:path";
-import {
-  createPluginRegistryFixture,
-  registerTestPlugin,
-} from "openclaw/plugin-sdk/plugin-test-contracts";
 // Session entry projection contract tests cover plugin session entry projection behavior.
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { afterAll, afterEach, beforeEach, describe, expect, it } from "vitest";
-import type { SessionEntry } from "../../config/sessions.js";
-import {
-  listSessionEntriesCore,
-  replaceSessionEntry,
-} from "../../config/sessions/session-accessor.js";
+import { listSessionEntriesCore } from "../../config/sessions/session-accessor.js";
 import { withTempConfig } from "../../gateway/test-temp-config.js";
 import { withEnvAsync } from "../../test-utils/env.js";
 import { useSessionStoreTempDirs } from "../../test-utils/session-state-cleanup.js";
@@ -19,9 +11,10 @@ import { clearPluginHostRuntimeState } from "../host-hook-runtime.js";
 import { patchPluginSessionExtension } from "../host-hook-state.js";
 import type { PluginJsonValue } from "../host-hooks.js";
 import { createEmptyPluginRegistry } from "../registry-empty.js";
+import { registrationFixture } from "../registry-registration.test-support.js";
 import { clearActivePluginRegistry, setActivePluginRegistry } from "../runtime.js";
-import { createPluginRecord } from "../status.test-fixtures.js";
 import { runTrustedToolPolicies } from "../trusted-tool-policy.js";
+import { seedPluginSessionEntry } from "./test-helpers/session-entry.js";
 
 const requireRecord = createRequireRecord("object", "expected-label");
 
@@ -43,35 +36,16 @@ function extensionNamespace(entry: Record<string, unknown>, pluginId: string, na
   return requireRecord(pluginExtensions[namespace], `${pluginId}.${namespace} state`);
 }
 
-function loadSessionStore(
-  storePath: string,
-  _options?: { skipCache?: boolean },
-): Record<string, SessionEntry> {
-  return Object.fromEntries(
-    listSessionEntriesCore({ agentId: "main", storePath }).map(({ sessionKey, entry }) => [
-      sessionKey,
-      entry,
-    ]),
-  );
-}
-
-async function updateSessionStore(
-  storePath: string,
-  update: (store: Record<string, SessionEntry>) => void,
-): Promise<void> {
-  const store: Record<string, SessionEntry> = {};
-  update(store);
-  for (const [sessionKey, entry] of Object.entries(store)) {
-    await replaceSessionEntry({ sessionKey, storePath }, entry);
-  }
-}
-
 const sessionDirs = useSessionStoreTempDirs(afterAll, "openclaw-host-hooks-slot-");
 
 async function withProjectionSessionStore(
   run: (fixture: {
     storePath: string;
     tempConfig: { session: { store: string } };
+    patch: (
+      params: Omit<Parameters<typeof patchPluginSessionExtension>[0], "cfg" | "sessionKey">,
+    ) => ReturnType<typeof patchPluginSessionExtension>;
+    readEntry: () => Record<string, unknown>;
   }) => Promise<void>,
 ): Promise<void> {
   const stateDir = sessionDirs.make();
@@ -87,7 +61,22 @@ async function withProjectionSessionStore(
         cfg: tempConfig,
         run: async () => {
           try {
-            await run({ storePath, tempConfig });
+            await run({
+              storePath,
+              tempConfig,
+              patch: (params) =>
+                patchPluginSessionExtension({
+                  cfg: tempConfig as never,
+                  sessionKey: "agent:main:main",
+                  ...params,
+                }),
+              readEntry: () =>
+                Object.fromEntries(
+                  listSessionEntriesCore({ agentId: "main", storePath }).map(
+                    ({ sessionKey, entry }) => [sessionKey, entry],
+                  ),
+                )["agent:main:main"] as unknown as Record<string, unknown>,
+            });
           } finally {
             // Retired hooks must finish before their state directory and config change.
             setActivePluginRegistry(createEmptyPluginRegistry());
@@ -110,132 +99,91 @@ describe("plugin session extension SessionEntry projection", () => {
   });
 
   it("mirrors projected values to SessionEntry[slotKey] and clears them on unset", async () => {
-    const { config, registry } = createPluginRegistryFixture();
-    registerTestPlugin({
-      registry,
-      config,
-      record: createPluginRecord({ id: "promoted-plugin", name: "Promoted" }),
-      register(api) {
-        api.registerSessionExtension({
-          namespace: "workflow",
-          description: "promoted workflow",
-          sessionEntrySlotKey: "approvalSnapshot",
-          sessionEntrySlotSchema: { type: "object" },
-          project: (ctx) => {
-            if (!ctx.state || typeof ctx.state !== "object" || Array.isArray(ctx.state)) {
-              return undefined;
-            }
-            const state = ctx.state as Record<string, PluginJsonValue>;
-            return { state: state.state ?? null, title: state.title ?? null };
-          },
-        });
-      },
-    });
-    setActivePluginRegistry(registry.registry);
-
-    await withProjectionSessionStore(async ({ storePath, tempConfig }) => {
-      await updateSessionStore(storePath, (store) => {
-        store["agent:main:main"] = {
-          sessionId: "session-id",
-          updatedAt: Date.now(),
-        } as unknown as SessionEntry;
+    const { registry, register } = registrationFixture();
+    register({ id: "promoted-plugin", name: "Promoted" }, (api) => {
+      api.registerSessionExtension({
+        namespace: "workflow",
+        description: "promoted workflow",
+        sessionEntrySlotKey: "approvalSnapshot",
+        sessionEntrySlotSchema: { type: "object" },
+        project: (ctx) => {
+          if (!ctx.state || typeof ctx.state !== "object" || Array.isArray(ctx.state)) {
+            return undefined;
+          }
+          const state = ctx.state as Record<string, PluginJsonValue>;
+          return { state: state.state ?? null, title: state.title ?? null };
+        },
       });
+    });
+    setActivePluginRegistry(registry);
 
-      const patchResult = await patchPluginSessionExtension({
-        cfg: tempConfig as never,
-        sessionKey: "agent:main:main",
+    await withProjectionSessionStore(async ({ storePath, patch, readEntry }) => {
+      await seedPluginSessionEntry(storePath);
+
+      const patchResult = await patch({
         pluginId: "promoted-plugin",
         namespace: "workflow",
         value: { state: "executing", title: "Deploy approval", internal: 7 },
       });
       expect(patchResult.ok).toBe(true);
-      const afterPatch = loadSessionStore(storePath, { skipCache: true });
-      expect(
-        (afterPatch["agent:main:main"] as unknown as Record<string, unknown>).approvalSnapshot,
-      ).toEqual({ state: "executing", title: "Deploy approval" });
+      const afterPatch = readEntry();
+      expect(afterPatch.approvalSnapshot).toEqual({ state: "executing", title: "Deploy approval" });
 
-      const unsetResult = await patchPluginSessionExtension({
-        cfg: tempConfig as never,
-        sessionKey: "agent:main:main",
+      const unsetResult = await patch({
         pluginId: "promoted-plugin",
         namespace: "workflow",
         unset: true,
       });
       expect(unsetResult.ok).toBe(true);
-      const afterUnset = loadSessionStore(storePath, { skipCache: true });
-      expect(
-        (afterUnset["agent:main:main"] as unknown as Record<string, unknown>).approvalSnapshot,
-      ).toBeUndefined();
+      const afterUnset = readEntry();
+      expect(afterUnset.approvalSnapshot).toBeUndefined();
     });
   });
 
   it("clears promoted SessionEntry slots when projectors fail", async () => {
-    const { config, registry } = createPluginRegistryFixture();
-    registerTestPlugin({
-      registry,
-      config,
-      record: createPluginRecord({ id: "failing-promoted-plugin", name: "Failing" }),
-      register(api) {
-        api.registerSessionExtension({
-          namespace: "workflow",
-          description: "promoted workflow",
-          sessionEntrySlotKey: "approvalSnapshot",
-          sessionEntrySlotSchema: { type: "object" },
-          project: (ctx) => {
-            const state = ctx.state as Record<string, PluginJsonValue>;
-            if (state.fail === "throw") {
-              throw new Error("projection failed");
-            }
-            if (state.fail === "promise") {
-              return Promise.resolve({ state: "async" }) as never;
-            }
-            return { state: state.state ?? null };
-          },
-        });
-      },
-    });
-    setActivePluginRegistry(registry.registry);
-
-    await withProjectionSessionStore(async ({ storePath, tempConfig }) => {
-      await updateSessionStore(storePath, (store) => {
-        store["agent:main:main"] = {
-          sessionId: "session-id",
-          updatedAt: Date.now(),
-        } as unknown as SessionEntry;
+    const { registry, register } = registrationFixture();
+    register({ id: "failing-promoted-plugin", name: "Failing" }, (api) => {
+      api.registerSessionExtension({
+        namespace: "workflow",
+        description: "promoted workflow",
+        sessionEntrySlotKey: "approvalSnapshot",
+        sessionEntrySlotSchema: { type: "object" },
+        project: (ctx) => {
+          const state = ctx.state as Record<string, PluginJsonValue>;
+          if (state.fail === "throw") {
+            throw new Error("projection failed");
+          }
+          if (state.fail === "promise") {
+            return Promise.resolve({ state: "async" }) as never;
+          }
+          return { state: state.state ?? null };
+        },
       });
+    });
+    setActivePluginRegistry(registry);
+
+    await withProjectionSessionStore(async ({ storePath, patch, readEntry }) => {
+      await seedPluginSessionEntry(storePath);
 
       await expectOkResult(
-        patchPluginSessionExtension({
-          cfg: tempConfig as never,
-          sessionKey: "agent:main:main",
+        patch({
           pluginId: "failing-promoted-plugin",
           namespace: "workflow",
           value: { state: "ready" },
         }),
         "ready patch result",
       );
-      expect(
-        (
-          loadSessionStore(storePath, { skipCache: true })["agent:main:main"] as unknown as Record<
-            string,
-            unknown
-          >
-        ).approvalSnapshot,
-      ).toEqual({ state: "ready" });
+      expect(readEntry().approvalSnapshot).toEqual({ state: "ready" });
 
       await expectOkResult(
-        patchPluginSessionExtension({
-          cfg: tempConfig as never,
-          sessionKey: "agent:main:main",
+        patch({
           pluginId: "failing-promoted-plugin",
           namespace: "workflow",
           value: { state: "bad", fail: "throw" },
         }),
         "throwing projector patch result",
       );
-      const afterThrow = loadSessionStore(storePath, { skipCache: true })[
-        "agent:main:main"
-      ] as unknown as Record<string, unknown>;
+      const afterThrow = readEntry();
       expect(afterThrow.approvalSnapshot).toBeUndefined();
       expect(extensionNamespace(afterThrow, "failing-promoted-plugin", "workflow")).toEqual({
         state: "bad",
@@ -243,37 +191,24 @@ describe("plugin session extension SessionEntry projection", () => {
       });
 
       await expectOkResult(
-        patchPluginSessionExtension({
-          cfg: tempConfig as never,
-          sessionKey: "agent:main:main",
+        patch({
           pluginId: "failing-promoted-plugin",
           namespace: "workflow",
           value: { state: "ready-again" },
         }),
         "ready-again patch result",
       );
-      expect(
-        (
-          loadSessionStore(storePath, { skipCache: true })["agent:main:main"] as unknown as Record<
-            string,
-            unknown
-          >
-        ).approvalSnapshot,
-      ).toEqual({ state: "ready-again" });
+      expect(readEntry().approvalSnapshot).toEqual({ state: "ready-again" });
 
       await expectOkResult(
-        patchPluginSessionExtension({
-          cfg: tempConfig as never,
-          sessionKey: "agent:main:main",
+        patch({
           pluginId: "failing-promoted-plugin",
           namespace: "workflow",
           value: { state: "async-bad", fail: "promise" },
         }),
         "promise projector patch result",
       );
-      const afterPromise = loadSessionStore(storePath, { skipCache: true })[
-        "agent:main:main"
-      ] as unknown as Record<string, unknown>;
+      const afterPromise = readEntry();
       expect(afterPromise.approvalSnapshot).toBeUndefined();
       expect(extensionNamespace(afterPromise, "failing-promoted-plugin", "workflow")).toEqual({
         state: "async-bad",
@@ -299,25 +234,20 @@ describe("plugin session extension SessionEntry projection", () => {
       "retired-execask": "execAsk",
       "retired-conversation-link": "conversationLink",
     };
-    const { config, registry } = createPluginRegistryFixture();
-    registerTestPlugin({
-      registry,
-      config,
-      record: createPluginRecord({ id: "slot-collision", name: "Slot Collision" }),
-      register(api) {
-        for (const [namespace, sessionEntrySlotKey] of Object.entries(reservedSlots)) {
-          api.registerSessionExtension({
-            namespace,
-            description: "reserved session field",
-            sessionEntrySlotKey,
-          });
-        }
-      },
+    const { registry, register } = registrationFixture();
+    register({ id: "slot-collision", name: "Slot Collision" }, (api) => {
+      for (const [namespace, sessionEntrySlotKey] of Object.entries(reservedSlots)) {
+        api.registerSessionExtension({
+          namespace,
+          description: "reserved session field",
+          sessionEntrySlotKey,
+        });
+      }
     });
 
-    expect(registry.registry.sessionExtensions).toHaveLength(0);
+    expect(registry.sessionExtensions).toHaveLength(0);
     expect(
-      registry.registry.diagnostics.map(({ pluginId, message }) => ({ pluginId, message })),
+      registry.diagnostics.map(({ pluginId, message }) => ({ pluginId, message })),
     ).toStrictEqual(
       Object.values(reservedSlots).map((slotKey) => ({
         pluginId: "slot-collision",
@@ -332,25 +262,20 @@ describe("plugin session extension SessionEntry projection", () => {
       "has-own": "hasOwnProperty",
       "value-of": "valueOf",
     };
-    const { config, registry } = createPluginRegistryFixture();
-    registerTestPlugin({
-      registry,
-      config,
-      record: createPluginRecord({ id: "object-slot-collision", name: "Object Slot Collision" }),
-      register(api) {
-        for (const [namespace, sessionEntrySlotKey] of Object.entries(reservedSlots)) {
-          api.registerSessionExtension({
-            namespace,
-            description: "bad object slot",
-            sessionEntrySlotKey,
-          });
-        }
-      },
+    const { registry, register } = registrationFixture();
+    register({ id: "object-slot-collision", name: "Object Slot Collision" }, (api) => {
+      for (const [namespace, sessionEntrySlotKey] of Object.entries(reservedSlots)) {
+        api.registerSessionExtension({
+          namespace,
+          description: "bad object slot",
+          sessionEntrySlotKey,
+        });
+      }
     });
 
-    expect(registry.registry.sessionExtensions).toHaveLength(0);
+    expect(registry.sessionExtensions).toHaveLength(0);
     expect(
-      registry.registry.diagnostics.map(({ pluginId, message }) => ({ pluginId, message })),
+      registry.diagnostics.map(({ pluginId, message }) => ({ pluginId, message })),
     ).toStrictEqual(
       Object.values(reservedSlots).map((slotKey) => ({
         pluginId: "object-slot-collision",
@@ -360,42 +285,30 @@ describe("plugin session extension SessionEntry projection", () => {
   });
 
   it("rejects duplicate promoted SessionEntry slot keys across registrations", () => {
-    const { config, registry } = createPluginRegistryFixture();
-    registerTestPlugin({
-      registry,
-      config,
-      record: createPluginRecord({ id: "slot-owner", name: "Slot Owner" }),
-      register(api) {
-        api.registerSessionExtension({
-          namespace: "workflow",
-          description: "first promoted slot",
-          sessionEntrySlotKey: "approvalSnapshot",
-        });
-        api.registerSessionExtension({
-          namespace: "recovery",
-          description: "same plugin duplicate slot",
-          sessionEntrySlotKey: " approvalSnapshot ",
-        });
-      },
+    const { registry, register } = registrationFixture();
+    register({ id: "slot-owner", name: "Slot Owner" }, (api) => {
+      api.registerSessionExtension({
+        namespace: "workflow",
+        description: "first promoted slot",
+        sessionEntrySlotKey: "approvalSnapshot",
+      });
+      api.registerSessionExtension({
+        namespace: "recovery",
+        description: "same plugin duplicate slot",
+        sessionEntrySlotKey: " approvalSnapshot ",
+      });
     });
-    registerTestPlugin({
-      registry,
-      config,
-      record: createPluginRecord({ id: "slot-colliding-plugin", name: "Slot Colliding" }),
-      register(api) {
-        api.registerSessionExtension({
-          namespace: "workflow",
-          description: "cross-plugin duplicate slot",
-          sessionEntrySlotKey: "approvalSnapshot",
-        });
-      },
+    register({ id: "slot-colliding-plugin", name: "Slot Colliding" }, (api) => {
+      api.registerSessionExtension({
+        namespace: "workflow",
+        description: "cross-plugin duplicate slot",
+        sessionEntrySlotKey: "approvalSnapshot",
+      });
     });
 
-    expect(registry.registry.sessionExtensions).toHaveLength(1);
-    expect(registry.registry.sessionExtensions[0]?.extension.sessionEntrySlotKey).toBe(
-      "approvalSnapshot",
-    );
-    const diagnostics = registry.registry.diagnostics.map(({ pluginId, message }) => ({
+    expect(registry.sessionExtensions).toHaveLength(1);
+    expect(registry.sessionExtensions[0]?.extension.sessionEntrySlotKey).toBe("approvalSnapshot");
+    const diagnostics = registry.diagnostics.map(({ pluginId, message }) => ({
       pluginId,
       message,
     }));
@@ -412,32 +325,20 @@ describe("plugin session extension SessionEntry projection", () => {
   });
 
   it("clears promoted SessionEntry slots with plugin-owned session state", async () => {
-    const { config, registry } = createPluginRegistryFixture();
-    registerTestPlugin({
-      registry,
-      config,
-      record: createPluginRecord({ id: "cleanup-promoted-plugin", name: "Cleanup" }),
-      register(api) {
-        api.registerSessionExtension({
-          namespace: "workflow",
-          description: "promoted workflow",
-          sessionEntrySlotKey: "approvalSnapshot",
-        });
-      },
-    });
-    setActivePluginRegistry(registry.registry);
-
-    await withProjectionSessionStore(async ({ storePath, tempConfig }) => {
-      await updateSessionStore(storePath, (store) => {
-        store["agent:main:main"] = {
-          sessionId: "session-id",
-          updatedAt: Date.now(),
-        } as unknown as SessionEntry;
+    const { registry, register } = registrationFixture();
+    register({ id: "cleanup-promoted-plugin", name: "Cleanup" }, (api) => {
+      api.registerSessionExtension({
+        namespace: "workflow",
+        description: "promoted workflow",
+        sessionEntrySlotKey: "approvalSnapshot",
       });
+    });
+    setActivePluginRegistry(registry);
+
+    await withProjectionSessionStore(async ({ storePath, tempConfig, patch, readEntry }) => {
+      await seedPluginSessionEntry(storePath);
       await expectOkResult(
-        patchPluginSessionExtension({
-          cfg: tempConfig as never,
-          sessionKey: "agent:main:main",
+        patch({
           pluginId: "cleanup-promoted-plugin",
           namespace: "workflow",
           value: { state: "waiting" },
@@ -448,47 +349,34 @@ describe("plugin session extension SessionEntry projection", () => {
       await expectNoCleanupFailures(
         runPluginHostCleanup({
           cfg: tempConfig as never,
-          registry: registry.registry,
+          registry,
           pluginId: "cleanup-promoted-plugin",
           reason: "delete",
         }),
         "cleanup result",
       );
 
-      const stored = loadSessionStore(storePath, { skipCache: true });
-      const entry = stored["agent:main:main"] as unknown as Record<string, unknown>;
+      const entry = readEntry();
       expect(entry.pluginExtensions).toBeUndefined();
       expect(entry.approvalSnapshot).toBeUndefined();
     });
   });
 
   it("uses the active registry to clear promoted slots when cleanup omits registry", async () => {
-    const { config, registry } = createPluginRegistryFixture();
-    registerTestPlugin({
-      registry,
-      config,
-      record: createPluginRecord({ id: "active-cleanup-promoted-plugin", name: "Cleanup" }),
-      register(api) {
-        api.registerSessionExtension({
-          namespace: "workflow",
-          description: "promoted workflow",
-          sessionEntrySlotKey: "approvalSnapshot",
-        });
-      },
-    });
-    setActivePluginRegistry(registry.registry);
-
-    await withProjectionSessionStore(async ({ storePath, tempConfig }) => {
-      await updateSessionStore(storePath, (store) => {
-        store["agent:main:main"] = {
-          sessionId: "session-id",
-          updatedAt: Date.now(),
-        } as unknown as SessionEntry;
+    const { registry, register } = registrationFixture();
+    register({ id: "active-cleanup-promoted-plugin", name: "Cleanup" }, (api) => {
+      api.registerSessionExtension({
+        namespace: "workflow",
+        description: "promoted workflow",
+        sessionEntrySlotKey: "approvalSnapshot",
       });
+    });
+    setActivePluginRegistry(registry);
+
+    await withProjectionSessionStore(async ({ storePath, tempConfig, patch, readEntry }) => {
+      await seedPluginSessionEntry(storePath);
       await expectOkResult(
-        patchPluginSessionExtension({
-          cfg: tempConfig as never,
-          sessionKey: "agent:main:main",
+        patch({
           pluginId: "active-cleanup-promoted-plugin",
           namespace: "workflow",
           value: { state: "waiting" },
@@ -505,52 +393,34 @@ describe("plugin session extension SessionEntry projection", () => {
         "active cleanup result",
       );
 
-      const stored = loadSessionStore(storePath, { skipCache: true });
-      const entry = stored["agent:main:main"] as unknown as Record<string, unknown>;
+      const entry = readEntry();
       expect(entry.pluginExtensions).toBeUndefined();
       expect(entry.approvalSnapshot).toBeUndefined();
     });
   });
 
   it("clears stale promoted SessionEntry slots on plugin restart without deleting extension state", async () => {
-    const previousFixture = createPluginRegistryFixture();
-    registerTestPlugin({
-      registry: previousFixture.registry,
-      config: previousFixture.config,
-      record: createPluginRecord({ id: "restart-promoted-plugin", name: "Restart" }),
-      register(api) {
-        api.registerSessionExtension({
-          namespace: "workflow",
-          description: "promoted workflow",
-          sessionEntrySlotKey: "approvalSnapshot",
-        });
-      },
-    });
-    const nextFixture = createPluginRegistryFixture();
-    registerTestPlugin({
-      registry: nextFixture.registry,
-      config: nextFixture.config,
-      record: createPluginRecord({ id: "restart-promoted-plugin", name: "Restart" }),
-      register(api) {
-        api.registerSessionExtension({
-          namespace: "workflow",
-          description: "promoted workflow",
-        });
-      },
-    });
-    setActivePluginRegistry(previousFixture.registry.registry);
-
-    await withProjectionSessionStore(async ({ storePath, tempConfig }) => {
-      await updateSessionStore(storePath, (store) => {
-        store["agent:main:main"] = {
-          sessionId: "session-id",
-          updatedAt: Date.now(),
-        } as unknown as SessionEntry;
+    const previousFixture = registrationFixture();
+    previousFixture.register({ id: "restart-promoted-plugin", name: "Restart" }, (api) => {
+      api.registerSessionExtension({
+        namespace: "workflow",
+        description: "promoted workflow",
+        sessionEntrySlotKey: "approvalSnapshot",
       });
+    });
+    const nextFixture = registrationFixture();
+    nextFixture.register({ id: "restart-promoted-plugin", name: "Restart" }, (api) => {
+      api.registerSessionExtension({
+        namespace: "workflow",
+        description: "promoted workflow",
+      });
+    });
+    setActivePluginRegistry(previousFixture.registry);
+
+    await withProjectionSessionStore(async ({ storePath, tempConfig, patch, readEntry }) => {
+      await seedPluginSessionEntry(storePath);
       await expectOkResult(
-        patchPluginSessionExtension({
-          cfg: tempConfig as never,
-          sessionKey: "agent:main:main",
+        patch({
           pluginId: "restart-promoted-plugin",
           namespace: "workflow",
           value: { state: "waiting" },
@@ -561,14 +431,13 @@ describe("plugin session extension SessionEntry projection", () => {
       await expectNoCleanupFailures(
         createPluginHostRegistryRetirement({
           cfg: tempConfig as never,
-          previousRegistry: previousFixture.registry.registry,
-          nextRegistry: nextFixture.registry.registry,
+          previousRegistry: previousFixture.registry,
+          nextRegistry: nextFixture.registry,
         })(),
         "restart cleanup result",
       );
 
-      const stored = loadSessionStore(storePath, { skipCache: true });
-      const entry = stored["agent:main:main"] as unknown as Record<string, unknown>;
+      const entry = readEntry();
       expect(entry.approvalSnapshot).toBeUndefined();
       expect(entry.pluginExtensionSlotKeys).toBeUndefined();
       expect(entry.pluginExtensions).toEqual({
@@ -580,54 +449,37 @@ describe("plugin session extension SessionEntry projection", () => {
   });
 
   it("clears only stale promoted SessionEntry slots on mixed plugin restart", async () => {
-    const previousFixture = createPluginRegistryFixture();
-    registerTestPlugin({
-      registry: previousFixture.registry,
-      config: previousFixture.config,
-      record: createPluginRecord({ id: "restart-mixed-plugin", name: "Restart" }),
-      register(api) {
-        api.registerSessionExtension({
-          namespace: "workflow",
-          description: "promoted workflow",
-          sessionEntrySlotKey: "approvalSnapshot",
-        });
-        api.registerSessionExtension({
-          namespace: "legacy",
-          description: "legacy promoted workflow",
-          sessionEntrySlotKey: "legacyApprovalSnapshot",
-        });
-      },
-    });
-    const nextFixture = createPluginRegistryFixture();
-    registerTestPlugin({
-      registry: nextFixture.registry,
-      config: nextFixture.config,
-      record: createPluginRecord({ id: "restart-mixed-plugin", name: "Restart" }),
-      register(api) {
-        api.registerSessionExtension({
-          namespace: "workflow",
-          description: "promoted workflow",
-          sessionEntrySlotKey: "approvalSnapshot",
-        });
-        api.registerSessionExtension({
-          namespace: "legacy",
-          description: "legacy workflow",
-        });
-      },
-    });
-    setActivePluginRegistry(previousFixture.registry.registry);
-
-    await withProjectionSessionStore(async ({ storePath, tempConfig }) => {
-      await updateSessionStore(storePath, (store) => {
-        store["agent:main:main"] = {
-          sessionId: "session-id",
-          updatedAt: Date.now(),
-        } as unknown as SessionEntry;
+    const previousFixture = registrationFixture();
+    previousFixture.register({ id: "restart-mixed-plugin", name: "Restart" }, (api) => {
+      api.registerSessionExtension({
+        namespace: "workflow",
+        description: "promoted workflow",
+        sessionEntrySlotKey: "approvalSnapshot",
       });
+      api.registerSessionExtension({
+        namespace: "legacy",
+        description: "legacy promoted workflow",
+        sessionEntrySlotKey: "legacyApprovalSnapshot",
+      });
+    });
+    const nextFixture = registrationFixture();
+    nextFixture.register({ id: "restart-mixed-plugin", name: "Restart" }, (api) => {
+      api.registerSessionExtension({
+        namespace: "workflow",
+        description: "promoted workflow",
+        sessionEntrySlotKey: "approvalSnapshot",
+      });
+      api.registerSessionExtension({
+        namespace: "legacy",
+        description: "legacy workflow",
+      });
+    });
+    setActivePluginRegistry(previousFixture.registry);
+
+    await withProjectionSessionStore(async ({ storePath, tempConfig, patch, readEntry }) => {
+      await seedPluginSessionEntry(storePath);
       await expectOkResult(
-        patchPluginSessionExtension({
-          cfg: tempConfig as never,
-          sessionKey: "agent:main:main",
+        patch({
           pluginId: "restart-mixed-plugin",
           namespace: "workflow",
           value: { state: "waiting" },
@@ -635,9 +487,7 @@ describe("plugin session extension SessionEntry projection", () => {
         "mixed restart workflow patch result",
       );
       await expectOkResult(
-        patchPluginSessionExtension({
-          cfg: tempConfig as never,
-          sessionKey: "agent:main:main",
+        patch({
           pluginId: "restart-mixed-plugin",
           namespace: "legacy",
           value: { state: "legacy" },
@@ -648,14 +498,13 @@ describe("plugin session extension SessionEntry projection", () => {
       await expectNoCleanupFailures(
         createPluginHostRegistryRetirement({
           cfg: tempConfig as never,
-          previousRegistry: previousFixture.registry.registry,
-          nextRegistry: nextFixture.registry.registry,
+          previousRegistry: previousFixture.registry,
+          nextRegistry: nextFixture.registry,
         })(),
         "mixed restart cleanup result",
       );
 
-      const stored = loadSessionStore(storePath, { skipCache: true });
-      const entry = stored["agent:main:main"] as unknown as Record<string, unknown>;
+      const entry = readEntry();
       expect(entry.approvalSnapshot).toEqual({ state: "waiting" });
       expect(entry.legacyApprovalSnapshot).toBeUndefined();
       expect(entry.pluginExtensionSlotKeys).toEqual({
@@ -673,45 +522,28 @@ describe("plugin session extension SessionEntry projection", () => {
   });
 
   it("preserves promoted SessionEntry slots on plugin restart when the slot is still declared", async () => {
-    const previousFixture = createPluginRegistryFixture();
-    registerTestPlugin({
-      registry: previousFixture.registry,
-      config: previousFixture.config,
-      record: createPluginRecord({ id: "restart-preserved-plugin", name: "Restart" }),
-      register(api) {
-        api.registerSessionExtension({
-          namespace: "workflow",
-          description: "promoted workflow",
-          sessionEntrySlotKey: "approvalSnapshot",
-        });
-      },
-    });
-    const nextFixture = createPluginRegistryFixture();
-    registerTestPlugin({
-      registry: nextFixture.registry,
-      config: nextFixture.config,
-      record: createPluginRecord({ id: "restart-preserved-plugin", name: "Restart" }),
-      register(api) {
-        api.registerSessionExtension({
-          namespace: "workflow",
-          description: "promoted workflow",
-          sessionEntrySlotKey: "approvalSnapshot",
-        });
-      },
-    });
-    setActivePluginRegistry(previousFixture.registry.registry);
-
-    await withProjectionSessionStore(async ({ storePath, tempConfig }) => {
-      await updateSessionStore(storePath, (store) => {
-        store["agent:main:main"] = {
-          sessionId: "session-id",
-          updatedAt: Date.now(),
-        } as unknown as SessionEntry;
+    const previousFixture = registrationFixture();
+    previousFixture.register({ id: "restart-preserved-plugin", name: "Restart" }, (api) => {
+      api.registerSessionExtension({
+        namespace: "workflow",
+        description: "promoted workflow",
+        sessionEntrySlotKey: "approvalSnapshot",
       });
+    });
+    const nextFixture = registrationFixture();
+    nextFixture.register({ id: "restart-preserved-plugin", name: "Restart" }, (api) => {
+      api.registerSessionExtension({
+        namespace: "workflow",
+        description: "promoted workflow",
+        sessionEntrySlotKey: "approvalSnapshot",
+      });
+    });
+    setActivePluginRegistry(previousFixture.registry);
+
+    await withProjectionSessionStore(async ({ storePath, tempConfig, patch, readEntry }) => {
+      await seedPluginSessionEntry(storePath);
       await expectOkResult(
-        patchPluginSessionExtension({
-          cfg: tempConfig as never,
-          sessionKey: "agent:main:main",
+        patch({
           pluginId: "restart-preserved-plugin",
           namespace: "workflow",
           value: { state: "waiting" },
@@ -722,14 +554,13 @@ describe("plugin session extension SessionEntry projection", () => {
       await expectNoCleanupFailures(
         createPluginHostRegistryRetirement({
           cfg: tempConfig as never,
-          previousRegistry: previousFixture.registry.registry,
-          nextRegistry: nextFixture.registry.registry,
+          previousRegistry: previousFixture.registry,
+          nextRegistry: nextFixture.registry,
         })(),
         "preserved restart cleanup result",
       );
 
-      const stored = loadSessionStore(storePath, { skipCache: true });
-      const entry = stored["agent:main:main"] as unknown as Record<string, unknown>;
+      const entry = readEntry();
       expect(entry.approvalSnapshot).toEqual({ state: "waiting" });
       expect(entry.pluginExtensionSlotKeys).toEqual({
         "restart-preserved-plugin": {
@@ -746,23 +577,19 @@ describe("plugin session extension SessionEntry projection", () => {
 
   it("clears persisted promoted slots when registry metadata is unavailable", async () => {
     setActivePluginRegistry(createEmptyPluginRegistry());
-    await withProjectionSessionStore(async ({ storePath, tempConfig }) => {
-      await updateSessionStore(storePath, (store) => {
-        store["agent:main:main"] = {
-          sessionId: "session-id",
-          updatedAt: Date.now(),
-          pluginExtensions: {
-            "removed-promoted-plugin": {
-              workflow: { state: "stale" },
-            },
+    await withProjectionSessionStore(async ({ storePath, tempConfig, readEntry }) => {
+      await seedPluginSessionEntry(storePath, {
+        pluginExtensions: {
+          "removed-promoted-plugin": {
+            workflow: { state: "stale" },
           },
-          pluginExtensionSlotKeys: {
-            "removed-promoted-plugin": {
-              workflow: "approvalSnapshot",
-            },
+        },
+        pluginExtensionSlotKeys: {
+          "removed-promoted-plugin": {
+            workflow: "approvalSnapshot",
           },
-          approvalSnapshot: { state: "stale" },
-        } as unknown as SessionEntry;
+        },
+        approvalSnapshot: { state: "stale" },
       });
 
       await expectNoCleanupFailures(
@@ -774,8 +601,7 @@ describe("plugin session extension SessionEntry projection", () => {
         "metadata cleanup result",
       );
 
-      const stored = loadSessionStore(storePath, { skipCache: true });
-      const entry = stored["agent:main:main"] as unknown as Record<string, unknown>;
+      const entry = readEntry();
       expect(entry.approvalSnapshot).toBeUndefined();
       expect(entry.pluginExtensionSlotKeys).toBeUndefined();
       expect(entry.pluginExtensions).toBeUndefined();
@@ -785,16 +611,14 @@ describe("plugin session extension SessionEntry projection", () => {
   it("exposes scoped session extension reads to trusted tool policies", async () => {
     const seen: unknown[] = [];
     const seenConfig: unknown[] = [];
-    const { config, registry } = createPluginRegistryFixture();
-    registerTestPlugin({
-      registry,
-      config,
-      record: createPluginRecord({
+    const { registry, register } = registrationFixture();
+    register(
+      {
         id: "policy-plugin",
         name: "Policy Plugin",
         origin: "bundled",
-      }),
-      register(api) {
+      },
+      (api) => {
         api.registerSessionExtension({
           namespace: "policy",
           description: "policy state",
@@ -815,20 +639,13 @@ describe("plugin session extension SessionEntry projection", () => {
           },
         });
       },
-    });
-    setActivePluginRegistry(registry.registry);
+    );
+    setActivePluginRegistry(registry);
 
-    await withProjectionSessionStore(async ({ storePath, tempConfig }) => {
-      await updateSessionStore(storePath, (store) => {
-        store["agent:main:main"] = {
-          sessionId: "session-id",
-          updatedAt: Date.now(),
-        } as unknown as SessionEntry;
-      });
+    await withProjectionSessionStore(async ({ storePath, tempConfig, patch }) => {
+      await seedPluginSessionEntry(storePath);
       await expectOkResult(
-        patchPluginSessionExtension({
-          cfg: tempConfig as never,
-          sessionKey: "agent:main:main",
+        patch({
           pluginId: "policy-plugin",
           namespace: "policy",
           value: { gate: "open" },
@@ -836,9 +653,7 @@ describe("plugin session extension SessionEntry projection", () => {
         "policy patch result",
       );
       await expectOkResult(
-        patchPluginSessionExtension({
-          cfg: tempConfig as never,
-          sessionKey: "agent:main:main",
+        patch({
           pluginId: "policy-plugin",
           namespace: "second",
           value: { gate: "second" },
@@ -880,37 +695,24 @@ describe("plugin session extension SessionEntry projection", () => {
   });
 
   it("does not touch top-level SessionEntry slots when sessionEntrySlotKey is omitted", async () => {
-    const { config, registry } = createPluginRegistryFixture();
-    registerTestPlugin({
-      registry,
-      config,
-      record: createPluginRecord({ id: "non-promoted-plugin", name: "Non" }),
-      register(api) {
-        api.registerSessionExtension({
-          namespace: "workflow",
-          description: "non-promoted workflow",
-        });
-      },
-    });
-    setActivePluginRegistry(registry.registry);
-
-    await withProjectionSessionStore(async ({ storePath, tempConfig }) => {
-      await updateSessionStore(storePath, (store) => {
-        store["agent:main:main"] = {
-          sessionId: "session-id",
-          updatedAt: Date.now(),
-        } as unknown as SessionEntry;
+    const { registry, register } = registrationFixture();
+    register({ id: "non-promoted-plugin", name: "Non" }, (api) => {
+      api.registerSessionExtension({
+        namespace: "workflow",
+        description: "non-promoted workflow",
       });
-      const result = await patchPluginSessionExtension({
-        cfg: tempConfig as never,
-        sessionKey: "agent:main:main",
+    });
+    setActivePluginRegistry(registry);
+
+    await withProjectionSessionStore(async ({ storePath, patch, readEntry }) => {
+      await seedPluginSessionEntry(storePath);
+      const result = await patch({
         pluginId: "non-promoted-plugin",
         namespace: "workflow",
         value: { state: "executing" },
       });
       expect(result.ok).toBe(true);
-      const stored = loadSessionStore(storePath, { skipCache: true });
-      const entry = stored["agent:main:main"] as unknown as Record<string, unknown>;
+      const entry = readEntry();
       expect(entry.approvalSnapshot).toBeUndefined();
     });
   });

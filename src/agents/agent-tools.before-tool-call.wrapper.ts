@@ -1,3 +1,7 @@
+import {
+  appendToolLoopWarning,
+  attachInternalToolExecutionPreparer,
+} from "../../packages/agent-core/src/internal-hooks.js";
 /**
  * Owns tool preparation/finalization, adjusted-param replay state, terminal
  * results, diagnostics around execution, and wrapper metadata.
@@ -11,7 +15,6 @@ import {
   createChildDiagnosticTraceContext,
   freezeDiagnosticTraceContext,
 } from "../infra/diagnostic-trace-context.js";
-import { pruneMapToMaxSize } from "../infra/map-size.js";
 import { captureDiagnosticToolProgress } from "../logging/diagnostic-run-activity.js";
 import { getPluginToolMeta } from "../plugins/tool-metadata.js";
 import { copyBeforeToolCallWrapperMetadata } from "./agent-tool-metadata.js";
@@ -41,10 +44,10 @@ import {
 } from "./agent-tools.before-tool-call.diagnostics.js";
 import { runBeforeToolCallHook } from "./agent-tools.before-tool-call.policy.js";
 import {
-  adjustedParamsByToolCallId,
   buildAdjustedParamsKey,
   clearTrackedToolExecution,
   preExecutionBlockedToolCallIds,
+  recordAdjustedParamsForToolCall,
   recordStructuredReplaySafeToolCall,
   recordToolExecutionStarted,
   recordToolExecutionTracked,
@@ -78,11 +81,9 @@ import {
   normalizeCodeModeExecBeforeHookParams,
   reconcileCodeModeExecBeforeHookParams,
 } from "./code-mode-control-tools.js";
+import { createGatewayToolPolicyAssertion } from "./gateway-tool-policy.js";
 import { captureAgentPluginRuntimeRefresh } from "./plugin-runtime-refresh.js";
-import {
-  appendToolLoopWarning,
-  attachInternalToolExecutionPreparer,
-} from "./runtime/internal-hooks.js";
+import { markToolExecutionRefused } from "./tool-effect-receipt.js";
 import { buildToolMutationState } from "./tool-mutation.js";
 import { normalizeToolPolicyName } from "./tool-policy.js";
 import {
@@ -95,7 +96,7 @@ import type { AnyAgentTool } from "./tools/common.js";
 import { getGatewayToolCallerIdentity } from "./tools/gateway-caller-context.js";
 
 type ForwardedToolExecution = (...args: unknown[]) => ReturnType<AnyAgentTool["execute"]>;
-const MAX_TRACKED_ADJUSTED_PARAMS = 1024;
+const MAX_TRACKED_TOOL_CALL_IDS = 1024;
 const INTERNAL_DISPOSED_RESULT = {
   content: [],
   details: { status: "skipped", deniedReason: "internal-dispose" },
@@ -191,25 +192,6 @@ export function getBeforeToolCallFailureDisposition(
   }
 }
 
-/** Remember hook-adjusted params for later adapter-side execution. */
-export function recordAdjustedParamsForToolCall(
-  toolCallId: string | undefined,
-  params: unknown,
-  runId?: string,
-): void {
-  if (!toolCallId) {
-    return;
-  }
-  let snapshot: unknown;
-  try {
-    snapshot = structuredClone(params);
-  } catch {
-    return;
-  }
-  adjustedParamsByToolCallId.set(buildAdjustedParamsKey({ runId, toolCallId }), snapshot);
-  pruneMapToMaxSize(adjustedParamsByToolCallId, MAX_TRACKED_ADJUSTED_PARAMS);
-}
-
 /** Record that one concrete core-owned tool call may use structured replay classification. */
 export function recordStructuredReplayTrustForToolCall(
   toolCallId: string | undefined,
@@ -221,14 +203,6 @@ export function recordStructuredReplayTrustForToolCall(
   }
   recordStructuredReplaySafeToolCall(toolCallId, runId);
   pruneTrackedToolCallIds(structuredReplaySafeToolCallIds);
-}
-
-const preExecutionBlockedToolResults = new WeakSet<object>();
-
-export function isPreExecutionBlockedToolResult(result: unknown): boolean {
-  return (
-    result !== null && typeof result === "object" && preExecutionBlockedToolResults.has(result)
-  );
 }
 
 export function buildBlockedToolResult(params: {
@@ -246,8 +220,7 @@ export function buildBlockedToolResult(params: {
       reason: params.reason,
     },
   };
-  preExecutionBlockedToolResults.add(result);
-  return result;
+  return markToolExecutionRefused(result, { kind: "blocked", reason: params.reason });
 }
 
 export function wrapToolWithBeforeToolCallHook(
@@ -256,6 +229,7 @@ export function wrapToolWithBeforeToolCallHook(
   options: Partial<BeforeToolCallDiagnosticOptions> = {},
 ): AnyAgentTool {
   const execute = tool.execute;
+  const assertGatewayToolPolicy = createGatewayToolPolicyAssertion(tool, inputContext?.config);
   const refresh = captureAgentPluginRuntimeRefresh();
   // Only the exact host wait control may drain work admitted before a reload.
   const assertAgentPluginRuntimeCurrent =
@@ -495,6 +469,7 @@ export function wrapToolWithBeforeToolCallHook(
               // Charge the invocation after the source read, at the effect boundary.
               signal?.throwIfAborted();
               assertAgentPluginRuntimeCurrent();
+              assertGatewayToolPolicy(executeParams);
               admitExecution?.();
               onImplementationStart?.();
               recordAdjustedParamsForToolCall(toolCallId, executeParams, ctx?.runId);
@@ -543,7 +518,13 @@ export function wrapToolWithBeforeToolCallHook(
           ctx,
         });
         if (skillMatch && terminalDiagnostic.type === "tool.execution.completed") {
-          recordSkillUsed({ ctx, match: skillMatch, toolName: normalizedToolName, toolCallId });
+          recordSkillUsed({
+            ctx,
+            match: skillMatch,
+            toolName: normalizedToolName,
+            toolCallId,
+            result: signal?.aborted ? undefined : result,
+          });
         }
         if (hookOptions.emitDiagnostics) {
           emitTrustedDiagnosticEventWithPrivateData(
@@ -689,7 +670,7 @@ function recordPreExecutionBlockedToolCall(toolCallId?: string, runId?: string):
 }
 
 function pruneTrackedToolCallIds(ids: Set<string>): void {
-  while (ids.size > MAX_TRACKED_ADJUSTED_PARAMS) {
+  while (ids.size > MAX_TRACKED_TOOL_CALL_IDS) {
     const oldest = ids.values().next().value;
     if (!oldest) {
       break;

@@ -2,7 +2,8 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { Compile } from "typebox/compile";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { PluginsListResultSchema } from "../../../packages/gateway-protocol/src/schema/plugins.js";
-import { encodePluginDiscoveryId } from "../../plugins/catalog-discovery.js";
+import { pluginCatalogId } from "../../plugins/catalog-discovery.js";
+import { createRemotePluginCatalogFixture } from "../../plugins/catalog-discovery.test-support.js";
 import { emptyInstalledPluginComponents } from "../../plugins/installed-plugin-components.js";
 import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
 import {
@@ -10,6 +11,7 @@ import {
   withPluginRuntimeRegistryScope,
 } from "../../plugins/runtime/gateway-request-scope.js";
 import { warnPluginSdkDeprecation } from "../../plugins/sdk-deprecation.js";
+import { createPluginRecord } from "../../plugins/status.test-helpers.js";
 import type { RespondFn } from "./types.js";
 
 const { managementMocks, searchMock, catalogMocks, readers } = vi.hoisted(() => ({
@@ -37,10 +39,14 @@ vi.mock("../../infra/clawhub-plugin-catalog.js", () => ({
 
 const { pluginsHandlers } = await import("./plugins.js");
 
-async function callHandler(method: string, params: Record<string, unknown>) {
+async function callHandler(
+  method: string,
+  params: Record<string, unknown>,
+  registry = createEmptyPluginRegistry(),
+) {
   const respond = vi.fn<RespondFn>();
   const handler = expectDefined(pluginsHandlers[method], method);
-  await withPluginRuntimeRegistryScope(createEmptyPluginRegistry(), () =>
+  await withPluginRuntimeRegistryScope(registry, () =>
     handler({
       params,
       req: {} as never,
@@ -145,6 +151,24 @@ describe("plugin management Gateway handlers", () => {
     } finally {
       warning.mockRestore();
     }
+  });
+
+  it("keeps an astral plugin runtime error whole at the report cap", async () => {
+    const prefix = "a".repeat(1999);
+    inventory([{ ...workboard, id: "broken-plugin", state: "error" }]);
+    const registry = createEmptyPluginRegistry();
+    registry.plugins.push(
+      createPluginRecord({
+        id: "broken-plugin",
+        status: "error",
+        error: `${prefix}\u{1F600}tail`,
+      }),
+    );
+    const result = await callHandler("plugins.list", {}, registry);
+    expect(result.ok).toBe(true);
+    expect(result.response).toMatchObject({
+      plugins: [{ id: "broken-plugin", runtime: { state: "unloaded", error: prefix } }],
+    });
   });
 
   it.each([
@@ -488,14 +512,7 @@ describe("plugin management Gateway handlers", () => {
   ])(
     "keeps local results private in $intent search with attribution $searchSource",
     async ({ intent, searchSource }) => {
-      const remote = {
-        packageName: "@alice/memory-plus",
-        displayName: "Memory Plus",
-        family: "code-plugin" as const,
-        isOfficial: false,
-        categories: ["memory"],
-        runtimeId: "memory-plus",
-      };
+      const remote = createRemotePluginCatalogFixture();
       catalogMocks.browse.mockResolvedValue({ items: [remote] });
       inventory([memoryBundle]);
 
@@ -601,7 +618,7 @@ vi.mock("../../infra/clawhub-plugin-skills.js", () => ({
 describe("plugin skill read Gateway boundary", () => {
   const catalogSkill = {
     source: "catalog",
-    catalogId: encodePluginDiscoveryId("@example/plugin"),
+    catalogId: pluginCatalogId({ id: "example", clawhubPackage: "@example/plugin" }),
     version: "1.0.0",
     skillName: "guide",
   };

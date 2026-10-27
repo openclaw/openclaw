@@ -3,8 +3,10 @@ import {
   extractAssistantTextForPhase,
   resolveAssistantMessagePhase,
 } from "../../../../src/shared/chat-message-content.js";
+import type { MessageGroup } from "../../lib/chat/chat-types.ts";
 import { extractTextCached } from "../../lib/chat/message-extract.ts";
 import { isKeyedAssistantStreamFallbackMessage } from "./chat-thread-run-identity.ts";
+import { assistantGroupIsIndependentBoundary } from "./chat-turn-boundary.ts";
 import { extractMessageMediaText } from "./components/chat-message-media.ts";
 import { readLiveTerminalDisposition } from "./terminal-message-identity.ts";
 
@@ -73,4 +75,38 @@ export function assistantMessageCanOwnTurnActions(message: unknown, explicitOnly
     return false;
   }
   return !explicitOnly || phase === "final_answer" || stopReason === "stop";
+}
+
+export function assistantMessageKind(
+  message: unknown,
+  visibleContent: MessageGroup["visibleContent"],
+) {
+  if (isProviderVoiceTranscript(message)) {
+    return "voice-transcript";
+  }
+  return (
+    resolveAssistantReplyPhase(message) ??
+    (asRecord(message)?.stopReason === "toolUse"
+      ? "commentary"
+      : visibleContent === "none"
+        ? "activity"
+        : "reply")
+  );
+}
+
+/** A group holding the message that ended its run in failure; it marks where the run stopped. */
+export function groupEndsRunInFailure(group: MessageGroup): boolean {
+  return group.messages.some(
+    ({ message }) =>
+      assistantMessageIsInterrupted(message) || asRecord(message)?.stopReason === "error",
+  );
+}
+
+export function assistantGroupCanOwnActiveRunStatus(group: MessageGroup): boolean {
+  return (
+    group.role.toLowerCase() === "assistant" &&
+    !assistantGroupIsIndependentBoundary(group) &&
+    !group.messages.some(({ message }) => isProviderVoiceTranscript(message)) &&
+    (group.visibleContent === "text" || group.visibleContent === "non-text")
+  );
 }

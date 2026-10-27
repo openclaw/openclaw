@@ -5,6 +5,7 @@ import ai.openclaw.app.ChatDraftPlacement
 import ai.openclaw.app.ChatShareDraft
 import ai.openclaw.app.SharedAttachment
 import ai.openclaw.app.SharedAttachmentKind
+import ai.openclaw.app.chat.CHAT_COMPOSER_MAX_IMAGE_DECODED_BYTES
 import ai.openclaw.app.chat.ChatComposerOwner
 import ai.openclaw.app.chat.GatewayDefaultAgentOwner
 import ai.openclaw.app.chat.VoiceNoteRecorderState

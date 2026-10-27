@@ -7,6 +7,7 @@ import { hasValidMentionReferences, type MentionCommittedInput } from "./mention
 import { formatMentionExcerpt } from "./mention-inbox-presentation.js";
 import {
   indexMentionItem,
+  mentionTargetKey,
   trimMentionItems,
   type createMentionMutationProjection,
   type InboxState,
@@ -125,6 +126,7 @@ export function createMentionInputRecorder(params: {
       }
       const item: StoredMention = {
         id: randomUUID(),
+        targetKey: mentionTargetKey(target.sessionKey, target.agentId),
         recipientProfileId: recipient.profileId,
         source,
         message,

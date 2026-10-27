@@ -120,18 +120,16 @@ function FilterDropdown<T extends string>(props: {
   onToggle: (value: T, checked: boolean) => void;
   onClear: () => void;
 }) {
-  const selectedLabels = createMemo(() =>
+  const selectedLabels = () =>
     props.options
       .filter((option) => props.selected.includes(option.value))
-      .map((option) => option.label),
-  );
-  const summary = createMemo(() =>
+      .map((option) => option.label);
+  const summary = () =>
     selectedLabels().length === 0
       ? props.allLabel
       : selectedLabels().length <= 2
         ? selectedLabels().join(", ")
-        : `${selectedLabels()[0]} +${selectedLabels().length - 1}`,
-  );
+        : `${selectedLabels()[0]} +${selectedLabels().length - 1}`;
   const accessibleSummary = createMemo(() =>
     selectedLabels().length > 2
       ? `${summary()} (${new Intl.ListFormat(i18n.getLocale(), {
@@ -217,7 +215,7 @@ export function RunsSection(props: CronRunsSectionProps) {
           <span>{t("cron.linkedRun.label")}</span>
           <button
             class="btn btn--sm"
-            onClick={() => void props.onRunsFiltersChange({ cronRunsRunId: null })}
+            onClick={() => props.onRunsFiltersChange({ cronRunsRunId: null })}
           >
             {t("cron.linkedRun.showAll")}
           </button>
@@ -235,7 +233,7 @@ export function RunsSection(props: CronRunsSectionProps) {
             aria-label={t("cron.runs.searchRuns")}
             placeholder={t("cron.runs.searchPlaceholder")}
             onInput={(e) =>
-              void props.onRunsFiltersChange({
+              props.onRunsFiltersChange({
                 cronRunsQuery: e.currentTarget.value,
               })
             }
@@ -252,10 +250,10 @@ export function RunsSection(props: CronRunsSectionProps) {
           selected={props.runsStatuses}
           onToggle={(value, checked) => {
             const next = toggleSelection(props.runsStatuses, value, checked);
-            void props.onRunsFiltersChange({ cronRunsStatuses: next });
+            props.onRunsFiltersChange({ cronRunsStatuses: next });
           }}
           onClear={() => {
-            void props.onRunsFiltersChange({ cronRunsStatuses: [] });
+            props.onRunsFiltersChange({ cronRunsStatuses: [] });
           }}
         />
         <FilterDropdown
@@ -269,10 +267,10 @@ export function RunsSection(props: CronRunsSectionProps) {
           selected={props.runsDeliveryStatuses}
           onToggle={(value, checked) => {
             const next = toggleSelection(props.runsDeliveryStatuses, value, checked);
-            void props.onRunsFiltersChange({ cronRunsDeliveryStatuses: next });
+            props.onRunsFiltersChange({ cronRunsDeliveryStatuses: next });
           }}
           onClear={() => {
-            void props.onRunsFiltersChange({ cronRunsDeliveryStatuses: [] });
+            props.onRunsFiltersChange({ cronRunsDeliveryStatuses: [] });
           }}
         />
         <div class="cron-filter-dropdown">
@@ -312,7 +310,7 @@ export function RunsSection(props: CronRunsSectionProps) {
             ]}
             onSelect={(item) => {
               if (item.id === "asc" || item.id === "desc") {
-                void props.onRunsFiltersChange({ cronRunsSortDir: item.id });
+                props.onRunsFiltersChange({ cronRunsSortDir: item.id });
               }
             }}
           />
@@ -405,7 +403,9 @@ function Run(props: {
   formatTimestamp: ReturnType<typeof createMsFormatter>;
   highlightedRunId?: string | null;
   onViewRunTranscript?: CronProps["onViewRunTranscript"];
-  onRunMount?: CronProps["onRunMount"];
+  onRunMount?: (
+    ...args: Parameters<NonNullable<CronProps["onRunMount"]>>
+  ) => (() => void) | undefined;
 }) {
   const status = () =>
     runStatusLabel(props.entry.status ?? "unknown", props.entry.completionStatus);

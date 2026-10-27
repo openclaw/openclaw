@@ -2,7 +2,7 @@ import type { JSX } from "@solidjs/web";
 import { onSettled } from "solid-js";
 import { Icon } from "../../components/solid/icon.tsx";
 import { registerPluginManagementEnglish } from "../../i18n/locales/en-plugin-management.ts";
-import { shouldHandleNavigationClick } from "../../lib/navigation-click.ts";
+import { handleNavigationClick } from "../../lib/navigation-click.ts";
 import { t, registerEnglishCatalog } from "../../lib/reactive/i18n.ts";
 
 registerEnglishCatalog(registerPluginManagementEnglish);
@@ -18,13 +18,7 @@ export function renderPluginDetailBreadcrumb(props: {
       <a
         class="plugins-settings-breadcrumb__parent"
         href={props.backHref}
-        onClick={(event: MouseEvent) => {
-          if (!shouldHandleNavigationClick(event)) {
-            return;
-          }
-          event.preventDefault();
-          props.onBack();
-        }}
+        onClick={(event: MouseEvent) => handleNavigationClick(event, () => props.onBack())}
       >
         {props.backLabel}
       </a>

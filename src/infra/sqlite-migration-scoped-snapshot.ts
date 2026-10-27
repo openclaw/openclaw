@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { constants, type DatabaseSync, type SQLInputValue } from "node:sqlite";
+import { isDeepStrictEqual } from "node:util";
 import { z } from "zod";
 import { requireDirectorySync, sha256File, syncDirectorySync } from "./directory-durability.js";
 import {
@@ -212,6 +213,46 @@ function writeRows(
   for (const row of rows) {
     writer.run(...row);
   }
+}
+
+/** A retry's full image must still contain every row the current transaction will retire. */
+export function scopedMigrationTablesMatchFullBackup(
+  source: DatabaseSync,
+  sourcePath: string,
+  backupPath: string,
+  tables: readonly string[],
+): boolean {
+  const names = tables.filter((name) => !isStatisticTable(name));
+  const inspection = inspectSourceTables(source, sourcePath, names);
+  using saved = openNodeSqliteDatabase(resolveImmutableSqliteFileUri(backupPath), {
+    readOnly: true,
+  });
+  if (!isDeepStrictEqual(inspection.tables, inspectSourceTables(saved, backupPath, names).tables)) {
+    return false;
+  }
+  for (const table of inspection.tables) {
+    if (!table.sql) {
+      continue;
+    }
+    const columns = [...(table.rowid ? [table.rowid] : []), ...table.columns];
+    const selected = columns.map(quote).join(", ");
+    const query = `SELECT ${selected} FROM ${quote(table.name)} ORDER BY ${selected}`;
+    const current = readRows(source, query, columns);
+    const original = readRows(saved, query, columns);
+    try {
+      for (const row of current) {
+        if (!isDeepStrictEqual(row, original.next().value)) {
+          return false;
+        }
+      }
+      if (!original.next().done) {
+        return false;
+      }
+    } finally {
+      original.return(undefined);
+    }
+  }
+  return true;
 }
 
 function copyRows(

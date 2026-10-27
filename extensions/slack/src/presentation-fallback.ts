@@ -76,7 +76,6 @@ export function renderSlackMessagePresentationTableFallbackText(
 
 export function renderSlackMessagePresentationFallbackText(params: {
   presentation?: MessagePresentation;
-  emptyFallback?: string | null;
   text?: string | null;
 }): string {
   if (!params.presentation) {

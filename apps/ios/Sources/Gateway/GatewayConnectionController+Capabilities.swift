@@ -76,6 +76,19 @@ extension GatewayConnectionController {
             helperText: helperText)
     }
 
+    /// Explains a Host value the connect path cannot turn into a gateway URL. It asks the same
+    /// endpoint builder as `connectManual`, so the forms block exactly the input that would fail.
+    static func manualHostValidationMessage(host: String) -> String? {
+        let trimmedHost = host.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmedHost.isEmpty,
+              GatewayConnectEndpoint(host: trimmedHost, port: 1, tls: true).websocketURL == nil
+        else { return nil }
+        if trimmedHost.contains("://") {
+            return String(localized: "Enter the host without https:// or wss://.")
+        }
+        return String(localized: "Enter only a host name or IP address.")
+    }
+
     func manualStableID(host: String, port: Int, contextPath: String? = nil) -> String {
         ManualAuthOverride.manualStableID(host: host, port: port, contextPath: contextPath)
     }

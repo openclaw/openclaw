@@ -2,11 +2,7 @@ import { promises as fs } from "node:fs";
 import { basename, isAbsolute, resolve } from "node:path";
 import JSON5 from "json5";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
-import {
-  POLICY_RULE_METADATA,
-  type PolicyRuleMetadata,
-  type PolicyScopeSelectorKind,
-} from "./doctor/metadata.js";
+import { POLICY_RULE_METADATA, type PolicyRuleMetadata } from "./doctor/metadata.js";
 import { policyRuleValueIsValid } from "./doctor/ordered-shape.js";
 import {
   normalizePolicySelectorValues,
@@ -63,10 +59,7 @@ type PolicyRuleClaim = {
   readonly value: unknown;
   readonly target: string;
   readonly propertyPath: string;
-  readonly selector?: {
-    readonly kind: PolicyScopeSelectorKind;
-    readonly value: string;
-  };
+  readonly scoped?: true;
 };
 
 export async function buildPolicyConformanceReport(params: {
@@ -246,32 +239,27 @@ function conformanceFinding(
   }
   const exactCandidates = candidateClaims.filter((candidate) => candidate.key === baseline.key);
   const candidates =
-    baseline.selector === undefined || exactCandidates.length > 0
+    baseline.scoped === undefined || exactCandidates.length > 0
       ? exactCandidates
       : candidateClaims.filter(
-          (candidate) =>
-            candidate.selector === undefined && candidate.metadata === baseline.metadata,
+          (candidate) => candidate.scoped === undefined && candidate.metadata === baseline.metadata,
         );
   if (candidates.length === 0) {
     return unsatisfiedConformanceFinding(baseline, policyDisplayName);
   }
   const satisfies = (candidate: PolicyRuleClaim) =>
     isPolicyValueAtLeastAsStrict(baseline.metadata, candidate.value, baseline.value);
-  if (
-    baseline.selector !== undefined &&
-    exactCandidates.length === 0 &&
-    candidates.some(satisfies)
-  ) {
+  if (baseline.scoped !== undefined && exactCandidates.length === 0 && candidates.some(satisfies)) {
     return undefined;
   }
   const weaker = candidates.find((candidate) => !satisfies(candidate));
   if (weaker !== undefined) {
     return unsatisfiedConformanceFinding(baseline, policyDisplayName, weaker);
   }
-  if (baseline.selector === undefined) {
+  if (baseline.scoped === undefined) {
     const weakerScopedOverride = candidateClaims.find(
       (candidate) =>
-        candidate.selector !== undefined &&
+        candidate.scoped !== undefined &&
         candidate.metadata === baseline.metadata &&
         !satisfies(candidate),
     );
@@ -375,7 +363,7 @@ function collectScopedPolicyRuleClaims(document: PolicyDocument): readonly Polic
             value,
             target: `oc://${document.displayName}/${targetPath}`,
             propertyPath: `scopes.${scopeName}.${propertyPath}`,
-            selector: { kind: selector, value: selectorValue },
+            scoped: true,
           });
         }
       }

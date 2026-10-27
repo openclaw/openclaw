@@ -29,9 +29,7 @@ export async function waitForTerminalOpenDeadline<T>(
   deadline: TerminalOpenDeadline,
 ): Promise<T> {
   const expire = () => {
-    if (!deadline.controller.signal.aborted) {
-      deadline.controller.abort(new TerminalOpenDeadlineError());
-    }
+    deadline.controller.abort(new TerminalOpenDeadlineError());
     throw toErrorObject(deadline.controller.signal.reason, "Terminal open timed out");
   };
   const assertCurrent = () => {

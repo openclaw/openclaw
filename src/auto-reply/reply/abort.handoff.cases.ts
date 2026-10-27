@@ -1,16 +1,33 @@
 import { expectDefined } from "@openclaw/normalization-core/expect";
-import { expect, it, onTestFinished } from "vitest";
+import { expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
-import type { OpenClawConfig } from "../../config/config.js";
+import * as subagentControlSession from "../../agents/subagents/registry/subagent-control-session.js";
+import {
+  addSubagentRunForTests,
+  releaseSubagentRun,
+} from "../../agents/subagents/registry/subagent-registry.test-helpers.js";
+import { getRuntimeConfig, type OpenClawConfig } from "../../config/config.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import { loadSessionEntry, replaceSessionEntry } from "../../config/sessions/session-accessor.js";
+import {
+  publishSystemEventStoreConfig,
+  resolvePhysicalSessionStorePath,
+} from "../../config/sessions/session-store-path.js";
 import {
   clearAgentRunContext,
   getAgentRunContext,
   registerAgentRunContext,
 } from "../../infra/agent-run-registry.js";
+import {
+  captureExecRequestOwners,
+  withExecRequestTurn,
+  type ExecRequestOwner,
+} from "../../infra/exec-request-context.js";
+import { captureSessionEntryCurrentCheckAsync } from "../../plugin-sdk/session-binding-runtime.js";
+import { normalizeSessionDeliveryState } from "../../plugin-sdk/session-store-runtime.js";
 import { captureSessionTarget } from "../../sessions/session-controller.lifecycle.js";
 import { createReplyOperation } from "../../sessions/session-controller.operation.js";
+import { observeMainThreadSql } from "../../test-utils/main-thread-sql-spies.test-support.js";
 import type { FinalizedRuntimeMsgContext } from "../templating.js";
 import { formatAbortReplyText, tryFastAbortFromMessage } from "./abort.js";
 import { handleStopCommand } from "./commands-session-abort.js";
@@ -203,4 +220,230 @@ export function registerAbortHandoffCases({
     ).toBeUndefined();
     replacement.complete();
   });
+
+  it.each([false, true])(
+    "checks the published conversation at the Stop effect (rebound=%s)",
+    async (rebound) => {
+      const state = await setupStop();
+      const address = {
+        channel: "slack",
+        accountId: "default",
+        kind: "group" as const,
+        peerId: "g12345678",
+        threadId: "123.456",
+      };
+      const delivery = normalizeSessionDeliveryState({
+        context: {
+          channel: address.channel,
+          accountId: address.accountId,
+          to: "group:g12345678",
+          threadId: address.threadId,
+        },
+      });
+      const scope = { agentId: "main", storePath: state.storePath, sessionKey };
+      await replaceSessionEntry(scope, { ...state.entry, chatType: "group", delivery });
+      const childRunId = "selected-child";
+      const childKey = `agent:main:subagent:${childRunId}`;
+      const childSessionId = "selected-child-session";
+      await replaceSessionEntry(
+        { ...scope, sessionKey: childKey },
+        { sessionId: childSessionId, updatedAt: Date.now() },
+      );
+      const childEntry = expectDefined(
+        loadSessionEntry({ ...scope, sessionKey: childKey }),
+        "selected child session",
+      );
+      publishSystemEventStoreConfig(state.cfg);
+      const controllerStorePath = resolvePhysicalSessionStorePath(
+        { sessionKey, agentId: "main" },
+        state.cfg,
+      );
+      await addSubagentRunForTests({
+        runId: childRunId,
+        childSessionKey: childKey,
+        childAgentId: "main",
+        childSessionIdentity: {
+          sessionId: childEntry.sessionId,
+          lifecycleRevision: childEntry.lifecycleRevision,
+        },
+        requesterSessionKey: sessionKey,
+        requesterAgentId: "main",
+        requesterDisplayKey: sessionKey,
+        requesterStorePath: controllerStorePath,
+        controllerSessionKey: sessionKey,
+        controllerStorePath,
+        task: "selected child requires current Stop authority",
+        cleanup: "keep",
+        expectsCompletionMessage: false,
+      });
+      const operation = createReplyOperation({
+        agentId: "main",
+        sessionKey,
+        sessionId: state.entry.sessionId,
+        target: state.target,
+        resetTriggered: false,
+      });
+      const cancel = vi.fn(() => queueMicrotask(() => operation.complete()));
+      operation.attachBackend({
+        kind: "embedded",
+        runId: "selected-parent",
+        cancel,
+        isStreaming: () => true,
+      });
+      operation.setPhase("running");
+      const child = createReplyOperation({
+        agentId: "main",
+        sessionKey: childKey,
+        sessionId: childSessionId,
+        target: captureSessionTarget({
+          storeScope: state.storePath,
+          sessionKey: childKey,
+          incarnation: childSessionId,
+          agentId: "main",
+        }),
+        resetTriggered: false,
+      });
+      const cancelChild = vi.fn(() => child.complete());
+      child.attachBackend({
+        kind: "embedded",
+        runId: childRunId,
+        cancel: cancelChild,
+        isStreaming: () => true,
+      });
+      child.setPhase("running");
+      const execIdentity = {
+        agentId: "main",
+        sessionKey,
+        sessionId: state.entry.sessionId,
+        runId: "selected-parent",
+      };
+      const releaseExec = createDeferred();
+      let externalOwner: ExecRequestOwner | undefined;
+      const execution = withExecRequestTurn({ identity: execIdentity }, async () => {
+        externalOwner = expectDefined(captureExecRequestOwners(execIdentity)?.[0], "exec owner");
+        await releaseExec.promise;
+      });
+      const prepared = await captureSessionEntryCurrentCheckAsync({
+        ...scope,
+        alternatives: [{ conversations: [{ ...address, sessionKey }] }],
+        errorMessage: "The selected session changed before it could be stopped.",
+      });
+      const preparationReached = createDeferred();
+      const releasePreparation = createDeferred();
+      let earlyResult: boolean | undefined;
+      const effectSqlCalls: number[] = [];
+      const sessionSource = new Proxy(prepared.source, {
+        apply(target, thisArg, args) {
+          if (earlyResult === undefined) {
+            return Reflect.apply(target, thisArg, args);
+          }
+          const sql = observeMainThreadSql();
+          try {
+            return Reflect.apply(target, thisArg, args);
+          } finally {
+            effectSqlCalls.push(sql.count());
+            sql.restore();
+          }
+        },
+      });
+      const isCommandTargetCurrent = Object.assign(
+        async () => {
+          earlyResult = await prepared.isCurrent();
+          if (pathKind === "fast") {
+            // Fast Stop checks after child preparation; extend its existing async-check await.
+            preparationReached.resolve();
+            await releasePreparation.promise;
+          }
+          return earlyResult;
+        },
+        { sessionSource },
+      );
+      const prepareChildSession = subagentControlSession.prepareSubagentKillSession;
+      const preparation =
+        pathKind === "command"
+          ? vi
+              .spyOn(subagentControlSession, "prepareSubagentKillSession")
+              .mockImplementationOnce(async (...args) => {
+                const session = await prepareChildSession(...args);
+                preparationReached.resolve();
+                await releasePreparation.promise;
+                return session;
+              })
+          : undefined;
+      let stopping: Promise<{ result: unknown } | { error: unknown }> | undefined;
+      try {
+        stopping = (
+          pathKind === "fast"
+            ? tryFastAbortFromMessage({ ...state, isCommandTargetCurrent })
+            : handleStopCommand({ ...state.params, opts: { isCommandTargetCurrent } }, true)
+        ).then(
+          (result) => ({ result }),
+          (error: unknown) => {
+            preparationReached.reject(error);
+            return { error };
+          },
+        );
+        await preparationReached.promise;
+        expect(earlyResult).toBe(true);
+        if (rebound) {
+          // A real worker commit changes only the competing row, after the early check.
+          await replaceSessionEntry(
+            { ...scope, sessionKey: `${sessionKey}:thread:123.456` },
+            {
+              sessionId: "session-b",
+              updatedAt: state.entry.updatedAt + 1000,
+              chatType: "group",
+              delivery,
+            },
+          );
+        }
+        effectSqlCalls.length = 0;
+        releasePreparation.resolve();
+        const outcome = await stopping;
+        if (rebound) {
+          // These effects are checked before the rejection so baseline fails on real harm.
+          expect(cancel).not.toHaveBeenCalled();
+          expect(operation.abortSignal.aborted).toBe(false);
+          expect(cancelChild).not.toHaveBeenCalled();
+          expect(child.abortSignal.aborted).toBe(false);
+          expect(externalOwner?.signal.aborted).toBe(false);
+          expect(loadSessionEntry(scope)?.abortedLastRun).not.toBe(true);
+          expect(outcome).toEqual({
+            error: expect.objectContaining({
+              message: "The selected session changed before it could be stopped.",
+            }),
+          });
+        } else {
+          expect(outcome).toMatchObject({
+            result:
+              pathKind === "fast"
+                ? { handled: true, aborted: true }
+                : {
+                    shouldContinue: false,
+                    reply: { text: expect.stringContaining("Stopped 1 sub-agent.") },
+                  },
+          });
+          expect(cancel).toHaveBeenCalledOnce();
+          expect(operation.abortSignal.aborted).toBe(true);
+          expect(cancelChild).toHaveBeenCalledOnce();
+          expect(child.abortSignal.aborted).toBe(true);
+          expect(externalOwner?.signal.aborted).toBe(true);
+          expect(loadSessionEntry(scope)?.abortedLastRun).toBe(true);
+        }
+        expect(effectSqlCalls.length).toBeGreaterThan(0);
+        expect(effectSqlCalls.every((calls) => calls === 0)).toBe(true);
+      } finally {
+        releasePreparation.resolve();
+        await stopping;
+        preparation?.mockRestore();
+        operation.complete();
+        child.complete();
+        releaseExec.resolve();
+        await Promise.all([operation.ownerSettlement, child.ownerSettlement, execution]);
+        prepared.release();
+        await releaseSubagentRun(childRunId);
+        publishSystemEventStoreConfig(getRuntimeConfig());
+      }
+    },
+  );
 }

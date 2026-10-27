@@ -34,24 +34,21 @@ export async function deleteManagedImageRecordArtifacts(
   stateDir = resolveStateDir(),
   alreadyClaimed = false,
   context = captureManagedImageContext(stateDir),
-) {
+): Promise<void> {
   if (
     !alreadyClaimed &&
     !(await claimManagedImageRecordCleanupIfCurrent(record, stateDir, context))
   ) {
-    return { deletedRecord: false, deletedFileCount: 0 };
+    return;
   }
   context.admission.assertCurrent();
   try {
     await fs.rm(resolveManagedImageOriginalPath(record), { force: true });
   } catch {
     // Keep the durable cleanup claim so the next sweep retries this exact file.
-    return { deletedRecord: false, deletedFileCount: 0 };
+    return;
   }
-  return {
-    deletedRecord: await deleteClaimedManagedImageRecord(record, stateDir, context),
-    deletedFileCount: 1,
-  };
+  await deleteClaimedManagedImageRecord(record, stateDir, context);
 }
 
 export async function insertManagedImageRecordWithFile(
@@ -134,11 +131,11 @@ export async function deleteAgedOrphanManagedImageFiles(params: {
   stateDir: string;
   nowMs: number;
   minAgeMs: number;
-}): Promise<number> {
+}): Promise<void> {
   // Destructive migration barrier only: runtime never parses or serves legacy metadata.
   // Any legacy source may own an old file, so Doctor must retire all JSON before orphan reaping.
   if (await hasUnmigratedManagedImageMetadata(params.stateDir)) {
-    return 0;
+    return;
   }
   let referencedMediaIds: Set<string> | undefined;
   const originalsDir = resolveManagedImageOriginalsDir(params.stateDir);
@@ -146,9 +143,8 @@ export async function deleteAgedOrphanManagedImageFiles(params: {
   try {
     names = await fs.readdir(originalsDir);
   } catch {
-    return 0;
+    return;
   }
-  let deletedCount = 0;
   for (const name of names) {
     if (referencedMediaIds?.has(name)) {
       continue;
@@ -164,10 +160,8 @@ export async function deleteAgedOrphanManagedImageFiles(params: {
     }
     try {
       await fs.rm(filePath, { force: true });
-      deletedCount += 1;
     } catch {
       // A later maintenance pass retries transient filesystem failures and races.
     }
   }
-  return deletedCount;
 }

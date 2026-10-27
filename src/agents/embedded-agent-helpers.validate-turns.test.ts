@@ -1,155 +1,99 @@
-import type { AgentMessage } from "openclaw/plugin-sdk/agent-core";
-import { describe, expect, it } from "vitest";
+import { expect, it } from "vitest";
 import { validateAnthropicTurns, validateGeminiTurns } from "./embedded-agent-helpers/turns.js";
+import { castAgentMessages as asMessages } from "./test-helpers/agent-message-fixtures.js";
 import { textToolResult } from "./test-helpers/sparse-transcript.test-support.js";
 
-function asMessages(messages: unknown[]): AgentMessage[] {
-  return messages as AgentMessage[];
-}
 const text = (value: string) => ({ type: "text", text: value });
-const user = (value: string) => ({ role: "user", content: [text(value)] });
+const user = (value: string | unknown[]) => ({
+  role: "user",
+  content: typeof value === "string" ? [text(value)] : value,
+});
 const assistant = (content: unknown[]) => ({ role: "assistant", content });
-const call = (type: string, id = "tool-1", name = "gateway") => ({ type, id, name, arguments: {} });
+const call = (type: string, id = "tool-1") => ({ type, id, name: "gateway", arguments: {} });
 const thinking = { type: "thinking", thinking: "internal", thinkingSignature: "sig_1" };
-const signed = (id = "tool-1") => [thinking, call("toolCall", id)];
-const omitted = assistant([text("[tool calls omitted]")]);
+const signed = () => [thinking, call("toolCall")];
+const resultBlock = (value: string) => ({
+  type: "toolResult",
+  toolUseId: "tool-1",
+  content: [text(value)],
+});
 
-function validateToolTurn(content: unknown[], following: unknown[], fields = {}) {
-  return validateAnthropicTurns(
-    asMessages([user("Use tool"), { ...assistant(content), ...fields }, ...following]),
-  );
+function checkToolTurn(content: unknown[], following: unknown[], expected: unknown[], fields = {}) {
+  const wrap = (blocks: unknown[]) =>
+    asMessages([user("Use tool"), { ...assistant(blocks), ...fields }, ...following]);
+  expect(validateAnthropicTurns(wrap(content))).toEqual(wrap(expected));
 }
 
-describe("turn validation", () => {
-  it("returns empty history unchanged", () => {
-    expect(validateGeminiTurns([])).toStrictEqual([]);
-    expect(validateAnthropicTurns([])).toStrictEqual([]);
-  });
+it("returns empty history unchanged", () => {
+  expect(validateGeminiTurns([])).toStrictEqual([]);
+  expect(validateAnthropicTurns([])).toStrictEqual([]);
+});
 
-  it("merges Gemini assistant content with the latest usage and stop reason", () => {
-    const latest = { usage: { input: 10, output: 10 }, stopReason: "end_turn" };
-    const messages = asMessages([
-      { ...assistant([text("Part 1")]), usage: { input: 10, output: 5 } },
-      { ...assistant([text("Part 2")]), ...latest },
-    ]);
-    expect(validateGeminiTurns(messages)).toEqual([
-      { ...assistant([text("Part 1"), text("Part 2")]), ...latest },
-    ]);
-  });
+it("merges Gemini assistant content with the latest usage and stop reason", () => {
+  const latest = { usage: { input: 10, output: 10 }, stopReason: "end_turn" };
+  const messages = asMessages([
+    { ...assistant([text("Part 1")]), usage: { input: 10, output: 5 } },
+    { ...assistant([text("Part 2")]), ...latest },
+  ]);
+  expect(validateGeminiTurns(messages)).toEqual([
+    { ...assistant([text("Part 1"), text("Part 2")]), ...latest },
+  ]);
+});
 
-  it.each([false])(
-    "preserves signed tool-result pairing across an injected assistant (merging=%s)",
-    (mergeConsecutiveTurns) => {
-      const result = {
-        role: "toolResult",
-        toolUseId: "tool-1",
-        toolName: "gateway",
-        content: [text("done")],
-        isError: false,
-      };
-      const source = { ...assistant(signed()), stopReason: "toolUse" };
-      const injected = {
-        ...assistant([text("Subagent completion delivered.")]),
-        stopReason: "stop",
-      };
-      expect(
-        validateAnthropicTurns(asMessages([user("Use tool"), source, injected, result]), {
-          mergeConsecutiveTurns,
-        }),
-      ).toEqual([
-        user("Use tool"),
-        ...(mergeConsecutiveTurns
-          ? [
-              {
-                ...assistant([...signed(), text("Subagent completion delivered.")]),
-                stopReason: "stop",
-              },
-            ]
-          : [source, injected]),
-        result,
-      ]);
-    },
-  );
+it("preserves signed tool-result pairing across an injected assistant without merging", () => {
+  const result = {
+    ...resultBlock("done"),
+    role: "toolResult",
+    toolName: "gateway",
+    isError: false,
+  };
+  const source = { ...assistant(signed()), stopReason: "toolUse" };
+  const injected = { ...assistant([text("delivered")]), stopReason: "stop" };
+  expect(
+    validateAnthropicTurns(asMessages([user("Use tool"), source, injected, result]), {
+      mergeConsecutiveTurns: false,
+    }),
+  ).toEqual([user("Use tool"), source, injected, result]);
+});
 
-  it("normalizes string user content while merging", () => {
-    expect(
-      validateAnthropicTurns(
-        asMessages([
-          { role: "user", content: "before", timestamp: 1000 },
-          { role: "user", content: "after", timestamp: 2000 },
-        ]),
-      ),
-    ).toEqual([{ role: "user", content: [text("before"), text("after")], timestamp: 2000 }]);
-  });
+it("backfills merged array-user timestamps", () => {
+  expect(
+    validateAnthropicTurns(asMessages([{ ...user("before"), timestamp: 1000 }, user("after")])),
+  ).toEqual([{ ...user([text("before"), text("after")]), timestamp: 1000 }]);
+});
 
-  it("backfills missing user timestamps from the preceding turn", () => {
-    expect(
-      validateAnthropicTurns(asMessages([{ ...user("before"), timestamp: 1000 }, user("after")])),
-    ).toEqual([{ role: "user", content: [text("before"), text("after")], timestamp: 1000 }]);
-  });
-
-  it.each([{ stopReason: "aborted", expected: [] }])(
-    "repairs dangling tool-only turns after $stopReason",
-    ({ stopReason, expected }) => {
-      expect(validateToolTurn([call("toolUse")], [user("Hello")], { stopReason })).toEqual([
-        user("Use tool"),
-        { role: "assistant", content: expected, stopReason },
-        user("Hello"),
-      ]);
-    },
-  );
-
-  it("prunes only unmatched sibling calls with user-embedded results", () => {
-    const following = {
-      role: "user",
-      content: [
-        { type: "toolResult", toolUseId: "tool-1", content: [text("Result 1")] },
-        text("Thanks"),
-      ],
-    };
-    expect(
-      validateToolTurn([call("toolUse"), call("toolUse", "tool-2"), text("Done")], [following]),
-    ).toEqual([user("Use tool"), assistant([call("toolUse"), text("Done")]), following]);
-  });
-
-  it("matches legacy results across intermediate non-assistant turns", () => {
-    const following = [
+const legacy = [call("functionCall"), text("Checking")];
+const omitted = [text("[tool calls omitted]")];
+it.each<[string, unknown[], unknown[], unknown[], Record<string, unknown>?]>([
+  ["aborted dangling call", [call("toolUse")], [user("Hello")], [], { stopReason: "aborted" }],
+  [
+    "unmatched sibling",
+    [call("toolUse"), call("toolUse", "tool-2"), text("Done")],
+    [user([resultBlock("Result 1"), text("Thanks")])],
+    [call("toolUse"), text("Done")],
+  ],
+  [
+    "legacy result after a user",
+    legacy,
+    [
       user("waiting"),
       { role: "tool", toolCallId: "tool-1", content: [text("data")] },
       user("Continue"),
-    ];
-    const content = [call("functionCall"), text("Checking")];
-    expect(validateToolTurn(content, following)).toEqual([
-      user("Use tool"),
-      assistant(content),
-      ...following,
-    ]);
-  });
-
-  it("does not trust user-embedded results for signed thinking", () => {
-    const following = {
-      role: "user",
-      content: [
-        { type: "toolResult", toolUseId: "tool-1", content: [text("ok")] },
-        text("Continue"),
-      ],
-    };
-    expect(validateToolTurn([thinking, call("toolUse")], [following])).toEqual([
-      user("Use tool"),
-      omitted,
-      following,
-    ]);
-  });
-
-  it("rejects signed-thinking pairing with the wrong tool name", () => {
-    const following = [
-      textToolResult("tool-1", "exec", "wrong tool", { isError: false }),
-      user("Continue"),
-    ];
-    expect(validateToolTurn(signed(), following)).toEqual([
-      user("Use tool"),
-      omitted,
-      ...following,
-    ]);
-  });
+    ],
+    legacy,
+  ],
+  [
+    "signed embedded result",
+    [thinking, call("toolUse")],
+    [user([resultBlock("ok"), text("Continue")])],
+    omitted,
+  ],
+  [
+    "signed wrong-name result",
+    signed(),
+    [textToolResult("tool-1", "exec", "wrong tool", { isError: false }), user("Continue")],
+    omitted,
+  ],
+])("repairs %s", (_name, content, following, expected, fields) => {
+  checkToolTurn(content, following, expected, fields);
 });

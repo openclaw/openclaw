@@ -33,16 +33,8 @@ export type OpenAIToolProjection = {
 };
 
 type OpenAIResponsesToolChoice = ResponseCreateParamsStreaming["tool_choice"];
-type OpenAIResponsesAllowedToolChoice = Extract<
-  OpenAIResponsesToolChoice,
-  { type: "allowed_tools" }
->;
 type OpenAICompletionsSdkToolChoice =
   OpenAI.Chat.Completions.ChatCompletionCreateParamsStreaming["tool_choice"];
-type OpenAICompletionsAllowedToolChoice = Extract<
-  OpenAICompletionsSdkToolChoice,
-  { type: "allowed_tools" }
->;
 export type OpenAICompletionsToolChoice = Exclude<
   OpenAICompletionsSdkToolChoice,
   { type: "custom" }
@@ -220,8 +212,11 @@ function reconcileToolChoice(
   if ((mode !== "auto" && mode !== "required") || !Array.isArray(tools)) {
     return choice;
   }
-  const responseTools: OpenAIResponsesAllowedToolChoice["tools"] = [];
-  const completionTools: OpenAICompletionsAllowedToolChoice["allowed_tools"]["tools"] = [];
+  const responseTools: Extract<OpenAIResponsesToolChoice, { type: "allowed_tools" }>["tools"] = [];
+  const completionTools: Extract<
+    OpenAICompletionsSdkToolChoice,
+    { type: "allowed_tools" }
+  >["allowed_tools"]["tools"] = [];
   for (const tool of tools) {
     if (!isRecord(tool) || tool.type !== "function") {
       if (responses) {

@@ -7,16 +7,13 @@ import type {
 import {
   createGitHubReadGroup,
   prepareSessionPullRequestGitHubRead,
+  type SessionPullRequestReadCredential,
 } from "./control-ui-session-pr-request.js";
 import {
   fetchSessionPullRequestCheckDetails,
-  sessionPullRequestRepositoryApiUrl,
   type SessionPullRequestCheckTarget,
 } from "./control-ui-session-prs-checks.js";
-import {
-  parsePullListItem,
-  type ControlUiSessionPullRequestsParams,
-} from "./control-ui-session-prs.js";
+import type { ControlUiSessionPullRequestsParams } from "./control-ui-session-prs.js";
 import { gitHubPublicApi } from "./github-public-api.js";
 
 const checkDetailsCache = createRetainedCache<{
@@ -38,6 +35,7 @@ export type ControlUiSessionPullRequestChecksParams = Pick<
 };
 
 type LoadSessionCheckDetailsDeps = {
+  credential?: () => SessionPullRequestReadCredential | undefined;
   /** The request handler binds and rechecks session visibility, generation, and workspace. */
   sessionScope: string;
   assertCurrent: () => void;
@@ -77,7 +75,9 @@ export async function loadControlUiSessionPullRequestChecks(
     return unavailable("The session pull request or head changed; reopen CI details");
   }
   const host = new URL(pull.url).hostname;
-  const read = prepareSessionPullRequestGitHubRead(host, deps.assertCurrent);
+  const read = prepareSessionPullRequestGitHubRead(host, deps.assertCurrent, {
+    credential: deps.credential?.(),
+  });
   const assertCurrent = read.assertCurrent;
   const checkTarget = { ...target, host, apiBaseUrl: read.apiBaseUrl };
   const key = JSON.stringify([
@@ -106,6 +106,7 @@ export async function loadControlUiSessionPullRequestChecks(
     releaseReader = pending.access.add(deps.assertCurrent);
     const transportRead = prepareSessionPullRequestGitHubRead(host, pending.access.assertCurrent, {
       signal: pending.access.signal,
+      credential: read.credential,
     });
     activeCheckDetails += 1;
     const load = async (): Promise<ControlUiSessionPullRequestCheckDetails> => {
@@ -128,27 +129,8 @@ export async function loadControlUiSessionPullRequestChecks(
           );
         });
       };
-      const assertHead = async () => {
-        const value = parsePullListItem(
-          await request(`${sessionPullRequestRepositoryApiUrl(checkTarget)}/pulls/${number}`),
-        );
-        if (
-          !value ||
-          value.owner.toLowerCase() !== owner.toLowerCase() ||
-          value.repo.toLowerCase() !== repo.toLowerCase() ||
-          new URL(value.url).hostname !== host ||
-          value.number !== number ||
-          value.headSha?.toLowerCase() !== headSha ||
-          (value.state !== "open" && value.state !== "draft")
-        ) {
-          throw new gitHubPublicApi.ControlUiGitHubError(
-            409,
-            "The pull request head changed; reopen CI details",
-          );
-        }
-      };
       try {
-        await assertHead();
+        // CI details describe the chip's exact head until the session PR snapshot refreshes.
         const details = await fetchSessionPullRequestCheckDetails(checkTarget, request);
         const result: ControlUiSessionPullRequestCheckDetails = {
           ...target,

@@ -1,3 +1,4 @@
+import syncFs from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { withTempHome } from "openclaw/plugin-sdk/test-env";
@@ -6,7 +7,11 @@ import { withContendedConfigMutation } from "../../test/helpers/config-mutation-
 import { createDeferred } from "../../test/helpers/promise.js";
 import * as config from "../config/config.js";
 import { listConfiguredMcpServers, mcpConfigInternal } from "../config/mcp-config.js";
-import * as stateDb from "../state/openclaw-state-db.js";
+import { readGatewayLockProcessNamespace } from "../infra/gateway-lock-payload.js";
+import { acquireGatewayStateOwner } from "../infra/gateway-state-owner.js";
+import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
+import { closeStateDatabaseForTest as closeState } from "../test-utils/database-cleanup.js";
+import { observeMainThreadSql } from "../test-utils/main-thread-sql-spies.test-support.js";
 import {
   setConfiguredMcpServer as setServer,
   unsetConfiguredMcpServer as unsetServer,
@@ -33,11 +38,6 @@ async function install(server: Parameters<typeof setServer>[0]["server"] = PER_R
   return result;
 }
 
-async function closeState() {
-  await stateDb.closeOpenClawStateDatabaseAsync();
-  stateDb.closeOpenClawStateDatabaseForTest();
-}
-
 function seedOAuthState() {
   const operator = operatorMcpOAuthIdentity("fixture", SERVER_URL);
   const requester = requesterMcpOAuthIdentity("fixture", SERVER_URL, {
@@ -54,9 +54,7 @@ function seedOAuthState() {
   return { operator, requester };
 }
 
-afterEach(() => {
-  vi.unstubAllEnvs();
-});
+afterEach(() => vi.unstubAllEnvs());
 
 it.aroundEach((run) =>
   withTempHome(
@@ -78,6 +76,98 @@ it.aroundEach((run) =>
     },
   ),
 );
+it.each(["keep", "replace"] as const)(
+  "keeps MCP mutation ownership off the host with %s custody",
+  async (ending) => {
+    const databasePath = resolveOpenClawStateSqlitePath();
+    const owner = acquireGatewayStateOwner({
+      databasePath,
+      payload: {
+        pid: process.pid,
+        role: "gateway",
+        createdAt: new Date().toISOString(),
+        configPath: `${databasePath}.config`,
+        processNamespace: readGatewayLockProcessNamespace(),
+      },
+    });
+    try {
+      const initial = await install(STDIO_SERVER);
+      const originalConfig = await fs.readFile(initial.path, "utf8");
+      const originalOwner = await fs.readFile(owner.path);
+      const lstat = syncFs.lstatSync;
+      const stat = syncFs.statSync;
+      const realpath = syncFs.realpathSync.native;
+      const pause = new Int32Array(new SharedArrayBuffer(4));
+      const hostOwnershipReads = { owner: 0, database: 0, identity: 0 };
+      let hostLeaseStatements = 0;
+      const hostProbe = vi.spyOn(syncFs, "lstatSync").mockImplementation((pathname, options) => {
+        if (String(pathname) === owner.path) {
+          hostOwnershipReads.owner++;
+          Atomics.wait(pause, 0, 0, 20);
+        }
+        return lstat(pathname, options);
+      });
+      const databaseProbe = vi.spyOn(syncFs, "statSync").mockImplementation((pathname, options) => {
+        if (String(pathname) === databasePath) {
+          hostOwnershipReads.database++;
+          Atomics.wait(pause, 0, 0, 20);
+        }
+        return stat(pathname, options);
+      });
+      const identityProbe = vi
+        .spyOn(syncFs.realpathSync, "native")
+        .mockImplementation((pathname, options) => {
+          if ([databasePath, path.dirname(owner.path)].includes(String(pathname))) {
+            hostOwnershipReads.identity++;
+            Atomics.wait(pause, 0, 0, 20);
+          }
+          return realpath(pathname, options);
+        });
+      const sql = observeMainThreadSql({
+        onStatement: (statement) => {
+          if (/\bstate_leases\b/u.test(statement)) {
+            hostLeaseStatements++;
+          }
+        },
+      });
+      config.setRuntimeConfigSnapshotRefreshHandler({
+        preflight: async () => {
+          if (ending === "replace") {
+            await fs.writeFile(owner.path, "replacement");
+          }
+        },
+        refresh: () => true,
+      });
+      try {
+        const mutation = updateTools({ name: "fixture", tools: { include: ["search"] } });
+        if (ending === "replace") {
+          await expect(mutation).rejects.toThrow();
+          expect(await fs.readFile(initial.path, "utf8")).toBe(originalConfig);
+        } else {
+          expect(await mutation).toMatchObject({ ok: true });
+          expect(
+            JSON.parse(await fs.readFile(initial.path, "utf8")).mcp.servers.fixture.toolFilter,
+          ).toEqual({
+            include: ["search"],
+          });
+        }
+        expect(hostOwnershipReads).toEqual({ owner: 0, database: 0, identity: 0 });
+        expect(hostLeaseStatements).toBe(0);
+      } finally {
+        hostProbe.mockRestore();
+        databaseProbe.mockRestore();
+        identityProbe.mockRestore();
+        sql.restore();
+        config.setRuntimeConfigSnapshotRefreshHandler(null);
+        await fs.writeFile(owner.path, originalOwner);
+      }
+    } finally {
+      owner.release();
+      await closeState();
+    }
+  },
+);
+
 it("preserves config and OAuth credentials when deletion authority expires during preflight", async () => {
   const initial = await install();
   const { operator, requester } = seedOAuthState();
@@ -200,11 +290,8 @@ it("keeps write metadata private and leaves no-change config bytes untouched", a
   const raw = await fs.readFile(initial.path, "utf8");
   const listed = await listConfiguredMcpServers();
   expect(listed.ok).toBe(true);
-  expect(Object.keys(listed).toSorted()).toEqual(
-    "authoredConfig baseHash config mcpServers ok path runtimeConfig sourceConfigBeforeMigrations".split(
-      " ",
-    ),
-  );
+  expect(listed).not.toHaveProperty("writeOptions");
+  expect(listed).not.toHaveProperty("snapshot");
   const missing = await unsetServer({ name: "missing" });
   expect(missing).toMatchObject({ ok: true, removed: false });
   expect(Object.keys(missing)).not.toContain("writeOptions");

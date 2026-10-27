@@ -19,5 +19,7 @@ export function resolveToolSearchConfig(config?: OpenClawConfig): ToolSearchConf
     mode: raw.mode ?? "tools",
     searchDefaultLimit: Math.min(maxSearchLimit, raw.searchDefaultLimit ?? DEFAULT_SEARCH_LIMIT),
     maxSearchLimit,
+    ...(raw.include !== undefined ? { include: raw.include } : {}),
+    ...(raw.exclude !== undefined ? { exclude: raw.exclude } : {}),
   };
 }

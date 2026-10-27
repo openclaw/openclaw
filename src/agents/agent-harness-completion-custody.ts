@@ -1,6 +1,6 @@
+import { acquireSessionActorStorage } from "../config/sessions/session-actor-storage-acquisition.js";
 import {
   getSessionActorStorageBinding,
-  acquireSessionActorStorage,
   runWithSessionActorStorage,
   type SessionActorStorageBinding,
 } from "../config/sessions/session-actor-storage-binding.js";
@@ -359,7 +359,7 @@ export function runWithAgentHarnessCompletionCustody<T>(
 }
 
 /** Revalidate the retained source at asynchronous delivery effect boundaries. */
-export function isAgentHarnessCompletionCustodyCurrent(
+function isAgentHarnessCompletionCustodyCurrent(
   custody: AgentHarnessCompletionCustody,
   scope: AgentHarnessCompletionScope,
 ): boolean {

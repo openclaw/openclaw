@@ -7,7 +7,6 @@ import {
   MAX_CURSOR_LENGTH,
   MAX_CWD_LENGTH,
   MAX_SESSION_ID_LENGTH,
-  selectCodexCatalogPreviewInput,
   truncateCodexCatalogPreview,
 } from "./session-catalog-parsing.js";
 import { copyCodexCatalogSource } from "./session-catalog-source.js";
@@ -84,9 +83,7 @@ export function projectCodexCatalogNativeThread(
   if (preview !== undefined) {
     row.preview = preview;
   } else if (typeof rawPreview === "string") {
-    row.preview = rawPreview
-      ? truncateCodexCatalogPreview(selectCodexCatalogPreviewInput(rawPreview), sanitize)
-      : "";
+    row.preview = rawPreview ? truncateCodexCatalogPreview(rawPreview, sanitize) : "";
   } else if (rawPreview === null) {
     row.preview = null;
   }
@@ -141,9 +138,10 @@ export function projectCodexCatalogNativeResponse(
   const limit = Number.isFinite(remainingRows)
     ? Math.max(0, Math.min(CODEX_CATALOG_NATIVE_PAGE_LIMIT, Math.floor(remainingRows)))
     : 0;
-  const data = response.data
-    .slice(0, limit)
-    .map((thread) => projectCodexCatalogNativeThread(thread, sanitize, cachedPreview));
+  const data: CodexCatalogNativeThread[] = [];
+  for (let index = 0; index < Math.min(limit, response.data.length); index++) {
+    data.push(projectCodexCatalogNativeThread(response.data[index], sanitize, cachedPreview));
+  }
   const page: CodexCatalogNativePage = { data };
   for (const field of ["nextCursor", "backwardsCursor"] as const) {
     const value = response[field];

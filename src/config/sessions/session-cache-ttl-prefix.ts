@@ -6,11 +6,12 @@ import type {
 } from "./session-accessor.sqlite-contract.js";
 import {
   getActiveTranscriptKysely,
+  readSnapshotEventRows,
   type CurrentTranscriptProjection,
 } from "./session-accessor.sqlite-projection-read.js";
 import { collectCacheTtlProjectionPrefix } from "./session-cache-ttl-prefix-values.js";
 import {
-  transcriptEventJsonSql,
+  readTranscriptPayload,
   transcriptEventModelNavigationSql,
   transcriptPredicateSql,
 } from "./transcript-payload.js";
@@ -60,6 +61,7 @@ export function readCacheTtlProjectionPrefix(
       .crossJoin("transcript_events as event")
       .whereRef("event.session_id", "=", "active.session_id")
       .whereRef("event.seq", "=", "active.event_seq")
+      .select("event.seq")
       .select((eb) =>
         eb
           .case()
@@ -68,9 +70,9 @@ export function readCacheTtlProjectionPrefix(
           .then(
             transcriptEventModelNavigationSql(projection.database.db, "event", sql.lit("reset")),
           )
-          .else(transcriptEventJsonSql(projection.database.db, "event"))
+          .else(null)
           .end()
-          .as("event_json"),
+          .as("reset_json"),
       )
       .select(
         transcriptPredicateSql(projection.database.db, "navigation_valid", "event").as(
@@ -120,7 +122,11 @@ export function readCacheTtlProjectionPrefix(
     (function* () {
       for (const row of rows) {
         assertTranscriptNavigationValid(row.navigation_valid);
-        yield JSON.parse(row.event_json) as unknown;
+        // Sorting checkpoint payloads decompresses obsolete history before the first yield.
+        // Fetch only consumed payloads through the owner of this same projection snapshot.
+        const eventJson =
+          row.reset_json ?? readTranscriptPayload(readSnapshotEventRows(projection, [row.seq])[0]!);
+        yield JSON.parse(eventJson) as unknown;
       }
     })(),
   );

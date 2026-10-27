@@ -11,11 +11,10 @@ export type GatewayChannelManager = Parameters<
 export function startGatewayChannelHealthMonitor(params: {
   channelManager: GatewayChannelManager;
   scheduler: GatewayScheduler;
-  env?: NodeJS.ProcessEnv;
 }): ChannelHealthMonitor | null {
   // Process-level channel suppression also owns recovery: otherwise the health
   // monitor restarts configured transports after the startup grace period.
-  if (isChannelStartupSuppressedByEnvironment(params.env)) {
+  if (isChannelStartupSuppressedByEnvironment()) {
     return null;
   }
   return startChannelHealthMonitor({

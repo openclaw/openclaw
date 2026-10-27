@@ -23,6 +23,7 @@ export function createBackupClassificationInventory(stateDir: string): BackupRes
     coreDatabaseSourcePaths: [],
     resolveSqliteSource: () => ({ role: "plugin" }),
     regenerableRoots: [],
+    isIncludedByOwner: () => true,
     isIncluded: () => true,
     isTraversable: () => true,
     isPackageContent: () => false,

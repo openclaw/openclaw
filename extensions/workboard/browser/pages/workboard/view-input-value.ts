@@ -1,4 +1,4 @@
-import { createEffect, onCleanup } from "solid-js";
+import { createEffect } from "solid-js";
 
 export function liveInputValue(read: () => string) {
   let input: HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement | undefined;
@@ -7,9 +7,6 @@ export function liveInputValue(read: () => string) {
     if (input && input.value !== value) {
       input.value = value;
     }
-  });
-  onCleanup(() => {
-    input = undefined;
   });
   return (element: HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement) => {
     input = element;

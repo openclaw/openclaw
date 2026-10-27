@@ -32,7 +32,7 @@ not expose dynamic tools that duplicate Codex-native workspace operations:
 and `tool_search`. Goal operations stay native to Codex,
 so OpenClaw does not project a second goal store into Codex turns. Most
 remaining OpenClaw integration tools, such as messaging, media, cron,
-browser, nodes, gateway, `progress_card`, and `heartbeat_respond` are available through
+browser, nodes, gateway, and `progress_card` are available through
 Codex tool search under the `openclaw` namespace, keeping the initial model
 context smaller. The restricted-turn shell fallback is the exception for
 `exec` and `process` when a finite allowlist disables native Code Mode;
@@ -95,8 +95,8 @@ dynamic calls; submit several `sessions_spawn` calls in a bounded loop rather
 than expecting `Promise.all` to launch them concurrently. Already-accepted
 children can still overlap while later calls are submitted. See
 [Swarm](/tools/swarm#use-swarm-from-other-harnesses) for a complete pattern.
-Scheduled heartbeat user messages identify `heartbeat_respond` when structured
-responses are enabled; the tool remains discoverable through Codex tool search.
+Migrated heartbeat monitors use ordinary scheduled automation turns and their
+configured delivery policy. The retired `heartbeat_respond` tool is not exposed.
 
 Set `codexDynamicToolsLoading: "direct"` only when connecting to a custom
 Codex app-server that cannot search deferred dynamic tools or when
@@ -212,6 +212,10 @@ join it; once ready, an unused client retires after the idle grace. Isolated
 startup remains caller-owned. See
 [startup budgets](/plugins/codex-harness-reference/timeouts#timeouts).
 
+Temporary capability, native-hook, and tool-catalog probes wait for their isolated
+app-server to close before returning, including after a failed or timed-out read.
+Probes using a shared connection release their lease so other work can continue.
+
 OpenClaw preserves assistant text supplied with the initial native item and
 reasoning supplied with a completed item, even when Codex sends no text deltas.
 Completed items, including empty messages, reconcile the transcript with Codex's
@@ -240,56 +244,42 @@ can use it.
 
 ## Automatic Daybreak escalation
 
-OpenAI declines some defensive-cyber work on its general models and directs
-approved workspaces to a Daybreak model instead. When a turn ends in a
-cyber-policy refusal, OpenClaw retries it once on the configured Daybreak model
-so the refused work reaches the tier allowed to answer it. This is on by
-default and is configured under
-`plugins.entries.codex.config.appServer.cyberFailover`.
+When OpenAI returns a structured cyber-policy refusal, the default automatic policy
+retries once with **Blue Access on the same model**. It does not choose a replacement
+model or use the retiring Blue/Red model aliases. The native request changes only the
+turn-scoped `cyberAccessProgram` to `daybreakBlue`; provider, model, runtime, account,
+effort, and speed stay selected. Exact model pins and empty model fallback lists do
+not disable this Access configuration retry.
 
-Daybreak trails the general models in capability, so escalation stays scoped to
-work that was actually refused:
+Escalation stays scoped to work that was actually refused:
 
-- At most one escalated attempt per turn. A second refusal under Daybreak keeps
-  the block and stops.
-- A turn already running on the configured Daybreak model is never escalated.
-- A turn that already acted is never retried. Escalation requires the attempt's
-  own replay-safe verdict, so a turn refused after it sent a message, added a
-  cron entry, spawned a session, started a native continuation, or generated
-  media keeps its result. Cancellation, timeout, or a later failure also prevents
-  escalation even if the result retains a refusal diagnostic.
-- Only a refused turn is ever routed to Daybreak. Every turn starts on the model
-  the session selected, and a turn that was not refused never reaches the weaker
-  tier.
-- The retry does not mirror the prompt into the transcript a second time. The
-  refused attempt's own terminal row is discarded with its result rather than
-  staged, so a successful escalation returns the Daybreak answer; the refused
-  turn still exists upstream in the native Codex thread, which OpenClaw does not
-  rewrite.
-- Only OpenAI's own cyber refusal on the current attempt escalates. Another
-  provider's refusal, another category, and a refusal inherited from an earlier
-  turn all leave the result untouched.
-- Escalation never changes the session's stored model selection, and the only
-  retained state is the unauthorized-target record below, which is process-local
-  rather than persisted.
+- Only the current attempt's structured OpenAI cyber refusal qualifies. Other providers,
+  policy categories, and historical refusals do not trigger a retry.
+- At most one escalated attempt runs per turn. A turn already using Blue or Red is not
+  retried or downgraded; a second refusal stops.
+- The attempt must be replay-safe. Sent messages, scheduled work, spawned sessions,
+  native continuations, generated media, cancellation, timeout, and later failures keep
+  their existing no-replay behavior.
+- Every new turn starts with the session's selected Access setting. Neither the model
+  nor Access override is permanently changed, and the user prompt is not mirrored into
+  the transcript a second time. The refused turn remains in the native Codex thread.
+- `plugins.entries.codex.config.appServer.cyberFailover.mode: "off"` disables this
+  automatic retry. Doctor removes the retired `cyberFailover.model` setting and keeps
+  `mode` and `cooloffMs`; ordinary configured model fallbacks remain separate.
 
-Authorization stays server-owned. `model/list` advertises Daybreak to every
-client, so catalog presence does not prove entitlement: an unentitled workspace
-still receives `401`/`403` on use, and each such attempt costs the transport's
-full reconnect ladder. OpenClaw therefore treats the retry itself as the only
-evidence and reports an `unavailable` notice rather than a silent block. If the
-fallback target is denied without tool activity, side effects, native
-continuation, or interruption, OpenClaw keeps the original refusal even when
-the fallback produced no assistant message. Otherwise, its result is preserved
-so those facts reach the runner.
+Before `turn/start`, the request owner checks the same native client's authenticated
+ChatGPT account and its model-specific `availableAccessPrograms`. Unknown or absent Blue
+capability leaves the original refusal intact without sending a Blue request. This
+integration does not support native API-key Access requests; use the OpenClaw Responses
+runtime for Platform API-key access. Catalog metadata is a prerequisite, not permission
+to ignore a later server denial or changed account.
 
-Because entitlement belongs to the authenticated workspace and the target model
-rather than to any one conversation, an unauthorized target is remembered once
-for every session under that workspace and cannot be displaced by session churn.
-A separate workspace that is entitled keeps escalating normally, and the record
-releases on its own once `cooloffMs` elapses. Only one check runs at a time for a
-given workspace and target, so sibling sessions refused at the same moment do not
-each pay the reconnect ladder before the first result lands.
+A server authorization denial is remembered for the authenticated workspace/model for
+`cooloffMs`, so sibling sessions do not repeat the failed Blue request. This process-local
+record does not disable ordinary Standard requests. A separate workspace remains
+independent, and expired records release automatically. If a failed retry has tool
+activity, side effects, native continuation, or interruption, its own result and receipts
+are retained rather than replaced with the original refusal.
 
 ## Parallel chats and thread ownership
 
@@ -319,10 +309,13 @@ turns of the same child remain independent. Parent subscription retention during
 ordinary completion retries is unchanged.
 
 If a chat's previous client was retired while other chats still use it, the
-next turn waits for that client to exit before resuming. Stopping that turn
-ends the wait without closing a healthy new client. A startup deadline also
-ends the wait, but retires the startup client; neither path resumes the thread
-while its old writer remains alive.
+next turn waits for its exact thread to close or for that client to exit before
+resuming. If a plugin reload missed the thread's closure notification, OpenClaw
+reads the exact old client's thread status once. A matching `notLoaded` status
+allows the handoff; a still-loaded thread keeps waiting. Native resume retains
+its exclusive persistence writer lock. Stopping the waiting turn cancels its
+read and wait without closing sibling sessions or a healthy new client. A
+startup deadline also ends the wait, but retires the startup client.
 
 Managed local connections share a bounded inference relay. Up to 16 request
 preparations and uploads run at once, with another 16 waiting in arrival order.
@@ -334,8 +327,14 @@ with room for 16 pending or closing admissions. It retains up to 64 usable
 WebSockets and reclaims the oldest completed idle connection when either
 transport needs room. Active responses and newly opened connections awaiting
 their first request are not evicted. HTTP connections close after each response;
-native WebSocket reuse remains intact. The separate limit of 64 admitted root
-contexts is unchanged; transport capacity is not a count of saved conversations.
+native WebSocket reuse remains intact. Separately, each inference relay admits at
+most 64 active root contexts. Additional turns wait in arrival order for a root
+to be released; cancellation removes a waiting turn, and relay shutdown rejects
+its waiters. Admission rechecks the turn and transport ownership before starting.
+Debug logs identify the root limit and waiting count. A completed, failed,
+aborted, or yielded turn releases its root; retained parent subscriptions and
+prepared context do not occupy active roots. Transport capacity is not a count
+of saved conversations.
 
 A new WebSocket waits before opening its upstream connection; admission and its
 handshake share a 10-second deadline. HTTP admission and queued WebSocket

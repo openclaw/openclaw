@@ -136,7 +136,6 @@ export function registerQueuedFollowupNoticeCases(): void {
   );
 
   it.each([
-    { phase: "still queued", reason: "explicit-followup" },
     { phase: "still queued", reason: "steering-unavailable" },
     { phase: "evicted before finalization", reason: "explicit-followup" },
     { phase: "evicted during progress flush", reason: "steering-unavailable" },

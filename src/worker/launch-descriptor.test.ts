@@ -57,23 +57,6 @@ function launchDescriptor(): WorkerLaunchDescriptor {
   };
 }
 
-// Legacy-shape descriptors may fail closed through whole-descriptor rejection or
-// parsed denied exec authority, so accept either outcome here.
-function expectExecDeniedOrDescriptorRejected(candidate: unknown): void {
-  let parsed: WorkerLaunchDescriptor;
-  try {
-    parsed = parseWorkerLaunchDescriptor(candidate);
-  } catch (error) {
-    expect(error).toMatchObject({ message: "invalid worker launch descriptor" });
-    return;
-  }
-  const { exec } = parsed.assignment.toolAuthority;
-  if (exec !== undefined) {
-    expect(exec).toMatchObject({ security: "deny", ask: "off" });
-  }
-  expect(exec?.security).not.toBe("full");
-}
-
 function expectInvalidDescriptor(candidate: unknown) {
   expect(() => parseWorkerLaunchDescriptor(candidate)).toThrow("invalid worker launch descriptor");
 }
@@ -344,10 +327,13 @@ describe("worker launch descriptor", () => {
     }
   });
 
-  it("rejects or denies absent, malformed, and partially populated exec authority", () => {
+  it("preserves absent exec authority and rejects malformed grants", () => {
     const descriptor = launchDescriptor();
     const { exec: _exec, ...nameOnlyAuthority } = descriptor.assignment.toolAuthority;
-    expectExecDeniedOrDescriptorRejected(withAssignment({ toolAuthority: nameOnlyAuthority }));
+    expect(
+      parseWorkerLaunchDescriptor(withAssignment({ toolAuthority: nameOnlyAuthority })).assignment
+        .toolAuthority,
+    ).toEqual(nameOnlyAuthority);
     for (const exec of [
       null,
       {},
@@ -375,7 +361,7 @@ describe("worker launch descriptor", () => {
       { host: "node", security: "full", ask: "off", nodeCwd: "" },
       { host: "node", security: "full", ask: "off", nodeCwd: " /remote/workspace" },
     ]) {
-      expectExecDeniedOrDescriptorRejected(
+      expectInvalidDescriptor(
         withAssignment({ toolAuthority: { ...descriptor.assignment.toolAuthority, exec } }),
       );
     }

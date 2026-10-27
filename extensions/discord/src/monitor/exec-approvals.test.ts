@@ -351,7 +351,6 @@ describe("discord exec approval monitor helpers", () => {
         cfg,
         accountId: "default",
         config: { enabled: true, approvers: ["123"] },
-        gatewayUrl: "ws://127.0.0.1:18789",
       });
 
       expect(ctx.getApprovers()).toEqual(["123"]);
@@ -367,7 +366,6 @@ describe("discord exec approval monitor helpers", () => {
         channel: "discord",
         accountId: "default",
         senderId: "123",
-        gatewayUrl: "ws://127.0.0.1:18789",
       });
     },
   );

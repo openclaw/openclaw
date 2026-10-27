@@ -198,7 +198,10 @@ export function captureHttpRequestAuthority(
 }
 
 export function bindHttpResponseAuthority<T>(
-  auth: T & { operatorAccessAuthority?: PluginGatewayAccessAuthority | null },
+  auth: T & {
+    operatorAccessAuthority?: PluginGatewayAccessAuthority | null;
+    hasCurrentProfileAuthority?: () => boolean;
+  },
   res: ServerResponse,
   hasCurrentClientAuthority: () => boolean,
 ): T & GatewayHttpResponseAuthority {
@@ -209,7 +212,7 @@ export function bindHttpResponseAuthority<T>(
     if (!hasCurrentGatewayOperatorAccess(auth.operatorAccessAuthority)) {
       throw new GatewayOperatorAccessDeniedError();
     }
-    if (!hasCurrentClientAuthority()) {
+    if (!hasCurrentClientAuthority() || auth.hasCurrentProfileAuthority?.() === false) {
       sendUnauthorized(res);
       throw new GatewayHttpRequestAuthorityError("Unauthorized");
     }
@@ -220,6 +223,7 @@ export function bindHttpResponseAuthority<T>(
       !res.writableEnded &&
       !res.destroyed &&
       hasCurrentClientAuthority() &&
+      auth.hasCurrentProfileAuthority?.() !== false &&
       hasCurrentGatewayOperatorAccess(auth.operatorAccessAuthority),
     assertCurrent,
     revalidate: async () => assertCurrent(),

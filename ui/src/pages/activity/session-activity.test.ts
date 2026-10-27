@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from "vitest";
 import { sessionActivityTimestamp } from "../../../../src/shared/session-activity-timestamp.js";
 import type { AgentsListResult, GatewaySessionRow, SessionsListResult } from "../../api/types.ts";
 import { activityPersonFromPath } from "../../app-route-paths.ts";
+import { makeBootRoster } from "../../app/bootstrap.test-support.ts";
 import { createSessionRowProvenance } from "../../lib/sessions/session-row-provenance.ts";
 import { useSessionActivityControllerFixture } from "./session-activity-controller.test-support.ts";
 import {
@@ -64,6 +65,26 @@ function result(sessions: GatewaySessionRow[]): SessionsListResult {
 }
 
 describe("session activity projection", () => {
+  it.each([
+    ["gateway-owner", undefined, undefined],
+    ["gateway-owner", "  ", undefined],
+    ["gateway-owner", "Alex", "Alex"],
+    ["profile-ada", undefined, undefined],
+    [undefined, undefined, "main"],
+  ])("keeps actor %s names separate from the session agent", (id, label, name) => {
+    expect(
+      sessionActivityOwner(
+        {
+          key: "agent:main:work",
+          kind: "direct",
+          agentId: "main",
+          createdActor: id ? { type: "human", id, label } : undefined,
+        },
+        null,
+      ),
+    ).toMatchObject({ id: id ?? "main", name });
+  });
+
   it.each(["main", "codex"])("does not invent an avatar for ownerless %s sessions", (agentId) => {
     expect(
       sessionActivityOwner({ key: `agent:${agentId}:main`, kind: "direct", agentId }, null),
@@ -71,12 +92,9 @@ describe("session activity projection", () => {
   });
 
   it("uses the advertised owner's avatar instead of the creator's avatar", () => {
-    const agents: AgentsListResult = {
-      defaultId: "main",
-      mainKey: "main",
-      scope: "per-sender",
+    const agents: AgentsListResult = makeBootRoster({
       agents: [{ id: "main", identity: { avatarUrl: "/avatar/main?roster=1" } }],
-    };
+    });
     const row: GatewaySessionRow = {
       key: "agent:main:work",
       kind: "direct",

@@ -10,7 +10,6 @@ import {
   isContractToolResultBlock,
   readToolCallName,
 } from "../shared/tool-block-contract.js";
-import { HEARTBEAT_RESPONSE_TOOL_NAME } from "./heartbeat-tool-response.js";
 import {
   HEARTBEAT_RESPONSE_TOOL_INSTRUCTIONS,
   HEARTBEAT_RESPONSE_TOOL_PROMPT,
@@ -20,6 +19,9 @@ import {
 } from "./heartbeat.js";
 import { HEARTBEAT_TOKEN, SILENT_REPLY_TOKEN } from "./tokens.js";
 
+// Saved transcripts retain calls to the retired response tool.
+const HEARTBEAT_RESPONSE_TOOL_NAME = "heartbeat_respond";
+
 const HEARTBEAT_TASK_PROMPT_PREFIX =
   "Run the following periodic tasks (only those due based on their intervals):";
 const HEARTBEAT_TASK_PROMPT_COMPLETIONS = [
@@ -27,9 +29,11 @@ const HEARTBEAT_TASK_PROMPT_COMPLETIONS = [
     (token) => `After completing all due tasks, reply ${token}.`,
   ),
   HEARTBEAT_RESPONSE_TOOL_INSTRUCTIONS,
+  // Saved transcripts retain the closing the retired executor wrote when the response tool was unused.
+  `After completing all due tasks, reply with exactly ${SILENT_REPLY_TOKEN} as the entire final answer.`,
   `After completing all due tasks, use ${HEARTBEAT_RESPONSE_TOOL_NAME}`,
 ];
-type HeartbeatTranscriptMessage = { role: string; content?: unknown };
+type HeartbeatTranscriptMessage = { role: string; content?: unknown; __openclaw?: unknown };
 
 function isVisibleHeartbeatResponseToolCall(block: Record<string, unknown>): boolean {
   const nested = isRecord(block.function) ? block.function : undefined;

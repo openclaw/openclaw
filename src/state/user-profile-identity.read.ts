@@ -72,6 +72,13 @@ export function readUserProfileSnapshotCommand(
     { type: "userProfiles.reconcile" | "userProfiles.catalog" }
   >,
 ) {
+  if (command.type === "userProfiles.catalog" && !tableExists(db, "user_profiles")) {
+    return {
+      type: command.type,
+      profiles: [],
+      emailBindings: readUserProfileEmailBindings(db),
+    };
+  }
   return runSqliteReadSnapshotSync(db, () =>
     command.type === "userProfiles.reconcile"
       ? {
@@ -81,7 +88,7 @@ export function readUserProfileSnapshotCommand(
         }
       : {
           type: command.type,
-          profiles: tableExists(db, "user_profiles") ? selectProfileAccessEntries(db) : [],
+          profiles: selectProfileAccessEntries(db),
           emailBindings: readUserProfileEmailBindings(db),
         },
   );

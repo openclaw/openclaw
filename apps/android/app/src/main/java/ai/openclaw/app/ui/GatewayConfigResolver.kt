@@ -335,6 +335,18 @@ internal fun resolveScannedSetupCodeResult(rawInput: String): GatewayScannedSetu
   return GatewayScannedSetupCodeResult(setupCode = setupCode)
 }
 
+/** Prefer a usable QR payload; keep the first rejection for gallery diagnostics. */
+internal fun resolveScannedSetupCodeResult(rawInputs: Sequence<String?>): GatewayScannedSetupCodeResult? {
+  var firstRejection: GatewayScannedSetupCodeResult? = null
+  for (rawInput in rawInputs) {
+    if (rawInput.isNullOrBlank()) continue
+    val result = resolveScannedSetupCodeResult(rawInput)
+    if (result.setupCode != null) return result
+    if (firstRejection == null) firstRejection = result
+  }
+  return firstRejection
+}
+
 internal fun gatewayEndpointValidationMessage(
   error: GatewayEndpointValidationError,
   source: GatewayEndpointInputSource,

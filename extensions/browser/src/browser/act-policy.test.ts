@@ -16,22 +16,12 @@ function expectTimeout(request: BrowserActRequest, expected: number) {
   expect(resolveBrowserActRequestTimeoutMs(request)).toBe(expected);
 }
 const batch = (actions: BrowserActRequest[]): BrowserActRequest => ({ kind: "batch", actions });
+const delay = (): BrowserActRequest => ({ kind: "wait", timeMs: 30_000 });
+const fields = ["first", "second"].map((ref) => ({ ref, type: "text" }));
 
 describe("browser action request deadlines", () => {
   it("sums the delay and every sequential wait condition", () => {
-    expect(
-      resolveBrowserActRequestTimeoutMs({
-        kind: "wait",
-        timeMs: 10_000,
-        text: "ready",
-        textGone: "loading",
-        selector: "#result",
-        url: "**/done",
-        loadState: "networkidle",
-        fn: "() => true",
-        timeoutMs: 20_000,
-      }),
-    ).toBe(135_000);
+    expectTimeout({ ...wait, timeMs: 10_000, timeoutMs: 20_000 }, 135_000);
   });
 
   it("normalizes each condition timeout before multiplication", () => {
@@ -53,45 +43,17 @@ describe("browser action request deadlines", () => {
   });
 
   it("recursively sums nested batch children in execution order", () => {
-    expect(
-      resolveBrowserActRequestTimeoutMs({
-        kind: "batch",
-        actions: [
-          { kind: "wait", timeMs: 30_000 },
-          {
-            kind: "batch",
-            actions: [
-              { kind: "wait", timeMs: 30_000 },
-              { kind: "wait", timeMs: 30_000 },
-            ],
-          },
-        ],
-      }),
-    ).toBe(95_000);
+    expectTimeout(batch([delay(), batch([delay(), delay()])]), 95_000);
   });
 
   it("budgets action and verification defaults and adds outer slack once", () => {
-    expect(resolveBrowserActRequestTimeoutMs({ kind: "click", ref: "1" })).toBe(126_250);
-    expect(resolveBrowserActRequestTimeoutMs({ kind: "wait", timeMs: 0 })).toBe(126_250);
-    expect(resolveBrowserActRequestTimeoutMs({ kind: "click", ref: "1", timeoutMs: 45_000 })).toBe(
-      96_250,
-    );
+    expectTimeout({ kind: "click", ref: "1" }, 126_250);
+    expectTimeout({ kind: "wait", timeMs: 0 }, 126_250);
+    expectTimeout({ kind: "click", ref: "1", timeoutMs: 45_000 }, 96_250);
   });
 
   it("budgets sequential leaf phases and bounded delays", () => {
-    expectTimeout(
-      batch([
-        {
-          kind: "fill",
-          fields: [
-            { ref: "first", type: "text" },
-            { ref: "second", type: "text" },
-          ],
-          timeoutMs: 40_000,
-        },
-      ]),
-      85_500,
-    );
+    expectTimeout(batch([{ kind: "fill", fields, timeoutMs: 40_000 }]), 85_500);
     expectTimeout(
       {
         kind: "type",
@@ -134,21 +96,7 @@ describe("browser action request deadlines", () => {
   );
 
   it("preserves the prior whole-request floor for batches", () => {
-    expect(
-      resolveBrowserActRequestTimeoutMs({
-        kind: "batch",
-        actions: [
-          {
-            kind: "fill",
-            fields: [
-              { ref: "first", type: "text" },
-              { ref: "second", type: "text" },
-            ],
-            timeoutMs: 20_000,
-          },
-        ],
-      }),
-    ).toBe(65_000);
+    expectTimeout(batch([{ kind: "fill", fields, timeoutMs: 20_000 }]), 65_000);
   });
 
   it("budgets the wider scrollIntoView locator timeout", () => {

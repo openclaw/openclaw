@@ -1,8 +1,13 @@
+import { writeFile } from "node:fs/promises";
+import path from "node:path";
 import { expect, it } from "vitest";
+import type { SessionsCreateResult } from "../../../packages/gateway-protocol/src/schema/sessions.js";
+import { persistColdLoadWarmState } from "../../../scripts/lib/control-ui-bench-warm-state.ts";
 import { createCanvasDocument } from "../../../src/canvas/documents.js";
 import { buildWidgetDocument } from "../../../src/canvas/wrap.js";
 import { appendTranscriptMessage } from "../../../src/config/sessions/session-accessor.js";
 import { ensureGatewayOwnerProfile } from "../../../src/state/user-profiles.js";
+import { withEnvAsync } from "../../../src/test-utils/env.js";
 import {
   createOpenClawTestInstance,
   type OpenClawTestInstance,
@@ -11,12 +16,26 @@ import { runQaGatewayFixture } from "../../../test/helpers/qa-gateway-cleanup.ts
 import { waitForControlUiGatewayReady } from "../test-helpers/control-ui-e2e-readiness.ts";
 import { controlUiSessionUrl } from "../test-helpers/control-ui-e2e.ts";
 import { enterControlUiSession } from "../test-helpers/control-ui-session-entry.ts";
+import { connectChatGateway } from "./chat-real-gateway.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
+import {
+  installWarmConnectIdentityGate,
+  installWarmConnectSocketTrace,
+} from "./warm-connect-socket.test-support.ts";
 
 let instance: OpenClawTestInstance | undefined;
+let client: Awaited<ReturnType<typeof connectChatGateway>> | undefined;
 const suite = createControlUiE2eSuite({
   name: "Control UI widget sandbox with a real Gateway",
   startServerBeforeBrowser: true,
+  resources: {
+    async run(signal) {
+      client = await connectChatGateway(gatewayOwner(), signal);
+    },
+    async close() {
+      await client?.stopAndWait();
+    },
+  },
   async startServer() {
     const owner = await createOpenClawTestInstance({
       name: "control-ui-widget-sandbox",
@@ -56,8 +75,12 @@ const browserOptions = {
   permissions: ["local-network-access"],
 };
 
-const rpc = (method: string, params: Record<string, unknown>) =>
-  cliJson(["gateway", "call", method, "--params", JSON.stringify(params), "--json"]);
+function rpc<T = Record<string, unknown>>(method: string, params: Record<string, unknown>) {
+  if (!client) {
+    throw new Error("Gateway fixture client is not connected");
+  }
+  return client.request<T>(method, params);
+}
 
 async function sessionUrl(key: string, face: "chat" | "dashboard") {
   const handoff = await cliJson(["dashboard", "--json"]);
@@ -67,26 +90,22 @@ async function sessionUrl(key: string, face: "chat" | "dashboard") {
   return url.toString();
 }
 
-function canvasDocument(
-  id: string,
-  title: string,
-  body: string,
-  options?: Parameters<typeof buildWidgetDocument>[2],
-) {
-  return createCanvasDocument(
-    {
-      id,
+function canvasDocument(title: string, body: string) {
+  return withEnvAsync({ OPENCLAW_STATE_DIR: gatewayOwner().stateDir }, () =>
+    createCanvasDocument({
       title,
-      html: buildWidgetDocument(title, body, options),
+      html: buildWidgetDocument(title, body),
       cspSandbox: "scripts",
-      surface: "assistant_message",
-    },
-    { stateDir: gatewayOwner().stateDir },
+    }),
   );
 }
 
 async function createSession(key: string, label: string) {
-  const session = await rpc("sessions.create", { key, agentId: "main", label });
+  const session = await rpc<SessionsCreateResult>("sessions.create", {
+    key,
+    agentId: "main",
+    label,
+  });
   expect(session.ok).toBe(true);
   expect(typeof session.sessionId).toBe("string");
   return String(session.sessionId);
@@ -106,53 +125,124 @@ async function cliJson(args: string[]): Promise<Record<string, unknown>> {
 }
 
 suite.define(() => {
+  it.each(["chat", "dashboard"] as const)(
+    "keeps one signed-in connection across warm %s reloads",
+    { timeout: 120_000 },
+    async (face) => {
+      const key = `agent:main:dashboard:warm-connect-${face}`;
+      const sessionId = await createSession(key, `Warm ${face} connection`);
+      await rpc("sessions.patch", { key, boardFace: "dashboard" });
+      await rpc("board.widget.put", {
+        sessionKey: key,
+        name: "warm-connect",
+        title: "Warm connection proof",
+        placement: { size: "full" },
+        content: {
+          kind: "html",
+          html: buildWidgetDocument("Warm connection proof", "<h1>Cached connection proof</h1>"),
+        },
+      });
+      for (let index = 0; index < 9; index++) {
+        await appendAssistant(key, sessionId, [
+          {
+            type: "text",
+            text:
+              index === 8
+                ? `Cached warm connection transcript.\n\n| Item | Value |\n| --- | --- |\n${Array.from({ length: 24 }, (_, row) => `| Synthetic ${row} | Stored value |`).join("\n")}\n\n[Linked mission](/chat/main/d0effac9)\n\n![Synthetic image](/apple-touch-icon.png)`
+                : `Synthetic tall row ${index}.\n\n${"Cached paragraph.\n\n".repeat(12)}`,
+          },
+        ]);
+      }
+      const url = await sessionUrl(key, face);
+      const observations: unknown[] = [];
+      await suite.withPage(browserOptions, async ({ page }) => {
+        await page.addInitScript(installWarmConnectSocketTrace);
+        await page.addInitScript(installWarmConnectIdentityGate);
+        await page.goto(url);
+        if (await page.getByRole("link", { name: "Log in", exact: true }).isVisible()) {
+          await enterControlUiSession(page);
+        }
+        await waitForControlUiGatewayReady(page);
+        const transcript = page
+          .getByText("Cached warm connection transcript.", { exact: false })
+          .first();
+        await transcript.waitFor();
+        if (face === "dashboard") {
+          await page
+            .locator(".board-widget__frame")
+            .contentFrame()
+            .frameLocator("iframe")
+            .getByRole("heading", { name: "Cached connection proof" })
+            .waitFor();
+        }
+        await page.waitForFunction(() =>
+          Object.keys(localStorage).some((storageKey) =>
+            storageKey.startsWith("openclaw.control.bootRecord.v1:"),
+          ),
+        );
+        const warmInput: Parameters<typeof persistColdLoadWarmState>[0] = {
+          sessionKey: key,
+          sidebarView: "sessions",
+        };
+        for (let reload = 0; reload < 2; reload++) {
+          await page.evaluate(persistColdLoadWarmState, warmInput);
+          if (reload === 0) {
+            await page.evaluate(() => sessionStorage.setItem("warm-connect-hold-identity", "1"));
+          }
+          await page.reload();
+          if (reload === 0) {
+            try {
+              await page.waitForFunction(() => window.warmConnectIdentityPending === true);
+              await transcript.waitFor();
+              await page.getByRole("link", { name: "Linked mission", exact: true }).waitFor();
+              observations.push({
+                face,
+                reload,
+                stage: "cached-before-connect",
+                trace: await page.evaluate(() => window.warmConnectSocketTrace),
+              });
+            } finally {
+              await page.evaluate(() => window.releaseWarmConnectIdentity?.());
+            }
+          }
+          await waitForControlUiGatewayReady(page);
+          await transcript.waitFor();
+          const trace = await page.evaluate(() => window.warmConnectSocketTrace);
+          observations.push({ face, reload, trace });
+          await writeFile(
+            path.join(suite.artifactDir, `warm-connect-${face}.json`),
+            JSON.stringify(observations, null, 2),
+          );
+          expect(trace, JSON.stringify(trace)).toMatchObject({
+            sockets: 1,
+            connects: 1,
+            closeRequests: 0,
+            closes: 0,
+            dropped: 0,
+          });
+          expect(trace?.events.find((event) => event.direction === "send")?.method).toBe("connect");
+        }
+      });
+    },
+  );
   it("reads persisted Canvas bytes through an authenticated browser connection", async () => {
     const sessionKey = "agent:main:widget-live-proof";
-    const docId = "widget-live-proof";
     const sessionId = await createSession(sessionKey, "Synthetic widget proof");
-    await canvasDocument(
-      docId,
+    const { id: docId } = await canvasDocument(
       "Live widget proof",
       `<h1>Live widget proof</h1><label>Local note <input aria-label="Local note"></label>`,
-    );
-    const a2uiDocId = `${docId}-a2ui`;
-    const a2uiBundlePath = "/__openclaw__/a2ui/a2ui-v0.9.bundle.js";
-    const a2uiBoot = JSON.stringify({
-      messages: [
-        {
-          version: "v0.9",
-          createSurface: {
-            surfaceId: "main",
-            catalogId: "https://a2ui.org/specification/v0_9/catalogs/basic/catalog.json",
-          },
-        },
-        {
-          version: "v0.9",
-          updateComponents: {
-            surfaceId: "main",
-            components: [
-              { id: "root", component: "Column", children: ["title"] },
-              { id: "title", component: "Text", text: "A2UI live proof" },
-            ],
-          },
-        },
-      ],
-      actionTier: "state",
-    }).replaceAll("<", "\\u003c");
-    await canvasDocument(
-      a2uiDocId,
-      "A2UI live proof",
-      `<script>globalThis.openclawA2UIBoot=${a2uiBoot};</script><style>html,body{height:100%;overflow:hidden;background:transparent}openclaw-a2ui-host{display:block;height:100%}</style><openclaw-a2ui-host></openclaw-a2ui-host><script>(()=>{const match=location.pathname.match(/^\\/__openclaw__\\/cap\\/[^/]+/u);const script=document.createElement("script");script.src=(match?.[0]??"")+${JSON.stringify(a2uiBundlePath)};document.head.appendChild(script);})();</script>`,
-      { scriptOrigins: ["'self'"] },
     );
     const content = [
       {
         type: "text",
-        text: `The synthetic widgets are ready.\n[embed ref="${docId}" title="Live widget proof" height="320" /]\n[embed ref="${a2uiDocId}" title="A2UI live proof" height="200" /]`,
+        text: `The synthetic widget is ready.\n[embed ref="${docId}" title="Live widget proof" height="320" /]`,
       },
     ];
     await appendAssistant(sessionKey, sessionId, content);
-    const history = await rpc("chat.history", { sessionKey, agentId: "main" });
+    const history = await rpc<{ messages: unknown[] }>("chat.history", {
+      sessionKey,
+      agentId: "main",
+    });
     expect(history.messages).toEqual(
       expect.arrayContaining([expect.objectContaining({ content })]),
     );
@@ -176,10 +266,7 @@ suite.define(() => {
       const inner = outer.contentFrame().frameLocator("iframe");
       await inner.getByRole("heading", { name: "Live widget proof" }).waitFor();
       await inner.getByRole("textbox", { name: "Local note" }).fill("Persisted bytes, isolated UI");
-      const a2uiInner = frames.nth(1).contentFrame().frameLocator("iframe");
-      await a2uiInner.getByText("A2UI live proof", { exact: true }).waitFor();
-      expect(canvasReads).toHaveLength(2);
-      expect(canvasReads).toEqual(expect.arrayContaining([{ docId }, { docId: a2uiDocId }]));
+      expect(canvasReads).toEqual([{ docId }]);
       expect(await outer.getAttribute("src")).toContain("/mcp-app-sandbox");
       const opaque = await inner.locator("body").evaluate(() => {
         try {

@@ -1,10 +1,12 @@
 import { rawDataToString } from "@openclaw/gateway-client/websocket-data";
+import { expectDefined } from "@openclaw/normalization-core";
 import { expect, onTestFinished, test, vi } from "vitest";
 import type { EventFrame } from "../../packages/gateway-protocol/src/index.js";
 import { GatewayChatEvents } from "../../ui/src/api/gateway-chat-events.ts";
 import { createTestGatewayClient } from "../../ui/src/test-helpers/gateway-client.ts";
 import { flushPendingSessionsChangedEvents } from "./server-methods/session-change-event.js";
 import { sessionSubscriptionHandlers } from "./server-methods/sessions-subscriptions.js";
+import { captureGatewayKernel } from "./server.capture-kernel.test-support.js";
 import { startGatewayServerHarness, type GatewayServerHarness } from "./server.e2e-ws-harness.js";
 import { broadcastSessionActivitySummary } from "./session-activity-summary-events.js";
 import { drainSessionEventPublications } from "./session-event-prepared-row.js";
@@ -14,47 +16,40 @@ import { loadGatewaySessionEntryReadOnlyAsync } from "./session-utils-store.js";
 import { installGatewayTestHooks, rpcReq } from "./test-helpers.js";
 
 let harness: GatewayServerHarness;
-let kernel: Awaited<ReturnType<(typeof import("./server-kernel.js"))["createGatewayKernel"]>>;
+let kernel: Awaited<ReturnType<typeof captureGatewayKernel>>;
 installGatewayTestHooks({
   scope: "suite",
   setup: async () => {
-    const module = await import("./server-kernel.js");
-    const create = module.createGatewayKernel;
-    const capture = vi.spyOn(module, "createGatewayKernel").mockImplementation(async (...args) => {
-      kernel = await create(...args);
-      return kernel;
-    });
-    try {
+    kernel = await captureGatewayKernel(async () => {
       harness = await startGatewayServerHarness();
-    } finally {
-      capture.mockRestore();
-    }
+    });
   },
   cleanup: async () => harness?.close(),
 });
 
 test("unsubscribe acknowledgements and subscription switches preserve connection row baselines", async () => {
-  const capable = await harness.openClient({
-    caps: ["session-scoped-events", "session-row-deltas"],
-  });
-  const legacy = await harness.openClient({ caps: ["session-scoped-events"] });
+  const caps = ["session-scoped-events"];
+  const capable = await harness.openClient({ caps: [...caps, "session-row-deltas"] });
+  const legacy = await harness.openClient({ caps });
+  const unsubscribeMethod = "sessions.messages.unsubscribe";
+  const sockets = [capable.ws, legacy.ws];
+  const request = async (method: string, params: unknown, ws = capable.ws) => {
+    const response = await rpcReq(ws, method, params);
+    expect(response.ok).toBe(true);
+    return response.payload;
+  };
+  const context = kernel.gatewayRequestContext;
   const keyA = "agent:main:row-delta-unsubscribe-a";
   const keyB = "agent:main:row-delta-unsubscribe-b";
   for (const key of [keyA, keyB]) {
-    expect(
-      (await rpcReq(capable.ws, "sessions.create", { key, agentId: "main", visibility: "shared" }))
-        .ok,
-    ).toBe(true);
+    await request("sessions.create", { key, agentId: "main", visibility: "shared" });
   }
-  const projection = getSessionRowProjection(kernel.gatewayRequestContext);
-  if (!projection) {
-    throw new Error("Expected runtime session projection");
-  }
-  await flushPendingSessionsChangedEvents(kernel.gatewayRequestContext);
+  const projection = expectDefined(getSessionRowProjection(context), "session projection");
+  await flushPendingSessionsChangedEvents(context);
   await drainSessionEventPublications(projection);
-  for (const { ws } of [capable, legacy]) {
-    expect((await rpcReq(ws, "sessions.subscribe", {})).ok).toBe(true);
-    expect((await rpcReq(ws, "sessions.messages.subscribe", { key: keyA })).ok).toBe(true);
+  for (const ws of sockets) {
+    await request("sessions.subscribe", {}, ws);
+    await request("sessions.messages.subscribe", { key: keyA }, ws);
   }
   const encoded = collectSessionRowFrames(capable.ws);
   const baseline = collectSessionRowFrames(legacy.ws);
@@ -67,82 +62,55 @@ test("unsubscribe acknowledgements and subscription switches preserve connection
       decoder.dispatch(event, (frame) => decoded.push(frame));
     }
   });
-  const client = createTestGatewayClient(async (method, params) => {
-    const response = await rpcReq(capable.ws, method, params);
-    if (!response.ok || response.payload == null) {
-      throw new Error(`Expected successful ${method} response`);
-    }
-    return response.payload;
-  });
-  const targets = await Promise.all(
-    [keyA, keyB].map(async (key) => ({
-      key,
-      agentId: "main",
-      storePath: (await loadGatewaySessionEntryReadOnlyAsync(key, { agentId: "main" })).storePath,
-    })),
+  const client = createTestGatewayClient(async (method, params) =>
+    expectDefined(await request(method, params), `${method} payload`),
   );
-  const publish = async (key: string) => {
-    const target = targets.find((row) => row.key === key);
-    if (!target) {
-      throw new Error("Expected publication target");
+  // Both sessions belong to the same main-agent store.
+  const { storePath } = await loadGatewaySessionEntryReadOnlyAsync(keyA, { agentId: "main" });
+  const publish = (key: string) =>
+    broadcastSessionActivitySummary(
+      { key, agentId: "main", storePath },
+      { getSessionRowProjection: () => projection, broadcast: context.broadcast },
+    );
+  const expectPair = async (delta = false) => {
+    for (const ws of sockets) {
+      await request("sessions.list", { agentId: "main", rowMode: "sidebar" }, ws);
     }
-    await broadcastSessionActivitySummary(target, {
-      getSessionRowProjection: () => projection,
-      broadcast: kernel.gatewayRequestContext.broadcast,
-    });
-  };
-  const drain = async () => {
-    for (const { ws } of [capable, legacy]) {
-      expect((await rpcReq(ws, "sessions.list", { agentId: "main", rowMode: "sidebar" })).ok).toBe(
-        true,
-      );
+    if (delta) {
+      expect(encoded.at(-1)?.payload).toHaveProperty("session.base");
     }
-  };
-  const expectPair = () => {
     expect(reconnect).not.toHaveBeenCalled();
     expect(decoded.at(-1)?.payload).toEqual(baseline.at(-1)?.payload);
     expect(decoded).toHaveLength(encoded.length);
   };
   await publish(keyA);
   await publish(keyB);
-  await drain();
-  expectPair();
+  await expectPair();
 
-  const unsubscribe = sessionSubscriptionHandlers["sessions.messages.unsubscribe"];
-  if (!unsubscribe) {
-    throw new Error("Expected unsubscribe handler");
-  }
-  const interleave = vi
-    .spyOn(sessionSubscriptionHandlers, "sessions.messages.unsubscribe")
-    .mockImplementationOnce(async (options) => {
-      let response: Parameters<typeof options.respond> | undefined;
-      await unsubscribe({ ...options, respond: (...args) => (response = args) });
-      if (!response) {
-        throw new Error("Expected unsubscribe acknowledgement");
-      }
-      // The real mutation has finished; this frame must reach ingress before its ACK.
-      await publish(keyB);
-      options.respond(...response);
-    });
+  const unsubscribe = expectDefined(sessionSubscriptionHandlers[unsubscribeMethod], "unsubscribe");
+  const interleave = vi.spyOn(sessionSubscriptionHandlers, unsubscribeMethod);
+  interleave.mockImplementationOnce(async (options) => {
+    let response: Parameters<typeof options.respond> | undefined;
+    await unsubscribe({ ...options, respond: (...args) => (response = args) });
+    const acknowledgement = expectDefined(response, "unsubscribe acknowledgement");
+    // The real mutation has finished; this frame must reach ingress before its ACK.
+    await publish(keyB);
+    options.respond(...acknowledgement);
+  });
   onTestFinished(() => interleave.mockRestore());
-  await decoder.request(client, "sessions.messages.unsubscribe", { key: keyA });
-  await drain();
-  expectPair();
+  await decoder.request(client, unsubscribeMethod, { key: keyA });
+  await expectPair();
   await publish(keyB);
-  await drain();
-  expect(encoded.at(-1)?.payload).toHaveProperty("session.base");
-  expectPair();
+  await expectPair(true);
 
-  expect((await rpcReq(legacy.ws, "sessions.messages.unsubscribe", { key: keyA })).ok).toBe(true);
+  await request(unsubscribeMethod, { key: keyA }, legacy.ws);
   for (const key of [keyB, keyA, keyB]) {
-    for (const { ws } of [capable, legacy]) {
-      expect((await rpcReq(ws, "sessions.messages.subscribe", { key })).ok).toBe(true);
+    for (const ws of sockets) {
+      await request("sessions.messages.subscribe", { key }, ws);
     }
     await publish(key);
-    await drain();
-    expect(encoded.at(-1)?.payload).toHaveProperty("session.base");
-    expectPair();
-    await decoder.request(client, "sessions.messages.unsubscribe", { key });
-    expect((await rpcReq(legacy.ws, "sessions.messages.unsubscribe", { key })).ok).toBe(true);
+    await expectPair(true);
+    await decoder.request(client, unsubscribeMethod, { key });
+    await request(unsubscribeMethod, { key }, legacy.ws);
   }
 });

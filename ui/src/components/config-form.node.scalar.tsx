@@ -347,6 +347,9 @@ function ScalarInput(props: {
     get "aria-label"() {
       return state().field.label;
     },
+    get "aria-required"() {
+      return state().field.required ? ("true" as const) : undefined;
+    },
     get "aria-describedby"() {
       return [state().field.helpId, state().errorId].filter(Boolean).join(" ");
     },
@@ -371,6 +374,9 @@ function ScalarInput(props: {
         !props.params.compact &&
         props.params.value === undefined &&
         state().effectiveValue !== undefined &&
+        event.currentTarget instanceof HTMLInputElement &&
+        event.currentTarget.value === "" &&
+        !event.currentTarget.validity.badInput &&
         (event.key === "ArrowUp" || event.key === "ArrowDown")
       ) {
         event.preventDefault();
@@ -526,6 +532,7 @@ export function SelectInput(props: {
         <select
           class="settings-select"
           aria-label={field().label}
+          aria-required={field().required ? "true" : undefined}
           aria-describedby={field().helpId}
           disabled={props.params.disabled}
           value={selectedValue()}

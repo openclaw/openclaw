@@ -73,13 +73,11 @@ export type QaCredentialRecord = z.infer<typeof credentialRecordSchema>;
 
 export class QaCredentialAdminError extends Error {
   code: string;
-  httpStatus?: number;
 
-  constructor(params: { code: string; message: string; httpStatus?: number }) {
+  constructor(params: { code: string; message: string }) {
     super(params.message);
     this.name = "QaCredentialAdminError";
     this.code = params.code;
-    this.httpStatus = params.httpStatus;
   }
 }
 
@@ -316,14 +314,12 @@ async function postJson<T>(
     throw new QaCredentialAdminError({
       code: brokerError.data.code,
       message: brokerError.data.message,
-      httpStatus: response.status,
     });
   }
   if (!response.ok) {
     throw new QaCredentialAdminError({
       code: "BROKER_HTTP_ERROR",
       message: `Convex credential admin request failed with HTTP ${response.status}.`,
-      httpStatus: response.status,
     });
   }
 
@@ -332,7 +328,6 @@ async function postJson<T>(
     throw new QaCredentialAdminError({
       code: "INVALID_RESPONSE",
       message: `Convex credential admin response did not match expected shape: ${parsed.error.message}`,
-      httpStatus: response.status,
     });
   }
 

@@ -1,5 +1,4 @@
 import type { ReplyPayload } from "../../auto-reply/reply-payload.js";
-import type { DeliveryRecoveryDrainDecision } from "../delivery-recovery.shared.js";
 import { hasActiveDeliveryOwner, type QueuedDelivery } from "./delivery-queue-types.js";
 
 const DEFAULT_MAX_RETRIES = 5;
@@ -34,18 +33,23 @@ export function canReplayAmbiguousFinalText(entry: QueuedDelivery): boolean {
   return entry.retryAmbiguousFinalText === true && entry.ambiguousTransportError === true;
 }
 
-export function shouldInspectQueuedDelivery(
-  entry: QueuedDelivery,
-  now: number,
-  selectEntry?: (entry: QueuedDelivery, now: number) => DeliveryRecoveryDrainDecision,
-): boolean {
+export function shouldInspectQueuedDelivery(entry: QueuedDelivery, now: number): boolean {
   // The live producer may still be awaiting its committed enqueue reply. Taking
   // an inspection claim would preempt it before we reload and skip its lease.
-  return (
-    Boolean(entry.settlement) ||
-    (!hasActiveDeliveryOwner(entry, now) &&
-      (selectEntry === undefined || selectEntry(entry, now).match))
-  );
+  return Boolean(entry.settlement) || !hasActiveDeliveryOwner(entry, now);
+}
+
+/** Resolves the platform attempt identity a recovered delivery must reconcile against. */
+export function recoveryPlatformAttemptId(entry: QueuedDelivery, claimedAttemptId?: string) {
+  return claimedAttemptId !== undefined
+    ? claimedAttemptId
+    : typeof entry.platformSendAttemptId === "string"
+      ? entry.platformSendAttemptId
+      : entry.recoveryState === "producer_claimed" && typeof entry.producerClaimId === "string"
+        ? entry.producerClaimId
+        : typeof entry.completionRetention === "object" || entry.requiresProducerClaim === true
+          ? null
+          : undefined;
 }
 
 const PERMANENT_ERROR_PATTERNS: readonly RegExp[] = [

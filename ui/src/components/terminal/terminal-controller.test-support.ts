@@ -1,3 +1,4 @@
+import type { GhosttyTerminalController } from "@openclaw/libterminal/browser";
 import { vi } from "vitest";
 import { terminalFontFamily } from "../../app/terminal-font.ts";
 
@@ -8,7 +9,7 @@ export function createTerminalController(dispose: () => void = vi.fn()) {
     remeasureFont: vi.fn(),
     render: vi.fn(),
   };
-  return {
+  const controller = {
     readOnly: false,
     terminal: {
       options: { fontFamily: terminalFontFamily() },
@@ -22,12 +23,14 @@ export function createTerminalController(dispose: () => void = vi.fn()) {
       attachCustomKeyEventHandler: vi.fn(),
       reset: vi.fn(),
       paste: vi.fn(),
+      input: vi.fn(),
     },
     write: vi.fn(),
     fit: vi.fn(),
     resize: vi.fn(),
     setReadOnly: vi.fn(),
-    attach: vi.fn(),
+    attach: vi.fn(async () => {}),
     dispose,
   };
+  return controller satisfies Omit<GhosttyTerminalController, "terminal">;
 }

@@ -3,12 +3,14 @@ import { describe, expect, it, vi } from "vitest";
 import { applyExecApprovalsUpdate } from "../../infra/exec-approvals-mutation.kernel.js";
 import * as execApprovalsSocket from "../../infra/exec-approvals-socket.js";
 import type { ExecApprovalsFile } from "../../infra/exec-approvals.js";
+import { acquireGatewayLock, readLockPayloadSync } from "../../infra/gateway-lock.js";
 import * as workerAdmission from "../../infra/sqlite-worker-operation-admission.js";
 import { sqliteWorkerOwnerProbe as probe } from "../../infra/sqlite-worker-owner-probe.test-support.js";
 import { closeOpenClawStateDatabaseAsync } from "../../state/openclaw-state-db.js";
 import { withEnvAsync } from "../../test-utils/env.js";
 import { withTempDir } from "../../test-utils/temp-dir.js";
 import * as localStateOwner from "./local-state-owner.js";
+import { createSessionMutationTestContext } from "./sessions-mutations.owner.test-support.js";
 import type { GatewayRequestHandlerOptions } from "./types.js";
 
 const ensureExecApprovalsSnapshotMock = vi.hoisted(() => vi.fn());
@@ -60,6 +62,84 @@ async function callHandler(
 }
 
 describe("exec approvals gateway methods", () => {
+  it.each([false, true])(
+    "commits native usage only while its live requester still owns the request (revoked=%s)",
+    async (revoked) => {
+      const actual = await vi.importActual<typeof import("../../infra/exec-approvals.js")>(
+        "../../infra/exec-approvals.js",
+      );
+      await withTempDir("native-exec-request-", async (stateDir) => {
+        await withEnvAsync({ OPENCLAW_STATE_DIR: stateDir }, async () => {
+          const owner = await acquireGatewayLock({ env: process.env, allowInTests: true });
+          expect(owner).not.toBeNull();
+          const pattern = "/usr/bin/echo";
+          await actual.updateExecApprovals({
+            update: {
+              kind: "replace",
+              file: { version: 1, agents: { main: { allowlist: [{ pattern }] } } },
+            },
+          });
+          let current = true;
+          let commitObserved = false;
+          const admission = probe.admission(workerAdmission, (request, grant, admit) => {
+            if (request.stage === "commit") {
+              commitObserved = true;
+              current = !revoked;
+            }
+            admit(request, grant);
+          });
+          try {
+            const respond = await callHandler(
+              "exec.approvals.native.commit",
+              {
+                expectedOwnerId: expectDefined(
+                  readLockPayloadSync(owner!.lockPath, true)?.ownerId,
+                  "state owner id",
+                ),
+                agentId: "main",
+                command: "echo native",
+                uses: [{ match: { pattern }, resolvedPath: pattern }],
+                grants: [],
+                authorization: {
+                  source: "current-policy",
+                  security: "full",
+                  ask: "off",
+                  allowlistSatisfied: true,
+                },
+              },
+              createSessionMutationTestContext({}),
+              () => current,
+            );
+            expect(commitObserved).toBe(true);
+            if (revoked) {
+              expect(respond).toHaveBeenCalledWith(
+                false,
+                undefined,
+                expect.objectContaining({
+                  code: "UNAVAILABLE",
+                  message: expect.stringContaining("Gateway requester authority changed"),
+                }),
+              );
+              expect(
+                actual.readExecApprovalsSnapshot().file.agents?.main?.allowlist?.[0]?.lastUsedAt,
+              ).toBeUndefined();
+            } else {
+              expect(respond).toHaveBeenCalledWith(true, { authorized: true }, undefined);
+              expect(
+                actual.readExecApprovalsSnapshot().file.agents?.main?.allowlist?.[0]
+                  ?.lastUsedCommand,
+              ).toBe("echo native");
+            }
+          } finally {
+            admission.mockRestore();
+            await closeOpenClawStateDatabaseAsync();
+            await owner?.release();
+          }
+        });
+      });
+    },
+  );
+
   it.each([false, true])(
     "reads the owner-routed local socket path without mutation (revoked=%s)",
     async (revoked) => {

@@ -1,12 +1,16 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { sql } from "kysely";
+import { getPostgresPhysicalFacts } from "../infra/database-engine/physical-facts.js";
 import {
   executeSqliteQuerySync,
   executeSqliteQueryTakeFirstSync,
   getNodeSqliteKysely,
 } from "../infra/kysely-sync.js";
 import type { EngineConnection } from "../infra/sql-connection.js";
-import { withExistingOpenClawStateDatabaseReadOnly } from "../state/openclaw-state-db-readonly.js";
+import { isPostgresSqlConnection } from "../infra/sql-connection.js";
+import { isIncognitoSessionKey } from "../routing/session-key.js";
+import { mapNestedStrings } from "../shared/map-nested-strings.js";
+import { readTableColumns } from "../state/openclaw-state-db-schema-helpers.js";
 import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
 
 export type ReservedKeyRename = { from: string; to: string };
@@ -38,8 +42,8 @@ function listTuiLastSessionStateRows(database: EngineConnection) {
   ).rows;
 }
 
-function sqliteSchemaIdentifier(value: string) {
-  return sql.id(value); // kysely-allow-raw -- value comes only from SQLite schema metadata.
+function schemaIdentifier(value: string) {
+  return sql.id(value); // kysely-allow-raw -- value comes only from admitted schema metadata.
 }
 
 // Shared state has many owner-specific session-key columns; schema discovery keeps this migration complete.
@@ -47,21 +51,27 @@ function listSharedStateSessionKeyColumns(
   database: EngineConnection,
 ): SharedStateSessionKeyColumn[] {
   const db = getNodeSqliteKysely<SharedStateSchemaDatabase>(database);
-  const tables = executeSqliteQuerySync(
-    database,
-    db
-      .selectFrom("sqlite_schema")
-      .select("name")
-      .where("type", "=", "table")
-      .where("name", "not like", "sqlite_%"),
-  ).rows;
+  const tables = isPostgresSqlConnection(database)
+    ? (getPostgresPhysicalFacts(database)
+        ?.catalog.filter((fact) => fact.kind === "table")
+        .map((fact) => ({ name: fact.table })) ?? [])
+    : executeSqliteQuerySync(
+        database,
+        db
+          .selectFrom("sqlite_schema")
+          .select("name")
+          .where("type", "=", "table")
+          .where("name", "not like", "sqlite_%"),
+      ).rows;
   return tables.flatMap(({ name: table }) => {
-    const columns = executeSqliteQuerySync(
-      database,
-      db
-        .selectFrom(sql`pragma_table_info(${table})`.as("pragma_columns"))
-        .select(sql`name`.as("name")),
-    ).rows as Array<{ name: string }>;
+    const columns = isPostgresSqlConnection(database)
+      ? [...readTableColumns(database, table)].map((name) => ({ name }))
+      : (executeSqliteQuerySync(
+          database,
+          db
+            .selectFrom(sql`pragma_table_info(${table})`.as("pragma_columns"))
+            .select(sql`name`.as("name")),
+        ).rows as Array<{ name: string }>);
     return columns.flatMap(({ name: column }): SharedStateSessionKeyColumn[] => {
       if (column === "session_key" || column.endsWith("_session_key")) {
         return [{ table, column, json: false }];
@@ -71,15 +81,15 @@ function listSharedStateSessionKeyColumns(
   });
 }
 
-export function collectSharedStateSessionKeys(database: EngineConnection): Set<string> {
+function collectSharedStateSessionKeys(database: EngineConnection): Set<string> {
   const db = getNodeSqliteKysely<DynamicSharedStateDatabase>(database);
   const keys = new Set<string>();
   for (const { table, column, json } of listSharedStateSessionKeyColumns(database)) {
-    const columnId = sqliteSchemaIdentifier(column);
+    const columnId = schemaIdentifier(column);
     const rows = executeSqliteQuerySync(
       database,
       db
-        .selectFrom(sql`${sqliteSchemaIdentifier(table)}`.as("session_key_table"))
+        .selectFrom(sql`${schemaIdentifier(table)}`.as("session_key_table"))
         .select(columnId.as("value"))
         .where(columnId, "is not", null),
     ).rows as Array<{ value: unknown }>;
@@ -109,10 +119,9 @@ export function rewriteSharedStateSessionKeys(
   renames: ReadonlyMap<string, string>,
 ): void {
   const db = getNodeSqliteKysely<DynamicSharedStateDatabase>(database);
-  const rowId = sql`rowid`;
   for (const { table, column, json } of listSharedStateSessionKeyColumns(database)) {
-    const tableId = sqliteSchemaIdentifier(table);
-    const columnId = sqliteSchemaIdentifier(column);
+    const tableId = schemaIdentifier(table);
+    const columnId = schemaIdentifier(column);
     if (!json) {
       for (const [from, to] of renames) {
         executeSqliteQuerySync(
@@ -127,10 +136,8 @@ export function rewriteSharedStateSessionKeys(
     }
     const rows = executeSqliteQuerySync(
       database,
-      db
-        .selectFrom(sql`${tableId}`.as("session_key_table"))
-        .select([rowId.as("rowid"), columnId.as("value")]),
-    ).rows as Array<{ rowid: number | bigint; value: unknown }>;
+      db.selectFrom(sql`${tableId}`.as("session_key_table")).select(columnId.as("value")),
+    ).rows as Array<{ value: unknown }>;
     for (const row of rows) {
       if (typeof row.value !== "string") {
         continue;
@@ -141,14 +148,16 @@ export function rewriteSharedStateSessionKeys(
       } catch {
         continue;
       }
-      const rewritten = JSON.stringify(replaceSessionKeyReferences(parsed, renames));
+      const rewritten = JSON.stringify(
+        mapNestedStrings(parsed, (value) => renames.get(value) ?? value),
+      );
       if (rewritten !== row.value) {
         executeSqliteQuerySync(
           database,
           db
             .updateTable(sql`${tableId}`.as("session_key_table"))
             .set(columnId, rewritten)
-            .where(rowId, "=", row.rowid),
+            .where(columnId, "=", row.value),
         );
       }
     }
@@ -183,7 +192,7 @@ function collectJsonStringValues(value: unknown, values: Set<string>): void {
   }
 }
 
-export function readRepairJournal(database: EngineConnection): ReservedKeyRename[] {
+function readRepairJournal(database: EngineConnection): ReservedKeyRename[] {
   const db = getNodeSqliteKysely<Pick<OpenClawStateKyselyDatabase, "state_leases">>(database);
   const row = executeSqliteQueryTakeFirstSync(
     database,
@@ -208,12 +217,13 @@ export function readRepairJournal(database: EngineConnection): ReservedKeyRename
   });
 }
 
-export function readRepairJournalReadOnly(env: NodeJS.ProcessEnv): ReservedKeyRename[] {
-  return (
-    withExistingOpenClawStateDatabaseReadOnly((database) => readRepairJournal(database.db), {
-      env,
-    }) ?? []
-  );
+export function readReservedIncognitoKeyRepairState(database: EngineConnection) {
+  const occupiedKeys = collectSharedStateSessionKeys(database);
+  return {
+    occupiedKeys,
+    reservedKeys: [...occupiedKeys].filter(isIncognitoSessionKey),
+    renames: readRepairJournal(database),
+  };
 }
 
 export function writeRepairJournal(
@@ -254,23 +264,5 @@ export function deleteRepairJournal(database: EngineConnection): void {
       .deleteFrom("state_leases")
       .where("scope", "=", REPAIR_JOURNAL_SCOPE)
       .where("lease_key", "=", REPAIR_JOURNAL_KEY),
-  );
-}
-
-function replaceSessionKeyReferences(
-  value: unknown,
-  renames: ReadonlyMap<string, string>,
-): unknown {
-  if (typeof value === "string") {
-    return renames.get(value) ?? value;
-  }
-  if (Array.isArray(value)) {
-    return value.map((item) => replaceSessionKeyReferences(item, renames));
-  }
-  if (!value || typeof value !== "object") {
-    return value;
-  }
-  return Object.fromEntries(
-    Object.entries(value).map(([key, item]) => [key, replaceSessionKeyReferences(item, renames)]),
   );
 }

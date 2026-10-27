@@ -1,9 +1,5 @@
 // Provider auth runtime helpers implement OAuth loopback, token exchange, and auth persistence.
 import crypto from "node:crypto";
-import fs from "node:fs";
-import { createServer } from "node:http";
-import path from "node:path";
-import { fileURLToPath, pathToFileURL } from "node:url";
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import { resolveTimerTimeoutMs } from "@openclaw/normalization-core/number-coercion";
 import {
@@ -21,6 +17,7 @@ import { renderOAuthPage } from "../shared/oauth-page.js";
 
 export { resolveEnvApiKey } from "../agents/model-auth-env.js";
 export { withPersonalAuthProfileStore } from "../agents/auth-profiles/personal-store.js";
+export { withAuthProfileStoreAtEffect } from "../agents/auth-profiles/store-runtime.js";
 export { isUserModelAuthProfileId } from "../state/user-model-account-id.js";
 export { removeProviderAuthProfilesWithLock } from "../agents/auth-profiles/profiles.js";
 export { removeAuthProfileConfig } from "../plugins/provider-auth-helpers.js";
@@ -53,7 +50,7 @@ export type OAuthCallbackResult = {
  * only after the callback route is ready. Invalid request candidates remain nonterminal.
  */
 export async function startProviderOAuthLoopbackCallbackServer(
-  params: Omit<Parameters<typeof startOAuthLoopbackCallbackServer>[0], "lookup" | "createServer">,
+  params: Parameters<typeof startOAuthLoopbackCallbackServer>[0],
 ): Promise<OAuthLoopbackCallbackServer> {
   return await startOAuthLoopbackCallbackServer(params);
 }
@@ -229,7 +226,6 @@ export async function waitForLocalOAuthCallback(params: {
     expectedState: params.expectedState,
     timeoutMs,
     ...(params.hostname ? { bindHostname: params.hostname } : {}),
-    createServer,
     ...(params.signal ? { signal: params.signal } : {}),
     resolveCorsOrigin: hasCorsOriginAllowlist
       ? resolveOAuthCallbackOrigin
@@ -269,29 +265,6 @@ type ResolveApiKeyForProvider =
   typeof import("../agents/model-auth.js").resolveApiKeyForProviderCore;
 type GetRuntimeAuthForModel =
   typeof import("../plugins/runtime/runtime-model-auth.runtime.js").getRuntimeAuthForModelCore;
-type RuntimeModelAuthModule = typeof import("../plugins/runtime/runtime-model-auth.runtime.js");
-const RUNTIME_MODEL_AUTH_CANDIDATES = [
-  "./runtime-model-auth.runtime",
-  "../plugins/runtime/runtime-model-auth.runtime",
-] as const;
-const RUNTIME_MODEL_AUTH_EXTENSIONS = [".js", ".ts", ".mjs", ".mts", ".cjs", ".cts"] as const;
-
-function resolveRuntimeModelAuthModuleHref(): string {
-  const baseDir = path.dirname(fileURLToPath(import.meta.url));
-  for (const relativeBase of RUNTIME_MODEL_AUTH_CANDIDATES) {
-    for (const ext of RUNTIME_MODEL_AUTH_EXTENSIONS) {
-      const candidate = path.resolve(baseDir, `${relativeBase}${ext}`);
-      if (fs.existsSync(candidate)) {
-        return pathToFileURL(candidate).href;
-      }
-    }
-  }
-  throw new Error(`Unable to resolve runtime model auth module from ${import.meta.url}`);
-}
-
-async function loadRuntimeModelAuthModule(): Promise<RuntimeModelAuthModule> {
-  return (await import(resolveRuntimeModelAuthModuleHref())) as RuntimeModelAuthModule;
-}
 
 /**
  * Resolves provider API-key auth through the runtime auth module.
@@ -301,7 +274,7 @@ export async function resolveApiKeyForProvider(
   params: Parameters<ResolveApiKeyForProvider>[0],
 ): Promise<Awaited<ReturnType<ResolveApiKeyForProvider>>> {
   params.signal?.throwIfAborted();
-  const runtimeAuth = await loadRuntimeModelAuthModule();
+  const runtimeAuth = await import("../plugins/runtime/runtime-model-auth.runtime.js");
   params.signal?.throwIfAborted();
   return runtimeAuth.resolveProviderRuntimeApiKey(params);
 }
@@ -314,6 +287,6 @@ export async function getRuntimeAuthForModel(
   params: Parameters<GetRuntimeAuthForModel>[0],
 ): Promise<Awaited<ReturnType<GetRuntimeAuthForModel>>> {
   const { getRuntimeAuthForModelCore: getRuntimeAuthForModelLocal } =
-    await loadRuntimeModelAuthModule();
+    await import("../plugins/runtime/runtime-model-auth.runtime.js");
   return getRuntimeAuthForModelLocal(params);
 }

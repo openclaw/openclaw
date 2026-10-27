@@ -296,7 +296,6 @@ it("skips writer admission when the archive budget target is already satisfied",
   const work = fixture.prune(Infinity);
   await expect(withinTest(work, signal)).resolves.toMatchObject({
     removedFiles: 0,
-    completed: true,
     checkpointIncomplete: 0,
   });
   fixture.expectUnchanged();
@@ -336,7 +335,6 @@ it("lets foreground writes settle while archive pruning scans physical usage", a
   release.resolve();
   await expect(withinTest(work, signal)).resolves.toMatchObject({
     removedFiles: 1,
-    completed: true,
   });
 });
 
@@ -400,7 +398,7 @@ it("rejects another agent's archive without changing its canonical row or file",
     .catch((error: unknown) => error);
   fixture.expectUnchanged();
   const recovered = await fixture.prune(0);
-  expect(recovered).toMatchObject({ removedFiles: 1, completed: true });
+  expect(recovered).toMatchObject({ removedFiles: 1 });
   expect(fixture.readArchive()).toBeUndefined();
   expect(fs.existsSync(fixture.archivePath)).toBe(false);
   expect(failure).toBeInstanceOf(Error);

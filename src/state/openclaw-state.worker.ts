@@ -199,9 +199,11 @@ function createSharedStateWorkerBackend(
   ) => {
     const { receipt, transactionEnvironment, ...options } = transactionOptions;
     const openedDatabase = open();
+    // Waiting for the host must not hold the writer lock. The commit grant still
+    // revalidates authority after the transaction's current-row checks.
+    requestSqliteWorkerOperationAdmission({ stage: "transaction", facts: undefined });
     return write(
       (database) => {
-        requestSqliteWorkerOperationAdmission({ stage: "transaction", facts: undefined });
         const result = operation(database);
         requestSqliteWorkerOperationAdmission({
           stage: "commit",
@@ -503,6 +505,9 @@ function createSharedStateWorkerBackend(
       updateRunWriter?.assertSettled();
       if (nativeDatabase) {
         assertTransactionUsable(nativeDatabase.db);
+        if (!nativeDatabase.db.isOpen && isPostgresSqlConnection(nativeDatabase.db)) {
+          throw new Error("Shared-state worker retained a closed PostgreSQL connection");
+        }
         if (nativeDatabase.db.isOpen && nativeDatabase.db.isTransaction) {
           throw new Error("Shared-state worker retained an unsettled transaction");
         }

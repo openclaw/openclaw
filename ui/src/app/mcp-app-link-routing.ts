@@ -2,12 +2,6 @@ import { shouldHandleNavigationClick } from "../lib/navigation-click.ts";
 import { listen } from "../lib/reactive/listener.ts";
 import type { ApplicationContext } from "./context.ts";
 
-function looksLikeMcpAppLink(href: string): boolean {
-  return /^(?:(?:codex|chatgpt|openclaw):\/\/plugins\/|https:\/\/chatgpt\.com\/plugins\/)[^/?#]+\/app\/[^/?#]+\/?(?:[?#]|$)/iu.test(
-    href,
-  );
-}
-
 export function startMcpAppRouting(context: Pick<ApplicationContext, "navigate">) {
   let disposed = false;
   const click = (event: MouseEvent) => {
@@ -21,7 +15,11 @@ export function startMcpAppRouting(context: Pick<ApplicationContext, "navigate">
       return;
     }
     const href = anchor.href;
-    if (!looksLikeMcpAppLink(href)) {
+    if (
+      !/^(?:(?:codex|chatgpt|openclaw):\/\/plugins\/|https:\/\/chatgpt\.com\/plugins\/)[^/?#]+\/app\/[^/?#]+\/?(?:[?#]|$)/iu.test(
+        href,
+      )
+    ) {
       return;
     }
     // Chat links use target=_blank. Suppress navigation for app-shaped links even

@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import { insideGitCheckout, runGit } from "../agents/worktrees/git.js";
 import type { OpenClawStateDatabaseOptions } from "../state/openclaw-state-db.js";
 import {
+  OpenClawStateLeaseError,
   type OpenClawStateLeaseContext,
   withOpenClawStateLease,
 } from "../state/openclaw-state-lease.js";
@@ -13,24 +14,47 @@ export class ProjectCheckoutError extends Error {
   override name = "ProjectCheckoutError";
 }
 
+/** Immediate acquisition failed before the protected operation could start. */
+export class ProjectCheckoutBusyError extends OpenClawStateLeaseError {
+  constructor(cause: OpenClawStateLeaseError) {
+    super(cause.message, { code: cause.code, cause });
+  }
+}
+
 export async function withProjectCheckoutLifecycle<T>(
   repoRoot: string,
-  options: OpenClawStateDatabaseOptions & { signal?: AbortSignal },
+  options: OpenClawStateDatabaseOptions & { signal?: AbortSignal; waitMs?: number },
   run: (lease: OpenClawStateLeaseContext) => Promise<T>,
 ): Promise<T> {
-  return await withOpenClawStateLease(
-    {
-      scope: "projects.checkout",
-      key: repoRoot,
-      signal: options.signal,
-      database: { scope: "shared", options },
-      leaseMs: PROJECT_CHECKOUT_LEASE_MS,
-      waitMs: PROJECT_CHECKOUT_WAIT_MS,
-      leaseLabel: "project checkout lease",
-      operationLabel: "projects.checkout.lease",
-    },
-    run,
-  );
+  let entered = false;
+  try {
+    return await withOpenClawStateLease(
+      {
+        scope: "projects.checkout",
+        key: repoRoot,
+        signal: options.signal,
+        database: { scope: "shared", options },
+        leaseMs: PROJECT_CHECKOUT_LEASE_MS,
+        waitMs: options.waitMs ?? PROJECT_CHECKOUT_WAIT_MS,
+        leaseLabel: "project checkout lease",
+        operationLabel: "projects.checkout.lease",
+      },
+      (lease) => {
+        entered = true;
+        return run(lease);
+      },
+    );
+  } catch (error) {
+    if (
+      !entered &&
+      options.waitMs === 0 &&
+      error instanceof OpenClawStateLeaseError &&
+      error.code === "OPENCLAW_STATE_LEASE_HELD"
+    ) {
+      throw new ProjectCheckoutBusyError(error);
+    }
+    throw error;
+  }
 }
 
 export async function resolveProjectDirectory(projectPath: string): Promise<string> {

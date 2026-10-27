@@ -35,11 +35,42 @@ import {
 } from "./memory-session-tombstones.js";
 import { applyShortTermPromotions } from "./short-term-promotion-apply.js";
 import { readPhaseSignalStore, readShortTermStore } from "./short-term-promotion-store.js";
-import type { ShortTermLockEntry } from "./short-term-promotion-types.js";
+import type { PromotionCandidate, ShortTermLockEntry } from "./short-term-promotion-types.js";
 import { normalizeShortTermRecallStore } from "./short-term-promotion-utils.js";
 
 const MEMORY_CORE_PLUGIN_ID = "memory-core";
 const MEMORY_CORE_TEST_AGENT_ID = "memory-core-test";
+
+export function createPromotionCandidateForTest(
+  params: Pick<PromotionCandidate, "path" | "snippet"> & Partial<PromotionCandidate>,
+): PromotionCandidate {
+  return {
+    key: `memory:${params.path}:1:1`,
+    startLine: 1,
+    endLine: 1,
+    source: "memory",
+    recallCount: 3,
+    signalCount: 3,
+    avgScore: 0.95,
+    maxScore: 0.95,
+    uniqueQueries: 2,
+    firstRecalledAt: "2026-04-01T00:00:00.000Z",
+    lastRecalledAt: "2026-04-02T00:00:00.000Z",
+    ageDays: 0,
+    score: 0.95,
+    recallDays: ["2026-04-01", "2026-04-02"],
+    conceptTags: [],
+    components: {
+      frequency: 1,
+      relevance: 1,
+      diversity: 1,
+      recency: 1,
+      consolidation: 1,
+      conceptual: 1,
+    },
+    ...params,
+  };
+}
 
 export function readMemoryForgetTombstonesForTest(params: { agentId: string }) {
   const { db } = openOpenClawAgentDatabase(params);
@@ -170,9 +201,6 @@ export const shortTermTestState = {
     writeRawShortTermStore(workspaceDir, raw, "phase"),
   async writeShortTermLock(workspaceDir: string, entry: ShortTermLockEntry) {
     await shortTermLocks().register(memoryCoreWorkspaceStateKey(workspaceDir), entry);
-  },
-  async deleteShortTermLock(workspaceDir: string) {
-    await shortTermLocks().delete(memoryCoreWorkspaceStateKey(workspaceDir));
   },
 };
 

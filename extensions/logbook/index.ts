@@ -11,6 +11,10 @@ import {
   type OpenClawPluginApi,
   type OpenClawPluginNodeHostCommand,
 } from "openclaw/plugin-sdk/plugin-entry";
+import {
+  createPluginRuntimeProcessEntrypoint,
+  resolveRuntimeWorkerUrl,
+} from "openclaw/plugin-sdk/process-runtime";
 import { resolveLogbookConfig } from "./src/config.js";
 import { dayKeyFor } from "./src/day.js";
 import { LogbookService } from "./src/service.js";
@@ -133,9 +137,11 @@ export default definePluginEntry({
           logger: ctx.logger,
           scheduler: ctx.scheduler,
           dataDir: path.join(ctx.stateDir, "logbook"),
-          workerModuleUrl: new URL(
-            `./src/store.worker${path.extname(api.runtimeSource)}`,
-            pathToFileURL(api.runtimeSource),
+          workerModuleUrl: resolveRuntimeWorkerUrl(
+            createPluginRuntimeProcessEntrypoint(
+              "logbookStore",
+              pathToFileURL(api.runtimeSource).href,
+            ),
           ),
         });
         try {

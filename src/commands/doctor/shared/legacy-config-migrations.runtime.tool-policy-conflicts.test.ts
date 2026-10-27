@@ -1,4 +1,3 @@
-// Covers doctor repair for tool policy scopes that set both allow and alsoAllow.
 import { describe, expect, it } from "vitest";
 import {
   isToolAllowed,
@@ -21,42 +20,30 @@ function runRegisteredMigrations(raw: unknown): { config: unknown; changes: stri
 function isValid(config: unknown): boolean {
   return validateConfigObjectWithPlugins(config, { pluginValidation: "core-only" }).ok;
 }
+const conflict = (allow = ["message"], alsoAllow = ["exec"]) => ({ allow, alsoAllow });
+const globalConflict = conflict(["read"]);
+const messageRead = ["message", "read"];
+type Policy = { allow?: string[]; alsoAllow: string[] };
 
 describe("tool policy allow/alsoAllow conflict repair", () => {
-  it.each([
-    {
-      name: "top-level without a profile",
-      raw: { tools: { allow: ["message", "read"], alsoAllow: ["exec"] } },
-      paths: ["tools"],
-      allow: ["message", "read", "exec"],
-    },
-    {
-      name: "full profile",
-      raw: { tools: { profile: "full", allow: ["message"], alsoAllow: ["exec"] } },
-      paths: ["tools"],
-      allow: ["message", "exec"],
-    },
-    {
-      name: "agent and provider scopes",
-      raw: {
-        tools: { byProvider: { sandbox: { allow: ["message"], alsoAllow: ["exec"] } } },
-        agents: { entries: { sandbox: { tools: { allow: ["message"], alsoAllow: ["read"] } } } },
+  const repairs: [string, unknown, string[], string[]?][] = [
+    ["no profile", { tools: conflict(messageRead) }, ["tools"], [...messageRead, "exec"]],
+    ["full profile", { tools: { profile: "full", ...conflict() } }, ["tools"], ["message", "exec"]],
+    [
+      "agent and provider scopes",
+      {
+        tools: { byProvider: { sandbox: conflict() } },
+        agents: { entries: { sandbox: { tools: conflict(["message"], ["read"]) } } },
       },
-      paths: ["tools.byProvider.sandbox", "agents.entries.sandbox.tools"],
-    },
-    {
-      name: "profile-bound repair",
-      raw: {
-        tools: {
-          profile: "messaging",
-          allow: ["message"],
-          alsoAllow: ["exec"],
-          exec: { security: "allowlist" },
-        },
-      },
-      paths: ["tools"],
-    },
-  ])("repairs conflicts in $name exactly once", ({ name, raw, paths, allow }) => {
+      ["tools.byProvider.sandbox", "agents.entries.sandbox.tools"],
+    ],
+    [
+      "profile-bound repair",
+      { tools: { profile: "messaging", ...conflict(), exec: { security: "allowlist" } } },
+      ["tools"],
+    ],
+  ];
+  it.each(repairs)("repairs conflicts in %s exactly once", (name, raw, paths, allow) => {
     expect(isValid(raw)).toBe(false);
     const res = runRegisteredMigrations(raw);
     expect(isValid(res.config)).toBe(true);
@@ -76,23 +63,12 @@ describe("tool policy allow/alsoAllow conflict repair", () => {
     expect(runRegisteredMigrations(res.config)).toEqual({ config: res.config, changes: [] });
   });
 
-  it.each([
-    {
-      scope: "agent",
-      global: { alsoAllow: ["exec"] },
-      agent: { allow: ["read", "message"], alsoAllow: ["message"] },
-    },
-    {
-      scope: "global with an agent extras override",
-      global: { allow: ["read"], alsoAllow: ["exec"] },
-      agent: { alsoAllow: ["message"] },
-    },
-    {
-      scope: "global with an empty agent extras override",
-      global: { allow: ["read"], alsoAllow: ["exec"] },
-      agent: { alsoAllow: [] },
-    },
-  ])("preserves sandbox permissions for a conflict at $scope", ({ global, agent }) => {
+  const sandboxCases: [string, Policy, Policy][] = [
+    ["agent", { alsoAllow: ["exec"] }, conflict(["read", "message"], ["message"])],
+    ["global with an agent extras override", globalConflict, { alsoAllow: ["message"] }],
+    ["global with an empty agent extras override", globalConflict, { alsoAllow: [] }],
+  ];
+  it.each(sandboxCases)("preserves sandbox grants at %s", (_scope, global, agent) => {
     const raw: OpenClawConfig = {
       tools: { sandbox: { tools: global } },
       agents: {
@@ -115,11 +91,7 @@ describe("tool policy allow/alsoAllow conflict repair", () => {
 
   it.each([
     { tools: { alsoAllow: ["exec"] } },
-    {
-      plugins: {
-        entries: { acme: { config: { tools: { allow: ["message"], alsoAllow: ["exec"] } } } },
-      },
-    },
+    { plugins: { entries: { acme: { config: { tools: conflict() } } } } },
   ])("leaves non-conflicting or plugin-owned config untouched: %j", (raw) => {
     expect(runRegisteredMigrations(raw)).toEqual({ config: raw, changes: [] });
   });

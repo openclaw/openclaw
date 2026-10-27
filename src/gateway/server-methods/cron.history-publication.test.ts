@@ -1,13 +1,13 @@
 import { expectDefined } from "@openclaw/normalization-core";
-import { expect, it, vi } from "vitest";
-import { CronService } from "../../cron/service.js";
-import { createNoopLogger } from "../../cron/service.test-harness.js";
-import { createTestGatewayScheduler } from "../../test-utils/gateway-scheduler-clock.js";
+import { afterEach, expect, it, vi } from "vitest";
 import { createDirectChatContext } from "../server-chat.agent-events.test-helpers.js";
 import { cronHistoryHandler } from "./cron-history.js";
+import { createReadService } from "./cron-read.test-support.js";
 import { cronHandlers } from "./cron.js";
 import { createCronCallerClient, createCronJob } from "./cron.validation.test-support.js";
 import type { RespondFn } from "./types.js";
+
+afterEach(() => vi.restoreAllMocks());
 
 const publication = vi.hoisted(() => ({
   afterVerification: () => {},
@@ -48,33 +48,49 @@ vi.mock("../../cron/delivery-preview.js", () => ({
 it.each([
   { method: "cron.history", change: "client" },
   { method: "cron.history", change: "grant" },
+  { method: "cron.list", change: "off-page unchanged" },
+  { method: "cron.list", change: "duplicate allowed first" },
+  { method: "cron.list", change: "duplicate denied first" },
+  { method: "cron.list", change: "client" },
+  { method: "cron.list", change: "resident unavailable" },
   { method: "cron.list", change: "off-page grant" },
+  { method: "cron.list", change: "off-page removal" },
+  { method: "cron.list", change: "off-page retarget" },
+  { method: "cron.list", change: "second selected removal" },
+  { method: "cron.list", change: "second selected retarget" },
 ] as const)(
   "$method rechecks $change authority before final publication",
   async ({ method, change }) => {
-    const cron = new CronService({
-      scheduler: createTestGatewayScheduler(),
-      nowMs: () => Date.now(),
+    const cron = createReadService({
       storePath: "/synthetic/cron",
       cronEnabled: false,
       defaultAgentId: "main",
-      log: createNoopLogger(),
       enqueueSystemEvent() {},
-      requestHeartbeat() {},
       runIsolatedAgentJob: async () => ({ status: "ok" }),
     });
     const job = createCronJob({
       agentId: "main",
       scheduledToolPolicy: { version: 1, mode: "trusted" },
     });
+    const secondJob = createCronJob({ id: "cron-2", agentId: "main" });
+    const selectedJobs =
+      change === "second selected removal" || change === "second selected retarget"
+        ? [job, secondJob]
+        : [job];
+    let residentJobs: Array<typeof job> | undefined = selectedJobs;
     vi.spyOn(cron, "readJob").mockResolvedValue(job);
-    vi.spyOn(cron, "getJob").mockReturnValue(job);
+    vi.spyOn(cron, "getJob").mockImplementation((id) =>
+      residentJobs?.find((candidate) => candidate.id === id),
+    );
+    vi.spyOn(cron, "getLoadedJobs").mockImplementation(() => residentJobs);
     vi.spyOn(cron, "listPage").mockImplementation(async (_options, matchesJob) => {
-      expect(matchesJob?.(job)).toBe(true);
+      for (const selectedJob of selectedJobs) {
+        expect(matchesJob?.(selectedJob)).toBe(true);
+      }
       return {
         jobs: [],
-        total: 1,
-        offset: 1,
+        total: selectedJobs.length,
+        offset: selectedJobs.length,
         limit: 1,
         hasMore: false,
         nextOffset: null,
@@ -94,15 +110,34 @@ it.each([
     let current = true;
     publication.verified = false;
     publication.afterVerification = () => {
+      if (change === "off-page unchanged") {
+        return;
+      }
       if (change === "client") {
         current = false;
+      } else if (change === "off-page removal") {
+        residentJobs = [];
+      } else if (change === "off-page retarget") {
+        residentJobs = [createCronJob({ ...job, agentId: "other" })];
+      } else if (change === "second selected removal") {
+        residentJobs = [job];
+      } else if (change === "second selected retarget") {
+        residentJobs = [job, createCronJob({ ...secondJob, agentId: "other" })];
+      } else if (change === "resident unavailable") {
+        residentJobs = undefined;
+      } else if (change === "duplicate allowed first") {
+        residentJobs = [job, createCronJob({ ...job, agentId: "other" })];
+      } else if (change === "duplicate denied first") {
+        residentJobs = [createCronJob({ ...job, agentId: "other" }), job];
       } else {
         claim.expiresAtMs = Date.now() - 1;
       }
     };
     const respond = vi.fn<RespondFn>();
     const params =
-      method === "cron.history" ? { id: job.id, runId: "public" } : { offset: 1, limit: 1 };
+      method === "cron.history"
+        ? { id: job.id, runId: "public" }
+        : { offset: selectedJobs.length, limit: 1 };
     try {
       const invocation = expectDefined(
         method === "cron.history" ? cronHistoryHandler : cronHandlers[method],
@@ -120,19 +155,25 @@ it.each([
         isWebchatConnect: () => false,
         hasCurrentClientAuthority: () => current,
       });
-      if (method === "cron.list") {
-        await expect(invocation).rejects.toThrow("Cron list visibility changed");
+      if (change === "off-page unchanged" || change === "duplicate allowed first") {
+        await invocation;
+        expect(respond).toHaveBeenCalledExactlyOnceWith(
+          true,
+          expect.objectContaining({ jobs: [], total: 1, offset: 1, limit: 1 }),
+          undefined,
+        );
+      } else if (method === "cron.list") {
+        await expect(invocation).rejects.toThrow(
+          change === "client" ? "Cron history authority closed" : "Cron list visibility changed",
+        );
         expect(respond).not.toHaveBeenCalled();
-        expect(publication.verified).toBe(true);
-        return;
+      } else {
+        await invocation;
+        expect(respond.mock.calls).toMatchObject([[false, undefined, { code: "UNAVAILABLE" }]]);
       }
-      await invocation;
       expect(publication.verified).toBe(true);
-      expect(respond.mock.calls).toHaveLength(1);
-      expect(respond.mock.calls[0]).toMatchObject([false, undefined, { code: "UNAVAILABLE" }]);
     } finally {
       cron.stop();
-      vi.restoreAllMocks();
     }
   },
 );

@@ -1,6 +1,7 @@
 // Looks up installed plugin index records by normalized scope.
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 import { compileSafeRegex } from "../security/safe-regex.js";
+import { normalizeLowercaseStringSet } from "../shared/normalized-string-set.js";
 import { normalizePluginId } from "./config-state.js";
 import { hasMissingConfigPathActivationMetadata } from "./installed-plugin-index-config-path-scope.js";
 import { getInstalledPluginIndexFacts } from "./installed-plugin-index-facts.js";
@@ -126,7 +127,6 @@ export function createInstalledPluginIndexScopeLookup(
   };
   const lookup: InstalledPluginIndexScopeLookup = {
     addAgentHarnessOwners: agentHarnessOwners.add,
-    addChannelContributionOwners: channelContributionOwners.add,
     addDirectChannelOwners: directChannelOwners.add,
     addDirectProviderOwners: installedPluginOwners.add,
     addProviderContributionOwners: providerContributionOwners.add,
@@ -140,11 +140,7 @@ export function createInstalledPluginIndexScopeLookup(
       }
     },
     canResolveDirectProviderIds: (providerIds, scopePluginIds) => {
-      const normalizedScope = new Set(
-        [...scopePluginIds]
-          .map((pluginId) => normalizeOptionalLowercaseString(pluginId))
-          .filter((pluginId): pluginId is string => Boolean(pluginId)),
-      );
+      const normalizedScope = normalizeLowercaseStringSet(scopePluginIds);
       return providerIds.every((providerId) => {
         const normalized = normalizeOptionalLowercaseString(providerId);
         return Boolean(

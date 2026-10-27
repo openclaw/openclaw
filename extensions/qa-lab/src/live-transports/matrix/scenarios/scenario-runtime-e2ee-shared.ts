@@ -27,13 +27,6 @@ export const MATRIX_QA_SYNC_STATE_AFTER_PARAM = "org.matrix.msc4222.use_state_af
 
 type MatrixQaE2eeBootstrapResult = Awaited<ReturnType<typeof runMatrixQaE2eeBootstrap>>;
 
-export function requireMatrixQaE2eeOutputDir(context: MatrixQaScenarioContext) {
-  if (!context.outputDir) {
-    throw new Error("Matrix E2EE QA scenarios require an output directory");
-  }
-  return context.outputDir;
-}
-
 export function requireMatrixQaCliRuntimeEnv(context: MatrixQaScenarioContext) {
   if (!context.gatewayRuntimeEnv) {
     throw new Error("Matrix CLI QA scenarios require the gateway runtime environment");
@@ -324,7 +317,7 @@ export async function createMatrixQaE2eeAccountClient(
     ...account,
     baseUrl: context.baseUrl,
     observedEvents: context.observedEvents,
-    outputDir: requireMatrixQaE2eeOutputDir(context),
+    outputDir: context.outputDir,
     timeoutMs: context.timeoutMs,
   });
 }

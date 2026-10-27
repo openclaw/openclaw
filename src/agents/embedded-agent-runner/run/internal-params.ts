@@ -1,8 +1,10 @@
 import type { SessionTranscriptRuntimeTarget } from "../../../config/sessions/session-accessor.js";
 import type { SessionAdmissionTransition } from "../../../config/sessions/session-admission-transition.types.js";
+import type { PreparedSessionSourceAssertion } from "../../../config/sessions/session-source-authority.js";
 import type { SessionTranscriptTargetBinding } from "../../../config/sessions/transcript-target-binding.js";
 import type { InternalSessionEntry } from "../../../config/sessions/types.js";
 import type { Model } from "../../../llm/types.js";
+import type { ReplyMessageJoinObservation } from "../../../sessions/session-controller.message-join-observation.js";
 import type { SessionControllerWatchdogAttempt } from "../../../sessions/session-controller.watchdog.js";
 import type { PreparedTtsPreferences } from "../../../tts/tts-preferences.js";
 import type { AgentExecutionAuthBinding } from "../../execution-auth-binding.js";
@@ -47,6 +49,8 @@ export type CompactionAccountingFact = Readonly<
 >;
 
 export type RunEmbeddedAgentInternalParams = RunEmbeddedAgentParams & {
+  /** Original admitted settings, retained by the host across private runtime selection. */
+  joinObservation?: ReplyMessageJoinObservation;
   /** The logical run already invoked model routing before preparing its candidate chain. */
   resolvedModelSelection?: ResolvedRunEntryModelSelection;
   preparedTtsPreferences?: PreparedTtsPreferences;
@@ -82,6 +86,7 @@ export type RunEmbeddedAgentInternalParams = RunEmbeddedAgentParams & {
   pluginGeneration?: PreparedModelRuntimePluginGeneration;
   /** Re-admit from the committed transcript without persisting the original prompt again. */
   pluginRuntimeRefreshContinuation?: true;
+  pluginRuntimeRefreshUserPrompt?: EmbeddedRunAttemptParams["pluginRuntimeRefreshUserPrompt"];
   pluginRuntimeRefreshMessages?: EmbeddedRunAttemptParams["pluginRuntimeRefreshMessages"];
   /** Actual generation cleanup, including source callbacks after native terminal publication. */
   runCleanupSettlement?: Promise<void>;
@@ -93,19 +98,23 @@ export type RunEmbeddedAgentInternalParams = RunEmbeddedAgentParams & {
   onRetryWait?: (
     deadlineAtMs: number,
     signal?: AbortSignal,
+    wait?: { rateLimitStopMessage?: string },
   ) => ((completed?: boolean) => void) | undefined;
 };
 
 export type EmbeddedRunAttemptInternalParams = EmbeddedRunAttemptParams &
   Pick<
     RunEmbeddedAgentInternalParams,
-    "onContextAccountingEvent" | "onCompactionRequestBudget" | "runCleanupSettlement"
+    | "onContextAccountingEvent"
+    | "onCompactionRequestBudget"
+    | "runCleanupSettlement"
+    | "joinObservation"
   > & {
     bindWatchdogAttempt?: (attempt: SessionControllerWatchdogAttempt) => void;
     /** The dispatch owner already selected this target, including any compaction successor. */
     preparedSessionTarget?: {
       readonly target: Readonly<BoundAgentRunSessionTarget & SessionTranscriptTargetBinding>;
-      assertCurrent(): void;
+      assertCurrent: PreparedSessionSourceAssertion;
     };
     compactionCountOwner?: "subscription" | "caller";
     /** Current-run committed plan facts; retained across attempts, never loaded from history. */

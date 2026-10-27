@@ -62,7 +62,11 @@ export async function runAgentHarnessToolInvocation<TResult>(params: {
       const prepared = params.prepareArguments(toolArgs, Boolean(prepare));
       preparedArgs = isPromiseLike(prepared) ? await prepared : prepared;
     }
-    boundary.setArguments(isRecord(preparedArgs) ? preparedArgs : initialArguments);
+    const executionArguments = isRecord(preparedArgs) ? preparedArgs : initialArguments;
+    // Preparation can mutate in place; otherwise the initial capture is already exact.
+    if (prepare || params.prepareArguments || executionArguments !== initialArguments) {
+      boundary.setArguments(executionArguments);
+    }
     const beforeExecuteResult = params.beforeExecute?.();
     if (beforeExecuteResult) {
       await beforeExecuteResult;
@@ -143,7 +147,7 @@ type AgentHarnessToolCall = {
 type AgentHarnessToolExecution = {
   boundary: ReturnType<ReturnType<typeof createAgentHarnessToolExecutionBoundaryRegistry>["begin"]>;
   startedAt: number;
-  executedArguments: Record<string, unknown>;
+  executedArguments: Readonly<Record<string, unknown>>;
   rawResult: AgentToolResult<unknown>;
   rawResultSnapshot: unknown;
   rawIsError: boolean;
@@ -161,6 +165,6 @@ type AgentHarnessToolInvocationFailure = {
   error: unknown;
   boundary: AgentHarnessToolExecution["boundary"];
   startedAt: number;
-  executedArguments: Record<string, unknown>;
+  executedArguments: Readonly<Record<string, unknown>>;
   rawResult: AgentToolResult<unknown> | undefined;
 };

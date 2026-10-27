@@ -16,7 +16,11 @@ import { normalizeUsage } from "../../src/agents/usage.js";
 import type { OpenClawConfig } from "../../src/config/types.openclaw.js";
 import { readResponseWithLimit } from "../../src/infra/http-response-body.js";
 import type { ManagedRun } from "../../src/process/supervisor/types.js";
-import type { CodeModeMatrixCellResult, RunCellParams } from "../code-mode-model-matrix.ts";
+import type {
+  CodeModeMatrixAutoTier,
+  CodeModeMatrixCellResult,
+  RunCellParams,
+} from "../code-mode-model-matrix.ts";
 import { createBuildSmokeEnv } from "./build-smoke-env.mts";
 import { createGatewayMatrixConfig } from "./code-mode-matrix-config.ts";
 import {
@@ -32,6 +36,7 @@ import {
   type MatrixPerformanceTask,
 } from "./code-mode-matrix-performance-fixtures.ts";
 import type { MatrixPerformanceFixture } from "./code-mode-matrix-performance-types.ts";
+import { createGatewayMatrixProcessSupervisor } from "./code-mode-matrix-process-owner.ts";
 import {
   classifyCodeModeMatrixProviderFailure,
   matrixProviderEnv,
@@ -109,6 +114,13 @@ export function parseGatewayMatrixActivationDiagnostic(line: string) {
     toolsDisabled: value.toolsDisabled,
     rawRun: value.rawRun,
     fallbackActive: value.fallbackActive,
+    ...(typeof value.modelProvider === "string" ? { modelProvider: value.modelProvider } : {}),
+    ...(typeof value.modelId === "string" ? { modelId: value.modelId } : {}),
+    ...(value.modelCodeMode === "unflagged" ||
+    value.modelCodeMode === "preferred" ||
+    value.modelCodeMode === "capable"
+      ? { modelCodeMode: value.modelCodeMode }
+      : {}),
     ...(typeof value.allowlist === "string" ? { allowlist: value.allowlist } : {}),
   };
 }
@@ -117,7 +129,9 @@ export function evaluateGatewayMatrixActivation(params: {
   diagnostics: readonly GatewayMatrixActivationDiagnostic[];
   rootRunId?: string;
   childRunIds: readonly string[];
-  expectedEnabled: boolean;
+  expectedEnabled: boolean | "auto";
+  expectedModel?: string;
+  expectedAutoTier?: CodeModeMatrixAutoTier;
 }) {
   const requiredActivationRuns = [
     ...new Set([...(params.rootRunId ? [params.rootRunId] : []), ...params.childRunIds]),
@@ -133,7 +147,16 @@ export function evaluateGatewayMatrixActivation(params: {
     Boolean(params.rootRunId) &&
     requiredActivationRuns.every((runId) =>
       qualifyingActivation.some((entry) => entry.runId === runId),
-    );
+    ) &&
+    (params.expectedEnabled !== "auto" ||
+      qualifyingActivation.every(
+        (entry) =>
+          entry.modelProvider !== undefined &&
+          entry.modelId !== undefined &&
+          `${entry.modelProvider}/${entry.modelId}` === params.expectedModel &&
+          entry.modelCodeMode !== undefined &&
+          !entry.fallbackActive,
+      ));
   return {
     requiredActivationRuns,
     observedActivation,
@@ -142,7 +165,16 @@ export function evaluateGatewayMatrixActivation(params: {
     actualCodeMode: activationComplete && qualifyingActivation.every((entry) => entry.active),
     engagement:
       activationComplete &&
-      qualifyingActivation.every((entry) => entry.active === params.expectedEnabled),
+      qualifyingActivation.every(
+        (entry) =>
+          (params.expectedEnabled !== "auto" ||
+            params.expectedAutoTier === undefined ||
+            entry.modelCodeMode === params.expectedAutoTier) &&
+          entry.active ===
+            (params.expectedEnabled === "auto"
+              ? entry.modelCodeMode === "preferred"
+              : params.expectedEnabled),
+      ),
   };
 }
 
@@ -1456,9 +1488,10 @@ export async function runGatewayMatrixCell(
     NO_COLOR: "1",
   };
   const startedAt = Date.now();
-  const { createProcessSupervisor } = await import("../../src/process/supervisor/supervisor.js");
+  const supervisor = await createGatewayMatrixProcessSupervisor(
+    params.runtime.processOwnerBootstrap,
+  );
   const { runCommandWithTimeout } = await import("../../src/process/exec.js");
-  const supervisor = createProcessSupervisor();
   const scopeKey = `code-mode-matrix:${randomUUID()}`;
   const cleanup = supervisor.acquireScopeCleanup(scopeKey, { processTree: "required-all" });
   let child: ManagedRun | undefined;
@@ -1724,7 +1757,9 @@ export async function runGatewayMatrixCell(
       ledger?.runs
         .filter((run) => run.requesterSessionKey === rootSessionKey)
         .map((run) => run.runId) ?? [],
-    expectedEnabled: params.cell.mode === "code",
+    expectedEnabled: params.cell.mode === "auto" ? "auto" : params.cell.mode === "code",
+    expectedModel: params.cell.model,
+    expectedAutoTier: params.expectedAutoTier,
   });
   let behavior: Record<string, boolean>;
   if (performance) {
@@ -1793,6 +1828,7 @@ export async function runGatewayMatrixCell(
     cleanupCertain &&
     task.status === "completed" &&
     identity &&
+    engagement &&
     behaviorPassed &&
     (performance !== undefined ||
       (interview.status === "completed" && Object.values(interviewChecks).every(Boolean)));
@@ -1868,6 +1904,8 @@ export async function runGatewayMatrixCell(
     },
   };
   await write("evidence.json", {
+    codeModeConfigured: record(cfg) && record(cfg.tools) && Object.hasOwn(cfg.tools, "codeMode"),
+    expectedAutoTier: params.expectedAutoTier ?? null,
     gateway,
     task,
     interview,

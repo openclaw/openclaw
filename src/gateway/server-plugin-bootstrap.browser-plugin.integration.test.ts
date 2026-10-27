@@ -3,6 +3,7 @@
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createBundledBrowserPluginFixture } from "../../test/helpers/browser-bundled-plugin-fixture.js";
+import { createSilentPluginLogger as createTestLog } from "../../test/helpers/mock-logger.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { clearPluginLoaderCache } from "../plugins/loader.test-fixtures.js";
 import {
@@ -14,15 +15,6 @@ import { prepareGatewayPluginLoad } from "./server-plugin-bootstrap.js";
 function resetPluginState() {
   clearPluginLoaderCache();
   resetPluginRuntimeStateForTest();
-}
-
-function createTestLog() {
-  return {
-    info() {},
-    warn() {},
-    error() {},
-    debug() {},
-  };
 }
 
 describe("prepareGatewayPluginLoad browser plugin integration", () => {

@@ -19,8 +19,11 @@ import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { upsertSessionEntryCore, withTranscriptWriteLock } from "./session-accessor.js";
 import type { SessionTranscriptRawDeltaResult } from "./session-accessor.sqlite-contract.js";
 import { loadSessionEntryForAdmission } from "./session-accessor.sqlite-entry-admission.js";
-import { readActiveTranscriptEntryAnchor } from "./session-accessor.sqlite-transcript-anchor.js";
-import { readSessionTranscriptContextProjectionAsync } from "./session-transcript-context-read.js";
+import { readActiveTranscriptEntryAnchor } from "./session-accessor.sqlite-transcript-admitted-read.js";
+import {
+  readSessionTranscriptContextProjectionAsync,
+  readSessionTranscriptModelContextAsync,
+} from "./session-transcript-context-read.js";
 import { withSessionTranscriptDeltaReader } from "./session-transcript-delta-read.js";
 import * as transcriptReaders from "./session-transcript-execution-read.js";
 import { hasSessionTranscriptMessage } from "./session-transcript-message-presence.js";
@@ -30,6 +33,46 @@ import { waitForSessionTranscriptProjection } from "./session-transcript-reconci
 import { readSessionTranscriptWatermarkAsync } from "./session-transcript-watermark.js";
 import { historyLane } from "./session-transcript-worker-resources.js";
 import { withOwnedSessionTranscriptWrites } from "./transcript-write-context.js";
+
+it("captures a caller's transcript anchor before asynchronous reading", async () => {
+  await withOpenClawTestState({ label: "context-anchor-snapshot" }, async (state) => {
+    const target = {
+      agentId: "main",
+      sessionId: "snapshot",
+      sessionKey: "agent:main:snapshot",
+      storePath: state.statePath("transcript.sqlite"),
+    };
+    await upsertSessionEntryCore(target, { sessionId: target.sessionId, updatedAt: 1 });
+    const manager = await SessionManager.openAsync(target);
+    const { anchor } = await manager.appendMessageWithTranscriptAnchorAsync({
+      role: "user",
+      content: "captured question",
+      timestamp: 1,
+    });
+    if (!anchor) {
+      throw new Error("Missing committed transcript anchor");
+    }
+    const through = { ...anchor };
+    const reading = readSessionTranscriptModelContextAsync(
+      target,
+      (context) => context.events,
+      undefined,
+      undefined,
+      through,
+    );
+    through.entryId = "mutated-by-caller";
+    through.rawSeq = -1;
+    through.generation = "mutated-generation";
+    await expect(reading).resolves.toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          type: "message",
+          message: expect.objectContaining({ content: "captured question" }),
+        }),
+      ]),
+    );
+  });
+});
 
 it("reads a prepared transcript snapshot while another writer owns the FIFO", async ({
   signal,

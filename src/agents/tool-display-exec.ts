@@ -525,16 +525,15 @@ function isGenericSummary(summary: string): boolean {
   return false;
 }
 
-function compactRawCommand(raw: string, maxLength = 120): string {
+function compactRawCommand(raw: string): string {
   const oneLine = raw
     .replace(/\s*\n\s*/g, " ")
     .replace(/\s{2,}/g, " ")
     .trim();
-  if (oneLine.length <= maxLength) {
+  if (oneLine.length <= 120) {
     return oneLine;
   }
-  const half = Math.floor((maxLength - 1) / 2);
-  return `${sliceUtf16Safe(oneLine, 0, half)}…${sliceUtf16Safe(oneLine, -(maxLength - 1 - half))}`;
+  return `${sliceUtf16Safe(oneLine, 0, 59)}…${sliceUtf16Safe(oneLine, -60)}`;
 }
 
 export type ToolDetailMode = "explain" | "raw";

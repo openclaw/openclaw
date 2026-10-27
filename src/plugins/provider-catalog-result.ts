@@ -21,6 +21,12 @@ export function copyProviderCatalogOutcomes(
       outcome.rejectionScope = entry.rejectionScope;
     }
     if (entry.status === "ready") {
+      if (entry.modelAccessPrograms) {
+        outcome.modelAccessPrograms = entry.modelAccessPrograms.map((model) => ({
+          ...model,
+          cyber: [...model.cyber],
+        }));
+      }
       if (entry.modelServiceTiers) {
         outcome.modelServiceTiers = entry.modelServiceTiers.map((model) => ({
           modelId: model.modelId.trim(),

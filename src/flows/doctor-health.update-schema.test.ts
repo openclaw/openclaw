@@ -25,7 +25,10 @@ import {
 } from "../state/openclaw-agent-db.js";
 import { OPENCLAW_AGENT_SCHEMA_V24_SQL } from "../state/openclaw-agent-schema-v24.test-support.js";
 import { getOpenClawDatabaseMaintenanceScope } from "../state/openclaw-state-db-async-lifecycle.js";
-import { OPENCLAW_STATE_SCHEMA_VERSION } from "../state/openclaw-state-db-contract.js";
+import {
+  CLIENT_CREDENTIAL_CUTOVER_SCHEMA_VERSION,
+  OPENCLAW_STATE_SCHEMA_VERSION,
+} from "../state/openclaw-state-db-contract.js";
 import { tableExists } from "../state/openclaw-state-db-schema-helpers.js";
 import {
   closeOpenClawStateDatabaseAsync,
@@ -252,11 +255,13 @@ it.each([
     const shared = openOpenClawStateDatabase({ env: state.env }).path;
     const run = createUpdateRun({ trigger: "cli", before: { version: driver } });
     await closeOpenClawStateDatabaseAsync();
+    // The restored credential tables belong to the schema before their local-owner cutover.
+    const sourceVersion = CLIENT_CREDENTIAL_CUTOVER_SCHEMA_VERSION - 1;
     {
       using predecessor = new DatabaseSync(shared);
       addPreCutoverClientCredentialTablesForTest(predecessor);
     }
-    setSchemaVersion(shared, OPENCLAW_STATE_SCHEMA_VERSION - 1);
+    setSchemaVersion(shared, sourceVersion);
     mocks.runContributions.mockImplementation(async () => {
       const result = repairOpenClawStateDatabaseSchema({ env: state.env });
       expect(result.warnings).toEqual([]);
@@ -270,7 +275,7 @@ it.each([
       await closeOpenClawStateDatabaseAsync();
     }
     expect(readDatabase(shared)).toMatchObject({
-      version: OPENCLAW_STATE_SCHEMA_VERSION - (deferred ? 1 : 0),
+      version: deferred ? sourceVersion : OPENCLAW_STATE_SCHEMA_VERSION,
       captureSessions: deferred ? [] : [{ id: captureSessionId, mode: "cli" }],
     });
     if (deferred) {

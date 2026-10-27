@@ -35,6 +35,7 @@ import {
 } from "./telegram-ingress-coalescing.test-support.js";
 import { createTelegramTransportIngressMonitor } from "./telegram-ingress-drain-factory.js";
 import { openTelegramIngressQueue, telegramQueueEventId } from "./telegram-ingress-spool.js";
+import { writeTelegramSpooledUpdate } from "./telegram-ingress-spool.test-support.js";
 
 export const runtimeErrors: unknown[] = [];
 
@@ -76,11 +77,12 @@ export function createDownstreamTurnFixture(
     ) => Promise<{ queuedFinal: boolean; counts: { block: number; final: number; tool: number } }>
   >,
 ) {
+  const emptyTurn = () => ({ queuedFinal: false, counts: { block: 0, final: 0, tool: 0 } });
   function captureNextDownstreamTurn() {
     const dispatched = createDeferred<MsgContext>();
     downstreamTurns.mockImplementationOnce(async (turn) => {
       dispatched.resolve(turn);
-      return { queuedFinal: false, counts: { block: 0, final: 0, tool: 0 } };
+      return emptyTurn();
     });
     return dispatched.promise;
   }
@@ -96,56 +98,15 @@ export function createDownstreamTurnFixture(
     return downstreamTurns.mock.calls[0]?.[0] as MsgContext & Record<string, unknown>;
   }
 
-  async function assertAlbumTurnAndTombstones(params: {
-    stateDir: string;
-    updateIds: number[];
-    monitor: ReturnType<typeof createTelegramTransportIngressMonitor>;
-  }) {
-    await params.monitor.waitForDeferredClaims();
-    const turn = await awaitSingleDownstreamTurn();
-    expect(turn.Body).toContain("Two photo album");
-    expect(turn.media).toMatchObject([
-      { path: "/tmp/photo-1.jpg", kind: "image" },
-      { path: "/tmp/photo-2.jpg", kind: "image" },
-    ]);
-    await assertSpoolTombstoned(params);
-  }
-
-  function holdFirstDownstreamTurn() {
-    const headDispatched = createDeferred<void>();
-    const releaseHead = createDeferred<void>();
-    downstreamTurns.mockImplementation(async (_ctx, abortSignal, lifecycle) => {
-      if (downstreamTurns.mock.calls.length === 1) {
-        if (!lifecycle?.deferredHeartbeatIntervalMs) {
-          throw new Error("Expected the deferred turn's heartbeat cadence");
-        }
-        lifecycle.onDeferred?.();
-        const heartbeat = setInterval(
-          () => lifecycle.onDeferredHeartbeat?.(),
-          lifecycle.deferredHeartbeatIntervalMs,
-        );
-        headDispatched.resolve();
-        try {
-          await releaseHead.promise;
-          if (!abortSignal?.aborted) {
-            await lifecycle.onAdopted();
-          }
-        } finally {
-          clearInterval(heartbeat);
-        }
-      }
-      return { queuedFinal: false, counts: { block: 0, final: 0, tool: 0 } };
-    });
-    return { headDispatched, releaseHead };
-  }
-
-  function holdDownstreamLane() {
+  function holdTurns(serial: boolean) {
     const releaseHead = createDeferred<void>();
     const turnsDeferred = [createDeferred<void>(), createDeferred<void>()] as const;
     let turnIndex = 0;
-    // Session-lane stand-in: every turn defers, heartbeats, and adopts after the turn ahead.
     let laneTail: Promise<void> = releaseHead.promise;
     downstreamTurns.mockImplementation(async (_ctx, abortSignal, lifecycle) => {
+      if (!serial && downstreamTurns.mock.calls.length !== 1) {
+        return emptyTurn();
+      }
       if (!lifecycle?.deferredHeartbeatIntervalMs) {
         throw new Error("Expected the deferred turn's heartbeat cadence");
       }
@@ -168,17 +129,16 @@ export function createDownstreamTurnFixture(
         clearInterval(heartbeat);
         finished.resolve();
       }
-      return { queuedFinal: false, counts: { block: 0, final: 0, tool: 0 } };
+      return emptyTurn();
     });
-    return { releaseHead, turnsDeferred };
+    return { releaseHead, turnsDeferred, headDispatched: turnsDeferred[0] };
   }
 
   return {
     captureNextDownstreamTurn,
     awaitSingleDownstreamTurn,
-    assertAlbumTurnAndTombstones,
-    holdFirstDownstreamTurn,
-    holdDownstreamLane,
+    holdFirstDownstreamTurn: () => holdTurns(false),
+    holdDownstreamLane: () => holdTurns(true),
   };
 }
 
@@ -271,6 +231,34 @@ export async function admitAlbum(
     await monitor.waitForIdle();
   }
   await vi.advanceTimersByTimeAsync(40);
+}
+
+/** Every update is settled except `pending`, which stays retryable in the spool. */
+export async function expectOnlyPending(
+  queue: ReturnType<typeof openTelegramIngressQueue>,
+  pending: Array<Record<string, unknown>>,
+) {
+  expect(await queue.listClaims()).toEqual([]);
+  expect(await queue.listFailed?.({ limit: "all" })).toEqual([]);
+  expect(await queue.listPending({ limit: "all" })).toMatchObject(pending);
+}
+
+/** Buffers `first`, then pauses the pump so `second` is durably pending but not yet buffered. */
+export async function spoolBehindPausedPump(params: {
+  monitor: ReturnType<typeof createTelegramTransportIngressMonitor>;
+  queue: ReturnType<typeof openTelegramIngressQueue>;
+  stateDir: string;
+  first: Parameters<ReturnType<typeof createTelegramTransportIngressMonitor>["admit"]>[0];
+  second: { update_id: number };
+}) {
+  params.monitor.start();
+  await params.monitor.admit(params.first);
+  await params.monitor.waitForIdle();
+  await params.monitor.pause();
+  await writeTelegramSpooledUpdate({ stateDir: params.stateDir, update: params.second });
+  expect(await params.queue.listPending({ limit: "all" })).toMatchObject([
+    { id: telegramQueueEventId(params.second.update_id) },
+  ]);
 }
 
 export type TelegramIngressResources = Awaited<ReturnType<typeof createIngressMonitor>>;

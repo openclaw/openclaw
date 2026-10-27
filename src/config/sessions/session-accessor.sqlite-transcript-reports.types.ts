@@ -63,6 +63,7 @@ export type TranscriptReportCommit = {
   abortedPartial?: AbortedSessionTranscriptPartialResult;
   sessionEntryChanged?: boolean;
   entry?: InternalSessionEntry;
+  fullEntry?: InternalSessionEntry;
 };
 
 export type TranscriptReportWorkerOperations = {

@@ -5,16 +5,11 @@ import {
   type ProjectRecord,
   type ProjectSummary,
 } from "../../../packages/gateway-protocol/src/index.js";
-import type { ManagedWorktreeService } from "../../agents/worktrees/service.js";
+import { managedWorktrees } from "../../agents/worktrees/service.js";
 import type { loadCombinedSessionStoreForGatewayCoreAsync } from "../../config/sessions/combined-store-gateway-read.js";
 import { createSessionListEntryFilter } from "../session-sharing.js";
 import type { startProjectsListDiagnostics } from "./projects-list-diagnostics.js";
 import type { GatewayRequestHandlers } from "./types.js";
-
-export type ProjectWorktreeService = Pick<
-  ManagedWorktreeService,
-  "listRegistryRecords" | "resolveRepositoryIdentities"
->;
 
 type ProjectCandidate = {
   checkoutPath: string;
@@ -164,14 +159,13 @@ function projectCandidatesToSummaries(candidates: readonly ProjectCandidate[]): 
 }
 
 export async function listObservedProjects(
-  service: ProjectWorktreeService,
   context: Parameters<GatewayRequestHandlers["projects.list"]>[0]["context"],
   client: Parameters<GatewayRequestHandlers["projects.list"]>[0]["client"],
   store: Awaited<ReturnType<typeof loadCombinedSessionStoreForGatewayCoreAsync>>["store"],
   diagnostics?: ReturnType<typeof startProjectsListDiagnostics>,
 ) {
   diagnostics?.mark("worktreeRegistry");
-  const worktrees = await service.listRegistryRecords();
+  const worktrees = await managedWorktrees.listRegistryRecords();
   diagnostics?.mark("sessionCandidates");
   const cfg = context.getRuntimeConfig();
   const rawCandidates: RawProjectCandidate[] = [];
@@ -224,7 +218,9 @@ export async function listObservedProjects(
   ]
     .slice(0, PROJECTS_LIST_MAX_IDENTITY_PROBES)
     .toSorted();
-  const results = probePaths.length ? await service.resolveRepositoryIdentities(probePaths) : [];
+  const results = probePaths.length
+    ? await managedWorktrees.resolveRepositoryIdentities(probePaths)
+    : [];
   const identities = new Map(
     probePaths.map((checkoutPath, index) => [checkoutPath, results[index]]),
   );

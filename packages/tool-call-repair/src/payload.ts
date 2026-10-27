@@ -15,6 +15,7 @@ import {
   isPlainTextToolNameChar,
   scanJsonObject,
   type JsonObjectScanState,
+  scanToolCallNameEnd,
   scanXmlishToolCall,
   skipHorizontalWhitespace,
   skipLineIndentation,
@@ -38,6 +39,9 @@ export type PlainTextToolCallBlock = {
 const DEFAULT_MAX_PLAIN_TEXT_TOOL_PAYLOAD_BYTES = 256_000;
 const MAX_PLAIN_TEXT_TOOL_NAME_CHARS = 120;
 const HARMONY_CHANNELS = ["commentary", "analysis", "final"] as const;
+// Case folding only admits candidates; the canonical Harmony scanner retains its case rules.
+const PLAIN_TEXT_TOOL_CALL_CANDIDATE_RE =
+  /(?:^|[\r\n])[^\S\r\n]*(?:\[(?:tool:)?[A-Za-z0-9_-]+\]\s*(?:\{|<parameter=)|(?:<\|channel\|>)?(?:commentary|analysis|final)[ \t]+to=|<function=)/i;
 
 export type PlainTextJsonToolCallSpan = { end: number; start: number };
 export type PlainTextJsonToolCallSyntax = "harmony" | "named-bracket" | "tool-bracket";
@@ -105,17 +109,6 @@ function isLiteralPrefixAt(text: string, start: number, literal: string): boolea
   return start >= 0 && available < literal.length && literal.startsWith(text.slice(start));
 }
 
-function scanToolNameEnd(text: string, start: number): number | null {
-  let end = start;
-  while (isPlainTextToolNameChar(text[end])) {
-    if (end - start === MAX_PLAIN_TEXT_TOOL_NAME_CHARS) {
-      return null;
-    }
-    end += 1;
-  }
-  return end;
-}
-
 function candidate<NameComplete extends boolean>(
   syntax: PlainTextJsonToolCallSyntax,
   name: PlainTextJsonToolCallSpan,
@@ -140,8 +133,8 @@ function scanBracketOpening(
     return { kind: "prefix" };
   }
   const nameStart = cursor;
-  const nameEnd = scanToolNameEnd(text, nameStart);
-  if (nameEnd === null) {
+  const nameEnd = scanToolCallNameEnd(text, nameStart, isPlainTextToolNameChar);
+  if (nameEnd - nameStart > MAX_PLAIN_TEXT_TOOL_NAME_CHARS) {
     return { kind: "invalid", at: nameStart + MAX_PLAIN_TEXT_TOOL_NAME_CHARS };
   }
   const name = { start: nameStart, end: nameEnd };
@@ -207,8 +200,8 @@ function scanHarmonyOpening(text: string, start: number): PlainTextJsonToolCallO
   cursor += "to=".length;
 
   const nameStart = cursor;
-  const nameEnd = scanToolNameEnd(text, nameStart);
-  if (nameEnd === null) {
+  const nameEnd = scanToolCallNameEnd(text, nameStart, isPlainTextToolNameChar);
+  if (nameEnd - nameStart > MAX_PLAIN_TEXT_TOOL_NAME_CHARS) {
     return { kind: "invalid", at: nameStart + MAX_PLAIN_TEXT_TOOL_NAME_CHARS };
   }
   const name = { start: nameStart, end: nameEnd };
@@ -514,14 +507,61 @@ export function stripPlainTextToolCallBlocks(
   text: string,
   options: { resolveProtectedRanges?: PlainTextToolCallProtectedRangeResolver } = {},
 ): string {
-  if (
-    !/(?:^|[\r\n])[^\S\r\n]*\[(?:tool:)?[A-Za-z0-9_-]+\]\s*(?:\{|<parameter=)/i.test(text) &&
-    !/(?:^|[\r\n])[^\S\r\n]*(?:<\|channel\|>)?(?:commentary|analysis|final)[ \t]+to=/.test(text) &&
-    !/(?:^|[\r\n])[^\S\r\n]*<function=/i.test(text)
-  ) {
+  if (!PLAIN_TEXT_TOOL_CALL_CANDIDATE_RE.test(text)) {
     return text;
   }
   return projectPlainTextToolCallBlocks(text, options).text;
+}
+
+/** Admit bracket JSON candidates without activating on ordinary brace prose. */
+export function createPlainTextToolCallBraceProbe(): (delta: string) => boolean {
+  let lineStart = true;
+  let header = "";
+  let awaitingPayload = "";
+  return (delta) => {
+    for (const char of delta) {
+      if (char === "\r" || char === "\n") {
+        lineStart = true;
+        header = "";
+        if (awaitingPayload && !awaitingPayload.endsWith("\n")) {
+          awaitingPayload += "\n";
+        }
+        continue;
+      }
+      if (awaitingPayload) {
+        if (/\s/u.test(char)) {
+          continue;
+        }
+        // The canonical header parser owns names, limits, and required line breaks.
+        const opening = char === "{" ? scanBracketOpening(awaitingPayload + char, 0) : undefined;
+        awaitingPayload = "";
+        if (opening?.kind === "complete") {
+          return true;
+        }
+      }
+      if (header) {
+        header += char;
+        if (char === "]") {
+          awaitingPayload = header;
+          header = "";
+        } else if (
+          /\s/u.test(char) ||
+          header.length > MAX_PLAIN_TEXT_TOOL_NAME_CHARS + "[tool:]".length
+        ) {
+          header = "";
+        }
+        continue;
+      }
+      if (!lineStart || /[^\S\r\n]/u.test(char)) {
+        continue;
+      }
+      lineStart = false;
+      if (char === "[") {
+        header = char;
+      }
+    }
+    return false;
+  };
 }
 
 /** Call-grammar settlement; callers also retain any mutable Markdown ownership. */

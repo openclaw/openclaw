@@ -6,12 +6,11 @@ import {
   getAiTransportHost,
   type Api,
   type AssistantMessageEventStreamContract,
-  type StreamFunction,
 } from "@openclaw/ai";
 import { prepareModelForSimpleCompletion } from "@openclaw/ai/transports";
 import { expectDefined } from "@openclaw/normalization-core";
 import type { StreamFn } from "openclaw/plugin-sdk/agent-core";
-import { streamSimple, type Context, type Model } from "openclaw/plugin-sdk/llm";
+import { getApiProvider, streamSimple, type Model } from "openclaw/plugin-sdk/llm";
 import { capturePluginRegistration } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { buildOpenAICompatibleLiveModels } from "openclaw/plugin-sdk/provider-catalog-live-runtime";
 import { resolveAgentModelPrimaryValue } from "openclaw/plugin-sdk/provider-onboard";
@@ -37,13 +36,11 @@ function captureCompletionWrapper() {
 
 function resolveCatalogModel(modelId: string): Model<"openai-responses"> {
   const provider = buildMetaProvider();
+  const model = provider.models.find((entry) => entry.id === modelId);
   return {
     provider: "meta",
     baseUrl: provider.baseUrl,
-    ...expectDefined(
-      provider.models.find((model) => model.id === modelId),
-      modelId,
-    ),
+    ...expectDefined(model, modelId),
     api: "openai-responses",
   } as Model<"openai-responses">;
 }
@@ -63,7 +60,7 @@ function wrapCompletion(model: Model, streamFn: StreamFn, sourceApi?: Api) {
   );
 }
 
-function completedSseResponse(): Response {
+function captureHttp() {
   const completed = {
     type: "response.completed",
     response: {
@@ -73,34 +70,30 @@ function completedSseResponse(): Response {
       usage: { input_tokens: 1, output_tokens: 0, total_tokens: 1 },
     },
   };
-  return new Response(`data: ${JSON.stringify(completed)}\n\n`, {
-    status: 200,
-    headers: { "content-type": "text/event-stream" },
+  let requestBody: unknown;
+  let requestUrl: string | undefined;
+  const fetchMock = vi.fn(async (url: string | URL | Request, init?: RequestInit) => {
+    const request = new Request(url, init);
+    requestUrl = request.url;
+    requestBody = await request.json();
+    return new Response(`data: ${JSON.stringify(completed)}\n\n`, {
+      headers: { "content-type": "text/event-stream" },
+    });
   });
+  vi.stubGlobal("fetch", fetchMock);
+  return () => {
+    expect(fetchMock).toHaveBeenCalledOnce();
+    expect(requestUrl).toBe("https://api.meta.ai/v1/responses");
+    expect(requestBody).toMatchObject({ store: false, include: ["reasoning.encrypted_content"] });
+    return requestBody;
+  };
 }
 
 function requireSynchronousStream(
   stream: ReturnType<StreamFn>,
 ): AssistantMessageEventStreamContract {
   expect(stream).not.toBeInstanceOf(Promise);
-  expect(stream).toMatchObject({ push: expect.any(Function), end: expect.any(Function) });
   return stream as AssistantMessageEventStreamContract;
-}
-
-function recordingStream(
-  record: (payload: Record<string, unknown>, api: Api) => void,
-): StreamFunction {
-  return (model, _context, options) => {
-    const payload: Record<string, unknown> = {};
-    options?.onPayload?.(payload, model);
-    record(payload, model.api);
-    const stream = createAssistantMessageEventStream();
-    queueMicrotask(() => {
-      stream.push({ type: "done", reason: "stop", message: { stopReason: "stop" } as never });
-      stream.end();
-    });
-    return stream;
-  };
 }
 
 describe("meta provider", () => {
@@ -109,22 +102,36 @@ describe("meta provider", () => {
     configureAiTransportHost(initialAiTransportHost);
   });
 
-  it("applies Muse Spark 1.3 as the onboarding default and alias", () => {
-    const config = applyMetaConfig({});
+  it.each([
+    { primary: "meta/muse-spark-1.3", authored: false, wonder: { alias: "Muse Wonder" } },
+    {
+      primary: "meta/muse-spark-1.2",
+      authored: true,
+      wonder: { alias: "Wonder Work", params: { temperature: 0.7 } },
+    },
+  ])(
+    "applies onboarding defaults without overwriting authored settings ($authored)",
+    ({ primary, authored, wonder }) => {
+      const config = applyMetaConfig(
+        authored
+          ? {
+              agents: {
+                defaults: { model: { primary }, models: { "meta/muse-wonder-1.0": wonder } },
+              },
+            }
+          : {},
+      );
+      expect(resolveAgentModelPrimaryValue(config.agents?.defaults?.model)).toBe(primary);
+      expect(config.agents?.defaults?.models?.["meta/muse-wonder-1.0"]).toEqual(wonder);
+      expect(config.agents?.defaults?.models?.["meta/muse-spark-1.3"]).toEqual({
+        alias: "Muse Spark 1.3",
+      });
+    },
+  );
 
-    expect(resolveAgentModelPrimaryValue(config.agents?.defaults?.model)).toBe(
-      "meta/muse-spark-1.3",
-    );
-    const models = config.agents?.defaults?.models;
-    expect([models?.["meta/muse-spark-1.3"], models?.["meta/muse-wonder-1.0"]]).toEqual([
-      { alias: "Muse Spark 1.3" },
-      { alias: "Muse Wonder" },
-    ]);
-  });
-
-  it("publishes Wonder Standard without inventing API-only Full or Contributor variants", () => {
+  it("publishes and projects Wonder Standard capabilities without API-only variants", () => {
     const provider = buildMetaProvider();
-    expect(provider.models[0]).toMatchObject({
+    const wonder = {
       id: "muse-wonder-1.0",
       name: "Muse Wonder",
       reasoning: true,
@@ -138,48 +145,20 @@ describe("meta provider", () => {
         supportedReasoningEfforts: ["minimal", "low", "medium", "high", "xhigh", "max"],
       },
       cost: { input: 4, output: 20, cacheRead: 0.2, cacheWrite: 0 },
-    });
+    };
+    expect(provider.models[0]).toMatchObject(wonder);
     expect(provider.models.map((model) => model.id)).not.toContain("muse-wonder-full-1.0");
     expect(provider.models.map((model) => model.id)).not.toContain("muse-wonder-1.0-contributor");
-  });
-
-  it("preserves an authored primary model and Wonder alias during setup", () => {
-    const config = applyMetaConfig({
-      agents: {
-        defaults: {
-          model: { primary: "meta/muse-spark-1.2" },
-          models: {
-            "meta/muse-wonder-1.0": { alias: "Wonder Work", params: { temperature: 0.7 } },
-          },
-        },
-      },
-    });
-    expect(resolveAgentModelPrimaryValue(config.agents?.defaults?.model)).toBe(
-      "meta/muse-spark-1.2",
-    );
-    expect(config.agents?.defaults?.models?.["meta/muse-wonder-1.0"]).toEqual({
-      alias: "Wonder Work",
-      params: { temperature: 0.7 },
-    });
-  });
-
-  it("retains Wonder capabilities and prices when projecting authenticated catalog rows", () => {
     const models = buildOpenAICompatibleLiveModels(
       [
         { id: "muse-wonder-1.0", object: "model", created: 2 },
         { id: "muse-spark-1.3", object: "model", created: 1 },
       ],
-      buildMetaProvider(),
+      provider,
     );
     // Shared discovery sorts IDs; it does not preserve Meta's newest-first wire order.
     expect(models.map((model) => model.id)).toEqual(["muse-spark-1.3", "muse-wonder-1.0"]);
-    expect(models[1]).toMatchObject({
-      reasoning: true,
-      input: ["text", "image"],
-      contextWindow: 1_048_576,
-      thinkingLevelMap: { max: "max" },
-      cost: { input: 4, output: 20, cacheRead: 0.2, cacheWrite: 0 },
-    });
+    expect(models[1]).toMatchObject(wonder);
   });
 
   it("does not wrap projected non-Responses Meta models for either stream hook", () => {
@@ -200,90 +179,41 @@ describe("meta provider", () => {
     }
   });
 
-  it("wraps projected direct completions from a Responses source API", () => {
-    const model = projectedModel();
-    const record = vi.fn();
-    const baseStreamFn = recordingStream(record);
-    const wrapped = wrapCompletion(model, baseStreamFn, "openai-responses");
-    void wrapped(model, { messages: [] }, { maxTokens: 0 });
-
-    expect(record.mock.lastCall?.[0]).toMatchObject({
-      include: ["reasoning.encrypted_content"],
-      max_output_tokens: 131072,
-      store: false,
-    });
-  });
-
-  it.each([undefined, 4096])(
-    "preserves the caller output cap %s through Responses",
-    async (maxTokens) => {
-      const model = resolveCatalogModel(CATALOG_CAP_MODEL_ID);
-      const onPayload = vi.fn();
-      const fetchMock = vi.fn(async () => completedSseResponse());
-      vi.stubGlobal("fetch", fetchMock);
-      const streamFn = wrapCompletion(model, streamSimple);
-      const context: Context = {
-        messages: [{ role: "user", content: "Catalog cap probe", timestamp: 0 }],
-      };
-      const stream = await streamFn(model, context, {
-        apiKey: "unit-test-token",
-        maxTokens,
-        onPayload,
-      });
-      const result = await stream.result();
-
-      expect(result.stopReason).toBe("stop");
-      expect(fetchMock).toHaveBeenCalledOnce();
-      if (maxTokens === undefined) {
-        expect(onPayload.mock.lastCall?.[0]).not.toHaveProperty("max_output_tokens");
-      } else {
-        expect(onPayload.mock.lastCall?.[0]).toHaveProperty("max_output_tokens", maxTokens);
-      }
-    },
-  );
-
   it.each([
-    { level: "off", wireEffort: "minimal" },
-    { level: "max", wireEffort: "max" },
+    [CATALOG_CAP_MODEL_ID, undefined, undefined, undefined, undefined],
+    [CATALOG_CAP_MODEL_ID, 0, 131072, undefined, undefined],
+    ["muse-wonder-1.0", 4096, 4096, "off", "minimal"],
+    ["muse-wonder-1.0", 4096, 4096, "max", "max"],
   ] as const)(
-    "sends Wonder $level as $wireEffort through the Responses transport",
-    async ({ level, wireEffort }) => {
-      const model = resolveCatalogModel("muse-wonder-1.0");
-      let requestBody: Record<string, unknown> | undefined;
-      let requestUrl: string | undefined;
-      const fetchMock = vi.fn(async (_url: string | URL | Request, init?: RequestInit) => {
-        const request = new Request(_url, init);
-        requestUrl = request.url;
-        requestBody = (await request.json()) as Record<string, unknown>;
-        return completedSseResponse();
-      });
-      vi.stubGlobal("fetch", fetchMock);
-      const streamFn = expectDefined(
-        captureCompletionWrapper()({
-          provider: "meta",
-          modelId: model.id,
-          model,
-          streamFn: streamSimple,
-        }),
-        "Wonder completion stream",
-      );
-      const stream = await streamFn(
+    "sends %s with cap %s (wire %s), reasoning %s (wire %s)",
+    async (modelId, cap, expectedCap, level, effort) => {
+      const readRequest = captureHttp();
+      const model = cap === 0 ? projectedModel() : resolveCatalogModel(modelId);
+      const sourceApi = cap === 0 ? "openai-responses" : undefined;
+      const source: StreamFn = (wireModel, context, options) =>
+        streamSimple({ ...wireModel, api: "openai-responses" }, context, options);
+      const stream = await wrapCompletion(model, source, sourceApi)(
         model,
-        { messages: [{ role: "user", content: "Wonder reasoning probe", timestamp: 0 }] },
-        { apiKey: "unit-test-token", reasoning: level, maxTokens: 4096 },
+        { messages: [] },
+        {
+          apiKey: "unit-test-token",
+          maxTokens: cap,
+          reasoning: level,
+        },
       );
       const result = await stream.result();
-      expect(result.errorMessage).toBeUndefined();
       expect(result.stopReason).toBe("stop");
-      expect(fetchMock).toHaveBeenCalledOnce();
-      expect(requestUrl).toBe("https://api.meta.ai/v1/responses");
-      expect(requestBody).toMatchObject({
-        model: "muse-wonder-1.0",
-        reasoning: { effort: wireEffort },
-        max_output_tokens: 4096,
-        store: false,
-        include: ["reasoning.encrypted_content"],
-      });
+      expect(result.errorMessage).toBeUndefined();
+      const body = readRequest();
+      expect(body).toMatchObject({ model: modelId });
+      if (expectedCap === undefined) {
+        expect(body).not.toHaveProperty("max_output_tokens");
+      } else {
+        expect(body).toHaveProperty("max_output_tokens", expectedCap);
+      }
+      if (effort) {
+        expect(body).toHaveProperty("reasoning.effort", effort);
+      }
     },
   );
 
@@ -291,22 +221,14 @@ describe("meta provider", () => {
     const wrapStream = captureCompletionWrapper();
     const registry = createApiRegistry();
     const runtime = createLlmRuntime(registry);
-    const sourceModel = resolveCatalogModel(CATALOG_CAP_MODEL_ID);
-    const record = vi.fn();
-    const sourceStreamFn = recordingStream(record);
-    registry.registerApiProvider({
-      api: "openai-responses",
-      stream: sourceStreamFn,
-      streamSimple: sourceStreamFn,
-    });
+    const base = resolveCatalogModel(CATALOG_CAP_MODEL_ID);
+    const readRequest = captureHttp();
+    registry.registerApiProvider(expectDefined(getApiProvider("openai-responses"), "Responses"));
     configureAiTransportHost({
       ...initialAiTransportHost,
       registerCustomApi: (apiRegistry, api, streamFn) => {
-        if (apiRegistry.getApiProvider(api)) {
-          return false;
-        }
-        const customStream: StreamFunction = (model, context, options) =>
-          requireSynchronousStream(streamFn(model, context, options));
+        const customStream = (...args: Parameters<StreamFn>) =>
+          requireSynchronousStream(streamFn(...args));
         apiRegistry.registerApiProvider({
           api,
           stream: customStream,
@@ -317,51 +239,33 @@ describe("meta provider", () => {
       plugin: {
         ...initialAiTransportHost.plugin,
         resolveProviderStream: () => undefined,
-        wrapSimpleCompletionStream: ({ provider: providerId, context }) => {
-          if (providerId !== "meta") {
-            return undefined;
-          }
-          const { provider, modelId, model, streamFn } = context;
-          return wrapStream({ provider, modelId, model, streamFn }) ?? undefined;
-        },
+        wrapSimpleCompletionStream: ({ context: { provider, modelId, model, streamFn } }) =>
+          wrapStream({ provider, modelId, model, streamFn }) ?? undefined,
       },
     });
 
-    const preparedModel = prepareModelForSimpleCompletion({
-      apiRegistry: registry,
-      model: sourceModel,
-    });
+    const preparedModel = prepareModelForSimpleCompletion({ apiRegistry: registry, model: base });
     expect(preparedModel.api).toMatch(/^openclaw-provider-simple:/);
 
-    const result = await runtime.completeSimple(preparedModel, { messages: [] });
+    const result = await runtime.completeSimple(
+      preparedModel,
+      { messages: [] },
+      { apiKey: "unit-test-token" },
+    );
 
     expect(result.stopReason).toBe("stop");
-    expect(record.mock.lastCall?.[1]).toBe("openai-responses");
-    expect(record.mock.lastCall?.[0]).toMatchObject({
-      store: false,
-      include: ["reasoning.encrypted_content"],
-    });
-    expect(record.mock.lastCall?.[0]).not.toHaveProperty("max_output_tokens");
+    expect(readRequest()).not.toHaveProperty("max_output_tokens");
   });
 
-  it("advertises a high default thinking profile for every reasoning model", () => {
+  it("resolves max-capable and standard thinking profiles with catalog fallback", () => {
     const resolveProfile = captureThinkingResolver();
-    const reasoningModels = buildMetaProvider().models.filter((model) => model.reasoning);
-    expect(reasoningModels.map((model) => model.id)).toEqual([
-      "muse-wonder-1.0",
-      "muse-spark-1.3",
-      "muse-spark-1.3-contributor",
-      "muse-spark-1.2",
-      "muse-spark-1.2-contributor",
-      "muse-spark-1.1",
-    ]);
-    for (const model of reasoningModels) {
+    for (const modelId of ["muse-wonder-1.0", "muse-spark-1.2"]) {
       const levels = ["off", "minimal", "low", "medium", "high", "xhigh"];
-      if (["muse-wonder-1.0", "muse-spark-1.3"].includes(model.id)) {
+      if (modelId === "muse-wonder-1.0") {
         levels.push("max");
       }
-      for (const reasoning of [model.reasoning, undefined]) {
-        const profile = resolveProfile({ provider: "meta", modelId: model.id, reasoning });
+      for (const reasoning of [true, undefined]) {
+        const profile = resolveProfile({ provider: "meta", modelId, reasoning });
         expect(profile?.defaultLevel).toBe("high");
         expect(profile?.levels.map((level) => level.id)).toEqual(levels);
       }

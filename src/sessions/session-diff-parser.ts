@@ -72,10 +72,7 @@ function parseNumstatTokens(tokens: readonly string[], start: number): Map<strin
 }
 
 /** Git emits all raw records before the numstat records in `--raw --numstat -z`. */
-export function parseDiffInventoryZ(text: string): {
-  entries: NameStatusEntry[];
-  numstat: Map<string, NumstatEntry>;
-} {
+export function parseDiffInventoryZ(text: string) {
   const tokens = text.split("\0");
   const nameStatus: string[] = [];
   let index = 0;

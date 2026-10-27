@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { ApplicationGatewaySnapshot } from "../app/gateway.ts";
+import { createApplicationGatewaySnapshot } from "../test-helpers/application-context-fixtures.ts";
 import { canCallGatewayMethod, canPresentGatewayMethod } from "./gateway-methods.ts";
 
 function snapshot(params: {
@@ -10,7 +11,7 @@ function snapshot(params: {
   includeScopes?: boolean;
 }): ApplicationGatewaySnapshot {
   const connected = params.connected ?? true;
-  return {
+  return createApplicationGatewaySnapshot({
     client: connected ? ({} as ApplicationGatewaySnapshot["client"]) : null,
     phase: connected ? "connected" : "offline",
     offlineStable: !connected,
@@ -25,12 +26,8 @@ function snapshot(params: {
             },
       features: params.methods === undefined ? {} : { methods: params.methods },
     } as ApplicationGatewaySnapshot["hello"],
-    canvasPluginSurfaceUrl: null,
-    assistantAgentId: null,
     sessionKey: "agent:main:main",
-    lastError: null,
-    lastErrorCode: null,
-  };
+  });
 }
 
 describe("canCallGatewayMethod", () => {

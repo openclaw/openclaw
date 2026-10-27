@@ -20,7 +20,7 @@ import {
   createWorkspaceStateIdentity,
   resolveWorkspaceStateIdentity,
 } from "./workspace-state-identity.js";
-import { workspaceStateFactKey, workspaceStatePublication } from "./workspace-state-publication.js";
+import { workspaceStatePublication } from "./workspace-state-publication.js";
 import {
   clearExpiredWorkspaceStateForVanishedWorkspace,
   deleteWorkspaceState,
@@ -110,9 +110,12 @@ it("registers alias batches once and rolls back conflicts without publishing par
     count: 70,
   });
   for (const alias of aliases) {
-    expect(observed.get(workspaceStateFactKey("alias", alias.workspaceKey))).toMatchObject({
-      kind: "postimage",
-      value: { row: { alias_key: alias.workspaceKey, updated_at_ms: 1000 } },
+    expect(
+      sql("SELECT updated_at_ms FROM workspace_path_aliases WHERE alias_key = ?").get(
+        alias.workspaceKey,
+      ),
+    ).toEqual({
+      updated_at_ms: 1000,
     });
   }
   const missing = Array.from({ length: 65 }, (_, index) =>
@@ -132,9 +135,7 @@ it("registers alias batches once and rolls back conflicts without publishing par
   });
 });
 
-it("publishes complete hash replacement and exact alias/setup/attestation tombstones", async () => {
-  const identity = resolveWorkspaceStateIdentity(dir);
-  const observed = observeFacts();
+it("replaces complete hash sets and removes aliased setup and attestation state", async () => {
   await seed();
   const alias = testState.path("receipt-workspace-link");
   fs.symlinkSync(dir, alias, process.platform === "win32" ? "junction" : "dir");
@@ -144,17 +145,13 @@ it("publishes complete hash replacement and exact alias/setup/attestation tombst
     ["TOOLS.md", "b".repeat(64)],
   ]);
   await attest(2000, [["AGENTS.md", "c".repeat(64)]]);
-  expect(observed.get(workspaceStateFactKey("hashes", identity.workspaceKey))).toEqual({
-    kind: "postimage",
-    value: {
-      kind: "hashes",
-      workspaceKey: identity.workspaceKey,
-      hashes: [["AGENTS.md", "c".repeat(64)]],
-    },
+  expect((await read(dir)).attestation).toEqual({
+    attestedAtMs: 2000,
+    generatedHashes: new Map([["AGENTS.md", "c".repeat(64)]]),
   });
-  expect([...observed.keys()].filter((key) => key.startsWith('["alias",'))).toHaveLength(2);
+  expect(sql("SELECT COUNT(*) AS count FROM workspace_path_aliases").get()).toEqual({ count: 2 });
   await deleteState(alias);
-  expect([...observed.values()]).toEqual(Array.from({ length: 4 }, () => ({ kind: "absent" })));
+  expect(sql("SELECT COUNT(*) AS count FROM workspace_path_aliases").get()).toEqual({ count: 0 });
   const { setupExists, attestation } = await read(dir, { readOnly: true });
   expect([setupExists, attestation]).toEqual([false, undefined]);
 });

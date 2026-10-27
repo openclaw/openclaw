@@ -146,16 +146,12 @@ export async function resolveChannelAccountConfigured(params: {
   plugin: ChannelPlugin;
   account: unknown;
   cfg: OpenClawConfig;
-  readAccountConfiguredField?: boolean;
 }): Promise<boolean> {
   if (params.plugin.config.isConfigured) {
     return await params.plugin.config.isConfigured(params.account, params.cfg);
   }
-  if (params.readAccountConfiguredField) {
-    // Status inspection can project an explicit configured=false marker. Normal runtime
-    // account objects default to configured unless the plugin owns a stricter check.
-    const configured = isRecord(params.account) ? params.account.configured : undefined;
-    return configured !== false;
-  }
-  return true;
+  // Status inspection can project an explicit configured=false marker. Account
+  // objects otherwise default to configured unless the plugin owns a stricter check.
+  const configured = isRecord(params.account) ? params.account.configured : undefined;
+  return configured !== false;
 }

@@ -179,11 +179,12 @@ export function mergeProviderModels(
       configuredRoute,
       configuredCompat: explicitModel.compat,
     });
+    const catalogRouteMatches = modelTransportRoutesMatch(catalogRoute, configuredRoute);
     const parameterCount =
       explicitModel.parameterCount ??
-      (modelTransportRoutesMatch(catalogRoute, configuredRoute)
-        ? implicitModel.parameterCount
-        : undefined);
+      (catalogRouteMatches ? implicitModel.parameterCount : undefined);
+    // A configured route that leaves the catalog's endpoint may serve a different model.
+    const family = explicitModel.family ?? (catalogRouteMatches ? implicitModel.family : undefined);
     const contextSelection = explicitModel.contextWindows
       ? explicitModel
       : modelTransportRoutesMatch(catalogRoute, configuredRoute)
@@ -196,6 +197,8 @@ export function mergeProviderModels(
       headers: _headers,
       maxTokensSource: _maxTokensSource,
       parameterCount: _parameterCount,
+      family: _family,
+      inference: _inference,
       ...implicitMetadata
     } = implicitModel;
     return Object.assign(
@@ -210,9 +213,19 @@ export function mergeProviderModels(
       contextWindow === undefined ? {} : { contextWindow },
       contextTokens === undefined ? {} : { contextTokens },
       parameterCount === undefined ? {} : { parameterCount },
+      family === undefined ? {} : { family },
       maxTokens === undefined ? {} : { maxTokens },
       maxTokensSource === undefined ? {} : { maxTokensSource },
       { compat },
+      {
+        inference:
+          explicitModel.inference ??
+          (catalogRouteMatches
+            ? implicitModel.inference
+            : implicitModel.inference
+              ? { chat: false }
+              : undefined),
+      },
       {
         contextWindows: contextSelection?.contextWindows,
         contextWindowDefault: contextSelection?.contextWindowDefault,

@@ -1,5 +1,6 @@
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { expect, it, vi } from "vitest";
+import { createSessionGoalFixture } from "../../../../src/gateway/session-goal.test-support.js";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { GatewaySessionRow, SessionGoal, SessionsListResult } from "../../api/types.ts";
@@ -498,17 +499,7 @@ it.each([false, true])(
 );
 
 it("does not preserve another agent's raw-global row through background hydration", async () => {
-  const opsGoal: SessionGoal = {
-    schemaVersion: 1,
-    id: "goal-ops",
-    objective: "Ops only",
-    status: "active",
-    createdAt: 1,
-    updatedAt: 1,
-    tokenStart: 0,
-    tokensUsed: 0,
-    continuationTurns: 0,
-  };
+  const opsGoal: SessionGoal = createSessionGoalFixture("goal-ops", "Ops only");
   const request = listRequest((listCallCount) => {
     return sessionsResult(
       listCallCount === 1

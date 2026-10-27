@@ -1,5 +1,4 @@
 import { isPromiseLike } from "@openclaw/normalization-core/promise-like";
-import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import {
   ErrorCodes,
   errorShape,
@@ -19,6 +18,7 @@ import type { InternalSessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { PluginRegistry } from "../../plugins/registry-types.js";
 import { withPluginRuntimeRegistryScope } from "../../plugins/runtime/gateway-request-scope.js";
+import type { SessionControllerInput } from "../../sessions/session-controller.contracts.js";
 import { getAsyncWorkSignal } from "../../shared/async-work-scope.js";
 import type { SessionOperatorScope } from "../../shared/session-method-scopes-base.js";
 import {
@@ -26,7 +26,7 @@ import {
   listAgentDatabaseAdmissionRefusals,
   readAgentDatabaseAdmissionRefusal,
 } from "../../state/agent-database-admission.js";
-import { readChatInputRecoveryAdmission } from "../chat-input-recovery-source.js";
+import type { InternalAgentTurnDispatchOptions } from "../agent-turn/internal-facade.types.js";
 import type { ExpectedProfileBinding } from "../expected-profile.js";
 import type { GatewayMethodRegistryView } from "../methods/descriptor.js";
 import {
@@ -58,6 +58,7 @@ import { resolveAgentIdOrRespondError } from "./agent-id-shared.js";
 import { gatewayRouterUploadPolicyError } from "./core-handlers.js";
 import { authorizeAuthenticatedProfileForMethod } from "./gateway-client-identity.js";
 import { authorizeGatewayMethod } from "./method-authorization.js";
+import { isGatewayRecoveryInput } from "./request-recovery-admission.js";
 import type {
   GatewayRequestContext,
   GatewayRequestOptions,
@@ -192,6 +193,8 @@ export async function authorizeGatewayRequestPreDispatch(params: {
   signal?: AbortSignal;
   assertInvocationCurrent?: () => void;
   assertPreparationCurrent?: () => void;
+  recoveryInput?: InternalAgentTurnDispatchOptions["recoveryInput"];
+  controllerInput?: SessionControllerInput;
   markSessionSubscribePhase?: (phase: SessionSubscribePhase) => void;
   consumeSessionTurn?: {
     target: { sessionKey: string; agentId?: string; sessionId: string };
@@ -229,20 +232,19 @@ export async function authorizeGatewayRequestPreDispatch(params: {
         params.context,
       ),
     );
+  const unavailableDuringStartup = () =>
+    errorShape(ErrorCodes.UNAVAILABLE, `${params.method} unavailable during gateway startup`, {
+      retryable: true,
+      retryAfterMs: GATEWAY_STARTUP_RETRY_AFTER_MS,
+      details: { ...gatewayStartupUnavailableDetails(), method: params.method },
+    });
   const startupError = () =>
     params.context.unavailableGatewayMethods?.has(params.method) &&
-    // Only the recovery owner's exact saved request can enter before fresh chat.
     !(
       params.method === "chat.send" &&
-      isRecord(params.requestParams) &&
-      typeof params.requestParams.idempotencyKey === "string" &&
-      readChatInputRecoveryAdmission(params.requestParams.idempotencyKey)
+      isGatewayRecoveryInput(params, params.context.getRuntimeConfig())
     )
-      ? errorShape(ErrorCodes.UNAVAILABLE, `${params.method} unavailable during gateway startup`, {
-          retryable: true,
-          retryAfterMs: GATEWAY_STARTUP_RETRY_AFTER_MS,
-          details: { ...gatewayStartupUnavailableDetails(), method: params.method },
-        })
+      ? unavailableDuringStartup()
       : null;
   let assertChatRoutingCurrent: (() => void) | undefined;
   while (true) {
@@ -335,6 +337,17 @@ export async function authorizeGatewayRequestPreDispatch(params: {
         }
         return { error };
       }
+    }
+    // Database refusals keep precedence, including the pending agent's retry contract.
+    if (
+      (params.method === "chat.send" || params.method === "agent") &&
+      params.context.inputRecovery &&
+      startupWriteAgents(params, params.context.getRuntimeConfig()).some((agentId) =>
+        params.context.inputRecovery!.isPending(agentId),
+      ) &&
+      !isGatewayRecoveryInput(params, params.context.getRuntimeConfig())
+    ) {
+      return { error: unavailableDuringStartup() };
     }
     const startup =
       startupReadMethods.has(params.method) &&

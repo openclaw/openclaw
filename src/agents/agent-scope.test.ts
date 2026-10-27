@@ -2,13 +2,12 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import type { SessionEntry } from "../config/sessions.js";
 import type { AgentModelConfig } from "../config/types.agents-shared.js";
 import { withEnv } from "../test-utils/env.js";
 import { findOverlappingWorkspaceAgentIds } from "./agent-delete-safety.js";
-import type { ModelFallbackAvailability } from "./agent-scope.js";
 import {
   clearAutoFallbackPrimaryProbeSelection,
   hasLegacyAutoFallbackWithoutOrigin,
@@ -19,9 +18,6 @@ import {
   resolveAgentEffectiveModelPrimary,
   resolveAgentExplicitModelPrimary,
   resolveAgentSkillsFilter,
-  modelFallbackOverrideFromAvailability,
-  resolveEffectiveModelFallbacks,
-  resolveModelFallbackAvailability,
   resolveAgentModelFallbacksOverride,
   resolveRunModelFallbacksOverride,
   resolveSubagentModelFallbacksOverride,
@@ -32,6 +28,12 @@ import {
   resolveAgentIdByWorkspacePath,
   setAgentEffectiveModelPrimary,
 } from "./agent-scope.js";
+import type { ModelFallbackAvailability } from "./model-fallback.types.js";
+import {
+  modelFallbackOverrideFromAvailability,
+  resolveEffectiveModelFallbacks,
+  resolveModelFallbackAvailability,
+} from "./model-selection-config.js";
 
 function agentConfig(agents: NonNullable<OpenClawConfig["agents"]>): OpenClawConfig {
   return { agents };
@@ -61,10 +63,11 @@ function probeEntry(entry: ProbeParams["entry"], overrides: Partial<ProbeParams>
     entry,
     primaryProvider: "anthropic",
     primaryModel: "claude-sonnet-4-6",
-    probeState: new Map(),
     ...overrides,
   });
 }
+
+afterEach(() => vi.restoreAllMocks());
 
 describe("resolveAgentConfig", () => {
   it("prefers per-agent verbose defaults over global defaults", () => {
@@ -120,6 +123,46 @@ describe("resolveAgentConfig", () => {
         hasSessionModelOverride: false,
       }),
     ).toEqual({ kind: "none_configured", source: "inherited" });
+  });
+
+  it("keeps configured fallbacks for saved user selections matching the effective primary", () => {
+    const cfg = agentConfig({
+      defaults: {
+        model: modelConfig("openai/gpt-5.4", ["anthropic/claude-sonnet-4-6"]),
+      },
+      entries: {
+        main: {},
+        worker: { model: modelConfig("anthropic/claude-sonnet-4-6", ["openai/gpt-5.4"]) },
+      },
+    });
+    const selection = {
+      cfg,
+      agentId: "main",
+      hasSessionModelOverride: true,
+      modelOverrideSource: "user" as const,
+      selectedModel: { provider: "openai", model: "gpt-5.4" },
+    };
+    expect(resolveModelFallbackAvailability(selection)).toEqual({
+      kind: "active",
+      models: ["anthropic/claude-sonnet-4-6"],
+      source: "inherited",
+    });
+    expect(resolveEffectiveModelFallbacks(selection)).toBeUndefined();
+    expect(
+      resolveEffectiveModelFallbacks({
+        ...selection,
+        agentId: "worker",
+        selectedModel: { provider: "anthropic", model: "claude-sonnet-4-6" },
+      }),
+    ).toEqual(["openai/gpt-5.4"]);
+    expect(resolveEffectiveModelFallbacks({ ...selection, agentId: "worker" })).toEqual([]);
+    expect(resolveModelFallbackAvailability({ ...selection, modelSelectionLocked: true })).toEqual({
+      kind: "disabled_by_model_selection_lock",
+    });
+    expect(resolveModelFallbackAvailability({ ...selection, modelFallbacksOverride: [] })).toEqual({
+      kind: "none_configured",
+      source: "explicit",
+    });
   });
 
   describe("modelFallbackOverrideFromAvailability", () => {
@@ -307,18 +350,17 @@ describe("resolveAgentConfig", () => {
   });
 
   it("resolves throttled primary probes for auto fallback selections", () => {
-    const probeState = new Map<string, number>();
+    const clock = vi.spyOn(Date, "now").mockReturnValue(1_000);
     const entry = fallbackEntry({
       authProfileOverride: "google:fallback",
       authProfileOverrideSource: "auto",
     });
-    const probe = (now: number, currentEntry = entry) =>
-      probeEntry(currentEntry, {
-        sessionKey: "agent:main:session",
-        now,
-        minIntervalMs: 60_000,
-        probeState,
+    const probe = (now: number, currentEntry = entry) => {
+      clock.mockReturnValue(now);
+      return probeEntry(currentEntry, {
+        sessionKey: "agent:main:throttled-probe",
       });
+    };
 
     expect(probe(1_000)).toMatchObject({
       provider: "anthropic",
@@ -333,15 +375,14 @@ describe("resolveAgentConfig", () => {
         fallbackProvider: "google",
         fallbackModel: "gemini-3-pro",
       },
-      sessionKey: "agent:main:session",
-      now: 1_000,
-      probeState,
+      sessionKey: "agent:main:throttled-probe",
     });
     expect(probe(30_000)).toBeUndefined();
     expect(
       probe(30_000, { ...entry, providerOverride: "openai", modelOverride: "gpt-5.4" }),
     ).toBeUndefined();
-    expect(probe(70_000)).toMatchObject({ provider: "anthropic", model: "claude-sonnet-4-6" });
+    expect(probe(300_999)).toBeUndefined();
+    expect(probe(301_000)).toMatchObject({ provider: "anthropic", model: "claude-sonnet-4-6" });
   });
 
   it("skips primary probes for strict or stale fallback selections", () => {
@@ -422,8 +463,9 @@ describe("resolveAgentConfig", () => {
   ] as const)(
     "clears fallback state while respecting $name auth ownership",
     ({ overrides, expected }) => {
+      vi.spyOn(Date, "now").mockReturnValue(2);
       const entry = fallbackEntry(overrides);
-      clearAutoFallbackPrimaryProbeSelection(entry, 2);
+      clearAutoFallbackPrimaryProbeSelection(entry);
       expect(entry).toEqual({ sessionId: "session", updatedAt: 2, ...expected });
     },
   );

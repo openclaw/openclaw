@@ -69,7 +69,7 @@ function workspaceFiles(bundleRoot: string, input: Launch) {
 function retainInput(
   input: Launch,
   sequence: number,
-  retain: Retain,
+  retain: Retain = [],
 ): NodeWorkerWorkspaceRetainInput {
   return {
     version: 1,
@@ -91,8 +91,8 @@ function fixture(name: string) {
     generation,
     manifestRefs: [],
   };
-  const collect = (sequence: number, retain: Retain = []) =>
-    workspace.applyRetainSnapshot(retainInput(input, sequence, retain), async () => []);
+  const collect = (sequence: number, retain: Retain = [], signal?: AbortSignal) =>
+    workspace.applyRetainSnapshot(retainInput(input, sequence, retain), async () => [], signal);
   return { root, workspace, input, generation, entry, collect, ...workspaceFiles(root, input) };
 }
 
@@ -171,21 +171,8 @@ it("preserves legacy synchronous plugin acquisition for the exact canonical plac
   );
 });
 
-it("protects a claimed placement workspace until its owner releases it", async () => {
-  const { workspace, workspaceDir, request, collect } = managedFixture("managed-retention");
-  const claim = await workspace.acquireManagedWorkspaceAsync(request);
-
-  await collect(1);
-  expect(fs.existsSync(workspaceDir)).toBe(true);
-
-  claim.release();
-  claim.release();
-  await collect(2);
-  expect(fs.existsSync(workspaceDir)).toBe(false);
-});
-
 it("keeps an in-flight removal fenced until it settles after cancellation", async () => {
-  const { workspace, input, workspaceDir, request } = managedFixture("managed-removal-race");
+  const { workspace, collect, workspaceDir, request } = managedFixture("managed-removal-race");
   const removalStarted = createDeferred();
   const finishRemoval = createDeferred();
   const controller = new AbortController();
@@ -197,12 +184,7 @@ it("keeps an in-flight removal fenced until it settles after cancellation", asyn
     }
     return await remove(target, options);
   });
-  const retention = workspace
-    .applyRetainSnapshot(retainInput(input, 1, []), async () => [], controller.signal)
-    .then(
-      () => undefined,
-      (error: unknown) => error,
-    );
+  const retention = collect(1, [], controller.signal).catch((error: unknown) => error);
 
   try {
     await removalStarted.promise;
@@ -221,9 +203,9 @@ it("keeps an in-flight removal fenced until it settles after cancellation", asyn
 it.each(["manifest", "metadata"] as const)(
   "cancels before deleting a %s verified after cancellation and resumes on replay",
   async (kind) => {
-    const { workspace, input, entry, seed, manifest, session } = fixture("cancel-retention");
+    const { collect, entry, seed, manifest, session } = fixture("cancel-retention");
     const retained = kind === "metadata" ? undefined : seed(2);
-    const snapshot = retainInput(input, 1, retained ? [{ ...entry, generation: 2 }] : []);
+    const retainedEntries = retained ? [{ ...entry, generation: 2 }] : [];
     const target =
       kind === "manifest" ? manifest("b".repeat(64)) : path.join(session, ".openclaw-worker");
     if (kind === "metadata") {
@@ -232,12 +214,9 @@ it.each(["manifest", "metadata"] as const)(
     }
     const { entered, release } = holdLstat(target);
     const controller = new AbortController();
-    const retention = workspace
-      .applyRetainSnapshot(snapshot, async () => [], controller.signal)
-      .then(
-        () => undefined,
-        (error: unknown) => error,
-      );
+    const retention = collect(1, retainedEntries, controller.signal).catch(
+      (error: unknown) => error,
+    );
     try {
       await entered.promise;
       controller.abort(new Error("retention cancelled"));
@@ -247,7 +226,7 @@ it.each(["manifest", "metadata"] as const)(
     expect(await retention).toBe(controller.signal.reason);
     expect(fs.existsSync(target)).toBe(true);
 
-    await expect(workspace.applyRetainSnapshot(snapshot, async () => [])).resolves.toMatchObject({
+    await expect(collect(1, retainedEntries)).resolves.toMatchObject({
       applied: true,
       hasMore: false,
     });
@@ -259,7 +238,7 @@ it.each(["manifest", "metadata"] as const)(
 );
 
 it("settles an issued deletion but leaves empty parents when cancelled", async () => {
-  const { workspace, input, manifest: seedManifest, session } = fixture("cancel-parent-retention");
+  const { collect, manifest: seedManifest, session } = fixture("cancel-parent-retention");
   const manifest = seedManifest("b".repeat(64));
   const controller = new AbortController();
   const reason = new Error("retention cancelled");
@@ -270,33 +249,20 @@ it("settles an issued deletion but leaves empty parents when cancelled", async (
       controller.abort(reason);
     }
   });
-  const snapshot = retainInput(input, 1, []);
-  await expect(
-    workspace.applyRetainSnapshot(snapshot, async () => [], controller.signal),
-  ).rejects.toBe(reason);
+  await expect(collect(1, [], controller.signal)).rejects.toBe(reason);
   expect(fs.existsSync(manifest)).toBe(false);
   expect(fs.existsSync(path.dirname(manifest))).toBe(true);
 
-  await workspace.applyRetainSnapshot(snapshot, async () => []);
+  await collect(1);
   expect(fs.existsSync(session)).toBe(false);
 });
 
-it("does not delete workspaces before the first Gateway snapshot", async () => {
-  const { seed, supervisor } = supervisorFixture("startup-retention");
-  const generations = [seed(1), seed(2)];
-
-  await supervisor.initialize();
-
-  expectPaths(generations, true);
-  await supervisor.close();
-});
-
-it("continues a bounded backlog with an idempotent snapshot replay", async () => {
+it("preserves workspaces until the first snapshot and continues a bounded backlog on replay", async () => {
   const { seed, session, input, supervisor } = supervisorFixture("backlog-retention");
-  for (let generation = 0; generation <= 260; generation += 1) {
-    seed(generation);
-  }
-  const snapshot = retainInput(input, 1, []);
+  const generations = Array.from({ length: 261 }, (_, generation) => seed(generation));
+  await supervisor.initialize();
+  expectPaths(generations, true);
+  const snapshot = retainInput(input, 1);
 
   const first = await supervisor.retainWorkspaces(snapshot);
   const second = await supervisor.retainWorkspaces(snapshot);
@@ -307,72 +273,69 @@ it("continues a bounded backlog with an idempotent snapshot replay", async () =>
   await supervisor.close();
 });
 
-it.each(["upload", "download"] as const)(
-  "retains the latest %s manifest across command gaps until superseded or retired",
-  async (direction) => {
-    const f = fixture("transfer-retention");
-    const { workspace, input, generation, entry, collect } = f;
-    const workspaceDir = f.seed();
-    const baseDigest = "b".repeat(64);
-    const baseManifest = f.manifest(baseDigest);
-    const retainedEntry = {
-      ...entry,
-      manifestRefs: [`sha256:${baseDigest}`],
-    };
-    const runTransfer = vi.spyOn(workspaceTransfer, "runNodeWorkerWorkspaceTransfer");
-    const transferManifest = async (digest: string) => {
-      const manifestRef = `sha256:${digest}`;
-      const manifest = f.manifest(digest);
-      runTransfer.mockResolvedValueOnce(manifestRef);
-      await workspace.exec(
-        {
-          gatewayNamespace: input.gatewayNamespace,
-          environmentId: retainedEntry.environmentId,
-          sessionId: retainedEntry.sessionId,
-          generation,
-          argv: ["node"],
-          transfer:
-            direction === "upload"
-              ? {
-                  direction,
-                  token: "test-token",
-                  baseManifestRef: `sha256:${baseDigest}`,
-                  referenceManifestRef: `sha256:${baseDigest}`,
-                }
-              : { direction, token: "test-token", manifestRef },
-        },
-        undefined,
-        { url: "http://127.0.0.1:1" },
-      );
-      return manifest;
-    };
+it("retains transferred manifests across command gaps until superseded or retired", async () => {
+  const f = fixture("transfer-retention");
+  const { workspace, input, generation, entry, collect } = f;
+  const workspaceDir = f.seed();
+  const baseDigest = "b".repeat(64);
+  const baseManifest = f.manifest(baseDigest);
+  const retainedEntry = {
+    ...entry,
+    manifestRefs: [`sha256:${baseDigest}`],
+  };
+  const runTransfer = vi.spyOn(workspaceTransfer, "runNodeWorkerWorkspaceTransfer");
+  const transferManifest = async (direction: "upload" | "download", digest: string) => {
+    const manifestRef = `sha256:${digest}`;
+    const manifest = f.manifest(digest);
+    runTransfer.mockResolvedValueOnce(manifestRef);
+    await workspace.exec(
+      {
+        gatewayNamespace: input.gatewayNamespace,
+        environmentId: retainedEntry.environmentId,
+        sessionId: retainedEntry.sessionId,
+        generation,
+        argv: ["node"],
+        transfer:
+          direction === "upload"
+            ? {
+                direction,
+                token: "test-token",
+                baseManifestRef: `sha256:${baseDigest}`,
+                referenceManifestRef: `sha256:${baseDigest}`,
+              }
+            : { direction, token: "test-token", manifestRef },
+      },
+      undefined,
+      { url: "http://127.0.0.1:1" },
+    );
+    return manifest;
+  };
 
-    const first = await transferManifest("c".repeat(64));
-    const artifacts = [
-      `.${generation}.workspace-transfer-stale`,
-      `${generation}.previous-123-stale`,
-    ].map((name) => path.join(f.session, name));
-    for (const artifact of artifacts) {
-      fs.mkdirSync(artifact);
-    }
-    await collect(1, [retainedEntry]);
+  const first = await transferManifest("upload", "c".repeat(64));
+  const artifacts = [
+    `.${generation}.workspace-transfer-stale`,
+    `${generation}.previous-123-stale`,
+  ].map((name) => path.join(f.session, name));
+  for (const artifact of artifacts) {
+    fs.mkdirSync(artifact);
+  }
+  await collect(1, [retainedEntry]);
 
-    expect(fs.existsSync(first)).toBe(true);
-    expect(artifacts.every((artifact) => !fs.existsSync(artifact))).toBe(true);
+  expect(fs.existsSync(first)).toBe(true);
+  expect(artifacts.every((artifact) => !fs.existsSync(artifact))).toBe(true);
 
-    const latest = await transferManifest("d".repeat(64));
-    await collect(2, [retainedEntry]);
+  const latest = await transferManifest("download", "d".repeat(64));
+  await collect(2, [retainedEntry]);
 
-    expect(fs.existsSync(first)).toBe(false);
-    expectPaths([latest, baseManifest], true);
+  expect(fs.existsSync(first)).toBe(false);
+  expectPaths([latest, baseManifest], true);
 
-    const sibling = f.seed(generation + 1);
-    await collect(3, [{ ...retainedEntry, generation: generation + 1 }]);
+  const sibling = f.seed(generation + 1);
+  await collect(3, [{ ...retainedEntry, generation: generation + 1 }]);
 
-    expectPaths([workspaceDir, latest], false);
-    expect(fs.existsSync(sibling)).toBe(true);
-  },
-);
+  expectPaths([workspaceDir, latest], false);
+  expect(fs.existsSync(sibling)).toBe(true);
+});
 
 it("keeps a retained worker workspace after turn completion until environment teardown", async () => {
   const root = tempDirs.make("node-worker-workspace-retention-active-");
@@ -467,26 +430,16 @@ await awaitRelease("command", "release");`,
 });
 
 it("rejects conflicting replay and ignores an older sequence", async () => {
-  const { seed, input, supervisor } = supervisorFixture("sequence-retention");
+  const { seed, entry, collect } = fixture("sequence-retention");
   const generation = seed(5);
-  const retainedEntry = {
-    environmentId: input.descriptor.admission.environmentId,
-    sessionId: input.descriptor.admission.sessionId,
-    generation: 5,
-    manifestRefs: null,
-  } as const;
-
-  await supervisor.retainWorkspaces(retainInput(input, 2, [retainedEntry]));
-  await expect(supervisor.retainWorkspaces(retainInput(input, 1, []))).resolves.toEqual({
+  await collect(2, [{ ...entry, generation: 5, manifestRefs: null }]);
+  await expect(collect(1)).resolves.toEqual({
     applied: false,
     deleted: 0,
     hasMore: false,
   });
-  await expect(supervisor.retainWorkspaces(retainInput(input, 2, []))).rejects.toThrow(
-    "sequence changed contents",
-  );
+  await expect(collect(2)).rejects.toThrow("sequence changed contents");
   expect(fs.existsSync(generation)).toBe(true);
-  await supervisor.close();
 });
 
 it("keeps other Gateway namespaces isolated", async () => {

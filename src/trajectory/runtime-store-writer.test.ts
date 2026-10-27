@@ -25,7 +25,7 @@ import {
   loadSqliteTrajectoryRuntimeEvents,
   loadSqliteTrajectoryRuntimeEventRowsSync,
 } from "./runtime-store.sqlite.js";
-import { createTrajectoryEvent } from "./runtime-store.test-support.js";
+import { createTrajectoryEvent, trajectoryEventBytes } from "./runtime-store.test-support.js";
 import { createTrajectoryRuntimeRecorder } from "./runtime.js";
 
 // Real native writes and admission run unchanged; only delivery of their evidence changes.
@@ -291,9 +291,7 @@ it("reuses committed trajectory facts across metadata writes and clears them aft
     const events = ["first", "later", "final"].map((type) =>
       createTrajectoryEvent({ type, sessionId: target.sessionId }),
     );
-    const maxRuntimeFileBytes = events
-      .slice(0, 2)
-      .reduce((bytes, event) => bytes + Buffer.byteLength(JSON.stringify(event), "utf8") + 1, 0);
+    const maxRuntimeFileBytes = trajectoryEventBytes(events.slice(0, 2));
     const sink = await createSink(state, target, maxRuntimeFileBytes);
     const flush = async (event: (typeof events)[number]) => {
       sink.write(event, JSON.stringify(event));

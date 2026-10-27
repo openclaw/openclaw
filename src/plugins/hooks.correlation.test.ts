@@ -2,7 +2,7 @@ import { AsyncLocalStorage } from "node:async_hooks";
 import { spawnSync } from "node:child_process";
 import { setImmediate as nextTurn } from "node:timers/promises";
 import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
-import { beforeAll, describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { resolveRuntimeWorkerArgv, resolveRuntimeWorkerUrl } from "../infra/runtime-worker-url.js";
 import { AsyncWorkScope } from "../shared/async-work-scope.js";
 import { createDeferredCore } from "../shared/deferred.js";
@@ -55,8 +55,7 @@ function heldHook(reject = false) {
 }
 
 describe("hook timeouts", () => {
-  let child: { status: number | null; stderr: string; stdout: string };
-  beforeAll(() => {
+  it("keeps one-shot agent_end runs alive until a ref'd timeout fires", () => {
     const hooksUrl = resolveRuntimeWorkerUrl(pluginProcessRuntimeEntrypoints.hooks);
     const script = `
       import { createHookRunner } from ${JSON.stringify(hooksUrl.href)};
@@ -71,14 +70,11 @@ describe("hook timeouts", () => {
         { runId: "test-run-id" }, { unrefTimeout: false });
       console.log("settled-after-timeout");
     `;
-    child = spawnSync(
+    const child = spawnSync(
       process.execPath,
       [...resolveRuntimeWorkerArgv(hooksUrl).slice(0, -1), "--input-type=module", "-e", script],
       { cwd: process.cwd(), encoding: "utf8", timeout: 30_000 },
     );
-  });
-
-  it("keeps one-shot agent_end runs alive until a ref'd timeout fires", () => {
     expect(child.status).toBe(0);
     expect(child.stderr).toContain(
       "[hooks] agent_end handler from plugin-a failed: timed out after 20ms",

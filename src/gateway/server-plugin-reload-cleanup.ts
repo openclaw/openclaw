@@ -18,6 +18,7 @@ import { withPluginHttpRouteRegistry } from "../plugins/http-registry.js";
 import { PluginInstanceDrainTimeoutError } from "../plugins/plugin-instance-error.js";
 import { getPluginInstance, type PluginInstanceHandle } from "../plugins/plugin-instance-scope.js";
 import { collectRegistryInvocationInstances } from "../plugins/plugin-invocation-scope.js";
+import { pluginHandsOverTurns } from "../plugins/plugin-turn-handover-eligibility.js";
 import type { PluginRegistry } from "../plugins/registry-types.js";
 import { disposePluginRegistryInstances } from "../plugins/runtime.js";
 import {
@@ -25,9 +26,25 @@ import {
   getPluginServiceCleanupSettlement,
   type PluginServicesHandle,
 } from "../plugins/services.js";
+import { formatPluginReloadDrainReason } from "./plugin-reload-drain-reason.js";
 import type { GatewayPluginReloadStatus } from "./server-plugin-reload-status.types.js";
 
 const PLUGIN_RELOAD_ADMITTED_WORK_TIMEOUT_MS = 60_000;
+
+// Keep acquisition facts in raw logs; each egress applies its own redaction policy.
+function logRetainedReferences(
+  instances: readonly PluginInstanceHandle[],
+  phase: "queued" | "timeout",
+  log: Pick<ReturnType<typeof createSubsystemLogger>, "info" | "warn">,
+): void {
+  const selected = instances
+    .slice(0, 8)
+    .map((instance) => instance.retentionSnapshot({ limit: 8 }));
+  log[phase === "timeout" ? "warn" : "info"](
+    `Plugin retained references (${phase}); a turn awaiting its own retained work cannot drain.`,
+    { instances: selected, omittedInstances: Math.max(0, instances.length - selected.length) },
+  );
+}
 
 export class PluginAdmittedWorkTimeoutError extends Error {
   /** Previous-generation instances whose pre-stop drain expired, from the failing registry. */
@@ -107,7 +124,9 @@ export function createPluginReloadCleanup({
     }
   };
   const admittedWorkDeadline = () =>
-    (admittedWorkDeadlineAtMs ??= Date.now() + admittedWorkTimeoutMs);
+    (admittedWorkDeadlineAtMs ??= performance.now() + admittedWorkTimeoutMs);
+  // Budgets use the monotonic clock their timers run on; status reports a wall-clock deadline.
+  const wallClockDeadline = (deadlineAtMs: number) => Date.now() + deadlineAtMs - performance.now();
   const observeDrain = async (
     label: string,
     signal: AbortSignal,
@@ -120,7 +139,7 @@ export function createPluginReloadCleanup({
       await withPluginHostCleanupTimeout(
         label,
         () => run(currentSignal),
-        Math.max(0, deadlineAtMs - Date.now()),
+        Math.max(0, deadlineAtMs - performance.now()),
       );
     } finally {
       // Detach observers when the wait ends; admitted work keeps its own lifetime.
@@ -131,11 +150,11 @@ export function createPluginReloadCleanup({
     signal: AbortSignal,
     reportStatus: (status: GatewayPluginReloadStatus) => void,
   ) => {
-    const deadlineAtMs = Date.now() + PLUGIN_RELOAD_ADMITTED_WORK_TIMEOUT_MS;
+    const deadlineAtMs = performance.now() + PLUGIN_RELOAD_ADMITTED_WORK_TIMEOUT_MS;
     reportStatus({
       phase: "recovering",
       pluginIds: [...changedPluginIds],
-      deadlineAtMs,
+      deadlineAtMs: wallClockDeadline(deadlineAtMs),
       reason: "Waiting for cleanup and admitted work before restoring the previous plugin runtime.",
     });
     try {
@@ -308,21 +327,40 @@ export function createPluginReloadCleanup({
     { includeConsumers = false, includeCalls = false } = {},
   ) => {
     const instances = previousInstances(pluginIds);
-    const count = instances.reduce(
-      (total, instance) =>
-        total + instance.retainedWorkCount + (includeCalls ? instance.ordinaryCallCount : 0),
-      0,
-    );
+    const holds = previousRegistry.plugins.flatMap((record) => {
+      const instance = pluginIds.has(record.id) && getPluginInstance(record);
+      return instance
+        ? [
+            {
+              pluginId: record.id,
+              count: instance.retainedWorkCount + (includeCalls ? instance.ordinaryCallCount : 0),
+              turnHandover: pluginHandsOverTurns([previousRegistry], record.id),
+            },
+          ]
+        : [];
+    });
+    const count = holds.reduce((total, hold) => total + hold.count, 0);
     if (!instances.length || (!count && !includeConsumers)) {
       return;
     }
     retainedWorkQueued ||= count > 0;
     const deadlineAtMs = admittedWorkDeadline();
     const reason = count
-      ? `Plugin replacement queued behind ${count} ${includeCalls ? "admitted" : "retained"} work item(s) for plugin ${[...pluginIds].join(", ")}; new agent runs wait up to the ${admittedWorkTimeoutMs / 1_000}s drain budget.${waitForDrain ? " Press Ctrl+C to cancel the waiting reload." : ""}`
+      ? formatPluginReloadDrainReason({
+          holds,
+          includeCalls,
+          drainBudgetSeconds: admittedWorkTimeoutMs / 1_000,
+          cancellable: waitForDrain,
+        })
       : "Waiting for admitted plugin cleanup before replacing it.";
-    reportStatus({ phase: "reloading", pluginIds: [...changedPluginIds], deadlineAtMs, reason });
+    reportStatus({
+      phase: "reloading",
+      pluginIds: [...changedPluginIds],
+      deadlineAtMs: wallClockDeadline(deadlineAtMs),
+      reason,
+    });
     log.info(reason);
+    logRetainedReferences(instances, "queued", log);
     try {
       await observeDrain("retained plugin work", signal, deadlineAtMs, (current) =>
         Promise.all(
@@ -335,6 +373,7 @@ export function createPluginReloadCleanup({
       );
     } catch (error) {
       if (error instanceof PluginHostCleanupTimeoutError) {
+        logRetainedReferences(instances, "timeout", log);
         throw new PluginAdmittedWorkTimeoutError(
           pluginIds,
           instances,

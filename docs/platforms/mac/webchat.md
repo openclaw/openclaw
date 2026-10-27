@@ -396,7 +396,7 @@ If images or files prompt you to **Sign in to continue loading content**, choose
 returns to the open conversation. Signing in to an ordinary browser tab alone
 does not refresh the Mac app's separate browser session.
 
-Choose **File → New Gateway Window…** or press Shift-Cmd-N, then select a Gateway.
+Choose **File → New Gateway Window…**, then select a Gateway. This action has no keyboard shortcut.
 The picker includes the primary Gateway, **This Mac** when it also hosts a local
 Gateway, and saved profiles. It remembers the selected Gateway. Every selection
 creates a new independent window in the chosen Web or Native experience, so the

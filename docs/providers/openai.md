@@ -183,10 +183,11 @@ selection remains locked; an incompatible subscription profile does not fall
 through to a different account.
 
 Boolean questions map to predicates; choices retain their string labels; score
-levels use zero-based rubric positions. A batch supports up to 200 questions,
+levels use zero-based rubric positions. A V2 batch supports up to 400 questions,
 with up to 255 alternatives per choice question. Larger requests return
 `unsupported-input` before credential resolution or an API call. Split independent
-questions into separate batches, or reduce the alternatives.
+questions into separate batches, or reduce the alternatives. Legacy V1 callers
+retain the host's 256-question limit; use `contractVersion: 2` for larger batches.
 
 The prepared V2 adapter accepts tagged text, JSON, or one inline PNG, JPEG, or
 WebP image up to 4 MiB, with optional text. It does not fetch remote image URLs.

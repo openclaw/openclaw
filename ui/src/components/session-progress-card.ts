@@ -1,7 +1,10 @@
 import type { ProgressCard, ProgressCardStep, SessionRunStatus } from "@openclaw/gateway-protocol";
 import { asDateTimestampMs } from "@openclaw/normalization-core/number-coercion";
 import { t } from "../i18n/index.ts";
+import { registerSessionProgressEnglish } from "../i18n/locales/en-session-progress.ts";
 import type { SessionProgressCardRefreshState } from "../lib/session-progress-cards.ts";
+
+registerSessionProgressEnglish();
 
 export const REFRESH_STATUS_LABEL_KEYS: Record<
   SessionProgressCardRefreshState,
@@ -93,10 +96,24 @@ function currentProgressStep(steps: readonly ProgressCardStep[]): ProgressCardSt
   return unfinishedProgressStep(steps) ?? steps.findLast((step) => step.status === "completed");
 }
 
-export function promoteFirstProgressBar(sanitizedHtml: string): string {
+function parseProgressMarkup(sanitizedHtml: string) {
   const template = document.createElement("template");
   template.innerHTML = sanitizedHtml;
-  const progress = template.content.querySelector("progress");
+  return { template, bars: template.content.querySelectorAll("progress") };
+}
+
+/** Compact previews share the full note parser but omit progress-bar fallback text. */
+export function progressCardNoteSummary(sanitizedHtml: string): string {
+  const { template, bars } = parseProgressMarkup(sanitizedHtml);
+  for (const bar of bars) {
+    bar.remove();
+  }
+  return template.content.textContent?.replace(/\s+/gu, " ").trim() ?? "";
+}
+
+export function promoteFirstProgressBar(sanitizedHtml: string): string {
+  const { template, bars } = parseProgressMarkup(sanitizedHtml);
+  const progress = bars[0];
   if (!progress) {
     return sanitizedHtml;
   }
@@ -194,7 +211,6 @@ export function progressCardPresentation(
     effectiveSessionStatus,
     activityTimestamp,
     activityKey,
-    currentStep,
     currentPosition,
     complete,
     stepLabel,

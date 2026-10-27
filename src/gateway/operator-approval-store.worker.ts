@@ -44,8 +44,8 @@ function transact<Payload, Result>(
   receiptOf?: (result: Result) => OperatorApprovalCommitReceipt | undefined,
 ): Result {
   const options = { ...context.stateOptions(), database: context.open() };
+  requestSqliteWorkerOperationAdmission({ stage: "transaction", facts: undefined });
   return runOpenClawStateWriteTransaction((database) => {
-    requestSqliteWorkerOperationAdmission({ stage: "transaction", facts: undefined });
     const approval = operatorApprovalPublication.capture(database.db, () =>
       operatorStandingGrantPublication.capture(database.db, () =>
         execApprovalsPublication.capture(database.db, () =>

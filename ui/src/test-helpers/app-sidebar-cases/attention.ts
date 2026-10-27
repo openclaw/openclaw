@@ -3,6 +3,7 @@ import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { GatewaySessionRow } from "../../api/types.ts";
 import type { ExecApprovalRequest } from "../../app/exec-approval.ts";
 import { getAppSidebarOwner } from "../../components/app-sidebar.tsx";
+import { setSessionsShowPreview } from "../../components/session-organizer-menu.runtime.ts";
 import { rosterActivityStore } from "../../lib/agents/roster-activity-store.ts";
 import {
   createGateway,
@@ -238,22 +239,29 @@ describe("AppSidebar session attention", () => {
     });
     await settleLitElement(sidebar);
     expect(dom.query('[data-session-attention="question"]')).toBeNull();
-    expect(dom.query('[data-session-attention="agent"]')).not.toBeNull();
-    expect(sidebar.textContent).toContain("Blocked: need the staging password");
+    expect(attentionLabel(sidebar, "agent")).toBe("Blocked: need the staging password");
   });
 
   it("shows hourglass attention ahead of a run error", async () => {
     const { sidebar, dom } = await mountAttention([agentAttentionRow(sessionKey, {}, "hourglass")]);
 
-    expect(dom.query('[data-session-attention="agent"] svg circle')).not.toBeNull();
-    expect(sidebar.textContent).toContain("Blocked: need the staging password");
+    const glyph = dom.query<HTMLElement>('[data-session-attention="agent"] .session-css-icon');
+    const mask = glyph?.style.maskImage.match(/data:image\/svg\+xml,([^"\s]+)"/u)?.[1];
+    expect(mask).toBeDefined();
+    const artwork = new DOMParser().parseFromString(decodeURIComponent(mask!), "image/svg+xml");
+    expect(artwork.querySelector('circle[cx="12"][cy="12"][r="10"]')).not.toBeNull();
+    expect(attentionLabel(sidebar, "agent")).toBe("Blocked: need the staging password");
+    // The default sidebar keeps the note on the icon; it does not add a second line.
+    expect(
+      dom.query(`[data-session-key="${sessionKey}"] .sidebar-recent-session__subtitle`),
+    ).toBeNull();
     expect(sidebar.textContent).not.toContain("Run failed:");
   });
 
   it("shows an unflagged agent status note in the subtitle slot", async () => {
     const { sidebar, dom } = await mountAttention([deploymentRow()]);
 
-    sidebar.sessionOrganizer.setSessionsShowPreview(true);
+    setSessionsShowPreview(sidebar.sessionOrganizer, true);
     await settleLitElement(sidebar);
     expect(sidebar.textContent).toContain("Deploying to staging");
     expect(dom.query('[data-session-attention="agent"]')).toBeNull();

@@ -3,7 +3,6 @@ import {
   runOpenClawStateWriteTransaction,
   type OpenClawStateDatabase,
 } from "../../../state/openclaw-state-db.js";
-import { captureOpenClawStateWorkerContext } from "../../../state/openclaw-state-worker-context.js";
 import { loadSubagentRegistryFromSqlite } from "../registry/subagent-registry-state.fixture.test-support.js";
 import {
   armRequesterWake,
@@ -13,17 +12,15 @@ import {
 } from "./subagent-completion-admission.test-helpers.js";
 import { mutateSubagentCompletionInDatabase } from "./subagent-completion-mutation.kernel.js";
 
-export function registerRequesterWakeOwnershipTests({
-  database: getDatabase,
-  persistOwner,
-}: {
+export function registerRequesterWakeOwnershipTests(options: {
   database: () => OpenClawStateDatabase;
   persistOwner: (input: ReturnType<typeof records>) => unknown;
 }) {
+  const stored = (input: ReturnType<typeof records>) =>
+    loadSubagentRegistryFromSqlite().get(input.subagent.runId);
   it.each(["owner", "incarnation"] as const)(
     "reconciles aged cancellation only with known child ownership (missing: %s)",
     (missing) => {
-      const database = getDatabase();
       const input = failedRecords("cancelled", { status: "error", error: "stopped" });
       const endedAt = Date.now() - 9 * 24 * 60 * 60_000;
       input.subagent.execution.endedAt = endedAt;
@@ -37,28 +34,23 @@ export function registerRequesterWakeOwnershipTests({
       } else {
         input.subagent.childSessionIdentity = undefined;
       }
-      persistOwner(input);
-      const before = loadSubagentRegistryFromSqlite().get(input.subagent.runId);
-
+      options.persistOwner(input);
+      const before = stored(input);
+      const database = options.database();
+      const mutation = {
+        kind: "reconcileCancelled" as const,
+        expected: input.subagent,
+        now: Date.now(),
+      };
       const result = runOpenClawStateWriteTransaction(
-        () =>
-          mutateSubagentCompletionInDatabase(database, {
-            kind: "reconcileCancelled",
-            expected: input.subagent,
-            now: Date.now(),
-          }),
+        () => mutateSubagentCompletionInDatabase(database, mutation),
         { database },
       );
-
-      const after = loadSubagentRegistryFromSqlite().get(input.subagent.runId);
-      if (missing === "owner") {
-        expect(result.records).toEqual([]);
-        expect(after).toEqual(before);
-      } else {
-        expect(result.records).toHaveLength(1);
-        expect(after).toEqual({ ...before, killReconciliation: undefined });
-        expect(after?.childSessionIdentity).toBeUndefined();
-      }
+      const after = stored(input);
+      expect(result.records).toHaveLength(missing === "owner" ? 0 : 1);
+      expect(after).toEqual(
+        missing === "owner" ? before : { ...before, killReconciliation: undefined },
+      );
     },
   );
 
@@ -66,28 +58,25 @@ export function registerRequesterWakeOwnershipTests({
     "settles an explicitly owned raw-child wake with requester-turn retirement (%s)",
     async (requesterTurnRunId) => {
       const input = armRequesterWake(records());
-      Object.assign(input.subagent, {
+      const owner = {
         childSessionKey: "global",
         childAgentId: "main",
         cleanupCompletedAt: undefined,
         requesterTurnRunId,
         retireAfterRequesterTurn: true,
-      });
+      };
+      Object.assign(input.subagent, owner);
       input.subagent.requesterSettleWake!.retireAfterSettle = true;
-      persistOwner(input);
+      options.persistOwner(input);
 
       await expect(
-        settleRequesterCompletionBatch({
-          entries: [input.subagent],
+        settleRequesterCompletionBatch({ entries: [input.subagent] }),
+      ).resolves.toMatchObject({
+        applied: true,
+        publication: "published",
+      });
 
-          context: captureOpenClawStateWorkerContext(),
-          assertCurrent: () => {},
-          onCommitted: () => {},
-          onPublished: () => {},
-        }),
-      ).resolves.toMatchObject({ applied: true, publication: "published" });
-
-      const retained = loadSubagentRegistryFromSqlite().get(input.subagent.runId);
+      const retained = stored(input);
       if (requesterTurnRunId) {
         expect(retained).toMatchObject({
           childSessionKey: "global",

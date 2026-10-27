@@ -10,6 +10,7 @@ import {
   detectContentType,
   missingUiHtml,
   proxyUpgradeRequest,
+  resolveUiAssetVersion,
   tryResolveUiAsset,
 } from "./lab-server-ui.js";
 
@@ -29,6 +30,20 @@ async function makeUiDir() {
 }
 
 describe("qa-lab server ui helpers", () => {
+  it("versions UI assets only when the index is a regular file", async () => {
+    const root = await makeUiDir();
+    const index = path.join(root, "index.html");
+    expect(resolveUiAssetVersion(root)).toBeNull();
+    await mkdir(index);
+    expect(resolveUiAssetVersion(root)).toBeNull();
+    await rm(index, { recursive: true });
+    await writeFile(index, "first");
+    const first = resolveUiAssetVersion(root);
+    expect(first).toMatch(/^[a-f0-9]{12}$/);
+    await writeFile(index, "second");
+    expect(resolveUiAssetVersion(root)).not.toBe(first);
+  });
+
   it("detects basic UI asset content types", () => {
     expect(detectContentType("index.html")).toBe("text/html; charset=utf-8");
     expect(detectContentType("styles.css")).toBe("text/css; charset=utf-8");

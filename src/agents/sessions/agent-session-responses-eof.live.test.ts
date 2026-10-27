@@ -128,7 +128,7 @@ describeLive("AgentSession Responses EOF live", () => {
           execute: inspect,
         },
       ],
-      resourceLoader: createResourceLoader(),
+      resourceLoader: await createResourceLoader(),
       modelRegistry: ModelRegistry.inMemory(authStorage),
       sessionManager: SessionManager.inMemory(),
       settingsManager: SettingsManager.inMemory({
@@ -191,11 +191,11 @@ describeLive("AgentSession Responses EOF live", () => {
       expect(unfinishedCallId).not.toBe("");
       expect(record).toHaveBeenCalledOnce();
       expect(inspect).not.toHaveBeenCalled();
-      expect(events.filter((event) => event.type === "auto_retry_start")).toMatchObject([
-        { errorMessage: "Responses stream ended with unresolved tool calls" },
+      expect(events.filter((event) => event.type === "auto_retry_start")).toEqual([
+        { type: "auto_retry_start" },
       ]);
-      expect(events.filter((event) => event.type === "auto_retry_end")).toMatchObject([
-        { success: true },
+      expect(events.filter((event) => event.type === "auto_retry_end")).toEqual([
+        { type: "auto_retry_end" },
       ]);
       expect(httpRequests).toBe(3);
       expect(requests).toHaveLength(3);

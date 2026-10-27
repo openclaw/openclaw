@@ -12,6 +12,22 @@ import {
 const PROVIDER_ID = "comfy";
 const COMFY_MAX_INPUT_IMAGES = 1;
 
+type ComfyReadinessContext = Omit<Parameters<typeof isComfyCapabilityConfigured>[0], "capability">;
+
+function comfyProviderDefaults(capability: "image" | "music" | "video") {
+  return {
+    id: PROVIDER_ID,
+    label: "ComfyUI",
+    defaultModel: DEFAULT_COMFY_MODEL,
+    models: [DEFAULT_COMFY_MODEL],
+    // Retained for synchronous SDK consumers through 2026-12-31.
+    isConfigured: ({ cfg, agentDir }: ComfyReadinessContext) =>
+      isComfyCapabilityConfigured({ cfg, agentDir, capability }),
+    isConfiguredAsync: ({ cfg, agentDir }: ComfyReadinessContext) =>
+      isComfyCapabilityConfiguredAsync({ cfg, agentDir, capability }),
+  };
+}
+
 function resolveInputImage(inputImage: MusicGenerationSourceImage | undefined) {
   if (!inputImage) {
     return undefined;
@@ -73,15 +89,7 @@ export default definePluginEntry({
       ],
     });
     api.registerImageGenerationProvider({
-      id: "comfy",
-      label: "ComfyUI",
-      defaultModel: DEFAULT_COMFY_MODEL,
-      models: [DEFAULT_COMFY_MODEL],
-      // Retained for synchronous SDK consumers through 2026-12-31.
-      isConfigured: ({ cfg, agentDir }) =>
-        isComfyCapabilityConfigured({ cfg, agentDir, capability: "image" }),
-      isConfiguredAsync: ({ cfg, agentDir }) =>
-        isComfyCapabilityConfiguredAsync({ cfg, agentDir, capability: "image" }),
+      ...comfyProviderDefaults("image"),
       capabilities: {
         generate: {
           maxCount: 1,
@@ -117,15 +125,7 @@ export default definePluginEntry({
       },
     });
     api.registerMusicGenerationProvider({
-      id: "comfy",
-      label: "ComfyUI",
-      defaultModel: DEFAULT_COMFY_MODEL,
-      models: [DEFAULT_COMFY_MODEL],
-      // Retained for synchronous SDK consumers through 2026-12-31.
-      isConfigured: ({ cfg, agentDir }) =>
-        isComfyCapabilityConfigured({ cfg, agentDir, capability: "music" }),
-      isConfiguredAsync: ({ cfg, agentDir }) =>
-        isComfyCapabilityConfiguredAsync({ cfg, agentDir, capability: "music" }),
+      ...comfyProviderDefaults("music"),
       capabilities: {
         generate: {},
         edit: {
@@ -161,15 +161,7 @@ export default definePluginEntry({
       },
     });
     api.registerVideoGenerationProvider({
-      id: "comfy",
-      label: "ComfyUI",
-      defaultModel: DEFAULT_COMFY_MODEL,
-      models: [DEFAULT_COMFY_MODEL],
-      // Retained for synchronous SDK consumers through 2026-12-31.
-      isConfigured: ({ cfg, agentDir }) =>
-        isComfyCapabilityConfigured({ cfg, agentDir, capability: "video" }),
-      isConfiguredAsync: ({ cfg, agentDir }) =>
-        isComfyCapabilityConfiguredAsync({ cfg, agentDir, capability: "video" }),
+      ...comfyProviderDefaults("video"),
       capabilities: {
         generate: {
           maxVideos: 1,

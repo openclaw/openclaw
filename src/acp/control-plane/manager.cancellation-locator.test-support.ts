@@ -38,7 +38,7 @@ export function observeControlRead(
     });
 }
 
-export function createGate(label: string) {
+export function createGate(label = "Operation settled before its controlled boundary") {
   const entered = createDeferred();
   const release = createDeferred();
   return {
@@ -50,6 +50,27 @@ export function createGate(label: string) {
     reached: (operation: PromiseLike<unknown>) =>
       awaitGateBeforeSettlement(entered.promise, operation, label),
   };
+}
+
+export function untilAborted(signal: AbortSignal | undefined) {
+  return new Promise<void>((resolve) => {
+    signal?.addEventListener("abort", () => resolve(), { once: true });
+  });
+}
+
+export function holdEnsure(f: Fixture, gate: ReturnType<typeof createGate>, name: string) {
+  f.ensureSession.mockImplementationOnce(async () => {
+    await gate.wait();
+    return runtimeHandle(f, name);
+  });
+}
+
+export function holdMetadataWrite(gate: ReturnType<typeof createGate>) {
+  const upsert = DEFAULT_DEPS.upsertSessionMeta;
+  return vi.spyOn(DEFAULT_DEPS, "upsertSessionMeta").mockImplementationOnce(async (params) => {
+    await gate.wait();
+    return upsert(params);
+  });
 }
 
 export function runtimeHandle(f: Fixture, runtimeSessionName: string) {

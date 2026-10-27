@@ -221,6 +221,13 @@ Auto-recall embeds the current turn's prompt after removing media attachment
 notes and normalizing whitespace. The same limit bounds each recalled item
 after prompt escaping before that text reaches the model.
 
+Automatic recall and `memory_recall` each have a 15-second budget shared by
+embedding-provider initialization, the embedding request, and database search.
+On the provider-adapter path, cold initialization does not give the embedding
+request a fresh budget: if initialization finishes after the deadline, that
+expired query is not sent. Shared provider initialization may still finish for
+later operations.
+
 `captureMaxChars` gates whether a user message from the turn's `agent_end`
 event is short enough to be considered for auto-capture. `memory_store` rejects
 longer text before embedding or storage; the setting does not affect recall
@@ -267,12 +274,42 @@ to save them. Explicit tool calls still follow their normal data-handling rules.
 openclaw ltm list [--agent <id>] [--limit <n>] [--order-by-created-at]
 openclaw ltm search <query> [--agent <id>] [--limit <n>]
 openclaw ltm stats [--agent <id>]
+openclaw ltm optimize
 ```
 
 `ltm stats` gives its database read 60 seconds after plugin registration. It
 stops the isolated reader before reporting a timeout, without creating a memory
 table or changing existing memory data. A database with no memory table reports
 zero. Plugin discovery and source capture happen before this deadline starts.
+
+### Compact a local table
+
+Stop every Gateway and command using the table, including other profiles that
+share its `dbPath`, then run:
+
+```bash
+openclaw ltm optimize
+```
+
+The command compacts small fragments and prints before/after fragment and row
+counts. It operates on the entire shared table, across all agents, so it has no
+`--agent` option. All rows and existing version history are preserved. Retained
+versions still reference their old files, so fewer active fragments does not
+necessarily mean less disk usage.
+
+Optimization requires exclusive offline custody. It refuses while the active
+state directory has a Gateway owner or another plugin handle has the local table
+open, including handles from other profiles. Normal shared readers and writers
+remain supported outside maintenance. Restart the Gateways after it completes.
+
+Local filesystem paths and `file:` URLs share the same custody lock. Remote URI
+tables require distributed custody and are refused. Older plugin versions and
+external LanceDB scripts do not participate in the table lock; stop them before
+maintenance too.
+The command does not prune versions, delete memories, apply retention cleanup,
+or schedule background maintenance.
+
+### Query memories
 
 `ltm query` runs a non-vector query directly against the LanceDB table:
 

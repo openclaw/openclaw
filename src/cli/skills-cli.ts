@@ -27,6 +27,7 @@ import {
   type ClawHubSkillVerificationResponse,
 } from "../infra/clawhub-skills.js";
 import { formatErrorMessage } from "../infra/errors.js";
+import { normalizeAgentIdStrict } from "../routing/session-key.js";
 import { defaultRuntime, ExitError } from "../runtime.js";
 import { resolveSkillStatusEntry, type SkillStatusReport } from "../skills/discovery/status.js";
 import {
@@ -142,7 +143,11 @@ function normalizeExplicitAgentId(agentId?: string): string | undefined {
   if (agentId !== undefined && !normalizedAgentId) {
     throw new Error("--agent must not be blank");
   }
-  return normalizedAgentId;
+  if (!normalizedAgentId) {
+    return undefined;
+  }
+  const canonical = normalizeAgentIdStrict(normalizedAgentId);
+  return canonical.ok ? canonical.value : normalizedAgentId;
 }
 
 async function resolveSkillsWorkspace(options?: ResolveSkillsWorkspaceOptions) {

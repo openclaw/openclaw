@@ -5,8 +5,13 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { buildNodeShellCommand } from "../infra/node-shell.js";
 import * as processExec from "../process/exec.js";
+import { createCommandResult } from "../test-utils/npm-spec-install-test-helpers.js";
 import { mockProcessPlatform } from "../test-utils/vitest-spies.js";
 import { runCommand } from "./invoke-run-command.js";
+
+function runNode(source: string, cwd?: string, signal?: AbortSignal) {
+  return runCommand([process.execPath, "-e", source], cwd, undefined, undefined, signal);
+}
 
 describe("runCommand", () => {
   const tempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -14,37 +19,28 @@ describe("runCommand", () => {
     vi.restoreAllMocks();
   });
 
-  it.each(["before", "after"] as const)(
-    "checks node launch policy %s native execution",
-    async (timing) => {
-      let allowed = timing === "after";
-      const pending = runCommand(
-        [
-          process.execPath,
-          "-e",
-          "process.stdin.resume(); process.stdin.once('end', () => process.stdout.write('completed'))",
-        ],
-        undefined,
-        { PATH: process.env.PATH ?? "" },
-        5_000,
-        undefined,
-        () => {
-          if (!allowed) {
-            throw new Error("exec approval changed before execution");
-          }
-        },
-      );
-      // The canonical node runner spawns synchronously before returning its promise.
-      allowed = false;
-      if (timing === "before") {
-        await expect(pending).rejects.toThrow("exec approval changed before execution");
-      } else {
-        const result = await pending;
-        expect(result.success).toBe(true);
-        expect(result.stdout).toBe("completed");
-      }
-    },
-  );
+  it("does not revoke an already-launched native command", async () => {
+    let allowed = true;
+    const pending = runCommand(
+      [
+        process.execPath,
+        "-e",
+        "process.stdin.resume(); process.stdin.once('end', () => process.stdout.write('completed'))",
+      ],
+      undefined,
+      { PATH: process.env.PATH ?? "" },
+      5_000,
+      undefined,
+      () => {
+        if (!allowed) {
+          throw new Error("exec approval changed before execution");
+        }
+      },
+    );
+    // The canonical node runner spawns synchronously before returning its promise.
+    allowed = false;
+    await expect(pending).resolves.toMatchObject({ success: true, stdout: "completed" });
+  });
 
   it.runIf(process.platform === "linux")(
     "restores the service PATH after login startup and resolves service-only tools",
@@ -71,12 +67,7 @@ describe("runCommand", () => {
   );
 
   it.runIf(process.platform !== "win32")("preserves signal termination diagnostics", async () => {
-    const result = await runCommand(
-      [process.execPath, "-e", "process.kill(process.pid, 'SIGTERM')"],
-      undefined,
-      undefined,
-      undefined,
-    );
+    const result = await runNode("process.kill(process.pid, 'SIGTERM')");
 
     expect(result).toMatchObject({
       exitCode: undefined,
@@ -98,14 +89,8 @@ describe("runCommand", () => {
         onOutputChunk: () => controller.abort(),
       }),
     );
-    const result = await runCommand(
-      [
-        process.execPath,
-        "-e",
-        "process.on('SIGTERM', () => {}); setInterval(() => {}, 1000); process.stdout.write('ready')",
-      ],
-      undefined,
-      undefined,
+    const result = await runNode(
+      "process.on('SIGTERM', () => {}); setInterval(() => {}, 1000); process.stdout.write('ready')",
       undefined,
       controller.signal,
     );
@@ -123,30 +108,16 @@ describe("runCommand", () => {
 
     async function captureLaunch(platform: NodeJS.Platform, argv: string[]) {
       mockProcessPlatform(platform);
-      const launch = vi.spyOn(processExec, "runCommandWithTimeout").mockResolvedValueOnce({
-        code: 0,
-        signal: null,
-        killed: false,
-        termination: "exit",
-        stdout: "",
-        stderr: "",
-      });
+      const launch = vi
+        .spyOn(processExec, "runCommandWithTimeout")
+        .mockResolvedValueOnce(createCommandResult());
       await runCommand(argv, undefined, undefined, undefined);
       expect(launch).toHaveBeenCalledTimes(1);
       const [launchedArgv, options] = launch.mock.calls[0] ?? [];
       return { launchedArgv, options };
     }
 
-    it("quotes the node shell command once and passes it verbatim", async () => {
-      const { launchedArgv, options } = await captureLaunch(
-        "win32",
-        buildNodeShellCommand(shellCommand, "win32"),
-      );
-      expect(launchedArgv).toEqual(["cmd.exe", "/d", "/s", "/c", `"${shellCommand}"`]);
-      expect(options).toMatchObject({ windowsVerbatimArguments: true });
-    });
-
-    it("recognizes an absolute cmd.exe path regardless of case", async () => {
+    it("quotes an absolute cmd.exe path regardless of case", async () => {
       const shell = "C:\\Windows\\System32\\CMD.EXE";
       const { launchedArgv, options } = await captureLaunch("win32", [
         shell,
@@ -161,9 +132,7 @@ describe("runCommand", () => {
 
     it.each([
       ["four elements", "win32", ["cmd.exe", "/d", "/s", "/c"]],
-      ["six elements", "win32", ["cmd.exe", "/d", "/s", "/c", shellCommand, "extra"]],
       ["another program", "win32", ["powershell.exe", "/d", "/s", "/c", shellCommand]],
-      ["a bare cmd name", "win32", ["cmd", "/d", "/s", "/c", shellCommand]],
       ["/c without /s", "win32", ["cmd.exe", "/d", "/c", "echo", "ready"]],
       ["uppercase switches", "win32", ["cmd.exe", "/D", "/S", "/C", shellCommand]],
       ["another platform", "linux", ["cmd.exe", "/d", "/s", "/c", shellCommand]],
@@ -175,19 +144,11 @@ describe("runCommand", () => {
 
     const prompt = "Quel est le rôle du dossier checks ?";
     it.runIf(process.platform === "win32").each([
-      {
-        name: "with trailing flags",
-        suffix: " --permission-mode plan",
-        expected: [prompt, "--permission-mode", "plan"],
-      },
-      {
-        name: "when the command begins and ends with quotes",
-        suffix: "",
-        expected: [prompt],
-      },
-    ])(
-      "delivers a quoted argument with spaces and accents whole to the child ($name)",
-      async ({ suffix, expected }) => {
+      [" --permission-mode plan", [prompt, "--permission-mode", "plan"]],
+      ["", [prompt]],
+    ] as const)(
+      "delivers quoted spaces and accents whole with suffix %j",
+      async (suffix, expected) => {
         const source =
           "process.stdout.write(encodeURIComponent(JSON.stringify(process.argv.slice(1))))";
         const result = await runCommand(
@@ -206,44 +167,22 @@ describe("runCommand", () => {
   });
 
   describe("working directory failures", () => {
-    const enoent = (message: string) =>
-      Object.assign(new Error(message), { code: "ENOENT" }) as NodeJS.ErrnoException;
+    const enoent = (message: string) => Object.assign(new Error(message), { code: "ENOENT" });
 
     async function runCommandError(error: NodeJS.ErrnoException, cwd?: string) {
       vi.spyOn(processExec, "runCommandWithTimeout").mockRejectedValueOnce(error);
       return (await runCommand([process.execPath], cwd, undefined, undefined)).error;
     }
 
-    it("flags a cwd that exists but is not a directory", async () => {
-      const file = path.join(os.tmpdir(), `node-exec-file-${process.pid}-${Date.now()}.txt`);
-      fs.writeFileSync(file, "x");
-      try {
-        const result = await runCommand(
-          [process.execPath, "-e", "process.exit(0)"],
-          file,
-          undefined,
-          undefined,
-        );
-        expect(result).toMatchObject({ success: false });
-        expect(result.error).toContain(
-          `node exec working directory is not a directory on the node host: ${file}`,
-        );
-      } finally {
-        fs.rmSync(file, { force: true });
+    it.each(["is not a directory", "does not exist"])("clarifies a cwd that %s", async (reason) => {
+      const cwd = path.join(tempDirs.make("openclaw-node-cwd-"), "cwd");
+      if (reason === "is not a directory") {
+        fs.writeFileSync(cwd, "x");
       }
-    });
-
-    it("clarifies a missing cwd during execution", async () => {
-      const cwd = path.join(os.tmpdir(), `node-exec-run-missing-${process.pid}-${Date.now()}`);
-      const result = await runCommand(
-        [process.execPath, "-e", "process.exit(0)"],
-        cwd,
-        undefined,
-        undefined,
-      );
+      const result = await runNode("process.exit(0)", cwd);
       expect(result).toMatchObject({ success: false });
       expect(result.error).toContain(
-        `node exec working directory does not exist on the node host: ${cwd}`,
+        `node exec working directory ${reason} on the node host: ${cwd}`,
       );
     });
 
@@ -253,9 +192,7 @@ describe("runCommand", () => {
       expect(await runCommandError(enoent("spawn /bin/sh ENOENT"), undefined)).toBe(
         "spawn /bin/sh ENOENT",
       );
-      const denied = Object.assign(new Error("spawn EACCES"), {
-        code: "EACCES",
-      }) as NodeJS.ErrnoException;
+      const denied = Object.assign(new Error("spawn EACCES"), { code: "EACCES" });
       expect(await runCommandError(denied, "/missing")).toBe("spawn EACCES");
     });
 

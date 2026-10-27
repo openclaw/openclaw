@@ -3,10 +3,12 @@ import crypto from "node:crypto";
 import type { ContentBlock } from "@modelcontextprotocol/client";
 import { ContentBlockSchema } from "@modelcontextprotocol/core";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { copyInternalToolResultState } from "../../packages/agent-core/src/internal-hooks.js";
+import { runWithSessionMcpToolCallAuthority } from "../agents/agent-bundle-mcp-request-context.js";
 import { runBeforeToolCallHook, type HookContext } from "../agents/agent-tools.before-tool-call.js";
 import { extractToolErrorMessage } from "../agents/embedded-agent-tool-results.js";
+import { createGatewayToolPolicyAssertion } from "../agents/gateway-tool-policy.js";
 import { runAgentHarnessAfterToolCallHook } from "../agents/harness/hook-helpers.js";
-import { copyInternalToolResultState } from "../agents/runtime/internal-hooks.js";
 import {
   formatToolExecutionErrorMessage,
   protectNetworkToolExecutionError,
@@ -65,6 +67,8 @@ export async function handleMcpJsonRpc(params: {
   message: JsonRpcRequest;
   tools: McpLoopbackTool[];
   toolSchema: McpToolSchemaEntry[];
+  /** Upstream guidance for bridged configured MCP servers, sent on initialize. */
+  serverInstructions?: string;
   hookContext?: HookContext;
   signal?: AbortSignal;
   /** Revalidate short-lived client authority immediately before side effects. */
@@ -96,6 +100,7 @@ export async function handleMcpJsonRpc(params: {
           name: MCP_LOOPBACK_SERVER_NAME,
           version: MCP_LOOPBACK_SERVER_VERSION,
         },
+        ...(params.serverInstructions ? { instructions: params.serverInstructions } : {}),
       });
     }
     case "notifications/initialized":
@@ -127,6 +132,10 @@ export async function handleMcpJsonRpc(params: {
       if (!tool) {
         return toolError(`Tool not available: ${toolName || "unknown"}`);
       }
+      const assertGatewayToolPolicy = createGatewayToolPolicyAssertion(
+        tool,
+        params.hookContext?.config,
+      );
       const toolCallId = `mcp-${crypto.randomUUID()}`;
       const startedAt = Date.now();
       let executedToolArgs = toolArgs;
@@ -208,9 +217,19 @@ export async function handleMcpJsonRpc(params: {
           );
           return toolError("Tool call authorization expired");
         }
+        assertGatewayToolPolicy(finalizedToolArgs);
         let result: Awaited<ReturnType<typeof tool.execute>>;
         try {
-          result = await tool.execute(toolCallId, finalizedToolArgs, params.signal);
+          const { authorizeToolCall } = params;
+          result = await runWithSessionMcpToolCallAuthority(
+            authorizeToolCall &&
+              (() => {
+                if (!authorizeToolCall()) {
+                  throw new Error("Tool call authorization expired");
+                }
+              }),
+            () => tool.execute(toolCallId, finalizedToolArgs, params.signal),
+          );
         } catch (error) {
           throw tool.resultContentSource === "network"
             ? protectNetworkToolExecutionError(error, "tool execution failed", params.signal)

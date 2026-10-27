@@ -83,7 +83,6 @@ export async function configureNodeHost(params: {
   fallbackDisplayName: string;
   gateway: NodeHostGatewayConfig;
   env?: NodeJS.ProcessEnv;
-  nowMs?: number;
   candidateNodeId?: string;
   installedAppsSharing?: boolean;
   commands?: string[];
@@ -98,10 +97,6 @@ export async function configureNodeHost(params: {
   const gateway = normalizeGatewayConfig(params.gateway);
   const commands =
     params.commands === undefined ? undefined : normalizeNodeHostCommands(params.commands);
-  const updatedAtMs = params.nowMs ?? Date.now();
-  if (!Number.isSafeInteger(updatedAtMs) || updatedAtMs < 0) {
-    throw new Error("invalid node-host updatedAtMs: expected a non-negative integer");
-  }
 
   const worker = new NodeWorkerJournalWorker({ env });
   const { config, clearedCommands } = await worker.execute({
@@ -116,7 +111,7 @@ export async function configureNodeHost(params: {
         installedAppsSharing: params.installedAppsSharing,
         commands,
         allCommands: params.allCommands,
-        updatedAtMs,
+        updatedAtMs: Date.now(),
       },
     ],
   });

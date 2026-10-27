@@ -22,13 +22,7 @@ type OpenAIResponsesPayloadModel = {
   contextTokens?: unknown;
   contextWindow?: unknown;
   compat?: unknown;
-};
-
-type OpenAIResponsesPayloadPolicyOptions = {
-  extraParams?: Record<string, unknown>;
-  storeMode?: "provider-policy" | "transport-default" | "disable" | "preserve";
-  enablePromptCacheStripping?: boolean;
-  enableServerCompaction?: boolean;
+  thinkingLevelMap?: unknown;
 };
 
 type OpenAIResponsesPayloadPolicy = {
@@ -318,7 +312,12 @@ function stripInputItemStatuses(input: unknown): void {
 /** Resolve payload mutation policy for one OpenAI Responses-style model endpoint. */
 export function resolveOpenAIResponsesPayloadPolicy(
   model: OpenAIResponsesPayloadModel,
-  options: OpenAIResponsesPayloadPolicyOptions = {},
+  options: {
+    extraParams?: Record<string, unknown>;
+    storeMode?: "provider-policy" | "transport-default" | "disable" | "preserve";
+    enablePromptCacheStripping?: boolean;
+    enableServerCompaction?: boolean;
+  } = {},
 ): OpenAIResponsesPayloadPolicy {
   const capabilities = resolveOpenAIResponsesPayloadCapabilities(model);
   const storeMode = options.storeMode ?? "provider-policy";
@@ -341,7 +340,9 @@ export function resolveOpenAIResponsesPayloadPolicy(
     isResponsesApi &&
     // Custom endpoints need an explicit capability; model-name hints describe native routes.
     !supportsOpenAIReasoningEffort(
-      capabilities.usesKnownNativeOpenAIRoute ? model : { compat: model.compat },
+      capabilities.usesKnownNativeOpenAIRoute
+        ? model
+        : { compat: model.compat, thinkingLevelMap: model.thinkingLevelMap },
       "none",
     );
   // Strict OpenAI-compatible Responses endpoints reject output-only fields

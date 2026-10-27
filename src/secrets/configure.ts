@@ -647,7 +647,6 @@ async function configureProvidersInteractive(
 /** Runs interactive secrets configuration and returns changed config/auth-store state. */
 export async function runSecretsConfigureInteractive(
   params: {
-    env?: NodeJS.ProcessEnv;
     providersOnly?: boolean;
     skipProviderSetup?: boolean;
     agentId?: string;
@@ -661,7 +660,7 @@ export async function runSecretsConfigureInteractive(
     throw new Error("Cannot combine --providers-only with --skip-provider-setup.");
   }
 
-  const env = params.env ?? process.env;
+  const env = process.env;
   const allowExecInPreflight = Boolean(params.allowExecInPreflight);
   const io = createSecretsConfigIO({ env });
   const { snapshot } = await io.readConfigFileSnapshotForWrite();

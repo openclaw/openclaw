@@ -7,8 +7,8 @@ export function isUpdateRunVerificationConfirmed(
     verification.serviceRunning === true &&
     verification.versionMatch === true &&
     verification.settled === true &&
-    verification.readyz === true &&
-    verification.channelsReady === true &&
+    (verification.coreReady ??
+      (verification.readyz === true && verification.channelsReady === true)) &&
     verification.pluginErrors?.length === 0
   );
 }
@@ -31,6 +31,10 @@ export function recordUpdateRunVerificationRecord(
   }
   record.verification = {
     ...record.verification,
+    // A released observer's readiness verdict cannot inherit a newer core proof.
+    ...(verification.readyz !== undefined && verification.coreReady === undefined
+      ? { coreReady: undefined }
+      : {}),
     ...observedVerification,
     ...(verification.pluginErrors ? { pluginErrors: verification.pluginErrors.slice(-32) } : {}),
   };

@@ -30,7 +30,9 @@ export async function repairMainSessionRecoveryMutation<T>(params: {
 
 export function inspectMainSessionRecoveryLifecycleEvent(params: {
   currentLifecycleGeneration: string;
-  entry?: Partial<Pick<SessionEntry, "restartRecoveryRuns" | "abortedLastRun">> | null;
+  entry?: Partial<
+    Pick<SessionEntry, "restartRecoveryRuns" | "abortedLastRun" | "lifecycleRunId">
+  > | null;
   event: MainRecoveryLifecycleEvent;
   abortSignal?: AbortSignal;
 }) {
@@ -51,7 +53,14 @@ export function inspectMainSessionRecoveryLifecycleEvent(params: {
     runId &&
     lifecycleGeneration &&
     params.entry?.restartRecoveryRuns?.some(
-      (run) => run.runId === runId && run.lifecycleGeneration === lifecycleGeneration,
+      (run) =>
+        run.runId === runId &&
+        (run.lifecycleGeneration === lifecycleGeneration ||
+          // The current lifecycle owner can finish its own pre-restart fence,
+          // even if cancellation arrived before its start event refreshed it.
+          (terminal &&
+            lifecycleGeneration === params.currentLifecycleGeneration &&
+            params.entry?.lifecycleRunId === runId)),
     ),
   );
   const interrupted = terminal?.reason === "cancelled" && terminal.stopReason === "restart";
@@ -107,7 +116,7 @@ export function projectMainSessionRecoveryLifecycle(params: {
     | (Partial<MainRecoveryStateFields> &
         Pick<
           Partial<SessionEntry>,
-          "restartRecoveryDeliveryRunId" | "restartRecoveryTerminalRunIds"
+          "restartRecoveryDeliveryRunId" | "restartRecoveryTerminalRunIds" | "lifecycleRunId"
         >)
     | null;
   event: MainRecoveryLifecycleEvent;

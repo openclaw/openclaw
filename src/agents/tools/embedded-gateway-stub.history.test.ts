@@ -1,6 +1,6 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { Value } from "typebox/value";
-import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
 import {
   appendTranscriptEvent,
@@ -8,15 +8,11 @@ import {
   replaceSessionEntrySync,
 } from "../../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import * as serverConstants from "../../gateway/server-constants.js";
+import * as historyBudget from "../../gateway/chat-history-budget.js";
 import * as historyPages from "../../gateway/server-methods/chat-history-pages.js";
 import { readChatHistoryMessageId } from "../../gateway/session-history-tail.js";
 import { createSessionRowProjection } from "../../gateway/session-row-projection.js";
-import { executeSqliteQuerySync, getNodeSqliteKysely } from "../../infra/kysely-sync.js";
-import type { DB as AgentDatabase } from "../../state/openclaw-agent-db.generated.js";
-import { runOpenClawAgentWriteTransaction } from "../../state/openclaw-agent-db.js";
 import { createOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
-import { drainSessionStateForTest } from "../../test-utils/session-state-cleanup.js";
 import {
   bindEmbeddedSessionRowProjection,
   createEmbeddedCallGateway,
@@ -55,6 +51,9 @@ async function history(params: Record<string, unknown>) {
 function messageIds(result: { messages: unknown[] }) {
   return result.messages.map(readChatHistoryMessageId);
 }
+function gatewayHistory(params: Record<string, unknown>) {
+  return callGateway<{ messages: unknown[] }>({ method: "chat.history", params });
+}
 function append(
   eventId: string,
   message: Parameters<typeof appendTranscriptMessage>[1]["message"],
@@ -67,22 +66,10 @@ describe("embedded session history anchors", () => {
   let state: Awaited<ReturnType<typeof createOpenClawTestState>>;
   let projection: Awaited<ReturnType<typeof createSessionRowProjection>> | undefined;
   let unbindProjection: (() => void) | undefined;
-  let resetFailure: Error | undefined;
-
-  beforeAll(async () => {
-    state = await createOpenClawTestState({ prefix: "embedded-anchor-test-" });
-  });
-
-  afterAll(async () => {
-    await state?.cleanup();
-  });
-
   beforeEach(async () => {
-    if (resetFailure) {
-      throw resetFailure;
-    }
     projection = undefined;
     unbindProjection = undefined;
+    state = await createOpenClawTestState({ prefix: "embedded-anchor-test-" });
     setRuntimeConfigSnapshot(config);
     replaceSessionEntrySync(scope, { sessionId: scope.sessionId, updatedAt: Date.now() });
     for (const [index, id] of ["old", "middle", "newest"].entries()) {
@@ -98,31 +85,15 @@ describe("embedded session history anchors", () => {
 
   afterEach(async () => {
     try {
-      if (resetFailure) {
-        return;
-      }
       unbindProjection?.();
       projection?.dispose();
       await projection?.ensureMaterialized();
-      const cleanupScope = { stateDir: state.stateDir, rootPath: state.root };
-      await drainSessionStateForTest(cleanupScope);
-      for (const agentId of ["main", "work"]) {
-        runOpenClawAgentWriteTransaction(
-          ({ db }) => {
-            const kysely = getNodeSqliteKysely<AgentDatabase>(db);
-            // FTS identities lack a foreign key; their trigger clears search content.
-            executeSqliteQuerySync(db, kysely.deleteFrom("session_transcript_fts_rows"));
-            executeSqliteQuerySync(db, kysely.deleteFrom("session_nodes"));
-          },
-          { agentId },
-        );
-      }
-      await drainSessionStateForTest(cleanupScope);
-    } catch (error) {
-      resetFailure = new Error("Embedded history fixture cleanup failed", { cause: error });
-      throw resetFailure;
     } finally {
-      vi.restoreAllMocks();
+      try {
+        await state?.cleanup();
+      } finally {
+        vi.restoreAllMocks();
+      }
     }
   });
 
@@ -134,18 +105,16 @@ describe("embedded session history anchors", () => {
       expect(hits).toHaveLength(1);
       const hit = expectDefined(hits[0], "search hit");
       expect(hit).toMatchObject(selector);
-      expect(
-        (await history({ sessionKey: hit.sessionKey, limit: 1 })).messages.map(
-          readChatHistoryMessageId,
-        ),
-      ).toEqual(["newest"]);
+      const tail = await history({ sessionKey: hit.sessionKey, limit: 1 });
+      expect(messageIds(tail)).toEqual(["newest"]);
+      expect(tail).not.toHaveProperty("offset");
       const recalled = await history({
         sessionKey: hit.sessionKey,
         messageId: hit.messageId,
         ...(includeSessionId ? { sessionId: hit.sessionId } : {}),
         limit: 1,
       });
-      expect(recalled.messages.map(readChatHistoryMessageId)).toEqual(["old"]);
+      expect(messageIds(recalled)).toEqual(["old"]);
       expect(recalled).not.toHaveProperty("nextOffset");
     },
   );
@@ -223,7 +192,6 @@ describe("embedded session history anchors", () => {
     ]);
     const recalled = await history({ ...selector, includeTools: true, limit: 10 });
     expect(messageIds(recalled)).toEqual(["old", "middle", "newest", "old-tool", "reset"]);
-    expect(messageIds(recalled)).not.toContain("fresh");
   });
 
   it.each(["missing", "wrong-key", "wrong-agent"])(
@@ -282,11 +250,8 @@ describe("embedded session history anchors", () => {
   });
 
   it("preserves the anchor when the embedded transport byte cap drops neighbors", async () => {
-    vi.spyOn(serverConstants, "getMaxChatHistoryMessagesBytes").mockReturnValue(1_200);
-    const result = await callGateway<{ messages: unknown[] }>({
-      method: "chat.history",
-      params: { ...selector, limit: 3 },
-    });
+    vi.spyOn(historyBudget, "getMaxChatHistoryMessagesBytes").mockReturnValue(1_200);
+    const result = await gatewayHistory({ ...selector, limit: 3 });
     expect(messageIds(result)).toEqual(["old"]);
     expect(Buffer.byteLength(JSON.stringify(result.messages))).toBeLessThanOrEqual(1_200);
   });
@@ -320,8 +285,8 @@ describe("embedded session history anchors", () => {
     { offset: 0, messageId: "old", error: "offset and messageId cannot be used together" },
     { sessionId: scope.sessionId, error: "sessionId requires messageId" },
   ])("rejects incompatible history selectors: $error", async ({ error, ...params }) => {
-    await expect(
-      callGateway({ method: "chat.history", params: { sessionKey: scope.sessionKey, ...params } }),
-    ).rejects.toThrow(error);
+    await expect(gatewayHistory({ sessionKey: scope.sessionKey, ...params })).rejects.toThrow(
+      error,
+    );
   });
 });

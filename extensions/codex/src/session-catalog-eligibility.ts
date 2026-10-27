@@ -1,3 +1,4 @@
+import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import type { CodexManagedThreadStore } from "./app-server/managed-thread-store.js";
 import type { CodexThread } from "./app-server/protocol.js";
 import { withTimeout } from "./app-server/timeout.js";
@@ -8,6 +9,11 @@ import {
 } from "./session-catalog-parsing.js";
 import { readCodexSessionMeta } from "./session-catalog-provenance.js";
 import type { CodexSessionCatalogRequestSnapshot } from "./session-catalog-request-types.js";
+
+const loadNativeProjection = createLazyRuntimeModule(
+  () => import("./session-catalog-native-projection.js"),
+);
+const loadCatalogLimits = createLazyRuntimeModule(() => import("./session-catalog-limits.js"));
 
 /** Exact identity and native membership are independent of resident retention. */
 export async function requireEligibleCodexThread(params: {
@@ -56,9 +62,8 @@ export async function requireEligibleCodexThread(params: {
     if (!root) {
       // Remote thread/read includes archived threads, so every action needs
       // fresh non-archived membership on the captured home.
-      const { CODEX_CATALOG_NATIVE_PAGE_LIMIT } =
-        await import("./session-catalog-native-projection.js");
-      const { CODEX_CATALOG_MAX_ROWS } = await import("./session-catalog-limits.js");
+      const { CODEX_CATALOG_NATIVE_PAGE_LIMIT } = await loadNativeProjection();
+      const { rememberCodexCatalogCursor } = await loadCatalogLimits();
       let cursor: string | undefined;
       const seenCursors = new Set<string>();
       for (;;) {
@@ -86,13 +91,7 @@ export async function requireEligibleCodexThread(params: {
         if (!nextCursor || seenCursors.has(nextCursor)) {
           throw unverified();
         }
-        seenCursors.add(nextCursor);
-        if (seenCursors.size > CODEX_CATALOG_MAX_ROWS) {
-          const oldest = seenCursors.values().next().value;
-          if (oldest !== undefined) {
-            seenCursors.delete(oldest);
-          }
-        }
+        rememberCodexCatalogCursor(seenCursors, nextCursor);
         cursor = nextCursor;
       }
     }

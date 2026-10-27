@@ -45,7 +45,6 @@ import { whatsappHeartbeatLog, whatsappLog } from "./loggers.js";
 import { createWebChannelStatusController } from "./monitor-state.js";
 import { resolveWebMonitorConfigSnapshot } from "./monitor/config.js";
 import type { GroupHistoryEntry } from "./monitor/inbound-context.js";
-import { formatWhatsAppInboundListeningLog } from "./monitor/listener-log.js";
 import { createWebOnMessageHandler } from "./monitor/on-message.js";
 import type { WebMonitorTuning } from "./types.js";
 import { isLikelyWhatsAppCryptoError } from "./util.js";
@@ -441,13 +440,31 @@ export async function monitorWebChannel(
         accountId: account.accountId,
         selfE164: selfE164 ?? null,
       });
-      whatsappLog.info(
-        formatWhatsAppInboundListeningLog({
-          groups: inboundPolicy.account.groups,
-          groupPolicy: inboundPolicy.groupPolicy,
-          hasGroupAllowFrom: inboundPolicy.groupAllowFrom.length > 0,
-        }),
-      );
+      let groupScope: string;
+      if (inboundPolicy.groupPolicy === "disabled") {
+        groupScope = "groups disabled by groupPolicy";
+      } else if (
+        inboundPolicy.groupPolicy === "allowlist" &&
+        !inboundPolicy.groupAllowFrom.length
+      ) {
+        groupScope = "group inbound blocked by empty groupPolicy allowlist";
+      } else {
+        const groups = inboundPolicy.account.groups ?? {};
+        if (Object.keys(groups).length === 0) {
+          const suffix =
+            inboundPolicy.groupPolicy === "allowlist"
+              ? "sender allowlist configured"
+              : "no group allowlist configured";
+          groupScope = `all groups; ${suffix}`;
+        } else if (Object.hasOwn(groups, "*")) {
+          groupScope = "all groups; wildcard configured";
+        } else {
+          const explicitGroupCount = Object.keys(groups).length;
+          const groupLabel = explicitGroupCount === 1 ? "group" : "groups";
+          groupScope = `${explicitGroupCount} configured ${groupLabel}`;
+        }
+      }
+      whatsappLog.info(`Listening for WhatsApp inbound messages (DM + ${groupScope}).`);
       if (process.stdout.isTTY || process.stderr.isTTY) {
         whatsappLog.raw("Ctrl+C to stop.");
       }

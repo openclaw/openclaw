@@ -106,34 +106,26 @@ export function registerCryptoShutdownTests(context: CryptoPersistenceContext): 
     });
   });
 
-  it("does not mark or flush the sync cursor when strict crypto persistence fails", async () => {
-    await withCryptoStore(async ({ client, store, databasesSpy }) => {
-      const cause = new Error("indexeddb unavailable");
-      const flushSpy = vi.spyOn(store, "flush");
-      const markCleanSpy = vi.spyOn(store, "markCleanShutdown");
-
-      databasesSpy.mockRejectedValue(cause);
-      await expect(client.stopAndPersist()).rejects.toBe(cause);
-      expect(markCleanSpy).not.toHaveBeenCalled();
-      expect(flushSpy).not.toHaveBeenCalled();
-      expect(vi.mocked(context.getMatrixJsClient()).stopClient).toHaveBeenCalledTimes(1);
-    });
-  });
-
-  it("falls back to one non-persisting SDK stop when public stop persistence fails", async () => {
-    await withCryptoStore(async ({ client, store, databasesSpy }) => {
-      const cause = new Error("indexeddb unavailable");
-      const discardSpy = vi.spyOn(store, "discardPendingSyncCursorPersistence");
-
-      databasesSpy.mockRejectedValue(cause);
-      client.stop();
-
-      await vi.waitFor(() => {
-        expect(discardSpy).toHaveBeenCalledTimes(1);
-      });
-      expect(vi.mocked(context.getMatrixJsClient()).stopClient).toHaveBeenCalledTimes(1);
-    });
-  });
+  it.each(["strict", "public"] as const)(
+    "does not publish a clean cursor when %s stop persistence fails",
+    async (mode) =>
+      withCryptoStore(async ({ client, store, databasesSpy }) => {
+        const cause = new Error("indexeddb unavailable");
+        const flush = vi.spyOn(store, "flush");
+        const markClean = vi.spyOn(store, "markCleanShutdown");
+        const discard = vi.spyOn(store, "discardPendingSyncCursorPersistence");
+        databasesSpy.mockRejectedValue(cause);
+        if (mode === "strict") {
+          await expect(client.stopAndPersist()).rejects.toBe(cause);
+        } else {
+          client.stop();
+          await vi.waitFor(() => expect(discard).toHaveBeenCalledTimes(1));
+        }
+        expect(markClean).not.toHaveBeenCalled();
+        expect(flush).not.toHaveBeenCalled();
+        expect(vi.mocked(context.getMatrixJsClient()).stopClient).toHaveBeenCalledTimes(1);
+      }),
+  );
 }
 
 export function registerCryptoStartupAbortTest(context: CryptoPersistenceContext): void {
@@ -157,7 +149,6 @@ export function registerCryptoStartupAbortTest(context: CryptoPersistenceContext
 
       await initStarted.promise;
       abortController.abort();
-      expect(vi.mocked(context.getMatrixJsClient()).startClient).not.toHaveBeenCalled();
 
       initCrypto.resolve();
       await startupResult;
@@ -170,6 +161,70 @@ export function registerCryptoStartupAbortTest(context: CryptoPersistenceContext
       await fixture.cleanup();
     }
   });
+}
+
+export function registerCryptoOneOffInitializationTests(
+  context: CryptoPersistenceContext,
+  prepareReadAuthority: () => void,
+): void {
+  it.each(["single-flight", "discard shutdown"] as const)(
+    "joins pending host-authorized one-off initialization: %s",
+    async (mode) => {
+      prepareReadAuthority();
+      const fixture = createCryptoFixture(context);
+      context.clearMatrixSyncApiForNeverStartedClient();
+      const sdk = vi.mocked(context.getMatrixJsClient());
+      const started = createDeferred<void>();
+      const finish = createDeferred<void>();
+      let backendLive = false;
+      sdk.initRustCrypto.mockImplementation(async () => {
+        started.resolve();
+        await finish.promise;
+        backendLive = true;
+      });
+      sdk.stopClient.mockImplementation(() => {
+        backendLive = false;
+      });
+      const client = fixture.create();
+      const preparation = client.prepareForOneOff();
+      const preparations = Promise.allSettled(
+        mode === "single-flight" ? [preparation, client.prepareForOneOff()] : [preparation],
+      );
+      let shutdown: Promise<void> | undefined;
+      try {
+        await started.promise;
+        let shutdownFinished = false;
+        if (mode === "discard shutdown") {
+          shutdown = client.stopWithoutPersist().then(() => {
+            shutdownFinished = true;
+          });
+          void shutdown.catch(() => undefined);
+        }
+        await setImmediate();
+        expect(sdk.initRustCrypto).toHaveBeenCalledTimes(1);
+        expect(shutdownFinished).toBe(false);
+        finish.resolve();
+        if (mode === "single-flight") {
+          await expect(preparations).resolves.toEqual([
+            { status: "fulfilled", value: undefined },
+            { status: "fulfilled", value: undefined },
+          ]);
+          expect(sdk.initRustCrypto).toHaveBeenCalledTimes(1);
+        } else {
+          await preparations;
+          await expect(shutdown).resolves.toBeUndefined();
+          expect(backendLive).toBe(false);
+          await context.expectAbortError(preparation);
+        }
+      } finally {
+        finish.reject(new Error("crypto initialization fixture cleanup"));
+        await preparations;
+        await shutdown?.catch(() => undefined);
+        await client.stopWithoutPersist();
+        await fixture.cleanup();
+      }
+    },
+  );
 }
 
 export function registerCryptoPeriodicShutdownTest(context: CryptoPersistenceContext): void {

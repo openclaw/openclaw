@@ -1,11 +1,17 @@
 import { gatewayCredentialScope } from "@openclaw/gateway-client/browser";
-import { For, Show, createMemo } from "solid-js";
+import {
+  Errored,
+  For,
+  Loading,
+  Show,
+  createMemo,
+  isPending,
+  latest,
+  type Accessor,
+} from "solid-js";
 import type { SystemInfoResult } from "../../../../packages/gateway-protocol/src/index.js";
 import type { GatewayHelloOk } from "../../api/gateway.ts";
-import type { ApplicationGatewayPhase } from "../../app/gateway.ts";
 import { isRemoteControlUiIngress } from "../../app/remote-ingress.ts";
-import type { UiSettings } from "../../app/settings.ts";
-import type { GatewayStatusSample } from "../../components/gateway-vitals.ts";
 import { GatewayVitals } from "../../components/solid/gateway-vitals.tsx";
 import {
   SettingsPage,
@@ -14,52 +20,22 @@ import {
   SettingsSection,
   SettingsStatus,
 } from "../../components/solid/settings-ui.tsx";
-import type { SparklineSample } from "../../components/sparkline-tile.tsx";
 import { registerSettingsEnglish } from "../../i18n/locales/en-settings.ts";
 import { formatBytes } from "../../lib/agents/display.ts";
 import { formatDurationHuman } from "../../lib/format-duration.ts";
+import { formatUiError } from "../../lib/format-error.ts";
 import { formatGatewayHost } from "../../lib/gateway-host.ts";
 import { classifyGatewaySecret } from "../../lib/gateway-secret-shape.ts";
 import { registerEnglishCatalog, t } from "../../lib/reactive/i18n.ts";
 import { CONNECTION_SETTINGS_TARGET_IDS } from "../config/settings-targets.ts";
-import type { ConnectionPingSummary } from "./latency.ts";
+import type { ConnectionDraft } from "./connection-draft.ts";
 
 registerEnglishCatalog(registerSettingsEnglish);
 
 type GatewayAuthMode = NonNullable<NonNullable<GatewayHelloOk["snapshot"]>["authMode"]>;
 
-export type ConnectionProps = {
-  phase: ApplicationGatewayPhase;
-  hello: GatewayHelloOk | null;
-  settings: UiSettings;
-  /** URL of the live connection; the draft in `settings` may differ until Connect. */
-  liveGatewayUrl: string;
-  secret: string;
-  lastError: string | null;
-  systemInfo: SystemInfoResult | null;
-  systemInfoUnavailable: boolean;
-  systemInfoLoading: boolean;
-  ping: ConnectionPingSummary | null;
-  pingFailed: boolean;
-  pingSamples: readonly SparklineSample[];
-  statusHistory: readonly GatewayStatusSample[];
-  statusFailed: boolean;
-  /** True when the draft differs from the live connection. */
-  dirty: boolean;
-  sessionDirty: boolean;
-  sessionSaved: boolean;
-  showGatewaySecret: boolean;
-  canForgetDevice: boolean;
-  onForgetDevice: () => void;
-  onConnectionChange: (patch: Partial<Pick<UiSettings, "gatewayUrl" | "token">>) => void;
-  onSecretChange: (next: string) => void;
-  onSessionKeyChange: (next: string) => void;
-  onToggleGatewaySecretVisibility: () => void;
-  onConnect: () => void;
-  onDiscardConnection: () => void;
-  onReconnect: () => void;
-  onSaveSession: () => void;
-  onDiscardSession: () => void;
+export type ConnectionProps = ReturnType<ConnectionDraft["viewProps"]> & {
+  systemInfoReady: Accessor<boolean | null>;
 };
 
 const AUTH_MODE_KEYS: Record<GatewayAuthMode, string> = {
@@ -188,9 +164,15 @@ export function ConnectionView(props: ConnectionProps) {
         ? t("connection.access.applyReconnect")
         : t(props.lastError ? "connection.access.retry" : "common.connect");
   const tick = () => formatTick(props.hello?.policy?.tickIntervalMs);
+  const systemInfoFeedback = () => {
+    if (latest(props.systemInfoReady)) {
+      throw new Error(t("connection.activity.failed"));
+    }
+    return null;
+  };
   const activityState = () =>
     props.statusFailed
-      ? "failed"
+      ? null
       : !connected()
         ? "offline"
         : props.statusHistory.length === 0
@@ -313,6 +295,15 @@ export function ConnectionView(props: ConnectionProps) {
             status={props.statusHistory.at(-1)?.status ?? {}}
             history={props.statusHistory}
           />
+          <Errored
+            fallback={(error) => (
+              <p class="settings-row__desc" role="status">
+                {formatUiError(error())}
+              </p>
+            )}
+          >
+            <Loading>{systemInfoFeedback()}</Loading>
+          </Errored>
           <Show when={activityState()}>
             {(state) => (
               <p class="settings-row__desc" role={state() === "offline" ? undefined : "status"}>
@@ -367,7 +358,9 @@ export function ConnectionView(props: ConnectionProps) {
           </div>
         </Show>
       </SettingsSection>
-      <SystemSection {...props} />
+      <Loading fallback={<SystemSection {...props} pending />}>
+        <SystemSection {...props} pending={isPending(props.systemInfoReady)} />
+      </Loading>
       <Show when={props.canForgetDevice}>
         <SettingsSection title={t("connection.browser.title")}>
           <SettingsRow
@@ -454,10 +447,6 @@ function Placeholder(props: { loading: boolean | undefined }) {
   );
 }
 
-function formatUsedPercent(fraction: number) {
-  return `${Math.round(Math.min(Math.max(fraction, 0), 1) * 100)}%`;
-}
-
 function resourceStat(
   kind: "memory" | "disk",
   totalBytes: number | undefined,
@@ -470,7 +459,7 @@ function resourceStat(
       : (totalBytes - freeBytes) / totalBytes;
   return {
     label: t(`quickSettings.system.${kind}`),
-    value: used == null ? "—" : formatUsedPercent(used),
+    value: used == null ? "—" : `${Math.round(Math.min(Math.max(used, 0), 1) * 100)}%`,
     unit: used == null ? undefined : t("quickSettings.system.used"),
     detail: t("quickSettings.system.freeOf", {
       free: formatBytes(freeBytes),
@@ -520,7 +509,7 @@ function buildSystemStats(info: SystemInfoResult): SystemStat[] {
 }
 
 /** Gateway host section with the stable settings-search scroll target id. */
-function SystemSection(props: ConnectionProps) {
+function SystemSection(props: ConnectionProps & { pending: boolean }) {
   const info = () => props.systemInfo;
   const hostTitle = () =>
     info() && info()!.hostname !== info()!.machineName ? info()!.hostname : undefined;
@@ -533,10 +522,7 @@ function SystemSection(props: ConnectionProps) {
   // Host identity and metered stats use a custom two-column grid with aligned row padding.
   return (
     <Show when={!props.systemInfoUnavailable}>
-      <div
-        id={CONNECTION_SETTINGS_TARGET_IDS.host}
-        aria-busy={props.systemInfoLoading ? "true" : "false"}
-      >
+      <div id={CONNECTION_SETTINGS_TARGET_IDS.host} aria-busy={props.pending ? "true" : "false"}>
         <SettingsSection
           title={t("quickSettings.system.gatewayHost")}
           actions={
@@ -553,18 +539,18 @@ function SystemSection(props: ConnectionProps) {
           <div class="config-host">
             <div class="config-host__identity">
               <div class="config-host__name" title={hostTitle() ?? ""}>
-                <Show when={info()} fallback={<Placeholder loading={props.systemInfoLoading} />}>
+                <Show when={info()} fallback={<Placeholder loading={props.pending} />}>
                   {info()?.machineName}
                 </Show>
               </div>
               <div class="config-host__meta">
                 <Show
                   when={info()}
-                  fallback={<Placeholder loading={props.systemInfoLoading} />}
+                  fallback={<Placeholder loading={props.pending} />}
                 >{`${info()?.osLabel} · ${info()?.arch}`}</Show>
               </div>
               <div class="config-host__meta">
-                <Show when={info()} fallback={<Placeholder loading={props.systemInfoLoading} />}>
+                <Show when={info()} fallback={<Placeholder loading={props.pending} />}>
                   {t("quickSettings.system.runtime", {
                     version: info()?.nodeVersion ?? "",
                     pid: String(info()?.pid),
@@ -586,7 +572,7 @@ function SystemSection(props: ConnectionProps) {
                           {t(`quickSettings.system.${kind}`)}
                         </div>
                         <div class="config-host__stat-value">
-                          <Placeholder loading={props.systemInfoLoading} />
+                          <Placeholder loading={props.pending} />
                         </div>
                       </div>
                     )}

@@ -3,20 +3,17 @@ import { sleep, type RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 const GATEWAY_RELOAD_WAIT_MS = 15_000;
 const GATEWAY_RELOAD_POLL_MS = 500;
 
-type BuzzStatusPayload = {
-  channelAccounts?: Record<
-    string,
-    Array<{ accountId?: string; probe?: { ok?: boolean; rooms?: Array<{ id?: string }> } }>
-  >;
-};
-
-type GatewayConfigPayload = {
-  appliedConfigHash?: string | null;
-  configRevisionHash?: string;
-};
-
 function hasSuccessfulBuzzProbe(payload: unknown, accountId: string, target: string): boolean {
-  const accounts = (payload as BuzzStatusPayload | undefined)?.channelAccounts?.buzz;
+  const accounts = (
+    payload as
+      | {
+          channelAccounts?: Record<
+            string,
+            Array<{ accountId?: string; probe?: { ok?: boolean; rooms?: Array<{ id?: string }> } }>
+          >;
+        }
+      | undefined
+  )?.channelAccounts?.buzz;
   return Boolean(
     accounts?.some(
       (account) =>
@@ -53,7 +50,10 @@ export async function verifyBuzzAfterSetup(params: {
           { timeout: "5000", json: true },
           {},
           { expectFinal: false, progress: false },
-        )) as GatewayConfigPayload;
+        )) as {
+          appliedConfigHash?: string | null;
+          configRevisionHash?: string;
+        };
         if (!configState.configRevisionHash) {
           throw new Error("Gateway config status did not include a saved revision hash");
         }

@@ -6,9 +6,10 @@ import { createInterval } from "../../../lib/reactive/timers.ts";
 import { ContentPresentation } from "../../../lib/solid/presentation.ts";
 import type { PluginToolIcons } from "../chat-tool-icon-controller.ts";
 import type { ActivityHeadline } from "./chat-activity-headline-selection.ts";
-import { ChatToolIcon } from "./chat-tool-cards.solid.tsx";
+import { ChatToolIcon } from "./chat-tool-card-chrome.tsx";
 
 export type ChatActivityHeadlineProps = {
+  bubbleMode?: boolean;
   contentRef?: (element: HTMLSpanElement) => void;
   scope: string;
   activity: ActivityHeadline | undefined;
@@ -87,33 +88,47 @@ export function ChatActivityHeadline(props: ChatActivityHeadlineProps) {
   const name = () => shown()?.name;
   return (
     <>
-      <span
-        class="chat-activity-group__icon"
-        role={name() ? "img" : undefined}
-        aria-label={name()}
-        aria-hidden={name() ? undefined : "true"}
-        title={name()}
+      <Show
+        when={props.bubbleMode}
+        fallback={
+          <span
+            class="chat-activity-group__icon"
+            role={name() ? "img" : undefined}
+            aria-label={name()}
+            aria-hidden={name() ? undefined : "true"}
+          >
+            <Show when={name()} fallback={<Icon name="listTree" />}>
+              {(tool) => (
+                <ChatToolIcon
+                  style={{ display: "contents" }}
+                  name={shown()?.commandBearing ? "squareTerminal" : resolveToolDisplayIcon(tool())}
+                  tool={{ toolName: tool(), pluginToolIcons: props.pluginToolIcons }}
+                />
+              )}
+            </Show>
+          </span>
+        }
       >
-        <Show when={name()} fallback={<Icon name="listTree" />}>
-          {(tool) => (
-            <ChatToolIcon
-              style={{ display: "contents" }}
-              name={shown()?.commandBearing ? "squareTerminal" : resolveToolDisplayIcon(tool())}
-              tool={{ toolName: tool(), pluginToolIcons: props.pluginToolIcons }}
-            />
-          )}
-        </Show>
-      </span>
+        <span class="chat-bubble-dots chat-bubble-dots--working" aria-hidden="true">
+          <span />
+          <span />
+          <span />
+        </span>
+      </Show>
       <span ref={(element) => props.contentRef?.(element)} class="chat-tool-disclosure__content">
         <Show
           when={shown()?.title}
           keyed
-          fallback={<span class="chat-activity-group__label">{props.summary}</span>}
+          fallback={
+            <Show when={!props.bubbleMode}>
+              <span class="chat-activity-group__label">{props.summary}</span>
+            </Show>
+          }
         >
           {(title) => (
             <span class="chat-activity-group__label chat-activity-group__label--live">
               {title}
-              {shown()?.status === "running" ? "…" : ""}
+              {!props.bubbleMode && shown()?.status === "running" ? "…" : ""}
             </span>
           )}
         </Show>

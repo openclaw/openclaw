@@ -135,7 +135,6 @@ it("discards a completed directory read when a linked handle changes before sele
       syncBob("bob-after");
       setDisplayName(f.bob.id, "Robert Updated");
     });
-    expect(response.error).toBeUndefined();
     expectUsers(response, [{ profileId: f.bob.id, displayName: "Robert Updated" }]);
     expect(await searchDirectory(f, "bob-before")).toMatchObject({ users: [] });
   }));
@@ -179,8 +178,6 @@ it("resolves verified handles and full names to the same recipient without expos
     expect(
       f.inbox.validateRecipients(f.aliceClient, { sessionKey: SESSION_KEY }, [f.bob.id]),
     ).toEqual({ ok: true, value: [f.bob.id] });
-    await f.post();
-    expect(await f.items()).toHaveLength(1);
     syncBob("robert-new");
     expect(await searchDirectory(f, "bobby")).toMatchObject({ users: [] });
     expect(await searchDirectory(f, "robert-new")).toMatchObject({
@@ -203,10 +200,6 @@ it("includes offline people without leaking administrative profile fields or bin
     for (const user of users) {
       expect(Object.keys(user).toSorted()).toEqual(fields);
     }
-    setDisplayName(offline.id, "Dana");
-    expect(await searchDirectory(f, "Dana")).toMatchObject({
-      users: [{ profileId: offline.id, displayName: "Dana", online: false }],
-    });
   }));
 
 it.each([

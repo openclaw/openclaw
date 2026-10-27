@@ -6,27 +6,39 @@ import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { GatewaySessionRow, SessionsListResult } from "../../api/types.ts";
 import { createConnectionBootstrapCoordinator } from "../../app/connection-bootstrap.ts";
 import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
+import { sessionRequest } from "./hydration-family.test-support.ts";
 import { createSessionCapability } from "./index.ts";
 import { createGatewayHarness, sessionsResult } from "./session-capability.test-support.ts";
 import type { SessionGateway, SessionListScope } from "./session-capability.ts";
+
+type PendingList = ReturnType<typeof createDeferred<SessionsListResult>>;
+type Cleanup = () => unknown;
+
+export function rosterPage(rows: GatewaySessionRow[], totalCount: number, limit: number, ts = 1) {
+  return {
+    ...sessionsResult(rows, ts),
+    totalCount,
+    hasMore: true,
+    nextOffset: limit,
+    limitApplied: limit,
+  };
+}
 
 export function ownRoster(
   gateway: SessionGateway,
   bootstrap?: ReturnType<typeof createConnectionBootstrapCoordinator>,
 ) {
+  const selection = { state: { selectedId: "main" }, subscribe: () => () => undefined };
   const sessions = createSessionCapability(
     gateway,
-    {
-      state: { selectedId: "main" },
-      subscribe: () => () => undefined,
-    },
+    selection,
     bootstrap ? { connectionBootstrap: bootstrap } : undefined,
   );
-  const stops: Array<() => unknown> = [];
-  const before: Array<() => unknown> = [];
-  const after: Array<() => unknown> = [];
+  const stops: Cleanup[] = [];
+  const pending: Array<[PendingList, SessionsListResult]> = [];
+  const after: Cleanup[] = [];
   onTestFinished(async () => {
-    before.forEach((resolve) => resolve());
+    pending.forEach(([deferred, result]) => deferred.resolve(result));
     stops.forEach((stop) => stop());
     sessions.dispose();
     bootstrap?.reset();
@@ -42,13 +54,10 @@ export function ownRoster(
       stops.push(stop);
       return stop;
     },
-    resolveOnCleanup(
-      this: void,
-      ...pending: Array<[ReturnType<typeof createDeferred<SessionsListResult>>, SessionsListResult]>
-    ) {
-      pending.forEach(([deferred, result]) => before.push(() => deferred.resolve(result)));
+    resolveOnCleanup: (...entries: typeof pending) => {
+      entries.forEach(([deferred, result]) => pending.push([deferred, result]));
     },
-    settle(this: void, run: () => unknown) {
+    settle: (run: Cleanup) => {
       after.push(run);
     },
     listResult: (query: SessionListScope) => sessions.listSnapshot(query).result,
@@ -67,10 +76,17 @@ export function rosterFixture(
   return { ...harness, ...ownRoster(harness.gateway) };
 }
 
-export function queuedLists(
-  lists: Record<string, ReturnType<typeof createDeferred<SessionsListResult>>>,
+export function rosterReadFixture(
+  read: (params: ReturnType<typeof listParams>) => unknown,
+  ownerId?: string,
 ) {
-  const request = vi.fn(async (method: string, params?: { agentId?: string }) => {
+  const request = vi.fn((method: string, params?: unknown) => read(listParams(method, params)));
+  const client = createTestGatewayClient(request);
+  return { request, ...rosterFixture(client.request.bind(client), { ownerId }) };
+}
+
+export function queuedLists(lists: Record<string, PendingList>) {
+  const request = vi.fn((method: string, params?: ReturnType<typeof listParams>) => {
     expect(method).toBe("sessions.list");
     const pending = params?.agentId ? lists[params.agentId] : undefined;
     if (!pending) {
@@ -78,20 +94,17 @@ export function queuedLists(
     }
     return pending.promise;
   });
-  return { ...rosterFixture(request as unknown as GatewayBrowserClient["request"]), request };
+  const client = createTestGatewayClient((method, params) =>
+    request(method, listParams(method, params)),
+  );
+  return { request, ...rosterFixture(client.request.bind(client)) };
 }
 
 export function listRequest<P = unknown>(
   read: (params?: P) => unknown,
   subscribe: () => unknown = () => ({ subscribed: true }),
 ) {
-  return vi.fn(async (method: string, params?: P) => {
-    if (method === "sessions.subscribe") {
-      return subscribe();
-    }
-    expect(method).toBe("sessions.list");
-    return read(params);
-  });
+  return sessionRequest<P>({ "sessions.subscribe": subscribe, "sessions.list": read });
 }
 
 export function coordinated(request: Parameters<typeof createTestGatewayClient>[0]) {
@@ -118,15 +131,12 @@ export function listParams(method: string, params: unknown) {
   return params;
 }
 
-export function delay(ms: number) {
-  return new Promise<void>((resolve) => {
+export const delay = (ms: number) =>
+  new Promise<void>((resolve) => {
     setTimeout(resolve, ms);
   });
-}
 
-export function advance(ms = 0) {
-  return vi.advanceTimersByTimeAsync(ms);
-}
+export const advance = (ms = 0) => vi.advanceTimersByTimeAsync(ms);
 
 export function ownerCountsFixture(row: GatewaySessionRow, fullRows?: GatewaySessionRow[]) {
   const counts = { open: 8, running: 0 };

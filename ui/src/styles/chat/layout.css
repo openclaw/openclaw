@@ -117,7 +117,12 @@ openclaw-pending-session-create {
   height: 14px;
 }
 
-.chat-error__content[open] .chat-error__chevron {
+.chat-error__content[open] .chat-error__chevron,
+.chat-workspace-conflict-notice:not([open]) .chat-workspace-conflict-notice__chevron,
+.chat-pr__checks[open] .chat-pr__checks-chevron svg,
+.chat-ci__job[open] > summary .chat-ci__chevron,
+.chat-ci__skipped[open] > summary .chat-ci__chevron,
+.chat-pr__publication-status[open] .chat-pr__publication-chevron {
   transform: rotate(180deg);
 }
 
@@ -384,11 +389,6 @@ openclaw-pending-session-create {
   color: var(--muted);
 }
 
-.chat-child-attention .chat-composer-neighbor-card__copy :is(strong, span) {
-  white-space: normal;
-  overflow-wrap: anywhere;
-}
-
 .chat-composer-neighbor-card--info {
   border-color: color-mix(in srgb, var(--info) 16%, transparent);
 }
@@ -521,10 +521,6 @@ openclaw-pending-session-create {
   transition: transform var(--duration-fast) var(--ease-out);
 }
 
-.chat-workspace-conflict-notice:not([open]) .chat-workspace-conflict-notice__chevron {
-  transform: rotate(180deg);
-}
-
 .chat-workspace-conflict-notice__content {
   display: grid;
   gap: 10px;
@@ -633,6 +629,9 @@ openclaw-pending-session-create {
 }
 
 .chat-virtual-block {
+  /* The outer extent owns scroll height. This translated row window must not
+     contribute a second changing box when saved rows become live rows. */
+  contain: size;
   position: absolute;
   top: 0;
   left: 0;
@@ -648,23 +647,38 @@ openclaw-pending-session-create {
   content-visibility: auto;
 }
 
+@media (min-width: 769px) {
+  .chat-virtual-row {
+    /* The virtualizer bounds mounted rows. Wide rows pay for WebKit's automatic
+       content skipping; compact rows retain it for steadier frame delivery. */
+    content-visibility: visible;
+    contain: content;
+  }
+}
+
+/* Small notice rows must enter at their real height, not the virtual estimate. */
+.chat-virtual-row:has(> .chat-notice) {
+  content-visibility: visible;
+  contain: none;
+}
+
 .chat-virtual-row:focus-within {
   /* Footer controls use a -4px block margin. Paint containment must clear
      that overhang plus the 2px focus outline and its 3px offset. */
   overflow-clip-margin: 10px;
 }
 
-/* Message jumps need real mounted-row sizes before their target settles.
-   Native reader takeover restores ordinary overscan layout skipping. */
+/* Message jumps need real mounted-row sizes before their target settles. */
 .chat-thread-inner[data-measuring-rows] .chat-virtual-row {
   content-visibility: visible;
+  contain: none;
 }
 
 @media (max-width: 768px), (max-width: 932px) and (max-height: 500px) and (orientation: landscape) {
   /* Revealed 44px footer targets can overhang the compact row by half their
-     height. Widen the paint clip rather than toggling content-visibility:
-     flipping it from :hover while a context menu opens crashes Chromium's
-     renderer (Chrome for Testing 153). */
+     height. Widen the paint clip instead of changing containment on hover.
+     Toggling content-visibility here while a context menu opens previously
+     crashed Chromium's renderer (Chrome for Testing 153). */
   .chat-virtual-row:has(.chat-group:hover),
   .chat-virtual-row:has(.chat-group:is(:focus-within, .chat-group--meta-revealed)) {
     overflow-clip-margin: 22px;
@@ -716,6 +730,21 @@ openclaw-pending-session-create {
   justify-content: center;
   gap: 10px;
   padding: 8px 12px;
+}
+
+/* Included in the transcript virtualizer's header margin; keep this height exact. */
+.chat-pending-inputs--history {
+  box-sizing: border-box;
+  overflow: hidden;
+  height: 44px;
+  flex-wrap: nowrap;
+  padding: 4px 12px;
+}
+
+.chat-pending-inputs--history .btn {
+  min-width: 0;
+  height: 100%;
+  white-space: normal;
 }
 
 .chat-history-error--inline {
@@ -777,7 +806,7 @@ openclaw-pending-session-create {
   text-transform: uppercase;
 }
 
-.chat-history-boundary__action:not(:disabled):hover {
+.chat-history-boundary__action:not([aria-disabled="true"]):hover {
   color: var(--text);
 }
 
@@ -793,6 +822,11 @@ openclaw-pending-session-create {
   }
 }
 
+.chat {
+  --chat-scroll-to-bottom-size: 36px;
+  --chat-scroll-to-bottom-gap: 12px;
+}
+
 /* The zero-height anchor keeps the affordance out of the flex flow so showing
    it never shrinks the transcript or moves the composer. */
 .chat-scroll-to-bottom-wrap {
@@ -805,13 +839,13 @@ openclaw-pending-session-create {
 
 .chat-scroll-to-bottom {
   position: absolute;
-  bottom: 12px;
+  bottom: calc(var(--chat-scroll-to-bottom-gap) + var(--chat-scroll-to-bottom-clearance, 0px));
   left: 50%;
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 36px;
-  height: 36px;
+  width: var(--chat-scroll-to-bottom-size);
+  height: var(--chat-scroll-to-bottom-size);
   padding: 0;
   line-height: 1;
   color: var(--text);
@@ -879,17 +913,6 @@ openclaw-pending-session-create {
   outline-offset: 2px;
 }
 
-.chat-scroll-to-bottom svg {
-  width: 16px;
-  height: 16px;
-  stroke: currentColor;
-  fill: none;
-  stroke-width: 1.5px;
-  stroke-linecap: round;
-  stroke-linejoin: round;
-  flex-shrink: 0;
-}
-
 .context-usage {
   position: relative;
   display: inline-flex;
@@ -952,7 +975,7 @@ openclaw-pending-session-create {
 }
 
 .context-ring__track {
-  stroke: color-mix(in srgb, currentColor 22%, transparent);
+  stroke: var(--context-ring-track, color-mix(in srgb, currentColor 22%, transparent));
 }
 
 .context-ring__fill {
@@ -966,6 +989,7 @@ openclaw-pending-session-create {
   overflow-y: auto;
   padding: 14px;
   color: var(--popover-foreground);
+  font-variant-numeric: tabular-nums;
   animation: fade-in 150ms var(--ease-out);
 }
 
@@ -973,208 +997,239 @@ openclaw-pending-session-create {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 20px;
+  gap: 8px;
+  min-height: 20px;
 }
-
-.context-usage__title,
-.context-usage__section-label {
-  color: var(--muted);
-  font-size: 11px;
-  font-weight: 700;
-  letter-spacing: 0.08em;
-  line-height: 1.2;
-  text-transform: uppercase;
-}
-
 .context-usage__context-value {
-  font-size: 13px;
-  font-variant-numeric: tabular-nums;
+  color: var(--text);
+  font-size: 12px;
+  font-weight: 650;
   white-space: nowrap;
 }
-
-.context-usage__bar {
-  height: 5px;
-  margin: 8px 0 10px;
-  overflow: hidden;
-  border-radius: var(--radius-full);
-  background: color-mix(in srgb, var(--muted) 22%, transparent);
+.context-usage__open {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  height: 26px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--muted);
+  font: inherit;
+  font-size: 11.5px;
 }
-
-.context-usage__bar span {
-  display: block;
-  height: 100%;
-  border-radius: inherit;
-  background: var(--ctx-color, var(--accent));
-  box-shadow: 0 0 12px color-mix(in srgb, var(--ctx-color, var(--accent)) 46%, transparent);
+.context-usage__open svg {
+  width: 11px;
+  height: 11px;
+  transition: transform 150ms var(--ease-out);
 }
-
-.context-usage__section-label {
-  padding-top: 14px;
-  border-top: 1px solid color-mix(in srgb, var(--border) 72%, transparent);
+.context-usage__open:hover:not(:disabled) {
+  color: var(--text);
 }
-
-.context-usage__plan-header {
+.context-usage__open:hover:not(:disabled) svg {
+  transform: translateX(2px);
+}
+.context-usage__separator {
+  height: 1px;
+  margin: 10px 0;
+  background: var(--details-separator);
+}
+.context-usage__latest {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 12px;
-  margin-top: 14px;
+  flex-wrap: wrap;
+  gap: 4px 8px;
+  min-height: 26px;
+  color: var(--muted);
+  font-size: 12px;
 }
-
-.context-usage__plan-link {
+.context-usage__stats {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  margin: 0 0 0 auto;
+  font-size: 12px;
+  div {
+    display: inline-flex;
+    align-items: baseline;
+    gap: 3px;
+  }
+  div:not(:last-child)::after {
+    margin: 0 6px;
+    color: color-mix(in srgb, var(--muted) 50%, transparent);
+    content: "·";
+  }
+  dt {
+    color: var(--muted);
+  }
+  dd {
+    margin: 0;
+    color: var(--text);
+    font-weight: 650;
+  }
+}
+.context-usage__tray {
+  --tray: color-mix(in oklab, var(--text) 3.5%, var(--bg-elevated));
+  margin: 10px -14px -14px;
+  padding: 6px 14px 14px;
+  border-top: 1px solid var(--details-separator);
+  border-radius: 0 0 13px 13px;
+  background: var(--tray);
+}
+.context-usage__identity,
+.context-usage__skeleton-row {
+  display: grid;
+  grid-template-columns: 16px minmax(0, 1fr) auto;
+  column-gap: 6px;
+  align-items: center;
+}
+.context-usage__identity {
+  height: 28px;
+  .provider-brand-icon {
+    width: 16px;
+    height: 16px;
+    justify-self: center;
+  }
+}
+.context-usage__account {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--text);
+  font-size: 12px;
+  font-weight: 400;
+  white-space: nowrap;
+  mask-image: linear-gradient(to right, black calc(100% - 24px), transparent);
+}
+.context-usage__account:dir(rtl) {
+  mask-image: linear-gradient(to left, black calc(100% - 24px), transparent);
+}
+.context-usage__plan-badge {
   display: inline-flex;
   align-items: center;
-  gap: 6px;
-  color: var(--muted);
-  transition: color 150ms ease-out;
+  height: 18px;
+  padding: 0 6px;
+  border-radius: 5px;
+  color: var(--muted-strong);
+  font-size: 11px;
+  font-weight: 500;
+  text-decoration: none;
+  box-shadow: inset 0 0 0 1px color-mix(in oklab, var(--muted) 40%, transparent);
 }
-
-.context-usage__plan-link:hover {
-  color: var(--text);
+.context-usage__plan-badge:hover {
+  background: var(--surface-hover);
+  text-decoration: none;
 }
-
-.context-usage__plan-link svg,
+.context-usage__limits {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-top: 6px;
+}
+.context-usage__limit {
+  position: relative;
+  height: 24px;
+  overflow: hidden;
+  border-radius: var(--radius-sm);
+  background: var(--bg-elevated);
+  box-shadow: inset 0 0 0 1px var(--border);
+}
+:root[data-theme-mode="dark"] .context-usage__limit {
+  background: color-mix(in oklab, var(--bg) 40%, var(--bg-elevated));
+}
+.context-usage__limit-fill {
+  position: absolute;
+  inset: 0 auto 0 0;
+  background: color-mix(
+    in oklab,
+    var(--accent) calc(var(--session-color-tint) * var(--quota-strength)),
+    var(--tray)
+  );
+}
+.context-usage__limit-tick {
+  position: absolute;
+  inset: 6px auto 6px 50%;
+  width: 1px;
+  background: color-mix(in oklab, var(--text) 28%, transparent);
+}
+.context-usage__limit-content {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  height: 100%;
+  padding: 0 10px;
+}
+.context-usage__limit-label {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--text-strong);
+  font-size: 12px;
+  font-weight: 500;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+.context-usage__limit-reset {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  color: color-mix(in oklab, var(--muted-strong) 50%, var(--text));
+  font-size: 11px;
+  font-weight: 500;
+  white-space: nowrap;
+  svg {
+    width: 10px;
+    height: 10px;
+  }
+}
+.context-usage__limit-value {
+  margin-inline-start: auto;
+  color: var(--text-strong);
+  font-size: 12px;
+  font-weight: 650;
+  white-space: nowrap;
+}
+.context-usage__limit-value--warn {
+  color: color-mix(in oklab, var(--warn) 80%, var(--text));
+}
+.context-usage__limit-value--danger {
+  color: var(--danger);
+}
+.context-usage__report-skeleton {
+  margin-top: 10px;
+  height: 141px;
+}
+.context-usage__skeleton-bar {
+  height: 5px;
+  margin-bottom: 6px;
+  border-radius: var(--radius-full);
+  background: color-mix(in srgb, var(--muted) 20%, transparent);
+}
+.context-usage__skeleton-row {
+  height: 26px;
+  :is(i, span, b) {
+    height: 8px;
+    border-radius: 2px;
+    background: color-mix(in srgb, var(--muted) 15%, transparent);
+  }
+  i {
+    width: 8px;
+    justify-self: center;
+  }
+  span {
+    width: 70%;
+  }
+  b {
+    width: 36px;
+  }
+}
 .task-suggestion__start svg,
-.chat-swarm__disclosure svg,
 .chat-pr__checks-chevron svg,
 .chat-ci__chevron svg,
 .chat-ci__job-link svg,
 .chat-pr__publication-chevron svg {
   width: 12px;
   height: 12px;
-}
-
-.context-usage__plan-badge {
-  color: var(--text);
-  font-size: 11px;
-  font-weight: 650;
-  letter-spacing: 0.02em;
-  text-transform: none;
-}
-
-.context-usage__account {
-  overflow: hidden;
-  margin-top: 4px;
-  color: var(--muted);
-  font-size: 12px;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.context-usage__limits {
-  display: flex;
-  flex-direction: column;
-  gap: 11px;
-  margin-top: 12px;
-}
-
-.context-usage__limit-head {
-  display: flex;
-  align-items: baseline;
-  justify-content: space-between;
-  gap: 12px;
-}
-
-.context-usage__limit-label {
-  overflow: hidden;
-  color: var(--text);
-  font-size: 12px;
-  font-weight: 550;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.context-usage__limit-meta {
-  display: inline-flex;
-  align-items: baseline;
-  gap: 8px;
-  color: var(--muted);
-  font-size: 11px;
-  white-space: nowrap;
-}
-
-.context-usage__limit-meta strong {
-  color: var(--text);
-  font-size: 12px;
-  font-weight: 650;
-  font-variant-numeric: tabular-nums;
-}
-
-.context-usage__limit-bar {
-  height: 4px;
-  margin-top: 6px;
-  overflow: hidden;
-  border-radius: var(--radius-full);
-  background: color-mix(in srgb, var(--muted) 20%, transparent);
-}
-
-.context-usage__limit-bar span {
-  display: block;
-  height: 100%;
-  border-radius: inherit;
-  background: var(--accent);
-}
-
-.context-usage__limit-bar span.context-usage__limit-fill--warn {
-  background: var(--warn);
-}
-
-.context-usage__limit-bar span.context-usage__limit-fill--danger {
-  background: var(--danger);
-}
-
-.context-usage__stats {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: baseline;
-  gap: 4px 6px;
-  margin: 8px 0 0;
-  font-size: 12px;
-}
-
-.context-usage__stats div {
-  display: inline-flex;
-  align-items: baseline;
-  gap: 4px;
-  min-width: 0;
-}
-
-/* Trailing separator: on flex-wrap the dot stays at the end of the previous
-   line instead of orphaned at the start of the next one. */
-.context-usage__stats div:not(:last-child)::after {
-  margin-left: 2px;
-  color: var(--muted);
-  content: "·";
-}
-
-.context-usage__stats dt {
-  color: var(--muted);
-}
-
-.context-usage__stats dd {
-  margin: 0;
-  color: var(--text);
-  font-weight: 650;
-  font-variant-numeric: tabular-nums;
-}
-
-.context-usage__provenance {
-  display: block;
-  margin-top: 12px;
-  overflow: hidden;
-  color: var(--muted);
-  font-size: 11px;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.context-usage__provenance + .context-usage__provenance {
-  margin-top: 3px;
-}
-
-.context-usage__provenance strong {
-  color: var(--text);
-  font-weight: 650;
 }
 
 openclaw-chat-audio-player,
@@ -1589,7 +1644,6 @@ openclaw-chat-video-player {
 
 .session-suggestion__action svg,
 .task-suggestion__header-action svg,
-.chat-swarm__task-icon svg,
 .chat-pr__icon svg,
 .chat-pr__warning svg,
 .chat-ci__status svg {
@@ -1937,170 +1991,10 @@ openclaw-chat-video-player {
   }
 }
 
-.chat-swarm__group {
-  position: relative;
-  display: grid;
-  gap: 8px;
-  width: 100%;
-  padding: 10px 12px;
-  border: 1px solid color-mix(in srgb, var(--border) 70%, transparent);
-  border-radius: calc(16px * var(--openclaw-corner-radius-scale));
-  corner-shape: superellipse(1.5);
-  background: var(--chat-composer-surface, var(--popover));
-  outline: none;
-}
-
-.chat-swarm__header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 8px;
-  min-width: 0;
-}
-
-.chat-swarm__header strong {
-  overflow: hidden;
-  color: var(--text);
-  font-size: 13px;
-  font-weight: 600;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.chat-swarm__header span {
-  color: var(--muted);
-  font-size: 12px;
-  font-variant-numeric: tabular-nums;
-}
-
-.chat-swarm__summary {
-  display: grid;
-  gap: 8px;
-  list-style: none;
-}
-
-.chat-swarm__group--completed .chat-swarm__summary {
-  grid-template-columns: auto minmax(0, 1fr) auto auto;
-  align-items: center;
-  min-height: 44px;
-  margin: -10px -12px;
-  padding: 10px 12px;
-}
-
-.chat-swarm__group--completed[open] .chat-swarm__summary {
-  margin-bottom: 0;
-}
-
-.chat-swarm__group--completed .chat-swarm__counts {
-  white-space: nowrap;
-}
-
-.chat-swarm__summary::-webkit-details-marker {
-  display: none;
-}
-
-.chat-swarm__markers {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 4px;
-  color: var(--muted);
-  font-size: 11px;
-}
-
-.chat-swarm__marker {
-  width: 9px;
-  height: 9px;
-  border: 1px solid var(--muted);
-  border-radius: var(--radius-full);
-}
-
-.chat-swarm__marker--running {
-  border-color: var(--info);
-  background: var(--info);
-}
-.chat-swarm__marker--done {
-  border-color: var(--ok);
-  background: var(--ok);
-}
-.chat-swarm__marker--failed {
-  border-color: var(--danger);
-  background: var(--danger);
-}
-
-.chat-swarm__counts,
-.chat-swarm__outcome,
-.chat-swarm__disclosure {
-  color: var(--muted);
-  font-size: 12px;
-}
-
-.chat-swarm__disclosure {
-  display: flex;
-  align-items: center;
-  gap: 4px;
-}
-.chat-swarm__group[open] .chat-swarm__disclosure svg {
-  transform: rotate(180deg);
-}
-
-.chat-swarm__tasks {
-  display: grid;
-  gap: 2px;
-  max-height: min(240px, 30dvh);
-  overflow-y: auto;
-  overscroll-behavior: contain;
-  margin-top: 8px;
-}
-
-.chat-swarm__task {
-  display: grid;
-  grid-template-columns: 18px minmax(0, 1fr) auto;
-  align-items: center;
-  gap: 8px;
-  min-height: 32px;
-  color: var(--muted);
-  font-size: 12px;
-}
-
-.chat-swarm__task-icon,
 .chat-ci__status,
 .chat-ci__chevron {
   display: inline-flex;
   color: var(--muted);
-}
-
-.chat-swarm__task-icon--running svg {
-  animation: btn-spinner-spin 1s linear infinite;
-}
-
-.chat-swarm__task-icon--done {
-  color: var(--ok);
-}
-
-.chat-swarm__task-icon--failed {
-  color: var(--danger);
-}
-
-.chat-swarm__task-name {
-  overflow: hidden;
-  color: var(--text);
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.chat-swarm__task-duration {
-  font-variant-numeric: tabular-nums;
-}
-
-@media (prefers-reduced-motion: reduce) {
-  .chat-swarm__task-icon--running svg {
-    animation: none;
-  }
-
-  .chat-swarm__tasks {
-    transition: none;
-  }
 }
 
 .chat-prs {
@@ -2279,12 +2173,7 @@ button.chat-pr__diff {
   display: flex;
 }
 
-.chat-pr__checks[open] .chat-pr__checks-chevron svg {
-  transform: rotate(180deg);
-}
-
-.chat-pr__checks-dot,
-.chat-pr__checks-row-dot {
+.chat-pr__checks-dot {
   width: 7px;
   height: 7px;
   border-radius: 50%;
@@ -2340,22 +2229,6 @@ button.chat-pr__diff {
   align-items: center;
   gap: 5px;
   white-space: nowrap;
-}
-
-.chat-pr__checks-row--passed .chat-pr__checks-row-dot {
-  background: var(--ok);
-}
-
-.chat-pr__checks-row--failed .chat-pr__checks-row-dot {
-  background: var(--danger);
-}
-
-.chat-pr__checks-row--running .chat-pr__checks-row-dot {
-  background: var(--warn);
-}
-
-.chat-pr__checks-row--skipped .chat-pr__checks-row-dot {
-  background: var(--muted);
 }
 
 .chat-pr__checks-row-label {
@@ -2546,11 +2419,6 @@ openclaw-chat-ci-details {
   white-space: nowrap;
 }
 
-.chat-ci__job[open] > summary .chat-ci__chevron,
-.chat-ci__skipped[open] > summary .chat-ci__chevron {
-  transform: rotate(180deg);
-}
-
 .chat-ci__job-detail {
   padding: 0 24px 10px;
 }
@@ -2715,10 +2583,6 @@ openclaw-chat-ci-details {
   display: inline-flex;
 }
 
-.chat-pr__publication-status[open] .chat-pr__publication-chevron {
-  transform: rotate(180deg);
-}
-
 .chat-pr__publication-more {
   display: grid;
   gap: 2px;
@@ -2800,6 +2664,10 @@ openclaw-chat-ci-details {
 
   flex: 0 0 auto;
   margin: 0 10px 10px;
+}
+
+.shell:not(.shell--mobile-nav) .chat-session-rail__composer.agent-chat__input {
+  margin-bottom: 20px;
 }
 
 /* One control in this row, so it keeps only the inset that stops the send from
@@ -2913,6 +2781,21 @@ openclaw-chat-ci-details {
 
 .agent-chat__disabled-banner--compact .callout__content {
   min-width: 0;
+}
+
+/* Keep the desktop Subagents Stop appearance at the notice's button size. */
+.agent-chat__disabled-banner .agent-chat__disabled-banner-stop.btn {
+  border-color: transparent;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--danger) 9%, transparent);
+  color: var(--danger);
+}
+
+.agent-chat__disabled-banner-stop.btn svg {
+  width: 10px;
+  height: 10px;
+  fill: currentColor;
+  stroke: none;
 }
 
 .agent-chat__disabled-banner-icon--eye {
@@ -3122,7 +3005,7 @@ openclaw-chat-ci-details {
     min-width: var(--chat-composer-send-size);
     height: var(--chat-composer-send-size);
     background: var(--primary);
-    color: var(--primary-foreground);
+    color: var(--chat-send-foreground);
   }
 
   .agent-chat__input--chat .chat-mobile-primary-action .chat-send-btn {
@@ -3137,10 +3020,6 @@ openclaw-chat-ci-details {
     stroke-width: var(--chat-mobile-row-permission-stroke);
   }
 
-  .agent-chat__input--chat :is(.chat-send-btn--send, .chat-send-btn--talk-mode) > svg {
-    color: var(--primary-foreground);
-  }
-
   .agent-chat__input--chat
     :is(.chat-send-btn--send, .chat-send-btn--stop, .chat-send-btn--talk-mode)
     > svg {
@@ -3148,7 +3027,8 @@ openclaw-chat-ci-details {
     height: var(--chat-mobile-row-icon-size);
   }
 
-  .agent-chat__input--chat .chat-send-btn--stop {
+  /* Stop keeps its smaller target regardless of lazy composer stylesheet order. */
+  .agent-chat__input--chat .chat-send-btn.chat-send-btn--stop {
     width: var(--chat-mobile-row-target-size);
     min-width: var(--chat-mobile-row-target-size);
     height: var(--chat-mobile-row-target-size);
@@ -3159,7 +3039,7 @@ openclaw-chat-ci-details {
   .agent-chat__input--chat .chat-send-btn--stop > svg {
     width: var(--chat-mobile-row-stop-icon-size);
     height: var(--chat-mobile-row-stop-icon-size);
-    color: var(--danger);
+    color: inherit;
     fill: currentColor;
     stroke: none;
   }
@@ -3172,12 +3052,19 @@ openclaw-chat-ci-details {
     stroke-width: var(--chat-mobile-row-mic-stroke);
   }
 
+  .agent-chat__input--chat
+    .chat-mobile-dictation-action
+    .chat-send-btn--voice:not(:disabled, [aria-disabled="true"])
+    > svg {
+    color: inherit;
+  }
+
   .agent-chat__input--chat .chat-mobile-dictation-action .chat-send-btn--voice {
     padding: var(--chat-mobile-row-icon-padding);
   }
 }
 
-::highlight(openclaw-comment) {
+:root::highlight(openclaw-comment) {
   background: var(--selection-bg);
   color: var(--selection-fg);
 }
@@ -3320,16 +3207,14 @@ openclaw-chat-ci-details {
 
 .chat-pane__chat-toggle,
 .chat-pane__layout-trigger,
-.chat-pane__sharing-trigger,
-button.chat-pane__subagents-running {
+.chat-pane__sharing-trigger {
   padding: 5px 8px;
   line-height: 1;
 }
 
 @media (max-width: 768px), (max-width: 932px) and (max-height: 500px) and (orientation: landscape) {
   .chat-pane__chat-toggle,
-  .chat-pane__layout-trigger,
-  button.chat-pane__subagents-running {
+  .chat-pane__layout-trigger {
     min-height: 44px;
   }
 

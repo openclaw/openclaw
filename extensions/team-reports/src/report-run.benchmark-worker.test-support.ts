@@ -1,18 +1,8 @@
-import { registerHooks } from "node:module";
+import { installReportFixtureTransport } from "./report-fixture-transport.test-support.js";
 
-globalThis.fetch = async () => {
-  throw new Error("Benchmark attempted a real network request");
-};
-
-registerHooks({
-  resolve(specifier, context, nextResolve) {
-    return specifier === "openclaw/plugin-sdk/ssrf-runtime"
-      ? {
-          url: new URL("./report-run.benchmark-fixtures.test-support.ts", import.meta.url).href,
-          shortCircuit: true,
-        }
-      : nextResolve(specifier, context);
-  },
-});
+installReportFixtureTransport(
+  "./report-run.benchmark-fixtures.test-support.ts",
+  "Benchmark attempted a real network request",
+);
 
 await import("./run.worker.js");

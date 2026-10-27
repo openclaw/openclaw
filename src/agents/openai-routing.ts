@@ -156,10 +156,7 @@ export function modelSelectionShouldEnsureCodexPlugin(params: {
     return configuredRuntime === "codex";
   }
   if (!configuredPolicy) {
-    const agentRuntime = resolveRetiredAgentRuntimeOptOut({
-      config: params.config,
-      agentId: params.agentId,
-    });
+    const agentRuntime = resolveRetiredAgentRuntimeOptOut(params);
     // Any explicit model policy wins; without one, the shipped whole-agent
     // opt-out still suppresses implicit Codex installation despite retirement.
     if (agentRuntime && !isDefaultAgentRuntimeId(agentRuntime)) {

@@ -14,6 +14,7 @@ import {
   inspectAcceptedWorkerWorkspace,
   recoverWorkerWorkspaceReconciliation,
 } from "./workspace-reconcile.js";
+import type { WorkerWorkspaceGitHistory } from "./workspace-result-inventory.js";
 import { workerWorkspaceResultStaging } from "./workspace-result-staging.js";
 
 /** Accepts authenticated transport snapshots through one local journal and result owner. */
@@ -43,6 +44,8 @@ export async function prepareLocalWorkspaceReconciliation(params: {
     baseRaw: string;
     currentRaw: string;
     currentManifestRef: string;
+    gitHistory?: WorkerWorkspaceGitHistory;
+    gitPackPath?: string;
     publishAcceptedManifest: (
       accepted: Omit<WorkerWorkspaceApplyResult, "verifyLocalStable">,
     ) => Promise<void>;
@@ -68,7 +71,10 @@ export async function prepareLocalWorkspaceReconciliation(params: {
             }),
           )
         : undefined;
-    const unchanged = inspected?.conflictPaths.length === 0 ? inspected : undefined;
+    const hasWorkerCommits =
+      snapshot.gitHistory && snapshot.gitHistory.headCommit !== snapshot.gitHistory.baseCommit;
+    const unchanged =
+      !hasWorkerCommits && inspected?.conflictPaths.length === 0 ? inspected : undefined;
     if (!unchanged) {
       await snapshot.verifyStable();
     }
@@ -79,6 +85,8 @@ export async function prepareLocalWorkspaceReconciliation(params: {
         currentManifestRef: snapshot.currentManifestRef,
         baseManifestRaw: snapshot.baseRaw,
         currentManifestRaw: snapshot.currentRaw,
+        gitHistory: snapshot.gitHistory,
+        gitPackPath: snapshot.gitPackPath,
         publishAcceptedManifest: snapshot.publishAcceptedManifest,
         unchanged,
         additionalPaths,

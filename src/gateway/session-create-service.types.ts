@@ -1,6 +1,7 @@
 import type { Result } from "@openclaw/normalization-core/result";
 import type { FastMode } from "@openclaw/normalization-core/string-coerce";
 import type { ErrorShape, SessionVisibility } from "../../packages/gateway-protocol/src/index.js";
+import type { AdmittedRunOperatorAuthority } from "../agents/admitted-run-context.js";
 import type { ModelCatalogSnapshot } from "../agents/model-catalog.types.js";
 import type { ModelRef } from "../agents/model-selection.js";
 import type {
@@ -14,6 +15,7 @@ import type {
   SessionCreatedVia,
 } from "../config/sessions/session-entry-provenance.js";
 import type { SessionSourceAssertion } from "../config/sessions/session-source-authority.js";
+import type { SessionTranscriptAssistantMessage } from "../config/sessions/transcript.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { AgentRuntimeSpawnModelAutoSelection } from "./agent-runtime-session-spawn-context.js";
 import type {
@@ -25,6 +27,7 @@ import type {
   SessionMutationAuthorization,
 } from "./server-methods/shared-types.js";
 import type { SessionCreatePhase } from "./session-create-diagnostics.js";
+import type { SessionWorkerPlacementContext } from "./session-worker-placement-context.js";
 
 type TrustedCatalogSessionTarget = {
   model: string;
@@ -120,6 +123,7 @@ export type CreateGatewaySessionParams = {
   personalAccountDefaults?: ModelAccountConnectAction;
   contextWindow?: string;
   thinkingLevel?: string;
+  cyberAccessProgram?: SessionEntry["cyberAccessProgram"] | null;
   fastMode?: FastMode;
   /** Registry identity for a new session or a successfully recovered pending worktree. */
   projectId?: string;
@@ -188,6 +192,8 @@ export type CreateGatewaySessionParams = {
   waitForModelCatalog?: <T>(operation: () => Promise<T>) => Promise<T>;
   /** Trusted in-process initializer; never populated from public Gateway params. */
   initialEntry?: TrustedInitialSessionEntry;
+  /** Trusted prepared assistant reply committed with a new ordinary session, never a wire input. */
+  initialAssistantMessage?: { message: SessionTranscriptAssistantMessage; idempotencyKey?: string };
   /** Keep a new ordinary session unusable until afterCreate succeeds, or roll it back. */
   atomicInitialization?: true;
   /** Public callers need admin before reconfiguring an adopted keyed session. */
@@ -230,4 +236,45 @@ export type CreateGatewaySessionParams = {
   followSharingRegistration?: SessionMutationAuthorization["followRegistration"];
   /** Synchronous caller-authority guard checked by each durable owner boundary. */
   commitGuard?: SessionSourceAssertion;
+};
+
+export type GatewaySessionResetParams = {
+  key: string;
+  agentId?: string;
+  spawnedCwd?: string;
+  sessionRoot?: string;
+  permissionMode?: SessionEntry["permissionMode"];
+  /** Existing-row changes stay admin-gated across reset preparation and commit. */
+  fastModeSelection?: { value: FastMode; allowExistingChange: boolean };
+  /** Prepares session-owned resources while the target lifecycle fence is held. */
+  prepareLifecycle?: PrepareGatewaySessionLifecycle;
+  onLifecycleCleanupError?: (error: unknown) => void;
+  /** Bind session exec to host=node with this node id; caller scope-checks. */
+  execNode?: string;
+  /** Working directory interpreted only by execNode. */
+  execCwd?: string;
+  /** Clear a prior node binding when a new Gateway-host session replaces it. */
+  clearExecBinding?: boolean;
+  // A plain New Chat must return to the agent workspace instead of inheriting the previous
+  // turn's session worktree cwd; only worktree-requested resets carry a spawnedCwd forward.
+  clearSpawnedCwd?: boolean;
+  reason: "new" | "reset";
+  commandSource: string;
+  /** Trusted provenance for a reset that materializes a previously missing row. */
+  creation?: { via: SessionCreatedVia; actor?: SessionCreatedActor };
+  /** Authenticated durable operator identity for missing-session materialization. */
+  requestingOperatorProfileId?: string;
+  operatorAuthority?: AdmittedRunOperatorAuthority;
+  /** Trusted host actor; system-owned resets must identify themselves explicitly. */
+  operatorRoleActor?: GatewayOperatorRoleActor;
+  /** Exact plugin namespace authorized by the scoped plugin runtime. */
+  authorizedPluginId?: string;
+  /** Arms local checkout attribution in the authoritative reset commit. */
+  armSessionDiffBaselineCapture?: boolean;
+  workerPlacementContext?: SessionWorkerPlacementContext;
+  assertCurrent?: () => void;
+  assertAuthorizedInstance?: () => void;
+  /** Optional caller-observed session ID that must still be current at lifecycle admission. */
+  expectedSessionId?: string;
+  onCommitted?: (commit: { key: string; sessionId: string }) => void;
 };

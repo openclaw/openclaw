@@ -245,7 +245,6 @@ it.for(cases)(
             defaults: {
               workspace: state.workspaceDir,
               skipBootstrap: true,
-              heartbeat: { every: "0m" },
               model: { primary: provider.modelRef },
               models: { [provider.modelRef]: model },
             },

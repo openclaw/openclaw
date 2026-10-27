@@ -8,7 +8,7 @@ import {
   normalizeOptionalString,
   readStringValue,
 } from "@openclaw/normalization-core/string-coerce";
-import { truncateUtf16Safe } from "../utils.js";
+import { truncateUtf16Safe, tryParseJson } from "../utils.js";
 import { collectTextContentBlocks } from "./content-blocks.js";
 import { readNodePermissionError } from "./node-permission-error.js";
 import {
@@ -359,16 +359,9 @@ export function extractToolErrorMessage(result: unknown): string | undefined {
     return direct;
   }
   const text = extractToolResultText(result);
-  if (text) {
-    try {
-      const parsed = JSON.parse(text) as unknown;
-      const fromJson = extractErrorField(parsed);
-      if (fromJson) {
-        return fromJson;
-      }
-    } catch {
-      // Fall through to status/text fallback.
-    }
+  const fromJson = text ? extractErrorField(tryParseJson(text)) : undefined;
+  if (fromJson) {
+    return fromJson;
   }
   const fromStatus = extractErrorField(record.details) ?? extractErrorField(record);
   if (fromStatus) {

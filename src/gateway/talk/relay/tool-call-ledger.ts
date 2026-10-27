@@ -21,8 +21,6 @@ export class RelayToolCallLedger {
   constructor(
     private readonly options: {
       onOverflow: () => void;
-      maxEntries?: number;
-      maxBytes?: number;
     },
   ) {}
 
@@ -40,11 +38,9 @@ export class RelayToolCallLedger {
       (total, callId) => total + Buffer.byteLength(callId, "utf8"),
       0,
     );
-    const maxEntries = this.options.maxEntries ?? MAX_RELAY_TOOL_CALL_IDENTITIES;
-    const maxBytes = this.options.maxBytes ?? MAX_RELAY_TOOL_CALL_IDENTITY_BYTES;
     if (
-      this.entries.size + additions.length > maxEntries ||
-      this.retainedBytes + additionBytes > maxBytes
+      this.entries.size + additions.length > MAX_RELAY_TOOL_CALL_IDENTITIES ||
+      this.retainedBytes + additionBytes > MAX_RELAY_TOOL_CALL_IDENTITY_BYTES
     ) {
       if (!this.overflowReported) {
         this.overflowReported = true;

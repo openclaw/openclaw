@@ -19,7 +19,6 @@ export {
   mapLmstudioWireEntry,
   mapLmstudioWireModelsToConfig,
   normalizeLmstudioConfiguredCatalogEntries,
-  normalizeLmstudioConfiguredCatalogEntry,
   normalizeLmstudioProviderConfig,
   resolveLmstudioInferenceBase,
   resolveLmstudioReasoningCapability,

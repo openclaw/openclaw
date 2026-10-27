@@ -109,7 +109,7 @@ async function seedCompletedUsageSession(state: OpenClawTestState) {
     touchSessionEntry: false,
     updateMode: "none",
   });
-  expect(turn.appendedCount).toBe(2);
+  expect(turn.messages.filter((message) => message.appended)).toHaveLength(2);
 
   await upsertSessionEntryCore(scope, {
     ...entry,

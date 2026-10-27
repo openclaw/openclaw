@@ -47,7 +47,6 @@ function selectModel(owner: ModelOwner, isGmailHook = false) {
     agentId: owner.agentId,
     agentDir: owner.agentDir,
     workspaceDir: owner.workspaceDir,
-    payload: { kind: "agentTurn", message: "scheduled work" },
     sessionEntry: {},
     isGmailHook,
   });

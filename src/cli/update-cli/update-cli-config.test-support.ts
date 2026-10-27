@@ -3,6 +3,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { onTestFinished, vi, type Mock } from "vitest";
 import type { runPostCorePluginConvergence } from "../../commands/doctor/shared/post-core-plugin-convergence.js";
+import { createTestConfigSnapshot } from "../../commands/test-runtime-config-helpers.js";
 import type { readConfigFileSnapshot as ReadConfigFileSnapshot } from "../../config/config.js";
 import { resolveConfigPath } from "../../config/paths.js";
 import type {
@@ -48,20 +49,7 @@ export function createConfigValidationFailure(
 }
 
 export function createUpdateCliBaseSnapshot(config: OpenClawConfig): ConfigFileSnapshot {
-  return {
-    path: "/tmp/openclaw-config.json",
-    exists: true,
-    raw: "{}",
-    parsed: {},
-    resolved: config,
-    sourceConfig: config,
-    valid: true,
-    config,
-    runtimeConfig: config,
-    issues: [],
-    warnings: [],
-    legacyIssues: [],
-  };
+  return createTestConfigSnapshot(config, config, "/tmp/openclaw-config.json");
 }
 
 export const pluginSyncResult = (

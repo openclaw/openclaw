@@ -7,6 +7,8 @@ import {
   updateRunReportInputFromResult,
 } from "../../infra/update-run-report.js";
 import type { UpdateRunResult } from "../../infra/update-runner-types.js";
+import { updateResult } from "./update-command-maintenance-fixtures.test-support.js";
+import { createPostCorePluginUpdateResult } from "./update-command-plugins-internals.js";
 import { runPostActivationInspections } from "./update-command-post-activation-inspections.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -32,13 +34,11 @@ async function inspectFixture(
     root,
     gatewayReady: true,
     nodeRunner: process.execPath,
-    result: {
-      status: "ok",
-      mode: "npm",
+    result: updateResult({
       durationMs: 0,
       steps: [doctorStep(selectors, root)],
       ...result,
-    },
+    }),
   });
 }
 
@@ -103,70 +103,43 @@ process.exitCode = 13;
   );
 });
 
-it.each([null, "not-an-array", [" "], { length: 0 }].map((selectors) => ({ selectors })))(
-  "does not revive an earlier report when the latest Doctor selectors are unusable ($selectors)",
-  async ({ selectors }) => {
-    // Decode a malformed wire receipt rather than constructing a valid typed step.
-    const result: UpdateRunResult = JSON.parse(`{
-      "status": "ok", "mode": "git", "durationMs": 0,
-      "steps": ${JSON.stringify([
-        doctorStep(["core/doctor/command-owner"]),
-        {
-          ...doctorStep(null),
-          name: "post-plugin doctor",
-          deferredInspectionCheckIds: selectors,
-        },
-      ])}
-    }`);
-    const observed = await runPostActivationInspections({
-      root: "/synthetic/candidate",
-      gatewayReady: true,
-      result,
-    });
-    expect(observed.status).toBe("ok");
-    expect(observed.steps.at(-1)).toMatchObject({
-      name: "post-activation doctor inspections",
-      exitCode: null,
-      advisory: {
-        kind: "recoverable-maintenance",
-        message: expect.stringContaining("did not report usable deferred inspection selectors"),
-      },
-    });
-  },
-);
+it("does not revive an earlier report when the latest Doctor selectors are unusable", async () => {
+  const observed = await runPostActivationInspections({
+    root: "/synthetic/candidate",
+    gatewayReady: true,
+    result: updateResult({
+      mode: "git",
+      steps: [doctorStep(["core/doctor/command-owner"]), doctorStep([" "])],
+    }),
+  });
+  expect(observed.status).toBe("ok");
+  expect(observed.steps.at(-1)).toMatchObject({
+    name: "post-activation doctor inspections",
+    exitCode: null,
+    advisory: {
+      kind: "recoverable-maintenance",
+      message: expect.stringContaining("did not report usable deferred inspection selectors"),
+    },
+  });
+});
 
 it.each(["doctor", "inline lint"])(
   "does not turn an empty deferred set from %s into an unfiltered lint pass",
   async (receiptOwner) => {
-    const result: UpdateRunResult = {
-      status: "ok",
+    const result = updateResult({
       mode: "git",
       durationMs: 0,
       steps: [doctorStep(receiptOwner === "doctor" ? [] : null)],
-    };
+    });
     if (receiptOwner === "inline lint") {
       result.postUpdate = {
-        plugins: {
+        plugins: createPostCorePluginUpdateResult({
           status: "ok",
-          changed: false,
-          sync: {
-            changed: false,
-            switchedToBundled: [],
-            switchedToNpm: [],
-            warnings: [],
-            errors: [],
-          },
-          npm: { changed: false, outcomes: [] },
-          integrityDrifts: [],
           doctorLint: {
-            name: "post-plugin-doctor-lint",
+            ...doctorStep([]),
             command: "doctor --lint --all",
-            cwd: "/synthetic/candidate",
-            durationMs: 0,
-            exitCode: 0,
-            deferredInspectionCheckIds: [],
           },
-        },
+        }),
       };
     }
     await expect(

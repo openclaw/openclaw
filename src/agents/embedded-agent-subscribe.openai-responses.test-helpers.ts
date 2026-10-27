@@ -1,3 +1,5 @@
+import type { TextContent } from "../llm/types.js";
+
 /** Text phases used by OpenAI Responses subscribe test helpers. */
 export type OpenAiResponsesTextEventPhase = "commentary" | "final_answer";
 
@@ -15,7 +17,7 @@ export function createOpenAiResponsesTextBlock(params: {
       id: params.id,
       ...(params.phase ? { phase: params.phase } : {}),
     }),
-  };
+  } satisfies TextContent;
 }
 
 /** Builds an assistant partial update payload for OpenAI Responses subscribe tests. */

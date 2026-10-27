@@ -1,7 +1,6 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { DatabaseSync } from "node:sqlite";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { withConfigWriteLock } from "../config/write-lock.js";
 import { withGatewayServiceOperationLock } from "../daemon/service-operation-lock.js";
@@ -14,6 +13,7 @@ import * as pathCase from "./path-case.js";
 import { createManagedHandoffLeaseStore } from "./update-managed-service-handoff-lease.js";
 import {
   heldServiceLockCoordinate,
+  readManagedHandoffRowsJson,
   seedRetainedBorrower,
   type RetainedBorrowerSource,
 } from "./update-retained-custody.test-support.js";
@@ -101,18 +101,7 @@ function seedRetained(parent = acquire(), phase: "reserved" | "admitted" = "rese
   return result.lease;
 }
 
-function rows() {
-  const db = new DatabaseSync(path.join(fixture.root, "managed-update-handoffs.sqlite"), {
-    readOnly: true,
-  });
-  try {
-    return JSON.stringify(
-      db.prepare("SELECT * FROM managed_update_handoffs ORDER BY install_root").all(),
-    );
-  } finally {
-    db.close();
-  }
-}
+const rows = () => readManagedHandoffRowsJson(fixture.root);
 function snapshot(file: string) {
   const stat = fs.statSync(file);
   return { bytes: fs.readFileSync(file), dev: stat.dev, ino: stat.ino };

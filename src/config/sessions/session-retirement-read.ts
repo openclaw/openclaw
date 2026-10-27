@@ -90,14 +90,10 @@ export function withSessionRetirementReaders<T>(
   read: () => Promise<T>,
 ): Promise<T> {
   const databases = readers.map((reader) => reader.database);
-  return runOpenClawAgentWriteAdmissions(
-    databases,
-    async () => {
-      const assertNativeCurrent = captureSessionEntryNativeMutationWitness(databases);
-      const result = await read();
-      assertNativeCurrent();
-      return result;
-    },
-    true,
-  );
+  return runOpenClawAgentWriteAdmissions(databases, async () => {
+    const assertNativeCurrent = captureSessionEntryNativeMutationWitness(databases);
+    const result = await read();
+    assertNativeCurrent();
+    return result;
+  });
 }

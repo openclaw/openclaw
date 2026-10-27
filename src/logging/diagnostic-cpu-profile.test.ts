@@ -137,6 +137,40 @@ afterEach(() => {
 });
 
 describe("diagnostic CPU profile owner", () => {
+  it("preserves a large native graph while repairing names, URLs and signed script IDs", async () => {
+    const { parseNativeCpuProfile } = await import("./diagnostic-profile.js");
+    const nodes: Profiler.ProfileNode[] = Array.from({ length: 4_096 }, (_, index) => ({
+      id: index + 1,
+      hitCount: index % 3,
+      callFrame: {
+        functionName: `work${index}"\\\nlabel`,
+        lineNumber: index - 2,
+        columnNumber: -1,
+        scriptId: String(index - 2),
+        url: `file:///fixture/quoted"\\\nmodule${index}.js`,
+      },
+      ...(index < 4_095 ? { children: [index + 2] } : {}),
+      ...(index % 2 === 0
+        ? { deoptReason: "not optimized", positionTicks: [{ line: index, ticks: 2 }] }
+        : {}),
+    }));
+    const expected: Profiler.Profile = {
+      nodes,
+      startTime: 10_000,
+      endTime: 5_510_000,
+      samples: [4_096, 2, 4_096],
+      timeDeltas: [10_000, -500, 10_500],
+    };
+    // Match native field order and verbatim names/URLs, not JSON.stringify escaping.
+    const json = JSON.stringify(expected)
+      .replace(/"scriptId":"(-?\d+)"/g, '"scriptId":$1')
+      .replace(
+        /"(functionName|url)":("(?:\\.|[^"\\])*")/g,
+        (_match, key, value) => `"${key}":"${JSON.parse(value)}"`,
+      );
+    expect(parseNativeCpuProfile(json)).toStrictEqual(expected);
+  });
+
   it("reports disposal failure and allows a later native capture", async () => {
     Object.defineProperty(process.versions, "bun", { configurable: true, value: undefined });
     native.dispose.mockImplementationOnce(() => {

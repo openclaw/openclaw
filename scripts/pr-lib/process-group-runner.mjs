@@ -2,12 +2,10 @@ import { spawn, spawnSync } from "node:child_process";
 import {
   closeSync,
   fstatSync,
-  lstatSync,
   mkdirSync,
   mkdtempSync,
   readFileSync,
   readSync,
-  realpathSync,
   rmSync,
   symlinkSync,
   writeFileSync,
@@ -16,12 +14,20 @@ import { constants, tmpdir } from "node:os";
 import { basename, delimiter, dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { inspectManagedProcessGroup } from "../lib/managed-child-process.mts";
+import {
+  claimMaterializedAnchor,
+  retireMaterializedAnchor,
+  sweepMaterializedAnchors,
+} from "./materialized-anchor.mjs";
 
 const SIGNAL_GRACE_MS = 5000;
 const KILL_DRAIN_MS = 5000;
 const POLL_MS = 25;
 const MAX_NOTIFICATION_LINE_BYTES = 4096;
 const FORWARDED_SIGNALS = ["SIGHUP", "SIGINT", "SIGQUIT", "SIGTERM"];
+// Sourced helpers bypass scripts/pr's re-exec guard. Use system Bash on macOS
+// so PATH cannot reintroduce Bash 5.3's heredoc/here-string deadlock.
+const bash = process.platform === "darwin" ? "/bin/bash" : "bash";
 
 const [repoRootArg, script, ...args] = process.argv.slice(2);
 if (!repoRootArg || !script) {
@@ -34,50 +40,17 @@ if (process.platform === "win32") {
 }
 
 const repoRoot = resolve(repoRootArg);
-// Only the mktemp creator survives both execs as this supervisor. No child may
-// inherit cleanup authority, and an inherited pathname is never a deletion input.
-const anchorCreator = process.env.OPENCLAW_PR_ANCHOR_CREATOR_PID;
-const anchorFd = process.env.OPENCLAW_PR_ANCHOR_FD;
+const ownedAnchor = claimMaterializedAnchor(script);
 delete process.env.OPENCLAW_PR_ANCHOR_CREATOR_PID;
 delete process.env.OPENCLAW_PR_ANCHOR_FD;
-let ownedAnchor;
-if (anchorCreator === String(process.pid) && anchorFd === "9") {
-  let directoryFd = false;
-  try {
-    const path = dirname(dirname(resolve(script)));
-    const held = fstatSync(9, { bigint: true });
-    directoryFd = held.isDirectory();
-    const current = lstatSync(path, { bigint: true });
-    if (
-      basename(path).startsWith("openclaw-pr-anchor.") &&
-      resolve(script) === join(path, "scripts", "pr") &&
-      realpathSync(script) === resolve(script) &&
-      realpathSync(fileURLToPath(import.meta.url)) ===
-        join(path, "scripts", "pr-lib", "process-group-runner.mjs") &&
-      held.isDirectory() &&
-      current.isDirectory() &&
-      held.dev === current.dev &&
-      held.ino === current.ino &&
-      held.uid === BigInt(process.getuid()) &&
-      (held.mode & 0o777n) === 0o700n &&
-      held.mode === current.mode &&
-      held.uid === current.uid
-    ) {
-      ownedAnchor = { path, dev: held.dev, ino: held.ino, uid: held.uid, mode: held.mode };
-    }
-  } catch {
-    // Missing or replaced creation evidence is retain-only.
+// Startup failures have no operation child whose code could still be in use.
+let operationStarted = false;
+process.once("exit", () => {
+  if (!operationStarted) {
+    retireMaterializedAnchor(ownedAnchor);
   }
-  if (directoryFd) {
-    process.once("exit", () => {
-      try {
-        closeSync(9);
-      } catch {
-        // A missing creation FD never grants cleanup authority.
-      }
-    });
-  }
-}
+});
+sweepMaterializedAnchors(ownedAnchor);
 const workflowContext = process.env.OPENCLAW_PR_WORKFLOW_CONTEXT;
 if (workflowContext) {
   // Exec preserves the verified producer PID; only its child receives this FD.
@@ -120,7 +93,7 @@ const darwinIdentityScript = fileURLToPath(
 );
 if (process.platform === "darwin") {
   const identity = spawnSync(
-    "bash",
+    bash,
     [
       "-c",
       'source "$1"; pr_operation_lock_process_birth "$2"',
@@ -376,6 +349,7 @@ const child = spawn(script, args, {
     ? ["inherit", "inherit", "inherit", "pipe", "ignore", "ignore", "ignore", "ignore", 8]
     : ["inherit", "inherit", "inherit", "pipe"],
 });
+operationStarted = true;
 if (workflowContext) {
   closeSync(8);
 }
@@ -639,7 +613,7 @@ function releaseLock({ lockRef, ownerOid }) {
   const env = { ...process.env };
   delete env.OPENCLAW_PR_LOCK_NOTIFY_FD;
   const result = spawnSync(
-    "bash",
+    bash,
     [
       "-c",
       [
@@ -817,33 +791,11 @@ if (releaseAfterDrainedFailure) {
   }
 }
 
-if (
-  ownedAnchor &&
-  drainResult === "drained" &&
-  childResultAllowsLockRelease() &&
-  retainedLocks.length === 0 &&
-  !notificationFailure
-) {
-  try {
-    const held = fstatSync(9, { bigint: true });
-    const current = lstatSync(ownedAnchor.path, { bigint: true });
-    if (
-      current.isDirectory() &&
-      realpathSync(ownedAnchor.path) === ownedAnchor.path &&
-      [held, current].every(
-        (value) =>
-          value.dev === ownedAnchor.dev &&
-          value.ino === ownedAnchor.ino &&
-          value.uid === ownedAnchor.uid &&
-          value.mode === ownedAnchor.mode,
-      )
-    ) {
-      // rm does not follow the materializer's external dependency symlinks.
-      rmSync(ownedAnchor.path, { recursive: true });
-    }
-  } catch {
-    console.error("Warning: retaining the materialized PR wrapper after anchor cleanup failed.");
-  }
+if (drainResult === "drained") {
+  // Anchors hold code bytes, not PR state. A dead group and closed pipe leave
+  // only the fd-closing escapee residual already accepted on clean exits.
+  // Lock/merge recovery runs from trusted checkouts, never these anchor paths.
+  retireMaterializedAnchor(ownedAnchor);
 }
 
 if (notificationFailure) {

@@ -8,7 +8,7 @@ import {
 import { processProbeEntrypoints } from "../process-probes-runtime.test-support.js";
 
 it.skipIf(process.platform !== "linux" || !["x64", "arm64"].includes(process.arch))(
-  "retires A/B and failed startup with real kernel-denied group signals and complete output",
+  "reaps adopted children and preserves root results with kernel-denied group signals",
   async () => {
     const fixture = resolveRuntimeWorkerUrl(processProbeEntrypoints.serviceChildSubreaper);
     const { stdout } = await promisify(execFile)(
@@ -34,6 +34,7 @@ it.skipIf(process.platform !== "linux" || !["x64", "arm64"].includes(process.arc
         owner: "linux-subreaper",
       },
       { label: "realtime-signal", signalNumber: 34, extinct: true },
+      { label: "active-root-orphan", code: 37, signal: null, extinct: true },
       {
         label: "startup-failed",
         code: null,

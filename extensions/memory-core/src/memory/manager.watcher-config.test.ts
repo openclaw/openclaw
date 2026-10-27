@@ -14,6 +14,7 @@ import {
   resetMemoryCoreDreamingStateForTests,
 } from "../test-helpers.js";
 import { runInMemoryTestBackgroundContext } from "./background-context.test-support.js";
+import { MemoryIndexDatabase } from "./manager-database-context.js";
 import { MemoryIndexManager } from "./manager.js";
 
 // Keep owner fault injection in this process; real worker transport has separate coverage.
@@ -86,7 +87,7 @@ describe("Memory watch configuration", () => {
     (await active.search(text, { minScore: 0 })).map((result) => result.snippet);
 
   it("keeps a newer selected-file dirty behind held settling before publishing the index", async () => {
-    const { file, cfg, active } = await openManager("Initial indexed text.");
+    const { file, cfg, active, idle } = await openManager("Initial indexed text.");
     const debounceMs = resolveMemorySearchConfig(cfg, "main")!.sync.watchDebounceMs;
     const indexPath = active.status().dbPath;
     if (!indexPath) {
@@ -125,7 +126,7 @@ describe("Memory watch configuration", () => {
       }
       return opened;
     });
-    const sync = vi.spyOn(active, "sync");
+    const write = vi.spyOn(MemoryIndexDatabase.prototype, "replaceSource");
     const dirty = () =>
       entry.dirty([{ path: path.relative(entry.root.rootDir, file), type: "content" }]);
     vi.useFakeTimers();
@@ -134,13 +135,13 @@ describe("Memory watch configuration", () => {
       await fs.writeFile(file, "Intermediate write.");
       dirty();
       expect(active.status().dirty).toBe(true);
-      expect(sync).not.toHaveBeenCalled();
+      expect(write).not.toHaveBeenCalled();
       await vi.advanceTimersByTimeAsync(debounceMs);
       await entered.promise;
       await fs.writeFile(file, "Newest settled indexed text.");
       dirty();
       await vi.advanceTimersByTimeAsync(50);
-      expect(sync).not.toHaveBeenCalled();
+      expect(write).not.toHaveBeenCalled();
       expect(rows.all()).toEqual(initial);
 
       // An old sample cannot erase a newer event or publish an unsettled generation.
@@ -150,18 +151,18 @@ describe("Memory watch configuration", () => {
       await vi.advanceTimersByTimeAsync(100);
       await sampled[1]!.promise;
       await vi.advanceTimersByTimeAsync(0);
-      expect(sync).not.toHaveBeenCalled();
+      expect(write).not.toHaveBeenCalled();
       expect(rows.all()).toEqual(initial);
 
       await vi.advanceTimersByTimeAsync(debounceMs);
       await sampled[2]!.promise;
       await vi.advanceTimersByTimeAsync(0);
-      expect(sync).not.toHaveBeenCalled();
+      expect(write).not.toHaveBeenCalled();
       await vi.advanceTimersByTimeAsync(100);
       await sampled[3]!.promise;
       await vi.advanceTimersByTimeAsync(0);
-      expect(sync).toHaveBeenCalledExactlyOnceWith({ reason: "watch" });
-      await sync.mock.results[0]!.value;
+      await idle();
+      expect(write).toHaveBeenCalled();
       expect(rows.all()).toEqual([
         { path: "memory/note.md", text: "Newest settled indexed text." },
       ]);

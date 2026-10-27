@@ -2,6 +2,7 @@ import { expectDefined } from "@openclaw/normalization-core/expect";
 import { afterEach, expect, it, vi } from "vitest";
 import { memorySessionActorOwners } from "../../../config/sessions/session-actor-memory-owner.js";
 import { runWithSessionActorStorage } from "../../../config/sessions/session-actor-storage-binding.js";
+import type { InternalSessionEntry } from "../../../config/sessions/types.js";
 import { resolveIncognitoOpenClawAgentSqlitePath } from "../../../state/openclaw-agent-db.paths.js";
 import { createInitialSubagentSession } from "./subagent-spawn-session-patch.js";
 
@@ -27,6 +28,14 @@ afterEach(() => {
   vi.unstubAllEnvs();
 });
 
+function location(agentId: string, root = "/synthetic/spawn") {
+  return {
+    agentId,
+    path: resolveIncognitoOpenClawAgentSqlitePath({ agentId, env: { OPENCLAW_STATE_DIR: root } }),
+  };
+}
+const skill = { skillId: "skill", revision: "revision", name: "skill", ownerProfileId: null };
+
 it.each([
   { targetAgentId: "main", bound: true },
   { targetAgentId: "research", bound: true },
@@ -37,42 +46,28 @@ it.each([
     vi.stubEnv("OPENCLAW_STATE_DIR", "/synthetic/spawn");
     const parentKey = "agent:main:dashboard:incognito-spawn-parent";
     const childKey = `agent:${targetAgentId}:dashboard:incognito-spawn-child`;
-    const parent = memorySessionActorOwners.get({
-      agentId: "main",
-      path: resolveIncognitoOpenClawAgentSqlitePath({ agentId: "main" }),
-    });
-    const childPath = resolveIncognitoOpenClawAgentSqlitePath({ agentId: targetAgentId });
+    const parent = memorySessionActorOwners.get(location("main"));
     // The selected parent namespace must not capture another state root's matching agent.
-    const foreign = memorySessionActorOwners.get({
-      agentId: targetAgentId,
-      path: resolveIncognitoOpenClawAgentSqlitePath({
-        agentId: targetAgentId,
-        env: { OPENCLAW_STATE_DIR: "/synthetic/foreign" },
-      }),
-    });
+    const foreign = memorySessionActorOwners.get(location(targetAgentId, "/synthetic/foreign"));
     const actor = await parent.acquire(
       { database: parent.identity, sessionKey: parentKey },
       { assertCurrent() {}, assertReadable() {} },
     );
     const authority = { assertCurrent() {}, authorize() {} };
-    const initialized = await actor.storage!.mutate(
-      {
-        type: "session.entry.create",
-        input: {
-          entry: {
-            sessionId: "parent-session",
-            lifecycleRevision: "parent-lifecycle",
-            updatedAt: 1,
-            incognito: true,
-            skillLibrarySelections: [
-              { skillId: "skill", revision: "revision", name: "skill", ownerProfileId: null },
-            ],
-          },
-        },
-      },
-      authority,
+    const entry = {
+      sessionId: "parent-session",
+      lifecycleRevision: "parent-lifecycle",
+      updatedAt: 1,
+      incognito: true,
+      skillLibrarySelections: [{ ...skill }],
+    } satisfies InternalSessionEntry;
+    await expect(
+      actor.storage!.mutate({ type: "session.entry.create", input: { entry } }, authority),
+    ).resolves.toMatchObject({ kind: "committed" });
+    const storedParent = expectDefined(
+      parent.readSession(parentKey, authority)?.entry,
+      "parent session entry",
     );
-    expect(initialized.kind).toBe("committed");
     const create = () =>
       createInitialSubagentSession({
         cfg: {},
@@ -84,12 +79,7 @@ it.each([
           storePath: parent.path,
           canonicalKey: parentKey,
           storeKeys: [parentKey],
-          store: {
-            [parentKey]: expectDefined(
-              parent.readSession(parentKey, authority)?.entry,
-              "parent session entry",
-            ),
-          },
+          store: { [parentKey]: storedParent },
         },
         childSessionKey: childKey,
         incognito: true,
@@ -102,16 +92,14 @@ it.each([
     const result = await (bound
       ? runWithSessionActorStorage({ actor, authority, agentId: "main", path: parent.path }, create)
       : create());
-    const childOwner = memorySessionActorOwners.read({ agentId: targetAgentId, path: childPath });
+    const childOwner = memorySessionActorOwners.read(location(targetAgentId));
     expect(result.status).toBe("ok");
     expect(childOwner?.readSession(childKey, authority)?.entry).toMatchObject({
       incognito: true,
       spawnedBy: parentKey,
       parentSessionKey: parentKey,
       completionOwnerSessionKey: parentKey,
-      skillLibrarySelections: [
-        { skillId: "skill", revision: "revision", name: "skill", ownerProfileId: null },
-      ],
+      skillLibrarySelections: [skill],
     });
     expect(parent.readSession(parentKey, authority)?.entry?.sessionId).toBe("parent-session");
     expect(foreign.readSession(childKey, authority)).toBeUndefined();

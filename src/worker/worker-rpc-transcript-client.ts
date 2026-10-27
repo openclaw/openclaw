@@ -1,10 +1,9 @@
 import {
   WORKER_TRANSCRIPT_MAX_BATCH_MESSAGES,
-  type WorkerTranscriptCommitRequestFrame,
   type WorkerTranscriptCommitResult,
   type WorkerTranscriptMessage,
 } from "../../packages/gateway-protocol/src/schema/worker-admission.js";
-import { isWorkerTranscriptFrameWithinBudget } from "../../packages/gateway-protocol/src/worker-transcript-budget.js";
+import { takeFittingWorkerTranscriptBatch } from "../../packages/gateway-protocol/src/worker-transcript-budget.js";
 import { type WorkerConnection, WorkerConnectionInterruptedError } from "./worker-connection.js";
 import type { TranscriptResponseError } from "./worker-rpc-client-shared.js";
 import { fenceForOwnershipError } from "./worker-rpc-client-shared.js";
@@ -52,6 +51,10 @@ export class WorkerTranscriptCommitClient {
     return this.nextSeqValue;
   }
 
+  admitInput(baseLeafId: string | null): void {
+    this.baseLeafIdValue = baseLeafId;
+  }
+
   async commit(
     messages: readonly WorkerTranscriptMessage[],
   ): Promise<WorkerTranscriptCommitResult> {
@@ -61,7 +64,9 @@ export class WorkerTranscriptCommitClient {
     const entryIds: string[] = [];
     let offset = 0;
     while (offset < messages.length) {
-      const batch = this.takeFittingBatch(messages.slice(offset));
+      const batch = this.takeFittingBatch(
+        messages.slice(offset, offset + WORKER_TRANSCRIPT_MAX_BATCH_MESSAGES),
+      );
       const result = await this.commitBatch(batch);
       entryIds.push(...result.entryIds);
       offset += batch.length;
@@ -73,36 +78,26 @@ export class WorkerTranscriptCommitClient {
     return { entryIds, newLeafId };
   }
 
-  private takeFittingBatch(
-    messages: readonly WorkerTranscriptMessage[],
-  ): WorkerTranscriptMessage[] {
-    let batch: WorkerTranscriptMessage[] = [];
-    for (const message of messages.slice(0, WORKER_TRANSCRIPT_MAX_BATCH_MESSAGES)) {
-      const candidate = [...batch, message];
-      const frame: WorkerTranscriptCommitRequestFrame = {
-        type: "req",
-        id: TRANSCRIPT_SIZE_FRAME_ID,
-        method: "worker.transcript.commit",
-        params: {
-          runEpoch: this.options.runEpoch,
-          seq: this.nextSeqValue,
-          baseLeafId: this.baseLeafIdValue,
-          messages: candidate,
-        },
-      };
-      if (!isWorkerTranscriptFrameWithinBudget(frame)) {
-        if (batch.length === 0) {
-          throw new Error("worker transcript message exceeds the protocol payload limit");
-        }
-        break;
-      }
-      batch = candidate;
+  private takeFittingBatch(messages: WorkerTranscriptMessage[]): WorkerTranscriptMessage[] {
+    const batch = takeFittingWorkerTranscriptBatch({
+      type: "req",
+      id: TRANSCRIPT_SIZE_FRAME_ID,
+      method: "worker.transcript.commit",
+      params: {
+        runEpoch: this.options.runEpoch,
+        seq: this.nextSeqValue,
+        baseLeafId: this.baseLeafIdValue,
+        messages,
+      },
+    });
+    if (batch.length === 0) {
+      throw new Error("worker transcript message exceeds the protocol payload limit");
     }
     return batch;
   }
 
   private async commitBatch(
-    messages: readonly WorkerTranscriptMessage[],
+    messages: WorkerTranscriptMessage[],
   ): Promise<WorkerTranscriptCommitResult> {
     if (this.terminalFailure) {
       throw this.terminalFailure;
@@ -111,7 +106,7 @@ export class WorkerTranscriptCommitClient {
       runEpoch: this.options.runEpoch,
       seq: this.nextSeqValue,
       baseLeafId: this.baseLeafIdValue,
-      messages: [...messages],
+      messages,
     };
     while (true) {
       await this.connection.waitForReady();

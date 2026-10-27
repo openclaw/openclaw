@@ -12,12 +12,11 @@ import { registerPersonActivityData } from "./person-activity-data.ts";
 import type { SidebarPeopleRuntime } from "./sidebar-people.runtime.ts";
 
 export type SidebarPeopleStatusFilter = "all" | "running";
-export type SidebarPeoplePresenceFilter = "online" | "all";
 export type SidebarPeopleSortMode = "presence" | "running" | "open" | "name";
 
 /** Snapshot restoration reads these choices synchronously, before view consumers run. */
 export class SidebarPeoplePreferences {
-  presenceFilter: SidebarPeoplePresenceFilter = "online";
+  presenceFilter: "online" | "all" = "online";
   statusFilter: SidebarPeopleStatusFilter = "all";
   sortMode: SidebarPeopleSortMode = "presence";
 

@@ -3,7 +3,7 @@
 import { afterEach, expect, it, onTestFinished, vi } from "vitest";
 import type { AgentRuntimeRestrictionErrorDetails } from "../../../../packages/gateway-protocol/src/index.js";
 import { createDeferred } from "../../../../test/helpers/promise.js";
-import { GatewayRequestError } from "../../api/gateway.ts";
+import { GatewayRequestError } from "../../api/gateway-connect-errors.ts";
 import type { SessionsPatchResult } from "../../api/types.ts";
 import { createSessionsListResult } from "../../test-helpers/chat-model.ts";
 import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
@@ -11,7 +11,7 @@ import { sessionMutationGatewayHello } from "../../test-helpers/gateway-methods.
 import { waitForConfirmDialogActions } from "../../test-helpers/modal-dialog.ts";
 import { createStorageMock } from "../../test-helpers/storage.ts";
 import { waitForFast } from "../../test-helpers/wait-for.ts";
-import { makeChatHost, requestCalls } from "./chat-host.test-support.ts";
+import { makeChatHost, requestCalls, expectRequestCounts } from "./chat-host.test-support.ts";
 import { handleSendChat } from "./chat-send-submit.ts";
 import { retireChatModelSelectionOwnership, switchChatModel } from "./chat-session.ts";
 import { getPendingChatPickerPatch, patchChatSessionSettings } from "./chat-settings-patches.ts";
@@ -252,11 +252,7 @@ it.each([false, true])(
       expectedSandboxMode: null,
       expectedNativeRuntimeConsent: null,
     });
-    expect(
-      host.request.mock.calls.some(
-        ([method]) => method === "chat.send" || method === "config.patch",
-      ),
-    ).toBe(false);
+    expectRequestCounts(host.request, { "chat.send": 0, "config.patch": 0 });
     expect(host.chatMessage).toBe("Keep this draft; never replay it");
     expect(host.chatError ?? null).toEqual(
       rejectRecovery ? expect.stringContaining("Session changed") : null,
@@ -460,6 +456,5 @@ it("does not adopt an unrelated incarnation after a first-send refusal", async (
   });
   await handleSendChat(host);
   expect(document.querySelector("openclaw-modal-dialog")).toBeNull();
-  expect(requestCalls(host.request, "chat.send")).toHaveLength(1);
-  expect(requestCalls(host.request, "sessions.patch")).toEqual([]);
+  expectRequestCounts(host.request, { "chat.send": 1, "sessions.patch": 0 });
 });

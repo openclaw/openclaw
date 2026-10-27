@@ -41,6 +41,8 @@ export type McpServerCatalog = {
   marketplace?: string;
   title?: string;
   icons?: McpAppIcon[];
+  /** Complete server-level guidance from the upstream initialize result. */
+  instructions?: string;
   settings?: McpAppSettingsCapability;
   toolCount: number;
   resources?: {
@@ -258,7 +260,7 @@ export type SessionMcpRuntimeManager = {
   completeDeferredRetirement: (sessionId: string, runtime?: SessionMcpRuntime) => Promise<boolean>;
   reloadConfig: (params: SessionMcpConfigReload) => Promise<void>;
   disposeAll: () => Promise<void>;
-  sweepIdleRuntimes: () => Promise<number>;
+  sweepIdleRuntimes: () => Promise<void>;
   listSessionIds: () => string[];
   /** All managed cache keys (session ids and requester composite keys). */
   listRuntimeKeys: () => string[];

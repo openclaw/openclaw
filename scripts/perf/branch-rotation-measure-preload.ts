@@ -3,6 +3,8 @@ import { isMainThread } from "node:worker_threads";
 import { isRecord } from "../../packages/normalization-core/src/record-coerce.ts";
 import { getTrackedWorkerLifecycleSnapshot } from "../../src/infra/worker-cpu.ts";
 
+const memoryPressure = channel("openclaw.memory.critical");
+
 // The private benchmark IPC descriptor is the only control surface. Use the real
 // pressure owner to retire idle readers; measured requests still use Gateway RPC.
 if (isMainThread) {
@@ -14,7 +16,7 @@ if (isMainThread) {
       return;
     }
     if (message.action === "retire-idle") {
-      channel("openclaw.memory.critical").publish({});
+      memoryPressure.publish({});
     } else if (message.action !== "sample") {
       return;
     }

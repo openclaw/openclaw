@@ -12,6 +12,7 @@ import {
   type WorkerNodePlacementAuthority,
 } from "./device-placement-eligibility.js";
 import { DEVICE_WORKER_PROVIDER_ID } from "./device-provider-identity.js";
+import type { WorkerEnvironmentReconcileCore } from "./environment-reconcile.types.js";
 import { composePlacementAuthorization } from "./placement-authorization.js";
 import type {
   PlacementFailureActions,
@@ -40,7 +41,6 @@ import {
   type WorkerPlacementDispatchRequest,
 } from "./service-contract.js";
 import type { WorkerEnvironmentService } from "./service.js";
-import type { WorkerEnvironmentReconcileCore } from "./service.types.js";
 import type { WorkerSessionWorkspace } from "./session-workspace.js";
 import { AcceptedWorkspacePublicationIndeterminateError } from "./workspace-accepted-publication.js";
 
@@ -293,6 +293,7 @@ export function createWorkerPlacementDispatchStartup(options: {
       environmentId: provisioned.environmentId,
       ownerEpoch: provisioned.ownerEpoch,
       sessionId: request.sessionId,
+      assertCurrent: assertAttachmentCurrent,
       ...(params.environment.preparation
         ? {
             placementBinding: {

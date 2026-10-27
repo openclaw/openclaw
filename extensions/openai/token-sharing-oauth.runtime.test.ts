@@ -33,6 +33,8 @@ const exchangeForm = () =>
   request.mock.calls.find(([params]) => params.init?.method === "POST")![0].init
     .body as URLSearchParams;
 const callbackStatus = async () => (await callbackResponse!).status;
+const mockTokens = (body: Record<string, unknown>, status = 200) =>
+  request.mockResolvedValue(oauthResponse(body, status));
 
 function existingCredential(overrides: Partial<OAuthCredential> = {}): OAuthCredential {
   return {
@@ -117,18 +119,22 @@ function context(overrides: Partial<ProviderAuthContext> = {}): ProviderAuthCont
   } as unknown as ProviderAuthContext;
 }
 
-function reconnectProfile(
+function reconnectContext(
   credential: OAuthCredential,
   state: "without-id-token" | "legacy" | "unbound",
 ) {
-  return {
-    profileId: "openai:my-account",
-    credential: {
-      ...credential,
-      ...(state !== "without-id-token" && { accountId: undefined }),
-      ...(state !== "legacy" && { idToken: undefined }),
-    },
-  };
+  return context({
+    existingProfiles: [
+      {
+        profileId: "openai:my-account",
+        credential: {
+          ...credential,
+          ...(state !== "without-id-token" && { accountId: undefined }),
+          ...(state !== "legacy" && { idToken: undefined }),
+        },
+      },
+    ],
+  });
 }
 
 function oauthCredential(result: Awaited<ReturnType<typeof loginTokenSharing>>) {
@@ -194,24 +200,19 @@ describe("ChatGPT token-sharing authorization", () => {
     { name: "unsafe exp", exp: Number.MAX_SAFE_INTEGER, ttl: 3600, expected: 1_800_004_260_000 },
   ])("bounds refreshed credential expiry: $name", async ({ exp, opaque, ttl, expected }) => {
     const credential = existingCredential({
-      access: "synthetic-old-access",
-      refresh: "synthetic-refresh",
-      expires: 1_800_003_600_000,
       idToken: jwt({ sub: "user-1" }),
+      expires: 1_800_003_600_000,
       grantedScope: TOKEN_SHARING_SCOPE,
     });
-    request.mockResolvedValue(
-      oauthResponse({
-        access_token: opaque ? "synthetic-opaque-access" : jwt({ exp }),
-        expires_in: ttl,
-        token_type: "Bearer",
-      }),
-    );
+    mockTokens({
+      access_token: opaque ? "synthetic-opaque-access" : jwt({ exp }),
+      expires_in: ttl,
+      token_type: "Bearer",
+    });
     const clock = vi.spyOn(Date, "now").mockReturnValue(1_800_000_660_000);
     try {
       const refreshed = await refreshTokenSharingCredential(credential);
-      expect(refreshed.expires).toBe(expected);
-      expect(refreshed.accountId).toBe(credential.accountId);
+      expect(refreshed).toMatchObject({ expires: expected, accountId: credential.accountId });
     } finally {
       clock.mockRestore();
     }
@@ -233,9 +234,7 @@ describe("ChatGPT token-sharing authorization", () => {
       expect(message).toContain("8080:127.0.0.1:8080");
       await visitBrowser(pendingUrl!);
     });
-    const result = await loginTokenSharing(ctx);
-    expect(result.profiles[0]?.credential).toMatchObject({ access: "opaque-test-access" });
-    expect(await callbackStatus()).toBe(200);
+    await expectConnected(await loginTokenSharing(ctx));
   });
 
   it("restarts a cancelled login without accepting its stale callback", async () => {
@@ -349,18 +348,14 @@ describe("ChatGPT token-sharing authorization", () => {
       expect(request.mock.calls[0]![0].init.body.get("client_id")).toBe(registeredId);
       expect(refreshed.clientId).toBe(registeredId);
 
-      const reconnect = context({
-        existingProfiles: [
-          reconnectProfile(
-            {
-              ...credential,
-              authorizationScope:
-                "openid email profile resource.invoke chatpass.enable.request.direct offline_access",
-            },
-            state,
-          ),
-        ],
-      });
+      const reconnect = reconnectContext(
+        {
+          ...credential,
+          authorizationScope:
+            "openid email profile resource.invoke chatpass.enable.request.direct offline_access",
+        },
+        state,
+      );
       callbackClientIds = [];
       const reconnected = await method.run(reconnect);
       expect(Object.fromEntries(authorization.searchParams)).toMatchObject({
@@ -394,7 +389,7 @@ describe("ChatGPT token-sharing authorization", () => {
     async (state) => {
       const credential = await loginCredential();
       await (await callbackResponse!).text();
-      const ctx = context({ existingProfiles: [reconnectProfile(credential, state)] });
+      const ctx = reconnectContext(credential, state);
       identity.sub = state === "unbound" ? "user-1" : "another-user";
       await expectRejected(ctx, "ChatGPT account changed");
     },
@@ -479,15 +474,13 @@ describe("ChatGPT token-sharing authorization", () => {
       identity.email = "owner@example.test";
       const credential = await loginCredential();
       request.mockClear();
-      request.mockResolvedValue(
-        oauthResponse({
-          access_token: "renewed-access",
-          token_type: "Bearer",
-          expires_in: 3600,
-          ...(replacement ? { refresh_token: replacement } : {}),
-          ...(scope === undefined ? {} : { scope }),
-        }),
-      );
+      mockTokens({
+        access_token: "renewed-access",
+        token_type: "Bearer",
+        expires_in: 3600,
+        ...(replacement ? { refresh_token: replacement } : {}),
+        ...(scope === undefined ? {} : { scope }),
+      });
       // Existing SIWC profiles may retain the verified token without its email metadata.
       const refreshed = await refreshTokenSharingCredential({ ...credential, email: undefined });
       expect(Object.fromEntries(request.mock.calls[0]![0].init.body)).toEqual({
@@ -516,8 +509,7 @@ describe("ChatGPT token-sharing authorization", () => {
       const credential = await loginCredential();
       identity.email = email;
       const refreshed = await refreshTokenSharingCredential(credential);
-      expect(refreshed.email).toBe(email);
-      expect(refreshed.accountId).toBe(credential.accountId);
+      expect(refreshed).toMatchObject({ email, accountId: credential.accountId });
     },
   );
 
@@ -539,9 +531,7 @@ describe("ChatGPT token-sharing authorization", () => {
 
   it("classifies revoked refreshes without exposing the provider response or credentials", async () => {
     const credential = await loginCredential();
-    request.mockResolvedValue(
-      oauthResponse({ error: "invalid_grant", error_description: "secret-provider-detail" }, 400),
-    );
+    mockTokens({ error: "invalid_grant", error_description: "secret-provider-detail" }, 400);
     await expect(refreshTokenSharingCredential(credential)).rejects.toMatchObject({
       message: "ChatGPT connection expired or was revoked. Sign in again to reconnect.",
       oauthRefreshFailure: { reason: "invalid_grant" },

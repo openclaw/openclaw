@@ -1,3 +1,5 @@
+import { pruneMapToMaxSize } from "openclaw/plugin-sdk/collection-runtime";
+
 const TOKEN_RATE_LIMIT = 10;
 const TOKEN_GLOBAL_RATE_LIMIT = 60;
 const TOKEN_RATE_WINDOW_MS = 60_000;
@@ -7,20 +9,15 @@ export class TokenRateLimiter {
   private readonly attempts = new Map<string, number[]>();
   private globalAttempts: Array<{ at: number }> = [];
 
-  constructor(private readonly now: () => number) {}
-
   allowKey(key: string): boolean {
-    const now = this.now();
+    const now = Date.now();
     const active = (this.attempts.get(key) ?? []).filter(
       (timestamp) => timestamp > now - TOKEN_RATE_WINDOW_MS,
     );
     const allowed = active.length < TOKEN_RATE_LIMIT;
     if (allowed) {
       if (!this.attempts.has(key) && this.attempts.size >= TOKEN_RATE_MAX_KEYS) {
-        const oldestKey = this.attempts.keys().next().value;
-        if (typeof oldestKey === "string") {
-          this.attempts.delete(oldestKey);
-        }
+        pruneMapToMaxSize(this.attempts, TOKEN_RATE_MAX_KEYS - 1);
       }
       active.push(now);
     }
@@ -30,7 +27,7 @@ export class TokenRateLimiter {
   }
 
   reserveGlobal(): { at: number } | null {
-    const now = this.now();
+    const now = Date.now();
     this.globalAttempts = this.globalAttempts.filter(
       (reservation) => reservation.at > now - TOKEN_RATE_WINDOW_MS,
     );

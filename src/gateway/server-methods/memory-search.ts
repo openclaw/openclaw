@@ -21,9 +21,14 @@ import {
 import { loadBundledPluginPublicArtifactModuleSync } from "../../plugins/public-surface-loader.js";
 import { normalizeAgentId } from "../../routing/session-key.js";
 import {
+  captureChannelReadScope,
+  withChannelReadAuthority,
+} from "../../shared/channel-read-authority.js";
+import {
+  captureLocalStateMutationGuard,
   localStateOwnerChangedError,
-  runWithLocalStateMutationOwner,
 } from "./local-state-owner.js";
+import { respondError } from "./response.js";
 import type { GatewayRequestHandlerOptions, GatewayRequestHandlers } from "./types.js";
 
 const DEFAULT_MAX_RESULTS = 20;
@@ -86,31 +91,24 @@ async function searchMemory(options: GatewayRequestHandlerOptions, assertCurrent
     return;
   }
   if (params?.version !== undefined && params.version !== 1) {
-    respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "unsupported memory version"));
+    respondError(respond, ErrorCodes.INVALID_REQUEST, "unsupported memory version");
     return;
   }
   const record = params && typeof params === "object" ? (params as Record<string, unknown>) : {};
   const query = typeof record.query === "string" ? record.query : "";
   const searchQuery = assertCurrent ? query : query.trim();
   if (!query.trim()) {
-    respond(
-      false,
-      undefined,
-      errorShape(ErrorCodes.INVALID_REQUEST, "query must be a non-empty string"),
-    );
+    respondError(respond, ErrorCodes.INVALID_REQUEST, "query must be a non-empty string");
     return;
   }
   const searchOptions = resolveSearchOptions(record, Boolean(assertCurrent));
   if (!searchOptions) {
-    respond(
-      false,
-      undefined,
-      errorShape(
-        ErrorCodes.INVALID_REQUEST,
-        assertCurrent
-          ? "maxResults must be a positive integer and minScore a finite number when provided"
-          : "maxResults and minScore must be finite numbers when provided",
-      ),
+    respondError(
+      respond,
+      ErrorCodes.INVALID_REQUEST,
+      assertCurrent
+        ? "maxResults must be a positive integer and minScore a finite number when provided"
+        : "maxResults and minScore must be finite numbers when provided",
     );
     return;
   }
@@ -119,30 +117,27 @@ async function searchMemory(options: GatewayRequestHandlerOptions, assertCurrent
   if (assertCurrent) {
     const slot = normalizePluginsConfig(cfg.plugins).slots.memory;
     if (slot !== "memory-core") {
-      respond(
-        false,
-        undefined,
-        errorShape(
-          ErrorCodes.INVALID_REQUEST,
-          `Memory Core search is unavailable for the selected memory slot. Use the selected plugin's memory tools.`,
-        ),
+      respondError(
+        respond,
+        ErrorCodes.INVALID_REQUEST,
+        `Memory Core search is unavailable for the selected memory slot. Use the selected plugin's memory tools.`,
       );
       return;
     }
   }
   const hasAgentId = Object.hasOwn(record, "agentId");
   if (hasAgentId && typeof record.agentId !== "string") {
-    respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "agentId must be a string"));
+    respondError(respond, ErrorCodes.INVALID_REQUEST, "agentId must be a string");
     return;
   }
   if (hasAgentId && !hasUsableAgentIdInput(record.agentId as string)) {
-    respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "unknown agentId"));
+    respondError(respond, ErrorCodes.INVALID_REQUEST, "unknown agentId");
     return;
   }
   const requestedAgentId = hasAgentId ? normalizeAgentId(record.agentId as string) : null;
   // Read-scoped input must not bootstrap state or index files for invented agent namespaces.
   if (requestedAgentId !== null && !listAgentIds(cfg).includes(requestedAgentId)) {
-    respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, "unknown agentId"));
+    respondError(respond, ErrorCodes.INVALID_REQUEST, "unknown agentId");
     return;
   }
   let agentId = requestedAgentId;
@@ -156,7 +151,7 @@ async function searchMemory(options: GatewayRequestHandlerOptions, assertCurrent
       if (!(error instanceof AgentSelectionRequiredError)) {
         throw error;
       }
-      respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, error.message));
+      respondError(respond, ErrorCodes.INVALID_REQUEST, error.message);
       return;
     }
   }
@@ -165,17 +160,22 @@ async function searchMemory(options: GatewayRequestHandlerOptions, assertCurrent
     ? resolveActiveMemoryBackendConfig({ cfg, agentId })
     : null;
   if (backend?.backend === "provider-runtime") {
-    respond(
-      false,
-      undefined,
-      errorShape(
-        ErrorCodes.INVALID_REQUEST,
-        `memory plugin "${backend.providerId}" uses the provider runtime; retry memory.search with version: 2`,
-      ),
+    respondError(
+      respond,
+      ErrorCodes.INVALID_REQUEST,
+      `memory plugin "${backend.providerId}" uses the provider runtime; retry memory.search with version: 2`,
     );
     return;
   }
-  let acquired: Awaited<ReturnType<typeof getActiveMemorySearchManagerCore>>;
+  let acquired: Awaited<ReturnType<typeof getActiveMemorySearchManagerCore>> | undefined;
+  const readScope = assertCurrent ? captureChannelReadScope() : undefined;
+  // Register before acquisition so revoked reads still close the returned manager.
+  readScope?.registerResource({
+    key: "memory-search-manager",
+    settle: async () => {
+      await acquired?.manager?.close?.();
+    },
+  });
   try {
     // Use the transient CLI lifecycle so request cleanup cannot close a shared manager.
     // manager.search owns the same lazy/on-search sync behavior as the existing CLI path.
@@ -186,10 +186,10 @@ async function searchMemory(options: GatewayRequestHandlerOptions, assertCurrent
       ...(assertCurrent ? { inspectSources: true } : {}),
     });
   } catch (error) {
-    respond(
-      false,
-      undefined,
-      errorShape(ErrorCodes.UNAVAILABLE, `memory search unavailable: ${formatErrorMessage(error)}`),
+    respondError(
+      respond,
+      ErrorCodes.UNAVAILABLE,
+      `memory search unavailable: ${formatErrorMessage(error)}`,
     );
     return;
   }
@@ -203,11 +203,7 @@ async function searchMemory(options: GatewayRequestHandlerOptions, assertCurrent
       respond(true, outcome, undefined);
       return;
     }
-    respond(
-      false,
-      undefined,
-      errorShape(ErrorCodes.UNAVAILABLE, acquireError ?? "memory search unavailable"),
-    );
+    respondError(respond, ErrorCodes.UNAVAILABLE, acquireError ?? "memory search unavailable");
     return;
   }
 
@@ -233,9 +229,11 @@ async function searchMemory(options: GatewayRequestHandlerOptions, assertCurrent
     const { captureMemoryRebuildNotice } = loadBundledPluginPublicArtifactModuleSync<{
       captureMemoryRebuildNotice: (status: MemoryProviderStatus) => () => string | undefined;
     }>({ dirName: "memory-core", artifactBasename: "search-api.js" });
-    readRebuildWarning = captureMemoryRebuildNotice(await readMemorySearchManagerStatus(manager));
+    readRebuildWarning = captureMemoryRebuildNotice(
+      await readMemorySearchManagerStatus(manager, { includeCounts: false }),
+    );
     const results = await manager.search(searchQuery, searchOptions);
-    const status = await readMemorySearchManagerStatus(manager);
+    const status = await readMemorySearchManagerStatus(manager, { includeCounts: false });
     const staleness = resolveMemorySearchStaleness(status, agentId);
     const warning = [staleness?.warning, readRebuildWarning()]
       .filter((message): message is string => typeof message === "string")
@@ -250,20 +248,15 @@ async function searchMemory(options: GatewayRequestHandlerOptions, assertCurrent
     };
     respond(true, payload, undefined);
   } catch (error) {
-    respond(
-      false,
-      undefined,
-      errorShape(
-        ErrorCodes.UNAVAILABLE,
-        [`memory search failed: ${formatErrorMessage(error)}`, readRebuildWarning()]
-          .filter(Boolean)
-          .join(" "),
-      ),
+    respondError(
+      respond,
+      ErrorCodes.UNAVAILABLE,
+      [`memory search failed: ${formatErrorMessage(error)}`, readRebuildWarning()]
+        .filter(Boolean)
+        .join(" "),
     );
   } finally {
-    if (assertCurrent) {
-      await manager.close?.();
-    } else {
+    if (!readScope) {
       await manager.close?.().catch(() => {});
     }
   }
@@ -283,21 +276,17 @@ export const memorySearchHandlers: GatewayRequestHandlers = {
   "memory.search.owner": async (options) => {
     const expectedOwnerId = options.params?.expectedOwnerId;
     if (typeof expectedOwnerId !== "string" || !expectedOwnerId.trim()) {
-      options.respond(
-        false,
-        undefined,
-        errorShape(ErrorCodes.INVALID_REQUEST, "expectedOwnerId is required"),
-      );
+      respondError(options.respond, ErrorCodes.INVALID_REQUEST, "expectedOwnerId is required");
       return;
     }
     let domainEntered = false;
     try {
-      let response: Parameters<GatewayRequestHandlerOptions["respond"]> | undefined;
-      const assertOwnerCurrent = await runWithLocalStateMutationOwner(
-        expectedOwnerId,
-        options,
-        async (assertCurrent) => {
+      const assertCurrent = captureLocalStateMutationGuard(expectedOwnerId, options);
+      await withChannelReadAuthority(
+        assertCurrent,
+        async () => {
           domainEntered = true;
+          let response: Parameters<GatewayRequestHandlerOptions["respond"]> | undefined;
           await searchMemory(
             {
               ...options,
@@ -307,13 +296,15 @@ export const memorySearchHandlers: GatewayRequestHandlers = {
             },
             assertCurrent,
           );
-          return assertCurrent;
+          return response;
+        },
+        options.signal,
+        (response) => {
+          if (response) {
+            options.respond(...response);
+          }
         },
       );
-      assertOwnerCurrent();
-      if (response) {
-        options.respond(...response);
-      }
     } catch (error) {
       options.respond(
         false,

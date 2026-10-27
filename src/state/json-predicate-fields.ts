@@ -7,6 +7,7 @@ export type JsonPredicateToken = {
 export function scanJsonObjectFields(json: string, fields: readonly string[]) {
   const first = new Map<string, JsonPredicateToken>();
   const last = new Map<string, JsonPredicateToken>();
+  const duplicateKeys = new Set<string>();
   const wanted = new Set(fields);
   let offset = 0;
   let maximumDepth = 0;
@@ -97,6 +98,9 @@ export function scanJsonObjectFields(json: string, fields: readonly string[]) {
               first.set(firstKey, token);
             }
             if (keepLast) {
+              if (last.has(key)) {
+                duplicateKeys.add(key);
+              }
               last.set(key, token);
             }
           }
@@ -133,13 +137,14 @@ export function scanJsonObjectFields(json: string, fields: readonly string[]) {
     if (offset !== json.length && json[offset] !== "\0") {
       fail();
     }
-    return { valid: true, maximumDepth, first, last };
+    return { valid: true, maximumDepth, first, last, duplicateKeys };
   } catch {
     return {
       valid: false,
       maximumDepth,
       first: new Map<string, JsonPredicateToken>(),
       last: new Map<string, JsonPredicateToken>(),
+      duplicateKeys: new Set<string>(),
     };
   }
 }

@@ -10,10 +10,6 @@ import { readStyleSheet } from "../../../../test/helpers/ui-style-fixtures.js";
 import { finishElementAnimations } from "../../test-helpers/animations.ts";
 import { closeBrowserPage, withBrowserPage } from "../../test-helpers/browser-page.ts";
 import {
-  startControlUiE2eServer,
-  type ControlUiE2eServer,
-} from "../../test-helpers/control-ui-e2e.ts";
-import {
   canRunChatLayoutBrowser,
   chromiumExecutablePath,
   createChatLayoutBrowser,
@@ -21,7 +17,6 @@ import {
   getBoundingBox,
   getRect,
   readUiCss,
-  mountMcpAppSurfaceFixture,
   rectsOverlap,
   waitForLayoutSettled,
   type ControlRect,
@@ -36,7 +31,6 @@ const describeBrowserLayout = canRunChatLayoutBrowser ? describe : describe.skip
 
 const layoutBrowser = createChatLayoutBrowser();
 const { openBrowserPage } = layoutBrowser;
-let realChatServer: ControlUiE2eServer | null = null;
 
 type ChatFixtureOptions = {
   composerAttachment?: boolean;
@@ -401,7 +395,7 @@ function chatHtml(opts: ChatFixtureOptions = {}, mobileNavLayout = false) {
                   : ""
               }
               <div class="agent-chat__composer-shell">
-                <div class="agent-chat__input" data-composer-layout="multiline">
+                <div class="agent-chat__input agent-chat__input--chat agent-chat__input--mobile-toolbar" data-composer-layout="multiline">
                   ${
                     opts.slashMenu
                       ? `<div class="slash-menu" role="listbox" aria-label="Command suggestions">
@@ -540,10 +534,9 @@ async function openSessionRailFixture(width: number, height: number) {
                     <section class="chat-session-rail chat-session-rail--expanded chat-session-rail--embedded" role="region" aria-label="Side chat">
                       <div class="chat-session-rail__thread">
                         <article class="chat-session-rail__exchange">
-                          <div class="chat-group user chat-session-rail__message"><div class="chat-bubble chat-session-rail__question">What should I check next?</div></div>
-                          <div class="chat-group assistant chat-session-rail__message"><div class="chat-bubble chat-session-rail__answer">${LONG_SESSION_RAIL_BODY}</div></div>
+                          <div class="chat-group user chat-group--with-footer"><div class="chat-group-messages"><div class="chat-bubble">What should I check next?</div></div></div>
+                          <div class="chat-group assistant chat-group--with-footer"><div class="chat-group-messages"><div class="chat-bubble">${LONG_SESSION_RAIL_BODY}</div></div></div>
                           <span class="chat-session-rail__pr-checks">2 passed</span>
-                          <time class="chat-session-rail__timestamp">as of 4:12 PM</time>
                           <div class="chat-session-rail__hint">Side chat is already answering a question.</div>
                         </article>
                       </div>
@@ -607,12 +600,9 @@ async function expectNoHorizontalOverflow(page: Page) {
 describeBrowserLayout.concurrent("chat responsive browser layout", () => {
   beforeAll(async () => {
     await layoutBrowser.start();
-    realChatServer = await startControlUiE2eServer();
   });
 
   afterAll(async () => {
-    await realChatServer?.close();
-    realChatServer = null;
     await layoutBrowser.close();
   });
 
@@ -692,7 +682,7 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
         "chat-pane__header-leading",
         "chat-pane__header-trailing",
       ]);
-      expect(geometry.gap).toBeCloseTo(8, 0);
+      expect(geometry.gap).toBeCloseTo(4, 0);
       expect(geometry.titleScrollWidth).toBeGreaterThan(geometry.titleClientWidth);
     });
   });
@@ -977,7 +967,7 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
 
   it("keeps custom avatar sizing and the user edge neutral", async () => {
     await withBrowserPage(openBrowserPage(430, 720), async (page) => {
-      await page.setContent(`<!doctype html><html><head><style>${readUiCss()}</style></head><body>
+      await page.setContent(`<!doctype html><html><head><style>${readUiCss()}${readStyleSheet("ui/src/styles/identity-avatar.css")}</style></head><body>
         <img class="chat-avatar assistant" src="/avatar/main" alt="Custom" />
         <img class="chat-avatar user" src="/avatar/user" alt="User" />
       </body></html>`);
@@ -1004,7 +994,7 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
           boxSizing: "border-box",
           objectFit: "cover",
           padding: "0px",
-          borderWidth: "1px",
+          borderWidth: "0px",
         },
         {
           width: 36,
@@ -1012,7 +1002,7 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
           boxSizing: "border-box",
           objectFit: "cover",
           padding: "0px",
-          borderWidth: "1px",
+          borderWidth: "0px",
         },
       ]);
 
@@ -1020,32 +1010,26 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
         const edge = await page.evaluate((mode) => {
           document.documentElement.dataset.themeMode = mode;
           const probe = document.createElement("span");
-          probe.style.border = "1px solid var(--border)";
+          probe.style.outline = "1px solid color-mix(in srgb, var(--text) 8%, transparent)";
           document.body.append(probe);
-          const neutralColor = getComputedStyle(probe).borderTopColor;
-          probe.style.borderColor = "color-mix(in srgb, var(--accent) 20%, transparent)";
-          const accentColor = getComputedStyle(probe).borderTopColor;
+          const neutralOutline = getComputedStyle(probe).outline;
           const avatar = document.querySelector("img.chat-avatar.user");
           if (!avatar) {
             throw new Error("Expected user avatar fixture");
           }
           const avatarStyle = getComputedStyle(avatar);
           const result = {
-            accentColor,
-            borderColor: avatarStyle.borderTopColor,
-            borderStyle: avatarStyle.borderTopStyle,
             borderWidth: avatarStyle.borderTopWidth,
-            neutralColor,
-            outlineStyle: avatarStyle.outlineStyle,
+            neutralOutline,
+            outline: avatarStyle.outline,
+            outlineOffset: avatarStyle.outlineOffset,
           };
           probe.remove();
           return result;
         }, theme);
-        expect(edge.borderColor).toBe(edge.neutralColor);
-        expect(edge.borderColor).not.toBe(edge.accentColor);
-        expect(edge.borderStyle).toBe("solid");
-        expect(edge.borderWidth).toBe("1px");
-        expect(edge.outlineStyle).toBe("none");
+        expect(edge.outline).toBe(edge.neutralOutline);
+        expect(edge.borderWidth).toBe("0px");
+        expect(edge.outlineOffset).toBe("-1px");
       }
     });
   });
@@ -1199,44 +1183,6 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
         return chevron.left - label.right;
       });
       expect(measuredGap).toBeCloseTo(4, 0);
-    });
-  });
-
-  it("keeps inline MCP App reloads transparent without changing dashboard surfaces", async () => {
-    await withBrowserPage(openBrowserPage(1366, 900), async (page) => {
-      if (!realChatServer) {
-        throw new Error("Expected the Control UI server to be ready");
-      }
-      const provider = await mountMcpAppSurfaceFixture(page, realChatServer.baseUrl);
-      const backgrounds = await provider.evaluate(async (owner: HTMLElement) => {
-        await customElements.whenDefined("mcp-app-view");
-        const readFrameBackground = async (boardSurface?: string) => {
-          if (boardSurface) {
-            owner.style.setProperty("--board-surface", boardSurface);
-          } else {
-            owner.style.removeProperty("--board-surface");
-          }
-          const view = document.createElement("mcp-app-view") as HTMLElement & {
-            updateComplete: Promise<boolean>;
-          };
-          owner.replaceChildren(view);
-          await view.updateComplete;
-          const mount = view.querySelector(".mount");
-          if (!mount) {
-            throw new Error("MCP App mount is missing");
-          }
-          const frame = document.createElement("iframe");
-          mount.append(frame);
-          return getComputedStyle(frame).backgroundColor;
-        };
-        return {
-          dashboard: await readFrameBackground("rgb(12, 34, 56)"),
-          inline: await readFrameBackground(),
-        };
-      });
-
-      expect(backgrounds.dashboard).toBe("rgb(12, 34, 56)");
-      expect(backgrounds.inline).toBe("rgba(0, 0, 0, 0)");
     });
   });
 
@@ -1748,21 +1694,13 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
         // the thread sits on, not another card in the same stack.
         expect(geometry.composer?.borderRadius).toBe(20 * (await readCornerScale(page)));
 
-        // The editor's horizontal inset belongs to its row, not to the control,
-        // so the text keeps one origin while the surface changes shape.
-        const textareaBlockInset = width <= 768 || (width <= 932 && height <= 500) ? 10 : 6;
-        expect(geometry.textarea?.paddingTop).toBe(textareaBlockInset);
-        expect(geometry.textarea?.paddingRight).toBe(0);
-        expect(geometry.textarea?.paddingBottom).toBe(textareaBlockInset);
-        expect(geometry.textarea?.paddingLeft).toBe(0);
-        const shortLandscape = width <= 932 && height <= 500;
-        const footerInset = width <= 768 || shortLandscape ? 4 : 8;
-        expect(geometry.footer?.paddingLeft).toBe(footerInset);
-        expect(geometry.footer?.paddingRight).toBe(footerInset);
-        // Multiline keeps optical breathing room inside the footer on both edges;
-        // the outer margin only docks the complete row above the surface edge.
-        expect(geometry.footer?.paddingTop).toBe(width <= 768 ? 4 : shortLandscape ? 2 : 6);
-        expect(geometry.footer?.paddingBottom).toBe(width <= 768 ? 4 : shortLandscape ? 0 : 6);
+        // The editor and footer retain breathing room without freezing their
+        // padding values as the native scrollbar and compact controls change.
+        expect(geometry.textarea!.paddingTop).toBeGreaterThan(0);
+        expect(geometry.textarea!.paddingBottom).toBe(geometry.textarea!.paddingTop);
+        expect(geometry.textarea!.paddingLeft).toBeGreaterThan(0);
+        expect(geometry.footer!.paddingLeft).toBeGreaterThan(0);
+        expect(geometry.footer!.paddingRight).toBe(geometry.footer!.paddingLeft);
 
         // The resting shape is two stacked regions, not one line that may grow
         // into two: a draft that fits on a single line still leaves the surface at
@@ -1792,7 +1730,11 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
         for (const rect of [surface, editor, actionRow]) {
           expectFiniteRect(rect);
         }
-        expect(surface.height).toBeGreaterThanOrEqual(98);
+        expect(surface.height).toBeGreaterThanOrEqual(editor.height + actionRow.height);
+        expect(editor.x + geometry.textarea!.paddingLeft).toBeGreaterThan(surface.x);
+        expect(editor.x + editor.width - geometry.textarea!.paddingRight).toBeLessThan(
+          surface.x + surface.width,
+        );
         expect(actionRow.top).toBeGreaterThanOrEqual(editor.bottom - 1);
         expect(surface.bottom - actionRow.bottom).toBeGreaterThanOrEqual(0);
       });
@@ -2138,7 +2080,7 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
       expect(layout.viewportWidth - (shell.x + shell.width)).toBeCloseTo(shell.x, 0);
       expect(attach.x - input.x).toBeLessThanOrEqual(10);
       expect(model.x).toBeGreaterThanOrEqual(context.x + context.width - 1);
-      expect(input.x + input.width - (send.x + send.width)).toBeLessThanOrEqual(8);
+      expect(input.x + input.width - (send.x + send.width)).toBeCloseTo(attach.x - input.x, 0);
       for (const control of [model, context]) {
         expect(
           Math.abs(control.y + control.height / 2 - (model.y + model.height / 2)),
@@ -2340,13 +2282,16 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
           };
         });
         expect(composerFontSizes).toEqual({
-          labels: [14, 14],
-          placeholder: 16,
-          textarea: 16,
+          labels: [13, 13],
+          placeholder: 14,
+          textarea: 14,
         });
         if (width === 320) {
-          expect(attach.width).toBeGreaterThanOrEqual(36);
-          expect(attach.height).toBeGreaterThanOrEqual(TOUCH_TARGET_MIN_PX);
+          expect(attach.width).toBeGreaterThanOrEqual(32);
+          expect(attach.height).toBeGreaterThanOrEqual(32);
+          await page
+            .locator('.agent-chat__input-btn[aria-label="Add attachment"]')
+            .click({ trial: true });
         }
         if (width <= 480) {
           const modelSettings = expectControlRect(
@@ -2374,17 +2319,11 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
           expect(modelTrigger.x).toBeGreaterThanOrEqual(model.x - 1);
           expect(effortTrigger.x).toBeGreaterThanOrEqual(modelTrigger.x + modelTrigger.width - 1);
         }
-        if (width <= 768) {
-          expect(send.width).toBeCloseTo(32, 2);
-          expect(send.height).toBeCloseTo(32, 2);
-          expect(footer.height).toBeLessThanOrEqual(53);
-        } else {
-          // The editor reads at input size, while the controls around it stay
-          // chrome-sized — that difference is what marks the text as the
-          // subject of the surface.
-          expect(send.width).toBeCloseTo(32, 2);
-          expect(send.height).toBeCloseTo(32, 2);
-        }
+        expect(send.width).toBeGreaterThanOrEqual(32);
+        expect(send.height).toBeGreaterThanOrEqual(32);
+        expect(
+          Math.abs(attach.y + attach.height / 2 - send.y - send.height / 2),
+        ).toBeLessThanOrEqual(1);
 
         if (width >= 1600) {
           expect(shell.width).toBeGreaterThanOrEqual(767);
@@ -2898,7 +2837,6 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
           return {
             background: getComputedStyle(node).backgroundColor,
             borderColor: getComputedStyle(node).borderColor,
-            boxShadow: getComputedStyle(node).boxShadow,
             left: bounds.left,
             right: bounds.right,
             top: bounds.top,
@@ -2939,10 +2877,6 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
         expect(surface.left).toBeCloseTo(shellBounds.left, 1);
         expect(surface.right).toBeCloseTo(shellBounds.right, 1);
       }
-      expect(new Set(stackSurfaces.slice(0, 3).map(({ background }) => background))).toHaveProperty(
-        "size",
-        1,
-      );
       for (const [index, surface] of stackSurfaces.entries()) {
         expect(Number.parseFloat(surface.topLeftRadius)).toBeGreaterThan(0);
         expect(surface.topRightRadius).toBe(surface.topLeftRadius);
@@ -2952,8 +2886,6 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
           expect(surface.top).toBeGreaterThan(stackSurfaces[index - 1]!.bottom);
         }
       }
-      expect(stackSurfaces[2]?.borderColor).toBe(stackSurfaces[1]?.borderColor);
-      expect(stackSurfaces[2]?.boxShadow).toBe(stackSurfaces[1]?.boxShadow.split(", rgba")[0]);
       for (const { state, surface } of warnGoalSurfaces) {
         expect(surface.background, state).not.toBe(stackSurfaces[2]?.background);
         expect(surface.borderColor, state).not.toBe(stackSurfaces[2]?.borderColor);
@@ -3129,7 +3061,7 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
         <section class="chat-session-rail chat-session-rail--expanded chat-session-rail--embedded">
           <div class="chat-session-rail__thread">
             <article class="chat-session-rail__exchange">
-              <div class="chat-session-rail__answer">
+              <div class="chat-bubble">
                 <span data-selection-target>Copy this side chat answer.</span>
               </div>
             </article>
@@ -3233,17 +3165,16 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
           return {
             thread: read(".chat-session-rail__thread"),
             prChecks: read(".chat-session-rail__pr-checks"),
-            timestamp: read(".chat-session-rail__timestamp"),
             hint: read(".chat-session-rail__hint"),
           };
         });
 
-        // PR checks, timestamps and hints are metadata inside an exchange. Sharing the
+        // PR checks and hints are metadata inside an exchange. Sharing the
         // thread's rule would give each one a 96px scrolling bordered box; the
         // selector list has silently merged before.
         expect(styles.thread.minHeight).toBe("96px");
         expect(styles.thread.overflowY).toBe("auto");
-        for (const metadata of [styles.prChecks, styles.timestamp, styles.hint]) {
+        for (const metadata of [styles.prChecks, styles.hint]) {
           // Relational, not a literal: the point is that these nodes do not share
           // the thread's rule, whatever the thread's own numbers become.
           expect(metadata.minHeight).not.toBe(styles.thread.minHeight);

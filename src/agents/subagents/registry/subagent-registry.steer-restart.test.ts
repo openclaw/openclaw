@@ -116,25 +116,9 @@ vi.mock("../../../config/sessions/session-entry-read-runtime.js", async (importO
   ...(await importOriginal<
     typeof import("../../../config/sessions/session-entry-read-runtime.js")
   >()),
-  readSessionEntryReadOnlyInWorker: vi.fn<
-    typeof import("../../../config/sessions/session-entry-read-runtime.js").readSessionEntryReadOnlyInWorker
-  >(async (scope, assertCurrent) => {
-    assertCurrent?.();
-    const entry = await Promise.resolve(sessionStore[scope.sessionKey]);
-    assertCurrent?.();
-    return entry;
-  }),
-  withSessionEntryReadOnlyInWorker: vi.fn<
-    typeof import("../../../config/sessions/session-entry-read-runtime.js").withSessionEntryReadOnlyInWorker
-  >(async (scope, assertCurrent, consume) => {
-    assertCurrent();
-    const result = await consume(
-      { ok: true, value: sessionStore[scope.sessionKey] },
-      { kind: "file", assertCurrent },
-    );
-    assertCurrent();
-    return result;
-  }),
+  ...(await import("./subagent-registry.mock-state.test-support.js")).createSessionEntryReadMocks(
+    sessionStore,
+  ),
 }));
 
 const announceSpy = vi.fn(
@@ -208,9 +192,17 @@ vi.mock("../../../context-engine/init.js", () => ({ ensureContextEnginesInitiali
 vi.mock("../../../context-engine/registry.js", () => ({
   resolveContextEngine: vi.fn(async () => noopContextEngine),
 }));
+// mock-isolation: Steer tests supply registry handles without discovering installed plugins.
 vi.mock("../../runtime-plugins.js", async () => {
   const { createEmptyPluginRegistry } = await import("../../../plugins/registry-empty.js");
-  return { loadAgentRuntimePluginRegistryHandle: vi.fn(() => createEmptyPluginRegistry()) };
+  const loadRegistry = vi.fn<
+    typeof import("../../runtime-plugins.js").loadAgentRuntimePluginRegistryHandle
+  >(() => createEmptyPluginRegistry());
+  return {
+    loadAgentRuntimePluginRegistryHandle: loadRegistry,
+    loadAgentRuntimePluginRegistryHandleAsync: async (...args: Parameters<typeof loadRegistry>) =>
+      loadRegistry(...args),
+  };
 });
 
 vi.mock("../../../plugins/hook-runner-global.js", () => ({

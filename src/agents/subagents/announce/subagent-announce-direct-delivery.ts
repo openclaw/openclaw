@@ -1,6 +1,7 @@
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 import { completionRequiresMessageToolDelivery } from "../../../auto-reply/reply/completion-delivery-policy.js";
+import type { RestartRecoveryTerminalDeliveryEvidence } from "../../../config/sessions/restart-recovery-types.js";
 import { readSessionEntriesFromStoreInWorker } from "../../../config/sessions/session-entry-read-runtime.js";
 import { bindInProcessSessionRun } from "../../../gateway/in-process-session-run.js";
 import { stringifyRouteThreadId } from "../../../plugin-sdk/channel-route.js";
@@ -9,7 +10,6 @@ import {
   INTERNAL_PROVENANCE_SOURCE_CHANNEL,
   isAgentMediatedCompletionSourceTool,
 } from "../../../sessions/input-provenance.js";
-import { retireSessionControllerInput } from "../../../sessions/session-controller.mailbox.js";
 import {
   submitSessionControllerSteer,
   type SessionControllerSteerResult,
@@ -27,6 +27,7 @@ import {
   classifyAgentRunTerminalOutcome,
 } from "../../agent-run-terminal-outcome.js";
 import { resolveEmbeddedRunAbandonment } from "../../embedded-agent-runner/runs.js";
+import { isReplaySafeTranscriptConflict } from "../../embedded-agent-runner/transcript-conflict.js";
 import {
   hasFailedSubagentNoOutputCompletion,
   hasVisibleCompletionResult,
@@ -36,7 +37,10 @@ import {
   RUNTIME_EVENT_USER_PROMPT,
   projectRuntimeContextFragments,
 } from "../../internal-runtime-context.js";
-import { resolveCommandReplyExpectation } from "../../reply-completion.js";
+import {
+  resolveCommandReplyExpectation,
+  resolveCompletionInputReplyExpectation,
+} from "../../reply-completion.js";
 import {
   deliverCompletionDirect,
   isDirectMessageDeliveryTarget,
@@ -243,11 +247,39 @@ async function sendSubagentAnnounceDirectlyBound(
       // requester turn here would replay the original fanout during handoff.
       return completionHandoffPendingResult();
     }
+    const resolveRecovery = async (
+      entry: typeof requesterEntry,
+      replaySafeTranscriptConflict = false,
+    ) => {
+      const recovery = resolveRequesterRecoveryDelivery(
+        entry,
+        params.directIdempotencyKey,
+        replaySafeTranscriptConflict,
+      );
+      if (
+        parentOnly &&
+        recovery?.kind === "delivery" &&
+        recovery.delivery.reason === "requester_turn_pending"
+      ) {
+        const { resolvePrivateRequesterSettleRecoveryOwner } =
+          await import("../registry/subagent-registry-restart-recovery.js");
+        // This private owner must finish its own interrupted input, not wait for itself.
+        if (
+          resolvePrivateRequesterSettleRecoveryOwner(
+            { ...requester, entry },
+            params.directIdempotencyKey,
+          ) === "owned"
+        ) {
+          return undefined;
+        }
+      }
+      return recovery;
+    };
     // A recovered requester already owns this admitted input. Reuse its final
     // receipt through the normal delivery checks; never execute the old wake again.
     const recovery =
-      !parentOnly && (sourceToolId === "subagent_settle" || isSubagentCompletion)
-        ? resolveRequesterRecoveryDelivery(requesterEntry, params.directIdempotencyKey)
+      sourceToolId === "subagent_settle" || isSubagentCompletion
+        ? await resolveRecovery(requesterEntry)
         : undefined;
     if (recovery?.kind === "delivery") {
       return recovery.delivery;
@@ -267,6 +299,7 @@ async function sendSubagentAnnounceDirectlyBound(
         cfg,
         requesterSessionKey: canonicalRequesterSessionKey,
         requesterSessionId,
+        requesterLifecycleRevision,
         requesterAgentId: params.requesterAgentId,
         directIdempotencyKey: params.directIdempotencyKey,
         deliveryTarget,
@@ -370,34 +403,6 @@ async function sendSubagentAnnounceDirectlyBound(
       if (!isCompletionAdmissionAllowed()) {
         return sourceOwnerChangedResult();
       }
-      if (
-        steer.reason === "injection_unavailable" &&
-        requesterAbandonment === "recovering_timeout" &&
-        !params.controllerInput.custody.rpcAdopted &&
-        resolveEmbeddedRunAbandonment({
-          sessionKey: canonicalRequesterSessionKey,
-          sessionId: requesterActivity.sessionId,
-          target: requesterActivity.target,
-        }) === "recovering_timeout"
-      ) {
-        // The recovery retry leases the durable outbox. Settle this rejected,
-        // unadopted reservation first so it cannot dispatch the completion again.
-        retireSessionControllerInput(params.controllerInput);
-        await params.controllerInput.settlement.promise;
-        if (!isCompletionDeliveryAllowed()) {
-          return sourceOwnerChangedResult();
-        }
-        if (params.signal?.aborted) {
-          return { delivered: false, path: "none" };
-        }
-        return {
-          delivered: false,
-          path: "none",
-          reason: "completion_handoff_pending",
-          error: "requester timeout recovery is still settling",
-          disposition: "retryable",
-        };
-      }
     }
     if (
       params.expectsCompletionMessage &&
@@ -418,26 +423,26 @@ async function sendSubagentAnnounceDirectlyBound(
       : sessionOnlyOriginChannel
         ? sessionOnlyOrigin
         : undefined;
-    const replyExpectation = resolveCommandReplyExpectation({
-      cfg,
-      sessionKey: canonicalRequesterSessionKey,
-      sessionEntry: requesterEntry,
-      messageChannel: shouldDeliverAgentFinal ? deliveryTarget.channel : sessionOnlyOriginChannel,
-      opts: {
-        ...(parentOnly ? { privateCompletion: true as const } : {}),
-        inputProvenance: { kind: "inter_session" },
-      },
-    });
+    const inputReplyExpectation = resolveCompletionInputReplyExpectation(sourceToolId, params);
+    // Settle execution and receipt classification share the owner's reply obligation.
+    const replyExpectation =
+      sourceToolId === "subagent_settle"
+        ? inputReplyExpectation
+        : resolveCommandReplyExpectation({
+            cfg,
+            sessionKey: canonicalRequesterSessionKey,
+            sessionEntry: requesterEntry,
+            messageChannel: shouldDeliverAgentFinal
+              ? deliveryTarget.channel
+              : sessionOnlyOriginChannel,
+            opts: {
+              ...(parentOnly ? { privateCompletion: true as const } : {}),
+              inputProvenance: { kind: "inter_session" },
+            },
+          });
     // A private completion gets its own serialized turn. Steering into a public
     // turn would inherit that turn's delivery policy and expose child output.
     let directAgentParams: Record<string, unknown> = {
-      ...(requesterSessionBound
-        ? {
-            expectedExistingSessionId: params.completionRequesterSessionId,
-            expectedExistingSessionLifecycleRevision:
-              params.completionRequesterLifecycleRevision ?? null,
-          }
-        : {}),
       sessionKey: canonicalRequesterSessionKey,
       ...(requesterAgentId ? { agentId: requesterAgentId } : {}),
       message: turnMessage,
@@ -459,11 +464,21 @@ async function sendSubagentAnnounceDirectlyBound(
         : {}),
       idempotencyKey: params.directIdempotencyKey,
     };
-    if (requesterSessionBound && params.completionRequesterSessionId) {
+    // Public completions bind the selected requester, including a nested fallback.
+    // Private and settle completions keep their captured incarnation checked above.
+    const boundRequesterSessionId = requesterSessionBound
+      ? params.completionRequesterSessionId
+      : isSubagentCompletion
+        ? requesterSessionId
+        : undefined;
+    if (boundRequesterSessionId) {
       directAgentParams = bindInProcessSessionRun(directAgentParams, {
         sessionKey: canonicalRequesterSessionKey,
-        sessionId: params.completionRequesterSessionId,
-        lifecycleRevision: params.completionRequesterLifecycleRevision ?? null,
+        sessionId: boundRequesterSessionId,
+        lifecycleRevision:
+          (requesterSessionBound
+            ? params.completionRequesterLifecycleRevision
+            : requesterLifecycleRevision) ?? null,
         runId: params.directIdempotencyKey,
       });
     }
@@ -484,8 +499,27 @@ async function sendSubagentAnnounceDirectlyBound(
       textCompletionDirectDeliveryKind,
       tryTextCompletionDirectDelivery,
     });
+    const classifyRecoveredResult = (result: RestartRecoveryTerminalDeliveryEvidence) => {
+      if (parentOnly && (!result.captured || result.meta?.error || result.meta?.aborted)) {
+        return {
+          delivered: false,
+          path: "direct",
+          reason: "completion_handoff_pending",
+          error: "recovered private requester did not complete successfully",
+          disposition: "permanent_failure",
+        } satisfies SubagentAnnounceDeliveryResult;
+      }
+      // Recovery processed the same private input. Its retained result replaces
+      // the original RPC receipt without admitting that terminal run again.
+      return classifyResponse({
+        status: "ok",
+        result,
+        ...(parentOnly ? { inputProcessingCompleted: true } : {}),
+      });
+    };
     let directAnnounceResponse: unknown;
     let directFailure: SubagentAnnounceDeliveryResult | undefined;
+    let replaySafeTranscriptConflict = false;
     try {
       directAnnounceResponse = recoveredResult
         ? { status: "ok", result: recoveredResult }
@@ -497,11 +531,7 @@ async function sendSubagentAnnounceDirectlyBound(
             return await runAnnounceAgentCall({
               agentParams: directAgentParams,
               controllerInput: params.controllerInput,
-              // The input owner decides whether this handoff owes another reply.
-              replyExpectation:
-                params.expectsCompletionMessage || params.requireVisibleReply
-                  ? "required"
-                  : "optional",
+              replyExpectation: inputReplyExpectation,
               // A resumed parent has no inbound channel dispatcher to keep activity visible.
               typing:
                 sourceToolId === "subagent_settle" &&
@@ -597,6 +627,8 @@ async function sendSubagentAnnounceDirectlyBound(
         }
       }
       params.onDeliveryError?.(err);
+      replaySafeTranscriptConflict =
+        sourceToolId === "subagent_settle" && isReplaySafeTranscriptConflict(err);
       directFailure = {
         delivered: false,
         path: "direct",
@@ -605,13 +637,16 @@ async function sendSubagentAnnounceDirectlyBound(
       };
     }
 
-    const classified = directFailure ?? classifyResponse(directAnnounceResponse);
+    const classified =
+      directFailure ??
+      (recoveredResult
+        ? classifyRecoveredResult(recoveredResult)
+        : classifyResponse(directAnnounceResponse));
     const delivery = classified instanceof Promise ? await classified : classified;
     const originalOutcome = buildAgentRunTerminalOutcomeFromWaitResult(
       asOptionalRecord(directAnnounceResponse),
     );
     if (
-      parentOnly ||
       (sourceToolId !== "subagent_settle" && !isSubagentCompletion) ||
       recoveredResult !== undefined ||
       requesterCanonicalKey !== canonicalRequesterSessionKey ||
@@ -676,10 +711,7 @@ async function sendSubagentAnnounceDirectlyBound(
     ) {
       return delivery;
     }
-    const settledRecovery = resolveRequesterRecoveryDelivery(
-      currentEntry,
-      params.directIdempotencyKey,
-    );
+    const settledRecovery = await resolveRecovery(currentEntry, replaySafeTranscriptConflict);
     if (!settledRecovery) {
       return delivery;
     }
@@ -687,7 +719,7 @@ async function sendSubagentAnnounceDirectlyBound(
     // their normal receipt classifier never dispatches or sends the input again.
     return settledRecovery.kind === "delivery"
       ? settledRecovery.delivery
-      : classifyResponse({ status: "ok", result: settledRecovery.result });
+      : classifyRecoveredResult(settledRecovery.result);
   } catch (err) {
     // A failed dispatch receipt has not admitted any delivery; its owner retries preparation.
     if (!dispatchPrepared) {

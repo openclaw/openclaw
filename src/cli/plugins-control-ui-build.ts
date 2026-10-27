@@ -104,41 +104,7 @@ export async function buildPluginControlUi(params: {
     entry: `${output}/index.js`,
     ...(files.some((file) => file.name === "index.css") ? { styles: [`${output}/index.css`] } : {}),
   };
-  return await publishControlUiBuild(outputDir, declaration, files, params.check);
-}
-
-function validateControlUiFiles(files: Array<{ name: string; contents: Uint8Array }>): void {
-  if (files.length > CONTROL_UI_PLUGIN_MAX_ASSETS) {
-    throw new Error(`Control UI builds allow at most ${CONTROL_UI_PLUGIN_MAX_ASSETS} assets.`);
-  }
-  if (
-    files.some((file) => file.contents.length > CONTROL_UI_PLUGIN_MAX_ASSET_BYTES) ||
-    files.reduce((total, file) => total + file.contents.length, 0) >
-      CONTROL_UI_PLUGIN_MAX_BUILD_BYTES
-  ) {
-    throw new Error(
-      "Control UI builds allow at most 4 MiB per asset and 8 MiB per plugin. Reduce the browser bundle before installing.",
-    );
-  }
-  if (
-    !files.some((file) => file.name === "index.js") ||
-    files.some(
-      (file) => file.name !== path.basename(file.name) || !isPluginControlUiAssetPath(file.name),
-    )
-  ) {
-    throw new Error(
-      "Control UI build must produce a JavaScript entrypoint and only flat JavaScript/CSS assets.",
-    );
-  }
-}
-
-async function publishControlUiBuild(
-  outputDir: string,
-  declaration: PluginManifestControlUi,
-  files: Array<{ name: string; contents: Uint8Array }>,
-  check?: boolean,
-): Promise<PluginManifestControlUi> {
-  if (check) {
+  if (params.check) {
     for (const file of files) {
       const existing = await fs.readFile(path.join(outputDir, file.name)).catch(() => null);
       if (!existing?.equals(Buffer.from(file.contents))) {
@@ -187,6 +153,31 @@ async function publishControlUiBuild(
     await fs.rm(staging, { recursive: true, force: true });
   }
   return declaration;
+}
+
+function validateControlUiFiles(files: Array<{ name: string; contents: Uint8Array }>): void {
+  if (files.length > CONTROL_UI_PLUGIN_MAX_ASSETS) {
+    throw new Error(`Control UI builds allow at most ${CONTROL_UI_PLUGIN_MAX_ASSETS} assets.`);
+  }
+  if (
+    files.some((file) => file.contents.length > CONTROL_UI_PLUGIN_MAX_ASSET_BYTES) ||
+    files.reduce((total, file) => total + file.contents.length, 0) >
+      CONTROL_UI_PLUGIN_MAX_BUILD_BYTES
+  ) {
+    throw new Error(
+      "Control UI builds allow at most 4 MiB per asset and 8 MiB per plugin. Reduce the browser bundle before installing.",
+    );
+  }
+  if (
+    !files.some((file) => file.name === "index.js") ||
+    files.some(
+      (file) => file.name !== path.basename(file.name) || !isPluginControlUiAssetPath(file.name),
+    )
+  ) {
+    throw new Error(
+      "Control UI build must produce a JavaScript entrypoint and only flat JavaScript/CSS assets.",
+    );
+  }
 }
 
 // mkdtemp is owner-only and file creation follows umask. Normalize generated

@@ -17,6 +17,7 @@ import {
   removeTempDirectoryAsync,
 } from "./sqlite-readonly-location-cleanup.js";
 import { prepareSqliteReadOnlyLocationSyncInProcess } from "./sqlite-readonly-location.js";
+import { reclaimAbandonedSqliteSnapshotsAsync } from "./sqlite-snapshot-reclamation.js";
 import { sqliteSnapshotStagingEntrypoints } from "./sqlite-snapshot-staging-runtime.test-support.js";
 import {
   createSqliteSnapshotStagingDirectory,
@@ -24,7 +25,6 @@ import {
   createSqliteSnapshotStagingTokenSync,
   reconcileSqliteSnapshotRetirement,
   reclaimAbandonedSqliteSnapshots,
-  reclaimAbandonedSqliteSnapshotsAsync,
 } from "./sqlite-snapshot-staging.js";
 import { sqliteWorkerPreloadEnv } from "./sqlite-worker-preload.test-support.js";
 

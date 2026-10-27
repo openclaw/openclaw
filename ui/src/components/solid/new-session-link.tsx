@@ -3,7 +3,7 @@ import { createMemo, Show } from "solid-js";
 import { pathForRoute } from "../../app-route-paths.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import { resolveNewSessionShortcut } from "../../lib/keyboard-shortcut-contract.ts";
-import { shouldHandleNavigationClick } from "../../lib/navigation-click.ts";
+import { handleNavigationClick } from "../../lib/navigation-click.ts";
 import { t } from "../../lib/reactive/i18n.ts";
 import { readSessionMethodAccess } from "../../lib/session-method-access.ts";
 import { normalizeAgentId } from "../../lib/sessions/session-key.ts";
@@ -43,9 +43,8 @@ export function renderNewSessionLink(params: {
           event.preventDefault();
           return;
         }
-        if (params.onOpen && shouldHandleNavigationClick(event)) {
-          event.preventDefault();
-          params.onOpen?.(params.agentId, params.target);
+        if (params.onOpen) {
+          handleNavigationClick(event, () => params.onOpen?.(params.agentId, params.target));
         }
       }}
     >

@@ -63,7 +63,7 @@ export function createEmbeddedMessageInvocationPolicy(params: {
   const filter = (
     currentProfile = params.capabilityProfile,
     onFilter?: (event: ToolPolicyFilterEvent) => void,
-    // "session" omits the per-turn completion-handoff replay, which refuses calls instead.
+    // Listing retains the requester's own ceiling; completion replay only gates calls.
     scope: "turn" | "session" = "turn",
   ): AnyAgentTool[] => {
     const currentPolicies =
@@ -84,9 +84,8 @@ export function createEmbeddedMessageInvocationPolicy(params: {
           subagentPolicy: policies.subagentPolicy,
           runtimeToolPolicy: policies.runtimeToolPolicy,
           inheritedToolPolicy:
-            scope === "session" &&
-            currentProfile.policy.requesterPolicySource === "completion-handoff"
-              ? undefined
+            scope === "session"
+              ? params.capabilityProfile.policy.sessionInheritedToolPolicy
               : policies.inheritedToolPolicy,
         },
         includeRuntimeToolPolicy: true,

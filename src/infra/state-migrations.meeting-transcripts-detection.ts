@@ -15,6 +15,7 @@ import {
   isRecordedCanonicalTranscriptExport,
 } from "./state-migrations.meeting-transcripts-files.js";
 import type { LegacyMeetingTranscriptsDetection } from "./state-migrations.meeting-transcripts.types.js";
+import { decodeUtf8Input } from "./utf8-input.js";
 
 type MeetingTranscriptExportOwnership = {
   selector: string;
@@ -74,7 +75,7 @@ export function resolveMeetingTranscriptExportOwnership(params: {
       if (stat.isSymbolicLink() || !stat.isFile()) {
         return undefined;
       }
-      const metadata = JSON.parse(fs.readFileSync(metadataPath, "utf8")) as {
+      const metadata = JSON.parse(decodeUtf8Input(fs.readFileSync(metadataPath), metadataPath)) as {
         sessionId?: unknown;
         startedAt?: unknown;
       };
@@ -114,7 +115,7 @@ export function detectLegacyMeetingTranscripts(params: {
 }): LegacyMeetingTranscriptsDetection {
   const sourceDir = path.join(params.stateDir, "transcripts");
   if (params.doctorOnlyStateMigrations !== true) {
-    return { sourceDir, hasLegacy: false, pendingImportCount: 0 };
+    return { sourceDir, hasLegacy: false };
   }
   const databaseState = readMeetingTranscriptMigrationDetectionState({
     env: { ...(params.env ?? process.env), OPENCLAW_STATE_DIR: params.stateDir },
@@ -171,11 +172,10 @@ export function detectLegacyMeetingTranscripts(params: {
     return {
       sourceDir,
       hasLegacy: hasSource || needsDatabaseRepair,
-      pendingImportCount,
     };
   } catch (error) {
     if (isRecord(error) && error.code === "ENOENT") {
-      return { sourceDir, hasLegacy: needsDatabaseRepair, pendingImportCount };
+      return { sourceDir, hasLegacy: needsDatabaseRepair };
     }
     throw error;
   }

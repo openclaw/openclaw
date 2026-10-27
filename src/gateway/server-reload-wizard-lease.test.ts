@@ -11,7 +11,6 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { withPluginLifecycleLease } from "../plugins/plugin-lifecycle-lease.js";
 import {
   captureActivePluginRegistrySnapshot,
-  requireActivePluginChannelRegistry,
   restoreActivePluginRegistrySnapshot,
   setActivePluginRegistry,
 } from "../plugins/runtime.js";
@@ -39,13 +38,11 @@ import {
 import type { ManagedGatewayConfigReloaderParams } from "./server-reload-contracts.js";
 import {
   createConfigWriteNotification,
-  createDefaultGatewayReloadState,
   createDirectConfigWriteFixture,
-  createTestConfigRevisionProjector,
+  createManagedReloadTestParams,
   publishConfigWrite,
 } from "./server-reload-handlers.config.test-support.js";
 import { startManagedGatewayConfigReloader } from "./server-reload-managed.js";
-import { SharedGatewaySessionGenerationState } from "./server-shared-auth-generation.js";
 import { createMockRuntimeSecretsActivator } from "./server-startup-config.test-support.js";
 
 vi.mock("../agents/agent-bundle-mcp-tools.js", () => ({
@@ -126,57 +123,25 @@ async function createReloadFixture(
   logReload.warn.mockImplementation(warnings.observe);
   const channels = { start: vi.fn(async () => new Map()), stop: vi.fn(async () => {}) };
   const clock = createGatewaySchedulerClock(Date.now());
-  let state = createDefaultGatewayReloadState();
-  const reloader = startManagedGatewayConfigReloader({
-    scheduler: createTestGatewayScheduler(clock.clock),
-    getPluginRegistry: requireActivePluginChannelRegistry,
-    minimalTestGateway: false,
-    initialConfig,
-    initialCompareConfig: initialConfig,
-    initialPluginInstallRecords: {},
-    initialSnapshotRawHash: null,
-    initialAuthoredConfig: initialConfig,
-    initialSnapshotValid: true,
-    initialSnapshotIssues: [],
-    watchPath: "/tmp/openclaw.json",
-    readSnapshot: writer.readSnapshot,
-    subscribeToWrites: writer.subscribeToWrites,
-    promoteSnapshot: vi.fn(async () => true),
-    deps: {} as never,
-    broadcast: vi.fn(),
-    getState: () => state,
-    setState: (nextState) => {
-      state = nextState;
-    },
-    startChannel: channels.start,
-    stopChannel: channels.stop,
-    reloadPlugins,
-    logHooks: createInfoWarnErrorLogger(),
-    logChannels: createInfoWarnErrorLogger(),
-    logCron: createInfoWarnErrorLogger(),
-    logReload,
-    channelManager: {
-      pruneInactiveChannelAccountState: vi.fn(),
-      releaseChannelRouteHandoffs: vi.fn(),
-    } as never,
-    activateRuntimeSecrets: createMockRuntimeSecretsActivator(),
-    resolveSharedGatewaySessionGenerationForConfig: () => undefined,
-    sharedGatewaySessionGenerationState: new SharedGatewaySessionGenerationState({
-      current: undefined,
-      required: null,
+  const reloader = startManagedGatewayConfigReloader(
+    createManagedReloadTestParams({
+      scheduler: createTestGatewayScheduler(clock.clock),
+      initialConfig,
+      initialAuthoredConfig: initialConfig,
+      readSnapshot: writer.readSnapshot,
+      subscribeToWrites: writer.subscribeToWrites,
+      startChannel: channels.start,
+      stopChannel: channels.stop,
+      reloadPlugins,
+      logReload,
+      channelManager: {
+        pruneInactiveChannelAccountState: vi.fn(),
+        releaseChannelRouteHandoffs: vi.fn(),
+      } as never,
+      activateRuntimeSecrets: createMockRuntimeSecretsActivator(),
+      requestRecoveryRestart: vi.fn(() => ({ status: "emitted" as const })),
     }),
-    clients: [],
-    reconcileRuntimePolicy: vi.fn(),
-    commitRuntimePolicy: vi.fn(),
-    acceptTerminalConfig: vi.fn(),
-    prepareTerminalConfig: vi.fn(),
-    configRevisionProjector: createTestConfigRevisionProjector(),
-    cronReconciliation: {
-      arm: vi.fn(() => ({ complete: vi.fn(async () => {}) })),
-      invalidate: vi.fn(),
-    },
-    requestRecoveryRestart: vi.fn(() => ({ status: "emitted" as const })),
-  });
+  );
   await reloader.ready;
   const leaseClock = createPluginLifecycleLeaseTestClock();
   return {

@@ -119,45 +119,14 @@ function resolveBrowserProxyConfig(cfg = loadBrowserConfigForRuntimeRefresh()) {
   };
 }
 
-let browserControlReady: Promise<void> | null = null;
-let admittedBrowserControlState: ReturnType<typeof getBrowserControlState> = null;
-
 export function hasBrowserNodeHostWork(): boolean {
   return hasBrowserControlWork() || hasBrowserProxyUploadWork();
-}
-
-async function ensureBrowserControlService(): Promise<void> {
-  const current = getBrowserControlState();
-  // Admission survives config refresh only for this exact live runtime generation.
-  if (current && current === admittedBrowserControlState) {
-    return;
-  }
-  if (browserControlReady) {
-    return browserControlReady;
-  }
-  const startup = (async () => {
-    const cfg = loadBrowserConfigForRuntimeRefresh();
-    const resolved = resolveBrowserConfig(cfg.browser, cfg);
-    if (!resolved.enabled) {
-      throw new Error(await describeBrowserControlUnavailable(cfg));
-    }
-    const started = await startBrowserControlServiceFromConfig();
-    if (!started) {
-      throw new Error(await describeBrowserControlUnavailable(cfg));
-    }
-    admittedBrowserControlState = started;
-  })();
-  browserControlReady = startup.finally(() => {
-    // Share pending failures, but never keep settled startup as runtime authority.
-    browserControlReady = null;
-  });
-  return browserControlReady;
 }
 
 function collectBrowserProxyPaths(payload: unknown): string[] {
   const paths = new Set<string>();
   visitBrowserProxyFilePaths(payload, (filePath) => {
-    paths.add(filePath.trim());
+    paths.add(filePath);
     assertBrowserProxyFileCountWithinLimit(paths.size);
   });
   return [...paths];
@@ -313,7 +282,9 @@ export async function runBrowserProxyCommand(
     throw new Error("INVALID_REQUEST: owned tab close requires POST");
   }
 
-  await ensureBrowserControlService();
+  if (!(await startBrowserControlServiceFromConfig())) {
+    throw new Error(await describeBrowserControlUnavailable());
+  }
   invocationSignal?.throwIfAborted();
   const cfg = loadBrowserConfigForRuntimeRefresh();
   const resolved = resolveBrowserConfig(cfg.browser, cfg);
@@ -361,7 +332,7 @@ export async function runBrowserProxyCommand(
   assertCurrent();
 
   const timeoutMs = resolveBrowserProxyTimeoutMs(params.timeoutMs);
-  const deadlineAt = Date.now() + timeoutMs;
+  const deadlineAt = performance.now() + timeoutMs;
   const timeoutDetails = {
     method,
     path,
@@ -439,7 +410,7 @@ export async function runBrowserProxyCommand(
     await discardStagedBrowserProxyUpload(stagedUpload);
     throw error;
   }
-  const remainingTimeoutMs = deadlineAt - Date.now();
+  const remainingTimeoutMs = deadlineAt - performance.now();
   if (remainingTimeoutMs <= 0) {
     await discardStagedBrowserProxyUpload(stagedUpload);
     throw new Error(formatBrowserProxyTimeoutMessage({ ...timeoutDetails, status: null }));

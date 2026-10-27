@@ -13,6 +13,7 @@ import {
 import { requestSessionCommunicationApproval } from "../../gateway/session-communication-approval.js";
 import { withSessionSendDelivery } from "../../gateway/session-send-delivery.js";
 import { assertParentSubagentResumeSuccessorCurrent } from "../../gateway/session-subagent-resume.js";
+import { resolveSessionChildController } from "../../gateway/session-utils-core.js";
 import { parseAgentSessionKey } from "../../routing/session-key.js";
 import {
   communicationEndpointBinding,
@@ -44,7 +45,10 @@ import {
   resolveSandboxedSessionToolContext,
   resolveSessionToolAccess,
 } from "./sessions-access.js";
-import { readSessionCommunicationEndpoint } from "./sessions-send-communication-endpoint.js";
+import {
+  readSessionCommunicationLineage,
+  readSessionCommunicationEndpoint,
+} from "./sessions-send-communication-endpoint.js";
 
 /** A current permission decision rejected delivery, rather than an unavailable dependency. */
 export class SessionCommunicationDeniedError extends Error {}
@@ -70,6 +74,7 @@ export async function prepareSessionsSendCommunication(params: {
     requesterOwned?: boolean;
     authorizationTargetSessionKey?: string;
     expectedSessionId?: string;
+    controllerOnly?: boolean;
   };
   /** Creates empty metadata through the caller's existing creation owner, never model input. */
   ensureTarget?: (assertCurrent: () => void) => Promise<CommunicationEndpoint>;
@@ -134,6 +139,15 @@ export async function prepareSessionsSendCommunication(params: {
     assertCaller?.();
     params.assertSourceCurrent?.();
     params.assertAccessCurrent?.();
+    const targetEntry = currentTarget.entry;
+    const controller =
+      targetEntry &&
+      resolveSessionChildController(targetSessionKey, targetEntry, params.source.sessionKey);
+    if (controller && controller !== params.source.sessionKey) {
+      throw new SessionCommunicationDeniedError(
+        "Child is controlled by another active session; wait for that work to finish before continuing it.",
+      );
+    }
     params.acceptedReply?.(params.source, currentTarget);
     if (currentPolicyConfig() !== currentConfig) {
       throw new Error("Communication policy changed; send the message again for a new decision.");
@@ -218,30 +232,6 @@ export async function prepareSessionsSendCommunication(params: {
       endpoint,
       assertCurrent: assertSource,
     });
-  const lineage = async (endpoint: CommunicationEndpoint) => {
-    const chain = [endpoint];
-    while (chain.at(-1)?.entry?.spawnedBy) {
-      const child = chain.at(-1)!;
-      const key = child.entry!.spawnedBy!;
-      if (chain.length >= 32 || chain.some((entry) => entry.sessionKey === key)) {
-        throw new Error("Session communication ancestry is invalid.");
-      }
-      const parent = await read({
-        agentId: parseAgentSessionKey(key)?.agentId ?? child.agentId,
-        sessionKey: key,
-        storePath: "",
-        entry: undefined,
-      });
-      if (
-        !parent.entry ||
-        (child.entry?.parentSessionId && child.entry.parentSessionId !== parent.entry.sessionId)
-      ) {
-        throw new Error("The communication policy's parent session is no longer current.");
-      }
-      chain.push(parent);
-    }
-    return chain;
-  };
   const task = getLatestLiveSubagentRunByChildSessionKey(
     params.target.sessionKey,
     undefined,
@@ -270,6 +260,14 @@ export async function prepareSessionsSendCommunication(params: {
     | { resume: NonNullable<ReturnType<typeof readInProcessSubagentResume>>; runId: string }
     | undefined;
   const assertTask = () => {
+    if (
+      params.access?.controllerOnly &&
+      (!currentTarget.entry ||
+        resolveSessionChildController(targetSessionKey, currentTarget.entry) !==
+          params.source.sessionKey)
+    ) {
+      throw new SessionCommunicationDeniedError("Child controller access changed before delivery.");
+    }
     if (
       ownedTask &&
       (getLatestLiveSubagentRunByChildSessionKey(
@@ -300,8 +298,8 @@ export async function prepareSessionsSendCommunication(params: {
   };
   try {
     assertSource();
-    let source = await lineage(params.source);
-    let target = await lineage(params.target);
+    let source = await readSessionCommunicationLineage(params.source, read, assertSource);
+    let target = await readSessionCommunicationLineage(params.target, read, assertSource);
     endpoints = [...source, ...target];
     let bindings = endpoints.map(communicationEndpointBinding);
     const assertAccess = async () => {
@@ -461,7 +459,7 @@ export async function prepareSessionsSendCommunication(params: {
       ) {
         throw new Error("Created target differs from the approved communication operation.");
       }
-      target = await lineage(created);
+      target = await readSessionCommunicationLineage(created, read, assertSource);
       // An initially absent main alias can name both sides of this creation.
       if (
         !source[0]!.entry &&
@@ -495,8 +493,11 @@ export async function prepareSessionsSendCommunication(params: {
         entry.sessionId !== transition.current.sessionId ||
         entry.lifecycleRevision !== transition.current.lifecycleRevision ||
         entry.lifecycleRevision !== expected.lifecycleRevision ||
-        communicationEntryBinding({ ...entry, sessionId: expected.sessionId }) !==
-          communicationEntryBinding(expected) ||
+        communicationEntryBinding({
+          ...entry,
+          sessionId: expected.sessionId,
+          previousSessionId: expected.previousSessionId,
+        }) !== communicationEntryBinding(expected) ||
         (expected.sessionId !== entry.sessionId &&
           (transition.previous?.sessionId !== expected.sessionId ||
             transition.previous.lifecycleRevision !== expected.lifecycleRevision))
@@ -509,7 +510,7 @@ export async function prepareSessionsSendCommunication(params: {
         if (communicationEndpointBinding(endpoint) !== previousBinding) {
           return endpoint;
         }
-        // The compaction owner alone authorizes this identity change. Other facts stay sticky.
+        // Only compaction can advance this identity and its predecessor; policy changes stay sticky.
         if (changedBindings.get(endpoint) === committedBinding) {
           changedBindings.delete(endpoint);
         }

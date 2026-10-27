@@ -558,8 +558,7 @@ it.each([
       expect(catalogs).toMatchObject({ detected: 0, migrated: 0, warnings: [] });
       expect(await maybeRepairCodexSessionRoutes({ cfg, env, shouldRepair: true })).toMatchObject({
         scannedStores: 0,
-        repairedStores: 0,
-        repairedSessions: 0,
+        changes: [],
       });
       const leaseId = claimOpenClawAgentDatabaseLease({
         agentId: "retired",

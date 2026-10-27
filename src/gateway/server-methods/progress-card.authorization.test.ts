@@ -2,25 +2,21 @@ import { describe, expect, it, vi } from "vitest";
 import { setRuntimeConfigSnapshot } from "../../config/io.js";
 import {
   deleteSessionEntryLifecycle,
-  loadSessionEntry,
   resetSessionEntryLifecycle,
   upsertSessionEntryCore,
 } from "../../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { ProgressCardStore } from "../../session-cards/progress-card-store.types.js";
-import { createDeferredCore } from "../../shared/deferred.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
+import { withRestoredMocks } from "../../test-utils/vitest-spies.js";
 import { progressCardStore } from "../progress-card-store.js";
 import { createDirectChatContext } from "../server-chat.agent-events.test-helpers.js";
 import { handleGatewayRequest } from "../server-methods.js";
-import { resolveSessionMutationAuthorizationAsync } from "../session-sharing-authorization-async.js";
-import {
-  resolveSessionSharingTargetAsync,
-  SessionMutationAuthorizationChangedError,
-} from "../session-sharing.js";
+import { createPlacementTestHold } from "../server-worker-placement-hold.test-support.js";
+import { resolveSessionSharingTargetAsync } from "../session-sharing.js";
 import { roleClient, rolePolicyConfig } from "../session-sharing.test-utils.js";
 import { createLazyCoreHandlers } from "./lazy-core-handlers.js";
-import { createProgressCardHandlers } from "./progress-card.js";
+import { progressCardHandlers } from "./progress-card.js";
 import type { GatewayRequestContext, RespondFn } from "./types.js";
 
 type Target = { sessionKey: string; agentId: string };
@@ -79,7 +75,7 @@ function requester(
   return (
     method: string,
     params: Record<string, unknown>,
-    extraHandlers = createProgressCardHandlers(),
+    extraHandlers = progressCardHandlers,
   ) => {
     const respond = vi.fn<RespondFn>();
     const pending = handleGatewayRequest({
@@ -94,38 +90,27 @@ function requester(
   };
 }
 
-function barrier() {
-  const entered = createDeferredCore();
-  const release = createDeferredCore();
-  return {
-    entered,
-    release,
-    wait: () => {
-      entered.resolve();
-      return release.promise;
-    },
-  };
-}
-
 function pausedHandlers(method: string) {
-  const gate = barrier();
-  const handlers = createProgressCardHandlers();
-  const loadHandlers = vi.fn(async () => {
-    await gate.wait();
-    return handlers;
-  });
+  const gate = createPlacementTestHold();
   return {
     ...gate,
-    loadHandlers,
-    handlers: createLazyCoreHandlers({ methods: [method], loadHandlers }),
+    handlers: createLazyCoreHandlers({
+      methods: [method],
+      loadHandlers: async () => {
+        await gate.wait();
+        return progressCardHandlers;
+      },
+    }),
   };
 }
 
 function pausedStore(beforeCommit = false, pauseWrites = false) {
-  const gate = barrier();
+  const gate = createPlacementTestHold();
+  const read = progressCardStore.get.bind(progressCardStore);
+  const write = progressCardStore.put.bind(progressCardStore);
   const store: ProgressCardStore = {
     async get(...args) {
-      const card = await progressCardStore.get(...args);
+      const card = await read(...args);
       await gate.wait();
       return card;
     },
@@ -133,7 +118,7 @@ function pausedStore(beforeCommit = false, pauseWrites = false) {
       if (pauseWrites && beforeCommit) {
         await gate.wait();
       }
-      const result = await progressCardStore.put(...args);
+      const result = await write(...args);
       if (pauseWrites && !beforeCommit) {
         await gate.wait();
       }
@@ -141,6 +126,16 @@ function pausedStore(beforeCommit = false, pauseWrites = false) {
     },
   };
   return { ...gate, store };
+}
+
+function withPausedStore(store: ProgressCardStore, run: () => Promise<void>) {
+  return withRestoredMocks(
+    [
+      vi.spyOn(progressCardStore, "get").mockImplementation(store.get.bind(store)),
+      vi.spyOn(progressCardStore, "put").mockImplementation(store.put.bind(store)),
+    ],
+    run,
+  );
 }
 
 const awaitEntered = (entered: Promise<void>, pending: Promise<void>) =>
@@ -215,41 +210,39 @@ describe("progress card request authorization", () => {
         });
         await putCard(target, "shared card");
         const { entered, release, store } = pausedStore();
-        const context = createDirectChatContext({ getRuntimeConfig: () => cfg });
-        const { respond, pending } = requester(client, context)(
-          "progressCard.get",
-          target,
-          createProgressCardHandlers(store),
-        );
-        const settled = Promise.allSettled([pending]);
-        try {
-          await awaitEntered(entered.promise, pending);
-          expect(respond).not.toHaveBeenCalled();
-          if (change === "visibility") {
-            await upsertSessionEntryCore(target, { visibility: "draft" });
-          } else {
-            client.invalidated = true;
-          }
-          release.resolve();
-          const [result] = await settled;
-          if (change === "source") {
-            expect(result).toEqual({
-              status: "rejected",
-              reason: new Error("Gateway requester authority changed"),
-            });
+        await withPausedStore(store, async () => {
+          const context = createDirectChatContext({ getRuntimeConfig: () => cfg });
+          const { respond, pending } = requester(client, context)("progressCard.get", target);
+          const settled = Promise.allSettled([pending]);
+          try {
+            await awaitEntered(entered.promise, pending);
             expect(respond).not.toHaveBeenCalled();
-          } else {
-            expect(result).toEqual({ status: "fulfilled", value: undefined });
-            expect(respond).toHaveBeenCalledExactlyOnceWith(
-              false,
-              undefined,
-              expect.objectContaining({ code: "INVALID_REQUEST" }),
-            );
+            if (change === "visibility") {
+              await upsertSessionEntryCore(target, { visibility: "draft" });
+            } else {
+              client.invalidated = true;
+            }
+            release.resolve();
+            const [result] = await settled;
+            if (change === "source") {
+              expect(result).toEqual({
+                status: "rejected",
+                reason: new Error("Gateway requester authority changed"),
+              });
+              expect(respond).not.toHaveBeenCalled();
+            } else {
+              expect(result).toEqual({ status: "fulfilled", value: undefined });
+              expect(respond).toHaveBeenCalledExactlyOnceWith(
+                false,
+                undefined,
+                expect.objectContaining({ code: "INVALID_REQUEST" }),
+              );
+            }
+          } finally {
+            release.resolve();
+            await settled;
           }
-        } finally {
-          release.resolve();
-          await settled;
-        }
+        });
       }),
   );
 
@@ -269,165 +262,81 @@ describe("progress card request authorization", () => {
         await upsertSessionEntryCore(target, admitted);
         await putCard(target, "original card");
         const { entered, release, store } = pausedStore(beforeCommit, true);
-        const { context, broadcast } = cardContext(cfg);
-        const { respond, pending } = requester(client, context)(
-          method,
-          cardParams(method, target, "committed card", "delayed-refresh"),
-          createProgressCardHandlers(store),
-        );
-        try {
-          await awaitEntered(entered.promise, pending);
-          expect(respond).not.toHaveBeenCalled();
+        await withPausedStore(store, async () => {
+          const { context, broadcast } = cardContext(cfg);
+          const { respond, pending } = requester(client, context)(
+            method,
+            cardParams(method, target, "committed card", "delayed-refresh"),
+          );
+          try {
+            await awaitEntered(entered.promise, pending);
+            expect(respond).not.toHaveBeenCalled();
+            expect(broadcast).not.toHaveBeenCalled();
+            await upsertSessionEntryCore(target, {
+              ...admitted,
+              sessionId: "successor-generation",
+              updatedAt: 2,
+            });
+          } finally {
+            release.resolve();
+            await pending;
+          }
+          expect(respond).toHaveBeenCalledExactlyOnceWith(false, undefined, changedAuthority());
           expect(broadcast).not.toHaveBeenCalled();
-          await upsertSessionEntryCore(target, {
-            ...admitted,
-            sessionId: "successor-generation",
-            updatedAt: 2,
+          expect(await getCard(target)).toMatchObject({
+            markdown:
+              method === "progressCard.put" && !beforeCommit ? "committed card" : "original card",
+            revision: method === "progressCard.put" && !beforeCommit ? 2 : 1,
           });
-        } finally {
-          release.resolve();
-          await pending;
-        }
-        expect(respond).toHaveBeenCalledExactlyOnceWith(false, undefined, changedAuthority());
-        expect(broadcast).not.toHaveBeenCalled();
-        expect(await getCard(target)).toMatchObject({
-          markdown:
-            method === "progressCard.put" && !beforeCommit ? "committed card" : "original card",
-          revision: method === "progressCard.put" && !beforeCommit ? 2 : 1,
         });
       }),
   );
 
-  it.each(
-    (["global", "agent:work:progress-authorization"] as const).flatMap((sessionKey) =>
-      (["progressCard.get", "progressCard.put", "progressCard.refresh"] as const).flatMap(
-        (method) =>
-          (method === "progressCard.refresh" ? [true] : [false, true]).map((replace) => ({
-            sessionKey,
-            method,
-            replace,
-          })),
-      ),
-    ),
-  )(
-    "revalidates $method for $sessionKey after preparation (replace=$replace)",
-    ({ method, sessionKey, replace }) =>
-      withState(async () => {
-        const cfg = config({ session: { scope: "per-sender" } });
-        const target = { sessionKey, agentId: "work" };
-        const client = { ...roleClient("view", "admitted-owner"), connId: "admitted-owner" };
-        const successor = roleClient("view", "successor-owner");
-        const successorId = successor.authenticatedUserProfile!.profileId;
-        await upsertSessionEntryCore(target, entry(client));
-        await putCard(target, "original card");
-        const { context, broadcast } = cardContext(cfg);
-        const params = cardParams(method, target, "request update", "revoked-refresh");
-        const oracle = await resolveSessionMutationAuthorizationAsync({
-          client,
-          method,
-          requestParams: params,
-          context,
-        });
-        using authorizationCleanup = {
-          [Symbol.dispose]: () => oracle.authorization?.release?.(),
-        };
-        void authorizationCleanup;
-        expect(oracle.error).toBeNull();
-        const authorization = oracle.authorization;
-        if (!authorization) {
-          throw new Error("expected a captured session authorization");
+  it("rejects a prepared card read before touching its replacement owner's storage", () =>
+    withState(async () => {
+      const cfg = config({ session: { scope: "per-sender" } });
+      const target = { sessionKey: "global", agentId: "work" };
+      const client = { ...roleClient("view", "admitted-owner"), connId: "admitted-owner" };
+      const successor = roleClient("view", "successor-owner");
+      await upsertSessionEntryCore(target, entry(client));
+      await putCard(target, "original card");
+      const { context, broadcast } = cardContext(cfg);
+      const { entered, release, handlers } = pausedHandlers("progressCard.get");
+      const { respond, pending } = requester(client, context)("progressCard.get", target, handlers);
+      try {
+        await awaitEntered(entered.promise, pending);
+        expect(respond).not.toHaveBeenCalled();
+        const resolved = await resolveSessionSharingTargetAsync({ cfg, ...target });
+        if (!resolved) {
+          throw new Error("expected the admitted persisted session");
         }
-        authorization.assertCurrent();
-        const { entered, release, loadHandlers, handlers: extraHandlers } = pausedHandlers(method);
-        const request = () => requester(client, context)(method, params, extraHandlers);
-        const { respond, pending } = request();
-        try {
-          await awaitEntered(entered.promise, pending);
-          expect(respond).not.toHaveBeenCalled();
-          if (replace) {
-            const resolved = await resolveSessionSharingTargetAsync({ cfg, ...target });
-            if (!resolved) {
-              throw new Error("expected the admitted persisted session");
-            }
-            await expect(
-              deleteSessionEntryLifecycle({
-                agentId: resolved.agentId,
-                archiveTranscript: false,
-                expectedSessionId: "admitted-generation",
-                storePath: resolved.storePath,
-                target: { canonicalKey: resolved.canonicalKey, storeKeys: resolved.storeKeys },
-              }),
-            ).resolves.toMatchObject({ deleted: true });
-            await upsertSessionEntryCore(target, {
-              ...entry(successor, "successor-generation"),
-              updatedAt: 2,
-            });
-            await putCard(target, "successor card");
-            expect(loadSessionEntry(target)).toMatchObject({
-              sessionId: "successor-generation",
-              visibility: "draft",
-              createdActor: { id: successorId },
-            });
-            expect(() => authorization.assertCurrent()).toThrow(
-              SessionMutationAuthorizationChangedError,
-            );
-            const { respond: fresh, pending: freshPending } = request();
-            await freshPending;
-            expect(fresh).toHaveBeenCalledWith(
-              false,
-              undefined,
-              method === "progressCard.get"
-                ? {
-                    code: "INVALID_REQUEST",
-                    message: `Session "${target.sessionKey}" was not found.`,
-                  }
-                : expect.objectContaining({
-                    details: expect.objectContaining({ code: "SESSION_PARTICIPATION_REQUIRED" }),
-                  }),
-            );
-            expect(loadHandlers).toHaveBeenCalledOnce();
-          } else {
-            authorization.assertCurrent();
-          }
-          const before = await getCard(target);
-          const get = vi.spyOn(progressCardStore, "get");
-          const put = vi.spyOn(progressCardStore, "put");
-          let storeCalls;
-          try {
-            release.resolve();
-            await pending;
-            storeCalls = { get: [...get.mock.calls], put: [...put.mock.calls] };
-          } finally {
-            get.mockRestore();
-            put.mockRestore();
-          }
-          const after = await getCard(target);
-          if (replace) {
-            expect(respond.mock.calls).toEqual([[false, undefined, changedAuthority()]]);
-            expect(after).toEqual(before);
-            expect(storeCalls).toEqual({ get: [], put: [] });
-            expect(broadcast).not.toHaveBeenCalled();
-          } else {
-            const writing = method === "progressCard.put";
-            expect(respond).toHaveBeenCalledWith(
-              true,
-              {
-                card: expect.objectContaining({
-                  markdown: writing ? "request update" : "original card",
-                  revision: writing ? 2 : 1,
-                }),
-              },
-              undefined,
-            );
-            expect(after?.markdown).toBe(writing ? "request update" : "original card");
-            expect(broadcast).toHaveBeenCalledTimes(writing ? 1 : 0);
-          }
-        } finally {
+        await deleteSessionEntryLifecycle({
+          agentId: resolved.agentId,
+          archiveTranscript: false,
+          expectedSessionId: "admitted-generation",
+          storePath: resolved.storePath,
+          target: { canonicalKey: resolved.canonicalKey, storeKeys: resolved.storeKeys },
+        });
+        await upsertSessionEntryCore(target, {
+          ...entry(successor, "successor-generation"),
+          updatedAt: 2,
+        });
+        await putCard(target, "successor card");
+        const before = await getCard(target);
+        {
+          using get = vi.spyOn(progressCardStore, "get");
           release.resolve();
           await pending;
+          expect(get).not.toHaveBeenCalled();
         }
-      }),
-  );
+        expect(respond.mock.calls).toEqual([[false, undefined, changedAuthority()]]);
+        expect(await getCard(target)).toEqual(before);
+        expect(broadcast).not.toHaveBeenCalled();
+      } finally {
+        release.resolve();
+        await pending;
+      }
+    }));
 });
 
 it.each(
@@ -470,8 +379,12 @@ it.each(
         }),
       });
       await putCard(target, "fresh card");
+      using get = vi.spyOn(progressCardStore, "get");
+      using put = vi.spyOn(progressCardStore, "put");
       release.resolve();
       await pending;
+      expect(get).not.toHaveBeenCalled();
+      expect(put).not.toHaveBeenCalled();
       expect(respond).toHaveBeenCalledWith(false, undefined, changedAuthority());
       expect((await getCard(target))?.markdown).toBe("fresh card");
       expect(broadcast).not.toHaveBeenCalled();

@@ -9,6 +9,7 @@ import {
   createConfigWriteSnapshot,
   flushConfigHandlerMicrotasks,
 } from "./config.test-helpers.js";
+import { expectRpcError, expectRpcResult } from "./rpc-response.test-support.js";
 
 const readConfigFileSnapshotForWriteMock = vi.fn();
 const writeConfigFileMock = vi.fn();
@@ -24,30 +25,26 @@ const restartSentinelMocks = vi.hoisted(() => ({
   writeRestartSentinel: vi.fn(async (_payload: RestartSentinelPayload) => undefined),
 }));
 
-vi.mock("../../config/config.js", async () => {
-  const actual =
-    await vi.importActual<typeof import("../../config/config.js")>("../../config/config.js");
-  return {
-    ...actual,
-    createConfigIO: () => ({ configPath: "/tmp/openclaw.json" }),
-    writeConfigFile: writeConfigFileMock,
-    replaceConfigFile: async (params: { sourceConfig: OpenClawConfig; writeOptions?: object }) => {
-      await writeConfigFileMock(params.sourceConfig, params.writeOptions);
-      if (params.writeOptions && runtimeApplication.claimed) {
-        getRuntimeConfigWriteApplication(params.writeOptions)?.claim()?.settle("applied");
-      }
-      return {
-        path: "/tmp/openclaw.json",
-        previousHash: "base-hash",
-        snapshot: createConfigWriteSnapshot(params.sourceConfig),
-        nextConfig: params.sourceConfig,
-        persistedHash: "next-hash",
-        afterWrite: { mode: "auto" },
-        followUp: { mode: "auto", requiresRestart: false },
-      };
-    },
-  };
-});
+vi.mock("../../config/config.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../config/config.js")>()),
+  createConfigIO: () => ({ configPath: "/tmp/openclaw.json" }),
+  writeConfigFile: writeConfigFileMock,
+  replaceConfigFile: async (params: { sourceConfig: OpenClawConfig; writeOptions?: object }) => {
+    await writeConfigFileMock(params.sourceConfig, params.writeOptions);
+    if (params.writeOptions && runtimeApplication.claimed) {
+      getRuntimeConfigWriteApplication(params.writeOptions)?.claim()?.settle("applied");
+    }
+    return {
+      path: "/tmp/openclaw.json",
+      previousHash: "base-hash",
+      snapshot: createConfigWriteSnapshot(params.sourceConfig),
+      nextConfig: params.sourceConfig,
+      persistedHash: "next-hash",
+      afterWrite: { mode: "auto" },
+      followUp: { mode: "auto", requiresRestart: false },
+    };
+  },
+}));
 
 vi.mock("../../config/io.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../config/io.js")>()),
@@ -155,9 +152,7 @@ beforeEach(() => {
     config,
   }));
   prepareSecretsRuntimeSnapshotMock.mockImplementation(
-    async ({ config }: { config: OpenClawConfig }) => ({
-      config,
-    }),
+    async ({ config }: { config: OpenClawConfig }) => ({ config }),
   );
 });
 
@@ -224,11 +219,7 @@ describe("config shared auth disconnects", () => {
       release.resolve();
       await operation;
     }
-    expect(respond).toHaveBeenCalledWith(
-      true,
-      expect.objectContaining({ ok: true, hash: "next-hash" }),
-      undefined,
-    );
+    expectRpcResult(respond, expect.objectContaining({ ok: true, hash: "next-hash" }));
   });
 
   it("accepts an unresolved isolatable TTS SecretRef and reports the cold owner", async () => {
@@ -256,19 +247,13 @@ describe("config shared auth disconnects", () => {
     ]);
   });
 
-  it.each(["secret provider policy denied resolution"])(
-    "rejects non-retryable SecretRef degradation before config writes: %s",
-    async (reason) => {
-      mockDegradedTts(reason);
-      const { respond } = await runWrite("config.set", ttsConfig);
-      expect(writeConfigFileMock).not.toHaveBeenCalled();
-      expect(respond).toHaveBeenCalledWith(
-        false,
-        undefined,
-        expect.objectContaining({ message: expect.stringContaining(reason) }),
-      );
-    },
-  );
+  it("rejects non-retryable SecretRef degradation before config writes", async () => {
+    const reason = "secret provider policy denied resolution";
+    mockDegradedTts(reason);
+    const { respond } = await runWrite("config.set", ttsConfig);
+    expect(writeConfigFileMock).not.toHaveBeenCalled();
+    expectRpcError(respond, { message: expect.stringContaining(reason) });
+  });
 
   it.each(["config.patch", "config.apply"] as const)(
     "%s hot-applies same-mode credentials and retains restart ownership for mode switches",
@@ -298,14 +283,15 @@ describe("config shared auth disconnects", () => {
 
   it("leaves unclaimed trusted-proxy grant writes to per-client policy reconciliation", async () => {
     runtimeApplication.claimed = false;
+    const proxyPolicy = (user: string) => ({
+      userHeader: "x-forwarded-user",
+      allowUsers: [user],
+    });
     mockPreviousConfig({
       gateway: {
         auth: {
           mode: "trusted-proxy",
-          trustedProxy: {
-            userHeader: "x-forwarded-user",
-            allowUsers: ["alice@example.com"],
-          },
+          trustedProxy: proxyPolicy("alice@example.com"),
         },
         trustedProxies: ["127.0.0.1"],
       },
@@ -313,16 +299,7 @@ describe("config shared auth disconnects", () => {
 
     const { disconnectClientsUsingSharedGatewayAuth } = await runWrite(
       "config.patch",
-      {
-        gateway: {
-          auth: {
-            trustedProxy: {
-              userHeader: "x-forwarded-user",
-              allowUsers: ["bob@example.com"],
-            },
-          },
-        },
-      },
+      { gateway: { auth: { trustedProxy: proxyPolicy("bob@example.com") } } },
       { restartDelayMs: 1_000, replacePaths: ["gateway.auth.trustedProxy.allowUsers"] },
     );
 

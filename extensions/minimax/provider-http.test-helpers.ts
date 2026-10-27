@@ -10,9 +10,13 @@ const minimaxProviderHttpMocks = getProviderHttpMocks();
 
 beforeEach(() => {
   minimaxProviderHttpMocks.resolveProviderHttpRequestConfigMock.mockImplementation((params) => {
-    const headers = new Headers(params.defaultHeaders);
+    const headers = new Headers(omitNullRequestHeaders(params.defaultHeaders));
     for (const [key, value] of Object.entries(params.request?.headers ?? {})) {
-      headers.set(key, value);
+      if (value === null) {
+        headers.delete(key);
+      } else {
+        headers.set(key, value);
+      }
     }
     return {
       baseUrl: params.baseUrl ?? params.defaultBaseUrl,
@@ -67,3 +71,4 @@ export function loadMinimaxMusicGenerationProviderModule() {
 export function loadMinimaxVideoGenerationProviderModule() {
   return import("./video-generation-provider.js");
 }
+import { omitNullRequestHeaders } from "openclaw/plugin-sdk/provider-request-headers";

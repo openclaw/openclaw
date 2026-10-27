@@ -15,6 +15,8 @@ const mockState = getGraphMessagesMockState();
 installGraphMessagesMockDefaults();
 let graph: GraphMessagesTestModule;
 const target = { cfg: {}, to: CHAT_ID, messageId: "msg-1" };
+const chatPath = `/chats/${encodeURIComponent(CHAT_ID)}`;
+const graphRequest = (path: string, fields: object = {}) => ({ token: TOKEN, path, ...fields });
 
 const NAMED_ACCOUNT_CFG: OpenClawConfig = {
   channels: { msteams: { accounts: { secondary: { appId: "secondary-app-id" } } } },
@@ -76,11 +78,9 @@ describe("listPinsMSTeams", () => {
       { id: "pinned-1", pinnedMessageId: "pinned-1", messageId: "msg-1", text: "First page" },
       { id: "pinned-2", pinnedMessageId: "pinned-2", messageId: "msg-2", text: "Second page" },
     ]);
-    expect(mockState.fetchAllGraphPages).toHaveBeenCalledWith({
-      token: TOKEN,
-      path: `/chats/${encodeURIComponent(CHAT_ID)}/pinnedMessages?$expand=message`,
-      maxPages: 10,
-    });
+    expect(mockState.fetchAllGraphPages).toHaveBeenCalledWith(
+      graphRequest(`${chatPath}/pinnedMessages?$expand=message`, { maxPages: 10 }),
+    );
   });
 
   it("throws for channel list-pins (not supported on Graph v1.0)", async () => {
@@ -139,16 +139,14 @@ it("pins a message in a chat via message@odata.bind body", async () => {
   const result = await graph.pinMessageMSTeams(target);
 
   expect(result).toEqual({ ok: true, pinnedMessageId: "pinned-1" });
-  expect(mockState.mutateGraphJson).toHaveBeenCalledWith({
-    token: TOKEN,
-    path: `/chats/${encodeURIComponent(CHAT_ID)}/pinnedMessages`,
-    method: "POST",
-    body: {
-      "message@odata.bind": `https://graph.microsoft.com/v1.0/chats/${encodeURIComponent(
-        CHAT_ID,
-      )}/messages/${encodeURIComponent("msg-1")}`,
-    },
-  });
+  expect(mockState.mutateGraphJson).toHaveBeenCalledWith(
+    graphRequest(`${chatPath}/pinnedMessages`, {
+      method: "POST",
+      body: {
+        "message@odata.bind": `https://graph.microsoft.com/v1.0${chatPath}/messages/msg-1`,
+      },
+    }),
+  );
 });
 
 describe("unpinMessageMSTeams", () => {
@@ -158,10 +156,9 @@ describe("unpinMessageMSTeams", () => {
     const result = await graph.unpinMessageMSTeams({ ...target, pinnedMessageId: "pinned-1" });
 
     expect(result).toEqual({ ok: true });
-    expect(mockState.deleteGraphRequest).toHaveBeenCalledWith({
-      token: TOKEN,
-      path: `/chats/${encodeURIComponent(CHAT_ID)}/pinnedMessages/${encodeURIComponent("pinned-1")}`,
-    });
+    expect(mockState.deleteGraphRequest).toHaveBeenCalledWith(
+      graphRequest(`${chatPath}/pinnedMessages/pinned-1`),
+    );
   });
 
   it("rejects unpinning a message from a channel on Graph v1.0", async () => {
@@ -190,13 +187,13 @@ describe("MSTeams reactions", () => {
         {},
         { preferDelegated: true, accountId: undefined },
       );
-      expect(mockState.mutateGraphJson).toHaveBeenCalledWith({
-        token: TOKEN,
-        path: `${messagePath}/${action}`,
-        method: "POST",
-        body: { reactionType: "🎉" },
-        beta: true,
-      });
+      expect(mockState.mutateGraphJson).toHaveBeenCalledWith(
+        graphRequest(`${messagePath}/${action}`, {
+          method: "POST",
+          body: { reactionType: "🎉" },
+          beta: true,
+        }),
+      );
     },
   );
 
@@ -227,23 +224,22 @@ function searchMessage(
   };
 }
 
-function readFirstGraphPath(): string {
-  const request = mockState.fetchGraphJson.mock.calls[0]?.[0];
-  if (!request || typeof request.path !== "string") {
-    throw new Error("Expected Graph fetch request path");
-  }
-  return request.path;
+function expectReadPath(path: string) {
+  expect(mockState.fetchGraphJson).toHaveBeenNthCalledWith(1, graphRequest(path));
 }
 
 describe("searchMessagesMSTeams", () => {
   it("filters chat messages locally and normalizes HTML content", async () => {
+    const content = "<p>Meeting <b>notes</b> from Monday</p>";
+    const from = { user: { id: "u1", displayName: "Alice" } };
+    const createdAt = "2026-03-25T10:00:00Z";
     mockState.fetchGraphJson.mockResolvedValue({
       value: [
         {
           id: "msg-1",
-          body: { content: "<p>Meeting <b>notes</b> from Monday</p>", contentType: "html" },
-          from: { user: { id: "u1", displayName: "Alice" } },
-          createdDateTime: "2026-03-25T10:00:00Z",
+          body: { content, contentType: "html" },
+          from,
+          createdDateTime: createdAt,
         },
         searchMessage("msg-2", "Unrelated update", undefined, "text"),
       ],
@@ -255,14 +251,14 @@ describe("searchMessagesMSTeams", () => {
       messages: [
         {
           id: "msg-1",
-          text: "<p>Meeting <b>notes</b> from Monday</p>",
+          text: content,
           from: { user: { id: "u1", displayName: "Alice" } },
-          createdAt: "2026-03-25T10:00:00Z",
+          createdAt,
         },
       ],
       truncated: false,
     });
-    expect(readFirstGraphPath()).toBe(`/chats/${encodeURIComponent(CHAT_ID)}/messages?$top=50`);
+    expectReadPath(`${chatPath}/messages?$top=50`);
   });
 
   it("keeps channel search scoped to the selected channel", async () => {
@@ -277,7 +273,7 @@ describe("searchMessagesMSTeams", () => {
     });
 
     expect(result.messages).toHaveLength(1);
-    expect(readFirstGraphPath()).toBe("/teams/team-id-1/channels/channel-id-1/messages?$top=50");
+    expectReadPath("/teams/team-id-1/channels/channel-id-1/messages?$top=50");
   });
 
   it("follows target-scoped pagination and applies sender matching locally", async () => {

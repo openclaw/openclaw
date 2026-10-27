@@ -8,15 +8,8 @@ import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/st
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import pLimit from "p-limit";
 import type { NodePluginToolDescriptor } from "../../packages/gateway-protocol/src/schema/nodes.js";
-import {
-  connectMcpClient,
-  disposeMcpClient,
-  isMcpHttpSessionExpired,
-} from "../agents/mcp-client-lifecycle.js";
-import { redactMcpDiagnosticError } from "../agents/mcp-error.js";
-import { createMcpJsonSchemaValidator } from "../agents/mcp-json-schema-validator.js";
+import { listAllMcpTools } from "../agents/mcp-catalog-listing.js";
 import { sanitizeMcpMetadataText } from "../agents/mcp-metadata.js";
-import { collectMcpPaginatedItems } from "../agents/mcp-pagination.js";
 import {
   McpSdkCompatibilityError,
   mcpCallToolResultSchema,
@@ -27,7 +20,7 @@ import {
   type McpToolCatalogMetadata,
 } from "../agents/mcp-tool-metadata.js";
 import { resolveMcpRequestTimeoutMs } from "../agents/mcp-transport-config.js";
-import { resolveMcpTransport } from "../agents/mcp-transport.js";
+import type { resolveMcpTransport } from "../agents/mcp-transport.js";
 import type { McpServerConfig } from "../config/types.mcp.js";
 import {
   NODE_MCP_TOOL_CALL_TIMEOUT_MS,
@@ -43,9 +36,6 @@ const NODE_MCP_ERROR_MAX_CHARS = 1_024;
 const NODE_MCP_MAX_DESCRIPTORS = 128;
 const NODE_MCP_MAX_DESCRIPTOR_BYTES = 1024 * 1024;
 const NODE_MCP_MAX_CATALOG_BYTES = 10 * 1024 * 1024;
-const NODE_MCP_MAX_LIST_PAGES = NODE_MCP_MAX_DESCRIPTORS;
-// The byte cap charges every response; this separately bounds retained tiny-tool object overhead.
-const NODE_MCP_MAX_LISTED_TOOLS = NODE_MCP_MAX_DESCRIPTORS * NODE_MCP_MAX_LIST_PAGES;
 const NODE_MCP_CONNECT_CONCURRENCY = 6;
 const NODE_MCP_RETRY_INITIAL_MS = 250;
 const NODE_MCP_RETRY_MAX_MS = 60_000;
@@ -97,10 +87,6 @@ type NodeHostMcpManagerDeps = {
   onDescriptorsChanged?: () => void;
   signal?: AbortSignal;
 };
-
-function formatMcpError(error: unknown): string {
-  return truncateUtf16Safe(redactMcpDiagnosticError(error), NODE_MCP_ERROR_MAX_CHARS);
-}
 
 function sanitizeDescriptorFragment(raw: string, fallback: string): string {
   const cleaned = raw
@@ -186,6 +172,7 @@ async function disposeNodeHostMcpSession(
   session: NodeHostMcpSession,
 ): Promise<void> {
   session.abortController.abort(new Error("node host MCP session retired"));
+  const { disposeMcpClient } = await import("../agents/mcp-client-lifecycle.js");
   if ((await disposeMcpClient(session)) === "uncertain") {
     console.warn(
       `node host MCP server "${serverName}" cleanup could not be confirmed; check the server process`,
@@ -198,6 +185,20 @@ export async function startNodeHostMcpManager(
   servers: Record<string, McpServerConfig> | undefined,
   deps: NodeHostMcpManagerDeps = {},
 ) {
+  const [
+    { connectMcpClient, isMcpHttpSessionExpired },
+    { redactMcpDiagnosticError },
+    { createMcpJsonSchemaValidator },
+    { resolveMcpTransport },
+  ] = await Promise.all([
+    import("../agents/mcp-client-lifecycle.js"),
+    import("../agents/mcp-error.js"),
+    import("../agents/mcp-json-schema-validator.js"),
+    import("../agents/mcp-transport.js"),
+  ]);
+  function formatMcpError(error: unknown): string {
+    return truncateUtf16Safe(redactMcpDiagnosticError(error), NODE_MCP_ERROR_MAX_CHARS);
+  }
   const descriptors: NodePluginToolDescriptor[] = [];
   const connectionAdmission = pLimit(NODE_MCP_CONNECT_CONCURRENCY);
   const lifecycleAbortController = new AbortController();
@@ -289,29 +290,11 @@ export async function startNodeHostMcpManager(
     signal: AbortSignal,
     resetRetryDelay = false,
   ) => {
-    const normalized = await collectMcpPaginatedItems({
-      label: "MCP tool listing",
-      itemLabel: "tools",
-      timeoutMs: session.requestTimeoutMs,
-      maxPages: NODE_MCP_MAX_LIST_PAGES,
-      maxItems: NODE_MCP_MAX_LISTED_TOOLS,
-      maxBytes: NODE_MCP_MAX_CATALOG_BYTES,
-      signal,
-      loadPage: async ({ cursor, requestTimeoutMs, signal: requestSignal }) => {
-        const page = await session.client.request(
-          { method: "tools/list", params: cursor === undefined ? undefined : { cursor } },
-          {
-            timeout: requestTimeoutMs,
-            maxTotalTimeout: requestTimeoutMs,
-            signal: requestSignal,
-          },
-        );
-        return { items: page.tools, nextCursor: page.nextCursor, serializedValue: page };
-      },
-    }).then((tools) =>
-      normalizeMcpToolCatalog(tools, createMcpJsonSchemaValidator(), (toolName) =>
-        isMcpToolAllowed(state.config.toolFilter, toolName) ? "include" : "exclude",
-      ),
+    const normalized = await listAllMcpTools(session.client, session.requestTimeoutMs, signal).then(
+      (tools) =>
+        normalizeMcpToolCatalog(tools, createMcpJsonSchemaValidator(), (toolName) =>
+          isMcpToolAllowed(state.config.toolFilter, toolName) ? "include" : "exclude",
+        ),
     );
     if (closed || state.current !== session) {
       return;

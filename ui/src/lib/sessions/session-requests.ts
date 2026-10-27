@@ -1,10 +1,7 @@
 import type { GatewayProtocolRequestOptions } from "@openclaw/gateway-client/browser";
 import type {
-  SessionsDeleteResult,
   SessionsSetInvolvementParams,
   SessionsListParams,
-  SessionsPatchManyParams,
-  SessionsPatchManyResult,
 } from "../../../../packages/gateway-protocol/src/index.js";
 import {
   expandSessionRowFacts,
@@ -16,11 +13,10 @@ import type { SessionsListResult, SessionsPatchResult } from "../../api/types.ts
 import type { SessionPatch } from "./patch.ts";
 import { appendSessionResults } from "./reconcile.ts";
 import type {
-  SessionDeleteOptions,
   SessionListOptions,
   SessionRequestClient,
   SessionResetOptions,
-} from "./session-capability.ts";
+} from "./session-types.ts";
 
 /** Personal list choices share one RPC contract across all session menus. */
 export async function requestSessionInvolvement(
@@ -297,36 +293,6 @@ export function requestSessionPatch(
   return patch.archived === true
     ? client.request<SessionsPatchResult>("sessions.patch", params, SESSION_ARCHIVE_REQUEST_OPTIONS)
     : client.request<SessionsPatchResult>("sessions.patch", params);
-}
-
-export function requestSessionPatchMany(
-  client: SessionRequestClient,
-  params: SessionsPatchManyParams,
-): Promise<SessionsPatchManyResult> {
-  return params.patch.archived === true
-    ? client.request<SessionsPatchManyResult>(
-        "sessions.patchMany",
-        params,
-        SESSION_ARCHIVE_REQUEST_OPTIONS,
-      )
-    : client.request<SessionsPatchManyResult>("sessions.patchMany", params);
-}
-
-export function requestSessionDelete(
-  client: SessionRequestClient,
-  key: string,
-  options: SessionDeleteOptions = {},
-): Promise<SessionsDeleteResult> {
-  return client.request<SessionsDeleteResult>(
-    "sessions.delete",
-    {
-      ...buildSessionRequestParams(key, options.agentId),
-      deleteTranscript: options.deleteTranscript ?? true,
-      ...(options.expectedSessionId ? { expectedSessionId: options.expectedSessionId } : {}),
-      ...(options.archivedOnly === true ? { archivedOnly: true } : {}),
-    },
-    SESSION_ARCHIVE_REQUEST_OPTIONS,
-  );
 }
 
 export function requestSessionReset(

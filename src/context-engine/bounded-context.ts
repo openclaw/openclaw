@@ -40,7 +40,7 @@ export function boundContextEngineAssembly(
   }
   // User messages can arrive between a call and its result. Advance past the
   // complete occurrence rather than retaining an orphan or exceeding the budget.
-  for (const frame of classifyToolUseResultPairing(messages).frames) {
+  for (const frame of classifyToolUseResultPairing(messages)) {
     if (frame.startIndex >= cut) {
       break;
     }

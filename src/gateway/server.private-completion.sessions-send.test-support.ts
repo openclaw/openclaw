@@ -7,7 +7,6 @@ import {
 } from "../../test/helpers/promise.js";
 import type { AgentCommandOpts } from "../agents/command/types.js";
 import { SessionFollowupCompletion } from "../agents/subagents/completion/session-followup-completion.js";
-import type { FollowupRequest } from "../agents/subagents/completion/session-followup-completion.types.js";
 import { startSessionsSendReplyFlow } from "../agents/tools/sessions-send-reply-flow.js";
 import { withPluginRuntimeGatewayContextResolver } from "../plugins/runtime/gateway-request-scope.js";
 import { getRpcSource } from "../sessions/session-controller.rpc-sources.js";
@@ -59,9 +58,7 @@ export function readPrivateCompletionRecorder(
   sessionId: string,
 ): UserTurnTranscriptRecorder {
   const command = input as AgentCommandOpts;
-  expect(command.deliver).toBe(false);
-  expect(command.privateCompletion).toBe(true);
-  expect(command.sessionId).toBe(sessionId);
+  expect(command).toMatchObject({ deliver: false, privateCompletion: true, sessionId });
   return expectDefined(command.userTurnTranscriptRecorder, "Expected real private input recorder");
 }
 
@@ -71,31 +68,19 @@ export function registerSessionsSendPrivateCompletionTests(
   it.for(["processed", "provider failed"] as const)(
     "settles a sessions_send child reply through real private admission (%s)",
     async (outcome, { signal }) => {
-      const {
-        context,
-        sequence,
-        sessionKey,
-        sessionId,
-        completions,
-        pending,
-        transcript,
-        recorder,
-        agentCommandMock,
-        verifyChatSuccessor,
-      } = getFixture();
-      const childRunId = `sessions-send-child-${sequence}`;
+      const fixture = getFixture();
+      const { context, sessionKey, sessionId, agentCommandMock } = fixture;
+      const childRunId = `sessions-send-child-${fixture.sequence}`;
       const childSessionKey = `agent:main:subagent:${childRunId}`;
       const childReply = "Synthetic retained sessions_send child result";
+      const failure = "synthetic retained parent failure";
       const runId = `announce:sessions-send:${childRunId}:completion`;
       const entered = createDeferred();
       const release = createDeferred();
       const source = new AbortController();
-      const closed = createDeferred<{
-        completions: ReturnType<typeof completions>;
-        pending: ReturnType<typeof pending>;
-      }>();
+      const closed = createDeferred<Record<"completions" | "pending", Record<string, unknown>[]>>();
       let completionWork: Promise<unknown> | undefined;
-      const followup: FollowupRequest = {
+      const completion = SessionFollowupCompletion.bind({
         runId: childRunId,
         requesterAgentId: "main",
         requesterSessionKey: sessionKey,
@@ -106,7 +91,7 @@ export function registerSessionsSendPrivateCompletionTests(
           signal: source.signal,
           assertCurrent: () => source.signal.throwIfAborted(),
           release: () => {
-            closed.resolve({ completions: completions(), pending: pending() });
+            closed.resolve({ completions: fixture.completions(), pending: fixture.pending() });
             source.abort();
           },
           run<T>(work: () => T): T {
@@ -115,8 +100,7 @@ export function registerSessionsSendPrivateCompletionTests(
             return result;
           },
         },
-      };
-      const completion = SessionFollowupCompletion.bind(followup);
+      });
       const close = vi.spyOn(completion, "close");
       completion.markAccepted(childRunId);
       await completion.settle(childRunId, {
@@ -127,13 +111,13 @@ export function registerSessionsSendPrivateCompletionTests(
       completion.finishExecution(childRunId);
       agentCommandMock.mockImplementation(async (input) => {
         const command = input as AgentCommandOpts;
-        const inputRecorder = recorder(input);
+        const inputRecorder = fixture.recorder(input);
         expect(command.runId).toBe(runId);
         await command.onExecutionStarted?.();
         entered.resolve();
         await release.promise;
         if (outcome === "provider failed") {
-          throw new Error("synthetic retained parent failure");
+          throw new Error(failure);
         }
         await inputRecorder.persistApproved();
         return { payloads: [], meta: { durationMs: 1, terminalReply: { disposition: "empty" } } };
@@ -151,8 +135,9 @@ export function registerSessionsSendPrivateCompletionTests(
         requesterAgentId: "main",
         requesterSession: { sessionId },
       });
-      const work = expectDefined(completionWork, "Expected retained completion work");
-      const finished = work.catch(() => undefined);
+      const finished = expectDefined(completionWork, "Expected retained completion work").catch(
+        () => undefined,
+      );
       try {
         await withinTest(
           awaitGateBeforeSettlement(
@@ -163,23 +148,17 @@ export function registerSessionsSendPrivateCompletionTests(
           signal,
         );
         expect(completion.signal.aborted).toBe(false);
-        expect(completions()).toEqual([]);
-        expect(pending()).toMatchObject([{ run_id: runId, state: "queued" }]);
+        expect(fixture.completions()).toEqual([]);
+        expect(fixture.pending()).toMatchObject([{ run_id: runId, state: "queued" }]);
         release.resolve();
         await withinTest(finished, signal);
         const settled = await withinTest(closed.promise, signal);
         expect(completion.signal.aborted).toBe(true);
-        expect(close.mock.calls).toEqual(
+        const closeArgs =
           outcome === "processed"
-            ? [[]]
-            : [
-                [
-                  expect.objectContaining({
-                    message: expect.stringContaining("synthetic retained parent failure"),
-                  }),
-                ],
-              ],
-        );
+            ? []
+            : [expect.objectContaining({ message: expect.stringContaining(failure) })];
+        expect(close.mock.calls).toEqual([closeArgs]);
         expect(agentCommandMock).toHaveBeenCalledOnce();
         expect(getRpcSource(runId)).toBeUndefined();
         expect(settled.completions).toMatchObject([
@@ -187,12 +166,12 @@ export function registerSessionsSendPrivateCompletionTests(
         ]);
         if (outcome === "processed") {
           expect(settled.pending).toEqual([]);
-          expect(JSON.stringify(transcript())).toContain(childReply);
+          expect(JSON.stringify(fixture.transcript())).toContain(childReply);
           expect(context.dedupe.get(`agent:${runId}`)?.payload).toMatchObject({
             status: "ok",
             inputProcessingCompleted: true,
           });
-          await verifyChatSuccessor(signal);
+          await fixture.verifyChatSuccessor(signal);
         } else {
           expect(settled.pending).toMatchObject([
             {
@@ -203,7 +182,7 @@ export function registerSessionsSendPrivateCompletionTests(
           ]);
           expect(JSON.parse(String(settled.completions[0]?.outcome_json))).toMatchObject({
             reason: "failed",
-            error: "synthetic retained parent failure",
+            error: failure,
           });
         }
       } finally {

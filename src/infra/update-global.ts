@@ -17,13 +17,14 @@ import {
   readPackageDistInventoryIfPresent,
 } from "./package-dist-inventory.js";
 import { readPackageName, readPackageVersion } from "./package-json.js";
+import { realpathOrResolve } from "./path-existence.js";
 import { parseSemver } from "./runtime-guard.js";
 import { collectGitRuntimeErrors, type GitRuntimeIdentity } from "./update-git-runtime.js";
 import type { CommandRunner } from "./update-global-command-runner.js";
 import type { GlobalInstallManager } from "./update-global-env.js";
 import {
   resolvePnpmGlobalDirFromGlobalRoot,
-  resolvePnpmHome,
+  resolvePnpmCommand,
 } from "./update-native-package-owner.js";
 import {
   inspectNpmLauncher,
@@ -322,7 +323,7 @@ export async function verifyPackageUpdateRecovery(
 }
 
 async function collectSourceCheckoutInstallErrors(packageRoot: string): Promise<string[]> {
-  const realPackageRoot = await tryRealpath(packageRoot);
+  const realPackageRoot = await realpathOrResolve(packageRoot);
   const hasSourceCheckoutShape =
     ((await pathExists(path.join(realPackageRoot, ".git"))) ||
       (await pathExists(path.join(realPackageRoot, "pnpm-workspace.yaml")))) &&
@@ -489,14 +490,6 @@ export function resolveGlobalInstallSpec(params: {
 }
 
 export { createGlobalInstallEnv } from "./update-global-env.js";
-
-async function tryRealpath(targetPath: string): Promise<string> {
-  try {
-    return await fs.realpath(targetPath);
-  } catch {
-    return path.resolve(targetPath);
-  }
-}
 
 function resolveBunGlobalRoot(): string {
   return (
@@ -697,7 +690,7 @@ export async function resolvePnpmIsolatedInstallOwner(
   pkgRoot?: string | null,
 ): Promise<string | null> {
   const projectRoot = inferPnpmProjectRoot(pkgRoot);
-  return projectRoot ? await tryRealpath(projectRoot) : null;
+  return projectRoot ? await realpathOrResolve(projectRoot) : null;
 }
 
 async function listPnpmIsolatedGlobalPackages(params: {
@@ -834,16 +827,14 @@ function normalizeGlobalInstallCommand(
   managerOrCommand: GlobalInstallManager | ResolvedGlobalInstallCommand,
   pkgRoot?: string | null,
 ): ResolvedGlobalInstallCommand {
-  const pnpmHome = resolvePnpmHome(inferPnpmGlobalRootFromPackageRoot(pkgRoot));
-  const pnpm =
-    pnpmHome && path.join(pnpmHome, "bin", process.platform === "win32" ? "pnpm.cmd" : "pnpm");
+  const pnpm = resolvePnpmCommand(inferPnpmGlobalRootFromPackageRoot(pkgRoot));
   return typeof managerOrCommand === "string"
     ? {
         manager: managerOrCommand,
         command:
           managerOrCommand === "npm"
             ? (resolvePreferredNpmCommand(pkgRoot) ?? managerOrCommand)
-            : managerOrCommand === "pnpm" && pnpm && fsSync.existsSync(pnpm)
+            : managerOrCommand === "pnpm" && pnpm
               ? pnpm
               : managerOrCommand === "bun" && process.versions.bun
                 ? process.execPath
@@ -1036,10 +1027,10 @@ async function inspectNpmGlobalOwner(
     resolvePreferredNpmCommand(pkgRoot) ?? "npm",
     diagnostics,
   );
-  const pkgReal = await tryRealpath(pkgRoot);
+  const pkgReal = await realpathOrResolve(pkgRoot);
   if (
     selected &&
-    (await tryRealpath(path.join(selected.globalRoot, PRIMARY_PACKAGE_NAME))) === pkgReal
+    (await realpathOrResolve(path.join(selected.globalRoot, PRIMARY_PACKAGE_NAME))) === pkgReal
   ) {
     return true;
   }
@@ -1063,7 +1054,7 @@ export async function detectGlobalInstallManagerForRoot(
   timeoutMs: number,
   diagnostics: string[] = [],
 ): Promise<GlobalInstallManager | null> {
-  const pkgReal = await tryRealpath(pkgRoot);
+  const pkgReal = await realpathOrResolve(pkgRoot);
   diagnostics.push(`package root: ${pkgRoot} (resolved: ${pkgReal})`);
   const bunOwner = resolveBunGlobalInstallOwner(pkgRoot) ?? resolveBunGlobalInstallOwner(pkgReal);
   if (bunOwner) {
@@ -1080,11 +1071,11 @@ export async function detectGlobalInstallManagerForRoot(
     if (!globalRoot) {
       continue;
     }
-    const globalReal = await tryRealpath(globalRoot);
+    const globalReal = await realpathOrResolve(globalRoot);
     if (manager === "pnpm" && (await resolvePnpmIsolatedGlobalPackage({ globalRoot, pkgRoot }))) {
       return "pnpm";
     }
-    const expectedReal = await tryRealpath(path.join(globalReal, PRIMARY_PACKAGE_NAME));
+    const expectedReal = await realpathOrResolve(path.join(globalReal, PRIMARY_PACKAGE_NAME));
     if (path.resolve(expectedReal) === path.resolve(pkgReal)) {
       return manager;
     }

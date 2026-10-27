@@ -1,9 +1,12 @@
 import { createMemo, For, Show } from "solid-js";
+import { registerChatSessionEnglish } from "../../../i18n/locales/en-chat-session.ts";
 import { resolveIdentityHue } from "../../../lib/identity-avatar.ts";
-import { getLocale, t } from "../../../lib/reactive/i18n.ts";
+import { getLocale, t, registerEnglishCatalog } from "../../../lib/reactive/i18n.ts";
 import { ChatAvatar } from "../chat-avatar.ts";
 import type { ChatTypingActorView, ChatTypingOverflow } from "../chat-typing-presence.ts";
 import { ChatAuthorAvatar } from "./chat-author-avatar.ts";
+
+registerEnglishCatalog(registerChatSessionEnglish);
 
 let listFormatter: Intl.ListFormat | undefined;
 let listLocale: string | undefined;

@@ -35,7 +35,7 @@ import {
   waitUntilCompleted,
 } from "./code-mode.test-support.js";
 import { createLazyProcessTool } from "./lazy-process-tool.js";
-import type { AgentMessage, AgentToolResult } from "./runtime/index.js";
+import type { AgentToolResult } from "./runtime/index.js";
 import { installSessionToolResultGuard } from "./session-tool-result-guard.js";
 import { SessionManager } from "./sessions/index.js";
 import { makeAgentAssistantMessage } from "./test-helpers/agent-message-fixtures.js";
@@ -68,38 +68,30 @@ function toolTurn(id: string, name: string, args: Record<string, unknown>) {
   };
 }
 
-function toolResultMessage(
-  toolCallId: string,
-  result: AgentToolResult<unknown>,
-): Extract<AgentMessage, { role: "toolResult" }> {
-  return copyInternalToolResultState(result, {
-    role: "toolResult",
-    toolCallId,
-    toolName: "process",
-    content: result.content,
-    details: result.details,
-    isError: false,
-    timestamp: Date.now(),
-  });
-}
-
 function pollFixture(output = "") {
   const session = createSession(output);
   const tool = createProcessTool();
   const manager = SessionManager.inMemory();
   const guard = (options?: Parameters<typeof installSessionToolResultGuard>[1]) =>
     installSessionToolResultGuard(manager, options);
-  const turn = (id: string) => toolTurn(id, "process", { action: "poll", sessionId: session.id });
+  const args = { action: "poll", sessionId: session.id };
+  const turn = (id: string) => toolTurn(id, "process", args);
   const poll = (id: string, timeout?: number, context = turn(id)) =>
     runWithAgentToolExecutionContext(context, () =>
-      tool.execute(id, {
-        action: "poll",
-        sessionId: session.id,
-        ...(timeout === undefined ? {} : { timeout }),
-      }),
+      tool.execute(id, { ...args, ...(timeout === undefined ? {} : { timeout }) }),
     );
   const persist = (id: string, result: AgentToolResult<unknown>) =>
-    manager.appendMessage(toolResultMessage(id, result));
+    manager.appendMessage(
+      copyInternalToolResultState(result, {
+        role: "toolResult" as const,
+        toolCallId: id,
+        toolName: "process",
+        content: result.content,
+        details: result.details,
+        isError: false,
+        timestamp: Date.now(),
+      }),
+    );
   const appendTurn = (id: string) => manager.appendMessage(turn(id).assistantMessage);
   return { session, manager, guard, turn, poll, persist, appendTurn };
 }
@@ -139,22 +131,15 @@ test("retains a waiting poll completion through failed persistence and acknowled
   await vi.advanceTimersByTimeAsync(250);
   const result = await pending;
   expect(resultText(result)).toContain("terminal output");
-  const append = h.manager.appendMessageWithTranscriptAnchor.bind(h.manager);
-  let rejectAppend = true;
-  vi.spyOn(h.manager, "appendMessageWithTranscriptAnchor").mockImplementation(
-    (message, options) => {
-      if (message.role === "toolResult" && rejectAppend) {
-        throw new Error("result persistence failed");
-      }
-      return append(message, options);
-    },
-  );
+  const append = vi.spyOn(h.manager, "appendMessageWithTranscriptAnchor");
   h.guard();
   h.appendTurn("persist-notify");
+  append.mockImplementationOnce(() => {
+    throw new Error("result persistence failed");
+  });
   expect(() => h.persist("persist-notify", result)).toThrow("result persistence failed");
   recordCompletion();
   expect(peekSystemEventEntries(sessionKey)).toHaveLength(2);
-  rejectAppend = false;
   h.persist("persist-notify", result);
   expect(peekSystemEventEntries(sessionKey)).toEqual([unrelated]);
   expect(resultText(await h.poll("observed"))).not.toContain("terminal output");
@@ -237,14 +222,9 @@ test.each(["blocked", "error"] as const)(
         expect(nextActivities[0]?.details.result.content).toContainEqual(output);
         expect(await poll("nested-after-retry")).toMatchObject({ status: "completed" });
       }
-      expect((await h.readNestedActivities()).at(-1)?.details.result.content).not.toContainEqual(
-        output,
-      );
-      expect(
-        h.sessionManager
-          .getEntries()
-          .filter((entry) => entry.type === "message" && entry.message.role === "custom"),
-      ).toHaveLength(2);
+      const settledActivities = await h.readNestedActivities();
+      expect(settledActivities).toHaveLength(2);
+      expect(settledActivities.at(-1)?.details.result.content).not.toContainEqual(output);
     } finally {
       h.dispose();
     }
@@ -260,14 +240,18 @@ test("Code Mode pages retained logs after showing the default tail and continuat
     value: {
       status: "completed",
       totalLines: 205,
-      output: `${lines.slice(5).join("\n")}\n\n[showing last 200 of 205 lines; pass offset/limit to page]`,
+      output: `${lines.slice(5).join("\n")}\n\n[showing last 200 of 205 lines; pass offset/limit to page]\n\nProcess exited with code 0.`,
     },
   });
   expect(
     await runProcessInCodeMode({ action: "log", sessionId: session.id, offset: 1, limit: 1 }),
   ).toMatchObject({
     status: "completed",
-    value: { status: "completed", output: "line-1", totalLines: 205 },
+    value: {
+      status: "completed",
+      output: "line-1\n\nProcess exited with code 0.",
+      totalLines: 205,
+    },
   });
 });
 

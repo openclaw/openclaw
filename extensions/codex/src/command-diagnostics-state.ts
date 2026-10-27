@@ -14,14 +14,9 @@ export type CodexDiagnosticsTarget = {
   sessionKey?: string;
   sessionId?: string;
   channel?: string;
-  channelId?: string;
-  accountId?: string;
-  messageThreadId?: string | number;
-  threadParentId?: string;
 };
 
 export type PendingCodexDiagnosticsConfirmation = {
-  token: string;
   targets: CodexDiagnosticsTarget[];
   note?: string;
   senderId: string;
@@ -42,10 +37,4 @@ export const codexDiagnosticsFeedbackState = {
   lastUploadByScope: new Map<string, number>(),
   pendingConfirmations: new Map<string, PendingCodexDiagnosticsConfirmation>(),
   pendingTokensByScope: new Map<string, string[]>(),
-  clear(): void {
-    this.lastUploadByThread.clear();
-    this.lastUploadByScope.clear();
-    this.pendingConfirmations.clear();
-    this.pendingTokensByScope.clear();
-  },
 };

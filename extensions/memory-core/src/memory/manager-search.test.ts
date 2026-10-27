@@ -1,4 +1,5 @@
-import { afterEach, expect, it, vi } from "vitest";
+import type { DatabaseSync } from "node:sqlite";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { createKeywordSearch } from "./manager-keyword-fixture.test-support.js";
 import { searchKeywordWithFallback } from "./manager-search.js";
 import { createMemorySearchDb, insertKeywordFixture } from "./manager-search.test-support.js";
@@ -7,6 +8,21 @@ import { applyTemporalDecayToHybridResults } from "./temporal-decay.js";
 afterEach(() => {
   vi.restoreAllMocks();
 });
+
+function searchBodyAndPath(db: DatabaseSync, query: string, ftsTokenizer: "unicode61" | "trigram") {
+  const options = {
+    query,
+    ftsTokenizer,
+    limit: 10,
+    snippetMaxChars: 200,
+    sourceFilter: { sql: "", params: [] },
+  };
+  return searchKeywordWithFallback({
+    db,
+    body: { ...options, ftsTable: "memory_index_chunks_fts" },
+    path: { ...options, pathFtsTable: "memory_index_paths_fts" },
+  });
+}
 
 function supportsFts(ftsTokenizer: "unicode61" | "trigram" = "unicode61"): boolean {
   const { db, schema } = createMemorySearchDb({ ftsTokenizer });
@@ -172,20 +188,7 @@ it.each(["unicode61", "trigram"] as const)(
       insertKeywordFixture(db, row);
     }
     const prepare = vi.spyOn(db, "prepare");
-    const search = (query: string) => {
-      const options = {
-        query,
-        ftsTokenizer,
-        limit: 10,
-        snippetMaxChars: 200,
-        sourceFilter: { sql: "", params: [] },
-      };
-      return searchKeywordWithFallback({
-        db,
-        body: { ...options, ftsTable: "memory_index_chunks_fts" },
-        path: { ...options, pathFtsTable: "memory_index_paths_fts" },
-      });
-    };
+    const search = (query: string) => searchBodyAndPath(db, query, ftsTokenizer);
     const bodyQueries = () =>
       prepare.mock.calls.filter(([sql]) => /FROM memory_index_chunks_fts\b/.test(sql)).length;
 
@@ -205,3 +208,69 @@ it.each(["unicode61", "trigram"] as const)(
     expect((await search("İ missing")).body.rows.map((row) => row.id)).toEqual(["dotted"]);
   },
 );
+
+describe("searchKeywordWithFallback statement reuse", () => {
+  it.each(["unicode61", "trigram"] as const)(
+    "keeps %s search statements reusable across searches on one connection",
+    async (ftsTokenizer) => {
+      const createDb = () => {
+        const { db } = createMemorySearchDb({ ftsTokenizer });
+        for (const row of [
+          { id: "alpha", path: "memory/alpha-notes.md", text: "alpha beta release notes" },
+          { id: "beta", path: "memory/beta.md", text: "beta rollout checklist" },
+          { id: "cafe", path: "memory/café.md", text: "café opening hours" },
+        ]) {
+          insertKeywordFixture(db, row);
+        }
+        return db;
+      };
+      const search = (db: DatabaseSync, query: string) =>
+        searchBodyAndPath(db, query, ftsTokenizer);
+      const queries = ["alpha beta", "beta.md", "café"] as const;
+      const db = createDb();
+      try {
+        const registerFunction = vi.spyOn(db, "function");
+        const prepare = vi.spyOn(db, "prepare");
+        const results = [];
+        for (const query of queries) {
+          results.push(await search(db, query));
+        }
+        const repeated = await search(db, queries[0]);
+        // Searches await between their body and path statements, so these interleave.
+        const concurrent = await Promise.all(queries.map((query) => search(db, query)));
+
+        // Replacing a function expires every statement on the connection.
+        expect
+          .soft(registerFunction.mock.calls.map(([name]) => name).toSorted())
+          .toEqual([
+            "openclaw_memory_exact_path_specificity",
+            "openclaw_memory_normalized_contains",
+          ]);
+        const searchSql = prepare.mock.calls
+          .map(([sql]) => sql)
+          .filter((sql) => /\bmemory_index_(?:chunks|paths)_fts\b/.test(sql));
+        expect(searchSql.some((sql) => sql.includes("exact_paths AS"))).toBe(true);
+        expect(searchSql.some((sql) => sql.includes("retained_paths AS"))).toBe(true);
+        // A bare bound LIMIT or LIKE pattern recompiles the statement on every run.
+        expect
+          .soft(searchSql.flatMap((sql) => sql.match(/\b(?:LIMIT|LIKE) \?/g) ?? []))
+          .toEqual([]);
+
+        expect(results[1]?.path.rows.map((row) => row.id)).toContain("beta");
+        expect(results[2]?.path.rows.map((row) => row.id)).toContain("cafe");
+        expect(repeated).toEqual(results[0]);
+        expect(concurrent).toEqual(results);
+        for (const [index, query] of queries.entries()) {
+          const fresh = createDb();
+          try {
+            expect(results[index]).toEqual(await search(fresh, query));
+          } finally {
+            fresh.close();
+          }
+        }
+      } finally {
+        db.close();
+      }
+    },
+  );
+});

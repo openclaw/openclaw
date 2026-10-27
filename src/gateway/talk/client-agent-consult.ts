@@ -34,12 +34,12 @@ import type {
   TalkRequesterFinalBinding,
 } from "./client-agent-consult.types.js";
 import { createTalkClientAgentRuntime } from "./client-agent-runtime.js";
+import type { TalkClientRunAuthority } from "./client-run-authority.js";
 import {
+  prepareTalkClientToolContext,
   resolveTalkAgentConsultAuthority,
   type TalkAgentConsultAuthority,
-} from "./client-gateway-control.js";
-import type { TalkClientRunAuthority } from "./client-run-authority.js";
-import { prepareTalkClientToolContext } from "./client-tool-authority.js";
+} from "./client-tool-authority.js";
 import { isTalkConsultSourceCurrent } from "./run-ownership.js";
 import type { PreparedTalkSessionTarget } from "./session-target.types.js";
 
@@ -533,6 +533,7 @@ export function createTalkClientAgentConsultRunner(params: {
         owner.source === "native-delegation"
           ? (text) =>
               createUserTurnTranscriptRecorder({
+                sessionLifecyclePatch: { lastInteractionAt: Date.now() },
                 input: { text, display: false },
                 target: {
                   agentId,

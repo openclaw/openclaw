@@ -527,7 +527,6 @@ export class DiscordRealtimeSpeakerSession {
   }
 
   activateOutput(): void {
-    this.readVoiceSelection();
     this.outputEnabled = true;
     this.playback.activateOutputAudioPort();
   }

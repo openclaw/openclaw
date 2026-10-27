@@ -1,3 +1,4 @@
+import { createSubsystemLogger } from "openclaw/plugin-sdk/diagnostic-runtime";
 import {
   watch,
   resolveFsObservationMode,
@@ -8,7 +9,6 @@ import {
   type WatchSubscription,
   type WatchScope,
 } from "openclaw/plugin-sdk/file-access-runtime";
-import { createSubsystemLogger } from "openclaw/plugin-sdk/memory-core-host-engine-foundation";
 import type { MemoryWorkspaceWatchRequest } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 import { formatCliCommand } from "openclaw/plugin-sdk/setup-tools";
 import type { MemoryCoreRuntimeHost } from "./runtime-host.js";

@@ -1,7 +1,4 @@
-import {
-  extractBalancedJsonPrefix,
-  resolvePositiveTimerTimeoutMs,
-} from "@openclaw/normalization-core";
+import { extractBalancedJsonPrefix } from "@openclaw/normalization-core";
 import { sliceUtf16Safe, truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { z } from "zod";
 import { createReasoningTagTextPartitioner } from "../../packages/markdown-core/src/reasoning-tags.js";
@@ -86,12 +83,10 @@ export async function summarizeTranscriptsWithModel(params: {
   agentId: string;
   session: TranscriptSessionDescriptor;
   utterances: TranscriptUtterance[];
-  timeoutMs?: number;
   abortSignal?: AbortSignal;
   assertCurrent?: () => void;
 }): Promise<TranscriptsSummary | undefined> {
-  const timeoutMs = resolvePositiveTimerTimeoutMs(params.timeoutMs, MODEL_SUMMARY_TIMEOUT_MS);
-  const deadline = Date.now() + timeoutMs;
+  const deadline = Date.now() + MODEL_SUMMARY_TIMEOUT_MS;
   const abort = new AbortController();
   const signal = AbortSignal.any(
     [abort.signal, params.abortSignal, getAsyncWorkSignal()].filter(
@@ -197,7 +192,7 @@ export async function summarizeTranscriptsWithModel(params: {
     return undefined;
   };
   try {
-    timer = setTimeout(() => abort.abort(), timeoutMs);
+    timer = setTimeout(() => abort.abort(), MODEL_SUMMARY_TIMEOUT_MS);
     timer.unref();
     // Cancellation closes admission, but the summary lane retains custody until
     // the underlying completion has finished releasing its runtime resources.

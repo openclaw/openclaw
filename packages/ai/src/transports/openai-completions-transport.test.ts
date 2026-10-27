@@ -1,4 +1,3 @@
-import { createServer } from "node:http";
 import { describe, expect, it, vi } from "vitest";
 import { configureAiTransportHost, getAiTransportHost } from "../host.js";
 import type { OpenAICompletionsOptions } from "../provider-options.js";
@@ -19,6 +18,7 @@ async function captureTransportRequest(
   model: Model<"openai-completions">,
   tools: Context["tools"] = [],
   options: SimpleStreamOptions & Pick<OpenAICompletionsOptions, "toolChoice"> = {},
+  chunks = [makeCompletionsChunk({ content: "ok" }, "stop")],
 ) {
   const previousHost = getAiTransportHost();
   let captured: Request | undefined;
@@ -27,7 +27,7 @@ async function captureTransportRequest(
     buildModelFetch: () => async (input, init) => {
       captured = new Request(input, init);
       return new Response(
-        `data: ${JSON.stringify(makeCompletionsChunk({ content: "ok" }, "stop"))}\n\ndata: [DONE]\n\n`,
+        chunks.map((chunk) => `data: ${JSON.stringify(chunk)}\n\n`).join("") + "data: [DONE]\n\n",
         { headers: { "content-type": "text/event-stream" } },
       );
     },
@@ -41,14 +41,11 @@ async function captureTransportRequest(
     if (stream instanceof Promise) {
       throw new Error("OpenAI Chat transport must return its event stream synchronously");
     }
-    for await (const event of stream) {
-      // Consume the request through transport finalization.
-      void event;
-    }
+    const collected = await collectStream(stream);
     if (!captured) {
       throw new Error("Expected the transport to issue a request");
     }
-    return captured;
+    return { request: captured, ...collected };
   } finally {
     configureAiTransportHost(previousHost);
   }
@@ -56,10 +53,52 @@ async function captureTransportRequest(
 
 describe("openai completions transport", () => {
   it.each([
+    { field: "reasoning", answer: "OK", reasoning: false, finish: "stop", terminal: "done" },
+    { field: "reasoning_content", answer: "", reasoning: false, finish: "stop", terminal: "error" },
+    { field: "reasoning_text", answer: "", reasoning: false, finish: "length", terminal: "error" },
+    { field: "reasoning", answer: "OK", reasoning: true, finish: "stop", terminal: "done" },
+  ])(
+    "diagnoses suppressed $field with reasoning=$reasoning and finish=$finish",
+    async (testCase) => {
+      const hidden = "synthetic private thought";
+      const { events, text, terminal, result } = await captureTransportRequest(
+        makeCompletionsModel({
+          provider: "local",
+          id: "qwen3:4b",
+          baseUrl: "http://127.0.0.1:11434/v1",
+          reasoning: testCase.reasoning,
+        }),
+        [],
+        {},
+        [
+          makeCompletionsChunk({ [testCase.field]: hidden }),
+          makeCompletionsChunk({ content: testCase.answer }, testCase.finish),
+        ],
+      );
+      expect(terminal?.type).toBe(testCase.terminal);
+      expect(text).toBe(testCase.answer);
+      if (testCase.reasoning) {
+        expect(result.diagnostics).toBeUndefined();
+        expect(events.some((event) => event.type === "thinking_delta")).toBe(true);
+      } else {
+        expect(JSON.stringify(result)).not.toContain(hidden);
+        expect(events.some((event) => event.type === "thinking_delta")).toBe(false);
+        expect(result.diagnostics).toEqual([
+          { type: "reasoning_suppressed", timestamp: expect.any(Number) },
+        ]);
+        if (testCase.terminal === "error") {
+          expect(result.errorMessage).toContain("reasoning: true");
+          expect(result.errorMessage).toContain("local/qwen3:4b");
+        }
+      }
+    },
+  );
+
+  it.each([
     ["official OpenAI", "https://api.openai.com/v1", true],
     ["OpenAI-compatible proxy", "https://proxy.example.com/v1", false],
   ] as const)("routes %s reasoning tool turns", async (_endpoint, baseUrl, native) => {
-    const request = await captureTransportRequest(
+    const { request } = await captureTransportRequest(
       makeCompletionsModel({ id: "gpt-5.6-sol", provider: "openai-api", baseUrl }),
       [{ name: "read", description: "", parameters: {} }],
       { toolChoice: { type: "function", function: { name: "read" } } },
@@ -89,7 +128,24 @@ describe("openai completions transport", () => {
     const invalid = { ...model, requestTimeoutMs: -1 };
     expect(buildOpenAISdkRequestOptions(invalid, undefined)).toBeUndefined();
   });
-  it("streams OpenAI-compatible loopback requests with the configured SDK timeout", async () => {
+  it.each([
+    {
+      name: "configured SDK timeout",
+      model: { id: "mlx-community/Qwen3-30B-A3B-6bit", provider: "mlx", requestTimeoutMs: 900_000 },
+      context: replyContext("Reply OK"),
+      expected: {
+        timeout: "900",
+        model: "mlx-community/Qwen3-30B-A3B-6bit",
+        roles: ["system", "user"],
+      },
+    },
+    {
+      name: "generic endpoints without the ModelStudio turn guard",
+      model: { provider: "custom-openai-compatible" },
+      context: { systemPrompt: "runtime-only system prompt", messages: [], tools: [] },
+      expected: { roles: ["system"] },
+    },
+  ])("streams loopback requests with $name", async ({ model, context, expected }) => {
     let captured: { path?: string; timeout?: string; model?: string; roles?: string[] } = {};
     await withServer(
       (req, res, body) => {
@@ -107,36 +163,20 @@ describe("openai completions transport", () => {
         };
         startSse(res, true);
         writeSse(res, makeCompletionsChunk({ role: "assistant", content: "OK" }));
-        writeSse(
-          res,
-          makeCompletionsChunk({}, "stop", {
-            usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 },
-          }),
-        );
+        writeSse(res, makeCompletionsChunk({}, "stop"));
         res.write("data: [DONE]\n\n");
         res.end();
       },
       async (baseUrl) => {
-        const baseModel = {
-          ...makeCompletionsModel({
-            id: "mlx-community/Qwen3-30B-A3B-6bit",
-            provider: "mlx",
-            baseUrl,
-            reasoning: false,
-          }),
-          requestTimeoutMs: 900_000,
-        } satisfies Model<"openai-completions"> & { requestTimeoutMs: number };
         const stream = createOpenAICompletionsTransportStreamFn()(
-          baseModel,
-          replyContext("Reply OK"),
+          { ...makeCompletionsModel({ baseUrl, reasoning: false }), ...model },
+          context,
           { apiKey: "test-key" },
         );
         const { text, terminal } = await collectStream(stream);
         expect(captured).toMatchObject({
           path: "/v1/chat/completions",
-          timeout: "900",
-          model: "mlx-community/Qwen3-30B-A3B-6bit",
-          roles: ["system", "user"],
+          ...expected,
         });
         expect(terminal).toMatchObject({ type: "done", reason: "stop" });
         expect(text).toBe("OK");
@@ -165,80 +205,6 @@ describe("openai completions transport", () => {
       "contains no non-empty user or assistant messages",
     );
     expect(String(errorPayload?.errorMessage)).toContain("system/tool-only request");
-  });
-
-  it("allows generic OpenAI-compatible chat streams without the ModelStudio turn guard", async () => {
-    let capturedRoles: string[] | undefined;
-    const server = createServer((req, res) => {
-      let body = "";
-      req.setEncoding("utf8");
-      req.on("data", (chunk) => {
-        body += chunk;
-      });
-      req.on("end", () => {
-        const parsed = JSON.parse(body) as { messages?: Array<{ role?: string }> };
-        capturedRoles = parsed.messages?.map((message) => message.role ?? "");
-        res.writeHead(200, {
-          "content-type": "text/event-stream; charset=utf-8",
-          "cache-control": "no-cache",
-          connection: "keep-alive",
-        });
-        res.write(
-          `data: ${JSON.stringify(makeCompletionsChunk({ role: "assistant", content: "OK" }))}\n\n`,
-        );
-        res.write(`data: ${JSON.stringify(makeCompletionsChunk({}, "stop"))}\n\n`);
-        res.write("data: [DONE]\n\n");
-        res.end();
-      });
-    });
-
-    await new Promise<void>((resolve) => {
-      server.listen(0, "127.0.0.1", resolve);
-    });
-    try {
-      const address = server.address();
-      if (!address || typeof address === "string") {
-        throw new Error("Missing loopback server address");
-      }
-      const model = makeCompletionsModel({
-        id: "generic-openai-compatible",
-        name: "Generic OpenAI Compatible",
-        provider: "custom-openai-compatible",
-        baseUrl: `http://127.0.0.1:${address.port}/v1`,
-        reasoning: false,
-        contextWindow: 4096,
-        maxTokens: 256,
-      });
-      const stream = createOpenAICompletionsTransportStreamFn()(
-        model,
-        {
-          systemPrompt: "runtime-only system prompt",
-          messages: [],
-          tools: [],
-        } as never,
-        { apiKey: "test-key" } as never,
-      );
-
-      let doneReason: string | undefined;
-      for await (const event of stream as AsyncIterable<{ type: string; reason?: string }>) {
-        if (event.type === "done") {
-          doneReason = event.reason;
-        }
-      }
-
-      expect(capturedRoles).toEqual(["system"]);
-      expect(doneReason).toBe("stop");
-    } finally {
-      await new Promise<void>((resolve, reject) => {
-        server.close((error) => {
-          if (error) {
-            reject(error);
-          } else {
-            resolve();
-          }
-        });
-      });
-    }
   });
 
   it("fails OpenAI completions streams when headers arrive but no first event follows", async () => {
@@ -298,7 +264,7 @@ describe("openai completions transport", () => {
   });
 
   it("moves Azure OpenAI completions api-version headers into query params", async () => {
-    const request = await captureTransportRequest(
+    const { request } = await captureTransportRequest(
       makeCompletionsModel({
         id: "gpt-4o-mini",
         provider: "azure-custom",

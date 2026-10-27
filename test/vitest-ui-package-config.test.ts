@@ -135,7 +135,7 @@ describe("ui package vitest config", () => {
         "ui/src/pages/chat/talk/shared.browser-import.test.ts",
       );
       expect(report.rootNodeFiles).toEqual(expect.arrayContaining(uiNodeDrivenBrowserTestFiles));
-      expect(report.rows).toHaveLength(4);
+      expect(report.rows).toHaveLength(3);
       expect(report.empty).toEqual({ modules: 0, errors: 0 });
       expect(report.emptyDiscoveryAllowed).toBe(false);
       expect(report.scheduling.native).toEqual(
@@ -184,8 +184,10 @@ describe("ui package vitest config", () => {
       ).toEqual(report.discovered);
       const nodeRequired = new Set([
         "ui/src/components/desktop/desktop-mobile-keyboard.test.ts",
+        "ui/src/lib/reactive/session-progress-roster.test.ts",
         "ui/src/pages/chat/chat-pane-retention.test.ts",
         "ui/src/pages/chat/chat-thread-retention.test.ts",
+        "ui/src/pages/chat/session-message-cache-retention.test.ts",
         "ui/src/pages/chat/session-snapshot-store.test.ts",
         "ui/src/pages/usage/usage-page-retention.test.ts",
       ]);
@@ -280,54 +282,62 @@ export default {
       expect(result.stdout).toContain("3 passed");
     }));
 
-  it("preserves native Chromium discovery when loaded as a file project", ({ signal }) =>
-    fixture.run(async () => {
-      signal.throwIfAborted();
-      const root = fixture.createTempDir("ui-browser-project-root-");
-      const topLevelRoot = fixture.createTempDir("ui-browser-top-level-root-");
-      const testRoot = fixture.createTempDir("ui-browser-test-root-");
-      const reportPath = path.join(root, "discovery.json");
-      const home = path.join(root, "home");
-      const tmp = path.join(root, "tmp");
-      mkdirSync(home);
-      mkdirSync(tmp);
-      const fixturePath = fileURLToPath(
-        new URL("./fixtures/vitest-browser-project-root.mjs", import.meta.url),
-      );
-      await run([fixturePath, reportPath, topLevelRoot, testRoot], signal, {
-        HOME: home,
-        USERPROFILE: home,
-        TMPDIR: tmp,
-        TMP: tmp,
-        TEMP: tmp,
-        XDG_CONFIG_HOME: path.join(home, ".config"),
-        XDG_DATA_HOME: path.join(home, ".local", "share"),
-        XDG_CACHE_HOME: path.join(home, ".cache"),
-        OPENCLAW_VITEST_FS_MODULE_CACHE_PATH: path.join(root, "transforms"),
-      });
-      const reports = JSON.parse(readFileSync(reportPath, "utf8")) as Array<{
-        projects: Array<{ name: string; root: string; viteRoot: string; setupFiles: string[] }>;
-        files: string[];
-      }>;
-      expect(reports).toHaveLength(4);
-      const [standalone, embedded, topLevel, testOption] = reports;
-      const uiRoot = path.join(process.cwd(), "ui");
-      const chromium = (projectRoot: string) => [
-        {
-          name: "chromium",
-          root: projectRoot,
-          viteRoot: projectRoot,
-          setupFiles: [path.join(projectRoot, "src/test-helpers/dom.setup.ts")],
-        },
-      ];
-      expect(standalone?.projects).toEqual(chromium(uiRoot));
-      expect(standalone?.files).toContain(
-        path.join(uiRoot, "src/components/markdown-mermaid.runtime.browser.test.ts"),
-      );
-      expect(embedded).toEqual(standalone);
-      expect(topLevel?.projects).toEqual(chromium(topLevelRoot));
-      expect(testOption?.projects).toEqual(chromium(testRoot));
-    }));
+  it.for(["chromium", "webkit"])(
+    "preserves native %s discovery when loaded as a file project",
+    (browser, { signal }) =>
+      fixture.run(async () => {
+        signal.throwIfAborted();
+        const root = fixture.createTempDir("ui-browser-project-root-");
+        const topLevelRoot = fixture.createTempDir("ui-browser-top-level-root-");
+        const testRoot = fixture.createTempDir("ui-browser-test-root-");
+        const reportPath = path.join(root, "discovery.json");
+        const home = path.join(root, "home");
+        const tmp = path.join(root, "tmp");
+        mkdirSync(home);
+        mkdirSync(tmp);
+        const fixturePath = fileURLToPath(
+          new URL("./fixtures/vitest-browser-project-root.mjs", import.meta.url),
+        );
+        await run([fixturePath, reportPath, topLevelRoot, testRoot, browser], signal, {
+          HOME: home,
+          USERPROFILE: home,
+          TMPDIR: tmp,
+          TMP: tmp,
+          TEMP: tmp,
+          XDG_CONFIG_HOME: path.join(home, ".config"),
+          XDG_DATA_HOME: path.join(home, ".local", "share"),
+          XDG_CACHE_HOME: path.join(home, ".cache"),
+          OPENCLAW_VITEST_FS_MODULE_CACHE_PATH: path.join(root, "transforms"),
+        });
+        const reports = JSON.parse(readFileSync(reportPath, "utf8")) as Array<{
+          projects: Array<{ name: string; root: string; viteRoot: string; setupFiles: string[] }>;
+          files: string[];
+        }>;
+        expect(reports).toHaveLength(4);
+        const [standalone, embedded, topLevel, testOption] = reports;
+        const uiRoot = path.join(process.cwd(), "ui");
+        const browserProject = (projectRoot: string) => [
+          {
+            name: browser,
+            root: projectRoot,
+            viteRoot: projectRoot,
+            setupFiles: [path.join(projectRoot, "src/test-helpers/dom.setup.ts")],
+          },
+        ];
+        expect(standalone?.projects).toEqual(browserProject(uiRoot));
+        expect(standalone?.files).toContain(
+          path.join(
+            uiRoot,
+            browser === "webkit"
+              ? "src/components/solid/menu-navigation.browser.test.tsx"
+              : "src/components/markdown-mermaid.runtime.browser.test.ts",
+          ),
+        );
+        expect(embedded).toEqual(standalone);
+        expect(topLevel?.projects).toEqual(browserProject(topLevelRoot));
+        expect(testOption?.projects).toEqual(browserProject(testRoot));
+      }),
+  );
 
   it("runs full-render timing budgets after ordinary UI work with one owner per entry point", async () => {
     vi.stubEnv("OPENCLAW_VITEST_INCLUDE_FILE", "");

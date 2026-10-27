@@ -22,7 +22,7 @@ import {
 } from "./update-command-config-snapshot.js";
 import { recordUpdateDatabaseWrites } from "./update-command-database-receipts.js";
 
-type DoctorCompletionOptions = {
+export function createPackageUpdateDoctorCompletion(params: {
   root: string;
   progress: UpdateStepProgress;
   results: UpdateStepResult[];
@@ -32,9 +32,7 @@ type DoctorCompletionOptions = {
   sectionTiming: UpdateDoctorSectionTiming;
   assertCurrent: () => void;
   doctorProgressInfo: { name: string; command: string; index: number; total: number };
-};
-
-export function createPackageUpdateDoctorCompletion(params: DoctorCompletionOptions) {
+}) {
   const { context, configSnapshot, sectionTiming, assertCurrent, doctorProgressInfo } = params;
   return async (
     doctorStep: UpdateStepResult,

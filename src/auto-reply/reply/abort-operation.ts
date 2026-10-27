@@ -89,8 +89,6 @@ export function captureChannelSessionStop(params: {
   sessionId?: string;
   storePath: string;
   agentId?: string;
-  aliases?: readonly (string | undefined)[];
-  includeQueued?: boolean;
   resolveGatewayContext?: GatewayContextResolver;
 }): ChannelStopCapture {
   const key = normalizeOptionalString(params.key);
@@ -113,13 +111,11 @@ export function captureChannelSessionStop(params: {
             sessionKey: key,
             incarnation: params.sessionId,
             agentId: params.agentId,
-            aliases: params.aliases,
           }),
         ]
       : [],
     inputs: candidates.flatMap((candidate) => candidate.capture.inputs),
     operations: candidates.flatMap((candidate) => candidate.capture.operations),
-    includeQueued: params.includeQueued,
     resolveGatewayContext: params.resolveGatewayContext,
   });
   return captureChannelStopResources(controller, params.sessionId, {
@@ -216,7 +212,6 @@ function combineChannelStopCaptures(captures: readonly ChannelStopCapture[]): Ch
 export function abortSessionRunTargetWithOutcome(params: {
   capture: ChannelStopCapture | (() => ChannelStopCapture);
   assertCurrent?: () => void;
-  afterQueued?: () => void;
   hookContext: SessionStopHookContext;
   messageIdentity?: unknown;
   recordAbortTarget?: SessionStopRequest["recordAbortTarget"];
@@ -278,7 +273,6 @@ export function abortSessionRunTargetWithOutcome(params: {
     },
     afterQueued: () => {
       const capture = resolveCapture();
-      params.afterQueued?.();
       for (const retirement of capture.idleMcpRetirements) {
         trackRetirement(retirement.sessionId, () =>
           retirement.retire(() => params.assertCurrent?.()),
@@ -408,8 +402,8 @@ export async function executeFastAbortRequest(
     readChannelContextGatewayContextResolver(ctx) ??
     getPluginRuntimeGatewayRequestScope()?.resolveGatewayContext;
   const assertCurrent = () => {
-    if (params.isCommandTargetCurrent?.sessionSource?.assertScopeCurrent) {
-      params.isCommandTargetCurrent.sessionSource.assertScopeCurrent();
+    if (params.isCommandTargetCurrent?.sessionSource) {
+      params.isCommandTargetCurrent.sessionSource();
       return;
     }
     if (params.isCommandTargetCurrent?.() === false) {

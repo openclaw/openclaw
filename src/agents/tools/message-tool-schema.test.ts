@@ -1,3 +1,4 @@
+import { normalizeToolParameterSchema } from "@openclaw/ai/internal/tool-schema";
 import { Type } from "typebox";
 import { Value } from "typebox/value";
 import { describe, expect, it } from "vitest";
@@ -10,6 +11,24 @@ const options = {
 };
 
 describe("message schema variants", () => {
+  it("projects presentation table cells to a scalar Gemini type without changing the source schema", () => {
+    const source = buildMessageToolSchemaFromActions(["send"], {
+      ...options,
+      includePresentation: true,
+    });
+    const cellType =
+      "properties.presentation.properties.blocks.items.properties.rows.items.items.type";
+    expect(normalizeToolParameterSchema(source, { modelProvider: "google" })).toHaveProperty(
+      cellType,
+      "string",
+    );
+    expect(normalizeToolParameterSchema(source, { modelProvider: "anthropic" })).toHaveProperty(
+      cellType,
+      ["string", "number"],
+    );
+    expect(source).toHaveProperty(cellType, ["string", "number"]);
+  });
+
   it("reuses equivalent capabilities and detaches channel-owned properties", () => {
     const extraProperties = { topic: Type.Optional(Type.String({ maxLength: 10 })) };
     const first = buildMessageToolSchemaFromActions(["send"], { ...options, extraProperties });

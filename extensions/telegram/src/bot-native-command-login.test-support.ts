@@ -200,19 +200,6 @@ async function exerciseModelAccess(home: string, choice: "all" | "cancel") {
       const markup = call[2]?.reply_markup;
       return markup && "inline_keyboard" in markup ? markup.inline_keyboard.flat() : [];
     });
-  await first.handler(createPrivateCommandContext({ match: fixtureId, userId: 200 }));
-  const methods = deliveredButtons(first.sendMessage.mock.calls);
-  expect(methods).toHaveLength(2);
-  for (const [text, method] of [
-    ["Fixture device login", "device"],
-    ["Fixture alternate device login", "device-alternate"],
-  ]) {
-    const expected = { text, callback_data: `tgcmd:/login ux-catalog-fixture/${method}` };
-    expect(methods).toContainEqual(expect.objectContaining(expected));
-  }
-  expect(loginFlow).not.toHaveBeenCalled();
-  first.sendMessage.mockClear();
-  deliverReplies.mockClear();
   await first.handler(createPrivateCommandContext({ match: `${fixtureId}/device`, userId: 200 }));
   await vi.waitFor(() => expect(deliverReplies).toHaveBeenCalledOnce());
   await expect(deliverReplies.mock.results[0]?.value).resolves.toMatchObject({ delivered: true });

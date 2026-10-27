@@ -295,11 +295,11 @@ function expectOwnedRowsOrPending(respond: ReturnType<typeof vi.fn>) {
   expect.soft(respond).toHaveBeenCalledOnce();
   expect.soft(respond.mock.calls[0]?.[0]).toBe(true);
   const catalog = respond.mock.calls[0]?.[1]?.catalogs[0];
-  if (catalog?.error) {
+  if (catalog?.pending) {
     expect.soft(catalog).toMatchObject({
       id: "fixture",
       hosts: [],
-      error: { code: "catalog_pending" },
+      pending: true,
     });
   } else {
     expect.soft(rows(respond)).toEqual(["owned"]);

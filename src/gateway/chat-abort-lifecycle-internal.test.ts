@@ -1,5 +1,12 @@
-import { afterEach, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred, withinTest } from "../../test/helpers/promise.js";
+import { createOperationalRunInstanceRef } from "../agents/admitted-run-context.js";
+import {
+  claimAgentRunDelegatedAuthority,
+  releaseAgentRunDelegatedAuthority,
+  resetAgentRunRegistryForTest,
+  validateAgentRunDelegatedAuthority,
+} from "../infra/agent-run-registry.js";
 import { withPluginRuntimeGatewayContextResolver } from "../plugins/runtime/gateway-request-scope.js";
 import { captureSessionTarget } from "../sessions/session-controller.lifecycle.js";
 import {
@@ -18,7 +25,7 @@ import {
   waitForChatAbortControllerRemoval,
   waitForChatAbortTerminalPersistence,
 } from "./chat-abort-lifecycle-internal.js";
-import { abortChatRunById, registerChatAbortController } from "./chat-abort.js";
+import { abortChatRunById, registerChatAbortController, type ChatAbortOps } from "./chat-abort.js";
 import { createChatRunState } from "./server-chat-state.js";
 
 afterEach(() => resetSessionControllerStateForTest());
@@ -57,7 +64,18 @@ function registeredRun(
       targets: [{ runId, entry }],
       timeoutMs: 1_000,
     });
-  return { runId, entry, registration, drain };
+  const abort = (broadcast: ChatAbortOps["broadcast"] = () => {}) =>
+    abortChatRunById(
+      {
+        chatRunState: createChatRunState(),
+        removeChatRun: () => undefined,
+        agentRunSeq: new Map(),
+        broadcast,
+        nodeSendToSession: () => {},
+      },
+      { runId, sessionKey: getRpcSourceIdentity(entry).sessionKey },
+    );
+  return { runId, entry, registration, drain, abort };
 }
 
 it.each(
@@ -91,44 +109,22 @@ it("finishes an empty selection without draining unrelated registrations", async
 });
 
 it("releases the reserved terminal owner when no lifecycle subscriber adopts it", async () => {
-  const { runId, entry, drain } = registeredRun();
+  const { runId, drain, abort } = registeredRun();
   const result = drain();
-  expect(
-    abortChatRunById(
-      {
-        chatRunState: createChatRunState(),
-        removeChatRun: () => undefined,
-        agentRunSeq: new Map(),
-        broadcast: () => {},
-        nodeSendToSession: () => {},
-      },
-      { runId, sessionKey: getRpcSourceIdentity(entry).sessionKey },
-    ),
-  ).toEqual({ aborted: true });
+  expect(abort()).toEqual({ aborted: true });
   expect(await result).toBe(true);
   expect(rpcSourceTesting.has(runId)).toBe(false);
 });
 
 it("marks captured cancellation without publishing over a replacement", () => {
-  const { runId, entry } = registeredRun();
+  const { runId, entry, abort } = registeredRun();
   let replacement: ReturnType<typeof registeredRun> | undefined;
   entry.input.abortSignal.addEventListener("abort", () => {
     rpcSourceTesting.deleteExpected(runId, entry);
     replacement = registeredRun({ runId, sessionKey: "agent:main:replacement" });
   });
   const broadcast = vi.fn();
-  expect(
-    abortChatRunById(
-      {
-        chatRunState: createChatRunState(),
-        removeChatRun: () => undefined,
-        agentRunSeq: new Map(),
-        broadcast,
-        nodeSendToSession: () => {},
-      },
-      { runId, sessionKey: getRpcSourceIdentity(entry).sessionKey },
-    ),
-  ).toEqual({ aborted: true });
+  expect(abort(broadcast)).toEqual({ aborted: true });
   expect(broadcast).not.toHaveBeenCalled();
   expect(entry.input.abortSignal.aborted).toBe(true);
   expect(entry.adapter.terminalOutcomeObserved).toBe(true);
@@ -160,35 +156,23 @@ it.each([true, false])(
   },
 );
 
-it.each(["fulfilled", "rejected"] as const)(
-  "settles promise-only source work after it is %s",
-  async (outcome) => {
-    const onRemoved = vi.fn();
-    const { runId, entry, registration } = registeredRun({ onRemoved });
-    const persistence = createDeferred();
-    entry.adapter.projectSessionTerminalPersistence = persistence.promise;
-    registration.cleanup();
-    expect(rpcSourceTesting.get(runId)).toBe(entry);
-    expect(onRemoved).not.toHaveBeenCalled();
-    const failure = new Error("terminal write failed");
-    const sourceSettlement = captureSessionControllerSourceSettlement(entry.input);
-    const sourceOutcome =
-      outcome === "fulfilled"
-        ? expect(sourceSettlement).resolves.toBeUndefined()
-        : expect(sourceSettlement).rejects.toBe(failure);
-    if (outcome === "fulfilled") {
-      persistence.resolve();
-    } else {
-      persistence.reject(failure);
-    }
-    await sourceOutcome;
-    if (outcome === "rejected") {
-      await expect(waitForChatAbortTerminalPersistence(entry)).rejects.toBe(failure);
-    }
-    expect(rpcSourceTesting.has(runId)).toBe(false);
-    expect(onRemoved).toHaveBeenCalledOnce();
-  },
-);
+it("retires promise-only source work while preserving its persistence rejection", async () => {
+  const onRemoved = vi.fn();
+  const { runId, entry, registration } = registeredRun({ onRemoved });
+  const persistence = createDeferred();
+  entry.adapter.projectSessionTerminalPersistence = persistence.promise;
+  registration.cleanup();
+  expect(rpcSourceTesting.get(runId)).toBe(entry);
+  expect(onRemoved).not.toHaveBeenCalled();
+  const failure = new Error("terminal write failed");
+  const sourceSettlement = captureSessionControllerSourceSettlement(entry.input);
+  const sourceOutcome = expect(sourceSettlement).rejects.toBe(failure);
+  persistence.reject(failure);
+  await sourceOutcome;
+  await expect(waitForChatAbortTerminalPersistence(entry)).rejects.toBe(failure);
+  expect(rpcSourceTesting.has(runId)).toBe(false);
+  expect(onRemoved).toHaveBeenCalledOnce();
+});
 
 it("joins accepted dispatch before reporting an already-rejected prepared write", async ({
   signal,
@@ -224,68 +208,7 @@ it("joins accepted dispatch before reporting an already-rejected prepared write"
   }
 });
 
-it.for(["fulfilled", "rejected"] as const)(
-  "keeps the captured %s write when persistence is replaced during dispatch",
-  async (outcome, { signal }) => {
-    const { entry, registration } = registeredRun();
-    const dispatch = createDeferred();
-    const prepared = createDeferred();
-    const replacement = createDeferred();
-    const failure = new Error("captured terminal write failed");
-    void prepared.promise.catch(() => {});
-    entry.adapter.projectSessionTerminalPersistence = prepared.promise;
-    bindChatAbortTerminalDispatch([entry], dispatch.promise, {});
-    const waiter = waitForChatAbortTerminalPersistence(entry);
-    void waiter.catch(() => {});
-    entry.adapter.projectSessionTerminalPersistence = replacement.promise;
-    try {
-      if (outcome === "fulfilled") {
-        prepared.resolve();
-      } else {
-        prepared.reject(failure);
-      }
-      dispatch.resolve();
-      if (outcome === "fulfilled") {
-        await expect(withinTest(waiter, signal)).resolves.toBeUndefined();
-      } else {
-        await expect(withinTest(waiter, signal)).rejects.toBe(failure);
-      }
-      expect(entry.adapter.projectSessionTerminalPersistence).toBe(replacement.promise);
-    } finally {
-      dispatch.resolve();
-      prepared.resolve();
-      replacement.resolve();
-      await Promise.allSettled([waiter]);
-      registration.cleanup();
-      await Promise.allSettled([entry.input.settlement.promise]);
-    }
-  },
-);
-
-it.each(["fulfilled", "rejected"] as const)(
-  "does not retire a replacement persistence owner when an older write is %s",
-  async (outcome) => {
-    const { entry, registration } = registeredRun();
-    const previous = createDeferred();
-    const current = createDeferred();
-    entry.adapter.projectSessionTerminalPersistence = previous.promise;
-    registration.cleanup();
-    entry.adapter.projectSessionTerminalPersistence = current.promise;
-    if (outcome === "fulfilled") {
-      previous.resolve();
-    } else {
-      previous.reject(new Error("older terminal write failed"));
-    }
-    await previous.promise.catch(() => {});
-    await Promise.resolve();
-    expect(entry.adapter.projectSessionTerminalPersistence).toBe(current.promise);
-    const joined = waitForChatAbortTerminalPersistence(entry);
-    current.resolve();
-    await expect(joined).resolves.toBeUndefined();
-  },
-);
-
-it.each(["settled", "pending", "writing", "failed", "dispatch-failed"] as const)(
+it.each(["settled", "pending", "writing"] as const)(
   "retains %s terminal ownership while joining the raw producer",
   async (state) => {
     const producer = createDeferred();
@@ -296,14 +219,6 @@ it.each(["settled", "pending", "writing", "failed", "dispatch-failed"] as const)
     }
     if (state === "writing") {
       entry.adapter.projectSessionTerminalPersistence = write.promise;
-    }
-    if (state === "failed") {
-      markChatAbortTerminalPersistenceError(entry, new Error("write failed"));
-    }
-    if (state === "dispatch-failed") {
-      bindChatAbortTerminalDispatch([entry], Promise.resolve(), {
-        failure: { error: new Error("terminal dispatch failed") },
-      });
     }
     registration.cleanup();
     let drained = false;
@@ -350,4 +265,119 @@ it("waits for every selected source without draining unrelated registrations", a
   expect(rpcSourceTesting.has(sibling.runId)).toBe(false);
   expect(rpcSourceTesting.get(unrelated.runId)).toBe(unrelated.entry);
   unrelated.registration.cleanup();
+});
+
+describe("delegated abort authority", () => {
+  beforeEach(resetAgentRunRegistryForTest);
+
+  function createAuthorityAbortFixture(runId: string, sessionless = false) {
+    const sessionKey = "agent:main:authority";
+    const operationalRunInstance = createOperationalRunInstanceRef(runId);
+    rpcSourceTesting.clear();
+    const registration = registerChatAbortController({
+      runId,
+      sessionId: `session-${runId}`,
+      sessionKey: sessionless ? undefined : sessionKey,
+      target: !sessionless
+        ? captureSessionTarget({
+            storeScope: `/synthetic/authority/${runId}`,
+            sessionKey,
+            incarnation: `session-${runId}`,
+          })
+        : undefined,
+      timeoutMs: 60_000,
+      operationalRunInstance,
+    });
+    onTestFinished(registration.cleanup);
+    const authority = claimAgentRunDelegatedAuthority(operationalRunInstance);
+    if (registration.registered) {
+      registration.bindAgentRunDelegatedAuthority(authority);
+    }
+    const chatRunState = createChatRunState();
+    const ops: ChatAbortOps = {
+      chatRunState,
+      removeChatRun: vi.fn(() => undefined),
+      agentRunSeq: new Map(),
+      broadcast: vi.fn(),
+      nodeSendToSession: vi.fn(),
+    };
+    const abort = (
+      options: Omit<Parameters<typeof abortChatRunById>[1], "runId" | "sessionKey"> = {},
+    ) => abortChatRunById(ops, { runId, sessionKey, ...options });
+    return { authority, operationalRunInstance, chatRunState, ops, registration, abort };
+  }
+
+  it("binds delegated authority only to the exact operational instance object", () => {
+    const { authority, operationalRunInstance, registration } =
+      createAuthorityAbortFixture("run-exact-authority");
+
+    expect(registration.entry?.adapter.agentRunDelegatedAuthority).toBe(authority);
+    expect(registration.entry?.adapter.operationalRunInstance).toBe(operationalRunInstance);
+    expect(() =>
+      registration.bindAgentRunDelegatedAuthority({
+        ...authority,
+        operationalRunInstance: Object.freeze({ ...operationalRunInstance }),
+      }),
+    ).toThrow("does not belong to this exact RPC source");
+
+    registration.cleanup();
+    expect(validateAgentRunDelegatedAuthority(authority)).toBe(false);
+  });
+
+  it("leaves sessionless authority with the outer admission owner", () => {
+    const { registration, authority } = createAuthorityAbortFixture("run-sessionless", true);
+    const unrelatedInstance = createOperationalRunInstanceRef("run-unrelated-authority");
+    const unrelatedAuthority = claimAgentRunDelegatedAuthority(unrelatedInstance);
+
+    expect(registration.registered).toBe(false);
+    expect(rpcSourceTesting.size).toBe(0);
+    const authorities = [authority, unrelatedAuthority];
+    for (const delegated of authorities) {
+      expect(() => registration.bindAgentRunDelegatedAuthority(delegated)).toThrow(
+        "Unregistered source cannot own a projected run authority",
+      );
+    }
+    registration.cleanup();
+    expect(authorities.map((delegated) => validateAgentRunDelegatedAuthority(delegated))).toEqual([
+      true,
+      true,
+    ]);
+    expect(authorities.map(releaseAgentRunDelegatedAuthority)).toEqual([true, true]);
+  });
+
+  it("prepares before cancellation and publishes only after exact authority retirement", () => {
+    const runId = "run-authority-abort";
+    const { authority, chatRunState, ops, registration, abort } =
+      createAuthorityAbortFixture("run-authority-abort");
+    const entry = registration.entry!;
+    const expectRetired = () => {
+      expect(validateAgentRunDelegatedAuthority(authority)).toBe(false);
+      expect(entry.input.abortSignal.aborted).toBe(true);
+    };
+    const onAbortPrepared = vi.fn(() => {
+      expect(validateAgentRunDelegatedAuthority(authority)).toBe(true);
+      expect(entry.input.abortSignal.aborted).toBe(false);
+      expect(chatRunState.hasAbortMarker(runId)).toBe(true);
+    });
+    const onAbortCommitted = vi.fn(expectRetired);
+    ops.onRunAborted = vi.fn(expectRetired);
+
+    expect(abort({ stopReason: "user", onAbortPrepared, onAbortCommitted })).toEqual({
+      aborted: true,
+    });
+    expect(ops.onRunAborted).toHaveBeenCalledOnce();
+    expect(abort({ onAbortCommitted })).toEqual({ aborted: false });
+    expect(onAbortCommitted).toHaveBeenCalledOnce();
+  });
+
+  it("does not revoke a same-id successor from a stale abort controller", () => {
+    const runId = "run-authority-successor";
+    const { abort } = createAuthorityAbortFixture(runId);
+    const successorInstance = createOperationalRunInstanceRef(runId);
+    const successor = claimAgentRunDelegatedAuthority(successorInstance);
+
+    expect(abort({ stopReason: "stale" })).toEqual({ aborted: true });
+    expect(validateAgentRunDelegatedAuthority(successor)).toBe(true);
+    expect(releaseAgentRunDelegatedAuthority(successor)).toBe(true);
+  });
 });

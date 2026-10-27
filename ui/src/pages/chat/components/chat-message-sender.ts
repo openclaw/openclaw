@@ -1,10 +1,13 @@
 import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
 import { resolveLocalUserName } from "../../../app/user-identity.ts";
 import { t } from "../../../i18n/index.ts";
+import { registerChatSessionEnglish } from "../../../i18n/locales/en-chat-session.ts";
 import type { MessageGroup } from "../../../lib/chat/chat-types.ts";
 import { messageClientSourcesLabel } from "../../../lib/chat/message-client-source.ts";
 import { normalizeRoleForGrouping } from "../../../lib/chat/message-normalizer.ts";
 import { workspaceResultConflictFromTranscript } from "../workspace-conflict.ts";
+
+registerChatSessionEnglish();
 
 export function isOwnSenderGroup(
   group: Pick<MessageGroup, "sender">,

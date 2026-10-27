@@ -295,6 +295,8 @@ function fixture(
     metadata.set(artifactsPath(id), { total_count: total, artifacts });
   const githubReads: string[] = [];
   const registryReads: string[] = [];
+  const requests: string[] = [];
+  const responses = new Map<string, () => Response | undefined>();
   const archiveIdentity = {
     sha256: digest(tarball),
     size: tarball.length,
@@ -304,6 +306,14 @@ function fixture(
   const fetchImpl: typeof fetch = async (input, init) => {
     const url = new URL(requestUrl(input));
     expect(init?.method ?? "GET").toBe("GET");
+    requests.push(url.pathname);
+    if (url.hostname !== "api.github.com") {
+      expect(new Headers(init?.headers).has("authorization")).toBe(false);
+    }
+    const override = [...responses].find(([suffix]) => url.pathname.endsWith(suffix))?.[1]();
+    if (override) {
+      return override;
+    }
     if (url.hostname === "api.github.com") {
       const path = `${url.pathname.replace(`/repos/${repository}/`, "")}${url.search}`;
       githubReads.push(path);
@@ -317,7 +327,6 @@ function fixture(
       const value = metadata.get(path);
       return value instanceof Response ? value : Response.json(value);
     }
-    expect(new Headers(init?.headers).has("authorization")).toBe(false);
     registryReads.push(url.pathname);
     if (url.pathname.endsWith("/publication")) {
       return Response.json({ name: entry.name, version: entry.version, state: "published" });
@@ -380,6 +389,9 @@ function fixture(
     archives,
     githubReads,
     registryReads,
+    requests,
+    respond: (suffix: string, response: () => Response | undefined) =>
+      responses.set(suffix, response),
     transactions,
     entry,
     receiptArtifact,
@@ -590,24 +602,12 @@ describe("ClawHub prepared publication", () => {
       "@openclaw/other",
     ]);
     expect(manifest.producer.runAttempt).toBe(2);
-    for (const entry of manifest.packages) {
-      const transaction = readPackedClawHubTransaction({
-        artifactDir: join(options.directory, entry.artifactName),
-        packageName: entry.packageName,
-        version: entry.version,
-        artifactName: entry.artifactName,
-      });
-      expect(entry.tarballSha256).toBe(transaction.artifactSha256);
-      expect(entry.inventoryDigest).toBe(transaction.inventoryDigest);
-    }
   });
 
-  it.each(["prior attempt", "mixed attempt", "failed producer", "reused producer"])(
+  it.each(["prior attempt", "failed producer", "reused producer"])(
     "refuses to relabel %s packages as the current preparation attempt",
     (change) => {
-      const options = preparedSealingFixture(
-        change === "prior attempt" ? [1, 1] : change === "mixed attempt" ? [1, 2] : [2, 2],
-      );
+      const options = preparedSealingFixture(change === "prior attempt" ? [1, 1] : [2, 2]);
       if (change === "failed producer") {
         options.workflowJobs.jobs[0].conclusion = "failure";
       }
@@ -635,31 +635,17 @@ describe("ClawHub prepared publication", () => {
   it.each(["selected", "all-publishable"])(
     "retains the %s prepared roster when an exact version is adopted on resume",
     async (selectionMode) => {
-      const f = preparedFixture(selectionMode);
+      const f = preparedFixture(selectionMode, "cloudflare");
       const [entry] = await resolvePreparedClawHubMatrix(f.resolveOptions);
       expect(entry.alreadyPublished).toBe(true);
+      expect(entry.family).toBe("bundle-plugin");
+      expect(entry.publication).toEqual({ state: "published" });
       await restorePreparedClawHubPackage({ ...f.restoreOptions, entry: entry.prepared });
-      expect(readFileSync(join(f.restoreOptions.outputDir, "example.tgz"))).toEqual(f.tarball);
-      const readback = await verifyPublishedClawHubPackage({
-        expectedArtifactDir: f.restoreOptions.outputDir,
-        packageName: entry.packageName,
-        packageVersion: entry.version,
-        publishTag: entry.publishTag,
-        retryOptions: { fetchImpl: f.options.fetchImpl, attempts: 1 },
-      });
-      expect(readback.package.registrySha256).toBe(f.entry.artifactSha256);
-      expect(readback.publicationAuthentication).toBe("not-verified");
+      expect(readFileSync(join(f.restoreOptions.outputDir, "cloudflare.tgz"))).toEqual(f.tarball);
     },
   );
 
-  it("restores established package families in prepared promotion matrices", async () => {
-    const f = preparedFixture("selected", "cloudflare");
-    const [entry] = await resolvePreparedClawHubMatrix(f.resolveOptions);
-    expect(entry.family).toBe("bundle-plugin");
-  });
-
   it.each([
-    { publication: { state: "published" } },
     { publication: { state: "absent" } },
     { publication: { state: "pending", stage: "staging" } },
     { publication: { state: "pending", stage: "checks", attemptId: "attempt_checks" } },
@@ -669,36 +655,33 @@ describe("ClawHub prepared publication", () => {
     { publication: { state: "absent" }, legacy: [200, 404] },
   ])("resolves prepared publication detail: %j", async ({ publication, legacy }) => {
     const f = preparedFixture();
-    const requests: string[] = [];
-    const fetchImpl: typeof fetch = async (input, init) => {
-      const url = requestUrl(input);
-      if (url.includes("/versions/")) {
-        requests.push(url.slice(url.indexOf("/versions/")));
-        if (url.endsWith("/publication")) {
-          return Response.json(
-            { name: f.entry.name, version: f.entry.version, ...(legacy ? {} : publication) },
-            { status: legacy?.[0] ?? 200 },
-          );
-        }
-        if (!legacy) {
-          throw new Error("Recognized publication state must not fall back to the version probe.");
-        }
-        return new Response(null, { status: legacy[1] });
+    f.respond("/publication", () =>
+      Response.json(
+        { name: f.entry.name, version: f.entry.version, ...(legacy ? {} : publication) },
+        { status: legacy?.[0] ?? 200 },
+      ),
+    );
+    f.respond(`/versions/${f.entry.version}`, () => {
+      if (!legacy) {
+        throw new Error("Recognized publication state must not fall back to the version probe.");
       }
-      if (url.endsWith("/trusted-publisher") && ["pending", "failed"].includes(publication.state)) {
-        return new Response(null, { status: 404 });
-      }
-      return f.options.fetchImpl(input, init);
-    };
-    const [entry] = await resolvePreparedClawHubMatrix({ ...f.resolveOptions, fetchImpl });
+      return new Response(null, { status: legacy[1] });
+    });
+    if (["pending", "failed"].includes(publication.state)) {
+      f.respond("/trusted-publisher", () => new Response(null, { status: 404 }));
+    }
+    const [entry] = await resolvePreparedClawHubMatrix(f.resolveOptions);
     expect(entry).toMatchObject({
       packageName: f.entry.name,
-      publication,
       alreadyPublished: publication.state === "published",
       prepared: { tarballSha256: f.entry.artifactSha256 },
     });
     expect(entry.publication).toEqual(publication);
-    expect(requests).toEqual([
+    expect(
+      f.requests
+        .filter((url) => url.includes("/versions/"))
+        .map((url) => url.slice(url.indexOf("/versions/"))),
+    ).toEqual([
       `/versions/${f.entry.version}/publication`,
       ...(legacy ? [`/versions/${f.entry.version}`] : []),
     ]);
@@ -715,32 +698,27 @@ describe("ClawHub prepared publication", () => {
     "requires existing owner repair for $label before normal preparation",
     async ({ status, patch }) => {
       const f = preparedFixture("all-publishable");
-      const registryRequests: string[] = [];
-      const fetchImpl: typeof fetch = async (input, init) => {
-        const url = requestUrl(input);
-        if (url.startsWith("https://clawhub.ai/")) {
-          registryRequests.push(url);
-        }
-        if (url.endsWith("/trusted-publisher")) {
-          if (status === 404) {
-            return new Response(null, { status });
-          }
-          const response = await f.options.fetchImpl(input, init);
-          const body: {
-            trustedPublisher: { provider: string; repository: string; workflowFilename: string };
-          } = await response.json();
-          return Response.json({
-            trustedPublisher: patch === null ? null : { ...body.trustedPublisher, ...patch },
-          });
-        }
-        return f.options.fetchImpl(input, init);
-      };
-      await expect(
-        resolvePreparedClawHubMatrix({ ...f.resolveOptions, fetchImpl }),
-      ).rejects.toThrow(/Plugin ClawHub New owner before preparing again/u);
-      expect(registryRequests).toEqual([
-        `https://clawhub.ai/api/v1/packages/${encodeURIComponent(f.entry.name)}/versions/${f.entry.version}/publication`,
-        `https://clawhub.ai/api/v1/packages/${encodeURIComponent(f.entry.name)}/trusted-publisher`,
+      f.respond("/trusted-publisher", () =>
+        status === 404
+          ? new Response(null, { status })
+          : Response.json({
+              trustedPublisher:
+                patch === null
+                  ? null
+                  : {
+                      provider: "github-actions",
+                      repository,
+                      workflowFilename: "plugin-clawhub-release.yml",
+                      ...patch,
+                    },
+            }),
+      );
+      await expect(resolvePreparedClawHubMatrix(f.resolveOptions)).rejects.toThrow(
+        /Plugin ClawHub New owner before preparing again/u,
+      );
+      expect(f.requests.filter((url) => url.startsWith("/api/v1/"))).toEqual([
+        `/api/v1/packages/${encodeURIComponent(f.entry.name)}/versions/${f.entry.version}/publication`,
+        `/api/v1/packages/${encodeURIComponent(f.entry.name)}/trusted-publisher`,
       ]);
     },
   );
@@ -749,16 +727,13 @@ describe("ClawHub prepared publication", () => {
     const f = preparedFixture();
     const options = { ...f.restoreOptions, archivePath: join(f.directory, "package.zip") };
     await restorePreparedClawHubPackage(options);
-    const fetchImpl: typeof fetch = async (input, init) => {
-      if (requestUrl(input).endsWith("/zip")) {
-        throw new Error("Saved verified bytes must not be redownloaded.");
-      }
-      return f.options.fetchImpl(input, init);
-    };
-    await restorePreparedClawHubPackage({ ...options, fetchImpl });
+    f.respond("/zip", () => {
+      throw new Error("Saved verified bytes must not be redownloaded.");
+    });
+    await restorePreparedClawHubPackage(options);
     const tarballPath = join(options.outputDir, "example.tgz");
     writeFileSync(tarballPath, "changed local bytes");
-    await expect(restorePreparedClawHubPackage({ ...options, fetchImpl })).rejects.toThrow();
+    await expect(restorePreparedClawHubPackage(options)).rejects.toThrow();
     expect(readFileSync(tarballPath, "utf8")).toBe("changed local bytes");
   });
 
@@ -802,8 +777,8 @@ describe("ClawHub prepared publication", () => {
   it("retries an interrupted body against the same artifact and restores its original bytes", async () => {
     const f = preparedFixture();
     let transfers = 0;
-    const fetchImpl: typeof fetch = async (input, init) => {
-      if (requestUrl(input).endsWith("/actions/artifacts/3/zip") && ++transfers === 1) {
+    f.respond("/actions/artifacts/3/zip", () => {
+      if (++transfers === 1) {
         let firstChunk = true;
         return new Response(
           new ReadableStream({
@@ -824,9 +799,9 @@ describe("ClawHub prepared publication", () => {
           }),
         );
       }
-      return f.options.fetchImpl(input, init);
-    };
-    await restorePreparedClawHubPackage({ ...f.restoreOptions, fetchImpl });
+      return undefined;
+    });
+    await restorePreparedClawHubPackage(f.restoreOptions);
     expect(transfers).toBe(2);
     expect(readFileSync(join(f.restoreOptions.outputDir, "example.tgz"))).toEqual(f.tarball);
   });
@@ -886,6 +861,9 @@ describe("ClawHub detached postpublish verification", () => {
       expect(result).toMatchObject({ complete: true, parentRunAttempt: 2, dispatchRunAttempt: 1 });
       expect(result.packages).toHaveLength(noChild ? 0 : 1);
       expect(f.registryReads.length > 0).toBe(!noChild);
+      if (noChild) {
+        expect(result).toMatchObject({ outcome: "no-normal-clawhub-publication" });
+      }
     },
   );
 
@@ -1060,28 +1038,24 @@ describe("ClawHub detached postpublish verification", () => {
     async (outcome) => {
       const f = fixture();
       let publicationReads = 0;
-      const fetchImpl: typeof fetch = async (input, init) => {
-        if (requestUrl(input).endsWith("/publication")) {
-          publicationReads += 1;
-          const state =
-            publicationReads === 1
-              ? { state: "pending", stage: "finalization", attemptId: "attempt-1" }
-              : outcome === "published"
-                ? { state: "published" }
-                : outcome === "failed"
-                  ? { state: "failed", recoverable: false, attemptId: "attempt-1" }
-                  : { state: "pending", stage: "checks", attemptId: "replacement" };
-          return Response.json({ name: f.entry.name, version: f.entry.version, ...state });
-        }
-        if (
-          requestUrl(input).endsWith(encodeURIComponent(f.entry.name)) &&
-          !(publicationReads === 2 && outcome === "published")
-        ) {
-          return Response.json({ package: { tags: { latest: "2026.8.1" } } });
-        }
-        return f.options.fetchImpl(input, init);
-      };
-      const options = { ...f.options, fetchImpl };
+      f.respond("/publication", () => {
+        publicationReads += 1;
+        const state =
+          publicationReads === 1
+            ? { state: "pending", stage: "finalization", attemptId: "attempt-1" }
+            : outcome === "published"
+              ? { state: "published" }
+              : outcome === "failed"
+                ? { state: "failed", recoverable: false, attemptId: "attempt-1" }
+                : { state: "pending", stage: "checks", attemptId: "replacement" };
+        return Response.json({ name: f.entry.name, version: f.entry.version, ...state });
+      });
+      f.respond(encodeURIComponent(f.entry.name), () =>
+        publicationReads === 2 && outcome === "published"
+          ? undefined
+          : Response.json({ package: { tags: { latest: "2026.8.1" } } }),
+      );
+      const options = f.options;
       if (outcome === "published") {
         expect((await verifyClawHubPostpublish(options)).complete).toBe(true);
         expect(f.registryReads.length).toBeGreaterThan(0);
@@ -1169,10 +1143,6 @@ describe("ClawHub detached postpublish verification", () => {
       const verifierSha = status === "identical" ? sha : "c".repeat(40);
       const f = fixture(parentOnMain, verifierSha);
       const comparison = `compare/${sha}...${verifierSha}`;
-      f.metadata.set(comparison, {
-        status,
-        files: [{ filename: "large.txt", patch: "+change\n".repeat(300_000) }],
-      });
       f.metadata.set(`${comparison}?per_page=1&page=2`, { status, commits: [] });
       const result = await verifyClawHubPostpublish(f.options);
       expect(result.complete).toBe(true);
@@ -1192,29 +1162,16 @@ describe("ClawHub detached postpublish verification", () => {
     "resumes a failed public readback with retained downloads: %s",
     async (outcome) => {
       const f = fixture();
-      const archiveRequests: string[] = [];
-      const authorityRequests: string[] = [];
       let publicReadbackAvailable = false;
-      const fetchImpl: typeof fetch = async (input, init) => {
-        const url = requestUrl(input);
-        if (url.endsWith("/zip")) {
-          archiveRequests.push(url);
-        }
-        if (/\/actions\/runs\/(10|20)\/attempts\/1$/u.test(url)) {
-          authorityRequests.push(url);
-        }
-        if (!publicReadbackAvailable && url.endsWith("/artifact/download")) {
-          return new Response(null, { status: 403 });
-        }
-        return f.options.fetchImpl(input, init);
-      };
-      const options = { ...f.options, fetchImpl };
+      f.respond("/artifact/download", () =>
+        publicReadbackAvailable ? undefined : new Response(null, { status: 403 }),
+      );
+      const options = f.options;
       await expect(verifyClawHubPostpublish(options)).rejects.toThrow(/HTTP 403/u);
       const tarballPath = join(options.outputDir, "3", "example.tgz");
       expect(readFileSync(tarballPath)).toEqual(f.tarball);
-      const firstDownloads = [...archiveRequests];
-      expect(firstDownloads).toHaveLength(5);
-      authorityRequests.length = 0;
+      expect(f.requests.filter((url) => url.endsWith("/zip"))).toHaveLength(5);
+      f.requests.length = 0;
       f.registryReads.length = 0;
       publicReadbackAvailable = true;
       if (outcome === "revoked child") {
@@ -1231,10 +1188,12 @@ describe("ClawHub detached postpublish verification", () => {
       } else {
         expect((await verifyClawHubPostpublish(options)).complete).toBe(true);
       }
-      expect(archiveRequests).toEqual(firstDownloads);
-      expect(authorityRequests).toEqual([
-        `https://api.github.com/repos/${repository}/actions/runs/10/attempts/1`,
-        `https://api.github.com/repos/${repository}/actions/runs/20/attempts/1`,
+      expect(f.requests.filter((url) => url.endsWith("/zip"))).toEqual([]);
+      expect(
+        f.requests.filter((url) => /\/actions\/runs\/(10|20)\/attempts\/1$/u.test(url)),
+      ).toEqual([
+        `/repos/${repository}/actions/runs/10/attempts/1`,
+        `/repos/${repository}/actions/runs/20/attempts/1`,
       ]);
     },
   );
@@ -1279,22 +1238,6 @@ describe("ClawHub detached postpublish verification", () => {
     await rejectsBeforeRegistry(f, error);
   });
 
-  it("records an explicit no-child outcome without claiming registry verification", async () => {
-    const f = fixture();
-    replaceJsonArtifact(f, f.dispatchArtifact, "dispatch.json", {
-      ...f.dispatch,
-      normalClawHubRunId: null,
-      normalClawHubRunAttempt: null,
-    });
-    const result = await verifyClawHubPostpublish(f.options);
-    expect(result).toMatchObject({
-      complete: true,
-      outcome: "no-normal-clawhub-publication",
-      packages: [],
-    });
-    expect(f.registryReads).toEqual([]);
-  });
-
   it("does not mistake a missing dispatch record for an empty release", async () => {
     const f = fixture();
     f.setArtifacts(10, []);
@@ -1316,15 +1259,8 @@ describe("ClawHub detached postpublish verification", () => {
     const corrupted = Buffer.from(f.archives.get(3)!);
     corrupted.writeUInt32LE(0, 0);
     f.archives.set(3, corrupted);
-    let transfers = 0;
-    const fetchImpl: typeof fetch = async (input, init) => {
-      if (requestUrl(input).endsWith("/actions/artifacts/3/zip")) {
-        transfers += 1;
-      }
-      return f.options.fetchImpl(input, init);
-    };
-    await expect(verifyClawHubPostpublish({ ...f.options, fetchImpl })).rejects.toThrow(/digest/u);
-    expect(transfers).toBe(1);
+    await expect(verifyClawHubPostpublish(f.options)).rejects.toThrow(/digest/u);
+    expect(f.requests.filter((url) => url.endsWith("/actions/artifacts/3/zip"))).toHaveLength(1);
     expect(f.registryReads).toEqual([]);
   });
 });

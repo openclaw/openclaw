@@ -1,6 +1,9 @@
 import { t } from "../../i18n/index.ts";
+import { registerChatComposerEnglish } from "../../i18n/locales/en-chat-composer.ts";
 import type { ChatAttachment } from "../../lib/chat/chat-types.ts";
 import { getChatAttachmentDataUrl } from "./attachment-payload-store.ts";
+
+registerChatComposerEnglish();
 
 function dataUrlToBase64(dataUrl: string): { content: string; mimeType: string } | null {
   const commaIndex = dataUrl.indexOf(",");

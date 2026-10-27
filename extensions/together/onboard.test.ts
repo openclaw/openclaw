@@ -1,7 +1,8 @@
-import { streamSimple, type Model } from "openclaw/plugin-sdk/llm";
+import type { Model } from "openclaw/plugin-sdk/llm";
 import { registerSingleProviderPlugin } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { resolveAgentModelPrimaryValue } from "openclaw/plugin-sdk/provider-onboard";
 import { describe, expect, it } from "vitest";
+import { captureProviderRequestPayload } from "../test-support/provider-request-payload.test-support.js";
 import plugin from "./index.js";
 import { TOGETHER_MODEL_CATALOG } from "./models.js";
 import { applyTogetherConfig, TOGETHER_DEFAULT_MODEL_REF } from "./onboard.js";
@@ -55,20 +56,7 @@ describe("Together prompt cache routing", () => {
         modelId: model.id,
         model,
       }) ?? model;
-    let payload: unknown;
-    const result = await streamSimple(
-      normalized,
-      { messages: [] },
-      {
-        apiKey: "synthetic-unused-key",
-        sessionId: "synthetic-session",
-        cacheRetention: "long",
-        onPayload(value) {
-          payload = value;
-          throw new Error("captured before request");
-        },
-      },
-    ).result();
+    const { result, payload } = await captureProviderRequestPayload(normalized);
     expect(result.errorMessage).toBe("captured before request");
     expect(payload).toMatchObject({ prompt_cache_key: route.key });
     expect(payload).not.toHaveProperty("prompt_cache_retention");

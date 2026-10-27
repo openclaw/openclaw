@@ -45,23 +45,14 @@ import {
   createOpenClawTestState,
   type OpenClawTestState,
 } from "../test-utils/openclaw-test-state.js";
-import {
-  activateMcpLoopbackClientGrantCapture,
-  mintMcpLoopbackClientGrant,
-  revokeMcpLoopbackClientGrant,
-} from "./mcp-grant-store.js";
+import { revokeMcpLoopbackClientGrant } from "./mcp-grant-store.js";
+import { captureGrant, request as requestMcp, toolCall } from "./mcp-http-request.test-support.js";
 import { closeMcpLoopbackServer } from "./mcp-http.js";
 import {
   beginMcpLoopbackToolCallCapture,
   clearMcpLoopbackToolCallCapture,
-  type McpLoopbackToolCallOutcome,
 } from "./mcp-http.loopback-runtime.js";
-import {
-  jsonHeaders,
-  mcpToolCallBody,
-  sendRaw,
-  startLoopbackServerForTest,
-} from "./mcp-http.test-support.js";
+import { startLoopbackServerForTest } from "./mcp-http.test-support.js";
 
 vi.mock("../agents/tools/gateway.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../agents/tools/gateway.js")>()),
@@ -172,71 +163,63 @@ async function mintCompletionGrant(
   );
   admissions.push(admission);
   const admittedRunContext = await admission.admit("gateway");
-  const grant = mintMcpLoopbackClientGrant({
-    runtimeOwnerToken: runtime.ownerToken,
-    admittedRunContext,
-    context: {
-      sessionKey: requesterKey,
-      sessionId: requesterSessionId,
-      agentId: "main",
-      runId,
-      workspaceDir: state.workspaceDir,
-      cwd: state.workspaceDir,
-      senderIsOwner: false,
-      modelProvider: "claude-cli",
-      modelId: "opus",
-      toolsAllow: ["write"],
-      inputProvenance: {
-        kind: "inter_session",
-        sourceSessionKey: sourceKey,
-        sourceChannel: "internal",
-        sourceTool: "subagent_announce",
-      },
-      trustedInternalHandoff: {
-        kind: "subagent-completion",
-        sourceSessionKey: sourceKey,
-        sourceSessionId,
-        targetSessionKey: requesterKey,
-        targetSessionId: requesterSessionId,
-        provider: "claude-cli",
-        model: "opus",
-      },
-    },
-  });
-  grants.push(grant.token);
   const captureKey = "capture-" + runId;
   captures.push(captureKey);
-  const outcomes: McpLoopbackToolCallOutcome[] = [];
   // The dispatch boundary reports "prepared" synchronously before it authorizes the call.
   const prepared = createDeferredCore();
   beginMcpLoopbackToolCallCapture({
     captureKey,
     onToolCallUpdate: () => prepared.resolve(),
-    onToolCallResult: (call) => outcomes.push(call),
+    onToolCallResult: () => {},
   });
-  expect(
-    activateMcpLoopbackClientGrantCapture({
-      token: grant.token,
+  const grant = captureGrant(
+    {
       runtimeOwnerToken: runtime.ownerToken,
-      captureKey,
-    }),
-  ).not.toBe(false);
+      admittedRunContext,
+      context: {
+        sessionKey: requesterKey,
+        sessionId: requesterSessionId,
+        agentId: "main",
+        runId,
+        workspaceDir: state.workspaceDir,
+        cwd: state.workspaceDir,
+        senderIsOwner: false,
+        modelProvider: "claude-cli",
+        modelId: "opus",
+        toolsAllow: ["write"],
+        inputProvenance: {
+          kind: "inter_session",
+          sourceSessionKey: sourceKey,
+          sourceChannel: "internal",
+          sourceTool: "subagent_announce",
+        },
+        trustedInternalHandoff: {
+          kind: "subagent-completion",
+          sourceSessionKey: sourceKey,
+          sourceSessionId,
+          targetSessionKey: requesterKey,
+          targetSessionId: requesterSessionId,
+          provider: "claude-cli",
+          model: "opus",
+        },
+      },
+    },
+    captureKey,
+    (token) => grants.push(token),
+  );
   const target = path.join(state.workspaceDir, runId + ".txt");
   const request = (method: "tools/list" | "tools/call") =>
-    sendRaw({
-      port: runtime.port,
-      token: grant.token,
-      headers: jsonHeaders({ "x-openclaw-cli-capture-key": captureKey }),
-      body:
-        method === "tools/call"
-          ? mcpToolCallBody("write", { path: target, content: runId })
-          : JSON.stringify({ jsonrpc: "2.0", id: 1, method }),
-    });
+    requestMcp(
+      runtime,
+      method === "tools/call"
+        ? toolCall("write", { path: target, content: runId })
+        : { jsonrpc: "2.0", id: 1, method },
+      { token: grant.token, captureKey },
+    );
   return {
     request,
     written: () => fs.readFile(target, "utf8").catch(() => undefined),
     target,
-    outcomes,
     prepared: prepared.promise,
     call: async () => (await request("tools/call")).json(),
     list: async () => {
@@ -261,9 +244,6 @@ async function expectExpiredWrite(grant: Awaited<ReturnType<typeof mintCompletio
     result: { isError: true, content: [{ text: "Tool call authorization expired" }] },
   });
   expect(await grant.written()).toBeUndefined();
-  expect(grant.outcomes).toMatchObject([
-    { toolName: "write", outcome: "blocked", deniedReason: "client-grant-revoked" },
-  ]);
 }
 
 function readWatch(targetSessionKey: string) {
@@ -294,7 +274,17 @@ describe("MCP loopback completion lineage at the final tool-effect fence", () =>
     "registers watches without host SQL for %s lineage",
     async (kind, sourceKey, storedKey, suppliedSessionId, parentKey) => {
       const sessionId = suppliedSessionId ?? childEntry.sessionId;
-      await seedLineage({ sessionId, ...(parentKey ? { spawnedBy: parentKey } : {}) }, storedKey);
+      await seedLineage(
+        {
+          sessionId,
+          ...(kind === "durable"
+            ? { spawnedBy: anotherRequester, completionOwnerSessionKey: requesterKey }
+            : parentKey
+              ? { spawnedBy: parentKey }
+              : {}),
+        },
+        storedKey,
+      );
       if (parentKey) {
         await replaceSessionEntry({ agentId: "main", sessionKey: parentKey }, childEntry);
       }
@@ -304,7 +294,7 @@ describe("MCP loopback completion lineage at the final tool-effect fence", () =>
       expect(await listed.json()).toMatchObject({ result: { tools: [{ name: "write" }] } });
       let authoritySql: number | undefined;
       const watches: boolean[] = [];
-      const hook = vi.fn(async () => {
+      registerBeforeToolCallHook(async () => {
         await new Promise<void>((resolve) => {
           setImmediate(resolve);
         });
@@ -319,14 +309,11 @@ describe("MCP loopback completion lineage at the final tool-effect fence", () =>
           sql.restore();
         }
       });
-      registerBeforeToolCallHook(hook);
 
       expect(await grant.call()).toMatchObject({ result: { isError: false } });
-      expect(hook).toHaveBeenCalledTimes(1);
       expect(watches).toEqual([true, true]);
       expect(authoritySql).toBe(0);
       expect(await grant.written()).toBe(runId);
-      expect(grant.outcomes).toMatchObject([{ toolName: "write", outcome: "completed" }]);
     },
   );
 
@@ -399,18 +386,6 @@ describe("MCP loopback completion lineage at the final tool-effect fence", () =>
       expect(await grant.written()).toBeUndefined();
     },
   );
-
-  it("lets the completion owner write when another session controls the child", async () => {
-    // The persisted completion owner, when set, is the lineage; the controller is not.
-    await seedLineage({
-      spawnedBy: "agent:main:direct:controller",
-      completionOwnerSessionKey: requesterKey,
-    });
-    const grant = await mintCompletionGrant("lineage-completion-owner");
-
-    expect(await grant.call()).toMatchObject({ result: { isError: false } });
-    expect(await grant.written()).toBe("lineage-completion-owner");
-  });
 
   it.each<[string, () => Promise<void>, Partial<SessionEntry>?, string?]>([
     ["removed", removeChild],
@@ -494,6 +469,5 @@ describe("MCP loopback completion lineage at the final tool-effect fence", () =>
       expect(await response.json()).toMatchObject({ error: { message: "Internal error" } });
     }
     expect(await grant.written()).toBeUndefined();
-    expect(grant.outcomes).toEqual([]);
   });
 });

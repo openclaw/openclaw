@@ -15,15 +15,12 @@ function writeResponse(response) {
   process.stdout.write(`${JSON.stringify(response)}\n`);
 }
 
-function parseRequest(input) {
+function parseRequestIds(input) {
   const parsed = JSON.parse(input);
   if (!parsed || typeof parsed !== "object" || !Array.isArray(parsed.ids)) {
     throw new Error("invalid exec SecretRef request");
   }
-  return {
-    protocolVersion: 1,
-    ids: parsed.ids.filter((id) => typeof id === "string" && id.length > 0),
-  };
+  return parsed.ids.filter((id) => typeof id === "string" && id.length > 0);
 }
 
 function normalizeVaultAddress() {
@@ -406,8 +403,8 @@ async function resolveFromVault(ids) {
 
 async function main() {
   const input = await consumeText(process.stdin.setEncoding("utf8"));
-  const request = parseRequest(input);
-  writeResponse(await resolveFromVault(request.ids));
+  const ids = parseRequestIds(input);
+  writeResponse(await resolveFromVault(ids));
 }
 
 /** @param {unknown} error */

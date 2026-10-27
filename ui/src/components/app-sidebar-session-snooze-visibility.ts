@@ -36,9 +36,11 @@ export function projectSidebarSnoozeCatalogs(
   host: SidebarSnoozeVisibilityHost & { readonly sessionInvolvingMeFilterActive: boolean },
   ownerId: string | null,
 ) {
+  const selectedAgentId = host.expandedAgentId();
   const visibility = projectSidebarArchiveVisibility({
     sessionData: host.sessionData,
-    selectedAgentId: host.expandedAgentId(),
+    sourceRows: host.sessionData.resultForAgent(selectedAgentId)?.sessions ?? [],
+    selectedAgentId,
     statusFilter: host.sessionsStatusFilter,
     now: Date.now(),
     deletionState: (key, agentId) => host.sessionDataContext?.sessions.deletionState(key, agentId),

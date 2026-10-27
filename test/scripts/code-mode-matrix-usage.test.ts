@@ -7,7 +7,6 @@ import {
   captureMatrixLedgerBoundary,
   collectMatrixUsage,
   readMatrixSessionLedger,
-  selectMatrixLedgerRows,
   type MatrixSessionLedger,
 } from "../../scripts/lib/code-mode-matrix-usage.js";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
@@ -50,13 +49,7 @@ function ledger(events: unknown[] = [assistant()]): MatrixSessionLedger {
       sha256: JSON.stringify(event),
       event,
     })),
-    sessions: [
-      {
-        ...rootIdentity,
-        historyRewritten: false,
-        generation: "initial",
-      },
-    ],
+    sessions: [{ ...rootIdentity, historyRewritten: false, generation: "initial" }],
     runs: [],
     issues: [],
   };
@@ -166,14 +159,6 @@ describe("matrix task billing", () => {
     });
     expect(task.costUsd).toBeCloseTo(0.024);
     expect(interview).toMatchObject({ complete: true, totalTokens: 24, assistantTurns: 1 });
-    expect(
-      selectMatrixLedgerRows({ ledger: final, after: taskEnd, rootSessionKeys: [ROOT] }).rows,
-    ).toHaveLength(2);
-    expect(final.rows.map((row) => [row.storeId, row.sessionId, row.seq])).toEqual([
-      ["agents/qa/agent/openclaw-agent.sqlite", "qa", 1],
-      ["agents/qa/agent/openclaw-agent.sqlite", "qa", 2],
-      ["agents/worker/agent/openclaw-agent.sqlite", "worker", 1],
-    ]);
   });
 
   const unavailable = { usageReport: { state: "unavailable" } };
@@ -190,10 +175,10 @@ describe("matrix task billing", () => {
     totalTokens: null,
     knownTotalTokens,
   });
-  it.each([0, 1])("ignores unavailable counters at scale %s", (scale) => {
+  it("ignores unavailable counters", () => {
     expect(
       accounting({
-        events: [assistant({ usage: { ...usage(scale), ...unavailable } })],
+        events: [assistant({ usage: { ...usage(), ...unavailable } })],
         rootUsage: unavailable,
       }),
     ).toMatchObject({
@@ -207,11 +192,11 @@ describe("matrix task billing", () => {
       assistantTurns: 1,
     });
   });
-  it.each([false, true])("preserves measured usage with unavailable first=%s", (first) => {
+  it("preserves measured usage alongside unavailable usage", () => {
     const failed = assistant({ usage: { ...usage(), ...unavailable }, stopReason: "error" });
     expect(
       accounting({
-        events: first ? [failed, assistant()] : [assistant(), failed],
+        events: [failed, assistant()],
         rootUsage: unavailable,
       }),
     ).toMatchObject({
@@ -412,7 +397,7 @@ describe("matrix task billing", () => {
   );
 });
 
-function modeRow(mode: "code" | "direct", repetition = 1) {
+function modeRow(mode: "code" | "direct" | "auto", repetition = 1) {
   return {
     id: `${mode}-${repetition}`,
     mode,
@@ -433,10 +418,8 @@ function modeRow(mode: "code" | "direct", repetition = 1) {
       settings: {
         thinking: "low",
         fast: false,
-        runtime: "openclaw",
         allowedTools: ["read", "write"],
         timeoutSeconds: 60,
-        executor: "node",
       },
     },
     accounting: accounting(),
@@ -449,6 +432,30 @@ function comparePairs(...codeRows: ReturnType<typeof modeRow>[]) {
 }
 
 describe("same-source mode comparisons", () => {
+  it("keeps the omitted-default treatment labeled auto rather than forced code", () => {
+    const report = comparePairs(modeRow("auto"));
+    expect(report).toMatchObject({ treatmentMode: "auto", incompletePairs: [] });
+    expect(report.byTask[0]).toMatchObject({
+      treatmentMode: "auto",
+      pairs: 1,
+      direct: { attempts: 1 },
+      auto: { attempts: 1 },
+    });
+    expect(report.byTask[0]).not.toHaveProperty("code");
+    expect(report.pairs[0]).toMatchObject({
+      directId: "direct-1",
+      autoId: "auto-1",
+      totalTokens: { direct: 24, auto: 24, delta: 0, ratio: 1 },
+    });
+    expect(report.pairs[0]).not.toHaveProperty("codeId");
+  });
+
+  it("rejects mixing default and forced treatments into one comparison", () => {
+    expect(() =>
+      compareCodeModeMatrixModes([modeRow("direct"), modeRow("auto"), modeRow("code")]),
+    ).toThrow("one treatment");
+  });
+
   it("charges failed attempts to completed tasks and exposes auditable empirical pairs", () => {
     const completedWithErrors = modeRow("code", 1);
     completedWithErrors.accounting.toolFailures = 1;

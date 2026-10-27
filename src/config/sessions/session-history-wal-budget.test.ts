@@ -31,7 +31,7 @@ import {
 import * as diskBudgetModule from "./disk-budget.js";
 import type { SqliteSessionArchivePruningDiagnostics } from "./session-accessor.sqlite-contract.js";
 import { replaceSessionEntry } from "./session-accessor.sqlite-entry.js";
-import { readActiveTranscriptEntryAnchor } from "./session-accessor.sqlite-transcript-anchor.js";
+import { readActiveTranscriptEntryAnchor } from "./session-accessor.sqlite-transcript-admitted-read.js";
 import { appendTranscriptMessage } from "./session-accessor.sqlite-transcript-write.js";
 import { rewriteTranscriptMessageAtAnchor } from "./session-accessor.transcript.js";
 import * as archivePruningDiagnostics from "./session-history-archive-pruning-diagnostics.js";
@@ -429,9 +429,7 @@ it("coalesces forced kicks during and after a sweep until the one-minute interva
   const measurement = vi
     .spyOn(diskBudgetModule, "measureSessionPhysicalDiskUsage")
     .mockResolvedValue({
-      databaseMainBytes: 0,
       databaseWalBytes: 0,
-      sessionFilesBytes: 0,
       totalBytes: 0,
     });
   const maintenanceConfig = limit();
@@ -485,11 +483,11 @@ it("reclaims newly freed pages after rewriting a protected current transcript", 
   });
   const database = openOpenClawAgentDatabase({ agentId: "main", env: state.env });
   expect(database.walMaintenance.checkpoint()).toBe(true);
-  const { enforce, inspect, measure, kick } = budget(storePath);
+  const { enforce, inspect, kick } = budget(storePath);
   await expect(enforce()).resolves.toMatchObject(noWork);
   // Settle any initial allocation; this pass records protected pressure with no work left.
   await expect(enforce()).resolves.toMatchObject({ freedBytes: 0 });
-  const before = await measure();
+  const before = (await fs.promises.stat(database.path)).size;
   const anchor = readActiveTranscriptEntryAnchor({ ...scope, entryId: "large-answer" });
   assert(anchor);
   await expect(
@@ -507,8 +505,8 @@ it("reclaims newly freed pages after rewriting a protected current transcript", 
   const now = Date.now() + 31 * 60_000;
   vi.spyOn(Date, "now").mockReturnValue(now);
   await kick(now);
-  const after = await measure();
-  expect(after.databaseMainBytes).toBeLessThan(before.databaseMainBytes);
+  const after = (await fs.promises.stat(database.path)).size;
+  expect(after).toBeLessThan(before);
   expect(database.db.prepare("PRAGMA freelist_count").get()?.freelist_count).toBe(0);
   expect(
     database.db

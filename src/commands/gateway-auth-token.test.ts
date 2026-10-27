@@ -1,10 +1,12 @@
-import { beforeEach, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { createNonExitingRuntimeEnv } from "../test-utils/plugin-runtime-env.js";
 import { gatewayAuthTokenCommand } from "./gateway-auth-token.js";
 
 const mocks = vi.hoisted(() => ({
   readConfigFileSnapshot: vi.fn(),
   resolveCommandSecretRefsViaGateway: vi.fn(),
+  isTerminalInteractive: vi.fn(() => true),
 }));
 
 vi.mock("../config/config.js", () => ({
@@ -15,13 +17,14 @@ vi.mock("../cli/command-secret-gateway.js", () => ({
   resolveCommandSecretRefsViaGateway: mocks.resolveCommandSecretRefsViaGateway,
 }));
 
-const runtime = {
-  log: vi.fn(),
-  error: vi.fn(),
-  exit: vi.fn(),
-  writeJson: vi.fn(),
-  writeStdout: vi.fn(),
-};
+vi.mock("../cli/terminal-interactivity.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../cli/terminal-interactivity.js")>()),
+  isTerminalInteractive: mocks.isTerminalInteractive,
+}));
+
+afterEach(() => vi.unstubAllEnvs());
+
+const runtime = vi.mocked(createNonExitingRuntimeEnv());
 
 const tokenRef = { source: "env", provider: "default", id: "GATEWAY_TOKEN" } as const;
 const tokenConfig = { gateway: { auth: { mode: "token", token: tokenRef } } } as const;
@@ -37,23 +40,24 @@ function setResolvedConfig(resolvedConfig: OpenClawConfig) {
   });
 }
 async function expectRefusal(message: string, env: NodeJS.ProcessEnv = {}) {
-  await expect(gatewayAuthTokenCommand(runtime, { env, interactive: true })).rejects.toThrow(
-    message,
-  );
+  Object.entries(env).forEach(([name, value]) => vi.stubEnv(name, value));
+  await expect(gatewayAuthTokenCommand(runtime)).rejects.toThrow(message);
   expect(mocks.resolveCommandSecretRefsViaGateway).not.toHaveBeenCalled();
   expect(runtime.writeStdout).not.toHaveBeenCalled();
 }
 
 beforeEach(() => {
   vi.clearAllMocks();
+  vi.stubEnv("OPENCLAW_GATEWAY_TOKEN", undefined);
+  vi.stubEnv("OPENCLAW_GATEWAY_PASSWORD", undefined);
   setConfig(tokenConfig);
   setResolvedConfig({ gateway: { auth: { mode: "token", token: "resolved-value" } } });
 });
 
 it("prints only the resolved token for an interactive operator", async () => {
-  const env = { OPENCLAW_GATEWAY_TOKEN: "environment-value" };
+  vi.stubEnv("OPENCLAW_GATEWAY_TOKEN", "environment-value");
 
-  await gatewayAuthTokenCommand(runtime, { env, interactive: true });
+  await gatewayAuthTokenCommand(runtime);
 
   expect(mocks.resolveCommandSecretRefsViaGateway).toHaveBeenCalledWith({
     config: tokenConfig,
@@ -69,16 +73,13 @@ it("prints only the resolved token for an interactive operator", async () => {
 
 it("diagnoses a redaction marker returned by an older Gateway instead of revealing it", async () => {
   setResolvedConfig({ gateway: { auth: { mode: "token", token: "__OPENCLAW_REDACTED__" } } });
-  await expect(gatewayAuthTokenCommand(runtime, { env: {}, interactive: true })).rejects.toThrow(
-    "openclaw doctor --fix",
-  );
+  await expect(gatewayAuthTokenCommand(runtime)).rejects.toThrow("openclaw doctor --fix");
   expect(runtime.writeStdout).not.toHaveBeenCalled();
 });
 
 it("refuses non-interactive output before reading config or secrets", async () => {
-  await expect(gatewayAuthTokenCommand(runtime, { interactive: false })).rejects.toThrow(
-    "outside an interactive terminal",
-  );
+  mocks.isTerminalInteractive.mockReturnValueOnce(false);
+  await expect(gatewayAuthTokenCommand(runtime)).rejects.toThrow("outside an interactive terminal");
 
   expect(mocks.readConfigFileSnapshot).not.toHaveBeenCalled();
   expect(mocks.resolveCommandSecretRefsViaGateway).not.toHaveBeenCalled();
@@ -89,7 +90,7 @@ it("fails actionably when no configured token is available", async () => {
   setConfig({ gateway: { auth: { mode: "token" } } });
   setResolvedConfig({ gateway: { auth: { mode: "token" } } });
 
-  await expect(gatewayAuthTokenCommand(runtime, { env: {}, interactive: true })).rejects.toThrow(
+  await expect(gatewayAuthTokenCommand(runtime)).rejects.toThrow(
     "openclaw doctor --generate-gateway-token",
   );
 
@@ -101,12 +102,10 @@ it("does not fall back to ambient env when the configured SecretRef is unresolve
     new Error("gateway.auth.token SecretRef is unresolved"),
   );
 
-  await expect(
-    gatewayAuthTokenCommand(runtime, {
-      interactive: true,
-      env: { OPENCLAW_GATEWAY_TOKEN: "ambient-fallback" },
-    }),
-  ).rejects.toThrow("gateway.auth.token SecretRef is unresolved");
+  vi.stubEnv("OPENCLAW_GATEWAY_TOKEN", "ambient-fallback");
+  await expect(gatewayAuthTokenCommand(runtime)).rejects.toThrow(
+    "gateway.auth.token SecretRef is unresolved",
+  );
 
   expect(runtime.writeStdout).not.toHaveBeenCalled();
 });

@@ -1,6 +1,6 @@
 {
   "name": "@openclaw/vault",
-  "version": "2026.10.5",
+  "version": "2026.10.7",
   "private": true,
   "description": "HashiCorp Vault SecretRef provider integration for OpenClaw",
   "type": "module",

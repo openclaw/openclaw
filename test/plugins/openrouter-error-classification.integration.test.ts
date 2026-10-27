@@ -11,7 +11,6 @@ import {
 } from "../../src/agents/failover-error.js";
 import { makeProviderModelFixture } from "../../src/agents/test-helpers/provider-model-fixture.js";
 import { sleepWithAbort } from "../../src/infra/backoff.js";
-import { loadBundledPluginFacade } from "../../src/test-utils/bundled-plugin-public-surface.js";
 import { registerSingleProviderPlugin } from "../../src/test-utils/plugin-registration.js";
 import {
   closeHttpServer,
@@ -19,6 +18,7 @@ import {
   readRequestText,
   respondJson,
 } from "../helpers/gateway-integration-fixtures.js";
+import { loadBundledProviderPlugin } from "../helpers/media-generation/bundled-provider-builders.js";
 
 vi.mock("../../src/infra/backoff.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../src/infra/backoff.js")>()),
@@ -28,13 +28,7 @@ vi.mock("../../src/infra/backoff.js", async (importOriginal) => ({
 let providerOwner: Awaited<ReturnType<typeof registerSingleProviderPlugin>>;
 
 beforeAll(async () => {
-  const { default: openrouterPlugin } = await loadBundledPluginFacade<{
-    default: Parameters<typeof registerSingleProviderPlugin>[0];
-  }>({
-    pluginId: "openrouter",
-    artifactBasename: "index.js",
-  });
-  providerOwner = await registerSingleProviderPlugin(openrouterPlugin);
+  providerOwner = await registerSingleProviderPlugin(await loadBundledProviderPlugin("openrouter"));
 });
 
 const model = makeProviderModelFixture<"openai-completions">({
@@ -151,32 +145,30 @@ describe("OpenRouter runtime error classification", () => {
     expectRetryEffects(fixture, 0);
   });
 
-  it("keeps genuine HTTP 429 recovery at nine same-model retries", async () => {
+  it("keeps genuine HTTP 429 recovery at fifteen same-model retries", async () => {
     const result = await runAgainstOpenRouter({
       status: 429,
       message: "Rate limit exceeded",
     });
     const fixture = await recover(result.assistant);
     expect(result.reason).toBe("rate_limit");
-    expect(fixture.recovery).toMatchObject({
+    const retryState = {
       action: "retry",
       lastRetryFailoverReason: "rate_limit",
-    });
-    for (let retry = 2; retry <= 9; retry++) {
-      expect(await fixture.recover()).toMatchObject({
-        action: "retry",
-        lastRetryFailoverReason: "rate_limit",
-      });
+    };
+    expect(fixture.recovery).toMatchObject(retryState);
+    for (let retry = 2; retry <= 15; retry++) {
+      expect(await fixture.recover()).toMatchObject(retryState);
     }
     expect(await fixture.recover()).toEqual({ action: "proceed" });
-    expectRetryEffects(fixture, 9);
+    expectRetryEffects(fixture, 15);
     expect(fixture.onAgentEvent).toHaveBeenLastCalledWith({
       stream: "run_status",
       data: expect.objectContaining({
         phase: "retrying",
         reason: "rate_limit",
-        attempt: 10,
-        maxAttempts: 10,
+        attempt: 16,
+        maxAttempts: 16,
       }),
     });
   });

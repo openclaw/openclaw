@@ -6,7 +6,10 @@ read_when:
   - You are importing, validating, or recovering legacy session history
 ---
 
-Explicit SQLite maintenance runs offline, with the Gateway stopped. This page covers
+SQLite repairs and compaction run offline, with the Gateway stopped. The session
+`inspect` and `validate` modes are read-only and can run while the Gateway is up;
+they do not take the exclusive maintenance lock. Validation may add load, and
+separate reads can observe new commits while the Gateway runs. This page covers
 shared-state compaction and the targeted session SQLite modes.
 
 SQLite keeps pages freed by deletes available for reuse inside the database file.
@@ -95,6 +98,8 @@ compatible backup or upgrade OpenClaw for a newer schema.
 Session-key repair follows complete transcript-owner alias chains, including
 long chains in large databases. It preserves the terminal owner's session key and
 retained transcript history; shortening history is not required to bound the repair's stack.
+Archived registry discovery and recovery diagnostics also process complete
+inventories without expanding them into function arguments.
 
 Runtime session rows and transcripts live in SQLite, by default at
 `~/.openclaw/agents/<agentId>/agent/openclaw-agent.sqlite`. Gateway startup uses
@@ -175,6 +180,13 @@ conflicting source that cannot be verified stays in place. A conflicting identit
 or missing middle event is named in the finding. Compare those events with a
 verified backup, preserve the original, and restore a corrected JSONL at the named
 path before rerunning recovery. A healthy agent does not inherit another agent's failure.
+
+Transcript verification recognizes Doctor's legacy inbound-context heading
+normalization when comparing retained JSONL with SQLite. Heading-only rewrites
+do not report missing content or block migration completion. Different message
+bodies, event identities, and parent links still fail verification; the original
+JSONL bytes remain unchanged.
+
 When the legacy index and live transcript inputs are gone, verified historical
 archives keep their existing receipts. They do not require a new legacy-index
 receipt or block post-session plugin repair. The plugin's completion releases
@@ -260,7 +272,11 @@ an import for that verified history.
 
 Doctor also discovers primary conversation transcripts omitted from the legacy
 registry, including timestamp-prefixed filenames. It verifies the session header,
-file identity, and logical owner before importing. Known historical generations
+file identity, and logical owner before importing. A renamed or copied file keeps
+its header's session identity; Doctor records a filename mismatch warning and
+preserves the original bytes. If multiple files claim that identity, Doctor keeps
+them separate in the protected archive and reports the conflict without merging
+their histories. Known historical generations
 remain attached to their existing session without changing its current generation
 or settings. History with no registry owner is recovered as an archived session
 only when its agent owner is unambiguous.
@@ -283,13 +299,19 @@ are named in the warning; retained historical conflicts do not block update's
 post-session plugin repair. Preserve the originals and migration manifests while
 resolving those conflicts, then rerun `openclaw doctor --fix`.
 
+If you deleted a retained historical archive, Doctor keeps a warning and completes
+verified plugin session repair. History available only in that missing file cannot
+be recovered; Doctor does not recreate it or resurrect deleted sessions. Remaining
+originals and their recovery references stay protected.
+
 Duplicate settlement indexes retained artifact paths and manifest moves once per
 inventory instead of rescanning the full history for each duplicate. File-identity
 and source-byte checks still run before originals are retired.
 
-Normal Doctor output and `openclaw update status` show at most five
-`historical_transcript_deferred` examples per session store. Larger groups include
-the total and omitted counts; other warning types remain visible. For every
+Normal Doctor combines historical transcript notices into one summary with at
+most five examples across the checked session stores. `openclaw update status`
+shows at most five `historical_transcript_deferred` examples per session store.
+Larger groups include the total and omitted counts; current problems remain visible. For every
 finding, run `openclaw doctor --session-sqlite dry-run --session-sqlite-all-agents --json`.
 This summary does not retire recovery references or make missing archives eligible
 for cleanup. Preserve the remaining originals and migration manifests for recovery.
@@ -312,6 +334,27 @@ ID. Historical archive discovery, restore, and recovery cleanup accept a device-
 change after a volume remount; inode, modification time, size, and SHA-256 must
 still match. Copying, replacing, touching, or editing an archive can invalidate
 that receipt.
+For a byte-identical registry copied back to its recorded path, explicit
+`openclaw doctor --session-sqlite recover` can record the new inode in its completed
+migration receipts. The device, modification time, size, and SHA-256 must still
+match, and the registry must remain an unaliased regular file with verified agent
+ownership. Recovery preserves current SQLite settings and the archive's protection
+and disposal status. Automatic discovery keeps its strict identity checks; changed
+contents or other metadata remain deferred.
+
+This registry-only rebind does not relocate or adopt an entire migration
+archive. If `session-sqlite-import-archive` was moved to another volume and its
+original path now resolves through a directory symlink, import and archive
+restore refuse that topology. Copying the archived files back into a regular
+directory does not by itself restore their receipt-bound identities; matching
+contents alone is not enough. There is no supported automatic CLI recovery for
+this cross-volume layout. Preserve the symlink, relocated archive, and
+`<state-dir>/session-sqlite-migration-runs/` without edits, make a verified
+backup, and contact the maintainers for assisted recovery. Include the Doctor
+warning and `openclaw doctor --session-sqlite inspect --session-sqlite-all-agents`
+output, but keep transcript contents and raw manifests private. Do not delete
+or rewrite archives or receipts to silence the warning.
+
 The identity format is the same in 2026.9.4 and 2026.9.5; 2026.9.5 added historical
 archive discovery that checks these older receipts.
 
@@ -426,6 +469,9 @@ the store's owning state directory before maintaining another installation.
 Existing hard-linked targets are rejected because another path can share the
 same database inode outside the locked state directory. The same ownership
 checks cover SQLite WAL, shared-memory, and rollback-journal sidecars.
+Automatic all-agent import still checks discovered paths of databases retained
+after agent deletion for symbolic aliases before importing or settling archives,
+while excluding those databases from mutation.
 
 Each import writes a manifest under
 `~/.openclaw/session-sqlite-migration-runs/` before moving transcript artifacts

@@ -422,12 +422,34 @@ Register each capability inside `register(api)` alongside your existing
 
   </Tab>
   <Tab title="Media understanding">
+    Media registrations should declare static capability metadata, not capture
+    `api.config` to calculate capabilities. A provider can opt into
+    `inheritConfiguredImageCapability: true` to add image support when the
+    **current request's** configured provider models include an image input.
+    The host projects this onto a fresh per-request provider without changing
+    the registered object. Omission or `false` preserves existing behavior;
+    this does not add a provider-specific image executor or bypass request auth.
+
+    `sharedEntryCapabilities` optionally narrows inference for entries in
+    `tools.media.models` that omit capabilities. Omission infers the provider's
+    effective capabilities as before; `[]` infers none. A supplied list is
+    intersected with effective capabilities, so it cannot grant unsupported
+    capabilities. Explicit entry capabilities, CLI entries, and runtime
+    overrides retain their existing precedence. For example, an audio provider
+    with `inheritConfiguredImageCapability: true` and
+    `sharedEntryCapabilities: ["image"]` preserves configured shared image
+    entries without turning legacy shared chat entries into audio selection.
+
     Audio providers with their own credential and endpoint contracts can
     implement `transcribeAudioWithContext(request)`. The host calls it after
     loading each audio file. The request includes the audio bytes, filename,
     model, prompt, language, timeout, transport settings, configuration,
     agent directory, and selected profile. Resolve credentials for that call;
-    do not retain credentials across attachment downloads.
+    do not retain credentials across attachment downloads. The host carries its
+    request authority through the provider callback and checks it again in the
+    guarded transport after DNS resolution and immediately before network dispatch.
+    Use the host guarded transport for uploads; plugins do not receive or manage
+    the admission callback.
 
     Return `{ ok: true, value: { text, model } }` after transcription. Return
     `{ ok: false, error }` only for authentication or configuration rejected

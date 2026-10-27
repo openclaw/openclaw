@@ -11,6 +11,9 @@ import textCss from "../../../styles/chat/text.css?inline";
 
 let container: HTMLElement;
 let root: ReturnType<typeof mountSolid>;
+const query = (parent: ParentNode, selector: string) => parent.querySelector(selector)!;
+const rect = (parent: ParentNode, selector: string) =>
+  query(parent, selector).getBoundingClientRect();
 
 afterEach(() => {
   root.unmount();
@@ -30,11 +33,11 @@ it.each(
     container = document.body.appendChild(document.createElement("section"));
     const makeGroup = (key: string, count: number, forwarded: boolean): MessageGroupData => ({
       kind: "group",
-      key,
       role: "assistant",
-      timestamp: 1000,
       isStreaming: false,
       visibleContent: "text",
+      key,
+      timestamp: 1000,
       ...(forwarded ? { senderSession: { sessionKey, agentId } } : {}),
       messages: Array.from({ length: count }, (_, index) => ({
         key: `${key}-${index}`,
@@ -45,53 +48,49 @@ it.each(
         },
       })),
     });
-    const normal = makeGroup("normal", 1, false);
-    const single = makeGroup("single", 1, true);
-    const grouped = makeGroup("grouped", 2, true);
+    const groupsToRender = [
+      makeGroup("normal", 1, false),
+      makeGroup("single", 1, true),
+      makeGroup("grouped", 2, true),
+    ];
+    const options = {
+      agentId: "main",
+      agents: [{ id: "main" }, { id: "research" }],
+      assistantTextAvatar: "M",
+      showReasoning: false,
+    };
+    const stylesheet = document.createElement("style");
+    stylesheet.textContent = baseCss + startupCss + groupedCss + textCss;
     root = mountSolid(
-      () => {
-        const stylesheet = document.createElement("style");
-        stylesheet.textContent = baseCss + startupCss + groupedCss + textCss;
-        return [
-          stylesheet,
-          ...[normal, single, grouped].map((group) =>
-            createComponent(MessageGroup, {
-              group,
-              options: {
-                agentId: "main",
-                agents: [{ id: "main" }, { id: "research" }],
-                assistantTextAvatar: "M",
-                showReasoning: false,
-              },
-            }),
-          ),
-        ];
-      },
+      () => [
+        stylesheet,
+        ...groupsToRender.map((group) => createComponent(MessageGroup, { group, options })),
+      ],
       { container },
     );
     const groups = [...container.querySelectorAll<HTMLElement>(".chat-group")];
     const normalGroup = groups[0]!;
-    const reference = normalGroup.querySelector(".chat-group-messages")!.getBoundingClientRect();
-    const expectedGutter = width === 1440 ? 46 : 0;
-    expect(reference.x - normalGroup.getBoundingClientRect().x).toBeCloseTo(expectedGutter, 1);
+    const reference = rect(normalGroup, ".chat-group-messages");
     if (width === 1440) {
-      expect(normalGroup.querySelector(".chat-avatar")!.getBoundingClientRect().top).toBeCloseTo(
-        reference.top,
-        1,
-      );
+      const avatar = rect(normalGroup, ".chat-avatar");
+      expect(reference.x - avatar.right).toBeCloseTo(10, 1);
+      expect(avatar.top).toBeCloseTo(reference.top, 1);
+    } else {
+      expect(reference.x).toBeCloseTo(normalGroup.getBoundingClientRect().x, 1);
     }
     for (const group of groups.slice(1)) {
-      const content = group.querySelector(".chat-group-messages")!.getBoundingClientRect();
+      const content = rect(group, ".chat-group-messages");
       expect(content.x).toBeCloseTo(reference.x, 1);
       expect(content.width).toBeCloseTo(reference.width, 1);
-      expect(content.x - group.getBoundingClientRect().x).toBeCloseTo(expectedGutter, 1);
       const hasAvatar = agentId === "research";
       const gutterAvatar = group.querySelector(":scope > .chat-avatar, :scope > .chat-avatar-slot");
       expect(Boolean(gutterAvatar)).toBe(hasAvatar);
       if (width === 1440 && gutterAvatar) {
-        expect(gutterAvatar.getBoundingClientRect().top).toBeCloseTo(content.top, 1);
+        const avatar = gutterAvatar.getBoundingClientRect();
+        expect(content.x - avatar.right).toBeCloseTo(10, 1);
+        expect(avatar.top).toBeCloseTo(content.top, 1);
       }
-      const attribution = group.querySelector(".chat-reply-attribution")!;
+      const attribution = query(group, ".chat-reply-attribution");
       const inlineAvatar = attribution.querySelector(".chat-reply-attribution__agent-avatar");
       expect(Boolean(inlineAvatar)).toBe(hasAvatar);
       if (agentId) {
@@ -100,7 +99,7 @@ it.each(
         );
         expect(attribution.querySelector("a")?.dataset.sessionKey).toBe(sessionKey);
         const from = attribution.children[1]!.getBoundingClientRect();
-        const agent = attribution.querySelector(".chat-reply-attribution__agent")!;
+        const agent = query(attribution, ".chat-reply-attribution__agent");
         const name = agent.lastElementChild!.getBoundingClientRect();
         expect(name.x - from.right).toBeCloseTo(hasAvatar ? 6 + 18 + 4 : 6, 1);
         if (inlineAvatar) {

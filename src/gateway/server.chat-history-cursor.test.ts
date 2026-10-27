@@ -10,7 +10,6 @@ import {
   appendTranscriptEvent,
   appendTranscriptMessage,
 } from "../config/sessions/session-accessor.js";
-import { readTranscriptDisplayDelta } from "../config/sessions/session-accessor.sqlite-history-events.test-support.js";
 import { replaceTranscriptEvents } from "../config/sessions/session-accessor.sqlite-transcript-write.test-support.js";
 import { waitForSessionTranscriptProjection } from "../config/sessions/session-transcript-reconcile.js";
 import { createNestedToolActivity } from "../sessions/nested-tool-activity.js";
@@ -40,6 +39,8 @@ const prepareProfileCatalog = useUserProfileCatalogForTest();
 
 type ChatMethod = "chat.history" | "chat.startup";
 type History = { deltaCursor: string; messages: unknown[] };
+type Envelope = { message: unknown; messageId: string; messageSeq: number };
+type Delta = { kind: string; deltaCursor: string; messages: Envelope[] };
 type RpcResult<T = Record<string, unknown>> = {
   error?: unknown;
   ok: boolean;
@@ -61,6 +62,15 @@ function transcriptEvent(id: string, parentId: string | null, role: string, cont
 
 function currentScope(storePath: string) {
   return { agentId: "main", sessionId, sessionKey, storePath };
+}
+
+function appendMessage(
+  storePath: string,
+  eventId: string,
+  parentId: string,
+  message: Parameters<typeof appendTranscriptMessage>[1]["message"],
+) {
+  return appendTranscriptMessage(currentScope(storePath), { eventId, parentId, message });
 }
 
 async function createCursorSession(
@@ -128,6 +138,17 @@ function messageIds(messages: readonly unknown[]) {
   return messages.map((message) => asOptionalRecord(asOptionalRecord(message)?.["__openclaw"])?.id);
 }
 
+function expectSenderDisplay(messages: unknown[], profileId: string, avatarUrl: string) {
+  for (const message of messages) {
+    expect(message).toMatchObject({
+      __openclaw: {
+        senderIdentity: { type: "profile", id: profileId },
+        senderProfileAvatarUrl: avatarUrl,
+      },
+    });
+  }
+}
+
 afterEach(async () => {
   await disposeSessionReadContexts();
   for (const directory of tempDirs.dirs) {
@@ -141,7 +162,6 @@ afterEach(async () => {
 
 describe("chat.history cursor catch-up", () => {
   test("keeps live and cursor sequences identical after compaction and a same-session reset", async () => {
-    type Envelope = { message: unknown; messageId: string; messageSeq: number };
     const oldEvents: Array<Record<string, unknown>> = [];
     for (let turn = 1; turn <= 3; turn += 1) {
       oldEvents.push({
@@ -202,7 +222,7 @@ describe("chat.history cursor catch-up", () => {
     });
     const cleanup = vi
       .spyOn(managedOutgoingMedia, "cleanupManagedOutgoingMediaRecords")
-      .mockResolvedValue({ deletedRecordCount: 0, deletedFileCount: 0, retainedCount: 0 });
+      .mockResolvedValue(undefined);
     onTestFinished(() => cleanup.mockRestore());
     const cached = await callChat<History>(context, "chat.history");
     expect(cached.ok).toBe(true);
@@ -242,11 +262,7 @@ describe("chat.history cursor catch-up", () => {
         expect(broadcast.mock.calls[0]?.[0]).toBe("session.message");
         const live = broadcast.mock.calls[0]?.[1] as Envelope;
         replay(live);
-        const delta = await callChat<{ kind: string; deltaCursor: string; messages: Envelope[] }>(
-          context,
-          "chat.history",
-          { cursor },
-        );
+        const delta = await callChat<Delta>(context, "chat.history", { cursor });
         expect(delta).toMatchObject({ ok: true, payload: { kind: "delta" } });
         expect(delta.payload!.messages).toHaveLength(1);
         const caughtUp = delta.payload!.messages[0]!;
@@ -270,12 +286,7 @@ describe("chat.history cursor catch-up", () => {
       .toEqual(renderedMessages(fresh.payload!.messages));
     const expectedIds = [
       "reset",
-      "fresh-user-1",
-      "fresh-assistant-1",
-      "fresh-user-2",
-      "fresh-assistant-2",
-      "fresh-user-3",
-      "fresh-assistant-3",
+      ...[1, 2, 3].flatMap((n) => [`fresh-user-${n}`, `fresh-assistant-${n}`]),
     ];
     expect.soft(messageIds(projection.messages)).toEqual(expectedIds);
     await appendTranscriptEvent(scope, {
@@ -325,14 +336,13 @@ describe("chat.history cursor catch-up", () => {
               startedAt: 1,
               timestamp: 2,
             });
-      await appendTranscriptMessage(currentScope(storePath), { eventId: id, parentId, message });
+      await appendMessage(storePath, id, parentId, message);
       parentId = id;
     }
-    const delta = await callChat<{
-      kind?: string;
-      messages?: Array<{ message?: unknown; messageId?: unknown; messageSeq?: unknown }>;
-    }>(context, "chat.history", { cursor: cached.payload?.deltaCursor });
-    const fresh = await callChat<{ messages?: unknown[] }>(context, "chat.history");
+    const delta = await callChat<Delta>(context, "chat.history", {
+      cursor: cached.payload?.deltaCursor,
+    });
+    const fresh = await callChat<History>(context, "chat.history");
     expect(delta).toMatchObject({ ok: true, payload: { kind: "delta" } });
     expect(fresh.ok).toBe(true);
     let projection = createSessionProjection(
@@ -363,93 +373,35 @@ describe("chat.history cursor catch-up", () => {
     let parentId = "cached";
     for (let index = 0; index < 3; index += 1) {
       const eventId = `profile-message-${index}`;
-      await appendTranscriptMessage(currentScope(storePath), {
-        eventId,
-        parentId,
-        message: {
-          role: "user",
-          content: `question ${index}`,
-          __openclaw: { senderIdentity: { type: "profile", id: profile.id } },
-        },
+      await appendMessage(storePath, eventId, parentId, {
+        role: "user",
+        content: `question ${index}`,
+        __openclaw: { senderIdentity: { type: "profile", id: profile.id } },
       });
       parentId = eventId;
     }
-    const lookup = vi.spyOn(userProfileList, "getResidentUserProfileDisplay");
-    try {
-      const avatarUrls: string[] = [];
-      for (const byte of [1, 2]) {
-        expect(setAvatar(profile.id, new Uint8Array([byte]), "image/png").ok).toBe(true);
-        const { avatarRevision } = userProfileList.getUserProfileDisplay(profile.id);
-        const avatarUrl = buildControlUiUserAvatarPath(profile.id, avatarRevision);
-        avatarUrls.push(avatarUrl);
-        lookup.mockClear();
-        const history = await callChat<History>(context, "chat.history");
-        expect(history.ok).toBe(true);
-        expect(lookup).not.toHaveBeenCalled();
-        expect(history.payload?.messages).toHaveLength(4);
-        for (const message of history.payload?.messages.slice(-3) ?? []) {
-          expect(message).toMatchObject({
-            __openclaw: {
-              senderIdentity: { type: "profile", id: profile.id },
-              senderProfileAvatarUrl: avatarUrl,
-            },
-          });
-        }
-        const delta = await callChat<{ kind: string; messages: unknown[] }>(
-          context,
-          "chat.history",
-          { cursor: cached.payload?.deltaCursor },
-        );
-        expect(delta.ok).toBe(true);
-        expect(delta.payload?.kind).toBe("delta");
-        expect(lookup.mock.calls).toEqual([[profile.id]]);
-        expect(delta.payload?.messages).toHaveLength(3);
-        for (const envelope of delta.payload?.messages ?? []) {
-          expect(envelope).toMatchObject({
-            message: {
-              __openclaw: {
-                senderIdentity: { type: "profile", id: profile.id },
-                senderProfileAvatarUrl: avatarUrl,
-              },
-            },
-          });
-        }
-      }
-      expect(avatarUrls[1]).not.toBe(avatarUrls[0]);
-    } finally {
-      lookup.mockRestore();
+    const avatarUrls: string[] = [];
+    for (const byte of [1, 2]) {
+      expect(setAvatar(profile.id, new Uint8Array([byte]), "image/png").ok).toBe(true);
+      const { avatarRevision } = userProfileList.getUserProfileDisplay(profile.id);
+      const avatarUrl = buildControlUiUserAvatarPath(profile.id, avatarRevision);
+      avatarUrls.push(avatarUrl);
+      const history = await callChat<History>(context, "chat.history");
+      expect(history.ok).toBe(true);
+      expect(history.payload?.messages).toHaveLength(4);
+      expectSenderDisplay(history.payload?.messages.slice(-3) ?? [], profile.id, avatarUrl);
+      const delta = await callChat<Delta>(context, "chat.history", {
+        cursor: cached.payload?.deltaCursor,
+      });
+      expect(delta).toMatchObject({ ok: true, payload: { kind: "delta" } });
+      expect(delta.payload?.messages).toHaveLength(3);
+      expectSenderDisplay(
+        delta.payload?.messages.map(({ message }) => message) ?? [],
+        profile.id,
+        avatarUrl,
+      );
     }
-  });
-
-  test("returns an empty delta at the cached head with a fixed multi-agent store", async () => {
-    testState.agentsConfig = {
-      ownership: "explicit",
-      entries: { main: {}, ops: {} },
-    };
-    testState.agentConfig = { sessionStore: { agentId: "main" } };
-    const { context } = await createCursorSession();
-    const page = await callChat<History>(context, "chat.history", { sessionKey });
-    expect(page.ok).toBe(true);
-    expect(page.payload?.deltaCursor).toEqual(expect.any(String));
-    const explicitFirstPage = await callChat<{ deltaCursor?: string }>(context, "chat.history", {
-      sessionKey,
-      offset: 0,
-    });
-    expect(explicitFirstPage.payload?.deltaCursor).toEqual(expect.any(String));
-
-    const delta = await callChat(context, "chat.history", {
-      sessionKey,
-      cursor: page.payload?.deltaCursor,
-    });
-    expect(delta).toMatchObject({
-      ok: true,
-      payload: {
-        kind: "delta",
-        messages: [],
-        deltaCursor: page.payload?.deltaCursor,
-        sessionInfo: { activeLeafEntryId: "cached" },
-      },
-    });
+    expect(avatarUrls[1]).not.toBe(avatarUrls[0]);
   });
 
   test.each([
@@ -463,32 +415,27 @@ describe("chat.history cursor catch-up", () => {
     const cached = await callChat<{ deltaCursor: string }>(context, "chat.history");
     expect(cached.ok).toBe(true);
     expect(cached.payload?.deltaCursor).toEqual(expect.any(String));
-    const scope = currentScope(storePath);
-    await appendTranscriptMessage(scope, {
-      eventId: "heartbeat",
-      parentId: "cached",
-      message: { role: "user", content: HEARTBEAT_PROMPT, timestamp: 2 },
+    await appendMessage(storePath, "heartbeat", "cached", {
+      role: "user",
+      content: HEARTBEAT_PROMPT,
+      timestamp: 2,
     });
-    await appendTranscriptMessage(scope, {
-      eventId: "commentary",
-      parentId: "heartbeat",
-      message: {
-        role: "assistant",
-        content: [
-          {
-            type: "text",
-            text: "NO_REPLY",
-            textSignature: JSON.stringify({ v: 1, id: "commentary", phase: "commentary" }),
-          },
-          ...sibling,
-        ],
-        timestamp: 3,
-      },
+    await appendMessage(storePath, "commentary", "heartbeat", {
+      role: "assistant",
+      content: [
+        {
+          type: "text",
+          text: "NO_REPLY",
+          textSignature: JSON.stringify({ v: 1, id: "commentary", phase: "commentary" }),
+        },
+        ...sibling,
+      ],
+      timestamp: 3,
     });
-    await appendTranscriptMessage(scope, {
-      eventId: "after-commentary",
-      parentId: "commentary",
-      message: { role: "assistant", content: "visible after commentary", timestamp: 4 },
+    await appendMessage(storePath, "after-commentary", "commentary", {
+      role: "assistant",
+      content: "visible after commentary",
+      timestamp: 4,
     });
 
     const delta = await callChat<{
@@ -543,13 +490,6 @@ describe("chat.history cursor catch-up", () => {
       ok: true,
       payload: { messages: [{ __openclaw: { id: "root" } }] },
     });
-    expect(
-      readTranscriptDisplayDelta(scope, { cursor: cached.payload!.deltaCursor }),
-    ).toMatchObject({
-      kind: "page",
-      activeLeafEntryId: "root",
-      events: [{ event: { type: "leaf", id: "rewind" } }],
-    });
     const delta = await callChat(context, "chat.history", { cursor: cached.payload!.deltaCursor });
     expect(delta).toMatchObject({ ok: true, payload: { kind: "reset" } });
   });
@@ -572,10 +512,10 @@ describe("chat.history cursor catch-up", () => {
       defaultModelCatalog: [],
     });
     const page = await callChat<{ deltaCursor?: string }>(context, "chat.startup");
-    await appendTranscriptMessage(currentScope(storePath), {
-      eventId: "startup-append",
-      parentId: "cached",
-      message: { role: "assistant", content: "startup delta", timestamp: 2 },
+    await appendMessage(storePath, "startup-append", "cached", {
+      role: "assistant",
+      content: "startup delta",
+      timestamp: 2,
     });
     const delta = await callChat(context, "chat.startup", { cursor: page.payload?.deltaCursor });
     expect(delta).toMatchObject({

@@ -68,7 +68,7 @@ export async function resolveRuntimePluginDiscoveryProviders(
 
 /** Groups plugin providers into stable discovery phases for catalog probing. */
 export function groupPluginDiscoveryProvidersByOrder(
-  providers: ProviderPlugin[],
+  providers: readonly ProviderPlugin[],
 ): Record<ProviderCatalogOrder, ProviderPlugin[]> {
   const grouped: Record<ProviderCatalogOrder, ProviderPlugin[]> = {
     simple: [],
@@ -195,9 +195,9 @@ export async function prepareProviderStaticCatalog(params: {
   signal?: AbortSignal;
   /** Provider ids the caller will resolve from these catalogs; absent for unscoped validation. */
   providerIds?: readonly string[];
-}): Promise<PreparedProviderStaticCatalog> {
+}): Promise<Pick<PreparedProviderStaticCatalog, "entries">> {
   const entries: PreparedProviderStaticCatalogEntry[] = [];
-  const byOrder = groupPluginDiscoveryProvidersByOrder([...params.providers]);
+  const byOrder = groupPluginDiscoveryProvidersByOrder(params.providers);
   for (const order of DISCOVERY_ORDER) {
     for (const provider of byOrder[order]) {
       if (!provider.staticCatalog) {
@@ -215,10 +215,7 @@ export async function prepareProviderStaticCatalog(params: {
       });
     }
   }
-  return {
-    providers: [...params.providers],
-    entries,
-  };
+  return { entries };
 }
 
 export function resolvePreparedProviderStaticConfigs(

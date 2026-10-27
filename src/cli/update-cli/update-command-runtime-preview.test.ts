@@ -12,6 +12,7 @@ import { defaultRuntime } from "../../runtime.js";
 import { quoteCliArg, quotePowerShellArg } from "../quote-cli-arg.js";
 import * as shared from "./shared.js";
 import * as databaseContext from "./update-command-database-context.js";
+import { runtimeFixture } from "./update-command-fixtures.test-support.js";
 import { installFreshUpdateFixture, targetMetadata } from "./update-command-fresh.test-support.js";
 import * as runtimeRecovery from "./update-command-node-runtime-resolution.js";
 import * as packageUpdate from "./update-command-package.js";
@@ -92,16 +93,12 @@ it.each([
             : null,
       }),
     );
-    vi.spyOn(runtimePaths, "resolveNodeRuntimeInfo").mockImplementation(async (node) => ({
-      status: "supported",
-      version: compatible || node === "/current/node" ? "26.1.0" : "24.16.0",
-      sqliteVersion: "3.53.0",
-      nodeSharedSqlite: false,
-      sqliteProbe: { available: true, version: "3.53.0", text: true, blob: true, json: true },
-    }));
+    vi.spyOn(runtimePaths, "resolveNodeRuntimeInfo").mockImplementation(async (node) =>
+      runtimeFixture(compatible || node === "/current/node" ? "26.12.1" : "24.22.1", "3.53.0"),
+    );
     vi.mocked(packageMetadata.fetchNpmPackageTargetStatus).mockResolvedValue({
       ...targetMetadata,
-      nodeEngine: ">=26.1.0",
+      nodeEngine: ">=26.12.1",
     });
     if (current) {
       fs.writeFileSync(
@@ -145,10 +142,10 @@ it.each([
     expect(captureNotices).toHaveLength(debugCapture ? 1 : 0);
     const preview = lastJson();
     const notes = json ? JSON.stringify(preview) : log.mock.calls.flat().join("\n");
-    const replacement = !compatible && restart && owned && (!current || (running && refresh));
+    const replacement = !compatible && restart && owned && current && running && refresh;
     if (!compatible && !replacement) {
       const recoverySteps = expectedRuntimeRecoverySteps(
-        "26.1.0",
+        "26.12.1",
         fixture.root,
         "2026.9.2",
         undefined,
@@ -166,7 +163,7 @@ it.each([
           notes: [expect.stringContaining(message)],
           failures: [
             {
-              reason: "node-runtime-preflight",
+              reason: current ? "node-runtime-preflight" : "preflight-node-runtime-incompatible",
               message: expect.stringContaining(message),
               recoverySteps,
               failureFacts: matchingEntry({
@@ -174,7 +171,7 @@ it.each([
                 code: "node-runtime-preflight",
                 affectedKey: "engines.node",
                 message:
-                  "Required: openclaw@2026.9.2 Node >=26.1.0; detected: Node 24.16.0 at [redacted-path]",
+                  "Required: openclaw@2026.9.2 Node >=26.12.1; detected: Node 24.22.1 at [redacted-path]",
               }),
             },
           ],
@@ -199,20 +196,20 @@ it.each([
       await expect(
         updateCommand({ ...opts, json: true, admission: "installed" }),
       ).rejects.toBeInstanceOf(Error);
-      if (compatible || replacement) {
+      if (compatible) {
         expect(packageUpdate.stagePackageInstallUpdate).toHaveBeenCalledWith(
           expect.objectContaining({ nodeRunner: replacement ? "/current/node" : "/service/node" }),
         );
       } else {
         expect(lastJson()).toMatchObject({
-          reason: "node-runtime-preflight",
+          reason: "preflight-node-runtime-incompatible",
           steps: matchingEntry({
             stderrTail: expect.stringContaining(
               `node ${quote(path.join(fixture.root, "openclaw.mjs"))} update --tag 2026.9.2`,
             ),
             failureFacts: matchingEntry({
               code: "node-runtime-preflight",
-              message: expect.stringContaining("Required: openclaw@2026.9.2 Node >=26.1.0"),
+              message: expect.stringContaining("Required: openclaw@2026.9.2 Node >=26.12.1"),
             }),
           }),
         });

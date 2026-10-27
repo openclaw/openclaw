@@ -1,18 +1,11 @@
 // This suite owns wizard-to-discovery cancellation. Context-enrichment
 // cancellation stays in setup-model-selection.test.ts: the default enrichment
 // path is separate from the wizard's tool inspection.
-import type { WizardPrompter } from "openclaw/plugin-sdk/setup";
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { requestUrl } from "openclaw/plugin-sdk/test-env";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { promptAndConfigureOllama } from "./setup.js";
-
-function createOllamaSetupPrompter(mode: "local-only" | "cloud-local"): WizardPrompter {
-  return {
-    select: vi.fn().mockResolvedValueOnce(mode),
-    text: vi.fn().mockResolvedValueOnce("http://127.0.0.1:11434"),
-    note: vi.fn(async () => undefined),
-  } as unknown as WizardPrompter;
-}
+import { createLocalPrompter } from "./setup.test-support.js";
 
 function abortReasonAsError(signal: AbortSignal): Error {
   return signal.reason instanceof Error
@@ -29,19 +22,16 @@ describe("Ollama setup cancellation", () => {
     "aborts pending %s model discovery with the setup session",
     async (mode) => {
       const controller = new AbortController();
-      let markTagsStarted!: () => void;
       let rejectPendingFetch!: (reason: Error) => void;
       let requestSignal: AbortSignal | undefined;
-      const tagsStarted = new Promise<void>((resolve) => {
-        markTagsStarted = resolve;
-      });
+      const tagsStarted = createDeferred<void>();
       vi.stubGlobal(
         "fetch",
         vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
           if (!requestUrl(input).endsWith("/api/tags")) {
             throw new Error(`Unexpected fetch: ${requestUrl(input)}`);
           }
-          markTagsStarted();
+          tagsStarted.resolve();
           return await new Promise<Response>((_resolve, reject) => {
             rejectPendingFetch = reject;
             const signal = init?.signal;
@@ -60,10 +50,12 @@ describe("Ollama setup cancellation", () => {
       const setup = promptAndConfigureOllama({
         cfg: {},
         env: {},
-        prompter: createOllamaSetupPrompter(mode),
+        prompter: createLocalPrompter({
+          select: vi.fn().mockResolvedValueOnce(mode),
+        }),
         signal: controller.signal,
       });
-      await tagsStarted;
+      await tagsStarted.promise;
       controller.abort();
 
       try {

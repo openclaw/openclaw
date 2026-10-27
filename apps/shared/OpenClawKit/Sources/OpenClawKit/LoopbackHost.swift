@@ -43,6 +43,10 @@ public enum LoopbackHost {
         return isUniqueLocal || isLinkLocal
     }
 
+    static func isIPv6Literal(_ rawHost: String) -> Bool {
+        IPv6Address(self.normalizedHost(rawHost)) != nil
+    }
+
     public static func isPrivateOrTailnetIPv4Literal(_ value: String) -> Bool {
         guard value.allSatisfy({ $0.isNumber || $0 == "." }),
               let (first, second, _, _) = self.parseIPv4(value)

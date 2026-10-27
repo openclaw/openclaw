@@ -14,7 +14,7 @@ afterEach(() => {
 
 describe("mounted context usage palette", () => {
   it.each([85, 90, 95, 100])(
-    "keeps the %s percent ring and bar on the current CSS palette",
+    "keeps the %s percent ring on the current CSS palette",
     async (percent) => {
       const container = document.createElement("div");
       container.className = "agent-chat__input";
@@ -44,7 +44,6 @@ describe("mounted context usage palette", () => {
       const ring = container.querySelector<HTMLElement>(".context-ring")!;
       ring.style.transition = "none";
       const fill = container.querySelector(".context-ring__fill")!;
-      const bar = container.querySelector(".context-usage__bar span")!;
       const probe = document.createElement("span");
       container.append(probe);
       const dangerPercent = Math.min(Math.max((percent - 85) / 10, 0), 1) * 100;
@@ -59,7 +58,6 @@ describe("mounted context usage palette", () => {
         rootStyle.setProperty("--danger", danger);
         const expected = getComputedStyle(probe).color;
         expect(getComputedStyle(fill).stroke).toBe(expected);
-        expect(getComputedStyle(bar).backgroundColor).toBe(expected);
         expect(container.querySelector(".context-ring")).toBe(ring);
       }
     },

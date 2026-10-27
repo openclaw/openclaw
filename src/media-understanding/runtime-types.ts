@@ -22,13 +22,11 @@ export type RunMediaUnderstandingFileParams = {
   activeModel?: ActiveMediaModel;
   prompt?: string;
   timeoutMs?: number;
-  scopeContext?: MediaUnderstandingScopeContext;
-};
-
-type MediaUnderstandingScopeContext = {
-  sessionKey?: string;
-  channel?: string;
-  chatType?: string;
+  scopeContext?: {
+    sessionKey?: string;
+    channel?: string;
+    chatType?: string;
+  };
 };
 
 export type RunMediaUnderstandingFileResult = {
@@ -51,7 +49,7 @@ export type DescribeImageFileWithModelParams = Omit<
   maxTokens?: number;
 };
 
-export type PreparedImageDescriptionInput = ImagesDescriptionInput;
+type PreparedImageDescriptionInput = ImagesDescriptionInput;
 
 export type PrepareImageDescriptionInputParams = Pick<
   DescribeImageFileWithModelParams,
@@ -78,10 +76,6 @@ export type ExtractStructuredWithModelParams = Omit<
   agentDir?: string;
   timeoutMs?: number;
 };
-
-type ExtractStructuredWithModelResult = Awaited<
-  ReturnType<NonNullable<MediaUnderstandingProvider["extractStructured"]>>
->;
 
 export type DescribeVideoFileParams = Omit<
   DescribeImageFileParams,
@@ -112,7 +106,7 @@ export type MediaUnderstandingRuntime = {
   ) => Promise<DescribeImageFileWithModelResult>;
   extractStructuredWithModel: (
     params: ExtractStructuredWithModelParams,
-  ) => Promise<ExtractStructuredWithModelResult>;
+  ) => Promise<Awaited<ReturnType<NonNullable<MediaUnderstandingProvider["extractStructured"]>>>>;
   describeVideoFile: (params: DescribeVideoFileParams) => Promise<RunMediaUnderstandingFileResult>;
   transcribeAudioFile: (
     params: TranscribeAudioFileParams,

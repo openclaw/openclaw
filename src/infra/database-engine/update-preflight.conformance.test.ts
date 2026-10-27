@@ -9,6 +9,7 @@ import { Client } from "pg";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { z } from "zod";
 import { createFixtureLifetime } from "../../../test/helpers/fixture-lifetime.js";
+import { withRuntimePreload } from "../../../test/helpers/runtime-preload.js";
 import { parseUpdateRecoveryBackupManifest } from "../../commands/backup-verify-manifest.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { fingerprintPostgresDatabase } from "../../snapshot/database-backup-core.worker.js";
@@ -108,13 +109,18 @@ describe.skipIf(!connection)("PostgreSQL updater preflight and exact recovery", 
       agent = path.join(root, "registered-agent", "openclaw-agent.sqlite");
       plugin = path.join(stateDir, "npm", "projects", "fixture", "node_modules", "fixture-plugin");
       const configPath = path.join(stateDir, "openclaw.json");
-      env = {
-        ...process.env,
-        HOME: root,
-        OPENCLAW_STATE_DIR: stateDir,
-        OPENCLAW_CONFIG_PATH: configPath,
-        OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
-      };
+      env = withRuntimePreload(
+        {
+          ...process.env,
+          HOME: root,
+          OPENCLAW_STATE_DIR: stateDir,
+          OPENCLAW_CONFIG_PATH: configPath,
+          OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
+        },
+        fileURLToPath(
+          new URL("../../../test/helpers/postgres-pool-roots-preload.mjs", import.meta.url),
+        ),
+      );
       config = { database: { engine: "postgres", postgres: { connection: connection! } } };
       for (const directory of [path.dirname(shared), path.dirname(agent), plugin]) {
         await fs.mkdir(directory, { recursive: true });
@@ -255,7 +261,7 @@ describe.skipIf(!connection)("PostgreSQL updater preflight and exact recovery", 
       const plan = UpdateCandidatePluginPlanSchema.parse(
         JSON.parse(await fs.readFile(path.join(targetStateDir, inventory.pluginPlan), "utf8")),
       );
-      expect(plan.bindings).toContainEqual(expect.objectContaining({ source: plugin }));
+      expect(Object.keys(plan.pluginPaths)).toContain(plugin);
       const discovery = parseUpdateStateInspectionWorker(
         await inspect("discover"),
         UpdateStateSchemaInspectionPlanSchema,

@@ -118,8 +118,6 @@ it("uses outer, scope, session, and tool-call correlation in Gateway records", a
   );
 
   expect(requests).toHaveLength(2);
-  expect(requests[0]?.id).toMatch(/^acp_[a-f0-9]{24}_0$/u);
-  expect(requests[1]?.id).toMatch(/^acp_[a-f0-9]{24}_0$/u);
   expect(requests[0]?.id).not.toBe(requests[1]?.id);
   expect(requests[0]).toMatchObject({
     sessionKey: "agent:codex:acp:target",

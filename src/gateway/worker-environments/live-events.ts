@@ -58,7 +58,6 @@ type WorkerLiveEventPublication = Omit<PendingLiveEvent, "sizeBytes">;
 
 type WorkerLiveEventReceiverOptions = {
   maxActiveRuns?: number;
-  maxPendingBytes?: number;
   maxSessions?: number;
   windowSize?: number;
 };
@@ -75,10 +74,6 @@ export function createWorkerLiveEventReceiver(options: WorkerLiveEventReceiverOp
   const windows = new Map<string, LiveEventWindow>();
   const windowSize = Math.max(1, Math.floor(options.windowSize ?? DEFAULT_WINDOW_SIZE));
   const maxActiveRuns = Math.max(1, Math.floor(options.maxActiveRuns ?? DEFAULT_MAX_ACTIVE_RUNS));
-  const maxPendingBytes = Math.max(
-    1,
-    Math.floor(options.maxPendingBytes ?? DEFAULT_MAX_PENDING_BYTES),
-  );
   const maxSessions = Math.max(1, Math.floor(options.maxSessions ?? DEFAULT_MAX_SESSIONS));
   const rotateCredential = (rotation: WorkerLiveCredentialRotation): boolean =>
     rotateWorkerLiveEventCredential(windows.get(rotation.sessionId), rotation);
@@ -433,7 +428,7 @@ export function createWorkerLiveEventReceiver(options: WorkerLiveEventReceiverOp
       const failed = await publish(window, publication, buffered !== undefined);
       if (failed?.details.reason === "capacity-exceeded" && buffered) {
         // Keep the ordered tail retryable while the active prefix claim drains.
-        // Later gaps still hit windowSize/maxPendingBytes and force normal resync.
+        // Later gaps still hit the sequence/byte bounds and force normal resync.
         return { ok: true, result: { ackedSeq: window.ackedSeq } };
       }
       if (buffered && window.pending.delete(request.seq)) {
@@ -504,7 +499,7 @@ export function createWorkerLiveEventReceiver(options: WorkerLiveEventReceiverOp
       return { ok: true, result: { ackedSeq: window.ackedSeq } };
     }
     const sizeBytes = Buffer.byteLength(JSON.stringify(params.request.event), "utf8");
-    if (window.pendingBytes + sizeBytes > maxPendingBytes) {
+    if (window.pendingBytes + sizeBytes > DEFAULT_MAX_PENDING_BYTES) {
       return resyncWindow(window);
     }
     window.pending.set(seq, {

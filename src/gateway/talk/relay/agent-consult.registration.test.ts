@@ -227,42 +227,36 @@ it.for(["none", "live", "detached"] as const)(
   },
 );
 
-it.each(["call-1", "call-2"])("retains a shared run when %s clears first", async (first) => {
-  const { relay, target, chat } = await createRegistrationFixture();
-  const second = first === "call-1" ? "call-2" : "call-1";
-  try {
-    for (const callId of ["call-1", "call-2"]) {
-      adoptRelayProviderToolCallId(relay, callId);
-      await registerRun({ ...target, callId });
-    }
-    clearRelayAgentToolCall(relay, first);
-    expect(relay.activeAgentRuns.size).toBe(1);
-    expect(relay.activeAgentToolCalls.has(second)).toBe(true);
-    expect(resolveBinding(target.runId)).toBeDefined();
-    cancelTalkRealtimeRelayProviderToolCall(relay, second);
-    expect(chat.source.input.abortSignal.aborted).toBe(true);
-    expect(relay.activeAgentRuns.size).toBe(0);
-  } finally {
-    await chat.cleanup();
-  }
-});
-
-it.each(["standalone", "call"])(
-  "retains shared voice ownership when the %s registration releases first",
+it.each(["calls", "standalone", "call"] as const)(
+  "retains shared voice ownership when %s releases first",
   async (first) => {
     const { relay, target, chat } = await createRegistrationFixture();
-    const standalone = await registerRun(target);
-    const call = await registerRun({ ...target, callId: "shared-call" });
+    const firstCall =
+      first === "calls" ? adoptRelayProviderToolCallId(relay, "call-1")! : undefined;
+    const firstRegistration = await registerRun({ ...target, callId: firstCall });
+    const secondCall =
+      first === "calls" ? adoptRelayProviderToolCallId(relay, "call-2")! : "shared-call";
+    const secondRegistration = await registerRun({ ...target, callId: secondCall });
     try {
-      (first === "standalone" ? standalone : call).release();
+      if (first === "calls") {
+        clearRelayAgentToolCall(relay, firstCall!);
+      } else {
+        (first === "standalone" ? firstRegistration : secondRegistration).release();
+      }
       expect(relay.activeAgentRuns.size).toBe(1);
       expect(resolveBinding(target.runId)).toBeDefined();
-      (first === "standalone" ? call : standalone).release();
+      if (first === "calls") {
+        expect(relay.activeAgentToolCalls.has(secondCall)).toBe(true);
+        cancelTalkRealtimeRelayProviderToolCall(relay, secondCall);
+        expect(chat.source.input.abortSignal.aborted).toBe(true);
+      } else {
+        (first === "standalone" ? secondRegistration : firstRegistration).release();
+        expect(resolveBinding(target.runId)).toBeUndefined();
+      }
       expect(relay.activeAgentRuns.size).toBe(0);
-      expect(resolveBinding(target.runId)).toBeUndefined();
     } finally {
-      standalone.release();
-      call.release();
+      firstRegistration.release();
+      secondRegistration.release();
       await chat.cleanup();
     }
   },

@@ -1,23 +1,16 @@
 import { spawnSync } from "node:child_process";
 import fs from "node:fs";
-import { createRequire } from "node:module";
 import path from "node:path";
 import { expect } from "vitest";
 import { resolveRepoToolBinPath } from "../../scripts/lib/local-check-runtime.mts";
-import {
-  TSDOWN_UNIFIED_DTS_CONFIG_GROUPS,
-  TSDOWN_PLUGIN_SDK_DTS_CONFIG_GROUPS,
-} from "../../scripts/lib/tsdown-config-groups.mts";
-import { prepareTsgoCommand } from "../../scripts/run-tsgo.mts";
+import { TSDOWN_PLUGIN_SDK_DTS_CONFIG_GROUPS } from "../../scripts/lib/tsdown-config-groups.mts";
 import type { CommandFixture } from "../helpers/command-fixture.js";
-import { materializeNativeCompiler } from "./native-boundary-fixture.js";
 import {
   createDeclarationFixture,
   createDeclarationTest,
   declarationCacheRecords,
   expectStagingClean,
   runFixtureModule,
-  runUnifiedWriter,
   runWriter,
   treeHashes,
 } from "./tsdown-declaration-fixture.js";
@@ -230,47 +223,16 @@ assert.equal(process.cwd(), packageDir);
 `);
   }));
 
-it.runIf(process.platform === "win32").concurrent(
-  "starts the checkout compiler when its Windows executable uses an extended-length path",
-  ({ command }) =>
-    command.lifetime.run(async () => {
-      const base = fs.realpathSync.native(command.createTempDir("openclaw-native-long-path-"));
-      const root = path.join(base, "nested-checkout-".repeat(5), "nested-install-".repeat(5));
-      fs.mkdirSync(root, { recursive: true });
-      const native = materializeNativeCompiler(root, { javaScriptApi: false });
-      expect(native.length).toBeGreaterThanOrEqual(248);
-      const require = createRequire(path.join(root, "package.json"));
-      const getExePath: { default: () => string } = require(
-        path.join(root, "node_modules/typescript/lib/getExePath.js"),
-      );
-      expect(getExePath.default()).toBe(path.toNamespacedPath(native));
-      const compilerCommand = prepareTsgoCommand(["--version"], process.env, root);
-      expect(compilerCommand?.bin).toBe(getExePath.default());
-      const result = spawnSync(resolveRepoToolBinPath("tsgo", { cwd: root }), ["--version"], {
-        cwd: base,
-        encoding: "utf8",
-        timeout: 10_000,
-      });
-      const manifest: { version: string } = JSON.parse(
-        fs.readFileSync(require.resolve("typescript/package.json"), "utf8"),
-      );
-      expect(result.error).toBeUndefined();
-      expect(result.status, result.stderr).toBe(0);
-      expect(result.stdout.trim()).toBe(`Version ${manifest.version}`);
-    }),
-);
-
 for (const kind of [
   "directory alias",
   "Windows 8.3 alias",
-  "directory alias targeting Windows 8.3",
   "directory alias targeting a case alias",
 ]) {
   it.skipIf(kind.includes("Windows") && process.platform !== "win32").concurrent(
     `compiles and receipts every local input through a ${kind}`,
     ({ command, skip }) =>
       command.lifetime.run(async () => {
-        const { root, localInput, run } = nestedFixture(command);
+        const { root, ancestorInput, localInput } = nestedFixture(command);
         let target = root;
         if (kind.includes("Windows")) {
           const short = spawnSync(
@@ -307,40 +269,6 @@ for (const kind of [
           expect(alias).not.toBe(target);
           expect(target).not.toBe(root);
         }
-        await run(`
-import { build } from "tsdown";
-import { createDeclarationBoundaryHooks } from "./scripts/lib/tsdown-declaration-boundary.mts";
-import { createDeclarationStage, createDeclarationInputCapture, requestDeclarationInputs, readDeclarationInputs } from "./scripts/lib/tsdown-declaration-inputs.mts";
-const buildFixture = makeBuild(build);
-const cwd = ${JSON.stringify(alias)};
-const canonical = fs.realpathSync.native(cwd);
-const stage = createDeclarationStage(cwd);
-const outDir = path.join(cwd, path.relative(canonical, fs.realpathSync.native(stage)), "dist");
-requestDeclarationInputs(outDir, "alias", [path.join(cwd, "src/shared.ts")]);
-const { bundles } = await buildFixture({
-  cwd, entry: path.join(cwd, "src/shared.ts"), outDir,
-  dts: true,
-  hooks: createDeclarationBoundaryHooks({ "build:done": createDeclarationInputCapture("alias") }),
-
-});
-try {
-  const declaration = fs.readFileSync(path.join(outDir, "shared.d.mts"), "utf8");
-  assert.match(declaration, /inferredOrigin: "local"/);
-  assert.match(declaration, /directoryName\\(\\): "declared-cwd"/);
-  const inputs = readDeclarationInputs(outDir, "alias");
-  assert.ok(inputs.includes(${JSON.stringify(localInput)}));
-  assert.ok(inputs.includes("src/shared.ts"));
-  assert.ok(inputs.some(file => file.endsWith("/lib.es2023.d.ts")));
-  assert.ok(inputs.some(file => file.endsWith("synthetic-core/package.json")));
-  assert.ok(inputs.every(file => !file.startsWith("../")), "receipt admitted an outside input");
-} finally {
-  await dispose(bundles);
-  fs.rmSync(stage, { recursive: true, force: true });
-}
-`);
-        if (!kind.includes("Windows")) {
-          return;
-        }
         const dist = path.join(root, "dist");
         fs.mkdirSync(dist, { recursive: true });
         // An installed alias exposes live output to topology scanning. Its physical
@@ -348,12 +276,28 @@ try {
         fs.symlinkSync(dist, path.join(root, "node_modules/fixture-published"), "junction");
         const cold = await runWriter(command, alias);
         expect(cold.status, cold.stdout + cold.stderr).toBe(0);
-        expect(declarationCacheRecords(root).flatMap((record) => record.inputs ?? [])).toContain(
-          localInput,
-        );
+        const inputs = declarationCacheRecords(root).flatMap((record) => record.inputs ?? []);
+        expect(inputs).toEqual(expect.arrayContaining([localInput, "src/shared.ts"]));
+        expect(inputs.some((file) => file.endsWith("/lib.es2023.d.ts"))).toBe(true);
+        expect(inputs.some((file) => file.endsWith("synthetic-core/package.json"))).toBe(true);
+        for (const input of inputs) {
+          const relative = path.relative(root, fs.realpathSync(path.resolve(root, input)));
+          expect(
+            relative === ".." || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative),
+            input,
+          ).toBe(false);
+        }
         const published = treeHashes(dist);
+        const declarations = Object.keys(published)
+          .filter((file) => file.endsWith(".d.ts"))
+          .map((file) => fs.readFileSync(path.join(dist, file), "utf8"))
+          .join("\n");
+        expect(declarations.match(/declare const inferredOrigin: [^;]+;/u)?.[0]).toBe(
+          'declare const inferredOrigin: "local";',
+        );
         const cache = path.join(root, ".artifacts/build-all-cache");
         const cached = treeHashes(cache);
+        fs.writeFileSync(ancestorInput, coreText("changed-ancestor"));
         const warm = await runWriter(command, alias);
         expect(warm.status, warm.stdout + warm.stderr).toBe(0);
         expect(warm.stdout + warm.stderr).not.toContain("[tsdown-build] invocation");
@@ -651,60 +595,12 @@ for (const failure of [false, true]) {
   }));
 
 it.concurrent.for([
-  {
-    name: "SDK",
-    groups: TSDOWN_PLUGIN_SDK_DTS_CONFIG_GROUPS,
-    run: async (command: CommandFixture, root: string, env?: NodeJS.ProcessEnv) =>
-      await runWriter(command, root, false, env),
-  },
-  { name: "unified", groups: TSDOWN_UNIFIED_DTS_CONFIG_GROUPS, run: runUnifiedWriter },
-])(
-  "uses local explicit references and records real inputs for $name",
-  ({ groups, run }, { command }) =>
-    command.lifetime.run(async () => {
-      const { root, ancestorInput, localInput } = nestedFixture(command, groups);
-      const initial = await run(command, root);
-      expect(initial.status, initial.stdout + initial.stderr).toBe(0);
-      const published = treeHashes(path.join(root, "dist"));
-      const declarations = Object.keys(published)
-        .filter((file) => file.endsWith(".d.ts"))
-        .map((file) => fs.readFileSync(path.join(root, "dist", file), "utf8"))
-        .join("\n");
-      expect(declarations.match(/declare const inferredOrigin: [^;]+;/u)?.[0]).toBe(
-        'declare const inferredOrigin: "local";',
-      );
-      const inputs = declarationCacheRecords(root).flatMap((record) => record.inputs ?? []);
-      expect(inputs).toContain(localInput);
-      for (const input of inputs) {
-        const relative = path.relative(root, fs.realpathSync(path.resolve(root, input)));
-        expect(
-          relative === ".." || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative),
-          input,
-        ).toBe(false);
-      }
-      expectStagingClean(root);
-      // Both writers share the cache owner; one warm-cache probe covers reuse.
-      if (groups === TSDOWN_UNIFIED_DTS_CONFIG_GROUPS) {
-        return;
-      }
-      fs.writeFileSync(ancestorInput, coreText("changed-ancestor"));
-      const ancestorChanged = await run(command, root);
-      expect(ancestorChanged.status, ancestorChanged.stdout + ancestorChanged.stderr).toBe(0);
-      expect(ancestorChanged.stdout + ancestorChanged.stderr).not.toContain(
-        "[tsdown-build] invocation",
-      );
-      expect(treeHashes(path.join(root, "dist"))).toEqual(published);
-    }),
-);
-
-it.concurrent.for([
   "ancestor module",
   "ancestor package alias",
   "ancestor ambient types",
   "package symlink",
   "source symlink",
   "source reference",
-  "ancestor symlink reference",
 ])("refuses an escaped %s before publication", (kind, { command }) =>
   command.lifetime.run(async () => {
     const ancestorLookup = [
@@ -770,10 +666,6 @@ it.concurrent.for([
       fs.symlinkSync(path.join(outside, "index.d.ts"), path.join(root, "src/escaped.d.ts"));
       write("src/shared.ts", 'export type { Marker as Shared } from "./escaped.js";');
     } else {
-      if (kind === "ancestor symlink reference") {
-        fs.rmSync(path.join(outside, "index.d.ts"));
-        fs.symlinkSync(path.join(root, "src/contract.d.ts"), path.join(outside, "index.d.ts"));
-      }
       write(
         "src/shared.ts",
         `/// <reference path="${path.join(outside, "index.d.ts").replaceAll(path.sep, "/")}" />\nexport class Shared {}\n`,

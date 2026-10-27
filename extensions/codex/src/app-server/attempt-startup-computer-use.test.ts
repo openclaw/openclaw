@@ -1,7 +1,6 @@
-import fs from "node:fs/promises";
-import { fileURLToPath } from "node:url";
 import { AgentHarnessPreflightError } from "openclaw/plugin-sdk/agent-harness-runtime";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi } from "vitest";
+import { setupStartupLifecycle } from "./attempt-startup-lifecycle.test-support.js";
 import {
   answerInitialize,
   createAttemptPaths,
@@ -14,10 +13,6 @@ import { threadStartResult } from "./codex-app-server.test-fixtures.js";
 import { readCodexComputerUseStatus } from "./computer-use.js";
 import { createComputerUseRequest } from "./computer-use.test-support.js";
 import type { CodexPluginConfig } from "./config.js";
-import { setManagedCodexPluginRoot } from "./managed-binary.js";
-import { defaultCodexPluginMetadataCache } from "./plugin-metadata-cache.js";
-import { resetCodexTestBindingStore } from "./session-binding.test-helpers.js";
-import { clearSharedCodexAppServerClientAndWait } from "./shared-client.js";
 import { createInferenceReadyClientHarness } from "./test-support.js";
 import { CODEX_APP_SERVER_VERSION } from "./version.js";
 
@@ -31,46 +26,21 @@ const pluginConfig: CodexPluginConfig = { appServer: { command: "codex" } };
 const startThreadWithHarness = createAttemptThreadStarter(tempRoots, pluginConfig);
 
 describe("Computer Use attempt startup", () => {
-  beforeEach(async () => {
-    vi.useRealTimers();
-    vi.stubEnv("CODEX_API_KEY", "");
-    vi.stubEnv("OPENAI_API_KEY", "");
-    await clearSharedCodexAppServerClientAndWait();
-    setManagedCodexPluginRoot(fileURLToPath(new URL("../../", import.meta.url)));
-    defaultCodexPluginMetadataCache.clear();
-    resetCodexTestBindingStore();
-  });
-
-  afterEach(async () => {
-    vi.useRealTimers();
-    await clearSharedCodexAppServerClientAndWait();
-    setManagedCodexPluginRoot(undefined);
-    defaultCodexPluginMetadataCache.clear();
-    vi.restoreAllMocks();
-    vi.unstubAllEnvs();
-    for (const root of tempRoots) {
-      await fs.rm(root, { recursive: true, force: true });
-    }
-    tempRoots.clear();
-  });
+  setupStartupLifecycle(tempRoots, () => vi.useRealTimers());
 
   it("charges initial client acquisition to the one-off status deadline", async () => {
-    const { harness, requests, status } = await statusProbe({
+    const { harness, timeout, status } = await statusProbe({
       initialize: 800,
       "mcpServerStatus/list": 1_050,
     });
     expect(status.ready).toBe(false);
-    expect(requests).toHaveBeenCalledWith(
-      "plugin/list",
-      expect.anything(),
-      expect.objectContaining({ timeoutMs: 200 }),
-    );
+    expect(timeout("plugin/list")).toBe(200);
     expect(readHarnessRequestMethods(harness)).not.toContain("thread/start");
     expect(readHarnessRequestMethods(harness)).not.toContain("mcpServer/tool/call");
   });
 
   it("preserves cleanup after the one-off status probe exhausts its deadline", async () => {
-    const { harness, requests, status } = await statusProbe(
+    const { harness, requests, timeout, status } = await statusProbe(
       { "mcpServer/tool/call": 2_000 },
       { liveTestTimeoutMs: 1_500, toolCallTimeoutMs: 100 },
     );
@@ -81,16 +51,7 @@ describe("Computer Use attempt startup", () => {
       expect.objectContaining({ timeoutMs: 1_500, signal: expect.any(AbortSignal) }),
     );
     expect(harness.stdinDestroyed).toBe(false);
-    for (const [method, timeoutMs] of [
-      ["thread/start", 1_000],
-      ["mcpServer/tool/call", 100],
-    ] as const) {
-      expect(requests).toHaveBeenCalledWith(
-        method,
-        expect.anything(),
-        expect.objectContaining({ timeoutMs }),
-      );
-    }
+    expect(["thread/start", "mcpServer/tool/call"].map(timeout)).toEqual([1_000, 100]);
   });
 
   it.each([false, true])(
@@ -167,7 +128,7 @@ describe("Computer Use attempt startup", () => {
           cause: {
             status: {
               reason: "live_test_failed",
-              liveTest: { attempts: 2, durationMs: 120_000 },
+              liveTest: { attempts: 2 },
             },
           },
         });
@@ -195,6 +156,7 @@ async function statusProbe(
   elapsedByMethod: Record<string, number>,
   overrides: NonNullable<CodexPluginConfig["computerUse"]> = {},
 ) {
+  vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
   let elapsedMs = 0;
   vi.spyOn(performance, "now").mockImplementation(() => elapsedMs);
   vi.spyOn(Date, "now").mockImplementation(() => elapsedMs);
@@ -230,5 +192,7 @@ async function statusProbe(
       computerUse: { enabled: true, marketplaceName: "desktop-tools", ...overrides },
     },
   });
-  return { harness, requests, status };
+  const timeout = (method: string) =>
+    requests.mock.calls.find(([called]) => called === method)?.[2]?.timeoutMs;
+  return { harness, requests, timeout, status };
 }

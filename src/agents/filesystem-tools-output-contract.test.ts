@@ -42,13 +42,13 @@ async function expectResult(
   return result;
 }
 
-async function callThroughCodeMode(tool: AnyAgentTool, args: Record<string, unknown>) {
+async function runCodeMode(tool: AnyAgentTool, code: string) {
   const harness = createCodeModeHarness();
   applyCodeModeCatalog({ ...harness.ctx, tools: [...harness.tools, tool] });
   return await runUntilCompleted({
     execTool: harness.tools[0]!,
     waitTool: harness.tools[1]!,
-    code: `return await ${tool.name}(${JSON.stringify(args)});`,
+    code,
   });
 }
 
@@ -85,7 +85,7 @@ it.each([
     await Promise.all(files.map((file) => write(file, "fixture\n")));
     const tool = createLsTool(tmpDir) as unknown as AnyAgentTool;
     const direct = await tool.execute("direct-ls", args);
-    const result = await callThroughCodeMode(tool, args);
+    const result = await runCodeMode(tool, `return await ${tool.name}(${JSON.stringify(args)});`);
 
     expect(direct.content).toEqual([{ type: "text", text: output }]);
     expect(result).toMatchObject({
@@ -101,31 +101,17 @@ it("validates read text, image, truncation, and optional-not-found results", asy
   await write("long.txt", "x".repeat(DEFAULT_MAX_BYTES + 1));
 
   const tool = read({ autoResizeImages: false });
-  await expectResult(
-    tool,
-    { path: "notes.txt", limit: 10 },
-    { kind: "text", content: "ordinary text\n" },
-    true,
-  );
-  await expectResult(
-    tool,
-    { path: "pixel.png", limit: 10 },
-    { kind: "image", mimeType: "image/png" },
-  );
+  const check = (filePath: string, details: Record<string, unknown>, exact = false) =>
+    expectResult(tool, { path: filePath, limit: 10 }, details, exact);
+  await check("notes.txt", { kind: "text", content: "ordinary text\n" }, true);
+  await check("pixel.png", { kind: "image", mimeType: "image/png" });
   const omitted = await expectResult(
     read({ autoResizeImages: false }, { imageSanitization: { maxBytes: 1 } }),
     { path: "pixel.png", limit: 10 },
     { kind: "text", content: expect.stringContaining("omitted image payload") },
   );
   expect(omitted.content.some((block) => block.type === "image")).toBe(false);
-  await expectResult(
-    tool,
-    { path: "long.txt", limit: 10 },
-    {
-      kind: "truncated",
-      truncation: { totalBytes: DEFAULT_MAX_BYTES + 1 },
-    },
-  );
+  await check("long.txt", { kind: "truncated", truncation: { totalBytes: DEFAULT_MAX_BYTES + 1 } });
   const missing = { path: "memory/2026-07-17.md", optional: true };
   await expectResult(tool, missing, { ...missing, kind: "not_found", status: "not_found" }, true);
   expect(compactToolOutputHint(tool.outputSchema)).toBe(
@@ -151,12 +137,9 @@ it.each([
     const first = await tool.execute("first-page", { path: "records.json" });
     expectContract(tool, first.details);
     expect(JSON.stringify(first.content)).toContain("to continue.");
-    const harness = createCodeModeHarness();
-    applyCodeModeCatalog({ ...harness.ctx, tools: [...harness.tools, tool] });
-    const result = await runUntilCompleted({
-      execTool: harness.tools[0]!,
-      waitTool: harness.tools[1]!,
-      code: `
+    const result = await runCodeMode(
+      tool,
+      `
         let content = "";
         let next = { path: "records.json", limit: ${limit ?? "undefined"} };
         let delimiter = "";
@@ -174,7 +157,7 @@ it.each([
         }
         throw new Error("pagination did not reach EOF");
       `,
-    });
+    );
     expect(result.status, JSON.stringify(result)).toBe("completed");
     expect(result.value).toEqual({
       count: records.length,

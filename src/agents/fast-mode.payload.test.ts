@@ -13,6 +13,7 @@ import { attachModelProviderRuntimePluginHandle } from "../plugins/provider-hook
 import { applyExtraParamsToAgent } from "./embedded-agent-runner/extra-params.js";
 import { resolveFastModeState } from "./fast-mode.js";
 import type { StreamFn } from "./runtime/index.js";
+import { makeProviderModelFixture } from "./test-helpers/provider-model-fixture.js";
 
 const requests = vi.hoisted(() => [] as unknown[]);
 vi.mock("openai", () => ({
@@ -26,18 +27,14 @@ vi.mock("openai", () => ({
   },
 }));
 
-const model: Model<"openai-responses"> = {
+const model: Model<"openai-responses"> = makeProviderModelFixture({
   id: "speed-fixture",
   name: "Speed fixture",
   provider: "openai",
   api: "openai-responses",
   baseUrl: "https://api.openai.com/v1",
-  reasoning: false,
-  input: ["text"],
   contextWindow: 1_050_000,
-  maxTokens: 4096,
-  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-};
+});
 
 const selections = [
   [false, "default"],

@@ -1,7 +1,8 @@
+import { asOptionalObjectRecord } from "@openclaw/normalization-core/record-coerce";
 import type { PluginsInspectResult } from "../../packages/gateway-protocol/src/schema/plugins.js";
 import { mergeConfiguredBundleMcpServers } from "../agents/bundle-mcp-config.js";
+import { partitionMcpServersByConnectionScope } from "../agents/mcp-connection-resolver.js";
 import { operatorMcpOAuthIdentity } from "../agents/mcp-oauth-identity.js";
-import { resolveOperatorMcpOAuthConfig } from "../agents/mcp-operator-auth.js";
 import { resolveMcpTransportConfig } from "../agents/mcp-transport-config.js";
 import { resolveRuntimeConfigCacheKey } from "../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -9,6 +10,24 @@ import { loadEnabledBundleMcpConfig } from "./bundle-mcp.js";
 import type { PluginMcpAuthDeclarations } from "./plugin-cache-metadata.js";
 import { getPluginMetadataSnapshotCache, withPluginCache } from "./plugin-cache.js";
 import type { PluginMetadataSnapshot } from "./plugin-metadata-snapshot.types.js";
+
+/** The shared operator OAuth connection that Settings may inspect and sign in. */
+function resolveOperatorMcpOAuthConfig(serverName: string, server: unknown) {
+  const raw = asOptionalObjectRecord(server);
+  if (!raw || raw.enabled === false) {
+    return undefined;
+  }
+  const config = resolveMcpTransportConfig(serverName, raw, { logWarnings: false });
+  return config?.kind === "http" &&
+    config.auth === "oauth" &&
+    !config.oauth?.authProfileId &&
+    Object.hasOwn(
+      partitionMcpServersByConnectionScope({ [serverName]: raw }).staticServers,
+      serverName,
+    )
+    ? config
+    : undefined;
+}
 
 function resolvePluginMcpAuthDeclarations(
   config: OpenClawConfig,

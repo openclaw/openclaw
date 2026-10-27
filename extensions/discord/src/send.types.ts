@@ -6,10 +6,6 @@ import type { RetryConfig } from "openclaw/plugin-sdk/retry-runtime";
 import type { RequestClient } from "./internal/rest.js";
 
 export class DiscordSendError extends Error {
-  kind?: "missing-permissions" | "dm-blocked";
-  channelId?: string;
-  missingPermissions?: string[];
-  discordCode?: number;
   status?: number;
 
   constructor(message: string, opts?: Partial<DiscordSendError>) {

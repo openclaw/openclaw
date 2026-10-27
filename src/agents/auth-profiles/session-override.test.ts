@@ -389,7 +389,7 @@ describe("session auth-profile rotation", () => {
         [OAUTH]: {
           cooldownUntil: Date.now() + 60_000,
           cooldownReason: "rate_limit",
-          failureCounts: { rate_limit: 1 },
+          lastRateLimitAt: Date.now(),
         },
       };
       const sessionEntry: SessionEntry = { sessionId: "s1", updatedAt: 1, model: MODEL };

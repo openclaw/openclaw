@@ -25,6 +25,7 @@ const sessionKey = "agent:main:participant-migration";
 async function historicalStore(
   state: OpenClawTestState,
   entry?: { sessionId: string; updatedAt: number },
+  version = 17,
 ) {
   if (entry) {
     await captureRuntimeConfigAsyncReader()();
@@ -34,6 +35,9 @@ async function historicalStore(
   const native = requireNativeSqliteDatabase(initial.db);
   restoreEmptyV21StorageForHistoricalFixture(native);
   removeCanonicalValidationFromHistoricalAgentFixture(native);
+  initial.db.exec(
+    `DROP TABLE session_participants; PRAGMA user_version = ${version}; UPDATE schema_meta SET schema_version = ${version};`,
+  );
   return initial;
 }
 function migrate(
@@ -53,10 +57,7 @@ function expectHealthy(database: ReturnType<typeof openNodeSqliteDatabase>) {
 describe("participant identity migration", () => {
   it("upgrades v17 during standalone import finalization", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
-      const { db, path: databasePath } = await historicalStore(state);
-      db.exec(
-        "DROP TABLE session_participants; PRAGMA user_version = 17; UPDATE schema_meta SET schema_version = 17;",
-      );
+      const { path: databasePath } = await historicalStore(state);
       closeOpenClawAgentDatabasesForTest();
       const result = await compactDoctorSessionSqliteTarget(
         { agentId: "main", storePath: databasePath },
@@ -74,9 +75,6 @@ describe("participant identity migration", () => {
     await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
       const { db, path: databasePath } = await historicalStore(state);
       db.exec(`
-        DROP TABLE session_participants;
-        PRAGMA user_version = 17;
-        UPDATE schema_meta SET schema_version = 17;
         INSERT INTO cache_entries (scope, key, value_json, expires_at, updated_at)
           VALUES ('participant-proof', 'preserved', '{"ok":true}', 100, 1);
         DROP INDEX idx_agent_cache_expiry;
@@ -121,9 +119,6 @@ describe("participant identity migration", () => {
       await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
         const entry = { sessionId: "migration-session", updatedAt: 123 };
         const { db, path: databasePath } = await historicalStore(state, entry);
-        db.exec(
-          "DROP TABLE session_participants; PRAGMA user_version = 17; UPDATE schema_meta SET schema_version = 17;",
-        );
         db.exec(LEGACY_PARTICIPANTS_SCHEMA);
         db.prepare(
           "INSERT INTO session_participants VALUES (?, 'human', 'profile', 'profile', 2, 30, 50)",
@@ -190,10 +185,7 @@ describe("participant identity migration", () => {
     "refuses a v%s identity migration outside stopped-writer maintenance",
     async (version) => {
       await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
-        const { db, path: databasePath } = await historicalStore(state);
-        db.exec(
-          `DROP TABLE session_participants; PRAGMA user_version = ${version}; UPDATE schema_meta SET schema_version = ${version};`,
-        );
+        const { path: databasePath } = await historicalStore(state, undefined, version);
         closeOpenClawAgentDatabasesForTest();
         using database = openNodeSqliteDatabase(databasePath);
         expect(() =>
@@ -211,7 +203,6 @@ describe("participant identity migration", () => {
     await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
       const entry = { sessionId: "legacy-kinds", updatedAt: 1 };
       const { db, path: databasePath } = await historicalStore(state, entry);
-      db.exec("DROP TABLE session_participants;");
       db.exec(LEGACY_PARTICIPANTS_SCHEMA);
       const kinds = [
         {
@@ -251,7 +242,6 @@ describe("participant identity migration", () => {
           kind.source,
         );
       }
-      db.exec("PRAGMA user_version = 17; UPDATE schema_meta SET schema_version = 17;");
       closeOpenClawAgentDatabasesForTest();
       using database = openNodeSqliteDatabase(databasePath);
       await migrate(database, databasePath, state.env);
@@ -280,7 +270,6 @@ describe("participant identity migration", () => {
         const entry = { sessionId: "migration-session", updatedAt: 123 };
         const { db, path: databasePath } = await historicalStore(state, entry);
         db.exec(`
-          DROP TABLE session_participants;
           CREATE TABLE session_participants (
             session_key TEXT NOT NULL,
             actor_type TEXT NOT NULL,
@@ -292,8 +281,6 @@ describe("participant identity migration", () => {
             PRIMARY KEY (session_key, actor_type, actor_id),
             FOREIGN KEY (session_key) REFERENCES session_nodes(session_key) ON DELETE CASCADE
           ) STRICT;
-          PRAGMA user_version = 17;
-          UPDATE schema_meta SET schema_version = 17;
         `);
         db.prepare(`INSERT INTO session_participants VALUES (
           ?, 'human', 'historical-profile',

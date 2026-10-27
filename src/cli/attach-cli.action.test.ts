@@ -17,6 +17,25 @@ let revokeStarted = createDeferred();
 let revokeWork = async () => {};
 let responseGate: { method: string; entered: () => void; release: Promise<void> } | undefined;
 const configDirectories = new Set<string>();
+const mcpConfig = {
+  mcpServers: {
+    openclaw: {
+      type: "http",
+      url: "http://127.0.0.1:9999/mcp",
+      headers: {
+        Authorization: "Bearer ${OPENCLAW_MCP_TOKEN}",
+        "x-session-key": "${OPENCLAW_MCP_SESSION_KEY}",
+      },
+    },
+  },
+};
+const grant = (sessionKey = "agent:main:main") => ({
+  sessionKey,
+  token: "tok-123",
+  expiresAtMs: 2_000_000_000_000,
+  mcpConfig: structuredClone(mcpConfig),
+  env: { OPENCLAW_MCP_TOKEN: "tok-123" },
+});
 vi.mock("node:child_process", () => ({
   spawn: vi.fn((_bin: string, args: string[]) => {
     configDirectories.add(dirname(args[2]!));
@@ -25,16 +44,9 @@ vi.mock("node:child_process", () => ({
   }),
 }));
 
-const gatewayCalls: Array<{
-  method: string;
-  params: Record<string, unknown>;
-  mode?: string;
-  url?: string;
-  token?: string;
-  useStoredDeviceAuth?: boolean;
-  requiredStoredDeviceAuthScopes?: string[];
-  hasDeviceIdentityKey: boolean;
-}> = [];
+const gatewayCalls: Array<
+  Omit<Parameters<typeof callGateway>[0], "params"> & { params: Record<string, unknown> }
+> = [];
 
 function gatewayParams(params: unknown): Record<string, unknown> {
   if (typeof params !== "object" || params === null || Array.isArray(params)) {
@@ -45,64 +57,28 @@ function gatewayParams(params: unknown): Record<string, unknown> {
 
 vi.mock("../gateway/call.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../gateway/call.js")>()),
-  callGateway: vi.fn(
-    async (p: {
-      method: string;
-      params: Record<string, unknown>;
-      mode?: string;
-      url?: string;
-      token?: string;
-      useStoredDeviceAuth?: boolean;
-      requiredStoredDeviceAuthScopes?: string[];
-    }) => {
-      gatewayCalls.push({
-        method: p.method,
-        params: gatewayParams(p.params),
-        mode: p.mode,
-        url: p.url,
-        token: p.token,
-        useStoredDeviceAuth: p.useStoredDeviceAuth,
-        requiredStoredDeviceAuthScopes: p.requiredStoredDeviceAuthScopes,
-        hasDeviceIdentityKey: "deviceIdentity" in p,
-      });
-      if (responseGate?.method === p.method) {
-        responseGate.entered();
-        await responseGate.release;
-      }
-      if (p.method === "sessions.resolve") {
-        return { ok: true, key: "agent:ops:thread:resolved" };
-      }
-      if (p.method === "agents.list") {
-        return { defaultId: "main", mainKey: "main", scope: "global", agents: [] };
-      }
-      if (p.method === "attach.grant") {
-        const sessionKey = (p.params.sessionKey as string) ?? "agent:main:main";
-        return {
-          sessionKey,
-          token: "tok-123",
-          expiresAtMs: 2_000_000_000_000,
-          mcpConfig: {
-            mcpServers: {
-              openclaw: {
-                type: "http",
-                url: "http://127.0.0.1:9999/mcp",
-                headers: {
-                  Authorization: "Bearer ${OPENCLAW_MCP_TOKEN}",
-                  "x-session-key": "${OPENCLAW_MCP_SESSION_KEY}",
-                },
-              },
-            },
-          },
-          env: { OPENCLAW_MCP_TOKEN: "tok-123" },
-        };
-      }
-      if (p.method === "attach.revoke") {
-        revokeStarted.resolve();
-        await revokeWork();
-      }
-      return {};
-    },
-  ),
+  callGateway: vi.fn(async (p: Parameters<typeof callGateway>[0]) => {
+    const params = gatewayParams(p.params);
+    gatewayCalls.push({ ...p, params });
+    if (responseGate?.method === p.method) {
+      responseGate.entered();
+      await responseGate.release;
+    }
+    if (p.method === "sessions.resolve") {
+      return { ok: true, key: "agent:ops:thread:resolved" };
+    }
+    if (p.method === "agents.list") {
+      return { defaultId: "main", mainKey: "main", scope: "global", agents: [] };
+    }
+    if (p.method === "attach.grant") {
+      return grant(params.sessionKey as string | undefined);
+    }
+    if (p.method === "attach.revoke") {
+      revokeStarted.resolve();
+      await revokeWork();
+    }
+    return {};
+  }),
   GatewayStoredDeviceAuthUnavailableError: class extends Error {},
   GatewayTransportError: class extends Error {},
 }));
@@ -153,6 +129,7 @@ async function waitForSpawn(action: Promise<void>) {
     "attach returned before its child closed",
   );
 }
+const calls = (method: string) => gatewayCalls.filter((call) => call.method === method);
 
 describe("openclaw attach (action)", () => {
   beforeEach(() => {
@@ -330,18 +307,7 @@ describe("openclaw attach (action)", () => {
         throw new Error("missing spawned MCP config path");
       }
       expect(existsSync(configPath)).toBe(true);
-      expect(JSON.parse(readFileSync(configPath, "utf8"))).toEqual({
-        mcpServers: {
-          openclaw: {
-            type: "http",
-            url: "http://127.0.0.1:9999/mcp",
-            headers: {
-              Authorization: "Bearer ${OPENCLAW_MCP_TOKEN}",
-              "x-session-key": "${OPENCLAW_MCP_SESSION_KEY}",
-            },
-          },
-        },
-      });
+      expect(JSON.parse(readFileSync(configPath, "utf8"))).toEqual(mcpConfig);
       const onSigint = process.listeners("SIGINT").find((fn) => !beforeInt.includes(fn));
       const onSigterm = process.listeners("SIGTERM").find((fn) => !beforeTerm.includes(fn));
       expect(onSigint).toBeTypeOf("function");
@@ -365,7 +331,7 @@ describe("openclaw attach (action)", () => {
         allowRevoke.resolve();
       }
       expect(await outcome).toEqual(new ExitError(expected));
-      expect(gatewayCalls.filter((call) => call.method === "attach.revoke")).toHaveLength(1);
+      expect(calls("attach.revoke")).toHaveLength(1);
       expect(existsSync(configPath)).toBe(false);
       expect(process.listeners("SIGINT")).toEqual(beforeInt);
       expect(process.listeners("SIGTERM")).toEqual(beforeTerm);
@@ -385,7 +351,7 @@ describe("openclaw attach (action)", () => {
     expect(defaultRuntime.exit).not.toHaveBeenCalled();
     spawnedChild.emit("close", -2, null);
     await completed;
-    expect(gatewayCalls.filter((c) => c.method === "attach.revoke")).toHaveLength(1);
+    expect(calls("attach.revoke")).toHaveLength(1);
     expect(exitCode).toBe(1);
     expect(logs.join("\n")).toContain("Failed to launch");
   });
@@ -425,10 +391,8 @@ describe("openclaw attach (action)", () => {
         ).resolves.toEqual({ status: "cancelled", error: cancelled });
         expect(vi.mocked(spawn).mock.calls).toHaveLength(spawnCount);
         expect(vi.mocked(mkdtempSync).mock.calls).toHaveLength(configCount);
-        expect(gatewayCalls.filter((call) => call.method === "attach.grant")).toHaveLength(
-          method === "attach.grant" ? 1 : 0,
-        );
-        const revocations = gatewayCalls.filter((call) => call.method === "attach.revoke");
+        expect(calls("attach.grant")).toHaveLength(method === "attach.grant" ? 1 : 0);
+        const revocations = calls("attach.revoke");
         expect(revocations).toHaveLength(method === "attach.grant" ? 1 : 0);
         if (method === "attach.grant") {
           expect(revocations[0]?.params).toEqual({ token: "tok-123" });
@@ -454,30 +418,9 @@ describe("openclaw attach (action)", () => {
   });
 
   it("warns when revoke fails but still exits with the child status", async () => {
-    vi.mocked(callGateway).mockImplementationOnce(async (p) => {
-      gatewayCalls.push({
-        method: p.method,
-        params: gatewayParams(p.params),
-        mode: p.mode,
-        hasDeviceIdentityKey: "deviceIdentity" in p,
-      });
-      return {
-        sessionKey: "agent:main:spawn",
-        token: "tok-123",
-        expiresAtMs: 2_000_000_000_000,
-        mcpConfig: { mcpServers: { openclaw: {} } },
-        env: { OPENCLAW_MCP_TOKEN: "tok-123" },
-      } as never;
-    });
-    vi.mocked(callGateway).mockImplementationOnce(async (p) => {
-      gatewayCalls.push({
-        method: p.method,
-        params: gatewayParams(p.params),
-        mode: p.mode,
-        hasDeviceIdentityKey: "deviceIdentity" in p,
-      });
+    revokeWork = async () => {
       throw new Error("gateway down");
-    });
+    };
 
     const action = runAttach("--session", "agent:main:spawn");
     await waitForSpawn(action);
@@ -493,8 +436,7 @@ describe("openclaw attach (action)", () => {
     "rejects invalid expiresAtMs %s while revoking the minted grant",
     async (expiresAtMs) => {
       vi.mocked(callGateway).mockResolvedValueOnce({
-        sessionKey: "agent:main:x",
-        token: "tok-123",
+        ...grant("agent:main:x"),
         expiresAtMs,
         mcpConfig: { mcpServers: { openclaw: {} } },
         env: {},
@@ -506,7 +448,7 @@ describe("openclaw attach (action)", () => {
       await expect(runAttach("--print-config")).rejects.toEqual(new ExitError(1));
       expect(logs).toEqual(["ERR:attach.grant returned an unexpected response from the gateway."]);
       expect(vi.mocked(mkdtempSync).mock.calls).toHaveLength(configCount);
-      const revocations = gatewayCalls.filter((call) => call.method === "attach.revoke");
+      const revocations = calls("attach.revoke");
       expect(revocations).toHaveLength(1);
       expect(revocations[0]?.params).toEqual({ token: "tok-123" });
     },

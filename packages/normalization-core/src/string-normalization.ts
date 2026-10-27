@@ -1,5 +1,15 @@
 import { normalizeOptionalLowercaseString, normalizeOptionalString } from "./string-coerce.js";
 
+/** Counts matching leading UTF-16 code units without normalizing either string. */
+export function commonPrefixLength(left: string, right: string): number {
+  const limit = Math.min(left.length, right.length);
+  let index = 0;
+  while (index < limit && left[index] === right[index]) {
+    index += 1;
+  }
+  return index;
+}
+
 /** Detects C0 and DEL without rejecting C1 or other Unicode text. */
 export function containsAsciiControlCharacter(value: string): boolean {
   for (let index = 0; index < value.length; index += 1) {

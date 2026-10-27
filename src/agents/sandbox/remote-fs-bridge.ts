@@ -5,6 +5,7 @@ import {
 } from "@openclaw/fs-safe/guest";
 import { parseDirectoryEntries, type DirectoryEntry } from "../../infra/directory-entries.js";
 import type {
+  SandboxBackendCommandParams,
   SandboxBackendCommandResult,
   SandboxFsBridgeContext,
 } from "./backend-handle.types.js";
@@ -39,10 +40,19 @@ import {
   resolveRemotePinnedCanonicalFrame,
   type RemotePinnedTarget,
 } from "./remote-fs-bridge-pinned-frame.js";
-import type { ResolvedRemotePath, RemoteShellSandboxHandle } from "./remote-fs-bridge.types.js";
 import { resolveReadOnlyWorkspaceSkillMounts } from "./workspace-mounts.js";
 
-export type { RemoteShellSandboxHandle } from "./remote-fs-bridge.types.js";
+type ResolvedRemotePath = SandboxResolvedPath & {
+  writable: boolean;
+  mountRootPath: string;
+};
+
+/** Minimal remote shell contract used by the SSH filesystem bridge. */
+export type RemoteShellSandboxHandle = {
+  remoteWorkspaceDir: string;
+  remoteAgentWorkspaceDir: string;
+  runRemoteShellScript(params: SandboxBackendCommandParams): Promise<SandboxBackendCommandResult>;
+};
 
 export function createRemoteShellSandboxFsBridge(params: {
   sandbox: SandboxFsBridgeContext;

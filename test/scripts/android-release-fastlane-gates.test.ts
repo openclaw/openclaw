@@ -20,7 +20,7 @@ function createFixture(): string {
   mkdirSync(path.join(fixtureRoot, "apps/android"), { recursive: true });
   mkdirSync(path.join(fixtureRoot, "recovery"));
   for (const [file, contents] of Object.entries({
-    "package.json": '{"version":"2026.9.2"}\n',
+    "package.json": '{"version":"2026.9.2-beta.1"}\n',
     "apps/android/version.json": '{"version":"2026.8.2","versionCode":2026080201}\n',
     ".gitignore":
       "scripts\nFastfile\norigin.git/\nrecovery/\napps/android/build/\napps/android/fastlane/\n",
@@ -128,7 +128,7 @@ module Supply
       return [2026080299] if $scenario == "changed-code" && $edits > 1
       [2026080203]
     end
-    def apks_version_codes; $events << "apks"; [2026080253]; end
+    def apks_version_codes; $events << "apks"; [2026041590, 2026080253]; end
     def tracks(*names)
       $events << "tracks:#{names.join(',')}"
       tracks = $public_tracks || []
@@ -216,7 +216,7 @@ function runRuby(source: string): LaneResult[] {
   return JSON.parse(
     run(
       useBundle ? "bundle" : "ruby",
-      useBundle ? ["_4.0.22_", "exec", "ruby", ...rubyArgs] : rubyArgs,
+      useBundle ? ["_4.0.23_", "exec", "ruby", ...rubyArgs] : rubyArgs,
       rootDir,
       { ...process.env, BUNDLE_GEMFILE: path.join(rootDir, "apps/android/Gemfile") },
     ),
@@ -397,9 +397,13 @@ STDOUT.puts JSON.generate(results)
     expect(results[0]?.error).toBeUndefined();
     expect(results[0]?.plan).toMatchObject({
       schemaVersion: 2,
+      gatewayVersion: "2026.9.2",
+      revision: 0,
+      buildNumber: 1,
       version: "2026.9.20",
       versionCode: 2026080254,
       wearVersionCode: 2026080255,
+      legacyMaxVersionCode: 2026080253,
       releaseNotesBaselines: [
         ["phone", "2026080203"],
         ["wear", "2026080253"],

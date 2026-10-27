@@ -1,4 +1,5 @@
 import type { AgentsListResult, SessionsListResult } from "../../../api/types.ts";
+import { hasOperatorWriteAccess } from "../../../app/operator-access.ts";
 import { resolveAgentTextAvatar } from "../../../lib/agents/display.ts";
 import {
   resolveAgentAvatarUrl,
@@ -17,6 +18,34 @@ import {
 } from "../../../lib/sessions/session-key.ts";
 
 const WELCOME_RECENT_SESSION_LIMIT = 5;
+
+const OPERATOR_WELCOME_SUGGESTION_KEYS = [
+  "chat.welcome.suggestions.whatCanYouDo",
+  "chat.welcome.suggestions.summarizeRecentSessions",
+  "chat.welcome.suggestions.configureChannel",
+  "chat.welcome.suggestions.checkSystemHealth",
+] as const;
+
+const SESSION_SCOPED_WELCOME_SUGGESTION_KEYS = [
+  "chat.welcome.suggestions.whatCanYouDo",
+  "chat.welcome.suggestions.exploreOpenClaw",
+  "chat.welcome.suggestions.investigateInSandbox",
+  "chat.welcome.suggestions.openDraftPullRequest",
+] as const;
+
+export type WelcomeSuggestionAuth = { role?: string; scopes?: readonly string[] } | null;
+
+/**
+ * Starter prompts the connected principal can act on. Session-scoped grants
+ * (the visitor guest policy) lack `operator.write`, so they cannot configure
+ * channels or read Gateway health; offer work their own sandboxed sessions can
+ * do instead. Missing auth keeps the operator set, matching operator-access.
+ */
+export function resolveWelcomeSuggestionKeys(auth: WelcomeSuggestionAuth | undefined) {
+  return hasOperatorWriteAccess(auth ?? null)
+    ? OPERATOR_WELCOME_SUGGESTION_KEYS
+    : SESSION_SCOPED_WELCOME_SUGGESTION_KEYS;
+}
 
 export function resolveAssistantDisplayAvatar(props: {
   currentAgentId?: string;
@@ -41,12 +70,7 @@ export function resolveAssistantDisplayAvatar(props: {
   };
 }
 
-export type WelcomeRecentSession = {
-  key: string;
-  name: string;
-  subtitle: string | undefined;
-  updatedAt: number | null | undefined;
-};
+export type WelcomeRecentSession = ReturnType<typeof prepareWelcomeRecentSessions>[number];
 
 /**
  * Recent user-created chats for the welcome screen: the sidebar's visible-row
@@ -58,7 +82,7 @@ export function prepareWelcomeRecentSessions(
   sessions: SessionsListResult | null | undefined,
   sessionKey: string | undefined,
   defaultAgentId: string,
-): WelcomeRecentSession[] {
+) {
   if (!sessions) {
     return [];
   }

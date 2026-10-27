@@ -117,7 +117,6 @@ export const {
   listSpeechVoices,
   prepareTtsRequest,
   resolveTtsConfig,
-  resolveTtsPrefsPath,
   setTtsMachinePrefsPathResolver,
   setSummarizationEnabled,
   setTtsMaxLength,

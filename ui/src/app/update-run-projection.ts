@@ -10,8 +10,9 @@ import {
   resolveUpdateRunIdentity,
 } from "../../../src/infra/update-run-report.ts";
 import { t } from "../i18n/index.ts";
+import { registerUpdateActionsEnglish } from "../i18n/locales/en-update-actions.ts";
 
-type OracleState = "pass" | "warn" | "fail" | "pending";
+registerUpdateActionsEnglish();
 
 export function updateRunStepOwner(step: string): string {
   // Diagnostic suffixes identify ledger receipts, not additional installation work.
@@ -77,7 +78,7 @@ export function projectUpdateRun(run: UpdateRunRecord, connected = true) {
   const details = detailStep ? (stepDetails.get(updateRunStepOwner(detailStep.step)) ?? "") : "";
   const facts = run.verification;
   const identity = resolveUpdateRunIdentity(facts, run.after);
-  const booleanState = (value: boolean | undefined): OracleState =>
+  const booleanState = (value: boolean | undefined): "pass" | "warn" | "fail" | "pending" =>
     value === undefined ? (terminal ? "warn" : "pending") : value ? "pass" : "fail";
   const oracles = [
     { name: "service", state: booleanState(facts.serviceRunning) },

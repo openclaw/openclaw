@@ -1,5 +1,4 @@
-import { execFileSync, spawn, spawnSync } from "node:child_process";
-import { createHash } from "node:crypto";
+import { spawn, spawnSync } from "node:child_process";
 import { once } from "node:events";
 import {
   copyFileSync,
@@ -15,9 +14,14 @@ import { parse } from "yaml";
 import { awaitGateBeforeSettlement, withinTest } from "../helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 import { resolveWorkflowBash } from "../helpers/workflow-bash.js";
+import {
+  SOURCE_SHA,
+  VERSION,
+  registryFixture as makeRegistryFixture,
+  sha256,
+  writeTarball,
+} from "./prepublish-plugin-registry.fixture.js";
 
-const SOURCE_SHA = "a".repeat(40);
-const VERSION = "2026.8.1-beta.1";
 const BASELINE_VERSION = "2026.7.1";
 const SCRIPT = "scripts/e2e/lib/prepublish-plugin-registry.sh";
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -35,10 +39,6 @@ function runShell(
   });
 }
 
-function sha256(path: string): string {
-  return createHash("sha256").update(readFileSync(path)).digest("hex");
-}
-
 function createTarball(
   root: string,
   outputDir: string,
@@ -46,52 +46,19 @@ function createTarball(
   filename: string,
   version = VERSION,
   extra: Record<string, unknown> = {},
-): string {
-  const packageRoot = join(root, "staging", filename, "package");
-  mkdirSync(packageRoot, { recursive: true });
-  writeFileSync(
-    join(packageRoot, "package.json"),
-    `${JSON.stringify({ ...extra, name, version })}\n`,
-  );
-  const tarball = join(outputDir, filename);
-  execFileSync("tar", ["-czf", tarball, "-C", join(packageRoot, ".."), "package"]);
-  return tarball;
+) {
+  return writeTarball(root, join(outputDir, filename), name, version, extra);
 }
 
 function registryFixture(root: string, names: string[], version = VERSION) {
-  const artifactDir = join(root, "artifact");
-  mkdirSync(artifactDir);
-  const packages = names
-    .toSorted((a, b) => a.localeCompare(b))
-    .map((name) => {
-      const tarball = `${name.replace(/^@/u, "").replace("/", "-")}.tgz`;
-      const file = createTarball(root, artifactDir, name, tarball, version, {
-        provenance: "candidate",
-        ...(name === "openclaw" ? { dependencies: { "@openclaw/ai": version } } : {}),
-      });
-      return { name, version, tarball, sha256: sha256(file) };
-    });
-  const manifestPath = join(artifactDir, "prepublish-plugin-registry.json");
-  writeFileSync(
-    manifestPath,
-    JSON.stringify({
-      schema: "openclaw.prepublish-plugin-registry/v1",
-      schemaVersion: 1,
-      sourceSha: SOURCE_SHA,
-      candidateVersion: version,
-      packages,
-    }),
-  );
-  return {
-    artifactDir,
-    manifestPath,
-    env: {
-      OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_DIR: artifactDir,
-      OPENCLAW_DOCKER_E2E_SELECTED_SHA: SOURCE_SHA,
-      OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_CANDIDATE_VERSION: version,
-      OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_MANIFEST_SHA256: sha256(manifestPath),
+  return makeRegistryFixture(
+    root,
+    names.toSorted((a, b) => a.localeCompare(b)),
+    version,
+    {
+      candidateMetadata: true,
     },
-  };
+  );
 }
 
 async function withPublishedRegistry(

@@ -65,51 +65,50 @@ beforeEach(() => {
 
 describe("run-node script", () => {
   it.for([
-    { args: ["--profile", "ci", "qa", "mantis", "run"], mantis: true },
-    { args: ["--profile", "qa", "mantis", "run"], mantis: false },
-    { args: ["status", "qa", "mantis", "run"], mantis: false },
-  ])(
-    "grants Mantis lifecycle IPC only to the parsed command: %j",
-    async ({ args, mantis }, { tmp }) => {
-      await setupStampedProject(tmp, { oldPaths: [ROOT_SRC, ROOT_TSCONFIG, ROOT_PACKAGE] });
-      const fakeProcess = Object.assign(createFakeProcess(), { stdin: { isTTY: true } });
-      const child = Object.assign(new EventEmitter(), { kill: vi.fn(() => true) });
-      const { promise: childSpawned, resolve: markChildSpawned } = createDeferred();
-      const spawn = vi.fn((_cmd: string, childArgs: string[], _options: unknown) => {
-        if (!childArgs.includes("openclaw.mjs")) {
-          return createExitedProcess(0);
-        }
-        markChildSpawned();
-        return child;
-      });
-      const outcome = runNodeCommand(tmp, {
-        args,
-        process: fakeProcess,
-        spawn,
-        runRuntimePostBuild: skipRuntimePostBuild,
-      });
-      // Lifecycle listeners attach in the spawn call stack, after async build/postbuild work.
-      await Promise.race([childSpawned, outcome]);
-      try {
-        expect(child.listenerCount("exit")).toBe(1);
-        vi.useFakeTimers();
-        child.emit("message", { type: "openclaw:shutdown-grace", graceMs: 120_000 });
-        fakeProcess.emit("SIGTERM");
-        await vi.advanceTimersByTimeAsync(5_000);
-        expect(child.kill.mock.calls).toEqual(mantis ? [["SIGTERM"]] : [["SIGTERM"], ["SIGKILL"]]);
-        if (mantis) {
-          await vi.advanceTimersByTimeAsync(115_000);
-          expect(child.kill.mock.calls).toEqual([["SIGTERM"], ["SIGKILL"]]);
-        }
-      } finally {
-        child.emit("exit", 0, null);
-        await outcome;
-        vi.useRealTimers();
+    { args: ["gateway"], graceMs: 330_000 },
+    { args: ["--profile", "ci", "gateway", "run", "--port", "18790"], graceMs: 330_000 },
+    { args: ["gateway", "status"], graceMs: 5_000 },
+    { args: ["--profile", "gateway", "status"], graceMs: 5_000 },
+    { args: ["--profile", "ci", "qa", "mantis", "run"], graceMs: 120_000 },
+    { args: ["--profile", "qa", "mantis", "run"], graceMs: 5_000 },
+    { args: ["status", "qa", "mantis", "run"], graceMs: 5_000 },
+  ])("honors the parsed command's shutdown budget: %j", async ({ args, graceMs }, { tmp }) => {
+    await setupStampedProject(tmp, { oldPaths: [ROOT_SRC, ROOT_TSCONFIG, ROOT_PACKAGE] });
+    const fakeProcess = Object.assign(createFakeProcess(), { stdin: { isTTY: true } });
+    const child = Object.assign(new EventEmitter(), { kill: vi.fn(() => true) });
+    const { promise: childSpawned, resolve: markChildSpawned } = createDeferred();
+    const spawn = vi.fn((_cmd: string, childArgs: string[], _options: unknown) => {
+      if (!childArgs.includes("openclaw.mjs")) {
+        return createExitedProcess(0);
       }
-      expect(await outcome).toBe(143);
-      expect(fakeProcess.listenerCount("SIGTERM")).toBe(0);
-    },
-  );
+      markChildSpawned();
+      return child;
+    });
+    const outcome = runNodeCommand(tmp, {
+      args,
+      process: fakeProcess,
+      spawn,
+      runRuntimePostBuild: skipRuntimePostBuild,
+    });
+    // Lifecycle listeners attach in the spawn call stack, after async build/postbuild work.
+    await Promise.race([childSpawned, outcome]);
+    try {
+      expect(child.listenerCount("exit")).toBe(1);
+      vi.useFakeTimers();
+      child.emit("message", { type: "openclaw:shutdown-grace", graceMs: 120_000 });
+      fakeProcess.emit("SIGTERM");
+      await vi.advanceTimersByTimeAsync(graceMs - 1);
+      expect(child.kill.mock.calls).toEqual([["SIGTERM"]]);
+      await vi.advanceTimersByTimeAsync(1);
+      expect(child.kill.mock.calls).toEqual([["SIGTERM"], ["SIGKILL"]]);
+    } finally {
+      child.emit("exit", 0, null);
+      await outcome;
+      vi.useRealTimers();
+    }
+    expect(await outcome).toBe(143);
+    expect(fakeProcess.listenerCount("SIGTERM")).toBe(0);
+  });
 
   it.for([undefined, "node", "bun"])(
     "starts the %s CLI only after the Node runtime build completes",

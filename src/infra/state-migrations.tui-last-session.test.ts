@@ -14,6 +14,7 @@ import {
 } from "./state-migrations.tui-last-session.js";
 
 const tempDirs = createTempDirTracker();
+type MigrationOptions = Parameters<typeof migrateLegacyTuiLastSessions>[0];
 
 function writeLegacyStore(stateDir: string, value: unknown): string {
   const sourcePath = path.join(stateDir, "tui", "last-session.json");
@@ -30,18 +31,29 @@ function fixture(value: unknown = { terminal: pointer() }) {
   return {
     stateDir,
     sourcePath,
-    run: (
-      overrides: Omit<
-        Parameters<typeof migrateLegacyTuiLastSessions>[0],
-        "detected" | "stateDir"
-      > = {},
-    ) =>
+    run: (overrides: Omit<MigrationOptions, "detected" | "stateDir"> = {}) =>
       migrateLegacyTuiLastSessions({
         detected: { sourcePath, hasLegacy: true },
         stateDir,
         ...overrides,
       }),
     read: (scopeKey = "terminal") => readTuiLastSessionKey({ scopeKey, stateDir }),
+    async check(
+      result: ReturnType<typeof migrateLegacyTuiLastSessions>,
+      session: string | null,
+      warning?: string,
+    ) {
+      if (warning) {
+        expect(result.changes).toEqual([]);
+        expect(result.warnings.join("\n")).toContain(warning);
+      } else {
+        expect(result.warnings).toEqual([]);
+      }
+      expect(fs.existsSync(sourcePath)).toBe(Boolean(warning));
+      await expect(readTuiLastSessionKey({ scopeKey: "terminal", stateDir })).resolves.toBe(
+        session,
+      );
+    },
   };
 }
 
@@ -58,29 +70,29 @@ function seedPointer(stateDir: string, updatedAt: number): void {
   );
 }
 
-async function expectRefusal(
-  value: ReturnType<typeof fixture>,
-  result: ReturnType<typeof migrateLegacyTuiLastSessions>,
-  warning: string,
-  session: string | null,
-) {
-  expect(result.changes).toEqual([]);
-  expect(result.warnings.join("\n")).toContain(warning);
-  expect(fs.existsSync(value.sourcePath)).toBe(true);
-  await expect(value.read()).resolves.toBe(session);
-}
-
 afterEach(() => {
   closeOpenClawStateDatabaseForTest();
   tempDirs.cleanup();
 });
 
 describe("legacy TUI last-session migration", () => {
+  it("retains malformed UTF-8 without importing replacement characters", async () => {
+    const state = fixture({ terminal: pointer("utf8-marker") });
+    const bytes = fs.readFileSync(state.sourcePath);
+    bytes[bytes.indexOf("utf8-marker")] = 0xff;
+    fs.writeFileSync(state.sourcePath, bytes);
+    const result = state.run();
+    await state.check(result, null, "must be valid UTF-8");
+    expect(result.warningDisposition).toBe("recoverable");
+    expect(fs.readFileSync(state.sourcePath)).toEqual(bytes);
+  });
+
   it("requires Doctor opt-in and discards heartbeat pointers", async () => {
-    const { stateDir, sourcePath, read } = fixture({
+    const state = fixture({
       terminal: pointer(),
       heartbeat: pointer("agent:main:telegram:direct:123:heartbeat", 200),
     });
+    const { stateDir, sourcePath, read } = state;
     const runtimeDetection = detectLegacyTuiLastSessions({ stateDir });
     expect(runtimeDetection.hasLegacy).toBe(false);
     await expect(read()).resolves.toBeNull();
@@ -96,13 +108,7 @@ describe("legacy TUI last-session migration", () => {
       stateDir,
     });
 
-    expect(result.warnings).toEqual([]);
-    expect(result.changes).toContain(
-      "Migrated 1 TUI last-session pointer(s) → shared SQLite state",
-    );
-    expect(result.changes).toContain("Discarded 1 legacy heartbeat TUI restore pointer(s)");
-    expect(fs.existsSync(sourcePath)).toBe(false);
-    await expect(read()).resolves.toBe("agent:main:tui-123");
+    await state.check(result, "agent:main:tui-123");
     expect(
       readConfigMachineStateWithMetadata<string>("tui.lastSession.terminal", {
         env: { ...process.env, OPENCLAW_STATE_DIR: stateDir },
@@ -113,45 +119,23 @@ describe("legacy TUI last-session migration", () => {
   });
 
   it.each([
-    ["non-object top level", []],
-    ["non-object record", { terminal: "agent:main:tui-123" }],
-    ["missing timestamp", { terminal: { sessionKey: "agent:main:tui-123" } }],
-  ])("retains malformed source: %s", async (_label, value) => {
+    ["non-object top level", [], "must be a JSON object"],
+    ["non-object record", { terminal: "agent:main:tui-123" }, "must be an object"],
+    ["missing timestamp", { terminal: { sessionKey: "agent:main:tui-123" } }, "invalid timestamp"],
+    ["unexpected field", { terminal: { "": 1, later: 2, ...pointer() } }, 'unexpected field ""'],
+  ])("retains malformed source: %s", async (_label, value, warning) => {
     const state = fixture(value);
-    await expectRefusal(state, state.run(), "Failed reading legacy TUI last-session state", null);
+    await state.check(state.run(), null, warning);
+    expect(fs.readdirSync(path.dirname(state.sourcePath))).toEqual(["last-session.json"]);
   });
 
-  it("rejects unexpected fields before claiming or writing", async () => {
-    const { sourcePath, run, read } = fixture({
-      terminal: { "": 1, later: 2, ...pointer() },
-    });
-    const result = run();
-    expect(result.warnings).toEqual([
-      `Failed reading legacy TUI last-session state ${sourcePath}: Error: legacy TUI last-session record terminal has unexpected field ""`,
-    ]);
-    expect(fs.readdirSync(path.dirname(sourcePath))).toEqual(["last-session.json"]);
-    await expect(read()).resolves.toBeNull();
-  });
-
-  it.each([100, 200])("preserves the SQLite pointer at timestamp %s", async (timestamp) => {
+  it.each([
+    [100, "divergent JSON and SQLite pointers at the same timestamp"],
+    [200, undefined],
+  ] as const)("preserves the SQLite pointer at timestamp %s", async (timestamp, warning) => {
     const state = fixture({ terminal: pointer("agent:main:legacy") });
     seedPointer(state.stateDir, timestamp);
-    const result = state.run();
-    if (timestamp === 100) {
-      await expectRefusal(
-        state,
-        result,
-        "divergent JSON and SQLite pointers at the same timestamp",
-        "agent:main:current",
-      );
-    } else {
-      expect(result).toMatchObject({
-        warnings: [],
-        notices: ["Kept 1 newer shared SQLite TUI last-session pointer(s) over legacy JSON"],
-      });
-      expect(fs.existsSync(state.sourcePath)).toBe(false);
-      await expect(state.read()).resolves.toBe("agent:main:current");
-    }
+    await state.check(state.run(), "agent:main:current", warning);
   });
 
   it.each([
@@ -177,14 +161,10 @@ describe("legacy TUI last-session migration", () => {
         }
       },
     });
-    await expectRefusal(state, result, warning, session);
+    await state.check(result, session, warning);
     if (hook === "beforeVerify") {
       return;
     }
-    expect(state.run().warnings).toEqual([]);
-    expect(fs.existsSync(state.sourcePath)).toBe(false);
-    await expect(state.read()).resolves.toBe(
-      hook === "beforeClaim" ? "agent:main:second" : session,
-    );
+    await state.check(state.run(), hook === "beforeClaim" ? "agent:main:second" : session);
   });
 });

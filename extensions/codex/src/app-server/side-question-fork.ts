@@ -215,7 +215,7 @@ export class CodexSideQuestionFork {
   ) {
     const inference = getCodexInferenceThread(client, this.parentThreadId);
     if (inference) {
-      this.inferenceContext = inference.context.fork({
+      this.inferenceContext = await inference.context.fork({
         sourceThreadId: this.parentThreadId,
         threadId,
         signal: runAbortController.signal,

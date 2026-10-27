@@ -23,6 +23,7 @@ export function resourceBytes(executable) {
 
 export function stageInstalledPackage(installed, work, target, plan) {
   const core = path.join(installed, "node_modules/openclaw");
+  assert.equal(readJson(path.join(core, "package.json")).name, "openclaw", "Expected the OpenClaw package");
   const require = createRequire(path.join(core, "package.json"));
   const platform = target.platform === "windows" ? "win32" : target.platform;
   assert.ok(require.resolve(`@openai/codex-${platform}-${target.arch}/package.json`),
@@ -108,7 +109,8 @@ export function stagePackage(root, work, target) {
     const npm = resolveNpmRunner({ env, npmArgs: ["install", "--prefix", installed,
       "--omit=dev", "--include=optional", "--no-audit", "--no-fund",
       `--os=${target.platform === "windows" ? "win32" : target.platform}`, `--cpu=${target.arch}`,
-      archive] });
+      // Naming the archive avoids npm unpacking it just to discover its package name.
+      `openclaw@file:${archive}`] });
     execFileSync(npm.command, npm.args, { cwd: scratch, stdio: "inherit", env: npm.env ?? env,
       windowsVerbatimArguments: npm.windowsVerbatimArguments });
     stageInstalledPackage(installed, work, target, plan);

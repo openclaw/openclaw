@@ -81,11 +81,9 @@ let root: string;
 let store: WorkerTranscriptCommitStore;
 let input: WorkerTranscriptCommitInput;
 let sequence = 0;
-let nowMs = 1_000;
 const openStore = () =>
   createWorkerTranscriptCommitStore({
     database: openOpenClawStateDatabase({ env: { OPENCLAW_STATE_DIR: root } }),
-    now: () => nowMs,
   });
 const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
   afterAll(async () => {
@@ -101,54 +99,35 @@ beforeAll(() => {
 
 beforeEach(() => {
   input = { ...BASE_INPUT, sessionId: `session-${++sequence}` };
-  nowMs = 1_000;
 });
 afterEach(() => vi.restoreAllMocks());
 
-it("recovers pending work and replays a terminal result across reopen", async () => {
-  expect(await store.begin(input)).toEqual({ kind: "claimed" });
-  expect(await store.begin(input)).toEqual({ kind: "recover" });
-
-  nowMs = 1_010;
-  expect(await store.complete({ ...input, outcome: SUCCESS_OUTCOME })).toEqual(SUCCESS_OUTCOME);
-  expect(await store.begin(input)).toEqual({ kind: "replay", outcome: SUCCESS_OUTCOME });
-
-  await closeStateDatabaseForTest();
-  const database = openOpenClawStateDatabase({ env: { OPENCLAW_STATE_DIR: root } });
-  store = createWorkerTranscriptCommitStore({ database, now: () => nowMs });
-  expect(await store.begin(input)).toEqual({ kind: "replay", outcome: SUCCESS_OUTCOME });
-});
-
-it("rejects a tuple replayed with a different payload or environment", async () => {
-  expect(await store.begin(input)).toEqual(CLAIMED);
-  expect(await store.begin({ ...input, requestHash: "b".repeat(64) })).toEqual(CONFLICT);
-  await store.complete({ ...input, outcome: SUCCESS_OUTCOME });
-  expect(await store.begin({ ...input, requestHash: "b".repeat(64) })).toEqual(CONFLICT);
-  expect(await store.begin({ ...input, environmentId: "worker-b" })).toEqual(CONFLICT);
-});
-
-it("advances one ordered sequence only after terminal completion", async () => {
+it("persists an ordered, payload-bound sequence and its first terminal outcome across reopen", async () => {
   const second = { ...input, seq: 2, requestHash: "b".repeat(64) };
   const third = { ...input, seq: 3, requestHash: "c".repeat(64) };
-
+  const conflicting = { ...input, requestHash: second.requestHash };
+  await expect(store.complete({ ...input, outcome: SUCCESS_OUTCOME })).rejects.toThrow(
+    "must begin before terminal completion",
+  );
   expect(await store.begin(second)).toEqual(OUT_OF_ORDER);
   expect(await store.begin(input)).toEqual(CLAIMED);
+  expect(await store.begin(input)).toEqual(RECOVER);
   expect(await store.begin(second)).toEqual(OUT_OF_ORDER);
-  await store.complete({ ...input, outcome: SUCCESS_OUTCOME });
+  expect(await store.begin(conflicting)).toEqual(CONFLICT);
+  expect(await store.complete({ ...input, outcome: SUCCESS_OUTCOME })).toEqual(SUCCESS_OUTCOME);
+  expect(await store.complete({ ...input, outcome: ERROR_OUTCOME })).toEqual(SUCCESS_OUTCOME);
+  expect(await store.begin(input)).toEqual(REPLAY);
+  expect(await store.begin(conflicting)).toEqual(CONFLICT);
+  expect(await store.begin({ ...input, environmentId: "worker-b" })).toEqual(CONFLICT);
+
+  await closeStateDatabaseForTest();
+  store = openStore();
+  expect(await store.begin(input)).toEqual(REPLAY);
   expect(await store.begin(third)).toEqual({ ...OUT_OF_ORDER, expectedSeq: 2 });
   expect(await store.begin(second)).toEqual(CLAIMED);
   expect(await store.complete({ ...second, outcome: ERROR_OUTCOME })).toEqual(ERROR_OUTCOME);
   expect(await store.begin(second)).toEqual({ kind: "replay", outcome: ERROR_OUTCOME });
   expect(await store.begin(third)).toEqual(CLAIMED);
-});
-
-it("keeps the first cached terminal outcome", async () => {
-  await expect(store.complete({ ...input, outcome: SUCCESS_OUTCOME })).rejects.toThrow(
-    "must begin before terminal completion",
-  );
-  await store.begin(input);
-  expect(await store.complete({ ...input, outcome: SUCCESS_OUTCOME })).toEqual(SUCCESS_OUTCOME);
-  expect(await store.complete({ ...input, outcome: ERROR_OUTCOME })).toEqual(SUCCESS_OUTCOME);
 });
 
 it("releases only the exact pending reservation without rewinding or releasing its owner", async () => {
@@ -181,7 +160,7 @@ it("preserves submission order and captures inputs before yielding", async () =>
 });
 
 it("starts an independent sequence for a later owner epoch", async () => {
-  expect(await store.begin(input)).toEqual({ kind: "claimed" });
+  expect(await store.begin(input)).toEqual(CLAIMED);
   await store.complete({ ...input, outcome: SUCCESS_OUTCOME });
   const replacement = {
     ...input,
@@ -189,7 +168,7 @@ it("starts an independent sequence for a later owner epoch", async () => {
     runEpoch: input.runEpoch + 1,
   };
 
-  expect(await store.begin(replacement)).toEqual({ kind: "claimed" });
+  expect(await store.begin(replacement)).toEqual(CLAIMED);
   expect(await store.complete({ ...replacement, outcome: SUCCESS_OUTCOME })).toEqual(
     SUCCESS_OUTCOME,
   );

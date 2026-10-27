@@ -35,7 +35,10 @@ import type {
   VerboseLevel,
 } from "../../thinking.shared.js";
 import type { GoalContinuation } from "../goal-continuation.types.js";
-import type { SessionEventExecution } from "../session-event-contract.js";
+import type {
+  ScheduledSessionAutomation,
+  SessionEventExecution,
+} from "../session-event-contract.js";
 
 type FollowupQueueDisposition = Parameters<
   NonNullable<GetReplyOptions["onFollowupQueueDisposition"]>
@@ -60,22 +63,7 @@ export type QueuedFollowupReplyDelivery = ((
   createSourceRetry?: () => QueuedFollowupReplyDelivery;
 };
 
-type QueuedFollowupReplyDisposition =
-  | { kind: "deliver"; deliver: QueuedFollowupReplyDelivery }
-  | { kind: "drop"; reason: "source-unavailable" };
-
 // Leaf contracts only: get-reply.types.ts imports this module.
-type FollowupRunObservers = Pick<
-  GetReplyOptions,
-  "onAgentRunStart" | "onPreparedAgentRunStart" | "onAgentRunTerminalOutcome" | "onModelSelected"
-> & {
-  awaitSessionDiffBaseline?: () => Promise<void>;
-  prepareAssistantTranscriptMessage?: PrepareAssistantTranscriptMessage;
-  resolveReplyDelivery?: ReplyDeliveryObserver;
-  resolveReplyDeliveryFacts?: ReplyDeliveryFactsObserver;
-  onDeliberateSilentTerminalReply?: () => void;
-};
-
 export type FollowupRunPayload = {
   /** Original config owner, read only when this input receives a new execution admission. */
   readAdmissionConfig?: () => OpenClawConfig;
@@ -123,9 +111,20 @@ export type FollowupRunPayload = {
   /** Records terminal queue-cap outcomes at the queue owner before lifecycle cleanup. */
   onQueueDisposition?: (disposition: FollowupQueueDisposition) => void;
   /** Keep delivery bound to the source that owned admission, not later runner defaults. */
-  queuedFollowupReplyDisposition?: QueuedFollowupReplyDisposition;
+  queuedFollowupReplyDisposition?:
+    | { kind: "deliver"; deliver: QueuedFollowupReplyDelivery }
+    | { kind: "drop"; reason: "source-unavailable" };
   /** Run-lifecycle observers bound to the source request; the drain's runner may belong to another turn. */
-  runObservers?: FollowupRunObservers;
+  runObservers?: Pick<
+    GetReplyOptions,
+    "onAgentRunStart" | "onPreparedAgentRunStart" | "onAgentRunTerminalOutcome" | "onModelSelected"
+  > & {
+    awaitSessionDiffBaseline?: () => Promise<void>;
+    prepareAssistantTranscriptMessage?: PrepareAssistantTranscriptMessage;
+    resolveReplyDelivery?: ReplyDeliveryObserver;
+    resolveReplyDeliveryFacts?: ReplyDeliveryFactsObserver;
+    onDeliberateSilentTerminalReply?: () => void;
+  };
   /** Provider message ID, when available (for deduplication). */
   messageId?: string;
   summaryLine?: string;
@@ -173,6 +172,8 @@ export type FollowupRunPayload = {
   /** Chat type for context-aware threading (e.g., DM vs channel). */
   originatingChatType?: string;
   run: QueuedAgentRunParams & {
+    scheduledAutomation?: ScheduledSessionAutomation;
+    bootstrapContextMode?: GetReplyOptions["bootstrapContextMode"];
     internalEventExecution?: SessionEventExecution;
     agentId: string;
     agentDir: string;

@@ -1,6 +1,7 @@
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { resolveStateDir } from "../../config/paths.js";
 import { isContainerEnvironment } from "../../infra/container-environment.js";
+import { updateRepairRefusalNextAction } from "../../infra/update-preflight-details.js";
 import {
   isUpdateGatewayReadinessPending,
   isUpdatePostInstallVerificationDeferred,
@@ -51,6 +52,12 @@ export function resolveUpdateResultNextAction(params: {
     return UPDATE_INSTALL_SKIP_GUIDANCE[result.reason];
   }
   if (result.status === "error") {
+    const refusalNextAction = updateRepairRefusalNextAction(result.reason, (command) =>
+      formatCliCommand(command, env),
+    );
+    if (refusalNextAction) {
+      return refusalNextAction;
+    }
     const triageGuidance = `Run \`${formatCliCommand("openclaw triage", env)}\` on this machine to open a coding agent that can diagnose and repair the installation.`;
     const doctorSettlement = result.steps.findLast(
       (step) => step.name === "doctor process settlement",

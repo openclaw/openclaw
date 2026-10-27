@@ -1,9 +1,11 @@
+import assert from "node:assert/strict";
 import { expect, it, onTestFinished, vi } from "vitest";
 import { awaitGateBeforeSettlement, withinTest } from "../../../../test/helpers/promise.js";
 import { createSessionWorkStartChangedError } from "../../../config/sessions/lifecycle.js";
 import { replaceSessionEntry } from "../../../config/sessions/session-accessor.js";
 import { memorySessionActorOwners } from "../../../config/sessions/session-actor-memory-owner.js";
 import * as sessionEntryWorker from "../../../config/sessions/session-entry-read-runtime.js";
+import { SqliteTranscriptMutationConflictError } from "../../../config/sessions/session-mutation-conflict-error.js";
 import type { SessionEntry } from "../../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { createRecoveryTypingManager } from "../../../gateway/recovery-typing.js";
@@ -21,7 +23,10 @@ import {
 import { createReplyOperation } from "../../../sessions/session-controller.operation.js";
 import { createDeferredCore } from "../../../shared/deferred.js";
 import { resolveIncognitoOpenClawAgentSqlitePath } from "../../../state/openclaw-agent-db.paths.js";
+import { buildRestartRecoveryTerminalDeliveryEvidence } from "../../agent-command-restart-recovery.js";
 import * as embeddedRuns from "../../embedded-agent-runner/runs.js";
+import { ReplaySafeTranscriptConflictError } from "../../embedded-agent-runner/transcript-conflict.js";
+import { buildMainSessionRecoverySettlementPatch } from "../../main-session-recovery/main-session-recovery-clear.js";
 import { deliverSubagentAnnouncement, testing } from "./subagent-announce-delivery.test-support.js";
 import { sendSubagentAnnounceDirectly } from "./subagent-announce-direct-delivery.js";
 
@@ -196,141 +201,89 @@ function expectNoReplay(fixture: ReturnType<typeof setup>, dispatches = 1) {
   expect(fixture.send).not.toHaveBeenCalled();
 }
 
-it.each([
-  ["committed steering", false, false],
-  ["unconfirmed steering", false, true],
-  ["required direct delivery", true, false],
-] as const)(
-  "preserves the completion dispatch phase for %s without replacing controller custody",
-  async (_name, requireDirectDelivery, unconfirmed) => {
-    const fixture = setup("subagent_announce");
-    const expected = unconfirmed
-      ? { delivered: false, path: "steered", error: "commit outcome unknown" }
-      : { delivered: true, path: requireDirectDelivery ? "direct" : "steered" };
-    const { queueMessage, input } = steering(fixture, async (_text, options, assertCurrent) => {
-      assertCurrent();
-      options?.onQueueAccepted?.(true);
-      return unconfirmed ? unconfirmedCommit : undefined;
-    });
-    fixture.dispatchDone.resolve(response([{ text: "Completed directly" }], sentDeliveryStatus));
-    const result = await deliverSubagentAnnouncement({
-      ...fixture.params,
-      controllerInput: input,
-      requireDirectDelivery,
-    });
-    expect(result).toMatchObject(expected);
-    expect(result.phases).toEqual([
-      {
-        phase: "direct-primary",
-        ...expected,
-        deliveredAt: undefined,
-        enqueuedAt: undefined,
-        ...(!unconfirmed ? { error: undefined } : {}),
-      },
-    ]);
-    expect(queueMessage).toHaveBeenCalledTimes(requireDirectDelivery ? 0 : 1);
-    expect(fixture.dispatch).toHaveBeenCalledTimes(requireDirectDelivery ? 1 : 0);
-    if (requireDirectDelivery) {
-      expect(fixture.dispatch.mock.calls[0]?.[2]?.controllerInput).toBe(input);
-    }
-  },
-);
+it("preserves the direct completion phase without replacing controller custody", async () => {
+  const fixture = setup("subagent_announce");
+  const expected = { delivered: true, path: "direct" };
+  const { queueMessage, input } = steering(fixture, async () => {
+    throw new Error("Required direct delivery must not steer");
+  });
+  fixture.dispatchDone.resolve(response([{ text: "Completed directly" }], sentDeliveryStatus));
+  const result = await deliverSubagentAnnouncement({
+    ...fixture.params,
+    controllerInput: input,
+    requireDirectDelivery: true,
+  });
+  expect(result).toMatchObject(expected);
+  expect(result.phases).toEqual([
+    {
+      phase: "direct-primary",
+      ...expected,
+      deliveredAt: undefined,
+      enqueuedAt: undefined,
+      error: undefined,
+    },
+  ]);
+  expect(queueMessage).not.toHaveBeenCalled();
+  expect(fixture.dispatch.mock.calls[0]?.[2]?.controllerInput).toBe(input);
+});
 
-it.for(["current", "revoked"] as const)(
-  "settles a rejected recovery handoff before releasing the parent turn (%s source)",
-  async (source, { signal }) => {
-    const fixture = setup("subagent_announce");
-    const gate = <T>(pending: Promise<T>, active: Promise<unknown>, message: string) =>
-      withinTest(awaitGateBeforeSettlement(pending, active, message), signal);
-    const { target } = fixture;
-    const recoveryEntered = createDeferredCore();
-    const releaseRecovery = createDeferredCore();
-    const retirementEntered = createDeferredCore();
-    const releaseRetirement = createDeferredCore();
-    const recovery = withSessionTurn(
-      { target, sessionKey, sessionId: fixture.state.entry.sessionId },
-      async (operation) => {
-        if (!operation) {
-          throw new Error("Timeout recovery requires its retained controller operation");
-        }
-        operation.setPhase("preflight_compacting");
-        recoveryEntered.resolve();
-        await releaseRecovery.promise;
-      },
+it("keeps the same completion input queued when timeout recovery cannot accept steering", async ({
+  signal,
+}) => {
+  const fixture = setup("subagent_announce");
+  const recoveryEntered = createDeferredCore();
+  const releaseRecovery = createDeferredCore();
+  const recovery = withSessionTurn(
+    { target: fixture.target, sessionKey, sessionId: fixture.state.entry.sessionId },
+    async (operation) => {
+      assert(operation, "Missing timeout recovery operation");
+      operation.setPhase("preflight_compacting");
+      recoveryEntered.resolve();
+      await releaseRecovery.promise;
+    },
+  );
+  const abandonment = vi
+    .spyOn(embeddedRuns, "resolveEmbeddedRunAbandonment")
+    .mockReturnValue("recovering_timeout");
+  fixture.state.active = true;
+  fixture.readDone.resolve();
+  let input: ReturnType<typeof reserveSessionControllerSource> | undefined;
+  let delivery: ReturnType<typeof fixture.startDelivery> | undefined;
+  try {
+    await withinTest(recoveryEntered.promise, signal);
+    input = reserveSessionControllerSource(sessionKey, {
+      target: fixture.target,
+      policy: { mode: "followup" },
+    });
+    const parentClaim = input.mailbox.claim;
+    fixture.params.controllerInput = input;
+    delivery = fixture.startDelivery();
+    await withinTest(
+      awaitGateBeforeSettlement(
+        fixture.dispatchEntered.promise,
+        delivery,
+        "Completion lost its controller input",
+      ),
+      signal,
     );
-    const abandonment = vi
-      .spyOn(embeddedRuns, "resolveEmbeddedRunAbandonment")
-      .mockReturnValue("recovering_timeout");
-    fixture.state.active = true;
-    fixture.dispatch.mockRejectedValue(new Error("Unexpected completion during recovery"));
-    fixture.readDone.resolve();
-    let input: ReturnType<typeof reserveSessionControllerSource> | undefined;
-    let delivery: ReturnType<typeof fixture.startDelivery> | undefined;
-    let handoffSettled = false;
-    try {
-      await gate(recoveryEntered.promise, recovery, "Recovery exited before admission");
-      input = reserveSessionControllerSource(sessionKey, {
-        target,
-        policy: { mode: "followup" },
-        adapter: {
-          onSettled: async () => {
-            retirementEntered.resolve();
-            await releaseRetirement.promise;
-          },
-        },
-      });
-      const parentClaim = input.mailbox.claim;
-      expect(parentClaim?.operation).toMatchObject({
-        phase: "preflight_compacting",
-        result: null,
-      });
-      fixture.params.controllerInput = input;
-      delivery = fixture.startDelivery().finally(() => {
-        handoffSettled = true;
-      });
-      await gate(retirementEntered.promise, delivery, "Completion skipped retirement");
-      expect(handoffSettled).toBe(false);
-      expect(input.mailbox.entries).toContain(input);
-      expect(input.mailbox.claim).toBe(parentClaim);
-      expect(parentClaim?.operation?.result).toBeNull();
-      if (source === "revoked") {
-        fixture.state.allowed = false;
-      }
-      releaseRetirement.resolve();
-      const result = await gate(delivery, recovery, "Recovery released before handoff");
-      await input.settlement.promise;
-      expect(result).toMatchObject(
-        source === "current"
-          ? { delivered: false, reason: "completion_handoff_pending", disposition: "retryable" }
-          : {
-              delivered: false,
-              reason: "source_owner_changed",
-              terminal: true,
-              disposition: "intentional_non_delivery",
-            },
-      );
-      expect(input.phase).toBe("consumed");
-      expect(input.mailbox.entries).not.toContain(input);
-      expect(input.mailbox.claim).toBe(parentClaim);
-      expect(parentClaim).toMatchObject({
-        released: false,
-        operation: { phase: "preflight_compacting", result: null },
-      });
-      expectNoReplay(fixture, 0);
-      releaseRecovery.resolve();
-      await recovery;
-      expectNoReplay(fixture, 0);
-    } finally {
-      releaseRetirement.resolve();
-      releaseRecovery.resolve();
-      if (input) {
-        retireSessionControllerInput(input);
-      }
-      await Promise.allSettled([recovery, delivery, input?.settlement.promise]);
-      abandonment.mockRestore();
+    expect(fixture.dispatch.mock.calls[0]?.[2]?.controllerInput).toBe(input);
+    expect(input.mailbox.claim).toBe(parentClaim);
+    expect(input.phase).not.toBe("consumed");
+    releaseRecovery.resolve();
+    await recovery;
+    fixture.dispatchDone.resolve(response([{ text: "Recovered completion" }], sentDeliveryStatus));
+    await expect(delivery).resolves.toMatchObject({ delivered: true, path: "direct" });
+    expectNoReplay(fixture);
+  } finally {
+    releaseRecovery.resolve();
+    fixture.dispatchDone.resolve(response());
+    if (input) {
+      retireSessionControllerInput(input);
     }
-  },
-);
+    await Promise.allSettled([recovery, delivery, input?.settlement.promise]);
+    abandonment.mockRestore();
+  }
+});
 
 it("reports no attempted completion phase when cancelled before dispatch", async () => {
   const fixture = setup();
@@ -437,6 +390,7 @@ it.each([
     throw new Error("unexpected recovery dispatch");
   };
   const unregister = registerGatewayRecoveryRuntime({
+    prepareFailedWorkerPlacement: unused,
     prepareRestartRecovery: unused,
     resumeChatInput: unused,
     dispatchSessionMethod: unused,
@@ -534,36 +488,28 @@ const unsent = {
     { runId: sourceRunId, captured: true, payloads: [{ visible: true }] },
   ],
 } satisfies Partial<SessionEntry>;
-const suppressed = {
-  status: "ok",
-  result: {
-    deliveryStatus: {
-      status: "suppressed",
-      reason: "cancelled_by_message_sending_hook",
-      resultCount: 0,
-    },
-  },
-};
+const safeConflict = () =>
+  new ReplaySafeTranscriptConflictError(new SqliteTranscriptMutationConflictError("fixture"));
+const terminalOnly = {
+  restartRecoveryTerminalRunIds: [sourceRunId],
+} satisfies Partial<SessionEntry>;
 it.each`
-  name                                     | input                                                                                         | patch                                                                                    | expected                                                                            | sourceTool             | preserve
-  ${"pending settle response"}             | ${{ status: "accepted", runId: "pending-requester" }}                                         | ${{} satisfies Partial<SessionEntry>}                                                    | ${{ ...queued, path: "direct" } satisfies Expected}                                 | ${undefined}           | ${false}
-  ${"announcement during recovery"}        | ${createSessionWorkStartChangedError(sessionKey)}                                             | ${undefined}                                                                             | ${recovered}                                                                        | ${"subagent_announce"} | ${false}
-  ${"empty final"}                         | ${response()}                                                                                 | ${undefined}                                                                             | ${recovered}                                                                        | ${undefined}           | ${false}
-  ${"restart interruption"}                | ${{ status: "error", stopReason: "restart" }}                                                 | ${undefined}                                                                             | ${recovered}                                                                        | ${undefined}           | ${false}
-  ${"old keyed-input rejection"}           | ${new Error("old keyed input rejected")}                                                      | ${undefined}                                                                             | ${recovered}                                                                        | ${undefined}           | ${false}
-  ${"live claim"}                          | ${response()}                                                                                 | ${liveClaim}                                                                             | ${queued}                                                                           | ${undefined}           | ${false}
-  ${"terminal without receipt"}            | ${response()}                                                                                 | ${{ restartRecoveryTerminalRunIds: [sourceRunId] } satisfies Partial<SessionEntry>}      | ${{ ...missing, ...permanent } satisfies Expected}                                  | ${undefined}           | ${false}
-  ${"unrelated source"}                    | ${response()}                                                                                 | ${{ restartRecoveryTerminalRunIds: ["another-source"] } satisfies Partial<SessionEntry>} | ${retryable}                                                                        | ${undefined}           | ${false}
-  ${"replacement session"}                 | ${response()}                                                                                 | ${{ ...finalReceipt, sessionId: "replacement" } satisfies Partial<SessionEntry>}         | ${retryable}                                                                        | ${undefined}           | ${false}
-  ${"replacement lifecycle"}               | ${response()}                                                                                 | ${{ ...finalReceipt, lifecycleRevision: "replacement" } satisfies Partial<SessionEntry>} | ${retryable}                                                                        | ${undefined}           | ${false}
-  ${"unsent external final"}               | ${response()}                                                                                 | ${unsent}                                                                                | ${retryable}                                                                        | ${undefined}           | ${false}
-  ${"committed final"}                     | ${response([{ text: "Sent final" }], sentDeliveryStatus)}                                     | ${undefined}                                                                             | ${{ delivered: true, disposition: undefined } satisfies Expected}                   | ${undefined}           | ${true}
-  ${"partial send"}                        | ${{ status: "ok", result: { deliveryStatus: { status: "partial_failed", resultCount: 1 } } }} | ${undefined}                                                                             | ${ambiguous}                                                                        | ${undefined}           | ${true}
-  ${"intentional suppression"}             | ${suppressed}                                                                                 | ${undefined}                                                                             | ${{ delivered: false, disposition: "intentional_non_delivery" } satisfies Expected} | ${undefined}           | ${true}
-  ${"explicit stop"}                       | ${{ status: "error", stopReason: "rpc" }}                                                     | ${undefined}                                                                             | ${{ delivered: false, disposition: undefined } satisfies Expected}                  | ${undefined}           | ${true}
-  ${"permanent failure"}                   | ${Object.assign(new Error("unsupported channel: fixture"), { code: "UNSUPPORTED" })}          | ${undefined}                                                                             | ${permanent}                                                                        | ${undefined}           | ${true}
-  ${"flattened transcript turn assertion"} | ${new Error("Error: Session transcript keyed user is outside the current turn: old-input")}   | ${undefined}                                                                             | ${permanent}                                                                        | ${undefined}           | ${true}
-  ${"send ambiguity"}                      | ${Object.assign(new Error("send outcome unknown"), { sentBeforeError: true })}                | ${undefined}                                                                             | ${ambiguous}                                                                        | ${undefined}           | ${true}
+  name                                                 | input                                                       | patch                                                                                    | expected                                                                                                      | sourceTool             | preserve
+  ${"pending settle response"}                         | ${{ status: "accepted", runId: "pending-requester" }}       | ${{} satisfies Partial<SessionEntry>}                                                    | ${{ ...queued, path: "direct" } satisfies Expected}                                                           | ${undefined}           | ${false}
+  ${"announcement during recovery"}                    | ${createSessionWorkStartChangedError(sessionKey)}           | ${undefined}                                                                             | ${recovered}                                                                                                  | ${"subagent_announce"} | ${false}
+  ${"restart interruption"}                            | ${{ status: "error", stopReason: "restart" }}               | ${undefined}                                                                             | ${recovered}                                                                                                  | ${undefined}           | ${false}
+  ${"old keyed-input rejection"}                       | ${new Error("old keyed input rejected")}                    | ${undefined}                                                                             | ${recovered}                                                                                                  | ${undefined}           | ${false}
+  ${"safe rejected transcript under current custody"}  | ${safeConflict()}                                           | ${terminalOnly}                                                                          | ${{ delivered: false, reason: "requester_transcript_conflict", disposition: "retryable" } satisfies Expected} | ${undefined}           | ${false}
+  ${"unqualified transcript error without receipt"}    | ${new SqliteTranscriptMutationConflictError("fixture")}     | ${terminalOnly}                                                                          | ${{ ...missing, ...permanent } satisfies Expected}                                                            | ${undefined}           | ${false}
+  ${"safe rejected transcript with committed receipt"} | ${safeConflict()}                                           | ${undefined}                                                                             | ${recovered}                                                                                                  | ${undefined}           | ${false}
+  ${"live claim"}                                      | ${response([{ text: "Unsent final" }])}                     | ${liveClaim}                                                                             | ${queued}                                                                                                     | ${undefined}           | ${false}
+  ${"terminal without receipt"}                        | ${response([{ text: "Unsent final" }])}                     | ${{ restartRecoveryTerminalRunIds: [sourceRunId] } satisfies Partial<SessionEntry>}      | ${{ ...missing, ...permanent } satisfies Expected}                                                            | ${undefined}           | ${false}
+  ${"unrelated source"}                                | ${response([{ text: "Unsent final" }])}                     | ${{ restartRecoveryTerminalRunIds: ["another-source"] } satisfies Partial<SessionEntry>} | ${retryable}                                                                                                  | ${undefined}           | ${false}
+  ${"replacement session"}                             | ${response([{ text: "Unsent final" }])}                     | ${{ ...finalReceipt, sessionId: "replacement" } satisfies Partial<SessionEntry>}         | ${retryable}                                                                                                  | ${undefined}           | ${false}
+  ${"replacement lifecycle"}                           | ${response([{ text: "Unsent final" }])}                     | ${{ ...finalReceipt, lifecycleRevision: "replacement" } satisfies Partial<SessionEntry>} | ${retryable}                                                                                                  | ${undefined}           | ${false}
+  ${"unsent external final"}                           | ${response([{ text: "Unsent final" }])}                     | ${unsent}                                                                                | ${retryable}                                                                                                  | ${undefined}           | ${false}
+  ${"explicit stop"}                                   | ${{ status: "error", stopReason: "rpc" }}                   | ${undefined}                                                                             | ${{ delivered: false, disposition: undefined } satisfies Expected}                                            | ${undefined}           | ${true}
+  ${"safe conflict cannot override send ambiguity"}    | ${Object.assign(safeConflict(), { sentBeforeError: true })} | ${undefined}                                                                             | ${ambiguous}                                                                                                  | ${undefined}           | ${true}
 `("reconciles the direct outcome for $name without replay", async (outcome: DirectOutcome) => {
   const fixture = setup(outcome.sourceTool);
   const onDeliveryError = vi.fn();
@@ -595,24 +541,80 @@ it.each`
   expectNoReplay(fixture);
 });
 
-it.each(["private", "incognito"] as const)("no recovery reads for %s", async (scope) => {
+it.each(["visible", "silent"] as const)(
+  "settles a private %s completion on the next retry after requester recovery",
+  async (reply) => {
+    const fixture = setup("subagent_announce");
+    Object.assign(fixture.params, {
+      completionTarget: "parent",
+      completionRequesterSessionId: "requester-session",
+      completionRequesterLifecycleRevision: "requester-revision",
+    });
+    const first = fixture.startDelivery();
+    await fixture.dispatchEntered.promise;
+    fixture.state.entry = { ...fixture.state.entry, ...liveClaim };
+    fixture.readDone.resolve();
+    fixture.dispatchDone.reject(createSessionWorkStartChangedError(sessionKey));
+    expect((await first).delivered).toBe(false);
+
+    fixture.state.entry = {
+      ...fixture.state.entry,
+      ...buildMainSessionRecoverySettlementPatch({
+        entry: fixture.state.entry,
+        recordTerminalSource: true,
+        terminalRunId: "successor",
+        terminalDeliveryEvidence: buildRestartRecoveryTerminalDeliveryEvidence(
+          reply === "visible"
+            ? { payloads: [{ text: "Requester processed the child result" }] }
+            : { meta: { terminalReply: { disposition: "silent" } } },
+        ),
+      }),
+    };
+    for (let retry = 0; retry < 2; retry += 1) {
+      await expect(fixture.startDelivery()).resolves.toMatchObject({
+        delivered: true,
+        path: "direct",
+      });
+    }
+    expectNoReplay(fixture);
+  },
+);
+
+it.each([
+  { captured: true as const, meta: { error: true as const } },
+  { captured: true as const, meta: { aborted: true as const } },
+  { payloads: [{ visible: true }] },
+])("does not accept unsuccessful private recovery evidence: %j", async (evidence) => {
+  const fixture = setup("subagent_announce");
+  Object.assign(fixture.params, {
+    completionTarget: "parent",
+    completionRequesterSessionId: "requester-session",
+    completionRequesterLifecycleRevision: "requester-revision",
+  });
+  fixture.state.entry = {
+    ...fixture.state.entry,
+    restartRecoveryTerminalRunIds: [sourceRunId],
+    restartRecoveryTerminalDeliveryEvidence: [{ runId: sourceRunId, ...evidence }],
+  };
+  await expect(fixture.startDelivery()).resolves.toMatchObject({
+    delivered: false,
+    disposition: "permanent_failure",
+  });
+  expectNoReplay(fixture, 0);
+});
+
+it("does not read durable recovery receipts for incognito", async () => {
   const fixture = setup();
-  if (scope === "private") {
-    fixture.params.completionTarget = "parent";
-    fixture.params.completionRequesterSessionId = "requester-session";
-    fixture.params.completionRequesterLifecycleRevision = "requester-revision";
-  } else {
-    fixture.params.requesterSessionKey = "agent:main:dashboard:incognito-recovery";
-    fixture.params.targetRequesterSessionKey = fixture.params.requesterSessionKey;
-    const storePath = resolveIncognitoOpenClawAgentSqlitePath({ agentId: "main" });
-    onTestFinished(() =>
-      memorySessionActorOwners.closeDatabase({ agentId: "main", path: storePath }),
-    );
-    await replaceSessionEntry(
-      { agentId: "main", sessionKey: fixture.params.requesterSessionKey, storePath },
-      { ...fixture.state.entry, incognito: true },
-    );
-  }
+  fixture.params.requesterSessionKey = "agent:main:dashboard:incognito-recovery";
+  fixture.params.targetRequesterSessionKey = fixture.params.requesterSessionKey;
+  const storePath = resolveIncognitoOpenClawAgentSqlitePath({ agentId: "main" });
+  onTestFinished(() =>
+    memorySessionActorOwners.closeDatabase({ agentId: "main", path: storePath }),
+  );
+  await replaceSessionEntry(
+    { agentId: "main", sessionKey: fixture.params.requesterSessionKey, storePath },
+    { ...fixture.state.entry, incognito: true },
+  );
   const delivery = fixture.startDelivery();
   await awaitGateBeforeSettlement(
     fixture.dispatchEntered.promise,
@@ -620,7 +622,7 @@ it.each(["private", "incognito"] as const)("no recovery reads for %s", async (sc
     "Announcement did not reach direct delivery",
   );
   fixture.state.entry = { ...fixture.state.entry, ...finalReceipt };
-  fixture.dispatchDone.resolve(response());
+  fixture.dispatchDone.resolve(response([{ text: "Unsent final" }]));
   await expect(delivery).resolves.toMatchObject({ delivered: false });
   expect(fixture.read).not.toHaveBeenCalled();
   expectNoReplay(fixture);

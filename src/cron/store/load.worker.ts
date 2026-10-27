@@ -1,26 +1,31 @@
 import { getSqliteWorkerStateContext } from "../../infra/sqlite-worker-state-context.js";
-import { readConfigMachineStateRowInDatabase } from "../../state/config-machine-state.js";
 import type { OpenClawStateDatabase } from "../../state/openclaw-state-db-contract.js";
 import { runOpenClawStateWriteTransaction } from "../../state/openclaw-state-db.js";
 import { serializeCronLoadError } from "./load-error.js";
 import type { CronStoreWorkerOperations } from "./load-worker.types.js";
 import { loadCronStoreFromDatabase } from "./load.kernel.js";
-import { resolveSelectedCronJobsStorePath } from "./paths.js";
+import { requireCronStoreSelection, resolveCronStoreSelectionInDatabase } from "./paths.js";
 
-function resolveDefaultCronStoreKey(database: OpenClawStateDatabase): string {
-  const row = readConfigMachineStateRowInDatabase(database.db, "cron.store");
-  const value: unknown = row ? JSON.parse(row.value_json) : undefined;
-  return resolveSelectedCronJobsStorePath(
-    typeof value === "string" ? value.trim() : undefined,
-    getSqliteWorkerStateContext().environment,
-  );
+function resolveDefaultCronStoreKey(
+  database: OpenClawStateDatabase,
+  defaultStorePath?: string,
+): string {
+  return requireCronStoreSelection(
+    resolveCronStoreSelectionInDatabase(
+      database.db,
+      undefined,
+      getSqliteWorkerStateContext().environment,
+      defaultStorePath,
+    ),
+  ).storeKey;
 }
 
 export function loadMutableCronStoreInWorker(
   database: OpenClawStateDatabase,
   selectedStoreKey: string | undefined,
+  defaultStorePath?: string,
 ): CronStoreWorkerOperations["cron.loadMutable"]["output"] {
-  const storeKey = selectedStoreKey ?? resolveDefaultCronStoreKey(database);
+  const storeKey = selectedStoreKey ?? resolveDefaultCronStoreKey(database, defaultStorePath);
   let repairCommits = 0;
   try {
     const loaded = loadCronStoreFromDatabase(database.db, storeKey, {

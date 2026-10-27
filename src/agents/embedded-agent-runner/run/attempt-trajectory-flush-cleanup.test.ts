@@ -8,11 +8,13 @@ describe("embedded attempt trajectory flush cleanup", () => {
   };
 
   beforeEach(() => {
+    vi.stubEnv("OPENCLAW_TRAJECTORY_FLUSH_TIMEOUT_MS", "5");
     vi.useFakeTimers();
     log.warn.mockClear();
   });
 
   afterEach(() => {
+    vi.unstubAllEnvs();
     vi.useRealTimers();
   });
 
@@ -32,7 +34,6 @@ describe("embedded attempt trajectory flush cleanup", () => {
         flush,
       },
       log,
-      timeoutMs: 5,
     });
 
     await vi.advanceTimersByTimeAsync(4);

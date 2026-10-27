@@ -1,3 +1,4 @@
+import assert from "node:assert/strict";
 import fs from "node:fs";
 import { DatabaseSync } from "node:sqlite";
 import { setImmediate } from "node:timers/promises";
@@ -35,7 +36,7 @@ import {
 import { assignSessionOwner } from "./session-accessor.sqlite-owner.js";
 import { listSessionParticipantsReadOnly } from "./session-accessor.sqlite-participant-read.js";
 import { recordSessionParticipant } from "./session-accessor.sqlite-participants.native.js";
-import { appendTranscriptMessageSync } from "./session-accessor.sqlite-transcript-write.js";
+import { appendTranscriptMessageSync } from "./session-accessor.sqlite-transcript-write.kernel.js";
 import { setCanonicalSqliteSessionMainKey } from "./session-canonical-key.js";
 import { assertSessionEntryCurrentAdmission } from "./session-entry-current-admission.js";
 import {
@@ -101,9 +102,7 @@ const invalidateLineage = () => {
 };
 function sourceFor(native: OpenClawAgentReadOnlyDatabase): SessionEntryCurrentSource {
   const identity = readOpenClawAgentDatabaseIdentity(native);
-  if (typeof identity.identity !== "string") {
-    throw new Error("Expected the fixture's durable database identity");
-  }
+  assert(typeof identity.identity === "string", "Expected the fixture's durable database identity");
   return {
     agentId: native.agentId,
     path: native.path,
@@ -120,9 +119,7 @@ it.each(["native", "worker"] as const)(
       { ...scope, sessionId: "session-1" },
       { message: { role: "user", content: "receipt source" } },
     );
-    if (!appended.ok || !appended.value?.anchor) {
-      throw new Error("Expected committed transcript anchor");
-    }
+    assert(appended.ok && appended.value?.anchor, "Expected committed transcript anchor");
     const anchor = appended.value.anchor;
     const onCommitted = vi.fn();
     const options = {
@@ -313,6 +310,7 @@ it.each(["fresh", "sibling", "same-connection"] as const)(
     const connection = fresh ?? requireNativeSqliteDatabase(database.db);
     const original = {
       sessionId: "session-1",
+      executionPolicy: {},
       lifecycleRevision: undefined,
       lifecycleRunId: undefined,
       activeWriterRunId: undefined,
@@ -371,6 +369,7 @@ it("preserves parser values and last duplicate owner fields through native admis
   const entry = currentFacts(database);
   const expected = {
     sessionId: "session-1",
+    executionPolicy: {},
     lifecycleRevision: 42,
     deviceFolder: { deviceId: "paired-host", path: "/home/example/project" },
     lifecycleRunId: null,

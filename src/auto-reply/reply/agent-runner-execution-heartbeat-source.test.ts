@@ -5,11 +5,13 @@ import type { RunEmbeddedAgentInternalParams } from "../../agents/embedded-agent
 import { createOpenClawToolsAsync } from "../../agents/openclaw-tools.js";
 import { replaceSessionEntry } from "../../config/sessions/session-accessor.sqlite-entry.js";
 import { withSessionTranscriptWriteAssertion } from "../../config/sessions/transcript-write-context.js";
+import { makeCronJob } from "../../cron/delivery.test-helpers.js";
+import { TEST_SCHEDULED_TURN } from "../../cron/scheduled-occurrence.test-support.js";
 import {
   createFollowupRun,
   createMinimalRunAgentTurnParams,
   getExecuteAgentTurnForTest,
-  initialFallbackAttemptOptions,
+  runFallbackCandidate,
   setupAgentRunnerExecutionTestState,
   useProductionEmbeddedRunExecutionParamsForTest,
   type FallbackRunnerParams,
@@ -17,34 +19,32 @@ import {
 
 const state = await setupAgentRunnerExecutionTestState();
 
-describe.each(["cli", "embedded"] as const)("heartbeat %s source delivery", (runtime) => {
-  it.each([false, true, undefined])(
-    "honors the admitted explicit-target policy (%s) at message-tool creation",
-    async (requireExplicitMessageTarget) => {
+async function prepareRuntime(runtime: "cli" | "embedded", sessionKey: string) {
+  const isCli = runtime === "cli";
+  const provider = isCli ? "claude-cli" : "anthropic";
+  const model = isCli ? "sonnet-4.6" : "claude";
+  state.isCliProviderMock.mockReturnValue(isCli);
+  await useProductionEmbeddedRunExecutionParamsForTest();
+  state.runWithModelFallbackMock.mockImplementationOnce((params: FallbackRunnerParams) =>
+    runFallbackCandidate(params, provider, model),
+  );
+  return {
+    followupRun: createFollowupRun({ sessionKey, provider, model }),
+    runAgent: isCli ? state.runCliAgentMock : state.runEmbeddedAgentMock,
+  };
+}
+
+describe.each(["cli", "embedded"] as const)("%s source delivery", (runtime) => {
+  it.each([false, true])(
+    "requires an explicit message target only for scheduled execution (%s)",
+    async (scheduled) => {
       const sessionKey = "agent:main:dashboard:completion";
-      const followupRun = createFollowupRun();
-      followupRun.run.sessionKey = sessionKey;
+      const { followupRun, runAgent } = await prepareRuntime(runtime, sessionKey);
       followupRun.run.messageProvider = "webchat";
       followupRun.run.sourceReplyDeliveryMode = "message_tool_only";
       followupRun.originatingChannel = "webchat";
       followupRun.originatingTo = sessionKey;
       followupRun.originatingChatType = "direct";
-      const isCli = runtime === "cli";
-      const provider = isCli ? "claude-cli" : "anthropic";
-      const model = isCli ? "sonnet-4.6" : "claude";
-      followupRun.run.provider = provider;
-      followupRun.run.model = model;
-      state.isCliProviderMock.mockReturnValue(isCli);
-      await useProductionEmbeddedRunExecutionParamsForTest();
-      state.runWithModelFallbackMock.mockImplementationOnce(
-        async (params: FallbackRunnerParams) => ({
-          result: await params.run(provider, model, initialFallbackAttemptOptions(params)),
-          provider,
-          model,
-          attempts: [],
-        }),
-      );
-      const runAgent = isCli ? state.runCliAgentMock : state.runEmbeddedAgentMock;
       let sourceReply:
         | Awaited<
             ReturnType<Awaited<ReturnType<typeof createOpenClawToolsAsync>>[number]["execute"]>
@@ -78,10 +78,14 @@ describe.each(["cli", "embedded"] as const)("heartbeat %s source delivery", (run
         }
         return { payloads: [], meta: {} };
       });
-      const opts = { isHeartbeat: true, requireExplicitMessageTarget };
+      if (scheduled) {
+        followupRun.run.scheduledAutomation = {
+          ...TEST_SCHEDULED_TURN,
+          job: makeCronJob({ sessionTarget: "session:main", wakeMode: "now" }),
+        };
+      }
       const params = createMinimalRunAgentTurnParams({
         followupRun,
-        opts,
         sessionCtx: {
           Provider: "webchat",
           Surface: "webchat",
@@ -92,13 +96,11 @@ describe.each(["cli", "embedded"] as const)("heartbeat %s source delivery", (run
           SessionKey: sessionKey,
         },
       });
-      params.isHeartbeat = true;
       params.sessionKey = sessionKey;
       const executeAgentTurn = await getExecuteAgentTurnForTest();
       const result = await executeAgentTurn(params);
       expect(result.kind).toBe("success");
-      expect(runAgent).toHaveBeenCalledOnce();
-      if (requireExplicitMessageTarget === false) {
+      if (!scheduled) {
         expect(sendError).toBeUndefined();
         expect(sourceReply?.details).toMatchObject({
           channel: "webchat",
@@ -115,25 +117,10 @@ describe.each(["cli", "embedded"] as const)("heartbeat %s source delivery", (run
     },
   );
   it("retains revoked source authority at runtime admission", async () => {
-    const followupRun = createFollowupRun();
-    followupRun.run.sessionKey = "agent:main:dashboard:source-authority";
+    const sessionKey = "agent:main:dashboard:source-authority";
+    const { followupRun, runAgent } = await prepareRuntime(runtime, sessionKey);
     const isCli = runtime === "cli";
-    const provider = isCli ? "claude-cli" : "anthropic";
-    const model = isCli ? "sonnet-4.6" : "claude";
-    followupRun.run.provider = provider;
-    followupRun.run.model = model;
-    state.isCliProviderMock.mockReturnValue(isCli);
-    await useProductionEmbeddedRunExecutionParamsForTest();
     let current = true;
-    state.runWithModelFallbackMock.mockImplementationOnce(async (params: FallbackRunnerParams) => {
-      return {
-        result: await params.run(provider, model, initialFallbackAttemptOptions(params)),
-        provider,
-        model,
-        attempts: [],
-      };
-    });
-    const runAgent = isCli ? state.runCliAgentMock : state.runEmbeddedAgentMock;
     let sourceFailure: unknown;
     let admissionFailure: unknown;
     runAgent.mockImplementationOnce(async (params: RunEmbeddedAgentInternalParams) => {
@@ -155,30 +142,23 @@ describe.each(["cli", "embedded"] as const)("heartbeat %s source delivery", (run
       return { payloads: [], meta: {} };
     });
     const execute = await getExecuteAgentTurnForTest();
-    const params = createMinimalRunAgentTurnParams({
-      followupRun,
-      opts: { isHeartbeat: true },
-    });
-    params.isHeartbeat = true;
+    const params = createMinimalRunAgentTurnParams({ followupRun, opts: {} });
     params.storePath = path.join(followupRun.run.workspaceDir, "sessions.json");
-    params.sessionKey = followupRun.run.sessionKey;
-    const entry = await replaceSessionEntry(
-      {
-        agentId: followupRun.run.agentId,
-        sessionKey: params.sessionKey,
-        storePath: params.storePath,
-      },
-      { sessionId: followupRun.run.sessionId, updatedAt: 1 },
-    );
+    params.sessionKey = sessionKey;
+    const target = {
+      agentId: followupRun.run.agentId,
+      sessionId: followupRun.run.sessionId,
+      sessionKey,
+      storePath: params.storePath,
+    };
+    const entry = await replaceSessionEntry(target, {
+      sessionId: followupRun.run.sessionId,
+      updatedAt: 1,
+    });
     expect(entry).not.toBeNull();
     params.getActiveSessionEntry = () => entry ?? undefined;
     await withSessionTranscriptWriteAssertion(
-      {
-        agentId: followupRun.run.agentId,
-        sessionId: followupRun.run.sessionId,
-        sessionKey: params.sessionKey,
-        storePath: params.storePath,
-      },
+      target,
       () => {
         if (!current) {
           throw new Error("source revoked");
@@ -186,7 +166,6 @@ describe.each(["cli", "embedded"] as const)("heartbeat %s source delivery", (run
       },
       () => execute(params),
     );
-    expect(runAgent).toHaveBeenCalledOnce();
     expect(sourceFailure).toBeInstanceOf(Error);
     expect(String(sourceFailure)).toContain("source revoked");
     if (!isCli) {

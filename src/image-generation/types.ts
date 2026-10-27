@@ -14,11 +14,11 @@ export type GeneratedImageAsset = {
 
 export type ImageGenerationResolution = "1K" | "2K" | "4K";
 
-export type ImageGenerationQuality = "low" | "medium" | "high" | "xhigh" | "max" | "auto";
+type ImageGenerationQuality = "low" | "medium" | "high" | "xhigh" | "max" | "auto";
 
 export type ImageGenerationOutputFormat = "png" | "jpeg" | "webp";
 
-export type ImageGenerationBackground = "transparent" | "opaque" | "auto";
+type ImageGenerationBackground = "transparent" | "opaque" | "auto";
 
 export type ImageGenerationOpenAIBackground = ImageGenerationBackground;
 
@@ -33,16 +33,8 @@ export type ImageGenerationProviderOptions = Record<string, unknown> & {
   openai?: ImageGenerationOpenAIOptions;
 };
 
-type ImageGenerationIgnoredOverrideKey =
-  | "size"
-  | "aspectRatio"
-  | "resolution"
-  | "quality"
-  | "outputFormat"
-  | "background";
-
 export type ImageGenerationIgnoredOverride = {
-  key: ImageGenerationIgnoredOverrideKey;
+  key: "size" | "aspectRatio" | "resolution" | "quality" | "outputFormat" | "background";
   value: string;
 };
 
@@ -62,6 +54,8 @@ export type ImageGenerationRequest = {
   agentDir?: string;
   authStore?: AuthProfileStore;
   timeoutMs?: number;
+  /** Cancels image generation and any result downloads owned by this request. */
+  signal?: AbortSignal;
   count?: number;
   size?: string;
   aspectRatio?: string;
@@ -87,31 +81,6 @@ type ImageGenerationModeCapabilities = {
   supportsResolution?: boolean;
 };
 
-type ImageGenerationEditCapabilities = ImageGenerationModeCapabilities & {
-  enabled: boolean;
-  maxInputImages?: number;
-  maxInputImagesByModel?: Readonly<Record<string, number>>;
-  maxInputImagesByModelPrefix?: Readonly<Record<string, number>>;
-};
-
-type ImageGenerationGeometryCapabilities = {
-  sizes?: string[];
-  sizesByModel?: Record<string, string[]>;
-  aspectRatios?: string[];
-  aspectRatiosByModel?: Record<string, string[]>;
-  resolutions?: ImageGenerationResolution[];
-  resolutionsByModel?: Record<string, ImageGenerationResolution[]>;
-};
-
-type ImageGenerationOutputCapabilities = {
-  qualities?: ImageGenerationQuality[];
-  qualitiesByModel?: Record<string, ImageGenerationQuality[]>;
-  formats?: ImageGenerationOutputFormat[];
-  formatsByModel?: Record<string, ImageGenerationOutputFormat[]>;
-  backgrounds?: ImageGenerationBackground[];
-  backgroundsByModel?: Record<string, ImageGenerationBackground[]>;
-};
-
 export type ImageGenerationNormalization = {
   size?: MediaNormalizationEntry<string>;
   aspectRatio?: MediaNormalizationEntry<string>;
@@ -120,9 +89,28 @@ export type ImageGenerationNormalization = {
 
 export type ImageGenerationProviderCapabilities = {
   generate: ImageGenerationModeCapabilities;
-  edit: ImageGenerationEditCapabilities;
-  geometry?: ImageGenerationGeometryCapabilities;
-  output?: ImageGenerationOutputCapabilities;
+  edit: ImageGenerationModeCapabilities & {
+    enabled: boolean;
+    maxInputImages?: number;
+    maxInputImagesByModel?: Readonly<Record<string, number>>;
+    maxInputImagesByModelPrefix?: Readonly<Record<string, number>>;
+  };
+  geometry?: {
+    sizes?: string[];
+    sizesByModel?: Record<string, string[]>;
+    aspectRatios?: string[];
+    aspectRatiosByModel?: Record<string, string[]>;
+    resolutions?: ImageGenerationResolution[];
+    resolutionsByModel?: Record<string, ImageGenerationResolution[]>;
+  };
+  output?: {
+    qualities?: ImageGenerationQuality[];
+    qualitiesByModel?: Record<string, ImageGenerationQuality[]>;
+    formats?: ImageGenerationOutputFormat[];
+    formatsByModel?: Record<string, ImageGenerationOutputFormat[]>;
+    backgrounds?: ImageGenerationBackground[];
+    backgroundsByModel?: Record<string, ImageGenerationBackground[]>;
+  };
 };
 
 export type ImageGenerationProvider = {

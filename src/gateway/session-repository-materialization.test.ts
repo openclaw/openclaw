@@ -29,6 +29,7 @@ import * as secretsRuntime from "../secrets/runtime-state.js";
 import { resolveIncognitoOpenClawAgentSqlitePath } from "../state/openclaw-agent-db.paths.js";
 import { getSessionRepositoryWorkspaceStore } from "../state/session-repository-workspaces.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
+import { NODE_WORKSPACE_GIT_HISTORY_SCRIPT } from "../worker/node-workspace-transfer-protocol.js";
 import * as githubOAuthLifecycle from "./github-oauth-lifecycle.js";
 import { captureGitHubPublicationWorkspaceSnapshot } from "./github-publication-git-transport.js";
 import { REMOTE_GITHUB_PUBLICATION_SNAPSHOT_JS } from "./github-repository-publication-snapshot.js";
@@ -37,6 +38,7 @@ import * as repositoryGitHubIdentity from "./worker-environments/repository-gith
 import { stageSessionRepositoryCheckpoint } from "./worker-environments/session-repository-checkpoints.js";
 import { captureWorkspaceManifest } from "./worker-environments/workspace-manifest-worker.js";
 import { serializeWorkerWorkspaceManifest } from "./worker-environments/workspace-manifest.js";
+import type { WorkerWorkspaceGitHistory } from "./worker-environments/workspace-result-inventory.js";
 
 const exec = promisify(execFile);
 const git = async (cwd: string, args: string[]) =>
@@ -269,6 +271,7 @@ it.each([
   "publication unavailable",
   "requested topic",
   "unbound incognito",
+  "worker commits",
 ] as const)("retains only committed materialization: %s", async (outcome) => {
   // Local recovery fixtures exercise retained state; identity admission is covered above.
   vi.spyOn(repositoryGitHubIdentity, "prepareRepositoryGitHubIdentity").mockImplementation(
@@ -305,6 +308,37 @@ it.each([
     const base = await captureWorkspaceManifest({ root: source, baseCommit });
     const remote = state.path("remote");
     await exec("git", ["clone", "--", source, remote]);
+    let workerHistory: { gitHistory: WorkerWorkspaceGitHistory; gitPackPath: string } | undefined;
+    if (outcome === "worker commits") {
+      await fsp.writeFile(path.join(remote, "committed.txt"), "worker commit\n");
+      await git(remote, ["add", "committed.txt"]);
+      await git(remote, [
+        "-c",
+        "user.name=Fixture",
+        "-c",
+        "user.email=fixture@example.invalid",
+        "-c",
+        "commit.gpgSign=false",
+        "commit",
+        "-m",
+        "worker commit",
+      ]);
+      const gitPackPath = state.path("worker.pack");
+      workerHistory = {
+        gitPackPath,
+        gitHistory: JSON.parse(
+          (
+            await exec(process.execPath, [
+              "-e",
+              NODE_WORKSPACE_GIT_HISTORY_SCRIPT,
+              remote,
+              baseCommit,
+              gitPackPath,
+            ])
+          ).stdout,
+        ),
+      };
+    }
     await fsp.writeFile(path.join(remote, "published[1].ignored"), "publishable\n");
     await fsp.writeFile(path.join(remote, "retained.ignored"), "recovery only\n");
     await git(remote, ["--literal-pathspecs", "add", "-f", "--", "published[1].ignored"]);
@@ -344,6 +378,7 @@ it.each([
       workspaceId: repository.workspaceId,
       expectedRevision: repository.revision,
       stagingRoot: remote,
+      ...workerHistory,
       ...(publicationDigest ? { publicationStagingRoot, publicationDigest } : {}),
       baseManifestRaw: serializeWorkerWorkspaceManifest(base.manifest),
       currentManifestRaw: serializeWorkerWorkspaceManifest(current.manifest),
@@ -433,7 +468,12 @@ it.each([
         await expect(fsp.stat(path.join(worktree.path, "deleted.txt"))).rejects.toMatchObject({
           code: "ENOENT",
         });
-        expect(await git(worktree.path, ["rev-parse", "HEAD"])).toBe(baseCommit);
+        expect(await git(worktree.path, ["rev-parse", "HEAD"])).toBe(
+          workerHistory?.gitHistory.headCommit ?? baseCommit,
+        );
+        if (workerHistory) {
+          expect(await git(worktree.path, ["show", "HEAD:committed.txt"])).toBe("worker commit");
+        }
         expect(await readFile(worktree.path, "published[1].ignored")).toBe("publishable\n");
         expect(await readFile(worktree.path, "retained.ignored")).toBe("recovery only\n");
         expect(await git(worktree.path, ["ls-files", "--", "published[1].ignored"])).toBe(

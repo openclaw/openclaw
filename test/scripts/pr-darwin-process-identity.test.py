@@ -25,7 +25,7 @@ RUNNER = ROOT / 'scripts/pr-lib/process-group-runner.mjs'
 spec = importlib.util.spec_from_file_location('pr_identity', PROVIDER)
 identity = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(identity)
-BASH = shutil.which('bash')
+BASH = '/bin/bash' if sys.platform == 'darwin' else shutil.which('bash')
 NODE = shutil.which('node')
 GIT = shutil.which('git')
 
@@ -140,7 +140,7 @@ class LockTests(unittest.TestCase):
         self.repo = self.root/'repo'; self.repo.mkdir()
         self.git('init', '-q', '-b', 'main')
         self.sources = self.root/'source'/'pr-lib';self.sources.mkdir(parents=True)
-        for file in (LOCK, RUNNER, PROVIDER, LOCK.with_name('host-tools.sh'), LOCK.with_name('github.sh'), LOCK.with_name('github.mjs'), LOCK.with_name('gh-api-preflight.mjs')):
+        for file in (LOCK, RUNNER, RUNNER.with_name('materialized-anchor.mjs'), PROVIDER, LOCK.with_name('host-tools.sh'), LOCK.with_name('github.sh'), LOCK.with_name('github.mjs'), LOCK.with_name('gh-api-preflight.mjs')):
             shutil.copyfile(file,self.sources/file.name)
         library = self.sources.parent/'lib';library.mkdir()
         # Preserve the supervisor's eager script imports without copying an app graph.
@@ -225,6 +225,25 @@ class LockTests(unittest.TestCase):
         self.assertFalse(self.exists())
         self.assertFalse((self.repo/'node_modules').exists())
 
+    @unittest.skipUnless(sys.platform == 'darwin', 'Darwin interpreter compatibility')
+    def test_helpers_use_system_bash_independently_of_path(self):
+        tools = self.root/'tools'; tools.mkdir()
+        intercepted = self.root/'intercepted'
+        bash = tools/'bash'
+        self.env['PATH'] = str(tools)+os.pathsep+self.env['PATH']
+        for helper in ('pr-identity-preflight', 'operation-lock-release'):
+            with self.subTest(helper=helper):
+                # The operation uses absolute BASH. Reject just one supervisor
+                # helper at a time so preflight cannot hide a release regression.
+                bash.write_text('#!/bin/sh\nif [ "$3" = "'+helper+'" ]; then\n'
+                                '  printf "%s\\n" "$3" > "'+str(intercepted)+'"\n'
+                                '  exit 97\nfi\nexec /bin/bash "$@"\n')
+                bash.chmod(0o755)
+                self.complete(self.supervise('acquire_pr_operation_lock 42'), 0)
+                self.assertFalse(intercepted.exists())
+                self.assertFalse(self.exists())
+                self.assertFalse(list(self.root.glob('openclaw-pr-lock-release-*')))
+
     def test_anchor_cleanup_after_clean_completion_preserves_dependency_target(self):
         p, anchor, outside = self.supervise_anchor('acquire_pr_operation_lock 42')
         self.complete(p, 0)
@@ -249,11 +268,11 @@ class LockTests(unittest.TestCase):
         self.assertFalse(anchor.exists())
         self.assertTrue((outside/'preserved').exists())
 
-    def test_anchor_retained_after_drained_operation_failure(self):
+    def test_anchor_retired_after_drained_operation_failure(self):
         p, anchor, _ = self.supervise_anchor('acquire_pr_operation_lock 42\nexit 7')
         self.complete(p, 7)
         self.assertFalse(self.exists())
-        self.assertTrue(anchor.exists())
+        self.assertFalse(anchor.exists())
 
     def test_anchor_retained_without_creation_authority(self):
         for handoff in ('missing', 'closed', 'wrong-pid', 'foreign'):
@@ -279,7 +298,7 @@ class LockTests(unittest.TestCase):
         self.assertTrue(original.exists())
         self.assertEqual((anchor/'replacement').read_text(), 'foreign bytes\n')
 
-    def test_anchor_retained_after_interruption(self):
+    def test_anchor_retired_after_interruption(self):
         ready = self.root/'ready'
         p, anchor, _ = self.supervise_anchor('acquire_pr_operation_lock 42\n: > "'+str(ready)+'"\nsleep 30')
         deadline = time.monotonic()+5
@@ -287,7 +306,7 @@ class LockTests(unittest.TestCase):
             self.assertIsNone(p.poll()); self.assertLess(time.monotonic(), deadline); time.sleep(.02)
         p.send_signal(signal.SIGTERM)
         self.complete(p, 128+signal.SIGTERM)
-        self.assertTrue(anchor.exists())
+        self.assertFalse(anchor.exists())
         self.assertTrue(self.exists())
 
     @unittest.skipUnless(sys.platform == 'darwin', 'Darwin sandbox')

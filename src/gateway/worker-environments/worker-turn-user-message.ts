@@ -1,20 +1,31 @@
+import { AsyncLocalStorage } from "node:async_hooks";
+import type {
+  WorkerTurnAdmissionParams,
+  WorkerTurnAdmissionResult,
+} from "../../../packages/gateway-protocol/src/schema/worker-turn-admission.js";
 import { buildEmbeddedRunBlockedResult } from "../../agents/embedded-agent-runner/run/blocked-run-result.js";
 import {
   buildAgentRunBlockedUserMessage,
   runBeforeAgentRunGate,
 } from "../../agents/harness/before-agent-run.js";
 import { buildAgentHookContext } from "../../agents/harness/hook-context.js";
+import type { PreparedModelRuntimeSnapshot } from "../../agents/prepared-model-runtime.js";
 import type { BoundAgentRunSessionTarget } from "../../agents/run-session-target.types.js";
 import type { SessionPlacementTurnParams } from "../../agents/session-placement-admission.js";
 import { convertToLlm } from "../../agents/sessions/messages.js";
 import { SessionTranscriptMessageCommittedError } from "../../agents/sessions/session-manager-message-error.js";
 import { withSessionManagerWrite } from "../../agents/sessions/session-manager-write-admission.js";
 import { SessionManager } from "../../agents/sessions/session-manager.js";
-import type { SessionSourceAssertion } from "../../config/sessions/session-source-authority.js";
+import {
+  composeSessionSourceAssertion,
+  type SessionSourceAssertion,
+} from "../../config/sessions/session-source-authority.js";
 import { withoutSessionTranscriptReadFence } from "../../config/sessions/session-transcript-read-fence.js";
 import { withSessionTranscriptWriteAssertion } from "../../config/sessions/transcript-write-context.js";
 import { buildAgentHookContextChannelFields } from "../../plugins/hook-agent-context.js";
 import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
+import type { PluginHookBeforeAgentRunEvent } from "../../plugins/hook-types.js";
+import { withPluginRuntimeGenerationScope } from "../../plugins/runtime/generation-scope.js";
 import { readSessionTranscriptRunId } from "../../sessions/transcript-events.js";
 import { buildPersistedUserTurnMessage } from "../../sessions/user-turn-transcript.js";
 import type { prepareWorkerTurnMedia } from "./worker-turn-media.js";
@@ -77,6 +88,7 @@ export async function persistWorkerTurnUserMessage(params: {
 
 type WorkerTurnInputParams = {
   turn: SessionPlacementTurnParams;
+  cwd: string;
   transcriptTarget: BoundAgentRunSessionTarget;
   identity: { agentId: string; sessionId: string; sessionKey: string };
   modelRef: { provider: string; model: string };
@@ -86,32 +98,144 @@ type WorkerTurnInputParams = {
   onBlocked: () => void;
 };
 
-export async function gateWorkerTurnInput({
-  turn,
-  transcriptTarget,
-  identity,
-  modelRef,
-  startedAt,
-  assertCurrent,
-  assertSourceCurrent,
-  onBlocked,
-}: WorkerTurnInputParams) {
+async function persistWorkerTurnRecordedInput(
+  params: Pick<WorkerTurnInputParams, "turn" | "transcriptTarget" | "assertCurrent"> & {
+    cwd: string;
+  },
+) {
+  const { turn, transcriptTarget, assertCurrent, cwd } = params;
+  const recorder = turn.userTurnTranscriptRecorder;
+  if (recorder && turn.suppressNextUserMessagePersistence !== true && !recorder.hasPersisted()) {
+    const persisted = await recorder.persistApproved({ storageTarget: transcriptTarget, cwd });
+    if (persisted) {
+      turn.onUserMessagePersisted?.(persisted.message);
+    }
+    assertCurrent();
+  }
+}
+
+export async function persistWorkerTurnInput(
+  params: Parameters<typeof persistWorkerTurnUserMessage>[0] & {
+    turn: SessionPlacementTurnParams;
+    cwd: string;
+    assertCurrent: () => void;
+    workerAdmission: boolean;
+    userMessageAlreadyPersisted: boolean;
+    baseLeafId: string | null;
+  },
+) {
+  await persistWorkerTurnRecordedInput(params);
+  const recorder = params.turn.userTurnTranscriptRecorder;
+  if (recorder && params.workerAdmission && !params.userMessageAlreadyPersisted) {
+    return recorder.getAdmissionReceipt()?.entryId ?? params.baseLeafId;
+  }
+  return !recorder && !params.userMessageAlreadyPersisted
+    ? await persistWorkerTurnUserMessage(params)
+    : params.baseLeafId;
+}
+
+export function createWorkerTurnInputAdmission(
+  params: WorkerTurnInputParams & {
+    runtime: PreparedModelRuntimeSnapshot;
+    preparedInput: Pick<Awaited<ReturnType<typeof prepareWorkerTurnMedia>>, "prompt" | "history">;
+    persist: () => Promise<string | null>;
+    onBlockedResult: (result: NonNullable<Awaited<ReturnType<typeof gateWorkerTurnInput>>>) => void;
+  },
+) {
+  // The RPC retains the launching turn's transcript and plugin scopes.
+  const runAdmission = AsyncLocalStorage.snapshot();
+  const { prompt, history } = params.preparedInput;
+  const preparedInput = {
+    prompt:
+      typeof prompt === "string"
+        ? prompt
+        : prompt
+            .filter((part) => part.type === "text")
+            .map((part) => part.text)
+            .join("\n"),
+    messages: convertToLlm(history),
+  };
+  let started = false;
+  return (
+    request: WorkerTurnAdmissionParams,
+    assertRpcCurrent: () => void,
+    recordApproval: () => void,
+  ): Promise<WorkerTurnAdmissionResult> =>
+    runAdmission(async (): Promise<WorkerTurnAdmissionResult> => {
+      if (started) {
+        throw new Error("Worker turn input admission was already requested");
+      }
+      started = true;
+      const assertCurrent = composeSessionSourceAssertion([params.assertCurrent, assertRpcCurrent]);
+      assertCurrent();
+      return await withSessionTranscriptWriteAssertion(
+        params.transcriptTarget,
+        composeSessionSourceAssertion([params.assertSourceCurrent, assertCurrent]),
+        async () => {
+          const blocked = await withPluginRuntimeGenerationScope(params.runtime, () =>
+            // Host-local prompt bytes cannot be verified here. All other event fields
+            // come from the Gateway; plugins must not trust systemPrompt as authority.
+            gateWorkerTurnInput(
+              { ...params, assertCurrent },
+              {
+                ...preparedInput,
+                systemPrompt: request.systemPrompt,
+              },
+            ),
+          );
+          assertCurrent();
+          if (blocked) {
+            params.onBlockedResult(blocked);
+            return { outcome: "block" };
+          }
+          recordApproval();
+          const baseLeafId = await params.persist();
+          assertCurrent();
+          params.turn.userTurnTranscriptRecorder?.markSentToProvider?.();
+          return { outcome: "allow", baseLeafId };
+        },
+      );
+    });
+}
+
+export async function gateWorkerTurnInput(
+  {
+    turn,
+    transcriptTarget,
+    identity,
+    modelRef,
+    startedAt,
+    assertCurrent,
+    assertSourceCurrent,
+    onBlocked,
+  }: WorkerTurnInputParams,
+  event?: Pick<PluginHookBeforeAgentRunEvent, "prompt" | "systemPrompt" | "messages">,
+) {
   const recorder = turn.userTurnTranscriptRecorder;
   const runner = getGlobalHookRunner();
   if (!runner?.hasHooks("before_agent_run")) {
     return undefined;
   }
-  const history = await SessionManager.openModelContextAsync(transcriptTarget, {
-    admission: recorder?.getAdmissionReceipt(),
-    signal: turn.abortSignal,
-  });
+  const input: Pick<PluginHookBeforeAgentRunEvent, "prompt" | "systemPrompt" | "messages"> =
+    event ?? {
+      prompt: turn.prompt,
+      messages: convertToLlm(
+        (
+          await SessionManager.openModelContextAsync(transcriptTarget, {
+            admission: recorder?.getAdmissionReceipt(),
+            signal: turn.abortSignal,
+          })
+        ).buildSessionContext().messages,
+      ),
+    };
   assertCurrent();
   const channel = buildAgentHookContextChannelFields(turn);
   const block = await runBeforeAgentRunGate(
     runner,
     {
-      prompt: turn.prompt,
-      messages: convertToLlm(history.buildSessionContext().messages),
+      prompt: input.prompt,
+      messages: input.messages,
+      ...(input.systemPrompt === undefined ? {} : { systemPrompt: input.systemPrompt }),
       channelId: channel.channelId,
       accountId: turn.agentAccountId,
       senderId: turn.senderId ?? undefined,
@@ -165,12 +289,18 @@ export async function gateWorkerTurnInput({
   });
 }
 
-export async function readWorkerTurnInputContext(params: WorkerTurnInputParams) {
+export async function readWorkerTurnInputContext(
+  params: WorkerTurnInputParams,
+  pendingAdmission = false,
+) {
+  if (!pendingAdmission) {
+    await persistWorkerTurnRecordedInput(params);
+  }
   const { turn, transcriptTarget, modelRef, assertCurrent } = params;
   const recorder = turn.userTurnTranscriptRecorder;
   const receipt = recorder?.getAdmissionReceipt();
   const admission = receipt ? { ...receipt } : undefined;
-  if (recorder && !admission) {
+  if (recorder && !admission && !pendingAdmission) {
     throw new Error("Cloud worker turn has no readable canonical user admission");
   }
   const userMessageAlreadyPersisted =

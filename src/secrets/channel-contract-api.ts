@@ -141,33 +141,6 @@ function recordOwnsChannel(record: PluginManifestRecord, channelId: string): boo
   );
 }
 
-function listChannelSecretContractRecords(params: {
-  channelId: string;
-  config: OpenClawConfig;
-  env: NodeJS.ProcessEnv;
-  loadablePluginOrigins?: ReadonlyMap<string, PluginOrigin>;
-}): PluginManifestRecord[] {
-  const manifestRegistry = resolveConfigWidePluginManifestRegistry({
-    config: params.config,
-    env: params.env,
-  });
-  return manifestRegistry.plugins
-    .filter((record) => record.origin !== "bundled")
-    .filter((record) => recordOwnsChannel(record, params.channelId))
-    .filter(
-      (record) => !params.loadablePluginOrigins || params.loadablePluginOrigins.has(record.id),
-    )
-    .toSorted((left, right) => {
-      if (left.id === params.channelId && right.id !== params.channelId) {
-        return -1;
-      }
-      if (right.id === params.channelId && left.id !== params.channelId) {
-        return 1;
-      }
-      return left.id.localeCompare(right.id);
-    });
-}
-
 export function loadChannelSecretContractApi(params: {
   channelId: string;
   config: OpenClawConfig;
@@ -185,12 +158,23 @@ export function loadChannelSecretContractApi(params: {
   const officialFallback = loadOfficialExternalChannelSecretContractApi(params.channelId);
   let records: PluginManifestRecord[];
   try {
-    records = listChannelSecretContractRecords({
-      channelId: params.channelId,
-      config: params.config,
-      env,
-      loadablePluginOrigins: params.loadablePluginOrigins,
-    });
+    const channelId = params.channelId;
+    const config = params.config;
+    const loadablePluginOrigins = params.loadablePluginOrigins;
+    const manifestRegistry = resolveConfigWidePluginManifestRegistry({ config, env });
+    records = manifestRegistry.plugins
+      .filter((record) => record.origin !== "bundled")
+      .filter((record) => recordOwnsChannel(record, channelId))
+      .filter((record) => !loadablePluginOrigins || loadablePluginOrigins.has(record.id))
+      .toSorted((left, right) => {
+        if (left.id === channelId && right.id !== channelId) {
+          return -1;
+        }
+        if (right.id === channelId && left.id !== channelId) {
+          return 1;
+        }
+        return left.id.localeCompare(right.id);
+      });
   } catch (error) {
     // Catalog contracts are process-stable fallbacks when plugin metadata is unavailable.
     if (officialFallback) {

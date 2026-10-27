@@ -1,10 +1,9 @@
-import { createTestPluginServiceScheduler } from "openclaw/plugin-sdk/plugin-test-api";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime";
 import { describe, expect, it, vi } from "vitest";
 import { useTlonMonitorFixture } from "./monitor.test-harness.js";
 
 const {
-  monitorTlonProvider,
+  startMonitor,
   authenticateMock,
   sseClientMock,
   ingressMock,
@@ -17,20 +16,12 @@ const OWNER = "~nec";
 const CLUB_ID = "0v3.q4n5m.6r7s8.9t0u1.2v3w4";
 
 async function withMonitor(run: (runtime: RuntimeEnv) => Promise<void>) {
-  const controller = new AbortController();
-  const runtime = { error: vi.fn(), exit: vi.fn(), log: vi.fn() } satisfies RuntimeEnv;
-  const monitor = monitorTlonProvider({
-    scheduler: createTestPluginServiceScheduler(),
-    abortSignal: controller.signal,
-    runtime,
-  });
-  void monitor.catch(() => {});
+  const { runtime, stop } = startMonitor();
   try {
     await vi.waitFor(() => expect(sseClientMock.connect).toHaveBeenCalledOnce());
     await run(runtime);
   } finally {
-    controller.abort();
-    await monitor;
+    await stop();
   }
 }
 

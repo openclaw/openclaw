@@ -1,3 +1,4 @@
+import { setTimeout as delay } from "node:timers/promises";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import { resolveDefaultAgentId } from "../agents/agent-scope.js";
@@ -7,6 +8,7 @@ import { loadOrCreateProcessDeviceIdentityAsync } from "../infra/device-identity
 import { getPairedDevice } from "../infra/device-pairing.js";
 import type { GatewayScheduler } from "../infra/gateway-scheduler.js";
 import { resolveOpenClawPackageRootSync } from "../infra/openclaw-root.js";
+import { isSqliteLockError } from "../infra/sqlite-error-diagnostics.js";
 import { getGatewayPluginMetadataSnapshot } from "../plugins/current-plugin-metadata-state.js";
 import type { PluginRegistry } from "../plugins/registry-types.js";
 import type { WorkerExecutionMode, WorkerProfile } from "../plugins/types.js";
@@ -37,6 +39,7 @@ import { nodeWorkerGatewayNamespace as resolveNodeWorkerGatewayNamespace } from 
 import type { NodeWorkerWorkspaceBindingResolver } from "./worker-environments/node-worker-tunnel.js";
 import type { NodeWorkerBundleRetention } from "./worker-environments/node-workspace-retain-coordinator.js";
 import type { NodeWorkspaceTransferHttpCallback } from "./worker-environments/node-workspace-transfer-http-contract.js";
+import type { coordinateWorkerPlacementDispatch } from "./worker-environments/placement-dispatch-coordinator.js";
 import {
   createWorkerPlacementRuntimeInstallReader,
   type WorkerPlacementRuntimeInstallReader,
@@ -49,12 +52,14 @@ import {
 import type { WorkerPlacementDispatchContract } from "./worker-environments/service-contract.js";
 import type { WorkerEnvironmentService } from "./worker-environments/service.js";
 import type { WorkerEnvironmentServiceOptions } from "./worker-environments/service.types.js";
-import type { WorkerTunnelManager } from "./worker-environments/tunnel.js";
 import { listRetainedWorkerBundleHashes } from "./worker-environments/worker-bundle-retention.js";
 
 type WorkerEnvironmentLogger = {
   child: (name: string) => { info: (message: string) => void; warn: (message: string) => void };
 };
+
+// Five existing SQLite busy waits plus capped backoff allow about 37s for a competing writer.
+const WORKER_STARTUP_RECOVERY_ATTEMPTS = 5;
 
 export type GatewayWorkerEnvironmentStartupState = Awaited<
   ReturnType<typeof loadGatewayWorkerEnvironmentStartupState>
@@ -63,11 +68,15 @@ export type GatewayWorkerEnvironmentStartupState = Awaited<
 export type GatewayWorkerEnvironmentRuntime = {
   workerEnvironmentService?: WorkerEnvironmentService;
   workerLiveEvents?: WorkerLiveEventReceiver;
-  workerTunnelManager?: WorkerTunnelManager;
   nodeWorkerGatewayNamespace?: string;
   nodeWorkerBundleRetention?: NodeWorkerBundleRetention;
   runtimeInstall?: WorkerPlacementRuntimeInstallReader;
-  bindWorkerSessionDispatch?: (dispatch: WorkerPlacementDispatchContract["dispatch"]) => void;
+  bindWorkerSessionDispatch?: (
+    dispatch: WorkerPlacementDispatchContract["dispatch"],
+    waitForInitialPlacement: ReturnType<
+      typeof coordinateWorkerPlacementDispatch
+    >["waitForInitialPlacement"],
+  ) => void;
   bindDeviceNodeControl?: (transport: NodeWorkerSupervisorTransport) => void;
   bindWorkerNodeDesktopControl?: (transport: NodeWorkerSupervisorTransport) => void;
   bindNodeWorkspaceBindingResolver?: (resolver: NodeWorkerWorkspaceBindingResolver) => void;
@@ -169,7 +178,28 @@ export async function createGatewayWorkerEnvironmentRuntime(params: {
   // The Gateway state-directory lock proves that executors from the previous
   // process are gone. Resolve their ambiguous effects before placement
   // reconciliation attempts to release the owning worker claims.
-  await params.startup.placementStore.recoverWorkerSessionToolOperationsAfterRestart();
+  const workerEnvironmentLog = params.log.child("worker-environments");
+  for (let attempt = 1; ; attempt += 1) {
+    try {
+      await params.startup.placementStore.recoverWorkerSessionToolOperationsAfterRestart();
+      break;
+    } catch (error) {
+      if (!isSqliteLockError(error)) {
+        throw error;
+      }
+      if (attempt === WORKER_STARTUP_RECOVERY_ATTEMPTS) {
+        throw new Error(
+          `placementTools.recover failed after ${attempt} attempts: the database is locked by another process or connection. Run openclaw doctor or openclaw gateway status --deep to diagnose the lock.`,
+          { cause: error },
+        );
+      }
+      const waitMs = Math.min(1_000 * 2 ** (attempt - 1), 5_000);
+      workerEnvironmentLog.warn(
+        `placementTools.recover: database is locked; retrying attempt ${attempt + 1}/${WORKER_STARTUP_RECOVERY_ATTEMPTS} in ${waitMs} ms.`,
+      );
+      await delay(waitMs);
+    }
+  }
   // A crashed gateway can leak local turn claims; drop them before workers re-admit turns.
   await params.startup.placementStore.clearLocalTurnClaimsAfterRestartAsync();
   const placementGate = createWorkerSessionPlacementGate(params.startup.placementStore, {
@@ -177,7 +207,6 @@ export async function createGatewayWorkerEnvironmentRuntime(params: {
     // workspace recovery. Worker authority is minted from claims created in this lifecycle.
     recoveryPlacements: await params.startup.placementStore.listAsync(),
   });
-  const workerEnvironmentLog = params.log.child("worker-environments");
   const listRetainedBundleHashes = async () =>
     listRetainedWorkerBundleHashes({
       environments: params.startup.store.list(),
@@ -193,7 +222,6 @@ export async function createGatewayWorkerEnvironmentRuntime(params: {
     signal?.throwIfAborted();
     const producer = (workerBundleProducer ??= workerRuntime.createWorkerBundleProducer({
       protocolFeatures: WORKER_PROTOCOL_FEATURES,
-      cacheOwnership: "exclusive",
       onCacheCleanupError: (error) => {
         workerEnvironmentLog.warn(`Worker bundle cache cleanup failed: ${String(error)}`);
       },
@@ -352,6 +380,17 @@ export async function createGatewayWorkerEnvironmentRuntime(params: {
   const nodeWorkerBundleRetention: NodeWorkerBundleRetention = {
     isEnvironmentOwnedNode,
     currentBuild: currentWorkerBundleArtifact,
+    prefetch: async (node, signal, assertCurrent) => {
+      const artifact = await currentWorkerBundleArtifact();
+      assertCurrent();
+      await nodeWorkerBundleInstaller({
+        deviceId: node.nodeId,
+        artifact,
+        reason: "prefetch",
+        signal,
+        assertCurrent,
+      });
+    },
   };
   const nodeEnrollment = createWorkerNodeEnrollmentManager({
     store: params.startup.store,
@@ -369,11 +408,17 @@ export async function createGatewayWorkerEnvironmentRuntime(params: {
   let dispatchChild: WorkerPlacementDispatchContract["dispatch"] = async () => {
     throw new Error("Worker session dispatch is unavailable");
   };
+  let waitForInitialPlacement: ReturnType<
+    typeof coordinateWorkerPlacementDispatch
+  >["waitForInitialPlacement"] = async () => {
+    throw new Error("Worker session dispatch is unavailable");
+  };
   const computers = createWorkerComputerService({
     store: params.startup.store,
     placements: params.startup.placementStore,
     resolveGatewayContext: params.resolveGatewayContext,
     getNodeTransport: () => deviceRuntime.getNodeTransport(),
+    cleanupSignal: nodeWorkerTunnelManager.cleanupSignal,
     desktopRegistry: params.desktopSessionRegistry,
     warn: (message) => workerEnvironmentLog.warn(message),
   });
@@ -384,6 +429,7 @@ export async function createGatewayWorkerEnvironmentRuntime(params: {
     gatewayNamespace: nodeWorkerGatewayNamespace,
   });
   const workerEnvironmentService = createWorkerEnvironmentService({
+    resolveGatewayContext: params.resolveGatewayContext,
     scheduler: params.scheduler,
     projectNamespace: nodeWorkerGatewayNamespace,
     prepareComputer: computers.prepare,
@@ -603,6 +649,7 @@ export async function createGatewayWorkerEnvironmentRuntime(params: {
       placements: params.startup.placementStore,
       environments: workerEnvironmentService,
       dispatchChild: (...args) => dispatchChild(...args),
+      waitForInitialPlacement: (...args) => waitForInitialPlacement(...args),
       portals: {
         getService: () => params.getPortalRuntime()?.portalService,
         carrier: workerNodePortalCarrier,
@@ -621,15 +668,15 @@ export async function createGatewayWorkerEnvironmentRuntime(params: {
   return {
     workerEnvironmentService,
     workerLiveEvents,
-    workerTunnelManager,
     nodeWorkerGatewayNamespace,
     nodeWorkerBundleRetention,
     runtimeInstall: createWorkerPlacementRuntimeInstallReader({
       environments: workerEnvironmentService,
       installer: nodeWorkerBundleInstaller,
     }),
-    bindWorkerSessionDispatch: (dispatch) => {
+    bindWorkerSessionDispatch: (dispatch, wait) => {
       dispatchChild = dispatch;
+      waitForInitialPlacement = wait;
     },
     bindDeviceNodeControl: (transport) => {
       deviceRuntime.bindNodeTransport(transport);

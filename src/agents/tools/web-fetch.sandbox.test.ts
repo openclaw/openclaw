@@ -4,12 +4,11 @@ import path from "node:path";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
-import { runCommandBuffered } from "../../process/exec.js";
 import { createSandboxedReadTool } from "../agent-tools.read.js";
-import type { SandboxBackendCommandParams } from "../sandbox/backend-handle.types.js";
 import { createSandboxFsBridge } from "../sandbox/fs-bridge.js";
 import { bindSandboxInputStager, createSandboxInputStager } from "../sandbox/input-staging.js";
 import { createRemoteShellSandboxFsBridge } from "../sandbox/remote-fs-bridge.js";
+import { createLocalRemoteShellScriptRunner } from "../sandbox/remote-fs-bridge.test-helpers.js";
 import { createSandboxTestContext } from "../sandbox/test-fixtures.js";
 import { createHostSandboxFsBridge } from "../test-helpers/host-sandbox-fs-bridge.js";
 import { createWebFetchTool } from "./web-fetch.js";
@@ -129,18 +128,7 @@ it("recovers omitted content through bounded read and keeps cached files with th
 it.runIf(process.platform !== "win32")("stages read-only output", async () => {
   const root = tempDirs.make("web-fetch-native-read-only-");
   const sandbox = sandboxContext(root, "ro");
-  const backend = {
-    runShellCommand: async (params: SandboxBackendCommandParams) => {
-      const result = await runCommandBuffered(
-        ["sh", "-c", params.script, "web-fetch-sandbox-test", ...(params.args ?? [])],
-        { input: params.stdin, signal: params.signal, timeoutMs: 10_000 },
-      );
-      if (result.code !== 0 && !params.allowFailure) {
-        throw new Error(result.stderr.toString());
-      }
-      return { code: result.code ?? 1, stdout: result.stdout, stderr: result.stderr };
-    },
-  };
+  const backend = { runShellCommand: createLocalRemoteShellScriptRunner() };
   const bridge = createSandboxFsBridge({ sandbox: { ...sandbox, backend } });
   const native = context(root, "native-read-only", undefined, bridge);
   await expect(

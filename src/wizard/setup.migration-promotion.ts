@@ -8,6 +8,7 @@ import {
 } from "@openclaw/fs-safe/advanced";
 import { isNotFoundPathError, isPathInside } from "@openclaw/fs-safe/path";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { readClientCredentialBootstrapSource } from "../infra/client-credential-migration.js";
 import { readClientCredentialReceipt } from "../infra/client-credential-readiness.js";
 import {
   emptyClientCredentialReceipt,
@@ -17,6 +18,7 @@ import type { ClientCredentialDatabase } from "../infra/client-credential-schema
 import { openClientCredentialCustody } from "../infra/client-credential-store.js";
 import { readDurableJsonFile, writeJsonAtomic } from "../infra/json-files.js";
 import { executeSqliteQueryTakeFirstSync, getNodeSqliteKysely } from "../infra/kysely-sync.js";
+import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
 import type { MigrationApplyResult, MigrationPlan } from "../plugins/types.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { hashSetupMigrationConfig } from "./setup.migration-canonical.js";
@@ -470,6 +472,11 @@ export async function assertSupportedStagedStateTree(params: {
   // Client credential import is unsupported; never replace the live local owner.
   const sharedFile = readClientCredentialFileIdentity(resolveOpenClawStateSqlitePath(env));
   const stored = readClientCredentialReceipt(credentials.database);
+  const expectedReceipt = emptyClientCredentialReceipt(sharedFile);
+  if (sharedFile && stored?.receipt.source) {
+    using source = openNodeSqliteDatabase(sharedFile.path, { readOnly: true });
+    expectedReceipt.source = readClientCredentialBootstrapSource(source, sharedFile.path);
+  }
   const db = getNodeSqliteKysely<ClientCredentialDatabase>(credentials.database);
   const materialTables = [
     "device_identities",
@@ -480,7 +487,7 @@ export async function assertSupportedStagedStateTree(params: {
   if (
     !sharedFile ||
     stored?.phase !== "complete" ||
-    !isDeepStrictEqual(stored.receipt, emptyClientCredentialReceipt(sharedFile)) ||
+    !isDeepStrictEqual(stored.receipt, expectedReceipt) ||
     materialTables.some((table) =>
       executeSqliteQueryTakeFirstSync(
         credentials.database,

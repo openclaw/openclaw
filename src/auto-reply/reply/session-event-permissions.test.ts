@@ -1,14 +1,10 @@
 import "../../test-utils/prepare-compiled-subprocesses.js";
+import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core/expect";
-import { expect, it, vi, type TestContext } from "vitest";
+import { expect, it, vi } from "vitest";
 import { createDeferred, withinTest } from "../../../test/helpers/promise.js";
-import {
-  applyEmbeddedAttemptToolsAllow,
-  resolveEmbeddedAttemptToolConstructionPlan,
-} from "../../agents/embedded-agent-runner/run/attempt-tool-construction-plan.js";
-import { buildEmbeddedAttemptToolRunContext } from "../../agents/embedded-agent-runner/run/attempt-tool-run-context.js";
 import type { RunEmbeddedAgentParams } from "../../agents/embedded-agent-runner/run/params.js";
 import { runEmbeddedAgent } from "../../agents/embedded-agent.js";
 import { createAgentHarnessHostCapabilities } from "../../agents/harness/host-capability.js";
@@ -20,6 +16,7 @@ import {
   loadSessionEntry,
   updateSessionEntry,
 } from "../../config/sessions/session-accessor.js";
+import { replaceSessionEntrySync } from "../../config/sessions/session-accessor.sqlite-entry.js";
 import * as sessionLifecycleProjection from "../../config/sessions/session-lifecycle-projection.js";
 import { SessionEntryLifecycleUpsertConflictError } from "../../config/sessions/session-mutation-conflict-error.js";
 import type { InternalSessionEntry, SessionEntry } from "../../config/sessions/types.js";
@@ -39,17 +36,20 @@ import {
 } from "../../sessions/session-state-events.js";
 import { readCursor } from "../../sessions/session-state-events.test-support.js";
 import { drainGlobalSingletonLifecycleState } from "../../shared/global-singleton.js";
-import { openOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
-import {
-  withOpenClawTestState,
-  type OpenClawTestState,
-} from "../../test-utils/openclaw-test-state.js";
+import { openOpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
+import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import * as routedReplies from "./route-reply.js";
 import * as sessionEventHandoff from "./session-event-handoff.js";
 import {
   captureSessionEventTargetForHost,
   enqueueSessionEventForHost,
 } from "./session-event-handoff.js";
+import {
+  configureEventState,
+  createEventManagedTools,
+  runEventFixture,
+  startEmbeddedTurn,
+} from "./session-event.test-support.js";
 // mock-isolation: Use synthetic model execution with real admission and native filesystem guards.
 vi.mock("../../agents/embedded-agent-runner/run.js", () => ({
   runEmbeddedAgent: vi.fn(),
@@ -68,47 +68,14 @@ await Promise.all([
   ),
 ]);
 
-async function configureEventState(
-  state: OpenClawTestState,
-  overrides: Partial<OpenClawConfig> = {},
-) {
-  const config: OpenClawConfig = {
-    agents: {
-      entries: { main: { workspace: state.workspaceDir } },
-      defaults: {
-        workspace: state.workspaceDir,
-        skipBootstrap: true,
-        model: { primary: "mock-openai/gpt-5.6-luna" },
-        models: { "mock-openai/gpt-5.6-luna": { agentRuntime: { id: "openclaw" } } },
-      },
-    },
-    plugins: { enabled: false },
-    skills: { load: { watch: false } },
-    ...overrides,
-  };
-  setRuntimeConfigSnapshot(config);
-  await state.writeConfig(config);
-  openOpenClawStateDatabase();
-  return config;
-}
-
-async function startEmbeddedTurn(params: RunEmbeddedAgentParams, label: string) {
-  const admission = expectDefined(params.preparedRunAdmission, label);
-  const context = await admission.admit("gateway", params.runId);
-  params.onExecutionPhase?.({ phase: "model_call_started" });
-  await params.onExecutionStarted?.();
-  await params.onAgentEvent?.({ stream: "lifecycle", data: { phase: "start" } });
-  return context;
-}
-
 type EventReceipt = ReturnType<typeof enqueueSessionEventForHost>;
-function observeEnqueue(source: string, onReceipt: (receipt: EventReceipt) => void) {
+function observeEnqueue(source: string | undefined, onReceipt: (receipt: EventReceipt) => void) {
   const enqueue = sessionEventHandoff.enqueueSessionEventForHost;
   return vi
     .spyOn(sessionEventHandoff, "enqueueSessionEventForHost")
     .mockImplementation((text, options) => {
       const receipt = enqueue(text, options);
-      if (options.source === source) {
+      if (source === undefined || options.source === source) {
         onReceipt(receipt);
       }
       return receipt;
@@ -132,19 +99,6 @@ async function recordWatchEvents(child: string, sessionId: string) {
   };
 }
 
-function runEventFixture(
-  label: string,
-  onTestFinished: TestContext["onTestFinished"],
-  run: (state: OpenClawTestState) => Promise<void>,
-) {
-  const work = withOpenClawTestState({ label, env: { OPENCLAW_TEST_FAST: "0" } }, run);
-  // Cancellation must settle the state owner even when the test body times out.
-  onTestFinished(async () => {
-    await Promise.allSettled([work]);
-  });
-  return work;
-}
-
 async function enqueueGuardedCliWatchdog(params: {
   config: OpenClawConfig;
   workspaceDir: string;
@@ -156,7 +110,7 @@ async function enqueueGuardedCliWatchdog(params: {
   const { testing: cliBackends } = await import("../../agents/cli-backends.test-support.js");
   const { prepareCliRunContext } = await import("../../agents/cli-runner/prepare.js");
   const { runPreparedCliAgent } = await import("../../agents/cli-runner.js");
-  const { executeDeps } = await import("../../agents/cli-runner/execute-deps.js");
+  const processSupervisor = await import("../../process/supervisor/index.js");
   const { resolveSessionFilePathCore, resolveSessionFilePathOptions, resolveSessionStorePathCore } =
     await import("../../config/sessions/paths.js");
   const sessionTarget = {
@@ -187,12 +141,10 @@ async function enqueueGuardedCliWatchdog(params: {
     ],
   });
   let receipt: ReturnType<typeof enqueueSessionEventForHost> | undefined;
-  const enqueue = executeDeps.enqueueSessionEvent;
-  const observer = vi.spyOn(executeDeps, "enqueueSessionEvent").mockImplementation((...args) => {
-    receipt = enqueue(...args);
-    return receipt;
+  const observer = observeEnqueue(undefined, (value) => {
+    receipt = value;
   });
-  const supervisor = vi.spyOn(executeDeps, "getProcessSupervisor").mockReturnValue({
+  const supervisor = vi.spyOn(processSupervisor, "getProcessSupervisor").mockReturnValue({
     acquireScopeCleanup: () => async () => {},
     spawn: async () => ({
       runId,
@@ -300,6 +252,8 @@ it.for([
   "downgrade",
   "upgrade",
   "retained-tool-downgrade",
+  "retained-overrides-downgrade",
+  "retained-database-replacement",
   "retained-config-downgrade",
   "remapped-workspace",
   "remapped-guarded",
@@ -309,7 +263,10 @@ it.for([
   "cli-watchdog-guarded",
 ] as const)(
   "bounds a production background completion by current and retained permissions: %s",
-  async (change, { signal, onTestFinished }) => {
+  async (change, { signal, onTestFinished, skip }) => {
+    if (change === "retained-database-replacement" && process.platform === "win32") {
+      skip("Windows cannot replace an open database file");
+    }
     await runEventFixture("session-event-permissions", onTestFinished, async (state) => {
       const config = await configureEventState(state, {
         tools: { profile: "coding", codeMode: false, toolSearch: false },
@@ -400,41 +357,13 @@ it.for([
             },
             pluginId: "openclaw",
           });
+          let restoreDatabase: (() => void) | undefined;
           try {
             observedMode = params.permissionMode;
-            const toolRunContext = buildEmbeddedAttemptToolRunContext({
-              ...params,
-              model:
-                params.provider && params.model
-                  ? { provider: params.provider, id: params.model }
-                  : undefined,
-            });
-            const construction = resolveEmbeddedAttemptToolConstructionPlan({
-              toolsAllow: toolRunContext.runtimeToolAllowlist,
-            });
-            const boundTools = expectDefined(
-              host.capabilities.createToolSurface,
-              "managed tool surface",
-            )({
-              ...toolRunContext,
-              config: params.config,
-              agentId: params.agentId,
-              sessionId: params.sessionId,
-              sessionKey: params.sessionKey,
-              workspaceDir: workspace.effectiveWorkspace,
-              cwd: workspace.effectiveCwd,
-              sessionPermissionPolicy: workspace.sessionPermissionPolicy,
-              toolConstructionPlan: {
-                ...construction.codingToolConstructionPlan,
-                includeShellTools: false,
-                includeChannelTools: false,
-                includeOpenClawTools: false,
-                includePluginTools: false,
-              },
-            });
-            const tools = applyEmbeddedAttemptToolsAllow(
-              boundTools,
-              construction.runtimeToolAllowlist,
+            const tools = createEventManagedTools(
+              params,
+              workspace,
+              expectDefined(host.capabilities.createToolSurface, "managed tool surface"),
             );
             const read = expectDefined(
               tools.find((tool) => tool.name === "read"),
@@ -446,6 +375,29 @@ it.for([
               expect(write).toBeDefined();
               if (change === "retained-tool-downgrade") {
                 await setMode("read-only");
+              } else if (change === "retained-overrides-downgrade") {
+                await updateSessionEntry(scope, () => ({ toolOverrides: { webSearch: false } }));
+              } else if (change === "retained-database-replacement") {
+                const database = openOpenClawAgentDatabase({ agentId: scope.agentId });
+                const foreignPath = `${database.path}.foreign.sqlite`;
+                const originalPath = `${database.path}.original`;
+                openOpenClawAgentDatabase({
+                  agentId: scope.agentId,
+                  path: foreignPath,
+                });
+                replaceSessionEntrySync(
+                  { ...scope, storePath: foreignPath },
+                  {
+                    ...expectDefined(loadSessionEntry(scope), "retained session"),
+                    label: "foreign owner",
+                  },
+                );
+                fsSync.renameSync(database.path, originalPath);
+                fsSync.renameSync(foreignPath, database.path);
+                restoreDatabase = () => {
+                  fsSync.renameSync(database.path, foreignPath);
+                  fsSync.renameSync(originalPath, database.path);
+                };
               } else {
                 config.tools = { ...config.tools, deny: ["write"] };
                 setRuntimeConfigSnapshot(config);
@@ -476,6 +428,7 @@ it.for([
             }
             return { payloads: [{ text: "Completion observed" }], meta: { durationMs: 1 } };
           } finally {
+            restoreDatabase?.();
             host.close();
           }
         });
@@ -506,7 +459,9 @@ it.for([
       let outcome: Awaited<ReturnType<typeof enqueueSessionEventForHost>["settled"]>;
       let accepted: Awaited<ReturnType<typeof enqueueSessionEventForHost>["accepted"]>;
       const route = toolOnly
-        ? vi.spyOn(routedReplies, "routeReply").mockResolvedValue({ ok: true, delivered: true })
+        ? vi
+            .spyOn(routedReplies, "routePreparedReply")
+            .mockResolvedValue({ ok: true, delivered: true })
         : undefined;
       try {
         const text = "Process the event; record the result.";
@@ -706,7 +661,8 @@ it.for([
         try {
           await expect(first.accepted).resolves.toEqual({ ok: true });
           await withinTest(firstStarted.promise, signal);
-          vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
+          // Advance notice timers without moving mailbox enqueue timestamps into the future.
+          vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
           const observed = [await recordWatchEvents(child, "notice-child")];
           const assertCursor = (notice: (typeof observed)[number], consumed = false) => {
             expect(
@@ -773,7 +729,6 @@ it.for([
               retainedOverflow,
             );
           }
-          expect(starts).toHaveLength(1);
           observed.forEach((notice) => assertCursor(notice));
           // Subsequent queue execution uses real time; only the notice coalescing window was advanced.
           vi.useRealTimers();

@@ -4,24 +4,63 @@ import fs from "node:fs";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 
-// Retain the shipped native-v0 input so package acceptance proves its upgrade
-// into the local credential owner before node startup.
+// Frozen native-v0 schema: upgrade proof must not derive its input from the current app.
+const legacyNativeV0Schema = `
+CREATE TABLE IF NOT EXISTS device_identities (
+  identity_key TEXT NOT NULL PRIMARY KEY,
+  device_id TEXT NOT NULL,
+  public_key_pem TEXT NOT NULL,
+  private_key_pem TEXT NOT NULL,
+  created_at_ms INTEGER NOT NULL,
+  updated_at_ms INTEGER NOT NULL
+) STRICT;
+
+CREATE INDEX IF NOT EXISTS idx_device_identities_device
+  ON device_identities(device_id, updated_at_ms DESC);
+
+CREATE TABLE IF NOT EXISTS device_auth_tokens (
+  device_id TEXT NOT NULL,
+  role TEXT NOT NULL,
+  token TEXT NOT NULL,
+  scopes_json TEXT NOT NULL,
+  updated_at_ms INTEGER NOT NULL,
+  PRIMARY KEY (device_id, role)
+) STRICT;
+
+CREATE INDEX IF NOT EXISTS idx_device_auth_tokens_updated
+  ON device_auth_tokens(updated_at_ms DESC, device_id, role);
+
+CREATE TABLE IF NOT EXISTS macos_port_guardian_records (
+  pid INTEGER NOT NULL PRIMARY KEY,
+  port INTEGER NOT NULL,
+  command TEXT NOT NULL,
+  mode TEXT NOT NULL,
+  timestamp REAL NOT NULL
+) STRICT;
+
+CREATE INDEX IF NOT EXISTS idx_macos_port_guardian_records_port
+  ON macos_port_guardian_records(port, timestamp DESC);
+
+CREATE TABLE IF NOT EXISTS exec_approvals_config (
+  config_key TEXT NOT NULL PRIMARY KEY,
+  raw_json TEXT NOT NULL,
+  socket_path TEXT,
+  has_socket_token INTEGER NOT NULL,
+  default_security TEXT,
+  default_ask TEXT,
+  default_ask_fallback TEXT,
+  auto_allow_skills INTEGER,
+  agent_count INTEGER NOT NULL,
+  allowlist_count INTEGER NOT NULL,
+  updated_at_ms INTEGER NOT NULL
+) STRICT;
+`;
+
 export function seedMacNodeWorkerProofState(databasePath) {
-  const source = fs.readFileSync(
-    new URL(
-      "../../apps/shared/OpenClawKit/Sources/OpenClawNativeState/OpenClawNativeStateSQLite.swift",
-      import.meta.url,
-    ),
-    "utf8",
-  );
-  const statements = [...source.matchAll(/createSQL: """\n([\s\S]*?)\n\s*"""/gu)];
-  assert.equal(statements.length, 4, "Native bootstrap DDL must be extracted completely");
   fs.mkdirSync(path.dirname(databasePath), { recursive: true });
   const db = new DatabaseSync(databasePath);
   try {
-    for (const [, sql] of statements) {
-      db.exec(sql);
-    }
+    db.exec(legacyNativeV0Schema);
     const { publicKey, privateKey } = generateKeyPairSync("ed25519");
     const publicDer = publicKey.export({ type: "spki", format: "der" });
     const deviceId = createHash("sha256").update(publicDer.subarray(-32)).digest("hex");

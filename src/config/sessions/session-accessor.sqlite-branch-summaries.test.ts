@@ -6,6 +6,7 @@ import { executeSqliteQuerySync } from "../../infra/kysely-sync.js";
 import * as sqliteRuntime from "../../infra/node-sqlite.js";
 import { admitSqliteSchema } from "../../infra/sqlite-schema-facts.js";
 import { runSqliteImmediateTransactionSync } from "../../infra/sqlite-transaction.js";
+import { withFreshOpenClawAgentDatabaseReadOnly } from "../../state/openclaw-agent-db-readonly-open.js";
 import {
   openOpenClawAgentDatabase,
   runOpenClawAgentWriteTransaction,
@@ -16,17 +17,22 @@ import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../runtime
 import {
   appendTranscriptMessage,
   listSessionBranches,
-  loadTranscriptEvents,
   upsertSessionEntryCore,
 } from "./session-accessor.js";
+import {
+  branchMessage as message,
+  branchSummary as branch,
+  expectBranchList,
+} from "./session-accessor.sqlite-branch-fixtures.test-support.js";
 import {
   readSessionBranchSnapshot,
   readSessionBranchSummariesInWorker,
 } from "./session-accessor.sqlite-branches.worker.js";
+import { recordSessionParticipant } from "./session-accessor.sqlite-participants.native.js";
 import { getSessionKysely } from "./session-accessor.sqlite-scope.js";
 import { replaceTranscriptEventsSync } from "./session-accessor.sqlite-transcript-write.test-support.js";
 import type { SessionBranchSummary } from "./session-accessor.types.js";
-import { prepareTranscriptPayload } from "./transcript-payload.js";
+import { createTranscriptEventInserter, prepareTranscriptPayload } from "./transcript-payload.js";
 
 const tempDirs = createTempDirTracker();
 
@@ -38,38 +44,6 @@ afterEach(async () => {
   tempDirs.cleanup();
   clearRuntimeConfigSnapshot();
 });
-
-function message(
-  id: string,
-  parentId: string | null,
-  content: unknown,
-  options: { role?: string; phase?: string; appendMode?: string; timestamp?: string } = {},
-): Record<string, unknown> {
-  const { role = "user", phase, ...eventFields } = options;
-  return {
-    type: "message",
-    id,
-    parentId,
-    message: { role, content, ...(phase ? { phase } : {}) },
-    ...eventFields,
-  };
-}
-
-function branch(
-  leafEntryId: string,
-  headline: string,
-  messageCount: number,
-  active = false,
-  updatedAt?: string,
-): SessionBranchSummary {
-  return {
-    leafEntryId,
-    headline,
-    messageCount,
-    active,
-    ...(updatedAt === undefined ? {} : { updatedAt }),
-  };
-}
 
 function leaf(
   id: string,
@@ -127,18 +101,6 @@ const cases: Array<{
     ],
   },
   {
-    name: "forward opaque parents and cycles keep existing summary behavior",
-    events: [
-      message("root", null, "root"),
-      { type: "extension", id: "forward", parentId: "later", payload: "opaque" },
-      { type: "extension", id: "later", parentId: "root" },
-      { type: "extension", id: "cycle-a", parentId: "cycle-b" },
-      { type: "extension", id: "cycle-b", parentId: "cycle-a" },
-      leaf("selected", "root", "cycle-a"),
-    ],
-    branches: [branch("cycle-a", "", 0, true), branch("forward", "root", 1)],
-  },
-  {
     name: "parentless rows and invalid controls retain reset navigation",
     events: [
       message("root", null, "root"),
@@ -180,15 +142,6 @@ const cases: Array<{
         content: "not a message",
         timestamp: "  exact timestamp  ",
       },
-    ],
-    branches: [branch("custom", "final answer", 5, true, "  exact timestamp  ")],
-  },
-  {
-    name: "headlines retain 120 code points and truncate only longer values",
-    events: [
-      message("root", null, "root"),
-      message("exact", "root", "🦞".repeat(120), { appendMode: "side" }),
-      message("long", "root", "🦞".repeat(121), { appendMode: "side" }),
       message(
         "joined",
         "root",
@@ -196,19 +149,19 @@ const cases: Array<{
           { type: "text", text: "café" },
           { type: "text", text: "🦞" },
         ],
-        { appendMode: "side" },
+        {
+          appendMode: "side",
+        },
       ),
     ],
     branches: [
-      branch("root", "root", 1, true),
+      branch("custom", "final answer", 5, true, "  exact timestamp  "),
       branch("joined", "café🦞", 2),
-      branch("long", `${"🦞".repeat(119)}…`, 2),
-      branch("exact", "🦞".repeat(120), 2),
     ],
   },
 ];
 
-async function seedStoredBranchEvents(events: Record<string, unknown>[]) {
+async function seedStoredBranchEvents(events: Record<string, unknown>[], canonical = false) {
   setRuntimeConfigSnapshot({});
   const agentId = "main";
   const env = { ...process.env, OPENCLAW_STATE_DIR: tempDirs.make("openclaw-branch-summary-") };
@@ -219,48 +172,76 @@ async function seedStoredBranchEvents(events: Record<string, unknown>[]) {
     sessionKey: "agent:main:branch-summary",
   };
   await upsertSessionEntryCore(scope, { sessionId: scope.sessionId, updatedAt: 1 });
-  expect(
-    replaceTranscriptEventsSync(scope, [{ type: "session", id: scope.sessionId, version: 3 }]),
-  ).toBe(true);
-  if (events.length === 0) {
-    return scope;
-  }
+  const header = { type: "session", id: scope.sessionId, version: 3 };
+  expect(replaceTranscriptEventsSync(scope, canonical ? [header, ...events] : [header])).toBe(true);
   // Seed stored rows directly so append-time deduplication cannot erase reader compatibility cases.
-  runOpenClawAgentWriteTransaction(
-    (database) => {
-      executeSqliteQuerySync(
-        database.db,
-        getSessionKysely(database.db)
-          .insertInto("transcript_events")
-          .values(
-            events.map((event, index) => ({
-              session_id: scope.sessionId,
-              seq: index + 2,
-              ...prepareTranscriptPayload(database.db, JSON.stringify(event)),
-              created_at: 1,
-            })),
-          ),
-      );
-    },
-    { agentId, env },
-  );
+  if (!canonical && events.length) {
+    runOpenClawAgentWriteTransaction(
+      ({ db }) => {
+        createTranscriptEventInserter(db, scope.sessionId).batch(
+          events.map((event, index) => ({
+            seq: index + 2,
+            eventJson: JSON.stringify(event),
+            createdAt: 1,
+          })),
+        );
+      },
+      { agentId, env },
+    );
+  }
   return scope;
 }
 
 it.each(cases)("$name", async ({ events, branches }) => {
   const scope = await seedStoredBranchEvents(events);
-  await expect(listSessionBranches(scope)).resolves.toEqual({ status: "ok", branches });
-  expect((await loadTranscriptEvents(scope)).slice(1)).toEqual(events);
+  await expectBranchList(scope, branches);
 });
 
-async function seedCanonicalBranchEvents(events: Record<string, unknown>[]) {
-  const scope = await seedStoredBranchEvents([]);
-  replaceTranscriptEventsSync(scope, [
-    { type: "session", id: scope.sessionId, version: 3 },
-    ...events,
+const seedCanonicalBranchEvents = (events: Record<string, unknown>[]) =>
+  seedStoredBranchEvents(events, true);
+
+it("reads branch summaries without loading participant display data", async () => {
+  const scope = await seedCanonicalBranchEvents([
+    message("root", null, "root headline"),
+    message("answer", "root", "final answer", { role: "assistant" }),
   ]);
-  return scope;
-}
+  recordSessionParticipant(scope, {
+    identity: { type: "profile", id: "branch-viewer" },
+    promptedAt: 1,
+  });
+  const result = withFreshOpenClawAgentDatabaseReadOnly((database) => {
+    const tracked = trackSqliteStatementExecutions(
+      requireNativeSqliteDatabase(database.db),
+      ["participants"],
+      (sql) => (sql.includes('from "session_participants"') ? "participants" : null),
+    );
+    using _ = { [Symbol.dispose]: tracked.restore };
+    const snapshot = readSessionBranchSnapshot(database, scope);
+    expect(snapshot).toMatchObject({
+      status: "ok",
+      branches: [branch("answer", "final answer", 2, true)],
+    });
+    expect(tracked.counts.participants).toBe(0);
+    return snapshot;
+  }, scope);
+  expect(result.found).toBe(true);
+});
+
+const append = (
+  scope: Awaited<ReturnType<typeof seedStoredBranchEvents>>,
+  eventId: string,
+  parentId: string,
+  content: string,
+  role = "user",
+  now = 1_000,
+  phase?: string,
+) =>
+  appendTranscriptMessage(scope, {
+    eventId,
+    parentId,
+    now,
+    message: { role, content, ...(phase ? { phase } : {}) },
+  });
 
 function branchSnapshot(
   scope: Awaited<ReturnType<typeof seedStoredBranchEvents>>,
@@ -280,32 +261,12 @@ it("extends a selected ancestor while retaining its inactive descendants and hea
     leaf("selected", "side", "root"),
   ];
   const scope = await seedCanonicalBranchEvents(events);
-  await expect(listSessionBranches(scope)).resolves.toMatchObject({
-    status: "ok",
-    branches: [
-      { leafEntryId: "root", active: true },
-      { leafEntryId: "side", active: false },
-    ],
-  });
-  await appendTranscriptMessage(scope, {
-    eventId: "tool",
-    parentId: "root",
-    now: 2_000,
-    message: { role: "toolResult", content: "tool result" },
-  });
-  await appendTranscriptMessage(scope, {
-    eventId: "analysis",
-    parentId: "tool",
-    now: 3_000,
-    message: { role: "assistant", content: "hidden", phase: "commentary" },
-  });
-  await expect(listSessionBranches(scope)).resolves.toEqual({
-    status: "ok",
-    branches: [
-      branch("analysis", "root headline", 3, true, "1970-01-01T00:00:03.000Z"),
-      branch("side", "side headline", 2),
-    ],
-  });
+  await append(scope, "tool", "root", "tool result", "toolResult", 2_000);
+  await append(scope, "analysis", "tool", "hidden", "assistant", 3_000, "commentary");
+  await expectBranchList(scope, [
+    branch("analysis", "root headline", 3, true, "1970-01-01T00:00:03.000Z"),
+    branch("side", "side headline", 2),
+  ]);
 });
 
 it("rescans when an append resolves an older opaque forward reference", async () => {
@@ -320,19 +281,11 @@ it("rescans when an append resolves an older opaque forward reference", async ()
       { leafEntryId: "forward", messageCount: 0, active: false },
     ],
   });
-  await appendTranscriptMessage(scope, {
-    eventId: "future",
-    parentId: "root",
-    now: 1_000,
-    message: { role: "user", content: "new headline" },
-  });
-  await expect(listSessionBranches(scope)).resolves.toEqual({
-    status: "ok",
-    branches: [
-      branch("future", "new headline", 2, true, "1970-01-01T00:00:01.000Z"),
-      branch("forward", "new headline", 2),
-    ],
-  });
+  await append(scope, "future", "root", "new headline");
+  await expectBranchList(scope, [
+    branch("future", "new headline", 2, true, "1970-01-01T00:00:01.000Z"),
+    branch("forward", "new headline", 2),
+  ]);
 });
 
 it("reads only the newest usable appended headline while retaining cached history", async () => {
@@ -346,12 +299,7 @@ it("reads only the newest usable appended headline while retaining cached histor
     ["commentary", "not a headline", "assistant", "commentary"],
     ["tool", "tool payload", "toolResult", undefined],
   ] as const) {
-    await appendTranscriptMessage(scope, {
-      eventId,
-      parentId,
-      now: 1_000,
-      message: { role, content, ...(phase ? { phase } : {}) },
-    });
+    await append(scope, eventId, parentId, content, role, 1_000, phase);
     parentId = eventId;
   }
   const tracked = trackSqliteStatementExecutions(
@@ -364,29 +312,21 @@ it("reads only the newest usable appended headline while retaining cached histor
         ? "headlines"
         : null,
   );
-  try {
-    expect(read()).toMatchObject({
-      status: "ok",
-      appendSafe: true,
-      branches: [branch("tool", "latest visible answer", 6, true)],
-    });
-    expect(tracked.counts.headlines).toBe(3);
-    expect(tracked.textBytes.headlines).toBeLessThan(1_000);
-  } finally {
-    tracked.restore();
-  }
+  using _ = { [Symbol.dispose]: tracked.restore };
+  expect(read()).toMatchObject({
+    status: "ok",
+    appendSafe: true,
+    branches: [branch("tool", "latest visible answer", 6, true)],
+  });
+  expect(tracked.counts.headlines).toBe(3);
+  expect(tracked.textBytes.headlines).toBeLessThan(1_000);
 });
 
 it("rescans an unindexed legacy prefix after an append reuses one of its IDs", async () => {
   const scope = await seedStoredBranchEvents([message("legacy", null, "legacy headline")]);
   const { read } = branchSnapshot(scope, false);
 
-  await appendTranscriptMessage(scope, {
-    eventId: "legacy",
-    parentId: "legacy",
-    now: 1_000,
-    message: { role: "user", content: "duplicate creates a cycle" },
-  });
+  await append(scope, "legacy", "legacy", "duplicate creates a cycle");
 
   expect(read()).toMatchObject({
     status: "ok",

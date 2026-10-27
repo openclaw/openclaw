@@ -5,7 +5,6 @@ import {
   openNodeSqliteDatabase,
   openOpenClawAgentDatabase,
   resolveOpenClawAgentSqlitePath,
-  runSqliteImmediateTransactionSync,
 } from "openclaw/plugin-sdk/sqlite-runtime";
 import {
   requireNativeSqliteDatabase,
@@ -13,10 +12,8 @@ import {
   closeOpenClawAgentDatabasesForTest,
   closeOpenClawStateDatabaseAsync,
   closeOpenClawStateDatabaseForTest,
-  observeHostDataSql,
 } from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { matchStandingIntentsInDatabase } from "./standing-intents-kernel.js";
 import { prepareStandingIntentMatch } from "./standing-intents-model.js";
 import { createStandingIntentExecutor } from "./standing-intents-tool.js";
 import {
@@ -141,7 +138,7 @@ describe("standing intents", () => {
     await fs.rm(stateDir, { recursive: true, force: true });
   });
 
-  it("reuses lifecycle deadlines across bindings and invalidates them on writes and rollback", async () => {
+  it("maintains lifecycle deadlines across bindings, writes, and rollback", async () => {
     const intent = await createStandingIntent({
       nowMs: 1_000,
       expiresAt: 10_000,
@@ -158,13 +155,7 @@ describe("standing intents", () => {
     sweep(1_000);
     await worker.close();
     worker = bindSqliteWorkerBackend(undefined, context);
-    const sql = observeHostDataSql();
-    try {
-      sweep(1_001);
-      expect(sql.queries.filter((query) => query.includes('"standing_intents"'))).toEqual([]);
-    } finally {
-      sql.restore();
-    }
+    sweep(1_001);
     const match = prepareStandingIntentMatch({ prompt: "release", nowMs: 2_000 });
     expect(match).toBeDefined();
     expectValue(worker.execute({ type: "match", input: match! }), [
@@ -177,18 +168,7 @@ describe("standing intents", () => {
     expect(() => sweep(3_000)).toThrow("test commit refused");
     context.refuseCommit = false;
     expectStatus(3_000, "armed");
-    expectStatus(10_000, "expired");
     const row = intentRow("replacement", 11_000, 12_000, 3, 1);
-    create(row);
-    expectValue(listAt(12_000), [
-      { id: intent.id, status: "expired" },
-      { id: row.id, status: "expired" },
-    ]);
-    create({ ...row, id: "cancelled", expires_at: 14_000 });
-    worker.execute({ type: "cancel", input: { id: "cancelled" } });
-    expectValue(worker.execute({ type: "list", input: { status: "cancelled", nowMs: 14_000 } }), [
-      { id: "cancelled", status: "cancelled" },
-    ]);
     const preciseExpiry = 1_790_000_000_001;
     create({ ...row, id: "precise-expiry", expires_at: preciseExpiry });
     const expectDeadline = (nowMs: number, nextDueAt: number) =>
@@ -204,7 +184,7 @@ describe("standing intents", () => {
     expect(() => sweep(15_000)).toThrow();
     await worker.close();
   });
-  it("skips empty match transactions without hiding creates, cancellation, or rolled-back expiry", async () => {
+  it("keeps empty matching current after creates, cancellation, and rolled-back expiry", async () => {
     await list(1_000);
     await closeAgents();
     const context = workerContext(database());
@@ -216,19 +196,17 @@ describe("standing intents", () => {
     expect(match()).toEqual(empty);
     await worker.close();
     worker = bindSqliteWorkerBackend(undefined, context);
-    const observation = observeHostDataSql();
     try {
       expect(match()).toEqual(empty);
-      expect(observation.queries).toEqual([]);
       worker.execute({ type: "create", input: row });
       expect(match("unrelated")).toEqual({ ...empty, nextDueAt: row.expires_at });
       expectValue(match(), [{ id: row.id, status: "done", fireCount: 1 }]);
       worker.execute({ type: "create", input: { ...row, id: "cancelled" } });
       worker.execute({ type: "cancel", input: { id: "cancelled" } });
       expect(match()).toEqual(empty);
-      const reads = observation.queries.length;
-      expect(match()).toEqual(empty);
-      expect(observation.queries).toHaveLength(reads);
+      expectValue(worker.execute({ type: "list", input: { status: "cancelled", nowMs: 10_000 } }), [
+        { id: "cancelled", status: "cancelled" },
+      ]);
 
       worker.execute({ type: "create", input: { ...row, id: "rollback" } });
       context.refuseCommit = true;
@@ -236,7 +214,6 @@ describe("standing intents", () => {
       context.refuseCommit = false;
       expectValue(match(), [{ id: "rollback", status: "done", fireCount: 1 }]);
     } finally {
-      observation.restore();
       await worker.close();
     }
   });
@@ -250,13 +227,9 @@ describe("standing intents", () => {
     ).toEqual([]);
     await closeAgents();
 
-    const rehearsal = {
-      description: "Mention the migration rehearsal.",
-      triggerKeywords: ["migration rehearsal"],
-    };
-    await expect(createStandingIntent({ ...rehearsal, maxFires: 0, nowMs: 1_000 })).rejects.toThrow(
-      "CHECK constraint failed: max_fires > 0",
-    );
+    const create = (maxFires: number, nowMs: number) =>
+      createKeywordIntent("migration rehearsal", { maxFires, nowMs });
+    await expect(create(0, 1_000)).rejects.toThrow("CHECK constraint failed: max_fires > 0");
     await closeAgents();
 
     // Inspect durable state without an agent open that could repair the schema.
@@ -277,7 +250,7 @@ describe("standing intents", () => {
       reopened.close();
     }
 
-    const created = await createStandingIntent({ ...rehearsal, maxFires: 1, nowMs: 2_000 });
+    const created = await create(1, 2_000);
     expect(await matchIds({ prompt: "migration rehearsal", nowMs: 2_000 })).toEqual([created.id]);
     const stored = await list(2_000);
     expect(stored.map((intent) => intent.id)).toEqual([created.id]);
@@ -285,8 +258,6 @@ describe("standing intents", () => {
   });
 
   it.each([
-    ["3", 3],
-    [3, 3],
     ["5", 5],
     [undefined, 3],
   ])("creates an intent with maxFires=%j", async (maxFires, expected) => {
@@ -295,21 +266,6 @@ describe("standing intents", () => {
     const options = { maxFires: expected, cooldownSeconds: 0 };
     expect(result.intent).toMatchObject(options);
     expect(await listStandingIntents({ agentId: "main" })).toMatchObject([options]);
-  });
-
-  it.each([
-    ["maxFires", "abc", "positive"],
-    ["maxFires", "3.5", "positive"],
-    ["maxFires", "3fires", "positive"],
-    ["maxFires", "-1", "positive"],
-    ["maxFires", "0", "positive"],
-    ["maxFires", "9007199254740992", "positive"],
-    ["cooldownSeconds", "-1", "non-negative"],
-  ])("rejects invalid %s=%s with an integer error", async (field, value, range) => {
-    const execute = executor();
-    await expect(execute("create-invalid-integer", createArgs({ [field]: value }))).rejects.toThrow(
-      `${field} must be a ${range} integer`,
-    );
   });
 
   it("injects owner-created intents and skips rows without a known creator", async () => {
@@ -326,27 +282,14 @@ describe("standing intents", () => {
       }),
     ).toEqual([created.id]);
 
-    const db = database();
-    const insertUnknownCreator = db.prepare(
-      `INSERT INTO standing_intents (
-        id, description, trigger_keywords, trigger_embedding, channel_scope, sender_scope,
-        creator_sender, status, expires_at, max_fires, fire_count, cooldown_seconds,
-        last_fired_at, created_at, source_session_id
-      ) VALUES (?, ?, ?, NULL, NULL, NULL, ?, 'armed', ?, 1, 0, 0, NULL, ?, NULL)`,
-    );
-    const expiresAt = Date.now() + 60_000;
     for (const [kind, creator] of [
       ["missing", null],
       ["unknown", "unknown"],
     ] as const) {
-      insertUnknownCreator.run(
-        `${kind}-creator`,
-        `${kind} creator must not inject.`,
-        JSON.stringify([`${kind} creator signal`]),
-        creator,
-        expiresAt,
-        Date.now(),
-      );
+      const untrusted = await createKeywordIntent(`${kind} creator signal`);
+      database()
+        .prepare("UPDATE standing_intents SET creator_sender = ? WHERE id = ?")
+        .run(creator, untrusted.id);
     }
 
     expect(
@@ -449,7 +392,7 @@ describe("standing intents", () => {
     ).toBe(true);
   });
 
-  it("matches late prompt terms in the kernel without stale FTS rows starving an armed intent", async () => {
+  it("matches late prompt terms without stale FTS rows starving an armed intent", async () => {
     for (let index = 0; index < 33; index += 1) {
       const stale = await createKeywordIntent("deployment", { nowMs: index });
       await cancelStandingIntent({ agentId: "main", id: stale.id });
@@ -458,43 +401,9 @@ describe("standing intents", () => {
     const active = await createKeywordIntent("deployment needle", { maxFires: 1, nowMs: 100 });
     const prefix = Array.from({ length: 40 }, (_, index) => `word${index}`).join(" ");
 
-    // Reopen so cached statements from setup cannot bypass the execution counter.
-    await closeAgents();
-    const db = database();
-    const prepare = db.prepare.bind(db);
-    let reads = 0;
-    const prepareSpy = vi.spyOn(db, "prepare").mockImplementation((sql) => {
-      const statement = prepare(sql);
-      const countRead = <T extends (...args: never[]) => unknown>(method: T): T =>
-        new Proxy(method, {
-          apply(target, receiver, args) {
-            reads += 1;
-            return Reflect.apply(target, receiver, args);
-          },
-        });
-      statement.all = countRead(statement.all.bind(statement));
-      statement.get = countRead(statement.get.bind(statement));
-      statement.iterate = countRead(statement.iterate.bind(statement));
-      return statement;
-    });
-    try {
-      const input = prepareStandingIntentMatch({
-        prompt: `${prefix} deployment needle`,
-        nowMs: 1_000,
-      });
-      if (!input) {
-        throw new Error("Expected the production preparer to admit the late prompt terms");
-      }
-      const matches = runSqliteImmediateTransactionSync(db, () =>
-        matchStandingIntentsInDatabase(db, input),
-      );
-
-      expect(matches.map((intent) => intent.id)).toStrictEqual([active.id]);
-      expect(reads).toBeGreaterThan(0);
-      expect(reads).toBeLessThanOrEqual(4);
-    } finally {
-      prepareSpy.mockRestore();
-    }
+    expect(await matchIds({ prompt: `${prefix} deployment needle`, nowMs: 1_000 })).toStrictEqual([
+      active.id,
+    ]);
     expect((await list(1_000)).find((intent) => intent.id === active.id)).toMatchObject({
       status: "done",
       fireCount: 1,

@@ -14,6 +14,7 @@ import {
   invalidateControlUiFaviconPalette,
 } from "./control-ui-environment-presentation.runtime.ts";
 import { connectControlUiFaviconArtwork } from "./control-ui-favicon-artwork.runtime.ts";
+import { controlUiPaletteStyle } from "./control-ui-palette-style.ts";
 import { gatewayPresentationScope } from "./gateway-presentation-scope.ts";
 import { canUseQuestionPrompts } from "./question-prompt-client.ts";
 import {
@@ -177,11 +178,21 @@ export function connectControlUiFavicon(
     listen(shell, CHAT_RUN_ACTIVITY_CHANGED_EVENT, synchronize),
     listen(shell, CHAT_PANE_LIFECYCLE_CHANGED_EVENT, synchronize),
   ];
-  const palette = new MutationObserver(() => {
+  const root = document.documentElement;
+  let previousPaletteStyle = controlUiPaletteStyle(root);
+  const palette = new MutationObserver((records) => {
+    const nextPaletteStyle = controlUiPaletteStyle(root);
+    if (
+      records.every((record) => record.attributeName === "style") &&
+      nextPaletteStyle === previousPaletteStyle
+    ) {
+      return;
+    }
+    previousPaletteStyle = nextPaletteStyle;
     invalidateControlUiFaviconPalette();
     synchronize();
   });
-  palette.observe(document.documentElement, {
+  palette.observe(root, {
     attributes: true,
     attributeFilter: ["style", "data-theme", "data-theme-mode", "data-theme-mascot"],
   });

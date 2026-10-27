@@ -1,4 +1,5 @@
 import { AsyncLocalStorage } from "node:async_hooks";
+import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import type { WorkerTaskPool } from "openclaw/plugin-sdk/process-runtime";
 import { codexCatalogPageWorkerEntrypoint } from "../../catalog-page-worker-entrypoint.js";
 import {
@@ -17,6 +18,9 @@ const CATALOG_MAX_BYTES = 8 * 1024 * 1024;
 const CATALOG_SINGLETON_MAX_BYTES = 64 * 1024 * 1024;
 const CATALOG_WORKER_IDLE_MS = 60_000;
 const runInCatalogWorkerContext = AsyncLocalStorage.snapshot();
+const loadProcessRuntime = createLazyRuntimeModule(
+  () => import("openclaw/plugin-sdk/process-runtime"),
+);
 
 /** Late responses retain their decode route after cancellation removes the waiter. */
 export function codexCatalogRequestId(
@@ -72,11 +76,6 @@ export class CodexCatalogWorker {
         // Keep malformed-payload diagnostics off the main thread.
       }
       if (parsed !== undefined) {
-        // Cache callbacks observe closure and cancellation before asynchronous delivery.
-        await Promise.resolve();
-        if (this.closed) {
-          return undefined;
-        }
         const attempt = attempts.get(route.id);
         const projection = attempt?.catalogProjection;
         return projectCodexCatalogMessage(
@@ -94,8 +93,7 @@ export class CodexCatalogWorker {
       return undefined;
     }
     if (!this.pool) {
-      const { resolveRuntimeWorkerUrl, WorkerTaskPool } =
-        await import("openclaw/plugin-sdk/process-runtime");
+      const { resolveRuntimeWorkerUrl, WorkerTaskPool } = await loadProcessRuntime();
       if (this.closed) {
         return undefined;
       }

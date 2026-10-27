@@ -1,11 +1,11 @@
-import path from "node:path";
+import nodePath from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import * as boundaryPath from "../infra/boundary-path.js";
-import { executeSqliteQuerySync, getNodeSqliteKysely } from "../infra/kysely-sync.js";
+import { executeSqliteQuerySync as query, getNodeSqliteKysely } from "../infra/kysely-sync.js";
 import { requireNodeSqlite } from "../infra/node-sqlite.js";
 import { runSqliteImmediateTransactionSync } from "../infra/sqlite-transaction.js";
 import { mockProcessPlatform } from "../test-utils/vitest-spies.js";
-import { migrateAgentDatabaseRelativePaths } from "./openclaw-state-db-schema-repair.js";
+import { migrateAgentDatabaseRelativePaths as migrate } from "./openclaw-state-db-schema-repair.js";
 import type { AgentDatabases, DB } from "./openclaw-state-db.generated.js";
 
 vi.hoisted(() => {
@@ -27,6 +27,16 @@ beforeEach(() => {
 });
 afterEach(() => vi.restoreAllMocks());
 
+function row(
+  path: string,
+  schema_version: number,
+  last_seen_at: number,
+  size_bytes: number | null,
+  agent_id = "main",
+): AgentDatabases {
+  return { agent_id, path, schema_version, last_seen_at, size_bytes };
+}
+
 describe.each([String.raw`C:\OpenClaw`, String.raw`\\Server\Share\OpenClaw`])(
   "v8 Windows inventory migration under %s",
   (stateDir) => {
@@ -38,93 +48,49 @@ describe.each([String.raw`C:\OpenClaw`, String.raw`\\Server\Share\OpenClaw`])(
     ])(
       "merges aliases with newest $newest facts (reverse scan: $reverse)",
       ({ reverse, newest }) => {
-        const db = new (requireNodeSqlite().DatabaseSync)(":memory:");
-        try {
-          db.exec(`
+        using db = new (requireNodeSqlite().DatabaseSync)(":memory:");
+        db.exec(`
           CREATE TABLE agent_databases (
-            agent_id TEXT NOT NULL,
-            path TEXT NOT NULL,
-            schema_version INTEGER NOT NULL,
-            last_seen_at INTEGER NOT NULL,
-            size_bytes INTEGER,
+            agent_id TEXT NOT NULL, path TEXT NOT NULL,
+            schema_version INTEGER NOT NULL, last_seen_at INTEGER NOT NULL, size_bytes INTEGER,
             PRIMARY KEY (agent_id, path)
           ) STRICT;
           PRAGMA user_version = 8;
           PRAGMA reverse_unordered_selects = ${reverse ? 1 : 0};
         `);
-          const relative = String.raw`agents\main\agent\openclaw-agent.sqlite`;
-          const ordinary = path.join(stateDir, relative);
-          const namespaced = path.toNamespacedPath(ordinary);
-          const external = String.raw`D:\External\custom.sqlite`;
-          const newestFacts = { schema_version: 20, last_seen_at: 200, size_bytes: null };
-          const olderFacts = { schema_version: 18, last_seen_at: 100, size_bytes: 50 };
-          const aliases: AgentDatabases[] = [
-            {
-              agent_id: "main",
-              path: ordinary,
-              ...(newest === "ordinary" ? newestFacts : olderFacts),
-            },
-            {
-              agent_id: "main",
-              path: namespaced,
-              ...(newest === "namespaced" ? newestFacts : olderFacts),
-            },
-          ];
-          const retained: AgentDatabases[] = [
-            {
-              agent_id: "other",
-              path: ordinary,
-              schema_version: 18,
-              last_seen_at: 300,
-              size_bytes: 75,
-            },
-            {
-              agent_id: "main",
-              path: external,
-              schema_version: 18,
-              last_seen_at: 400,
-              size_bytes: 80,
-            },
-            {
-              agent_id: "main",
-              path: path.toNamespacedPath(external),
-              schema_version: 20,
-              last_seen_at: 500,
-              size_bytes: 90,
-            },
-          ];
-          const queries = getNodeSqliteKysely<Pick<DB, "agent_databases">>(db);
-          executeSqliteQuerySync(
-            db,
-            queries
-              .insertInto("agent_databases")
-              .values([...(reverse ? aliases.toReversed() : aliases), ...retained]),
-          );
+        const relative = String.raw`agents\main\agent\openclaw-agent.sqlite`;
+        const ordinary = nodePath.join(stateDir, relative);
+        const namespaced = nodePath.toNamespacedPath(ordinary);
+        const external = String.raw`D:\External\custom.sqlite`;
+        const newer = [20, 200, null] as const;
+        const older = [18, 100, 50] as const;
+        const aliases = [
+          newest === "ordinary" ? row(ordinary, ...newer) : row(ordinary, ...older),
+          newest === "namespaced" ? row(namespaced, ...newer) : row(namespaced, ...older),
+        ];
+        const retained: AgentDatabases[] = [
+          row(ordinary, 18, 300, 75, "other"),
+          row(external, 18, 400, 80),
+          row(nodePath.toNamespacedPath(external), 20, 500, 90),
+        ];
+        const queries = getNodeSqliteKysely<Pick<DB, "agent_databases">>(db);
+        const input = [...(reverse ? aliases.toReversed() : aliases), ...retained];
+        query(db, queries.insertInto("agent_databases").values(input));
 
-          runSqliteImmediateTransactionSync(db, () =>
-            migrateAgentDatabaseRelativePaths(
-              db,
-              8,
-              path.join(stateDir, "state", "openclaw.sqlite"),
-            ),
-          );
+        runSqliteImmediateTransactionSync(db, () =>
+          migrate(db, 8, nodePath.join(stateDir, "state", "openclaw.sqlite")),
+        );
 
-          const rows = executeSqliteQuerySync(
-            db,
-            queries.selectFrom("agent_databases").selectAll(),
-          ).rows;
-          expect(rows).toHaveLength(4);
-          expect(rows).toEqual(
-            expect.arrayContaining([
-              { agent_id: "main", path: relative, ...newestFacts },
-              { ...retained[0], path: relative },
-              retained[1],
-              retained[2],
-            ]),
-          );
-        } finally {
-          db.close();
-        }
+        const rows = query(db, queries.selectFrom("agent_databases").selectAll()).rows;
+        expect(rows).toHaveLength(4);
+        expect(rows).toEqual(
+          expect.arrayContaining([
+            row(relative, ...newer),
+            { ...retained[0], path: relative },
+            retained[1],
+            retained[2],
+          ]),
+        );
       },
     );
   },

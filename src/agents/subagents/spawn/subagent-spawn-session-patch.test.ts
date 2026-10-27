@@ -2,12 +2,12 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { expect, it, vi } from "vitest";
 import {
+  appendTranscriptMessage,
   loadSessionEntry,
   loadTranscriptEvents,
   upsertSessionEntryCore,
 } from "../../../config/sessions/session-accessor.js";
 import { writeSessionEntry } from "../../../config/sessions/session-accessor.sqlite-entry-store.js";
-import { replaceTranscriptEvents } from "../../../config/sessions/session-accessor.sqlite-transcript-write.test-support.js";
 import * as sessionStorePaths from "../../../config/sessions/session-store-path.js";
 import type { SessionEntry } from "../../../config/sessions/types.js";
 import {
@@ -73,28 +73,19 @@ it.each(["creation", "fork"] as const)(
           updatedAt: 1,
         });
         if (operation === "fork") {
-          await replaceTranscriptEvents(
-            { agentId, sessionKey, sessionId, storePath: database.path },
-            [
-              { type: "session", version: 3, id: sessionId, timestamp: "2026-09-26T00:00:00Z" },
-              {
-                type: "message",
-                id: "user-message",
-                parentId: null,
-                message: { role: "user", content: `${source} context` },
-              },
-              {
-                type: "message",
-                id: "assistant-message",
-                parentId: "user-message",
-                message: {
-                  role: "assistant",
-                  content: [{ type: "text", text: `${source} reply` }],
-                  stopReason: "stop",
-                },
-              },
-            ],
-          );
+          for (const message of [
+            { role: "user", content: `${source} context` },
+            {
+              role: "assistant",
+              content: [{ type: "text", text: `${source} reply` }],
+              stopReason: "stop",
+            },
+          ]) {
+            await appendTranscriptMessage(
+              { agentId, sessionKey, sessionId, storePath: database.path },
+              { message },
+            );
+          }
         }
       }
       if (operation === "fork") {
@@ -232,7 +223,7 @@ it("inherits admitted skill pins without overwriting a parent refresh", async ()
     });
     let refreshedParent: SessionEntry | null = null;
     const preparePhysical = sessionStorePaths.preparePhysicalSessionStorePath;
-    const prepare = vi
+    using _ = vi
       .spyOn(sessionStorePaths, "preparePhysicalSessionStorePath")
       .mockImplementation(async (...args) => {
         if (args[0].sessionKey === childSessionKey) {
@@ -244,26 +235,23 @@ it("inherits admitted skill pins without overwriting a parent refresh", async ()
         }
         return preparePhysical(...args);
       });
-    try {
-      const result = await spawn({
-        expectedParentSessionId: "parent-first",
-        senderIsOwner: true,
-      });
-      expect(result).toMatchObject({ status: "ok" });
-      const child = readEntry(storePath, childSessionKey);
-      expect(child).toMatchObject({
-        spawnedBySessionId: "parent-first",
-        spawnedBySenderIsOwner: true,
-        skillLibrarySelections,
-      });
-      expect(refreshedParent).toMatchObject({
-        totalTokens: 10,
-        skillLibrarySelections: [],
-      });
-      expect(loadSessionEntry(scope)).toEqual(refreshedParent);
-    } finally {
-      prepare.mockRestore();
-    }
+
+    const result = await spawn({
+      expectedParentSessionId: "parent-first",
+      senderIsOwner: true,
+    });
+    expect(result).toMatchObject({ status: "ok" });
+    const child = readEntry(storePath, childSessionKey);
+    expect(child).toMatchObject({
+      spawnedBySessionId: "parent-first",
+      spawnedBySenderIsOwner: true,
+      skillLibrarySelections,
+    });
+    expect(refreshedParent).toMatchObject({
+      totalTokens: 10,
+      skillLibrarySelections: [],
+    });
+    expect(loadSessionEntry(scope)).toEqual(refreshedParent);
   });
 });
 

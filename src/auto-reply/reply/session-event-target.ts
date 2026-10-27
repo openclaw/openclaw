@@ -4,7 +4,7 @@ import {
   assertAdmittedRunOperatorAuthority,
   type AdmittedRunOperatorAuthority,
 } from "../../agents/admitted-run-context.js";
-import { isAgentDeletionBlocked } from "../../agents/agent-lifecycle-registry.js";
+import { prepareAgentDeletionBlocked } from "../../agents/agent-lifecycle-registry.js";
 import { resolveConfiguredAgentId } from "../../agents/agent-scope-config.js";
 import { createRuntimeToolMatcher } from "../../agents/tool-policy-match.js";
 import {
@@ -39,7 +39,11 @@ const targetScopes = resolveGlobalSingleton(
   () =>
     new WeakMap<
       SessionEventTarget,
-      { env?: NodeJS.ProcessEnv; operatorAuthority?: AdmittedRunOperatorAuthority }
+      {
+        env?: NodeJS.ProcessEnv;
+        operatorAuthority?: AdmittedRunOperatorAuthority;
+        deletion?: { agentId: string; isBlocked: () => boolean };
+      }
     >(),
 );
 
@@ -137,6 +141,7 @@ export async function captureSessionEventTargetForHost(
     const { withSessionEntryReadOnlyInWorker } =
       await import("../../config/sessions/session-entry-read-runtime.js");
     await readAgentDeletionJournalStatusInWorker(agentId, { env });
+    const deletion = { agentId, isBlocked: prepareAgentDeletionBlocked(agentId, { env }) };
     const entry = await withSessionEntryReadOnlyInWorker(
       { agentId, storePath, sessionKey, env },
       assertCaptureCurrent,
@@ -187,7 +192,7 @@ export async function captureSessionEventTargetForHost(
         ? narrowSessionEventSettings(producerSettings, destinationSettings)
         : structuredClone(destinationSettings),
     };
-    targetScopes.set(target, { env, operatorAuthority });
+    targetScopes.set(target, { env, operatorAuthority, deletion });
     return target;
   } finally {
     preparedCaller?.release();
@@ -202,7 +207,16 @@ export function assertSessionEventTargetCurrent(target: SessionEventTarget): voi
   }
   const cfg = getSessionEventRuntimeConfig();
   resolveConfiguredAgentId(cfg, target.agentId);
-  if (isAgentDeletionBlocked(target.agentId, { env: targetScopes.get(target)?.env })) {
+  const scope = targetScopes.get(target);
+  let deletion = scope?.deletion;
+  if (!deletion || deletion.agentId !== target.agentId) {
+    deletion = {
+      agentId: target.agentId,
+      isBlocked: prepareAgentDeletionBlocked(target.agentId, { env: scope?.env }),
+    };
+    targetScopes.set(target, { ...scope, deletion });
+  }
+  if (deletion.isBlocked()) {
     throw new Error("Session event owner is being deleted");
   }
 }
@@ -281,6 +295,10 @@ export async function prepareSessionEventTargetForHost(
     return {
       ...retained,
       assertCurrent,
+      readSessionSettings: () => {
+        assertTargetCurrent();
+        return retained.readSessionSettings();
+      },
       bindCreation: (operation: Parameters<typeof retained.bindCreation>[0]) => {
         assertTargetCurrent();
         const assertCreationCurrent = retained.bindCreation(operation, (binding) => {

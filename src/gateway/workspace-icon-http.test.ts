@@ -189,19 +189,24 @@ describe("handleWorkspaceIconHttpRequest", () => {
     await state?.cleanup();
   });
 
+  let sessionVisible = true;
+
   beforeEach(() => {
     // The shared test setup retires plugin runtime metadata after every case.
     publishPluginMetadata();
     authorityCurrent = true;
-    mocks.authorize
-      .mockReset()
-      .mockImplementation(({ res }: { res: ServerResponse }) =>
-        bindHttpResponseAuthority(
-          { authMethod: "token", operatorScopes: ["operator.admin", "operator.read"] },
-          res,
-          () => authorityCurrent,
-        ),
-      );
+    sessionVisible = true;
+    mocks.authorize.mockReset().mockImplementation(({ res }: { res: ServerResponse }) =>
+      bindHttpResponseAuthority(
+        {
+          authMethod: "token",
+          operatorScopes: ["operator.admin", "operator.read"],
+          canReadSession: () => sessionVisible,
+        },
+        res,
+        () => authorityCurrent,
+      ),
+    );
   });
 
   const iconRoute = (sessionKey: string) =>
@@ -253,6 +258,25 @@ describe("handleWorkspaceIconHttpRequest", () => {
       expect(response.headers.get("content-type")).toBe("image/png");
     }
     await expectBody(response, Buffer.alloc(0));
+  });
+
+  it("refuses a session the profile cannot see without reading its workspace", async () => {
+    await seedIcon();
+    sessionVisible = false;
+    const read = vi.spyOn(boundaryFileRead, "readFileDescriptorBounded");
+    try {
+      const response = await requestIcon(403);
+      expectHeaders(response, { "cache-control": "no-store" });
+      await expect(response.json()).resolves.toEqual({
+        ok: false,
+        error: { message: "session access required", type: "forbidden" },
+      });
+      expect(read).not.toHaveBeenCalled();
+    } finally {
+      read.mockRestore();
+    }
+    sessionVisible = true;
+    await expectBody(await requestIcon(), PNG_BYTES);
   });
 
   it("briefly caches an authenticated 404 for a workspace with no icon", async () => {

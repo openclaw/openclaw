@@ -14,7 +14,21 @@ const native = vi.hoisted(() => ({
   select: vi.fn<(pathname: string) => void>(),
   closeProbe: vi.fn<() => Promise<SqliteRuntimeCapabilities>>(),
   publish: vi.fn<(key: unknown, value: unknown) => void>(),
+  spawn: vi.fn(),
 }));
+
+vi.mock("node:child_process", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("node:child_process")>();
+  return {
+    ...actual,
+    spawnSync: (...args: Parameters<typeof actual.spawnSync>) => {
+      if (!native.enabled) {
+        return actual.spawnSync(...args);
+      }
+      return native.spawn(...args);
+    },
+  };
+});
 
 vi.mock("node:fs", async (importOriginal) => {
   const actual = await importOriginal<typeof import("node:fs")>();
@@ -29,19 +43,7 @@ vi.mock("node:module", async (importOriginal) => {
     const require = actual.createRequire(...args);
     return Object.assign((specifier: string) => {
       if (specifier === "bun:ffi") {
-        return {
-          FFIType: { cstring: 0, i32: 1 },
-          dlopen: (pathname: string) => {
-            const probe = native.probe(pathname);
-            return {
-              symbols: {
-                sqlite3_libversion: () => probe.version,
-                sqlite3_compileoption_used: () => (probe.extensionLoadingSupported ? 0 : 1),
-              },
-              close() {},
-            };
-          },
-        };
+        throw new Error("bun:ffi requires the JIT");
       }
       if (specifier === "bun:sqlite") {
         return { Database: { setCustomSQLite: (pathname: string) => native.select(pathname) } };
@@ -86,35 +88,37 @@ export const {
   initializeSqliteRuntimeCapabilities,
 } = await import("./bun-sqlite-library.js");
 
-let restore: () => void;
+function snapshotProperty(target: object, key: PropertyKey) {
+  const descriptor = Object.getOwnPropertyDescriptor(target, key);
+  return () =>
+    descriptor
+      ? Object.defineProperty(target, key, descriptor)
+      : Reflect.deleteProperty(target, key);
+}
+let restore: (() => unknown)[];
 beforeEach(() => {
-  const originals = [
-    [globalThis, sqliteSelectionKey],
-    [globalThis, "__openclawStandaloneRootUrl"],
-    [process, "versions"],
-    [process, "platform"],
-  ] as const;
-  const descriptors = originals.map(([target, key]) =>
-    Object.getOwnPropertyDescriptor(target, key),
-  );
-  restore = () => {
-    originals.forEach(([target, key], index) => {
-      const descriptor = descriptors[index];
-      if (descriptor) {
-        Object.defineProperty(target, key, descriptor);
-      } else {
-        Reflect.deleteProperty(target, key);
-      }
-    });
-  };
+  restore = [
+    snapshotProperty(globalThis, sqliteSelectionKey),
+    snapshotProperty(globalThis, "__openclawStandaloneRootUrl"),
+    snapshotProperty(process, "versions"),
+    snapshotProperty(process, "platform"),
+  ];
 });
 afterEach(() => {
-  restore();
+  restore.forEach((property) => property());
   native.enabled = false;
   native.environment.clear();
   vi.unstubAllEnvs();
   vi.restoreAllMocks();
 });
+
+function setValue(target: object, key: PropertyKey, value: unknown) {
+  if (value === undefined) {
+    Reflect.deleteProperty(target, key);
+  } else {
+    Object.defineProperty(target, key, { configurable: true, value });
+  }
+}
 
 export function mockBunSqliteNativeBoundary(
   options: {
@@ -137,24 +141,29 @@ export function mockBunSqliteNativeBoundary(
   native.probe = vi.fn(
     options.probe ?? (() => ({ version: "3.53.4", extensionLoadingSupported: true })),
   );
+  native.spawn.mockReset().mockImplementation((_command: string, args: string[]) => {
+    try {
+      const facts = native.probe(args.at(-1) ?? "");
+      return { status: 0, signal: null, stdout: JSON.stringify({ protocol: 1, ...facts }) };
+    } catch (error) {
+      return {
+        status: 1,
+        signal: null,
+        stdout: JSON.stringify({
+          protocol: 1,
+          error: error instanceof Error ? error.message : String(error),
+        }),
+      };
+    }
+  });
   native.select = vi.fn(options.select ?? (() => {}));
   Reflect.deleteProperty(globalThis, sqliteSelectionKey);
-  if (options.standaloneRootUrl === undefined) {
-    Reflect.deleteProperty(globalThis, "__openclawStandaloneRootUrl");
-  } else {
-    Object.defineProperty(globalThis, "__openclawStandaloneRootUrl", {
-      configurable: true,
-      value: options.standaloneRootUrl,
-    });
-  }
-  Object.defineProperty(process, "versions", {
-    configurable: true,
-    value: { ...process.versions, bun: (options.isBun ?? true) ? "fixture" : undefined },
+  setValue(globalThis, "__openclawStandaloneRootUrl", options.standaloneRootUrl);
+  setValue(process, "versions", {
+    ...process.versions,
+    bun: (options.isBun ?? true) ? "fixture" : undefined,
   });
-  Object.defineProperty(process, "platform", {
-    configurable: true,
-    value: options.platform ?? "darwin",
-  });
+  setValue(process, "platform", options.platform ?? "darwin");
   for (const key of ["OPENCLAW_SQLITE_LIBRARY", "HOMEBREW_PREFIX", "OPENCLAW_DIAGNOSTICS"]) {
     vi.stubEnv(key, options.env?.[key]);
   }

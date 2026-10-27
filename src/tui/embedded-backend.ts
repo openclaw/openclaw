@@ -15,11 +15,8 @@ import {
   isDefinitiveRunLifecycle,
   type AgentRunTerminalOutcome,
 } from "../agents/agent-run-terminal-outcome.js";
-import {
-  resolveAgentDir,
-  resolveDefaultAgentId,
-  resolveSessionAgentId,
-} from "../agents/agent-scope.js";
+import { resolveAgentVerboseDefault, resolveDefaultAgentId } from "../agents/agent-scope-config.js";
+import { resolveAgentDir, resolveSessionAgentId } from "../agents/agent-scope.js";
 import { ensureContextWindowCacheLoaded } from "../agents/context.js";
 import { claimPendingEmbeddedAgentQuestionAnswer } from "../agents/embedded-agent-runner/runs.js";
 import { resolveThinkingDefault } from "../agents/model-selection.js";
@@ -52,18 +49,18 @@ import {
 } from "../gateway/agent-event-assistant-text.js";
 import { resolveEffectiveChatHistoryMaxChars } from "../gateway/chat-display-projection.js";
 import {
-  capLiveAssistantText,
-  shouldSuppressAssistantEventForLiveChat,
-} from "../gateway/live-chat-projector.js";
-import { getMaxChatHistoryMessagesBytes } from "../gateway/server-constants.js";
-import {
   CHAT_HISTORY_MAX_SINGLE_MESSAGE_BYTES,
   createChatHistoryActivityProjection,
   createChatHistoryByteCounter,
+  getMaxChatHistoryMessagesBytes,
   replaceOversizedChatHistoryMessages,
-} from "../gateway/server-methods/chat-history-budget.js";
+} from "../gateway/chat-history-budget.js";
+import { enrichChatHistoryCompactionMarkers } from "../gateway/chat-history-response-page.js";
+import {
+  capLiveAssistantText,
+  shouldSuppressAssistantEventForLiveChat,
+} from "../gateway/live-chat-projector.js";
 import { readChatHistoryPage } from "../gateway/server-methods/chat-history-pages.js";
-import { enrichChatHistoryCompactionMarkers } from "../gateway/server-methods/chat-history-response-page.js";
 import { buildModelsListResult } from "../gateway/server-methods/models-list-result.js";
 import { createGatewaySession } from "../gateway/session-create-service.js";
 import { performGatewaySessionReset } from "../gateway/session-reset-service.js";
@@ -154,8 +151,6 @@ export class EmbeddedTuiBackend implements TuiBackend {
 
   onEvent?: (evt: TuiEvent) => void;
   onConnected?: () => void;
-  onDisconnected?: (reason: string) => void;
-  onGap?: (info: { expected: number; received: number }) => void;
 
   private readonly deps = createDefaultDeps();
   private readonly localSenderId = randomUUID();
@@ -535,7 +530,7 @@ export class EmbeddedTuiBackend implements TuiBackend {
             lifecycleRevision: entry.lifecycleRevision,
           })
         : undefined;
-    const verboseLevel = entry?.verboseLevel ?? cfg.agents?.defaults?.verboseDefault;
+    const verboseLevel = entry?.verboseLevel ?? resolveAgentVerboseDefault(cfg, sessionAgentId);
     if (sessionInfo) {
       sessionInfo.thinkingLevel = thinkingLevel;
       sessionInfo.verboseLevel = verboseLevel;

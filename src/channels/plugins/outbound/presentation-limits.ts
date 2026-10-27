@@ -265,53 +265,6 @@ function adaptOption(
   return adaptControl(option, resolveMessagePresentationOptionAction(option), limits);
 }
 
-function adaptSelectBlock(
-  block: Extract<MessagePresentationBlock, { type: "select" }>,
-  limits: SelectLimits | undefined,
-  budget: ActionBudget,
-  fallbackBlockType: "context" | "text",
-  textLimits?: TextLimits,
-): MessagePresentationBlock[] {
-  const candidates: SelectCandidate[] = block.options.map((option) => ({
-    original: option,
-    adapted: adaptOption(option, limits),
-  }));
-  const renderableCandidates = candidates.filter(
-    (candidate): candidate is SelectCandidate & { adapted: MessagePresentationOption } =>
-      Boolean(candidate.adapted),
-  );
-  const maxOptions = asPositiveInteger(limits?.maxOptions);
-  const selectedCandidates = maxOptions
-    ? renderableCandidates.slice(0, maxOptions)
-    : renderableCandidates;
-  const selected = new Set<SelectCandidate>(selectedCandidates);
-  const options = selectedCandidates.map((candidate) => candidate.adapted);
-  const canRenderSelect = options.length > 0 && hasActionSlotBudget(budget);
-  const fallback = fallbackListBlocks({
-    blockType: fallbackBlockType,
-    heading: block.placeholder ?? "Options",
-    labels: (canRenderSelect
-      ? candidates.filter((candidate) => !candidate.adapted || !selected.has(candidate))
-      : candidates
-    ).map((candidate) => renderMessagePresentationControlFallbackLabel(candidate.original)),
-    limits: textLimits,
-  });
-  if (!canRenderSelect) {
-    return fallback;
-  }
-  consumeActionBudget(budget);
-  return [
-    {
-      type: "select",
-      ...(block.placeholder
-        ? { placeholder: truncateText(block.placeholder, limits?.maxLabelLength) }
-        : {}),
-      options,
-    },
-    ...fallback,
-  ];
-}
-
 function countRenderableSelectBlocks(
   blocks: readonly MessagePresentationBlock[],
   capabilities: ChannelPresentationCapabilities | undefined,
@@ -468,13 +421,46 @@ export function adaptMessagePresentationForChannel(params: {
       );
     }
     if (block.type === "select") {
-      return adaptSelectBlock(
-        block,
-        limits?.selects,
-        actionBudget,
-        fallbackBlockType,
-        limits?.text,
+      const selectLimits = limits?.selects;
+      const textLimits = limits?.text;
+      const candidates: SelectCandidate[] = block.options.map((option) => ({
+        original: option,
+        adapted: adaptOption(option, selectLimits),
+      }));
+      const renderableCandidates = candidates.filter(
+        (candidate): candidate is SelectCandidate & { adapted: MessagePresentationOption } =>
+          Boolean(candidate.adapted),
       );
+      const maxOptions = asPositiveInteger(selectLimits?.maxOptions);
+      const selectedCandidates = maxOptions
+        ? renderableCandidates.slice(0, maxOptions)
+        : renderableCandidates;
+      const selected = new Set<SelectCandidate>(selectedCandidates);
+      const options = selectedCandidates.map((candidate) => candidate.adapted);
+      const canRenderSelect = options.length > 0 && hasActionSlotBudget(actionBudget);
+      const fallback = fallbackListBlocks({
+        blockType: fallbackBlockType,
+        heading: block.placeholder ?? "Options",
+        labels: (canRenderSelect
+          ? candidates.filter((candidate) => !candidate.adapted || !selected.has(candidate))
+          : candidates
+        ).map((candidate) => renderMessagePresentationControlFallbackLabel(candidate.original)),
+        limits: textLimits,
+      });
+      if (!canRenderSelect) {
+        return fallback;
+      }
+      consumeActionBudget(actionBudget);
+      return [
+        {
+          type: "select",
+          ...(block.placeholder
+            ? { placeholder: truncateText(block.placeholder, selectLimits?.maxLabelLength) }
+            : {}),
+          options,
+        },
+        ...fallback,
+      ];
     }
     return block.type === "divider" && capabilities?.divider === false ? [] : [block];
   });

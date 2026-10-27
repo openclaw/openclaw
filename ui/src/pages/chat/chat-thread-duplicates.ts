@@ -1,9 +1,10 @@
 import { messageClientSourcesKey } from "../../../../src/chat/message-client-source.js";
 import { escapeRegExp } from "../../../../src/shared/regexp.js";
 import type { ChatItem, NormalizedMessage } from "../../lib/chat/chat-types.ts";
+import { readChatThreadMessageIdentity } from "../../lib/chat/history-message-identity.ts";
 import { normalizeMessage, normalizeRoleForGrouping } from "../../lib/chat/message-normalizer.ts";
 import { senderIdentityKey } from "../../lib/chat/sender-label.ts";
-import { isPendingSendMessage, readChatThreadMessageIdentity } from "./chat-thread-items.ts";
+import { isPendingSendMessage } from "./chat-thread-items.ts";
 
 type PreparedChatItem =
   | Exclude<ChatItem, { kind: "message" }>

@@ -24,7 +24,6 @@ export type RegistryState = {
     registerMemoryCapability?: MemoryCapabilityRegistrar;
   };
   commandRegistryClearTail?: Promise<void>;
-  commandRegistryClearRegistries?: Map<PluginRegistry, number>;
   retiredRegistryCleanups?: Map<
     Promise<void>,
     { registry: PluginRegistry; work: import("../shared/async-work-scope.js").AsyncWorkScope }

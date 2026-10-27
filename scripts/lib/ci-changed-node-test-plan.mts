@@ -71,6 +71,8 @@ import {
 import {
   listExtensionTestFilesForRoots,
   resolveExtensionTestConfig,
+  DATABASE_WORKER_CONFIG,
+  DATABASE_WORKER_TEST_JOB_FILE_LIMIT,
 } from "./extension-test-plan.mts";
 import {
   mergeVitestPretestBuildModes,
@@ -98,6 +100,34 @@ type ChangedTargetValidation = {
   selectionMode?: "full" | "aggressive";
   onSelection?: (selection: { rule: string; input: string; targets: string[] }) => void;
 };
+const CHANGED_FILE_SECONDS_HINTS = new Map<string, number>([
+  // Broad PR runs 39544275996 and 39545658103: cold direct-target wrapper
+  // spans, rounded up. Missing/older native timings underpriced these processes.
+  ["test/e2e/qa-lab/runtime/channel-progress-presentation.e2e.test.ts", 266],
+  ["test/e2e/qa-lab/runtime/paired-node-worker-lifecycle-wire.e2e.test.ts", 263],
+  ["test/e2e/qa-lab/runtime/codex-node-exec-server.e2e.test.ts", 194],
+  ["test/e2e/qa-lab/runtime/paired-node-worker-upgrade-wire.e2e.test.ts", 178],
+  ["test/e2e/qa-lab/runtime/gateway-node-control-plane.e2e.test.ts", 144],
+  ["test/e2e/qa-lab/runtime/gateway-node-mcp.stress.e2e.test.ts", 133],
+  ["test/e2e/qa-lab/runtime/telegram-recovered-artifact.e2e.test.ts", 127],
+  ["test/e2e/qa-lab/runtime/gateway-node-exec-routing.e2e.test.ts", 119],
+  ["test/e2e/qa-lab/runtime/gateway-node-pending-work.e2e.test.ts", 111],
+  ["test/e2e/qa-lab/runtime/node-worker-launch-wire.e2e.test.ts", 104],
+  ["test/e2e/qa-lab/plugins/workspace-node-files.e2e.test.ts", 91],
+  ["test/e2e/gateway-transcripts-discord-capture.e2e.test.ts", 61],
+  ["test/gateway-session-resume-restart.e2e.test.ts", 196],
+  ["test/gateway-background-process-restart.e2e.test.ts", 120],
+  ["test/gateway-subagent-restart.e2e.test.ts", 118],
+  // Same runs: serial case sums are relative file costs, not wrapper walls.
+  ["src/infra/update-managed-service-handoff-lifecycle.test.ts", 92],
+  ["src/agents/agent-command.harness-compaction-custody.test.ts", 52],
+  ["src/cli/update-cli/update-command-migrated.test.ts", 67],
+  ["src/flows/doctor-health.managed-settlement.test.ts", 296],
+  ["src/cli/update-cli.already-current.test.ts", 130],
+  ["src/flows/doctor-health.update-schema.test.ts", 62],
+  ["src/cli/admin-state-owner.process.test.ts", 45],
+]);
+
 const BROWSER_EXTENSION_E2E_TEST_FILE =
   "extensions/browser/chrome-extension/bootstrap.chromium.test.ts";
 
@@ -231,6 +261,7 @@ const BUILT_ARTIFACT_TEST_INPUTS = new Set([
   "extensions/browser/chrome-extension/relay-key.test-support.ts",
   "extensions/browser/src/browser/extension-install.native-host.e2e.test.ts",
   "extensions/browser/src/browser/extension-install.test-support.ts",
+  "scripts/test-built-source-verifiers.mts",
 ]);
 
 /**
@@ -385,6 +416,9 @@ const AGGRESSIVE_PR_SMOKE_TEST_FILES = [
   "src/plugins/loader.runtime-registry.test.ts",
 ];
 const protectedRuntimeTestFiles = new Set(PR_PROTECTED_RUNTIME_TEST_FILES);
+// Roots whose tests have ordinary PR Vitest owners. Tests elsewhere, such as the
+// opt-in scripts/control-ui-retention census, keep their own config and command.
+const CHANGED_TEST_ROOTS = ["src", "test", "extensions", "packages", "ui"];
 
 /** Resolve owner areas and transitive consumers once, before projecting platform jobs. */
 export function resolveChangedNodeTestTargets(
@@ -393,6 +427,7 @@ export function resolveChangedNodeTestTargets(
 ): string[] {
   const cwd = options.cwd ?? process.cwd();
   const paths = changedPaths.filter((file) => !isIndependentlyCheckedDocumentation(file, cwd));
+  const policyTargets = resolvePolicyTestTargets(changedPaths, { cwd, baseRef: options.baseRef });
   const aggressive = options.selectionMode === "aggressive";
   const smoke = aggressive ? AGGRESSIVE_PR_SMOKE_TEST_FILES : PR_SMOKE_TEST_FILES;
   const selections: { rule: string; input: string; targets: string[] }[] = [];
@@ -436,8 +471,8 @@ export function resolveChangedNodeTestTargets(
   recordSelection({ rule: "protected-owner", input: paths.join(", "), targets: ownerOptIns });
   recordSelection({
     rule: "policy-watch",
-    input: paths.join(", "),
-    targets: resolvePolicyTestTargets(paths),
+    input: changedPaths.join(", "),
+    targets: policyTargets,
   });
   recordSelection({ rule: "fixed-smoke", input: "PR", targets: smoke });
   const owners = [
@@ -456,15 +491,11 @@ export function resolveChangedNodeTestTargets(
       ...(paths.some((file) => listRunnableVitestConfigTargets().includes(file))
         ? ["test/vitest-projects-config.test.ts"]
         : []),
-      ...resolvePolicyTestTargets(paths),
+      ...policyTargets,
     ]),
   ];
   let inventory: string[] | undefined;
-  const allFiles = () =>
-    (inventory ??= listExtensionTestFilesForRoots(
-      ["src", "test", "extensions", "packages", "ui"],
-      cwd,
-    ));
+  const allFiles = () => (inventory ??= listExtensionTestFilesForRoots(CHANGED_TEST_ROOTS, cwd));
   const optInTargets = new Set([...paths, ...smoke, ...ownerOptIns]);
   const expandTarget = (target: string): string[] => {
     if (isTestFileTarget(target)) {
@@ -506,6 +537,7 @@ export function resolveChangedNodeTestTargets(
       (file) =>
         isTestFileTarget(file) &&
         !file.endsWith(".live.test.ts") &&
+        CHANGED_TEST_ROOTS.some((root) => file.startsWith(`${root}/`)) &&
         (optInTargets.has(file) ||
           ((options.includePrExemptRuntimeTests !== false || !isPrExemptRuntimeTestFile(file)) &&
             (options.includeReleaseOnlyRuntimeTests !== false ||
@@ -558,12 +590,22 @@ function createChangedTargetShards(
   rowBudget?: number,
 ) {
   const timings = { ...readRepoE2eFileTimings(), ...readToolingFileTimings("blacksmith") };
+  // Fixed hourly reservations retain their existing weights; these hints own PR packing.
+  const costOf = (target: string) =>
+    Math.max(
+      timings[target] ?? 20,
+      rowBudget === undefined ? (CHANGED_FILE_SECONDS_HINTS.get(target) ?? 0) : 0,
+    );
   // Target children use source routing, even when selection remaps their canonical owner.
   const buildModeOf = (chunk: typeof targets) =>
     chunk.some(({ sourcePlans }) => sourcePlans.some((plan) => plan.config === E2E_VITEST_CONFIG))
       ? "private-qa"
       : resolveVitestPretestBuildMode([{ includePatterns: chunk.map(({ target }) => target) }]);
   const targetChunks: (typeof targets)[] = [];
+  const inheritedPolicies = new Map<
+    string,
+    { mode: ReturnType<typeof buildModeOf>; serial: boolean }
+  >();
   if (rowBudget !== undefined) {
     const byPolicy = new Map<string, { targets: typeof targets; seconds: number; rows: number }>();
     for (const entry of targets) {
@@ -573,7 +615,7 @@ function createChangedTargetShards(
       ]);
       const partition = byPolicy.get(key) ?? { targets: [], seconds: 0, rows: 1 };
       partition.targets.push(entry);
-      partition.seconds += timings[entry.target] ?? 20;
+      partition.seconds += costOf(entry.target);
       byPolicy.set(key, partition);
     }
     const partitions = [...byPolicy.values()];
@@ -602,36 +644,62 @@ function createChangedTargetShards(
         () => ({ targets: [], seconds: 0 }),
       );
       for (const entry of partition.targets.toSorted(
-        (a, b) => (timings[b.target] ?? 20) - (timings[a.target] ?? 20),
+        (a, b) => costOf(b.target) - costOf(a.target),
       )) {
         const bin = bins.reduce((best, candidate) =>
           candidate.seconds < best.seconds ? candidate : best,
         );
         bin.targets.push(entry);
-        bin.seconds += timings[entry.target] ?? 20;
+        bin.seconds += costOf(entry.target);
       }
       targetChunks.push(...bins.map((bin) => bin.targets));
     }
   } else {
-    let pendingChunk: typeof targets = [];
-    let seconds = 0;
+    // Retain each target's prior preparation and concurrency envelope before
+    // redistributing work; a shared serial row must not become parallel.
+    const originalChunks: (typeof targets)[] = [];
     for (const entry of targets) {
-      const cost = timings[entry.target] ?? 20;
+      let chunk = originalChunks.at(-1);
       if (
-        pendingChunk.length &&
-        (pendingChunk.length >= CHANGED_NODE_TEST_TARGETS_PER_JOB ||
-          seconds + cost > PR_NODE_TEST_SECONDS)
+        !chunk ||
+        chunk.length >= CHANGED_NODE_TEST_TARGETS_PER_JOB ||
+        chunk.reduce((sum, target) => sum + (timings[target.target] ?? 20), 0) +
+          (timings[entry.target] ?? 20) >
+          PR_NODE_TEST_SECONDS
       ) {
-        targetChunks.push(pendingChunk);
-        pendingChunk = [];
-        seconds = 0;
+        chunk = [];
+        originalChunks.push(chunk);
       }
-      pendingChunk.push(entry);
-      seconds += cost;
+      chunk.push(entry);
     }
-    if (pendingChunk.length) {
-      targetChunks.push(pendingChunk);
+    for (const chunk of originalChunks) {
+      const policy = {
+        mode: buildModeOf(chunk),
+        serial: chunk.some(({ target }) => SERIAL_CHANGED_TARGET_RE.test(target)),
+      };
+      for (const { target } of chunk) {
+        inheritedPolicies.set(target, policy);
+      }
     }
+    // Longest-first placement avoids stranding a slow target with cheap neighbors.
+    const bins: { targets: typeof targets; seconds: number; policy: string }[] = [];
+    for (const entry of targets.toSorted((a, b) => costOf(b.target) - costOf(a.target))) {
+      const cost = costOf(entry.target);
+      const policy = JSON.stringify(inheritedPolicies.get(entry.target));
+      const bin = bins.find(
+        (candidate) =>
+          candidate.policy === policy &&
+          candidate.targets.length < CHANGED_NODE_TEST_TARGETS_PER_JOB &&
+          candidate.seconds + cost <= PR_NODE_TEST_SECONDS,
+      );
+      if (bin) {
+        bin.targets.push(entry);
+        bin.seconds += cost;
+      } else {
+        bins.push({ targets: [entry], seconds: cost, policy });
+      }
+    }
+    targetChunks.push(...bins.map((bin) => bin.targets));
   }
   return targetChunks.map((chunk, index) => {
     const suffix = targetChunks.length === 1 ? "" : `-${index + 1}`;
@@ -642,15 +710,17 @@ function createChangedTargetShards(
       runner: DEFAULT_NODE_TEST_RUNNER,
       shardName: `${names.shardName}${suffix}`,
       targets: chunk.map(({ target }) => target),
-      predictedSeconds: Math.ceil(
-        chunk.reduce((sum, { target }) => sum + (timings[target] ?? 20), 0),
-      ),
+      predictedSeconds: Math.ceil(chunk.reduce((sum, { target }) => sum + costOf(target), 0)),
     };
-    const pretestBuildMode = buildModeOf(chunk);
+    const inheritedPolicy = inheritedPolicies.get(chunk[0]!.target);
+    const pretestBuildMode = inheritedPolicy ? inheritedPolicy.mode : buildModeOf(chunk);
     if (pretestBuildMode) {
       shard.pretestBuildMode = pretestBuildMode;
     }
-    if (chunk.some(({ target }) => SERIAL_CHANGED_TARGET_RE.test(target))) {
+    if (
+      inheritedPolicy?.serial ||
+      chunk.some(({ target }) => SERIAL_CHANGED_TARGET_RE.test(target))
+    ) {
       shard.planConcurrency = 1;
     }
     return shard;
@@ -680,7 +750,7 @@ function boundChangedNodeRows(
   const fileTimings = { ...readRepoE2eFileTimings(), ...readToolingFileTimings(profile) };
   const groupTimings = readCompactGroupTimings(profile);
   const selected = new Set(selectedTargets);
-  return shards.flatMap((shard) => {
+  const bounded = shards.flatMap((shard) => {
     if (!shard.groups) {
       const files = shard.includePatterns;
       const testSeconds = (row: ChangedNodeTestShard) =>
@@ -725,8 +795,29 @@ function boundChangedNodeRows(
       return [shard];
     }
     const canonicalTestSeconds = shard.predictedTestSeconds ?? shard.predictedSeconds;
-    if (canonicalTestSeconds === undefined || canonicalTestSeconds <= PR_NODE_TEST_SECONDS) {
-      return [shard];
+    const hintedSeconds = shard.groups.reduce(
+      (seconds, group) =>
+        seconds +
+        (group.includePatterns ?? []).reduce(
+          (total, file) => total + (CHANGED_FILE_SECONDS_HINTS.get(file) ?? 0),
+          0,
+        ),
+      0,
+    );
+    const hasSlowFiles = shard.groups.some(
+      (group) =>
+        (group.includePatterns ?? []).reduce(
+          (seconds, file) => seconds + (CHANGED_FILE_SECONDS_HINTS.get(file) ?? 0),
+          0,
+        ) > PR_NODE_TEST_SECONDS,
+    );
+    if (
+      canonicalTestSeconds === undefined ||
+      (canonicalTestSeconds <= PR_NODE_TEST_SECONDS && !hasSlowFiles)
+    ) {
+      return hintedSeconds > (canonicalTestSeconds ?? Infinity) && shard.planConcurrency === 1
+        ? [Object.assign({}, shard, { predictedTestSeconds: hintedSeconds })]
+        : [shard];
     }
     const pieces = shard.groups.flatMap((group) => {
       // Static boundary guards are fixed correctness gates, outside runtime selection.
@@ -768,6 +859,7 @@ function boundChangedNodeRows(
       const costOf = (file: string) =>
         Math.max(
           groupFileSeconds,
+          CHANGED_FILE_SECONDS_HINTS.get(file) ?? 0,
           fileTimings[file] ??
             (group.configs[0] === "test/vitest/vitest.tooling.config.ts"
               ? estimateVitestToolingFileSeconds(file)
@@ -838,6 +930,61 @@ function boundChangedNodeRows(
       ),
     );
   });
+  const secondsOf = (row: ChangedNodeTestShard) =>
+    row.predictedTestSeconds ?? row.predictedSeconds ?? PR_NODE_TEST_SECONDS;
+  const policyOf = (row: ChangedNodeTestShard) =>
+    JSON.stringify([
+      row.runner,
+      row.pretestBuildMode,
+      row.planConcurrency,
+      row.timeoutMinutes,
+      Object.entries(row.env ?? {}).toSorted(([a], [b]) => a.localeCompare(b)),
+    ]);
+  // Merge only settled serial envelopes. Keeping each child intact preserves its
+  // worker/memory limits; parallel rows retain their canonical sibling isolation.
+  return packNodeTestGroups(
+    bounded.toSorted((a, b) => secondsOf(b) - secondsOf(a)),
+    (bin, row) => {
+      if (
+        row.requiresDist ||
+        row.planConcurrency !== 1 ||
+        !row.groups ||
+        bin.some((entry) => entry.requiresDist || !entry.groups) ||
+        policyOf(bin[0]) !== policyOf(row)
+      ) {
+        return false;
+      }
+      const combined = [...bin, row];
+      const groups = combined.flatMap((entry) => entry.groups ?? []);
+      return (
+        groups.length <= 10 &&
+        groups.reduce(
+          (count, group) =>
+            count +
+            (group.configs.includes(DATABASE_WORKER_CONFIG)
+              ? (group.includePatterns?.length ?? DATABASE_WORKER_TEST_JOB_FILE_LIMIT)
+              : 0),
+          0,
+        ) <= DATABASE_WORKER_TEST_JOB_FILE_LIMIT &&
+        combined.reduce((seconds, entry) => seconds + secondsOf(entry), 0) <= PR_NODE_TEST_SECONDS
+      );
+    },
+  )
+    .toSorted(([a], [b]) => bounded.indexOf(a) - bounded.indexOf(b))
+    .map((bin) => {
+      if (bin.length === 1) {
+        return bin[0];
+      }
+      const first = bin[0];
+      const predictedTestSeconds = bin.reduce((seconds, row) => seconds + secondsOf(row), 0);
+      return Object.assign({}, first, {
+        groups: bin.flatMap((row) => row.groups ?? []),
+        predictedTestSeconds,
+        predictedSeconds:
+          predictedTestSeconds +
+          (first.pretestBuildMode ? VITEST_PRETEST_BUILD_SECONDS[first.pretestBuildMode] : 0),
+      });
+    });
 }
 
 /**
@@ -884,7 +1031,7 @@ export function createChangedNodeTestShards(
   const selectedTargets =
     options.selectedTestTargets ?? resolveChangedNodeTestTargets(changedPaths, options);
   const livePaths = changedPaths.filter((file) => existsSync(path.join(cwd, file)));
-  const policyTargets = new Set(resolvePolicyTestTargets(changedPaths));
+  const policyTargets = new Set(resolvePolicyTestTargets(changedPaths, { cwd }));
   const resolvedTargetPlans = resolvePreciseChangedTargets(selectedTargets, cwd);
   if (resolvedTargetPlans.some(({ plans }) => plans.length === 0)) {
     return fallback("selected test lacks an executable owner");

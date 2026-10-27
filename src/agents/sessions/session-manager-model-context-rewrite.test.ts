@@ -10,16 +10,12 @@ import {
   openOpenClawAgentDatabase,
 } from "../../state/openclaw-agent-db.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
+import { sessionScope } from "./session-manager-fixtures.test-support.js";
 import { SessionManager } from "./session-manager.js";
 
 it("refreshes same-generation model sizes after a native rewrite and append", async () => {
   await withOpenClawTestState({ label: "model-context-rewrite-sizes" }, async (state) => {
-    const scope = {
-      agentId: "main",
-      sessionId: "model-context-rewrite-sizes",
-      sessionKey: "agent:main:model-context-rewrite-sizes",
-      storePath: state.statePath("transcript.sqlite"),
-    };
+    const scope = sessionScope(state.statePath("transcript.sqlite"), "model-context-rewrite-sizes");
     await upsertSessionEntryCore(scope, { sessionId: scope.sessionId, updatedAt: 1 });
     const source = SessionManager.open(scope);
     for (let index = 0; index < 12; index++) {

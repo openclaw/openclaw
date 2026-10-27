@@ -1,4 +1,5 @@
 import { stableStringify } from "@openclaw/normalization-core/stable-stringify";
+import { GATEWAY_CLIENT_CAPS } from "../../../packages/gateway-protocol/src/client-info.js";
 import type { Snapshot } from "../../../packages/gateway-protocol/src/index.js";
 import { resolveAgentEffectiveModelPrimary } from "../../agents/agent-scope.js";
 import { getRuntimeConfig } from "../../config/io.js";
@@ -18,6 +19,7 @@ import type { ChannelHealthSummary, HealthSummary } from "../health/types.js";
 import { createPresenceRecipientProjection } from "../presence-projection.js";
 import type { ChannelRuntimeSnapshot } from "../server-channel-runtime.types.js";
 import { HEALTH_REFRESH_INTERVAL_MS } from "../server-constants.js";
+import type { GatewayCronState } from "../server-cron-contract.js";
 import type { GatewayClient } from "../server-methods/types.js";
 import type { SessionRowProjection } from "../session-row-projection.js";
 import type { GatewayEventLoopHealth } from "./event-loop-health.js";
@@ -52,9 +54,13 @@ export function buildGatewaySnapshot(opts: {
   const scope = cfg.session?.scope ?? "per-sender";
   const mainSessionKey =
     scope === "global" ? "global" : resolveAgentMainSessionKey({ cfg, agentId: defaultAgentId });
+  const presenceRows = listSystemPresence({ includeConnectionId: opts.client?.connId });
   const presence = createPresenceRecipientProjection({
     cfg,
-    presence: listSystemPresence({ includeConnectionId: opts.client?.connId }),
+    // The presence stream delivers the roster; hello still owns profile bootstrap.
+    presence: opts.client?.connect.caps?.includes(GATEWAY_CLIENT_CAPS.HELLO_PRESENCE_SELF)
+      ? presenceRows.filter((row) => row.connectionId === opts.client?.connId)
+      : presenceRows,
     projection: opts.sessionRowProjection,
   })(opts.client);
   const uptimeMs = Math.round(process.uptime() * 1000);
@@ -173,6 +179,7 @@ export async function refreshGatewayHealthSnapshot(opts?: {
   getEventLoopHealth?: () => GatewayEventLoopHealth | undefined;
   getConfigReloaderHotReloadStatus?: () => GatewayHotReloadStatus | undefined;
   getSessionRowProjection?: () => SessionRowProjection | undefined;
+  getCronState?: () => GatewayCronState;
 }) {
   const includeSensitive = opts?.includeSensitive === true;
   const audience: HealthAudience = includeSensitive ? "admin" : "public";
@@ -198,6 +205,7 @@ export async function refreshGatewayHealthSnapshot(opts?: {
       audience,
       probe: strength === "probe",
       runtimeSnapshot,
+      cronState: opts?.getCronState?.(),
       ...(configReloadHotReloadStatus ? { configReloadHotReloadStatus } : {}),
       ...(opts?.getSessionRowProjection
         ? { sessionRowProjection: opts.getSessionRowProjection() }

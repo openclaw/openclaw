@@ -1,13 +1,18 @@
 // Validation helpers for cron delivery targets before jobs enter runtime dispatch.
 /** Returns whether a delivery plan names a concrete channel, recipient, thread, or account. */
 export function hasExplicitCronDeliveryTarget(plan: {
+  target?: "owner";
   channel?: string;
   to?: string;
   threadId?: string | number;
   accountId?: string;
 }): boolean {
   return Boolean(
-    (plan.channel && plan.channel !== "last") || plan.to || plan.threadId != null || plan.accountId,
+    plan.target ||
+    (plan.channel && plan.channel !== "last") ||
+    plan.to ||
+    plan.threadId != null ||
+    plan.accountId,
   );
 }
 

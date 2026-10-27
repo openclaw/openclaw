@@ -1,5 +1,5 @@
 import { vi } from "vitest";
-import { GATEWAY_SERVER_CAPS } from "../../../packages/gateway-protocol/src/index.js";
+import { GATEWAY_SERVER_CAPS as CAPS } from "../../../packages/gateway-protocol/src/index.js";
 import type {
   SessionsPatchManyParams,
   SessionsPatchManyResult,
@@ -8,7 +8,8 @@ import type { GatewayBrowserClient } from "../api/gateway.ts";
 import type { ApplicationGatewaySnapshot } from "../app/gateway.ts";
 import type { SessionCapability } from "../lib/sessions/index.ts";
 import type { SessionDeleteBatchResult } from "../lib/sessions/session-capability.ts";
-import { requestSessionPatchMany } from "../lib/sessions/session-requests.ts";
+import { requestSessionPatchMany } from "../lib/sessions/session-mutation-operations.runtime.ts";
+import { createNavigationPreferencesFixture } from "../test-helpers/application-context-fixtures.ts";
 import { SESSION_MUTATION_TEST_METHODS } from "../test-helpers/gateway-methods.ts";
 import type {
   SidebarRecentSession,
@@ -16,13 +17,17 @@ import type {
 } from "./app-sidebar-session-types.ts";
 import type { SessionOrganizerDependencies } from "./session-organizer.ts";
 
-export function sessionRow(index: number): SidebarRecentSession {
+export function sessionRow(
+  index: number,
+  overrides: Partial<SidebarRecentSession> = {},
+): SidebarRecentSession {
   return {
     key: `agent:main:batch-${index}`,
     label: `Batch ${index}`,
     sessionId: `session-${index}`,
     sharingRole: "owner",
     pinned: index === 0 || index === 100,
+    ...overrides,
   } as SidebarRecentSession;
 }
 
@@ -33,7 +38,6 @@ export function sessionTarget(row: SidebarRecentSession) {
 export function createHarness(
   params: {
     methods?: string[] | null;
-    capabilities?: string[];
     scopes?: string[];
     current?: boolean;
     staleAfterRequest?: number;
@@ -44,36 +48,32 @@ export function createHarness(
 ) {
   let current = params.current ?? true;
   let requestCount = 0;
-  // Mirrors SessionDataController's own controller: retiring the scope aborts
-  // it so a dialog wired to `scope.signal` dismisses itself for real, and
-  // renewing stands in for the next `beginSessionMutation()` after a reconnect.
+  // Reconnect retires the dialog's signal; renewal models beginSessionMutation().
   let abortController = new AbortController();
-  const request = vi.fn(async (_method: string, rawParams?: unknown, _options?: unknown) => {
-    const patchParams = rawParams as SessionsPatchManyParams;
-    const requestFailure = params.requestFailure;
-    requestCount += 1;
-    if (requestFailure && requestCount === requestFailure.at) {
-      throw requestFailure.error;
-    }
-    const result = {
-      outcomes: patchParams.targets.map((target) => {
-        if (params.failedKeys?.includes(target.key)) {
-          const error = { code: "INVALID_REQUEST" as const, message: `failed ${target.key}` };
-          return target.agentId
-            ? { ok: false as const, key: target.key, agentId: target.agentId, error }
-            : { ok: false as const, key: target.key, error };
-        }
-        if (target.agentId) {
-          return { ok: true as const, key: target.key, agentId: target.agentId };
-        }
-        return { ok: true as const, key: target.key };
-      }),
-    } satisfies SessionsPatchManyResult;
-    if (requestCount === params.staleAfterRequest) {
-      current = false;
-    }
-    return result;
-  });
+  // Gateway requests are generic over method results; tests may answer other methods.
+  const request = vi.fn(
+    async (_method: string, rawParams?: unknown, _options?: unknown): Promise<unknown> => {
+      const patchParams = rawParams as SessionsPatchManyParams;
+      const requestFailure = params.requestFailure;
+      requestCount += 1;
+      if (requestFailure && requestCount === requestFailure.at) {
+        throw requestFailure.error;
+      }
+      const result = {
+        outcomes: patchParams.targets.map((target) => {
+          if (params.failedKeys?.includes(target.key)) {
+            const error = { code: "INVALID_REQUEST" as const, message: `failed ${target.key}` };
+            return Object.assign(targetIdentity(target), { ok: false as const, error });
+          }
+          return Object.assign(targetIdentity(target), { ok: true as const });
+        }),
+      } satisfies SessionsPatchManyResult;
+      if (requestCount === params.staleAfterRequest) {
+        current = false;
+      }
+      return result;
+    },
+  );
   const client = { request } as unknown as GatewayBrowserClient;
   const snapshot = {
     client,
@@ -84,85 +84,75 @@ export function createHarness(
           ? {}
           : {
               methods: params.methods ?? [...SESSION_MUTATION_TEST_METHODS],
-              capabilities: params.capabilities ?? [
-                GATEWAY_SERVER_CAPS.SESSION_UNREAD_ACK_CONTRACT,
-              ],
+              capabilities: [CAPS.SESSION_UNREAD_ACK_CONTRACT],
             },
       auth: { role: "operator", scopes: params.scopes ?? ["operator.write"] },
     },
   } as ApplicationGatewaySnapshot;
   const finishArchive = vi.fn();
-  const beginArchive = vi.fn(() => finishArchive);
-  const patch = vi.fn(async (key: string) => ({ ok: true, key }));
-  const reconcileMutation = vi.fn(async () => ({ status: "refreshed" as const }));
-  const refreshTheme = vi.fn();
-  const deleteMany = vi.fn(async (): Promise<SessionDeleteBatchResult> => ({
-    deleted: [],
-    errors: [],
-    preservedWorktrees: [],
-  }));
-  const deleteOne = vi.fn(async () => ({ deleted: true }));
-  const groupsDelete = vi.fn(async () => "completed" as const);
+  const mocks = {
+    finishArchive,
+    beginArchive: vi.fn(() => finishArchive),
+    patch: vi.fn(async (key: string) => ({ ok: true, key })),
+    reconcileMutation: vi.fn(async () => ({ status: "refreshed" as const })),
+    refreshTheme: vi.fn(),
+    deleteMany: vi.fn(async (): Promise<SessionDeleteBatchResult> => ({
+      deleted: [],
+      errors: [],
+      preservedWorktrees: [],
+    })),
+    deleteOne: vi.fn(async () => ({ deleted: true })),
+    groupsDelete: vi.fn(async () => "completed" as const),
+    publishSessionMutationError: vi.fn(),
+    pruneSidebarSessionEntry: vi.fn(),
+    replaceCurrentSession: vi.fn(),
+    request,
+  };
   const connection = {};
   const scope = {
     epoch: 1,
     context: {
+      navigation: createNavigationPreferencesFixture(),
       agents: { state: { agentsList: null } },
-      theme: { refresh: refreshTheme },
+      theme: { refresh: mocks.refreshTheme },
       placementStartup: { pause: vi.fn() },
     },
     gateway: { snapshot },
     sessions: {
-      beginArchive,
+      beginArchive: mocks.beginArchive,
       captureConnectionScope: () => connection,
       isConnectionScopeCurrent: () => current,
-      patch,
+      patch: mocks.patch,
       patchMany: (
         targets: SessionsPatchManyParams["targets"],
         patchParams: SessionsPatchManyParams["patch"],
       ) => requestSessionPatchMany(client, { targets, patch: patchParams }),
-      reconcileMutation,
-      delete: deleteOne,
-      deleteMany,
-      groupsDelete,
+      reconcileMutation: mocks.reconcileMutation,
+      delete: mocks.deleteOne,
+      deleteMany: mocks.deleteMany,
+      groupsDelete: mocks.groupsDelete,
     } as unknown as SessionCapability,
     client,
     selectedAgentId: "main",
     signal: abortController.signal,
   } as unknown as SidebarSessionMutationScope;
-  const publishSessionMutationError = vi.fn();
-  const pruneSidebarSessionEntry = vi.fn();
-  const replaceCurrentSession = vi.fn();
   const host = {
     sessionData: {
       isSessionMutationScopeCurrent: vi.fn(() => current),
-      publishSessionMutationError,
+      publishSessionMutationError: mocks.publishSessionMutationError,
       refreshSidebarSessions: vi.fn(),
     },
     sidebarSessionStatusFilter: () => "active",
-    pruneSidebarSessionEntry,
-    replaceCurrentSession,
+    pruneSidebarSessionEntry: mocks.pruneSidebarSessionEntry,
+    replaceCurrentSession: mocks.replaceCurrentSession,
   } as unknown as SessionOrganizerDependencies;
   return {
-    beginArchive,
-    finishArchive,
-    deleteMany,
-    deleteOne,
-    groupsDelete,
+    ...mocks,
     host,
-    patch,
-    pruneSidebarSessionEntry,
-    publishSessionMutationError,
-    reconcileMutation,
-    refreshTheme,
-    replaceCurrentSession,
-    request,
-    // Stands in for a reconnect or agent switch landing while a confirm is open.
     retireScope: () => {
       current = false;
       abortController.abort();
     },
-    // Stands in for the next beginSessionMutation() a reconnect issues.
     renewScope: () => {
       current = true;
       abortController = new AbortController();
@@ -170,4 +160,8 @@ export function createHarness(
     },
     scope,
   };
+}
+
+function targetIdentity(target: SessionsPatchManyParams["targets"][number]) {
+  return target.agentId ? { key: target.key, agentId: target.agentId } : { key: target.key };
 }

@@ -558,7 +558,7 @@ function prepareRedactionCapture(
         policyReplacement ??
         (isShellReferencePattern
           ? maskToken(token)
-          : `${maskSecretValue(formAwareValue.secret, { hinted: true })}${formAwareValue.suffix}`);
+          : `${maskSecretValue(formAwareValue.secret)}${formAwareValue.suffix}`);
       return { start: target.start, end: target.end, replacement: masked };
     },
   };

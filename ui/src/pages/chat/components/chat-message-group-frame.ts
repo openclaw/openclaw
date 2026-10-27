@@ -15,7 +15,8 @@ import {
   isProviderVoiceTranscript,
   resolveAssistantReplyPhase,
 } from "../chat-assistant-reply.ts";
-import { readPendingSendStatus } from "../chat-thread.ts";
+import { isChatSendReconnecting } from "../chat-send-presentation.ts";
+import { readPendingSendStatus } from "../chat-thread-items.ts";
 import { hasForwardedSource } from "../chat-turn-boundary.ts";
 import { workspaceResultConflictFromTranscript } from "../workspace-conflict.ts";
 import type { RenderMessageGroupOptions } from "./chat-message-group-options.ts";
@@ -206,7 +207,15 @@ export function prepareMessageGroupFrame(
       : normalizedRole === "user" && group.sender
         ? resolveIdentityHue(group.sender)
         : null;
-  const sendStatus = readPendingSendStatus(group.messages.at(-1)?.message);
+  const pendingSend = readPendingSendStatus(group.messages.at(-1)?.message);
+  // Normal delivery uses the settled footer; only recovery needs an interruption.
+  const sendStatus =
+    pendingSend &&
+    (pendingSend.state === "failed" ||
+      pendingSend.state === "held" ||
+      isChatSendReconnecting(pendingSend.state, opts.connected))
+      ? pendingSend
+      : null;
 
   const inlineUserAvatar =
     normalizedRole === "user" &&

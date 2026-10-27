@@ -2,11 +2,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { requireGit } from "../../agents/worktrees/git.js";
-import {
-  createPreparationArtifacts,
-  PREPARATION_TARGET,
-  usePreparedPoolFixture,
-} from "./prepared-pool.test-support.js";
+import { usePreparedPoolFixture } from "./prepared-pool.test-support.js";
 import { createWorkerProviderIntent } from "./provider-intent.js";
 
 describe("empty workspace prepared worker reserves", () => {
@@ -44,24 +40,8 @@ describe("empty workspace prepared worker reserves", () => {
     return root;
   }
 
-  function createIntentOwner() {
-    fixture.provider.requiresNodeEnrollment = true;
-    fixture.provider.supportsProjectPreparation = () => true;
-    fixture.provider.resolvePreparationTarget = () => PREPARATION_TARGET;
-    return createWorkerProviderIntent({
-      store: fixture.store,
-      getConfig: () => fixture.config,
-      projectNamespace: "empty-workspace-pool-test",
-      providerFor: () => fixture.provider,
-      prepareNodeArtifacts: async () => ({
-        artifacts: createPreparationArtifacts(),
-        assertCurrent: () => {},
-      }),
-      resumeProvision: async (record) => await fixture.ready(record),
-      isStopping: () => false,
-      withLock: async (_environmentId, task) => task(),
-    });
-  }
+  const createIntentOwner = () =>
+    createWorkerProviderIntent(fixture.intentOwnerOptions("empty-workspace-pool-test"));
 
   function createPool(owner: ReturnType<typeof createIntentOwner>, warn = vi.fn()) {
     return fixture.pool({

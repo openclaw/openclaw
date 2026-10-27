@@ -10,8 +10,6 @@ export type Publication = {
   owner: object;
   reference: SystemAgentPluginReference;
   pathname: string;
-  overview: boolean;
-  installed: boolean;
 };
 type HelpState = {
   identity: CustodianSessionOwner;
@@ -20,7 +18,6 @@ type HelpState = {
   pendingDraft: string;
   focusRequest: number;
   selectionEpoch: number;
-  seenGateways: Set<string>;
   listeners: Set<() => void>;
 };
 const states = new WeakMap<PluginHelpContext, HelpState>();
@@ -35,7 +32,6 @@ export function pluginHelpState(context: PluginHelpContext): HelpState {
       pendingDraft: "",
       focusRequest: 0,
       selectionEpoch: 0,
-      seenGateways: new Set(),
       listeners: new Set(),
     };
     states.set(context, state);
@@ -81,19 +77,4 @@ export function subscribePluginHelp(context: PluginHelpContext, listener: () => 
   const state = pluginHelpState(context);
   state.listeners.add(listener);
   return () => state.listeners.delete(listener);
-}
-
-/** The dock owns availability/width and calls this only when it can actually open. */
-export function consumePluginHelpAutoOpen(context: PluginHelpContext): boolean {
-  const state = pluginHelpState(context);
-  const url = context.gateway.connection.gatewayUrl;
-  if (!state.publication?.overview || !state.publication.installed || state.seenGateways.has(url)) {
-    return false;
-  }
-  state.seenGateways.add(url);
-  return true;
-}
-
-export function dismissPluginHelpAutoOpen(context: PluginHelpContext): void {
-  pluginHelpState(context).seenGateways.add(context.gateway.connection.gatewayUrl);
 }

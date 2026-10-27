@@ -31,7 +31,9 @@ describe("native application projections", () => {
           source,
           update: () =>
             new Promise<void>((resolve, reject) => {
-              source.set("app.showDockIcon", false, (error) => (error ? reject(error) : resolve()));
+              void source.set("app.showDockIcon", false, (error) =>
+                error ? reject(error) : resolve(),
+              );
             }),
           dispose: () => source.dispose(),
         };

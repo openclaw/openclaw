@@ -292,10 +292,8 @@ describe("runMessageAction plugin dispatch", () => {
         sendResult,
       });
       const result = await runBroadcast("gatewaychat");
-      if (result.kind !== "broadcast") {
-        throw new Error("expected broadcast result");
-      }
-      expect(result.payload.results).toEqual([
+      expect(result.kind).toBe("broadcast");
+      expect(result).toHaveProperty("payload.results", [
         {
           channel: "gatewaychat",
           to: "user-123",
@@ -305,8 +303,6 @@ describe("runMessageAction plugin dispatch", () => {
           result: sendResult,
         },
       ]);
-      expect(result.payload.results[0]?.payload).toBe(nestedPayload);
-      expect(result.payload.results[0]?.result).toBe(sendResult);
     });
 
     it("retains partial delivery from Gateway errors", async () => {
@@ -492,7 +488,6 @@ describe("runMessageAction plugin dispatch", () => {
     const componentsPlugin: ChannelPlugin = {
       ...createChannelTestPluginBase({
         id: "componentchat",
-        label: "Component Chat",
         config: createAlwaysConfiguredPluginConfig({}),
       }),
       actions: {

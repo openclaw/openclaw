@@ -8,19 +8,24 @@ import {
   createPluginStateKeyedStoreForTests,
   createPluginStateSyncKeyedStoreForTests,
   createChannelIngressQueueForTests,
-  getPluginStateCapacityForTests,
-  importPluginStateEntriesForDoctorForTests,
 } from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import type { PluginDoctorStateMigrationContext } from "openclaw/plugin-sdk/runtime-doctor-migrations";
 import type { MatrixStoredCredentialRecord } from "./src/matrix/credentials-state.js";
 
-// Released Matrix replay markers retain their identities for 30 days.
 export const MATRIX_INBOUND_DEDUPE_TTL_MS = 30 * 24 * 60 * 60 * 1000;
 
 export function createContext(
   env?: NodeJS.ProcessEnv,
   inheritStoreEnv = true,
 ): PluginDoctorStateMigrationContext {
+  const openQueue = <TPayload, TMetadata = unknown, TCompletedMetadata = unknown>({
+    accountId,
+  }: { accountId?: string } = {}) =>
+    createChannelIngressQueueForTests<TPayload, TMetadata, TCompletedMetadata>({
+      channelId: "matrix",
+      accountId,
+      stateDir: env?.OPENCLAW_STATE_DIR,
+    });
   return {
     readPluginStateEntriesInKeyRange(namespace, range) {
       return createPluginStateSyncKeyedStoreForTests<unknown>("matrix", {
@@ -30,10 +35,7 @@ export function createContext(
         env,
       })
         .entries()
-        .filter(
-          (entry) =>
-            entry.key.startsWith(range.prefix) && (!range.after || entry.key > range.after),
-        )
+        .filter(({ key }) => key.startsWith(range.prefix) && (!range.after || key > range.after))
         .toSorted((a, b) => a.key.localeCompare(b.key))
         .slice(0, range.limit)
         .map((entry) =>
@@ -47,27 +49,10 @@ export function createContext(
       {
         channelId: "matrix",
         listChannelIngressQueueAccountIds: async () => [],
-        openChannelIngressQueueForInspection: <TPayload, TMetadata>({
-          accountId,
-        }: { accountId?: string } = {}) =>
-          createChannelIngressQueueForTests<TPayload, TMetadata>({
-            channelId: "matrix",
-            accountId,
-            stateDir: env?.OPENCLAW_STATE_DIR,
-          }),
-        openChannelIngressQueue: <TPayload, TMetadata, TCompletedMetadata>({
-          accountId,
-        }: { accountId?: string } = {}) =>
-          createChannelIngressQueueForTests<TPayload, TMetadata, TCompletedMetadata>({
-            channelId: "matrix",
-            accountId,
-            stateDir: env?.OPENCLAW_STATE_DIR,
-          }),
+        openChannelIngressQueueForInspection: openQueue,
+        openChannelIngressQueue: openQueue,
       },
     ],
-    getPluginStateCapacity: () => getPluginStateCapacityForTests("matrix", env),
-    importPluginStateEntries: (options, entries) =>
-      importPluginStateEntriesForDoctorForTests("matrix", options, entries),
     openPluginStateKeyedStore: <T>(options: OpenKeyedStoreOptions) =>
       createPluginStateKeyedStoreForTests<T>("matrix", {
         ...options,
@@ -87,43 +72,60 @@ export function createMigrationParams(stateDir: string, inheritStoreEnv = true) 
   };
 }
 
-export function accountStorageRoot(
+export const accountStorageRoot = (
   stateDir: string,
   accountId = "default",
   token = "0123456789abcdef",
-) {
-  return path.join(stateDir, "matrix", "accounts", accountId, "matrix.example.org__bot", token);
-}
+) => path.join(stateDir, "matrix", "accounts", accountId, "matrix.example.org__bot", token);
 
-export function writeSource(file: string, contents: string): string {
+export function writeSource(file: string, contents: string | Uint8Array): string {
   fs.mkdirSync(path.dirname(file), { recursive: true });
   fs.writeFileSync(file, contents);
   return file;
 }
 
-export function legacyCredentials(
-  overrides: Partial<Omit<MatrixStoredCredentialRecord, "accountId">> = {},
-) {
+export function archiveScanRoots(stateDir: string) {
+  const matrixRoot = path.join(stateDir, "matrix");
+  const tokenParent = path.dirname(accountStorageRoot(stateDir, "ops"));
+  const archivedAccount = path.relative(
+    matrixRoot,
+    accountStorageRoot(stateDir, "ops", "fedcba9876543210"),
+  );
   return {
-    homeserver: "https://matrix.example.org",
-    userId: "@bot:example.org",
-    accessToken: "legacy-token",
-    createdAt: "2026-07-01T12:00:00.000Z",
-    ...overrides,
+    activeRoots: [
+      path.join(matrixRoot, "accounts", "legacy"),
+      accountStorageRoot(stateDir, "sync-cache-backup"),
+    ],
+    excludedRoots: [
+      "0123456789abcdef.apr24-cutover-20260424",
+      "fedcba9876543210.reset-20260720",
+      "0123456789abcdef.pre-stable-token-20260716",
+      "fedcba9876543210.migrated",
+      "sync-cache-backup",
+      "_archive",
+    ]
+      .map((name) => path.join(tokenParent, name))
+      .concat(
+        ["crypto-backup-20260720", ".apr24-cutover-20260424", "operator-copy"].map((name) =>
+          path.join(matrixRoot, name, archivedAccount),
+        ),
+      ),
   };
 }
 
-export function withDatabase<T>(
-  databasePath: string,
-  readOnly: boolean,
-  run: (db: DatabaseSync) => T,
-): T {
-  const db = new DatabaseSync(databasePath, { readOnly });
-  try {
-    return run(db);
-  } finally {
-    db.close();
-  }
+export const legacyCredentials = (
+  overrides: Partial<Omit<MatrixStoredCredentialRecord, "accountId">> = {},
+) => ({
+  homeserver: "https://matrix.example.org",
+  userId: "@bot:example.org",
+  accessToken: "legacy-token",
+  createdAt: "2026-07-01T12:00:00.000Z",
+  ...overrides,
+});
+
+export function withDatabase<T>(file: string, readOnly: boolean, run: (db: DatabaseSync) => T): T {
+  using db = new DatabaseSync(file, { readOnly });
+  return run(db);
 }
 
 export function createLegacyDatabase(databasePath: string) {
@@ -153,17 +155,6 @@ export async function migrationById(id: string) {
   return migration;
 }
 
-export function dedupeMigrationResult(roots: string[], imported: number, total = imported) {
-  return {
-    changes: [
-      `Migrated Matrix inbound dedupe markers to the durable ingress spool (${imported} of ${total} entries)`,
-      ...roots.map((root) => `Retired Matrix inbound dedupe rows for ${root}`),
-      `Recorded Matrix inbound dedupe migration completion (${roots.length} SQLite roots scanned)`,
-    ],
-    warnings: [],
-  };
-}
-
 export function writeSqliteDedupeSource(
   storageRootDir: string,
   accountId: string,
@@ -175,32 +166,22 @@ export function writeSqliteDedupeSource(
   const key = `${accountId}:${createHash("sha256")
     .update(`${accountId}\0${roomId}\0${eventId}`)
     .digest("hex")}`;
-  const db = createLegacyDatabase(databasePath);
-  try {
-    db.prepare(`
+  using db = createLegacyDatabase(databasePath);
+  db.prepare(`
       INSERT INTO plugin_state_entries VALUES ('matrix', 'inbound-dedupe', ?, ?, ?, NULL)
     `).run(key, JSON.stringify({ roomId, eventId, ts }), ts);
-  } finally {
-    db.close();
-  }
   return databasePath;
 }
 
-export function syncCachePayload(nextBatch: string, cleanShutdown = true) {
-  return {
-    version: 1,
-    savedSync: {
-      nextBatch,
-      accountData: [],
-      roomsData: { join: {}, invite: {}, leave: {}, knock: {} },
-    },
-    cleanShutdown,
-  };
-}
+export const syncCachePayload = (nextBatch: string, cleanShutdown = true) => ({
+  version: 1,
+  savedSync: {
+    nextBatch,
+    accountData: [],
+    roomsData: { join: {}, invite: {}, leave: {}, knock: {} },
+  },
+  cleanShutdown,
+});
 
-export function writeLegacySyncCache(storageRootDir: string, nextBatch: string): void {
-  writeSource(
-    path.join(storageRootDir, "bot-storage.json"),
-    JSON.stringify(syncCachePayload(nextBatch)),
-  );
-}
+export const writeLegacySyncCache = (root: string, nextBatch: string): string =>
+  writeSource(path.join(root, "bot-storage.json"), JSON.stringify(syncCachePayload(nextBatch)));

@@ -1,10 +1,10 @@
 import { PROCESS_NODE_VERSION_CHECK } from "../../../node-version.mjs";
 
-// Development/CI pin; digests: https://nodejs.org/dist/v24.21.0/SHASUMS256.txt
-const DEFAULT_NODE_VERSION = "24.21.0";
+// Development/CI pin; digests: https://nodejs.org/dist/v24.22.1/SHASUMS256.txt
+const DEFAULT_NODE_VERSION = "24.22.1";
 const DEFAULT_NODE_SHA256 = {
-  x64: "6e1db87ef58b8819e5d5402eff1536491b18edd8eb7bee5ef7897876e88dc5ff",
-  arm64: "724282c3b43aec998aa9527380465b45d229e021b58035f5f4f63095eabfe5d5",
+  x64: "eb6728e77c576a35162c122c45ccadf224d89ff00abc8dae46cc2897c6002d7c",
+  arm64: "33c37be234ba8bee041961047b19160f4d7d0f164e8e246f78bdd10feff148b3",
 };
 
 /** Shared installer body for bootstrap and repository releases; stdout is the bin path. */

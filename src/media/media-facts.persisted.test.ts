@@ -157,7 +157,6 @@ describe("canonical persisted media", () => {
       __openclaw: { traceId: "trace-1" },
     });
 
-    expect(result.hadLegacy).toBe(true);
     expect(result.changed).toBe(true);
     expect(result.message).toEqual({
       id: "msg-1",

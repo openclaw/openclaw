@@ -1,6 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { afterEach, expect, it } from "vitest";
+import { afterEach, expect, it, vi } from "vitest";
 import { resolveAgentWorkspaceDir } from "../agents/agent-scope-config.js";
 import { listConfiguredOwnerInputs } from "../agents/prepared-model-runtime.configured.js";
 import { setConfigValueAtPath } from "../config/config-paths.js";
@@ -8,7 +8,11 @@ import { promoteConfigSnapshotToLastKnownGood, readConfigFileSnapshot } from "..
 import { writeOpenClawConfig } from "../config/test-helpers.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { makeCronJob } from "../cron/delivery.test-helpers.js";
-import { saveCronJobsStore } from "../cron/store.js";
+import {
+  loadCronJobsStore,
+  resolveCronJobsStorePathFromConfig,
+  saveCronJobsStore,
+} from "../cron/store.js";
 import { cronStoreKey } from "../cron/store/key.js";
 import { loadCronRows } from "../cron/store/row-codec.js";
 import {
@@ -68,6 +72,52 @@ function withHome(
 const withQueueDefaultHome = useDoctorConfigPreflightHome();
 
 afterEach(closeOpenClawStateDatabaseForTest);
+
+it(
+  "keeps a valid Kubernetes reseed without metadata and still recovers a later invalid config",
+  withHome(async (home) => {
+    const configPath = await writeConfig(home, { gateway: { mode: "local", port: 19091 } });
+    await writeInitial(configPath);
+    const baseline = await readConfigFileSnapshot();
+    expect(await promoteConfigSnapshotToLastKnownGood(baseline)).toBe(true);
+    for (const suffix of [".bak", ".bak.1"]) {
+      await fs.copyFile(configPath, `${configPath}${suffix}`);
+    }
+    const { meta: _meta, ...reseeded } = await readJson(configPath);
+    reseeded.gateway.port = 19092;
+    const reseededRaw = JSON.stringify(reseeded, null, 2);
+    await fs.unlink(configPath);
+    await fs.writeFile(configPath, reseededRaw);
+
+    await using ctx = await prepareDoctorContext(configPath);
+    expect(ctx.cfg.gateway?.port).toBe(19092);
+    expect(await readText(configPath)).toBe(reseededRaw);
+    expect(await fs.readdir(path.dirname(configPath))).not.toEqual(
+      expect.arrayContaining([expect.stringContaining(".clobbered.")]),
+    );
+    // Gateway startup promotes the accepted config; the meta-less reseed must qualify.
+    expect(await promoteConfigSnapshotToLastKnownGood(await readConfigFileSnapshot())).toBe(true);
+
+    const invalidRaw = '{ "gateway": { "mode": 123 } }';
+    await fs.writeFile(configPath, invalidRaw);
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      await using recovered = await prepareDoctorContext(configPath);
+      expect(recovered.cfg.gateway?.port).toBe(19092);
+      const clobbered = (await fs.readdir(path.dirname(configPath))).filter((name) =>
+        name.includes(".clobbered."),
+      );
+      expect(clobbered).toHaveLength(1);
+      const originalPath = path.join(path.dirname(configPath), clobbered[0]!);
+      expect(await readText(originalPath)).toBe(invalidRaw);
+      const warnings = warn.mock.calls.flat().join("\n");
+      expect(warnings).toContain(originalPath);
+      expect(warnings).toContain("to undo, stop the Gateway and copy it back");
+    } finally {
+      warn.mockRestore();
+    }
+  }),
+);
 
 it.each([
   { included: true, otherRepair: false, value: undefined },
@@ -321,7 +371,7 @@ it(
       expect(saved.config.agents?.ownership).toBe("explicit");
       expect(saved.config.agents?.entries?.main?.workspace).toBe(workspace);
       expect(saved.config.agents?.defaults?.systemAgent).toEqual({ agentId: "main" });
-      expect(saved.config.agents?.defaults?.heartbeat).toEqual({ agentId: "main" });
+      expect(saved.config.agents?.defaults).not.toHaveProperty("heartbeat");
       expect(saved.config.bindings).toBeUndefined();
       expect(resolveAgentWorkspaceDir(saved.config, "main")).toBe(workspace);
       for (const name of originals) {
@@ -334,7 +384,7 @@ it(
 );
 
 it(
-  "repairs noncanonical workspace and heartbeat values through persistence",
+  "repairs workspace and migrates heartbeat cadence through persistence",
   withHome(async (home) => {
     const configPath = await writeConfig(home, {
       agents: {
@@ -350,14 +400,26 @@ it(
     expect((await readConfigFileSnapshot()).valid).toBe(false);
     await using ctx = await prepareDoctorContext(configPath);
     expect(ctx.configResult.shouldWriteConfig).toBe(true);
-    expect(ctx.cfg.agents?.entries?.ops).toEqual({ heartbeat: { every: "30m" } });
+    expect(ctx.cfg.agents?.entries?.ops).toEqual({});
     await runInitialConfigWriteHealth(ctx);
 
     const saved = await readJson(configPath);
-    expect(saved.agents.entries.ops).toEqual({ heartbeat: { every: "30m" } });
+    expect(saved.agents.entries.ops).toEqual({});
     expect(saved.agents).not.toHaveProperty("list");
     expect((await readConfigFileSnapshot()).valid).toBe(true);
+    const storePath = resolveCronJobsStorePathFromConfig(saved);
+    const migrated = await loadCronJobsStore(storePath);
+    expect(migrated.jobs).toHaveLength(1);
+    expect(migrated.jobs[0]).toMatchObject({
+      agentId: "ops",
+      enabled: true,
+      schedule: { kind: "every", everyMs: 30 * 60 * 1000 },
+      payload: { kind: "agentTurn", skipIfScratchEmpty: true },
+      idleOnly: true,
+    });
+    expect(migrated.jobs[0]?.activeHours).toBeUndefined();
     await expectSettled(configPath);
+    expect(await loadCronJobsStore(storePath)).toEqual(migrated);
   }),
 );
 

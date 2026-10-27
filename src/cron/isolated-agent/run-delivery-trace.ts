@@ -177,6 +177,8 @@ export async function createCronToolsAllowPreflightDiagnostics(params: {
   provider: string;
   model: string;
   modelApi?: string;
+  modelBaseUrl?: string;
+  modelParams?: Record<string, unknown>;
   agentId?: string;
   agentDir?: string;
   sessionKey?: string;
@@ -197,6 +199,8 @@ export async function createCronToolsAllowPreflightDiagnostics(params: {
         config: params.cfg,
         modelProvider: params.provider,
         modelApi: params.modelApi,
+        modelBaseUrl: params.modelBaseUrl,
+        modelParams: params.modelParams,
         modelId: params.model,
         agentId: params.agentId,
         sessionKey: params.sessionKey,

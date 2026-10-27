@@ -1,3 +1,4 @@
+import fs from "node:fs/promises";
 import path from "node:path";
 import { memorySessionActorOwners } from "../config/sessions/session-actor-memory-owner.js";
 import { isPathInside } from "../infra/path-guards.js";
@@ -24,4 +25,14 @@ export async function closeGatewayTestHomeDatabases(home: string): Promise<void>
   await closeOpenClawStateDatabaseByPathAsync(
     resolveOpenClawStateSqlitePath({ OPENCLAW_STATE_DIR: path.join(home, ".openclaw") }),
   );
+}
+
+/** Recreate a suite home's state directory without inheriting stale admissions. */
+export async function recreateGatewayTestStateDir(home: string, stateDir: string): Promise<void> {
+  // Detached work from the previous case, such as the post-restore subagent
+  // sweep, can re-admit these databases after cleanup closed them. Close again
+  // at deletion so the recreated database never inherits that admission.
+  await closeGatewayTestHomeDatabases(home);
+  await fs.rm(stateDir, { recursive: true, force: true, maxRetries: 20, retryDelay: 25 });
+  await fs.mkdir(stateDir, { recursive: true });
 }

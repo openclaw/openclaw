@@ -88,6 +88,30 @@ for (const platform of ["linux", "windows"]) {
   });
 }
 
+test("rejects an installed package with the wrong identity before staging", (t) => {
+  // openclaw-temp-dir: allow verifies the fresh archive identity before mutation
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "tauri-package-identity-"));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const installed = path.join(root, "installed");
+  const work = path.join(root, "work");
+  write(installed, "node_modules/openclaw/package.json", { name: "unexpected-package" });
+  write(installed, "node_modules/openclaw/dist/build-info.json", { commit });
+  write(installed, "node_modules/openclaw/dist/extensions/codex/package.json", {
+    openclaw: { extensions: ["./index.js"] },
+  });
+  write(installed, "node_modules/openclaw/dist/extensions/codex/index.js", "export {};\n");
+  write(installed, "node_modules/@openai/codex-win32-x64/package.json", { name: "@openai/codex" });
+  write(work, "manifest.json", { files: { "bin/bun": "original" } });
+  assert.throws(() => stageInstalledPackage(installed, work, { platform: "windows", arch: "x64" }, {
+    commit, pluginIds: ["codex"],
+  }), /Expected the OpenClaw package/);
+  assert.deepEqual(read(installed, "node_modules/openclaw/package.json"), { name: "unexpected-package" });
+  assert.deepEqual(read(installed, "node_modules/openclaw/dist/build-info.json"), { commit });
+  assert.equal(fs.existsSync(path.join(installed, "node_modules/openclaw/openclaw-install-owner.json")), false);
+  assert.deepEqual(read(work, "manifest.json"), { files: { "bin/bun": "original" } });
+  assert.equal(fs.existsSync(path.join(work, "package")), false);
+});
+
 test("exact release builds leave runtime resources unchanged without building or installing core", (t) => {
   // openclaw-temp-dir: allow exercises the exact Git release boundary
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "tauri-release-"));
@@ -134,7 +158,7 @@ for (const platform of ["linux", "windows"]) {
 
 test("reuses npm tarballs across isolated same-commit package installs", async (t) => {
   // openclaw-temp-dir: allow verifies staging with tiny real npm artifacts
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), "tauri-package-cache-"));
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "tauri package cache-"));
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
   const source = path.join(root, "source");
   const core = path.join(root, "core");
@@ -153,10 +177,9 @@ test("reuses npm tarballs across isolated same-commit package installs", async (
     const { parentPort, workerData } = require("node:worker_threads");
     const archive = fs.readFileSync(workerData);
     let tarballFetches = 0;
+    parentPort.on("message", () => parentPort.postMessage({ tarballFetches }));
     const server = http.createServer((request, response) => {
-      if (request.url === "/requests") {
-        response.end(JSON.stringify({ tarballFetches }));
-      } else if (request.url === "/codex.tgz") {
+      if (request.url === "/codex.tgz") {
         tarballFetches++;
         response.writeHead(200, {
           "Content-Type": "application/octet-stream",
@@ -176,6 +199,7 @@ test("reuses npm tarballs across isolated same-commit package installs", async (
   const manifest = {
     name: "openclaw", version: "0.0.0",
     files: ["!dist/extensions/codex/**"],
+    scripts: { postinstall: `node -e "require('node:fs').writeFileSync('installed.txt', 'fresh install')"` },
     dependencies: { "@openai/codex-win32-x64": `${origin}/codex.tgz` },
   };
   write(source, "package.json", manifest);
@@ -190,6 +214,7 @@ test("reuses npm tarballs across isolated same-commit package installs", async (
   write(source, "dist/build-info.json", { commit: sourceCommit });
   write(core, "package/package.json", manifest);
   write(core, "package/openclaw.mjs", "export {};\n");
+  fs.chmodSync(path.join(core, "package/openclaw.mjs"), 0o755);
   write(core, "package/dist/build-info.json", { commit: sourceCommit });
   write(core, "package/dist/extensions/codex/package.json", { openclaw: { extensions: ["./index.js"] } });
   write(core, "package/dist/extensions/codex/index.js", "export {};\n");
@@ -210,6 +235,11 @@ test("reuses npm tarballs across isolated same-commit package installs", async (
     ["NpM_cOnFiG_cAcHe", { NpM_cOnFiG_cAcHe: cache }],
   ];
   for (const [index, [alias, cacheEnv]] of cases.entries()) {
+    const entry = index === 2 ? "export const fresh = true;\n" : "export {};\n";
+    if (index === 2) {
+      write(core, "package/openclaw.mjs", entry);
+      execFileSync("tar", ["-czf", coreArchive, "-C", core, "package"]);
+    }
     const work = path.join(root, `resources-${index}`);
     write(work, "manifest.json", { files: { "bin/bun.exe": "existing-runtime-hash" } });
     execFileSync(process.execPath, ["--input-type=module", "--eval", `
@@ -228,6 +258,7 @@ test("reuses npm tarballs across isolated same-commit package installs", async (
           assert.equal(options.env.HOME, options.env.USERPROFILE);
           assert.notEqual(options.env.HOME, process.env.HOME);
           assert.equal(options.env.LOCALAPPDATA, undefined);
+          assert.ok(args.some((arg) => arg.includes("openclaw@file:" + process.env.TMPDIR)));
         }
         return original(command, args, options);
       };
@@ -236,15 +267,24 @@ test("reuses npm tarballs across isolated same-commit package installs", async (
       stagePackage(process.argv[2], process.argv[3], { platform: "windows", arch: "x64" });
       assert.equal(installs, 1);
     `, new URL("./stage-package.mjs", import.meta.url).href, source, work, JSON.stringify(cacheEnv), cache], {
-      env: { ...inherited, npm_config_registry: "https://registry.example.invalid", LOCALAPPDATA: root },
+      env: { ...inherited, npm_config_registry: "https://registry.example.invalid", LOCALAPPDATA: root,
+        TMPDIR: root, TEMP: root, TMP: root },
       stdio: "pipe",
     });
     assert.ok(fs.existsSync(path.join(cache, "_cacache")), `${alias} did not populate the reusable npm cache`);
-    const requests = await fetch(`${origin}/requests`).then((response) => response.json());
+    // Synchronous npm can outlive an idle HTTP socket; read the worker-owned counter over IPC.
+    const counted = once(registry, "message");
+    registry.postMessage("requests");
+    const [requests] = await counted;
     assert.equal(requests.tarballFetches, 1, `${alias} downloaded the already cached tarball`);
     const staged = read(work, "manifest.json");
+    const stagedCore = path.join(work, "package/node_modules/openclaw");
+    assert.equal(fs.readFileSync(path.join(stagedCore, "openclaw.mjs"), "utf8"), entry);
+    assert.equal(fs.readFileSync(path.join(stagedCore, "installed.txt"), "utf8"), "fresh install");
+    if (process.platform !== "win32") assert.equal(fs.statSync(path.join(stagedCore, "openclaw.mjs")).mode & 0o777, 0o755);
     assert.ok(staged.files["package/node_modules/@openai/codex-win32-x64/vendor/codex.exe"]);
-    if (expected) assert.deepEqual(staged, expected);
+    if (index === 2) assert.notDeepEqual(staged, expected);
+    else if (expected) assert.deepEqual(staged, expected);
     else expected = staged;
   }
 });

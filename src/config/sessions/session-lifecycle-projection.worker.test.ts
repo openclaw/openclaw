@@ -1,3 +1,5 @@
+import { isDeepStrictEqual } from "node:util";
+import { serialize } from "node:v8";
 import { afterEach, expect, it, vi } from "vitest";
 import { observeHostDataSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import * as admission from "../../infra/sqlite-worker-operation-admission.js";
@@ -10,6 +12,7 @@ import {
 import { onSessionIdentityMutation } from "../../sessions/session-lifecycle-events.js";
 import { sessionChanges } from "../../sessions/session-row-changes.js";
 import { createDeferredCore } from "../../shared/deferred.js";
+import { readOpenClawAgentDatabaseIdentity } from "../../state/openclaw-agent-db-identity.js";
 import { openOpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import type { SessionEntryLifecycleUpsert } from "./session-accessor.lifecycle-types.js";
@@ -17,6 +20,7 @@ import {
   commitReplySessionInitialization,
   loadReplySessionInitializationSnapshot,
 } from "./session-accessor.reset.js";
+import { retainPreparedSessionEntryPredicate } from "./session-accessor.sqlite-entry-cache-publication-state.js";
 import { readPreparedSessionEntryChange } from "./session-accessor.sqlite-entry-cache-publication.js";
 import { readExactSessionEntryRow } from "./session-accessor.sqlite-entry-store.js";
 import { replaceSessionEntrySync } from "./session-accessor.sqlite-entry.js";
@@ -41,6 +45,7 @@ const delivery = vi.hoisted(() => ({
   currentCommand: "",
   beforeCommand: undefined as ((type: string) => Promise<void>) | undefined,
   afterCommit: undefined as ((type: string) => void) | undefined,
+  afterReply: undefined as ((type: string, result: unknown) => void) | undefined,
 }));
 vi.mock("../../state/openclaw-agent-execution.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../../state/openclaw-agent-execution.js")>();
@@ -67,6 +72,7 @@ vi.mock("../../state/openclaw-agent-execution.js", async (importOriginal) => {
                       await delivery.beforeCommand(command.type);
                     }
                     const result = await worker.execute(command, commandOptions);
+                    delivery.afterReply?.(command.type, result);
                     delivery.afterCommit?.(command.type);
                     return result;
                   } finally {
@@ -84,6 +90,7 @@ vi.mock("../../state/openclaw-agent-execution.js", async (importOriginal) => {
 afterEach(() => {
   delivery.beforeCommand = undefined;
   delivery.afterCommit = undefined;
+  delivery.afterReply = undefined;
   delivery.currentCommand = "";
   vi.restoreAllMocks();
 });
@@ -116,6 +123,103 @@ function fixture() {
     read: (sessionKey = scope.sessionKey) => readExactSessionEntryRow(database, sessionKey)?.entry,
   };
 }
+
+it("preserves snapshot authority during lifecycle metadata publication and revokes changed snapshots", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async () => {
+    const f = fixture();
+    const identity = readOpenClawAgentDatabaseIdentity(
+      openOpenClawAgentDatabase({ agentId: "main", path: f.scope.storePath }),
+    ).identity;
+    const predicate = retainPreparedSessionEntryPredicate({
+      databaseIdentity: `file:${identity}`,
+      sessionKey: f.scope.sessionKey,
+      entry: f.read(),
+      projection: ["skillsSnapshot"],
+      matches: (before, after) => isDeepStrictEqual(before?.skillsSnapshot, after?.skillsSnapshot),
+    });
+    const pending: boolean[] = [];
+    delivery.afterCommit = (type) => {
+      if (type === "session.lifecycle.project") {
+        pending.push(predicate.isCurrent());
+      }
+    };
+    try {
+      await applySessionEntryLifecycleMutation({
+        ...f.scope,
+        upserts: [
+          { sessionKey: f.scope.sessionKey, entry: { ...f.read()!, displayName: "Renamed" } },
+        ],
+        skipMaintenance: true,
+      });
+      expect(pending).toEqual([true]);
+      expect(predicate.isCurrent()).toBe(true);
+      expect(predicate.readRetainedEntry()?.skillsSnapshot).toEqual(f.initial.skillsSnapshot);
+
+      await applySessionEntryLifecycleMutation({
+        ...f.scope,
+        upserts: [
+          { sessionKey: f.scope.sessionKey, entry: { ...f.read()!, skillsSnapshot: undefined } },
+        ],
+        skipMaintenance: true,
+      });
+      expect(pending).toEqual([true, false]);
+      expect(predicate.isCurrent()).toBe(false);
+      expect(predicate.canRefresh()).toBe(false);
+    } finally {
+      predicate.release();
+    }
+  });
+});
+
+it("reuses same-key reply initialization preimages without retransmitting snapshots or hiding newer writes", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async () => {
+    const f = fixture();
+    const prompt = "synthetic lifecycle instructions ".repeat(1500);
+    replaceSessionEntrySync(f.scope, {
+      ...f.initial,
+      skillsSnapshot: { prompt, skills: [] },
+    });
+    const update = () =>
+      applySessionEntryLifecycleMutation({
+        ...f.scope,
+        skipMaintenance: true,
+        upserts: [
+          {
+            sessionKey: f.scope.sessionKey,
+            relatedSessionKeys: [f.scope.sessionKey],
+            buildEntry: ({ currentEntry, readEntry }) => {
+              expect(readEntry(f.scope.sessionKey)).toEqual(currentEntry);
+              return { ...currentEntry!, label: "updated" };
+            },
+          },
+        ],
+      });
+    await update();
+    const bytes: number[] = [];
+    delivery.afterReply = (type, result) => {
+      if (type === "database.domain.publish") {
+        bytes.push(serialize(result).byteLength);
+      }
+    };
+    await update();
+    expect(f.read()?.skillsSnapshot?.prompt).toBe(prompt);
+    expect(bytes).toHaveLength(1);
+    expect(bytes[0]).toBeLessThan(2000);
+
+    delivery.beforeCommand = async (type) => {
+      if (type !== "database.domain.publish") {
+        return;
+      }
+      delivery.beforeCommand = undefined;
+      replaceSessionEntrySync(f.scope, {
+        ...f.read()!,
+        skillsSnapshot: { prompt: "newer instructions", skills: [] },
+      });
+    };
+    await update();
+    expect(f.read()?.skillsSnapshot?.prompt).toBe("newer instructions");
+  });
+});
 
 function maintenanceFixture() {
   const f = fixture();

@@ -26,6 +26,7 @@ import {
 } from "./server.sessions.create.test-support.js";
 import type { GatewaySessionCommitResult } from "./session-create-service.types.js";
 import { agentDiscoveryMock, testState, writeSessionStore } from "./test-helpers.js";
+import { createClaudeCliRegistrationFixture } from "./test-helpers.plugin-registry.js";
 import {
   createCompactedSessionFixture,
   sessionStoreEntry,
@@ -545,16 +546,7 @@ function installSessionCatalog(
 ) {
   const registry = createEmptyPluginRegistry();
   if (cli) {
-    registry.cliBackends.push({
-      pluginId: "anthropic",
-      source: "test",
-      backend: {
-        id: "claude-cli",
-        modelProvider: "anthropic",
-        config: { command: "claude" },
-        bundleMcp: false,
-      },
-    });
+    registry.cliBackends.push(createClaudeCliRegistrationFixture());
   }
   registry.sessionCatalogs.push({
     pluginId: "anthropic",

@@ -1,4 +1,3 @@
-import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -45,12 +44,8 @@ afterEach(async () => {
 
 async function writeFutureSchema(databasePath: string): Promise<void> {
   await fs.mkdir(path.dirname(databasePath), { recursive: true });
-  const database = new DatabaseSync(databasePath);
-  try {
-    database.exec(futureSchemaSql);
-  } finally {
-    database.close();
-  }
+  using database = new DatabaseSync(databasePath);
+  database.exec(futureSchemaSql);
 }
 
 async function createFixture(futureSchema = true) {
@@ -78,12 +73,7 @@ async function snapshotDirectory(directory: string) {
   const names = (await fs.readdir(directory)).toSorted();
   return Object.fromEntries(
     await Promise.all(
-      names.map(async (name) => [
-        name,
-        createHash("sha256")
-          .update(await fs.readFile(path.join(directory, name)))
-          .digest("hex"),
-      ]),
+      names.map(async (name) => [name, await fs.readFile(path.join(directory, name))]),
     ),
   );
 }

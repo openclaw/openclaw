@@ -1,64 +1,23 @@
-import { spawn } from "node:child_process";
+import type { ChildProcess } from "node:child_process";
 import { readFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { afterEach, expect, it } from "vitest";
+import { expect } from "vitest";
 import { resolveTestNodeExecPath } from "../../src/test-utils/node-process.js";
-import { createBoundedChildOutput } from "../helpers/bounded-child-output.js";
-import { createFixtureLifetime } from "../helpers/fixture-lifetime.js";
+import { createCommandTest, type CommandFixture } from "../helpers/command-fixture.js";
+import { isProcessAlive } from "../helpers/process-wait.js";
 import { awaitGateBeforeSettlement, createDeferred, withinTest } from "../helpers/promise.js";
+import { runNodeScript } from "../helpers/run-node-script.js";
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
 const scriptPath = path.join(repoRoot, "scripts/e2e/lib/run-with-pty.mjs");
+const it = createCommandTest();
 const posixIt = process.platform === "win32" ? it.skip : it;
 const testNodeExecPath = resolveTestNodeExecPath();
 const nodeCommand = (source: string) => [testNodeExecPath, "-e", source];
-const fixtureLifetime = createFixtureLifetime();
-afterEach(() => fixtureLifetime.cleanup());
-
-function withPtyFixture(run: (root: string, logPath: string) => Promise<void>) {
-  return fixtureLifetime.run(() => {
-    const root = fixtureLifetime.createTempDir("openclaw-run-with-pty-");
-    return run(root, path.join(root, "pty.log"));
-  });
-}
-
-function startPty(logPath: string, command: string[], env: Record<string, string>, input?: string) {
-  const args = [scriptPath, logPath, ...command];
-  const options = { env: { ...process.env, ...env } };
-  const child =
-    input === undefined
-      ? spawn(testNodeExecPath, args, { ...options, stdio: ["ignore", "pipe", "pipe"] })
-      : spawn(testNodeExecPath, args, { ...options, stdio: ["pipe", "pipe", "pipe"] });
-  const stdout = createBoundedChildOutput();
-  const stderr = createBoundedChildOutput();
-  for (const [stream, output] of [
-    [child.stdout, stdout],
-    [child.stderr, stderr],
-  ] as const) {
-    stream.setEncoding("utf8");
-    stream.on("data", output.append);
-  }
-  const completion = new Promise<{ code: number | null; signal: NodeJS.Signals | null }>(
-    (resolve, reject) => {
-      child.once("close", (code, signal) => resolve({ code, signal }));
-      child.once("error", reject);
-    },
-  );
-  child.stdin?.end(input);
-  return { child, stdout, stderr, completion };
-}
-
-async function finishPty(child: ReturnType<typeof spawn>, completion: Promise<unknown>) {
-  if (child.exitCode === null && child.signalCode === null) {
-    child.kill("SIGTERM");
-  }
-  await completion;
-}
-
 async function runPtyProbe(
+  fixture: CommandFixture,
   logPath: string,
-  signal: AbortSignal,
   env: Record<string, string> = {},
   command: string[] = [
     "/bin/bash",
@@ -67,59 +26,56 @@ async function runPtyProbe(
   ],
   input = "abc\n",
 ) {
-  const { child, stdout, stderr, completion } = startPty(logPath, command, env, input);
-  try {
-    const { code } = await withinTest(completion, signal);
-    return { code, stdout: stdout.text(), stderr: stderr.text() };
-  } finally {
-    await finishPty(child, completion);
-  }
+  return fixture.run(testNodeExecPath, [scriptPath, logPath, ...command], {
+    env: { ...process.env, ...env },
+    input,
+  });
 }
 
-it("rejects loose terminal dimension env values", ({ signal }) =>
-  withPtyFixture(async (_root, logPath) => {
-    const result = await runPtyProbe(logPath, signal, { COLUMNS: "120cols" });
-    expect(result.code).not.toBe(0);
-    expect(result.stderr).toContain("invalid COLUMNS: 120cols");
-  }));
+it("rejects loose terminal dimension env values", async ({ command }) => {
+  const logPath = path.join(command.createTempDir("pty-"), "pty.log");
+  const result = await runPtyProbe(command, logPath, { COLUMNS: "120cols" });
+  expect(result.status).not.toBe(0);
+  expect(result.stderr).toContain("invalid COLUMNS: 120cols");
+});
 
-it("forwards stdin through a PTY and writes the transcript log", ({ signal }) =>
-  withPtyFixture(async (_root, logPath) => {
-    const result = await runPtyProbe(logPath, signal);
-    expect(result).toMatchObject({ code: 0, stderr: "" });
-    for (const output of [result.stdout, await readFile(logPath, "utf8")]) {
-      expect(output).toContain("prompt");
-      expect(output).toContain("got:abc");
-    }
-  }));
+it("forwards stdin through a PTY and writes the transcript log", async ({ command }) => {
+  const logPath = path.join(command.createTempDir("pty-"), "pty.log");
+  const result = await runPtyProbe(command, logPath);
+  expect(result).toMatchObject({ status: 0, stderr: "", error: undefined });
+  for (const output of [result.stdout, await readFile(logPath, "utf8")]) {
+    expect(output).toContain("prompt");
+    expect(output).toContain("got:abc");
+  }
+});
 
-it("caps noisy PTY output in stdout and transcript logs", ({ signal }) =>
-  withPtyFixture(async (_root, logPath) => {
-    const result = await runPtyProbe(
-      logPath,
-      signal,
-      { OPENCLAW_E2E_PTY_OUTPUT_MAX_BYTES: "64" },
-      nodeCommand("process.stdout.write('x'.repeat(2048))"),
-      "",
-    );
-    expect(result).toMatchObject({ code: 0, stderr: "" });
-    for (const output of [result.stdout, await readFile(logPath, "utf8")]) {
-      expect(output).toContain("[run-with-pty output truncated after 64 bytes]");
-      expect(output.length).toBeLessThan(512);
-    }
-  }));
+it("caps noisy PTY output in stdout and transcript logs", async ({ command }) => {
+  const logPath = path.join(command.createTempDir("pty-"), "pty.log");
+  const result = await runPtyProbe(
+    command,
+    logPath,
+    { OPENCLAW_E2E_PTY_OUTPUT_MAX_BYTES: "64" },
+    nodeCommand("process.stdout.write('x'.repeat(2048))"),
+    "",
+  );
+  expect(result).toMatchObject({ status: 0, stderr: "", error: undefined });
+  for (const output of [result.stdout, await readFile(logPath, "utf8")]) {
+    expect(output).toContain("[run-with-pty output truncated after 64 bytes]");
+    expect(output.length).toBeLessThan(512);
+  }
+});
 
-it("fails when the transcript log cannot be written", ({ signal }) =>
-  withPtyFixture(async (tempRoot) => {
-    const result = await runPtyProbe(tempRoot, signal, {}, nodeCommand("console.log('ready')"), "");
-    expect(result.code).toBe(1);
-    expect(result.stderr).toContain("run-with-pty transcript log failed:");
-  }));
+it("fails when the transcript log cannot be written", async ({ command }) => {
+  const tempRoot = command.createTempDir("pty-");
+  const result = await runPtyProbe(command, tempRoot, {}, nodeCommand("console.log('ready')"), "");
+  expect(result.status).toBe(1);
+  expect(result.stderr).toContain("run-with-pty transcript log failed:");
+});
 
-posixIt("kills descendants ignoring forwarded PTY termination", ({ signal }) =>
-  withPtyFixture(async (_root, logPath) => {
-    let descendantPid: number | null = null;
-    const probeCode = `
+posixIt("kills descendants ignoring forwarded PTY termination", async ({ signal, command }) => {
+  const logPath = path.join(command.createTempDir("pty-"), "pty.log");
+  let descendantPid: number | null = null;
+  const probeCode = `
 const { spawn } = require("node:child_process");
 process.on("SIGTERM", () => process.exit(0));
 const descendant = spawn(process.execPath, [
@@ -129,40 +85,45 @@ const descendant = spawn(process.execPath, [
 descendant.once("message", (pid) => console.log("ready:" + pid));
 setInterval(() => {}, 1000);
 `;
-    const { child, stdout, stderr, completion } = startPty(logPath, nodeCommand(probeCode), {
-      OPENCLAW_E2E_PTY_FORCE_KILL_MS: "25",
-    });
-    const ready = createDeferred<number>();
-    child.stdout.on("data", () => {
-      const match = stdout.text().match(/ready:(\d+)(?:\r?\n)/u);
-      if (match) {
-        ready.resolve(Number(match[1]));
-      }
-    });
-    try {
-      descendantPid = await withinTest(
-        awaitGateBeforeSettlement(ready.promise, completion, "timed out waiting for condition"),
+  const ready = createDeferred<number>();
+  let child: ChildProcess | undefined;
+  const completion = command.lifetime.track(
+    runNodeScript(
+      [scriptPath, logPath, ...nodeCommand(probeCode)],
+      { ...process.env, OPENCLAW_E2E_PTY_FORCE_KILL_MS: "25" },
+      undefined,
+      {
         signal,
-      );
-      child.kill("SIGTERM");
-      const result = await withinTest(completion, signal);
-      expect({ ...result, stderr: stderr.text() }).toEqual({ code: 143, signal: null, stderr: "" });
-      expect(await readFile(logPath, "utf8")).toContain("ready");
-      expect(isProcessAlive(descendantPid)).toBe(false);
-    } finally {
-      await finishPty(child, completion);
-      if (descendantPid && isProcessAlive(descendantPid)) {
-        process.kill(descendantPid, "SIGKILL");
-      }
-    }
-  }),
-);
-
-function isProcessAlive(pid: number) {
+        onReady(process, output) {
+          child = process;
+          process.stdout!.on("data", () => {
+            const match = output().stdout.match(/ready:(\d+)(?:\r?\n)/u);
+            if (match) {
+              ready.resolve(Number(match[1]));
+            }
+          });
+        },
+      },
+    ),
+  );
   try {
-    process.kill(pid, 0);
-    return true;
-  } catch {
-    return false;
+    descendantPid = await withinTest(
+      awaitGateBeforeSettlement(ready.promise, completion, "timed out waiting for condition"),
+      signal,
+    );
+    child!.kill("SIGTERM");
+    const result = await withinTest(completion, signal);
+    expect(result).toMatchObject({ status: 143, error: undefined, stderr: "" });
+    expect(child!.signalCode).toBeNull();
+    expect(await readFile(logPath, "utf8")).toContain("ready");
+    expect(isProcessAlive(descendantPid)).toBe(false);
+  } finally {
+    if (child?.exitCode === null && child.signalCode === null) {
+      child.kill("SIGTERM");
+    }
+    await completion;
+    if (descendantPid && isProcessAlive(descendantPid)) {
+      process.kill(descendantPid, "SIGKILL");
+    }
   }
-}
+});

@@ -24,6 +24,12 @@ function createState(label: string) {
   const stateDir = fs.realpathSync(tempDirs.make(label));
   return { stateDir, env: { ...process.env, OPENCLAW_STATE_DIR: stateDir } };
 }
+function readEntry(sql: ReturnType<typeof sessionSqlFixture>, key: string): unknown {
+  const row = sql`SELECT entry_json FROM session_nodes WHERE session_key = ${key}`.get() as {
+    entry_json: string;
+  };
+  return JSON.parse(row.entry_json);
+}
 afterEach(async () => {
   await closeAgentDatabases();
   closeAgentHandles();
@@ -85,11 +91,18 @@ describe("doctor reserved incognito session key repair", () => {
     sql`INSERT INTO board_tabs (session_key, tab_id, title, position, created_by, revision) VALUES (${oldKey}, 'tab-1', 'Tab', 0, 'user', 0)`.run();
     sql`INSERT INTO board_widgets (session_key, name, tab_id, content_kind, html, sha256, view_generation, revision, size_w, size_h, position, created_by, created_at, updated_at) VALUES (${oldKey}, 'widget-1', 'tab-1', 'html', X'00', 'sha', 'view-1', 1, 1, 1, 0, 'user', 1, 1)`.run();
     sql`INSERT INTO session_members (session_key, identity_id, added_by, added_at) VALUES (${oldKey}, 'member-1', 'owner-1', 1)`.run();
-    expect(listEntries({ agentId: "main", clone: false, env })[0]?.sessionKey).toBe(oldKey);
-
+    // Repair must invalidate both already-populated owner caches.
+    for (const agentId of ["main", "work"]) {
+      listEntries({ agentId, clone: false, env });
+    }
     expect(await repairKeys({ apply: false, cfg: {}, env })).toEqual({ found: 1, repaired: 0 });
     expect(await repairKeys({ apply: true, cfg: {}, env })).toEqual({ found: 1, repaired: 1 });
     expect(listEntries({ agentId: "main", clone: false, env })[0]?.sessionKey).toBe(newKey);
+    expect(listEntries({ agentId: "work", clone: false, env })[0]?.entry).toMatchObject({
+      parentSessionKey: newKey,
+      spawnedBy: newKey,
+      updatedAt: 1,
+    });
 
     for (const [owner, table, columns] of [
       [
@@ -120,17 +133,9 @@ describe("doctor reserved incognito session key repair", () => {
       audience_session_keys_json: JSON.stringify([baseLegacyKey]),
     });
 
-    const secondaryEntry = secondarySql`SELECT entry_json FROM session_nodes`.get() as {
-      entry_json: string;
-    };
-    expect(JSON.parse(secondaryEntry.entry_json)).toMatchObject({
+    expect(readEntry(secondarySql, workKey)).toMatchObject({
       completionOwnerSessionKey: newKey,
     });
-    const entry = sql`SELECT session_key, entry_json FROM session_nodes`.get() as {
-      session_key: string;
-      entry_json: string;
-    };
-    expect(entry.session_key).toBe(newKey);
     expect(loadEntry({ agentId: "main", env, sessionKey: newKey })?.entry).toMatchObject({
       parentSessionKey: newKey,
       completionOwnerSessionKey: newKey,
@@ -140,8 +145,9 @@ describe("doctor reserved incognito session key repair", () => {
       skillsSnapshot,
       pluginExtensions: { test: { label: oldKey } },
     });
-    expect(JSON.parse(entry.entry_json)).not.toHaveProperty("systemPromptReport");
-    expect(JSON.parse(entry.entry_json)).not.toHaveProperty("skillsSnapshot");
+    const entry = readEntry(sql, newKey);
+    expect(entry).not.toHaveProperty("systemPromptReport");
+    expect(entry).not.toHaveProperty("skillsSnapshot");
     expect(loadEntry({ agentId: "work", env, sessionKey: workKey })?.entry).toMatchObject({
       systemPromptReport: { sessionKey: coldOccupiedKey },
     });
@@ -280,11 +286,7 @@ describe("doctor reserved incognito session key repair", () => {
     });
     for (const index of [0, 65, 129]) {
       const sessionKey = `agent:main:incognito-density-${String(index).padStart(3, "0")}`;
-      const row =
-        sql`SELECT entry_json FROM session_nodes WHERE session_key = ${sessionKey}`.get() as {
-          entry_json: string;
-        };
-      expect(JSON.parse(row.entry_json)).toMatchObject({ parentSessionKey: newKey, payload });
+      expect(readEntry(sql, sessionKey)).toMatchObject({ parentSessionKey: newKey, payload });
     }
   });
 });

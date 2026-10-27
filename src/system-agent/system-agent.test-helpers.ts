@@ -34,7 +34,42 @@ import {
   type SystemAgentConfigSnapshot,
 } from "./inference-route.js";
 import { createSystemAgentVerifiedInferenceBinding } from "./verified-inference.js";
-import { mockPluginRegistry, pluginRecord } from "./verified-inference.test-support.js";
+import {
+  mockPluginRegistry,
+  pluginRecord,
+  profileAuth,
+  requireFingerprint,
+} from "./verified-inference.test-support.js";
+
+export async function createSystemAgentSelectedProfileTestBinding(
+  config: OpenClawConfig,
+  profileId: string,
+  agentHarnessId?: string,
+) {
+  const configuredRoute = await resolveSystemAgentConfiguredRouteFromConfig(config);
+  if (!configuredRoute) {
+    throw new Error("missing test route");
+  }
+  const resolvedAuth = profileAuth(profileId, "test-key");
+  vi.spyOn(authStore, "loadAuthProfileStoreForRuntimeAsync").mockResolvedValue({
+    version: 1,
+    profiles: {
+      [profileId]: { type: "api_key", provider: configuredRoute.provider, key: "test-key" },
+    },
+  });
+  vi.spyOn(modelAuth, "resolveApiKeyForProviderCore").mockResolvedValue(resolvedAuth);
+  return createSystemAgentVerifiedInferenceBinding({
+    configuredRoute,
+    executionRoute: { ...configuredRoute, authProfileId: profileId },
+    auth: {
+      authProfileId: profileId,
+      authFingerprint: requireFingerprint(fingerprintResolvedProviderAuth(resolvedAuth)),
+      ...(agentHarnessId ? { agentHarnessId } : {}),
+      modelId: configuredRoute.model,
+      modelApi: "openai-responses",
+    },
+  });
+}
 
 export type SystemAgentPluginMetadataTestSnapshot = {
   /** Rebind one prepared inventory to the exact authored config under test. */

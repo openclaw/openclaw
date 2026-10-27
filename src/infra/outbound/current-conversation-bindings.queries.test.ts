@@ -18,15 +18,14 @@ import {
 } from "./current-conversation-bindings.js";
 import {
   readCurrentConversationBindingListsInDatabase as readLists,
-  readCurrentConversationBindingSelectionInDatabase as readSelection,
+  inspectCurrentConversationBindingRecordsInDatabase as readSelection,
 } from "./current-conversation-bindings.kernel.js";
 import { currentConversationBindingPublication as publication } from "./current-conversation-bindings.publication.js";
+import {
+  recordPublications,
+  type CurrentConversationBindingPublication,
+} from "./current-conversation-bindings.test-support.js";
 import type { SessionBindingRecord } from "./session-binding.types.js";
-
-type CurrentConversationBindingPublication = Extract<
-  Parameters<Parameters<typeof publication.subscribeFacts>[0]>[0],
-  { receipt: unknown }
->;
 
 aroundEach(async (runTest) => {
   try {
@@ -56,17 +55,6 @@ function readColumns(bindingId: string) {
   return openOpenClawStateDatabase()
     .db.prepare("SELECT * FROM current_conversation_bindings WHERE binding_id = ?")
     .get(bindingId);
-}
-
-function recordPublications() {
-  const publications: CurrentConversationBindingPublication[] = [];
-  const unsubscribe = publication.subscribeFacts((value) => {
-    if ("receipt" in value) {
-      publications.push(value);
-    }
-  });
-  onTestFinished(unsubscribe);
-  return publications;
 }
 
 function publicationFacts(value: CurrentConversationBindingPublication) {

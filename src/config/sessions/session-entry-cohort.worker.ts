@@ -17,13 +17,11 @@ import {
 } from "../../state/openclaw-agent-db-readonly.js";
 import type { DB } from "../../state/openclaw-agent-db.generated.js";
 import { resolveSessionLifecycleTimestampsWithHeader } from "./lifecycle-timestamps.js";
+import type { SessionColdArchive } from "./session-accessor.sqlite-archive-types.js";
 import { readExactSessionEntryFactsInDatabase } from "./session-accessor.sqlite-entry-facts.worker.js";
 import { readSessionKeyBySessionIdInDatabase } from "./session-accessor.sqlite-entry-read.js";
 import { assertCanonicalSqliteSessionKeysCurrent } from "./session-canonical-key.js";
-import {
-  sessionColdArchiveMetadataColumns,
-  type SessionColdArchive,
-} from "./session-cold-storage-state.js";
+import { sessionColdArchiveMetadataColumns } from "./session-cold-storage-state.js";
 import { SessionEntryChangedDuringReadError } from "./session-entry-read-errors.js";
 import type {
   SessionEntryCohortRequest,

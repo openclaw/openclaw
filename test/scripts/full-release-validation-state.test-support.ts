@@ -7,6 +7,7 @@ import {
   createPublicationSourceFact,
   publicationDispatchEnvelope,
   publicationSourceRequest,
+  type PublicationSelection,
   type PublicationSourceRequest,
 } from "../../scripts/full-release-publication-contract.mjs";
 import {
@@ -23,6 +24,43 @@ export const SHA = "a".repeat(40);
 export const TARGET_SHA = "b".repeat(40);
 export const TRUSTED_MAIN = { fullRef: "refs/heads/main", ref: "main", sha: SHA };
 const WORKFLOW = { workflowRef: "release-ci/tooling", workflowSha: SHA };
+
+export function publicationSelectionFixture(): PublicationSelection {
+  return {
+    route: "normal",
+    npmDistTag: "latest",
+    publishOpenclawNpm: true,
+    pluginPublishScope: "all-publishable",
+    plugins: [],
+  };
+}
+
+export function publicationSourceEnv(
+  inputs: Record<string, unknown> = {},
+  env: NodeJS.ProcessEnv = {},
+) {
+  return {
+    PUBLICATION_INPUTS_JSON: JSON.stringify({
+      ref: TARGET_SHA,
+      release_profile: "stable",
+      rerun_group: "all",
+      trusted_workflow_json: publicationDispatchEnvelope(null, {
+        validationPurpose: "publish",
+        publicationSelection: publicationSelectionFixture(),
+      }),
+      ...inputs,
+    }),
+    PUBLICATION_TARGET_CONTEXT: "release/2026.9.9",
+    PUBLICATION_TOOLING_JSON: JSON.stringify(TRUSTED_MAIN),
+    PUBLICATION_TARGET_SHA: TARGET_SHA,
+    GITHUB_REPOSITORY: "openclaw/openclaw",
+    GITHUB_REF: "refs/heads/release-ci/tooling",
+    GITHUB_SHA: SHA,
+    GITHUB_RUN_ID: "77",
+    GITHUB_RUN_ATTEMPT: "1",
+    ...env,
+  };
+}
 
 export function collectorEnv(overrides: NodeJS.ProcessEnv) {
   return {
@@ -92,6 +130,7 @@ export function generatedManifest(planArtifact: Record<string, any>): Record<str
     sourceParentRunAttempt: 1,
     targetRef: "main",
     targetSha: TARGET_SHA,
+    validationInputs: { targetVersion: planArtifact.targetVersion },
     version: 3,
     workflowFullRef: "refs/heads/release-ci/tooling",
     workflowName: "Full Release Validation",
@@ -212,31 +251,7 @@ export function reusedEvidenceChildren() {
 
 export function sourceFact(overrides: Partial<PublicationSourceRequest> = {}) {
   const request = {
-    ...publicationSourceRequest({
-      PUBLICATION_INPUTS_JSON: JSON.stringify({
-        ref: TARGET_SHA,
-        release_profile: "stable",
-        rerun_group: "all",
-        trusted_workflow_json: publicationDispatchEnvelope(null, {
-          validationPurpose: "publish",
-          publicationSelection: {
-            route: "normal",
-            npmDistTag: "latest",
-            publishOpenclawNpm: true,
-            pluginPublishScope: "all-publishable",
-            plugins: [],
-          },
-        }),
-      }),
-      PUBLICATION_TARGET_CONTEXT: "release/2026.9.9",
-      PUBLICATION_TOOLING_JSON: JSON.stringify(TRUSTED_MAIN),
-      PUBLICATION_TARGET_SHA: TARGET_SHA,
-      GITHUB_REPOSITORY: "openclaw/openclaw",
-      GITHUB_REF: "refs/heads/release-ci/tooling",
-      GITHUB_SHA: SHA,
-      GITHUB_RUN_ID: "77",
-      GITHUB_RUN_ATTEMPT: "1",
-    }),
+    ...publicationSourceRequest(publicationSourceEnv()),
     ...overrides,
   };
   return createPublicationSourceFact(

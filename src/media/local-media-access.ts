@@ -44,7 +44,6 @@ export { getDefaultMediaLocalRoots as getDefaultLocalRootsCore };
 
 type LocalMediaBoundaryOptions = {
   inboundRoots?: readonly string[];
-  resolvedRoots?: readonly string[];
   resolveRoots?: () => Promise<readonly string[]>;
 };
 
@@ -152,10 +151,7 @@ async function resolveLocalMediaBoundary(
   }
   const roots = localRoots ?? getDefaultMediaLocalRoots();
   const resolved = await resolveLocalMediaPathForContainment(mediaPath);
-  const resolvedRoots =
-    options?.resolvedRoots ??
-    (await options?.resolveRoots?.()) ??
-    (await resolveLocalMediaRoots(roots));
+  const resolvedRoots = (await options?.resolveRoots?.()) ?? (await resolveLocalMediaRoots(roots));
   const workspaceRootIndex = roots.findIndex((root) => path.basename(root) === "workspace");
   const workspaceRoot = roots[workspaceRootIndex];
   if (workspaceRoot) {

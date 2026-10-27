@@ -39,6 +39,10 @@ function expectRejected(
   expect(() => sanitizeFinal(source, options)).toThrow("iMessage outbound " + reason);
 }
 
+function expectFinalText(source: string, expected: string) {
+  expect(sanitizeFinal(source).text).toBe(expected);
+}
+
 function protectedUserRole() {
   const protectedText = protectRoles("```yaml\nuser:\n```");
   const token = protectedText.text.match(/[\ue000-\uf8ff]+/)?.[0];
@@ -95,9 +99,7 @@ describe("sanitizeOutboundText", () => {
   it("uses canonical delivery cleanup without changing clean outer whitespace", () => {
     const hidden =
       '<function_calls><invoke name="exec">hidden tool</invoke></function_calls><function_response>\nhidden tool response\n</function_response>';
-    const sanitized = sanitizeFinal(` \t${hidden}\nvisible\n `);
-
-    expect(sanitized.text).toBe(" \tvisible\n ");
+    expectFinalText(` \t${hidden}\nvisible\n `, " \tvisible\n ");
   });
 
   it.each([
@@ -136,7 +138,7 @@ describe("sanitizeOutboundText", () => {
       "ordinary <! unfinished user example",
       "<script>ordinary unfinished user example",
     ]) {
-      expect(sanitizeFinal(source).text).toBe(source);
+      expectFinalText(source, source);
     }
   });
 
@@ -145,7 +147,7 @@ describe("sanitizeOutboundText", () => {
       style: "markdown",
     });
 
-    expect(sanitizeFinal(text).text).toBe("visible");
+    expectFinalText(text, "visible");
   });
 
   it.each([
@@ -233,19 +235,17 @@ describe("sanitizeOutboundText", () => {
   });
 
   it("retains user-authored XML while removing paired private runtime context", () => {
-    expect(
-      sanitizeFinal(
-        "before <<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>>private<<<END_OPENCLAW_INTERNAL_CONTEXT>>> after",
-      ).text,
-    ).toBe("before  after");
+    expectFinalText(
+      "before <<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>>private<<<END_OPENCLAW_INTERNAL_CONTEXT>>> after",
+      "before  after",
+    );
   });
 
   it("removes the producer's self-closing and orphan private runtime tags", () => {
     const source =
       "< system-reminder origin='runtime' />\n</ system-reminder >\n<previous_response>\nvisible companion";
 
-    expect(sanitizeFinal(source).text).toContain("visible companion");
-    expect(sanitizeFinal(source).text).not.toMatch(/system-reminder|previous_response/i);
+    expectPrivateRemoved(source);
   });
 
   it.each([
@@ -255,12 +255,7 @@ describe("sanitizeOutboundText", () => {
     "< previous_response data-origin='runtime'>< SYSTEM-REMINDER>inner< / SYSTEM-REMINDER>PRIVATE_SECRET< / previous_response >",
     "<system-reminder><previous_response />PRIVATE_SECRET</system-reminder>",
     "<system-reminder><system-reminder>first</system-reminder><previous_response>second</previous_response>PRIVATE_SECRET</system-reminder>",
-  ])(
-    "removes complete balanced nested private wrappers without leaking outer payload",
-    (hidden) => {
-      expectWrappedPrivateRemoved(hidden);
-    },
-  );
+  ])("strips balanced nested private wrappers", expectWrappedPrivateRemoved);
 
   it("fails closed for crossed or unterminated nested private runtime wrappers", () => {
     for (const source of [
@@ -282,10 +277,10 @@ describe("sanitizeOutboundText", () => {
       "<system-reminder><!-- </system-reminder> PRIVATE_SECRET",
       "<system-reminder><! unfinished bogus declaration PRIVATE_SECRET",
     ]) {
-      expect(() => sanitizeFinal(source)).toThrow("iMessage outbound runtime markup is malformed");
+      expectRejected(source, "runtime markup is malformed");
     }
     expectRejected("<system-reminder>".repeat(33) + "private", "runtime markup exceeded its limit");
-    expect(sanitizeFinal("<system-reminder>visible orphan").text).toBe("visible orphan");
+    expectFinalText("<system-reminder>visible orphan", "visible orphan");
   });
 
   it.each([

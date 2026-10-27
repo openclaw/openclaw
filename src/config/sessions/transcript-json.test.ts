@@ -1,7 +1,51 @@
 import { fileURLToPath } from "node:url";
 import { expect, it } from "vitest";
 import { runNodeScript } from "../../../test/helpers/run-node-script.js";
+import {
+  prepareCodeModeCheckpoint,
+  persistCodeModeCheckpoint,
+} from "../../agents/code-mode-checkpoint.js";
 import { normalizeTranscriptJsonValue } from "./transcript-json.js";
+
+it.each(["exec", "wait"])("shares admitted %s payloads across checkpoint stamping", (toolName) => {
+  const message = {
+    role: "toolResult",
+    toolName,
+    toolCallId: "synthetic-call",
+    content: [{ type: "text", text: "output 🦞\ud800" }],
+    details: { nested: { values: [null, 7, "retained output"] } },
+  };
+  prepareCodeModeCheckpoint(message, {});
+  normalizeTranscriptJsonValue({ message }, "");
+  const stamped = persistCodeModeCheckpoint(message, message);
+  const expected = JSON.stringify({ ...message, __openclaw: { codeModeCheckpoint: null } });
+  const persisted = normalizeTranscriptJsonValue(stamped, "") as typeof stamped;
+  expect(JSON.stringify(persisted)).toBe(expected);
+  expect(persisted.content).toBe(message.content);
+  expect(persisted.details).toBe(message.details);
+  expect(persisted).not.toBe(message);
+  expect(Object.isFrozen(persisted)).toBe(false);
+  expect(Object.isFrozen(persisted.content[0])).toBe(true);
+  expect(message).not.toHaveProperty("__openclaw");
+});
+
+it("does not admit arbitrary frozen payloads when copying a checkpoint envelope", () => {
+  const content = Object.freeze([{ type: "text", text: "unadmitted output" }]);
+  Object.freeze(content[0]);
+  const message = Object.freeze({
+    role: "toolResult",
+    toolName: "exec",
+    toolCallId: "call",
+    content,
+  });
+  prepareCodeModeCheckpoint(message, {});
+  const stamped = persistCodeModeCheckpoint(message, message);
+  const persisted = normalizeTranscriptJsonValue(stamped, "") as typeof stamped;
+  expect(persisted.content).toEqual(content);
+  expect(persisted.content).not.toBe(content);
+  expect(persisted.content[0]).not.toBe(content[0]);
+  expect(message).not.toHaveProperty("__openclaw");
+});
 
 it("releases discarded tool-output backing strings while sharing persisted payloads", async ({
   signal,
@@ -25,6 +69,35 @@ it.each([
   ["numbers", () => ({ zero: -0, nan: Number.NaN, infinity: Number.POSITIVE_INFINITY })],
   ["wrappers", () => [Object(7), Object("text"), Object(false), Object(Symbol("hidden"))]],
   ["proxy", () => new Proxy({ value: 7 }, {})],
+  [
+    "messages",
+    () => [
+      {
+        role: "user",
+        content: [
+          { type: "text", text: "hello" },
+          { type: "image", data: "aGVsbG8=", mimeType: "image/png" },
+        ],
+      },
+      {
+        role: "assistant",
+        content: [
+          { type: "thinking", thinking: "thought" },
+          {
+            type: "toolCall",
+            id: "call",
+            name: "exec",
+            arguments: { nested: [null, true, { missing: undefined, value: -0 }] },
+          },
+        ],
+      },
+      {
+        role: "toolResult",
+        content: [{ type: "text", text: "result\ud800" }],
+        details: { values: [undefined, Number.NaN] },
+      },
+    ],
+  ],
 ] as const)("matches native JSON bytes for %s", (_name, createValue) => {
   const value = createValue();
   const expected = JSON.stringify({ data: value });

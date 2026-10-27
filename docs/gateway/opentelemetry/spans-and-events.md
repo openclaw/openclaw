@@ -25,15 +25,25 @@ read_when:
 Plugin attribution is span-only. It does not add a plugin dimension to shared
 OpenTelemetry metrics or change Prometheus metric labels.
 
+Embedded and simple model requests compute prompt component sizes only when a
+diagnostic subscriber requests them. Activity tracking, the stability recorder,
+Prometheus, and metrics-only OpenTelemetry do not request these sizes. Tracing
+retains the same pre-provider JSON character counts; these are distinct from the
+encoded request's UTF-8 byte count. Internal diagnostic subscribers can set
+`includePromptStats: false` in their event filter to avoid requesting this work.
+Omitting the option preserves prompt statistics for interested subscribers.
+
 - `openclaw.run`
   - `openclaw.outcome`, `openclaw.channel`, `openclaw.provider`, `openclaw.model`, `openclaw.errorCategory`, optional `openclaw.agent`
 - `openclaw.model.call`
   - `gen_ai.system` by default, or `gen_ai.provider.name` when the latest GenAI semantic conventions are opted in
   - `gen_ai.request.model`, `gen_ai.operation.name`, `openclaw.provider`, `openclaw.model`, `openclaw.api`, `openclaw.transport`, `openclaw.model_call.observation_unit` (`request` or `turn`), optional `openclaw.agent`
+  - `gen_ai.response.model` on terminal request spans (completed and error) when the provider reported the model that actually served the request — e.g. routed OpenRouter presets, `openrouter/auto`, or alias models. `gen_ai.request.model` and `openclaw.model` keep the requested id; the response model is observed from the terminal message, omitted when absent, and never attached to aggregate usage or turn spans, used for OpenClaw pricing, or exported as a metric label (unbounded cardinality). `model.call.started` is emitted before the provider responds and never carries it.
   - `openclaw.errorCategory`, `error.type`, and optional `openclaw.failureKind` on errors
   - `openclaw.model_call.request_bytes`, `openclaw.model_call.response_bytes`, `openclaw.model_call.time_to_first_byte_ms`
   - `openclaw.model_call.prompt.input_messages_count`, `openclaw.model_call.prompt.input_messages_chars`, `openclaw.model_call.prompt.system_prompt_chars`, `openclaw.model_call.prompt.tool_definitions_count`, `openclaw.model_call.prompt.tool_definitions_chars`, `openclaw.model_call.prompt.total_chars` (safe component sizes only, no prompt text)
   - `openclaw.model_call.usage.*` and `gen_ai.usage.*` when the result carries usage for that request or aggregate turn
+  - Cache-write totals remain in `openclaw.model_call.usage.cache_creation_input_tokens` and `gen_ai.usage.cache_creation.input_tokens`. When reported, `openclaw.model_call.usage.cache_creation_input_tokens_1h` and `openclaw.model_call.usage.cache_creation_input_tokens_5m` carry the provider’s TTL buckets verbatim, including zero; unreported buckets stay absent. TTL subsets are OpenClaw-specific so generic usage consumers do not price both the total and its breakdown.
   - Span event `openclaw.provider.request` with attribute `openclaw.upstreamRequestIdHash` (bounded, hash-based) when the upstream provider result exposes a request id; raw ids are never exported
   - Codex turn span event `openclaw.model.response.observed` with `openclaw.upstreamRequestIdHash`, `openclaw.model_response.timestamp_source = receipt`, `openclaw.model_response.usage_source = native-normalized`, `openclaw.model_response.usage_scope = response`, and known `openclaw.model_call.usage.*` / `gen_ai.usage.*` fields. It records an untimed native response observation and does not increment usage metrics.
   - With `OTEL_SEMCONV_STABILITY_OPT_IN=gen_ai_latest_experimental`, request spans use the latest GenAI inference span name `{gen_ai.operation.name} {gen_ai.request.model}`. Turn spans use `invoke_agent` because OpenClaw does not claim a native agent name from the opaque CLI boundary. Both use `CLIENT` span kind instead of `openclaw.model.call`.
@@ -46,6 +56,9 @@ OpenTelemetry metrics or change Prometheus metric labels.
 - `openclaw.tool.execution`
   - `gen_ai.tool.name`, `gen_ai.operation.name` (`execute_tool`), `openclaw.toolName`, `openclaw.tool.source`, optional `gen_ai.tool.call.id`, `openclaw.tool.owner`, `openclaw.tool.params.*`, optional `openclaw.agent`
   - Optional `openclaw.errorCategory`/`openclaw.errorCode` on errors, `openclaw.deniedReason` and `openclaw.outcome=blocked` when denied by policy or sandbox
+- `openclaw.skill.used`
+  - `openclaw.skill.name`, `openclaw.skill.source`, `openclaw.skill.activation`, optional `openclaw.agent` and `openclaw.toolName`
+  - Optional `openclaw.skill.fingerprint`: SHA-256 of the complete instruction body actually delivered by `read` or `skills_read`. Cached reads reuse the delivered identity; unread support files and discovery results do not contribute. The fingerprint is omitted when no traced instruction delivery is known and never labels metrics.
 - `openclaw.exec`
   - `openclaw.exec.target`, `openclaw.exec.mode`, `openclaw.outcome`, `openclaw.failureKind`, `openclaw.exec.command_length`, `openclaw.exec.exit_code`, `openclaw.exec.exit_signal`, `openclaw.exec.timed_out`
 - `openclaw.webhook.processed`
@@ -117,6 +130,9 @@ permanently exhaustive.
 
 Events with no interested subscriber or tracing exporter are discarded before
 payload enrichment and queuing; they are not buffered for future subscribers.
+Queued events capture their payloads when emitted, so later producer changes do
+not change delivery. Listeners share immutable plain-data snapshots; opaque
+values such as maps and typed arrays retain separate listener copies.
 
 `agent.commentary` records completed preambles, not text deltas. It carries the
 original agent-event sequence and timestamp and attaches to the active harness
@@ -186,6 +202,10 @@ The Gateway's `/tmp/openclaw/openclaw-YYYY-MM-DD.log` JSONL file and
 diagnostics-otel plugin converts them to metrics such as `openclaw.tokens` and
 `openclaw.cost.usd` and to `openclaw.model.usage` spans; those usage metrics
 and spans intentionally omit session identifiers.
+
+Completed memory-flush and Skill Workshop review inference records its own usage
+and available cost estimate. These internal runs do not add their usage to the
+foreground conversation's totals.
 
 For an external integration that needs session-correlated usage, query the
 authenticated Gateway instead:

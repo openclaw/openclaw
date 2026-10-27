@@ -1,3 +1,4 @@
+import assert from "node:assert/strict";
 import fs from "node:fs/promises";
 import path from "node:path";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
@@ -9,13 +10,22 @@ import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
 import { encodePngRgba } from "openclaw/plugin-sdk/test-media-generation";
 import { loadWebMedia as loadRealMedia } from "openclaw/plugin-sdk/web-media";
 import { afterEach, expect, it, vi } from "vitest";
+import llamaCppPlugin from "../index.js";
 import manifest from "../openclaw.plugin.json" with { type: "json" };
 import {
   LLAMA_CPP_MEDIA_MAX_BYTES,
   LLAMA_CPP_MEDIA_MAX_TOKENS,
   LLAMA_CPP_MEDIA_TIMEOUT_MS,
 } from "./media-config.js";
-import { registerLlamaCppMediaTool } from "./media-tool.js";
+import { createLlamaCppMediaProvider } from "./media-provider.js";
+
+vi.mock("./media-provider.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./media-provider.js")>();
+  return {
+    ...actual,
+    createLlamaCppMediaProvider: vi.fn(actual.createLlamaCppMediaProvider),
+  };
+});
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const IMAGE = encodePngRgba(Buffer.from([255, 0, 0, 255]), 1, 1);
@@ -62,25 +72,24 @@ function capture(
     }),
     registerTool,
   });
-  registerLlamaCppMediaTool(api, { id: "llama-cpp", capabilities: ["image"], describeImage });
+  vi.mocked(createLlamaCppMediaProvider).mockReturnValueOnce({
+    id: "llama-cpp",
+    capabilities: ["image"],
+    describeImage,
+  });
+  llamaCppPlugin.register(api);
   const factory = registerTool.mock.calls[0]?.[0];
-  if (typeof factory !== "function") {
-    throw new Error("local_image factory was not registered");
-  }
+  assert(typeof factory === "function", "local_image factory was not registered");
   const registered = factory({
     agentDir: "/agent",
     workspaceDir: "/workspace",
     fsPolicy: { workspaceOnly: true },
     ...ctx,
   });
-  if (Array.isArray(registered)) {
-    throw new Error("local_image must register one tool");
-  }
+  assert(!Array.isArray(registered), "local_image must register one tool");
   const tool = registered;
   async function run(input: unknown = "fixture.png", signal?: AbortSignal) {
-    if (!tool) {
-      throw new Error("Expected the configured local_image tool");
-    }
+    assert(tool, "Expected the configured local_image tool");
     return await tool.execute("test", typeof input === "string" ? { path: input } : input, signal);
   }
   async function blocked(input?: unknown, message?: string) {

@@ -1,7 +1,6 @@
 // @vitest-environment node
 import { createRouter } from "@openclaw/uirouter";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { createEmptyCostUsageTotals } from "../../../../src/infra/session-cost-usage-totals.js";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import { createAgentSelectionCapability } from "../../app/agent-selection.ts";
 import {
@@ -10,16 +9,11 @@ import {
   stubGatewayStoreTestGlobals,
 } from "../../app/gateway-store.test-support.ts";
 import { setAvatarGatewayOrigin } from "../../lib/identity-avatar-context.ts";
-import { page } from "./route.ts";
+import { page } from "./route.tsx";
 import type { UsageRouteData } from "./types.ts";
+import { usageTotals } from "./view.test-support.ts";
 
-const totals = {
-  ...createEmptyCostUsageTotals(),
-  input: 100,
-  totalTokens: 100,
-  totalCost: 1,
-  inputCost: 1,
-};
+const totals = usageTotals(100, 1);
 const payload = {
   updatedAt: 1,
   startDate: "2026-07-09",
@@ -36,7 +30,7 @@ function createUsageRouter() {
   const store = createGatewayStoreTestStore();
   store.gateway.start();
   const request = vi.spyOn(store.gateway.snapshot.client!, "request").mockResolvedValue(payload);
-  store.current().opts.onHello?.({ ...GATEWAY_STORE_TEST_HELLO });
+  store.current().testOptions.onHello?.({ ...GATEWAY_STORE_TEST_HELLO });
   const selection = createAgentSelectionCapability(store.gateway, {
     state: { agentsList: null },
     subscribe: () => () => {},
@@ -92,16 +86,16 @@ describe("usage route", () => {
       if (change === "navigation") {
         await router.navigate("other", context);
       } else if (change === "disconnect" || change === "reconnect") {
-        current().opts.onClose?.({ code: 1012, reason: "restart", willRetry: true });
+        current().testOptions.onClose?.({ code: 1012, reason: "restart", willRetry: true });
         if (change === "reconnect") {
-          current().opts.onHello?.({ ...GATEWAY_STORE_TEST_HELLO });
+          current().testOptions.onHello?.({ ...GATEWAY_STORE_TEST_HELLO });
           expect(gateway.snapshot.client).toBe(admitted.client);
           expect(gateway.snapshot.hello).not.toBe(admitted.hello);
         }
       } else if (change === "client") {
         gateway.connect();
         current().request.mockResolvedValue(payload);
-        current().opts.onHello?.({ ...GATEWAY_STORE_TEST_HELLO });
+        current().testOptions.onHello?.({ ...GATEWAY_STORE_TEST_HELLO });
       } else if (change === "set") {
         selection.set("research");
       } else {
@@ -111,7 +105,7 @@ describe("usage route", () => {
       expect(usageCalls()).toEqual([]);
 
       if (gateway.snapshot.phase !== "connected") {
-        current().opts.onHello?.({ ...GATEWAY_STORE_TEST_HELLO });
+        current().testOptions.onHello?.({ ...GATEWAY_STORE_TEST_HELLO });
       }
       await router.revalidate(context, "usage");
       const active = router.getState().matches[0];
@@ -175,13 +169,7 @@ describe("usage route", () => {
       expect(
         (Date.parse(data!.query.endDate) - Date.parse(data!.query.startDate)) / 86_400_000,
       ).toBe(29);
-      expect(data?.costSummary).toEqual({
-        updatedAt: 1,
-        days: 30,
-        totals,
-        daily: payload.aggregates.costDaily,
-        cacheStatus: payload.cacheStatus,
-      });
+      expect(data?.result).toEqual(payload);
       expect(calls.find(([method]) => method === "sessions.usage")?.[1]).toMatchObject({
         startDate: data?.query.startDate,
         endDate: data?.query.endDate,
@@ -190,6 +178,8 @@ describe("usage route", () => {
         mode: "specific",
         timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone,
         includeContextWeight: false,
+        sort: "cost",
+        sortDirection: "desc",
       });
     },
   );

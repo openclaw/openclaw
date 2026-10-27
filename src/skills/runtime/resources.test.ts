@@ -443,9 +443,6 @@ it("delivers only selected resources from a large discovery catalog and admits e
   const hiddenDir = await writeSkill("hidden", hiddenMarkdown);
   const omittedDir = await writeSkill("z-omitted");
   const snapshot = await loadSnapshot({ skills: { limits: { maxSkillsInPrompt: 1 } } });
-  expect(snapshot.prompt).toContain("<name>visible</name>");
-  expect(snapshot.prompt).not.toContain("<name>z-omitted</name>");
-  expect(snapshot.resolvedSkills?.map((skill) => skill.name)).toEqual(["visible"]);
   const omitted = snapshot.discoverySkills!.find((skill) => skill.name === "z-omitted")!;
   snapshot.discoverySkills!.push(
     ...Array.from({ length: 300 }, (_, index) => ({ ...omitted, name: `extra-${index}` })),

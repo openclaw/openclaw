@@ -11,20 +11,22 @@ import {
   resolveChunkMode,
   resolveTextChunkLimit,
 } from "openclaw/plugin-sdk/reply-chunking";
+import type { ReplyPayload } from "openclaw/plugin-sdk/reply-runtime";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { matrixPlugin } from "../../channel.js";
 import { setMatrixRuntime } from "../../runtime.js";
 import type { CoreConfig } from "../../types.js";
 import type { MatrixClient } from "../sdk.js";
 import { sendMessageMatrix } from "../send.js";
-import { deliverMatrixReplies } from "./replies.js";
+import {
+  createMatrixTestReplyDispatcher,
+  type MatrixTestReplyOptions,
+} from "./reply-dispatcher.test-support.js";
 
 const table = "| Name | Status |\n|---|---|\n| Alpha | Ready |";
-type Delivery = Parameters<typeof deliverMatrixReplies>[0];
 const firstReply = () => ({
   replyToMode: "first" as const,
-  replyToId: "$incoming",
-  hasRepliedRef: { value: false },
+  replyToEventId: "$incoming",
 });
 function createClient(options: { cfg?: CoreConfig; accountId?: string } = {}) {
   let nextId = 0;
@@ -45,12 +47,15 @@ function createClient(options: { cfg?: CoreConfig; accountId?: string } = {}) {
     ...options,
     client,
   };
+  let dispatcher: ReturnType<typeof createMatrixTestReplyDispatcher> | undefined;
   return {
     sendMessage,
     contents: () => sendMessage.mock.calls.map(([, content]) => content),
     direct: (text: string) => sendMessageMatrix(params.roomId, text, params),
-    reply: (reply: Delivery["replies"][number], overrides: Partial<Delivery> = {}) =>
-      deliverMatrixReplies({ ...params, replies: [reply], ...overrides }),
+    reply: async (reply: ReplyPayload, overrides: Partial<MatrixTestReplyOptions> = {}) => {
+      dispatcher ??= createMatrixTestReplyDispatcher({ ...params, ...overrides });
+      return (await dispatcher).deliverReply(reply, { kind: "final" });
+    },
   };
 }
 
@@ -107,7 +112,6 @@ it("keeps a native table within a long automatic reply while preserving code exa
 it("keeps first-reply relations and receipts across separate dispatches", async () => {
   const { reply, sendMessage } = createClient();
   const delivery = firstReply();
-  const { hasRepliedRef } = delivery;
   const first = await reply({ text: "Visible paragraph. ".repeat(400) }, delivery);
   const firstCount = sendMessage.mock.calls.length;
   expect(firstCount).toBeGreaterThan(1);
@@ -116,7 +120,6 @@ it("keeps first-reply relations and receipts across separate dispatches", async 
     receipt: { primaryPlatformMessageId: "$sent-1" },
     content: sendMessage.mock.calls.map(([, content]) => content.body).join("\n"),
   });
-  expect(hasRepliedRef.value).toBe(true);
   for (const [, content] of sendMessage.mock.calls.slice(0, firstCount)) {
     expect(content["m.relates_to"]).toEqual({ "m.in_reply_to": { event_id: "$incoming" } });
   }
@@ -139,8 +142,8 @@ it.each([
       ...(explicit ? { replyToId: selected, replyToTag: true } : {}),
     },
     {
-      threadId: thread ? "$thread" : undefined,
-      replyToId: thread ? "$incoming" : "$ambient",
+      threadTarget: thread ? "$thread" : undefined,
+      replyToEventId: "$ambient",
     },
   );
   expect(result.visibleReplySent).toBe(true);
@@ -153,7 +156,7 @@ it.each([
     expect(content["m.relates_to"]).toEqual({
       ...(thread ? { rel_type: "m.thread", event_id: "$thread" } : {}),
       ...(explicit ? {} : { is_falling_back: true }),
-      "m.in_reply_to": { event_id: explicit ? selected : "$incoming" },
+      "m.in_reply_to": { event_id: explicit ? selected : "$thread" },
     });
   }
   expect(
@@ -192,12 +195,10 @@ it("retains the accepted event and first-reply slot when a later chunk fails", a
     return "$accepted";
   });
   const delivery = firstReply();
-  const { hasRepliedRef } = delivery;
   const error = await reply({ text: "Visible paragraph. ".repeat(400) }, delivery).catch(
     (caught: unknown) => caught,
   );
   expect(sendMessage).toHaveBeenCalledTimes(2);
-  expect(hasRepliedRef.value).toBe(true);
   expect(error).toMatchObject({
     code: "CHANNEL_PARTIAL_DELIVERY",
     deliveryResult: {
@@ -207,4 +208,6 @@ it("retains the accepted event and first-reply slot when a later chunk fails", a
       receipt: { parts: [expect.objectContaining({ replyToId: "$incoming" })] },
     },
   });
+  await reply({ text: "Retry after accepted prefix" }, delivery);
+  expect(sendMessage.mock.calls.at(-1)?.[1]["m.relates_to"]).toBeUndefined();
 });

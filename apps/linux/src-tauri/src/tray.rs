@@ -1,6 +1,6 @@
 use crate::gateway::{GatewayAction, GatewaySnapshot};
 use crate::gateway_operation_queue::GatewayOperationQueue;
-use crate::keep_awake::{KeepAwake, Status as KeepAwakeStatus};
+use crate::keep_awake::{Error as KeepAwakeError, KeepAwake, Status as KeepAwakeStatus};
 use crate::quickchat;
 use crate::DesktopState;
 use std::sync::{
@@ -413,7 +413,7 @@ fn handle_menu(
                 state.with_tray(|tray| {
                     let _ = tray.keep_awake.set_enabled(true);
                 });
-                show_keep_awake_error(app, error);
+                show_keep_awake_error(app, KeepAwakeError::Power(error));
             }
         }
         QUICKCHAT_SHORTCUT_ID => {
@@ -533,11 +533,11 @@ pub fn publish_keep_awake(app: &AppHandle, status: KeepAwakeStatus) {
     }
 }
 
-fn show_keep_awake_error(app: &AppHandle, error: String) {
-    eprintln!("Keep computer awake: {error}");
+fn show_keep_awake_error(app: &AppHandle, error: KeepAwakeError) {
+    eprintln!("{}: {}", error.title(), error.message());
     app.dialog()
-        .message(error)
-        .title("Keep computer awake")
+        .message(error.message())
+        .title(error.title())
         .kind(MessageDialogKind::Error)
         .show(|_| {});
 }

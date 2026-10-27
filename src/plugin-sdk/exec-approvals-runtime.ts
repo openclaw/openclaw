@@ -2,6 +2,7 @@
 import {
   loadExecApprovals as loadExecApprovalsSync,
   readExecApprovalsSnapshot as readExecApprovalsSnapshotSync,
+  readExecApprovalsSnapshotAsync as readExecApprovalsSnapshotAsyncInternal,
 } from "../infra/exec-approvals.js";
 import { warnPluginSdkDeprecation } from "../plugins/sdk-deprecation.js";
 
@@ -25,14 +26,21 @@ function readExecApprovalsSnapshotDeprecated() {
   return readExecApprovalsSnapshotSync();
 }
 
+/** SDK snapshots remain caller-owned; internal and ReadOnly readers share frozen policy. */
+async function readExecApprovalsSnapshotForPlugin(
+  context?: Parameters<typeof readExecApprovalsSnapshotAsyncInternal>[0],
+) {
+  return structuredClone(await readExecApprovalsSnapshotAsyncInternal(context));
+}
+
 export {
   loadExecApprovalsDeprecated as loadExecApprovals,
   readExecApprovalsSnapshotDeprecated as readExecApprovalsSnapshot,
+  readExecApprovalsSnapshotForPlugin as readExecApprovalsSnapshotAsync,
 };
 
 export {
   loadExecApprovalsReadOnlyAsync,
-  readExecApprovalsSnapshotAsync,
   resolveExecApprovalsDisplayPath,
   resolveExecApprovalsFromFile,
   resolveExecModePolicy,

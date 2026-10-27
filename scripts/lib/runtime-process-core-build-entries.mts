@@ -1,5 +1,6 @@
 import { fileURLToPath } from "node:url";
 import { runtimeProcessEntrypoints } from "../../src/infra/runtime-process-entrypoints.ts";
+import { runtimeProcessScriptEntrypoints } from "../../src/infra/runtime-process-manifest.ts";
 import { managedMemoryEntrypoint } from "./managed-memory-entrypoint.mts";
 import { managedWindowsJobEntrypoint } from "./managed-windows-job-entrypoint.mts";
 
@@ -8,7 +9,7 @@ export function createRuntimeProcessBuildEntries(
     currentModuleUrl: string;
     sourceWorkerName: string;
     distWorkerPath: string;
-    sourceExtension?: ".ts" | ".mts";
+    sourceExtension?: ".ts" | ".mts" | ".mjs";
   }[],
 ) {
   return Object.fromEntries(
@@ -25,18 +26,44 @@ export function createRuntimeProcessBuildEntries(
 }
 
 export const runtimeProcessCoreEntrypoints = [
-  ...Object.values(runtimeProcessEntrypoints),
+  // Recovery artifacts are built by the sealed handoff owner, never the shared graph.
+  ...Object.values(runtimeProcessEntrypoints).filter((entry) =>
+    entry.distWorkerPath.endsWith(".js"),
+  ),
   managedWindowsJobEntrypoint,
   managedMemoryEntrypoint,
+];
+
+const privateChunkRuntimeProcessEntrypoints = [
+  runtimeProcessEntrypoints.sessionDiskBudget,
+  runtimeProcessEntrypoints.pluginModelCatalogRead,
+  runtimeProcessEntrypoints.attachmentProcessor,
+  runtimeProcessEntrypoints.codeModeNode,
+  runtimeProcessEntrypoints.imageProcessor,
+  runtimeProcessEntrypoints.identityFile,
+  runtimeProcessEntrypoints.localAgentAvatar,
+  runtimeProcessEntrypoints.fsSafeCopy,
+  runtimeProcessEntrypoints.controlUiFile,
+  runtimeProcessEntrypoints.publicSessionCard,
+  runtimeProcessEntrypoints.sessionTranscriptReconcile,
+  runtimeProcessEntrypoints.gitOperations,
+  runtimeProcessEntrypoints.cronStreamMatcher,
+  runtimeProcessEntrypoints.fileToolPlanning,
 ];
 
 // Keep small helper processes out of the shared runtime bundle.
 export const standaloneRuntimeProcessBuildEntries = createRuntimeProcessBuildEntries([
   managedMemoryEntrypoint,
+  ...Object.values(runtimeProcessScriptEntrypoints).flatMap((entry) =>
+    "runtimeEntrypoint" in entry ? [runtimeProcessEntrypoints[entry.runtimeEntrypoint]] : [],
+  ),
   runtimeProcessEntrypoints.pluginGenerationPreparation,
   runtimeProcessEntrypoints.sqliteReadOnly,
   runtimeProcessEntrypoints.sqliteSourceRevision,
   runtimeProcessEntrypoints.stateRead,
+  runtimeProcessEntrypoints.sessionTranscript,
+  ...privateChunkRuntimeProcessEntrypoints,
+  runtimeProcessEntrypoints.shellSnapshotEnvironment,
   runtimeProcessEntrypoints.nativeHookRelayClient,
   runtimeProcessEntrypoints.spawnBroker,
   runtimeProcessEntrypoints.stateLeaseHeartbeat,
@@ -46,6 +73,14 @@ export const standaloneRuntimeProcessBuildEntries = createRuntimeProcessBuildEnt
 ]);
 
 export function getStandaloneRuntimeProcessOutputOptions(name: string) {
+  if (
+    privateChunkRuntimeProcessEntrypoints.some(
+      (entry) => entry.distWorkerPath.replace(/\.js$/u, "") === name,
+    )
+  ) {
+    // Small workers must not evaluate shared Gateway chunks; keep optional paths lazy.
+    return { codeSplitting: true, chunkFileNames: `${name}-[name]-[hash].mjs` };
+  }
   const pluginPreparationEntry =
     runtimeProcessEntrypoints.pluginGenerationPreparation.distWorkerPath.replace(/\.js$/u, "");
   const stateReadEntry = runtimeProcessEntrypoints.stateRead.distWorkerPath.replace(/\.js$/u, "");
@@ -64,6 +99,9 @@ export function getStandaloneRuntimeProcessOutputOptions(name: string) {
   }
   if (name === sqliteReadEntry) {
     return { codeSplitting: true, chunkFileNames: "infra/sqlite-readonly-[name]-[hash].mjs" };
+  }
+  if (name === runtimeProcessEntrypoints.sessionTranscript.distWorkerPath.replace(/\.js$/u, "")) {
+    return { codeSplitting: true, chunkFileNames: "config/sessions/transcript-[name]-[hash].mjs" };
   }
   return { codeSplitting: false };
 }

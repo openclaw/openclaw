@@ -5,7 +5,11 @@ import { createDirectRoomTracker } from "./direct.js";
 
 type MockStateEvents = Record<string, Record<string, unknown>>;
 
-const DEFAULT_DIRECT_CHECK = { roomId: "!room:example.org", senderId: "@alice:example.org" };
+const DEFAULT_DIRECT_CHECK = {
+  roomId: "!room:example.org",
+  senderId: "@alice:example.org",
+  selfUserId: "@bot:example.org",
+};
 
 function checkDefaultRoom(tracker: ReturnType<typeof createDirectRoomTracker>) {
   return tracker.isDirectMessage(DEFAULT_DIRECT_CHECK);

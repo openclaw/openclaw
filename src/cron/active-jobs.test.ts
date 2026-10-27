@@ -16,6 +16,8 @@ import {
   captureCronJobMessageActionAuthority,
   clearCronJobActive,
   getActiveCronJobCount,
+  isCronActiveJobMarkerCurrent,
+  isCronJobActive,
   markCronJobActive,
   noteActiveCronJobMessageActionAuthorityMutation,
   noteActiveCronJobRemoval,
@@ -25,6 +27,7 @@ import {
   resetCronActiveJobs,
 } from "./active-jobs.js";
 import { prepareCronRunAdmission } from "./run-admission.js";
+import { TEST_SCHEDULED_EXECUTION } from "./scheduled-occurrence.test-support.js";
 
 const admissions: ReturnType<typeof prepareAgentRunAdmission>[] = [];
 function prepareAdmission(
@@ -46,6 +49,16 @@ function prepareAdmission(
 
 function capture(jobId: string, operationalRunInstance: OperationalRunInstanceRef) {
   return captureCronJobMessageActionAuthority({ jobId, operationalRunInstance });
+}
+
+async function activeRun(isMessageActionAuthorityCurrent = () => true) {
+  const jobId = "job";
+  const marker = markCronJobActive(jobId, { isMessageActionAuthorityCurrent })!;
+  const controller = new AbortController();
+  const admission = prepareAdmission("run");
+  const context = await admission.admit("embedded");
+  bindCronJobAdmittedRun(marker, context, controller.signal);
+  return { jobId, marker, controller, admission, context };
 }
 
 function reload(phase: string) {
@@ -78,6 +91,7 @@ describe("cron message action authority", () => {
         sessionKey: "cron:long-message-read",
       };
       const owner = prepareCronRunAdmission({
+        scheduledExecution: TEST_SCHEDULED_EXECUTION,
         deliveryAttemptFence: { beforeAttempt: async () => {}, assertCurrent: () => {} },
         cfg: { agents: { defaults: { timeoutSeconds: 40 } } },
         ...identity,
@@ -140,17 +154,11 @@ describe("cron message action authority", () => {
   it.each(["source observation", "committed mutation"] as const)(
     "keeps %s revocation through a new prompt without cancelling the run",
     async (source) => {
-      const jobId = "revoked-message-read";
       let sourceCurrent = true;
-      const marker = markCronJobActive(jobId, {
-        isMessageActionAuthorityCurrent: () => sourceCurrent,
-      });
-      const controller = new AbortController();
-      const first = prepareAdmission("message-run");
-      const replacement = prepareAdmission("message-run");
-      const admitted = await first.admit("embedded");
-      bindCronJobAdmittedRun(marker, admitted, controller.signal);
-      const assertCurrent = capture(jobId, admitted.operationalRunInstance);
+      const { jobId, marker, controller, admission, context } = await activeRun(
+        () => sourceCurrent,
+      );
+      const assertCurrent = capture(jobId, context.operationalRunInstance);
       expect(assertCurrent).not.toThrow();
       if (source === "committed mutation") {
         noteActiveCronJobMessageActionAuthorityMutation(jobId);
@@ -158,14 +166,13 @@ describe("cron message action authority", () => {
         sourceCurrent = false;
       }
       expect(assertCurrent).toThrow();
-      expect(resolveAdmittedRunActiveAssertion(admitted, controller.signal)).not.toThrow();
+      expect(resolveAdmittedRunActiveAssertion(context, controller.signal)).not.toThrow();
       expect(controller.signal.aborted).toBe(false);
       sourceCurrent = true;
-      first.close();
-      const next = await replacement.admit("embedded");
+      admission.close();
+      const next = await prepareAdmission("run").admit("embedded");
       bindCronJobAdmittedRun(marker, next, controller.signal);
       const assertReplacementCurrent = capture(jobId, next.operationalRunInstance);
-      expect(assertReplacementCurrent).toBeTypeOf("function");
       expect(assertReplacementCurrent).toThrow();
       expect(getActiveCronJobCount()).toBeGreaterThan(0);
     },
@@ -186,25 +193,21 @@ describe.each(["same module", "reload before guard", "reload after guard"])(
   "active cron self-removal ownership: %s",
   (moduleBoundary) => {
     it.each([
-      "active owner",
-      "closed admission",
-      "aborted run",
-      "expired caller",
-      "replaced marker",
-      "replaced admission",
-      "retired generation",
-      "copied guard",
-      "different instance",
-    ] as const)("keeps self-removal bound to the %s", async (scenario) => {
-      const jobId = "self-removing-job";
-      const marker = markCronJobActive(jobId, { isMessageActionAuthorityCurrent: () => true })!;
-      const controller = new AbortController();
-      const admission = prepareAdmission("self-removal-run");
-      const replacement = prepareAdmission("replacement-run");
-      const context = await admission.admit("embedded");
-      bindCronJobAdmittedRun(marker, context, controller.signal);
-      const assertMessageCurrent = capture(jobId, context.operationalRunInstance);
-      expect(assertMessageCurrent).not.toThrow();
+      ["active owner", true],
+      ["closed admission", false],
+      ["aborted run", false],
+      ["closed after validation", true],
+      ["aborted after validation", true],
+      ["expired caller", false],
+      ["replaced marker", false],
+      ["replaced admission", false],
+      ["retired generation", false],
+      ["copied guard", true],
+      ["different instance", false],
+    ] as const)("keeps self-removal bound to the %s", async (scenario, validAtCommit) => {
+      const { jobId, marker, controller, admission, context } = await activeRun();
+      const assertCurrent = capture(jobId, context.operationalRunInstance);
+      expect(assertCurrent).not.toThrow();
       let callerActive = true;
       let commitGuard: () => void = vi.fn();
       const bindingModule =
@@ -231,7 +234,11 @@ describe.each(["same module", "reload before guard", "reload after guard"])(
       } else if (scenario === "expired caller") {
         callerActive = false;
       } else if (scenario === "replaced admission") {
-        bindCronJobAdmittedRun(marker, await replacement.admit("embedded"), controller.signal);
+        bindCronJobAdmittedRun(
+          marker,
+          await prepareAdmission("replacement").admit("embedded"),
+          controller.signal,
+        );
       } else if (scenario === "replaced marker" || scenario === "retired generation") {
         if (scenario === "retired generation") {
           advanceCronActiveJobGeneration();
@@ -241,21 +248,26 @@ describe.each(["same module", "reload before guard", "reload after guard"])(
       const cancel = vi.fn();
       currentMarker.cancellation = { kind: "bound", cancel };
 
-      if (scenario === "active owner" || scenario === "copied guard") {
+      if (validAtCommit) {
         expect(commitGuard).not.toThrow();
       } else {
         expect(commitGuard).toThrow();
       }
       expect(cancel).not.toHaveBeenCalled();
       expect(currentMarker.jobRemoved).toBeUndefined();
+      if (scenario === "closed after validation") {
+        admission.close();
+      } else if (scenario === "aborted after validation") {
+        controller.abort();
+      }
       const removalGuard = scenario === "copied guard" ? () => commitGuard() : commitGuard;
       const removalModule =
         moduleBoundary === "same module"
           ? { noteActiveCronJobRemoval }
           : await reload("after-guard");
       expect(removalModule.noteActiveCronJobRemoval(jobId, removalGuard)).toBe(currentMarker);
-      expect(currentMarker.jobRemoved).toBe(true);
-      expect(assertMessageCurrent).toThrow();
+      expect(currentMarker).toMatchObject({ jobRemoved: true, scheduleMutated: true });
+      expect(assertCurrent).toThrow();
       expect(getActiveCronJobCount()).toBeGreaterThan(0);
       if (scenario === "active owner") {
         expect(cancel).not.toHaveBeenCalled();
@@ -267,6 +279,28 @@ describe.each(["same module", "reload before guard", "reload after guard"])(
 );
 
 describe("active cron schedule ownership", () => {
+  it.each([false, true])("preserves a replacement marker (restart=%s)", (restart) => {
+    const jobId = "manual-reuse";
+    const oldMarker = markCronJobActive(jobId);
+    if (restart) {
+      advanceCronActiveJobGeneration();
+    }
+    const freshMarker = markCronJobActive(jobId);
+    clearCronJobActive(jobId, oldMarker);
+    expect(isCronJobActive(jobId)).toBe(true);
+    clearCronJobActive(jobId, freshMarker);
+    expect(isCronJobActive(jobId)).toBe(false);
+  });
+
+  it("retires preserved main-session markers at the lifecycle cutoff", () => {
+    const jobId = "manual-main-cutoff";
+    const marker = markCronJobActive(jobId, { preserveAcrossGenerationAdvance: true });
+    advanceCronActiveJobGeneration();
+    expect(isCronActiveJobMarkerCurrent(marker)).toBe(true);
+    resetCronActiveJobs();
+    expect([isCronActiveJobMarkerCurrent(marker), isCronJobActive(jobId)]).toEqual([false, false]);
+  });
+
   it("notifies only the removed marker when a same-id run replaces it", () => {
     const removedMarker = markCronJobActive("reused-job");
     const onRemovedInactive = vi.fn();
@@ -280,28 +314,24 @@ describe("active cron schedule ownership", () => {
     expect(onRemovedInactive).toHaveBeenCalledOnce();
   });
 
-  it("records durable job removal without releasing the active run marker", () => {
-    const marker = markCronJobActive("removed-job");
-
-    noteActiveCronJobRemoval("removed-job");
-
-    expect(marker).toMatchObject({
-      scheduleMutated: true,
-      jobRemoved: true,
-      cancellation: { kind: "requested", reason: "Cron job removed by operator." },
-    });
-    expect(getActiveCronJobCount()).toBeGreaterThan(0);
-  });
-
   it.each([
     ["schedule", noteActiveCronJobScheduleMutation, "scheduleMutated", "jobRemoved"],
     ["trigger", noteActiveCronJobTriggerMutation, "triggerMutated", "scheduleMutated"],
   ] as const)(
-    "records %s edits without changing other ownership",
+    "records %s edits only on the replacement run without changing other ownership",
     (_name, mutate, changed, untouched) => {
+      const retired = markCronJobActive("updated-job");
+      clearCronJobActive("updated-job", retired);
       const marker = markCronJobActive("updated-job");
+      const unrelated = markCronJobActive("unrelated-job");
       mutate("updated-job");
-      expect([marker?.[changed], marker?.[untouched]]).toEqual([true, undefined]);
+      mutate("updated-job");
+      expect(unrelated?.[changed]).toBeUndefined();
+      expect([marker?.[changed], marker?.[untouched], retired?.[changed]]).toEqual([
+        true,
+        undefined,
+        undefined,
+      ]);
     },
   );
 
@@ -312,31 +342,5 @@ describe("active cron schedule ownership", () => {
   ] as const)("does not create idle markers for %s", (_name, mutate) => {
     mutate("idle-job");
     expect(getActiveCronJobCount()).toBe(0);
-  });
-
-  it("attributes later edits only to the replacement active run", () => {
-    const retiredMarker = markCronJobActive("rescheduled-job");
-    clearCronJobActive("rescheduled-job", retiredMarker);
-    const replacementMarker = markCronJobActive("rescheduled-job");
-
-    noteActiveCronJobScheduleMutation("rescheduled-job");
-
-    expect(retiredMarker?.scheduleMutated).toBeUndefined();
-    expect(replacementMarker?.scheduleMutated).toBe(true);
-  });
-
-  it("keeps schedule ownership isolated across concurrent active jobs", () => {
-    const markers = Array.from({ length: 64 }, (_, index) =>
-      markCronJobActive(`rescheduled-job-${index}`),
-    );
-
-    for (let index = 0; index < markers.length; index += 2) {
-      noteActiveCronJobScheduleMutation(`rescheduled-job-${index}`);
-      noteActiveCronJobScheduleMutation(`rescheduled-job-${index}`);
-    }
-
-    for (const [index, marker] of markers.entries()) {
-      expect(marker?.scheduleMutated).toBe(index % 2 === 0 ? true : undefined);
-    }
   });
 });

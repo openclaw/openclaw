@@ -1,12 +1,16 @@
 import type { BrowserContextOptions, Locator, Page } from "playwright";
 import { expect } from "vitest";
 import type { SystemAgentSetupDetectResult, WizardStep } from "../api/types.ts";
+import { sourceConfigSnapshot } from "../lib/config/config-snapshot.test-support.ts";
 import type { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { pickerValue } from "../test-helpers/select-picker-e2e.ts";
 import type { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
+import { installSetupGateway } from "./model-setup.test-support.ts";
 
 type SetupSuite = ReturnType<typeof createControlUiE2eSuite>;
 type SetupPage = Parameters<Parameters<SetupSuite["withPage"]>[1]>[0];
+type Gateway = Awaited<ReturnType<typeof installMockGateway>>;
+type Candidate = SystemAgentSetupDetectResult["candidates"][number];
 export const setupRpc = {
   detect: "openclaw.setup.detect",
   activate: "openclaw.setup.activate.start",
@@ -44,9 +48,10 @@ export const localSetupFeatures = [
   "wizard.next",
 ];
 
-export function activated(modelRef: string, options: { gatewayRestartRequired?: boolean } = {}) {
-  return { done: true, status: "done", modelActivation: { modelRef, ...options } };
-}
+export const activated = (
+  modelRef: string,
+  options: { gatewayRestartRequired?: boolean } = {},
+) => ({ done: true, status: "done", modelActivation: { modelRef, ...options } });
 
 export function activationFailure(error: string, status?: "auth" | "timeout" | "unavailable") {
   return {
@@ -59,48 +64,45 @@ export function activationFailure(error: string, status?: "auth" | "timeout" | "
   };
 }
 
-export function localPrepareOptions(
-  llamaHint = "Install a verified llama.cpp server and run a private GGUF model managed by OpenClaw",
-) {
-  return [
-    {
-      id: "ollama",
-      brandId: "ollama",
-      label: "Ollama",
-      hint: "Connect to an Ollama server and select a cloud or local model",
-      actionLabel: "Choose connection",
-    },
-    {
-      id: "llama-cpp",
-      brandId: "llama-cpp",
-      label: "llama.cpp",
-      hint: llamaHint,
-      actionLabel: "Set up model",
-    },
-    {
-      id: "lmstudio",
-      brandId: "lmstudio",
-      label: "LM Studio",
-      hint: "Connect to a running LM Studio server and use an already loaded model",
-      actionLabel: "Connect server",
-      icon: "https://cdn.simpleicons.org/lmstudio",
-      website: "https://lmstudio.ai/download",
-    },
-  ];
+export function localPrepareOptions(llamaHint = "Run a private local model") {
+  return (
+    [
+      ["ollama", "Ollama", "Choose connection"],
+      ["llama-cpp", "llama.cpp", "Set up model"],
+      ["lmstudio", "LM Studio", "Connect server"],
+    ] as const
+  ).map(([id, label, actionLabel]) =>
+    Object.assign(
+      {
+        id,
+        brandId: id,
+        label,
+        hint: id === "llama-cpp" ? llamaHint : `Connect to ${label}`,
+        actionLabel,
+      },
+      id === "lmstudio"
+        ? {
+            icon: "https://cdn.simpleicons.org/lmstudio",
+            website: "https://lmstudio.ai/download",
+          }
+        : {},
+    ),
+  );
 }
 
-export function setupContext(options: BrowserContextOptions = {}): BrowserContextOptions {
-  return { locale: "en-US", serviceWorkers: "block", ...options };
-}
+export const setupContext = (options: BrowserContextOptions = {}): BrowserContextOptions => ({
+  locale: "en-US",
+  serviceWorkers: "block",
+  ...options,
+});
 
 export async function expectText(target: Locator, text: string, absent = false) {
   const assertion = expect.poll(() => target.textContent());
   await (absent ? assertion.not : assertion).toContain(text);
 }
 
-export async function expectCount(target: Locator, count: number) {
-  await expect.poll(() => target.count()).toBe(count);
-}
+export const expectCount = (target: Locator, count: number) =>
+  expect.poll(() => target.count()).toBe(count);
 
 export async function expectFocused(target: Locator) {
   await expect
@@ -108,18 +110,18 @@ export async function expectFocused(target: Locator) {
     .toBe(true);
 }
 
-export function runningStep(
+export const runningStep = (
   id: string,
   type: WizardStep["type"],
   message: string,
   options: Omit<WizardStep, "id" | "type" | "message"> = {},
-) {
-  return { done: false, status: "running", step: { id, type, message, ...options } };
-}
+) => ({ done: false, status: "running", step: { id, type, message, ...options } });
 
-export function runningWizard(sessionId?: string) {
-  return { done: false, status: "running", ...(sessionId ? { sessionId } : {}) };
-}
+export const runningWizard = (sessionId?: string) => ({
+  done: false,
+  status: "running",
+  ...(sessionId ? { sessionId } : {}),
+});
 
 export function makeDetection(overrides: Partial<SystemAgentSetupDetectResult> = {}) {
   return {
@@ -131,26 +133,61 @@ export function makeDetection(overrides: Partial<SystemAgentSetupDetectResult> =
   };
 }
 
-export function configSnapshot(config: object, hash: string) {
-  return {
-    config,
-    sourceConfig: config,
-    raw: JSON.stringify(config),
-    hash,
-    valid: true,
-    issues: [],
-  };
+export function installLocalSetupGateway(
+  page: Page,
+  detection: ReturnType<typeof makeDetection>,
+  provider: string,
+  sequence: unknown[],
+) {
+  const model = "openai/gpt-5";
+  return installSetupGateway(page, {
+    agentModel: model,
+    models: [{ id: "gpt-5", name: "GPT-5", provider: "openai", available: true }],
+    featureMethods: localSetupFeatures,
+    methodResponses: {
+      "config.get": sourceConfigSnapshot(
+        { agents: { defaults: { model } } },
+        "before-local-activation",
+      ),
+      [setupRpc.detect]: detection,
+      [setupRpc.prepare]: runningWizard(`${provider}-prepare-session`),
+      [setupRpc.activate]: runningWizard("activation-session"),
+      [setupRpc.next]: { sequence },
+    },
+  });
 }
 
-export function button(target: Page | Locator, name: string) {
-  return target.getByRole("button", { name, exact: true });
+export async function expectLocalActivation(
+  page: Page,
+  gateway: Gateway,
+  provider: string,
+  modelRef: string,
+  icon = provider,
+) {
+  await page.getByRole("heading", { name: "Connection verified" }).waitFor();
+  const success = page.locator(".model-setup-success");
+  await expectText(success, modelRef);
+  await expectText(success, "Verified in", true);
+  await expectCount(success.locator(`[data-provider-icon="${icon}"]`), 1);
+  expect((await gateway.waitForRequest(setupRpc.activate)).params).toEqual({
+    sessionId: expect.any(String),
+    kind: `provider-auto:${provider}`,
+    agentId: "main",
+    modelRef,
+  });
 }
+
+export const button = (target: Page | Locator, name: string) =>
+  target.getByRole("button", { name, exact: true });
+
+export const waitText = (target: Page | Locator, text: string | RegExp, exact = true) =>
+  target.getByText(text, { exact }).waitFor();
 
 export function candidate(
-  kind: SystemAgentSetupDetectResult["candidates"][number]["kind"],
+  kind: Candidate["kind"],
   label: string,
   modelRef: string,
-  options: Partial<SystemAgentSetupDetectResult["candidates"][number]> = {},
+  options: Partial<Candidate> = {},
 ) {
   return {
     kind,
@@ -165,25 +202,18 @@ export function candidate(
 
 export async function returnToLocalModelSettings(
   page: Page,
-  gateway: Awaited<ReturnType<typeof installMockGateway>>,
+  gateway: Gateway,
   options: { provider: string; label: string; icon: string; model: string; hash: string },
 ) {
   const { provider, label, icon, model, hash } = options;
   const modelRef = `${provider}/${model}`;
   const globalModel = "openai/gpt-5";
   // Publish agent defaults and catalog facts; the global default must remain unchanged.
-  await gateway.setMethodResponse(
-    "config.get",
-    configSnapshot(
-      {
-        agents: {
-          defaults: { model: globalModel },
-          entries: { main: { model: { primary: modelRef } } },
-        },
-      },
-      hash,
-    ),
-  );
+  const agents = {
+    defaults: { model: globalModel },
+    entries: { main: { model: { primary: modelRef } } },
+  };
+  await gateway.setMethodResponse("config.get", sourceConfigSnapshot({ agents }, hash));
   await gateway.setMethodResponse("models.list", {
     models: [
       { id: "gpt-5", name: "GPT-5", provider: "openai", available: true },
@@ -210,18 +240,11 @@ export async function returnToLocalModelSettings(
   await expect.poll(() => pickerValue(picker)).toBe(globalModel);
 }
 
-export async function expectRequestCounts(
-  gateway: Awaited<ReturnType<typeof installMockGateway>>,
-  counts: Record<string, number>,
-) {
+export async function expectRequestCounts(gateway: Gateway, counts: Record<string, number>) {
   for (const [method, count] of Object.entries(counts)) {
     expect(await gateway.getRequests(method), method).toHaveLength(count);
   }
 }
 
-export function pollRequestCount(
-  gateway: Awaited<ReturnType<typeof installMockGateway>>,
-  method: string,
-) {
-  return expect.poll(async () => (await gateway.getRequests(method)).length);
-}
+export const pollRequestCount = (gateway: Gateway, method: string) =>
+  expect.poll(async () => (await gateway.getRequests(method)).length);

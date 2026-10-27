@@ -156,6 +156,9 @@ Native plugin inventory discovery separately follows Codex's authentication
 behavior, including during a dry run. The default
 agent-scoped runtime does not consume a copied or mounted `auth.json` directly.
 Import those credentials into the owning agent's OpenClaw auth store explicitly.
+If native account state changes during inspection, OpenClaw retries the credential
+read once within the same deadline. A startup account announcement can therefore
+recover; another change during the retry leaves the credential unimported.
 Replace `<agent-id>` with that configured agent's ID:
 
 ```bash

@@ -2,11 +2,12 @@ import { existsSync } from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { resolvePathPrefixSync } from "@openclaw/fs-safe/advanced";
+import { readRegularFile, resolvePathPrefixSync } from "@openclaw/fs-safe/advanced";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
+import { hasTerminalControl, terminalText } from "../../packages/terminal-core/src/safe-text.js";
 import { resolveStateDir } from "../config/paths.js";
 import { isErrno } from "../infra/errors.js";
 import { decodeWindowsTextFileBuffer } from "../infra/windows-encoding.js";
@@ -21,7 +22,7 @@ export const COMPLETION_SKIP_PLUGIN_COMMANDS_ENV = "OPENCLAW_COMPLETION_SKIP_PLU
 type CompletionProfileEncoding = "utf8" | "utf8bom" | "utf16le" | "utf16be";
 
 async function readCompletionProfile(profilePath: string, shell: CompletionShell) {
-  const buffer = await fs.readFile(profilePath);
+  const { buffer } = await readRegularFile({ filePath: await fs.realpath(profilePath) });
   let encoding: CompletionProfileEncoding = "utf8";
   if (shell === "powershell" && process.platform === "win32") {
     const [first, second, third] = buffer;
@@ -51,31 +52,25 @@ export function isCompletionShell(value: string): value is CompletionShell {
   return COMPLETION_SHELLS.includes(value as CompletionShell);
 }
 
-function resolveShellBasename(
-  shellPath: string,
-  platform: NodeJS.Platform = process.platform,
-): string {
+function resolveShellBasename(shellPath: string): string {
   const platformBasename =
-    platform === "win32" ? path.win32.basename(shellPath) : path.basename(shellPath);
+    process.platform === "win32" ? path.win32.basename(shellPath) : path.basename(shellPath);
   const winBasename = path.win32.basename(shellPath);
   const basename = winBasename.length < platformBasename.length ? winBasename : platformBasename;
   return normalizeLowercaseStringOrEmpty(basename.replace(/\.(?:exe|cmd|bat)$/i, ""));
 }
 
 /** Resolves the active shell from environment paths, using the platform's native default. */
-export function resolveShellFromEnv(
-  env: NodeJS.ProcessEnv = process.env,
-  platform: NodeJS.Platform = process.platform,
-): CompletionShell {
-  const shellPath = normalizeOptionalString(env.SHELL) ?? "";
-  const shellName = shellPath ? resolveShellBasename(shellPath, platform) : "";
+export function resolveShellFromEnv(): CompletionShell {
+  const shellPath = normalizeOptionalString(process.env.SHELL) ?? "";
+  const shellName = shellPath ? resolveShellBasename(shellPath) : "";
   if (isCompletionShell(shellName)) {
     return shellName;
   }
   if (shellName === "pwsh") {
     return "powershell";
   }
-  return platform === "win32" ? "powershell" : "zsh";
+  return process.platform === "win32" ? "powershell" : "zsh";
 }
 
 /** Returns the per-shell cached completion script path for a sanitized CLI binary name. */
@@ -337,60 +332,6 @@ function isSlowDynamicCompletionLine(line: string, binName: string): boolean {
   );
 }
 
-function updateCompletionProfile(
-  content: string,
-  binName: string,
-  cachePath: string,
-  shell: CompletionShell,
-  homeDir: string,
-): { next: string; changed: boolean; hadExisting: boolean } {
-  // Remove both cached and old dynamic blocks so installs converge to one fast source line,
-  // while preserving user-managed portable hooks byte-for-byte.
-  const lines = content.split("\n");
-  const filtered: string[] = [];
-  let hadExisting = false;
-  let portableCoversCurrent = false;
-
-  for (let i = 0; i < lines.length; i += 1) {
-    const line = lines[i] ?? "";
-    if (line.trim() === "# OpenClaw Completion") {
-      const following = lines[i + 1] ?? "";
-      if (isPortableCompletionSourceLine(following, shell, cachePath, homeDir)) {
-        filtered.push(line);
-        continue;
-      }
-      hadExisting = true;
-      // An orphaned marker owns no following user line; remove only a recognized source line.
-      if (
-        isCompletionProfileLine(following, binName, cachePath) ||
-        isPreviousCompletionSourceLine(following, cachePath, shell)
-      ) {
-        i += 1;
-      }
-      continue;
-    }
-    if (isCompletionProfileLine(line, binName, cachePath)) {
-      hadExisting = true;
-      continue;
-    }
-    if (isPortableCompletionSourceLine(line, shell, cachePath, homeDir)) {
-      // A portable hook for the current cache counts as configured and stays untouched.
-      hadExisting = true;
-      portableCoversCurrent = true;
-    }
-    filtered.push(line);
-  }
-
-  if (portableCoversCurrent) {
-    const next = filtered.join("\n");
-    return { next, changed: next !== content, hadExisting };
-  }
-  const trimmed = filtered.join("\n").replace(/(?<!\n)\n+$/u, "");
-  const block = `# OpenClaw Completion\n${formatCompletionSourceLine(shell, cachePath)}`;
-  const next = trimmed ? `${trimmed}\n\n${block}\n` : `${block}\n`;
-  return { next, changed: next !== content, hadExisting };
-}
-
 async function resolveCompletionProfileWritePath(profilePath: string): Promise<string> {
   const { existingPath, unresolvedSegments } = resolvePathPrefixSync(profilePath);
   // Keep unresolved `..` components until mkdir has created their physical parents.
@@ -401,19 +342,11 @@ async function resolveCompletionProfileWritePath(profilePath: string): Promise<s
 }
 
 /** Resolves the shell startup profile path that should contain the OpenClaw completion block. */
-export function resolveCompletionProfilePath(
-  shell: CompletionShell,
-  options: {
-    env?: NodeJS.ProcessEnv;
-    homeDir?: () => string;
-    platform?: NodeJS.Platform;
-  } = {},
-): string {
-  const env = options.env ?? process.env;
-  const homeDir = options.homeDir ?? os.homedir;
-  const platform = options.platform ?? process.platform;
+export function resolveCompletionProfilePath(shell: CompletionShell): string {
+  const env = process.env;
+  const platform = process.platform;
   const pathApi = platform === "win32" ? path.win32 : path.posix;
-  const home = env.HOME || homeDir();
+  const home = env.HOME || os.homedir();
   if (shell === "zsh") {
     const profileDirectory = env.ZDOTDIR === undefined ? home : env.ZDOTDIR || pathApi.sep;
     return appendCompletionProfilePath(profileDirectory, pathApi, ".zshrc");
@@ -435,7 +368,7 @@ export function resolveCompletionProfilePath(
   }
   if (platform === "win32") {
     const shellPath = normalizeOptionalString(env.SHELL) ?? "";
-    const shellName = shellPath ? resolveShellBasename(shellPath, platform) : "";
+    const shellName = shellPath ? resolveShellBasename(shellPath) : "";
     const profileDirectory = shellName === "powershell" ? "WindowsPowerShell" : "PowerShell";
     return appendCompletionProfilePath(
       env.USERPROFILE || home,
@@ -517,6 +450,13 @@ export async function usesSlowDynamicCompletion(
 
 const PROFILE_WRITE_ERROR_CODES = new Set(["EACCES", "EPERM", "EROFS"]);
 
+class CompletionCacheMissingError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "CompletionCacheMissingError";
+  }
+}
+
 export function findCompletionProfileWriteError(err: unknown): NodeJS.ErrnoException | undefined {
   if (isErrno(err) && PROFILE_WRITE_ERROR_CODES.has(err.code ?? "")) {
     return err;
@@ -532,7 +472,7 @@ export async function installCompletion(shell: string, yes: boolean, binName = "
   const cachePath = resolveCompletionCachePath(shell, binName);
   const cacheExists = await pathExists(cachePath);
   if (!cacheExists) {
-    throw new Error(
+    throw new CompletionCacheMissingError(
       `Completion cache not found at ${cachePath}. Run \`${binName} completion --write-state\` first.`,
     );
   }
@@ -550,22 +490,66 @@ export async function installCompletion(shell: string, yes: boolean, binName = "
         throw error;
       }
       if (!yes) {
-        console.warn(`Profile not found at ${profilePath}. Creating a new one.`);
+        console.warn(terminalText`Profile not found at ${profilePath}. Creating a new one.`);
       }
       content = "";
     }
 
-    const update = updateCompletionProfile(content, binName, cachePath, shell, homeDir);
-    if (!update.changed) {
+    // Remove both cached and old dynamic blocks so installs converge to one fast source line,
+    // while preserving user-managed portable hooks byte-for-byte.
+    const lines = content.split("\n");
+    const filtered: string[] = [];
+    let hadExisting = false;
+    let portableCoversCurrent = false;
+
+    for (let i = 0; i < lines.length; i += 1) {
+      const line = lines[i] ?? "";
+      if (line.trim() === "# OpenClaw Completion") {
+        const following = lines[i + 1] ?? "";
+        if (isPortableCompletionSourceLine(following, shell, cachePath, homeDir)) {
+          filtered.push(line);
+          continue;
+        }
+        hadExisting = true;
+        // An orphaned marker owns no following user line; remove only a recognized source line.
+        if (
+          isCompletionProfileLine(following, binName, cachePath) ||
+          isPreviousCompletionSourceLine(following, cachePath, shell)
+        ) {
+          i += 1;
+        }
+        continue;
+      }
+      if (isCompletionProfileLine(line, binName, cachePath)) {
+        hadExisting = true;
+        continue;
+      }
+      if (isPortableCompletionSourceLine(line, shell, cachePath, homeDir)) {
+        // A portable hook for the current cache counts as configured and stays untouched.
+        hadExisting = true;
+        portableCoversCurrent = true;
+      }
+      filtered.push(line);
+    }
+
+    let next: string;
+    if (portableCoversCurrent) {
+      next = filtered.join("\n");
+    } else {
+      const trimmed = filtered.join("\n").replace(/(?<!\n)\n+$/u, "");
+      const block = `# OpenClaw Completion\n${formatCompletionSourceLine(shell, cachePath)}`;
+      next = trimmed ? `${trimmed}\n\n${block}\n` : `${block}\n`;
+    }
+    if (next === content) {
       if (!yes) {
-        console.log(`Completion already installed in ${profilePath}`);
+        console.log(terminalText`Completion already installed in ${profilePath}`);
       }
       return;
     }
 
     if (!yes) {
-      const action = update.hadExisting ? "Updating" : "Installing";
-      console.log(`${action} completion in ${profilePath}...`);
+      const action = hadExisting ? "Updating" : "Installing";
+      console.log(terminalText`${action} completion in ${profilePath}...`);
     }
 
     await publishOutputFileAtomically({
@@ -573,14 +557,17 @@ export async function installCompletion(shell: string, yes: boolean, binName = "
       tempPrefix: ".openclaw-completion-profile",
       durable: true,
       writeTemp: async (tempPath) => {
-        await fs.writeFile(tempPath, encodeCompletionProfile(update.next, encoding), {
+        await fs.writeFile(tempPath, encodeCompletionProfile(next, encoding), {
           flag: "wx",
         });
       },
     });
     if (!yes) {
+      const profileHint = resolveCompletionProfileHint(shell);
       console.log(
-        `Completion installed. Restart your shell or run: ${formatCompletionReloadCommand(shell, resolveCompletionProfileHint(shell))}`,
+        hasTerminalControl(profileHint)
+          ? "Completion installed. Restart your shell to load it."
+          : `Completion installed. Restart your shell or run: ${formatCompletionReloadCommand(shell, profileHint)}`,
       );
     }
   } catch (err) {

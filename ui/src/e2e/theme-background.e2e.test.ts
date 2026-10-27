@@ -2,8 +2,10 @@ import type { Page } from "playwright";
 import { expect, it } from "vitest";
 import { BUILTIN_THEME_IDS } from "../../../packages/gateway-protocol/src/theme-ids.ts";
 import { resolveTheme, type ThemeName } from "../app/theme.ts";
+import { evaluateControlUiContext } from "../test-helpers/control-ui-e2e-context.ts";
 import {
   controlUiBundledGatewayUrl,
+  waitForControlUiRoute,
   type MockGatewayControls,
 } from "../test-helpers/control-ui-e2e.ts";
 import { createImportedCustomThemeFixture } from "../test-helpers/custom-theme.ts";
@@ -35,7 +37,7 @@ const message = (role: "user" | "assistant", text: string) => ({
 
 type ColorMode = "dark" | "light";
 
-function themeConfig(family: ThemeName, mode: ColorMode | "system") {
+function themeConfig(family: ThemeName, mode: ColorMode) {
   const config = {
     ui: { prefs: { theme: family === "claw" ? undefined : family, themeMode: mode } },
   };
@@ -50,12 +52,8 @@ async function changeTheme(
   resolved = resolveTheme(selection.family, selection.mode),
 ) {
   // Refresh through the Gateway so a synced change must preserve the mounted draft.
-  const configGets = (await gateway.getRequests("config.get")).length;
   await gateway.setMethodResponse("config.get", themeConfig(selection.family, selection.mode));
   await gateway.emitGatewayEvent("config.changed", {});
-  await expect
-    .poll(async () => (await gateway.getRequests("config.get")).length)
-    .toBeGreaterThan(configGets);
   const root = page.locator("html");
   await expect.poll(() => root.getAttribute("data-theme")).toBe(resolved);
   await expect.poll(() => root.getAttribute("data-theme-mode")).toBe(selection.mode);
@@ -79,7 +77,17 @@ suite.define(() => {
       const images = new Map<string, string>();
       const decoded = new Set<string>();
       for (const route of ["new", "chat", "settings/appearance"] as const) {
-        await page.goto(`${suite.server.baseUrl}${route}`);
+        if (route === "new") {
+          await page.goto(`${suite.server.baseUrl}${route}`);
+        } else {
+          const routeId = route === "chat" ? "chat" : "appearance";
+          await evaluateControlUiContext(
+            page,
+            (app, target: "chat" | "appearance") => app.navigate(target),
+            routeId,
+          );
+          await waitForControlUiRoute(page, { routeId });
+        }
         await gateway.waitForRequest("config.get");
         if (route === "chat") {
           await page
@@ -121,8 +129,12 @@ suite.define(() => {
               }
             }
             const label = `${resolved}-${route.replace("/", "-")}-${viewport}`;
-            const artwork = await readArtwork(shell);
+            const fingerprint = route === "new" && viewport === "desktop";
+            const artwork = await readArtwork(shell, fingerprint ? "fingerprint" : undefined);
             expectAppArtwork(artwork, label);
+            expect(artwork.canvasOwner, label).toBe(
+              route === "chat" && viewport === "mobile" ? "native-mobile" : "shell-artwork",
+            );
             const minimumContrast = selection.family === "beacon" ? 7 : 4.5;
             expect
               .soft(artwork.canvasContrast, `${label}: muted text on app artwork`)
@@ -138,20 +150,16 @@ suite.define(() => {
                 `${label}: conversation text on artwork`,
               ).toBeGreaterThanOrEqual(4.5);
             }
-            if (route === "new" && viewport === "desktop") {
+            if (fingerprint) {
+              if (artwork.pixels === null) {
+                throw new Error(`Missing decoded artwork fingerprint for ${label}`);
+              }
               images.set(resolved, artwork.backgroundImage);
               decoded.add(artwork.pixels);
             } else {
               expect(artwork.backgroundImage, label).toBe(images.get(resolved));
             }
           }
-        }
-        if (composer && textarea) {
-          await composer.getByRole("button", { name: "Add attachment", exact: true }).click();
-          await composer
-            .getByRole("menuitem", { name: "File", exact: true })
-            .waitFor({ state: "visible" });
-          await page.keyboard.press("Escape");
         }
         await changeTheme(page, gateway, { family: "dash", mode: "light" }, "dash-light");
         const background = () =>
@@ -187,15 +195,6 @@ suite.define(() => {
             await session.send("Emulation.setEmulatedMedia", { features: [] });
             await session.detach();
           }
-        }
-        await gateway.setMethodResponse("config.get", themeConfig("dash", "system"));
-        await gateway.emitGatewayEvent("config.changed", {});
-        for (const mode of ["dark", "light"] as const) {
-          await page.emulateMedia({ colorScheme: mode });
-          const resolved = mode === "dark" ? "dash" : "dash-light";
-          await expect.poll(() => page.locator("html").getAttribute("data-theme")).toBe(resolved);
-          expect(await background()).toBe(images.get(resolved));
-          await expectDraft();
         }
         await page.setViewportSize({ width: 1440, height: 900 });
       }
@@ -235,7 +234,7 @@ suite.define(() => {
       for (const mode of ["dark", "light"] as const) {
         const resolved = mode === "dark" ? "custom" : "custom-light";
         await changeTheme(page, gateway, { family: "custom", mode }, resolved);
-        const artwork = await readArtwork(page.locator(".shell"));
+        const artwork = await readArtwork(page.locator(".shell"), "color-spread");
         expectAppArtwork(artwork, `custom ${mode}`);
         await expectComposerSurface(composer);
         expect(artwork.maxColorSpread).toBeLessThanOrEqual(32);

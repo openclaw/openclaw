@@ -9,6 +9,12 @@ import { cleanupTempDirs } from "../helpers/temp-dir.js";
 export function copyOxlintConfigFixture(root: string): void {
   fs.copyFileSync(".oxlintrc.json", path.join(root, ".oxlintrc.json"));
   // Oxlint loads configured JS plugins even when the selected files are outside their scope.
+  fs.mkdirSync(path.join(root, "scripts"), { recursive: true });
+  fs.symlinkSync(
+    path.resolve("scripts/oxlint-boundary-guards.mjs"),
+    path.join(root, "scripts/oxlint-boundary-guards.mjs"),
+    "file",
+  );
   fs.mkdirSync(path.join(root, "tools"), { recursive: true });
   fs.symlinkSync(path.resolve("tools/solid-lint"), path.join(root, "tools/solid-lint"), "junction");
 }

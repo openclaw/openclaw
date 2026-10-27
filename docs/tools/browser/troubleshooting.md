@@ -78,6 +78,12 @@ How to read the results:
 - If `start` and `tabs` succeed but `open` or `navigate` fails, the browser control plane is up and the failure is in navigation policy or the target page.
 - If `start`, `tabs`, and `open` all succeed, the basic managed-browser control path is healthy.
 
+A cold Playwright connection must initialize every existing page in the profile.
+If a renderer is unresponsive, even a snapshot of a healthy tab can time out.
+When the error names a page target, close that target in the browser or provider
+dashboard and retry. If direct closure is unavailable, restart the affected
+browser profile. OpenClaw does not automatically close user-owned tabs.
+
 Important behavior details:
 
 - Browser config defaults to an SSRF policy object that blocks disallowed destinations even when you do not configure `browser.ssrfPolicy`.
@@ -85,6 +91,7 @@ Important behavior details:
 - Local managed Chrome gets up to 60 seconds for launch discovery, followed by up to 30 seconds for CDP readiness. Readiness checks allow up to 1.5 seconds per HTTP request and 2 seconds per WebSocket stage to tolerate Gateway scheduling delays; checks near the deadline use shorter timeouts.
 - Later operations use the same readiness allowance for an owned managed browser before deciding it needs a restart. Stopping a profile aborts its pending discovery and readiness checks; canceling one caller waiting for a shared start does not stop that shared launch.
 - Navigation protection is separate. A successful `start` or `tabs` result does not mean a later `open` or `navigate` target is allowed.
+- Timed-out or cancelled page interactions and `browser navigate` requests cancel their pending navigation-policy checks. A stalled DNS check from that request should not keep the profile busy when you run `openclaw browser stop`. An observed browser dialog interrupts the foreground interaction without cancelling its still-active navigation guard.
 
 Resetting or deleting a local managed profile stops a verified browser left by an
 earlier Gateway runtime before moving its data. If a live profile owner cannot be

@@ -41,6 +41,7 @@ import { isCompletionHeldByYield } from "./subagent-registry-run-pause.js";
 import { completeTerminalEffects } from "./subagent-registry-terminal-effects.js";
 import type { SubagentCompletionRequest, SubagentRunRecord } from "./subagent-registry.types.js";
 import { isSameSubagentRunOwner } from "./subagent-run-generation.js";
+import { getSubagentTerminalReplySummary } from "./subagent-run-payload-facts.js";
 import {
   resolveSubagentRunEffectiveEndedAt,
   shouldPreservePublishedExplicitRunTimeout,
@@ -58,7 +59,7 @@ function resolveTerminalRequest(
   now: number,
   liveStructuredOutput: SubagentRunRecord["structuredOutput"],
 ) {
-  const recoveryRequested = completeParams.recoverInterrupted === true;
+  const recoveryRequested = completeParams.recoverInterrupted !== undefined;
   let completionReason = completeParams.reason;
   let requestedEndedAt = completeParams.endedAt ?? now;
   const existingEndedAt = entry.execution.endedAt;
@@ -215,6 +216,7 @@ export async function completeSubagentRunAttempt(
         completeParams.recoverInterrupted ||
         context.newerGenerationOwnsSession(selected) ||
         terminal.terminalReply ||
+        getSubagentTerminalReplySummary(selected) ||
         (terminal.missingRequiredReply && terminal.completionOutcome.status === "ok") ||
         completeParams.completionSnapshot
           ? undefined
@@ -247,7 +249,7 @@ export async function completeSubagentRunAttempt(
             const entry = planned.entry;
             const outcomeStatus = entry.execution.outcome?.status;
             const terminalEvents =
-              (planned.mutated || completeParams.recoverInterrupted === true) &&
+              (planned.mutated || completeParams.recoverInterrupted !== undefined) &&
               !planned.suppressSessionEffects &&
               !planned.sessionSuperseded &&
               entry.killReconciliation === undefined &&
@@ -358,7 +360,9 @@ function planTerminalCompletion(
   let suppressSessionEffects =
     prepared.suppressSessionEffects || entry.execution.suppressSessionEffects === true;
   let replacedProvisionalKill = false;
-  const recoveryRequested = completeParams.recoverInterrupted === true;
+  const recoveryRequested = completeParams.recoverInterrupted !== undefined;
+  const interruptionReason =
+    completeParams.recoverInterrupted === true ? "gateway-restart" : undefined;
   if (
     !recoveryRequested &&
     (entry.terminalOwner === "interrupted-recovery" ||
@@ -417,7 +421,7 @@ function planTerminalCompletion(
       endedAt,
       outcome: interruptedOutcome,
       interruptedAt: undefined,
-      interruptionReason: "gateway-restart",
+      interruptionReason,
       suppressSessionEffects: suppressSessionEffects ? true : undefined,
     };
     entry.completion = {
@@ -605,7 +609,6 @@ function planTerminalCompletion(
   const retainedRestartRecovery = suppressSessionEffects
     ? entry.execution.restartRecovery
     : undefined;
-  const interruptionReason = recoveryRequested ? "gateway-restart" : undefined;
   if (
     entry.execution.status !== "terminal" ||
     entry.execution.endedAt !== endedAt ||
@@ -692,9 +695,15 @@ function planTerminalCompletion(
     }
   }
   if (entry.collect) {
-    updateSwarmCollectorCompletion(entry, params.getRuntimeConfig(), {
-      entry: prepared.collectorSession?.entry,
-    });
+    updateSwarmCollectorCompletion(
+      entry,
+      params.getRuntimeConfig(),
+      { entry: prepared.collectorSession?.entry },
+      // Mark only the sweeper's diagnostic settlement of a yield with no recorded outcome.
+      completeParams.settleYielded === true && currentEntry.execution.outcome === undefined
+        ? "yielded_without_result"
+        : undefined,
+    );
   } else {
     updateSubagentArchiveAtMs(entry, params.getRuntimeConfig());
   }

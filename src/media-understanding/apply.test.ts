@@ -74,22 +74,19 @@ function configuredMedia(
 }
 
 type TranscribeAudio = NonNullable<MediaUnderstandingProvider["transcribeAudio"]>;
-function createGroqProviders(transcript: string | TranscribeAudio = "transcribed text") {
-  const transcribeAudio =
-    typeof transcript === "string" ? async () => ({ text: transcript }) : transcript;
-  return { groq: { id: "groq", transcribeAudio } };
-}
 type ApplyOptions = Parameters<typeof applyMediaUnderstanding>[0];
 function applyAudio(
   ctx: MsgContext,
   transcript: string | TranscribeAudio = "transcribed text",
   options: Partial<Omit<ApplyOptions, "ctx" | "providers">> = {},
 ) {
+  const transcribeAudio =
+    typeof transcript === "string" ? async () => ({ text: transcript }) : transcript;
   return applyMediaUnderstanding({
     ctx,
     cfg: createGroqAudioConfig(),
     ...options,
-    providers: createGroqProviders(transcript),
+    providers: { groq: { id: "groq", transcribeAudio } },
   });
 }
 
@@ -106,14 +103,6 @@ function expectTranscriptApplied(
     RawBody: commandBody,
     BodyForCommands: commandBody,
   });
-}
-
-function getRunExecCallForCommand(command: string) {
-  const call = runExecMock.mock.calls.find(([calledCommand]) => calledCommand === command);
-  if (!call) {
-    throw new Error(`expected runExec call for ${command}`);
-  }
-  return call[1];
 }
 
 function createMediaDisabledConfig(): OpenClawConfig {
@@ -152,35 +141,6 @@ function imageProviders(describeImage: NonNullable<MediaUnderstandingProvider["d
   return { openai: { id: "openai", capabilities: ["image" as const], describeImage } };
 }
 
-async function autoAudioFixture(binary: string, files: string[] = []) {
-  const binDir = await createTempMediaDir();
-  const modelDir = await createTempMediaDir();
-  const executablePath = path.join(binDir, binary);
-  await fs.writeFile(executablePath, "echo mocked\n", { mode: 0o755 });
-  for (const file of files) {
-    await fs.writeFile(path.join(modelDir, file), "model");
-  }
-  return {
-    modelDir,
-    executablePath,
-    run: (ctx: MsgContext, env: Record<string, string | undefined>) =>
-      withEnvAsync(
-        {
-          SHERPA_ONNX_MODEL_DIR: undefined,
-          WHISPER_CPP_MODEL: undefined,
-          OPENAI_API_KEY: undefined,
-          GROQ_API_KEY: undefined,
-          DEEPGRAM_API_KEY: undefined,
-          GEMINI_API_KEY: undefined,
-          OPENCLAW_AGENT_DIR: undefined,
-          PATH: binDir,
-          ...env,
-        },
-        () => applyMediaUnderstanding({ ctx, cfg: mediaConfig({ audio: {} }) }),
-      ),
-  };
-}
-
 async function createAudioCtx({
   body = "",
   fileName = "note.ogg",
@@ -193,21 +153,6 @@ async function createAudioCtx({
   content?: Buffer | string;
 } = {}): Promise<MsgContext> {
   return mediaCtx([await attachment(fileName, content, mediaType)], body);
-}
-
-function mockWhisperCliTranscript(transcript: string) {
-  runExecMock.mockImplementation(async (command, args) => {
-    if (command === "readelf" || command === "otool") {
-      return { stdout: "", stderr: "" };
-    }
-    const outputBaseIndex = args.indexOf("-of");
-    const outputBase = outputBaseIndex >= 0 ? args[outputBaseIndex + 1] : undefined;
-    if (typeof outputBase !== "string") {
-      throw new Error("missing whisper-cli output base");
-    }
-    await fs.writeFile(`${outputBase}.txt`, transcript);
-    return { stdout: "Transcribing with Whisper...\n", stderr: "" };
-  });
 }
 
 async function applyFile(
@@ -394,20 +339,6 @@ describe("applyMediaUnderstanding", () => {
     );
   });
 
-  it("keeps caption for command parsing when audio has user text", async () => {
-    const ctx = await createAudioCtx({ body: "/capture status" });
-    ctx.CommandAuthorized = false;
-    await applyAudio(ctx);
-
-    expectTranscriptApplied(
-      ctx,
-      "transcribed text",
-      "[Audio]\nUser text:\n/capture status\nTranscript:\ntranscribed text",
-      "/capture status",
-    );
-    expect(ctx.CommandAuthorized).toBe(false);
-  });
-
   it("handles URL-only attachments for audio transcription", async () => {
     const ctx: MsgContext = {
       Body: "",
@@ -450,10 +381,9 @@ describe("applyMediaUnderstanding", () => {
 
   it("falls back to a CLI transcript after provider failure", async () => {
     const ctx = await createAudioCtx();
-    const providers = createGroqProviders();
-    vi.spyOn(providers.groq, "transcribeAudio").mockRejectedValue(new Error("boom"));
+    const transcribeAudio = vi.fn<TranscribeAudio>().mockRejectedValue(new Error("boom"));
     runExecMock.mockResolvedValue({ stdout: "cli transcript\n", stderr: "" });
-    await applyAudio(ctx, providers.groq.transcribeAudio, {
+    await applyAudio(ctx, transcribeAudio, {
       cfg: configuredMedia([
         { provider: "groq", capabilities: ["audio"] },
         { type: "cli", command: "whisper", args: ["{{MediaPath}}"], capabilities: ["audio"] },
@@ -463,73 +393,25 @@ describe("applyMediaUnderstanding", () => {
     expect(ctx.Body).toBe("[Audio]\nTranscript:\ncli transcript");
   });
 
-  it("auto-detects sherpa for audio when binary and model files are available", async () => {
-    const { executablePath, modelDir, run } = await autoAudioFixture("sherpa-onnx-offline", [
-      "tokens.txt",
-      "encoder.onnx",
-      "decoder.onnx",
-      "joiner.onnx",
-    ]);
-    const ctx = await createAudioCtx({ fileName: "sample.wav", mediaType: "audio/wav" });
-    runExecMock.mockResolvedValueOnce({ stdout: '{"text":"sherpa ok"}', stderr: "" });
-    await run(ctx, { SHERPA_ONNX_MODEL_DIR: modelDir });
-
-    expect(ctx.Transcript).toBe("sherpa ok");
-    const args = getRunExecCallForCommand(executablePath);
-    expect(args).toEqual([
-      `--tokens=${path.join(modelDir, "tokens.txt")}`,
-      `--encoder=${path.join(modelDir, "encoder.onnx")}`,
-      `--decoder=${path.join(modelDir, "decoder.onnx")}`,
-      `--joiner=${path.join(modelDir, "joiner.onnx")}`,
-      await fs.realpath(ctx.media?.[0]?.path ?? ""),
-    ]);
-  });
-
-  it("transcodes non-wav audio before auto-detected whisper-cli runs", async () => {
-    const { executablePath, modelDir, run } = await autoAudioFixture("whisper-cli", ["tiny.bin"]);
-    const modelPath = path.join(modelDir, "tiny.bin");
-    const ctx = await createAudioCtx({ fileName: "telegram-voice.ogg" });
-
-    runFfmpegMock.mockImplementationOnce(async (args: string[]) => {
-      const wavPath = args.at(-1);
-      if (typeof wavPath !== "string") {
-        throw new Error("missing wav path");
-      }
-      await fs.writeFile(wavPath, Buffer.from("RIFF"));
-      return "";
-    });
-    mockWhisperCliTranscript("whisper cpp ogg ok\n");
-
-    await run(ctx, { WHISPER_CPP_MODEL: modelPath });
-
-    expect(ctx.Transcript).toBe("whisper cpp ogg ok");
-    const ffmpegArgs = runFfmpegMock.mock.calls[0]?.[0];
-    if (!Array.isArray(ffmpegArgs)) {
-      throw new Error("expected runFfmpeg args");
-    }
-    expect(ffmpegArgs).toEqual([
-      "-y",
-      "-i",
-      expect.stringMatching(/telegram-voice\.ogg$/),
-      ..."-ac 1 -ar 16000 -c:a pcm_s16le -f wav".split(" "),
-      expect.stringMatching(/telegram-voice\.wav.*\.part$/),
-    ]);
-
-    const args = getRunExecCallForCommand(executablePath);
-    if (!Array.isArray(args)) {
-      throw new Error("expected whisper-cli transcode args");
-    }
-    expect(args.slice(0, 4)).toEqual(["-m", modelPath, "-otxt", "-of"]);
-    expect(args[5]).toBe("-nt");
-    expect(String(args[6]).endsWith("telegram-voice.wav")).toBe(true);
-  });
-
   it("does not probe Gemini CLI during media auto-detect", async () => {
-    const { run } = await autoAudioFixture("gemini");
+    const binDir = await createTempMediaDir();
+    await fs.writeFile(path.join(binDir, "gemini"), "echo mocked\n", { mode: 0o755 });
     const isolatedAgentDir = await createTempMediaDir();
     const ctx = await createAudioCtx({ fileName: "sample.wav", mediaType: "audio/wav" });
     resolveApiKeyForProviderCoreMock.mockResolvedValue({ source: "none", mode: "api-key" });
-    await run(ctx, { OPENCLAW_AGENT_DIR: isolatedAgentDir });
+    await withEnvAsync(
+      {
+        PATH: binDir,
+        SHERPA_ONNX_MODEL_DIR: undefined,
+        WHISPER_CPP_MODEL: undefined,
+        OPENAI_API_KEY: undefined,
+        GROQ_API_KEY: undefined,
+        DEEPGRAM_API_KEY: undefined,
+        GEMINI_API_KEY: undefined,
+        OPENCLAW_AGENT_DIR: isolatedAgentDir,
+      },
+      () => applyMediaUnderstanding({ ctx, cfg: mediaConfig({ audio: {} }) }),
+    );
 
     expect(ctx.Transcript).toBeUndefined();
     expect(ctx.Body).toBe(

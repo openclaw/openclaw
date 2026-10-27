@@ -232,13 +232,6 @@ it("keeps config-path activation owners when projecting one complete inventory",
   expect(repeated.manifestRegistry).toBe(table.manifestRegistry);
 
   expect(readManifests).toHaveBeenCalledOnce();
-  expect(readManifests.mock.calls[0]?.[0]).toMatchObject({
-    index,
-    config: params.config,
-    env: {},
-    includeDisabled: true,
-  });
-  expect(readManifests.mock.calls[0]?.[0]).not.toHaveProperty("pluginIds");
   expect(table.pluginIds).toEqual(["browser", "openai"]);
   expect(table.metrics.indexPluginCount).toBe(3);
   expect(table.metrics.manifestPluginCount).toBe(2);

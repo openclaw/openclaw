@@ -1,13 +1,8 @@
-import fs from "node:fs";
 import path from "node:path";
-import { afterEach, expect, it, onTestFinished } from "vitest";
+import { expect, it, onTestFinished } from "vitest";
 import { createVitestCacheSlots } from "../../scripts/lib/vitest-cache-slots.mts";
 import { applyDefaultVitestCachePaths } from "../../scripts/test-projects.test-support.mts";
 import { createDeferred } from "../helpers/promise.js";
-import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
-import { loadVitestPerformanceConfig } from "../vitest/vitest.performance-config.js";
-
-const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 const spec = {
   config: "test/a.ts",
@@ -46,43 +41,6 @@ function cacheFixture() {
   };
 }
 
-it.skipIf(process.platform === "win32")(
-  "reuses separately warmed configs through the default root in serial, reordered, and parallel project runs",
-  async () => {
-    const root = tempDirs.make("vitest-cache-layout-");
-    const env: NodeJS.ProcessEnv = {};
-    const run = async (configs: string[], parallel: boolean, seed = false) => {
-      const lease = createVitestCacheSlots("linux");
-      const specs = applyDefaultVitestCachePaths(
-        configs.map((config) => ({ config, env, watchMode: false })),
-        { env, cwd: root },
-      );
-      const visit = (entry: (typeof specs)[number]) =>
-        lease(entry, async (assigned) => {
-          const cache = loadVitestPerformanceConfig(assigned.env, "linux", root);
-          const directory = cache.fsModuleCachePath!;
-          const file = path.join(directory, `${entry.config}.js`);
-          if (seed) {
-            fs.mkdirSync(directory, { recursive: true });
-            fs.writeFileSync(file, entry.config);
-          } else {
-            expect(fs.readFileSync(file, "utf8")).toBe(entry.config);
-          }
-          return joined;
-        });
-      const batches = parallel ? [specs] : specs.map((entry) => [entry]);
-      for (const batch of batches) {
-        await Promise.all(batch.map(visit));
-      }
-    };
-    await run(["first.config.ts"], false, true);
-    await run(["second.config.ts"], false, true);
-    await run(["second.config.ts", "first.config.ts"], false);
-    await run(["first.config.ts", "first.config.ts"], false);
-    await run(["first.config.ts", "second.config.ts"], true);
-  },
-);
-
 it("preserves an explicit caller leaf alongside a shared root", async () => {
   const env = {
     OPENCLAW_VITEST_FS_MODULE_CACHE_ROOT: "/shared-cache",
@@ -98,59 +56,31 @@ it("preserves an explicit caller leaf alongside a shared root", async () => {
   });
 });
 
-it("reuses an idle config cache while another config occupies its former scheduler slot", async () => {
+it("reuses a failed command's joined cache while a same-config lease and another config remain active", async () => {
   const { hold, visit } = cacheFixture();
-  const first = hold(joined, { ...spec, config: "a.config.ts" });
-  const peer = hold(joined, { ...spec, config: "b.config.ts" });
-  await first.finish();
+  const first = hold({ ...joined, code: 1 }, { ...spec, config: "a.config.ts" });
+  const peer = hold(joined, { ...spec, config: "a.config.ts" });
+  await expect(first.finish()).resolves.toMatchObject({ code: 1 });
   const third = hold(joined, { ...spec, config: "c.config.ts" });
-  await peer.finish();
   const reused = await visit({ ...spec, config: "a.config.ts" });
   expect(reused).toBe(first.path);
+  expect(await cacheFixture().visit({ ...spec, config: "a.config.ts" })).toBe(first.path);
   expect(reused).not.toBe(third.path);
   expect(new Set([first.path, peer.path, third.path]).size).toBe(3);
+  await peer.finish();
 });
 
-it.each([true, false])(
-  "isolates alias leases and respects join state (%s)",
-  async (groupJoined) => {
-    const { hold, visit } = cacheFixture();
-    const first = hold({ groupJoined });
-    const alias = {
-      ...spec,
-      config: groupJoined ? "test/x/../a.ts" : spec.config,
-      // Different spellings may name the same physical root.
-      cacheAssignment: {
-        ...spec.cacheAssignment,
-        root: groupJoined ? "/cache/x/.." : "/alias",
-      },
-    };
-    const secondPath = await visit(alias, groupJoined);
-    expect(secondPath).not.toBe(first.path);
-    await first.finish();
-    const thirdPath = await visit(groupJoined ? alias : spec);
-    if (groupJoined) {
-      expect(thirdPath).toBe(first.path);
-    } else {
-      expect(
-        new Set([first.path, secondPath, thirdPath].map((value) => path.basename(value))).size,
-      ).toBe(3);
-    }
-  },
-);
-
-it("holds concurrent leases until joined and reuses a failed command's completed slot", async () => {
+it("isolates concurrent aliases and reuses their joined slot", async () => {
   const { hold, visit } = cacheFixture();
-  const first = hold({ groupJoined: true, code: 1 });
-  const second = hold({ groupJoined: true, code: 0 });
-  const paths = [first.path, second.path];
-  expect(new Set(paths).size).toBe(2);
-  await expect(first.finish()).resolves.toMatchObject({ code: 1 });
-  const reused = await visit();
-  expect(reused).toBe(first.path);
-  expect(reused).not.toBe(second.path);
-  expect(paths).not.toContain(await visit({ ...spec, config: "test/b.ts" }));
-  await second.finish();
+  const first = hold(joined);
+  const alias = {
+    ...spec,
+    config: "test/x/../a.ts",
+    cacheAssignment: { ...spec.cacheAssignment, root: "/cache/x/.." },
+  };
+  expect(await visit(alias)).not.toBe(first.path);
+  await first.finish();
+  expect(await visit(alias)).toBe(first.path);
 });
 
 it.each(["child-only", "rejected"])(
@@ -170,6 +100,13 @@ it.each(["child-only", "rejected"])(
     } else {
       await attempt;
     }
+    const alias = await visit(
+      { ...spec, cacheAssignment: { ...spec.cacheAssignment, root: "/alias" } },
+      false,
+    );
+    expect(
+      new Set([retired!, alias, await visit()].map((value) => path.basename(value))).size,
+    ).toBe(3);
     for (let index = 0; index < 3; index += 1) {
       expect(await visit()).not.toBe(retired);
     }

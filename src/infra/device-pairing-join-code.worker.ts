@@ -53,13 +53,9 @@ export function redeemDevicePairingJoinCodeInWorker(
   const row = executeSqliteQueryTakeFirstSync(
     db,
     kysely
-      .selectFrom("device_pairing_join_codes")
-      .select(["payload_json", "expires_at_ms"])
-      .where("shortcode", "=", input.shortcode),
-  );
-  executeSqliteQuerySync(
-    db,
-    kysely.deleteFrom("device_pairing_join_codes").where("shortcode", "=", input.shortcode),
+      .deleteFrom("device_pairing_join_codes")
+      .where("shortcode", "=", input.shortcode)
+      .returning(["payload_json", "expires_at_ms"]),
   );
   // Malformed rows must still be burned before their result is discarded.
   if (!row || typeof row.payload_json !== "string" || typeof row.expires_at_ms !== "number") {

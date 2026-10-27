@@ -4,24 +4,51 @@ import {
   type BootRecord,
 } from "../../app/boot-record.ts";
 import type { SidebarSnapshotModel } from "../../components/sidebar-snapshot-data.ts";
+import { readStoredChatSnapshotRecord } from "./session-snapshot-database.ts";
 import {
   sidebarSnapshotInvalidationMatches,
   snapshotStoreGeneration,
   subscribeSnapshotInvalidation,
 } from "./session-snapshot-invalidation-events.ts";
-import type { ChatSessionSnapshot } from "./session-snapshot-types.ts";
+
+type PreparedSnapshotRead = ReturnType<
+  typeof import("./session-snapshot-store.ts").readPrewarmedChatSnapshot
+>;
 
 type PrewarmedSnapshot = {
   cacheKey: string;
   cancelled: boolean;
   promise: Promise<unknown>;
-  snapshot?: Promise<ChatSessionSnapshot | null>;
+  prepared?: {
+    promise: PreparedSnapshotRead;
+    snapshot?: Awaited<PreparedSnapshotRead>;
+  };
 };
 
 let pending: PrewarmedSnapshot | undefined;
+export let prewarmedHistoryStateValidator:
+  | typeof import("../../lib/protocol-validators.generated/history-state.js").isChatHistoryState
+  | undefined;
+
+export async function loadChatHistoryStateValidator() {
+  const { isChatHistoryState } =
+    await import("../../lib/protocol-validators.generated/history-state.js");
+  prewarmedHistoryStateValidator = isChatHistoryState;
+  return isChatHistoryState;
+}
 
 export function peekPrewarmedChatSnapshot(): PrewarmedSnapshot | undefined {
   return pending;
+}
+
+export function readSharedPrewarm(entry: PrewarmedSnapshot, read: () => PreparedSnapshotRead) {
+  const prepared: NonNullable<PrewarmedSnapshot["prepared"]> = (entry.prepared ??= {
+    promise: read().then((snapshot) => {
+      prepared.snapshot = snapshot;
+      return snapshot;
+    }),
+  });
+  return prepared;
 }
 
 export function discardPrewarmedChatSnapshot(cacheKey?: string): void {
@@ -31,20 +58,29 @@ export function discardPrewarmedChatSnapshot(cacheKey?: string): void {
   }
 }
 
-export function prewarmChatSnapshot(cacheKey: string): void {
+export async function prewarmChatSnapshot(cacheKey: string): Promise<void> {
   discardPrewarmedChatSnapshot();
   const generation = snapshotStoreGeneration;
   const entry: PrewarmedSnapshot = {
     cacheKey,
     cancelled: false,
-    promise: import("./session-snapshot-database.ts")
-      .then(({ readStoredChatSnapshotRecord }) => readStoredChatSnapshotRecord(cacheKey))
+    promise: readStoredChatSnapshotRecord(cacheKey)
       .then((record) =>
         entry.cancelled || generation !== snapshotStoreGeneration ? undefined : record,
       )
       .catch(() => undefined),
   };
   pending = entry;
+  // Validate once before mount; dispatch reads facts without adopting display rows.
+  try {
+    const [{ readPrewarmedChatSnapshot }] = await Promise.all([
+      import("./session-snapshot-store.ts"),
+      loadChatHistoryStateValidator(),
+    ]);
+    if (pending === entry) {
+      await readPrewarmedChatSnapshot(cacheKey);
+    }
+  } catch {}
 }
 
 export function consumePrewarmedChatSnapshot(cacheKey: string): PrewarmedSnapshot | undefined {

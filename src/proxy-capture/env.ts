@@ -1,12 +1,19 @@
 import { randomUUID } from "node:crypto";
 import type { Agent } from "node:http";
+import path from "node:path";
 import process from "node:process";
 import { createAmbientNodeProxyAgent } from "@openclaw/proxyline";
-import {
-  resolveDebugProxyBlobDir,
-  resolveDebugProxyCertDir,
-  resolveDebugProxyDbPath,
-} from "./paths.js";
+import { resolveStateDir } from "../config/paths.js";
+
+// Debug proxy CA files live under OpenClaw state. Capture data lives in the
+// shared global state database.
+function resolveDebugProxyRootDir(env: NodeJS.ProcessEnv = process.env): string {
+  return path.join(resolveStateDir(env), "debug-proxy");
+}
+
+function resolveDebugProxyCertDir(env: NodeJS.ProcessEnv = process.env): string {
+  return path.join(resolveDebugProxyRootDir(env), "certs");
+}
 
 // Environment contract for debug proxy capture. These vars are passed to child
 // processes and provider transports so capture sessions share one store/proxy.
@@ -55,8 +62,8 @@ export function resolveDebugProxySettings(
     required: isTruthy(env[OPENCLAW_DEBUG_PROXY_REQUIRE]),
     // Child credentials belong only to the private capture endpoint, never stored facts or proxies.
     proxyUrl: childEndpoint?.origin ?? (env[OPENCLAW_DEBUG_PROXY_URL]?.trim() || undefined),
-    dbPath: resolveDebugProxyDbPath(env),
-    blobDir: resolveDebugProxyBlobDir(env),
+    dbPath: path.join(resolveDebugProxyRootDir(env), "capture.sqlite"),
+    blobDir: path.join(resolveDebugProxyRootDir(env), "blobs"),
     certDir: env[OPENCLAW_DEBUG_PROXY_CERT_DIR]?.trim() || resolveDebugProxyCertDir(env),
     sessionId,
     sourceProcess: "openclaw",

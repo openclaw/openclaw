@@ -80,6 +80,22 @@ For multiple bots, put account-specific values under
 `channels.x.accounts.<accountId>`. Root fields are shared defaults; the default
 account ID is `default`.
 
+## Requester identity and credit
+
+X polling and Activity streams obtain immutable `author_id` values from the
+authenticated X API. An allowlist entry admits work; it does not identify a
+Gateway person. An administrator must [link the channel sender](/concepts/user-model#channel-identity-links)
+to their existing profile with `users.linkChannelIdentity`, using `channelId: "x"`,
+the exact configured account ID, and that immutable sender ID. Handles and
+display names are not identity evidence.
+
+After linking, subsequent turns carry the host-verified requester profile. New
+visible work sessions default to that requester when the source has no different
+human owner. Their contribution is eligible for the profile's existing verified
+GitHub credit preference, including delegated work. Linking does not rewrite
+historical creators, reassign existing sessions, change sharing, or grant an
+operator role. Unlinked senders remain channel identities, not Gateway profiles.
+
 ## Public work sessions
 
 Set `channels.x.accounts.<accountId>.autoPublishWorkSessions: true` (or the
@@ -192,14 +208,14 @@ media URL. Native attachments are preferable to sign-in-only proof links when th
 image or video helps explain the result. Work-session approval and origin restrictions
 still apply; guest replies remain text-only.
 
-The connector accepts up to four JPEG, PNG, or WebP images (5 MiB each), or one GIF
+The X plugin accepts up to four JPEG, PNG, or WebP images (5 MiB each), or one GIF
 (15 MiB) or MP4 video (100 MiB). It does not mix videos/GIFs with other attachments.
 The video cap bounds Gateway buffering; it is not X's account upload ceiling.
 Use H.264 video and AAC-LC audio; X validates the remaining encoding and account
 limits. See [X media requirements](https://docs.x.com/x-api/media/quickstart/best-practices).
 
 Local files use the host's approved media roots and file-reader policy; remote
-URLs use the shared guarded downloader. The connector uploads in chunks and waits
+URLs use the shared guarded downloader. The plugin uploads in chunks and waits
 for X processing before creating the reply. Attachments go on the first post if a
 long caption is split into a thread. A failed upload never falls back to a text-only
 post or a local-file link. A 403 on upload may require reconnecting the bot's OAuth

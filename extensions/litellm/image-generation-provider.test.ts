@@ -3,196 +3,99 @@ import {
   getProviderHttpMocks,
   installProviderHttpMockCleanup,
 } from "openclaw/plugin-sdk/provider-http-test-mocks";
-import { afterEach, assert, beforeEach, describe, expect, it, vi } from "vitest";
+import { assert, beforeEach, expect, it, vi } from "vitest";
 import { buildLitellmImageGenerationProvider } from "./image-generation-provider.js";
 
-const {
-  resolveApiKeyForProviderMock,
-  postJsonRequestMock,
-  postMultipartRequestMock,
-  resolveProviderHttpRequestConfigMock,
-} = getProviderHttpMocks();
+const { resolveApiKeyForProviderMock, postJsonRequestMock, postMultipartRequestMock } =
+  getProviderHttpMocks();
 
 installProviderHttpMockCleanup();
 
-function pngResponse() {
-  return {
-    response: Response.json({
-      data: [{ b64_json: Buffer.from("png-bytes").toString("base64") }],
-    }),
-    release: vi.fn(async () => {}),
-  };
-}
-
-function generate(overrides: Partial<ImageGenerationRequest> = {}) {
-  return buildLitellmImageGenerationProvider().generateImage({
+const generate = (overrides: Partial<ImageGenerationRequest> = {}) =>
+  buildLitellmImageGenerationProvider().generateImage({
     provider: "litellm",
     model: "gpt-image-2",
     prompt: "Draw a QA lighthouse",
     cfg: {},
     ...overrides,
   });
-}
+const proxyConfig = (baseUrl: string, request?: { allowPrivateNetwork: boolean }) => ({
+  models: { providers: { litellm: { baseUrl, request, models: [] } } },
+});
 
-function generateAt(baseUrl: string, request?: { allowPrivateNetwork: boolean }) {
-  postJsonRequestMock.mockImplementation(pngResponse);
-  return generate({
-    cfg: { models: { providers: { litellm: { baseUrl, request, models: [] } } } },
-  });
-}
-
-function mockObjectArg(mock: unknown, index = -1): Record<string, unknown> {
-  const calls = (mock as { mock?: { calls?: Array<Array<unknown>> } }).mock?.calls ?? [];
-  const call = index < 0 ? calls.at(index) : calls[index];
-  const [arg] = call ?? [];
-  if (!arg || typeof arg !== "object") {
-    throw new Error(`expected mock object argument ${index}`);
-  }
+function mockObjectArg(mock: { mock: { calls: unknown[][] } }): Record<string, unknown> {
+  const arg = mock.mock.calls.at(-1)?.[0];
+  assert(arg && typeof arg === "object");
   return arg as Record<string, unknown>;
 }
 
-describe("litellm image generation provider", () => {
-  beforeEach(() => {
-    resolveApiKeyForProviderMock.mockResolvedValue({ apiKey: "litellm-key" });
+beforeEach(() => {
+  resolveApiKeyForProviderMock.mockResolvedValue({ apiKey: "litellm-key" });
+  const pngResponse = () => ({
+    response: Response.json({ data: [{ b64_json: Buffer.from("png-bytes").toString("base64") }] }),
+    release: vi.fn(async () => {}),
   });
+  postJsonRequestMock.mockImplementation(pngResponse);
+  postMultipartRequestMock.mockImplementation(pngResponse);
+});
 
-  afterEach(() => {
-    postMultipartRequestMock.mockReset();
+it("forwards count and size overrides on generation requests", async () => {
+  const body = { model: "dall-e-3", prompt: "two landscape variants", n: 2, size: "3840x2160" };
+  const { n: count, ...request } = body;
+  await generate({ ...request, count });
+  expect(mockObjectArg(postJsonRequestMock)).toMatchObject({
+    url: "http://localhost:4000/images/generations",
+    allowPrivateNetwork: true,
   });
+  expect(mockObjectArg(postJsonRequestMock).body).toEqual(body);
+});
 
-  it("forwards count and size overrides on generation requests", async () => {
-    postJsonRequestMock.mockImplementation(pngResponse);
+it.each([1, 2])("uploads %i reference images as multipart", async (count) => {
+  const inputImages = [
+    { buffer: Buffer.from("first"), mimeType: "image/png" },
+    { buffer: Buffer.from("second"), mimeType: "image/jpeg" },
+  ].slice(0, count);
+  await generate({ prompt: "refine the hero", inputImages });
+  // LiteLLM rejects JSON edits; single and multiple uploads use different part names.
+  expect(postJsonRequestMock).not.toHaveBeenCalled();
+  const request = mockObjectArg(postMultipartRequestMock);
+  expect(request.url).toBe("http://localhost:4000/images/edits");
+  const form = request.body as FormData;
+  expect(form.get("model")).toBe("gpt-image-2");
+  expect(form.get("prompt")).toBe("refine the hero");
+  expect(form.getAll(count === 1 ? "image[]" : "image")).toHaveLength(0);
+  const images = form.getAll(count === 1 ? "image" : "image[]");
+  expect(
+    await Promise.all(
+      images.map(async (image) => {
+        assert(image instanceof Blob);
+        return { buffer: Buffer.from(await image.arrayBuffer()), mimeType: image.type };
+      }),
+    ),
+  ).toEqual(inputImages);
+});
 
-    await generate({
-      model: "dall-e-3",
-      prompt: "two landscape variants",
-      count: 2,
-      size: "3840x2160",
-    });
+it.each([
+  ["http://127.255.255.254:4000", true],
+  ["http://[::1]:4000", true],
+  ["http://[0:0:0:0:0:0:0:1]:4000", true],
+  ["http://host.docker.internal:4000", true],
+  ["https://localhost:4000", true],
+  ["https://LOCALHOST:4000", true],
+  ["http://proxy.localhost:4000", true],
+  ["http://192.168.5.10:4000", undefined],
+  ["http://printer.local:4000", undefined],
+  ["http://127.evil.com:4000", undefined],
+  ["http://[::ffff:127.0.0.1]:4000", undefined],
+  ["https://evil.example.com/?target=host.docker.internal", undefined],
+  ["https://evil.example.com/host.docker.internal/foo", undefined],
+  ["https://public-api.openai.com/v1", undefined],
+] as const)("sets automatic private-network policy for %s to %s", async (baseUrl, allow) => {
+  await generate({ cfg: proxyConfig(baseUrl) });
+  expect(mockObjectArg(postJsonRequestMock).allowPrivateNetwork).toBe(allow === true);
+});
 
-    expect(mockObjectArg(postJsonRequestMock).url).toBe("http://localhost:4000/images/generations");
-    expect(mockObjectArg(postJsonRequestMock).allowPrivateNetwork).toBe(true);
-    expect(mockObjectArg(postJsonRequestMock).body).toEqual({
-      model: "dall-e-3",
-      prompt: "two landscape variants",
-      n: 2,
-      size: "3840x2160",
-    });
-  });
-
-  // The multipart edit tests own LiteLLM's part names and upload assembly.
-  // Assert each image's bytes and MIME type, not only the part count.
-  it("routes to the edit endpoint as multipart when input images are provided", async () => {
-    postMultipartRequestMock.mockImplementation(pngResponse);
-
-    await generate({
-      prompt: "refine the hero",
-      inputImages: [
-        {
-          buffer: Buffer.from("fake-input"),
-          mimeType: "image/png",
-        },
-      ],
-    });
-
-    // LiteLLM rejects JSON edits before they reach the upstream provider.
-    expect(postJsonRequestMock).not.toHaveBeenCalled();
-    expect(mockObjectArg(postMultipartRequestMock).url).toBe("http://localhost:4000/images/edits");
-
-    const form = mockObjectArg(postMultipartRequestMock).body as FormData;
-    expect(form.get("model")).toBe("gpt-image-2");
-    expect(form.get("prompt")).toBe("refine the hero");
-    expect(form.getAll("image")).toHaveLength(1);
-    expect(form.getAll("image[]")).toHaveLength(0);
-    expect(form.get("image")).toBeInstanceOf(Blob);
-  });
-
-  it("sends multiple reference images as repeated image[] parts", async () => {
-    postMultipartRequestMock.mockImplementation(pngResponse);
-
-    await generate({
-      prompt: "merge these",
-      inputImages: [
-        { buffer: Buffer.from("first"), mimeType: "image/png" },
-        { buffer: Buffer.from("second"), mimeType: "image/jpeg" },
-      ],
-    });
-
-    const form = mockObjectArg(postMultipartRequestMock).body as FormData;
-    // Sending both part names is an error.
-    expect(form.getAll("image")).toHaveLength(0);
-    const images = form.getAll("image[]");
-    expect(
-      await Promise.all(
-        images.map(async (image) => {
-          assert(image instanceof Blob);
-          return { bytes: Buffer.from(await image.arrayBuffer()), mimeType: image.type };
-        }),
-      ),
-    ).toEqual([
-      { bytes: Buffer.from("first"), mimeType: "image/png" },
-      { bytes: Buffer.from("second"), mimeType: "image/jpeg" },
-    ]);
-  });
-
-  it("auto-allows private network for loopback-style baseUrls", async () => {
-    const cases = [
-      "http://127.255.255.254:4000",
-      "http://[::1]:4000",
-      "http://[0:0:0:0:0:0:0:1]:4000",
-      "http://host.docker.internal:4000",
-      "https://localhost:4000",
-      "https://LOCALHOST:4000",
-      "http://proxy.localhost:4000",
-    ] as const;
-    for (const baseUrl of cases) {
-      await generateAt(baseUrl);
-      expect(
-        mockObjectArg(resolveProviderHttpRequestConfigMock),
-        `expected allowPrivateNetwork=true for ${baseUrl}`,
-      ).toHaveProperty("allowPrivateNetwork", true);
-    }
-  });
-
-  it("requires explicit private-network opt-in for LAN and internal baseUrls", async () => {
-    const cases = [
-      "http://192.168.5.10:4000",
-      "http://printer.local:4000",
-      "http://127.evil.com:4000",
-      "http://[::ffff:127.0.0.1]:4000",
-    ] as const;
-    for (const baseUrl of cases) {
-      await generateAt(baseUrl);
-      expect(
-        mockObjectArg(resolveProviderHttpRequestConfigMock),
-        `expected no automatic allowPrivateNetwork for ${baseUrl}`,
-      ).toHaveProperty("allowPrivateNetwork", undefined);
-      expect(mockObjectArg(postJsonRequestMock).allowPrivateNetwork).toBe(false);
-    }
-  });
-
-  it("honors explicit private-network opt-in for a non-loopback hostname", async () => {
-    await generateAt("http://127.evil.com:4000", { allowPrivateNetwork: true });
-
-    const config = mockObjectArg(resolveProviderHttpRequestConfigMock);
-    expect(config.allowPrivateNetwork).toBeUndefined();
-    expect(config.request).toEqual({ allowPrivateNetwork: true });
-    expect(mockObjectArg(postJsonRequestMock).allowPrivateNetwork).toBe(true);
-  });
-
-  it("does not allow private network for public hosts that embed private strings in the URL", async () => {
-    // Only the parsed hostname can grant the loopback exemption.
-    const cases = [
-      "https://evil.example.com/?target=host.docker.internal",
-      "https://evil.example.com/host.docker.internal/foo",
-      "https://public-api.openai.com/v1",
-    ] as const;
-    for (const baseUrl of cases) {
-      await generateAt(baseUrl);
-      expect(
-        mockObjectArg(resolveProviderHttpRequestConfigMock),
-        `expected allowPrivateNetwork=false for ${baseUrl}`,
-      ).toHaveProperty("allowPrivateNetwork", undefined);
-    }
-  });
+it("honors explicit private-network opt-in for a non-loopback hostname", async () => {
+  await generate({ cfg: proxyConfig("http://127.evil.com:4000", { allowPrivateNetwork: true }) });
+  expect(mockObjectArg(postJsonRequestMock).allowPrivateNetwork).toBe(true);
 });

@@ -12,6 +12,7 @@ import {
   detachActiveEmbeddedRun,
   attachActiveEmbeddedRun,
 } from "../../agents/subagents/registry/subagent-control-native.test-support.js";
+import * as subagentControlSession from "../../agents/subagents/registry/subagent-control-session.js";
 import {
   getLatestLiveSubagentRunByChildSessionKey,
   isSubagentRunQueued,
@@ -36,8 +37,6 @@ import {
 } from "../../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { registerRpcSource } from "../../sessions/session-controller.rpc-sources.js";
-import { bindSessionRowProjection } from "../session-row-projection-access.js";
-import { createSessionRowProjection } from "../session-row-projection.js";
 import { handleChatSend } from "./chat-send-handler.js";
 import {
   createActiveRun,
@@ -365,7 +364,7 @@ it("typed Stop settles child cancellation accepted before its parent guard chang
   }
 });
 
-it("typed Stop cannot acquire a replacement collector after projection readiness yields", async () => {
+it("typed Stop cannot acquire a replacement collector after cancellation preparation yields", async () => {
   const test = createGuardedStopFixture();
   const collector = await test.child("collector");
   expect(isSubagentRunQueued(getLatestLiveSubagentRunByChildSessionKey(collector.sessionKey))).toBe(
@@ -375,17 +374,18 @@ it("typed Stop cannot acquire a replacement collector after projection readiness
   const old = createActiveRun(collector.sessionKey, { ...collector, runId: "old-collector" });
   registerRpcSource("old-collector", old);
   test.context.chatRunState.getOrCreate("old-collector").buffer = "old collector partial";
-  const projection = await createSessionRowProjection({ cfg: test.cfg });
-  await projection.ensureMaterialized();
-  bindSessionRowProjection(test.context, () => projection);
   const entered = createDeferred();
   const resume = createDeferred();
-  const materialize = projection.ensureMaterialized.bind(projection);
-  const readiness = vi.spyOn(projection, "ensureMaterialized").mockImplementationOnce(async () => {
-    entered.resolve();
-    await resume.promise;
-    await materialize();
-  });
+  const prepareSession = subagentControlSession.prepareSubagentKillSession;
+  // Stop no longer waits for display rows; retain the real cancellation read across replacement.
+  const readiness = vi
+    .spyOn(subagentControlSession, "prepareSubagentKillSession")
+    .mockImplementationOnce(async (...args) => {
+      const prepared = await prepareSession(...args);
+      entered.resolve();
+      await resume.promise;
+      return prepared;
+    });
   const pending = test.send(collector.sessionKey, {
     expectedLeafEntryId: null,
     sessionId: collector.sessionId,
@@ -395,7 +395,7 @@ it("typed Stop cannot acquire a replacement collector after projection readiness
       entered.promise,
       pending.then((respond) => {
         throw new Error(
-          `Stop did not reach collector projection readiness: ${JSON.stringify(respond.mock.calls)}`,
+          `Stop did not reach collector cancellation preparation: ${JSON.stringify(respond.mock.calls)}`,
         );
       }),
     ]);
@@ -449,7 +449,6 @@ it("typed Stop cannot acquire a replacement collector after projection readiness
       await pending;
     } finally {
       readiness.mockRestore();
-      projection.dispose();
       for (const runId of ["collector", "collector-descendant"]) {
         releaseSwarmRun(`${runId}-capacity`);
         releaseSwarmRun(runId);

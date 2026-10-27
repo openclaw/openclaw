@@ -1,9 +1,4 @@
 import {
-  createMessageReceiveContext,
-  type MessageAckPolicy,
-  type MessageReceiveContext,
-} from "openclaw/plugin-sdk/channel-outbound";
-import {
   buildTelegramUpdateKey,
   createTelegramUpdateDedupe,
   resolveTelegramUpdateId,
@@ -15,7 +10,6 @@ type PersistUpdateId = (updateId: number) => void | Promise<void>;
 type TelegramUpdateTrackerOptions = {
   initialUpdateId?: number | null;
   persistenceFloorUpdateId?: number | null;
-  ackPolicy?: MessageAckPolicy;
   onAcceptedUpdateId?: PersistUpdateId;
   onPersistError?: (error: unknown) => void;
   onSkip?: (key: string) => void;
@@ -24,7 +18,6 @@ type TelegramUpdateTrackerOptions = {
 type AcceptedTelegramUpdate = {
   key?: string;
   updateId?: number;
-  receiveContext?: MessageReceiveContext<TelegramUpdateKeyContext>;
 };
 
 type BeginUpdateResult =
@@ -54,7 +47,6 @@ export function createTelegramUpdateTracker(options: TelegramUpdateTrackerOption
     typeof options.persistenceFloorUpdateId === "number"
       ? options.persistenceFloorUpdateId
       : initialUpdateId;
-  const ackPolicy = options.ackPolicy ?? "after_receive_record";
   const recentUpdates = createTelegramUpdateDedupe();
   const activeHandledUpdateKeys = new Map<string, boolean>();
   const pendingUpdateIds = new Set<number>();
@@ -117,29 +109,6 @@ export function createTelegramUpdateTracker(options: TelegramUpdateTrackerOption
     }
   };
 
-  const requestPersistAcceptedUpdateId = (updateId: number) => {
-    if (typeof options.onAcceptedUpdateId !== "function") {
-      return;
-    }
-    if (
-      highestPersistenceRequestedUpdateId !== null &&
-      updateId <= highestPersistenceRequestedUpdateId
-    ) {
-      return;
-    }
-    highestPersistenceRequestedUpdateId = updateId;
-    persistTargetUpdateId = updateId;
-    void drainPersistQueue().catch(reportPersistError);
-  };
-
-  const acceptUpdateId = (updateId: number) => {
-    acceptedUpdateIds.add(updateId);
-    if (highestAcceptedUpdateId === null || updateId > highestAcceptedUpdateId) {
-      highestAcceptedUpdateId = updateId;
-    }
-    pruneAcceptedUpdateIds();
-  };
-
   function resolveSafeCompletedUpdateId() {
     if (highestCompletedUpdateId === null) {
       return null;
@@ -158,25 +127,14 @@ export function createTelegramUpdateTracker(options: TelegramUpdateTrackerOption
     return safeCompletedUpdateId;
   }
 
-  const ackUpdateAfterStage = (
-    receiveContext: MessageReceiveContext<TelegramUpdateKeyContext> | undefined,
-    stage: "receive_record" | "agent_dispatch",
-  ) => {
-    if (!receiveContext?.shouldAckAfter(stage)) {
-      return;
-    }
-    void receiveContext.ack().catch(reportPersistError);
-  };
-
   const beginUpdate = (ctx: TelegramUpdateKeyContext): BeginUpdateResult => {
     const updateId = resolveTelegramUpdateId(ctx);
     const updateKey = buildTelegramUpdateKey(ctx);
     if (typeof updateId === "number") {
-      if (failedUpdateIds.has(updateId)) {
-        failedUpdateIds.delete(updateId);
-      } else if (
-        (initialUpdateId !== null && updateId <= initialUpdateId) ||
-        acceptedUpdateIds.has(updateId)
+      if (
+        !failedUpdateIds.delete(updateId) &&
+        ((initialUpdateId !== null && updateId <= initialUpdateId) ||
+          acceptedUpdateIds.has(updateId))
       ) {
         // Pending middleware is not a terminal processing fact for a spool retry.
         options.onSkip?.(`update:${updateId}`);
@@ -197,31 +155,19 @@ export function createTelegramUpdateTracker(options: TelegramUpdateTrackerOption
       }
       activeHandledUpdateKeys.set(updateKey, false);
     }
-    let receiveContext: MessageReceiveContext<TelegramUpdateKeyContext> | undefined;
     if (typeof updateId === "number") {
       pendingUpdateIds.add(updateId);
-      acceptUpdateId(updateId);
-      receiveContext = createMessageReceiveContext({
-        id: updateKey ?? `telegram:update:${updateId}`,
-        channel: "telegram",
-        message: ctx,
-        ackPolicy,
-        onAck: async () => {
-          const persistUpdateId =
-            ackPolicy === "after_agent_dispatch" ? resolveSafeCompletedUpdateId() : updateId;
-          if (persistUpdateId !== null) {
-            requestPersistAcceptedUpdateId(persistUpdateId);
-          }
-        },
-      });
-      ackUpdateAfterStage(receiveContext, "receive_record");
+      acceptedUpdateIds.add(updateId);
+      if (highestAcceptedUpdateId === null || updateId > highestAcceptedUpdateId) {
+        highestAcceptedUpdateId = updateId;
+      }
+      pruneAcceptedUpdateIds();
     }
     return {
       accepted: true,
       update: {
         ...(updateKey ? { key: updateKey } : {}),
         ...(typeof updateId === "number" ? { updateId } : {}),
-        ...(receiveContext ? { receiveContext } : {}),
       },
     };
   };
@@ -240,12 +186,22 @@ export function createTelegramUpdateTracker(options: TelegramUpdateTrackerOption
         if (highestCompletedUpdateId === null || update.updateId > highestCompletedUpdateId) {
           highestCompletedUpdateId = update.updateId;
         }
-        ackUpdateAfterStage(update.receiveContext, "agent_dispatch");
+        const persistUpdateId = resolveSafeCompletedUpdateId();
+        if (persistUpdateId !== null) {
+          if (
+            typeof options.onAcceptedUpdateId === "function" &&
+            !(
+              highestPersistenceRequestedUpdateId !== null &&
+              persistUpdateId <= highestPersistenceRequestedUpdateId
+            )
+          ) {
+            highestPersistenceRequestedUpdateId = persistUpdateId;
+            persistTargetUpdateId = persistUpdateId;
+            void drainPersistQueue().catch(reportPersistError);
+          }
+        }
       } else {
         failedUpdateIds.add(update.updateId);
-        void update.receiveContext
-          ?.nack(new Error("Telegram update handler did not complete"))
-          .catch(reportPersistError);
       }
       pruneAcceptedUpdateIds();
     }

@@ -1,4 +1,5 @@
 import { readSessionMethodAccess } from "../lib/session-method-access.ts";
+import type { ShellNavigationCapability } from "./app-shell-navigation.ts";
 import type { ApplicationContext } from "./context.ts";
 import type { ControlUiReadinessOutlet } from "./control-ui-readiness.ts";
 
@@ -8,7 +9,7 @@ export interface ShellNewSessionHost extends Pick<HTMLElement, "isConnected"> {
   readonly onboardingMode: boolean;
   navDrawerElement?: HTMLElement;
   pendingNativeNewSession: boolean;
-  openNewSession(agentId: string): void;
+  readonly shellNavigation: Pick<ShellNavigationCapability, "openNewSession">;
 }
 
 /** Native startup may queue navigation; a keyboard action belongs to the ready surface only. */
@@ -41,7 +42,7 @@ export function openShellNewSession(
   ) {
     return false;
   }
-  host.openNewSession(context.agentSelection.state.selectedId ?? "");
+  host.shellNavigation.openNewSession(context.agentSelection.state.selectedId ?? "");
   if (source === "shortcut") {
     host.routeOutlet?.renderedElement?.("openclaw-new-session-page")?.focusComposer();
   }

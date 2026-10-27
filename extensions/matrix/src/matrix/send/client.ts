@@ -11,14 +11,9 @@ type MatrixControlClientOptions = Omit<MatrixRuntimeClientOptions, "readiness">;
 const loadMatrixSendClientRuntime = createLazyRuntimeModule(() => import("../client-bootstrap.js"));
 
 export function resolveMediaMaxBytes(
-  accountId?: string | null,
-  cfg?: CoreConfig,
+  accountId: string | null | undefined,
+  cfg: CoreConfig,
 ): number | undefined {
-  if (!cfg) {
-    throw new Error(
-      "Matrix media limits requires a resolved runtime config. Load and resolve config at the command or gateway boundary, then pass cfg through the runtime path.",
-    );
-  }
   const matrixCfg = resolveMatrixAccountConfig({ cfg, accountId });
   const mediaMaxMb = matrixCfg.mediaMaxMb;
   // Only a positive value is a cap, matching CommonMediaMaxMbSchema. `0` or a negative
@@ -61,9 +56,6 @@ export async function withResolvedMatrixSendClient<T>(
         () => run(client, abortSignal),
       );
     },
-    // Started one-off send clients should flush sync/crypto state before CLI
-    // shutdown paths can tear down the process.
-    "persist",
   );
 }
 
@@ -83,11 +75,10 @@ export async function withResolvedMatrixControlClient<T>(
 async function withResolvedMatrixClient<T>(
   opts: MatrixControlClientOptions & { readiness: "started" | "none" },
   run: (client: MatrixClient, abortSignal?: AbortSignal) => Promise<T>,
-  shutdownBehavior?: "persist",
 ): Promise<T> {
   if (opts.client) {
     return await run(opts.client);
   }
   const { withResolvedRuntimeMatrixClient } = await loadMatrixSendClientRuntime();
-  return await withResolvedRuntimeMatrixClient(opts, run, shutdownBehavior);
+  return await withResolvedRuntimeMatrixClient(opts, run);
 }

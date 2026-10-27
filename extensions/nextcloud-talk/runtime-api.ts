@@ -17,7 +17,6 @@ export {
   warnMissingProviderGroupPolicyFallbackOnce,
 } from "openclaw/plugin-sdk/runtime-group-policy";
 export type { OutboundReplyPayload } from "openclaw/plugin-sdk/reply-payload";
-export { deliverFormattedTextWithAttachments } from "openclaw/plugin-sdk/reply-payload";
 export type { PluginRuntime } from "openclaw/plugin-sdk/runtime-store";
 export type { RuntimeEnv } from "openclaw/plugin-sdk/runtime";
 export { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";

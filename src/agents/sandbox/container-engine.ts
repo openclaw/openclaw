@@ -18,6 +18,8 @@ export type SandboxContainerEngine = {
   command: "docker" | "podman";
   displayName: "Docker" | "Podman";
   globalArgs?: readonly string[];
+  /** A captured transport must not follow later ambient Docker context changes. */
+  baseEnv?: NodeJS.ProcessEnv;
 };
 
 export type SandboxContainerEngineTarget = {
@@ -54,6 +56,7 @@ export async function execContainerRaw(
   let result;
   try {
     result = await spawnCommand([engine.command, ...(engine.globalArgs ?? []), ...args], {
+      baseEnv: engine.baseEnv,
       cancelSignal: opts?.signal,
       encoding: "buffer",
       input: opts?.input ?? Buffer.alloc(0),

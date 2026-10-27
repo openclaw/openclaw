@@ -1,9 +1,7 @@
-export type UpdateReportPreCreateGuardReason = "authority" | "reservation" | "stale" | "validation";
-
 export class UpdateReportPreCreateGuardError extends Error {
   constructor(
     message: string,
-    readonly reason: UpdateReportPreCreateGuardReason,
+    readonly reason: "authority" | "reservation" | "stale" | "validation",
     options?: ErrorOptions,
   ) {
     super(message, options);

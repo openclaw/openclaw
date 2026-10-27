@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { CodeModeExecutorContinuation } from "./code-mode-executor-types.js";
 import { runCodeModeExecutor } from "./code-mode-executor.js";
+import { createCodeModeExecutorConfig } from "./code-mode-executor.test-support.js";
 import { EMPTY_CODE_MODE_OUTPUT } from "./code-mode-json.js";
 
 const mocks = vi.hoisted(() => ({ resolve: vi.fn(), execute: vi.fn() }));
@@ -8,13 +9,7 @@ vi.mock("../plugins/code-mode-executor.js", () => ({
   resolvePluginCodeModeExecutor: mocks.resolve,
 }));
 
-const config = {
-  timeoutMs: 1_000,
-  memoryLimitBytes: 64 * 1024 * 1024,
-  maxOutputBytes: 65_536,
-  maxSnapshotBytes: 10 * 1024 * 1024,
-  maxPendingToolCalls: 16,
-};
+const config = createCodeModeExecutorConfig();
 const input = {
   kind: "exec" as const,
   source: "return 1;",

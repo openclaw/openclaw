@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { createTestModelDefinition } from "../commands/test-runtime-config-helpers.js";
 import type { ModelDefinitionConfig } from "../config/types.models.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { buildModelsListResult } from "../gateway/server-methods/models-list-result.js";
@@ -10,15 +11,7 @@ import { createPluginMetadataSnapshotFixture } from "../plugins/plugin-metadata.
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 
 function configuredModel(name: string): ModelDefinitionConfig {
-  return {
-    id: "choice",
-    name,
-    reasoning: false,
-    input: ["text"],
-    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-    contextWindow: 32768,
-    maxTokens: 4096,
-  };
+  return createTestModelDefinition("choice", { name, contextWindow: 32768 });
 }
 
 describe("terminal model catalog availability", () => {

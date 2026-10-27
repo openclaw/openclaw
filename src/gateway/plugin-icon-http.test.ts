@@ -7,6 +7,7 @@ import { syncBuiltinESMExports } from "node:module";
 import type { AddressInfo } from "node:net";
 import path from "node:path";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { listenLoopback } from "../../test/helpers/gateway-integration-fixtures.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import * as boundaryFileRead from "../infra/boundary-file-read.js";
 import { createDeferredCore } from "../shared/deferred.js";
@@ -23,11 +24,6 @@ const mocks = vi.hoisted(() => ({
   resolveCatalogIconUrl: vi.fn(),
   resolveIconSource: vi.fn(),
   resolveActivityIconSource: vi.fn(),
-  fetchPluginIconUrls: vi.fn(),
-}));
-
-vi.mock("../infra/clawhub-plugin-icons.js", () => ({
-  fetchClawHubPluginIconUrls: (...args: unknown[]) => mocks.fetchPluginIconUrls(...args),
 }));
 
 vi.mock("./http-utils.js", () => ({
@@ -134,13 +130,7 @@ beforeAll(async () => {
       })
       .catch(() => finishFailedGatewayHttpResponse(res));
   });
-  await new Promise<void>((resolve, reject) => {
-    server.once("error", reject);
-    server.listen(0, "127.0.0.1", () => {
-      port = (server.address() as AddressInfo).port;
-      resolve();
-    });
-  });
+  port = Number(new URL(await listenLoopback(server)).port);
 });
 
 afterAll(async () => {
@@ -152,8 +142,6 @@ afterAll(async () => {
 beforeEach(() => {
   clearPluginIconCacheForTest();
   vi.clearAllMocks();
-  mocks.fetchPluginIconUrls.mockReset();
-  mocks.fetchPluginIconUrls.mockResolvedValue([]);
   writeFileSync(localIconPath, PNG_BYTES);
   writeFileSync(activityIconPath, ACTIVITY_SVG);
   mocks.resolveActivityIconSource.mockReset();
@@ -640,56 +628,6 @@ describe("Control UI plugin and catalog icon routes", () => {
         syncBuiltinESMExports();
       }
     }
-  });
-
-  it.each(["package", "publisher", "missing"])(
-    "tries local, remote package, then publisher images and caches the successful %s result",
-    async (outcome) => {
-      writeFileSync(localIconPath, "invalid local image");
-      const source = {
-        kind: "clawhub",
-        baseUrl: "https://clawhub.ai",
-        packageName: "@acme/calendar",
-      };
-      mocks.resolveIconSource.mockResolvedValue([
-        { kind: "file", path: localIconPath, rootPath: iconFixtureDir },
-        source,
-      ]);
-      const packageUrl = "https://cdn.example.test/package.png";
-      const publisherUrl = "https://cdn.example.test/publisher.png";
-      mocks.fetchPluginIconUrls.mockResolvedValue([packageUrl, publisherUrl]);
-      mocks.readRemoteMediaBuffer.mockImplementation(async ({ url }) => {
-        if (outcome === "missing" || (outcome === "publisher" && url === packageUrl)) {
-          throw new Error("Image unavailable");
-        }
-        return { buffer: PNG_BYTES, contentType: "image/png" };
-      });
-      const response = await request("/__openclaw__/plugin-icon/calendar");
-      expect(response.status).toBe(outcome === "missing" ? 404 : 200);
-      expect(mocks.fetchPluginIconUrls).toHaveBeenCalledExactlyOnceWith({
-        ...source,
-        skipAuth: true,
-        timeoutMs: PLUGIN_ICON_REQUEST_TIMEOUT_MS,
-      });
-      expect(mocks.readRemoteMediaBuffer.mock.calls.map(([params]) => params.url)).toEqual(
-        outcome === "package" ? [packageUrl] : [packageUrl, publisherUrl],
-      );
-      if (outcome !== "missing") {
-        const cached = await request("/__openclaw__/plugin-icon/calendar", { method: "HEAD" });
-        expect(cached.status).toBe(200);
-        expect(cached.headers.get("etag")).toBe(response.headers.get("etag"));
-        expect(mocks.fetchPluginIconUrls).toHaveBeenCalledOnce();
-      }
-    },
-  );
-
-  it("does not read remote metadata when the local package icon succeeds", async () => {
-    mocks.resolveIconSource.mockResolvedValue([
-      { kind: "file", path: localIconPath, rootPath: iconFixtureDir },
-      { kind: "clawhub", baseUrl: "https://clawhub.ai", packageName: "@acme/calendar" },
-    ]);
-    expect((await request("/__openclaw__/plugin-icon/calendar")).status).toBe(200);
-    expect(mocks.fetchPluginIconUrls).not.toHaveBeenCalled();
   });
 
   it("rejects a package icon redirected outside its package after discovery", async () => {

@@ -1,5 +1,6 @@
 import { Type, type Static } from "typebox";
-import { lazyCompile } from "../protocol-validator.js";
+import * as Checks from "../compiled/protocol.generated/schema-web-search.js";
+import { createProtocolValidator } from "../protocol-validator.js";
 import { closedObject } from "./closed-object.js";
 import { PluginCredentialDescriptorSchema } from "./plugin-credentials.js";
 import { stringLiteralUnion } from "./string-literal-union.js";
@@ -84,5 +85,11 @@ export type WebSearchStatusParams = Static<typeof WebSearchStatusParamsSchema>;
 export type WebSearchStatusResult = Static<typeof WebSearchStatusResultSchema>;
 export type WebSearchTestParams = Static<typeof WebSearchTestParamsSchema>;
 export type WebSearchTestResult = Static<typeof WebSearchTestResultSchema>;
-export const validateWebSearchStatusParams = lazyCompile(WebSearchStatusParamsSchema);
-export const validateWebSearchTestParams = lazyCompile(WebSearchTestParamsSchema);
+export const validateWebSearchStatusParams = createProtocolValidator(
+  WebSearchStatusParamsSchema,
+  Checks.isWebSearchStatusParams,
+);
+export const validateWebSearchTestParams = createProtocolValidator(
+  WebSearchTestParamsSchema,
+  Checks.isWebSearchTestParams,
+);

@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import {
   readOperatorToolGatewayAuthority,
   runWithOperatorToolGatewayAuthority,
@@ -8,41 +8,35 @@ import {
   reserveSessionControllerSource,
   retireSessionControllerInput,
 } from "../../../sessions/session-controller.mailbox.js";
-// Completion predicates read recorded facts, not rendered placeholder wording.
 import { createDeferredCore } from "../../../shared/deferred.js";
 import { createAdmittedRunOperatorAuthority } from "../../admitted-run-context.js";
 import { hasFailedSubagentNoOutputCompletion } from "../../internal-event-contract.js";
 import { runAnnounceAgentCall } from "./subagent-announce-completion-delivery.js";
 import { setSubagentAnnounceDeliveryDepsForTest } from "./subagent-announce-overrides.test-support.js";
+import type { dispatchGatewayMethodInProcess } from "./subagent-announce.runtime.js";
 
-const failedChild = { type: "task_completion", source: "subagent", status: "error" } as const;
+afterEach(() => setSubagentAnnounceDeliveryDepsForTest());
+const dispatch = vi.fn<typeof dispatchGatewayMethodInProcess>();
+beforeEach(() => {
+  dispatch.mockReset().mockResolvedValue({ status: "ok" });
+  setSubagentAnnounceDeliveryDepsForTest({ dispatchGatewayMethodInProcess: dispatch });
+});
+const announce = (overrides: Partial<Parameters<typeof runAnnounceAgentCall>[0]> = {}) =>
+  runAnnounceAgentCall({ agentParams: {}, isExecutionAllowed: () => true, ...overrides });
 
 it("does not dispatch a private handoff after its caller has already cancelled", async () => {
   const caller = new AbortController();
   caller.abort(new Error("requester stopped"));
-  const dispatch = vi.fn(async () => {
-    throw new Error("cancelled dispatch must not start");
-  });
-  setSubagentAnnounceDeliveryDepsForTest({ dispatchGatewayMethodInProcess: dispatch });
-  try {
-    await expect(
-      runAnnounceAgentCall({
-        agentParams: {},
-        privateCompletion: true,
-        signal: caller.signal,
-        isExecutionAllowed: () => true,
-      }),
-    ).rejects.toThrow("requester stopped");
-    expect(dispatch).not.toHaveBeenCalled();
-  } finally {
-    setSubagentAnnounceDeliveryDepsForTest();
-  }
+  await expect(announce({ privateCompletion: true, signal: caller.signal })).rejects.toThrow(
+    "requester stopped",
+  );
+  expect(dispatch).not.toHaveBeenCalled();
 });
 
 it("keeps genuine cancellation attached after requester execution starts", async () => {
   const caller = new AbortController();
   const started = vi.fn();
-  const dispatch = vi.fn(async (_method, _params, options) => {
+  dispatch.mockImplementation(async (_method, _params, options) => {
     options?.onExecutionStarted?.();
     return await new Promise((_resolve, reject) => {
       options?.signal?.addEventListener("abort", () => reject(options.signal?.reason as Error), {
@@ -50,20 +44,10 @@ it("keeps genuine cancellation attached after requester execution starts", async
       });
     });
   });
-  setSubagentAnnounceDeliveryDepsForTest({ dispatchGatewayMethodInProcess: dispatch });
-  try {
-    const delivery = runAnnounceAgentCall({
-      agentParams: {},
-      signal: caller.signal,
-      onExecutionStarted: started,
-      isExecutionAllowed: () => true,
-    });
-    expect(started).toHaveBeenCalledOnce();
-    caller.abort(new Error("requester stopped"));
-    await expect(delivery).rejects.toThrow("requester stopped");
-  } finally {
-    setSubagentAnnounceDeliveryDepsForTest();
-  }
+  const delivery = announce({ signal: caller.signal, onExecutionStarted: started });
+  expect(started).toHaveBeenCalledOnce();
+  caller.abort(new Error("requester stopped"));
+  await expect(delivery).rejects.toThrow("requester stopped");
 });
 
 it.each([
@@ -96,12 +80,10 @@ it.each([
         },
       }),
     });
-    const observedAuthority = vi.fn();
-    const dispatch = vi.fn(async () => {
-      observedAuthority(readOperatorToolGatewayAuthority()?.operatorRunAuthority);
+    dispatch.mockImplementation(async () => {
+      expect(readOperatorToolGatewayAuthority()?.operatorRunAuthority).toBeUndefined();
       return { status: "ok" };
     });
-    setSubagentAnnounceDeliveryDepsForTest({ dispatchGatewayMethodInProcess: dispatch });
     try {
       const delivery = runWithOperatorToolGatewayAuthority(
         {
@@ -109,23 +91,16 @@ it.each([
           scopes: ambientAuthority.scopes,
           signal: new AbortController().signal,
         },
-        () =>
-          runAnnounceAgentCall({
-            agentParams: {},
-            controllerInput: input,
-            isExecutionAllowed: () => true,
-          }),
+        () => announce({ controllerInput: input }),
       );
       if (current) {
         await expect(delivery).resolves.toEqual({ status: "ok" });
-        expect(observedAuthority).toHaveBeenCalledWith(undefined);
       } else {
         await expect(delivery).rejects.toThrow("continuation owner retired");
         expect(dispatch).not.toHaveBeenCalled();
       }
       expect(input.continuationCaller?.deliveryRoute).toBe(route);
     } finally {
-      setSubagentAnnounceDeliveryDepsForTest();
       retireSessionControllerInput(input);
       await input.settlement.promise;
     }
@@ -139,11 +114,8 @@ it.each(["commit", "failure", "revocation"] as const)(
     const release = createDeferredCore();
     const failed = new Error("dispatch receipt unavailable");
     let current = true;
-    const dispatch = vi.fn(async () => ({ status: "ok" }));
-    setSubagentAnnounceDeliveryDepsForTest({ dispatchGatewayMethodInProcess: dispatch });
     try {
-      const delivery = runAnnounceAgentCall({
-        agentParams: {},
+      const delivery = announce({
         isExecutionAllowed: () => current,
         onBeforeDispatch: async () => {
           entered.resolve();
@@ -159,50 +131,97 @@ it.each(["commit", "failure", "revocation"] as const)(
       release.resolve();
       if (outcome === "commit") {
         await expect(delivery).resolves.toEqual({ status: "ok" });
-        expect(dispatch).toHaveBeenCalledOnce();
       } else if (outcome === "failure") {
         await expect(delivery).rejects.toBe(failed);
-        expect(dispatch).not.toHaveBeenCalled();
       } else {
         await expect(delivery).rejects.toThrow("subagent source lifecycle changed");
-        expect(dispatch).not.toHaveBeenCalled();
       }
+      expect(dispatch).toHaveBeenCalledTimes(outcome === "commit" ? 1 : 0);
     } finally {
       release.resolve();
-      setSubagentAnnounceDeliveryDepsForTest();
     }
   },
 );
 
-describe("hasFailedSubagentNoOutputCompletion", () => {
-  it.each([
-    [
-      "recorded no visible result",
-      { ...failedChild, result: "(no output)", noVisibleResult: true },
-      true,
-    ],
-    [
-      "reworded placeholder",
-      { ...failedChild, result: "(nothing to report)", noVisibleResult: true },
-      true,
-    ],
-    ["real result resembling placeholder", { ...failedChild, result: "(no output)" }, false],
-    [
-      "successful child",
-      { ...failedChild, status: "ok", result: "(no output)", noVisibleResult: true },
-      false,
-    ],
-    [
-      "non-subagent source",
-      { ...failedChild, source: "image_generation", result: "(no output)", noVisibleResult: true },
-      false,
-    ],
-  ] as const)("classifies %s from the recorded result fact", (_label, event, expected) => {
-    expect(hasFailedSubagentNoOutputCompletion([event])).toBe(expected);
-  });
-
-  it("reports nothing for an absent or empty event list", () => {
-    expect(hasFailedSubagentNoOutputCompletion(undefined)).toBe(false);
-    expect(hasFailedSubagentNoOutputCompletion([])).toBe(false);
-  });
+it.each([
+  ["absent", { noVisibleResult: true }, true],
+  ["reworded", { noVisibleResult: true, result: "(nothing to report)" }, true],
+  ["visible placeholder", {}, false],
+  ["success", { noVisibleResult: true, status: "ok" }, false],
+  ["other source", { noVisibleResult: true, source: "image_generation" }, false],
+] as const)("classifies %s completion from the recorded fact", (_label, overrides, expected) => {
+  const event = {
+    type: "task_completion",
+    source: "subagent",
+    status: "error",
+    result: "(no output)",
+    ...overrides,
+  } as const;
+  expect(hasFailedSubagentNoOutputCompletion([event])).toBe(expected);
 });
+
+it("reports nothing for an absent or empty event list", () => {
+  expect(hasFailedSubagentNoOutputCompletion(undefined)).toBe(false);
+  expect(hasFailedSubagentNoOutputCompletion([])).toBe(false);
+});
+
+it.each(["deadline", "admission", "execution"] as const)(
+  "publishes a materialized %s abort reason with unchanged failure identity",
+  async (trigger) => {
+    vi.useFakeTimers();
+    const prepareStackTrace = Object.getOwnPropertyDescriptor(Error, "prepareStackTrace");
+    const formatted = new Set<Error>();
+    Error.prepareStackTrace = (error) => {
+      formatted.add(error);
+      return `${error.name}: ${error.message}`;
+    };
+    let current = true;
+    let signal: AbortSignal | undefined;
+    let formattedAtAbort = false;
+    dispatch.mockImplementation(async (_method, _params, options) => {
+      signal = options?.signal;
+      signal?.addEventListener("abort", () => {
+        formattedAtAbort = formatted.has(signal?.reason);
+      });
+      if (trigger === "deadline") {
+        return new Promise((_resolve, reject) => {
+          signal?.addEventListener("abort", () => reject(signal?.reason as Error), { once: true });
+        });
+      }
+      current = false;
+      if (trigger === "admission") {
+        options?.sessionMutationCommitGuard?.();
+      } else {
+        options?.onExecutionStarted?.();
+      }
+      return undefined;
+    });
+    try {
+      const result = announce({
+        timeoutMs: 10,
+        isExecutionAllowed: () => current,
+        isSourceSessionAdmissionAllowed: () => current,
+      }).catch((error: unknown) => error);
+      if (trigger === "deadline") {
+        await vi.advanceTimersByTimeAsync(10);
+      }
+      const failure = await result;
+      expect(formattedAtAbort).toBe(true);
+      expect(signal?.aborted).toBe(true);
+      expect(failure).toBe(signal?.reason);
+      expect(failure).toBeInstanceOf(Error);
+      expect((failure as Error).message).toBe(
+        trigger === "deadline"
+          ? "gateway request timeout for agent"
+          : "subagent source lifecycle changed before completion delivery",
+      );
+    } finally {
+      if (prepareStackTrace) {
+        Object.defineProperty(Error, "prepareStackTrace", prepareStackTrace);
+      } else {
+        Reflect.deleteProperty(Error, "prepareStackTrace");
+      }
+      vi.useRealTimers();
+    }
+  },
+);

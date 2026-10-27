@@ -19,7 +19,7 @@ export function createCodexHostToolSurface(
     "hostCapabilities" | "cronCreatorAuthorityCapability" | "runId"
   >,
   options: OpenClawCodingToolsOptions,
-  bindingOptions: Readonly<{ cwd: string }>,
+  bindingOptions: Readonly<{ cwd: string; nativeLocalExecution?: true }>,
   resolveCronCreatorToolAuthority?: Parameters<
     typeof runWithCronCreatorAuthorityCapabilityResolver
   >[0]["resolve"],

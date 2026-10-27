@@ -24,7 +24,12 @@ const native = vi.hoisted(() => ({
   running: vi.fn<typeof import("./schtasks-runtime.js").waitForScheduledTaskRunningEvidence>(),
   stop: vi.fn<typeof import("./schtasks-control.js").stopRegisteredScheduledTask>(),
 }));
-vi.mock("./schtasks-exec.js", () => ({ execSchtasks: native.exec }));
+// mock-isolation: Install recovery changes only the task registration modeled by this fixture.
+vi.mock("./schtasks-exec.js", () => ({
+  execSchtasks: native.exec,
+  execScheduledTaskEnabledChange: (taskName: string, enabled: boolean) =>
+    native.exec(["/Change", "/TN", taskName, enabled ? "/ENABLE" : "/DISABLE"]),
+}));
 vi.mock("./schtasks-control.js", async (original) => ({
   ...(await original<typeof import("./schtasks-control.js")>()),
   runScheduledTaskOrThrow: native.run,

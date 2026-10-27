@@ -83,10 +83,7 @@ it("recovers released numeric restore journals and refuses replacement files", a
       }
       return { directory, file, journal, ...scenario };
     }
-    const cases: Awaited<ReturnType<typeof makeCase>>[] = [];
-    for (const scenario of scenarios) {
-      cases.push(await makeCase(scenario));
-    }
+    const cases = await Promise.all(scenarios.map(makeCase));
     // Bun on Windows releases retained SQLite resources when the owning process exits.
     const result = await fixture.track(
       runNodeScript(

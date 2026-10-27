@@ -1,6 +1,7 @@
 import { flattenMarkdownToPlainText } from "@openclaw/normalization-core/markdown-plain-text";
 import { asOptionalRecord as readRecord } from "@openclaw/normalization-core/record-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
+import { isHeartbeatOkResponse } from "../auto-reply/heartbeat-filter.js";
 import type { SessionPreviewItem } from "../config/sessions/session-history-read.types.js";
 import { projectAssistantDisplayContent } from "../shared/assistant-display-content.js";
 import { stripEnvelope } from "../shared/chat-envelope.js";
@@ -9,6 +10,8 @@ import {
   isSilentAssistantTranscriptMessage,
 } from "../shared/chat-message-content.js";
 import {
+  asRoleContentMessage,
+  isProjectedForwardedMessage,
   stripAssistantMediaDirectivesForDisplay,
   takeAssistantManagedMediaUrlsForDisplay,
 } from "./chat-display-projection.helpers.js";
@@ -16,11 +19,6 @@ import { prepareAssistantHistoryMessage } from "./chat-display-projection.saniti
 
 const SESSION_LAST_MESSAGE_PREVIEW_DEFAULT_CHARS = 240;
 const SESSION_DISPLAY_PROJECTION_MAX_CHARS = 800;
-
-type SessionDisplayProjection = {
-  role: "user" | "assistant";
-  text: string;
-};
 
 type SessionDisplayProjectionOptions = {
   flattenMarkdown?: boolean;
@@ -54,7 +52,10 @@ function extractUserText(message: Record<string, unknown>): string | undefined {
 export function projectSessionDisplayMessage(
   message: unknown,
   options: SessionDisplayProjectionOptions = {},
-): SessionDisplayProjection | null {
+): {
+  role: "user" | "assistant";
+  text: string;
+} | null {
   const entry = readRecord(prepareAssistantHistoryMessage(message));
   if (!entry || (options.view !== "model-context" && entry.display === false)) {
     return null;
@@ -71,6 +72,14 @@ export function projectSessionDisplayMessage(
     role === "assistant" ? extractAssistantPhaseText(projectedEntry) : extractUserText(entry);
   let text = extracted;
   if (text && role === "assistant" && options.view !== "model-context") {
+    const roleContent = asRoleContentMessage(projectedEntry);
+    if (
+      roleContent &&
+      !isProjectedForwardedMessage(roleContent) &&
+      isHeartbeatOkResponse(roleContent)
+    ) {
+      return null;
+    }
     text = stripAssistantMediaDirectivesForDisplay(
       text,
       takeAssistantManagedMediaUrlsForDisplay(projectedEntry, role).urls,

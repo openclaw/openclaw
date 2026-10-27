@@ -61,8 +61,8 @@ export class WorkerConnectionInterruptedError extends Error {
 }
 
 export class WorkerConnectionStoppedError extends Error {
-  constructor(message = "worker connection stopped") {
-    super(message);
+  constructor() {
+    super("worker connection stopped");
     this.name = "WorkerConnectionStoppedError";
   }
 }

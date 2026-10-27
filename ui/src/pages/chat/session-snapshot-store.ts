@@ -1,10 +1,9 @@
-import { readSessionMessageSequence } from "@openclaw/gateway-client/browser";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { requestResult, transactionComplete } from "../../lib/chat/control-ui-database.runtime.ts";
-import { removePairingQrContent } from "../../lib/chat/pairing-qr.ts";
 import {
   isChatTranscriptMetadata,
   isProgressCard,
+  isMessageReactionSummary,
 } from "../../lib/protocol-validators.generated/transcript.js";
 import { listen } from "../../lib/reactive/listener.ts";
 import * as json from "../../lib/snapshot-json.ts";
@@ -14,10 +13,17 @@ import {
   setSessionCacheValue,
 } from "./session-cache.ts";
 import {
+  MAX_CACHED_CHAT_SNAPSHOT_WEIGHT,
   MAX_CACHED_CHAT_WEIGHT,
   type ChatCacheObserver,
   type ChatMessageCache,
+  type ChatSessionSnapshot,
 } from "./session-message-cache.ts";
+import {
+  accessSidebarSnapshot,
+  sidebarRecordBytes,
+  type SidebarRecord,
+} from "./session-sidebar-snapshot.ts";
 import {
   isPersistableChatSnapshotKey,
   CHAT_SNAPSHOT_METADATA_STORE_NAME,
@@ -26,7 +32,6 @@ import {
   openSessionSnapshotDatabase,
   readStoredChatSnapshotRecord,
   resetSessionSnapshotDatabase,
-  SIDEBAR_SNAPSHOT_STORE_NAME,
 } from "./session-snapshot-database.ts";
 import {
   snapshotStoreGeneration,
@@ -39,11 +44,15 @@ import { deleteStoredChatSnapshot } from "./session-snapshot-invalidation.ts";
 import {
   consumePrewarmedChatSnapshot,
   discardPrewarmedChatSnapshot,
+  loadChatHistoryStateValidator,
   peekPrewarmedChatSnapshot,
+  prewarmedHistoryStateValidator,
+  readSharedPrewarm,
 } from "./session-snapshot-prewarm.ts";
-import type { ChatSessionSnapshot } from "./session-snapshot-types.ts";
-const CHAT_SNAPSHOT_PROJECTION_VERSION = 3;
-const CHAT_SNAPSHOT_MESSAGE_LIMIT = 80;
+import {
+  CHAT_SNAPSHOT_PROJECTION_VERSION,
+  createSnapshotRecord,
+} from "./session-snapshot-projection.ts";
 const CHAT_SNAPSHOT_WRITE_DELAY_MS = 500;
 const CHAT_SNAPSHOT_IDLE_TIMEOUT_MS = 1000;
 
@@ -72,15 +81,47 @@ const paginationSchema = {
       : completePaginationSchema.parse(value);
   },
 };
+const permissionModeSchema = json.enumeration(["read-only", "guarded", "workspace", "full"]);
 const snapshotSchema = json.object(
   {
+    composer: json.optional(
+      json.nullable(
+        json.object({
+          id: json.text,
+          provider: json.text,
+          name: json.text,
+          reasoning: json.optional(json.boolean),
+          speed: json.optional(
+            json.object({
+              active: json.boolean,
+              currentOverride: json.enumeration(["", "on", "off", "auto", "ultrafast"]),
+              label: json.text,
+              supported: json.boolean,
+            }),
+          ),
+          thinkingLevel: json.optional(json.text),
+          thinkingDefault: json.optional(json.text),
+          thinkingLevels: json.optional(
+            json.array(json.object({ id: json.text, label: json.text }), 30),
+          ),
+          permissionMode: json.optional(permissionModeSchema),
+          defaultPermissionMode: json.optional(permissionModeSchema),
+        }),
+      ),
+    ),
+    board: json.optional(
+      json.nullable(json.object({ snapshot: json.unknown, receivedAtMs: nonnegative }, true)),
+    ),
     widgetHeights: json.optional(
       json.refine(
-        json.record(json.refine(json.number, (height) => height >= 48 && height <= 8000)),
+        json.record(json.refine(json.number, (height) => height >= 1 && height <= 8000)),
         (heights) => Object.keys(heights).length <= 100,
       ),
     ),
     transcriptMetadata: json.optional(json.checked(isChatTranscriptMetadata)),
+    messageReactions: json.optional(
+      json.record(json.array(json.checked(isMessageReactionSummary))),
+    ),
     progressCard: json.optional(json.nullable(json.checked(isProgressCard))),
     deltaCursor: json.optional(json.text),
     // Only persisted warm metadata needs its full validator; read admission loads it below.
@@ -119,26 +160,15 @@ const metadataFields = {
 };
 const metadataSchema = json.object({ ...metadataFields, weight: nonnegative }, true);
 type SessionSnapshotMetadata = json.SnapshotValue<typeof metadataSchema>;
-const sidebarRecordsSchema = json.array(
-  json.object(
-    {
-      ...metadataFields,
-      projectionVersion: json.literal(1),
-      model: json.unknown,
-    },
-    true,
-  ),
-);
-type SidebarRecord = json.SnapshotValue<typeof sidebarRecordsSchema>[number];
-const sidebarRecordBytes = (record: SidebarRecord) =>
-  new TextEncoder().encode(JSON.stringify(record)).byteLength;
-type PreparedSnapshotRecord = {
-  record: SessionSnapshotRecord;
-  metadata: SessionSnapshotMetadata;
-};
+type PreparedSnapshotRecord = NonNullable<ReturnType<typeof createSnapshotRecord>>;
 type PendingSessionState = {
   savedAt: number;
   snapshot: ChatSessionSnapshot;
+  weight: number;
+};
+type SnapshotReadScope = {
+  isCurrent: () => boolean;
+  dispose: () => void;
 };
 
 const activeStores = new Set<SessionSnapshotStore>();
@@ -153,8 +183,9 @@ async function parseSnapshotRecord(
   }
   const historyState = parsed.snapshot.historyState;
   if (historyState !== undefined) {
-    const { isChatHistoryState } =
-      await import("../../lib/protocol-validators.generated/history-state.js");
+    // A repeated dynamic import can yield past dispatch even after prewarm evaluated it.
+    const isChatHistoryState =
+      prewarmedHistoryStateValidator ?? (await loadChatHistoryStateValidator());
     if (!isChatHistoryState(historyState)) {
       return null;
     }
@@ -193,87 +224,12 @@ export async function readPrewarmedChatSnapshot(
   if (entry?.cacheKey !== cacheKey) {
     return null;
   }
-  entry.snapshot ??= entry.promise.then((value) =>
-    readSnapshotRecord(entry.cacheKey, value, () => !entry.cancelled),
-  );
-  const snapshot = await entry.snapshot;
+  const snapshot = await readSharedPrewarm(entry, () =>
+    entry.promise.then((value) =>
+      readSnapshotRecord(entry.cacheKey, value, () => !entry.cancelled),
+    ),
+  ).promise;
   return snapshot && !entry.cancelled && peekPrewarmedChatSnapshot() === entry ? snapshot : null;
-}
-
-function createSnapshotRecord(
-  sessionKey: string,
-  pending: PendingSessionState,
-): PreparedSnapshotRecord | null {
-  let snapshot: ChatSessionSnapshot;
-  let weight: number;
-  try {
-    let projected = pending.snapshot;
-    const messages = projected.messages;
-    let start = Math.max(0, messages.length - CHAT_SNAPSHOT_MESSAGE_LIMIT);
-    // A history entry can project multiple rows; retain its whole sequence group.
-    while (start > 0) {
-      const seq = readSessionMessageSequence(messages[start]);
-      if (seq === null || seq !== readSessionMessageSequence(messages[start - 1])) {
-        break;
-      }
-      start--;
-    }
-    if (start > 0) {
-      // Display rows are not Gateway page boundaries. Refill from zero on the
-      // first upward scroll; the history owner deduplicates the overlap and
-      // returns the next authoritative offset, including merged CLI histories.
-      projected = {
-        ...projected,
-        messages: messages.slice(start),
-        pagination: {
-          hasMore: true,
-          nextOffset: 0,
-          ...(projected.pagination.totalMessages !== undefined
-            ? { totalMessages: projected.pagination.totalMessages }
-            : {}),
-        },
-      };
-    }
-    // Pairing credentials stay in the live projection, never the browser's disk cache.
-    let redacted = false;
-    const serialized = JSON.stringify(projected, (_key, value: unknown) => {
-      if (value === projected.messages) {
-        return projected.messages.map((message) => {
-          const record = asOptionalRecord(message);
-          if (!record || !Object.hasOwn(record, "openclawResponsesInputReplay")) {
-            return message;
-          }
-          const { openclawResponsesInputReplay: _replay, ...display } = record;
-          return display;
-        });
-      }
-      const sanitized = removePairingQrContent(value);
-      redacted ||= sanitized !== value;
-      return sanitized;
-    });
-    snapshot = JSON.parse(serialized);
-    // A receipt cannot certify metadata changed by the disk privacy projection.
-    if (redacted) {
-      delete snapshot.historyState;
-    }
-    weight = serialized.length;
-  } catch {
-    return null;
-  }
-  const envelope = {
-    projectionVersion: CHAT_SNAPSHOT_PROJECTION_VERSION,
-    savedAt: pending.savedAt,
-    sessionId: pending.snapshot.sessionId,
-    sessionKey,
-  };
-  return {
-    record: { ...envelope, snapshot },
-    metadata: {
-      savedAt: pending.savedAt,
-      sessionKey,
-      weight: weight + JSON.stringify(envelope).length,
-    },
-  };
 }
 
 async function readSnapshotMetadata(): Promise<SessionSnapshotMetadata[] | null> {
@@ -312,15 +268,15 @@ async function writeSnapshotRecords(
   generation: number,
 ): Promise<string[] | null> {
   if (records.length === 0 || generation !== snapshotStoreGeneration) {
-    return [];
+    return null;
   }
   const database = await openSessionSnapshotDatabase();
   if (!database) {
-    return [];
+    return null;
   }
   try {
     if (generation !== snapshotStoreGeneration) {
-      return [];
+      return null;
     }
     const transaction = database.transaction(
       [CHAT_SNAPSHOT_STORE_NAME, CHAT_SNAPSHOT_METADATA_STORE_NAME],
@@ -367,76 +323,21 @@ async function writeSnapshotRecords(
   }
 }
 
-async function accessSidebarSnapshot<Model>(
-  key: string,
-  validate: (value: unknown) => Model | null,
-  isCurrent: () => boolean,
-  incoming?: SidebarRecord,
-): Promise<Model | null> {
-  const database = await openSessionSnapshotDatabase();
-  if (!database) {
-    return null;
-  }
-  try {
-    if (!isCurrent()) {
-      return null;
-    }
-    const transaction = database.transaction(SIDEBAR_SNAPSHOT_STORE_NAME, "readwrite");
-    const store = transaction.objectStore(SIDEBAR_SNAPSHOT_STORE_NAME);
-    const records = sidebarRecordsSchema.parse(await requestResult(store.getAll()));
-    if (!isCurrent()) {
-      await transactionComplete(transaction);
-      return null;
-    }
-    const retained = records.filter((record) => record.sessionKey !== incoming?.sessionKey);
-    if (incoming) {
-      retained.push(incoming);
-      store.put(incoming);
-    }
-    let bytes = 0;
-    let result: Model | null = null;
-    for (const [index, record] of retained.toSorted((a, b) => b.savedAt - a.savedAt).entries()) {
-      const admitted = validate(record.model);
-      if (admitted === null) {
-        throw new Error("sidebar projection shape mismatch");
-      }
-      bytes += sidebarRecordBytes(record);
-      if (
-        index >= 8 ||
-        bytes > 512 * 1024 ||
-        Date.now() - record.savedAt > 30 * 24 * 60 * 60 * 1000
-      ) {
-        store.delete(record.sessionKey);
-      } else if (record.sessionKey === key) {
-        result = admitted;
-      }
-    }
-    await transactionComplete(transaction);
-    return isCurrent() ? result : null;
-  } catch (error) {
-    debugSnapshotStore("resetting cache after sidebar projection failure", error);
-    if (isCurrent()) {
-      await resetSessionSnapshotDatabase(database);
-    }
-    return null;
-  } finally {
-    database.close();
-  }
-}
-
 export class SessionSnapshotStore implements ChatCacheObserver {
   private connected = false;
-  private readonly pending = new Map<string, PendingSessionState>();
+  private pending = new Map<string, PendingSessionState>();
   // Hydration identity suppresses unchanged writes; the bounded message cache
   // owns transcript retention, so eviction must leave no second strong owner.
   private readonly hydratedSnapshots = new Map<string, WeakRef<ChatSessionSnapshot>>();
-  private readonly revisions = new Map<string, number>();
+  // Reads and queued writes retain invalidation identity only until they settle.
+  private readonly readScopes = new Map<string, { readers: number }>();
   // Cross-tab writes may leave this index stale until reload; the 30s prefetch
   // cooldown bounds the resulting redundant fetches without per-row IDB reads.
   private readonly savedAtBySession = new Map<string, number>();
   private savedAtSeed: Promise<void> | null = null;
   private cancelScheduledWrite: (() => void) | null = null;
   private writeChain = Promise.resolve();
+  private draining: Promise<void> | null = null;
 
   constructor(private readonly memoryCache?: ChatMessageCache) {}
 
@@ -455,12 +356,29 @@ export class SessionSnapshotStore implements ChatCacheObserver {
     });
   }
 
-  captureReadScope(sessionKey: string): () => boolean {
+  /** Dispose after the final read or publication so idle keys have no retained metadata. */
+  captureReadScope(sessionKey: string): SnapshotReadScope {
     const generation = snapshotStoreGeneration;
-    const revision = this.revisions.get(sessionKey) ?? 0;
-    this.revisions.set(sessionKey, revision);
-    return () =>
-      generation === snapshotStoreGeneration && revision === (this.revisions.get(sessionKey) ?? 0);
+    const entry = this.readScopes.get(sessionKey) ?? { readers: 0 };
+    this.readScopes.set(sessionKey, entry);
+    entry.readers += 1;
+    let disposed = false;
+    return {
+      isCurrent: () =>
+        !disposed &&
+        generation === snapshotStoreGeneration &&
+        this.readScopes.get(sessionKey) === entry,
+      dispose: () => {
+        if (disposed) {
+          return;
+        }
+        disposed = true;
+        entry.readers -= 1;
+        if (entry.readers === 0 && this.readScopes.get(sessionKey) === entry) {
+          this.readScopes.delete(sessionKey);
+        }
+      },
+    };
   }
 
   async readSidebar<Model>(
@@ -470,9 +388,13 @@ export class SessionSnapshotStore implements ChatCacheObserver {
     if (!this.connected) {
       return null;
     }
-    const isCurrent = this.captureReadScope(key);
-    await this.writeChain;
-    return accessSidebarSnapshot(key, validate, () => this.connected && isCurrent());
+    const scope = this.captureReadScope(key);
+    try {
+      await this.writeChain;
+      return await accessSidebarSnapshot(key, validate, () => this.connected && scope.isCurrent());
+    } finally {
+      scope.dispose();
+    }
   }
 
   async writeSidebar<Model>(
@@ -483,12 +405,12 @@ export class SessionSnapshotStore implements ChatCacheObserver {
     if (!this.connected || !key.startsWith("scope:[") || !key.includes("\u0000sidebar:")) {
       return false;
     }
-    const isCurrent = this.captureReadScope(key);
+    const scope = this.captureReadScope(key);
     try {
       const record: SidebarRecord = {
         sessionKey: key,
         savedAt: Date.now(),
-        projectionVersion: 1,
+        projectionVersion: 3,
         model: structuredClone(model),
       };
       if (sidebarRecordBytes(record) > 512 * 1024) {
@@ -500,7 +422,7 @@ export class SessionSnapshotStore implements ChatCacheObserver {
           (await accessSidebarSnapshot(
             key,
             validate,
-            () => this.connected && isCurrent(),
+            () => this.connected && scope.isCurrent(),
             record,
           )) !== null;
       });
@@ -509,30 +431,48 @@ export class SessionSnapshotStore implements ChatCacheObserver {
     } catch (error) {
       debugSnapshotStore("sidebar projection could not be cached", error);
       return false;
+    } finally {
+      scope.dispose();
     }
   }
 
   forgetSidebar(invalidation: SnapshotInvalidation): void {
-    for (const key of this.revisions.keys()) {
+    for (const key of this.readScopes.keys()) {
       if (key.includes("\u0000sidebar:") && sidebarSnapshotInvalidationMatches(key, invalidation)) {
         this.forget(key);
       }
     }
   }
 
-  async read(sessionKey: string): Promise<ChatSessionSnapshot | null> {
-    const isCurrent = this.captureReadScope(sessionKey);
-    const prewarm = consumePrewarmedChatSnapshot(sessionKey);
-    const read = () =>
-      (prewarm?.promise ?? readStoredChatSnapshotRecord(sessionKey)).then((value) =>
-        readSnapshotRecord(sessionKey, value, isCurrent),
-      );
-    const snapshot = await (prewarm ? (prewarm.snapshot ??= read()) : read());
-    if (!snapshot || !isCurrent()) {
-      return null;
+  readReady(sessionKey: string): ChatSessionSnapshot | undefined {
+    const entry = peekPrewarmedChatSnapshot();
+    const snapshot = entry?.prepared?.snapshot;
+    if (entry?.cacheKey !== sessionKey || entry.cancelled || !snapshot) {
+      return undefined;
     }
+    consumePrewarmedChatSnapshot(sessionKey);
     setSessionCacheValue(this.hydratedSnapshots, sessionKey, new WeakRef(snapshot));
     return snapshot;
+  }
+
+  async read(sessionKey: string): Promise<ChatSessionSnapshot | null> {
+    const scope = this.captureReadScope(sessionKey);
+    try {
+      const prewarm = consumePrewarmedChatSnapshot(sessionKey);
+      const read = () =>
+        (prewarm?.promise ?? readStoredChatSnapshotRecord(sessionKey)).then((value) =>
+          readSnapshotRecord(sessionKey, value, scope.isCurrent),
+        );
+      const prepared = prewarm ? readSharedPrewarm(prewarm, read) : undefined;
+      const snapshot = await (prepared?.promise ?? read());
+      if (!snapshot || !scope.isCurrent()) {
+        return null;
+      }
+      setSessionCacheValue(this.hydratedSnapshots, sessionKey, new WeakRef(snapshot));
+      return snapshot;
+    } finally {
+      scope.dispose();
+    }
   }
 
   async loadSavedAtIndex(): Promise<void> {
@@ -544,20 +484,20 @@ export class SessionSnapshotStore implements ChatCacheObserver {
     return this.pending.get(sessionKey)?.savedAt ?? this.savedAtBySession.get(sessionKey) ?? null;
   }
 
-  write(sessionKey: string, snapshot: ChatSessionSnapshot): void {
+  write(sessionKey: string, snapshot: ChatSessionSnapshot, weight: number): void {
     // The message cache remains the live UI owner; only durable admission is denied.
-    if (!isPersistableChatSnapshotKey(sessionKey)) {
+    if (!isPersistableChatSnapshotKey(sessionKey) || weight > MAX_CACHED_CHAT_SNAPSHOT_WEIGHT) {
       return;
     }
     discardPrewarmedChatSnapshot(sessionKey);
-    this.revisions.set(sessionKey, (this.revisions.get(sessionKey) ?? 0) + 1);
+    this.readScopes.delete(sessionKey);
     if (getSessionCacheValue(this.hydratedSnapshots, sessionKey)?.deref() === snapshot) {
       return;
     }
     this.hydratedSnapshots.delete(sessionKey);
     // Cache reconciliation replaces snapshots immutably, so retaining this raw
-    // reference until the debounced flush cannot observe in-place mutation.
-    this.schedule(sessionKey, snapshot);
+    // reference until the bounded flush cannot observe in-place mutation.
+    this.schedule(sessionKey, snapshot, weight);
   }
 
   async delete(sessionKey: string, reason?: SessionSnapshotInvalidationReason): Promise<void> {
@@ -567,53 +507,89 @@ export class SessionSnapshotStore implements ChatCacheObserver {
 
   forget(sessionKey: string): void {
     discardPrewarmedChatSnapshot(sessionKey);
-    this.revisions.set(sessionKey, (this.revisions.get(sessionKey) ?? 0) + 1);
+    this.readScopes.delete(sessionKey);
     this.pending.delete(sessionKey);
     this.hydratedSnapshots.delete(sessionKey);
     this.savedAtBySession.delete(sessionKey);
     this.memoryCache?.delete(sessionKey);
   }
 
-  async flush(): Promise<void> {
+  flush(): Promise<void> {
     this.cancelScheduledWrite?.();
     this.cancelScheduledWrite = null;
-    const pending = [...this.pending.entries()];
-    const pendingRevisions = new Map(
-      pending.map(([sessionKey]) => [sessionKey, this.revisions.get(sessionKey) ?? 0]),
-    );
-    this.pending.clear();
-    const records: PreparedSnapshotRecord[] = [];
-    for (const [sessionKey, state] of pending) {
-      const record = createSnapshotRecord(sessionKey, state);
-      if (record) {
-        records.push(record);
-      } else {
-        await this.delete(sessionKey, "cache-eviction");
-      }
+    if (!this.draining) {
+      this.draining = (async () => {
+        try {
+          await this.drainPending();
+        } finally {
+          this.draining = null;
+          if (this.pending.size > 0) {
+            await this.flush();
+          }
+        }
+      })();
     }
-    const generation = snapshotStoreGeneration;
-    this.writeChain = this.writeChain.then(async () => {
-      const currentRecords = records.filter(
-        ({ record: { sessionKey } }) =>
-          pendingRevisions.get(sessionKey) === (this.revisions.get(sessionKey) ?? 0),
+    return this.draining;
+  }
+
+  private async drainPending(): Promise<void> {
+    // One drain owns projection and I/O; concurrent flushes retain only bounded
+    // latest replacements, never another prepared batch behind a slow write.
+    while (this.pending.size > 0) {
+      const pending = this.pending;
+      this.pending = new Map();
+      const scopes = new Map(
+        [...pending.keys()].map((sessionKey) => [sessionKey, this.captureReadScope(sessionKey)]),
       );
-      const evicted = await writeSnapshotRecords(currentRecords, generation);
-      if (evicted === null) {
-        this.resetSavedAtIndex();
-        return;
-      }
-      for (const sessionKey of evicted) {
-        if (!this.pending.has(sessionKey)) {
-          this.savedAtBySession.delete(sessionKey);
+      try {
+        const records: PreparedSnapshotRecord[] = [];
+        let weight = 0;
+        for (const [sessionKey, state] of pending) {
+          pending.delete(sessionKey);
+          const record = createSnapshotRecord(sessionKey, state);
+          if (!record) {
+            // Rejection publishes invalidation, which awaits accepted DB writes.
+            // Keep it outside writeChain so a connected store cannot await itself.
+            await this.delete(sessionKey, "cache-eviction");
+            continue;
+          }
+          records.push(record);
+          weight += record.metadata.weight;
+          while (weight > MAX_CACHED_CHAT_WEIGHT) {
+            weight -= records.shift()!.metadata.weight;
+          }
+        }
+        const generation = snapshotStoreGeneration;
+        this.writeChain = this.writeChain.then(async () => {
+          const currentRecords = records.filter(({ record: { sessionKey } }) =>
+            scopes.get(sessionKey)!.isCurrent(),
+          );
+          const evicted = await writeSnapshotRecords(currentRecords, generation);
+          if (evicted === null) {
+            this.resetSavedAtIndex();
+            return;
+          }
+          for (const { metadata } of currentRecords) {
+            if (scopes.get(metadata.sessionKey)!.isCurrent()) {
+              this.savedAtBySession.set(metadata.sessionKey, metadata.savedAt);
+            }
+          }
+          for (const sessionKey of evicted) {
+            this.savedAtBySession.delete(sessionKey);
+          }
+        });
+        await this.writeChain;
+      } finally {
+        for (const scope of scopes.values()) {
+          scope.dispose();
         }
       }
-    });
-    await this.writeChain;
+    }
   }
 
   forgetScope(prefix: string): void {
     for (const key of new Set([
-      ...this.revisions.keys(),
+      ...this.readScopes.keys(),
       ...this.pending.keys(),
       ...this.hydratedSnapshots.keys(),
       ...this.savedAtBySession.keys(),
@@ -630,24 +606,38 @@ export class SessionSnapshotStore implements ChatCacheObserver {
     this.cancelScheduledWrite = null;
     this.pending.clear();
     this.hydratedSnapshots.clear();
-    this.revisions.clear();
+    this.readScopes.clear();
     this.savedAtBySession.clear();
     this.memoryCache?.clear();
   }
 
   async whenIdle(): Promise<void> {
-    await this.writeChain;
+    let accepted: Promise<void>;
+    do {
+      accepted = this.writeChain;
+      await accepted;
+    } while (accepted !== this.writeChain);
   }
 
-  private schedule(sessionKey: string, snapshot: ChatSessionSnapshot): void {
+  private schedule(sessionKey: string, snapshot: ChatSessionSnapshot, weight: number): void {
     const pending = {
       savedAt: Date.now(),
       snapshot,
+      weight,
     };
+    this.pending.delete(sessionKey);
     this.pending.set(sessionKey, pending);
-    this.savedAtBySession.set(sessionKey, pending.savedAt);
-    this.cancelScheduledWrite?.();
-    this.cancelScheduledWrite = null;
+    let totalWeight = [...this.pending.values()].reduce((sum, value) => sum + value.weight, 0);
+    while (this.pending.size > MAX_CACHED_CHAT_SESSIONS || totalWeight > MAX_CACHED_CHAT_WEIGHT) {
+      const oldestKey = this.pending.keys().next().value!;
+      totalWeight -= this.pending.get(oldestKey)!.weight;
+      this.pending.delete(oldestKey);
+    }
+    // The first pending write owns the deadline, including its idle timeout;
+    // foreground traffic must not keep postponed snapshots alive indefinitely.
+    if (this.cancelScheduledWrite) {
+      return;
+    }
     const timer = globalThis.setTimeout(() => {
       this.cancelScheduledWrite = null;
       if (typeof globalThis.requestIdleCallback === "function") {
@@ -678,9 +668,6 @@ export class SessionSnapshotStore implements ChatCacheObserver {
 
   private resetSavedAtIndex(): void {
     this.savedAtBySession.clear();
-    for (const [sessionKey, pending] of this.pending) {
-      this.savedAtBySession.set(sessionKey, pending.savedAt);
-    }
   }
 }
 

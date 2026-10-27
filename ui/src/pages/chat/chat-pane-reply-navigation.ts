@@ -5,7 +5,7 @@ import { normalizeMessage } from "../../lib/chat/message-normalizer.ts";
 import { parseCatalogSessionKey } from "../../lib/sessions/catalog-key.ts";
 import { areUiSessionKeysEquivalent } from "../../lib/sessions/session-key.ts";
 import { ChatPaneSession } from "./chat-pane-session.ts";
-import { persistedMessageEntryId } from "./chat-thread.ts";
+import { persistedMessageEntryId } from "./chat-thread-items.ts";
 import type { ReplyMessageStatus } from "./components/chat-reply-preview.ts";
 
 registerChatMessageMetadataEnglish();

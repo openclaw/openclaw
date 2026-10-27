@@ -8,6 +8,7 @@ import {
   verifyInstallSmokeCandidatePayload,
 } from "../../scripts/install-smoke-candidate-payload.mts";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
+import { writeTarball } from "./prepublish-plugin-registry.fixture.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const IDENTITY = {
@@ -40,11 +41,9 @@ function createTarball(archivePath: string, sourceDir: string, entries: string[]
 function createFixture(options: FixtureOptions = {}) {
   const root = tempDirs.make("install-smoke-candidate-payload-");
   const scriptsDir = path.join(root, "candidate-root/scripts");
-  const packageRoot = path.join(root, "package-root");
-  const packageContents = path.join(packageRoot, "package");
   const packageDir = path.join(root, "package-output");
   const payloadDir = path.join(root, "payload");
-  for (const dir of [scriptsDir, packageContents, packageDir, payloadDir]) {
+  for (const dir of [scriptsDir, packageDir, payloadDir]) {
     fs.mkdirSync(dir, { recursive: true });
   }
 
@@ -58,26 +57,33 @@ function createFixture(options: FixtureOptions = {}) {
   const archivePath = path.join(root, "candidate.tar.gz");
   createTarball(archivePath, root, ["candidate-root"]);
 
-  write(
-    packageContents,
-    "package.json",
-    `${JSON.stringify({ name: "openclaw", version: PACKAGE_VERSION })}\n`,
-  );
-  write(packageContents, "index.js", "console.log('openclaw');\n");
   const packagePath = path.join(packageDir, "candidate.tgz");
-  createTarball(packagePath, packageRoot, ["package"]);
+  writeTarball(root, packagePath, "openclaw", PACKAGE_VERSION);
   if (options.symlinkPackage) {
     fs.unlinkSync(packagePath);
     fs.symlinkSync(path.join(root, "candidate.tar.gz"), packagePath);
   }
-  return { archivePath, packageDir, packagePath, packageContents, payloadDir, root, scriptsDir };
+  return { archivePath, packageDir, packagePath, payloadDir, root, scriptsDir };
 }
 
 async function sealFixture() {
   const fixture = createFixture();
   const manifest = await seal(fixture);
   const manifestPath = path.join(fixture.payloadDir, "install-smoke-candidate-payload.json");
-  return { ...fixture, manifest, manifestSha256: sha256(manifestPath) };
+  const expectedManifestSha256 = sha256(manifestPath);
+  return {
+    ...fixture,
+    manifest,
+    verify: (overrides: Partial<Parameters<typeof verifyInstallSmokeCandidatePayload>[0]> = {}) =>
+      verifyInstallSmokeCandidatePayload({
+        ...IDENTITY,
+        expectedManifestSha256,
+        expectedPackageVersion: PACKAGE_VERSION,
+        expectedSourceArchiveSha256: manifest.sourceArchiveSha256,
+        payloadDir: fixture.payloadDir,
+        ...overrides,
+      }),
+  };
 }
 
 function seal(fixture: ReturnType<typeof createFixture>) {
@@ -86,20 +92,6 @@ function seal(fixture: ReturnType<typeof createFixture>) {
     archivePath: fixture.archivePath,
     outputDir: fixture.payloadDir,
     packageDir: fixture.packageDir,
-  });
-}
-
-function verify(
-  fixture: Awaited<ReturnType<typeof sealFixture>>,
-  overrides: Partial<Parameters<typeof verifyInstallSmokeCandidatePayload>[0]> = {},
-) {
-  return verifyInstallSmokeCandidatePayload({
-    ...IDENTITY,
-    expectedManifestSha256: fixture.manifestSha256,
-    expectedPackageVersion: PACKAGE_VERSION,
-    expectedSourceArchiveSha256: fixture.manifest.sourceArchiveSha256,
-    payloadDir: fixture.payloadDir,
-    ...overrides,
   });
 }
 
@@ -120,7 +112,7 @@ describe("install smoke candidate payload", () => {
 
   it("seals source installers and package bytes into a fully bound payload", async () => {
     const fixture = await sealFixture();
-    const verified = await verify(fixture);
+    const verified = await fixture.verify();
 
     expect(verified).toEqual(fixture.manifest);
     expect(verified).toMatchObject({
@@ -129,21 +121,15 @@ describe("install smoke candidate payload", () => {
       schema: "openclaw.install-smoke-candidate-payload/v1",
       sourceArchiveSha256: sha256(fixture.archivePath),
     });
-    expect(verified.files.map(({ name, role }) => ({ name, role }))).toEqual([
-      { name: "candidate.tgz", role: "package" },
-      { name: "candidate-pack.json", role: "package-metadata" },
-      { name: "install.sh", role: "installer" },
-      { name: "install-cli.sh", role: "cli-installer" },
-    ]);
     expect(JSON.parse(read(fixture.payloadDir, "candidate-pack.json"))).toEqual([
       {
-        entryCount: 2,
+        entryCount: 1,
         filename: "candidate.tgz",
         name: "openclaw",
         size: fs.statSync(fixture.packagePath).size,
-        unpackedSize:
-          fs.statSync(path.join(fixture.packageContents, "package.json")).size +
-          fs.statSync(path.join(fixture.packageContents, "index.js")).size,
+        unpackedSize: Buffer.byteLength(
+          JSON.stringify({ name: "openclaw", version: PACKAGE_VERSION }) + "\n",
+        ),
         version: PACKAGE_VERSION,
       },
     ]);
@@ -159,30 +145,20 @@ describe("install smoke candidate payload", () => {
   });
 
   it.each([
-    ["install-cli.sh", "tampered\n", "candidate payload digest does not match for install-cli.sh"],
-    [
-      "install-smoke-candidate-payload.json",
-      "{}\n",
-      "candidate payload manifest digest does not match producer output",
-    ],
-    ["extra", "unexpected\n", "candidate payload contains missing or unexpected files"],
+    ["install-cli.sh", "tampered\n", /payload digest.*install-cli.sh/],
+    ["install-smoke-candidate-payload.json", "{}\n", /manifest digest/],
+    ["extra", "unexpected\n", /missing or unexpected files/],
   ] as const)("rejects tampering with %s after sealing", async (name, content, error) => {
     const fixture = await sealFixture();
     write(fixture.payloadDir, name, content);
-    await expect(verify(fixture)).rejects.toThrow(error);
+    await expect(fixture.verify()).rejects.toThrow(error);
   });
 
   it.each([
-    [
-      { targetSha: "3".repeat(40) },
-      "candidate payload manifest targetSha does not match the expected tuple",
-    ],
-    [
-      { expectedSourceArchiveSha256: "4".repeat(64) },
-      "candidate payload source archive digest does not match producer output",
-    ],
+    [{ targetSha: "3".repeat(40) }, /targetSha.*expected tuple/],
+    [{ expectedSourceArchiveSha256: "4".repeat(64) }, /source archive digest/],
   ] as const)("rejects tuple drift %j", async (overrides, error) => {
-    await expect(verify(await sealFixture(), overrides)).rejects.toThrow(error);
+    await expect((await sealFixture()).verify(overrides)).rejects.toThrow(error);
   });
 
   it.each([

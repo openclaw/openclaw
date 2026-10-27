@@ -193,6 +193,10 @@ Notes:
 - Use `""` to disable the typing reaction, including the default for quiet top-level turns.
 - The reaction is best-effort and cleanup is attempted automatically after the reply or failure path completes.
 
+## Question buttons
+
+When an `ask_user` question is answered, canceled, or expires, OpenClaw updates the delivered question card with its outcome. Only that question's answer buttons are removed; other buttons and links on the card remain available.
+
 ## Commands and slash behavior
 
 Slash commands appear in Slack as either a single configured command or multiple native commands. Configure `channels.slack.slashCommand` to change command defaults:

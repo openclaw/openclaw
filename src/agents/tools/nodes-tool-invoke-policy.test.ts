@@ -8,20 +8,20 @@ const mocks = vi.hoisted(() => ({
   resolveAgentNodeId: vi.fn(async () => "node-1"),
 }));
 
-vi.mock("./gateway.js", () => ({ callGatewayTool: mocks.callGatewayTool }));
+vi.mock("./gateway.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./gateway.js")>()),
+  callGatewayTool: mocks.callGatewayTool,
+  readGatewayCallOptions: () => ({}),
+}));
 vi.mock("./nodes-utils.js", () => ({ resolveAgentNodeId: mocks.resolveAgentNodeId }));
 vi.mock("../../gateway/node-plugin-tool-snapshot.js", () => ({
   listConnectedNodePluginTools: mocks.listConnectedNodePluginTools,
 }));
 
-const { executeNodeCommandAction } = await import("./nodes-tool-commands.js");
+const { createNodesTool } = await import("./nodes-tool.js");
 
 async function execute(action: "device_status" | "invoke", input: Record<string, unknown>) {
-  return executeNodeCommandAction({
-    action,
-    input: { node: "macbook", ...input },
-    gatewayOpts: {},
-  });
+  return createNodesTool().execute("invoke-fixture", { action, node: "macbook", ...input });
 }
 
 async function invoke(command: string) {
@@ -35,37 +35,15 @@ describe("generic node invoke policy", () => {
   });
 
   it.each([
-    {
-      name: "node-hosted MCP",
-      command: "mcp.tools.call.v1",
-      descriptors: [
-        {
-          nodeId: "node-1",
-          descriptor: { name: "docs_search", command: "mcp.tools.call.v1" },
-        },
-      ],
-      rawToolName: "docs_search",
-    },
-    {
-      name: "node-published plugin tool",
-      command: "remote.secret",
-      descriptors: [
-        { nodeId: "node-1", descriptor: { name: "remote_secret", command: "remote.secret" } },
-      ],
-      rawToolName: "remote_secret",
-    },
-    {
-      name: "prototype-like node-published plugin tool",
-      command: "constructor",
-      descriptors: [
-        { nodeId: "node-1", descriptor: { name: "remote_constructor", command: "constructor" } },
-      ],
-      rawToolName: "remote_constructor",
-    },
-  ])("blocks raw $name commands in favor of policy-filtered tools", async (testCase) => {
-    mocks.listConnectedNodePluginTools.mockReturnValue(testCase.descriptors);
+    ["mcp.tools.call.v1", "docs_search"],
+    ["remote.secret", "remote_secret"],
+    ["constructor", "remote_constructor"],
+  ])("blocks raw %s commands in favor of policy-filtered tools", async (command, rawToolName) => {
+    mocks.listConnectedNodePluginTools.mockReturnValue([
+      { nodeId: "node-1", descriptor: { name: rawToolName, command } },
+    ]);
 
-    const error = await invoke(testCase.command).then(
+    const error = await invoke(command).then(
       () => undefined,
       (cause: unknown) => cause,
     );
@@ -73,7 +51,7 @@ describe("generic node invoke policy", () => {
     expect(String(error)).toContain(
       "use the matching dedicated agent tool if available; otherwise this command is disabled by tool policy",
     );
-    expect(String(error)).not.toContain(testCase.rawToolName);
+    expect(String(error)).not.toContain(rawToolName);
     expect(mocks.callGatewayTool).not.toHaveBeenCalled();
   });
 

@@ -13,14 +13,20 @@ const gitObjectId = /^[a-f0-9]{40}$/iu;
 /** Published history can supersede a failed attempt without changing its durable outcome. */
 export async function isGitHubPublicationSuperseded(
   snapshot: AcceptedSnapshot,
-  pullRequests: readonly ControlUiSessionPullRequest[],
-  { assertCurrent }: { assertCurrent: () => void },
+  readPublished: () => Promise<
+    { pullRequests: readonly ControlUiSessionPullRequest[]; assertCurrent: () => void } | undefined
+  >,
 ): Promise<boolean> {
-  assertCurrent();
   const tree = snapshot.workspace_tree;
   if (!tree || !gitObjectId.test(tree)) {
     return false;
   }
+  const history = await readPublished();
+  if (!history) {
+    return false;
+  }
+  const { pullRequests, assertCurrent } = history;
+  assertCurrent();
   const candidates = pullRequests.flatMap((pr) => {
     const head = pr.headSha;
     return pr.state !== "closed" &&

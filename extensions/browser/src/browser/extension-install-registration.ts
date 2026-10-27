@@ -574,7 +574,6 @@ export async function uninstallChromeExtensionNativeHosts(
     nativeHostExecutable?: string;
     browserProfile?: string;
     removeStore?: boolean;
-    signal?: AbortSignal;
   } = {},
 ): Promise<{ removed: string[]; refused: string[]; manualRequired: boolean }> {
   if (process.platform === "win32") {

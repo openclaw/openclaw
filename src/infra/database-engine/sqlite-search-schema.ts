@@ -216,12 +216,14 @@ export function admitSqliteMemoryTextSearch(
   }
   const canonical = ftsTable === MEMORY_INDEX_FTS_TABLE;
   const tables = canonical ? [ftsTable, MEMORY_INDEX_PATHS_FTS_TABLE] : [ftsTable];
-  const { objects, tableStatus } = inspectMemoryFts(db, tables, tokenizer);
+  const existing = options.fresh ? undefined : inspectMemoryFts(db, tables, tokenizer);
   // Read before mutation so both fragments share one native catalog snapshot.
-  const bodyStatus = tableStatus(ftsTable);
-  const pathStatus = canonical ? tableStatus(MEMORY_INDEX_PATHS_FTS_TABLE) : undefined;
+  const bodyStatus = existing?.tableStatus(ftsTable) ?? "missing";
+  const pathStatus = canonical
+    ? (existing?.tableStatus(MEMORY_INDEX_PATHS_FTS_TABLE) ?? "missing")
+    : undefined;
   const matchingTrigger = (trigger: { name: string; sql: string }) =>
-    normalizeSchemaSql(objects.get(trigger.name)?.sql ?? null) ===
+    normalizeSchemaSql(existing?.objects.get(trigger.name)?.sql ?? null) ===
     normalizeSchemaSql(trigger.sql.replace(`main.${trigger.name}`, trigger.name));
   const bodyTriggersMatch =
     !canonical || MEMORY_CHUNK_FTS_TRIGGER_DEFINITIONS.every(matchingTrigger);

@@ -1,35 +1,33 @@
 import fsSync, { writeFileSync } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
 import { describe, expect, it, vi } from "vitest";
 import { createChannelIngressDrain } from "../channels/message/ingress-drain.js";
 import { createChannelIngressQueue } from "../channels/message/ingress-queue.js";
-import {
-  coercePluginDoctorContractModule,
-  type PluginDoctorContractModule,
-  type PluginDoctorStateMigration,
-} from "../plugins/doctor-contract-module.js";
+import type { PluginDoctorStateMigration } from "../plugins/doctor-contract-module.js";
 import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { createPluginDoctorStateMigrationContext } from "./state-migrations.plugin-doctor-context.js";
+import {
+  expectFile as expectBytes,
+  expectMissing,
+  runPluginMigrations,
+} from "./state-migrations.store.test-support.js";
 
 type MigrationInput = Parameters<PluginDoctorStateMigration["detectLegacyState"]>[0];
 const receivedAt = Date.now() - 60_000;
 
 async function runDetectedMigrations(input: MigrationInput) {
-  const { stateMigrations } = coercePluginDoctorContractModule(
-    await vi.importActual<PluginDoctorContractModule>(
-      fileURLToPath(new URL("../../extensions/telegram/doctor-contract-api.ts", import.meta.url)),
-    ),
-  );
-  const results = [];
-  for (const migration of stateMigrations) {
-    if (await migration.detectLegacyState(input)) {
-      results.push(await migration.migrateLegacyState(input));
-    }
-  }
-  return results;
+  return (await runPluginMigrations("telegram", input)).map(({ result }) => result);
+}
+
+function expectSingleWarning(
+  result: Awaited<ReturnType<typeof runDetectedMigrations>>[number] | undefined,
+  warning: string,
+  disposition?: "recoverable",
+) {
+  expect(result?.warnings).toEqual([expect.stringContaining(warning)]);
+  expect(result?.warningDisposition).toBe(disposition);
 }
 
 function pending(updateId: number, text = "legacy update") {
@@ -49,28 +47,34 @@ function pending(updateId: number, text = "legacy update") {
   };
 }
 
+function spoolFixture(env: NodeJS.ProcessEnv, stateDir: string, accountId: string) {
+  const spoolDir = path.join(stateDir, "telegram", `ingress-spool-${accountId}`);
+  let input: MigrationInput | undefined;
+  return {
+    env,
+    spoolDir,
+    file: (name: string) => path.join(spoolDir, name),
+    makeInput: (assertCurrent?: () => void) =>
+      (input = migrationInput(env, stateDir, assertCurrent)),
+    migrate: () => runDetectedMigrations((input ??= migrationInput(env, stateDir))),
+    queue: <T>() =>
+      createChannelIngressQueue<T>({
+        channelId: "telegram",
+        stateDir,
+        ...(accountId === "default" ? {} : { accountId }),
+      }),
+  };
+}
 async function withSpool(
-  run: (fixture: {
-    env: NodeJS.ProcessEnv;
-    stateDir: string;
-    spoolDir: string;
-    file: (name: string) => string;
-    makeInput: (assertCurrent?: () => void) => ReturnType<typeof migrationInput>;
-  }) => Promise<void>,
+  run: (fixture: ReturnType<typeof spoolFixture>) => Promise<void>,
   accountId = "default",
 ) {
   await withOpenClawTestState(
     { label: "telegram-spool-import", applyEnv: false },
     async ({ env, stateDir }) => {
-      const spoolDir = path.join(stateDir, "telegram", `ingress-spool-${accountId}`);
-      await fs.mkdir(spoolDir, { recursive: true });
-      await run({
-        env,
-        stateDir,
-        spoolDir,
-        file: (name) => path.join(spoolDir, name),
-        makeInput: (assertCurrent) => migrationInput(env, stateDir, assertCurrent),
-      });
+      const fixture = spoolFixture(env, stateDir, accountId);
+      await fs.mkdir(fixture.spoolDir, { recursive: true });
+      await run(fixture);
     },
   );
 }
@@ -85,17 +89,11 @@ function migrationInput(env: NodeJS.ProcessEnv, stateDir: string, assertCurrent 
   return { config: {}, env, stateDir, oauthDir: path.join(stateDir, "credentials"), context };
 }
 
-async function expectBytes(file: string, bytes: string) {
-  await expect(fs.readFile(file, "utf8")).resolves.toBe(bytes);
-}
-async function expectMissing(file: string) {
-  await expect(fs.stat(file)).rejects.toMatchObject({ code: "ENOENT" });
-}
 describe("Telegram JSON spool Doctor import", () => {
   it.each(["stale", "fresh", "message-date", "edited-message", "missing-receipt"] as const)(
     "%s legacy update passes through migration before the drain can dispatch",
-    async (scenario) => {
-      await withSpool(async ({ stateDir, file, makeInput }) => {
+    (scenario) =>
+      withSpool(async ({ file, migrate, queue: createQueue }) => {
         const shouldDispatch = ["fresh", "edited-message", "missing-receipt"].includes(scenario);
         const originalReceivedAt =
           scenario === "stale" ? receivedAt - 120 * 86_400_000 : receivedAt;
@@ -132,12 +130,8 @@ describe("Telegram JSON spool Doctor import", () => {
             }),
           );
         }
-        const input = makeInput();
-        const results = await runDetectedMigrations(input);
-        const queue = createChannelIngressQueue<typeof payload>({
-          channelId: "telegram",
-          stateDir,
-        });
+        const results = await migrate();
+        const queue = createQueue<typeof payload>();
         const handleUpdate = vi.fn();
         const drain = createChannelIngressDrain({
           queue,
@@ -151,13 +145,12 @@ describe("Telegram JSON spool Doctor import", () => {
           await drain.waitForIdle();
           expect(handleUpdate).toHaveBeenCalledTimes(shouldDispatch ? 1 : 0);
           if (!shouldDispatch) {
-            expect(results[0]?.warnings).toEqual([
-              expect.stringContaining(
-                `${scenario === "stale" ? 2 : 1} stale legacy Telegram update`,
-              ),
-            ]);
+            expectSingleWarning(
+              results[0],
+              `${scenario === "stale" ? 2 : 1} stale legacy Telegram update`,
+              "recoverable",
+            );
             expect(results[0]?.warnings[0]).toContain(new Date(message.date * 1000).toISOString());
-            expect(results[0]?.warningDisposition).toBe("recoverable");
             const failed = await queue.listFailed?.();
             expect(failed).toHaveLength(scenario === "stale" ? 2 : 1);
             expect(failed).toEqual(
@@ -181,16 +174,15 @@ describe("Telegram JSON spool Doctor import", () => {
             expect(results[0]?.warnings ?? []).toEqual([]);
           }
           await expectBytes(`${sourcePath}.migrated`, bytes);
-          expect(await runDetectedMigrations(input)).toEqual([]);
+          expect(await migrate()).toEqual([]);
         } finally {
           drain.dispose();
         }
-      });
-    },
+      }),
   );
 
-  it("backs up published spool bytes, replays pending claims in order, and retains failure tombstones", async () => {
-    await withSpool(async ({ stateDir, file, makeInput }) => {
+  it("backs up published spool bytes, replays pending claims in order, and retains failure tombstones", () =>
+    withSpool(async ({ file, migrate, queue: createQueue }) => {
       // These are the v2026.5.28 writer's three committed file shapes.
       const fixtures = [
         ["0000000000000041.json", pending(41)],
@@ -222,16 +214,15 @@ describe("Telegram JSON spool Doctor import", () => {
         originals.set(name, bytes);
         await fs.writeFile(file(name), bytes);
       }
-      const input = makeInput();
       const importStartedAt = Date.now();
-      const results = await runDetectedMigrations(input);
+      const results = await migrate();
       expect(results).toHaveLength(1);
       expect(results[0]?.warnings).toEqual([]);
       for (const [name, bytes] of originals) {
         await expectBytes(file(`${name}.migrated`), bytes);
         await expectMissing(file(name));
       }
-      const queue = createChannelIngressQueue({ channelId: "telegram", stateDir });
+      const queue = createQueue();
       // Fresh imported work remains eligible for replay within Telegram’s 24-hour window.
       expect(await queue.prune({ pendingTtlMs: 86_400_000, now: importStartedAt })).toBe(0);
       const beforeRetry = await queue.listPending({ orderBy: "id" });
@@ -253,9 +244,9 @@ describe("Telegram JSON spool Doctor import", () => {
       for (const [name, bytes] of originals) {
         await fs.writeFile(file(name), bytes);
       }
-      expect((await runDetectedMigrations(input))[0]?.warnings).toEqual([]);
+      expect((await migrate())[0]?.warnings).toEqual([]);
       expect(await queue.listPending({ orderBy: "id" })).toEqual(beforeRetry);
-      expect(await runDetectedMigrations(input)).toEqual([]);
+      expect(await migrate()).toEqual([]);
       const first = await queue.claimNext({ orderBy: "id" });
       expect(first?.id).toBe("0000000000000041");
       expect(await queue.complete(first!, { completedAt: receivedAt + 1_000 })).toBe(true);
@@ -270,7 +261,7 @@ describe("Telegram JSON spool Doctor import", () => {
       const failedTwinClaim = file("0000000000000043.json.doctor-importing");
       await fs.rename(file("0000000000000041.json"), claim);
       await fs.rename(file("0000000000000043.json"), failedTwinClaim);
-      expect((await runDetectedMigrations(input))[0]?.warnings).toEqual([]);
+      expect((await migrate())[0]?.warnings).toEqual([]);
       await expectMissing(claim);
       await expectMissing(failedTwinClaim);
       expect(await queue.listPending()).toEqual([]);
@@ -282,34 +273,28 @@ describe("Telegram JSON spool Doctor import", () => {
         file("0000000000000041.json"),
         JSON.stringify(pending(41, "replacement bytes")),
       );
-      expect((await runDetectedMigrations(input))[0]?.warnings).toEqual([]);
+      expect((await migrate())[0]?.warnings).toEqual([]);
       expect((await queue.listPending()).map((row) => row.payload)).toEqual([
         pending(41, "replacement bytes"),
       ]);
       expect(await queue.delete("0000000000000041")).toBe(true);
       await fs.writeFile(file("0000000000000041.json"), originals.get("0000000000000041.json")!);
-      expect((await runDetectedMigrations(input))[0]?.warnings).toEqual([]);
+      expect((await migrate())[0]?.warnings).toEqual([]);
       expect(await queue.listPending()).toEqual([]);
-    });
-  });
+    }));
 
-  it("preserves conflicting or invalid sources and existing canonical work", async () => {
-    await withSpool(async ({ stateDir, file, makeInput }) => {
+  it("preserves conflicting or invalid sources and existing canonical work", () =>
+    withSpool(async ({ file, migrate, queue: createQueue }) => {
       const source = file("0000000000000041.json");
       const bytes = `${JSON.stringify(pending(41))}\n`;
       await fs.writeFile(source, bytes);
       await fs.writeFile(file("0000000000000042.json"), "invalid JSON\n");
-      const queue = createChannelIngressQueue({
-        channelId: "telegram",
-        accountId: "retired_account",
-        stateDir,
-      });
+      const queue = createQueue();
       await queue.enqueue("0000000000000041", pending(41, "canonical"), {
         receivedAt: receivedAt + 41,
       });
       const original = await queue.listPending();
-      const input = makeInput();
-      const results = await runDetectedMigrations(input);
+      const results = await migrate();
       expect(results[0]?.warnings).toHaveLength(2);
       expect(results[0]?.warningDisposition).toBeUndefined();
       expect(results[0]?.warnings[0]).toContain(
@@ -326,15 +311,14 @@ describe("Telegram JSON spool Doctor import", () => {
       );
       // A conflict records no completed receipt: removing it still permits the legacy import.
       expect(await queue.delete("0000000000000041")).toBe(true);
-      expect((await runDetectedMigrations(input))[0]?.warnings).toHaveLength(1);
+      expect((await migrate())[0]?.warnings).toHaveLength(1);
       expect((await queue.listPending()).map((row) => row.payload)).toEqual([pending(41)]);
-    }, "retired_account");
-  });
+    }, "retired_account"));
 
   it.each(["source", "receipt", "expired-authority"] as const)(
     "classifies %s cleanup failures only after verifying the committed import and recovery bytes",
-    async (failure) => {
-      await withSpool(async ({ env, stateDir, spoolDir, file, makeInput }) => {
+    (failure) =>
+      withSpool(async ({ env, spoolDir, file, makeInput, migrate, queue: createQueue }) => {
         const source = file("0000000000000041.json");
         const bytes = `${JSON.stringify(pending(41))}\n`;
         await fs.writeFile(source, bytes);
@@ -369,7 +353,7 @@ describe("Telegram JSON spool Doctor import", () => {
           return unlink(filePath);
         });
         try {
-          const results = await runDetectedMigrations(input);
+          const results = await migrate();
           if (failure !== "expired-authority") {
             await expectBytes(source, bytes);
           } else {
@@ -380,17 +364,15 @@ describe("Telegram JSON spool Doctor import", () => {
             expect(claims).toHaveLength(1);
             await expectBytes(file(claims[0]!), bytes);
           }
-          expect(results[0]?.warningDisposition).toBe(
-            failure === "expired-authority" ? undefined : "recoverable",
-          );
-          expect(results[0]?.warnings).toHaveLength(1);
-          expect(results[0]?.warnings[0]).toContain(
+          expectSingleWarning(
+            results[0],
             failure === "expired-authority"
               ? "repair owner expired during cleanup"
               : `Retained Telegram spool source ${source}`,
+            failure === "expired-authority" ? undefined : "recoverable",
           );
           await expectBytes(`${source}.migrated`, bytes);
-          const queue = createChannelIngressQueue({ channelId: "telegram", stateDir });
+          const queue = createQueue();
           const committed = await queue.listPending();
           expect(committed.map((row) => row.payload)).toEqual([pending(41)]);
           remove.mockRestore();
@@ -399,7 +381,7 @@ describe("Telegram JSON spool Doctor import", () => {
             if (failure === "receipt") {
               expect(await queue.delete("0000000000000041")).toBe(true);
             }
-            expect((await runDetectedMigrations(input))[0]?.warnings).toEqual([]);
+            expect((await migrate())[0]?.warnings).toEqual([]);
             expect(await queue.listPending()).toEqual(failure === "receipt" ? [] : committed);
             await expectMissing(source);
             expect(
@@ -411,14 +393,13 @@ describe("Telegram JSON spool Doctor import", () => {
         } finally {
           remove.mockRestore();
         }
-      });
-    },
+      }),
   );
 
   it.each(["authority", "backup"])(
     "retains originals after a %s failure and resumes safely",
-    async (failure) => {
-      await withSpool(async ({ env, stateDir, file, makeInput }) => {
+    (failure) =>
+      withSpool(async ({ env, file, makeInput, migrate, queue: createQueue }) => {
         const source = file("0000000000000043.json.failed");
         const bytes =
           '{"version":1,"updateId":43,"receivedAt":100,"failure":{"reason":"timeout","message":"original","failedAt":200}}\n';
@@ -426,7 +407,7 @@ describe("Telegram JSON spool Doctor import", () => {
         const { db } = openOpenClawStateDatabase({ env });
         let transactionChecks = 0;
         let interrupt = true;
-        const input = makeInput(() => {
+        makeInput(() => {
           if (interrupt && db.isTransaction && ++transactionChecks === 2) {
             if (failure === "authority") {
               throw new Error("repair owner expired before commit");
@@ -434,14 +415,14 @@ describe("Telegram JSON spool Doctor import", () => {
             writeFileSync(`${source}.migrated`, "changed backup");
           }
         });
-        const results = await runDetectedMigrations(input);
+        const results = await migrate();
         expect(results[0]?.warningDisposition).toBeUndefined();
         expect(results[0]?.warnings).toContainEqual(
           expect.stringContaining(
             failure === "authority" ? "repair owner expired before commit" : "backup changed",
           ),
         );
-        const queue = createChannelIngressQueue({ channelId: "telegram", stateDir });
+        const queue = createQueue();
         expect(await queue.listPending()).toEqual([]);
         expect(await queue.listFailed?.()).toHaveLength(failure === "authority" ? 0 : 1);
         await expectBytes(source, bytes);
@@ -449,7 +430,7 @@ describe("Telegram JSON spool Doctor import", () => {
           failure === "authority" ? bytes : "changed backup",
         );
         interrupt = false;
-        expect((await runDetectedMigrations(input))[0]?.warnings).toEqual([]);
+        expect((await migrate())[0]?.warnings).toEqual([]);
         expect(
           await fs.readFile(`${source}.migrated${failure === "backup" ? ".2" : ""}`, "utf8"),
         ).toBe(bytes);
@@ -457,7 +438,6 @@ describe("Telegram JSON spool Doctor import", () => {
           kind: "unrecoverable",
           record: { failedAt: 200, receivedAt: 100, message: "original" },
         });
-      });
-    },
+      }),
   );
 });

@@ -3,6 +3,7 @@ import { expect, it } from "vitest";
 import type { SessionMoveTarget } from "../../../packages/gateway-protocol/src/index.js";
 import { selectChatLayoutAction } from "../test-helpers/chat-layout-menu.ts";
 import { evaluateControlUiContext } from "../test-helpers/control-ui-e2e-context.ts";
+import { closeChatDetails, openChatDetails } from "./chat-details.test-support.ts";
 import {
   chatSessionListResponse,
   createChatFlowE2eSuite,
@@ -13,6 +14,25 @@ import {
 import { tooltipTitleText } from "./control-ui-e2e-suite.test-support.ts";
 
 const suite = createChatFlowE2eSuite();
+
+async function placementTrigger(scope: Page | Locator) {
+  if (!("mainFrame" in scope)) {
+    // Select the pane whose placement is being inspected before opening its Details.
+    await scope.locator(".agent-chat__composer-combobox textarea").click();
+  }
+  const details = await openChatDetails(scope);
+  const trigger = details.locator(".chat-environment__machine-trigger");
+  await trigger.waitFor();
+  return trigger;
+}
+
+async function openPlacement(scope: Page | Locator) {
+  const trigger = await placementTrigger(scope);
+  if ((await trigger.getAttribute("aria-expanded")) !== "true") {
+    await trigger.click();
+  }
+  return trigger;
+}
 const sessionKey = "agent:main:placement-move";
 const expectedSource = { generation: 4, environmentId: "worker:source", ownerEpoch: 7 };
 const moveMethods = ["chat.startup", "environments.list", "sessions.move"];
@@ -141,7 +161,7 @@ suite.define(() => {
       });
       await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey));
       await gateway.deferNext("sessions.move");
-      await page.getByRole("button", { name: "Runs on Cloud" }).click();
+      await openPlacement(page);
       await page.getByRole("menuitem", { name: "Move session…", exact: true }).click();
       await page.getByText("The active turn will be interrupted.", { exact: false }).waitFor();
       await page.locator('[data-value="gateway"]').waitFor();
@@ -158,7 +178,11 @@ suite.define(() => {
 
       await page.getByRole("button", { name: "Move session", exact: true }).click();
       await expectMove(gateway, { kind: "device", deviceId: "writer-runner" });
-      await page.getByRole("button", { name: "Moving session…" }).waitFor();
+      await (
+        await placementTrigger(page)
+      )
+        .and(page.getByRole("button", { name: /Moving session/ }))
+        .waitFor();
 
       await resolveMove(gateway, { state: "active", generation: 10 });
     }));
@@ -175,28 +199,27 @@ suite.define(() => {
         },
       });
       await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey));
-      await page.locator(".chat-pane__placement-chip").waitFor();
-      await page.getByRole("button", { name: "Device offline" }).waitFor();
-      await page.locator(".chat-pane__placement-chip").click();
+      await openPlacement(page);
+      await page.getByRole("button", { name: /Device offline/ }).waitFor();
       await page
         .getByText("Waiting for device to reconnect; retry after it returns", { exact: false })
         .waitFor();
       session.placement.runner.status = "available";
       await gateway.setSessionsListResponse(chatSessionListResponse([session]));
       await gateway.emitGatewayEvent("sessions.changed", { reason: "runner-availability" });
-      await page.getByRole("button", { name: "Runs on device" }).waitFor();
+      await page.getByRole("button", { name: /Runs on device/ }).waitFor();
       expect(await page.locator(".chat-pane__placement-note").count()).toBe(0);
 
       session.placement.runner.status = "offline";
       await gateway.setSessionsListResponse(chatSessionListResponse([session]));
       await gateway.emitGatewayEvent("sessions.changed", { reason: "runner-availability" });
-      await page.getByRole("button", { name: "Device offline" }).waitFor();
+      await page.getByRole("button", { name: /Device offline/ }).waitFor();
       const continueAction = page.getByRole("menuitem", {
         name: "Continue on Gateway…",
         exact: true,
       });
       if (!(await continueAction.isVisible())) {
-        await page.getByRole("button", { name: "Device offline" }).click();
+        await openPlacement(page);
       }
       const moveItem = page.locator(".chat-pane__placement-move");
       const reclaimItem = page.locator(".chat-pane__placement-reclaim");
@@ -219,7 +242,7 @@ suite.define(() => {
       };
       await gateway.setSessionsListResponse(chatSessionListResponse([localSession]));
       await resolveMove(gateway, localSession.placement);
-      await page.locator(".chat-pane__placement-chip").waitFor({ state: "detached" });
+      await page.locator(".chat-environment__machine-trigger").waitFor({ state: "detached" });
 
       expect(await page.getByRole("button", { name: "Move failed" }).count()).toBe(0);
       expect(await page.getByText("Continue on Gateway…", { exact: true }).count()).toBe(0);
@@ -268,7 +291,12 @@ suite.define(() => {
         sessionKey,
       });
       await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey));
-      await page.getByRole("button", { name: "Device offline" }).waitFor();
+      await (
+        await placementTrigger(page)
+      )
+        .and(page.getByRole("button", { name: /Device offline/ }))
+        .waitFor();
+      await closeChatDetails(page);
       await selectChatLayoutAction(page, "Open split view");
       const panes = page.locator("openclaw-chat-pane.chat-split-view__pane");
       await expectCount(panes, 2);
@@ -279,7 +307,7 @@ suite.define(() => {
       }
 
       await gateway.deferNext("sessions.move");
-      await panes.last().getByRole("button", { name: "Device offline" }).click();
+      await openPlacement(panes.last());
       await panes
         .last()
         .getByRole("menuitem", { name: "Continue on Gateway…", exact: true })
@@ -316,7 +344,7 @@ suite.define(() => {
       };
       await gateway.setSessionsListResponse(chatSessionListResponse([localSession]));
       await resolveMove(gateway, localSession.placement);
-      await expectCount(page.getByRole("button", { name: "Device offline" }), 0);
+      await expectCount(page.getByRole("button", { name: /Device offline/ }), 0);
       for (const pane of await panes.all()) {
         const transcript = pane.locator(".chat-thread-inner");
         await expectCount(transcript.getByText(partialText, { exact: true }));
@@ -447,6 +475,7 @@ suite.define(() => {
         metadata: { models },
       };
       const gateway = await installPlacementGateway(page, {
+        subscriptionInitialHistory: false,
         deferredMethods: ["chat.startup"],
         featureMethods: ["chat.startup", "sessions.move"],
         historyMessages,
@@ -464,24 +493,32 @@ suite.define(() => {
       });
       await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey));
       await gateway.waitForRequest("chat.startup");
-      await page.getByRole("button", { name: "Runs on device" }).waitFor();
+      await (
+        await placementTrigger(page)
+      )
+        .and(page.getByRole("button", { name: /Runs on device/ }))
+        .waitFor();
       await expect.poll(() => observedRunnerStatus(page, available.key)).toBe("available");
       const presentation = await page.evaluateHandle(() => {
         const state = { returnedOnline: false, seenOffline: false };
         const inspect = () => {
           const labels = new Set(
-            [...document.querySelectorAll("button")].map((button) => button.textContent?.trim()),
+            [...document.querySelectorAll(".chat-environment__machine-trigger")].map(
+              (button) => button.getAttribute("aria-label") ?? "",
+            ),
           );
-          if (labels.has("Device offline")) {
+          if ([...labels].some((label) => label.includes("Device offline"))) {
             state.seenOffline = true;
           }
-          if (state.seenOffline && labels.has("Runs on device")) {
+          if (state.seenOffline && [...labels].some((label) => label.includes("Runs on device"))) {
             state.returnedOnline = true;
           }
         };
         new MutationObserver(inspect).observe(document.body, {
           childList: true,
           characterData: true,
+          attributes: true,
+          attributeFilter: ["aria-label"],
           subtree: true,
         });
         inspect();
@@ -544,7 +581,7 @@ suite.define(() => {
         after: descriptorCount + 1,
         match: descriptorMatch,
       });
-      await page.getByRole("button", { name: "Device offline" }).waitFor();
+      await page.getByRole("button", { name: /Device offline/ }).waitFor();
       expect(await observedRunnerStatus(page, available.key)).toBe("offline");
       expect(await gateway.getRequests("sessions.describe", descriptorMatch)).toHaveLength(
         descriptorCount + 2,
@@ -559,11 +596,15 @@ suite.define(() => {
       await gateway.resolveDeferred("chat.startup", staleStartup);
       await expectCount(page.getByText("Deferred available startup transcript settled."), 2);
       for (const pane of await panes.all()) {
-        await pane.getByRole("button", { name: "Device offline" }).waitFor();
+        await (
+          await placementTrigger(pane)
+        )
+          .and(pane.getByRole("button", { name: /Device offline/ }))
+          .waitFor();
       }
-      expect(await page.getByRole("button", { name: "Runs on device" }).count()).toBe(0);
+      expect(await page.getByRole("button", { name: /Runs on device/ }).count()).toBe(0);
       expect(await presentation.jsonValue()).toEqual({ returnedOnline: false, seenOffline: true });
-      await panes.last().getByRole("button", { name: "Device offline" }).click();
+      await openPlacement(panes.last());
       await panes
         .last()
         .getByText("Waiting for device to reconnect; retry after it returns", { exact: false })
@@ -600,17 +641,21 @@ suite.define(() => {
       });
       await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey));
       await gateway.deferNext("sessions.move");
-      await page.getByRole("button", { name: "Runs on Cloud" }).click();
+      await openPlacement(page);
       await page.getByRole("menuitem", { name: "Move session…", exact: true }).click();
       const profile = page.locator('[data-value="cloud:aws"]');
       await profile.click();
       await expect.poll(() => profile.getAttribute("aria-pressed")).toBe("true");
       if (machineId) {
-        await page.locator(`[data-value="machine:${machineId}"]`).click();
+        await page.getByRole("button", { name: "Machine", exact: true }).click();
+        await page
+          .getByRole("menu", { name: "Machine", exact: true })
+          .locator(`[role="menuitemradio"][data-value="${machineId}"]`)
+          .click();
       } else {
         const dialog = page.locator("openclaw-modal-dialog");
         expect(await dialog.getByText("Machine", { exact: true }).count()).toBe(0);
-        expect(await dialog.locator('[data-value^="machine:"]').count()).toBe(0);
+        expect(await dialog.getByRole("button", { name: "Machine", exact: true }).count()).toBe(0);
       }
       await page.getByRole("button", { name: "Move session", exact: true }).click();
 

@@ -2,12 +2,34 @@ import path from "node:path";
 import { expect, it } from "vitest";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import { controlUiSessionUrl, installMockGateway } from "../test-helpers/control-ui-e2e.ts";
+import { createControlUiSessionRow } from "../test-helpers/control-ui-session-fixtures.ts";
+import { openChatDetailsPeople } from "./chat-details.test-support.ts";
+import { chatSessionListResponse } from "./chat-flow.test-support.ts";
+import { board } from "./chat-layout-fixtures.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
 const suite = createControlUiE2eSuite({
   name: "Control UI chat header owner presence capture",
   startServerBeforeBrowser: true,
 });
+const sessionKey = "agent:main:owner-present";
+const identity = (name: string): { type: "profile"; id: string } => ({
+  type: "profile",
+  id: `profile-${name.toLowerCase()}`,
+});
+const actor = (label: string) => ({
+  type: "human",
+  id: identity(label).id,
+  identity: identity(label),
+  label,
+});
+const watcher = (name: string, self = false) => ({
+  id: identity(name).id,
+  identity: identity(name),
+  name,
+  ...(self ? { self } : { watchedSessions: [sessionKey] }),
+});
+const ada = actor("Ada");
 
 suite.define(() => {
   it.each(["chat", "dashboard"] as const)(
@@ -24,95 +46,31 @@ suite.define(() => {
           viewport: { height: 760, width: 1180 },
         },
         async ({ page }) => {
-          const sessionKey = "agent:main:owner-present";
           const gateway = await installMockGateway(page, {
             hasMultipleSessionSharingIdentities: true,
             presenceUsers: [
-              {
-                self: true,
-                id: "profile-operator",
-                identity: { type: "profile", id: "profile-operator" },
-                name: "Operator",
-              },
-              {
-                id: "profile-ada",
-                identity: { type: "profile", id: "profile-ada" },
-                name: "Ada",
-                watchedSessions: [sessionKey],
-              },
-              {
-                id: "profile-zoe",
-                identity: { type: "profile", id: "profile-zoe" },
-                name: "Zoe",
-                watchedSessions: [sessionKey],
-              },
-              {
-                id: "profile-lin",
-                identity: { type: "profile", id: "profile-lin" },
-                name: "Lin",
-                watchedSessions: [sessionKey],
-              },
+              watcher("Operator", true),
+              ...["Ada", "Zoe", "Lin"].map((name) => watcher(name)),
             ],
             sessionKey,
             featureMethods: ["board.get"],
             methodResponses: {
-              "board.get": {
-                sessionKey,
-                revision: 1,
-                tabs: [{ tabId: "main", title: "Main", position: 0, chatDock: "right" }],
-                widgets: [],
-              },
+              "board.get": board(sessionKey),
               "sessions.list": {
-                count: 1,
-                owners: [
-                  {
-                    type: "human",
-                    id: "profile-ada",
-                    identity: { type: "profile", id: "profile-ada" },
-                    label: "Ada",
-                  },
-                  {
-                    type: "human",
-                    id: "profile-zoe",
-                    identity: { type: "profile", id: "profile-zoe" },
-                    label: "Zoe",
-                  },
-                ],
-                defaults: { contextTokens: null, model: "gpt-5.5", modelProvider: "openai" },
-                path: "",
-                sessions: [
-                  {
-                    contextTokens: null,
-                    createdActor: {
-                      type: "human",
-                      id: "profile-ada",
-                      identity: { type: "profile", id: "profile-ada" },
-                      label: "Ada",
+                ...chatSessionListResponse([
+                  createControlUiSessionRow(
+                    sessionKey,
+                    "Owner presence",
+                    Date.parse("2026-08-14T12:00:00.000Z"),
+                    {
+                      createdActor: ada,
+                      owner: { actor: ada },
+                      participants: [{ identity: identity("Zoe"), label: "Zoe" }],
+                      participantCount: 1,
                     },
-                    owner: {
-                      actor: {
-                        type: "human",
-                        id: "profile-ada",
-                        identity: { type: "profile", id: "profile-ada" },
-                        label: "Ada",
-                      },
-                    },
-                    participants: [
-                      { identity: { type: "profile", id: "profile-zoe" }, label: "Zoe" },
-                    ],
-                    participantCount: 1,
-                    displayName: "Owner presence",
-                    hasActiveRun: false,
-                    key: sessionKey,
-                    kind: "direct",
-                    label: "Owner presence",
-                    model: "gpt-5.5",
-                    modelProvider: "openai",
-                    status: "done",
-                    totalTokens: 0,
-                    updatedAt: Date.parse("2026-08-14T12:00:00.000Z"),
-                  },
-                ],
+                  ),
+                ]),
+                owners: [ada, actor("Zoe")],
                 ts: Date.parse("2026-08-14T12:00:00.000Z"),
               },
             },
@@ -123,14 +81,15 @@ suite.define(() => {
           );
           expect(response?.status()).toBe(200);
           const header = page.locator(".chat-pane__header").first();
+          const count = (selector: string, expected: number) =>
+            expect.poll(() => header.locator(selector).count()).toBe(expected);
+          const attribute = (selector: string, name: string) =>
+            expect.poll(() => header.locator(selector).getAttribute(name));
           await header.waitFor({ state: "visible" });
-          await expect.poll(() => header.locator(".session-owner-chip--header").count()).toBe(1);
-          await expect
-            .poll(() =>
-              header.locator('.chat-pane__participants .viewer-avatar[aria-label="Zoe"]').count(),
-            )
-            .toBe(1);
-          await expect.poll(() => header.locator('[data-viewer-id="profile-lin"]').count()).toBe(1);
+          for (const id of ["profile-ada", "profile-zoe", "profile-lin"]) {
+            await count(`[data-viewer-id="${id}"]`, 1);
+          }
+          await attribute(".chat-pane__presence .viewer-facepile", "data-viewer-count").toBe("3");
 
           const screenshotPath = path.join(outputDir, `${face}-header.png`);
           const clip = await header.boundingBox();
@@ -140,26 +99,20 @@ suite.define(() => {
           await page.screenshot({ animations: "disabled", clip, path: screenshotPath });
           process.stdout.write(`Chat header screenshot: ${screenshotPath}\n`);
 
-          await expect
-            .poll(() =>
-              header
-                .locator(".chat-pane__presence .viewer-facepile")
-                .getAttribute("data-viewer-count"),
-            )
-            .toBe("1");
-          await expect.poll(() => header.locator('[data-viewer-id="profile-ada"]').count()).toBe(0);
-          await expect
-            .poll(() => header.locator('.viewer-avatar[aria-label="Zoe"]:visible').count())
-            .toBe(1);
-          await expect
-            .poll(() => header.locator(".session-owner-chip--header").getAttribute("class"))
-            .not.toContain("session-owner-chip--away");
+          const people = await openChatDetailsPeople(page);
+          const members = people.locator(".chat-details-people__person");
+          const owner = members.filter({ hasText: "Ada" });
+          const participant = members.filter({ hasText: "Zoe" });
+          await owner.waitFor({ state: "visible" });
+          await participant.waitFor({ state: "visible" });
+          expect(await members.count()).toBe(2);
+          expect(await owner.locator(".chat-details-people__role").textContent()).toBe("Owner");
 
           await gateway.emitGatewayEvent("presence", { presence: [] });
-          await expect.poll(() => header.locator(".chat-pane__presence").count()).toBe(0);
-          await expect
-            .poll(() => header.locator('.viewer-avatar[aria-label="Zoe"]:visible').count())
-            .toBe(1);
+          await count(".chat-pane__presence", 0);
+          expect(await members.count()).toBe(2);
+          expect(await owner.isVisible()).toBe(true);
+          expect(await participant.isVisible()).toBe(true);
         },
       );
     },

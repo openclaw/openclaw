@@ -23,6 +23,7 @@ const isFixturePath = (p: string) => {
 
 function setPackageRoot(root: string, name = "openclaw") {
   state.entries.set(abs(path.join(root, "package.json")), JSON.stringify({ name }));
+  return root;
 }
 
 const mockFsModule = () => ({
@@ -97,59 +98,42 @@ describe("resolveOpenClawPackageRoot", () => {
     return { opts: { cwd, moduleUrl }, expected: packageName === "openclaw" ? cwd : null };
   }
 
+  function linkedScenario(name: string, nested = false) {
+    const project = fx(name);
+    const bin = path.join(project, nested ? ".artifacts/prefix/bin" : "bin", "openclaw");
+    const expected = setPackageRoot(
+      path.join(project, nested ? ".artifacts/prefix/lib/node_modules/openclaw" : "real-pkg"),
+    );
+    if (nested) {
+      setPackageRoot(project);
+    }
+    state.realpaths.set(abs(bin), abs(path.join(expected, "openclaw.mjs")));
+    return { opts: { argv1: bin }, expected };
+  }
+
+  function moduleScenario(fallthrough = false) {
+    const root = fx(fallthrough ? "moduleurl-fallthrough" : "moduleurl");
+    const moduleRoot = setPackageRoot(
+      fallthrough ? path.join(root, "wrong") : root,
+      fallthrough ? "not-openclaw" : "openclaw",
+    );
+    const cwd = fallthrough ? setPackageRoot(path.join(root, "cwd")) : undefined;
+    return {
+      opts: { moduleUrl: pathToFileURL(path.join(moduleRoot, "dist/index.js")).href, cwd },
+      expected: cwd ?? moduleRoot,
+    };
+  }
+
   it.each([
     ["resolves package root from .bin argv1", () => binScenario("bin-scenario")],
-    [
-      "resolves package root via symlinked argv1",
-      () => {
-        const project = fx("symlink-scenario");
-        const bin = path.join(project, "bin", "openclaw");
-        const realPkg = path.join(project, "real-pkg");
-        state.realpaths.set(abs(bin), abs(path.join(realPkg, "openclaw.mjs")));
-        setPackageRoot(realPkg);
-        return { opts: { argv1: bin }, expected: realPkg };
-      },
-    ],
+    ["resolves package root via symlinked argv1", () => linkedScenario("symlink-scenario")],
     [
       "prefers a symlink target nested under another openclaw package",
-      () => {
-        const sourceRoot = fx("nested-symlink-scenario");
-        const bin = path.join(sourceRoot, ".artifacts", "prefix", "bin", "openclaw");
-        const installedRoot = path.join(sourceRoot, ".artifacts/prefix/lib/node_modules/openclaw");
-        state.realpaths.set(abs(bin), abs(path.join(installedRoot, "openclaw.mjs")));
-        setPackageRoot(sourceRoot);
-        setPackageRoot(installedRoot);
-        return { opts: { argv1: bin }, expected: installedRoot };
-      },
+      () => linkedScenario("nested-symlink-scenario", true),
     ],
     ["falls back when argv1 realpath throws", () => binScenario("realpath-throw-scenario", false)],
-    [
-      "prefers moduleUrl candidates",
-      () => {
-        const pkgRoot = fx("moduleurl");
-        setPackageRoot(pkgRoot);
-        return {
-          opts: { moduleUrl: pathToFileURL(path.join(pkgRoot, "dist", "index.js")).toString() },
-          expected: pkgRoot,
-        };
-      },
-    ],
-    [
-      "falls through from a non-openclaw moduleUrl candidate to cwd",
-      () => {
-        const wrongPkgRoot = fx("moduleurl-fallthrough", "wrong");
-        const cwdPkgRoot = fx("moduleurl-fallthrough", "cwd");
-        setPackageRoot(wrongPkgRoot, "not-openclaw");
-        setPackageRoot(cwdPkgRoot);
-        return {
-          opts: {
-            moduleUrl: pathToFileURL(path.join(wrongPkgRoot, "dist", "index.js")).toString(),
-            cwd: cwdPkgRoot,
-          },
-          expected: cwdPkgRoot,
-        };
-      },
-    ],
+    ["prefers moduleUrl candidates", () => moduleScenario()],
+    ["falls through from a non-openclaw moduleUrl candidate to cwd", () => moduleScenario(true)],
     [
       "ignores invalid moduleUrl values and falls back to cwd",
       () => cwdScenario("invalid-moduleurl", "not-a-file-url"),

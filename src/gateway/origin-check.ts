@@ -1,11 +1,9 @@
 import type { IncomingMessage } from "node:http";
 import net from "node:net";
-import {
-  normalizeLowercaseStringOrEmpty,
-  normalizeOptionalLowercaseString,
-} from "@openclaw/normalization-core/string-coerce";
+import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { resolveControlUiAllowedOrigins } from "../config/gateway-control-ui-origins.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { normalizeLowercaseStringSet } from "../shared/normalized-string-set.js";
 import { getHeader } from "./http-header-value.js";
 import {
   getRemoteControlUiIngressContext,
@@ -128,11 +126,7 @@ export function checkBrowserOrigin(params: {
     return { ok: false, reason: "origin missing or invalid" };
   }
 
-  const allowlist = new Set(
-    (params.allowedOrigins ?? [])
-      .map((value) => normalizeOptionalLowercaseString(value))
-      .filter(Boolean),
-  );
+  const allowlist = normalizeLowercaseStringSet((params.allowedOrigins ?? []).values());
   if (allowlist.has("*") || allowlist.has(parsedOrigin.origin)) {
     return { ok: true, matchedBy: "allowlist" };
   }

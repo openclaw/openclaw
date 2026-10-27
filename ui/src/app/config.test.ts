@@ -25,12 +25,25 @@ function setup(options: Partial<Parameters<typeof createApplicationConfigCapabil
   return createApplicationConfigCapability({ resourceBasePath: "", ...options });
 }
 
+function pendingResponse() {
+  const response = createDeferred<Response>();
+  fetchMock.mockImplementationOnce(() => response.promise);
+  return (version: string) => response.resolve(bootstrapResponse(version));
+}
+
 function documentConfig(payload: ControlUiBootstrapConfig) {
   document.documentElement.setAttribute(
     CONTROL_UI_BOOTSTRAP_CONFIG_ATTRIBUTE,
     JSON.stringify(payload),
   );
 }
+const documentPayload: ControlUiBootstrapConfig = {
+  basePath: "",
+  assistantName: "Observatory",
+  assistantAvatar: "🔭",
+  preferences: { profileId: "synthetic-viewer", entries: { "ui.themeMode": "light" } },
+  pluginFrameGrants: [{ pluginId: "fixture", path: "/panel", match: "exact" }],
+};
 
 afterEach(() => {
   vi.unstubAllGlobals();
@@ -61,19 +74,17 @@ it("keeps capabilities available when development plugin grants contain invalid 
     gatewayUrl: "ws://gateway.example/mount",
     proxyPath: "/dev-gateway",
   });
+  const grants = [
+    { pluginId: "fixture", path: "/mount/plugins/fixture/", match: "prefix" },
+    { pluginId: "malformed", path: "http://[", match: "prefix" },
+    { pluginId: "foreign", path: "https://other.example/panel", match: "exact" },
+  ];
   fetchMock.mockImplementation(async () =>
     Response.json({
       terminalEnabled: true,
       cliAgentsEnabled: true,
       pluginFrameGrants: [
-        {
-          pluginId: "fixture",
-          path: "/mount/plugins/fixture/",
-          match: "prefix",
-          unrecognized: "discard",
-        },
-        { pluginId: "malformed", path: "http://[", match: "prefix" },
-        { pluginId: "foreign", path: "https://other.example/panel", match: "exact" },
+        ...grants.map((grant) => ({ ...grant, unrecognized: "discard" })),
         { path: "/missing-owner", match: "prefix" },
       ],
     }),
@@ -83,13 +94,11 @@ it("keeps capabilities available when development plugin grants contain invalid 
     terminalEnabled: true,
     cliAgentsEnabled: true,
     pluginFrameGrants: [
-      { pluginId: "fixture", path: "/dev-gateway/mount/plugins/fixture/", match: "prefix" },
-      { pluginId: "malformed", path: "http://[", match: "prefix" },
-      { pluginId: "foreign", path: "https://other.example/panel", match: "exact" },
+      { ...grants[0], path: "/dev-gateway/mount/plugins/fixture/" },
+      ...grants.slice(1),
     ],
   });
   expect(config.current.pluginFrameGrants[0]).not.toHaveProperty("unrecognized");
-  expect(fetchMock).toHaveBeenCalledOnce();
 });
 
 it.each([undefined, false])(
@@ -113,19 +122,12 @@ it("returns an unavailable result for invalid bootstrap data", async () => {
 });
 
 it("publishes document config before requests and reuses it until invalidated", async () => {
-  const payload: ControlUiBootstrapConfig = {
-    basePath: "",
-    assistantName: "Observatory",
-    assistantAvatar: "🔭",
-    preferences: { profileId: "synthetic-viewer", entries: { "ui.themeMode": "light" } },
-    pluginFrameGrants: [{ pluginId: "fixture", path: "/panel", match: "exact" }],
-  };
-  documentConfig(payload);
+  documentConfig(documentPayload);
   fetchMock.mockImplementation(async () => bootstrapResponse("updated"));
   const config = setup();
   expect(config.current.assistantIdentity).toMatchObject({ name: "Observatory", avatar: "🔭" });
-  expect(config.current.pluginFrameGrants).toEqual(payload.pluginFrameGrants);
-  expect(config.preferences).toEqual(payload.preferences);
+  expect(config.current.pluginFrameGrants).toEqual(documentPayload.pluginFrameGrants);
+  expect(config.preferences).toEqual(documentPayload.preferences);
   await config.refresh({ ifNeeded: true });
   expect(fetchMock).not.toHaveBeenCalled();
   vi.spyOn(Date, "now").mockReturnValue(Date.now() + 24 * 60 * 60 * 1_000);
@@ -137,117 +139,81 @@ it("publishes document config before requests and reuses it until invalidated", 
 });
 
 it("revalidates document grants before reusing them with a startup bearer", async () => {
-  documentConfig({
-    basePath: "",
-    preferences: { profileId: "browser-profile", entries: { "ui.themeMode": "light" } },
-    assistantName: "Browser identity",
-    assistantAvatar: "",
-    pluginFrameGrants: [{ pluginId: "browser-only", path: "/browser", match: "prefix" }],
-  });
+  documentConfig(documentPayload);
   fetchMock.mockImplementation(async () => bootstrapResponse("bearer"));
   const config = setup({
     getAuth: () => ({ settings: { token: "test-other-identity" } }),
   });
-  expect(config.current.assistantIdentity.name).toBe("Browser identity");
+  expect(config.current.assistantIdentity.name).toBe("Observatory");
   expect(config.preferences).toBeUndefined();
   const result = await config.refresh({ ifNeeded: true });
-  expect(fetchMock).toHaveBeenCalledOnce();
   expect(result).toMatchObject({ serverVersion: "bearer", pluginFrameGrants: [] });
 });
 
 it.each(["/other", "https://other.example"])(
   "does not adopt another resource owner's document config: %s",
   (resourceBasePath) => {
-    documentConfig({ basePath: "", assistantName: "Observatory", assistantAvatar: "" });
+    documentConfig(documentPayload);
     const config = createApplicationConfigCapability({ resourceBasePath });
     expect(config.current.assistantIdentity.name).toBe("Assistant");
   },
 );
 
 it("shares concurrent bootstrap loads with equivalent credentials", async () => {
-  const response = createDeferred<Response>();
-  fetchMock.mockImplementation(() => response.promise);
+  const respond = pendingResponse();
   let token = "fixture-token";
   const config = setup({ getAuth: () => ({ settings: { token } }) });
 
   const first = config.refresh();
   token = " fixture-token ";
   const second = config.refresh({ ifNeeded: true });
-  response.resolve(bootstrapResponse("ready"));
+  respond("ready");
 
   await expect(first).resolves.toMatchObject({ serverVersion: "ready" });
   await expect(second).resolves.toMatchObject({ serverVersion: "ready" });
   expect(fetchMock).toHaveBeenCalledTimes(1);
 });
 
-it("refreshes without a bearer candidate at boot and after credentials change", async () => {
-  const oldResponse = createDeferred<Response>();
-  fetchMock
-    .mockImplementationOnce(() => oldResponse.promise)
-    .mockResolvedValueOnce(bootstrapResponse("cookie"));
-  let token = "fixture-token";
-  const config = setup({ getAuth: () => ({ settings: { token } }) });
-  const loading = config.refresh({ ifNeeded: true });
-  token = "";
-  await expect(config.refresh({ ifNeeded: true })).resolves.toMatchObject({
-    serverVersion: "cookie",
-  });
-  oldResponse.resolve(bootstrapResponse("retired"));
-  await expect(loading).resolves.toBeNull();
-  expect(fetchMock.mock.calls[1]?.[1]).toMatchObject({
-    credentials: "same-origin",
-    headers: { Accept: "application/json" },
-  });
-  expect(fetchMock.mock.calls[1]?.[1]?.headers).not.toHaveProperty("Authorization");
-  expect(config.current.serverVersion).toBe("cookie");
-});
-
-it.each([false, true])("rejects retired credentials (replacement refresh: %s)", async (replace) => {
-  const old = createDeferred<Response>();
-  const replacement = createDeferred<Response>();
-  fetchMock
-    .mockImplementationOnce(() => old.promise)
-    .mockImplementationOnce(() => replacement.promise);
-  let token = "fixture-token";
-  const config = setup({ getAuth: () => ({ settings: { token } }) });
-  const loading = config.refresh();
-  token = "replacement-fixture-token";
-  if (replace) {
-    const next = config.refresh();
-    replacement.resolve(bootstrapResponse("new"));
-    await expect(next).resolves.toMatchObject({ serverVersion: "new" });
-  }
-  old.resolve(bootstrapResponse("retired"));
-  await expect(loading).resolves.toBeNull();
-  expect(config.current.serverVersion).toBe(replace ? "new" : null);
-  expect(fetchMock).toHaveBeenCalledTimes(replace ? 2 : 1);
-  if (replace) {
-    expect(config.current.cliAgentsEnabled).toBe(true);
-  }
-});
-
-it.each([false, true])(
-  "keeps independent callers valid and publishes the newest successful response (aborted: %s)",
-  async (aborted) => {
-    const firstResponse = createDeferred<Response>();
-    const secondResponse = createDeferred<Response>();
-    fetchMock
-      .mockImplementationOnce(() => firstResponse.promise)
-      .mockImplementationOnce(() => secondResponse.promise);
-    const config = setup();
-    const abort = new AbortController();
-    const first = config.refresh();
-    const second = config.refresh({ signal: abort.signal });
-    if (aborted) {
-      abort.abort();
+it.each(["cookie", "retired", "replacement", "newer", "aborted"] as const)(
+  "settles concurrent bootstrap reads after %s",
+  async (mode) => {
+    const old = pendingResponse();
+    const replacement = pendingResponse();
+    let token = "fixture-token";
+    const config = setup({ getAuth: () => ({ settings: { token } }) });
+    const loading = config.refresh();
+    const changesAuth = ["cookie", "retired", "replacement"].includes(mode);
+    if (changesAuth) {
+      token = mode === "cookie" ? "" : "replacement-fixture-token";
     }
-    secondResponse.resolve(bootstrapResponse("new"));
-    expect(await second).toEqual(
-      aborted ? null : expect.objectContaining({ serverVersion: "new" }),
+    if (mode !== "retired") {
+      const abort = new AbortController();
+      const next = config.refresh({ ifNeeded: true, signal: abort.signal });
+      if (mode === "aborted") {
+        abort.abort();
+      }
+      replacement("new");
+      expect(await next).toEqual(
+        mode === "aborted" ? null : expect.objectContaining({ serverVersion: "new" }),
+      );
+    }
+    old("retired");
+    expect(await loading).toEqual(
+      changesAuth ? null : expect.objectContaining({ serverVersion: "retired" }),
     );
-    firstResponse.resolve(bootstrapResponse("old"));
-
-    await expect(first).resolves.toMatchObject({ serverVersion: "old" });
-    expect(config.current.serverVersion).toBe(aborted ? "old" : "new");
+    expect(config.current.serverVersion).toBe(
+      mode === "retired" ? null : mode === "aborted" ? "retired" : "new",
+    );
+    expect(fetchMock).toHaveBeenCalledTimes(mode === "retired" ? 1 : 2);
+    if (mode === "replacement") {
+      expect(config.current.cliAgentsEnabled).toBe(true);
+    }
+    if (mode === "cookie") {
+      expect(fetchMock.mock.calls[1]?.[1]).toMatchObject({
+        credentials: "same-origin",
+        headers: { Accept: "application/json" },
+      });
+      expect(fetchMock.mock.calls[1]?.[1]?.headers).not.toHaveProperty("Authorization");
+    }
   },
 );

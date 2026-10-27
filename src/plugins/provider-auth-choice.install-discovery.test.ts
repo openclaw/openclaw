@@ -3,6 +3,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { setImmediate as nextTurn } from "node:timers/promises";
 import { afterEach, expect, it, vi } from "vitest";
+import { createPluginDeclaredSurface } from "../../test/helpers/plugin-declared-surface.js";
 import { createWizardPrompter } from "../../test/helpers/wizard-prompter.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
@@ -80,18 +81,9 @@ it.each([false, true])(
     const cleanupPath = path.join(root, "provider-cleaned");
     const writeJson = (dir: string, name: string, value: unknown) =>
       fs.writeFileSync(path.join(dir, name), JSON.stringify(value));
-    const acceptedSurface = {
-      channels: [],
+    const acceptedSurface = createPluginDeclaredSurface({
       providers: ["installed-provider"],
-      tools: [],
-      contracts: [],
-      hooks: [],
-      mcpServers: [],
-      cliCommands: [],
-      cliBackends: [],
-      skills: [],
-      dangerousConfigFlags: [],
-    };
+    });
     const trustedRecord: PluginInstallRecord = {
       source: "npm",
       spec: "@fixture/installed-provider@1.0.0",

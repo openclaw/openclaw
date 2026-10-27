@@ -1,6 +1,6 @@
+import { expectDefined } from "@openclaw/normalization-core/expect";
 import { beforeEach, expect, test, vi } from "vitest";
 import {
-  appendTranscriptEvent,
   appendTranscriptMessage,
   loadSessionEntry,
   upsertSessionEntryCore,
@@ -36,60 +36,50 @@ const transcriptReads = vi.hoisted(() => ({
 vi.mock("../config/sessions/session-transcript-hydration.js", async (importOriginal) => {
   const actual =
     await importOriginal<typeof import("../config/sessions/session-transcript-hydration.js")>();
-  return {
-    ...actual,
-    prepareSessionTranscriptHydration: transcriptReads.hydration,
-  };
+  transcriptReads.hydration.mockImplementation(actual.prepareSessionTranscriptHydration);
+  return { ...actual, prepareSessionTranscriptHydration: transcriptReads.hydration };
 });
 
 vi.mock("../config/sessions/session-transcript-stats.js", async (importOriginal) => {
   const actual =
     await importOriginal<typeof import("../config/sessions/session-transcript-stats.js")>();
-  return {
-    ...actual,
-    readTranscriptStatsAsync: transcriptReads.stats,
-  };
+  transcriptReads.stats.mockImplementation(actual.readTranscriptStatsAsync);
+  return { ...actual, readTranscriptStatsAsync: transcriptReads.stats };
 });
 
 const { createSessionStoreDir, openClient } = setupGatewaySessionsTestHarness();
 
-let realPrepareTranscriptHydration: PrepareTranscriptHydration;
-let realTranscriptStatsReader: ReadTranscriptStats;
+async function compact(key = "main", maxLines?: number) {
+  const { ws } = await openClient();
+  try {
+    return await rpcReq(ws, "sessions.compact", {
+      key,
+      ...(maxLines === undefined ? {} : { maxLines }),
+    });
+  } finally {
+    ws.close();
+  }
+}
 
-beforeEach(async () => {
-  transcriptReads.hydration.mockReset();
-  transcriptReads.stats.mockReset();
-  const [hydration, stats] = await Promise.all([
-    vi.importActual<typeof import("../config/sessions/session-transcript-hydration.js")>(
-      "../config/sessions/session-transcript-hydration.js",
-    ),
-    vi.importActual<typeof import("../config/sessions/session-transcript-stats.js")>(
-      "../config/sessions/session-transcript-stats.js",
-    ),
-  ]);
-  realPrepareTranscriptHydration = hydration.prepareSessionTranscriptHydration;
-  realTranscriptStatsReader = stats.readTranscriptStatsAsync;
-  transcriptReads.hydration.mockImplementation(realPrepareTranscriptHydration);
-  transcriptReads.stats.mockImplementation(realTranscriptStatsReader);
+const realHydration = expectDefined(transcriptReads.hydration.getMockImplementation(), "hydration");
+const realStats = expectDefined(transcriptReads.stats.getMockImplementation(), "transcript stats");
+beforeEach(() => {
+  transcriptReads.hydration.mockReset().mockImplementation(realHydration);
+  transcriptReads.stats.mockReset().mockImplementation(realStats);
 });
 
-async function seedCompactionSession(params: {
-  sessionId: string;
-  storePath: string;
-  nativeHarness?: boolean;
-  withTranscript?: boolean;
-}) {
-  const scope = {
-    agentId: "main",
-    sessionId: params.sessionId,
-    sessionKey: "agent:main:main",
-    storePath: params.storePath,
-  };
+async function seedCompactionSession(
+  sessionId: string,
+  nativeHarness = false,
+  withTranscript = true,
+) {
+  const { storePath } = await createSessionStoreDir();
+  const scope = { agentId: "main", sessionId, sessionKey: "agent:main:main", storePath };
   await upsertSessionEntryCore(
     scope,
     sessionStoreEntry(
-      params.sessionId,
-      params.nativeHarness
+      sessionId,
+      nativeHarness
         ? {
             agentHarnessId: "codex",
             cliSessionBindings: { "codex-cli": { sessionId: "thread-1" } },
@@ -99,19 +89,11 @@ async function seedCompactionSession(params: {
         : {},
     ),
   );
-  if (params.withTranscript === false) {
+  if (!withTranscript) {
     return scope;
   }
-  await appendTranscriptEvent(scope, {
-    type: "session",
-    version: 3,
-    id: params.sessionId,
-    timestamp: "2026-08-18T12:00:00.000Z",
-    cwd: "/tmp",
-  });
   await appendTranscriptMessage(scope, {
     message: { role: "user", content: "compact me", timestamp: 1 },
-    now: Date.parse("2026-08-18T12:00:01.000Z"),
   });
   return scope;
 }
@@ -123,7 +105,7 @@ const transcriptReadError = () =>
 function failTranscriptReadForSession(sessionId: string, reader: "hydration" | "stats"): void {
   if (reader === "hydration") {
     transcriptReads.hydration.mockImplementation((...params) => {
-      const prepared = realPrepareTranscriptHydration(...params);
+      const prepared = realHydration(...params);
       return {
         ...prepared,
         read: async (options) => {
@@ -137,80 +119,39 @@ function failTranscriptReadForSession(sessionId: string, reader: "hydration" | "
   } else {
     transcriptReads.stats.mockImplementation(async (scope) => {
       if (scope.sessionId !== sessionId) {
-        return realTranscriptStatsReader(scope);
+        return realStats(scope);
       }
       throw transcriptReadError();
     });
   }
 }
 
-test.each([
-  { stage: "legacy preflight", sessionId: "sess-read-failure", reader: "hydration" as const },
-  {
-    stage: "native preflight",
-    sessionId: "sess-native-read-failure",
-    reader: "stats" as const,
-    nativeHarness: true,
-  },
-  {
-    stage: "maxLines preflight",
-    sessionId: "sess-max-lines-read-failure",
-    reader: "stats" as const,
-    maxLines: 50,
-  },
-])(
-  "sessions.compact reports $stage transcript read failures as unavailable",
-  async ({ sessionId, maxLines, nativeHarness, reader }) => {
-    const { storePath } = await createSessionStoreDir();
-    await seedCompactionSession({ sessionId, storePath, nativeHarness });
-    failTranscriptReadForSession(sessionId, reader);
-
-    const { ws } = await openClient();
-    try {
-      const response = await rpcReq(ws, "sessions.compact", {
-        key: "main",
-        ...(maxLines === undefined ? {} : { maxLines }),
-      });
-
-      expect(response.ok).toBe(false);
-      expect(response.error).toMatchObject({
+test.each(["legacy", "native", "maxLines"])(
+  "sessions.compact reports %s preflight transcript read failures as unavailable",
+  async (stage) => {
+    const sessionId = `sess-${stage}-read-failure`;
+    const maxLines = stage === "maxLines" ? 50 : undefined;
+    await seedCompactionSession(sessionId, stage === "native");
+    failTranscriptReadForSession(sessionId, stage === "legacy" ? "hydration" : "stats");
+    expect(await compact("main", maxLines)).toMatchObject({
+      ok: false,
+      error: {
         code: "UNAVAILABLE",
         message: expect.stringContaining("failed to read session transcript storage"),
-      });
-    } finally {
-      ws.close();
-    }
+      },
+    });
   },
 );
 
 test.each([false, true])(
   "sessions.compact keeps an empty transcript as a successful no-op (native harness: %s)",
   async (nativeHarness) => {
-    const { storePath } = await createSessionStoreDir();
-    await seedCompactionSession({
-      sessionId: "sess-empty-model",
-      storePath,
-      withTranscript: false,
-      nativeHarness,
+    await seedCompactionSession("sess-empty-model", nativeHarness, false);
+
+    expect(await compact()).toMatchObject({
+      ok: true,
+      payload: { ok: true, compacted: false, reason: "no transcript" },
     });
-
-    const { ws } = await openClient();
-    try {
-      const response = await rpcReq<{ compacted: boolean; ok: true; reason: string }>(
-        ws,
-        "sessions.compact",
-        { key: "main" },
-      );
-
-      expect(response.ok).toBe(true);
-      expect(response.payload).toMatchObject({
-        ok: true,
-        compacted: false,
-        reason: "no transcript",
-      });
-    } finally {
-      ws.close();
-    }
   },
 );
 
@@ -218,34 +159,20 @@ test.each([undefined, 2])(
   "sessions.compact rejects a missing session with maxLines=%s",
   async (maxLines) => {
     await createSessionStoreDir();
-    const { ws } = await openClient();
-    try {
-      const response = await rpcReq(ws, "sessions.compact", {
-        key: "agent:main:missing",
-        ...(maxLines === undefined ? {} : { maxLines }),
-      });
-
-      expect(response.ok).toBe(false);
-      expect(response.error).toMatchObject({
+    expect(await compact("agent:main:missing", maxLines)).toMatchObject({
+      ok: false,
+      error: {
         code: "INVALID_REQUEST",
         message: expect.stringContaining("Session agent:main:missing not found"),
-      });
-    } finally {
-      ws.close();
-    }
+      },
+    });
   },
 );
 
 test.each([false, true])(
   "sessions.compact reads settled facts (native harness: %s)",
   async (nativeHarness) => {
-    const { storePath } = await createSessionStoreDir();
-    const scope = await seedCompactionSession({
-      sessionId: "sess-compact-settled",
-      storePath,
-      nativeHarness,
-      withTranscript: false,
-    });
+    const scope = await seedCompactionSession("sess-compact-settled", nativeHarness, false);
     const settle = settlementOwner.waitForTerminalSessionRunSettlement;
     const settlement = vi
       .spyOn(settlementOwner, "waitForTerminalSessionRunSettlement")
@@ -265,13 +192,12 @@ test.each([false, true])(
         });
         return settled;
       });
-    embeddedRunMock.compactEmbeddedAgentSession.mockResolvedValueOnce({
-      ok: true,
-      compacted: true,
-    });
-    const { ws } = await openClient();
     try {
-      expect(await rpcReq(ws, "sessions.compact", { key: "main" })).toMatchObject({
+      embeddedRunMock.compactEmbeddedAgentSession.mockResolvedValueOnce({
+        ok: true,
+        compacted: true,
+      });
+      expect(await compact()).toMatchObject({
         ok: true,
         payload: { key: "agent:main:main", compacted: true },
       });
@@ -284,7 +210,6 @@ test.each([false, true])(
       );
     } finally {
       settlement.mockRestore();
-      ws.close();
     }
   },
 );

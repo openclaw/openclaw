@@ -1,7 +1,11 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { expect, it, vi } from "vitest";
-import { createDeferred, withTestTimeout } from "../../../test/helpers/promise.js";
-import { claimEmbeddedPendingUserInputAnswer } from "../../agents/embedded-agent-runner/run/attempt-queue-message.js";
+import {
+  awaitGateBeforeSettlement,
+  createDeferred,
+  withTestTimeout,
+} from "../../../test/helpers/promise.js";
+import { claimEmbeddedPendingUserInputAnswer as claimAnswer } from "../../agents/embedded-agent-runner/run/attempt-queue-message.js";
 import {
   cancelPendingAgentQuestionForSession,
   runAgentHarnessGatewayQuestion,
@@ -19,18 +23,16 @@ it("leaves hidden-run image input for visible followup when question registratio
   await withQuestionGateway(async (fixture) =>
     withQuestionCreator(key, run, async (operation, fingerprint) => {
       const hello = fixture.holdNextHello();
-      const question = runAgentHarnessGatewayQuestion({
-        questionId: "ask_hidden_registration_failure",
-        sessionKey: key,
-        questions: [{ id: "answer", header: "Answer", question: "Continue?", isOther: true }],
-        timeoutMs: 60_000,
-        signal: fixture.backingRun.signal,
-        delivery: { onBlockReply: vi.fn() },
-      });
-      const questionOutcome = question.then(
-        (result) => ({ kind: "answer" as const, result }),
-        (error: unknown) => ({ kind: "error" as const, error }),
-      );
+      const questionOutcome = Promise.allSettled([
+        runAgentHarnessGatewayQuestion({
+          questionId: "ask_hidden_registration_failure",
+          sessionKey: key,
+          questions: [{ id: "answer", header: "Answer", question: "Continue?", isOther: true }],
+          timeoutMs: 60_000,
+          signal: fixture.backingRun.signal,
+          delivery: { onBlockReply: vi.fn() },
+        }),
+      ]);
       const enteredCancel = createDeferred();
       const queueMessage = vi.fn(async () => {});
       const cancelBackingRun = vi.fn();
@@ -44,10 +46,7 @@ it("leaves hidden-run image input for visible followup when question registratio
           isAvailable: () => true,
           queueMessage,
           claimPendingUserInputAnswer: (text, options, assertCurrent, kind) =>
-            claimEmbeddedPendingUserInputAnswer(text, options, key, undefined, {
-              kind,
-              assertCurrent,
-            }),
+            claimAnswer(text, options, key, undefined, { kind, assertCurrent }),
           cancelPendingUserInput: (resolvedBy, assertCurrent, kind) => {
             enteredCancel.resolve();
             return cancelPendingAgentQuestionForSession({
@@ -66,12 +65,11 @@ it("leaves hidden-run image input for visible followup when question registratio
       let imageOutcome: Promise<unknown> | undefined;
       try {
         await withTestTimeout(
-          Promise.race([
+          awaitGateBeforeSettlement(
             hello.entered,
-            questionOutcome.then(() => {
-              throw new Error("question completed before the registration handshake");
-            }),
-          ]),
+            questionOutcome,
+            "question completed before the registration handshake",
+          ),
           5_000,
           "question did not begin Gateway registration",
         );
@@ -83,31 +81,28 @@ it("leaves hidden-run image input for visible followup when question registratio
           images: [{ type: "image", data: "aW1hZ2U=", mimeType: "image/png" }],
           assertCurrent: () => operation.abortSignal.throwIfAborted(),
         });
-        imageOutcome = attempt.outcome.then(
-          (outcome) => ({ kind: "outcome", outcome }),
-          (error: unknown) => ({ kind: "error", error }),
-        );
+        imageOutcome = Promise.allSettled([attempt.outcome]);
         await withTestTimeout(enteredCancel.promise, 1_000, "image did not reach question owner");
         expect(fixture.requests.some((frame) => frame.method === "question.request")).toBe(false);
         hello.fail();
         await expect(attempt.acceptance).resolves.toBe(false);
-        await expect(imageOutcome).resolves.toMatchObject({
-          kind: "outcome",
-          outcome: { status: "rejected", reason: "input_visibility_mismatch" },
-        });
-        await expect(questionOutcome).resolves.toMatchObject({ kind: "error" });
-        expect(
-          fixture.requests.filter(
-            (frame) =>
-              frame.method === "question.resolve" &&
-              isRecord(frame.params) &&
-              frame.params.resolvedBy === "image-reply",
-          ),
-        ).toEqual([]);
+        await expect(imageOutcome).resolves.toMatchObject([
+          {
+            status: "fulfilled",
+            value: { status: "rejected", reason: "input_visibility_mismatch" },
+          },
+        ]);
+        await expect(questionOutcome).resolves.toMatchObject([{ status: "rejected" }]);
+        const resolvedBy = fixture.requests
+          .filter((frame) => frame.method === "question.resolve")
+          .map((frame) => (isRecord(frame.params) ? frame.params.resolvedBy : undefined));
+        expect(resolvedBy).not.toContain("image-reply");
         expect(queueMessage).not.toHaveBeenCalled();
         expect(cancelBackingRun).not.toHaveBeenCalled();
-        expect(operation.phase).toBe("running");
-        expect(fixture.backingRun.signal.aborted).toBe(false);
+        expect({ phase: operation.phase, aborted: fixture.backingRun.signal.aborted }).toEqual({
+          phase: "running",
+          aborted: false,
+        });
       } finally {
         hello.release();
         fixture.backingRun.abort();

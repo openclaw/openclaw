@@ -1,10 +1,7 @@
-import {
-  normalizeLowercaseStringOrEmpty,
-  normalizeOptionalLowercaseString,
-} from "@openclaw/normalization-core/string-coerce";
+import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 import { removeDirectiveSpan } from "./directive-parsing.js";
 
-const INLINE_SIMPLE_COMMAND_RE = /(?<!\S)\/(help|commands|whoami|id)(?=$|\s|:)/i;
+const INLINE_SIMPLE_COMMAND_RE = /(?<!\S)\/(?:help|commands|whoami|id)(?=$|\s|:)/i;
 const INLINE_STATUS_RE = /(?<!\S)\/status(?=$|\s|:)(?:\s*:)?/i;
 
 export function getStandaloneSlashCommandName(body: string): string | null {
@@ -19,11 +16,11 @@ export function extractInlineSimpleCommand(body?: string): {
   if (!body) {
     return null;
   }
-  const match = body.match(INLINE_SIMPLE_COMMAND_RE);
-  if (!match || match.index === undefined) {
+  const match = INLINE_SIMPLE_COMMAND_RE.exec(body);
+  if (!match) {
     return null;
   }
-  const alias = `/${normalizeLowercaseStringOrEmpty(match[1])}`;
+  const alias = match[0].toLowerCase();
   const command = alias === "/id" ? "/whoami" : alias;
   const cleaned = removeDirectiveSpan(body, match.index, match.index + match[0].length);
   return { command, cleaned };

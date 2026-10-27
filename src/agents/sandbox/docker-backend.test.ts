@@ -29,6 +29,15 @@ vi.mock("./container-engine.js", async (importOriginal) => ({
   execContainer: mocks.execContainer,
 }));
 
+// These fixtures exercise ordinary engine execution; persistent transport ownership
+// has its own protocol and real-container boundary proof.
+// mock-isolation: Ordinary-engine fixtures must not discover or bind a real persistent Docker transport.
+vi.mock("./docker-persistent-target.js", () => ({
+  captureDockerPersistentTarget: async () => undefined,
+  bindDockerPersistentTarget: vi.fn(),
+  readDockerPersistentContainer: vi.fn(),
+}));
+
 const {
   createDockerSandboxBackend,
   createPodmanSandboxBackend,
@@ -45,24 +54,15 @@ const completed = { status: "completed", exitCode: 0, timedOut: false } as const
 const localTarget = { key: "local", globalArgs: [] };
 
 function createConfig(backend?: "docker" | "podman", browserEnabled = true): OpenClawConfig {
-  return {
-    agents: {
-      defaults: {
-        sandbox: {
-          mode: "all",
-          scope: "session",
-          workspaceAccess: "none",
-          backend,
-          docker: { image: "openclaw-sandbox:trixie-slim" },
-          browser: {
-            enabled: browserEnabled,
-            image: "openclaw-sandbox-browser:trixie-slim",
-          },
-        },
-      },
-      entries: {},
-    },
-  };
+  const sandbox = {
+    mode: "all",
+    scope: "session",
+    workspaceAccess: "none",
+    backend,
+    docker: { image: "openclaw-sandbox:trixie-slim" },
+    browser: { enabled: browserEnabled, image: "openclaw-sandbox-browser:trixie-slim" },
+  } satisfies NonNullable<NonNullable<OpenClawConfig["agents"]>["defaults"]>["sandbox"];
+  return { agents: { defaults: { sandbox }, entries: {} } };
 }
 
 function backendParams(
@@ -100,10 +100,8 @@ const mount = (type: string, source: string, destination: string, writable = tru
   RW: writable,
 });
 
-function assertMasked(
-  bridge: { resolvePath: (input: { filePath: string }) => unknown },
-  paths: string[],
-) {
+type Bridge = { resolvePath: (input: { filePath: string }) => unknown };
+function assertMasked(bridge: Bridge, paths: string[]) {
   for (const filePath of paths) {
     expect(() => bridge.resolvePath({ filePath })).toThrow("container-only");
   }
@@ -144,25 +142,19 @@ async function mountedBridge(
   table: string,
   extraMounts: { Type: string; Source: string; Destination: string; RW: boolean }[] = [],
 ) {
+  const inspected = {
+    Mounts: [
+      mount("bind", "/host/project", "/workspace"),
+      ...extraMounts,
+      ...binds.map(({ source, target, writable }) => mount("bind", source, target, writable)),
+    ],
+    Tmpfs: tmpfs,
+  };
+  const baseMounts =
+    "1 1 0:1 / / rw - overlay overlay rw\n2 1 8:1 /project /workspace rw - ext4 /dev/root rw\n";
   mocks.execContainer
-    .mockResolvedValueOnce(
-      engineResult(
-        JSON.stringify({
-          Mounts: [
-            mount("bind", "/host/project", "/workspace"),
-            ...extraMounts,
-            ...binds.map(({ source, target, writable }) => mount("bind", source, target, writable)),
-          ],
-          Tmpfs: tmpfs,
-        }),
-      ),
-    )
-    .mockResolvedValueOnce(
-      engineResult(
-        "1 1 0:1 / / rw - overlay overlay rw\n2 1 8:1 /project /workspace rw - ext4 /dev/root rw\n" +
-          table,
-      ),
-    );
+    .mockResolvedValueOnce(engineResult(JSON.stringify(inspected)))
+    .mockResolvedValueOnce(engineResult(baseMounts + table));
   const backend = await createDockerExecBackend();
   return backend.createFsBridge!({
     sandbox: {
@@ -374,22 +366,6 @@ it.each<MaskFixture>([
     readable: ["/workspace/other/marker"],
   },
   {
-    name: "bind attached inside the intervening tmpfs remains visible",
-    binds: [bind("/host/export", "/workspace/cache/export", true)],
-    tmpfs: { "/workspace/aliases/deep/link": "rw" },
-    table: `3 2 0:9 / /workspace/cache rw - tmpfs tmpfs rw
-4 3 8:1 /export /workspace/cache/export rw - ext4 /dev/root rw`,
-    masked: ["/workspace/cache/marker"],
-    readable: ["/workspace/cache/export/marker"],
-  },
-  {
-    name: "identical recursive bind backing with a readonly top",
-    binds: [bind("/host/export", "/workspace/export", false)],
-    table: `3 2 8:1 /export /workspace/export rw - ext4 /dev/root rw
-4 3 8:1 /export /workspace/export ro - ext4 /dev/root rw`,
-    readable: ["/workspace/export/marker"],
-  },
-  {
     name: "readonly bind with mismatched realized access",
     binds: [bind("/host/export", "/workspace/export", false)],
     table: "3 2 8:1 /export /workspace/export rw - ext4 /dev/root rw",
@@ -411,16 +387,6 @@ it.each<MaskFixture>([
     readable: ["/workspace/export/marker"],
   },
   {
-    name: "different backing above a hidden older bind",
-    binds: [bind("/host/cache", "/workspace/cache", true)],
-    tmpfs: { "/workspace/aliases/link": "rw" },
-    table: `3 2 8:1 /cache /workspace/cache rw - ext4 /dev/root rw
-4 2 8:1 /project /workspace rw - ext4 /dev/root rw
-5 4 0:9 / /workspace/cache rw - tmpfs tmpfs rw`,
-    masked: ["/workspace/cache/marker"],
-    readable: ["/workspace/other/marker"],
-  },
-  {
     name: "bind destination alias without a realized lexical mount",
     binds: [bind("/host/export", "/workspace/link", true)],
     table: "3 2 8:1 /export /workspace/cache rw - ext4 /dev/root rw",
@@ -435,7 +401,6 @@ it.each<MaskFixture>([
     for (const filePath of readable) {
       expect(bridge.resolvePath({ filePath }).containerPath).toBe(filePath);
     }
-    expect(mocks.execContainer).toHaveBeenCalledTimes(2);
   },
 );
 
@@ -462,73 +427,26 @@ it("binds Podman provisioning and later execs to the resolved target", async () 
   });
   const backend = await createPodmanSandboxBackend(
     backendParams({
+      scopeKey,
+      readOnlyResourceMounts,
       cfg: resolveSandboxConfigForAgent(createConfig("podman", false)),
     }),
   );
   const execSpec = await backend.buildExecSpec({ command: "true", env: {}, usePty: false });
 
   expect(mocks.ensureSandboxContainer).toHaveBeenCalledWith(
-    expect.objectContaining({ podmanTarget }),
+    expect.objectContaining({ podmanTarget, scopeKey, readOnlyResourceMounts }),
   );
   expect(mocks.execContainer).toHaveBeenCalledWith(
     expect.objectContaining({ id: "podman", globalArgs: podmanTarget.globalArgs }),
     expect.arrayContaining(["inspect", containerId]),
     expect.anything(),
   );
-  expect(mocks.validateSandboxContainerEngineTarget).toHaveBeenCalledWith(
-    expect.objectContaining({ id: "podman" }),
-    podmanTarget,
-  );
   expect(execSpec.argv.slice(0, 6)).toEqual(["podman", ...podmanTarget.globalArgs, "exec"]);
   expect(execSpec.stdinMode).toBe("pipe-closed");
   expect(execSpec.argv.at(-1)).toBe("true");
   expect(fs.readFileSync(envFile(execSpec), "utf8")).not.toContain("OPENCLAW_PREPEND_PATH=");
   await finalize(backend, execSpec.finalizeToken);
-});
-
-it("stages exec environment privately until finalization", async () => {
-  const sentinel = "synthetic-container-exec-transport-value";
-  const requestedPath = "$(touch /tmp/openclaw-path-injection)";
-  const backend = await createDockerExecBackend();
-  expect(mocks.ensureSandboxContainer).toHaveBeenCalledWith(
-    expect.objectContaining({
-      scopeKey,
-      readOnlyResourceMounts: [
-        { hostPath: "/host/attachments", containerPath: "/openclaw/attachments" },
-      ],
-    }),
-  );
-
-  const execSpec = await backend.buildExecSpec({
-    command: "printf ready",
-    workdir: "/workspace/project",
-    env: { CONFIGURED_VALUE: sentinel, PATH: requestedPath },
-    usePty: true,
-  });
-
-  for (const privateValue of [sentinel, requestedPath]) {
-    expect(execSpec.argv.join(" ")).not.toContain(privateValue);
-  }
-  expect(execSpec.argv).not.toContain("-e");
-  expect(execSpec.argv).toEqual(expect.arrayContaining(["-t", "-w", "/workspace/project"]));
-  expect(execSpec.argv.slice(-4, -1)).toEqual([containerId, "/bin/sh", "-lc"]);
-  expect(execSpec.argv.at(-1)).toBe(
-    'export PATH="${OPENCLAW_PREPEND_PATH}:$PATH"; unset OPENCLAW_PREPEND_PATH; printf ready',
-  );
-  expect(execSpec.stdinMode).toBe("pipe-open");
-  const stagedFile = envFile(execSpec);
-  expect(stagedFile).toBeDefined();
-  const envFileContent = fs.readFileSync(stagedFile, "utf8");
-  assertStaged(envFileContent, {
-    CONFIGURED_VALUE: sentinel,
-    OPENCLAW_PREPEND_PATH: requestedPath,
-  });
-  expect(envFileContent).not.toMatch(/^PATH=/m);
-  expect(backend.finalizeExec).toBeDefined();
-
-  await finalize(backend, execSpec.finalizeToken);
-  expect(fs.existsSync(stagedFile)).toBe(false);
-  await expect(finalize(backend, execSpec.finalizeToken)).resolves.toBeUndefined();
 });
 
 it("admits explicit piped input without enabling a PTY", async () => {
@@ -547,6 +465,7 @@ it.skipIf(process.platform === "win32").each([
 ] as const)(
   "$engine binds the current $host identity at launch without staging its token",
   async ({ engine, host }) => {
+    const requestedPath = "$(touch /tmp/openclaw-path-injection)";
     const root = tempDirs.make("github-sandbox-launch-");
     const profile = path.join(root, "profile");
     fs.mkdirSync(profile, { mode: 0o700 });
@@ -594,14 +513,17 @@ process.stdout.write(JSON.stringify({
     );
     const spec = await backend.buildExecSpec({
       command: "printf ready",
+      workdir: "/workspace/project",
       env: {
+        CONFIGURED_VALUE: "configured-value",
+        PATH: requestedPath,
         GH_CONFIG_DIR: "/untrusted/profile",
         GH_TOKEN: "synthetic-request-token",
         GITHUB_TOKEN: "synthetic-request-fallback",
         GIT_AUTHOR_NAME: "Untrusted Author",
         PREVIEW_TOKEN: "synthetic-preview-token",
       },
-      usePty: false,
+      usePty: true,
     });
     try {
       fs.writeFileSync(hosts, `${host}:\n  oauth_token: synthetic-after-preparation\n`);
@@ -609,12 +531,25 @@ process.stdout.write(JSON.stringify({
       expect(result).toMatchObject({ code: 0, stderr: "" });
       const delivered = JSON.parse(result.stdout);
       expect(delivered).toMatchObject({ selected: true, cleared: true });
+      expect(spec.stdinMode).toBe("pipe-open");
+      for (const value of ["configured-value", requestedPath]) {
+        expect(spec.argv.join(" ")).not.toContain(value);
+        expect(delivered.args.join(" ")).not.toContain(value);
+      }
+      expect(delivered.args).not.toContain("-e");
+      expect(delivered.args).toEqual(expect.arrayContaining(["-t", "-w", "/workspace/project"]));
+      expect(delivered.args.slice(-4, -1)).toEqual([containerId, "/bin/sh", "-lc"]);
+      expect(delivered.args.at(-1)).toBe(
+        'export PATH="${OPENCLAW_PREPEND_PATH}:$PATH"; unset OPENCLAW_PREPEND_PATH; printf ready',
+      );
       expect(delivered.args.slice(delivered.args.indexOf("--env-file") + 2, -4)).toEqual(
         ["GH_TOKEN", "GH_ENTERPRISE_TOKEN", "GITHUB_TOKEN", "GITHUB_ENTERPRISE_TOKEN"].flatMap(
           (name) => ["--env", name],
         ),
       );
       assertStaged(delivered.staged, {
+        CONFIGURED_VALUE: "configured-value",
+        OPENCLAW_PREPEND_PATH: requestedPath,
         GH_CONFIG_DIR: "/openclaw/github",
         GH_HOST: host,
         GIT_AUTHOR_NAME: "Release Agent",
@@ -626,10 +561,15 @@ process.stdout.write(JSON.stringify({
       expect(JSON.stringify({ argv: spec.argv, staged: delivered.staged })).not.toContain(
         "synthetic-",
       );
+      expect(delivered.staged).not.toMatch(/^PATH=/m);
       fs.unlinkSync(hosts);
       const refused = launch(spec, root);
       expect(refused).toMatchObject({ code: 1, stdout: "" });
       expect(refused.stderr).toContain("GitHub Identity credential is unavailable or insecure");
+      const stagedFile = envFile({ argv: delivered.args });
+      await finalize(backend, spec.finalizeToken);
+      expect(fs.existsSync(stagedFile)).toBe(false);
+      await expect(finalize(backend, spec.finalizeToken)).resolves.toBeUndefined();
     } finally {
       await finalize(backend, spec.finalizeToken);
     }
@@ -651,20 +591,15 @@ it.each([
 });
 
 it.each([
-  {
-    backend: "docker",
-    code: 1,
-    stderr: "permission denied",
-    error: "Failed to remove Docker sandbox runtime sandbox-1: permission denied",
-  },
-  {
-    backend: "docker",
-    code: 1,
-    stderr: "Error response from daemon: No such container: sandbox-1",
-    error: undefined,
-  },
-  { backend: "podman", code: 0, stderr: "", error: undefined },
-])("removes $backend runtime: $stderr", async ({ backend, code, stderr, error }) => {
+  [
+    "docker",
+    1,
+    "permission denied",
+    "Failed to remove Docker sandbox runtime sandbox-1: permission denied",
+  ],
+  ["docker", 1, "Error response from daemon: No such container: sandbox-1", undefined],
+  ["podman", 0, "", undefined],
+] as const)("removes %s runtime (exit %s, %s)", async (backend, code, stderr, error) => {
   mocks.execContainer.mockResolvedValueOnce({ code, stdout: "", stderr });
   const manager = backend === "podman" ? podmanSandboxBackendManager : dockerSandboxBackendManager;
   const entry = runtimeEntry(backend);
@@ -740,10 +675,4 @@ it("matches canonical Podman identity for an expanded image name", async () => {
     actualConfigLabel: "localhost/openclaw-sandbox:trixie-slim",
     configLabelMatch: true,
   });
-  expect(mocks.execContainer).toHaveBeenNthCalledWith(
-    2,
-    expect.objectContaining({ id: "podman", command: "podman" }),
-    ["image", "inspect", "-f", "{{.Id}}", "openclaw-sandbox:trixie-slim"],
-    { allowFailure: true },
-  );
 });

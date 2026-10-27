@@ -1,7 +1,8 @@
-import { createEffect, onSettled } from "solid-js";
+import { createDeferred, createEffect, onSettled } from "solid-js";
 
 export function validLifecycle(read: () => string) {
-  createEffect(read, (value) => {
+  const deferred = createDeferred(read);
+  createEffect(deferred, (value) => {
     document.title = value;
   });
   onSettled(() => {

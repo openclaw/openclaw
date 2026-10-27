@@ -147,51 +147,30 @@ function isMentionStartBoundary(charBefore: string | undefined): boolean {
   return !charBefore || !/[A-Za-z0-9_]/.test(charBefore);
 }
 
-function trimMentionSuffix(
-  rawInput: string,
-  endInput: number,
-): { raw: string; end: number } | null {
-  let raw = rawInput;
-  let end = endInput;
-  while (raw.length > 1 && TRIMMABLE_MENTION_SUFFIX.test(raw.at(-1) ?? "")) {
-    if (raw.at(-1) === "]" && /\[[0-9A-Fa-f:.]+\](?::\d+)?$/i.test(raw)) {
-      break;
-    }
-    raw = raw.slice(0, -1);
-    end -= 1;
-  }
-  if (!raw.startsWith("@") || raw === "@") {
-    return null;
-  }
-  return { raw, end };
-}
-
-function buildMentionCandidate(raw: string, start: number): MatrixMentionCandidate | null {
-  const normalized = trimMentionSuffix(raw, start + raw.length);
-  if (!normalized) {
-    return null;
-  }
-  if (normalizeLowercaseStringOrEmpty(normalized.raw) === "@room") {
-    return { ...normalized, start, kind: "room" };
-  }
-  return MATRIX_MENTION_USER_ID_PATTERN.test(normalized.raw)
-    ? { ...normalized, start, kind: "user", userId: normalized.raw }
-    : null;
-}
-
 function collectMentionCandidates(text: string): MatrixMentionCandidate[] {
   const mentions: MatrixMentionCandidate[] = [];
   for (const match of text.matchAll(MENTION_PATTERN)) {
-    const raw = match[0];
+    let raw = match[0];
     const start = match.index;
     if (!isMentionStartBoundary(text[start - 1])) {
       continue;
     }
-    const candidate = buildMentionCandidate(raw, start);
-    if (!candidate) {
+    let end = start + raw.length;
+    while (raw.length > 1 && TRIMMABLE_MENTION_SUFFIX.test(raw.at(-1) ?? "")) {
+      if (raw.at(-1) === "]" && /\[[0-9A-Fa-f:.]+\](?::\d+)?$/i.test(raw)) {
+        break;
+      }
+      raw = raw.slice(0, -1);
+      end -= 1;
+    }
+    if (!raw.startsWith("@") || raw === "@") {
       continue;
     }
-    mentions.push(candidate);
+    if (normalizeLowercaseStringOrEmpty(raw) === "@room") {
+      mentions.push({ raw, end, start, kind: "room" });
+    } else if (MATRIX_MENTION_USER_ID_PATTERN.test(raw)) {
+      mentions.push({ raw, end, start, kind: "user", userId: raw });
+    }
   }
   return mentions;
 }
@@ -308,89 +287,6 @@ function normalizeMatrixSpoilerNesting(tokens: MarkdownInlineToken[]): MarkdownI
     }
   }
   return result;
-}
-
-function createMentionLinkTokens(params: {
-  sample: MarkdownInlineToken;
-  href: string;
-  label: string;
-}): MarkdownInlineToken[] {
-  const open = createToken(params.sample, "link_open", "a", 1);
-  open.attrSet("href", params.href);
-  const text = createTextToken(params.sample, params.label);
-  const close = createToken(params.sample, "link_close", "a", -1);
-  return [open, text, close];
-}
-
-function mutateInlineTokensWithMentions(params: {
-  children: MarkdownInlineToken[];
-  userIds: string[];
-  seenUserIds: Set<string>;
-  selfUserId: string | null;
-}): { children: MarkdownInlineToken[]; roomMentioned: boolean } {
-  const nextChildren: MarkdownInlineToken[] = [];
-  let roomMentioned = false;
-  let insideLinkDepth = 0;
-  for (const child of params.children) {
-    if (child.type === "link_open") {
-      insideLinkDepth += 1;
-      nextChildren.push(child);
-      continue;
-    }
-    if (child.type === "link_close") {
-      insideLinkDepth = Math.max(0, insideLinkDepth - 1);
-      nextChildren.push(child);
-      continue;
-    }
-    if (child.type !== "text" || !child.content) {
-      nextChildren.push(child);
-      continue;
-    }
-
-    if (insideLinkDepth > 0) {
-      nextChildren.push(child);
-      continue;
-    }
-    const matches = collectMentionCandidates(child.content);
-    if (matches.length === 0) {
-      nextChildren.push(child);
-      continue;
-    }
-
-    let cursor = 0;
-    for (const match of matches) {
-      if (match.start > cursor) {
-        nextChildren.push(createTextToken(child, child.content.slice(cursor, match.start)));
-      }
-      cursor = match.end;
-      if (match.kind === "room") {
-        roomMentioned = true;
-        nextChildren.push(createTextToken(child, match.raw));
-        continue;
-      }
-
-      const resolvedUserId = match.userId;
-      if (resolvedUserId === params.selfUserId) {
-        nextChildren.push(createTextToken(child, match.raw));
-        continue;
-      }
-      if (!params.seenUserIds.has(resolvedUserId)) {
-        params.seenUserIds.add(resolvedUserId);
-        params.userIds.push(resolvedUserId);
-      }
-      nextChildren.push(
-        ...createMentionLinkTokens({
-          sample: child,
-          href: `https://matrix.to/#/${encodeURIComponent(resolvedUserId)}`,
-          label: match.raw,
-        }),
-      );
-    }
-    if (cursor < child.content.length) {
-      nextChildren.push(createTextToken(child, child.content.slice(cursor)));
-    }
-  }
-  return { children: nextChildren, roomMentioned };
 }
 
 // Compact loose lists by hiding a list item's single wrapper paragraph,
@@ -545,14 +441,68 @@ async function resolveMarkdownMentionState(params: {
     if (!token.children?.length) {
       continue;
     }
-    const mutated = mutateInlineTokensWithMentions({
-      children: token.children,
-      userIds,
-      seenUserIds,
-      selfUserId,
-    });
-    token.children = mutated.children;
-    roomMentioned ||= mutated.roomMentioned;
+    const nextChildren: MarkdownInlineToken[] = [];
+    let insideLinkDepth = 0;
+    for (const child of token.children) {
+      if (child.type === "link_open") {
+        insideLinkDepth += 1;
+        nextChildren.push(child);
+        continue;
+      }
+      if (child.type === "link_close") {
+        insideLinkDepth = Math.max(0, insideLinkDepth - 1);
+        nextChildren.push(child);
+        continue;
+      }
+      if (child.type !== "text" || !child.content) {
+        nextChildren.push(child);
+        continue;
+      }
+
+      if (insideLinkDepth > 0) {
+        nextChildren.push(child);
+        continue;
+      }
+      const matches = collectMentionCandidates(child.content);
+      if (matches.length === 0) {
+        nextChildren.push(child);
+        continue;
+      }
+
+      let cursor = 0;
+      for (const match of matches) {
+        if (match.start > cursor) {
+          nextChildren.push(createTextToken(child, child.content.slice(cursor, match.start)));
+        }
+        cursor = match.end;
+        if (match.kind === "room") {
+          roomMentioned = true;
+          nextChildren.push(createTextToken(child, match.raw));
+          continue;
+        }
+
+        const resolvedUserId = match.userId;
+        if (resolvedUserId === selfUserId) {
+          nextChildren.push(createTextToken(child, match.raw));
+          continue;
+        }
+        if (!seenUserIds.has(resolvedUserId)) {
+          seenUserIds.add(resolvedUserId);
+          userIds.push(resolvedUserId);
+        }
+        const open = createToken(child, "link_open", "a", 1);
+        open.attrSet("href", `https://matrix.to/#/${encodeURIComponent(resolvedUserId)}`);
+        nextChildren.push(
+          open,
+          createTextToken(child, match.raw),
+          createToken(child, "link_close", "a", -1),
+        );
+      }
+      if (cursor < child.content.length) {
+        nextChildren.push(createTextToken(child, child.content.slice(cursor)));
+      }
+    }
+    token.children = nextChildren;
   }
 
   const mentions: MatrixMentions = {};

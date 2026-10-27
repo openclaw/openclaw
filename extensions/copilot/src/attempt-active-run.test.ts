@@ -145,6 +145,31 @@ describe("registerCopilotActiveRun", () => {
     harnessMocks.setActiveEmbeddedRun.mockClear();
   });
 
+  it("steers a human control without answering or cancelling the pending Copilot question", async () => {
+    harnessMocks.claimPendingAgentQuestionAnswer.mockResolvedValue(true);
+    const { handle, send } = registerTestRun();
+    const accepted = vi.fn();
+    await expect(
+      handle.queueMessage("status control", {
+        isInboundUserMessage: true,
+        allowPendingUserInputAnswer: false,
+        onQueueAccepted: accepted,
+      }),
+    ).resolves.toBeUndefined();
+    expect(send).toHaveBeenCalledExactlyOnceWith({ prompt: "status control" });
+    expect(accepted).toHaveBeenCalledExactlyOnceWith(true);
+    expectNotCalled(
+      harnessMocks.claimPendingAgentQuestionAnswer,
+      harnessMocks.cancelPendingAgentQuestionForSession,
+    );
+    // Permission omitted preserves the existing question-answer behavior.
+    await expect(
+      handle.queueMessage("Continue", { isInboundUserMessage: true }),
+    ).resolves.toBeUndefined();
+    expect(harnessMocks.claimPendingAgentQuestionAnswer).toHaveBeenCalledOnce();
+    expect(send).toHaveBeenCalledOnce();
+  });
+
   it("retains the resolved agent for raw global registrations", () => {
     const { handle } = registerTestRun({ agentId: "ops", sessionKey: "global" });
     expect(harnessMocks.setActiveEmbeddedRun.mock.calls).toContainEqual([

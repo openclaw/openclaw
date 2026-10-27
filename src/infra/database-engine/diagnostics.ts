@@ -14,42 +14,16 @@ import { openNodeSqliteDatabase } from "../node-sqlite.js";
 import { admitSqliteSchema, getAdmittedSqliteSchemaFacts } from "../sqlite-schema-facts.js";
 import { quoteSqliteIdentifier as quote } from "../sqlite-schema-sql.js";
 import { prepareSqliteReadOnlyLocationSync } from "../sqlite-snapshot-source.js";
+import {
+  createDatabaseStoreDiagnostic,
+  type DatabaseStoreDiagnostic,
+} from "./diagnostic-record.js";
 import { readBackupEngineImage, type BackupEngine } from "./physical-store.js";
 import type { PortDescriptor } from "./port-types.js";
 import { readPostgresStoreMetadata, withPostgresConnection } from "./postgres-store-metadata.js";
-import type { DatabaseEngineId, DatabaseEngineInput } from "./types.js";
+import type { DatabaseEngineInput } from "./types.js";
 
-export type DatabaseStoreDiagnostic = {
-  family: string;
-  path: string | null;
-  configured: {
-    default: DatabaseEngineId;
-    override: DatabaseEngineId | null;
-    effective: DatabaseEngineId;
-    fixedLocal: boolean;
-  };
-  observed: DatabaseEngineId | "unknown";
-  mismatch: boolean | null;
-  schema: {
-    versioning: "versioned" | "unversioned" | "unknown";
-    version: number | null;
-    expectedVersion: number | null;
-    pending: number | null;
-  };
-  connectivity: "reachable" | "unreachable" | "unknown" | "local";
-  namespace: string | null;
-  storeId: string | null;
-  database: string | null;
-  extensions: string[] | null;
-  admittedExtensions: string[] | null;
-  degraded: string[] | null;
-  custody: "live-owner" | "none" | "unverifiable";
-  lease: "live-owner" | "none" | "unverifiable";
-  backup: { status: string } | null;
-  legacyMigrations: { state: "pending" | "none" | "unknown"; pending: string[] };
-  issues: string[];
-  nextSteps: string[];
-};
+export type { DatabaseStoreDiagnostic } from "./diagnostic-record.js";
 
 export type DatabaseStoreInspection = Pick<
   DatabaseStoreDiagnostic,
@@ -274,40 +248,22 @@ async function inspectPostgres(
 export async function inspectDatabaseStore(
   input: DatabaseStoreInspection,
 ): Promise<DatabaseStoreDiagnostic> {
-  const result: DatabaseStoreDiagnostic = {
+  const result = createDatabaseStoreDiagnostic({
     family: input.family,
     path: input.path,
     configured: input.configured,
-    observed: "unknown",
-    mismatch: null,
-    schema: {
-      versioning:
-        input.schemaVersion === null
-          ? "unversioned"
-          : input.descriptor || input.schemaVersion !== undefined
-            ? "versioned"
-            : "unknown",
-      version: null,
-      expectedVersion:
-        input.schemaVersion === null
-          ? null
-          : (input.schemaVersion ?? input.descriptor?.version ?? null),
-      pending: null,
-    },
-    connectivity: "unknown",
-    namespace: null,
-    storeId: null,
-    database: null,
-    extensions: null,
-    admittedExtensions: null,
-    degraded: null,
-    custody: "unverifiable",
-    lease: "unverifiable",
-    backup: null,
-    legacyMigrations: { state: input.configured.fixedLocal ? "none" : "unknown", pending: [] },
-    issues: [],
-    nextSteps: [],
-  };
+  });
+  result.schema.versioning =
+    input.schemaVersion === null
+      ? "unversioned"
+      : input.descriptor || input.schemaVersion !== undefined
+        ? "versioned"
+        : "unknown";
+  result.schema.expectedVersion =
+    input.schemaVersion === null
+      ? null
+      : (input.schemaVersion ?? input.descriptor?.version ?? null);
+  result.legacyMigrations.state = input.configured.fixedLocal ? "none" : "unknown";
   if (input.inspectionError === "unreadable-root") {
     result.issues.push("The physical store root could not be read; its contents are unknown.");
     result.nextSteps.push("Check store path permissions, then rerun openclaw doctor.");

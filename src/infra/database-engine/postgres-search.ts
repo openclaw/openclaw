@@ -104,7 +104,7 @@ export function bindPostgresSearch(
             }
             return /* kysely-allow-raw: PostgreSQL's tsvector predicate returns boolean. */ sql<boolean>`${column} @@ ${tsquery(query, config)}`;
           },
-          rank(index, query) {
+          rank(index, query, options) {
             if (query?.kind === "contains") {
               if (index.postgres?.mode !== "trigram") {
                 throw new Error("Contains requires a declared PostgreSQL trigram index");
@@ -116,8 +116,10 @@ export function bindPostgresSearch(
               };
             }
             const column = relation(index);
+            const rankFunction =
+              options?.postgres?.rank === "frequency" ? sql`ts_rank` : sql`ts_rank_cd`;
             return {
-              value: /* kysely-allow-raw: The native rank is a numeric scalar. */ sql<number>`ts_rank_cd(${column}, ${requireQuery(query)}, 2)`,
+              value: /* kysely-allow-raw: The closed rank choice selects a native numeric function. */ sql<number>`${rankFunction}(${column}, ${requireQuery(query)}, ${options?.postgres?.normalization ?? 2})`,
               order: "desc",
               toRank: (raw) => raw,
             };

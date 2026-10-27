@@ -8,7 +8,7 @@ import type { RenderMessageGroupOptions } from "./chat-message-group-options.ts"
 import { ChatTimestamp } from "./chat-message-timestamp-view.tsx";
 import "./chat-session-activity.css";
 
-type ChatSessionActivityProps = {
+export function ChatSessionActivity(props: {
   group: MessageGroup;
   options: RenderMessageGroupOptions;
   renderEntry: (
@@ -19,9 +19,7 @@ type ChatSessionActivityProps = {
     actions: JSX.Element;
     actionsRef?: (element: HTMLDivElement) => void;
   };
-};
-
-export function ChatSessionActivity(props: ChatSessionActivityProps) {
+}) {
   const disclosureId = () => "session-activity:" + props.group.key;
   const expanded = () =>
     Boolean(props.options.searchResult) ||

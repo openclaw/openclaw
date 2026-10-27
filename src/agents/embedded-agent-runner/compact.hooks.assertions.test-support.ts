@@ -1,19 +1,7 @@
-import { expect, vi } from "vitest";
+import { vi } from "vitest";
 
 /** Asserts selected fields on a captured compaction record. */
-export function expectRecordFields(
-  record: unknown,
-  expected: Record<string, unknown>,
-): Record<string, unknown> {
-  if (!record || typeof record !== "object") {
-    throw new Error("Expected record");
-  }
-  const actual = record as Record<string, unknown>;
-  for (const [key, value] of Object.entries(expected)) {
-    expect(actual[key]).toEqual(value);
-  }
-  return actual;
-}
+export { expectObjectFields as expectRecordFields } from "../../test-utils/mock-call-assertions.js";
 
 /** Returns one argument from a recorded compaction mock call. */
 export function mockCallArg(mock: ReturnType<typeof vi.fn>, callIndex = 0, argIndex = 0): unknown {

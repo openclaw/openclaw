@@ -2,6 +2,15 @@ import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import { managedHandoffBootSchema } from "./update-managed-service-handoff-schema.js";
 
+/** Legacy Windows records need a five-minute margin around the observed boot time. */
+export function predatesCurrentBoot(
+  recordedAt: number,
+  boot: ReturnType<ReturnType<typeof createManagedHandoffBootIdentityReader>> | undefined,
+): boolean {
+  const bootStartedAt = boot?.platform === "win32" ? Date.parse(boot.identity) : Number.NaN;
+  return recordedAt < bootStartedAt - 5 * 60_000;
+}
+
 /** Bind the lease environment without caching boot identity or selecting an OS early. */
 export function createManagedHandoffBootIdentityReader(serviceManagerEnv: NodeJS.ProcessEnv) {
   return function bootIdentity() {

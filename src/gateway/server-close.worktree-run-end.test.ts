@@ -26,6 +26,14 @@ import * as stateWorker from "../state/openclaw-state-worker-store.js";
 import { createGatewayMetadataCloseFixture } from "./server-close.metadata.test-support.js";
 
 const initializeRepository = useManagedWorktreeTestRepository();
+function expectNoRunLeases(env: NodeJS.ProcessEnv) {
+  using database = new DatabaseSync(resolveOpenClawStateSqlitePath(env), { readOnly: true });
+  expect(
+    database
+      .prepare("SELECT COUNT(*) AS count FROM state_leases WHERE scope LIKE 'worktree-run:%'")
+      .get(),
+  ).toEqual({ count: 0 });
+}
 function registerHarness(
   registry: Parameters<typeof withPluginRuntimeRegistryScope>[0],
   id: string,
@@ -44,86 +52,66 @@ function registerHarness(
   );
 }
 
-it.for([false, true])(
-  "disposes run execution before joining its held worktree lease (sibling=%s)",
-  async (withSibling, { signal }) => {
-    const fixture = await createGatewayMetadataCloseFixture("gateway-worktree-execution-close");
-    const disposed = createDeferred();
-    const order: string[] = [];
-    let lease: Awaited<ReturnType<typeof acquireWorktreeRunLease>> | undefined;
-    let closing: Promise<void> | undefined;
-    try {
-      const port = await fixture.reservePort();
-      const server = await fixture.start(port);
-      const kernel = expectDefined(fixture.kernels.get(port), "Gateway kernel");
-      kernel.pluginRuntime.registry.typedHooks.push({
-        pluginId: fixture.pluginId,
-        hookName: "gateway_stop",
-        source: "worktree-shutdown-fixture",
-        handler: async () => {
-          order.push("gateway_stop");
-        },
-      });
-      registerHarness(kernel.pluginRuntime.registry, "worktree-shutdown-fixture", async () => {
-        order.push("dispose");
-        disposed.resolve();
-        await lease?.release();
-      });
-      const disposeSibling = vi.fn();
-      let sibling: Awaited<ReturnType<typeof fixture.start>> | undefined;
-      if (withSibling) {
-        fixture.config.plugins = { enabled: false };
-        const siblingPort = await fixture.reservePort();
-        sibling = await fixture.start(siblingPort);
-        const siblingKernel = expectDefined(
-          fixture.kernels.get(siblingPort),
-          "Sibling Gateway kernel",
-        );
-        expect(siblingKernel.pluginRuntime.registry).not.toBe(kernel.pluginRuntime.registry);
-        registerHarness(
-          siblingKernel.pluginRuntime.registry,
-          "sibling-worktree-shutdown-fixture",
-          disposeSibling,
-        );
-      }
-      const repoRoot = await initializeRepository(fixture.state.statePath("execution-source"));
-      const [record] = await materializeManagedWorktreeFixtures({
-        env: fixture.state.env,
-        stateDir: fixture.state.statePath(),
-        repoRoot,
-        now: 1,
-        names: ["running"],
-      });
-      lease = await acquireWorktreeRunLease(expectDefined(record, "Running worktree").id, {
-        env: fixture.state.env,
-      });
-      closing = server.close({ reason: "running tool shutdown" });
-      await withinTest(
-        awaitGateBeforeSettlement(disposed.promise, closing, "Tool execution was not cancelled"),
-        signal,
-      );
-      await withinTest(closing, signal);
-      expect(order).toEqual(["gateway_stop", "dispose"]);
-      expect(disposeSibling).not.toHaveBeenCalled();
-      if (sibling) {
-        await withinTest(sibling.close({ reason: "sibling shutdown" }), signal);
-        expect(disposeSibling).toHaveBeenCalledOnce();
-      }
-      using database = new DatabaseSync(resolveOpenClawStateSqlitePath(fixture.state.env), {
-        readOnly: true,
-      });
-      expect(
-        database
-          .prepare("SELECT COUNT(*) AS count FROM state_leases WHERE scope LIKE 'worktree-run:%'")
-          .get(),
-      ).toEqual({ count: 0 });
-    } finally {
+it("disposes run execution before joining its held worktree lease without retiring a sibling", async ({
+  signal,
+}) => {
+  const fixture = await createGatewayMetadataCloseFixture("gateway-worktree-execution-close");
+  const disposed = createDeferred();
+  const order: string[] = [];
+  let lease: Awaited<ReturnType<typeof acquireWorktreeRunLease>> | undefined;
+  let closing: Promise<void> | undefined;
+  try {
+    const { server, kernel } = await fixture.startServer();
+    kernel.pluginRuntime.registry.typedHooks.push({
+      pluginId: fixture.pluginId,
+      hookName: "gateway_stop",
+      source: "worktree-shutdown-fixture",
+      handler: async () => {
+        order.push("gateway_stop");
+      },
+    });
+    registerHarness(kernel.pluginRuntime.registry, "worktree-shutdown-fixture", async () => {
+      order.push("dispose");
+      disposed.resolve();
       await lease?.release();
-      await closing;
-      await fixture.cleanup();
-    }
-  },
-);
+    });
+    const disposeSibling = vi.fn();
+    fixture.config.plugins = { enabled: false };
+    const { server: sibling, kernel: siblingKernel } = await fixture.startServer();
+    expect(siblingKernel.pluginRuntime.registry).not.toBe(kernel.pluginRuntime.registry);
+    registerHarness(
+      siblingKernel.pluginRuntime.registry,
+      "sibling-worktree-shutdown-fixture",
+      disposeSibling,
+    );
+    const repoRoot = await initializeRepository(fixture.state.statePath("execution-source"));
+    const [record] = await materializeManagedWorktreeFixtures({
+      env: fixture.state.env,
+      stateDir: fixture.state.statePath(),
+      repoRoot,
+      now: 1,
+      names: ["running"],
+    });
+    lease = await acquireWorktreeRunLease(expectDefined(record, "Running worktree").id, {
+      env: fixture.state.env,
+    });
+    closing = server.close({ reason: "running tool shutdown" });
+    await withinTest(
+      awaitGateBeforeSettlement(disposed.promise, closing, "Tool execution was not cancelled"),
+      signal,
+    );
+    await withinTest(closing, signal);
+    expect(order).toEqual(["gateway_stop", "dispose"]);
+    expect(disposeSibling).not.toHaveBeenCalled();
+    await withinTest(sibling.close({ reason: "sibling shutdown" }), signal);
+    expect(disposeSibling).toHaveBeenCalledOnce();
+    expectNoRunLeases(fixture.state.env);
+  } finally {
+    await lease?.release();
+    await closing;
+    await fixture.cleanup();
+  }
+});
 
 // mock-isolation: Keep upstream polling and its agent runtime out of this close-order fixture.
 vi.mock("../sessions/session-upstream-monitor.js", () => ({
@@ -148,9 +136,7 @@ it("joins accepted worktree removals across scheduler cancellation before closin
   let acceptedChild: Promise<void> | undefined;
   let restoreWorker: (() => void) | undefined;
   try {
-    const port = await fixture.reservePort();
-    const server = await fixture.start(port);
-    const kernel = expectDefined(fixture.kernels.get(port), "Gateway kernel");
+    const { server, kernel } = await fixture.startServer();
     const repoRoot = await initializeRepository(fixture.state.statePath("run-end-source"));
     const records = await materializeManagedWorktreeFixtures({
       env: fixture.state.env,
@@ -251,11 +237,7 @@ it("joins accepted worktree removals across scheduler cancellation before closin
         removed_at: record.id === running.id ? null : expect.any(Number),
       })),
     );
-    expect(
-      database
-        .prepare("SELECT COUNT(*) AS count FROM state_leases WHERE scope LIKE 'worktree-run:%'")
-        .get(),
-    ).toEqual({ count: 0 });
+    expectNoRunLeases(fixture.state.env);
   } finally {
     vi.useRealTimers();
     release.resolve();

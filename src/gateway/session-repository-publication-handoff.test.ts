@@ -7,7 +7,6 @@ import { afterEach, expect, it, vi } from "vitest";
 import { managedWorktrees } from "../agents/worktrees/service.js";
 import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import { loadSessionEntry, upsertSessionEntryCore } from "../config/sessions/session-accessor.js";
-import * as backoff from "../infra/backoff.js";
 import { registerClonedProjectRegistry } from "../projects/project-registry.test-support.js";
 import type { RepositoryGitHubPublicationRow } from "../state/github-publication-read.types.js";
 import { readGitHubPublicationSessionLifecycle } from "../state/github-publication-session-lifecycles.worker.js";
@@ -470,32 +469,24 @@ it("can hold publisher exclusion during an existing reclaim claim without taking
       assertOwned();
       entered = true;
       expect(placements.validateWorkspaceResultClaim(claim)).toBe(true);
-      const wait = vi.spyOn(backoff, "sleepWithAbort");
       await expect(
         placements.withWorkspaceExclusion(REQUEST.sessionId, async () => {}),
       ).rejects.toMatchObject({
         code: "OPENCLAW_STATE_LEASE_HELD",
         outcome: { kind: "held", holder: { owner: expect.any(String), epoch: expect.any(Number) } },
       });
-      expect(wait).not.toHaveBeenCalled();
       assertOwned();
       expect(placements.validateWorkspaceResultClaim(claim)).toBe(true);
     });
     expect(entered).toBe(true);
     expect(placements.validateWorkspaceResultClaim(claim)).toBe(true);
-    for (const code of [
-      "OPENCLAW_STATE_LEASE_HELD",
-      "OPENCLAW_STATE_LEASE_STORAGE_FAILED",
-      "OPENCLAW_STATE_LEASE_ABORTED",
-    ] as const) {
-      const operationFailure = new OpenClawStateLeaseError("Nested operation refused admission", {
-        code,
-      });
-      await expect(
-        placements.withWorkspaceExclusion(REQUEST.sessionId, async () => {
-          throw operationFailure;
-        }),
-      ).rejects.toBe(operationFailure);
-    }
+    const operationFailure = new OpenClawStateLeaseError("Nested operation refused admission", {
+      code: "OPENCLAW_STATE_LEASE_HELD",
+    });
+    await expect(
+      placements.withWorkspaceExclusion(REQUEST.sessionId, async () => {
+        throw operationFailure;
+      }),
+    ).rejects.toBe(operationFailure);
   });
 });

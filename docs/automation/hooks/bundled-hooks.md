@@ -120,7 +120,8 @@ a subsequent turn is admitted; this is not a timer that writes memory at the
 daily boundary while the session is idle.
 
 The artifact is `<workspace>/memory/YYYY-MM-DD-HHMM.md` by default, with a
-numeric suffix if that filename already exists. Dates use
+numeric suffix if that filename already exists. Overlapping resets sharing a
+workspace keep separate files and matching session provenance. Dates use
 `agents.defaults.userTimezone`, then process `TZ` when no user timezone is set,
 and the host timezone as fallback. The file records session identity and the
 command source or automatic reset reason.

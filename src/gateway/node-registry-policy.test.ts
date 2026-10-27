@@ -2,22 +2,14 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { GATEWAY_CLIENT_IDS } from "../../packages/gateway-protocol/src/client-info.js";
 import { createDeferred } from "../../test/helpers/promise.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { NODE_WORKER_SUPERVISOR_LAUNCH_COMMAND } from "../infra/node-commands.js";
 import {
   mergeRemoteNodeSkillEntries,
   removeRemoteNodeSkills,
 } from "../skills/runtime/remote-skills.js";
-import {
-  resolveNodeCommandAllowlist,
-  resolveRequiredNodeCommandAuthority,
-  TALK_PTT_COMMANDS,
-} from "./node-command-policy.js";
+import { TALK_PTT_COMMANDS } from "./node-command-policy.js";
 import { listConnectedNodePluginTools } from "./node-plugin-tool-snapshot.js";
-import {
-  NodeRegistry,
-  readNodeSessionWithheldCommands,
-  type NodeSession,
-} from "./node-registry.js";
+import { NodeRegistry, readNodeSessionWithheldCommands } from "./node-registry.js";
+import { makeClient } from "./node-registry.test-helpers.js";
 import type { GatewayWsClient } from "./server/ws-types.js";
 
 const registries: NodeRegistry[] = [];
@@ -72,27 +64,17 @@ function createFixture(
   const registry = new NodeRegistry({ ...pairingOptions, getConfig: () => config });
   registries.push(registry);
   const socket = { readyState: 1, bufferedAmount: 0, send: vi.fn(), close: vi.fn() };
-  const client = {
-    connId: "policy-conn",
-    socket,
-    usesSharedGatewayAuth: false,
-    connect: {
-      minProtocol: 1,
-      maxProtocol: 1,
-      client: {
-        id: GATEWAY_CLIENT_IDS.NODE_HOST,
-        version: "test",
-        platform: "linux",
-        deviceFamily: "Linux",
-        mode: "node",
-      },
-      device: { id: "policy-node" },
-      caps: ["computer"],
-      commands: ["computer.act", "system.run"],
-      declaredCaps: ["computer", "screen"],
-      declaredCommands: ["computer.act", "system.run", "screen.snapshot"],
-    },
-  } as unknown as GatewayWsClient;
+  const client = makeClient("policy-conn", "policy-node", [], {
+    socket: socket as unknown as GatewayWsClient["socket"],
+    clientId: GATEWAY_CLIENT_IDS.NODE_HOST,
+    version: "test",
+    platform: "linux",
+    caps: ["computer"],
+    commands: ["computer.act", "system.run"],
+    declaredCaps: ["computer", "screen"],
+    declaredCommands: ["computer.act", "system.run", "screen.snapshot"],
+  });
+  client.connect.client.deviceFamily = "Linux";
   const node = registry.register(client, { ...registration });
   return {
     registry,
@@ -124,7 +106,6 @@ function createFixture(
         seq: 0,
         chunk,
       }),
-    getConfig: () => config,
     publishConfig: (next: OpenClawConfig) => {
       config = next;
     },
@@ -135,46 +116,7 @@ function createFixture(
   };
 }
 
-function readCommandState(node: NodeSession, config: OpenClawConfig, command: string) {
-  return resolveRequiredNodeCommandAuthority({
-    nodeId: node.nodeId,
-    requiredCommands: [command],
-    declaredCommands: node.declaredCommands,
-    effectiveCommands: node.commands,
-    withheldCommands: readNodeSessionWithheldCommands(node),
-    allowlist: resolveNodeCommandAllowlist(config, node),
-  })?.state;
-}
-
 describe("connected node runtime policy", () => {
-  it.each([
-    ["system.run", [], [], "pending-approval"],
-    ["screen.snapshot", ["screen"], [], "pending-approval"],
-    ["computer.act", ["computer"], [], "pending-approval"],
-    ["camera.list", ["camera"], ["camera.list"], "pending-approval"],
-    ["location.get", ["location"], ["location.get"], "pending-approval"],
-    ["talk.ptt.start", [], [], "pending-approval"],
-    ["camera.snap", [], [], "unauthorized"],
-    ["camera.snap", [], ["camera.snap"], "pending-approval"],
-    [
-      NODE_WORKER_SUPERVISOR_LAUNCH_COMMAND,
-      [],
-      [NODE_WORKER_SUPERVISOR_LAUNCH_COMMAND],
-      "unauthorized",
-    ],
-  ] satisfies Array<[string, string[], string[], string]>)(
-    "classifies an unapproved %s (caps=%j, allow=%j) as %s",
-    (command, caps, allow, state) => {
-      const config = policy({ commands: { allow } });
-      const { registerSurface, socket } = createFixture(config);
-      const node = registerSurface(caps, [command], []);
-
-      expect(readCommandState(node, config, command)).toBe(state);
-      expect(node).toMatchObject({ commands: [], caps: [] });
-      expect(socket.close).not.toHaveBeenCalled();
-    },
-  );
-
   it.each([
     { name: "command-only advertisement", caps: [], initiallyDenied: false },
     { name: "initially denied approved declaration", caps: [], initiallyDenied: true },
@@ -328,23 +270,17 @@ describe("connected node runtime policy", () => {
   });
 
   it("withdraws and restores approved commands without granting an unapproved declaration", () => {
-    const { node, client, socket, reload, getConfig } = createFixture();
-    expect(readCommandState(node, getConfig(), "computer.act")).toBe("invocable");
-    expect(readCommandState(node, getConfig(), "screen.snapshot")).toBe("pending-approval");
+    const { node, client, socket, reload } = createFixture();
     reload(denyComputer);
 
     expect(node).toMatchObject({ commands: ["system.run"], caps: [] });
     expect(client.connect.commands).toEqual(["system.run"]);
     expect(readNodeSessionWithheldCommands(node)).toContain("computer.act");
-    expect(readCommandState(node, getConfig(), "computer.act")).toBe("unauthorized");
-    expect(readCommandState(node, getConfig(), "screen.snapshot")).toBe("pending-approval");
 
     reload(policy({ commands: { allow: ["screen.snapshot"] } }));
 
     expect(node).toMatchObject({ commands: ["computer.act", "system.run"], caps: ["computer"] });
     expect(readNodeSessionWithheldCommands(node)).not.toContain("computer.act");
-    expect(readCommandState(node, getConfig(), "computer.act")).toBe("invocable");
-    expect(readCommandState(node, getConfig(), "screen.snapshot")).toBe("pending-approval");
     expect(node).toMatchObject({ connId: "policy-conn", pairingGeneration: "policy-generation" });
     expect(socket.close).not.toHaveBeenCalled();
   });

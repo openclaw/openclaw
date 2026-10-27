@@ -12,8 +12,68 @@ let closedUpdateResult;
 let handoffFailure;
 let terminalRuntimePath = params.recoveryModulePath;
 let serviceStoppedAtMs, serviceDowntimeMs;
+let recoveryObservation;
+
+async function observeUnrecordedRecovery() {
+  if (!triageFailure || typeof triageFailure.restored === "boolean" || !ownsManagedUpdateLease()) return;
+  const previous = closedUpdateResult?.steps?.findLast((step) => step.name === "gateway recovery verification");
+  if (previous) {
+    triageFailure.restored = previous.exitCode === 0 && !previous.failureFacts?.length;
+    return;
+  }
+  const startedAt = Date.now();
+  let verified = false;
+  let code = "gateway-probe-failed";
+  let detail = terminationRequested ? "Gateway recovery verification was cancelled."
+    : !params.serviceRecovery ? (params.foregroundOrigin
+      ? "Foreground Gateway serving health remains unverified by its current owner."
+      : "Gateway serving health remains unverified by its external service owner.")
+    : closedUpdateResult?.recovery?.reason || "Recovery runtime identity is unavailable.";
+  let verification;
+  // A pre-activation refusal leaves the original service untouched. Observe that
+  // generation without granting restart authority or claiming candidate activation.
+  if (!terminationRequested && params.serviceRecovery && !restorationArmed && params.recovery?.version) {
+    try {
+      const { waitForGatewayUpdateRecovery } = await import(pathToFileURL(params.recoveryModulePath).href);
+      if (!ownsManagedUpdateLease()) return;
+      const health = await waitForGatewayUpdateRecovery(params.recovery.version, params.recovery.buildId, Math.min(params.recoveryTimeoutMs, 3000));
+      if (!ownsManagedUpdateLease()) return;
+      const running = health.runtime?.status === "running";
+      const versionMatch = health.gatewayVersion === params.recovery.version &&
+        (!params.recovery.buildId || health.gatewayBuildId === params.recovery.buildId);
+      verified = running && versionMatch && health.healthy === true;
+      verification = {
+        serviceRunning: running ? true : health.runtime?.status === "stopped" ? false : undefined,
+        pid: typeof health.runtime?.pid === "number" ? health.runtime.pid : undefined,
+        runningVersion: health.gatewayVersion ?? undefined,
+        runningBuildId: health.gatewayBuildId ?? undefined,
+        versionMatch, settled: health.healthy === true, coreReady: health.healthy === true,
+      };
+      code = health.runtime?.status === "stopped" ? "service-not-running"
+        : !running ? "gateway-probe-failed" : !versionMatch ? "version-mismatch" : "gateway-readiness-unverified";
+      detail = verified ? "Original Gateway is verified serving." : "Original Gateway serving health was not verified: " + code;
+    } catch (error) {
+      detail = "Original Gateway recovery probe failed.";
+      appendLog(detail + " " + String(error));
+    }
+  }
+  triageFailure.restored = verified;
+  triageFailure.recoveryReason = verified ? undefined : detail;
+  recoveryObservation = {
+    verification,
+    step: {
+      name: "gateway recovery verification", command: "gateway verification", cwd: params.updateLeaseKey,
+      durationMs: Math.max(0, Date.now() - startedAt), exitCode: verified ? 0 : 1,
+      ...(!verified ? { failureFacts: [{ check: "gateway-recovery", code, message: detail }] } : {}),
+    },
+  };
+}
 
 async function finishManagedUpdateRun() {
+  try { await observeUnrecordedRecovery(); }
+  catch (error) {
+    appendLog("Gateway recovery observation could not complete: " + String(error));
+  }
   if (!runLedger || !runOutcome) return;
   if (foregroundParked && runOutcome.status === "succeeded") return;
   if (!ownsManagedUpdateLease()) throw new Error("managed update terminal writer lost its current claim");
@@ -26,7 +86,9 @@ async function finishManagedUpdateRun() {
     ...runOutcome,
     ...(closedUpdateResult ? { reason: closedUpdateResult.reason ?? runOutcome.reason, after: closedUpdateResult.after } : {}),
     diagnostics: {
-      steps: closedUpdateResult?.steps,
+      steps: [...(closedUpdateResult?.steps ?? []), ...(recoveryObservation ? [recoveryObservation.step] : [])],
+      recovery: closedUpdateResult?.recovery,
+      verification: recoveryObservation?.verification ?? closedUpdateResult?.verification,
       ...(handoffFailure && runOutcome.status === "failed" ? { failure: { step: "managed-service-handoff", detail: failureDetail, exitCode: 1 } } : {}),
     },
     ...(serviceDowntimeMs !== undefined ? { downtimeMs: serviceDowntimeMs } : {}),

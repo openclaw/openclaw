@@ -20,17 +20,6 @@ type PendingRowCopyHost = PendingRowHost & {
   copyRow: (row: GatewaySessionRow, patch: Partial<GatewaySessionRow>) => GatewaySessionRow;
 };
 
-/** `canonical` is what the Gateway confirmed; `previous` is the value the intent replaced. */
-type PendingRowPatch<T> = {
-  token: symbol;
-  order: number;
-  sessionId: string | undefined;
-  hasProjectedRow: boolean;
-  isCurrent?: () => boolean;
-  previous: T;
-  next: T;
-  canonical: T;
-};
 export type SessionPinFields = { pinned: boolean; pinnedAt: number | undefined };
 type SessionFastModeFields = Pick<GatewaySessionRow, "fastMode" | "effectiveFastMode">;
 export const optimisticSessionRowFields = [
@@ -41,8 +30,13 @@ export const optimisticSessionRowFields = [
   "label",
   "icon",
   "color",
+  "archived",
+  "archivedAt",
+  "archivedBy",
+  "archiveReason",
   "thinkingLevel",
   "fastMode",
+  "cyberAccessProgram",
   "effectiveFastMode",
   "contextWindow",
 ] as const;
@@ -72,6 +66,7 @@ export type SessionPatchRowFact = {
     | (SessionPinFields & SessionReadFields)
     | SessionArchiveFields
     | Pick<GatewaySessionRow, "fastMode">
+    | Pick<GatewaySessionRow, "cyberAccessProgram">
     | Pick<
         GatewaySessionRow,
         | "model"
@@ -191,7 +186,7 @@ export function resolvePredecessorRowTarget(
     : null;
 }
 
-function createOptimisticRowPatches<T>(
+export function createOptimisticRowPatches<T>(
   host: PendingRowHost,
   fields: {
     read: (row: GatewaySessionRow | undefined) => T;
@@ -200,7 +195,19 @@ function createOptimisticRowPatches<T>(
     observe: (previous: T, row: GatewaySessionRow, names: readonly string[]) => T;
   },
 ) {
-  const pending = new Map<string, PendingRowPatch<T>>();
+  const pending = new Map<
+    string /** `canonical` is what the Gateway confirmed; `previous` is the value the intent replaced. */,
+    {
+      token: symbol;
+      order: number;
+      sessionId: string | undefined;
+      hasProjectedRow: boolean;
+      isCurrent?: () => boolean;
+      previous: T;
+      next: T;
+      canonical: T;
+    }
+  >();
   let nextOrder = 0;
   const owns = (target: PendingRowPresentationTarget, token: symbol): boolean => {
     const current = pending.get(target.identity);
@@ -329,6 +336,7 @@ export function createOptimisticRowField<
     | "category"
     | "unread"
     | "thinkingLevel"
+    | "cyberAccessProgram"
     | "contextWindow",
 >(host: PendingRowCopyHost, field: Field) {
   return createOptimisticRowPatches(host, {
@@ -361,11 +369,10 @@ export function createOptimisticPinPatches(host: PendingRowCopyHost) {
   };
 }
 
-type SessionSettingsPatch = Pick<SessionPatch, "thinkingLevel" | "fastMode" | "contextWindow">;
-
 /** Settings share the row-intent owner; their token group is captured before queued dispatch. */
 export function createOptimisticSettingsPatches(host: PendingRowCopyHost) {
   const thinking = createOptimisticRowField(host, "thinkingLevel");
+  const accessProgram = createOptimisticRowField(host, "cyberAccessProgram");
   const fastMode = createOptimisticRowPatches(host, {
     read: (row): SessionFastModeFields => ({
       fastMode: row?.fastMode,
@@ -386,23 +393,37 @@ export function createOptimisticSettingsPatches(host: PendingRowCopyHost) {
   });
   const contextWindow = createOptimisticRowField(host, "contextWindow");
   return {
-    owners: [thinking, fastMode, contextWindow] as const,
+    owners: [thinking, fastMode, contextWindow, accessProgram] as const,
     read(identity: string) {
       const thinkingValue = thinking.read(identity);
       const speedValue = fastMode.read(identity);
       const contextValue = contextWindow.read(identity);
-      return thinkingValue || speedValue || contextValue
+      const accessProgramValue = accessProgram.read(identity);
+      return thinkingValue || speedValue || contextValue || accessProgramValue
         ? {
             ...(thinkingValue ? { thinkingLevel: thinkingValue.next } : {}),
             ...speedValue?.next,
+            ...(accessProgramValue ? { cyberAccessProgram: accessProgramValue.next } : {}),
             ...(contextValue ? { contextWindow: contextValue.next } : {}),
           }
         : undefined;
     },
-    prepare(patch: SessionSettingsPatch, isCurrent: () => boolean) {
+    prepare(
+      patch: Pick<
+        SessionPatch,
+        "thinkingLevel" | "fastMode" | "contextWindow" | "cyberAccessProgram"
+      >,
+      isCurrent: () => boolean,
+    ) {
       const starts: Array<
         readonly [Pick<typeof thinking, "settle" | "owns">, ReturnType<typeof thinking.prepare>]
       > = [];
+      if (patch.cyberAccessProgram !== undefined) {
+        starts.push([
+          accessProgram,
+          accessProgram.prepare(() => patch.cyberAccessProgram ?? undefined, isCurrent),
+        ]);
+      }
       if (patch.thinkingLevel !== undefined) {
         starts.push([
           thinking,

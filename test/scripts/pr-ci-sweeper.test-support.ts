@@ -24,7 +24,6 @@ export function fakeGithub(options: {
     Array<{ conclusion: string | null; event?: string; id?: number; status?: string }>
   >;
   pullsGetByNumber?: Record<number, Record<string, unknown> | Array<Record<string, unknown>>>;
-  events?: Array<Record<string, unknown>>;
   pageSize?: number;
 }) {
   const calls: FakeCall[] = [];
@@ -77,7 +76,7 @@ export function fakeGithub(options: {
         );
       }
       if (endpoint.endpointName === "issues.listEvents") {
-        return Promise.resolve(options.events ?? []);
+        return Promise.resolve([]);
       }
       throw new Error(`unexpected paginate ${endpoint.endpointName}`);
     },
@@ -111,7 +110,6 @@ export function fakeGithub(options: {
 }
 
 export const context = { repo: { owner: "openclaw", repo: "openclaw" } };
-export const core = { info: () => {}, warning: () => {}, setFailed: () => {} };
 
 export function recordingCore() {
   const logs: string[] = [];
@@ -124,14 +122,5 @@ export function recordingCore() {
     },
     logs,
     warnings,
-  };
-}
-
-export function autoMergePr(number: number, headSha: string) {
-  return {
-    ...pr({ auto_merge: { merge_method: "squash" } }),
-    number,
-    state: "open",
-    head: { sha: headSha, ref: "automation/refresh" },
   };
 }

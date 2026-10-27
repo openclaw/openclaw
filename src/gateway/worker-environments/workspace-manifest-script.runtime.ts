@@ -1,26 +1,13 @@
-import { createRequire } from "node:module";
-import { compileFunction } from "node:vm";
 import { requestGitWorkerCommand } from "../../infra/git-worker-context.js";
 import type { WorkspaceManifestComputationOperations } from "./workspace-manifest-computation.js";
-import { WORKSPACE_MANIFEST_PROGRAM } from "./workspace-sync-scripts.js";
-
-const require = createRequire(import.meta.url);
-// Invocation bindings keep workspace state private while the resident worker reuses the code.
-const capture = compileFunction(`${WORKSPACE_MANIFEST_PROGRAM}\nreturn main();`, [
-  "process",
-  "require",
-  "readManifestInput",
-  "assertManifestCurrent",
-  "readManifestGit",
-  "MAX_WORKSPACE_HASH_MEMO_BYTES",
-]);
+import { runWorkspaceManifestProgram } from "./workspace-manifest-script.generated.mjs";
 
 export async function captureNodeWorkspaceManifestImpl(
   input: WorkspaceManifestComputationOperations["workspace.manifest.remote-capture"]["input"],
   assertCurrent: () => void = () => {},
 ): Promise<string> {
   let stdout = "";
-  await capture(
+  await runWorkspaceManifestProgram(
     {
       argv: [process.execPath, ...input.argv],
       env: { HOME: input.home },
@@ -38,7 +25,6 @@ export async function captureNodeWorkspaceManifestImpl(
         },
       },
     },
-    require,
     () => input.memo ?? "",
     assertCurrent,
     async (root: string, args: string[], maxOutputBytes: number) => {

@@ -2,18 +2,16 @@ import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
-import { filterStringEntries } from "@openclaw/normalization-core/string-normalization";
+import {
+  filterStringEntries,
+  sortUniqueStrings,
+} from "@openclaw/normalization-core/string-normalization";
 import type { ChannelOutboundTargetRef as RouteNoticeTarget } from "../channels/plugins/outbound.types.js";
+import { formatHumanList } from "../shared/human-list.js";
 import type {
   ChannelApprovalNativeDeliveryPlan,
   ChannelApprovalNativePlannedTarget,
 } from "./approval-native-delivery.js";
-import {
-  describeApprovalDeliveryDestination,
-  resolveAmbiguousApprovalRouteNoticeText,
-  resolveApprovalDeliveryFailedNoticeText,
-  resolveApprovalRoutedElsewhereNoticeText,
-} from "./approval-native-route-notice.js";
 import { buildChannelApprovalNativeTargetKey } from "./approval-native-target-key.js";
 import type {
   ApprovalRequestInput as ApprovalRequest,
@@ -325,17 +323,27 @@ function resolveApprovalRouteNotice(params: {
       requiresManualFallback ||
       params.missingSelectedRuntime)
   ) {
-    return buildNotice(
-      () =>
-        ambiguousOwner
-          ? resolveAmbiguousApprovalRouteNoticeText(params.approvalKind)
-          : resolveApprovalDeliveryFailedNoticeText({
-              approvalId: params.request.id,
-              approvalKind: params.approvalKind,
-              allowedDecisions: readAllowedDecisionStrings(params.request),
-            }),
-      true,
-    );
+    return buildNotice(() => {
+      if (ambiguousOwner) {
+        const surface =
+          params.approvalKind === "plugin" ? "Control UI or terminal UI" : "Control UI";
+        return `Approval required, but multiple channel accounts can handle this request. Open the ${surface} to approve it.`;
+      }
+      // Only exec ids are long command ids; plugin ids can be short semantic ids.
+      const commandId =
+        params.approvalKind === "exec" && params.request.id.length > 8
+          ? params.request.id.slice(0, 8)
+          : params.request.id;
+      const allowedDecisions = readAllowedDecisionStrings(params.request);
+      const decisions = (
+        allowedDecisions?.length ? allowedDecisions : ["allow-once", "allow-always", "deny"]
+      ).join("|");
+      return [
+        "Approval required. I could not deliver the native approval request.",
+        `Reply with: /approve ${commandId} ${decisions}`,
+        "If the short code is ambiguous, use the full id in /approve.",
+      ].join("\n");
+    }, true);
   }
 
   // If any same-channel runtime already delivered into the origin chat, every
@@ -372,19 +380,24 @@ function resolveApprovalRouteNotice(params: {
     ) {
       return [];
     }
+    const surfaces = new Set(report.deliveredTargets.map((delivered) => delivered.surface));
     return [
-      describeApprovalDeliveryDestination({
-        channelLabel: report.channelLabel,
-        deliveredTargets: report.deliveredTargets,
-      }),
+      surfaces.size === 1 && surfaces.has("approver-dm")
+        ? `${report.channelLabel} DMs`
+        : report.channelLabel,
     ];
   });
-  const text = resolveApprovalRoutedElsewhereNoticeText(destinations);
-  if (!text) {
+  const uniqueDestinations = sortUniqueStrings(destinations.map((value) => value.trim())).filter(
+    Boolean,
+  );
+  if (uniqueDestinations.length === 0) {
     return null;
   }
 
-  return buildNotice(() => text);
+  return buildNotice(
+    () =>
+      `Approval required. I sent the approval request to ${formatHumanList(uniqueDestinations)}, not this chat.`,
+  );
 }
 
 /** Returns whether a native approval runtime is active for the requested channel/account scope. */

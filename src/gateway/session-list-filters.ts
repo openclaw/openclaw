@@ -7,11 +7,13 @@ import type {
   SessionOwnerSessionCount,
   SessionsListParams,
 } from "../../packages/gateway-protocol/src/index.js";
+import { SessionRunStatusSchema } from "../../packages/gateway-protocol/src/schema/sessions-row.js";
 import type { ModelCatalogEntry } from "../agents/model-catalog.js";
 import { resolveSessionModelIdentityRef } from "../agents/session-model-ref.js";
 import { buildGroupDisplayName } from "../config/sessions/group-display.js";
 import {
   MAX_SESSION_PARTICIPANTS,
+  resolveSessionCreatorActor,
   sessionCreatorProfileId,
 } from "../config/sessions/session-entry-provenance.js";
 import { isPinnableSessionEntry } from "../config/sessions/session-pin-policy.js";
@@ -24,19 +26,19 @@ import { formatGoalSummary } from "../shared/session-goal-display.js";
 import { isSessionRunStateActive } from "../shared/session-run-state.js";
 import { normalizeSessionSearchText } from "../shared/session-search-text.js";
 import type { SessionActivityPulse, SessionOwnerFacetIdentity } from "../shared/session-types.js";
-import type { SynchronousWork } from "../shared/synchronous-work.js";
 import { sessionDeliveryChannel, sessionDeliveryOrigin } from "../utils/delivery-context.read.js";
 import { readPreparedGatewayModelCatalogMetadata } from "./server-model-catalog-view.js";
 import {
   projectSessionOwner,
   addSessionOwnerFacetIdentity,
   sortSessionOwnerFacet,
-  projectSessionParticipant,
+  resolveSessionProfileId,
   projectSessionPeople,
   projectSessionPeopleFacet,
   resolveSessionListProfileReference,
 } from "./session-identity-projection.js";
 import type { SessionEntryPair } from "./session-list-order.js";
+import { addSessionListSearchModelFields } from "./session-list-search-fields.js";
 import type {
   SessionListModelFactsLookup,
   SessionListTargetLookup,
@@ -91,6 +93,7 @@ export type SessionListFilterParams = {
   entriesSorted?: boolean;
   getTarget: SessionListTargetLookup;
   getModelFacts?: SessionListModelFactsLookup;
+  modelSearchMayMatch?: (search: string) => boolean;
   modelCatalog?: SessionListModelCatalog | ModelCatalogEntry[];
   opts: SessionsListParams;
   now: number;
@@ -107,7 +110,6 @@ export type SessionListFilterParams = {
   involvingActorId?: string;
   ownerFirstActorId?: string;
   projectActiveRun?: SessionListActiveRunProjector;
-  shouldYield?: () => boolean;
   involvementKeys: (profileId: string, personal: boolean) => ReadonlySet<string>;
 };
 
@@ -133,28 +135,16 @@ function resolveSessionListSearchDisplayName(
   return entry?.label ?? sessionDeliveryOrigin(entry)?.label;
 }
 
-function addSessionListSearchModelFields(
-  fields: Array<string | undefined>,
-  identity: { provider?: string; model?: string },
-) {
-  const provider = normalizeOptionalString(identity.provider);
-  const model = normalizeOptionalString(identity.model);
-  fields.push(provider, model);
-  if (provider && model) {
-    fields.push(`${provider}/${model}`);
-  }
-}
-
 function matchesSessionListSearch(fields: Array<string | undefined>, search: string): boolean {
   return fields.some(
     (field) => typeof field === "string" && normalizeLowercaseStringOrEmpty(field).includes(search),
   );
 }
 
-// Selection facts are replaced with the resident entry; weak keys release retired revisions.
+// Search follows the committed entry and physical key; weak keys release retired revisions.
 const staticSearchFields = new WeakMap<
-  NonNullable<ReturnType<SessionListTargetLookup>>["selection"],
-  { literal: string[]; titles: string[] }
+  SessionEntry,
+  { key: string; literal: string[]; titles: string[] }
 >();
 
 function createActivityPulse(opts: SessionsListParams): SessionActivityPulse | undefined {
@@ -172,11 +162,11 @@ function createActivityPulse(opts: SessionsListParams): SessionActivityPulse | u
   };
 }
 
-export function* filterSessionEntries(
+export function filterSessionEntries(
   params: SessionListFilterParams,
   window?: { offset: number; limit?: number; ownerLimit: number },
-): SynchronousWork<SessionListFilteredEntries> {
-  const { cfg, opts, now, shouldYield, configuredAgentIds } = params;
+): SessionListFilteredEntries {
+  const { cfg, opts, now, configuredAgentIds } = params;
   let rowContext: SessionListRowContext | undefined;
   const getRowContext = () => (rowContext ??= params.getRowContext());
   const search = normalizeLowercaseStringOrEmpty(opts.search);
@@ -210,11 +200,7 @@ export function* filterSessionEntries(
   const profileRelation = opts.profileRelation
     ? {
         ...opts.profileRelation,
-        profileId: projectSessionParticipant(
-          { type: "profile", id: opts.profileRelation.profileId },
-          identities,
-          cfg,
-        ).identity.id,
+        profileId: resolveSessionProfileId(opts.profileRelation.profileId, identities),
       }
     : undefined;
   const involvingActorId = normalizeOptionalString(params.involvingActorId);
@@ -233,9 +219,6 @@ export function* filterSessionEntries(
       ) {
         visibleEntries.push(pair);
       }
-      if (shouldYield?.()) {
-        yield;
-      }
     }
   }
   const allowedProfileIds =
@@ -246,18 +229,14 @@ export function* filterSessionEntries(
       for (const person of projectPeople(entry, identities, owner)) {
         allowedProfileIds.add(person.identity.id);
       }
-      if (shouldYield?.()) {
-        yield;
-      }
     }
   }
   const profileReference = opts.involvingProfileId
-    ? yield* resolveSessionListProfileReference(
+    ? resolveSessionListProfileReference(
         opts.involvingProfileId,
         visibleEntries,
         identities,
         allowedProfileIds,
-        shouldYield,
       )
     : undefined;
   if (profileReference && !profileReference.ok) {
@@ -276,12 +255,41 @@ export function* filterSessionEntries(
   const agentFilter = typeof opts.agentId === "string" ? normalizeAgentId(opts.agentId) : "";
   // Excluded rows must not participate in search or ownership resolution.
   const titleSearch = search && normalizeSessionSearchText(search);
+  const matchesLiteralField = (field: string) => field.includes(search);
+  const matchesTitleField = (field: string) => field.includes(titleSearch);
+  const searchRunState =
+    search &&
+    [...SessionRunStatusSchema.anyOf.map((status) => status.const), "live running", "idle"].some(
+      (status) => status.includes(search),
+    );
+  let identityMatches: Map<string, boolean> | undefined;
+  let modelMatches: Map<string, boolean> | undefined;
+  let runtimeMatches: Map<string, boolean> | undefined;
+  let searchModels: boolean | undefined;
+  const matchesModelRefs = (
+    key: string,
+    read: () => Array<Parameters<typeof addSessionListSearchModelFields>[1]>,
+  ) => {
+    let modelMatch = modelMatches?.get(key);
+    if (modelMatch === undefined) {
+      const models: Array<string | undefined> = [];
+      for (const identity of read()) {
+        addSessionListSearchModelFields(models, identity);
+      }
+      modelMatch = matchesSessionListSearch(models, search);
+      (modelMatches ??= new Map()).set(key, modelMatch);
+    }
+    return modelMatch;
+  };
   const matchesSearch = search
-    ? (key: string, entry: SessionEntry): boolean => {
-        const target = expectDefined(params.getTarget(key), "search row owner");
+    ? (
+        key: string,
+        entry: SessionEntry,
+        target: NonNullable<ReturnType<SessionListTargetLookup>>,
+      ): boolean => {
         const storeKey = target.storeKey ?? key;
-        let fields = staticSearchFields.get(target.selection);
-        if (!fields) {
+        let fields = staticSearchFields.get(entry);
+        if (!fields || fields.key !== storeKey) {
           const titles = [
             entry.label,
             entry.subject,
@@ -300,78 +308,121 @@ export function* filterSessionEntries(
             model: entry.model,
           });
           fields = {
+            key: storeKey,
             literal: rawFields.map(normalizeLowercaseStringOrEmpty),
             titles: titles.map(normalizeSessionSearchText),
           };
-          staticSearchFields.set(target.selection, fields);
+          staticSearchFields.set(entry, fields);
         }
         if (
-          fields.literal.some((field) => field.includes(search)) ||
-          (titleSearch && fields.titles.some((field) => field.includes(titleSearch)))
+          fields.literal.some(matchesLiteralField) ||
+          (titleSearch && fields.titles.some(matchesTitleField))
         ) {
           return true;
         }
         const agentId = target.agentId;
-        const metadataSnapshot = readPreparedGatewayModelCatalogMetadata(
-          params.modelCatalog instanceof Map ? params.modelCatalog.get(agentId) : undefined,
-        );
-        const run = projectGatewaySessionRunState({
-          key: storeKey,
-          entry,
-          now,
-          rowContext: getRowContext(),
-        }).fields;
-        const active = params.projectActiveRun?.(key, entry, agentId);
-        const state = projectGatewaySessionActiveRun(active, run.status);
-        const goal = resolveGatewaySessionGoal(entry, now);
+        if (searchRunState) {
+          const run = projectGatewaySessionRunState({
+            key: storeKey,
+            entry,
+            now,
+            rowContext: getRowContext(),
+          }).fields;
+          const active = params.projectActiveRun?.(key, entry, agentId);
+          const state = projectGatewaySessionActiveRun(active, run.status);
+          if (
+            matchesSessionListSearch(
+              [
+                state.status,
+                isSessionRunStateActive(state)
+                  ? "live running"
+                  : state.hasActiveRun === false
+                    ? "idle"
+                    : undefined,
+              ],
+              search,
+            )
+          ) {
+            return true;
+          }
+        }
+        const goal = entry.goal && resolveGatewaySessionGoal(entry, now);
         if (
+          goal &&
           matchesSessionListSearch(
             [
-              state.status,
-              isSessionRunStateActive(state)
-                ? "live running"
-                : state.hasActiveRun === false
-                  ? "idle"
-                  : undefined,
-              goal
-                ? `${goal.objective} ${goal.status} ${formatGoalSummary(goal)} ${goal.lastStatusNote ?? ""}`
-                : undefined,
+              `${goal.objective} ${goal.status} ${formatGoalSummary(goal)} ${goal.lastStatusNote ?? ""}`,
             ],
             search,
           )
         ) {
           return true;
         }
-        if (matchesSessionListSearch([params.identityNames?.get(agentId)], search)) {
+        let identityMatch = identityMatches?.get(agentId);
+        if (identityMatch === undefined) {
+          identityMatch = matchesSessionListSearch([params.identityNames?.get(agentId)], search);
+          (identityMatches ??= new Map()).set(agentId, identityMatch);
+        }
+        if (identityMatch) {
           return true;
         }
-        const source = expectDefined(params.getModelFacts, "prepared search row model facts")(key);
+        searchModels ??=
+          search.startsWith("agent:") ||
+          expectDefined(params.modelSearchMayMatch, "prepared search model vocabulary")(search);
+        if (!searchModels) {
+          return false;
+        }
         // Derived model aliases are not agent-key matches.
         if (!search.startsWith("agent:")) {
           const subagentRun = getRowContext().subagentRuns.getDisplaySubagentRun(storeKey);
-          const resolvedModel = resolveSessionModelIdentityRef(
-            cfg,
-            entry,
+          // These are exactly the persisted inputs consumed by the identity resolver.
+          const modelKey = JSON.stringify([
+            "resolved",
             agentId,
+            entry.modelProvider,
+            entry.model,
             subagentRun?.model,
-            {
-              allowPluginNormalization: false,
-              manifestPlugins: metadataSnapshot,
-              configuredDefaultModelByAgent: getRowContext().configuredDefaultModelByAgent,
-            },
-          );
-          const models: Array<string | undefined> = [];
-          for (const identity of [resolvedModel, source.selectedModel, source.rowModelIdentity]) {
-            addSessionListSearchModelFields(models, identity);
-          }
-          if (matchesSessionListSearch(models, search)) {
+            entry.providerOverride,
+            entry.modelOverride,
+            entry.modelOverrideRouteResolution,
+            entry.modelOverrideFallbackOriginProvider,
+            entry.modelOverrideFallbackOriginModel,
+          ]);
+          if (
+            matchesModelRefs(modelKey, () => [
+              resolveSessionModelIdentityRef(cfg, entry, agentId, subagentRun?.model, {
+                allowPluginNormalization: false,
+                manifestPlugins: readPreparedGatewayModelCatalogMetadata(
+                  params.modelCatalog instanceof Map ? params.modelCatalog.get(agentId) : undefined,
+                ),
+                configuredDefaultModelByAgent: getRowContext().configuredDefaultModelByAgent,
+              }),
+            ])
+          ) {
             return true;
           }
         }
-        return matchesSessionListSearch(
-          [formatAgentRuntimeLabel(source.thinkingProjection.agentRuntime)],
-          search,
-        );
+        const source = expectDefined(params.getModelFacts, "prepared search row model facts")(key);
+        if (!search.startsWith("agent:")) {
+          const modelKey = JSON.stringify([
+            "prepared",
+            agentId,
+            source.selectedModel.provider,
+            source.selectedModel.model,
+            source.rowModelIdentity.provider,
+            source.rowModelIdentity.model,
+          ]);
+          if (matchesModelRefs(modelKey, () => [source.selectedModel, source.rowModelIdentity])) {
+            return true;
+          }
+        }
+        const runtimeLabel = formatAgentRuntimeLabel(source.thinkingProjection.agentRuntime);
+        let runtimeMatch = runtimeMatches?.get(runtimeLabel);
+        if (runtimeMatch === undefined) {
+          runtimeMatch = matchesSessionListSearch([runtimeLabel], search);
+          (runtimeMatches ??= new Map()).set(runtimeLabel, runtimeMatch);
+        }
+        return runtimeMatch;
       }
     : undefined;
   const personalKeys = involvingActorId && params.involvementKeys(involvingActorId, true);
@@ -381,9 +432,6 @@ export function* filterSessionEntries(
       : undefined;
 
   for (const pair of candidateEntries) {
-    if (shouldYield?.()) {
-      yield;
-    }
     const key = pair[0];
     const entry = pair[1];
     if (
@@ -454,7 +502,7 @@ export function* filterSessionEntries(
     ) {
       continue;
     }
-    if (matchesSearch && !matchesSearch(key, entry)) {
+    if (matchesSearch && !matchesSearch(key, entry, target)) {
       continue;
     }
     if (activeMinutes !== undefined) {
@@ -479,8 +527,7 @@ export function* filterSessionEntries(
       const createdProfileId = sessionCreatorProfileId(entry.createdActor);
       if (
         !createdProfileId ||
-        projectSessionParticipant({ type: "profile", id: createdProfileId }, identities, cfg)
-          .identity.id !== profileRelation.profileId
+        resolveSessionProfileId(createdProfileId, identities) !== profileRelation.profileId
       ) {
         continue;
       }
@@ -491,7 +538,7 @@ export function* filterSessionEntries(
     if (effectiveOwner) {
       addSessionOwnerFacetIdentity(ownerFacet, effectiveOwner);
     }
-    if (creatorId && entry.createdActor?.id !== creatorId) {
+    if (creatorId && resolveSessionCreatorActor(entry.createdActor)?.id !== creatorId) {
       continue;
     }
     if (ownerId && effectiveOwner?.id !== ownerId) {

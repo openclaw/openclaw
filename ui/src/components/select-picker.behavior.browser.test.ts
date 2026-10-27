@@ -1,6 +1,8 @@
 import { createSignal, flush } from "solid-js";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { allMutationObserverOptions } from "../test-helpers/dom-probe.ts";
 import { cleanupSolid, mountSolid } from "../test-helpers/mount-solid.ts";
+import { waitForSolid } from "../test-helpers/solid-settle.ts";
 import { Picker, type PickerParams, type PickerOption } from "./select-picker.ts";
 import overlayStyles from "./solid/overlay.css?inline";
 
@@ -87,17 +89,14 @@ async function mount(overrides: Partial<PickerParams<PickerOption>> = {}) {
 
 describe("Picker", () => {
   it("keeps closed choices unmounted across catalog refreshes and shows current choices on open", async () => {
-    const p = await mount({ searchable: false });
+    const groupBy = vi.fn(() => undefined);
+    const p = await mount({ searchable: false, groupBy });
     const menu = p.picker.querySelector<HTMLElement>(".picker-select__menu")!;
     expect(p.rows()).toHaveLength(0);
+    expect(groupBy).not.toHaveBeenCalled();
     const mutations: MutationRecord[] = [];
     const observer = new MutationObserver((records) => mutations.push(...records));
-    observer.observe(menu, {
-      attributes: true,
-      childList: true,
-      characterData: true,
-      subtree: true,
-    });
+    observer.observe(menu, allMutationObserverOptions());
     try {
       await p.update({
         options: [{ value: "updated", label: "Updated choice" }],
@@ -105,14 +104,17 @@ describe("Picker", () => {
       });
       mutations.push(...observer.takeRecords());
       expect(mutations).toHaveLength(0);
+      expect(groupBy).not.toHaveBeenCalled();
       expect(p.trigger.getAttribute("aria-label")).toBe("Model: Updated choice");
       await p.key("ArrowDown");
       expect(p.rows().map((row) => row.textContent?.trim())).toEqual(["Updated choice"]);
       expect(document.activeElement).toBe(p.picker.querySelector(".picker-select__options"));
       await p.key("Escape");
       expect(p.rows()).toHaveLength(0);
+      groupBy.mockClear();
       await p.update({ options, value: "fixture/anchor" });
       expect(p.rows()).toHaveLength(0);
+      expect(groupBy).not.toHaveBeenCalled();
       await p.open();
       expect(p.rows()).toHaveLength(options.length);
       expect(p.params.onChange).not.toHaveBeenCalled();
@@ -205,18 +207,16 @@ describe("Picker", () => {
         groupBy: grouped ? () => ({ id: "models", label: "Models" }) : undefined,
       });
       await p.open();
+      await waitForSolid(() =>
+        expect(p.picker.querySelector("[data-active]")?.getAttribute("data-value")).toBe("atlas-0"),
+      );
       const retained = p.rows().find((row) => row.dataset.value === "atlas-3")!;
       const mutations: MutationRecord[] = [];
       const observer = new MutationObserver((records) => mutations.push(...records));
       if (!grouped) {
         observer.observe(p.picker.querySelector(".picker-select__options")!, { childList: true });
       }
-      observer.observe(retained, {
-        attributes: true,
-        childList: true,
-        characterData: true,
-        subtree: true,
-      });
+      observer.observe(retained, allMutationObserverOptions());
       try {
         await p.search("atlas");
         mutations.push(...observer.takeRecords());
@@ -235,6 +235,95 @@ describe("Picker", () => {
       }
     },
   );
+
+  it("starts revealing a windowed selection before animation frames resume", async () => {
+    const frames = vi.spyOn(window, "requestAnimationFrame").mockReturnValue(0);
+    try {
+      const p = await mount({
+        options: Array.from({ length: 1000 }, (_, index) => ({
+          value: `model-${index}`,
+          label: `Model ${index}`,
+        })),
+        value: "model-750",
+        windowed: () => "",
+      });
+      p.container.style.width = "420px";
+      await p.open();
+      await waitForSolid(() =>
+        expect(
+          p.picker.querySelector<HTMLElement>(".picker-select__options")!.scrollTop,
+        ).toBeGreaterThan(0),
+      );
+    } finally {
+      cleanupSolid();
+      frames.mockRestore();
+    }
+  });
+
+  it("windows a caller-sized large catalog without truncating keyboard selection", async () => {
+    const choices = Array.from({ length: 1000 }, (_, index) => ({
+      value: `model-${index}`,
+      label: index === 999 ? "Zebra last model" : `Model ${String(index).padStart(4, "0")}`,
+      description:
+        index === 750
+          ? "A long description that wraps at the fixed picker width and must remain inside the viewport"
+          : undefined,
+      disabled: index === 751,
+    }));
+    const p = await mount({
+      options: choices,
+      value: "model-750",
+      // This fixed-width fixture exercises the navigation contract independently of sizing.
+      windowed: () => "",
+    });
+    p.container.style.width = "420px";
+    await p.open();
+    const input = p.picker.querySelector<HTMLInputElement>("input")!;
+    const viewport = p.picker.querySelector<HTMLElement>(".picker-select__options")!;
+    const active = () => document.getElementById(input.getAttribute("aria-activedescendant")!);
+    const expectActive = async (value: string, position: number, count = 1000) => {
+      await waitForSolid(() => {
+        const row = active()!;
+        expect(row?.dataset.value).toBe(value);
+        expect(row.getAttribute("aria-posinset")).toBe(String(position));
+        expect(row.getAttribute("aria-setsize")).toBe(String(count));
+        const clip = viewport.getBoundingClientRect();
+        const bounds = row.getBoundingClientRect();
+        expect(bounds.top).toBeGreaterThanOrEqual(clip.top - 1);
+        expect(bounds.bottom).toBeLessThanOrEqual(clip.bottom + 1);
+        expect(p.rows().length).toBeLessThan(50);
+      });
+    };
+    await expectActive("model-750", 751);
+    expect(viewport.scrollTop).toBeGreaterThan(0);
+    await p.key("ArrowDown");
+    await expectActive("model-752", 753);
+    await p.key("ArrowUp");
+    await expectActive("model-750", 751);
+    // Input editing retains Home/End; the list's keyboard surface navigates all rows.
+    expect((await p.key("Home")).defaultPrevented).toBe(false);
+    const listKey = async (key: string) => {
+      viewport.dispatchEvent(
+        new KeyboardEvent("keydown", { key, bubbles: true, cancelable: true }),
+      );
+      flush();
+    };
+    await listKey("End");
+    await expectActive("model-999", 1000);
+    await listKey("Home");
+    await expectActive("model-0", 1);
+    await listKey("z");
+    await expectActive("model-999", 1000);
+    expect(p.params.onChange).not.toHaveBeenCalled();
+    await p.search("Model 0998");
+    await expectActive("model-998", 1, 1);
+    expect(p.rows()).toHaveLength(1);
+    await p.key("Enter");
+    await waitForSolid(() =>
+      expect(p.params.onChange).toHaveBeenCalledExactlyOnceWith("model-998"),
+    );
+    expect(p.trigger.getAttribute("aria-expanded")).toBe("false");
+  });
 
   it("leaves closed-trigger Escape to the page after dismissing the menu without a write", async () => {
     const p = await mount();
@@ -273,7 +362,7 @@ describe("Picker", () => {
     await p.open();
     await p.key("z");
     await p.key("Enter");
-    expect(p.params.onChange).toHaveBeenCalledExactlyOnceWith("beta");
+    await waitForSolid(() => expect(p.params.onChange).toHaveBeenCalledExactlyOnceWith("beta"));
   });
 
   it.each([
@@ -315,7 +404,7 @@ describe("Picker", () => {
     expect(p.trigger.getAttribute("aria-expanded")).toBe("true");
     expect(p.params.onChange).not.toHaveBeenCalled();
     await p.key("Enter");
-    expect(p.params.onChange).toHaveBeenCalledExactlyOnceWith("alpha");
+    await waitForSolid(() => expect(p.params.onChange).toHaveBeenCalledExactlyOnceWith("alpha"));
   });
 
   it("uses spaces and backspace for compact-menu typeahead without an early commit", async () => {
@@ -332,7 +421,7 @@ describe("Picker", () => {
     }
     expect(p.params.onChange).not.toHaveBeenCalled();
     await p.key("Enter");
-    expect(p.params.onChange).toHaveBeenCalledExactlyOnceWith("dog");
+    await waitForSolid(() => expect(p.params.onChange).toHaveBeenCalledExactlyOnceWith("dog"));
   });
 
   it("filters label and exact reference substrings without changing the selected value", async () => {
@@ -366,7 +455,9 @@ describe("Picker", () => {
     await p.search("aurora");
     await p.key("ArrowDown");
     await p.key("Enter");
-    expect(p.params.onChange).toHaveBeenCalledExactlyOnceWith("fixture/aurora-large");
+    await waitForSolid(() =>
+      expect(p.params.onChange).toHaveBeenCalledExactlyOnceWith("fixture/aurora-large"),
+    );
     expect(p.trigger.getAttribute("aria-expanded")).toBe("false");
   });
 
@@ -423,7 +514,7 @@ describe("Picker", () => {
     expect(p.trigger.textContent).toContain("retired/model");
     await p.key("a");
     await p.key("Enter");
-    expect(p.params.onChange).toHaveBeenCalledExactlyOnceWith("");
+    await waitForSolid(() => expect(p.params.onChange).toHaveBeenCalledExactlyOnceWith(""));
   });
 
   it("does not write on outside dismissal, disables an open picker, and closes on disconnect", async () => {
@@ -443,6 +534,24 @@ describe("Picker", () => {
     p.container.append(p.picker);
     await p.picker.updateComplete;
     expect(p.trigger.getAttribute("aria-expanded")).toBe("false");
+  });
+
+  it("cancels an armed submenu hover timer when its owner unmounts", async () => {
+    const p = await mount({ variant: "submenu" });
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    try {
+      expect(vi.getTimerCount()).toBe(0);
+      p.trigger.parentElement!.dispatchEvent(
+        new PointerEvent("pointerenter", { pointerType: "mouse" }),
+      );
+      expect(vi.getTimerCount()).toBe(1);
+      expect(p.trigger.getAttribute("aria-expanded")).toBe("false");
+      cleanupSolid();
+      expect(vi.getTimerCount()).toBe(0);
+    } finally {
+      cleanupSolid();
+      vi.useRealTimers();
+    }
   });
 
   it("retains label styles, tooltips, and open effects", async () => {

@@ -229,47 +229,13 @@ export type SlackAuthIdentity = {
 };
 
 export type SlackObservedMessage = {
-  botId?: string;
   channelId: string;
-  matchedScenario?: boolean;
-  scenarioId?: string;
-  scenarioTitle?: string;
   text: string;
-  actionValues?: string[];
   blockText?: string[];
-  threadTs?: string;
   ts: string;
-  userId?: string;
-};
-
-export type SlackApprovalArtifact = {
-  approvalId: string;
-  approvalKind: ChannelApprovalKind;
-  appServerMethod?: SlackQaCodexApprovalMethod;
-  channelId?: string;
-  codexModelKey?: string;
-  decision: SlackQaApprovalDecision;
-  finalCodexTurnStatus?: string;
-  operationVerified?: boolean;
-  pendingActionValues?: string[];
-  pendingCheckpointPath?: string;
-  pendingMessageTs?: string;
-  pendingScreenshotPath?: string;
-  pendingText?: string;
-  resolvedActionValues?: string[];
-  resolvedCheckpointPath?: string;
-  resolvedMessageTs?: string;
-  resolvedScreenshotPath?: string;
-  resolvedText?: string;
-  threadTs?: string;
 };
 
 export type SlackApprovalCheckpointState = "pending" | "resolved";
-
-export type SlackApprovalCheckpointAck = {
-  capturedAt?: string;
-  screenshotPath?: string;
-};
 
 export type SlackApprovalCheckpointMessage = {
   actionLabels: string[];

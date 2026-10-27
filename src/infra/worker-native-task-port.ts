@@ -128,10 +128,10 @@ export class NativeWorkerTaskPort {
     }
   }
 
-  postMessage(value: unknown, transferList: readonly Transferable[]): void {
+  postMessage(value: unknown, transferList: Transferable[]): void {
     this.assertAvailable();
     const bytes = workerMessagePayloadBytes(value);
-    this.port.postMessage(value, [...transferList]);
+    this.port.postMessage(value, transferList);
     observeWorkerMessage(value, "to_worker", "other", bytes ?? null);
   }
 

@@ -1,11 +1,19 @@
 import { spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { afterEach, expect, it } from "vitest";
+import { afterAll, afterEach, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
-import { runGatesBash } from "./pr-prepare.test-support.js";
+import {
+  createPublisherRepoFactory,
+  runGatesBash,
+  runPublisher,
+} from "./pr-prepare.test-support.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+const createPublisher = createPublisherRepoFactory({
+  cases: tempDirs,
+  templates: useAutoCleanupTempDirTracker(afterAll),
+});
 
 function fixtureGit(cwd: string, args: string[]) {
   const result = spawnSync("git", args, { cwd, encoding: "utf8" });
@@ -39,64 +47,6 @@ function makeRetryRepo() {
   git("commit", "-q", "--allow-empty", "-m", "retry head");
   const headSha = git("rev-parse", "HEAD");
   return { repoDir, headSha };
-}
-
-function makeSyncRepo(): string {
-  const { repoDir, git } = initRepo();
-  const base = ["shared: old", "one", "two", "three", "four", "five", "pr: old", ""].join("\n");
-  const prChange = base.replace("shared: old", "shared: new").replace("pr: old", "pr: new");
-  const mainChange = base.replace("shared: old", "shared: new");
-  commitFile(repoDir, "config.yml", base, "base");
-  git("checkout", "-qb", "prep");
-  commitFile(repoDir, "config.yml", prChange, "pr change");
-  git("checkout", "-q", "main");
-  commitFile(repoDir, "config.yml", mainChange, "upstream shared hunk");
-  git("remote", "add", "origin", ".");
-  git("fetch", "-q", "origin", "main");
-  git("checkout", "-q", "prep");
-
-  writeLocal(repoDir, "hosted-sha", `${git("rev-parse", "HEAD")}\n`);
-  writeLocal(
-    repoDir,
-    "pr-meta.env",
-    "PR_NUMBER=4242\nPR_AUTHOR=steipete\nPR_URL=https://example.test/pr/4242\n",
-  );
-  writeLocal(
-    repoDir,
-    "prep-context.env",
-    `PR_HEAD=topic\nPREP_BRANCH=prep\nPR_HEAD_SHA_BEFORE=${git("rev-parse", "HEAD")}\n`,
-  );
-  writeLocal(repoDir, "prep.md", "# Prepare\n");
-  return repoDir;
-}
-
-function makePreparePushHeadDriftRepo() {
-  const { repoDir, git } = initRepo();
-  commitFile(repoDir, "base.txt", "base\n", "base");
-  const recordedHead = git("rev-parse", "HEAD");
-  git("remote", "add", "origin", ".");
-  git("fetch", "-q", "origin", "main");
-
-  git("checkout", "-qb", "pr-4242");
-  commitFile(repoDir, "reviewed.txt", "new reviewed head\n", "reviewed head update");
-  const reviewedHead = git("rev-parse", "HEAD");
-
-  git("checkout", "-qb", "prep", recordedHead);
-  commitFile(repoDir, "stale-fixup.txt", "belongs to stale prep head\n", "stale prep fixup");
-  writeLocal(
-    repoDir,
-    "pr-meta.env",
-    `PR_NUMBER=4242\nPR_AUTHOR=steipete\nPR_URL=https://example.test/pr/4242\nPR_HEAD=topic\nPR_HEAD_SHA=${reviewedHead}\n`,
-  );
-  writeLocal(
-    repoDir,
-    "prep-context.env",
-    `PR_NUMBER=4242\nPR_HEAD=topic\nPR_HEAD_SHA_BEFORE=${recordedHead}\nPREP_BRANCH=prep\nPREP_STARTED_AT=2026-07-19T00:00:00Z\n`,
-  );
-  writeLocal(repoDir, "gates.env", "GATES_MODE=stale\n");
-  writeLocal(repoDir, "prep.env", "PREP_HEAD_SHA=stale\n");
-  writeLocal(repoDir, "prep.md", "# Prepare\n");
-  return { repoDir, recordedHead, reviewedHead };
 }
 
 function changePlan(base: string, files = "''", docsOnly = false, changelogUpdate = false) {
@@ -259,45 +209,30 @@ it.each([
   expect(result.stdout.trim()).toBe(expected);
 });
 it("publishes only appended fixups when main advances", () => {
-  const repoDir = makeSyncRepo();
-  const contextPath = join(repoDir, ".local", "prep-context.env");
-  writeFileSync(
-    contextPath,
-    `${readFileSync(contextPath, "utf8")}PR_AUTHOR_ACCESS_AT_PREP=external\n`,
-  );
-  commitFile(repoDir, "fixup.ts", "export const fixed = true;\n", "reviewed fixup");
-  const localHead = fixtureGit(repoDir, ["rev-parse", "HEAD"]);
-
-  const result = runGatesBash(
-    [
-      "enter_worktree() { PR_MAIN_SHA=$(git rev-parse --verify refs/remotes/origin/main); }",
-      "hosted_sha=$(cat .local/hosted-sha)",
-      'pr_gh() { printf "%s\\n" "$hosted_sha"; }',
-      'verify_prep_head_extends_hosted_head() { git merge-base --is-ancestor "$1" HEAD; }',
-      "push_prep_head_to_pr_branch() {",
-      '  local result_env="$5"',
-      "  touch .local/published",
-      '  printf \'PUSH_PREP_HEAD_SHA=%q\\nPUSH_LOCAL_PREP_HEAD_SHA=%q\\nPUSHED_FROM_SHA=%q\\nPUSH_REPLACED_HOSTED_ANCESTRY=false\\nPR_HEAD_SHA_AFTER_PUSH=%q\\n\' "$3" "$3" "$hosted_sha" "$3" > "$result_env"',
-      "}",
-      "prepare_sync_head 4242",
-      `test "$(git rev-parse HEAD)" = "${localHead}"`,
-      'test "$(git diff --name-only "$hosted_sha" HEAD)" = "fixup.ts"',
-      'git merge-base --is-ancestor "$hosted_sha" HEAD',
-      "! git merge-base --is-ancestor origin/main HEAD",
-      "test -e .local/published",
-      "grep -F 'Preserved hosted PR ancestry' .local/prep.md",
-      "grep -F 'PREP_REPLACED_HOSTED_ANCESTRY=false' .local/prep.env",
-      "grep -F 'PREP_AUTHOR_ACCESS=external' .local/prep.env",
-    ].join("\n"),
-    { cwd: repoDir, env: { OPENCLAW_TESTBOX: "1" }, sourcePrepareCore: true },
-  );
-
+  const f = createPublisher();
+  f.git("update-ref", "refs/remotes/origin/main", f.advance);
+  f.write("prep-context.env", f.read("prep-context.env") + "PR_AUTHOR_ACCESS_AT_PREP=external\n");
+  const result = runPublisher(f, "prepare_sync_head 4242", [
+    `enter_worktree() { PR_MAIN_SHA=${f.advance}; }`,
+  ]);
   expect(result.status, result.stderr).toBe(0);
+  expect(f.git("rev-parse", "HEAD")).toBe(f.candidate);
+  expect(f.git("diff", "--name-only", f.source, "HEAD")).toBe("fixup.txt");
+  expect(f.git("merge-base", f.advance, "HEAD")).toBe(f.source);
+  expect(f.git("--git-dir", f.remote, "rev-parse", "refs/heads/topic")).toBe(f.candidate);
+  expect(f.read("prep.md")).toContain("Preserved hosted PR ancestry");
+  expect(f.read("prep.env")).toContain("PREP_REPLACED_HOSTED_ANCESTRY=false");
+  expect(f.read("prep.env")).toContain("PREP_AUTHOR_ACCESS=external");
   expect(result.stdout).toContain("prepare-sync-head complete");
   expect(result.stdout).not.toContain("Rebase");
 });
 it("rebuilds a stale prep branch and reruns gates before push", () => {
-  const { repoDir, recordedHead, reviewedHead } = makePreparePushHeadDriftRepo();
+  const f = createPublisher();
+  const { repoDir, base: recordedHead, source: reviewedHead } = f;
+  f.git("update-ref", "refs/remotes/origin/main", f.base);
+  f.git("branch", "pr-4242", reviewedHead);
+  f.write("prep-context.env", f.read("prep-context.env").replace(f.source, f.base));
+  f.write("prep.env", "PREP_HEAD_SHA=stale\n");
   const result = runGatesBash(
     [
       "refresh_main_snapshot() { PR_MAIN_SHA=$(git rev-parse --verify refs/remotes/origin/main); }",
@@ -315,7 +250,7 @@ it("rebuilds a stale prep branch and reruns gates before push", () => {
       "prepare_push 4242",
       'test "$(git rev-parse HEAD)" = "$reviewed_head"',
       "test -e .local/gates-reran",
-      "test ! -e stale-fixup.txt",
+      "test ! -e fixup.txt",
       'test "$(. .local/prep-context.env; printf "%s" "$PR_HEAD_SHA_BEFORE")" = "$reviewed_head"',
       `grep -F 'drifted from ${recordedHead} to ${reviewedHead}' .local/prep.md`,
       "grep -F 'Gate mode: fresh' .local/prep.md",

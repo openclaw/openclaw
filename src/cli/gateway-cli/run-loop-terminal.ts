@@ -52,7 +52,7 @@ export function createGatewayRunTerminal(params: {
     forceExitAfterStabilityBundle,
   } = params;
   const getManagedUpdateOwner = () => params.getRequest()?.restartIntent?.successorOwner;
-  const finishLoopAfterSignals = async (code: number) => {
+  const waitForTerminalSignals = async () => {
     for (;;) {
       if (params.isForcedExitStarted() || !params.getSignals().pending) {
         break;
@@ -62,6 +62,9 @@ export function createGatewayRunTerminal(params: {
         () => params.getSignals().pending,
       );
     }
+  };
+  const finishLoopAfterSignals = async (code: number) => {
+    await waitForTerminalSignals();
     finishLoop(code);
   };
   const finishLoopAfterCleanup = async (
@@ -82,15 +85,7 @@ export function createGatewayRunTerminal(params: {
     let commitOutcome = initialOutcome;
     await params.drainProcessResources();
     for (;;) {
-      for (;;) {
-        if (params.isForcedExitStarted() || !params.getSignals().pending) {
-          break;
-        }
-        await measureGatewayCloseStep(
-          "restart.close.terminal-signals",
-          () => params.getSignals().pending,
-        );
-      }
+      await waitForTerminalSignals();
       if (hostStopOwner && params.getHost() !== hostStopOwner) {
         return;
       }
@@ -113,15 +108,7 @@ export function createGatewayRunTerminal(params: {
         sameManagedUpdateOwner(owner, ownerToCommit) &&
         eagerLifecycleRuntime.claimManagedServiceUpdateHandoff(owner) &&
         (await eagerLifecycleRuntime.commitManagedServiceUpdateHandoff(owner, commitOutcome));
-      for (;;) {
-        if (params.isForcedExitStarted() || !params.getSignals().pending) {
-          break;
-        }
-        await measureGatewayCloseStep(
-          "restart.close.terminal-signals",
-          () => params.getSignals().pending,
-        );
-      }
+      await waitForTerminalSignals();
       if (
         committed &&
         sameManagedUpdateOwner(getManagedUpdateOwner(), owner) &&

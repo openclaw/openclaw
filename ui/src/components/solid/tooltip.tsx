@@ -6,6 +6,7 @@ import { createOverlay, findOverlayParent } from "../overlay-lifecycle.ts";
 import type { TooltipOwner, TooltipPolicyProps } from "../tooltip-owner.ts";
 import { TooltipElement, type TooltipRuntime } from "../tooltip.ts";
 import { retainShadowStyles } from "./shadow-styles.ts";
+import kbdStyles from "../kbd.css?inline";
 import overlayStyles from "./overlay.css?inline";
 import tooltipStyles from "./tooltip.css?inline";
 
@@ -37,7 +38,7 @@ export function mountTooltipView(
     interactionElements: () => (policy.trigger ? [policy.trigger] : []),
     onRootChange: (root) =>
       root === host.shadowRoot
-        ? retainShadowStyles(root, [overlayStyles, tooltipStyles])
+        ? retainShadowStyles(root, [overlayStyles, tooltipStyles, kbdStyles])
         : undefined,
   });
   overlay.bindSurface(surface);
@@ -113,7 +114,7 @@ export const Tooltip = Object.assign(
       <openclaw-tooltip
         {...props}
         prop:content={props.content ?? ""}
-        prop:placement={props.placement ?? "top"}
+        prop:placement={props.placement}
         prop:closeDelay={props.closeDelay ?? 100}
         prop:hoverDismissDelay={props.hoverDismissDelay}
         prop:delay={props.delay}

@@ -4,8 +4,6 @@ import {
   captureNodePairingGeneration,
   isNodePairingGenerationCurrent,
 } from "../../infra/device-pairing-node-state.js";
-import { recordPairedNodeHostStats } from "../../infra/device-pairing-node.js";
-import { formatErrorMessage } from "../../infra/errors.js";
 import { ApnsRegistrationPairingChangedError } from "../../infra/push-apns-store.errors.js";
 import { NodeWorkerProcessesChangedSchema } from "../../worker/worker-process-observation.js";
 import type { NodeEventContext } from "../server-node-events-types.js";
@@ -144,22 +142,7 @@ export const nodeEventHandlers: GatewayRequestHandlers = {
           context.nodeRegistry.clearPresenceActivity(activity),
         updateNodeDesktopAvailability: (availability) =>
           context.nodeRegistry.updateDesktopAvailability(availability),
-        updateNodeHostStats: (stats) => {
-          const hostStats = context.nodeRegistry.updateHostStats(stats);
-          if (hostStats && eventPairingGeneration) {
-            // The 60 s reporting cadence costs one small JSON-column update per node per minute.
-            void recordPairedNodeHostStats({
-              nodeId,
-              hostStats,
-              expectedPairingGeneration: { nodeId, key: eventPairingGeneration },
-            }).catch((error: unknown) =>
-              context.logGateway.warn(
-                `failed to persist node host stats for ${nodeId}: ${formatErrorMessage(error)}`,
-              ),
-            );
-          }
-          return hostStats;
-        },
+        updateNodeHostStats: (stats) => context.nodeRegistry.updateHostStats(stats),
         logGateway: { warn: context.logGateway.warn },
       };
       const result = await handleNodeEvent(
@@ -177,6 +160,20 @@ export const nodeEventHandlers: GatewayRequestHandlers = {
             : undefined,
           presenceAllowed,
           isConnectionCurrent: isEventConnectionCurrent,
+          assertSessionEventCurrent: () => {
+            const current = eventPairingGeneration
+              ? sessionForGeneration(eventPairingGeneration)
+              : undefined;
+            if (
+              !eventConnId ||
+              !current ||
+              current !== nodeSession ||
+              current.connId !== eventConnId ||
+              current.client.invalidated === true
+            ) {
+              throw new Error("Node event connection changed during preparation");
+            }
+          },
           assertApnsRegistrationCurrent: () => {
             const current = apnsGeneration
               ? context.nodeRegistry.getForPairingGeneration(nodeId, apnsGeneration.key)

@@ -128,6 +128,7 @@ openclaw approvals set --gateway --file ./exec-approvals.json
 ```
 
 `set` accepts JSON5, not only strict JSON. Use either `--file` or `--stdin`, not both.
+Input must be valid UTF-8. Malformed bytes are rejected before replacing the saved policy.
 
 Host-native Windows nodes use their own policy shape:
 

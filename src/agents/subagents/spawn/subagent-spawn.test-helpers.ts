@@ -1,9 +1,6 @@
-// Subagent spawn test helpers install mocked runtime seams so sessions_spawn
-// tests can exercise orchestration without real gateway/session-store effects.
 import os from "node:os";
 import { expect, vi } from "vitest";
 import "../../../test-utils/prepare-compiled-subprocesses.js";
-import type { ThinkLevel } from "../../../auto-reply/thinking.shared.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { resolveLeastPrivilegeOperatorScopesForMethod } from "../../../gateway/method-scopes.js";
 import type { SubagentLifecycleHookRunner } from "../../../plugins/hooks.js";
@@ -55,6 +52,39 @@ type HookRunner = Pick<SubagentLifecycleHookRunner, "hasHooks"> &
 type SubagentSpawnModuleForTest = Awaited<typeof import("./subagent-spawn.js")> & {
   resetSubagentRegistryForTests: typeof import("../registry/subagent-registry.test-helpers.js").resetSubagentRegistryForTests;
 };
+
+type ThinkingProvenanceCase = [
+  name: string,
+  context: Parameters<typeof import("./subagent-spawn.js").spawnSubagentDirect>[1] & {
+    requesterThinkingExplicit?: boolean;
+  },
+  saved: string | undefined,
+  expected: string | undefined,
+  spawnThinking?: string,
+  requesterThinkingDefault?: string,
+];
+
+export function createThinkingProvenanceCases(): ThinkingProvenanceCase[] {
+  const automatic: ThinkingProvenanceCase[1] = {
+    requesterThinkingLevel: "high",
+    requesterThinkingExplicit: false,
+  };
+  return [
+    [
+      "inherits explicit active effort",
+      { requesterThinkingLevel: "ultra", requesterThinkingExplicit: true },
+      "medium",
+      "ultra",
+    ],
+    ["inherits legacy active effort", { requesterThinkingLevel: "ultra" }, "medium", "ultra"],
+    ["ignores automatic effort and stale preference", automatic, "medium", undefined],
+    ["ignores automatic effort without a preference", automatic, undefined, undefined],
+    ["does not persist an unselected model default", {}, undefined, undefined],
+    ["prefers explicit spawn effort", automatic, undefined, "low", "low"],
+    ["inherits persisted effort", {}, "off", "off"],
+    ["inherits configured effort", {}, undefined, "high", undefined, "high"],
+  ];
+}
 
 export function createSubagentRegistrationScopeForTest(
   overrides: Partial<SubagentRegistrationScope> &
@@ -163,6 +193,7 @@ export function createSpawnBoundaryConfig(
       providers: {
         custom: {
           api: "openai-completions",
+          apiKey: "test-key",
           baseUrl: "https://example.invalid/v1",
           models: [
             {
@@ -192,16 +223,12 @@ export function throwBoundFailures(failures: unknown[]): void {
   }
 }
 
-/** Build a minimal runtime config for sessions_spawn tests. */
 export function createSubagentSpawnTestConfig(
   workspaceDir = os.tmpdir(),
   overrides?: Record<string, unknown>,
-) {
+): OpenClawConfig {
   return {
-    session: {
-      mainKey: "main",
-      scope: "per-sender",
-    },
+    session: { mainKey: "main", scope: "per-sender" },
     tools: {
       sessions_spawn: {
         attachments: {
@@ -212,11 +239,7 @@ export function createSubagentSpawnTestConfig(
         },
       },
     },
-    agents: {
-      defaults: {
-        workspace: workspaceDir,
-      },
-    },
+    agents: { defaults: { workspace: workspaceDir } },
     ...overrides,
   };
 }
@@ -224,22 +247,16 @@ export function createSubagentSpawnTestConfig(
 export function createConfigOverride(overrides?: Record<string, unknown>) {
   return createSubagentSpawnTestConfig(os.tmpdir(), {
     agents: {
-      defaults: {
-        workspace: os.tmpdir(),
-      },
+      defaults: { workspace: os.tmpdir() },
       entries: { main: { workspace: "/tmp/workspace-main" } },
     },
     ...overrides,
   });
 }
 
-/** Mock gateway calls for the common accepted-spawn flow. */
 export function setupAcceptedSubagentGatewayMock(callGatewayMock: MockImplementationTarget) {
   callGatewayMock.mockImplementation(async (opts: { method?: string }) => {
-    if (opts.method === "sessions.patch") {
-      return { ok: true };
-    }
-    if (opts.method === "sessions.delete") {
+    if (opts.method === "sessions.patch" || opts.method === "sessions.delete") {
       return { ok: true };
     }
     if (opts.method === "agent") {
@@ -249,11 +266,12 @@ export function setupAcceptedSubagentGatewayMock(callGatewayMock: MockImplementa
   });
 }
 
-function identityDeliveryContext(value: unknown) {
-  return value;
+async function mutateEmptyStore(_storePath: string, mutator: SessionStoreMutator) {
+  const store: SessionStore = {};
+  await mutator(store);
+  return store;
 }
 
-/** Install an updateSessionStore mock that captures mutations in memory. */
 export function installSessionStoreCaptureMock(
   updateSessionStoreMock: {
     mockImplementation: (
@@ -276,7 +294,6 @@ export function installSessionStoreCaptureMock(
   );
 }
 
-/** Assert the persisted session entry captured the expected runtime model. */
 export function expectPersistedRuntimeModel(params: {
   persistedStore: SessionStore | undefined;
   sessionKey: string | RegExp;
@@ -290,14 +307,27 @@ export function expectPersistedRuntimeModel(params: {
   } else {
     expect(persistedKey).toMatch(params.sessionKey);
   }
-  expect(persistedEntry?.modelProvider).toBe(params.provider);
-  expect(persistedEntry?.model).toBe(params.model);
-  expect(persistedEntry?.providerOverride).toBe(params.provider);
-  expect(persistedEntry?.modelOverride).toBe(params.model);
-  if (params.overrideSource) {
-    expect(persistedEntry?.modelOverrideSource).toBe(params.overrideSource);
-  }
+  expect(persistedEntry).toMatchObject({
+    modelProvider: params.provider,
+    model: params.model,
+    providerOverride: params.provider,
+    modelOverride: params.model,
+    ...(params.overrideSource ? { modelOverrideSource: params.overrideSource } : {}),
+  });
 }
+
+type SpawnTestConversation = {
+  channel: string;
+  accountId?: string;
+  conversationId: string;
+  parentConversationId?: string;
+};
+type SpawnTestBinding = {
+  targetSessionKey: string;
+  targetKind?: string;
+  status?: string;
+  conversation: SpawnTestConversation;
+};
 
 /** Load subagent-spawn with runtime dependencies replaced by test doubles. */
 export async function loadSubagentSpawnModuleForTest(params: {
@@ -332,45 +362,22 @@ export async function loadSubagentSpawnModuleForTest(params: {
       bindSupported: boolean;
       placements: Array<"current" | "child">;
     };
-    bind?: (params: {
-      targetSessionKey: string;
-      targetKind?: string;
-      conversation: {
-        channel: string;
-        accountId?: string;
-        conversationId: string;
-        parentConversationId?: string;
-      };
-      placement: "current" | "child";
-      metadata?: Record<string, unknown>;
-    }) => Promise<{
-      targetSessionKey: string;
-      targetKind?: string;
-      status?: string;
-      conversation: {
-        channel: string;
-        accountId?: string;
-        conversationId: string;
-        parentConversationId?: string;
-      };
-    }>;
-    listBySession: (targetSessionKey: string) => Array<{
-      status?: string;
-      conversation: {
-        channel: string;
-        accountId?: string;
-        conversationId: string;
-        parentConversationId?: string;
-      };
-    }>;
+    bind?: (
+      params: Omit<SpawnTestBinding, "status"> & {
+        placement: "current" | "child";
+        metadata?: Record<string, unknown>;
+      },
+    ) => Promise<SpawnTestBinding>;
+    listBySession: (
+      targetSessionKey: string,
+    ) => Array<Pick<SpawnTestBinding, "status" | "conversation">>;
   };
   workspaceDir?: string;
   sessionStorePath?: string;
   resetModules?: boolean;
 }): Promise<SubagentSpawnModuleForTest> {
   if (params.resetModules ?? true) {
-    // The helper rewires imports with vi.doMock, so each test starts from a
-    // fresh module graph unless explicitly sharing mocks.
+    // vi.doMock requires a fresh graph unless the fixture explicitly shares mocks.
     vi.resetModules();
   }
 
@@ -435,13 +442,7 @@ export async function loadSubagentSpawnModuleForTest(params: {
       scope: { storePath?: string; sessionKey: string },
       patch: Record<string, unknown>,
     ) => {
-      const updateSessionStore =
-        params.updateSessionStoreMock ??
-        (async (_storePath: string, mutator: SessionStoreMutator) => {
-          const store: SessionStore = {};
-          await mutator(store);
-          return store;
-        });
+      const updateSessionStore = params.updateSessionStoreMock ?? mutateEmptyStore;
       let updated: Record<string, unknown> | undefined;
       const storePath =
         scope.storePath ?? params.sessionStorePath ?? "/tmp/subagent-spawn-model-session.json";
@@ -480,7 +481,7 @@ export async function loadSubagentSpawnModuleForTest(params: {
       storeKeys: [targetParams.key],
       store: params.loadSessionStoreMock?.(params.sessionStorePath) ?? {},
     }),
-    normalizeDeliveryContext: identityDeliveryContext,
+    normalizeDeliveryContext: (value: unknown) => value,
     resolveAgentConfig: params.resolveAgentConfig ?? (() => undefined),
     resolveSandboxRuntimeStatus:
       params.resolveSandboxRuntimeStatus ?? (() => ({ sandboxed: false })),
@@ -537,92 +538,14 @@ export async function loadSubagentSpawnModuleForTest(params: {
   };
 }
 
-type InheritedSpawnPreferenceCase = {
-  name: string;
-  task: string;
-  requesterState: Readonly<Record<string, unknown>>;
-  preferenceKey: "thinkingLevel" | "fastMode";
-  expected: string | boolean;
-  agentDefaults?: Readonly<Record<string, unknown>>;
-  requesterAgent?: Readonly<Record<string, unknown>>;
-  collect?: boolean;
-  requesterRunId?: string;
-  requesterThinkingLevel?: ThinkLevel;
-  thinkingOverride?: string;
-};
-
-const inheritedSpawnPreferenceCases: readonly InheritedSpawnPreferenceCase[] = [
-  {
-    name: "inherits active-turn Ultra instead of the stored session thinking level",
-    task: "inherit active thinking",
-    requesterState: { thinkingLevel: "medium" },
-    requesterThinkingLevel: "ultra",
-    preferenceKey: "thinkingLevel",
-    expected: "ultra",
-  },
-  {
-    name: "inherits active-turn off instead of a stored Ultra override",
-    task: "inherit active thinking off",
-    requesterState: { thinkingLevel: "ultra" },
-    requesterThinkingLevel: "off",
-    preferenceKey: "thinkingLevel",
-    expected: "off",
-  },
-  {
-    name: "keeps explicit child thinking ahead of active-turn Ultra",
-    task: "override active thinking",
-    requesterState: { thinkingLevel: "medium" },
-    requesterThinkingLevel: "ultra",
-    thinkingOverride: "low",
-    preferenceKey: "thinkingLevel",
-    expected: "low",
-  },
-  {
-    name: "inherits requester fast mode for collector children",
-    task: "inherit fast mode",
-    requesterState: { fastMode: "auto" },
-    preferenceKey: "fastMode",
-    expected: "auto",
-    collect: true,
-    requesterRunId: "parent-run",
-  },
-  {
-    name: "inherits requester fast mode for ordinary children with default Swarm config",
-    task: "inherit ordinary fast mode",
-    requesterState: { fastMode: true },
-    preferenceKey: "fastMode",
-    expected: true,
-  },
-  {
-    name: "persists inherited requester thinking off",
-    task: "inherit thinking off",
-    requesterState: { thinkingLevel: "off" },
-    preferenceKey: "thinkingLevel",
-    expected: "off",
-  },
-  {
-    name: "inherits global thinkingDefault when caller session and agent have no stored thinking",
-    task: "inherit global thinking default",
-    requesterState: {},
-    agentDefaults: { thinkingDefault: "medium" },
-    preferenceKey: "thinkingLevel",
-    expected: "medium",
-  },
-  {
-    name: "applies requester-agent subagent thinking before active-turn thinking",
-    task: "requester policy thinking",
-    requesterState: { thinkingLevel: "high" },
-    requesterAgent: { subagents: { thinking: "medium" } },
-    requesterThinkingLevel: "ultra",
-    preferenceKey: "thinkingLevel",
-    expected: "medium",
-  },
-];
-
 export const inheritedSpawnCases = {
-  preferences: inheritedSpawnPreferenceCases,
-  permissionModes: [
-    { label: "default", mode: undefined },
-    { label: "guarded", mode: "guarded" },
-  ] as const,
+  preferences: [
+    {
+      name: "inherits requester fast mode for collector children",
+      task: "inherit fast mode",
+      requesterState: { fastMode: "auto" },
+      expected: "auto",
+      collect: true,
+    },
+  ],
 };

@@ -3,7 +3,6 @@ import { normalizeOptionalAccountId } from "openclaw/plugin-sdk/account-resoluti
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { OpenClawConfig } from "../runtime-api.js";
 import {
-  listEnabledFeishuAccounts,
   listFeishuAccountIds,
   resolveDefaultFeishuAccountId,
   resolveFeishuAccount,
@@ -15,16 +14,14 @@ import type { FeishuToolsConfig, ResolvedFeishuAccount } from "./types.js";
 
 type AccountAwareParams = { accountId?: string };
 type FeishuToolFamily = keyof FeishuToolsConfig;
-type FeishuToolRequirement = {
-  family: FeishuToolFamily;
-  label: string;
-};
-
 type FeishuToolAccountParams = {
   cfg: OpenClawConfig;
   executeParams?: AccountAwareParams;
   defaultAccountId?: string;
-  requiredTool: FeishuToolRequirement;
+  requiredTool: {
+    family: FeishuToolFamily;
+    label: string;
+  };
 };
 
 function resolveImplicitToolAccountId(params: FeishuToolAccountParams): string {
@@ -119,30 +116,4 @@ export function resolveFeishuToolAccount(params: FeishuToolAccountParams): Resol
 
 export function createFeishuToolClient(params: FeishuToolAccountParams): Lark.Client {
   return createFeishuClient(resolveFeishuToolAccount(params));
-}
-
-export function resolveAnyEnabledFeishuToolsConfig(
-  config: OpenClawConfig,
-): Required<FeishuToolsConfig> {
-  const accounts = listEnabledFeishuAccounts(config);
-  const merged: Required<FeishuToolsConfig> = {
-    doc: false,
-    chat: false,
-    wiki: false,
-    drive: false,
-    perm: false,
-    scopes: false,
-    bitable: false,
-  };
-  for (const account of accounts) {
-    const cfg = resolveToolsConfig(account.config.tools);
-    merged.doc = merged.doc || cfg.doc;
-    merged.chat = merged.chat || cfg.chat;
-    merged.wiki = merged.wiki || cfg.wiki;
-    merged.drive = merged.drive || cfg.drive;
-    merged.perm = merged.perm || cfg.perm;
-    merged.scopes = merged.scopes || cfg.scopes;
-    merged.bitable = merged.bitable || cfg.bitable;
-  }
-  return merged;
 }

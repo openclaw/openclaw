@@ -251,18 +251,12 @@ function applyManagedNpmRootOverrides(params: {
   return { overrides, managedOverrideKeys };
 }
 
-export async function readOpenClawManagedNpmRootOverrides(params?: {
-  cwd?: string;
-  moduleUrl?: string;
-  packageRoot?: string | null;
-}): Promise<Record<string, unknown>> {
-  const packageRoot =
-    params?.packageRoot ??
-    resolveOpenClawPackageRootSync({
-      argv1: process.argv[1],
-      moduleUrl: params?.moduleUrl ?? import.meta.url,
-      cwd: params?.cwd ?? process.cwd(),
-    });
+export async function readOpenClawManagedNpmRootOverrides(): Promise<Record<string, unknown>> {
+  const packageRoot = resolveOpenClawPackageRootSync({
+    argv1: process.argv[1],
+    moduleUrl: import.meta.url,
+    cwd: process.cwd(),
+  });
   if (!packageRoot) {
     return {};
   }
@@ -796,19 +790,14 @@ export async function syncManagedNpmRootPeerDependencies(params: {
 /** Remove stale managed-root openclaw peer installs while preserving active host links. */
 export async function repairManagedNpmRootOpenClawPeer(params: {
   npmRoot: string;
-  packageRoot?: string | null;
   timeoutMs?: number;
   workTimeoutMs?: number | null;
   signal?: AbortSignal;
   logger?: ManagedNpmRootLogger;
-  runCommand?: ManagedNpmRootRunCommand;
 }): Promise<boolean> {
   await fs.mkdir(params.npmRoot, { recursive: true });
 
-  const activeHostState = await readManagedNpmRootOpenClawHostState({
-    npmRoot: params.npmRoot,
-    packageRoot: params.packageRoot,
-  });
+  const activeHostState = await readManagedNpmRootOpenClawHostState(params.npmRoot);
   if (activeHostState === "managed-active-host") {
     return false;
   }
@@ -835,7 +824,6 @@ export async function repairManagedNpmRootOpenClawPeer(params: {
     return true;
   }
 
-  const command = params.runCommand ?? runCommandWithTimeout;
   const npmArgs = resolveNpmCommand([
     hasManifestDependency ? "uninstall" : "prune",
     "--loglevel=error",
@@ -846,7 +834,7 @@ export async function repairManagedNpmRootOpenClawPeer(params: {
     ...(hasManifestDependency ? ["openclaw"] : []),
   ]);
   try {
-    const result = await command(npmArgs, {
+    const result = await runCommandWithTimeout(npmArgs, {
       cwd: params.npmRoot,
       timeoutMs: resolveInstallWorkTimeoutMs(
         params.workTimeoutMs,
@@ -876,23 +864,19 @@ export async function repairManagedNpmRootOpenClawPeer(params: {
   return true;
 }
 
-async function readManagedNpmRootOpenClawHostState(params: {
-  npmRoot: string;
-  packageRoot?: string | null;
-}): Promise<ManagedNpmRootOpenClawHostState> {
-  const packageRoot =
-    params.packageRoot === undefined
-      ? resolveOpenClawPackageRootSync({
-          argv1: process.argv[1],
-          moduleUrl: import.meta.url,
-          cwd: process.cwd(),
-        })
-      : params.packageRoot;
+async function readManagedNpmRootOpenClawHostState(
+  npmRoot: string,
+): Promise<ManagedNpmRootOpenClawHostState> {
+  const packageRoot = resolveOpenClawPackageRootSync({
+    argv1: process.argv[1],
+    moduleUrl: import.meta.url,
+    cwd: process.cwd(),
+  });
   if (!packageRoot) {
     return "none";
   }
 
-  const managedOpenClawPackageDir = path.join(params.npmRoot, "node_modules", "openclaw");
+  const managedOpenClawPackageDir = path.join(npmRoot, "node_modules", "openclaw");
   const [hostPackageRoot, managedPackageRoot, managedPackageStat] = await Promise.all([
     fs.realpath(packageRoot).catch(ignoreMissingPath),
     fs.realpath(managedOpenClawPackageDir).catch(ignoreMissingPath),

@@ -171,7 +171,7 @@ it("preserves the accepted successor and both hook lifetimes when an identity ob
     hookSignals.push(getAsyncWorkSignal());
     await startGate.promise;
   });
-  noteActiveSessionForShutdown({ ...target, cfg: {} });
+  noteActiveSessionForShutdown(target);
   try {
     const accepted = await caller.track(() =>
       acceptCompactionSuccessor({

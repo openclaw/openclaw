@@ -1,9 +1,20 @@
-import type { ProviderThinkingProfile } from "openclaw/plugin-sdk/plugin-entry";
+import { streamSimple } from "openclaw/plugin-sdk/llm";
+import type {
+  ProviderThinkingProfile,
+  ProviderWrapStreamFnContext,
+} from "openclaw/plugin-sdk/plugin-entry";
 import { buildOpenAICompatibleLiveProviderCatalog } from "openclaw/plugin-sdk/provider-catalog-live-runtime";
 import type { ProviderCatalogContext } from "openclaw/plugin-sdk/provider-catalog-shared";
 import { defineSingleProviderPluginEntry } from "openclaw/plugin-sdk/provider-entry";
 import { buildProviderReplayFamilyHooks } from "openclaw/plugin-sdk/provider-model-shared";
 import {
+  normalizeOpenAICompatibleReasoningReplay,
+  streamWithPayloadPatch,
+} from "openclaw/plugin-sdk/provider-stream-shared";
+import { asNonArrayRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { buildBasetenDecisionProvider } from "./decision-provider.js";
+import {
+  BASETEN_BASE_URL,
   projectBasetenLiveModels,
   resolveBasetenDynamicModel,
   usesBasetenChatTemplateThinking,
@@ -11,9 +22,78 @@ import {
 import { applyBasetenSetupConfig } from "./onboard.js";
 import manifest from "./openclaw.plugin.json" with { type: "json" };
 import { buildStaticBasetenProvider } from "./provider-catalog.js";
-import { createBasetenThinkingWrapper } from "./stream.js";
 
 const PROVIDER_ID = "baseten";
+
+function createBasetenThinkingWrapper(
+  ctx: ProviderWrapStreamFnContext,
+): ProviderWrapStreamFnContext["streamFn"] {
+  const underlying = ctx.streamFn ?? streamSimple;
+  return (model, context, options) => {
+    // Standalone completions use dispatch aliases; the source API owns wire policy.
+    if (model.provider !== "baseten" || (ctx.sourceApi ?? model.api) !== "openai-completions") {
+      return underlying(model, context, options);
+    }
+    const affinity = options?.promptCacheKey ?? options?.sessionId;
+    const cacheRetention = options?.cacheRetention ?? ctx.extraParams?.cacheRetention;
+    let streamOptions = options;
+    if (
+      affinity &&
+      cacheRetention !== "none" &&
+      model.baseUrl?.trim().replace(/\/+$/u, "") === BASETEN_BASE_URL &&
+      !Object.keys({ ...model.headers, ...options?.headers }).some(
+        (name) => name.toLowerCase() === "x-session-affinity",
+      )
+    ) {
+      streamOptions = {
+        ...options,
+        headers: { ...options?.headers, "x-session-affinity": affinity },
+      };
+    }
+    const optIn = usesBasetenChatTemplateThinking(model.id);
+    const thinkingLevel =
+      options?.reasoning ??
+      (ctx.thinkingLevel === "adaptive" ? "max" : ctx.thinkingLevel) ??
+      (optIn ? "off" : undefined);
+    // Resolve before serialization so scalar effort agrees with the opt-in toggle.
+    return streamWithPayloadPatch(
+      underlying,
+      model,
+      context,
+      thinkingLevel === undefined ? streamOptions : { ...streamOptions, reasoning: thinkingLevel },
+      (payload) => {
+        const normalizedModelId = model.id.trim().toLowerCase();
+        if (
+          normalizedModelId === "deepseek-ai/deepseek-v4-pro" ||
+          normalizedModelId === "deepseek-ai/deepseek-v4-pro-0813"
+        ) {
+          // DeepSeek defaults on; only explicit off may remove required replay metadata.
+          normalizeOpenAICompatibleReasoningReplay(payload, {
+            thinkingEnabled: thinkingLevel !== "off",
+            stripAssistantMessagesOnly: true,
+            replaceNullReasoningContent: true,
+          });
+          // The current Pro endpoint requires this envelope whenever scalar effort is present,
+          // and rejects an enabled envelope next to effort "none".
+          if (
+            normalizedModelId === "deepseek-ai/deepseek-v4-pro-0813" &&
+            payload.reasoning_effort !== undefined
+          ) {
+            payload.thinking = {
+              type: payload.reasoning_effort === "none" ? "disabled" : "enabled",
+            };
+          }
+        }
+        if (optIn) {
+          payload.chat_template_args = {
+            ...asNonArrayRecord(payload.chat_template_args),
+            enable_thinking: thinkingLevel !== "off",
+          };
+        }
+      },
+    );
+  };
+}
 
 const BASETEN_BINARY_THINKING_PROFILE = {
   levels: [{ id: "off" }, { id: "low", label: "on" }],
@@ -39,6 +119,9 @@ export default defineSingleProviderPluginEntry({
   name: "Baseten Provider",
   description: "Official Baseten Model APIs provider plugin",
   manifest,
+  register(api) {
+    api.registerDecisionProvider(buildBasetenDecisionProvider());
+  },
   provider: {
     label: "Baseten",
     docsPath: "/providers/baseten",

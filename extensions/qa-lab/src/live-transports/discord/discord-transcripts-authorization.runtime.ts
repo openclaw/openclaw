@@ -167,11 +167,6 @@ export async function runDiscordTranscriptsVoiceAuthorizationScenario(
       channelId: runtimeEnv.channelId,
       afterSnowflake: sent.id,
       timeoutMs,
-      observedMessages: environment.observedMessages,
-      observationScenarioId: environment.scenario.id,
-      observationScenarioTitle: environment.scenario.title,
-      triggerMessageId: sent.id,
-      triggerTimestamp: sent.timestamp,
       predicate: (message) =>
         matchesDiscordScenarioReply({
           channelId: runtimeEnv.channelId,

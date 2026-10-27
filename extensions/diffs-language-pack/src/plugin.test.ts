@@ -5,7 +5,7 @@ import type { OpenClawPluginHttpRouteHandler } from "openclaw/plugin-sdk/plugin-
 import { createTestPluginApi } from "openclaw/plugin-sdk/plugin-test-api";
 import { withServer } from "openclaw/plugin-sdk/test-env";
 import { beforeAll, describe, expect, it } from "vitest";
-import { registerDiffsLanguagePackPlugin } from "./plugin.js";
+import plugin from "../index.js";
 
 const VIEWER_RUNTIME_PATH = "/plugins/diffs-language-pack/assets/viewer-runtime.js";
 const UNKNOWN_ASSET_PATH = "/plugins/diffs-language-pack/assets/does-not-exist.js";
@@ -34,7 +34,7 @@ async function withLanguagePackServer(run: (base: string) => Promise<void>): Pro
       registeredHttpRouteHandler = params.handler;
     },
   });
-  registerDiffsLanguagePackPlugin(api);
+  plugin.register(api);
   const handler = registeredHttpRouteHandler;
   if (!handler) {
     throw new Error("expected the plugin to register an HTTP route");

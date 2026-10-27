@@ -97,7 +97,6 @@ export function clearSessionControllerMailbox(
   const nextAbort = capturedInputs ? undefined : new AbortController();
   const timer = mailbox.timer;
   const droppedCount = mailbox.droppedCount;
-  const evictedSummaryCount = mailbox.evictedSummaryCount;
   let removedSummaries = 0;
   const wasClearing = mailbox.clearing;
   mailbox.clearing = true;
@@ -131,7 +130,11 @@ export function clearSessionControllerMailbox(
         (source) => source.controllerInput === input,
       );
       for (const [key, record] of mailbox.recentSources) {
-        if (record.input === input && !input.custody.adopted && input.phase !== "consumed") {
+        if (
+          record.inputInstance === input.instance &&
+          !input.custody.adopted &&
+          input.phase !== "consumed"
+        ) {
           mailbox.recentSources.delete(key);
         }
       }
@@ -168,7 +171,6 @@ export function clearSessionControllerMailbox(
         0,
         mailbox.droppedCount - Math.max(0, droppedCount - removedSummaries),
       );
-      mailbox.evictedSummaryCount = Math.max(0, mailbox.evictedSummaryCount - evictedSummaryCount);
       if (
         !mailbox.entries.some(
           (input) => !selected.has(input) && !isCurrentSessionControllerTurnInput(input),

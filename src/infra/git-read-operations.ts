@@ -10,6 +10,12 @@ export type GitCheckoutContext = {
   branch: string | null;
   root?: string;
   defaultBranch?: string;
+  /**
+   * Candidate head repositories from non-origin GitHub remotes tracking `branch`.
+   * The PR response must identify the same head repository; remote names alone
+   * do not establish fork membership. `owner`/`repo` stay the base identity.
+   */
+  forkHeadCandidates?: Array<{ owner: string; repo: string }>;
 };
 
 /** Lowercased merged-PR head, its target branch, and its merge commit. */
@@ -48,8 +54,15 @@ export type GitReadOperations = {
       scope: "context" | "refs" | "worktree" | "diff";
       branch?: string;
       defaultBranch?: string;
+      summaryOnly?: boolean;
+      /** Previously displayed paths whose Git attributes can affect the cached diff. */
+      paths?: string[];
     };
-    output: string | null;
+    output: {
+      key: string;
+      /** A successful status inventory, tied to its physical checkout and HEAD. */
+      cleanWorktree?: { root: string; head: string };
+    } | null;
   };
   "checkout.context": {
     input: { root: string; githubHost?: string };

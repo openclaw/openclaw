@@ -69,7 +69,24 @@ export class LobsterPetInteractions {
     }
     if (this.timers.has("holdTimer")) {
       this.handleHoldCancel();
-      this.pokeNow();
+      this.playChirp("poke");
+      const now = Date.now();
+      this.pokeTimes = [...this.pokeTimes.filter((at) => now - at < 6000), now];
+      if (this.pokeTimes.length >= 10 && this.hooks.canHuff()) {
+        this.pokeTimes = [];
+        this.hooks.onGrumpyChange(false);
+        // Ends this visit only; the host schedules the resident's later return.
+        this.hooks.onHuff();
+        return;
+      }
+      if (this.pokeTimes.length >= 3) {
+        this.hooks.onGrumpyChange(true);
+        this.timers.clear("grumpyTimer");
+        this.timers.schedule("grumpyTimer", 60_000, () => {
+          this.hooks.onGrumpyChange(false);
+        });
+      }
+      this.hooks.onAct("startle");
     }
   };
 
@@ -77,35 +94,6 @@ export class LobsterPetInteractions {
 
   private playChirp(kind: LobsterPetChirpKind) {
     this.audioCtx = playLobsterPetChirp(this.audioCtx, this.hooks.soundsEnabled(), kind);
-  }
-
-  private pokeNow() {
-    this.playChirp("poke");
-    const now = Date.now();
-    this.pokeTimes = [...this.pokeTimes.filter((at) => now - at < 6000), now];
-    if (this.pokeTimes.length >= 10 && this.hooks.canHuff()) {
-      this.huffOff();
-      return;
-    }
-    if (this.pokeTimes.length >= 3) {
-      this.enterGrumpy();
-    }
-    this.hooks.onAct("startle");
-  }
-
-  private enterGrumpy() {
-    this.hooks.onGrumpyChange(true);
-    this.timers.clear("grumpyTimer");
-    this.timers.schedule("grumpyTimer", 60_000, () => {
-      this.hooks.onGrumpyChange(false);
-    });
-  }
-
-  private huffOff() {
-    this.pokeTimes = [];
-    this.hooks.onGrumpyChange(false);
-    // Ends this visit only; the host schedules the resident's later return.
-    this.hooks.onHuff();
   }
 
   // Gaze follows the pointer between acts and stays inert under reduced motion.

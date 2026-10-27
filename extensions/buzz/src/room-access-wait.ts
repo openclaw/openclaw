@@ -19,13 +19,10 @@ export async function waitForBuzzRoomAccess(params: {
   relayUrl: string;
   privateKey: string;
   authTag?: string;
-  timeoutMs?: number;
-  signal?: AbortSignal;
 }): Promise<BuzzDiscoveredRoom[]> {
   const secretKey = decodeBuzzPrivateKey(params.privateKey);
   const publicKey = resolveBuzzPublicKey(params.privateKey);
-  const timeoutSignal = AbortSignal.timeout(params.timeoutMs ?? DEFAULT_WAIT_TIMEOUT_MS);
-  const signal = params.signal ? AbortSignal.any([params.signal, timeoutSignal]) : timeoutSignal;
+  const signal = AbortSignal.timeout(DEFAULT_WAIT_TIMEOUT_MS);
   const { relay, relayPublicKey } = await connectAuthenticatedBuzzRelaySession({
     relayUrl: params.relayUrl,
     secretKey,
@@ -37,7 +34,6 @@ export async function waitForBuzzRoomAccess(params: {
     return await new Promise<BuzzDiscoveredRoom[]>((resolve, reject) => {
       let settled = false;
       let checking = false;
-      const seenEvents = new Set<string>();
 
       const finish = (error?: unknown, rooms?: BuzzDiscoveredRoom[]) => {
         if (settled) {
@@ -56,13 +52,7 @@ export async function waitForBuzzRoomAccess(params: {
           resolve(rooms ?? []);
         }
       };
-      const onAbort = () => {
-        if (timeoutSignal.aborted && !params.signal?.aborted) {
-          finish();
-          return;
-        }
-        finish(signal.reason ?? new Error("Buzz room access wait aborted"));
-      };
+      const onAbort = () => finish();
       const checkRooms = async () => {
         if (checking) {
           return;
@@ -104,13 +94,11 @@ export async function waitForBuzzRoomAccess(params: {
           onevent: (event) => {
             if (
               event.kind !== BUZZ_MEMBER_ADDED_NOTIFICATION_KIND ||
-              seenEvents.has(event.id) ||
               !event.tags.some((tag) => tag[0] === "p" && tag[1] === publicKey) ||
               !hasValidRoomTag(event)
             ) {
               return;
             }
-            seenEvents.add(event.id);
             void checkRooms();
           },
           oneose: () => {

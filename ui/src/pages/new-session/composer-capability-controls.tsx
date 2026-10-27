@@ -7,7 +7,7 @@ import { countSessionToolOverrides } from "../../lib/sessions/tool-overrides.ts"
 import { ChatComposerPlusMenu } from "../chat/components/chat-composer-plus-menu.tsx";
 import type {
   ChatComposerPlusMenuProps,
-  ChatComposerCapabilityMenuProps,
+  ChatComposerCapabilityMenuSource,
 } from "../chat/components/chat-composer-plus-menu.types.ts";
 import { NewSessionComposerTextareaContext } from "./composer-textarea-context.ts";
 import type { NewSessionVisibility } from "./create-params.ts";
@@ -19,7 +19,7 @@ type NewSessionComposerCapabilityOptions = {
   messageLocked?: boolean;
   visibility?: NewSessionVisibility;
   draftAvailable?: boolean;
-  capabilityMenu?: ChatComposerCapabilityMenuProps;
+  capabilityMenu?: ChatComposerCapabilityMenuSource;
   toolOverrides?: SessionToolOverrides | null;
   onChange: () => void;
   onVisibilityChange?: (visibility: NewSessionVisibility) => void;
@@ -115,5 +115,53 @@ export function NewSessionSelectionStatus(props: { options: NewSessionComposerCa
         })}
       </button>
     </Show>
+  );
+}
+
+export function StartControl(props: {
+  options: {
+    submitting: boolean;
+    nativeTerminal?: boolean;
+    canSubmit: boolean;
+    submitDisabledReason?: string;
+    onBlockedSubmit?: () => void;
+    attachmentDraft: { reads: { pendingReads: number } };
+  };
+  onSubmit: () => void;
+}) {
+  const label = () =>
+    props.options.submitting
+      ? t("newSession.starting")
+      : t(props.options.nativeTerminal ? "newSession.startInTerminal" : "newSession.start");
+  const busy = () =>
+    props.options.submitting || props.options.attachmentDraft.reads.pendingReads > 0;
+  return (
+    <openclaw-tooltip
+      content={props.options.submitDisabledReason ?? label()}
+      onPointerDown={(event) => {
+        if (event.button === 0 && !props.options.canSubmit) {
+          props.options.onBlockedSubmit?.();
+        }
+      }}
+    >
+      <button
+        type="button"
+        class={[
+          "chat-send-btn new-session-page__start-submit",
+          {
+            "new-session-page__start-submit--busy": busy(),
+          },
+        ]}
+        disabled={!props.options.canSubmit}
+        aria-disabled={props.options.canSubmit ? "false" : "true"}
+        aria-busy={busy() ? "true" : "false"}
+        aria-label={label()}
+        onClick={() => props.onSubmit()}
+      >
+        <Icon
+          name={busy() ? "loader" : props.options.nativeTerminal ? "squareTerminal" : "arrowUp"}
+        />
+      </button>
+    </openclaw-tooltip>
   );
 }

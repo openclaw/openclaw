@@ -39,12 +39,12 @@ import {
   assertSystemdAvailable,
   disableSystemdUserUnitForRemoval,
   execSystemctlUser,
+  isSystemdUnitActive,
   isSystemdUnitMissingDetail,
   isSystemdUserScopeUnavailable,
   readSystemctlDetail,
   reloadSystemdUserManager,
 } from "./systemd-exec.js";
-import { captureSystemdInstallRecovery } from "./systemd-install-recovery.js";
 import { assertNoSystemGatewayOwnership } from "./systemd-scope.js";
 import {
   isNodeSystemdEnvironment,
@@ -228,7 +228,64 @@ async function writeSystemdUnit(
       const recovery =
         load && !definitionTransaction
           ? await withGatewayServiceInstallationRecovery(
-              () => captureSystemdInstallRecovery(env, existingUnit !== null),
+              async () => {
+                // Capture native policy while the definition writer holds the original artifacts.
+                const unit = `${resolveSystemdServiceName(env)}.service`;
+                let enabled = "disabled";
+                let running = false;
+                if (existingUnit !== null) {
+                  const enablement = await execSystemctlUser(env, ["is-enabled", unit]);
+                  enabled = enablement.stdout.trim();
+                  if (
+                    enablement.termination !== "exit" ||
+                    !["enabled", "enabled-runtime", "disabled", "static", "indirect"].includes(
+                      enabled,
+                    )
+                  ) {
+                    throw new Error(
+                      `Cannot preserve the existing systemd enablement policy before replacing its definition; no service files were changed: ${readSystemctlDetail(enablement)}`,
+                    );
+                  }
+                  const active = await isSystemdUnitActive(env, unit);
+                  if (!active.ok) {
+                    throw new Error(
+                      `Cannot preserve the existing systemd running state before replacing its definition; no service files were changed: ${active.error}`,
+                    );
+                  }
+                  running = active.value;
+                }
+                let activationAttempted = false;
+                let restartAttempted = false;
+                return {
+                  beforeAction: (action: string) => {
+                    activationAttempted = true;
+                    restartAttempted ||= action === "restart";
+                  },
+                  async restore() {
+                    if (!activationAttempted) {
+                      return;
+                    }
+                    const run = async (args: string[]) => {
+                      await assertNoSystemGatewayOwnership(env);
+                      const result = await execSystemctlUser(env, args);
+                      if (result.code !== 0) {
+                        throw new Error(
+                          `systemctl rollback ${args[0]} failed: ${readSystemctlDetail(result)}`,
+                        );
+                      }
+                    };
+                    if (enabled !== "enabled") {
+                      await run(["disable", unit]);
+                      if (enabled === "enabled-runtime") {
+                        await run(["enable", "--runtime", unit]);
+                      }
+                    }
+                    if (restartAttempted) {
+                      await run([running ? "restart" : "stop", unit]);
+                    }
+                  },
+                };
+              },
               async () => false,
             )
           : null;
@@ -469,57 +526,47 @@ export async function stageSystemdService({
   return { unitPath };
 }
 
-async function activateSystemdService(params: {
-  env: GatewayServiceEnv;
-  preserveAutoStart?: boolean;
-  beforeAction?: (action: string) => void;
-}) {
-  const unitName = `${resolveSystemdServiceName(params.env)}.service`;
-  // A system unit may appear after publication. Refuse before the user manager
-  // can load a second supervisor for the same gateway name.
-  await assertNoSystemGatewayOwnership(params.env);
-  const runActivation = async (
-    action: "daemon-reload" | "enable" | "restart",
-    retryMissing = true,
-  ): Promise<void> => {
-    const args = action === "daemon-reload" ? [action] : [action, unitName];
-    params.beforeAction?.(action);
-    const result = await execSystemctlUser(params.env, args);
-    if (result.code === 0) {
-      return;
-    }
-    const detail = readSystemctlDetail(result);
-    if (
-      action !== "daemon-reload" &&
-      retryMissing &&
-      result.termination === "exit" &&
-      isSystemdUnitMissingDetail(detail)
-    ) {
-      await runActivation("daemon-reload");
-      return await runActivation(action, false);
-    }
-    if (isSystemdUserScopeUnavailable(detail)) {
-      throw new Error(`systemctl --user unavailable: ${detail || "unknown error"}`.trim());
-    }
-    throw new Error(`systemctl ${action} failed: ${detail || "unknown error"}`.trim());
-  };
-  for (const action of ["daemon-reload", "enable", "restart"] as const) {
-    if (action === "enable" && params.preserveAutoStart) {
-      continue;
-    }
-    await runActivation(action);
-  }
-}
-
 export async function installSystemdService(
   args: GatewayServiceInstallArgs,
 ): Promise<{ unitPath: string }> {
-  const load = (beforeAction?: (action: string) => void) =>
-    activateSystemdService({
-      env: args.env,
-      beforeAction,
-      preserveAutoStart: args.preserveAutoStart,
-    });
+  const load = async (beforeAction?: (action: string) => void) => {
+    const { env, preserveAutoStart } = args;
+    const unitName = `${resolveSystemdServiceName(env)}.service`;
+    // A system unit may appear after publication. Refuse before the user manager
+    // can load a second supervisor for the same gateway name.
+    await assertNoSystemGatewayOwnership(env);
+    const runActivation = async (
+      action: "daemon-reload" | "enable" | "restart",
+      retryMissing = true,
+    ): Promise<void> => {
+      const activationArgs = action === "daemon-reload" ? [action] : [action, unitName];
+      beforeAction?.(action);
+      const result = await execSystemctlUser(env, activationArgs);
+      if (result.code === 0) {
+        return;
+      }
+      const detail = readSystemctlDetail(result);
+      if (
+        action !== "daemon-reload" &&
+        retryMissing &&
+        result.termination === "exit" &&
+        isSystemdUnitMissingDetail(detail)
+      ) {
+        await runActivation("daemon-reload");
+        return await runActivation(action, false);
+      }
+      if (isSystemdUserScopeUnavailable(detail)) {
+        throw new Error(`systemctl --user unavailable: ${detail || "unknown error"}`.trim());
+      }
+      throw new Error(`systemctl ${action} failed: ${detail || "unknown error"}`.trim());
+    };
+    for (const action of ["daemon-reload", "enable", "restart"] as const) {
+      if (action === "enable" && preserveAutoStart) {
+        continue;
+      }
+      await runActivation(action);
+    }
+  };
   const { unitPath, backedUp } = await writeSystemdUnit(args, load);
   if (
     args.warn &&

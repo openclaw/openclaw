@@ -1,6 +1,5 @@
 import type { AgentRunTimeoutPhase } from "@openclaw/normalization-core/agent-run-terminal-outcome";
 import type { FastMode } from "@openclaw/normalization-core/string-coerce";
-import type { HeartbeatToolResponse } from "../../../auto-reply/heartbeat-tool-response.js";
 import type { ThinkLevel } from "../../../auto-reply/thinking.js";
 import type {
   SessionContextBudgetStatus,
@@ -100,43 +99,6 @@ export type EmbeddedRunFastModeParam =
   | Exclude<FastMode, "auto">
   | (() => Exclude<FastMode, "auto"> | undefined);
 
-type EmbeddedRunAttemptOperation = "attempt" | "settled-tool-finalization";
-
-type EmbeddedRunAttemptToolTerminalObservation = {
-  toolCallId?: string;
-  toolName: string;
-  arguments?: unknown;
-  /** Original host result or error; public fields cannot supply effect provenance. */
-  result?: unknown;
-  meta?: string;
-  executionStarted?: boolean;
-  /** Exact-instance replay classification resolved by the host tool catalog. */
-  replaySafe?: boolean;
-  outcome: "success" | "failure";
-  failure?: Omit<ToolErrorSummary, "toolName" | "meta" | "mutatingAction">;
-  /** Protocol-owned mutation facts for native tools that do not use OpenClaw definitions. */
-  nativeMutation?: {
-    mutatingAction: boolean;
-    replaySafe: boolean;
-  };
-  /** Concrete plugin owner; the terminal observer derives mutation facts from executed args. */
-  ownerMutation?: {
-    ownerKey: string;
-  };
-};
-
-type EmbeddedRunAttemptToolTerminalResolution = {
-  lastToolError?: ToolErrorSummary;
-  executionStarted: boolean;
-  executedArguments?: Record<string, unknown>;
-  sideEffectEvidence: boolean;
-  effectReceipt: ToolEffectReceipt;
-};
-
-type EmbeddedRunAttemptToolTerminalObserver = (
-  observation: EmbeddedRunAttemptToolTerminalObservation,
-) => EmbeddedRunAttemptToolTerminalResolution;
-
 /** Host-owned trajectory recorder supplied to plugin harnesses for attempt-local runtime events. */
 export type EmbeddedRunAttemptTrajectoryRecorder = {
   recordEvent: (type: string, data?: Record<string, unknown>) => void;
@@ -165,7 +127,7 @@ export type EmbeddedRunAttemptParams = EmbeddedRunAttemptBase & {
   /** Host-created authority available only after harness selection. */
   hostCapabilities?: import("../../harness/host-capability-types.js").AgentHarnessHostCapabilities;
   /** Sticky operation identity used to suppress ordinary retry and hook policy. */
-  operation?: EmbeddedRunAttemptOperation;
+  operation?: "attempt" | "settled-tool-finalization";
   /** Core-prepared fact that explicit requester/config policy restricts plugin-native tools. */
   pluginHarnessToolPolicyRestricted?: boolean;
   /** Requester policy prepared by core; turn-specific tool restrictions still apply. */
@@ -228,7 +190,34 @@ export type EmbeddedRunAttemptParams = EmbeddedRunAttemptBase & {
   /** OpenClaw-owned runtime policy prepared by the orchestrator for this attempt. */
   runtimePlan?: AgentRuntimePlan;
   /** Reports terminal tool facts to the host-owned attempt outcome accumulator. */
-  observeToolTerminal?: EmbeddedRunAttemptToolTerminalObserver;
+  observeToolTerminal?: (observation: {
+    toolCallId?: string;
+    toolName: string;
+    arguments?: unknown;
+    /** Original host result or error; public fields cannot supply effect provenance. */
+    result?: unknown;
+    meta?: string;
+    executionStarted?: boolean;
+    /** Exact-instance replay classification resolved by the host tool catalog. */
+    replaySafe?: boolean;
+    outcome: "success" | "failure";
+    failure?: Omit<ToolErrorSummary, "toolName" | "meta" | "mutatingAction">;
+    /** Protocol-owned mutation facts for native tools that do not use OpenClaw definitions. */
+    nativeMutation?: {
+      mutatingAction: boolean;
+      replaySafe: boolean;
+    };
+    /** Concrete plugin owner; the terminal observer derives mutation facts from executed args. */
+    ownerMutation?: {
+      ownerKey: string;
+    };
+  }) => {
+    lastToolError?: ToolErrorSummary;
+    executionStarted: boolean;
+    executedArguments?: Record<string, unknown>;
+    sideEffectEvidence: boolean;
+    effectReceipt: ToolEffectReceipt;
+  };
   /** Host-issued scope for harness-owned child completion. */
   agentHarnessCompletionScope?: AgentHarnessCompletionScope;
   /** Host-only originals retained across native image projection. */
@@ -260,6 +249,12 @@ export type EmbeddedRunAttemptParams = EmbeddedRunAttemptBase & {
   registerPluginRuntimeRefreshConsumer?: (isCurrent: () => boolean) => void;
   /** Completed native attempt results excluded by the original admission read fence. */
   pluginRuntimeRefreshMessages?: AgentMessage[];
+  /**
+   * Set on a plugin-runtime refresh continuation: the logical turn's user prompt.
+   * Prompt hooks see it instead of the synthetic continuation prompt, and turn-start
+   * work (next-turn injections, agent_turn_prepare) is not repeated.
+   */
+  pluginRuntimeRefreshUserPrompt?: string;
   /** Host-owned same-turn recovery context; never a new user turn or execution authority. */
   continuation?: {
     /** Original current request, retained outside bounded historical projections. */
@@ -300,6 +295,7 @@ export type EmbeddedRunAttemptParams = EmbeddedRunAttemptBase & {
 };
 
 export type EmbeddedRunAttemptResult = {
+  cyberAccessProgram?: "standard" | "daybreak_blue" | "daybreak_red";
   terminal: AgentRunAttemptTerminal;
   preparedTerminalReply?: PreparedAgentRunTerminalReply;
   /** Prepared policy that explains unavailable tools without another session read. */
@@ -435,7 +431,6 @@ export type EmbeddedRunAttemptResult = {
   messagingToolSentMediaUrls: string[];
   messagingToolSentTargets: MessagingToolSend[];
   messagingToolSourceReplyPayloads?: MessagingToolSourceReplyPayload[];
-  heartbeatToolResponse?: HeartbeatToolResponse;
   toolMediaUrls?: string[];
   /**
    * Native artifacts produced and owned by the harness, never model-selected

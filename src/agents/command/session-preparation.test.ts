@@ -1,5 +1,5 @@
 import path from "node:path";
-import { expect, it, vi } from "vitest";
+import { afterEach, expect, it, vi } from "vitest";
 import { buildSourceConversationContext, buildGroupIntro } from "../../auto-reply/reply/groups.js";
 import { buildInboundMetaSystemPrompt } from "../../auto-reply/reply/inbound-meta.js";
 import type { TemplateContext } from "../../auto-reply/templating.js";
@@ -24,17 +24,13 @@ import {
 } from "../../test-utils/channel-plugins.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { normalizeSessionDeliveryState } from "../../utils/delivery-context.shared.js";
-import { createAdmittedRunOperatorAuthority } from "../admitted-run-context.js";
+import { createOperatorRecoveryAuthority } from "../operator-recovery.test-support.js";
 import { buildAgentSystemPrompt } from "../system-prompt.js";
 import {
   prepareCommandSessionRecoveryEntry,
   prepareEmbeddedSessionState,
 } from "./session-preparation.js";
 
-// mock-isolation: session preparation projects run state without loading the embedded runner owner.
-vi.mock("../embedded-agent-runner/runs.js", () => ({
-  resolveSessionRunProgressState: () => undefined,
-}));
 vi.mock("../subagents/registry/subagent-registry-read.js", () => ({
   getLatestLiveSubagentRunByChildSessionKey: () => undefined,
   isSubagentRunQueued: () => false,
@@ -63,6 +59,31 @@ const { skillSnapshot } = vi.hoisted(() => ({
   })),
 }));
 
+type Prepare = Parameters<typeof prepareEmbeddedSessionState>[0];
+const preparedRunId = "command-session-test";
+function prepare(params: Pick<Prepare, "opts"> & Partial<Prepare>) {
+  return prepareEmbeddedSessionState({
+    runId: preparedRunId,
+    cfg: {},
+    sessionAgentId: "main",
+    sessionId: "conversation-id",
+    storePath: "/unused/command.sqlite",
+    lifecycleGeneration: getAgentRunLifecycleGeneration(),
+    executionWorkspaceDir: "/workspace",
+    watchSkills: false,
+    isNewSession: false,
+    isSubagentLaneTurn: false,
+    suppressVisibleSessionEffects: true,
+    sessionStateActor: { actorType: "agent" },
+    ...params,
+  });
+}
+afterEach(() => {
+  clearAgentRunContext(preparedRunId);
+  skillSnapshot.mockReturnValue({ snapshot: undefined, shouldRefresh: false });
+  resetPluginRuntimeStateForTest();
+});
+
 it.each([
   { refresh: true, skipTouch: false, current: "original" },
   { refresh: true, skipTouch: true, current: "original" },
@@ -76,7 +97,6 @@ it.each([
   async (testCase) => {
     await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
       const sessionKey = "agent:main:prepare-metadata";
-      const runId = "prepare-metadata";
       const scope = {
         agentId: "main",
         sessionKey,
@@ -126,54 +146,43 @@ it.each([
         snapshot: testCase.refresh ? snapshot : undefined,
         shouldRefresh: testCase.refresh,
       });
-      try {
-        const prepared = await prepareEmbeddedSessionState({
-          cfg: {},
-          opts: { message: "hello", skipInitialSessionTouch: testCase.skipTouch },
-          sessionEntry: initial,
-          sessionStore: store,
-          sessionKey,
-          sessionId: initial.sessionId,
-          storePath: scope.storePath,
-          sessionAgentId: "main",
-          lifecycleGeneration: getAgentRunLifecycleGeneration(),
-          runId,
-          executionWorkspaceDir: state.workspaceDir,
-          watchSkills: false,
-          isNewSession: false,
-          isSubagentLaneTurn: true,
-          suppressVisibleSessionEffects: false,
-          sessionStateActor: { actorType: "human" },
-        });
-        const persisted = loadSessionEntry({ ...scope, readConsistency: "latest" });
-        expect(persisted).toEqual(prepared.sessionEntry);
-        expect(store[sessionKey]).toEqual(prepared.sessionEntry);
-        if (testCase.current === "deleted" || testCase.current === "replaced") {
-          expect(prepared.sessionEntry).toEqual(before);
-          return;
-        }
+      const prepared = await prepare({
+        opts: { message: "hello", skipInitialSessionTouch: testCase.skipTouch },
+        sessionEntry: initial,
+        sessionStore: store,
+        sessionKey,
+        sessionId: initial.sessionId,
+        storePath: scope.storePath,
+        executionWorkspaceDir: state.workspaceDir,
+        isSubagentLaneTurn: true,
+        suppressVisibleSessionEffects: false,
+        sessionStateActor: { actorType: "human" },
+      });
+      const persisted = loadSessionEntry({ ...scope, readConsistency: "latest" });
+      expect(persisted).toEqual(prepared.sessionEntry);
+      expect(store[sessionKey]).toEqual(prepared.sessionEntry);
+      if (testCase.current === "deleted" || testCase.current === "replaced") {
+        expect(prepared.sessionEntry).toEqual(before);
+        return;
+      }
+      expect(prepared.sessionEntry).toMatchObject({
+        sessionId: "metadata-session",
+        sessionStartedAt: 1,
+        lastInteractionAt: testCase.skipTouch ? 1 : expect.any(Number),
+      });
+      expect(prepared.sessionEntry?.skillsSnapshot).toEqual(
+        testCase.refresh ? snapshot : undefined,
+      );
+      expect(prepared.sessionEntry?.agentStatus).toEqual(
+        testCase.skipTouch ? { note: "busy", expiresAt: 10 } : undefined,
+      );
+      if (testCase.current === "policy-cleared") {
         expect(prepared.sessionEntry).toMatchObject({
-          sessionId: "metadata-session",
-          sessionStartedAt: 1,
-          lastInteractionAt: testCase.skipTouch ? 1 : expect.any(Number),
+          label: "Renamed while preparing",
+          sendPolicy: "deny",
         });
-        expect(prepared.sessionEntry?.skillsSnapshot).toEqual(
-          testCase.refresh ? snapshot : undefined,
-        );
-        expect(prepared.sessionEntry?.agentStatus).toEqual(
-          testCase.skipTouch ? { note: "busy", expiresAt: 10 } : undefined,
-        );
-        if (testCase.current === "policy-cleared") {
-          expect(prepared.sessionEntry).toMatchObject({
-            label: "Renamed while preparing",
-            sendPolicy: "deny",
-          });
-          expect(prepared.sessionEntry?.elevatedLevel).toBeUndefined();
-          expect(prepared.sessionEntry?.inheritedToolAllow).toBeUndefined();
-        }
-      } finally {
-        skillSnapshot.mockReturnValue({ snapshot: undefined, shouldRefresh: false });
-        clearAgentRunContext(runId);
+        expect(prepared.sessionEntry?.elevatedLevel).toBeUndefined();
+        expect(prepared.sessionEntry?.inheritedToolAllow).toBeUndefined();
       }
     });
   },
@@ -189,28 +198,10 @@ it.each([
   "binds operator recovery custody for $sourceTool from $requesterProfileId",
   ({ sourceTool, requesterProfileId, retained }) => {
     const runId = "announce:requester-settle:main:agent:main:main:child-run";
-    const operatorAuthority = createAdmittedRunOperatorAuthority({
-      profileId: "original-operator",
-      scopes: ["operator.read"],
-      assertCurrent() {},
-      recoverySnapshot: {
-        profileId: "original-operator",
-        scopes: ["operator.read"],
-        assignedRole: null,
-        githubLogin: null,
-        grant: null,
-        aliasBindingIds: [],
-        authPolicy: {
-          generation: "",
-          grantGeneration: "original-grant",
-          role: "operator",
-          authMethod: "token",
-        },
-        controlUiAdmin: false,
-        localOperator: false,
-        sourceIngress: "control-ui",
-      },
-    });
+    const operatorAuthority = createOperatorRecoveryAuthority(
+      "original-operator",
+      "original-grant",
+    );
     const { nextEntry } = prepareCommandSessionRecoveryEntry({
       entry: {
         sessionId: "requester-session",
@@ -343,7 +334,6 @@ it.each([
 ])(
   "projects command startup and capacity waits (internal=$internal, coordination=$coordination)",
   async ({ internal, coordination }) => {
-    const runId = "command-activity";
     const sessionKey = "agent:main:command-activity";
     const sessionId = "command-activity-session";
     const lifecycleGeneration = getAgentRunLifecycleGeneration();
@@ -358,8 +348,7 @@ it.each([
 
     let releaseWait: (() => void) | undefined;
     try {
-      await prepareEmbeddedSessionState({
-        cfg: {},
+      await prepare({
         opts: {
           message: "hello",
           ...(coordination
@@ -374,27 +363,20 @@ it.each([
         },
         sessionKey,
         sessionId,
-        storePath: "/unused/command.sqlite",
-        sessionAgentId: "main",
         lifecycleGeneration,
-        runId,
-        executionWorkspaceDir: "/workspace",
-        watchSkills: false,
-        isNewSession: false,
-        isSubagentLaneTurn: false,
         suppressVisibleSessionEffects: internal,
         sessionStateActor: { actorType: "human" },
       });
       const hidden = internal || coordination;
       const active = hidden ? { active: false, runIds: [] } : { active: true };
       expect(state()).toEqual(active);
-      releaseWait = registerAgentRunCapacityWait(runId, lifecycleGeneration);
+      releaseWait = registerAgentRunCapacityWait(preparedRunId, lifecycleGeneration);
       expect(state()).toEqual(hidden ? active : { active: true, status: "queued" });
       releaseWait?.();
       expect(state()).toEqual(active);
     } finally {
       releaseWait?.();
-      clearAgentRunContext(runId);
+      clearAgentRunContext(preparedRunId);
     }
     expect(state()).toEqual({ active: false, runIds: [] });
   },
@@ -403,40 +385,25 @@ it.each([
 it.each(["agent:main:cron:nightly:run:123", "agent:main:subagent:123"])(
   "retains the isolated task's prompt for %s",
   async (sessionKey) => {
-    const runId = `isolated-prompt:${sessionKey}`;
-    try {
-      const { opts } = await prepareEmbeddedSessionState({
-        cfg: {},
-        opts: {
-          message: "Child finished.",
-          extraSystemPrompt: "Continue the isolated task.",
-          inputProvenance: { kind: "inter_session", sourceTool: "subagent_settle" },
-          runContext: { messageChannel: "webchat" },
-        },
-        sessionKey,
-        sessionAgentId: "main",
+    const { opts } = await prepare({
+      opts: {
+        message: "Child finished.",
+        extraSystemPrompt: "Continue the isolated task.",
+        inputProvenance: { kind: "inter_session", sourceTool: "subagent_settle" },
+        runContext: { messageChannel: "webchat" },
+      },
+      sessionKey,
+      sessionId: "isolated-id",
+      isSubagentLaneTurn: sessionKey.includes(":subagent:"),
+      sessionEntry: {
         sessionId: "isolated-id",
-        storePath: "/unused/command.sqlite",
-        lifecycleGeneration: getAgentRunLifecycleGeneration(),
-        runId,
-        executionWorkspaceDir: "/workspace",
-        watchSkills: false,
-        isNewSession: false,
-        isSubagentLaneTurn: sessionKey.includes(":subagent:"),
-        suppressVisibleSessionEffects: true,
-        sessionStateActor: { actorType: "agent" },
-        sessionEntry: {
-          sessionId: "isolated-id",
-          updatedAt: 1,
-          chatType: "direct",
-          delivery: { kind: "internal" },
-        },
-      });
-      expect(opts.extraSystemPrompt).toBe("Continue the isolated task.");
-      expect(opts.silentReplyPromptMode).toBeUndefined();
-    } finally {
-      clearAgentRunContext(runId);
-    }
+        updatedAt: 1,
+        chatType: "direct",
+        delivery: { kind: "internal" },
+      },
+    });
+    expect(opts.extraSystemPrompt).toBe("Continue the isolated task.");
+    expect(opts.silentReplyPromptMode).toBeUndefined();
   },
 );
 
@@ -449,7 +416,6 @@ it.each([
   "preserves the $channel $chatType system prompt on completion (private=$privateCompletion)",
   async ({ channel, chatType, privateCompletion }) => {
     const sessionKey = "agent:main:conversation";
-    const runId = "announce:conversation";
     const shared = chatType === "channel";
     const ctx: TemplateContext = {
       Provider: channel,
@@ -480,49 +446,34 @@ it.each([
     ]
       .filter(Boolean)
       .join("\n\n");
-    try {
-      const prepared = await prepareEmbeddedSessionState({
-        cfg: {},
-        opts: {
-          message: "Child finished.",
-          channel,
-          to: ctx.OriginatingTo,
-          accountId: ctx.AccountId,
-          threadId: ctx.MessageThreadId,
-          privateCompletion,
-          inputProvenance: { kind: "inter_session", sourceTool: "subagent_settle" },
-        },
-        sessionEntry: entry,
-        sessionKey,
-        sessionId: entry.sessionId,
-        storePath: "/unused/command.sqlite",
-        sessionAgentId: "main",
-        lifecycleGeneration: getAgentRunLifecycleGeneration(),
-        runId,
-        executionWorkspaceDir: "/workspace",
-        watchSkills: false,
-        isNewSession: false,
-        isSubagentLaneTurn: false,
-        suppressVisibleSessionEffects: true,
-        sessionStateActor: { actorType: "agent" },
+    const prepared = await prepare({
+      opts: {
+        message: "Child finished.",
+        channel,
+        to: ctx.OriginatingTo,
+        accountId: ctx.AccountId,
+        threadId: ctx.MessageThreadId,
+        privateCompletion,
+        inputProvenance: { kind: "inter_session", sourceTool: "subagent_settle" },
+      },
+      sessionEntry: entry,
+      sessionKey,
+      sessionId: entry.sessionId,
+    });
+    const prompt = (extraSystemPrompt?: string) =>
+      buildAgentSystemPrompt({
+        workspaceDir: "/workspace",
+        toolNames: ["sessions_spawn", "sessions_yield"],
+        extraSystemPrompt,
+        silentReplyPromptMode: "none",
       });
-      const prompt = (extraSystemPrompt?: string) =>
-        buildAgentSystemPrompt({
-          workspaceDir: "/workspace",
-          toolNames: ["sessions_spawn", "sessions_yield"],
-          extraSystemPrompt,
-          silentReplyPromptMode: "none",
-        });
-      expect(prompt(prepared.opts.extraSystemPrompt)).toBe(prompt(normalContext));
-      expect(prepared.opts.privateCompletion).toBe(privateCompletion);
-      expect(prepared.opts.silentReplyPromptMode).toBe("none");
-      expect(prepared.opts.inputProvenance).toEqual({
-        kind: "inter_session",
-        sourceTool: "subagent_settle",
-      });
-    } finally {
-      clearAgentRunContext(runId);
-    }
+    expect(prompt(prepared.opts.extraSystemPrompt)).toBe(prompt(normalContext));
+    expect(prepared.opts.privateCompletion).toBe(privateCompletion);
+    expect(prepared.opts.silentReplyPromptMode).toBe("none");
+    expect(prepared.opts.inputProvenance).toEqual({
+      kind: "inter_session",
+      sourceTool: "subagent_settle",
+    });
   },
 );
 
@@ -531,7 +482,6 @@ it.each([
   { deliver: true, replyAccountId: "plain", markup: "markdown" },
   { deliver: false, replyAccountId: undefined, markup: undefined },
 ])("uses the delivering account's format once ($deliver, $replyAccountId)", async (testCase) => {
-  const runId = "delivery-format-context";
   setActivePluginRegistry(
     createTestRegistry([
       {
@@ -552,62 +502,45 @@ it.each([
       },
     ]),
   );
-  try {
-    const ctx: TemplateContext = {
-      Provider: "telegram",
-      Surface: "telegram",
-      OriginatingChannel: "telegram",
-      OriginatingTo: "1222",
-      AccountId: "rich",
-      ChatType: "direct",
-    };
-    const { opts: prepared } = await prepareEmbeddedSessionState({
-      cfg: {},
-      opts: {
-        message: "Child finished.",
-        deliver: testCase.deliver,
-        replyAccountId: testCase.replyAccountId,
-        inputProvenance: { kind: "inter_session", sourceTool: "subagent_settle" },
-        runContext: { messageChannel: "telegram", currentChannelId: "1222", accountId: "rich" },
-      },
-      sessionKey: "agent:main:telegram:direct:1222",
-      sessionAgentId: "main",
+  const ctx: TemplateContext = {
+    Provider: "telegram",
+    Surface: "telegram",
+    OriginatingChannel: "telegram",
+    OriginatingTo: "1222",
+    AccountId: "rich",
+    ChatType: "direct",
+  };
+  const { opts: prepared } = await prepare({
+    opts: {
+      message: "Child finished.",
+      deliver: testCase.deliver,
+      replyAccountId: testCase.replyAccountId,
+      inputProvenance: { kind: "inter_session", sourceTool: "subagent_settle" },
+      runContext: { messageChannel: "telegram", currentChannelId: "1222", accountId: "rich" },
+    },
+    sessionKey: "agent:main:telegram:direct:1222",
+    sessionEntry: {
       sessionId: "conversation-id",
-      storePath: "/unused/command.sqlite",
-      lifecycleGeneration: getAgentRunLifecycleGeneration(),
-      runId,
-      executionWorkspaceDir: "/workspace",
-      watchSkills: false,
-      isNewSession: false,
-      isSubagentLaneTurn: false,
-      suppressVisibleSessionEffects: true,
-      sessionStateActor: { actorType: "agent" },
-      sessionEntry: {
-        sessionId: "conversation-id",
-        updatedAt: 1,
-        chatType: "direct",
-        delivery: normalizeSessionDeliveryState({
-          context: { channel: "telegram", to: "1222", accountId: "rich" },
-          origin: { provider: "telegram", surface: "telegram", chatType: "direct" },
-        }),
-      },
-    });
-    const prompt = prepared.extraSystemPrompt ?? "";
-    expect(prompt).toContain('"account_id": "rich"');
-    expect(prompt.split("### Delivery Format")).toHaveLength(testCase.deliver ? 2 : 1);
-    if (testCase.markup) {
-      expect(prompt).toContain(`"text_markup": "${testCase.markup}"`);
-    }
-    if (testCase.replyAccountId === "rich") {
-      expect(prompt).toBe(
-        [
-          buildInboundMetaSystemPrompt(ctx, {}),
-          buildSourceConversationContext({ sessionCtx: ctx }),
-        ].join("\n\n"),
-      );
-    }
-  } finally {
-    clearAgentRunContext(runId);
-    resetPluginRuntimeStateForTest();
+      updatedAt: 1,
+      chatType: "direct",
+      delivery: normalizeSessionDeliveryState({
+        context: { channel: "telegram", to: "1222", accountId: "rich" },
+        origin: { provider: "telegram", surface: "telegram", chatType: "direct" },
+      }),
+    },
+  });
+  const prompt = prepared.extraSystemPrompt ?? "";
+  expect(prompt).toContain('"account_id": "rich"');
+  expect(prompt.split("### Delivery Format")).toHaveLength(testCase.deliver ? 2 : 1);
+  if (testCase.markup) {
+    expect(prompt).toContain(`"text_markup": "${testCase.markup}"`);
+  }
+  if (testCase.replyAccountId === "rich") {
+    expect(prompt).toBe(
+      [
+        buildInboundMetaSystemPrompt(ctx, {}),
+        buildSourceConversationContext({ sessionCtx: ctx }),
+      ].join("\n\n"),
+    );
   }
 });

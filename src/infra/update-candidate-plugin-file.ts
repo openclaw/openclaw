@@ -1,8 +1,6 @@
 import fsSync from "node:fs";
-import fs from "node:fs/promises";
 import path from "node:path";
 import { assertDirectoryIdentitySync, type DirectoryIdentity } from "@openclaw/fs-safe/advanced";
-import { hashFileMutationSnapshotSync } from "./file-descriptor.js";
 import type { Root } from "./fs-safe.js";
 import {
   createUpdateCandidatePluginPool,
@@ -55,10 +53,6 @@ export async function copyUpdateCandidatePluginFileBytes(
       assertUpdateCandidatePluginEntryStat(entry, fsSync.lstatSync(entry.path, { bigint: true }));
     },
   });
-  const copiedStat = await fs.lstat(destination, { bigint: true });
-  if (hashFileMutationSnapshotSync(destination, copiedStat) !== entry.sha256) {
-    throw new Error(`Copied plugin bytes differ from snapshot inventory: ${entry.path}`);
-  }
 }
 
 /** Drain the complete file phase before the tree owner can publish links or clean up. */

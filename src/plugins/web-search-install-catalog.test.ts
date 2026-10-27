@@ -9,7 +9,6 @@ describe("web-search install catalog", () => {
   it("keeps Parallel's keyless provider installable but opt-in", () => {
     const entry = resolveWebSearchInstallCatalogEntry({
       providerId: "parallel-free",
-      pluginId: "parallel",
     });
 
     expect(entry).toMatchObject({

@@ -26,6 +26,7 @@ import {
   pluginList,
   pluginSummary,
   pluginDetail,
+  appSummary,
   appInfo as inventoryAppInfo,
 } from "../app-server/plugin-inventory.test-helpers.js";
 import type { CodexGetAccountResponse, v2 } from "../app-server/protocol.js";
@@ -1639,14 +1640,7 @@ function pluginRead(pluginName: string, apps: v2.AppSummary[] = []): v2.PluginRe
 }
 
 function pluginApp(id: string, overrides: Partial<v2.AppSummary> = {}): v2.AppSummary {
-  return {
-    id,
-    name: id,
-    description: null,
-    installUrl: null,
-    category: null,
-    ...overrides,
-  };
+  return { ...appSummary(id), ...overrides };
 }
 
 function appInfo(id: string, overrides: Partial<v2.AppInfo> = {}): v2.AppInfo {

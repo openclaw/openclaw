@@ -113,7 +113,7 @@ function runRecovery(
         "restart_fixture_package=fixture.tgz; restart_fixture_version=2100.1.0",
         'phase() { printf "%s\\n" "$1" >> "$EVENTS"; shift; "$@"; }',
         "stop_update_restart_probe_gateway() { :; }",
-        "prepare_restart_inference() { :; }; prepare_restart_fixture() { :; }",
+        "prepare_restart_inference() { :; }; prepare_restart_plugin_release_selectors() { :; }; prepare_restart_fixture() { :; }",
         'install_update_restart_systemctl_shim() { printf "containment:%s\\n" "$1" >> "$EVENTS"; }',
         'run_update_restart_probe_gateway() { [ "$1" = start ]; }',
         'check_gateway_status() { [ "$FAIL_AT" != auth ]; }',
@@ -159,6 +159,7 @@ describe.skipIf(process.platform === "win32")("frozen managed membership contrac
     expect(run.events).toEqual([
       "stop-recovery-service",
       "prepare-restart-inference",
+      "prepare-restart-plugin-selectors",
       "prepare-restart-fixture",
       "prepare-restart-manager",
       "containment:native",

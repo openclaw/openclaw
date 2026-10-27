@@ -34,7 +34,7 @@ export type InstalledApp = {
 
 export type InstalledAppsResult =
   | { status: "ok"; apps: InstalledApp[] }
-  | { status: "unsupported"; platform: NodeJS.Platform; apps: [] };
+  | { status: "unsupported"; apps: [] };
 
 function isBackupishBundle(label: string): boolean {
   return (
@@ -76,9 +76,8 @@ async function readBundleIdWithPlutil(appPath: string): Promise<string | undefin
 }
 
 export async function scanInstalledApps(): Promise<InstalledAppsResult> {
-  const platform = process.platform;
-  if (platform !== "darwin") {
-    return { status: "unsupported", platform, apps: [] };
+  if (process.platform !== "darwin") {
+    return { status: "unsupported", apps: [] };
   }
 
   const appPaths = (

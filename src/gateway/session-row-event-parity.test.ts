@@ -154,7 +154,6 @@ it("delivers nested event rows identical to the full list for each viewer and cl
         const source = {
           ...buildGatewaySessionSnapshot({
             sessionRow: projection.snapshot({ key, agentId: "main" }).row,
-            includeSession: true,
             lifecycle: true,
           }),
           sessionKey: key,
@@ -316,7 +315,7 @@ it("delivers nested event rows identical to the full list for each viewer and cl
         projection.state.rowContext.projectedAgentRuns,
       );
       const present = (index: number) =>
-        publication(peers[index]!.client, projectRun).present(captured, request);
+        publication(peers[index]!.client, projectRun).getPresentation().present(captured, request);
       publishPreview(preview);
       const stringify = vi.spyOn(JSON, "stringify");
       try {
@@ -339,15 +338,15 @@ it("delivers nested event rows identical to the full list for each viewer and cl
       const compactRequest = { ...request, rowMode: "compact" as const };
       const expiresAt = now - 100 + 30 * 60_000;
       for (const [sampledAt, owners, snapshotAt] of [
-        [now, [controller, navigationParent], now],
-        [expiresAt, [controller, navigationParent], now],
+        [now, [navigationParent], now],
+        [expiresAt, [navigationParent], now],
         [expiresAt + 1, [], expiresAt + 1],
       ] as const) {
         clock.mockReturnValue(sampledAt);
         const children = await listSessions({
           client: peers[0]!.client,
           context,
-          request: { ...compactRequest, spawnedBy: controller },
+          request: { ...compactRequest, spawnedBy: navigationParent },
         });
         expect(children.sessions.map((row) => row.key)).toEqual(owners.length ? [lineageKey] : []);
         const listed = await listSessions({

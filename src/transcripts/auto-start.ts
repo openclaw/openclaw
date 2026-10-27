@@ -79,7 +79,7 @@ export function createTranscriptsAutoStartService(
       if (stopped) {
         return { settled: Promise.resolve() };
       }
-      diagnostics = beginConfiguredTranscriptStarts(config?.transcripts);
+      diagnostics = beginConfiguredTranscriptStarts();
       const resolved = resolveTranscriptsConfig(config?.transcripts);
       if (!resolved.enabled) {
         return { settled: Promise.resolve() };

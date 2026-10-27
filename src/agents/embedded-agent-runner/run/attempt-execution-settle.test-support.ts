@@ -1,5 +1,6 @@
 import path from "node:path";
 import { vi, type Mock } from "vitest";
+import { makeUserMessage } from "../../../../test/helpers/user-message.js";
 import {
   loadSessionEntryReadOnly,
   loadTranscriptEvents,
@@ -10,6 +11,7 @@ import { withOwnedSessionTranscriptWrites } from "../../../config/sessions/trans
 import type { OpenClawTestState } from "../../../test-utils/openclaw-test-state.js";
 import { createTestAdmittedRunContext } from "../../admitted-run-context.test-support.js";
 import { SessionManager } from "../../sessions/session-manager.js";
+import { createUsageFixture } from "../../test-helpers/usage-fixtures.js";
 import { createAttemptNestedToolActivityState } from "./attempt-nested-tool-activity.js";
 import type { runEmbeddedAttemptSettledPhase } from "./attempt-settle.js";
 import { createEmbeddedAttemptTranscriptLifecycle } from "./attempt-transcript-lifecycle.js";
@@ -78,14 +80,7 @@ export function createFixture(mocks: {
       api: "openai-responses",
       provider: "openai",
       model: "model",
-      usage: {
-        input: 1,
-        output: 2,
-        cacheRead: 0,
-        cacheWrite: 0,
-        totalTokens: 3,
-        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-      },
+      usage: createUsageFixture(1, 2, 3),
       stopReason: "stop",
       timestamp: 100,
     },
@@ -141,6 +136,7 @@ export function createFixture(mocks: {
     },
     timeout: {
       getRunAbortDeadlineAtMs: vi.fn(() => 123),
+      onRunAbortDeadlineChanged: () => () => {},
       clearTimers,
     },
   };
@@ -170,9 +166,7 @@ export function createFixture(mocks: {
       takePendingMidTurnPrecheckRequest: vi.fn(() => null),
     },
     preparedUserTurnMessage: {
-      role: "user",
-      content: "hello",
-      timestamp: 100,
+      ...makeUserMessage("hello", 100),
       __openclaw: { senderName: "Alice" },
     },
     sessionManager,

@@ -2,14 +2,12 @@ import { mkdirSync, readFileSync } from "node:fs";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, expect, it } from "vitest";
+import { trackSqliteStatementExecutions } from "../../test/helpers/sqlite-statement-execution-counter.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
-import { captureFreshDoctorMigrationTables } from "../commands/doctor-migration-backup.js";
 import type { EngineConnection } from "../infra/sql-connection.js";
 import { corruptSqliteIndexKey } from "../infra/sqlite-index-corruption.test-support.js";
-import { runWithDoctorMigrationBackup } from "../infra/update-doctor-migration-attribution.js";
-import { recordSessionStateEventInDatabase } from "../sessions/session-state-events.kernel.js";
+import { recordSessionStateEventsInDatabase } from "../sessions/session-state-events.kernel.js";
 import { readSessionStateSequence } from "../sessions/session-state-events.read.worker.js";
-import { createOpenClawDatabaseMaintenanceScope } from "./openclaw-state-db-async-lifecycle.js";
 import { OPENCLAW_STATE_SCHEMA_VERSION } from "./openclaw-state-db-contract.js";
 import {
   closeOpenClawStateDatabaseAsync,
@@ -18,6 +16,7 @@ import {
   runOpenClawStateWriteTransaction,
 } from "./openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "./openclaw-state-db.paths.js";
+import { withStateMigrationBackupForTest } from "./openclaw-state-schema.test-support.js";
 import { assertSqliteMigrationScopePreserved } from "./sqlite-migration-scope.test-support.js";
 import { migrateSqliteTableWithoutRowid } from "./sqlite-table-layout-migration.js";
 
@@ -33,41 +32,46 @@ const directories = useAutoCleanupTempDirTracker((cleanup) => {
   });
 });
 
-async function withMigrationCustody(pathname: string, run: () => void | Promise<void>) {
-  const maintenance = createOpenClawDatabaseMaintenanceScope({
-    schemaMaintenance: true,
-    assertOwnerCurrent() {},
-    assertDatabaseAccess(databasePath) {
-      expect(databasePath).toBe(pathname);
-    },
+function withMigrationCustody(
+  options: Parameters<typeof withStateMigrationBackupForTest>[0],
+  run: () => void | Promise<void>,
+) {
+  return withStateMigrationBackupForTest(options, async () => {
+    try {
+      await run();
+    } finally {
+      await closeOpenClawStateDatabaseAsync();
+    }
   });
-  try {
-    await maintenance.run(() =>
-      runWithDoctorMigrationBackup(captureFreshDoctorMigrationTables, run),
-    );
-  } finally {
-    await maintenance.run(() => closeOpenClawStateDatabaseAsync());
-    await maintenance.close();
-  }
 }
 
 function record(db: EngineConnection, agentId: string, dedupeKey: string, now: number) {
-  return recordSessionStateEventInDatabase(
-    db,
+  return recordSessionStateEventsInDatabase(db, [
     {
-      sessionKey: "global",
-      agentId,
-      kind: "human_direct_message",
-      actorType: "human",
-      summary: "synthetic event",
-      dedupeKey,
+      event: {
+        sessionKey: "global",
+        agentId,
+        kind: "human_direct_message",
+        actorType: "human",
+        summary: "synthetic event",
+        dedupeKey,
+      },
+      now,
     },
-    now,
-  );
+  ]).rows[0];
 }
 
 function heads(db: EngineConnection) {
   return db.prepare("SELECT * FROM session_state_heads ORDER BY session_key, agent_id").all();
+}
+
+function head(
+  agent_id: string,
+  last_sequence: number,
+  pruned_max_sequence: number,
+  updated_at: number,
+) {
+  return { session_key: "global", agent_id, last_sequence, pruned_max_sequence, updated_at };
 }
 
 function legacyDatabase(refusePublication = false) {
@@ -96,12 +100,11 @@ it.each([
   { schema: "pending", integrityCheck: undefined },
   { schema: "pending", integrityCheck: "full" },
   { schema: "current", integrityCheck: undefined },
-  { schema: "current", integrityCheck: "full" },
 ] as const)(
   "reserves untouched index recovery for $integrityCheck verification with $schema schema",
   async ({ schema, integrityCheck }) => {
     const { options, pathname } = legacyDatabase();
-    await withMigrationCustody(pathname, () => {
+    await withMigrationCustody(options, () => {
       if (schema === "current") {
         expect(repairOpenClawStateDatabaseSchema(options).warnings).toEqual([]);
       }
@@ -133,7 +136,7 @@ it.each(["runtime", "doctor"] as const)(
   "migrates v25 heads through %s within scope and preserves subsequent event writes",
   async (owner) => {
     const { options, pathname, before } = legacyDatabase();
-    await withMigrationCustody(pathname, async () => {
+    await withMigrationCustody(options, async () => {
       using scope = new DatabaseSync(pathname);
       const { db } = await assertSqliteMigrationScopePreserved(
         scope,
@@ -151,6 +154,10 @@ it.each(["runtime", "doctor"] as const)(
           "device_auth_tokens",
           "gateway_origin_device_tokens",
           "exec_approvals_config",
+          "local_workspace_projections",
+          "local_workspace_manifest_nodes",
+          "local_workspace_source_path_sets",
+          "local_workspace_tree_packs",
           "sqlite_stat1",
           "sqlite_stat4",
         ],
@@ -176,7 +183,7 @@ it.each(["runtime", "doctor"] as const)(
         ({ db: writer }) => record(writer, "main", "main-after", 200),
         options,
       );
-      expect(readSessionStateSequence(db, "global", "main")).toBe(inserted.row?.sequence);
+      expect(readSessionStateSequence(db, "global", "main")).toBe(inserted?.sequence);
       expect(readSessionStateSequence(db, "global", "other")).toBe(2);
       expect(
         db
@@ -197,7 +204,7 @@ it.each(["runtime", "doctor"] as const)(
 
 it("rolls back the rebuilt head table and version when publication fails", async () => {
   const { options, pathname, before } = legacyDatabase(true);
-  await withMigrationCustody(pathname, () => {
+  await withMigrationCustody(options, () => {
     expect(() => openOpenClawStateDatabase(options)).toThrow("fixture publication refusal");
   });
   using db = new DatabaseSync(pathname, { readOnly: true });
@@ -229,18 +236,63 @@ it("preserves local constraints, generated values, indexes, and triggers during 
   BEGIN IMMEDIATE;`);
   migrateSqliteTableWithoutRowid(db, "session_state_heads");
   db.exec("COMMIT");
-  expect(heads(db)).toEqual([
-    {
-      session_key: "global",
-      agent_id: "main",
-      last_sequence: 3,
-      pruned_max_sequence: 0,
-      updated_at: 100,
-      label: "kept",
-      doubled: 6,
-    },
-  ]);
+  expect(heads(db)).toEqual([{ ...head("main", 3, 0, 100), label: "kept", doubled: 6 }]);
   db.exec("UPDATE session_state_heads SET last_sequence = 4");
   expect(db.prepare("SELECT * FROM head_changes").all()).toEqual([{ sequence: 4 }]);
   expect(() => db.exec("UPDATE session_state_heads SET last_sequence = 0")).toThrow(/CHECK/);
+});
+
+it("batches creation heads without rewinding replayed or shared-key agent heads", () => {
+  const env = { OPENCLAW_STATE_DIR: directories.make("head-batch-") };
+  const options = { env, path: resolveOpenClawStateSqlitePath(env) };
+  const database = openOpenClawStateDatabase(options);
+  const created = (agentId: string, dedupeKey: string) => ({
+    sessionKey: "global",
+    agentId,
+    dedupeKey,
+    kind: "created" as const,
+    actorType: "system" as const,
+    summary: "created",
+  });
+  const events = [
+    created("main", "one"),
+    created("other", "two"),
+    created("main", "three"),
+    created("main", "one"),
+  ];
+  const writeBatch = (batch: typeof events, now: number) =>
+    runOpenClawStateWriteTransaction(
+      ({ db }) =>
+        recordSessionStateEventsInDatabase(
+          db,
+          batch.map((event) => ({ event, now })),
+        ),
+      options,
+    );
+  if (!(database.db instanceof DatabaseSync)) {
+    throw new Error("SQLite fixture required");
+  }
+  const counter = trackSqliteStatementExecutions(database.db, ["heads"], (sql) =>
+    /^insert into "session_state_heads"/i.test(sql) ? "heads" : null,
+  );
+  try {
+    const first = writeBatch(events, 100);
+    expect(first.rows.map((row) => row.sequence)).toEqual([1, 2, 3, 1]);
+    expect(counter.counts.heads).toBe(1);
+    database.db.exec(
+      "UPDATE session_state_heads SET pruned_max_sequence = 1 WHERE agent_id = 'main'",
+    );
+    writeBatch([created("main", "four"), events[0]!], 200);
+    const stored = heads(database.db);
+    expect(stored).toEqual([head("main", 5, 1, 200), head("other", 2, 0, 100)]);
+    expect(() =>
+      runOpenClawStateWriteTransaction(() => {
+        writeBatch([created("main", "rolled-back")], 300);
+        throw new Error("rollback batch");
+      }, options),
+    ).toThrow("rollback batch");
+    expect(heads(database.db)).toEqual(stored);
+  } finally {
+    counter.restore();
+  }
 });

@@ -15,61 +15,6 @@ import {
   resolveMatrixTargetIdentity,
 } from "./matrix/target-ids.js";
 
-function resolveEffectiveMatrixAccountId(
-  params: Pick<ChannelOutboundSessionRouteParams, "cfg" | "accountId">,
-): string {
-  return normalizeAccountId(params.accountId ?? resolveDefaultMatrixAccountId(params.cfg));
-}
-
-function resolveMatrixDmSessionScope(params: {
-  cfg: ChannelOutboundSessionRouteParams["cfg"];
-  accountId: string;
-}): "per-user" | "per-room" {
-  return (
-    resolveMatrixAccountConfig({
-      cfg: params.cfg,
-      accountId: params.accountId,
-    }).dm?.sessionScope ?? "per-user"
-  );
-}
-
-async function resolveMatrixCurrentDmRoomId(params: {
-  cfg: ChannelOutboundSessionRouteParams["cfg"];
-  agentId: string;
-  accountId: string;
-  currentSessionKey?: string;
-  targetUserId: string;
-}): Promise<string | undefined> {
-  const sessionKey =
-    parseThreadSessionSuffix(params.currentSessionKey).baseSessionKey ??
-    params.currentSessionKey?.trim();
-  if (!sessionKey) {
-    return undefined;
-  }
-  try {
-    const storePath = resolveStorePath(params.cfg.session?.store, {
-      agentId: params.agentId,
-    });
-    const existing = await getSessionEntryAsync({
-      storePath,
-      sessionKey,
-    });
-    const currentSession = resolveMatrixStoredSessionMeta(existing);
-    if (!currentSession) {
-      return undefined;
-    }
-    if (currentSession.accountId && currentSession.accountId !== params.accountId) {
-      return undefined;
-    }
-    if (!currentSession.directUserId || currentSession.directUserId !== params.targetUserId) {
-      return undefined;
-    }
-    return currentSession.roomId;
-  } catch {
-    return undefined;
-  }
-}
-
 export async function resolveMatrixOutboundSessionRoute(params: ChannelOutboundSessionRouteParams) {
   const target =
     resolveMatrixTargetIdentity(params.resolvedTarget?.to ?? params.target) ??
@@ -77,20 +22,45 @@ export async function resolveMatrixOutboundSessionRoute(params: ChannelOutboundS
   if (!target) {
     return null;
   }
-  const effectiveAccountId = resolveEffectiveMatrixAccountId(params);
-  const dmSessionScope = resolveMatrixDmSessionScope({
-    cfg: params.cfg,
-    accountId: effectiveAccountId,
-  });
+  const effectiveAccountId = normalizeAccountId(
+    params.accountId ?? resolveDefaultMatrixAccountId(params.cfg),
+  );
+  const dmSessionScope =
+    resolveMatrixAccountConfig({ cfg: params.cfg, accountId: effectiveAccountId }).dm
+      ?.sessionScope ?? "per-user";
+  async function resolveMatrixCurrentDmRoomId(targetUserId: string): Promise<string | undefined> {
+    const sessionKey =
+      parseThreadSessionSuffix(params.currentSessionKey).baseSessionKey ??
+      params.currentSessionKey?.trim();
+    if (!sessionKey) {
+      return undefined;
+    }
+    try {
+      const storePath = resolveStorePath(params.cfg.session?.store, {
+        agentId: params.agentId,
+      });
+      const existing = await getSessionEntryAsync({
+        storePath,
+        sessionKey,
+      });
+      const currentSession = resolveMatrixStoredSessionMeta(existing);
+      if (!currentSession) {
+        return undefined;
+      }
+      if (currentSession.accountId && currentSession.accountId !== effectiveAccountId) {
+        return undefined;
+      }
+      if (!currentSession.directUserId || currentSession.directUserId !== targetUserId) {
+        return undefined;
+      }
+      return currentSession.roomId;
+    } catch {
+      return undefined;
+    }
+  }
   const roomScopedDmId =
     target.kind === "user" && dmSessionScope === "per-room"
-      ? await resolveMatrixCurrentDmRoomId({
-          cfg: params.cfg,
-          agentId: params.agentId,
-          accountId: effectiveAccountId,
-          currentSessionKey: params.currentSessionKey,
-          targetUserId: target.id,
-        })
+      ? await resolveMatrixCurrentDmRoomId(target.id)
       : undefined;
   const peer =
     roomScopedDmId !== undefined

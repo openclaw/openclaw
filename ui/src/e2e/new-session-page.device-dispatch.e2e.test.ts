@@ -194,9 +194,12 @@ suite.define(() => {
             placement: { state: "active", generation: 1 },
           },
           "sessions.describe": {
-            session: { placement: { state: "requested", generation: 1 } },
+            session: {
+              sessionId: `session:${sessionKey}`,
+              placement: { state: "requested", generation: 1 },
+            },
           },
-          "sessions.send": { runId: "run-device-dispatch", status: "started" },
+          "chat.send": { runId: "run-device-dispatch", status: "started" },
         },
       });
       await page.locator("#new-session-where-trigger").click();
@@ -219,9 +222,11 @@ suite.define(() => {
         agentId: "main",
         ...target,
       });
-      const send = await gateway.waitForRequest("sessions.send");
+      const send = await gateway.waitForRequest("chat.send");
       expect(send.params).toMatchObject({
-        key: sessionKey,
+        sessionKey,
+        sessionId: `session:${sessionKey}`,
+        expectedLeafEntryId: null,
         message: "run on the paired device",
       });
       const requests = await gateway.getRequests();
@@ -370,8 +375,11 @@ suite.define(() => {
             "worktrees.branches": gitRepository,
             "sessions.create": { key: sessionKey },
             "sessions.list": createdSessionListResult(sessionKey),
-            "sessions.dispatch": { placement: { state: "active", generation: 1 } },
-            "sessions.send": { runId: "run-restored-remote", status: "started" },
+            "sessions.dispatch": {
+              sessionId: `session:${sessionKey}`,
+              placement: { state: "active", generation: 1 },
+            },
+            "chat.send": { runId: "run-restored-remote", status: "started" },
           },
         });
         await pollAttribute(page.locator("#new-session-checkout-trigger"), "data-worktree").toBe(
@@ -502,7 +510,7 @@ suite.define(() => {
       expect(create.params).toMatchObject({ agentId: "research", message });
       expect(create.params).not.toHaveProperty("worktree");
       expect(await gateway.getRequests("sessions.dispatch")).toHaveLength(0);
-      expect(await gateway.getRequests("sessions.send")).toHaveLength(0);
+      expect(await gateway.getRequests("chat.send")).toHaveLength(0);
     });
   });
 
@@ -516,8 +524,7 @@ suite.define(() => {
           operatorScopes: undefined,
           workspaceGit: false,
           methodResponses: {
-            "sessions.dispatch": { placement: { state: "active", generation: 1 } },
-            "sessions.send": { runId: "run-device-recovery", status: "started" },
+            "chat.send": { runId: "run-device-recovery", status: "started" },
           },
         });
         await page.locator("#new-session-where-trigger").click();
@@ -553,14 +560,23 @@ suite.define(() => {
         await expect(gateway.waitForRequest("sessions.dispatch")).resolves.toMatchObject({
           params: { key: sessionKey, agentId: "main", ...target },
         });
-        expect(await gateway.getRequests("sessions.send")).toHaveLength(0);
-        await gateway.resolveDeferred("sessions.dispatch");
-        await expect(gateway.waitForRequest("sessions.send")).resolves.toMatchObject({
-          params: { key: sessionKey, agentId: "main", message },
+        expect(await gateway.getRequests("chat.send")).toHaveLength(0);
+        await gateway.resolveDeferred("sessions.dispatch", {
+          sessionId: `session:${sessionKey}`,
+          placement: { state: "active", generation: 1 },
+        });
+        await expect(gateway.waitForRequest("chat.send")).resolves.toMatchObject({
+          params: {
+            sessionKey,
+            sessionId: `session:${sessionKey}`,
+            expectedLeafEntryId: null,
+            agentId: "main",
+            message,
+          },
         });
         expect(await gateway.getRequests("sessions.create")).toHaveLength(1);
         expect(await gateway.getRequests("sessions.dispatch")).toHaveLength(1);
-        expect(await gateway.getRequests("sessions.send")).toHaveLength(1);
+        expect(await gateway.getRequests("chat.send")).toHaveLength(1);
         await page.waitForURL((url) => url.pathname === controlUiSessionPath(sessionKey), {
           timeout: 30_000,
         });

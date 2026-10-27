@@ -12,7 +12,7 @@ import * as aggregation from "../infra/session-cost-usage-aggregation.js";
 import * as cacheRuntime from "../infra/session-cost-usage-cache-runtime.js";
 import { sessionCostUsageNotifications } from "../infra/session-cost-usage-events.js";
 import { closeAgentWorkAdmissions } from "../sessions/session-controller.lifecycle.js";
-import { sessionChanges } from "../sessions/session-row-changes.js";
+import { sessionChanges, type SessionRowChange } from "../sessions/session-row-changes.js";
 import { AsyncWorkScope } from "../shared/async-work-scope.js";
 import type { SessionCostUsagePublication } from "../shared/usage-types.js";
 import {
@@ -48,12 +48,7 @@ function appendUsage(
   const usage =
     tokens === undefined
       ? undefined
-      : {
-          input: tokens,
-          output: 0,
-          totalTokens: tokens,
-          cost: { total: tokens / 100 },
-        };
+      : { input: tokens, output: 0, totalTokens: tokens, cost: { total: tokens / 100 } };
   return persistSessionTranscriptTurn(target, {
     config,
     messages: [
@@ -74,6 +69,21 @@ const sessionFresh = (totalTokens: number) => ({
 });
 const timestamp = Date.parse("2026-09-18T12:00:00Z");
 const mainConfig = () => ({ agents: { entries: { main: {} } } });
+const topologyAgents = () => ({
+  ownership: "explicit" as const,
+  entries: { main: {}, alpha: {}, beta: {} },
+});
+
+function refuseStartup(agentId: string) {
+  const refusal = createAgentDatabaseInspectionRefusal({
+    agentId,
+    paths: [resolveOpenClawAgentSqlitePath({ agentId })],
+    pending: true,
+    reason: "Startup preparation is pending",
+  });
+  recordAgentDatabaseAdmissions([refusal], { source: "startup" });
+  return refusal;
+}
 
 function observeProjection(config: Parameters<typeof costWindow>[0]) {
   const publications: SessionCostUsagePublication[] = [];
@@ -117,6 +127,7 @@ it("keeps usage backfill and all-agent totals available while another agent's de
   signal,
 }) => {
   await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+    const wait = <T>(work: PromiseLike<T>) => withinTest(work, signal);
     const config = { agents: { entries: { main: {}, retiring: {} } } };
     setRuntimeConfigSnapshot(config);
     for (const [agentId, tokens] of [
@@ -147,7 +158,7 @@ it("keeps usage backfill and all-agent totals available while another agent's de
       endMs: timestamp + 2,
     });
     const readSettled = Promise.allSettled([reading]);
-    await withinTest(capturedRoster.promise, signal);
+    await wait(capturedRoster.promise);
     vi.useFakeTimers();
     const queued = new AsyncWorkScope();
     queued.run(() =>
@@ -170,31 +181,45 @@ it("keeps usage backfill and all-agent totals available while another agent's de
       deleteFiles: false,
       phase: "draining",
     });
-    const refresh = vi.spyOn(aggregation, "refreshCostUsageCacheForAgent");
+    const mainRefreshStarted = createDeferred();
+    const refreshUsage = aggregation.refreshCostUsageCacheForAgent;
+    const refresh = vi
+      .spyOn(aggregation, "refreshCostUsageCacheForAgent")
+      .mockImplementation((params) => {
+        if (params.agentId === "main") {
+          mainRefreshStarted.resolve();
+        }
+        return refreshUsage(params);
+      });
+    const releaseBackfill = createDeferred();
+    roster.mockImplementationOnce(async (cfg) => {
+      await releaseBackfill.promise;
+      return readRoster(cfg);
+    });
     const { publications, warn, lifetime } = observeProjection(config);
+    const startupRoster = roster.mock.results.at(-1)!.value;
     try {
       releaseRoster.resolve();
       expect.soft(await cost()).toMatchObject(fresh(10, 0.1));
-      await withinTest(roster.mock.results.at(-1)!.value, signal);
+      releaseBackfill.resolve();
+      await wait(startupRoster);
       await vi.advanceTimersByTimeAsync(0);
-      const refreshed = await withinTest(
-        Promise.allSettled(refresh.mock.results.map((result) => result.value)),
-        signal,
+      await wait(mainRefreshStarted.promise);
+      const refreshed = await wait(
+        Promise.allSettled(refresh.mock.results.map(({ value }) => value)),
       );
-      await withinTest(
-        queued.runWhenIdle(() => {}),
-        signal,
-      );
+      await wait(queued.runWhenIdle(() => {}));
       await lifetime.stop();
       await queued.drain();
-      expect(refreshed).not.toHaveLength(0);
+      expect(refreshed).toContainEqual({ status: "fulfilled", value: "refreshed" });
       expect.soft(refreshed.filter((result) => result.status === "rejected")).toEqual([]);
       expect.soft(publications.filter((event) => event.usageRefreshFailed)).toEqual([]);
       expect(warn).not.toHaveBeenCalled();
       expect(await cost()).toMatchObject(fresh(10, 0.1));
-      expect(await withinTest(reading, signal)).toMatchObject({ totals: { totalTokens: 10 } });
+      expect(await wait(reading)).toMatchObject({ totals: { totalTokens: 10 } });
     } finally {
       releaseRoster.resolve();
+      releaseBackfill.resolve();
       await lifetime.stop();
       queued.beginClose();
       await queued.drain();
@@ -299,6 +324,7 @@ it("projects committed usage after startup preparation without borrowing its exp
   onTestFinished,
 }) => {
   const run = withOpenClawTestState({ scenario: "minimal" }, async () => {
+    const wait = <T>(work: PromiseLike<T>) => withinTest(work, signal);
     const config = mainConfig();
     const target = seedUsage("usage-admission");
     const append = (tokens: number) =>
@@ -343,16 +369,10 @@ it("projects committed usage after startup preparation without borrowing its exp
     );
     let pendingRefreshes = -1;
     try {
-      await withinTest(firstStarted.promise, signal);
-      expect(await withinTest(outcomes[0]!, signal)).toEqual({ ok: true, context: "owner" });
+      await wait(firstStarted.promise);
+      expect(await wait(outcomes[0]!)).toEqual({ ok: true, context: "owner" });
       const initialRequests = requested.mock.calls.length;
-      const refusal = createAgentDatabaseInspectionRefusal({
-        agentId: target.agentId,
-        paths: [resolveOpenClawAgentSqlitePath({ agentId: target.agentId })],
-        pending: true,
-        reason: "Startup preparation is pending",
-      });
-      recordAgentDatabaseAdmissions([refusal], { source: "startup" });
+      const refusal = refuseStartup(target.agentId);
       holdRefresh = true;
       await preparePendingAgentDatabase(refusal, { assertCurrent() {} }, () =>
         publisher.run("preparation", async () => {
@@ -360,15 +380,15 @@ it("projects committed usage after startup preparation without borrowing its exp
           sessionChanges.emit({ all: true, scope: { agentId: target.agentId, topology: true } });
           await roster.mock.results.at(-1)?.value;
           if (requested.mock.calls.length > initialRequests) {
-            await withinTest(nextStarted.promise, signal);
+            await wait(nextStarted.promise);
           }
           pendingRefreshes = outcomes.length - 1;
         }),
       );
       await roster.mock.results.at(-1)?.value;
-      await withinTest(nextStarted.promise, signal);
+      await wait(nextStarted.promise);
       releaseRefresh.resolve();
-      const settled = await withinTest(Promise.all(outcomes), signal);
+      const settled = await wait(Promise.all(outcomes));
       await lifetime.stop();
       const summary = await cacheRuntime.loadCostUsageSummaryFromCache({
         ...costWindow(config),
@@ -391,4 +411,72 @@ it("projects committed usage after startup preparation without borrowing its exp
   });
   onTestFinished(() => run);
   return run;
+});
+
+it("routes startup, shared selectors, invalidations, and admitted topology owners", async ({
+  signal,
+}) => {
+  await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+    const agents = topologyAgents();
+    let config: Parameters<typeof costWindow>[0] = { agents };
+    setRuntimeConfigSnapshot(config);
+    await state.writeText("agents/unowned/marker", "Synthetic unowned agent");
+    const requested = vi
+      .spyOn(cacheRuntime, "requestCostUsageCacheRefresh")
+      .mockImplementation(() => {});
+    const roster = vi.spyOn(agentList, "listGatewayAgentsBasic");
+    const waitForRoster = () => withinTest(roster.mock.results.at(-1)!.value, signal);
+    const requestedAgents = () => requested.mock.calls.map(([request]) => request.agentId);
+    const lifetime = startSessionCostUsageProjectionLifetime({
+      getConfig: () => config,
+      warn: vi.fn(),
+    });
+    const topology = { agentId: "alpha", topology: true } as const;
+    const cases: Array<
+      [
+        name: string,
+        scope: Extract<SessionRowChange, { all: true }>["scope"],
+        store?: string,
+        factsInvalidated?: true,
+      ]
+    > = [
+      ["unqualified agent", { agentId: "alpha" }],
+      ["unknown object scope", {}],
+      ["topology without an owner", { topology: true }],
+      ["explicit store path", { ...topology, storePath: state.path("shared.sqlite") }],
+      ["config", "config"],
+      ["stores", "stores"],
+      ["forced topology invalidation", topology, undefined, true],
+      ["shared store selector", topology, state.path("shared.sqlite")],
+      ["custom store template", topology, state.path("{agentId}", "sessions.json")],
+      ["whitespace store selector", topology, " "],
+    ];
+    try {
+      await waitForRoster();
+      expect(requestedAgents()).toEqual(["main", "alpha", "beta"]);
+      for (const [name, scope, store, factsInvalidated] of cases) {
+        config = { agents, ...(store === undefined ? {} : { session: { store } }) };
+        requested.mockClear();
+        sessionChanges.emit({ all: true, scope, factsInvalidated });
+        await waitForRoster();
+        expect(requestedAgents(), name).toEqual(["main", "alpha", "beta"]);
+      }
+      config = { agents };
+      requested.mockClear();
+      for (const agentId of ["alpha", "beta", "alpha"]) {
+        sessionChanges.emit({ all: true, scope: { agentId, topology: true } });
+        await waitForRoster();
+      }
+      expect(requestedAgents()).toEqual(["alpha", "beta", "alpha"]);
+      requested.mockClear();
+      refuseStartup("alpha");
+      for (const agentId of ["unowned", "alpha"]) {
+        sessionChanges.emit({ all: true, scope: { agentId, topology: true } });
+        await waitForRoster();
+      }
+      expect(requested).not.toHaveBeenCalled();
+    } finally {
+      await lifetime.stop();
+    }
+  });
 });

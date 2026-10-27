@@ -12,8 +12,15 @@ import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../../utils/message-
 import { drainPendingDeliveriesCore } from "./delivery-queue-recovery.js";
 import type { OutboundMessageGatewayOptionsInput } from "./message-gateway-options.js";
 
-function registerPlugin(plugin: ChannelPlugin) {
-  setActivePluginRegistry(createTestRegistry([{ pluginId: plugin.id, source: "test", plugin }]));
+function registerPlugin(
+  id: string,
+  outbound: ChannelOutboundAdapter,
+  aliases: string[] = [],
+  options: Omit<Parameters<typeof createChannelTestPluginBase>[0], "id"> = {},
+) {
+  const base = createChannelTestPluginBase({ id, ...options });
+  const plugin: ChannelPlugin = { ...base, meta: { ...base.meta, aliases }, outbound };
+  setActivePluginRegistry(createTestRegistry([{ pluginId: id, source: "test", plugin }]));
 }
 
 const callGatewayMock = vi.fn();
@@ -88,11 +95,7 @@ it("keeps ephemeral-authority sends out of recovery after revocation", async () 
         await ctx.onPlatformSendDispatch?.();
         return { channel: "threadchat", messageId: "live-only-1" };
       });
-      const plugin: ChannelPlugin = {
-        ...createChannelTestPluginBase({ id: "threadchat" }),
-        outbound: { deliveryMode: "direct", sendText },
-      };
-      registerPlugin(plugin);
+      registerPlugin("threadchat", { deliveryMode: "direct", sendText });
       const onDeliveryIntent = vi.fn(() => {
         throw new Error("simulated crash after queue persistence");
       });
@@ -138,17 +141,9 @@ it("threads resolved cfg through alias + target normalization in outbound dispat
     sendCfg?: unknown;
     to?: string;
   } = {};
-  const localChatAliasPlugin: ChannelPlugin = {
-    ...createChannelTestPluginBase({
-      id: "localchat",
-      label: "LocalChat",
-      config: { listAccountIds: () => [] },
-    }),
-    meta: {
-      ...createChannelTestPluginBase({ id: "localchat", label: "LocalChat" }).meta,
-      aliases: ["localmsg"],
-    },
-    outbound: {
+  registerPlugin(
+    "localchat",
+    {
       deliveryMode: "direct",
       resolveTarget: ({ to, cfg }) => {
         seen.resolveCfg = cfg;
@@ -161,9 +156,9 @@ it("threads resolved cfg through alias + target normalization in outbound dispat
         return { channel: "localchat", messageId: "local-resolved" };
       },
     },
-  };
-
-  registerPlugin(localChatAliasPlugin);
+    ["localmsg"],
+    { label: "LocalChat", config: { listAccountIds: () => [] } },
+  );
 
   const result = await sendMessage({
     cfg: resolvedCfg,
@@ -180,18 +175,26 @@ it("threads resolved cfg through alias + target normalization in outbound dispat
 
 describe("sendMessage replyToId threading", () => {
   const setupThreadChatCapture = () => {
-    const capturedCtx: Record<string, unknown>[] = [];
-    const plugin = createThreadChatLikePlugin({
-      onSendText: (ctx) => capturedCtx.push(ctx),
-    });
-    registerPlugin(plugin);
+    const capturedCtx: Parameters<NonNullable<ChannelOutboundAdapter["sendText"]>>[0][] = [];
+    registerPlugin(
+      "threadchat",
+      {
+        deliveryMode: "direct",
+        sendText: async (ctx) => {
+          capturedCtx.push(ctx);
+          return { channel: "threadchat", messageId: "m1" };
+        },
+      },
+      [],
+      { label: "ThreadChat", capabilities: { chatTypes: ["direct", "channel"] } },
+    );
     return capturedCtx;
   };
 
   it.each([
     ["replyToId", "post123", "thread reply"],
     ["threadId", "topic456", "topic reply"],
-  ])("passes %s through to the outbound adapter", async (field, expected, content) => {
+  ] as const)("passes %s through to the outbound adapter", async (field, expected, content) => {
     const capturedCtx = setupThreadChatCapture();
     await sendThreadMessage({ content, [field]: expected });
 
@@ -201,16 +204,15 @@ describe("sendMessage replyToId threading", () => {
 });
 
 function setDemoPollRegistry(outboundOptions: Parameters<typeof createDemoAliasOutbound>[0] = {}) {
-  const base = createChannelTestPluginBase({
-    id: "demo-alias-channel",
-    label: "Demo Alias Channel",
-    config: { listAccountIds: () => [], resolveAccount: () => ({}) },
-  });
-  registerPlugin({
-    ...base,
-    meta: { ...base.meta, aliases: ["workspace-chat"] },
-    outbound: createDemoAliasOutbound(outboundOptions),
-  });
+  registerPlugin(
+    "demo-alias-channel",
+    createDemoAliasOutbound(outboundOptions),
+    ["workspace-chat"],
+    {
+      label: "Demo Alias Channel",
+      config: { listAccountIds: () => [], resolveAccount: () => ({}) },
+    },
+  );
 }
 
 describe("sendPoll channel normalization", () => {
@@ -327,9 +329,9 @@ describe("sendPoll channel normalization", () => {
 });
 
 const setThreadChatGatewayRegistry = () =>
-  registerPlugin({
-    ...createThreadChatLikePlugin({ onSendText: () => {} }),
-    outbound: { deliveryMode: "gateway" },
+  registerPlugin("threadchat", { deliveryMode: "gateway" }, [], {
+    label: "ThreadChat",
+    capabilities: { chatTypes: ["direct", "channel"] },
   });
 
 describe("gateway url override hardening", () => {
@@ -510,21 +512,4 @@ const createDemoAliasOutbound = (
   pollMaxOptions: 12,
   ...(opts.supportsAnonymousPolls ? { supportsAnonymousPolls: true } : {}),
   sendPoll: opts.sendPoll ?? (async () => ({ messageId: "p1" })),
-});
-
-const createThreadChatLikePlugin = (opts: {
-  onSendText: (ctx: Record<string, unknown>) => void;
-}): ChannelPlugin => ({
-  ...createChannelTestPluginBase({
-    id: "threadchat",
-    label: "ThreadChat",
-    capabilities: { chatTypes: ["direct", "channel"] },
-  }),
-  outbound: {
-    deliveryMode: "direct",
-    sendText: async (ctx) => {
-      opts.onSendText(ctx as unknown as Record<string, unknown>);
-      return { channel: "threadchat", messageId: "m1" };
-    },
-  },
 });

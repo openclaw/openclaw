@@ -133,4 +133,6 @@ export type ProviderNativeWebSearchPolicyContext = {
   modelId?: string;
   api?: string;
   baseUrl?: string;
+  /** Secret-free selected-route facts; omission cannot establish eligibility. */
+  modelParams?: Record<string, unknown>;
 };

@@ -10,6 +10,7 @@ public enum GatewayServerCapability: String, CaseIterable, Sendable {
     case progressCardAgentScope = "progress-card-agent-scope-v1"
     case systemAgentSetupModelRef = "openclaw-setup-model-ref"
     case nodePermissionErrors = "node-permission-errors"
+    case talkSessionCloseDisposition = "talk-session-close-disposition"
 }
 
 extension HelloOk {

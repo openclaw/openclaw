@@ -9,7 +9,7 @@ export type GenerationWorkerInput = (
       operation: "capture";
       captureId: number;
       rootDir: string;
-      entryFile?: string;
+      entryFile?: string | readonly string[];
       storage: PluginSourceCaptureStorage;
       installRoots: PluginInstallRoots;
       readOnly: boolean;
@@ -20,9 +20,15 @@ export type GenerationWorkerInput = (
         "owners" | "managedRoots" | "receipts" | "files" | "namespaces"
       >;
       callbackPort?: MessagePort;
+      progressSignal?: Int32Array<SharedArrayBuffer>;
     }
-  | { operation: "call"; handle: number; args: GenerationWireValue[]; asynchronous: boolean }
-  | { operation: "close" }
+  | {
+      operation: "call";
+      captureId: number;
+      handle: number;
+      args: GenerationWireValue[];
+      asynchronous: boolean;
+    }
 ) & { nativeLoads?: string[] };
 export type GenerationWorkerReply = (
   | { value: GenerationWireValue; resources: number; admission?: GenerationWireValue }

@@ -9,6 +9,7 @@ import { makeAssistantMessageFixture } from "../../test-helpers/assistant-messag
 import { beginPromptCacheObservation } from "../prompt-cache-observability.js";
 import {
   createActiveSession,
+  createBoundaryInputDefaults,
   createSessionManager,
 } from "./attempt-session-boundary.test-support.js";
 import { prepareEmbeddedAttemptSessionBoundary } from "./attempt-session-prepare.js";
@@ -31,10 +32,7 @@ describe("prepareEmbeddedAttemptSessionBoundary", () => {
       appendOnlyRuntimeContext: false,
       attempt: { sessionId: "session-boundary", prompt: "next question" },
       getUserTranscriptContexts: () => undefined,
-      isRawModelRun: false,
-      preparedUserTurnMessage: undefined,
-      sessionManager: createSessionManager(),
-      setActiveSessionSystemPrompt: vi.fn(),
+      ...createBoundaryInputDefaults(),
     });
     const converted = await activeSession.agent.convertToLlm(messages);
     expect(converted).toHaveLength(4);
@@ -70,10 +68,7 @@ describe("prepareEmbeddedAttemptSessionBoundary", () => {
             prompt: "first question",
           },
           getUserTranscriptContexts: () => undefined,
-          isRawModelRun: false,
-          preparedUserTurnMessage: undefined,
-          sessionManager: createSessionManager(),
-          setActiveSessionSystemPrompt: vi.fn(),
+          ...createBoundaryInputDefaults(),
         });
         const user = {
           role: "user" as const,
@@ -242,10 +237,7 @@ describe("prepareEmbeddedAttemptSessionBoundary", () => {
         prompt: "Current ask",
       },
       getUserTranscriptContexts: () => undefined,
-      isRawModelRun: false,
-      preparedUserTurnMessage: undefined,
-      sessionManager: createSessionManager(),
-      setActiveSessionSystemPrompt: vi.fn(),
+      ...createBoundaryInputDefaults(),
     });
     boundary.setCurrentUserTimestampOverride({
       timestamp: preparedTimestamp,
@@ -300,10 +292,7 @@ describe("prepareEmbeddedAttemptSessionBoundary", () => {
           } as AgentMessage,
         },
       ],
-      isRawModelRun: false,
-      preparedUserTurnMessage: undefined,
-      sessionManager: createSessionManager(),
-      setActiveSessionSystemPrompt: vi.fn(),
+      ...createBoundaryInputDefaults(),
     });
 
     const converted = await activeSession.agent.convertToLlm([initialRuntime, queuedRuntime]);
@@ -347,10 +336,7 @@ describe("prepareEmbeddedAttemptSessionBoundary", () => {
           } as AgentMessage,
         },
       ],
-      isRawModelRun: false,
-      preparedUserTurnMessage: undefined,
-      sessionManager: createSessionManager(),
-      setActiveSessionSystemPrompt: vi.fn(),
+      ...createBoundaryInputDefaults(),
     });
 
     const converted = await activeSession.agent.convertToLlm([firstRuntime, secondRuntime]);

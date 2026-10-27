@@ -35,7 +35,7 @@ export function renderPluginRowMessage(
         `plugins-row-message--${message.kind}`,
         "oc-banner",
         {
-          "oc-banner-error": message.kind === "error",
+          "callout danger oc-banner-error": message.kind === "error",
           "oc-banner-warning": message.kind === "warning",
         },
       ]}

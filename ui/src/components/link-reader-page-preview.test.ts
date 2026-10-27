@@ -57,7 +57,7 @@ function fixture(shadow = false) {
       label: "Forge",
       linkReader: {
         hosts: ["github.com"],
-        pathPattern: "^/[^/]+/[^/]+/(pull|issues)/[0-9]+$",
+        pathPattern: "^/[^/]+/[^/]+/(?:pull/[0-9]+|issues/[0-9]+|commit/[a-f0-9]{7,40})$",
         detailMethod: "forge.detail",
         previewMethod: "forge.preview",
       },
@@ -82,6 +82,14 @@ function fixture(shadow = false) {
 function card() {
   return document.querySelector<HTMLElement>(".link-hovercard");
 }
+function expectNoPreview(request: ReturnType<typeof fixture>["request"]) {
+  expect(request).not.toHaveBeenCalled();
+  expect(card()).toBeNull();
+}
+function focus(anchor: HTMLAnchorElement) {
+  anchor.focus();
+  anchor.dispatchEvent(new FocusEvent("focusin", { bubbles: true, composed: true }));
+}
 async function hover(anchor: HTMLElement) {
   await Promise.resolve(); // Allow the bridge to mount before dispatching intent.
   anchor.dispatchEvent(new MouseEvent("pointerover", { bubbles: true, composed: true }));
@@ -92,27 +100,63 @@ afterEach(async () => {
   document.body.replaceChildren();
   await Promise.resolve();
   vi.useRealTimers();
+  vi.unstubAllGlobals();
 });
 
 describe("generic link hovercards", () => {
-  it("keeps a rendered GitHub sign-in link ordinary while genuine issue and PR links preview", async () => {
+  it("starts page observation only with intent and retires a pending shadow-root link", async () => {
+    const NativeMutationObserver = MutationObserver;
+    const observers: MutationObserver[] = [];
+    const observations: {
+      observer: MutationObserver;
+      target: Node;
+      options?: MutationObserverInit;
+    }[] = [];
+    vi.stubGlobal(
+      "MutationObserver",
+      class extends NativeMutationObserver {
+        constructor(callback: MutationCallback) {
+          super(callback);
+          observers.push(this);
+        }
+        override observe(target: Node, options?: MutationObserverInit) {
+          observations.push({ observer: this, target, options });
+          super.observe(target, options);
+        }
+      },
+    );
+    const view = fixture(true);
+    fixture();
+    expect(observers).toHaveLength(1);
+    view.anchor.dispatchEvent(new MouseEvent("pointerover", { bubbles: true, composed: true }));
+    const pageObserver = observations.find(({ options }) =>
+      options?.attributeFilter?.includes("data-file-path"),
+    )?.observer;
+    expect(pageObserver).toBeDefined();
+    expect(observations).toContainEqual({
+      observer: pageObserver,
+      target: view.anchor.getRootNode(),
+      options: { childList: true, subtree: true, attributes: true },
+    });
+    view.anchor.setAttribute("data-file-path", "/guide");
+    await vi.advanceTimersByTimeAsync(250);
+    expectNoPreview(view.request);
+  });
+  it("keeps a rendered GitHub sign-in link ordinary while genuine issue, PR, and commit links preview", async () => {
     const view = fixture();
     const login = "https://github.com/login?return_to=%2Facme%2Fproject%2Fpull%2F42";
     view.pane.innerHTML = toSanitizedMarkdownHtml(
-      `[Sign in](${login}) · [Pull request](https://github.com/acme/project/pull/42) · [Issue](https://github.com/acme/project/issues/43)`,
+      `[Sign in](${login}) · [Pull request](https://github.com/acme/project/pull/42) · [Issue](https://github.com/acme/project/issues/43) · [Commit](https://github.com/acme/project/commit/abcdef0123456789)`,
     );
-    const [signIn, pull, issue] = view.pane.querySelectorAll<HTMLAnchorElement>("a");
+    const [signIn, pull, issue, commit] = view.pane.querySelectorAll<HTMLAnchorElement>("a");
     await hover(signIn!);
-    signIn!.focus();
-    signIn!.dispatchEvent(new FocusEvent("focusin", { bubbles: true, composed: true }));
+    focus(signIn!);
     await vi.advanceTimersByTimeAsync(300);
     await prefetchLinkReader(signIn!, new AbortController().signal);
     expect(view.request).not.toHaveBeenCalled();
     expect(document.querySelector(".link-hovercard, .link-reader-hovercard")).toBeNull();
-    expect(signIn!.href).toBe(login);
-    expect(signIn!.target).toBe("_blank");
-    expect(signIn!.textContent).toBe("Sign in");
-    for (const anchor of [pull!, issue!]) {
+    expect(signIn).toMatchObject({ href: login, target: "_blank", textContent: "Sign in" });
+    for (const anchor of [pull!, issue!, commit!]) {
       view.request.mockResolvedValue({
         url: anchor.href,
         title: "Real resource",
@@ -140,8 +184,7 @@ describe("generic link hovercards", () => {
     const view = fixture();
     view.anchor.href = href;
     await hover(view.anchor);
-    expect(view.request).not.toHaveBeenCalled();
-    expect(card()).toBeNull();
+    expectNoPreview(view.request);
     expect(view.anchor.href).toBe(href);
   });
 
@@ -167,40 +210,34 @@ describe("generic link hovercards", () => {
     );
     const signIn = view.pane.querySelector<HTMLAnchorElement>(".wizard-step__external-link")!;
     await hover(signIn);
-    signIn.focus();
-    signIn.dispatchEvent(new FocusEvent("focusin", { bubbles: true, composed: true }));
+    focus(signIn);
     await vi.advanceTimersByTimeAsync(1);
-    expect(view.request).not.toHaveBeenCalled();
-    expect(card()).toBeNull();
-    expect(signIn.href).toBe(authorizationUrl);
-    expect(signIn.target).toBe("_blank");
+    expectNoPreview(view.request);
+    expect(signIn).toMatchObject({ href: authorizationUrl, target: "_blank" });
     await hover(view.anchor);
     expect(card()?.textContent).toContain("Field guide");
   });
-  it.each([["https://github.com/openclaw/openclaw", "github.com", "^/openclaw/openclaw$"]])(
-    "keeps the detail-only plugin claim authoritative without prefetching %s",
-    async (href, host, pathPattern) => {
-      const view = fixture();
-      view.anchor.href = href;
-      await prefetchLinkReader(view.anchor, new AbortController().signal);
-      expect(view.request).not.toHaveBeenCalled();
-      view.provider.claimedReaders = [
-        {
-          pluginId: "forge",
-          id: "commits",
-          label: "Commits",
-          linkReader: {
-            hosts: [host],
-            pathPattern,
-            detailMethod: "forge.detail",
-          },
+  it("keeps the detail-only plugin claim authoritative without prefetching", async () => {
+    const href = "https://github.com/openclaw/openclaw";
+    const { anchor, request, provider } = fixture();
+    anchor.href = href;
+    await prefetchLinkReader(anchor, new AbortController().signal);
+    expect(request).not.toHaveBeenCalled();
+    provider.claimedReaders = [
+      {
+        ...provider.readers[0]!,
+        id: "commits",
+        label: "Commits",
+        linkReader: {
+          ...provider.readers[0]!.linkReader,
+          pathPattern: "^/openclaw/openclaw$",
+          previewMethod: undefined,
         },
-      ];
-      await hover(view.anchor);
-      expect(view.request).not.toHaveBeenCalled();
-      expect(card()).toBeNull();
-    },
-  );
+      },
+    ];
+    await hover(anchor);
+    expectNoPreview(request);
+  });
 
   it("does not unlock plugin loading hints after a public page succeeds", async () => {
     const view = fixture();
@@ -221,8 +258,7 @@ describe("generic link hovercards", () => {
     view.anchor.dispatchEvent(new MouseEvent("pointerover", { bubbles: true }));
     view.anchor.dispatchEvent(new MouseEvent("pointerout", { bubbles: true }));
     await vi.advanceTimersByTimeAsync(300);
-    expect(view.request).not.toHaveBeenCalled();
-    expect(card()).toBeNull();
+    expectNoPreview(view.request);
     expect(view.anchor.hasAttribute("aria-haspopup")).toBe(false);
     await hover(view.anchor);
     expect(card()?.textContent).toContain("Field guide");
@@ -242,7 +278,7 @@ describe("generic link hovercards", () => {
     expect(view.request).toHaveBeenCalledOnce();
   });
 
-  it.each(["config", "client", "scope", "href", "removed", "hidden", "file"])(
+  it.each(["config", "client", "scope", "href", "removed", "hidden", "file"] as const)(
     "retires pending metadata when %s changes",
     async (change) => {
       const view = fixture();
@@ -250,27 +286,17 @@ describe("generic link hovercards", () => {
       view.request.mockReturnValue(pending.promise);
       await hover(view.anchor);
       expect(card()).not.toBeNull();
-      if (change === "config") {
-        view.context.config.current.automaticallyFetchFavicons = false;
-      }
-      if (change === "client") {
-        view.context.gateway.snapshot.client = { ...view.client };
-      }
-      if (change === "scope") {
-        view.client.recoveryScope = "next";
-      }
-      if (change === "href") {
-        view.anchor.href = "https://example.org/other";
-      }
-      if (change === "removed") {
-        view.pane.remove();
-      }
-      if (change === "hidden") {
-        view.pane.hidden = true;
-      }
-      if (change === "file") {
-        view.anchor.setAttribute("data-file-path", "/guide");
-      }
+      const changes = {
+        config: () =>
+          Object.assign(view.context.config.current, { automaticallyFetchFavicons: false }),
+        client: () => Object.assign(view.context.gateway.snapshot, { client: { ...view.client } }),
+        scope: () => Object.assign(view.client, { recoveryScope: "next" }),
+        href: () => Object.assign(view.anchor, { href: "https://example.org/other" }),
+        removed: () => view.pane.remove(),
+        hidden: () => Object.assign(view.pane, { hidden: true }),
+        file: () => view.anchor.setAttribute("data-file-path", "/guide"),
+      };
+      changes[change]();
       if (change !== "file") {
         view.notify();
       }

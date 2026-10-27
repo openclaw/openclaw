@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import { pruneMapToMaxSize } from "openclaw/plugin-sdk/collection-runtime";
-import { createSubsystemLogger } from "openclaw/plugin-sdk/logging-core";
+import { createSubsystemLogger } from "openclaw/plugin-sdk/diagnostic-runtime";
 import { readResponseWithLimit } from "openclaw/plugin-sdk/response-limit-runtime";
 import { parseRetryAfterHeaderSeconds } from "openclaw/plugin-sdk/retry-runtime";
 import {
@@ -325,7 +325,7 @@ export async function fetchGitHubApi(
       response = await fetchImpl(url.href, {
         headers: {
           ...githubApiHeaders(token),
-          ...(etag ? { "If-None-Match": etag } : {}),
+          ...(etag && redirects === 0 ? { "If-None-Match": etag } : {}),
           ...(graphql ? { "Content-Type": "application/json" } : {}),
         },
         ...(graphql ? { method: "POST", body: JSON.stringify(graphql) } : {}),
@@ -466,7 +466,7 @@ export async function readGitHubGraphQLResponse(
     `${DEFAULT_GITHUB_API_BASE_URL}:${githubApiCredentialCacheScope(token)}`;
   const value =
     response.status === 403 && !isGitHubRateLimitResponse(response)
-      ? await readGitHubJsonBody(response, maxBytes)
+      ? (await readGitHubJsonBody(response, maxBytes)).value
       : await readGitHubJsonResponse(response, maxBytes);
   const noData =
     isRecord(value) &&
@@ -561,7 +561,7 @@ export async function readGitHubJsonResponse(
     if (response.status === 403 && !isGitHubRateLimitResponse(response)) {
       let payload: unknown;
       try {
-        payload = await readGitHubJsonBody(response, maxBytes);
+        payload = (await readGitHubJsonBody(response, maxBytes)).value;
       } catch {
         // An unreadable error body must not change a permission failure's status.
       }
@@ -586,13 +586,13 @@ export async function readGitHubJsonResponse(
     await discardResponse(response);
     throw githubResponseError(response);
   }
-  return readGitHubJsonBody(response, maxBytes);
+  return (await readGitHubJsonBody(response, maxBytes)).value;
 }
 
 async function readGitHubJsonBody(
   response: Response,
   maxBytes = GITHUB_JSON_MAX_BYTES,
-): Promise<unknown> {
+): Promise<{ value: unknown; bytes: number }> {
   let body: Buffer;
   try {
     body = await readBoundedResponse(response, maxBytes);
@@ -603,13 +603,115 @@ async function readGitHubJsonBody(
     throw new ControlUiGitHubError(502, "GitHub response could not be read");
   }
   try {
-    return JSON.parse(body.toString("utf8"));
+    return { value: JSON.parse(body.toString("utf8")), bytes: body.byteLength };
   } catch {
     throw new ControlUiGitHubError(502, "GitHub response was not valid JSON");
   }
 }
 
-/** Fetch a GitHub API JSON document with bounded size and normalized errors. */
+type GitHubJsonPage = { value: unknown; link: string | null };
+type CachedGitHubJsonPage = GitHubJsonPage & { etag: string; bytes: number };
+const jsonCaches = new WeakMap<
+  typeof fetch,
+  { pages: Map<string, CachedGitHubJsonPage>; bytes: number }
+>();
+const GITHUB_JSON_CACHE_BYTES = 8 * 1024 * 1024;
+const GITHUB_JSON_CACHE_ENTRIES = 128;
+
+/** Revalidate every GET; only GitHub's 304 permits reuse, never a local TTL. */
+export async function fetchGitHubJsonPage(
+  rawUrl: string,
+  fetchImpl: typeof fetch,
+  token?: string,
+  options: {
+    maxBytes?: number;
+    apiBaseUrl?: string;
+    beforeRedirect?: (url: URL) => Promise<void>;
+    identity?: Parameters<typeof fetchGitHubApi>[4];
+    signal?: AbortSignal;
+  } = {},
+): Promise<GitHubJsonPage> {
+  const { maxBytes = GITHUB_JSON_MAX_BYTES, apiBaseUrl = GITHUB_API_BASE_URL } = options;
+  const cache = jsonCaches.get(fetchImpl) ?? { pages: new Map(), bytes: 0 };
+  jsonCaches.set(fetchImpl, cache);
+  const key = JSON.stringify([apiBaseUrl, rawUrl, githubApiCredentialCacheScope(token), maxBytes]);
+  const cached = cache.pages.get(key);
+  const remove = (entryKey: string) => {
+    const entry = cache.pages.get(entryKey);
+    if (entry) {
+      cache.bytes -= entry.bytes;
+      cache.pages.delete(entryKey);
+    }
+  };
+  let redirected = false;
+  try {
+    const response = await fetchGitHubApi(
+      rawUrl,
+      fetchImpl,
+      token,
+      async (url) => {
+        redirected = true;
+        await options.beforeRedirect?.(url);
+      },
+      options.identity,
+      cached?.etag,
+      options.signal,
+      undefined,
+      apiBaseUrl,
+    );
+    if (response.status === 304 && cached && !redirected) {
+      const link = response.headers.get("link") ?? cached.link;
+      const page = link === cached.link ? cached : Object.freeze({ ...cached, link });
+      if (cache.pages.get(key) === cached) {
+        cache.pages.set(key, page);
+      }
+      await discardResponse(response);
+      return page;
+    }
+    if (!response.ok) {
+      // Preserve permission errors and body-reported secondary quota handling.
+      await readGitHubJsonResponse(response, maxBytes);
+    }
+    const { value, bytes } = await readGitHubJsonBody(response, maxBytes);
+    // Replace after body I/O so overlapping reads account only the retained page.
+    remove(key);
+    const page = { value, link: response.headers.get("link") };
+    const etag = response.headers.get("etag");
+    if (
+      etag &&
+      etag.length <= 1024 &&
+      !redirected &&
+      bytes <= GITHUB_JSON_CACHE_BYTES &&
+      !/\bno-store\b/iu.test(response.headers.get("cache-control") ?? "")
+    ) {
+      // JSON has no cycles or accessors. Iteration also accepts deeply nested input.
+      const pending = [value];
+      while (pending.length > 0) {
+        const item = pending.pop();
+        if (item !== null && typeof item === "object") {
+          for (const child of Object.values(item)) {
+            pending.push(child);
+          }
+          Object.freeze(item);
+        }
+      }
+      cache.pages.set(key, Object.freeze({ ...page, etag, bytes }));
+      cache.bytes += bytes;
+      while (
+        cache.pages.size > GITHUB_JSON_CACHE_ENTRIES ||
+        cache.bytes > GITHUB_JSON_CACHE_BYTES
+      ) {
+        remove(cache.pages.keys().next().value!);
+      }
+    }
+    return page;
+  } catch (error) {
+    remove(key);
+    throw error;
+  }
+}
+
+/** Optional host credentials can retry public reads anonymously; never share their validators. */
 export function fetchGitHubJson(
   rawUrl: string,
   fetchImpl: typeof fetch,
@@ -617,20 +719,9 @@ export function fetchGitHubJson(
   maxBytes?: number,
   apiBaseUrl = GITHUB_API_BASE_URL,
 ): Promise<unknown> {
-  return withOptionalGitHubAuth(token, async (requestToken) =>
-    readGitHubJsonResponse(
-      await fetchGitHubApi(
-        rawUrl,
-        fetchImpl,
-        requestToken,
-        undefined,
-        undefined,
-        undefined,
-        undefined,
-        undefined,
-        apiBaseUrl,
-      ),
-      maxBytes,
-    ),
+  return withOptionalGitHubAuth(
+    token,
+    async (requestToken) =>
+      (await fetchGitHubJsonPage(rawUrl, fetchImpl, requestToken, { maxBytes, apiBaseUrl })).value,
   );
 }

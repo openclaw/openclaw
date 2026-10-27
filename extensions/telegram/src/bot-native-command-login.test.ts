@@ -57,10 +57,15 @@ const sessionEntry = (overrides: Partial<SessionEntry> = {}): SessionEntry => ({
   updatedAt: 1,
   ...overrides,
 });
-function pendingLogin(code: string, profile = "openai:codex", title = "OpenAI Codex device code") {
+function pendingLogin(
+  code: string,
+  profile = "openai:codex",
+  title = "OpenAI Codex device code",
+  details: { expiresInMinutes?: number; message?: string } = {},
+) {
   const finish = createDeferred<void>();
   const loginFlow = vi.fn<TelegramLoginFlow>(async (params) => {
-    await params.prompter.deviceCode?.({ title, code });
+    await params.prompter.deviceCode?.({ title, code, ...details });
     await finish.promise;
     return createLoginResult(profile);
   });
@@ -214,24 +219,17 @@ describe("registerTelegramNativeCommands /login", () => {
   });
 
   it("routes the login button through the non-blocking native login flow", async () => {
-    const finishLogin = createDeferred<void>();
-    const loginFlow = vi.fn<TelegramLoginFlow>(async (params) => {
-      await params.prompter.deviceCode?.({
-        title: "OpenAI Codex device code",
-        code: "BUTTON-CODE",
+    const { finish: finishLogin, loginFlow } = pendingLogin(
+      "BUTTON-CODE",
+      "openai:codex",
+      "OpenAI Codex device code",
+      {
         expiresInMinutes: 15,
         message: "URL: https://auth.openai.com/codex/device",
-      });
-      await finishLogin.promise;
-      return createLoginResult("openai:codex");
-    });
-    const { nativeCommandCallbackDispatcher, sendMessage } = await registerLoginCommand({
-      cfg: createOwnerLoginConfig(),
-      loginFlow,
-    });
-    if (!nativeCommandCallbackDispatcher) {
-      throw new Error("expected login callback dispatcher to be registered");
-    }
+      },
+    );
+    const { nativeCommandCallbackDispatcher, sendMessage } = await registerOwnedLogin(loginFlow);
+    assert(nativeCommandCallbackDispatcher, "expected login callback dispatcher to be registered");
     const callbackQuery = {
       id: "login-button",
       chat_instance: "login-button-chat",
@@ -256,21 +254,15 @@ describe("registerTelegramNativeCommands /login", () => {
     ).resolves.toEqual({ handled: true, clearButtons: true });
 
     expect(loginFlow).toHaveBeenCalledOnce();
-    expect(sendMessage).toHaveBeenCalledWith(
-      100,
+    expectSent(
+      sendMessage,
       expect.stringContaining("Code: <code>BUTTON-CODE</code>"),
       expect.objectContaining({ parse_mode: "HTML" }),
     );
-    expect(sendMessage.mock.calls.map((call) => String(call[1]))).not.toContain(
-      "OpenAI login complete. Try your request again now.",
-    );
+    expect(messages(sendMessage)).not.toContain(completed);
 
     finishLogin.resolve();
-    await vi.waitFor(() =>
-      expect(sendMessage.mock.calls.map((call) => String(call[1]))).toContain(
-        "OpenAI login complete. Try your request again now.",
-      ),
-    );
+    await vi.waitFor(() => expect(messages(sendMessage)).toContain(completed));
   });
 
   it.each(["all", "cancel"] as const)(
@@ -436,22 +428,12 @@ describe("registerTelegramNativeCommands /login", () => {
     const loginFlow = vi.fn(async () => {
       throw new Error("device-code request failed");
     });
-    const { handler, sendMessage } = await registerLoginCommand({
-      cfg: createOwnerLoginConfig(),
-      loginFlow,
-    });
-
-    await handler(createPrivateCommandContext({ match: "codex", userId: 200 }));
-    await handler(createPrivateCommandContext({ match: "codex", userId: 200 }));
+    const { handler, sendMessage } = await registerOwnedLogin(loginFlow);
+    await handler(ownerContext());
+    await handler(ownerContext());
 
     expect(loginFlow).toHaveBeenCalledTimes(2);
-    expect(
-      sendMessage.mock.calls.filter(
-        (call) =>
-          call[1] ===
-          "OpenAI login did not complete. Send `/login openai/openai-device-code` to try again.",
-      ),
-    ).toHaveLength(2);
+    expect(messages(sendMessage).filter((text) => text === failed)).toHaveLength(2);
   });
 
   it("does not report auth failure when only the terminal notification fails", async () => {
@@ -535,10 +517,8 @@ describe("registerTelegramNativeCommands /login", () => {
       sessionDirs.make(),
       sessionMocks,
     );
-    const { handler } = await registerLoginCommand({
+    const { handler } = await registerOwnedLogin(savedLogin("openai:saved"), {
       accountId: "default",
-      cfg: createOwnerLoginConfig(),
-      loginFlow: savedLogin("openai:saved"),
     });
     const sql = observeHostDataSql();
     try {

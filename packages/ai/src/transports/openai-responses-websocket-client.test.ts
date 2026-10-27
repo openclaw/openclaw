@@ -15,6 +15,7 @@ import { isRetryableAssistantError } from "../../../../src/llm/utils/retry.js";
 import { createEmptyPluginRegistry } from "../../../../src/plugins/registry-empty.js";
 import { withPluginRuntimeGenerationScope } from "../../../../src/plugins/runtime/generation-scope.js";
 import { configureAiTransportHost, getAiTransportHost } from "../host.js";
+import { makeProviderModel } from "../providers/provider-model.test-support.js";
 import { cleanupSessionResources } from "../session-resources.js";
 import {
   OpenAIResponsesWebSocketSafeRetryError,
@@ -23,6 +24,12 @@ import {
   type ResponsesPromptObservation,
   type ResponsesServiceTierObservation,
 } from "./openai-responses-contracts.js";
+import type { SdkResponse } from "./openai-responses-sdk.test-support.js";
+import {
+  message as responseMessage,
+  outputItem,
+  tool,
+} from "./openai-responses-stream-parity.test-helpers.js";
 import {
   withProviderAcceptanceObserver,
   type ProviderAcceptance,
@@ -34,7 +41,6 @@ type StreamMessage =
   | { type: "close"; code: number }
   | { type: "delay"; ms: number }
   | { type: "message"; message: Record<string, unknown> };
-type SdkResponse = { data: AsyncIterable<unknown>; response: Response };
 
 const transport = vi.hoisted(() => ({
   handshakeMessages: [] as StreamMessage[],
@@ -47,36 +53,12 @@ const transport = vi.hoisted(() => ({
   wsRequests: [] as Array<Record<string, unknown>>,
 }));
 
-vi.mock("openai", () => {
-  class MockOpenAI {
-    apiKey: string;
-    baseURL: string;
-    responses = {
-      create: (request: Record<string, unknown>) => {
-        transport.sdkRequests.push(request);
-        const outcome = transport.sdkOutcomes.shift() ?? new Error("Unexpected SSE request");
-        return {
-          withResponse: async () => {
-            if (outcome instanceof Error) {
-              throw outcome;
-            }
-            return outcome;
-          },
-        };
-      },
-    };
-
-    constructor(options: { apiKey?: string; baseURL?: string }) {
-      this.apiKey = options.apiKey ?? "";
-      this.baseURL = options.baseURL ?? "https://api.openai.com/v1";
-    }
-
-    withOptions(options: { apiKey?: string }) {
-      return new MockOpenAI({ apiKey: options.apiKey ?? this.apiKey, baseURL: this.baseURL });
-    }
-  }
-
-  return { default: MockOpenAI, AzureOpenAI: MockOpenAI };
+vi.mock("openai", async () => {
+  const { createResponsesSdkMock } = await import("./openai-responses-sdk.test-support.js");
+  return createResponsesSdkMock({
+    outcomes: transport.sdkOutcomes,
+    requests: transport.sdkRequests,
+  });
 });
 
 vi.mock("openai/resources/responses/ws.js", () => ({
@@ -133,20 +115,16 @@ import {
   createOpenAIResponsesTransportStreamFn as createStreamFn,
 } from "./openai-responses-client.js";
 import { createOpenAIResponsesWebSocketStream as createSocketStream } from "./openai-responses-websocket.js";
+import { collectEventTypes } from "./openai-stream-cases.test-support.js";
 
 const initialHost = getAiTransportHost();
-const model = {
-  id: "gpt-5.6-luna",
+const model = makeProviderModel("openai-responses", "openai", "gpt-5.6-luna", {
   name: "GPT-5.6 Luna",
-  api: "openai-responses",
-  provider: "openai",
   baseUrl: "https://api.openai.com/v1",
   reasoning: true,
-  input: ["text"],
-  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
   contextWindow: 200_000,
   maxTokens: 8192,
-} satisfies Model<"openai-responses">;
+});
 
 function history(...messages: Context["messages"]): Context {
   return { messages, tools: [] };
@@ -161,9 +139,7 @@ function completedEvent(responseId: string, content?: string | Array<Record<stri
     typeof content === "string"
       ? [
           {
-            id: `msg_${responseId}`,
-            type: "message",
-            status: "completed",
+            ...responseMessage(`msg_${responseId}`, content, "final_answer"),
             content: [
               {
                 text: content,
@@ -172,8 +148,6 @@ function completedEvent(responseId: string, content?: string | Array<Record<stri
                 logprobs: [{ token: content, logprob: -0.1 }],
               },
             ],
-            role: "assistant",
-            phase: "final_answer",
           },
         ]
       : (content ?? []);
@@ -235,21 +209,10 @@ function wrappedSdkServerError(params: {
 }
 
 function toolCallResponse(responseId: string): StreamMessage[] {
-  const functionCall = {
-    type: "function_call",
-    id: "fc_read",
-    call_id: "call_read",
-    name: "read",
-    arguments: '{"path":"README.md"}',
-    status: "completed",
-  };
+  const functionCall = tool("read", '{"path":"README.md"}', "completed", "read");
   const position = { output_index: 0, item_id: functionCall.id };
   return [
-    message({
-      type: "response.output_item.added",
-      output_index: 0,
-      item: { ...functionCall, arguments: "", status: "in_progress" },
-    }),
+    message(outputItem("added", { ...functionCall, arguments: "", status: "in_progress" }, 0)),
     message({
       type: "response.function_call_arguments.delta",
       ...position,
@@ -261,7 +224,7 @@ function toolCallResponse(responseId: string): StreamMessage[] {
       name: functionCall.name,
       arguments: functionCall.arguments,
     }),
-    message({ type: "response.output_item.done", output_index: 0, item: functionCall }),
+    message(outputItem("done", functionCall, 0)),
     message(completedEvent(responseId, [functionCall])),
   ];
 }
@@ -313,14 +276,12 @@ async function run(
 describe("native OpenAI Responses WebSocket client integration", () => {
   beforeEach(() => {
     cleanupSessionResources();
-    transport.handshakeMessages.length = 0;
-    transport.responseBatches.length = 0;
-    transport.sdkOutcomes.length = 0;
-    transport.sdkRequests.length = 0;
     transport.closeCount = 0;
-    transport.wsClients.length = 0;
-    transport.wsOptions.length = 0;
-    transport.wsRequests.length = 0;
+    for (const value of Object.values(transport)) {
+      if (Array.isArray(value)) {
+        value.length = 0;
+      }
+    }
     let turn = 0;
     configureAiTransportHost({
       ...initialHost,
@@ -561,11 +522,7 @@ describe("native OpenAI Responses WebSocket client integration", () => {
       transport: "auto",
       onResponse,
     });
-    const consume = (async () => {
-      for await (const event of responseStream) {
-        order.push(event.type);
-      }
-    })();
+    const consume = collectEventTypes(responseStream, order);
 
     await vi.waitFor(() => expect(onResponse).toHaveBeenCalledOnce());
     expect(order).toEqual(["hook:start"]);
@@ -768,9 +725,12 @@ describe("native OpenAI Responses WebSocket client integration", () => {
     expect(result.stopReason).toBe("error");
     expectCounts(1, 0);
     expect(transport.closeCount).toBe(1);
-    const line = logWarn.mock.calls.find(([, text]) => text.startsWith("[responses] error "))?.[1];
-    expect(line).toContain("abortReason=request_deadline");
-    expect(line).not.toContain("abortMessage=");
+    expect(logWarn).toHaveBeenCalledExactlyOnceWith(
+      "provider-error",
+      "Model request failed",
+      expect.objectContaining({ abortReason: "request_deadline" }),
+    );
+    expect(JSON.stringify(logWarn.mock.calls)).not.toContain("abortMessage");
 
     transport.sdkOutcomes.push(sdkCompletion("resp_sse"));
     const next = await run(history(user("next", 2)));

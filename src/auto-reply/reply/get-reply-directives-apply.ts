@@ -43,34 +43,6 @@ const directivePersistLoader = createLazyImportLoader(
   () => import("../../model-picker/apply-session-model-selection.js"),
 );
 
-function formatModelOverrideResetEvent(params: {
-  rejectedRef?: string;
-  initialModelLabel: string;
-  reason?: "disallowed" | "stale" | "temporarily-unavailable";
-  modelPolicyConfigPath?: string;
-  modelPolicyRepairConfigPath?: string;
-}): string {
-  if (params.reason === "temporarily-unavailable") {
-    // Non-destructive: the pin is preserved and comes back once the catalog reloads.
-    const subject = params.rejectedRef
-      ? `Model override ${params.rejectedRef}`
-      : "Your pinned model override";
-    return `${subject} is temporarily unavailable (model catalog is still loading); using ${params.initialModelLabel} for this turn. Your pinned model is unchanged.`;
-  }
-  if (params.reason === "stale") {
-    if (params.rejectedRef) {
-      return `Stored model override ${params.rejectedRef} is stale for this session; reverted to ${params.initialModelLabel}. Pick a model again with /model if you still want to override the default.`;
-    }
-    return `Stored model override is stale for this session; reverted to ${params.initialModelLabel}.`;
-  }
-  if (params.rejectedRef) {
-    const policyPath = params.modelPolicyConfigPath ?? "modelPolicy.allow";
-    const repairPath = params.modelPolicyRepairConfigPath ?? "modelPolicy.allow";
-    return `Model override ${params.rejectedRef} is not allowed for this agent by ${policyPath}; reverted to ${params.initialModelLabel}. Add ${params.rejectedRef} to ${repairPath} or pick an allowed model with /model list.`;
-  }
-  return `Model override not allowed for this agent; reverted to ${params.initialModelLabel}.`;
-}
-
 type ApplyDirectiveResult =
   | {
       kind: "reply";
@@ -164,19 +136,33 @@ export async function applyInlineDirectiveOverrides(params: {
   // Fire on the reason, not the boolean: a temporarily-unavailable override
   // surfaces a notice without destroying the pin, so resetModelOverride stays false.
   if (modelState.resetModelOverrideReason) {
-    enqueueSystemEvent(
-      formatModelOverrideResetEvent({
-        rejectedRef: modelState.resetModelOverrideRef,
-        initialModelLabel,
-        reason: modelState.resetModelOverrideReason,
-        modelPolicyConfigPath: modelState.modelPolicyConfigPath,
-        modelPolicyRepairConfigPath: modelState.modelPolicyRepairConfigPath,
-      }),
-      {
-        sessionKey: resolveSystemEventQueueKey(sessionKey, agentId),
-        contextKey: `model:reset:${initialModelLabel}`,
-      },
-    );
+    function formatModelOverrideResetEvent(): string {
+      const rejectedRef = modelState.resetModelOverrideRef;
+      const reason = modelState.resetModelOverrideReason;
+      if (reason === "temporarily-unavailable") {
+        // Non-destructive: the pin is preserved and comes back once the catalog reloads.
+        const subject = rejectedRef
+          ? `Model override ${rejectedRef}`
+          : "Your pinned model override";
+        return `${subject} is temporarily unavailable (model catalog is still loading); using ${initialModelLabel} for this turn. Your pinned model is unchanged.`;
+      }
+      if (reason === "stale") {
+        if (rejectedRef) {
+          return `Stored model override ${rejectedRef} is stale for this session; reverted to ${initialModelLabel}. Pick a model again with /model if you still want to override the default.`;
+        }
+        return `Stored model override is stale for this session; reverted to ${initialModelLabel}.`;
+      }
+      if (rejectedRef) {
+        const policyPath = modelState.modelPolicyConfigPath ?? "modelPolicy.allow";
+        const repairPath = modelState.modelPolicyRepairConfigPath ?? "modelPolicy.allow";
+        return `Model override ${rejectedRef} is not allowed for this agent by ${policyPath}; reverted to ${initialModelLabel}. Add ${rejectedRef} to ${repairPath} or pick an allowed model with /model list.`;
+      }
+      return `Model override not allowed for this agent; reverted to ${initialModelLabel}.`;
+    }
+    enqueueSystemEvent(formatModelOverrideResetEvent(), {
+      sessionKey: resolveSystemEventQueueKey(sessionKey, agentId),
+      contextKey: `model:reset:${initialModelLabel}`,
+    });
   }
 
   if (!command.isAuthorizedSender) {
@@ -288,7 +274,7 @@ export async function applyInlineDirectiveOverrides(params: {
       await directiveLevelsLoader.load()
     ).resolveCurrentDirectiveLevels({
       sessionEntry,
-      agentEntry: persistenceState ? undefined : agentEntry,
+      agentEntry,
       agentCfg,
       resolveDefaultThinkingLevel:
         !persistenceState || directives.hasThinkDirective

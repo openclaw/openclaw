@@ -1,7 +1,5 @@
-import path from "node:path";
 import type { PluginManifestRecord } from "./manifest-registry.types.js";
-import { clearPluginModuleRequireCache, isJavaScriptModulePath } from "./native-module-require.js";
-import { getPluginCache, getPluginCacheSource, retirePluginCacheInstance } from "./plugin-cache.js";
+import { getPluginCache, retirePluginCacheInstance } from "./plugin-cache.js";
 import { bindPluginInstanceModuleLoader } from "./plugin-instance-module-loader.js";
 import { PluginInstance } from "./plugin-instance.js";
 
@@ -40,18 +38,6 @@ export function getPluginSetupModuleLoader(
   if (!cached) {
     cache.setupModules.set(key, instance);
     discardOnFailure(() => {
-      if (record.origin === "bundled" && isJavaScriptModulePath(source)) {
-        const distribution = path.dirname(path.dirname(rootDir));
-        const dependencyRoot =
-          path.basename(path.dirname(rootDir)) === "extensions" &&
-          path.basename(distribution) === "dist"
-            ? distribution
-            : rootDir;
-        // Cold metadata reset refreshes CJS entry and hoisted helpers. Ordinary
-        // inventory retirement must not evict code still used by another instance.
-        getPluginCacheSource(source).disposeModule ??= () =>
-          clearPluginModuleRequireCache(source, dependencyRoot);
-      }
       bindPluginInstanceModuleLoader({
         instance,
         origin: record.origin,

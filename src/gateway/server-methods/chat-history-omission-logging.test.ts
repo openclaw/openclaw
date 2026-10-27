@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { onDiagnosticEvent, type DiagnosticEventPayload } from "../../infra/diagnostic-events.js";
-import { reportOmittedChatHistory } from "./chat-history-budget.js";
-import { prepareChatHistoryResponsePage } from "./chat-history-response-page.js";
+import { reportOmittedChatHistory } from "../chat-history-budget.js";
+import { prepareChatHistoryResponsePage } from "../chat-history-response-page.js";
 
 function runHistoryBudgetPipeline(messages: unknown[], maxHistoryBytes: number) {
   const events: Extract<DiagnosticEventPayload, { type: "payload.large" }>[] = [];

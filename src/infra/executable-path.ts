@@ -7,10 +7,6 @@ import { expandHomePrefix } from "./home-dir.js";
 import { pruneMapToMaxSize } from "./map-size.js";
 import { resolveEnvironmentValue } from "./process-env.js";
 
-function isDriveLessWindowsRootedPath(value: string): boolean {
-  return process.platform === "win32" && /^:[\\/]/.test(value);
-}
-
 export function resolveExecutablePathCandidate(
   rawExecutable: string,
   options?: { cwd?: string; env?: NodeJS.ProcessEnv; requirePathSeparator?: boolean },
@@ -18,7 +14,7 @@ export function resolveExecutablePathCandidate(
   const expanded = rawExecutable.startsWith("~")
     ? expandHomePrefix(rawExecutable, { env: options?.env })
     : rawExecutable;
-  if (isDriveLessWindowsRootedPath(expanded)) {
+  if (process.platform === "win32" && /^:[\\/]/.test(expanded)) {
     return undefined;
   }
   const hasPathSeparator = expanded.includes("/") || expanded.includes("\\");
@@ -31,7 +27,7 @@ export function resolveExecutablePathCandidate(
   if (path.isAbsolute(expanded)) {
     return path.resolve(expanded);
   }
-  const base = options?.cwd && options.cwd.trim() ? options.cwd.trim() : process.cwd();
+  const base = options?.cwd && options.cwd.trim() ? options.cwd : process.cwd();
   return path.resolve(base, expanded);
 }
 
@@ -105,27 +101,6 @@ function cacheExecutablePath(key: string, resolved: string | undefined): void {
   pruneMapToMaxSize(executablePathCache, EXECUTABLE_PATH_CACHE_MAX_ENTRIES);
 }
 
-function executablePathCacheKey(
-  executable: string,
-  pathEnv: string | readonly string[],
-  env: NodeJS.ProcessEnv | undefined,
-  includeExtensionless: boolean | undefined,
-  requestedCwd: string | undefined,
-): string {
-  const pathExt =
-    resolveEnvironmentValue(env, "PATHEXT") ??
-    resolveEnvironmentValue(process.env, "PATHEXT") ??
-    "";
-  let cwd = "";
-  try {
-    // Relative PATH entries resolve against cwd, so changing directories must invalidate them.
-    cwd = requestedCwd ?? process.cwd();
-  } catch {
-    // A deleted cwd already makes relative probes fail; keep the cache key stable for that state.
-  }
-  return `${process.platform}\0${executable}\0${JSON.stringify(pathEnv)}\0${pathExt}\0${includeExtensionless !== false}\0${cwd}\0${requestedCwd !== undefined}`;
-}
-
 /** Clears process-local PATH probe results after the runtime environment changes. */
 export function clearExecutablePathCache(): void {
   executablePathCache.clear();
@@ -138,15 +113,20 @@ export function resolveExecutableFromPathEnv(
   env?: NodeJS.ProcessEnv,
   options?: { includeExtensionless?: boolean; cwd?: string; useCache?: boolean },
 ): string | undefined {
-  const cwd = options?.cwd?.trim() ? path.resolve(options.cwd.trim()) : undefined;
+  const cwd = options?.cwd?.trim() ? path.resolve(options.cwd) : undefined;
   const useCache = options?.useCache !== false;
-  const cacheKey = executablePathCacheKey(
-    executable,
-    pathEnv,
-    env,
-    options?.includeExtensionless,
-    cwd,
-  );
+  const pathExt =
+    resolveEnvironmentValue(env, "PATHEXT") ??
+    resolveEnvironmentValue(process.env, "PATHEXT") ??
+    "";
+  let cacheCwd = "";
+  try {
+    // Relative PATH entries resolve against cwd, so changing directories must invalidate them.
+    cacheCwd = cwd ?? process.cwd();
+  } catch {
+    // A deleted cwd already makes relative probes fail; keep the cache key stable for that state.
+  }
+  const cacheKey = `${process.platform}\0${executable}\0${JSON.stringify(pathEnv)}\0${pathExt}\0${options?.includeExtensionless !== false}\0${cacheCwd}\0${cwd !== undefined}`;
   const cached = useCache ? executablePathCache.get(cacheKey) : undefined;
   const now = Date.now();
   if (cached && cached.expiresAt > now) {

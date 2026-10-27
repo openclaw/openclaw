@@ -1,6 +1,11 @@
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { Value } from "typebox/value";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { createCronTool } from "../../agents/tools/cron-tool.js";
+import * as gatewayModule from "../../agents/tools/gateway.js";
+import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
 import { replaceSessionEntrySync } from "../../config/sessions/session-accessor.sqlite-entry.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import * as listRevision from "../../cron/list-snapshot-revision.js";
@@ -26,6 +31,9 @@ function expectReply(respond: ReturnType<typeof vi.fn>, payload: unknown) {
 }
 function expectError(respond: ReturnType<typeof vi.fn>, error: unknown) {
   expect(respond).toHaveBeenCalledExactlyOnceWith(false, undefined, error);
+}
+function expectErrorMessage(respond: ReturnType<typeof vi.fn>, message: string) {
+  expectError(respond, expect.objectContaining({ message: expect.stringContaining(message) }));
 }
 
 function createJobs(count: number): CronJob[] {
@@ -55,6 +63,7 @@ async function withCronStore(
   } = {},
 ) {
   await withOpenClawTestState({ layout: "state-only" }, async (state) => {
+    setRuntimeConfigSnapshot(options.config ?? {});
     const storePath = path.join(state.root, "jobs.json");
     await saveCronStore(storePath, { version: 1, jobs: options.jobs ?? createJobs(count) });
     const cron = createReadService({
@@ -62,7 +71,6 @@ async function withCronStore(
       cronEnabled: true,
       defaultAgentId: options.defaultAgentId ?? "main",
       enqueueSystemEvent: vi.fn(),
-      requestHeartbeat: vi.fn(),
       runIsolatedAgentJob: vi.fn(async () => ({ status: "ok" as const })),
     });
     try {
@@ -107,6 +115,63 @@ async function listScoped(
 }
 
 describe("cron.list scoped SQLite snapshots", () => {
+  it("distinguishes an enabled-only tool inventory from a saved stopped watcher", async () => {
+    await withCronStore(2, async ({ context, storePath }) => {
+      const store = await loadCronStore(storePath);
+      const watcher = expectDefined(store.jobs[0], "saved watcher");
+      watcher.schedule = { kind: "stream", command: ["tail", "-F", "/synthetic/build.log"] };
+      watcher.state = {
+        streamStatus: "stopped",
+        streamSourceIdentity: "00000000-0000-4000-8000-000000000001",
+      };
+      const active = expectDefined(store.jobs[1], "unrelated enabled job");
+      active.enabled = true;
+      active.state.nextRunAtMs = 2_000_000_000_001;
+      await saveCronStore(storePath, store);
+      using _ = vi
+        .spyOn(gatewayModule, "callGatewayTool")
+        .mockImplementation(async <T>(method: string, _options: unknown, params: unknown) => {
+          if (!isRecord(params)) {
+            throw new Error("Tool inventory requests require object parameters");
+          }
+          const respond = await callCron(context, method, params);
+          expect(respond).toHaveBeenCalledExactlyOnceWith(true, expect.any(Object), undefined);
+          return respond.mock.calls[0]?.[1] as T;
+        });
+      const tool = createCronTool();
+      const listed = await tool.execute("active-inventory", { action: "list" });
+      expect(listed.details).toMatchObject({
+        jobs: [expect.objectContaining({ id: "job-0001" })],
+        total: 1,
+        hasMore: false,
+        includeDisabled: false,
+        inventoryHint: expect.stringContaining("Disabled automations are omitted"),
+      });
+      const saved = await tool.execute("saved-inventory", {
+        action: "list",
+        includeDisabled: true,
+      });
+      expect(saved.details).toMatchObject({
+        jobs: expect.arrayContaining([expect.objectContaining({ id: watcher.id, enabled: false })]),
+        total: 2,
+        includeDisabled: true,
+        inventoryHint: expect.stringContaining("get jobId"),
+      });
+      const exact = await tool.execute("inspect-stopped", { action: "get", jobId: watcher.id });
+      expect(exact.details).toMatchObject({
+        id: watcher.id,
+        enabled: false,
+        state: { streamStatus: "stopped" },
+      });
+      for (const result of [listed, saved, exact]) {
+        expect(
+          Value.Errors(expectDefined(tool.outputSchema, "tool output schema"), result.details),
+        ).toEqual([]);
+      }
+      expect(await loadCronStore(storePath)).toEqual(store);
+    });
+  });
+
   it("lists 146 jobs with delivery previews through the real session worker", async () => {
     const cfg: OpenClawConfig = {};
     const jobs = createJobs(146).map((job, index) =>
@@ -148,34 +213,32 @@ describe("cron.list scoped SQLite snapshots", () => {
       3,
       async ({ context, storePath, cron }) => {
         const db = openOpenClawStateDatabase().db;
-        db.prepare(
+        const storeKey = cronStoreKey(storePath);
+        const update = (sql: string, ...params: (string | number)[]) =>
+          db.prepare(sql).run(...params, storeKey);
+        const read = (columns: string) =>
+          db
+            .prepare(`SELECT ${columns} FROM cron_jobs WHERE store_key = ? AND job_id = 'job-0000'`)
+            .get(storeKey);
+        update(
           "UPDATE cron_jobs SET enabled = ?, payload_kind = 'systemEvent', job_json = json_set(job_json, '$.enabled', json(?), '$.delivery.mode', 'not-a-route', '$.sessionTarget', 'main', '$.payload', json(?)) WHERE store_key = ? AND job_id = 'job-0000'",
-        ).run(
           1,
           "true",
           JSON.stringify({ kind: "systemEvent", text: "synthetic legacy job" }),
-          cronStoreKey(storePath),
         );
-        db.prepare(
+        update(
           "UPDATE cron_jobs SET sort_order = 10, grant_definition_generation = 17, job_json = json_set(job_json, '$.notify', json('true'), '$.authoredNote', 'retain me') WHERE store_key = ? AND job_id = 'job-0000'",
-        ).run(cronStoreKey(storePath));
-        db.prepare(
-          "UPDATE cron_jobs SET sort_order = 20 WHERE store_key = ? AND job_id = 'job-0001'",
-        ).run(cronStoreKey(storePath));
-        db.prepare(
+        );
+        update("UPDATE cron_jobs SET sort_order = 20 WHERE store_key = ? AND job_id = 'job-0001'");
+        update(
           "UPDATE cron_jobs SET sort_order = 0, job_json = json_set(job_json, '$.schedule.everyMs', 0) WHERE store_key = ? AND job_id = 'job-0002'",
-        ).run(cronStoreKey(storePath));
+        );
         const retained = () =>
-          db
-            .prepare(
-              "SELECT agent_id, updated_at, grant_definition_revision, grant_definition_generation, grant_definition_updated_at FROM cron_jobs WHERE store_key = ? AND job_id = 'job-0000'",
-            )
-            .get(cronStoreKey(storePath));
+          read(
+            "agent_id, updated_at, grant_definition_revision, grant_definition_generation, grant_definition_updated_at",
+          );
         const retainedBefore = retained();
-        const raw = () =>
-          db
-            .prepare("SELECT job_json FROM cron_jobs WHERE store_key = ? AND job_id = 'job-0000'")
-            .get(cronStoreKey(storePath))?.job_json;
+        const raw = () => read("job_json")?.job_json;
         const original = raw();
         await cron.start();
         const quarantinedJobs = await loadCronQuarantinedJobs(storePath);
@@ -216,18 +279,10 @@ describe("cron.list scoped SQLite snapshots", () => {
           "job-0001",
         ]);
         const runResponse = await callCron(context, "cron.run", { id: "job-0000", mode: "force" });
-        expectError(
-          runResponse,
-          expect.objectContaining({ message: expect.stringContaining("openclaw doctor --fix") }),
-        );
+        expectErrorMessage(runResponse, "openclaw doctor --fix");
         for (const patch of [{ name: "unrelated edit" }, { state: { lastDurationMs: 99 } }]) {
           const response = await callCron(context, "cron.update", { id: "job-0000", patch });
-          expectError(
-            response,
-            expect.objectContaining({
-              message: expect.stringContaining("delivery requires an explicit mode"),
-            }),
-          );
+          expectErrorMessage(response, "delivery requires an explicit mode");
           expect(raw()).toBe(original);
         }
         const corrected = await callCron(context, "cron.update", {
@@ -330,7 +385,10 @@ describe("cron.list scoped SQLite snapshots", () => {
         limit: 1,
         hasMore: true,
         nextOffset: 1,
-        snapshotRevision: listRevision.resolveCronListSnapshotRevision(visible),
+        snapshotRevision: listRevision.resolveCronListSnapshotRevision(
+          visible,
+          listRevision.resolveCronListSnapshotRows(visible),
+        ),
       });
       expect(await loadCronStore(storePath)).toEqual(store);
       expect(sort.mock.calls.reduce((total, [jobs]) => total + jobs.length, 0)).toBeLessThanOrEqual(

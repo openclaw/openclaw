@@ -135,6 +135,8 @@ function childHistoryFixture(name: string, replace = false) {
             key: targetSessionKey,
             sessionId: expectedSessionId,
             parentSessionKey: requesterSessionKey,
+            // Older Gateways exposed the expired display projection alongside durable lineage.
+            childOwnerSessionKeys: [],
           },
         };
       }

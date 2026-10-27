@@ -6,6 +6,7 @@ import { expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { GatewayBrowserClient, GatewayEventFrame } from "../../api/gateway.ts";
 import type { GatewaySessionRow } from "../../api/types.ts";
+import { makeBootRoster } from "../../app/bootstrap.test-support.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import { sessionProgressCardsForGateway } from "../../lib/session-progress-cards.ts";
 import { resolveUiConversationIdentity } from "../../lib/sessions/session-key.ts";
@@ -13,18 +14,17 @@ import { createSessionsListResult } from "../../test-helpers/chat-model.ts";
 import type { GatewayRequestHandler } from "../../test-helpers/gateway-client.ts";
 import { gatewayHelloForMethods } from "../../test-helpers/gateway-methods.ts";
 import { flush } from "../../test-helpers/solid-settle.ts";
+import {
+  createGatewayBrowserClientFixture,
+  createInitializationContext,
+  createSessionContext,
+} from "./chat-application-context.test-support.ts";
 import type { ChatHistoryResult } from "./chat-history-snapshot.ts";
 import { resetChatHistoryProjection } from "./chat-history-state.ts";
 import { loadChatHistory } from "./chat-history.ts";
 import type { ChatPaneRuntime } from "./chat-pane-render.ts";
-import {
-  createGatewayBrowserClientFixture,
-  createInitializationContext,
-  createRenderTestChatPane,
-  createSessionContext,
-  connectPaneTestView,
-} from "./chat-pane.test-support.ts";
-import { cancelChatStreamRenderFrame } from "./chat-state-render.ts";
+import { createRenderTestChatPane, connectPaneTestView } from "./chat-pane.test-support.ts";
+import { chatRunPresentation } from "./chat-run-presentation.ts";
 
 const history: ChatHistoryResult = {
   sessionId: "research-notes",
@@ -79,12 +79,7 @@ function createHistoryProgressPane(
   state.client = client;
   state.connected = true;
   state.hello = hello;
-  state.agentsList = {
-    defaultId: "main",
-    mainKey: "main",
-    scope: "per-sender",
-    agents: [{ id: "main" }, { id: "research" }],
-  };
+  state.agentsList = makeBootRoster({ agents: [{ id: "main" }, { id: "research" }] });
   context.agents.state.agentsList = state.agentsList;
   state.assistantAgentId = "main";
   pane.sessionKey = "notes";
@@ -99,7 +94,7 @@ function createHistoryProgressPane(
   flush();
   onTestFinished(() => {
     pane.disconnectedCallback();
-    cancelChatStreamRenderFrame(state);
+    chatRunPresentation(state).cancelFrame();
   });
   const emitEvent = (event: string, payload: unknown) => {
     const gateway = pane.context.gateway as ApplicationContext["gateway"] & {
@@ -156,9 +151,23 @@ it("hides the history owner's card only in this pane without rekeying the compos
   emit(f.card);
   await vi.waitFor(() => expect(pane.chatProps?.progressCard).toEqual(f.card));
   expect(request.mock.calls.filter(([method]) => method === "progressCard.get")).toHaveLength(2);
-  f.dismiss();
-  await pane.updateComplete;
-  expect(pane.chatProps?.progressCard).toBeNull();
+  const displayed = expectDefined(pane.chatProps?.progressCard, "displayed progress card");
+  const dismiss = expectDefined(pane.chatProps?.onDismissProgressCard, "local hide action");
+  const target = { sessionKey: f.card.sessionKey };
+  const lifetime = progress.getLifetime(target);
+  expect(lifetime).toBeDefined();
+  dismiss({ ...displayed });
+  flush();
+  expect(pane.chatProps?.progressCard).toBe(displayed);
+
+  // A background read can replace the saved object before the rendered action runs.
+  f.card = { ...f.card };
+  f.emitEvent("progressCard.changed", { sessionKey: f.card.sessionKey, revision: null });
+  await progress.getReadCompletion(target);
+  expect(progress.get(target)).toBe(f.card);
+  expect(progress.getLifetime(target)).toBe(lifetime);
+  dismiss(displayed);
+  await vi.waitFor(() => expect(pane.chatProps?.progressCard).toBeNull());
   expect(progress.get({ sessionKey: f.card.sessionKey })).toEqual(f.card);
   expect(request.mock.calls.every(([method]) => method !== "progressCard.put")).toBe(true);
   expect(state.chatMessage).toBe("Retained draft");
@@ -170,6 +179,56 @@ it("hides the history owner's card only in this pane without rekeying the compos
   expect(pane.chatProps?.progressCard).toBeNull();
 });
 
+it.each(["revision", "card lifetime", "session incarnation"] as const)(
+  "ignores a captured hide action after a new %s",
+  async (replacement) => {
+    let currentHistory = history;
+    const f = createHistoryProgressPane(undefined, () => currentHistory);
+    const { pane, state, progress } = f;
+    await loadChatHistory(state, { deferBranches: true });
+    await vi.waitFor(() => expect(pane.chatProps?.progressCard).toEqual(f.card));
+    const displayed = expectDefined(pane.chatProps?.progressCard, "displayed progress card");
+    const dismiss = expectDefined(pane.chatProps?.onDismissProgressCard, "local hide action");
+    const target = { sessionKey: f.card.sessionKey };
+    const lifetime = progress.getLifetime(target);
+    expect(lifetime).toBeDefined();
+
+    if (replacement === "session incarnation") {
+      currentHistory = {
+        ...history,
+        sessionId: "replacement-notes",
+        sessionInfo: {
+          ...expectDefined(history.sessionInfo, "accepted history session"),
+          sessionId: "replacement-notes",
+        },
+      };
+      await loadChatHistory(state, { deferBranches: true });
+      expect(state.currentSessionId).toBe("replacement-notes");
+    } else {
+      f.card = replacement === "revision" ? progressCard(3) : { ...f.card };
+      if (replacement === "card lifetime") {
+        progress.invalidate(target);
+        await progress.load(target);
+      } else {
+        f.emitEvent("progressCard.changed", { sessionKey: f.card.sessionKey, revision: null });
+        await progress.getReadCompletion(target);
+      }
+    }
+    await pane.updateComplete;
+    expect(pane.chatProps?.progressCard).toBe(f.card);
+    if (replacement === "card lifetime") {
+      expect(progress.getLifetime(target)).toBeDefined();
+      expect(progress.getLifetime(target)).not.toBe(lifetime);
+    } else {
+      expect(progress.getLifetime(target)).toBe(lifetime);
+    }
+    dismiss(displayed);
+    flush();
+    expect(pane.chatProps?.progressCard).toBe(f.card);
+    expect(progress.get(target)).toBe(f.card);
+  },
+);
+
 it("hides progress and its loading slot without clearing saved progress, then restores updates", async () => {
   const f = createHistoryProgressPane();
   const { pane, state, emit } = f;
@@ -178,7 +237,8 @@ it("hides progress and its loading slot without clearing saved progress, then re
   expect(pane.chatProps?.progressCardInitialLoading).toBe(false);
   await loadChatHistory(state, { deferBranches: true });
   await pane.updateComplete;
-  f.expectMethods("chat.history");
+  await vi.waitFor(() => expect(f.progress.get({ sessionKey: f.card.sessionKey })).toEqual(f.card));
+  f.expectMethods("chat.history", "progressCard.get");
   expect(pane.chatProps?.progressCard).toBeNull();
 
   state.settings = { ...state.settings, chatShowTaskProgress: true };
@@ -189,7 +249,9 @@ it("hides progress and its loading slot without clearing saved progress, then re
   expect(pane.chatProps).toMatchObject({ progressCard: null, progressCardInitialLoading: false });
   f.card = progressCard(2);
   emit(f.card);
-  f.expectMethods("chat.history", "progressCard.get");
+  await vi.waitFor(() => expect(f.progress.get({ sessionKey: f.card.sessionKey })).toEqual(f.card));
+  expect(pane.chatProps).toMatchObject({ progressCard: null, progressCardInitialLoading: false });
+  f.expectMethods("chat.history", "progressCard.get", "progressCard.get");
 
   state.settings = { ...state.settings, chatShowTaskProgress: true };
   await vi.waitFor(() => expect(pane.chatProps?.progressCard).toEqual(f.card));
@@ -267,6 +329,7 @@ it.each([
   };
   onTestFinished(() => swarmPane.swarm.hydrator?.dispose());
   swarmPane.refreshSwarmRoster();
+  await vi.dynamicImportSettled();
   expect(request).not.toHaveBeenCalled();
   await loadChatHistory(state, { deferBranches: true });
   swarmPane.refreshSwarmRoster();

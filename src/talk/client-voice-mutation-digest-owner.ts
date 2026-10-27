@@ -23,10 +23,7 @@ import {
   type ClientVoiceRunBinding,
   operationKey,
 } from "./client-voice-session-store.js";
-import {
-  captureClientVoiceSessionWriter,
-  type ClientVoiceSessionWriter,
-} from "./client-voice-session-write.js";
+import { captureClientVoiceSessionWriter } from "./client-voice-session-write.js";
 
 const loadMessageRuntime = createLazyRuntimeModule(() => import("../channels/message/runtime.js"));
 
@@ -63,127 +60,6 @@ type MutationDigestDelivery = {
   confirmed?: ClientVoiceRunBinding & { deliveredAt: number };
   mayHaveReachedRecipient?: true;
 };
-
-/** A confirmed send survives marker retries without re-entering the sender. */
-async function deliverClientVoiceMutationDigest(
-  record: ClientVoiceSessionRecord,
-  config: OpenClawConfig,
-  signal: AbortSignal,
-  writer: ClientVoiceSessionWriter,
-  delivery: MutationDigestDelivery,
-  preparedEntry: InternalSessionEntry | undefined,
-  conversation: MutationDigestConversation,
-): Promise<void> {
-  if (record.digestDeliveredAt) {
-    return;
-  }
-  if (!delivery.confirmed) {
-    const text = formatMutationDigest(record.effects);
-    if (!text) {
-      return;
-    }
-    const assertCurrent = () => {
-      writer.assertCurrent();
-      const selected = conversation.selected;
-      if (selected) {
-        assertExistingDatabaseIdentity(selected.canonicalPath, selected.key, selected.birthtime);
-      }
-    };
-    const send = async (entry: InternalSessionEntry | undefined, assertReadCurrent: () => void) => {
-      if (!entry) {
-        throw new Error(`Voice mutation digest conversation not found (${record.sessionKey})`);
-      }
-      const target = resolveSessionDeliveryTarget({ entry, requestedChannel: "last" });
-      if (!target.channel || target.channel === "webchat" || !target.to) {
-        return;
-      }
-      const { sendDurableMessageBatchCore, durableMessageBatchMayHaveReachedRecipient } =
-        await loadMessageRuntime();
-      assertCurrent();
-      assertReadCurrent();
-      signal.throwIfAborted();
-      const result = await sendDurableMessageBatchCore({
-        cfg: config,
-        channel: target.channel,
-        to: target.to,
-        ...(target.accountId ? { accountId: target.accountId } : {}),
-        ...(target.threadId != null ? { threadId: target.threadId } : {}),
-        payloads: [{ text }],
-        durability: "required",
-        requireUnknownSendReconciliation: true,
-        signal,
-        session: buildOutboundSessionContext({
-          cfg: config,
-          agentId: record.agentId,
-          sessionKey: record.sessionKey,
-          policySessionKey: record.sessionKey,
-        }),
-      });
-      if (durableMessageBatchMayHaveReachedRecipient(result)) {
-        delivery.mayHaveReachedRecipient = true;
-      }
-      if (result.status === "failed" || result.status === "partial_failed") {
-        throw result.error;
-      }
-      if (result.status === "suppressed" && delivery.mayHaveReachedRecipient) {
-        throw new Error("voice mutation digest delivery outcome is uncertain");
-      }
-      delivery.confirmed = {
-        agentId: record.agentId,
-        sessionKey: record.sessionKey,
-        voiceSessionId: record.voiceSessionId,
-        deliveredAt: Date.now(),
-      };
-    };
-    const target = resolveUnsuffixedSqliteTargetFromSessionStorePath(conversation.storePath);
-    const captured = conversation.identities.get(writer.identity.canonicalPath);
-    // The metadata read already carries delivery facts for its unambiguous canonical conversation.
-    if (
-      !isIncognitoSessionKey(record.sessionKey) &&
-      target.agentId === record.agentId &&
-      target.path === writer.options.path &&
-      captured?.key === writer.identity.key &&
-      captured.birthtime === writer.identity.birthtime
-    ) {
-      conversation.selected ??= captured;
-      await send(preparedEntry, assertCurrent);
-    } else {
-      await withSessionEntryReadOnlyInWorker(
-        {
-          agentId: record.agentId,
-          sessionKey: record.sessionKey,
-          storePath: conversation.selected?.canonicalPath ?? conversation.storePath,
-          env: writer.options.env,
-          projection: "list",
-        },
-        assertCurrent,
-        async (read, owner) => {
-          if (!read.ok) {
-            throw read.error;
-          }
-          if (owner.scope && !conversation.selected) {
-            const selected = readDatabasePathIdentitySync(owner.scope.storePath);
-            const original = conversation.identities.get(selected.canonicalPath);
-            if (!original) {
-              throw new Error("Voice mutation digest conversation store changed before delivery");
-            }
-            assertExistingDatabaseIdentity(
-              selected.canonicalPath,
-              original.key,
-              original.birthtime,
-            );
-            conversation.selected = selected;
-          }
-          await send(read.value, () => owner.assertCurrent());
-        },
-      );
-    }
-    if (!delivery.confirmed) {
-      return;
-    }
-  }
-  await writer.mutate({ ...delivery.confirmed, kind: "delivered", now: Date.now() });
-}
 
 type MutationDigestIntent<TContext> = {
   agentId: string;
@@ -278,18 +154,6 @@ export class ClientVoiceMutationDigestOwner<TContext> {
     } finally {
       this.pump();
     }
-  }
-
-  snapshot(): {
-    active: number;
-    pending: number;
-    retained: number;
-  } {
-    return {
-      active: this.activeAttempts.size,
-      pending: this.pendingKeys.size,
-      retained: this.intents.size,
-    };
   }
 
   clear(): void {
@@ -585,15 +449,133 @@ export function createClientVoiceMutationDigestDeliveryOptions(
         if (!conversation) {
           throw new Error("Voice mutation digest conversation source was not captured");
         }
-        await deliverClientVoiceMutationDigest(
-          record,
-          config,
-          signal,
-          writer,
-          delivery,
-          prepared?.entry,
-          conversation,
-        );
+        const preparedEntry = prepared?.entry;
+        // A confirmed send survives marker retries without re-entering the sender.
+        const deliverClientVoiceMutationDigest = async (): Promise<void> => {
+          if (record.digestDeliveredAt) {
+            return;
+          }
+          if (!delivery.confirmed) {
+            const text = formatMutationDigest(record.effects);
+            if (!text) {
+              return;
+            }
+            const assertCurrent = () => {
+              writer.assertCurrent();
+              const selected = conversation.selected;
+              if (selected) {
+                assertExistingDatabaseIdentity(
+                  selected.canonicalPath,
+                  selected.key,
+                  selected.birthtime,
+                );
+              }
+            };
+            const send = async (
+              entry: InternalSessionEntry | undefined,
+              assertReadCurrent: () => void,
+            ) => {
+              if (!entry) {
+                throw new Error(
+                  `Voice mutation digest conversation not found (${record.sessionKey})`,
+                );
+              }
+              const target = resolveSessionDeliveryTarget({ entry, requestedChannel: "last" });
+              if (!target.channel || target.channel === "webchat" || !target.to) {
+                return;
+              }
+              const { sendDurableMessageBatchCore, durableMessageBatchMayHaveReachedRecipient } =
+                await loadMessageRuntime();
+              assertCurrent();
+              assertReadCurrent();
+              signal.throwIfAborted();
+              const result = await sendDurableMessageBatchCore({
+                cfg: config,
+                channel: target.channel,
+                to: target.to,
+                ...(target.accountId ? { accountId: target.accountId } : {}),
+                ...(target.threadId != null ? { threadId: target.threadId } : {}),
+                payloads: [{ text }],
+                durability: "required",
+                requireUnknownSendReconciliation: true,
+                signal,
+                session: buildOutboundSessionContext({
+                  cfg: config,
+                  agentId: record.agentId,
+                  sessionKey: record.sessionKey,
+                  policySessionKey: record.sessionKey,
+                }),
+              });
+              if (durableMessageBatchMayHaveReachedRecipient(result)) {
+                delivery.mayHaveReachedRecipient = true;
+              }
+              if (result.status === "failed" || result.status === "partial_failed") {
+                throw result.error;
+              }
+              if (result.status === "suppressed" && delivery.mayHaveReachedRecipient) {
+                throw new Error("voice mutation digest delivery outcome is uncertain");
+              }
+              delivery.confirmed = {
+                agentId: record.agentId,
+                sessionKey: record.sessionKey,
+                voiceSessionId: record.voiceSessionId,
+                deliveredAt: Date.now(),
+              };
+            };
+            const target = resolveUnsuffixedSqliteTargetFromSessionStorePath(
+              conversation.storePath,
+            );
+            const captured = conversation.identities.get(writer.identity.canonicalPath);
+            // The metadata read already carries delivery facts for its unambiguous canonical conversation.
+            if (
+              !isIncognitoSessionKey(record.sessionKey) &&
+              target.agentId === record.agentId &&
+              target.path === writer.options.path &&
+              captured?.key === writer.identity.key &&
+              captured.birthtime === writer.identity.birthtime
+            ) {
+              conversation.selected ??= captured;
+              await send(preparedEntry, assertCurrent);
+            } else {
+              await withSessionEntryReadOnlyInWorker(
+                {
+                  agentId: record.agentId,
+                  sessionKey: record.sessionKey,
+                  storePath: conversation.selected?.canonicalPath ?? conversation.storePath,
+                  env: writer.options.env,
+                  projection: "list",
+                },
+                assertCurrent,
+                async (read, owner) => {
+                  if (!read.ok) {
+                    throw read.error;
+                  }
+                  if (owner.scope && !conversation.selected) {
+                    const selected = readDatabasePathIdentitySync(owner.scope.storePath);
+                    const original = conversation.identities.get(selected.canonicalPath);
+                    if (!original) {
+                      throw new Error(
+                        "Voice mutation digest conversation store changed before delivery",
+                      );
+                    }
+                    assertExistingDatabaseIdentity(
+                      selected.canonicalPath,
+                      original.key,
+                      original.birthtime,
+                    );
+                    conversation.selected = selected;
+                  }
+                  await send(read.value, () => owner.assertCurrent());
+                },
+              );
+            }
+            if (!delivery.confirmed) {
+              return;
+            }
+          }
+          await writer.mutate({ ...delivery.confirmed, kind: "delivered", now: Date.now() });
+        };
+        await deliverClientVoiceMutationDigest();
         return true;
       });
     },

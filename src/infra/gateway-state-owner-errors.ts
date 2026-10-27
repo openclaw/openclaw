@@ -34,7 +34,7 @@ export const StateDatabaseMaintenanceScopeError = resolveGlobalSingleton(
     class extends StateDatabaseAccessError {
       override name = "StateDatabaseMaintenanceScopeError";
 
-      constructor(readonly databasePath: string) {
+      constructor(databasePath: string) {
         super(
           `Internal state ownership error at ${databasePath}: this process holds maintenance ownership without an active schema lease or maintenance scope. Retry the command; if it persists, report this error.`,
         );

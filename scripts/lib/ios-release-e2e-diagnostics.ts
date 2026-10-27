@@ -12,6 +12,40 @@ type GatewayLogEvent = {
   pending?: Record<string, boolean>;
 };
 
+export function summarizeIOSBuildTiming(output: string) {
+  const tasks = new Set([
+    "SwiftCompile",
+    "SwiftEmitModule",
+    "SwiftDriver",
+    "SwiftDriver Compilation",
+    "SwiftDriver Compilation Requirements",
+    "CompileC",
+    "Ld",
+    "PhaseScriptExecution",
+    "CodeSign",
+    "Copy",
+    "ProcessInfoPlistFile",
+    "CompileAssetCatalog",
+    "CompileAssetCatalogVariant",
+    "CompileStoryboard",
+    "CompileXIB",
+    "Validate",
+  ]);
+  return [
+    ...stripVTControlCharacters(output).matchAll(
+      /^\s*([A-Za-z ]+) \((\d+) tasks?\) \| ([\d.]+) seconds\s*$/gmu,
+    ),
+  ]
+    .flatMap(([, name = "", count, value]) => {
+      const task = name.trim();
+      const seconds = Number(value);
+      return tasks.has(task) && Number.isFinite(seconds)
+        ? [{ task, tasks: Number(count), seconds }]
+        : [];
+    })
+    .slice(-32);
+}
+
 export function summarizeGatewayLanes(value: unknown) {
   if (!value || typeof value !== "object") {
     return { outcome: "unavailable" as const };

@@ -97,6 +97,8 @@ export type SessionTranscriptSourceCursor = {
 export type SessionTranscriptSourcePageOptions = SessionTranscriptReadOptions & {
   mode: "page";
   includeOffPathMessages?: boolean;
+  /** Narrow by indexed IDs; unindexed legacy rows remain candidates for exact matching. */
+  messageIds?: readonly string[];
   cursor?: SessionTranscriptSourceCursor;
 };
 

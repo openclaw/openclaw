@@ -15,10 +15,13 @@ import {
   resolveSessionAgentIds,
 } from "./agent-scope.js";
 import { ensureAuthProfileStoreWithoutExternalProfilesAsync } from "./auth-profiles/store-runtime.js";
+import { resolveSessionToolListingClientCaps } from "./openclaw-tools.client-caps.js";
+import { resolveCapturedOpenClawToolsFsPolicy } from "./openclaw-tools.fs-policy.js";
 import { resolveOptionalMediaToolFactoryPlan } from "./openclaw-tools.media-factory-plan.js";
 import { prepareProgressCardToolForOpenClawTools } from "./openclaw-tools.registration.js";
 import type { OpenClawToolsOptions } from "./openclaw-tools.types.js";
 import { getPreparedModelRuntimeAuthStore } from "./prepared-model-runtime-auth.js";
+import { withPreparedSessionCapabilityRead } from "./subagents/spawn/subagent-session-store.js";
 import type { PreparedToolConstruction } from "./tool-construction-preparation.js";
 import { hasGenerationToolAvailabilityAsync } from "./tools/media-tool-shared.js";
 import { createOpenClawDelegateToolsForRunAsync } from "./tools/openclaw-delegate-tool.js";
@@ -29,6 +32,9 @@ export async function prepareOpenClawTools(
   shared: PreparedToolConstruction,
 ) {
   const captured = { ...options, config: shared.config };
+  captured.listingClientCaps ??= await withPreparedSessionCapabilityRead(() =>
+    resolveSessionToolListingClientCaps(captured),
+  );
   const { sessionAgentId } = resolveSessionAgentIds({
     sessionKey: captured.runSessionKey ?? captured.agentSessionKey,
     config: captured.config,
@@ -41,6 +47,7 @@ export async function prepareOpenClawTools(
     captured.agentDir ?? resolveAgentDir(captured.config ?? {}, sessionAgentId),
     { allowKeychainPrompt: false },
   );
+  captured.fsPolicy = resolveCapturedOpenClawToolsFsPolicy(captured, sessionAgentId);
   const delegated = isEmbeddedMode()
     ? []
     : await createOpenClawDelegateToolsForRunAsync({ ...captured, sessionAgentId }, shared);
@@ -94,7 +101,6 @@ export async function prepareOpenClawTools(
       agentDir: captured.agentDir,
       workspaceDir,
       authStore: captured.authProfileStore,
-      authProfileStoreSource: captured.authProfileStoreSource,
       modelConfig: availabilityConfig?.agents?.defaults?.mediaModels?.[kind],
       providerKey,
       providers: captured.preparedModelRuntime?.mediaCapabilityProviders?.[providerKey],

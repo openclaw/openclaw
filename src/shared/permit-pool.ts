@@ -14,6 +14,17 @@ type PermitWaiter = {
 export function createPermitPool(limit: number) {
   let active = 0;
   const waiters: PermitWaiter[] = [];
+  let waiterHead = 0;
+
+  const compactWaiters = () => {
+    if (waiterHead >= waiters.length) {
+      waiters.length = 0;
+      waiterHead = 0;
+    } else if (waiterHead > 256 && waiterHead * 2 > waiters.length) {
+      waiters.splice(0, waiterHead);
+      waiterHead = 0;
+    }
+  };
 
   const createRelease = (): PermitRelease => {
     active += 1;
@@ -24,13 +35,15 @@ export function createPermitPool(limit: number) {
       }
       released = true;
       active -= 1;
-      for (let waiter = waiters.shift(); waiter; waiter = waiters.shift()) {
+      for (let waiter = waiters[waiterHead]; waiter; waiter = waiters[waiterHead]) {
+        waiterHead += 1;
         const expired = waiter.expired();
         waiter.settle(expired ? null : createRelease());
         if (!expired) {
           break;
         }
       }
+      compactWaiters();
     };
   };
 
@@ -38,7 +51,7 @@ export function createPermitPool(limit: number) {
 
   return {
     get pendingCount(): number {
-      return waiters.length;
+      return waiters.length - waiterHead;
     },
     tryAcquire,
     async acquire({
@@ -56,16 +69,19 @@ export function createPermitPool(limit: number) {
       }
       return await new Promise<PermitRelease | null>((resolve) => {
         let cancelDeadline: (() => void) | undefined;
-        const cancel = () => waiter.settle(null);
+        const cancel = () => {
+          const index = waiters.indexOf(waiter, waiterHead);
+          if (index >= waiterHead) {
+            waiters.splice(index, 1);
+            compactWaiters();
+          }
+          waiter.settle(null);
+        };
         const waiter: PermitWaiter = {
           expired,
           settle: (release) => {
             cancelDeadline?.();
             signal?.removeEventListener("abort", cancel);
-            const index = waiters.indexOf(waiter);
-            if (index >= 0) {
-              waiters.splice(index, 1);
-            }
             resolve(release);
           },
         };

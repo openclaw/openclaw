@@ -18,7 +18,7 @@ import type {
   WebhookVerificationResult,
 } from "../types.js";
 import { verifyTelnyxWebhook } from "../webhook-security.js";
-import type { VoiceCallProvider } from "./base.js";
+import { assertVoiceCallProviderSetting, type VoiceCallProvider } from "./base.js";
 import { createCarrierApi } from "./shared/carrier-api.js";
 
 interface TelnyxProviderOptions {
@@ -77,12 +77,8 @@ export class TelnyxProvider implements VoiceCallProvider {
   private readonly api: ReturnType<typeof createCarrierApi>;
 
   constructor(config: TelnyxConfig, options: TelnyxProviderOptions = {}) {
-    if (!config.apiKey) {
-      throw new Error("Telnyx API key is required");
-    }
-    if (!config.connectionId) {
-      throw new Error("Telnyx connection ID is required");
-    }
+    assertVoiceCallProviderSetting(config.apiKey, "Telnyx API key is required");
+    assertVoiceCallProviderSetting(config.connectionId, "Telnyx connection ID is required");
 
     this.connectionId = config.connectionId;
     this.publicKey = config.publicKey;
@@ -167,7 +163,6 @@ export class TelnyxProvider implements VoiceCallProvider {
           type: "call.speech",
           transcript,
           isFinal: data.payload?.transcription_data?.is_final ?? data.payload?.is_final ?? true,
-          confidence: data.payload?.transcription_data?.confidence ?? data.payload?.confidence,
         };
       }
 

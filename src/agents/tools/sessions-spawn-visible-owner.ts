@@ -1,5 +1,6 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { SessionEntry } from "../../config/sessions.js";
+import { resolveSessionCreatorActor } from "../../config/sessions/session-entry-provenance.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { projectSessionActor } from "../../gateway/session-identity-projection.js";
 
@@ -10,7 +11,7 @@ export function resolveVisibleSessionOwner(
   requesterLabel: string | undefined,
   cfg: OpenClawConfig,
 ) {
-  const actor = entry?.owner?.actor ?? entry?.createdActor;
+  const actor = entry?.owner?.actor ?? resolveSessionCreatorActor(entry?.createdActor);
   if (!actor?.id) {
     return {
       type: "agent" as const,

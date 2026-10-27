@@ -17,6 +17,7 @@ import {
   listCliRuntimeProviderIds,
   resolveCliRuntimeCanonicalProvider,
   resolveCliRuntimeModelBackendBinding,
+  resolveCliRuntimeProfileAlias,
 } from "./cli-backends.js";
 import { resolveLegacyInheritedAuthDir } from "./legacy-inherited-auth-dir.js";
 import { resolveModelRuntimePolicy } from "./model-runtime-policy.js";
@@ -54,11 +55,13 @@ export function isCliRuntimeProvider(
   provider: string,
   params: { config?: OpenClawConfig } = {},
 ): boolean {
-  const normalized = normalizeProviderId(provider);
-  return listCliRuntimeProviderIds({
-    config: params.config,
-    includeSetupRegistry: params.config !== undefined,
-  }).includes(normalized);
+  return (
+    resolveCliRuntimeCanonicalProvider({
+      runtime: provider,
+      config: params.config,
+      includeSetupRegistry: params.config !== undefined,
+    }) !== undefined
+  );
 }
 
 export function isCliRuntimeAlias(runtime: string | undefined): boolean {
@@ -252,32 +255,6 @@ function resolveRuntimeAuthProvider(
   });
 }
 
-function resolveProfileRuntimeAlias(
-  params: RuntimeAuthAliasParams & {
-    provider: string;
-    profileProvider: string | undefined;
-  },
-): string | undefined {
-  const provider = normalizeProviderId(params.provider);
-  const profileProvider = normalizeProviderId(params.profileProvider ?? "");
-  if (!provider || !profileProvider) {
-    return undefined;
-  }
-  const providerAuthKey = resolveRuntimeAuthProvider(provider, params);
-  const profileAuthKey = resolveRuntimeAuthProvider(profileProvider, params, true);
-  if (providerAuthKey !== profileAuthKey) {
-    return undefined;
-  }
-  if (profileProvider === provider) {
-    return undefined;
-  }
-  return resolveCliRuntimeModelBackendBinding({
-    config: params.cfg,
-    provider,
-    runtime: profileProvider,
-  })?.runtime;
-}
-
 function resolveCliRuntimeFromAuthProfile(
   params: RuntimeAuthAliasParams & {
     provider: string;
@@ -303,7 +280,7 @@ function resolveCliRuntimeFromAuthProfile(
     );
   if (params.authProfileId?.trim()) {
     const profileId = params.authProfileId.trim();
-    return resolveProfileRuntimeAlias({
+    return resolveCliRuntimeProfileAlias({
       ...params,
       provider: params.provider,
       profileProvider: (configuredProfiles[profileId] ?? store?.profiles[profileId])?.provider,
@@ -327,7 +304,7 @@ function resolveCliRuntimeFromAuthProfile(
     if (profileAuthKey !== providerAuthKey) {
       continue;
     }
-    return resolveProfileRuntimeAlias({
+    return resolveCliRuntimeProfileAlias({
       ...params,
       provider,
       profileProvider: profile.provider,
@@ -357,7 +334,7 @@ function resolveCliRuntimeFromAuthProfile(
   }
   const [profileId] = compatibleProfileIds;
   return profileId
-    ? resolveProfileRuntimeAlias({
+    ? resolveCliRuntimeProfileAlias({
         ...params,
         provider,
         profileProvider: configuredProfiles[profileId]?.provider,
@@ -372,14 +349,17 @@ export function resolveCliRuntimeExecutionProvider(
     modelId?: string;
     authProfileId?: string;
   },
+  configuredRuntimePolicy?: ReturnType<typeof resolveModelRuntimePolicy>,
 ): string | undefined {
   const provider = normalizeProviderId(params.provider);
-  const { policy, matchedProvider } = resolveModelRuntimePolicy({
-    config: params.cfg,
-    provider,
-    modelId: params.modelId,
-    agentId: params.agentId,
-  });
+  const { policy, matchedProvider } =
+    configuredRuntimePolicy ??
+    resolveModelRuntimePolicy({
+      config: params.cfg,
+      provider,
+      modelId: params.modelId,
+      agentId: params.agentId,
+    });
   const runtime = policy?.id?.trim() || undefined;
   if (runtime === "openclaw") {
     return undefined;

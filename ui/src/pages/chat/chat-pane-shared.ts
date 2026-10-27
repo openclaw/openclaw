@@ -1,8 +1,12 @@
-import { asNullableRecord as catalogRawRecord } from "@openclaw/normalization-core/record-coerce";
+import {
+  isApplePlatform,
+  matchesKeyboardShortcut,
+  resolveAsciiShortcutKey,
+} from "../../../../src/shared/keyboard-shortcuts.ts";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import { capturePlacementStartupConnection } from "../../app/session-placement-startup.ts";
-import { menuOwnsShortcut } from "../../components/menu-shortcuts.ts";
+import { findMenuSearch, menuOwnsShortcut } from "../../components/menu-shortcuts.ts";
 import { hasModalSurface, registryFor } from "../../components/overlay-registry.ts";
 import type { BoardProvider } from "../../lib/board/provider.ts";
 import type { BoardFace } from "../../lib/board/settings.ts";
@@ -117,34 +121,11 @@ export type ResolvedBoardView = {
   activeTabId: string;
 };
 
-export const CATALOG_TOOL_RESULT_PREVIEW_MAX_CHARS = 500;
 // One distance owns both halves of early history loading: upward intent within
 // this range arms the sentinel observer, and the observer's rootMargin fires
 // the same distance out. Splitting them re-creates the wall at the smaller value.
 export const CHAT_HISTORY_PREFETCH_EDGE_PX = 1200;
 export const CHAT_HISTORY_INTENT_IDLE_MS = 200;
-
-export function catalogRawString(raw: unknown, keys: readonly string[]): string | null {
-  const record = catalogRawRecord(raw);
-  if (!record) {
-    return null;
-  }
-  for (const key of keys) {
-    const value = record[key];
-    if (typeof value === "string" && value.trim()) {
-      return value.trim();
-    }
-  }
-  return null;
-}
-export function catalogRawResult(raw: unknown): string | null {
-  const result = catalogRawRecord(raw)?.result;
-  try {
-    return JSON.stringify(result) || null;
-  } catch {
-    return null;
-  }
-}
 
 export type ChatPaneConnectionScope = {
   context: ApplicationContext;
@@ -169,12 +150,23 @@ const CHAT_DROPDOWN_KEYS = new Set([
   "ArrowUp",
   "Escape",
 ]);
+
 export const NEW_SESSION_ACTIVE_RUN_MESSAGE =
   "Start a new session after the active run or queued messages finish.";
 export const NEW_SESSION_LIST_LOADING_MESSAGE =
   "Session list is still refreshing. Try New Chat again in a moment.";
 export const NEW_SESSION_CREATE_FAILED_MESSAGE =
   "New Chat could not create a new thread. Try again in a moment.";
+
+// Expanded questions own only their advertised, enabled numeric shortcuts.
+function questionOwnsNumericShortcut(target: HTMLElement, key: string): boolean {
+  return (
+    /^[1-9]$/u.test(key) &&
+    target.matches(
+      `[data-chat-autotype-shortcuts="active"]:has([data-shortcut="${key}"]:not(:disabled))`,
+    )
+  );
+}
 
 function keyboardEventPathHasInteractiveTarget(event: KeyboardEvent): boolean {
   return event
@@ -185,6 +177,8 @@ function keyboardEventPathHasInteractiveTarget(event: KeyboardEvent): boolean {
         (target.matches("dialog[open], [aria-modal='true']") ||
           target.matches(CHAT_PRINTABLE_KEY_TARGET_SELECTOR) ||
           menuOwnsShortcut(target, event.key) ||
+          (!(event.target instanceof HTMLAnchorElement) &&
+            questionOwnsNumericShortcut(target, event.key)) ||
           (event.key === " " && target.matches(CHAT_SPACE_ACTIVATION_SELECTOR))),
     );
 }
@@ -198,24 +192,32 @@ function openDropdownOwnsKey(root: HTMLElement, key: string): boolean {
       overlay.open &&
       overlay.surface.matches('[role="menu"][popover]') &&
       !overlay.surface.closest("[inert]") &&
-      (CHAT_DROPDOWN_KEYS.has(key) || menuOwnsShortcut(overlay.surface, key)),
+      (CHAT_DROPDOWN_KEYS.has(key) ||
+        menuOwnsShortcut(overlay.surface, key) ||
+        (key.length === 1 && Boolean(findMenuSearch(overlay.surface)))),
   );
 }
 
-export function focusChatComposerFromPrintableKeydown(
+export function focusChatComposerFromKeydown(
   root: HTMLElement,
   event: KeyboardEvent,
   composer: HTMLTextAreaElement | null,
+  options: { allowPaste?: boolean } = {},
 ): void {
+  const nativePaste =
+    options.allowPaste === true &&
+    matchesKeyboardShortcut(
+      { modifiers: event.shiftKey ? ["mod", "shift"] : ["mod"], key: "v", platformSpecific: true },
+      event,
+      isApplePlatform(),
+      resolveAsciiShortcutKey(event),
+    );
   // Native callers cross modal and composer renderer boundaries to transfer keyboard ownership.
   if (
     event.defaultPrevented ||
     event.isComposing ||
-    event.metaKey ||
-    event.ctrlKey ||
-    event.altKey ||
+    (!nativePaste && (event.metaKey || event.ctrlKey || event.altKey || event.key.length !== 1)) ||
     openDropdownOwnsKey(root, event.key) ||
-    event.key.length !== 1 ||
     keyboardEventPathHasInteractiveTarget(event) ||
     root.closest("[inert]") ||
     hasModalSurface(root.ownerDocument)
@@ -225,7 +227,8 @@ export function focusChatComposerFromPrintableKeydown(
   if (!composer || composer.disabled || composer.readOnly) {
     return;
   }
-  // Focus transfers ownership; block old-target dropdown typeahead from cancelling input.
+  // Keep the native default: paste must reach this textarea with its original clipboard data.
+  // Block old-target dropdown typeahead from cancelling the transferred input.
   composer.focus({ preventScroll: true });
   event.stopImmediatePropagation();
 }

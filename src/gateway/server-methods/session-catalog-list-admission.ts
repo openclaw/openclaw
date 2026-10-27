@@ -4,7 +4,6 @@ import { createPermitPool } from "../../shared/permit-pool.js";
 export type SessionCatalogListTiming = {
   admittedAt?: number;
   settledAt?: number;
-  continuationWaitMs?: number;
   admittedStepMs?: number;
   stepCount?: number;
 };

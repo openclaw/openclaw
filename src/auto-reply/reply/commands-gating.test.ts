@@ -135,7 +135,8 @@ vi.mock("../../config/runtime-schema.js", async () => {
   };
 });
 
-vi.mock("../../utils/message-channel.js", () => ({
+vi.mock("../../utils/message-channel.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../utils/message-channel.js")>()),
   isInternalMessageChannel: isInternalMessageChannelMock,
 }));
 

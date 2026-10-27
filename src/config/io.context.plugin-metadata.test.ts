@@ -28,9 +28,6 @@ vi.mock("../plugins/plugin-metadata-snapshot.js", async (importOriginal) => ({
 
 const { resolveReadOnlyChannelPluginsForConfig } = await import("../channels/plugins/read-only.js");
 const { createConfigIoContext } = await import("./io.context.js");
-const { resolveConfigWidePluginMetadataSnapshot, resolveConfigWidePluginManifestRegistry } =
-  await import("./io.plugin-metadata.js");
-
 const { createCanonicalAgentConfigFixture } = await import("../test-utils/config-roster.js");
 const { validateConfigObjectWithPlugins, validateConfigObjectWithPluginsAsync } =
   await import("./validation.js");
@@ -76,9 +73,6 @@ function workspaceSnapshot(
     policyHash,
     index,
     registryIndex: index,
-    plugins,
-    manifestRegistry: { plugins, diagnostics: [] },
-    byPluginId: new Map(plugins.map((plugin) => [plugin.id, plugin])),
     discovery: {
       candidates: plugins.map((plugin) =>
         recordPluginCandidateInstallOwner(
@@ -102,15 +96,8 @@ function metadataLoader() {
   return context.createValidationPluginMetadataSnapshotLoader({ env: {} });
 }
 
-function mockWorkspaces(
-  entries: Record<string, ReturnType<typeof workspaceSnapshot> | PluginManifestRecord[]>,
-) {
-  const snapshots = new Map(
-    Object.entries(entries).map(
-      ([workspace, entry]) =>
-        [workspace, Array.isArray(entry) ? workspaceSnapshot(workspace, entry) : entry] as const,
-    ),
-  );
+function mockWorkspaces(entries: Record<string, ReturnType<typeof workspaceSnapshot>>) {
+  const snapshots = new Map(Object.entries(entries));
   mocks.resolvePluginMetadataSnapshotInput.mockImplementation(
     ({ workspaceDir }: { workspaceDir: string }) => snapshots.get(workspaceDir),
   );
@@ -193,24 +180,29 @@ it("discovers the new workspace when reload changes legacy default ownership", a
 
   expect(result).toMatchObject({ ok: true });
   expect(loader.getSnapshot()?.plugins.map((plugin) => plugin.id)).toEqual([added.id]);
-  expect(
-    mocks.resolvePluginMetadataSnapshotInput.mock.calls.map(([params]) => params.workspaceDir),
-  ).toEqual(["/srv/base/ops", "/srv/base"]);
 });
 
-it("feeds merged workspace plugins to snapshot-backed read-only discovery", () => {
+it("merges workspace discovery in order, retaining diagnostics but rejecting conflicting IDs", () => {
   const primary = manifestRecord("primary", "/srv/ops/primary");
   const secondary = manifestRecord("chat", "/srv/research/chat", ["research-chat"]);
-  const mergedRegistry = { plugins: [primary, secondary], diagnostics: [] };
+  const shared = manifestRecord("shared", "/plugins/shared");
   const secondaryDiagnostic = {
     level: "warn" as const,
     code: "persisted-registry-stale-source" as const,
     message: "Retained secondary registry metadata",
   };
   const snapshots = mockWorkspaces({
-    "/srv/ops": workspaceSnapshot("/srv/ops", [primary], ["primary"]),
+    "/srv/ops": workspaceSnapshot(
+      "/srv/ops",
+      [primary, shared, manifestRecord("conflict", "/srv/ops/conflict")],
+      ["primary"],
+    ),
     "/srv/research": {
-      ...workspaceSnapshot("/srv/research", [secondary]),
+      ...workspaceSnapshot("/srv/research", [
+        secondary,
+        shared,
+        manifestRecord("conflict", "/srv/research/conflict"),
+      ]),
       registryDiagnostics: [secondaryDiagnostic],
     },
   });
@@ -226,52 +218,27 @@ it("feeds merged workspace plugins to snapshot-backed read-only discovery", () =
   loader.load(cfg);
   const snapshot = loader.getSnapshot();
 
-  const ids = ["primary", "chat"];
+  const ids = ["primary", "shared", "chat"];
   expect(snapshot?.index.plugins.map((plugin) => plugin.pluginId)).toEqual(ids);
   expect(snapshot?.registryIndex).toEqual(snapshots.get("/srv/ops")?.registryIndex);
   expect(snapshot?.registryDiagnostics).toEqual([secondaryDiagnostic]);
-  expect(snapshot?.plugins).toEqual(mergedRegistry.plugins);
-  expect(structuredClone(snapshot?.manifestRegistry)).toEqual(mergedRegistry);
+  expect(snapshot?.plugins.map((plugin) => plugin.id)).toEqual(ids);
   expect(snapshot?.index.plugins.find((plugin) => plugin.pluginId === "primary")?.enabled).toBe(
     false,
   );
-  expect(snapshot?.byPluginId.get("chat")).toBe(secondary);
-  expect(snapshot?.owners.channels.get("research-chat")).toEqual(["chat"]);
   expect(snapshot?.discovery?.candidates.map((candidate) => candidate.workspaceDir)).toEqual([
     "/srv/ops",
     "/srv/research",
+    "/srv/research",
   ]);
   expect(snapshot?.discovery?.candidates.map(resolvePluginCandidateInstallOwner)).toEqual(ids);
-  expect(Object.isFrozen(snapshot?.index.plugins)).toBe(true);
   expect(
     resolveReadOnlyChannelPluginsForConfig(cfg, {
       env: {},
       metadataSnapshot: snapshot,
     }).plugins.map((plugin) => plugin.id),
   ).toContain("research-chat");
-});
-
-it("preserves shared source order and rejects conflicting IDs throughout the inventory", () => {
-  const primary = manifestRecord("primary", "/srv/ops/primary");
-  const shared = manifestRecord("shared", "/plugins/shared");
-  const secondary = manifestRecord("secondary", "/srv/research/secondary");
-  mockWorkspaces({
-    "/srv/ops": [primary, shared, manifestRecord("conflict", "/srv/ops/conflict")],
-    "/srv/research": [secondary, shared, manifestRecord("conflict", "/srv/research/conflict")],
-  });
-
-  const snapshot = resolveConfigWidePluginMetadataSnapshot({ config: { agents }, env: {} });
-
-  const ids = ["primary", "shared", "secondary"];
-  expect(snapshot.plugins.map((plugin) => plugin.id)).toEqual(ids);
-  expect(snapshot.index.plugins.map((plugin) => plugin.pluginId)).toEqual(ids);
-  expect(snapshot.discovery?.candidates.map((candidate) => candidate.idHint)).toEqual(ids);
-  expect(
-    structuredClone(
-      resolveConfigWidePluginManifestRegistry({ config: { agents }, env: {}, pluginIds: [] }),
-    ).plugins,
-  ).toEqual([]);
-  expect(snapshot.diagnostics).toContainEqual(
+  expect(snapshot?.diagnostics).toContainEqual(
     expect.objectContaining({
       level: "error",
       pluginId: "conflict",

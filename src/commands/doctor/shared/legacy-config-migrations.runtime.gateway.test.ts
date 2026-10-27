@@ -29,3 +29,14 @@ it("removes even a false tool-title preference without changing other settings",
   expect(migrate(result.next)).toEqual({ next: null, changes: [] });
   expect(raw.gateway.controlUi.toolTitles).toBe(false);
 });
+
+it.each([false, undefined])(
+  "preserves an empty Control UI owner after removing %j",
+  (toolTitles) => {
+    const result = migrate({ gateway: { controlUi: { toolTitles } } });
+    expect(result.next).toEqual({ gateway: { controlUi: {} } });
+    expect(result.changes).toEqual([
+      "Removed retired gateway.controlUi.toolTitles; tool activity descriptions are automatic and make no utility-model calls.",
+    ]);
+  },
+);

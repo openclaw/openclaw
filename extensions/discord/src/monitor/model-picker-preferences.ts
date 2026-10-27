@@ -7,7 +7,7 @@ import {
   preferenceTimestampMs,
 } from "./model-picker-preference-primitives.js";
 
-const DEFAULT_RECENT_LIMIT = 5;
+const RECENT_LIMIT = 5;
 const PREFERENCE_MAX_ENTRIES = 2_000;
 let lastPreferenceTimestampMs = 0;
 let lastPreferenceOrder = 0;
@@ -19,11 +19,10 @@ type ModelPickerPreferencesEntry = {
   updatedOrder?: number;
 };
 
-function openPreferenceStore(env?: NodeJS.ProcessEnv) {
+function openPreferenceStore() {
   return getDiscordRuntime().state.openKeyedStore<ModelPickerPreferencesEntry>({
     namespace: "model-picker-preferences",
     maxEntries: PREFERENCE_MAX_ENTRIES,
-    ...(env ? { env } : {}),
   });
 }
 
@@ -113,17 +112,14 @@ function nextPreferenceTimestamp(): {
 
 export async function readDiscordModelPickerRecentModels(params: {
   scope: DiscordModelPickerPreferenceScope;
-  limit?: number;
   allowedModelRefs?: Set<string>;
-  env?: NodeJS.ProcessEnv;
 }): Promise<string[]> {
   const key = buildDiscordModelPickerPreferenceKey(params.scope);
   if (!key) {
     return [];
   }
-  const limit = Math.max(1, Math.min(params.limit ?? DEFAULT_RECENT_LIMIT, 10));
   try {
-    const store = openPreferenceStore(params.env);
+    const store = openPreferenceStore();
     const recent = scopedPreferenceEntries(await store.entries(), key)
       .toSorted(comparePreferenceEntries)
       .map((entry) => entry.value.modelRef);
@@ -131,7 +127,7 @@ export async function readDiscordModelPickerRecentModels(params: {
       !params.allowedModelRefs || params.allowedModelRefs.size === 0
         ? recent
         : recent.filter((modelRef) => params.allowedModelRefs?.has(modelRef));
-    return [...new Set(visible)].slice(0, limit);
+    return [...new Set(visible)].slice(0, RECENT_LIMIT);
   } catch {
     // Preferences are optional; unavailable history must not fail the model picker.
     return [];
@@ -141,8 +137,6 @@ export async function readDiscordModelPickerRecentModels(params: {
 export async function recordDiscordModelPickerRecentModel(params: {
   scope: DiscordModelPickerPreferenceScope;
   modelRef: string;
-  limit?: number;
-  env?: NodeJS.ProcessEnv;
 }): Promise<void> {
   const key = buildDiscordModelPickerPreferenceKey(params.scope);
   const normalizedModelRef = normalizeModelRef(params.modelRef);
@@ -151,7 +145,7 @@ export async function recordDiscordModelPickerRecentModel(params: {
   }
 
   try {
-    const store = openPreferenceStore(params.env);
+    const store = openPreferenceStore();
     const existingEntries = scopedPreferenceEntries(await store.entries(), key);
     const timestamp = nextPreferenceTimestamp();
     const modelKey = buildPreferenceModelKey(key, normalizedModelRef);
@@ -160,11 +154,10 @@ export async function recordDiscordModelPickerRecentModel(params: {
       modelRef: normalizedModelRef,
       ...timestamp,
     });
-    const limit = Math.max(1, Math.min(params.limit ?? DEFAULT_RECENT_LIMIT, 10));
     const expired = existingEntries
       .filter((entry) => entry.key !== modelKey)
       .toSorted(comparePreferenceEntries)
-      .slice(limit - 1);
+      .slice(RECENT_LIMIT - 1);
     await Promise.all(expired.map((entry) => store.delete(entry.key)));
   } catch {
     // Preferences are optional; a failed save must not fail the model command.

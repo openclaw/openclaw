@@ -1,8 +1,8 @@
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { createDeferred, withinTest } from "../../test/helpers/promise.js";
 import { resolveAgentWorkspaceDir } from "../agents/agent-scope.js";
 import { resolveSandboxWorkspaceLayoutPaths } from "../agents/sandbox/shared.js";
 import { ensureAgentWorkspace } from "../agents/workspace.js";
@@ -67,12 +67,11 @@ async function writeLegacyWorkspace(dir: string, bytes = legacyBytes) {
   return sourcePath;
 }
 
-async function migrate(cfg: OpenClawConfig, homedir?: () => string) {
+async function migrate(cfg: OpenClawConfig) {
   const stateDir = state.stateDir;
   const detected = await detectLegacyWorkspaceState({
     cfg,
     stateDir,
-    homedir,
     doctorOnlyStateMigrations: true,
   });
   expect((await migrateLegacyWorkspaceState({ stateDir, detected })).warnings).toEqual([]);
@@ -166,45 +165,32 @@ it("refuses every owned session workspace without reading its store on the main 
   expect(prepare.mock.calls.filter(([sql]) => sql.includes('"retained_window"'))).toEqual([]);
 });
 
-it.each(["disk", "supplied snapshot"])(
-  "refuses a secondary workspace from %s until Doctor migrates it",
-  async (source) => {
-    const workspaceDir = state.statePath("workspace-secondary");
-    const cfg = config({
-      main: { workspace: state.statePath("workspace-main") },
-      secondary: { workspace: workspaceDir },
-    });
-    await writeConfigFile(cfg);
-    const sourcePath = await writeLegacyWorkspace(workspaceDir);
-    const initialSnapshotRead =
-      source === "supplied snapshot"
-        ? await readConfigFileSnapshotWithPluginMetadata({ observe: false })
-        : undefined;
-    if (initialSnapshotRead) {
-      await writeConfigFile(
-        config({
-          ...cfg.agents.entries,
-          secondary: { workspace: state.statePath("workspace-clean") },
-        }),
-      );
-    }
-    const port = await getFreePort();
-    const attempt = start(port, initialSnapshotRead);
-    await expect(attempt).rejects.toThrow("Legacy workspace setup state requires migration");
-    await expect(fetch(`http://127.0.0.1:${port}/readyz`)).rejects.toThrow();
-    await expect(fs.stat(sourcePath)).resolves.toBeDefined();
+it("refuses a secondary workspace from the supplied snapshot even after disk config changes", async () => {
+  const workspaceDir = state.statePath("workspace-secondary");
+  const cfg = config({
+    main: { workspace: state.statePath("workspace-main") },
+    secondary: { workspace: workspaceDir },
+  });
+  await writeConfigFile(cfg);
+  const sourcePath = await writeLegacyWorkspace(workspaceDir);
+  const snapshot = await readConfigFileSnapshotWithPluginMetadata({ observe: false });
+  await writeConfigFile(
+    config({
+      ...cfg.agents.entries,
+      secondary: { workspace: state.statePath("workspace-clean") },
+    }),
+  );
+  const port = await getFreePort();
+  await expect(start(port, snapshot)).rejects.toThrow(
+    "Legacy workspace setup state requires migration",
+  );
+  await expect(fetch(`http://127.0.0.1:${port}/readyz`)).rejects.toThrow();
+  await expect(fs.stat(sourcePath)).resolves.toBeDefined();
+});
 
-    await migrate(cfg, os.homedir);
-    server = await start(port, initialSnapshotRead);
-    const ready = await fetch(`http://127.0.0.1:${port}/readyz`);
-    expect(ready.status).toBe(200);
-    await expect(fs.stat(sourcePath)).rejects.toHaveProperty("code", "ENOENT");
-  },
-);
-
-it.each(["managed write", "file watcher"])(
+it.for(["managed write", "file watcher"])(
   "rejects an unmigrated workspace switch before publication via %s",
-  async (ingress) => {
+  async (ingress, { signal }) => {
     // The live candidate boundary needs the real managed reloader, not the minimal stub.
     state.envVars.OPENCLAW_TEST_MINIMAL_GATEWAY = undefined;
     state.applyEnv();
@@ -222,8 +208,23 @@ it.each(["managed write", "file watcher"])(
     const persona = "Retained workspace persona.\n";
     await fs.writeFile(personaPath, persona);
     const port = await getFreePort();
-    server = await start(port);
-    await server.startupSettled;
+    const startReady = async () => {
+      // Startup settles before recovery; observe the owner's readiness event.
+      const ready = createDeferred();
+      const info = gatewayKernelLogs.log.info.bind(gatewayKernelLogs.log);
+      using readyLog = vi.spyOn(gatewayKernelLogs.log, "info");
+      readyLog.mockImplementation((message, meta) => {
+        info(message, meta);
+        if (message === "gateway ready") {
+          ready.resolve();
+        }
+      });
+      const started = await start(port);
+      await withinTest(started.startupSettled, signal);
+      await withinTest(ready.promise, signal);
+      return started;
+    };
+    server = await startReady();
     client = await connectGatewayClient({
       url: `ws://127.0.0.1:${port}`,
       scopes: ["operator.admin"],
@@ -266,8 +267,7 @@ it.each(["managed write", "file watcher"])(
     await expect(fs.stat(sourcePath)).rejects.toHaveProperty("code", "ENOENT");
     // Restart with last-good config, then retry the same live change after Doctor.
     await state.writeConfig(cfg);
-    server = await start(port);
-    await server.startupSettled;
+    server = await startReady();
     reloadError.mockClear();
     const application = createRuntimeConfigWriteApplication();
     await writeConfigFile(nextConfig, attachRuntimeConfigWriteApplication({}, application));

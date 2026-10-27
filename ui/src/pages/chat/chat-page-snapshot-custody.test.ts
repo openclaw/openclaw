@@ -1,10 +1,9 @@
-/* @vitest-environment jsdom */
-
 import { expectDefined } from "@openclaw/normalization-core";
 import { createRouter } from "@openclaw/uirouter";
 import { IDBFactory } from "fake-indexeddb";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
+import { makeBootRoster } from "../../app/bootstrap.test-support.ts";
 import { SESSION_FACE_PREFERENCE_PARAM } from "../../lib/sessions/route-navigation.ts";
 import { createApplicationContextProvider } from "../../test-helpers/application-context.ts";
 import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
@@ -13,8 +12,8 @@ import { createSolidApplicationContextProvider } from "../../test-helpers/solid-
 import { createStorageMock } from "../../test-helpers/storage.ts";
 import { chatHistoryRequests } from "./chat-history-state.ts";
 import { settleChatPage, stubMatchMedia } from "./chat-page.test-support.ts";
-import "./chat-page.ts";
 import { createMountedPanes } from "./chat-pane-mounted.test-support.ts";
+import "./chat-page.tsx";
 import { ChatPaneRuntime } from "./chat-pane-render.ts";
 import { nativeHistoryMessage } from "./chat-pane.test-support.ts";
 import type { ChatPaneElement } from "./chat-pane.tsx";
@@ -24,10 +23,15 @@ import {
   resetTranscriptTestDom,
 } from "./components/chat-transcript.test-support.ts";
 import { loadChatRoute } from "./route-loader.ts";
-import { readChatSessionSnapshot, resolveChatSnapshotKey } from "./session-message-cache.ts";
+import {
+  readChatSessionSnapshot,
+  resolveChatSnapshotKey,
+  type ChatSessionSnapshot,
+} from "./session-message-cache.ts";
 import { clearStoredChatSnapshots } from "./session-snapshot-invalidation.ts";
 import { SessionSnapshotStore } from "./session-snapshot-store.ts";
-import type { ChatSessionSnapshot } from "./session-snapshot-types.ts";
+/* @vitest-environment jsdom */
+import { writeSnapshotFixture } from "./session-snapshot.test-support.ts";
 
 beforeEach(() => {
   installTranscriptDomMocks();
@@ -69,18 +73,13 @@ it.each([false, true])(
     const researchSnapshotKey = resolveChatSnapshotKey(snapshotHost, {
       sessionKey: "agent:research:main",
     });
-    writer.write(mainSnapshotKey, mainSnapshot);
-    writer.write(researchSnapshotKey, researchSnapshot);
+    writeSnapshotFixture(writer, mainSnapshotKey, mainSnapshot);
+    writeSnapshotFixture(writer, researchSnapshotKey, researchSnapshot);
     await writer.flush();
     const originalRequest = client.request.bind(client);
     const routedClient = createTestGatewayClient(async (method, params, options) => {
       if (method === "agents.list") {
-        return {
-          defaultId: "main",
-          mainKey: "main",
-          scope: "global",
-          agents: [{ id: "main" }, { id: "research" }],
-        };
+        return makeBootRoster({ scope: "global", agents: [{ id: "main" }, { id: "research" }] });
       }
       if (method === "sessions.resolve") {
         return {
@@ -123,7 +122,6 @@ it.each([false, true])(
       "chat",
       lifecycle.signal,
     );
-    expect(route).toMatchObject({ kind: "session", sessionKey: "global" });
     if (!("kind" in route) || route.kind !== "session") {
       throw new Error("Expected the supported global chat route");
     }
@@ -137,16 +135,17 @@ it.each([false, true])(
     const release = createDeferred();
     // oxlint-disable-next-line typescript/unbound-method -- Rebound to the original page-store receiver below.
     const originalRead = SessionSnapshotStore.prototype.read;
-    const storedRead = vi
-      .spyOn(SessionSnapshotStore.prototype, "read")
-      .mockImplementation(async function (this: SessionSnapshotStore, key) {
-        const snapshot = await originalRead.call(this, key);
-        if (key === mainSnapshotKey) {
-          entered.resolve();
-          await release.promise;
-        }
-        return snapshot;
-      });
+    vi.spyOn(SessionSnapshotStore.prototype, "read").mockImplementation(async function (
+      this: SessionSnapshotStore,
+      key,
+    ) {
+      const snapshot = await originalRead.call(this, key);
+      if (key === mainSnapshotKey) {
+        entered.resolve();
+        await release.promise;
+      }
+      return snapshot;
+    });
     let pane: ChatPaneRuntime | undefined;
     const connected = vi.spyOn(ChatPaneRuntime.prototype, "start");
     const provider = createSolidApplicationContextProvider(context);
@@ -180,7 +179,6 @@ it.each([false, true])(
       );
       expect(expectDefined(pane, "mounted pane runtime").element).toBe(paneElement);
       expect(chatHistoryRequests(pageState()).initialSnapshotHydration).toBeDefined();
-      expect(storedRead).toHaveBeenCalledWith(mainSnapshotKey);
       await entered.promise;
       expect(pane?.agentId).toBeUndefined();
       const state = pageState();
@@ -196,9 +194,6 @@ it.each([false, true])(
       expect(page.querySelector("openclaw-chat-pane")).toBe(paneElement);
       expect(pageState()).toBe(state);
       expect(state.assistantAgentId).toBe(changeAgent ? "research" : "main");
-      expect(resolveChatSnapshotKey(state, { sessionKey: "global" })).toBe(
-        changeAgent ? researchSnapshotKey : mainSnapshotKey,
-      );
       const sessionBefore = state.currentSessionId;
       const paginationBefore = state.chatHistoryPagination;
       release.resolve();

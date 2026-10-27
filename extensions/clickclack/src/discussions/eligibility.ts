@@ -25,10 +25,7 @@ export function resolveDiscussionBindingAccount(
   binding: ClickClackDiscussionBinding,
 ): DiscussionBindingAccountResolution {
   const accounts = discussionAccounts(cfg);
-  if (accounts.length !== 1) {
-    return { state: "unavailable" };
-  }
-  const account = accounts[0];
+  const account = accounts.length === 1 ? accounts[0] : undefined;
   if (!account) {
     return { state: "unavailable" };
   }

@@ -103,139 +103,6 @@ function detectArchiveType(filename: string | undefined): string | undefined {
   return undefined;
 }
 
-function resolveArchiveType(
-  spec: SkillInstallSpec,
-  filename: string,
-  headerFileName?: string,
-): string | undefined {
-  const explicit = normalizeOptionalLowercaseString(spec.archive);
-  if (explicit) {
-    return explicit;
-  }
-  return (
-    detectArchiveType(spec.extract === true ? headerFileName : undefined) ??
-    detectArchiveType(filename)
-  );
-}
-
-async function downloadFile(params: {
-  url: string;
-  relativePath: string;
-  pinnedRoot: Root;
-  tempPath: string;
-  sha256?: string;
-  timeoutMs: number;
-}): Promise<{ bytes: number; archiveFileName?: string }> {
-  const temporaryRoot = await fsRoot(path.dirname(params.tempPath));
-  const { response, release } = await fetchWithSsrFGuard({
-    url: params.url,
-    timeoutMs: Math.max(1_000, params.timeoutMs),
-  });
-  try {
-    if (!response.ok || !response.body) {
-      throw new Error(`Download failed (${response.status} ${response.statusText})`);
-    }
-    const archiveFileName = parseSkillInstallFileName(response.headers.get("content-disposition"));
-    // Encoded Content-Length measures wire bytes, not the decoded stream we cap.
-    const contentEncoding = normalizeOptionalLowercaseString(
-      response.headers.get("content-encoding"),
-    );
-    const declaredBytes =
-      !contentEncoding || contentEncoding === "identity"
-        ? parseStrictNonNegativeInteger(response.headers.get("content-length"))
-        : undefined;
-    if (declaredBytes !== undefined && declaredBytes > MAX_SKILL_DOWNLOAD_BYTES) {
-      throw new Error(
-        `Skill download exceeds ${MAX_SKILL_DOWNLOAD_BYTES}-byte limit (declared ${declaredBytes} bytes)`,
-      );
-    }
-    const body = response.body;
-    let downloadedBytes = 0;
-    async function* chunks() {
-      // Delay reader acquisition until path admission; the fetch guard owns cancellation.
-      for await (const chunk of body.values({ preventCancel: true })) {
-        downloadedBytes += chunk.byteLength;
-        yield chunk;
-      }
-    }
-    await temporaryRoot.create(path.basename(params.tempPath), chunks(), {
-      maxBytes: MAX_SKILL_DOWNLOAD_BYTES,
-      mkdir: false,
-      durable: false,
-      mode: 0o666 & ~process.umask(),
-    });
-    if (params.sha256) {
-      const actual = await sha256File(params.tempPath);
-      if (actual !== params.sha256) {
-        const filename = path.basename(params.relativePath);
-        throw new Error(
-          `SHA-256 mismatch for ${filename}: expected ${params.sha256}, actual ${actual}. The download was discarded; verify the publisher checksum or update the skill manifest before retrying.`,
-        );
-      }
-    }
-    await params.pinnedRoot.copyIn(params.relativePath, params.tempPath);
-    return archiveFileName
-      ? { bytes: downloadedBytes, archiveFileName }
-      : { bytes: downloadedBytes };
-  } catch (error) {
-    if (error instanceof FsSafeError && error.code === "too-large") {
-      throw new Error(`Skill download exceeds ${MAX_SKILL_DOWNLOAD_BYTES}-byte limit`, {
-        cause: error,
-      });
-    }
-    throw error;
-  } finally {
-    await release();
-  }
-}
-
-async function publishExtractedTree(params: {
-  sourceDir: string;
-  targetRelativePath: string;
-  pinnedRoot: Root;
-}): Promise<void> {
-  if (params.targetRelativePath) {
-    await params.pinnedRoot.mkdir(params.targetRelativePath);
-  } else {
-    await params.pinnedRoot.ensureRoot();
-  }
-
-  const publishDirectory = async (relativeDir: string): Promise<void> => {
-    const sourceDir = path.join(params.sourceDir, relativeDir);
-    for (const entry of await fs.promises.readdir(sourceDir, { withFileTypes: true })) {
-      const relativePath = path.join(relativeDir, entry.name);
-      const sourcePath = path.join(params.sourceDir, relativePath);
-      const destinationPath = path.join(params.targetRelativePath, relativePath);
-      const sourceStat = await fs.promises.lstat(sourcePath);
-      try {
-        if (sourceStat.isDirectory()) {
-          await params.pinnedRoot.mkdir(destinationPath);
-          await publishDirectory(relativePath);
-          continue;
-        }
-        if (!sourceStat.isFile() || sourceStat.nlink !== 1) {
-          throw new Error(`archive staging contains unsupported entry: ${relativePath}`);
-        }
-        await params.pinnedRoot.copyIn(destinationPath, sourcePath, {
-          mode: sourceStat.mode & 0o777,
-          sourceHardlinks: "reject",
-        });
-      } catch (error) {
-        if (
-          error instanceof FsSafeError &&
-          (error.code === "symlink" || error.code === "path-alias")
-        ) {
-          throw new Error(`archive entry traverses symlink in destination: ${relativePath}`, {
-            cause: error,
-          });
-        }
-        throw error;
-      }
-    }
-  };
-  await publishDirectory("");
-}
-
 function downloadFailure(
   message: string,
   details: { stderr?: string; code?: number } = {},
@@ -307,21 +174,88 @@ export async function installDownloadSpec(params: {
     let downloaded;
     let archiveFileName: string | undefined;
     try {
-      const result = await downloadFile({
-        url,
-        relativePath: archiveRelativePath,
-        pinnedRoot,
-        tempPath: tempArchivePath,
-        sha256: spec.sha256,
-        timeoutMs,
-      });
+      const result = await (async (): Promise<{ bytes: number; archiveFileName?: string }> => {
+        const sha256 = spec.sha256;
+        const temporaryRoot = await fsRoot(path.dirname(tempArchivePath));
+        const { response, release } = await fetchWithSsrFGuard({
+          url,
+          timeoutMs: Math.max(1_000, timeoutMs),
+        });
+        try {
+          if (!response.ok || !response.body) {
+            throw new Error(`Download failed (${response.status} ${response.statusText})`);
+          }
+          const downloadFileName = parseSkillInstallFileName(
+            response.headers.get("content-disposition"),
+          );
+          // Encoded Content-Length measures wire bytes, not the decoded stream we cap.
+          const contentEncoding = normalizeOptionalLowercaseString(
+            response.headers.get("content-encoding"),
+          );
+          const declaredBytes =
+            !contentEncoding || contentEncoding === "identity"
+              ? parseStrictNonNegativeInteger(response.headers.get("content-length"))
+              : undefined;
+          if (declaredBytes !== undefined && declaredBytes > MAX_SKILL_DOWNLOAD_BYTES) {
+            throw new Error(
+              `Skill download exceeds ${MAX_SKILL_DOWNLOAD_BYTES}-byte limit (declared ${declaredBytes} bytes)`,
+            );
+          }
+          const body = response.body;
+          let downloadedBytes = 0;
+          async function* chunks() {
+            // Delay reader acquisition until path admission; the fetch guard owns cancellation.
+            for await (const chunk of body.values({ preventCancel: true })) {
+              downloadedBytes += chunk.byteLength;
+              yield chunk;
+            }
+          }
+          await temporaryRoot.create(path.basename(tempArchivePath), chunks(), {
+            maxBytes: MAX_SKILL_DOWNLOAD_BYTES,
+            mkdir: false,
+            durable: false,
+            mode: 0o666 & ~process.umask(),
+          });
+          if (sha256) {
+            const actual = await sha256File(tempArchivePath);
+            if (actual !== sha256) {
+              const checksumFileName = path.basename(archiveRelativePath);
+              throw new Error(
+                `SHA-256 mismatch for ${checksumFileName}: expected ${sha256}, actual ${actual}. The download was discarded; verify the publisher checksum or update the skill manifest before retrying.`,
+              );
+            }
+          }
+          await pinnedRoot.copyIn(archiveRelativePath, tempArchivePath);
+          return downloadFileName
+            ? { bytes: downloadedBytes, archiveFileName: downloadFileName }
+            : { bytes: downloadedBytes };
+        } catch (error) {
+          if (error instanceof FsSafeError && error.code === "too-large") {
+            throw new Error(`Skill download exceeds ${MAX_SKILL_DOWNLOAD_BYTES}-byte limit`, {
+              cause: error,
+            });
+          }
+          throw error;
+        } finally {
+          await release();
+        }
+      })();
       downloaded = result.bytes;
       archiveFileName = result.archiveFileName;
     } catch (err) {
       return downloadFailure(formatErrorMessage(err));
     }
 
-    const archiveType = resolveArchiveType(spec, filename, archiveFileName);
+    const archiveType = ((): string | undefined => {
+      const explicit = normalizeOptionalLowercaseString(spec.archive);
+      if (explicit) {
+        return explicit;
+      }
+      return (
+        detectArchiveType(spec.extract === true ? archiveFileName : undefined) ??
+        detectArchiveType(filename)
+      );
+    })();
     const shouldExtract = spec.extract ?? Boolean(archiveType);
     if (!shouldExtract) {
       return {
@@ -352,11 +286,47 @@ export async function installDownloadSpec(params: {
       });
       if (extractResult.code === 0) {
         // Extraction never reopens the published archive or trusts its mutable destination path.
-        await publishExtractedTree({
-          sourceDir: stagingDir,
-          targetRelativePath: path.relative(canonicalRoot, targetDir),
-          pinnedRoot,
-        });
+        const targetRelativePath = path.relative(canonicalRoot, targetDir);
+        if (targetRelativePath) {
+          await pinnedRoot.mkdir(targetRelativePath);
+        } else {
+          await pinnedRoot.ensureRoot();
+        }
+
+        const publishDirectory = async (relativeDir: string): Promise<void> => {
+          const sourceDir = path.join(stagingDir, relativeDir);
+          for (const entry of await fs.promises.readdir(sourceDir, { withFileTypes: true })) {
+            const relativePath = path.join(relativeDir, entry.name);
+            const sourcePath = path.join(stagingDir, relativePath);
+            const destinationPath = path.join(targetRelativePath, relativePath);
+            const sourceStat = await fs.promises.lstat(sourcePath);
+            try {
+              if (sourceStat.isDirectory()) {
+                await pinnedRoot.mkdir(destinationPath);
+                await publishDirectory(relativePath);
+                continue;
+              }
+              if (!sourceStat.isFile() || sourceStat.nlink !== 1) {
+                throw new Error(`archive staging contains unsupported entry: ${relativePath}`);
+              }
+              await pinnedRoot.copyIn(destinationPath, sourcePath, {
+                mode: sourceStat.mode & 0o777,
+                sourceHardlinks: "reject",
+              });
+            } catch (error) {
+              if (
+                error instanceof FsSafeError &&
+                (error.code === "symlink" || error.code === "path-alias")
+              ) {
+                throw new Error(`archive entry traverses symlink in destination: ${relativePath}`, {
+                  cause: error,
+                });
+              }
+              throw error;
+            }
+          }
+        };
+        await publishDirectory("");
       }
       const success = extractResult.code === 0;
       return {

@@ -329,10 +329,10 @@ export async function probeGatewayReachable(
 }
 
 export type GatewayConfiguredModelProbeResult =
-  | { kind: "configured" }
-  | { kind: "missing-configured-model"; detail: string }
-  | { kind: "reachable-unverified"; detail?: string }
-  | { kind: "unreachable"; detail?: string };
+  | "configured"
+  | "missing-configured-model"
+  | "reachable-unverified"
+  | "unreachable";
 
 /** Reads only Gateway config and classifies whether its default agent has inference. */
 export async function probeGatewayConfiguredModel(
@@ -341,15 +341,14 @@ export async function probeGatewayConfiguredModel(
   let probe: GatewayProbeResult;
   try {
     probe = await runOnboardingGatewayProbe(params, "config");
-  } catch (err) {
-    return { kind: "unreachable", detail: summarizeError(err) };
+  } catch {
+    return "unreachable";
   }
-  const detail = probe.error ?? undefined;
   if (!probe.gatewayReached) {
-    return { kind: "unreachable", ...(detail ? { detail } : {}) };
+    return "unreachable";
   }
   if (!probe.ok) {
-    return { kind: "reachable-unverified", detail };
+    return "reachable-unverified";
   }
   const snapshot = probe.configSnapshot as {
     valid?: unknown;
@@ -358,24 +357,15 @@ export async function probeGatewayConfiguredModel(
   } | null;
   const configCandidate =
     snapshot?.valid === true ? (snapshot.runtimeConfig ?? snapshot.config) : null;
-  const invalidSnapshot: GatewayConfiguredModelProbeResult = {
-    kind: "reachable-unverified",
-    detail: "Gateway returned an invalid config snapshot",
-  };
   if (!configCandidate || typeof configCandidate !== "object" || Array.isArray(configCandidate)) {
-    return invalidSnapshot;
+    return "reachable-unverified";
   }
   try {
     const config = configCandidate as OpenClawConfig;
     const model = resolveAgentEffectiveModelPrimary(config, resolveDefaultAgentId(config));
-    return model
-      ? { kind: "configured" }
-      : {
-          kind: "missing-configured-model",
-          detail: "Gateway default agent has no configured model",
-        };
+    return model ? "configured" : "missing-configured-model";
   } catch {
-    return invalidSnapshot;
+    return "reachable-unverified";
   }
 }
 

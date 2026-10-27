@@ -29,8 +29,16 @@ function invoke(def: { execute: ToolExecute }, id: string, params: unknown, sign
   return def.execute(id, params, signal, undefined, extensionContext);
 }
 
-function definitionFor(tool: AgentTool) {
-  const [definition] = toToolDefinitions([tool]);
+function definitionFor(
+  name: string,
+  parameters: AgentTool["parameters"],
+  execute: AgentTool["execute"],
+  validate = false,
+) {
+  const tool = { name, label: name, description: name, parameters, execute };
+  const [definition] = toToolDefinitions([
+    validate ? wrapToolParamValidation(tool, REQUIRED_PARAM_GROUPS.edit) : tool,
+  ]);
   if (!definition) {
     throw new Error("missing tool definition");
   }
@@ -38,14 +46,8 @@ function definitionFor(tool: AgentTool) {
 }
 
 function failingExecDefinition(name: string, parameters: AgentTool["parameters"]) {
-  return definitionFor({
-    name,
-    label: name,
-    description: "runs commands",
-    parameters,
-    execute: async () => {
-      throw new Error("exec denied: allowlist miss");
-    },
+  return definitionFor(name, parameters, async () => {
+    throw new Error("exec denied: allowlist miss");
   });
 }
 
@@ -60,18 +62,7 @@ function expectPrivateExecLog(...secrets: string[]) {
   }
 }
 function editDefinition(execute: AgentTool["execute"]) {
-  return definitionFor(
-    wrapToolParamValidation(
-      {
-        name: "edit",
-        label: "Edit",
-        description: "edits files",
-        parameters: editParameters,
-        execute,
-      },
-      REQUIRED_PARAM_GROUPS.edit,
-    ),
-  );
+  return definitionFor("edit", editParameters, execute, true);
 }
 
 describe("agent tool definition adapter logging", () => {
@@ -111,16 +102,10 @@ describe("agent tool definition adapter logging", () => {
     failure.stack = "Error: private-tool-stack-sentinel";
     const operatorHint =
       "apply_patch is restricted to the workspace by default. Set tools.exec.applyPatch.workspaceOnly to false.";
-    const baseTool = {
-      name: "apply_patch",
-      label: "apply_patch",
-      description: "patches files",
-      parameters: Type.Object({ input: Type.String() }),
-      execute: async () => {
-        throw withToolOperatorHint(failure, operatorHint);
-      },
-    } satisfies AgentTool;
-    const result = await invoke(definitionFor(baseTool), "call-hint-1", {
+    const def = definitionFor("apply_patch", Type.Object({ input: Type.String() }), async () => {
+      throw withToolOperatorHint(failure, operatorHint);
+    });
+    const result = await invoke(def, "call-hint-1", {
       input: "*** Begin Patch",
     });
 
@@ -183,27 +168,15 @@ describe("agent tool definition adapter logging", () => {
   );
 
   it("rethrows AbortError failures when the agent run signal was aborted", async () => {
-    const baseTool = {
-      name: "web_search",
-      label: "Web Search",
-      description: "searches",
-      parameters: Type.Object({ query: Type.String() }),
-      execute: async () => {
-        const error = new Error("This operation was aborted");
-        error.name = "AbortError";
-        throw error;
-      },
-    } satisfies AgentTool;
-    const def = definitionFor(baseTool);
+    const def = definitionFor("web_search", Type.Object({ query: Type.String() }), async () => {
+      const error = new Error("This operation was aborted");
+      error.name = "AbortError";
+      throw error;
+    });
     const controller = new AbortController();
     controller.abort();
 
-    const pending = invoke(
-      def,
-      "call-web-search-agent-abort",
-      { query: "OpenClaw" },
-      controller.signal,
-    );
+    const pending = invoke(def, "call-agent-abort", { query: "OpenClaw" }, controller.signal);
     await expect(pending).rejects.toBeInstanceOf(Error);
     await expect(pending).rejects.toBe(controller.signal.reason);
     await expect(pending).rejects.toHaveProperty("name", "AbortError");

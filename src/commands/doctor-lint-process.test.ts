@@ -10,6 +10,7 @@ import { resolveCommandProcessSignal } from "../process/exec-spawn.js";
 import { runUtf8CommandWithTimeout } from "../process/exec.js";
 import { drainProcessOutput } from "../process/output-drain.js";
 import { createDeferredCore } from "../shared/deferred.js";
+import { createCommandResult } from "../test-utils/npm-spec-install-test-helpers.js";
 import { runUpdateDoctorLintProcess } from "./doctor-lint-process.js";
 
 vi.mock("../process/exec.js", () => ({ runUtf8CommandWithTimeout: vi.fn() }));
@@ -18,20 +19,13 @@ vi.mock("../process/output-drain.js", () => ({ drainProcessOutput: vi.fn() }));
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const report = `${JSON.stringify({ ok: true, checksRun: 1, findings: [] })}\n`;
+const run = (budget?: Parameters<typeof runUpdateDoctorLintProcess>[1]) =>
+  runUpdateDoctorLintProcess({ json: true }, budget);
 let stdout: MockInstance<typeof process.stdout.write>;
 let stderr: MockInstance<typeof process.stderr.write>;
 
 function workerResult(overrides: Partial<SpawnResult> = {}): SpawnResult {
-  return {
-    stdout: report,
-    stderr: "",
-    code: 0,
-    signal: null,
-    killed: false,
-    cleanup: "normal",
-    termination: "exit",
-    ...overrides,
-  };
+  return createCommandResult({ stdout: report, cleanup: "normal", ...overrides });
 }
 
 function reportingWorker(result: SpawnResult | Promise<SpawnResult> = workerResult()) {
@@ -92,7 +86,7 @@ it.each([
         termination: "signal",
       });
     });
-    const completion = runUpdateDoctorLintProcess({ json: true }, { disposalDeadlineMs: 0 });
+    const completion = run({ disposalDeadlineMs: 0 });
     await expect(completion).resolves.toBe(0);
     expect(stdout).toHaveBeenCalledWith(report);
     expect(stderr).toHaveBeenCalledWith(
@@ -111,9 +105,7 @@ it("hands the worker this command's budget anchor", async () => {
     options.onOutputChunk?.(Buffer.from(report), "stdout");
     return workerResult();
   });
-  await expect(
-    runUpdateDoctorLintProcess({ json: true }, { commandStartedAtMs: 1_234 }),
-  ).resolves.toBe(0);
+  await expect(run({ commandStartedAtMs: 1_234 })).resolves.toBe(0);
   expect(JSON.parse(input ?? "")).toEqual({ options: { json: true }, commandStartedAtMs: 1_234 });
 });
 
@@ -124,9 +116,7 @@ it.each([
   "rejects %s without an accepted supervisor abort",
   async (_name, code, signal, termination) => {
     reportingWorker(workerResult({ code, signal, cleanup: "forced", termination }));
-    await expect(
-      runUpdateDoctorLintProcess({ json: true }, { disposalDeadlineMs: 0 }),
-    ).resolves.toBe(2);
+    await expect(run({ disposalDeadlineMs: 0 })).resolves.toBe(2);
     expect(stderr).toHaveBeenCalledWith(expect.stringContaining("exited unexpectedly"));
     expect(stderr).not.toHaveBeenCalledWith(expect.stringContaining("[warning] Doctor disposal"));
   },
@@ -142,23 +132,24 @@ it.each([
   "cleanup-uncertain",
 ] as const)("reports settlement refusal %s without private output", async (mode) => {
   const caller = new AbortController();
-  const cancelled = mode === "caller-signal" || mode === "signal-barrier" || mode === "combined";
+  const reasons = (
+    mode === "combined"
+      ? "signal-barrier,caller-signal,output-error,worker-output,output-limit,cleanup-uncertain"
+      : mode
+  ).split(",");
+  const has = (reason: string) => reasons.includes(reason);
+  const cancelled = has("caller-signal") || has("signal-barrier");
   if (cancelled) {
     vi.mocked(resolveCommandProcessSignal).mockReturnValue(caller.signal);
   }
   const worker = createDeferredCore<SpawnResult>();
   reportingWorker(worker.promise);
-  const completion = runUpdateDoctorLintProcess({ json: true }, { disposalDeadlineMs: 0 });
-  const cancellation =
-    mode === "caller-signal"
-      ? caller.abort()
-      : mode === "signal-barrier" || mode === "combined"
-        ? waitForSignalExitBarriers()
-        : undefined;
-  if (mode === "combined") {
+  const completion = run({ disposalDeadlineMs: 0 });
+  const cancellation = has("signal-barrier") ? waitForSignalExitBarriers() : undefined;
+  if (has("caller-signal")) {
     caller.abort(new Error("private caller reason"));
   }
-  if (mode === "combined" || mode === "output-error") {
+  if (has("output-error")) {
     process.stdout.emit("error", new Error("private output token=synthetic-doctor-secret"));
   }
   if (cancelled) {
@@ -169,21 +160,17 @@ it.each([
       code: cancelled ? 1 : 0,
       stderr: cancelled ? "" : "private worker details",
       killIssuedByAbort: true,
-      cleanup: mode === "combined" || mode === "cleanup-uncertain" ? "uncertain" : "forced",
+      cleanup: has("cleanup-uncertain") ? "uncertain" : "forced",
       termination: cancelled && mode !== "combined" ? "signal" : "no-output-timeout",
-      ...(mode === "combined" || mode === "worker-output" ? { outputErrorStream: "stderr" } : {}),
-      ...(!cancelled || mode === "combined"
-        ? { outputLimitExceeded: mode === "combined" || mode === "output-limit" }
-        : {}),
+      outputErrorStream: has("worker-output") ? "stderr" : undefined,
+      outputLimitExceeded: has("output-limit"),
     }),
   );
   await cancellation;
   await expect(completion).resolves.toBe(2);
-  const reason =
-    mode === "combined"
-      ? "Doctor lint settlement refused: signal-barrier,caller-signal,output-error,worker-output,output-limit,cleanup-uncertain; disposal-requested,kill-issued-by-abort,termination=no-output-timeout."
-      : `Doctor lint settlement refused: ${mode}; disposal-requested,kill-issued-by-abort,termination=${cancelled ? "signal" : "no-output-timeout"}.`;
-  expectRefusal(reason);
+  expectRefusal(
+    `Doctor lint settlement refused: ${reasons.join(",")}; disposal-requested,kill-issued-by-abort,termination=${cancelled && mode !== "combined" ? "signal" : "no-output-timeout"}.`,
+  );
   if (cancelled) {
     expect(stderr).not.toHaveBeenCalledWith(expect.stringContaining("[warning] Doctor disposal"));
   }
@@ -197,7 +184,7 @@ it.each(["output-error", "caller-signal", "signal-barrier"] as const)(
     const draining = createDeferredCore<() => void>();
     vi.mocked(drainProcessOutput).mockImplementation((done) => draining.resolve(done));
     reportingWorker();
-    const completion = runUpdateDoctorLintProcess({ json: true });
+    const completion = run();
     const drained = await draining.promise;
     if (failure === "output-error") {
       process.stderr.emit("error", new Error("private output token=synthetic-doctor-secret"));

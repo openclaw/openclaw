@@ -161,6 +161,14 @@ openclaw migrate apply hermes --json --yes
 
 If source directory inspection or skill listing fails, preview stops with the filesystem error instead of silently omitting files. Resolve the reported access or storage problem and rerun the preview before applying.
 
+Hermes config, dotenv, and credential files must be valid UTF-8. Migration refuses malformed encoding before importing settings or credentials and names the source file. Re-save or re-encode that file as UTF-8, then rerun the migration; the original source remains unchanged.
+
+Text inputs and existing memory append targets must be ordinary files. Migration
+does not wait for a writer on a named pipe or read a device as a text stream.
+Replace an unexpected special file with an ordinary file, then rerun the preview
+or import. Symlinks to ordinary source text files remain supported; optional
+profile and organization selectors keep their unreadable-file behavior.
+
 <AccordionGroup>
   <Accordion title="Apply refuses with conflicts">
     Inspect the plan output. Each conflict identifies the source path and the existing target. Decide per item whether to skip, edit the target, or rerun with `--overwrite`.

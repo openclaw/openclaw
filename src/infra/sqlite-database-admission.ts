@@ -29,6 +29,7 @@ import {
   type Admission,
   type AdmissionFactValue,
   type SqliteDatabaseAdmissionKey,
+  type SqliteDatabaseFactKey,
   type StagedAdmissionFact,
 } from "./sqlite-database-admission-record.js";
 import {
@@ -37,7 +38,8 @@ import {
 } from "./sqlite-database-admission-seal.js";
 import { createSqliteDatabaseWriteReceipts } from "./sqlite-database-write-receipts.js";
 import { getSqliteNativeAdmissionFacts } from "./sqlite-native-admission.js";
-import { stageSqliteTransactionState } from "./sqlite-post-commit.js";
+import { hasSqlitePostCommitScope, stageSqliteTransactionState } from "./sqlite-post-commit.js";
+import type { DatabaseFileIdentity } from "./sqlite-worker-identity.js";
 
 export {
   readSqliteDatabaseAdmissions,
@@ -47,6 +49,7 @@ export {
 export type {
   SqliteDatabaseAdmissions,
   SqliteDatabaseAdmissionKey,
+  SqliteDatabaseFactKey,
 } from "./sqlite-database-admission-record.js";
 export { beginSqliteDatabaseAdmissionOperation } from "./sqlite-native-admission.js";
 
@@ -128,6 +131,8 @@ export const {
   getSqliteDatabaseAdmission,
   getSqliteDatabaseSchemaRevision,
   getOrLoadSqliteDatabaseAdmissionForPath,
+  peekSqliteDatabaseAdmissionForPath,
+  prepareSqliteDatabaseAdmissionForPath,
   hasSqliteDatabaseSchemaAdmissionForPath,
   getSqliteDatabaseAdmissionIdentityForPath,
   hasSqliteDatabaseSchemaAdmissionForIdentity,
@@ -188,7 +193,22 @@ function exchange(target: string | Admission, create?: boolean): void {
 }
 
 /** Identity descriptors stay open for the process: closing one can release SQLite's POSIX locks. */
-export function retainSqliteDatabaseAdmissionLocation(location: string): void {
+export function retainSqliteDatabaseAdmissionLocation(
+  location: string,
+  expectedIdentity?: DatabaseFileIdentity,
+): void {
+  const retained = state.registry.forLocation(location);
+  if (
+    retained &&
+    expectedIdentity?.birthtime !== undefined &&
+    retained.physicalIdentity.key === expectedIdentity.key &&
+    retained.physicalIdentity.birthtime === expectedIdentity.birthtime &&
+    state.registry.descriptors.get(retained.identity)?.descriptor === retained.descriptor
+  ) {
+    // Bound workers check this physical identity; unbound opens still discover the current file.
+    seals.load(retained);
+    return;
+  }
   const observed = fs.statSync(location, { bigint: true });
   if (!observed.isFile()) {
     return;
@@ -344,9 +364,10 @@ export function bindSqliteDatabaseAdmission(database: DatabaseSync, expected?: s
     state.unproven.add(database);
     return;
   }
-  const record = state.registry.records.get(observed);
-  if (record && !isRetired(record)) {
-    retainConnection(database, record);
+  // Restore descriptor-held facts before schema tracking initializes the new handle.
+  const known = state.registry.records.get(observed);
+  if ((known && !isRetired(known)) || state.registry.descriptors.get(observed)?.facts.size) {
+    admission(database);
   }
 }
 
@@ -480,13 +501,20 @@ export function beginSqliteDatabaseWrite(database: DatabaseSync, unscoped = fals
   }
 }
 
-/** Native settlement invalidates row caches, including failed or rolled-back writes. */
-export function finishSqliteDatabaseWrite(database: DatabaseSync): void {
+/** Failed writes invalidate too, unless the prepared native owner certifies no effect. */
+export function finishSqliteDatabaseWrite(database: DatabaseSync, noEffect = false): void {
   if (!state.dataWriters.has(database)) {
     return;
   }
   const record = state.dataWriters.get(database);
   state.dataWriters.delete(database);
+  if (noEffect) {
+    scopedWrites.cancel(database);
+    if (record) {
+      Atomics.sub(new Int32Array(record.references.get(threadId)!), 1, 1);
+    }
+    return;
+  }
   state.localWriteRevisions.set(database, (state.localWriteRevisions.get(database) ?? 0) + 1);
   scopedWrites.finish(database, record);
   if (record) {
@@ -550,7 +578,7 @@ export function hasPendingSqliteDatabaseSchemaMutation(
 
 export function publishSqliteDatabaseAdmission<T>(
   database: DatabaseSync | PostgresSqlConnection,
-  key: SqliteDatabaseAdmissionKey<T>,
+  key: SqliteDatabaseFactKey<T>,
   value: T,
   options: { schemaRevision?: number } = {},
 ): void {
@@ -569,7 +597,7 @@ export function publishSqliteDatabaseAdmission<T>(
     ? undefined
     : getSqliteNativeAdmissionFacts(database);
   const admitted = admitSqliteDatabaseFactValue(key, value);
-  if (!native && !database.isTransaction) {
+  if (!native && !database.isTransaction && !hasSqlitePostCommitScope(database)) {
     publishFact(record, key, admitted, revision);
     return;
   }

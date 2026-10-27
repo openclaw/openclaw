@@ -64,14 +64,11 @@ describe("protocol event coverage", () => {
       }
       if evt.event == "connect.challenge" { return }
     `;
-    expect([...extractSwiftHandledEvents(source, swiftConstants)].toSorted()).toEqual([
-      "ApprovalBridge.requestedKind",
-      "chat",
-      "connect.challenge",
-      "exec.approval.requested",
-      "session.message",
-      "tick",
-    ]);
+    expect([...extractSwiftHandledEvents(source, swiftConstants)].toSorted()).toEqual(
+      "ApprovalBridge.requestedKind chat connect.challenge exec.approval.requested session.message tick".split(
+        " ",
+      ),
+    );
   });
 
   it("collects literals and generated enum constants inside handler functions only", () => {
@@ -138,19 +135,11 @@ describe("protocol event coverage", () => {
       }
     `;
     const handled = extractKotlinHandledEvents(source, constants);
-    expect([...handled].toSorted()).toEqual([
-      "assignment",
-      "block/*event*/",
-      "chat",
-      "connect.challenge",
-      "health",
-      "other",
-      "session.message",
-      "sessions.changed",
-      "slash//event",
-      "tick",
-      "when-condition",
-    ]);
+    expect([...handled].toSorted()).toEqual(
+      "assignment block/*event*/ chat connect.challenge health other session.message sessions.changed slash//event tick when-condition".split(
+        " ",
+      ),
+    );
   });
 
   it("reports missing and stale allowances while accepting explained omissions", () => {
@@ -165,12 +154,11 @@ describe("protocol event coverage", () => {
         cron: "",
       },
     });
-    expect(errors).toHaveLength(4);
-    expect(errors.some((error) => error.includes('[ios] gateway event "unhandled"'))).toBe(true);
-    expect(errors.some((error) => error.includes('"presence" is now handled'))).toBe(true);
-    expect(errors.some((error) => error.includes('"gone.event" is not a gateway event'))).toBe(
-      true,
-    );
-    expect(errors.some((error) => error.includes('"cron" needs a non-empty reason'))).toBe(true);
+    expect(errors.toSorted()).toEqual([
+      expect.stringContaining('"cron" needs a non-empty reason'),
+      expect.stringContaining('"gone.event" is not a gateway event'),
+      expect.stringContaining('"presence" is now handled'),
+      expect.stringContaining('[ios] gateway event "unhandled"'),
+    ]);
   });
 });

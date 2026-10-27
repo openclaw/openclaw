@@ -16,7 +16,11 @@ enum ExecApprovalsPromptPresenter {
         var cancelled = false
     }
 
-    private static var activePrompt: ActivePrompt?
+    private static let approvalSource = UUID()
+    private static var activePrompt: ActivePrompt? {
+        didSet { ApprovalPromptState.shared.setPending(self.activePrompt != nil, source: self.approvalSource) }
+    }
+
     private static var pendingPrompts: [PendingPrompt] = []
 
     static func prompt(
@@ -150,6 +154,7 @@ enum ExecApprovalsPromptPresenter {
             backing: .buffered,
             defer: false)
         panel.onDismiss = { onDecision(decisions.contains(.deny) ? .deny : nil) }
+        panel.sharingType = .none
         panel.level = .modalPanel
         panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
         panel.title = String(localized: "OpenClaw Command Approval")

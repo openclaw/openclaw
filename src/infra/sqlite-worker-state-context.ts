@@ -17,6 +17,8 @@ export type SqliteWorkerStateContext = {
   };
   /** Selected config inputs for native shared-state initialization, not command environment. */
   initializationEnvironment?: NodeJS.ProcessEnv;
+  /** Original default cron selector, before initialization pins the physical state directory. */
+  initializationCronDefaultStoreKey?: string;
   /** Known agent paths preserve deletion-history uncertainty during native initialization. */
   initializationAgentPaths?: readonly string[];
   existingSchemaPath?: string;
@@ -32,6 +34,7 @@ export function captureSqliteWorkerStateContext(
   return {
     databaseEngineSelection: context.databaseEngineSelection ?? getDatabaseEngineSelection(),
     environment: { ...context.environment },
+    initializationCronDefaultStoreKey: context.initializationCronDefaultStoreKey,
     ...(context.initializationEnvironment
       ? { initializationEnvironment: { ...context.initializationEnvironment } }
       : {}),
@@ -69,6 +72,7 @@ export function sqliteWorkerRequestBytes(
       Buffer.byteLength(JSON.stringify(context?.databaseEngineSelection) ?? "", "utf8") +
       (preparation?.byteLength ?? 0) +
       agentPathBytes +
+      Buffer.byteLength(context?.initializationCronDefaultStoreKey ?? "", "utf8") +
       (context?.scheduledMaintenanceSuspension?.byteLength ?? 0),
   );
 }
@@ -92,6 +96,11 @@ export function captureSqliteWorkerWalMaintenanceSuspension(): (() => boolean) |
   }
   const holds = new Int32Array(buffer);
   return () => Atomics.load(holds, 0) > 0;
+}
+
+/** Original selector is an initialization fact, never a path to open or write authority. */
+export function getSqliteWorkerCronDefaultStoreKey(): string | undefined {
+  return stateContexts.getStore()?.initializationCronDefaultStoreKey;
 }
 
 /** Preserve factory facts across later commands without changing their captured host context. */

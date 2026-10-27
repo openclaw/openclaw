@@ -13,11 +13,11 @@ import type {
   SessionBranchSwitchMutationResult,
   SessionMessageCutMutationResult,
 } from "../../config/sessions/session-accessor.js";
-import { mutateSessionAtMessageWithPreconditions } from "../../config/sessions/session-accessor.sqlite-message-cut.js";
+import { mutateSqliteSessionAtMessage } from "../../config/sessions/session-accessor.sqlite-message-cut.js";
+import { withSessionActorStorage } from "../../config/sessions/session-actor-storage-acquisition.js";
 import {
   getSessionActorStorageBinding,
   runWithSessionActorStorage,
-  withSessionActorStorage,
 } from "../../config/sessions/session-actor-storage-binding.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { isIncognitoSessionKey } from "../../routing/session-key.js";
@@ -568,7 +568,7 @@ async function mutatePreparedSessionAtMessage({
           forkWorkspace: forkWorkspace?.value,
           creation: { ...creation, sandbox },
         };
-        result = await mutateSessionAtMessageWithPreconditions(
+        result = await mutateSqliteSessionAtMessage(
           action === "fork" ? forkParams : { ...mutationParams, entryId },
           action,
           memory ? undefined : expectedState,

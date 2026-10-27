@@ -83,21 +83,6 @@ export async function recordMatrixInboundDedupeMigrationCompletion(
   );
 }
 
-/**
- * Reserves the durable completion row before any legacy source is changed.
- * The invalid timestamp keeps detection active after an interrupted run, while
- * updating this same key after retirement remains possible at plugin capacity.
- */
-export async function reserveMatrixInboundDedupeMigrationCompletion(
-  context: PluginDoctorStateMigrationContext,
-  env: NodeJS.ProcessEnv,
-): Promise<void> {
-  await openMatrixInboundDedupeMigrationCompletionStore(context, env).register(
-    MIGRATION_COMPLETION_KEY,
-    { version: 1, completedAt: -1 },
-  );
-}
-
 export async function collectMatrixInboundDedupeSources(
   stateDir: string,
 ): Promise<MatrixInboundDedupeSourceCensus> {
@@ -263,35 +248,14 @@ export async function retireLegacyInboundDedupeSqliteRows(storageRootDir: string
   }
 }
 
-export async function verifyMatrixInboundDedupeSourcesRetired(stateDir: string): Promise<string[]> {
-  const warnings: string[] = [];
-  const remaining = await collectMatrixInboundDedupeSources(stateDir);
-  if (remaining.status === "incomplete") {
-    warnings.push(...remaining.warnings);
-  }
-  for (const storageRootDir of remaining.sqliteRoots) {
-    try {
-      if ((await readLegacyInboundDedupeSqliteSource(storageRootDir)).legacyRowCount > 0) {
-        warnings.push(`Matrix inbound dedupe rows remain after retirement for ${storageRootDir}`);
-      }
-    } catch (err) {
-      warnings.push(
-        `Failed verifying retired Matrix inbound dedupe rows for ${storageRootDir}: ${String(err)}`,
-      );
-    }
-  }
-  return warnings;
-}
-
 /** Import committed replay markers as ingress tombstones without replaying payloads. */
 export async function importInboundDedupeMarkersToIngress(params: {
   context: PluginDoctorStateMigrationContext;
   markers: Iterable<LegacyInboundDedupeMarker>;
-  now?: number;
 }): Promise<{ imported: number; total: number }> {
   const openQueue = resolveMatrixIngressQueueOpener(params.context);
   const queues = new Map<string, ReturnType<typeof openQueue>>();
-  const now = params.now ?? Date.now();
+  const now = Date.now();
   const newestByKey = new Map<string, LegacyInboundDedupeMarker>();
   for (const marker of params.markers) {
     const accountId = marker.accountId.trim() || "default";

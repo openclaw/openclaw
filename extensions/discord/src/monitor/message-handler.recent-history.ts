@@ -2,9 +2,9 @@ import { Routes, type APIGuildMember, type APIMessage } from "discord-api-types/
 import { formatInboundMediaUnavailableText } from "openclaw/plugin-sdk/channel-inbound";
 import { isRecentOutboundMessageIdentity } from "openclaw/plugin-sdk/channel-outbound";
 import type { ContextVisibilityMode } from "openclaw/plugin-sdk/config-contracts";
+import { parseDateStringTimestampMs } from "openclaw/plugin-sdk/number-runtime";
 import { danger } from "openclaw/plugin-sdk/runtime-env";
 import { getGuildMember, Message, MessageType } from "../internal/discord.js";
-import { resolveTimestampMs } from "./format.js";
 import {
   createDiscordHistorySenderProvenance,
   filterDiscordHistoryEntriesForContext,
@@ -45,7 +45,7 @@ export async function recoverDiscordChannelHistory(params: {
   // allowing policy exclusions to turn this into an unbounded search for matching senders.
   let remaining = ctx.historyLimit + excludedIds.size - 1;
   let before = ctx.message.id;
-  const triggerTimestamp = resolveTimestampMs(ctx.message.timestamp);
+  const triggerTimestamp = parseDateStringTimestampMs(ctx.message.timestamp);
   const guildId = ctx.data.guild?.id ?? ctx.data.guild_id;
   const cachedMedia = new Map(
     (ctx.guildHistories.get(ctx.messageChannelId) ?? []).map((entry) => [entry.messageId, entry]),
@@ -67,7 +67,7 @@ export async function recoverDiscordChannelHistory(params: {
       remaining -= window.length;
       for (const raw of window) {
         const row: HistoryMessage = raw;
-        const timestamp = resolveTimestampMs(row.timestamp);
+        const timestamp = parseDateStringTimestampMs(row.timestamp);
         if (
           row.channel_id !== ctx.messageChannelId ||
           (row.guild_id && row.guild_id !== guildId) ||
@@ -192,7 +192,7 @@ export async function recoverDiscordChannelHistory(params: {
       entries: entries.toReversed(),
       mode: params.mode,
       isSenderAllowed: params.isSenderAllowed,
-    }).entries.slice(-ctx.historyLimit);
+    }).slice(-ctx.historyLimit);
   } catch (error) {
     ctx.runtime.error(
       danger(`discord: recent history omitted for ${ctx.messageChannelId}: ${String(error)}`),

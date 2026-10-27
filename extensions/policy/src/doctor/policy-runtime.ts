@@ -94,7 +94,6 @@ export function readChannelDenyRules(policy: unknown, policyDocName: string) {
           {
             when: rule.when,
             requirement: `oc://${policyDocName}/channels/denyRules/#${index}`,
-            ...(rule.id === undefined ? {} : { id: rule.id }),
             ...(rule.reason === undefined ? {} : { reason: rule.reason }),
           },
         ]

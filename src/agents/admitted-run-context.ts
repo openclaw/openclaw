@@ -1,11 +1,13 @@
 /** Canonical operational instance and optional enabled execution-identity evidence. */
 import type { ProviderModelRef as ModelRef } from "@openclaw/model-catalog-core/model-catalog-refs";
+import type { CyberAccessProgram } from "../../packages/gateway-protocol/src/schema/sessions-row.js";
 import { isExecutionIdentityCollectionEnabled } from "../audit/audit-config.js";
 import {
   createExecutionIdentityAdmissionToken,
   enqueueExecutionIdentityContextAtAdmission,
   type ExecutionIdentityAdmissionFacts,
   type ExecutionIdentityAdmissionToken,
+  type ExecutionIdentityRecoveryAdmission,
 } from "../audit/execution-identity-admission.js";
 import { executionIdentitySpawnAdmission } from "../audit/execution-identity-spawn-admission.js";
 import {
@@ -14,7 +16,6 @@ import {
   runWithSessionSourceScope,
   type SessionSourceAssertion,
 } from "../config/sessions/session-source-authority.js";
-import type { GatewayOperatorRoleDefinition } from "../config/types.gateway.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   captureAgentRunDelegatedSourceAssertion,
@@ -25,15 +26,17 @@ import {
   validateAgentRunDelegatedAuthority,
   type AgentRunDelegatedAuthority,
 } from "../infra/agent-run-registry.js";
-import type { GatewayAccessGrantRef } from "../plugins/gateway-access-policy.types.js";
 import { prepareGatewayContextBindingOwner } from "../plugins/runtime/gateway-context-binding-owner.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import { freezeJsonSnapshot } from "../shared/immutable-data.js";
+import type { AdmittedRunOperatorAuthority } from "./admitted-run-operator-authority.types.js";
 import {
   createOperationalRunInstanceRef,
   type OperationalRunInstanceRef,
 } from "./operational-run-instance.js";
-import type { PreparedOperatorModelPolicy } from "./operator-model-policy.types.js";
+import { isOperatorAccessProgramAllowed } from "./operator-access-program.js";
+
+type OperatorModelSelection = ModelRef & { cyberAccessProgram?: CyberAccessProgram };
 
 export {
   createOperationalRunInstanceRef,
@@ -48,38 +51,7 @@ export type AdmittedRunContext = Readonly<{
   executionIdentityToken?: ExecutionIdentityAdmissionToken;
 }>;
 
-export type AdmittedRunOperatorAuthority = Readonly<{
-  profileId: string;
-  /** Host-captured original input; claim/occurrence owners revalidate it for continuations. */
-  recoverySnapshot?: import("../gateway/operator-run-recovery-source.codec.js").OperatorRunRecoverySnapshot;
-  /** Existing immutable policy and link; accepted-input owners may retain them for recovery. */
-  channelRecoverySource?: Readonly<{
-    reference: import("../state/user-profiles.types.js").UserChannelAuthorizationReference;
-    modelPolicy?: PreparedOperatorModelPolicy;
-  }>;
-  scopes: readonly string[];
-  /** Original access dependency; null is proven independent, undefined is unclassified. */
-  gatewayAccessGrant?: GatewayAccessGrantRef | null;
-  assertCurrent: SessionSourceAssertion;
-  signal?: AbortSignal;
-  /** Opaque original source identity used only to compare compatible queued input. */
-  source?: object;
-  /** Retains the original source independently of a foreground run or request. */
-  retain?: () => () => void;
-  /** Live assignment from the original prepared profile lease. */
-  readCurrentRoleAssignment?: (this: void) => string | null;
-  /** Verified primary login from the same live profile authority. */
-  readCurrentGithubLogin?: (this: void) => string | null;
-  /** Prepared role permissions; source-policy changes revoke the owning authority. */
-  rolePolicy?: Readonly<{
-    sessionAccessCap: GatewayOperatorRoleDefinition["sessions"]["others"];
-    sandboxRequired: boolean;
-    agents: "*" | readonly string[];
-  }>;
-  modelPolicy?: PreparedOperatorModelPolicy;
-  /** Committed policy changes invalidate only executions using a removed model. */
-  onModelPolicyChanged?: (listener: () => void) => () => void;
-}>;
+export type { AdmittedRunOperatorAuthority } from "./admitted-run-operator-authority.types.js";
 
 // Source and bundled module instances must recognize the same host-issued object.
 const operatorAuthorityIssuers = resolveGlobalSingleton(
@@ -108,15 +80,7 @@ export function createAdmittedRunOperatorAuthority(
       throw error;
     }
   });
-  const bindCurrentReader = (read: (() => string | null) | undefined) =>
-    read
-      ? () => {
-          assertCurrent();
-          return read();
-        }
-      : undefined;
-  const readCurrentRoleAssignment = bindCurrentReader(source.readCurrentRoleAssignment);
-  const readCurrentGithubLogin = bindCurrentReader(source.readCurrentGithubLogin);
+  const readRoleFacts = source.readCurrentRoleFacts;
   const authority = Object.freeze({
     profileId: source.profileId,
     recoverySnapshot: source.recoverySnapshot
@@ -140,11 +104,24 @@ export function createAdmittedRunOperatorAuthority(
       return source.modelPolicy;
     },
     assertCurrent,
-    readCurrentRoleAssignment,
-    readCurrentGithubLogin,
+    readCurrentRoleFacts: readRoleFacts
+      ? () => {
+          assertCurrent();
+          return readRoleFacts();
+        }
+      : undefined,
     rolePolicy: source.rolePolicy
       ? Object.freeze({
           ...source.rolePolicy,
+          ...(source.rolePolicy.accessPrograms
+            ? {
+                accessPrograms: Object.freeze({
+                  cyber: Object.freeze(
+                    [...new Set(source.rolePolicy.accessPrograms.cyber)].toSorted(),
+                  ),
+                }),
+              }
+            : {}),
           agents:
             source.rolePolicy.agents === "*"
               ? "*"
@@ -167,7 +144,7 @@ export function assertAdmittedRunOperatorAuthority(
 /** Selection never grants authority; callers must pass the original host-issued source. */
 export function assertOperatorModelAllowed(
   authority: AdmittedRunOperatorAuthority | undefined,
-  model: ModelRef | undefined,
+  model: OperatorModelSelection | undefined,
 ): void {
   createOperatorModelSelectionAssertion(authority, model)();
 }
@@ -175,7 +152,7 @@ export function assertOperatorModelAllowed(
 /** Carry the operator's source checks into writes without rereading its store on the host. */
 export function createOperatorModelSelectionAssertion(
   authority: AdmittedRunOperatorAuthority | undefined,
-  model: ModelRef | undefined,
+  model: OperatorModelSelection | undefined,
 ): SessionSourceAssertion {
   return composeSessionSourceAssertion([authority?.assertCurrent], (assertSource) => {
     if (!authority) {
@@ -189,23 +166,42 @@ export function createOperatorModelSelectionAssertion(
         "Your operator role cannot use this model. Choose an allowed model or ask a gateway administrator to update your role's model policy.",
       );
     }
+    assertOperatorAccessProgramAllowed(authority, model?.cyberAccessProgram);
   });
+}
+
+/** Clearing a stale Access selection must not require permission to its old model. */
+export function assertOperatorAccessProgramAllowed(
+  authority: AdmittedRunOperatorAuthority | undefined,
+  program: CyberAccessProgram | undefined,
+): void {
+  if (!authority) {
+    return;
+  }
+  assertAdmittedRunOperatorAuthority(authority);
+  authority.assertCurrent();
+  if (!isOperatorAccessProgramAllowed(authority.rolePolicy, program)) {
+    throw new Error(
+      "Your operator role cannot use this Access level. Choose Standard or ask a gateway administrator to grant this Access level to your role.",
+    );
+  }
 }
 
 /** Keeps one selected model current without revoking other work from the same source. */
 export function bindOperatorModelExecution(
   authority: AdmittedRunOperatorAuthority | undefined,
-  model: ModelRef | undefined,
+  model: OperatorModelSelection | undefined,
   mapAuthorizationError?: (error: unknown) => Error,
 ): Readonly<{ signal: AbortSignal; assertCurrent: () => void; release: () => void }> | undefined {
   if (!authority) {
     return undefined;
   }
   const selected = model ? { ...model } : undefined;
+  const assertModelAllowed = createOperatorModelSelectionAssertion(authority, selected);
   const mapError = (error: unknown) => mapAuthorizationError?.(error) ?? error;
   let releaseAuthority: (() => void) | undefined;
   try {
-    assertOperatorModelAllowed(authority, selected);
+    assertModelAllowed();
     releaseAuthority = authority.retain?.();
   } catch (error) {
     throw mapError(error);
@@ -218,7 +214,7 @@ export function bindOperatorModelExecution(
     }
     revoked.signal.throwIfAborted();
     try {
-      assertOperatorModelAllowed(authority, selected);
+      assertModelAllowed();
     } catch (error) {
       const failure = mapError(error);
       revoked.abort(failure);
@@ -275,6 +271,34 @@ export type PreparedAgentRunAdmission = Readonly<{
   /** Idempotently closes the exact delegated approval lease, if admission occurred. */
   close: () => void;
 }>;
+
+type PreparedRestartRecovery = Readonly<{
+  operationalRunInstance: OperationalRunInstanceRef;
+  assertCurrent: () => void;
+}>;
+
+// Existing adapters preserve this exact prepared owner through its close operation.
+const preparedRestartRecoveries = new WeakMap<
+  PreparedAgentRunAdmission["close"],
+  PreparedRestartRecovery
+>();
+
+/** Recognizes an admitted restart continuation without granting execution permission. */
+export function isPreparedRunRestartRecovery(
+  prepared: PreparedAgentRunAdmission,
+  runId: string,
+): boolean {
+  const recovery = preparedRestartRecoveries.get(prepared.close);
+  if (
+    !recovery ||
+    recovery.operationalRunInstance !== prepared.operationalRunInstance ||
+    prepared.operationalRunInstance.runId !== runId
+  ) {
+    return false;
+  }
+  recovery.assertCurrent();
+  return true;
+}
 
 type DelegatedAuthorityLease = {
   authority: AgentRunDelegatedAuthority;
@@ -382,7 +406,7 @@ export function getAdmittedRunSource(
 export function resolveAdmittedRunActiveAssertion(
   context: AdmittedRunContext,
   signal?: AbortSignal,
-): SessionSourceAssertion | undefined {
+): ReturnType<typeof captureAdmittedRunActiveAssertion> {
   const authority = getAdmittedRunDelegatedAuthority(context);
   return authority ? captureAdmittedRunActiveAssertion(context, authority, signal) : undefined;
 }
@@ -476,15 +500,6 @@ export function retainAdmittedRunBeforeToolCallRecovery(
     },
   };
 }
-
-type ExecutionIdentityRecoveryAdmission = Readonly<{
-  /** Recovery retries never manufacture replacement identity when exact evidence is absent. */
-  retryOnly: boolean;
-  consume: (runId: string) => Readonly<{
-    accepted: boolean;
-    token?: ExecutionIdentityAdmissionToken;
-  }>;
-}>;
 
 /** Creates a one-shot recovery admission owned by the durable recovery resolver. */
 export function createExecutionIdentityRecoveryAdmission(params: {
@@ -594,7 +609,7 @@ export function prepareAgentRunAdmission(params: {
     assertPreparationOpen();
     assertSource();
   });
-  return Object.freeze({
+  const prepared: PreparedAgentRunAdmission = Object.freeze({
     operationalRunInstance,
     assertSourceCurrent: Object.assign(composeSessionSourceAssertion([assertSourceCurrent]), {
       assertScopeCurrent: assertPreparationOpen,
@@ -667,6 +682,21 @@ export function prepareAgentRunAdmission(params: {
       return admitted;
     },
   });
+  if (
+    params.facts.ingress.kind === "recovery" &&
+    params.facts.ingress.boundary === "gateway.main-session-recovery"
+  ) {
+    preparedRestartRecoveries.set(prepared.close, {
+      operationalRunInstance,
+      assertCurrent: () => {
+        if (closed) {
+          throw new Error("prepared restart recovery is no longer active");
+        }
+        assertSourceCurrent?.();
+      },
+    });
+  }
+  return prepared;
 }
 
 /** Resolves a host-only continuation or validates an already-admitted internal caller. */

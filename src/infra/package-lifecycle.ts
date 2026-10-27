@@ -1,6 +1,7 @@
 import { spawnSync } from "node:child_process";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
 import {
   LEGACY_PACKAGE_INSTALL_GUARD_RELATIVE_PATH,
@@ -11,6 +12,8 @@ import { getFileLockProcessStartTime, isPidAlive } from "../shared/pid-alive.js"
 import { sleep } from "../utils/sleep.js";
 import { asFsSafeFileLockRoot, createFileLockManager } from "./file-lock-manager.js";
 import { root } from "./fs-safe.js";
+import { runtimeProcessExternalPackageEntrypoints } from "./runtime-process-manifest.js";
+import { resolveExternalPackageRuntimeEntrypointUrl } from "./runtime-process-url.js";
 import { resolveRuntimeArgs } from "./runtime-worker-url.js";
 
 const PACKAGE_LIFECYCLE_LOCK_RELATIVE_PATH = ".openclaw-lifecycle-lock";
@@ -22,7 +25,6 @@ const lifecycleLocks = createFileLockManager("openclaw.package-lifecycle");
 /** Ownership is uncertain: callers must preserve the package until its writers settle. */
 export class PackageLifecycleOwnershipError extends Error {
   readonly packageRoot: string;
-  readonly lockPath: string;
 
   constructor(packageRoot: string, reason: string, cause?: unknown) {
     const lockPath = path.join(packageRoot, PACKAGE_LIFECYCLE_LOCK_RELATIVE_PATH);
@@ -33,7 +35,6 @@ export class PackageLifecycleOwnershipError extends Error {
     );
     this.name = "PackageLifecycleOwnershipError";
     this.packageRoot = packageRoot;
-    this.lockPath = lockPath;
   }
 }
 
@@ -65,11 +66,11 @@ export type PackageLifecycleScript = Readonly<{
 const PACKAGE_LIFECYCLE_SCRIPTS: readonly PackageLifecycleScript[] = [
   {
     name: "preinstall",
-    relativePath: path.join("scripts", "preinstall-package-manager-warning.mjs"),
+    relativePath: path.normalize(runtimeProcessExternalPackageEntrypoints.preinstall),
   },
   {
     name: "postinstall",
-    relativePath: path.join("scripts", "postinstall-bundled-plugins.mjs"),
+    relativePath: path.normalize(runtimeProcessExternalPackageEntrypoints.postinstall),
   },
 ];
 function hasErrorCode(error: unknown, code: string): boolean {
@@ -118,14 +119,8 @@ async function assertLifecycleRoot(packageRoot: string, packageDirectory: Lifecy
   }
 }
 
-async function isPackageLifecyclePending(
-  paths: ReturnType<typeof resolveLifecyclePaths>,
-  packageDirectory: LifecycleRoot,
-) {
-  await assertLifecycleRoot(paths.packageRoot, packageDirectory);
-  const pending = (await pathExists(paths.pending)) || (await pathExists(paths.legacyGuard));
-  await assertLifecycleRoot(paths.packageRoot, packageDirectory);
-  return pending;
+async function isPackageLifecyclePending(paths: ReturnType<typeof resolveLifecyclePaths>) {
+  return (await pathExists(paths.pending)) || (await pathExists(paths.legacyGuard));
 }
 
 async function assertLifecycleAuthority(
@@ -260,7 +255,9 @@ function runPackageLifecycleScript(
   script: PackageLifecycleScript,
   timeoutMs: number,
 ): void {
-  const scriptPath = path.join(packageRoot, script.relativePath);
+  const scriptPath = fileURLToPath(
+    resolveExternalPackageRuntimeEntrypointUrl(script.name, packageRoot),
+  );
   const result = spawnSync(process.execPath, [...resolveRuntimeArgs(), scriptPath], {
     cwd: packageRoot,
     env: process.env,
@@ -377,16 +374,16 @@ export async function completePendingPackageLifecycle(params: {
   packageRoot: string;
   runScript?: (script: PackageLifecycleScript) => void | Promise<void>;
   timeoutMs?: number;
-}): Promise<boolean> {
+}): Promise<void> {
   const packageRoot = path.resolve(params.packageRoot);
   const scriptTimeoutMs = params.timeoutMs ?? DEFAULT_PACKAGE_LIFECYCLE_SCRIPT_TIMEOUT_MS;
   const paths = resolveLifecyclePaths(packageRoot);
   // Bind before observing work, and retain that directory across every retry.
   const packageDirectory = await bindLifecycleRoot(packageRoot);
   if (!packageDirectory) {
-    return false;
+    return;
   }
-  if (!(await isPackageLifecyclePending(paths, packageDirectory))) {
+  if (!(await isPackageLifecyclePending(paths))) {
     try {
       // Postinstall can clear its marker before its invocation settles. A lock
       // still requires admission before callers may verify or activate this package.
@@ -394,7 +391,7 @@ export async function completePendingPackageLifecycle(params: {
     } catch (error) {
       if (hasErrorCode(error, "ENOENT")) {
         await assertLifecycleRoot(packageRoot, packageDirectory);
-        return false;
+        return;
       }
       throw new PackageLifecycleOwnershipError(packageRoot, "lock cannot be inspected", error);
     }
@@ -404,10 +401,10 @@ export async function completePendingPackageLifecycle(params: {
   const assertOwnership = () => assertLifecycleAuthority(paths, packageDirectory, lock);
   let observedPendingWork = false;
   const completeWhileHeld = async () => {
-    observedPendingWork = await isPackageLifecyclePending(paths, packageDirectory);
+    observedPendingWork = await isPackageLifecyclePending(paths);
     if (!observedPendingWork) {
       await assertOwnership();
-      return false;
+      return;
     }
     const finalizeLegacyMarker = !(await pathExists(
       path.join(packageRoot, PACKAGE_LIFECYCLE_MARKER_CONTRACT_RELATIVE_PATH),
@@ -428,37 +425,36 @@ export async function completePendingPackageLifecycle(params: {
       // interrupted promotion, so successful retries can still finalize it.
       await fs.rm(paths.pending, { force: true });
     }
-    if (await isPackageLifecyclePending(paths, packageDirectory)) {
+    if (await isPackageLifecyclePending(paths)) {
       throw new Error("OpenClaw package postinstall did not complete its lifecycle marker");
     }
-    return true;
   };
-  let outcome: { completed: boolean } | { error: unknown };
+  let failure: { error: unknown } | undefined;
   try {
-    outcome = { completed: await completeWhileHeld() };
+    await completeWhileHeld();
   } catch (error) {
-    outcome = { error };
+    failure = { error };
   }
   try {
     // A failed script is safely removable only while this generation still owns it.
     await assertOwnership();
   } catch (error) {
-    outcome = { error };
+    failure = { error };
   }
   // A no-work caller must not recreate markers retired before its admission.
-  if ("error" in outcome && observedPendingWork) {
+  if (failure && observedPendingWork) {
     try {
       await ensurePendingMarker(paths, packageDirectory, lock);
     } catch (error) {
       if (error instanceof PackageLifecycleOwnershipError) {
-        outcome = { error };
+        failure = { error };
       } else {
         // A marker write failure does not make settled work uncertain while
         // this invocation still owns the same directory and lock generation.
         try {
           await assertOwnership();
         } catch (ownershipError) {
-          outcome = { error: ownershipError };
+          failure = { error: ownershipError };
         }
       }
     }
@@ -472,8 +468,7 @@ export async function completePendingPackageLifecycle(params: {
     // Uncertain release must preserve the stage even if the script itself failed.
     throw new PackageLifecycleOwnershipError(packageRoot, "lock release failed", error);
   }
-  if ("error" in outcome) {
-    throw outcome.error;
+  if (failure) {
+    throw failure.error;
   }
-  return outcome.completed;
 }

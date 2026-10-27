@@ -4,39 +4,59 @@ import { DatabaseSync } from "node:sqlite";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { clearPluginDoctorContractRegistryCache } from "../plugins/doctor-contract-registry.test-fixtures.js";
-import { writePersistedInstalledPluginIndex } from "../plugins/installed-plugin-index-store-write.js";
-import { EMPTY_LEGACY_SESSION_SURFACES } from "../plugins/legacy-session-surfaces.types.js";
-import * as pluginSetupModule from "../plugins/plugin-setup-module.js";
-import { closeOpenClawAgentDatabasesAsync } from "../state/openclaw-agent-db-lifecycle.js";
-import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
-import * as stateDatabase from "../state/openclaw-state-db.js";
-import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
-import { withStateMigrationBackupForTest } from "../state/openclaw-state-schema.test-support.js";
+let { clearPluginDoctorContractRegistryCache } =
+  await import("../plugins/doctor-contract-registry.test-fixtures.js");
+let { writePersistedInstalledPluginIndex } =
+  await import("../plugins/installed-plugin-index-store-write.js");
+let { EMPTY_LEGACY_SESSION_SURFACES } = await import("../plugins/legacy-session-surfaces.types.js");
+let pluginSetupModule = await import("../plugins/plugin-setup-module.js");
+let { closeOpenClawAgentDatabasesAsync } = await import("../state/openclaw-agent-db-lifecycle.js");
+let { closeOpenClawAgentDatabasesForTest } = await import("../state/openclaw-agent-db.js");
+let stateDatabase = await import("../state/openclaw-state-db.js");
+let { resolveOpenClawStateSqlitePath } = await import("../state/openclaw-state-db.paths.js");
+let { withStateMigrationBackupForTest } =
+  await import("../state/openclaw-state-schema.test-support.js");
 import { createTrackedTempDirs } from "../test-utils/tracked-temp-dirs.js";
-import {
-  readDeferredPluginMigrations,
-  recordDeferredPluginMigrations,
-} from "./deferred-plugin-migrations.js";
-import {
-  expectBlockedTailInPlanOrder,
-  expectPlanReceiptDescriptorsToMatch,
-} from "./state-migrations.caller-mode.test-helpers.js";
-import {
-  detectLegacyStateMigrations,
-  runLegacyStateMigrations,
-} from "./state-migrations.doctor.js";
-import { throwIfDoctorStateMigrationRefused } from "./state-migrations.messages.js";
-import {
-  autoMigrateLegacyPluginDoctorState,
-  runPostSessionPluginDoctorStateRepairs,
-} from "./state-migrations.plugin-doctor.js";
-import {
-  byId,
-  createMigrationFixture,
-  writeFixtureFile,
-} from "./state-migrations.shard-fixture.test-support.js";
-import { resetAutoMigrateLegacyStateDirForTest } from "./state-migrations.state-dir.js";
+let { readDeferredPluginMigrations, recordDeferredPluginMigrations } =
+  await import("./deferred-plugin-migrations.js");
+let { expectBlockedTailInPlanOrder, expectPlanReceiptDescriptorsToMatch } =
+  await import("./state-migrations.caller-mode.test-helpers.js");
+let { detectLegacyStateMigrations, runLegacyStateMigrations } =
+  await import("./state-migrations.doctor.js");
+let { throwIfDoctorStateMigrationRefused } = await import("./state-migrations.messages.js");
+let { autoMigrateLegacyPluginDoctorState, runPostSessionPluginDoctorStateRepairs } =
+  await import("./state-migrations.plugin-doctor.js");
+let { byId, createMigrationFixture, writeFixtureFile } =
+  await import("./state-migrations.shard-fixture.test-support.js");
+
+async function reloadStateDirFixtureGraph() {
+  await closeOpenClawAgentDatabasesAsync();
+  await stateDatabase.closeOpenClawStateDatabaseAsync();
+  vi.resetModules();
+  ({ clearPluginDoctorContractRegistryCache } =
+    await import("../plugins/doctor-contract-registry.test-fixtures.js"));
+  ({ writePersistedInstalledPluginIndex } =
+    await import("../plugins/installed-plugin-index-store-write.js"));
+  ({ EMPTY_LEGACY_SESSION_SURFACES } = await import("../plugins/legacy-session-surfaces.types.js"));
+  pluginSetupModule = await import("../plugins/plugin-setup-module.js");
+  ({ closeOpenClawAgentDatabasesAsync } = await import("../state/openclaw-agent-db-lifecycle.js"));
+  ({ closeOpenClawAgentDatabasesForTest } = await import("../state/openclaw-agent-db.js"));
+  stateDatabase = await import("../state/openclaw-state-db.js");
+  ({ resolveOpenClawStateSqlitePath } = await import("../state/openclaw-state-db.paths.js"));
+  ({ withStateMigrationBackupForTest } =
+    await import("../state/openclaw-state-schema.test-support.js"));
+  ({ readDeferredPluginMigrations, recordDeferredPluginMigrations } =
+    await import("./deferred-plugin-migrations.js"));
+  ({ expectBlockedTailInPlanOrder, expectPlanReceiptDescriptorsToMatch } =
+    await import("./state-migrations.caller-mode.test-helpers.js"));
+  ({ detectLegacyStateMigrations, runLegacyStateMigrations } =
+    await import("./state-migrations.doctor.js"));
+  ({ throwIfDoctorStateMigrationRefused } = await import("./state-migrations.messages.js"));
+  ({ autoMigrateLegacyPluginDoctorState, runPostSessionPluginDoctorStateRepairs } =
+    await import("./state-migrations.plugin-doctor.js"));
+  ({ byId, createMigrationFixture, writeFixtureFile } =
+    await import("./state-migrations.shard-fixture.test-support.js"));
+}
 
 function writeJson(file: string, value: unknown) {
   fs.writeFileSync(file, JSON.stringify(value) + "\n");
@@ -117,7 +137,6 @@ async function makeFixture() {
 }
 
 afterEach(async () => {
-  resetAutoMigrateLegacyStateDirForTest();
   await closeOpenClawAgentDatabasesAsync();
   closeOpenClawAgentDatabasesForTest();
   await stateDatabase.closeOpenClawStateDatabaseAsync();
@@ -313,6 +332,9 @@ export const stateMigrations = ${JSON.stringify(runtimeIds)}.map((id) => ({
   ] as const)(
     "discovers live actions: legacy=%s indexed=%s phase=%s direct=%s old-schema=%s ordinary-only=%s",
     async (legacyRoot, fromInstallIndex, phase, direct, legacySchema, excludeDoctorOnly) => {
+      if (legacyRoot) {
+        await reloadStateDirFixtureGraph();
+      }
       const fixture = await makeFixture();
       // This execution fixture has no candidate package. Its config-root plugin directory
       // must contain only the live owner, not makeFixture's copied-plan bundled tree.

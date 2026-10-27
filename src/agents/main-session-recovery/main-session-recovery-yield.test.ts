@@ -8,6 +8,7 @@ import { subagentRuns } from "../subagents/registry/subagent-registry-memory.js"
 import { projectMainSessionRecoveryLifecycle } from "./main-session-recovery-lifecycle.js";
 import { claimMainSessionRecoveryOwner } from "./main-session-recovery-store.js";
 import { createMainSessionRecoveryStoreFixture } from "./main-session-recovery-store.test-support.js";
+import { markOrphanedMainSessionForRecovery } from "./main-session-restart-recovery-marking.js";
 
 describe("yielded requester admission", () => {
   const sessionKey = "agent:main:main";
@@ -141,4 +142,45 @@ describe("yielded requester admission", () => {
     await expect(claimRecovery()).rejects.toThrow("continuation changed before recovery handoff");
     expect(read().restartRecoveryRuns).toEqual([{ runId: "yielded-run", lifecycleGeneration }]);
   });
+
+  // A killed member of a yielded cohort keeps the wake; its continuation reports the cancellation.
+  it.each(["live pending", "live dispatching", "killed dispatching"] as const)(
+    "leaves orphaned delivery custody with the retained yielded wake: %s",
+    async (state) => {
+      const retained = createSubagentRunRecord({
+        ...child,
+        requesterSettleWake: {
+          ...child.requesterSettleWake!,
+          status: state === "live pending" ? "pending" : "dispatching",
+          attemptCount: 1,
+        },
+      });
+      if (state === "killed dispatching") {
+        retained.suppressCompletionDelivery = true;
+        retained.endedReason = "subagent-killed";
+        retained.killReconciliation = { killedAt: 2000, supersededAt: 3000 };
+      }
+      subagentRuns.set(retained.runId, retained);
+      await write({
+        sessionId: "session-1",
+        updatedAt: 4000,
+        endedAt: 4000,
+        abortedLastRun: false,
+        restartRecoveryDeliveryRunId: "older-orphan-claim",
+        restartRecoveryDeliverySourceRunId: "older-orphan-source",
+      });
+      const before = read();
+      const childBefore = structuredClone(retained);
+      await expect(
+        markOrphanedMainSessionForRecovery({
+          target: { agentId: "main", sessionKey, storePath },
+          expectedSessionId: "session-1",
+          cfg: { session: { store: storePath } },
+        }),
+      ).resolves.toMatchObject({ marked: 0 });
+      expect(read()).toEqual(before);
+      expect(subagentRuns.get(retained.runId)).toBe(retained);
+      expect(retained).toEqual(childBefore);
+    },
+  );
 });

@@ -597,10 +597,6 @@ export async function clearActivePluginRegistry(
     clearActivePluginRegistryState();
   }
   const clearVersion = state.activeVersion;
-  const clearRegistries = (state.commandRegistryClearRegistries ??= new Map());
-  if (previousRegistry) {
-    clearRegistries.set(previousRegistry, (clearRegistries.get(previousRegistry) ?? 0) + 1);
-  }
   const previousTail = state.commandRegistryClearTail ?? Promise.resolve();
   const completion = previousTail
     .catch(() => undefined)
@@ -635,28 +631,17 @@ export async function clearActivePluginRegistry(
           }
         }
       }
-    })
-    .finally(() => {
-      if (previousRegistry) {
-        const remaining = (clearRegistries.get(previousRegistry) ?? 1) - 1;
-        if (remaining === 0) {
-          clearRegistries.delete(previousRegistry);
-        } else {
-          clearRegistries.set(previousRegistry, remaining);
-        }
-      }
     });
   state.commandRegistryClearTail = completion.catch((error: unknown) => {
     log.warn(`plugin registry clear failed: ${String(error)}`);
   });
-  // Publish the clear owner and tail before synchronous retirement listeners can reenter.
+  // Publish the drain before synchronous retirement listeners can reenter.
   quiescePluginRegistry(previousRegistry);
   // Reentrant commands and retired cleanup callbacks must not await their own pending attempt.
   if (
-    [...clearRegistries.keys()].some(isPluginCommandExecutionActiveHere) ||
-    [...(state.retiredRegistryCleanups?.values() ?? [])].some(
-      ({ registry, work }) =>
-        isPluginCommandExecutionActiveHere(registry) || isAsyncWorkScopeActiveHere(work),
+    isPluginCommandExecutionActiveHere() ||
+    [...(state.retiredRegistryCleanups?.values() ?? [])].some(({ work }) =>
+      isAsyncWorkScopeActiveHere(work),
     )
   ) {
     return;

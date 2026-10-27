@@ -1,4 +1,3 @@
-// Config helper tests cover channel plugin config merge and selection helpers.
 import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
@@ -8,139 +7,84 @@ import {
   setAccountEnabledInConfigSection,
 } from "./config-helpers.js";
 
-describe("public account config writers", () => {
-  it.each([false, true])(
-    "setAccountEnabledInConfigSection preserves rejected aliases when policy is %s",
-    (declared) => {
-      const alias = { allowFrom: ["bob"] };
-      const cfg = {
-        channels: { sample: { allowFrom: ["alice"], accounts: { "Work Phone": alias } } },
-      };
-      const result = setAccountEnabledInConfigSection({
-        cfg,
-        sectionKey: "sample",
-        accountId: "Work Phone",
-        accountKeyPolicy: declared ? { canonicalAliasesRequireOwnField: "account" } : undefined,
-        enabled: false,
-      });
-      expect(result.channels?.sample).toEqual({
-        allowFrom: ["alice"],
-        accounts: declared
-          ? { "Work Phone": alias, "work-phone": { enabled: false } }
-          : { "Work Phone": { ...alias, enabled: false } },
-      });
-    },
-  );
+const policy = { canonicalAliasesRequireOwnField: "account" };
+function writerFixture(declared: boolean) {
+  const accounts = { "Work Phone": { secret: "authored", allowFrom: ["bob"] } };
+  const cfg = { channels: { sample: { allowFrom: ["alice"], accounts } } };
+  const params = {
+    cfg,
+    sectionKey: "sample",
+    accountId: "Work Phone",
+    accountKeyPolicy: declared ? policy : undefined,
+  };
+  return { accounts, params };
+}
 
-  it.each(
-    [false, true].flatMap((declared) =>
-      ["delete", "clear"].map((operation) => ({ declared, operation })),
-    ),
-  )(
-    "deleteAccountFromConfigSection / clearAccountEntryFields: $operation honors policy=$declared",
-    ({ declared, operation }) => {
-      const accounts = { "Work Phone": { secret: "authored", allowFrom: ["bob"] } };
-      const cfg = { channels: { sample: { allowFrom: ["alice"], accounts } } };
-      const accountKeyPolicy = declared
-        ? { canonicalAliasesRequireOwnField: "account" }
-        : undefined;
-      if (operation === "delete") {
-        expect(
-          deleteAccountFromConfigSection({
-            cfg,
-            sectionKey: "sample",
-            accountId: "Work Phone",
-            accountKeyPolicy,
-          }).channels?.sample,
-        ).toEqual({ allowFrom: ["alice"], accounts: declared ? accounts : undefined });
-      } else {
-        expect(
-          clearAccountEntryFields({
-            accounts,
-            accountId: "Work Phone",
-            accountKeyPolicy,
-            fields: ["secret"],
-          }),
-        ).toEqual({
-          nextAccounts: declared ? accounts : { "Work Phone": { allowFrom: ["bob"] } },
-          changed: !declared,
-          cleared: !declared,
-        });
-      }
-    },
-  );
+describe("public account config writers", () => {
+  it.each([false, true])("enable honors account policy=%s", (declared) => {
+    const { accounts, params } = writerFixture(declared);
+    expect(
+      setAccountEnabledInConfigSection({ ...params, enabled: false }).channels?.sample,
+    ).toEqual({
+      allowFrom: ["alice"],
+      accounts: declared
+        ? { ...accounts, "work-phone": { enabled: false } }
+        : { "Work Phone": { secret: "authored", allowFrom: ["bob"], enabled: false } },
+    });
+  });
+
+  it.each([false, true])("delete honors account policy=%s", (declared) => {
+    const { accounts, params } = writerFixture(declared);
+    expect(deleteAccountFromConfigSection(params).channels?.sample).toEqual({
+      allowFrom: ["alice"],
+      accounts: declared ? accounts : undefined,
+    });
+  });
+
+  it.each([false, true])("clear honors account policy=%s", (declared) => {
+    const { accounts, params } = writerFixture(declared);
+    expect(clearAccountEntryFields({ ...params, accounts, fields: ["secret"] })).toEqual({
+      nextAccounts: declared ? accounts : { "Work Phone": { allowFrom: ["bob"] } },
+      changed: !declared,
+      cleared: !declared,
+    });
+  });
 });
 
-describe("clearAccountFieldsFromConfigSection", () => {
-  function clear(cfg: OpenClawConfig, accountId = "default", markClearedOnFieldPresence = false) {
-    const original = structuredClone(cfg);
-    const result = clearAccountFieldsFromConfigSection({
+const sibling = { token: "keep" };
+const clearArgs = { sectionKey: "sample", accountId: "default", fields: ["token", "secret"] };
+function config(sample: object): OpenClawConfig {
+  return { channels: { sample } };
+}
+
+it.each([
+  [
+    "nested field presence",
+    config({ accounts: { primary: { token: "   ", secret: "", name: "Keep" }, sibling } }),
+    config({ accounts: { primary: { name: "Keep" }, sibling } }),
+    { accountId: "primary", markClearedOnFieldPresence: true },
+  ],
+  [
+    "empty id preserves root",
+    config({ token: "root", accounts: { default: { token: "nested" } } }),
+    config({ token: "root" }),
+    { accountId: "" },
+  ],
+] as const)("clear config: %s", (_name, cfg, nextConfig, options) => {
+  const original = structuredClone(cfg);
+  expect(
+    clearAccountFieldsFromConfigSection({
+      ...clearArgs,
       cfg,
-      sectionKey: "sample",
-      accountId,
-      fields: ["token", "secret"],
-      markClearedOnFieldPresence,
-    });
-    expect(cfg).toEqual(original);
-    return result;
-  }
+      ...options,
+    }),
+  ).toEqual({ nextConfig, changed: true, cleared: true });
+  expect(cfg).toEqual(original);
+});
 
-  it.each([{ source: "env", provider: "default", id: "SAMPLE_TOKEN" }])(
-    "clears the entire root field group for truthy value %j",
-    (token) => {
-      const cfg: OpenClawConfig = {
-        channels: {
-          sample: { token, secret: "", accounts: {}, name: "Keep" },
-          other: { enabled: false },
-        },
-      };
-      expect(clear(cfg)).toEqual({
-        nextConfig: {
-          channels: { sample: { accounts: {}, name: "Keep" }, other: { enabled: false } },
-        },
-        changed: true,
-        cleared: true,
-      });
-    },
-  );
-
-  it.each([true])(
-    "preserves nested field-presence reporting with mode %s",
-    (markClearedOnFieldPresence) => {
-      const sibling = { token: "keep" };
-      const cfg: OpenClawConfig = {
-        channels: {
-          sample: { accounts: { primary: { token: "   ", secret: "", name: "Keep" }, sibling } },
-        },
-      };
-      expect(clear(cfg, "primary", markClearedOnFieldPresence)).toEqual({
-        nextConfig: { channels: { sample: { accounts: { primary: { name: "Keep" }, sibling } } } },
-        changed: true,
-        cleared: markClearedOnFieldPresence,
-      });
-    },
-  );
-
-  it("normalizes an empty nested account id without clearing root fields", () => {
-    const cfg: OpenClawConfig = {
-      channels: { sample: { token: "root", accounts: { default: { token: "nested" } } } },
-    };
-    expect(clear(cfg, "")).toEqual({
-      nextConfig: { channels: { sample: { token: "root" } } },
-      changed: true,
-      cleared: true,
-    });
-  });
-
-  it.each([{ channels: {} }])("returns original config without pruning a no-op %j", (cfg) => {
-    const result = clear(cfg);
-    expect(result).toEqual({ nextConfig: cfg, changed: false, cleared: false });
-    expect(result.nextConfig).toBe(cfg);
-  });
-
-  it("prunes changed empty account, channel, and channels objects", () => {
-    expect(clear({ channels: { sample: { accounts: { default: { token: "remove" } } } } })).toEqual(
-      { nextConfig: {}, changed: true, cleared: true },
-    );
-  });
+it("preserves config identity and empty channels on a no-op", () => {
+  const cfg = { channels: {} };
+  const result = clearAccountFieldsFromConfigSection({ ...clearArgs, cfg });
+  expect(result).toEqual({ nextConfig: cfg, changed: false, cleared: false });
+  expect(result.nextConfig).toBe(cfg);
 });

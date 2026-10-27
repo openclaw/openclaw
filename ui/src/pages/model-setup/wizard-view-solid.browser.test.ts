@@ -74,8 +74,8 @@ it.runIf("__vitest_browser__" in globalThis)(
       ...container.querySelectorAll<HTMLButtonElement>(".model-setup-wizard__footer button"),
     ];
     expect(actions.map((button) => button.textContent?.trim())).toEqual([
-      "Start a new chat with Muse Spark 1.3",
       "Close",
+      "Start a new chat with Muse Spark 1.3",
     ]);
     actions[0]!.click();
     actions[1]!.click();

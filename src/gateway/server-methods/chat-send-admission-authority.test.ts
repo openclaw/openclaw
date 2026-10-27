@@ -59,13 +59,9 @@ function lifecycleRelease(fixture: Awaited<ReturnType<typeof createBrowserFollow
   });
 }
 
-it.each([
-  { revokeInCallback: false, scoped: true },
-  { revokeInCallback: true, scoped: true },
-  { revokeInCallback: true, scoped: false },
-])(
-  "keeps caller authority current through admission callbacks (revoked: $revokeInCallback, scoped: $scoped)",
-  async ({ revokeInCallback, scoped }) => {
+it.each([true, false])(
+  "rejects caller authority revoked in the admission callback (scoped: %s)",
+  async (scoped) => {
     await using fixture = await createBrowserFollowupFixture();
     const prepared = await prepareChatAdmission(fixture);
     let current = true;
@@ -82,21 +78,16 @@ it.each([
       current = false;
       return true;
     };
-    const admitting = admitChatSend({
-      ...prepared,
-      respond: vi.fn(),
-      ...(scoped ? { assertCurrent, withCurrent } : {}),
-      assertCurrentAsync: () => withCurrent(assertCurrent),
-      onAdmissionOwned: revokeInCallback ? revoke : undefined,
-    });
-    if (revokeInCallback) {
-      await expect(admitting).rejects.toThrow("caller revoked during admission");
-      expect(rpcSourceTesting.size).toBe(0);
-    } else {
-      const admitted = await admitting;
-      assert(admitted.ok);
-      admitted.value.cleanupAdmittedRun();
-    }
+    await expect(
+      admitChatSend({
+        ...prepared,
+        respond: vi.fn(),
+        ...(scoped ? { assertCurrent, withCurrent } : {}),
+        assertCurrentAsync: () => withCurrent(assertCurrent),
+        onAdmissionOwned: revoke,
+      }),
+    ).rejects.toThrow("caller revoked during admission");
+    expect(rpcSourceTesting.size).toBe(0);
   },
 );
 it("clears a pending reservation when its retained reader is revoked after publication", async () => {

@@ -25,6 +25,9 @@ import {
 } from "./tool-description-presets.js";
 import { AUTOMATIONS_TOOL_NAME } from "./tools/automations-tool-name.js";
 
+// Shared with restart classification without importing the tool-search runtime contract.
+export const TOOL_CALL_RAW_TOOL_NAME = "dispatch_action";
+
 /** Built-in tool profile ids exposed in config and UI. */
 export type ToolProfileId = "minimal" | "coding" | "messaging" | "full";
 
@@ -32,16 +35,6 @@ export type ToolProfileId = "minimal" | "coding" | "messaging" | "full";
 type ToolProfilePolicy = {
   allow?: string[];
   deny?: string[];
-};
-
-type CoreToolSection = {
-  id: string;
-  label: string;
-  tools: Array<{
-    id: string;
-    label: string;
-    description: string;
-  }>;
 };
 
 export type CoreToolFactoryFamily = "base-coding" | "shell" | "openclaw";
@@ -222,7 +215,6 @@ const CORE_TOOL_DEFINITIONS: CoreToolDefinition[] = [
     ["message", "Send messages"],
   ]),
   ...coreTools("automation", { profiles: [], includeInOpenClawGroup: true }, [
-    ["heartbeat_respond", "Accept heartbeat outcomes for post-turn handling"],
     [AUTOMATIONS_TOOL_NAME, CRON_TOOL_DISPLAY_SUMMARY, { profiles: ["coding"] }],
     [
       "gateway",
@@ -408,7 +400,15 @@ export function resolveCoreToolProfilePolicy(profile?: string): ToolProfilePolic
 export function listCoreToolSections(params?: {
   swarmEnabled?: boolean;
   personalInstructionsEnabled?: boolean;
-}): CoreToolSection[] {
+}): Array<{
+  id: string;
+  label: string;
+  tools: Array<{
+    id: string;
+    label: string;
+    description: string;
+  }>;
+}> {
   // Callers resolve the swarm gate and pass the fact in; resolving config here
   // would couple this ui-shared module to the server graph.
   const swarmEnabled = params?.swarmEnabled === true;

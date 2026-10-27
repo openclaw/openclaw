@@ -24,27 +24,24 @@ function expectNativeBehavior(
   expect(hasPendingSqliteNativeExecution(db)).toBe(false);
 }
 
-it.each(["exec", "all"] as const)(
-  "retains custody across %s callbacks and preserves a native error",
-  (method) => {
-    using db = open();
-    const failure = new Error("synthetic native callback failure");
-    const observations: boolean[] = [];
-    db.function("callback", () => {
-      observations.push(hasPendingSqliteNativeExecution(db));
-      // Nested native work cannot settle its enclosing operation.
-      db.prepare("SELECT 1").get();
-      observations.push(hasPendingSqliteNativeExecution(db));
-      throw failure;
-    });
-    expect(() =>
-      method === "exec" ? db.exec("SELECT callback()") : db.prepare("SELECT callback()")[method](),
-    ).toThrow("synthetic native callback failure");
-    expect(observations).toEqual([true, true]);
-    expect(hasPendingSqliteNativeExecution(db)).toBe(false);
-    expect(db.prepare("SELECT 42 AS value").get()).toEqual({ value: 42 });
-  },
-);
+it.each(["exec", "all"] as const)("retains custody across failing %s callbacks", (method) => {
+  using db = open();
+  const failure = new Error("synthetic native callback failure");
+  const observations: boolean[] = [];
+  db.function("callback", () => {
+    observations.push(hasPendingSqliteNativeExecution(db));
+    // Nested native work cannot settle its enclosing operation.
+    db.prepare("SELECT 1").get();
+    observations.push(hasPendingSqliteNativeExecution(db));
+    throw failure;
+  });
+  expect(() =>
+    method === "exec" ? db.exec("SELECT callback()") : db.prepare("SELECT callback()")[method](),
+  ).toThrow("synthetic native callback failure");
+  expect(observations).toEqual([true, true]);
+  expect(hasPendingSqliteNativeExecution(db)).toBe(false);
+  expect(db.prepare("SELECT 42 AS value").get()).toEqual({ value: 42 });
+});
 
 it("binds iterators immediately and holds custody until exhaustion or explicit return", () => {
   using db = open();
@@ -55,17 +52,17 @@ it("binds iterators immediately and holds custody until exhaustion or explicit r
   expect(hasPendingSqliteNativeExecution(db)).toBe(false);
   const rows = statement.iterate(1);
   expect(hasPendingSqliteNativeExecution(db)).toBe(false);
-  expect(rows.next().value).toEqual({ value: 1 });
-  expect(hasPendingSqliteNativeExecution(db)).toBe(true);
-  expect(rows.next().value).toEqual({ value: 2 });
-  expect(hasPendingSqliteNativeExecution(db)).toBe(true);
-  expect(rows.next().done).toBe(true);
-  expect(hasPendingSqliteNativeExecution(db)).toBe(false);
+  for (const value of [1, 2, undefined]) {
+    const step = rows.next();
+    expect(value === undefined ? step.done : step.value).toEqual(
+      value === undefined ? true : { value },
+    );
+    expect(hasPendingSqliteNativeExecution(db)).toBe(value !== undefined);
+  }
 
   const next = statement.iterate(3);
   expect(next.next().value).toEqual({ value: 3 });
-  // Native return can reset the shared statement, even from a completed cursor.
-  // That stale cursor cannot certify the newer cursor's settlement.
+  // Completed and explicitly returned cursors cannot settle their successor.
   rows.return?.();
   expect(hasPendingSqliteNativeExecution(db)).toBe(true);
   next.return?.();
@@ -79,34 +76,31 @@ it("binds iterators immediately and holds custody until exhaustion or explicit r
   expect(hasPendingSqliteNativeExecution(db)).toBe(false);
 });
 
-it.each(["all", "close"] as const)(
-  "settles a retained statement's RETURNING cursor on %s",
-  (method) => {
-    using db = open();
-    db.exec(
-      "CREATE TABLE entries (id INTEGER PRIMARY KEY, value INTEGER); INSERT INTO entries VALUES (1, 0), (2, 0)",
-    );
-    const statement = db.prepare("UPDATE entries SET value = value + ? RETURNING id, value");
-    const rows = statement.iterate(1);
-    expect(rows.next().done).toBe(false);
-    expect(hasPendingSqliteNativeExecution(db)).toBe(true);
-    if (method === "close") {
-      // Statement finalization is optional on older supported Node versions.
-      if (statement.close) {
-        statement.close();
-      } else {
-        rows.return?.();
-      }
+it.each(["all", "close"] as const)("settles RETURNING cursors on %s", (method) => {
+  using db = open();
+  db.exec(
+    "CREATE TABLE entries (id INTEGER PRIMARY KEY, value INTEGER); INSERT INTO entries VALUES (1, 0), (2, 0)",
+  );
+  const statement = db.prepare("UPDATE entries SET value = value + ? RETURNING id, value");
+  const rows = statement.iterate(1);
+  expect(rows.next().done).toBe(false);
+  expect(hasPendingSqliteNativeExecution(db)).toBe(true);
+  if (method === "close") {
+    // Statement finalization is optional on older supported Node versions.
+    if (statement.close) {
+      statement.close();
     } else {
-      statement[method](0);
+      rows.return?.();
     }
-    expect(hasPendingSqliteNativeExecution(db)).toBe(false);
-    expect(db.prepare("SELECT value FROM entries ORDER BY id").all()).toEqual([
-      { value: 1 },
-      { value: 1 },
-    ]);
-  },
-);
+  } else {
+    statement[method](0);
+  }
+  expect(hasPendingSqliteNativeExecution(db)).toBe(false);
+  expect(db.prepare("SELECT value FROM entries ORDER BY id").all()).toEqual([
+    { value: 1 },
+    { value: 1 },
+  ]);
+});
 
 it("settles a failing step and closes only the connection whose cursor it owns", () => {
   using db = open();
@@ -161,32 +155,26 @@ it("keeps an opaque batch fenced without treating its tentative tail as committe
   expect(writer.prepare("SELECT id FROM entries").all()).toEqual([{ id: "committed" }]);
 });
 
-it.each(["get", "iterate"] as const)(
-  "preserves native undefined and trailing bindings in %s",
-  (method) => {
-    expectNativeBehavior((db) => {
-      const called: unknown[][] = [];
-      db.function("callback", (first, second) => {
-        called.push([first, second]);
-        return 1;
-      });
-      const statement = db.prepare("SELECT callback(?, ?) AS value");
-      const result = outcome(() => {
-        if (method === "iterate") {
-          const rows: ReturnType<typeof statement.iterate> = Reflect.apply(
-            statement.iterate.bind(statement),
-            undefined,
-            [undefined, 42],
-          );
-          const step = rows.next();
-          rows.return?.();
-          return step;
-        }
-        return Reflect.apply(statement[method].bind(statement), undefined, [undefined, 42]);
-      });
-      return { called, outcome: result };
+it.each(["get", "iterate"] as const)("preserves native undefined/trailing %s bindings", (method) =>
+  expectNativeBehavior((db) => {
+    db.function("callback", (first, second) =>
+      JSON.stringify([typeof first, first, typeof second, second]),
+    );
+    const statement = db.prepare("SELECT callback(?, ?) AS value");
+    return outcome(() => {
+      if (method === "iterate") {
+        const rows: ReturnType<typeof statement.iterate> = Reflect.apply(
+          statement.iterate.bind(statement),
+          undefined,
+          [undefined, 42],
+        );
+        const step = rows.next();
+        rows.return?.();
+        return step;
+      }
+      return Reflect.apply(statement[method].bind(statement), undefined, [undefined, 42]);
     });
-  },
+  }),
 );
 
 it("preserves native cursor behavior when an invalidated iterator is stepped", () => {
@@ -213,10 +201,7 @@ it("preserves native cursor behavior when an invalidated iterator is stepped", (
 it("preserves a recoverable native row-conversion failure without losing the next row", () => {
   expectNativeBehavior((db) => {
     const rows = db.prepare("SELECT 9007199254740992 AS value UNION ALL SELECT 2").iterate();
-    const results: unknown[] = [];
-    for (let step = 0; step < 2; step++) {
-      results.push(outcome(() => rows.next()));
-    }
+    const results = Array.from({ length: 2 }, () => outcome(() => rows.next()));
     rows.return?.();
     return results;
   });

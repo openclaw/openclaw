@@ -16,14 +16,22 @@ import {
   normalizeOptionalString,
   normalizeStringifiedOptionalString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { buildTlonAccountFields, type TlonAccountFieldsInput } from "./account-fields.js";
 import { normalizeShip } from "./targets.js";
 import { listTlonAccountIds, resolveTlonAccount } from "./types.js";
 import { validateUrbitBaseUrl } from "./urbit/base-url.js";
 
 const t = createSetupTranslator();
 
-type TlonSetupInput = ChannelSetupInput & TlonAccountFieldsInput;
+type TlonSetupInput = ChannelSetupInput & {
+  ship?: string;
+  url?: string;
+  code?: string;
+  dangerouslyAllowPrivateNetwork?: boolean;
+  groupChannels?: string[];
+  dmAllowlist?: string[];
+  autoDiscoverChannels?: boolean;
+  ownerShip?: string;
+};
 
 export function createTlonSetupWizardBase(
   finalize: NonNullable<ChannelSetupWizard["finalize"]>,
@@ -142,7 +150,24 @@ export function applyTlonSetupConfig(params: {
     name: input.name,
   });
   const base = namedConfig.channels?.tlon ?? {};
-  const payload = buildTlonAccountFields(input);
+  const payload = {
+    ...(input.ship ? { ship: input.ship } : {}),
+    ...(input.url ? { url: input.url } : {}),
+    ...(input.code ? { code: input.code } : {}),
+    ...(input.dangerouslyAllowPrivateNetwork !== undefined
+      ? {
+          network: {
+            dangerouslyAllowPrivateNetwork: input.dangerouslyAllowPrivateNetwork,
+          },
+        }
+      : {}),
+    ...(input.groupChannels ? { groupChannels: input.groupChannels } : {}),
+    ...(input.dmAllowlist ? { dmAllowlist: input.dmAllowlist } : {}),
+    ...(input.autoDiscoverChannels !== undefined
+      ? { autoDiscoverChannels: input.autoDiscoverChannels }
+      : {}),
+    ...(input.ownerShip ? { ownerShip: input.ownerShip } : {}),
+  };
 
   return patchScopedAccountConfig({
     cfg: namedConfig,

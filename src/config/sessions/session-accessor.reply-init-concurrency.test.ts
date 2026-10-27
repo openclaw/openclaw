@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
+import { once } from "node:events";
 import path from "node:path";
 import process from "node:process";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
@@ -19,6 +20,7 @@ import {
 } from "./session-accessor.js";
 import { replaceTranscriptEvents } from "./session-accessor.sqlite-transcript-write.test-support.js";
 import type { ReplySessionInitializationCommitResult } from "./session-accessor.types.js";
+import { messageEvent } from "./transcript-message.test-support.js";
 
 vi.mock("../config.js", async () => ({
   ...(await vi.importActual<typeof import("../config.js")>("../config.js")),
@@ -76,19 +78,18 @@ const {
 const SESSION_KEY = ${JSON.stringify(SESSION_KEY)};
 const AGENT_ID = ${JSON.stringify(AGENT_ID)};
 const proceedResolvers = new Map();
+const scope = (request) => ({ agentId: AGENT_ID, sessionKey: SESSION_KEY, storePath: request.storePath });
+const failure = (error) => ({
+  name: error instanceof Error ? error.name : typeof error,
+  message: error instanceof Error ? error.message : String(error),
+});
 
 function send(message) {
   process.send?.(message);
 }
 
-function waitForProceed(requestId) {
-  return new Promise((resolve) => {
-    proceedResolvers.set(requestId, resolve);
-  });
-}
-
 async function ready(request, value) {
-  const proceed = waitForProceed(request.requestId);
+  const proceed = new Promise((resolve) => { proceedResolvers.set(request.requestId, resolve); });
   send({ phase: "ready", requestId: request.requestId, value });
   await proceed;
 }
@@ -98,35 +99,24 @@ function message(id, content) {
 }
 
 async function runReplyInit(request) {
-  const snapshot = await loadReplySessionInitializationSnapshot({
-    agentId: AGENT_ID,
-    sessionKey: SESSION_KEY,
-    storePath: request.storePath,
-  });
+  const snapshot = await loadReplySessionInitializationSnapshot(scope(request));
   await ready(request, { currentEntry: snapshot.currentEntry, revision: snapshot.revision });
   return commitReplySessionInitialization({
+    ...scope(request),
     activeSessionKey: SESSION_KEY,
-    agentId: AGENT_ID,
     expectedRevision: snapshot.revision,
     sessionEntry: {
       sessionId: "existing-session",
       updatedAt: request.preparedUpdatedAt,
     },
-    sessionKey: SESSION_KEY,
     snapshotEntry: snapshot.currentEntry,
-    storePath: request.storePath,
   });
 }
 
 async function runTranscriptRewrite(request) {
   try {
     await withTranscriptWriteLock(
-      {
-        agentId: AGENT_ID,
-        sessionId: request.sessionId,
-        sessionKey: SESSION_KEY,
-        storePath: request.storePath,
-      },
+      { ...scope(request), sessionId: request.sessionId },
       async (transcript) => {
         if (request.rewriteMode === "replace-twice") {
           const firstReplacement = [
@@ -151,11 +141,7 @@ async function runTranscriptRewrite(request) {
     );
     return { ok: true };
   } catch (error) {
-    return {
-      ok: false,
-      name: error instanceof Error ? error.name : typeof error,
-      message: error instanceof Error ? error.message : String(error),
-    };
+    return { ok: false, ...failure(error) };
   }
 }
 
@@ -176,14 +162,7 @@ process.on("message", (request) => {
         : await runTranscriptRewrite(request);
     send({ phase: "result", requestId: request.requestId, value });
   })().catch((error) => {
-    send({
-      error: {
-        message: error instanceof Error ? error.message : String(error),
-        name: error instanceof Error ? error.name : typeof error,
-      },
-      phase: "error",
-      requestId: request.requestId,
-    });
+    send({ error: failure(error), phase: "error", requestId: request.requestId });
   });
 });
 
@@ -330,12 +309,8 @@ async function runConcurrencyScenario<TRequest extends ConcurrencyWorkerRequest>
   );
 }
 
-const message = (id: string, content: string) => ({
-  type: "message",
-  id,
-  parentId: null,
-  message: { role: "assistant", content },
-});
+const message = (id: string, content: string) =>
+  messageEvent(id, null, { role: "assistant", content });
 const transcriptEvents = (
   sessionId: string,
   id = "rewrite-target",
@@ -349,30 +324,21 @@ async function fixture(sessionId: string) {
   return { tempDir, storePath, scope };
 }
 async function waitForChild(child: ReturnType<typeof spawn>, label: string): Promise<void> {
-  let childStdout = "";
-  let childStderr = "";
-  child.stdout?.setEncoding("utf8");
-  child.stderr?.setEncoding("utf8");
-  child.stdout?.on("data", (chunk) => {
-    childStdout += String(chunk);
-  });
-  child.stderr?.on("data", (chunk) => {
-    childStderr += String(chunk);
-  });
-
+  const output = { stdout: "", stderr: "" };
+  for (const stream of ["stdout", "stderr"] as const) {
+    child[stream]?.setEncoding("utf8");
+    child[stream]?.on("data", (chunk) => {
+      output[stream] += String(chunk);
+    });
+  }
   // Honor an already-observed exit instead of waiting for a spent event.
-  const childExit =
-    child.exitCode !== null || child.signalCode !== null
-      ? { code: child.exitCode, signal: child.signalCode }
-      : await new Promise<{ code: number | null; signal: NodeJS.Signals | null }>(
-          (resolve, reject) => {
-            child.once("error", reject);
-            child.once("exit", (code, signal) => resolve({ code, signal }));
-          },
-        );
-  if (childExit.code !== 0) {
+  if (child.exitCode === null && child.signalCode === null) {
+    await once(child, "exit");
+  }
+  const { exitCode: code, signalCode: signal } = child;
+  if (code !== 0) {
     throw new Error(
-      `${label} child failed code=${String(childExit.code)} signal=${String(childExit.signal)}\nstdout:\n${childStdout}\nstderr:\n${childStderr}`,
+      `${label} child failed code=${String(code)} signal=${String(signal)}\nstdout:\n${output.stdout}\nstderr:\n${output.stderr}`,
     );
   }
 }

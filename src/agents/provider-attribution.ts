@@ -21,23 +21,15 @@ import { asBoolean } from "../utils/boolean.js";
 import type { RuntimeVersionEnv } from "../version.js";
 import { resolveRuntimeServiceVersion } from "../version.js";
 
-type ProviderAttributionVerification =
-  | "vendor-documented"
-  | "vendor-hidden-api-spec"
-  | "vendor-sdk-hook-only"
-  | "internal-runtime";
-
-type ProviderAttributionHook =
-  | "request-headers"
-  | "default-headers"
-  | "user-agent-extra"
-  | "custom-user-agent";
-
 export type ProviderAttributionPolicy = {
   provider: string;
   enabledByDefault: boolean;
-  verification: ProviderAttributionVerification;
-  hook?: ProviderAttributionHook;
+  verification:
+    | "vendor-documented"
+    | "vendor-hidden-api-spec"
+    | "vendor-sdk-hook-only"
+    | "internal-runtime";
+  hook?: "request-headers" | "default-headers" | "user-agent-extra" | "custom-user-agent";
   docsUrl?: string;
   reviewNote?: string;
   product: string;

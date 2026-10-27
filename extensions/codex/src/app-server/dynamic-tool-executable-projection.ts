@@ -21,7 +21,9 @@ export function projectCodexExecutableDynamicToolSurface(
   tools: ProjectedCodexDynamicTool<AnyAgentTool>[];
   quarantinedTools: CodexDynamicToolSchemaQuarantine[];
 } {
-  const { tools: projectedTools, quarantinedTools } = projectCodexDynamicTools(tools);
+  const { tools: projectedTools, quarantinedTools } = projectCodexDynamicTools(tools, {
+    config: hookContext?.config,
+  });
   const wrappedTools: ProjectedCodexDynamicTool<AnyAgentTool>[] = [];
   for (const entry of projectedTools) {
     try {

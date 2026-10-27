@@ -1,3 +1,4 @@
+import { createPluginRuntimeMock } from "openclaw/plugin-sdk/channel-test-helpers";
 import type { ReplyPayload } from "openclaw/plugin-sdk/reply-runtime";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { PluginRuntime, RuntimeEnv } from "../../../runtime-api.js";
@@ -14,7 +15,10 @@ vi.mock("../send.js", () => ({
 }));
 
 import { setMatrixRuntime } from "../../runtime.js";
-import { deliverMatrixReplies } from "./replies.js";
+import {
+  createMatrixTestReplyDispatcher,
+  type MatrixTestReplyOptions,
+} from "./reply-dispatcher.test-support.js";
 
 let nextMessageId = 0;
 
@@ -50,7 +54,7 @@ function sendOptions(index: number) {
   return sendCall(index)[2];
 }
 
-describe("deliverMatrixReplies", () => {
+describe("Matrix reply dispatcher delivery", () => {
   const PRESENTATION_KEY = "com.openclaw.presentation";
   const cfg = { channels: { matrix: {} } };
 
@@ -59,11 +63,8 @@ describe("deliverMatrixReplies", () => {
     error: vi.fn(),
   } as unknown as RuntimeEnv;
 
-  function deliver(
-    options: Pick<Parameters<typeof deliverMatrixReplies>[0], "replies"> &
-      Partial<Parameters<typeof deliverMatrixReplies>[0]>,
-  ) {
-    return deliverMatrixReplies({
+  async function createDispatcher(options: Partial<MatrixTestReplyOptions> = {}) {
+    return createMatrixTestReplyDispatcher({
       cfg,
       roomId: "room:2",
       client: {} as MatrixClient,
@@ -71,6 +72,15 @@ describe("deliverMatrixReplies", () => {
       replyToMode: "off",
       ...options,
     });
+  }
+
+  async function deliver(options: Partial<MatrixTestReplyOptions> & { replies: ReplyPayload[] }) {
+    const dispatcher = await createDispatcher(options);
+    const results = [];
+    for (const reply of options.replies) {
+      results.push(await dispatcher.deliverReply(reply, { kind: "final" }));
+    }
+    return results.at(-1);
   }
 
   beforeEach(() => {
@@ -85,23 +95,22 @@ describe("deliverMatrixReplies", () => {
   }
 
   it("does not consume the first reply when Matrix delivery fails", async () => {
-    const hasRepliedRef = { value: false };
-    const delivery = {
-      replies: [{ text: "retry me" }],
+    const dispatcher = await createDispatcher({
       roomId: "room:1",
-      replyToMode: "first" as const,
-      replyToId: "reply-1",
-      hasRepliedRef,
-    };
+      replyToMode: "first",
+      replyToEventId: "reply-1",
+    });
     sendMessageMatrixMock.mockRejectedValueOnce(new Error("Matrix unavailable"));
-    await expect(deliver(delivery)).rejects.toThrow("Matrix unavailable");
-    expect(hasRepliedRef.value).toBe(false);
-    await expect(deliver(delivery)).resolves.toMatchObject({
+    await expect(dispatcher.deliverReply({ text: "retry me" }, { kind: "final" })).rejects.toThrow(
+      "Matrix unavailable",
+    );
+    await expect(
+      dispatcher.deliverReply({ text: "retry me" }, { kind: "final" }),
+    ).resolves.toMatchObject({
       visibleReplySent: true,
     });
     expect(sendOptions(0).replyToId).toBe("reply-1");
     expect(sendOptions(1).replyToId).toBe("reply-1");
-    expect(hasRepliedRef.value).toBe(true);
   });
 
   it.each([undefined, "   "])("reports blank-only media with text=%j as missing", async (text) => {
@@ -128,6 +137,19 @@ describe("deliverMatrixReplies", () => {
     expect(sendCall(0)[1]).toBe("Visible answer");
     expect(sendOptions(0).cfg).toBe(cfg);
   });
+
+  it.each([false, true])(
+    "gates suppression diagnostics through runtime.log with verbose=%s",
+    async (verbose) => {
+      setMatrixRuntime(createPluginRuntimeMock({ logging: { shouldLogVerbose: () => verbose } }));
+      await deliverTexts(["Reasoning: private"]);
+      expect(runtimeEnv.log).toHaveBeenCalledTimes(verbose ? 1 : 0);
+      if (verbose) {
+        expect(runtimeEnv.log).toHaveBeenCalledWith("matrix reply suppressed as reasoning-only");
+      }
+      expect(sendMessageMatrixMock).not.toHaveBeenCalled();
+    },
+  );
 
   it("strips namespaced reasoning while delivering visible Matrix replies", async () => {
     const cases = [

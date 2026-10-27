@@ -58,11 +58,7 @@ afterEach(async () => {
 
 function enableSkills() {
   const entry = createFixtureSkillEntry("demo");
-  hoisted.resolveEmbeddedRunSkillEntriesMock.mockReturnValue({
-    shouldLoadSkillEntries: true,
-    skillEntries: [entry],
-    loadSkillEntries: () => [entry],
-  });
+  hoisted.prepareWorkspaceSkillsMock.mockResolvedValue([entry]);
   hoisted.resolveSkillsPromptForRunMock.mockReturnValue(skillsPrompt);
 }
 
@@ -143,10 +139,11 @@ describe("runEmbeddedAttempt skill policy projections", () => {
       },
     });
 
-    expect(hoisted.resolveEmbeddedRunSkillEntriesMock.mock.calls[0]?.[0]).toMatchObject({
-      workspaceDir: sandboxWorkspace,
-      skillsSnapshot: undefined,
-    });
+    expect(hoisted.prepareWorkspaceSkillsMock).toHaveBeenCalledWith(
+      sandboxWorkspace,
+      expect.objectContaining({ workspaceOnly: true }),
+      expect.any(Function),
+    );
     expect(hoisted.resolveSkillsPromptForRunMock.mock.calls[0]?.[0]).toMatchObject({
       workspaceDir: sandboxWorkspace,
       skillsSnapshot: {

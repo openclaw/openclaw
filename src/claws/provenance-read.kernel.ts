@@ -1,4 +1,3 @@
-import { executeSqliteQueryTakeFirstSync, getNodeSqliteKysely } from "../infra/kysely-sync.js";
 import type { EngineConnection } from "../infra/sql-connection.js";
 import { isPostgresSqlConnection } from "../infra/sql-connection.js";
 import { coerceRequiredSqliteNumber as sqliteNumber } from "../infra/sqlite-number.js";
@@ -17,7 +16,7 @@ import {
   selectClawBootstrapProvenanceColumns,
 } from "./provenance-bootstrap.js";
 import * as installRecordSchema from "./provenance-schema-version.js";
-import type { ClawOrphanWorkspace, PersistedClawInstall } from "./provenance-types.js";
+import type { PersistedClawInstall } from "./provenance-types.js";
 
 type ClawInstallRow = Omit<
   DB["claw_installs"],
@@ -180,22 +179,4 @@ export function readClawPackageRefsInDatabase(
       // SAFETY: The explicit projection matches the admitted package-reference schema consumed by its row codec.
       .all(params) as PackageRefRow[];
   return rows.map(rowToPackageRef);
-}
-
-export function readClawOrphanWorkspaceInDatabase(
-  db: EngineConnection,
-  agentId: string,
-): ClawOrphanWorkspace | undefined {
-  const row = executeSqliteQueryTakeFirstSync(
-    db,
-    getNodeSqliteKysely<Pick<DB, "claw_workspace_files">>(db)
-      .selectFrom("claw_workspace_files")
-      .select(["workspace", "updated_at_ms"])
-      .where("agent_id", "=", agentId)
-      .orderBy("target_path")
-      .limit(1),
-  );
-  return row
-    ? { workspace: row.workspace, updatedAtMs: sqliteNumber(row.updated_at_ms) }
-    : undefined;
 }

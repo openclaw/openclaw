@@ -18,3 +18,9 @@
 .sidebar-recent-session--creating .sidebar-recent-session__link {
   cursor: default;
 }
+
+/* A create lands atop a headerless first section. Use row spacing instead of
+   group spacing so the accepted row replaces this one without moving the rest. */
+.sidebar-recent-session--creating + .sidebar-recent-sessions__group--headless {
+  margin-top: calc(2px - var(--sidebar-group-gap));
+}

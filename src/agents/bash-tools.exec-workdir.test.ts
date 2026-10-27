@@ -38,9 +38,8 @@ const resolved = (
   scriptPreflightCwd: string | null = hostCwd,
 ) => ({ kind: "sandbox", hostCwd, containerCwd, scriptPreflightCwd });
 const unavailable = (requestedCwd: string) => ({ kind: "unavailable", requestedCwd });
-async function expectUnavailable(workdir: string, config = sandbox()) {
-  await expect(resolveSandbox(workdir, config)).resolves.toEqual(unavailable(workdir));
-}
+const expectUnavailable = (workdir: string, config = sandbox()) =>
+  expect(resolveSandbox(workdir, config)).resolves.toEqual(unavailable(workdir));
 const mount = (containerPath: string, hostPath: string) => ({ containerPath, hostPath });
 async function skillMount() {
   const root = tempDirs.make("openclaw-skills-mount-");
@@ -49,9 +48,6 @@ async function skillMount() {
   return { root, demo };
 }
 
-it("rejects whitespace-only explicit workdirs", async () => {
-  await expect(local({ workdir: "   " })).resolves.toEqual(unavailable("   "));
-});
 it("canonicalizes local workdirs before approval and execution", async () => {
   const target = path.join(workspaceDir, "target"),
     link = path.join(workspaceDir, "link");
@@ -76,6 +72,8 @@ it("rejects missing configured local cwd without falling back to current cwd", a
 it.each([
   [undefined, undefined, { kind: "node" }],
   ["/node/explicit", "/node/default", { kind: "node", remoteCwd: "/node/explicit" }],
+  ["/node/trailing ", "/node/default", { kind: "node", remoteCwd: "/node/trailing " }],
+  [" /node/leading", undefined, { kind: "node", remoteCwd: " /node/leading" }],
 ] as const)(
   "selects remote cwd for %s / %s without local validation",
   async (workdir, nodeCwd, expected) => {
@@ -93,23 +91,17 @@ it("rejects file sandbox workdirs", async () => {
     resolveExecWorkdir({ host: "sandbox", defaultCwd: "/workspace/not-dir", sandbox: sandbox() }),
   ).resolves.toEqual(unavailable("/workspace/not-dir"));
 });
-it.each(["outside workspace", "parent segments", "outside backend roots", "backend refusal"])(
-  "rejects sandbox workdir: %s",
-  async (kind) => {
-    const config =
-      kind.startsWith("outside backend") || kind === "backend refusal"
-        ? backend(kind === "backend refusal" ? { validateWorkdir: async () => null } : {})
-        : sandbox();
-    const workdir =
-      kind === "outside workspace"
-        ? tempDirs.make("openclaw-outside-")
-        : kind === "parent segments"
-          ? "missing/.."
-          : kind === "backend refusal"
-            ? "/remote/workspace/missing"
-            : "/other/remote/workspace";
-    await expectUnavailable(workdir, config);
-  },
+it.each<[string, () => string, () => BashSandboxConfig]>([
+  ["outside workspace", () => tempDirs.make("openclaw-outside-"), () => sandbox()],
+  ["parent segments", () => "missing/..", () => sandbox()],
+  ["outside backend roots", () => "/other/remote/workspace", () => backend()],
+  [
+    "backend refusal",
+    () => "/remote/workspace/missing",
+    () => backend({ validateWorkdir: async () => null }),
+  ],
+])("rejects sandbox workdir: %s", async (_kind, workdir, config) =>
+  expectUnavailable(workdir(), config()),
 );
 it.each(["host", "backend"] as const)(
   "rejects workspace symlink escape with %s validation",

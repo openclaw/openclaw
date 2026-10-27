@@ -52,27 +52,6 @@ const SKIP_REASON_LABELS = {
   uv: "uv",
 } satisfies Record<SkillInstallSkipReason, string>;
 
-function formatSkillNames(names: string[]): string {
-  const visible = names.slice(0, SKIPPED_INSTALL_NAME_LIMIT);
-  const suffix = names.length > visible.length ? ` (+${names.length - visible.length} more)` : "";
-  return `${visible.join(", ")}${suffix}`;
-}
-
-function formatSkippedInstallNote(skipped: SkippedInstall[]): string {
-  const lines = [t("wizard.skills.manualPrereqsIntro")];
-  for (const reason of ["brew", "go", "uv"] as const) {
-    const names = skipped.filter((item) => item.reason === reason).map((item) => item.skill.name);
-    if (names.length > 0) {
-      lines.push(`${SKIP_REASON_LABELS[reason]}: ${formatSkillNames(names)}`);
-    }
-  }
-  for (const item of skipped.filter((entry) => entry.detail).slice(0, SKIPPED_INSTALL_NAME_LIMIT)) {
-    lines.push(`${item.skill.name}: ${item.detail}`);
-  }
-  lines.push(t("wizard.skills.manualPrereqsDoctorHint"));
-  return lines.join("\n");
-}
-
 /** Runs the interactive skills setup step and returns the updated config. */
 export async function setupSkills(
   cfg: OpenClawConfig,
@@ -285,10 +264,26 @@ export async function setupSkills(
       );
     }
     if (selectedSkippedInstallable.length > 0) {
-      await prompter.note(
-        formatSkippedInstallNote(selectedSkippedInstallable),
-        t("wizard.skills.manualPrereqsTitle"),
-      );
+      const skipped = selectedSkippedInstallable;
+      const lines = [t("wizard.skills.manualPrereqsIntro")];
+      for (const reason of ["brew", "go", "uv"] as const) {
+        const names = skipped
+          .filter((item) => item.reason === reason)
+          .map((item) => item.skill.name);
+        if (names.length > 0) {
+          const visible = names.slice(0, SKIPPED_INSTALL_NAME_LIMIT);
+          const suffix =
+            names.length > visible.length ? ` (+${names.length - visible.length} more)` : "";
+          lines.push(`${SKIP_REASON_LABELS[reason]}: ${visible.join(", ")}${suffix}`);
+        }
+      }
+      for (const item of skipped
+        .filter((entry) => entry.detail)
+        .slice(0, SKIPPED_INSTALL_NAME_LIMIT)) {
+        lines.push(`${item.skill.name}: ${item.detail}`);
+      }
+      lines.push(t("wizard.skills.manualPrereqsDoctorHint"));
+      await prompter.note(lines.join("\n"), t("wizard.skills.manualPrereqsTitle"));
     }
   }
 

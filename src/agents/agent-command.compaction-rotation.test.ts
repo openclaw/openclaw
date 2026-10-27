@@ -71,6 +71,40 @@ function discordTurn(sessionId: string, sessionKey: string) {
   };
 }
 
+type CliCompactionArgs = Parameters<typeof state.runCliTurnCompactionLifecycleMock>;
+async function commitCliCompaction([params, host]: CliCompactionArgs, sessionId: string) {
+  const currentTarget = {
+    agentId: params.sessionAgentId,
+    sessionId: params.sessionId,
+    sessionKey: params.sessionKey,
+    storePath: expectDefined(params.storePath, "command session store path"),
+  };
+  const predecessor = expectDefined(loadSessionEntry(currentTarget), "command predecessor");
+  const accepted = await acceptCompactionSuccessor({
+    currentTarget,
+    currentSessionFile: params.sessionKey,
+    expectedEntry: {
+      sessionId: params.sessionId,
+      lifecycleRevision: predecessor.lifecycleRevision,
+      activeWriterRunId: predecessor.activeWriterRunId,
+    },
+    assertActive: expectDefined(host?.assertActive, "command compaction fence"),
+    onCommitted: host?.onCommitted,
+    result: {
+      ok: true,
+      compacted: true,
+      result: { sessionId, tokensBefore: 120, tokensAfter: 42 },
+    },
+  });
+  expectDefined(params.sessionStore, "command session store")[params.sessionKey] = accepted.entry;
+  return accepted.entry;
+}
+
+function prepareReply(sessionId: string, text: string) {
+  state.runAgentAttemptMock.mockResolvedValueOnce(makeResult({ sessionId, text }));
+  return { sessionId, sessionKey: `agent:main:explicit:${sessionId}`, text };
+}
+
 async function commitAttemptCompaction(
   params: Parameters<typeof state.runAgentAttemptMock>[0],
   accounting: Pick<CompactionAccountingFact, "count" | "currentContextSnapshot"> = {
@@ -281,10 +315,7 @@ describe("agentCommand compaction transcript rotation", () => {
       cwd: state.workspaceDir,
     });
 
-    const attempt = state.runAgentAttemptMock.mock.calls[0]?.[0] as
-      | { providerOverride?: string; modelOverride?: string; pluginsEnabled?: boolean }
-      | undefined;
-    expect(attempt).toMatchObject({
+    expect(state.runAgentAttemptMock.mock.calls[0]?.[0]).toMatchObject({
       providerOverride: "tui-pty-mock",
       modelOverride: "gpt-5.5",
       pluginsEnabled: false,
@@ -475,33 +506,7 @@ describe("agentCommand compaction transcript rotation", () => {
       );
       state.runCliTurnCompactionLifecycleMock.mockImplementationOnce(async (params, host) => {
         bootSessionKey = params.sessionKey;
-        const entry = expectDefined(
-          loadSessionEntry({ sessionKey: params.sessionKey, storePath }),
-          "boot predecessor",
-        );
-        const accepted = await acceptCompactionSuccessor({
-          currentTarget: {
-            agentId: params.sessionAgentId,
-            sessionId: params.sessionId,
-            sessionKey: params.sessionKey,
-            storePath,
-          },
-          currentSessionFile: params.sessionKey,
-          expectedEntry: {
-            sessionId: entry.sessionId,
-            lifecycleRevision: entry.lifecycleRevision,
-            activeWriterRunId: entry.activeWriterRunId,
-          },
-          assertActive: expectDefined(host?.assertActive, "command compaction fence"),
-          onCommitted: host?.onCommitted,
-          result: {
-            ok: true,
-            compacted: true,
-            result: { sessionId: "boot-compaction-successor", tokensBefore: 120, tokensAfter: 42 },
-          },
-        });
-        expectDefined(params.sessionStore, "command session store")[params.sessionKey] =
-          accepted.entry;
+        const entry = await commitCliCompaction([params, host], "boot-compaction-successor");
         if (completion === "maintenance-error") {
           throw new Error(COMPACTION_ERROR);
         }
@@ -514,7 +519,7 @@ describe("agentCommand compaction transcript rotation", () => {
             },
           );
         }
-        return accepted.entry;
+        return entry;
       });
 
       const result = await runBootOnce({ cfg, deps: {}, workspaceDir });
@@ -535,9 +540,7 @@ describe("agentCommand compaction transcript rotation", () => {
   );
 
   it("carries Gateway plugin generation through failed post-turn compaction and still delivers", async () => {
-    const sessionId = "cli-compaction-failure";
-    const sessionKey = `agent:main:explicit:${sessionId}`;
-    const text = "cli reply generated before compaction";
+    const { sessionId, sessionKey, text } = prepareReply("cli-failure", "reply before compaction");
     const pluginGeneration = {
       pluginMetadataSnapshot: {
         ...createPluginMetadataSnapshotFixture(),
@@ -545,7 +548,6 @@ describe("agentCommand compaction transcript rotation", () => {
       },
     } as never;
     let storedEntryBeforeCompaction: SessionEntry | undefined;
-    state.runAgentAttemptMock.mockResolvedValueOnce(makeResult({ sessionId, text, runner: "cli" }));
     state.runCliTurnCompactionLifecycleMock.mockImplementationOnce(async (params) => {
       expect(params.pluginGeneration).toBe(pluginGeneration);
       storedEntryBeforeCompaction = findStoredSessionEntry(sessionKey);
@@ -609,48 +611,15 @@ describe("agentCommand compaction transcript rotation", () => {
   it.each(["return", "maintenance-error", "abort"] as const)(
     "adopts a committed compaction successor after %s",
     async (completion) => {
-      const sessionId = "pre-compaction-session";
+      const { sessionId, sessionKey, text } = prepareReply("pre-compaction", "carried reply");
       const successorSessionId = "post-compaction-session";
-      const sessionKey = `agent:main:explicit:${sessionId}`;
-      const text = "reply carried across successful compaction";
       let successorBeforeCleanup: SessionEntry | undefined;
-      let compactionSetupError: Error | undefined;
       const controller = new AbortController();
       const aborted = createAgentRunRestartAbortError();
       const onSessionIdChanged = vi.fn();
-      state.runAgentAttemptMock.mockResolvedValueOnce(makeResult({ sessionId, text }));
       state.runCliTurnCompactionLifecycleMock.mockImplementationOnce(async (params, host) => {
-        if (!params.sessionEntry || !params.sessionStore || !params.storePath) {
-          compactionSetupError = new Error("compaction test requires persisted session state");
-          throw compactionSetupError;
-        }
-        const predecessor = expectDefined(
-          loadSessionEntry({ sessionKey: params.sessionKey, storePath: params.storePath }),
-          "command compaction predecessor",
-        );
-        const accepted = await acceptCompactionSuccessor({
-          currentTarget: {
-            agentId: params.sessionAgentId,
-            sessionId: params.sessionId,
-            sessionKey: params.sessionKey,
-            storePath: params.storePath,
-          },
-          currentSessionFile: params.sessionKey,
-          expectedEntry: {
-            sessionId: params.sessionId,
-            lifecycleRevision: predecessor.lifecycleRevision,
-            activeWriterRunId: predecessor.activeWriterRunId,
-          },
-          assertActive: expectDefined(host?.assertActive, "command compaction fence"),
-          onCommitted: host?.onCommitted,
-          result: {
-            ok: true,
-            compacted: true,
-            result: { sessionId: successorSessionId, tokensBefore: 120, tokensAfter: 42 },
-          },
-        });
-        successorBeforeCleanup = accepted.entry;
-        params.sessionStore[params.sessionKey] = accepted.entry;
+        expect(params.sessionEntry).toBeDefined();
+        successorBeforeCleanup = await commitCliCompaction([params, host], successorSessionId);
         expect(onSessionIdChanged).not.toHaveBeenCalled();
         if (completion === "maintenance-error") {
           throw new Error(COMPACTION_ERROR);
@@ -681,7 +650,6 @@ describe("agentCommand compaction transcript rotation", () => {
       const result = await command;
       expect(onSessionIdChanged.mock.calls).toEqual([[successorSessionId]]);
 
-      expect(compactionSetupError).toBeUndefined();
       expect(successorBeforeCleanup).toMatchObject({
         sessionId: successorSessionId,
         pendingFinalDelivery: { kind: "replayable", text },
@@ -702,10 +670,10 @@ describe("agentCommand compaction transcript rotation", () => {
   );
 
   it("retains the pending final when delivery fails after compaction failure", async () => {
-    const sessionId = "delivery-failure-after-compaction";
-    const sessionKey = `agent:main:explicit:${sessionId}`;
-    const text = "reply awaiting restart recovery";
-    state.runAgentAttemptMock.mockResolvedValueOnce(makeResult({ sessionId, text }));
+    const { sessionId, sessionKey, text } = prepareReply(
+      "delivery-failure",
+      "reply awaiting recovery",
+    );
     state.runCliTurnCompactionLifecycleMock.mockRejectedValueOnce(new Error(COMPACTION_ERROR));
     state.deliverAgentCommandResultMock.mockResolvedValueOnce({ deliverySucceeded: false });
 
@@ -784,10 +752,8 @@ describe("agentCommand compaction transcript rotation", () => {
   });
 
   it("skips post-turn compaction when a recoverable final cannot persist a pending marker", async () => {
-    const sessionId = "subagent-no-pending-marker";
+    const { sessionId, text } = prepareReply("subagent-no-marker", "deliver before compaction");
     const sessionKey = `agent:main:subagent:${sessionId}`;
-    const text = "subagent final must deliver before compaction";
-    state.runAgentAttemptMock.mockResolvedValueOnce(makeResult({ sessionId, text }));
 
     const result = await agentCommand({
       ...discordTurn(sessionId, sessionKey),
@@ -830,27 +796,10 @@ describe("agentCommand compaction transcript rotation", () => {
       cwd: state.workspaceDir,
     });
 
-    const secondAttempt = state.runAgentAttemptMock.mock.calls[0]?.[0] as
-      | {
-          sessionId?: string;
-          sessionKey?: string;
-          sessionTarget?: {
-            agentId?: string;
-            sessionId?: string;
-            sessionKey?: string;
-            storePath?: string;
-          };
-        }
-      | undefined;
-    expect(secondAttempt).toMatchObject({
+    expect(state.runAgentAttemptMock.mock.calls[0]?.[0]).toMatchObject({
       sessionId: "rotated-session",
       sessionKey,
-    });
-    expect(secondAttempt?.sessionTarget).toMatchObject({
-      agentId: "main",
-      sessionId: "rotated-session",
-      sessionKey,
-      storePath,
+      sessionTarget: { agentId: "main", sessionId: "rotated-session", sessionKey, storePath },
     });
     expect(state.deliveryFreshEntries.at(-1)).toMatchObject({
       sessionId: "rotated-session",

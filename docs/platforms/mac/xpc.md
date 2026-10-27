@@ -41,6 +41,29 @@ Both mean the execution outcome is unknown; the command is never replayed
 locally. `COMPANION_APP_UNAVAILABLE` is reserved for requests that could not be
 submitted to the companion.
 
+The app obtains shared exec policy through the local CLI's bounded owner
+operations: read a redacted snapshot, replace policy with the expected hash, and
+commit a bound execution decision with any allow-always grant and usage update.
+The CLI routes to the running shared-state owner or acquires exclusive offline
+custody. This is the same path for SQLite and PostgreSQL; Swift never opens the
+shared policy database. With PostgreSQL selected, the local SQLite engine anchor
+contains no policy tables. Socket credentials remain in the separate local
+credential owner described below.
+
+The final owner commit checks current policy, including revocations made while a
+prompt was open and agent-deletion fences. The app awaits that commit within the
+original socket request, then checks cancellation and revalidates the bound
+executable and working directory immediately before spawn. A UI policy snapshot
+does not grant execution, and no database transaction stays open across the IPC
+wait. Owner failure, a missing operation, or PostgreSQL unavailability returns a
+visible policy-unavailable denial. Offline custody still requires the selected
+database to be reachable; there is no local policy fallback.
+
+Per-node policy reads and edits still use `exec.approvals.node.get/set`, which
+route `system.execApprovals.get/set` to the selected node. Moving the macOS
+policy access behind its local owner does not redirect it to a remote Gateway's
+policy.
+
 Diagram (SCI):
 
 ```text
@@ -125,6 +148,14 @@ secrets use the existing resolved state root. Neither opens the selected Gateway
 database to load private client material. Older apps cannot use retired shared credential tables: update the app
 and run the matching `openclaw doctor --fix` before reconnecting. The existing
 `mac-control.token` bootstrap file and its transport authentication stay unchanged.
+
+The shared-policy owner cutover needs no schema migration. An older app that is
+still admitted on SQLite sees the same policy row, but cannot access PostgreSQL
+policy. A new app requires the matching local CLI and owner operation; an older
+CLI or Gateway fails with a diagnostic instead of triggering direct database
+access. Roll back only to an app/CLI combination compatible with the current
+policy format, without restoring an older policy snapshot or rewinding local
+credentials.
 
 See [remote control](/platforms/mac/remote#macos-app-setup) for shell examples,
 profile selection, safe credential input, and background app launch.

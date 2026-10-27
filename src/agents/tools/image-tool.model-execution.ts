@@ -3,7 +3,7 @@ import { normalizeMediaProviderId } from "../../../packages/media-understanding-
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { MediaUnderstandingModelConfig } from "../../config/types.tools.js";
 import { MEDIA_CAPABILITY_DEFAULTS } from "../../media-understanding/defaults.constants.js";
-import { matchesMediaEntryCapability } from "../../media-understanding/entry-capabilities.js";
+import { matchesImageEntryCapability } from "../../media-understanding/entry-capabilities.js";
 import {
   describeImageWithModel,
   describeImagesWithModel,
@@ -56,10 +56,7 @@ export async function prepareImageCompressionPolicy(params: {
   preparedModelRuntime?: PreparedModelRuntimeSnapshot;
   operatorAuthority?: AdmittedRunOperatorAuthority;
 }): Promise<ImageCompressionPolicy> {
-  const overrideConfig = resolveImageModelConfigForOverride({
-    cfg: params.cfg,
-    modelOverride: params.modelOverride,
-  });
+  const overrideConfig = resolveImageModelConfigForOverride(params);
   const configuredImageModelConfig = params.imageModelConfig
     ? resolveConfiguredImageModelRefs({
         cfg: params.cfg,
@@ -108,11 +105,7 @@ function matchesImageTimeoutEntry(params: {
   if (
     !configuredProvider ||
     configuredProvider !== selectedProvider ||
-    !matchesMediaEntryCapability({
-      entry: params.entry,
-      capability: "image",
-      providerRegistry: params.providerRegistry,
-    })
+    !matchesImageEntryCapability(params)
   ) {
     return false;
   }
@@ -141,12 +134,7 @@ export async function runImagePrompt(params: {
   signal?: AbortSignal;
   operatorAuthority?: AdmittedRunOperatorAuthority;
   assertCurrent?: () => void;
-}): Promise<{
-  text: string;
-  provider: string;
-  model: string;
-  attempts: Array<{ provider: string; model: string; error: string }>;
-}> {
+}) {
   const effectiveCfg = applyAgentDefaultModelConfig(
     params.cfg,
     "imageModel",

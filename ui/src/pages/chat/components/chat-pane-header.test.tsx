@@ -1,24 +1,22 @@
 /* @vitest-environment jsdom */
-import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
-import { createDeferred } from "../../../../../test/helpers/promise.js";
+import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import type { GatewayBrowserClient } from "../../../api/gateway.ts";
-import type { GatewaySessionRow, PresenceEntry, SessionsListResult } from "../../../api/types.ts";
+import type { PresenceEntry, SessionsListResult } from "../../../api/types.ts";
 import { NAV_DRAWER_TOGGLE_REGISTRATION } from "../../../app/navigation-surface.ts";
 import { RouteElements, type RouteElementEvent } from "../../../app/route-elements.ts";
-import {
-  SHELL_NAV_DRAWER_TOGGLE_EVENT,
-  type ShellNavDrawerToggleDetail,
-} from "../../../components/command-palette-contract.ts";
+import { SHELL_NAV_DRAWER_TOGGLE_EVENT } from "../../../components/command-palette-contract.ts";
 import { KEYBOARD_SHORTCUT_COMBOS } from "../../../lib/keyboard-shortcut-contract.ts";
+import { allMutationObserverOptions } from "../../../test-helpers/dom-probe.ts";
 import { createTestGatewayClient } from "../../../test-helpers/gateway-client.ts";
 import { waitForSolid } from "../../../test-helpers/solid-settle.ts";
+import { createChatMobileHostFixture } from "../chat-mobile-host.test-support.ts";
+import type { ChatMobileHost } from "../chat-mobile-host.ts";
 import {
   activePlacementSession,
   createPaneHeaderWorkspaceFixture,
-  createSessionCapabilityFixture,
-  createSessionContext,
   createTestChatPane,
 } from "../chat-pane.test-support.ts";
+import { createSessionCapabilityFixture } from "../chat-session-capability.test-support.ts";
 import type { ChatPageHost } from "../chat-state-host.ts";
 import { openSlot } from "../sidebar-layout.ts";
 import {
@@ -26,13 +24,11 @@ import {
   chatPaneHeaderSharing,
   chatPaneHeaderSessionMenu,
   mountChatPaneHeader,
-  mockWorkspaceIconFetch,
   openNativeMenu,
   selectNativeMenu,
   renderPaneHeaderInto,
-  type ChatPaneHeaderProps,
 } from "./chat-pane-header.test-support.ts";
-import { resolveChatPaneWorkspaceIcon } from "./chat-pane-header.tsx";
+import type { ChatPaneHeaderProps } from "./chat-pane-header.types.ts";
 
 const containers: HTMLElement[] = [];
 
@@ -46,6 +42,37 @@ function mountHeader(patch: Partial<ChatPaneHeaderProps> = {}) {
   return mountChatPaneHeader(containers, patch);
 }
 
+const actor = {
+  type: "human",
+  id: "profile-ada",
+  label: "Ada",
+  identity: { type: "profile", id: "profile-ada" },
+} as const;
+const viewer = (id: string, name = id): PresenceEntry => ({
+  instanceId: `${id}-instance`,
+  ts: 1,
+  user: { id, identity: { type: "profile", id }, name },
+  watchedSessions: ["agent:main:current"],
+});
+const query = (
+  root: ParentNode,
+  selector: string,
+): HTMLElement & { updateComplete?: Promise<unknown> } =>
+  root.querySelector<HTMLElement>(selector)!;
+const text = (root: ParentNode, selector: string) => query(root, selector)?.textContent?.trim();
+const absent = (root: ParentNode, selectors: string) =>
+  expect(root.querySelector(selectors)).toBeNull();
+const keyEvent = (key: string, options: KeyboardEventInit = {}) =>
+  new KeyboardEvent("keydown", { bubbles: true, cancelable: true, key, ...options });
+
+function trackNavigation() {
+  const elements = new RouteElements();
+  const register = (event: Event) => elements.register(event as RouteElementEvent);
+  document.addEventListener("openclaw-route-element", register);
+  onTestFinished(() => document.removeEventListener("openclaw-route-element", register));
+  return () => elements.renderedElements(NAV_DRAWER_TOGGLE_REGISTRATION);
+}
+
 function mountIntegratedPresenceHeader(params: {
   owners: NonNullable<SessionsListResult["owners"]>;
   presence: PresenceEntry[];
@@ -55,12 +82,6 @@ function mountIntegratedPresenceHeader(params: {
     client,
     sessions: createSessionCapabilityFixture(),
   });
-  const actor = {
-    type: "human" as const,
-    id: "profile-ada",
-    identity: { type: "profile" as const, id: "profile-ada" },
-    label: "Ada",
-  };
   const session = row({
     key: state.sessionKey,
     createdActor: actor,
@@ -80,16 +101,10 @@ function mountIntegratedPresenceHeader(params: {
   const container = document.createElement("div");
   document.body.append(container);
   containers.push(container);
+  const workspace = createPaneHeaderWorkspaceFixture(state);
   const renderHeader = () =>
     renderPaneHeaderInto(
-      pane.renderPaneHeader(
-        createPaneHeaderWorkspaceFixture(state),
-        session,
-        false,
-        undefined,
-        false,
-        null,
-      ),
+      pane.renderPaneHeader(workspace, session, false, undefined, false, null),
       container,
     );
   renderHeader();
@@ -98,16 +113,14 @@ function mountIntegratedPresenceHeader(params: {
 
 describe("chat pane header", () => {
   it("preserves the merged navigation toggle for catalog sessions", () => {
-    const drawerEvents: CustomEvent<ShellNavDrawerToggleDetail>[] = [];
-    const onDrawer = (event: Event) =>
-      drawerEvents.push(event as CustomEvent<ShellNavDrawerToggleDetail>);
+    const onDrawer = vi.fn<(event: Event) => void>();
     window.addEventListener(SHELL_NAV_DRAWER_TOGGLE_EVENT, onDrawer);
     const { container } = mountHeader({ mergedChrome: true, catalog: true, session: undefined });
-    const drawer = container.querySelector<HTMLButtonElement>('[aria-label="Expand sidebar"]');
-    drawer?.click();
-    expect(drawer).not.toBeNull();
-    expect(drawerEvents).toHaveLength(1);
-    expect(drawerEvents[0]?.detail.trigger).toBe(drawer);
+    const drawer = container.querySelector<HTMLButtonElement>('[aria-label="Expand sidebar"]')!;
+    drawer.click();
+    expect(onDrawer).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({ detail: { trigger: drawer } }),
+    );
     window.removeEventListener(SHELL_NAV_DRAWER_TOGGLE_EVENT, onDrawer);
   });
 
@@ -118,78 +131,135 @@ describe("chat pane header", () => {
   });
 
   it.each(["openclaw", null])(
-    "replaces the mobile workspace line with connection status for %s",
+    "preserves workspace identity alongside mobile connection status for %s",
     (workspaceLabel) => {
       const retry = vi.fn();
       const { container, update } = mountHeader({ mergedChrome: true, workspaceLabel });
       const title = container.querySelector(".chat-pane__session-title");
+      const workspace = container.querySelector(".chat-pane__workspace-chip");
       const drawer = container.querySelector<HTMLButtonElement>(".chat-pane__nav-toggle")!;
       update({ gatewayStatus: { kind: "offline", queuedCount: 2, onRetry: retry } });
-      const line = container.querySelector(".mobile-connection-status")!;
+      const line = query(container, ".mobile-connection-status");
       expect(line.textContent).toBe("Disconnected · 2 queued");
       expect(line.querySelector('[role="status"]')).toBeNull();
-      expect(container.querySelector(".chat-pane__workspace-chip")).toBeNull();
+      expect(container.querySelector(".chat-pane__workspace-chip")).toBe(workspace);
       expect(container.querySelector(".chat-pane__session-title")).toBe(title);
       expect(drawer.dataset.connectionStatus).toBe("offline");
       line.querySelector<HTMLButtonElement>("button")!.click();
       expect(retry).toHaveBeenCalledOnce();
       update({ gatewayStatus: { kind: "connected" } });
       expect(container.querySelector(".mobile-connection-status")).toBeNull();
-      expect(container.querySelector(".chat-pane__workspace-chip") !== null).toBe(
-        Boolean(workspaceLabel),
-      );
+      expect(Boolean(query(container, ".chat-pane__workspace-chip"))).toBe(Boolean(workspaceLabel));
       expect(drawer.dataset.connectionStatus).toBe("connected");
+      if (!workspaceLabel) {
+        absent(container, ".chat-pane__crumb-sep");
+      }
     },
   );
 
-  it("keeps only Share, Layout, and overflow at rest and moves layout actions into the menu", async () => {
+  it("routes desktop split and pane closure through session actions without a Layout rail", async () => {
     const onClosePane = vi.fn();
     const onSplitDown = vi.fn();
-    const onSplitRight = vi.fn();
     const onOpenSplitView = vi.fn();
+    const sessionMenuAction = chatPaneHeaderSessionMenu();
     const { container, update } = mountHeader({
       onClosePane,
       onSplitDown,
-      onSplitRight,
       onOpenSplitView,
-      sharingControl: chatPaneHeaderSharing(),
-      sessionMenuAction: chatPaneHeaderSessionMenu(),
+      sessionMenuAction: {
+        ...sessionMenuAction,
+        compact: true,
+        splitAllowed: true,
+        session: { ...sessionMenuAction.session, target: { key: "agent:main:test" } },
+      },
     });
-    await container.querySelector("openclaw-chat-header-session-menu")!.updateComplete;
-    const actions = container.querySelector(".chat-pane__actions")!;
-    expect(actions.querySelector(".chat-header-session-menu__trigger")).not.toBeNull();
-    expect(
-      [...actions.querySelectorAll("button:not([role^=menuitem])")].map((button) =>
-        button.textContent?.trim(),
-      ),
-    ).toEqual(["Share", "Layout", ""]);
-    const menu = actions.querySelector(".chat-pane__layout-menu")!;
-    expect(menu.querySelector("[role^=menuitem]")).toBeNull();
+    const close = container.querySelector<HTMLButtonElement>(".chat-pane__close")!;
+    const menu = container.querySelector("openclaw-chat-header-session-menu")!;
+    await menu.updateComplete;
+    absent(container, ".chat-pane__layout-menu");
+    await selectNativeMenu(menu, "quick:open-split-view");
+    expect(onOpenSplitView).toHaveBeenCalledExactlyOnceWith();
+    await selectNativeMenu(menu, "compact:open-view");
+    expect(menu.querySelector('[data-value="layout:side-panel"]')).toBeNull();
+    await selectNativeMenu(menu, "layout:close-pane");
+    expect(onClosePane).toHaveBeenCalledExactlyOnceWith("pane-1");
+    await selectNativeMenu(menu, "compact:open-advanced");
+    await selectNativeMenu(menu, "compact:open-open-in");
+    await selectNativeMenu(menu, "split-below");
+    expect(onSplitDown).toHaveBeenCalledExactlyOnceWith("pane-1");
+    update({ actionsDisabled: true });
+    expect(close.disabled).toBe(true);
+    close.click();
+    expect(onClosePane).toHaveBeenCalledOnce();
     await openNativeMenu(menu);
-    expect(
-      [...menu.querySelectorAll("[role^=menuitem]")].map((item) => item.textContent?.trim()),
-    ).toEqual(["Open split view", "Split down", "Split right", "Close pane"]);
-    for (const [value, callback, args] of [
-      ["open-split-view", onOpenSplitView, []],
-      ["split-down", onSplitDown, ["pane-1"]],
-      ["split-right", onSplitRight, ["pane-1"]],
-      ["close-pane", onClosePane, ["pane-1"]],
-    ] as const) {
-      await selectNativeMenu(menu, value);
-      expect(callback).toHaveBeenCalledExactlyOnceWith(...args);
-    }
+    const split = menu.querySelector<HTMLButtonElement>('[data-value="quick:open-split-view"]')!;
+    expect(split.disabled).toBe(true);
+    split.click();
+    expect(onOpenSplitView).toHaveBeenCalledOnce();
     update({ onClosePane: undefined });
-    expect(container.querySelector(".chat-pane__close-pane")).toBeNull();
+    expect(container.querySelector(".chat-pane__close")).toBeNull();
+    await selectNativeMenu(menu, "compact:open-view");
+    expect(menu.querySelector('[data-value="layout:close-pane"]')).toBeNull();
   });
 
-  it("keeps available panels in the narrow Layout menu while omitting split actions", async () => {
-    const onTerminal = vi.fn();
+  it("toggles Panels through the native owner and reflects its current layout", () => {
+    const onToggleSidePanel = vi.fn();
+    const { container, update } = mountHeader({
+      onToggleSidePanel,
+      sidebarLayout: { columns: [], open: false },
+    });
+    const toggle = container.querySelector<HTMLButtonElement>(".chat-pane__panels-toggle")!;
+    expect(toggle.getAttribute("aria-expanded")).toBe("false");
+    toggle.click();
+    expect(onToggleSidePanel).toHaveBeenCalledOnce();
+    update({ sidebarLayout: openSlot({ columns: [] }, "detail") });
+    expect(toggle.getAttribute("aria-expanded")).toBe("true");
+    update({ mergedChrome: true });
+    expect(container.querySelector(".chat-pane__panels-toggle")).toBeNull();
+    update({ mergedChrome: false, catalog: true, session: undefined });
+    container.querySelector<HTMLButtonElement>(".chat-pane__panels-toggle")!.click();
+    expect(onToggleSidePanel).toHaveBeenCalledTimes(2);
+  });
+
+  it("replaces desktop session actions with native connection status and Retry, then restores them", () => {
+    const onRetry = vi.fn();
+    const { container, update } = mountHeader({ sessionMenuAction: chatPaneHeaderSessionMenu() });
+    expect(container.querySelector("openclaw-chat-header-session-menu")).not.toBeNull();
+    update({ gatewayStatus: { kind: "offline", onRetry } });
+    absent(container, "openclaw-chat-header-session-menu, openclaw-chat-pane-versions-menu");
+    expect(text(container, '[role="status"]')).toContain("Disconnected");
+    container.querySelector<HTMLButtonElement>(".chat-pane__connection-retry")!.click();
+    expect(onRetry).toHaveBeenCalledOnce();
+    update({ gatewayStatus: { kind: "restoring", onRetry } });
+    expect(text(container, '[role="status"]')).toContain("Restoring");
+    expect(container.querySelector(".chat-pane__connection-retry")).toBeNull();
+    update({ gatewayStatus: { kind: null, onRetry } });
+    expect(container.querySelector(".chat-pane__connection")).toBeNull();
+    expect(container.querySelector("openclaw-chat-header-session-menu")).not.toBeNull();
+  });
+
+  it("translates the saved-conversation status through the header's English catalog registration", () => {
+    const { container, update } = mountHeader({
+      savedConversation: true,
+      gatewayStatus: { kind: "reconnecting" },
+    });
+    const savedStatus = () => text(container, ".chat-pane__connection-state");
+    expect(savedStatus()).toBe("Saved conversation · Reconnecting…");
+    update({ gatewayStatus: undefined });
+    expect(savedStatus()).toBe("Saved conversation · Reconnecting…");
+    update({ gatewayStatus: { kind: "offline" } });
+    expect(savedStatus()).toBe("Saved conversation · Disconnected");
+    update({ savedConversation: false, gatewayStatus: { kind: null } });
+    absent(container, ".chat-pane__connection");
+  });
+
+  it("defers narrow Layout shortcuts and retains their nodes across label updates", async () => {
     const readShortcut = vi.fn(() => KEYBOARD_SHORTCUT_COMBOS.terminalPanel);
     const action = (label: string) => ({
       id: "terminal",
       label,
       icon: "copy" as const,
-      onActivate: onTerminal,
+      onActivate: vi.fn(),
       get shortcut() {
         return readShortcut();
       },
@@ -198,83 +268,57 @@ describe("chat pane header", () => {
       narrow: true,
       mergedChrome: true,
       panelMenuActions: [action("Terminal")],
-      sessionMenuAction: chatPaneHeaderSessionMenu(),
-      onOpenSplitView: vi.fn(),
-      onSplitDown: vi.fn(),
-      onSplitRight: vi.fn(),
     });
     const menu = container.querySelector(".chat-pane__layout-menu")!;
     expect(readShortcut).not.toHaveBeenCalled();
-    await openNativeMenu(menu);
+    await openNativeMenu(menu, "terminal");
     const shortcut = menu.querySelector('[data-value="terminal"] kbd');
     expect(shortcut).not.toBeNull();
     update({ panelMenuActions: [action("Open terminal")] });
     expect(menu.querySelector('[data-value="terminal"] kbd')).toBe(shortcut);
-    expect(menu.querySelector('[data-value="terminal"]')?.getAttribute("aria-label")).toBe(
-      "Open terminal",
-    );
-    expect(container.querySelector(".chat-pane__split-down")).toBeNull();
-    expect(container.querySelector(".chat-pane__split-right")).toBeNull();
-    expect(container.querySelector(".chat-pane__nav-toggle")).not.toBeNull();
-    await selectNativeMenu(menu, "terminal");
-    expect(onTerminal).toHaveBeenCalledOnce();
+    expect(query(menu, '[data-value="terminal"]').getAttribute("aria-label")).toBe("Open terminal");
   });
 
   it("shows the muted running count only while there are active subagents", () => {
     const { container, update } = mountHeader({ runningSubagentCount: 2 });
-    expect(container.querySelector(".chat-pane__subagents-running")?.textContent).toContain(
-      "Subagents · 2 running",
-    );
+    expect(text(container, ".chat-pane__subagents-running")).toContain("Subagents · 2 running");
     update({ runningSubagentCount: 0 });
     expect(container.querySelector(".chat-pane__subagents-running")).toBeNull();
   });
 
-  it("renders a quiet cloud placement chip with move and stop actions", async () => {
+  it("retains cloud placement, action ownership and control ordering across updates", async () => {
     const onPlacementMove = vi.fn();
     const onPlacementReclaim = vi.fn();
-    const { container } = mountHeader({
-      placementControl: {
-        session: activePlacementSession(),
-        onPlacementMove,
-        onPlacementReclaim,
-      },
+    const session = activePlacementSession();
+    const { container, update } = mountHeader({
+      placementControl: { session, onPlacementMove, onPlacementReclaim },
+      presence: { staticUsers: [], personActivity: undefined },
     });
-
-    expect(container.querySelector(".chat-pane__placement-chip")?.textContent?.trim()).toBe(
-      "Runs on Cloud",
-    );
-    expect(container.querySelector(".chat-pane__placement-state")).toBeNull();
-    expect(container.querySelector(".chat-pane__placement-note")).toBeNull();
+    const crumbs = query(container, ".chat-pane__crumbs");
+    const placement = query(container, ".chat-pane__placement-control");
+    expect(crumbs.parentElement).toBe(placement.parentElement);
+    expect(crumbs.compareDocumentPosition(placement)).toBe(Node.DOCUMENT_POSITION_FOLLOWING);
+    expect(query(container, ".chat-pane__header-trailing .chat-pane__presence")).not.toBeNull();
+    expect(text(container, ".chat-pane__placement-chip")).toBe("Runs on Cloud");
     const menu = container.querySelector(".chat-pane__placement-menu")!;
     await openNativeMenu(menu);
-    const actions = container.querySelectorAll(".chat-pane__placement-menu [role^=menuitem]");
-    expect(actions).toHaveLength(2);
-    expect(actions[0]?.textContent?.trim()).toBe("Move session…");
-    expect(actions[0]?.classList.contains("session-menu__item--destructive")).toBe(false);
     await selectNativeMenu(menu, "move");
     expect(onPlacementMove).toHaveBeenCalledOnce();
-    expect(actions[1]?.textContent?.trim()).toBe("Stop cloud worker…");
-    expect(actions[1]?.classList.contains("session-menu__item--destructive")).toBe(true);
-    expect(actions[1]?.getAttribute("data-variant")).toBe("danger");
-    expect(actions[1]?.querySelector(".session-menu__icon")).not.toBeNull();
     await selectNativeMenu(menu, "reclaim");
     expect(onPlacementReclaim).toHaveBeenCalledOnce();
+    await openNativeMenu(menu);
+    const nextMove = vi.fn();
+    update({ title: "Updated session", placementControl: { session, onPlacementMove: nextMove } });
+    expect(container.querySelector(".chat-pane__placement-menu")).toBe(menu);
+    expect(menu.querySelector(".oc-menu")?.matches(":popover-open")).toBe(true);
+    await selectNativeMenu(menu, "move");
+    expect(onPlacementMove).toHaveBeenCalledOnce();
+    expect(nextMove).toHaveBeenCalledOnce();
   });
 
   it("shows durable move progress in the placement chip", () => {
     const session = row({
-      placement: {
-        state: "draining",
-        generation: 2,
-        createdAtMs: 100_000,
-        updatedAtMs: 300_000,
-        stateChangedAtMs: 300_000,
-        environmentId: "worker:one",
-        activeOwnerEpoch: 1,
-        workerBundleHash: "a".repeat(64),
-        workspaceBaseManifestRef: "base-manifest",
-        remoteWorkspaceDir: "/worker/repo",
-      },
+      placement: { ...activePlacementSession().placement!, state: "draining" },
       placementMove: {
         target: { kind: "gateway" },
         updatedAtMs: 300_000,
@@ -285,45 +329,12 @@ describe("chat pane header", () => {
       placementControl: { session },
     });
 
-    expect(container.querySelector(".chat-pane__placement-chip")?.textContent?.trim()).toBe(
-      "Moving to Gateway…",
-    );
-  });
-
-  it("keeps the placement menu open and its callbacks current across header updates", async () => {
-    const session = activePlacementSession();
-    const firstMove = vi.fn();
-    const nextMove = vi.fn();
-    const { container, update } = mountHeader({
-      placementControl: { session, onPlacementMove: firstMove },
-    });
-    const menu = container.querySelector(".chat-pane__placement-menu")!;
-    await openNativeMenu(menu);
-
-    update({ title: "Updated session", placementControl: { session, onPlacementMove: nextMove } });
-
-    expect(container.querySelector(".chat-pane__placement-menu")).toBe(menu);
-    expect(menu.querySelector(".oc-menu")?.matches(":popover-open")).toBe(true);
-    await selectNativeMenu(menu, "move");
-    expect(firstMove).not.toHaveBeenCalled();
-    expect(nextMove).toHaveBeenCalledOnce();
-  });
-
-  it("places placement and presence after the identity trail", () => {
-    const { container } = mountHeader({
-      placementControl: { session: activePlacementSession() },
-      presence: { staticUsers: [], personActivity: undefined },
-    });
-    const crumbs = container.querySelector(".chat-pane__crumbs");
-    const placement = container.querySelector(".chat-pane__placement-control");
-    expect(crumbs?.nextElementSibling).toBe(placement);
-    expect(placement?.nextElementSibling?.classList.contains("chat-pane__presence")).toBe(true);
+    expect(text(container, ".chat-pane__placement-chip")).toBe("Moving to Gateway…");
   });
 
   it("keeps the public indicator visible in narrow headers", () => {
-    const narrow = true;
     const { container } = mountHeader({
-      narrow,
+      narrow: true,
       publicAccessIndicator: chatPaneHeaderSharing({
         state: {
           loading: false,
@@ -339,18 +350,15 @@ describe("chat pane header", () => {
       }),
     });
 
-    expect(container.querySelector(".chat-pane__public-share-indicator")?.textContent).toBe(
-      "Public",
+    const indicator = container.querySelector(".chat-pane__public-share-indicator")!;
+    expect(indicator.getAttribute("aria-label")).toBe(
+      "Public — anyone can read without signing in.",
     );
+    expect(indicator.querySelector("svg")).not.toBeNull();
+    expect(indicator.textContent).toBe("");
   });
 
   it("replaces the header owner avatar when visibility is available", () => {
-    const actor = {
-      type: "human" as const,
-      id: "profile-ada",
-      identity: { type: "profile" as const, id: "profile-ada" },
-      label: "Ada",
-    };
     const { container } = mountHeader({
       session: row({ owner: { actor } }),
       showOwnerChip: true,
@@ -358,25 +366,8 @@ describe("chat pane header", () => {
     });
 
     expect(container.querySelector("openclaw-session-owner-chip")).toBeNull();
-    expect(container.querySelector(".chat-pane__sharing-menu")?.parentElement?.className).toBe(
+    expect(query(container, ".chat-pane__sharing-menu").parentElement?.className).toBe(
       "chat-pane__actions",
-    );
-  });
-
-  it("drops the separator when the session has no project segment", () => {
-    const { container } = mountHeader({ workspaceLabel: null, workspaceRoot: null });
-    expect(container.querySelector(".chat-pane__crumb-sep")).toBeNull();
-    const crumbs = container.querySelector(".chat-pane__crumbs");
-    expect(crumbs?.firstElementChild?.className).toBe("chat-pane__session-trail");
-    expect(crumbs?.querySelector(".chat-pane__session-title")).not.toBeNull();
-  });
-
-  it("keeps the rename input inside the trail so the project stays visible", () => {
-    const { container } = mountHeader({ editing: true, renameValue: "Renaming" });
-    const crumbs = container.querySelector(".chat-pane__crumbs");
-    expect(crumbs?.querySelector(".chat-pane__workspace-chip")).not.toBeNull();
-    expect(crumbs?.querySelector<HTMLInputElement>(".chat-pane__session-title-input")?.value).toBe(
-      "Renaming",
     );
   });
 
@@ -384,8 +375,8 @@ describe("chat pane header", () => {
     const mounted = mountHeader({
       showOwnerChip: true,
       session: row({
-        createdActor: { type: "human", id: "profile-ada", label: "Ada" },
-        owner: { actor: { type: "human", id: "profile-ada", label: "Ada" } },
+        createdActor: actor,
+        owner: { actor },
         participants: [
           { identity: { type: "profile", id: "profile-bob" }, label: "Bob" },
           { identity: { type: "agent", id: "research" }, label: "Research" },
@@ -393,9 +384,7 @@ describe("chat pane header", () => {
         participantCount: 2,
       }),
     });
-    const facepile = mounted.container.querySelector<
-      HTMLElement & { updateComplete?: Promise<unknown> }
-    >("openclaw-viewer-facepile.chat-pane__participants");
+    const facepile = query(mounted.container, "openclaw-viewer-facepile.chat-pane__participants");
     await facepile?.updateComplete;
     await vi.dynamicImportSettled();
 
@@ -408,7 +397,7 @@ describe("chat pane header", () => {
         avatar.getAttribute("aria-label"),
       ),
     ).toEqual(["Bob", "Research"]);
-    expect(facepile?.querySelector("[data-viewer-id]")).toBeNull();
+    expect(facepile.querySelector("[data-viewer-id]")).toBeNull();
   });
 
   it.each([
@@ -484,41 +473,20 @@ describe("chat pane header", () => {
     ).toEqual(expectedViewers);
     expect(facepile !== null).toBe(expectedViewers.length > 0);
   });
-
   it("keeps header viewers settled until presence changes", async () => {
-    const presence: PresenceEntry[] = [
-      {
-        instanceId: "guest-instance",
-        ts: 1,
-        user: { id: "guest", identity: { type: "profile", id: "guest" }, name: "Guest" },
-        watchedSessions: ["agent:main:current"],
-      },
-    ];
+    const presence = [viewer("guest", "Guest")];
     const mounted = mountIntegratedPresenceHeader({ owners: [], presence });
     const facepile = mounted.container.querySelector("openclaw-viewer-facepile")!;
     await facepile.updateComplete;
     const updates: MutationRecord[] = [];
     const observer = new MutationObserver((records) => updates.push(...records));
-    observer.observe(facepile, {
-      subtree: true,
-      childList: true,
-      attributes: true,
-      characterData: true,
-    });
+    observer.observe(facepile, allMutationObserverOptions());
     onTestFinished(() => observer.disconnect());
     mounted.renderHeader();
     await facepile.updateComplete;
     expect(updates).toHaveLength(0);
     mounted.pane.presence.update({
-      presence: [
-        ...presence,
-        {
-          instanceId: "second-instance",
-          ts: 1,
-          user: { id: "second", identity: { type: "profile", id: "second" }, name: "Second" },
-          watchedSessions: ["agent:main:current"],
-        },
-      ],
+      presence: [...presence, viewer("second", "Second")],
     });
     mounted.renderHeader();
     await facepile.updateComplete;
@@ -527,48 +495,25 @@ describe("chat pane header", () => {
   });
 
   it("updates the header owner vitality from live session presence", async () => {
-    const sessionKey = "agent:main:current";
-    const owners = [
-      { type: "human" as const, id: "profile-ada", label: "Ada" },
-      { type: "human" as const, id: "profile-zoe", label: "Zoe" },
-    ];
-    const guest = {
-      instanceId: "profile-zoe-instance",
-      ts: 1,
-      user: {
-        id: "profile-zoe",
-        identity: { type: "profile", id: "profile-zoe" },
-        name: "Zoe",
-      },
-      watchedSessions: [sessionKey],
-    } satisfies PresenceEntry;
+    const owners = [actor, { type: "human" as const, id: "profile-zoe", label: "Zoe" }];
+    const guest = viewer("profile-zoe", "Zoe");
     const mounted = mountIntegratedPresenceHeader({ owners, presence: [guest] });
-    const ownerChip = mounted.container.querySelector<
-      HTMLElement & { updateComplete?: Promise<unknown> }
-    >("openclaw-session-owner-chip");
+    const ownerChip = query(mounted.container, "openclaw-session-owner-chip");
 
     await ownerChip?.updateComplete;
-    expect(mounted.container.querySelector(".session-owner-chip--header")?.classList).toContain(
-      "session-owner-chip--away",
-    );
     for (const identity of [undefined, { type: "profile" as const, id: "profile-ada" }]) {
       mounted.pane.presence.update({
         presence: [
-          {
-            instanceId: "profile-ada-instance",
-            ts: 1,
-            user: { id: "profile-ada", identity, name: "Ada" },
-            watchedSessions: [sessionKey],
-          },
+          { ...viewer("profile-ada", "Ada"), user: { id: "profile-ada", identity, name: "Ada" } },
           guest,
         ],
       });
       mounted.renderHeader();
       await ownerChip?.updateComplete;
       expect(
-        mounted.container
-          .querySelector(".session-owner-chip--header")
-          ?.classList.contains("session-owner-chip--away"),
+        query(mounted.container, ".session-owner-chip--header").classList.contains(
+          "session-owner-chip--away",
+        ),
       ).toBe(identity === undefined);
     }
   });
@@ -614,20 +559,14 @@ describe("chat pane header", () => {
       const { container, props } = mountHeader({
         editing: true,
         actionsDisabled: true,
+        renameValue: "Renaming",
         renameDisabledReason: action === "blocked" ? "Session access was revoked" : undefined,
       });
-      const input = container.querySelector<HTMLInputElement>(".chat-pane__session-title-input");
-      expect(input).toBeInstanceOf(HTMLInputElement);
-      const event = new KeyboardEvent("keydown", {
-        bubbles: true,
-        cancelable: true,
-        key,
-        isComposing,
-        keyCode,
-      });
-      input?.dispatchEvent(event);
+      const input = container.querySelector<HTMLInputElement>(".chat-pane__session-title-input")!;
+      const event = keyEvent(key, { isComposing, keyCode });
+      input.dispatchEvent(event);
       if (key === "Enter" && action !== null) {
-        input?.dispatchEvent(new FocusEvent("blur"));
+        input.dispatchEvent(new FocusEvent("blur"));
       }
 
       expect(event.defaultPrevented).toBe(action !== null);
@@ -645,12 +584,7 @@ describe("chat pane header", () => {
       const end = new CompositionEvent("compositionend", { bubbles: true, data: "日本語" });
       input.dispatchEvent(end);
       for (const offset of [1, 100]) {
-        const enter = new KeyboardEvent("keydown", {
-          key: "Enter",
-          keyCode: 13,
-          bubbles: true,
-          cancelable: true,
-        });
+        const enter = keyEvent("Enter", { keyCode: 13 });
         Object.defineProperty(enter, "timeStamp", {
           value: end.timeStamp + (release === "timeout" ? offset : 1),
         });
@@ -666,75 +600,50 @@ describe("chat pane header", () => {
     },
   );
 
-  it("keeps catalog sessions static and without a workspace chip", async () => {
-    const { container } = mountHeader({
-      catalog: true,
-      session: undefined,
-      panelMenuActions: [{ id: "terminal", label: "Terminal", icon: "copy", onActivate: vi.fn() }],
-    });
-    expect(container.querySelector(".chat-pane__session-title-button")).toBeNull();
-    expect(container.querySelector(".chat-pane__session-title")?.textContent).toContain(
-      "Session title",
+  it.each([
+    { catalog: true, session: undefined },
+    { renameDisabledReason: "Operator write access is required." },
+  ])("keeps catalog and read-only session titles static: %j", (options) => {
+    const { container } = mountHeader(options);
+    absent(container, ".chat-pane__session-title-button");
+    expect(text(container, ".chat-pane__session-title")).toContain("Session title");
+    expect(query(container, ".chat-pane__session-title").title).toBe(
+      options.renameDisabledReason ?? "Session title",
     );
-    expect(container.querySelector(".chat-pane__workspace-chip")).toBeNull();
-    await openNativeMenu(container.querySelector(".chat-pane__layout-menu")!);
-    expect(
-      container.querySelector('.chat-pane__layout-menu [data-value="terminal"]'),
-    ).not.toBeNull();
+    if (options.catalog) {
+      absent(container, ".chat-pane__workspace-chip, .chat-pane__layout-menu");
+    }
   });
 
-  it("keeps read-only gateway session titles static", () => {
-    const { container } = mountHeader({
-      renameDisabledReason: "Operator write access is required.",
-    });
-    expect(container.querySelector(".chat-pane__session-title-button")).toBeNull();
-    expect(container.querySelector(".chat-pane__session-title")?.textContent).toContain(
-      "Session title",
-    );
-    expect(container.querySelector(".chat-pane__session-title")?.getAttribute("title")).toBe(
-      "Operator write access is required.",
-    );
-  });
+  it.each([false, true])(
+    "keeps workspace copy actions before Reveal and preserves feedback with mergedChrome=%s",
+    async (mergedChrome) => {
+      const { container, props, update } = mountHeader({ mergedChrome, narrow: mergedChrome });
+      const menu = container.querySelector(".chat-pane__workspace-menu")!;
+      await openNativeMenu(menu);
+      expect(
+        [...menu.querySelectorAll('[role="menuitem"]')].map((item) =>
+          item.getAttribute("data-value"),
+        ),
+      ).toEqual(["copy-path", "copy-branch", "reveal"]);
+      for (const action of ["copy-path", "copy-branch", "reveal"] as const) {
+        await selectNativeMenu(menu, action);
+        expect(props.onMenuAction).toHaveBeenLastCalledWith(action);
+        if (action !== "reveal") {
+          update({ copiedAction: action });
+          expect(text(container, ".chat-pane__workspace-chip")).toContain("Copied");
+          update({ copiedAction: null });
+        }
+      }
+      expect(props.onMenuAction).toHaveBeenCalledTimes(3);
+      update({ canReveal: false, branch: null });
+      await openNativeMenu(menu);
+      absent(menu, '[data-value="reveal"], [data-value="copy-branch"], [role="separator"]');
+      expect(menu.querySelector('[data-value="copy-path"]')).not.toBeNull();
+    },
+  );
 
-  it("opens panel docking choices and applies the selected dock", async () => {
-    const onLayoutChange = vi.fn();
-    const { container } = mountHeader({
-      sidebarLayout: openSlot({ columns: [] }, "detail"),
-      onLayoutChange,
-    });
-    const menu = container.querySelector(".chat-panel-layout-menu")!;
-    await openNativeMenu(menu);
-    expect(
-      Array.from(menu.querySelectorAll("[role^=menuitem]"), (item) =>
-        item.getAttribute("data-value"),
-      ),
-    ).toContain("dock-bottom");
-    await selectNativeMenu(menu, "dock-bottom");
-    expect(onLayoutChange).toHaveBeenCalledWith(expect.objectContaining({ dock: "bottom" }), {
-      geometryOnly: true,
-    });
-  });
-
-  it("shows copied feedback on the workspace chip", () => {
-    const { container } = mountHeader({ copiedAction: "copy-path" });
-    expect(container.querySelector(".chat-pane__workspace-chip")?.textContent).toContain("Copied");
-  });
-
-  it("shows cloud placement and hides reveal when disabled", async () => {
-    const session = row({ placement: { state: "active" } as GatewaySessionRow["placement"] });
-    const { container } = mountHeader({
-      session,
-      placementControl: { session },
-      canReveal: false,
-    });
-    expect(container.querySelector(".chat-pane__placement-chip")).not.toBeNull();
-    const menu = container.querySelector(".chat-pane__workspace-menu")!;
-    await openNativeMenu(menu);
-    expect(container.querySelector('[data-value="reveal"]')).toBeNull();
-    expect(container.querySelector('[data-value="copy-path"]')).not.toBeNull();
-  });
-
-  it("visibly names incognito threads and reveals their lifetime on focus or activation", async () => {
+  it("names incognito threads and supplies their lifetime to the accessible reveal tooltip", async () => {
     const { container } = mountHeader({ session: row({ incognito: true }) });
     const indicator = container.querySelector<HTMLButtonElement>("button.chat-pane__incognito")!;
     const tooltip = indicator.closest("openclaw-tooltip")!;
@@ -743,17 +652,7 @@ describe("chat pane header", () => {
     expect(tooltip.content).toBe(
       "Incognito session. History expires 24 hours after creation or when the Gateway restarts, whichever comes first.",
     );
-    expect(indicator.getAttribute("aria-describedby")).toBeTruthy();
-    indicator.focus();
-    await tooltip.updateComplete;
-    expect(tooltip.hasAttribute("open")).toBe(true);
-    indicator.blur();
-    await tooltip.updateComplete;
-    expect(tooltip.hasAttribute("open")).toBe(false);
-    indicator.click();
-    expect(tooltip.hasAttribute("open")).toBe(true);
-    indicator.click();
-    expect(tooltip.hasAttribute("open")).toBe(false);
+    expect(tooltip.openOnClick).toBe(true);
     expect(mountHeader().container.querySelector(".chat-pane__incognito")).toBeNull();
   });
 
@@ -769,295 +668,85 @@ describe("chat pane header", () => {
   });
 });
 
-describe("chat pane workspace chip icon", () => {
-  beforeEach(() => vi.useFakeTimers());
-  afterEach(async () => {
-    containers.splice(0).forEach((container) => container.remove());
-    await vi.advanceTimersByTimeAsync(0);
-    vi.useRealTimers();
-  });
-  async function mountChip(workspaceIcon: ChatPaneHeaderProps["workspaceIcon"]) {
-    const { container } = mountHeader({ workspaceIcon });
-    const element = container.querySelector("openclaw-workspace-icon");
-    await element?.updateComplete;
-    return { container, element };
-  }
-
-  it("keeps the folder glyph when the gateway resolved no project icon", async () => {
-    const { container, element } = await mountChip(null);
-    expect(element).toBeNull();
-    expect(container.querySelector(".chat-pane__workspace-chip svg")).not.toBeNull();
-  });
-
-  it("keeps the folder glyph while credentials are not ready", async () => {
-    const fetchSpy = mockWorkspaceIconFetch();
-    const { container, element } = await mountChip({
-      routeUrl: "/__openclaw__/workspace-icon/agent%3Amain%3Aone",
-      authTokens: [],
-      authReady: false,
-    });
-    expect(element).not.toBeNull();
-    expect(container.querySelector(".workspace-icon")).toBeNull();
-    expect(container.querySelector(".chat-pane__workspace-chip svg")).not.toBeNull();
-    expect(fetchSpy).not.toHaveBeenCalled();
-  });
-
-  it("releases a queued icon render on disconnect and recovers on reconnect", async () => {
-    const fetchSpy = mockWorkspaceIconFetch().mockResolvedValue({
-      ok: false,
-      status: 503,
-      headers: new Headers({ "retry-after": "1" }),
-    } as Response);
-    const { container, element } = await mountChip({
-      routeUrl: "/__openclaw__/workspace-icon/agent%3Amain%3Adisconnected",
-      authTokens: ["token"],
-      authReady: true,
-    });
-    await Promise.resolve();
-    expect(fetchSpy).toHaveBeenCalledOnce();
-    if (element) {
-      element.authTokens = [...element.authTokens];
-    }
-    container.remove();
-    await element?.updateComplete;
-    await vi.advanceTimersByTimeAsync(1_000);
-    expect(fetchSpy.mock.calls.map(([url]) => url)).toEqual([
-      "/__openclaw__/workspace-icon/agent%3Amain%3Adisconnected",
-    ]);
-    expect(fetchSpy.mock.calls[0]?.[1]?.signal?.aborted).toBe(true);
-
-    fetchSpy.mockResolvedValue({
-      ok: true,
-      blob: async () => new Blob(["icon"], { type: "image/png" }),
-    } as Response);
-    vi.spyOn(URL, "createObjectURL").mockReturnValue("blob:reconnected-workspace-icon");
-    document.body.append(container);
-    await element?.updateComplete;
-    await vi.advanceTimersByTimeAsync(0);
-    await element?.updateComplete;
-    expect(fetchSpy).toHaveBeenCalledTimes(2);
-    expect(container.querySelector<HTMLImageElement>(".workspace-icon")?.src).toBe(
-      "blob:reconnected-workspace-icon",
-    );
-  });
-
-  it("recovers when a pending 503 settles between disconnect and immediate reconnect", async () => {
-    const pending = createDeferred<Response>();
-    const routeUrl = "/__openclaw__/workspace-icon/agent%3Amain%3Aimmediate-reconnect";
-    const fetchSpy = mockWorkspaceIconFetch()
-      .mockReturnValueOnce(pending.promise)
-      .mockResolvedValue({
-        ok: true,
-        blob: async () => new Blob(["icon"], { type: "image/png" }),
-      } as Response);
-    vi.spyOn(URL, "createObjectURL").mockReturnValue("blob:immediate-reconnect");
-    const { container, element } = await mountChip({
-      routeUrl,
-      authTokens: ["token"],
-      authReady: true,
-    });
-    container.remove();
-    pending.resolve({
-      ok: false,
-      status: 503,
-      headers: new Headers({ "retry-after": "1" }),
-    } as Response);
-    await pending.promise;
-
-    // Reattach in this task, before the deferred DOM-handoff release can delete the entry.
-    document.body.append(container);
-    await element?.updateComplete;
-    await vi.advanceTimersByTimeAsync(1_000);
-    await element?.updateComplete;
-
-    expect(fetchSpy.mock.calls.map(([url]) => url)).toEqual([routeUrl, routeUrl]);
-    expect(container.querySelector<HTMLImageElement>(".workspace-icon")?.src).toBe(
-      "blob:immediate-reconnect",
-    );
-  });
-
-  it("recovers the workspace icon after a transient 503 without remounting", async () => {
-    // A previous header can disconnect with a property update still queued. Its
-    // released retry must not consume the replacement header's response.
-    mockWorkspaceIconFetch().mockResolvedValue({
-      ok: false,
-      status: 503,
-      headers: new Headers({ "retry-after": "1" }),
-    } as Response);
-    const previous = await mountChip({
-      routeUrl: "/__openclaw__/workspace-icon/agent%3Amain%3Aprevious",
-      authTokens: ["token"],
-      authReady: true,
-    });
-    if (previous.element) {
-      previous.element.authTokens = [...previous.element.authTokens];
-    }
-    previous.container.remove();
-    await previous.element?.updateComplete;
-    const png = new Blob([new Uint8Array([1, 2, 3])], { type: "image/png" });
-    const fetchSpy = mockWorkspaceIconFetch()
-      .mockResolvedValueOnce({
-        ok: false,
-        status: 503,
-        headers: new Headers({ "retry-after": "1" }),
-      } as Response)
-      .mockResolvedValueOnce({
-        ok: true,
-        status: 200,
-        blob: async () => png,
-      } as unknown as Response);
-    vi.spyOn(URL, "createObjectURL").mockReturnValue("blob:recovered-workspace-icon");
-    const { container, element } = await mountChip({
-      routeUrl: "/__openclaw__/workspace-icon/agent%3Amain%3Arecovering",
-      authTokens: ["token"],
-      authReady: true,
-    });
-    await Promise.resolve();
-    expect(fetchSpy).toHaveBeenCalledOnce();
-    expect(container.querySelector(".workspace-icon")).toBeNull();
-    expect(container.querySelector(".chat-pane__workspace-chip svg")).not.toBeNull();
-
-    await vi.advanceTimersByTimeAsync(1_000);
-    await Promise.resolve();
-    await element?.updateComplete;
-
-    expect(fetchSpy.mock.calls.map(([url]) => url)).toEqual([
-      "/__openclaw__/workspace-icon/agent%3Amain%3Arecovering",
-      "/__openclaw__/workspace-icon/agent%3Amain%3Arecovering",
-    ]);
-    expect(container.querySelector("openclaw-workspace-icon")).toBe(element);
-    expect(container.querySelector<HTMLImageElement>(".workspace-icon")?.src).toBe(
-      "blob:recovered-workspace-icon",
-    );
-  });
-
-  it("does not refetch a missing project icon when the header rerenders", async () => {
-    const fetchSpy = mockWorkspaceIconFetch().mockResolvedValue({
-      ok: false,
-      status: 404,
-    } as Response);
-    const workspaceIcon = {
-      routeUrl: "/__openclaw__/workspace-icon/agent%3Amain%3Aone",
-      authTokens: ["token"],
-      authReady: true,
-    };
-    const mounted = mountHeader({ workspaceIcon });
-    const element = mounted.container.querySelector("openclaw-workspace-icon") as
-      | (HTMLElement & { updateComplete?: Promise<unknown> })
-      | null;
-
-    await vi.advanceTimersByTimeAsync(0);
-    expect(fetchSpy).toHaveBeenCalledTimes(1);
-    await element?.updateComplete;
-    mounted.update({ title: "Updated title", workspaceIcon });
-    await element?.updateComplete;
-    await Promise.resolve();
-
-    expect(fetchSpy).toHaveBeenCalledTimes(1);
-    mounted.update({ workspaceIcon: { ...workspaceIcon, authTokens: ["new-token"] } });
-    await vi.advanceTimersByTimeAsync(0);
-    expect(fetchSpy).toHaveBeenCalledTimes(2);
-  });
-
-  it("recovers an exhausted mounted icon after a new Gateway connection, not a header render", async () => {
-    const fetchSpy = mockWorkspaceIconFetch().mockResolvedValue({
-      ok: false,
-      status: 503,
-      headers: new Headers({ "retry-after": "1" }),
-    } as Response);
-    const context = createSessionContext(createTestGatewayClient(async () => ({})));
-    const initial = context.gateway.snapshot;
-    if (!initial.hello) {
-      throw new Error("expected a connected Gateway fixture");
-    }
-    context.publishGatewaySnapshot({
-      ...initial,
-      hello: { ...initial.hello, server: { connId: "initial-connection" } },
-    });
-    const iconProps = () => resolveChatPaneWorkspaceIcon(context, "agent:main:connection");
-    const mounted = mountHeader({ workspaceIcon: null });
-    // Update one Solid root so recovery must retain the same workspace element.
-    const paint = async () => {
-      mounted.update({ workspaceIcon: iconProps() });
-      const icon = mounted.container.querySelector<
-        HTMLElement & { updateComplete: Promise<unknown> }
-      >("openclaw-workspace-icon");
-      if (!icon) {
-        throw new Error("expected a mounted workspace icon");
-      }
-      await icon.updateComplete;
-      await vi.advanceTimersByTimeAsync(0);
-      await icon.updateComplete;
-      return icon;
-    };
-    const element = await paint();
-    await vi.advanceTimersByTimeAsync(10_000);
-    expect(fetchSpy).toHaveBeenCalledTimes(4);
-    await vi.advanceTimersByTimeAsync(60_000);
-    const unchanged = context.gateway.snapshot;
-    if (!unchanged.hello) {
-      throw new Error("expected a connected Gateway fixture");
-    }
-    context.publishGatewaySnapshot({
-      ...unchanged,
-      hello: { ...unchanged.hello, server: { ...unchanged.hello.server } },
-    });
-    await paint();
-    expect(fetchSpy).toHaveBeenCalledTimes(4);
-    expect(mounted.container.querySelector(".workspace-icon")).toBeNull();
-
-    fetchSpy.mockResolvedValue({ ok: true, blob: async () => new Blob(["icon"]) } as Response);
-    vi.spyOn(URL, "createObjectURL").mockReturnValue("blob:new-gateway-connection");
-    const snapshot = context.gateway.snapshot;
-    const hello = snapshot.hello;
-    if (!hello) {
-      throw new Error("expected a connected Gateway fixture");
-    }
-    context.publishGatewaySnapshot({
-      ...snapshot,
-      hello: { ...hello, server: { ...hello.server, connId: "new-connection" } },
-    });
-    await paint();
-    expect(fetchSpy).toHaveBeenCalledTimes(5);
-    expect(mounted.container.querySelector("openclaw-workspace-icon")).toBe(element);
-    expect(mounted.container.querySelector<HTMLImageElement>(".workspace-icon")?.src).toBe(
-      "blob:new-gateway-connection",
-    );
-  });
-});
-
 it("releases each merged-chrome toggle when its header branch closes", async () => {
-  const elements = new RouteElements();
+  const registered = trackNavigation();
   const mounted = mountHeader({ mergedChrome: false });
-  mounted.container.addEventListener("openclaw-route-element", (event) =>
-    elements.register(event as RouteElementEvent),
-  );
+  const retainedToggle = query(mounted.container, ".mobile-header__navigation");
+  await waitForSolid(() => expect(registered()).toEqual([retainedToggle]));
   for (let mount = 0; mount < 2; mount += 1) {
     mounted.update({ mergedChrome: true });
-    const toggle = mounted.container.querySelector<HTMLButtonElement>(".chat-pane__nav-toggle")!;
-    await waitForSolid(() =>
-      expect(elements.renderedElements(NAV_DRAWER_TOGGLE_REGISTRATION)).toEqual([toggle]),
-    );
+    const toggle = query(mounted.container, ".chat-pane__nav-toggle");
+    await waitForSolid(() => expect(registered()).toEqual([retainedToggle, toggle]));
     mounted.update({ mergedChrome: false });
     // A connected retired button exposes a stale map entry instead of letting isConnected mask it.
     mounted.container.append(toggle);
     try {
-      await waitForSolid(() =>
-        expect(elements.renderedElements(NAV_DRAWER_TOGGLE_REGISTRATION)).toEqual([]),
-      );
+      await waitForSolid(() => expect(registered()).toEqual([retainedToggle]));
     } finally {
       toggle.remove();
     }
   }
   mounted.update({ mergedChrome: true });
-  const toggle = mounted.container.querySelector<HTMLButtonElement>(".chat-pane__nav-toggle")!;
-  await waitForSolid(() =>
-    expect(elements.renderedElements(NAV_DRAWER_TOGGLE_REGISTRATION)).toEqual([toggle]),
-  );
+  const toggle = query(mounted.container, ".chat-pane__nav-toggle");
+  await waitForSolid(() => expect(registered()).toEqual([retainedToggle, toggle]));
   mounted.unmount();
   document.body.append(toggle);
   try {
-    expect(elements.renderedElements(NAV_DRAWER_TOGGLE_REGISTRATION)).toEqual([]);
+    expect(registered()).toEqual([]);
+  } finally {
+    toggle.remove();
+  }
+});
+
+it("publishes the active header while retaining mobile chrome across desktop transitions", async () => {
+  const registered = trackNavigation();
+  const { pane, state } = createTestChatPane({
+    client: createTestGatewayClient(async () => ({})),
+  });
+  const nativeHeader = pane.renderPaneHeader(
+    createPaneHeaderWorkspaceFixture(state),
+    row(),
+    false,
+    undefined,
+    false,
+    null,
+  ).header;
+  const mobileHost: ChatMobileHost = createChatMobileHostFixture("header-registration");
+  const mounted = mountHeader({
+    mergedChrome: false,
+    onHeaderRef: nativeHeader.onHeaderRef,
+    detailsControl: {
+      chat: undefined,
+      elements: {},
+      mobile: true,
+      mobileHost,
+      presentation: true,
+      setRef: vi.fn(),
+    },
+  });
+  const mobileHeader = query(mounted.container, ".agent-chat__header--mobile");
+  const toggle = query(mobileHeader, ".mobile-header__navigation");
+  for (let transition = 0; transition < 2; transition += 1) {
+    await waitForSolid(() =>
+      expect(pane.headerElement).toBe(mounted.container.querySelector(".chat-pane__header")),
+    );
+    expect(pane.headerElement).not.toBeNull();
+    mounted.update({ mergedChrome: true });
+    await waitForSolid(() => expect(pane.headerElement).toBe(mobileHeader));
+    expect(registered()).toEqual([toggle]);
+    mounted.update({ mergedChrome: false });
+    expect(mounted.container.querySelector(".agent-chat__header--mobile")).toBe(mobileHeader);
+  }
+  await waitForSolid(() =>
+    expect(pane.headerElement).toBe(mounted.container.querySelector(".chat-pane__header")),
+  );
+  expect(pane.headerElement).not.toBeNull();
+  mounted.unmount();
+  expect(pane.headerElement).toBeNull();
+  // Keeping the retired trigger connected must not hide a leaked registration.
+  document.body.append(toggle);
+  try {
+    expect(registered()).toEqual([]);
   } finally {
     toggle.remove();
   }

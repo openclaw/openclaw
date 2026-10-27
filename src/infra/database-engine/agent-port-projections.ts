@@ -1,4 +1,8 @@
-import { MEMORY_INDEX_DERIVED_TABLES } from "../../../packages/memory-host-sdk/src/host/memory-schema-base.js";
+import {
+  MEMORY_EMBEDDING_CACHE_TABLE,
+  MEMORY_INDEX_DERIVED_TABLES,
+  MEMORY_INDEX_META_TABLE,
+} from "../../../packages/memory-host-sdk/src/host/memory-schema-base.js";
 import {
   appendPreparedSessionTranscriptProjectionChunkInTransaction,
   prepareProjectionSource,
@@ -12,7 +16,13 @@ export const AGENT_PORT_PROJECTION_TABLES = [
   "session_transcript_fts",
   "session_transcript_index_state",
   "standing_intents_fts",
-  ...MEMORY_INDEX_DERIVED_TABLES,
+  // Keep chunk vectors and their identity in the verified copy, even when the cache evicted them.
+  ...MEMORY_INDEX_DERIVED_TABLES.filter(
+    (table) =>
+      table !== MEMORY_EMBEDDING_CACHE_TABLE &&
+      table !== MEMORY_INDEX_META_TABLE &&
+      table !== "memory_index_chunks",
+  ),
 ] as const;
 
 /** Reuse the transcript owner's branch and eligibility policy on the private port target. */
@@ -99,8 +109,8 @@ export async function rebuildAgentPortProjections(target: PortEndpoint): Promise
       await target.db.query(sql, values);
     }
   }
-  // Memory rebuild remains pending its owner entry point (R7b); retain canonical origins
-  // and tombstones, and seed empty metadata so the owner requests reindexing.
+  // The command invokes the selected memory owner after publishing and releasing port custody.
+  // The owner force-rebuilds from sources, reusing the preserved cache and compatible chunk vectors.
   const seed =
     "INSERT INTO memory_index_state (id, revision) VALUES (1, 0) ON CONFLICT (id) DO NOTHING";
   if (target.engine === "sqlite") {

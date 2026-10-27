@@ -196,7 +196,6 @@ export function createRestartSentinelFixture(payload: RestartSentinelPayload, re
 }
 
 export type RestartSentinelInProcessDispatchMock = (
-  method: string,
   params: Fields,
   options?: Fields,
 ) => Promise<Fields>;

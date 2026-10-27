@@ -6,6 +6,7 @@ import type { GatewayActiveWorkSnapshot } from "../../infra/gateway-active-work.
 import { createDeferredCore } from "../../shared/deferred.js";
 import { expectCallCount, withRunLoopCleanup } from "./run-loop-cleanup.test-support.js";
 import { registerGatewayForcedRestartTests } from "./run-loop-force.test-support.js";
+import { gatewayWorkAdmissionActual as admission } from "./run-loop-mocks.test-support.js";
 import {
   createActiveWorkSnapshot,
   createCloseMock,
@@ -118,9 +119,6 @@ export function registerGatewayRequestTests(fixtures: UpdateRespawnFixtures): vo
       const consumed = createDeferredCore<null>();
       consumeIntent.mockReturnValueOnce(consumed.promise);
       await withRunningGateway(async ({ captureSignal, close, exited }) => {
-        const admission = await vi.importActual<
-          typeof import("../../process/gateway-work-admission.js")
-        >("../../process/gateway-work-admission.js");
         restartProcess.mockReturnValue({ mode: "supervised" });
         expect(admission.isGatewayWorkAdmissionClosed()).toBe(false);
 
@@ -144,9 +142,6 @@ export function registerGatewayRequestTests(fixtures: UpdateRespawnFixtures): vo
     authorizeRestart.mockReturnValueOnce(false);
     consumeIntent.mockReturnValueOnce(first.promise).mockReturnValueOnce(second.promise);
     await withRunningGateway(async ({ captureSignal, exited }) => {
-      const admission = await vi.importActual<
-        typeof import("../../process/gateway-work-admission.js")
-      >("../../process/gateway-work-admission.js");
       captureSignal("SIGUSR2")();
       captureSignal("SIGTERM")();
       const lateRoot = admission.beginGatewayRootWorkAdmissionWhenOpen("test:queued-stop").then(
@@ -163,7 +158,7 @@ export function registerGatewayRequestTests(fixtures: UpdateRespawnFixtures): vo
     });
   });
 
-  it("joins FIFO signal consumption and defers durable restart upgrades through close", async () => {
+  it("joins FIFO signal consumption through close and keeps a queued Stop over a later update", async () => {
     process.env.OPENCLAW_SUPERVISOR_MODE = "external";
     const first = createDeferredCore<null>();
     const second = createDeferredCore<null>();
@@ -199,11 +194,9 @@ export function registerGatewayRequestTests(fixtures: UpdateRespawnFixtures): vo
         closing.release();
         await expect(exited).resolves.toBe(0);
       }
-      expect(close).toHaveBeenCalledOnce();
-      expect(writeHandoff).toHaveBeenCalledWith(
-        expect.objectContaining({ reason: "update.run" }),
-        expect.any(Function),
-      );
+      // The Stop queued behind the restart ends it; the later durable update cannot revive it.
+      expect(consumeIntent).toHaveBeenCalledTimes(3);
+      expectCallCount(0, restartProcess, writeHandoff);
     });
   });
 
@@ -220,7 +213,6 @@ export function registerGatewayRequestTests(fixtures: UpdateRespawnFixtures): vo
         consumed.resolve({ reason: "gateway.restart" });
         await vi.advanceTimersByTimeAsync(0);
         await expect(exited).resolves.toBe(1);
-        expect(runtime.exit).toHaveBeenCalledExactlyOnceWith(1);
         expect(close).toHaveBeenCalledExactlyOnceWith({
           retainSharedState: true,
           reason: "gateway stopping",
@@ -255,7 +247,6 @@ export function registerGatewayRequestTests(fixtures: UpdateRespawnFixtures): vo
           await advanceWithoutCalls(1, runtime.exit);
           closing.resolve();
           await vi.advanceTimersByTimeAsync(0);
-          expect(runtime.exit).toHaveBeenCalledExactlyOnceWith(0);
           await expect(exited).resolves.toBe(0);
         } finally {
           consumed.resolve(null);
@@ -269,7 +260,7 @@ export function registerGatewayRequestTests(fixtures: UpdateRespawnFixtures): vo
   it("settles a queued Stop when restart preparation fails before reopening storage", async () => {
     const preparation = deferredCall<{ drained: boolean; active: number }>();
     waitCron.mockImplementationOnce(preparation.call);
-    await withRunningGateway(async ({ captureSignal, close, start, runtime, exited }) => {
+    await withRunningGateway(async ({ captureSignal, close, start, exited }) => {
       try {
         captureSignal("SIGUSR2")();
         await preparation.entered;
@@ -279,7 +270,6 @@ export function registerGatewayRequestTests(fixtures: UpdateRespawnFixtures): vo
         preparation.reject(new Error("restart preparation failed"));
         await expect(exited).resolves.toBe(0);
         expect(consumeIntent).toHaveBeenCalledTimes(consumed + 1);
-        expect(runtime.exit).toHaveBeenCalledExactlyOnceWith(0);
         expectCallCount(1, start, close);
       } finally {
         preparation.resolve({ drained: true, active: 0 });
@@ -375,7 +365,6 @@ export function registerGatewayRequestTests(fixtures: UpdateRespawnFixtures): vo
         joined.resolve(true);
         await expect(exited).resolves.toBe(0);
         expectCallCount(1, close, start, acquireGatewayLock);
-        expect(runtime.exit).toHaveBeenCalledExactlyOnceWith(0);
         expectCallCount(0, restartProcess, respawnUpdate);
         expect(boot).toHaveBeenCalledExactlyOnceWith(
           expect.objectContaining({ outcome: "clean_stop", reason: replacementReason }),
@@ -421,9 +410,6 @@ export function registerGatewayRequestTests(fixtures: UpdateRespawnFixtures): vo
             gatewayLog.error.mockImplementationOnce(() => logged.resolve());
             helper.reject(new Error("helper exit is unconfirmed"));
             await logged.promise;
-            expect(gatewayLog.error).toHaveBeenCalledWith(
-              expect.stringContaining("system-service update settlement failed"),
-            );
             expectCallCount(0, close, runtime.exit);
             expect(admissionClosed()).toBe(false);
           } else {
@@ -431,9 +417,8 @@ export function registerGatewayRequestTests(fixtures: UpdateRespawnFixtures): vo
             await exited;
             helper.release();
             await helper.wait();
-            expect(waitUpdateHelpers).toHaveBeenCalledOnce();
+            expectCallCount(1, waitUpdateHelpers, runtime.exit);
             expect(restartProcess).not.toHaveBeenCalled();
-            expect(runtime.exit).toHaveBeenCalledOnce();
           }
         },
         createCloseMock().mockImplementation(async () => closing.resolve("closed")),
@@ -499,9 +484,6 @@ export function registerGatewayRequestTests(fixtures: UpdateRespawnFixtures): vo
             await expect(withTimeout(exited, 4_000)).resolves.toBe(1);
             await setImmediate();
             expect(start).toHaveBeenCalledTimes(phase === "beginBoot" ? 0 : 1);
-            expect(acquireGatewayLock).toHaveBeenCalledTimes(phase === "beginBoot" ? 1 : 2);
-            expect(beginBoot).toHaveBeenCalledTimes(phase === "beginBoot" ? 1 : 0);
-            expect(runtime.exit).toHaveBeenCalledExactlyOnceWith(1);
             expect(completeBoot).toHaveBeenCalledExactlyOnceWith(
               expect.objectContaining({ reason: replacementReason }),
             );

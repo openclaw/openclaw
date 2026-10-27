@@ -101,7 +101,7 @@ Model Q&A - defaults, selection, aliases, switching, failover, auth profiles - l
 
 ---
 
-Still stuck? Ask in [Discord](https://discord.com/invite/clawd) or use the [GitHub issue chooser](https://github.com/openclaw/openclaw/issues/new/choose).
+Still stuck? For official OpenClaw support, visit [community.openclaw.ai](https://community.openclaw.ai/). For reproducible product or documentation bugs, use the [GitHub issue chooser](https://github.com/openclaw/openclaw/issues/new/choose). Report security vulnerabilities privately through the [security policy](https://github.com/openclaw/openclaw/blob/main/SECURITY.md).
 
 ## Where each section moved
 

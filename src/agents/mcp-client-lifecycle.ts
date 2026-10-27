@@ -1,14 +1,7 @@
-import {
-  SdkError,
-  SdkErrorCode,
-  SdkHttpError,
-  type Client,
-  type Transport,
-} from "@modelcontextprotocol/client";
+import { SdkHttpError, type Client, type Transport } from "@modelcontextprotocol/client";
 import { racePromiseWithAbortSignal } from "../infra/abort-signal.js";
+import { logWarn } from "../logger.js";
 import { settlesWithin } from "../shared/settle-within.js";
-import { getSessionMcpRequestSignal } from "./agent-bundle-mcp-request-context.js";
-import { isMcpRequestTimeoutError } from "./mcp-error.js";
 import {
   McpSseSessionExpiredError,
   OpenClawSSEClientTransport,
@@ -81,6 +74,7 @@ export async function connectMcpClient(params: {
       () => (signal.reason instanceof Error ? signal.reason : new Error("MCP startup aborted")),
     );
   } catch (error) {
+    const { isMcpRequestTimeoutError } = await import("./mcp-error.js");
     if (deadline.aborted || isMcpRequestTimeoutError(error)) {
       await disposeMcpClient(
         {
@@ -172,7 +166,14 @@ export async function disposeMcpClient(
   try {
     const graceful = (async () => {
       if (session.transportType === "streamable-http") {
-        await ignoreCloseFailure(() => session.transport.terminateSession?.());
+        // Remote DELETE is best effort; local close still owns replacement safety.
+        try {
+          await session.transport.terminateSession?.();
+        } catch {
+          logWarn(
+            "bundle-mcp: remote session termination was not confirmed; continuing local cleanup",
+          );
+        }
       }
       await ignoreCloseFailure(() => session.transport.close());
       await ignoreCloseFailure(() => session.client.close());
@@ -181,8 +182,7 @@ export async function disposeMcpClient(
     if (closed) {
       return failed ? "uncertain" : "closed";
     }
-    // Closing an HTTP transport aborts a hung DELETE. Stdio owns a process
-    // group, so force it dead before disposal can report completion.
+    // Stdio owns a process group; force it dead before reporting completion.
     const { transport } = session;
     const closeTransport =
       session.transportType === "stdio" && transport instanceof OpenClawStdioClientTransport
@@ -204,73 +204,4 @@ export async function disposeMcpClient(
     // Shutdown itself may emit the last diagnostic; detach only after it settles.
     session.detachStderr?.();
   }
-}
-
-export function createMcpRequestLifecycle(humanInputTimeoutMs: number) {
-  const timeouts = new WeakSet<object>();
-  return {
-    didTimeout: (error: unknown) =>
-      error !== null && typeof error === "object" && timeouts.has(error),
-    run: async <T>(
-      { requestTimeoutMs: timeoutMs }: { requestTimeoutMs: number },
-      request: (signal: AbortSignal, holdForHumanInput: () => () => void) => Promise<T>,
-      parentSignal?: AbortSignal,
-    ): Promise<T> => {
-      const requestSignal = parentSignal ?? getSessionMcpRequestSignal();
-      const abortController = new AbortController();
-      const onParentAbort = () => abortController.abort(requestSignal?.reason);
-      if (requestSignal?.aborted) {
-        onParentAbort();
-      } else {
-        requestSignal?.addEventListener("abort", onParentAbort, { once: true });
-      }
-      const timeoutError = new SdkError(SdkErrorCode.RequestTimeout, "Request timed out", {
-        timeout: timeoutMs,
-      });
-      const onTimeout = () => {
-        timeouts.add(timeoutError);
-        abortController.abort(timeoutError);
-      };
-      let deadline = Date.now() + timeoutMs;
-      let humanInputRemainingMs = humanInputTimeoutMs;
-      let humanInputStartedAt = 0;
-      let humanInputWaits = 0;
-      let finished = false;
-      let timeout = setTimeout(onTimeout, timeoutMs);
-      timeout.unref?.();
-      const armTimeout = (expiresAt: number) => {
-        clearTimeout(timeout);
-        timeout = setTimeout(onTimeout, Math.max(0, expiresAt - Date.now()));
-        timeout.unref?.();
-      };
-      const holdForHumanInput = () => {
-        if (humanInputWaits++ === 0) {
-          humanInputStartedAt = Date.now();
-          armTimeout(deadline + humanInputRemainingMs);
-        }
-        return () => {
-          if (--humanInputWaits === 0 && !finished && !abortController.signal.aborted) {
-            const elapsed = Math.min(Date.now() - humanInputStartedAt, humanInputRemainingMs);
-            humanInputRemainingMs -= elapsed;
-            deadline += elapsed;
-            armTimeout(deadline);
-          }
-        };
-      };
-      try {
-        const signal = abortController.signal;
-        signal.throwIfAborted();
-        const result = await request(signal, holdForHumanInput);
-        requestSignal?.throwIfAborted();
-        return result;
-      } catch (error) {
-        requestSignal?.throwIfAborted();
-        throw error;
-      } finally {
-        finished = true;
-        requestSignal?.removeEventListener("abort", onParentAbort);
-        clearTimeout(timeout);
-      }
-    },
-  };
 }

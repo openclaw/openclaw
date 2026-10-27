@@ -1,4 +1,5 @@
 import type { EnvironmentSummary, SystemInfoResult } from "@openclaw/gateway-protocol";
+import { createInitialDevicesState } from "../lib/nodes/page-operations.ts";
 import type { DevicesProps } from "../pages/devices/view.types.ts";
 
 export const deviceSystemInfo: SystemInfoResult = {
@@ -43,15 +44,16 @@ export const deviceDesktopEnvironments: EnvironmentSummary[] = [
 
 export function createDevicesViewProps(overrides: Partial<DevicesProps> = {}): DevicesProps {
   return {
-    connected: true,
+    ...createInitialDevicesState({ connected: true }),
     loading: false,
-    nodes: [],
+    configRead: { scope: () => undefined, value: () => undefined },
+    execApprovalsRead: { scope: () => undefined, value: () => undefined },
+    inventoryRead: () => undefined,
+    inventoryScope: {},
+    onReloadInventory: () => undefined,
     presence: [],
     gatewayVersion: null,
     basePath: "",
-    lastError: null,
-    devicesLoading: false,
-    devicesError: null,
     devicesList: {
       pending: [],
       paired: [],
@@ -64,12 +66,6 @@ export function createDevicesViewProps(overrides: Partial<DevicesProps> = {}): D
     configSaving: false,
     configDirty: false,
     configFormMode: "form",
-    execApprovalsLoading: false,
-    execApprovalsSaving: false,
-    execApprovalsDirty: false,
-    execApprovalsSnapshot: null,
-    execApprovalsForm: null,
-    execApprovalsSelectedAgent: null,
     execApprovalsTarget: "gateway",
     execApprovalsTargetNodeId: null,
     onDevicePairSetupOpen: () => undefined,
@@ -94,4 +90,20 @@ export function createDevicesViewProps(overrides: Partial<DevicesProps> = {}): D
     onSaveExecApprovals: () => undefined,
     ...overrides,
   };
+}
+
+export function createWaitingNodePairSetup() {
+  return {
+    phase: "waiting",
+    access: "node",
+    setup: {
+      setupId: "setup-node",
+      setupCode: "AbC_123",
+      gatewayUrl: "wss://gateway.example",
+      auth: "token",
+      urlSource: "test",
+      access: "node",
+      expiresAtMs: 70_000,
+    },
+  } as const;
 }

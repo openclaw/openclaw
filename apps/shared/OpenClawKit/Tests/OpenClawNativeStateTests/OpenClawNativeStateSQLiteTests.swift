@@ -6,6 +6,8 @@ import Darwin.membership
 #endif
 
 struct OpenClawNativeStateSQLiteTests {
+    private static let currentSharedSchemaVersion: Int64 = 35
+
     @Test(arguments: [OpenClawNativeStateCanonicalTable.deviceIdentities, .deviceAuthTokens])
     func `shared adapter refuses credential creation`(_ table: OpenClawNativeStateCanonicalTable) throws {
         try self.withDatabase { database in
@@ -26,23 +28,21 @@ struct OpenClawNativeStateSQLiteTests {
     func `current shared schema admits retained tables and fences credentials`(readOnly: Bool) throws {
         try self.withDatabaseURL { writer, url in
             try writer.withImmediateTransaction {
-                try writer.ensureCanonicalTable(.execApprovalsConfig)
                 try writer.ensureCanonicalTable(.macosPortGuardianRecords)
                 try writer.execute("""
-                INSERT INTO exec_approvals_config
-                VALUES ('current','{"version":1}',NULL,0,NULL,NULL,NULL,NULL,0,0,10);
                 INSERT INTO macos_port_guardian_records VALUES (4242,18789,'synthetic-command','remote',10);
                 """)
                 try self.createConfigMachineState(writer)
-                try writer.execute("PRAGMA user_version = 29; UPDATE schema_meta SET schema_version = 29")
+                try writer.execute("""
+                PRAGMA user_version = \(Self.currentSharedSchemaVersion);
+                UPDATE schema_meta SET schema_version = \(Self.currentSharedSchemaVersion)
+                """)
             }
             let original = try Data(contentsOf: url)
             let database = try OpenClawNativeStateSQLite(
                 databaseURL: url, createIfMissing: false, readOnly: readOnly)
 
-            try database.ensureCanonicalTable(.execApprovalsConfig)
             try database.ensureCanonicalTable(.macosPortGuardianRecords)
-            #expect(try database.scalarText("SELECT raw_json FROM exec_approvals_config") == "{\"version\":1}")
             #expect(try database.scalarText("SELECT command FROM macos_port_guardian_records") == "synthetic-command")
             for table in [OpenClawNativeStateCanonicalTable.deviceIdentities, .deviceAuthTokens] {
                 #expect {
@@ -63,30 +63,31 @@ struct OpenClawNativeStateSQLiteTests {
                 #expect(try Data(contentsOf: url) == original)
             } else {
                 try database.withImmediateTransaction {
-                    try database.execute("UPDATE exec_approvals_config SET updated_at_ms = 20")
                     try database.execute("UPDATE macos_port_guardian_records SET command = 'changed-command'")
                 }
-                #expect(try database.scalarInt64("SELECT updated_at_ms FROM exec_approvals_config") == 20)
                 #expect(try database.scalarText("SELECT command FROM macos_port_guardian_records") == "changed-command")
             }
-            #expect(try database.scalarInt64("PRAGMA user_version") == 29)
-            #expect(try database.scalarInt64("SELECT schema_version FROM schema_meta") == 29)
+            #expect(try database.scalarInt64("PRAGMA user_version") == Self.currentSharedSchemaVersion)
+            #expect(try database.scalarInt64("SELECT schema_version FROM schema_meta") == Self
+                .currentSharedSchemaVersion)
         }
     }
 
     @Test(arguments: [false, true])
     func `future shared schema refuses retained table admission`(readOnly: Bool) throws {
+        let futureSchemaVersion = Self.currentSharedSchemaVersion + 1
         try self.withDatabaseURL { writer, url in
-            try writer.ensureCanonicalTable(.execApprovalsConfig)
             try writer.ensureCanonicalTable(.macosPortGuardianRecords)
             try self.createConfigMachineState(writer)
-            try writer.execute("PRAGMA user_version = 30; UPDATE schema_meta SET schema_version = 30")
+            try writer.execute("""
+            PRAGMA user_version = \(futureSchemaVersion);
+            UPDATE schema_meta SET schema_version = \(futureSchemaVersion)
+            """)
             let original = try Data(contentsOf: url)
 
             #expect {
                 let database = try OpenClawNativeStateSQLite(
                     databaseURL: url, createIfMissing: false, readOnly: readOnly)
-                try database.ensureCanonicalTable(.execApprovalsConfig)
                 try database.ensureCanonicalTable(.macosPortGuardianRecords)
             } throws: { error in
                 guard let error = error as? OpenClawNativeStateError else { return false }
@@ -141,7 +142,7 @@ struct OpenClawNativeStateSQLiteTests {
 
     @Test func `read-only bootstrap admission preserves absent config state`() throws {
         try self.withDatabaseURL { writer, url in
-            try writer.ensureCanonicalTable(.execApprovalsConfig)
+            try writer.ensureCanonicalTable(.macosPortGuardianRecords)
             let original = try Data(contentsOf: url)
             let reader = try OpenClawNativeStateSQLite(databaseURL: url, createIfMissing: false, readOnly: true)
 
@@ -193,7 +194,7 @@ struct OpenClawNativeStateSQLiteTests {
     }
 
     @Test
-    func `version zero composes exact canonical tables`() throws {
+    func `version zero creates the exact native table`() throws {
         try self.withDatabase { database in
             try database.withImmediateTransaction {
                 try database.ensureCanonicalTable(.macosPortGuardianRecords)
@@ -201,14 +202,13 @@ struct OpenClawNativeStateSQLiteTests {
                 INSERT INTO macos_port_guardian_records (pid, port, command, mode, timestamp)
                 VALUES (4242, 18789, '/usr/bin/ssh', 'remote', 42.5)
                 """)
-                try database.ensureCanonicalTable(.execApprovalsConfig)
             }
 
             #expect(try database.scalarInt64("PRAGMA user_version") == 0)
             #expect(try database.scalarInt64(
                 "SELECT COUNT(*) FROM macos_port_guardian_records WHERE pid = 4242") == 1)
             #expect(try database.scalarInt64(
-                "SELECT COUNT(*) FROM sqlite_schema WHERE name NOT LIKE 'sqlite_%'") == 3)
+                "SELECT COUNT(*) FROM sqlite_schema WHERE name NOT LIKE 'sqlite_%'") == 2)
         }
     }
 
@@ -226,7 +226,7 @@ struct OpenClawNativeStateSQLiteTests {
             """)
 
             #expect(throws: OpenClawNativeStateError.self) {
-                try database.ensureCanonicalTable(.execApprovalsConfig)
+                try database.ensureCanonicalTable(.macosPortGuardianRecords)
             }
         }
     }
@@ -270,33 +270,6 @@ struct OpenClawNativeStateSQLiteTests {
             }
             #expect(try database.scalarInt64("SELECT COUNT(*) FROM macos_port_guardian_records") == 0)
         }
-    }
-
-    @Test
-    func `concurrent version zero stores compose different tables`() async throws {
-        let directory = URL(fileURLWithPath: ProcessInfo.processInfo.environment["TMPDIR"] ?? NSTemporaryDirectory())
-            .appendingPathComponent(UUID().uuidString, isDirectory: true)
-        defer { try? FileManager.default.removeItem(at: directory) }
-        let databaseURL = directory.appendingPathComponent("openclaw.sqlite", isDirectory: false)
-
-        try await withThrowingTaskGroup(of: Void.self) { group in
-            for table in [
-                OpenClawNativeStateCanonicalTable.execApprovalsConfig,
-                .macosPortGuardianRecords,
-            ] {
-                group.addTask {
-                    let database = try OpenClawNativeStateSQLite(databaseURL: databaseURL)
-                    try database.withImmediateTransaction {
-                        try database.ensureCanonicalTable(table)
-                    }
-                }
-            }
-            try await group.waitForAll()
-        }
-
-        let database = try OpenClawNativeStateSQLite(databaseURL: databaseURL)
-        #expect(try database.scalarInt64(
-            "SELECT COUNT(*) FROM sqlite_schema WHERE name NOT LIKE 'sqlite_%'") == 3)
     }
 
     @Test(arguments: [
@@ -343,7 +316,7 @@ struct OpenClawNativeStateSQLiteTests {
         let database = try OpenClawNativeStateSQLite(databaseURL: databaseURL)
         try database.execute("PRAGMA journal_mode=WAL")
         try database.withImmediateTransaction {
-            try database.ensureCanonicalTable(.execApprovalsConfig)
+            try database.ensureCanonicalTable(.macosPortGuardianRecords)
         }
 
         try self.expectPrivateMetadata(at: parent, mode: 0o700)

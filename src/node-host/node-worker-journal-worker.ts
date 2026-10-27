@@ -5,6 +5,7 @@ import {
   observeSqliteWorkerCommittedFacts,
   type SqliteWorkerAdmissionFactory,
 } from "../infra/sqlite-worker-operation-admission.js";
+import { createPendingPromiseTracker } from "../shared/pending-promises.js";
 import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
 import type { OpenClawStateWorkerOperations } from "../state/openclaw-state-worker-contract.js";
 import { runOpenClawStateWorkerOperation } from "../state/openclaw-state-worker-store.js";
@@ -25,6 +26,7 @@ type JournalScope = {
 /** Host custody lasts through delivery and native transaction settlement. */
 export class NodeWorkerJournalWorker {
   private readonly pending = new Set<Promise<unknown>>();
+  private readonly trackPending = createPendingPromiseTracker(this.pending);
   private readonly settlements = new Set<Promise<unknown>>();
   private accepting = true;
   private uncertain: SqliteWorkerError | undefined;
@@ -167,12 +169,7 @@ export class NodeWorkerJournalWorker {
           existingOnly: true,
         })
       : runOpenClawStateWorkerOperation(context, operation, { assertCurrent, createAdmission });
-    this.pending.add(admitted);
-    void admitted.then(
-      () => this.pending.delete(admitted),
-      () => this.pending.delete(admitted),
-    );
-    return admitted;
+    return this.trackPending(admitted);
   }
 
   async drain(options: { close?: boolean } = {}): Promise<void> {

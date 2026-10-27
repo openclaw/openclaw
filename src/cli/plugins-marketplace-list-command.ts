@@ -1,3 +1,4 @@
+import { sanitizeTerminalText } from "../../packages/terminal-core/src/safe-text.js";
 import { theme } from "../../packages/terminal-core/src/theme.js";
 import { defaultRuntime } from "../runtime.js";
 import { ExpectedCliError } from "./failure-output.js";
@@ -35,11 +36,15 @@ export async function runPluginMarketplaceListCommand(
   }
 
   defaultRuntime.log(
-    `${theme.heading("Marketplace")} ${theme.muted(result.manifest.name ?? result.sourceLabel)}`,
+    `${theme.heading("Marketplace")} ${theme.muted(sanitizeTerminalText(result.manifest.name ?? result.sourceLabel))}`,
   );
   for (const plugin of result.manifest.plugins) {
-    const suffix = plugin.version ? theme.muted(` ${formatVersionLabel(plugin.version)}`) : "";
-    const desc = plugin.description ? ` - ${theme.muted(plugin.description)}` : "";
-    defaultRuntime.log(`${theme.command(plugin.name)}${suffix}${desc}`);
+    const suffix = plugin.version
+      ? theme.muted(` ${formatVersionLabel(sanitizeTerminalText(plugin.version))}`)
+      : "";
+    const desc = plugin.description
+      ? ` - ${theme.muted(sanitizeTerminalText(plugin.description))}`
+      : "";
+    defaultRuntime.log(`${theme.command(sanitizeTerminalText(plugin.name))}${suffix}${desc}`);
   }
 }

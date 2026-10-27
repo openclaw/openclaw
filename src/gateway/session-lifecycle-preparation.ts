@@ -8,10 +8,8 @@ import {
 import { prepareSessionEntryMutationDatabases } from "../config/sessions/session-accessor.entry-mutation.js";
 import { patchSessionEntryCore } from "../config/sessions/session-accessor.js";
 import type { SessionEntryCreateWithTranscriptOptions } from "../config/sessions/session-accessor.types.js";
-import {
-  acquireSessionActorStorage,
-  getSessionActorStorageBinding,
-} from "../config/sessions/session-actor-storage-binding.js";
+import { acquireSessionActorStorage } from "../config/sessions/session-actor-storage-acquisition.js";
+import { getSessionActorStorageBinding } from "../config/sessions/session-actor-storage-binding.js";
 import {
   composeSessionSourceAssertion,
   sessionEntryCommitGuardOptions,
@@ -408,6 +406,7 @@ export async function commitPreparedSessionWorkspace(params: {
   assertCurrent: SessionSourceAssertion;
   assertEntry: (entry: SessionEntry) => void;
   projectId?: string;
+  priorWorkspace?: SessionEntry["priorWorkspace"];
   clearPendingIntent?: boolean;
   onCommitted?: () => void;
   missingSessionMessage: string;
@@ -427,7 +426,9 @@ export async function commitPreparedSessionWorkspace(params: {
           ...(params.projectId ? { projectId: params.projectId } : {}),
           sessionRoot: prepared.sessionRoot,
           spawnedCwd: prepared.spawnedCwd,
+          spawnedWorkspaceDir: undefined,
           ...(prepared.worktree ? { worktree: prepared.worktree } : {}),
+          ...(params.priorWorkspace ? { priorWorkspace: params.priorWorkspace } : {}),
           ...(params.clearPendingIntent
             ? { pendingProjectGitUrl: undefined, pendingWorktree: undefined }
             : {}),
@@ -448,6 +449,25 @@ export async function commitPreparedSessionWorkspace(params: {
     }
     return entry;
   } catch (error) {
+    if (prepared.worktree) {
+      // A lost acknowledgement or post-commit error must not remove the accepted checkout.
+      // If this read cannot establish ownership, preserve the allocation for recovery.
+      const { withSessionEntryReadOnlyInWorker } =
+        await import("../config/sessions/session-entry-read-runtime.js");
+      const bound = await withSessionEntryReadOnlyInWorker(
+        params.target,
+        () => {},
+        async (read) => {
+          if (!read.ok) {
+            throw read.error;
+          }
+          return read.value?.worktree?.id === prepared.worktree?.id;
+        },
+      );
+      if (bound) {
+        throw error;
+      }
+    }
     await prepared.rollback?.();
     throw error;
   }

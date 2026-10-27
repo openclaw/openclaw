@@ -9,6 +9,7 @@ import {
 } from "@openclaw/normalization-core/string-coerce";
 import { resolveAgentModelPrimaryValue } from "../config/model-input.js";
 import { resolveMergedModelProviderConfig } from "../config/model-provider-config.js";
+import { getRuntimeConfigCapture } from "../config/runtime-config-capture-state.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type {
   ProviderModelRouteAuthRequirement,
@@ -77,6 +78,7 @@ import { resolveSelectedModelCredential } from "./model-auth-selected-credential
 import { hasAuthoredProviderRequestParams } from "./model-extra-params.js";
 import { splitTrailingAuthProfile } from "./model-ref-profile.js";
 import type { CliRuntimeAuthDirectories } from "./model-runtime-aliases.js";
+import { resolveModelRuntimePolicy } from "./model-runtime-policy.js";
 import { resolveDefaultModelForAgent } from "./model-selection-config.js";
 import {
   createOpenAIModelRoutesResolver,
@@ -190,6 +192,8 @@ function normalizeModelIdForProvider(provider: string, modelId: string): string 
 export function createModelAuthAvailabilityResolver(
   params: CreateModelAuthAvailabilityResolverParams,
 ): ModelAuthAvailabilityResolver {
+  // Captured catalog policy already owns its immutable authored source.
+  const sourceConfig = getRuntimeConfigCapture(params.cfg)?.source;
   const isPluginAuthProvider = (provider: string) =>
     resolveProviderAuthScope({
       provider,
@@ -277,8 +281,11 @@ export function createModelAuthAvailabilityResolver(
   // lifecycle. Provider-wide authority could bless an unrelated stale profile.
   const externalCliRefreshProfileIds = new Set(external.map((profile) => profile.profileId));
   const providerInput = (provider: string) =>
-    resolveProviderConfigSecretInput(params.cfg, provider);
+    resolveProviderConfigSecretInput(params.cfg, provider, sourceConfig);
   const prepareAuthTarget = (provider: string, ref: ModelAuthAvailabilityRef): AuthTarget => {
+    if (ref.api != null && ref.baseUrl != null) {
+      return ref;
+    }
     const { providerConfig: configured } = providerInput(provider);
     const configuredModelId = ref.modelId
       ? normalizeModelIdForProvider(provider, ref.modelId)
@@ -297,6 +304,7 @@ export function createModelAuthAvailabilityResolver(
   const providerBinding = (provider: string) =>
     resolveProviderEntryApiKeyProfileReference({
       cfg: params.cfg,
+      sourceConfig,
       provider,
       store,
     });
@@ -1280,10 +1288,7 @@ export function createModelAuthAvailabilityResolver(
   const evaluateModelAuth = (provider: string, ref?: ModelAuthAvailabilityRef) =>
     withSelectedCredential(provider, evaluateModelAuthSources(provider, ref));
   const providerDiscoveryProviderIds = new Set<string>();
-  const addProviderDiscoveryProviderId = (provider: string | undefined) => {
-    if (!provider) {
-      return;
-    }
+  const addProviderDiscoveryProviderId = (provider: string) => {
     const normalized = normalizeProvider(provider);
     if (normalized) {
       providerDiscoveryProviderIds.add(normalized);
@@ -1319,16 +1324,20 @@ export function createModelAuthAvailabilityResolver(
   if (synthetic.has("codex")) {
     addProviderDiscoveryProviderId(OPENAI_PROVIDER_ID);
   }
-  const evaluateCliRuntimeAuth = createCliRuntimeModelAuthEvaluator(params, evaluateModelAuth);
+  const evaluateCliRuntimeAuth = createCliRuntimeModelAuthEvaluator(
+    { ...params, authStore: orderStore },
+    evaluateModelAuth,
+  );
   return {
     providerDiscoveryProviderIds: [...providerDiscoveryProviderIds].toSorted((left, right) =>
       left.localeCompare(right),
     ),
     evaluateModelAuth,
     evaluateRuntimeModelAuth: (provider, ref = {}) => {
-      const runtimeId =
-        ref.runtimeId ??
-        resolveAgentHarnessPolicy({
+      let runtimeId = ref.runtimeId;
+      let configuredRuntimePolicy: ReturnType<typeof resolveModelRuntimePolicy> | undefined;
+      if (runtimeId === undefined) {
+        const policyParams = {
           config: params.cfg,
           agentId: params.agentId,
           provider,
@@ -1336,12 +1345,20 @@ export function createModelAuthAvailabilityResolver(
           modelApi: ref.api,
           modelBaseUrl: ref.baseUrl,
           env: params.env,
-        }).runtime;
+        };
+        configuredRuntimePolicy = resolveModelRuntimePolicy(policyParams);
+        runtimeId = resolveAgentHarnessPolicy(policyParams, configuredRuntimePolicy).runtime;
+      }
       const evaluation = evaluateModelAuth(provider, { ...ref, runtimeId });
       if (isPluginAuthProvider(provider) || ref.requiredProfileId?.trim()) {
         return evaluation;
       }
-      const runtimeEvaluation = evaluateCliRuntimeAuth(provider, { ...ref, runtimeId }, evaluation);
+      const runtimeEvaluation = evaluateCliRuntimeAuth(
+        provider,
+        { ...ref, runtimeId },
+        evaluation,
+        configuredRuntimePolicy,
+      );
       return runtimeEvaluation
         ? withSelectedCredential(provider, {
             ...runtimeEvaluation,

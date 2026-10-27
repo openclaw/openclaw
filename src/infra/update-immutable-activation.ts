@@ -213,15 +213,7 @@ function activationOwner(
     }
     verifyImmutableProtection(operation().protection, {
       ...protectionContext(service),
-      candidate: {
-        pid: service.pid,
-        generationPath: record.descriptor.current.path,
-        startedAtMs:
-          operation().servingStartedAtMs ??
-          operation().candidateStartedAtMs ??
-          operation().startedAtMs,
-        assertCurrent: () => assertService(service),
-      },
+      assertCurrent: () => assertService(service),
     });
   };
   const pending = (reason: string): ImmutableActivationResult => {
@@ -404,8 +396,6 @@ function activationOwner(
     assertStopped();
     save({
       phase: rollback ? "rollback-starting" : "starting",
-      servingStartedAtMs: Date.now(),
-      ...(!rollback ? { candidateStartedAtMs: Date.now() } : {}),
     });
     await controlImmutableService("start", {
       descriptor: record.descriptor,

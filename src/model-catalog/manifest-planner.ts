@@ -29,7 +29,6 @@ type ManifestModelCatalogRegistry = {
 };
 
 type ManifestModelCatalogPlanEntry = {
-  pluginId: string;
   provider: string;
   discovery?: ModelCatalogDiscovery;
   rows: readonly NormalizedModelCatalogRow[];
@@ -79,10 +78,12 @@ function mergeRemoteModelWithTrustedTransport(
 ): ModelCatalogModel {
   // Spread keeps an untrusted own `__proto__` key as data instead of invoking
   // Object.prototype's setter while trusted transport fields win explicitly.
+  // The hosted schema carries no family; the bundled row keeps the exact id's family.
   const merged = {
     ...remoteModel,
     ...(trustedModel?.baseUrl ? { baseUrl: trustedModel.baseUrl } : {}),
     ...(trustedModel?.headers ? { headers: trustedModel.headers } : {}),
+    ...(trustedModel?.family ? { family: trustedModel.family } : {}),
   };
   const target = {
     api: merged.api ?? effectiveProvider.api,
@@ -230,7 +231,6 @@ export function planManifestModelCatalogRows(params: {
         }
         const alias = plugin.modelCatalog?.aliases?.[plannedProvider];
         entries.push({
-          pluginId: plugin.id,
           provider: plannedProvider,
           discovery: plugin.modelCatalog?.discovery?.[normalizedProvider],
           rows: alias

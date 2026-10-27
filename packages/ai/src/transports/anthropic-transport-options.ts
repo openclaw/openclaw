@@ -91,7 +91,6 @@ export function resolveAnthropicTransportOptions(
     headers: options?.headers,
     onPayload: options?.onPayload,
     onResponse: options?.onResponse,
-    maxRetryDelayMs: options?.maxRetryDelayMs,
     metadata: options?.metadata,
     interleavedThinking: options?.interleavedThinking,
     toolChoice: options?.toolChoice,

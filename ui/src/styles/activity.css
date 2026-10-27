@@ -77,7 +77,7 @@ main.content:where(.content--activity-page) .content-header {
 }
 
 a.activity-current-work__row:hover {
-  background: var(--bg-hover);
+  background: var(--surface-hover);
 }
 
 .activity-current-work__copy {
@@ -212,16 +212,6 @@ a.activity-current-work__row:hover {
   outline: none;
   border-color: var(--ring);
   box-shadow: var(--focus-ring);
-}
-
-.activity-feed__selected-person,
-.activity-feed__git-label,
-.activity-feed__session-headline,
-.activity-feed__session-owner {
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
 }
 
 .activity-feed__facepile {
@@ -592,7 +582,7 @@ a.activity-current-work__row:hover {
 .activity-feed__pr:hover,
 .activity-feed__pr:focus-visible {
   border-color: var(--border-strong);
-  background: var(--bg-hover);
+  background: var(--surface-hover);
   text-decoration: none;
 }
 
@@ -686,7 +676,7 @@ a.activity-current-work__row:hover {
    together with the header link. Rows without a navigation target stay flat. */
 .activity-feed__session-row--link:hover,
 .activity-feed__session-row:focus-within {
-  background: var(--bg-hover);
+  background: var(--surface-hover);
 }
 
 .activity-feed__session-row:has(.activity-feed__inspect-run) .activity-feed__session {
@@ -1035,7 +1025,7 @@ a.activity-current-work__row:hover {
 }
 
 .activity-entry__summary:hover {
-  background: var(--bg-hover);
+  background: var(--surface-hover);
 }
 
 .activity-entry__chevron {

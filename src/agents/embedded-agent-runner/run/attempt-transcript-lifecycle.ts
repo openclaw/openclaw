@@ -1,6 +1,7 @@
 /** Serializes run-owned transcript callbacks and bounds teardown settlement. */
 import { AsyncLocalStorage } from "node:async_hooks";
 import { toErrorObject } from "../../../infra/errors.js";
+import { runWithAsyncStore } from "../../../shared/async-store.js";
 import { createDeferredCore } from "../../../shared/deferred.js";
 import { settlesWithin } from "../../../shared/settle-within.js";
 import { log } from "../logger.js";
@@ -75,7 +76,7 @@ export function createEmbeddedAttemptTranscriptLifecycle(params: {
     let value: T | undefined;
     let primaryError: Error | undefined;
     try {
-      value = await lifecycleOwners.run(owner, async () => await run());
+      value = await runWithAsyncStore(lifecycleOwners, owner, async () => await run());
     } catch (error) {
       primaryError = toErrorObject(error, "transcript write failed");
     }

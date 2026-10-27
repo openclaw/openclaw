@@ -20,7 +20,6 @@ import { resolveUnsuffixedSqliteTargetFromSessionStorePath } from "../../../conf
 import * as sqliteTarget from "../../../config/sessions/session-sqlite-target.js";
 import { readDatabasePathIdentitySync } from "../../../infra/sqlite-worker-identity.js";
 import type { SqliteWorkerAdmissionRequest } from "../../../infra/sqlite-worker-operation-admission.js";
-import { closeOpenClawAgentDatabasesAsync } from "../../../state/openclaw-agent-db-lifecycle.js";
 import { openOpenClawAgentDatabase } from "../../../state/openclaw-agent-db.js";
 import { resolveOpenClawAgentSqlitePath } from "../../../state/openclaw-agent-db.paths.js";
 import { prepareUserProfileCatalog } from "../../../state/user-profile-list.js";
@@ -327,114 +326,78 @@ export function registerClientCreateEnsureTests(harness: EnsureHarness) {
     },
   );
 
-  it.each([
-    "missing",
-    "idless",
-    "missing-database",
-    "missing-suffix",
-    "idless-suffix",
-    "missing-gap-suffix",
-  ])("commits the ensured %s chat in the worker before preparing voice authority", async (kind) => {
-    const key = `agent:main:voice-${kind}`;
-    harness.ownVoice(undefined, key);
-    const suffix = kind.endsWith("-suffix");
-    const idless = kind.startsWith("idless");
-    const suffixPath = file(
-      kind === "missing-gap-suffix" ? "custom.main.2.sqlite" : "custom.main.sqlite",
-    );
-    const storePath = suffix
-      ? file("custom.json")
-      : kind === "missing-database"
-        ? file("first-entry.sqlite")
-        : undefined;
-    if (suffix) {
-      openOpenClawAgentDatabase({ agentId: "other", path: file("custom.sqlite") });
-      expect(existsSync(file("custom.main.sqlite"))).toBe(false);
-    }
-    if (kind === "missing-gap-suffix") {
-      const reservedPath = file("custom.main.sqlite");
-      openOpenClawAgentDatabase({ agentId: "reserved", path: reservedPath });
-      await closeOpenClawAgentDatabasesAsync();
-      unlinkSync(reservedPath);
-    }
-    const creation = {
-      createdVia: "internal" as const,
-      createdAt: 7,
-      createdActor: {
-        type: "human" as const,
-        source: "profile" as const,
-        id: "original-creator",
-      },
-      sandbox: "required" as const,
-    };
-    if (idless) {
-      await replaceSessionEntry(
-        { agentId: "main", sessionKey: key, storePath },
-        { sessionId: "", updatedAt: 1, ...creation },
-      );
-    }
-    const fixture = browser(key);
-    if (storePath) {
-      if (!suffix) {
+  it.each(["missing-database", "idless"])(
+    "commits the ensured %s chat in the worker before preparing voice authority",
+    async (kind) => {
+      const key = `agent:main:voice-${kind}`;
+      harness.ownVoice(undefined, key);
+      const idless = kind === "idless";
+      const storePath = idless ? undefined : file("first-entry.sqlite");
+      const creation = {
+        createdVia: "internal" as const,
+        createdAt: 7,
+        createdActor: {
+          type: "human" as const,
+          source: "profile" as const,
+          id: "original-creator",
+        },
+        sandbox: "required" as const,
+      };
+      if (idless) {
+        await replaceSessionEntry(
+          { agentId: "main", sessionKey: key, storePath },
+          { sessionId: "", updatedAt: 1, ...creation },
+        );
+      }
+      const fixture = browser(key);
+      if (storePath) {
         expect(existsSync(storePath)).toBe(false);
+        setStore(fixture, storePath);
       }
-      setStore(fixture, storePath);
-    }
-    let entryTransactions = 0;
-    harness.observeAdmission((request, run) => {
-      const publication = isRecord(request.facts) ? request.facts.publication : undefined;
-      if (isRecord(publication) && publication.kind === "session-entry-patch-validated") {
-        entryTransactions += 1;
-      }
-      run();
-    });
-    const entryPath = suffix
-      ? suffixPath
-      : storePath
+      let entryTransactions = 0;
+      harness.observeAdmission((request, run) => {
+        const publication = isRecord(request.facts) ? request.facts.publication : undefined;
+        if (isRecord(publication) && publication.kind === "session-entry-patch-validated") {
+          entryTransactions += 1;
+        }
+        run();
+      });
+      const entryPath = storePath
         ? resolveUnsuffixedSqliteTargetFromSessionStorePath(storePath).path
         : resolveOpenClawAgentSqlitePath({ agentId: "main" });
-    const hostSql = observeTargetSql(
-      entryPath,
-      /\b(?:create\s+(?:(?:unique|virtual)\s+)?(?:table|index|trigger|view)|alter\s+table|drop\s+(?:table|index|trigger|view)|quick_check|integrity_check)\b/i,
-    );
-    try {
-      await fixture.create();
-      expect(fixture.reply?.[0], JSON.stringify(fixture.reply?.[2])).toBe(true);
-      const ownedVoiceSessionId = fixture.reply?.[1].voiceSessionId;
-      harness.ownVoice(ownedVoiceSessionId, key);
-      expect(
-        hostSql.allQueries.filter((sql) =>
-          /^\s*(?:insert(?:\s+or\s+\w+)?\s+into|update|delete\s+from)\s+"?session_nodes"?\b/i.test(
-            sql,
-          ),
-        ),
-      ).toEqual([]);
-      expect(hostSql.queries).toEqual([]);
-      expect(entryTransactions).toBe(1);
-      const entry = loadSessionEntry({ agentId: "main", sessionKey: key, storePath });
-      expect(entry?.sessionId).toBeTruthy();
-      if (idless) {
-        expect(entry).toMatchObject(creation);
-      }
-      if (suffix) {
-        expect(existsSync(suffixPath)).toBe(true);
+      const hostSql = observeTargetSql(
+        entryPath,
+        /\b(?:create\s+(?:(?:unique|virtual)\s+)?(?:table|index|trigger|view)|alter\s+table|drop\s+(?:table|index|trigger|view)|quick_check|integrity_check)\b/i,
+      );
+      try {
+        await fixture.create();
+        expect(fixture.reply?.[0], JSON.stringify(fixture.reply?.[2])).toBe(true);
+        const ownedVoiceSessionId = fixture.reply?.[1].voiceSessionId;
+        harness.ownVoice(ownedVoiceSessionId, key);
         expect(
-          loadSessionEntry({
-            agentId: "other",
-            sessionKey: key,
-            storePath: file("custom.sqlite"),
-          }),
-        ).toBeUndefined();
+          hostSql.allQueries.filter((sql) =>
+            /^\s*(?:insert(?:\s+or\s+\w+)?\s+into|update|delete\s+from)\s+"?session_nodes"?\b/i.test(
+              sql,
+            ),
+          ),
+        ).toEqual([]);
+        expect(hostSql.queries).toEqual([]);
+        expect(entryTransactions).toBe(1);
+        const entry = loadSessionEntry({ agentId: "main", sessionKey: key, storePath });
+        expect(entry?.sessionId).toBeTruthy();
+        if (idless) {
+          expect(entry).toMatchObject(creation);
+        }
+        expect(clientVoiceSessionTesting.readRecord("main", ownedVoiceSessionId!)).toMatchObject({
+          sessionKey: key,
+          status: "open",
+        });
+      } finally {
+        harness.observeAdmission(undefined);
+        hostSql.restore();
       }
-      expect(clientVoiceSessionTesting.readRecord("main", ownedVoiceSessionId!)).toMatchObject({
-        sessionKey: key,
-        status: "open",
-      });
-    } finally {
-      harness.observeAdmission(undefined);
-      hostSql.restore();
-    }
-  });
+    },
+  );
 
   it("keeps the committed chat when the following voice admission refuses", async () => {
     const key = "agent:main:ensure-before-voice-refusal";

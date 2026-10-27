@@ -32,6 +32,6 @@ CREATE TABLE "update_runs" (
   CHECK ((("status" = 'running') AND ("phase" != 'finished') AND "finished_at_ms" IS NULL) OR (("status" != 'running') AND ("phase" = 'finished') AND "finished_at_ms" IS NOT NULL))
 );
 
-CREATE INDEX "idx_update_runs_active" ON "update_runs" (("status") ASC NULLS FIRST, ("created_at_ms") DESC NULLS LAST, ("run_id") ASC NULLS FIRST);
+CREATE INDEX "idx_update_runs_active" ON "update_runs" (("status") ASC, ("created_at_ms") DESC, ("run_id") ASC);
 
-CREATE INDEX "idx_update_runs_created" ON "update_runs" (("created_at_ms") DESC NULLS LAST, ("run_id") ASC NULLS FIRST);
+CREATE INDEX "idx_update_runs_created" ON "update_runs" (("created_at_ms") DESC, ("run_id") ASC);

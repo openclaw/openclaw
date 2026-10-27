@@ -1,8 +1,7 @@
-/* @vitest-environment jsdom */
 import { afterEach, beforeEach, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import { registerChatPane } from "./chat-pane-elements.ts";
-import { resolveChatSnapshotKey } from "./session-message-cache.ts";
+import { resolveChatSnapshotKey, type ChatSessionSnapshot } from "./session-message-cache.ts";
 import {
   createSessionPrefetchFixture,
   prefetchHistoryRequest as historyRequest,
@@ -15,7 +14,8 @@ import {
   prefetchSessionKeyFromCall as sessionKeyFromCall,
   settleSessionPrefetch as settlePromises,
 } from "./session-prefetch.test-support.ts";
-import type { ChatSessionSnapshot } from "./session-snapshot-types.ts";
+/* @vitest-environment jsdom */
+import { writeSnapshotFixture } from "./session-snapshot.test-support.ts";
 
 let fixture: ReturnType<typeof createSessionPrefetchFixture>;
 let shell: HTMLElement;
@@ -80,7 +80,11 @@ it.each(["stored read", "cursor reset"])(
       pagination: { hasMore: false, completeSnapshot: true },
       sessionId: "stored-first",
     };
-    fixture.store.write(resolveChatSnapshotKey(snapshotHost, { sessionKey: first }), stored);
+    writeSnapshotFixture(
+      fixture.store,
+      resolveChatSnapshotKey(snapshotHost, { sessionKey: first }),
+      stored,
+    );
     await fixture.store.flush();
     fixture.cache.clear();
     const read = createDeferred<ChatSessionSnapshot | null>();

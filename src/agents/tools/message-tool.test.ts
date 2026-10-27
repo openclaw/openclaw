@@ -1,5 +1,3 @@
-// Message tool tests cover channel action discovery, secret scoping, and
-// outbound message execution context.
 import fs from "node:fs/promises";
 import { Type } from "typebox";
 import { Value } from "typebox/value";
@@ -31,7 +29,10 @@ import {
 import { createMockPluginRegistry } from "../../plugins/hooks.test-fixtures.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../../plugins/runtime.js";
 import { createDeferredCore } from "../../shared/deferred.js";
-import { createTestRegistry } from "../../test-utils/channel-plugins.js";
+import {
+  createChannelTestPluginBase,
+  createTestRegistry,
+} from "../../test-utils/channel-plugins.js";
 import { withTempDir } from "../../test-utils/temp-dir.js";
 import {
   consumePreExecutionBlockedToolCall,
@@ -57,94 +58,56 @@ type DescribeMessageTool = NonNullable<
 type MessageToolDiscoveryContext = Parameters<DescribeMessageTool>[0];
 type MessageToolSchema = NonNullable<ReturnType<DescribeMessageTool>>["schema"];
 
-function createTelegramPollExtraToolSchemas() {
+const mocks = vi.hoisted(() => {
+  const record = (value: unknown): Record<string, unknown> | undefined =>
+    value && typeof value === "object" && !Array.isArray(value)
+      ? (value as Record<string, unknown>)
+      : undefined;
   return {
-    pollDurationSeconds: Type.Optional(Type.Number()),
-    pollAnonymous: Type.Optional(Type.Boolean()),
-    pollPublic: Type.Optional(Type.Boolean()),
-  };
-}
-
-const mocks = vi.hoisted(() => ({
-  runMessageAction: vi.fn(),
-  getRuntimeConfig: vi.fn(() => ({})),
-  resolveCommandSecretRefsViaGateway: vi.fn(async ({ config }: { config: unknown }) => ({
-    resolvedConfig: config,
-    diagnostics: [],
-  })),
-  getScopedChannelsCommandSecretTargets: vi.fn(
-    ({
-      config,
-      channel,
-      channels,
-      accountId,
-    }: {
-      config?: { channels?: Record<string, unknown> };
-      channel?: string | null;
-      channels?: readonly string[];
-      accountId?: string | null;
-    }) => {
-      const allowedPaths = new Set<string>();
-      const targetIds = new Set<string>();
-      const scopedChannels = channels ?? (channel?.trim() ? [channel.trim()] : []);
-      const scopedAccountId = accountId?.trim();
-      if (scopedChannels.length === 0) {
-        return { targetIds };
-      }
-
-      const maybeCollectSecretPath = (path: string, value: unknown) => {
-        if (!value || typeof value !== "object" || Array.isArray(value)) {
-          return;
-        }
-        const record = value as Record<string, unknown>;
-        if (typeof record.source === "string" && typeof record.id === "string") {
-          targetIds.add(path);
-          allowedPaths.add(path);
-        }
-      };
-
-      for (const scopedChannel of scopedChannels) {
-        const scopedConfig =
-          config?.channels && typeof config.channels[scopedChannel] === "object"
-            ? (config.channels[scopedChannel] as Record<string, unknown>)
-            : null;
-        if (!scopedConfig) {
-          continue;
-        }
-        maybeCollectSecretPath(`channels.${scopedChannel}.token`, scopedConfig.token);
-        maybeCollectSecretPath(`channels.${scopedChannel}.botToken`, scopedConfig.botToken);
-        maybeCollectSecretPath(`channels.${scopedChannel}.appPassword`, scopedConfig.appPassword);
-        if (scopedAccountId) {
-          const accountRecord =
-            scopedConfig.accounts &&
-            typeof scopedConfig.accounts === "object" &&
-            !Array.isArray(scopedConfig.accounts) &&
-            typeof (scopedConfig.accounts as Record<string, unknown>)[scopedAccountId] === "object"
-              ? ((scopedConfig.accounts as Record<string, unknown>)[scopedAccountId] as Record<
-                  string,
-                  unknown
-                >)
-              : null;
-          if (accountRecord) {
-            maybeCollectSecretPath(
-              `channels.${scopedChannel}.accounts.${scopedAccountId}.token`,
-              accountRecord.token,
-            );
-            maybeCollectSecretPath(
-              `channels.${scopedChannel}.accounts.${scopedAccountId}.botToken`,
-              accountRecord.botToken,
+    dispatch: vi.fn(),
+    getConfig: vi.fn(() => ({})),
+    resolveSecrets: vi.fn(async ({ config }: { config: unknown }) => ({
+      resolvedConfig: config,
+      diagnostics: [],
+    })),
+    secretTargets: vi.fn(
+      ({
+        config,
+        channel,
+        channels,
+        accountId,
+      }: {
+        config?: { channels?: Record<string, unknown> };
+        channel?: string | null;
+        channels?: readonly string[];
+        accountId?: string | null;
+      }) => {
+        const targetIds = new Set<string>();
+        const collect = (prefix: string, value: unknown, fields: string[]) => {
+          const root = record(value);
+          for (const field of fields) {
+            const ref = record(root?.[field]);
+            if (typeof ref?.source === "string" && typeof ref.id === "string") {
+              targetIds.add(`${prefix}.${field}`);
+            }
+          }
+        };
+        for (const id of channels ?? (channel?.trim() ? [channel.trim()] : [])) {
+          const root = record(config?.channels?.[id]);
+          collect(`channels.${id}`, root, ["token", "botToken", "appPassword"]);
+          if (accountId?.trim()) {
+            collect(
+              `channels.${id}.accounts.${accountId.trim()}`,
+              record(root?.accounts)?.[accountId.trim()],
+              ["token", "botToken"],
             );
           }
         }
-      }
-
-      return {
-        targetIds,
-        ...(allowedPaths.size > 0 ? { allowedPaths } : {}),
-      };
-    },
-  ),
-}));
+        return { targetIds, ...(targetIds.size ? { allowedPaths: new Set(targetIds) } : {}) };
+      },
+    ),
+  };
+});
 const bootMocks = vi.hoisted(() => ({ agentCommandFromSystem: vi.fn() }));
 
 vi.mock("../../commands/agent.js", async () => ({
@@ -167,31 +130,26 @@ vi.mock("../../channels/plugins/bundled.js", async () => {
 
 type RunMessageActionInput = Parameters<typeof actualRunMessageAction>[0];
 
-function firstRunMessageActionInput(): RunMessageActionInput | undefined {
-  return mocks.runMessageAction.mock.calls[0]?.[0] as RunMessageActionInput | undefined;
+function firstAction(): RunMessageActionInput | undefined {
+  return mocks.dispatch.mock.calls[0]?.[0] as RunMessageActionInput | undefined;
 }
 
-function lastRunMessageActionInput(): RunMessageActionInput | undefined {
-  return mocks.runMessageAction.mock.calls.at(-1)?.[0] as RunMessageActionInput | undefined;
+function lastAction(): RunMessageActionInput | undefined {
+  return mocks.dispatch.mock.calls.at(-1)?.[0] as RunMessageActionInput | undefined;
 }
 
-function latestSecretResolveCall(): {
+type SecretCall = {
   allowedPaths?: Set<string>;
   config?: unknown;
   targetIds?: Set<string>;
-} {
-  const calls = mocks.resolveCommandSecretRefsViaGateway.mock.calls;
+};
+function lastSecretCall(): SecretCall {
+  const calls = mocks.resolveSecrets.mock.calls;
   const call = calls[calls.length - 1];
   if (!call) {
     throw new Error("expected secret resolution call");
   }
-  // Secret resolution is scoped to the active channel/account; tests inspect
-  // the exact target set to avoid broad credential reads.
-  return call[0] as {
-    allowedPaths?: Set<string>;
-    config?: unknown;
-    targetIds?: Set<string>;
-  };
+  return call[0] as SecretCall;
 }
 
 const openClawToolsFactoryMocks = vi.hoisted(() => {
@@ -202,36 +160,30 @@ const openClawToolsFactoryMocks = vi.hoisted(() => {
     parameters: { type: "object", properties: {} },
     execute: vi.fn(async () => ({ type: "json", data: { ok: true } })),
   });
-  return {
-    tool,
-  };
+  return { tool };
 });
 
 vi.mock("../../infra/outbound/message-action-runner.js", async () => {
   const actual = await vi.importActual<
     typeof import("../../infra/outbound/message-action-runner.js")
   >("../../infra/outbound/message-action-runner.js");
-  return {
-    ...actual,
-    runMessageAction: mocks.runMessageAction,
-  };
+  return { ...actual, runMessageAction: mocks.dispatch };
 });
 
 vi.mock("../../config/config.js", async () => {
   const actual =
     await vi.importActual<typeof import("../../config/config.js")>("../../config/config.js");
-  return {
-    ...actual,
-    getRuntimeConfig: mocks.getRuntimeConfig,
-  };
+  return { ...actual, getRuntimeConfig: mocks.getConfig };
 });
 
+// mock-isolation: inspect secret resolution requests without contacting an operator Gateway.
 vi.mock("../../cli/command-secret-gateway.js", () => ({
-  resolveCommandSecretRefsViaGateway: mocks.resolveCommandSecretRefsViaGateway,
+  resolveCommandSecretRefsViaGateway: mocks.resolveSecrets,
 }));
 
+// mock-isolation: use the synthetic channel credential paths defined by this fixture.
 vi.mock("../../cli/command-secret-targets.js", () => ({
-  getScopedChannelsCommandSecretTargets: mocks.getScopedChannelsCommandSecretTargets,
+  getScopedChannelsCommandSecretTargets: mocks.secretTargets,
 }));
 
 vi.mock("../../channels/plugins/message-tool-api.js", () => ({
@@ -249,26 +201,22 @@ vi.mock("./cron-tool.js", () => ({
 vi.mock("./gateway-tool.js", () => ({
   createGatewayTool: () => openClawToolsFactoryMocks.tool("gateway"),
 }));
-vi.mock("./image-generate-tool.js", () => ({
-  createImageGenerateTool: () => null,
-}));
-vi.mock("./image-tool.js", () => ({
-  createImageTool: () => null,
-}));
+// mock-isolation: message discovery does not load image generation providers.
+vi.mock("./image-generate-tool.js", () => ({ createImageGenerateTool: () => null }));
+// mock-isolation: message discovery does not load image inspection providers.
+vi.mock("./image-tool.js", () => ({ createImageTool: () => null }));
 vi.mock("./manifest-capability-availability.js", () => ({
   hasSnapshotCapabilityAvailability: () => false,
   hasSnapshotProviderEnvAvailability: () => false,
   loadCapabilityMetadataSnapshot: () => ({ index: {}, plugins: [] }),
 }));
-vi.mock("./music-generate-tool.js", () => ({
-  createMusicGenerateTool: () => null,
-}));
+// mock-isolation: message discovery does not load music generation providers.
+vi.mock("./music-generate-tool.js", () => ({ createMusicGenerateTool: () => null }));
 vi.mock("./nodes-tool.js", () => ({
   createNodesTool: () => openClawToolsFactoryMocks.tool("nodes"),
 }));
-vi.mock("./pdf-tool.js", () => ({
-  createPdfTool: () => null,
-}));
+// mock-isolation: message discovery does not load PDF inspection providers.
+vi.mock("./pdf-tool.js", () => ({ createPdfTool: () => null }));
 vi.mock("./session-status-tool.js", () => ({
   createSessionStatusTool: () => openClawToolsFactoryMocks.tool("session_status"),
 }));
@@ -290,28 +238,33 @@ vi.mock("./sessions-yield-tool.js", () => ({
 vi.mock("./subagents-tool.js", () => ({
   createSubagentsTool: () => openClawToolsFactoryMocks.tool("subagents"),
 }));
-vi.mock("./tts-tool.js", () => ({
-  createTtsTool: () => openClawToolsFactoryMocks.tool("tts"),
-}));
-vi.mock("./video-generate-tool.js", () => ({
-  createVideoGenerateTool: () => null,
-}));
+// mock-isolation: provide only the TTS tool identity without loading speech providers.
+vi.mock("./tts-tool.js", () => ({ createTtsTool: () => openClawToolsFactoryMocks.tool("tts") }));
+// mock-isolation: message discovery does not load video generation providers.
+vi.mock("./video-generate-tool.js", () => ({ createVideoGenerateTool: () => null }));
 vi.mock("./web-tools.js", () => ({
   createWebFetchTool: () => openClawToolsFactoryMocks.tool("web_fetch"),
   createWebSearchTool: () => openClawToolsFactoryMocks.tool("web_search"),
 }));
 
-function mockSendResult(overrides: { channel?: string; to?: string } = {}) {
-  mocks.runMessageAction.mockClear();
-  mocks.runMessageAction.mockResolvedValue({
+function makeSendResult(
+  overrides: Partial<Extract<MessageActionResult, { kind: "send" }>> = {},
+): MessageActionResult {
+  return {
     kind: "send",
     action: "send",
-    channel: overrides.channel ?? "telegram",
-    to: overrides.to ?? "telegram:123",
+    channel: "telegram",
+    to: "telegram:123",
     handledBy: "plugin",
     payload: {},
     dryRun: true,
-  } satisfies MessageActionResult);
+    ...overrides,
+  };
+}
+
+function mockSendResult(overrides: { channel?: string; to?: string } = {}) {
+  mocks.dispatch.mockClear();
+  mocks.dispatch.mockResolvedValue(makeSendResult(overrides));
 }
 
 function getToolProperties(tool: ReturnType<CreateMessageTool>) {
@@ -322,33 +275,45 @@ function getActionEnum(properties: Record<string, unknown>) {
   return (properties.action as { enum?: string[] } | undefined)?.enum ?? [];
 }
 
-function expectStringSchema(
-  schema: unknown,
-  expected?: {
-    description?: string;
-  },
-) {
-  expect(schema).toMatchObject({ type: "string", ...expected });
-}
-
 const { runMessageAction: actualRunMessageAction } = await vi.importActual<
   typeof import("../../infra/outbound/message-action-runner.js")
 >("../../infra/outbound/message-action-runner.js");
 
 const mintedTurnCapabilities: string[] = [];
 
+function admitTurn(input: Parameters<typeof mintMessageActionTurnCapability>[0]) {
+  const messageActionTurnCapability = mintMessageActionTurnCapability(input);
+  mintedTurnCapabilities.push(messageActionTurnCapability);
+  return {
+    agentId: input.agentId,
+    runId: input.runId,
+    sessionId: input.sessionId,
+    agentSessionKey: input.sessionKey,
+    messageActionTurnCapability,
+  };
+}
+
+const secretRef = (id: string) => ({ source: "env", provider: "default", id });
+const channelConfig = (channel: string, config: Record<string, unknown>) => ({
+  channels: { [channel]: config },
+});
+const accountSecrets = (field: string, entries: Record<string, unknown>) =>
+  Object.fromEntries(Object.entries(entries).map(([id, value]) => [id, { [field]: value }]));
+const inboundMetadata = (label: string, value: Record<string, unknown>) =>
+  [markInboundContextLabel(label), "```json", JSON.stringify(value), "```"].join("\n");
+
 beforeEach(() => {
   resetGlobalHookRunner();
   resetPluginRuntimeStateForTest();
   resetDiagnosticSessionStateForTest();
-  mocks.runMessageAction.mockReset();
+  mocks.dispatch.mockReset();
   bootMocks.agentCommandFromSystem.mockReset();
-  mocks.getRuntimeConfig.mockReset().mockReturnValue({});
-  mocks.resolveCommandSecretRefsViaGateway.mockReset().mockImplementation(async ({ config }) => ({
+  mocks.getConfig.mockReset().mockReturnValue({});
+  mocks.resolveSecrets.mockReset().mockImplementation(async ({ config }) => ({
     resolvedConfig: config,
     diagnostics: [],
   }));
-  mocks.getScopedChannelsCommandSecretTargets.mockClear();
+  mocks.secretTargets.mockClear();
   registerPlugins();
 });
 
@@ -361,7 +326,6 @@ afterEach(() => {
 
 function createChannelPlugin(params: {
   id: string;
-  aliases?: string[];
   actions?: ChannelMessageActionName[];
   capabilities?: readonly ChannelMessageCapability[];
   toolSchema?: MessageToolSchema | ((params: MessageToolDiscoveryContext) => MessageToolSchema);
@@ -373,21 +337,11 @@ function createChannelPlugin(params: {
   outbound?: ChannelPlugin["outbound"];
 }): ChannelPlugin {
   return {
-    id: params.id as ChannelPlugin["id"],
-    meta: {
+    ...createChannelTestPluginBase({
       id: params.id as ChannelPlugin["id"],
-      label: params.id,
-      selectionLabel: params.id,
-      docsPath: `/channels/${params.id}`,
-      blurb: "Test channel",
-      aliases: params.aliases,
-    },
-    capabilities: { chatTypes: ["direct", "group"], media: true },
-    config: {
-      listAccountIds: () => ["default"],
-      resolveAccount: () => ({}),
-      ...params.config,
-    },
+      capabilities: { chatTypes: ["direct", "group"], media: true },
+      config: params.config,
+    }),
     ...(params.message ? { message: params.message } : {}),
     ...(params.messaging ? { messaging: params.messaging } : {}),
     ...(params.outbound ? { outbound: params.outbound } : {}),
@@ -410,13 +364,7 @@ function createChannelPlugin(params: {
 
 function registerPlugins(...plugins: ChannelPlugin[]) {
   setActivePluginRegistry(
-    createTestRegistry(
-      plugins.map((plugin) => ({
-        pluginId: plugin.id,
-        source: "test",
-        plugin,
-      })),
-    ),
+    createTestRegistry(plugins.map((plugin) => ({ pluginId: plugin.id, source: "test", plugin }))),
   );
 }
 
@@ -424,11 +372,11 @@ function registerMessagingPlugin(id: string, messaging: NonNullable<ChannelPlugi
   registerPlugins(createChannelPlugin({ id, messaging }));
 }
 
-async function executeSend(params: Parameters<typeof executeSendWithResult>[0]) {
-  return (await executeSendWithResult(params)).call;
+async function executeSend(params: Parameters<typeof sendWithResult>[0]) {
+  return (await sendWithResult(params)).call;
 }
 
-async function executeSendWithResult(params: {
+async function sendWithResult(params: {
   action: Record<string, unknown>;
   toolOptions?: Partial<Parameters<typeof createMessageTool>[0]>;
   toolCallId?: string;
@@ -436,13 +384,13 @@ async function executeSendWithResult(params: {
   const { config, ...toolOptions } = params.toolOptions ?? {};
   const tool = createMessageTool(toolOptions);
   if (config) {
-    mocks.getRuntimeConfig.mockReturnValueOnce(config);
+    mocks.getConfig.mockReturnValueOnce(config);
   }
   const result = await tool.execute(params.toolCallId ?? "1", {
     action: "send",
     ...params.action,
   });
-  return { call: lastRunMessageActionInput(), result };
+  return { call: lastAction(), result };
 }
 
 describe("message tool gateway timeout", () => {
@@ -451,22 +399,16 @@ describe("message tool gateway timeout", () => {
     async (dryRun) => {
       const notice = "The normalized message was delivered; do not retry.";
       const receipt = dryRun ? "Prepared reply" : "Sent reply";
-      mocks.runMessageAction.mockResolvedValue({
-        kind: "send",
-        action: "send",
-        channel: "telegram",
-        to: "telegram:123",
-        handledBy: "plugin",
-        payload: { ok: true },
-        normalization: { locationOmitted: true, notice },
-        toolResult: {
-          content: [{ type: "text", text: receipt }],
-          details: { dryRun },
-        },
-        dryRun,
-      } satisfies MessageActionResult);
+      mocks.dispatch.mockResolvedValue(
+        makeSendResult({
+          payload: { ok: true },
+          normalization: { locationOmitted: true, notice },
+          toolResult: { content: [{ type: "text", text: receipt }], details: { dryRun } },
+          dryRun,
+        }),
+      );
 
-      const { result } = await executeSendWithResult({
+      const { result } = await sendWithResult({
         action: { channel: "telegram", target: "telegram:123", message: "hello", dryRun },
       });
 
@@ -497,18 +439,11 @@ describe("message tool gateway timeout", () => {
         },
       },
     };
-    mocks.runMessageAction.mockResolvedValue({
-      kind: "send",
-      action: "send",
-      channel: "telegram",
-      to: "telegram:123",
-      handledBy: "core",
-      payload: sendResult,
-      sendResult,
-      dryRun: false,
-    } satisfies MessageActionResult);
+    mocks.dispatch.mockResolvedValue(
+      makeSendResult({ handledBy: "core", payload: sendResult, sendResult, dryRun: false }),
+    );
 
-    const { result } = await executeSendWithResult({
+    const { result } = await sendWithResult({
       action: { channel: "telegram", target: "telegram:123", message: "hello" },
     });
 
@@ -542,30 +477,29 @@ describe("message tool gateway timeout", () => {
   ])(
     "records final external delivery for $name",
     async ({ route, final, expected, partial, dryRun, plugin, webchat }) => {
-      mocks.runMessageAction.mockResolvedValue({
-        kind: "send",
-        action: "send",
-        channel: "telegram",
-        to: webchat ? "123" : "telegram:123",
-        handledBy: plugin ? "plugin" : "core",
-        payload: {
-          sourceReplyRoute: route,
-          messageId: "message-1",
-          ...(partial ? { status: "partial_failed" } : {}),
-        },
-        sendResult: {
-          channel: "telegram",
-          to: "telegram:123",
-          via: "direct",
-          mediaUrl: null,
-          deliveryStatus: partial ? "partial_failed" : "sent",
+      mocks.dispatch.mockResolvedValue(
+        makeSendResult({
+          to: webchat ? "123" : "telegram:123",
+          handledBy: plugin ? "plugin" : "core",
+          payload: {
+            sourceReplyRoute: route,
+            messageId: "message-1",
+            ...(partial ? { status: "partial_failed" } : {}),
+          },
+          sendResult: {
+            channel: "telegram",
+            to: "telegram:123",
+            via: "direct",
+            mediaUrl: null,
+            deliveryStatus: partial ? "partial_failed" : "sent",
+            dryRun: dryRun === true,
+            result: { channel: "telegram", messageId: "message-1" },
+          },
           dryRun: dryRun === true,
-          result: { channel: "telegram", messageId: "message-1" },
-        },
-        dryRun: dryRun === true,
-      } satisfies MessageActionResult);
+        }),
+      );
 
-      const { result } = await executeSendWithResult({
+      const { result } = await sendWithResult({
         action: { message: "hello", final },
         toolOptions: {
           agentSessionKey: "agent:main:telegram:group:123",
@@ -589,13 +523,11 @@ describe("message tool gateway timeout", () => {
     "validates timeoutMs=$timeoutMs before dispatch",
     async ({ timeoutMs, expected }) => {
       mockSendResult();
-      const send = executeSend({
-        action: { target: "telegram:123", message: "hi", timeoutMs },
-      });
+      const send = executeSend({ action: { target: "telegram:123", message: "hi", timeoutMs } });
       if (expected === undefined) {
         await expect(send).rejects.toThrow("timeoutMs must be a positive integer");
-        expect(mocks.resolveCommandSecretRefsViaGateway).not.toHaveBeenCalled();
-        expect(mocks.runMessageAction).not.toHaveBeenCalled();
+        expect(mocks.resolveSecrets).not.toHaveBeenCalled();
+        expect(mocks.dispatch).not.toHaveBeenCalled();
       } else {
         expect((await send)?.gateway?.timeoutMs).toBe(expected);
       }
@@ -607,27 +539,20 @@ describe("poll vote echo guard", () => {
   const currentChat = "iMessage;-;+15550001111";
   let sessionKeyCounter = 0;
 
-  // The echo record is session-scoped so it survives the run boundary between a
-  // vote and the follow-up text. Give each tool a unique session key so tests
-  // stay isolated; a shared key would cross-contaminate via the module map.
+  // Echo state survives runs; unique session keys isolate each test's guard.
   function createPollVoteTool(votedOption = "Blue", agentSessionKey?: string) {
     const sessionKey = agentSessionKey ?? `agent:test:imessage:direct:s${(sessionKeyCounter += 1)}`;
     registerPlugins(
       createChannelPlugin({
         id: "imessage",
         actions: ["poll-vote"],
-        config: {
-          listAccountIds: () => ["primary", "secondary"],
-        },
+        config: { listAccountIds: () => ["primary", "secondary"] },
         messageActionTargetAliases: {
-          "poll-vote": {
-            aliases: ["chatGuid"],
-            deliveryTargetAliases: ["chatGuid"],
-          },
+          "poll-vote": { aliases: ["chatGuid"], deliveryTargetAliases: ["chatGuid"] },
         },
       }),
     );
-    mocks.runMessageAction.mockImplementation(async ({ action }: { action: string }) =>
+    mocks.dispatch.mockImplementation(async ({ action }: { action: string }) =>
       action === "poll-vote"
         ? ({
             kind: "action",
@@ -641,15 +566,7 @@ describe("poll vote echo guard", () => {
             },
             dryRun: false,
           } as MessageActionResult)
-        : ({
-            kind: "send",
-            channel: "imessage",
-            action: "send",
-            to: currentChat,
-            handledBy: "plugin",
-            payload: {},
-            dryRun: false,
-          } as MessageActionResult),
+        : makeSendResult({ channel: "imessage", to: currentChat, dryRun: false }),
     );
     return createMessageTool({
       currentChannelProvider: "imessage",
@@ -721,46 +638,26 @@ describe("poll vote echo guard", () => {
         } else {
           expect(result.details).not.toMatchObject({ status: "suppressed" });
         }
-        expect(mocks.runMessageAction).toHaveBeenCalledTimes(suppressed ? 1 : 2);
+        expect(mocks.dispatch).toHaveBeenCalledTimes(suppressed ? 1 : 2);
       } finally {
         now.mockRestore();
       }
     },
   );
 
-  it("does not cross accounts, delivery targets, or conflicting target fields", async () => {
-    const accountTool = createPollVoteTool();
-    await castBlueVote(accountTool);
-    await accountTool.execute("send", {
-      action: "send",
-      channel: "imessage",
-      accountId: "secondary",
-      message: "Blue",
-    });
-    expect(mocks.runMessageAction).toHaveBeenCalledTimes(2);
-
-    const targetTool = createPollVoteTool();
-    await castBlueVote(targetTool, { chatGuid: "iMessage;-;+15559998888" });
-    await targetTool.execute("send", {
-      action: "send",
-      channel: "imessage",
-      message: "Blue",
-    });
-    expect(mocks.runMessageAction).toHaveBeenCalledTimes(4);
-
-    const conflictingTool = createPollVoteTool();
-    await castBlueVote(conflictingTool, {
-      target: currentChat,
-      chatGuid: "iMessage;-;+15559998888",
-    });
-    await conflictingTool.execute("send", {
-      action: "send",
-      channel: "imessage",
-      target: currentChat,
-      message: "Blue",
-    });
-
-    expect(mocks.runMessageAction).toHaveBeenCalledTimes(6);
+  it.each<[string, Record<string, unknown>, Record<string, unknown>]>([
+    ["accounts", {}, { accountId: "secondary" }],
+    ["delivery targets", { chatGuid: "iMessage;-;+15559998888" }, {}],
+    [
+      "conflicting fields",
+      { target: currentChat, chatGuid: "iMessage;-;+15559998888" },
+      { target: currentChat },
+    ],
+  ])("does not cross %s", async (_name, vote, send) => {
+    const tool = createPollVoteTool();
+    await castBlueVote(tool, vote);
+    await tool.execute("send", { action: "send", channel: "imessage", message: "Blue", ...send });
+    expect(mocks.dispatch).toHaveBeenCalledTimes(2);
   });
 
   it("keeps captured poll aliases when the active channel adapter changes", async () => {
@@ -774,7 +671,7 @@ describe("poll vote echo guard", () => {
     });
 
     expect(result.details).not.toMatchObject({ status: "suppressed" });
-    expect(mocks.runMessageAction).toHaveBeenCalledTimes(2);
+    expect(mocks.dispatch).toHaveBeenCalledTimes(2);
   });
 
   it("consumes the guard on the first same-route visible send", async () => {
@@ -785,13 +682,9 @@ describe("poll vote echo guard", () => {
       channel: "imessage",
       message: "Blue, because it matches our theme",
     });
-    await tool.execute("send-2", {
-      action: "send",
-      channel: "imessage",
-      message: "Blue",
-    });
+    await tool.execute("send-2", { action: "send", channel: "imessage", message: "Blue" });
 
-    expect(mocks.runMessageAction).toHaveBeenCalledTimes(3);
+    expect(mocks.dispatch).toHaveBeenCalledTimes(3);
   });
 });
 
@@ -818,6 +711,7 @@ describe("message tool secret scoping", () => {
     expect(tool.description).not.toContain("Normal final answers stay private");
   });
 
+  const sameMessage = { action: "send", message: "same", to: "123" };
   it("keeps direct operator authority on the in-process action only", async () => {
     mockSendResult();
 
@@ -850,7 +744,7 @@ describe("message tool secret scoping", () => {
 
     await tool.execute("call1", { action: "send", message: "hi" });
 
-    expect(lastRunMessageActionInput()?.inboundAudio).toBe(true);
+    expect(lastAction()?.inboundAudio).toBe(true);
   });
 
   it("preserves a host-supplied retry idempotency key", async () => {
@@ -865,41 +759,19 @@ describe("message tool secret scoping", () => {
   });
 
   it("keeps the Codex final control out of delivery and retry idempotency", async () => {
-    mocks.runMessageAction
+    mocks.dispatch
       .mockRejectedValueOnce(new Error("gateway timeout"))
-      .mockResolvedValueOnce({
-        kind: "send",
-        action: "send",
-        channel: "telegram",
-        to: "telegram:123",
-        handledBy: "plugin",
-        payload: {},
-        dryRun: true,
-      } satisfies MessageActionResult);
+      .mockResolvedValueOnce(makeSendResult());
 
-    const tool = createMessageTool({
-      runId: "run-message-tool",
-    });
+    const tool = createMessageTool({ runId: "run-message-tool" });
 
     await expect(
-      tool.execute("message_111_1", {
-        action: "send",
-        message: "same",
-        to: "123",
-        timeoutMs: 1,
-        final: true,
-      }),
+      tool.execute("message_111_1", { ...sameMessage, timeoutMs: 1, final: true }),
     ).rejects.toThrow("gateway timeout");
-    const first = firstRunMessageActionInput();
+    const first = firstAction();
 
-    await tool.execute("message_222_1", {
-      action: "send",
-      timeoutMs: 30_000,
-      to: "123",
-      message: "same",
-      final: false,
-    });
-    const second = lastRunMessageActionInput();
+    await tool.execute("message_222_1", { ...sameMessage, timeoutMs: 30_000, final: false });
+    const second = lastAction();
 
     expect(first?.params?.idempotencyKey).toBe(second?.params?.idempotencyKey);
     expect(first?.params).not.toHaveProperty("final");
@@ -911,13 +783,13 @@ describe("message tool secret scoping", () => {
     async (remote) => {
       mockSendResult();
       if (remote) {
-        mocks.getRuntimeConfig.mockReturnValue({
+        mocks.getConfig.mockReturnValue({
           gateway: { mode: "remote", remote: { url: "wss://gateway.example" } },
         });
       }
       const sessionKey = "agent:main:telegram:direct:123";
       const runSessionKey = "agent:main:main";
-      const turnCapability = mintMessageActionTurnCapability({
+      const identity = admitTurn({
         agentId: "main",
         runId: "run-source-reply",
         sessionId: "session-source-reply",
@@ -929,14 +801,9 @@ describe("message tool secret scoping", () => {
           currentSourceTurnId: "source-turn-1",
         },
       });
-      mintedTurnCapabilities.push(turnCapability);
       const tool = createMessageTool({
-        agentId: "main",
-        agentSessionKey: sessionKey,
+        ...identity,
         runSessionKey,
-        runId: "run-source-reply",
-        sessionId: "session-source-reply",
-        messageActionTurnCapability: turnCapability,
         sourceReplyDeliveryMode: "message_tool_only",
       });
 
@@ -946,13 +813,9 @@ describe("message tool secret scoping", () => {
         to: "123",
         final: false,
       });
-      await tool.execute("message_terminal", {
-        action: "send",
-        message: "done",
-        to: "123",
-      });
+      await tool.execute("message_terminal", { action: "send", message: "done", to: "123" });
 
-      const [progress, terminal] = mocks.runMessageAction.mock.calls.map((call) => call[0]);
+      const [progress, terminal] = mocks.dispatch.mock.calls.map((call) => call[0]);
       expect(progress?.sourceReplyFinal).toBe(false);
       expect(terminal?.sourceReplyFinal).toBe(true);
       expect(progress?.sourceReplySessionKey).toBe(runSessionKey);
@@ -971,23 +834,16 @@ describe("message tool secret scoping", () => {
   it("keeps source-less message-tool-only sends outside terminal reconciliation", async () => {
     mockSendResult();
     const sessionKey = "agent:main:telegram:direct:scheduled";
-    const sourceLessCapability = mintMessageActionTurnCapability({
+    const identity = admitTurn({
       agentId: "main",
       runId: "run-source-less",
       sessionId: "session-source-less",
       sessionKey,
-      toolContext: {
-        currentChannelProvider: "telegram",
-        currentChannelId: "scheduled",
-      },
+      toolContext: { currentChannelProvider: "telegram", currentChannelId: "scheduled" },
     });
-    mintedTurnCapabilities.push(sourceLessCapability);
     const createSourceLessTool = (messageActionTurnCapability?: string) =>
       createMessageTool({
-        agentId: "main",
-        agentSessionKey: sessionKey,
-        runId: "run-source-less",
-        sessionId: "session-source-less",
+        ...identity,
         messageActionTurnCapability,
         sourceReplyDeliveryMode: "message_tool_only",
       });
@@ -997,13 +853,13 @@ describe("message tool secret scoping", () => {
       message: "scheduled update",
       to: "scheduled",
     });
-    await createSourceLessTool(sourceLessCapability).execute("message-room-event", {
+    await createSourceLessTool(identity.messageActionTurnCapability).execute("message-room-event", {
       action: "send",
       message: "ambient update",
       to: "scheduled",
     });
 
-    for (const [input] of mocks.runMessageAction.mock.calls) {
+    for (const [input] of mocks.dispatch.mock.calls) {
       expect(input.sourceReplyDeliveryMode).toBe("message_tool_only");
       expect(input.sourceReplyFinal).toBeUndefined();
       expect(input.sourceReplyToolCallId).toBeUndefined();
@@ -1012,7 +868,7 @@ describe("message tool secret scoping", () => {
 
   it("rejects a supplied turn capability after revocation", async () => {
     const sessionKey = "agent:main:telegram:direct:revoked";
-    const revokedCapability = mintMessageActionTurnCapability({
+    const identity = admitTurn({
       agentId: "main",
       runId: "run-revoked",
       sessionId: "session-revoked",
@@ -1023,30 +879,22 @@ describe("message tool secret scoping", () => {
         currentSourceTurnId: "channel-user:v1:revoked",
       },
     });
-    revokeMessageActionTurnCapability(revokedCapability);
+    revokeMessageActionTurnCapability(identity.messageActionTurnCapability);
     const tool = createMessageTool({
-      agentId: "main",
-      agentSessionKey: sessionKey,
-      runId: "run-revoked",
-      sessionId: "session-revoked",
-      messageActionTurnCapability: revokedCapability,
+      ...identity,
       sourceReplyDeliveryMode: "message_tool_only",
     });
 
     await expect(
-      tool.execute("message-revoked", {
-        action: "send",
-        message: "must not send",
-        to: "revoked",
-      }),
+      tool.execute("message-revoked", { action: "send", message: "must not send", to: "revoked" }),
     ).rejects.toThrow("message action turn capability is no longer active");
-    expect(mocks.runMessageAction).not.toHaveBeenCalled();
+    expect(mocks.dispatch).not.toHaveBeenCalled();
   });
 
   it("uses separate autogenerated idempotency keys for parallel identical sends", async () => {
     const pending: Array<(value: MessageActionResult) => void> = [];
     const dispatched = createDeferredCore();
-    mocks.runMessageAction.mockImplementation(
+    mocks.dispatch.mockImplementation(
       () =>
         new Promise<MessageActionResult>((resolve) => {
           pending.push(resolve);
@@ -1056,40 +904,22 @@ describe("message tool secret scoping", () => {
         }),
     );
 
-    const tool = createMessageTool({
-      runId: "run-message-tool",
-    });
+    const tool = createMessageTool({ runId: "run-message-tool" });
 
-    const firstResult = tool.execute("message_111_1", {
-      action: "send",
-      message: "same",
-      to: "123",
-    });
-    const secondResult = tool.execute("message_222_1", {
-      action: "send",
-      to: "123",
-      message: "same",
-    });
+    const firstResult = tool.execute("message_111_1", { ...sameMessage });
+    const secondResult = tool.execute("message_222_1", { ...sameMessage });
 
     const results = Promise.all([firstResult, secondResult]);
     void results.catch(dispatched.reject);
     try {
       await dispatched.promise;
-      expect(mocks.runMessageAction).toHaveBeenCalledTimes(2);
-      const first = mocks.runMessageAction.mock.calls[0]?.[0] as RunMessageActionInput | undefined;
-      const second = mocks.runMessageAction.mock.calls[1]?.[0] as RunMessageActionInput | undefined;
+      expect(mocks.dispatch).toHaveBeenCalledTimes(2);
+      const first = mocks.dispatch.mock.calls[0]?.[0] as RunMessageActionInput | undefined;
+      const second = mocks.dispatch.mock.calls[1]?.[0] as RunMessageActionInput | undefined;
       expect(first?.params?.idempotencyKey).not.toBe(second?.params?.idempotencyKey);
     } finally {
       for (const resolve of pending) {
-        resolve({
-          kind: "send",
-          action: "send",
-          channel: "telegram",
-          to: "telegram:123",
-          handledBy: "plugin",
-          payload: {},
-          dryRun: true,
-        });
+        resolve(makeSendResult());
       }
       await results;
     }
@@ -1098,124 +928,72 @@ describe("message tool secret scoping", () => {
   it("keeps nested delivery fields in autogenerated idempotency keys", async () => {
     mockSendResult();
 
-    const first = await executeSend({
-      action: {
-        message: "pay",
-        channelData: { button: { idempotencyKey: "invoice-A" } },
-      },
-      toolOptions: { runId: "run-message-tool" },
-    });
-    const second = await executeSend({
-      action: {
-        message: "pay",
-        channelData: { button: { idempotencyKey: "invoice-B" } },
-      },
-      toolOptions: { runId: "run-message-tool" },
-    });
+    const sendInvoice = (idempotencyKey: string) =>
+      executeSend({
+        action: { message: "pay", channelData: { button: { idempotencyKey } } },
+        toolOptions: { runId: "run-message-tool" },
+      });
+    const first = await sendInvoice("invoice-A");
+    const second = await sendInvoice("invoice-B");
 
     expect(first?.params?.idempotencyKey).not.toBe(second?.params?.idempotencyKey);
   });
 
-  it.each<{
-    name: string;
-    channel: string;
-    sessionKey: string;
-    expectedTarget: string;
-    secretField: string;
-    secretId: string;
-    register?: boolean;
-    declareUserPrefix?: boolean;
-    accountId?: string;
-    thread?: string;
-  }>([
-    {
-      name: "empty opaque segments",
-      channel: "telegram",
-      sessionKey: "agent:main:telegram:group:room::part",
-      expectedTarget: "room::part",
-      secretField: "botToken",
-      secretId: "TELEGRAM_BOT_TOKEN",
-    },
-    {
-      name: "declared user prefix",
-      channel: "discord",
-      sessionKey: "agent:main:discord:direct:123456789",
-      expectedTarget: "user:123456789",
-      secretField: "token",
-      secretId: "DISCORD_TOKEN",
-      register: true,
-      declareUserPrefix: true,
-    },
-    {
-      name: "native target",
-      channel: "telegram",
-      sessionKey: "agent:main:telegram:direct:123456789",
-      expectedTarget: "123456789",
-      secretField: "botToken",
-      secretId: "TELEGRAM_BOT_TOKEN",
-      register: true,
-    },
-    {
-      name: "account named direct",
-      channel: "discord",
-      sessionKey: "agent:main:discord:direct:direct:123456789",
-      expectedTarget: "user:123456789",
-      secretField: "token",
-      secretId: "DISCORD_TOKEN",
-      register: true,
-      declareUserPrefix: true,
-      accountId: "direct",
-    },
-    {
-      name: "legacy dm thread",
-      channel: "slack",
-      sessionKey: "agent:main:slack:dm:u123:thread:171.222",
-      expectedTarget: "user:u123",
-      secretField: "botToken",
-      secretId: "SLACK_BOT_TOKEN",
-      register: true,
-      declareUserPrefix: true,
-      thread: "171.222",
-    },
+  it.each<
+    [
+      string,
+      "telegram" | "discord" | "slack",
+      string,
+      string,
+      { register?: boolean; userPrefix?: boolean; accountId?: string; thread?: string },
+    ]
+  >([
+    ["empty opaque segments", "telegram", "group:room::part", "room::part", {}],
+    [
+      "declared user prefix",
+      "discord",
+      "direct:123456789",
+      "user:123456789",
+      { register: true, userPrefix: true },
+    ],
+    ["native target", "telegram", "direct:123456789", "123456789", { register: true }],
+    [
+      "account named direct",
+      "discord",
+      "direct:direct:123456789",
+      "user:123456789",
+      { register: true, userPrefix: true, accountId: "direct" },
+    ],
+    [
+      "legacy dm thread",
+      "slack",
+      "dm:u123:thread:171.222",
+      "user:u123",
+      { register: true, userPrefix: true, thread: "171.222" },
+    ],
   ])(
-    "infers $name after the ambient channel drifts to webchat",
-    async ({
-      channel,
-      sessionKey,
-      expectedTarget,
-      secretField,
-      secretId,
-      register,
-      declareUserPrefix,
-      accountId,
-      thread,
-    }) => {
+    "infers %s after the ambient channel drifts to webchat",
+    async (_name, channel, route, expectedTarget, { register, userPrefix, accountId, thread }) => {
+      const sessionKey = `agent:main:${channel}:${route}`;
+      const secretField = channel === "discord" ? "token" : "botToken";
+      const secretId = `${channel.toUpperCase()}_${channel === "discord" ? "TOKEN" : "BOT_TOKEN"}`;
       if (register) {
-        registerMessagingPlugin(
-          channel,
-          declareUserPrefix ? { directTargetStyle: "user-prefixed" } : {},
-        );
+        registerMessagingPlugin(channel, userPrefix ? { directTargetStyle: "user-prefixed" } : {});
       }
       mockSendResult({ channel, to: expectedTarget });
       const input = await executeSend({
         action: { message: "hi" },
         toolOptions: {
-          config: {
-            channels: {
-              [channel]: {
-                [secretField]: { source: "env", provider: "default", id: secretId },
-                ...(accountId
-                  ? {
-                      accounts: {
-                        [accountId]: {
-                          token: { source: "env", provider: "default", id: "DISCORD_DIRECT_TOKEN" },
-                        },
-                      },
-                    }
-                  : {}),
-              },
-            },
-          },
+          config: channelConfig(channel, {
+            [secretField]: secretRef(secretId),
+            ...(accountId
+              ? {
+                  accounts: accountSecrets("token", {
+                    [accountId]: secretRef("DISCORD_DIRECT_TOKEN"),
+                  }),
+                }
+              : {}),
+          }),
           sourceReplyDeliveryMode: "message_tool_only",
           currentChannelProvider: "webchat",
           agentSessionKey: sessionKey,
@@ -1233,7 +1011,7 @@ describe("message tool secret scoping", () => {
         expect(input?.toolContext?.currentThreadTs).toBe(thread);
         expect(input?.toolContext?.replyToMode).toBe("all");
       }
-      expect(Array.from(latestSecretResolveCall().targetIds ?? [])).toEqual([
+      expect(Array.from(lastSecretCall().targetIds ?? [])).toEqual([
         `channels.${channel}.${secretField}`,
         ...(accountId ? [`channels.${channel}.accounts.${accountId}.${secretField}`] : []),
       ]);
@@ -1280,8 +1058,8 @@ describe("message tool secret scoping", () => {
       }),
     ).rejects.toThrow(testCase.error);
 
-    expect(mocks.resolveCommandSecretRefsViaGateway).not.toHaveBeenCalled();
-    expect(mocks.runMessageAction).not.toHaveBeenCalled();
+    expect(mocks.resolveSecrets).not.toHaveBeenCalled();
+    expect(mocks.dispatch).not.toHaveBeenCalled();
   });
 
   it.each(
@@ -1324,10 +1102,7 @@ describe("message tool secret scoping", () => {
       const slackPlugin = createChannelPlugin({
         id: "slack",
         actions: ["send"],
-        config: {
-          listAccountIds: () => ["alternate"],
-          resolveAccount: () => ({ enabled: true }),
-        },
+        config: { listAccountIds: () => ["alternate"], resolveAccount: () => ({ enabled: true }) },
         outbound: { deliveryMode: "direct", sendText: vi.fn() as never },
       });
       registerPlugins(googleChatPlugin, slackPlugin);
@@ -1362,16 +1137,12 @@ describe("message tool secret scoping", () => {
         config: {
           channels: {
             googlechat: {
-              accounts: {
-                current: { serviceAccount: "current-credentials" },
-                alternate: { serviceAccount: "alternate-credentials" },
-              },
+              accounts: accountSecrets("serviceAccount", {
+                current: "current-credentials",
+                alternate: "alternate-credentials",
+              }),
             },
-            slack: {
-              accounts: {
-                alternate: { botToken: "alternate-token" },
-              },
-            },
+            slack: { accounts: accountSecrets("botToken", { alternate: "alternate-token" }) },
           },
         } as never,
         currentChannelProvider: "googlechat",
@@ -1397,16 +1168,16 @@ describe("message tool secret scoping", () => {
 
       if (rejected) {
         await expect(invocation).rejects.toThrow("does not match the trusted current account");
-        expect(mocks.resolveCommandSecretRefsViaGateway).not.toHaveBeenCalled();
-        expect(mocks.runMessageAction).not.toHaveBeenCalled();
+        expect(mocks.resolveSecrets).not.toHaveBeenCalled();
+        expect(mocks.dispatch).not.toHaveBeenCalled();
         return;
       }
 
       await expect(invocation).resolves.toBeDefined();
-      expect(mocks.resolveCommandSecretRefsViaGateway).toHaveBeenCalledOnce();
-      expect(mocks.runMessageAction).toHaveBeenCalledOnce();
+      expect(mocks.resolveSecrets).toHaveBeenCalledOnce();
+      expect(mocks.dispatch).toHaveBeenCalledOnce();
       if (expectedRunnerChannel !== undefined) {
-        expect(firstRunMessageActionInput()?.params?.channel).toBe(expectedRunnerChannel);
+        expect(firstAction()?.params?.channel).toBe(expectedRunnerChannel);
       }
     },
   );
@@ -1436,18 +1207,10 @@ describe("message tool secret scoping", () => {
     const rawConfig = {
       channels: {
         slack: {
-          accounts: {
-            shared: {
-              botToken: { source: "env", provider: "default", id: "SLACK_SHARED_TOKEN" },
-            },
-          },
+          accounts: accountSecrets("botToken", { shared: secretRef("SLACK_SHARED_TOKEN") }),
         },
         telegram: {
-          accounts: {
-            shared: {
-              botToken: { source: "env", provider: "default", id: "TELEGRAM_SHARED_TOKEN" },
-            },
-          },
+          accounts: accountSecrets("botToken", { shared: secretRef("TELEGRAM_SHARED_TOKEN") }),
         },
       },
     };
@@ -1465,20 +1228,15 @@ describe("message tool secret scoping", () => {
       message: "hi",
     });
 
-    expect(mocks.getScopedChannelsCommandSecretTargets).toHaveBeenCalledWith({
+    expect(mocks.secretTargets).toHaveBeenCalledWith({
       config: rawConfig,
       channel: undefined,
       channels: ["slack"],
       accountId: "shared",
     });
-    const secretResolveCall = latestSecretResolveCall();
-    expect(secretResolveCall.targetIds).toEqual(
-      new Set(["channels.slack.accounts.shared.botToken"]),
-    );
-    expect(secretResolveCall.allowedPaths).toEqual(
-      new Set(["channels.slack.accounts.shared.botToken"]),
-    );
-    expect(firstRunMessageActionInput()?.broadcastAccountPlan).toEqual({
+    const targets = new Set(["channels.slack.accounts.shared.botToken"]);
+    expect(lastSecretCall()).toMatchObject({ targetIds: targets, allowedPaths: targets });
+    expect(firstAction()?.broadcastAccountPlan).toEqual({
       accountId: "shared",
       candidateChannels: ["slack", "telegram"],
       secretChannels: ["slack"],
@@ -1489,27 +1247,15 @@ describe("message tool secret scoping", () => {
     mockSendResult({ channel: "discord", to: "channel:123" });
     const plugin = createChannelPlugin({ id: "discord", actions: ["send"] });
     registerPlugins(plugin);
-    const rawConfig = {
-      channels: {
-        discord: {
-          token: { source: "env", provider: "default", id: "DISCORD_BOT_TOKEN" },
-          accounts: {
-            ops: { token: { source: "env", provider: "default", id: "DISCORD_OPS_TOKEN" } },
-          },
-        },
-      },
-    };
-    const resolvedConfig = {
-      channels: {
-        discord: {
-          token: "resolved-discord-token",
-          accounts: {
-            ops: { token: "resolved-discord-ops-token" },
-          },
-        },
-      },
-    };
-    mocks.resolveCommandSecretRefsViaGateway.mockResolvedValueOnce({
+    const rawConfig = channelConfig("discord", {
+      token: secretRef("DISCORD_BOT_TOKEN"),
+      accounts: accountSecrets("token", { ops: secretRef("DISCORD_OPS_TOKEN") }),
+    });
+    const resolvedConfig = channelConfig("discord", {
+      token: "resolved-discord-token",
+      accounts: accountSecrets("token", { ops: "resolved-discord-ops-token" }),
+    });
+    mocks.resolveSecrets.mockResolvedValueOnce({
       resolvedConfig,
       diagnostics: [],
     });
@@ -1521,153 +1267,151 @@ describe("message tool secret scoping", () => {
       agentAccountId: "ops",
     });
 
-    await tool.execute("1", {
-      action: "send",
-      message: "hi",
-    });
+    await tool.execute("1", { action: "send", message: "hi" });
 
-    const secretResolveCall = latestSecretResolveCall();
+    const secretResolveCall = lastSecretCall();
     expect(secretResolveCall.config).toBe(rawConfig);
-    expect(secretResolveCall.targetIds).toEqual(
-      new Set(["channels.discord.token", "channels.discord.accounts.ops.token"]),
-    );
-    expect(secretResolveCall.allowedPaths).toEqual(
-      new Set(["channels.discord.token", "channels.discord.accounts.ops.token"]),
-    );
-    expect(firstRunMessageActionInput()?.cfg).toBe(resolvedConfig);
+    const targets = new Set(["channels.discord.token", "channels.discord.accounts.ops.token"]);
+    expect(secretResolveCall).toMatchObject({ targetIds: targets, allowedPaths: targets });
+    expect(firstAction()?.cfg).toBe(resolvedConfig);
   });
 });
 
-describe("message tool delivery mode schema", () => {
-  it.each([false, true])("respects a prepared catalog absence: %s", (preparedAbsent) => {
-    registerPlugins(
-      createChannelPlugin({
-        id: "discord",
-        actions: ["send"],
-        message: {
-          durableFinal: {
-            capabilities: { reconcileUnknownSend: true },
-            reconcileUnknownSend: async () => ({ status: "not_sent" }),
-          },
+it.each([false, true])("respects a prepared catalog absence: %s", (preparedAbsent) => {
+  registerPlugins(
+    createChannelPlugin({
+      id: "discord",
+      actions: ["send"],
+      message: {
+        durableFinal: {
+          capabilities: { reconcileUnknownSend: true },
+          reconcileUnknownSend: async () => ({ status: "not_sent" }),
         },
-      }),
-    );
-    const tool = createMessageTool({
-      config: {},
-      currentChannelProvider: "discord",
-      preparedMessageToolCatalog: preparedAbsent ? EMPTY_PREPARED_MESSAGE_TOOL_CATALOG : undefined,
-    });
-    const bestEffort = getToolProperties(tool).bestEffort as
-      | { description?: string; type?: string }
-      | undefined;
-    if (preparedAbsent) {
-      expect(bestEffort).toBeUndefined();
-    } else {
-      expect(bestEffort?.type).toBe("boolean");
-      expect(bestEffort?.description).toContain("requiring durable delivery");
-    }
+      },
+    }),
+  );
+  const tool = createMessageTool({
+    config: {},
+    currentChannelProvider: "discord",
+    preparedMessageToolCatalog: preparedAbsent ? EMPTY_PREPARED_MESSAGE_TOOL_CATALOG : undefined,
   });
+  const bestEffort = getToolProperties(tool).bestEffort as
+    | { description?: string; type?: string }
+    | undefined;
+  if (preparedAbsent) {
+    expect(bestEffort).toBeUndefined();
+  } else {
+    expect(bestEffort?.type).toBe("boolean");
+    expect(bestEffort?.description).toContain("requiring durable delivery");
+  }
+});
+it.each<{
+  name: string;
+  options: Parameters<typeof createOpenClawTools>[0];
+  action: Record<string, unknown>;
+  expected: Record<string, unknown>;
+}>([
+  {
+    name: "agentThreadId",
+    options: {
+      agentSessionKey: "agent:main:slack:channel:c123:thread:111.222",
+      currentChannelId: "channel:C123",
+      agentThreadId: "111.222",
+    },
+    action: { message: "stay in thread" },
+    expected: { currentThreadTs: "111.222", replyToMode: "all" },
+  },
+  {
+    name: "routable DM target",
+    options: {
+      currentChannelId: "D123",
+      currentChatType: "direct",
+      currentMessagingTarget: "user:U123",
+      currentThreadTs: "111.222",
+      replyToMode: "all",
+    },
+    action: { target: "user:U123", message: "stay in DM thread" },
+    expected: {
+      currentChannelId: "D123",
+      currentChatType: "direct",
+      currentMessagingTarget: "user:U123",
+      currentChannelProvider: "slack",
+      currentThreadTs: "111.222",
+      replyToMode: "all",
+    },
+  },
+])("forwards $name through createOpenClawTools", async ({ options, action, expected }) => {
+  mockSendResult({
+    channel: "slack",
+    to: typeof action.target === "string" ? action.target : "channel:C123",
+  });
+  registerPlugins(createChannelPlugin({ id: "slack", actions: ["send"] }));
+  const tool = createOpenClawTools({ config: {}, agentChannel: "slack", ...options }).find(
+    (candidate) => candidate.name === "message",
+  );
+  if (!tool) {
+    throw new Error("message tool not found");
+  }
+  await tool.execute("1", { action: "send", channel: "slack", ...action });
+  expect(firstAction()?.toolContext).toMatchObject(expected);
 });
 
-describe("message tool agent routing", () => {
-  it.each<{
-    name: string;
-    options: Parameters<typeof createOpenClawTools>[0];
-    action: Record<string, unknown>;
-    expected: Record<string, unknown>;
-  }>([
-    {
-      name: "agentThreadId",
-      options: {
-        agentSessionKey: "agent:main:slack:channel:c123:thread:111.222",
-        currentChannelId: "channel:C123",
-        agentThreadId: "111.222",
-      },
-      action: { message: "stay in thread" },
-      expected: { currentThreadTs: "111.222", replyToMode: "all" },
-    },
-    {
-      name: "routable DM target",
-      options: {
-        currentChannelId: "D123",
-        currentChatType: "direct",
-        currentMessagingTarget: "user:U123",
-        currentThreadTs: "111.222",
-        replyToMode: "all",
-      },
-      action: { target: "user:U123", message: "stay in DM thread" },
-      expected: {
-        currentChannelId: "D123",
-        currentChatType: "direct",
-        currentMessagingTarget: "user:U123",
-        currentChannelProvider: "slack",
-        currentThreadTs: "111.222",
-        replyToMode: "all",
-      },
-    },
-  ])("forwards $name through createOpenClawTools", async ({ options, action, expected }) => {
-    mockSendResult({
-      channel: "slack",
-      to: typeof action.target === "string" ? action.target : "channel:C123",
-    });
-    registerPlugins(createChannelPlugin({ id: "slack", actions: ["send"] }));
-    const tool = createOpenClawTools({ config: {}, agentChannel: "slack", ...options }).find(
+it("keeps the tool definition stable through createOpenClawTools", () => {
+  const tools = (["automatic", "message_tool_only"] as const).map((sourceReplyDeliveryMode) =>
+    createOpenClawTools({ config: {}, sourceReplyDeliveryMode }).find(
       (candidate) => candidate.name === "message",
-    );
-    if (!tool) {
-      throw new Error("message tool not found");
-    }
-    await tool.execute("1", { action: "send", channel: "slack", ...action });
-    expect(firstRunMessageActionInput()?.toolContext).toMatchObject(expected);
-  });
-
-  it("keeps the tool definition stable through createOpenClawTools", () => {
-    const tools = (["automatic", "message_tool_only"] as const).map((sourceReplyDeliveryMode) =>
-      createOpenClawTools({ config: {}, sourceReplyDeliveryMode }).find(
-        (candidate) => candidate.name === "message",
-      ),
-    );
-    expect(tools[0]).toBeDefined();
-    expect(tools[1]?.description).toBe(tools[0]?.description);
-    expect(tools[1]?.parameters).toEqual(tools[0]?.parameters);
-    expect(getToolProperties(tools[1]!).final).toMatchObject({ type: "boolean" });
-  });
+    ),
+  );
+  expect(tools[0]).toBeDefined();
+  expect(tools[1]?.description).toBe(tools[0]?.description);
+  expect(tools[1]?.parameters).toEqual(tools[0]?.parameters);
+  expect(getToolProperties(tools[1]!).final).toMatchObject({ type: "boolean" });
 });
-
 describe("message tool explicit target guard", () => {
-  it("records separate redacted denials when every broadcast target is invalid", async () => {
+  async function collectDecisions(
+    scope: string,
+    sessionKey: string,
+    run: (identity: Parameters<typeof withGatewayToolCallerIdentity>[0]) => Promise<void>,
+  ) {
     const receipts: DecisionReceiptV1[] = [];
-    const clearSink = configureMessageActionDecisionSink((receipt) => {
+    const clear = configureMessageActionDecisionSink((receipt) => {
       receipts.push(receipt);
       return true;
     });
-    const identity = {
-      agentId: "main",
-      sessionKey: "agent:main:qa-channel:direct:source",
-      executionIdentityToken: createExecutionIdentityAdmissionToken("run-message-decisions", {
-        contextId: "context-message-decisions",
-        executionId: "execution-message-decisions",
-        now: 100,
-      }),
-    };
     try {
-      registerPlugins(workspaceTestPlugin);
-      mocks.runMessageAction.mockImplementationOnce(actualRunMessageAction as never);
-      const tool = createMessageTool({
-        config: workspaceConfig,
-      });
-      const result = await withGatewayToolCallerIdentity(identity, () =>
-        tool.execute("invalid-broadcast-target", {
-          action: "broadcast",
-          channel: "workspace",
-          targets: ["not-a-target", "also-not-a-target"],
-          message: "hi",
+      await run({
+        agentId: "main",
+        sessionKey,
+        executionIdentityToken: createExecutionIdentityAdmissionToken(`run-${scope}`, {
+          contextId: `context-${scope}`,
+          executionId: `execution-${scope}`,
+          now: 100,
         }),
-      );
-      expect(result.details).toHaveProperty("messageDelivery.status", "failed");
+      });
     } finally {
-      clearSink();
+      clear();
     }
+    return receipts;
+  }
+  it("records separate redacted denials when every broadcast target is invalid", async () => {
+    const receipts = await collectDecisions(
+      "message-decisions",
+      "agent:main:qa-channel:direct:source",
+      async (identity) => {
+        registerPlugins(workspaceTestPlugin);
+        mocks.dispatch.mockImplementationOnce(actualRunMessageAction as never);
+        const tool = createMessageTool({ config: workspaceConfig });
+        const result = await withGatewayToolCallerIdentity(identity, () =>
+          tool.execute("invalid-broadcast-target", {
+            action: "broadcast",
+            channel: "workspace",
+            targets: ["not-a-target", "also-not-a-target"],
+            message: "hi",
+          }),
+        );
+        expect(result.details).toHaveProperty("messageDelivery.status", "failed");
+      },
+    );
     const denial = expect.objectContaining({
       contextId: "context-message-decisions",
       executionId: "execution-message-decisions",
@@ -1686,54 +1430,37 @@ describe("message tool explicit target guard", () => {
   });
 
   it("rejects a target removed by a hook before the mutation boundary", async () => {
-    const receipts: DecisionReceiptV1[] = [];
-    const clearSink = configureMessageActionDecisionSink((receipt) => {
-      receipts.push(receipt);
-      return true;
-    });
-    const identity = {
-      agentId: "main",
-      sessionKey: "agent:main:heartbeat",
-      executionIdentityToken: createExecutionIdentityAdmissionToken("run-hook-target-removal", {
-        contextId: "context-hook-target-removal",
-        executionId: "execution-hook-target-removal",
-        now: 100,
-      }),
-    };
-    initializeGlobalHookRunner(
-      createMockPluginRegistry([
-        {
-          hookName: "before_tool_call",
-          handler: async () => ({ params: { target: "" } }),
-        },
-      ]),
-    );
-    const tool = wrapToolWithBeforeToolCallHook(
-      createMessageTool({
-        requireExplicitTarget: true,
-        currentChannelProvider: "telegram",
-        currentChannelId: "telegram:dm-user-1",
-      }),
-      { agentId: "main", sessionKey: "agent:main:heartbeat" },
-    );
     const toolCallId = "heartbeat-target-removed";
-
-    try {
-      await expect(
-        withGatewayToolCallerIdentity(identity, () =>
-          tool.execute(toolCallId, {
-            action: "send",
-            target: "telegram:dm-user-1",
-            message: "HEARTBEAT_OK",
+    const receipts = await collectDecisions(
+      "hook-target-removal",
+      "agent:main:heartbeat",
+      async (identity) => {
+        initializeGlobalHookRunner(
+          createMockPluginRegistry([
+            { hookName: "before_tool_call", handler: async () => ({ params: { target: "" } }) },
+          ]),
+        );
+        const tool = wrapToolWithBeforeToolCallHook(
+          createMessageTool({
+            requireExplicitTarget: true,
+            currentChannelProvider: "telegram",
+            currentChannelId: "telegram:dm-user-1",
           }),
-        ),
-      ).rejects.toThrow(/Explicit message target required/i);
-    } finally {
-      clearSink();
-    }
-
+          { agentId: "main", sessionKey: "agent:main:heartbeat" },
+        );
+        await expect(
+          withGatewayToolCallerIdentity(identity, () =>
+            tool.execute(toolCallId, {
+              action: "send",
+              target: "telegram:dm-user-1",
+              message: "HEARTBEAT_OK",
+            }),
+          ),
+        ).rejects.toThrow(/Explicit message target required/i);
+      },
+    );
     expect(consumePreExecutionBlockedToolCall(toolCallId)).toBe(true);
-    expect(mocks.runMessageAction).not.toHaveBeenCalled();
+    expect(mocks.dispatch).not.toHaveBeenCalled();
     expect(receipts).toEqual([
       expect.objectContaining({
         contextId: "context-hook-target-removal",
@@ -1784,7 +1511,7 @@ describe("message tool explicit target guard", () => {
         channels: [preparedChannel],
         getChannel: (id: string) => (id === preparedChannel.id ? preparedChannel : undefined),
       };
-      mocks.runMessageAction.mockResolvedValueOnce({
+      mocks.dispatch.mockResolvedValueOnce({
         kind: "action",
         channel,
         action,
@@ -1806,89 +1533,68 @@ describe("message tool explicit target guard", () => {
         message: "heartbeat alert",
       });
 
-      expect(firstRunMessageActionInput()?.params).toMatchObject(target);
+      expect(firstAction()?.params).toMatchObject(target);
     },
   );
 });
 
-describe("message tool loop detection action runner proof", () => {
-  function mockQaChannelGatewayActionRunner() {
-    mocks.runMessageAction.mockImplementation(async ({ params }) => {
-      const callIndex = mocks.runMessageAction.mock.calls.length;
-      return {
-        kind: "send",
-        action: "send",
-        channel: "qa-channel",
-        to: typeof params?.target === "string" ? params.target : "channel:loop-room",
-        handledBy: "plugin",
-        payload: {
-          message: {
-            id: `qa-message-${callIndex}`,
-            accountId: "default",
-            direction: "outbound",
-            conversation: {
-              id: "loop-room",
-              chatType: "channel",
-            },
-            senderId: "openclaw",
-            text: "same visible reply",
-            timestamp: 1_800_000_000_000 + callIndex,
-          },
+function mockQaChannelGatewayActionRunner() {
+  mocks.dispatch.mockImplementation(async ({ params }) => {
+    const callIndex = mocks.dispatch.mock.calls.length;
+    return {
+      kind: "send",
+      action: "send",
+      channel: "qa-channel",
+      to: typeof params?.target === "string" ? params.target : "channel:loop-room",
+      handledBy: "plugin",
+      payload: {
+        message: {
+          id: `qa-message-${callIndex}`,
+          accountId: "default",
+          direction: "outbound",
+          conversation: { id: "loop-room", chatType: "channel" },
+          senderId: "openclaw",
+          text: "same visible reply",
+          timestamp: 1_800_000_000_000 + callIndex,
         },
-        dryRun: false,
-      } satisfies MessageActionResult;
+      },
+      dryRun: false,
+    } satisfies MessageActionResult;
+  });
+}
+
+it("blocks repeated qa-channel sends returned by the wrapped message tool", async () => {
+  mockQaChannelGatewayActionRunner();
+  const messageTool = createMessageTool();
+  const wrappedTool = wrapToolWithBeforeToolCallHook(messageTool, {
+    agentId: "main",
+    sessionKey: "message-tool-action-runner-loop",
+    sessionId: "message-tool-action-runner-loop-session",
+    runId: "message-tool-action-runner-loop-run",
+    loopDetection: { enabled: true },
+  });
+  const params = { action: "send", target: "channel:loop-room", message: "same visible reply" };
+
+  for (let i = 0; i < CRITICAL_THRESHOLD; i += 1) {
+    const result = await wrappedTool.execute(`message-tool-send-${i}`, params);
+    expect(result.details).toMatchObject({
+      message: { conversation: { id: "loop-room" }, text: "same visible reply" },
     });
   }
 
-  it("blocks repeated qa-channel sends returned by the wrapped message tool", async () => {
-    mockQaChannelGatewayActionRunner();
-    const messageTool = createMessageTool();
-    const wrappedTool = wrapToolWithBeforeToolCallHook(messageTool, {
-      agentId: "main",
-      sessionKey: "message-tool-action-runner-loop",
-      sessionId: "message-tool-action-runner-loop-session",
-      runId: "message-tool-action-runner-loop-run",
-      loopDetection: { enabled: true },
-    });
-    const params = {
-      action: "send",
-      target: "channel:loop-room",
-      message: "same visible reply",
-    };
+  const blocked = await wrappedTool.execute(`message-tool-send-${CRITICAL_THRESHOLD}`, params);
+  expect(mocks.dispatch).toHaveBeenCalledTimes(CRITICAL_THRESHOLD);
+  expect(blocked.details).toMatchObject({ status: "blocked", deniedReason: "tool-loop" });
+  const blockedDetails = blocked.details as { reason?: unknown } | undefined;
+  expect(String(blockedDetails?.reason)).toContain("CRITICAL");
 
-    for (let i = 0; i < CRITICAL_THRESHOLD; i += 1) {
-      const result = await wrappedTool.execute(`message-tool-send-${i}`, params);
-      expect(result.details).toMatchObject({
-        message: {
-          conversation: {
-            id: "loop-room",
-          },
-          text: "same visible reply",
-        },
-      });
-    }
-
-    const blocked = await wrappedTool.execute(`message-tool-send-${CRITICAL_THRESHOLD}`, params);
-    expect(mocks.runMessageAction).toHaveBeenCalledTimes(CRITICAL_THRESHOLD);
-    expect(blocked.details).toMatchObject({
-      status: "blocked",
-      deniedReason: "tool-loop",
-    });
-    const blockedDetails = blocked.details as { reason?: unknown } | undefined;
-    expect(String(blockedDetails?.reason)).toContain("CRITICAL");
-
-    const blockedAgain = await wrappedTool.execute(
-      `message-tool-send-${CRITICAL_THRESHOLD + 1}`,
-      params,
-    );
-    expect(mocks.runMessageAction).toHaveBeenCalledTimes(CRITICAL_THRESHOLD);
-    expect(blockedAgain.details).toMatchObject({
-      status: "blocked",
-      deniedReason: "tool-loop",
-    });
-  });
+  const blockedAgain = await wrappedTool.execute(
+    `message-tool-send-${CRITICAL_THRESHOLD + 1}`,
+    params,
+  );
+  expect(mocks.dispatch).toHaveBeenCalledTimes(CRITICAL_THRESHOLD);
+  expect(blockedAgain.details).toMatchObject({ status: "blocked", deniedReason: "tool-loop" });
 });
-
 describe("message tool schema scoping", () => {
   const telegramPlugin = createChannelPlugin({
     id: "telegram",
@@ -1896,7 +1602,11 @@ describe("message tool schema scoping", () => {
     capabilities: ["presentation"],
     toolSchema: () => [
       {
-        properties: createTelegramPollExtraToolSchemas(),
+        properties: {
+          pollDurationSeconds: Type.Optional(Type.Number()),
+          pollAnonymous: Type.Optional(Type.Boolean()),
+          pollPublic: Type.Optional(Type.Boolean()),
+        },
         visibility: "all-configured",
       },
     ],
@@ -1936,12 +1646,9 @@ describe("message tool schema scoping", () => {
         pollPublic: false,
       }),
     ).toBe(true);
-    expect(
-      Value.Check(tool.parameters, {
-        action: "poll",
-        pollDurationSeconds: "invalid",
-      }),
-    ).toBe(false);
+    expect(Value.Check(tool.parameters, { action: "poll", pollDurationSeconds: "invalid" })).toBe(
+      false,
+    );
   });
 
   it("uses discovery account scope for capability-gated presentation", () => {
@@ -1970,6 +1677,7 @@ describe("message tool schema scoping", () => {
   });
 
   it.each([
+    { action: "channel-create", fields: ["teamId", "name"], scopedOnly: false },
     { action: "conversation-open", fields: ["teamId"], scopedOnly: false },
     { action: "send", fields: [], scopedOnly: false },
     { action: "channel-move", fields: ["position", "parentId"], scopedOnly: true },
@@ -1984,6 +1692,7 @@ describe("message tool schema scoping", () => {
           "read",
           "channel-info",
           "channel-list",
+          "channel-create",
           "conversation-open",
           "channel-move",
           "category-delete",
@@ -2009,14 +1718,17 @@ describe("message tool schema scoping", () => {
         for (const field of fields) {
           expect(properties).toHaveProperty(field);
         }
-        if (action !== "conversation-open") {
+        if (action !== "conversation-open" && action !== "channel-create") {
           expect(properties).not.toHaveProperty("teamId");
           continue;
         }
-        expectStringSchema(properties.teamId);
+        expect(properties.teamId).toMatchObject({ type: "string" });
         expect(Value.Check(tool.parameters, { action })).toBe(true);
         for (const teamId of ["11111111-1111-1111-1111-111111111111", "T11111111"]) {
           expect(Value.Check(tool.parameters, { action, teamId })).toBe(true);
+        }
+        if (action === "channel-create") {
+          expect(Value.Check(tool.parameters, { action, name: "project-planning" })).toBe(true);
         }
         if (currentChannelProvider && action === "conversation-open") {
           for (const field of ["channelId", "guildId", "userId", "roleId"]) {
@@ -2109,12 +1821,7 @@ describe("message tool cross-channel schema", () => {
     const telegramPlugin = createChannelPlugin({
       id: "telegram",
       actions: ["send", "react"],
-      toolSchema: {
-        actions: [],
-        properties: {
-          emoji: Type.Optional(Type.String()),
-        },
-      },
+      toolSchema: { actions: [], properties: { emoji: Type.Optional(Type.String()) } },
     });
 
     registerPlugins(signalPlugin, telegramPlugin);
@@ -2173,122 +1880,69 @@ describe("message tool cross-channel schema", () => {
 });
 
 describe("message tool reasoning tag sanitization", () => {
+  function makePresentation(text: (label: string) => string) {
+    const button = {
+      label: text("Approve"),
+      action: { type: "command", command: "/codex approve" },
+      value: "approve",
+    };
+    return {
+      title: text("Deploy ready"),
+      blocks: [
+        { type: "text", text: text("Ship it") },
+        { type: "buttons", buttons: [button] },
+        {
+          type: "select",
+          placeholder: text("Pick a lane"),
+          options: [{ label: text("Main"), value: "main" }],
+        },
+        {
+          type: "chart",
+          chartType: "line",
+          title: text("Latency"),
+          categories: [text("Monday")],
+          series: [{ name: text("p95"), values: [250] }],
+          xLabel: text("Day"),
+          yLabel: text("Milliseconds"),
+        },
+        {
+          type: "chart",
+          chartType: "pie",
+          title: "Traffic",
+          segments: [{ label: text("Primary"), value: 1 }],
+        },
+      ],
+    };
+  }
+  function makeTable(text: (label: string) => string, plain = (label: string) => label) {
+    return {
+      blocks: [
+        {
+          type: "Table",
+          caption: text("Pipeline report"),
+          headers: [text("Account"), plain("ARR")],
+          rows: [
+            [text("Acme"), 125000],
+            [plain("Globex"), 82000],
+          ],
+          rowHeaderColumnIndex: 0,
+        },
+      ],
+    };
+  }
   it.each([
     {
       name: "sanitizes visible presentation text before sending",
-      presentation: {
-        title: "<think>internal title</think>Deploy ready",
-        blocks: [
-          { type: "text", text: "<think>internal note</think>Ship it" },
-          {
-            type: "buttons",
-            buttons: [
-              {
-                label: "<think>button rationale</think>Approve",
-                action: { type: "command", command: "/codex approve" },
-                value: "approve",
-              },
-            ],
-          },
-          {
-            type: "select",
-            placeholder: "<think>selection rationale</think>Pick a lane",
-            options: [
-              {
-                label: "<think>option rationale</think>Main",
-                value: "main",
-              },
-            ],
-          },
-          {
-            type: "chart",
-            chartType: "line",
-            title: "<think>chart rationale</think>Latency",
-            categories: ["<think>category rationale</think>Monday"],
-            series: [
-              {
-                name: "<think>series rationale</think>p95",
-                values: [250],
-              },
-            ],
-            xLabel: "<think>axis rationale</think>Day",
-            yLabel: "<think>axis rationale</think>Milliseconds",
-          },
-          {
-            type: "chart",
-            chartType: "pie",
-            title: "Traffic",
-            segments: [{ label: "<think>segment rationale</think>Primary", value: 1 }],
-          },
-        ],
-      },
-      expected: {
-        title: "Deploy ready",
-        blocks: [
-          { type: "text", text: "Ship it" },
-          {
-            type: "buttons",
-            buttons: [
-              {
-                label: "Approve",
-                action: { type: "command", command: "/codex approve" },
-                value: "approve",
-              },
-            ],
-          },
-          {
-            type: "select",
-            placeholder: "Pick a lane",
-            options: [{ label: "Main", value: "main" }],
-          },
-          {
-            type: "chart",
-            chartType: "line",
-            title: "Latency",
-            categories: ["Monday"],
-            series: [{ name: "p95", values: [250] }],
-            xLabel: "Day",
-            yLabel: "Milliseconds",
-          },
-          {
-            type: "chart",
-            chartType: "pie",
-            title: "Traffic",
-            segments: [{ label: "Primary", value: 1 }],
-          },
-        ],
-      },
+      presentation: makePresentation((label) => `<think>internal rationale</think>${label}`),
+      expected: makePresentation((label) => label),
     },
     {
       name: "sanitizes mixed-case table captions, headers, and string cells",
-      presentation: {
-        blocks: [
-          {
-            type: "Table",
-            caption: "  <think>caption rationale</think>Pipeline report  ",
-            headers: [" <think>header rationale</think>Account ", " ARR "],
-            rows: [
-              [" <think>cell rationale</think>Acme ", 125000],
-              [" Globex ", 82000],
-            ],
-            rowHeaderColumnIndex: 0,
-          },
-        ],
-      },
-      expected: {
-        blocks: [
-          {
-            type: "Table",
-            caption: "Pipeline report",
-            headers: ["Account", "ARR"],
-            rows: [
-              ["Acme", 125000],
-              ["Globex", 82000],
-            ],
-            rowHeaderColumnIndex: 0,
-          },
-        ],
-      },
+      presentation: makeTable(
+        (label) => `  <think>rationale</think>${label}  `,
+        (label) => ` ${label} `,
+      ),
+      expected: makeTable((label) => label),
     },
   ])("$name", async ({ presentation, expected }) => {
     mockSendResult({ channel: "slack", to: "slack:C123" });
@@ -2301,30 +1955,39 @@ describe("message tool reasoning tag sanitization", () => {
     (suppressOption) => {
       const internalContext =
         "<<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>>\nBOOT.md:\nWake up and report.\n<<<END_OPENCLAW_INTERNAL_CONTEXT>>>";
-      const inboundContext = [
-        markInboundContextLabel("Conversation info:"),
-        "```json",
-        '{"chat_id":"group:test","sender_id":"test-sender"}',
-        "```",
-      ].join("\n");
+      const inboundContext = inboundMetadata("Conversation info:", {
+        chat_id: "group:test",
+        sender_id: "test-sender",
+      });
       const metadata = { retained: true };
       const option = { label: suppressOption ? internalContext : "  Choice  ", metadata };
       const nonString = { label: 7 };
       const invalidArray = ["<think>unchanged</think>"];
+      const recordBlock = (
+        choice: typeof option,
+        category: string,
+        hidden: string,
+        visible: (label: string) => string,
+      ) => ({
+        options: [choice, null, invalidArray, nonString],
+        categories: [category],
+        segments: [
+          { label: hidden, value: 1 },
+          { label: visible("Slice"), value: 2 },
+        ],
+        series: [
+          { name: hidden, values: [1] },
+          { name: visible("Trend"), values: [2] },
+        ],
+      });
       const presentation = {
         blocks: [
-          {
-            options: [option, null, invalidArray, nonString],
-            categories: [inboundContext],
-            segments: [
-              { label: internalContext, value: 1 },
-              { label: "<think>segment rationale</think>Slice", value: 2 },
-            ],
-            series: [
-              { name: internalContext, values: [1] },
-              { name: "<think>series rationale</think>Trend", values: [2] },
-            ],
-          },
+          recordBlock(
+            option,
+            inboundContext,
+            internalContext,
+            (label) => `<think>rationale</think>${label}`,
+          ),
         ],
       };
       const original = structuredClone(presentation);
@@ -2335,23 +1998,14 @@ describe("message tool reasoning tag sanitization", () => {
       );
 
       const block = params.presentation.blocks[0];
-      expect(block).toEqual({
-        options: [
+      expect(block).toEqual(
+        recordBlock(
           { label: suppressOption ? "" : "  Choice  ", metadata },
-          null,
-          invalidArray,
-          nonString,
-        ],
-        categories: [""],
-        segments: [
-          { label: "", value: 1 },
-          { label: "Slice", value: 2 },
-        ],
-        series: [
-          { name: "", values: [1] },
-          { name: "Trend", values: [2] },
-        ],
-      });
+          "",
+          "",
+          (label) => label,
+        ),
+      );
       expect(params.presentation).not.toBe(presentation);
       expect(block).not.toBe(presentation.blocks[0]);
       for (const field of ["options", "segments", "series"] as const) {
@@ -2391,16 +2045,25 @@ describe("message tool boot-echo guard", () => {
     clearBootEchoContextForSession("agent:main:main");
   });
 
+  function sendBootMessage(action: Record<string, unknown>, target = "telegram:123") {
+    setBootEchoContextForSession("agent:main:main", longBootPrompt);
+    mockSendResult({ channel: target.split(":")[0], to: target });
+    return executeSend({
+      action: { target, ...action },
+      toolOptions: { agentSessionKey: "agent:main:main" },
+    });
+  }
+
   it("delivers a distinct surrogate collision once and suppresses an identical boot echo", async () => {
     const bootText = `${"x".repeat(79)}😀 boot`;
     const distinct = `${"x".repeat(79)}😁 visible`;
     const identical = `${"x".repeat(79)}😀`;
-    const outcomes: Awaited<ReturnType<typeof executeSendWithResult>>[] = [];
+    const outcomes: Awaited<ReturnType<typeof sendWithResult>>[] = [];
     mockSendResult({ channel: "qa-channel", to: "channel:boot-proof" });
     bootMocks.agentCommandFromSystem.mockImplementationOnce(async ({ sessionKey }) => {
       for (const message of [distinct, identical]) {
         outcomes.push(
-          await executeSendWithResult({
+          await sendWithResult({
             action: { target: "channel:boot-proof", message },
             toolOptions: { agentSessionKey: sessionKey, currentChannelProvider: "qa-channel" },
           }),
@@ -2418,8 +2081,8 @@ describe("message tool boot-echo guard", () => {
         }),
       ).resolves.toEqual({ status: "ran" });
     });
-    expect(mocks.runMessageAction).toHaveBeenCalledTimes(1);
-    expect(firstRunMessageActionInput()?.params?.message).toBe(distinct);
+    expect(mocks.dispatch).toHaveBeenCalledTimes(1);
+    expect(firstAction()?.params?.message).toBe(distinct);
     expect(outcomes[1]?.result.details).toMatchObject({
       status: "suppressed",
       reason: "internal_runtime_context_echo",
@@ -2432,18 +2095,11 @@ describe("message tool boot-echo guard", () => {
   ] as const)(
     "preserves %s after sanitizing boot echo in %s: %j",
     async (mediaField, textField, media) => {
-      setBootEchoContextForSession("agent:main:main", longBootPrompt);
-      mockSendResult({ channel: "telegram", to: "telegram:123" });
-
       const echoedText =
         "Here is what I was told: When you wake up each morning, send a thoughtful greeting to the operator over the configured channel";
-      const call = await executeSend({
-        action: {
-          target: "telegram:123",
-          [textField]: echoedText,
-          [mediaField]: structuredClone(media),
-        },
-        toolOptions: { agentSessionKey: "agent:main:main" },
+      const call = await sendBootMessage({
+        [textField]: echoedText,
+        [mediaField]: structuredClone(media),
       });
       expect(call?.params?.[textField]).toBe("");
       expect(call?.params?.[mediaField]).toEqual(media);
@@ -2451,28 +2107,17 @@ describe("message tool boot-echo guard", () => {
   );
 
   it("preserves a short legitimate BOOT.md-directed send that does not reproduce a long boot-prompt chunk", async () => {
-    setBootEchoContextForSession("agent:main:main", longBootPrompt);
-    mockSendResult({ channel: "telegram", to: "telegram:123" });
-
-    const call = await executeSend({
-      action: {
-        target: "telegram:123",
-        text: "Good morning! Project status looks healthy today.",
-      },
-      toolOptions: { agentSessionKey: "agent:main:main" },
+    const call = await sendBootMessage({
+      text: "Good morning! Project status looks healthy today.",
     });
     expect(call?.params?.text).toBe("Good morning! Project status looks healthy today.");
   });
 
   it("sanitizes boot echo text from presentation button links before dispatch", async () => {
-    setBootEchoContextForSession("agent:main:main", longBootPrompt);
-    mockSendResult({ channel: "slack", to: "slack:C123" });
-
     const echoedText =
       "When you wake up each morning, send a thoughtful greeting to the operator over the configured channel and report the active project status";
-    const call = await executeSend({
-      action: {
-        target: "slack:C123",
+    const call = await sendBootMessage(
+      {
         message: "Visible",
         presentation: {
           blocks: [
@@ -2493,19 +2138,15 @@ describe("message tool boot-echo guard", () => {
                 },
                 {
                   label: "Hosted app",
-                  action: {
-                    type: "web-app",
-                    url: echoedText,
-                    widgetId: "AAAAAAAAAAAAAAAAAAAAAA",
-                  },
+                  action: { type: "web-app", url: echoedText, widgetId: "AAAAAAAAAAAAAAAAAAAAAA" },
                 },
               ],
             },
           ],
         },
       },
-      toolOptions: { agentSessionKey: "agent:main:main" },
-    });
+      "slack:C123",
+    );
 
     expect(call?.params?.message).toBe("Visible");
     expect(call?.params?.presentation).toEqual({
@@ -2532,92 +2173,78 @@ describe("message tool visible text sanitization", () => {
   const internalContext =
     "<<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>>\nBOOT.md:\nWake up and report.\n<<<END_OPENCLAW_INTERNAL_CONTEXT>>>";
 
-  it.each<{
-    name: string;
-    channel: string;
-    target: string;
-    args: Record<string, unknown>;
-    expected: Record<string, unknown>;
-    forbidden?: string[];
-  }>([
-    {
-      name: "reasoning tags",
-      channel: "signal",
-      target: "signal:+15551234567",
-      args: { text: "<think>internal reasoning</think>Hello!" },
-      expected: { text: "Hello!" },
-    },
-    {
-      name: "reasoning-only text",
-      channel: "telegram",
-      target: "telegram:123",
-      args: { message: "Thinking\n_internal plan_\n_more internal notes_" },
-      expected: { message: "" },
-    },
-    {
-      name: "escaped runtime delimiters (#53732)",
-      channel: "telegram",
-      target: "telegram:123",
-      args: {
+  it.each<
+    [
+      name: string,
+      args: Record<string, unknown>,
+      expected: Record<string, unknown>,
+      target?: string,
+      forbidden?: string[],
+    ]
+  >([
+    [
+      "reasoning tags",
+      { text: "<think>internal reasoning</think>Hello!" },
+      { text: "Hello!" },
+      "signal:+15551234567",
+    ],
+    [
+      "reasoning-only text",
+      { message: "Thinking\n_internal plan_\n_more internal notes_" },
+      { message: "" },
+    ],
+    [
+      "escaped runtime delimiters (#53732)",
+      {
         message:
           "Here is the boot info:\\n<<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>>\\nBOOT.md:\\nWake up and report.\\n<<<END_OPENCLAW_INTERNAL_CONTEXT>>>\\nDone.",
       },
-      expected: { message: "Here is the boot info:\n\nDone." },
-    },
-    {
-      name: "inbound metadata and delivery hints (#89100)",
-      channel: "signal",
-      target: "signal:group-1",
-      args: {
+      { message: "Here is the boot info:\n\nDone." },
+    ],
+    [
+      "inbound metadata and delivery hints (#89100)",
+      {
         message: [
           "Delivery: Final assistant text is not automatically delivered in this run. Use the `message` tool to send user-visible output.",
           "",
-          markInboundContextLabel("Conversation info:"),
-          "```json",
-          '{"chat_id":"group:abc","sender_id":"+15551234567","is_group_chat":true}',
-          "```",
+          inboundMetadata("Conversation info:", {
+            chat_id: "group:abc",
+            sender_id: "+15551234567",
+            is_group_chat: true,
+          }),
           "",
-          markInboundContextLabel("Sender:"),
-          "```json",
-          '{"label":"Bob (+15551234567)","id":"+15551234567"}',
-          "```",
+          inboundMetadata("Sender:", { label: "Bob (+15551234567)", id: "+15551234567" }),
           "",
           "Visible reply only.",
         ].join("\n"),
       },
-      expected: { message: "Visible reply only." },
-      forbidden: ["sender_id", "+15551234567"],
-    },
-    {
-      name: "legitimate timestamp prefix",
-      channel: "signal",
-      target: "signal:group-1",
-      args: { message: "[Wed 2026-03-11 23:51 PDT] Standup starts now" },
-      expected: { message: "[Wed 2026-03-11 23:51 PDT] Standup starts now" },
-    },
-    {
-      name: "poll creation text",
-      channel: "telegram",
-      target: "telegram:123",
-      args: {
+      { message: "Visible reply only." },
+      "signal:group-1",
+      ["sender_id", "+15551234567"],
+    ],
+    [
+      "legitimate timestamp prefix",
+      { message: "[Wed 2026-03-11 23:51 PDT] Standup starts now" },
+      { message: "[Wed 2026-03-11 23:51 PDT] Standup starts now" },
+      "signal:group-1",
+    ],
+    [
+      "poll creation text",
+      {
         action: "poll",
         pollQuestion: `Choose one\n${internalContext}`,
         pollOption: [`Yes\n${internalContext}`, "No"],
       },
-      expected: { pollQuestion: "Choose one", pollOption: ["Yes", "No"] },
-    },
-    {
-      name: "quote text",
-      channel: "telegram",
-      target: "telegram:123",
-      args: { message: "Visible", quoteText: `Quoted\n${internalContext}` },
-      expected: { quoteText: "Quoted" },
-    },
-    {
-      name: "stringified presentation and interactive payloads",
-      channel: "slack",
-      target: "slack:C123",
-      args: {
+      { pollQuestion: "Choose one", pollOption: ["Yes", "No"] },
+    ],
+    [
+      "quote text",
+      { message: "Visible", quoteText: `Quoted\n${internalContext}` },
+      { quoteText: "Quoted" },
+    ],
+    [
+      "stringified presentation and interactive payloads",
+      {
         message: "Visible",
         presentation: JSON.stringify({
           title: `Presentation\n${internalContext}`,
@@ -2627,35 +2254,37 @@ describe("message tool visible text sanitization", () => {
           blocks: [{ type: "text", text: `Legacy\n${internalContext}` }],
         }),
       },
-      expected: {
+      {
         presentation: { title: "Presentation", blocks: [{ type: "text", text: "Block" }] },
         interactive: { blocks: [{ type: "text", text: "Legacy" }] },
       },
-    },
-    {
-      name: "later aliases after an earlier field is suppressed",
-      channel: "telegram",
-      target: "telegram:123",
-      args: {
+      "slack:C123",
+    ],
+    [
+      "later aliases after an earlier field is suppressed",
+      {
         text: internalContext,
         message: `Visible\n${internalContext}`,
         mediaUrl: "file:///tmp/status.png",
       },
-      expected: { text: "", message: "Visible" },
+      { text: "", message: "Visible" },
+    ],
+  ])(
+    "sanitizes %s before dispatch",
+    async (_name, args, expected, target = "telegram:123", forbidden = []) => {
+      mockSendResult({ channel: target.split(":")[0], to: target });
+      const call = await executeSend({ action: { target, ...args } });
+      for (const [field, value] of Object.entries(expected)) {
+        expect(call?.params?.[field], field).toEqual(value);
+      }
+      for (const text of forbidden ?? []) {
+        expect(JSON.stringify(call?.params)).not.toContain(text);
+      }
     },
-  ])("sanitizes $name before dispatch", async ({ channel, target, args, expected, forbidden }) => {
-    mockSendResult({ channel, to: target });
-    const call = await executeSend({ action: { target, ...args } });
-    for (const [field, value] of Object.entries(expected)) {
-      expect(call?.params?.[field], field).toEqual(value);
-    }
-    for (const text of forbidden ?? []) {
-      expect(JSON.stringify(call?.params)).not.toContain(text);
-    }
-  });
+  );
 
   it("suppresses pure internal-runtime-context sends before generic raw-params logging can see original args", async () => {
-    const { call, result } = await executeSendWithResult({
+    const { call, result } = await sendWithResult({
       action: {
         target: "discord:123",
         content:
@@ -2664,7 +2293,7 @@ describe("message tool visible text sanitization", () => {
     });
 
     expect(call).toBeUndefined();
-    expect(mocks.runMessageAction).not.toHaveBeenCalled();
+    expect(mocks.dispatch).not.toHaveBeenCalled();
     expect(result.details).toMatchObject({
       status: "suppressed",
       reason: "internal_runtime_context_echo",
@@ -2674,92 +2303,73 @@ describe("message tool visible text sanitization", () => {
   });
 });
 
-describe("message tool sandbox passthrough", () => {
-  it.each([false, true])(
-    "trusts only capability-bound current-turn identity (capability: %s)",
-    async (trusted) => {
-      mockSendResult({ to: "discord:123" });
-      const token = trusted
-        ? mintMessageActionTurnCapability({
-            agentId: "main",
-            runId: "run-1",
-            sessionKey: "agent:main:runtime-policy",
-            sessionId: "session-1",
-            requesterAccountId: "trusted-account",
-            requesterSenderId: "trusted-sender",
-            requesterSenderName: "Trusted Sender",
-            requesterSenderUsername: "trusted-user",
-            requesterSenderE164: "+15551234567",
-            toolContext: {
-              currentChannelProvider: "discord",
-              currentChannelId: "trusted-current",
-              currentChatType: "channel",
-            },
-          })
-        : undefined;
-      if (token) {
-        mintedTurnCapabilities.push(token);
-      }
-
-      const call = await executeSend({
-        toolOptions: {
-          agentId: "main",
-          agentSessionKey: "agent:main:runtime-policy",
-          runId: "run-1",
-          sessionId: "session-1",
-          messageActionTurnCapability: token,
-          agentAccountId: "forged-account",
-          requesterSenderId: "forged-sender",
-          currentChannelProvider: "discord",
-          currentChannelId: "forged-current",
-        },
-        action: {
-          target: "discord:123",
-          message: "hi",
-        },
+it.each([false, true])(
+  "trusts only capability-bound current-turn identity (capability: %s)",
+  async (trusted) => {
+    mockSendResult({ to: "discord:123" });
+    const identity = {
+      agentId: "main",
+      runId: "run-1",
+      sessionKey: "agent:main:runtime-policy",
+      sessionId: "session-1",
+    };
+    const requester = {
+      requesterAccountId: "trusted-account",
+      requesterSenderId: "trusted-sender",
+      requesterSenderName: "Trusted Sender",
+      requesterSenderUsername: "trusted-user",
+      requesterSenderE164: "+15551234567",
+    };
+    const source = {
+      currentChannelProvider: "discord",
+      currentChannelId: "trusted-current",
+      currentChatType: "channel" as const,
+    };
+    const routing = { currentChannelProvider: "discord", currentChannelId: "forged-current" };
+    const token = trusted
+      ? mintMessageActionTurnCapability({
+          ...identity,
+          ...requester,
+          toolContext: source,
+        })
+      : undefined;
+    if (token) {
+      mintedTurnCapabilities.push(token);
+    }
+    const call = await executeSend({
+      toolOptions: {
+        agentId: identity.agentId,
+        runId: identity.runId,
+        sessionId: identity.sessionId,
+        agentSessionKey: identity.sessionKey,
+        messageActionTurnCapability: token,
+        agentAccountId: "forged-account",
+        requesterSenderId: "forged-sender",
+        ...routing,
+      },
+      action: { target: "discord:123", message: "hi" },
+    });
+    if (!trusted) {
+      expect(call).toMatchObject({ requesterAccountId: undefined, requesterSenderId: undefined });
+      expect(call?.toolContext).toMatchObject(routing);
+      expect(call?.messageActionAuthorization).toEqual({
+        requesterAccountId: undefined,
+        requesterSenderId: undefined,
+        toolContext: undefined,
       });
-
-      if (!trusted) {
-        expect(call?.requesterAccountId).toBeUndefined();
-        expect(call?.requesterSenderId).toBeUndefined();
-        expect(call?.toolContext).toMatchObject({
-          currentChannelProvider: "discord",
-          currentChannelId: "forged-current",
-        });
-        expect(call?.messageActionAuthorization).toEqual({
-          requesterAccountId: undefined,
-          requesterSenderId: undefined,
-          toolContext: undefined,
-        });
-        return;
-      }
-      expect(call?.requesterAccountId).toBe("trusted-account");
-      expect(call?.requesterSenderId).toBe("trusted-sender");
-      expect(call?.requesterSenderName).toBe("Trusted Sender");
-      expect(call?.requesterSenderUsername).toBe("trusted-user");
-      expect(call?.requesterSenderE164).toBe("+15551234567");
-      expect(call?.toolContext).toMatchObject({
+      return;
+    }
+    expect(call).toMatchObject(requester);
+    expect(call?.messageActionAuthorization).toMatchObject({
+      requesterAccountId: requester.requesterAccountId,
+      requesterSenderId: requester.requesterSenderId,
+      toolContext: {
         currentChannelProvider: "discord",
-        currentChannelId: "forged-current",
-      });
-      expect(call?.messageActionAuthorization).toMatchObject({
-        requesterAccountId: "trusted-account",
-        requesterSenderId: "trusted-sender",
-        toolContext: {
-          currentChannelProvider: "discord",
-          currentChannelId: "trusted-current",
-          currentChatType: "channel",
-        },
-      });
-      expect(call?.messageActionAuthorization?.toolContext).not.toMatchObject({
-        currentChannelId: "forged-current",
-      });
-      expect(call?.toolContext).toMatchObject({
-        currentChannelProvider: "discord",
-        currentChannelId: "forged-current",
-        skipCrossContextDecoration: true,
-      });
-    },
-  );
-});
+        currentChannelId: "trusted-current",
+        currentChatType: "channel",
+      },
+    });
+    expect(call?.toolContext).toMatchObject({ ...routing, skipCrossContextDecoration: true });
+  },
+);
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

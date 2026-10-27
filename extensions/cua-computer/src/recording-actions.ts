@@ -1,6 +1,7 @@
 import { z } from "zod";
 import type { CuaComputerActParams } from "./action-targets.js";
 import type { CuaDriverSession, CuaToolResult } from "./driver-client.js";
+import { projectedToolDetails } from "./driver-result.js";
 import type { CuaExecutionResources } from "./execution-resources.js";
 
 const RecordingStateSchema = z.object({
@@ -47,19 +48,7 @@ function structured(result: CuaToolResult, tool: string): unknown {
   if (result.isError) {
     throw driverError(result, tool);
   }
-  if (result.structuredContent) {
-    return result.structuredContent;
-  }
-  if (!result.structuredJson) {
-    throw new Error(`COMPUTER_DRIVER_ERROR: ${tool} returned no structuredContent`);
-  }
-  try {
-    return JSON.parse(result.structuredJson) as unknown;
-  } catch (error) {
-    throw new Error(`COMPUTER_DRIVER_ERROR: ${tool} returned invalid structuredContent`, {
-      cause: error,
-    });
-  }
+  return projectedToolDetails(result, tool);
 }
 
 function projectRecordingState(

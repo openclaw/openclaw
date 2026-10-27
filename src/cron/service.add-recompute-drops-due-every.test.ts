@@ -1,18 +1,11 @@
 import { describe, expect, it, vi } from "vitest";
-import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
+import { cronTestDeps } from "./service.fixture-builders.test-support.js";
 import { CronService } from "./service.js";
-import {
-  createCronStoreHarness,
-  createNoopLogger,
-  installCronTestHooks,
-  writeCronStoreSnapshot,
-} from "./service.test-harness.js";
+import { setupCronServiceSuite, writeCronStoreSnapshot } from "./service.test-harness.js";
 import { loadCronJobsStore } from "./store.js";
 import type { CronJob } from "./types.js";
 
-const noopLogger = createNoopLogger();
-const { makeStorePath } = createCronStoreHarness();
-installCronTestHooks({ logger: noopLogger });
+const { logger: noopLogger, makeStorePath } = setupCronServiceSuite();
 
 describe("add() must not drop a due every-job's pending run", () => {
   it("preserves a due every-job nextRunAtMs when an unrelated job is added", async () => {
@@ -35,19 +28,14 @@ describe("add() must not drop a due every-job's pending run", () => {
       state: { lastRunAtMs, lastRunStatus: "ok", nextRunAtMs: dueSlot },
     };
 
-    const enqueueSystemEvent = vi.fn();
-    const requestHeartbeat = vi.fn();
     const runIsolatedAgentJob = vi.fn(async () => ({ status: "ok" as const }));
-    const cron = new CronService({
-      scheduler: createTestGatewayScheduler(),
-      nowMs: () => Date.now(),
-      storePath: store.storePath,
-      cronEnabled: true,
-      log: noopLogger,
-      enqueueSystemEvent,
-      requestHeartbeat,
-      runIsolatedAgentJob,
-    });
+    const cron = new CronService(
+      cronTestDeps({
+        storePath: store.storePath,
+        log: noopLogger,
+        runIsolatedAgentJob,
+      }),
+    );
 
     try {
       // Seed the completed run; driving all pending timers also advances SQLite idle timers.

@@ -1,4 +1,4 @@
-import { createMemo, onCleanup, Show } from "solid-js";
+import { createMemo, createProjection, onSettled, Show } from "solid-js";
 import type { AgentIdentityResult } from "../api/types.ts";
 import { resolveAgentTextAvatar } from "../lib/agents/display.ts";
 import { resolveAgentAvatarUrl } from "../lib/avatar.ts";
@@ -10,8 +10,9 @@ import { generateUUID } from "../lib/uuid.ts";
 import type { AgentSelectOption } from "./agent-select-types.ts";
 import { revealInScrollRegion } from "./scroll-state.ts";
 import { Icon } from "./solid/icon.tsx";
-import { AgentIdentityAvatar } from "./solid/identity-avatar.tsx";
-import { Menu, type MenuItem, type MenuHandle } from "./solid/menu.tsx";
+import { useAvatarGatewayContext } from "./solid/identity-avatar-view.ts";
+import { AgentOptionAvatar } from "./solid/identity-avatar.tsx";
+import { Menu, type MenuItem, type MenuHandle, type MenuItemBindings } from "./solid/menu.tsx";
 
 type AgentSelectProps = {
   options: readonly AgentSelectOption[];
@@ -23,7 +24,6 @@ type AgentSelectProps = {
   disabled: boolean;
   variant: "default" | "compact";
   onSelect: (value: string) => void;
-  onCreateAgent: (() => void) | null;
   focusTargetsRef?: (readTargets: () => readonly HTMLElement[]) => void;
 };
 export type AgentSelectElement = SolidBridgeElement<AgentSelectProps>;
@@ -33,19 +33,22 @@ defineSolidBridge<AgentSelectProps>(
     const id = `agent-select-${generateUUID()}`;
     let menu: MenuHandle | undefined;
     const selected = createMemo(() => props.options.find((option) => option.value === props.value));
-    const triggerOption = () =>
-      selected() ??
-      (props.value
-        ? { value: props.value, label: props.value, agent: { id: props.value } }
-        : undefined);
+    const fallbackOption = createMemo<AgentSelectOption | undefined>(() =>
+      selected() || !props.value
+        ? undefined
+        : { value: props.value, label: props.value, agent: { id: props.value } },
+    );
+    const triggerOption = () => selected() ?? fallbackOption();
     const label = () => triggerOption()?.label ?? (props.placeholder || t("agents.noAgents"));
     const accessibleLabel = () => [label(), selected()?.badge].filter(Boolean).join(", ");
+    const gateway = useAvatarGatewayContext();
     const loader = createIdentityAvatars();
-    onCleanup(loader.connect());
+    onSettled(() => loader.connect());
     const avatarSource = projectOwner(loader, (owner) => owner);
     const avatars = createMemo(() => {
-      const current = triggerOption();
-      const candidates = [...props.options, ...(current ? [current] : [])];
+      gateway();
+      const fallback = fallbackOption();
+      const candidates = fallback ? [...props.options, fallback] : props.options;
       const identities = props.identityById;
       return avatarSource.read().withActiveRoutes(
         () =>
@@ -56,7 +59,7 @@ defineSolidBridge<AgentSelectProps>(
               return [
                 option.value,
                 {
-                  identity,
+                  textAvatar: option.agent ? resolveAgentTextAvatar(option.agent, identity) : null,
                   image: url ? loader.resolve(url) : null,
                   onError: url ? loader.imageErrorHandler(url) : undefined,
                 },
@@ -67,95 +70,69 @@ defineSolidBridge<AgentSelectProps>(
     });
     function Avatar(avatarProps: { option: AgentSelectOption }) {
       const resolved = () => avatars().get(avatarProps.option.value);
+      return <AgentOptionAvatar option={avatarProps.option} avatar={resolved()} />;
+    }
+    // Menu retains a custom renderer per key; retain that key's live option fields too.
+    const optionRows = createProjection(() => props.options, [], { key: "value" });
+    function OptionRow(row: { option: AgentSelectOption; bindings: MenuItemBindings }) {
+      const isSelected = createMemo(() => row.option.value === props.value);
       return (
-        <Show
-          when={resolved()?.image ? undefined : avatarProps.option.icon}
-          fallback={
-            <AgentIdentityAvatar
-              class="agent-select__avatar"
-              agent={{
-                id: avatarProps.option.agent?.id ?? avatarProps.option.value,
-                avatar: resolved()?.image ?? null,
-                textAvatar: avatarProps.option.agent
-                  ? resolveAgentTextAvatar(avatarProps.option.agent, resolved()?.identity ?? null)
-                  : null,
-              }}
-              onImageError={resolved()?.onError}
-            />
+        <button
+          {...row.bindings}
+          type="button"
+          class="oc-menu-item agent-select__option"
+          value={row.option.value}
+          disabled={props.disabled || row.option.disabled}
+          data-agent-option=""
+          data-selected={isSelected() ? "" : undefined}
+          data-initial-focus={
+            isSelected() && !props.disabled && !row.option.disabled ? "" : undefined
           }
         >
-          {(icon) => (
-            <span class="agent-select__avatar agent-select__avatar--icon" aria-hidden="true">
-              <Icon name={icon()} />
-            </span>
-          )}
-        </Show>
-      );
-    }
-    const items = createMemo<readonly MenuItem[]>(() => [
-      ...props.options.map((option) => ({
-        id: `option:${option.value}`,
-        label: [option.label, option.description, option.badge].filter(Boolean).join(", "),
-        class: "agent-select__option",
-        type: "radio" as const,
-        checked: option.value === props.value,
-        disabled: props.disabled || option.disabled,
-        icon: <Avatar option={option} />,
-        content: (
-          <span class="agent-select__option-copy">
-            <span class="agent-select__option-heading">
-              <span class="agent-select__option-label">{option.label}</span>
-              <Show when={option.badge}>
-                <span class="agent-select__badge">{option.badge}</span>
+          <span class="oc-menu-item__check" aria-hidden="true">
+            {isSelected() ? "✓" : ""}
+          </span>
+          <span class="oc-menu-item__icon">
+            <Avatar option={row.option} />
+          </span>
+          <span class="oc-menu-item__label">
+            <span class="agent-select__option-copy">
+              <span class="agent-select__option-heading">
+                <span class="agent-select__option-label">{row.option.label}</span>
+                <Show when={row.option.badge}>
+                  <span class="agent-select__badge">{row.option.badge}</span>
+                </Show>
+              </span>
+              <Show when={row.option.description}>
+                <span class="agent-select__option-description">{row.option.description}</span>
               </Show>
             </span>
-            <Show when={option.description}>
-              <span class="agent-select__option-description">{option.description}</span>
-            </Show>
           </span>
-        ),
-        details: (
-          <span class="agent-select__option-state" aria-hidden="true">
-            <Show when={option.value === props.value}>
-              <span class="agent-select__option-check">
-                <Icon name="check" />
-              </span>
-            </Show>
-          </span>
-        ),
-        attributes: {
-          "data-agent-option": "",
-          "data-selected": option.value === props.value ? "" : undefined,
-          value: option.value,
-          "data-initial-focus":
-            option.value === props.value && !props.disabled && !option.disabled ? "" : undefined,
-        },
-      })),
-      ...(props.onCreateAgent
-        ? [
-            {
-              id: "create-agent",
-              label: t("custodian.newAgent"),
-              class: "agent-select__option",
-              disabled: props.disabled,
-              icon: (
-                <span class="agent-select__footer-icon" aria-hidden="true">
-                  <Icon name="users" />
+          <span class="oc-menu-item__details">
+            <span class="agent-select__option-state" aria-hidden="true">
+              <Show when={isSelected()}>
+                <span class="agent-select__option-check">
+                  <Icon name="check" />
                 </span>
-              ),
-              content: (
-                <>
-                  <Show when={props.options.length > 0}>
-                    <span class="agent-select__separator" role="separator" />
-                  </Show>
-                  <span class="agent-select__option-label">{t("custodian.newAgent")}</span>
-                </>
-              ),
-              attributes: { "data-create-agent": "" },
-            },
-          ]
-        : []),
-    ]);
+              </Show>
+            </span>
+          </span>
+        </button>
+      );
+    }
+    const items = createProjection<readonly MenuItem[]>(
+      () =>
+        optionRows.map((option) => ({
+          id: `option:${option.value}`,
+          label: [option.label, option.description, option.badge].filter(Boolean).join(", "),
+          type: "radio" as const,
+          checked: option.value === props.value,
+          disabled: props.disabled || option.disabled,
+          render: (bindings: MenuItemBindings) => <OptionRow option={option} bindings={bindings} />,
+        })),
+      [],
+      { key: "id" },
+    );
     return (
       <Menu
         id={id}
@@ -175,8 +152,8 @@ defineSolidBridge<AgentSelectProps>(
             ? `${props.accessibleLabel}: ${accessibleLabel()}`
             : accessibleLabel()
         }
-        disabled={props.disabled || (props.options.length === 0 && !props.onCreateAgent)}
-        items={items()}
+        disabled={props.disabled || props.options.length === 0}
+        items={items}
         placement="bottom-start"
         onAfterShow={() => {
           const surface = menu?.overlay.surface;
@@ -203,15 +180,9 @@ defineSolidBridge<AgentSelectProps>(
           if (props.disabled) {
             return;
           }
-          if (item.id === "create-agent") {
-            props.onCreateAgent?.();
-          } else {
-            const picked = props.options.find(
-              (candidate) => `option:${candidate.value}` === item.id,
-            );
-            if (picked && picked.value !== props.value) {
-              props.onSelect(picked.value);
-            }
+          const picked = props.options.find((candidate) => `option:${candidate.value}` === item.id);
+          if (picked && picked.value !== props.value) {
+            props.onSelect(picked.value);
           }
         }}
       >
@@ -232,7 +203,6 @@ defineSolidBridge<AgentSelectProps>(
       disabled: { default: false, attribute: false },
       variant: { default: "default", attribute: false },
       onSelect: { default: () => {}, attribute: false },
-      onCreateAgent: { default: null, attribute: false },
       focusTargetsRef: { default: undefined, attribute: false },
     },
   },

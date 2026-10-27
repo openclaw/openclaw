@@ -1,3 +1,4 @@
+import { runWithAsyncStore } from "../shared/async-store.js";
 import type {
   ReplyOperation,
   SessionControllerInput,
@@ -17,7 +18,8 @@ import { targetFrom, type SessionTarget } from "./session-controller.target.js";
 export function withSessionControllerOwner<T>(operation: ReplyOperation, run: () => T): T {
   assertSessionControllerOperation(operation);
   const current = ownerContext.getStore();
-  return ownerContext.run(
+  return runWithAsyncStore(
+    ownerContext,
     {
       sourceInput: current?.sourceInput,
       operation,
@@ -48,7 +50,8 @@ export function withSessionControllerClaim<T>(
     throw new Error("Mailbox claim is no longer current");
   }
   const current = ownerContext.getStore();
-  return ownerContext.run(
+  return runWithAsyncStore(
+    ownerContext,
     {
       sourceInput: current?.sourceInput,
       operation: claim.operation,
@@ -77,7 +80,8 @@ export function isCurrentSessionControllerTurnInput(input: SessionControllerInpu
 /** Identify raw cleanup without granting a turn, effect admission, or execution authority. */
 export function withSessionControllerSource<T>(input: SessionControllerInput, run: () => T): T {
   const current = ownerContext.getStore();
-  return ownerContext.run(
+  return runWithAsyncStore(
+    ownerContext,
     {
       sourceInput: input,
       operation: current?.operation,

@@ -218,13 +218,13 @@ describe("buildConfiguredAgentSystemPrompt", () => {
     } satisfies Parameters<typeof buildConfiguredAgentSystemPrompt>[0];
     const prompt = buildConfiguredAgentSystemPrompt(params);
 
-    expect(prompt).not.toContain("Active exec sessions:");
+    expect(prompt).not.toContain("Active exec sessions");
     expect(prompt).toContain("Before input: process log");
     expect(prompt).toContain("waitingForInput/stdinWritable");
     expect(prompt).toContain("process list");
 
     const restrictedPrompt = buildConfiguredAgentSystemPrompt({ ...params, tools: [] });
-    expect(restrictedPrompt).not.toContain("Active exec sessions:");
+    expect(restrictedPrompt).not.toContain("Active exec sessions");
     expect(restrictedPrompt).not.toContain("process log");
     expect(restrictedPrompt).not.toContain("process list");
   });

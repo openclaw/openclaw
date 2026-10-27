@@ -355,9 +355,8 @@ export async function inspectDisabledDiscoveryTasks(params: {
   const { selected, owners, recordProgress } = params;
   const { resolveGatewayWindowsTaskName } = await import("./constants.js");
   const { execSchtasks } = await import("./schtasks-exec.js");
-  const { resolveTaskScriptPath } = await import("./schtasks.js");
   const { quoteCmdScriptArg } = await import("./cmd-argv.js");
-  const { buildTaskScript } = await import("./schtasks-layout.js");
+  const { buildTaskScript, resolveTaskScriptPath } = await import("./schtasks-layout.js");
   const { encodeWindowsLauncherScript } = await import("../infra/windows-launcher-encoding.js");
   const writeCmd = (filename: string, content: string) =>
     fs.writeFile(filename, encodeWindowsLauncherScript({ format: "cmd", content }));

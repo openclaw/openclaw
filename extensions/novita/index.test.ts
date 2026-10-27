@@ -1,6 +1,7 @@
 // Novita tests cover index plugin behavior.
 import { registerSingleProviderPlugin } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { describe, expect, it } from "vitest";
+import { runSingleProviderCatalog } from "../test-support/provider-model-test-helpers.js";
 import plugin from "./index.js";
 
 describe("novita provider plugin", () => {
@@ -13,12 +14,7 @@ describe("novita provider plugin", () => {
     expect(provider.auth?.map((method) => method.id)).toEqual(["api-key"]);
     expect(provider.auth?.[0]?.starterModel).toBe("novita/deepseek/deepseek-v4-pro");
 
-    const result = await provider.staticCatalog?.run({
-      config: {},
-      env: {},
-      resolveProviderApiKey: () => ({}),
-    } as never);
-    const catalogProvider = result && "provider" in result ? result.provider : undefined;
+    const catalogProvider = await runSingleProviderCatalog({ catalog: provider.staticCatalog });
     expect(catalogProvider?.baseUrl).toBe("https://api.novita.ai/openai/v1");
     expect(catalogProvider?.models?.map((model) => model.id)).toContain("deepseek/deepseek-v4-pro");
   });

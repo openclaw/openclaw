@@ -55,7 +55,7 @@ export function createWorkerRuntimeInstallProgressPublisher(params: {
             if (stopped) {
               return;
             }
-            const observations = [...nodeIds].map((nodeId) => params.readInstall(nodeId));
+            const observations = Array.from(nodeIds, (nodeId) => params.readInstall(nodeId));
             for (const placement of placements.values()) {
               const environment = placement.environmentId
                 ? params.environments.get(placement.environmentId)

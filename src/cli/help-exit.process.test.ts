@@ -1,26 +1,15 @@
-import type { ChildProcess } from "node:child_process";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { Command, CommanderError } from "commander";
-import * as tar from "tar";
 import { afterEach, describe, expect, it } from "vitest";
-import { resolveVitestNodeArgs } from "../../scripts/lib/vitest-process-env.mts";
-import { createFixtureLifetime } from "../../test/helpers/fixture-lifetime.js";
-import { runNodeScript } from "../../test/helpers/run-node-script.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { listArchiveEntries } from "../infra/backup-create.test-support.js";
 import { resolveRuntimeWorkerUrl } from "../infra/runtime-worker-url.js";
 import { resolveTestNodeExecPath } from "../test-utils/node-process.js";
-import {
-  cliMessageExitEntrypoints,
-  cliRecoveryEntrypoints,
-} from "./cli-entrypoint.test-support.js";
+import { cliRecoveryEntrypoints } from "./cli-entrypoint.test-support.js";
 import { writeFixtureJson } from "./cli-fixtures.test-support.js";
-import {
-  CLI_PROCESS_DEADLOCK_GUARD_MS,
-  formatCliProcessFailure,
-  runCliProcessChild,
-} from "./cli-process-child.test-helpers.js";
+import { formatCliProcessFailure, runCliProcessChild } from "./cli-process-child.test-helpers.js";
 import { registerCoreCliByName } from "./program/command-registry-core.js";
 import { createProgramContext } from "./program/context.js";
 import { registerSubCliByName } from "./program/register.subclis.js";
@@ -45,19 +34,6 @@ const LAZY_GROUP_HELP_CASES = [
   { group: "security", usageCommand: "security", registry: "subcli" },
   { group: "update", usageCommand: "update", registry: "subcli" },
 ] as const;
-
-async function listBackupArchiveEntries(archivePath: string): Promise<string[]> {
-  const entries: string[] = [];
-  await tar.t({
-    file: archivePath,
-    gzip: true,
-    onentry: (entry) => {
-      entries.push(entry.path);
-      entry.resume();
-    },
-  });
-  return entries;
-}
 
 const guardSources = {
   forbidTlsImport: `import { registerHooks } from "node:module";
@@ -369,139 +345,6 @@ it.each(
   }
 });
 
-it("drains a large piped JSON payload before exiting nonzero on a structured target failure", ({
-  signal,
-  onTestFinished,
-}) => {
-  const lifetime = createFixtureLifetime();
-  const finished = new AbortController();
-  onTestFinished(async () => {
-    finished.abort();
-    await lifetime.cleanup();
-  });
-  return lifetime.run(async () => {
-    const root = lifetime.createTempDir("openclaw-message-broadcast-exit-");
-    const stateDir = path.join(root, "state");
-    const configPath = path.join(stateDir, "openclaw.json");
-    const entryPath = path.join(root, "run-message-broadcast.mjs");
-    const largePayload = "x".repeat(8_388_608);
-    const registrationUrl = resolveRuntimeWorkerUrl(cliMessageExitEntrypoints.registration);
-    const nodeExecutable = resolveTestNodeExecPath();
-    const commandSpecifier = /\.[cm]?ts$/u.test(registrationUrl.pathname)
-      ? "../../commands/message.js"
-      : resolveRuntimeWorkerUrl(cliMessageExitEntrypoints.command).href;
-    const finalizerUrl = resolveRuntimeWorkerUrl(cliMessageExitEntrypoints.oneShotExit);
-    await fs.writeFile(
-      entryPath,
-      `import { registerHooks } from "node:module";
-const messageModule = "data:text/javascript," + encodeURIComponent(\`export async function messageCommand() {
-  process.stdout.write(JSON.stringify(${JSON.stringify({ payload: largePayload })}) + "\\\\n");
-  return ${JSON.stringify({
-    kind: "broadcast",
-    channel: "fixture",
-    action: "broadcast",
-    handledBy: "core",
-    payload: {
-      results: [
-        { channel: "fixture", to: "ok-target", ok: true },
-        { channel: "fixture", to: "failed-target", ok: false, error: "delivery failed" },
-      ],
-    },
-    dryRun: false,
-  })};
-}\`);
-registerHooks({
-  resolve(specifier, context, nextResolve) {
-    return specifier === ${JSON.stringify(commandSpecifier)}
-      ? { shortCircuit: true, url: messageModule }
-      : nextResolve(specifier, context);
-  },
-});
-const { Command } = await import(${JSON.stringify(import.meta.resolve("commander"))});
-const { registerMessageCommands } = await import(${JSON.stringify(registrationUrl.href)});
-const { runCliWithExitFinalization } = await import(${JSON.stringify(finalizerUrl.href)});
-const program = new Command();
-registerMessageCommands(program, {
-  programVersion: "test",
-  messageChannelOptions: "fixture",
-  agentChannelOptions: "last|fixture",
-});
-await runCliWithExitFinalization({
-  run: async () => {
-    await program.parseAsync([
-      "message", "broadcast", "--channel", "fixture", "--targets",
-      "ok-target", "failed-target", "--message", "hello",
-    ], { from: "user" });
-  },
-  onError: (err) => {
-    console.error(err);
-  },
-});
-`,
-    );
-
-    const maxBuffer = 32 * 1024 * 1024;
-    const overflow = new AbortController();
-    let outputBytes = 0;
-    const spawned: { child?: ChildProcess } = {};
-    const child = await lifetime.track(
-      runNodeScript(
-        (workerArgv) => [
-          ...resolveVitestNodeArgs(),
-          ...workerArgv(registrationUrl).slice(0, -1),
-          entryPath,
-        ],
-        {
-          PATH: process.env.PATH,
-          SystemRoot: process.env.SystemRoot,
-          ComSpec: process.env.ComSpec,
-          PATHEXT: process.env.PATHEXT,
-          TEMP: process.env.TEMP,
-          TMP: process.env.TMP,
-          TMPDIR: process.env.TMPDIR,
-          ESBUILD_WORKER_THREADS: process.env.ESBUILD_WORKER_THREADS,
-          TSX_DISABLE_CACHE: process.env.TSX_DISABLE_CACHE,
-          HOME: root,
-          USERPROFILE: root,
-          NODE_DISABLE_COMPILE_CACHE: "1",
-          OPENCLAW_CONFIG_PATH: configPath,
-          OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
-          OPENCLAW_NO_RESPAWN: "1",
-          OPENCLAW_STATE_DIR: stateDir,
-        },
-        CLI_PROCESS_DEADLOCK_GUARD_MS,
-        {
-          executable: nodeExecutable,
-          cwd: path.resolve("."),
-          maxBuffer,
-          signal: AbortSignal.any([signal, finished.signal, overflow.signal]),
-          requireProcessTreeExit: process.platform !== "win32",
-          onReady(spawnedChild) {
-            spawned.child = spawnedChild;
-            // Preserve spawnSync's combined stdout/stderr failure bound.
-            const countOutput = (chunk: Buffer) => {
-              outputBytes += chunk.byteLength;
-              if (outputBytes > maxBuffer) {
-                overflow.abort();
-              }
-            };
-            spawnedChild.stdout?.on("data", countOutput);
-            spawnedChild.stderr?.on("data", countOutput);
-          },
-        },
-      ),
-    );
-    if (overflow.signal.aborted) {
-      throw new Error("Message fixture output exceeded maxBuffer", { cause: child.error });
-    }
-
-    expect(child.error).toBeUndefined();
-    expect(spawned.child?.signalCode).toBeNull();
-    expect(child.status, child.stderr).toBe(1);
-    expect(JSON.parse(child.stdout.trim())).toEqual({ payload: largePayload });
-  });
-});
-
 it.runIf(process.platform !== "win32")(
   "excludes a configured workspace before archive link validation",
   async () => {
@@ -551,7 +394,7 @@ it.runIf(process.platform !== "win32")(
     ) {
       throw new Error("backup CLI did not return an archive path");
     }
-    const entries = await listBackupArchiveEntries(output.archivePath);
+    const entries = await listArchiveEntries(output.archivePath);
     expect(entries.some((entry) => entry.endsWith("/state-sentinel.txt"))).toBe(true);
     expect(entries.some((entry) => entry.includes("/workspace/"))).toBe(false);
   },

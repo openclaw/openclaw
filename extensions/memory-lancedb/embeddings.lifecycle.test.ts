@@ -6,7 +6,10 @@ import {
   replaceRuntimeAuthProfileStoreSnapshots,
 } from "openclaw/plugin-sdk/agent-runtime";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
-import type { MemoryEmbeddingProvider } from "openclaw/plugin-sdk/memory-core-host-engine-embeddings";
+import type {
+  MemoryEmbeddingProvider,
+  registerRuntimeAuthProfileStoreMutationListener,
+} from "openclaw/plugin-sdk/memory-core-host-engine-embeddings";
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
 import { expect, it, vi } from "vitest";
 import type { MemoryConfig } from "./config.js";
@@ -14,11 +17,7 @@ import type { MemoryConfig } from "./config.js";
 const providerMocks = vi.hoisted(() => ({
   getMemoryEmbeddingProvider: vi.fn(),
   authMutationListeners: new Set<
-    (event: {
-      agentDir?: string;
-      affectsInheritedStores: boolean;
-      profileSetChanged: boolean;
-    }) => void
+    Parameters<typeof registerRuntimeAuthProfileStoreMutationListener>[0]
   >(),
 }));
 
@@ -178,6 +177,7 @@ it("invalidates only the matching normalized auth owner and unregisters on close
     agentDir: "/tmp/agent-private/../agent-private",
     affectsInheritedStores: false,
     profileSetChanged: false,
+    availabilityOnly: false,
   });
   await embed(embeddings, "other", "other warm provider");
   expect(createProvider).toHaveBeenCalledTimes(2);

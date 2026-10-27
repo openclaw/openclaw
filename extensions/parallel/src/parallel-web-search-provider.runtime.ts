@@ -37,45 +37,12 @@ const require = createRequire(import.meta.url);
 const PLUGIN_VERSION = readPluginPackageVersion({ require });
 const USER_AGENT = `openclaw-parallel/${PLUGIN_VERSION} (${process.platform})`;
 
-type ParallelConfig = {
-  apiKey?: string;
-  baseUrl?: string;
-};
-
-function invalidBaseUrlPayload(value: string) {
+function invalidBaseUrlPayload() {
   return {
     error: "invalid_base_url",
-    message: `plugins.entries.parallel.config.webSearch.baseUrl must be a valid http(s) URL. Got: ${value}`,
+    message: "plugins.entries.parallel.config.webSearch.baseUrl must be a valid http(s) URL.",
     docs: "https://docs.openclaw.ai/tools/parallel-search",
   };
-}
-
-function resolveParallelSearchEndpoint(
-  parallel?: ParallelConfig,
-): { endpoint: string } | { error: string; message: string; docs: string } {
-  const configured = normalizeOptionalString(parallel?.baseUrl);
-  if (!configured) {
-    return { endpoint: `${PARALLEL_BASE_URL}${PARALLEL_SEARCH_PATHNAME}` };
-  }
-  if (/^[a-z][a-z0-9+.-]*:\/\//i.test(configured) && !/^https?:\/\//i.test(configured)) {
-    return invalidBaseUrlPayload(configured);
-  }
-  const candidate = /^https?:\/\//i.test(configured) ? configured : `https://${configured}`;
-  let parsed: URL;
-  try {
-    parsed = new URL(candidate);
-  } catch {
-    return invalidBaseUrlPayload(configured);
-  }
-  if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
-    return invalidBaseUrlPayload(configured);
-  }
-  const pathname = parsed.pathname.replace(/\/+$/, "");
-  parsed.pathname = pathname.endsWith(PARALLEL_SEARCH_PATHNAME)
-    ? pathname
-    : `${pathname}${PARALLEL_SEARCH_PATHNAME}`;
-  parsed.hash = "";
-  return { endpoint: parsed.toString() };
 }
 
 export async function executeParallelWebSearchProviderTool(
@@ -102,15 +69,34 @@ export async function executeParallelWebSearchProviderTool(
       docs: "https://docs.openclaw.ai/tools/parallel-search",
     };
   }
-  const endpointResult = resolveParallelSearchEndpoint(parallelConfig);
-  if ("error" in endpointResult) {
-    return endpointResult;
+  let endpoint = `${PARALLEL_BASE_URL}${PARALLEL_SEARCH_PATHNAME}`;
+  const configured = normalizeOptionalString(parallelConfig?.baseUrl);
+  if (configured) {
+    if (/^[a-z][a-z0-9+.-]*:\/\//i.test(configured) && !/^https?:\/\//i.test(configured)) {
+      return invalidBaseUrlPayload();
+    }
+    const candidate = /^https?:\/\//i.test(configured) ? configured : `https://${configured}`;
+    let parsed: URL;
+    try {
+      parsed = new URL(candidate);
+    } catch {
+      return invalidBaseUrlPayload();
+    }
+    if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
+      return invalidBaseUrlPayload();
+    }
+    const pathname = parsed.pathname.replace(/\/+$/, "");
+    parsed.pathname = pathname.endsWith(PARALLEL_SEARCH_PATHNAME)
+      ? pathname
+      : `${pathname}${PARALLEL_SEARCH_PATHNAME}`;
+    parsed.hash = "";
+    endpoint = parsed.toString();
   }
-  const endpoint = endpointResult.endpoint;
 
   return executeParallelSearchRequest({
     provider: "parallel",
     endpoint,
+    apiKey,
     args,
     searchConfig,
     search: async (request, timeoutSeconds): Promise<ParallelSearchResponse> => {

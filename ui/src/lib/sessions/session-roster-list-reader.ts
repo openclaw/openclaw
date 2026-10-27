@@ -1,14 +1,14 @@
 import type { SessionsListResult } from "../../api/types.ts";
 import { formatUiError } from "../format-error.ts";
+import type { SessionListRefreshHost } from "./session-managed-list-refresh.ts";
+import { requestSessionList } from "./session-requests.ts";
+import type { createSessionRosterObservations } from "./session-roster-observations.ts";
 import type {
   SessionListOptions,
   SessionListScope,
   SessionRefreshOutcome,
   SessionState,
-} from "./session-capability.ts";
-import type { SessionListRefreshHost } from "./session-managed-list-refresh.ts";
-import { requestSessionList } from "./session-requests.ts";
-import type { createSessionRosterObservations } from "./session-roster-observations.ts";
+} from "./session-types.ts";
 
 /** Reads scoped roster facts without acquiring foreground query ownership. */
 export function createSessionRosterListReader(

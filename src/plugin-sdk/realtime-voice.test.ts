@@ -208,6 +208,13 @@ describe("RealtimeVoiceSessionLifecycle", () => {
       Buffer.alloc(512 * 1024, 0x02),
     ]);
 
+    const small = Buffer.alloc(960, 0x03);
+    lifecycle.enqueuePendingAudio(small);
+    small.fill(0);
+    const [retained] = lifecycle.drainPendingAudio();
+    expect(retained).toEqual(Buffer.alloc(960, 0x03));
+    expect(retained?.buffer.byteLength).toBe(960);
+
     lifecycle.enqueuePendingAudio(Buffer.from([0x04]));
     lifecycle.cancel();
     expect(lifecycle.drainPendingAudio()).toEqual([]);

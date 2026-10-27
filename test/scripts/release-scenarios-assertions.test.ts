@@ -1,9 +1,11 @@
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { writePluginInstallIndexForE2E } from "../../scripts/e2e/lib/plugin-index-sqlite.mjs";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
+import { writeJsonFile as writeJson } from "../helpers/temp-repo.js";
 
 const ASSERTIONS_SCRIPT = "scripts/e2e/lib/release-scenarios/assertions.mjs";
 const DISABLE_EXPERIMENTAL_WARNING = "--disable-warning=ExperimentalWarning";
@@ -15,14 +17,9 @@ const envRef = {
   keyRef: { source: "env", provider: "default", id: "OPENAI_API_KEY" },
 };
 
-function writeJson(filePath: string, value: unknown) {
-  mkdirSync(path.dirname(filePath), { recursive: true });
-  writeFileSync(filePath, `${JSON.stringify(value, null, 2)}\n`, "utf8");
-}
-
-function runAssertion(args: string[], env?: NodeJS.ProcessEnv) {
+function runAssertion(args: string[], env?: NodeJS.ProcessEnv, script = ASSERTIONS_SCRIPT) {
   const current = process.env.NODE_OPTIONS ?? "";
-  return spawnSync(process.execPath, [ASSERTIONS_SCRIPT, ...args], {
+  return spawnSync(process.execPath, [script, ...args], {
     encoding: "utf8",
     env: {
       ...process.env,
@@ -48,18 +45,10 @@ function authAssertion(profile: unknown, config: Record<string, unknown> = {}) {
   try {
     db.exec(`
       PRAGMA user_version = 13;
-      CREATE TABLE IF NOT EXISTS config_machine_state (
-        state_key TEXT NOT NULL PRIMARY KEY,
-        value_json TEXT NOT NULL,
-        updated_at_ms INTEGER NOT NULL
-      );
+      CREATE TABLE config_machine_state (
+        state_key TEXT NOT NULL PRIMARY KEY, value_json TEXT NOT NULL, updated_at_ms INTEGER NOT NULL);
     `);
-    db.prepare(
-      `
-        INSERT INTO config_machine_state (state_key, value_json, updated_at_ms)
-        VALUES (?, ?, ?)
-      `,
-    ).run(
+    db.prepare("INSERT INTO config_machine_state VALUES (?, ?, ?)").run(
       "authProfiles.store",
       JSON.stringify({ version: 1, profiles: { "openai:api-key": profile } }),
       Date.now(),
@@ -172,5 +161,132 @@ describe("release scenario assertions", () => {
     expect(result.stderr).toContain(
       "candidate package version mismatch: expected 2026.5.26, got 2026.5.22",
     );
+  });
+});
+
+describe("marketplace lifecycle assertions", () => {
+  let home: string;
+  let installPathFile: string;
+  let stateDir: string;
+  let configPath: string;
+  const pluginId = "release-marketplace-plugin";
+
+  beforeEach(() => {
+    home = directories.make("openclaw-marketplace-lifecycle-");
+    installPathFile = path.join(home, "install-path.txt");
+    stateDir = path.join(home, ".openclaw");
+    configPath = path.join(stateDir, "openclaw.json");
+  });
+
+  function writeIndex(record: Record<string, unknown> | null, packageVersion = "") {
+    writePluginInstallIndexForE2E(
+      {
+        installRecords: record ? { [pluginId]: record } : {},
+        plugins: record ? [{ pluginId, packageVersion }] : [],
+      },
+      { stateDir },
+    );
+  }
+
+  function runHelper(args: string[]) {
+    return runAssertion(
+      args,
+      { HOME: home, OPENCLAW_CONFIG_PATH: configPath, OPENCLAW_STATE_DIR: stateDir },
+      "scripts/e2e/lib/release-plugin-marketplace/lifecycle-assertions.mjs",
+    );
+  }
+
+  function writeMarketplaceState(version: string) {
+    const installPath = path.join(stateDir, "extensions", pluginId);
+    mkdirSync(installPath, { recursive: true });
+    writeJson(path.join(installPath, "package.json"), { name: `@openclaw/${pluginId}`, version });
+    writeJson(configPath, {
+      plugins: { entries: { [pluginId]: { enabled: true } } },
+    });
+    writeIndex(
+      {
+        source: "marketplace",
+        installPath,
+        version,
+        marketplaceName: "Release Fixture Marketplace",
+        marketplaceSource: "release-fixtures",
+        marketplacePlugin: pluginId,
+      },
+      version,
+    );
+    return installPath;
+  }
+
+  function assertMarketplace(version: string) {
+    return runHelper([
+      "assert-marketplace-state",
+      pluginId,
+      version,
+      "release-fixtures",
+      pluginId,
+      installPathFile,
+    ]);
+  }
+
+  function uninstallHelper(command: string, sentinelId: string, sentinelPath: string) {
+    return runHelper([command, pluginId, sentinelId, sentinelPath, installPathFile]);
+  }
+
+  function expectSuccess(result: ReturnType<typeof runHelper>) {
+    expect(result).toMatchObject({ stderr: "", status: 0 });
+  }
+
+  it("checks canonical marketplace metadata and stable managed install paths", () => {
+    const installPath = writeMarketplaceState("0.0.1");
+    expectSuccess(assertMarketplace("0.0.1"));
+    expect(readFileSync(installPathFile, "utf8").trim()).toBe(installPath);
+
+    writeMarketplaceState("0.0.2");
+    expectSuccess(assertMarketplace("0.0.2"));
+  });
+
+  it("rejects marketplace state with the wrong persisted version", () => {
+    writeMarketplaceState("0.0.1");
+    const result = assertMarketplace("0.0.2");
+
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain("expected install record version 0.0.2, got 0.0.1");
+  });
+
+  it("seeds uninstall state and verifies complete cleanup with sentinels preserved", () => {
+    const installPath = writeMarketplaceState("0.0.2");
+    const sentinelPluginId = "release-marketplace-other";
+    const sentinelPath = path.join(home, "marketplace", sentinelPluginId);
+    mkdirSync(sentinelPath, { recursive: true });
+
+    expectSuccess(
+      uninstallHelper("seed-marketplace-uninstall-state", sentinelPluginId, sentinelPath),
+    );
+
+    const config = JSON.parse(readFileSync(configPath, "utf8"));
+    expect(config.plugins).toMatchObject({
+      allow: [pluginId, sentinelPluginId],
+      deny: [pluginId, sentinelPluginId],
+      load: { paths: [installPath, sentinelPath] },
+    });
+
+    config.plugins.entries[pluginId] = { enabled: false };
+    config.plugins.allow = [sentinelPluginId];
+    config.plugins.deny = [sentinelPluginId];
+    config.plugins.load.paths = [sentinelPath];
+    writeJson(configPath, config);
+    rmSync(installPath, { recursive: true });
+    writeIndex(null);
+
+    expectSuccess(
+      uninstallHelper("assert-marketplace-uninstalled", sentinelPluginId, sentinelPath),
+    );
+  });
+
+  it("checks the exact dry-run and update outcome text", () => {
+    const logPath = path.join(home, "update.log");
+    const text = "Would update release-marketplace-plugin: 0.0.1 -> 0.0.2.";
+    writeFileSync(logPath, `${text}\n`, "utf8");
+    expectSuccess(runHelper(["assert-update-log", logPath, text]));
   });
 });

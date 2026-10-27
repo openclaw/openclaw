@@ -179,7 +179,6 @@ describe("TelnyxProvider.parseWebhookEvent", () => {
         type: "call.speech",
         transcript: "hello this is a test speech",
         isFinal: false,
-        confidence: 0.977219,
       },
     ]);
   });

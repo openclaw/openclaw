@@ -916,6 +916,11 @@ prepare_suspension() {
 				printf 'WAITING transient write custody activeCount=%s blockers=%s\n' \
 					"$suspension_active_count" "$suspension_blockers"
 				sleep "$custody_wait_interval"
+				if ((SECONDS >= custody_wait_deadline)); then
+					printf 'DEFERRED bounded interruption write custody wait expired activeCount=%s blockers=%s\n' \
+						"$suspension_active_count" "$suspension_blockers"
+					return 75
+				fi
 				continue
 			fi
 			if ((${waive_terminal_persistence:-0} && !${terminal_persistence_waiver_armed:-0})) &&

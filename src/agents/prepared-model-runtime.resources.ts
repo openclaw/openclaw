@@ -40,10 +40,6 @@ class PreparedRegistryResources {
   ) {
     state.views.add(this);
     state.registries.set(acquired.registry, this);
-    void this.completion.promise.then(
-      () => state.views.delete(this),
-      () => {},
-    );
   }
 
   get primaryRegistry(): PluginRegistry {
@@ -99,6 +95,7 @@ class PreparedRegistryResources {
             ),
           );
         } else {
+          state.views.delete(this);
           this.completion.resolve();
         }
       })();
@@ -152,7 +149,7 @@ export class PreparedModelRuntimeBuildResources {
     // External registry owners keep physical custody, but construction still owns finite work.
     this.releases.defer(releaseClaim);
     try {
-      releaseWork = retainRuntimePluginWork([registry]);
+      releaseWork = retainRuntimePluginWork([registry], "prepared-construction");
     } catch (error) {
       // Acquisition cleanup may wait for this claim; start it now and let the stack join it.
       void releaseClaim().catch(() => {});

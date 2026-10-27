@@ -33,16 +33,16 @@ export class CodexSteeringAssistantSegments {
     this.pending.clear();
   }
 
-  recordStream(itemId: string, knownFinalAnswer: boolean) {
+  recordStream(itemId: string, knownStableAnswer: boolean) {
     const replace =
       this.streamedPartialAssistantItemId !== undefined &&
       this.streamedPartialAssistantItemId !== itemId;
-    // Codex defines final_answer as terminal text. Replacement mode is for
+    // Codex partial_answer and final_answer text is stable. Replacement mode is for
     // phase-unknown/provisional items; append-only consumers cannot retract bytes.
-    if (replace && (!knownFinalAnswer || this.streamedPartialAssistantItemReplaceable)) {
+    if (replace && (!knownStableAnswer || this.streamedPartialAssistantItemReplaceable)) {
       this.streamedPartialAssistantItemReplaceable = true;
     } else if (this.streamedPartialAssistantItemId === undefined) {
-      this.streamedPartialAssistantItemReplaceable = !knownFinalAnswer;
+      this.streamedPartialAssistantItemReplaceable = !knownStableAnswer;
     }
     this.streamedPartialAssistantItemId = itemId;
     const replaceable = this.streamedPartialAssistantItemReplaceable;

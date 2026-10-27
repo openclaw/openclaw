@@ -1,16 +1,19 @@
+import fs from "node:fs";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
-import { isRecord } from "@openclaw/normalization-core";
-import { afterAll, afterEach, beforeEach, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { trackSqliteStatementExecutions } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import { listUsageCountedTranscriptStats } from "../../infra/session-cost-usage-collection.test-support.js";
 import { openOpenClawAgentDatabaseReadOnly } from "../../state/openclaw-agent-db-readonly-open.js";
 import {
   closeOpenClawAgentDatabasesAsync,
   openOpenClawAgentDatabase,
   runOpenClawAgentWriteTransaction,
+  resolveOpenClawAgentSqlitePath,
 } from "../../state/openclaw-agent-db.js";
 import { requireNativeSqliteDatabase } from "../../test-utils/native-sqlite.js";
 import { useSessionStoreTempDirs } from "../../test-utils/session-state-cleanup.js";
+import { normalizeSessionDeliveryState } from "../../utils/delivery-context.shared.js";
 import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../runtime-snapshot.js";
 import {
   appendTranscriptMessageSync,
@@ -19,15 +22,27 @@ import {
   listSessionEntriesCore,
   listSessionTranscriptInstances,
   loadSessionEntry,
-  openSessionEntryReadView,
+  loadExactSessionEntryReadOnly,
+  loadSessionEntryReadOnly,
+  loadSessionEntryByIdReadOnly,
+  listSessionEntriesReadOnly,
+  patchSessionEntryCore,
+  persistSessionTranscriptTurn,
   replaceSessionEntrySync,
   upsertSessionEntryCore,
 } from "./session-accessor.js";
-import { readSessionEntryCache } from "./session-accessor.sqlite-entry-cache.js";
-import { readReferencedSessionIds } from "./session-accessor.sqlite-lifecycle-state.js";
+import {
+  readSessionEntryCache,
+  readExactSessionEntryCandidatesInDatabase as readCandidates,
+} from "./session-accessor.sqlite-entry-cache.js";
 import { recordSessionParticipant } from "./session-accessor.sqlite-participants.native.js";
+import { readReferencedSessionIds } from "./session-accessor.sqlite-references.js";
+import { resolveSqliteTranscriptScope } from "./session-accessor.sqlite-scope.js";
 import { ensureTranscriptSessionRoot } from "./session-accessor.sqlite-transcript-state.js";
+import { appendTranscriptEventsInTransaction as appendEvents } from "./session-accessor.sqlite-transcript-store.js";
 import { appendTranscriptEventSync } from "./session-accessor.sqlite-transcript-write.test-support.js";
+import { markCanonicalSessionValidationPending } from "./session-canonical-key.js";
+import { promptReport } from "./system-prompt-report.test-support.js";
 import type { SessionEntry } from "./types.js";
 
 const parseSessionEntryCalls = vi.hoisted(() => vi.fn());
@@ -36,7 +51,6 @@ vi.mock("./session-accessor.sqlite-status.js", async (importOriginal) => {
   return {
     ...actual,
     parseSessionEntryJson: (...args: Parameters<typeof actual.parseSessionEntryJson>) => {
-      // Observe list payload decoding independently of the selected SQL columns.
       if (args[1] === "list") {
         parseSessionEntryCalls(args[0].entry_json);
       }
@@ -45,23 +59,28 @@ vi.mock("./session-accessor.sqlite-status.js", async (importOriginal) => {
   };
 });
 
-afterAll(clearRuntimeConfigSnapshot);
-const sessionDirs = useSessionStoreTempDirs(afterAll, "openclaw-entry-cache-");
+const sessionDirs = useSessionStoreTempDirs(
+  (cleanup) =>
+    afterEach(async () => {
+      vi.restoreAllMocks();
+      await cleanup();
+      vi.unstubAllEnvs();
+      clearRuntimeConfigSnapshot();
+    }),
+  "openclaw-entry-cache-",
+);
 
-beforeEach(() => parseSessionEntryCalls.mockClear());
-
-afterEach(() => {
-  vi.restoreAllMocks();
-  vi.unstubAllEnvs();
+beforeEach(() => {
+  parseSessionEntryCalls.mockClear();
+  setRuntimeConfigSnapshot({});
 });
 
-function createSessionScope(label: string) {
+function createSessionScope(label: string, sessionKey = `agent:main:${label}`) {
   const stateDir = sessionDirs.make();
-  setRuntimeConfigSnapshot({});
   return {
     agentId: "main",
     env: { ...process.env, OPENCLAW_STATE_DIR: stateDir },
-    sessionKey: `agent:main:${label}`,
+    sessionKey,
     projection: "list" as const,
   };
 }
@@ -106,17 +125,10 @@ function listedEntry(scope: SessionScope) {
   return listSessionEntriesCore({ ...scope, clone: false })[0]?.entry;
 }
 
-function savedPrompts(prompt: string) {
+function savedPrompts(prompt: string, promptChars = 0) {
   return {
     skillsSnapshot: { prompt, skills: [] },
-    systemPromptReport: {
-      source: "run" as const,
-      generatedAt: 1,
-      systemPrompt: { chars: 1, projectContextChars: 0, nonProjectContextChars: 1 },
-      injectedWorkspaceFiles: [],
-      skills: { promptChars: 0, entries: [] },
-      tools: { listChars: 0, schemaChars: 0, entries: [] },
-    },
+    systemPromptReport: promptReport(1, 1, promptChars),
   };
 }
 
@@ -147,7 +159,7 @@ it("reopens pre-device-folder entries through the codec, full accessor, and list
   expect([listed?.deviceFolder, listed?.skillsSnapshot]).toEqual([undefined, undefined]);
   expect(parseSessionEntryCalls).toHaveBeenCalled();
   expectCached(() => listingEntries(scope).get(scope.sessionKey), listed);
-  expect(openSessionEntryReadView(scope).get(scope.sessionKey)).toEqual(listed);
+  expect(loadExactSessionEntryReadOnly({ ...scope, clone: false })?.entry).toEqual(listed);
 
   await upsertSessionEntryCore(scope, { ...full!, label: "Continued after upgrade" });
   await closeOpenClawAgentDatabasesAsync(scope.env.OPENCLAW_STATE_DIR);
@@ -216,7 +228,7 @@ it.each(["owner", "participant"] as const)(
 );
 
 it.each(["plugin-owned-state", "promoted-slots"] as const)(
-  "cleans selected plugin metadata without materializing siblings or saved prompts (%s)",
+  "cleans selected plugin metadata while preserving siblings and saved prompts (%s)",
   async (mode) => {
     const scope = createSessionScope("plugin-cleanup");
     vi.stubEnv("OPENCLAW_STATE_DIR", scope.env.OPENCLAW_STATE_DIR);
@@ -237,7 +249,6 @@ it.each(["plugin-owned-state", "promoted-slots"] as const)(
     const database = openOpenClawAgentDatabase(scope);
 
     parseSessionEntryCalls.mockClear();
-    const clone = vi.spyOn(globalThis, "structuredClone");
     expect(
       await cleanupPluginHostSessionStore({
         agentId: scope.agentId,
@@ -248,12 +259,6 @@ it.each(["plugin-owned-state", "promoted-slots"] as const)(
         mode,
       }),
     ).toBe(1);
-    expect(
-      clone.mock.calls.some(
-        ([value]) => isRecord(value) && value.sessionId === "plugin-cleanup-sibling",
-      ),
-    ).toBe(false);
-    clone.mockRestore();
     expectSmallListPayloads();
     const cleaned = loadSessionEntry(scope);
     expect(cleaned).toEqual(expect.objectContaining(prompts));
@@ -324,12 +329,6 @@ it("keeps same-path caches isolated by live connection", async () => {
     throw new Error("Expected the existing agent database");
   }
   const alternate = opened.database.db;
-  const parse = vi.spyOn(JSON, "parse");
-  const expectOneParse = () =>
-    expect(
-      parse.mock.calls.filter(([json]) => json.includes('"sessionId":"connection-identity"')),
-    ).toHaveLength(1);
-
   try {
     parseSessionEntryCalls.mockClear();
     const alternateDatabase = { agentId: primary.agentId, db: alternate };
@@ -337,16 +336,14 @@ it("keeps same-path caches isolated by live connection", async () => {
       scope.sessionKey,
     );
     expect(alternateEntry?.label).toBe("connection-identity");
-    expectOneParse();
+    expect(alternateEntry).not.toBe(first);
 
     expectCached(() => listedEntry(scope), first);
     expectCached(
       () => readSessionEntryCache(alternateDatabase, { cache: true }).entries.get(scope.sessionKey),
       alternateEntry,
     );
-    expectOneParse();
   } finally {
-    parse.mockRestore();
     opened.database.close();
   }
 });
@@ -375,7 +372,7 @@ it("does not revalidate session nodes after a same-connection transcript write",
   expect(parseSessionEntryCalls).not.toHaveBeenCalled();
 });
 
-it("adds a native insertion to a warm snapshot without reparsing siblings", async () => {
+it("adds a native insertion to a warm snapshot preserving borrowed siblings", async () => {
   const scope = await seed("write-through-insert");
   openOpenClawAgentDatabase(scope);
   const existing = listingEntries(scope).get(scope.sessionKey);
@@ -440,4 +437,216 @@ it("bypasses the cache in a transaction and reuses the persisted snapshot after 
   expect(borrowedAfter?.label).toBe("before");
   expect(parseSessionEntryCalls).toHaveBeenCalledTimes(1);
   expectCached(() => listedEntry(scope), borrowedAfter);
+});
+
+function createFixture(sessionKey = "agent:main:plain") {
+  const scope = createSessionScope("canonical", sessionKey);
+  const put = (key: string, entry: Partial<SessionEntry> = {}) =>
+    replaceSessionEntrySync(
+      { ...scope, sessionKey: key },
+      { sessionId: key, updatedAt: 1, ...entry },
+    );
+  return {
+    scope,
+    put,
+    read: (projection?: "full" | "list", key = sessionKey) =>
+      loadSessionEntryReadOnly({ ...scope, sessionKey: key, projection }),
+    byId: (sessionId: string) =>
+      loadSessionEntryByIdReadOnly({ ...scope, sessionId, projection: "list" }),
+    setJson: (key: string, json: string) =>
+      openOpenClawAgentDatabase(scope)
+        .db.prepare("UPDATE session_nodes SET entry_json = ? WHERE session_key = ?")
+        .run(json, key),
+    retain: (sessionId: string) =>
+      runOpenClawAgentWriteTransaction(
+        (database) =>
+          ensureTranscriptSessionRoot(
+            database,
+            { ...scope, sessionKey: `agent:main:${sessionId}`, sessionId },
+            1,
+          ),
+        scope,
+      ),
+  };
+}
+
+it("omits saved prompts from metadata reads and transcript batches", async () => {
+  const { scope, put, read } = createFixture();
+  const { sessionKey } = scope;
+  expect(read("list")).toBeUndefined();
+  expect(fs.existsSync(resolveOpenClawAgentSqlitePath(scope))).toBe(false);
+  const savedPrompt = "saved prompt ".repeat(40_000);
+  put(sessionKey, {
+    lifecycleRevision: "original",
+    ...savedPrompts(savedPrompt, 1),
+  });
+  assignSessionOwner(scope, {
+    owner: { type: "agent", id: "owner" },
+    assignedBy: { type: "human", id: "assigner" },
+    assignedAt: 10,
+  });
+  recordSessionParticipant(scope, { identity: { type: "profile", id: "person" }, promptedAt: 10 });
+  const { skillsSnapshot: _saved, systemPromptReport: _report, ...expected } = read()!;
+  const queries = trackSqliteStatementExecutions(
+    requireNativeSqliteDatabase(openOpenClawAgentDatabase(scope).db),
+    ["entries"],
+    (sql) => (/(?:from|join)\s+"session_nodes"/i.test(sql) ? "entries" : null),
+  );
+  using _ = { [Symbol.dispose]: queries.restore };
+  expect(read("list")).toEqual(expected);
+  expect(queries.textBytes.entries).toBeLessThan(2048);
+  queries.textBytes.entries = 0;
+  queries.counts.entries = 0;
+  runOpenClawAgentWriteTransaction((writer) => {
+    expect(
+      appendEvents(writer, resolveSqliteTranscriptScope({ ...scope, sessionId: sessionKey }), [
+        { type: "custom", id: "first", parentId: null, data: "synthetic" },
+        { type: "custom", id: "second", parentId: "first", data: "synthetic" },
+      ]),
+    ).toBe(2);
+  }, scope);
+  expect(queries.counts.entries).toBeGreaterThan(0);
+  expect(queries.textBytes.entries).toBeLessThan(4096);
+  expect(read()?.skillsSnapshot?.prompt).toBe(savedPrompt);
+  expect(read(undefined, sessionKey.replace("agent:", "AGENT:"))).toEqual(read());
+  await patchSessionEntryCore(scope, (entry) => {
+    expect(entry.skillsSnapshot?.prompt).toBe(savedPrompt);
+    return { label: "renamed" };
+  });
+  expect(read()).toMatchObject({ label: "renamed", skillsSnapshot: { prompt: savedPrompt } });
+});
+
+it("validates a folded sibling before selecting or preparing the exact opaque target", async () => {
+  const sessionKey = "agent:main:matrix:channel:!Mixed:example.org";
+  const { scope, put, read, setJson } = createFixture(sessionKey);
+  const sibling = sessionKey.toLowerCase();
+  [sessionKey, sibling].forEach((key) => put(key));
+  read();
+  const database = openOpenClawAgentDatabase(scope);
+  markCanonicalSessionValidationPending(database, [sibling]);
+  const delivery = normalizeSessionDeliveryState({
+    context: { channel: "matrix", to: "!Mixed:example.org" },
+  });
+  setJson(sibling, JSON.stringify({ sessionId: sibling, updatedAt: 1, delivery }));
+  database.db
+    .prepare("UPDATE session_nodes SET entry_valid = 1 WHERE session_key = ?")
+    .run(sibling);
+  const listing = { ...scope, sessionKeys: [sessionKey], includeParticipants: false };
+  for (const projection of ["full", "list"] as const) {
+    expect(() => read(projection)).toThrow("non-canonical persisted row");
+    expect(() => listSessionEntriesReadOnly({ ...listing, projection })).toThrow(
+      "non-canonical persisted row",
+    );
+  }
+  const shouldAppend = vi.fn(() => true);
+  await expect(
+    persistSessionTranscriptTurn(
+      { ...scope, sessionId: sessionKey },
+      {
+        expectedSessionId: sessionKey,
+        messages: [{ message: { role: "user", content: "must not prepare" }, shouldAppend }],
+        updateMode: "none",
+      },
+    ),
+  ).rejects.toThrow("non-canonical persisted row");
+  expect(shouldAppend).not.toHaveBeenCalled();
+});
+it("preserves visible listing order and excludes retained generations", () => {
+  const { scope, put, byId, retain } = createFixture();
+  const shared = { sessionId: "shared", spawnDepth: 2 };
+  for (const name of ["z-shared", "a-shared", "internal-session-effects:shared"]) {
+    put(`agent:main:${name}`, {
+      ...shared,
+      label: name,
+      skillsSnapshot: { prompt: "saved prompt", skills: [] },
+    });
+  }
+  put("agent:main:internal-session-effects:hidden", { sessionId: "hidden" });
+  ["previous", "current"].forEach((sessionId) => put("agent:main:rolled-over", { sessionId }));
+  retain("retained");
+
+  const selected = byId("shared");
+  expect(selected).toEqual(
+    listSessionEntriesReadOnly({ ...scope, projection: "list" }).find(
+      ({ entry }) => entry.sessionId === "shared",
+    ),
+  );
+  expect(selected).toMatchObject({
+    sessionKey: "agent:main:a-shared",
+    entry: { ...shared, label: "a-shared" },
+  });
+  expect(selected?.entry.skillsSnapshot).toBeUndefined();
+  expect(byId("current")).toMatchObject({
+    sessionKey: "agent:main:rolled-over",
+    entry: { sessionId: "current" },
+  });
+  ["previous", "retained", "hidden", "missing"].forEach((id) => expect(byId(id)).toBeUndefined());
+});
+
+it("leaves a missing store absent", () => {
+  const root = sessionDirs.make();
+  const env = { OPENCLAW_STATE_DIR: path.join(root, "state") };
+  expect(
+    loadSessionEntryByIdReadOnly({ agentId: "main", env, sessionId: "missing" }),
+  ).toBeUndefined();
+  expect(fs.readdirSync(root)).toEqual([]);
+});
+
+it("preserves delivery JSON semantics, retained windows, and invalid-row failures", () => {
+  const { scope, put, retain, setJson } = createFixture();
+  const delivery = normalizeSessionDeliveryState({
+    context: {
+      channel: "matrix",
+      to: "!Opaque:example.org",
+      accountId: "work",
+      threadId: "Topic",
+    },
+  });
+  const entry = { sessionId: "source", updatedAt: 1, delivery, groupId: "!Opaque:example.org" };
+  const json = JSON.stringify(entry);
+  const cases = [
+    json,
+    json
+      .replace('"sessionId":"source"', '"sessionId":"discarded","sessionId":"source"')
+      .replace('"delivery":', '"delivery":null,"delivery":'),
+    json.slice(0, -1) + ',"unused":' + "[".repeat(1100) + "0" + "]".repeat(1100) + "}",
+    JSON.stringify({ ...entry, delivery: null, groupId: false }),
+    JSON.stringify({ ...entry, groupId: "opaque-\ud800" }),
+    '{"sessionId":"source","updatedAt":1}',
+  ];
+  const database = openOpenClawAgentDatabase(scope);
+  const keys = cases.map((_, index) => `agent:main:case-${index}`);
+  keys.forEach((key) => put(key, entry));
+  retain("retained");
+  keys.push("agent:main:retained", "agent:main:missing");
+  const read = (projection: "list" | "delivery") =>
+    readCandidates(
+      database,
+      keys.map((key) => [key]),
+      projection,
+    );
+  expect(read("delivery").every((result) => result.ok)).toBe(true);
+  // Admitted readers preserve raw metadata parsing; cold admission still rejects uncertified rows.
+  cases.forEach((stored, index) => setJson(keys[index]!, stored));
+  expect(read("delivery")).toEqual([
+    ...cases.map((stored, index) => {
+      const projected: Record<string, unknown> = JSON.parse(stored);
+      delete projected.unused;
+      return { ok: true, value: [{ sessionKey: keys[index], entry: projected }] };
+    }),
+    { ok: true, value: [] },
+    { ok: true, value: [] },
+  ]);
+  for (const broken of [
+    json + "\u0000tail",
+    '{"unrelated":true}',
+    json.replace('"updatedAt":1', '"updatedAt":2'),
+  ]) {
+    setJson(keys[0]!, broken);
+    expect(read("delivery").map((r) => r.ok)).toEqual(read("list").map((r) => r.ok));
+    expect(read("delivery")[0]).toMatchObject({
+      ok: false,
+      error: { code: "SESSION_CANONICAL_KEY_MIGRATION_REQUIRED" },
+    });
+  }
 });

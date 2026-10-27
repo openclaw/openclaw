@@ -105,31 +105,6 @@ function inspectMattermostIngressEvent(rawEvent: string) {
   return { eventId, laneKey: `channel:${channelId}` };
 }
 
-function parseClaimedEvent(rawEvent: string, eventId: string) {
-  const payload = parseMattermostEventPayload(rawEvent);
-  if (!payload || payload.event !== "posted") {
-    throw new MattermostIngressPermanentError(
-      "invalid-event",
-      `Mattermost ingress row ${eventId} is not a posted event.`,
-    );
-  }
-  const post = parseMattermostPost(payload.data?.post);
-  // Channel id may live on the post, the event data, or the broadcast — the
-  // durable inspector accepted all three, so the claim-side check must too.
-  const claimedChannelId =
-    post?.channel_id?.trim() ||
-    payload.data?.channel_id?.trim() ||
-    payload.broadcast?.channel_id?.trim();
-  const senderId = post?.user_id?.trim();
-  if (!post || post.id !== eventId || !senderId || !claimedChannelId) {
-    throw new MattermostIngressPermanentError(
-      "invalid-event",
-      `Mattermost ingress row ${eventId} has invalid post identity.`,
-    );
-  }
-  return { post: { ...post, user_id: senderId }, payload };
-}
-
 function resolveMattermostIngressNonRetryableFailure(error: unknown) {
   if (error instanceof MattermostIngressPermanentError) {
     return { reason: error.reason, message: error.message };
@@ -179,14 +154,33 @@ export function createMattermostIngressMonitor(options: {
         ),
     },
     deliver: async (rawEvent, lifecycle, claim) => {
-      const { post, payload } = parseClaimedEvent(rawEvent, claim.id);
-      return await options.dispatch(post, payload, lifecycle);
+      const payload = parseMattermostEventPayload(rawEvent);
+      if (!payload || payload.event !== "posted") {
+        throw new MattermostIngressPermanentError(
+          "invalid-event",
+          `Mattermost ingress row ${claim.id} is not a posted event.`,
+        );
+      }
+      const post = parseMattermostPost(payload.data?.post);
+      // Channel id may live on the post, the event data, or the broadcast — the
+      // durable inspector accepted all three, so the claim-side check must too.
+      const claimedChannelId =
+        post?.channel_id?.trim() ||
+        payload.data?.channel_id?.trim() ||
+        payload.broadcast?.channel_id?.trim();
+      const senderId = post?.user_id?.trim();
+      if (!post || post.id !== claim.id || !senderId || !claimedChannelId) {
+        throw new MattermostIngressPermanentError(
+          "invalid-event",
+          `Mattermost ingress row ${claim.id} has invalid post identity.`,
+        );
+      }
+      return await options.dispatch({ ...post, user_id: senderId }, payload, lifecycle);
     },
     pollIntervalMs: options.pollIntervalMs ?? MATTERMOST_INGRESS_POLL_INTERVAL_MS,
-    // Preserve Mattermost's existing one-drain-at-a-time delivery cycle.
-    waitForDeliveryIdleBeforeRepump: true,
     retention: "standard",
     drain: {
+      deferredLaneOccupancy: "release",
       resolveNonRetryableFailure: resolveMattermostIngressNonRetryableFailure,
       adoptionStallTimeoutMs: options.adoptionStallTimeoutMs,
       onLog: (message) => options.runtime.log?.(`mattermost ${message}`),

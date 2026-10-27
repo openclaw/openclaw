@@ -7,6 +7,7 @@ import {
   type GroupToolPolicyConfig,
   type ScopeTree,
 } from "openclaw/plugin-sdk/channel-policy";
+import { resolveTelegramAccountConfig } from "./account-config.js";
 
 function parseTelegramGroupId(value?: string | null) {
   const raw = value?.trim() ?? "";
@@ -33,7 +34,7 @@ export function resolveTelegramGroupRequireMention(
   if (chatId) {
     const groups =
       (params.accountId
-        ? params.cfg.channels?.telegram?.accounts?.[params.accountId]?.groups
+        ? resolveTelegramAccountConfig(params.cfg, params.accountId)?.groups
         : undefined) ?? params.cfg.channels?.telegram?.groups;
     const groupConfig = groups?.[chatId];
     const groupDefault = groups?.["*"];

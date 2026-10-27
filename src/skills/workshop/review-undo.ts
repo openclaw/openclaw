@@ -1,5 +1,6 @@
 import { resolveSystemEventQueueKey } from "../../infra/system-event-ownership.js";
 import { enqueueSystemEvent } from "../../infra/system-events.js";
+import { KeyedAsyncQueue } from "../../plugin-sdk/keyed-async-queue.js";
 import type { WorkshopChange } from "./changes.kernel.js";
 import {
   archiveWorkshopSkill,
@@ -160,7 +161,7 @@ async function revertReview(
   return { status: "undone", changes };
 }
 
-const inFlight = new Map<string, Promise<WorkshopReviewUndoResult>>();
+const inFlight = new KeyedAsyncQueue();
 
 /**
  * Reverts every skill one background review changed: restores the version saved before the
@@ -177,16 +178,5 @@ export async function undoWorkshopReview(
   }
   // A double-pressed Undo waits for the first press, then finds the review already undone.
   const key = `${ctx.agentId}\0${reviewId}`;
-  const previous = inFlight.get(key);
-  const run = (previous ?? Promise.resolve())
-    .catch(() => undefined)
-    .then(() => revertReview(ctx, params.runId, reviewId));
-  inFlight.set(key, run);
-  try {
-    return await run;
-  } finally {
-    if (inFlight.get(key) === run) {
-      inFlight.delete(key);
-    }
-  }
+  return await inFlight.enqueue(key, () => revertReview(ctx, params.runId, reviewId));
 }

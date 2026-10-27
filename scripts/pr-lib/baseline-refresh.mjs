@@ -1060,7 +1060,40 @@ function create(pr, source, baseline, main, archive, snapshot, manifestPath, suc
   };
   const bytes = Buffer.from(`${JSON.stringify(record, null, 2)}\n`);
   const oid = hash(bytes);
-  const message = `fix: refresh the reviewed correction baseline\n\nBaseline-Refresh: ${oid}\n`;
+  // Git owns trailer parsing/unfolding; this read-only format cannot execute
+  // configured trailer commands. Copy only source credit, never binding markers.
+  const coauthors = decoder
+    .decode(
+      git([
+        "-c",
+        "trailer.separators=:",
+        "-c",
+        "trailer.co-authored-by.key=Co-authored-by",
+        "show",
+        "-s",
+        "--no-show-signature",
+        "--no-notes",
+        "--no-color",
+        "--no-decorate",
+        "--encoding=UTF-8",
+        "--format=%(trailers:key=Co-authored-by,only,unfold)",
+        source,
+      ]),
+    )
+    .split("\n")
+    .filter(Boolean);
+  if (coauthors.some((line) => !/^Co-authored-by: [^\p{Cc}\p{Zl}\p{Zp}]+$/u.test(line))) {
+    throw new Error(
+      "Cannot preserve source co-author credit containing control or line separators.",
+    );
+  }
+  const message = [
+    "fix: refresh the reviewed correction baseline",
+    "",
+    `Baseline-Refresh: ${oid}`,
+    ...coauthors,
+    "",
+  ].join("\n");
   const anchor = decoder
     .decode(
       git(

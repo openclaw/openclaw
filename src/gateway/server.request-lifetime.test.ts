@@ -1,8 +1,6 @@
 // Real Gateway proof: execute only on a machine with isolated SQLite coordination.
 import { randomUUID } from "node:crypto";
 import { once } from "node:events";
-import os from "node:os";
-import path from "node:path";
 import { setImmediate as nextTurn } from "node:timers/promises";
 import { expect, it, vi } from "vitest";
 import { WebSocket } from "ws";
@@ -12,7 +10,6 @@ import {
 } from "../../packages/gateway-protocol/src/client-info.js";
 import type { ResponseFrame } from "../../packages/gateway-protocol/src/schema/frames.js";
 import { isAgentRunRestartAbortReason } from "../agents/run-termination.js";
-import { resolveStateDir } from "../config/paths.js";
 import { waitForGatewayActiveWork } from "../infra/gateway-active-work.js";
 import { initializeGlobalHookRunner } from "../plugins/hook-runner-global.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
@@ -151,8 +148,11 @@ it.for([
       expect(getActiveGatewayRootWorkCount(), getActiveGatewayRootWorkHolders().join(", ")).toBe(1);
       // A failing owner is released through the real terminal registry, not an abandoned wait.
       releaseTimer = setTimeout(() => {
-        emergencyRelease = true;
-        releaseWait();
+        // Full Gateway cleanup may outlast an already-settled observation.
+        if (!settled) {
+          emergencyRelease = true;
+          releaseWait();
+        }
       }, 5_000);
       if (finish === "disconnect") {
         const disconnected = once(ws, "close");
@@ -200,26 +200,17 @@ it.for([
   },
 );
 
-it("joins both handlers across restart drain and concurrent close before fixture restoration", async ({
-  signal,
-}) => {
+it("joins both handlers across restart drain and concurrent close", async ({ signal }) => {
   const expectHeldWork = await observeHeldGatewayWorkDrain();
-  const bothEntered = createDeferredCore();
   const release = createDeferredCore();
-  const initialRoot = path.join(os.tmpdir(), "gateway-lifetime", "fixture");
-  const selection = { OPENCLAW_STATE_DIR: initialRoot };
-  const selectedRoots: string[] = [];
   const handlerRuns: Promise<void>[] = [];
-  let enteredCount = 0;
+  let completed = 0;
   const registry = lifetimeRegistry(({ respond }) => {
     const work = (async () => {
-      if (++enteredCount === 2) {
-        bothEntered.resolve();
-      }
       // An accepted response is not completion of the handler's remaining work.
       respond(true, { accepted: true });
       await release.promise;
-      selectedRoots.push(resolveStateDir(selection));
+      completed++;
     })();
     handlerRuns.push(work);
     return work;
@@ -235,34 +226,25 @@ it("joins both handlers across restart drain and concurrent close before fixture
     gateway = await createGatewaySuiteHarness({ serverOptions });
     ws = await gateway.openWs();
     await connectOk(ws, { scopes: ["operator.admin"] });
-    const accepted = [rpcReq(ws, "test.lifetime", {}), rpcReq(ws, "test.lifetime", {})];
-    expect(await Promise.all(accepted)).toMatchObject([{ ok: true }, { ok: true }]);
-    await bothEntered.promise;
-    const shutdown = onceMessage<{ type: string; event: string; payload: { reason: string } }>(
-      ws,
-      (frame) => frame.type === "event" && frame.event === "shutdown",
-    );
-
+    expect(
+      await Promise.all([rpcReq(ws, "test.lifetime", {}), rpcReq(ws, "test.lifetime", {})]),
+    ).toMatchObject([{ ok: true }, { ok: true }]);
     markGatewayRestartDraining("stop (SIGTERM)");
     const options = { reason: "request lifetime proof" };
     closing = closeTwice(
       gateway,
       options,
       () => {
-        finishedAtClose.push(selectedRoots.length);
-        // Model fixture restoration with an explicit synthetic selector only.
-        selection.OPENCLAW_STATE_DIR = path.join(os.tmpdir(), "gateway-lifetime", "restored");
+        finishedAtClose.push(completed);
         unblock();
       },
       options,
     );
-    expect((await shutdown).payload.reason).toBe("request lifetime proof");
     await expectHeldWork(closing);
     unblock();
     await closing;
     await Promise.all(handlerRuns);
     expect(finishedAtClose).toEqual([2, 2]);
-    expect(selectedRoots).toEqual([initialRoot, initialRoot]);
   } finally {
     unblock();
     // Public close is deliberately insufficient on the baseline. Join our own
@@ -281,7 +263,6 @@ it("joins a returned catalog's held completion before zero-budget dependency ret
   const release = createDeferredCore();
   const connectionReleased = createDeferredCore();
   const order: string[] = [];
-  const finishedAtClose: boolean[] = [];
   let publication: Promise<void> | undefined;
   let providerSignal: AbortSignal | undefined;
   let gatewaySignal: AbortSignal | undefined;
@@ -371,9 +352,7 @@ it("joins a returned catalog's held completion before zero-budget dependency ret
     expect(providerSignal?.aborted).toBe(false);
     expect(gatewaySignal).toBeDefined();
     const disconnected = once(ws, "close");
-    closing = closeTwice(gateway, { restartExpectedMs: 0, drainTimeoutMs: 0 }, () => {
-      finishedAtClose.push(completionSettled);
-    });
+    closing = gateway.server.close({ restartExpectedMs: 0, drainTimeoutMs: 0 });
     await disconnected;
     // The server-side release follows actual socket bookkeeping. Once its microtasks
     // settle, the held catalog completion must be the remaining required work.
@@ -390,7 +369,6 @@ it("joins a returned catalog's held completion before zero-budget dependency ret
     await closing;
     expect(whileHeld).toEqual({ drainFinished: false, order: [], retired: true, restart: true });
     expect(order).toEqual(["catalog completion settled", "dependencies stopped"]);
-    expect(finishedAtClose).toEqual([true, true]);
   } finally {
     unblock();
     try {

@@ -10,6 +10,8 @@ describe("isMcpToolAllowed", () => {
     ["resources_*", "resources_read", true],
     ["a**b***c", "axbyc", true],
     ["a*b*c", "acb", false],
+    ["DOC_*", "DOC_read", true],
+    ["DOC_*", "doc_read", false],
   ])("matches %j against %j", (pattern, value, expected) => {
     expect(isMcpToolAllowed({ include: [pattern] }, value)).toBe(expected);
   });

@@ -174,7 +174,7 @@ describe("CLI durable session context", () => {
         "Current active computer (latest reported app/system input, not message origin): active_node=mac-one active_node_identity=unknown";
       const logicalPrompt = context.promptForHooks ?? context.params.prompt;
       expect(logicalPrompt).toMatch(
-        /^Sender: ⟦openclaw:ctx⟧\nsender_id=U123 trusted hook context\n\nlatest ask\n\ntrusted hook tail\n\nFor the current source conversation,/,
+        /^Sender: ⟦openclaw:ctx⟧\nsender_id=U123 trusted hook context\n\nlatest ask\n\ntrusted hook tail\n\nThis turn has no current conversation\./,
       );
       expect(logicalPrompt.endsWith(`\n\n${activeNodeText}`)).toBe(true);
       if (pluginExecution) {
@@ -185,7 +185,7 @@ describe("CLI durable session context", () => {
           ? {
               prependContext: "trusted hook context",
               appendContext: expect.stringMatching(
-                /^trusted hook tail\n\nFor the current source conversation,/,
+                /^trusted hook tail\n\nThis turn has no current conversation\./,
               ),
             }
           : undefined,
@@ -347,7 +347,7 @@ describe("CLI durable session context", () => {
     cleanups.push(() => context.preparedBackend.cleanup?.());
 
     expect(context.params.prompt).toMatch(
-      /^hook context\n\ncurrent ask\n\nFor the current source conversation,/,
+      /^hook context\n\ncurrent ask\n\nThis turn has no current conversation\./,
     );
     expect(context.params.prompt).toMatch(
       /\n\nCurrent active computer .*active_node=unknown active_node_identity=unknown$/,

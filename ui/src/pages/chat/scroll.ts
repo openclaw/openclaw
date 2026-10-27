@@ -116,63 +116,6 @@ export function cancelChatScroll(host: ChatScrollHost): void {
   pendingChatScrolls.get(host)?.cancel();
 }
 
-function applyChatScroll(
-  host: ChatScrollHost,
-  force: boolean,
-  smooth: boolean,
-  options: ChatScrollOptions,
-): void {
-  const target = host.chatScrollElement?.();
-  if (!target) {
-    return;
-  }
-  const distanceFromBottom = target.scrollHeight - target.scrollTop - target.clientHeight;
-  const contentGrew = target.scrollHeight > (host.chatLastScrollHeight ?? 0) + 1;
-  host.chatLastScrollHeight = target.scrollHeight;
-  const contentChanged = options.contentChanged ?? options.source !== "resize";
-  const manualScroll = options.source === "manual";
-
-  // force=true only overrides when we haven't auto-scrolled yet (initial load).
-  // After initial load, respect the user's scroll position.
-  const effectiveForce = force && !host.chatHasAutoScrolled;
-  const shouldStick =
-    manualScroll ||
-    effectiveForce ||
-    (!host.chatFollowLocked &&
-      (options.source === "resize" ||
-        host.chatUserNearBottom ||
-        distanceFromBottom < NEAR_BOTTOM_THRESHOLD));
-
-  if (!shouldStick) {
-    if (contentChanged || (options.source === "resize" && contentGrew)) {
-      host.chatNewMessagesBelow = true;
-    }
-    return;
-  }
-  const behavior = resolveScrollBehavior(smooth ? "smooth" : "auto");
-  // Restoration owns the viewport until it settles or an explicit command
-  // replaces it. Automatic follow must not change policy when it is declined.
-  if (
-    !host.chatScrollToEnd?.({
-      behavior,
-      source: manualScroll ? "manual" : "auto",
-    })
-  ) {
-    return;
-  }
-  if (effectiveForce) {
-    host.chatHasAutoScrolled = true;
-  }
-  host.chatFollowLocked = false;
-  host.chatUserNearBottom = true;
-  host.chatNewMessagesBelow = false;
-  // A return issued at an already-clamped end produces no native scroll event.
-  // Settle it here; an actual smooth journey waits for its final position event.
-  if (manualScroll && distanceFromBottom <= CHAT_TRANSCRIPT_END_THRESHOLD_PX) {
-    updateChatScrollPosition(host, target, "toward-end");
-  }
-}
-
 function queueChatScroll(
   host: ChatScrollHost,
   force: boolean,
@@ -209,7 +152,56 @@ function queueChatScroll(
       }
       pendingChatScrolls.delete(host);
       complete?.();
-      applyChatScroll(host, force, smooth, options);
+      const target = host.chatScrollElement?.();
+      if (!target) {
+        return;
+      }
+      const scrollHeight = target.scrollHeight;
+      const distanceFromBottom = scrollHeight - target.scrollTop - target.clientHeight;
+      const contentGrew = scrollHeight > (host.chatLastScrollHeight ?? 0) + 1;
+      host.chatLastScrollHeight = scrollHeight;
+      const contentChanged = options.contentChanged ?? options.source !== "resize";
+      const manualScroll = options.source === "manual";
+
+      // force=true only overrides when we haven't auto-scrolled yet (initial load).
+      // After initial load, respect the user's scroll position.
+      const effectiveForce = force && !host.chatHasAutoScrolled;
+      const shouldStick =
+        manualScroll ||
+        effectiveForce ||
+        (!host.chatFollowLocked &&
+          (options.source === "resize" ||
+            host.chatUserNearBottom ||
+            distanceFromBottom < NEAR_BOTTOM_THRESHOLD));
+
+      if (!shouldStick) {
+        if (contentChanged || (options.source === "resize" && contentGrew)) {
+          host.chatNewMessagesBelow = true;
+        }
+        return;
+      }
+      const behavior = resolveScrollBehavior(smooth ? "smooth" : "auto");
+      // Restoration owns the viewport until it settles or an explicit command
+      // replaces it. Automatic follow must not change policy when it is declined.
+      if (
+        !host.chatScrollToEnd?.({
+          behavior,
+          source: manualScroll ? "manual" : "auto",
+        })
+      ) {
+        return;
+      }
+      if (effectiveForce) {
+        host.chatHasAutoScrolled = true;
+      }
+      host.chatFollowLocked = false;
+      host.chatUserNearBottom = true;
+      host.chatNewMessagesBelow = false;
+      // A return issued at an already-clamped end produces no native scroll event.
+      // Settle it here; an actual smooth journey waits for its final position event.
+      if (manualScroll && distanceFromBottom <= CHAT_TRANSCRIPT_END_THRESHOLD_PX) {
+        updateChatScrollPosition(host, target, "toward-end");
+      }
     };
     frame = requestAnimationFrame(() => {
       // The composer viewport and appended rows commit their measured sizes in

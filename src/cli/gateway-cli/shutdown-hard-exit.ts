@@ -1,4 +1,6 @@
 import type { Worker } from "node:worker_threads";
+import { resolveRuntimeProcessEntrypointUrl } from "../../infra/runtime-process-url.js";
+import { resolveRuntimeWorkerThreadExecArgv } from "../../infra/runtime-worker-url.js";
 import { createCpuTrackedWorker } from "../../infra/worker-cpu.js";
 
 export type ShutdownHardExitWatchdog = {
@@ -18,19 +20,11 @@ export function armShutdownHardExitWatchdog(params: {
   };
   let worker: Worker;
   try {
-    worker = createCpuTrackedWorker(
-      `const { parentPort, workerData } = require("node:worker_threads");
-       const timer = setTimeout(() => process.kill(process.pid, "SIGKILL"), workerData.delayMs);
-       parentPort.once("message", () => {
-         clearTimeout(timer);
-         parentPort.close();
-       });`,
-      {
-        eval: true,
-        execArgv: [],
-        workerData: { delayMs: Math.max(0, Math.floor(params.delayMs)) },
-      },
-    );
+    const url = resolveRuntimeProcessEntrypointUrl("shutdownHardExit");
+    worker = createCpuTrackedWorker(url, {
+      execArgv: resolveRuntimeWorkerThreadExecArgv(url),
+      workerData: { delayMs: Math.max(0, Math.floor(params.delayMs)) },
+    });
   } catch (error) {
     reportError(error);
     return null;

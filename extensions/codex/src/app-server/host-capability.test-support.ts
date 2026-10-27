@@ -47,6 +47,7 @@ export function createCodexTestHostCapabilities(
     runBeforeToolCall: async (request) => ({ blocked: false, params: request.params }),
     requestApproval: async () => undefined,
     waitForApproval: async () => undefined,
+    prepareContextMedia: async () => ({ images: [] }),
     ...overrides,
   });
   toolFactories.set(host, undefined);

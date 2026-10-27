@@ -1,5 +1,6 @@
 import { setRuntimeConfigSnapshot } from "../../config/config.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { TEST_SCHEDULED_OCCURRENCE } from "../scheduled-occurrence.test-support.js";
 /** Shared loose cron fixtures for isolated-agent tests. */
 type LooseRecord = Record<string, unknown>;
 
@@ -22,6 +23,7 @@ export function makeIsolatedAgentParamsFixture(overrides?: LooseRecord) {
     overrides && "job" in overrides ? (overrides.job as LooseRecord | undefined) : undefined;
   const cfg: OpenClawConfig = {};
   const params = {
+    occurrence: TEST_SCHEDULED_OCCURRENCE,
     deliveryAttemptFence: null,
     cfg,
     deps: {} as never,

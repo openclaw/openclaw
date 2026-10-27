@@ -491,28 +491,33 @@ describe("cli json stdout contract", () => {
   it("renders sandbox explain validation failures as one canonical JSON document", async () => {
     await withTempHome(
       async (tempHome) => {
-        const result = runBuiltCli(tempHome, [
-          "sandbox",
-          "explain",
-          "--json",
-          "--agent",
-          "alpha",
-          "--session",
-          "agent:beta:main",
-        ]);
+        const configPath = path.join(tempHome, "openclaw.json");
+        await fs.writeFile(
+          configPath,
+          JSON.stringify({
+            agents: { ownership: "explicit", entries: { alpha: {}, beta: {} } },
+          }),
+        );
+        const message =
+          'Multiple agents are configured, but session agent resolution has no explicit owner. The agent-scoped session key belongs to "beta", not "alpha".';
+        const result = runBuiltCli(
+          tempHome,
+          ["sandbox", "explain", "--json", "--agent", "alpha", "--session", "agent:beta:main"],
+          {
+            OPENCLAW_CONFIG_PATH: configPath,
+            OPENCLAW_STATE_DIR: path.join(tempHome, "isolated-state"),
+          },
+        );
 
         expect(result.status, result.stderr).toBe(1);
         expect(JSON.parse(result.stdout)).toEqual({
           ok: false,
           error: {
             type: "cli_error",
-            message: 'Sandbox explain agent "alpha" does not match session agent "beta".',
+            message,
           },
         });
-        expect(result.stderr).toContain("[openclaw] The CLI command failed.");
-        expect(result.stderr).not.toContain(
-          'Sandbox explain agent "alpha" does not match session agent "beta".',
-        );
+        expect(result.stderr).toBe(`${message}\n`);
       },
       { prefix: "openclaw-sandbox-json-failure-e2e-" },
     );
@@ -697,7 +702,14 @@ describe("cli json stdout contract", () => {
       async (tempHome) => {
         const bundledPluginsDir = path.join(tempHome, "packaged-extensions");
         const memoryCoreDir = path.join(bundledPluginsDir, "memory-core");
+        const openaiDir = path.join(bundledPluginsDir, "openai");
         await fs.mkdir(memoryCoreDir, { recursive: true });
+        await fs.mkdir(openaiDir, { recursive: true });
+        await fs.writeFile(
+          path.join(openaiDir, "doctor-health-api.js"),
+          "export function registerOpenAIDoctorChecks() {}\n",
+          "utf8",
+        );
         await fs.writeFile(
           path.join(memoryCoreDir, "doctor-health-api.js"),
           [

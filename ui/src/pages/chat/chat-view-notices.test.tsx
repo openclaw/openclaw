@@ -6,7 +6,9 @@ import { afterEach, expect, it, vi } from "vitest";
 import { t } from "../../i18n/index.ts";
 import { installDialogPolyfill } from "../../test-helpers/modal-dialog.ts";
 import { mountSolid } from "../../test-helpers/mount-solid.ts";
+import { waitForSolid } from "../../test-helpers/solid-settle.ts";
 import { renderChatComposerNotices, renderChatTopbarNotices } from "./chat-view-notices.tsx";
+import { ChatConversationMobile } from "./components/chat-conversation-presentation.ts";
 
 const model = "<img src=x onerror=alert(1)>";
 type ComposerProps = Parameters<typeof renderChatComposerNotices>[0];
@@ -16,8 +18,15 @@ function publishedNotices<P extends object>(Notices: (props: P) => JSX.Element, 
   const [props, publish] = createSignal<P>(() => initial);
   return { ...mountSolid(() => <Notices {...props()} />), publish };
 }
-const publishedComposer = (initial: Omit<ComposerProps, "messages">) =>
-  publishedNotices<ComposerProps>(renderChatComposerNotices, { messages: [], ...initial });
+const publishedComposer = (initial: Omit<ComposerProps, "messages">, mobile = false) =>
+  publishedNotices<ComposerProps>(
+    (props) => (
+      <ChatConversationMobile value={() => mobile}>
+        {renderChatComposerNotices(props)}
+      </ChatConversationMobile>
+    ),
+    { messages: [], ...initial },
+  );
 function publishHistory(
   publish: (props: ComposerProps) => void,
   initial: ComposerProps,
@@ -44,7 +53,7 @@ const failedPlacement = (error: string) => ({
 
 afterEach(() => document.body.replaceChildren());
 
-it.each(["transferring", "installing"] as const)("shows %s worker progress", (phase) => {
+it.each(["transferring", "installing"] as const)("shows %s worker progress", async (phase) => {
   const installing = phase === "installing";
   const title = installing
     ? "Installing worker runtime"
@@ -61,6 +70,9 @@ it.each(["transferring", "installing"] as const)("shows %s worker progress", (ph
       updatedAtMs: 2,
     },
   });
+  await waitForSolid(() =>
+    expect(container.querySelector(".chat-worker-runtime-install-notice")).not.toBeNull(),
+  );
   const notice = container.querySelector(".chat-worker-runtime-install-notice");
   expect(notice?.getAttribute("role")).toBe("status");
   expect(notice?.querySelector("strong")).toMatchObject({ textContent: title });
@@ -77,12 +89,15 @@ it.each([
   ["fallback", "status", `OpenAI routed this response to ${model}.`],
   ["escalated", "status", `OpenAI declined this request; retried on ${model}.`],
   ["unavailable", "alert", `OpenAI declined this request; ${model} is not authorized.`],
-] as const)("renders %s provider notice as plain text", (state, role, copy) => {
+] as const)("renders %s provider notice as plain text", async (state, role, copy) => {
   const initial = {
     messages: [],
     providerPolicyNotice: { runId: "r", seq: 1, state, model: "m", fallbackModel: model },
   };
   const { container, publish } = publishedComposer(initial);
+  await waitForSolid(() =>
+    expect(container.querySelector(".chat-provider-policy-notice")).not.toBeNull(),
+  );
   const notice = container.querySelector(".chat-provider-policy-notice");
   expect(notice?.getAttribute("role")).toBe(role);
   expect(notice?.textContent).toContain(copy);
@@ -96,16 +111,17 @@ it.each([
   expect(container.querySelector(".chat-provider-policy-notice")).toBeNull();
 });
 
-it("offers an explicit discard action with the full warning when unsaved starts block recovery", () => {
+it("offers an explicit discard action with the full warning when unsaved starts block recovery", async () => {
   const discardAndReload = vi.fn();
   const retry = vi.fn();
   const { container } = publishedComposer({
     placementStartup: {
-      ...failedPlacement(t("newSession.placementReloadBlocked")),
+      ...failedPlacement("Recovery needs a reload. Unsaved starts will be lost."),
       discardAndReload,
     },
     onRetrySessionPlacementStartup: retry,
   });
+  await waitForSolid(() => expect(container.querySelector('[role="alert"]')).not.toBeNull());
   const alert = container.querySelector('[role="alert"]');
   expect(alert?.querySelector("details")).toBeNull();
   expect(alert?.textContent).toContain("Recovery needs a reload. Unsaved starts will be lost.");
@@ -124,7 +140,7 @@ it.each([
   [false, false],
   [true, true],
   [true, false],
-])("refreshes without retrying (contention=%s, connected=%s)", (contention, connected) => {
+])("refreshes without retrying (contention=%s, connected=%s)", async (contention, connected) => {
   const onRefresh = vi.fn(),
     onRetrySessionPlacementStartup = vi.fn();
   const diagnostic = contention ? `Busy\n${model}` : "The conversation changed.";
@@ -137,6 +153,7 @@ it.each([
     onRefresh,
     ...(contention ? { onRetrySessionPlacementStartup } : {}),
   });
+  await waitForSolid(() => expect(container.querySelector(".chat-error")).not.toBeNull());
   const notice = container.querySelector(".chat-error");
   if (contention) {
     expect(notice?.classList.contains("chat-composer-neighbor-card--warn")).toBe(true);
@@ -160,14 +177,19 @@ it.each([
   }
 });
 
-it.each(["run", "placement"] as const)("preserves expanded diagnostics and focus (%s)", (kind) => {
+it.each([
+  ["run", false],
+  ["run", true],
+  ["placement", false],
+] as const)("preserves expanded diagnostics and focus (%s, mobile=%s)", async (kind, mobile) => {
   const diagnostic = "Synthetic failure\n  at workspace/session.ts:42";
   const initial: ComposerProps = {
     messages: [],
     runError: kind === "run" ? { summary: diagnostic } : undefined,
     placementStartup: kind === "placement" ? failedPlacement(diagnostic) : undefined,
   };
-  const { container, publish } = publishedComposer(initial);
+  const { container, publish } = publishedComposer(initial, mobile);
+  await waitForSolid(() => expect(container.querySelector("details")).not.toBeNull());
   const details = container.querySelector("details")!;
   const summary = details.querySelector("summary")!;
   details.open = true;
@@ -184,7 +206,7 @@ it.each(["run", "placement"] as const)("preserves expanded diagnostics and focus
 
 it.each(["chatgpt_business_usage_limit", "chatgpt_consumer_usage_limit"] as const)(
   "keeps %s recovery beside a transcript error and resets dismissal for a new run",
-  (kind) => {
+  async (kind) => {
     const restoreDialog = installDialogPolyfill();
     const initial: ComposerProps = {
       sessionKey: "agent:main:business-limit",
@@ -197,22 +219,64 @@ it.each(["chatgpt_business_usage_limit", "chatgpt_consumer_usage_limit"] as cons
     };
     const view = publishedNotices(renderChatComposerNotices, initial);
     try {
-      flush();
-      expect(view.container.querySelector("dialog")?.open).toBe(true);
+      await waitForSolid(() => expect(view.container.querySelector("dialog")?.open).toBe(true));
       view.getByRole("button", { name: "Close" }).click();
       flush();
       publishHistory(view.publish, initial, () => {
         expect(view.container.querySelector("dialog")?.open).toBe(false);
       });
       view.publish({ ...initial, runError: { ...initial.runError!, runId: "run-2" } });
-      flush();
-      expect(view.container.querySelector("dialog")?.open).toBe(true);
+      await waitForSolid(() => expect(view.container.querySelector("dialog")?.open).toBe(true));
       view.publish({ messages: [] });
       flush();
       expect(view.container.querySelector("dialog")).toBeNull();
     } finally {
       view.unmount();
       restoreDialog();
+    }
+  },
+);
+
+it.each(["refresh", "details", "message"] as const)(
+  "keeps available mobile error actions and diagnostics (%s)",
+  async (variant) => {
+    const onRefresh = vi.fn();
+    const diagnostic =
+      variant === "message" ? "Stopped." : "Request interrupted.\nPlease check the conversation.";
+    const { container } = publishedComposer(
+      {
+        connected: true,
+        runError: { kind: "stop", summary: diagnostic },
+        onRefresh: variant === "refresh" ? onRefresh : undefined,
+      },
+      true,
+    );
+    await waitForSolid(() => expect(container.querySelector(".chat-error")).not.toBeNull());
+    const notice = container.querySelector(".chat-error")!;
+    expect(notice.textContent).toContain(
+      diagnostic === "Stopped." ? diagnostic : "Request interrupted.",
+    );
+    expect(notice.querySelector(".chat-error__dismiss")).toBeNull();
+    const details = notice.querySelector("details");
+    if (variant === "message") {
+      expect(details).toBeNull();
+      expect(notice.querySelector("button")).toBeNull();
+      return;
+    }
+    expect(details?.open).toBe(false);
+    expect(details?.querySelector("summary .chat-copy-btn")).toBeNull();
+    details!.open = true;
+    expect(details?.querySelector("pre")?.textContent).toBe(diagnostic);
+    expect(details?.querySelector(".chat-copy-btn")?.getAttribute("aria-label")).toBe(
+      t("chat.copyError"),
+    );
+    const refresh = notice.querySelector<HTMLButtonElement>(".chat-error__refresh");
+    if (variant === "refresh") {
+      refresh!.click();
+      expect(onRefresh).toHaveBeenCalledOnce();
+      expect(details?.open).toBe(true);
+    } else {
+      expect(refresh).toBeNull();
     }
   },
 );

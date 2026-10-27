@@ -5,18 +5,14 @@ import {
   joinJsonlFrames,
   claudeStreamEvent,
   claudeTextDelta,
+  localCliBackend,
 } from "./cli-output.test-helpers.js";
 
 type ParserOptions = Cli.CliJsonlStreamingParserOptions;
 type ExpectedOutput = Pick<Cli.CliOutput, "text"> & Partial<Cli.CliOutput>;
 function createParser(overrides: Partial<ParserOptions> = {}) {
   return createClaudeParser({
-    backend: {
-      command: "local-cli",
-      output: "jsonl",
-      jsonlDialect: "claude-stream-json",
-      sessionIdFields: ["session_id"],
-    },
+    backend: localCliBackend,
     providerId: "local-cli",
     ...overrides,
   });

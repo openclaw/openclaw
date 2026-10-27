@@ -182,9 +182,6 @@ export function resolveExecNotificationDefaults(defaults?: ExecToolDefaults) {
     notifySessionKey,
     resolveSubagentSession,
     notifyDeliveryContext,
-    // Preserve conversation provenance for passive subagent completion notices.
-    notifyFromConversationTurn:
-      defaults?.trigger === "user" || defaults?.continuesConversation === true,
   };
 }
 

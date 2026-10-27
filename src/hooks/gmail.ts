@@ -1,4 +1,3 @@
-import { randomBytes } from "node:crypto";
 import { asPositiveFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { normalizeUniqueStringEntries } from "@openclaw/normalization-core/string-normalization";
@@ -60,10 +59,6 @@ export type GmailHookRuntimeConfig = {
     target?: string;
   };
 };
-
-export function generateHookToken(bytes = 24): string {
-  return randomBytes(bytes).toString("hex");
-}
 
 /** Resolve the per-message body byte bound gog is provisioned with (`--max-bytes`). */
 export function resolveGmailHookMaxBytes(raw: number | undefined): number {

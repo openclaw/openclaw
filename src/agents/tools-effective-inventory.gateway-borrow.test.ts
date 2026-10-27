@@ -1,3 +1,4 @@
+import { createToolLoadContext } from "../plugins/tools.test-support.js";
 // Preserve module setup before modules that consume it.
 // oxfmt-ignore
 import { usePreparedModelRuntimeHarness } from "./prepared-model-runtime.test-harness.js";
@@ -35,17 +36,14 @@ describe("tools.effective dynamic runtime model", () => {
     Object.assign(mocks.pluginMetadataSnapshot, metadata);
     const gateway = createEmptyPluginRegistry();
     bindPluginRegistryGatewayOwner(gateway, { current: () => gateway });
-    setPluginRuntimeLoadContext(gateway, {
-      rawConfig: config,
-      config,
-      activationSourceConfig: config,
-      autoEnabledReasons: {},
-      workspaceDir,
-      env: process.env,
-      metadataSnapshot: metadata,
-      manifestRegistry: metadata.manifestRegistry,
-      logger: { info() {}, warn() {}, error() {}, debug() {} },
-    });
+    setPluginRuntimeLoadContext(
+      gateway,
+      createToolLoadContext(config, workspaceDir, {
+        metadataSnapshot: metadata,
+        manifestRegistry: metadata.manifestRegistry,
+        logger: { info() {}, warn() {}, error() {}, debug() {} },
+      }),
+    );
 
     await withPluginRuntimeRegistryScope(gateway, async () => {
       await using _ = await acquireEffectiveToolInventoryRuntimeModelContext({

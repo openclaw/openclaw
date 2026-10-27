@@ -69,13 +69,7 @@ async function fixture(rootPath = "skills/guide") {
     version: {
       version: "1.0.0",
       pluginManifestSummary: {
-        bundledSkills: [
-          {
-            name: "operator-guide",
-            rootPath,
-            skillMdPath: `${rootPath}/SKILL.md`,
-          },
-        ],
+        bundledSkills: [{ name: "operator-guide", rootPath, skillMdPath: `${rootPath}/SKILL.md` }],
       },
       files: [...source].map(([p, b]) => ({
         path: `${rootPath}/${p}`,

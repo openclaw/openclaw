@@ -217,12 +217,16 @@ describe("startOrResumeThread — configured MCP ownership", () => {
     const clientStub = (instanceId: string, request: (method: string) => Promise<unknown>) =>
       ({
         getInstanceId: () => instanceId,
+        getCloseError: () => undefined,
         request: vi.fn(request),
         addNotificationHandler: () => () => undefined,
         addRequestHandler: () => () => undefined,
         addCloseHandler: () => () => undefined,
       }) as never;
     const oldClient = clientStub("client-old", async (method) => {
+      if (method === "thread/read") {
+        return { thread: { id: "thread-ordinary-old", status: { type: "idle" } } };
+      }
       throw new Error(`unexpected method: ${method}`);
     });
     ensureCodexAppServerClientRuntime(oldClient, { agentDir: workspaceDir });

@@ -21,7 +21,7 @@ import {
 import { prepareSessionEntryPresenceRead } from "../config/sessions/session-entry-presence-read.js";
 import { readSessionHistoryPageInWorker } from "../config/sessions/session-history-worker-runtime.js";
 import {
-  historyClearTimeout,
+  clearDatabaseWorkerIdleRetirement,
   historyLane,
   maintenanceLane,
   rotateDatabaseWorkers,
@@ -148,7 +148,7 @@ afterEach(async () => {
   observed.restoration = undefined;
   await Promise.all(
     [historyLane, maintenanceLane, targetDiscoveryLane].map(async (lane) => {
-      historyClearTimeout(lane.idleTimer);
+      clearDatabaseWorkerIdleRetirement(lane);
       await rotateDatabaseWorkers(lane);
     }),
   );
@@ -178,18 +178,10 @@ it.each([false, true])(
       expect(fs.existsSync(databasePath)).toBe(false);
       await replaceSessionEntry(target, { sessionId: "metadata-without-transcript", updatedAt: 1 });
       expect(await read()).toBe(true);
-      expect(
-        await prepareSessionEntryPresenceRead({
-          ...target,
-          sessionKey: target.sessionKey.toUpperCase(),
-        }).read(),
-      ).toBe(true);
-      expect(
-        await prepareSessionEntryPresenceRead({
-          ...target,
-          sessionKey: `${target.sessionKey}-sibling`,
-        }).read(),
-      ).toBe(false);
+      const presence = (sessionKey: string) =>
+        prepareSessionEntryPresenceRead({ ...target, sessionKey }).read();
+      expect(await presence(target.sessionKey.toUpperCase())).toBe(true);
+      expect(await presence(`${target.sessionKey}-sibling`)).toBe(false);
       if (incognito) {
         expect(observed.workers).toHaveLength(workersBefore);
         expect(fs.existsSync(databasePath)).toBe(false);

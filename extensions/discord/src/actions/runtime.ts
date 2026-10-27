@@ -1,5 +1,10 @@
 import type { AgentToolResult } from "openclaw/plugin-sdk/agent-core";
-import { jsonResult, readStringParam } from "openclaw/plugin-sdk/channel-actions";
+import {
+  jsonResult,
+  readPositiveIntegerParam,
+  readReactionParams,
+  readStringParam,
+} from "openclaw/plugin-sdk/channel-actions";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { createDiscordActionGate, resolveDefaultDiscordAccountId } from "../accounts.js";
@@ -8,7 +13,6 @@ import { getGateway } from "../monitor/gateway-registry.js";
 import * as discordModerationActionRuntime from "../send.js";
 import { handleDiscordGuildAction, isDiscordGuildAction } from "./runtime.guild.js";
 import { handleDiscordMessageManagementAction } from "./runtime.messaging.messages.js";
-import { handleDiscordReactionMessagingAction } from "./runtime.messaging.reactions.js";
 import { handleDiscordMessageSendAction } from "./runtime.messaging.send.js";
 import {
   createDiscordMessagingActionContext,
@@ -60,9 +64,6 @@ export async function handleDiscordAction(
   const isActionEnabled = createDiscordActionGate({ cfg, accountId });
 
   if (messagingActions.has(action)) {
-    if (!cfg) {
-      throw new Error("Discord messaging actions require a resolved runtime config.");
-    }
     const ctx = createDiscordMessagingActionContext({
       action,
       input: params,
@@ -70,8 +71,41 @@ export async function handleDiscordAction(
       cfg,
       options,
     });
+    if (action === "react" || action === "reactions") {
+      if (!ctx.isActionEnabled("reactions")) {
+        throw new Error("Discord reactions are disabled.");
+      }
+      const channelId = await ctx.resolveReactionChannelId();
+      const messageId = readStringParam(ctx.params, "messageId", { required: true });
+      if (action === "reactions") {
+        const limit = readPositiveIntegerParam(ctx.params, "limit");
+        await ctx.assertReadTargetAllowed({ channelId });
+        const reactions = await discordModerationActionRuntime.fetchReactionsDiscord(
+          channelId,
+          messageId,
+          ctx.withReactionRuntimeOptions({ limit }),
+        );
+        return jsonResult({ ok: true, reactions });
+      }
+      const { emoji, remove, isEmpty } = readReactionParams(ctx.params, {
+        removeErrorMessage: "Emoji is required to remove a Discord reaction.",
+      });
+      await ctx.assertReadTargetAllowed({ channelId });
+      if (isEmpty) {
+        const removed = await discordModerationActionRuntime.removeOwnReactionsDiscord(
+          channelId,
+          messageId,
+          ctx.withReactionRuntimeOptions(),
+        );
+        return jsonResult({ ok: true, removed: removed.removed });
+      }
+      const mutate = remove
+        ? discordModerationActionRuntime.removeReactionDiscord
+        : discordModerationActionRuntime.reactMessageDiscord;
+      await mutate(channelId, messageId, emoji, ctx.withReactionRuntimeOptions());
+      return jsonResult({ ok: true, [remove ? "removed" : "added"]: emoji });
+    }
     const result =
-      (await handleDiscordReactionMessagingAction(ctx)) ??
       (await handleDiscordMessageSendAction(ctx)) ??
       (await handleDiscordMessageManagementAction(ctx));
     if (result == null) {
@@ -175,13 +209,7 @@ export async function handleDiscordAction(
     return jsonResult({
       ok: true,
       status,
-      activities: activities.map((a) =>
-        Object.assign(
-          { type: a.type, name: a.name },
-          a.url ? { url: a.url } : {},
-          a.state ? { state: a.state } : {},
-        ),
-      ),
+      activities,
     });
   }
   throw new Error(`Unknown action: ${action}`);

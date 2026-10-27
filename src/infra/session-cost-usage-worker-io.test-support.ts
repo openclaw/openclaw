@@ -64,36 +64,20 @@ if (!isMainThread) {
   const prepare = DatabaseSync.prototype.prepare;
   DatabaseSync.prototype.prepare = function(sql) {
     const statement = Reflect.apply(prepare, this, [sql]);
-    if (/^select\\b.*\\bfrom\\s+["\\x60]?transcript_events["\\x60]?/is.test(sql)) {
+    const stats = /^select\\b.*\\bfrom\\s+["\\x60]?transcript_events["\\x60]?/is.test(sql);
+    const watermark = sql.includes('as "is_cold"') && sql.includes('"transcript_rewrite_watermarks"');
+    const cache = /^select\\b.*\\bfrom\\s+["\\x60]?cache_entries["\\x60]?/is.test(sql);
+    if (stats || watermark || cache) {
       for (const method of ["all", "get", "iterate"]) {
         const original = statement[method];
         statement[method] = function(...args) {
-          record({ kind: "transcript-stats" });
-          return Reflect.apply(original, this, args);
-        };
-      }
-    }
-    if (sql.includes('as "is_cold"') && sql.includes('"transcript_rewrite_watermarks"')) {
-      for (const method of ["all", "get", "iterate"]) {
-        const original = statement[method];
-        statement[method] = function(...args) {
-          record({ kind: "hot-watermark" });
-          return Reflect.apply(original, this, args);
-        };
-      }
-    }
-    if (/^select\\b.*\\bfrom\\s+["\\x60]?cache_entries["\\x60]?/is.test(sql)) {
-      for (const method of ["all", "get", "iterate"]) {
-        const original = statement[method];
-        statement[method] = function(...args) {
-          if (args.includes("session-cost-usage-projection-v2")) {
-            record({ kind: "partitions" });
-          }
-          const rollup = args.includes("session-cost-usage-rollup-v3");
-          if (!rollup && !args.includes("session-cost-usage-projection-v2")) {
-            return Reflect.apply(original, this, args);
-          }
+          const partitions = cache && args.includes("session-cost-usage-projection-v2");
+          const rollup = cache && args.includes("session-cost-usage-rollup-v3");
+          if (partitions) record({ kind: "partitions" });
           if (rollup) record({ kind: "cache" });
+          if (watermark) record({ kind: "hot-watermark" });
+          if (stats) record({ kind: "transcript-stats" });
+          if (!rollup && !partitions) return Reflect.apply(original, this, args);
           const observeRow = (row) => record({
             kind: rollup ? "cache-row" : "partition-row", key: row.key,
             blobBytes: row.blob?.byteLength ?? 0,
@@ -110,11 +94,7 @@ if (!isMainThread) {
               }
             })();
           }
-          if (method === "all") {
-            for (const row of result) observeRow(row);
-          } else if (result) {
-            observeRow(result);
-          }
+          for (const row of method === "all" ? result : result ? [result] : []) observeRow(row);
           return result;
         };
       }
@@ -135,10 +115,7 @@ if (!isMainThread) {
         .map(
           (line) =>
             JSON.parse(line) as
-              | { kind: "transcript-stats" }
-              | { kind: "hot-watermark" }
-              | { kind: "cache" }
-              | { kind: "partitions" }
+              | { kind: "transcript-stats" | "hot-watermark" | "cache" | "partitions" }
               | { kind: "decompress"; outputLimit: number }
               | {
                   kind: "cache-row" | "partition-row";

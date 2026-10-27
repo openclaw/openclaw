@@ -9,9 +9,8 @@ import * as runtimeConfig from "../../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import * as activeJobs from "../../cron/active-jobs.js";
 import { prepareCronRunAdmission } from "../../cron/run-admission.js";
+import { TEST_SCHEDULED_EXECUTION } from "../../cron/scheduled-occurrence.test-support.js";
 import { registerActiveCronTaskRun } from "../../cron/service/active-run-cancellation.js";
-import { createAgentRuntimeApprovalAuthorityValidator } from "../../gateway/agent-runtime-approval-authority.js";
-import { createGatewayMethodRegistry } from "../../gateway/methods/registry.js";
 import type * as Gateway from "../../gateway/server-methods/types.js";
 import { recoverPendingDeliveries } from "../../infra/outbound/delivery-queue-recovery.js";
 import { loadUnfinishedDeliveries } from "../../infra/outbound/delivery-queue-storage.js";
@@ -24,6 +23,10 @@ import { resolveConversationCapabilityProfile } from "../conversation-capability
 import { createEmbeddedMessageInvocationPolicy } from "../scheduled-message-invocation.js";
 import * as gatewayCallerContext from "./gateway-caller-context.js";
 import { createMessageTool } from "./message-tool-execution.js";
+import {
+  messageGatewayContext,
+  resolvedMessageSecrets,
+} from "./message-tool-execution.test-support.js";
 
 const settled = { status: "settled", partialDelivery: false };
 function delivered(messageId: string, withSettlement = true) {
@@ -240,24 +243,13 @@ it.each([
         const { sendHandlers } = await import("../../gateway/server-methods/send.js");
         const method = "message.action";
         gatewayDispatch = vi.fn(sendHandlers[method] as Gateway.GatewayRequestHandler);
-        const methods = createGatewayMethodRegistry([
-          {
-            name: method,
-            owner: { kind: "core", area: "message" },
-            scope: "operator.write",
-            handler: gatewayDispatch,
-          },
-        ]);
-        gatewayContext = {
-          getRuntimeConfig: () => currentConfig,
-          getGatewayMethodRegistry: () => methods,
-          validateAgentRuntimeApprovalAuthority: createAgentRuntimeApprovalAuthorityValidator(),
-          trackExecution: <T>(run: () => Promise<T>) => run(),
+        gatewayContext = messageGatewayContext(() => currentConfig, gatewayDispatch, {
           dedupe: new Map(),
-        } as Gateway.GatewayRequestContext;
+        });
       }
       const prepareAdmission = () =>
         prepareCronRunAdmission({
+          scheduledExecution: TEST_SCHEDULED_EXECUTION,
           deliveryAttemptFence: { beforeAttempt: async () => {}, assertCurrent: () => {} },
           cfg: config,
           ...runOptions,
@@ -290,12 +282,7 @@ it.each([
       vi.spyOn(commandSecretGateway, "resolveCommandSecretRefsViaGateway").mockImplementation(
         async ({ config: resolvedConfig }) => {
           await pauseAtBoundary(revokeAt === "config");
-          return {
-            resolvedConfig,
-            diagnostics: [],
-            targetStatesByPath: {},
-            hadUnresolvedTargets: false,
-          };
+          return resolvedMessageSecrets(resolvedConfig);
         },
       );
       const tool = createMessageTool({

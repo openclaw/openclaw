@@ -3,7 +3,6 @@ import { parseStrictPositiveInteger } from "@openclaw/normalization-core/number-
 // interpreter eval paths used by approval policy and command explanations.
 import { splitShellArgs } from "../../utils/shell-argv.js";
 import {
-  COMMAND_CARRIER_EXECUTABLES,
   isEnvAssignmentToken,
   parseEnvInvocationPrelude,
   resolveCarrierCommandArgv,
@@ -34,10 +33,6 @@ type CarriedShellBuiltinHit = { kind: "eval" } | { kind: "source"; command: stri
 // Recurse through env, carriers, and shell wrappers while guarding argv cycles.
 function commandArgvKey(argv: readonly string[]): string {
   return argv.join("\0");
-}
-
-function isCommandCarrierExecutable(executable: string) {
-  return COMMAND_CARRIER_EXECUTABLES.has(executable) || executable === "exec";
 }
 
 export function buildCommandPayloadArgvCandidates(
@@ -211,10 +206,6 @@ function detectCarrierInlineEvalArgvInternal(
     return detectInlineEvalArgvInternal(dispatchUnwrap.argv, seenArgv);
   }
 
-  const executable = normalizeExecutableToken(executableArgv[0] ?? "");
-  if (!isCommandCarrierExecutable(executable)) {
-    return null;
-  }
   const carriedArgv = resolveCarrierCommandArgv(executableArgv);
   if (!carriedArgv) {
     return null;
@@ -326,9 +317,6 @@ export function detectShellWrapperThroughCarrierArgv(
   shellCommandFlag: (argv: string[], startIndex: number) => unknown,
 ): string | null {
   const executable = normalizeExecutableToken(argv[0] ?? "");
-  if (!isCommandCarrierExecutable(executable)) {
-    return null;
-  }
   const carriedArgv = resolveCarrierCommandArgv(argv);
   if (!carriedArgv) {
     return null;
@@ -340,10 +328,6 @@ export function detectShellWrapperThroughCarrierArgv(
 }
 
 export function detectCarriedShellBuiltinArgv(argv: string[]): CarriedShellBuiltinHit | null {
-  const executable = normalizeExecutableToken(argv[0] ?? "");
-  if (!isCommandCarrierExecutable(executable)) {
-    return null;
-  }
   const carriedArgv = resolveCarrierCommandArgv(argv);
   if (!carriedArgv) {
     return null;

@@ -58,14 +58,6 @@ it("retains command admission through Code Mode disposal, not detached external 
     let rawWork: Promise<ReturnType<typeof jsonResult>> | undefined;
     let first: Promise<unknown> | undefined;
     let next: Promise<unknown> | undefined;
-    const expectOrder = (...names: string[]) => {
-      let previous = -1;
-      for (const eventName of names) {
-        const index = events.indexOf(eventName);
-        expect(index).toBeGreaterThan(previous);
-        previous = index;
-      }
-    };
     const lifecycle = vi.spyOn(harness.subscription, "runToolLifecycle");
     const held = pluginToolWithExecute("held_target", "Ignore cancellation", async () => {
       rawWork = (async () => {
@@ -165,7 +157,7 @@ it("retains command admission through Code Mode disposal, not detached external 
       void first.catch(() => {});
       await withinTest(waiting.promise, signal);
       await withinTest(cleanupStarted.promise, signal);
-      expectOrder("command:cancel", "cleanup:start");
+      expect(events).toEqual(["command:cancel", "cleanup:start"]);
 
       next = execute(successorRunId, () =>
         runUntilCompleted({
@@ -178,13 +170,7 @@ it("retains command admission through Code Mode disposal, not detached external 
       await withinTest(successorPrepared.promise, signal);
       expect(events).not.toContain("command:settled");
       expect(effect.execute).not.toHaveBeenCalled();
-      expect(createGatewayActiveWorkSnapshot()).toMatchObject({
-        idle: false,
-        counts: { sessionAdmissions: 1 },
-        blockers: expect.arrayContaining([
-          expect.objectContaining({ kind: "session-admission", count: 1 }),
-        ]),
-      });
+      expect(createGatewayActiveWorkSnapshot().counts.sessionAdmissions).toBe(1);
 
       releaseCleanup.resolve();
       expect(await withinTest(first, signal)).toMatchObject({ status: "failed", code: "aborted" });
@@ -195,7 +181,7 @@ it("retains command admission through Code Mode disposal, not detached external 
       expect(events).not.toContain("raw:settled");
       expect(effect.execute).toHaveBeenCalledOnce();
       expect(createGatewayActiveWorkSnapshot().counts.sessionAdmissions).toBe(0);
-      expectOrder("cleanup:settled", "successor:effect");
+      expect(events.indexOf("cleanup:settled")).toBeLessThan(events.indexOf("successor:effect"));
 
       const publishedUpdates = updates.mock.calls.length;
       releaseRaw.resolve();

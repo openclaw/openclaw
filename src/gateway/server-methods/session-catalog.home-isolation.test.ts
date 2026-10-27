@@ -1,6 +1,6 @@
 import os from "node:os";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
 import type { PluginRegistry } from "../../plugins/registry-types.js";
 import { clearActivePluginRegistry, setActivePluginRegistry } from "../../plugins/runtime.js";
@@ -63,142 +63,122 @@ function withProfile<T>(profile: string | undefined, run: () => Promise<T>): Pro
   );
 }
 
-describe("session catalog Gateway HOME isolation", () => {
-  let activeRegistry: PluginRegistry;
-  beforeEach(() => {
-    activeRegistry = createEmptyPluginRegistry();
-    setActivePluginRegistry(activeRegistry);
-    projection = createSessionRowProjectionFixture({ cfg: {}, store: {} });
-  });
-  afterEach(async () => {
-    projection.dispose();
-    await clearActivePluginRegistry();
-  });
+let activeRegistry: PluginRegistry;
+beforeEach(() => {
+  activeRegistry = createEmptyPluginRegistry();
+  setActivePluginRegistry(activeRegistry);
+  projection = createSessionRowProjectionFixture({ cfg: {}, store: {} });
+});
+afterEach(async () => {
+  projection.dispose();
+  await clearActivePluginRegistry();
+});
 
-  it.each([true, false])("reads only the scoped registry (has catalog: %s)", async (hasCatalog) => {
-    const globalCatalog = provider("global");
-    registerCatalog(activeRegistry, globalCatalog);
-    const scopedRegistry = createEmptyPluginRegistry();
-    const scopedCatalog = provider("scoped");
-    if (hasCatalog) {
-      registerCatalog(scopedRegistry, scopedCatalog);
-    }
+it.each([true, false])("reads only the scoped registry (has catalog: %s)", async (hasCatalog) => {
+  const globalCatalog = provider("global");
+  registerCatalog(activeRegistry, globalCatalog);
+  const scopedRegistry = createEmptyPluginRegistry();
+  const scopedCatalog = provider("scoped");
+  if (hasCatalog) {
+    registerCatalog(scopedRegistry, scopedCatalog);
+  }
 
-    await withPluginRuntimeRegistryScope(scopedRegistry, async () => {
-      await Promise.resolve();
-      const catalogs = listActiveSessionCatalogs();
-      expect(catalogs.map(({ id }) => id)).toEqual(hasCatalog ? ["scoped"] : []);
-      for (const catalog of catalogs) {
-        await catalog.list({});
-        await catalog.read({ hostId: "gateway:local", threadId: "synthetic-thread" });
-      }
-    });
-
-    expect(scopedCatalog.list).toHaveBeenCalledTimes(hasCatalog ? 1 : 0);
-    expect(scopedCatalog.read).toHaveBeenCalledTimes(hasCatalog ? 1 : 0);
-    expect(globalCatalog.list).not.toHaveBeenCalled();
-    expect(globalCatalog.read).not.toHaveBeenCalled();
-    expect(listActiveSessionCatalogs().map(({ id }) => id)).toEqual(["global"]);
-  });
-
-  it("suppresses only process-HOME local hosts for a named profile", async () => {
-    const localHost = catalogHost();
-    const nodeHost = catalogHost({
-      hostId: "node:devbox",
-      label: "Devbox",
-      kind: "node",
-      nodeId: "devbox",
-    });
-    const list = vi.fn(async (query: Parameters<SessionCatalogProvider["list"]>[0]) => [
-      ...(query.allowProcessHomeFallback === false ? [] : [localHost]),
-      nodeHost,
-    ]);
-    registerCatalog(activeRegistry, provider("claude", { list }));
-    const logGateway = { warn: vi.fn() };
-
-    const defaultRespond = await withProfile(undefined, () =>
-      call("sessions.catalog.list", {}, logGateway),
-    );
-    expectCatalog(defaultRespond, { id: "claude", hosts: [localHost, nodeHost] });
-
-    const respond = await withProfile("dev", () => call("sessions.catalog.list", {}, logGateway));
-    await withProfile("dev", () =>
-      call("sessions.catalog.list", { search: "second request" }, logGateway),
-    );
-
-    expect(list).toHaveBeenCalledTimes(3);
-    expectCatalog(respond, { id: "claude", hosts: [nodeHost] });
-    expect(logGateway.warn).toHaveBeenCalledOnce();
-    expect(logGateway.warn).toHaveBeenCalledWith(
-      "external session catalog HOME fallback skipped: isolated state; configure an explicit root to enable",
-      { reason: "isolated_state" },
-    );
-  });
-
-  it("binds HOME isolation into the internal read-only catalog facade", async () => {
-    const localHost = catalogHost();
-    const list = vi.fn(async (request: { allowProcessHomeFallback?: boolean }) =>
-      request.allowProcessHomeFallback === false ? [] : [localHost],
-    );
-    const read = vi.fn(async (request: Parameters<SessionCatalogProvider["read"]>[0]) => {
-      if (request.allowProcessHomeFallback === false) {
-        throw new Error("local Test sessions are unavailable in isolated state");
-      }
-      return { hostId: request.hostId, threadId: request.threadId, items: [] };
-    });
-    registerCatalog(activeRegistry, provider("test", { list, read }));
-
-    for (const profile of [undefined, "dev"]) {
-      await withProfile(profile, async () => {
-        const [catalog] = listActiveSessionCatalogs();
-        expect(catalog?.processHomeFallbackAllowed).toBe(!profile);
-        await expect(catalog?.list({})).resolves.toEqual(profile ? [] : [localHost]);
-        const reading = expect(
-          catalog?.read({ hostId: "gateway:local", threadId: "known-thread" }),
-        );
-        if (profile) {
-          await reading.rejects.toThrow("local Test sessions are unavailable in isolated state");
-        } else {
-          await reading.resolves.toMatchObject({ threadId: "known-thread" });
-        }
-      });
-    }
-    for (const operation of [list, read]) {
-      expect(operation.mock.calls.map(([request]) => request.allowProcessHomeFallback)).toEqual([
-        true,
-        false,
-      ]);
+  await withPluginRuntimeRegistryScope(scopedRegistry, async () => {
+    await Promise.resolve();
+    const catalogs = listActiveSessionCatalogs();
+    expect(catalogs.map(({ id }) => id)).toEqual(hasCatalog ? ["scoped"] : []);
+    for (const catalog of catalogs) {
+      await catalog.list({});
+      await catalog.read({ hostId: "gateway:local", threadId: "synthetic-thread" });
     }
   });
 
-  it.each([
-    ["continue", "continueSession", {}],
-    ["archive", "archive", { confirmNoOtherRunner: true }],
-  ] as const)("rejects a known local %s for a named profile", async (method, hook, extra) => {
-    const rejectLocal = vi.fn(async (request: { allowProcessHomeFallback?: boolean }) => {
-      if (request.allowProcessHomeFallback === false) {
-        throw new Error("local Test sessions are unavailable in isolated state");
+  expect(scopedCatalog.list).toHaveBeenCalledTimes(hasCatalog ? 1 : 0);
+  expect(scopedCatalog.read).toHaveBeenCalledTimes(hasCatalog ? 1 : 0);
+  expect(globalCatalog.list).not.toHaveBeenCalled();
+  expect(globalCatalog.read).not.toHaveBeenCalled();
+  expect(listActiveSessionCatalogs().map(({ id }) => id)).toEqual(["global"]);
+});
+
+it("suppresses only process-HOME local hosts for a named profile", async () => {
+  const localHost = catalogHost();
+  const nodeHost = catalogHost({ hostId: "node:devbox", kind: "node", nodeId: "devbox" });
+  const list = async (query: Parameters<SessionCatalogProvider["list"]>[0]) => [
+    ...(query.allowProcessHomeFallback === false ? [] : [localHost]),
+    nodeHost,
+  ];
+  registerCatalog(activeRegistry, provider("claude", { list }));
+  const logGateway = { warn: vi.fn() };
+
+  const defaultRespond = await withProfile(undefined, () =>
+    call("sessions.catalog.list", {}, logGateway),
+  );
+  expectCatalog(defaultRespond, { id: "claude", hosts: [localHost, nodeHost] });
+
+  const respond = await withProfile("dev", () => call("sessions.catalog.list", {}, logGateway));
+  await withProfile("dev", () =>
+    call("sessions.catalog.list", { search: "second request" }, logGateway),
+  );
+
+  expectCatalog(respond, { id: "claude", hosts: [nodeHost] });
+  expect(logGateway.warn).toHaveBeenCalledOnce();
+  expect(logGateway.warn.mock.calls[0]?.[1]).toEqual({ reason: "isolated_state" });
+});
+
+it("binds HOME isolation into the internal read-only catalog facade", async () => {
+  const localHost = catalogHost();
+  const list = async (request: { allowProcessHomeFallback?: boolean }) =>
+    request.allowProcessHomeFallback === false ? [] : [localHost];
+  const read = async (request: Parameters<SessionCatalogProvider["read"]>[0]) => {
+    if (request.allowProcessHomeFallback === false) {
+      throw new Error("local Test sessions are unavailable in isolated state");
+    }
+    return { hostId: request.hostId, threadId: request.threadId, items: [] };
+  };
+  registerCatalog(activeRegistry, provider("test", { list, read }));
+
+  for (const profile of [undefined, "dev"]) {
+    await withProfile(profile, async () => {
+      const [catalog] = listActiveSessionCatalogs();
+      expect(catalog?.processHomeFallbackAllowed).toBe(!profile);
+      await expect(catalog?.list({})).resolves.toEqual(profile ? [] : [localHost]);
+      const reading = expect(catalog?.read({ hostId: "gateway:local", threadId: "known-thread" }));
+      if (profile) {
+        await reading.rejects.toThrow("local Test sessions are unavailable in isolated state");
+      } else {
+        await reading.resolves.toMatchObject({ threadId: "known-thread" });
       }
-      return hook === "archive" ? { ok: true as const } : { sessionKey: "agent:main:known" };
     });
-    registerCatalog(
-      activeRegistry,
-      provider("test", { [hook]: rejectLocal } as Partial<SessionCatalogProvider>),
-    );
+  }
+});
 
-    const respond = await withProfile("dev", () =>
-      call(`sessions.catalog.${method}`, {
-        catalogId: "test",
-        hostId: "gateway:local",
-        threadId: "known-thread",
-        ...extra,
-      }),
-    );
-
-    expect(respond).toHaveBeenCalledWith(
-      false,
-      undefined,
-      expect.objectContaining({ message: "local Test sessions are unavailable in isolated state" }),
-    );
+it.each([
+  ["continue", "continueSession", {}],
+  ["archive", "archive", { confirmNoOtherRunner: true }],
+] as const)("rejects a known local %s for a named profile", async (method, hook, extra) => {
+  const rejectLocal = vi.fn(async (request: { allowProcessHomeFallback?: boolean }) => {
+    if (request.allowProcessHomeFallback === false) {
+      throw new Error("local Test sessions are unavailable in isolated state");
+    }
+    return hook === "archive" ? { ok: true as const } : { sessionKey: "agent:main:known" };
   });
+  registerCatalog(
+    activeRegistry,
+    provider("test", { [hook]: rejectLocal } as Partial<SessionCatalogProvider>),
+  );
+
+  const respond = await withProfile("dev", () =>
+    call(`sessions.catalog.${method}`, {
+      catalogId: "test",
+      hostId: "gateway:local",
+      threadId: "known-thread",
+      ...extra,
+    }),
+  );
+
+  expect(respond).toHaveBeenCalledWith(
+    false,
+    undefined,
+    expect.objectContaining({ message: "local Test sessions are unavailable in isolated state" }),
+  );
 });

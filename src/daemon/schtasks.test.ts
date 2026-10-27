@@ -8,10 +8,11 @@ import { assertDaemonRuntimePinDefinition } from "./runtime-pin-state.js";
 import {
   buildHiddenLauncherScript,
   buildStartupLauncherScript,
+  readScheduledTaskCommand,
   resolveStartupEntryPaths,
+  resolveTaskScriptPath,
 } from "./schtasks-layout.js";
 import { isScheduledTaskEnabled, readScheduledTaskRuntime } from "./schtasks-runtime.js";
-import { readScheduledTaskCommand, resolveTaskScriptPath } from "./schtasks.js";
 import { hasGatewayServiceLauncherOverride } from "./service-types.js";
 
 const resolveWindowsOemEncodingMock = vi.hoisted(() => vi.fn((): string | null => null));

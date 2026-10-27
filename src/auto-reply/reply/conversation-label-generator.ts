@@ -8,7 +8,10 @@ import { resolveDefaultAgentId } from "../../agents/agent-scope.js";
 import { splitTrailingAuthProfile } from "../../agents/model-ref-profile.js";
 import { resolveCompatibleAgentRuntimeForProvider } from "../../agents/session-runtime-compat.js";
 import { resolveSimpleCompletionSelectionForAgent } from "../../agents/simple-completion-runtime.js";
-import { runUtilityCompletion } from "../../agents/utility-completion.js";
+import {
+  runUtilityCompletion,
+  type UtilityCompletionAttempt,
+} from "../../agents/utility-completion.js";
 import { resolveAutomaticUtilityRuntimeOverride } from "../../agents/utility-model.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createDedupeCache } from "../../infra/dedupe.js";
@@ -77,21 +80,44 @@ function resolveRawModelProvider(modelRef: string | undefined): string | undefin
   return provider || undefined;
 }
 
-function resolveAttemptKey(
+function resolveAttemptPlan(
   params: ConversationLabelParams & { agentId: string },
   attempt: ConversationLabelAttempt,
-): string {
+  dispatched?: UtilityCompletionAttempt,
+) {
   const selection = resolveAttemptSelection(params, attempt);
+  let runtime = dispatched?.agentHarnessRuntimeOverride;
+  if (!dispatched && selection) {
+    // A session override cannot serve a utility model on an incompatible provider.
+    runtime = resolveCompatibleAgentRuntimeForProvider({
+      provider: selection.provider,
+      runtime: params.agentHarnessRuntimeOverride,
+      cfg: params.cfg,
+    });
+    if (!runtime) {
+      const automaticRuntime = resolveAutomaticUtilityRuntimeOverride({
+        cfg: params.cfg,
+        agentId: params.agentId,
+        utilityProvider: selection.provider,
+        utilityModelId: selection.modelId,
+      });
+      runtime = automaticRuntime === "claude-cli" ? automaticRuntime : undefined;
+    }
+  }
   const rawRef = splitTrailingAuthProfile(attempt.modelRef?.trim() ?? "");
-  return selection
+  const key = selection
     ? [
         "resolved",
         selection.provider,
         selection.runtimeProvider ?? "",
         selection.modelId,
         selection.profileId ?? attempt.preferredProfile ?? "",
+        runtime ?? "",
       ].join("\0")
-    : ["raw", rawRef.model, rawRef.profile ?? attempt.preferredProfile ?? ""].join("\0");
+    : ["raw", rawRef.model, rawRef.profile ?? attempt.preferredProfile ?? "", runtime ?? ""].join(
+        "\0",
+      );
+  return { selection, runtime, key };
 }
 
 async function runLabelAttempts(
@@ -110,18 +136,20 @@ async function runLabelAttempts(
     params.operatorAuthority?.assertCurrent();
     params.abortSignal?.throwIfAborted();
   };
-  const seen = new Set(params.skipAttempts?.map((attempt) => resolveAttemptKey(params, attempt)));
+  const seen = new Set(
+    params.skipAttempts?.map((attempt) => resolveAttemptPlan(params, attempt).key),
+  );
   const failures: LabelModelPhase[] = [];
   for (const attempt of params.attempts) {
     assertCurrent();
-    const key = resolveAttemptKey(params, attempt);
-    if (seen.has(key)) {
+    const plan = resolveAttemptPlan(params, attempt);
+    if (seen.has(plan.key)) {
       continue;
     }
-    seen.add(key);
+    seen.add(plan.key);
     let modelRef = splitTrailingAuthProfile(attempt.modelRef ?? "").model || "unavailable";
     try {
-      const selection = resolveAttemptSelection(params, attempt);
+      const { selection } = plan;
       if (!selection) {
         throw new Error("conversation label model selection unavailable");
       }
@@ -133,23 +161,6 @@ async function runLabelAttempts(
         }
         assertOperatorModelAllowed(params.operatorAuthority, model);
       }
-      // The session's runtime override was resolved for its primary provider; a
-      // utility model on another provider cannot run through that harness.
-      const selectedRuntime = resolveCompatibleAgentRuntimeForProvider({
-        provider: selection.provider,
-        runtime: params.agentHarnessRuntimeOverride,
-        cfg: params.cfg,
-      });
-      const automaticRuntime = selectedRuntime
-        ? undefined
-        : resolveAutomaticUtilityRuntimeOverride({
-            cfg: params.cfg,
-            agentId: params.agentId,
-            utilityProvider: selection.provider,
-            utilityModelId: selection.modelId,
-          });
-      const agentHarnessRuntimeOverride =
-        selectedRuntime ?? (automaticRuntime === "claude-cli" ? automaticRuntime : undefined);
       const completion = await runUtilityCompletion({
         purpose: "conversation-label",
         config: params.cfg,
@@ -159,16 +170,21 @@ async function runLabelAttempts(
         agentId: params.agentId,
         agentDir: params.agentDir ?? selection.agentDir,
         useUtilityModel: attempt.phase === "utility",
-        onAttempt: ({ provider, model: modelId, authProfileId }) => {
+        onAttempt: (candidate) => {
+          // Utility fallbacks can reach the same model without the session runtime.
           seen.add(
-            resolveAttemptKey(params, {
-              modelRef: `${provider}/${modelId}`,
-              preferredProfile: authProfileId,
-              phase: attempt.phase,
-            }),
+            resolveAttemptPlan(
+              params,
+              {
+                modelRef: `${candidate.provider}/${candidate.model}`,
+                preferredProfile: candidate.authProfileId,
+                phase: attempt.phase,
+              },
+              candidate,
+            ).key,
           );
         },
-        ...(agentHarnessRuntimeOverride ? { agentHarnessRuntimeOverride } : {}),
+        ...(plan.runtime ? { agentHarnessRuntimeOverride: plan.runtime } : {}),
         systemPrompt: [
           params.prompt,
           'Label only the text in the "conversationLabelSource" field of the JSON object in the final user input.',
@@ -193,10 +209,12 @@ async function runLabelAttempts(
         .flatMap((delta) => (delta.kind === "text" ? [delta.text] : []))
         .join("")
         .trim();
-      const label = truncateUtf16Safe(visibleText, maxLength) || null;
-      const normalized = label && params.normalizeLabel ? params.normalizeLabel(label) : label;
-      if (normalized) {
-        return normalized;
+      // Normalize the whole answer: a model may put its title after a leading explanation.
+      const normalized =
+        visibleText && params.normalizeLabel ? params.normalizeLabel(visibleText) : visibleText;
+      const label = truncateUtf16Safe(normalized ?? "", maxLength) || null;
+      if (label) {
+        return label;
       }
     } catch {
       assertCurrent();

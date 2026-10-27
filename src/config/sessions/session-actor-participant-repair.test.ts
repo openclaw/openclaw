@@ -9,10 +9,16 @@ import { participantRecord, withActor } from "./session-actor-worker.test-suppor
 import type { SessionEntryWritePostimages } from "./session-entry-write-postimage.js";
 import { readSessionMembershipFactsInDatabase } from "./session-membership-facts.js";
 
+const participant = (id: string, promptedAt: number) => ({
+  identity: { type: "agent" as const, id },
+  promptedAt,
+});
+
 it.each(["same-store", "cross-store"])(
   "publishes merged participants to a warm actor after %s canonical repair",
   async (kind) => {
     await withActor((f) => {
+      const key = f.target.sessionKey;
       const source =
         kind === "same-store" ? f.database : openOpenClawAgentDatabase({ agentId: "source" });
       const sourceScope = {
@@ -27,33 +33,26 @@ it.each(["same-store", "cross-store"])(
           ["shared", 30],
           ["new", 5],
         ] as const) {
-          recordSessionParticipantFromWorker(source, sourceScope, {
-            identity: { type: "agent", id },
-            promptedAt,
-          });
+          recordSessionParticipantFromWorker(source, sourceScope, participant(id, promptedAt));
         }
       });
       f.read();
-      f.participant({ identity: { type: "agent", id: "shared" }, promptedAt: 20 });
-      f.participant({ identity: { type: "agent", id: "destination-only" }, promptedAt: 15 });
+      f.participant(participant("shared", 20));
+      f.participant(participant("destination-only", 15));
+      f.writeEntry({
+        ...f.read().entry!,
+        category: "work",
+        owner: { actor: { type: "human", id: "alice" } },
+      });
       const before = f.read();
       const postimages: SessionEntryWritePostimages = new Map();
       const repair = () => {
         // A previous write in this transaction has already staged the resident actor's facts.
-        recordSessionParticipantFromWorker(f.database, f.scope, {
-          identity: { type: "agent", id: "shared" },
-          promptedAt: 25,
+        recordSessionParticipantFromWorker(f.database, f.scope, participant("shared", 25));
+        writeSessionEntry(f.database, key, before.entry!, { postimages });
+        copySessionNodeArtifactsForRepair(source, f.database, [sourceScope.sessionKey], key, {
+          postimages,
         });
-        writeSessionEntry(f.database, f.target.sessionKey, before.entry!, { postimages });
-        copySessionNodeArtifactsForRepair(
-          source,
-          f.database,
-          [sourceScope.sessionKey],
-          f.target.sessionKey,
-          {
-            postimages,
-          },
-        );
       };
       expect(() =>
         runSqliteImmediateTransactionSync(f.database.db, () => {
@@ -69,31 +68,34 @@ it.each(["same-store", "cross-store"])(
         participantRecord("destination-only", 1, 15),
       ];
       expect(f.read().participants).toEqual(expected);
-      expect(postimages.get(f.target.sessionKey)?.entry).toMatchObject({
+      const projected = {
         participants: expected.map(({ identity }) => ({ identity })),
         participantCount: 3,
-      });
-      expect(
-        participantRecordsBySessionKey(f.database.db, [f.target.sessionKey]).get(
-          f.target.sessionKey,
-        ),
-      ).toEqual(expected);
-      expect(
-        readSessionMembershipFactsInDatabase(f.database, [f.target.sessionKey]).facts[0]?.[3],
-      ).toEqual({
-        participants: expected.map(({ identity }) => ({ identity })),
-        participantCount: 3,
-      });
-      f.participant({ identity: { type: "agent", id: "shared" }, promptedAt: 40 });
-      expect(f.read().participants[1]).toMatchObject({
+      };
+      expect(postimages.get(key)?.entry).toMatchObject(projected);
+      expect(participantRecordsBySessionKey(f.database.db, [key]).get(key)).toEqual(expected);
+      const membership = readSessionMembershipFactsInDatabase(f.database, [key]).facts[0];
+      expect(membership).toEqual([key, "work", [], projected, before.entry!.sessionId]);
+      f.participant(participant("shared", 40));
+      const afterPrompt = {
         contributionCount: kind === "same-store" ? 5 : 3,
         lastPromptedAt: 40,
+      };
+      expect(f.read().participants[1]).toMatchObject(afterPrompt);
+      f.writeEntry({
+        ...f.read().entry!,
+        category: "personal",
+        owner: { actor: { type: "human", id: "bob" } },
       });
+      expect(readSessionMembershipFactsInDatabase(f.database).facts).toContainEqual([
+        key,
+        "personal",
+        [],
+        expect.objectContaining({ participantCount: 3 }),
+        before.entry!.sessionId,
+      ]);
       f.restartActor();
-      expect(f.read().participants[1]).toMatchObject({
-        contributionCount: kind === "same-store" ? 5 : 3,
-        lastPromptedAt: 40,
-      });
+      expect(f.read().participants[1]).toMatchObject(afterPrompt);
     });
   },
 );

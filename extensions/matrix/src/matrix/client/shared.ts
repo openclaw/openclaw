@@ -64,10 +64,8 @@ type SharedMatrixClientState = {
 
 type SharedMatrixClientParams = {
   cfg?: CoreConfig;
-  env?: NodeJS.ProcessEnv;
   timeoutMs?: number;
   auth?: MatrixAuth;
-  startClient?: boolean;
   accountId?: string | null;
   abortSignal?: AbortSignal;
   role?: MatrixClientLeaseRole;
@@ -176,9 +174,7 @@ async function ensureSharedClientStarted(
     state.started = true;
   })();
   const guardedStart = startPromise.finally(() => {
-    if (state.startPromise === guardedStart) {
-      state.startPromise = null;
-    }
+    state.startPromise = null;
   });
   state.startPromise = guardedStart;
   await awaitMatrixStartupWithAbort(guardedStart, abortSignal);
@@ -199,7 +195,7 @@ async function resolveSharedMatrixAuth(params: SharedMatrixClientParams): Promis
       "Matrix shared client requires a resolved runtime config. Load and resolve config at the command or gateway boundary, then pass cfg through the runtime path.",
     );
   }
-  return resolveMatrixAuth({ cfg: params.cfg, env: params.env, accountId: params.accountId });
+  return resolveMatrixAuth({ cfg: params.cfg, accountId: params.accountId });
 }
 
 async function resolveOpenSharedMatrixClientState(
@@ -525,16 +521,7 @@ export async function acquireSharedMatrixClient(
     }
     throwIfMatrixStartupAborted(abortSignal);
   }
-  const lease = createSharedMatrixClientLease(state, params.role ?? "transient");
-  if (params.startClient !== false) {
-    try {
-      await lease.start(abortSignal);
-    } catch (error) {
-      await lease.release({ mode: "stop" }).catch(() => undefined);
-      throw error;
-    }
-  }
-  return lease;
+  return createSharedMatrixClientLease(state, params.role ?? "transient");
 }
 
 async function forceRetireState(state: SharedMatrixClientState): Promise<void> {

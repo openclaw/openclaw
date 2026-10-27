@@ -28,6 +28,7 @@ export async function inlineOpenAiCompatibleImageUrls(
     maxDownloads: number;
     maxBytes: number;
     timeoutMs: () => number;
+    signal?: AbortSignal;
     /** Explicit operator opt-in only; never an inferred local-provider grant. */
     allowPrivateNetwork?: boolean;
     ssrfPolicy?: SsrFPolicy;
@@ -79,6 +80,7 @@ export async function inlineOpenAiCompatibleImageUrls(
       url,
       init: { method: "GET" },
       timeoutMs: params.timeoutMs(),
+      signal: params.signal,
       fetchImpl: fetch,
     });
     try {

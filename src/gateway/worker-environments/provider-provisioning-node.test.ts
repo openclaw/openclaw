@@ -604,7 +604,11 @@ describe("node worker provider provisioning", () => {
     expect(generateWorkerCredential).not.toHaveBeenCalled();
     expect(state.store.getCredential(provisioning.environmentId)).toBeUndefined();
     expect(transitions).not.toHaveBeenCalledWith(expect.objectContaining({ to: "ready" }));
-    expect(destroy).toHaveBeenCalledExactlyOnceWith({ leaseId, profile: { region: "test" } });
+    expect(destroy).toHaveBeenCalledExactlyOnceWith({
+      leaseId,
+      profile: { region: "test" },
+      signal: expect.any(AbortSignal),
+    });
     expect(retireNodeEnrollment).toHaveBeenCalledExactlyOnceWith(
       expect.objectContaining({
         state: "destroying",

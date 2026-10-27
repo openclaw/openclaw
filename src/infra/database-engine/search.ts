@@ -25,8 +25,8 @@ export function bindStoreSearch(store: SearchStore, schema: SearchSchema): Store
       ]),
     );
   return {
-    fullText: postgres ? null : bindSqliteFullText(token, sqlite),
-    vector: postgres ? null : bindSqliteVectorCapability({ store: token, databasePath }, sqlite),
+    fullText: bindSqliteFullText(token, sqlite),
+    vector: bindSqliteVectorCapability({ store: token, databasePath }, sqlite),
     text: bindIndexes(schema.text),
     vectors: bindIndexes(schema.vector),
     diagnostics: [],

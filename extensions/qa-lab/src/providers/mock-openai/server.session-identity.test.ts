@@ -3,19 +3,18 @@ import type { PluginHookRegistration } from "openclaw/plugin-sdk/plugin-test-run
 import { describe, expect, it } from "vitest";
 import qaLabPlugin from "../../../index.js";
 import { QA_SESSION_OBSERVER_HEADER } from "../shared/session-observer-registry.js";
+import { respond, settleParent, textBlock, userInputs } from "./server.fixtures.test-support.js";
 import {
   type MockServer,
   createMockServerTestHarness,
-  expectNonStreamingResponsesJson,
   expectOk,
+  makeAnthropicUserText,
   getJson,
   makeToolOutputWithCallId,
-  makeUserInput,
   outputText,
   outputToolArgsFromItem,
   outputToolCall,
   postJson,
-  requireRecord,
 } from "./server.test-harness.js";
 
 const { startMockServer } = createMockServerTestHarness();
@@ -30,23 +29,17 @@ async function requestJson(
   return (await expectOk(postJson(server, route, body, headers))).json();
 }
 
-async function observeSession(server: MockServer, sessionId: string) {
+async function startObservedServer(...sessionIds: string[]) {
+  const server = await startMockServer();
+  const provider = {
+    baseUrl: `${server.baseUrl}/v1`,
+    models: [],
+    request: { headers: { [QA_SESSION_OBSERVER_HEADER]: `${server.baseUrl}/debug/session` } },
+  };
   let gate: PluginHookRegistration<"before_agent_run">["handler"] | undefined;
   qaLabPlugin.register(
     createTestPluginApi({
-      config: {
-        models: {
-          providers: {
-            "mock-openai": {
-              baseUrl: `${server.baseUrl}/v1`,
-              models: [],
-              request: {
-                headers: { [QA_SESSION_OBSERVER_HEADER]: `${server.baseUrl}/debug/session` },
-              },
-            },
-          },
-        },
-      },
+      config: { models: { providers: { "mock-openai": provider } } },
       on: (hookName, handler) => {
         if (hookName === "before_agent_run") {
           gate = handler as PluginHookRegistration<"before_agent_run">["handler"];
@@ -57,9 +50,16 @@ async function observeSession(server: MockServer, sessionId: string) {
   if (!gate) {
     throw new Error("QA session observation gate was not registered");
   }
-  expect(
-    await gate({ prompt: "No session identity in the prompt", messages: [] }, { sessionId }),
-  ).toBeUndefined();
+  for (const sessionId of sessionIds) {
+    await gate({ prompt: "No session identity in the prompt", messages: [] }, { sessionId });
+  }
+  return server;
+}
+
+function expectSpawnLabel(response: unknown, label: string) {
+  expect(outputToolArgsFromItem(outputToolCall(response, "sessions_spawn"))).toMatchObject({
+    label,
+  });
 }
 
 describe("QA transport session identity", () => {
@@ -68,10 +68,7 @@ describe("QA transport session identity", () => {
       "qa-session-alpha-" + "a".repeat(80),
       "qa-session-beta-" + "b".repeat(80),
     ] as const;
-    const server = await startMockServer();
-    for (const sessionId of sessions) {
-      await observeSession(server, sessionId);
-    }
+    const server = await startObservedServer(...sessions);
     const handoffPrompt =
       "Delegate one bounded QA task to a subagent. Wait for the subagent to finish.";
     const fanoutPrompt =
@@ -95,115 +92,83 @@ describe("QA transport session identity", () => {
         "/v1/messages",
         {
           tools: [{ name: "sessions_spawn", input_schema: { type: "object", properties: {} } }],
-          messages: [{ role: "user", content: [{ type: "text", text: handoffPrompt }] }],
+          messages: [makeAnthropicUserText(handoffPrompt)],
         },
         { "x-session-affinity": sessionId },
       );
     const handoffs = await Promise.all(
-      sessions.map((id) => postSession(id, [makeUserInput(handoffPrompt)])),
+      sessions.map((id) => postSession(id, userInputs(handoffPrompt))),
     );
     for (const handoff of handoffs) {
-      expect(outputToolArgsFromItem(outputToolCall(handoff, "sessions_spawn"))).toMatchObject({
-        label: "qa-sidecar",
-      });
+      expectSpawnLabel(handoff, "qa-sidecar");
     }
-    expect(
-      requireRecord(await postAnthropic(sessions[0]), "cross-provider continuation").stop_reason,
-    ).toBe("end_turn");
-    expect(
-      requireRecord(await postAnthropic("qa-session-anthropic"), "independent Anthropic handoff")
-        .stop_reason,
-    ).toBe("tool_use");
+    expect(await postAnthropic(sessions[0])).toMatchObject({ stop_reason: "end_turn" });
+    expect(await postAnthropic("qa-session-anthropic")).toMatchObject({ stop_reason: "tool_use" });
     for (const [boundary, label] of [
       [1, "qa-fanout-alpha"],
       [2, "qa-fanout-beta"],
     ] as const) {
-      const calls = await Promise.all(
-        sessions.map((id) =>
-          postSession(
-            id,
-            [
-              makeUserInput(fanoutPrompt),
-              ...(boundary === 2
-                ? [
-                    makeToolOutputWithCallId(
-                      "spawn",
-                      '{"status":"accepted","childSessionKey":"alpha","note":"ALPHA-OK"}',
-                    ),
-                  ]
-                : []),
-            ],
-            boundary,
+      const input = userInputs(fanoutPrompt);
+      if (boundary === 2) {
+        input.push(
+          makeToolOutputWithCallId(
+            "spawn",
+            '{"status":"accepted","childSessionKey":"alpha","note":"ALPHA-OK"}',
           ),
-        ),
-      );
+        );
+      }
+      const calls = await Promise.all(sessions.map((id) => postSession(id, input, boundary)));
       for (const call of calls) {
-        expect(outputToolArgsFromItem(outputToolCall(call, "sessions_spawn"))).toMatchObject({
-          label,
-        });
+        expectSpawnLabel(call, label);
       }
     }
   });
 
   it("accepts standalone tool-free completion", async () => {
     const instructions = "Choose how to incorporate each supplied candidate into MEMORY.md.";
-    const server = await startMockServer();
-    await observeSession(server, "observed-agent-session");
+    const server = await startObservedServer("observed-agent-session");
     for (const body of [
-      { instructions, input: [makeUserInput("Reply exactly: {}")], tools: [] },
+      { instructions, input: userInputs("Reply exactly: {}"), tools: [] },
       { instructions, input: "Reply exactly: {}" },
       ...["system", "developer"].map((role) => ({
-        input: [
-          { type: "message", role, content: [{ type: "input_text", text: instructions }] },
-          makeUserInput("Reply exactly: {}"),
-        ],
+        input: userInputs(
+          { type: "message", role, content: [textBlock(instructions)] },
+          "Reply exactly: {}",
+        ),
       })),
     ]) {
       const response = await postJson(server, "/v1/responses", body);
       expect(response.status).toBe(200);
       expect(outputText(await response.json())).toBe("{}");
-      expect(await getJson(server, "/debug/last-request")).toMatchObject({
-        requestKind: "agent-initial",
-        prompt: "Reply exactly: {}",
-      });
     }
     const anthropic = await postJson(server, "/v1/messages", {
       system: [{ type: "text", text: instructions }],
-      messages: [{ role: "user", content: [{ type: "text", text: "Reply exactly: {}" }] }],
+      messages: [makeAnthropicUserText("Reply exactly: {}")],
       tools: [],
     });
     expect(anthropic.status).toBe(200);
     expect(await anthropic.json()).toMatchObject({ content: [{ type: "text", text: "{}" }] });
   });
 
-  it.each<{ name: string; body: Record<string, unknown>; route?: string }>([
-    {
-      name: "Anthropic history discarded by normalization",
-      route: "/v1/messages",
-      body: {
-        system: "You are a JSON-only function.",
-        messages: [
-          { role: "assistant", content: [{ type: "thinking", thinking: "Earlier reasoning" }] },
-          { role: "user", content: "Reply exactly: {}" },
-        ],
-      },
-    },
-  ])("requires utility affinity for $name", async ({ body, route = "/v1/responses" }) => {
-    const server = await startMockServer();
+  it("requires utility affinity for Anthropic history discarded by normalization", async () => {
     const sessionId = "observed-agent-session";
-    await observeSession(server, sessionId);
+    const server = await startObservedServer(sessionId);
     const request = {
       instructions: "You are a JSON-only function. Return only a valid JSON value.",
-      input: [makeUserInput("Reply exactly: {}")],
+      input: userInputs("Reply exactly: {}"),
       tools: [],
-      ...body,
+      system: "You are a JSON-only function.",
+      messages: [
+        { role: "assistant", content: [{ type: "thinking", thinking: "Earlier reasoning" }] },
+        { role: "user", content: "Reply exactly: {}" },
+      ],
     };
-    const missing = await postJson(server, route, request);
+    const missing = await postJson(server, "/v1/messages", request);
     expect(missing.status).toBe(500);
     expect(await missing.text()).toContain("Missing QA session identity");
     expect(await getJson(server, "/debug/requests")).toEqual([]);
-    const admitted = await postJson(server, route, request, {
-      [route === "/v1/messages" ? "x-session-affinity" : "session_id"]: sessionId,
+    const admitted = await postJson(server, "/v1/messages", request, {
+      "x-session-affinity": sessionId,
     });
     expect(admitted.status).toBe(200);
     expect(await getJson(server, "/debug/last-request")).toMatchObject({ sessionId });
@@ -212,67 +177,47 @@ describe("QA transport session identity", () => {
   it("settles the full requester observed behind a truncated affinity value", async () => {
     const sessionId = `internal-session-effects-${"run-".repeat(20)}parent`;
     const childSessionKey = "agent:qa:subagent:identity-child";
-    const session = {
-      key: "agent:qa:main",
-      agentId: "qa",
-      sessionId,
-      hasActiveRun: false,
-      status: "done",
-      abortedLastRun: false,
-    };
-    const gateway = { call: async () => ({ sessions: [session], nextOffset: null }) };
-    const server = await startMockServer();
-    await observeSession(server, sessionId);
+    const server = await startObservedServer(sessionId);
     const response = await requestJson(
       server,
       "/v1/responses",
       {
         instructions: "Runtime: embedded | agent=qa | session=agent:qa:main",
-        input: [
-          makeUserInput("Subagent terminal reply QA check: visible."),
+        input: userInputs(
+          "Subagent terminal reply QA check: visible.",
           { type: "function_call", call_id: "spawn", name: "sessions_spawn", arguments: "{}" },
           makeToolOutputWithCallId(
             "spawn",
             JSON.stringify({ status: "accepted", childSessionKey, runId: "identity-run" }),
           ),
-        ],
+        ),
       },
       { session_id: sessionId.slice(0, 64) },
     );
     expect(outputText(response)).toBe("Worker started.");
     expect(await getJson(server, "/debug/last-request")).toMatchObject({ sessionId });
-    await server.terminalRequesters.settle(gateway);
-    const child = await expectNonStreamingResponsesJson(server, {
+    await settleParent(server, sessionId);
+    const child = await respond(server, "Subagent terminal reply QA worker: visible.", {
       client_metadata: { session_id: "identity-child" },
       instructions: `- Your session: ${childSessionKey}.`,
-      input: [makeUserInput("Subagent terminal reply QA worker: visible.")],
     });
     expect(outputText(child)).toBe("QA-SUBAGENT-TERMINAL-VISIBLE-OK");
   });
 
-  it.each([
-    {
-      name: "observed exact identity wins over longer prefixes",
-      ids: [prefix, `${prefix}-first`, `${prefix}-second`],
-      affinity: prefix,
-    },
-    {
-      name: "ambiguous prefix",
-      ids: [`${prefix}-first`, `${prefix}-second`],
-      error: "Ambiguous QA session affinity",
-      affinity: prefix,
-    },
-    { name: "unknown prefix", ids: [], error: "Unknown QA session affinity", affinity: prefix },
-  ])("resolves transport identity safely: $name", async ({ ids, error, affinity }) => {
-    const server = await startMockServer();
-    for (const sessionId of ids) {
-      await observeSession(server, sessionId);
-    }
+  it.each<[string, string[], string?]>([
+    [
+      "observed exact identity wins over longer prefixes",
+      [prefix, `${prefix}-first`, `${prefix}-second`],
+    ],
+    ["ambiguous prefix", [`${prefix}-first`, `${prefix}-second`], "Ambiguous QA session affinity"],
+    ["unknown prefix", [], "Unknown QA session affinity"],
+  ])("resolves transport identity safely: %s", async (_name, ids, error) => {
+    const server = await startObservedServer(...ids);
     const response = await postJson(
       server,
       "/v1/responses",
       { input: "Reply exactly: IDENTITY-OK" },
-      affinity ? { session_id: affinity } : undefined,
+      { session_id: prefix },
     );
     if (error) {
       expect(response.status).toBe(500);

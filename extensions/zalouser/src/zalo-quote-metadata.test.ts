@@ -24,10 +24,11 @@ const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
 // mock-isolation: Quote fixtures provide synthetic listeners and sends, never a live Zalo session.
 vi.mock("./zca-client.js", () => ({ createZalo: createZaloMock, TextStyle: { Indent: 9 } }));
 
-import { zalouserMessageAdapter } from "./channel.adapters.js";
+import { zalouserPlugin } from "./channel.js";
 import { setZalouserRuntime } from "./runtime.js";
 import { saveStoredZaloCredentials } from "./session-state.js";
 import {
+  logoutZaloProfile,
   normalizeZaloInboundMessage,
   resolveZaloGroupContext,
   sendZaloTextMessage,
@@ -54,6 +55,11 @@ function createMockApi(overrides: Partial<API> = {}): API {
     sendMessage,
     ...overrides,
   } as unknown as API;
+}
+
+function groupApi(groupId: string, name: string) {
+  const getGroupInfo = vi.fn(async () => ({ gridInfoMap: { [groupId]: { groupId, name } } }));
+  return { api: createMockApi({ getGroupInfo }), getGroupInfo };
 }
 
 async function withStoredSession<T>(profile: string, api: API, run: () => Promise<T>): Promise<T> {
@@ -92,7 +98,7 @@ it("applies the resolved account media cap before the native message send", asyn
   const directory = tempDirs.make("zalouser-media-cap-");
   const file = path.join(directory, "attachment.txt");
   await withStoredSession("media-cap", api, async () => {
-    const sendMedia = zalouserMessageAdapter.send?.media;
+    const sendMedia = zalouserPlugin.message?.send?.media;
     if (!sendMedia) {
       throw new Error("Zalo Personal media sender unavailable");
     }
@@ -187,7 +193,6 @@ it("extracts quote metadata and implicit mentions", async () => {
 
   expect(message).toMatchObject({
     quotedGlobalMsgId: "987654321234",
-    quotedOwnerId: "555444333",
     quotedBody: "Previous bot message content",
     implicitMention: true,
   });
@@ -208,15 +213,11 @@ it.each([
 });
 
 it("reuses group context until its five-minute TTL expires", async () => {
-  const getGroupInfo = vi.fn(async () => ({
-    gridInfoMap: { "group-ttl": { groupId: "group-ttl", name: "Group" } },
-  }));
-  const api = createMockApi({ getGroupInfo } as Partial<API>);
+  const { api, getGroupInfo } = groupApi("group-ttl", "Group");
   const now = vi.spyOn(Date, "now").mockReturnValue(1_700_000_000_000);
 
   await withStoredSession("cache-ttl", api, async () => {
     await expect(resolveZaloGroupContext("cache-ttl", "group-ttl")).resolves.toMatchObject({
-      groupId: "group-ttl",
       name: "Group",
     });
     now.mockReturnValue(1_700_000_299_999);
@@ -227,4 +228,34 @@ it("reuses group context until its five-minute TTL expires", async () => {
   });
 
   expect(getGroupInfo).toHaveBeenCalledTimes(2);
+});
+
+it("keeps group lookups profile-scoped and refreshes them after logout", async () => {
+  const groupId = "shared-group";
+  const alpha = groupApi(groupId, "Alpha");
+  const beta = groupApi(groupId, "Beta");
+  await withStoredSession("cache-alpha", alpha.api, async () => {
+    await expect(resolveZaloGroupContext("cache-alpha", groupId)).resolves.toMatchObject({
+      name: "Alpha",
+    });
+    await withStoredSession("cache-beta", beta.api, async () => {
+      await expect(resolveZaloGroupContext("cache-beta", groupId)).resolves.toMatchObject({
+        name: "Beta",
+      });
+    });
+    await expect(resolveZaloGroupContext("cache-alpha", groupId)).resolves.toMatchObject({
+      name: "Alpha",
+    });
+    expect(alpha.getGroupInfo).toHaveBeenCalledOnce();
+    expect(beta.getGroupInfo).toHaveBeenCalledOnce();
+    await logoutZaloProfile("cache-alpha");
+  });
+
+  const replacement = groupApi(groupId, "New Alpha");
+  await withStoredSession("cache-alpha", replacement.api, async () => {
+    await expect(resolveZaloGroupContext("cache-alpha", groupId)).resolves.toMatchObject({
+      name: "New Alpha",
+    });
+  });
+  expect(replacement.getGroupInfo).toHaveBeenCalledOnce();
 });

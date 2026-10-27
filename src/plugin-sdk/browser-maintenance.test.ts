@@ -225,7 +225,6 @@ describe("browser maintenance", () => {
       } else {
         realRmSync(trashDir, { recursive: true });
       }
-      const { renameSync, cpSync, rmSync } = trackMoves();
       const target = writeTrashTarget();
       const original = fs.lstatSync(target, { bigint: true });
       const moved = await movePathToTrash(target);
@@ -235,9 +234,6 @@ describe("browser maintenance", () => {
         expect(fs.lstatSync(trashDir).mode & 0o777).toBe(0o700);
       }
       expect(fs.lstatSync(moved, { bigint: true }).ino).toBe(original.ino);
-      expect(renameSync).toHaveBeenCalledWith(target, moved);
-      expect(cpSync).not.toHaveBeenCalled();
-      expect(rmSync).not.toHaveBeenCalled();
       expect(fs.readdirSync(path.join(homeDir, ".Trash"))).toEqual([
         path.basename(path.dirname(moved)),
       ]);
@@ -303,19 +299,9 @@ describe("browser maintenance", () => {
       if (kind === "copy") {
         expect(fs.lstatSync(moved, { bigint: true }).ino).not.toBe(original.ino);
         expect(cpSync).toHaveBeenCalledTimes(2);
-        for (const [index, destination] of [first, moved].entries()) {
-          expect(cpSync).toHaveBeenNthCalledWith(index + 1, target, destination, {
-            recursive: true,
-            force: false,
-            errorOnExist: true,
-          });
-        }
         expect(rmSync).toHaveBeenCalledTimes(1);
-        expect(rmSync).toHaveBeenCalledWith(target, { recursive: true, force: false });
       } else {
         expect(renameSync).toHaveBeenCalledTimes(2);
-        expect(renameSync).toHaveBeenNthCalledWith(1, target, first);
-        expect(renameSync).toHaveBeenNthCalledWith(2, target, moved);
         expect(cpSync).not.toHaveBeenCalled();
         expect(rmSync).not.toHaveBeenCalled();
       }

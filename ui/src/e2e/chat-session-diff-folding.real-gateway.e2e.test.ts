@@ -4,6 +4,7 @@ import { mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import type { Locator } from "playwright";
 import { expect, it } from "vitest";
+import type { SessionsDiffResult } from "../../../packages/gateway-protocol/src/schema/sessions.js";
 import { ensureGatewayOwnerProfile } from "../../../src/state/user-profiles.js";
 import {
   createOpenClawTestInstance,
@@ -11,8 +12,8 @@ import {
 } from "../../../test/helpers/openclaw-test-instance.ts";
 import { runQaGatewayFixture } from "../../../test/helpers/qa-gateway-cleanup.ts";
 import { waitForControlUiGatewayReady } from "../test-helpers/control-ui-e2e-readiness.ts";
-import { takeControlUiScreenshotFrame } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import { enterControlUiSession } from "../test-helpers/control-ui-session-entry.ts";
+import { connectChatGateway } from "./chat-real-gateway.test-support.ts";
 import {
   activateChatHeaderPanelAction,
   focusChatSidePanel,
@@ -35,6 +36,7 @@ const after = before.map((line) =>
   line.replace('"before"', '"after"').replace("label + count", "label + count * 2"),
 );
 let instance: OpenClawTestInstance;
+let client: Awaited<ReturnType<typeof connectChatGateway>> | undefined;
 let workspace: string;
 let longBefore: string[], longAfter: string[];
 
@@ -63,6 +65,14 @@ async function expectLines(file: Locator, selector: string, lines: (string | und
 const suite = createControlUiE2eSuite({
   name: "manual code folding through a real Gateway",
   startServerBeforeBrowser: true,
+  resources: {
+    async run(signal) {
+      client = await connectChatGateway(instance, signal);
+    },
+    async close() {
+      await client?.stopAndWait();
+    },
+  },
   async startServer() {
     const owner = await createOpenClawTestInstance({
       name: profile,
@@ -94,7 +104,7 @@ const suite = createControlUiE2eSuite({
       await writeSources(true);
       await owner.state.writeConfig({
         agents: {
-          defaults: { workspace, skipBootstrap: true, heartbeat: { every: "0m" } },
+          defaults: { workspace, skipBootstrap: true },
           entries: { main: { workspace, name: "Folding proof" } },
         },
         gateway: {
@@ -119,46 +129,27 @@ const suite = createControlUiE2eSuite({
 });
 
 suite.define(() => {
-  it("folds actual sessions.diff source without concealing edits by default", async () => {
-    const rpc = async (method: string, params: object) => {
-      const result = await instance.cli([
-        "gateway",
-        "call",
-        method,
-        "--params",
-        JSON.stringify(params),
-        "--json",
-      ]);
-      if (result.code !== 0) {
-        throw new Error(
-          method + " failed: " + result.stderr.replaceAll(instance.gatewayToken, "[fixture token]"),
-        );
-      }
-      return JSON.parse(result.stdout);
-    };
-    const created = await rpc("sessions.create", {
+  it("folds actual sessions.diff source without concealing edits in expanded files", async () => {
+    const gateway = client;
+    if (!gateway) {
+      throw new Error("Gateway fixture client is not connected");
+    }
+    const created = await gateway.request("sessions.create", {
       agentId: "main",
       key,
       label: "Manual code folding proof",
       cwd: workspace,
     });
     expect(created.ok).toBe(true);
-    const diff = await rpc("sessions.diff", { sessionKey: key });
+    const diff = await gateway.request<SessionsDiffResult>("sessions.diff", { sessionKey: key });
     expect(diff.files.map((file: { path: string }) => file.path)).toEqual([
       "example.ts",
       "gapped.ts",
       "large.ts",
     ]);
-    const report: { [key: string]: unknown } = {
-      files: diff.files.map((file: { path: string; additions: number; deletions: number }) => ({
-        path: file.path,
-        added: file.additions,
-        removed: file.deletions,
-      })),
-      profile,
-      port: instance.port,
-    };
-    const handoff = await rpc("health", {}).then(() => instance.cli(["dashboard", "--json"]));
+    const handoff = await gateway
+      .request("health", {})
+      .then(() => instance.cli(["dashboard", "--json"]));
     expect(handoff.code).toBe(0);
     const dashboard = JSON.parse(handoff.stdout);
     const url = new URL("chat/main/~key/folding-proof", suite.server.baseUrl);
@@ -192,6 +183,10 @@ suite.define(() => {
         await focusChatSidePanel(page);
         const panel = page.locator(".session-diff");
         const file = panel.locator(".session-diff__file").filter({ hasText: "example.ts" });
+        const fileToggle = file.locator(".session-diff__file-toggle");
+        await fileToggle.waitFor();
+        expect(await fileToggle.getAttribute("aria-expanded")).toBe("false");
+        await fileToggle.click();
         const codeToggle = file.locator(".session-diff__code-toggle");
         const placeholder = file.locator(".session-diff__code-placeholder");
         const button = (name: string) => file.getByRole("button", { name, exact: true });
@@ -201,22 +196,15 @@ suite.define(() => {
         await expectLines(file, splitLeft, [before[1], before[3]]);
         await expectLines(file, splitRight, [after[1], after[3]]);
         expect(await file.locator(".chat-diff__change--add").count()).toBeGreaterThan(0);
-        const take = async (name: string) => {
-          const frame = await takeControlUiScreenshotFrame(
-            page,
-            panel,
-            [file.locator(".session-diff__filename")],
-            { elements: [file], animations: "disabled" },
-          );
-          await writeFile(path.join(suite.artifactDir, name + ".png"), frame.png);
-        };
         const otherFiles = panel
           .locator(".session-diff__file")
           .filter({ hasNotText: "example.ts" });
         for (const section of await otherFiles.all()) {
-          await section.locator(".session-diff__file-toggle").click();
+          const toggle = section.locator(".session-diff__file-toggle");
+          if ((await toggle.getAttribute("aria-expanded")) === "true") {
+            await toggle.click();
+          }
         }
-        await take("before-expanded");
         await button("Collapse code at line 1").click();
         await placeholder.waitFor();
         expect(await file.locator(".session-diff-split__row").count()).toBe(1);
@@ -224,14 +212,13 @@ suite.define(() => {
         const foldedText = await placeholder.textContent();
         expect(foldedText).toContain("+2");
         expect(foldedText).toContain("-2");
-        await take("after-folded-split");
-        const view = async (name: string) => {
-          await panel.getByRole("button", { name: "Change view options" }).click();
-          await page.getByRole("menuitem", { name, exact: true }).click();
-        };
-        await view("Switch to Unified Diff");
+        await panel
+          .getByRole("button", { name: "Diff mode: split. Switch to next mode", exact: true })
+          .click();
+        await panel
+          .getByRole("button", { name: "Diff mode: auto. Switch to next mode", exact: true })
+          .click();
         expect(await file.locator(".chat-diff__row").count()).toBe(1);
-        await take("after-folded-unified");
         for (const section of await otherFiles.all()) {
           await section.locator(".session-diff__file-toggle").click();
         }
@@ -245,9 +232,11 @@ suite.define(() => {
         await expectLines(large, unifiedAdd, longAfter);
         const gapped = panel.locator(".session-diff__file").filter({ hasText: "gapped.ts" });
         expect(await gapped.locator(".session-diff__code-toggle").count()).toBe(0);
-        await gapped.getByRole("button", { name: /Show all .* unmodified lines/ }).click();
+        await gapped.getByRole("button", { name: /^\d+ unmodified lines$/ }).click();
         await gapped.locator(".session-diff__code-toggle").first().waitFor();
-        await view("Switch to Split Diff");
+        await panel
+          .getByRole("button", { name: "Diff mode: unified. Switch to next mode", exact: true })
+          .click();
         await expectLines(
           large,
           ".session-diff-split__side--left.session-diff-split__side--filled .session-diff-split__text",
@@ -262,6 +251,10 @@ suite.define(() => {
         expect(await placeholder.count()).toBe(1);
         await panel.getByRole("button", { name: "Refresh changes" }).click();
         await expect.poll(() => panel.getAttribute("aria-busy")).toBe("false");
+        // Refresh closes file cards; reopening must retain this source's code-fold state.
+        expect(await fileToggle.getAttribute("aria-expanded")).toBe("false");
+        await fileToggle.click();
+        await placeholder.waitFor();
         expect(await placeholder.count()).toBe(1);
         await button("Collapse code at line 1").click();
         await button("Expand code at line 1").click();
@@ -278,19 +271,12 @@ suite.define(() => {
           path.join(workspace, "example.ts"),
           after.join("\n").replace('"empty"', '"nothing"') + "\n",
         );
-        const refreshStart = await page.evaluate(() => performance.now());
         await panel.getByRole("button", { name: "Refresh changes" }).click();
+        await expect.poll(() => fileToggle.locator(".chat-diffstat__add").textContent()).toBe("+3");
+        expect(await fileToggle.getAttribute("aria-expanded")).toBe("false");
+        await fileToggle.click();
         await file.getByText('return "nothing";', { exact: true }).waitFor();
         expect(await placeholder.count()).toBe(0);
-        report.changedPatchRefreshMs =
-          (await page.evaluate(
-            () =>
-              new Promise<number>((resolve) => {
-                requestAnimationFrame(() =>
-                  requestAnimationFrame(() => resolve(performance.now())),
-                );
-              }),
-          )) - refreshStart;
         await button("Collapse code at line 1").waitFor();
         await action("Collapse Code");
         expect(await file.locator(".session-diff-split__row").count()).toBe(1);
@@ -301,15 +287,6 @@ suite.define(() => {
           expect(sha256(built)).toBe(asset.sha256);
         }
         expect(servedAssets.length).toBeGreaterThan(0);
-        report.assets = servedAssets;
-        report.browser = page.context().browser()?.version();
-        report.assertions =
-          "default-open; DOM absence; split/unified retention; source/highlight fidelity; nested state; real gap expansion; 64 long replacements; refresh retention; file-menu actions; real patch invalidation";
-        await writeFile(
-          path.join(suite.artifactDir, "proof.json"),
-          JSON.stringify(report, null, 2),
-        );
-        console.info("Session diff folding proof.json:", JSON.stringify(report));
       },
     );
   }, 120_000);

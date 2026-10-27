@@ -26,11 +26,7 @@ import type { AgentWorkerOperationContext } from "../../state/openclaw-agent-ope
 import type { OpenClawStateDatabase } from "../../state/openclaw-state-db-contract.js";
 import { encodeOpenClawStateWorkerError } from "../../state/openclaw-state-worker-error.js";
 import { withSqliteSessionDeletionWorkerParticipant } from "./session-accessor.sqlite-deletion.js";
-import { collectLifecycleIdentityChanges } from "./session-accessor.sqlite-identity.js";
-import {
-  collectReclamationChangedSessionKeys,
-  collectReclamationDeletionEntries,
-} from "./session-accessor.sqlite-reclamation-publication.js";
+import { collectReclamationEntryReplacement } from "./session-accessor.sqlite-reclamation-publication.js";
 import { reclaimSqliteSessionInTransaction } from "./session-accessor.sqlite-reclamation.js";
 import { prepareSessionEntryReplacementPublication } from "./session-accessor.sqlite-replacement-state.js";
 import type { SessionEntryPatchReceipt } from "./session-entry-patch.types.js";
@@ -76,42 +72,12 @@ export function deleteSessionWithNativeBindings(
       ) {
         throw new Error("Native binding deletion returned another reclamation operation");
       }
-      const changedKeys =
-        result.kind === "entry" && !result.value.deleted
-          ? []
-          : collectReclamationChangedSessionKeys(input.plan, result);
-      const removedEntries = collectReclamationDeletionEntries(input.plan, result);
-      const identities =
-        input.plan.kind === "lifecycle-projection-commit" &&
-        result.kind === "lifecycle-projection-commit"
-          ? collectLifecycleIdentityChanges(
-              input.plan.input.projected,
-              result.value.removedSessionKeys,
-            )
-          : {
-              previous: new Map(removedEntries.map(({ sessionKey, entry }) => [sessionKey, entry])),
-              current: new Map<string, SessionEntry>(),
-            };
-      const publication =
-        changedKeys.length > 0
-          ? prepareSessionEntryReplacementPublication(
-              {
-                ...identities,
-                pendingArchiveRecovery:
-                  result.kind === "lifecycle-projection-commit"
-                    ? result.value.pendingArchives
-                    : false,
-                membershipInvalidatedKeys: changedKeys,
-                maintenancePlans:
-                  result.kind === "lifecycle-projection-commit"
-                    ? result.value.maintenancePlans
-                    : [],
-              },
-              current,
-            )
-          : undefined;
+      const replacement = collectReclamationEntryReplacement(input.plan, result);
+      const publication = replacement
+        ? prepareSessionEntryReplacementPublication(replacement, current)
+        : undefined;
       if (publication) {
-        publication.changedKeys = changedKeys;
+        publication.changedKeys = publication.membershipInvalidatedKeys;
       }
       const candidate: SessionNativeBindingCandidate = {
         kind: "session-native-binding-deletion",

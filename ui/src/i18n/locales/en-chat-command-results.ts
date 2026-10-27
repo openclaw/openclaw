@@ -4,6 +4,9 @@ import { en } from "./en.ts";
 const enChatCommandResults = {
   chat: {
     commandResults: {
+      unknownCommand: "Unknown command: `{command}`",
+      options: "Options: {options}.",
+      sessionUnavailable: "Session capability is unavailable",
       help: {
         availableCommands: "Available Commands",
         agentCommand: "agent",

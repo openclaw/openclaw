@@ -110,8 +110,8 @@
 .session-progress-card__step-marker > .session-run-spinner {
   width: var(--session-progress-marker-size);
   height: var(--session-progress-marker-size);
-  border-color: color-mix(in srgb, var(--session-progress-neutral) 28%, transparent);
-  border-top-color: var(--session-progress-neutral);
+  border-color: color-mix(in srgb, var(--text) 28%, transparent);
+  border-top-color: var(--text);
 }
 
 .session-progress-card__current {
@@ -120,7 +120,7 @@
   font-size: var(--control-ui-text-sm);
   font-weight: 500;
   line-height: 1.35;
-  text-overflow: ellipsis;
+  text-overflow: clip;
   white-space: nowrap;
 }
 
@@ -273,10 +273,17 @@
 }
 
 .session-progress-card__current-marker,
-.session-progress-card__step--in_progress .session-progress-card__step-marker,
-.session-progress-card__step--pending .session-progress-card__step-marker,
-.session-progress-card__step--paused .session-progress-card__step-marker {
+.session-progress-card__step-marker:not([data-status="completed"]) {
   color: var(--session-progress-neutral);
+}
+
+.session-progress-card__step-marker[data-status="pending"] {
+  opacity: 0.9;
+
+  /* The 20-unit circle plus its 1.5-unit stroke fills 21.5 of the 24-unit viewBox. */
+  svg {
+    scale: calc(24 / 21.5);
+  }
 }
 
 @media (prefers-reduced-motion: reduce) {

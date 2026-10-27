@@ -5,7 +5,6 @@ import { createDeferred } from "../../../test/helpers/promise.js";
 import { captureCommandOwnerAssertion } from "../../auto-reply/command-owner-authority.js";
 import { getReplyPayloadMetadata } from "../../auto-reply/reply-payload.js";
 import { withAdminIngress } from "../../channels/message-access/operator-authority.test-support.js";
-import { createMessageReceiptFromOutboundResults } from "../../channels/message/receipt.js";
 import { SessionWorkStartChangedError } from "../../config/sessions/lifecycle.js";
 import {
   buildRestartRecoveryClaimCleanupPatch,
@@ -23,32 +22,31 @@ import { composeSessionSourceAssertion } from "../../config/sessions/session-sou
 import * as historyWorker from "../../config/sessions/session-transcript-worker-runtime.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import { PlatformMessageNotDispatchedError } from "../../infra/outbound/deliver-types.js";
-import { deliverOutboundPayloads } from "../../infra/outbound/deliver.js";
-import { drainPendingDeliveriesCore } from "../../infra/outbound/delivery-queue-recovery.js";
 import { loadUnfinishedDeliveries as loadPendingDeliveries } from "../../infra/outbound/delivery-queue-storage.js";
-import { createRecoveryLog } from "../../infra/outbound/delivery-queue.test-helpers.js";
 import {
   initializeGlobalHookRunner,
   resetGlobalHookRunner,
 } from "../../plugins/hook-runner-global.js";
 import { addTestHook } from "../../plugins/hooks.test-helpers.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../../plugins/runtime.js";
-import { createOutboundTestPlugin, createTestRegistry } from "../../test-utils/channel-plugins.js";
+import { createTestRegistry } from "../../test-utils/channel-plugins.js";
 import { bindCommandHarnessCompletionAssertion } from "../agent-command-restart-recovery.js";
 import { reconcileHarnessCompletionDelivery } from "../agent-harness-completion-delivery.js";
 import { captureAdmittedHarnessCompletionForTest } from "../agent-harness-completion.test-support.js";
 import { runWithAgentToolSourceExecutionScope } from "../agent-tool-source-execution-guard.js";
 import { resolveSourceReplyDelivery } from "../embedded-agent-runner/delivery-evidence.js";
 import type { EmbeddedAgentRunResult } from "../embedded-agent-runner/types.js";
-import { persistPendingFinalDeliveryMarker } from "../pending-final-delivery-marker.js";
-import { capturePendingFinalRecoverySource } from "../pending-final-recovery-source.js";
 import { createAgentRunRestartAbortError } from "../run-termination.js";
 import { deliverAgentCommandResult } from "./delivery.js";
-
-const deliveryContext = { channel: "matrix", to: "!owner:example", accountId: "default" };
-const runtime = { log: () => {}, error: () => {}, exit: () => {} };
-type MarkerParams = Parameters<typeof persistPendingFinalDeliveryMarker>[0];
-type SessionTarget = Pick<MarkerParams, "agentId" | "storePath"> & { sessionKey: string };
+import {
+  deliverFinal,
+  deliveryContext,
+  matrixPlugin,
+  persistMarker,
+  recoveryFor,
+  runtime,
+  textReceipt,
+} from "./delivery.test-support.js";
 
 async function admitCompletion(
   state: { sessionsDir: () => string },
@@ -99,42 +97,18 @@ async function admitCompletion(
     "Completion claim was not admitted",
   );
   const entry = { ...original, restartRecoveryHarnessCompletion: claim };
+  const append = (message: Parameters<typeof appendTranscriptMessage>[1]["message"]) =>
+    appendTranscriptMessage({ ...target, sessionId: entry.sessionId }, { message });
   const appendInput = () =>
-    appendTranscriptMessage(
-      { ...target, sessionId: entry.sessionId },
-      {
-        message: {
-          role: "user",
-          content: "Completion result",
-          idempotencyKey: `${source}:user`,
-          provenance,
-          __openclaw: { runId: source },
-          timestamp: Date.now(),
-        },
-      },
-    );
-  return { key, source, child, target, entry, claim, appendInput, write, read, cleanup };
-}
-
-function persistMarker(
-  target: SessionTarget,
-  entry: SessionEntry,
-  payloads: MarkerParams["payloads"],
-  overrides: Partial<MarkerParams> = {},
-) {
-  return persistPendingFinalDeliveryMarker({
-    ...target,
-    admittedRecoverySource: capturePendingFinalRecoverySource(entry),
-    deliver: true,
-    sessionStore: { [target.sessionKey]: entry },
-    sessionEntry: entry,
-    suppressVisibleSessionEffects: false,
-    sessionReboundDuringRun: false,
-    payloads,
-    deliveryContext,
-    runOwnedSessionId: entry.sessionId,
-    ...overrides,
-  });
+    append({
+      role: "user",
+      content: "Completion result",
+      idempotencyKey: `${source}:user`,
+      provenance,
+      __openclaw: { runId: source },
+      timestamp: Date.now(),
+    });
+  return { key, source, child, target, entry, claim, append, appendInput, write, read, cleanup };
 }
 
 afterEach(() => {
@@ -165,18 +139,9 @@ it.each(
   const queued = boundary.startsWith("queued");
   const unchanged = outcome.endsWith("unchanged");
   await withAdminIngress(async ({ state, cfg, admins, context }) => {
-    const recover = () =>
-      drainPendingDeliveriesCore({
-        drainKey: "matrix:completion-custody",
-        logLabel: "Completion custody",
-        cfg,
-        log: createRecoveryLog(),
-        stateDir: state.stateDir,
-        deliver: deliverOutboundPayloads,
-        selectEntry: () => ({ match: true, bypassBackoff: true }),
-      });
+    const recover = recoveryFor(cfg, state.stateDir, "matrix:completion-custody");
     const recovery = "restart-recovery:final-send";
-    const { key, child, source, target, entry, claim, appendInput, write, read, cleanup } =
+    const { key, child, source, target, entry, claim, append, appendInput, write, read, cleanup } =
       await admitCompletion(
         state,
         "matrix:direct:owner",
@@ -217,50 +182,31 @@ it.each(
       await release.promise;
     };
     let prepareAttempts = 0;
-    const plugin = createOutboundTestPlugin({
-      id: "matrix",
-      outbound: {
-        deliveryMode: "direct",
-        sendText: async () => {
-          throw new Error("message adapter must own the send");
+    const plugin = matrixPlugin(
+      async ({ text, onPlatformSendDispatch, assertDirectAdapterHandoff }) => {
+        if (handoff && !recoveryStarted && boundary.endsWith("onPlatformSendDispatch")) {
+          await hold();
+        }
+        await onPlatformSendDispatch?.();
+        if (handoff && !recoveryStarted && boundary.endsWith("assertDirectAdapterHandoff")) {
+          await hold();
+        }
+        assertDirectAdapterHandoff?.();
+        writes.push(text);
+        return textReceipt("recorded-final");
+      },
+      {
+        beforeSendAttempt: async () => {
+          if (boundary === "adapter preparation") {
+            await hold();
+          } else if (queued && prepareAttempts++ === 0) {
+            throw new PlatformMessageNotDispatchedError("temporary transport failure", {
+              cause: undefined,
+            });
+          }
         },
       },
-    });
-    plugin.message = {
-      id: "matrix",
-      durableFinal: { capabilities: { text: true } },
-      send: {
-        lifecycle: {
-          beforeSendAttempt: async () => {
-            if (boundary === "adapter preparation") {
-              await hold();
-            } else if (queued && prepareAttempts++ === 0) {
-              throw new PlatformMessageNotDispatchedError("temporary transport failure", {
-                cause: undefined,
-              });
-            }
-          },
-        },
-        text: async ({ text, onPlatformSendDispatch, assertDirectAdapterHandoff }) => {
-          if (handoff && !recoveryStarted && boundary.endsWith("onPlatformSendDispatch")) {
-            await hold();
-          }
-          await onPlatformSendDispatch?.();
-          if (handoff && !recoveryStarted && boundary.endsWith("assertDirectAdapterHandoff")) {
-            await hold();
-          }
-          assertDirectAdapterHandoff?.();
-          writes.push(text);
-          return {
-            messageId: "recorded-final",
-            receipt: createMessageReceiptFromOutboundResults({
-              results: [{ channel: "matrix", messageId: "recorded-final" }],
-              kind: "text",
-            }),
-          };
-        },
-      },
-    };
+    );
     const registry = createTestRegistry([{ pluginId: "matrix", source: "test", plugin }]);
     if (boundary === "reply hook") {
       addTestHook({
@@ -272,10 +218,8 @@ it.each(
     }
     setActivePluginRegistry(registry);
     initializeGlobalHookRunner(registry);
-    const delivery = deliverAgentCommandResult({
+    const delivery = deliverFinal(target, {
       cfg,
-      deps: {},
-      runtime,
       opts: {
         ...opts,
         abortSignal: controller.signal,
@@ -286,7 +230,6 @@ it.each(
         sessionKey: key,
         runId: recovery,
       },
-      outboundSession: { agentId: "main", key },
       sessionEntry: marker.sessionEntry,
       result: { meta: { durationMs: 1 } },
       payloads,
@@ -313,7 +256,7 @@ it.each(
     if (readFailure) {
       expect(await loadPendingDeliveries(state.stateDir)).toHaveLength(1);
       const retain = historyWorker.retainSessionHistoryWorkerDatabase;
-      const sourceRead = vi
+      using _ = vi
         .spyOn(historyWorker, "retainSessionHistoryWorkerDatabase")
         .mockImplementationOnce((...args) => {
           const retained = retain(...args);
@@ -323,42 +266,31 @@ it.each(
           return retained;
         });
       release.resolve();
-      try {
-        expect(await delivery).toMatchObject({
-          ok: false,
-          error: { message: "Source transcript read unavailable" },
-        });
-      } finally {
-        sourceRead.mockRestore();
-      }
+
+      expect(await delivery).toMatchObject({
+        ok: false,
+        error: { message: "Source transcript read unavailable" },
+      });
     }
     if (outcome.endsWith("source-interleaved")) {
-      await appendTranscriptMessage(
-        { ...target, sessionId: entry.sessionId },
-        { message: { role: "user", content: "A new request", timestamp: Date.now() } },
-      );
+      await append({ role: "user", content: "A new request", timestamp: Date.now() });
       await expect(
         runWithAgentToolSourceExecutionScope(assertCurrent, async () => assertCurrent()),
       ).rejects.toThrow(SessionWorkStartChangedError);
     }
     if (boundary === "queued after cleanup") {
-      await appendTranscriptMessage(
-        { ...target, sessionId: entry.sessionId },
-        {
-          message: {
-            role: "user",
-            content: "Continue the admitted completion",
-            idempotencyKey: `${recovery}:user`,
-            provenance: {
-              kind: "internal_system",
-              sourceTool: "main_session_restart_recovery",
-              sourceSessionKey: key,
-            },
-            __openclaw: { runId: recovery },
-            timestamp: Date.now(),
-          },
+      await append({
+        role: "user",
+        content: "Continue the admitted completion",
+        idempotencyKey: `${recovery}:user`,
+        provenance: {
+          kind: "internal_system",
+          sourceTool: "main_session_restart_recovery",
+          sourceSessionKey: key,
         },
-      );
+        __openclaw: { runId: recovery },
+        timestamp: Date.now(),
+      });
       const markerEntry = expectDefined(marker.sessionEntry, "pending final marker missing");
       await cleanup(markerEntry, recovery);
       const cleaned = read();

@@ -27,7 +27,7 @@ export function initializeGlobalHookRunner(registry: GlobalHookRunnerRegistry): 
  */
 export function ensureGlobalHookRunner(): HookRunner {
   if (!state.hookRunner) {
-    state.hookRunner = createHookRunner(createLiveHookRegistryFacade(state), {
+    state.hookRunner = createHookRunner(createLiveHookRegistryFacade(), {
       logger: createSubsystemLogger("plugins"),
       catchErrors: true,
       failurePolicyByHook: {

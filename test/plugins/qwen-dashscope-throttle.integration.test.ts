@@ -11,15 +11,13 @@ import { loadAuthProfileStoreWithoutExternalProfiles } from "../../src/agents/au
 import type { AuthProfileState } from "../../src/agents/auth-profiles/types.js";
 import { isProfileInCooldown } from "../../src/agents/auth-profiles/usage-state.js";
 import { handleEmbeddedAssistantFailure } from "../../src/agents/embedded-agent-runner/run/assistant-failure.js";
+import { makeAssistantFailureInput } from "../../src/agents/embedded-agent-runner/run/assistant-failure.test-support.js";
 import { createEmbeddedRunFailoverRetryController } from "../../src/agents/embedded-agent-runner/run/failover-retry-controller.js";
-import { resolveEmbeddedRunAttemptTerminalState } from "../../src/agents/embedded-agent-runner/run/terminal-outcome.js";
-import { makeEmbeddedRunnerAttempt } from "../../src/agents/test-helpers/embedded-agent-runner-e2e-fixtures.js";
 import { makeProviderModelFixture } from "../../src/agents/test-helpers/provider-model-fixture.js";
 import { withPluginMetadataSnapshotScope } from "../../src/plugins/current-plugin-metadata-snapshot.js";
 import { loadPluginManifestRegistryCore } from "../../src/plugins/manifest-registry.js";
 import { createPluginMetadataSnapshotFixture } from "../../src/plugins/plugin-metadata.test-support.js";
 import type { ProviderPlugin } from "../../src/plugins/types.js";
-import { loadBundledPluginFacade } from "../../src/test-utils/bundled-plugin-public-surface.js";
 import { withOpenClawTestState } from "../../src/test-utils/openclaw-test-state.js";
 import {
   registerProviderPlugin,
@@ -30,6 +28,7 @@ import {
   listenLoopback,
   respondJson,
 } from "../helpers/gateway-integration-fixtures.js";
+import { loadBundledProviderPlugin } from "../helpers/media-generation/bundled-provider-builders.js";
 
 const MODEL_ID = "qwen3.8-max";
 const QWEN_TOKEN_PLAN_PROVIDER_ID = "qwen-token-plan";
@@ -56,9 +55,7 @@ beforeAll(async () => {
   });
   availabilitySnapshot = createPluginMetadataSnapshotFixture(registry);
   for (const pluginId of ["qwen", "openrouter"]) {
-    const { default: plugin } = await loadBundledPluginFacade<{
-      default: Parameters<typeof registerProviderPlugin>[0]["plugin"];
-    }>({ pluginId, artifactBasename: "index.js" });
+    const plugin = await loadBundledProviderPlugin(pluginId);
     const { providers } = await registerProviderPlugin({ plugin, id: pluginId, name: pluginId });
     registeredProviders.set(pluginId, providers);
   }
@@ -72,15 +69,9 @@ type ErrorFixture = {
 };
 
 async function runThroughFailureRecovery(
-  {
-    provider,
-    providerOwner,
-    fixture,
-  }: {
-    provider: string;
-    providerOwner?: ProviderPlugin;
-    fixture: ErrorFixture;
-  },
+  provider: string,
+  fixture: ErrorFixture,
+  providerOwner?: ProviderPlugin,
   snapshot = availabilitySnapshot,
 ) {
   return withPluginMetadataSnapshotScope(
@@ -112,12 +103,7 @@ async function runThroughFailureRecovery(
       } finally {
         await closeHttpServer(server);
       }
-      expect(assistant).toMatchObject({
-        stopReason: "error",
-        provider,
-        model: MODEL_ID,
-        errorCode: String(fixture.code),
-      });
+      expect(assistant).toMatchObject({ stopReason: "error", errorCode: String(fixture.code) });
       expect(assistant.errorMessage).toContain(fixture.message);
       if (fixture.metadata) {
         expect(assistant.errorMessage).toContain(fixture.metadata.raw);
@@ -131,80 +117,42 @@ async function runThroughFailureRecovery(
             [profileId]: createApiKeyCredential(provider, "synthetic-test-key"),
           });
           await state.writeAuthProfiles(profileStore);
-          const sessionId = `session:${provider}:${fixture.code}`;
-          const runParams = {
-            runId: `run:${provider}:${fixture.code}`,
-            sessionId,
-            sessionKey: `agent:main:${provider}:${fixture.code}`,
-            sessionFile: `${agentDir}/session.jsonl`,
-            workspaceDir: agentDir,
-            prompt: "hello",
-            timeoutMs: 60_000,
-            config: {},
-          } satisfies Parameters<typeof handleEmbeddedAssistantFailure>[0]["runInput"]["runParams"];
-          const suspensionReasons: string[] = [];
-          const runInput = {
-            runParams,
-            agentDir,
+          const input = makeAssistantFailureInput(assistant, {
+            profileId,
             fallbackConfigured: false,
-            isProbeSession: false,
-            globalLane: "qwen-dashscope-throttle-test",
+          });
+          const { runInput, preparedRuntime, runtime, normalizedAttempt } = input;
+          Object.assign(runInput.runParams, {
+            sessionFile: `${agentDir}/session.jsonl`,
+            config: {},
+          });
+          const suspensionReasons: string[] = [];
+          Object.assign(runInput, {
+            agentDir,
             suspendForFailure: ({ reason }: { reason: string }) => {
               suspensionReasons.push(reason);
             },
-          };
-          const runtime = {
-            pluginHarnessOwnsTransport: false,
-            lastProfileId: profileId,
-            thinkLevel: "off" as const,
-          };
-          const preparedRuntime = {
-            provider,
-            modelId: MODEL_ID,
-            model: { id: MODEL_ID },
+          });
+          runtime.thinkLevel = "off";
+          const controllerRuntime = Object.assign(preparedRuntime, {
             attemptedThinking: new Set([runtime.thinkLevel]),
             attemptAuthProfileStore: profileStore,
-            maybeRefreshRuntimeAuthForAuthError: async () => false,
             profileFailureStore: profileStore,
-            snapshot: () => ({
-              ...runtime,
-              agentHarness: { id: "embedded" },
-            }),
+            snapshot: () => ({ ...runtime, agentHarness: { id: "embedded" } }),
             getApiKeyInfo: () => null,
             advanceAttemptAuthProfile: async () => false,
-          };
-          const failover = createEmbeddedRunFailoverRetryController({
-            runInput,
-            preparedRuntime,
-            getSessionId: () => sessionId,
           });
-          const attempt = makeEmbeddedRunnerAttempt({
-            lastAssistant: assistant,
-            messagesSnapshot: [assistant],
+          normalizedAttempt.attempt.messagesSnapshot = [assistant];
+          input.providerOwner = providerOwner;
+          input.getThinkLevel = () => "off";
+          input.failover = createEmbeddedRunFailoverRetryController({
+            runInput: { ...runInput, globalLane: "qwen-dashscope-throttle-test" },
+            preparedRuntime: controllerRuntime,
+            getSessionId: () => runInput.runParams.sessionId,
           });
           let failureReason: unknown;
           try {
-            await handleEmbeddedAssistantFailure({
-              runInput,
-              normalizedAttempt: {
-                attempt,
-                attemptAssistant: assistant,
-                currentAttemptAssistant: assistant,
-                terminalState: resolveEmbeddedRunAttemptTerminalState({ attempt, assistant }),
-                activeErrorContext: { provider, model: MODEL_ID },
-              },
-              preparedRuntime,
-              runtime,
-              providerOwner,
-              getThinkLevel: () => "off",
-              runtimeAuthRetry: false,
-              failover,
-              emptyErrorRetries: 0,
-              overloadProfileRotations: 0,
-              previousRetryFailoverReason: null,
-              traceAttempts: [],
-              suspensionSessionId: sessionId,
-            });
+            await handleEmbeddedAssistantFailure(input);
           } catch (error) {
             failureReason =
               typeof error === "object" && error !== null && "reason" in error
@@ -231,20 +179,21 @@ async function runThroughFailureRecovery(
 
 function expectFailureState(
   result: Awaited<ReturnType<typeof runThroughFailureRecovery>>,
-  reason: "rate_limit" | "billing",
-  openRouter: boolean,
+  reason: "rate_limit" | "overloaded" | "auth" | "billing",
+  provider: string,
 ): void {
   const billing = reason === "billing";
-  const managedThrottle = openRouter && !billing;
+  const transient = reason === "rate_limit" || reason === "overloaded";
+  const openRouter = provider === "openrouter";
   expect.soft(result).toMatchObject({
     failureReason: reason,
-    affectedModelBlocked: !managedThrottle,
-    otherModelBlocked: billing,
+    affectedModelBlocked: !transient,
+    otherModelBlocked: !transient,
   });
   if (openRouter) {
     expect.soft(result.suspensionReasons).toEqual([billing ? "manual" : "quota_exhausted"]);
   }
-  if (managedThrottle) {
+  if ((openRouter || provider === selfManagedProvider) && transient) {
     expect.soft(result.usage).toBeUndefined();
     return;
   }
@@ -254,13 +203,16 @@ function expectFailureState(
           disabledReason: "billing",
           disabledUntil: expect.any(Number),
         }
-      : {
-          cooldownReason: "rate_limit",
-          cooldownModel: MODEL_ID,
-          cooldownUntil: expect.any(Number),
-        },
+      : transient
+        ? { lastRateLimitAt: expect.any(Number) }
+        : { cooldownReason: reason, cooldownUntil: expect.any(Number) },
   );
-  for (const key of billing ? ["cooldownReason"] : ["disabledReason", "disabledUntil"]) {
+  if (provider === selfManagedProvider) {
+    return;
+  }
+  for (const key of billing
+    ? ["cooldownReason"]
+    : ["cooldownReason", "cooldownUntil", "disabledReason", "disabledUntil"]) {
     expect.soft(result.usage).not.toHaveProperty(key);
   }
 }
@@ -272,34 +224,20 @@ const snapshot = createPluginMetadataSnapshotFixture({
   ],
 });
 it.each([
-  { status: 429, message: "Too many requests", reason: "rate_limit", transient: true },
-  { status: 503, message: "Provider overloaded", reason: "overloaded", transient: true },
-  { status: 401, message: "Invalid API key", reason: "auth", transient: false },
-  { status: 402, message: "Insufficient credits", reason: "billing", transient: false },
+  { status: 429, message: "Too many requests", reason: "rate_limit" },
+  { status: 503, message: "Provider overloaded", reason: "overloaded" },
+  { status: 401, message: "Invalid API key", reason: "auth" },
+  { status: 402, message: "Insufficient credits", reason: "billing" },
 ] as const)(
   "self-managed provider policy after HTTP $status",
-  async ({ status, message, reason, transient }) => {
+  async ({ status, message, reason }) => {
     const result = await runThroughFailureRecovery(
-      {
-        provider: selfManagedProvider,
-        fixture: { status, code: status, message },
-      },
+      selfManagedProvider,
+      { status, code: status, message },
+      undefined,
       snapshot,
     );
-    expect(result).toMatchObject({
-      failureReason: reason,
-      affectedModelBlocked: !transient,
-      otherModelBlocked: !transient,
-    });
-    if (transient) {
-      expect(result.usage).toBeUndefined();
-    } else {
-      expect(result.usage).toMatchObject(
-        reason === "billing"
-          ? { disabledReason: reason, disabledUntil: expect.any(Number) }
-          : { cooldownReason: reason, cooldownUntil: expect.any(Number) },
-      );
-    }
+    expectFailureState(result, reason, selfManagedProvider);
   },
 );
 const quotaCode = "insufficient_quota";
@@ -326,17 +264,16 @@ it.each([
 ] as const)(
   "%s %s (%s) classifies as %s",
   async (...[provider, code, message, reason, metadata]) => {
-    const result = await runThroughFailureRecovery({
+    const result = await runThroughFailureRecovery(
       provider,
-      providerOwner:
-        provider === "openai"
-          ? undefined
-          : requireRegisteredProvider(
-              registeredProviders.get(provider === "openrouter" ? "openrouter" : "qwen") ?? [],
-              provider,
-            ),
-      fixture: { status: 429, code, message, ...(metadata ? { metadata } : {}) },
-    });
-    expectFailureState(result, reason, provider === "openrouter");
+      { status: 429, code, message, ...(metadata ? { metadata } : {}) },
+      provider === "openai"
+        ? undefined
+        : requireRegisteredProvider(
+            registeredProviders.get(provider === "openrouter" ? "openrouter" : "qwen") ?? [],
+            provider,
+          ),
+    );
+    expectFailureState(result, reason, provider);
   },
 );

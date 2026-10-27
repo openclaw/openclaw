@@ -1053,11 +1053,8 @@ export async function mutateConfigFile<T = void>(
 }
 
 export async function mutateConfigFileWithRetry<T = void>(
-  params: MutateConfigFileParams<T> & { maxAttempts?: number },
+  params: MutateConfigFileParams<T>,
 ): Promise<ConfigMutationResult<T>> {
-  return await transformConfigFileWithRetry<T>({
-    ...configMutationTransform(params),
-    maxAttempts: params.maxAttempts,
-  });
+  return await transformConfigFileWithRetry<T>(configMutationTransform(params));
 }
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

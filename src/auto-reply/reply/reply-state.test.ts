@@ -33,9 +33,10 @@ import { incrementCompactionCount } from "./session-updates.js";
 
 const sessionDirs = useSessionStoreTempDirs(afterAll, "openclaw-compact-");
 
-async function seedSessionStore(storePath: string, sessionKey: string, entry: SessionEntry) {
+async function seedCompaction(storePath: string, sessionKey: string, entry: SessionEntry) {
   await fs.mkdir(path.dirname(storePath), { recursive: true });
   await upsertSessionEntryCore({ storePath, sessionKey }, entry);
+  return { storePath, sessionKey, sessionEntry: entry, sessionStore: { [sessionKey]: entry } };
 }
 
 const loadStoredEntry = (storePath: string, sessionKey: string) =>
@@ -224,14 +225,10 @@ describe("incrementCompactionCount", () => {
       agentId: "main",
     }).path;
     const entry = { sessionId: "incognito-session", updatedAt: 1 } as SessionEntry;
-    const sessionStore = { [sessionKey]: entry };
-    await seedSessionStore(scopedStorePath, sessionKey, entry);
-
+    const seeded = await seedCompaction(scopedStorePath, sessionKey, entry);
     await incrementCompactionCount({
+      ...seeded,
       agentId: "main",
-      sessionEntry: entry,
-      sessionStore,
-      sessionKey,
       storePath: durableStorePath,
     });
 
@@ -255,14 +252,8 @@ describe("incrementCompactionCount", () => {
     } as SessionEntry;
     const storePath = path.join(sessionDirs.make(), "sessions.json");
     const sessionKey = "main";
-    const sessionStore = { [sessionKey]: entry };
-    await seedSessionStore(storePath, sessionKey, entry);
-
     await incrementCompactionCount({
-      sessionEntry: entry,
-      sessionStore,
-      sessionKey,
-      storePath,
+      ...(await seedCompaction(storePath, sessionKey, entry)),
       tokensAfter: 12_000,
     });
 

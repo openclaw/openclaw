@@ -130,9 +130,7 @@ function fingerprintCorrelation(pcm: Buffer, startSample: number, fingerprint: O
 /** Correlates sink audio with the same waveform returning on the microphone capture path. */
 export function createMeetingOutputLoopbackVerifier(options: {
   audioFormat: MeetingRealtimeAudioFormat;
-  now?: () => number;
 }) {
-  const now = options.now ?? Date.now;
   const sampleRate = options.audioFormat === "g711-ulaw-8khz" ? 8_000 : 24_000;
   const fullReferenceBytes = sampleRate * OUTPUT_LOOPBACK_REFERENCE_MS * 0.001 * 2;
   const maxInputHistoryBytes = sampleRate * OUTPUT_LOOPBACK_INPUT_HISTORY_MS * 0.001 * 2;
@@ -202,7 +200,7 @@ export function createMeetingOutputLoopbackVerifier(options: {
       resetGeneration(false);
     },
     recordInput(audio: Buffer): void {
-      const capturedAtMs = now();
+      const capturedAtMs = Date.now();
       if (
         !generationStarted ||
         generationVerified ||
@@ -258,7 +256,7 @@ export function createMeetingOutputLoopbackVerifier(options: {
       nextInputStartSample = Math.max(0, lastStartSample + 1);
     },
     recordOutput(audio: Buffer): void {
-      const outputAtMs = now();
+      const outputAtMs = Date.now();
       if (
         !generationStarted ||
         (outputObservationDeadlineMs !== Number.NEGATIVE_INFINITY &&

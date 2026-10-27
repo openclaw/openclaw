@@ -1,5 +1,5 @@
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
-import { expect, it, type Mock } from "vitest";
+import { expect, it, vi, type Mock } from "vitest";
 
 type DiagnosticTestParams = {
   logger: OpenClawPluginApi["logger"];
@@ -15,6 +15,8 @@ type DiagnosticTestParams = {
 /** Registers trigger-recall diagnostics against the shared plugin hook fixture. */
 export function registerActiveMemoryDiagnosticTests(params: DiagnosticTestParams): void {
   it.each([true])("reports an unconfigured trigger-recall agent (logging=%s)", async (logging) => {
+    // This diagnostic does not exercise the preflight deadline or cold SQLite setup speed.
+    vi.useFakeTimers({ toFake: ["Date", "performance", "setTimeout", "clearTimeout"] });
     params.configure(logging);
     const result = await params.runPromptBuild({ prompt: "What do I usually order?" });
     expect(result).toBeUndefined();

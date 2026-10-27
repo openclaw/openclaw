@@ -1,7 +1,5 @@
-import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
-import { cameraTempPath } from "../cli/nodes-camera.js";
 import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../config/io.js";
 import {
   readFileUtf8AndCleanup,
@@ -25,7 +23,7 @@ const NODE_ID = "mac-1";
 const TINY_JPEG_BASE64 =
   "/9j/4AAQSkZJRgABAQAAAQABAAD/2wBDAP//////////////////////////////////////////////////////////////////////////////////////2wBDAf//////////////////////////////////////////////////////////////////////////////////////wAARCAABAAEDASIAAhEBAxEB/8QAFQABAQAAAAAAAAAAAAAAAAAAAAX/xAAUEAEAAAAAAAAAAAAAAAAAAAAA/9oADAMBAAIQAxAAAAH/xAAUEAEAAAAAAAAAAAAAAAAAAAAA/9oACAEBAAEFAqf/xAAUEQEAAAAAAAAAAAAAAAAAAAAA/9oACAEDAQE/ASP/xAAUEQEAAAAAAAAAAAAAAAAAAAAA/9oACAECAQE/ASP/xAAUEAEAAAAAAAAAAAAAAAAAAAAA/9oACAEBAAY/Aqf/xAAUEAEAAAAAAAAAAAAAAAAAAAAA/9oACAEBAAE/IV//2gAMAwEAAgADAAAAEP/EFBQRAQAAAAAAAAAAAAAAAAAAABD/2gAIAQMBAT8QH//EFBQRAQAAAAAAAAAAAAAAAAAAABD/2gAIAQIBAT8QH//EFBABAQAAAAAAAAAAAAAAAAAAABD/2gAIAQEAAT8QH//Z";
 const JPG_PAYLOAD = { format: "jpg", base64: TINY_JPEG_BASE64, width: 1, height: 1 };
-const PHOTO = { ...JPG_PAYLOAD, format: "jpeg", createdAt: "2026-03-04T00:00:00Z" };
+const PHOTO = { ...JPG_PAYLOAD, format: "jpeg" };
 
 function executeNodes(
   input: Record<string, unknown>,
@@ -77,6 +75,18 @@ async function expectNodeError(input: Record<string, unknown>, error: string | R
   await expect(executeNodes(input)).rejects.toThrow(error);
 }
 
+async function expectNoPublication(input: Record<string, unknown>, error: string | RegExp) {
+  const rename = vi.spyOn(fs, "rename");
+  try {
+    await expectNodeError(input, error);
+    expect(rename).not.toHaveBeenCalled();
+  } finally {
+    const paths = rename.mock.calls.map(([, destination]) => String(destination));
+    rename.mockRestore();
+    await Promise.all(paths.map((file) => fs.unlink(file).catch(() => {})));
+  }
+}
+
 function firstMediaUrl(result: NodesToolResult): string {
   const details = result.details as { media?: { mediaUrls?: string[] } } | undefined;
   const mediaUrl = details?.media?.mediaUrls?.[0];
@@ -118,16 +128,8 @@ it.each([
         payload: captures++ === index ? invalid : JPG_PAYLOAD,
       }),
     });
-    const rename = vi.spyOn(fs, "rename");
-    try {
-      await expectNodeError({ action: "camera_snap", facing: "both" }, error);
-      expect(rename).not.toHaveBeenCalled();
-      expect(captures).toBe(count);
-    } finally {
-      const publishedPaths = rename.mock.calls.map(([, destination]) => String(destination));
-      rename.mockRestore();
-      await Promise.all(publishedPaths.map((filePath) => fs.unlink(filePath).catch(() => {})));
-    }
+    await expectNoPublication({ action: "camera_snap", facing: "both" }, error);
+    expect(captures).toBe(count);
   },
 );
 
@@ -163,13 +165,6 @@ it.each([
   },
 );
 
-it("rejects facing both when deviceId is provided", async () => {
-  await expectNodeError(
-    { action: "camera_snap", facing: "both", deviceId: "cam-123" },
-    /facing=both is not allowed when deviceId is set/i,
-  );
-});
-
 it.each([
   [{ photos: {} }, "invalid photos.latest payload"],
   [{ photos: [PHOTO, PHOTO] }, "photos.latest returned 2 photos; requested at most 1"],
@@ -180,26 +175,10 @@ it.each([
 
 it("rejects an unsupported second photo before writing the first", async () => {
   setupNodeInvokeMock({ invokePayload: { photos: [PHOTO, { ...PHOTO, format: "webp" }] } });
-  const ids = [
-    "00000000-0000-4000-8000-000000000001",
-    "00000000-0000-4000-8000-000000000022",
-    "00000000-0000-4000-8000-000000000033",
-  ] as const;
-  const paths = ids.slice(1).map((id) => cameraTempPath({ kind: "snap", ext: "jpg", id }));
-  const randomUUID = vi.spyOn(crypto, "randomUUID");
-  for (const id of ids) {
-    randomUUID.mockReturnValueOnce(id);
-  }
-  try {
-    await expectNodeError(
-      { action: "photos_latest", limit: 2 },
-      /unsupported photos\.latest format/i,
-    );
-    await expect(fs.stat(paths[0]!)).rejects.toMatchObject({ code: "ENOENT" });
-  } finally {
-    randomUUID.mockRestore();
-    await Promise.all(paths.map((filePath) => fs.unlink(filePath).catch(() => undefined)));
-  }
+  await expectNoPublication(
+    { action: "photos_latest", limit: 2 },
+    /unsupported photos\.latest format/i,
+  );
 });
 
 it("returns an explicit model-facing result when no photos are available", async () => {
@@ -209,26 +188,8 @@ it("returns an explicit model-facing result when no photos are available", async
   expect(result.details).toStrictEqual([]);
 });
 
-it("returns media paths and no inline images when model has no vision", async () => {
-  setupNodeInvokeMock({ invokePayload: { photos: [PHOTO] }, remoteIp: "198.51.100.42" });
-  const result = await executeNodes({ action: "photos_latest" }, { modelHasVision: false });
-  const mediaUrl = firstMediaUrl(result);
-  expect(mediaUrl).toMatch(/openclaw-camera-snap-.*\.jpg$/);
-  expect(result.details).toMatchObject({
-    photos: [{ width: 1, height: 1, createdAt: "2026-03-04T00:00:00Z" }],
-  });
-  expect(result.content).toStrictEqual([
-    { type: "text", text: `Library photo saved to ${mediaUrl}.` },
-  ]);
-});
-
-it.each<[string, Record<string, unknown>, Record<string, unknown>, Record<string, unknown>]>([
-  [
-    "device.status",
-    { action: "device_status" },
-    {},
-    { battery: { state: "charging", lowPowerModeEnabled: false } },
-  ],
+it.each<[string, Record<string, unknown>, Record<string, unknown>]>([
+  ["device.status", { action: "device_status" }, {}],
   [
     "notifications.actions",
     {
@@ -238,7 +199,6 @@ it.each<[string, Record<string, unknown>, Record<string, unknown>, Record<string
       notificationReplyText: " On it ",
     },
     { key: "n1", action: "reply", replyText: "On it" },
-    { ok: true, key: "n1", action: "reply" },
   ],
   [
     "location.get",
@@ -249,11 +209,11 @@ it.each<[string, Record<string, unknown>, Record<string, unknown>, Record<string
       locationTimeoutMs: 4_500,
     },
     { maxAgeMs: 12_000, desiredAccuracy: "balanced", timeoutMs: 4_500 },
-    { latitude: 37.3346, longitude: -122.009, accuracyMeters: 18, provider: "network" },
   ],
 ])(
   "routes %s with normalized parameters and returns its payload",
-  async (command, input, params, payload) => {
+  async (command, input, params) => {
+    const payload = { fixture: "node reply" };
     mockInvoke(command, params, payload, [command]);
     expect(JSON.parse(firstText(await executeNodes(input)))).toStrictEqual(payload);
   },

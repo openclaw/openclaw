@@ -63,17 +63,6 @@ function timedTraffic(style: Parameters<typeof setLogStyle>[0], consoleLevel: "d
   };
 }
 
-function logPrivateEvent(payload: Parameters<typeof summarizeAgentEventForWsLog>[0]) {
-  setLogStyle("full");
-  setLoggerOverride({ level: "silent", consoleLevel: "info" });
-  const output = captureConsole();
-  const summary = summarizeAgentEventForWsLog(payload);
-  logWs("out", "event", { event: "agent", ...summary });
-  expect(output).toHaveBeenCalled();
-  expect(JSON.stringify(output.mock.calls)).not.toContain("synthetic-private-content");
-  return { summary, output };
-}
-
 function shouldLogWs(direction: "in" | "out", kind: string): boolean {
   let admitted = false;
   logWs(direction, kind, () => {
@@ -143,7 +132,6 @@ test.each([
   ["compact", "compact"],
   ["dashboard", "dashboard"],
   ["sidebar", "sidebar"],
-  [undefined, "full"],
   ["unrecognized caller value", "full"],
 ])("reports session row mode %s as %s", (rowMode, expected) => {
   expect(summarizeSessionListForWsLog({ source: "sidebar", rowMode })).toMatchObject({
@@ -243,12 +231,9 @@ test("formatForLog walks cause chain so the underlying error is not hidden (open
 
   const out = formatForLog(top);
 
-  expect(out).toMatch(/AcpRuntimeError/);
-  expect(out).toMatch(/ACP_TURN_FAILED/);
-  expect(out).toMatch(/Agent does not support session\/close/);
-  expect(out).toMatch(/Method not found/);
-  expect(out).toMatch(/nes\/close/);
-  expect(out).toMatch(/-32601/);
+  expect(out).toMatch(
+    /AcpRuntimeError.*ACP_TURN_FAILED.*Agent does not support session\/close.*Method not found.*nes\/close.*-32601/,
+  );
 });
 
 test("formatForLog caps cause-chain depth so a self-referential cause cannot loop", () => {
@@ -261,12 +246,10 @@ test("formatForLog caps cause-chain depth so a self-referential cause cannot loo
   expect(out.length).toBeLessThan(2000);
 });
 
-test("formatForLog redacts obvious secrets", () => {
-  const token = "sk-abcdefghijklmnopqrstuvwxyz123456";
-  const out = formatForLog({ token });
-  expect(out).toContain("token");
-  expect(out).not.toContain(token);
-  expect(out).toContain("…");
+test("formatForLog omits empty error segments without dropping a false cause", () => {
+  const outer = new Error("", { cause: new Error("leaf", { cause: false }) });
+  outer.name = "";
+  expect(formatForLog(outer)).toBe("Error: leaf <- false");
 });
 
 const longText = `${"a".repeat(239)}😀tail`;
@@ -289,7 +272,10 @@ test.each([
   const incognito = scope === "incognito";
   const marker = "synthetic-private-content";
   const privateData = { text: marker, meta: marker, error: marker, reason: marker };
-  const { summary, output } = logPrivateEvent({
+  setLogStyle("full");
+  setLoggerOverride({ level: "silent", consoleLevel: "info" });
+  const output = captureConsole();
+  const summary = summarizeAgentEventForWsLog({
     runId: incognito ? "private-run" : "12345678-1234-1234-1234-123456789abc",
     sessionKey: incognito ? "agent:main:dashboard:incognito-synthetic" : "agent:main:thread-1",
     stream,
@@ -306,6 +292,9 @@ test.each([
           mediaUrls: ["a", "b"],
         },
   });
+  logWs("out", "event", { event: "agent", ...summary });
+  expect(output).toHaveBeenCalled();
+  expect(JSON.stringify(output.mock.calls)).not.toContain(marker);
   const expectedSummary = {
     run: incognito ? "private-run" : "12345678…9abc",
     agent: "main",

@@ -67,11 +67,11 @@ const discordMessage = "100000000000000020";
 const discordWorkToken = "synthetic-scheduled-work-token";
 const discordChannelPath = `/api/v10/channels/${channels.discord.current}`;
 const discordMessagePath = `${discordChannelPath}/messages/${discordMessage}`;
-const discordPinPath = `${discordChannelPath}/pins/${discordMessage}`;
+const discordPinPath = `${discordChannelPath}/messages/pins/${discordMessage}`;
 const discordGuildsPath = "/api/v10/users/@me/guilds";
 const discordGuildChannelsPath = `/api/v10/guilds/${discordGuild}/channels`;
 const discordMemberPath = `/api/v10/guilds/${discordGuild}/members/${channels.discord.sender}`;
-const discordSiblingPinPath = `/api/v10/channels/${discordSibling}/pins/${discordMessage}`;
+const discordSiblingPinPath = `/api/v10/channels/${discordSibling}/messages/pins/${discordMessage}`;
 const channelData = (id: string | undefined, name = "allowed") => ({
   id,
   type: 0,
@@ -188,13 +188,14 @@ describe("CLI message authority integration", () => {
       usesWorkCredential: req.headers.authorization === `Bot ${discordWorkToken}`,
     });
     const isChannelEdit = req.method === "PATCH" && url.pathname === discordChannelPath;
-    const messageWriteTarget = /^\/api\/v10\/channels\/(\d+)\/(messages|pins)\/(\d+)$/.exec(
+    const messageWriteTarget = /^\/api\/v10\/channels\/(\d+)\/(messages(?:\/pins)?)\/(\d+)$/.exec(
       url.pathname,
     );
     const isMessageWrite =
       (messageWriteTarget?.[2] === "messages" &&
         (req.method === "PATCH" || req.method === "DELETE")) ||
-      (messageWriteTarget?.[2] === "pins" && (req.method === "PUT" || req.method === "DELETE"));
+      (messageWriteTarget?.[2] === "messages/pins" &&
+        (req.method === "PUT" || req.method === "DELETE"));
     const rejectedWriteStatus = isChannelEdit
       ? nextChannelEditStatus
       : isMessageWrite
@@ -327,7 +328,7 @@ describe("CLI message authority integration", () => {
     };
     initialConfig = cfg;
     setRuntimeConfigSnapshot(cfg, cfg);
-    await ensureMcpLoopbackServer(0);
+    await ensureMcpLoopbackServer();
     const runtime = expectDefined(getActiveMcpLoopbackRuntime(), "task-owned MCP runtime");
     mcpOrigin = `http://127.0.0.1:${runtime.port}`;
   });
@@ -588,15 +589,17 @@ describe("CLI message authority integration", () => {
           }),
     });
     const grant = mintMcpLoopbackClientGrant({
-      context: buildCliMcpGrantContext({
-        run,
-        config: cfg,
-        requireExplicitMessageTarget: Boolean(scheduledPolicy),
-        agentId: "main",
-        modelProvider: "anthropic",
-        modelId: "test-model",
+      context: {
+        ...buildCliMcpGrantContext({
+          run,
+          config: cfg,
+          requireExplicitMessageTarget: Boolean(scheduledPolicy),
+          agentId: "main",
+          modelProvider: "anthropic",
+          modelId: "test-model",
+        }),
         toolsAllow: ["message"],
-      }),
+      },
       runtimeOwnerToken: runtime.ownerToken,
       admittedRunContext: admitted,
       messageActionTurnCapability: options.bindCapability === false ? undefined : capability,

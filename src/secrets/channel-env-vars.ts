@@ -7,8 +7,6 @@ import { appendUniqueEnvVarCandidates } from "../shared/env-var-candidates.js";
 type ChannelEnvVarLookupParams = {
   /** Config snapshot used to discover enabled/installed plugin manifests. */
   config?: OpenClawConfig;
-  /** Workspace root used for local plugin metadata discovery. */
-  workspaceDir?: string;
   /** Env snapshot used by metadata loading; defaults to process env. */
   env?: NodeJS.ProcessEnv;
 };
@@ -22,7 +20,6 @@ function resolveChannelEnvVars(
 ): Record<string, readonly string[]> {
   const snapshot = resolvePluginMetadataSnapshot({
     config: params?.config,
-    workspaceDir: params?.workspaceDir,
     env: params?.env ?? process.env,
   });
   const candidates: Record<string, string[]> = {};

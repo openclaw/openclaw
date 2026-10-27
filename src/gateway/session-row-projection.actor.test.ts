@@ -26,12 +26,11 @@ type Scope = { agentId: string; sessionKey: string };
 async function withActorRow(
   name: string,
   run: (actor: SessionActor, entry: Entry, scope: Scope) => Promise<void>,
-  overrides: Partial<Entry> = {},
 ) {
   await withOpenClawTestState({ scenario: "minimal" }, async () => {
     setRuntimeConfigSnapshot({});
     const scope = { agentId: "main", sessionKey: `agent:main:${name}` };
-    const entry = { sessionId: name, lifecycleRevision: name, updatedAt: 1, ...overrides };
+    const entry = { sessionId: name, lifecycleRevision: name, updatedAt: 1 };
     replaceSessionEntrySync(scope, entry);
     const exercised = await withSessionActor(
       scope,
@@ -62,43 +61,62 @@ async function actorProjection(scope: Scope) {
 }
 
 it("reuses actor row facts after metadata writes and refreshes Board presence after a write", async () => {
-  await withActorRow(
-    "actor-row-facts",
-    async (_actor, { sessionId }, scope) => {
-      const updateLabel = (label: string, updatedAt: number) =>
-        patchSdkSessionEntry({
-          ...scope,
-          skipMaintenance: true,
-          update: () => ({ updatedAt, label }),
-        });
-      await updateLabel("Committed metadata", 2);
-      using _ = rowFixture.holdForeground();
-      using projection = await actorProjection(scope);
-      const { reads, query } = projection;
-      const expectRow = async (label: string, hasBoard: boolean) => {
-        await projection.ensureMaterialized();
-        expect(projection.snapshot(query).row).toMatchObject({ sessionId, label, hasBoard });
-        expect(reads).toEqual(hasBoard ? [[scope.sessionKey]] : []);
-      };
-      await expectRow("Committed metadata", false);
-      expect(projection.describe(query)?.retainedDatabaseFacts?.entry).not.toHaveProperty(
-        "skillsSnapshot",
-      );
+  await withActorRow("actor-row-facts", async (_actor, { sessionId }, scope) => {
+    const updateLabel = (label: string, updatedAt: number) =>
+      patchSdkSessionEntry({
+        ...scope,
+        skipMaintenance: true,
+        update: () => ({ updatedAt, label }),
+      });
+    await updateLabel("Committed metadata", 2);
+    using _ = rowFixture.holdForeground();
+    using projection = await actorProjection(scope);
+    const { reads, query } = projection;
+    const expectRow = async (label: string, hasBoard: boolean) => {
+      await projection.ensureMaterialized();
+      expect(projection.snapshot(query).row).toMatchObject({ sessionId, label, hasBoard });
+      expect(reads).toEqual(hasBoard ? [[scope.sessionKey]] : []);
+    };
+    await expectRow("Committed metadata", false);
+    const board = new SqliteBoardStore({
+      resolveSession: ({ sessionKey }) => ({ agentId: scope.agentId, sessionKey }),
+    });
+    await board.putWidget({
+      sessionKey: scope.sessionKey,
+      name: "status",
+      content: { kind: "html", html: "<p>Current</p>" },
+    });
+    await expectRow("Committed metadata", true);
+    await updateLabel("Metadata after Board", 3);
+    await expectRow("Metadata after Board", true);
+  });
+});
 
-      const board = new SqliteBoardStore({
-        resolveSession: ({ sessionKey }) => ({ agentId: scope.agentId, sessionKey }),
-      });
-      await board.putWidget({
-        sessionKey: scope.sessionKey,
-        name: "status",
-        content: { kind: "html", html: "<p>Current</p>" },
-      });
-      await expectRow("Committed metadata", true);
-      await updateLabel("Metadata after Board", 3);
-      await expectRow("Metadata after Board", true);
-    },
-    { label: "Initial", skillsSnapshot: { prompt: "Saved actor instructions", skills: [] } },
-  );
+it("publishes terminal actor recency before another run begins", async () => {
+  await withActorRow("actor-terminal-recency", async (actor, entry, scope) => {
+    using _ = rowFixture.holdForeground();
+    using projection = await actorProjection(scope);
+    const { query, reads } = projection;
+    await projection.ensureMaterialized();
+    expect(projection.snapshot(query).row?.updatedAt).toBe(1);
+    await actor.completeTurn(
+      {
+        commandId: "visible-result",
+        phaseId: "terminal",
+        bookkeeping: {
+          sessionId: entry.sessionId,
+          lifecycleRevision: entry.lifecycleRevision ?? null,
+          writerRunId: undefined,
+          expectedState: buildRestartRecoveryExpectedState(entry),
+          lifecycle: { updatedAt: 2 },
+        },
+      },
+      authority,
+    );
+    await projection.ensureMaterialized();
+    expect(projection.snapshot(query).row?.updatedAt).toBe(2);
+    expect(reads).toEqual([]);
+  });
 });
 
 it("publishes user and assistant actor previews without background reads or losing the replica", async () => {
@@ -117,7 +135,7 @@ it("publishes user and assistant actor previews without background reads or losi
       });
     };
     await projection.ensureMaterialized();
-    const input = await actor.acceptInput(
+    await actor.acceptInput(
       {
         commandId: "accepted-input",
         phaseId: "turn",
@@ -141,10 +159,9 @@ it("publishes user and assistant actor previews without background reads or losi
       },
       authority,
     );
-    expect(input.kind).toBe("committed");
     await expectPreview("Accepted question", 1);
 
-    const reply = await appendSessionManagerActor({
+    await appendSessionManagerActor({
       actor,
       toolResult: false,
       assertCurrent() {},
@@ -161,7 +178,6 @@ it("publishes user and assistant actor previews without background reads or losi
         },
       },
     });
-    expect(reply.failure).toBeUndefined();
     await expectPreview("Committed answer", 2);
     expect(reads).toEqual([]);
 

@@ -1,6 +1,7 @@
 /* @vitest-environment jsdom */
-import { createComponent, createSignal } from "solid-js";
-import { afterEach, describe, expect, it, onTestFinished } from "vitest";
+import { expectDefined } from "@openclaw/normalization-core";
+import { createRoot, createSignal } from "solid-js";
+import { afterEach, expect, it, onTestFinished, vi } from "vitest";
 import { mountSolid } from "../../test-helpers/mount-solid.ts";
 import { waitForSolid } from "../../test-helpers/solid-settle.ts";
 import { createDraftFixture } from "./draft-submission-flow.test-support.ts";
@@ -9,26 +10,24 @@ import {
   retainInstantThreadRestore,
   takeInstantThreadRestore,
 } from "./instant-thread-restore.ts";
+import { createNewSessionRouteData as routeData } from "./location.test-support.ts";
 import type { NewSessionRouteData } from "./location.ts";
-import { renderSolid } from "./new-session-page-entry.ts";
+import { renderSolid as Route } from "./new-session-page-entry.ts";
 import type { PageHost } from "./new-session-page-owner.ts";
 
-function routeData(agentId = "main"): NewSessionRouteData {
-  return {
-    agentId,
-    requestedAgentId: agentId,
-    catalogId: "",
-    catalogLabel: "",
-    startTerminal: false,
-  };
+const pageHost = (container: Element) =>
+  container.querySelector<PageHost>("openclaw-new-session-page");
+
+function mountRoute(initial: NewSessionRouteData) {
+  const [data, setData] = createSignal<NewSessionRouteData | undefined>(initial);
+  const view = mountSolid(() => <Route data={data()} loaderPending={false} presented={true} />);
+  onTestFinished(view.unmount);
+  return { container: view.container, setData };
 }
 
 function retainedDraft() {
   const { context, flow, gateway } = createDraftFixture();
-  const auth = context.gateway.snapshot.hello?.auth;
-  if (!auth) {
-    throw new Error("Retained draft fixture requires authenticated hello");
-  }
+  const auth = expectDefined(context.gateway.snapshot.hello?.auth, "authenticated hello");
   const client = context.gateway.snapshot.client;
   const recoveryScope = auth.recoveryScope;
   const data = routeData();
@@ -43,10 +42,7 @@ function retainedDraft() {
       owns() && context.gateway.snapshot.hello?.auth?.recoveryScope === recoveryScope,
     search: "?agent=main",
   });
-  const restored = takeInstantThreadRestore(context, "?agent=main");
-  if (!restored) {
-    throw new Error("Retained draft fixture requires an owned restore");
-  }
+  const restored = expectDefined(takeInstantThreadRestore(context, "?agent=main"), "owned restore");
   onTestFinished(() => {
     clearRestore();
     forgetInstantThreadPage(data, page);
@@ -61,128 +57,93 @@ afterEach(() => {
   localStorage.clear();
 });
 
-describe("new-session native route entry", () => {
-  it("offers an in-page retry after a native draft render fails", async () => {
-    // SAFETY: The registered native bridge exposes PageHost properties and updateComplete.
-    const page = document.createElement("openclaw-new-session-page") as PageHost;
-    const data = routeData();
-    let fail = true;
-    Object.defineProperty(page, "data", {
-      get: () => {
-        if (fail) {
-          throw new Error("Synthetic draft render failure");
-        }
-        return data;
-      },
+it("does not subscribe a discarded native draft to document visibility", () => {
+  const subscribe = vi.spyOn(document, "addEventListener");
+  onTestFinished(() => subscribe.mockRestore());
+  const Page = expectDefined(customElements.get("openclaw-new-session-page"), "registered page");
+  const renderPage: unknown = Reflect.get(Page, "render");
+  if (typeof renderPage !== "function") {
+    throw new Error("Expected the native bridge renderer");
+  }
+  mountSolid(() => {
+    createRoot((dispose) => {
+      // Exercise the registered renderer without committing its branch.
+      Reflect.apply(renderPage, Page, [{ data: routeData("research") }]);
+      dispose();
     });
-    document.body.append(page);
-    try {
-      await page.updateComplete.catch(() => false);
-      await waitForSolid(() =>
-        expect(page.querySelector(".lazy-view-error")?.textContent).toContain(
-          "Synthetic draft render failure",
-        ),
-      );
-      fail = false;
-      page.querySelector<HTMLButtonElement>(".lazy-view-error__action")!.click();
-      await waitForSolid(() =>
-        expect(page.querySelector(".new-session-page__message")).not.toBeNull(),
-      );
-    } finally {
-      page.remove();
-    }
+    return null;
   });
+  expect(subscribe.mock.calls.filter(([type]) => type === "visibilitychange")).toHaveLength(0);
+});
 
-  it("updates loader data without replacing the registered page host", async () => {
-    const initial = routeData("research");
-    const resolved = routeData("main");
-    const [data, setData] = createSignal<NewSessionRouteData | undefined>(initial);
-    const view = mountSolid(() =>
-      createComponent(renderSolid, {
-        get data() {
-          return data();
-        },
-        loaderPending: false,
-        presented: true,
-      }),
-    );
-    try {
-      await waitForSolid(() =>
-        expect(view.container.querySelector<PageHost>("openclaw-new-session-page")?.data).toBe(
-          initial,
-        ),
-      );
-      const page = view.container.querySelector<PageHost>("openclaw-new-session-page");
-      setData(undefined);
-      await waitForSolid(() => {
-        expect(view.container.querySelector("openclaw-new-session-page")).toBe(page);
-        expect(page?.data).toBeUndefined();
-      });
-      setData(resolved);
-      await waitForSolid(() => {
-        expect(view.container.querySelector("openclaw-new-session-page")).toBe(page);
-        expect(page?.data).toBe(resolved);
-      });
-    } finally {
-      view.unmount();
-    }
+it("offers an in-page retry after a native draft render fails", async () => {
+  // SAFETY: The registered native bridge exposes PageHost properties and updateComplete.
+  const page = document.createElement("openclaw-new-session-page") as PageHost;
+  const data = routeData();
+  let fail = true;
+  Object.defineProperty(page, "data", {
+    get: () => {
+      if (fail) {
+        throw new Error("Synthetic draft render failure");
+      }
+      return data;
+    },
   });
+  document.body.append(page);
+  onTestFinished(() => page.remove());
+  await page.updateComplete.catch(() => false);
+  await waitForSolid(() =>
+    expect(page.querySelector(".lazy-view-error")?.textContent).toContain(
+      "Synthetic draft render failure",
+    ),
+  );
+  fail = false;
+  page.querySelector<HTMLButtonElement>(".lazy-view-error__action")!.click();
+  await waitForSolid(() => expect(page.querySelector(".new-session-page__message")).not.toBeNull());
+});
 
-  it("reuses the authorized retained DOM and its unsent input", async () => {
-    const { data, page, input } = retainedDraft();
-    const view = mountSolid(() =>
-      createComponent(renderSolid, { data, loaderPending: false, presented: true }),
-    );
-    try {
-      await waitForSolid(() => expect(view.container.firstElementChild).toBe(page));
-      expect(view.container.querySelector("input")).toBe(input);
-      expect(input.value).toBe("Keep this private unsent draft");
-      expect(view.container.querySelector("openclaw-new-session-page")).toBeNull();
-    } finally {
-      view.unmount();
-    }
+it("initializes the composer and retains it while loader data updates", async () => {
+  const initial = routeData("research");
+  const resolved = routeData("main");
+  const { container, setData } = mountRoute(initial);
+  await waitForSolid(() => expect(pageHost(container)?.data).toBe(initial));
+  const page = pageHost(container);
+  await waitForSolid(() => expect(page?.querySelector("textarea")).not.toBeNull());
+  const input = page?.querySelector("textarea");
+  await waitForSolid(() => expect(document.activeElement).toBe(input));
+  setData(undefined);
+  await waitForSolid(() => {
+    expect(pageHost(container)).toBe(page);
+    expect(page?.data).toBeUndefined();
+    expect(page?.querySelector("textarea")).toBe(input);
   });
+  setData(resolved);
+  await waitForSolid(() => {
+    expect(pageHost(container)).toBe(page);
+    expect(page?.data).toBe(resolved);
+    expect(page?.querySelector("textarea")).toBe(input);
+  });
+});
 
-  it("replaces the displayed restored page when a later rollback supplies another host", async () => {
-    const first = retainedDraft();
-    const second = retainedDraft();
-    const [data, setData] = createSignal<NewSessionRouteData>(first.data);
-    const view = mountSolid(() =>
-      createComponent(renderSolid, {
-        get data() {
-          return data();
-        },
-        loaderPending: false,
-        presented: true,
-      }),
-    );
-    try {
-      await waitForSolid(() => expect(view.container.firstElementChild).toBe(first.page));
-      setData(second.data);
-      await waitForSolid(() => expect(view.container.firstElementChild).toBe(second.page));
-      expect(view.container.contains(first.input)).toBe(false);
-      expect(view.container.contains(second.input)).toBe(true);
-    } finally {
-      view.unmount();
-    }
-  });
+it("rejects retained DOM after its authorization changes", async () => {
+  const { auth, data, page, input } = retainedDraft();
+  auth.recoveryScope = "replacement-principal";
+  const { container } = mountRoute(data);
+  await waitForSolid(() => expect(pageHost(container)?.data).toBe(data));
+  expect(container.contains(page)).toBe(false);
+  expect(container.contains(input)).toBe(false);
+});
 
-  it("renders a fresh page when retained draft authority changes before rendering", async () => {
-    const { auth, data, page, input } = retainedDraft();
-    auth.recoveryScope = "replacement-principal";
-    const view = mountSolid(() =>
-      createComponent(renderSolid, { data, loaderPending: false, presented: true }),
-    );
-    try {
-      await waitForSolid(() =>
-        expect(view.container.querySelector<PageHost>("openclaw-new-session-page")?.data).toBe(
-          data,
-        ),
-      );
-      expect(view.container.contains(page)).toBe(false);
-      expect(view.container.contains(input)).toBe(false);
-    } finally {
-      view.unmount();
-    }
-  });
+it("restores owned DOM and replaces it when a later rollback supplies another host", async () => {
+  const first = retainedDraft();
+  const second = retainedDraft();
+  const { container, setData } = mountRoute(first.data);
+  await waitForSolid(() => expect(container.firstElementChild).toBe(first.page));
+  expect(container.querySelector("input")).toBe(first.input);
+  expect(first.input.value).toBe("Keep this private unsent draft");
+  expect(pageHost(container)).toBeNull();
+  setData(second.data);
+  await waitForSolid(() => expect(container.firstElementChild).toBe(second.page));
+  expect(container.contains(first.input)).toBe(false);
+  expect(container.contains(second.input)).toBe(true);
 });

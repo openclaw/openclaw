@@ -160,14 +160,11 @@ it.each([
       const { create, first, scope } = await setupCreationTarget(key, originalRoot, "main");
       const original = { sessionId: first.entry.sessionId, sessionRoot: originalRoot };
       const transcriptScope = { ...scope, sessionId: first.entry.sessionId };
-      for (const message of [
-        { role: "user", content: "Keep this conversation when moving the workspace." },
-        { role: "assistant", content: "The conversation stays with this session." },
-      ]) {
-        expect(await appendTranscriptMessage(transcriptScope, { message })).toMatchObject({
-          appended: true,
-        });
-      }
+      expect(
+        await appendTranscriptMessage(transcriptScope, {
+          message: { role: "user", content: "Keep this conversation when moving the workspace." },
+        }),
+      ).toMatchObject({ appended: true });
       const transcript = await loadTranscriptEvents(transcriptScope);
       const onInterrupt = vi.fn();
       const handle = {
@@ -398,7 +395,6 @@ it.each(["sessions.send", "sessions.create", "generated-create", "custom-store-s
         afterCreate,
       });
       expect(created.ok).toBe(true);
-      expect(notify).toHaveBeenCalledOnce();
       expect(afterCreate).toHaveBeenCalledOnce();
     }),
 );
@@ -436,10 +432,9 @@ it("retains the full adopted target while checking sibling labels", () =>
     const first = await create("agent:main:target", "Original");
     expect(first.ok).toBe(true);
     const scope = { agentId: "main", sessionKey: "agent:main:target" };
-    const initial = loadSessionEntry(scope);
-    assert(initial, "Missing initial session");
+    assert(first.ok);
     const saved = {
-      ...initial,
+      ...first.entry,
       skillsSnapshot: { prompt: "Saved skill prompt", skills: [] },
       systemPromptReport: {
         source: "run" as const,

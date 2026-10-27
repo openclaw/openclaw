@@ -7,13 +7,18 @@ import type {
 } from "../media-generation/registry.js";
 import {
   buildMediaGenerationNormalizationMetadata,
+  normalizeDurationToClosestMax,
   resolveReferenceImageCapabilityError,
   runMediaGenerationCandidates,
 } from "../media-generation/runtime-shared.js";
 import { withAcquiredPluginCapabilityProviders } from "../plugins/capability-provider-acquisition.js";
-import { resolveMusicGenerationOverrides } from "./normalization.js";
+import { resolveMusicGenerationModeCapabilities } from "./capabilities.js";
 import type { GenerateMusicParams, GenerateMusicRuntimeResult } from "./runtime-types.js";
-import type { MusicGenerationResult } from "./types.js";
+import type {
+  MusicGenerationIgnoredOverride,
+  MusicGenerationNormalization,
+  MusicGenerationResult,
+} from "./types.js";
 
 const log = createSubsystemLogger("music-generation");
 
@@ -66,15 +71,64 @@ async function runMusicGeneration(
       }
 
       return async (attempts): Promise<GenerateMusicRuntimeResult> => {
-        const sanitized = resolveMusicGenerationOverrides({
+        const caps = resolveMusicGenerationModeCapabilities({
           provider,
-          model: candidate.model,
-          lyrics: params.lyrics,
-          instrumental: params.instrumental,
-          durationSeconds: params.durationSeconds,
-          format: params.format,
-          inputImages: params.inputImages,
+          inputImageCount: params.inputImages?.length ?? 0,
         });
+        const ignoredOverrides: MusicGenerationIgnoredOverride[] = [];
+        const normalization: MusicGenerationNormalization = {};
+        let { lyrics, instrumental, durationSeconds, format } = params;
+        if (caps) {
+          if (
+            lyrics?.trim() &&
+            !(caps.supportsLyricsByModel?.[candidate.model] ?? caps.supportsLyrics === true)
+          ) {
+            ignoredOverrides.push({ key: "lyrics", value: lyrics });
+            lyrics = undefined;
+          }
+          if (
+            typeof instrumental === "boolean" &&
+            !(
+              caps.supportsInstrumentalByModel?.[candidate.model] ??
+              caps.supportsInstrumental === true
+            )
+          ) {
+            ignoredOverrides.push({ key: "instrumental", value: instrumental });
+            instrumental = undefined;
+          }
+          if (typeof durationSeconds === "number" && !caps.supportsDuration) {
+            ignoredOverrides.push({ key: "durationSeconds", value: durationSeconds });
+            durationSeconds = undefined;
+          } else if (typeof durationSeconds === "number") {
+            const normalizedDurationSeconds = normalizeDurationToClosestMax(
+              durationSeconds,
+              caps.maxDurationSeconds,
+            );
+            if (
+              typeof normalizedDurationSeconds === "number" &&
+              normalizedDurationSeconds !== durationSeconds
+            ) {
+              normalization.durationSeconds = {
+                requested: durationSeconds,
+                applied: normalizedDurationSeconds,
+              };
+            }
+            durationSeconds = normalizedDurationSeconds;
+          }
+          if (format) {
+            const supportedFormats =
+              caps.supportedFormatsByModel?.[candidate.model] ?? caps.supportedFormats ?? [];
+            // An empty list means the provider validates formats internally.
+            if (
+              !caps.supportsFormat ||
+              (supportedFormats.length > 0 && !supportedFormats.includes(format))
+            ) {
+              ignoredOverrides.push({ key: "format", value: format });
+              format = undefined;
+            }
+          }
+        }
+        const appliedNormalization = normalization.durationSeconds ? normalization : undefined;
         const result: MusicGenerationResult = await provider.generateMusic({
           provider: candidate.provider,
           model: candidate.model,
@@ -82,10 +136,10 @@ async function runMusicGeneration(
           cfg: params.cfg,
           agentDir: params.agentDir,
           authStore: params.authStore,
-          lyrics: sanitized.lyrics,
-          instrumental: sanitized.instrumental,
-          durationSeconds: sanitized.durationSeconds,
-          format: sanitized.format,
+          lyrics,
+          instrumental,
+          durationSeconds,
+          format,
           inputImages: params.inputImages,
           ...(timeoutMs !== undefined ? { timeoutMs } : {}),
         });
@@ -104,14 +158,14 @@ async function runMusicGeneration(
           model: result.model ?? candidate.model,
           attempts,
           lyrics: result.lyrics,
-          normalization: sanitized.normalization,
+          normalization: appliedNormalization,
           metadata: {
             ...result.metadata,
             ...buildMediaGenerationNormalizationMetadata({
-              normalization: sanitized.normalization,
+              normalization: appliedNormalization,
             }),
           },
-          ignoredOverrides: sanitized.ignoredOverrides,
+          ignoredOverrides,
         };
       };
     },

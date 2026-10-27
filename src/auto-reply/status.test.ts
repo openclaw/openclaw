@@ -1,10 +1,20 @@
 import { withTempHome } from "openclaw/plugin-sdk/test-env";
-import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { normalizeTestText } from "../../test/helpers/normalize-text.js";
 import { testing as cliBackendsTesting } from "../agents/cli-backends.test-support.js";
 import type { OpenClawConfig } from "../config/config.js";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../config/runtime-snapshot.js";
+import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
+import {
+  appendTranscriptMessageSync,
+  replaceSessionEntrySync,
+} from "../config/sessions/session-accessor.js";
+import { readRecentSessionUsageFromTranscriptAsync } from "../gateway/session-transcript-usage.js";
 import type { MediaUnderstandingDecision } from "../media-understanding/types.js";
-import { statusModelRefs } from "../status/status-message.test-support.js";
+import { resolveAgentIdFromSessionKey } from "../routing/session-key.js";
 import { normalizeSessionDeliveryState } from "../utils/delivery-context.shared.js";
 import * as commandsRegistry from "./commands-registry.js";
 import { createSuccessfulImageMediaDecision } from "./media-understanding.test-fixtures.js";
@@ -20,6 +30,7 @@ import {
   normalizedStatus,
   modelArgs,
   providerModels,
+  statusContext,
   type StatusTestArgs,
 } from "./status.test-fixtures.js";
 
@@ -41,13 +52,6 @@ afterEach(() => {
   listPluginCommands.mockReset().mockImplementation(() => []);
 });
 
-type FallbackContextStatusOverrides = {
-  activeProvider?: string;
-  activeModel?: string;
-  activeContextWindow?: number | null;
-  runtimeContextTokens?: number;
-  sessionContextTokens?: number;
-};
 function audioDecision(
   outcome: MediaUnderstandingDecision["outcome"],
   attempts: MediaUnderstandingDecision["attachments"][number]["attempts"],
@@ -64,46 +68,34 @@ function audioDecision(
   };
 }
 
-function makeFallbackContextStatusArgs({
-  activeProvider = "minimax-portal",
-  activeModel = "MiniMax-M2.7",
-  activeContextWindow = 200_000,
-  runtimeContextTokens,
-  sessionContextTokens,
-}: FallbackContextStatusOverrides): Parameters<typeof buildStatusMessage>[0] {
+const selected = { provider: "source", model: "large" };
+const active = { provider: "target", model: "small" };
+function fallbackContext(window: number | null, session: number, runtime?: number): StatusTestArgs {
+  const route = fallbackRoute(selected, active);
   const providers: Parameters<typeof providerModels> = [
-    ["xiaomi", "mimo-v2-flash", { contextWindow: 1_048_576 }],
+    ["source", "large", { contextWindow: 1_048_576 }],
   ];
-  if (activeContextWindow !== null) {
-    providers.push([activeProvider, activeModel, { contextWindow: activeContextWindow }]);
+  if (window !== null) {
+    providers.push(["target", "small", { contextWindow: window }]);
   }
-  const route = fallbackRoute(
-    { provider: "xiaomi", model: "mimo-v2-flash" },
-    { provider: activeProvider, model: activeModel },
-  );
   return {
     ...route,
     config: providerModels(...providers),
-    runtimeContextTokens,
+    runtimeContextTokens: runtime,
+    resolvedHarness: "openclaw",
     sessionEntry: {
       ...route.sessionEntry,
-      totalTokens: 49_000,
-      totalTokensFresh: true,
-      totalTokensVersion: 1 as const,
-      ...(sessionContextTokens === undefined
-        ? {}
-        : {
-            contextTokens: sessionContextTokens,
-            contextTokensSource: "runtime" as const,
-            agentHarnessId: "openclaw" as const,
-          }),
+      ...freshUsage(49_000),
+      contextTokens: session,
+      contextTokensSource: "runtime",
+      agentHarnessId: "openclaw",
     },
-    resolvedHarness: "openclaw",
   };
 }
 
 it("shows sanitized TTS provider details in the voice status line", async () => {
   await withTempHome(async () => {
+    using _ = vi.spyOn(Date, "now").mockReturnValue(0);
     const normalized = normalizedStatus({
       config: {
         tts: {
@@ -120,7 +112,6 @@ it("shows sanitized TTS provider details in the voice status line", async () => 
         },
       } as unknown as OpenClawConfig,
       agent: {},
-      now: 0,
     });
 
     expect(normalized).toContain(
@@ -170,62 +161,52 @@ it("shows trace lines only when trace is enabled", () => {
   expect(visible).toContain("trace");
 });
 
-it("uses the channel override model context window instead of stale persisted context", () => {
-  const normalized = normalizedStatus({
-    ...modelArgs("minimax-portal", "MiniMax-M2.7"),
-    config: {
-      ...providerModels(
-        ["minimax-portal", "MiniMax-M2.7", { contextWindow: 200_000 }],
-        ["anthropic", "claude-opus-4-6", { contextWindow: 1_048_576 }],
-      ),
-      channels: {
-        modelByChannel: {
-          discord: {
-            "123": "minimax-portal/MiniMax-M2.7",
+it.each([undefined, "MiniMax-M2.7"])(
+  "uses the channel override model context window with explicit override=%s",
+  (modelOverride) => {
+    const normalized = normalizedStatus({
+      ...modelArgs("minimax-portal", "MiniMax-M2.7"),
+      config: {
+        ...providerModels(
+          ["minimax-portal", "MiniMax-M2.7", { contextWindow: 200_000 }],
+          ["anthropic", "claude-opus-4-6", { contextWindow: 1_048_576 }],
+        ),
+        channels: {
+          modelByChannel: {
+            discord: {
+              "123": "minimax-portal/MiniMax-M2.7",
+            },
           },
         },
+      } as unknown as OpenClawConfig,
+      sessionEntry: {
+        delivery: normalizeSessionDeliveryState({ context: { channel: "discord" } }),
+        groupId: "123",
+        ...freshUsage(49_000),
+        contextTokens: 1_048_576,
+        modelOverride,
       },
-    } as unknown as OpenClawConfig,
-    sessionEntry: {
-      delivery: normalizeSessionDeliveryState({ context: { channel: "discord" } }),
-      groupId: "123",
-      totalTokens: 49_000,
-      totalTokensFresh: true,
-      totalTokensVersion: 1,
-      contextTokens: 1_048_576,
-    },
-  });
+    });
 
-  expect(normalized).toContain("Model: minimax-portal/MiniMax-M2.7");
-  expect(normalized).toContain("channel override");
-  expect(normalized).toContain("Context: 49k/200k");
-  expect(normalized).not.toContain("Context: 49k/1.0m");
-});
-
-it.each<[FallbackContextStatusOverrides, string, string?]>([
-  [{ sessionContextTokens: 1_048_576 }, "49k/200k"],
-  [
-    {
-      activeProvider: "custom-runtime",
-      activeModel: "unknown-fallback-model",
-      activeContextWindow: null,
-      sessionContextTokens: 128_000,
-    },
-    "49k/128k",
-    "custom-runtime/unknown-fallback-model",
-  ],
-  [{ runtimeContextTokens: 123_456, sessionContextTokens: 1_048_576 }, "49k/123k"],
-  [{ sessionContextTokens: 123_456 }, "49k/123k"],
-])(
-  "renders fallback %j with context %s",
-  (overrides, context, model = "minimax-portal/MiniMax-M2.7") => {
-    const text = normalizedStatus(makeFallbackContextStatusArgs(overrides));
-    expect(text).toContain(`Fallback: ${model}`);
-    expect(text).toContain(`Context: ${context}`);
-    expect(text).not.toContain("Context: 49k/1.0m");
-    expect(text.includes("Context: 49k/200k")).toBe(context === "49k/200k");
+    expect(normalized).toContain("Model: minimax-portal/MiniMax-M2.7");
+    expect(normalized.includes("channel override")).toBe(modelOverride === undefined);
+    expect(normalized).toContain("Context: 49k/200k");
+    expect(normalized).not.toContain("Context: 49k/1.0m");
   },
 );
+
+it.each<[number | null, number, number | undefined, string]>([
+  [200_000, 1_048_576, undefined, "49k/200k"],
+  [null, 128_000, undefined, "49k/128k"],
+  [200_000, 1_048_576, 123_456, "49k/123k"],
+  [200_000, 123_456, undefined, "49k/123k"],
+])("renders fallback limits %j/%j/%j as %s", (window, session, runtime, context) => {
+  const text = normalizedStatus(fallbackContext(window, session, runtime));
+  expect(text).toContain("Fallback: target/small");
+  expect(text).toContain(`Context: ${context}`);
+  expect(text).not.toContain("Context: 49k/1.0m");
+  expect(text.includes("Context: 49k/200k")).toBe(context === "49k/200k");
+});
 
 function buildCliAliasStatus({ sessionEntry, ...args }: StatusTestArgs) {
   configureCliBackend(true);
@@ -252,9 +233,7 @@ it.each<[StatusTestArgs, string[], string[]]>([
     {
       sessionEntry: {
         cacheRead: 3_000_000,
-        totalTokens: 36_000,
-        totalTokensFresh: true,
-        totalTokensVersion: 1,
+        ...freshUsage(36_000),
         contextTokens: 1_000_000,
       },
       modelAuth: "unknown",
@@ -334,47 +313,22 @@ it.each<[MediaUnderstandingDecision[], string, string?]>([
   }
 });
 
-it.each<[StatusTestArgs, string, boolean]>([
-  [
-    {
-      agent: {
-        model: {
-          primary: "anthropic/claude-opus-4-6",
-          fallbacks: ["google/gemini-2.5-flash", "openai/gpt-5-mini"],
-        },
-      },
-    },
-    "Fallbacks: google/gemini-2.5-flash, openai/gpt-5-mini",
-    true,
-  ],
-  [
-    {
-      modelRefs: statusModelRefs({ provider: "google", model: "gemini-3.1-flash-lite" }),
-      configuredDefaultModelLabel: "google/gemini-3-flash-preview",
-      agent: {
-        model: {
-          primary: "google/gemini-3-flash-preview",
-          fallbacks: [
-            "google/gemini-3.1-flash-lite",
-            "google/gemini-2.5-flash",
-            "google/gemini-3.1-pro-preview",
-          ],
-        },
-      },
-      sessionEntry: {
-        modelProvider: "google",
-        model: "gemini-3.1-flash-lite",
-        modelOverride: "gemini-3.1-flash-lite",
-        modelOverrideSource: "user",
-      },
-    },
-    "Model: google/gemini-3.1-flash-lite",
-    false,
-  ],
-])("renders configured fallbacks with %j", (args, expected, showFallbacks) => {
-  const text = normalizedStatus(args);
-  expect(text).toContain(expected);
-  expect(text.includes("Fallbacks:")).toBe(showFallbacks);
+it.each([false, true])("renders configured fallbacks with a pinned model=%s", (pinned) => {
+  const text = normalizedStatus({
+    ...modelArgs("google", pinned ? "small" : "primary"),
+    configuredDefaultModelLabel: "google/primary",
+    agent: { model: { primary: "google/primary", fallbacks: ["google/small", "openai/other"] } },
+    sessionEntry: pinned
+      ? {
+          modelProvider: "google",
+          model: "small",
+          modelOverride: "small",
+          modelOverrideSource: "user",
+        }
+      : undefined,
+  });
+  expect(text).toContain(pinned ? "Model: google/small" : "Fallbacks: google/small, openai/other");
+  expect(text.includes("Fallbacks:")).toBe(!pinned);
 });
 
 it("lists commands with aliases and hints", () => {
@@ -397,27 +351,20 @@ it("includes plugin commands in the paginated list", () => {
   listPluginCommands.mockReturnValue([
     { name: "plugin_cmd", description: "Plugin command", pluginId: "demo-plugin" },
   ]);
-  const firstPage = buildCommandsMessagePaginated(commandConfig, undefined, {
-    surface: "telegram",
-    page: 1,
-    forcePaginatedList: true,
-  });
+  const renderPage = (page = 1) =>
+    buildCommandsMessagePaginated(commandConfig, undefined, {
+      surface: "telegram",
+      page,
+      forcePaginatedList: true,
+    });
+  const firstPage = renderPage();
   expect(firstPage.text).toContain("ℹ️ Commands (1/");
   expect(firstPage.text).toContain("Session");
   expect(firstPage.text).toContain("/stop - Stop the current run.");
-  const pages = Array.from({ length: firstPage.totalPages }, (_, index) =>
-    buildCommandsMessagePaginated(commandConfig, undefined, {
-      surface: "telegram",
-      page: index + 1,
-      forcePaginatedList: true,
-    }),
-  );
+  const pages = Array.from({ length: firstPage.totalPages }, (_, index) => renderPage(index + 1));
   const pluginPage = pages.find((page) => page.text.includes("/plugin_cmd (demo-plugin)"));
-  if (!pluginPage) {
-    throw new Error("expected plugin command page");
-  }
-  expect(pluginPage.text).toContain("Plugins");
-  expect(pluginPage.text).toContain("/plugin_cmd (demo-plugin) - Plugin command");
+  expect(pluginPage?.text).toContain("Plugins");
+  expect(pluginPage?.text).toContain("/plugin_cmd (demo-plugin) - Plugin command");
 });
 
 const tool = (id: string, label: string, description: string, pluginId?: string) => ({
@@ -439,25 +386,18 @@ function group(tools: ReturnType<typeof tool>[], source: "core" | "plugin" = "co
 }
 
 it("groups shipped docks commands with tools", () => {
-  vi.spyOn(commandsRegistry, "listChatCommands").mockReturnValue([
-    {
-      key: "saved-layout",
-      description: "Inspect a saved layout.",
-      textAliases: ["/saved-layout"],
+  vi.spyOn(commandsRegistry, "listChatCommands").mockReturnValue(
+    (["docks", "tools"] as const).map((category) => ({
+      key: category,
+      description: category,
+      textAliases: [`/${category}`],
       scope: "text",
-      category: "docks",
-    },
-    {
-      key: "inspect-tool",
-      description: "Inspect a tool.",
-      textAliases: ["/inspect-tool"],
-      scope: "text",
-      category: "tools",
-    },
-  ]);
+      category,
+    })),
+  );
   const text = buildCommandsMessage();
-  expect(text).toContain("Tools\n  /saved-layout [text] - Inspect a saved layout.");
-  expect(text).toContain("  /inspect-tool [text] - Inspect a tool.");
+  expect(text).toContain("Tools\n  /docks [text] - docks");
+  expect(text).toContain("  /tools [text] - tools");
   expect(text.match(/^Tools$/gm)).toHaveLength(1);
   expect(text).not.toContain("Docks");
 });
@@ -471,17 +411,13 @@ it("renders compact inventory with plugin ownership and availability notices", (
         tool("exec", "Exec", "Run shell commands"),
         tool("web_search", "Web Search", "Search the web"),
       ]),
-      group(
-        [tool("docs_lookup", "Docs Lookup", "Search internal documentation", "docs")],
-        "plugin",
-      ),
+      group([tool("docs_lookup", "Docs", "Search docs", "docs")], "plugin"),
     ],
     notices: [
       {
         id: "browser-filtered-by-profile",
         severity: "info",
-        message:
-          'Browser is configured, but the current tool profile does not include the browser tool. Add tools.alsoAllow: ["browser"].',
+        message: 'Add tools.alsoAllow: ["browser"].',
       },
     ],
   });
@@ -505,18 +441,16 @@ it("trims verbose descriptions before schema-like doc blocks", () => {
       groups: [
         group([
           {
-            ...tool("cron", "Cron", "Schedule and manage cron jobs."),
+            ...tool("cron", "Cron", "Schedule jobs."),
             rawDescription:
-              'Manage Gateway cron jobs and send wake events. Use this for reminders, "check back later" requests, delayed follow-ups, and recurring tasks. Do not emulate scheduling with exec sleep or process polling.\n\nACTIONS:\n- status: Check cron scheduler status\nJOB SCHEMA:\n{ ... }',
+              "Schedule jobs.\n\nACTIONS:\n- status: Check status\nJOB SCHEMA:\n{ ... }",
           },
         ]),
       ],
     },
     { verbose: true },
   );
-  expect(text).toContain(
-    'Cron - Manage Gateway cron jobs and send wake events. Use this for reminders, "check back later" requests, delayed follow-ups, and recurring tasks. Do not emulate scheduling with exec sleep or process polling.',
-  );
+  expect(text).toContain("Cron - Schedule jobs.");
   expect(text).toContain("What this agent can use right now:");
   expect(text).toContain("Tool availability depends on this agent's configuration.");
   expect(text).not.toContain("ACTIONS:");
@@ -526,5 +460,223 @@ it("trims verbose descriptions before schema-like doc blocks", () => {
 it("returns the empty state when no tools are available", () => {
   expect(buildToolsMessage({ agentId: "main", profile: "full", groups: [] })).toBe(
     "No tools are available for this agent right now.\n\nProfile: full",
+  );
+});
+
+const openrouterArgs = {
+  ...modelArgs("openrouter", "google/gemini-2.5-pro"),
+  thinkingCatalog: [
+    { provider: "openrouter", id: "google/gemini-2.5-pro", contextWindow: 999_000 },
+    { provider: "google", id: "gemini-2.5-pro", contextWindow: 2_000_000 },
+  ],
+  config: providerModels(["google", "gemini-2.5-pro", { contextWindow: 2_000_000 }]),
+};
+function usage(input: number, output: number, cacheRead: number, totalTokens: number) {
+  return { input, output, cacheRead, cacheWrite: 0, totalTokens };
+}
+function freshUsage(totalTokens: number) {
+  return { totalTokens, totalTokensFresh: true, totalTokensVersion: 1 as const };
+}
+function withStatusHome(run: () => Promise<void>) {
+  return withTempHome(
+    async () => {
+      setRuntimeConfigSnapshot({});
+      await run();
+    },
+    { prefix: "openclaw-status-" },
+  ).finally(clearRuntimeConfigSnapshot);
+}
+
+describe("status transcript usage and model context", () => {
+  function transcriptFixture(
+    params: {
+      agentId?: string;
+      model?: string;
+      usage?: ReturnType<typeof usage>;
+    } = {},
+  ) {
+    const agentId = params.agentId ?? "main";
+    const scope = {
+      agentId,
+      sessionId: "status-transcript",
+      sessionKey: `agent:${agentId}:main`,
+      storePath: resolveSessionStorePathCore(undefined, { agentId }),
+    };
+    replaceSessionEntrySync(scope, { sessionId: scope.sessionId, updatedAt: Date.now() });
+    const append = (message: Parameters<typeof appendTranscriptMessageSync>[1]["message"]) =>
+      appendTranscriptMessageSync(scope, { message });
+    append({
+      role: "assistant",
+      model: params.model ?? "claude-opus-4-6",
+      usage: params.usage ?? usage(1, 2, 1000, 1003),
+    });
+    return {
+      append,
+      render: async (args: StatusTestArgs = {}) => {
+        const sessionKey = "sessionKey" in args ? args.sessionKey : statusContext.sessionKey;
+        const readerAgentId =
+          args.agentId ?? (sessionKey ? resolveAgentIdFromSessionKey(sessionKey) : undefined);
+        const transcriptUsage = await readRecentSessionUsageFromTranscriptAsync(
+          {
+            agentId: readerAgentId,
+            sessionId: scope.sessionId,
+            sessionKey,
+            storePath: resolveSessionStorePathCore(undefined, { agentId: readerAgentId }),
+          },
+          256 * 1024,
+        );
+        return buildStatusMessage({
+          ...args,
+          sessionEntry: { sessionId: scope.sessionId, ...args.sessionEntry },
+          transcriptUsage,
+        });
+      },
+    };
+  }
+
+  const runtimeEntry = {
+    totalTokens: 3,
+    modelProvider: "anthropic",
+    model: "claude-opus-4-6",
+    agentHarnessId: "openclaw" as const,
+    contextTokens: 32_000,
+    contextTokensSource: "runtime" as const,
+  };
+
+  it("reads fresh non-default agent usage while ignoring delivery mirrors", async () => {
+    await withStatusHome(async () => {
+      const { render, append } = transcriptFixture({ agentId: "worker1" });
+      const args: StatusTestArgs = {
+        sessionEntry: runtimeEntry,
+        sessionKey: "agent:worker1:telegram:12345",
+        resolvedHarness: "openclaw",
+      };
+      expect(normalizeTestText(await render(args))).toContain("Context: 1.0k/32k");
+      append({
+        role: "assistant",
+        provider: "openclaw",
+        model: "delivery-mirror",
+        usage: usage(0, 0, 0, 0),
+      });
+      const mirrored = normalizeTestText(await render(args));
+      expect(mirrored).toContain("Cache: 100% hit · 1.0k cached, 0 new");
+      expect(mirrored).toContain("Context: 1.0k/32k");
+      append({ role: "assistant", usage: { input: 2_000, output: 20, totalTokens: 2_000 } });
+      expect(normalizeTestText(await render(args))).toContain("Context: 2.0k/32k");
+    });
+  });
+
+  it.each([
+    {
+      name: "does not render stale context usage from transcript fallback",
+      transcript: usage(3_800_000, 20_000, 0, 3_820_000),
+      entry: {
+        inputTokens: 3_800_000,
+        outputTokens: 20_000,
+        totalTokens: 3_800_000,
+        totalTokensFresh: false,
+      },
+      present: ["Context: ?/1.0m"],
+      absent: ["Context: 3.8m/1.0m", "Context: 3.82m/1.0m"],
+    },
+    {
+      name: "does not let legacy cumulative session totals override fresh transcript context usage",
+      transcript: usage(10_000, 1_000, 26_000, 36_000),
+      entry: {
+        inputTokens: 16,
+        outputTokens: 5_100,
+        cacheRead: 2_300_000,
+        cacheWrite: 11_000,
+        totalTokens: 2_300_000,
+      },
+      present: ["Cache: 100% hit · 2.3m cached, 11k new", "Context: 36k/1.0m (4%)"],
+      absent: ["Context: 2.3m/1.0m"],
+    },
+  ])("$name", async ({ transcript, entry, present, absent }) => {
+    await withStatusHome(async () => {
+      const { render } = transcriptFixture({ usage: transcript });
+      const text = normalizeTestText(
+        await render({
+          sessionEntry: { contextTokens: 1_000_000, ...entry },
+        }),
+      );
+      present.forEach((snippet) => expect(text).toContain(snippet));
+      absent.forEach((snippet) => expect(text).not.toContain(snippet));
+    });
+  });
+
+  it.each([
+    ["slash", "google/gemini-2.5-pro", openrouterArgs, "999k", "2.0m"],
+    [
+      "bare",
+      "gemini-2.5-pro",
+      {
+        ...modelArgs("google-gemini-cli", "gemini-2.5-pro"),
+        thinkingCatalog: [
+          { provider: "google-gemini-cli", id: "gemini-2.5-pro", contextWindow: 1_000_000 },
+          { provider: "google", id: "gemini-2.5-pro", contextWindow: 128_000 },
+        ],
+      },
+      "1.0m",
+      "128k",
+    ],
+  ] as const)(
+    "keeps transcript-derived %s model ids in their admitted provider catalog",
+    async (_kind, model, args, context, otherContext) => {
+      await withStatusHome(async () => {
+        const { render } = transcriptFixture({
+          model,
+          usage: usage(2, 3, 1200, 1205),
+        });
+        const normalized = normalizeTestText(
+          await render({
+            ...args,
+            thinkingCatalog: [...args.thinkingCatalog],
+            sessionEntry: { totalTokens: 5 },
+          }),
+        );
+        expect(normalized).toContain(`Context: 1.2k/${context}`);
+        expect(normalized).not.toContain(`Context: 1.2k/${otherContext}`);
+      });
+    },
+  );
+
+  it("keeps runtime slash model ids in their admitted provider catalog when modelProvider is missing", () => {
+    const text = buildStatusMessage({
+      ...openrouterArgs,
+      sessionEntry: {
+        ...freshUsage(1205),
+        model: "google/gemini-2.5-pro",
+      },
+    });
+
+    const normalized = normalizeTestText(text);
+    expect(normalized).toContain("Context: 1.2k/999k");
+    expect(normalized).not.toContain("Context: 1.2k/2.0m");
+  });
+
+  it.each([true, false])(
+    "keeps provider-aware runtime slash lookup with fallback=%s",
+    (fallback) => {
+      const route = fallbackRoute(selected, active);
+      const normalized = normalizedStatus({
+        ...(fallback ? route : modelArgs(active.provider, active.model)),
+        config: providerModels(
+          ["target", "small", { contextWindow: 777_000 }],
+          ["source", "large", { contextWindow: 1_048_576 }],
+        ),
+        sessionEntry: {
+          ...(fallback ? route.sessionEntry : {}),
+          modelProvider: undefined,
+          model: "target/small",
+          ...freshUsage(49_000),
+        },
+      });
+      if (fallback) {
+        expect(normalized).toContain("Fallback: target/small");
+      }
+      expect(normalized).toContain("Context: 49k/777k");
+      expect(normalized).not.toContain("Context: 49k/200k");
+    },
   );
 });

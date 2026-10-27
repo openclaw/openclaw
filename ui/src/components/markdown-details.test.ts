@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { toSanitizedMarkdownHtml, toStreamingMarkdownParts } from "./markdown.ts";
+import { toStreamingMarkdownParts } from "./markdown.test-support.ts";
+import { toSanitizedMarkdownHtml } from "./markdown.ts";
 
 function htmlFragment(html: string): DocumentFragment {
   return document.createRange().createContextualFragment(html);

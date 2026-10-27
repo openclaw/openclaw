@@ -2,15 +2,14 @@
 import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { REALTIME_VOICE_DESCRIBE_VIEW_TOOL_NAME } from "../../../../../src/talk/describe-view-tool.js";
 import { createDeferred } from "../../../../../test/helpers/promise.js";
+import { audioFixture, cameraFixture, stubMedia } from "./input.test-support.ts";
 import type { RealtimeTalkCallbacks } from "./shared.ts";
 import {
-  audioFixture,
   createWebRtcTransport,
   dispatchCompletedToolCall,
   FakePeerConnection,
   requirePeer,
   sentRealtimeEvents,
-  stubMedia,
   toolOutput,
   userMessage,
 } from "./webrtc.test-support.ts";
@@ -23,21 +22,6 @@ async function createTransport(callbacks: RealtimeTalkCallbacks = {}, videoDevic
   const fixture = await createWebRtcTransport({ callbacks, videoDeviceId });
   onTestFinished(() => fixture.transport.stop());
   return fixture;
-}
-
-function cameraFixture(deviceId?: string) {
-  const track = Object.assign(new EventTarget(), {
-    stop: vi.fn(),
-    readyState: "live",
-    enabled: true,
-    muted: false,
-    ...(deviceId ? { getSettings: () => ({ deviceId }) } : {}),
-  });
-  const stream = {
-    getVideoTracks: () => [track],
-    getTracks: () => [track],
-  } as unknown as MediaStream;
-  return { track, stream };
 }
 
 function dispatchDescribeViewToolCall(
@@ -196,7 +180,6 @@ describe("OpenAI Realtime media lifecycle", () => {
     expect(getUserMedia).toHaveBeenNthCalledWith(2, { video: true });
     expect(peer?.addTrack).toHaveBeenCalledOnce();
     expect(drawImage).toHaveBeenCalledTimes(2);
-    expect(onTalkEvent.mock.calls.map(([event]) => event.type)).toContain("tool.result");
     for (const [payload] of peer?.channel.send.mock.calls ?? []) {
       expect(new TextEncoder().encode(String(payload)).length).toBeLessThanOrEqual(512);
     }

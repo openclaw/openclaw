@@ -6,7 +6,7 @@ import { copyMarkdownLabel } from "../../../components/copy-button-state.ts";
 import { CopyButton } from "../../../components/solid/copy-button.tsx";
 import { Icon } from "../../../components/solid/icon.tsx";
 import { registerChatMessageMetadataEnglish } from "../../../i18n/locales/en-chat-message-metadata.ts";
-import type { NormalizedMessage } from "../../../lib/chat/chat-types.ts";
+import type { ChatItem, NormalizedMessage } from "../../../lib/chat/chat-types.ts";
 import { readHumanMentions } from "../../../lib/chat/human-mentions.ts";
 import { resolveMessageDisplayMarkdown } from "../../../lib/chat/message-display.ts";
 import {
@@ -20,7 +20,7 @@ import {
   resolveCappedMessageId,
   resolveSourceMessageId,
 } from "../chat-message-recovery.ts";
-import { persistedMessageEntryId } from "../chat-thread.ts";
+import { persistedMessageEntryId } from "../chat-thread-items.ts";
 import {
   registerMessageActionElements,
   type MessageActionElements,
@@ -28,9 +28,8 @@ import {
 import type { MessageActionDetails, MessageReplyTarget } from "./chat-message-markdown.types.ts";
 import { extractMessageMediaText } from "./chat-message-media.ts";
 import {
-  type MessageReactionAction,
+  hasActionRowReactionPicker,
   type MessageReactionOptions,
-  ownReactionEmoji,
 } from "./chat-message-reaction-model.ts";
 import { MessageReactionPicker } from "./chat-message-reactions-view.tsx";
 import { ReadAloud } from "./chat-read-aloud.tsx";
@@ -47,7 +46,8 @@ export function prepareChatMessageRender(message: unknown) {
   const record = asNullableRecord(message);
   const metadata = asNullableRecord(record?.["__openclaw"]);
   let humanMentions: ReturnType<typeof readHumanMentions>;
-  if (record?.role === "user" && metadata?.humanMentions) {
+  // Gateway-authored assistant rows may carry the same selections as human input.
+  if ((record?.role === "user" || record?.role === "assistant") && metadata?.humanMentions) {
     const source =
       typeof record.content === "string"
         ? record.content
@@ -68,6 +68,28 @@ export function prepareChatMessageRender(message: unknown) {
 }
 
 export type ChatMessageRenderPreparation = ReturnType<typeof prepareChatMessageRender>;
+
+const streamPreparations = new WeakMap<
+  Extract<ChatItem, { kind: "stream" }>,
+  ChatMessageRenderPreparation
+>();
+
+/** The rail and bubble consume the same immutable stream snapshot. */
+export function prepareChatStreamRender(part: Extract<ChatItem, { kind: "stream" }>) {
+  let prepared = streamPreparations.get(part);
+  if (!prepared) {
+    prepared = prepareChatMessageRender({
+      role: "assistant",
+      content: [
+        ...(part.thinking ? [{ type: "thinking", thinking: part.thinking }] : []),
+        { type: "text", text: part.text },
+      ],
+      timestamp: part.startedAt,
+    });
+    streamPreparations.set(part, prepared);
+  }
+  return prepared;
+}
 
 export function resolveMessageReplyText(
   message: unknown,
@@ -99,8 +121,11 @@ export function resolveMessageActionDetails(
     : undefined;
   const expansion = fullMessage?.state;
   const expandedMarkdown = expansion?.status === "loaded" ? expansion.markdown : previewMarkdown;
+  // Preparation already filtered the preview; loaded full text is a new display input.
   const visibleMarkdown =
-    role === "assistant" ? stripThinkingTags(expandedMarkdown) : expandedMarkdown;
+    role === "assistant" && expansion?.status === "loaded"
+      ? stripThinkingTags(expandedMarkdown)
+      : expandedMarkdown;
   const isConversationMessage = role === "assistant" || role === "user";
   const markdown = isConversationMessage || pendingInput ? visibleMarkdown : undefined;
   const copyMarkdown = resolveMessageReplyText(message, normalizedMessage, visibleMarkdown);
@@ -129,21 +154,24 @@ export function resolveMessageActionDetails(
   };
 }
 
+type MessageActionOptions = MessageReactionOptions & {
+  onReply?: (target: MessageReplyTarget) => void;
+};
+
+// The picker never reports an active emoji here: it only renders while the message has no reactions.
+const NO_ACTIVE_REACTIONS: ReadonlySet<string> = new Set();
+
 export function hasMessageActionButtons(
   details: MessageActionDetails | null | undefined,
-  opts: { onReply?: (target: MessageReplyTarget) => void; onReact?: MessageReactionAction },
+  opts: MessageActionOptions,
 ): details is MessageActionDetails {
   return Boolean(
     details &&
     (details.markdown ||
       (details.replyTarget && opts.onReply) ||
-      (details.reactionMessageId && opts.onReact)),
+      hasActionRowReactionPicker(details.reactionMessageId, opts)),
   );
 }
-
-type MessageActionOptions = MessageReactionOptions & {
-  onReply?: (target: MessageReplyTarget) => void;
-};
 
 export function MessageActions(props: {
   details: MessageActionDetails | null | undefined;
@@ -181,14 +209,11 @@ export function MessageActions(props: {
           }}
         />
       </Show>
-      <Show when={props.details?.reactionMessageId && props.options.onReact}>
+      <Show when={hasActionRowReactionPicker(props.details?.reactionMessageId, props.options)}>
         <MessageReactionPicker
           class="chat-reaction-action"
           placement={props.options.reactionPlacement ?? "bottom-start"}
-          activeEmoji={ownReactionEmoji(
-            props.options.messageReactions?.get(props.details!.reactionMessageId!),
-            props.options.userId,
-          )}
+          activeEmoji={NO_ACTIVE_REACTIONS}
           onSelect={(emoji: string, remove: boolean) =>
             props.options.onReact?.(props.details!.reactionMessageId!, emoji, remove)
           }
