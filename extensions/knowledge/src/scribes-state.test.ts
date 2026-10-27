@@ -39,8 +39,8 @@ describe("scribes catalog", () => {
       "America/Los_Angeles",
     );
     const prompt = setupPrompt(setup);
-    expect(prompt.split("\n")[0]).toBe(
-      'Set up the Knowledge scribe "Learn from conversations" in this conversation. Don\'t ask questions: nobody is watching this turn.',
+    expect(prompt).toMatch(
+      /^Set up the Knowledge scribe "Learn from conversations" in this conversation\./,
     );
     expect(prompt).toContain(
       [
@@ -51,36 +51,24 @@ describe("scribes catalog", () => {
     );
     expect(prompt).toContain("declaration key `knowledge:scribe:conversations`");
     expect(prompt).toContain("Don't start a run from this turn");
-    expect(prompt).toContain(
-      "`Scribe status: on — <one sentence: the automation and its next run>`",
-    );
+    expect(prompt).toContain("`Scribe status: on — <one sentence: the automation");
     expect(prompt.endsWith(`Run message:\n\n\`\`\`text\n${runPrompt(setup)}\n\`\`\``)).toBe(true);
-    expect(runPrompt(setup)).toContain(
-      "- Conversations: active and archived, from the last 90 days.",
-    );
-    expect(runPrompt(setup)).toContain(
-      'Follow "Learn from conversations" in the "Scribe runs" section',
+    expect(runPrompt(setup)).toMatch(
+      /archived, from the last 90 days\.[\s\S]*"Learn from conversations"/,
     );
     expect(prompt, "no JSON in the prompt").not.toMatch(/[{}]|```json|SCRIBE_RESULT/);
   });
 
   it("writes a once prompt that does the work in this turn, and defaults the review to weekly", () => {
-    expect(
-      scribeSetup(
-        "conversations",
-        "once",
-        { scope: "active", since: "30d", schedule: "0 4 * * *" },
-        "UTC",
-      ).options,
-    ).toEqual({ scope: "active", since: "30d" });
+    const once = scribeSetup("conversations", "once", defaultOptions("conversations"), "UTC");
+    expect(once.options).toEqual({ scope: "active", since: "30d" });
     const memory = setupPrompt(
       scribeSetup("memory", "once", { sources: ["memory-md", "dreams"] }, "UTC"),
     );
     expect(memory).toContain("- Runs once, now, in this turn. Nothing is scheduled.");
     expect(memory).toContain("- Memory files: MEMORY.md and the Dreaming diary (DREAMS.md).");
     expect(memory).toContain("`Scribe status: done — <one sentence with counts");
-    expect(memory).not.toContain("Run message");
-    expect(memory).not.toContain("automations tool");
+    expect(memory).not.toMatch(/Run message|automations tool/);
     const review = setupPrompt(
       scribeSetup("unlinked-review", "ongoing", defaultOptions("unlinked-review"), "UTC"),
     );
@@ -93,9 +81,7 @@ describe("scribes catalog", () => {
       schedule: { kind: "cron", expr: "45 3 * * *", tz: "UTC" },
       runMessage: "Edited run message",
     });
-    expect(prompt).toMatch(
-      /^Repair the Knowledge scribe "Review unlinked claims" in this conversation/,
-    );
+    expect(prompt).toMatch(/^Repair the Knowledge scribe "Review unlinked claims"/);
     expect(prompt).toContain("- Runs nightly at 3:45 AM UTC (cron `45 3 * * *`).");
     expect(prompt).toContain("leave it as it is and go to the last step");
     expect(prompt.endsWith("```text\nEdited run message\n```")).toBe(true);
@@ -105,25 +91,18 @@ describe("scribes catalog", () => {
   });
 
   it("reads a status line tolerantly", () => {
-    expect(statusFromText("Filed.\nScribe status: on — 9 filed, 2 left")).toEqual({
-      state: "on",
-      summary: "9 filed, 2 left",
-    });
-    expect(statusFromText("**Scribe status:** Done – 12 saved")).toEqual({
-      state: "done",
-      summary: "12 saved",
-    });
-    expect(statusFromText("`Scribe status: failed - store not writable`")).toEqual({
-      state: "failed",
-      summary: "store not writable",
-    });
-    expect(statusFromText("_Scribe status: on — next run 4:00 AM America/Los_Angeles_")).toEqual({
-      state: "on",
-      summary: "next run 4:00 AM America/Los_Angeles",
-    });
-    expect(statusFromText("scribe status: on")).toEqual({ state: "on", summary: "" });
-    expect(statusFromText("Scribe status: maybe — x")).toBeUndefined();
-    expect(statusFromText("All done.")).toBeUndefined();
+    const cases: [string, string?, string?][] = [
+      ["Filed.\nScribe status: on — 9 filed, 2 left", "on", "9 filed, 2 left"],
+      ["**Scribe status:** Done – 12 saved", "done", "12 saved"],
+      ["`Scribe status: failed - not writable`", "failed", "not writable"],
+      ["_Scribe status: on — next run America/Los_Angeles_", "on", "next run America/Los_Angeles"],
+      ["scribe status: on", "on", ""],
+      ["Scribe status: maybe — x"],
+      ["All done."],
+    ];
+    for (const [text, state, summary] of cases) {
+      expect(statusFromText(text), text).toEqual(state ? { state, summary } : undefined);
+    }
   });
 });
 

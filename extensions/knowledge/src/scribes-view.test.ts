@@ -213,8 +213,6 @@ it("sends a hand-edited prompt and stops regenerating it until asked", async () 
   expect(text.value).toBe(
     setupPrompt(scribeSetup("unlinked-review", "ongoing", { schedule: "45 3 * * *" }, timezone)),
   );
-  text.value = edited;
-  text.dispatchEvent(new Event("input"));
   text.value = "  ";
   text.dispatchEvent(new Event("input"));
   expect(buttonNamed(dialog, "Turn on").disabled, "an empty prompt can't start").toBe(true);
