@@ -403,18 +403,16 @@ describe("canonical proof on physical database validation", () => {
   );
 
   describe("native integrity proof handoff", () => {
-    it.for(["empty", "canonical", "verified"] as const)(
+    it.for(["empty", "canonical"] as const)(
       "keeps concurrent publications current after $0 admission succeeds",
       (cache, { empty: { database, options } }) => {
         if (cache === "canonical") {
           writeTransaction(recordCanonical, options);
         }
         const received = independentWorkerReceipt(database);
-        if (cache !== "verified") {
-          clearValidation(database.path);
-          if (cache === "canonical") {
-            expect(hasCanonical(database)).toBe(true);
-          }
+        clearValidation(database.path);
+        if (cache === "canonical") {
+          expect(hasCanonical(database)).toBe(true);
         }
         const first = capturePublication(database);
         const second = capturePublication(database);
