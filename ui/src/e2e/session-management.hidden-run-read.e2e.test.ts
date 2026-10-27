@@ -1,5 +1,6 @@
 import { expect, it } from "vitest";
 import { GATEWAY_SERVER_CAPS } from "../../../packages/gateway-protocol/src/server-capabilities.js";
+import { evaluateControlUiContext } from "../test-helpers/control-ui-e2e-context.ts";
 import {
   waitForControlUiGatewayReady,
   waitForControlUiGatewayReconnecting,
@@ -11,17 +12,28 @@ import * as support from "./session-management.test-support.ts";
 
 const suite = support.createSessionManagementE2eSuite();
 const runPrefix = "agent:main:subagent:hidden-read-";
-type ReadTraffic = { active: number; peak: number; completedTargets: number; batches: number[] };
+type ReadTraffic = {
+  active: number;
+  peak: number;
+  completedTargets: number;
+  batches: number[];
+  rosterReadsAtFirstAck?: number;
+};
 type TrafficWindow = MockGatewayWindow & { hiddenRunReadTraffic?: ReadTraffic };
 
 // Delay actual mock-Gateway responses so an unawaited per-run producer exposes
 // its whole burst before any acknowledgement can settle.
 function installReadTrafficProbe() {
   const target = window as TrafficWindow;
-  const traffic = { active: 0, peak: 0, completedTargets: 0, batches: [] as number[] };
+  const traffic: ReadTraffic = { active: 0, peak: 0, completedTargets: 0, batches: [] };
+  const mock = target.openclawControlUiE2eGateway!;
+  const rosterReads = () =>
+    mock
+      .findRequests("sessions.list")
+      .filter(({ params }) => !(params as { spawnedBy?: string } | undefined)?.spawnedBy).length;
   target.hiddenRunReadTraffic = traffic;
   for (const method of ["sessions.patch", "sessions.patchMany"]) {
-    target.openclawControlUiE2eGateway!.setRequestHandler(method, ({ params, respond }) => {
+    mock.setRequestHandler(method, ({ params, respond, emit }) => {
       const request = params as { key?: string; targets?: { key: string }[] };
       const count =
         method === "sessions.patch"
@@ -32,6 +44,7 @@ function installReadTrafficProbe() {
         respond({});
         return;
       }
+      traffic.rosterReadsAtFirstAck ??= rosterReads();
       traffic.active += 1;
       traffic.peak = Math.max(traffic.peak, traffic.active);
       if (method === "sessions.patchMany") {
@@ -41,6 +54,21 @@ function installReadTrafficProbe() {
         traffic.active -= 1;
         traffic.completedTargets += count;
         respond({});
+        const keys =
+          method === "sessions.patch" ? [request.key!] : request.targets!.map(({ key }) => key);
+        for (const key of keys) {
+          const row = Object.assign({}, mock.getSessionRow(key), { snapshotAt: Date.now() });
+          const parent = Object.assign({}, mock.getSessionRow("agent:main:hidden-read-parent"), {
+            snapshotAt: Date.now(),
+          });
+          emit("sessions.changed", {
+            agentId: "main",
+            reason: "patch",
+            sessionKey: key,
+            session: row,
+            ancestorSessions: [parent],
+          });
+        }
       }, 200);
     });
   }
@@ -53,12 +81,16 @@ suite.define(() => {
       suite.withPage(createControlUiE2eContextOptions(), async ({ page }) => {
         const parentKey = "agent:main:hidden-read-parent";
         const otherKey = "agent:main:hidden-read-other";
-        const parent = sessionRow(parentKey, "Parent with hidden runs", 20, { unread: false });
+        const parent = sessionRow(parentKey, "Parent with hidden runs", 20, {
+          unread: false,
+          childSessions: Array.from({ length: 150 }, (_, index) => runPrefix + index),
+        });
         const other = sessionRow(otherKey, "Other thread", 10, { unread: false });
         const runs = Array.from({ length: 150 }, (_, index) =>
           sessionRow(runPrefix + index, "Hidden run " + index, 30, {
             parentSessionKey: parentKey,
             spawnedBy: parentKey,
+            childOwnerSessionKeys: [parentKey],
             unread: true,
             status: "done",
           }),
@@ -100,6 +132,18 @@ suite.define(() => {
             page.evaluate(() => (window as TrafficWindow).hiddenRunReadTraffic?.completedTargets),
           )
           .toBe(150);
+        await expect
+          .poll(() =>
+            evaluateControlUiContext(
+              page,
+              ({ sessions }) =>
+                sessions.state.result?.sessions.filter(
+                  (row) =>
+                    row.key.startsWith("agent:main:subagent:hidden-read-") && row.unread === false,
+                ).length,
+            ),
+          )
+          .toBe(150);
         const traffic = await page.evaluate(() => (window as TrafficWindow).hiddenRunReadTraffic);
         if (!traffic) {
           throw new Error("Hidden-run request probe was not installed");
@@ -124,6 +168,62 @@ suite.define(() => {
         await parentRow.click({ button: "right" });
         await page.getByRole("menuitem", { name: "Mark as unread", exact: true }).waitFor();
         await page.keyboard.press("Escape");
+        if (entry !== "organizer") {
+          const rosterReads = (await gateway.getRequests("sessions.list")).filter(
+            ({ params }) => !support.requireRecord(params).spawnedBy,
+          ).length;
+          expect(rosterReads).toBe(traffic.rosterReadsAtFirstAck);
+        }
+        if (entry === "reconnect") {
+          const previousRevision = await evaluateControlUiContext(
+            page,
+            ({ sessions }) => sessions.canonicalListRevision,
+          );
+          await gateway.setOnline(false);
+          await waitForControlUiGatewayReconnecting(page);
+          await gateway.setOnline(true);
+          await waitForControlUiGatewayReady(page);
+          await expect
+            .poll(() =>
+              evaluateControlUiContext(
+                page,
+                ({ sessions }, previous) =>
+                  sessions.canonicalListRevision > previous &&
+                  !sessions.presentation.resultCached &&
+                  sessions.presentation.result?.sessions.filter(
+                    (row) =>
+                      row.key.startsWith("agent:main:subagent:hidden-read-") &&
+                      row.unread === false,
+                  ).length === 150,
+                previousRevision,
+              ),
+            )
+            .toBe(true);
+          await parentRow.click({ button: "right" });
+          await page.getByRole("menuitem", { name: "Mark as unread", exact: true }).waitFor();
+          await page.keyboard.press("Escape");
+          const repeated = await page.evaluate(
+            () => (window as TrafficWindow).hiddenRunReadTraffic,
+          );
+          expect(repeated).toMatchObject({
+            completedTargets: 150,
+            active: 0,
+            peak: 1,
+            batches: [100, 50],
+          });
+          expect(
+            (await gateway.getRequests("sessions.patch")).filter((request) =>
+              String(support.requireRecord(request.params).key).startsWith(runPrefix),
+            ),
+          ).toHaveLength(0);
+          expect(
+            (await gateway.getRequests("sessions.patchMany")).filter((request) =>
+              (support.requireRecord(request.params).targets as { key: string }[]).some((target) =>
+                target.key.startsWith(runPrefix),
+              ),
+            ),
+          ).toHaveLength(2);
+        }
         for (const request of batch) {
           const params = support.requireRecord(request.params);
           expect(params.patch).toEqual({ unread: false });

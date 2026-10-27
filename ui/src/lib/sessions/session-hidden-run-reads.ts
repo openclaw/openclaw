@@ -59,8 +59,6 @@ export function createHiddenRunReads(
     const run = async (): Promise<HiddenRunReadOutcome[]> => {
       const outcomes = new Map<string, HiddenRunReadOutcome>();
       const errors: string[] = [];
-      const agents = new Set<string | undefined>();
-      const reconciled = new Set<string | undefined>();
       try {
         for (let start = 0; start < entries.length; start += SESSIONS_PATCH_MANY_MAX_TARGETS) {
           if (!host.connection.isCurrent(scope)) {
@@ -71,9 +69,6 @@ export function createHiddenRunReads(
             const result = await withSessionMutationOperations((runtime) => {
               // A cold import or an earlier chunk can outlive the original grant.
               const targets = chunk.filter((entry) => entry.allowed()).map((entry) => entry.target);
-              for (const target of targets) {
-                agents.add(target.agentId);
-              }
               return targets.length === 0
                 ? null
                 : runtime.patchSessionBatch(host, scope, snapshot, targets, { unread: false });
@@ -99,45 +94,25 @@ export function createHiddenRunReads(
             errors.push(formatUiError(error));
           }
         }
-        // Batch receipts contain no row facts: reconcile conditional no-ops too,
-        // so a manual marker written after our snapshot remains visible.
-        if (host.connection.isCurrent(scope)) {
-          for (const agentId of agents) {
-            const refresh = await host.reconcileMutation(agentId, () => false);
-            if (refresh.status === "refreshed") {
-              reconciled.add(agentId);
-            }
-          }
-        }
-      } catch (error) {
-        errors.push(formatUiError(error));
       } finally {
-        for (const { optimisticTarget, token } of entries) {
+        // Admitted row events update the optimistic owner's canonical value,
+        // including newer manual markers; read acknowledgements do not change membership.
+        for (const { row, optimisticTarget, token } of entries) {
           if (optimisticTarget && token) {
-            unread.settle(optimisticTarget, token, false, host.connection.isCurrent(scope));
+            unread.settle(
+              optimisticTarget,
+              token,
+              outcomes.get(row.key)?.ok === true,
+              host.connection.isCurrent(scope),
+            );
           }
         }
       }
-      // A batch ACK can be a conditional no-op. Without a fresh row, callers
-      // must not latch their revision guards as though unread state was confirmed.
-      const refreshError = new Error(
-        "Read acknowledgement needs a session refresh to be confirmed.",
+      const results = entries.map(({ row }): HiddenRunReadOutcome =>
+        host.connection.isCurrent(scope)
+          ? (outcomes.get(row.key) ?? { key: row.key, ok: false })
+          : { key: row.key, ok: false },
       );
-      let unconfirmed = false;
-      const results = entries.map(({ row, target }): HiddenRunReadOutcome => {
-        const outcome = outcomes.get(row.key);
-        if (!host.connection.isCurrent(scope)) {
-          return { key: row.key, ok: false };
-        }
-        if (outcome?.ok && !reconciled.has(target.agentId)) {
-          unconfirmed = true;
-          return { key: row.key, ok: false, error: refreshError };
-        }
-        return outcome ?? { key: row.key, ok: false };
-      });
-      if (unconfirmed) {
-        errors.push(refreshError.message);
-      }
       if (options.publishErrors && errors.length > 0 && host.connection.isCurrent(scope)) {
         host.publish({ ...host.readState(), error: errors.join("; ") }, "operation");
       }

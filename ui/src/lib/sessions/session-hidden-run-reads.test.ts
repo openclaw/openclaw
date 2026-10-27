@@ -97,8 +97,16 @@ it("settles partial outcomes and conditional no-ops without hiding a newer manua
   const operation = h.sessions.acknowledgeHiddenRuns(rows);
   expect(h.sessions.state.result?.sessions.map((row) => row.unread)).toEqual([false, false, false]);
   await started.promise;
-  Object.assign(rows[0]!, { markedUnreadAt: 99, updatedAt: 99, unread: true });
-  Object.assign(rows[1]!, { unread: false, lastReadAt: 99 });
+  h.changed({
+    reason: "patch",
+    session: { ...rows[0]!, markedUnreadAt: 99, updatedAt: 99, unread: true },
+    ancestorSessions: [],
+  });
+  h.changed({
+    reason: "patch",
+    session: { ...rows[1]!, unread: false, lastReadAt: 99, updatedAt: 99 },
+    ancestorSessions: [],
+  });
   reply.resolve();
   const outcomes = await operation;
   expect(outcomes.map(({ ok }) => ok)).toEqual([true, true, false]);
@@ -136,27 +144,30 @@ it("rechecks access after a chunk and skips viewers and manual unread markers", 
   expect(h.sessions.state.result?.sessions[1]?.unread).toBe(true);
 });
 
-it("keeps a committed read retryable when its reconciliation fails", async () => {
-  const row = sessionRow("refresh-failed", { unread: true });
-  let failRead = false;
+it("settles a successful read without a roster read and admits a later manual marker", async () => {
+  const row = sessionRow("event-settled", { unread: true, updatedAt: 1 });
   const h = sessionRpcHarness({
-    "sessions.list": () => {
-      if (failRead) {
-        throw new Error("Synthetic list failure");
-      }
-      return sessionsResult([row]);
-    },
+    "sessions.list": () => sessionsResult([row], 100),
     "sessions.subscribe": () => ({ subscribed: true }),
-    "sessions.patchMany": () => {
-      failRead = true;
-      return { outcomes: [{ key: row.key, ok: true }] };
-    },
+    "sessions.patchMany": () => ({ outcomes: [{ key: row.key, ok: true }] }),
   });
   h.update({ hello: sessionMutationGatewayHello() });
   await h.sessions.refresh({ force: true });
+  const readsBefore = h.request.mock.calls.filter(([method]) => method === "sessions.list").length;
   const [outcome] = await h.sessions.acknowledgeHiddenRuns([row]);
-  expect(outcome?.ok).toBe(false);
-  expect(outcome?.error).toBeInstanceOf(Error);
-  expect(h.sessions.state.result?.sessions[0]?.unread).toBe(true);
+  expect(outcome?.ok).toBe(true);
+  expect(h.request.mock.calls.filter(([method]) => method === "sessions.list")).toHaveLength(
+    readsBefore,
+  );
+  expect(h.sessions.state.result?.sessions[0]?.unread).toBe(false);
+  h.changed({
+    reason: "patch",
+    session: { ...row, markedUnreadAt: 101, updatedAt: 101, unread: true },
+    ancestorSessions: [],
+  });
+  expect(h.sessions.state.result?.sessions[0]).toMatchObject({ unread: true, markedUnreadAt: 101 });
+  expect(h.request.mock.calls.filter(([method]) => method === "sessions.list")).toHaveLength(
+    readsBefore,
+  );
   expect(h.sessions.state.error).toBeNull();
 });
