@@ -121,7 +121,13 @@ export async function readGitRollbackPreservation(params: {
     return undefined;
   }
   const quote = process.platform === "win32" ? quotePowerShellArg : quoteCliArg;
-  const target = branch && branch !== "HEAD" ? quote(branch) : `--detach ${beforeSha}`;
+  const git = `git -C ${quote(gitRoot)}`;
+  // Activation can move the original branch (checkout -B), so reset it back to beforeSha;
+  // --keep moves the branch only when that does not discard local changes.
+  const restore =
+    branch && branch !== "HEAD"
+      ? `${git} checkout ${quote(branch)}, then ${git} reset --keep ${beforeSha}`
+      : `${git} checkout --detach ${beforeSha}`;
   return {
     name: "git-rollback-preserve",
     command: argv.join(" "),
@@ -129,7 +135,7 @@ export async function readGitRollbackPreservation(params: {
     durationMs: 0,
     exitCode: 1,
     stderrTail: `${changes}
-Source rollback was refused so these changes are kept; the previous runtime is still restored. After saving your changes, restore the checkout with: git -C ${quote(gitRoot)} checkout ${target}`,
+Source rollback was refused so these changes are kept; the previous runtime is still restored. After saving your changes, restore the checkout with: ${restore}`,
   };
 }
 
