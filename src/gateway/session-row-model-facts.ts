@@ -13,8 +13,6 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveRuntimeCliBackends } from "../plugins/cli-backends.runtime.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.types.js";
 import { readPreparedGatewayModelMetadata } from "./server-model-catalog-view.js";
-import type { SessionListModelFactsLookup } from "./session-list-target.js";
-import type { Row } from "./session-row-projection-record.js";
 import type {
   GatewaySessionModelSource,
   SessionListRowContext,
@@ -34,10 +32,16 @@ export function mayMatchSessionRowModelSearch(
   > & {
     rows: Iterable<
       Pick<
-        Row,
-        "agentId" | "storedEntry" | "entry" | "preparedAcpMeta" | "preparedRuntimeOwnership"
+        Parameters<typeof readSessionRowModelFacts>[0],
+        "agentId" | "entry" | "preparedAcpMeta" | "preparedRuntimeOwnership"
       > & {
-        materialized?: { source: ReturnType<SessionListModelFactsLookup> };
+        storedEntry?: SessionEntry;
+        materialized?: {
+          source: Pick<
+            ReturnType<typeof readSessionRowModelFacts>,
+            "selectedModel" | "rowModelIdentity" | "thinkingProjection"
+          >;
+        };
       }
     >;
   },
