@@ -324,6 +324,35 @@ describe("prepared model runtime automatic selections", () => {
     ).rejects.toThrow("lease admission made no publication progress");
   });
 
+  it("refuses a refresh continuation whose settled gate never gives way", async () => {
+    const replacement = createPreparedModelRuntimeReplacement();
+    replacement.resolve();
+    let reads = 0;
+    await expect(
+      acquirePreparedModelRuntimeLeaseFromOwners(
+        fixture.agentInput("worker", {}),
+        "run",
+        {
+          captureLifetime: () => () => undefined,
+          owners: new Map(),
+          agentBuildCompletions: new Map(),
+          retainedDirectRunOwners: new PreparedModelRuntimeOwnerRetention(1),
+          retainedGatewayRunOwners: new PreparedModelRuntimeOwnerRetention(8),
+          getBuildTimeoutMs: () => 120_000,
+          getGatewayLifecycleActive: () => false,
+          getPendingReplacement: () => {
+            if (++reads > 16) {
+              throw new Error("test iteration guard reached");
+            }
+            return replacement;
+          },
+        },
+        { waitForReplacementPublication: true },
+      ),
+    ).rejects.toThrow("lease admission made no publication progress");
+    expect(reads).toBe(2);
+  });
+
   it.each([
     { waitForReplacementPublication: false, gatesWaited: 3 },
     { waitForReplacementPublication: true, gatesWaited: 4 },

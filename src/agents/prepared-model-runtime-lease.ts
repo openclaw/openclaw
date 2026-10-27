@@ -154,14 +154,19 @@ export async function acquirePreparedModelRuntimeLeaseFromOwners(
   let replacement = context.getPendingReplacement(rawInput);
   // Drain, retirement, and failed-activation recovery each own one gate; further churn is best effort.
   // A refresh continuation has already run tools, so it waits through back-to-back reloads: each
-  // gate is one reload that settles within its own drain and stop budget, and the run's abort
-  // signal still cancels the wait.
+  // gate is one reload that settles within its own drain and stop budget, a gate that settles
+  // without giving way ends the wait, and the run's abort signal still cancels it.
   const maxWaits = options.waitForReplacementPublication ? Number.POSITIVE_INFINITY : 3;
   for (let waits = 0; replacement && waits < maxWaits; waits += 1) {
     assertPreparedModelRuntimeAdmissionCanWait();
-    await racePromiseWithAbortSignal(replacement.promise, options.abortSignal);
+    const awaited = replacement;
+    await racePromiseWithAbortSignal(awaited.promise, options.abortSignal);
     assertAdmission();
     replacement = context.getPendingReplacement(rawInput);
+    // An unbounded wait still needs each gate to give way to the next reload.
+    if (replacement === awaited && options.waitForReplacementPublication) {
+      break;
+    }
   }
   if (replacement) {
     throw new PreparedModelRuntimeOwnerNotPublishedError(
