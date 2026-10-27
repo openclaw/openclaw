@@ -711,6 +711,7 @@ src/config/sessions/migration-required.ts
 src/config/sessions/model-override-provenance.ts
 src/config/sessions/paths.ts
 src/config/sessions/session-accessor.sqlite-entry-inventory.ts
+src/config/sessions/session-accessor.sqlite-entry-equality.ts
 src/config/sessions/session-accessor.sqlite-conversation-publication.ts
 src/config/sessions/session-accessor.sqlite-owner-projection.ts
 src/config/sessions/session-accessor.sqlite-scope-helpers.ts
@@ -1579,7 +1580,6 @@ src/plugins/official-external-plugin-catalog-hosted.ts
 src/plugins/official-external-plugin-catalog-snapshot-store.ts
 src/plugins/official-external-plugin-catalog-source.ts
 src/plugins/official-external-plugin-catalog.ts
-src/plugins/official-external-provider-endpoints.ts
 src/plugins/package-compat.ts
 src/plugins/package-entry-resolution.ts
 src/plugins/package-entrypoints.ts
@@ -1599,7 +1599,6 @@ src/plugins/plugin-generation-file-capture.ts
 src/plugins/plugin-generation-receipt.ts
 src/plugins/plugin-generation-source-lookup.ts
 src/plugins/plugin-install-default-choice.ts
-src/plugins/plugin-instance-argument-views.ts
 src/plugins/plugin-instance-background.ts
 src/plugins/legacy-sdk-resource-host.ts
 src/plugins/provider-claude-thinking.ts
@@ -1632,7 +1631,6 @@ src/plugins/plugin-metadata-snapshot-required.ts
 src/plugins/plugin-metadata-snapshot.runtime.ts
 src/plugins/plugin-metadata-snapshot.ts
 src/plugins/plugin-metadata-state-worker.ts
-src/plugins/plugin-metadata-live-read.worker.ts
 src/plugins/plugin-metadata-state.read.worker.ts
 src/plugins/plugin-metadata-state.kernel.ts
 src/plugins/plugin-module-loader-cache.ts
@@ -1658,6 +1656,7 @@ src/plugins/plugin-return-value.ts
 src/plugins/plugin-tool-execution.ts
 src/plugins/plugin-runtime-artifact-identity.ts
 src/plugins/plugin-runtime-artifact-resolution.ts
+src/plugins/plugin-runtime-artifact-binding.ts
 src/plugins/plugin-runtime-artifact-selection.ts
 src/plugins/plugin-safety-inspected-files.ts
 src/plugins/plugin-scope.ts
@@ -2677,6 +2676,7 @@ src/config/sessions/session-lifecycle-worker-publication.ts
 src/config/sessions/session-native-binding.ts
 src/plugin-state/plugin-state-publication.ts
 src/config/sessions/transcript-recent-text.ts
+src/state/startup-metadata-live-read.worker.ts
 src/state/state-domain-publication.ts
 src/state/user-model-account-authority.ts
 src/state/user-model-account-id.ts

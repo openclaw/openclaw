@@ -295,6 +295,10 @@ these rules:
   cross-call state in `api.runtime.state` or the plugin's own database.
 - **Disposal releases everything the plugin started.** Register cleanup with
   `api.lifecycle.onDispose` and wait for your own workers and timers there.
+- **A context engine keeps turn state durable.** At handover OpenClaw disposes
+  the old version's engine and creates one from the new version for the rest
+  of the turn. The new engine finishes the turn: it receives `commitTurn` for
+  the whole turn and runs its maintenance once.
 
 In return, OpenClaw never runs calls on two versions of the plugin at once,
 stops and disposes the old version only after its admitted calls finish, and
@@ -304,9 +308,9 @@ failing.
 Handover happens only between model steps. A long-running tool call keeps the
 reload waiting until it returns. A turn hands over only when every plugin the
 reload replaces declares the field; one undeclared plugin keeps the whole turn
-waiting. Plugins that register a context engine keep the default wait for now,
-because the engine's turn state is held outside the step boundary. Reload status
-and logs name the plugins that kept a turn waiting.
+waiting. If the new version no longer registers the turn's context engine, the
+turn ends with an error instead of switching engines mid-turn. Reload status and
+logs name the plugins that kept a turn waiting.
 
 ### Plugin value boundary
 
@@ -383,13 +387,16 @@ to close before registering its successor. Disabling or removing a plugin can
 report their cleanup as deferred; starting engine disposal closes normal engine
 callbacks while cleanup finishes.
 
-Replacement validates metadata and configuration first, then stops services and
-channels, drains admitted work, runs `gateway_stop`, and disposes the old instance
+Replacement validates metadata and configuration first, then closes admission to
+the old instance and waits for in-flight work while its services and channels
+keep running. If that work does not finish in time, the reload fails once and
+resumes admission. Otherwise, replacement stops services and channels, drains
+remaining admitted work, runs `gateway_stop`, and disposes the old instance
 before invoking the new registration. Session-extension and runtime-lifecycle
 `cleanup` callbacks receive `reason: "restart"` before the replacement registers,
 so they can unsubscribe observers and release in-memory buffers. Persistent
 session-state and scheduler reconciliation remain part of registry retirement.
-Pre-publication failure triggers automatic
+Once services and channels begin stopping, a pre-publication failure triggers automatic
 recovery by registering the captured previous code with its previous config;
 a stopped instance is not assumed to be restartable. A plugin cannot synchronously
 replace itself from its own active call: the operation rejects before shutdown

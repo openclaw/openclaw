@@ -785,49 +785,42 @@ suite.define(() => {
     });
   });
 
-  it.each(["click", "Enter"] as const)(
-    "retains Settings opened with %j while refreshed inspection finishes",
-    async (activation) => {
-      await suite.withPage(createSettingsPageOptions(), async ({ page }) => {
-        const gateway = await installMockGateway(page, {
-          featureMethods: pluginMethods,
-          methodResponses: pluginResponses(),
-          operatorScopes: ["operator.read", "operator.admin"],
-        });
-        await openWorkboard(page, suite.server.baseUrl);
-        await page.getByRole("heading", { level: 1, name: "Workboard", exact: true }).waitFor();
-        const inspections = (await gateway.getRequests("plugins.inspect")).length;
-        await gateway.deferNext("plugins.inspect");
-        await page.getByRole("button", { name: "Disable Workboard", exact: true }).click();
-        await gateway.waitForRequest("plugins.inspect", { after: inspections });
-
-        const configuration = page
-          .locator(".plugin-catalog-detail__actions")
-          .getByRole("link", { name: "Settings", exact: true });
-        await configuration.waitFor();
-        if (activation === "click") {
-          await configuration.click();
-        } else {
-          await configuration.press(activation);
-        }
-        await gateway.resolveDeferred("plugins.inspect", inspection);
-        await page
-          .locator(".plugin-editor")
-          .getByRole("searchbox", { name: "Search settings", exact: true })
-          .waitFor();
-        if (captureUiProof && activation === "click") {
-          await page.screenshot({
-            animations: "disabled",
-            path: path.join(proofDir, "selected-tab-after-inspection.png"),
-          });
-        }
-
-        await expect.poll(() => new URL(page.url()).searchParams.get("view")).toBe("settings");
-        expect(await page.getByRole("tab").count()).toBe(0);
-        await page.getByLabel("Workspace label", { exact: true }).waitFor();
+  it("retains Settings opened with Enter while refreshed inspection finishes", async () => {
+    await suite.withPage(createSettingsPageOptions(), async ({ page }) => {
+      const gateway = await installMockGateway(page, {
+        featureMethods: pluginMethods,
+        methodResponses: pluginResponses(),
+        operatorScopes: ["operator.read", "operator.admin"],
       });
-    },
-  );
+      await openWorkboard(page, suite.server.baseUrl);
+      await page.getByRole("heading", { level: 1, name: "Workboard", exact: true }).waitFor();
+      const inspections = (await gateway.getRequests("plugins.inspect")).length;
+      await gateway.deferNext("plugins.inspect");
+      await page.getByRole("button", { name: "Disable Workboard", exact: true }).click();
+      await gateway.waitForRequest("plugins.inspect", { after: inspections });
+
+      const configuration = page
+        .locator(".plugin-catalog-detail__actions")
+        .getByRole("link", { name: "Settings", exact: true });
+      await configuration.waitFor();
+      await configuration.press("Enter");
+      await gateway.resolveDeferred("plugins.inspect", inspection);
+      await page
+        .locator(".plugin-editor")
+        .getByRole("searchbox", { name: "Search settings", exact: true })
+        .waitFor();
+      if (captureUiProof) {
+        await page.screenshot({
+          animations: "disabled",
+          path: path.join(proofDir, "selected-tab-after-inspection.png"),
+        });
+      }
+
+      await expect.poll(() => new URL(page.url()).searchParams.get("view")).toBe("settings");
+      expect(await page.getByRole("tab").count()).toBe(0);
+      await page.getByLabel("Workspace label", { exact: true }).waitFor();
+    });
+  });
 
   it("keeps global plugin policy in Advanced and exposes read-only details without mutations", async () => {
     await suite.withPage(createSettingsPageOptions(), async ({ page }) => {

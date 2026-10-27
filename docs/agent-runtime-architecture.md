@@ -69,6 +69,10 @@ Standalone embedded runtimes publish the same snapshot shape at their activation
 
 Runtime selections resolve in the requesting agent's scope before becoming owner keys. Lease admission carries that prepared choice forward and reads the exact owner's snapshot. Retries must observe a changed owner or publication gate; unchanged publication state fails with a retryable error instead of blocking the Gateway event loop.
 
+If publication supersedes unfinished run preparation, admission prepares again on the current generation once before reporting a retryable error. A reply whose captured dispatch generation was replaced can also discard that initial selection before execution and enter current admission. These retries do not replay model requests or tools. Once execution begins, nested work stays pinned to its admitted generation; changing plugin owners at that point could mix callbacks and resources from different generations.
+
+Auth-triggered publication allows up to two fresh-generation retries for supersession. Exhaustion remains a typed, retryable error, and a later request can recover the configured owner through normal catalog recovery. Other lifecycle failures retain their existing single fresh-generation retry.
+
 ## Compute workers
 
 Code-mode execution, compaction planning, and file-tool planning use the reusable `WorkerTaskPool`.

@@ -655,7 +655,9 @@ export async function createSessionRowProjection(params: records.ProjectionOptio
       projection: (): Parameters<typeof readPreparedSessionRows>[0] => projection,
     }),
     setArchivePageSize: archive.setPageSize,
-    modelFacts: rowReads.createSessionRowModelFactsReader({
+    ...rowReads.createSessionRowModelFactsReader({
+      rows: () => rows.values(),
+      onFactsChange: revisions.onFactsChange,
       lookup,
       dirty,
       readSourceEntry,

@@ -49,6 +49,27 @@ const widgetSnapshot = (
 ): ChatSessionSnapshot => ({ messages, pagination: { hasMore: false }, sessionId, ...extras });
 
 describe("session message cache", () => {
+  it("persists changed session display facts once without repeating unchanged writes", () => {
+    const cache: ChatMessageCache = new Map();
+    const host = { assistantAgentId: "main" };
+    const target = { sessionKey: "agent:main:archived" };
+    const write = vi.fn();
+    observeChatCache(cache, { write, delete: vi.fn() });
+    const snapshot = widgetSnapshot(["saved conversation"]);
+    const sessionState = { archived: true, unarchiveAllowed: true, parentSession: null };
+    cacheChatSessionSnapshot(cache, host, target, { ...snapshot, sessionState });
+    cacheChatSessionSnapshot(cache, host, target, {
+      ...snapshot,
+      sessionState: { ...sessionState },
+    });
+    expect(write).toHaveBeenCalledTimes(1);
+    cacheChatSessionSnapshot(cache, host, target, {
+      ...snapshot,
+      sessionState: { ...sessionState, archived: false },
+    });
+    expect(write).toHaveBeenCalledTimes(2);
+    expect(readChatSessionSnapshot(cache, host, target)?.sessionState?.archived).toBe(false);
+  });
   it("retains reaction facts only across the same session incarnation", () => {
     const { read, write } = createCacheContext();
     const summaries = [{ emoji: "👍", count: 1, identities: [{ id: "peer" }] }];
@@ -80,6 +101,7 @@ describe("session message cache", () => {
     const target = { sessionKey: "agent:main:batch" };
     cacheChatSessionSnapshot(cache, host, target, widgetSnapshot([], "one"));
     const layout = createChatWidgetLayout()(cache, host, target);
+    expect(layout.readRows()).toBeUndefined();
     const write = vi.fn();
     observeChatCache(cache, { write, delete: vi.fn() });
     const heights = {
@@ -89,6 +111,10 @@ describe("session message cache", () => {
     layout.writeRows(heights);
     expect(write).toHaveBeenCalledTimes(1);
     expect(readChatSessionSnapshot(cache, host, target)?.widgetHeights).toEqual(heights);
+    // Newly measured rows belong to the next reload, not this admission.
+    expect(layout.readRows()).toBeUndefined();
+    const reloaded = createChatWidgetLayout()(cache, host, target);
+    expect(reloaded.readRows()).toEqual(heights);
     layout.writeRows(heights);
     expect(write).toHaveBeenCalledTimes(1);
     cacheChatSessionSnapshot(cache, host, target, widgetSnapshot([], "two"));
@@ -96,6 +122,35 @@ describe("session message cache", () => {
     layout.writeRows(heights);
     expect(write).not.toHaveBeenCalled();
     expect(readChatSessionSnapshot(cache, host, target)?.widgetHeights).toBeUndefined();
+    expect(reloaded.readRows()).toBeUndefined();
+  });
+  it("retires admitted row heights when the same session key moves to another account", () => {
+    const cache: ChatMessageCache = new Map();
+    const host = {
+      assistantAgentId: "main",
+      settings: { gatewayUrl: "wss://cache.example" },
+      client: { recoveryScope: "account-a", recoveryScopeReady: true },
+    };
+    const target = { sessionKey: "agent:main:batch" };
+    const row = 'row:v1:768:appearance:first:"one"';
+    cacheChatSessionSnapshot(
+      cache,
+      host,
+      target,
+      widgetSnapshot([], "one", { widgetHeights: { [row]: 100 } }),
+    );
+    const layout = createChatWidgetLayout()(cache, host, target);
+    expect(layout.readRows()).toEqual({ [row]: 100 });
+    host.client.recoveryScope = "account-b";
+    cacheChatSessionSnapshot(
+      cache,
+      host,
+      target,
+      widgetSnapshot([], "one", { widgetHeights: { [row]: 200 } }),
+    );
+    expect(layout.readRows()).toBeUndefined();
+    expect(layout.read(row)).toBeUndefined();
+    expect(createChatWidgetLayout()(cache, host, target).readRows()).toEqual({ [row]: 200 });
   });
   it("keeps the settled row reservation through an initial short widget report", () => {
     const context = createCacheContext();

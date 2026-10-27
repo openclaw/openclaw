@@ -211,9 +211,11 @@ it("seeks linked runs before pagination without confusing public ids or ambiguou
 
 it("retains history across worker reads, isolates stores, and recovers only an exact receipt", () =>
   withHistoryState(async (storeKey) => {
+    const read = (options: Partial<ReadCronRunHistoryPageOptions> = {}) =>
+      readCronRunHistoryPage({ storeKey, jobId: "job", ...options });
     const expectResult = async (result: NonNullable<CronRunLogEntry["result"]>) => {
       for (const view of ["full", "summary"] as const) {
-        const page = await readCronRunHistoryPage({ storeKey, jobId: "job", runId: "third", view });
+        const page = await read({ runId: "third", view });
         expect(page.entries.map((entry) => entry.result)).toEqual([result]);
       }
     };
@@ -245,23 +247,16 @@ it("retains history across worker reads, isolates stores, and recovers only an e
           ?.endedAt,
       ).toBe(20);
     });
-    const history = await readCronRunHistoryPage({
-      storeKey,
-      jobId: "job",
-      limit: 1,
-      sortDir: "asc",
-    });
+    const history = await read({ limit: 1, sortDir: "asc" });
     expect(history).toMatchObject({ total: 2, limit: 1, hasMore: true, nextOffset: 1 });
     expect(history.entries[0]?.sessionId).toBe("recorded-generation");
-    expect(
-      (await readCronRunHistoryPage({ storeKey, jobId: "job", runId: "second" })).entries,
-    ).toHaveLength(1);
+    expect((await read({ runId: "second" })).entries).toHaveLength(1);
     await recordCronRun({
       ...outcome(storeKey, "third"),
       detail: outcomeDetail(storeKey, { runId: "third", result: { outcome: "no_change" } }),
     });
     await expectResult({ outcome: "no_change" });
-    const refreshed = await readCronRunHistoryPage({ storeKey, jobId: "job" });
+    const refreshed = await read();
     expect(refreshed.total).toBe(3);
     expect(runIds(refreshed.entries)).toEqual(expect.arrayContaining(["first", "second", "third"]));
     const updated = outcome(storeKey, "third");
@@ -276,11 +271,7 @@ it("retains history across worker reads, isolates stores, and recovers only an e
         result,
       }),
     });
-    const delivered = await readCronRunHistoryPage({
-      storeKey,
-      jobId: "job",
-      deliveryStatus: "delivered",
-    });
+    const delivered = await read({ deliveryStatus: "delivered" });
     expect(delivered.total).toBe(1);
     expect(delivered.entries).toMatchObject([
       { runId: "third", summary: "Fresh delivery result", deliveryStatus: "delivered" },
@@ -516,6 +507,7 @@ it("retains legacy identities and raw details without inventing a store partitio
     const insertDelivery = db.prepare(
       "INSERT INTO task_delivery_state (task_id, requester_origin_json) VALUES (?, ?)",
     );
+    const survivingTask = [{ task_id: "retired-task" }];
     insertDelivery.run("legacy-null", "cron delivery");
     insertDelivery.run("retired-task", "retired delivery");
     const records = readCronRunRecordsInDatabase(db);
@@ -531,11 +523,10 @@ it("retains legacy identities and raw details without inventing a store partitio
     expect(projectCronRunHistoryPage(records, { storeKey: "current-store" }).entries).toEqual([]);
     expect(pruneHistory(db, 11)).toBe(0);
     expect(
-      db.prepare("SELECT detail_json FROM task_runs WHERE task_id = ?").get("legacy-null"),
-    ).toEqual({ detail_json: rawDetail });
-    expect(
-      db.prepare("SELECT detail_json FROM task_runs WHERE task_id = ?").get("legacy-empty"),
-    ).toEqual({ detail_json: "{" });
+      db
+        .prepare("SELECT detail_json FROM task_runs WHERE task_id IN (?, ?) ORDER BY task_id")
+        .all("legacy-empty", "legacy-null"),
+    ).toEqual([{ detail_json: "{" }, { detail_json: rawDetail }]);
     ensureExecutionOwnerLifecycleBindingSchema(db);
     const insertBinding = db.prepare(
       "INSERT INTO execution_owner_lifecycle_bindings (owner_kind, owner_id, context_id, execution_id) VALUES (?, ?, 'context', 'execution')",
@@ -546,12 +537,8 @@ it("retains legacy identities and raw details without inventing a store partitio
     insertBinding.run("flow", "legacy-null");
     expect(pruneHistory(db, 10 + 7 * DAY)).toBe(3);
     expect(readCronRunRecordsInDatabase(db)).toEqual([]);
-    expect(db.prepare("SELECT task_id FROM task_runs").all()).toEqual([
-      { task_id: "retired-task" },
-    ]);
-    expect(db.prepare("SELECT task_id FROM task_delivery_state").all()).toEqual([
-      { task_id: "retired-task" },
-    ]);
+    expect(db.prepare("SELECT task_id FROM task_runs").all()).toEqual(survivingTask);
+    expect(db.prepare("SELECT task_id FROM task_delivery_state").all()).toEqual(survivingTask);
     expect(
       db
         .prepare(

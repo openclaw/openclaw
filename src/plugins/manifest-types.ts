@@ -426,7 +426,7 @@ export type PluginManifestDecisionModel = {
 };
 
 /** Reload behavior a plugin opts in to; absent fields keep the default reload. */
-export type PluginManifestReload = {
+type PluginManifestReload = {
   /**
    * A reload hands running turns to the new generation at their next model step
    * instead of waiting for them to finish. Opting in promises the plugin keeps no

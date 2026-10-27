@@ -22,9 +22,9 @@ scenario:
               - message
   successCriteria:
     - Visible completion output reaches the originating QA DM exactly once.
-    - Exact worker NO_REPLY stays private while required parent completion represents missing child output visibly exactly once.
+    - Exact worker NO_REPLY stays private while the parent explicitly reports missing child output visibly exactly once.
     - Gateway restart does not replay prior terminal payloads or synthesize interruption notices for already-settled handoffs, and a post-restart completion is delivered exactly once.
-    - Direct fallback strips protected internal metadata before one channel delivery.
+    - A visible but unsent parent completion triggers direct fallback, which strips protected internal metadata before one channel delivery.
     - A private parent consumes a child-only nonce and media reference, spawns a second child with messaging denied, records its reviewed outcome internally, and does not send or replay either result on the channel.
   docsRefs:
     - docs/tools/subagents.md
@@ -178,6 +178,8 @@ flow:
                         senderName: QA Terminal Reply Operator
                         text:
                           expr: "`Subagent terminal reply QA check: ${terminalCase.name}. Spawn one native worker, then finish the parent turn without waiting. Do not use ACP.`"
+                    # The mock leaves visible parent text unsent to require fallback;
+                    # empty parent output intentionally settles quietly instead.
                     # Child delivery can finish while the parent's acknowledgment is still queued.
                     - call: waitForCondition
                       saveAs: terminalRun

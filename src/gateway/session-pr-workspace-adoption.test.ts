@@ -2,6 +2,7 @@ import "../config/sessions/session-entry-patch-delivery.test-support.js";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, assert, expect, it, onTestFinished, vi } from "vitest";
+import { acknowledgeInternalToolResult } from "../../packages/agent-core/src/internal-hooks.js";
 import { makeTextToolResult } from "../../test/helpers/text-tool-result.js";
 import { makeUserMessage } from "../../test/helpers/user-message.js";
 import { getSession, waitForExecScope } from "../agents/bash-process-registry.js";
@@ -13,7 +14,6 @@ import {
 } from "../agents/bash-tools.lifecycle.test-support.js";
 import { createProcessTool } from "../agents/bash-tools.process.js";
 import { truncateOversizedToolResultsInSessionManager } from "../agents/embedded-agent-runner/tool-result-truncation.js";
-import { acknowledgeInternalToolResult } from "../agents/runtime/internal-hooks.js";
 import * as sandboxContext from "../agents/sandbox/context.js";
 import { createSandboxTestContext } from "../agents/sandbox/test-fixtures.js";
 import { SessionManager } from "../agents/sessions/session-manager.js";
@@ -545,10 +545,12 @@ const pullRequest = {
 /** GitHub I/O and the container runtime stay synthetic; the handler, its session read,
  * allocation, binding, file-source checks and the PR association write are real. */
 function stubPullRequestPreparation(sessionKey: string) {
-  vi.spyOn(inspect, "inspectOwnGitHubPullRequest").mockResolvedValue({
-    result: pullRequest,
-    assertCurrent() {},
-  } as never);
+  vi.spyOn(inspect, "inspectOwnGitHubPullRequest").mockImplementation(
+    async ({ assertCurrent }) => ({
+      result: { ...pullRequest, author: { accountId: 9, login: "guest" }, state: "open" },
+      assertCurrent,
+    }),
+  );
   vi.spyOn(availability, "prepareCurrentGitHubPublicationIdentity").mockResolvedValue({
     account: { accountId: 9 },
   } as never);

@@ -18,7 +18,7 @@ it.skipIf(!enabled)(
     console.info("[corporate-effect-proof] phase=case-entered");
     const { readRequestText } = await import("../../test/helpers/gateway-integration-fixtures.js");
     const { writeOpenAiResponsesText } = await import("../../test/helpers/openai-responses-sse.js");
-    const { withinTest } = await import("../../test/helpers/promise.js");
+    const { withinTest, awaitGateBeforeSettlement } = await import("../../test/helpers/promise.js");
     const { createOpenClawTestInstance } =
       await import("../../test/helpers/openclaw-test-instance.js");
     const { acquireGatewayTestClient } = await import("../../test/helpers/gateway-client.js");
@@ -37,13 +37,6 @@ it.skipIf(!enabled)(
         timeout: 20_000,
         maxBuffer: 1024 * 1024,
       }).trim();
-    // Fail setup, never silently skip an explicitly requested but unavailable backend.
-    console.info("[corporate-effect-proof] phase=backend-preflight");
-    docker("info", "--format", "{{.ID}}");
-    console.info("[corporate-effect-proof] phase=docker-info-complete");
-    docker("image", "inspect", DEFAULT_SANDBOX_IMAGE);
-    console.info("[corporate-effect-proof] phase=image-inspect-complete");
-
     await using cleanup = new AsyncDisposableStack();
     // The supervised built Gateway owns its runtime outside the Vitest module graph.
     const instance = await createOpenClawTestInstance({
@@ -70,9 +63,10 @@ it.skipIf(!enabled)(
     // The host sentinels are siblings of, never inside, the mounted workspace.
     const sentinel = await state.writeText("host-only/sentinel.txt", randomUUID());
     const originalSentinel = await fs.readFile(sentinel, "utf8");
-    const escalated = state.path("host-only/escalated.txt");
-    const signaled = state.path("host-only/signaled.txt");
+    const escalated = state.statePath("host-only/escalated.txt");
+    const signaled = state.statePath("host-only/signaled.txt");
     const processMarker = `corporate-host-process-${randomUUID()}`;
+    let hostStderr = "";
     const hostProcess = spawn(
       process.execPath,
       [
@@ -81,8 +75,11 @@ it.skipIf(!enabled)(
         processMarker,
         signaled,
       ],
-      { stdio: ["ignore", "ignore", "ignore", "ipc"], env: {} },
+      { stdio: ["ignore", "ignore", "pipe", "ipc"], env: {} },
     );
+    hostProcess.stderr?.on("data", (chunk: Buffer) => {
+      hostStderr = (hostStderr + chunk.toString()).slice(-4096);
+    });
     cleanup.defer(async () => {
       if (hostProcess.exitCode === null && hostProcess.signalCode === null) {
         const exited = once(hostProcess, "exit");
@@ -96,8 +93,22 @@ it.skipIf(!enabled)(
     // Positive control: this exact process can receive a harmless host signal.
     const hostSignal = once(hostProcess, "message");
     hostProcess.kill("SIGUSR2");
-    expect((await withinTest(hostSignal, signal))[0]).toBe("signaled");
+    expect(
+      (
+        await withinTest(
+          awaitGateBeforeSettlement(
+            hostSignal,
+            once(hostProcess, "exit").then(() => {
+              throw new Error(`Host sentinel exited: ${hostStderr}`);
+            }),
+            "Host sentinel exited before the positive control",
+          ),
+          signal,
+        )
+      )[0],
+    ).toBe("signaled");
     expect(await fs.readFile(signaled, "utf8")).toBe("signaled");
+    console.info("[corporate-effect-proof] phase=host-signal-qualified");
     await fs.unlink(signaled);
 
     let hostHttpHits = 0;
@@ -109,6 +120,14 @@ it.skipIf(!enabled)(
     const hostUrl = (await listenProvider(hostHttp)).replace(/\/v1$/, "");
     expect(await (await fetch(hostUrl, { signal })).text()).toBe("synthetic-host-http");
     expect(hostHttpHits).toBe(1);
+    console.info("[corporate-effect-proof] phase=host-http-qualified");
+
+    // Fail setup, never silently skip an explicitly requested but unavailable backend.
+    console.info("[corporate-effect-proof] phase=backend-preflight");
+    docker("info", "--format", "{{.ID}}");
+    console.info("[corporate-effect-proof] phase=docker-info-complete");
+    docker("image", "inspect", DEFAULT_SANDBOX_IMAGE);
+    console.info("[corporate-effect-proof] phase=image-inspect-complete");
 
     const workspaceToken = `workspace-${randomUUID()}`;
     // Python is supplied by scripts/sandbox-setup.sh's default image. No runtime

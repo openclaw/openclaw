@@ -2,6 +2,7 @@ import { MessageChannel, receiveMessageOnPort, type Transferable } from "node:wo
 import { expectDefined } from "@openclaw/normalization-core";
 import type { Result } from "@openclaw/normalization-core/result";
 import { isSessionActorCommand } from "../config/sessions/session-actor-command.js";
+import { materializeErrorStack } from "../infra/error-graph-internal.js";
 import { sqlPublicationAnchor } from "../infra/sql-connection.js";
 import { createSqliteLifecycleAggregateError } from "../infra/sqlite-lifecycle-errors.js";
 import {
@@ -271,6 +272,7 @@ function openAgentDatabaseBackend(
       } catch (error) {
         // An explicit pre-open refusal cannot retain a native handle.
         if (!(error instanceof SqliteWorkerOpenRefusedError)) {
+          materializeErrorStack(error);
           openingFailure = { error };
         }
         openingResult = { ok: false, error };
@@ -326,7 +328,8 @@ function openAgentDatabaseBackend(
     if (!database || !database.db.isOpen || getOpenClawAgentDatabaseIfOpen(options) !== database) {
       throw new Error("Agent execution lost its retained native database");
     }
-    if (refreshSchema) {
+    // A fresh open already admitted the schema; publication below still checks its live receipt.
+    if (refreshSchema && !validation) {
       validation = refreshOpenClawAgentDatabaseSchema(database, admitOpen);
     }
     requestSqliteWorkerOperationAdmission({

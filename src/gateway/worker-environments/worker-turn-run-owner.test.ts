@@ -39,6 +39,7 @@ import {
   createWorkerSessionTurnPlacementProvider,
   createWorkerTurnTunnel,
   placements,
+  reconcileUnchangedLocalWorkspace,
   seedActivePlacement,
   sessionTarget,
   setupWorkerTurnLauncherTest,
@@ -129,10 +130,7 @@ describe("cloud worker run ownership", () => {
       let workerSignal: AbortSignal | undefined;
       const environments = workerTurnEnvironments(
         createWorkerTurnTunnel({
-          quiesceWorkspace: vi.fn(),
-          syncWorkspace: vi.fn(),
-          reconcileWorkspace: vi.fn(),
-          stop: vi.fn(),
+          reconcileWorkspace: reconcileUnchangedLocalWorkspace,
           launchTurn: async (request) => {
             request.onDispatchReady?.();
             workerSignal = request.signal;
@@ -171,44 +169,44 @@ describe("cloud worker run ownership", () => {
         replyOperation: operation,
         abortSignal: operation.abortSignal,
       };
-      const attempt = provider
+      const execution = provider
         .executeTurn(workerTurnRequest(runId), input, vi.fn())
-        .catch((error: unknown) => error)
         .finally(() => operation.complete());
-      await launched.promise;
-      const active = expectDefined(placements.get(SESSION_ID), "expected active placement");
-      const turnClaim = expectDefined(
-        projectWorkerSessionTurnClaim(active),
-        "expected admitted worker turn",
-      );
-      const turnCapability = expectDefined(
-        getWorkerTurnExecutionIdentityCapability(placements, turnClaim),
-        "expected worker turn capability",
-      );
-      const identity: WorkerConnectionIdentity = createWorkerConnectionIdentity(turnClaim, {
-        protocolFeatures: ["worker-live-event-v1"],
-        credentialExpiresAtMs: Date.now() + input.timeoutMs,
-      });
+      const attempt = execution.catch((error: unknown) => error);
       const receiver = createWorkerLiveEventReceiver();
-      const receive = (event: WorkerLiveEventParams["event"], seq: number, sender = identity) =>
-        receiver.apply({
-          readAckedSeq: () => 0,
-          source: turnCapability,
-          identity: sender,
-          request: { runEpoch: OWNER_EPOCH, lastAckedSeq: seq - 1, seq, runId, event },
-        });
-      const acknowledge = async (event: WorkerLiveEventParams["event"], seq: number) => {
-        expect(await receive(event, seq)).toEqual({ ok: true, result: { ackedSeq: seq } });
-      };
-      now = turnStartedAtMs + firstToolDelayMs;
       const previousDiagnostics = areDiagnosticsEnabledForProcess();
-      setDiagnosticsEnabledForProcess(true);
-      logSessionStateChange({
-        sessionId: SESSION_ID,
-        sessionKey: SESSION_KEY,
-        state: "processing",
-      });
       try {
+        await awaitGateBeforeSettlement(launched.promise, execution, "Worker did not dispatch");
+        const active = expectDefined(placements.get(SESSION_ID), "expected active placement");
+        const turnClaim = expectDefined(
+          projectWorkerSessionTurnClaim(active),
+          "expected admitted worker turn",
+        );
+        const turnCapability = expectDefined(
+          getWorkerTurnExecutionIdentityCapability(placements, turnClaim),
+          "expected worker turn capability",
+        );
+        const identity: WorkerConnectionIdentity = createWorkerConnectionIdentity(turnClaim, {
+          protocolFeatures: ["worker-live-event-v1"],
+          credentialExpiresAtMs: Date.now() + input.timeoutMs,
+        });
+        const receive = (event: WorkerLiveEventParams["event"], seq: number, sender = identity) =>
+          receiver.apply({
+            readAckedSeq: () => 0,
+            source: turnCapability,
+            identity: sender,
+            request: { runEpoch: OWNER_EPOCH, lastAckedSeq: seq - 1, seq, runId, event },
+          });
+        const acknowledge = async (event: WorkerLiveEventParams["event"], seq: number) => {
+          expect(await receive(event, seq)).toEqual({ ok: true, result: { ackedSeq: seq } });
+        };
+        now = turnStartedAtMs + firstToolDelayMs;
+        setDiagnosticsEnabledForProcess(true);
+        logSessionStateChange({
+          sessionId: SESSION_ID,
+          sessionKey: SESSION_KEY,
+          state: "processing",
+        });
         if (collisionAt === "progress") {
           collideSessionId();
         }

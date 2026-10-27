@@ -558,11 +558,10 @@
   width: 100%;
 }
 
-.session-actions .icon-btn svg,
-.session-details-toggle svg {
+.session-actions .icon-btn .session-css-icon,
+.session-details-toggle .session-css-icon {
   width: 14px;
   height: 14px;
-  stroke-width: 2px;
 }
 
 .session-key-cell__text {
@@ -751,7 +750,7 @@
     border-color var(--duration-fast) ease;
 }
 
-.session-details-toggle svg {
+.session-details-toggle .session-css-icon {
   transition: transform var(--duration-normal) var(--ease-out);
 }
 
@@ -759,7 +758,7 @@
   color: var(--text);
 }
 
-.session-data-row--expanded .session-details-toggle svg {
+.session-data-row--expanded .session-details-toggle .session-css-icon {
   transform: rotate(180deg);
 }
 

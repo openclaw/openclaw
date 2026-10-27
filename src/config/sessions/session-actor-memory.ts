@@ -163,6 +163,7 @@ export function createMemorySessionActorOwner(
               },
             }),
             snapshot,
+            snapshotEntry: snapshot,
             read: (authority) => enqueue(() => snapshot(authority)),
             command: (phase, input, authority, observer) =>
               enqueue(() => {

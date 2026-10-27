@@ -315,6 +315,7 @@
     "!dist/extensions/byteplus/**",
     "!dist/extensions/buzz/**",
     "!dist/extensions/cerebras/**",
+    "!dist/extensions/liquid-ai/**",
     "!dist/extensions/chutes/**",
     "!dist/extensions/cohere/**",
     "!dist/extensions/comfy/**",

@@ -199,35 +199,6 @@ export function createSkillMenu() {
     });
   }
 
-  function handleSkillMenuKeydown(
-    event: KeyboardEvent,
-    state: SkillMenuState,
-    host: SkillMenuHost,
-  ): boolean {
-    if (!state.skillMenuOpen) {
-      return false;
-    }
-    const items = state.skillCommandRefreshPending ? [] : state.skillMenuItems;
-    return handleComposerMenuKeydown(event, {
-      count: items.length,
-      index: state.skillMenuIndex,
-      consumeEmpty: true,
-      close: () => {
-        resetSkillMenuState(state);
-      },
-      move: (index) => {
-        state.skillMenuIndex = index;
-        return getActiveSkillMenuOptionId(state, host.paneId);
-      },
-      select: () => {
-        const command = items[state.skillMenuIndex];
-        if (command) {
-          selectSkillMention(command, state, host);
-        }
-      },
-    });
-  }
-
   return {
     state: presentation,
     update(value: string, caret: number, host: SkillMenuHost) {
@@ -245,7 +216,28 @@ export function createSkillMenu() {
     handleKeydown(event: KeyboardEvent, host: SkillMenuHost) {
       let handled = false;
       setState((draft) => {
-        handled = handleSkillMenuKeydown(event, draft, host);
+        if (!draft.skillMenuOpen) {
+          return;
+        }
+        const items = draft.skillCommandRefreshPending ? [] : draft.skillMenuItems;
+        handled = handleComposerMenuKeydown(event, {
+          count: items.length,
+          index: draft.skillMenuIndex,
+          consumeEmpty: true,
+          close: () => {
+            resetSkillMenuState(draft);
+          },
+          move: (index) => {
+            draft.skillMenuIndex = index;
+            return getActiveSkillMenuOptionId(draft, host.paneId);
+          },
+          select: () => {
+            const command = items[draft.skillMenuIndex];
+            if (command) {
+              selectSkillMention(command, draft, host);
+            }
+          },
+        });
       });
       return handled;
     },

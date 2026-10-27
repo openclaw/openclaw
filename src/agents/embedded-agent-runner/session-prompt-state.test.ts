@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { canonicalizeSessionEntry } from "../sessions/session-manager-persistence-entry.js";
 import type { SessionEntry } from "../sessions/session-manager-types.js";
 import type { AnyAgentTool } from "../tools/common.js";
+import { createComputerTool } from "../tools/computer-tool.js";
 import {
   clearEmbeddedSessionPromptStates,
   beginSessionSystemPrompt,
@@ -192,6 +193,32 @@ describe("system prompt series", () => {
     expect(updated.update?.content).toBe(`${updateHeading}## Changed\n\ud801`);
     expect(project(second, [], "other-route").systemPrompt).toBe(second);
   });
+
+  it.each(["compaction", "reset"] as const)(
+    "restarts on a new %s, but not when its payload enters or leaves a bounded window",
+    (kind) => {
+      const state = fixture.state;
+      const projectBoundary = (entries: SessionEntry[], historyBoundaryCount: number) => {
+        const result = prepareSessionSystemPrompt({
+          state,
+          routeKey,
+          entries,
+          historyBoundaryCount,
+          systemPrompt: entries.length ? changed : base,
+        });
+        result.commit();
+        return result;
+      };
+      const first = projectBoundary([], 1);
+      expect(projectBoundary([historyEntry(kind, "old")], 1).systemPrompt).toBe(first.systemPrompt);
+      const compacted = projectBoundary([historyEntry(kind, "new")], 2);
+      expect(compacted.restart).toBe(true);
+      expect(compacted.systemPrompt).toBe(changed);
+      expect(projectBoundary([], 2).systemPrompt).toBe(compacted.systemPrompt);
+      beginSessionSystemPrompt({ state, routeKey, enabled: true, getEntries: () => [] });
+      expect(projectBoundary([historyEntry(kind, "different-branch")], 2).restart).toBe(true);
+    },
+  );
 
   it("replaces duplicate-heading groups without ambiguous partial removals", () => {
     project("First.\n## File\nOne.\n## File\nTwo.");
@@ -423,6 +450,40 @@ describe("session tool surface", () => {
     fixture.prepare(prompt, entries).commit();
     await fixture.persist(entries);
   }
+
+  it.each([false, true])(
+    "pins initial computer capabilities across turns (restored=%s)",
+    async (restored) => {
+      const entries: SessionEntry[] = [];
+      const first = createComputerTool({
+        pairedNodeComputerUse: { actions: ["screenshot", "list_windows"] },
+      });
+      const initial = JSON.stringify(definitions(surface([first])));
+      expect(initial).toBe(JSON.stringify(definitions([first])));
+      await persist(entries);
+      if (restored) {
+        fixture.reload();
+      }
+      const current = createComputerTool({
+        pairedNodeComputerUse: {
+          actions: ["launch_app"],
+          gateway: { configured: false, available: false },
+        },
+      });
+      expect(JSON.stringify(definitions([current]))).not.toBe(initial);
+      const next = surface([current], entries);
+      expect(JSON.stringify(definitions(next))).toBe(initial);
+      expect(next[0]!.execute).toBe(current.execute);
+      const unavailable = surface([], entries);
+      expect(JSON.stringify(definitions(unavailable))).toBe(initial);
+      expect((await unavailable[0]!.execute("unavailable", {})).details).toMatchObject({
+        gated: true,
+      });
+      expect(definitions(surface([current], entries, routeKey, "new-provider-config"))).toEqual(
+        definitions([current]),
+      );
+    },
+  );
 
   it("reuses admitted tool payloads when checkpointing a changed prompt", async () => {
     const entries: SessionEntry[] = [];

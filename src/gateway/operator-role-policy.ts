@@ -18,6 +18,7 @@ type OperatorRolePolicyChange =
   | { kind: "assignment"; profileId: string }
   | { kind: "config"; context: object };
 const policyListeners = new Set<(change: OperatorRolePolicyChange) => void>();
+const configRevisions = new WeakMap<object, object>();
 let assignmentRevision = 0;
 const deniedOperatorRole: GatewayOperatorRoleDefinition = {
   sessions: { others: "none" },
@@ -55,8 +56,14 @@ export function onOperatorRolePolicyChanged(
 /** Called after this Gateway's committed runtime reader advances, never at tentative activation. */
 export function publishOperatorRoleConfigChange(context: object | undefined): void {
   if (context) {
+    configRevisions.set(context, {});
     notifyListeners([...policyListeners], { kind: "config", context });
   }
+}
+
+/** Committed publications invalidate prepared policy even when config identity is retained. */
+export function readOperatorRoleConfigRevision(context: object): object | undefined {
+  return configRevisions.get(context);
 }
 
 export function readOperatorRolePolicyRevision(): number {

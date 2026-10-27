@@ -29,6 +29,10 @@ By default, delivery depends on requester depth:
 - Nested requester subagent sessions receive an internal follow-up injection (`deliver=false`) so the orchestrator can synthesize child results in-session.
 - If a nested requester subagent session is gone, OpenClaw falls back to that session's requester when available.
 
+Completion follow-up turns retain the requester's authority, including
+session-scoped write access. Gateway admission still checks access to the selected
+requester session; a child completion does not grant global write access.
+
 The requester turn's captured origin owns completion routing, including after
 `sessions_yield` and for child pause notices. A WebChat origin does not inherit a
 previous external destination from the session. Without a captured origin, the

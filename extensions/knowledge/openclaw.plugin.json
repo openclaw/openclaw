@@ -60,18 +60,15 @@
             "minLength": 1,
             "maxLength": 100,
             "description": "IANA time zone for the schedule. Default: the Gateway host's time zone."
-          },
-          "reviewJobId": {
-            "type": "string",
-            "minLength": 1,
-            "maxLength": 100,
-            "description": "Automation run after each maintenance pass that leaves private claims reachable from no page. Its agent turn follows the knowledge-unlinked-claims skill. Disable the automation to pause the review."
           }
         },
         "additionalProperties": false
       }
     },
     "additionalProperties": false
+  },
+  "doctorContract": {
+    "configRepair": true
   },
   "activation": {
     "onStartup": true

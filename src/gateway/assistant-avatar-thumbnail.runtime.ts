@@ -1,5 +1,4 @@
 import { normalizeMimeType } from "@openclaw/media-core/mime";
-import { fileTypeFromBuffer } from "file-type";
 import { createImageProcessor, isAnimatedWebpBuffer } from "../media/image-ops.js";
 import { isAvatarImageMimeType, isRenderableAvatarImageDataUrl } from "../shared/avatar-limits.js";
 import { AVATAR_MAX_BYTES, resolveAvatarMime } from "../shared/avatar-policy.js";
@@ -46,6 +45,7 @@ async function createAvatarThumbnail(
   }
   // Preserve animation/vector bytes; Rastermill's PNG output contains only one frame.
   if (["image/png", "image/jpeg", "image/webp"].includes(mime)) {
+    const { fileTypeFromBuffer } = await import("file-type");
     const detectedMime = (await fileTypeFromBuffer(body))?.mime;
     if (detectedMime === "image/apng" || isAnimatedWebpBuffer(body)) {
       return createHttpImageRepresentation(body, contentType);

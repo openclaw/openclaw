@@ -1,4 +1,5 @@
 import type { ApplicationContext } from "../../ui/src/app/context.ts";
+import type { ReloadAnimationSample } from "./warm-reload-frames.ts";
 
 export const proofRegions = {
   sidebar: "aside.sidebar",
@@ -28,6 +29,10 @@ export function installWarmReloadBrowserProbe(route: string) {
     loaf: [] as Array<{ atMs: number; durationMs: number; blockingMs: number }>,
     shifts: [] as Array<{ atMs: number; value: number }>,
     domStates: [] as Array<{ atMs: number; rows: number; sidebarRows: number; board: boolean }>,
+    animationSamples: [] as ReloadAnimationSample[],
+    animationProbeMs: 0,
+    animationPolicy:
+      "Recognized skeleton shimmer or opacity/visibility-only fades with at most 64 elements; fades containing images, canvas, video or iframes are excluded. Signatures retain content, attributes, appearance and geometry, except intermediate opacity. No whole-page animation mask.",
     masks: [] as Array<{
       name: string;
       reason: string;
@@ -142,7 +147,9 @@ export function installWarmReloadBrowserProbe(route: string) {
   };
   window.addEventListener("context-provider", receiveContext);
   window.addEventListener("pagehide", () => stopGateway?.(), { once: true });
+  let domVersion = 0;
   const textObserver = new MutationObserver((records) => {
+    domVersion++;
     for (const record of records) {
       for (const node of record.addedNodes) {
         const element = node instanceof Element ? node : node.parentElement;
@@ -167,7 +174,135 @@ export function installWarmReloadBrowserProbe(route: string) {
       }
     }
   });
-  textObserver.observe(document, { childList: true, subtree: true });
+  textObserver.observe(document, {
+    childList: true,
+    subtree: true,
+    attributes: true,
+    characterData: true,
+  });
+  document.fonts.addEventListener("loadingdone", () => domVersion++);
+  const hash = (text: string) => {
+    let value = 2166136261;
+    for (let index = 0; index < text.length; index++) {
+      value = Math.imul(value ^ text.charCodeAt(index), 16777619);
+    }
+    return (value >>> 0).toString(16);
+  };
+  const trackedAnimations = new Map<
+    Animation,
+    {
+      target: Element;
+      key: string;
+      kind: "shimmer" | "fade";
+      version?: number;
+      value?: ReloadAnimationSample["animations"][number];
+    }
+  >();
+  let nextAnimationId = 0;
+  let previousAnimationSample = "";
+  const sampleAnimations = () => {
+    const started = performance.now();
+    for (const animation of document.getAnimations()) {
+      if (
+        trackedAnimations.has(animation) ||
+        !(animation.effect instanceof KeyframeEffect) ||
+        !(animation.effect.target instanceof Element)
+      ) {
+        continue;
+      }
+      const target = animation.effect.target;
+      const properties = new Set(
+        animation.effect
+          .getKeyframes()
+          .flatMap((frame) =>
+            Object.keys(frame).filter(
+              (key) => !["offset", "computedOffset", "easing", "composite"].includes(key),
+            ),
+          ),
+      );
+      const shimmer =
+        animation instanceof CSSAnimation &&
+        /shimmer|skeleton-sweep/u.test(animation.animationName) &&
+        /skeleton/u.test(target.className);
+      const fade =
+        properties.size > 0 &&
+        [...properties].every((key) => key === "opacity" || key === "visibility");
+      if (
+        (!shimmer && !fade) ||
+        target.querySelectorAll("*").length > 63 ||
+        target.matches("img,canvas,video,iframe") ||
+        target.querySelector("img,canvas,video,iframe")
+      ) {
+        continue;
+      }
+      trackedAnimations.set(animation, {
+        target,
+        key: hash(`${performance.timeOrigin}:${nextAnimationId++}`),
+        kind: shimmer ? "shimmer" : "fade",
+      });
+    }
+    const animations: ReloadAnimationSample["animations"] = [];
+    for (const [animation, tracked] of trackedAnimations) {
+      if (!tracked.target.isConnected) {
+        trackedAnimations.delete(animation);
+        continue;
+      }
+      const active = animation.playState === "running" || animation.pending;
+      if (!tracked.value || active || tracked.value.active || tracked.version !== domVersion) {
+        const elements = [tracked.target, ...tracked.target.querySelectorAll("*")];
+        const box = tracked.target.getBoundingClientRect();
+        const appearance = elements
+          .map((element) => {
+            const rect = element.getBoundingClientRect();
+            const style = getComputedStyle(element);
+            return (
+              [rect.x, rect.y, rect.width, rect.height].map((value) => value.toFixed(2)).join(",") +
+              [
+                style.display,
+                style.visibility,
+                Number(style.opacity) > 0,
+                style.color,
+                style.backgroundColor,
+                style.backgroundImage,
+                style.font,
+                style.letterSpacing,
+                style.lineHeight,
+                style.textDecoration,
+                style.borderColor,
+                style.borderWidth,
+                style.borderRadius,
+                style.padding,
+                style.boxShadow,
+                style.filter,
+                style.outline,
+                style.fill,
+                style.stroke,
+              ].join(";")
+            );
+          })
+          .join("|");
+        tracked.value = {
+          name: tracked.kind,
+          key: tracked.key,
+          signature: hash(tracked.target.outerHTML + appearance),
+          kind: tracked.kind,
+          active,
+          x: Math.floor(box.x),
+          y: Math.floor(box.y),
+          width: Math.ceil(box.width),
+          height: Math.ceil(box.height),
+        };
+        tracked.version = domVersion;
+      }
+      animations.push(tracked.value);
+    }
+    const serialized = JSON.stringify(animations);
+    if (serialized !== previousAnimationSample) {
+      data.animationSamples.push({ atMs: performance.now(), animations });
+      previousAnimationSample = serialized;
+    }
+    data.animationProbeMs += performance.now() - started;
+  };
   const maskKeys = new Set<string>();
   const addMask = (
     name: string,
@@ -196,6 +331,7 @@ export function installWarmReloadBrowserProbe(route: string) {
       textObserver.disconnect();
       return;
     }
+    sampleAnimations();
     const rowElements = [...document.querySelectorAll(".chat-virtual-row")];
     const rows = rowElements.length;
     const sidebarRows = document.querySelectorAll("openclaw-app-sidebar [data-session-key]").length;

@@ -8,7 +8,7 @@ title: "Exec tool"
 
 Run shell commands in the workspace. `exec` is a mutating shell surface: commands can create, edit, or delete files wherever the selected host or sandbox filesystem permits. Disabling OpenClaw filesystem tools such as `write`, `edit`, or `apply_patch` does not make `exec` read-only.
 
-Gateway, sandbox, and worker-local execution support foreground and background execution via `process`. Remote `host=node` execution uses synchronous `system.run` and never creates a `process` session, even when `process` is enabled. If `process` is disallowed, local `exec` also runs synchronously and ignores `yieldMs`/`background`. Background sessions are scoped per agent. `process` only sees sessions from the same agent.
+Gateway, sandbox, and worker-local execution support foreground and background execution via `process`. Remote `host=node` execution uses synchronous `system.run` and never creates a `process` session, even when `process` is enabled. If `process` is disallowed, local `exec` also runs synchronously and ignores `yieldMs`/`background`. Background sessions are scoped to their originating session. Child sessions can also manage ancestor processes within the same agent; unrelated session trees and other agents cannot access them.
 
 Completed calls return command output directly. Use `process` only when `exec` reports that a command is still running and provides a `sessionId`; an identifier printed by the command is ordinary output, not a process handle.
 

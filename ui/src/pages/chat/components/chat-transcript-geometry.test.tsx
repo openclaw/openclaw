@@ -78,6 +78,7 @@ it("reserves only the matching width and appearance, including text scale, width
       cachedKey ??= key;
       return key === cachedKey ? 300 : undefined;
     },
+    readRows: () => undefined,
     write: vi.fn(),
     writeRows: vi.fn(),
     invalidateRow: vi.fn(),
@@ -214,8 +215,8 @@ it.each(["chat-bubble-activity", "", "code-block-expand", "code-block-wrap", "ra
       virtualizer.measureElement(row);
       emitTranscriptResize(row, 768, 100);
       expect(write).not.toHaveBeenCalled();
-      layout.persistRows(virtualizer);
-      layout.persistRows(virtualizer);
+      layout.persistRows(virtualizer, false);
+      layout.persistRows(virtualizer, false);
       expect(frames).toHaveLength(1);
       frames.shift()!(0);
       expect(write).not.toHaveBeenCalled();
@@ -241,7 +242,7 @@ it.each(["chat-bubble-activity", "", "code-block-expand", "code-block-wrap", "ra
         disclosure.open = true;
       }
       emitTranscriptResize(row, 768, 300);
-      layout.persistRows(virtualizer);
+      layout.persistRows(virtualizer, false);
       frames.shift()!(0);
       idle.shift()!({ didTimeout: false, timeRemaining: () => 50 });
       expect(write).toHaveBeenCalledTimes(1);
@@ -255,7 +256,7 @@ it.each(["chat-bubble-activity", "", "code-block-expand", "code-block-wrap", "ra
       emitTranscriptResize(row, 768, 100);
       const savedKey = Object.keys(write.mock.calls[0]![1].widgetHeights)[0]!;
       expect(createChatWidgetLayout()(cache, host, target).read(savedKey)).toBe(100);
-      layout.persistRows(virtualizer);
+      layout.persistRows(virtualizer, false);
       frames.shift()!(0);
       layout.disconnect();
       idle.shift()!({ didTimeout: false, timeRemaining: () => 50 });

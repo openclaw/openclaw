@@ -6,11 +6,12 @@ import { resolveRetryAfterMs } from "../../failover/retry-evidence.js";
 const mocks = vi.hoisted(() => ({
   sleepWithAbort: vi.fn(async (_ms: number, _abortSignal?: AbortSignal): Promise<void> => {}),
   warn: vi.fn((_message: string) => {}),
+  error: vi.fn(),
 }));
 
 vi.mock("../logger.js", async () => {
   const actual = await vi.importActual<typeof import("../logger.js")>("../logger.js");
-  return { ...actual, log: { ...actual.log, warn: mocks.warn } };
+  return { ...actual, log: { ...actual.log, warn: mocks.warn, error: mocks.error } };
 });
 
 vi.mock("../../../infra/backoff.js", async () => {
@@ -72,7 +73,21 @@ beforeEach(() => {
   onRetry.mockReset();
   sleep.mockReset().mockResolvedValue(undefined);
   warn.mockClear();
+  mocks.error.mockClear();
   rotationContext.logFallbackDecision.mockClear();
+});
+
+it("does not announce or schedule a retry after the reply watchdog stops the operation", async () => {
+  const abort = new AbortController();
+  const error = Object.assign(new Error("Reply operation stalled"), {
+    name: "AbortError",
+    code: "OPENCLAW_SESSION_WATCHDOG",
+  });
+  controller = createRetryController({ runParams: { abortSignal: abort.signal } });
+  abort.abort(error);
+  await expect(controller.maybeRetryTransient({ reason: "timeout", onRetry })).rejects.toBe(error);
+  expectNoRetry();
+  expect(warn).not.toHaveBeenCalled();
 });
 
 it("reports the one output-limit continuation independently of transient attempts", async () => {
@@ -117,6 +132,11 @@ it.each([
   }
   await checkRetry({ reason: "rate_limit" }, false);
   expect(controller.rateLimitRetriesExhausted).toBe(15);
+  expect(warn).not.toHaveBeenCalled();
+  expect(mocks.error).toHaveBeenCalledExactlyOnceWith(
+    "same-model retries exhausted",
+    expect.objectContaining({ reason: "rate_limit", retries: 15 }),
+  );
   expect(sleep.mock.calls.map(([delay]) => delay)).toEqual(delays);
 });
 
@@ -203,6 +223,42 @@ it("waits for the provider floor before exhausting recovery and rotating credent
     status: 429,
   });
   expect(advance).toHaveBeenCalledTimes(1);
+});
+
+it("bounds shared TPM recovery before model fallback by retries and elapsed waiting", async () => {
+  const advanceTime = clock();
+  vi.spyOn(Math, "random").mockReturnValue(0.5);
+  sleep.mockImplementation(async (delayMs) => advanceTime(delayMs));
+  const advance = vi.fn(async () => true);
+  controller = createRetryController({
+    fallbackConfigured: true,
+    runtime: { advanceAttemptAuthProfile: advance },
+  });
+  const retry = {
+    reason: "rate_limit" as const,
+    message:
+      "429 Rate limit reached for mock-primary in organization org-example on tokens per min (TPM). Please try again in 48ms.",
+    retryAfterMs: 48,
+    failoverEligible: true,
+  };
+  await checkRetry(retry);
+  const queuedRetry = {
+    ...retry,
+    message: "429 Shared organization token rate limit wait budget.",
+  };
+  await checkRetry(queuedRetry);
+  await checkRetry(queuedRetry, false);
+  await expect(rotate()).resolves.toBe(false);
+  expect(advance).not.toHaveBeenCalled();
+  expect(sleep.mock.calls.map(([delay]) => delay)).toEqual([1_000, 2_000]);
+  // A later attempt that cannot safely switch models retains ordinary recovery.
+  await checkRetry({ ...retry, failoverEligible: false });
+  expect(sleep).toHaveBeenLastCalledWith(4_000, undefined);
+
+  controller.observeAttempt({ hasSuccessfulModelResponse: true });
+  await checkRetry({ ...retry, retryAfterMs: 10_000 });
+  await checkRetry({ ...retry, retryAfterMs: 10_000 }, false);
+  expect(sleep).toHaveBeenCalledTimes(4);
 });
 
 it.each([

@@ -1,6 +1,6 @@
 import { expect, it, vi } from "vitest";
 import { connections } from "./connections.js";
-import { markdown, extractLinks, resolveLinks, wikiHref } from "./markdown-links.js";
+import { markdown, resolveLinks } from "./markdown-links.js";
 import { effectiveRecord } from "./merge.js";
 import type { Envelope, LoadedRecord } from "./model.js";
 import { recordPath } from "./record-path.js";
@@ -43,7 +43,7 @@ it("keeps a live record's link parse warm across unrelated document churn", () =
     expect(lexer).not.toHaveBeenCalled();
     source.body = "[[changed cache owner]]";
     expect(resolveLinks(source, candidates)).toEqual([
-      { href: wikiHref("changed cache owner"), status: "missing" },
+      { href: "#wiki=changed%20cache%20owner", status: "missing" },
     ]);
     expect(lexer).toHaveBeenCalledOnce();
   } finally {
@@ -61,17 +61,17 @@ it("shares link extraction with merged projections before their first parse", ()
   const lexer = vi.spyOn(markdown, "lexer");
   try {
     expect(resolveLinks(effectiveRecord(source, redirects), candidates)).toEqual([
-      { href: wikiHref("Target"), status: "resolved", id: "target" },
+      { href: "#wiki=Target", status: "resolved", id: "target" },
     ]);
     resolveLinks(effectiveRecord(source, redirects), candidates);
     resolveLinks(source, candidates);
     expect(lexer).toHaveBeenCalledOnce();
     const projection = effectiveRecord(source, redirects);
     expect(resolveLinks({ ...projection, body: "[[Changed]]" }, candidates)).toEqual([
-      { href: wikiHref("Changed"), status: "missing" },
+      { href: "#wiki=Changed", status: "missing" },
     ]);
     expect(resolveLinks(source, candidates)).toEqual([
-      { href: wikiHref("Target"), status: "resolved", id: "target" },
+      { href: "#wiki=Target", status: "resolved", id: "target" },
     ]);
   } finally {
     lexer.mockRestore();
@@ -109,11 +109,9 @@ it("revalidates unsettled files while reusing links only for unchanged bytes", a
 it("Markdown tokenization excludes code, escapes, HTML, images and generated backlinks", () => {
   const body =
     '[Alex](../people/alex.md) [[Alex|A]]\n\n`[[Code]]`\n\n```md\n[[Fence]]\n```\n\n    [[Indent]]\n\n\\[[Escape]]\n\n<a href="people/html.md">HTML</a> ![image](people/image.md)\n\n<!-- backlinks:start -->\n[[Generated]]\n<!-- backlinks:end -->\n\n[ref][person]\n\n[person]: people/alex.md';
-  expect(extractLinks(body)).toStrictEqual([
-    "../people/alex.md",
-    wikiHref("Alex"),
-    "people/alex.md",
-  ]);
+  expect(
+    resolveLinks(record("source", "Source", "source.md", body), []).map(({ href }) => href),
+  ).toStrictEqual(["../people/alex.md", "#wiki=Alex", "people/alex.md"]);
 });
 it("comments are invisible while code examples and other HTML stay escaped", () => {
   const source =
@@ -125,22 +123,34 @@ it("comments are invisible while code examples and other HTML stay escaped", () 
   expect(rendered).toMatch(/&lt;!-- fenced example --&gt;/);
   expect(rendered).toMatch(/&lt;!-- escaped example --&gt;/);
   expect(rendered).toMatch(/&lt;script&gt;unsafe/);
-  expect(extractLinks(source)).toStrictEqual([]);
+  expect(
+    resolveLinks(record("source", "Source", "source.md", source), []).map(({ href }) => href),
+  ).toStrictEqual([]);
 });
 
 it("backlink markers inside code do not suppress subsequent authored links", () => {
-  expect(extractLinks("```html\n<!-- backlinks:start -->\n```\n\n[[Alex]]")).toStrictEqual([
-    wikiHref("Alex"),
-  ]);
+  expect(
+    resolveLinks(
+      record("source", "Source", "source.md", "```html\n<!-- backlinks:start -->\n```\n\n[[Alex]]"),
+      [],
+    ).map(({ href }) => href),
+  ).toStrictEqual(["#wiki=Alex"]);
 });
 it("links in one block longer than the regexp backtracking cap are still found", () => {
   // About 120,000 lines without a blank line; JavaScriptCore stops matching one
   // paragraph after roughly 49,000 lines.
   const lines = "Capacity needle paragraph with Unicode é.\n".repeat(120_000);
-  expect(extractLinks(`[[Start]]\n${lines}see [end](end.md) and\n\`[[code]]\``)).toStrictEqual([
-    wikiHref("Start"),
-    "end.md",
-  ]);
+  expect(
+    resolveLinks(
+      record(
+        "source",
+        "Source",
+        "source.md",
+        `[[Start]]\n${lines}see [end](end.md) and\n\`[[code]]\``,
+      ),
+      [],
+    ).map(({ href }) => href),
+  ).toStrictEqual(["#wiki=Start", "end.md"]);
 });
 it("current path, title, alias and old ID paths resolve; ambiguity never chooses an arbitrary target", () => {
   const alex = record("a", "Alex Rivera", "people/alex-rivera.md", "", { aliases: ["Alex"] }),

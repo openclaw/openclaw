@@ -48,11 +48,9 @@ type Body = {
   input: Array<Partial<Record<"role" | "type" | "call_id" | "output", string>>>;
 };
 type Step = { step: number; plugin: string; generation: number; atMs: number };
-type Scenario = {
-  name: string;
-  plugins: Array<{ id: string; turnHandover: boolean }>;
-  handsOver: boolean;
-};
+type Plugin = { id: string; turnHandover: boolean; contextEngine?: boolean };
+type Scenario = { name: string; plugins: Plugin[]; handsOver: boolean };
+type EngineEvent = { event: string; generation: number; atMs: number; toolResults?: number };
 
 function writeToolCall(response: ServerResponse, name: string, id: string) {
   const item = {
@@ -77,7 +75,22 @@ function writeToolCall(response: ServerResponse, name: string, id: string) {
   ]);
 }
 
-async function writePlugin(home: string, id: string, turnHandover: boolean, counts: string) {
+// A durable context engine that logs each lifecycle call with the generation that served it.
+function contextEngineSource(id: string, events: string): string {
+  return ` const log = (event, extra) => fs.appendFileSync(${JSON.stringify(events)}, JSON.stringify({ event, generation, atMs: Date.now(), ...extra }) + "\\n");
+ api.registerContextEngine(${JSON.stringify(id)}, () => ({
+  info: { id: ${JSON.stringify(id)}, name: "Engine proof", transcriptSemantics: { currentTurnFence: "before-current-turn-entry-v1", turnAdvancementIdempotency: "atomic-idempotent-v1" } },
+  async ingest() { return { ingested: false }; },
+  async assemble({ messages }) { log("assemble"); return { messages, estimatedTokens: 0 }; },
+  async compact() { return { ok: true, compacted: false }; },
+  async commitTurn({ messages }) { log("commitTurn", { toolResults: messages.filter((m) => m.role === "toolResult").length }); return { status: "committed" }; },
+  async maintain() { log("maintain"); return { changed: false, bytesFreed: 0, rewrittenEntries: 0 }; },
+  async dispose() { log("dispose"); },
+ }));`;
+}
+
+async function writePlugin(home: string, plugin: Plugin, counts: string, events: string) {
+  const { id, turnHandover } = plugin;
   const root = path.join(home, id);
   const tool = id.replaceAll("-", "_") + "_step";
   await fs.mkdir(root, { recursive: true });
@@ -101,6 +114,7 @@ async function writePlugin(home: string, id: string, turnHandover: boolean, coun
  const generation = fs.existsSync(file) ? Number(fs.readFileSync(file, "utf8")) + 1 : 1;
  fs.writeFileSync(file, String(generation));
  api.on("agent_end", () => { fs.appendFileSync(${JSON.stringify(counts)}, "agent_end\\n"); });
+${plugin.contextEngine ? contextEngineSource(id, events) : ""}
  api.registerTool({ name: ${JSON.stringify(tool)}, label: "Step", description: "Slow step", parameters: { type: "object", properties: {} },
   async execute() { await new Promise((r) => setTimeout(r, ${STEP_MS}));
    return { content: [{ type: "text", text: JSON.stringify({ plugin: ${JSON.stringify(id)}, generation }) }] }; } },
@@ -121,6 +135,11 @@ const scenarios: Scenario[] = [
     ],
     handsOver: false,
   },
+  {
+    name: "declared context engine",
+    plugins: [{ id: "engine-proof", turnHandover: true, contextEngine: true }],
+    handsOver: true,
+  },
 ];
 
 it.for(scenarios)(
@@ -133,11 +152,13 @@ it.for(scenarios)(
     const bundledPluginsDir = path.join(home, "empty-bundled");
     const configPath = path.join(stateDir, "openclaw.json");
     const counts = path.join(home, "hooks.log");
+    const events = path.join(home, "engine.log");
+    const engineId = plugins.find((plugin) => plugin.contextEngine)?.id;
     await Promise.all(
       [stateDir, workspaceDir, bundledPluginsDir].map((dir) => fs.mkdir(dir, { recursive: true })),
     );
     const written = await Promise.all(
-      plugins.map((plugin) => writePlugin(home, plugin.id, plugin.turnHandover, counts)),
+      plugins.map((plugin) => writePlugin(home, plugin, counts, events)),
     );
     const sessionKey = "agent:main:dashboard:" + randomUUID();
     const token = randomUUID();
@@ -235,7 +256,7 @@ it.for(scenarios)(
           enabled: true,
           allow: written.map(({ id }) => id),
           load: { paths: written.map(({ root }) => root) },
-          slots: { memory: "none" },
+          slots: { memory: "none", ...(engineId ? { contextEngine: engineId } : {}) },
           // External plugins need explicit consent to observe agent_end.
           entries: Object.fromEntries(
             written.map(({ id }) => [
@@ -329,6 +350,14 @@ it.for(scenarios)(
           reloadSettledBeforeReply: reloadSettledAt < deliveredAt,
           steps: steps.map(({ plugin, generation, atMs }) => `${plugin}@${generation}+${atMs}ms`),
           agentEnds: await agentEnds(),
+          engine: (engineId ? await fs.readFile(events, "utf8") : "")
+            .split("\n")
+            .filter(Boolean)
+            .map((line) => JSON.parse(line) as EngineEvent)
+            .map(({ event, generation, atMs, toolResults }) => {
+              const at = `${event}@${generation}+${atMs - startedAt}ms`;
+              return toolResults === undefined ? at : `${at}:${toolResults}`;
+            }),
         };
         const proof = "turn-handover proof " + JSON.stringify(summary);
         console.log(proof);
@@ -358,6 +387,30 @@ it.for(scenarios)(
           expect(summary.reloadSettledBeforeReply, proof).toBe(false);
           expect(
             later.every(({ plugin, generation }) => generation === firstGeneration.get(plugin)),
+            proof,
+          ).toBe(true);
+        }
+        if (engineId) {
+          // The new generation's engine owns the turn's end: it commits the whole turn,
+          // both generations' steps, once, then runs its turn maintenance once. Each
+          // engine also bootstraps when its attempt starts. The old engine was released
+          // mid-turn, before the reload could finish.
+          const commits = summary.engine.filter((entry) => entry.startsWith("commitTurn@"));
+          expect(commits, proof).toEqual([
+            expect.stringMatching(new RegExp(`^commitTurn@2\\+\\d+ms:${STEPS}$`)),
+          ]);
+          const afterCommit = summary.engine.slice(summary.engine.indexOf(commits[0]!) + 1);
+          expect(
+            afterCommit.filter((entry) => entry.startsWith("maintain@")),
+            proof,
+          ).toEqual([expect.stringMatching(/^maintain@2\+/)]);
+          const disposedAt = summary.engine.find((entry) => entry.startsWith("dispose@1+"));
+          expect(disposedAt, proof).toBeDefined();
+          expect(Number(/\+(\d+)ms/.exec(disposedAt!)![1]), proof).toBeLessThan(
+            reloadSettledAt - startedAt,
+          );
+          expect(
+            summary.engine.some((entry) => entry.startsWith("assemble@2+")),
             proof,
           ).toBe(true);
         }

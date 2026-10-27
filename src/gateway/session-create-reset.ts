@@ -75,6 +75,7 @@ async function resetGatewaySessionForCreation(
   const execCwd = normalizeOptionalString(params.execCwd);
   const resetResult = await performGatewaySessionReset({
     key: canonicalParentSessionKey,
+    operatorAuthority: (await params.operatorAuthority)?.authority,
     ...(parentSelectedAgentId ? { agentId: parentSelectedAgentId } : {}),
     ...(params.requestingOperatorProfileId
       ? { requestingOperatorProfileId: params.requestingOperatorProfileId }

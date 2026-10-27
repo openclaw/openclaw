@@ -17,8 +17,15 @@ import {
 } from "./session-identity-projection.js";
 import { retainSessionListBaseMiss } from "./session-list-diagnostics.js";
 import type { SessionEntrySelection, SessionListFilteredEntries } from "./session-list-filters.js";
-import type { SessionListView } from "./session-list-view-cache.js";
-import { tryResolveSessionCompatibilityOwnerAgentId } from "./session-request-agent.js";
+import {
+  shareSessionRowFacts,
+  sessionRowFactEncodingBytes,
+  type SessionListView,
+} from "./session-list-view-cache.js";
+import {
+  resolveRequestedSessionAgentId,
+  tryResolveSessionCompatibilityOwnerAgentId,
+} from "./session-request-agent.js";
 import {
   sessionRowId,
   sessionRowsRevision,
@@ -26,6 +33,8 @@ import {
 } from "./session-row-identity.js";
 import {
   projectPreparedSessionRunState,
+  toProjectedSessionSharingTarget,
+  prepareLinkedSessionEntryFilter,
   type SessionRowReadView,
 } from "./session-row-prepared-read.js";
 import type * as records from "./session-row-projection-record.js";
@@ -78,111 +87,6 @@ function sameFacts(previous: readonly unknown[] | undefined, current: readonly u
   return true;
 }
 
-function toProjectedSessionSharingTarget(record: records.MaterializedRow): SessionSharingTarget {
-  return {
-    agentId: record.agentId,
-    canonicalKey: record.key,
-    entry: record.entry,
-    storeKey: record.key,
-    storeKeys: [record.key],
-    storePath: record.storeTarget.storePath,
-  };
-}
-
-/** Immutable row identities own field preparation; fact indexes stay response-local. */
-function createSessionRowFactSharing<T extends GatewaySessionRow>() {
-  type Fact = { encoded: string; fact: Partial<T>; rows: number | number[] };
-  const prepared = new WeakMap<T, { facts: Fact[]; bytes: number; rawBytes: number }>();
-  const share = (sessions: T[]) => {
-    // Empty and single-row deltas cannot share facts; keep their prepared wire rows.
-    if (sessions.length < 2) {
-      return { sessions, sharedFacts: [] };
-    }
-    type SharedFact = { fact: Partial<T>; rows: number[] };
-    const candidates = new Map<string, Fact>();
-    const rows: GatewaySessionRow[] = [];
-    sessions.forEach((row, index) => {
-      const { key, kind, updatedAt, sessionId, rowMode } = row;
-      const required = { key, kind, updatedAt, sessionId, rowMode };
-      rows.push(required);
-      let facts = prepared.get(row)?.facts;
-      if (!facts) {
-        facts = [];
-        let bytes = 0;
-        for (const field in row) {
-          const value = row[field];
-          // Keep required fields and the projection marker readable without expanding the table.
-          if (
-            value === undefined ||
-            ["key", "kind", "updatedAt", "sessionId", "rowMode"].includes(field)
-          ) {
-            continue;
-          }
-          const fact: Partial<T> = {};
-          fact[field] = value;
-          const encoded = JSON.stringify(fact);
-          facts.push({ encoded, fact, rows: 0 });
-          bytes += encoded.length * 2;
-        }
-        // Reserve a possible singleton delta without retaining its unused raw JSON.
-        // Each optional one-field object contributes its property and one comma.
-        const rawBytes = JSON.stringify(required).length * 2 + bytes - facts.length * 2;
-        prepared.set(row, { facts, bytes, rawBytes });
-      }
-      for (const fact of facts) {
-        const candidate = candidates.get(fact.encoded);
-        if (candidate) {
-          if (typeof candidate.rows === "number") {
-            candidate.rows = [candidate.rows, index];
-          } else {
-            candidate.rows.push(index);
-          }
-        } else {
-          fact.rows = index;
-          candidates.set(fact.encoded, fact);
-        }
-      }
-    });
-    // Facts with the same recipients share one reference, including common scalar defaults.
-    const groups = new Map<string, SharedFact>();
-    for (const candidate of candidates.values()) {
-      const recipients = candidate.rows;
-      // Recipient scratch belongs to this response, never to the retained row facts.
-      candidate.rows = 0;
-      if (typeof recipients === "number") {
-        Object.assign(rows[recipients]!, candidate.fact);
-        continue;
-      }
-      const key = recipients.join(",");
-      const group = groups.get(key);
-      if (group) {
-        Object.assign(group.fact, candidate.fact);
-      } else {
-        groups.set(key, { fact: { ...candidate.fact }, rows: recipients });
-      }
-    }
-    const sharedFacts: Partial<T>[] = [];
-    for (const group of groups.values()) {
-      const reference = sharedFacts.push(group.fact) - 1;
-      for (const index of group.rows) {
-        (rows[index]!.sharedFacts ??= []).push(reference);
-      }
-    }
-    return { sessions: rows, sharedFacts };
-  };
-  return {
-    share,
-    encodingBytes: (row: T) => {
-      const retained = prepared.get(row);
-      return retained
-        ? retained.bytes + Math.max(0, retained.rawBytes - sessionRowEncodingBytes(row))
-        : 0;
-    },
-  };
-}
-
-const { share: shareSessionRowFacts, encodingBytes: sessionRowFactEncodingBytes } =
-  createSessionRowFactSharing<GatewaySessionRow>();
 const sharedLists = new WeakMap<
   GatewaySessionRow[],
   ReturnType<typeof shareSessionRowFacts> & { rowsRevision: string }
@@ -333,6 +237,11 @@ export function prepareProjectedSessionPresentation(
   const profileId = profile
     ? projectSessionParticipant({ type: "profile", id: profile.id }, profiles).identity.id
     : undefined;
+  const canReadLinkedEntry = prepareLinkedSessionEntryFilter(
+    projection,
+    sharing.entryFilter,
+    sharing.identity?.id,
+  );
   const listView = (opts: SessionsListParams, selection = false): SessionListView => {
     const { source: _source, ifRowsRevision: _ifRowsRevision, ...query } = opts;
     if (selection) {
@@ -345,7 +254,8 @@ export function prepareProjectedSessionPresentation(
       client === undefined,
       sharing.getCacheKey(),
       presentFastMode("ultrafast"),
-      Object.entries(query).toSorted(([left], [right]) => left.localeCompare(right)),
+      // oxlint-disable-next-line unicorn/no-array-sort -- Object.entries creates a private array.
+      Object.entries(query).sort(([left], [right]) => left.localeCompare(right)),
     ]);
     return publicationState?.lists.get(key) ?? { key, refs: 0, bytes: 0, historyRefs: 0 };
   };
@@ -414,17 +324,24 @@ export function prepareProjectedSessionPresentation(
     let excludedChildKeys = options.excludedChildKeys;
     if (!excludedChildKeys && entryFilter) {
       let excluded: Set<string> | undefined;
-      for (const { key, entry } of record.materialized.source.childLinks ?? []) {
-        if (!entryFilter(key, entry)) {
+      for (const { key, entry, agentId, storePath } of record.materialized.source.childLinks ??
+        []) {
+        const owner = agentId ? undefined : resolveRequestedSessionAgentId(cfg, key);
+        if (
+          !canReadLinkedEntry(
+            key,
+            entry,
+            agentId ?? (owner?.ok ? owner.agentId : undefined),
+            storePath,
+          )
+        ) {
           (excluded ??= new Set()).add(key);
         }
       }
       excludedChildKeys = excluded;
     }
-    const sourceSwarm =
-      options.rowMode === "sidebar" || options.rowMode === "dashboard"
-        ? undefined
-        : record.materialized.row.swarm;
+    const fullRow = options.rowMode !== "sidebar" && options.rowMode !== "dashboard";
+    const sourceSwarm = fullRow ? record.materialized.row.swarm : undefined;
     let excludedSwarmKeys: Set<string> | undefined;
     for (const group of sourceSwarm?.groups ?? []) {
       for (const { sessionKey } of group.children ?? []) {
@@ -433,7 +350,15 @@ export function prepareProjectedSessionPresentation(
           (entryFilter &&
             projection
               .selectEntries({ key: sessionKey })
-              .some((child) => !entryFilter(child.key, child.entry)))
+              .some(
+                (child) =>
+                  !canReadLinkedEntry(
+                    child.key,
+                    child.entry,
+                    child.agentId,
+                    child.storeTarget.storePath,
+                  ),
+              ))
         ) {
           (excludedSwarmKeys ??= new Set()).add(sessionKey);
         }
@@ -511,10 +436,7 @@ export function prepareProjectedSessionPresentation(
     const views = published?.views;
     const value = published?.target ?? toProjectedSessionSharingTarget(record);
     const recipientView = client === undefined ? undefined : viewer(value, options.rowMode);
-    const includeActivitySummary =
-      options.includeActivitySummary !== false &&
-      options.rowMode !== "sidebar" &&
-      options.rowMode !== "dashboard";
+    const includeActivitySummary = options.includeActivitySummary !== false && fullRow;
     const canEnsure =
       includeActivitySummary && client !== undefined && preparedFacts?.activitySummary
         ? !authorizeIncognitoSessionTarget({
@@ -561,7 +483,7 @@ export function prepareProjectedSessionPresentation(
     row.childOwnerSessionKeys = [...childOwnerSessionKeys];
     row.fastMode = presentFastMode(row.fastMode);
     row.effectiveFastMode = presentFastMode(row.effectiveFastMode);
-    if (sourceSwarm) {
+    if (sourceSwarm && excludedSwarmKeys) {
       row.swarm = { ...sourceSwarm, groups: [] };
       for (const group of sourceSwarm.groups) {
         row.swarm.groups.push({
@@ -636,8 +558,9 @@ export function prepareProjectedSessionPresentation(
       opts: SessionsListParams,
       select: (retained?: WeakMap<object, SessionListFilteredEntries>) => SessionEntrySelection,
     ) {
-      // These queries consume clock or transient run facts independently of row publications.
-      if (opts.search || opts.spawnedBy || opts.activeOnly || opts.activityPulseBoundaries) {
+      // Membership, clocks, and transient runs are not owned by metadata partitions.
+      const live = opts.activeOnly || opts.activityPulseBoundaries;
+      if (sharing.sessionCap === "invited" || opts.search || opts.spawnedBy || live) {
         return select();
       }
       const view = listView(opts, true);

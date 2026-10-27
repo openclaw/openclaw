@@ -836,7 +836,7 @@ suite.define(() => {
     await expect.poll(() => card.count()).toBe(0);
     await expect.poll(() => isFocused(pullLink)).toBe(true);
     // Returning focus to the trigger must not reopen what Escape just dismissed.
-    await page.waitForTimeout(300);
+    await page.clock.runFor(300);
     expect(await card.count()).toBe(0);
   });
 

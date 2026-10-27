@@ -104,7 +104,8 @@ vi.mock("../config/config.js", async (importActual) => {
       return committedConfigFiles.write(nextConfig, resolveTestConfigPath());
     },
     resolveConfigWriteAfterWrite: actual.resolveConfigWriteAfterWrite,
-    resolveGatewayPort: (cfg: OpenClawConfig) => cfg.gateway?.port ?? 18789,
+    // Keep the operator's port and profile out of these synthetic config snapshots.
+    resolveGatewayPort: (cfg: OpenClawConfig) => actual.resolveGatewayPort(cfg, {}),
     transformConfigFileWithRetry: async (
       params: Parameters<typeof import("../config/config.js").transformConfigFileWithRetry>[0],
     ) => {
@@ -129,33 +130,14 @@ vi.mock("../config/config.js", async (importActual) => {
 
 vi.mock("./onboard-agent.js", () => ({ ensureOnboardingAgent: mockOnboardingAgent }));
 
-vi.mock("./onboard-helpers.js", () => {
-  const normalizeGatewayTokenInput = (value: unknown): string => {
-    if (typeof value !== "string") {
-      return "";
-    }
-    const trimmed = value.trim();
-    return trimmed === "undefined" || trimmed === "null" ? "" : trimmed;
-  };
-  return {
-    DEFAULT_WORKSPACE: "/tmp/openclaw-workspace",
-    applyWizardMetadata: (cfg: unknown) => cfg,
-    ensureWorkspaceAndSessions: ensureWorkspaceAndSessionsMock,
-    normalizeGatewayTokenInput,
-    randomToken: () => "tok_generated_gateway_test_token",
-    resolveControlUiLinks: ({ port }: { port: number }) => ({
-      httpUrl: `http://127.0.0.1:${port}`,
-      wsUrl: `ws://127.0.0.1:${port}`,
-    }),
-    resolveLocalControlUiProbeLinks: ({ port }: { port: number }) => ({
-      httpUrl: `http://127.0.0.1:${port}`,
-      wsUrl: `ws://127.0.0.1:${port}`,
-    }),
-    probeGatewayReachable: (params: { url: string; token?: string; password?: string }) =>
-      gatewayReachableState.mock?.(params) ?? Promise.resolve({ ok: true }),
-    waitForGatewayReachable: waitForGatewayReachableMock,
-  };
-});
+vi.mock("./onboard-helpers.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./onboard-helpers.js")>()),
+  ensureWorkspaceAndSessions: ensureWorkspaceAndSessionsMock,
+  randomToken: () => "tok_generated_gateway_test_token",
+  probeGatewayReachable: (params: { url: string; token?: string; password?: string }) =>
+    gatewayReachableState.mock?.(params) ?? Promise.resolve({ ok: true }),
+  waitForGatewayReachable: waitForGatewayReachableMock,
+}));
 
 vi.mock("./onboard-non-interactive/local/daemon-install.js", () => ({
   installGatewayDaemonNonInteractive: installGatewayDaemonNonInteractiveMock,
@@ -165,26 +147,8 @@ vi.mock("./health.js", () => ({
   healthCommandNonExiting: healthCommandMock,
 }));
 
-vi.mock("../daemon/service.js", () => ({
-  readGatewayServiceState: async () => {
-    const [loadState, runtime] = await Promise.all([
-      gatewayServiceMock
-        .isLoaded()
-        .then((loaded) =>
-          loaded ? ({ status: "loaded" } as const) : ({ status: "not-loaded" } as const),
-        )
-        .catch((error: unknown) => ({ status: "unknown" as const, detail: String(error) })),
-      gatewayServiceMock.readRuntime(),
-    ]);
-    return {
-      installed: true,
-      loadState,
-      running: runtime.status === "running",
-      env: {},
-      command: null,
-      runtime,
-    };
-  },
+vi.mock("../daemon/service.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../daemon/service.js")>()),
   resolveGatewayService: () => gatewayServiceMock,
 }));
 

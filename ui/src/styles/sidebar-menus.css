@@ -5,7 +5,7 @@
   top: 0;
   z-index: 1;
   padding: 6px 8px;
-  background: var(--bg-elevated);
+  background: var(--popover);
 }
 
 .people-menu__search input {
@@ -1375,7 +1375,6 @@
   max-height: min(calc(100dvh - var(--space-6)), var(--auto-size-available-height, 100dvh));
   padding: var(--menu-padding);
   border: 1px solid var(--overlay-border);
-  background: var(--bg-elevated);
   box-shadow: var(--overlay-shadow);
   font-size: calc((var(--control-ui-text-sm) + var(--control-ui-text-md)) / 2);
   line-height: 1.55;

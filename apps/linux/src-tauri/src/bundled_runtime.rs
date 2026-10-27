@@ -1,4 +1,4 @@
-use crate::runtime_action::BundledRuntime;
+use crate::runtime_action::{BundledRuntime, RuntimeFlavor};
 use serde::Deserialize;
 use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, BTreeSet};
@@ -32,13 +32,61 @@ struct Manifest {
     platform: String,
     arch: String,
     files: BTreeMap<String, String>,
+    #[serde(default)]
+    runtime: ManifestRuntime,
     #[serde(default, rename = "authenticodeSigned")]
     authenticode_signed: Option<bool>,
     #[serde(default, rename = "testOnly")]
     test_only: Option<bool>,
 }
 
-pub(crate) fn expected_bun_path() -> Result<PathBuf, String> {
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ManifestRuntime {
+    flavor: RuntimeFlavor,
+    executable: String,
+    #[serde(default)]
+    entry: Option<String>,
+    #[serde(default)]
+    standalone: Option<serde_json::Value>,
+}
+
+impl Default for ManifestRuntime {
+    fn default() -> Self {
+        // Existing installed JIT seeds remain valid during app upgrades.
+        Self {
+            flavor: RuntimeFlavor::Jit,
+            executable: BUN_PATH.into(),
+            entry: None,
+            standalone: None,
+        }
+    }
+}
+
+impl Manifest {
+    fn entry(&self) -> Option<&str> {
+        self.runtime.entry.as_deref().or_else(|| {
+            (self.runtime.flavor == RuntimeFlavor::Jit && self.files.contains_key(PACKAGE_ENTRY))
+                .then_some(PACKAGE_ENTRY)
+        })
+    }
+}
+
+pub(crate) fn flavor() -> Option<RuntimeFlavor> {
+    let manifest: Manifest = serde_json::from_str(MANIFEST).ok()?;
+    validate_manifest(&manifest).ok()?;
+    Some(manifest.runtime.flavor)
+}
+
+pub(crate) fn flavor_label() -> &'static str {
+    match flavor() {
+        Some(RuntimeFlavor::Jit) => "JIT",
+        Some(RuntimeFlavor::Aot) => "AOT (experimental)",
+        None => "Unavailable",
+    }
+}
+
+pub(crate) fn expected_executable_path() -> Result<PathBuf, String> {
     let manifest: Manifest = serde_json::from_str(MANIFEST).map_err(|_| {
         if cfg!(target_os = "windows") {
             missing_runtime_message()
@@ -49,7 +97,7 @@ pub(crate) fn expected_bun_path() -> Result<PathBuf, String> {
     })?;
     validate_manifest(&manifest)?;
     let prefix = crate::cli::openclaw_home().map_err(|error| error.to_string())?;
-    let path = runtime_directory(&prefix, MANIFEST, &manifest).join(BUN_PATH);
+    let path = runtime_directory(&prefix, MANIFEST, &manifest).join(&manifest.runtime.executable);
     #[cfg(target_os = "windows")]
     let path = match fs::canonicalize(&path) {
         Ok(path) => path,
@@ -83,29 +131,32 @@ fn runtime_directory(prefix: &Path, bytes: &str, manifest: &Manifest) -> PathBuf
 }
 
 pub(crate) fn seed(app: &AppHandle) -> Result<BundledRuntime, String> {
+    let prefix = crate::cli::openclaw_home().map_err(|error| error.to_string())?;
+    seed_into(app, &prefix)
+}
+
+fn seed_into(app: &AppHandle, prefix: &Path) -> Result<BundledRuntime, String> {
     let source = app
         .path()
         .resolve("desktop-runtime", BaseDirectory::Resource)
         .map_err(|error| format!("Embedded runtime resources are unavailable: {error}"))?;
-    let prefix = crate::cli::openclaw_home().map_err(|error| error.to_string())?;
-    seed_at(&source, &prefix, MANIFEST, &verify_revision).map_err(|error| error.to_string())
+    seed_at(&source, prefix, MANIFEST, &verify_revision).map_err(|error| error.to_string())
 }
 
-#[cfg(any(target_os = "linux", target_os = "windows"))]
-pub(crate) fn seed_package(app: &AppHandle) -> Result<Option<(BundledRuntime, PathBuf)>, String> {
+pub(crate) fn seed_cli(
+    app: &AppHandle,
+    prefix: &Path,
+) -> Result<Option<(BundledRuntime, PathBuf)>, String> {
     let manifest: Manifest =
         serde_json::from_str(MANIFEST).map_err(|_| missing_runtime_message().to_string())?;
-    if !manifest.files.contains_key(PACKAGE_ENTRY) {
+    if manifest.entry().is_none() && manifest.runtime.flavor == RuntimeFlavor::Jit {
         return Ok(None);
     }
-    let runtime = seed(app)?;
+    let runtime = seed_into(app, prefix)?;
     let entry = runtime
-        .bun
-        .parent()
-        .unwrap()
-        .parent()
-        .unwrap()
-        .join(PACKAGE_ENTRY);
+        .entry
+        .clone()
+        .unwrap_or_else(|| runtime.executable.clone());
     Ok(Some((runtime, entry)))
 }
 
@@ -160,7 +211,7 @@ fn seed_at(
             // Windows cannot rename the runtime directory while its manifest is open.
             drop(output);
             verify_payload(&staging, manifest_bytes, &manifest, false)?;
-            probe(&staging.join(BUN_PATH), &manifest)?;
+            probe(&staging.join(&manifest.runtime.executable), &manifest)?;
             // Windows flushes each file above; Rust cannot open directory handles for
             // fsync there. Atomic publication still prevents partial runtime copies.
             #[cfg(unix)]
@@ -190,7 +241,9 @@ fn seed_at(
     #[cfg(target_os = "windows")]
     let destination = fs::canonicalize(destination)?;
     Ok(BundledRuntime {
-        bun: destination.join(BUN_PATH),
+        executable: destination.join(&manifest.runtime.executable),
+        flavor: manifest.runtime.flavor,
+        entry: manifest.entry().map(|entry| destination.join(entry)),
         sqlite: manifest
             .files
             .contains_key("lib/libsqlite3.dylib")
@@ -209,7 +262,11 @@ fn validate_manifest(manifest: &Manifest) -> Result<(), String> {
     } else {
         "x64"
     };
-    let expected = if platform == "darwin" { 2 } else { 1 };
+    let safe_path = |path: &str| {
+        !path.contains(['\\', ':'])
+            && !path.starts_with('/')
+            && !path.split('/').any(|part| matches!(part, "" | "." | ".."))
+    };
     let safe_tag = !manifest.tag.is_empty()
         && manifest
             .tag
@@ -217,35 +274,75 @@ fn validate_manifest(manifest: &Manifest) -> Result<(), String> {
             .all(|byte| byte.is_ascii_alphanumeric() || b"-._".contains(&byte))
         && manifest.tag != "."
         && manifest.tag != "..";
-    if !safe_tag
-        || manifest.platform != platform
-        || manifest.arch != arch
-        || !matches!(platform, "linux" | "darwin" | "windows")
-        || (platform == "windows"
-            && (manifest.authenticode_signed != Some(true) || manifest.test_only != Some(false)))
-        || manifest.commit.len() != 40
-        || !manifest.commit.bytes().all(|byte| byte.is_ascii_hexdigit())
-        || manifest.revision.is_empty()
-        || manifest
-            .files
-            .keys()
-            .filter(|file| !file.starts_with("package/"))
-            .count()
-            != expected
-        || manifest.files.keys().any(|file| {
-            file.starts_with("package/")
-                && (platform == "darwin"
-                    || !manifest.files.contains_key(PACKAGE_ENTRY)
-                    || file.contains(['\\', ':'])
-                    || file.split('/').any(|part| matches!(part, "" | "." | "..")))
-        })
-        || !manifest.files.contains_key(BUN_PATH)
-        || (platform == "darwin" && !manifest.files.contains_key("lib/libsqlite3.dylib"))
-        || manifest
+    let common_valid = safe_tag
+        && manifest.platform == platform
+        && manifest.arch == arch
+        && matches!(platform, "linux" | "darwin" | "windows")
+        && manifest.commit.len() == 40
+        && manifest.commit.bytes().all(|byte| byte.is_ascii_hexdigit())
+        && !manifest.revision.is_empty()
+        && manifest.files.contains_key(&manifest.runtime.executable)
+        && manifest.files.keys().all(|file| safe_path(file))
+        && manifest
             .files
             .values()
-            .any(|hash| hash.len() != 64 || !hash.bytes().all(|byte| byte.is_ascii_hexdigit()))
-    {
+            .all(|hash| hash.len() == 64 && hash.bytes().all(|byte| byte.is_ascii_hexdigit()))
+        && manifest
+            .entry()
+            .is_none_or(|entry| manifest.files.contains_key(entry));
+    let flavor_valid = match manifest.runtime.flavor {
+        RuntimeFlavor::Jit => {
+            manifest.runtime.executable == BUN_PATH
+                && manifest.runtime.standalone.is_none()
+                && (platform != "darwin" || manifest.files.contains_key("lib/libsqlite3.dylib"))
+                && manifest.entry().is_none_or(|entry| entry == PACKAGE_ENTRY)
+                && manifest.files.keys().all(|file| {
+                    file == BUN_PATH
+                        || file == "lib/libsqlite3.dylib"
+                        || (file.starts_with("package/") && manifest.entry().is_some())
+                })
+                && (platform != "windows"
+                    || (manifest.authenticode_signed == Some(true)
+                        && manifest.test_only == Some(false)))
+        }
+        RuntimeFlavor::Aot => manifest
+            .runtime
+            .standalone
+            .as_ref()
+            .is_some_and(|standalone| {
+                platform != "windows"
+                    && (platform != "darwin" || arch == "arm64")
+                    && manifest.runtime.entry.is_none()
+                    && standalone.get("mode").and_then(serde_json::Value::as_str) == Some("aot")
+                    && standalone
+                        .pointer("/target/platform")
+                        .and_then(serde_json::Value::as_str)
+                        == Some(platform)
+                    && standalone
+                        .pointer("/target/arch")
+                        .and_then(serde_json::Value::as_str)
+                        == Some(arch)
+                    && standalone
+                        .pointer("/executable/path")
+                        .and_then(serde_json::Value::as_str)
+                        .is_some_and(|path| {
+                            manifest.runtime.executable == format!("standalone/{path}")
+                        })
+                    && standalone
+                        .pointer("/executable/sha256")
+                        .and_then(serde_json::Value::as_str)
+                        == manifest
+                            .files
+                            .get(&manifest.runtime.executable)
+                            .map(String::as_str)
+                    && manifest.files.contains_key("standalone/manifest.json")
+                    && manifest
+                        .files
+                        .keys()
+                        .all(|file| file.starts_with("standalone/"))
+            }),
+    };
+    if !common_valid || !flavor_valid {
         return Err("Embedded runtime identity does not match this app platform.".into());
     }
     Ok(())
@@ -358,6 +455,43 @@ fn collect_files(root: &Path, relative: &Path, files: &mut Vec<PathBuf>) -> Runt
 }
 
 fn verify_revision(bun: &Path, manifest: &Manifest) -> Result<(), String> {
+    if manifest.runtime.flavor == RuntimeFlavor::Aot {
+        let expected = manifest
+            .runtime
+            .standalone
+            .as_ref()
+            .and_then(|value| value.pointer("/openclaw/version"))
+            .and_then(serde_json::Value::as_str)
+            .ok_or("Standalone manifest has no OpenClaw version.")?;
+        let probe = bun
+            .parent()
+            .ok_or("Embedded executable has no parent.")?
+            .join(format!(".probe-{}", uuid::Uuid::new_v4()));
+        fs::create_dir(&probe).map_err(|error| error.to_string())?;
+        let output = Command::new(bun)
+            .arg("--version")
+            .env_clear()
+            .env("HOME", &probe)
+            .env("OPENCLAW_STATE_DIR", &probe)
+            .env("OPENCLAW_CONFIG_PATH", probe.join("openclaw.json"))
+            .env("TMPDIR", &probe)
+            .env("TMP", &probe)
+            .env("TEMP", &probe)
+            .output();
+        let cleanup = fs::remove_dir_all(&probe);
+        let output =
+            output.map_err(|error| format!("Embedded AOT executable cannot run: {error}"))?;
+        cleanup.map_err(|error| format!("Embedded runtime probe cleanup failed: {error}"))?;
+        let version = String::from_utf8_lossy(&output.stdout);
+        let version = version
+            .trim()
+            .strip_prefix("OpenClaw ")
+            .unwrap_or(version.trim());
+        if !output.status.success() || version.split_whitespace().next() != Some(expected) {
+            return Err("Embedded AOT executable did not report its admitted version.".into());
+        }
+        return Ok(());
+    }
     for (args, expected) in [
         (vec!["--revision"], manifest.revision.as_str()),
         (vec!["-p", "Bun.revision"], manifest.commit.as_str()),

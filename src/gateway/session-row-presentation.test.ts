@@ -617,9 +617,9 @@ it("selects collector children only when the recipient has a sharing filter", as
         projection,
         sharingPolicyClient({ scopes: ["operator.admin"] }),
       );
-      expect(
-        admin.snapshot(query).row?.swarm?.groups[0]?.children?.map((child) => child.sessionKey),
-      ).toEqual([visible, hidden]);
+      const swarm = admin.snapshot(query).row!.swarm!;
+      expect(swarm.groups[0]?.children?.map((row) => row.sessionKey)).toEqual([visible, hidden]);
+      expect(swarm).toBe(projection.describe(query)!.materialized.row.swarm);
       expect(
         admin
           .snapshot(query, { excludedChildKeys: new Set([hidden]) })

@@ -485,6 +485,11 @@ function convertResponsesMessagesWithStyle(
             );
             if (!shouldReplayResponsesItemIds) {
               delete replayableReasoningItem.id;
+              // Summaries alone cannot verify stateless reasoning and poison
+              // the next cached continuation, even if this request succeeds.
+              if (!replayableReasoningItem.encrypted_content) {
+                continue;
+              }
             }
             if (
               shouldReplayResponsesItemIds &&

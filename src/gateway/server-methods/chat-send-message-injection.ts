@@ -7,10 +7,10 @@ import type { AdmittedRunOperatorAuthority } from "../../agents/admitted-run-con
 import {
   hasLegacyAutoFallbackWithoutOrigin,
   hasSessionAutoModelFallbackProvenance,
-  resolveModelFallbackAvailability,
 } from "../../agents/agent-scope.js";
 import { bindWorkerToolPreparation } from "../../agents/harness/host-private-capabilities.js";
 import { bindPreparedToolAuthority } from "../../agents/harness/tool-authority-preparation.js";
+import { resolveModelFallbackAvailability } from "../../agents/model-selection-config.js";
 import { resolveCommandAuthorizationAsync } from "../../auto-reply/command-auth.js";
 import { resolveEnvelopeFormatOptions } from "../../auto-reply/envelope.js";
 import { buildInboundMediaNoteProjection } from "../../auto-reply/media-note.js";
@@ -164,14 +164,11 @@ export function createChatSendMessageInjectionStarter(params: {
         documentImages.length > 0
           ? [
               ...(replyOptionImages ?? []),
-              // Extracted page images follow the prepared inbound images, the
-              // same inline-then-extracted ordering reply dispatch produces; each
-              // keeps its attachment index as ordering provenance.
+              // Keep the same inline-then-extracted ordering reply dispatch produces.
               ...documentImages.map((image): ChatImageContent => ({
                 type: "image",
                 data: image.data,
                 mimeType: image.mimeType,
-                sourceIndex: image.attachmentIndex,
               })),
             ]
           : replyOptionImages;
@@ -215,6 +212,7 @@ export function createChatSendMessageInjectionStarter(params: {
             cfg,
             agentId,
             sessionKey,
+            selectedModel: resolvedSessionModel,
             hasSessionModelOverride:
               entry?.modelOverrideSource !== "default" &&
               Boolean(entry?.modelOverride || entry?.providerOverride) &&

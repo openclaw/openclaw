@@ -27,7 +27,10 @@ import {
   sqliteSessionStateDeleteSnapshotsEqual,
 } from "./session-accessor.sqlite-delete-snapshot.js";
 import { resolveTranscriptAppendRefusal } from "./session-accessor.sqlite-transcript-write-guard.js";
-import { iterateSessionColdRecords } from "./session-cold-storage-chunks.js";
+import {
+  iterateSessionColdRecords,
+  readVerifiedSessionColdChunks,
+} from "./session-cold-storage-chunks.js";
 import {
   verifyPublishedSessionColdArchive,
   type SessionColdRecord,
@@ -93,14 +96,7 @@ export async function prepareSessionColdRestoreInWorker(
   plan: Extract<SessionColdMutationPlan, { kind: "cold-restore" }>,
 ): Promise<(database: OpenClawAgentDatabase) => Iterable<SessionColdRecord>> {
   const opened = withOpenClawAgentDatabaseReadOnly(
-    (database) =>
-      executeSqliteQuerySync(
-        database.db,
-        getNodeSqliteKysely<DB>(database.db)
-          .selectFrom("session_transcript_cold_archives")
-          .selectAll()
-          .where("session_id", "=", plan.sessionId),
-      ).rows[0],
+    (database) => readSessionColdTranscript(database.db, plan.sessionId),
     plan.databaseOptions,
   );
   if (
@@ -111,19 +107,19 @@ export async function prepareSessionColdRestoreInWorker(
     throw new Error("Cold transcript changed before restoration");
   }
   const archive = opened.value;
-  // Verify every file before admission, retaining only metadata. Re-read each immutable
-  // chunk inside the guarded transaction so an interrupted restore rolls back as a unit.
+  // Publication verified the envelope. Check its immutable bytes before admission;
+  // decode and validate records once inside the guarded, all-or-nothing transaction.
   const verify = withOpenClawAgentDatabaseReadOnly(
     (database) =>
       runSqliteReadSnapshotSync(
         database.db,
         () => {
-          for (const record of iterateSessionColdRecords(
+          for (const chunk of readVerifiedSessionColdChunks(
             database.db,
             plan.databaseOptions.path,
             archive,
           )) {
-            void record;
+            void chunk;
           }
         },
         { databaseLabel: database.path, operationLabel: "cold restore verification" },
@@ -156,10 +152,11 @@ export function mutateSessionColdTranscriptInWorker(
         return result;
       }
       if (plan.kind === "cold-batch") {
-        const protectionKeys = readSessionAdmissionProtectionKeys(database, [
+        const sessionIds = [
           ...plan.prepared.map((item) => item.plan.sessionId),
           ...plan.externalizations.map((item) => item.archive.session_id),
-        ]);
+        ];
+        const protectionKeys = readSessionAdmissionProtectionKeys(database, sessionIds);
         if ([...protectionKeys].some((key) => !plan.protectionKeys.includes(key))) {
           throw new Error("Transcript ownership changed; cold archival was canceled");
         }
@@ -167,6 +164,7 @@ export function mutateSessionColdTranscriptInWorker(
           database,
           plan.beforeMs,
           new Set(plan.liveSessionKeys),
+          sessionIds,
         );
         const archivedIds: string[] = [];
         for (const prepared of plan.prepared) {

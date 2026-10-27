@@ -62,6 +62,7 @@ if (isMainThread) {
     }
   });
 
+  process.channel?.unref();
   const post = Worker.prototype.postMessage;
   const emit = Worker.prototype.emit;
   Worker.prototype.postMessage = function (message, ...args) {
