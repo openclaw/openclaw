@@ -199,15 +199,17 @@ export function sanitizeChatHistoryContentBlock(
   if (preserveExactToolPayload && Array.isArray(entry.content)) {
     // Some transcripts carry both nested output blocks and their joined text.
     // Keep one representation, and apply the same media privacy rules recursively.
-    const text = entry.content
-      .flatMap((item) => {
-        const value = readRecord(item)?.text;
-        return typeof value === "string" ? [value] : [];
-      })
-      .join("\n");
-    if (entry.text === text) {
-      delete entry.text;
-      changed = true;
+    if (typeof entry.text === "string") {
+      const text = entry.content
+        .flatMap((item) => {
+          const value = readRecord(item)?.text;
+          return typeof value === "string" ? [value] : [];
+        })
+        .join("\n");
+      if (entry.text === text) {
+        delete entry.text;
+        changed = true;
+      }
     }
     const content = entry.content.map((item) =>
       sanitizeChatHistoryContentBlock(item, {

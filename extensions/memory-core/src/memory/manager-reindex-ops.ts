@@ -210,7 +210,15 @@ export abstract class MemoryManagerReindexOps extends MemoryManagerSourceSyncOps
           ftsTokenizer: this.settings.store.fts.tokenizer,
           provenanceVersion: MEMORY_INDEX_PROVENANCE_VERSION,
         };
-        if (this.vector.available && this.vector.dims) {
+        // Canonical chunk vectors also need an identity-bound size when the
+        // optional search projection is disabled or unavailable.
+        const embeddingDimensions =
+          this.syncProviderGeneration?.kind === "semantic"
+            ? this.syncProviderGeneration.embeddingDimensions
+            : undefined;
+        if (embeddingDimensions) {
+          nextMeta.vectorDims = embeddingDimensions;
+        } else if (this.vector.available && this.vector.dims) {
           nextMeta.vectorDims = this.vector.dims;
         }
 

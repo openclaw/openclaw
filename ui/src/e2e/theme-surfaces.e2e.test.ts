@@ -218,17 +218,9 @@ suite.define(() => {
             content: `:root[data-theme] { --chat-composer-surface: ${surface}; --chat-user-surface: ${surface}; }`,
           });
           const inherited = await inspectSurfaces(page);
-          const expectedComposer = await page.evaluate((color) => {
-            const probe = document.createElement("div");
-            probe.style.backgroundImage = `linear-gradient(${color}, ${color}), none`;
-            document.body.append(probe);
-            const result = getComputedStyle(probe).backgroundImage;
-            probe.remove();
-            return result;
-          }, surface);
           expect
             .soft(inherited.composer, "composer inherits the theme surface")
-            .toBe(expectedComposer);
+            .toBe(`linear-gradient(${surface}, ${surface}), none`);
           expect.soft(inherited.bubble, "user bubble inherits the theme surface").toBe(surface);
           expect(inherited.dimensions).toEqual(original.dimensions);
           const media = page.locator(".chat-group.user .chat-bubble--with-images");

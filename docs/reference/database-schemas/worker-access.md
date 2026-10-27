@@ -6843,6 +6843,12 @@ event still commits before the runtime advances; bulk transcript imports reuse
 their transaction-local append cursor. Root checks read metadata without saved
 prompt payloads. No cross-transaction root cache is introduced.
 
+Individual message appends carry pending-user custody only for keyed user
+messages. Assistant and tool-result appends use their prepared message facts to
+omit the unrelated pending user payload. Their live admission and fresh-message
+checks remain unchanged. Multi-command metadata and transcript rewrites retain
+custody because they can promote or relocate user input.
+
 Bulk appends resolve prepared arrays' identity and idempotency-key conflicts in
 one read, then insert payloads, identities, and active projection rows in groups
 of up to 512 rows, flushing earlier when buffered payloads reach 1 MiB. Streaming

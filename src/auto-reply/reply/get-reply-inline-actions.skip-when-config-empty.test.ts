@@ -110,6 +110,14 @@ function expectReply(result: Awaited<ReturnType<typeof runBaseInlineActions>>, t
   expect(result).toEqual({ kind: "reply", reply: { text } });
 }
 
+function expectInlineProfileCall(toolExecute: ReturnType<typeof vi.fn>, signal?: AbortSignal) {
+  expect(mockCallArgs(toolExecute, "toolExecute")).toEqual([
+    expect.stringMatching(/^cmd_/),
+    { command: "display name", commandName: "set_profile", skillName: "matrix-profile" },
+    signal,
+  ]);
+}
+
 async function routeSender(ctx: ReturnType<typeof buildTestCtx>, isGroup: boolean) {
   const onBlockReply = vi.fn(async () => {});
   handleCommandsMock.mockImplementation(async ({ command }) => ({
@@ -257,7 +265,6 @@ describe("handleInlineActions", () => {
       ctx,
       cleanedBody: stripInlineStatus("/status").cleaned,
       command: {
-        isAuthorizedSender: true,
         rawBodyNormalized: "/status",
         commandBodyNormalized: "/status",
       },
@@ -292,7 +299,6 @@ describe("handleInlineActions", () => {
         surface: "discord",
         channel: "discord",
         channelId: "discord",
-        isAuthorizedSender: true,
         rawBodyNormalized: "<@123> /status what's next?",
         commandBodyNormalized: "<@123> /status what's next?",
       },
@@ -385,39 +391,36 @@ describe("handleInlineActions", () => {
     expect(handleCommandsMock).not.toHaveBeenCalled();
   });
 
-  it("keeps literal $ patterns in bundle command arguments", async () => {
+  it.each([
+    ["preloaded bundle arguments", "/office_hours", "price $$ and $& here", false],
+    ["lazy workspace commands", "/skill office_hours", "build me a deployment plan", true],
+  ] as const)("expands %s", async (_name, command, args, lazy) => {
     handleCommandsMock.mockResolvedValue({ shouldContinue: false, reply: { text: "done" } });
-    const ctx = commandCtx("/office_hours price $$ and $& here");
+    const ctx = commandCtx(`${command} ${args}`);
     const skillCommands = officeHoursSkillCommands();
-
+    prepareSkillCommandsForWorkspaceMock.mockReturnValue(skillCommands);
     const result = await runTestInlineActions({
       ctx,
-      overrides: {
-        cfg: { commands: { text: true } },
-        skillCommands,
-      },
+      overrides: { cfg: { commands: { text: true } }, skillCommands: lazy ? [] : skillCommands },
     });
-
     expectReply(result, "done");
-    expect(ctx.Body).toBe("Act as an engineering advisor.\n\nFocus on:\nprice $$ and $& here");
+    const expected = `Act as an engineering advisor.\n\nFocus on:\n${args}`;
+    expect(ctx.Body).toBe(expected);
     const commandArgs = handleCommandsMock.mock.calls[0]?.[0];
-    expect(commandArgs?.ctx.Body).toBe(
-      "Act as an engineering advisor.\n\nFocus on:\nprice $$ and $& here",
-    );
+    expect(commandArgs?.ctx.Body).toBe(expected);
+    expect(commandArgs?.skillCommands).toEqual(skillCommands);
+    expect(prepareSkillCommandsForWorkspaceMock).toHaveBeenCalledTimes(lazy ? 1 : 0);
   });
 
   it("keeps unauthorized explicit skill references as plain text", async () => {
     const body = "Please use $office_hours to build me a deployment plan";
-    const ctx = buildTestCtx({
-      Body: body,
-      CommandBody: body,
+    const ctx = commandCtx(body, {
       Provider: "webchat",
       Surface: "webchat",
     });
 
     const result = await runTestInlineActions({
       ctx,
-      cleanedBody: body,
       command: {
         isAuthorizedSender: false,
       },
@@ -435,9 +438,7 @@ describe("handleInlineActions", () => {
   it("preserves suppressed inline command text under a wildcard command allowlist", async () => {
     const body = "Explain /help please";
     const cfg = { commands: { allowFrom: { "*": ["*"] } } };
-    const ctx = buildTestCtx({
-      Body: body,
-      CommandBody: body,
+    const ctx = commandCtx(body, {
       CommandInterpretationSuppressed: true,
     });
     const command = buildCommandContext({
@@ -450,7 +451,6 @@ describe("handleInlineActions", () => {
 
     const result = await runTestInlineActions({
       ctx,
-      typing: createTypingController(),
       cleanedBody: ctx.agentText,
       command,
       overrides: { cfg, allowTextCommands: true },
@@ -459,29 +459,6 @@ describe("handleInlineActions", () => {
     expect(result.kind).toBe("continue");
     expect(ctx.agentText).toBe(body);
     expect(handleCommandsMock).not.toHaveBeenCalled();
-  });
-
-  it("loads workspace skills when /skill gets an empty preloaded command list", async () => {
-    handleCommandsMock.mockResolvedValue({ shouldContinue: false, reply: { text: "done" } });
-    const ctx = commandCtx("/skill office_hours build me a deployment plan");
-    const skillCommands = officeHoursSkillCommands();
-    prepareSkillCommandsForWorkspaceMock.mockReturnValue(skillCommands);
-
-    const result = await runTestInlineActions({
-      ctx,
-      overrides: {
-        cfg: { commands: { text: true } },
-        skillCommands: [],
-      },
-    });
-
-    expectReply(result, "done");
-    expect(prepareSkillCommandsForWorkspaceMock).toHaveBeenCalledOnce();
-    expect(ctx.Body).toBe(
-      "Act as an engineering advisor.\n\nFocus on:\nbuild me a deployment plan",
-    );
-    const commandArgs = handleCommandsMock.mock.calls[0]?.[0];
-    expect(commandArgs?.skillCommands).toEqual(skillCommands);
   });
 
   it("returns a visible error for an allowlist-hidden addressed skill", async () => {
@@ -495,16 +472,7 @@ describe("handleInlineActions", () => {
     });
     prepareSkillCommandsForWorkspaceMock.mockImplementation(
       (params: { includeAllowlistHidden?: boolean }) =>
-        params.includeAllowlistHidden
-          ? [
-              {
-                name: "office_hours",
-                skillName: "office-hours",
-                description: "Engineering office hours",
-                skillFile: "/tmp/skills/office-hours/SKILL.md",
-              },
-            ]
-          : [],
+        params.includeAllowlistHidden ? officeHoursSkillCommands(true) : [],
     );
 
     const result = await runTestInlineActions({
@@ -512,7 +480,6 @@ describe("handleInlineActions", () => {
       typing,
       cleanedBody: channelBody,
       command: {
-        isAuthorizedSender: true,
         rawBodyNormalized: normalizedBody,
         commandBodyNormalized: normalizedBody,
       },
@@ -532,16 +499,28 @@ describe("handleInlineActions", () => {
     expect(typing.cleanup).toHaveBeenCalledOnce();
   });
 
-  it("passes requesterAgentIdOverride into inline tool runtimes", async () => {
-    const fixture = toolFixture("spawn_subagent", async () => ({ text: "spawned" }));
-    const result = await runTool(fixture, { agentId: "named-worker" });
-
-    expectReply(result, "✅ Done.");
-    expect(createOpenClawToolsMock.mock.calls[0]?.[0]).toMatchObject({
-      requesterAgentIdOverride: "named-worker",
-    });
-    expect(fixture.toolExecute).toHaveBeenCalledTimes(1);
-  });
+  it.each([false, true])(
+    "passes prepared tool construction facts (sandboxed=%s)",
+    async (sandboxed) => {
+      const fixture = toolFixture(sandboxed ? "list_sessions" : "spawn_subagent", async () =>
+        sandboxed ? { content: "listed" } : { text: "spawned" },
+      );
+      const result = await runTool(
+        fixture,
+        sandboxed
+          ? {
+              cfg: { commands: { text: true }, agents: { defaults: { sandbox: { mode: "all" } } } },
+              sessionKey: "agent:main:thread",
+            }
+          : { agentId: "named-worker" },
+      );
+      expectReply(result, sandboxed ? "listed" : "✅ Done.");
+      expect(createOpenClawToolsMock.mock.calls[0]?.[0]).toMatchObject(
+        sandboxed ? { sandboxed: true } : { requesterAgentIdOverride: "named-worker" },
+      );
+      expect(fixture.toolExecute).toHaveBeenCalledTimes(1);
+    },
+  );
 
   it("passes sender identity into inline tool runtimes", async () => {
     const fixture = toolFixture("set_profile", async () => ({ text: "updated" }), {
@@ -572,16 +551,7 @@ describe("handleInlineActions", () => {
         },
       },
     });
-    const toolCall = mockCallArgs(fixture.toolExecute, "toolExecute");
-    expect(toolCall).toEqual([
-      expect.stringMatching(/^cmd_/),
-      {
-        command: "display name",
-        commandName: "set_profile",
-        skillName: "matrix-profile",
-      },
-      undefined,
-    ]);
+    expectInlineProfileCall(fixture.toolExecute);
   });
 
   it("honors construction-time before-tool-call blocks for inline tool dispatch", async () => {
@@ -613,16 +583,7 @@ describe("handleInlineActions", () => {
     expectReply(result, "❌ Tool call blocked: denied by policy");
     const toolsArgs = createOpenClawToolsMock.mock.calls[0]?.[0];
     expect(toolsArgs).toMatchObject({ sessionId: "target-session", currentChannelId: "whatsapp" });
-    const blockedToolCall = mockCallArgs(fixture.toolExecute, "toolExecute");
-    expect(blockedToolCall).toEqual([
-      expect.stringMatching(/^cmd_/),
-      {
-        command: "display name",
-        commandName: "set_profile",
-        skillName: "matrix-profile",
-      },
-      abortController.signal,
-    ]);
+    expectInlineProfileCall(fixture.toolExecute, abortController.signal);
     expect(fixture.typing.cleanup).toHaveBeenCalledTimes(1);
   });
 
@@ -688,26 +649,6 @@ describe("handleInlineActions", () => {
     expect(fixture.toolExecute).not.toHaveBeenCalled();
   });
 
-  it("passes sandboxed runtime state into inline tool construction", async () => {
-    const fixture = toolFixture("list_sessions", async () => ({ content: "listed" }));
-
-    const result = await runTool(fixture, {
-      cfg: {
-        commands: { text: true },
-        agents: { defaults: { sandbox: { mode: "all" } } },
-      },
-      sessionKey: "agent:main:thread",
-    });
-
-    expectReply(result, "listed");
-    expect(createOpenClawToolsMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        sandboxed: true,
-      }),
-    );
-    expect(fixture.toolExecute).toHaveBeenCalled();
-  });
-
   it("marks command-handler terminal replies for direct delivery (#87107)", async () => {
     handleCommandsMock.mockResolvedValueOnce({
       shouldContinue: false,
@@ -719,7 +660,6 @@ describe("handleInlineActions", () => {
     const result = await runTestInlineActions({
       ctx,
       command: {
-        isAuthorizedSender: true,
         senderId: "sender-1",
         senderIsOwner: true,
         abortKey: "sender-1",
@@ -812,7 +752,7 @@ describe("handleInlineActions", () => {
   });
   it("keeps recorded shortcuts inside a skill prompt template", async () => {
     const body = "/skill office_hours compare /help and /commands";
-    const ctx = buildTestCtx({ Body: body, RawBody: body, CommandBody: body });
+    const ctx = commandCtx(body, { RawBody: body });
     const onBlockReply = vi.fn(async () => {});
     handleCommandsMock.mockImplementation(async ({ command }) => ({
       shouldContinue: true,
@@ -820,8 +760,6 @@ describe("handleInlineActions", () => {
     }));
     const result = await runTestInlineActions({
       ctx,
-      typing: createTypingController(),
-      cleanedBody: body,
       overrides: {
         cfg: { commands: { text: true } },
         skillCommands: officeHoursSkillCommands(),

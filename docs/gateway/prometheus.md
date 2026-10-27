@@ -993,6 +993,8 @@ ArrayBuffer bytes are included in external memory; do not add them together.
 Native-only heap samples provide external memory but no ArrayBuffer count, so
 ArrayBuffer totals can cover fewer Workers than the heap sample count. Missing
 counters are omitted, while measured zero bytes are exported as zero.
+Dedicated SQLite archive and reclamation workers, including reusable cold-restore
+carriers, serve these isolate-local counters through the same diagnostics channel.
 On Node, `openclaw_worker_heap_space_used_bytes{script="...",space="..."}` sums
 used bytes by V8 heap space for Workers serving the private memory channel. It
 shares the existing heartbeat, sample expiration, and exit cleanup. Space names
