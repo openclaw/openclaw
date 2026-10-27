@@ -10,7 +10,6 @@ import { testing as acpRuntimeRegistryTesting } from "../../../acp/runtime/regis
 import { createExecutionIdentityAdmissionToken } from "../../../audit/execution-identity-admission.js";
 import type { ThinkLevel } from "../../../auto-reply/thinking.shared.js";
 import { getLoadedChannelPluginForRead } from "../../../channels/plugins/registry-loaded.js";
-import type { ChannelPlugin } from "../../../channels/plugins/types.public.js";
 import type { SessionEntry } from "../../../config/sessions/types.js";
 import type { AgentDefaultsConfig } from "../../../config/types.agent-defaults.js";
 import type { AgentEntryConfig } from "../../../config/types.agents.js";
@@ -170,11 +169,8 @@ function replaceSpawnConfig(next: OpenClawConfig): void {
   Object.assign(current, next);
 }
 
-function configureSubagentDefaults(
-  subagents: NonNullable<NonNullable<OpenClawConfig["agents"]>["defaults"]>["subagents"],
-): void {
-  const agents = (hoisted.state.cfg.agents ??= {});
-  const defaults = (agents.defaults ??= {});
+function configureSubagentDefaults(subagents: AgentDefaultsConfig["subagents"]): void {
+  const defaults = ((hoisted.state.cfg.agents ??= {}).defaults ??= {});
   Object.assign((defaults.subagents ??= {}), subagents);
 }
 
@@ -251,11 +247,6 @@ function spawn(
   context: SpawnContext = { agentSessionKey: "agent:main:main" },
 ) {
   return spawnAcpDirect({ task: "Investigate flaky tests", agentId: "codex", ...request }, context);
-}
-function mockAgentDispatch(dispatch: () => unknown) {
-  hoisted.callGatewayMock.mockImplementation(async ({ method }: { method?: string }) =>
-    method === "agent" ? dispatch() : gatewayResponse(method),
-  );
 }
 function configureAgents(entries: NonNullable<OpenClawConfig["agents"]>["entries"]) {
   hoisted.state.cfg.agents = { ...hoisted.state.cfg.agents, entries };
@@ -353,16 +344,6 @@ function configureChannelBindings(channel: string, accountId?: string, defaultAc
       ...(accountId ? { accounts: { [accountId]: { threadBindings } } } : {}),
     },
   };
-}
-
-function installBindingPlugin(plugin: ChannelPlugin, placements?: SessionBindingPlacement[]) {
-  setActivePluginRegistry(createTestRegistry([{ pluginId: plugin.id, plugin, source: "test" }]));
-  registerBindingAdapter(plugin.id, "default", placements);
-}
-
-function enableLineCurrentConversationBindings(): void {
-  configureChannelBindings("line");
-  installBindingPlugin(createChannelTestPluginBase({ id: "line" }), ["current"]);
 }
 
 function mockSessionStore(entries: Record<string, SessionEntry> = {}) {
@@ -500,11 +481,9 @@ describe("spawnAcpDirect", () => {
         sessionId: patch.sessionId ?? "sess-123",
         updatedAt: patch.updatedAt ?? Date.now(),
       }));
-
     hoisted.callGatewayMock
       .mockReset()
-      .mockImplementation(async (args: { method?: string }) => gatewayResponse(args.method));
-
+      .mockImplementation(async ({ method }: { method?: string }) => gatewayResponse(method));
     hoisted.initializeSessionMock
       .mockReset()
       .mockImplementation(async (args: AcpInitializeSessionInput) => ({
@@ -874,7 +853,10 @@ describe("spawnAcpDirect", () => {
   });
 
   it("refuses to hand the current conversation to a spawned worker", async () => {
-    enableLineCurrentConversationBindings();
+    configureChannelBindings("line");
+    const plugin = createChannelTestPluginBase({ id: "line" });
+    setActivePluginRegistry(createTestRegistry([{ pluginId: "line", plugin, source: "test" }]));
+    registerBindingAdapter("line", "default", ["current"]);
     const result = await spawn(
       { mode: "session", thread: true },
       channelContext("line", "U1234567890abcdef1234567890abcdef", {
@@ -1062,8 +1044,11 @@ describe("spawnAcpDirect", () => {
   it("disposes pre-registered parent relay when initial ACP dispatch fails", async () => {
     const relayHandle = createRelayHandle();
     hoisted.startAcpSpawnParentStreamRelayMock.mockReturnValueOnce(relayHandle);
-    mockAgentDispatch(() => {
-      throw new Error("agent dispatch failed");
+    hoisted.callGatewayMock.mockImplementation(async ({ method }: { method?: string }) => {
+      if (method === "agent") {
+        throw new Error("agent dispatch failed");
+      }
+      return gatewayResponse(method);
     });
 
     const result = await spawn({ streamTo: "parent" });
