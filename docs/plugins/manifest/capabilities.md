@@ -106,7 +106,9 @@ declare `scheduledTurns` in `contracts.commandRuntimeCapabilities` and
 `api.runtime.capabilities` for `command-scheduled-turns-v1` before registering
 such a command: hosts without it reject the registration. Hosts that also
 advertise `command-scheduled-turns-restart-v1` keep accepted schedules across a
-Gateway restart. See
+Gateway restart when the same plugin code loads again, including core-bundled
+plugins on the same OpenClaw build; each accepted schedule reports this as
+`survivesRestart`. See
 [requester-admitted scheduled commands](/plugins/sdk-runtime/background-work#requester-admitted-scheduled-commands).
 
 Runtime `api.registerTool(...)` registrations must match `contracts.tools`. Tool discovery uses this list to load only the plugin runtimes that can own the requested tools.

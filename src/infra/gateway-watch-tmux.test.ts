@@ -2,7 +2,6 @@ import type { SpawnSyncOptions, SpawnSyncReturns } from "node:child_process";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   buildGatewayWatchTmuxCommand,
-  resolveGatewayWatchTmuxSessionName,
   runGatewayWatchTmuxMain as runGatewayWatchTmuxMainNative,
   runGatewayWatchServiceHandoff as runGatewayWatchServiceHandoffNative,
 } from "../../scripts/gateway-watch-tmux.mts";
@@ -37,31 +36,9 @@ vi.mock("node:process", async (importOriginal) => {
 
 type RuntimeParams = NonNullable<Parameters<typeof runGatewayWatchTmuxMainNative>[0]>;
 type RuntimeFixture = RuntimeParams & {
-  spawnSync: SpawnSyncFixture;
-  nodePath?: string;
-  stderr?: { write(message: string): unknown };
-  stdout?: { write(message: string): unknown };
   stdinIsTTY?: boolean;
   stdoutIsTTY?: boolean;
 };
-
-function runNativeBoundary(run: (params: RuntimeParams) => number, fixture: RuntimeFixture) {
-  const { spawnSync, nodePath, stderr, stdout, stdinIsTTY, stdoutIsTTY, ...params } = fixture;
-  const output = stdout ?? process.stdout;
-  native.overrides = {
-    execPath: nodePath ?? process.execPath,
-    stderr: stderr ?? process.stderr,
-    stdin: { isTTY: stdinIsTTY ?? false },
-    stdout: { write: (message: string) => output.write(message), isTTY: stdoutIsTTY ?? false },
-  };
-  native.spawnSync.mockImplementation(spawnSync);
-  try {
-    return run(params);
-  } finally {
-    native.overrides = {};
-    native.spawnSync.mockReset();
-  }
-}
 
 const createOutput = () => {
   const chunks: string[] = [];
@@ -109,20 +86,29 @@ describe("gateway-watch tmux wrapper", () => {
       .mockReturnValueOnce({ status: 1, stdout: "", stderr: "" })
       .mockReturnValue({ status: 0, stdout: "", stderr: "" });
   });
-  const run = (overrides: Partial<RuntimeFixture> = {}, handoff = false) =>
-    runNativeBoundary(
-      handoff ? runGatewayWatchServiceHandoffNative : runGatewayWatchTmuxMainNative,
-      {
+  const run = (
+    { stdinIsTTY = false, stdoutIsTTY = false, ...params }: RuntimeFixture = {},
+    handoff = false,
+  ) => {
+    native.overrides = {
+      execPath: handoff ? "/opt/node" : "/node",
+      stderr: stderr.stream,
+      stdin: { isTTY: stdinIsTTY },
+      stdout: { ...stdout.stream, isTTY: stdoutIsTTY },
+    };
+    native.spawnSync.mockImplementation(spawnSync);
+    try {
+      return (handoff ? runGatewayWatchServiceHandoffNative : runGatewayWatchTmuxMainNative)({
         args: ["gateway", "--force"],
         cwd: "/repo",
         env: { SHELL: "/bin/zsh" },
-        nodePath: handoff ? "/opt/node" : "/node",
-        spawnSync,
-        stdout: stdout.stream,
-        stderr: stderr.stream,
-        ...overrides,
-      },
-    );
+        ...params,
+      });
+    } finally {
+      native.overrides = {};
+      native.spawnSync.mockReset();
+    }
+  };
   const runHandoff = (overrides: Partial<RuntimeFixture> = {}) => run(overrides, true);
   const serviceStatus = (service: object, portCli?: object) => ({
     status: 0,
@@ -170,23 +156,6 @@ describe("gateway-watch tmux wrapper", () => {
     }
     return args[6];
   };
-  it("derives stable session names from profile and port", () => {
-    const session = (args: string[], env: NodeJS.ProcessEnv = {}) =>
-      resolveGatewayWatchTmuxSessionName({ args, env });
-    expect(session(["gateway", "--force"])).toBe("openclaw-gateway-watch-main");
-    expect(
-      session(["gateway", "--force", "--port", "19001"], { OPENCLAW_PROFILE: "Dev Profile" }),
-    ).toBe("openclaw-gateway-watch-dev-profile-19001");
-    expect(session(["--dev", "gateway", "--port=18789"])).toBe("openclaw-gateway-watch-dev");
-    expect(session(["gateway", "--dev", "--port=18789"])).toBe("openclaw-gateway-watch-main");
-    expect(
-      session(["gateway", "--profile", "work", "--port=18789"], { OPENCLAW_PROFILE: "main" }),
-    ).toBe("openclaw-gateway-watch-work");
-    expect(session(["gateway", "--force"], { OPENCLAW_GATEWAY_PORT: "127.0.0.1:18789" })).toBe(
-      "openclaw-gateway-watch-main",
-    );
-  });
-
   it("builds a login-shell command that runs the raw watcher in the repo", () => {
     const command = buildCommand({
       args: ["gateway", "--force", "--raw-stream-path", "a b.jsonl"],
@@ -409,23 +378,32 @@ describe("gateway-watch tmux wrapper", () => {
     }
   });
 
-  it("respawns the existing tmux pane on repeated runs", () => {
+  it.each([
+    [["gateway", "--force"], {}, "main"],
+    [
+      ["gateway", "--force", "--port", "19001"],
+      { OPENCLAW_PROFILE: "Dev Profile" },
+      "dev-profile-19001",
+    ],
+    [["--dev", "gateway", "--port=18789"], {}, "dev"],
+    [["gateway", "--dev", "--port=18789"], {}, "main"],
+    [["gateway", "--profile", "work", "--port=18789"], { OPENCLAW_PROFILE: "main" }, "work"],
+    [["gateway", "--force"], { OPENCLAW_GATEWAY_PORT: "127.0.0.1:18789" }, "main"],
+    [["gateway", "--force", "--port=19001"], { OPENCLAW_PROFILE: "dev" }, "dev-19001"],
+  ] as const)("respawns the selected profile/port session: %j %j", (args, env, suffix) => {
     spawnSync = vi.fn().mockReturnValue({ status: 0, stdout: "", stderr: "" });
-
+    const session = `openclaw-gateway-watch-${suffix}`;
     const code = run({
-      args: ["gateway", "--force", "--port=19001"],
-      env: { OPENCLAW_GATEWAY_WATCH_AUTO_DOCTOR: "0", OPENCLAW_PROFILE: "dev", SHELL: "/bin/zsh" },
+      args: [...args],
+      env: { OPENCLAW_GATEWAY_WATCH_AUTO_DOCTOR: "0", SHELL: "/bin/zsh", ...env },
     });
-
     expect(code).toBe(0);
-    expectRemain(1, "openclaw-gateway-watch-dev-19001");
-    const command = expectPane(2, "respawn-pane", "openclaw-gateway-watch-dev-19001");
+    expectRemain(1, session);
+    const command = expectPane(2, "respawn-pane", session);
     expect(command).toContain("scripts/watch-node.mjs");
     expect(command).toContain("OPENCLAW_GATEWAY_WATCH_AUTO_DOCTOR=0");
     expect(command).toContain("OPENCLAW_SKIP_CHANNELS");
-    expect(stderr.text()).toContain(
-      "gateway:watch restarted in tmux session openclaw-gateway-watch-dev-19001",
-    );
+    expect(stderr.text()).toContain(`gateway:watch restarted in tmux session ${session}`);
   });
 
   it("recreates a stale session when its active pane target is missing", () => {

@@ -96,7 +96,7 @@ export async function ensureManagerRuntimeHandle(
   };
   assertCurrent();
   const agent =
-    normalizeText(params.meta.agent) || resolveAcpAgentFromSessionKey(params.sessionKey, "main");
+    normalizeText(params.meta.agent) || resolveAcpAgentFromSessionKey(params.sessionKey);
   const mode = params.meta.mode;
   const runtimeOptions = resolveRuntimeOptionsFromMeta(params.meta);
   const { cwd, model, thinking } = runtimeOptions;

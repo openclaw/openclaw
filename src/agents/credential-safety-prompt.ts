@@ -1,11 +1,9 @@
-export type CredentialSafetyPromptOptions = { controlToolsAvailable?: boolean };
-
 export function buildCredentialSafetyPrompt(
   /**
    * @deprecated The legacy string argument is ignored and supported through
    * 2026-11-30. Use the options object `{ controlToolsAvailable }` instead.
    */
-  input?: string | CredentialSafetyPromptOptions,
+  input?: string | { controlToolsAvailable?: boolean },
 ): string {
   // Legacy string and unknown-availability callers keep the handoff-only
   // result documented through 2026-11-30.

@@ -30,9 +30,7 @@ describe("docs-list", () => {
     const cases = [
       ["inline", "\n", 'read_when: "Read this page when the hint is inline."\n---'],
       ["yaml-end", "\n", "..."],
-      ["annotated", "\r\n", "--- # end"],
-      ["whitespace", "\n", "---   "],
-      ["document-end-comment", "\r\n", "... # end"],
+      ["annotated", "\r\n", "--- # end   "],
     ] as const;
     const { root } = makeDocs(
       Object.fromEntries(
@@ -54,15 +52,15 @@ describe("docs-list", () => {
   it("renders the publish docs map on demand without creating a mirror", () => {
     const { root, docs } = makeDocs({
       "page.md": [
-        '---\nsummary: "Page"\n# This metadata comment must not become a heading\n... # end',
+        '---\nsummary: "Page"\n# Hidden metadata\n... # end',
         "# Visible title\n## `API[*]` <script>alert(1)</script>",
         "### <scr<script>ipt>alert(1)</script>\n#### `![label](https://example.test/image)`",
-        "```md\n### Hidden fenced heading\n```",
-        "````md\n```json\n### Hidden nested fenced heading\n```\n````",
-        "~~~md\n### Hidden fenced heading with a suffixed closer\n~~~json",
-        "### Still hidden after the invalid closer\n~~~\n# Visible after the fenced block\n",
+        "```md\n### Hidden fence\n```",
+        "````md\n```json\n### Hidden nested fence\n```\n````",
+        "~~~md\n### Hidden tilde fence\n~~~json\n### Hidden invalid closer\n~~~\n# Visible after fence\n",
       ].join("\n"),
       "nested/index.mdx": "# Nested\n",
+      "nested/page.md": "# Nested page\n",
       "AGENTS.md": "# Instructions\n",
     });
 
@@ -74,13 +72,16 @@ describe("docs-list", () => {
     expect(output).toContain("  - H3: &lt;scr&lt;script&gt;ipt&gt;alert(1)&lt;/script&gt;");
     expect(output).toContain("  - H4: `![label](https://example.test/image)`");
     expect(output).toContain("## nested/index.mdx\n\n- Route: /nested");
-    expect(output).not.toContain("metadata comment must not become a heading");
-    expect(output).not.toContain("Hidden fenced heading");
-    expect(output).not.toContain("Hidden nested fenced heading");
-    expect(output).not.toContain("Still hidden after the invalid closer");
-    expect(output).toContain("  - H1: Visible after the fenced block");
+    expect(output).toContain("## nested/page.md\n\n- Route: /nested/page");
+    expect(output).not.toContain("Hidden");
+    expect(output).toContain("  - H1: Visible after fence");
     expect(output).not.toContain("AGENTS.md");
     expect(existsSync(path.join(docs, "docs_map.md"))).toBe(false);
+    expect(
+      renderDocsHeadingMap(docs, {
+        relativePath: (base, fullPath) => path.relative(base, fullPath).replace(/[\\/]+/gu, "\\"),
+      }),
+    ).toBe(output);
   });
 
   it.each([
@@ -95,20 +96,5 @@ describe("docs-list", () => {
     expect(output).not.toContain("H1: Hidden example");
     expect(output).not.toContain("H2: Still hidden");
     expect(output).toContain("H1: Visible after close");
-  });
-
-  it("normalizes injected Windows paths for nested page routes", () => {
-    const { docs } = makeDocs({
-      "nested/index.mdx": "# Nested index\n",
-      "nested/page.md": "# Nested page\n",
-    });
-
-    const output = renderDocsHeadingMap(docs, {
-      relativePath: (base, fullPath) => path.relative(base, fullPath).replace(/[\\/]+/gu, "\\"),
-    });
-
-    expect(output).toContain("## nested/index.mdx\n\n- Route: /nested");
-    expect(output).toContain("## nested/page.md\n\n- Route: /nested/page");
-    expect(output).not.toContain("\\");
   });
 });

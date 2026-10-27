@@ -12,6 +12,7 @@ import {
   expectRequestCountStable,
   installMockGateway,
   requireRecord,
+  requireString,
 } from "./chat-flow.test-support.ts";
 import { seedLegacyComposerDraft } from "./chat-outbox-legacy-draft.test-support.ts";
 import {
@@ -120,7 +121,7 @@ suite.define(() => {
                 sessionKey,
                 agentId: "main",
                 sendAttempts: 1,
-                sendState: "unconfirmed",
+                sendState: "waiting-reconnect",
               },
             ];
             const session = { updatedAt: 10, draftRevision: 42, queue };
@@ -144,7 +145,7 @@ suite.define(() => {
         await expectOutboxPayload(page, reference.key);
         expect(await readQueue(page)).toEqual([]);
         expect(await pane.locator(".chat-queue__item").count()).toBe(0);
-        expect(await pane.getByText("Delivery unconfirmed", { exact: true }).count()).toBe(0);
+        expect(await pane.getByText("Needs review", { exact: true }).count()).toBe(0);
         await restoreInput(
           page,
           gateway,
@@ -153,27 +154,39 @@ suite.define(() => {
             ? /Add this saved copy to “Main Session”/
             : /Add this saved copy to “topic”/,
         );
-        await pane.getByText("Delivery unconfirmed", { exact: true }).waitFor();
+        const changedDestination = legacySessionKey === "global";
+        const restored = pane.locator(
+          changedDestination ? ".chat-queue__item" : ".chat-group.user",
+          { hasText: retainedText },
+        );
+        const restoredState = changedDestination ? "Failed" : "Needs review";
+        await restored.getByText(restoredState, { exact: true }).waitFor();
         await page.reload();
-        await pane.getByText("Delivery unconfirmed", { exact: true }).waitFor();
-        expect((await readQueue(page))[0]).toMatchObject({
+        await restored.getByText(restoredState, { exact: true }).waitFor();
+        const recovered = (await readQueue(page))[0]!;
+        expect(recovered).toMatchObject({
           id: original.id,
           sessionKey: destination,
           agentId: "main",
-          sendRunId: original.sendRunId,
-          sendAttempts: 1,
           attachmentPayload: reference,
           storageScope: original.storageScope,
         });
+        expect(recovered.sendRunId).toBe(changedDestination ? undefined : original.sendRunId);
+        expect(recovered.sendAttempts ?? 0).toBe(changedDestination ? 0 : 1);
         await expectOutboxPayload(page, reference.key);
         await expectRequestCountStable(gateway, "chat.send", 0);
-        await pane.locator(".chat-group.user").getByRole("button", { name: /Retry/i }).click();
+        await restored.getByRole("button", { name: /Retry/i }).click();
         const sent = await gateway.waitForRequest("chat.send");
         expect(sent.params).toMatchObject({
           sessionKey: destination,
-          idempotencyKey: original.sendRunId,
           attachments: [outboxAttachment],
         });
+        const sentRunId = requireString(requireRecord(sent.params).idempotencyKey, "submission id");
+        if (changedDestination) {
+          expect(sentRunId).not.toBe(original.sendRunId);
+        } else {
+          expect(sentRunId).toBe(original.sendRunId);
+        }
         expect(requireRecord(sent.params).agentId).toBeUndefined();
         await expectOutboxPayload(page, reference.key);
         await gateway.resolveDeferred("chat.send");

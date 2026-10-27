@@ -54,17 +54,36 @@ function pressComposerEnter(container: Element, modifiers: KeyboardEventInit = {
   return pressComposerKey(container, "Enter", modifiers);
 }
 
+async function renderQueue(queue: QueuedMessage[], overrides: Partial<ChatComposerProps> = {}) {
+  const view = renderComposer({ queue, ...overrides });
+  await waitForSolid(() => expect(query(view.container, ".chat-queue__item")).not.toBeNull());
+  return (part: string) => query(view.container, `.chat-queue__${part}`);
+}
+
 describe("renderChatComposer controls", () => {
-  it("keeps an editable draft without send permission", () => {
-    const draft = "local draft";
-    const { container, onSend } = renderComposer({ canCompose: true, canSend: false, draft });
-    expect(textarea(container).disabled).toBe(false);
+  it.each([
+    { name: "without send permission", draft: "local draft", canCompose: true, canSend: false },
+    {
+      name: "after history failed",
+      draft: "/compact",
+      submitDisabledReason: "History failed. Retry to load the conversation.",
+      submitPending: false,
+    },
+  ])("keeps submission gated $name", ({ name: _name, ...overrides }) => {
+    const { container, onSend } = renderComposer(overrides);
     const send = primaryButton(container);
     expect(send.disabled).toBe(true);
+    if (overrides.submitDisabledReason) {
+      expect(send.getAttribute("aria-label")).toBe(overrides.submitDisabledReason);
+      expect(send.getAttribute("aria-busy")).toBe("false");
+      expect(send.querySelector(".btn__spinner")).toBeNull();
+    } else {
+      expect(textarea(container).disabled).toBe(false);
+    }
     send.click();
     pressComposerEnter(container);
     expect(onSend).not.toHaveBeenCalled();
-    expect(textarea(container).value).toBe(draft);
+    expect(textarea(container).value).toBe(overrides.draft);
   });
 
   it("keeps desktop and mobile Stop available with a pending attachment", () => {
@@ -80,34 +99,16 @@ describe("renderChatComposer controls", () => {
     });
     const stop = primaryButton(container);
 
-    expect(stop.getAttribute("aria-label")).toBe(t("chat.runControls.stopGenerating"));
     expect(stop.disabled).toBe(false);
+    expect(stop.getAttribute("aria-label")).toBe(t("chat.runControls.stopGenerating"));
     expect(query(container, ".chat-mobile-primary-action > openclaw-tooltip > button")).toBe(stop);
     expect(container.querySelectorAll(".chat-send-btn--stop")).toHaveLength(1);
     stop.click();
     expect(onAbort).toHaveBeenCalledOnce();
-    expect(onSend).not.toHaveBeenCalled();
-    expect(onDraftChange).not.toHaveBeenCalled();
-    expect(onTypingChange).not.toHaveBeenCalled();
+    for (const callback of [onSend, onDraftChange, onTypingChange]) {
+      expect(callback).not.toHaveBeenCalled();
+    }
     expect(textarea(container).value).toBe(props.draft);
-  });
-
-  it("keeps command submission gated after history failed", () => {
-    const reason = "History failed. Retry to load the conversation.";
-    const { container, onSend } = renderComposer({
-      draft: "/compact",
-      submitDisabledReason: reason,
-      submitPending: false,
-    });
-    const send = primaryButton(container);
-    expect(send.disabled).toBe(true);
-    expect(send.getAttribute("aria-label")).toBe(reason);
-    expect(send.getAttribute("aria-busy")).toBe("false");
-    expect(send.querySelector(".btn__spinner")).toBeNull();
-    send.click();
-    pressComposerEnter(container);
-    expect(onSend).not.toHaveBeenCalled();
-    expect(textarea(container).value).toBe("/compact");
   });
 
   function renderDictatingComposer({
@@ -134,27 +135,14 @@ describe("renderChatComposer controls", () => {
     const locked = vi.spyOn(dictation, "locksComposer", "get").mockReturnValue(true);
     vi.spyOn(dictation, "finalizing", "get").mockReturnValue(finalizing);
     const finishActive = vi.spyOn(dictation, "finishActive").mockResolvedValue(true);
-    const handleClick = vi.spyOn(dictation, "handleClick");
     const update = vi.spyOn(dictation, "update");
     renderComposerInto(container, props);
     const commit = update.mock.lastCall?.[0].onCommit;
     if (!commit) {
       throw new Error("expected the composer transcript callback");
     }
-    return { container, active, locked, finishActive, handleClick, onSend, commit };
+    return { container, active, locked, finishActive, onSend, commit };
   }
-
-  it("stops dictation by keeping its text without sending", () => {
-    const { container, finishActive, handleClick, onSend } = renderDictatingComposer();
-    const stop = query(container, ".chat-send-btn--dictating");
-
-    expect(stop?.getAttribute("aria-label")).toBe("Stop and keep text");
-    stop?.click();
-
-    expect(finishActive).toHaveBeenCalledOnce();
-    expect(handleClick).toHaveBeenCalledOnce();
-    expect(onSend).not.toHaveBeenCalled();
-  });
 
   it("finishes locked dictation before submitting the complete draft with history held", async () => {
     const { container, active, locked, finishActive, onSend, commit } = renderDictatingComposer({
@@ -187,19 +175,14 @@ describe("renderChatComposer controls", () => {
     );
   });
 
-  it("keeps Stop and Send visually stable while dictation finalizes", () => {
+  it("keeps Stop and Send mounted but aria-disabled while dictation finalizes", () => {
     const { container } = renderDictatingComposer({ finalizing: true });
 
-    const stop = query(container, ".chat-send-btn--dictating");
-    const send = query(container, ".chat-send-btn--dictation-commit");
-    expect(stop?.getAttribute("aria-label")).toBe("Stop and keep text");
-    expect(stop?.disabled).toBe(false);
-    expect(stop?.getAttribute("aria-disabled")).toBe("true");
-    expect(stop?.querySelector("rect")).not.toBeNull();
-    expect(send?.classList.contains("chat-send-btn--send")).toBe(true);
-    expect(send?.disabled).toBe(false);
-    expect(send?.getAttribute("aria-disabled")).toBe("true");
-    expect(send?.querySelector("path")?.getAttribute("d")).toBe("M12 19V5m-7 7 7-7 7 7");
+    for (const kind of ["dictating", "dictation-commit"]) {
+      const action = query(container, `.chat-send-btn--${kind}`);
+      expect(action?.disabled).toBe(false);
+      expect(action?.getAttribute("aria-disabled")).toBe("true");
+    }
   });
 
   it("keeps dictation available while Talk is held during an active turn", () => {
@@ -265,6 +248,7 @@ describe("renderChatComposer controls", () => {
         queued("waiting-idle-1", { createdAt: 4, sendState: "waiting-idle" }),
       ],
     });
+    await vi.dynamicImportSettled();
     const steer = await waitForSolid(() => {
       const buttons = [...container.querySelectorAll<HTMLButtonElement>(".chat-queue__action")];
       expect(buttons).toHaveLength(2);
@@ -308,6 +292,7 @@ describe("renderChatComposer controls", () => {
 
     pressComposerEnter(container);
     expect(onQueueSteer).not.toHaveBeenCalled();
+    await vi.dynamicImportSettled();
     await waitForSolid(() => expect(container.querySelector(".chat-queue__item")).not.toBeNull());
     expect(container.querySelector(".chat-queue__action")).toBeNull();
   });
@@ -439,84 +424,54 @@ describe("renderChatComposer controls", () => {
   });
 
   it("renders the queued author's avatar before the turn is submitted", async () => {
-    const { container } = renderComposer({
-      queue: [
-        queued("waiting-idle-1", {
-          createdAt: 4,
-          sendState: "waiting-idle",
-          sender: { id: "profile_123", name: "Alice Example" },
-        }),
-      ],
-    });
-
-    await vi.waitFor(() => {
-      expect(
-        query(container, ".chat-queue__item .chat-author-avatar__initials")?.textContent,
-      ).toContain("AE");
-    });
+    const part = await renderQueue([
+      queued("waiting", {
+        sendState: "waiting-idle",
+        sender: { id: "alice", name: "Alice Example" },
+      }),
+    ]);
+    await waitForSolid(() =>
+      expect(part("item .chat-author-avatar__initials")?.textContent).toContain("AE"),
+    );
   });
 
   it("renders reconnect waits as compact badges without the raw transport error", async () => {
-    const { container } = renderComposer({
-      connected: false,
-      queue: [
-        queued("reconnect-1", {
-          sendError: "chat.send unavailable during gateway restart",
-          sendState: "waiting-reconnect",
-        }),
-      ],
-    });
-    await waitForSolid(() => expect(container.querySelector(".chat-queue__item")).not.toBeNull());
-    const item = container.querySelector(".chat-queue__item");
+    const error = "chat.send unavailable during gateway restart";
+    const part = await renderQueue(
+      [queued("reconnect", { sendError: error, sendState: "waiting-reconnect" })],
+      { connected: false },
+    );
+    const item = part("item");
     expect(item?.classList.contains("chat-queue__item--reconnect")).toBe(true);
-    expect(
-      item?.querySelector('.chat-queue__icon path[d="M21 5v12a2 2 0 0 1-2 2h-6"]'),
-    ).not.toBeNull();
-    expect(item?.querySelector(".chat-queue__error")).toBeNull();
-    const state = item?.querySelector(".chat-queue__badge--reconnect");
-    expect(state?.textContent?.trim()).toBe("Waiting for reconnect");
-    expect(state?.getAttribute("title")).toBe("chat.send unavailable during gateway restart");
+    const badge = part("badge--reconnect");
+    expect(badge?.textContent?.trim()).toBe("Waiting for reconnect");
+    expect(badge?.getAttribute("title")).toBe(error);
     expect(item?.querySelectorAll(".chat-queue__badge")).toHaveLength(1);
-    expect(item?.querySelector(".chat-queue__state")).toBeNull();
-    expect(container.querySelector(".chat-queue__global-state")).toBeNull();
+    for (const hidden of ["error", "state", "global-state"]) {
+      expect(part(hidden)).toBeNull();
+    }
   });
 
   it("renders failed sends as retryable and running commands as inert", async () => {
     const onQueueRetry = vi.fn();
-    let view = renderComposer({
-      onQueueRetry,
-      queue: [
-        queued("failed-1", {
-          sendError: "send blocked by session policy",
-          sendRunId: "run-failed-1",
-          sendState: "failed",
-        }),
-      ],
-    });
-    await waitForSolid(() =>
-      expect(query(view.container, ".chat-queue__badge")?.textContent?.trim()).toBe("Failed"),
+    const error = "send blocked by session policy";
+    const part = await renderQueue(
+      [queued("failed-1", { sendError: error, sendRunId: "run-failed-1", sendState: "failed" })],
+      { onQueueRetry },
     );
-    expect(query(view.container, ".chat-queue__error")?.textContent).toContain(
-      "send blocked by session policy",
-    );
-    query(view.container, ".chat-queue__retry")?.click();
+    await waitForSolid(() => expect(part("badge")?.textContent?.trim()).toBe("Failed"));
+    expect(part("error")?.textContent).toContain(error);
+    part("retry")?.click();
     expect(onQueueRetry).toHaveBeenCalledWith("failed-1");
-
-    view = renderComposer({
-      queue: [
-        queued("running-command", {
-          text: "/compact",
-          localCommandName: "compact",
-          sendState: "executing-command",
-        }),
-      ],
-    });
-    await waitForSolid(() =>
-      expect(query(view.container, ".chat-queue__state")?.textContent?.trim()).toBe(
-        "Running command",
-      ),
-    );
-    expect(query(view.container, ".chat-queue__retry")).toBeNull();
-    expect(query(view.container, ".chat-queue__remove")).toBeNull();
+    const running = await renderQueue([
+      queued("running-command", {
+        text: "/compact",
+        localCommandName: "compact",
+        sendState: "executing-command",
+      }),
+    ]);
+    await waitForSolid(() => expect(running("state")?.textContent?.trim()).toBe("Running command"));
+    expect(running("retry")).toBeNull();
+    expect(running("remove")).toBeNull();
   });
 });

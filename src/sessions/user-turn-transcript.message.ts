@@ -9,6 +9,7 @@ import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { AgentMessage } from "../../packages/agent-core/src/types.js";
 import {
+  isMediaKind,
   readPersistedMediaFacts,
   type MediaFact,
   type MediaFactInput,
@@ -23,21 +24,7 @@ import type {
 } from "./user-turn-transcript.types.js";
 
 const URL_LIKE_MEDIA_PATH_PATTERN = /^[a-z][a-z0-9+.-]*:/i;
-const STRUCTURED_MEDIA_KINDS = new Set<string>([
-  "image",
-  "audio",
-  "video",
-  "document",
-  "sticker",
-  "unknown",
-]);
 const MIME_TYPE_PATTERN = /^[a-z0-9!#$&^_.+-]+\/[a-z0-9!#$&^_.+-]+$/iu;
-
-function isStructuredMediaKind(
-  kind: string | undefined,
-): kind is NonNullable<MediaFactInput["kind"]> {
-  return kind !== undefined && STRUCTURED_MEDIA_KINDS.has(kind);
-}
 
 function resolveTranscriptMediaPath(pathValue: string, workspaceDir: string | undefined): string {
   // Relative staged media paths are anchored to the media workspace; absolute
@@ -55,7 +42,7 @@ function normalizeStructuredMediaEntryForTranscript(
   const mediaPath = normalizeOptionalString(media.path);
   const mediaUrl = normalizeOptionalString(media.url);
   const legacyKind = normalizeOptionalString(media.kind);
-  const kind = isStructuredMediaKind(legacyKind) ? legacyKind : undefined;
+  const kind = isMediaKind(legacyKind) ? legacyKind : undefined;
   const messageId = normalizeOptionalString(media.messageId);
   const contentType =
     normalizeOptionalString(media.contentType) ??

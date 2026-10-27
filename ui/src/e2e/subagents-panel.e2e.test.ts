@@ -349,6 +349,21 @@ suite.define(() => {
           { exact: true },
         );
         await copy.waitFor();
+        await page.mouse.move(10, 10);
+        const stop = detail.locator(".subagents-desktop__stop");
+        await stop.waitFor();
+        const stopInk = await stop.evaluate((button) => {
+          const glyph = button.querySelector("svg")!;
+          return {
+            label: getComputedStyle(button).color,
+            glyph: getComputedStyle(glyph).color,
+            fill: getComputedStyle(glyph).fill,
+          };
+        });
+        expect(stopInk.glyph, "Stop keeps its destructive label foreground at rest").toBe(
+          stopInk.label,
+        );
+        expect(stopInk.fill, "Stop paints its destructive glyph foreground").toBe(stopInk.label);
 
         const geometry = await copy.evaluate((element) => {
           const thread = element.closest<HTMLElement>(".chat-thread")!;

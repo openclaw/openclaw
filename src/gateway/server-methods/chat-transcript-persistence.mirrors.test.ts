@@ -287,10 +287,7 @@ it("settles an accepted correction across the Gateway close prelude before closi
   let correcting: ReturnType<typeof rewriteByKey> | undefined;
   let closing: Promise<void> | undefined;
   try {
-    const port = await fixture.reservePort();
-    const server = await fixture.start(port);
-    const kernel = fixture.kernels.get(port);
-    assert(kernel);
+    const { server, kernel } = await fixture.startServer();
     const { scope, keyed } = await seed(fixture.state.env);
     const database = openOpenClawAgentDatabase(scope);
     held = patchSessionEntryCore(
@@ -430,16 +427,11 @@ async function seedTranscript(
     transcriptEvent("request", "user", [text("Make an avatar sheet.")]),
     assistant(
       "generation-tool-call",
-      [
-        text("Preparing the sheet.", "signed-progress"),
-        { type: "toolCall", id: "generate-call", name: "image_generate", arguments: {} },
-      ],
+      [{ type: "toolCall", id: "generate-call", name: "image_generate", arguments: {} }],
       RUN_ID,
       { stopReason: "toolUse" },
     ),
     transcriptEvent("generation-tool-result", "toolResult", [text("Generated one image.")], {
-      toolCallId: "generate-call",
-      toolName: "image_generate",
       __openclaw: { runId: RUN_ID },
     }),
     assistant(

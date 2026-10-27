@@ -1969,12 +1969,15 @@ async function runTelegramIfNeeded(
     (fullValidationEvidence.source === "candidate-owned-admission-v1" &&
       (qualificationManifest.releaseProfile === "stable" ||
         qualificationManifest.releaseProfile === "full"));
-  if (
-    npmUsesFullRun &&
-    coversPackageTelegram &&
-    options.telegramProviderMode === "mock-openai" &&
-    !qualificationManifest.validationInputs?.telegramWaiver
-  ) {
+  if (npmUsesFullRun && coversPackageTelegram && options.telegramProviderMode === "mock-openai") {
+    const waived = qualificationManifest.waivers?.some(
+      (waiver: JsonRecord) =>
+        waiver.jobName ===
+        "Run package acceptance / Telegram package acceptance / Run package Telegram E2E",
+    );
+    if (waived) {
+      return { status: "waived", providerMode: "mock-openai" };
+    }
     // Authentication proves package acceptance passed with Q's mock Telegram
     // harness. Reuse only its exact qualified package, not a separately packed one.
     return { status: "covered-by-full-release-validation", providerMode: "mock-openai" };

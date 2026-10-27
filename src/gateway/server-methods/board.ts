@@ -1,6 +1,8 @@
 import { isDeepStrictEqual } from "node:util";
 import {
   type BoardWidgetMaterializedPutParams,
+  ErrorCodes,
+  errorShape,
   validateBoardActionParams,
   validateBoardDataReadParams,
   validateBoardEventParams,
@@ -27,12 +29,8 @@ import {
   runWithSessionActorStorage,
 } from "../../config/sessions/session-actor-storage-binding.js";
 import { composeSessionSourceAssertion } from "../../config/sessions/session-source-authority.js";
-import {
-  resolveBoardWidgetContentKind,
-  resolveBoardWidgetContentKindByPluginKind,
-  resolveBoardWidgetContentKindResourceUrls,
-} from "../../plugins/board-widget-content-kinds.js";
 import { isIncognitoSessionKey } from "../../routing/session-key.js";
+import { operatorScopeSatisfied } from "../../shared/operator-scope-compat.js";
 import {
   boardDataBindingCapability,
   captureBoardCapabilityAuthority,
@@ -66,6 +64,7 @@ import {
   projectBoardSnapshot,
   broadcastBoardChanged,
 } from "./board-handler-context.js";
+import { retainCanvasWidgetRead } from "./canvas-widget-read.js";
 import { emitSessionsChanged } from "./session-change-event.js";
 import type { GatewayRequestHandlers } from "./types.js";
 import { assertValidParams } from "./validation.js";
@@ -94,22 +93,6 @@ export function createBoardHandlers(store: BoardStore): GatewayRequestHandlers {
         if (!viewMetadata || viewMetadata.revision !== widget.revision) {
           continue;
         }
-        const registration = widget.pluginKind
-          ? resolveBoardWidgetContentKindByPluginKind(authority.pluginRegistry, widget.pluginKind)
-          : undefined;
-        const scopedHostUrl = registration
-          ? client?.pluginSurfaceUrls?.[registration.definition.resources.surface]
-          : undefined;
-        const resourceUrls =
-          registration && scopedHostUrl
-            ? resolveBoardWidgetContentKindResourceUrls(registration, scopedHostUrl)
-            : undefined;
-        if (widget.contentKind === "plugin" && (!registration || !resourceUrls || !scopedHostUrl)) {
-          continue;
-        }
-        const resourceOrigins = resourceUrls
-          ? [...new Set(Object.values(resourceUrls).map((url) => new URL(url).origin))]
-          : undefined;
         if (sandboxPort === undefined && context.ensureSandboxHostPort) {
           sandboxPort = await context.ensureSandboxHostPort();
         }
@@ -120,22 +103,11 @@ export function createBoardHandlers(store: BoardStore): GatewayRequestHandlers {
           name: widget.name,
           revision: widget.revision,
           viewGeneration: viewMetadata.viewGeneration,
-          ...(registration && scopedHostUrl
-            ? {
-                pluginFrame: {
-                  pluginKind: registration.pluginKind,
-                  scopedHostUrl,
-                },
-              }
-            : {}),
           authority: {
             ...authority.ticketAuthority,
             remoteIngressPrincipal: client?.internal?.remoteIngressPrincipal,
           },
         });
-        if (registration) {
-          widget.kindLabel = registration.definition.label;
-        }
         widget.frameUrl = buildBoardWidgetFrameUrl({
           sessionKey: sessionObserverScopeKey(snapshot.sessionKey, boardSession.agentId),
           name: widget.name,
@@ -150,7 +122,6 @@ export function createBoardHandlers(store: BoardStore): GatewayRequestHandlers {
         if (sandboxPort !== undefined) {
           widget.sandboxUrl = buildBoardWidgetSandboxPath({
             ...viewMetadata,
-            ...(resourceOrigins ? { resourceOrigins } : {}),
           });
           if (ingress) {
             widget.sandboxUrl = new URL(widget.sandboxUrl, ingress.sandboxOrigin).href;
@@ -203,8 +174,15 @@ export function createBoardHandlers(store: BoardStore): GatewayRequestHandlers {
       validateBoardWidgetPutParams,
       async (invocation) => {
         const { params: requestParams, respond, context } = invocation;
+        if (requestParams.content.kind === "registered") {
+          throw new BoardValidationError(
+            "invalid_operation",
+            "Registered board widgets were removed; use HTML widgets instead.",
+          );
+        }
         const boardAuthority = captureBoardRequestAuthority(invocation);
         let requester: Awaited<ReturnType<typeof captureGatewayOperatorRunAuthority>>;
+        let canvasRead: Awaited<ReturnType<typeof retainCanvasWidgetRead>> | undefined;
         const authority = {
           ...boardAuthority,
           assertActive: composeSessionSourceAssertion(
@@ -212,6 +190,7 @@ export function createBoardHandlers(store: BoardStore): GatewayRequestHandlers {
             (assertSources) => {
               assertSources();
               requester?.authority.assertCurrent();
+              canvasRead?.read.assertCurrent();
             },
           ),
         };
@@ -239,6 +218,26 @@ export function createBoardHandlers(store: BoardStore): GatewayRequestHandlers {
           let declared = requestDeclared;
           let resolveMcpAppInteraction: (() => Promise<boolean>) | undefined;
           if (requestParams.content.kind === "canvas-doc") {
+            if (
+              invocation.client?.connect &&
+              !operatorScopeSatisfied("operator.read", invocation.client.connect.scopes ?? [])
+            ) {
+              canvasRead = await retainCanvasWidgetRead(invocation, {
+                ...boardSession,
+                docId: requestParams.content.docId,
+              });
+            }
+            authority.assertActive();
+            if (canvasRead?.pending) {
+              respond(
+                false,
+                undefined,
+                errorShape(ErrorCodes.UNAVAILABLE, "Waiting for the widget result.", {
+                  retryable: true,
+                }),
+              );
+              return;
+            }
             const document = await readCanvasDocumentHtmlSource(requestParams.content.docId);
             authority.assertActive();
             if (document.cspSandbox !== "scripts") {
@@ -294,42 +293,13 @@ export function createBoardHandlers(store: BoardStore): GatewayRequestHandlers {
               interactive,
             };
             declared = interactive && allowedTools.length > 0 ? { tools: allowedTools } : undefined;
-          } else if (requestParams.content.kind === "registered") {
-            const registration = resolveBoardWidgetContentKind(
-              authority.pluginRegistry,
-              requestParams.content.contentKind,
-            );
-            if (!registration) {
-              throw new BoardValidationError(
-                "invalid_operation",
-                `widget kind ${JSON.stringify(requestParams.content.contentKind)} is unavailable; enable the plugin that provides it and retry`,
-              );
-            }
-            try {
-              registration.definition.validateSource(requestParams.content.source);
-            } catch (error) {
-              throw new BoardValidationError(
-                "invalid_operation",
-                `invalid ${requestParams.content.contentKind} widget source: ${String(error)}`,
-              );
-            }
-            content = {
-              ...requestParams.content,
-              pluginKind: registration.pluginKind,
-            };
           } else {
             content = requestParams.content;
           }
           const persistedContent =
             content.kind === "mcp-app"
               ? { kind: content.kind, descriptor: content.descriptor }
-              : content.kind === "registered"
-                ? {
-                    kind: content.kind,
-                    contentKind: content.contentKind,
-                    source: content.source,
-                  }
-                : content;
+              : content;
           if (
             !assertValidParams(
               persistedContent,
@@ -370,7 +340,7 @@ export function createBoardHandlers(store: BoardStore): GatewayRequestHandlers {
               >
             | undefined;
           if (
-            (content.kind === "html" || content.kind === "registered") &&
+            content.kind === "html" &&
             declared?.tools?.some((tool) => tool.startsWith(GITHUB_ACTIONS_GRANT_PREFIX))
           ) {
             const { prepareBoardGitHubIdentity } = await import("../github-actions-read.js");
@@ -491,6 +461,7 @@ export function createBoardHandlers(store: BoardStore): GatewayRequestHandlers {
           try {
             await memory?.actor.release();
           } finally {
+            canvasRead?.read.release();
             requester?.release();
           }
         }

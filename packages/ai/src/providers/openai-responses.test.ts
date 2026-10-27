@@ -116,10 +116,10 @@ describe("OpenAI Responses provider", () => {
   it("routes the SDK fetch through the host guard without changing the request or response", async () => {
     const { hostResponse, hostFetch } = guardedResponse("synthetic rejection");
     const result = await runRequest({ apiKey: "sentinel-key" });
-    // Fail before a terminal usage event: zeros are unmeasured, not free.
+    // The provider rejected the request with an error body, so it did no billable work.
     expect(result).toMatchObject({
       stopReason: "error",
-      usage: { input: 0, output: 0, totalTokens: 0, usageReport: { state: "unavailable" } },
+      usage: { input: 0, output: 0, totalTokens: 0, usageReport: { state: "available" } },
     });
     expect(openAiMockState.configs).toHaveLength(1);
     expect(openAiMockState.configs[0]).toMatchObject({ maxRetries: 0 });
@@ -209,42 +209,22 @@ describe("OpenAI Responses provider", () => {
     },
   );
 
-  it.each<{
-    options: Options;
-    model: Partial<ResponsesModel>;
-    expected: { ttl: "30m" | "12h" } | undefined;
-  }>([
-    {
-      options: { promptCacheTtl: "12h", cacheRetention: "long" },
-      model: { id: "gpt-5.6-sol" },
-      expected: { ttl: "12h" },
-    },
-    { options: { promptCacheTtl: "30m" }, model: { id: "gpt-6.1-sol" }, expected: { ttl: "30m" } },
-    {
-      options: { promptCacheTtl: "12h", cacheRetention: "none" },
-      model: { id: "gpt-6.1-sol" },
-      expected: undefined,
-    },
-    { options: { promptCacheTtl: "12h" }, model: { id: "gpt-5.5" }, expected: undefined },
-    {
-      options: { promptCacheTtl: "12h" },
-      model: { id: "gpt-6.1-sol", compat: { supportsLongCacheRetention: false } },
-      expected: undefined,
-    },
-    {
-      options: { promptCacheTtl: "12h" },
-      model: { id: "gpt-6.1-sol", baseUrl: "https://proxy.example/v1" },
-      expected: undefined,
-    },
+  it.each<[Options, Partial<ResponsesModel>, "30m" | "12h" | undefined]>([
+    [{ cacheRetention: "long" }, { id: "gpt-5.6-sol" }, "12h"],
+    [{ promptCacheTtl: "30m" }, {}, "30m"],
+    [{ cacheRetention: "none" }, {}, undefined],
+    [{}, { id: "gpt-5.5" }, undefined],
+    [{}, { compat: { supportsLongCacheRetention: false } }, undefined],
+    [{}, { baseUrl: "https://proxy.example/v1" }, undefined],
   ])(
     "honors the explicit Responses cache lifetime only on eligible routes: %j",
-    async ({ options, model: modelOverrides, expected }) => {
+    async (options, modelOverrides, ttl) => {
       const requests = await bothRequests(
-        { sessionId: "cache-session", ...options },
-        modelOverrides,
+        { sessionId: "cache-session", promptCacheTtl: "12h", ...options },
+        { id: "gpt-6.1-sol", ...modelOverrides },
       );
       for (const params of requests) {
-        expect(params.prompt_cache_options).toEqual(expected);
+        expect(params.prompt_cache_options).toEqual(ttl ? { ttl } : undefined);
         expect(params.prompt_cache_retention).toBeUndefined();
       }
     },

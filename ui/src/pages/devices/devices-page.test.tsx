@@ -5,7 +5,6 @@ import { getQueriesForElement } from "@solidjs/testing-library";
 import { flush } from "solid-js";
 import { describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
-import { GatewayRequestError } from "../../api/gateway.ts";
 import type { PresenceEntry } from "../../api/types.ts";
 import { t } from "../../i18n/index.ts";
 import {
@@ -16,6 +15,7 @@ import {
   deviceSystemInfo,
   deviceDesktopEnvironments,
 } from "../../test-helpers/devices-fixtures.ts";
+import { missingReadScopeErrorFixture } from "../../test-helpers/gateway-client.ts";
 import { waitForRenderedModalDialog } from "../../test-helpers/modal-dialog.ts";
 import { waitForSolid } from "../../test-helpers/solid-settle.ts";
 import {
@@ -333,15 +333,7 @@ describe("DevicesPage gateway lifecycle", () => {
     const { client, request } = clientFor(
       vi.fn(async (method: string) => {
         if (method === "system.info") {
-          throw new GatewayRequestError({
-            code: "FORBIDDEN",
-            message: "permission denied",
-            details: {
-              code: "MISSING_SCOPE",
-              missingScope: "operator.read",
-              requiredScopes: ["operator.read"],
-            },
-          });
+          throw missingReadScopeErrorFixture();
         }
         return responseFor(method);
       }),

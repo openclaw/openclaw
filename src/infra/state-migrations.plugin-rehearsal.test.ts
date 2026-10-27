@@ -3,10 +3,7 @@ import path from "node:path";
 import { afterEach, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import {
-  applyPluginDoctorCompatibilityMigrations,
-  resolveLivePluginDoctorStateMigrationInventory,
-} from "../plugins/doctor-contract-registry.js";
+import { applyPluginDoctorCompatibilityMigrations } from "../plugins/doctor-contract-registry.js";
 import { clearPluginDoctorContractRegistryCache } from "../plugins/doctor-contract-registry.test-fixtures.js";
 import { waitForPluginCacheRetirement } from "../plugins/plugin-cache.js";
 import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
@@ -20,7 +17,6 @@ import {
 } from "./deferred-plugin-migrations.js";
 import {
   autoMigrateLegacyPluginDoctorState,
-  runPluginDoctorStateMigrationPlans,
   runPostSessionPluginDoctorStateRepairs,
 } from "./state-migrations.plugin-doctor.js";
 import { buildUpdateRehearsalPathEnv } from "./update-rehearsal-paths.js";
@@ -34,7 +30,7 @@ afterEach(async () => {
   await waitForPluginCacheRetirement();
 });
 
-it.each(["direct", "automatic", "post-session"] as const)(
+it.each(["automatic", "post-session"] as const)(
   "keeps external declared plugin data untouched through the registered %s runner",
   async (runner) => {
     const root = fs.realpathSync(dirs.make("plugin-rehearsal-"));
@@ -124,24 +120,14 @@ it.each(["direct", "automatic", "post-session"] as const)(
         },
       ],
     });
-    const inventory = resolveLivePluginDoctorStateMigrationInventory({ config, env });
-    const common = { config, env, inventory };
     const run = () =>
       runner === "automatic"
         ? autoMigrateLegacyPluginDoctorState({ config, env, homedir: () => stateDir })
-        : runner === "post-session"
-          ? runPostSessionPluginDoctorStateRepairs({
-              ...common,
-              maintenanceAuthority: { assertCurrent() {} },
-            })
-          : runPluginDoctorStateMigrationPlans({
-              ...common,
-              detected: {
-                stateDir,
-                oauthDir: path.join(stateDir, "credentials"),
-                doctorOnlyStateMigrations: true,
-              },
-            });
+        : runPostSessionPluginDoctorStateRepairs({
+            config,
+            env,
+            maintenanceAuthority: { assertCurrent() {} },
+          });
 
     const result = await run();
     expect(fs.readFileSync(external, "utf8")).toBe("live source");

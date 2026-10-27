@@ -7,7 +7,6 @@ import {
   DEFAULT_CHANNEL_STALE_EVENT_THRESHOLD_MS,
   evaluateChannelHealth,
   type ChannelHealthPolicy,
-  type ChannelHealthEvaluation,
 } from "../channel-health-policy.js";
 import type { ChannelManager } from "../server-channels.js";
 import type { GatewayPluginReloadStatus } from "../server-plugin-reload-status.types.js";
@@ -22,6 +21,7 @@ type ReadinessResult = {
   eventLoop?: GatewayEventLoopHealth;
   pluginReload?: GatewayPluginReloadStatus;
   agentDatabases?: readonly AgentDatabaseAdmissionRefusal[];
+  agentRecovery?: readonly string[];
   stateDatabase?: { reason: string };
 };
 
@@ -74,7 +74,7 @@ export function createStartupChecker(
 
 function shouldIgnoreReadinessFailure(
   accountSnapshot: ChannelAccountSnapshot,
-  health: ChannelHealthEvaluation,
+  health: ReturnType<typeof evaluateChannelHealth>,
 ): boolean {
   if (health.reason === "unmanaged" || health.reason === "stale-socket") {
     return true;
@@ -103,6 +103,8 @@ export function createReadinessChecker(
     getAgentDatabaseAdmissionRefusals?: () => readonly AgentDatabaseAdmissionRefusal[];
     getPluginReloadStatus?: () => GatewayPluginReloadStatus | undefined;
     isChatSendAvailable?: () => boolean;
+    getPendingAgentInputRecovery?: () => readonly string[];
+    isRequiredAgent?: (agentId: string) => boolean;
     shouldSkipChannelReadiness?: () => boolean;
   },
 ): ReadinessChecker {
@@ -113,6 +115,7 @@ export function createReadinessChecker(
 
   const readReadiness = (
     agentDatabases: readonly AgentDatabaseAdmissionRefusal[] | undefined,
+    pendingRecovery: readonly string[],
   ): ReadinessResult => {
     const startup = getStartup();
     const uptimeMs = startup.uptimeMs;
@@ -154,6 +157,18 @@ export function createReadinessChecker(
     if (deps.isChatSendAvailable?.() === false) {
       cachedState = null;
       return { ready: false, coreReady: false, failing: ["chat-recovery"], uptimeMs };
+    }
+    const requiredRecovery = pendingRecovery.filter(
+      (agentId) => deps.isRequiredAgent?.(agentId) ?? true,
+    );
+    if (requiredRecovery.length) {
+      cachedState = null;
+      return {
+        ready: false,
+        coreReady: false,
+        failing: requiredRecovery.map((agentId) => `chat-recovery:${agentId}`),
+        uptimeMs,
+      };
     }
     if (
       cachedState &&
@@ -212,12 +227,14 @@ export function createReadinessChecker(
   };
   return () => {
     const agentDatabases = deps.getAgentDatabaseAdmissionRefusals?.();
-    const result = readReadiness(agentDatabases);
+    const agentRecovery = deps.getPendingAgentInputRecovery?.();
+    const result = readReadiness(agentDatabases, agentRecovery ?? []);
     const getEventLoopHealth = deps.getEventLoopHealth;
     const eventLoop = getEventLoopHealth?.();
     return {
       ...result,
       ...(agentDatabases?.length ? { agentDatabases } : {}),
+      ...(agentRecovery?.length ? { agentRecovery } : {}),
       ...(eventLoop ? { eventLoop } : {}),
     };
   };

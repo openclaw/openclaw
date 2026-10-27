@@ -8,11 +8,20 @@ import {
 } from "../../infra/diagnostic-events.js";
 import type { DiagnosticTraceContext } from "../../infra/diagnostic-trace-context.js";
 import type { EmbeddedRunAttemptResult } from "../embedded-agent-runner/run/types.js";
-import { createZeroUsageFixture } from "../test-helpers/usage-fixtures.js";
+import { makeAgentAssistantMessage } from "../test-helpers/agent-message-fixtures.js";
 import type {
+  AgentHarness,
   AgentHarnessAttemptParamsV2 as AttemptParams,
   AgentHarnessSettledTurnFinalizationAttemptParams as SettledParams,
 } from "./types.js";
+
+export const createLifecycleHarness = (overrides: Partial<AgentHarness> = {}): AgentHarness => ({
+  id: "codex",
+  label: "Codex",
+  supports: () => ({ supported: true }),
+  runAttempt: async () => createAttemptResult(),
+  ...overrides,
+});
 
 export const createBaseAttemptParams = () => ({
   prompt: "hello",
@@ -27,39 +36,28 @@ export const createBaseAttemptParams = () => ({
   authStorage: {} as never,
   authProfileStore: { version: 1, profiles: {} },
   modelRegistry: {} as never,
-  thinkLevel: "low",
+  thinkLevel: "low" as const,
 });
 
 export const createAttemptParams = (): AttemptParams =>
+  createFinalizationParams() as unknown as AttemptParams;
+
+export const createFinalizationParams = (): SettledParams<AttemptParams> =>
   Object.assign(createBaseAttemptParams(), {
     sessionKey: "session-key",
     messageChannel: "qa",
-    trigger: "manual",
-  }) as unknown as AttemptParams;
-
-export function createFinalizationParams(): SettledParams<AttemptParams> {
-  const {
-    hostCapabilities: _hostCapabilities,
-    onSettledTurn: _onSettledTurn,
-    ...params
-  } = createAttemptParams();
-  return params;
-}
+    trigger: "manual" as const,
+  });
 
 export function createDiagnosticTrace(): DiagnosticTraceContext {
   return { traceId: "1".repeat(32), spanId: "2".repeat(16), traceFlags: "01" };
 }
 
-export const createFinalAssistant = (): NonNullable<EmbeddedRunAttemptResult["lastAssistant"]> => ({
-  role: "assistant",
-  content: [{ type: "text", text: "done" }],
-  api: "openai-responses",
-  provider: "openai",
-  model: "gpt-5.5",
-  usage: createZeroUsageFixture(),
-  stopReason: "stop",
-  timestamp: 0,
-});
+export const createFinalAssistant = () =>
+  makeAgentAssistantMessage({
+    content: [{ type: "text", text: "done" }],
+    model: "gpt-5.5",
+  });
 
 export const createAttemptResult = (): EmbeddedRunAttemptResult => ({
   terminal: { kind: "ok" },

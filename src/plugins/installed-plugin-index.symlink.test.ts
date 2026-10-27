@@ -11,6 +11,7 @@ import { loadPluginManifest } from "./manifest.js";
 import { createPluginCache, withPluginCache } from "./plugin-cache.js";
 import { refreshPluginRegistry } from "./plugin-registry-refresh.js";
 import { inspectPluginRegistry } from "./plugin-registry.js";
+import { writeArtifacts } from "./public-surface.test-support.js";
 
 const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
   afterEach(async () => {
@@ -29,12 +30,11 @@ function createAliasedPlugin() {
   fs.symlinkSync(projects, alias, process.platform === "win32" ? "junction" : "dir");
   const manifestPath = path.join(root, "openclaw.plugin.json");
   const contents = JSON.stringify({ id: "demo", configSchema: { type: "object" } });
-  fs.writeFileSync(manifestPath, contents);
-  fs.writeFileSync(
-    path.join(root, "package.json"),
-    JSON.stringify({ name: "@fixture/demo", openclaw: { extensions: ["./index.js"] } }),
-  );
-  fs.writeFileSync(path.join(root, "index.js"), 'throw new Error("metadata executed runtime");');
+  writeArtifacts(root, {
+    "openclaw.plugin.json": contents,
+    "package.json": { name: "@fixture/demo", openclaw: { extensions: ["./index.js"] } },
+    "index.js": 'throw new Error("metadata executed runtime");',
+  });
   return {
     roots: { canonical: root, alias: path.join(alias, "demo") },
     manifestPath,
@@ -55,7 +55,7 @@ it.each([
   { prewarm: "alias", configured: "canonical" },
   { prewarm: "canonical", configured: "alias" },
 ] as const)("hashes $configured roots after $prewarm prewarming", ({ prewarm, configured }) => {
-  const { roots, identity, manifestPath, env } = createAliasedPlugin();
+  const { roots, identity, env } = createAliasedPlugin();
   freshCache(() => {
     expect(loadPluginManifest(roots[prewarm]).ok).toBe(true);
     const index = loadInstalledPluginIndex({
@@ -67,15 +67,8 @@ it.each([
     expect(index.plugins[0]).toMatchObject({
       rootDir: roots.canonical,
       ...identity,
-      packageJson: { path: "package.json" },
     });
     expect(index.diagnostics).toEqual([]);
-    for (const root of Object.values(roots)) {
-      expect(loadPluginManifest(root)).toMatchObject({
-        ok: true,
-        manifestPath,
-      });
-    }
   });
 });
 

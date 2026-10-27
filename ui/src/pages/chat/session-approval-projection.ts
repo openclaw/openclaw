@@ -58,6 +58,7 @@ function projectPendingApproval(
       request: {
         ...common.request,
         host: presentation.host ?? null,
+        nodeId: presentation.nodeId ?? null,
         warningText: presentation.warningText ?? null,
         streamProposal: presentation.streamProposal,
       },

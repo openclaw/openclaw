@@ -4,15 +4,12 @@ import type { ApplicationContext } from "../app/context.ts";
 import { handleNavigationClick } from "../lib/navigation-click.ts";
 import { t } from "../lib/reactive/i18n.ts";
 
-export type CustomPluginUiDisabledContext = Pick<
-  ApplicationContext<"labs">,
-  "basePath" | "navigate"
-> & {
-  readonly plugins: Pick<ApplicationContext["plugins"], "errors">;
-};
-
 export function CustomPluginUiDisabled(props: {
-  context: CustomPluginUiDisabledContext | undefined;
+  context:
+    | (Pick<ApplicationContext<"labs">, "basePath" | "navigate"> & {
+        readonly plugins: Pick<ApplicationContext["plugins"], "errors">;
+      })
+    | undefined;
   pluginId: string;
 }) {
   return (

@@ -59,16 +59,6 @@ function defaultClaudeHome(): string {
   return configuredDir ? resolveHomePath(configuredDir) : path.join(os.homedir(), ".claude");
 }
 
-function defaultDesktopConfig(): string {
-  return path.join(
-    os.homedir(),
-    "Library",
-    "Application Support",
-    "Claude",
-    "claude_desktop_config.json",
-  );
-}
-
 async function addArchivePath(
   archivePaths: ClaudeArchivePath[],
   id: string,
@@ -177,7 +167,15 @@ export async function discoverClaudeSource(input?: string): Promise<ClaudeSource
   const userLocalSettingsPath = homeDir ? path.join(homeDir, "settings.local.json") : undefined;
   const userClaudeJsonPath = inspectGlobal ? path.join(os.homedir(), ".claude.json") : undefined;
   const userMemoryPath = homeDir ? path.join(homeDir, "CLAUDE.md") : undefined;
-  const desktopConfigPath = inspectGlobal ? defaultDesktopConfig() : undefined;
+  const desktopConfigPath = inspectGlobal
+    ? path.join(
+        os.homedir(),
+        "Library",
+        "Application Support",
+        "Claude",
+        "claude_desktop_config.json",
+      )
+    : undefined;
   const homeProjectsDir = homeDir ? path.join(homeDir, "projects") : undefined;
   const userSkillsDir = homeDir ? path.join(homeDir, "skills") : undefined;
   const userCommandsDir = homeDir ? path.join(homeDir, "commands") : undefined;

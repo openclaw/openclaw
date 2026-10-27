@@ -64,16 +64,15 @@ export function createDispatchFixture(
     duplicateOnSecondPage?: boolean;
     runIdentityOverrides?: Record<string, unknown>;
     runPathStyle?: "full-ref";
-    witnessOverrides?: Record<string, unknown>;
     witnessInputs?: Record<string, unknown>;
     witnessMissing?: boolean;
     witnessMissingReads?: number;
     witnessDuplicate?: boolean;
-    ghRoute?: "path" | "explicit";
+    ghRoute?: "path";
     tokenPresent?: boolean;
     artifactMetadata?: Record<string, unknown>;
     exactArtifactMetadata?: Record<string, unknown>;
-    artifactReadError?: "metadata" | "archive";
+    artifactReadError?: "archive";
     archiveEscapeFlag?: "required" | "unsupported";
     oversizedArtifactMetadata?: boolean;
     archiveFailure?: "oversized" | "corrupt" | "digest";
@@ -90,17 +89,16 @@ export function createDispatchFixture(
       attempt?: number;
       artifactReady?: boolean;
       artifacts?: unknown;
-      metadataError?: string;
       decisionState?: string;
       decisionAttempt?: number;
     }>;
     runDiscoveryMisses?: number;
     targetAlreadyRemote?: boolean;
     includeTargetRef?: boolean;
-    releaseRef?: string;
     workflowSource?: string;
     targetSource?: Record<string, string>;
     omitPurpose?: boolean;
+    toolingLagFetchFailure?: boolean;
     unreachableContributionRecord?: boolean;
     activeConcurrencyRun?: boolean;
     completedConcurrencyHistory?: number;
@@ -133,7 +131,7 @@ export function createDispatchFixture(
   const payloadCapturePath = join(root, "payload-capture.json");
   const preloadPath = join(root, "immediate-poll.mjs");
   const waitCallsPath = join(root, "wait-calls.txt");
-  const releaseRef = options.releaseRef ?? "release/2026.8.1";
+  const releaseRef = "release/2026.8.1";
   mkdirSync(binDir);
   writeFileSync(npmCallsPath, "");
   writeFileSync(
@@ -288,7 +286,6 @@ module.exports = async () => {
     sha: process.env.MOCK_WORKFLOW_SHA,
     runId: "123", runAttempt: "1",
     inputsDigest: "sha256:" + createHash("sha256").update(canonicalInputs).digest("hex"),
-    ...${JSON.stringify(options.witnessOverrides ?? {})},
   };
   const zip = new JSZip();
   zip.file("dispatch-inputs.json", JSON.stringify(witness) + "\\n", { date: new Date("2026-01-01T00:00:00Z") });
@@ -316,6 +313,14 @@ const fs = require("node:fs");
 const { spawnSync } = require("node:child_process");
 const args = process.argv.slice(2);
 fs.appendFileSync(process.env.MOCK_GIT_CALLS, JSON.stringify(args) + "\\n");
+if (args[0] === "fetch" && args.includes("refs/heads/main:refs/remotes/origin/main") && ${JSON.stringify(options.toolingLagFetchFailure ?? false)}) {
+  const mainFetches = fs.readFileSync(process.env.MOCK_GIT_CALLS, "utf8").trim().split("\\n")
+    .filter((line) => line.includes("refs/heads/main:refs/remotes/origin/main"));
+  if (mainFetches.length > 1) {
+    console.error("fixture origin/main fetch failed");
+    process.exit(1);
+  }
+}
 if (args.includes("https://github.com/openclaw/openclaw.git")) {
   if (${JSON.stringify(options.bareShaFetchFailure ?? false)}) {
     console.error("fatal: remote error: upload-pack: not our ref " + args.at(-1));
@@ -548,7 +553,7 @@ if (${JSON.stringify(options.candidateOwned ?? false)} && args[0] === "api" && a
   if (archive && ${JSON.stringify(options.archiveEscapeFlag ?? "")} === "required" && !args.includes("--allow-escape-sequences")) {
     fail("refusing to output binary content without --allow-escape-sequences");
   }
-  if (${JSON.stringify(options.artifactReadError ?? "")} === (archive ? "archive" : "metadata")) {
+  if (archive && ${JSON.stringify(options.artifactReadError ?? "")} === "archive") {
     fail("artifact read denied (HTTP 403)");
   }
   require(${JSON.stringify(artifactFixturePath)})().then(({ metadata, bytes }) => {
@@ -576,9 +581,6 @@ if (${JSON.stringify(options.candidateOwned ?? false)} && args[0] === "api" && a
 } else if (args[0] === "api" && endpoint.endsWith("/artifacts")) {
   const index = Number(fs.readFileSync(parentRunIndexPath, "utf8")) - 1;
   const state = parentRunStates[index];
-  if (state.metadataError) {
-    fail(state.metadataError);
-  }
   console.log(JSON.stringify({ artifacts: state.artifacts ?? (state.artifactReady ? [{
     name: "full-release-decision-123-" + (state.attempt ?? 1), expired: false,
   }] : []) }));

@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { expect, it, vi } from "vitest";
 import {
   createChannelPreflightAudio,
   formatAudioTranscriptForAgent,
@@ -29,80 +29,68 @@ it("labels and escapes machine-generated transcripts", () => {
   );
 });
 
-describe("createChannelPreflightAudio", () => {
-  it.each([undefined, false])(
-    "defers speculative echo=%s without mutating config",
-    async (deferTranscriptEcho) => {
-      const transcribeFirstAudio = vi.fn<TranscribeFirstAudio>().mockResolvedValue("hello");
-      const preflight = createPreflight({ deferTranscriptEcho, transcribeFirstAudio });
-      const audioRequest = {
-        ctx: { media: [{ path: "/tmp/voice.ogg", contentType: "audio/ogg" }] },
-        cfg: audioConfig,
-      };
-      await expect(preflight.resolve({ request: audioRequest })).resolves.toBe("hello");
+it.each([undefined, false])(
+  "defers speculative echo=%s without mutating config",
+  async (deferTranscriptEcho) => {
+    const transcribeFirstAudio = vi.fn<TranscribeFirstAudio>().mockResolvedValue("hello");
+    const preflight = createPreflight({ deferTranscriptEcho, transcribeFirstAudio });
+    const audioRequest = { ...request, cfg: audioConfig };
+    await expect(preflight.resolve({ request: audioRequest })).resolves.toBe("hello");
 
-      expect(transcribeFirstAudio).toHaveBeenCalledWith({
-        ctx: audioRequest.ctx,
-        cfg: {
-          tools: { media: { audio: { ...audio, echoTranscript: deferTranscriptEcho === false } } },
-        },
-      });
-      expect(audioConfig.tools.media.audio.echoTranscript).toBe(true);
-    },
+    const received = transcribeFirstAudio.mock.calls[0]?.[0];
+    expect(received?.ctx).toBe(audioRequest.ctx);
+    expect(received?.cfg.tools?.media?.audio).toEqual({
+      ...audio,
+      echoTranscript: deferTranscriptEcho === false,
+    });
+    expect(audioConfig.tools.media.audio.echoTranscript).toBe(true);
+  },
+);
+
+it.each(["before", "during"])("checks abort state %s transcription", async (stage) => {
+  const controller = new AbortController();
+  const transcribeFirstAudio = vi.fn<TranscribeFirstAudio>(async () => {
+    controller.abort();
+    return "too late";
+  });
+  if (stage === "before") {
+    controller.abort();
+  }
+  const preflight = createPreflight({ transcribeFirstAudio });
+  await expect(
+    preflight.resolve({ request, abortSignal: controller.signal }),
+  ).resolves.toBeUndefined();
+  expect(transcribeFirstAudio).toHaveBeenCalledTimes(stage === "before" ? 0 : 1);
+});
+
+it("formats and sends admitted echoes while preserving literal replacement tokens", async () => {
+  const sendTranscriptEcho = vi.fn<SendTranscriptEcho>().mockResolvedValue(undefined);
+  const preflight = createPreflight({ sendTranscriptEcho });
+
+  expect(preflight.format("cost is $& and $1", "heard: {transcript}")).toBe(
+    "heard: cost is $& and $1",
   );
+  await preflight.send(echo);
 
-  it("checks abort state before and after transcription", async () => {
-    const before = new AbortController();
-    before.abort();
-    const transcribeFirstAudio = vi.fn<TranscribeFirstAudio>();
-    const preflight = createPreflight({ transcribeFirstAudio });
-
-    await expect(
-      preflight.resolve({ request, abortSignal: before.signal }),
-    ).resolves.toBeUndefined();
-    expect(transcribeFirstAudio).not.toHaveBeenCalled();
-
-    const after = new AbortController();
-    transcribeFirstAudio.mockImplementation(async () => {
-      after.abort();
-      return "too late";
-    });
-    await expect(
-      preflight.resolve({ request, abortSignal: after.signal }),
-    ).resolves.toBeUndefined();
+  expect(sendTranscriptEcho.mock.calls[0]?.[0]).toMatchObject({
+    ctx: {
+      Provider: "test",
+      Surface: "test",
+      OriginatingChannel: "test",
+      OriginatingTo: "channel:C1",
+      AccountId: "work",
+      MessageThreadId: "thread-1",
+    },
+    cfg: audioConfig,
+    transcript: "cost is $& and $1",
+    format: "heard: {transcript}",
   });
+});
 
-  it("formats and sends admitted echoes while preserving literal replacement tokens", async () => {
-    const sendTranscriptEcho = vi.fn<SendTranscriptEcho>().mockResolvedValue(undefined);
-    const preflight = createPreflight({ sendTranscriptEcho });
+it("does not send when echo is disabled", async () => {
+  const sendTranscriptEcho = vi.fn<SendTranscriptEcho>();
+  const preflight = createPreflight({ sendTranscriptEcho });
+  await preflight.send({ ...echo, transcript: "hello", cfg: {} });
 
-    expect(preflight.format("cost is $& and $1", "heard: {transcript}")).toBe(
-      "heard: cost is $& and $1",
-    );
-    await preflight.send(echo);
-
-    expect(sendTranscriptEcho).toHaveBeenCalledWith({
-      ctx: {
-        Provider: "test",
-        Surface: "test",
-        OriginatingChannel: "test",
-        OriginatingTo: "channel:C1",
-        AccountId: "work",
-        MessageThreadId: "thread-1",
-      },
-      cfg: audioConfig,
-      transcript: "cost is $& and $1",
-      format: "heard: {transcript}",
-      logSuccess: false,
-      failureLogPrefix: "test: audio transcript echo failed",
-    });
-  });
-
-  it("does not send when echo is disabled", async () => {
-    const sendTranscriptEcho = vi.fn<SendTranscriptEcho>();
-    const preflight = createPreflight({ sendTranscriptEcho });
-    await preflight.send({ ...echo, transcript: "hello", cfg: {} });
-
-    expect(sendTranscriptEcho).not.toHaveBeenCalled();
-  });
+  expect(sendTranscriptEcho).not.toHaveBeenCalled();
 });

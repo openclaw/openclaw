@@ -7,9 +7,10 @@ records the exact merged closeout commit. Publication from the release branch
 and closeout on `main` are separate state transitions; never imply that
 publishing stable also advanced `main`.
 
-Closeout requires the original strict stable/full publication evidence with
-soak, blocking performance, and successful selected validation lanes. Historical
-waiver-bearing receipt replay and repair are unsupported. Completion requires both the closeout manifest and its matching checksum. If only the checksum is missing,
+Closeout requires the original successful stable/full FRV with soak and blocking
+performance, including any recorded [release-tooling policy](../../../../docs/reference/full-release-validation/evidence.md#release-tooling-waivers)
+decisions. Closeout cannot grant a waiver to a failed FRV. Historical candidate-side
+skip-waiver receipt replay and repair remain unsupported. Completion requires both the closeout manifest and its matching checksum. If only the checksum is missing,
 replay an eligible strict-evidence closeout to regenerate identical bytes; do not manufacture
 new evidence. Invalid or mismatched assets remain blocking.
 
@@ -96,7 +97,7 @@ new evidence. Invalid or mismatched assets remain blocking.
    when repository drill variables are configured. Replay requires successful
    stable/full evidence with soak and blocking performance. Complete
    manifest/checksum pairs remain recorded without rewriting. Historical
-   waiver-bearing receipt replay and repair are unsupported: the original
+   candidate-side skip-waiver receipt replay and repair remain unsupported: the original
    postpublish evidence binds its validation run, which a fresh run cannot
    replace. Preserve those artifacts and stop instead of overwriting them or
    publishing again to repair a receipt.

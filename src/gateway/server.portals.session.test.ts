@@ -11,6 +11,7 @@ import {
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { WebSocket } from "../../packages/gateway-client/src/websocket.js";
 import { createFixtureLifetime } from "../../test/helpers/fixture-lifetime.js";
+import { waitForGatewayStartup } from "../../test/helpers/gateway-startup.js";
 import {
   acquireGatewayTestWebSocket,
   closeGatewayTestWebSocket,
@@ -41,7 +42,7 @@ import {
   coerceNodeInvokePayload,
 } from "../node-host/invoke-payload.js";
 import { invokeNodeWorkerSupervisorCommand } from "../node-host/node-worker-supervisor-commands.js";
-import type { NodeWorkerSupervisorControl } from "../node-host/node-worker-supervisor-contract.js";
+import { createPortalSupervisor } from "../node-host/node-worker-supervisor.test-support.js";
 import { projectPluginContributions } from "../plugins/registry-contributions.js";
 import { adoptPluginRegistryRecords } from "../plugins/registry-lifecycle.js";
 import * as stateWorkerStore from "../state/openclaw-state-worker-store.js";
@@ -51,6 +52,7 @@ import { captureEnv } from "../test-utils/env.js";
 import { pairDeviceIdentity } from "./device-authz.test-helpers.js";
 import * as workerStartup from "./server-worker-environment-startup.js";
 import {
+  browserProxyAuth,
   connectReq,
   CONTROL_UI_CLIENT,
   installGatewayTestHooks,
@@ -65,17 +67,7 @@ import { hashWorkerCredential } from "./worker-environments/credential.js";
 import * as workerService from "./worker-environments/service.js";
 
 let portalProof: Awaited<ReturnType<typeof createSessionPortalProof>>;
-const unexpectedSupervisorCommand = async (): Promise<never> => {
-  throw new Error("Portal stream must not call another supervisor command");
-};
-const portalSupervisor: NodeWorkerSupervisorControl = {
-  launch: unexpectedSupervisorCommand,
-  status: unexpectedSupervisorCommand,
-  retainWorkspaces: unexpectedSupervisorCommand,
-  cancel: unexpectedSupervisorCommand,
-  observeProcesses: unexpectedSupervisorCommand,
-  stopEnvironment: unexpectedSupervisorCommand,
-};
+const portalSupervisor = createPortalSupervisor();
 installGatewayTestHooks({
   scope: "suite",
   setup: async () => {
@@ -105,14 +97,7 @@ describe("session portal fixture", () => {
 
 async function createSessionPortalProof() {
   const origin = "https://control.example.test";
-  const auth = {
-    mode: "trusted-proxy" as const,
-    trustedProxy: {
-      userHeader: "x-forwarded-user",
-      requiredHeaders: ["x-forwarded-proto"],
-      allowLoopback: true,
-    },
-  };
+  const auth = browserProxyAuth();
   testState.gatewayAuth = auth;
   testState.gatewayControlUi = { allowedOrigins: [origin] };
   await writeConfigFile({
@@ -223,6 +208,7 @@ async function createSessionPortalProof() {
     process.env.OPENCLAW_TEST_MINIMAL_GATEWAY = "0";
     gateway = await createGatewaySuiteHarness();
     await gateway.server.startupSettled;
+    await waitForGatewayStartup(gateway.port);
     const { port } = gateway;
     const startup = runtimeFactory.mock.calls.at(-1)?.[0];
     assert(startup, "Gateway must create its real worker runtime");

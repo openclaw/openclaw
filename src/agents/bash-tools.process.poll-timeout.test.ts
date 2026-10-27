@@ -233,7 +233,7 @@ test("an already-aborted poll leaves buffered output unread", async () => {
   const controller = new AbortController();
   controller.abort();
   await expect(poll(30_000, controller.signal)).rejects.toMatchObject({ name: "AbortError" });
-  expect(session.pendingOutput).toEqual([{ stream: "stdout", text: "interactive prompt\n" }]);
+  check(await poll(), { status: "running", sessionId: session.id }, ["interactive prompt"]);
 });
 
 test("a waiting poll cannot adopt a same-id successor after removal", async () => {
@@ -308,7 +308,9 @@ test("capped stream output stays ordered, compact, and frozen through terminal d
   appendOutput(session, "stderr", "late".repeat(1_000));
   expect(text(await poll())).toBe(discarded + "(no new output)\n\nProcess exited with code 0.");
   expect(session).toMatchObject({ totalOutputChars: 8_000, pendingOutput: "" });
-  expect(text(await call("log"))).toBe(discarded + "oe".repeat(1_500));
+  expect(text(await call("log"))).toBe(
+    discarded + "oe".repeat(1_500) + "\n\nProcess exited with code 0.",
+  );
 });
 
 test.each([

@@ -8,6 +8,7 @@ import {
   type DiagnosticEventMetadata,
   type DiagnosticEventPayload,
 } from "../infra/diagnostic-events.js";
+import { captureExecRequestOwners, withExecRequestTurn } from "../infra/exec-request-context.js";
 import {
   prepareGatewaySuspend,
   resetGatewaySuspendCoordinatorForLifecycleRestart,
@@ -381,7 +382,7 @@ describe("sandbox exec preparation failures", () => {
     const registry = await import("./bash-process-registry.js");
     const sessionSlugs = await import("./session-slug.js");
     const sessionId = "sandbox-preparation-failure";
-    const sessionSlug = vi.spyOn(sessionSlugs, "createSessionSlug").mockReturnValue(sessionId);
+    using _ = vi.spyOn(sessionSlugs, "createSessionSlug").mockReturnValue(sessionId);
     const preparation = createDeferred<ReturnType<typeof sandboxSpec>>();
     const finalizeExec = vi.fn<NonNullable<BashSandboxConfig["finalizeExec"]>>(async () => {});
     const onSettledBeforeNotify = vi.fn();
@@ -391,45 +392,41 @@ describe("sandbox exec preparation failures", () => {
       throw failure;
     });
 
-    try {
-      const pending = runTestExecProcess({
-        sandbox: {
-          ...sandboxDirectories,
-          buildExecSpec: async () => await preparation.promise,
-          finalizeExec,
-        },
+    const pending = runTestExecProcess({
+      sandbox: {
+        ...sandboxDirectories,
+        buildExecSpec: async () => await preparation.promise,
+        finalizeExec,
+      },
+      sessionKey: "agent:main:sandbox-preparation",
+      onSettledBeforeNotify,
+      beforeSpawn,
+    });
+
+    expect(registry.getSession(sessionId)).toMatchObject({ exited: false });
+    expect(beforeSpawn).not.toHaveBeenCalled();
+    preparation.resolve(sandboxSpec());
+    await expect(pending).rejects.toBe(failure);
+    await nextImmediate();
+
+    expect(finalizeExec).toHaveBeenCalledOnce();
+    expect(beforeSpawn).toHaveBeenCalledOnce();
+    expect(supervisorMock.spawn).not.toHaveBeenCalled();
+    expect(registry.getSession(sessionId)).toBeUndefined();
+    expect(onSettledBeforeNotify).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({ status: "failed", failureKind: "runtime-error" }),
+    );
+    expect(events).toEqual([
+      expect.objectContaining({
+        type: "exec.process.completed",
+        target: "sandbox",
+        mode: "child",
+        outcome: "failed",
+        failureKind: "runtime-error",
+        timedOut: false,
         sessionKey: "agent:main:sandbox-preparation",
-        onSettledBeforeNotify,
-        beforeSpawn,
-      });
-
-      expect(registry.getSession(sessionId)).toMatchObject({ exited: false });
-      expect(beforeSpawn).not.toHaveBeenCalled();
-      preparation.resolve(sandboxSpec());
-      await expect(pending).rejects.toBe(failure);
-      await nextImmediate();
-
-      expect(finalizeExec).toHaveBeenCalledOnce();
-      expect(beforeSpawn).toHaveBeenCalledOnce();
-      expect(supervisorMock.spawn).not.toHaveBeenCalled();
-      expect(registry.getSession(sessionId)).toBeUndefined();
-      expect(onSettledBeforeNotify).toHaveBeenCalledExactlyOnceWith(
-        expect.objectContaining({ status: "failed", failureKind: "runtime-error" }),
-      );
-      expect(events).toEqual([
-        expect.objectContaining({
-          type: "exec.process.completed",
-          target: "sandbox",
-          mode: "child",
-          outcome: "failed",
-          failureKind: "runtime-error",
-          timedOut: false,
-          sessionKey: "agent:main:sandbox-preparation",
-        }),
-      ]);
-    } finally {
-      sessionSlug.mockRestore();
-    }
+      }),
+    ]);
   });
 });
 
@@ -721,7 +718,20 @@ it("preserves independent stdout and stderr parser state", async () => {
     }
     return runtimeManagedRun(input);
   });
-  const outcome = await (await runTestExecProcess()).promise;
+  const identity = { runId: "output-owner", sessionId: "output-session" };
+  const updates: string[] = [];
+  const outcome = await withExecRequestTurn({ identity }, async () => {
+    const run = await runTestExecProcess({
+      requestOwners: captureExecRequestOwners(identity),
+      onUpdate: (update) => {
+        if (update.details?.status === "running") {
+          updates.push(update.details.tail ?? "");
+        }
+      },
+    });
+    return run.promise;
+  });
   expect(outcome.aggregated).toBe("outerrOUTERR");
   expect(outcome.aggregated).not.toContain("\\x1b");
+  expect(updates.at(-1)).toBe("outerrOUTERR");
 });

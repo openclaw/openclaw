@@ -3,7 +3,11 @@ import { t } from "../lib/reactive/i18n.ts";
 import { Icon } from "./solid/icon.tsx";
 import "./tooltip.ts";
 
-type SensitiveInputProps = {
+const graphemeSegmenter = new Intl.Segmenter(undefined, { granularity: "grapheme" });
+const maskedValue = (value: string) =>
+  "*".repeat(Array.from(graphemeSegmenter.segment(value)).length);
+
+export function SensitiveInput(props: {
   id: string;
   value: string;
   revealed: boolean;
@@ -14,13 +18,7 @@ type SensitiveInputProps = {
   label?: string;
   onInput: (value: string) => void;
   onToggle: () => void;
-};
-
-const graphemeSegmenter = new Intl.Segmenter(undefined, { granularity: "grapheme" });
-const maskedValue = (value: string) =>
-  "*".repeat(Array.from(graphemeSegmenter.segment(value)).length);
-
-export function SensitiveInput(props: SensitiveInputProps) {
+}) {
   let maskText: HTMLSpanElement | undefined;
   const value = createMemo(() => props.value);
   const visibilityLabel = () =>

@@ -57,7 +57,7 @@ function fixture(shadow = false) {
       label: "Forge",
       linkReader: {
         hosts: ["github.com"],
-        pathPattern: "^/[^/]+/[^/]+/(pull|issues)/[0-9]+$",
+        pathPattern: "^/[^/]+/[^/]+/(?:pull/[0-9]+|issues/[0-9]+|commit/[a-f0-9]{7,40})$",
         detailMethod: "forge.detail",
         previewMethod: "forge.preview",
       },
@@ -100,16 +100,55 @@ afterEach(async () => {
   document.body.replaceChildren();
   await Promise.resolve();
   vi.useRealTimers();
+  vi.unstubAllGlobals();
 });
 
 describe("generic link hovercards", () => {
-  it("keeps a rendered GitHub sign-in link ordinary while genuine issue and PR links preview", async () => {
+  it("starts page observation only with intent and retires a pending shadow-root link", async () => {
+    const NativeMutationObserver = MutationObserver;
+    const observers: MutationObserver[] = [];
+    const observations: {
+      observer: MutationObserver;
+      target: Node;
+      options?: MutationObserverInit;
+    }[] = [];
+    vi.stubGlobal(
+      "MutationObserver",
+      class extends NativeMutationObserver {
+        constructor(callback: MutationCallback) {
+          super(callback);
+          observers.push(this);
+        }
+        override observe(target: Node, options?: MutationObserverInit) {
+          observations.push({ observer: this, target, options });
+          super.observe(target, options);
+        }
+      },
+    );
+    const view = fixture(true);
+    fixture();
+    expect(observers).toHaveLength(1);
+    view.anchor.dispatchEvent(new MouseEvent("pointerover", { bubbles: true, composed: true }));
+    const pageObserver = observations.find(({ options }) =>
+      options?.attributeFilter?.includes("data-file-path"),
+    )?.observer;
+    expect(pageObserver).toBeDefined();
+    expect(observations).toContainEqual({
+      observer: pageObserver,
+      target: view.anchor.getRootNode(),
+      options: { childList: true, subtree: true, attributes: true },
+    });
+    view.anchor.setAttribute("data-file-path", "/guide");
+    await vi.advanceTimersByTimeAsync(250);
+    expectNoPreview(view.request);
+  });
+  it("keeps a rendered GitHub sign-in link ordinary while genuine issue, PR, and commit links preview", async () => {
     const view = fixture();
     const login = "https://github.com/login?return_to=%2Facme%2Fproject%2Fpull%2F42";
     view.pane.innerHTML = toSanitizedMarkdownHtml(
-      `[Sign in](${login}) · [Pull request](https://github.com/acme/project/pull/42) · [Issue](https://github.com/acme/project/issues/43)`,
+      `[Sign in](${login}) · [Pull request](https://github.com/acme/project/pull/42) · [Issue](https://github.com/acme/project/issues/43) · [Commit](https://github.com/acme/project/commit/abcdef0123456789)`,
     );
-    const [signIn, pull, issue] = view.pane.querySelectorAll<HTMLAnchorElement>("a");
+    const [signIn, pull, issue, commit] = view.pane.querySelectorAll<HTMLAnchorElement>("a");
     await hover(signIn!);
     focus(signIn!);
     await vi.advanceTimersByTimeAsync(300);
@@ -117,7 +156,7 @@ describe("generic link hovercards", () => {
     expect(view.request).not.toHaveBeenCalled();
     expect(document.querySelector(".link-hovercard, .link-reader-hovercard")).toBeNull();
     expect(signIn).toMatchObject({ href: login, target: "_blank", textContent: "Sign in" });
-    for (const anchor of [pull!, issue!]) {
+    for (const anchor of [pull!, issue!, commit!]) {
       view.request.mockResolvedValue({
         url: anchor.href,
         title: "Real resource",

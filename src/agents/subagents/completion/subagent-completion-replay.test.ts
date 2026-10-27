@@ -5,6 +5,7 @@ import { createTempDirTracker } from "../../../../test/helpers/temp-dir.js";
 import * as config from "../../../config/runtime-snapshot.js";
 import { resolveSessionStorePathCore } from "../../../config/sessions/paths.js";
 import { replaceSessionEntry } from "../../../config/sessions/session-accessor.js";
+import { throwCollectedErrors } from "../../../infra/error-graph-internal.js";
 import { resolvePreferredOpenClawTmpDir } from "../../../infra/tmp-openclaw-dir.js";
 import { getActiveGatewayRootWorkCount } from "../../../process/gateway-work-admission.js";
 import { closeOpenClawAgentDatabasesAsync } from "../../../state/openclaw-agent-db.js";
@@ -67,12 +68,7 @@ afterEach(async () => {
       env.restore();
     });
   }
-  if (failures.length === 1) {
-    throw failures[0];
-  }
-  if (failures.length > 1) {
-    throw new AggregateError(failures, "Subagent completion replay cleanup failed");
-  }
+  throwCollectedErrors(failures, "Subagent completion replay cleanup failed");
 });
 
 async function reopenOwners() {
@@ -153,118 +149,99 @@ async function runningOwner(signal: AbortSignal, holdTail = false, recoveredRequ
   return { input, driver, reported, complete, close };
 }
 
-it("does not wake again after ordinary announcement recovery permanently fails", async ({
-  signal,
-}) => {
-  const { input, driver, reported, complete, close } = await runningOwner(signal, false, true);
-  try {
-    await complete(true);
-    await withinTest(reported.promise, signal);
-    await settle();
-    expect(driver.wake).not.toHaveBeenCalled();
-  } finally {
-    await close();
-  }
-  await reopenOwners();
-  const stored = subagentRuns.get(input.subagent.runId)!;
-  expect(stored.completion?.resultText).toBe("canonical result");
-  expect(stored.delivery).toMatchObject({
-    status: "suspended",
-    disposition: "permanent_failure",
-    suspendedReason: "permanent_failure",
-    lastDropReason: "visible_reply_missing",
-    lastError: expect.stringContaining(
-      "recovered requester completed without durable final delivery evidence",
-    ),
-  });
-  expect(stored.requesterSettleWake).toBeUndefined();
-  expect(readCompletionSystemEvents(stateDb.openOpenClawStateDatabase())).toEqual([]);
-  input.subagent = stored;
-  const restored = requesterWakeDriver([input]);
-  try {
-    restored.controller.resumeRequesterSettleWake(stored.runId, stored);
-    await settle();
-    expect(restored.wake).not.toHaveBeenCalled();
-
-    // An explicit yield batch still owns real work after failed recovery.
-    stored.requesterSettleWake = {
-      status: "pending",
-      attemptCount: 0,
-      requesterYieldBatch: true,
-      rearmGeneration: 1,
-      batchRunIds: [stored.runId],
-    };
-    saveSubagentRegistryToSqlite(subagentRuns);
-    restored.wake.mockResolvedValue(false);
-    await restored.run(stored);
-    expect(restored.wake).toHaveBeenCalledTimes(1);
-  } finally {
-    restored.controller.clearRuntimeState();
-    await settle();
-  }
-});
-
-it("persists a blocked completion across the announce tail and reopen", async ({ signal }) => {
-  const { input, driver, reported, complete, close } = await runningOwner(signal, true);
-  try {
-    await complete(true);
-    await withinTest(reported.promise, signal);
-    const stored = loadSubagentRegistryFromSqlite().get(input.subagent.runId)!;
-    expect(stored.execution).toMatchObject({ status: "terminal", outcome: { status: "ok" } });
-    expect(stored.delivery).toMatchObject({
+it.for([false, true])(
+  "does not replay a blocked announcement (recovered=%s)",
+  async (recovered, { signal }) => {
+    const { input, driver, reported, complete, close } = await runningOwner(
+      signal,
+      !recovered,
+      recovered,
+    );
+    const expectedDelivery = {
       status: "suspended",
       suspendedReason: "permanent_failure",
-      lastDropReason: "message_tool_delivery_missing",
-      enqueuedAt: input.subagent.createdAt,
-      generation: 1,
-      payload: { childRunId: input.subagent.runId, task: input.subagent.task },
-    });
-    expect(stored.requesterSettleWake).toBeUndefined();
-    expect(stored.suppressCompletionDelivery).not.toBe(true);
-    expect(driver.wake).not.toHaveBeenCalled();
-  } finally {
-    await close();
-  }
-  await reopenOwners();
-  input.subagent = subagentRuns.get(input.subagent.runId)!;
-  const retained = structuredClone(input.subagent);
-  const restored = requesterWakeDriver([input]);
-  try {
-    restored.controller.resumeRequesterSettleWake(input.subagent.runId, input.subagent);
-    await settle();
-    expect(restored.wake).not.toHaveBeenCalled();
-    expect(input.subagent).toEqual(retained);
-
-    // Older persisted ordinary wake markers are not permission to replay.
-    stateDb
-      .openOpenClawStateDatabase()
-      .db.prepare(
-        "UPDATE subagent_runs SET payload_json = json_set(payload_json, '$.requesterSettleWake', json('{}')) WHERE run_id = ?",
-      )
-      .run(input.subagent.runId);
-    await reopenOwners();
-    input.subagent = subagentRuns.get(input.subagent.runId)!;
-    restored.controller.resumeRequesterSettleWake(input.subagent.runId, input.subagent);
-    await settle();
-    expect(restored.wake).not.toHaveBeenCalled();
-
-    // A separately admitted yield batch still owns real pending work.
-    input.subagent.requesterSettleWake = {
-      status: "pending",
-      attemptCount: 0,
-      requesterYieldBatch: true,
-      rearmGeneration: 1,
-      batchRunIds: [input.subagent.runId],
+      lastDropReason: recovered ? "visible_reply_missing" : "message_tool_delivery_missing",
+      ...(recovered
+        ? {
+            disposition: "permanent_failure",
+            lastError: expect.stringContaining(
+              "recovered requester completed without durable final delivery evidence",
+            ),
+          }
+        : {
+            enqueuedAt: input.subagent.createdAt,
+            generation: 1,
+            payload: { childRunId: input.subagent.runId, task: input.subagent.task },
+          }),
     };
-    saveSubagentRegistryToSqlite(subagentRuns);
-    restored.wake.mockResolvedValue(false);
-    await restored.run(input.subagent);
-    expect(restored.wake).toHaveBeenCalledTimes(1);
-  } finally {
-    restored.controller.clearRuntimeState();
-    await settle();
-  }
-});
+    try {
+      await complete(true);
+      await withinTest(reported.promise, signal);
+      if (recovered) {
+        await settle();
+      }
+      if (!recovered) {
+        const stored = loadSubagentRegistryFromSqlite().get(input.subagent.runId)!;
+        expect(stored.execution).toMatchObject({ status: "terminal", outcome: { status: "ok" } });
+        expect(stored.delivery).toMatchObject(expectedDelivery);
+        expect(stored.requesterSettleWake).toBeUndefined();
+        expect(stored.suppressCompletionDelivery).not.toBe(true);
+      }
+      expect(driver.wake).not.toHaveBeenCalled();
+    } finally {
+      await close();
+    }
+    await reopenOwners();
+    if (recovered) {
+      expect(readCompletionSystemEvents(stateDb.openOpenClawStateDatabase())).toEqual([]);
+    }
+    input.subagent = subagentRuns.get(input.subagent.runId)!;
+    if (recovered) {
+      expect(input.subagent.completion?.resultText).toBe("canonical result");
+      expect(input.subagent.delivery).toMatchObject(expectedDelivery);
+      expect(input.subagent.requesterSettleWake).toBeUndefined();
+    }
+    const retained = structuredClone(input.subagent);
+    const restored = requesterWakeDriver([input]);
+    try {
+      restored.controller.resumeRequesterSettleWake(input.subagent.runId, input.subagent);
+      await settle();
+      expect(restored.wake).not.toHaveBeenCalled();
+      expect(input.subagent).toEqual(retained);
+
+      if (!recovered) {
+        // Older persisted ordinary wake markers are not permission to replay.
+        stateDb
+          .openOpenClawStateDatabase()
+          .db.prepare(
+            "UPDATE subagent_runs SET payload_json = json_set(payload_json, '$.requesterSettleWake', json('{}')) WHERE run_id = ?",
+          )
+          .run(input.subagent.runId);
+        await reopenOwners();
+        input.subagent = subagentRuns.get(input.subagent.runId)!;
+        restored.controller.resumeRequesterSettleWake(input.subagent.runId, input.subagent);
+        await settle();
+        expect(restored.wake).not.toHaveBeenCalled();
+      }
+
+      // A separately admitted yield batch still owns real pending work.
+      input.subagent.requesterSettleWake = {
+        status: "pending",
+        attemptCount: 0,
+        requesterYieldBatch: true,
+        rearmGeneration: 1,
+        batchRunIds: [input.subagent.runId],
+      };
+      saveSubagentRegistryToSqlite(subagentRuns);
+      restored.wake.mockResolvedValue(false);
+      await restored.run(input.subagent);
+      expect(restored.wake).toHaveBeenCalledTimes(1);
+    } finally {
+      restored.controller.clearRuntimeState();
+      await settle();
+    }
+  },
+);
 
 it("rechecks blocked completion after wake admission", async ({ signal }) => {
   const { input, driver, reported, complete, close } = await runningOwner(signal);
@@ -274,10 +251,10 @@ it("rechecks blocked completion after wake admission", async ({ signal }) => {
   driver.controller.runRequesterSettleWake = (entry, run, isCurrent) =>
     runWake(
       entry,
-      async () => {
+      async (releasePreparation) => {
         admitted.resolve(undefined);
         await release.promise;
-        return run();
+        return run(releasePreparation);
       },
       isCurrent,
     );

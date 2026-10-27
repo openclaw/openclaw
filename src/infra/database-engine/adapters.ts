@@ -17,6 +17,7 @@ import {
   verifyPostgresSchema,
   withPostgresSearchExtensions,
 } from "./postgres-schema.js";
+import { admitPostgresSearch } from "./postgres-search-schema.js";
 import type { DatabaseEngineInput } from "./types.js";
 
 export { admitStoreSearch } from "./search-admission.js";
@@ -107,10 +108,31 @@ export const databaseEngineAdapters: {
               version: version - 1,
               postgres: migration.fromSchema.postgres,
               postgresFragments: migration.fromSchema.postgresFragments,
+              postgresVectorDecoderVersion: migration.fromSchema.postgresVectorDecoderVersion,
+              postgresVectorSearchVersion: migration.fromSchema.postgresVectorSearchVersion,
             },
             snapshot,
           );
-          store.beforeMigrate?.(db, version - 1);
+          if (
+            migration.schema.postgresVectorSearchVersion === 2 &&
+            migration.fromSchema.postgresVectorSearchVersion !== 2
+          ) {
+            for (const definition of [
+              schema.search,
+              ...Object.values(schema.searchExtensions ?? {}),
+            ]) {
+              if (definition) {
+                admitPostgresSearch(db, definition, store.namespace!, 2);
+              }
+            }
+          }
+          store.beforeMigrate?.(
+            db,
+            version - 1,
+            new Set(
+              snapshot.catalog.filter((fact) => fact.kind === "table").map((fact) => fact.table),
+            ),
+          );
           db.exec(migration.sql);
           db.prepare("UPDATE openclaw_schema_meta SET version = ? WHERE store = ?").run(
             version,
@@ -121,6 +143,8 @@ export const databaseEngineAdapters: {
             version,
             postgres: migration.schema.postgres,
             postgresFragments: migration.schema.postgresFragments,
+            postgresVectorDecoderVersion: migration.schema.postgresVectorDecoderVersion,
+            postgresVectorSearchVersion: migration.schema.postgresVectorSearchVersion,
           });
         }
       },

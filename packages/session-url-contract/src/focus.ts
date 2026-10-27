@@ -9,13 +9,6 @@ type ControlUiFocusDashboardTarget = {
   path: string;
 };
 
-type ControlUiFocusDesktopBuildTarget = {
-  kind: "desktop";
-  control?: boolean;
-  source?: string | null;
-  session?: string | null;
-};
-
 type ControlUiFocusBrowserTarget = {
   kind: "browser";
   sessionKey: string;
@@ -29,7 +22,12 @@ export type ControlUiFocusBuildTarget =
   | ControlUiFocusDashboardTarget
   | ControlUiFocusBrowserTarget
   | { kind: "terminal" }
-  | ControlUiFocusDesktopBuildTarget;
+  | {
+      kind: "desktop";
+      control?: boolean;
+      source?: string | null;
+      session?: string | null;
+    };
 
 export type ControlUiFocusTarget =
   | ControlUiFocusBrowserTarget
@@ -48,26 +46,10 @@ export type ControlUiFocusLocation =
   | { status: "valid"; basePath: string; target: ControlUiFocusTarget }
   | { status: "unsupported"; basePath: string };
 
-type ControlUiFocusLocationInput = string | { pathname: string; search?: string; hash?: string };
-
 function normalizePathname(pathname: string): string {
   const trimmed = pathname.trim();
   const withSlash = trimmed.startsWith("/") ? trimmed : `/${trimmed}`;
   return withSlash.length > 1 ? withSlash.replace(/\/+$/u, "") : withSlash;
-}
-
-function splitPathSuffix(value: string): { pathname: string; suffix: string } {
-  const delimiter = value.search(/[?#]/u);
-  const suffixIndex = delimiter < 0 ? value.length : delimiter;
-  return { pathname: value.slice(0, suffixIndex), suffix: value.slice(suffixIndex) };
-}
-
-function decodeFocusValue(segment: string): { ok: true; value: string | null } | { ok: false } {
-  try {
-    return { ok: true, value: readNonBlankString(decodeURIComponent(segment)) ?? null };
-  } catch {
-    return { ok: false };
-  }
 }
 
 function parseBrowserFocus(search: string): ControlUiFocusBrowserTarget | null {
@@ -172,7 +154,11 @@ export function buildControlUiFocusPath(
         : "";
     return `${root}/desktop${control}${selector}`;
   }
-  const { pathname, suffix } = splitPathSuffix(target.path);
+  const path = target.path;
+  const delimiter = path.search(/[?#]/u);
+  const suffixIndex = delimiter < 0 ? path.length : delimiter;
+  const pathname = path.slice(0, suffixIndex);
+  const suffix = path.slice(suffixIndex);
   const normalizedPath = normalizePathname(pathname);
   const dashboardRoot = `${base}/dashboard/`;
   if (!normalizedPath.startsWith(dashboardRoot)) {
@@ -182,7 +168,7 @@ export function buildControlUiFocusPath(
 }
 
 export function parseControlUiFocusLocation(
-  input: ControlUiFocusLocationInput,
+  input: string | { pathname: string; search?: string; hash?: string },
   basePath?: string,
 ): ControlUiFocusLocation | null {
   const pathname = typeof input === "string" ? input : input.pathname;
@@ -238,12 +224,14 @@ export function parseControlUiFocusLocation(
     ) {
       return { status: "unsupported", basePath: resolvedBasePath };
     }
-    const decoded = decodeFocusValue(encodedValue);
-    if (!decoded.ok) {
+    let value: string | null;
+    try {
+      value = readNonBlankString(decodeURIComponent(encodedValue)) ?? null;
+    } catch {
       return { status: "unsupported", basePath: resolvedBasePath };
     }
-    if (decoded.value) {
-      selector = { kind: selectorKind, value: decoded.value };
+    if (value) {
+      selector = { kind: selectorKind, value };
     }
   }
   return {

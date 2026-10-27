@@ -35,7 +35,7 @@ scenario:
       requiredProviderMode: mock-openai
       channelId: qa-failed-cron
       promptSnippet: Failed tool terminal recovery QA check
-      retryNeedle: "Do not repeat completed tool calls or restart from scratch. Tools are unavailable in this step:"
+      retryNeedle: "Do not repeat completed tool calls or restart from scratch. Do not call tools in this step."
       expectedMarker: CRON-FAILED-TOOL-FINALIZED-OK
       expectedReply: "The requested file could not be read: ENOENT. CRON-FAILED-TOOL-FINALIZED-OK"
 

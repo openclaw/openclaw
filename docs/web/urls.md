@@ -198,13 +198,52 @@ social card. It opens a small public landing page; **Open dashboard** or
 For example, `/share/dashboard/main/deploy-monitor-6db92d48` previews
 `/dashboard/main/deploy-monitor-6db92d48`. A configured Control UI base path
 prefixes both paths. The preview serves Open Graph metadata and a 1200 × 630 PNG
-at `/share/card.png`, without requiring JavaScript or a Gateway connection.
+at `/share/card.png`, plus a generic, silent five-second H.264 video at
+`/share/preview-v1.mp4`, without requiring JavaScript or a Gateway connection.
+The landing page starts with the still image. Expand **Play animation** for
+native video controls. It does not autoplay, including for people who request
+reduced motion. Playback is optional; the still image and destination link work
+without JavaScript or video support.
 
 The card shows generic OpenClaw branding, not the session's title, messages,
 dashboard widgets, or screenshots. Preview requests never look up session state,
 so the page does not reveal whether the target exists. The link itself still
 contains the session route and, for catalog sessions, the catalog routing fields.
 Treat those URLs as information you are choosing to share.
+
+### Animated cards and platform support
+
+The preview advertises the MP4 with [Open Graph video metadata](https://ogp.me/#structured)
+and retains the PNG as both `og:image` and `twitter:image`. X still receives a
+`summary_large_image` card. Some clients may use the video; others show only the
+still. Open Graph metadata does **not** guarantee inline playback, animation,
+looping, or autoplay on X. Client settings, data-saving behavior, and platform
+policy remain outside OpenClaw's control.
+
+X Player Cards are a separate integration, not a synonym for `og:video`. The
+[official Player Card sample](https://github.com/twitterdev/cards) uses HTTPS
+player/container and stream URLs plus `twitter:player` metadata. OpenClaw does
+not add an embeddable player or change its frame restrictions for a decorative
+brand animation. Test an actual posted preview on the intended X clients before
+claiming animated-card support; metadata validation alone is not playback proof.
+
+Chat platforms cache previews independently of the Gateway's HTTP cache headers.
+After deployment, use a fresh preview URL when testing, and allow for platform
+recrawling. Existing posts may continue showing old artwork. Published video
+artwork has a versioned path; replacing it requires a new asset name and matching
+Gateway route/metadata changes. The PNG remains a usable fallback.
+
+The artwork is fixed branding, not a recording of a conversation. Public
+transcripts retain their session-specific static cards; this animation applies
+to the generic `/share/chat/*` and `/share/dashboard/*` preview pages. The
+`openclaw.ai` marketing site is a separate deployment and is not changed by the
+Gateway's Control UI build.
+
+To revise the artwork, edit `ui/config/control-ui-social-preview.ts` and run
+`node scripts/generate-social-preview.mts` with system ffmpeg/libx264 available.
+The generator uses bundled fonts and the existing mascot to author the shipped
+MP4; ordinary UI builds do not need ffmpeg. `pnpm ui:build` creates the matching
+poster and copies the MP4 from `ui/public`.
 
 ### Behind a login proxy
 
@@ -224,8 +263,8 @@ terminates at the proxy, so the image and standard URLs use the public HTTPS
 address. Without it, previews use the request's Host and direct connection
 protocol; forwarded headers are not trusted for public preview URLs.
 
-Verify both the preview URL and its `/share/card.png` return `200` without
-cookies, then check that opening the dashboard still requires login. If a chat
+Verify the preview URL, `/share/card.png`, and `/share/preview-v1.mp4` return
+`200` without cookies (the MP4 must use `Content-Type: video/mp4`), then check that opening the dashboard still requires login. If a chat
 app shows the login page or no image, check for proxy redirects on both preview
 requests. Ordinary dashboard URLs remain protected and do not gain crawler
 access from this feature.
@@ -351,6 +390,8 @@ OpenClaw does not change Cloudflare Access or other proxy policies automatically
 Public pages share bounded rendered representations and in-flight work.
 Committed session and transcript changes invalidate affected pages; every
 response, including `304 Not Modified`, still checks live publication authority.
+If a change overtakes an in-flight read, the public reader prepares the current
+representation before responding, without requiring a browser retry.
 Representations are retained only on the server, not in a shared browser/CDN
 cache. Eight distinct builds may run at once, two for one publication, with
 32 additional builds queued. Overload returns `503` and `Retry-After`.

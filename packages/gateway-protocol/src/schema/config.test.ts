@@ -289,7 +289,12 @@ describe("update protocol schemas", () => {
         schedule: {
           channel: "dev",
           autoEnabled: true,
-          target: { kind: "git", upstreamRef: "origin/main", commitsBehind: -1 },
+          target: {
+            kind: "git",
+            upstreamRef: "origin/main",
+            upstreamSha: "abcdef1234",
+            commitsBehind: -1,
+          },
         },
       }),
     ).toBe(false);

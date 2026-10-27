@@ -1,7 +1,6 @@
 import type { UiCommandParams } from "@openclaw/gateway-protocol";
 import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
 import type { GatewayBrowserClient, GatewayEventFrame, GatewayHelloOk } from "../api/gateway.ts";
-import type { GatewayAgentRow } from "../api/types.ts";
 import { isSessionRouteId } from "../app-route-paths.ts";
 import {
   BROWSER_PANEL_TOGGLE_EVENT,
@@ -60,28 +59,9 @@ export interface ShellGatewayHost {
   readonly outboxStoreImport: { load: () => Promise<unknown> };
   readonly shellNavigation: Pick<
     ShellNavigationCapability,
-    "recoverDeletedActiveSession" | "selectChatSession"
+    "recoverDeletedActiveSession" | "selectChatSession" | "synchronizeSessionUrl"
   >;
   invalidate(): void;
-}
-
-function diffAgentRoster(
-  previous: readonly GatewayAgentRow[],
-  next: readonly GatewayAgentRow[],
-): { invalidatedIds: string[]; changedIds: string[] } {
-  const nextById = new Map(next.map((agent) => [agent.id, agent]));
-  const invalidatedIds: string[] = [];
-  const changedIds: string[] = [];
-  for (const agent of previous) {
-    const replacement = nextById.get(agent.id);
-    if (!replacement) {
-      invalidatedIds.push(agent.id);
-    } else if (JSON.stringify(replacement) !== JSON.stringify(agent)) {
-      invalidatedIds.push(agent.id);
-      changedIds.push(agent.id);
-    }
-  }
-  return { invalidatedIds, changedIds };
 }
 
 export class ShellGatewayOwner {
@@ -119,6 +99,7 @@ export class ShellGatewayOwner {
       }
       this.observeDeletedSessions(sessions.state);
       this.host.shellNavigation.recoverDeletedActiveSession();
+      this.host.shellNavigation.synchronizeSessionUrl();
       synchronizeTitle();
     };
     synchronize();
@@ -256,7 +237,7 @@ export class ShellGatewayOwner {
       return;
     }
     if (needsRefresh) {
-      await runtimeConfig.refresh();
+      await runtimeConfig.refreshDisplay();
       return;
     }
     if (retainedLocal) {
@@ -318,7 +299,7 @@ export class ShellGatewayOwner {
         (runtimeConfig.state.configSnapshot || !runtimeConfig.state.bootstrapConfig)
       ) {
         // Save notifications reconcile in place so active editors keep focus and stay interactive.
-        void runtimeConfig.refresh({ background: true });
+        void runtimeConfig.refreshDisplay({ background: true });
       }
       this.scheduleAgentRosterRefresh();
       return;
@@ -392,6 +373,7 @@ export class ShellGatewayOwner {
               : {}),
             ...(sessionKey ? { sessionKey } : {}),
             ...(command.dock ? { dock: command.dock } : {}),
+            ...(command.expanded !== undefined ? { expanded: command.expanded } : {}),
             ...(command.panel === "terminal" && command.terminalSessionId
               ? { terminalSessionId: command.terminalSessionId }
               : {}),
@@ -444,13 +426,25 @@ export class ShellGatewayOwner {
     if (!next || this.host.context !== context) {
       return;
     }
-    const rosterDiff = diffAgentRoster(previous?.agents ?? [], next.agents);
-    if (rosterDiff.invalidatedIds.length > 0) {
-      context.agents.invalidateFiles(rosterDiff.invalidatedIds);
-      context.agentIdentity.invalidate(rosterDiff.invalidatedIds);
+    const previousAgents = previous?.agents ?? [];
+    const nextById = new Map(next.agents.map((agent) => [agent.id, agent]));
+    const invalidatedIds: string[] = [];
+    const changedIds: string[] = [];
+    for (const agent of previousAgents) {
+      const replacement = nextById.get(agent.id);
+      if (!replacement) {
+        invalidatedIds.push(agent.id);
+      } else if (JSON.stringify(replacement) !== JSON.stringify(agent)) {
+        invalidatedIds.push(agent.id);
+        changedIds.push(agent.id);
+      }
     }
-    if (rosterDiff.changedIds.length > 0) {
-      void context.agentIdentity.ensure(rosterDiff.changedIds);
+    if (invalidatedIds.length > 0) {
+      context.agents.invalidateFiles(invalidatedIds);
+      context.agentIdentity.invalidate(invalidatedIds);
+    }
+    if (changedIds.length > 0) {
+      void context.agentIdentity.ensure(changedIds);
     }
     const nextIds = new Set(next.agents.map((agent) => agent.id));
     if (
@@ -523,7 +517,7 @@ export class ShellGatewayOwner {
     const context = this.host.context;
     const generation = ++this.preferenceGeneration;
     this.runtimeConfigReady = (
-      runtimeConfig.state.bootstrapConfig ? Promise.resolve() : runtimeConfig.ensureLoaded()
+      runtimeConfig.state.bootstrapConfig ? Promise.resolve() : runtimeConfig.ensureDisplayLoaded()
     ).then(async () => {
       if (
         this.host.context !== context ||

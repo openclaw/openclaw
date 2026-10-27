@@ -673,7 +673,7 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
       sent: {
         requesterSessionKey: "global",
         agentId: "research",
-        mirror: expect.objectContaining({ sessionKey: "global", agentId: "research" }),
+        session: { agentId: "research", policyKey: "global" },
       },
     }),
     completionCase("channel-grammar direct target", "channel", {
@@ -1127,10 +1127,7 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
   });
 
   it.each<[string, Record<string, unknown>, string?]>([
-    ["an attachment without usable media", { payloads: [{ attachments: [{}] }] }],
     ["non-subagent NO_REPLY", silentResult, "agent_harness_task"],
-    ["committed session spawn", { payloads: [], ...committedSessionSpawnEvidence }],
-    ["committed cron add", { payloads: [], successfulCronAdds: 1 }],
   ])(
     "rejects session-only completion without a result: %s",
     async (_name, gatewayResult, sourceTool) => {

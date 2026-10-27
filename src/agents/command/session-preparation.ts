@@ -132,6 +132,11 @@ export function prepareCommandSessionRecoveryEntry(
         forceRestartSafeTools: opts.forceRestartSafeTools,
         runId,
         harnessCompletion,
+        sourceMessageChannel:
+          resolveMessageChannel(
+            opts.runContext?.messageChannel ?? opts.messageChannel,
+            opts.replyChannel ?? opts.channel,
+          ) ?? null,
         ...sourceOptions,
         ...(requesterSource
           ? {
@@ -437,6 +442,11 @@ export async function prepareEmbeddedSessionState(params: {
             .filter(Boolean)
             .join("\n\n"),
           ...(conversationPrompt ? { silentReplyPromptMode: "none" as const } : {}),
+          extraSystemPromptTurnContext: {
+            start:
+              conversationPrompt || !opts.extraSystemPrompt ? 0 : opts.extraSystemPrompt.length + 2,
+            text: conversationPrompt || deliveryFormat || "",
+          },
         }
       : opts;
   prepareGoalContinuationContext({ runId: params.runId, sessionKey, sessionEntry });

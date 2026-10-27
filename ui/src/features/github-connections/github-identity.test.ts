@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { createDeferredCore } from "../../../../src/shared/deferred.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
+import { sourceConfigSnapshot } from "../../lib/config/config-snapshot.test-support.ts";
 import { createRuntimeConfigCapability } from "../../lib/config/runtime-config-capability.ts";
 import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
 import { gatewayHelloForMethods } from "../../test-helpers/gateway-methods.ts";
@@ -73,15 +74,6 @@ function createController(behavior: { beforeDispatch?: () => void; refreshError?
   const runExternalMutation = createMutationRunner(client, behavior);
   return { ...createIdentityFixture(client, { runExternalMutation }), client, requests };
 }
-
-const configSnapshot = (config: Record<string, unknown> = {}, hash = "poll-hash") => ({
-  config,
-  sourceConfig: config,
-  raw: JSON.stringify(config),
-  hash,
-  valid: true,
-  issues: [],
-});
 
 it("keeps independent identity drafts isolated and clears only the inherited target", async () => {
   const { identity, sync, requests } = createController();
@@ -173,7 +165,7 @@ it("config.set drains drafts before managed and refreshes both edits", async () 
   const request = vi.fn(async (method: string, params?: unknown) => {
     order.push(method);
     if (method === "config.get") {
-      return configSnapshot(storedConfig, `hash-${hashCounter}`);
+      return sourceConfigSnapshot(storedConfig, `hash-${hashCounter}`);
     }
     if (method === "config.set") {
       storedConfig = JSON.parse((params as { raw: string }).raw) as Record<string, unknown>;
@@ -407,7 +399,7 @@ it("waits for each authoritative poll deadline and adopts successful OAuth statu
   ];
   const request = vi.fn(async (method: string) => {
     if (method === "config.get") {
-      return configSnapshot();
+      return sourceConfigSnapshot({}, "poll-hash");
     }
     if (method === "tools.github.authorize.start") {
       return authorizationCode;

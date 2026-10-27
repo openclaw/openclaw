@@ -64,6 +64,7 @@ async function restoredSteer(name: string, age: number, offset: number, seq: num
   };
   const sessionInfo = { activeRunIds: [runId], hasActiveRun: true, key: "agent:main:main" };
   const gateway = await installMockGateway(page, {
+    subscriptionInitialHistory: false,
     historyMessages: [userMessage],
     inFlightRun: { runId, startedAt, text: "" },
     sessionInfo,

@@ -18,7 +18,7 @@ import {
   controlUiBuildSiblingPid,
 } from "./lib/output-root-guard.mjs";
 import { prepareControlUiSettings } from "./lib/prepare-control-ui-settings.mts";
-import { isRecord } from "./lib/record-shared.mjs";
+import { isRecord, trimString } from "./lib/record-shared.mjs";
 import { createPnpmRunnerSpawnSpec } from "./pnpm-runner.mts";
 import { resolveNodePackageBin } from "./run-node-package-bin.mts";
 
@@ -450,7 +450,12 @@ async function buildAndPublishUi(
     const sourcePluginInventory =
       cache && env.OPENCLAW_CONTROL_UI_REQUIRE_PLUGIN_DISTRIBUTIONS === "1"
         ? (await import("./lib/bundled-plugin-build-entries.mjs"))
-            .collectSourceCheckoutPluginBuildEntries({ cwd: repoRoot, env })
+            .collectSourceCheckoutPluginBuildEntries({
+              cwd: repoRoot,
+              // Private runtime plugins do not change UI discovery. Keep the full
+              // source inventory in both flavors so new UI declarations invalidate reuse.
+              env: { ...env, OPENCLAW_BUILD_PRIVATE_QA: "1" },
+            })
             .map(({ id, isolated, packageJson }) => {
               const openclaw =
                 isRecord(packageJson) && isRecord(packageJson.openclaw)
@@ -479,7 +484,9 @@ async function buildAndPublishUi(
           "package.json",
           "pnpm-lock.yaml",
           "tsconfig.json",
-          "docs/assets/openclaw-hero-dark.png",
+          // Poster generation reads bundled fonts outside the UI source tree.
+          "src/gateway/assets/session-card/Lato-Regular.ttf",
+          "src/gateway/assets/session-card/InstrumentSerif-Regular.ttf",
           // Package metadata discovers new generations; all copied files (including
           // deferred chunks absent from Vite's module graph) invalidate reuse.
           ...(() => {
@@ -492,6 +499,21 @@ async function buildAndPublishUi(
               .filter((entry) => entry.isDirectory())
               .flatMap((entry) => {
                 const relative = `dist/extensions/${entry.name}`;
+                const manifestPath = path.join(repoRoot, relative, "openclaw.plugin.json");
+                if (!fs.existsSync(manifestPath)) {
+                  return [];
+                }
+                const manifest: unknown = JSON.parse(fs.readFileSync(manifestPath, "utf8"));
+                if (!isRecord(manifest) || !trimString(manifest.id)) {
+                  throw new Error(
+                    `Invalid packaged plugin manifest for ${entry.name}: missing plugin id`,
+                  );
+                }
+                // The distribution plugin consumes only declared native UI assets.
+                // Keep malformed declarations in the key so Vite still rejects them.
+                if (manifest.controlUi === undefined) {
+                  return [];
+                }
                 return [
                   `${relative}/package.json`,
                   `${relative}/openclaw.plugin.json`,
@@ -506,11 +528,19 @@ async function buildAndPublishUi(
       },
     };
     const staticInputs = cache?.listCacheFiles(repoRoot, step.cache.inputs, fs) ?? [];
+    const testInputs = new Set(
+      staticInputs.filter((file) =>
+        /^ui\/src\/.*\.test\.tsx?$/u.test(path.relative(repoRoot, file).replaceAll(path.sep, "/")),
+      ),
+    );
     const inputSignature = (inputs: string[]) =>
       cache!.hashInputFiles(
         repoRoot,
         [
-          ...new Set([...staticInputs, ...inputs.map((file) => path.join(repoRoot, file))]),
+          ...new Set([
+            ...staticInputs.filter((file) => !testInputs.has(file)),
+            ...inputs.map((file) => path.join(repoRoot, file)),
+          ]),
         ].toSorted(),
         fs,
         [
@@ -525,6 +555,8 @@ async function buildAndPublishUi(
           platform: process.platform,
           arch: process.arch,
           sourcePluginInventory,
+          // New glob matches must miss; existing tests matter only if Vite consumed them.
+          testInputPaths: [...testInputs].map((file) => path.relative(repoRoot, file)),
         }),
       );
     const cacheState = cache?.resolveBuildStepCacheState(step, {

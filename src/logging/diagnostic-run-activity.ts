@@ -2,6 +2,7 @@ import {
   getInternalDiagnosticEventSequence,
   onInternalDiagnosticEvent,
   type DiagnosticEventPayload,
+  type DiagnosticSessionActiveWorkKind,
 } from "../infra/diagnostic-events.js";
 import type {
   CoreModelRequestLifecycleProvenance,
@@ -20,6 +21,7 @@ import {
 } from "../infra/diagnostic-tool-execution-liveness.js";
 import {
   applyArgumentChurnObservation,
+  resolveArgumentChurnProgress,
   clearArgumentChurnActivity,
   clearArgumentChurnPolicyWaits,
   type DiagnosticArgumentChurnObservationParams,
@@ -43,7 +45,6 @@ import {
   shouldIgnoreRecoveredOwnerStartEvent,
 } from "./diagnostic-run-activity-recovery.js";
 import {
-  buildDiagnosticSessionActivitySnapshot,
   resolveToolExecutionRecoveryDeadlineAtMs,
   type DiagnosticSessionActivitySnapshot,
 } from "./diagnostic-run-activity-snapshot.js";
@@ -70,6 +71,14 @@ export {
 export type { DiagnosticSessionActivitySnapshot } from "./diagnostic-run-activity-snapshot.js";
 export type { DiagnosticEmbeddedRunOwner } from "../infra/diagnostic-model-request-provenance.js";
 
+type SnapshotTool = {
+  runId?: string;
+  toolName: string;
+  toolCallId?: string;
+  startedAt: number;
+  deadlineAtMs?: number;
+};
+
 type DiagnosticToolStartedActivityEvent = Pick<
   Extract<DiagnosticEventPayload, { type: "tool.execution.started" }>,
   "runId" | "sessionId" | "sessionKey" | "toolName" | "toolCallId"
@@ -91,10 +100,10 @@ let embeddedRunSequence = 0;
 function touchSemanticSessionActivity(
   activity: SessionActivity,
   reason: string,
-  params: { runId?: string; now?: number } = {},
+  runId: string | undefined,
 ): void {
-  clearRepeatedRequestActivity(activity, { runId: params.runId });
-  touchSessionActivity(activity, reason, params.now);
+  clearRepeatedRequestActivity(activity, { runId });
+  touchSessionActivity(activity, reason);
 }
 
 function toolKey(event: {
@@ -252,10 +261,6 @@ function recordModelStarted(
       sessionKey: event.sessionKey,
       sequence: event.seq,
       requestTimeoutMs: provenance.requestTimeoutMs,
-      deadlineAtMs:
-        provenance.requestTimeoutMs === undefined
-          ? undefined
-          : (event.ts ?? Date.now()) + provenance.requestTimeoutMs,
     });
     activity.activeCoreModelCalls.set(provenance.generation, calls);
     touchSessionActivity(activity, "model_call:started");
@@ -357,9 +362,7 @@ function applyRunProgress(
   if (typeof provenance === "object") {
     const registration = resolveCurrentDiagnosticOwner(provenance);
     if (registration) {
-      touchSemanticSessionActivity(registration.activity, params.reason, {
-        runId: provenance.runId,
-      });
+      touchSemanticSessionActivity(registration.activity, params.reason, provenance.runId);
     }
     return;
   }
@@ -378,7 +381,7 @@ function applyRunProgress(
     touchSessionActivity(activity, params.reason);
     return;
   }
-  touchSemanticSessionActivity(activity, params.reason, { runId });
+  touchSemanticSessionActivity(activity, params.reason, runId);
 }
 
 function recordRunCompleted(
@@ -401,7 +404,7 @@ function recordRunCompleted(
   embeddedRunIndex.clear(activity);
   clearArgumentChurnActivity(activity, { runId: event.runId });
   clearArgumentChurnPolicyWaits(activity, { runId: event.runId });
-  touchSemanticSessionActivity(activity, "run:completed", { runId: event.runId });
+  touchSemanticSessionActivity(activity, "run:completed", event.runId);
 }
 
 export function createDiagnosticEmbeddedRunOwner(params: {
@@ -563,8 +566,64 @@ export function getDiagnosticSessionActivitySnapshot(
     }
   }
   const { activeBackendLivenessDeadlineAtMs, activeRetryWaitDeadlineAtMs } = deadlines;
+  const currentOwner = resolveCurrentDiagnosticRun(activity.activeEmbeddedRuns.values());
+  const currentOwnerRunId = currentOwner?.runId;
+  let activeCoreModelCallCount = 0;
+  let activeModelCallRequestTimeoutMs: number | undefined;
+  for (const [generation, calls] of activity.activeCoreModelCalls) {
+    activeCoreModelCallCount += calls.size;
+    if (generation !== currentOwner?.generation) {
+      continue;
+    }
+    for (const call of calls.values()) {
+      if (call.requestTimeoutMs !== undefined) {
+        activeModelCallRequestTimeoutMs = Math.max(
+          activeModelCallRequestTimeoutMs ?? 0,
+          call.requestTimeoutMs,
+        );
+      }
+    }
+  }
+  const activeWorkKind: DiagnosticSessionActiveWorkKind | undefined =
+    activity.activeTools.size > 0
+      ? "tool_call"
+      : activity.activeModelCalls.size > 0 || activeCoreModelCallCount > 0
+        ? "model_call"
+        : activity.activeEmbeddedRuns.size > 0
+          ? "embedded_run"
+          : undefined;
+  let activeTool: SnapshotTool | undefined;
+  let activeToolDeadlineAtMs: number | undefined;
+  for (const tool of activity.activeTools.values()) {
+    if (!activeTool || tool.startedAt < activeTool.startedAt) {
+      activeTool = tool;
+    }
+    // Nested tool wrappers keep the oldest identity, but the current run's
+    // enforced waits own its allowance. Prior runs cannot extend that budget.
+    if (currentOwnerRunId !== undefined && tool.runId === currentOwnerRunId) {
+      const deadline = tool.deadlineAtMs;
+      if (deadline !== undefined) {
+        activeToolDeadlineAtMs = Math.max(activeToolDeadlineAtMs ?? deadline, deadline);
+      }
+    }
+  }
+  const churnProgress = resolveArgumentChurnProgress(activity, currentOwnerRunId, now);
   return {
-    ...buildDiagnosticSessionActivitySnapshot(activity, now),
+    activeWorkKind,
+    ...(activity.activeEmbeddedRuns.size > 0 ? { hasActiveEmbeddedRun: true } : {}),
+    activeToolName: activeTool?.toolName,
+    activeToolCallId: activeTool?.toolCallId,
+    activeToolAgeMs: activeTool ? Math.max(0, now - activeTool.startedAt) : undefined,
+    activeToolDeadlineAtMs:
+      currentOwnerRunId === undefined ? activeTool?.deadlineAtMs : activeToolDeadlineAtMs,
+    lastProgressAgeMs: Math.max(0, now - churnProgress.lastProgressAt),
+    lastProgressReason: churnProgress.lastProgressReason,
+    repeatedRequestNoProgressAgeMs: resolveRepeatedRequestNoProgressAgeMs(
+      activity,
+      currentOwnerRunId,
+      now,
+    ),
+    activeModelCallRequestTimeoutMs,
     ...(activeBackendLivenessDeadlineAtMs !== undefined
       ? { activeBackendLivenessDeadlineAtMs }
       : {}),
@@ -631,6 +690,7 @@ export function startDiagnosticRunActivityTracking(): void {
       }
     },
     {
+      includePromptStats: false,
       include: [
         "tool.execution.started",
         "tool.execution.completed",

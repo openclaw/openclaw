@@ -123,13 +123,13 @@ describe("backupCreateCommand verification", () => {
   it("does not claim completion when both backup and outcome recording fail", async () => {
     const backupError = new Error("snapshot failed");
     createBackupArchiveMock.mockRejectedValue(backupError);
-    recordBackupRunOutcomeMock.mockRejectedValue(new Error("record failed"));
+    recordBackupRunOutcomeMock.mockRejectedValue(new Error("café\x1b[31m\nrecord failed"));
     const runtime = createTestRuntime();
 
     await expect(backupCreateCommand(runtime)).rejects.toBe(backupError);
 
     expect(runtime.error).toHaveBeenCalledWith(
-      "Warning: the backup outcome could not be recorded: record failed",
+      "Warning: the backup outcome could not be recorded: café\\nrecord failed",
     );
   });
 });

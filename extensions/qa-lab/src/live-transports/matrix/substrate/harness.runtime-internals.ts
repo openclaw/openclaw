@@ -54,13 +54,9 @@ export async function waitForReachableMatrixBaseUrl(params: {
   composeFile: string;
   containerBaseUrl: string | null;
   hostBaseUrl: string;
-  timeoutMs?: number;
-  pollMs?: number;
 }) {
-  const timeoutMs = params.timeoutMs ?? 60_000;
-  const pollMs = params.pollMs ?? 1_000;
   const startedAt = Date.now();
-  const deadline = startedAt + timeoutMs;
+  const deadline = startedAt + 60_000;
   const candidateBaseUrls = params.containerBaseUrl
     ? [params.hostBaseUrl, params.containerBaseUrl]
     : [params.hostBaseUrl];
@@ -98,7 +94,7 @@ export async function waitForReachableMatrixBaseUrl(params: {
     }
     const remainingSleepMs = deadline - Date.now();
     if (remainingSleepMs > 0) {
-      await sleep(Math.min(pollMs, remainingSleepMs));
+      await sleep(Math.min(1_000, remainingSleepMs));
     }
   }
 
@@ -107,7 +103,7 @@ export async function waitForReachableMatrixBaseUrl(params: {
     : params.hostBaseUrl;
   throw new Error(
     [
-      `Matrix homeserver did not become healthy within ${Math.round(timeoutMs / 1000)}s.`,
+      "Matrix homeserver did not become healthy within 60s.",
       `Last checked: ${candidateLabel}`,
       `Hint: check container logs with \`docker compose -f ${params.composeFile} logs ${MATRIX_QA_SERVICE}\`.`,
     ].join("\n"),

@@ -30,6 +30,7 @@ import {
   writeSessionEntry,
 } from "./session-accessor.sqlite-entry-store.js";
 import { replaceSessionEntrySync } from "./session-accessor.sqlite-entry.js";
+import { recordSessionParticipant } from "./session-accessor.sqlite-participants.native.js";
 import { resolveSqliteScope, toDatabaseOptions } from "./session-accessor.sqlite-scope.js";
 import {
   captureCanonicalSessionReaderContinuation,
@@ -47,6 +48,7 @@ import {
 } from "./session-entry-read.worker.js";
 import type { SessionEntrySnapshotField } from "./session-entry-snapshot-values.js";
 import { addSessionMember } from "./session-sharing-store.native.js";
+import { promptReport } from "./system-prompt-report.test-support.js";
 
 type Database = ReturnType<typeof openOpenClawAgentDatabase>;
 type Target = { agentId: string; path: string };
@@ -101,14 +103,7 @@ it("hydrates only requested snapshots while retaining exact-read lifecycle and a
       status: "done" as const,
       skillsSnapshot: { prompt: "saved prompt".repeat(8192), skills: [] },
       sessionDiffBaseline: { version: 1 as const, sessionId, root: "/synthetic", files: [] },
-      systemPromptReport: {
-        source: "run" as const,
-        generatedAt: 1,
-        systemPrompt: { chars: 1, projectContextChars: 0, nonProjectContextChars: 1 },
-        injectedWorkspaceFiles: [],
-        skills: { promptChars: 0, entries: [] },
-        tools: { listChars: 0, schemaChars: 0, entries: [] },
-      },
+      systemPromptReport: promptReport(1, 1, 0),
     };
     replaceSessionEntrySync({ agentId: "main", env, sessionKey }, entry);
     const target = { agentId: database.agentId, path: database.path };
@@ -282,6 +277,10 @@ it.each([false, true])("reads row metadata (continuation: %s)", (useContinuation
     for (const key of sessionKeys.slice(1)) {
       writeSessionEntry(database, key, { sessionId: key, updatedAt: 1 });
     }
+    recordSessionParticipant(
+      { agentId: database.agentId, storePath: database.path, env, sessionKey },
+      { identity: { type: "agent", id: "before-participant" }, promptedAt: 1 },
+    );
     const boardKeys = sessionKeys.filter((_, index) => index % 2 === 0);
     const insertTab = database.db.prepare(
       "INSERT INTO board_tabs (session_key, tab_id, title, position, created_by, revision) VALUES (?, ?, 'Board', 0, 'user', 0)",
@@ -329,6 +328,9 @@ it.each([false, true])("reads row metadata (continuation: %s)", (useContinuation
               .run(sessionKey);
             peer.prepare("DELETE FROM board_tabs WHERE session_key = ?").run(sessionKey);
             peer
+              .prepare("UPDATE session_participants SET actor_id = ? WHERE session_key = ?")
+              .run("after-participant", sessionKey);
+            peer
               .prepare(
                 "UPDATE transcript_rewrite_watermarks SET generation = 'next-generation' WHERE session_id = ?",
               )
@@ -344,13 +346,16 @@ it.each([false, true])("reads row metadata (continuation: %s)", (useContinuation
         const exec = vi.spyOn(reader.db, "exec");
         const queries = trackSqliteStatementExecutions(
           requireNativeSqliteDatabase(reader.db),
-          ["boards", "entries"],
+          ["boards", "entries", "participants"],
           (sql) => {
             if (/\bfrom "session_nodes"/iu.test(sql) && sql.includes('"entry_json"')) {
               return "entries";
             }
             if (/\bfrom "board_tabs"/iu.test(sql)) {
               return "boards";
+            }
+            if (/\bfrom "session_participants"/iu.test(sql)) {
+              return "participants";
             }
             return null;
           },
@@ -384,7 +389,11 @@ it.each([false, true])("reads row metadata (continuation: %s)", (useContinuation
           );
           expect(first.rows[0]).toMatchObject({
             sessionKey,
-            entry: { label: "before" },
+            entry: {
+              label: "before",
+              participants: [{ identity: { type: "agent", id: "before-participant" } }],
+              participantCount: 1,
+            },
             hasBoard: true,
             activitySummaryWatermark: { generation: "hot-generation", maxSeq: 41 },
           });
@@ -399,12 +408,17 @@ it.each([false, true])("reads row metadata (continuation: %s)", (useContinuation
             hasBoard: false,
           });
           expect(read().rows[0]).toMatchObject({
-            entry: { label: "after" },
+            entry: {
+              label: "after",
+              participants: [{ identity: { type: "agent", id: "after-participant" } }],
+              participantCount: 1,
+            },
             hasBoard: false,
             activitySummaryWatermark: { generation: "next-generation", maxSeq: 42 },
           });
           expect(queries.counts.boards).toBe(0);
           expect(queries.counts.entries).toBe(2);
+          expect(queries.counts.participants).toBe(0);
           expect(entryParseCount()).toBe(128);
           expect(
             exec.mock.calls
@@ -485,7 +499,7 @@ it("consumes admitted board absence for a cohort and observes first use and publ
     });
   }));
 
-it.each(["worker", "exact", "row-facts"] as const)(
+it.each(["worker", "exact", "full", "children", "worktree", "source-checks", "row-facts"] as const)(
   "refuses unavailable session metadata in the %s reader instead of reporting missing sessions",
   (reader) =>
     withOpenClawTestState({ scenario: "minimal" }, async ({ env }) => {
@@ -503,8 +517,19 @@ it.each(["worker", "exact", "row-facts"] as const)(
               kind: "session-exact-entries",
               database: { agentId: "main", path: storePath },
               env,
-              sessionKeys,
-              projection: reader === "exact" ? "exact" : "list",
+              ...(reader === "children"
+                ? {
+                    selection: { kind: "children" as const, parentSessionKeys: sessionKeys },
+                    projection: "list" as const,
+                  }
+                : {
+                    sessionKeys,
+                    projection:
+                      reader === "exact" || reader === "full" || reader === "worktree"
+                        ? reader
+                        : "list",
+                  }),
+              ...(reader === "source-checks" ? { sourceChecks: [] } : {}),
             }).entries;
       expect(read()).toEqual([]);
       fs.mkdirSync(path.dirname(storePath), { recursive: true });

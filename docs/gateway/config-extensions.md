@@ -385,8 +385,7 @@ See [Plugins](/tools/plugin).
 ```
 
 - `host.enabled` is the single Canvas host switch and defaults to enabled. It
-  gates hosted widget documents under `/__openclaw__/canvas/` and A2UI renderer
-  assets under `/__openclaw__/a2ui/`.
+  gates hosted widget documents under `/__openclaw__/canvas/`.
 - Local-only: keep `gateway.bind: "loopback"` (default).
 - Non-loopback binds: these routes require Gateway auth (token/password/trusted-proxy), same as other Gateway HTTP surfaces.
 - Node WebViews typically don't send auth headers; after a macOS node is paired and connected, the Gateway advertises a node-scoped `pluginSurfaceUrls.canvas` capability URL.

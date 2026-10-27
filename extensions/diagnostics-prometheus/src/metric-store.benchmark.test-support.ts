@@ -6,9 +6,15 @@ import { once } from "node:events";
 import { readFile, writeFile } from "node:fs/promises";
 import { createServer } from "node:http";
 import { Session } from "node:inspector/promises";
-import { constants, PerformanceObserver, type PerformanceNodeEntry } from "node:perf_hooks";
+import {
+  constants,
+  monitorEventLoopDelay,
+  PerformanceObserver,
+  type PerformanceNodeEntry,
+} from "node:perf_hooks";
 import { setImmediate as immediate, setTimeout as delay } from "node:timers/promises";
 import { parseArgs } from "node:util";
+import { writeHeapSnapshot } from "node:v8";
 import {
   MAX_PROMETHEUS_FAMILY_SERIES,
   PROMETHEUS_FAMILY_RESERVES,
@@ -19,11 +25,13 @@ import {
   createPrometheusMetricStore,
   type PrometheusMetricStore,
 } from "./prometheus-metric-store.js";
-import { recordWorkerRequest } from "./service-worker.js";
+import { createWorkerRequestMetricsRecorder } from "./service-worker.js";
 
 const { values } = parseArgs({
   options: {
     output: { type: "string" },
+    "pool-churn": { type: "boolean", default: false },
+    "heap-snapshot": { type: "string" },
     iterations: { type: "string", default: "100000" },
     "render-only": { type: "boolean", default: false },
     http: { type: "boolean", default: false },
@@ -32,6 +40,7 @@ const { values } = parseArgs({
     "flush-headers": { type: "boolean", default: false },
     "render-samples": { type: "string", default: "200" },
     "allocation-renders": { type: "string", default: "100" },
+    "updates-per-render": { type: "string", default: "0" },
     shape: { type: "string" },
     "start-at": { type: "string" },
     "phase-ms": { type: "string", default: "60000" },
@@ -47,19 +56,18 @@ function integerOption(value: string, name: string, min: number, max: number) {
   );
   return parsed;
 }
-const iterations = integerOption(values.iterations, "--iterations", 1000, 10000000);
-const renderSamples = integerOption(values["render-samples"], "--render-samples", 200, 100000);
-const allocationRenders = integerOption(
-  values["allocation-renders"],
-  "--allocation-renders",
-  1,
-  100000,
-);
-const phaseMs = integerOption(values["phase-ms"], "--phase-ms", 1000, 3600000);
+function numericOption(name: keyof typeof values, min: number, max: number) {
+  return integerOption(String(values[name]), `--${name}`, min, max);
+}
+const iterations = numericOption("iterations", 1000, 10000000);
+const renderSamples = numericOption("render-samples", 200, 100000);
+const allocationRenders = numericOption("allocation-renders", 1, 100000);
+const phaseMs = numericOption("phase-ms", 1000, 3600000);
+const updatesPerRender = numericOption("updates-per-render", 0, 16384);
+assert(!updatesPerRender || values.shape, "--updates-per-render requires --shape");
 const withHttp = values.http || values["http-only"];
-const httpPort = values["http-port"]
-  ? integerOption(values["http-port"], "--http-port", 40000, 65535)
-  : undefined;
+const httpPort = values["http-port"] ? numericOption("http-port", 40000, 65535) : undefined;
+assert(!values["heap-snapshot"] || !withHttp, "Heap snapshots are a separate retention-only pass");
 assert(!withHttp || httpPort, "--http-port is required with --http or --http-only");
 const startAt = values["start-at"] ? Number(values["start-at"]) : Date.now() + 30000;
 assert(Number.isSafeInteger(startAt), "--start-at must be an epoch millisecond integer");
@@ -109,10 +117,10 @@ function memoryDelta(after: NodeJS.MemoryUsage, before: NodeJS.MemoryUsage) {
   };
 }
 
-async function measure(
+async function measure<T>(
   name: string,
   operations: number,
-  run: () => void | Promise<void>,
+  run: () => T | Promise<T>,
   profiled = true,
 ) {
   await phaseStart(name);
@@ -147,10 +155,13 @@ async function measure(
   // These markers delimit only measured work in an optional --trace-gc-nvp log.
   console.error(JSON.stringify({ benchmarkPhase: name, event: "start", profiled, operations }));
   const cpu = process.cpuUsage();
+  const eventLoop = monitorEventLoopDelay({ resolution: 1 });
+  eventLoop.enable();
   started = performance.now();
-  await run();
+  const result = await run();
   ended = performance.now();
   const used = process.cpuUsage(cpu);
+  eventLoop.disable();
   console.error(JSON.stringify({ benchmarkPhase: name, event: "end" }));
   let sampledHeapBytes: number | undefined;
   if (profiled) {
@@ -183,18 +194,27 @@ async function measure(
     cpuMsPerOperation: cpuMs / operations,
     gc,
     gcMsPerOperation: gc.total.totalMs / operations,
+    eventLoop: {
+      samples: eventLoop.count,
+      p95Ms: eventLoop.count ? eventLoop.percentile(95) / 1e6 : null,
+      p99Ms: eventLoop.count ? eventLoop.percentile(99) / 1e6 : null,
+      maxMs: eventLoop.count ? eventLoop.max / 1e6 : null,
+      p95Eligible: eventLoop.count >= 200,
+      p99Eligible: eventLoop.count >= 1000,
+    },
   };
+  return result;
 }
 
 type Shape = {
   histograms: { name: PrometheusMetricName; labelSets: number; finiteBuckets: number[] }[];
   scalars: { name: PrometheusMetricName; labelSets: number; type: "counter" | "gauge" }[];
 };
+function shapeObject(value: unknown, message: string): asserts value is Record<string, unknown> {
+  assert(value && typeof value === "object", message);
+}
 function parseShape(raw: unknown): Shape {
-  assert(
-    raw && typeof raw === "object" && "histograms" in raw && "scalars" in raw,
-    "Invalid shape",
-  );
+  shapeObject(raw, "Invalid shape");
   assert(
     Array.isArray(raw.histograms) && Array.isArray(raw.scalars),
     "Shape must contain histogram and scalar arrays",
@@ -202,10 +222,7 @@ function parseShape(raw: unknown): Shape {
   let total = 0;
   const names = new Set<string>();
   const series = (row: unknown) => {
-    assert(
-      row && typeof row === "object" && "name" in row && "labelSets" in row,
-      "Invalid series shape",
-    );
+    shapeObject(row, "Invalid series shape");
     assert(
       typeof row.name === "string" && Object.hasOwn(PROMETHEUS_FAMILY_RESERVES, row.name),
       "Unknown metric name",
@@ -221,15 +238,12 @@ function parseShape(raw: unknown): Shape {
       Math.max(MAX_PROMETHEUS_FAMILY_SERIES, PROMETHEUS_FAMILY_RESERVES[name]),
     );
     total += labelSets;
-    return { name, labelSets };
+    return { name, labelSets, finiteBuckets: row.finiteBuckets, type: row.type };
   };
   const histograms: Shape["histograms"] = raw.histograms.map((row: unknown) => {
-    const common = series(row);
-    assert(
-      row && typeof row === "object" && "finiteBuckets" in row && Array.isArray(row.finiteBuckets),
-      "Invalid histogram bounds",
-    );
-    const finiteBuckets = row.finiteBuckets.map((bound: unknown) => {
+    const { name, labelSets, finiteBuckets: bounds } = series(row);
+    assert(Array.isArray(bounds), "Invalid histogram bounds");
+    const finiteBuckets = bounds.map((bound: unknown) => {
       assert(
         typeof bound === "number" && Number.isFinite(bound),
         "Histogram bounds must be finite",
@@ -242,26 +256,24 @@ function parseShape(raw: unknown): Shape {
         finiteBuckets.every((bound, index) => index === 0 || bound > finiteBuckets[index - 1]!),
       "Histogram bounds must be sorted and unique",
     );
-    return { ...common, finiteBuckets };
+    return { name, labelSets, finiteBuckets };
   });
   const scalars: Shape["scalars"] = raw.scalars.map((row: unknown) => {
-    const common = series(row);
-    assert(
-      row &&
-        typeof row === "object" &&
-        "type" in row &&
-        (row.type === "counter" || row.type === "gauge"),
-      "Invalid scalar type",
-    );
-    return { ...common, type: row.type };
+    const { name, labelSets, type } = series(row);
+    assert(type === "counter" || type === "gauge", "Invalid scalar type");
+    return { name, labelSets, type };
   });
   assert(total <= capacity, "Shape exceeds store capacity");
   return { histograms, scalars };
 }
 
+// Dead traffic between new series exposes long-lived views pinning unrelated pool slabs.
+const churnPool = () => values["pool-churn"] && Buffer.from("x".repeat(8192));
+
 function populateShape(store: PrometheusMetricStore, shape: Shape) {
   for (const { name, labelSets, finiteBuckets } of shape.histograms) {
     for (let index = 0; index < labelSets; index++) {
+      churnPool();
       store.histogram(
         name,
         "Synthetic histogram",
@@ -273,6 +285,7 @@ function populateShape(store: PrometheusMetricStore, shape: Shape) {
   }
   for (const { name, labelSets, type } of shape.scalars) {
     for (let index = 0; index < labelSets; index++) {
+      churnPool();
       store[type](
         name,
         "Synthetic scalar",
@@ -286,6 +299,33 @@ function populateShape(store: PrometheusMetricStore, shape: Shape) {
     scalarSeries: shape.scalars.reduce((sum, row) => sum + row.labelSets, 0),
     workload:
       "Observed family cardinalities and bucket widths, synthetic labels and values; exporter drop counters omitted.",
+  };
+}
+
+function shapeUpdater(store: PrometheusMetricStore, shape: Shape | undefined) {
+  const updates: ((round: number) => void)[] = [];
+  if (shape && updatesPerRender) {
+    for (const { name, labelSets, finiteBuckets } of shape.histograms) {
+      for (let index = 0; index < labelSets; index++) {
+        const labels = { kind: `kind-${index % 8}`, worker_slot: String(index) };
+        updates.push(() =>
+          store.histogram(name, "Synthetic histogram", labels, 0.015, finiteBuckets),
+        );
+      }
+    }
+    for (const { name, labelSets, type } of shape.scalars) {
+      for (let index = 0; index < labelSets; index++) {
+        const labels = { kind: `kind-${index % 8}`, worker_slot: String(index) };
+        updates.push((round) => store[type](name, "Synthetic scalar", labels, round + 1));
+      }
+    }
+    assert(updatesPerRender <= updates.length, "Cannot update more series than the shape contains");
+  }
+  let cursor = 0;
+  return () => {
+    for (let index = 0; index < updatesPerRender; index++) {
+      updates[cursor % updates.length]!(cursor++);
+    }
   };
 }
 
@@ -327,6 +367,7 @@ function populateCapacity(store: PrometheusMetricStore) {
       if (series === capacity) {
         break;
       }
+      churnPool();
       const labels = { kind: `kind-${label % 8}`, worker_slot: String(label) };
       const buckets = rpcBuckets[name];
       if (buckets || familyIndex % 4 >= 2) {
@@ -350,7 +391,15 @@ function populateCapacity(store: PrometheusMetricStore) {
   };
 }
 
-function scrapeInfo(scrape: string | Buffer) {
+type Scrape = string | Buffer<ArrayBuffer>;
+
+function releaseScrape(scrape: Scrape) {
+  if (Buffer.isBuffer(scrape)) {
+    scrape.buffer.transfer(0);
+  }
+}
+
+function scrapeInfo(scrape: Scrape) {
   return {
     sha256: createHash("sha256").update(scrape).digest("hex"),
     bytes: Buffer.byteLength(scrape),
@@ -363,11 +412,17 @@ function scrapeInfo(scrape: string | Buffer) {
   };
 }
 
-async function measureHttp(store: PrometheusMetricStore, expectedBytes: number, port: number) {
+async function measureHttp(
+  store: PrometheusMetricStore,
+  expectedBytes: number,
+  port: number,
+  update: () => void,
+) {
   let served = 0;
   // Mirror the authorized GET response path; service tests cover routing and authorization.
   const server = createServer((_req, res) => {
-    const body = store.render();
+    update();
+    const body: Scrape = store.render();
     served++;
     res.statusCode = 200;
     res.setHeader("Cache-Control", "no-store");
@@ -376,7 +431,16 @@ async function measureHttp(store: PrometheusMetricStore, expectedBytes: number, 
     if (values["flush-headers"]) {
       res.flushHeaders();
     }
-    res.end(body);
+    if (Buffer.isBuffer(body)) {
+      res.end(body, (error?: Error | null) => {
+        if (!error) {
+          releaseScrape(body);
+        }
+      });
+    } else {
+      // The baseline string response has no completion closure retaining its body.
+      res.end(body);
+    }
   });
   server.listen(port, "127.0.0.1");
   await once(server, "listening");
@@ -406,7 +470,8 @@ async function measureHttp(store: PrometheusMetricStore, expectedBytes: number, 
           let bytes = 0;
           for await (const chunk of response) bytes += chunk.length;
           durations.push(performance.now() - started);
-          assert.equal(bytes, expectedBytes);
+          assert(bytes > 0);
+          if (expectedBytes) assert.equal(bytes, expectedBytes);
           totalBytes += bytes;
         }
         process.send({ totalBytes, durations });
@@ -436,7 +501,9 @@ async function measureHttp(store: PrometheusMetricStore, expectedBytes: number, 
     const result = await reply;
     assert(!result.error, result.error);
     assert.equal(result.durations.length, count);
-    assert.equal(result.totalBytes, count * expectedBytes);
+    if (expectedBytes) {
+      assert.equal(result.totalBytes, count * expectedBytes);
+    }
     return result;
   };
   try {
@@ -446,17 +513,8 @@ async function measureHttp(store: PrometheusMetricStore, expectedBytes: number, 
       ["prometheus.http", renderSamples, false],
       ["prometheus.http-allocation", allocationRenders, true],
     ] as const) {
-      let reply: Reply | undefined;
       const previousServed = served;
-      await measure(
-        name,
-        count,
-        async () => {
-          reply = await request(count);
-        },
-        profiled,
-      );
-      assert(reply);
+      const reply = await measure(name, count, () => request(count), profiled);
       assert.equal(served - previousServed, count);
       results[`${name}.client`] = {
         receivedBytes: reply.totalBytes,
@@ -493,19 +551,10 @@ try {
     observe(2000);
     await measure("prometheus.observation", iterations * 3, () => observe(iterations));
     const workerStore = createPrometheusMetricStore();
+    const recordWorker = createWorkerRequestMetricsRecorder(workerStore);
     const record = (count: number) => {
       for (let index = 0; index < count; index++) {
-        recordWorkerRequest(workerStore, {
-          type: "worker.request",
-          ts: 1,
-          seq: index,
-          kind: "sqlite_read",
-          phase: "completed",
-          requestClass: "sessions.get",
-          queueDepth: 0,
-          queueWaitMs: 0.1,
-          durationMs: 1,
-        });
+        recordWorker("sqlite_read", "sessions.get", "completed", 0, 0.1, 1, undefined);
       }
     };
     record(2000);
@@ -529,7 +578,7 @@ try {
     const renders = Math.max(1000, Math.floor(iterations / 10));
     await measure("prometheus.render", renders, () => {
       for (let index = 0; index < renders; index++) {
-        fixed.render();
+        releaseScrape(fixed.render());
       }
     });
   }
@@ -537,6 +586,8 @@ try {
     ? parseShape(JSON.parse(await readFile(values.shape, "utf8")))
     : undefined;
   const retainedStore = createPrometheusMetricStore();
+  // Keep synthetic event input outside the measured store-retention delta.
+  const update = shapeUpdater(retainedStore, shape);
   const emptyMemory = await retainedMemory();
   const fixture = shape ? populateShape(retainedStore, shape) : populateCapacity(retainedStore);
   const populatedMemory = await retainedMemory();
@@ -551,18 +602,23 @@ try {
     retainedStore.render();
   }
   const warmedMemory = await retainedMemory();
+  if (values["heap-snapshot"]) {
+    writeHeapSnapshot(values["heap-snapshot"]);
+  }
   let consumedUnits = 0;
-  if (!values["http-only"]) {
+  if (!values["http-only"] && !values["heap-snapshot"]) {
     const durations = new Float64Array(renderSamples);
     await measure(
       "prometheus.full-capacity-render",
       renderSamples,
       () => {
         for (let index = 0; index < renderSamples; index++) {
+          update();
           const before = performance.now();
           const rendered = retainedStore.render();
           durations[index] = performance.now() - before;
           consumedUnits += rendered.length;
+          releaseScrape(rendered);
         }
       },
       false,
@@ -570,21 +626,24 @@ try {
     results.renderLatency = tails(Array.from(durations));
     await measure("prometheus.render-allocation", allocationRenders, () => {
       for (let index = 0; index < allocationRenders; index++) {
-        consumedUnits += retainedStore.render().length;
+        update();
+        const rendered = retainedStore.render();
+        consumedUnits += rendered.length;
+        releaseScrape(rendered);
       }
     });
   }
   const afterRenderMemory = await retainedMemory();
   if (withHttp) {
     assert(httpPort);
-    await measureHttp(retainedStore, fullScrape.bytes, httpPort);
+    await measureHttp(retainedStore, updatesPerRender ? 0 : fullScrape.bytes, httpPort, update);
     results.afterHttp = memoryDelta(await retainedMemory(), afterRenderMemory);
   }
-  assert.equal(
-    scrapeInfo(retainedStore.render()).sha256,
-    fullScrape.sha256,
-    "Measured renders changed the scrape",
-  );
+  const finalScrape = scrapeInfo(retainedStore.render());
+  if (!updatesPerRender) {
+    assert.equal(finalScrape.sha256, fullScrape.sha256, "Measured renders changed the scrape");
+  }
+  await writeFile(`${values.output}.final.prom`, retainedStore.render());
   retainedStore.reset();
   const afterResetMemory = await retainedMemory();
   assert.equal(retainedStore.render().length, 0);
@@ -603,7 +662,9 @@ try {
         node: process.version,
         iterations,
         renderSamples,
+        poolChurn: values["pool-churn"],
         allocationRenders,
+        updatesPerRender,
         http: withHttp,
         httpOnly: values["http-only"],
         flushHeaders: values["flush-headers"],
@@ -614,6 +675,7 @@ try {
         results,
         scrape: fullScrape,
         fixedScrape,
+        finalScrape,
       },
       null,
       2,

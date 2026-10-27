@@ -16,6 +16,7 @@ import { resolveRuntimeWorkerUrl } from "openclaw/plugin-sdk/process-runtime";
 import { closeOpenClawStateDatabaseAsync } from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { resolveRuntimeWorkerThreadExecArgv } from "openclaw/plugin-sdk/test-env";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi, type Mock } from "vitest";
+import { listenOnLoopback } from "../../test-support/hanging-loopback-server.js";
 import type * as TelegramProcessingOutcome from "./bot-processing-outcome.js";
 import type { TelegramBotOptions } from "./bot.types.js";
 import { asTelegramClientFetch, createTelegramClientFetch } from "./client-fetch.js";
@@ -278,14 +279,8 @@ async function withTempSpool<T>(fn: (stateDir: string) => Promise<T>): Promise<T
 }
 
 async function listen(server: Server) {
-  await new Promise<void>((resolve) => {
-    server.listen(0, "127.0.0.1", resolve);
-  });
-  const address = server.address();
-  if (!address || typeof address === "string") {
-    throw new Error("Expected a loopback Bot API listener");
-  }
-  return `http://127.0.0.1:${address.port}`;
+  const port = await listenOnLoopback(server);
+  return `http://127.0.0.1:${port}`;
 }
 
 async function closeServer(server: Server) {
@@ -1136,10 +1131,7 @@ describe("TelegramPollingSession", () => {
       const createTelegramTransport = vi.fn(() => replacement);
       createTelegramBotMock.mockReturnValue(makeIsolatedBot());
 
-      let firstWorkerDone: (() => void) | undefined;
-      const firstWorkerTask = new Promise<void>((resolve) => {
-        firstWorkerDone = resolve;
-      });
+      const { promise: firstWorkerTask, resolve: firstWorkerDone } = createDeferred<void>();
       const firstWorkerStop = vi.fn(async () => {
         firstWorkerDone?.();
       });
@@ -1301,47 +1293,64 @@ describe("TelegramPollingSession", () => {
     );
   });
 
-  it("lets isolated ingress control updates bypass an active spooled turn", async () => {
+  it("lets isolated ingress control updates bypass an active spooled turn", async (context) => {
     await withTempSpool(async (tempDir) => {
       const abort = new AbortController();
       const events: string[] = [];
+      const regularTurnStarted = createDeferred<void>();
       const regularTurnDone = createDeferred<void>();
+      const regularTurnFinished = createDeferred<void>();
+      const controlsHandled = createDeferred<void>();
+      const worker = createListeningIngressWorker();
       await writeSpooledTestUpdates(tempDir, [forumUpdate(42, "summarize this")]);
-      const { runPromise, stopWorker } = startIsolatedIngressSession({
+      const { runPromise } = startIsolatedIngressSession({
         abort,
         stateDir: tempDir,
+        createWorker: worker.createWorker,
         handleUpdate: async (update) => {
           if (update.update_id === 42) {
             events.push("regular:start");
+            regularTurnStarted.resolve();
             await regularTurnDone.promise;
             events.push("regular:end");
+            regularTurnFinished.resolve();
           } else if (update.update_id === 43) {
             events.push("status");
           } else if (update.update_id === 44) {
             events.push("stop");
+            controlsHandled.resolve();
           }
         },
       });
-
-      try {
-        await waitForTelegramTestState(() => expect(events).toEqual(["regular:start"]));
-        await writeSpooledTestUpdates(tempDir, [
-          forumUpdate(43, "/status"),
-          forumUpdate(44, "/stop@vacs_tars_bot"),
-        ]);
-        await waitForTelegramTestState(() =>
-          expect(events).toEqual(["regular:start", "status", "stop"]),
-        );
-        expect(await pendingUpdateIds(tempDir, "all")).toEqual([]);
-        regularTurnDone.resolve();
-        await waitForTelegramTestState(async () =>
-          expect(await pendingUpdateIds(tempDir, "all")).toEqual([]),
-        );
-      } finally {
+      const lifetime = createTestLifetime(context, async () => {
         regularTurnDone.resolve();
         abort.abort();
-        stopWorker();
         await runPromise;
+      });
+
+      try {
+        await lifetime.wait(Promise.all([regularTurnStarted.promise, worker.listening]));
+        // Live intake owns both the durable append and the wakeup for newly received controls.
+        worker.emit({
+          type: "updates",
+          requestId: "controls",
+          updates: [forumUpdate(43, "/status"), forumUpdate(44, "/stop@openclaw_bot")],
+          queued: 2,
+        });
+        await lifetime.wait(worker.firstAck);
+        expect(worker.ackSpooledUpdate).toHaveBeenCalledExactlyOnceWith("controls", {
+          ok: true,
+          updateId: 44,
+        });
+        await lifetime.wait(controlsHandled.promise);
+        expect(events).toEqual(["regular:start", "status", "stop"]);
+        expect(await pendingUpdateIds(tempDir, "all")).toEqual([]);
+        regularTurnDone.resolve();
+        await lifetime.wait(regularTurnFinished.promise);
+        expect(events).toEqual(["regular:start", "status", "stop", "regular:end"]);
+        expect(await pendingUpdateIds(tempDir, "all")).toEqual([]);
+      } finally {
+        await lifetime.close();
       }
     });
   });

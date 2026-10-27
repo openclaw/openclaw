@@ -1,5 +1,10 @@
 import { pruneMapToMaxSize } from "openclaw/plugin-sdk/collection-runtime";
-import { resolveExpiresAtMsFromDurationMs } from "openclaw/plugin-sdk/number-runtime";
+import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
+import {
+  isFutureDateTimestampMs,
+  parseFiniteNumber,
+  resolveExpiresAtMsFromDurationMs,
+} from "openclaw/plugin-sdk/number-runtime";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import type { ConsoleMessage, Dialog, Frame, Page, Request, Response } from "playwright-core";
@@ -8,25 +13,19 @@ import {
   MAX_CONSOLE_MESSAGES,
   MAX_NETWORK_REQUESTS,
   MAX_PAGE_ERRORS,
+  MAX_RECENT_DIALOGS,
+  OBSERVED_DIALOG_TIMEOUT_MS,
   pageStates,
   type ArmedDialogResponse,
   type BrowserObservedDialogRecord,
   type BrowserObservedState,
   type BrowserConsoleMessage,
   type PageState,
+  type PendingObservedDialog,
   type RoleRefs,
   type RoleRefsCacheEntry,
   BrowserObservedDialogBlockedError,
 } from "./pw-session-contracts.js";
-import {
-  clearArmedDialogResponse,
-  observeDialog,
-  recordClosedDialog,
-  resolveObservedDialogTimeoutMs,
-  resolvePendingDialogForResponse,
-  serializeObservedBrowserState,
-  settleObservedDialog,
-} from "./pw-session-dialogs.js";
 
 // Best-effort cache to make role refs stable even if Playwright returns a different Page object
 // for the same CDP target across requests.
@@ -215,7 +214,35 @@ export function ensurePageState(page: Page): PageState {
     rec.ok = false;
   });
   page.on("dialog", (dialog: Dialog) => {
-    observeDialog(state, dialog);
+    state.nextObservedDialogId += 1;
+    const type = dialog.type();
+    const defaultValue = dialog.defaultValue();
+    const pending: PendingObservedDialog = {
+      id: `d${state.nextObservedDialogId}`,
+      type,
+      message: dialog.message(),
+      openedAt: new Date().toISOString(),
+      dialog,
+      ...(type === "prompt" ? { defaultValue } : {}),
+    };
+    state.pendingDialogs.push(pending);
+
+    const armed = state.armedDialogResponse;
+    if (armed && isFutureDateTimestampMs(armed.expiresAt)) {
+      clearArmedDialogResponse(state);
+      void settleObservedDialog({
+        state,
+        pending,
+        accept: armed.accept,
+        ...(armed.promptText !== undefined ? { promptText: armed.promptText } : {}),
+        closedBy: "armed",
+      }).catch((err: unknown) => abortActionsBlockedByDialog(state, err));
+      return;
+    }
+    if (armed) {
+      clearArmedDialogResponse(state);
+    }
+    abortActionsBlockedByDialog(state);
   });
   page.on("download", (download) => {
     if (state.downloadWaiterDepth > 0) {
@@ -314,7 +341,8 @@ export function armObservedDialogResponseOnPage(opts: {
 }): void {
   const state = ensurePageState(opts.page);
   clearArmedDialogResponse(state);
-  const timeoutMs = resolveObservedDialogTimeoutMs(opts.timeoutMs);
+  const parsed = parseFiniteNumber(opts.timeoutMs);
+  const timeoutMs = Math.max(1, Math.floor(parsed ?? OBSERVED_DIALOG_TIMEOUT_MS));
   const expiresAt = resolveExpiresAtMsFromDurationMs(timeoutMs);
   if (expiresAt === undefined) {
     return;
@@ -354,4 +382,105 @@ export function createObservedDialogAbortSignalForPage(opts: {
       state.dialogAbortControllers.delete(controller);
     },
   };
+}
+
+function recordClosedDialog(
+  state: PageState,
+  dialog: BrowserObservedDialogRecord,
+  closedBy: NonNullable<BrowserObservedDialogRecord["closedBy"]>,
+): BrowserObservedDialogRecord {
+  const record = { ...serializeDialogRecord(dialog), closedAt: new Date().toISOString(), closedBy };
+  state.recentDialogs.push(record);
+  while (state.recentDialogs.length > MAX_RECENT_DIALOGS) {
+    state.recentDialogs.shift();
+  }
+  return record;
+}
+
+function serializeDialogRecord(dialog: BrowserObservedDialogRecord): BrowserObservedDialogRecord {
+  return {
+    id: dialog.id,
+    type: dialog.type,
+    message: dialog.message,
+    ...(dialog.defaultValue !== undefined ? { defaultValue: dialog.defaultValue } : {}),
+    openedAt: dialog.openedAt,
+    ...(dialog.closedAt !== undefined ? { closedAt: dialog.closedAt } : {}),
+    ...(dialog.closedBy !== undefined ? { closedBy: dialog.closedBy } : {}),
+  };
+}
+
+function serializeObservedBrowserState(state: PageState): BrowserObservedState {
+  return {
+    dialogs: {
+      pending: state.pendingDialogs.map(serializeDialogRecord),
+      recent: state.recentDialogs.map(serializeDialogRecord),
+    },
+  };
+}
+
+function clearArmedDialogResponse(state: PageState): void {
+  if (state.armedDialogResponse?.timer) {
+    clearTimeout(state.armedDialogResponse.timer);
+  }
+  state.armedDialogResponse = undefined;
+}
+
+function abortActionsBlockedByDialog(state: PageState, reason?: unknown): void {
+  if (state.dialogAbortControllers.size === 0) {
+    return;
+  }
+  const err = reason ?? new BrowserObservedDialogBlockedError(serializeObservedBrowserState(state));
+  for (const controller of state.dialogAbortControllers) {
+    controller.abort(err);
+  }
+  state.dialogAbortControllers.clear();
+}
+
+async function settleObservedDialog(params: {
+  state: PageState;
+  pending: PendingObservedDialog;
+  accept: boolean;
+  promptText?: string;
+  closedBy: NonNullable<BrowserObservedDialogRecord["closedBy"]>;
+}): Promise<BrowserObservedDialogRecord> {
+  const { state, pending } = params;
+  state.pendingDialogs = state.pendingDialogs.filter((dialog) => dialog.id !== pending.id);
+
+  let closedBy = params.closedBy;
+  try {
+    if (params.accept) {
+      await pending.dialog.accept(params.promptText);
+    } else {
+      await pending.dialog.dismiss();
+    }
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    if (!message.toLowerCase().includes("no dialog is showing")) {
+      throw err;
+    }
+    closedBy = "remote";
+  }
+
+  return recordClosedDialog(state, pending, closedBy);
+}
+
+function resolvePendingDialogForResponse(params: {
+  state: PageState;
+  dialogId?: string;
+}): PendingObservedDialog {
+  const dialogId = normalizeOptionalString(params.dialogId);
+  if (dialogId) {
+    const found = params.state.pendingDialogs.find((dialog) => dialog.id === dialogId);
+    if (found) {
+      return found;
+    }
+    throw new Error(`Dialog "${dialogId}" is not pending.`);
+  }
+  if (params.state.pendingDialogs.length === 1) {
+    return expectDefined(params.state.pendingDialogs.at(0), "single pending browser dialog");
+  }
+  if (params.state.pendingDialogs.length > 1) {
+    throw new Error("Multiple dialogs are pending; pass dialogId.");
+  }
+  throw new Error("No dialog is pending.");
 }

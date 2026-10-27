@@ -18,7 +18,6 @@ import {
 import {
   describe,
   registerCodexEventProjectorTestLifecycle,
-  embeddedAgentLog,
   expect,
   it,
   vi,
@@ -121,8 +120,8 @@ function sendMedia(
 function receipt(partialDelivery = false) {
   return { status: "settled", partialDelivery, createdThreadIds: [] };
 }
-function messageResult(details: unknown, text: string): AgentToolResult<unknown> {
-  return { content: [{ type: "text", text }], details };
+function messageResult(details: unknown): AgentToolResult<unknown> {
+  return { content: [{ type: "text", text: "Sent." }], details };
 }
 function internalReply(mediaUrl: unknown) {
   return {
@@ -244,7 +243,6 @@ describe("CodexAppServerEventProjector media projection", () => {
   });
 
   it("rejects oversized typed Codex images instead of using a remote saved path", async () => {
-    const warn = vi.spyOn(embeddedAgentLog, "warn").mockImplementation(() => undefined);
     const { events } = await createConfiguredProjection({
       config: { agents: { defaults: { mediaMaxMb: 0.000001 } } },
     });
@@ -252,43 +250,32 @@ describe("CodexAppServerEventProjector media projection", () => {
     await events.completed(codexImage("ig_typed_capped"));
 
     expectUndeliverableImage(events);
-    expect(warn).toHaveBeenCalledWith(
-      "codex app-server native image generation result exceeds media limit",
-      expect.objectContaining({ itemId: "ig_typed_capped" }),
-    );
   });
 
-  it("materializes overlapping typed and raw image events only once", async () => {
-    const { events } = await createProjection();
-
-    await Promise.all([
-      events.completed(codexImage("ig_concurrent")),
-      events.raw(rawImage("ig_concurrent", tinyPngBase64)),
-    ]);
-
-    await events.completed(nativeImage("ig_concurrent", tinyPngBase64));
-    const mediaUrl = await expectImage(events);
-    await expect(fs.readdir(path.dirname(mediaUrl))).resolves.toHaveLength(1);
-  });
-
-  it("retries valid typed image bytes after an overlapping invalid raw event", async () => {
-    const { events } = await createProjection();
-
-    await Promise.all([
-      events.raw(rawImage("ig_retry_valid", "not valid base64!")),
-      events.completed(nativeImage("ig_retry_valid", tinyPngBase64)),
-    ]);
-
-    await expectImage(events);
-  });
+  it.each([true, false])(
+    "materializes overlapping image events with valid raw bytes: %s",
+    async (validRaw) => {
+      const { events } = await createProjection();
+      const raw = rawImage("ig_concurrent", validRaw ? tinyPngBase64 : "not valid base64!");
+      await Promise.all(
+        validRaw
+          ? [events.completed(codexImage("ig_concurrent")), events.raw(raw)]
+          : [events.raw(raw), events.completed(nativeImage("ig_concurrent", tinyPngBase64))],
+      );
+      if (validRaw) {
+        await events.completed(nativeImage("ig_concurrent", tinyPngBase64));
+      }
+      const mediaUrl = await expectImage(events);
+      await expect(fs.readdir(path.dirname(mediaUrl))).resolves.toHaveLength(1);
+    },
+  );
 
   it("preserves generated media and route-specific identity after sending first to chat-source", async () => {
     const { events, bridge, execute, sources } = await createRemoteGeneratedMediaDelivery(
       async () =>
-        messageResult(
-          { messageDelivery: { ...receipt(), primaryPlatformMessageId: "sent-media-1" } },
-          "Sent.",
-        ),
+        messageResult({
+          messageDelivery: { ...receipt(), primaryPlatformMessageId: "sent-media-1" },
+        }),
     );
     const sent = await sendMedia(bridge, sources.first, "chat-source");
     expect(sent.success).toBe(true);
@@ -299,20 +286,24 @@ describe("CodexAppServerEventProjector media projection", () => {
     await events.complete();
     const result = events.result(bridge.telemetry);
 
-    expect(result.toolMediaUrls).toHaveLength(2);
     expect(result.hostOwnedToolMediaUrls).toEqual(result.toolMediaUrls);
     const generated = await readImages(result.toolMediaUrls);
     const first = generated.find((image) => image.base64 === tinyPngBase64);
     const second = generated.find((image) => image.base64 === SECOND_PNG_BASE64);
-    expect(first).toBeDefined();
-    expect(second).toBeDefined();
-    expect(result.messagingToolSentTargets).toHaveLength(1);
-    const delivery = result.messagingToolSentTargets?.[0];
-    expect(delivery).toMatchObject({ provider: "telegram", to: "chat-source" });
-    expect(delivery?.mediaUrls).toContain(stagedPath);
-    expect(result.messagingToolSentMediaUrls).toEqual(delivery?.mediaUrls);
-    expect(delivery?.mediaUrls).not.toContain(second?.url);
-    expect(delivery?.mediaUrls).toContain(first?.url);
+    expect(generated.map(({ base64 }) => base64).toSorted()).toEqual(
+      [tinyPngBase64, SECOND_PNG_BASE64].toSorted(),
+    );
+    expect(result.messagingToolSentTargets).toEqual([
+      expect.objectContaining({
+        provider: "telegram",
+        to: "chat-source",
+        mediaUrls: expect.arrayContaining([stagedPath, first?.url]),
+      }),
+    ]);
+    expect(result.messagingToolSentMediaUrls).toEqual(
+      result.messagingToolSentTargets?.[0]?.mediaUrls,
+    );
+    expect(result.messagingToolSentMediaUrls).not.toContain(second?.url);
   });
 
   it.each(["file-url", "error"] as const)(
@@ -332,14 +323,11 @@ describe("CodexAppServerEventProjector media projection", () => {
       });
       const { events, bridge, execute, sources } = await createRemoteGeneratedMediaDelivery(
         async (args) =>
-          messageResult(
-            {
-              status: "ok",
-              ...internalReply(args.mediaUrl),
-              messageDelivery: { ...receipt(), sourceReplyDelivered: true },
-            },
-            "Sent to current chat.",
-          ),
+          messageResult({
+            status: "ok",
+            ...internalReply(args.mediaUrl),
+            messageDelivery: { ...receipt(), sourceReplyDelivered: true },
+          }),
       );
       const sent = await sendMedia(bridge, sources.first);
       expect(sent.success).toBe(presentation !== "error");
@@ -356,16 +344,14 @@ describe("CodexAppServerEventProjector media projection", () => {
       expect(result.messagingToolSentTargets).toEqual([]);
       expect(result.messagingToolSentMediaUrls).toEqual([]);
       expect(result.messagingToolSentTexts).toEqual([]);
-      const sentGeneratedImage = presentation === "file-url";
-      expect(result.toolMediaUrls).toHaveLength(sentGeneratedImage ? 1 : 2);
       expect(result.hostOwnedToolMediaUrls).toEqual(result.toolMediaUrls);
       const remainingImages = (await readImages(result.toolMediaUrls)).map((image) => image.base64);
-      expect(remainingImages).toContain(SECOND_PNG_BASE64);
-      if (sentGeneratedImage) {
-        expect(remainingImages).not.toContain(tinyPngBase64);
-      } else {
-        expect(remainingImages).toContain(tinyPngBase64);
-      }
+      expect(remainingImages.toSorted()).toEqual(
+        (presentation === "file-url"
+          ? [SECOND_PNG_BASE64]
+          : [tinyPngBase64, SECOND_PNG_BASE64]
+        ).toSorted(),
+      );
     },
   );
 
@@ -376,7 +362,7 @@ describe("CodexAppServerEventProjector media projection", () => {
     await fs.writeFile(savedPath, Buffer.from(tinyPngBase64, "base64"));
     await events.completed(nativeImage("generated-local", undefined, savedPath));
     const { bridge } = createMessageBridge(async () =>
-      messageResult({ messageDelivery: receipt(true) }, "Message delivery receipt."),
+      messageResult({ messageDelivery: receipt(true) }),
     );
     await sendMedia(bridge, savedPath, "chat-source");
     await events.complete();

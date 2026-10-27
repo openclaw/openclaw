@@ -1,8 +1,11 @@
 /* @vitest-environment jsdom */
 
+import { onCleanup } from "solid-js";
 import { afterEach, expect, it, vi } from "vitest";
 import type { GatewaySessionRow } from "../api/types.ts";
 import type { ApplicationContext } from "../app/context.ts";
+import { createIdentityAvatars } from "../lib/identity-avatar-loader.ts";
+import { projectOwner } from "../lib/reactive/projection.ts";
 import { showToast } from "../lib/toast.ts";
 import { createTestGatewayClient } from "../test-helpers/gateway-client.ts";
 import { gatewayHelloForMethods } from "../test-helpers/gateway-methods.ts";
@@ -14,9 +17,9 @@ import {
   releaseMarkdownTables,
 } from "./markdown-tables.ts";
 import { moveSessionFromMenu } from "./session-placement-action.ts";
-import { renderSidebarAgentCreateDialogForMenus } from "./sidebar-menus-render.tsx";
+import { SidebarMenusRenderer } from "./sidebar-menus-render.tsx";
 import type { SidebarMenusOwner } from "./sidebar-menus-types.ts";
-import type { SidebarMenus } from "./sidebar-menus.tsx";
+import { createSidebarMenus } from "./sidebar-menus.tsx";
 
 // mock-isolation: Observe feedback without creating document-global toast hosts.
 vi.mock("../lib/toast.ts", () => ({ showToast: vi.fn() }));
@@ -66,15 +69,29 @@ it("reports a failed table dialog import and releases the open reservation", asy
 });
 
 it("reports an agent creation import failure after closing the picker", async () => {
-  const closeAgentCreateDialog = vi.fn();
-  // SAFETY: This renderer only reads the context and close operation supplied here.
-  const menus = { closeAgentCreateDialog } as unknown as SidebarMenus;
   const host = { sessionDataContext: {} } as SidebarMenusOwner;
-  const view = mountSolid(() => renderSidebarAgentCreateDialogForMenus(menus, host));
+  const view = mountSolid(() => {
+    const menus = createSidebarMenus({
+      host,
+      element: document.createElement("div"),
+      commit: () => Promise.resolve(true),
+    });
+    onCleanup(() => menus.dispose());
+    menus.openAgentCreateDialog();
+    const projection = projectOwner(menus, (owner) => owner);
+    return (
+      <SidebarMenusRenderer
+        menus={menus}
+        host={host}
+        avatars={createIdentityAvatars()}
+        revision={projection.revision}
+      />
+    );
+  });
   await waitForSolid(() => expect(view.container.querySelector("button")).not.toBeNull());
   view.container.querySelector<HTMLButtonElement>("button")!.click();
   await waitForSolid(() => expect(showToast).toHaveBeenCalledOnce());
-  expect(closeAgentCreateDialog).toHaveBeenCalledOnce();
+  expect(view.container.querySelector("button")).toBeNull();
   expect(vi.mocked(showToast).mock.calls[0]?.[0].message).toContain(
     "Agent creation module unavailable. Try again.",
   );

@@ -4,6 +4,7 @@ import path from "node:path";
 import { expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement, createDeferred } from "../../test/helpers/promise.js";
 import { getMediaDir } from "../media/store.js";
+import { authorizationClient } from "./server-methods.authorization.test-support.js";
 import { handleGatewayRequest } from "./server-methods.js";
 import { agentHandlers } from "./server-methods/agent.js";
 import { handleChatAbortRequest } from "./server-methods/chat-abort-handler.js";
@@ -71,27 +72,23 @@ function request(
   return {
     req: { type: "req", id: receipt ? "receipt-wire-id" : f.runId, method, params },
     params,
-    client: {
-      connId: receipt ? "upload-receipt-proof" : "upload-policy-proof",
-      connect: {
-        minProtocol: 1,
-        maxProtocol: 1,
-        role: "operator",
-        scopes: ["operator.admin"],
+    client: authorizationClient(
+      receipt ? "upload-receipt-proof" : "upload-policy-proof",
+      ["operator.admin"],
+      {},
+      {
         client: { id: "cli", mode: "cli", platform: "test", version: "test" },
-        ...(receipt
+        device: receipt
           ? {
-              device: {
-                id: "upload-receipt-device",
-                publicKey: "synthetic",
-                signature: "synthetic",
-                signedAt: 1,
-                nonce: "synthetic",
-              },
+              id: "upload-receipt-device",
+              publicKey: "synthetic",
+              signature: "synthetic",
+              signedAt: 1,
+              nonce: "synthetic",
             }
-          : {}),
+          : undefined,
       },
-    },
+    ),
     context: f.context,
     isWebchatConnect: () => false,
   } satisfies Omit<Parameters<GatewayRequestHandler>[0], "respond">;

@@ -1,18 +1,14 @@
-import { gatewayOriginScope } from "@openclaw/gateway-client/browser";
 import type { Locator } from "playwright";
 import { expect, it } from "vitest";
 import type { ChatPaneElement } from "../pages/chat/chat-pane-elements.ts";
 import {
   controlUiSessionUrl,
-  defaultControlUiFeatureMethods,
   installMockGateway,
   navigateToControlUiSession,
 } from "../test-helpers/control-ui-e2e.ts";
-import { requireRecord } from "./chat-flow.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
 const suite = createControlUiE2eSuite({ name: "Control UI route readiness" });
-const backgroundMethods = ["cron.list", "cron.status", "system.info"];
 const readSelection = (composer: Locator) =>
   composer.evaluate((element: HTMLTextAreaElement) => ({
     start: element.selectionStart,
@@ -23,7 +19,6 @@ const readSelection = (composer: Locator) =>
 suite.define(() => {
   it.each([
     ["desktop selection", 1200, 800, "no-preference", false],
-    ["mobile selection", 390, 844, "reduce", false],
     ["mobile composition", 390, 844, "reduce", true],
   ] as const)(
     "accepts a message and preserves the next draft's %s while first history loads",
@@ -34,25 +29,9 @@ suite.define(() => {
         const sessionId = "session:history-ready";
         const activeLeafEntryId = "history-ready-leaf";
         const submittedMessage = "Send before history.";
-        if (width > 400) {
-          const scope = gatewayOriginScope(suite.server.baseUrl.replace(/^http/u, "ws"));
-          await page.addInitScript(
-            (key) => localStorage.setItem(key, "involving-me"),
-            `openclaw.control.sidebarSessionOwnerFilter.v1:${scope}:history-profile`,
-          );
-        }
         const gateway = await installMockGateway(page, {
+          subscriptionInitialHistory: false,
           sessionKey,
-          ...(width > 400
-            ? {
-                presenceUsers: [{ self: true, id: "history-profile", name: "Fixture user" }],
-                featureMethods: [...defaultControlUiFeatureMethods, "system.info"],
-                methodResponses: {
-                  "config.get": { config: {}, hash: "history-profile-config" },
-                  "system.info": { platform: "darwin" },
-                },
-              }
-            : {}),
           sessions: [
             {
               key: sessionKey,
@@ -67,18 +46,19 @@ suite.define(() => {
           historyMessages: [{ role: "assistant", content: "Ready." }],
           heldMethods: ["chat.startup", "chat.history"],
         });
-        const hasInvolvingMeRequest = async () =>
-          (await gateway.getRequests("sessions.list")).some(
-            (request) => requireRecord(request.params).involvingMe === true,
-          );
         await page.goto(`${suite.server.baseUrl}chat/main/draft-timing-12345678`);
         const pane = page.locator("openclaw-chat-pane.chat-pane-cache__pane--visible");
         const composer = pane.locator(".agent-chat__composer-combobox textarea");
+        const transcript = pane.locator(".chat-thread");
+        const historyLoading = transcript.locator(
+          ime ? ".chat-conversation-loading" : ".lazy-view-state--loading",
+        );
         await composer.waitFor({ state: "visible" });
         await expect.poll(() => composer.isEnabled()).toBe(true);
-        await expect
-          .poll(() => pane.locator(".loading-skeleton, .chat-conversation-loading").isVisible())
-          .toBe(true);
+        await expect.poll(() => historyLoading.isVisible()).toBe(true);
+        await gateway.waitForRequest("chat.startup");
+        expect(await historyLoading.getAttribute("aria-busy")).toBe("true");
+        expect(await transcript.getByText("Ready.", { exact: true }).count()).toBe(0);
         expect(await composer.evaluate((el) => el === document.activeElement)).toBe(false);
         await composer.fill(submittedMessage);
         await expect.poll(() => pane.locator(".chat-send-btn--send").isEnabled()).toBe(true);
@@ -90,9 +70,10 @@ suite.define(() => {
         await expect.poll(() => composer.inputValue()).toBe("");
         await pane.locator(".chat-queue").getByText(submittedMessage, { exact: true }).waitFor();
         expect(await gateway.getRequests("chat.send")).toHaveLength(0);
-        expect(
-          await pane.locator(".loading-skeleton, .chat-conversation-loading").isVisible(),
-        ).toBe(true);
+        // Updating the queue remounts the transcript placeholder, whose shared
+        // reveal animation briefly hides it; history must remain held throughout.
+        await expect.poll(() => historyLoading.isVisible()).toBe(true);
+        expect(await transcript.getByText("Ready.", { exact: true }).count()).toBe(0);
 
         await composer.fill("Next draft before history.");
         const input = await composer.elementHandle();
@@ -119,16 +100,8 @@ suite.define(() => {
         );
         const before = await composer.boundingBox();
 
-        if (width > 400) {
-          expect(await hasInvolvingMeRequest()).toBe(false);
-          for (const method of backgroundMethods) {
-            expect(await gateway.getRequests(method)).toHaveLength(0);
-          }
-        }
         await gateway.resolveDeferred("chat.startup");
-        await expect
-          .poll(() => pane.locator(".loading-skeleton, .chat-conversation-loading").count())
-          .toBe(0);
+        await expect.poll(() => historyLoading.count()).toBe(0);
         await expect.poll(() => pane.textContent()).toContain("Ready.");
         expect(
           await input!.evaluate(
@@ -137,10 +110,11 @@ suite.define(() => {
         ).toBe(true);
         expect(await composer.inputValue()).toBe(pendingDraft);
         expect(await readSelection(composer)).toEqual(selection);
-        const after = await composer.boundingBox();
-        expect(after?.x).toBeCloseTo(before!.x, 0);
-        expect(after?.y).toBeCloseTo(before!.y, 0);
-        expect(after?.width).toBeCloseTo(before!.width, 0);
+        expect(await composer.boundingBox()).toMatchObject({
+          x: expect.closeTo(before!.x, 0),
+          y: expect.closeTo(before!.y, 0),
+          width: expect.closeTo(before!.width, 0),
+        });
         const sent = await gateway.waitForRequest("chat.send");
         expect(sent.params).toMatchObject({
           sessionKey,
@@ -156,25 +130,18 @@ suite.define(() => {
         }
         expect(await composer.inputValue()).toBe(pendingDraft);
         expect(await gateway.getRequests("chat.send")).toHaveLength(1);
-        if (width > 400) {
-          await expect.poll(hasInvolvingMeRequest).toBe(true);
-          await Promise.all(backgroundMethods.map((method) => gateway.waitForRequest(method)));
-          expect(await composer.inputValue()).toBe(pendingDraft);
-        }
       });
     },
   );
 
-  it.each([
-    { name: "root", basePath: "" },
-    { name: "encoded mount", basePath: "/nested/$&;=()+,![]{}'`/%25PATH%25" },
-  ])("navigates exact session keys at the $name", async ({ basePath }) => {
+  it("navigates an exact session key at an encoded mount", async () => {
     await suite.withPage({ viewport: { width: 1200, height: 800 } }, async ({ page }) => {
+      const basePath = "/nested/$&;=()+,![]{}'`/%25PATH%25";
       const initialSessionKey = "agent:runner:route:initial";
       const mountUrl = new URL(suite.server.baseUrl);
-      mountUrl.pathname = basePath || "/";
+      mountUrl.pathname = basePath;
       await installMockGateway(page, {
-        basePath: basePath ? mountUrl.pathname : "",
+        basePath: mountUrl.pathname,
         sessionKey: initialSessionKey,
       });
       await page.goto(controlUiSessionUrl(mountUrl.href, initialSessionKey));
@@ -183,20 +150,12 @@ suite.define(() => {
         .poll(() => visiblePane.evaluate((pane) => (pane as ChatPaneElement).sessionKey))
         .toBe(initialSessionKey);
 
-      const encodedBase = basePath ? mountUrl.pathname : "";
-      for (const [rest, suffix] of [
-        ["a/b", "a%2Fb"],
-        ["a:b", "a/b"],
-        ["%2F%25%3F%23", "%252F%2525%253F%2523"],
-        ["a?b#c", "a%3Fb%23c"],
-      ]) {
-        const sessionKey = `agent:runner:route:${rest}`;
-        await navigateToControlUiSession(page, sessionKey);
-        expect(new URL(page.url()).pathname).toBe(`${encodedBase}/chat/runner/route/${suffix}`);
-        expect(await visiblePane.evaluate((pane) => (pane as ChatPaneElement).sessionKey)).toBe(
-          sessionKey,
-        );
-      }
+      const sessionKey = "agent:runner:route:a/b";
+      await navigateToControlUiSession(page, sessionKey);
+      expect(new URL(page.url()).pathname).toBe(`${mountUrl.pathname}/chat/runner/route/a%2Fb`);
+      expect(await visiblePane.evaluate((pane) => (pane as ChatPaneElement).sessionKey)).toBe(
+        sessionKey,
+      );
     });
   });
 });

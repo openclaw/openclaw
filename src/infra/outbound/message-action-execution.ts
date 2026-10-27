@@ -211,13 +211,13 @@ export async function executeGatewayAction(
   const channelPlugin = ctx.channelPlugin;
   const supportsCanonicalGatewayDelivery =
     Boolean(ctx.input.messageActionAuthorization?.scheduled && ctx.gateway.request) &&
-    channelPlugin?.outbound?.deliveryMode === "gateway" &&
+    channelPlugin.outbound?.deliveryMode === "gateway" &&
     ((params.action === "send" &&
       Boolean(channelPlugin.message?.send?.text || channelPlugin.outbound.sendText)) ||
       (params.action === "poll" && Boolean(channelPlugin.outbound.sendPoll))) &&
     (!channelPlugin.actions?.handleAction ||
       channelPlugin.actions.supportsAction?.({ action: params.action }) === false);
-  if (!channelPlugin?.actions?.handleAction && !supportsCanonicalGatewayDelivery) {
+  if (!channelPlugin.actions?.handleAction && !supportsCanonicalGatewayDelivery) {
     return null;
   }
   const executionMode =
@@ -424,7 +424,7 @@ export async function executeMessagePoll(ctx: ResolvedActionContext): Promise<Me
     to,
     accountId,
     toolContext: input.toolContext,
-    resolveAutoThreadId: channelPlugin?.threading?.resolveAutoThreadId,
+    resolveAutoThreadId: channelPlugin.threading?.resolveAutoThreadId,
   });
 
   const base = typeof params.message === "string" ? params.message : "";
@@ -559,7 +559,7 @@ export async function executeMessagePlugin(
     };
   }
 
-  if (!channelPlugin?.actions?.handleAction) {
+  if (!channelPlugin.actions?.handleAction) {
     throw new Error(`Message action ${action} not supported for channel ${channel}.`);
   }
 

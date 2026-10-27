@@ -1,6 +1,6 @@
 import { expectDefined } from "@openclaw/normalization-core";
-/* @vitest-environment jsdom */
 import { createSignal } from "solid-js";
+/* @vitest-environment jsdom */
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { mountSolid } from "../../test-helpers/mount-solid.ts";
 import { flush } from "../../test-helpers/solid-settle.ts";
@@ -8,7 +8,7 @@ import { buildProviderSeries, type ProviderSeries } from "./provider-series.ts";
 import type { CostDailyEntry, UsageProps } from "./types.ts";
 import { dailyEntry } from "./usage-chart.test-support.ts";
 import { DailyChartCompact } from "./view-chart.tsx";
-import { createUsageProps } from "./view.test-support.ts";
+import { mountView, usageState } from "./view-render.test-support.ts";
 import { renderUsage } from "./view.tsx";
 
 afterEach(() => document.body.replaceChildren());
@@ -51,32 +51,18 @@ function renderDailyChart(
 describe("DailyChartCompact", () => {
   it("keeps day selection operable with mouse and keyboard", () => {
     const entry = dailyEntry("2026-05-04", 500, 0.2);
-    const base = createUsageProps();
-    const [filters, setFilters] = createSignal({
-      ...base.filters,
-      startDate: entry.date,
-      endDate: entry.date,
-    });
+    const { usage, setFilters } = usageState(
+      { startDate: entry.date, endDate: entry.date },
+      (data) => ({ ...data, totals: entry, costDaily: [entry] }),
+    );
     const onSelectDay = vi.fn((day: string, _shiftKey: boolean, _orderedDays: string[]) =>
       setFilters((current) => ({
         ...current,
         selectedDays: current.selectedDays.includes(day) ? [] : [day],
       })),
     );
-    const container = document.body.appendChild(document.createElement("div"));
-    mountSolid(
-      () =>
-        renderUsage({
-          ...base,
-          get filters() {
-            return filters();
-          },
-          data: { ...base.data, totals: entry, costDaily: [entry] },
-          callbacks: { ...base.callbacks, filters: { ...base.callbacks.filters, onSelectDay } },
-        }),
-      { container },
-    );
-    flush();
+    usage.callbacks.filters.onSelectDay = onSelectDay;
+    const { container } = mountView(() => renderUsage(usage));
     const bar = expectDefined(
       container.querySelector<HTMLElement>(".daily-bar-wrapper"),
       "daily usage bar",
@@ -182,6 +168,52 @@ describe("DailyChartCompact", () => {
     },
   );
 
+  it("retains provider segments and updates their values, colors and order across reports", () => {
+    const date = "2026-05-01";
+    const providers = (tokens: number[]) =>
+      buildProviderSeries(
+        tokens.map((value, index) => ({
+          date,
+          provider: `provider-${index}`,
+          model: "model",
+          tokens: value,
+          cost: 0,
+          count: 1,
+        })),
+      );
+    const [series, setSeries] = createSignal(providers([300, 100]));
+    const { container } = mountSolid(() =>
+      DailyChartCompact({
+        dailyEntries: [dailyEntry(date, 400)],
+        selectedDays: [],
+        chartMode: "tokens",
+        dailyChartMode: "by-provider",
+        onDailyChartModeChange: () => {},
+        get providerSeries() {
+          return series();
+        },
+        onSelectDay: () => {},
+        range: { startDate: date, endDate: date, complete: true },
+      }),
+    );
+    flush();
+    const segments = () => [...container.querySelectorAll<HTMLElement>(".daily-bar .cost-segment")];
+    const [first, second] = segments();
+    expect(first?.style.flexGrow).toBe("300");
+    expect(first?.style.background).toBe("var(--chart-series-1)");
+
+    setSeries(providers([100, 300]));
+    flush();
+    const refreshed = segments();
+    expect(refreshed).toHaveLength(2);
+    expect(refreshed[0]).toBe(second);
+    expect(refreshed[1]).toBe(first);
+    expect(first?.style.flexGrow).toBe("100");
+    expect(first?.style.background).toBe("var(--chart-series-2)");
+    expect(second?.style.flexGrow).toBe("300");
+    expect(second?.style.background).toBe("var(--chart-series-1)");
+  });
+
   it("keeps usage without per-model rows in the by-provider day total", () => {
     const series = buildProviderSeries([
       { date: "2026-05-01", provider: "openai", model: "a", tokens: 100, cost: 0, count: 1 },
@@ -216,28 +248,9 @@ describe("DailyChartCompact", () => {
   it("keeps a range preset focused while applying its dates", () => {
     vi.useFakeTimers({ toFake: ["Date"] });
     vi.setSystemTime(new Date("2026-05-14T12:00:00.000Z"));
-    const base = createUsageProps();
-    const [filters, setFilters] = createSignal<UsageProps["filters"]>({
-      ...base.filters,
-      timeZone: "utc",
-    });
-    const onDatesChange = vi.fn((patch: Partial<UsageProps["filters"]>) =>
-      setFilters((current) => ({ ...current, ...patch })),
-    );
-    const container = document.body.appendChild(document.createElement("div"));
+    const { usage, onDatesChange } = usageState({ timeZone: "utc" });
+    const { container } = mountView(() => renderUsage(usage));
     try {
-      mountSolid(
-        () =>
-          renderUsage({
-            ...base,
-            get filters() {
-              return filters();
-            },
-            callbacks: { ...base.callbacks, filters: { ...base.callbacks.filters, onDatesChange } },
-          }),
-        { container },
-      );
-      flush();
       const preset = [
         ...container.querySelectorAll<HTMLButtonElement>(".usage-presets button"),
       ].find((button) => button.textContent?.trim() === "7d")!;

@@ -1,5 +1,6 @@
 import fs from "node:fs/promises";
 import * as sourceTurn from "../../../auto-reply/reply/source-turn-id.js";
+import { composeSessionSourceAssertion } from "../../../config/sessions/session-source-authority.js";
 import { captureSessionTranscriptTargetBinding } from "../../../config/sessions/transcript-target-binding.js";
 import { attachModelProviderRuntimePluginHandle } from "../../../plugins/provider-hook-runtime.js";
 import { getGatewayContextResolver } from "../../../plugins/runtime/gateway-request-scope.js";
@@ -322,12 +323,10 @@ export async function prepareAndDispatchEmbeddedRunAttempt(
   // Resolve after the last fallible preparation so the attempt's finally owns the leases.
   const { memoryAudience, release: releaseMemoryAudience } =
     await resolveEmbeddedAttemptMemoryAudience({
-      memoryAudience: params.memoryAudience,
-      config: params.config,
+      run: params,
       agentId: workspaceResolution.agentId,
       sessionKey: resolvedSessionKey,
       sessionId,
-      senderIsOwner: params.senderIsOwner,
       admission: runInput.sessionAdmission,
       assertCallerCurrent: assertActiveRun,
     });
@@ -338,6 +337,17 @@ export async function prepareAndDispatchEmbeddedRunAttempt(
     },
   });
   const pluginRefresh = captureAgentPluginRuntimeRefresh();
+  const assertTargetCurrent = () => {
+    if (
+      !attemptControls.isAttemptCurrent() ||
+      sessionPromptState.sessionId !== sessionId ||
+      (["agentId", "sessionId", "sessionKey", "storePath", "threadId"] as const).some(
+        (field) => sessionPromptState.sessionTarget?.[field] !== selectedPromptTarget[field],
+      )
+    ) {
+      throw new Error("Session target preparation outlived its attempt");
+    }
+  };
   const preparedSessionTarget =
     (!sessionManager || params.sessionPersistence === "detached") &&
     resolvedSessionTarget?.agentId &&
@@ -352,19 +362,17 @@ export async function prepareAndDispatchEmbeddedRunAttempt(
             sessionKey: resolvedSessionTarget.sessionKey,
             storePath: resolvedSessionTarget.storePath,
           }),
-          assertCurrent: () => {
-            assertActiveRun();
-            if (
-              !attemptControls.isCurrent() ||
-              sessionPromptState.sessionId !== sessionId ||
-              (["agentId", "sessionId", "sessionKey", "storePath", "threadId"] as const).some(
-                (field) =>
-                  sessionPromptState.sessionTarget?.[field] !== selectedPromptTarget[field],
-              )
-            ) {
+          assertCurrent: composeSessionSourceAssertion([assertActiveRun], (assertSource) => {
+            assertTargetCurrent();
+            try {
+              assertSource();
+            } catch {
               throw new Error("Session target preparation outlived its attempt");
             }
-          },
+            // Source callbacks can retire this attempt or replace its selected target.
+            assertTargetCurrent();
+            assertActiveRun.assertScopeCurrent();
+          }),
         }
       : undefined;
   const attemptParams: EmbeddedRunAttemptInternalParams & {
@@ -385,7 +393,7 @@ export async function prepareAndDispatchEmbeddedRunAttempt(
     pluginRuntimeRefreshMessages: params.pluginRuntimeRefreshMessages,
     continuation: sessionPromptState.continuation,
     runCleanupSettlement: params.runCleanupSettlement,
-    executionSelection: params.executionSelection,
+    joinObservation: params.joinObservation,
     permissionChange: input.permissionChange,
     admittedRunContext: params.admittedRunContext,
     startedAtMs: runInput.startedAtMs,
@@ -543,6 +551,7 @@ export async function prepareAndDispatchEmbeddedRunAttempt(
     agentId: workspaceResolution.agentId,
     thinkLevel: runtime.thinkLevel,
     thinkingExplicit: params.thinkingExplicit,
+    cyberAccessProgram: params.cyberAccessProgram,
     onToolOutcome: input.observeToolOutcome,
     isTurnTainted: input.isTurnTainted,
     allocateToolOutcomeOrdinal: input.allocateToolOutcomeOrdinal,
@@ -594,6 +603,7 @@ export async function prepareAndDispatchEmbeddedRunAttempt(
     onDeferredLifecycleAbort: params.onDeferredLifecycleAbort,
     onExecutionPhase: params.onExecutionPhase,
     extraSystemPrompt,
+    extraSystemPromptTurnContext: params.extraSystemPromptTurnContext,
     gitCoauthorPrompt,
     preparedTtsPreferences: params.preparedTtsPreferences,
     sourceReplyDeliveryMode: params.sourceReplyDeliveryMode,
@@ -641,6 +651,7 @@ export async function prepareAndDispatchEmbeddedRunAttempt(
     codeModeOverride: params.codeModeOverride,
     disableToolSearch: params.disableToolSearch,
     sessionReadScopeKey: params.sessionReadScopeKey,
+    blindPrompt: params.blindPrompt,
     forceMessageTool: params.forceMessageTool,
     requireExplicitMessageTarget: params.requireExplicitMessageTarget,
     internalEvents: params.internalEvents,

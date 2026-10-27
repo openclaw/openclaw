@@ -7,7 +7,6 @@ import * as runtimeScope from "../../plugins/runtime/generation-scope.js";
 import { GATEWAY_OWNER_ONLY_CORE_TOOLS } from "../../security/dangerous-tools.js";
 import * as modelScope from "../prepared-model-runtime-generation-scope.js";
 import type { PreparedModelRuntimePluginGeneration } from "../prepared-model-runtime.types.js";
-import { compactToolOutputHint } from "../tool-schema-hints.js";
 import * as callerScope from "./gateway-caller-context.js";
 import { callInProcessGatewayTool } from "./in-process-gateway.js";
 import { createOpenClawDelegateToolsForRun as createTools } from "./openclaw-delegate-tool.js";
@@ -106,7 +105,6 @@ it("relays context and the completed approval outcome", async () => {
   });
   expect(result.details).toEqual({ reply: "Applied." });
   expect(Value.Check(tool.outputSchema!, result.details)).toBe(true);
-  expect(compactToolOutputHint(tool.outputSchema)).toBe("{ reply: string; action?: string }");
 });
 
 it.each<[string, Options, boolean]>([

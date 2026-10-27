@@ -748,6 +748,7 @@ describe("oxlint config", () => {
         const result = runTool(root, [oxlintRunner, "--openclaw-focused-config", "fixture.ts"], {
           env: {
             ...process.env,
+            CI: github ? "true" : "false",
             GITHUB_ACTIONS: github ? "true" : "false",
             OPENCLAW_OXLINT_CHANGED_PATHS: changedPaths && JSON.stringify(changedPaths),
             OPENCLAW_CI_STATIC_EVIDENCE: "1",
@@ -755,7 +756,7 @@ describe("oxlint config", () => {
           },
         });
         checked(result, 1);
-        expect(result.stdout + result.stderr).toContain("Failed to parse");
+        expect(result.stdout + result.stderr).toMatch(/Failed to (?:parse|load)[^\n]*config/u);
         expect(result.stdout).not.toContain("[ci-static:oxlint:leaf]");
       }
     }

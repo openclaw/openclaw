@@ -24,7 +24,7 @@ import {
   extractToolResultText,
 } from "../providers/tool-result-text.js";
 import { shortHash } from "../utils/hash.js";
-import { stripSystemPromptCacheBoundary } from "../utils/system-prompt-cache-boundary.js";
+import { prepareSystemPrompt } from "../utils/system-prompt-cache-boundary.js";
 import {
   buildOpenAIResponsesCompactionReplayPlan,
   isSafeResponsesReplayItemId,
@@ -51,6 +51,7 @@ import {
   providerReplayContextMatches,
   type ProviderReplayContext,
 } from "./provider-replay-context.js";
+import { buildResponsesInputImage } from "./responses-image-payload-sanitizer.js";
 import { sanitizeTransportPayloadText } from "./transport-stream-shared.js";
 
 function resolveResponsesInstructionRole(model: Model): "developer" | "system" {
@@ -352,7 +353,8 @@ function convertResponsesMessagesWithStyle(
       buildResponsesInputMessage(resolveResponsesInstructionRole(model), [
         {
           type: "input_text",
-          text: sanitizeTransportPayloadText(stripSystemPromptCacheBoundary(context.systemPrompt)),
+          text: prepareSystemPrompt(context.systemPrompt, context.preparedSystemPrompt)
+            .instructions,
         },
       ]),
     );
@@ -428,11 +430,7 @@ function convertResponsesMessagesWithStyle(
               msg.content.map((item) =>
                 item.type === "text"
                   ? { type: "input_text", text: sanitizeTransportPayloadText(item.text) }
-                  : {
-                      type: "input_image",
-                      detail: "auto",
-                      image_url: `data:${item.mimeType};base64,${item.data}`,
-                    },
+                  : buildResponsesInputImage(item),
               ) as ResponseInputMessageContentList
             ).filter(
               (item) =>
@@ -606,11 +604,7 @@ function convertResponsesMessagesWithStyle(
         let hasExplicitText = false;
         for (const item of msg.content) {
           if (isImageWithMediaPayload(item)) {
-            parts.push({
-              type: "input_image",
-              detail: "auto",
-              image_url: `data:${item.mimeType};base64,${item.data}`,
-            });
+            parts.push(buildResponsesInputImage(item));
           } else if (hasText && item.type === "text") {
             const text = extractToolResultBlockText(item);
             if (text) {

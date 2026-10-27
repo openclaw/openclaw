@@ -16,24 +16,23 @@ import {
 import { appendSessionTranscriptMessageByIdentity } from "openclaw/plugin-sdk/session-transcript-runtime";
 import { appendSqliteSessionTranscriptEventForTest } from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { nestedToolActivityFixture } from "../test/nested-tool-activity-fixture.js";
 import {
   createSession,
   readEffectiveTools,
-  readRawQaSessionStore,
-  readSessionTranscriptSummary,
-  readSessionToolActivity,
+  readRawQaSessionStore as readStore,
+  readSessionTranscriptSummary as readSummary,
+  readSessionToolActivity as readActivity,
   readSkillStatus,
   seedQaSessionEntries,
-  seedQaSessionTranscript,
+  seedQaSessionTranscript as seedTranscript,
 } from "./suite-runtime-agent-session.js";
 import { createTempDirHarness } from "./temp-dir.test-helper.js";
 import type { readQaNestedToolActivity } from "./tool-activity.js";
 
 const execFileAsync = promisify(execFile);
 
-const { cleanup, makeTempDir } = createTempDirHarness({
-  beforeCleanup: closeQaRuntimeStores,
-});
+const { cleanup, makeTempDir } = createTempDirHarness({ beforeCleanup: closeQaRuntimeStores });
 
 afterEach(() => {
   vi.useRealTimers();
@@ -72,44 +71,51 @@ describe("qa suite runtime agent session helpers", () => {
     sessionKey,
   });
 
-  async function createQaTranscript(sessionId = "session", sessionKey = "agent:qa:session") {
+  async function makeTranscript(
+    messages: unknown[] = [],
+    sessionId = "session",
+    sessionKey = "agent:qa:session",
+  ) {
     const identity = identityFor(sessionId, sessionKey);
-    await upsertSessionEntry({
-      ...identity,
-      entry: { sessionId, updatedAt: 10 },
-    });
+    await upsertSessionEntry({ ...identity, entry: { sessionId, updatedAt: 10 } });
+    const append = (message: unknown) =>
+      appendSessionTranscriptMessageByIdentity({ ...identity, message });
+    const appendMany = async (batch: unknown[]) => {
+      for (const message of batch) {
+        await append(message);
+      }
+    };
+    await appendMany(messages);
     return {
       sessionKey,
-      append: (message: unknown) =>
-        appendSessionTranscriptMessageByIdentity({ ...identity, message }),
-      appendMany: async (messages: unknown[]) => {
-        for (const message of messages) {
-          await appendSessionTranscriptMessageByIdentity({ ...identity, message });
-        }
-      },
-      read: (options?: Parameters<typeof readSessionTranscriptSummary>[2]) =>
-        readSessionTranscriptSummary(env, sessionKey, options),
+      append,
+      appendMany,
+      read: (options?: Parameters<typeof readSummary>[2]) => readSummary(env, sessionKey, options),
     };
   }
 
   function toolCall(id: string, name: string, args: Record<string, unknown> = {}) {
     return { type: "toolCall", id, name, arguments: args };
   }
-  function assistantToolCall(id: string, name: string, args: Record<string, unknown> = {}) {
+  function call(id: string, name: string, args: Record<string, unknown> = {}) {
     return { role: "assistant", content: [toolCall(id, name, args)] };
   }
 
-  function toolResult(
-    toolCallId: string,
-    toolName: string,
-    details?: Record<string, unknown>,
-    timestamp?: number,
-  ) {
+  type Details = Record<string, unknown>;
+  function toolResult(toolCallId: string, toolName: string, details?: Details, timestamp?: number) {
     return { role: "toolResult", toolCallId, toolName, details, isError: false, timestamp };
   }
 
   function textMessage(role: string, text: string, timestamp: number) {
     return { role, timestamp, content: [{ type: "text", text }] };
+  }
+
+  function counts(summary: Awaited<ReturnType<typeof readSummary>>) {
+    return [
+      summary.assistantToolCallCounts,
+      summary.completedToolCallCounts,
+      summary.successfulToolCallCounts,
+    ];
   }
 
   function seedEntries(
@@ -138,28 +144,24 @@ describe("qa suite runtime agent session helpers", () => {
 
   type NestedDetails = NonNullable<ReturnType<typeof readQaNestedToolActivity>>;
   function nestedTool(
-    input: Pick<NestedDetails, "toolCallId" | "toolName" | "parentToolCallId" | "timestamp"> &
-      Partial<NestedDetails>,
+    toolCallId: string,
+    toolName: string,
+    parentToolCallId: string,
+    timestamp: number,
+    overrides: Partial<NestedDetails> = {},
   ) {
-    const details = {
-      runId: "run-1",
-      scopeId: "scope-1",
-      afterEntryId: null,
-      startOrder: 0,
-      isError: false,
-      startedAt: 100,
-      input: {},
-      result: { content: [] },
-      ...input,
-    };
+    const fixture = nestedToolActivityFixture({ toolCallId, toolName, input: {}, text: "" });
     return {
-      role: "custom",
-      customType: "openclaw.nested-tool.v1",
-      display: true,
-      excludeFromContext: true,
-      content: "",
-      details,
-      timestamp: details.timestamp,
+      ...fixture,
+      details: {
+        ...fixture.details,
+        afterEntryId: null,
+        result: { content: [] },
+        parentToolCallId,
+        timestamp,
+        ...overrides,
+      },
+      timestamp,
     };
   }
 
@@ -197,7 +199,7 @@ describe("qa suite runtime agent session helpers", () => {
     const sessionId = "seeded-session";
     const sessionKey = "agent:qa:seeded-session";
 
-    await seedQaSessionTranscript(env, {
+    await seedTranscript(env, {
       sessionId,
       sessionKey,
       updatedAt: 300,
@@ -208,7 +210,7 @@ describe("qa suite runtime agent session helpers", () => {
       ],
     });
 
-    const sessionStore = await readRawQaSessionStore(env);
+    const sessionStore = await readStore(env);
     expect(sessionStore).toMatchObject({
       [sessionKey]: {
         sessionId,
@@ -240,7 +242,7 @@ describe("qa suite runtime agent session helpers", () => {
     });
     // QA reads a Gateway-owned database without retaining an in-process writer.
     await closeQaRuntimeStores(tempRoot);
-    await expect(readRawQaSessionStore(env)).resolves.toMatchObject({
+    await expect(readStore(env)).resolves.toMatchObject({
       [sessionKey]: { label: "before" },
     });
 
@@ -266,30 +268,24 @@ describe("qa suite runtime agent session helpers", () => {
         label,
       ]);
 
-      await expect(readRawQaSessionStore(env)).resolves.toMatchObject({
-        [sessionKey]: { label },
-      });
+      await expect(readStore(env)).resolves.toMatchObject({ [sessionKey]: { label } });
     }
   });
 
   it("seeds multi-agent session entries through the canonical accessor", async () => {
     const parentSessionKey = "agent:qa:main";
+    const entry = (sessionId: string, updatedAt: number) => ({ sessionId, updatedAt });
     const qaEntries = {
-      [parentSessionKey]: { sessionId: "session-main", updatedAt: 300 },
+      [parentSessionKey]: entry("session-main", 300),
       "agent:qa:subagent:child": {
-        sessionId: "session-child",
-        updatedAt: 200,
+        ...entry("session-child", 200),
         spawnedBy: parentSessionKey,
         status: "done" as const,
         endedAt: 250,
       },
     };
     const claudeEntries = {
-      "agent:claude:acp:child": {
-        sessionId: "session-acp-child",
-        updatedAt: 100,
-        parentSessionKey,
-      },
+      "agent:claude:acp:child": { ...entry("session-acp-child", 100), parentSessionKey },
     };
     await seedEntries("qa", qaEntries);
     await seedEntries("claude", claudeEntries);
@@ -297,18 +293,17 @@ describe("qa suite runtime agent session helpers", () => {
       ["qa", qaEntries],
       ["claude", claudeEntries],
     ] as const) {
-      await expect(readRawQaSessionStore(env, { agentId })).resolves.toMatchObject(entries);
+      await expect(readStore(env, { agentId })).resolves.toMatchObject(entries);
     }
     const updated = {
       [parentSessionKey]: {
-        sessionId: "session-main",
-        updatedAt: 400,
+        ...entry("session-main", 400),
         label: "Updated after the first read",
         compactionCount: 1,
       },
     };
     await seedEntries("qa", updated);
-    const refreshed = await readRawQaSessionStore(env, { agentId: "qa" });
+    const refreshed = await readStore(env, { agentId: "qa" });
     expect(refreshed).toMatchObject({
       ...updated,
       "agent:qa:subagent:child": { sessionId: "session-child" },
@@ -317,10 +312,10 @@ describe("qa suite runtime agent session helpers", () => {
   });
 
   it("reports bounded persisted compaction summaries", async () => {
-    const sessionId = "compaction-summary";
-    const sessionKey = "agent:qa:compaction-summary";
+    const sessionId = "compaction-summary",
+      sessionKey = "agent:qa:compaction-summary";
     const summaries = Array.from({ length: 18 }, (_, index) => `summary-${index}`);
-    const transcript = await createQaTranscript(sessionId, sessionKey);
+    const transcript = await makeTranscript([], sessionId, sessionKey);
 
     let parentId: string | null = null;
     for (const [index, summary] of summaries.entries()) {
@@ -350,7 +345,7 @@ describe("qa suite runtime agent session helpers", () => {
 
   it("rejects an empty QA session transcript seed", async () => {
     await expect(
-      seedQaSessionTranscript(env, {
+      seedTranscript(env, {
         sessionId: "seeded-session",
         sessionKey: "agent:qa:seeded-session",
         updatedAt: 100,
@@ -360,9 +355,8 @@ describe("qa suite runtime agent session helpers", () => {
   });
 
   it("summarizes QA transcript events after non-assistant rows", async () => {
-    const transcript = await createQaTranscript();
     const sendTool = { type: "tool_use", name: "message", input: { action: "send" } };
-    await transcript.appendMany([
+    const transcript = await makeTranscript([
       { role: "user", content: "x".repeat(70 * 1024) },
       { role: "assistant", content: [sendTool] },
       {
@@ -387,91 +381,74 @@ describe("qa suite runtime agent session helpers", () => {
     });
   });
 
-  it("counts only correlated non-error tool results as successful", async () => {
-    const transcript = await createQaTranscript();
-    await transcript.append({
-      role: "assistant",
-      content: [
-        toolCall("plan-ok", "progress_card"),
-        toolCall("plan-error", "progress_card"),
-        toolCall("write-mismatch", "write"),
-      ],
-    });
-    await transcript.appendMany([
-      textResult("plan-ok", "progress_card", "Progress card updated", 100),
-      textResult("plan-ok", "progress_card", "duplicate", 200),
-      textResult("plan-error", "progress_card", "failed", 300, true),
-      textResult("write-mismatch", "exec", "wrong tool", 400),
-    ]);
-
-    await expect(transcript.read()).resolves.toMatchObject({
-      assistantToolCallCounts: { progress_card: 2, write: 1 },
-      completedToolCallCounts: { progress_card: 2 },
-      successfulToolCallCounts: { progress_card: 1 },
-      successfulToolCallEvents: [{ name: "progress_card", timestamp: 100, toolCallId: "plan-ok" }],
-    });
-  });
-
-  it("counts Code Mode nested tool activity as the target tool's completed result", async () => {
-    const transcript = await createQaTranscript();
-    const { sessionKey } = transcript;
+  it("counts only correlated non-error results across direct and nested tool activity", async () => {
     const execCallId = "call_mock_exec_1|fc_mock_exec_1";
     const nestedActivity = (toolCallId: string, isError: boolean) =>
-      nestedTool({
+      nestedTool(toolCallId, "web_fetch", execCallId, 150, {
         startOrder: toolCallId === "nested-ok" ? 0 : 1,
-        parentToolCallId: execCallId,
-        toolCallId,
-        toolName: "web_fetch",
         isError,
-        timestamp: 150,
       });
-    await transcript.appendMany([
-      assistantToolCall(execCallId, "exec", { code: "" }),
+    const transcript = await makeTranscript([
+      {
+        role: "assistant",
+        content: [
+          toolCall("plan-ok", "read"),
+          toolCall("plan-error", "read"),
+          toolCall("write-mismatch", "write"),
+        ],
+      },
+      textResult("plan-ok", "read", "Progress card updated", 100),
+      textResult("plan-ok", "read", "duplicate", 200),
+      textResult("plan-error", "read", "failed", 300, true),
+      textResult("write-mismatch", "exec", "wrong tool", 400),
+      call(execCallId, "exec", { code: "" }),
       nestedActivity("nested-failed", true),
       nestedActivity("nested-ok", false),
       textResult(execCallId, "exec", '{"status":"completed"}', 200),
     ]);
 
     await expect(transcript.read()).resolves.toMatchObject({
-      assistantToolCallCounts: { web_fetch: 2 },
-      completedToolCallCounts: { web_fetch: 2 },
-      successfulToolCallCounts: { web_fetch: 1 },
-      successfulToolCallEvents: [{ name: "web_fetch", timestamp: 150, toolCallId: "nested-ok" }],
+      assistantToolCallCounts: { read: 2, write: 1, web_fetch: 2 },
+      completedToolCallCounts: { read: 2, web_fetch: 2 },
+      successfulToolCallCounts: { read: 1, web_fetch: 1 },
+      successfulToolCallEvents: [
+        { name: "read", timestamp: 100, toolCallId: "plan-ok" },
+        { name: "web_fetch", timestamp: 150, toolCallId: "nested-ok" },
+      ],
     });
-    const activity = await readSessionToolActivity(env, sessionKey);
-    expect(activity.filter((call) => call.kind === "tool").map((call) => call.toolCallId)).toEqual([
-      "nested-ok",
-      "nested-failed",
-    ]);
+    const activity = await readActivity(env, transcript.sessionKey);
+    expect(
+      activity
+        .filter((operation) => operation.kind === "tool" && operation.toolName === "web_fetch")
+        .map((operation) => operation.toolCallId),
+    ).toEqual(["nested-ok", "nested-failed"]);
     const wireSummary = await transcript.read({ includeCodeModeControl: true });
-    expect(wireSummary.assistantToolCallCounts).toEqual({ exec: 1, web_fetch: 2 });
-    expect(wireSummary.completedToolCallCounts).toEqual({ exec: 1, web_fetch: 2 });
-    expect(wireSummary.successfulToolCallCounts).toEqual({ exec: 1, web_fetch: 1 });
+    expect(counts(wireSummary)).toEqual([
+      { read: 2, write: 1, exec: 1, web_fetch: 2 },
+      { read: 2, exec: 1, web_fetch: 2 },
+      { read: 1, exec: 1, web_fetch: 1 },
+    ]);
   });
 
   it("counts physical shell results without Code Mode wrappers or failed exits", async () => {
-    const transcript = await createQaTranscript();
+    const transcript = await makeTranscript();
     for (const [index, exitCode] of [1, 0, 0].entries()) {
       const wrapperId = `wrapper-${index}`;
-      const nested = nestedTool({
+      const nested = nestedTool(`shell-${index}`, "exec", wrapperId, 105 + index * 10, {
         scopeId: `scope-${index}`,
-        parentToolCallId: wrapperId,
-        toolCallId: `shell-${index}`,
-        toolName: "exec",
         input: { command: "proof" },
         result: { content: [], details: { status: "completed", exitCode } },
         startedAt: 100 + index * 10,
-        timestamp: 105 + index * 10,
       });
       await transcript.appendMany([
-        assistantToolCall(wrapperId, "exec", { code: "await exec({ command: 'proof' });" }),
+        call(wrapperId, "exec", { code: "await exec({ command: 'proof' });" }),
         nested,
         nested,
         toolResult(wrapperId, "exec", { status: "completed" }, 109 + index * 10),
       ]);
     }
     await transcript.appendMany([
-      assistantToolCall("direct-failed", "exec", { command: "proof" }),
+      call("direct-failed", "exec", { command: "proof" }),
       toolResult("direct-failed", "exec", { status: "completed", exitCode: 1 }, 200),
     ]);
 
@@ -487,30 +464,23 @@ describe("qa suite runtime agent session helpers", () => {
   });
 
   it("retains persisted append boundaries for tied serial and overlapping nested tools", async () => {
-    const transcript = await createQaTranscript();
+    const transcript = await makeTranscript();
     const { sessionKey } = transcript;
     const wrapper = await transcript.append({
-      ...assistantToolCall("wrapper", "exec", { code: "dispatch task tools" }),
+      ...call("wrapper", "exec", { code: "dispatch task tools" }),
       timestamp: 100,
     });
     assert(wrapper, "missing persisted wrapper");
     const appendNested = (toolCallId: string, startOrder: number, afterEntryId: string) =>
       transcript.append(
-        nestedTool({
-          afterEntryId,
-          startOrder,
-          parentToolCallId: "wrapper",
-          toolCallId,
-          toolName: "read",
-          timestamp: 100,
-        }),
+        nestedTool(toolCallId, "read", "wrapper", 100, { afterEntryId, startOrder }),
       );
     await appendNested("first", 0, wrapper.messageId);
     const overlap = await appendNested("overlap", 1, wrapper.messageId);
     assert(overlap, "missing persisted overlapping result");
     await appendNested("serial", 2, overlap.messageId);
 
-    const activity = await readSessionToolActivity(env, sessionKey);
+    const activity = await readActivity(env, sessionKey);
     const [wrapperActivity, , overlapActivity] = activity;
     assert(wrapperActivity && overlapActivity, "missing projected causal tool activity");
     expect(activity).toMatchObject([
@@ -522,35 +492,27 @@ describe("qa suite runtime agent session helpers", () => {
   });
 
   it("matches pending Code Mode waits to the exec checkpoint that created their run", async () => {
-    const transcript = await createQaTranscript();
+    const transcript = await makeTranscript();
     const readPending = (pendingCodeModeExecNeedle: string) =>
       transcript.read({ pendingCodeModeExecNeedle });
-
+    const pending = (id: string, code: string) => [
+      call(`${id}-exec`, "exec", { code }),
+      toolResult(`${id}-exec`, "exec", { status: "waiting", runId: `${id}-run` }),
+      call(`${id}-wait`, "wait", { runId: `${id}-run` }),
+    ];
     await transcript.appendMany([
-      assistantToolCall("checkpoint-1-exec", "exec", {
-        code: "await qa_restart_wait(); return 'CHECKPOINT-1';",
-      }),
-      toolResult("checkpoint-1-exec", "exec", { status: "waiting", runId: "checkpoint-1-run" }),
-      assistantToolCall("checkpoint-1-wait", "wait", { runId: "checkpoint-1-run" }),
+      ...pending("checkpoint-1", "await qa_restart_wait(); return 'CHECKPOINT-1';"),
       toolResult("checkpoint-1-wait", "wait", { status: "completed" }),
-      assistantToolCall("audit-exec", "exec", {
-        code: "return await catalog.search('qa_restart_unsafe_probe');",
-      }),
-      toolResult("audit-exec", "exec", { status: "waiting", runId: "audit-run" }),
-      assistantToolCall("audit-wait", "wait", { runId: "audit-run" }),
+      ...pending("audit", "return await catalog.search('qa_restart_unsafe_probe');"),
     ]);
 
     await expect(readPending("CHECKPOINT-1")).resolves.toMatchObject({
       hasPendingCodeModeWait: false,
     });
 
-    await transcript.appendMany([
-      assistantToolCall("checkpoint-2-exec", "exec", {
-        code: "await qa_restart_wait(); return 'CHECKPOINT-2';",
-      }),
-      toolResult("checkpoint-2-exec", "exec", { status: "waiting", runId: "checkpoint-2-run" }),
-      assistantToolCall("checkpoint-2-wait", "wait", { runId: "checkpoint-2-run" }),
-    ]);
+    await transcript.appendMany(
+      pending("checkpoint-2", "await qa_restart_wait(); return 'CHECKPOINT-2';"),
+    );
 
     await expect(readPending("CHECKPOINT-2")).resolves.toMatchObject({
       hasPendingCodeModeWait: true,
@@ -558,80 +520,74 @@ describe("qa suite runtime agent session helpers", () => {
   });
 
   it("separates native-blocks cell controls from unmatched waits and physical exec", async () => {
-    const transcript = await createQaTranscript();
-    const { sessionKey } = transcript;
     const waitInput = (id: string) => ({ arguments: JSON.stringify({ cell_id: id }) });
     const header = "Script running with cell ID cell-owned\nWall time 0.1 seconds\nOutput:\n";
     const wrapperText = JSON.stringify([{ type: "input_text", text: header }]);
-    await transcript.appendMany([
-      assistantToolCall("wrapper", "exec", { input: "await work();" }),
-      assistantToolCall("early-wait", "wait", waitInput("cell-owned")),
+    const transcript = await makeTranscript([
+      call("wrapper", "exec", { input: "await work();" }),
+      call("early-wait", "wait", waitInput("cell-owned")),
       toolResult("early-wait", "wait", {}),
       {
         ...toolResult("wrapper", "exec", {}),
         content: [{ type: "text", text: wrapperText }],
       },
-      assistantToolCall("matched-wait", "wait", waitInput("cell-owned")),
+      call("matched-wait", "wait", waitInput("cell-owned")),
       toolResult("matched-wait", "wait", {}),
-      assistantToolCall("shell", "exec", { command: "printf proof" }),
+      call("shell", "exec", { command: "printf proof" }),
       {
         ...toolResult("shell", "exec", { status: "completed", exitCode: 0 }),
         content: [{ type: "text", text: header.replace("cell-owned", "cell-unmatched") }],
       },
-      assistantToolCall("unmatched-wait", "wait", waitInput("cell-unmatched")),
+      call("unmatched-wait", "wait", waitInput("cell-unmatched")),
       toolResult("unmatched-wait", "wait", {}),
     ]);
     const summary = await transcript.read();
     expect(summary.assistantToolCallCounts).toEqual({ exec: 1, wait: 2 });
     expect(summary.successfulToolCallCounts).toEqual({ exec: 1, wait: 2 });
-    const activity = await readSessionToolActivity(env, sessionKey);
+    const activity = await readActivity(env, transcript.sessionKey);
     expect(
-      activity.filter((call) => call.kind === "code-mode-control").map((call) => call.toolCallId),
+      activity
+        .filter((operation) => operation.kind === "code-mode-control")
+        .map((operation) => operation.toolCallId),
     ).toEqual(["wrapper", "matched-wait"]);
     const wireSummary = await transcript.read({ includeCodeModeControl: true });
     expect(wireSummary.assistantToolCallCounts).toEqual({ exec: 2, wait: 3 });
   });
 
   it("rejects ambiguous receipts and unfinished shell polls while preserving domain statuses", async () => {
-    const transcript = await createQaTranscript();
+    const transcript = await makeTranscript();
     const command = { command: "proof" };
     for (const [id, name, input, details] of [
       ["running", "process", { action: "poll" }, { status: "running" }],
       ["failed", "process", { action: "poll" }, { status: "completed", exitCode: 1 }],
       ["ok", "process", { action: "poll" }, { status: "completed", exitCode: 0 }],
       ["write", "process", { action: "write" }, { status: "running" }],
-      ["domain", "progress_card", {}, { status: "running" }],
+      ["domain", "read", {}, { status: "running" }],
       ["unavailable", "exec", command, { status: "unavailable" }],
       ["gateway-failed", "gateway_exec", command, { status: "completed", exitCode: 1 }],
       ["gateway-poll", "gateway_process", { action: "poll" }, { status: "running" }],
       ["conflict", "exec", command, { status: "completed", exitCode: 0 }],
     ] as const) {
-      await transcript.append(assistantToolCall(id, name, input));
+      await transcript.append(call(id, name, input));
       await transcript.append(toolResult(id, name, details, 100));
     }
     await transcript.append(
       toolResult("conflict", "exec", { status: "completed", exitCode: 1 }, 101),
     );
-    const summary = await transcript.read();
-    expect(summary).toMatchObject({
-      assistantToolCallCounts: {
-        process: 4,
-        progress_card: 1,
-        exec: 2,
-        gateway_exec: 1,
-        gateway_process: 1,
-      },
-      completedToolCallCounts: { process: 3, progress_card: 1, exec: 1, gateway_exec: 1 },
-    });
-    expect(summary.successfulToolCallCounts).toEqual({ process: 2, progress_card: 1 });
+    expect(counts(await transcript.read())).toEqual([
+      { process: 4, read: 1, exec: 2, gateway_exec: 1, gateway_process: 1 },
+      { process: 3, read: 1, exec: 1, gateway_exec: 1 },
+      { process: 2, read: 1 },
+    ]);
   });
 
   it("bounds authenticated successful tool results to the latest 64 events", async () => {
-    const transcript = await createQaTranscript();
-    await transcript.append({
-      role: "assistant",
-      content: Array.from({ length: 65 }, (_, index) => toolCall(`call-${index}`, "exec")),
-    });
+    const transcript = await makeTranscript([
+      {
+        role: "assistant",
+        content: Array.from({ length: 65 }, (_, index) => toolCall(`call-${index}`, "exec")),
+      },
+    ]);
 
     for (let index = 0; index < 65; index += 1) {
       await transcript.append(toolResult(`call-${index}`, "exec", undefined, index));
@@ -649,9 +605,8 @@ describe("qa suite runtime agent session helpers", () => {
   });
 
   it("reports current-source delivery facts from runtime-only tool result details", async () => {
-    const transcript = await createQaTranscript();
     const details = { sourceReplyRoute: "current-source", receipt: { threadId: "thread-1" } };
-    await transcript.append(toolResult("message-1", "message", details, 100));
+    const transcript = await makeTranscript([toolResult("message-1", "message", details, 100)]);
 
     await expect(transcript.read()).resolves.toMatchObject({
       currentSourceToolDeliveries: [{ toolName: "message", threadId: "thread-1" }],
@@ -659,20 +614,19 @@ describe("qa suite runtime agent session helpers", () => {
   });
 
   it("scopes transcript evidence after an event cursor", async () => {
-    const transcript = await createQaTranscript();
     const mirror = (identity: string) => ({
       role: "assistant",
       content: "same visible reply",
       __openclaw: { mirrorIdentity: identity },
     });
-    await transcript.appendMany([
-      assistantToolCall("old-plan", "progress_card", {}),
-      textResult("old-plan", "progress_card", "Progress card updated", 100),
+    const transcript = await makeTranscript([
+      call("old-plan", "read", {}),
+      textResult("old-plan", "read", "Progress card updated", 100),
       mirror("old-turn:assistant"),
     ]);
     const checkpoint = await transcript.read();
     expect(checkpoint.successfulToolCallEvents).toEqual([
-      { name: "progress_card", timestamp: 100, toolCallId: "old-plan" },
+      { name: "read", timestamp: 100, toolCallId: "old-plan" },
     ]);
     await transcript.append(mirror("current-turn:assistant"));
 
@@ -689,7 +643,7 @@ describe("qa suite runtime agent session helpers", () => {
 
   it("returns an empty checkpoint before the session exists", async () => {
     await expect(
-      readSessionTranscriptSummary(env, "agent:qa:not-created-yet", {
+      readSummary(env, "agent:qa:not-created-yet", {
         allowEmpty: true,
       }),
     ).resolves.toEqual({
@@ -705,13 +659,13 @@ describe("qa suite runtime agent session helpers", () => {
   });
 
   it("fails closed when a requested QA session transcript is empty", async () => {
-    const transcript = await createQaTranscript();
+    const transcript = await makeTranscript();
 
     await expect(transcript.read()).rejects.toThrow("session transcript is empty");
   });
 
   it("fails closed when a requested QA session transcript entry is missing", async () => {
-    await expect(readSessionTranscriptSummary(env, "agent:qa:missing")).rejects.toThrow(
+    await expect(readSummary(env, "agent:qa:missing")).rejects.toThrow(
       "session transcript entry not found",
     );
   });

@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { observeDiagnosticsTimelinePhases } from "../../infra/diagnostics-timeline.js";
 import { hasSqliteWorkerOutcomeUnknown } from "../../infra/sqlite-worker-contract.js";
 import { registerOpenClawAgentDatabaseAsyncResource } from "../../state/openclaw-agent-db-resources.js";
 import { runOpenClawAgentWriteTransaction } from "../../state/openclaw-agent-db.js";
@@ -46,6 +47,7 @@ export async function preparePendingInputStore(
   assertCurrent: () => void,
   lifecycleAdmission?: SessionInputLifecycleAdmission,
 ) {
+  using phase = observeDiagnosticsTimelinePhases("persist.stage.store.actor");
   const memoryOwner = captureSessionActorStorageOwner(scope, {
     assertCurrent,
     authorize: assertCurrent,
@@ -68,6 +70,7 @@ export async function preparePendingInputStore(
     env: captureSessionTranscriptStorageEnvironment(scope.env ?? process.env),
   };
   const inputActor = await getSessionInputActor(scope);
+  phase.mark("persist.stage.store.scope");
   if (lifecycleAdmission && !inputActor) {
     throw new Error("Restart resume requires the current input actor.");
   }
@@ -102,6 +105,7 @@ export async function preparePendingInputStore(
     throw new Error("Pending input changed its captured database owner");
   }
   const assertSource = readTarget.assertCurrent;
+  phase.mark("persist.stage.store.kernel");
   const { mutatePendingInput } = await import("./session-pending-input-operations.kernel.js");
   assertSource();
   let revoked = false;

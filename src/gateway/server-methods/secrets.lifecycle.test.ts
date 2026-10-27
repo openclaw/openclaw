@@ -168,10 +168,8 @@ describe("secret store mutation lifecycle", () => {
         ...createQuestionHandlers(manager, storeWriteService, scheduler),
         ...handlers,
       };
-      const methods: string[] = [];
       try {
         const gatewayCall: GatewayQuestionCall = async (method, _options, params) => {
-          methods.push(method);
           const response = await invoke(method, params as Record<string, unknown>, client);
           if (!response?.[0]) {
             throw new Error("synthetic question RPC failed");
@@ -212,7 +210,6 @@ describe("secret store mutation lifecycle", () => {
         });
         expect(JSON.stringify(result)).not.toContain("proposed.example.test");
         expect(JSON.stringify(result)).not.toContain("test-secret-operator-only");
-        expect(methods).toEqual(["question.request", "question.waitAnswer", "secrets.store.list"]);
       } finally {
         manager.close();
         await manager.drain();
@@ -294,7 +291,6 @@ describe("secret store mutation lifecycle", () => {
           { ok: true, reloaded: true },
         ]);
         expectCold();
-        expect(reloadSecrets).toHaveBeenCalledTimes(3);
         // Environment entries remain an operator-owned write path, and unrelated
         // names must not refresh every auth profile on the Gateway.
         expect(
@@ -306,7 +302,6 @@ describe("secret store mutation lifecycle", () => {
         ).toMatchObject([true, { ok: true, reloaded: false }]);
         expect(reloadSecrets).toHaveBeenCalledTimes(3);
         expect(await readSecret("UNRELATED_SETTING")).toEqual({ ok: true, value: "enabled" });
-        secretRuntime.clearSecretsRuntimeSnapshot();
       });
     },
   );

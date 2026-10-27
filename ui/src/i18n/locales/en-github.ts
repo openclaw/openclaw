@@ -66,7 +66,7 @@ const enGitHub = {
     pullRequests: {
       linkLabel: "Pull request {reference}: {title}",
       createPr: "Create PR",
-      createPrLabel: "Create a pull request for {branch}",
+      createPrLabel: "{label} for {branch}",
       publishPr: "Publish PR",
       publishing: "Publishing…",
       creating: "Creating…",
@@ -93,6 +93,7 @@ const enGitHub = {
       checksRunning: "Running",
       checksSkipped: "Skipped",
       checksTitle: "Checks",
+      automationNoChecks: "No CI checks reported.",
       codeChanges: "Code changes",
       status: "Status",
       rateLimitedShort: "GitHub is limiting updates. PR info may be outdated.",

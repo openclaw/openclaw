@@ -1,14 +1,12 @@
 // Install the shared GitHub fixture before loading the registered action owners.
 // oxfmt-ignore
-import { bindFixtureRuntime, fixture, mocks } from "./github-pr-workspace-preparation.test-support.js";
+import { interruptCanonicalWorkspaceAcceptance, bindFixtureRuntime, fixture, mocks } from "./github-pr-workspace-preparation.test-support.js";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { closeOpenClawAgentDatabasesAsync } from "../state/openclaw-agent-db.js";
 import { linkCanonicalUserProfileEmail } from "../state/user-profile-writes.js";
 import { installGitHubPublicationTestHarness } from "./github-publication.test-support.js";
-import * as workspaceStore from "./worker-environments/local-workspace-store.js";
-import { isLocalWorkspaceBaseRefreshRef } from "./worker-environments/workspace-result-inventory.js";
 
 describe("imported PR source refresh", () => {
   installGitHubPublicationTestHarness({
@@ -31,35 +29,15 @@ describe("imported PR source refresh", () => {
         "artifact.txt": "remote PR change\n",
         "pr.txt": "remote PR update\n",
       });
-      const withStore = workspaceStore.withLocalWorkspaceStore;
-      let interrupted = false;
-      const interruption = vi
-        .spyOn(workspaceStore, "withLocalWorkspaceStore")
-        .mockImplementation((params, operation) =>
-          withStore(params, (store) =>
-            operation({
-              ...store,
-              update: async (row, patch, authority, manifest) => {
-                const result = await store.update(row, patch, authority, manifest);
-                if (
-                  !interrupted &&
-                  patch.pending_target === "projection" &&
-                  isLocalWorkspaceBaseRefreshRef(result.pending_ref)
-                ) {
-                  interrupted = true;
-                  throw new Error("interrupted after canonical acceptance");
-                }
-                return result;
-              },
-            }),
-          ),
-        );
+      const { interruption, wasInterrupted } = interruptCanonicalWorkspaceAcceptance(
+        "interrupted after canonical acceptance",
+      );
       try {
         await expect(f.invoke()).rejects.toThrow("indeterminate and requires recovery");
       } finally {
         interruption.mockRestore();
       }
-      expect(interrupted).toBe(true);
+      expect(wasInterrupted()).toBe(true);
       expect(f.readSession().worktree?.githubPullRequest).toMatchObject({
         url: f.pr.html_url,
         head: { commit: acceptedHead },

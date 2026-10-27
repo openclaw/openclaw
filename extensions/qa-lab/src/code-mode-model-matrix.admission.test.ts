@@ -1,4 +1,3 @@
-import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
@@ -53,10 +52,7 @@ describe("Code Mode matrix paired admission", () => {
       ]),
     );
     const started: string[] = [];
-    let release: (() => void) | undefined;
-    const pairReady = new Promise<void>((resolve) => {
-      release = resolve;
-    });
+    const { promise: pairReady, resolve: release } = Promise.withResolvers<void>();
     const result = await runCodeModeModelMatrix(
       matrixOptions(root, {
         modes: ["direct", "code"],
@@ -128,8 +124,6 @@ describe("Code Mode model matrix runtime and output admission", () => {
     await fs.writeFile(artifact, "original");
     const dispatched: string[] = [];
     const options = matrixOptions(root, {
-      models: ["openai/fixture"],
-      modes: ["code"],
       repetitions: 2,
       outputDir: "artifacts/build-drift",
     });
@@ -137,11 +131,7 @@ describe("Code Mode model matrix runtime and output admission", () => {
       runCodeModeModelMatrix(
         options,
         matrixDependencies({
-          readBuildSha256: async () =>
-            createHash("sha256")
-              .update(await fs.readFile(artifact))
-              .digest("hex"),
-          buildCliArtifacts: async () => {},
+          readBuildSha256: () => fs.readFile(artifact, "utf8"),
           runCell: async ({ cell, buildSha256 }) => {
             dispatched.push(cell.id);
             await fs.writeFile(artifact, "changed");
@@ -215,10 +205,9 @@ describe("Code Mode model matrix runtime and output admission", () => {
     expect(attempts.filter((attempt) => attempt.status === "fulfilled")).toHaveLength(1);
     const rejected = attempts.find((attempt) => attempt.status === "rejected");
     expect(rejected).toMatchObject({
-      status: "rejected",
-      reason: expect.objectContaining({
+      reason: {
         message: expect.stringContaining("must not already exist"),
-      }),
+      },
     });
   });
 });

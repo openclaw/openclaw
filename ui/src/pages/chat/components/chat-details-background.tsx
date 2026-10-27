@@ -1,7 +1,7 @@
 import type { JSX } from "@solidjs/web";
 import { Errored, For, Loading, Show, createMemo, createSignal, latest } from "solid-js";
-import type { SessionProcessSummary } from "../../../../../packages/gateway-protocol/src/schema/session-processes.js";
 import { Icon } from "../../../components/solid/icon.tsx";
+import { registerChatDetailsEnglish } from "../../../i18n/locales/en-chat-details.ts";
 import { registerChatSessionEnglish } from "../../../i18n/locales/en-chat-session.ts";
 import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
 import {
@@ -14,12 +14,14 @@ import {
   createDetailsDesktopReveal,
 } from "./chat-details-desktop-section.tsx";
 import { ChatDetailsProcessRow } from "./chat-details-process-row.tsx";
+import { createDetailsProcessesPresentation } from "./chat-details-processes-presentation.ts";
 import { ChatDetailsSubagents, type ChatDetailsSubagentsProps } from "./chat-details-subagents.tsx";
 import type { ChatDetailsProps } from "./chat-details-types.ts";
 import { createProcessesPresentation } from "./chat-processes-presentation.ts";
 import { ChatSubagentActivity } from "./chat-subagent-activity-lazy.tsx";
 
 registerEnglishCatalog(registerChatSessionEnglish);
+registerEnglishCatalog(registerChatDetailsEnglish);
 
 type Props = {
   details: ChatDetailsProps;
@@ -45,16 +47,6 @@ const PREVIEW_ROWS = 3;
 
 function subagentState(row: ChatSubagentActivityRow): State {
   return row.status === "waiting" ? "running" : row.status;
-}
-
-function processState(row: SessionProcessSummary): State {
-  return row.status === "running"
-    ? "running"
-    : row.status === "completed"
-      ? "done"
-      : row.status === "failed"
-        ? "failed"
-        : "stopped";
 }
 
 function tally<T>(rows: readonly T[], state: (row: T) => State): Tally {
@@ -267,7 +259,6 @@ export function ChatDetailsBackground(
                 <ChatSubagentActivity
                   rows={subagents()}
                   limit={subagentsExpanded() ? undefined : PREVIEW_ROWS}
-                  compact={true}
                   onOpenSubagent={props.details.onOpenSubagent}
                   onOpenSession={props.details.onSessionSelect}
                 />
@@ -295,7 +286,6 @@ export function ChatDetailsBackground(
               >
                 <ChatSubagentActivity
                   rows={unlisted()}
-                  compact={true}
                   onOpenSession={props.details.onSessionSelect}
                 />
               </Show>
@@ -321,37 +311,28 @@ function DetailsProcesses(
   },
 ) {
   const presentation = createProcessesPresentation(() => props.processes(), true);
-  const [processesExpanded, setProcessesExpanded] = createSignal(false);
-  const processRows = createMemo(() =>
-    attentionOrder(props.processes()?.snapshot.rows ?? [], processState),
+  const processRows = createDetailsProcessesPresentation(
+    () => props.processes()?.snapshot.rows ?? [],
   );
-  const processTally = createMemo(() => tally(processRows(), processState));
-  const visibleProcesses = createMemo(() =>
-    processesExpanded() ? processRows() : processRows().slice(0, PREVIEW_ROWS),
-  );
+  const visibleRows = createMemo(() => processRows().slice(0, 2));
+  const hidden = () => processRows().length - visibleRows().length;
   const processError = () =>
-    processRows().length === 0 ? props.processes()?.snapshot.error : null;
-  const openProcesses = () => {
+    props.processes()?.snapshot.errorKind !== "read" ? props.processes()?.snapshot.error : null;
+  const openProcesses = (instanceId?: string) => {
     if (props.presented) {
-      props.details.onOpenProcesses?.();
+      props.details.onOpenProcesses?.(instanceId);
     }
   };
   const Content = (contentProps: { retry: () => void }) => (
     <Show when={processRows().length > 0 || processError()}>
-      <BackgroundGroup
-        kind="processes"
-        title={t("chat.sessionDetails.processes")}
-        tally={processTally()}
-        total={processRows().length}
-        icon="terminal"
-        openAllLabel={t("chat.sessionDetails.allProcesses")}
-        onOpenAll={props.details.onOpenProcesses ? openProcesses : undefined}
-        expanded={processesExpanded()}
-        onExpandedChange={setProcessesExpanded}
-      >
+      <details class="chat-details__group" data-details-group="processes" open>
+        <summary class="chat-details__caption">
+          <span class="chat-details__caption-title">{t("chat.sessionDetails.processes")}</span>
+          <Icon name="chevronDown" />
+        </summary>
         <Show when={processError()}>
           <div class="chat-summary__automation-error">
-            <span role="status">{t("chat.sessionDetails.processesError")}</span>
+            <span role="alert">{processError()}</span>
             <button
               type="button"
               class="chip chat-summary__automation-retry"
@@ -361,18 +342,34 @@ function DetailsProcesses(
             </button>
           </div>
         </Show>
-        <div role="list" aria-label={t("chat.sessionDetails.processes")}>
-          <For each={visibleProcesses()} keyed={(row) => row.instanceId}>
-            {(row) => (
-              <ChatDetailsProcessRow
-                row={row()}
-                hoverDescription
-                onOpen={props.details.onOpenProcesses ? openProcesses : undefined}
-              />
-            )}
-          </For>
-        </div>
-      </BackgroundGroup>
+        <Show when={processRows().length > 0}>
+          <div role="list" aria-label={t("chat.sessionDetails.processes")}>
+            <For each={visibleRows()} keyed={(row) => row.instanceId}>
+              {(row) => (
+                <ChatDetailsProcessRow
+                  row={row()}
+                  presentation={presentation}
+                  disabled={!props.presented}
+                  hoverDescription
+                  onOpen={props.details.onOpenProcesses ? openProcesses : undefined}
+                />
+              )}
+            </For>
+          </div>
+          <Show when={props.details.onOpenProcesses}>
+            <button
+              class="chat-details-processes__view-all"
+              type="button"
+              disabled={!props.presented}
+              onClick={() => openProcesses()}
+            >
+              {hidden() > 0
+                ? t("chat.sessionDetails.showMore", { count: String(hidden()) })
+                : t("chat.processesPanel.viewAll")}
+            </button>
+          </Show>
+        </Show>
+      </details>
     </Show>
   );
   const retry = () => void props.processes()?.refresh();

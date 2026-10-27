@@ -334,14 +334,7 @@ export async function resolveEffectiveCurrentChannelContextForRequest(
 function projectCurrentChannelContext(
   options: MessageToolCurrentContextOptions | undefined,
   inferred: InferredSessionDelivery | null,
-): {
-  accountId?: string;
-  currentChannelId?: string;
-  currentChatType?: ChatType;
-  currentMessagingTarget?: string;
-  currentChannelProvider?: string;
-  currentThreadTs?: string;
-} {
+) {
   const currentChannelProvider = options?.currentChannelProvider;
   const currentChannelId = options?.currentChannelId;
   const sessionDelivery =

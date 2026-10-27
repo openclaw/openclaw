@@ -1,5 +1,7 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { expect, vi } from "vitest";
+import { getRuntimeConfig, type OpenClawConfig } from "../../../config/config.js";
+import { setRuntimeConfigSnapshot } from "../../../config/io.js";
 import {
   loadExactSessionEntryReadOnly,
   replaceSessionEntry,
@@ -19,7 +21,24 @@ import type {
   GatewayRequest,
   SessionStoreEntry,
 } from "./subagent-registry.lifecycle-fixture.test-support.js";
+import { createExternalRequesterSessionEntry } from "./subagent-registry.lifecycle-fixture.test-support.js";
 import * as registry from "./subagent-registry.test-helpers.js";
+import type { SubagentRunRecord } from "./subagent-registry.types.js";
+import { buildRequesterSettleWakeIdentity } from "./subagent-requester-settle-identity.js";
+
+export function pendingRequesterSettleWake(
+  runId: string,
+  batchRunIds = [runId],
+): NonNullable<SubagentRunRecord["requesterSettleWake"]> {
+  return {
+    status: "pending",
+    attemptCount: 0,
+    batchRunIds,
+    requesterYieldBatch: true,
+    rearmGeneration: 1,
+    progressOperationId: runId,
+  };
+}
 
 export function holdRequesterWakeResponses(
   gates: ReadonlyMap<string, Promise<void>>,
@@ -52,6 +71,7 @@ export function holdRequesterWakeResponses(
 
 export function createGatewayContext() {
   const recoveryRuntime: GatewayRequestContext["recoveryRuntime"] = {
+    prepareFailedWorkerPlacement: async () => undefined,
     prepareRestartRecovery: () => undefined,
     dispatchAgent: (params, timeoutMs) => callGateway({ method: "agent", params, timeoutMs }),
     waitForAgent: (params, timeoutMs, signal) =>
@@ -192,4 +212,65 @@ export function createRequesterWakeSessionFixture(params: {
     );
   };
   return { prepareChildSession, spawnVisibleChild, settleTurn };
+}
+
+export async function prepareLargeRequesterWakeFixture(
+  params: { sessionStore: Record<string, SessionStoreEntry>; sessionStorePath: string },
+  nested: boolean,
+) {
+  vi.setSystemTime(100_000);
+  const cfg: OpenClawConfig = {
+    ...getRuntimeConfig(),
+    logging: { audit: { enabled: true, executionIdentity: true } },
+  };
+  setRuntimeConfigSnapshot(cfg);
+  vi.mocked(getRuntimeConfig).mockReturnValue(cfg);
+  const requesterSessionKey = "agent:main:telegram:direct:1234567890";
+  params.sessionStore[requesterSessionKey] = createExternalRequesterSessionEntry();
+  await replaceSessionEntry(
+    { storePath: params.sessionStorePath, sessionKey: requesterSessionKey },
+    params.sessionStore[requesterSessionKey],
+  );
+  const context = createGatewayContext();
+  await registry.initSubagentRegistry();
+  await registry.activateSubagentRegistry(() => context).settled;
+  const fixture = createRequesterWakeSessionFixture({
+    requesterSessionKey,
+    getSessionStore: () => params.sessionStore,
+    getSessionStorePath: () => params.sessionStorePath,
+  });
+  const childIds = Array.from(
+    { length: nested ? 3 : 6 },
+    (_, index) => `00000000-0000-4000-8000-${String(index).padStart(12, "0")}`,
+  );
+  const nestedSessionKey = "agent:main:subagent:10000000-0000-4000-8000-000000000000";
+  const children = nested
+    ? [
+        {
+          runId: buildRequesterSettleWakeIdentity({
+            requesterSessionKey: nestedSessionKey,
+            requesterAgentId: "main",
+            batchRunIds: childIds,
+            rearmGeneration: 1,
+          }).runId,
+          childSessionKey: nestedSessionKey,
+          expectsCompletionMessage: true,
+        },
+      ]
+    : childIds.map((runId) => ({
+        runId,
+        childSessionKey: `agent:main:subagent:${runId}`,
+        expectsCompletionMessage: true,
+      }));
+  return { cfg, requesterSessionKey, fixture, children };
+}
+
+export function expectLargeRequesterWakeFindings(
+  request: GatewayRequest | undefined,
+  count: number,
+) {
+  const findings = request?.params?.internalEvents?.[0]?.result ?? request?.params?.message;
+  for (let index = 0; index < count; index++) {
+    expect(findings).toContain(`findings ${index}`);
+  }
 }

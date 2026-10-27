@@ -37,6 +37,7 @@ import {
   bindReplyQueueInputAdapter,
   type ReplyQueueInputAdapter,
   bindReplyToolAuthorityCallerRead,
+  captureReplyToolAuthorityCallerBinding,
   createAgentQuestionAnswerAuthority,
   prepareReplyToolAuthorityCallerRead,
   registerAgentHarnessQuestionAnswerAuthority,
@@ -73,7 +74,7 @@ export async function withPreparedEmbeddedRunToolAuthority<T, Attempt extends To
     | "sessionPersistence"
     | "trigger"
     | "bindWatchdogAttempt"
-    | "executionSelection"
+    | "joinObservation"
   > & { queueInputAdapter?: ReplyQueueInputAdapter },
   attempt: Attempt,
   narrow: ReplyToolAuthorityNarrow | undefined,
@@ -118,9 +119,26 @@ async function withPreparedEmbeddedRunToolAuthorityOwned<T, Attempt extends Tool
   const inherited = getGatewayToolCallerIdentity();
   const source = inherited?.operationalRunInstance === instance ? inherited : undefined;
   const { sessionId, sessionKey, sessionFile, agentId, runId } = attempt;
+  const sourceTurnId = readChannelSourceTurnId(internal) ?? runId;
+  const queueInputAdapter = internal.queueInputAdapter ?? "legacy-question-category";
+  const operatorAuthority = readAdmittedRunOperatorAuthority(admitted);
   const requesterOrigin = captureRequesterOrigin({
-    ...attempt,
-    operatorProfileId: readAdmittedRunOperatorAuthority(admitted)?.profileId,
+    requesterOrigin: attempt.requesterOrigin,
+    sessionKey,
+    operatorProfileId: operatorAuthority?.profileId,
+    messageProvider: attempt.messageProvider,
+    messageChannel: attempt.messageChannel,
+    agentAccountId: attempt.agentAccountId,
+    chatType: attempt.chatType,
+    conversationId: attempt.conversationId,
+    messageThreadId: attempt.messageThreadId,
+    groupId: attempt.groupId,
+    groupChannel: attempt.groupChannel,
+    groupSpace: attempt.groupSpace,
+    senderId: attempt.senderId,
+    senderName: attempt.senderName,
+    senderUsername: attempt.senderUsername,
+    senderE164: attempt.senderE164,
   });
   const route = { provider: attempt.provider, model: attempt.modelId };
   // Maintenance borrows an operation for cancellation, not its injection snapshot.
@@ -132,7 +150,6 @@ async function withPreparedEmbeddedRunToolAuthorityOwned<T, Attempt extends Tool
       ? turn
       : undefined;
   const assertHostActive = attempt.hostCapabilities?.assertActive;
-  const operatorAuthority = readAdmittedRunOperatorAuthority(admitted);
   let live = true;
   // Preserve the complete admitted snapshot, but bind its hash and projection
   // only after hooks or native ownership have selected the actual model.
@@ -140,7 +157,6 @@ async function withPreparedEmbeddedRunToolAuthorityOwned<T, Attempt extends Tool
     ? undefined
     : prepareReplyToolAuthority(
         {
-          executionSelection: internal.executionSelection,
           originatingChannel: attempt.messageChannel,
           toolsAllow: attempt.toolsAllow,
           disableTools: attempt.disableTools,
@@ -164,6 +180,8 @@ async function withPreparedEmbeddedRunToolAuthorityOwned<T, Attempt extends Tool
           },
         },
         narrow,
+        undefined,
+        internal.joinObservation,
       );
   let fingerprint: string | undefined;
   let releaseAttemptSnapshot: (() => void) | undefined;
@@ -243,9 +261,16 @@ async function withPreparedEmbeddedRunToolAuthorityOwned<T, Attempt extends Tool
   if (watchdogAttempt) {
     internal.bindWatchdogAttempt?.(watchdogAttempt);
   }
+  const { hostCapabilities, userTurnTranscriptRecorder } = attempt;
+  // Retained authority assertions share this scope, but do not own the run payload.
+  let executeAttempt: (() => Promise<T>) | undefined = run.bind(undefined, {
+    ...attempt,
+    replyOperation: turn,
+    toolAuthorityFingerprint: fingerprint,
+  });
   const runPrepared = () =>
     withSessionTranscriptQuestionAnswers(
-      attempt.userTurnTranscriptRecorder,
+      userTurnTranscriptRecorder,
       assertReplyActive,
       (admitTranscriptAnswer) => {
         const questionAuthority = sessionKey
@@ -269,12 +294,15 @@ async function withPreparedEmbeddedRunToolAuthorityOwned<T, Attempt extends Tool
               admitTranscriptAnswer,
             })
           : undefined;
-        if (attempt.hostCapabilities && questionAuthority) {
-          registerAgentHarnessQuestionAnswerAuthority(attempt.hostCapabilities, questionAuthority);
+        if (hostCapabilities && questionAuthority) {
+          registerAgentHarnessQuestionAnswerAuthority(hostCapabilities, questionAuthority);
         }
-        return withAgentQuestionAnswerAuthority(questionAuthority, () =>
-          run({ ...attempt, replyOperation: turn, toolAuthorityFingerprint: fingerprint }),
-        );
+        return withAgentQuestionAnswerAuthority(questionAuthority, () => {
+          if (!executeAttempt) {
+            throw new Error("embedded attempt execution is closed");
+          }
+          return executeAttempt();
+        });
       },
     );
 
@@ -292,8 +320,14 @@ async function withPreparedEmbeddedRunToolAuthorityOwned<T, Attempt extends Tool
         requesterOrigin,
         receiptAuthority: assertReplyActive,
         embeddedRunToolAuthorityBinding: (registration) => {
-          assertActive();
           const { handle } = registration;
+          const assertRegistered = (assertSource = assertActive) => {
+            assertSource();
+            if (handle.runId !== runId || handle.toolAuthorityFingerprint !== fingerprint) {
+              throw new Error("embedded tool authority handle changed");
+            }
+          };
+          assertRegistered();
           if (
             registration.sessionId !== sessionId ||
             registration.sessionKey !== sessionKey ||
@@ -305,18 +339,11 @@ async function withPreparedEmbeddedRunToolAuthorityOwned<T, Attempt extends Tool
           ) {
             throw new Error("embedded tool authority registration does not match its attempt");
           }
-          const assertRegistered = () => {
-            assertActive();
-            if (handle.runId !== runId || handle.toolAuthorityFingerprint !== fingerprint) {
-              throw new Error("embedded tool authority handle changed");
-            }
-          };
           const ownsOperation = () =>
             !operation ||
             (getControllerEmbeddedAttachment(operation)?.handle === handle &&
               operation.toolAuthorityRoute?.provider === route.provider &&
               operation.toolAuthorityRoute.model === route.model);
-          assertRegistered();
           registered = true;
           const project = (caller: ReplyToolAuthorityOverlay | ReplyToolAuthorityRequester) => {
             assertRegistered();
@@ -380,7 +407,7 @@ async function withPreparedEmbeddedRunToolAuthorityOwned<T, Attempt extends Tool
           // attempt snapshot. A lifecycle-only turn cannot lend its policy.
           bindReplyToolAuthorityCallerRead(
             projectAsync,
-            async (caller, expected, _requestedRoute, assertCaller) => {
+            (caller, expected, _requestedRoute, assertCaller) => {
               const assertPreparedOwner = () => {
                 assertCaller();
                 assertRegistered();
@@ -404,7 +431,7 @@ async function withPreparedEmbeddedRunToolAuthorityOwned<T, Attempt extends Tool
                   );
                 }
               }
-              return prepareReplyToolAuthorityCallerRead(
+              return captureReplyToolAuthorityCallerBinding(
                 operation?.projectToolAuthorityFingerprintAsync ?? direct?.projectAsync,
                 caller,
                 expected,
@@ -419,14 +446,11 @@ async function withPreparedEmbeddedRunToolAuthorityOwned<T, Attempt extends Tool
             operation: turn,
             ...(!turn ? { detached: true as const } : {}),
             source: operation ? "reply" : "attempt",
-            sourceTurnId: readChannelSourceTurnId(internal) ?? runId,
+            sourceTurnId,
             get requesterPrincipalKey() {
               return operation?.requesterPrincipalKey ?? direct?.requesterPrincipalKey;
             },
-            assertRegistrationActive: () => {
-              assertRegistered();
-              assertReplyActive();
-            },
+            assertRegistrationActive: () => assertRegistered(assertReplyActive),
             assertActive: () => {
               assertRegistered();
               if (!ownsOperation()) {
@@ -446,10 +470,7 @@ async function withPreparedEmbeddedRunToolAuthorityOwned<T, Attempt extends Tool
             projectRequester: project,
             projectRequesterAsync: projectAsync,
           };
-          return bindReplyQueueInputAdapter(
-            binding,
-            internal.queueInputAdapter ?? "legacy-question-category",
-          );
+          return bindReplyQueueInputAdapter(binding, queueInputAdapter);
         },
       },
       runPrepared,
@@ -457,6 +478,7 @@ async function withPreparedEmbeddedRunToolAuthorityOwned<T, Attempt extends Tool
   } finally {
     // Retained ALS callbacks do not extend the attempt's authority.
     live = false;
+    executeAttempt = undefined;
     if (!registered) {
       watchdogAttempt?.close();
     }

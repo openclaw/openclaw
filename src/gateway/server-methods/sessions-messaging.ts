@@ -20,6 +20,7 @@ import { loadGatewaySessionEntryReadOnlyInWorker } from "../session-utils-store-
 import { prepareDeletedAgentSessionCheck } from "../session-utils.js";
 import { gatewayClientUploadPolicyError } from "../upload-policy.js";
 import { handleDirectExternalChatSend } from "./chat-send-external-entry.js";
+import { respondError } from "./response.js";
 import { emitSessionsChanged } from "./session-change-event.js";
 import { isFreshChatSendStarted } from "./session-create-initial-turn.js";
 import {
@@ -148,13 +149,10 @@ async function handleSessionSend(
     requestAuthority.assertPreparationCurrent();
   }
   if (deletedAgentId !== null) {
-    options.respond(
-      false,
-      undefined,
-      errorShape(
-        ErrorCodes.INVALID_REQUEST,
-        `Agent "${deletedAgentId}" no longer exists in configuration`,
-      ),
+    respondError(
+      options.respond,
+      ErrorCodes.INVALID_REQUEST,
+      `Agent "${deletedAgentId}" no longer exists in configuration`,
     );
     return;
   }
@@ -219,7 +217,7 @@ async function handleSessionSend(
     canonicalKey = created.canonicalKey;
   }
   if (!entry?.sessionId) {
-    respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, `session not found: ${key}`));
+    respondError(respond, ErrorCodes.INVALID_REQUEST, `session not found: ${key}`);
     return;
   }
   let sendAcked = false;

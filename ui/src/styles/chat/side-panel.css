@@ -1,3 +1,5 @@
+@import "./sidebar-panels.css";
+
 /* Width model: the tabs region takes the free space, but the strip itself sizes
    to its tabs and is the only thing that clips. The new-tab control sits outside
    that clip, so it hugs the last tab when everything fits and stays pinned at
@@ -173,7 +175,7 @@
 }
 
 .side-panel__header .tabstrip-tab[active] .tabstrip-tab__icon {
-  color: var(--text);
+  color: var(--icon-active, var(--text));
 }
 
 .side-panel__header .tabstrip-tab__icon svg,
@@ -319,7 +321,6 @@ openclaw-chat-detail-panel,
   min-width: 0;
   max-width: min(320px, calc(100vw - 24px));
   padding: var(--menu-padding);
-  border: 1px solid var(--border-strong);
   border-radius: var(--menu-radius);
   background: var(--bg-elevated);
   box-shadow: var(--shadow-md);
@@ -423,7 +424,10 @@ openclaw-chat-detail-panel,
 .side-panel-launcher__heading {
   margin: 0 12px 12px;
   color: var(--muted);
-  font-size: var(--control-ui-text-xs);
+  font-size: calc(var(--control-ui-text-sm) * 0.875);
+  font-weight: 500;
+  line-height: 1.4;
+  letter-spacing: 0;
   text-align: start;
 }
 
@@ -440,8 +444,11 @@ openclaw-chat-detail-panel,
   width: 100%;
   align-items: center;
   border: 0;
-  color: var(--muted);
+  color: var(--text);
   font-size: var(--control-ui-text-sm);
+  font-weight: 450;
+  line-height: 1.4;
+  letter-spacing: 0;
   text-align: start;
   cursor: var(--cursor-action);
 }
@@ -451,42 +458,19 @@ openclaw-chat-detail-panel,
   gap: 12px 8px;
   padding: 14px 12px;
   border-radius: var(--radius-lg);
-  background: var(--bg-hover);
+  background: var(--bg-accent);
 }
 
-.sidebar-region--desktop .side-panel-launcher__card {
-  background: var(--bg-elevated);
-}
-
-.sidebar-region--desktop .side-panel-launcher__card:is(:hover, :focus-visible) {
-  background: var(--bg-hover);
+:is(.side-panel-launcher__card, .side-panel-launcher__item):not(:disabled, [aria-disabled="true"])
+  .side-panel-type-option__icon {
+  color: color-mix(in srgb, var(--muted) 92%, transparent);
 }
 
 .sidebar-region--desktop .side-panel-launcher__card[aria-disabled="true"] {
-  background: var(--bg-elevated);
+  background: var(--bg-accent);
   color: var(--muted);
   opacity: 0.5;
   cursor: not-allowed;
-}
-
-.sidebar-region--desktop .side-panel-launcher__card .shortcut-kbd {
-  border-color: transparent;
-  background: transparent;
-}
-
-/* Desktop-panels' approved .panel-shortcut; Quick access keeps its own hints. */
-.sidebar-region--desktop .side-panel-launcher__item .shortcut-kbd {
-  padding: 2px 5px;
-  border: 1px solid var(--card-highlight);
-  border-radius: 5px;
-  background: color-mix(in srgb, var(--card-highlight) 87.5%, transparent);
-  color: var(--muted);
-  opacity: 0.75;
-  font:
-    500 10px / 1.2 system-ui,
-    sans-serif;
-  letter-spacing: 0.04em;
-  white-space: nowrap;
 }
 
 .side-panel-launcher__card .side-panel-type-option__label {
@@ -501,8 +485,8 @@ openclaw-chat-detail-panel,
 }
 
 .side-panel-launcher__item {
-  grid-template-columns: 20px minmax(0, 1fr) auto;
-  gap: 12px;
+  grid-template-columns: 16px minmax(0, 1fr) auto;
+  gap: 8px;
   min-height: 44px;
   padding: 8px 12px;
   border-radius: var(--radius-md);
@@ -513,7 +497,7 @@ openclaw-chat-detail-panel,
 .side-panel-launcher__card:focus-visible,
 .side-panel-launcher__item:hover,
 .side-panel-launcher__item:focus-visible {
-  background: var(--bg-accent);
+  background: var(--bg-hover);
   color: var(--text);
 }
 
@@ -523,7 +507,7 @@ openclaw-chat-detail-panel,
   }
 
   .side-panel-launcher__card {
-    grid-template-columns: 24px minmax(0, 1fr) auto;
+    grid-template-columns: 16px minmax(0, 1fr) auto;
   }
 
   .side-panel-launcher__card .side-panel-type-option__label {
@@ -536,14 +520,14 @@ openclaw-chat-detail-panel,
   }
 }
 
+.sidebar-region--desktop .side-panel__header {
+  background: transparent;
+}
+
 .sidebar-region--desktop .side-panel__header--occupied {
   /* Balance the bottom divider so the controls stay on the shared header axis. */
   padding-top: var(--rail-divider-size);
   border-bottom: var(--rail-divider-size) solid var(--rail-divider-color);
-}
-
-.sidebar-region--desktop .side-panel__frame-action {
-  color: var(--muted);
 }
 
 .sidebar-region--desktop .side-panel__frame-action > .oc-menu-item__label {
@@ -575,7 +559,7 @@ openclaw-chat-detail-panel,
   .side-panel-launcher__quick
   .side-panel-launcher__card {
   display: grid;
-  grid-template-columns: 18px minmax(0, 1fr) auto;
+  grid-template-columns: 16px minmax(0, 1fr) auto;
   align-items: center;
   gap: 8px;
   text-align: start;
@@ -660,8 +644,9 @@ openclaw-chat-detail-panel,
 }
 
 .side-panel-position__option[aria-checked="true"] {
-  background: var(--border-strong);
-  border-color: var(--border-hover);
+  background: var(--bg-elevated);
+  border-color: var(--border);
+  box-shadow: var(--shadow-sm);
 }
 
 .side-panel-position-menu__separator {

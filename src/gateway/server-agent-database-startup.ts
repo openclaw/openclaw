@@ -68,8 +68,9 @@ export function activateGatewayAgentDatabaseStartup(params: {
     preparationReady: params.preparationReady,
     openAgent: ({ agentId, paths, env, signal, assertCurrent }) =>
       runWithSpawnBroker(broker, async () => {
-        const { prepareOpenClawAgentDatabaseExecution } =
+        const { captureOpenClawAgentDatabaseExecution, prepareOpenClawAgentDatabaseExecution } =
           await import("../state/openclaw-agent-execution.js");
+        await using prepared = new AsyncDisposableStack();
         const assertOpenCurrent = createPreparationGuard(
           agentId,
           paths,
@@ -79,12 +80,16 @@ export function activateGatewayAgentDatabaseStartup(params: {
         );
         assertOpenCurrent();
         for (const pathname of paths) {
+          // Keep the existing owner out of idle eviction until this agent's publication settles.
+          const execution = captureOpenClawAgentDatabaseExecution({ agentId, path: pathname, env });
+          prepared.defer(() => execution.release());
           await prepareOpenClawAgentDatabaseExecution(
             { agentId, path: pathname, env },
             assertOpenCurrent,
             signal,
           );
         }
+        return prepared.move();
       }),
     migrateAgent: ({ agentId, paths, env, signal, assertCurrent }) =>
       runWithSpawnBroker(broker, async () => {

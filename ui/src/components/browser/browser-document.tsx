@@ -3,12 +3,15 @@ import { createMemo, Show } from "solid-js";
 import type { ApplicationContext } from "../../app/context.ts";
 import { resolveControlUiAuthToken } from "../../app/control-ui-auth.ts";
 import { isBrowserPanelAvailable } from "../../app/panel-availability.ts";
+import { registerBrowserEnglish } from "../../i18n/locales/en-browser.ts";
 import { projectGateway } from "../../lib/reactive/application.ts";
-import { t } from "../../lib/reactive/i18n.ts";
+import { t, registerEnglishCatalog } from "../../lib/reactive/i18n.ts";
 import { defineSolidBridge } from "../../lib/solid-bridge.ts";
 import { ConnectingSplash } from "../solid/loading-skeleton.tsx";
 import { BrowserPanelHost } from "./browser-panel.ts";
 import { readBrowserTabTarget } from "./browser-target.ts";
+
+registerEnglishCatalog(registerBrowserEnglish);
 
 export type BrowserDocumentViewProps = {
   context: ApplicationContext;

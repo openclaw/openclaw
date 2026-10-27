@@ -11,6 +11,8 @@ import { runOpenClawStateWorkerOperation } from "../state/openclaw-state-worker-
 import { hasSqliteWorkerOutcomeUnknown, isSqliteWorkerError } from "./sqlite-worker-contract.js";
 import { createSqliteWorkerWriteAdmission } from "./sqlite-worker-store.js";
 import { createUpdateErrorFact } from "./update-failure-facts.js";
+import type { UpdateResultPayload } from "./update-result-payload.js";
+import { readUpdateResultPolicy, sendUpdateResultTelemetry } from "./update-result-telemetry.js";
 import { captureUpdateRunRedactionFacts, type UpdateRunLedgerOptions } from "./update-run-codec.js";
 import type {
   UpdateRunPhasePatch,
@@ -26,7 +28,7 @@ import type {
   UpdateRunStep,
 } from "./update-run-record.js";
 import { UpdateRecoveryRequiredError } from "./update-run-recovery-schema.js";
-import { isRequiredUpdateRunStep } from "./update-run-write.js";
+import { hasUpdateRunDiagnostics, isRequiredUpdateRunStep } from "./update-run-write.js";
 
 export type UpdateRunWriteOptions = UpdateRunLedgerOptions & {
   context?: OpenClawStateWorkerContext;
@@ -44,7 +46,7 @@ async function recordUpdateRunMutationAsync(
   runId: string,
   createCommand: (input: UpdateRunWriteInput) => UpdateRunWriteCommand,
   options: UpdateRunWriteOptions = {},
-): Promise<UpdateRunRecord | undefined> {
+): Promise<{ record: UpdateRunRecord; updateResult?: UpdateResultPayload } | undefined> {
   options.assertAccepting?.();
   if (options.database || options.readOnly) {
     throw new Error("Existing-state writes require their own tracked writable connection.");
@@ -108,7 +110,7 @@ async function recordUpdateRunMutationAsync(
     );
     return undefined;
   }
-  return reply.record;
+  return reply;
 }
 
 export function recordUpdateRunStepAsync(
@@ -120,7 +122,7 @@ export function recordUpdateRunStepAsync(
     runId,
     (input) => ({ type: "updateRuns.recordStep", input: { ...input, step } }),
     options,
-  );
+  ).then((reply) => reply?.record);
 }
 
 export async function recordUpdateRunPhaseAsync(
@@ -129,31 +131,35 @@ export async function recordUpdateRunPhaseAsync(
   patch: UpdateRunPhasePatch = {},
   options: UpdateRunWriteOptions = {},
 ): Promise<UpdateRunRecord> {
-  const record = await recordUpdateRunMutationAsync(
+  const reply = await recordUpdateRunMutationAsync(
     runId,
     (input) => ({ type: "updateRuns.recordPhase", input: { ...input, phase, patch } }),
     options,
   );
-  if (!record) {
+  if (!reply) {
     throw new Error("Required update phase was not recorded");
   }
-  return record;
+  return reply.record;
 }
 
 export async function createUpdateRunAsync(
   input: CreateUpdateRunInput,
   options: UpdateRunWriteOptions = {},
 ): Promise<UpdateRunRecord> {
-  const run = { ...input, runId: input.runId ?? randomUUID() };
-  const record = await recordUpdateRunMutationAsync(
+  const run = {
+    ...input,
+    runId: input.runId ?? randomUUID(),
+    reportResult: !input.preview && (await readUpdateResultPolicy(options.env)),
+  };
+  const reply = await recordUpdateRunMutationAsync(
     run.runId,
     (mutation) => ({ type: "updateRuns.create", input: { ...mutation, run } }),
     options,
   );
-  if (!record) {
+  if (!reply) {
     throw new Error("Update run was not created");
   }
-  return record;
+  return reply.record;
 }
 
 export async function finishUpdateRunAsync(
@@ -161,15 +167,18 @@ export async function finishUpdateRunAsync(
   result: FinishUpdateRunInput,
   options: UpdateRunWriteOptions = {},
 ): Promise<UpdateRunRecord> {
-  const record = await recordUpdateRunMutationAsync(
+  const reply = await recordUpdateRunMutationAsync(
     runId,
     (input) => ({ type: "updateRuns.finish", input: { ...input, result } }),
     options,
   );
-  if (!record) {
+  if (!reply) {
     throw new Error("Update run outcome was not recorded");
   }
-  return record;
+  if (reply.updateResult) {
+    void sendUpdateResultTelemetry(reply.updateResult, { env: options.env });
+  }
+  return reply.record;
 }
 
 export async function recordUpdateRunVerificationAsync(
@@ -178,7 +187,7 @@ export async function recordUpdateRunVerificationAsync(
   options: UpdateRunWriteOptions & { onlyIfRunning?: true } = {},
 ): Promise<UpdateRunRecord> {
   const { onlyIfRunning } = options;
-  const record = await recordUpdateRunMutationAsync(
+  const reply = await recordUpdateRunMutationAsync(
     runId,
     (input) => ({
       type: "updateRuns.recordVerification",
@@ -186,10 +195,10 @@ export async function recordUpdateRunVerificationAsync(
     }),
     options,
   );
-  if (!record) {
+  if (!reply) {
     throw new Error("Update verification was not recorded");
   }
-  return record;
+  return reply.record;
 }
 
 export async function recordUpdateRunDiagnosticsAsync(
@@ -198,19 +207,12 @@ export async function recordUpdateRunDiagnosticsAsync(
   warn: (message: string) => void,
   options: UpdateRunWriteOptions & { preserveRecovery?: true } = {},
 ): Promise<UpdateRunRecord | undefined> {
-  if (
-    !(
-      diagnostics.failure ||
-      diagnostics.recovery ||
-      diagnostics.rollbackOutcome ||
-      diagnostics.verification
-    )
-  ) {
+  if (!hasUpdateRunDiagnostics(diagnostics)) {
     return undefined;
   }
   try {
     const { preserveRecovery } = options;
-    return await recordUpdateRunMutationAsync(
+    const reply = await recordUpdateRunMutationAsync(
       runId,
       (input) => ({
         type: "updateRuns.recordDiagnostics",
@@ -218,6 +220,7 @@ export async function recordUpdateRunDiagnosticsAsync(
       }),
       options,
     );
+    return reply?.record;
   } catch (error) {
     if (hasCommandProcessCleanupError(error)) {
       throw error;

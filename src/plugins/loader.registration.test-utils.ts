@@ -27,6 +27,10 @@ import {
   claimPluginInteractiveCallbackDedupe,
   commitPluginInteractiveCallbackDedupe,
 } from "./interactive-state.js";
+import {
+  memoryCapabilityFixtureSource,
+  memoryPublicArtifactsFixtureSource,
+} from "./loader-fixture-builders.test-support.js";
 import { loadOpenClawPlugins } from "./loader.js";
 import {
   makePluginLoaderTempDir,
@@ -44,6 +48,7 @@ import {
   expectCachePartitionByPluginSource,
   globalAfterEach0,
   globalAfterAll1,
+  writeFixtureJson,
 } from "./loader.test-harness.js";
 import {
   buildMemoryPromptSection,
@@ -189,18 +194,10 @@ describe("loadOpenClawPlugins", () => {
       );`,
     });
     for (const plugin of [first, second]) {
-      fs.writeFileSync(
-        path.join(plugin.dir, "openclaw.plugin.json"),
-        JSON.stringify(
-          {
-            id: plugin.id,
-            configSchema: { type: "object" },
-          },
-          null,
-          2,
-        ),
-        "utf-8",
-      );
+      writeFixtureJson(plugin.dir, "openclaw.plugin.json", {
+        id: plugin.id,
+        configSchema: { type: "object" },
+      });
     }
 
     clearInternalHooks();
@@ -673,25 +670,7 @@ describe("loadOpenClawPlugins", () => {
           id: "snapshot-memory",
           kind: "memory",
           register(api) {
-            api.registerMemoryCapability({
-              promptBuilder: () => ["snapshot memory section"],
-              flushPlanResolver: () => ({
-                softThresholdTokens: 10,
-                forceFlushTranscriptBytes: 20,
-                reserveTokensFloor: 30,
-                prompt: "snapshot",
-                systemPrompt: "snapshot",
-                relativePath: "memory/snapshot.md",
-              }),
-              runtime: {
-                async getMemorySearchManager() {
-                  return { manager: null, error: "snapshot" };
-                },
-                resolveMemoryBackendConfig() {
-                  return { backend: "builtin" };
-                },
-              },
-            });
+            api.registerMemoryCapability(${memoryCapabilityFixtureSource("snapshot memory section", "snapshot")});
           },
         };`,
     });
@@ -821,25 +800,7 @@ describe("loadOpenClawPlugins", () => {
           id: "failing-memory",
           kind: "memory",
           register(api) {
-            api.registerMemoryCapability({
-              promptBuilder: () => ["stale failure section"],
-              flushPlanResolver: () => ({
-                softThresholdTokens: 10,
-                forceFlushTranscriptBytes: 20,
-                reserveTokensFloor: 30,
-                prompt: "failed",
-                systemPrompt: "failed",
-                relativePath: "memory/failed.md",
-              }),
-              runtime: {
-                async getMemorySearchManager() {
-                  return { manager: null, error: "failed" };
-                },
-                resolveMemoryBackendConfig() {
-                  return { backend: "builtin" };
-                },
-              },
-            });
+            api.registerMemoryCapability(${memoryCapabilityFixtureSource("stale failure section", "failed")});
             api.registerMemoryPromptSupplement(() => ["stale failure supplement"]);
             api.registerMemoryPromptPreparation(async () => ["stale prepared supplement"]);
             api.registerMemoryCorpusSupplement({
@@ -996,20 +957,7 @@ describe("loadOpenClawPlugins", () => {
           id: "cached-memory-capability",
           kind: "memory",
           register(api) {
-            api.registerMemoryCapability({
-              publicArtifacts: {
-                async listArtifacts() {
-                  return [{
-                    kind: "memory-root",
-                    workspaceDir: ${JSON.stringify(workspaceDir)},
-                    relativePath: "MEMORY.md",
-                    absolutePath: ${JSON.stringify(absolutePath)},
-                    agentIds: ["main"],
-                    contentType: "markdown",
-                  }];
-                },
-              },
-            });
+            api.registerMemoryCapability(${memoryPublicArtifactsFixtureSource(workspaceDir, absolutePath)});
           },
         };`,
     });
@@ -1065,20 +1013,7 @@ describe("loadOpenClawPlugins", () => {
           id: "capability-survives-memory",
           kind: "memory",
           register(api) {
-            api.registerMemoryCapability({
-              publicArtifacts: {
-                async listArtifacts() {
-                  return [{
-                    kind: "memory-root",
-                    workspaceDir: ${JSON.stringify(workspaceDir)},
-                    relativePath: "MEMORY.md",
-                    absolutePath: ${JSON.stringify(absolutePath)},
-                    agentIds: ["main"],
-                    contentType: "markdown",
-                  }];
-                },
-              },
-            });
+            api.registerMemoryCapability(${memoryPublicArtifactsFixtureSource(workspaceDir, absolutePath)});
           },
         };`,
     });

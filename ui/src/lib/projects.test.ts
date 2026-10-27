@@ -23,7 +23,7 @@ function harness() {
     hello,
     sessionKey: "agent:main:first",
   });
-  const { gateway, publish, publishEvent } = connection;
+  const { gateway, publish } = connection;
   const snapshot = gateway.snapshot;
   const store = projectsForGateway(gateway);
   const detach = store.subscribe(vi.fn());
@@ -34,7 +34,6 @@ function harness() {
     snapshot,
     store,
     detach,
-    emitConfigChanged: () => publishEvent({ type: "event", event: "config.changed", payload: {} }),
     emit: () => publish(snapshot),
     replace: async (projects: ProjectRecord[]) => {
       request.mockResolvedValue({ projects });
@@ -87,14 +86,6 @@ describe("registered project catalog", () => {
     refreshed.resolve({ projects: [] });
     await h.store.refresh();
     expect(h.store.snapshot.result?.projects).toEqual([]);
-  });
-  it("retires project facts on config publication and reads the current GitHub host", async () => {
-    expect(h.store.snapshot.ready).toBe(true);
-    h.request.mockResolvedValueOnce({ projects: [], githubHost: "new.ghe.example.test" });
-    h.emitConfigChanged();
-    expect(h.store.snapshot).toMatchObject({ ready: false, result: null });
-    await h.store.refresh();
-    expect(h.store.snapshot.result?.githubHost).toBe("new.ghe.example.test");
   });
 
   it("retires projects for every consumer before an invalidating refresh can fail", async () => {

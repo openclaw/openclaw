@@ -1,4 +1,5 @@
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { pruneMapToMaxSize } from "../../infra/map-size.js";
 import type { PluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.types.js";
 import { shouldPreferProviderRuntimeResolvedModel } from "../../plugins/provider-runtime.js";
 import { getOrCreatePromise } from "../../shared/lazy-promise.js";
@@ -13,11 +14,6 @@ import {
   type PreparedAgentRuntimeAuthAttempt,
 } from "./prepare-auth.js";
 import type { AgentRuntimeAuthPlan } from "./types.js";
-
-type RuntimeModelAuthSelection =
-  | { authProfileId: string }
-  | { authProfileMode: ProviderModelRouteMaterializationAuthMode }
-  | undefined;
 
 export function providerUsesCredentialScopedModelMetadata(params: {
   provider: string;
@@ -51,7 +47,10 @@ export function resolveReusableRuntimeModelAuth(params: {
 }): {
   plan?: AgentRuntimeAuthPlan;
   authProfileId?: string;
-  modelAuth: RuntimeModelAuthSelection;
+  modelAuth:
+    | { authProfileId: string }
+    | { authProfileMode: ProviderModelRouteMaterializationAuthMode }
+    | undefined;
 } {
   const plan =
     params.plan &&
@@ -138,31 +137,6 @@ export function hasPreparedAuthAttemptModelMetadata(params: {
 
 const ROUTE_MODEL_MEMO_MAX_ENTRIES = 64;
 
-// Plans are fresh objects each turn; only their model-selection facts are reusable.
-function routeModelMemoKey(
-  plan: AgentRuntimeAuthPlan,
-  params: {
-    provider: string;
-    modelId: string;
-    requestedProfileId?: string;
-    providerUsesProfileScopedModelMetadata: boolean;
-  },
-): string {
-  const route = plan.modelRoute;
-  return JSON.stringify([
-    params.provider,
-    params.modelId,
-    plan.forwardedAuthProfileId ?? "",
-    plan.selectedAuthMode ?? "",
-    plan.selectedAuthFlow ?? "",
-    route?.api ?? "",
-    route?.baseUrl ?? "",
-    route?.authRequirement ?? "",
-    params.requestedProfileId?.trim() ?? "",
-    params.providerUsesProfileScopedModelMetadata,
-  ]);
-}
-
 export function createPreparedRuntimeModelMaterializer<Model extends RuntimeRouteModel>(params: {
   provider: string;
   modelId: string;
@@ -233,19 +207,27 @@ export function createPreparedRuntimeModelMaterializer<Model extends RuntimeRout
         return cached;
       }
     }
+    // Plans are fresh objects each turn; only their model-selection facts are reusable.
+    const route = memo ? plan.modelRoute : undefined;
     const materialized = memo
       ? getOrCreatePromise(
           memo,
-          routeModelMemoKey(plan, params),
+          JSON.stringify([
+            params.provider,
+            params.modelId,
+            plan.forwardedAuthProfileId ?? "",
+            plan.selectedAuthMode ?? "",
+            plan.selectedAuthFlow ?? "",
+            route?.api ?? "",
+            route?.baseUrl ?? "",
+            route?.authRequirement ?? "",
+            params.requestedProfileId?.trim() ?? "",
+            params.providerUsesProfileScopedModelMetadata,
+          ]),
           () => {
             // FIFO bounds retained metadata for a long-lived generation. The
             // shared promise helper evicts only its own rejection, even after churn.
-            if (memo.size >= ROUTE_MODEL_MEMO_MAX_ENTRIES) {
-              const oldest = memo.keys().next().value;
-              if (oldest !== undefined) {
-                memo.delete(oldest);
-              }
-            }
+            pruneMapToMaxSize(memo, ROUTE_MODEL_MEMO_MAX_ENTRIES - 1);
             return materializeUncached(plan);
           },
           { cacheRejections: false },

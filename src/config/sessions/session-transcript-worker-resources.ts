@@ -97,7 +97,7 @@ const historyDatabases = new Map<string, HistoryDatabaseResource>();
 // An exact lexical lookup derives from the physical owner; it owns no separate lifecycle.
 const historyReadCandidates = new Map<string, HistoryDatabaseResource>();
 const historySetTimeout = setTimeout;
-export const historyClearTimeout = clearTimeout;
+const historyClearTimeout = clearTimeout;
 const databaseWorkerLanes: SessionDatabaseWorkerLane[] = [];
 
 export function registerSessionTranscriptReaderLane<Pool extends SessionDatabaseWorkerLane["pool"]>(
@@ -120,9 +120,10 @@ function createHistoryLane(name: string, maxWorkers?: number) {
   );
 }
 
-export const historyLane = createHistoryLane(
-  "Session history",
-  SESSION_TRANSCRIPT_FOREGROUND_WORKERS,
+export const historyLane = registerSessionTranscriptReaderLane("Session history", (closed) =>
+  createSessionTranscriptHistoryPool(SESSION_TRANSCRIPT_FOREGROUND_WORKERS, closed, {
+    prewarmHistory: true,
+  }),
 );
 // Search readiness can await a host writer; it cannot occupy committed-history workers.
 export const transcriptSearchLane = createHistoryLane(
@@ -169,8 +170,7 @@ registerOpenClawStateDatabaseAsyncResource({
     // Per-database closes retain execution; whole-runtime close owns its final retirement.
     await joinOwnedWorkerTasks(
       databaseWorkerLanes.map(async (lane) => {
-        historyClearTimeout(lane.idleTimer);
-        lane.idleTimer = undefined;
+        clearDatabaseWorkerIdleRetirement(lane);
         await rotateDatabaseWorkers(lane);
       }),
     );
@@ -182,7 +182,7 @@ function retireIdleDatabaseWorkers(): void {
     if (lane.pending > 0 || lane.rotation || !lane.native) {
       continue;
     }
-    historyClearTimeout(lane.idleTimer);
+    clearDatabaseWorkerIdleRetirement(lane);
     void runInDetachedAsyncContext(() => rotateDatabaseWorkers(lane)).catch((error: unknown) => {
       process.emitWarning(`${lane.name} worker retirement failed: ${String(error)}`);
     });
@@ -205,6 +205,7 @@ export function pruneHistoryDatabases(): void {
 }
 
 export function releaseRetiredDatabaseCustody(lane: SessionDatabaseWorkerLane): void {
+  clearDatabaseWorkerIdleRetirement(lane);
   lane.native = false;
   for (const resource of historyDatabases.values()) {
     resource.nativeLanes.delete(lane);
@@ -227,15 +228,25 @@ export function rotateDatabaseWorkers(lane: SessionDatabaseWorkerLane): Promise<
   return rotation;
 }
 
-// Retire idle isolates independently of the longer SQLite handle retention window.
-export function armDatabaseWorkerIdleRetirement(lane: SessionDatabaseWorkerLane): void {
+export function clearDatabaseWorkerIdleRetirement(lane: SessionDatabaseWorkerLane): void {
   historyClearTimeout(lane.idleTimer);
+  lane.idleTimer = undefined;
+}
+
+// Only new work cancels the idle deadline; database cleanup must not keep
+// unrelated isolates warm beyond their own five-minute retention window.
+export function armDatabaseWorkerIdleRetirement(lane: SessionDatabaseWorkerLane): void {
   refreshDatabaseWorkerPressureSubscription();
   if (!lane.native || lane.pending > 0) {
+    clearDatabaseWorkerIdleRetirement(lane);
+    return;
+  }
+  if (lane.idleTimer) {
     return;
   }
   lane.idleTimer = runInDetachedAsyncContext(() =>
     historySetTimeout(() => {
+      lane.idleTimer = undefined;
       void rotateDatabaseWorkers(lane).catch((error: unknown) => {
         process.emitWarning(`${lane.name} worker retirement failed: ${String(error)}`);
       });
@@ -516,7 +527,7 @@ export async function withSessionHistoryWorkerReadCandidates<T>(
   const admissionFamilies = capturedCandidates
     .filter((candidate) => candidate.scope === "sibling-family")
     .map((candidate) => path.dirname(candidate.physicalPath));
-  historyClearTimeout(lane.idleTimer);
+  clearDatabaseWorkerIdleRetirement(lane);
   lane.pending++;
   refreshDatabaseWorkerPressureSubscription();
   try {

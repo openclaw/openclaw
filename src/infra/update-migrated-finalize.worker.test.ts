@@ -1,17 +1,25 @@
+import { setImmediate } from "node:timers/promises";
 import { format } from "node:util";
-import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, expect, expectTypeOf, it, vi } from "vitest";
 import "../test-utils/prepare-compiled-subprocesses.js";
 import type { UpdateCommandOptions } from "../cli/update-cli/shared.js";
+import type { MigratedUpdateFinalizationInput } from "../cli/update-cli/update-command-migrated-types.js";
 import { setLoggerOverride } from "../logging/logger.js";
 import { loggingState } from "../logging/state.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { CommandProcessCleanupError } from "../process/exec-result.js";
 import { defaultRuntime } from "../runtime.js";
 import { createDeferredCore } from "../shared/deferred.js";
+import { UPDATE_RUN_ID_ENV } from "./update-control-plane-sentinel.js";
+import {
+  POST_CORE_UPDATE_ENV,
+  POST_CORE_UPDATE_RESULT_PATH_ENV,
+} from "./update-post-core-context.js";
 
 const fixture = vi.hoisted(() => ({
   close: vi.fn<() => Promise<void>>(),
   closeNative: vi.fn<() => Promise<void>>(),
+  closePostgres: vi.fn<() => Promise<void>>(),
   budget: vi.fn(),
   activation: vi.fn(),
   finish: vi.fn(),
@@ -77,6 +85,11 @@ vi.mock("../state/openclaw-state-db.js", () => ({
 // mock-isolation: Finalizer fixtures observe cleanup without closing the test process's native workers.
 vi.mock("./worker-native-lifecycle.js", () => ({
   closeDefaultRetainedNativeWorkerSource: fixture.closeNative,
+}));
+// mock-isolation: Keep executable cleanup scoped to the synthetic finalization fixture.
+vi.mock("./postgres-sync/pool.js", () => ({
+  preparePostgresPoolForUpdate: vi.fn(async () => {}),
+  closePostgresPool: fixture.closePostgres,
 }));
 vi.mock("./update-finalization-budget.js", () => ({
   resolveUpdateFinalizationTimeoutMs: fixture.budget,
@@ -181,12 +194,20 @@ afterEach(() => {
 
 async function runWorker(
   input: unknown,
-  mode?: "--check" | "--doctor",
+  mode?: "--check" | "--doctor" | "--post-core",
   cleanup?: () => Promise<void>,
+  nativeCleanup?: () => Promise<void>,
 ) {
   const settled = createDeferredCore();
   fixture.close.mockImplementation(async () => cleanup?.());
-  fixture.closeNative.mockImplementation(async () => settled.resolve());
+  fixture.closeNative.mockImplementation(async () => {
+    try {
+      await nativeCleanup?.();
+    } finally {
+      settled.resolve();
+    }
+  });
+  fixture.closePostgres.mockResolvedValue(undefined);
   process.argv = [process.execPath, "update-migrated-finalize.worker.js", ...(mode ? [mode] : [])];
   vi.spyOn(process.stdin, Symbol.asyncIterator).mockImplementation(async function* () {
     yield JSON.stringify(input);
@@ -194,7 +215,101 @@ async function runWorker(
   });
   await import("./update-migrated-finalize.worker.js");
   await settled.promise;
+  await setImmediate();
 }
+
+it.each(["database", "native"] as const)(
+  "retains PostgreSQL services when the %s owner drain rejects",
+  async (owner) => {
+    const failure = new Error(`${owner} drain failed`);
+    const reject = async () => {
+      throw failure;
+    };
+    await runWorker(
+      {},
+      "--check",
+      owner === "database" ? reject : undefined,
+      owner === "native" ? reject : undefined,
+    );
+
+    expect(fixture.close).toHaveBeenCalledOnce();
+    expect(fixture.closeNative).toHaveBeenCalledOnce();
+    expect(fixture.closePostgres).not.toHaveBeenCalled();
+    expect(process.exitCode).toBe(1);
+    expect(stderr.join("")).toContain(failure.message);
+  },
+);
+
+it("keeps live callbacks and deadline owners out of the migrated wire contract", () => {
+  type Options = MigratedUpdateFinalizationInput["params"]["opts"];
+  expectTypeOf<Options>().not.toHaveProperty("onResult");
+  expectTypeOf<NonNullable<Options["run"]>>().not.toHaveProperty("deadline");
+});
+
+it("refuses a malformed post-core timeout before invoking the updater", async () => {
+  const update = vi.fn();
+  // mock-isolation: Check input rejection without running package updates against the host.
+  vi.doMock("../cli/update-cli/update-command.js", () => ({ updateCommand: update }));
+  vi.stubEnv(POST_CORE_UPDATE_ENV, "1");
+  vi.stubEnv(POST_CORE_UPDATE_RESULT_PATH_ENV, "/synthetic/post-core.json");
+  vi.stubEnv(UPDATE_RUN_ID_ENV, "synthetic-run");
+  try {
+    await runWorker(
+      {
+        executor: {},
+        runId: "synthetic-run",
+        root: process.cwd(),
+        opts: { timeout: 42 },
+      },
+      "--post-core",
+    );
+    await setImmediate();
+  } finally {
+    vi.unstubAllEnvs();
+    vi.doUnmock("../cli/update-cli/update-command.js");
+  }
+
+  expect(update).not.toHaveBeenCalled();
+  expect(fixture.activation).not.toHaveBeenCalled();
+  expect(process.exitCode).toBe(1);
+  expect(stderr.join("")).toContain("timeout");
+  expect(fixture.closePostgres).toHaveBeenCalledOnce();
+});
+
+it.each([
+  { field: "repair", value: "false" },
+  { field: "requester", value: { senderId: 42 } },
+  { field: "databaseGenerations", value: { "/synthetic/agent.sqlite": false } },
+])("refuses malformed Doctor $field before maintenance", async ({ field, value }) => {
+  const doctor = vi.fn();
+  // mock-isolation: Check input rejection without running maintenance against the host.
+  vi.doMock("../flows/doctor-health.js", () => ({ runDoctorHealthFlow: doctor }));
+  process.env.OPENCLAW_UPDATE_POST_INSTALL_DOCTOR_RESULT_PATH = "/synthetic/doctor.json";
+  try {
+    await runWorker(
+      {
+        executor: {},
+        runId: "synthetic-run",
+        root: "/synthetic",
+        configInputHash: "hash",
+        repair: true,
+        [field]: value,
+      },
+      "--doctor",
+    );
+    // The executable reports its terminal error after all cleanup promises settle.
+    await setImmediate();
+  } finally {
+    delete process.env.OPENCLAW_UPDATE_POST_INSTALL_DOCTOR_RESULT_PATH;
+    vi.doUnmock("../flows/doctor-health.js");
+  }
+
+  expect(doctor).not.toHaveBeenCalled();
+  expect(fixture.stopService).not.toHaveBeenCalled();
+  expect(fixture.activation).not.toHaveBeenCalled();
+  expect(process.exitCode).toBe(1);
+  expect(stderr.join("")).toContain(field);
+});
 
 it.each(["json", "human", "check"] as const)(
   "preserves %s stdout through finalization and asynchronous cleanup",
@@ -476,6 +591,105 @@ it.each(["inspected", "legacy-unavailable", "windows-suspended"] as const)(
   },
 );
 
+it("does not stop a supervised predecessor when the delegated Doctor deadline expires during startup", async () => {
+  const doctor = vi.fn();
+  let wallNow = 1_000;
+  let elapsedMs = 0;
+  vi.spyOn(performance, "now").mockImplementation(() => elapsedMs);
+  const deadlineAtMs = wallNow + 500;
+  const errorReported = createDeferredCore();
+  vi.spyOn(process.stderr, "write").mockImplementation((value) => {
+    stderr.push(String(value));
+    errorReported.resolve();
+    return true;
+  });
+  vi.spyOn(Date, "now").mockImplementation(() => wallNow);
+  // mock-isolation: Keep real Doctor repair, service and database effects outside this worker fixture.
+  vi.doMock("../flows/doctor-health.js", () => {
+    wallNow -= 90_000;
+    elapsedMs = 501;
+    return { runDoctorHealthFlow: doctor };
+  });
+  fixture.ownerLease.mockReturnValue({ state: "live", mode: "supervised" });
+  process.env.OPENCLAW_UPDATE_POST_INSTALL_DOCTOR_RESULT_PATH = "/synthetic/doctor.json";
+  try {
+    await runWorker(
+      {
+        executor: {},
+        runId: "synthetic-run",
+        root: "/synthetic",
+        configInputHash: "hash",
+        repair: true,
+        serviceInspectionDeadlineAtMs: deadlineAtMs,
+      },
+      "--doctor",
+    );
+    // Database cleanup settles before the executable reports its terminal error.
+    await errorReported.promise;
+  } finally {
+    delete process.env.OPENCLAW_UPDATE_POST_INSTALL_DOCTOR_RESULT_PATH;
+    vi.doUnmock("../flows/doctor-health.js");
+  }
+
+  expect(fixture.stopService).not.toHaveBeenCalled();
+  expect(doctor).not.toHaveBeenCalled();
+  expect(stderr.join("")).toContain("Doctor service-inspection deadline has expired.");
+  expect(process.exitCode).toBe(1);
+});
+
+it("bounds a supervised predecessor stop by the remaining Doctor deadline", async () => {
+  const doctor = vi.fn();
+  const deadlineAtMs = 1_500;
+  vi.spyOn(Date, "now").mockReturnValue(1_000);
+  vi.spyOn(performance, "now").mockReturnValue(0);
+  // mock-isolation: Keep real Doctor repair, service and database effects outside this worker fixture.
+  vi.doMock("../flows/doctor-health.js", () => ({ runDoctorHealthFlow: doctor }));
+  fixture.ownerLease.mockReturnValue({ state: "live", mode: "supervised" });
+  fixture.recordStep.mockImplementation(async (runId: string, step: unknown) => ({
+    runId,
+    status: "running",
+    steps: [step],
+  }));
+  const stoppedState = {
+    stopped: true,
+    stoppedAtMs: 7,
+    inspected: true,
+    runtimeInspected: true,
+    running: true,
+    servicePid: 631,
+    serviceManagerUid: 1000,
+    serviceUpdateVerdict: { kind: "owned", root: "/synthetic", fingerprint: "f" },
+  };
+  fixture.stopService.mockImplementation(
+    async (params: { timeoutMs?: number; onStopped?: (s: unknown) => void }) => {
+      params.onStopped?.(stoppedState);
+      return stoppedState;
+    },
+  );
+  process.env.OPENCLAW_UPDATE_POST_INSTALL_DOCTOR_RESULT_PATH = "/synthetic/doctor.json";
+  try {
+    await runWorker(
+      {
+        executor: {},
+        runId: "synthetic-run",
+        root: "/synthetic",
+        configInputHash: "hash",
+        repair: true,
+        serviceInspectionDeadlineAtMs: deadlineAtMs,
+      },
+      "--doctor",
+    );
+  } finally {
+    delete process.env.OPENCLAW_UPDATE_POST_INSTALL_DOCTOR_RESULT_PATH;
+    vi.doUnmock("../flows/doctor-health.js");
+  }
+
+  expect(fixture.stopService).toHaveBeenCalledExactlyOnceWith(
+    expect.objectContaining({ phase: "prepare", timeoutMs: deadlineAtMs - 1_000 }),
+  );
+  expect(doctor).toHaveBeenCalledOnce();
+});
+
 it.each([
   ["supervised", false],
   ["supervised", true],
@@ -487,6 +701,14 @@ it.each([
     const owner = mode ? { state: "live", mode } : undefined;
     const stops = mode === "supervised";
     const doctor = vi.fn();
+    const databasePluginOwners = {
+      fixture: {
+        id: "fixture",
+        rootDir: "/synthetic/plugin",
+        source: "/synthetic/plugin/index.ts",
+        origin: "bundled",
+      },
+    };
     vi.doMock("../flows/doctor-health.js", () => ({ runDoctorHealthFlow: doctor }));
     fixture.ownerLease.mockReturnValue(owner);
     fixture.recordStep.mockImplementation(async (runId: string, step: unknown) => ({
@@ -521,6 +743,7 @@ it.each([
           repair: true,
           fullIntegrityCheck: true,
           databaseGenerations: { "/synthetic/agent.sqlite": null },
+          databasePluginOwners,
         },
         "--doctor",
       );
@@ -535,7 +758,10 @@ it.each([
       expect(doctor, stderr.join("\n")).toHaveBeenCalledExactlyOnceWith(
         expect.anything(),
         expect.objectContaining({ fullIntegrityCheck: true }),
-        expect.objectContaining({ databaseGenerations: { "/synthetic/agent.sqlite": null } }),
+        expect.objectContaining({
+          databaseGenerations: { "/synthetic/agent.sqlite": null },
+          databasePluginOwners,
+        }),
       );
     }
     if (stops) {

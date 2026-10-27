@@ -10,6 +10,7 @@ import {
   validateConfigObjectRaw,
   validateConfigObjectRawWithPlugins,
 } from "../config/validation.js";
+import { CronStoreSelectionRequiredError } from "../cron/store/selection-error.js";
 import { getOpenClawDatabaseMaintenanceScope } from "../state/openclaw-state-db-async-lifecycle.js";
 import {
   projectRetiredHeartbeatConfig,
@@ -125,8 +126,15 @@ export async function prepareAutomaticHeartbeatRepair(
   if (isDeepStrictEqual(config, snapshot.sourceConfig)) {
     const { hasPendingHeartbeatCadenceMigration } =
       await import("./doctor-heartbeat-cadence-migration.js");
-    if (!hasPendingHeartbeatCadenceMigration(snapshot.sourceConfig, env)) {
-      return undefined;
+    try {
+      if (!hasPendingHeartbeatCadenceMigration(snapshot.sourceConfig, env)) {
+        return undefined;
+      }
+    } catch (error) {
+      if (!(error instanceof CronStoreSelectionRequiredError)) {
+        throw error;
+      }
+      // Maintenance may establish the binding; preflight owns any remaining selection prompt.
     }
   }
   if (

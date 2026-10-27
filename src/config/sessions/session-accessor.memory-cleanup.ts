@@ -41,8 +41,7 @@ export function applyMemorySessionEntryCleanup(
     ) {
       throw new Error("Memory bulk cleanup does not support SQLite repair or upsert callbacks");
     }
-    // cleanupArchivedTranscripts owns published disk archives. Removing a memory entry
-    // already discards its retained windows; archiving an entry preserves them.
+    // Removing a memory entry discards its retained windows; archiving preserves them.
     const empty: SessionEntryLifecycleMutationResult = {
       beforeCount: 0,
       removedEntries: 0,

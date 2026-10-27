@@ -1,22 +1,31 @@
 /* @vitest-environment jsdom */
 
+import { createSignal } from "solid-js";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import type { SessionUsageTimeSeries } from "../../../../src/shared/session-usage-timeseries-types.js";
 import { createDeferred as deferred } from "../../../../test/helpers/promise.js";
+import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
+import { mountSolid } from "../../test-helpers/mount-solid.ts";
+import { createSolidApplicationContextProvider } from "../../test-helpers/solid-application-context.tsx";
+import { flush } from "../../test-helpers/solid-settle.ts";
 import type { UsageSessionEntry } from "./types.ts";
 import {
   createUsagePageFixture,
   usageCalls,
+  usageButton,
   textOf,
   cacheSnapshot,
   cleanupUsagePageTest,
   contextWeight,
+  contextWithClient,
   focusDocument,
   refreshButton,
   usagePoints,
   loadUsagePage,
   selectUsageSession,
 } from "./usage-page.test-support.ts";
+import { UsagePageContent } from "./usage-page.tsx";
+import { usageFixture } from "./view.test-support.ts";
 
 beforeEach(focusDocument);
 afterEach(cleanupUsagePageTest);
@@ -98,6 +107,115 @@ function dragTimelineRange(page: Pick<HTMLElement, "querySelector">) {
   move();
   return { move, end: () => document.dispatchEvent(new MouseEvent("mouseup")) };
 }
+
+it("keeps roster rows distinct when the selected detail changes to another session", () => {
+  const { result } = cacheSnapshot("fresh");
+  const sessions = ["A", "B", "C"].map((label) => ({
+    key: `agent:main:detail-${label.toLowerCase()}`,
+    label: `Visible ${label}`,
+    agentId: "main",
+    usage: { ...result.totals },
+  }));
+  const initial = usageFixture(
+    { sessions, totals: result.totals, selectedSession: sessions[2] },
+    { selectedSessions: [sessions[2]!.key] },
+  );
+  const [state, setState] = createSignal(initial);
+  const context = contextWithClient(createTestGatewayClient(async () => ({})));
+  const { container } = mountSolid(
+    () =>
+      UsagePageContent({
+        get state() {
+          return state();
+        },
+        result: null,
+      }),
+    { wrapper: createSolidApplicationContextProvider(context).wrapper },
+  );
+  flush();
+  const buttons = () => [
+    ...container.querySelectorAll<HTMLButtonElement>(
+      ".session-bars:not(.session-bars--selected) .session-bar-selection",
+    ),
+  ];
+  const original = buttons();
+  expect(original.map((button) => button.getAttribute("aria-label"))).toEqual([
+    "Visible A",
+    "Visible B",
+    "Visible C",
+  ]);
+  expect(textOf(container, ".session-detail-title")).toBe("Visible C");
+
+  const hydrated = { ...sessions[0]!, usage: { ...sessions[0]!.usage, totalTokens: 900 } };
+  setState(
+    usageFixture(
+      { ...initial.data, selectedSession: hydrated, overview: undefined },
+      { ...initial.filters, selectedSessions: [hydrated.key] },
+    ),
+  );
+  flush();
+
+  expect(textOf(container, ".session-detail-title")).toBe("Visible A");
+  expect(textOf(container, ".session-detail-stats strong")).toBe("900");
+  expect(buttons().map((button) => button.getAttribute("aria-label"))).toEqual([
+    "Visible A",
+    "Visible B",
+    "Visible C",
+  ]);
+  buttons().forEach((button, index) => expect(button).toBe(original[index]));
+  expect(buttons().map((button) => button.getAttribute("aria-pressed"))).toEqual([
+    "true",
+    "false",
+    "false",
+  ]);
+});
+
+it("retains chart bars across conversation changes and updates chart modes", async () => {
+  const { page } = await timelineFixture("stable-instance", "[Tool: read]\nRetained turn");
+  await vi.waitFor(() => expect(page.querySelectorAll(".session-log-tools")).toHaveLength(3));
+  await Promise.all([page.read().detail.timeSeriesRead, page.read().detail.context.read]);
+  await page.updateComplete;
+  const bars = [...page.querySelectorAll(".ts-bar")];
+  expect(bars).toHaveLength(3);
+  const expectRetainedBars = () => {
+    const current = [...page.querySelectorAll(".ts-bar")];
+    expect(current).toHaveLength(bars.length);
+    current.forEach((bar, index) => expect(bar).toBe(bars[index]));
+  };
+
+  usageButton(page, "Expand All", ".session-logs-header button").click();
+  await page.updateComplete;
+  expect(
+    [...page.querySelectorAll<HTMLDetailsElement>(".session-log-tools")].every(
+      (tools) => tools.open,
+    ),
+  ).toBe(true);
+  expectRetainedBars();
+
+  const search = page.querySelector<HTMLInputElement>(".session-log-filters input[type=text]")!;
+  for (const [query, rows] of [
+    ["absent", 0],
+    ["Retained", 3],
+  ] as const) {
+    search.value = query;
+    search.dispatchEvent(new Event("input", { bubbles: true }));
+    await page.updateComplete;
+    expect(page.querySelectorAll(".session-log-entry")).toHaveLength(rows);
+    expectRetainedBars();
+  }
+
+  usageButton(page, "Cumulative", ".timeseries-controls button").click();
+  await page.updateComplete;
+  expect(page.querySelectorAll(".ts-bar")[2]?.getAttribute("aria-label")).toContain("300 tokens");
+  expect(page.querySelector(".ts-bar.usage-token-input")).toBeNull();
+  usageButton(page, "Per Turn", ".timeseries-controls button").click();
+  await page.updateComplete;
+  expect(page.querySelectorAll(".ts-bar")[2]?.getAttribute("aria-label")).toContain("100 tokens");
+  expect(page.querySelectorAll(".ts-bar.usage-token-input")).toHaveLength(3);
+  usageButton(page, "Total", ".timeseries-controls button").click();
+  await page.updateComplete;
+  expect(page.querySelector(".ts-bar.usage-token-input")).toBeNull();
+});
 
 it.each([
   { refresh: "automatic", points: 1, activeDrag: false },
@@ -198,8 +316,18 @@ it.each([
     expect.soft(page.read().detail).toMatchObject({
       timeSeries: null,
       sessionLogs: null,
-      timeSeriesStatus: { error: "Replacement details unavailable" },
-      sessionLogsStatus: { error: "Replacement details unavailable" },
+      timeSeriesStatus: {
+        error: "Replacement details unavailable",
+        hasLoaded: false,
+        stale: false,
+        awaitingGateway: false,
+      },
+      sessionLogsStatus: {
+        error: "Replacement details unavailable",
+        hasLoaded: false,
+        stale: false,
+        awaitingGateway: false,
+      },
     });
     for (const method of ["sessions.usage.timeseries", "sessions.usage.logs"]) {
       const requests = request.mock.calls.slice(beforeRefresh).filter(([name]) => name === method);
