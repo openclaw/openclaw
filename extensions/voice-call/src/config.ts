@@ -30,6 +30,10 @@ import { isTailscalePortAllowed, VoiceCallTailscaleConfigSchema } from "./tailsc
 const E164Schema = z
   .string()
   .regex(/^\+[1-9]\d{1,14}$/, "Expected E.164 format, e.g. +15550001234");
+// The exact end check also rejects a trailing newline (JavaScript's $ alone does not).
+const LiveKitExtensionNumberSchema = z
+  .string()
+  .regex(/^[0-9]{1,15}$(?![\s\S])/, "Expected a 1–15 digit LiveKit PBX extension");
 
 const InboundPolicySchema = z.enum(["disabled", "allowlist", "pairing", "open"]);
 
@@ -321,7 +325,7 @@ const VoiceCallConfigSchema = z
 
     plivo: PlivoConfigSchema.optional(),
 
-    fromNumber: E164Schema.optional(),
+    fromNumber: z.union([E164Schema, LiveKitExtensionNumberSchema]).optional(),
 
     /** Default outbound target. */
     toNumber: E164Schema.optional(),
@@ -399,6 +403,16 @@ const VoiceCallConfigSchema = z
     responseTimeoutMs: z.number().int().positive().default(30000),
   })
   .strict()
+  .refine(
+    ({ provider, fromNumber }) =>
+      provider === "livekit" ||
+      fromNumber === undefined ||
+      E164Schema.safeParse(fromNumber).success,
+    {
+      path: ["fromNumber"],
+      message: "Non-LiveKit providers require an E.164 fromNumber",
+    },
+  )
   .refine(isTailscalePortAllowed, {
     path: ["tailscale", "port"],
     message: "Tailscale Funnel HTTPS port must be one of 443, 8443, 10000",

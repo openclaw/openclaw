@@ -30,6 +30,7 @@
     },
     "fromNumber": {
       "label": "From Number",
+      "help": "E.164 caller ID; LiveKit also accepts a 1–15 digit PBX extension.",
       "placeholder": "+15550001234"
     },
     "toNumber": {
@@ -352,6 +353,20 @@
   "configSchema": {
     "type": "object",
     "additionalProperties": false,
+    "allOf": [
+      {
+        "if": {
+          "required": ["provider"],
+          "properties": { "provider": { "const": "livekit" } }
+        },
+        "then": {},
+        "else": {
+          "properties": {
+            "fromNumber": { "type": "string", "pattern": "^\\+[1-9]\\d{1,14}$" }
+          }
+        }
+      }
+    ],
     "properties": {
       "enabled": {
         "type": "boolean"
@@ -482,7 +497,10 @@
       },
       "fromNumber": {
         "type": "string",
-        "pattern": "^\\+[1-9]\\d{1,14}$"
+        "anyOf": [
+          { "pattern": "^\\+[1-9]\\d{1,14}$" },
+          { "pattern": "^[0-9]{1,15}$(?![\\s\\S])" }
+        ]
       },
       "toNumber": {
         "type": "string",

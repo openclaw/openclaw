@@ -19,6 +19,65 @@ import {
 } from "./config.js";
 import { createVoiceCallBaseConfig } from "./test-fixtures.js";
 
+// The manifest validates CLI config before the runtime normalizer runs.
+describe("LiveKit extension From numbers", () => {
+  const manifest = JSON.parse(
+    readFileSync(new URL("../openclaw.plugin.json", import.meta.url), "utf8"),
+  ) as { configSchema: Record<string, unknown> };
+  const acceptsManifest = (value: unknown) =>
+    validateJsonSchemaValue({ schema: manifest.configSchema, value }).ok;
+
+  it.each(["6018", "0012", "9", "123456789012345"])(
+    "preserves the exact digit-only LiveKit extension %s in runtime and manifest",
+    (fromNumber) => {
+      const input = { provider: "livekit", fromNumber, toNumber: "+15550000002" };
+      expect(normalizeVoiceCallConfig(input).fromNumber).toBe(fromNumber);
+      expect(acceptsManifest(input)).toBe(true);
+    },
+  );
+
+  it.each(["twilio", "telnyx", "plivo", "mock", undefined])(
+    "keeps E.164 From validation for provider %s",
+    (provider) => {
+      const input = { ...(provider ? { provider } : {}), fromNumber: "6018" };
+      expect(() => normalizeVoiceCallConfig(input)).toThrow();
+      expect(acceptsManifest(input)).toBe(false);
+      const e164 = { ...input, fromNumber: "+15550000001" };
+      expect(normalizeVoiceCallConfig(e164).fromNumber).toBe("+15550000001");
+      expect(acceptsManifest(e164)).toBe(true);
+    },
+  );
+
+  it.each([
+    "",
+    "1234567890123456",
+    " 6018",
+    "6018 ",
+    "6018\n",
+    "6018\r\n",
+    "60\u000018",
+    "sip:6018",
+    "6018@pbx.test",
+    "60;18",
+    "60*18",
+    "６０１８",
+  ])("rejects invalid LiveKit From %j in both validation owners", (fromNumber) => {
+    const input = { provider: "livekit", fromNumber };
+    expect(() => normalizeVoiceCallConfig(input)).toThrow();
+    expect(acceptsManifest(input)).toBe(false);
+  });
+
+  it("does not allow an extension recipient or inbound allowlist entry", () => {
+    for (const input of [
+      { provider: "livekit", fromNumber: "+15550000001", toNumber: "6018" },
+      { provider: "livekit", fromNumber: "+15550000001", allowFrom: ["6018"] },
+    ]) {
+      expect(() => normalizeVoiceCallConfig(input)).toThrow();
+      expect(acceptsManifest(input)).toBe(false);
+    }
+  });
+});
+
 describe("errand features config", () => {
   it("keeps delivery, callbacks and machine detection disabled unless configured", () => {
     const config = normalizeVoiceCallConfig({});

@@ -106,6 +106,7 @@ async function harness(
   policy: "open" | "allowlist" = "open",
   server = livekit,
   handlesAgentConsult = true,
+  fromNumber = from,
 ) {
   let participants: Array<{ identity: string; sid: string; kind: number }> = [
     { identity: "sip-inbound", sid: "PA_in", kind: 3 },
@@ -141,7 +142,7 @@ async function harness(
     agentId: "main",
     provider: "livekit",
     livekit: server,
-    fromNumber: from,
+    fromNumber,
     inboundPolicy: policy,
     allowFrom: [],
     realtime: { enabled: true },
@@ -335,6 +336,24 @@ describe("LiveKit telephony lifecycle", () => {
     await stopping;
     expect(h.manager.getActiveCalls()).toHaveLength(0);
     expect(h.close).toHaveBeenCalledOnce();
+    await h.handler.close();
+  });
+
+  it("preserves an extension From through normalization, manager state and the SIP SDK", async () => {
+    const h = await harness("open", livekit, true, "6018");
+    const result = await h.manager.initiateCall(to, undefined, { mode: "conversation" });
+    expect(result.success).toBe(true);
+    const call = h.manager.getCall(result.callId)!;
+    expect(call.from).toBe("6018");
+    expect(call.to).toBe(to);
+    expect(h.sip.createSipParticipant).toHaveBeenCalledWith(
+      "ST_out",
+      to,
+      call.providerCallId,
+      expect.objectContaining({ fromNumber: "6018", waitUntilAnswered: true }),
+    );
+    await h.manager.endCall(result.callId);
+    await h.provider.stop();
     await h.handler.close();
   });
 
