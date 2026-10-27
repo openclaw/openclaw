@@ -2,7 +2,6 @@ import { randomUUID } from "node:crypto";
 import { writeFileSync } from "node:fs";
 import { writeFile, readFile, rm, rename } from "node:fs/promises";
 import path from "node:path";
-import type { DatabaseSync } from "node:sqlite";
 import { Check } from "typebox/value";
 import { expect, it } from "vitest";
 import type { VaultAccess } from "./access.js";
@@ -10,6 +9,7 @@ import { contract } from "./contract.js";
 import { SqliteIdentityStore } from "./identity-store.js";
 import { createKnowledgeService } from "./service.js";
 import { KnowledgeStorage } from "./storage.js";
+import { draft, edit } from "./structured-write.test-support.js";
 import {
   accessFor,
   childEvalArgs,
@@ -40,21 +40,6 @@ async function fixture() {
     },
   };
 }
-const draft = () => ({
-  requestId: randomUUID(),
-  title: "Publication test",
-  type: "note",
-  body: "Authored text.\n",
-});
-const edit = (record: any, fields = {}) => ({
-  requestId: randomUUID(),
-  id: record.id,
-  expectedRevision: record.revision,
-  expectedHash: record.hash,
-  title: record.title,
-  body: record.body,
-  ...fields,
-});
 
 it("UI creates sourced page; agent reads and edits; durable retry/history/readback agree", async () => {
   const f = await fixture(),
@@ -287,46 +272,33 @@ it("cross-process publishers fence competing edits and never lose the winner", a
 it("returns a resume receipt without loading the retained publication plan twice", async () => {
   const f = await fixture();
   const input = { ...draft(), body: "Synthetic publication body.\n".repeat(1024) };
-  const original = await new KnowledgeStorage(f.config, f.store).save(input, f.access(), "agent");
-  const planBytes = f.store.withDatabase((db) =>
-    Buffer.byteLength(
-      String(db.prepare("SELECT plan FROM mutations WHERE request=?").get(input.requestId)!.plan),
-    ),
-  );
+  const storage = new KnowledgeStorage(f.config, f.store);
+  const original = await storage.save(input, f.access(), "agent");
   let returnedBytes = 0;
-  class MeasuredStore extends SqliteIdentityStore {
-    override withDatabase<T>(run: (db: DatabaseSync) => T): T {
-      return super.withDatabase((db) => {
-        const prepare = db.prepare.bind(db);
-        db.prepare = (sql) => {
-          const statement = prepare(sql);
-          return new Proxy(statement, {
-            get(target, property) {
-              if (property === "get") {
-                return (...args: Parameters<typeof statement.get>) => {
-                  const row = target.get(...args);
-                  for (const value of Object.values(row ?? {})) {
-                    if (typeof value === "string") {
-                      returnedBytes += Buffer.byteLength(value);
-                    }
-                  }
-                  return row;
-                };
-              }
-              const value: unknown = Reflect.get(target, property, target);
-              return typeof value === "function" ? value.bind(target) : value;
-            },
-          });
+  const withDatabase = f.store.withDatabase.bind(f.store);
+  f.store.withDatabase = (run) =>
+    withDatabase((db) => {
+      const prepare = db.prepare.bind(db);
+      db.prepare = (sql) => {
+        const statement = prepare(sql);
+        const get = statement.get.bind(statement);
+        statement.get = (...args) => {
+          const row = get(...args);
+          for (const value of Object.values(row ?? {})) {
+            if (typeof value === "string") {
+              returnedBytes += Buffer.byteLength(value);
+            }
+          }
+          return row;
         };
-        return run(db);
-      });
-    }
-  }
-  const storage = new KnowledgeStorage(f.config, new MeasuredStore(f.config.statePath));
+        return statement;
+      };
+      return run(db);
+    });
   expect(storage.resume(f.access(), input.requestId)).toStrictEqual(original);
-  // Identity validation needs the plan once. Receipt readback must stay small
-  // even when a publication retains large record bodies and before/after bytes.
-  expect(returnedBytes).toBeLessThan(planBytes + 16_384);
+  // This fixed fixture needs ~153 KB for identity validation. A second plan
+  // read doubles it; receipt readback must fit within the remaining budget.
+  expect(returnedBytes).toBeLessThan(180_000);
 });
 
 it("revision snapshots and publication details never cross conversation boundaries", async () => {

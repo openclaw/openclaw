@@ -141,15 +141,13 @@ export class StorageJournal extends StorageBase {
       this.flushGit(access);
     }
     access.assertCurrent();
-    return this.store.withDatabase(
+    return this.store.withDatabase((db) => {
+      const row = db
+        .prepare("SELECT receipt FROM mutations WHERE scope=? AND request=?")
+        .get(scopeKey(access.scope), requestId)!;
       // SAFETY: receipts are serialized Receipt values written by this storage layer.
-      (db) => {
-        const row = db
-          .prepare("SELECT receipt FROM mutations WHERE scope=? AND request=?")
-          .get(scopeKey(access.scope), requestId)!;
-        return JSON.parse(String(row.receipt)) as Receipt;
-      },
-    );
+      return JSON.parse(String(row.receipt)) as Receipt;
+    });
   }
   history(access: VaultAccess, input: { offset?: number; limit?: number; id?: string }) {
     access.assertCurrent();
