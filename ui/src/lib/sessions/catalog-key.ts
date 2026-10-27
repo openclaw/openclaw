@@ -39,20 +39,28 @@ export async function lookupCatalogSession(params: {
   key: CatalogSessionKey;
   agentId: string;
   isCurrent: () => boolean;
+  signal?: AbortSignal;
 }) {
   const { agentId, client, key } = params;
   let cursor: string | undefined;
   const seenCursors = new Set<string>();
   let host: SessionCatalogHost | null = null;
   for (let pageIndex = 0; pageIndex < CATALOG_SESSION_LOOKUP_MAX_PAGES; pageIndex += 1) {
-    const listed = await client.request<SessionsCatalogListResult>("sessions.catalog.list", {
-      agentId,
-      catalogId: key.catalogId,
-      hostIds: [key.hostId],
-      limitPerHost: CATALOG_SESSION_LOOKUP_PAGE_LIMIT,
-      ...(cursor ? { cursors: { [key.hostId]: cursor } } : {}),
-    });
-    if (!params.isCurrent()) {
+    if (params.signal?.aborted || !params.isCurrent()) {
+      return null;
+    }
+    const listed = await client.request<SessionsCatalogListResult>(
+      "sessions.catalog.list",
+      {
+        agentId,
+        catalogId: key.catalogId,
+        hostIds: [key.hostId],
+        limitPerHost: CATALOG_SESSION_LOOKUP_PAGE_LIMIT,
+        ...(cursor ? { cursors: { [key.hostId]: cursor } } : {}),
+      },
+      { signal: params.signal },
+    );
+    if (params.signal?.aborted || !params.isCurrent()) {
       return null;
     }
     const catalog = listed.catalogs.find((candidate) => candidate.id === key.catalogId);
