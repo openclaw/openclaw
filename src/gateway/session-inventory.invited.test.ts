@@ -1,4 +1,6 @@
-import { afterEach, expect, it, vi } from "vitest";
+import { afterEach, expect, it, onTestFinished, vi } from "vitest";
+import { createSubagentRunRecord } from "../agents/subagent-test-fixtures.test-helpers.js";
+import { subagentRuns } from "../agents/subagents/registry/subagent-registry-memory.js";
 import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
 import {
   addSessionMember,
@@ -68,6 +70,25 @@ it.each(["profile", "actor"] as const)(
           ...(key === parent ? {} : { parentSessionKey: parent }),
         });
       }
+      const runs = [child, hidden].map((key, index) => {
+        const run = createSubagentRunRecord({
+          runId: `invited-collector-${index}`,
+          childSessionKey: key,
+          childSessionIdentity: { sessionId: key },
+          requesterAgentId: "main",
+          requesterSessionKey: parent,
+          swarmRequesterSessionKey: parent,
+          collect: true,
+          groupId: "invited-collector",
+          createdAt: index + 1,
+          endedAt: 3,
+          collectorCompletion: { status: "done" },
+          expectsCompletionMessage: false,
+        });
+        subagentRuns.set(run.runId, run);
+        return run;
+      });
+      onTestFinished(() => runs.forEach((run) => subagentRuns.delete(run.runId)));
       const scope = (sessionKey: string) => ({ agentId: "main", sessionKey });
       for (const key of [parent, child]) {
         addSessionMember(scope(key), { identityId: member.id, addedBy: owner.id });
@@ -77,7 +98,9 @@ it.each(["profile", "actor"] as const)(
         listProjectedSessions({ projection, client, opts: {} });
       const admitted = await list();
       expect(admitted.sessions.map((row) => row.key).toSorted()).toEqual([child, parent]);
-      expect(admitted.sessions.find((row) => row.key === parent)?.childSessions).toEqual([child]);
+      const parentRow = admitted.sessions.find((row) => row.key === parent)!;
+      expect(parentRow.childSessions).toEqual([child]);
+      expect(parentRow.swarm?.groups[0]?.children?.map((row) => row.sessionKey)).toEqual([child]);
       expect((await list(clients[2]!)).sessions).toEqual([]);
       expect((await list(clients[0]!)).sessions.map((row) => row.key).toSorted()).toEqual([
         child,
@@ -88,6 +111,7 @@ it.each(["profile", "actor"] as const)(
       const revokedChild = await list();
       expect(revokedChild.sessions.map((row) => row.key)).toEqual([parent]);
       expect(revokedChild.sessions[0]?.childSessions).toBeUndefined();
+      expect(revokedChild.sessions[0]?.swarm?.groups[0]?.children).toEqual([]);
       expect(
         await withCurrentSessionListRows(admitted.sessions, (visible) => visible, true),
       ).toEqual(admitted.sessions.map((row) => row.key === parent));
