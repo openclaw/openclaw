@@ -729,7 +729,8 @@ it("recovers an oversized committed row after reply loss without replaying or tr
     paused_runtimes_json: null,
   });
   expect(acknowledged.baseline_json).toBe(baseline);
-  expect(acknowledged.journal_pack).toEqual(journalPack);
+  // Owner-provided bytes survive receipt recovery without another main-thread copy.
+  expect(acknowledged.journal_pack).toBe(journalPack);
   expect(committed).toEqual(acknowledged);
   expect(committed?.baseline_json).toBe(baseline);
 });
