@@ -334,6 +334,9 @@ suite.define(() => {
               await thread.press("Home");
               // Chromium drops a keyboard scroll that lands in the tail of the
               // previous smooth one, so End must wait for Home to settle.
+              await expect
+                .poll(() => thread.evaluate((element) => element.scrollTop), { message: label })
+                .toBe(0);
               await waitForChatScrollIdle(page);
               expect(await thread.evaluate((element) => element.scrollTop), label).toBe(0);
             }
