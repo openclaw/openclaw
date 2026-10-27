@@ -104,8 +104,7 @@ export async function provisionIncludedFiles(
       provisioned.push(normalized);
     }
   }
-  // oxlint-disable-next-line unicorn/no-array-sort -- The result is private until returned.
-  return provisioned.sort();
+  return provisioned.toSorted();
 }
 
 /** Restores provisioned bytes and modes from SQLite, never from the mutable source checkout. */
