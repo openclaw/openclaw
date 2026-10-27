@@ -139,24 +139,6 @@ async function listenOnLoopback(handler: RequestListener) {
 }
 
 describe("gateway startup benchmark script", () => {
-  it("requires an isolated Team-shaped fixture for delayed GitHub recovery", () => {
-    if (process.platform === "win32") {
-      expect(() => parseOptions("--case teamBoot --publication-api-delay-ms 500")).toThrow("POSIX");
-      return;
-    }
-    expect(parseOptions("--case teamBoot --publication-api-delay-ms 500").cases[0]).toMatchObject({
-      publicationApiDelayMs: 500,
-    });
-    for (const args of [
-      "--case default --publication-api-delay-ms 500",
-      "--case teamBoot --publication-api-delay-ms 199",
-      "--case teamBoot --publication-api-delay-ms 801",
-      "--case teamBoot --publication-api-delay-ms 500 --publication-git-delay-ms 500",
-    ]) {
-      expect(() => parseOptions(args)).toThrow();
-    }
-  });
-
   it("samples collected startup allocations and stops before post-ready work", async ({
     signal,
   }) => {
@@ -580,6 +562,21 @@ server.listen(port, "127.0.0.1", () => {
       output: "startup.json",
       runs: 2,
     });
+    if (process.platform === "win32") {
+      expect(() => parseOptions("--case teamBoot --publication-api-delay-ms 500")).toThrow("POSIX");
+      return;
+    }
+    expect(parseOptions("--case teamBoot --publication-api-delay-ms 500").cases[0]).toMatchObject({
+      publicationApiDelayMs: 500,
+    });
+    for (const args of [
+      "--case default --publication-api-delay-ms 500",
+      "--case teamBoot --publication-api-delay-ms 199",
+      "--case teamBoot --publication-api-delay-ms 801",
+      "--case teamBoot --publication-api-delay-ms 500 --publication-git-delay-ms 500",
+    ]) {
+      expect(() => parseOptions(args)).toThrow();
+    }
   });
 
   it("selects the Gateway runtime and affinity independently of the controller", () => {

@@ -110,15 +110,10 @@ it("recovers independent worktrees while preserving each worktree's publication 
     commandResult,
   });
   const secondWorktree = mocks.findWorktree("session", secondSession.sessionKey);
+  const { id: secondWorktreeId, branch, repoRoot } = secondWorktree;
   await upsertSessionEntryCore(
     { agentId: "main", sessionKey: secondSession.sessionKey },
-    {
-      worktree: {
-        id: secondWorktree.id,
-        branch: secondWorktree.branch,
-        repoRoot: secondWorktree.repoRoot,
-      },
-    },
+    { worktree: { id: secondWorktreeId, branch, repoRoot } },
   );
   const secondTransport = mocks.runCommand.getMockImplementation()!;
   const second = await createRequesterPolicyFixture(secondSession);
@@ -172,11 +167,8 @@ it("recovers independent worktrees while preserving each worktree's publication 
     await first.coordinator.requestForSessionV2(first.request("first", firstGuest.requester)),
     await first.coordinator.requestForSessionV2(first.request("next", firstGuest.requester)),
     await first.coordinator.requestForSessionV2({
+      ...first.request("independent", secondGuest.requester),
       sessionKey: secondSession.sessionKey,
-      agentId: "main",
-      idempotencyKey: "independent",
-      title: "independent",
-      requester: secondGuest.requester,
     }),
   ];
   expect(requests.map(({ status }) => status)).toEqual(["requested", "requested", "requested"]);
@@ -190,11 +182,9 @@ it("recovers independent worktrees while preserving each worktree's publication 
     firstResponse.resolve();
     await recovery;
   }
-  expect(requests.map(({ requestId }) => first.readReceipt(requestId)?.status)).toEqual([
-    "published",
-    "published",
-    "published",
-  ]);
+  for (const { requestId } of requests) {
+    expect(first.readReceipt(requestId)?.status).toBe("published");
+  }
   const calls = mocks.runCommand.mock.calls.length;
   await first.restart().resumeSessionRequests();
   expect(mocks.runCommand.mock.calls.slice(calls).filter(([argv]) => argv[0] === "gh")).toEqual([]);
