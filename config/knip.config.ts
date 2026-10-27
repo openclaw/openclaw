@@ -454,6 +454,7 @@ const repositoryScriptEntries = [
   "scripts/perf/agent-object-copy-measure.ts!",
   "scripts/perf/agent-stream-update-measure.ts!",
   "scripts/perf/agent-turn-taint-measure.ts!",
+  "scripts/perf/auth-availability-invalidation-measure.ts!",
   "scripts/perf/chat-display-admission-measure.mjs!",
   "scripts/perf/core-fresh-array-copies-measure.mjs!",
   "scripts/perf/delivery-info-measure.ts!",
