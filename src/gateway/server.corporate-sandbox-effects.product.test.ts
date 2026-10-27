@@ -12,7 +12,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 const enabled = process.env.OPENCLAW_TEST_CORPORATE_DOCKER_EFFECTS === "1";
 
 it.skipIf(!enabled)(
-  "confines actual corporate Gateway tool effects with the real Docker sandbox",
+  "confines actual corporate Gateway tool effects with the real container sandbox",
   { timeout: 120_000 },
   async ({ signal }) => {
     console.info("[corporate-effect-proof] phase=case-entered");
@@ -31,12 +31,10 @@ it.skipIf(!enabled)(
       await import("./gateway-provider-fixture.test-support.js");
     const { buildMockOpenAiResponsesProvider } = await import("./test-openai-responses-model.js");
     const { DEFAULT_SANDBOX_IMAGE } = await import("../agents/sandbox/constants.js");
-    const docker = (...args: string[]) =>
-      execFileSync("docker", args, {
-        encoding: "utf8",
-        timeout: 20_000,
-        maxBuffer: 1024 * 1024,
-      }).trim();
+    const backend = process.env.OPENCLAW_TEST_CORPORATE_SANDBOX_BACKEND ?? "docker";
+    if (backend !== "docker" && backend !== "podman") {
+      throw new Error("Corporate effect proof requires the docker or podman backend");
+    }
     await using cleanup = new AsyncDisposableStack();
     // The supervised built Gateway owns its runtime outside the Vitest module graph.
     const instance = await createOpenClawTestInstance({
@@ -48,6 +46,11 @@ it.skipIf(!enabled)(
         ...Object.fromEntries(
           listKnownProviderAuthEnvVarNamesCore().map((name) => [name, undefined]),
         ),
+        // Vitest deliberately rewrites XDG paths; the native engine must keep
+        // its qualified task-owned runtime directory, not that missing fixture path.
+        ...(process.env.OPENCLAW_TEST_CORPORATE_XDG_RUNTIME_DIR
+          ? { XDG_RUNTIME_DIR: process.env.OPENCLAW_TEST_CORPORATE_XDG_RUNTIME_DIR }
+          : {}),
         OPENCLAW_TEST_MINIMAL_GATEWAY: "0",
         OPENCLAW_SKIP_PROVIDERS: undefined,
         OPENCLAW_AGENT_RUNTIME: undefined,
@@ -56,10 +59,20 @@ it.skipIf(!enabled)(
       },
     });
     cleanup.defer(() => instance.cleanup());
+    // Match the child Gateway environment, including its isolated HOME. Native
+    // Podman stores must be pinned with absolute CONTAINERS_STORAGE_CONF paths.
+    const container = (...args: string[]) =>
+      execFileSync(backend, args, {
+        env: instance.env,
+        encoding: "utf8",
+        timeout: 20_000,
+        maxBuffer: 1024 * 1024,
+      }).trim();
     console.info("[corporate-effect-proof] phase=instance-prepared");
     const state = instance.state;
     const sessionKey = `agent:main:corporate-effects-${randomUUID()}`;
-    const sandboxPrefix = `oc-corp-${randomUUID().slice(0, 12)}-`;
+    // Leave room for Podman's suffix and the full workspace-identity slug.
+    const sandboxPrefix = `oc-${randomUUID().slice(0, 8)}-`;
     // The host sentinels are siblings of, never inside, the mounted workspace.
     const sentinel = await state.writeText("host-only/sentinel.txt", randomUUID());
     const originalSentinel = await fs.readFile(sentinel, "utf8");
@@ -124,9 +137,9 @@ it.skipIf(!enabled)(
 
     // Fail setup, never silently skip an explicitly requested but unavailable backend.
     console.info("[corporate-effect-proof] phase=backend-preflight");
-    docker("info", "--format", "{{.ID}}");
-    console.info("[corporate-effect-proof] phase=docker-info-complete");
-    docker("image", "inspect", DEFAULT_SANDBOX_IMAGE);
+    container("info");
+    console.info("[corporate-effect-proof] phase=container-info-complete");
+    container("image", "inspect", DEFAULT_SANDBOX_IMAGE);
     console.info("[corporate-effect-proof] phase=image-inspect-complete");
 
     const workspaceToken = `workspace-${randomUUID()}`;
@@ -204,6 +217,7 @@ it.skipIf(!enabled)(
             typeof output.output === "string" ? output.output : JSON.stringify(output.output),
           );
         }
+        console.info(`[corporate-effect-proof] phase=provider-request step=${issued}`);
         const step = steps[issued++];
         if (step) {
           writeToolCall(response, step.name, step.args);
@@ -237,7 +251,7 @@ it.skipIf(!enabled)(
           workspace: state.workspaceDir,
           skipBootstrap: true,
           utilityModel: "",
-          sandbox: { docker: { containerPrefix: sandboxPrefix } },
+          sandbox: { backend, docker: { containerPrefix: sandboxPrefix } },
           model: { primary: model.modelRef },
           models: {
             [model.modelRef]: {
@@ -260,9 +274,9 @@ it.skipIf(!enabled)(
     // Scope labels include workspace identity; this unique name prefix remains
     // fixture-owned even when setup fails before registry publication.
     cleanup.defer(() => {
-      const ids = docker("ps", "-aq", "--filter", `name=${sandboxPrefix}`);
+      const ids = container("ps", "-aq", "--filter", `name=${sandboxPrefix}`);
       if (ids) {
-        docker("rm", "-f", ...ids.split(/\s+/));
+        container("rm", "-f", ...ids.split(/\s+/));
       }
     });
     cleanup.defer(() => instance.stopGateway());
@@ -304,9 +318,13 @@ it.skipIf(!enabled)(
       idempotencyKey: randomUUID(),
     });
     expect(accepted).toMatchObject({ status: "started", runId: expect.any(String) });
-    expect(
-      await client.request("agent.wait", { runId: accepted.runId, timeoutMs: 90_000 }),
-    ).toMatchObject({ status: "ok" });
+    const completed = await client.request("agent.wait", {
+      runId: accepted.runId,
+      timeoutMs: 90_000,
+    });
+    expect(completed, JSON.stringify({ completed, issued, errors })).toMatchObject({
+      status: "ok",
+    });
     expect(errors).toEqual([]);
     expect(outputs).toHaveLength(steps.length);
     expect(outputs[1]).toContain(workspaceToken);
@@ -341,16 +359,17 @@ it.skipIf(!enabled)(
       "Corporate synthetic effect acceptance complete.",
     );
     // Supplemental backend evidence, not a substitute for the effects above.
-    const ids = docker("ps", "-q", "--filter", `name=${sandboxPrefix}`);
+    const ids = container("ps", "-q", "--filter", `name=${sandboxPrefix}`);
     expect(ids).not.toBe("");
     expect(ids.split(/\s+/)).toHaveLength(1);
-    const containers = JSON.parse(docker("inspect", ids)) as Array<{
+    const containers = JSON.parse(container("inspect", ids)) as Array<{
       HostConfig: {
         NetworkMode: string;
         ReadonlyRootfs: boolean;
         Init: boolean;
         CapDrop: string[];
         SecurityOpt: string[];
+        Annotations?: Record<string, string>;
       };
     }>;
     const policy = containers[0]?.HostConfig;
@@ -358,12 +377,23 @@ it.skipIf(!enabled)(
       NetworkMode: "none",
       ReadonlyRootfs: true,
       Init: true,
-      CapDrop: ["ALL"],
       SecurityOpt: expect.arrayContaining(["no-new-privileges"]),
     });
+    if (backend === "docker") {
+      expect(policy?.CapDrop).toEqual(["ALL"]);
+    } else {
+      expect(policy?.Annotations?.["io.podman.annotations.userns"]).toMatch(/^keep-id/);
+    }
+    // Podman expands CapDrop into individual names; prove the running init
+    // process has no effective/bounding capabilities on either native engine.
+    const processStatus = container("exec", ids, "cat", "/proc/1/status");
+    expect(processStatus).toMatch(/^CapEff:\s+0+$/m);
+    expect(processStatus).toMatch(/^CapBnd:\s+0+$/m);
+    expect(processStatus).toMatch(/^NoNewPrivs:\s+1$/m);
     console.info(
       "[corporate-effect-proof] " +
         JSON.stringify({
+          backend,
           workspaceToolRead: outputs[1]?.includes(workspaceToken),
           sandboxProcess: outputs[3]?.includes("CORPORATE_PROCESS_COMPLETED"),
           effects,
