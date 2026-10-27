@@ -2513,7 +2513,6 @@
 ["src/auto-reply/reply/session-hooks-context.test.ts","../../agents/agent-bundle-mcp-tools.js","d1399b3e3bf8d36c8970283ae045972ecf2620206d0d9ab7ba3799dd3bd708b1",1]
 ["src/auto-reply/reply/session-hooks-context.test.ts","../../agents/harness/registry.js","e0f4ef60d0ef337fb38532a3b39464a80ed52cc281c077bf53db0649cb769b8b",1]
 ["src/auto-reply/reply/session-hooks-context.test.ts","../../plugin-sdk/browser-maintenance.js","a67b3ff06a07b6fa7d341ad5f7344fcb2c0a29df8f150ccc834ce25cdcd8724b",1]
-["src/auto-reply/reply/session-hooks-context.test.ts","../../plugins/hook-runner-global.js","825f7409a66c18457b256833291ac57140a89a7c352dd4deae5433fab973ba32",1]
 ["src/auto-reply/reply/session-parent-fork-prepare.test.ts","./session-fork.js","43b440d77ff65b57823e107f9371a8b625cf3a3206c20e82b67dc8f723877189",1]
 ["src/auto-reply/reply/session-reset-model.test.ts","../../agents/prepared-model-catalog.js","e9b8418a6ae4571597608950e3936a38558c2a33c862df0c3fcffd92424e79b2",1]
 ["src/auto-reply/reply/session-reset-prompt.runtime-model.test.ts","../../agents/tools-effective-inventory.js","529892dd128b747e289f4b10f3aa8d059242ddb5923dc0edfca54d9c0fc6d2b5",1]

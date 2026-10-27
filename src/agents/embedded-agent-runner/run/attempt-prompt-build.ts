@@ -394,6 +394,7 @@ export async function prepareEmbeddedAttemptPromptContext(input: {
   prompt: PromptAssemblyContext;
   replaceSessionMessages: (messages: AgentMessage[]) => void;
   sessionAgentId: string;
+  systemPromptRuntimeContextFragments?: readonly RuntimeContextFragment[];
   systemPromptReport?: SessionSystemPromptReport;
   systemPromptText: string;
   toolResultPromptProjectionState: ToolResultPromptProjectionState;
@@ -467,6 +468,7 @@ export async function prepareEmbeddedAttemptPromptContext(input: {
     }),
     ...buildAgentInternalEventContext(attempt.internalEvents),
     ...(attempt.runtimeContextFragments ?? []),
+    ...(input.systemPromptRuntimeContextFragments ?? []),
     ...(input.prompt.originContext
       ? escapedProjection
         ? input.prompt.originContext.fragments

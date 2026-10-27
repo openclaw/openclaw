@@ -256,6 +256,8 @@ const repositoryScriptEntries = [
   "scripts/perf/provider-request-prepare-measure.ts!",
   // Invoked directly with Node as documented in its header.
   "scripts/perf/attempt-stream-options-measure.ts!",
+  "scripts/perf/attempt-prompt-context-measure.ts!",
+  "scripts/perf/current-prompt-history-measure.ts!",
   "scripts/perf/session-profile-reference-measure.ts!",
   "scripts/perf/worker-task-metrics-measure.ts!",
   // scripts/perf/README.md invokes this worker protocol benchmark by path.

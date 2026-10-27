@@ -70,7 +70,7 @@ function authRows(db) {
   };
 }
 
-export function seedLegacyOperatorDoctorRepairs() {
+function seedLegacyOperatorDoctorRepairs() {
   if (!enabled()) {
     return;
   }
@@ -102,7 +102,7 @@ export function seedLegacyOperatorDoctorRepairs() {
   }
 }
 
-export function assertLegacyOperatorDoctorRepairs() {
+function assertLegacyOperatorDoctorRepairs() {
   if (!enabled()) {
     return;
   }

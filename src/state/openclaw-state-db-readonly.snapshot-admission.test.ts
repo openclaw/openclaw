@@ -105,6 +105,13 @@ import {
 import { captureOpenClawStateWorkerContext as captureContext } from "./openclaw-state-worker-context.js";
 
 const directories = useAutoCleanupTempDirTracker(afterEach);
+const emptyRead = () =>
+  ({
+    value: { ok: true, type: "backup.runs", sourceAdmitted: true, runs: [] },
+  }) satisfies OpenClawStateReadOutcome;
+const throwError = (error: Error) => () => {
+  throw error;
+};
 let source: string;
 let options: { path: string };
 
@@ -115,9 +122,7 @@ beforeEach(() => {
   options = { path: source };
   mocks.forbiddenNative.mockClear();
   mocks.fork.mockReset();
-  mocks.read.mockReset().mockResolvedValue({
-    value: { ok: true, type: "backup.runs", sourceAdmitted: true, runs: [] },
-  });
+  mocks.read.mockReset().mockResolvedValue(emptyRead());
   mocks.assertFresh.mockReset();
   mocks.cleanup.mockReset().mockResolvedValue(true);
   mocks.closePreparation.mockReset().mockResolvedValue();
@@ -347,9 +352,7 @@ it("rechecks source admission after lazy materialization and cleans rejected byt
   mocks.capture.mockImplementation((databasePath: string) => ({
     databasePath,
     identity: {},
-    assertCurrent() {
-      throw failure;
-    },
+    assertCurrent: throwError(failure),
   }));
   await expect(
     withSnapshot(async () => activeSnapshot(options), { ...options, lazy: true }),
@@ -516,9 +519,7 @@ it.each([
   const cancelled = new Error("caller closed while waiting for schema custody");
   vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "performance"] });
   try {
-    mocks.assertFresh.mockImplementation(() => {
-      throw refusal;
-    });
+    mocks.assertFresh.mockImplementation(throwError(refusal));
     const operation = vi.fn(async () => "must not enter");
     const read = caller.track(() =>
       withSnapshot(operation, {
@@ -563,9 +564,7 @@ it.each([
 
 it("preserves discovery capture failure without preparing bytes", async () => {
   const failure = new Error("synthetic admission refusal");
-  mocks.capture.mockImplementation(() => {
-    throw failure;
-  });
+  mocks.capture.mockImplementation(throwError(failure));
   const operation = vi.fn(async () => 1);
   await expect(withSnapshot(operation, options)).rejects.toMatchObject({
     message: expect.stringContaining("Cannot read shared state for discovery: " + source),
@@ -622,9 +621,6 @@ it.each(["snapshot", "lazy", "disposable"] as const)(
     const started = createDeferredCore();
     const finishRead = createDeferredCore();
     const startedClosing = createDeferredCore();
-    const expected: OpenClawStateReadOutcome = {
-      value: { ok: true, type: "backup.runs", sourceAdmitted: true, runs: [] },
-    };
     mocks.read.mockImplementation(async (_source, authority) => {
       const scopeSignal = getAsyncWorkSignal();
       if (!scopeSignal) {
@@ -634,7 +630,7 @@ it.each(["snapshot", "lazy", "disposable"] as const)(
       started.resolve();
       await finishRead.promise;
       authority.assertCurrent();
-      return expected;
+      return emptyRead();
     });
     let escape!: ReturnType<typeof AsyncLocalStorage.snapshot>;
     let read!: ReturnType<typeof readExisting>;
@@ -657,7 +653,7 @@ it.each(["snapshot", "lazy", "disposable"] as const)(
       await read;
       await closing;
     }
-    expect(await read).toEqual(expected.value);
+    expect(await read).toEqual(emptyRead().value);
     await escape(expectRetiredAdmission);
     expect(mocks.forbiddenNative).not.toHaveBeenCalled();
     expect(mocks.cleanup).toHaveBeenCalledTimes(kind !== "disposable" ? 1 : 0);
@@ -671,7 +667,7 @@ it("keeps captured schema authority while selecting current rows", async () => {
       mocks.read.mockImplementation(async (location) => {
         expect(location.context).toBe(context);
         expect([existingSchemaPath(), location.location]).toEqual([source, source]);
-        return { value: { ok: true, type: "backup.runs", sourceAdmitted: true, runs: [] } };
+        return emptyRead();
       });
       await expect(readRows({ current: true, context })).resolves.toMatchObject({
         ok: true,

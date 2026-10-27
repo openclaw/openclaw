@@ -185,6 +185,7 @@ describe("production lint suppressions", () => {
         // The copy-count probe restores the native method after measurement.
         "scripts/perf/agent-fresh-array-copy-measure.ts|no-extend-native|2",
         // The owner probe executes its selected trusted source expression rather than a copied implementation.
+        "scripts/perf/attempt-prompt-context-measure.ts|typescript/no-implied-eval|1",
         "scripts/perf/attempt-stream-options-measure.ts|typescript/no-implied-eval|1",
         // The avatar dispatch probe forwards the original pool receiver and restores the method.
         "scripts/perf/avatar-inline-measure.ts|typescript/unbound-method|1",
@@ -196,6 +197,8 @@ describe("production lint suppressions", () => {
         "scripts/perf/diagnostic-profile-measure.ts|typescript/unbound-method|1",
         // Node BroadcastChannel.postMessage has no target-origin parameter.
         "scripts/perf/idle-gateway-measure-preload.mjs|unicorn/require-post-message-target-origin|1",
+        // The stack probe compares V8's formatter callback identity without invoking it.
+        "scripts/perf/jiti-stack-format.ts|typescript/unbound-method|1",
         "scripts/perf/lease-main-thread-renewal.mjs|typescript/unbound-method|3",
         // The counts-only probe restores the native copying sort in finally.
         "scripts/perf/memory-prompt-copy-measure.ts|no-extend-native|2",
@@ -331,6 +334,8 @@ describe("production lint suppressions", () => {
         "src/plugin-sdk/test-helpers/subagent-hooks.ts|typescript/no-unnecessary-type-parameters|1",
         "src/plugins/host-hooks.ts|typescript/no-unnecessary-type-parameters|1",
         "src/plugins/installed-plugin-index-policy.ts|unicorn/no-array-sort|2",
+        // Compiler scope saves/restores V8's formatter callback by identity without calling it.
+        "src/plugins/jiti-factory.ts|typescript/unbound-method|1",
         "src/plugins/lazy-service-module.ts|typescript/no-unnecessary-type-parameters|1",
         // Prompt preparation sorts only fresh private tool and supplement arrays.
         "src/plugins/memory-state.ts|unicorn/no-array-sort|2",
