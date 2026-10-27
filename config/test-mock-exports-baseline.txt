@@ -4517,7 +4517,6 @@
 ["src/gateway/agent-turn/internal-facade.test.ts","../server-methods.js","0bbb27eab581ee1ef8f6cba06fccf479007cd5b9004a9a1fb4febeb38b7e680e",1]
 ["src/gateway/agent-turn/internal-facade.test.ts","../server-methods/request-authorization.js","496eb08107fa91246bb5629c6fb3497403044c6bc38f096cb9000842d7d53402",1]
 ["src/gateway/agent-turn/internal-facade.test.ts","./agent-request-preflight.js","7028d2250135658503eff1f55c0f358dd44d30eea62c0ef24361443b4e8c47b1",1]
-["src/gateway/agent-turn/internal-facade.test.ts","./agent-turn-service.js","455206f781fac939fbb0f65a1fe7bc2ec37d58c25f765c1505e31fa75b0f8f73",1]
 ["src/gateway/agent-turn/internal-facade.test.ts","./agent-turn-service.js","b2d00317ead2bfd6ffb06e4893d34736d5c008aacf6c1c22fa066a322203280e",1]
 ["src/gateway/boot.test.ts","../commands/agent.js","80732ffe9faef12435ef564d6eeecf53fe27245623c03e15656578ea8b88fbaf",1]
 ["src/gateway/call.abort.test.ts","../../packages/gateway-client/src/event-loop-ready.js","77e810336f8c77dd3d74f2f364b14ec3766801544f45a30be544569d5b3d962d",1]
