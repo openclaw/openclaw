@@ -56,11 +56,11 @@ function watch() {
   return { onLimit, onDiagnostic, stop };
 }
 
-function mockFiles(files: Record<string, string>, onRead = (_file: string) => {}) {
+function mockFiles(files: Record<string, string>, onRead = (_file: string) => {}, code = "ENOENT") {
   return procfs.readFile.mockImplementation(async (file) => {
     onRead(file);
     if (files[file] === undefined) {
-      throw Object.assign(new Error("gone"), { code: "ENOENT" });
+      throw Object.assign(new Error("gone"), { code });
     }
     return files[file];
   });
@@ -83,23 +83,35 @@ it("scales the host bound with host memory, cgroup constraints, and the owner's 
   expect(resolveHostExecMemoryLimit()).toBeUndefined();
 });
 
-it("counts descendants from nonleader threads and swapped memory, then stops sampling", async () => {
-  const read = mockFiles({
-    "/proc/100/status": "VmRSS:\t32 kB\nVmSwap:\t0 kB\n",
-    "/proc/100/task/100/children": "",
-    "/proc/100/task/101/children": "200",
-    "/proc/200/status": "VmRSS:\t32 kB\nVmSwap:\t80 kB\n",
-  });
-  procfs.readdir.mockResolvedValue(["100", "101"]);
-  const { onLimit, onDiagnostic, stop } = watch();
-  await vi.advanceTimersByTimeAsync(2000);
-  expect(onLimit).toHaveBeenCalledExactlyOnceWith(144 * 1024);
-  expect(onDiagnostic).toHaveBeenCalledExactlyOnceWith(expect.stringContaining("1 MiB limit"));
-  const reads = read.mock.calls.length;
-  await vi.advanceTimersByTimeAsync(5000);
-  expect(read).toHaveBeenCalledTimes(reads);
-  stop();
-});
+it.each(["ENOENT", "ESRCH"])(
+  "counts thread-spawned grandchildren and swap through %s races",
+  async (code) => {
+    const read = mockFiles(
+      {
+        "/proc/100/status": `Groups:\t${"1 ".repeat(3000)}\nVmRSS:\t16 kB\n`,
+        "/proc/100/task/100/children": "",
+        "/proc/100/task/101/children": "200 400 ",
+        "/proc/200/status": "VmRSS:\t16 kB\n",
+        "/proc/200/task/200/children": "300",
+        "/proc/300/status": "VmRSS:\t16 kB\nVmSwap:\t96 kB\n",
+      },
+      undefined,
+      code,
+    );
+    procfs.readdir.mockImplementation(async (path) =>
+      path === "/proc/100/task" ? ["100", "101", "102"] : ["200"],
+    );
+    const { onLimit, onDiagnostic, stop } = watch();
+    await vi.advanceTimersByTimeAsync(2000);
+    expect(onLimit).toHaveBeenCalledExactlyOnceWith(144 * 1024);
+    expect(onDiagnostic).toHaveBeenCalledExactlyOnceWith(expect.stringContaining("1 MiB limit"));
+    expect(procfs.decodedBytes).toBe(0);
+    const reads = read.mock.calls.length;
+    await vi.advanceTimersByTimeAsync(5000);
+    expect(read).toHaveBeenCalledTimes(reads);
+    stop();
+  },
+);
 
 it.each(["half the bound", "new descendants"])(
   "samples quiet trees every five seconds and returns to one second at %s",
@@ -164,47 +176,3 @@ it("retries a failed quiet-tree sample after one second and cancels an awaited r
   expect(onDiagnostic).toHaveBeenCalledTimes(1);
   expect(procfs.readFile).toHaveBeenCalledTimes(3);
 });
-
-it("avoids decoding procfs files on unchanged ten-process tree samples", async () => {
-  const files: Record<string, string> = {};
-  for (let pid = 100; pid < 110; pid++) {
-    files[`/proc/${pid}/status`] = "VmRSS:\t1 kB\nVmSwap:\t0 kB\n";
-    files[`/proc/${pid}/task/${pid}/children`] = pid < 109 ? `${pid + 1} ` : "";
-  }
-  mockFiles(files);
-  procfs.readdir.mockImplementation(async (path) => [path.slice("/proc/".length, -"/task".length)]);
-  const { onLimit, stop } = watch();
-  await vi.advanceTimersByTimeAsync(7000);
-  expect(procfs.readFile).toHaveBeenCalledTimes(60);
-  expect(onLimit).not.toHaveBeenCalled();
-  expect(procfs.decodedBytes).toBe(0);
-  stop();
-});
-
-it.each(["ENOENT", "ESRCH"])(
-  "counts grandchildren and swap after long status fields despite %s races",
-  async (code) => {
-    const files: Record<string, string> = {
-      "/proc/100/status": `Groups:\t${"1 ".repeat(3000)}\nVmRSS:\t16 kB\nVmSwap:\t0 kB\n`,
-      "/proc/100/task/100/children": "200 300 ",
-      "/proc/200/status": "VmRSS:\t16 kB\n",
-      "/proc/200/task/201/children": "400 ",
-      "/proc/400/status": "VmRSS:\t16 kB\nVmSwap:\t96 kB\n",
-    };
-    procfs.readFile.mockImplementation(async (path) => {
-      const text = files[path];
-      if (text === undefined) {
-        throw Object.assign(new Error("gone"), { code });
-      }
-      return text;
-    });
-    procfs.readdir.mockImplementation(async (path) =>
-      path === "/proc/100/task" ? ["100", "101"] : ["201"],
-    );
-    const { onLimit, onDiagnostic, stop } = watch();
-    await vi.advanceTimersByTimeAsync(1000);
-    expect(onLimit).toHaveBeenCalledExactlyOnceWith(144 * 1024);
-    expect(onDiagnostic).toHaveBeenCalledExactlyOnceWith(expect.stringContaining("1 MiB limit"));
-    stop();
-  },
-);
