@@ -175,9 +175,10 @@ suite.define(() => {
       const longPrompt = Array.from({ length: 14 }, (_, index) => `line ${index + 1}`).join("\n");
       await message.fill(longPrompt);
       // Native input commits its overflow presentation on the next animation frame.
+      // Classic scrollbar gutters use scroll; overlay scrollbars use auto.
       await expect
         .poll(() => message.evaluate((element) => getComputedStyle(element).overflowY))
-        .toBe("auto");
+        .toMatch(/^(auto|scroll)$/);
       const capped = await message.evaluate((element) => ({
         clientHeight: element.clientHeight,
         scrollHeight: element.scrollHeight,
