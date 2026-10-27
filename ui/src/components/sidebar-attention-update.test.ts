@@ -1,6 +1,7 @@
 import { expect, it } from "vitest";
 import { GatewayBrowserClient } from "../api/gateway.ts";
 import type { ApplicationContext } from "../app/context.ts";
+import { createUpdateRunFixture } from "../test-helpers/update-run.ts";
 import { resolveSidebarUpdateAttention } from "./sidebar-attention-update.ts";
 
 function contextWithGitStatus(status: "behind" | "current" | "unavailable"): ApplicationContext {
@@ -65,6 +66,22 @@ it("keeps explicit dev update progress and errors visible", () => {
   context.overlays.snapshot.updateRunning = false;
   context.overlays.snapshot.updateStatusBanner = { tone: "danger", text: "Update failed" };
   expect(resolveSidebarUpdateAttention(context)).not.toBeNull();
+});
+
+it.each(["2026.9.4", "2026.10.1"])("keeps only current failed-run attention on %s", (version) => {
+  const context = contextWithGitStatus("current");
+  context.overlays.snapshot.updateRun = createUpdateRunFixture({
+    status: "failed",
+    before: { version: "2026.9.4" },
+    finishedAtMs: Date.now(),
+  });
+  context.gateway.snapshot.hello = {
+    type: "hello-ok",
+    protocol: 1,
+    server: { version },
+    features: { methods: [] },
+  };
+  expect(resolveSidebarUpdateAttention(context) !== null).toBe(version === "2026.9.4");
 });
 
 it.each([

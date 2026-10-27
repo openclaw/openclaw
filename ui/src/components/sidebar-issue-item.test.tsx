@@ -210,6 +210,7 @@ describe("renderSidebarUpdateSurface", () => {
         status: "failed",
         phase: "finished",
         reason: "build-failed",
+        before: { version: "1.0.0" },
         finishedAtMs: Date.now(),
       });
       const request = vi

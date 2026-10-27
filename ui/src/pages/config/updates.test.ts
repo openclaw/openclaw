@@ -54,7 +54,12 @@ function setToggle(title: string, checked: boolean) {
 }
 
 function failedRun() {
-  return createUpdateRunFixture({ status: "failed", phase: "finished", reason: "build-failed" });
+  return createUpdateRunFixture({
+    status: "failed",
+    phase: "finished",
+    reason: "build-failed",
+    before: { version: "2026.8.1" },
+  });
 }
 
 const checkFailure = {
@@ -562,6 +567,7 @@ describe("renderUpdates", () => {
           updateRun: createUpdateRunFixture({
             phase: "finished",
             status,
+            before: { version: "2026.8.1" },
             finishedAtMs: 10,
             reason,
             steps: reconciled ? [{ step: "reconcile:acknowledged", status: "completed" }] : [],

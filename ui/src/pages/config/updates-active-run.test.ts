@@ -18,6 +18,36 @@ beforeEach(async () => {
 });
 
 describe("running update status", () => {
+  it.each(["2026.9.4", "2026.10.1"])(
+    "projects past failures against serving %s",
+    (gatewayVersion) => {
+      mountUpdates(
+        createProps({
+          gatewayVersion,
+          update: {
+            updateRun: createUpdateRunFixture({
+              status: "failed",
+              phase: "finished",
+              reason: "preflight-no-good-commit",
+              target: { kind: "git", channel: "dev" },
+              before: { version: "2026.9.4" },
+              origin: { nextAction: "Run openclaw update." },
+            }),
+          },
+        }),
+      );
+      if (gatewayVersion === "2026.10.1") {
+        expect(container.textContent).toContain(
+          "Last update run failed (preflight-no-good-commit)",
+        );
+        expect(container.textContent).not.toContain("Retry update");
+        expect(container.textContent).not.toContain("Run openclaw update.");
+      } else {
+        expect(container.textContent).toContain("Retry update");
+      }
+    },
+  );
+
   it.each(["read error", "separate campaign", "same campaign"] as const)(
     "keeps executing run status distinct from %s",
     (scenario) => {

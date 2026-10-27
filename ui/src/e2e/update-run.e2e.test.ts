@@ -1,5 +1,8 @@
+import { writeFile } from "node:fs/promises";
+import path from "node:path";
 import type { Locator, Page } from "playwright";
 import { expect, it } from "vitest";
+import { takeControlUiScreenshotFrame } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { configResponse } from "./chat-flow-fixtures.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
@@ -12,6 +15,75 @@ function text(root: Page | Locator, value: string, exact = true) {
 }
 
 suite.define(() => {
+  it.each(["2026.9.4", "2026.10.1"])(
+    "projects saved update failures on serving %s",
+    async (serverVersion) => {
+      await suite.withPage(
+        { locale: "en-US", serviceWorkers: "block", viewport: { height: 1200, width: 1440 } },
+        async ({ page }) => {
+          const run = {
+            ...createUpdateRunFixture(),
+            phase: "finished",
+            status: "failed",
+            reason: "preflight-no-good-commit",
+            before: { version: "2026.9.4", sha: "37ea9f110bad" },
+            after: {},
+            verification: {},
+            target: { kind: "git", channel: "dev" },
+            finishedAtMs: Date.now(),
+            origin: { nextAction: "Run openclaw update." },
+          } as const;
+          const schedule = {
+            channel: "dev",
+            autoEnabled: false,
+            install: { kind: "git", git: { status: "current" } },
+          } as const;
+          const gateway = await installMockGateway(page, {
+            communityInvite: false,
+            serverVersion,
+            controlUiBuildSource: "configured",
+            updateAvailable: null,
+            updateSchedule: schedule,
+            methodResponses: {
+              "config.get": configResponse(
+                { update: { channel: "dev", auto: { enabled: false } } },
+                "historical-update",
+              ),
+              "update.status": { lastRun: run, schedule },
+              "update.runs.get": { run },
+            },
+          });
+          await page.goto(`${suite.server.baseUrl}settings/updates`);
+          await gateway.waitForRequest("update.status");
+          const surface = page.locator("openclaw-update-run-view");
+          const historical = serverVersion === "2026.10.1";
+          await surface
+            .getByText(historical ? /Last update run failed/ : /OpenClaw update failed/)
+            .first()
+            .waitFor();
+          expect(
+            await page.getByRole("button", { name: "Retry update", exact: true }).count(),
+          ).toBe(historical ? 0 : 1);
+          if (historical) {
+            expect(await surface.textContent()).not.toContain("Run openclaw update.");
+          }
+          expect(await gateway.getRequests("update.run")).toHaveLength(0);
+          const frame = await takeControlUiScreenshotFrame(page, surface, [surface], {
+            animations: "disabled",
+            scrollTo: surface,
+          });
+          await writeFile(
+            path.join(
+              suite.artifactDir,
+              historical ? "historical-after.png" : "unresolved-before.png",
+            ),
+            frame.png,
+          );
+        },
+      );
+    },
+  );
+
   it("requires confirmation and keeps long update output keyboard accessible", async () => {
     await suite.withPage(
       {

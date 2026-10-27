@@ -24,6 +24,7 @@ import {
   listUpdateRuns,
   recordUpdateRunPhase,
 } from "../../infra/update-run-ledger.js";
+import * as reportHealth from "../../infra/update-run-report-health.js";
 import { ABANDONED_UPDATE_RUN_MS } from "../../infra/update-run-timeouts.js";
 import {
   closeOpenClawStateDatabaseAsync as closeState,
@@ -118,6 +119,30 @@ beforeEach(() => {
   vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
   vi.stubEnv("OPENCLAW_CONFIG_PATH", path.join(stateDir, "openclaw.json"));
 });
+
+it.each(["2026.9.4", "2026.10.1"])(
+  "projects failed history against serving %s",
+  async (version) => {
+    const run = createUpdateRun({
+      trigger: "chat",
+      target: { kind: "git", channel: "dev" },
+      before: { version: "2026.9.4" },
+      origin: { nextAction: "Run openclaw update." },
+    });
+    finishUpdateRun(run.runId, { status: "failed", reason: "preflight-no-good-commit" });
+    vi.spyOn(reportHealth, "readUpdateRunReportHealth").mockResolvedValue({
+      kind: "responding",
+      version,
+    });
+    await updateStatus({});
+    if (version === "2026.10.1") {
+      expectOutput("Last update run failed (preflight-no-good-commit)");
+      expect(outputText()).not.toContain("Run openclaw update.");
+    } else {
+      expectOutput("OpenClaw update failed", "Run openclaw update.");
+    }
+  },
+);
 
 it.each([
   { json: true, remote: false },

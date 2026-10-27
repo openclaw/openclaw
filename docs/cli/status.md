@@ -67,22 +67,21 @@ The Update run row preserves the last recorded update outcome. When the local
 Gateway passes the current readiness and connection checks and its serving
 version matches the recorded update target, a previous failure is labeled as
 historical: `Last update run failed (post-update-failed) — Gateway is serving
-2026.9.7; run openclaw update to clear the record.` Build IDs must also match when
+2026.9.7.` Build IDs must also match when
 both the target and the live check expose them. A healthy old version, a different
 build, or unknown identity keeps the warning and its recorded failure details,
 with the serving and target versions when known. Rollback and recovery observations
 cannot by themselves establish the intended candidate identity. A
 same-version rollback stays warned when the intended candidate build cannot be
-verified. A failed run that never selected a target, such as a preflight refusal
-that recorded no target version, SHA, tag, or post-update identity, is also
-labeled as historical once the Gateway serves a different version or build than
-the running Gateway observation saved with that failure: `Last update run failed
-(preflight-no-good-commit) — Gateway is now serving 2026.10.1; recorded serving
-identity was 2026.9.4.` The installed package identity alone cannot establish this
-change: it may already have been ahead of the running Gateway when the update
-failed. A recovery check matching the old installed package does not establish
-an update target. Without a saved serving identity, the warning remains. A run with an
-explicit target keeps the rules above.
+verified. A failed or interrupted run is also historical when its recorded
+starting version or build ID differs from the serving Gateway: `Last update run
+failed (preflight-no-good-commit) — Gateway is serving 2026.10.1; recorded starting
+version was 2026.9.4.` This includes legacy preflight failures with no saved
+serving observation or selected target. The comparison uses recorded identities,
+not the age of the run or the CLI's installed package. A failure on the same
+build, or without comparable identities, keeps its warning.
+`openclaw update status` and the Control UI use the same comparison: historical
+failures do not prescribe another update, and the UI omits their retry action.
 Status does not rewrite the failed run or claim the update succeeded.
 Starting, unreachable, degraded, and
 remote Gateways do not qualify for this note. Use

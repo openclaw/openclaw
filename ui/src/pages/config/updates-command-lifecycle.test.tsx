@@ -32,6 +32,7 @@ it.each([
       status: "failed",
       phase: "finished",
       reason: "build-failed",
+      before: { version: "1.0.0" },
     });
     const request = vi.fn<RequestFn>((method) =>
       method === "update.report" ? preview.promise : Promise.resolve({ lastRun: run }),
@@ -118,6 +119,7 @@ it.each([
       }
       if (replacement === "route") {
         await router.navigate("advanced", context);
+        await vi.dynamicImportSettled();
         const advanced = await waitForSolid(() => {
           expect(view.querySelector(".content-header--settings .page-title")?.textContent).toBe(
             "Advanced",
