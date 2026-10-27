@@ -608,6 +608,7 @@ const repositoryScriptEntries = [
   "scripts/perf/session-lifecycle-prepare-measure.ts!",
   "scripts/perf/session-replacement-write-measure.ts!",
   "scripts/perf/session-patch-label-owner-measure.ts!",
+  "scripts/perf/session-patch-result-measure.mjs!",
   "scripts/perf/session-event-audience-measure.ts!",
   "scripts/perf/transcript-snapshot-copy-measure.ts!",
   "scripts/perf/turn-start-phases.ts!",
