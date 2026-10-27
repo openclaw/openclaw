@@ -21,7 +21,6 @@ import {
   type ChatSessionSnapshot,
 } from "./session-message-cache.ts";
 import {
-  CHAT_SNAPSHOT_DB_NAME as DB,
   CHAT_SNAPSHOT_METADATA_STORE_NAME as METADATA,
   CHAT_SNAPSHOT_STORE_NAME as SNAPSHOTS,
   SIDEBAR_SNAPSHOT_STORE_NAME as SIDEBAR,
@@ -36,6 +35,7 @@ import { resolveChatSnapshotKey } from "./session-snapshot-key.ts";
 import { prewarmChatSnapshot } from "./session-snapshot-prewarm.ts";
 import { SessionSnapshotStore } from "./session-snapshot-store.ts";
 
+const DB = "openclaw-chat-snapshots";
 const snapshotHost = {
   settings: { gatewayUrl: "wss://cache.example" },
   client: { recoveryScope: "account-a", recoveryScopeReady: true },
