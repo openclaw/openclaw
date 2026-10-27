@@ -270,6 +270,14 @@ async function waitForBoard(page: Page, tab = 0) {
   await settle(page);
 }
 
+async function boardReportCounts(page: Page) {
+  return page.locator(boardHost).evaluate((host) => ({
+    mountedReports: host.querySelectorAll("openclaw-report-widget").length,
+    widgetCells: host.querySelectorAll("openclaw-board-widget-cell").length,
+    scrollHeight: host.scrollHeight,
+  }));
+}
+
 async function prepareBoard(page: Page) {
   await openInteractionPanel(page);
   await waitForBoard(page);
@@ -756,7 +764,11 @@ export const dataBoardScenarios: readonly InteractionScenario[] = [
     },
     run: async (page) => {
       await prepareBoard(page);
-      return { visibleWidgets: widgetsPerTab, totalWidgets: tabCount * widgetsPerTab };
+      return {
+        visibleWidgets: widgetsPerTab,
+        totalWidgets: tabCount * widgetsPerTab,
+        ...(await boardReportCounts(page)),
+      };
     },
   },
   {
@@ -770,7 +782,27 @@ export const dataBoardScenarios: readonly InteractionScenario[] = [
     run: async (page) => {
       await page.locator(`${boardHost} [data-board-tab-id="data-1"]`).click();
       await waitForBoard(page, 1);
-      return { visitedWidgets: widgetsPerTab * 2 };
+      return { visitedWidgets: widgetsPerTab * 2, ...(await boardReportCounts(page)) };
+    },
+  },
+  {
+    id: "data-board-tab-return",
+    dataPage: "board",
+    route: controlUiSessionPath(sessionKey),
+    expected: "Returning to a visited tab preserves its already rendered report bodies.",
+    fixtureOverrides: createDataBoardFixture,
+    rowSelector: "openclaw-report-widget",
+    prepare: async (page) => {
+      await prepareBoard(page);
+      await page.locator(`${boardHost} [data-board-tab-id="data-1"]`).click();
+      await waitForBoard(page, 1);
+      await page.locator(`${boardHost} [data-board-tab-id="data-0"]`).click();
+      await waitForBoard(page);
+    },
+    run: async (page) => {
+      await page.locator(`${boardHost} [data-board-tab-id="data-1"]`).click();
+      await waitForBoard(page, 1);
+      return boardReportCounts(page);
     },
   },
   {
@@ -801,7 +833,13 @@ export const dataBoardScenarios: readonly InteractionScenario[] = [
     expected: "Scrolling the 250-widget board preserves its mounted reports.",
     fixtureOverrides: createDataBoardFixture,
     prepare: prepareBoard,
-    run: (page) => scrollSurface(page, boardHost),
+    run: async (page) => {
+      const scroll = await scrollSurface(page, boardHost);
+      await page
+        .locator(`${boardHost} [data-widget-name="data-widget-249"] openclaw-report-widget svg`)
+        .waitFor();
+      return { ...scroll, ...(await boardReportCounts(page)) };
+    },
   },
   {
     id: "data-dashboards-search",

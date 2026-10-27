@@ -178,6 +178,9 @@ Each physical store has one runtime: a storage worker thread, one serialized
 operation lane, a filesystem watcher, and a Git queue. Every agent using the
 store shares it. Vault scans, evidence checks, SQLite, and Git run in the
 worker, off the Gateway main thread. Authorization stays on the main thread.
+Evidence verification caches retain verdicts while file stamps remain unchanged;
+artifact buffers and decoded text are released after the operation, including
+when a citation fails validation.
 
 Exact reads re-read files and record external edits, renames, and deletions on
 the next query. Pending or conflicted accepted publications block ordinary reads

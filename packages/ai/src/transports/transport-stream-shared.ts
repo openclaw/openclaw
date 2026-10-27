@@ -28,12 +28,18 @@ import { sanitizeSurrogates } from "../utils/sanitize-unicode.js";
 import { createZeroUsage, isUnbilledFailedTurn } from "../utils/usage.js";
 import { parseJsonObjectPreservingUnsafeIntegers } from "./json-unsafe-integers.js";
 
-/** Decodes frame boundaries; callers retain reader lifetime and protocol admission. */
-export async function* iterateSseFrames(
-  read: () => Promise<ReadableStreamReadResult<Uint8Array>>,
-  limit?: { max: number; unit: "characters" | "bytes"; message: string },
-): AsyncGenerator<{ frame: string; terminated: boolean }> {
+/** A single synchronous scanner per stream; undefined requests the next reader result. */
+export function* decodeSseFrames(limit?: {
+  max: number;
+  unit: "characters" | "bytes";
+  message: string;
+}): Generator<
+  { frame: string; terminated: boolean } | undefined,
+  void,
+  ReadableStreamReadResult<Uint8Array>
+> {
   const decoder = new TextDecoder();
+  const streaming = { stream: true };
   const parts: string[] = [];
   let partsLength = 0;
   let tail = "";
@@ -47,8 +53,8 @@ export async function* iterateSseFrames(
     }
   };
   for (;;) {
-    const { done, value } = await read();
-    const buffer = tail + decoder.decode(value, { stream: !done });
+    const { done, value } = yield undefined;
+    const buffer = tail + decoder.decode(value, done ? undefined : streaming);
     let start = 0;
     let cr = buffer.indexOf("\r");
     let lf = buffer.indexOf("\n");
@@ -120,6 +126,22 @@ export async function* iterateSseFrames(
     }
     if (done) {
       return;
+    }
+  }
+}
+
+/** Decodes frame boundaries; callers retain reader lifetime and protocol admission. */
+export async function* iterateSseFrames(
+  read: () => Promise<ReadableStreamReadResult<Uint8Array>>,
+  limit?: Parameters<typeof decodeSseFrames>[0],
+): AsyncGenerator<{ frame: string; terminated: boolean }> {
+  const decoder = decodeSseFrames(limit);
+  for (let next = decoder.next(); !next.done;) {
+    if (next.value === undefined) {
+      next = decoder.next(await read());
+    } else {
+      yield next.value;
+      next = decoder.next();
     }
   }
 }
