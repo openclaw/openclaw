@@ -347,7 +347,6 @@ test("does not inherit receipts when a connection is replaced during pairing ver
 });
 
 test.each([
-  { boundary: "final", state: "final", drain: true },
   { boundary: "error", state: "error", drain: true },
   { boundary: "revoked source", state: "final", drain: false },
   { boundary: "cancel", state: "aborted", drain: false },

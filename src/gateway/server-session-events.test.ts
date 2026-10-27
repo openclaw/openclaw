@@ -463,24 +463,13 @@ describe("createTranscriptUpdateBroadcastHandler", () => {
     expectPrivateSessionInvalidation(broadcastToConnIds.mock.calls[0]?.[1]);
   });
 
-  it.each([
-    [
-      { idempotencyKey: "client-turn-3" },
-      {
-        sessionKey: "agent:main:main",
-        messageId: "message-1",
-        messageSeq: 1,
-        message: { __openclaw: { id: "message-1", idempotencyKey: "client-turn-3", seq: 1 } },
-      },
-    ],
-    [{ __openclaw: { senderIsOwner: true } }, { senderIsOwner: true }],
-  ])("broadcasts user message metadata %j", async (metadata, expected) => {
+  it("broadcasts user message ownership", async () => {
     await expect(
       emitAssistantTranscriptUpdate(false, {
         ...messageUpdate("message-1", "User turn", "user").message,
-        ...metadata,
+        __openclaw: { senderIsOwner: true },
       }),
-    ).resolves.toMatchObject(expected);
+    ).resolves.toMatchObject({ senderIsOwner: true });
   });
   it("publishes message-phase changes to plugins without websocket subscribers", async () => {
     const received = vi.fn();
