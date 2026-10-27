@@ -51,7 +51,10 @@ retaining an admission must not retain those completed workspace payloads.
 
 Idle session reclamation workers retain their admitted connection, not completed
 deletion plans or the caller's async context. Retirement callbacks capture only
-the worker's registry key. Transport startup and idle timers run outside request
+the worker's registry key. Request handlers release completed replies before
+waiting for the next message, including buffered admission replies. Lazy plugin
+capture imports reuse the shared detached maintenance context rather than
+retaining the importing request. Transport startup and idle timers run outside request
 context while preserving the selected database engine. Each reclamation request
 keeps its own current-source and commit-authority checks.
 
