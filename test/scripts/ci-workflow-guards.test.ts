@@ -3462,8 +3462,40 @@ server.listen(0, "127.0.0.1", () => {
       save,
       restore,
       steps.find((step) => step.name === "Warm transform and compile caches"),
+      steps.find((step) => step.name === "Save built-source compiled Vitest workers"),
     ].map((step) => steps.indexOf(expectDefined(step, "ordered warming step")));
     expect(ordered).toEqual(ordered.toSorted((a, b) => a - b));
+
+    const builtSave = requiredWorkflowStep(steps, "Save built-source compiled Vitest workers");
+    const producerSteps = readCiWorkflow().jobs["build-artifacts"].steps as WorkflowStep[];
+    const builtRestore = requiredWorkflowStep(
+      producerSteps,
+      "Restore built-source compiled Vitest workers",
+    );
+    expect(builtSave.uses).toBe(CACHE_SAVE_V5);
+    expect(builtRestore.uses).toBe(CACHE_V5);
+    expect(builtSave.if).toContain("steps.warm-caches.outcome == 'success'");
+    expect(builtSave.with?.path).toBe(".artifacts/vitest-worker-cache/run-cache-0");
+    expect(builtRestore.with?.path).toBe(builtSave.with?.path);
+    const saveKey = String(builtSave.with?.key);
+    const restoreKey = String(builtRestore.with?.key);
+    expect(saveKey).toContain("-vitest-workers-built-v1-protected-");
+    expect(saveKey).toContain("steps.setup-node-env.outputs.node-toolchain-cache-key");
+    expect(restoreKey.replace("steps.node_setup.", "steps.setup-node-env.")).toBe(saveKey);
+    expect(builtRestore.with?.["restore-keys"]).toBe(
+      restoreKey.replace("${{ github.run_id }}-${{ github.run_attempt }}", "") + "\n",
+    );
+    expect(builtRestore.if).toContain(
+      "needs.preflight.outputs.run_built_source_verifiers == 'true'",
+    );
+    const verifiers = requiredWorkflowStep(producerSteps, "Run built artifact checks");
+    expect(producerSteps.indexOf(builtRestore)).toBeLessThan(producerSteps.indexOf(verifiers));
+    expect(verifiers.env?.SOURCE_VERIFIER_CACHE).toContain(
+      "steps.built_worker_cache.outputs.cache-matched-key != ''",
+    );
+    expect(
+      String(requiredWorkflowStep(steps, "Save compiled Vitest workers").with?.key),
+    ).not.toContain("built-v1");
   });
 
   it("persists Node 26 minimum declarations through trusted bounded artifacts", () => {
@@ -5862,6 +5894,7 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
       channels: true,
       core: false,
       supported: true,
+      cache: "0",
       expected: ["channels|--max-old-space-size=8192|1|--max-old-space-size=8192|1"],
     },
     {
@@ -5919,7 +5952,7 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
         "  *test/vitest/vitest.full-core-support-boundary.config.ts) name=core-support-boundary ;;",
         "esac",
         'if [ -n "$name" ]; then',
-        '  printf "%s|%s|%s|%s|%s\\n" "$name" "${NODE_OPTIONS:-}" "${OPENCLAW_VITEST_MAX_WORKERS:-}" "$CHANNEL_NODE_OPTIONS" "$CHANNEL_MAX_WORKERS" >> "$CHECK_CALLS"',
+        '  printf "%s|%s|%s|%s|%s|%s\\n" "$name" "${NODE_OPTIONS:-}" "${OPENCLAW_VITEST_MAX_WORKERS:-}" "$CHANNEL_NODE_OPTIONS" "$CHANNEL_MAX_WORKERS" "$OPENCLAW_VITEST_WORKER_CACHE" >> "$CHECK_CALLS"',
         '  if [ "$name" = "$FAIL_CHECK" ]; then exit 7; fi',
         "fi",
       ]);
@@ -5938,6 +5971,7 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
         OPENCLAW_VITEST_MAX_WORKERS: "",
         CHANNEL_NODE_OPTIONS: heap,
         CHANNEL_MAX_WORKERS: "1",
+        SOURCE_VERIFIER_CACHE: scenario.cache ?? "1",
         RUN_CHANNELS: String(scenario.channels),
         RUN_CORE_SUPPORT_BOUNDARY: String(scenario.core),
         RUN_DOCTOR_PLUGIN_INDEX: "false",
@@ -5952,7 +5986,7 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
     });
     expect(result.status, result.stdout + result.stderr).toBe(scenario.failure ? 1 : 0);
     expect(readFileSync(calls, "utf8").trim().split("\n").toSorted()).toEqual(
-      scenario.expected.toSorted(),
+      scenario.expected.map((call) => `${call}|${scenario.cache ?? "1"}`).toSorted(),
     );
     if (scenario.failure) {
       expect(result.stdout).toContain(`::error title=${scenario.failure} failed::`);
