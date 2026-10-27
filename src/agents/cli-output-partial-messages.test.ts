@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { chargeClaudeStreamJsonLine } from "./cli-output-stream-limits.js";
 import {
   claudeBlockStart,
   claudeBlockStop,
@@ -14,6 +15,55 @@ function streamDelta(delta: Record<string, unknown>) {
     parent_tool_use_id: null,
   };
 }
+
+// Frame metadata shape emitted by current Claude Code (seen on 2.1.296 and 2.1.310).
+const API_MESSAGE_ID = `msg_${"0".repeat(24)}`;
+const currentDelta = (delta: Record<string, unknown>, extra: Record<string, unknown> = {}) => ({
+  ...streamDelta(delta),
+  api_message_id: API_MESSAGE_ID,
+  ...extra,
+});
+const CURRENT_FRAMES = [
+  ["text_delta", currentDelta({ type: "text_delta", text: "Ac" })],
+  ["input_json_delta", currentDelta({ type: "input_json_delta", partial_json: '{"pa' })],
+  [
+    "thinking_delta",
+    currentDelta(
+      { type: "thinking_delta", thinking: "a", estimated_tokens: 50 },
+      { thinking_display: "updates" },
+    ),
+  ],
+  [
+    "null metadata",
+    currentDelta(
+      { type: "text_delta", text: "a" },
+      { api_message_id: null, thinking_display: null },
+    ),
+  ],
+  [
+    "thinking_display only",
+    { ...streamDelta({ type: "thinking_delta", thinking: "a" }), thinking_display: "updates" },
+  ],
+  [
+    "api_message_id at its cap",
+    currentDelta({ type: "text_delta", text: "a" }, { api_message_id: "m".repeat(64) }),
+  ],
+  [
+    "thinking_display at its cap",
+    currentDelta({ type: "thinking_delta", thinking: "a" }, { thinking_display: "d".repeat(32) }),
+  ],
+] as const;
+
+// Key order and field values of captured frames, with synthetic ids.
+const capturedFrame = (delta: Record<string, unknown>, extra: Record<string, unknown> = {}) => ({
+  type: "stream_event",
+  event: { type: "content_block_delta", index: 0, delta },
+  session_id: "00000000-0000-4000-8000-000000000001",
+  parent_tool_use_id: null,
+  uuid: "00000000-0000-4000-8000-000000000002",
+  ...extra,
+  api_message_id: API_MESSAGE_ID,
+});
 
 const createParser = () => createClaudeParser({ onThinkingDelta: () => {} });
 const line = (record: unknown, count = 1) => `${JSON.stringify(record)}\n`.repeat(count);
@@ -96,6 +146,97 @@ describe("Claude partial-message output budgets", () => {
     expect(parser.getErrorText()).toContain("exceeded 20000 lines");
   });
 
+  it.each(CURRENT_FRAMES)("discounts the envelope of a current %s frame", (_name, record) => {
+    const raw = JSON.stringify(record);
+    const delta = record.event.delta as Record<string, unknown>;
+    const payload = delta.text ?? delta.partial_json ?? delta.thinking;
+    const tokens = delta.estimated_tokens === undefined ? 0 : '{"estimated_tokens":50}'.length;
+    expect(chargeClaudeStreamJsonLine(JSON.parse(raw), raw)).toEqual({
+      chars: JSON.stringify(payload).length + 32 + tokens,
+      partialMessage: true,
+    });
+  });
+
+  it.each(CURRENT_FRAMES)("accepts 20,001 current %s frames", (_name, record) => {
+    const parser = createParser();
+    parser.push(line(record, 20_001));
+    parser.finish();
+    expect(parser.getErrorText()).toBeNull();
+  });
+
+  it.each([
+    [
+      "oversized api_message_id",
+      currentDelta({ type: "text_delta", text: "a" }, { api_message_id: "m".repeat(65) }),
+    ],
+    [
+      "non-string api_message_id",
+      currentDelta({ type: "text_delta", text: "a" }, { api_message_id: 7 }),
+    ],
+    [
+      "oversized thinking_display",
+      currentDelta({ type: "thinking_delta", thinking: "a" }, { thinking_display: "d".repeat(33) }),
+    ],
+    [
+      "non-string thinking_display",
+      currentDelta({ type: "thinking_delta", thinking: "a" }, { thinking_display: 7 }),
+    ],
+    [
+      "thinking_display on a text frame",
+      currentDelta({ type: "text_delta", text: "a" }, { thinking_display: "updates" }),
+    ],
+    [
+      "thinking_display on a tool-input frame",
+      currentDelta(
+        { type: "input_json_delta", partial_json: "{" },
+        { thinking_display: "updates" },
+      ),
+    ],
+    [
+      "unknown record fields",
+      currentDelta({ type: "text_delta", text: "a" }, { request_id: "req_1" }),
+    ],
+  ] as const)("keeps full accounting for %s", (_name, record) => {
+    const raw = JSON.stringify(record);
+    expect(chargeClaudeStreamJsonLine(JSON.parse(raw), raw)).toEqual({
+      chars: raw.length,
+      partialMessage: false,
+    });
+    const parser = createParser();
+    parser.push(line(record, 20_001));
+    expect(parser.getErrorText()).toContain("exceeded 20000 lines");
+  });
+
+  it.each([
+    ["2.1.296 text_delta", capturedFrame({ type: "text_delta", text: "x" }), 35],
+    [
+      "2.1.310 thinking_delta",
+      capturedFrame(
+        { type: "thinking_delta", thinking: "xxx", estimated_tokens: null },
+        { thinking_display: "updates" },
+      ),
+      62,
+    ],
+  ] as const)("discounts a captured %s frame", (_name, record, chars) => {
+    const raw = JSON.stringify(record);
+    expect(chargeClaudeStreamJsonLine(JSON.parse(raw), raw)).toEqual({
+      chars,
+      partialMessage: true,
+    });
+  });
+
+  it("keeps full accounting for a captured empty thinking progress frame", () => {
+    const record = capturedFrame(
+      { type: "thinking_delta", thinking: "", estimated_tokens: 50 },
+      { thinking_display: "updates" },
+    );
+    const raw = JSON.stringify(record);
+    expect(chargeClaudeStreamJsonLine(JSON.parse(raw), raw)).toEqual({
+      chars: raw.length,
+      partialMessage: false,
+    });
+  });
+
   it("still counts outer whitespace around a recognized delta", () => {
     const parser = createParser();
     const compact = JSON.stringify(streamDelta({ type: "text_delta", text: "a" }));
@@ -112,5 +253,33 @@ describe("Claude partial-message output budgets", () => {
       parser.push(chunk);
     }
     expect(parser.getErrorText()).toContain("CLI JSONL output exceeded");
+  });
+
+  const maximalMetadata = {
+    uuid: "u".repeat(128),
+    session_id: "s".repeat(128),
+    parent_tool_use_id: "p".repeat(128),
+    api_message_id: "m".repeat(64),
+  };
+  it.each([
+    ["typical text", currentDelta({ type: "text_delta", text: "a" })],
+    ["maximal text", currentDelta({ type: "text_delta", text: "a" }, maximalMetadata)],
+    [
+      "maximal thinking",
+      currentDelta(
+        { type: "thinking_delta", thinking: "a" },
+        { ...maximalMetadata, thinking_display: "d".repeat(32) },
+      ),
+    ],
+  ] as const)("bounds tiny current-shape delta floods of %s frames by characters", (_n, record) => {
+    const parser = createParser();
+    const chunk = line(record);
+    // Each frame is charged 35 characters plus its newline, so frame 233,017 overflows.
+    let frames = 0;
+    for (; frames < 240_000 && !parser.getErrorText(); frames += 1) {
+      parser.push(chunk);
+    }
+    expect(parser.getErrorText()).toContain("exceeded 8388608 characters");
+    expect(frames).toBe(233_017);
   });
 });
