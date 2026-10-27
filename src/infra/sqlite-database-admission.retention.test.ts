@@ -15,6 +15,9 @@ import type { RuntimeWorkerGeneration } from "./runtime-worker-generation.js";
 import type { PostgresSqlConnection } from "./sql-connection.js";
 import { SQLITE_DATABASE_ADMISSIONS_KEY } from "./sqlite-database-admission-key.js";
 import {
+  admitSqliteDatabaseFactValue,
+  publishSqliteDatabaseFact,
+  readSqliteDatabaseFactRevision,
   readSqliteDatabaseAdmissionFact as readFact,
   SqliteDatabaseAdmissionRegistry,
 } from "./sqlite-database-admission-record.js";
@@ -23,6 +26,7 @@ import {
   discardSqliteDatabaseTransactionAdmissions as discardFacts,
   getSqliteDatabaseAdmission as getFact,
   getOrLoadSqliteDatabaseAdmissionForPath as loadFact,
+  prepareSqliteDatabaseAdmissionForPath as prepareFact,
   hasPendingSqliteDatabaseSchemaMutation as schemaDirty,
   invalidateLocalSqliteSchemaAdmissions as invalidateSchema,
   publishSqliteDatabaseAdmission as publishFact,
@@ -749,6 +753,53 @@ it("path revocation invalidates scoped receipts and admission facts with a live 
 
 const key = { name: "test.engine-admission", read: (value: unknown) => value };
 const schemaKey = { ...key, name: "test.engine-schema-admission", schemaDependent: true };
+
+it("prepared facts follow a worker whose snapshot predates the host seed", () => {
+  using fixture = databaseFixture("sqlite-prepared-publication-");
+  const { database, location } = fixture;
+  const worker = new SqliteDatabaseAdmissionRegistry();
+  worker.install(structuredClone(recordsFor(location)));
+  const workerRecord = worker.forLocation(location)!;
+  publishFact(database, schemaKey, "host seed");
+  const read = prepareFact(location, schemaKey);
+  expect(read()).toBe("host seed");
+  publishSqliteDatabaseFact(
+    workerRecord,
+    schemaKey,
+    admitSqliteDatabaseFactValue(schemaKey, "worker replacement"),
+    readSqliteDatabaseFactRevision(workerRecord, true),
+    "worker-publication",
+  );
+  worker.publish(workerRecord);
+  installAdmissions(worker.capture());
+  expect(getFact(database, schemaKey)).toBe("worker replacement");
+  expect(read()).toBe("worker replacement");
+});
+
+it.each([
+  [key, false],
+  [schemaKey, true],
+] as const)("prepared facts follow publication and revocation (%j)", (factKey, schemaDependent) => {
+  using fixture = databaseFixture("sqlite-prepared-admission-");
+  const { database, location } = fixture;
+  const read = prepareFact(location, factKey);
+  expect(read()).toBeUndefined();
+  publishFact(database, factKey, "first");
+  expect(read()).toBe("first");
+  publishFact(database, factKey, "replacement");
+  expect(read()).toBe("replacement");
+  revokePath(location);
+  expect(read()).toBeUndefined();
+  publishFact(database, factKey, "recovered");
+  expect(read()).toBe("recovered");
+  publishSchema(database);
+  expect(read()).toBe(schemaDependent ? undefined : "recovered");
+  publishFact(database, factKey, "new-schema");
+  expect(read()).toBe("new-schema");
+  database.close();
+  retireAdmission(location);
+  expect(read()).toBeUndefined();
+});
 
 it.each(["committed", "native", "sqlite-transaction", "postgres-transaction"] as const)(
   "decodes admission values once at publication (%s)",

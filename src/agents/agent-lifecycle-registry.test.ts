@@ -34,7 +34,10 @@ import {
   closeOpenClawAgentDatabasesForTest,
   openOpenClawAgentDatabase,
 } from "../state/openclaw-agent-db.js";
-import { requireOpenClawStateDatabaseIdentity } from "../state/openclaw-state-db-cache.js";
+import {
+  recordOpenClawStateDatabaseOpenFailure,
+  requireOpenClawStateDatabaseIdentity,
+} from "../state/openclaw-state-db-cache.js";
 import { withOpenClawStateDatabaseReadSnapshot } from "../state/openclaw-state-db-readonly.js";
 import { tableExists } from "../state/openclaw-state-db-schema-helpers.js";
 import {
@@ -52,6 +55,7 @@ import {
   captureAgentLifecycleBinding,
   claimCompletedAgentDeletion,
   isAgentDeletionBlocked,
+  prepareAgentDeletionBlocked,
   matchesAgentLifecycleBinding,
   matchesAgentLifecycleBindingAsync,
   withAgentDeletion as withAgentDeletionRuntime,
@@ -209,6 +213,25 @@ afterEach(async () => {
 });
 
 describe("agent lifecycle registry", () => {
+  it.each(["close", "terminal failure"])(
+    "rejects prepared effects after %s",
+    async (transition) => {
+      const database = openOpenClawStateDatabase(options);
+      await readAgentDeletionJournalStatusInWorker("main", options);
+      const preparedBlocked = prepareAgentDeletionBlocked("main", options);
+      expect(preparedBlocked()).toBe(false);
+      if (transition === "close") {
+        await closeStateDatabaseForTest();
+      } else {
+        recordOpenClawStateDatabaseOpenFailure(
+          database.path,
+          new Error("synthetic terminal failure"),
+        );
+      }
+      expect(preparedBlocked).toThrow();
+    },
+  );
+
   it.each(["openclaw", "crestodian"])(
     "rejects deletion authority for system agent %s",
     async (agentId) => {
@@ -230,6 +253,8 @@ describe("agent lifecycle registry", () => {
     await setProvenance(1);
     const binding = (await captureAgentLifecycleBinding(() => config, "main", options))!;
     await readAgentDeletionJournalStatusInWorker("main", options);
+    const preparedBlocked = prepareAgentDeletionBlocked("main", options);
+    expect(preparedBlocked()).toBe(false);
     const rollback = new Error("rollback authority changes");
     expect(() =>
       runOpenClawStateWriteTransaction((database) => {
@@ -249,12 +274,14 @@ describe("agent lifecycle registry", () => {
           options,
         );
         expect(blocked()).toBe(true);
+        expect(preparedBlocked()).toBe(true);
         expect(matchesAgentLifecycleBinding(config, binding, options)).toBe(true);
         throw rollback;
       }, options),
     ).toThrow(rollback);
     await readAgentDeletionJournalStatusInWorker("main", options);
     expect(blocked()).toBe(false);
+    expect(preparedBlocked()).toBe(false);
     expect(matchesAgentLifecycleBinding(config, binding, options)).toBe(true);
   });
 
@@ -373,12 +400,17 @@ describe("agent lifecycle registry", () => {
     const binding = await captureAgentLifecycleBinding(() => config, "main", options);
     await readAgentDeletionJournalStatusInWorker("main", options);
     let retainedGuard: (() => boolean) | undefined;
+    let retainedPreparedGuard: (() => boolean) | undefined;
+    const preparedBlocked = prepareAgentDeletionBlocked("main", options);
     await withOpenClawStateDatabaseReadSnapshot(async () => {
       retainedGuard = AsyncLocalStorage.bind(blocked);
+      retainedPreparedGuard = AsyncLocalStorage.bind(preparedBlocked);
       expect(blocked()).toBe(false);
+      expect(preparedBlocked()).toBe(false);
       await withAgentDeletion(async (begin) => {
         const deletion = await begin(createEntry());
         expect(blocked()).toBe(true);
+        expect(preparedBlocked()).toBe(true);
         expect(await captureAgentLifecycleBinding(() => config, "main", options)).toBeUndefined();
         expect(binding && matchesAgentLifecycleBinding(config, binding, options)).toBe(false);
         await withoutHostSql(() => deletion.assertCurrentAsync(), true);
@@ -387,9 +419,11 @@ describe("agent lifecycle registry", () => {
         await expect(deletion.assertCurrentAsync()).rejects.toThrow("no longer owns");
         expect(binding && matchesAgentLifecycleBinding(config, binding, options)).toBe(true);
         expect(blocked()).toBe(false);
+        expect(preparedBlocked()).toBe(false);
       });
     }, options);
     expect(retainedGuard).toThrow("read scope is closing or closed");
+    expect(retainedPreparedGuard).toThrow("read scope is closing or closed");
   });
 
   it("uses committed journal authority for filesystem effects without host SQL", async () => {
