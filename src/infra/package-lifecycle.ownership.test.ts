@@ -276,44 +276,39 @@ it.each([
     dispatches: shape !== "absent" ? 2 : 0,
   });
 });
-it.each([
-  "directory",
-  "partial",
-  "unknown",
-  "oversized",
-  "reused-pid",
-  "dead-parent",
-  "symlink",
-  "marker-absent",
-])("refuses %s ownership without mutation or scripts", async (kind) => {
-  const outside = path.join(packageRoot, "sentinel");
-  if (kind === "marker-absent") {
-    await fs.rm(pending);
-  }
-  if (kind === "directory") {
-    await fs.mkdir(lock);
-  } else if (kind === "symlink") {
-    await fs.mkdir(outside);
-    await fs.writeFile(path.join(outside, "keep"), "keep");
-    await fs.symlink(outside, lock, process.platform === "win32" ? "junction" : "dir");
-  } else if (kind === "dead-parent") {
-    const child = spawnSync(process.execPath, ["-e", ""], { timeout: 5000 });
-    expect(child.status).toBe(0);
-    await writeOwner({ pid: child.pid });
-  } else {
-    const raw =
-      kind === "partial" || kind === "marker-absent"
-        ? "{unfinished"
-        : kind === "oversized"
-          ? "x".repeat(1024 * 1024 + 1)
-          : kind === "reused-pid"
-            ? JSON.stringify({
-                ...ownerPayload(),
-                starttime: (pidAlive.getFileLockProcessStartTime(process.pid) ?? 0) + 1,
-              })
-            : "{}";
-    await fs.writeFile(lock, raw);
-  }
+const sentinel = () => path.join(packageRoot, "sentinel");
+it.each<[string, () => Promise<unknown>]>([
+  ["directory", () => fs.mkdir(lock)],
+  ["partial", () => fs.writeFile(lock, "{unfinished")],
+  ["unknown", () => fs.writeFile(lock, "{}")],
+  ["oversized", () => fs.writeFile(lock, "x".repeat(1024 * 1024 + 1))],
+  ["reused-pid", () => writeOwner({ starttime: (ownerPayload().starttime ?? 0) + 1 })],
+  [
+    "dead-parent",
+    async () => {
+      const child = spawnSync(process.execPath, ["-e", ""], { timeout: 5000 });
+      expect(child.status).toBe(0);
+      await writeOwner({ pid: child.pid });
+    },
+  ],
+  [
+    "symlink",
+    async () => {
+      const outside = sentinel();
+      await fs.mkdir(outside);
+      await fs.writeFile(path.join(outside, "keep"), "keep");
+      await fs.symlink(outside, lock, process.platform === "win32" ? "junction" : "dir");
+    },
+  ],
+  [
+    "marker-absent",
+    async () => {
+      await fs.rm(pending);
+      await fs.writeFile(lock, "{unfinished");
+    },
+  ],
+])("refuses %s ownership without mutation or scripts", async (kind, prepare) => {
+  await prepare();
   const before = await fs.lstat(lock);
   const rawBefore = before.isFile() ? await fs.readFile(lock) : null;
   const completion = finish();
@@ -324,7 +319,7 @@ it.each([
   if (kind === "symlink") {
     await expect(completion).rejects.toBeInstanceOf(OwnershipError);
     expect((await fs.lstat(lock)).isSymbolicLink()).toBe(true);
-    expect(await read(path.join(outside, "keep"))).toBe("keep");
+    expect(await read(path.join(sentinel(), "keep"))).toBe("keep");
   }
   expect(runScript).not.toHaveBeenCalled();
   expect((await fs.lstat(lock)).ino).toBe(before.ino);
