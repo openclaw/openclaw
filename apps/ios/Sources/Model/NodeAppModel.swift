@@ -1010,8 +1010,18 @@ final class NodeAppModel {
         watchMessagingService: any WatchMessagingServicing = WatchMessagingService(),
         talkMode: TalkModeManager = TalkModeManager(),
         voiceNoteRecorder: OpenClawVoiceNoteRecorder = OpenClawVoiceNoteRecorder(),
-        audioAdmissionInitiallyAllowed: Bool = true)
+        audioAdmissionInitiallyAllowed: Bool = true,
+        restoringSavedGatewayRoute: Bool = false)
     {
+        // Resolve the presentation route before RootTabs can construct or paint a chat.
+        // Connection and routing hydration later enrich this same gateway-owned session.
+        // Only the app asks for this: reading the saved registry and focus makes a model depend on
+        // process-wide settings, which tests that build many models must not do implicitly.
+        if restoringSavedGatewayRoute, let stableID = GatewaySettingsStore.activeGatewayEntry()?.stableID {
+            self.connectedGatewayID = stableID
+            self.selectedAgentId = GatewaySettingsStore.loadGatewaySelectedAgentId(stableID: stableID)
+            self.focusedChatSessionKey = GatewaySettingsStore.loadGatewayFocusedChatSessionKey(stableID: stableID)
+        }
         self.camera = camera
         self.preferredCameraFacing = Self.cameraFacingPreference(
             rawValue: UserDefaults.standard.string(forKey: Self.preferredCameraFacingKey))
@@ -1096,9 +1106,10 @@ final class NodeAppModel {
             }
         }
 
+        self.synchronizeTalkSessionKey()
         self.voiceWake.configure { [weak self] cmd in
             guard let self else { return }
-            try await self.sendVoiceTranscript(text: cmd, sessionKey: self.mainSessionKey)
+            try await self.sendVoiceTranscript(text: cmd, sessionKey: self.chatSessionKey)
         }
         self.voiceNoteRecorder.onRecordingActiveChanged = { [weak self] isActive in
             self?.voiceWake.setSuppressed(isActive, reason: .voiceNote)
@@ -1161,6 +1172,7 @@ final class NodeAppModel {
             // through this phase before active; keep microphone gates closed.
             break
         case .active:
+            self.synchronizeTalkSessionKey()
             self.isBackgrounded = false
             if self.clientDatabases == nil {
                 // Recovery must run even after forgetting the final gateway;
@@ -1362,6 +1374,7 @@ final class NodeAppModel {
         }
         UserDefaults.standard.set(enabled, forKey: "talk.enabled")
         if enabled {
+            self.synchronizeTalkSessionKey()
             if self.voiceNoteRecorder.isRecording || self.voiceNoteRecorder.isRequestingPermission {
                 self.voiceNoteRecorder.cancel()
             }
@@ -1654,14 +1667,7 @@ final class NodeAppModel {
             self.gatewayAgents = decoded.agents
             self.gatewaySessionScope = decoded.scope.value as? String
             self.applyMainSessionKey(decoded.mainkey)
-
-            let selected = (self.selectedAgentId ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
-            if !selected.isEmpty,
-               !decoded.agents.contains(where: { $0.id == selected && $0.isSelectableAgent })
-            {
-                self.selectedAgentId = nil
-                self.focusedChatSessionKey = nil
-            }
+            self.retireSelectedAgentIfRemoved(from: decoded.agents)
             self.synchronizeTalkSessionKey()
             if let routingIdentity {
                 await sourceStore.storeSessionRoutingIdentity(routingIdentity)
@@ -1683,6 +1689,16 @@ final class NodeAppModel {
         await self.refreshAgentsFromGateway()
     }
 
+    /// A roster refresh that drops the selected agent retires it through the normal selection
+    /// transition, so its active and saved chat focus cannot keep routing chat or Talk to it.
+    func retireSelectedAgentIfRemoved(from agents: [AgentSummary]) {
+        let selected = (self.selectedAgentId ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !selected.isEmpty,
+              !agents.contains(where: { $0.id == selected && $0.isSelectableAgent })
+        else { return }
+        self.setSelectedAgentId(nil)
+    }
+
     func setSelectedAgentId(_ agentId: String?) {
         let trimmed = (agentId ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
         let nextSelectedAgentId = trimmed.isEmpty ? nil : trimmed
@@ -1697,6 +1713,10 @@ final class NodeAppModel {
         }
         if selectedAgentChanged {
             self.focusedChatSessionKey = nil
+            // The saved chat belongs to the previous agent; relaunch must not restore it over this selection.
+            if let stableID = self.connectedGatewayID {
+                GatewaySettingsStore.saveGatewayFocusedChatSessionKey(stableID: stableID, sessionKey: nil)
+            }
             self.shareDeliveryChannel = nil
             self.shareDeliveryTo = nil
         }
@@ -3217,13 +3237,19 @@ extension NodeAppModel {
 
     func focusChatSession(_ sessionKey: String?) {
         self.focusedChatSessionKey = Self.trimmedOrNil(sessionKey)
+        // Like the web Control UI's lastActiveSessionKey: relaunch reopens this chat, not Home.
+        if let stableID = self.connectedGatewayID {
+            GatewaySettingsStore.saveGatewayFocusedChatSessionKey(
+                stableID: stableID,
+                sessionKey: self.focusedChatSessionKey)
+        }
         self.synchronizeTalkSessionKey()
     }
 
     /// Session changes invalidate queued PTT admission before Talk cancels any
     /// active owner. Otherwise a waiter can wake and retarget to the new chat.
-    func synchronizeTalkSessionKey(_ sessionKey: String? = nil) {
-        let effectiveSessionKey = sessionKey ?? self.chatSessionKey
+    func synchronizeTalkSessionKey() {
+        let effectiveSessionKey = self.chatSessionKey
         guard !self.talkMode.isUsingMainSessionKey(effectiveSessionKey) else { return }
         self.talkPttCommandEpoch &+= 1
         self.voiceWake.invalidatePendingCommand()
@@ -3640,7 +3666,7 @@ extension NodeAppModel {
         // Session keys are gateway-owned: transport reconnects keep the active chat,
         // while initial connects and target changes must not inherit another route.
         if !preservingFocusedChatSession {
-            self.focusedChatSessionKey = nil
+            self.focusedChatSessionKey = GatewaySettingsStore.loadGatewayFocusedChatSessionKey(stableID: stableID)
         }
         self.synchronizeTalkSessionKey()
         self.apnsLastRegisteredTokenHex = nil
@@ -5183,9 +5209,8 @@ extension NodeAppModel {
     }
 
     private func currentExecApprovalGatewayStableID() -> String? {
-        let stableID = self.activeGatewayConnectConfig?.effectiveStableID
-            ?? self.connectedGatewayID
-        return GatewayStableIdentifier.exact(stableID)
+        // Remembered chat ownership is not a configured approval route.
+        GatewayStableIdentifier.exact(self.activeGatewayConnectConfig?.effectiveStableID)
     }
 
     func refreshPendingApprovalInbox() async {
@@ -6036,7 +6061,7 @@ extension NodeAppModel {
             return
         case .startTalk:
             guard !self.isAppleReviewDemoModeEnabled else { break }
-            self.synchronizeTalkSessionKey(event.sessionKey ?? self.chatSessionKey)
+            // A Watch snapshot can lag behind the phone's visible conversation.
             self.setTalkEnabled(true)
         case .stopTalk:
             self.setTalkEnabled(false)
@@ -8900,7 +8925,7 @@ extension NodeAppModel {
                   generation: routeGeneration,
                   stableID: gatewayStableID)
         else { throw CancellationError() }
-        if let sessionKey, sessionKey != self.mainSessionKey {
+        if let sessionKey, sessionKey != self.chatSessionKey {
             throw CancellationError()
         }
         try Task.checkCancellation()
@@ -9156,6 +9181,10 @@ extension NodeAppModel {
 
 #if DEBUG
 extension NodeAppModel {
+    func _test_nodeGateway() -> GatewayNodeSession {
+        self.nodeGateway
+    }
+
     func _test_pttVoiceWakeLeaseCaptureIds() -> Set<String> {
         self.pttVoiceWakeLeaseCaptureId.map { [$0] } ?? []
     }
@@ -9188,9 +9217,6 @@ extension NodeAppModel {
     }
 
     func _test_presentExecApprovalPrompt(_ prompt: ExecApprovalPrompt) {
-        if self.currentExecApprovalGatewayStableID() == nil {
-            self.connectedGatewayID = prompt.gatewayStableID
-        }
         self.presentFetchedExecApprovalPrompt(prompt)
     }
 

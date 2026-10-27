@@ -40,7 +40,6 @@ enum GatewaySettingsStore {
     private static let nodeService = "ai.openclawfoundation.app.node"
 
     private static let instanceIdDefaultsKey = "node.instanceId"
-    private static let selectedAgentDefaultsPrefix = "gateway.selectedAgentId."
 
     private static let instanceIdAccount = "instanceId"
     private static let gatewayRegistryAccount = "gateway-registry"
@@ -617,11 +616,11 @@ enum GatewaySettingsStore {
         return deletedAll
     }
 
-    static func loadGatewaySelectedAgentId(stableID: String) -> String? {
+    private static func loadGatewayDefault(prefix: String, stableID: String) -> String? {
         guard let stableID = GatewayStableIdentifier.exact(stableID) else { return nil }
         let defaults = UserDefaults.standard
-        let key = self.selectedAgentDefaultsKey(stableID: stableID)
-        let legacyKey = self.selectedAgentDefaultsPrefix + stableID
+        let key = self.gatewayDefaultsKey(prefix: prefix, stableID: stableID)
+        let legacyKey = prefix + stableID
         let value = (defaults.string(forKey: key) ??
             (self.canSafelyReadLegacyRawStorageKey(stableID) ? defaults.string(forKey: legacyKey) : nil))?
             .trimmingCharacters(in: .whitespacesAndNewlines)
@@ -635,22 +634,22 @@ enum GatewaySettingsStore {
         return nil
     }
 
-    static func saveGatewaySelectedAgentId(stableID: String, agentId: String?) {
+    private static func saveGatewayDefault(_ value: String?, prefix: String, stableID: String) {
         guard let stableID = GatewayStableIdentifier.exact(stableID) else { return }
-        let key = self.selectedAgentDefaultsKey(stableID: stableID)
-        let trimmed = agentId?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        let key = self.gatewayDefaultsKey(prefix: prefix, stableID: stableID)
+        let trimmed = value?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         if trimmed.isEmpty {
             UserDefaults.standard.removeObject(forKey: key)
         } else {
             UserDefaults.standard.set(trimmed, forKey: key)
         }
         if self.canSafelyReadLegacyRawStorageKey(stableID) {
-            UserDefaults.standard.removeObject(forKey: self.selectedAgentDefaultsPrefix + stableID)
+            UserDefaults.standard.removeObject(forKey: prefix + stableID)
         }
     }
 
-    private static func selectedAgentDefaultsKey(stableID: String) -> String {
-        "\(self.selectedAgentDefaultsPrefix)v2.\(GatewayStableIdentifier.storageComponent(stableID)!)"
+    private static func gatewayDefaultsKey(prefix: String, stableID: String) -> String {
+        "\(prefix)v2.\(GatewayStableIdentifier.storageComponent(stableID)!)"
     }
 
     private static func gatewayTokenAccount(instanceId: String) -> String {
@@ -807,6 +806,27 @@ enum GatewaySettingsStore {
         if let stored {
             defaults.set(stored, forKey: defaultsKey)
         }
+    }
+}
+
+extension GatewaySettingsStore {
+    private static let selectedAgentDefaultsPrefix = "gateway.selectedAgentId."
+    private static let focusedChatSessionDefaultsPrefix = "gateway.focusedChatSessionKey."
+
+    static func loadGatewaySelectedAgentId(stableID: String) -> String? {
+        self.loadGatewayDefault(prefix: self.selectedAgentDefaultsPrefix, stableID: stableID)
+    }
+
+    static func saveGatewaySelectedAgentId(stableID: String, agentId: String?) {
+        self.saveGatewayDefault(agentId, prefix: self.selectedAgentDefaultsPrefix, stableID: stableID)
+    }
+
+    static func loadGatewayFocusedChatSessionKey(stableID: String) -> String? {
+        self.loadGatewayDefault(prefix: self.focusedChatSessionDefaultsPrefix, stableID: stableID)
+    }
+
+    static func saveGatewayFocusedChatSessionKey(stableID: String, sessionKey: String?) {
+        self.saveGatewayDefault(sessionKey, prefix: self.focusedChatSessionDefaultsPrefix, stableID: stableID)
     }
 }
 
