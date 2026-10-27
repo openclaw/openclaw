@@ -95,10 +95,23 @@ export function createLmstudioChatStream(): StreamFn {
             ]),
           ),
       };
-      return completions(
+      return streamWithPayloadPatch(
+        completions,
         completionsModel,
         projectLmstudioHistory(context, completionsModel),
         streamOptions,
+        (payload) => {
+          // Adaptive is a wrapper-level intent, outside the simple stream's
+          // scalar options. Resolve it through the same shared wire policy.
+          if (requestedThinking === "adaptive") {
+            const { effort } = resolveOpenAIRequestReasoning(completionsModel, requestedThinking);
+            if (effort === undefined) {
+              delete payload.reasoning_effort;
+            } else {
+              payload.reasoning_effort = effort;
+            }
+          }
+        },
       );
     }
     const thinkingEnabled =

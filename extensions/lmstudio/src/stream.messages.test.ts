@@ -475,6 +475,44 @@ it("selects Completions for configured extra_body.response_format before dispatc
 });
 
 it.each([
+  { mapped: "none", supported: ["none", "high"], reasoning: undefined, expected: "none" },
+  { mapped: "on", supported: ["off", "on"], reasoning: undefined, expected: "high" },
+  { mapped: "none", supported: ["high"], reasoning: undefined, expected: undefined },
+  { mapped: "none", supported: ["none", "medium"], reasoning: "medium", expected: "medium" },
+] as const)(
+  "preserves structured adaptive $mapped intent with explicit $reasoning and support $supported",
+  async ({ mapped, supported, reasoning, expected }) => {
+    await withTransport(
+      async ({ call, model, requests }) => {
+        const stream = await call(
+          undefined,
+          {
+            responseFormat,
+            reasoning,
+            onPayload: (payload) => ({ ...asRecord(payload), max_tokens: 64 }),
+          },
+          {
+            ...model,
+            compat: {
+              supportedReasoningEfforts: [...supported],
+              reasoningEffortMap: { adaptive: mapped },
+            },
+          },
+        );
+        expect(await stream.result()).toMatchObject({ stopReason: "stop" });
+        expect(requests[0]).toMatchObject({
+          path: "/v1/chat/completions",
+          body: { response_format: responseFormat, max_tokens: 64 },
+        });
+        expect(requests[0]?.body.reasoning_effort).toBe(expected);
+      },
+      (response) => response.end(structuredReply),
+      "adaptive",
+    );
+  },
+);
+
+it.each([
   { reasoning: "off", mapped: "off", expected: "none", source: "compat" },
   { reasoning: "high", mapped: "on", expected: "high", source: "compat" },
   { reasoning: "off", mapped: "on", expected: "high", source: "compat" },
