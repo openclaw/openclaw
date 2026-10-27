@@ -105,9 +105,10 @@ import {
 import { captureOpenClawStateWorkerContext as captureContext } from "./openclaw-state-worker-context.js";
 
 const directories = useAutoCleanupTempDirTracker(afterEach);
-const emptyRead = (): OpenClawStateReadOutcome => ({
-  value: { ok: true, type: "backup.runs", sourceAdmitted: true, runs: [] },
-});
+const emptyRead = () =>
+  ({
+    value: { ok: true, type: "backup.runs", sourceAdmitted: true, runs: [] },
+  }) satisfies OpenClawStateReadOutcome;
 const throwError = (error: Error) => () => {
   throw error;
 };

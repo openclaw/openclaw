@@ -727,7 +727,10 @@ describe("dispatchReplyFromConfig reply_dispatch hook", () => {
       const dispatcher = createDispatcher();
       const result = await dispatch({ dispatcher, replyResolver: async () => replies });
       expect(result.queuedFinal).toBe(true);
-      expectCalls([dispatcher.sendFinalReply, replies.slice(0, count).map((reply) => [reply])]);
+      expect(dispatcher.sendFinalReply).toHaveBeenCalledTimes(count);
+      for (const [index, reply] of replies.slice(0, count).entries()) {
+        expect(dispatcher.sendFinalReply).toHaveBeenNthCalledWith(index + 1, reply);
+      }
     },
   );
 });
