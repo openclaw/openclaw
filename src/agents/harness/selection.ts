@@ -1,4 +1,5 @@
 import { sha256HexPrefixCore } from "@openclaw/normalization-core/node-crypto";
+import { copyChannelSourceTurnContext } from "../../auto-reply/reply/source-turn-id.js";
 import { readRuntimeConfig } from "../../config/runtime-snapshot.js";
 import { hasInternalHookListeners } from "../../hooks/internal-hooks.js";
 import { prepareActiveNodeContext } from "../../infra/active-node-context.js";
@@ -198,12 +199,12 @@ export async function runAgentHarnessSettledTurnFinalization(
 }
 
 export async function runAgentHarnessAttempt(
-  params: EmbeddedRunAttemptParams,
+  params: EmbeddedRunAttemptInternalParams,
   nativeSessionRuntime?: import("../embedded-agent-runner/run/model-setup.js").PreparedNativeSessionRuntime,
 ): Promise<EmbeddedRunAttemptResult> {
-  let internalParams = params as EmbeddedRunAttemptParams & {
+  let internalParams: EmbeddedRunAttemptInternalParams & {
     systemAgentTool?: SystemAgentToolOptions;
-  };
+  } = params;
   if (nativeSessionRuntime) {
     await nativeSessionRuntime.assertCurrent();
   } else {
@@ -429,9 +430,19 @@ export async function runAgentHarnessAttempt(
           );
           // Load the calculator only after admission and final host policy preparation.
           return import("./tool-authority.runtime.js").then(
-            ({ withPreparedEmbeddedRunToolAuthority }) =>
-              withPreparedEmbeddedRunToolAuthority(
-                { ...internalParams, queueInputAdapter },
+            ({ withPreparedEmbeddedRunToolAuthority }) => {
+              const toolAuthorityParams = {
+                admittedRunContext: internalParams.admittedRunContext,
+                replyOperation: internalParams.replyOperation,
+                sessionPersistence: internalParams.sessionPersistence,
+                trigger: internalParams.trigger,
+                bindWatchdogAttempt: internalParams.bindWatchdogAttempt,
+                joinObservation: internalParams.joinObservation,
+                queueInputAdapter,
+              };
+              copyChannelSourceTurnContext(toolAuthorityParams, internalParams);
+              return withPreparedEmbeddedRunToolAuthority(
+                toolAuthorityParams,
                 effectiveAttemptParams,
                 selection.builtIn
                   ? undefined
@@ -454,7 +465,8 @@ export async function runAgentHarnessAttempt(
                         : input;
                     },
                 (prepared) => pluginAttempt.runWithHostScope(() => runPreparedAttempt(prepared)),
-              ),
+              );
+            },
           );
         }),
       );

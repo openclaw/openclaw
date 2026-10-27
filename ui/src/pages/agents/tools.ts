@@ -84,25 +84,6 @@ export function createAgentToolsCatalog(options: ReadOptions) {
       throw error;
     }
   }
-  function ensure(agentId: string) {
-    const { client, connected, requestGeneration: generation } = options.scope();
-    if (!client || !connected) {
-      return;
-    }
-    if (
-      target?.client === client &&
-      target.agentId === agentId &&
-      (target.generation === generation || target === accepted)
-    ) {
-      return;
-    }
-    accepted = null;
-    target = { client, generation, agentId };
-    const result = load(target);
-    // A hidden panel can leave the receipt unobserved until it is revisited.
-    void result.catch(() => undefined);
-    setRequest({ result });
-  }
   function reset() {
     target = null;
     accepted = null;
@@ -111,7 +92,25 @@ export function createAgentToolsCatalog(options: ReadOptions) {
   return {
     read,
     request,
-    ensure,
+    ensure(agentId: string) {
+      const { client, connected, requestGeneration: generation } = options.scope();
+      if (!client || !connected) {
+        return;
+      }
+      if (
+        target?.client === client &&
+        target.agentId === agentId &&
+        (target.generation === generation || target === accepted)
+      ) {
+        return;
+      }
+      accepted = null;
+      target = { client, generation, agentId };
+      const result = load(target);
+      // A hidden panel can leave the receipt unobserved until it is revisited.
+      void result.catch(() => undefined);
+      setRequest({ result });
+    },
     reset,
     invalidate() {
       if (target !== accepted) {

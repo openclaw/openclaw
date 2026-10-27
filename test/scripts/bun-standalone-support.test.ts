@@ -155,8 +155,16 @@ describe("matched standalone support artifacts", () => {
         compiledEntries: [input.mainEntry, second],
         compileEntries: new Set([input.mainEntry, second]),
         external: ["external-package"],
-        compileFlags: ["--aot", "--trim-allow=run,jit", "--trim-locales=en"],
-        aotCompileOptions: { trim: { allow: ["run", "jit"], locales: ["en"] } },
+        compileFlags: [
+          "--aot",
+          "--trim-allow=run,jit",
+          "--trim-locales=en",
+          "--aot-disable=flow-results",
+        ],
+        aotCompileOptions: {
+          trim: { allow: ["run", "jit"], locales: ["en"] },
+          aotDisable: ["flow-results"],
+        },
       });
       const options = JSON.parse(
         fs.readFileSync(path.join(input.outputRoot, "openclaw.options.json"), "utf8"),
@@ -172,6 +180,7 @@ describe("matched standalone support artifacts", () => {
           outfile: path.join(input.outputRoot, "openclaw"),
           aot: true,
           trim: { allow: ["run", "jit"], locales: ["en"] },
+          aotDisable: ["flow-results"],
           autoloadPackageJson: true,
           autoloadDotenv: false,
           autoloadBunfig: false,

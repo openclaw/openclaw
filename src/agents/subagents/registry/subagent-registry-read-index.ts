@@ -1,7 +1,7 @@
 import { isDeepStrictEqual } from "node:util";
 import { immutableSubagentRunSessionList, subagentRuns } from "./subagent-registry-memory.js";
 import { subscribeSubagentRunChanges } from "./subagent-registry-publication.js";
-import { buildSubagentSessionListReadIndex } from "./subagent-registry-read.js";
+import { buildSubagentRunReadIndexFromRuns } from "./subagent-registry-queries.js";
 import type { SubagentRunReadRecord } from "./subagent-registry-read.types.js";
 import type { SubagentSessionListReadView } from "./subagent-registry-state.js";
 import { copySubagentRunRuntimeOwner, isSameSubagentRunOwner } from "./subagent-run-generation.js";
@@ -12,7 +12,6 @@ export function createSubagentSessionListReadIndex(
   now: number,
 ) {
   let identity = source.snapshotIdentity();
-  let index = buildSubagentSessionListReadIndex(now, undefined, source.runs());
   let memory = new Map(
     Array.from(subagentRuns, ([id, entry]) => [
       id,
@@ -22,6 +21,11 @@ export function createSubagentSessionListReadIndex(
       ),
     ]),
   );
+  let index = buildSubagentRunReadIndexFromRuns({
+    runs: source.runs(),
+    inMemoryRuns: memory.values(),
+    now,
+  });
   let revision = 0;
   let replaced = false;
   const changedChildren = new Set<string>();
@@ -48,10 +52,6 @@ export function createSubagentSessionListReadIndex(
         for (const key of index.runsByChildSessionKey.keys()) {
           changedChildren.add(key);
         }
-        index = buildSubagentSessionListReadIndex(clock, undefined, source.runs());
-        for (const key of index.runsByChildSessionKey.keys()) {
-          changedChildren.add(key);
-        }
         memory = new Map(
           Array.from(subagentRuns, ([id, entry]) => [
             id,
@@ -61,6 +61,14 @@ export function createSubagentSessionListReadIndex(
             ),
           ]),
         );
+        index = buildSubagentRunReadIndexFromRuns({
+          runs: source.runs(),
+          inMemoryRuns: memory.values(),
+          now: clock,
+        });
+        for (const key of index.runsByChildSessionKey.keys()) {
+          changedChildren.add(key);
+        }
         revision++;
       } else if (pending.size) {
         const rows = source.runs(pending);

@@ -203,15 +203,12 @@ async function loadSessionFiles(
     return { files: [] };
   }
   if (entry.worktree?.id && loaded.root && !loaded.fileWorkspace?.historical) {
-    const { withSettledLocalWorkspacePath } =
+    const { checkpointLocalWorkspacePath } =
       await import("../worker-environments/local-workspace-projection.js");
-    await withSettledLocalWorkspacePath(
-      {
-        cwd: loaded.root,
-        assertCurrent: assertSourceCurrent,
-      },
-      async () => {},
-    );
+    await checkpointLocalWorkspacePath({
+      cwd: loaded.root,
+      assertCurrent: assertSourceCurrent,
+    });
   }
   const scope = {
     agentId,

@@ -67,6 +67,8 @@ const repositoryScriptEntries = [
   // Its header documents the paired operator-role currency-check benchmark.
   "scripts/perf/operator-role-source-policy-measure.mjs!",
   "scripts/perf/access-authority-callback-measure.mjs!",
+  // Its header documents the config-wide admission metadata benchmark.
+  "scripts/perf/config-wide-metadata-measure.ts!",
   // Its header documents the sandbox/workspace ownership assertion benchmark.
   "scripts/perf/workspace-assertion-measure.mjs!",
   // Its header documents the paired workspace reconciliation benchmark.
@@ -75,6 +77,8 @@ const repositoryScriptEntries = [
   // Its header documents the full transcript-pairing repair benchmark.
   "scripts/perf/tool-result-pairing-measure.ts!",
   "scripts/perf/assistant-thinking-measure.ts!",
+  // Its header documents leaf SELF-byte attribution of sampled survivor profiles.
+  "scripts/perf/survivor-leaf-rank.mjs!",
   // db:postgres:gen/check invoke this generator through the source loader.
   "scripts/generate-postgres-schema.mts!",
   // CI preflight executes the manifest from its trusted harness checkout.
@@ -140,11 +144,13 @@ const repositoryScriptEntries = [
   "scripts/perf/plugin-blob-registration-measure.ts!",
   "scripts/perf/session-reaction-quota-measure.ts!",
   // Maintained guides, source headers, and paired drivers invoke these roots by path.
+  "scripts/perf/audit-context-write-measure.ts!",
   "scripts/perf/node-worker-journal-measure.ts!",
   "scripts/perf/orphan-recovery-observer.mjs!",
   "scripts/perf/pairing-channel-attribution.mts!",
   "scripts/perf/session-actor-residency-snapshot.mjs!",
   "scripts/perf/session-actor-retention-seed.ts!",
+  "scripts/perf/session-entry-projection-measure.ts!",
   "scripts/perf/session-row-materialization-measure.ts!",
   "scripts/perf/session-row-refresh-measure.ts!",
   "scripts/perf/session-row-lineage-measure.ts!",
@@ -196,8 +202,18 @@ const repositoryScriptEntries = [
   "scripts/perf/session-tool-surface-measure.ts!",
   "scripts/perf/subagent-maintenance-capture-measure.ts!",
   "scripts/perf/subagent-sweep-measure.ts!",
+  // Its source header documents the shutdown workload; the literal URL links its preload.
+  "scripts/perf/gateway-shutdown-sweep-measure.ts!",
   "scripts/perf/tool-schema-preparation-measure.ts!",
   "scripts/perf/terminal-assistant-snapshot-measure.ts!",
+  // Their source headers and retained guide document standalone Node commands.
+  "scripts/perf/cheaper-retry-logging.ts!",
+  "scripts/perf/hook-message-loader-retention.ts!",
+  "scripts/perf/jiti-stack-format.ts!",
+  "scripts/perf/pr-restore-memory.mjs!",
+  "scripts/perf/session-cold-restore-memory.ts!",
+  "scripts/perf/subagent-custody-abort-retention.ts!",
+  "scripts/perf/worker-lifecycle-message-measure.ts!",
   // Retained source commands and selectable preloads execute directly by exact path.
   "scripts/perf/after-turn-context-measure.ts!",
   "scripts/perf/agent-runtime-dispatch-measure.ts!",
@@ -213,6 +229,7 @@ const repositoryScriptEntries = [
   "scripts/perf/session-history-prewarm-measure.mjs!",
   "scripts/perf/session-prepared-list-measure.ts!",
   "scripts/perf/session-list-search-measure.ts!",
+  "scripts/perf/session-list-transmit-measure.mjs!",
   "scripts/perf/transcript-boot-preload.mjs!",
   "scripts/perf/worker-pool-churn-preload.mjs!",
   "scripts/perf/worktree-prompt-native-measure.ts!",
@@ -344,6 +361,7 @@ const repositoryScriptEntries = [
   "scripts/perf/queued-input-retention.ts!",
   "scripts/perf/queued-input-retention-preload.mjs!",
   "scripts/perf/pty-session-scan-measure.mjs!",
+  "scripts/perf/publication-empty-recovery-measure.ts!",
   "scripts/perf/publication-spawn-measure.ts!",
   "scripts/perf/replay-history-measure.ts!",
   "scripts/perf/run-tool-validation-retention.ts!",
@@ -407,6 +425,7 @@ const repositoryScriptEntries = [
   "scripts/perf/cron-history-plan-measure.ts!",
   "scripts/perf/cron-list-projection-measure.mjs!",
   "scripts/perf/cron-list-revision-measure.ts!",
+  "scripts/perf/cron-refresh-measure.ts!",
   "scripts/perf/cron-session-bindings-measure.ts!",
   "scripts/perf/embedded-runner-array-copies.ts!",
   "scripts/perf/gateway-clone-measure.ts!",
@@ -448,6 +467,7 @@ const repositoryScriptEntries = [
   "scripts/perf/stream-dispatch-scope-measure.ts!",
   "scripts/perf/subagent-mutation-clone-measure.ts!",
   "scripts/perf/telegram-entity-sort-measure.mjs!",
+  "scripts/perf/telegram-token-owner-measure.mjs!",
   "scripts/perf/tool-result-owned-freeze-measure.ts!",
   "scripts/perf/tool-search-allowlist-measure.ts!",
   "scripts/perf/tools-catalog-copy-measure.ts!",
@@ -504,6 +524,7 @@ const repositoryScriptEntries = [
   "scripts/perf/transcript-payload-prepare-measure.ts!",
   "scripts/perf/transcript-resident-hydration-measure.ts!",
   "scripts/perf/transcript-selected-payload-measure.ts!",
+  "scripts/perf/transcript-active-read-measure.ts!",
   "scripts/perf/worker-task-input-measure.mjs!",
   "scripts/perf/worktree-provisioning-gateway-measure.ts!",
   "scripts/perf/worktree-provisioning-measure.ts!",
@@ -528,6 +549,7 @@ const repositoryScriptEntries = [
   "scripts/perf/plugin-preparation-boot.mjs!",
   "scripts/perf/plugin-preparation-boot-preload.mjs!",
   "scripts/perf/plugin-relative-path-measure.ts!",
+  "scripts/perf/plugin-capture-stat-measure.ts!",
   "scripts/perf/plugin-source-preparation.ts!",
   "scripts/perf/plugin-transform-preload.mjs!",
   "scripts/perf/prepared-gateway-startup-measure.mjs!",
@@ -578,6 +600,8 @@ const repositoryScriptEntries = [
   "scripts/perf/placement-identity-recovery-bench.ts!",
   "scripts/perf/provider-tool-normalization-measure.ts!",
   "scripts/perf/session-entry-patch-prepare-measure.ts!",
+  "scripts/perf/session-lifecycle-prepare-measure.ts!",
+  "scripts/perf/session-replacement-write-measure.ts!",
   "scripts/perf/session-patch-label-owner-measure.ts!",
   "scripts/perf/session-event-audience-measure.ts!",
   "scripts/perf/transcript-snapshot-copy-measure.ts!",
@@ -637,6 +661,7 @@ const repositoryScriptEntries = [
   "scripts/perf/plugin-object-copy-measure.ts!",
   "scripts/perf/plugin-recovery-transport-measure.ts!",
   "scripts/perf/plugin-startup-install-records.ts!",
+  "scripts/perf/plugin-metadata-read-measure.ts!",
   "scripts/perf/plugins-list-measure.ts!",
   "scripts/perf/plugins-list-owner-measure.ts!",
   "scripts/perf/provider-prompt-worker-bytes-measure.mjs!",
@@ -705,6 +730,7 @@ const repositoryScriptEntries = [
   "scripts/perf/crabbox-state-polling.mts!",
   "scripts/perf/local-workspace-manifest-equivalence.ts!",
   "scripts/perf/local-workspace-manifest-measure.ts!",
+  "scripts/perf/local-workspace-lookup-measure.ts!",
   "scripts/perf/operator-model-policy-list-probe.mjs!",
   "scripts/perf/operator-model-policy-load.mjs!",
   "scripts/perf/operator-model-policy-measure.ts!",
@@ -723,6 +749,7 @@ const repositoryScriptEntries = [
   // The transcript broadcast benchmark loads the stall recorder through --gateway-preload.
   "scripts/bench-filesystem-preconditions.mts!",
   "scripts/perf/github-tool-selection-measure.ts!",
+  "scripts/perf/github-preview-authority-measure.ts!",
   "scripts/perf/github-conditional-json-measure.ts!",
   "scripts/perf/session-transcript-code-measure.mjs!",
   "scripts/perf/stall-recorder-cost-preload.mjs!",
@@ -738,10 +765,13 @@ const repositoryScriptEntries = [
   "scripts/bench-team-reports-snapshots.mts!",
   "scripts/perf/async-work-scope-measure.ts!",
   "scripts/perf/local-workspace-callers-measure.ts!",
+  "scripts/perf/local-workspace-checkpoint-measure.ts!",
   "scripts/perf/local-workspace-retention.ts!",
   "scripts/perf/plugin-iterator-membrane-measure.ts!",
   "scripts/perf/plugin-generation-retention.ts!",
   "scripts/perf/placement-startup-wake-measure.ts!",
+  "scripts/perf/startup-agent-preparation-measure.ts!",
+  "scripts/perf/startup-recovery-admission-measure.ts!",
   "scripts/perf/response-decode-measure.mts!",
   "scripts/perf/text-projection-append-measure.ts!",
   "scripts/perf/text-projection-rope-measure.mjs!",
@@ -756,6 +786,7 @@ const repositoryScriptEntries = [
   // Maintainers invoke this isolated transcript-rewrite benchmark by path.
   "scripts/bench-session-manager-rewrite.ts",
   // The team-shaped fixture README invokes these measurement CLIs by path.
+  "scripts/perf/team-shape-stress.ts",
   "scripts/perf/team-shape-measure.ts",
   "scripts/perf/transcript-broadcast-measure.ts",
   "scripts/perf/post-restart-burst-measure.ts",

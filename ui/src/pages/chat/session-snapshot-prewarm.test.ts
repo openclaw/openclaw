@@ -8,9 +8,10 @@ import {
   publishSnapshotInvalidation,
   subscribeSnapshotInvalidation,
 } from "./session-snapshot-invalidation-events.ts";
-import { clearStoredChatSnapshots } from "./session-snapshot-invalidation.runtime.ts";
+import { clearStoredChatSnapshots } from "./session-snapshot-invalidation.ts";
 import { prewarmChatSnapshot } from "./session-snapshot-prewarm.ts";
 import * as snapshots from "./session-snapshot-store.ts";
+import { writeSnapshotFixture } from "./session-snapshot.test-support.ts";
 
 const key = 'scope:["wss://cache.example","account-a"]\u0000agent:main:routed';
 const otherKey = 'scope:["wss://cache.example","account-a"]\u0000agent:main:other';
@@ -23,8 +24,8 @@ const stored: ChatSessionSnapshot = {
 
 async function seed() {
   const writer = new snapshots.SessionSnapshotStore();
-  writer.write(key, stored);
-  writer.write(otherKey, { ...stored, sessionId: "other-session" });
+  writeSnapshotFixture(writer, key, stored);
+  writeSnapshotFixture(writer, otherKey, { ...stored, sessionId: "other-session" });
   await writer.flush();
   return writer;
 }
@@ -85,9 +86,13 @@ describe("routed transcript prewarm", () => {
 
   it("starts before consumption and reuses the matching read only once", async () => {
     const { open, reader } = await prewarm();
-    await vi.dynamicImportSettled();
+    expect(reader.readReady(key)).toBeUndefined();
+    const ready = await snapshots.readPrewarmedChatSnapshot(key);
     expect(open).toHaveBeenCalledOnce();
-    expect(await reader.read(key)).toEqual(stored);
+    expect(reader.readReady(otherKey)).toBeUndefined();
+    expect(reader.readReady(key)).toBe(ready);
+    expect(ready).toEqual(stored);
+    expect(reader.readReady(key)).toBeUndefined();
     expect(open).toHaveBeenCalledOnce();
     expect(await reader.read(key)).toEqual(stored);
     expect(open).toHaveBeenCalledTimes(2);
@@ -139,7 +144,7 @@ describe("routed transcript prewarm", () => {
       await settled.promise;
       const latest = { ...stored, deltaCursor: "latest-cursor" };
       if (change === "write") {
-        writer.write(key, latest);
+        writeSnapshotFixture(writer, key, latest);
         await writer.flush();
       } else {
         writer.forget(key);

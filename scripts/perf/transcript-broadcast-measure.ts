@@ -1566,14 +1566,16 @@ if (isMainThread) {
   timer.unref();
   process.on("message", message => {
     if (message?.turnStartTimelineFlush !== true) return;
+    process.channel?.ref();
     stopped = true;
     clearInterval(timer);
     reservation.unsubscribe(onReservation);
     worker.unsubscribe(onWorker);
     stopRequests();
     flush();
-    process.send?.({ turnStartTimelineFlushed: true, dropped });
+    process.send?.({ turnStartTimelineFlushed: true, dropped }, () => process.channel?.unref());
   });
+  process.channel?.unref();
 }
 if (isMainThread) onTrustedInternalDiagnosticEvent(event => {
   if (event.type === "diagnostic.phase.completed" &&
@@ -1892,6 +1894,7 @@ if (isMainThread) {
         scope: "main-isolate capture calls and clone payloads; serialized UTF-8 bytes and graph objects, not heap allocation" }));
     }
   });
+  process.channel?.unref();
 }
 `,
   );

@@ -11,7 +11,7 @@ import {
 } from "../../../../src/shared/session-goal-display.js";
 import type { AgentIdentityResult, GatewaySessionRow, SessionRunStatus } from "../../api/types.ts";
 import { AgentRowChip } from "../../components/agent-row-chip.tsx";
-import { Icon } from "../../components/solid/icon.tsx";
+import { sessionIconMask } from "../../components/solid/icon.tsx";
 import { SettingsStatus } from "../../components/solid/settings-ui.tsx";
 import {
   formatThinkingOverrideLabel,
@@ -375,7 +375,11 @@ export function SessionRows(props: SessionsProps & { row: GatewaySessionRow }) {
                 props.onToggleDetails(row().key);
               }}
             >
-              <Icon name="chevronDown" />
+              <i
+                class="session-css-icon"
+                aria-hidden="true"
+                style={{ "mask-image": sessionIconMask("chevronDown") }}
+              />
             </button>
             <button
               ref={(element) => (menuTrigger = element)}
@@ -392,7 +396,11 @@ export function SessionRows(props: SessionsProps & { row: GatewaySessionRow }) {
                 props.onOpenSessionMenu(row(), { x: rect.right, y: rect.bottom + 4 }, trigger);
               }}
             >
-              <Icon name="moreHorizontal" />
+              <i
+                class="session-css-icon"
+                aria-hidden="true"
+                style={{ "mask-image": sessionIconMask("moreHorizontal") }}
+              />
             </button>
           </div>
         </td>

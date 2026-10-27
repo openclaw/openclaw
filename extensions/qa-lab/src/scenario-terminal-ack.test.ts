@@ -71,7 +71,7 @@ async function startPublicCase(
                     provider: "openclaw",
                     model: "automation-result",
                     __openclaw: {
-                      idempotencyKey: "outbound-delivery:announce:v1:child:run:text-direct:fixture",
+                      idempotencyKey: "outbound-delivery:announce:v1:child:run:text-direct:0",
                     },
                     content: [{ type: "text", text: marker }],
                   },

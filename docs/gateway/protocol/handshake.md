@@ -207,10 +207,13 @@ should preserve the selected model and retry after application or restart finish
 Standalone CLI verification still tests saved configuration without requiring a
 running Gateway.
 
-While the gateway is still finishing startup sidecars, `connect` can return a
+While the Gateway is preparing authentication and request state, `connect` can return a
 retryable `UNAVAILABLE` error with `details.reason: "startup-sidecars"` and
 `retryAfterMs`. Retry within your connection budget instead of treating it as
-a terminal handshake failure.
+a terminal handshake failure. Once that state is ready, authenticated clients can
+connect and read available sessions while background recovery continues. Writes
+retain their startup and per-agent recovery gates; node enrollment retains its
+startup-specific admission checks.
 
 When a device token is issued, `hello-ok.auth` adds it:
 

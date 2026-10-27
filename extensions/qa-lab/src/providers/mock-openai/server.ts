@@ -937,9 +937,9 @@ async function buildResponsesPayload(
       }
       return buildAssistantEvents(visibleRepresentation);
     }
-    // Quiet completion is valid consumption. A visible final without the required
-    // message tool exercises the missing-delivery fallback instead.
-    return buildAssistantEvents("Completion reviewed.");
+    // Empty parent output settles quietly. Leave a visible answer unsent so
+    // direct-message fallback must deliver the child result or failure notice.
+    return buildAssistantEvents("The child run ended. Report its outcome to the requester.");
   }
   const terminalWorkerCase = terminalTurn?.kind === "worker" ? terminalTurn.caseName : undefined;
   if (terminalWorkerCase) {

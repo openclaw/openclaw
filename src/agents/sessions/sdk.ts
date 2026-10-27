@@ -1,5 +1,9 @@
 /** Assembles an agent session from the run owner's selected model and prepared resources. */
 import { clampThinkingLevel } from "@openclaw/ai/internal/runtime";
+import {
+  setInternalBeforeToolBatch,
+  type InternalBeforeToolBatchHook,
+} from "../../../packages/agent-core/src/internal-hooks.js";
 import { sameSessionTranscriptTargetBinding } from "../../config/sessions/transcript-target-binding.js";
 import type { SessionMetadataCommit } from "../../config/sessions/transcript-write-context-store.js";
 import {
@@ -19,10 +23,6 @@ import {
   type AgentTool,
   type ThinkingLevel,
 } from "../runtime/index.js";
-import {
-  setInternalBeforeToolBatch,
-  type InternalBeforeToolBatchHook,
-} from "../runtime/internal-hooks.js";
 import type { AgentSessionConfig } from "./agent-session-types.js";
 import { AgentSession } from "./agent-session.js";
 import type { ExtensionRunner } from "./extensions/index.js";

@@ -31,6 +31,8 @@ import {
   resolveTranscriptSessionKeyBySessionId,
   resolveTranscriptSessionKeyBySessionIdAsync,
   upsertSessionEntry,
+  withSessionEntriesAsync,
+  resolveStorePath,
 } from "./session-store-runtime.js";
 
 const tempDirs = createTempDirTracker();
@@ -198,6 +200,52 @@ it("lists current public metadata off the host after an owner write without crea
     },
   ]);
   expect(before[0]?.entry.sessionId).toBe("selected");
+});
+
+it("retains bounded multi-store metadata only through synchronous SDK consumption", async () => {
+  const env = { OPENCLAW_STATE_DIR: tempDirs.make("sdk-selected-entries-") };
+  const stores = ["main", "second"].map((agentId) => ({
+    agentId,
+    storePath: resolveStorePath(undefined, { agentId, env }),
+    sessionKeys: ["agent:" + agentId + ":selected"],
+  }));
+  for (const store of stores) {
+    for (const suffix of ["selected", "unselected"]) {
+      replaceSessionEntrySync(
+        { ...store, env, sessionKey: "agent:" + store.agentId + ":" + suffix },
+        { ...completeEntry, sessionId: store.agentId + "-" + suffix },
+      );
+    }
+  }
+  const sql = observeHostDataSql();
+  try {
+    const result = await withSessionEntriesAsync({ stores, env }, (entries) => {
+      expect(entries.map(({ agentId, entry }) => [agentId, entry.sessionId])).toEqual([
+        ["main", "main-selected"],
+        ["second", "second-selected"],
+      ]);
+      expect(entries.every(({ entry }) => !("pendingProjectGitUrl" in entry))).toBe(true);
+      return "serialized";
+    });
+    expect(result).toBe("serialized");
+    const detached = await withSessionEntriesAsync({ stores, env }, (entries) => entries);
+    detached[0]!.entry.pluginExtensions!.synthetic = { enabled: false };
+    await withSessionEntriesAsync({ stores, env }, (entries) => {
+      expect(entries[0]!.entry.pluginExtensions).toEqual(completeEntry.pluginExtensions);
+    });
+    await expect(withSessionEntriesAsync({ stores, env }, async () => "late")).rejects.toThrow(
+      "must remain synchronous",
+    );
+    await expect(
+      withSessionEntriesAsync({ stores, env }, () => {
+        throw new Error("consumer failed");
+      }),
+    ).rejects.toThrow("consumer failed");
+    expect(sql.queries.some((query) => query.includes('from "session_nodes"'))).toBe(true);
+    expect(sql.queries.some((query) => query.includes('from "transcript_events"'))).toBe(false);
+  } finally {
+    sql.restore();
+  }
 });
 
 it("reads committed watermark updates off the host and ignores a reset predecessor", async () => {

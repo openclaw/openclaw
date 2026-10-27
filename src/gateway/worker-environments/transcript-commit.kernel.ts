@@ -1,7 +1,5 @@
-import {
-  loadSessionEntry,
-  replaceSessionEntrySync,
-} from "../../config/sessions/session-accessor.sqlite-entry.js";
+import { loadSessionEntry } from "../../config/sessions/session-accessor.sqlite-entry-admitted-read.js";
+import { replaceSessionEntrySync } from "../../config/sessions/session-accessor.sqlite-entry-replace.js";
 import { loadTranscriptReadSnapshotSync } from "../../config/sessions/session-accessor.sqlite-read.js";
 import {
   resolveSqliteTranscriptScope,

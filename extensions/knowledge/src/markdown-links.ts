@@ -5,7 +5,7 @@ const escapeHtml = (text: string) =>
     /[&<>"']/g,
     (char) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[char]!,
   );
-export const wikiHref = (target: string) => `#wiki=${encodeURIComponent(target)}`;
+const wikiHref = (target: string) => `#wiki=${encodeURIComponent(target)}`;
 /** One parser for navigation and rendering: code, escapes, HTML and images are not links. */
 export const markdown = new Marked({
   gfm: true,
@@ -71,7 +71,7 @@ function boundBlockRuns(body: string): string {
   }
   return parts.length ? parts.join("") + body.slice(kept) : body;
 }
-export function extractLinks(body: string): string[] {
+function extractLinks(body: string): string[] {
   // Generated backlinks must not recursively create their own backlinks.
   const tokens = markdown.lexer(boundBlockRuns(body)).filter(
     (() => {

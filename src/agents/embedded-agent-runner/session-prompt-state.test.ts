@@ -193,6 +193,32 @@ describe("system prompt series", () => {
     expect(project(second, [], "other-route").systemPrompt).toBe(second);
   });
 
+  it.each(["compaction", "reset"] as const)(
+    "restarts on a new %s, but not when its payload enters or leaves a bounded window",
+    (kind) => {
+      const state = fixture.state;
+      const projectBoundary = (entries: SessionEntry[], historyBoundaryCount: number) => {
+        const result = prepareSessionSystemPrompt({
+          state,
+          routeKey,
+          entries,
+          historyBoundaryCount,
+          systemPrompt: entries.length ? changed : base,
+        });
+        result.commit();
+        return result;
+      };
+      const first = projectBoundary([], 1);
+      expect(projectBoundary([historyEntry(kind, "old")], 1).systemPrompt).toBe(first.systemPrompt);
+      const compacted = projectBoundary([historyEntry(kind, "new")], 2);
+      expect(compacted.restart).toBe(true);
+      expect(compacted.systemPrompt).toBe(changed);
+      expect(projectBoundary([], 2).systemPrompt).toBe(compacted.systemPrompt);
+      beginSessionSystemPrompt({ state, routeKey, enabled: true, getEntries: () => [] });
+      expect(projectBoundary([historyEntry(kind, "different-branch")], 2).restart).toBe(true);
+    },
+  );
+
   it("replaces duplicate-heading groups without ambiguous partial removals", () => {
     project("First.\n## File\nOne.\n## File\nTwo.");
     const next = project("Second.\n## File\nChanged.\n## File\nTwo.");

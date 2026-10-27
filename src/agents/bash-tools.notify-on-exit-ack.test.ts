@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, expect, it, vi, type MockInstance } from "vitest";
+import { acknowledgeInternalToolResult } from "../../packages/agent-core/src/internal-hooks.js";
 import { enqueueSessionEventForHost as enqueueSessionEvent } from "../auto-reply/reply/session-event-handoff.js";
 import {
   clearRuntimeConfigSnapshot,
@@ -21,7 +22,6 @@ import {
 import { resetProcessRegistryForTests } from "./bash-process-registry.test-support.js";
 import { startDeferredNotifyRun } from "./bash-tools.notify-on-exit-ack.test-support.js";
 import { createProcessTool } from "./bash-tools.process.js";
-import { acknowledgeInternalToolResult } from "./runtime/internal-hooks.js";
 
 const supervisorSpawnMock = vi.hoisted(() => vi.fn());
 vi.mock("../auto-reply/reply/session-event-handoff.js", async (importOriginal) => {

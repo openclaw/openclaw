@@ -7,6 +7,7 @@ import type {
   SessionOwnerSessionCount,
   SessionsListParams,
 } from "../../packages/gateway-protocol/src/index.js";
+import { SessionRunStatusSchema } from "../../packages/gateway-protocol/src/schema/sessions-row.js";
 import type { ModelCatalogEntry } from "../agents/model-catalog.js";
 import { resolveSessionModelIdentityRef } from "../agents/session-model-ref.js";
 import { buildGroupDisplayName } from "../config/sessions/group-display.js";
@@ -91,6 +92,7 @@ export type SessionListFilterParams = {
   entriesSorted?: boolean;
   getTarget: SessionListTargetLookup;
   getModelFacts?: SessionListModelFactsLookup;
+  modelSearchMayMatch?: (search: string) => boolean;
   modelCatalog?: SessionListModelCatalog | ModelCatalogEntry[];
   opts: SessionsListParams;
   now: number;
@@ -264,6 +266,30 @@ export function filterSessionEntries(
   const agentFilter = typeof opts.agentId === "string" ? normalizeAgentId(opts.agentId) : "";
   // Excluded rows must not participate in search or ownership resolution.
   const titleSearch = search && normalizeSessionSearchText(search);
+  const searchRunState =
+    search &&
+    [...SessionRunStatusSchema.anyOf.map((status) => status.const), "live running", "idle"].some(
+      (status) => status.includes(search),
+    );
+  let identityMatches: Map<string, boolean> | undefined;
+  let modelMatches: Map<string, boolean> | undefined;
+  let runtimeMatches: Map<string, boolean> | undefined;
+  let searchModels: boolean | undefined;
+  const matchesModelRefs = (
+    key: string,
+    read: () => Array<Parameters<typeof addSessionListSearchModelFields>[1]>,
+  ) => {
+    let modelMatch = modelMatches?.get(key);
+    if (modelMatch === undefined) {
+      const models: Array<string | undefined> = [];
+      for (const identity of read()) {
+        addSessionListSearchModelFields(models, identity);
+      }
+      modelMatch = matchesSessionListSearch(models, search);
+      (modelMatches ??= new Map()).set(key, modelMatch);
+    }
+    return modelMatch;
+  };
   const matchesSearch = search
     ? (
         key: string,
@@ -304,73 +330,108 @@ export function filterSessionEntries(
           return true;
         }
         const agentId = target.agentId;
-        const metadataSnapshot = readPreparedGatewayModelCatalogMetadata(
-          params.modelCatalog instanceof Map ? params.modelCatalog.get(agentId) : undefined,
-        );
-        const run = projectGatewaySessionRunState({
-          key: storeKey,
-          entry,
-          now,
-          rowContext: getRowContext(),
-        }).fields;
-        const active = params.projectActiveRun?.(key, entry, agentId);
-        const state = projectGatewaySessionActiveRun(active, run.status);
-        const goal = resolveGatewaySessionGoal(entry, now);
+        if (searchRunState) {
+          const run = projectGatewaySessionRunState({
+            key: storeKey,
+            entry,
+            now,
+            rowContext: getRowContext(),
+          }).fields;
+          const active = params.projectActiveRun?.(key, entry, agentId);
+          const state = projectGatewaySessionActiveRun(active, run.status);
+          if (
+            matchesSessionListSearch(
+              [
+                state.status,
+                isSessionRunStateActive(state)
+                  ? "live running"
+                  : state.hasActiveRun === false
+                    ? "idle"
+                    : undefined,
+              ],
+              search,
+            )
+          ) {
+            return true;
+          }
+        }
+        const goal = entry.goal && resolveGatewaySessionGoal(entry, now);
         if (
+          goal &&
           matchesSessionListSearch(
             [
-              state.status,
-              isSessionRunStateActive(state)
-                ? "live running"
-                : state.hasActiveRun === false
-                  ? "idle"
-                  : undefined,
-              goal
-                ? `${goal.objective} ${goal.status} ${formatGoalSummary(goal)} ${goal.lastStatusNote ?? ""}`
-                : undefined,
+              `${goal.objective} ${goal.status} ${formatGoalSummary(goal)} ${goal.lastStatusNote ?? ""}`,
             ],
             search,
           )
         ) {
           return true;
         }
-        if (matchesSessionListSearch([params.identityNames?.get(agentId)], search)) {
+        let identityMatch = identityMatches?.get(agentId);
+        if (identityMatch === undefined) {
+          identityMatch = matchesSessionListSearch([params.identityNames?.get(agentId)], search);
+          (identityMatches ??= new Map()).set(agentId, identityMatch);
+        }
+        if (identityMatch) {
           return true;
         }
-        let models: Array<string | undefined> | undefined;
+        searchModels ??=
+          search.startsWith("agent:") ||
+          expectDefined(params.modelSearchMayMatch, "prepared search model vocabulary")(search);
+        if (!searchModels) {
+          return false;
+        }
         // Derived model aliases are not agent-key matches.
         if (!search.startsWith("agent:")) {
           const subagentRun = getRowContext().subagentRuns.getDisplaySubagentRun(storeKey);
-          const resolvedModel = resolveSessionModelIdentityRef(
-            cfg,
-            entry,
+          // These are exactly the persisted inputs consumed by the identity resolver.
+          const modelKey = JSON.stringify([
+            "resolved",
             agentId,
+            entry.modelProvider,
+            entry.model,
             subagentRun?.model,
-            {
-              allowPluginNormalization: false,
-              manifestPlugins: metadataSnapshot,
-              configuredDefaultModelByAgent: getRowContext().configuredDefaultModelByAgent,
-            },
-          );
-          models = [];
-          addSessionListSearchModelFields(models, resolvedModel);
-          if (matchesSessionListSearch(models, search)) {
+            entry.providerOverride,
+            entry.modelOverride,
+            entry.modelOverrideRouteResolution,
+            entry.modelOverrideFallbackOriginProvider,
+            entry.modelOverrideFallbackOriginModel,
+          ]);
+          if (
+            matchesModelRefs(modelKey, () => [
+              resolveSessionModelIdentityRef(cfg, entry, agentId, subagentRun?.model, {
+                allowPluginNormalization: false,
+                manifestPlugins: readPreparedGatewayModelCatalogMetadata(
+                  params.modelCatalog instanceof Map ? params.modelCatalog.get(agentId) : undefined,
+                ),
+                configuredDefaultModelByAgent: getRowContext().configuredDefaultModelByAgent,
+              }),
+            ])
+          ) {
             return true;
           }
-          models.length = 0;
         }
         const source = expectDefined(params.getModelFacts, "prepared search row model facts")(key);
-        if (models) {
-          addSessionListSearchModelFields(models, source.selectedModel);
-          addSessionListSearchModelFields(models, source.rowModelIdentity);
-          if (matchesSessionListSearch(models, search)) {
+        if (!search.startsWith("agent:")) {
+          const modelKey = JSON.stringify([
+            "prepared",
+            agentId,
+            source.selectedModel.provider,
+            source.selectedModel.model,
+            source.rowModelIdentity.provider,
+            source.rowModelIdentity.model,
+          ]);
+          if (matchesModelRefs(modelKey, () => [source.selectedModel, source.rowModelIdentity])) {
             return true;
           }
         }
-        return matchesSessionListSearch(
-          [formatAgentRuntimeLabel(source.thinkingProjection.agentRuntime)],
-          search,
-        );
+        const runtime = source.thinkingProjection.agentRuntime;
+        let runtimeMatch = runtimeMatches?.get(runtime.id);
+        if (runtimeMatch === undefined) {
+          runtimeMatch = matchesSessionListSearch([formatAgentRuntimeLabel(runtime)], search);
+          (runtimeMatches ??= new Map()).set(runtime.id, runtimeMatch);
+        }
+        return runtimeMatch;
       }
     : undefined;
   const personalKeys = involvingActorId && params.involvementKeys(involvingActorId, true);

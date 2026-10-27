@@ -589,7 +589,8 @@ suite.define(() => {
     await gateway.rejectDeferred("chat.send", unavailableError("send outcome unknown"));
 
     const retainedTurn = page.locator(".chat-group.user", { hasText: message });
-    await pollLocatorText(retainedTurn.locator(".chat-send-status")).toContain("Queued");
+    await retainedTurn.locator("time.chat-group-timestamp").waitFor();
+    await pollCount(retainedTurn.locator(".chat-send-status")).toBe(0);
     expect(new URL(page.url()).pathname).toBe(controlUiSessionPath(sessionKey));
     expect(await readRecovery(page)).toMatchObject({
       phase: "sending",

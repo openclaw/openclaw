@@ -41,6 +41,12 @@ necessarily delete the provider's older cache entry before its normal expiry.
 
 ## Stable tools between turns
 
+Within an embedded run, bounded transcript reloads retain the admitted history
+boundary even when its compaction summary falls outside the loaded window.
+Actual compaction or reset starts a new prompt series. Permission changes still
+apply immediately through execution gates and in-history instruction updates;
+they do not require replacing the earlier system prompt.
+
 Client-capability tool listing uses the session's recorded operator declaration.
 Internal wake and restart-recovery turns retain the same tool definitions and
 Code Mode catalog, including `screen`, without borrowing execution authority.

@@ -1,6 +1,7 @@
 import { measuredRequestPressure } from "@openclaw/ai/internal/openai";
 import type { FirstStreamEventInternalOptions } from "@openclaw/ai/internal/runtime";
 import type { CompactionReplayRejection } from "@openclaw/ai/transports";
+import { setInternalRepetitionGuard } from "../../../../packages/agent-core/src/internal-hooks.js";
 import { resolveDiagnosticModelContentCapturePolicy } from "../../../infra/diagnostic-llm-content.js";
 import { DEFAULT_UNDICI_STREAM_TIMEOUT_MS } from "../../../infra/net/undici-global-dispatcher.js";
 import type { AssistantMessage } from "../../../llm/types.js";
@@ -16,7 +17,6 @@ import { shouldAllowProviderOwnedThinkingReplay } from "../../embedded-agent-hel
 import { wrapStreamFnTextTransforms } from "../../plugin-text-transforms.js";
 import { resolveModelCallUrgency } from "../../run-trigger.js";
 import type { StreamFn } from "../../runtime/index.js";
-import { setInternalRepetitionGuard } from "../../runtime/internal-hooks.js";
 import { withSessionManagerWrite } from "../../sessions/session-manager-write-admission.js";
 import { resolveAgentTimeoutMs } from "../../timeout.js";
 import { UNKNOWN_TOOL_THRESHOLD } from "../../tool-loop-detection.js";

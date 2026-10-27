@@ -107,7 +107,8 @@ export function createCronPromptExecutor(
 ) {
   const trigger = params.trigger === "event" ? "event" : "cron";
   const cronFallbacksOverride =
-    params.modelFallbacksOverride ?? resolveCronFallbacksOverride(params);
+    params.modelFallbacksOverride ??
+    resolveCronFallbacksOverride({ ...params, selectedModel: params.liveSelection });
   const fastModeStartedAtMs = Date.now();
   const fastModeAutoProgressState: FastModeAutoProgressState = {
     offAnnounced: false,
@@ -564,6 +565,8 @@ export function createCronPromptExecutor(
                     : undefined;
                 const candidateResult = await runCliAgent({
                   ...buildCommonRunParams(),
+                  // The CLI backend marks internal provenance as non-user input.
+                  inputProvenance: params.inputProvenance,
                   diagnosticOwner,
                   sessionEntry: params.cronSession.sessionEntry,
                   contextWindow: params.cronSession.sessionEntry.contextWindow,

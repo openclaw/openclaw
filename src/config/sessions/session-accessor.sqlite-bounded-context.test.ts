@@ -266,8 +266,9 @@ it.for(["identity", "compressed"] as const)(
       const context = readContext(scope, 16_384);
       expect(eventIds(context.events)).toEqual([scope.sessionId, "a", "b", "c"]);
       expect(context.serializedBytes).toBe(serializedBytes(context.events));
+      expect(recentEvents(scope, 3)).toEqual(context.events.slice(1));
     });
-    expect(acquisition.decodedRows).toBe(3);
+    expect(acquisition.decodedRows).toBe(6);
     expect(acquisition.pendingRows).toBe(0);
     expect(acquisition.peakPendingBytes).toBeLessThanOrEqual(acquisition.largestRowBytes);
     if (storage === "compressed") {
@@ -569,7 +570,7 @@ it("keeps repeated visits on one snapshot and expires their reader on return", a
   expect(() => savedVisit?.(() => {})).toThrow("outside its read snapshot");
 });
 
-it.for(["json", "sql", "consumer"] as const)(
+it.for(["json", "sql", "compressed", "consumer"] as const)(
   "preserves %s failure precedence and releases the read cursor",
   async (failureKind, { scope }) => {
     await persist(scope, [
@@ -593,10 +594,14 @@ it.for(["json", "sql", "consumer"] as const)(
       // The connection-local view corrupts reads without changing canonical rows or projections.
       database.db.exec(`CREATE TEMP VIEW transcript_events AS
         SELECT event.session_id, event.seq, event.created_at,
-          event.event_zstd, event.event_utf8_bytes, event.navigation_json,
+          CASE WHEN identity.event_id = 'middle' AND ${failureKind === "compressed" ? 1 : 0}
+            THEN x'01' ELSE event.event_zstd END AS event_zstd,
+          CASE WHEN identity.event_id = 'middle' AND ${failureKind === "compressed" ? 1 : 0}
+            THEN 0 ELSE event.event_utf8_bytes END AS event_utf8_bytes,
+          event.navigation_json,
           CASE identity.event_id
             WHEN 'oldest' THEN ${failureKind === "sql" ? "json_extract('{broken', '$')" : "'{\"old\":}'"}
-            WHEN 'middle' THEN '{"newer":}'
+            WHEN 'middle' THEN ${failureKind === "compressed" ? "NULL" : "'{\"newer\":}'"}
             ELSE event.event_json
           END AS event_json
         FROM main.transcript_events AS event
@@ -614,7 +619,11 @@ it.for(["json", "sql", "consumer"] as const)(
         ).toThrow(failure);
       } else {
         expect(() => recentEvents(scope, 3)).toThrow(
-          failureKind === "sql" ? "malformed JSON" : parseFailure,
+          failureKind === "sql"
+            ? "malformed JSON"
+            : failureKind === "compressed"
+              ? "Invalid compressed transcript payload bounds"
+              : parseFailure,
         );
       }
     } finally {

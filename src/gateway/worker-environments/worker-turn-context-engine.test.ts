@@ -138,14 +138,18 @@ it.each(["direct", "outer"] as const)("prepares and settles with %s ownership", 
     terminal = await completed.appendMessageWithTranscriptAnchorAsync(answer);
     return await worker.acknowledgeCompletedWorkerTurn(request.turnClaim, terminal.entryId);
   });
-  const tunnel = worker.createWorkerTurnTunnel({
-    launchTurn,
-    reconcileWorkspace: vi.fn(async (request) => {
-      events.push("reconcile");
+  const reconcileWorkspace = vi
+    .fn<WorkerTunnelHandle["reconcileWorkspace"]>()
+    .mockImplementationOnce(async (request) => {
+      events.push("reconcile-before-turn");
+      return worker.reconcileUnchangedLocalWorkspace(request);
+    })
+    .mockImplementationOnce(async (request) => {
+      events.push("reconcile-after-turn");
       await writeFile(acceptedFile, "accepted node content");
       return { ...(await worker.reconcileUnchangedLocalWorkspace(request)), changed: true };
-    }),
-  });
+    });
+  const tunnel = worker.createWorkerTurnTunnel({ launchTurn, reconcileWorkspace });
   const published = vi.fn(record("publish"));
   const provider = worker.createWorkerSessionTurnPlacementProvider({
     placements: worker.placements,
@@ -227,11 +231,12 @@ it.each(["direct", "outer"] as const)("prepares and settles with %s ownership", 
       await expect(readFile(followUpFile, "utf8")).resolves.toBe("accepted node content");
     }
     expect(events).toEqual([
+      "reconcile-before-turn",
       "bootstrap",
       "assemble",
       "launch",
       ...(lease ? ["candidate"] : []),
-      "reconcile",
+      "reconcile-after-turn",
       "publish",
       ...(lease ? [] : ["after-turn"]),
       "dispose",
