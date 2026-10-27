@@ -39,6 +39,7 @@ import {
   requireSessionRowProjection,
 } from "../session-row-projection-access.js";
 import type { MaterializedRow } from "../session-row-projection-record.js";
+import { hasSessionReadAccessChanged } from "../session-sharing-policy.js";
 import {
   authorizeIncognitoSessionTarget,
   createSessionListEntryFilter,
@@ -217,11 +218,18 @@ export const sessionReadHandlers: GatewayRequestHandlers = {
           if (!roleVisibilityFilter) {
             return true;
           }
-          const membership = membershipProjection?.readMembership({
-            key: sessionKey,
-            agentId: target.agentId,
-            storePath: target.storePath,
-          });
+          const lookup = { key: sessionKey, agentId: target.agentId, storePath: target.storePath };
+          // Worker results can predate a committed visibility or incarnation change.
+          if (membershipProjection) {
+            const current = membershipProjection.sharingTargetState(lookup);
+            if (
+              current.status !== "ready" ||
+              hasSessionReadAccessChanged(entry, current.target.entry)
+            ) {
+              return false;
+            }
+          }
+          const membership = membershipProjection?.readMembership(lookup);
           return Boolean(
             entry &&
             roleVisibilityFilter(
