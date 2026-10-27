@@ -86,7 +86,7 @@ function optionsText(setup: ScribeSetup) {
     };
     return `${options.scope === "all" ? "Active and archived" : "Active"} conversations, from ${since[options.since] ?? "an unknown start"} · ${setup.mode === "once" ? "once" : "keeps learning"}`;
   }
-  if ("sources" in options) {
+  if ("sources" in options && Array.isArray(options.sources)) {
     const names: Record<string, string> = {
       "memory-md": "MEMORY.md",
       "daily-notes": "daily notes",

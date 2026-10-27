@@ -203,6 +203,28 @@ it("keeps the start dialog open with the error when the Gateway rejects the star
   expect(dialog.open).toBe(true);
 });
 
+it("retries a failed setup send in the conversation it already created", async () => {
+  const { render, request, create, calls, page } = fixture({});
+  const view = await render();
+  buttonNamed(view, "Turn on…").click();
+  const dialog = page.querySelector("dialog")!;
+  request.mockImplementationOnce(async () => {
+    throw new Error("Gateway restarting");
+  });
+  buttonNamed(dialog, "Turn on").click();
+  await vi.waitFor(() =>
+    expect(dialog.querySelector(".knowledge-error")?.textContent).toContain("Gateway restarting"),
+  );
+  buttonNamed(dialog, "Turn on").click();
+  await vi.waitFor(() => expect(dialog.open).toBe(false));
+  expect(create).toHaveBeenCalledTimes(1);
+  const sends = calls.filter(([method]) => method === "chat.send");
+  expect(sends.map(([, params]) => params?.sessionKey)).toEqual([
+    "agent:main:dock:new",
+    "agent:main:dock:new",
+  ]);
+});
+
 it("disables starting without write access", async () => {
   const { render, page } = fixture({ canWrite: false });
   const view = await render();
