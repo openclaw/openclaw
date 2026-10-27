@@ -1,5 +1,7 @@
-import type { Model } from "openclaw/plugin-sdk/llm";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+// Prepare worker-backed SDK fixtures before the timed first-stream lifecycle cases.
+import "openclaw/plugin-sdk/provider-transport-runtime";
+import { afterEach, assert, beforeEach, describe, expect, it, vi } from "vitest";
+import { makeProviderModel } from "../../packages/ai/src/providers/provider-model.test-support.js";
 import { buildGoogleProvider } from "./provider-registration.js";
 
 const { guardedFetch } = vi.hoisted(() => ({ guardedFetch: vi.fn() }));
@@ -32,44 +34,30 @@ function response(events: readonly unknown[], cancel = vi.fn(), open = false) {
   );
 }
 async function startStream(signal: AbortSignal, id = "gemini-2.5-pro") {
-  const model: Model<"google-generative-ai"> = {
-    id,
-    name: id,
-    provider: "google",
-    api: "google-generative-ai",
+  const model = makeProviderModel("google-generative-ai", "google", id, {
     baseUrl: "https://generativelanguage.googleapis.com/v1beta",
-    reasoning: true,
-    input: ["text"],
-    contextWindow: 128000,
-    maxTokens: 8192,
-    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-  };
+  });
   const streamFn = buildGoogleProvider().createStreamFn?.({
     provider: model.provider,
     modelId: model.id,
     model,
   });
-  if (!streamFn) {
-    throw new Error("Google registration did not provide its stream");
-  }
-  const stream = await streamFn(
+  assert(streamFn, "Google registration must provide its stream");
+  return streamFn(
     model,
     { messages: [{ role: "user", content: "hello", timestamp: 0 }] },
     { apiKey: "fixture-key-1", signal },
   );
-  return stream;
 }
 async function advanceResponse(ms: number, id: string, expected: object = completedResponse) {
   const controller = new AbortController();
   const completed = vi.fn();
-  const stream = await startStream(controller.signal, id);
-  const pending = stream.result().then(completed);
+  const pending = (await startStream(controller.signal, id)).result().then(completed);
   await vi.advanceTimersByTimeAsync(ms);
   const result = completed.mock.calls[0]?.[0];
   controller.abort();
   await pending;
   expect(result).toMatchObject(expected);
-  return result;
 }
 
 describe("Google stream lifecycle", () => {
