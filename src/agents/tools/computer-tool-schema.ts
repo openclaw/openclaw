@@ -3,6 +3,7 @@ import {
   COMPUTER_ESCALATION_REASONS,
   COMPUTER_SCROLL_DIRECTIONS,
   COMPUTER_USE_V1_ACTION_NAMES,
+  COMPUTER_USE_V2_ACTION_NAMES,
   type ComputerUseV2ActionName,
 } from "../../plugins/computer-use-contract.js";
 import { createCachedToolSchema } from "../schema/cached-schema.js";
@@ -55,23 +56,25 @@ function coordinatePair(description: string, integer = true) {
 }
 
 const cachedComputerToolSchema = createCachedToolSchema({
-  key: (inputs: {
-    actions: readonly ComputerUseV2ActionName[];
-    targetScope: "paired" | "node" | "session";
-  }) => JSON.stringify([inputs.targetScope, inputs.actions]),
-  build: ({ actions, targetScope }) => buildComputerToolSchema(actions, targetScope),
+  key: (inputs: { hasCleanupOwner: boolean; targetScope: "paired" | "session" }) =>
+    `${inputs.targetScope}:${inputs.hasCleanupOwner}`,
+  build: ({ hasCleanupOwner, targetScope }) =>
+    buildComputerToolSchema(
+      availableComputerActions(COMPUTER_USE_V2_ACTION_NAMES, hasCleanupOwner),
+      targetScope,
+    ),
 });
 
 export function createComputerToolSchema(
-  actions: readonly ComputerUseV2ActionName[],
-  targetScope: "paired" | "node" | "session" = "paired",
+  hasCleanupOwner: boolean,
+  targetScope: "paired" | "session" = "paired",
 ) {
-  return cachedComputerToolSchema({ actions, targetScope });
+  return cachedComputerToolSchema({ hasCleanupOwner, targetScope });
 }
 
 function buildComputerToolSchema(
   actions: readonly ComputerUseV2ActionName[],
-  targetScope: "paired" | "node" | "session",
+  targetScope: "paired" | "session",
 ) {
   const supportsHold = actions.includes("hold_key");
   const accessibilityTarget = actions.includes("get_window_state")
@@ -85,15 +88,10 @@ function buildComputerToolSchema(
     ...(targetScope !== "session"
       ? {
           ...gatewayCallOptionSchemaProperties(),
-          target: optionalStringEnum(
-            targetScope === "paired" ? (["gateway", "node"] as const) : (["node"] as const),
-            {
-              description:
-                targetScope === "paired"
-                  ? "Computer host. Omit target for automatic selection: the configured Gateway desktop, otherwise the sole connected computer-capable node. target: gateway selects the Gateway desktop; target: node selects a paired node. Later calls retain the selected host."
-                  : "Computer host. The Gateway has no computer provider configured, so target: gateway is unavailable. Omit target for automatic selection of the sole connected computer-capable node, or use target: node. Later calls retain the selected host.",
-            },
-          ),
+          target: optionalStringEnum(["gateway", "node"] as const, {
+            description:
+              "Computer host. Omit target for automatic selection: the configured Gateway desktop, otherwise the sole connected computer-capable node. target: gateway selects the Gateway desktop; target: node selects a paired node. Later calls retain the selected host.",
+          }),
           node: describedString(
             "Paired node id or display name; implies target=node. Omit when selecting the sole connected computer-capable node.",
           ),

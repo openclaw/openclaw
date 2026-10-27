@@ -69,6 +69,7 @@ const repositoryScriptEntries = [
   "scripts/perf/access-authority-callback-measure.mjs!",
   // Its header documents the config-wide admission metadata benchmark.
   "scripts/perf/config-wide-metadata-measure.ts!",
+  "scripts/perf/computer-tool-definition.ts!",
   // Its header documents the sandbox/workspace ownership assertion benchmark.
   "scripts/perf/workspace-assertion-measure.mjs!",
   // Its header documents the paired workspace reconciliation benchmark.

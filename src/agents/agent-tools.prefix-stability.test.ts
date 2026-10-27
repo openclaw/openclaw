@@ -18,6 +18,7 @@ import {
   buildCodeModeCatalogPrompt,
   createCodeModeTools,
 } from "./code-mode.js";
+import type { PreparedPairedComputerUse } from "./computer-use-node-capabilities.js";
 import { prepareConversationCapabilityProfile } from "./conversation-capability-profile.js";
 import { createOpenClawTools } from "./openclaw-tools.js";
 import { clearToolSearchCatalog, createToolSearchCatalogRef } from "./tool-search-catalog.js";
@@ -61,6 +62,54 @@ function surface(tools: ReturnType<typeof createOpenClawCodingTools>) {
     JSON.stringify({ name: tool.name, description: tool.description, parameters: tool.parameters }),
   );
 }
+
+it("keeps the computer definition across connected desktop capabilities and availability", () => {
+  const render = (pairedNodeComputerUse?: PreparedPairedComputerUse) =>
+    surface(createOpenClawCodingTools({ ...userTurn, pairedNodeComputerUse }));
+  const expected = render();
+  for (const actions of [["screenshot"], ["list_windows", "screenshot"]] as const) {
+    const computerUse = {
+      contractVersion: 2 as const,
+      provider: { id: "fixture", label: "Fixture", generation: "generation-2" },
+      actions: [...actions],
+      targets: ["screen"] as const,
+      deliveryModes: ["foreground"] as const,
+      observations: ["image"] as const,
+      features: { recording: false, agentCursor: false, multiDisplay: true },
+    };
+    for (const available of [false, true]) {
+      expect(
+        render({
+          actions,
+          guidanceCapabilities: computerUse,
+          gateway: { configured: true, available, computerUse },
+        }),
+      ).toEqual(expected);
+    }
+  }
+  expect(render({ actions: [], gateway: { configured: false, available: false } })).toEqual(
+    expected,
+  );
+});
+
+it("keeps an unavailable session desktop listed while gating its execution", async () => {
+  const create = (computerTransport: ToolOptions["computerTransport"]) =>
+    createOpenClawCodingTools({ ...userTurn, computerTransport });
+  const unavailable = create(null);
+  const desktop = unavailable.find((tool) => tool.name === "computer");
+  expect(desktop).toBeDefined();
+  expect((await desktop!.execute("unavailable", { action: "screenshot" })).details).toMatchObject({
+    gated: true,
+  });
+  expect(surface(unavailable)).toEqual(
+    surface(
+      create({
+        resolveNode: async () => ({ nodeId: "session-desktop" }),
+        invoke: async () => undefined,
+      }),
+    ),
+  );
+});
 
 async function webchatSession(clientKind: "browser" | "cli" = "browser") {
   const sessionKey = "agent:main:dashboard:prefix-proof";

@@ -335,7 +335,7 @@ describe("MCP loopback Computer Use schema", () => {
     },
   );
 
-  it("unions approved actions across distinct paired node identities", async () => {
+  it("keeps the protocol schema stable across paired node inventories", async () => {
     const cache = new ToolCache();
     const scope = scopeParams({
       cfg: { tools: { allow: ["computer"] } },
@@ -346,7 +346,7 @@ describe("MCP loopback Computer Use schema", () => {
     listNodes.mockResolvedValue([
       computerNode("headless-windows-node", ["screenshot", "list_windows"]),
     ]);
-    expect(readComputerActions(await cache.resolve(scope))).not.toContain("launch_app");
+    const initial = (await cache.resolve(scope)).toolSchema;
 
     listNodes.mockResolvedValue([
       computerNode("headless-windows-node", ["screenshot", "list_windows"]),
@@ -354,6 +354,7 @@ describe("MCP loopback Computer Use schema", () => {
     ]);
     const resolved = await cache.resolve(scope);
 
+    expect(resolved.toolSchema).toEqual(initial);
     expect(readComputerActions(resolved)).toEqual(
       expect.arrayContaining(["screenshot", "list_windows", "launch_app", "wait"]),
     );

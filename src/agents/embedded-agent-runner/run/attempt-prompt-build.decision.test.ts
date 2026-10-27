@@ -92,6 +92,7 @@ async function fixture(
   session.setActiveToolsByName(
     mode === "structured" ? tools.map((t) => t.name) : [...controls, "message"],
   );
+  const offeredToolNames = session.getActiveToolNames();
   const catalogRef = mode === "structured" ? undefined : createToolSearchCatalogRef();
   if (catalogRef) {
     registerHeadlessToolSearchCatalog({
@@ -172,7 +173,19 @@ async function fixture(
       persistToolResultProjections,
       promptActiveSession: (prompt, options) => session.prompt(prompt, options),
     });
-  return { call, assemble, submit, session, policy, catalogRef, controller, owner, attempt, tools };
+  return {
+    call,
+    assemble,
+    submit,
+    session,
+    policy,
+    catalogRef,
+    controller,
+    owner,
+    attempt,
+    tools,
+    offeredToolNames,
+  };
 }
 
 describe("prompt assembly with registered Decision runtime", () => {
@@ -187,9 +200,10 @@ describe("prompt assembly with registered Decision runtime", () => {
       });
       if (!clientOnly) {
         await f.assemble();
-        expect(f.session.getActiveToolNames()).toEqual([]);
+        expect(f.policy.current.callableToolNames).toEqual([]);
       }
-      expect(f.policy.current.effectiveTools).toEqual([]);
+      expect(f.session.getActiveToolNames()).toEqual(names);
+      expect(f.policy.current.effectiveTools).toEqual(clientOnly ? [] : f.tools);
       call.mockResolvedValue(result(0.9));
       await f.assemble();
       expect(call).toHaveBeenCalledTimes(clientOnly ? 1 : 2);
@@ -213,7 +227,8 @@ describe("prompt assembly with registered Decision runtime", () => {
       setRuntimeConfigSnapshot(cfg);
       const f = await fixture(cfg, mode);
       const assembly = await f.assemble();
-      expect(f.session.getActiveToolNames()).toEqual(["message"]);
+      expect(f.session.getActiveToolNames()).toEqual(f.offeredToolNames);
+      expect(f.policy.current.callableToolNames).toEqual(["message"]);
       const entered = createDeferredCore();
       const barrier = createDeferredCore();
       const captured = captureRequests();
@@ -230,7 +245,7 @@ describe("prompt assembly with registered Decision runtime", () => {
       setRuntimeConfigSnapshot(next);
       barrier.resolve();
       await pending;
-      expect(captured).toEqual([["message"]]);
+      expect(captured).toEqual([f.offeredToolNames]);
       expect(f.policy.current.callableToolNames).not.toContain("denied");
       if (f.catalogRef) {
         expect(f.catalogRef.current?.entries).toEqual([]);
@@ -329,7 +344,8 @@ describe("prompt assembly with registered Decision runtime", () => {
         { user: "Help me understand this example.", assistant: "Would you like an explanation?" },
       ],
     });
-    expect(captures[1]).toEqual(["message"]);
+    expect(captures[1]).toEqual(captures[0]);
+    expect(f.policy.current.callableToolNames).toEqual(["message"]);
     call.mockResolvedValue(result(0.9));
     await submit("Read package.json now.");
     expect(captures[2]).toEqual(captures[0]);

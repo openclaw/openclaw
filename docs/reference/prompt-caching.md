@@ -41,6 +41,18 @@ necessarily delete the provider's older cache entry before its normal expiry.
 
 ## Stable tools between turns
 
+Computer definitions describe the protocol independently of connected desktops,
+provider capabilities, display geometry, and readiness. Selecting or refreshing a
+desktop reports its current capabilities in a tool result; it never rewrites the
+description or action schema. An unavailable session desktop retains its definition
+with execution gated. Current target capabilities, observation references, and
+authorization still determine whether a call can execute.
+
+The `sessions_yield` description does not change with sibling tool availability.
+Per-turn prompt-hook tool restrictions gate execution while retaining the session's
+provider definitions. Genuine config, skill, and tool refreshes still apply; the
+tool set is not permanently frozen to the first request.
+
 Within an embedded run, bounded transcript reloads retain the admitted history
 boundary even when its compaction summary falls outside the loaded window.
 Actual compaction or reset starts a new prompt series. Permission changes still

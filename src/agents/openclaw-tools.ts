@@ -487,7 +487,7 @@ function* createOpenClawToolsSteps(
       : [
           nodesTool,
           createMobileUiTool({ idempotencyScope: options?.runId }),
-          options?.modelHasVision === false || options?.computerTransport === null
+          options?.modelHasVision === false
             ? null
             : createComputerTool({
                 ...options,
