@@ -213,7 +213,7 @@ it.each(["deadline", "admission", "execution"] as const)(
       expect((failure as Error).message).toBe(
         trigger === "deadline"
           ? "gateway request timeout for agent"
-          : "subagent source lifecycle changed",
+          : "subagent source lifecycle changed before completion delivery",
       );
     } finally {
       if (prepareStackTrace) {

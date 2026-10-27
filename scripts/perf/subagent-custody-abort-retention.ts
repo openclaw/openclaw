@@ -33,7 +33,7 @@ const {
       ? pathToFileURL(values.owner).href
       : "../../src/agents/subagents/completion/session-followup-completion.js"
   );
-type Owner = InstanceType<typeof SessionFollowupCompletion>;
+type Owner = ReturnType<typeof SessionFollowupCompletion.bind>;
 const message = "synthetic custody revoked";
 const noop = () => {};
 const run = <T>(work: () => T): T => work();
@@ -51,8 +51,7 @@ function createOwner(index: number): Owner {
 }
 
 function abortFromCallerContext(owner: Owner, bytes: number): WeakRef<number[]> {
-  // oxlint-disable-next-line unicorn/no-new-array -- Fixed-size backing store without an allocation callback in the measured path.
-  const payload = new Array<number>(bytes / 8).fill(123);
+  const payload = Array.from({ length: bytes / 8 }, () => 123);
   function assertDispatchCurrent() {
     // The private V8 stack frame is the only surviving path to this closure.
     assert.equal(payload.length, bytes / 8);
