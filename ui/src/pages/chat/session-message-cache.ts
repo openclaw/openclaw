@@ -169,7 +169,15 @@ export function createChatDisplayFacts(
         return undefined;
       }
       return {
-        read: () => current()?.rowDisplay?.[messageId],
+        read: () => {
+          const snapshot = current();
+          return (
+            snapshot && {
+              scope: JSON.stringify([key, snapshot.sessionId, messageId]),
+              facts: snapshot.rowDisplay?.[messageId],
+            }
+          );
+        },
         write(update) {
           const snapshot = current();
           if (!snapshot) {
@@ -182,14 +190,14 @@ export function createChatDisplayFacts(
             Object.keys(row.images ?? {}).length > 8 ||
             JSON.stringify(row).length > 8192 ||
             Object.entries(row.links ?? {}).some(
-              ([key, value]) =>
-                key.length > 4096 ||
+              ([linkKey, value]) =>
+                linkKey.length > 4096 ||
                 (value.title?.length ?? 0) > 256 ||
                 (value.badge?.label.length ?? 0) > 256,
             ) ||
             Object.entries(row.images ?? {}).some(
-              ([key, value]) =>
-                key.length > 4096 ||
+              ([imageKey, value]) =>
+                imageKey.length > 4096 ||
                 !Number.isSafeInteger(value.width) ||
                 !Number.isSafeInteger(value.height) ||
                 value.width <= 0 ||

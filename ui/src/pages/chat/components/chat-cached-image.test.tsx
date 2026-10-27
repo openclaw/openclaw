@@ -24,7 +24,8 @@ it("paints saved thumbnail bytes and final geometry before live admission, witho
     images: { [key]: { width: 480, height: 240, rendition: 480, thumbnail } },
   };
   const write = vi.fn((update: Partial<ChatRowDisplayFacts>) => Object.assign(facts, update));
-  const row = { read: () => facts, write };
+  const [scope, setScope] = createSignal("gateway/account-a/session/cached-image");
+  const row = { read: () => ({ scope: scope(), facts }), write };
   const revoke = stubObjectUrls(() => "blob:cached-thumbnail");
   const fetch = vi.fn();
   vi.stubGlobal("fetch", fetch);
@@ -43,6 +44,9 @@ it("paints saved thumbnail bytes and final geometry before live admission, witho
           isStreaming: false,
           showReasoning: false,
           mediaReadAllowed: live(),
+          connectionEpoch: live() ? 2 : 1,
+          mediaPolicyKey: live() ? "live-policy" : "cached-policy",
+          assistantAttachmentAuthToken: live() ? "synthetic-live-token" : null,
           onOpenImage,
           displayFacts: { forRow: () => row },
         }}
@@ -55,7 +59,7 @@ it("paints saved thumbnail bytes and final geometry before live admission, witho
     </ChatRowDisplayContext>
   ));
   try {
-    const image = view.container.querySelector("img");
+    let image = view.container.querySelector("img");
     expect(image?.getAttribute("src")).toBe("blob:cached-thumbnail");
     expect(view.container.querySelector(".chat-image-skeleton")).toBeNull();
     expect(
@@ -74,6 +78,10 @@ it("paints saved thumbnail bytes and final geometry before live admission, witho
     expect(image?.getAttribute("src")).toBe("blob:cached-thumbnail");
     expect(fetch).not.toHaveBeenCalled();
     expect(write).not.toHaveBeenCalled();
+    setScope("gateway/account-b/session/cached-image");
+    flush();
+    expect(view.container.querySelector("img")).not.toBe(image);
+    image = view.container.querySelector("img");
     setLive(false);
     flush();
     image?.dispatchEvent(new Event("error"));

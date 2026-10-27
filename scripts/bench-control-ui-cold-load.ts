@@ -1712,30 +1712,47 @@ try {
     if (!fixture.lateRowFacts) {
       return;
     }
-    await page.waitForFunction(({ sessionTitle, prUrl }) => {
-      const thread = document.querySelector(".chat-pane-cache__pane--active .chat-thread");
-      const links = [...(thread?.querySelectorAll<HTMLAnchorElement>("a") ?? [])];
-      const images = [
-        ...(thread?.querySelectorAll<HTMLImageElement>(".chat-image-frame img") ?? []),
-      ];
-      const assistantAvatars = [
-        ...(thread?.querySelectorAll<HTMLImageElement>(
-          ".chat-avatar.assistant img, .identity-avatar--agent img",
-        ) ?? []),
-      ];
-      return (
-        links.some(
-          (link) =>
-            link.classList.contains("markdown-session-link--titled") &&
-            link.textContent === sessionTitle,
-        ) &&
-        links.some((link) => link.href === prUrl && link.dataset.linkReaderTone === "positive") &&
-        images.length === 2 &&
-        images.every((image) => image.complete && image.naturalWidth > 0) &&
-        Boolean(thread?.querySelector(".chat-notice")) &&
-        assistantAvatars.some((image) => image.complete && image.naturalWidth > 0)
-      );
-    }, fixture.lateRowFacts);
+    await page
+      .waitForFunction(({ sessionTitle, prUrl }) => {
+        const thread = document.querySelector(".chat-pane-cache__pane--active .chat-thread");
+        const links = [...(thread?.querySelectorAll<HTMLAnchorElement>("a") ?? [])];
+        const images = [
+          ...(thread?.querySelectorAll<HTMLImageElement>(".chat-image-frame img") ?? []),
+        ];
+        const assistantAvatars = [
+          ...(thread?.querySelectorAll<HTMLImageElement>(
+            "img.chat-avatar.assistant, .chat-avatar.assistant img, .identity-avatar--agent img",
+          ) ?? []),
+        ];
+        return (
+          links.some(
+            (link) =>
+              link.classList.contains("markdown-session-link--titled") &&
+              link.textContent === sessionTitle,
+          ) &&
+          links.some((link) => link.href === prUrl && link.dataset.linkReaderTone === "positive") &&
+          images.length === 2 &&
+          images.every((image) => image.complete && image.naturalWidth > 0) &&
+          Boolean(thread?.querySelector('.chat-notice[data-chat-row-key^="archive:"]')) &&
+          assistantAvatars.some(
+            (image) => image.checkVisibility() && image.complete && image.naturalWidth > 0,
+          )
+        );
+      }, fixture.lateRowFacts)
+      .catch(async (error: unknown) => {
+        await writeFile(
+          path.join(artifactDir, "late-row-qualification-failure.json"),
+          JSON.stringify({
+            errors,
+            consoleErrors,
+            thread: await page.locator(".chat-pane-cache__pane--active .chat-thread").innerHTML(),
+          }),
+        );
+        await page.screenshot({
+          path: path.join(artifactDir, "late-row-qualification-failure.png"),
+        });
+        throw error;
+      });
   };
   const qualifyLateRowSnapshot = (saved: (typeof snapshotSaves)[number], bundleIndex: number) => {
     if (!values["late-row-facts"] || !comparisonBundleDirs.length || bundleIndex === 0) {

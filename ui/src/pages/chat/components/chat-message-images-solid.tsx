@@ -2,7 +2,7 @@ import { createMemo, onCleanup, refresh, useContext } from "solid-js";
 import { registerChatComposerEnglish } from "../../../i18n/locales/en-chat-composer.ts";
 import { registerChatMediaEnglish } from "../../../i18n/locales/en-chat-media.ts";
 import {
-  chatDisplaySourceKey,
+  chatImageDisplayKey,
   MAX_CHAT_THUMBNAIL_SIZE,
 } from "../../../lib/chat/row-display-facts.ts";
 import { t, registerEnglishCatalog } from "../../../lib/reactive/i18n.ts";
@@ -61,16 +61,9 @@ export function createMessageImagePresentation(props: MessageImageProps) {
   const display = useContext(ChatRowDisplayContext);
   let active = true;
   let loadedBlob: Blob | undefined;
-  let thumbnail: { blob: Blob; url: string } | undefined;
-  const displayKey = (image: ImageBlock) => {
-    if (!display?.()) {
-      return undefined;
-    }
-    const source = image.url && chatDisplaySourceKey(image.url);
-    return image.url && !source
-      ? undefined
-      : JSON.stringify([image.artifactId ?? null, source ?? null, previewWidth]);
-  };
+  let thumbnail: { blob: Blob; url: string; scope: string } | undefined;
+  const displayKey = (image: ImageBlock) =>
+    display?.() ? chatImageDisplayKey(image, previewWidth) : undefined;
   let currentImage: ImageBlock | undefined;
   let currentOptions: ImageRenderOptions | undefined;
   let loadedElement: HTMLImageElement | undefined;
@@ -125,10 +118,10 @@ export function createMessageImagePresentation(props: MessageImageProps) {
     if (event.type === "error" && thumbnail && element.getAttribute("src") === thumbnail.url) {
       const key = currentImage && displayKey(currentImage);
       const row = display?.();
-      const saved = key && row?.read()?.images?.[key];
+      const saved = key && row?.read()?.facts?.images?.[key];
       if (saved && row && key) {
         const { thumbnail: _thumbnail, ...dimensions } = saved;
-        row.write({ images: { ...row.read()?.images, [key]: dimensions } });
+        row.write({ images: { ...row.read()?.facts?.images, [key]: dimensions } });
       }
       URL.revokeObjectURL(thumbnail.url);
       thumbnail = undefined;
@@ -157,10 +150,10 @@ export function createMessageImagePresentation(props: MessageImageProps) {
       const image = currentImage;
       const key = image && displayKey(image);
       const row = display?.();
-      const element = loadedElement;
+      const loadedImage = loadedElement;
       const record = (bytes = loadedBlob) => {
-        if (image && key && row && element.naturalWidth > 0 && element.naturalHeight > 0) {
-          const previous = row.read()?.images?.[key];
+        if (image && key && row && loadedImage.naturalWidth > 0 && loadedImage.naturalHeight > 0) {
+          const previous = row.read()?.facts?.images?.[key];
           const blob =
             managedImageInlineVariant(image) === "thumbnail" &&
             bytes &&
@@ -170,8 +163,8 @@ export function createMessageImagePresentation(props: MessageImageProps) {
               ? bytes
               : previous?.thumbnail;
           const next = {
-            width: element.naturalWidth,
-            height: element.naturalHeight,
+            width: loadedImage.naturalWidth,
+            height: loadedImage.naturalHeight,
             rendition: previewWidth,
             thumbnail: blob,
           };
@@ -180,7 +173,7 @@ export function createMessageImagePresentation(props: MessageImageProps) {
             previous?.height !== next.height ||
             previous?.thumbnail !== blob
           ) {
-            row.write({ images: { ...row.read()?.images, [key]: next } });
+            row.write({ images: { ...row.read()?.facts?.images, [key]: next } });
           }
         }
       };
@@ -192,7 +185,7 @@ export function createMessageImagePresentation(props: MessageImageProps) {
         isCanonicalInboundMediaSource(image.url) &&
         managedImageInlineVariant(image) === "thumbnail"
       ) {
-        const source = new URL(element.currentSrc || element.src, location.origin);
+        const source = new URL(loadedImage.currentSrc || loadedImage.src, location.origin);
         if (
           source.origin === location.origin &&
           source.searchParams.get("variant") === "thumbnail"
@@ -208,7 +201,7 @@ export function createMessageImagePresentation(props: MessageImageProps) {
               if (
                 bytes &&
                 active &&
-                previewElement === element &&
+                previewElement === loadedImage &&
                 currentImage &&
                 displayKey(currentImage) === key
               ) {
@@ -224,7 +217,8 @@ export function createMessageImagePresentation(props: MessageImageProps) {
 
   function readPresentation(image: ImageBlock, options: ImageRenderOptions | undefined) {
     const key = displayKey(image);
-    const saved = key ? display?.()?.read()?.images?.[key] : undefined;
+    const row = display?.()?.read();
+    const saved = key ? row?.facts?.images?.[key] : undefined;
     const previous = currentImage;
     if (previous?.url !== image.url || previous?.artifactId !== image.artifactId) {
       managed = image.url === undefined || isManagedOutgoingMediaSource(image.url);
@@ -259,13 +253,18 @@ export function createMessageImagePresentation(props: MessageImageProps) {
     }
     currentImage = image;
     currentOptions = options;
-    if (active && saved?.thumbnail) {
-      if (thumbnail?.blob !== saved.thumbnail) {
+    if (active && row && saved?.thumbnail) {
+      if (thumbnail?.blob !== saved.thumbnail || thumbnail?.scope !== row.scope) {
         if (thumbnail) {
           URL.revokeObjectURL(thumbnail.url);
         }
-        thumbnail = { blob: saved.thumbnail, url: URL.createObjectURL(saved.thumbnail) };
+        thumbnail = {
+          blob: saved.thumbnail,
+          url: URL.createObjectURL(saved.thumbnail),
+          scope: row.scope,
+        };
       }
+      releaseChatMediaResourceOwner(refreshImage);
       // These bytes were displayed under this snapshot's scope. They authorize no read or action.
       return renderImageElement(image, thumbnail.url);
     }
@@ -451,7 +450,7 @@ export function createMessageImagePresentation(props: MessageImageProps) {
       return image;
     }
     const key = displayKey(image);
-    return (key ? display?.()?.read()?.images?.[key] : undefined) ?? image;
+    return (key ? display?.()?.read()?.facts?.images?.[key] : undefined) ?? image;
   }
 
   function renderImageElement(image: ImageBlock, previewUrl: string): ImagePresentation {

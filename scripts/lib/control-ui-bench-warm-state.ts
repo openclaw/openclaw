@@ -183,9 +183,11 @@ export async function restoreColdLoadWarmState(
   }
   await page.evaluate(
     async ({ storage: saved, url: deepLink }) => {
-      const records: typeof storage.records = JSON.parse(saved.records);
+      const savedRecords: typeof storage.records = JSON.parse(saved.records);
       for (const thumbnail of saved.thumbnails) {
-        const record = records.snapshots.find((row) => row.sessionKey === thumbnail.sessionKey);
+        const record = savedRecords.snapshots.find(
+          (row) => row.sessionKey === thumbnail.sessionKey,
+        );
         const image =
           record?.snapshot.rowDisplay?.[thumbnail.messageId]?.images?.[thumbnail.imageKey];
         if (!image) {
@@ -197,7 +199,7 @@ export async function restoreColdLoadWarmState(
         image.thumbnail = new Blob([bytes], { type: thumbnail.mime });
       }
       const databases: Record<string, Record<string, unknown[]>> = {
-        "openclaw-chat-snapshots": records,
+        "openclaw-chat-snapshots": savedRecords,
       };
       if ((await indexedDB.databases()).some(({ name }) => name === "openclaw-control-ui")) {
         databases["openclaw-control-ui"] = { composerDrafts: [] };

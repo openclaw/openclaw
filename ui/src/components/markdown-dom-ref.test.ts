@@ -21,7 +21,7 @@ it("commits cached session titles and PR state with Markdown, then changes only 
   const write = vi.fn((update: Partial<ChatRowDisplayFacts>) => {
     facts = { ...facts, ...update };
   });
-  const display = { read: () => facts, write };
+  const display = { read: () => ({ scope: "cached-markdown", facts }), write };
   const html = toSanitizedMarkdownHtml(`${sessionKey}\n\n${pr}\n\n${queryPr}`, {
     sessionLinks: true,
   });

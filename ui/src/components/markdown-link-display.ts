@@ -33,7 +33,7 @@ export function registerMarkdownLinkDisplay(
   display: ChatRowDisplay | undefined,
 ): () => void {
   const key = linkDisplayKey(target);
-  const read = () => (key ? display?.read()?.links?.[key] : undefined);
+  const read = () => (key ? display?.read()?.facts?.links?.[key] : undefined);
   const write = (value: ChatLinkDisplay) => {
     const previous = read();
     if (
@@ -47,7 +47,7 @@ export function registerMarkdownLinkDisplay(
       key &&
       (!target.classList.contains("markdown-github-item") || linkDisplayKey(target) === key)
     ) {
-      const links = { ...display?.read()?.links };
+      const links = { ...display?.read()?.facts?.links };
       if (value.title || value.badge) {
         links[key] = value;
       } else {
