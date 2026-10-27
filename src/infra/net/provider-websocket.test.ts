@@ -155,24 +155,21 @@ describe("openProviderWebSocket", () => {
     expect(proxy.connectionCount()).toBe(0);
   });
 
-  it.for([false, true])(
-    "delegates target DNS to ambient proxy (managed=%s)",
-    async (managed, { signal }) => {
-      const proxy = await prepareProxy();
-      if (managed) {
-        vi.stubEnv("OPENCLAW_PROXY_ACTIVE", "1");
-      }
-      const socket = await openSocket(providerUrl, {
-        dispatcherPolicy: managed ? { mode: "env-proxy" } : undefined,
-      });
-      socket.on("error", ignoredError);
-      const peer = await withinTest(proxy.received, signal);
-      const closed = once(peer, "close", { signal: AbortSignal.timeout(2000) });
-      socket.terminate();
-      await closed;
-      expect(proxy.connectionCount()).toBe(1);
-    },
-  );
+  it.for([false, true])("delegates target DNS to ambient proxy (managed=%s)", async (active, t) => {
+    const proxy = await prepareProxy();
+    if (active) {
+      vi.stubEnv("OPENCLAW_PROXY_ACTIVE", "1");
+    }
+    const socket = await openSocket(providerUrl, {
+      dispatcherPolicy: active ? { mode: "env-proxy" } : undefined,
+    });
+    socket.on("error", ignoredError);
+    const peer = await withinTest(proxy.received, t.signal);
+    const closed = once(peer, "close", { signal: AbortSignal.timeout(2000) });
+    socket.terminate();
+    await closed;
+    expect(proxy.connectionCount()).toBe(1);
+  });
 
   it.each(["NO_PROXY bypass", "ALL_PROXY only"])("checks target DNS for %s", async (mode) => {
     const proxy = await prepareProxy(mode === "NO_PROXY bypass" ? "provider.example" : "");
