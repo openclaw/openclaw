@@ -2,7 +2,6 @@ import type { BackupStatusResult, StorageLocationsProbeResult } from "@openclaw/
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { createChangeListeners } from "../../../../src/shared/listeners.js";
 import type { NodeListNode } from "../../../../src/shared/node-list-types.js";
-import type { GatewaySessionRow } from "../../api/types.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import { gatewayPresentationScope } from "../../app/gateway-presentation-scope.ts";
 import { hasOperatorReadAccess } from "../../app/operator-access.ts";
@@ -29,17 +28,18 @@ import {
 
 const TELEMETRY_SAMPLE_LIMIT = 120;
 
-// Worker lifecycle is only reported by environments.list; placement changes signal it moved.
-function placementSignature(sessions: readonly GatewaySessionRow[]): string {
-  return JSON.stringify(
-    sessions
-      .flatMap(({ key, placement }) =>
-        placement && placement.state !== "local"
-          ? [[key, "environmentId" in placement ? placement.environmentId : null, placement.state]]
-          : [],
-      )
-      .toSorted(([a], [b]) => String(a).localeCompare(String(b))),
-  );
+const UNPLACED = JSON.stringify([null, null]);
+
+// Worker lifecycle is only reported by environments.list; a placement change signals it moved.
+function placementFact(payload: unknown): [sessionKey: string, fact: string] | undefined {
+  if (!isRecord(payload) || typeof payload.sessionKey !== "string" || !("placement" in payload)) {
+    return undefined;
+  }
+  const placement = isRecord(payload.placement) ? payload.placement : undefined;
+  return [
+    payload.sessionKey,
+    JSON.stringify([placement?.state ?? null, placement?.environmentId ?? null]),
+  ];
 }
 
 export type SystemsSortMode = "name" | "online-first" | "offline-first";
@@ -483,7 +483,8 @@ export function createSystems(context: ApplicationContext) {
         return;
       }
       let location = context.router.getState().location;
-      let placements = placementSignature(context.sessions.state.result?.sessions ?? []);
+      // Keyed by session from events, so sessions outside the loaded list still refresh workers.
+      const placements = new Map<string, string>();
       subscriptions = [
         context.router.subscribe((next) => {
           if (next.location !== location) {
@@ -516,7 +517,15 @@ export function createSystems(context: ApplicationContext) {
             cancelBackups();
             storageProbes.clear();
           }
+          const placement =
+            event.event === "sessions.changed" ? placementFact(event.payload) : undefined;
+          const placementChanged =
+            placement !== undefined && (placements.get(placement[0]) ?? UNPLACED) !== placement[1];
+          if (placementChanged) {
+            placements.set(placement[0], placement[1]);
+          }
           if (
+            placementChanged ||
             event.event === "presence" ||
             event.event === "node.pair.resolved" ||
             event.event === "node.runnerInventory.changed" ||
@@ -536,11 +545,6 @@ export function createSystems(context: ApplicationContext) {
         context.sessions.subscribe(() => {
           projectRows();
           notify();
-          const next = placementSignature(context.sessions.state.result?.sessions ?? []);
-          if (next !== placements) {
-            placements = next;
-            void refresh();
-          }
         }),
       ];
       if (lifecycle.transition(context.gateway.snapshot)) {

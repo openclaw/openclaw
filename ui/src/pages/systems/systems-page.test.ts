@@ -21,7 +21,7 @@ import { setupSidebarTest } from "../../test-helpers/app-sidebar-setup.ts";
 import {
   createContext,
   createGatewayHarness,
-  createSessionsHarness,
+  createSessions,
 } from "../../test-helpers/app-sidebar.ts";
 import { gatewayHelloForMethods } from "../../test-helpers/gateway-methods.ts";
 import { cleanupSolid as cleanup, mountSolid } from "../../test-helpers/mount-solid.ts";
@@ -100,8 +100,7 @@ function harness(
       ["operator.admin"],
     ),
   });
-  const sessions = createSessionsHarness("main", []);
-  const context = createContext(gateway.gateway, sessions.sessions);
+  const context = createContext(gateway.gateway, createSessions("main", []));
   const runtimeConfig = createRuntimeConfigCapability(gateway.gateway);
   runtimeConfigs.push(runtimeConfig);
   Object.assign(context, {
@@ -116,7 +115,7 @@ function harness(
     }),
   });
   const controller = createSystems(context);
-  return { controller, gateway, context, request, sessions };
+  return { controller, gateway, context, request };
 }
 
 function text(root: ParentNode, selector: string) {
@@ -777,35 +776,44 @@ describe("Systems workspace", () => {
         },
       });
     let environments = [host, cloud("attached")];
-    const { controller, request, sessions } = harness(async () => environments);
-    const active = createActiveSessionPlacement({ environmentId: "worker:cloud" });
-    const place = (placement: SessionPlacement) =>
-      sessions.publish({
-        result: {
-          ...sessions.sessions.state.result!,
-          sessions: [{ key: "agent:main:cloud", kind: "direct", updatedAt: 1, placement }],
-        },
-      });
-    place(active);
+    const { controller, gateway, request } = harness(async () => environments);
     const { sidebar, unmount } = await mount(controller);
     expect(sidebar.textContent).toContain("Cloud worker");
-    const reads = calls(request, "environments.list").length;
+    const reads = () => calls(request, "environments.list").length;
+    const initialReads = reads();
+    // The session need not be in the loaded session list; events alone carry placement.
+    const place = (placement: SessionPlacement | null, reason = "placement") =>
+      gateway.publishEvent("sessions.changed", {
+        sessionKey: "agent:main:cloud",
+        reason,
+        placement,
+      });
 
-    place({ ...active, updatedAtMs: 2 });
+    place(null, "activity-summary");
+    gateway.publishEvent("sessions.changed", { sessionKey: "agent:main:cloud", reason: "send" });
+    expect(reads()).toBe(initialReads);
+
+    const active = createActiveSessionPlacement({ environmentId: "worker:cloud" });
+    place(active, "dispatch");
+    await waitForSolid(() => expect(reads()).toBe(initialReads + 1));
+    place({ ...active, updatedAtMs: 2 }, "activity-summary");
     await waitForSolid(() => expect(controller.loading()).toBe(false));
-    expect(calls(request, "environments.list")).toHaveLength(reads);
+    expect(reads()).toBe(initialReads + 1);
 
     environments = [host, cloud("destroyed")];
-    place({
-      state: "reclaimed",
-      generation: 1,
-      createdAtMs: 1,
-      updatedAtMs: 3,
-      stateChangedAtMs: 3,
-      environmentId: "worker:cloud",
-    });
+    place(
+      {
+        state: "reclaimed",
+        generation: 1,
+        createdAtMs: 1,
+        updatedAtMs: 3,
+        stateChangedAtMs: 3,
+        environmentId: "worker:cloud",
+      },
+      "reclaim",
+    );
     await waitForSolid(() => expect(sidebar.textContent).not.toContain("Cloud worker"));
-    expect(calls(request, "environments.list")).toHaveLength(reads + 1);
+    expect(reads()).toBe(initialReads + 2);
     unmount();
   });
 
