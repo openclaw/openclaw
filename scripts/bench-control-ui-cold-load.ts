@@ -18,6 +18,7 @@
 // --gateway-http serves paired bundles, including layout cells, through the Gateway HTTP owner.
 // --first-load skips warm-up and clears client state; external Gateway URL runs stay single-sample.
 // --sidebar-persistent-children keeps expanded rows outside root windows for staggered handoff proof.
+// --sidebar-profile-peer flushes an unresolved peer profile before freezing each warm reload seed.
 // --boot-route chat|new|sessions|settings selects the measured reload destination.
 // --layout-matrix covers routes, themes, viewports and cold/warm reloads; --runs is per bundle/cell.
 // Repeat --layout-cell mobile:light:chat:cold to isolate cells with their matrix setup intact.
@@ -32,6 +33,7 @@ import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { loadavg } from "node:os";
 import path from "node:path";
 import { parseArgs } from "node:util";
+import { asRecord } from "@openclaw/normalization-core/record-coerce";
 import { buildControlUiSessionPath } from "@openclaw/session-url-contract";
 import { chromium, type Browser, type CDPSession, type Page } from "playwright";
 import { buildSandboxHostPath } from "../src/agents/sandbox-host.js";
@@ -41,10 +43,12 @@ import { shareSidebarSessionRows } from "../src/gateway/session-row-presentation
 import { normalizeControlUiBuildInfo } from "../ui/src/build-info-normalizers.ts";
 import { isChatHistoryState } from "../ui/src/lib/protocol-validators.generated/history-state.js";
 import { createColdLoadProbeInitScript } from "../ui/src/test-helpers/control-ui-cold-load-probes.ts";
+import { evaluateControlUiContext } from "../ui/src/test-helpers/control-ui-e2e-context.ts";
 import type { MockGatewayWindow } from "../ui/src/test-helpers/control-ui-e2e-contract.ts";
 import {
   createControlUiMockBootstrapConfig,
   installControlUiMockBootstrapDocument,
+  installMockGateway,
   createControlUiMockGatewayInitScript,
   controlUiSessionUrl,
   controlUiBundledSettingsStorageKey,
@@ -307,6 +311,7 @@ const { values } = parseArgs({
     "sidebar-presentation-probe": { type: "boolean", default: false },
     "sidebar-expanded": { type: "boolean", default: false },
     "sidebar-persistent-children": { type: "boolean", default: false },
+    "sidebar-profile-peer": { type: "boolean", default: false },
     "omit-hello-self-presence": { type: "boolean", default: false },
     "session-event-churn": { type: "boolean", default: false },
     "session-event-duration-ms": { type: "string", default: "30000" },
@@ -1648,6 +1653,64 @@ try {
       .waitFor();
   }
   const warmStates: Array<Awaited<ReturnType<typeof persistColdLoadWarmState>>["storage"]> = [];
+  const sidebarProfilePeerSeeds: Array<{
+    before: Array<[string, string]>;
+    after: Array<[string, string]>;
+    frozen: Array<[string, string]>;
+  }> = [];
+  async function flushUnresolvedSidebarPeer() {
+    if (!values["sidebar-profile-peer"]) {
+      return;
+    }
+    const readBootRecords = () =>
+      page.evaluate(() =>
+        Object.entries(localStorage).filter(([key]) =>
+          key.startsWith("openclaw.control.bootRecord.v1:"),
+        ),
+      );
+    const before = await readBootRecords();
+    const peer = await context.newPage();
+    await peer.addInitScript({ content: "globalThis.__name = (fn) => fn;" });
+    const peerLists = createTeamScaleSidebarListOwner(fixture.sidebarListInput);
+    const gateway = await installMockGateway(
+      peer,
+      {
+        ...prepared.scenario,
+        presenceUsers: prepared.scenario.presenceUsers.map((user) => ({ ...user, self: false })),
+        heldMethods: ["users.self"],
+        serverBuildId: buildId,
+      },
+      {
+        requestHandlers: {
+          "sessions.list": (value) => {
+            const params = asRecord(value);
+            if (!params) {
+              throw new Error("Sidebar peer requires sessions.list query parameters");
+            }
+            return peerLists.list(params).result;
+          },
+          "cron.list": (value) => fixture.listCronJobs(asRecord(value) ?? {}),
+        },
+      },
+    );
+    await peer.route("**/__openclaw__/**", async (route) => {
+      const asset = fixture.assets.get(new URL(route.request().url()).pathname);
+      return asset ? route.fulfill({ status: 200, ...asset }) : route.fallback();
+    });
+    await peer.goto(controlUiSessionUrl(baseUrl, fixture.scenario.sessions![1]!.key, "chat"));
+    await gateway.waitForRequest("users.self");
+    await evaluateControlUiContext(peer, async (app) => {
+      await app.agents.ensureList();
+      await app.sessions.groupsLoad();
+      if (app.gateway.snapshot.selfUser !== undefined) {
+        throw new Error("Sidebar peer profile resolved before the persistence fault");
+      }
+    });
+    await peer.evaluate(() => window.dispatchEvent(new Event("pagehide")));
+    // Retire its writers before swapping bundles without refocusing the original tab.
+    await peer.goto("about:blank");
+    return { before, after: await readBootRecords() };
+  }
   const snapshotSaves: Array<
     Omit<Awaited<ReturnType<typeof persistColdLoadWarmState>>, "storage">
   > = [];
@@ -1728,11 +1791,20 @@ try {
       await settle("chat");
     }
     await page.locator('aside.sidebar[data-snapshot-saved="true"]').waitFor({ state: "attached" });
+    const peerSeed = await flushUnresolvedSidebarPeer();
     const { storage: warmStorage, ...snapshotSave } = await page.evaluate(
       persistColdLoadWarmState,
       warmInput,
     );
     warmStates.push(warmStorage);
+    if (peerSeed) {
+      sidebarProfilePeerSeeds.push({
+        ...peerSeed,
+        frozen: warmStorage.local.filter(([key]) =>
+          key.startsWith("openclaw.control.bootRecord.v1:"),
+        ),
+      });
+    }
     snapshotSaves.push(snapshotSave);
     for (let index = 1; index < bundleSlots.length; index++) {
       await restoreColdLoadWarmState(page, warmStorage, warmStates[index - 1]);
@@ -1745,8 +1817,17 @@ try {
         await page.locator(".shell--nav-drawer-open").waitFor();
       }
       await expandSidebar();
+      const peerSeed = await flushUnresolvedSidebarPeer();
       const { storage, ...saved } = await page.evaluate(persistColdLoadWarmState, warmInput);
       warmStates.push(storage);
+      if (peerSeed) {
+        sidebarProfilePeerSeeds.push({
+          ...peerSeed,
+          frozen: storage.local.filter(([key]) =>
+            key.startsWith("openclaw.control.bootRecord.v1:"),
+          ),
+        });
+      }
       snapshotSaves.push(saved);
       if (viewportName === "mobile") {
         await page.keyboard.press("Escape");
@@ -3295,6 +3376,7 @@ try {
         sidebarPresentationProbe: values["sidebar-presentation-probe"],
         sidebarExpanded: values["sidebar-expanded"],
         sidebarPersistentChildren: fixture.sidebarPersistentChildren,
+        sidebarProfilePeerSeeds,
         omitHelloSelfPresence: values["omit-hello-self-presence"],
         streamingReply: values["streaming-reply"],
         streamingAllocations: values["streaming-allocations"],
