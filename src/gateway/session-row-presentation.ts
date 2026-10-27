@@ -17,7 +17,11 @@ import {
 } from "./session-identity-projection.js";
 import { retainSessionListBaseMiss } from "./session-list-diagnostics.js";
 import type { SessionEntrySelection, SessionListFilteredEntries } from "./session-list-filters.js";
-import type { SessionListView } from "./session-list-view-cache.js";
+import {
+  shareSessionRowFacts,
+  sessionRowFactEncodingBytes,
+  type SessionListView,
+} from "./session-list-view-cache.js";
 import {
   resolveRequestedSessionAgentId,
   tryResolveSessionCompatibilityOwnerAgentId,
@@ -40,12 +44,7 @@ import {
   type PublicationView,
   type SessionRowView,
 } from "./session-row-publication.js";
-import {
-  serializeSessionRow,
-  sessionRowEncodingBytes,
-  shareSessionRowFacts,
-  sessionRowFactEncodingBytes,
-} from "./session-row-serialization.js";
+import { serializeSessionRow, sessionRowEncodingBytes } from "./session-row-serialization.js";
 import {
   authorizeIncognitoSessionTarget,
   authorizeSessionAgentRun,

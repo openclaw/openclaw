@@ -547,7 +547,7 @@ try {
       sourceHashes: Object.fromEntries(
         [
           "session-row-presentation.ts",
-          "session-row-serialization.ts",
+          "session-list-view-cache.ts",
           "session-row-prepared-read.ts",
           "session-utils-display.ts",
         ].map((name) => [
