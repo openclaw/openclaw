@@ -523,11 +523,10 @@ it("retains legacy identities and raw details without inventing a store partitio
     expect(projectCronRunHistoryPage(records, { storeKey: "current-store" }).entries).toEqual([]);
     expect(pruneHistory(db, 11)).toBe(0);
     expect(
-      db.prepare("SELECT detail_json FROM task_runs WHERE task_id = ?").get("legacy-null"),
-    ).toEqual({ detail_json: rawDetail });
-    expect(
-      db.prepare("SELECT detail_json FROM task_runs WHERE task_id = ?").get("legacy-empty"),
-    ).toEqual({ detail_json: "{" });
+      db
+        .prepare("SELECT detail_json FROM task_runs WHERE task_id IN (?, ?) ORDER BY task_id")
+        .all("legacy-empty", "legacy-null"),
+    ).toEqual([{ detail_json: "{" }, { detail_json: rawDetail }]);
     ensureExecutionOwnerLifecycleBindingSchema(db);
     const insertBinding = db.prepare(
       "INSERT INTO execution_owner_lifecycle_bindings (owner_kind, owner_id, context_id, execution_id) VALUES (?, ?, 'context', 'execution')",
