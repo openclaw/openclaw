@@ -70,7 +70,7 @@ it("keeps multi-key target selection in the worker even when canonical facts are
   await withFixture(async (f) => {
     const otherKey = "agent:main:other-worker";
     replaceSessionEntrySync(
-      { ...f.scope, sessionKey: otherKey, sessionId: "other" },
+      { ...f.scope, sessionKey: otherKey },
       {
         sessionId: "other",
         updatedAt: 1,
