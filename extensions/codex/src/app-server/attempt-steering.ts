@@ -514,6 +514,9 @@ export function createCodexSteeringQueue(params: {
       }
       return true;
     },
+    // Receipts can settle before a terminal tool's release check. Retain the
+    // submitted fact for this native turn, not just its still-pending batches.
+    hasSubmittedMessages: () => dispatchedBatches.size > 0 || acceptedMessages.length > 0,
     getAcceptedMessages: () => acceptedMessages.slice(),
     sealAdmission: sealQueueAdmission,
     drainBeforeCancel() {

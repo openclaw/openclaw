@@ -4,7 +4,7 @@ import type {
   SessionsPatchParams,
 } from "../../../packages/gateway-protocol/src/index.js";
 import type { AdmittedRunOperatorAuthority } from "../../agents/admitted-run-context.js";
-import { resolveSessionModelRef } from "../../agents/session-model-ref.js";
+import { resolveSessionSubmittedModelRef } from "../../agents/session-model-ref.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import { isInternalSessionEffectsKey } from "../../config/sessions/internal-session-key.js";
 import type { SqliteLifecycleTargetSnapshot } from "../../config/sessions/session-accessor.sqlite-entry-equality.js";
@@ -54,7 +54,6 @@ import {
 import type { PreparedSessionPatchExecutionPermission } from "./sessions-patch-sandbox.runtime.js";
 import type {
   GroupMutationOperation,
-  MutationCoreResult,
   MutationOutcome,
   MutationTarget,
   PreparedPatchTarget,
@@ -81,14 +80,14 @@ export async function executeSessionPatchMutations(params: {
   onCreatedSessionCommitted?: SessionMutationAuthorization["recordCreatedSession"];
   patch: Omit<SessionsPatchParams, keyof PatchTargetIdentity>;
   targets: readonly MutationTarget[];
-}): Promise<MutationCoreResult> {
+}) {
   const { client } = params;
   const timing = params.diagnostics?.scope("preflight");
   let personalModelSelection: UserModelAccountSelection | undefined;
   try {
     personalModelSelection = await preparePersonalModelSelection(params, params.patch.model);
   } catch (error) {
-    return { ok: false, error: unexpectedPatchError(params.targets[0]?.key ?? "", error) };
+    return { ok: false as const, error: unexpectedPatchError(params.targets[0]?.key ?? "", error) };
   }
   const getCurrentConfig = params.context.getRuntimeConfig;
   const cfg = getCurrentConfig();
@@ -365,9 +364,9 @@ export async function executeSessionPatchMutations(params: {
                         store: workingStore,
                         ...(target.requestedAgentId ? { agentId: target.requestedAgentId } : {}),
                       });
-                      const previousModel =
-                        target.fullPatch.model !== undefined && existingEntry
-                          ? resolveSessionModelRef(cfg, existingEntry, target.targetAgentId)
+                      const submittedModel =
+                        target.fullPatch.model !== undefined
+                          ? resolveSessionSubmittedModelRef(existingEntry)
                           : undefined;
                       const accessError = targetAccessError(
                         existingEntry,
@@ -556,6 +555,14 @@ export async function executeSessionPatchMutations(params: {
                       if (runtimeSelection.validate) {
                         commitGuards.add(runtimeSelection.validate);
                       }
+                      if (
+                        submittedModel &&
+                        !projected.entry.lastSubmittedModel &&
+                        (submittedModel.provider !== projected.entry.modelProvider ||
+                          submittedModel.model !== projected.entry.model)
+                      ) {
+                        projected.entry.lastSubmittedModel = submittedModel;
+                      }
                       const replacement = prepareSessionPatchReplacement({
                         existingEntry,
                         projectedEntry: projected.entry,
@@ -566,9 +573,6 @@ export async function executeSessionPatchMutations(params: {
                         labelOwners,
                         assertCurrent: assertCommitAllowed,
                       });
-                      if (previousModel) {
-                        replacement.outcome.previousModel = previousModel;
-                      }
                       if (replacement.replacement) {
                         replacements.push(replacement.replacement);
                         if (!existingEntry && params.onCreatedSessionCommitted) {
@@ -638,17 +642,13 @@ export async function executeSessionPatchMutations(params: {
                     recordSessionStatusModelPatchOutcome(outcome.applied);
                   }
                   if (outcome.ok && outcome.applied) {
-                    await patchEffects.applySessionPatchModelEffects({
+                    modelSelection.refreshSessionPatchQueuedSelection({
                       cfg,
                       entry: outcome.entry,
                       patch: target.fullPatch,
-                      previousModel: outcome.previousModel,
                       sessionKey: target.canonicalKey,
                       agentId: target.targetAgentId,
-                      storePath: target.storePath,
-                      env: storage?.env,
                       catalog: (await catalogs.available(target.targetAgentId))?.entries,
-                      assertCurrent: assertCommitAllowed,
                     });
                   }
                 }
@@ -715,7 +715,7 @@ export async function executeSessionPatchMutations(params: {
     outcomes[index] = { ok: false, error };
   }
   return {
-    ok: true,
+    ok: true as const,
     archivedSessionsCommitted,
     cfg,
     outcomes: outcomes as MutationOutcome[],

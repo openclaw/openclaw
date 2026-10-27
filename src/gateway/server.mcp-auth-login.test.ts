@@ -65,6 +65,7 @@ describe("registered mcp.authLogin", () => {
   let expectedChallenge: string;
   let registeredRedirect: string;
   let tokenError: "invalid_client" | false = false;
+  let issuerRequired = false;
   const effects: McpAuthEffectEndpoint = { tokenLifetimeSeconds: 3600 };
   let tokenEntered = createDeferredCore();
   let releaseToken: Deferred | undefined;
@@ -98,7 +99,10 @@ describe("registered mcp.authLogin", () => {
         await releaseDiscovery?.promise;
         json({ resource: resourceUrl, authorization_servers: [new URL(resourceUrl).origin] });
       } else if (url.pathname === "/.well-known/oauth-authorization-server") {
-        json(mcpOAuthMetadata(resourceUrl));
+        json({
+          ...mcpOAuthMetadata(resourceUrl),
+          authorization_response_iss_parameter_supported: issuerRequired,
+        });
       } else if (url.pathname === "/register") {
         const metadata = JSON.parse(await text(request));
         registeredRedirect = metadata.redirect_uris[0];
@@ -216,6 +220,7 @@ describe("registered mcp.authLogin", () => {
   });
 
   beforeEach(() => {
+    issuerRequired = false;
     pruneStaleControlPlaneBuckets(Number.MAX_SAFE_INTEGER);
   });
 
@@ -345,7 +350,8 @@ describe("registered mcp.authLogin", () => {
     expect(requests).toHaveLength(before);
   });
 
-  it("replaces a tokenless CLI registration for browser sign-in, then calls the MCP tool", async () => {
+  it("replaces a tokenless CLI registration for issuer-bound browser sign-in, then calls the MCP tool", async () => {
+    issuerRequired = true;
     await clearMcpOAuthCredentials(identity());
     const cliAttempt = await startMcpOAuthAuthorization(identity(), resolvedTransport(), {});
     if (cliAttempt.status !== "redirect") {
@@ -356,9 +362,10 @@ describe("registered mcp.authLogin", () => {
 
     const started = await begin();
     expect((await rpcReq(other, "wizard.cancel", { sessionId: started.sessionId })).ok).toBe(false);
-    expect((await callback(started.state)).status).toBe(200);
+    const query = `code=fixture-code&iss=${encodeURIComponent(new URL(resourceUrl).origin)}`;
+    expect((await callback(started.state, query)).status).toBe(200);
     expect(await terminal(started.sessionId)).toMatchObject({ status: "done" });
-    expect((await callback(started.state)).status).toBe(410);
+    expect((await callback(started.state, query)).status).toBe(410);
     const stored = await store();
     expect(stored.tokens?.access_token).toBe("fixture-access");
     expect(stored.tokensAuthorizationServerUrl).toBe(new URL(resourceUrl).origin);
@@ -401,6 +408,89 @@ describe("registered mcp.authLogin", () => {
       client?.close();
       await configure();
     }
+  });
+
+  it.each([undefined, "", "https://wrong.example/?code=private-callback-value"])(
+    "rejects an unverified callback issuer %s without exchanging the code",
+    async (iss) => {
+      issuerRequired = true;
+      await clearMcpOAuthCredentials(identity());
+      const started = await begin();
+      const before = requests.length;
+      const query = `code=fixture-code${iss === undefined ? "" : `&iss=${encodeURIComponent(iss)}`}`;
+      expect((await callback(started.state, query)).status).toBe(200);
+      const result = await terminal(started.sessionId);
+      expect(result).toMatchObject({
+        status: "error",
+        error:
+          "OpenClaw could not verify the sign-in provider. Close this dialog, review the connection settings, and try again.",
+      });
+      expect(JSON.stringify(result)).not.toMatch(
+        /wrong\.example|private-callback-value|fixture-code/,
+      );
+      expect(requests.slice(before)).not.toContain("/token");
+      const stored = await store();
+      expect(stored.tokens).toBeUndefined();
+      expectPendingCleared(stored);
+    },
+  );
+
+  it.each(["registration", "network"] as const)(
+    "explains %s failure without exposing provider-controlled details",
+    async (failure) => {
+      await clearMcpOAuthCredentials(identity());
+      effects.endpoint = async (request, response) => {
+        if (new URL(request.url ?? "/", resourceUrl).pathname !== "/register") {
+          return false;
+        }
+        if (failure === "network") {
+          request.socket.destroy();
+        } else {
+          response.writeHead(400).end(
+            JSON.stringify({
+              error: "invalid_client_metadata",
+              error_description: "private-registration-detail https://private.example/?code=secret",
+            }),
+          );
+        }
+        return true;
+      };
+      try {
+        const sessionId = await startLogin();
+        const result = await terminal(sessionId);
+        expect(result).toMatchObject({
+          status: "error",
+          error: expect.stringContaining(
+            failure === "network"
+              ? "could not reach the sign-in service"
+              : "rejected this connection's settings",
+          ),
+        });
+        expect(JSON.stringify(result)).not.toMatch(
+          /private-registration-detail|private\.example|secret/,
+        );
+        expect((await store()).tokens).toBeUndefined();
+      } finally {
+        effects.endpoint = undefined;
+      }
+    },
+  );
+
+  it("reports an expired attempt rather than an explicit cancellation", async () => {
+    await clearMcpOAuthCredentials(identity());
+    const started = await begin();
+    const now = Date.now();
+    const clock = vi.spyOn(Date, "now").mockReturnValue(now + 10 * 60_000 + 1);
+    try {
+      expect((await callback(started.state)).status).toBe(410);
+    } finally {
+      clock.mockRestore();
+    }
+    expect(await terminal(started.sessionId)).toMatchObject({
+      status: "error",
+      error: "This sign-in attempt expired. Close this dialog and start sign-in again.",
+    });
+    expectPendingCleared(await store());
   });
 
   it.each(["unchanged", "disabled", "metadata replaced"] as const)(
@@ -501,10 +591,21 @@ describe("registered mcp.authLogin", () => {
       const newer = await startMcpOAuthAuthorization(identity(), resolvedTransport(), {});
       expect(newer.status).toBe("redirect");
       const before = await store();
-      expect((await callback(started.state, "error=access_denied")).status).toBe(400);
+      expect(
+        (
+          await callback(
+            started.state,
+            "error=access_denied&error_description=private-denial-detail&error_uri=https%3A%2F%2Fprivate.example",
+          )
+        ).status,
+      ).toBe(400);
       const result = await terminal(started.sessionId);
       settled = true;
-      expect(result).toMatchObject({ status: "error" });
+      expect(result).toMatchObject({
+        status: "error",
+        error: "The provider did not approve sign-in. Close this dialog and try again.",
+      });
+      expect(JSON.stringify(result)).not.toMatch(/private-denial-detail|private\.example/);
       expect(await store()).toEqual(before);
     } finally {
       if (!settled) {
@@ -535,7 +636,7 @@ describe("registered mcp.authLogin", () => {
       const result = await terminal(started.sessionId);
       expect(result.status).toBe("error");
       expect(result.error).toBe(
-        "Sign-in did not finish. Check the MCP server settings and try again, or sign in from this Gateway's terminal: stop the Gateway with openclaw gateway stop, run openclaw mcp login docs, then start the Gateway again.",
+        "The sign-in service rejected this attempt. Existing credentials were not changed. Close this dialog, review the connection settings, and try again.",
       );
       expect(JSON.stringify(result)).not.toContain("private exchange detail");
       const after = await store();

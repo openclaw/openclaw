@@ -366,6 +366,9 @@ describe("worker CPU lifecycle", () => {
 
   it.each([
     ["sqlite-store.worker.ts", "sqlite-store.worker.js"],
+    ["memory-worker-entry.ts", "workspace-memory.worker.js"],
+    ["skills-worker-entry.ts", "workspace-skills.worker.js"],
+    ["file-tool-read.worker.mjs", "read-file.worker.js"],
     ["private-session-worker.js", "other"],
   ])(
     "attributes %s and removes direct and owned Worker samples at native exit",
@@ -374,7 +377,10 @@ describe("worker CPU lifecycle", () => {
       const direct = new Worker(idleSource, { eval: true });
       workers.push(direct);
       await once(direct, "online");
-      const owned = await fileWorker(file);
+      const owned = await fileWorker(
+        file,
+        'import("node:worker_threads").then(({ parentPort }) => parentPort.on("message", () => {}));',
+      );
       const [directHeap, ownedHeap] = await Promise.all([
         direct.getHeapStatistics(),
         owned.getHeapStatistics(),

@@ -96,6 +96,14 @@ const appendMessage = (
 ) => appendTranscriptMessage(target, { message });
 const appendAborted = (target: OperatorRecoveryTarget) =>
   appendMessage(target, { role: "assistant", content: [], stopReason: "aborted" });
+async function expectInterrupted(target: OperatorRecoveryTarget) {
+  const retained = loadSessionEntry(target);
+  expect(retained?.status).toBe("interrupted");
+  expect(retained?.mainRestartRecovery).toBeUndefined();
+  const transcript = await loadTranscriptEvents(target);
+  expect(JSON.stringify(transcript)).toContain("Send a new authenticated message to continue.");
+  return { retained, transcript };
+}
 const recover = (
   target: OperatorRecoveryTarget,
   stateDir: string,
@@ -476,7 +484,16 @@ describe("typed restart recovery operator admission", () => {
         using runtime = createRuntime(() => context);
         await using _ = holdRecoveryTurn(target);
         const authorized = parentState === "allowed" || directHuman;
-        expectRecovery(await recover(target, stateDir, runtime, cfg), authorized);
+        const outcome = await recover(target, stateDir, runtime, cfg);
+        if (
+          parentState === "missing source" ||
+          parentState === "missing channel source" ||
+          parentState === "missing control-ui source"
+        ) {
+          expect(outcome).toEqual({ started: 0, settled: 0, failed: 0, skipped: 1 });
+        } else {
+          expectRecovery(outcome, authorized);
+        }
         expect(startTurn).toHaveBeenCalledTimes(authorized ? 1 : 0);
         if (parentState === "allowed") {
           const recovered = expectDefined(startTurn.mock.calls[0]?.[0], "recovered turn");
@@ -492,11 +509,17 @@ describe("typed restart recovery operator admission", () => {
           expect(assertParent).toThrow();
           expect(recovered.executionSource).toThrow();
         } else if (!authorized) {
-          expect(loadSessionEntry(target)?.status).toBe("interrupted");
-          expect(loadSessionEntry(target)?.mainRestartRecovery).toBeUndefined();
-          expect(JSON.stringify(await loadTranscriptEvents(target))).toContain(
-            "Send a new authenticated message to continue.",
-          );
+          const retained = loadSessionEntry(target);
+          const notice = JSON.stringify(await loadTranscriptEvents(target));
+          if (parentState === "missing lineage") {
+            expect(retained?.status).toBe("interrupted");
+            expect(retained?.mainRestartRecovery).toBeUndefined();
+            expect(notice).toContain("Send a new authenticated message to continue.");
+          } else {
+            expect(retained).toMatchObject({ status: "failed", abortedLastRun: false });
+            expect(retained?.mainRestartRecovery?.tombstone).toBeDefined();
+            expect(notice).toContain("In WebChat, use Resume");
+          }
           if (
             parentState === "policy denied" ||
             (missingSource && parentState !== "missing lineage")
@@ -540,15 +563,9 @@ describe("typed restart recovery operator admission", () => {
         expectRecovery(await recoverAgain(), authorized);
         expect(startTurn).toHaveBeenCalledTimes(authorized ? 1 : 0);
         if (!authorized) {
-          const retained = loadSessionEntry(target);
+          const { retained, transcript } = await expectInterrupted(target);
           expect(retained?.sessionId).toBe(target.sessionId);
-          expect(retained?.status).toBe("interrupted");
-          expect(retained?.mainRestartRecovery).toBeUndefined();
           expect(retained?.restartRecoveryTerminalRunIds).toContain(target.sourceRunId);
-          const transcript = await loadTranscriptEvents(target);
-          expect(JSON.stringify(transcript)).toContain(
-            "Send a new authenticated message to continue.",
-          );
           await recoverAgain();
           expect(startTurn).not.toHaveBeenCalled();
           expect(await loadTranscriptEvents(target)).toEqual(transcript);

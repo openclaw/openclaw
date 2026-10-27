@@ -63,6 +63,6 @@ test("real completed background commands retain only the newest fully readable p
   expect(newestLog.details).toMatchObject({ status: "completed" });
   expect(newestLog.content[0]).toMatchObject({
     type: "text",
-    text: `retention-${newestIndex}`,
+    text: `retention-${newestIndex}\n\nProcess exited with code 0.`,
   });
 }, 30_000);

@@ -68,7 +68,7 @@ suite.define(() => {
           await stop.waitFor();
           await statusText.waitFor();
           await page.getByText(message, { exact: true }).waitFor();
-          expect(await statusText.textContent()).toBe("Waiting for turn to start…");
+          expect(await statusText.textContent()).toBe("Waiting for turn to start");
           await gateway.emitGatewayEvent("chat", {
             sessionKey,
             runId,

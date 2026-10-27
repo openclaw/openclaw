@@ -78,6 +78,8 @@ import {
 } from "../swarm/swarm-scheduler.js";
 import { cleanupProvisionalSession } from "./subagent-spawn-cleanup.js";
 import { callSubagentGateway } from "./subagent-spawn-gateway.js";
+import { registerAccessRequestSpawnCases } from "./subagent-spawn.access-request.test-support.js";
+import { registerAccessStateSpawnCases } from "./subagent-spawn.access-state.test-support.js";
 import { registerNativeCancellationCases } from "./subagent-spawn.cancellation.test-support.js";
 import { registerCollectorResultSpawnCases } from "./subagent-spawn.collector-results.test-support.js";
 import { visibleResult } from "./subagent-spawn.fixtures.test-support.js";
@@ -239,6 +241,7 @@ async function createBoundGateway(bound: Awaited<ReturnType<typeof createBoundPa
   await refreshPreparedModelRuntimeSnapshots(bound.cfg, {
     gatewayLifecycle: true,
     catalogMode: "static",
+    allowGatewaySubagentBinding: true,
     defaultWorkspaceDir: stateDir,
   });
   const context = bound.context as unknown as GatewayRequestContext;
@@ -422,6 +425,9 @@ describe("recursive spawn production boundary", () => {
   registerYieldedRequesterBatchCase(boundSpawnFixture);
   registerOperatorSpawnRollbackCases(boundSpawnFixture);
   registerNativeCancellationCases(boundSpawnFixture);
+
+  registerAccessStateSpawnCases({ ...boundSpawnFixture, holdModelRun });
+  registerAccessRequestSpawnCases(boundSpawnFixture);
 
   it("admits an isolated descendant with current policy, saved thinking, and the active parent turn model", async () => {
     const customProvider = expectDefined(

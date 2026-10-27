@@ -803,8 +803,9 @@ describeStandaloneMockServer("standalone Control UI mock server", () => {
         .poll(() =>
           page
             .locator(".chat-pane-cache__pane--active .chat-thread .chat-bubble")
-            .allTextContents()
-            .then((messages) => messages.map((message) => message.trim())),
+            .evaluateAll((bubbles) =>
+              bubbles.map((bubble) => bubble.querySelector(".chat-text")?.textContent?.trim()),
+            ),
         )
         .toEqual(transcript);
       expect(

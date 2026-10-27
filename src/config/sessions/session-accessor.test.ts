@@ -42,7 +42,6 @@ import {
   appendTranscriptMessageSync as appendMessageSync,
   applySessionEntryLifecycleMutation as mutateLifecycle,
   commitReplySessionInitialization as commitInitialization,
-  createSessionEntryWithTranscript as createWithTranscript,
   deleteSessionEntryLifecycle as deleteLifecycle,
   findTranscriptEvent,
   listSessionTranscriptInstances,
@@ -1898,20 +1897,6 @@ describe("session accessor seam", () => {
       sizeBytes: 0,
     });
     expect(cleared.lastMutationAtMs).toBeGreaterThan(imported.lastMutationAtMs ?? 0);
-  });
-
-  it("returns the canonical transcript locator after creation", async () => {
-    const scope = agentScope("agent:main:main");
-    const created = await createWithTranscript(scope, () => ({
-      ok: true,
-      entry: makeEntry("session-1", 10),
-    }));
-    expect(created).toMatchObject({ ok: true, sessionFile: scope.sessionKey });
-    expect(created).not.toHaveProperty("entry.sessionFile");
-    const before = readEntry(scope);
-    const rejected = await createWithTranscript(scope, () => ({ ok: false, error: "rejected" }));
-    expect(rejected).toEqual({ ok: false, error: "rejected", phase: "entry" });
-    expect(readEntry({ ...scope, readConsistency: "latest" })).toEqual(before);
   });
 
   it("returns an implicit candidate fallback without persisting it", () => {

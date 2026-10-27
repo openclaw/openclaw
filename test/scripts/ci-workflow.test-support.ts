@@ -53,6 +53,7 @@ export function evaluateWorkflow(
 
 export type WorkflowStep = {
   "continue-on-error"?: boolean;
+  "timeout-minutes"?: number | string;
   env?: Record<string, unknown>;
   id?: string;
   if?: string;

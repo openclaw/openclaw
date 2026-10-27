@@ -53,7 +53,8 @@ versions are committed in order. There is no background retry timer.
   originals and media stay outside automatic snapshots.
 - Unrelated working-tree edits and staged content are not swept into a
   publication commit. Knowledge never checks out, resets, or overwrites working
-  files.
+  files. Updating the working index reuses the exact committed blobs, including
+  when retrying an interrupted checkpoint.
 - Commits name the Knowledge service as committer and label the actor (`agent`,
   `operator`, or external observation). These labels are coarse provenance, not
   authenticated identities.

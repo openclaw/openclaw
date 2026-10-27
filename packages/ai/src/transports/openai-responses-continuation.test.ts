@@ -36,15 +36,7 @@ const assistantOutput = {
     {
       type: "output_text",
       text: "answer",
-      annotations: [
-        {
-          type: "url_citation",
-          url: "https://example.test/source",
-          title: "source",
-          start_index: 0,
-          end_index: 6,
-        },
-      ],
+      annotations: [{ type: "file_citation", file_id: "file_1", filename: "a", index: 0 }],
       logprobs: [{ token: "answer", logprob: -0.1, bytes: [], top_logprobs: [] }],
     },
   ],
@@ -217,6 +209,30 @@ describe("OpenAI Responses continuation", () => {
     expect(
       responsesContinuationPrefixFingerprint([userInput(`${text}changed`)], [assistantOutput]),
     ).not.toBe(prefixHash);
+  });
+
+  it("fingerprints mutable history without serializing the whole prefix", () => {
+    const text = "history payload".repeat(2_000);
+    const content = { type: "input_text", text };
+    const item = { type: "message", role: "user", content: [content] };
+    const input = [item];
+    const encodedText = JSON.stringify(text);
+    const expected = hash(
+      "sha256",
+      `[{"content":[{"text":${encodedText},"type":"input_text"}],"role":"user","type":"message"}]`,
+    );
+    const stringify = vi.spyOn(JSON, "stringify");
+    try {
+      expect(responsesContinuationPrefixFingerprint(input)).toBe(expected);
+      // The canonical writer encodes string leaves; no container needs another JSON encoding.
+      expect(
+        stringify.mock.calls.filter(([value]) => value !== null && typeof value === "object"),
+      ).toHaveLength(0);
+      content.text = `${text} edited`;
+      expect(responsesContinuationPrefixFingerprint(input)).not.toBe(expected);
+    } finally {
+      stringify.mockRestore();
+    }
   });
 
   it.each([

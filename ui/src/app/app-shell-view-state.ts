@@ -91,9 +91,10 @@ export function readShellView(host: ShellViewHost) {
     historyRecovering,
   );
   const presentationScope = gatewayPresentationScope(context.gateway);
-  // Initial hello can paint the shell before recovery finishes. Keep that brief
-  // startup state in existing chrome rather than flashing recovery feedback.
+  // Cold hello can paint the shell before recovery finishes. Suppress that brief
+  // startup feedback, but keep admitted warm-boot chrome stable through reconnect.
   const initialConnection =
+    !runtime.warmBoot &&
     !presentationScope.readyOnce &&
     !gatewaySnapshot.offlineStable &&
     (connectionStatus === "connecting" ||
@@ -202,7 +203,7 @@ export function readShellView(host: ShellViewHost) {
       isClawsAvailable(context.runtimeConfig.state) === true
         ? APP_ROUTE_IDS
         : APP_ROUTE_IDS.filter((routeId) => routeId !== "claws"),
-    sessionKey: host.activeSessionKey,
+    sessionKey: host.routeState.sessionRouteNotice ? "" : host.activeSessionKey,
     connected: gatewayConnected,
     connectionStatus,
     footerControlsOverlap: host.shellLayout.footerControlsOverlap,

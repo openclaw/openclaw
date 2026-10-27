@@ -1,5 +1,5 @@
 import type { MessageCreateParamsStreaming } from "@anthropic-ai/sdk/resources/messages.js";
-import type { AssistantMessageEvent, Context, Model } from "@openclaw/llm-core";
+import type { AssistantMessageEvent, Context, MaybePromise, Model } from "@openclaw/llm-core";
 import { appendAssistantThinking } from "@openclaw/llm-core/event-stream";
 import {
   asRecord,
@@ -66,7 +66,7 @@ export async function runAnthropicStreamLifecycle(params: {
   stream: WritableTransportStream;
   options?: LifecycleOptions;
   profile: "provider" | "transport";
-  prepare: () => {
+  prepare: () => MaybePromise<{
     context: Context;
     options: LifecycleOptions | undefined;
     isOAuthToken: boolean;
@@ -78,7 +78,7 @@ export async function runAnthropicStreamLifecycle(params: {
       headers: Record<string, string> | undefined,
     ) => Promise<{ response: Response; events: AsyncIterable<object> | Iterable<object> }>;
     checkResponse?: (response: Response) => Promise<void>;
-  };
+  }>;
 }): Promise<void> {
   const { model, stream, options, profile } = params;
   const output = createAssistantOutput(model, "anthropic-messages");
@@ -88,7 +88,7 @@ export async function runAnthropicStreamLifecycle(params: {
     : undefined;
   let replayedCompaction: AnthropicCompactionBlock | undefined;
   try {
-    const prepared = params.prepare();
+    const prepared = await params.prepare();
     const built = await buildAnthropicRequest(
       model,
       prepared.context,

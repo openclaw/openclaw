@@ -27,6 +27,7 @@ import {
   retainPluginSourceCaptureInstance,
 } from "./plugin-source-capture-directory.js";
 import { sweepPluginSourceCapturesForTest } from "./plugin-source-capture-directory.test-support.js";
+import { writeArtifact as write } from "./public-surface.test-support.js";
 
 const temp = useAutoCleanupTempDirTracker((cleanup) =>
   afterEach(async () => {
@@ -51,7 +52,7 @@ function expectExists(file: string, exists = false) {
 
 function nativeFixture(bytes: string, state = stateDir, commit = true) {
   const root = createPluginNativeCaptureRoot(state);
-  const file = write(root.directory, "content/bin/native", bytes);
+  const file = write(path.join(root.directory, "content/bin/native"), bytes);
   if (commit) {
     root.commit();
     root.dispose();
@@ -84,13 +85,6 @@ function refusePath<P, A extends unknown[], T>(
 
 function expectBytes(file: string, expected: string) {
   expect(fs.readFileSync(file, "utf8")).toBe(expected);
-}
-
-function write(root: string, filename: string, contents: string) {
-  const file = path.join(root, filename);
-  fs.mkdirSync(path.dirname(file), { recursive: true });
-  fs.writeFileSync(file, contents);
-  return file;
 }
 
 function expectPairedFailure(failure: unknown, primary: Error, cleanup: Error) {
@@ -168,7 +162,7 @@ it.each(["failed removal", "maintenance failed removal", "identity-change return
   async (mode) => {
     const root = path.join(stateDir, "tmp", "plugin-captures", "released-producer");
     const captures = path.join(root, "captures");
-    const payload = write(captures, "source.js", "retained source bytes");
+    const payload = write(path.join(captures, "source.js"), "retained source bytes");
     const tokenPath = path.join(root, stagingToken.SQLITE_STAGING_TOKEN_FILES[0]);
     const extraLink = path.join(stateDir, "token-hardlink.sqlite");
     stagingToken.acquireSqliteStagingToken(root, "create")();
@@ -295,7 +289,7 @@ it("recovers a removed captures directory without releasing a live instance", as
   let worker: ReturnType<typeof sourceWorker> | undefined = undefined;
   await using resources = cleanupStack([() => worker?.release(), () => instance.releaseAsync()]);
   worker = sourceWorker();
-  const payload = write(worker.directory, "source.js", "recovered capture");
+  const payload = write(path.join(worker.directory, "source.js"), "recovered capture");
   advanceAge();
   await sweepPluginSourceCapturesForTest(stateDir);
   expectBytes(payload, "recovered capture");
@@ -348,7 +342,7 @@ it("preserves native bytes published after an unlocked missing-directory observa
     } catch (error) {
       if (target === native && !published) {
         expect(error).toMatchObject({ code: "ENOENT" });
-        write(native, "admission/module.node", "published under custody");
+        write(path.join(native, "admission/module.node"), "published under custody");
         producer(true);
         published = true;
       }
@@ -367,7 +361,7 @@ it.each(["sync", "async"])("preserves custody after partial %s disposal", async 
   await sweepPluginSourceCapturesForTest(stateDir);
   const directory = worker?.directory ?? instance!.createDirectory();
   const root = path.dirname(path.dirname(directory));
-  const payload = write(directory, "source.js", "export default 1");
+  const payload = write(path.join(directory, "source.js"), "export default 1");
   const removeSync = fs.rmSync.bind(fs);
   const remove = fsPromises.rm.bind(fsPromises);
   const interruptRemoval = (target: fs.PathLike) => {
@@ -418,7 +412,7 @@ it.each([
   "captures usable fallback bytes without tokenless roots after $stage fails with $code",
   async ({ stage, code }) => {
     const source = temp.make("capture-recovery-source-");
-    write(source, "index.cjs", sourceBytes);
+    write(path.join(source, "index.cjs"), sourceBytes);
     const instance = retainPluginSourceCaptureInstance(stateDir);
     await sweepPluginSourceCapturesForTest(stateDir);
     const managed = path.join(stateDir, "tmp", "plugin-captures");
@@ -472,7 +466,7 @@ it("reclaims aged tokenless roots and retries locked roots", async () => {
   const stateTemp = path.join(stateDir, "tmp");
   fs.mkdirSync(stateTemp);
   const create = (parent: string, name: string) =>
-    path.dirname(write(parent, path.join(name, "source.js"), "payload"));
+    path.dirname(write(path.join(parent, path.join(name, "source.js")), "payload"));
   const old = Array.from({ length: 87 }, (_, index) =>
     create(tmpdir(), `openclaw-plugin-build-${index}`),
   );
@@ -554,7 +548,10 @@ it.each(["managed", "fallback"] as const)(
     const legacyToken = stagingToken.acquireSqliteStagingToken(unknown, "create");
     let legacyFile: string;
     try {
-      legacyFile = write(unknown, "native/legacy/module.node", "unqualified legacy payload");
+      legacyFile = write(
+        path.join(unknown, "native/legacy/module.node"),
+        "unqualified legacy payload",
+      );
     } finally {
       legacyToken(true);
     }

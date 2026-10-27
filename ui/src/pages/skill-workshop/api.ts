@@ -26,9 +26,15 @@ export async function loadWorkshopSnapshot(
   return { list, changes };
 }
 
+/** `name` is the skill the mutation affects; a draft mutation also names the reviewed draft. */
 export type WorkshopMutation =
   | { method: "skills.workshop.archive"; name: string }
-  | { method: "skills.workshop.restore"; name: string; versionId?: string };
+  | { method: "skills.workshop.restore"; name: string; versionId?: string }
+  | {
+      method: "skills.workshop.applyDraft" | "skills.workshop.discardDraft";
+      name: string;
+      draftId: string;
+    };
 
 /**
  * Undo reverts to the version saved before the change. A creation, or a restore of an archived

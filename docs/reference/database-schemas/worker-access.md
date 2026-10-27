@@ -565,6 +565,8 @@ and outgoing public reads remain detached from the resident state.
 Internal hot-state projections also retain the actor's replace-only target,
 version, participants, and members. Read replies and committed receipt capture
 own detachment before those facts leave the worker.
+Cold hydration decodes each participant aggregate once; the selected entry and
+hot participant records share their actor-owned identity objects.
 
 Actor commands retain their immutable replica preimage for admission transport.
 The worker sends a reference only after matching its authoritative write token,
@@ -4269,6 +4271,12 @@ cleanup lease, which excludes their shared writers until deletion settles.
 Each effect guard still rereads config files, includes, and environment substitutions,
 using the protected migration rows for validation. Source identity and durable
 lease checks remain live; prepared rows are not retained permission to delete.
+Runtime plugin, setup, and Claw package callers use the async lifecycle lease.
+Publication and shared-directory compensation await the original durable owner,
+then apply its synchronous liveness guard at the effect. A refused owner cannot
+resume settlement under a successor; caller cancellation does not remove the
+original owner's authority to undo its accepted publication. Native bootstrap,
+offline update, and synchronous SDK callers retain their native lease contract.
 Stored formats and update behavior are unchanged.
 
 Gateway cleanup of retired plugin artifacts first inspects managed and
@@ -5900,6 +5908,8 @@ sweeps. Each preparation closes its scoped read-only handles before replying;
 selection, configuration checks, and commit authority remain per request.
 Preparation loads its read-only selection and archive encoding helpers without
 initializing the writable database lifecycle or transcript restoration machinery.
+Canonical validation and reclamation load cold-restoration source guards only
+when executing a cold mutation; restoration retains its existing source checks.
 
 Single-message lookups and display-message counts use that same history worker.
 Session-message broadcasts await the stored content and sequence in their existing

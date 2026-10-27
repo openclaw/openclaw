@@ -1662,10 +1662,10 @@ button.chat-reply-attribution__target:disabled {
 .agent-chat__typing-caret::after {
   content: "";
   position: absolute;
+  /* Stretch to the inline font box, matching its ascent/descent at any text size. */
+  inset-block: 0;
   inset-inline-start: 0;
-  bottom: -0.12em;
   width: 2px;
-  height: 1em;
   background: currentColor;
   animation: chat-typing-pulse 1s step-end infinite;
 }
