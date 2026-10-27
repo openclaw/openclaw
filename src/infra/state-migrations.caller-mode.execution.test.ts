@@ -256,19 +256,16 @@ describe("legacy state migration caller execution", () => {
       const sidecarBytes = "retired encrypted bytes\n";
       writeFixtureFile(sidecarPath, sidecarBytes);
       const authStorePath = path.join(fixture.stateDir, "agents/main/agent/auth-profiles.json");
+      const oauthRef = {
+        source: "openclaw-credentials",
+        provider: "openai-codex",
+        id: "b".repeat(32),
+      };
       writeFixtureFile(
         authStorePath,
         JSON.stringify({
           profiles: {
-            "openai-codex:default": {
-              type: "oauth",
-              provider: "openai-codex",
-              oauthRef: {
-                source: "openclaw-credentials",
-                provider: "openai-codex",
-                id: "b".repeat(32),
-              },
-            },
+            "openai-codex:default": { type: "oauth", provider: "openai-codex", oauthRef },
           },
         }),
       );
@@ -285,11 +282,8 @@ describe("legacy state migration caller execution", () => {
               legacySessionSurfaces: modules.surfaces.EMPTY_LEGACY_SESSION_SURFACES,
             })
           : modules.doctor.autoMigrateLegacyState({
-              cfg,
-              env: fixture.env,
-              homedir: () => fixture.homeDir,
+              ...doctorOptions(fixture, { cfg }),
               doctorOnlyStateMigrations: mode === "doctor",
-              legacySessionSurfaces: modules.surfaces.EMPTY_LEGACY_SESSION_SURFACES,
             });
       const migration =
         mode === "automatic"
