@@ -129,7 +129,7 @@ export function registerSessionTitleTarget(
       release = display
         ? register(registeredTarget, label, {
             title,
-            onTitle: (title) => write({ ...read(), title }),
+            onTitle: (nextTitle) => write({ ...read(), title: nextTitle }),
           })
         : register(registeredTarget, label);
     }
