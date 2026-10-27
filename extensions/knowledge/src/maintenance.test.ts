@@ -108,53 +108,15 @@ it("stopping the service ends maintenance: a pass in flight neither re-arms nor 
 });
 
 it("stopping during a paused review enqueue settles maintenance before closing the registry", async () => {
-  // Record registry calls and closes, per client, to check their order.
-  const events: string[] = [],
-    closedClients = new Set<RegistryClient>(),
-    registries = new Set<RegistryClient>();
-  const call = RegistryClient.prototype.call,
-    close = RegistryClient.prototype.close;
-  const callSpy = vi.spyOn(RegistryClient.prototype, "call").mockImplementation(function (
-    this: RegistryClient,
-    ...args: Parameters<RegistryClient["call"]>
-  ) {
-    registries.add(this);
-    if (closedClients.has(this)) {
-      events.push("registry-call-after-close");
-    }
-    return call.apply(this, args);
-  });
-  const closeSpy = vi.spyOn(RegistryClient.prototype, "close").mockImplementation(function (
-    this: RegistryClient,
-  ) {
-    closedClients.add(this);
-    events.push("registry-close");
-    return close.call(this);
-  });
-  // Stores.stop must receive maintenance's settlement as the registry's gate.
-  const stopGates: unknown[] = [];
-  const stop = Stores.prototype.stop;
-  const stopSpy = vi.spyOn(Stores.prototype, "stop").mockImplementation(function (
-    this: Stores,
-    ...args: Parameters<Stores["stop"]>
-  ) {
-    stopGates.push(args[0]);
-    return stop.apply(this, args);
-  });
-  const maintenanceStops: Promise<void>[] = [];
-  const maintenanceStop = Maintenance.prototype.stop;
-  const maintenanceSpy = vi.spyOn(Maintenance.prototype, "stop").mockImplementation(function (
-    this: Maintenance,
-  ) {
-    const settled = maintenanceStop.call(this);
-    maintenanceStops.push(settled);
-    return settled;
-  });
+  // Passthrough spies record each call's receiver, result and global call order.
+  const callSpy = vi.spyOn(RegistryClient.prototype, "call"),
+    closeSpy = vi.spyOn(RegistryClient.prototype, "close"),
+    storesStopSpy = vi.spyOn(Stores.prototype, "stop"),
+    maintenanceStopSpy = vi.spyOn(Maintenance.prototype, "stop");
   afterTest(() => {
-    callSpy.mockRestore();
-    closeSpy.mockRestore();
-    stopSpy.mockRestore();
-    maintenanceSpy.mockRestore();
+    for (const spy of [callSpy, closeSpy, storesStopSpy, maintenanceStopSpy]) {
+      spy.mockRestore();
+    }
   });
   const f = await fixture({ reviewJobId: "review-job" }),
     scheduler = fakeScheduler(Date.parse("2026-10-22T10:20:00Z"));
@@ -167,11 +129,12 @@ it("stopping during a paused review enqueue settles maintenance before closing t
     });
   // A failed assertion must not leave the pass, and so its service stop, paused.
   afterTest(() => release());
+  const enqueueSettled = vi.fn();
   const cron = {
     enqueueRun: async () => {
       entered();
       await paused;
-      events.push("enqueue-settled");
+      enqueueSettled();
       return { ok: true, enqueued: true, runId: "run-1" };
     },
   };
@@ -180,17 +143,27 @@ it("stopping during a paused review enqueue settles maintenance before closing t
   const pass = scheduler.fire("knowledge-maintenance");
   await enqueued;
   const stopped = f.lifecycles[0].stop();
-  expect(maintenanceStops, "stop asks maintenance to settle").toHaveLength(1);
-  expect(stopGates, "the registry closes only after maintenance settles").toStrictEqual(
-    maintenanceStops,
-  );
-  expect(events, "nothing closes while the enqueue is paused").toStrictEqual([]);
+  expect(maintenanceStopSpy, "stop asks maintenance to settle").toHaveBeenCalledOnce();
+  expect(
+    storesStopSpy.mock.calls.map(([gate]) => gate),
+    "the registry closes only after maintenance settles",
+  ).toStrictEqual(maintenanceStopSpy.mock.results.map((result) => result.value));
+  expect(closeSpy, "nothing closes while the enqueue is paused").not.toHaveBeenCalled();
   release();
   await stopped;
   await pass;
-  expect(events).toStrictEqual(["enqueue-settled", "registry-close"]);
-  expect(registries.size).toBeGreaterThan(0);
-  for (const registry of registries) {
+  expect(closeSpy).toHaveBeenCalledOnce();
+  const [closedAt] = closeSpy.mock.invocationCallOrder,
+    [closed] = closeSpy.mock.contexts;
+  expect(enqueueSettled.mock.invocationCallOrder[0]).toBeLessThan(closedAt!);
+  callSpy.mock.contexts.forEach((registry, index) => {
+    if (registry === closed) {
+      expect(callSpy.mock.invocationCallOrder[index], "no registry call after close").toBeLessThan(
+        closedAt!,
+      );
+    }
+  });
+  for (const registry of new Set<RegistryClient>(callSpy.mock.contexts as RegistryClient[])) {
     expect(Reflect.get(registry, "worker"), "no registry worker after stop").toBeUndefined();
   }
 });
