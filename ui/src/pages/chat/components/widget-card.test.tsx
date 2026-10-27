@@ -283,7 +283,9 @@ describe("widget-card", () => {
   );
   it("retains video playback through title changes after the player loads", async () => {
     stubTargetRetainingObserver("ResizeObserver");
-    onTestFinished(() => vi.unstubAllGlobals());
+    onTestFinished(() => {
+      vi.unstubAllGlobals();
+    });
     const preview = {
       ...canvasPreview,
       title: "Synthetic video",

@@ -32,8 +32,11 @@ import {
 } from "../server-model-catalog-auth.js";
 import { WITHOUT_OPENAI_ENV_AUTH } from "../test-helpers.env.js";
 import {
+  claudeOptOutConfig,
+  EXPECTED_DEMO_IDENTITY,
   EXPECTED_IMPLICIT_CODEX_RUNTIME,
   EXPECTED_IMPLICIT_OPENCLAW_RUNTIME,
+  thinkingLevels,
 } from "./models-runtime.fixtures.test-support.js";
 import { modelsHandlers } from "./models.js";
 import type { RespondFn } from "./types.js";
@@ -56,12 +59,6 @@ const VLLM_KEY_REF = {
   provider: "mounted-json",
   id: "/providers/vllm/apiKey",
 } as const;
-
-const EXPECTED_DEMO_IDENTITY = {
-  id: "demo-model",
-  name: "Demo Model",
-  provider: "demo-provider",
-};
 
 const modelPluginMetadataSnapshot = await vi.hoisted(async () => {
   const { createModelPluginMetadataSnapshot } = await import("./models-metadata.test-support.js");
@@ -307,17 +304,6 @@ function modelPayload(respond: ReturnType<typeof vi.fn>) {
   return respond.mock.calls[0]?.[1] as { models: Array<Record<string, unknown>> };
 }
 
-function claudeOptOutConfig(modelId: string): OpenClawConfig {
-  return {
-    agents: {
-      defaults: { models: { [`anthropic/${modelId}`]: { agentRuntime: { id: "claude-cli" } } } },
-    },
-    models: configForProviders({
-      anthropic: { models: [{ id: modelId, name: modelId, reasoning: false }] },
-    }).models,
-  } as unknown as OpenClawConfig;
-}
-
 async function expectDemoAvailability(available: boolean, runtimeConfig?: OpenClawConfig) {
   await expectModelsList(
     {
@@ -327,10 +313,6 @@ async function expectDemoAvailability(available: boolean, runtimeConfig?: OpenCl
     },
     [{ ...EXPECTED_DEMO_IDENTITY, available }],
   );
-}
-
-function thinkingLevels(levels: string) {
-  return levels.split(" ").map((id) => ({ id, label: id }));
 }
 
 describe("models.list", () => {
@@ -945,7 +927,12 @@ describe("models.list", () => {
         await request;
 
         expectModels(respond, [
-          { ...GPT_TEST, agentRuntime: EXPECTED_IMPLICIT_CODEX_RUNTIME, available: false },
+          {
+            ...GPT_TEST,
+            agentRuntime: EXPECTED_IMPLICIT_CODEX_RUNTIME,
+            available: false,
+            cyberAccessProgramDefault: "standard",
+          },
         ]);
         expect(loadGatewayModelCatalog).toHaveBeenCalledWith(
           expect.objectContaining({ readOnly: true }),
@@ -997,6 +984,7 @@ describe("models.list", () => {
         {
           ...GPT_CODEX,
           agentRuntime: EXPECTED_IMPLICIT_CODEX_RUNTIME,
+          cyberAccessProgramDefault: "standard",
           local: false,
           available: true,
         },
@@ -1005,6 +993,7 @@ describe("models.list", () => {
           name: "GPT Codex Test",
           provider: "openai",
           agentRuntime: EXPECTED_IMPLICIT_CODEX_RUNTIME,
+          cyberAccessProgramDefault: "standard",
           local: false,
           available: true,
         },
@@ -1033,6 +1022,7 @@ describe("models.list", () => {
         {
           ...GPT_CODEX,
           agentRuntime: EXPECTED_IMPLICIT_CODEX_RUNTIME,
+          cyberAccessProgramDefault: "standard",
           local: false,
           available: true,
         },
@@ -1041,6 +1031,7 @@ describe("models.list", () => {
           name: "GPT Codex Test",
           provider: "openai",
           agentRuntime: EXPECTED_IMPLICIT_CODEX_RUNTIME,
+          cyberAccessProgramDefault: "standard",
           local: false,
           available: true,
         },
@@ -1151,6 +1142,7 @@ describe("models.list", () => {
             {
               ...GPT_CODEX,
               agentRuntime: EXPECTED_IMPLICIT_CODEX_RUNTIME,
+              cyberAccessProgramDefault: "standard",
               local: false,
               available: true,
             },

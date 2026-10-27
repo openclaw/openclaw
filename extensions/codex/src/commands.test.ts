@@ -47,6 +47,9 @@ import {
   readDiagnosticsConfirmationToken,
   requestParams,
   runCommand,
+  skillEntry,
+  skillGroup,
+  modelEntry,
   supervisedTestBinding,
   useCodexCommandTestState,
   writeTestBinding,
@@ -137,31 +140,6 @@ function rateLimitSnapshot(
     rateLimitReachedType: null,
   };
 }
-
-function skillEntry(name: string, cwd = "/repo-a", enabled = true, description = "") {
-  return {
-    name,
-    enabled,
-    description,
-    path: `${cwd}/.codex/skills/${name}/SKILL.md`,
-    scope: "repo" as const,
-  };
-}
-
-function modelEntry(id: string) {
-  return {
-    id,
-    model: id,
-    inputModalities: ["text" as const],
-    supportedReasoningEfforts: ["medium" as const],
-  };
-}
-
-const skillGroup = (cwd: string, skills: JsonValue[], errors: JsonValue[] = []) => ({
-  cwd,
-  skills,
-  errors,
-});
 
 function goalResponse(threadId: string, objective: string, tokensUsed = 0) {
   return {
@@ -569,10 +547,16 @@ describe("codex command", () => {
       { pluginConfig: { appServer: { defaultWorkspaceDir: "/gateway/workspace" } } },
     );
 
-    expect(codexControlRequest).toHaveBeenCalledExactlyOnceWith(
-      expect.anything(),
+    expect(codexControlRequest).toHaveBeenCalledWith(
+      { appServer: { defaultWorkspaceDir: "/gateway/workspace" } },
       CODEX_CONTROL_METHODS.listPlugins,
       { cwds: ["/gateway/workspace"] },
+      expect.anything(),
+    );
+    expect(codexControlRequest).not.toHaveBeenCalledWith(
+      expect.anything(),
+      CODEX_CONTROL_METHODS.listPlugins,
+      expect.objectContaining({ cwds: ["/remote/node/private-workspace"] }),
       expect.anything(),
     );
   });

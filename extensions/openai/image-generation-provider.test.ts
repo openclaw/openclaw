@@ -2,6 +2,7 @@
 // cannot outlive a test and resume against the next test's reset mocks.
 import "openclaw/plugin-sdk/image-generation";
 import "openclaw/plugin-sdk/media-generation-runtime";
+import { expectDefined } from "@openclaw/normalization-core";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type { AuthProfileStore } from "openclaw/plugin-sdk/provider-auth";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -149,15 +150,24 @@ type AuthResolutionCall = Parameters<
 >[0];
 
 function jsonRequestCall(callIndex = 0): RequestCall {
-  return postJsonRequestMock.mock.calls[callIndex][0] as RequestCall;
+  return expectDefined(
+    postJsonRequestMock.mock.calls[callIndex],
+    "JSON request call",
+  )[0] as RequestCall;
 }
 
 function multipartRequestCall(callIndex = 0): RequestCall {
-  return postMultipartRequestMock.mock.calls[callIndex][0] as RequestCall;
+  return expectDefined(
+    postMultipartRequestMock.mock.calls[callIndex],
+    "multipart request call",
+  )[0] as RequestCall;
 }
 
 function httpConfigCall(callIndex = 0) {
-  return resolveProviderHttpRequestConfigMock.mock.calls[callIndex][0];
+  return expectDefined(
+    resolveProviderHttpRequestConfigMock.mock.calls[callIndex],
+    "HTTP config call",
+  )[0];
 }
 
 describe("openai image generation provider", () => {
@@ -609,7 +619,9 @@ describe("openai image generation provider", () => {
       authStore,
     });
     expect(resolveApiKeyForProviderMock).toHaveBeenCalledOnce();
-    expect(resolveApiKeyForProviderMock.mock.calls[0][0]).toMatchObject({
+    expect(
+      expectDefined(resolveApiKeyForProviderMock.mock.calls[0], "auth resolution call")[0],
+    ).toMatchObject({
       provider: "openai",
       store: authStore,
       credentialPrecedence: "env-first",

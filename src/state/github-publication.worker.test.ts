@@ -376,6 +376,10 @@ it("consumes validated connection replies without reparsing and keeps host redac
       device: {
         ...initial.pending!,
         kind: "device",
+        deviceCode,
+        userCode: "TEST-CODE",
+        verificationUri: "https://github.com/login/device",
+        pollIntervalMs: 1000,
         nextPollAtMs: now + 2000,
       },
     },
