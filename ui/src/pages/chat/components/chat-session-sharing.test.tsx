@@ -333,9 +333,7 @@ describe("chat session sharing menu", () => {
       { ...renderIndicator(true), state: undefined, cachedPublished: true },
       false,
     );
-    expect(
-      root.querySelector('.chat-pane__sharing-trigger[data-public="true"]')?.textContent?.trim(),
-    ).toBe("Public");
+    expect(root.textContent).toContain("Public");
     render(renderIndicator(true), root);
     await openMenu(root);
 

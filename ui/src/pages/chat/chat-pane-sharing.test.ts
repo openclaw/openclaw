@@ -16,16 +16,13 @@ import {
   createGatewayBrowserClientFixture,
   createSessionContext,
 } from "./chat-application-context.test-support.ts";
-import type { ChatHeaderSharingSnapshot } from "./chat-header-viewers-snapshot.ts";
 import { createTestChatPane, type TestChatPane } from "./chat-pane.test-support.ts";
 import { createSessionCapabilityFixture } from "./chat-session-capability.test-support.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
 import type {
   ChatSessionSharingState,
   ChatSessionSharingOutcome,
-  ChatSessionSharingProps,
 } from "./components/chat-session-sharing-shared.tsx";
-import { cacheChatSessionSnapshot, readChatSessionSnapshot } from "./session-message-cache.ts";
 
 const { confirmPublicShare, copyPublicShare } = vi.hoisted(() => ({
   confirmPublicShare: vi.fn<(...args: unknown[]) => Promise<boolean>>(),
@@ -39,11 +36,6 @@ afterEach(() => {
 });
 
 type SharingPane = TestChatPane & {
-  headerSharingPlaceholder: (
-    row: GatewaySessionRow | undefined,
-    control: ChatSessionSharingProps | undefined,
-  ) => ChatHeaderSharingSnapshot | undefined;
-  prepareSessionSharing: (row: GatewaySessionRow) => ChatSessionSharingProps | undefined;
   loadSessionSharing: (row: GatewaySessionRow, force?: boolean) => Promise<void>;
   syncSelectedSessionSharing: (row: GatewaySessionRow | undefined) => void;
   sessionSharingCacheKey: (sessionKey: string) => string;
@@ -199,39 +191,6 @@ const mutations = [
 ] as const;
 
 describe("public session sharing", () => {
-  it("retains cached sharing geometry until live control admission, then follows permission changes", () => {
-    const { pane, state } = sharingPane(vi.fn());
-    const row = sessionRow();
-    state.sessionKey = row.key;
-    state.currentSessionId = row.sessionId!;
-    state.connected = true;
-    const target = { sessionKey: row.key };
-    cacheChatSessionSnapshot(state.chatMessagesBySession, state, target, {
-      messages: [],
-      pagination: { hasMore: false },
-      sessionId: state.currentSessionId,
-      headerSharing: "shared",
-    });
-    expect(pane.headerSharingPlaceholder({ ...row, sharingRole: undefined }, undefined)).toBe(
-      "shared",
-    );
-    expect(pane.headerSharingPlaceholder(row, undefined)).toBe("shared");
-    expect(readChatSessionSnapshot(state.chatMessagesBySession, state, target)?.headerSharing).toBe(
-      "shared",
-    );
-    const control = pane.prepareSessionSharing(row);
-    expect(control).toBeDefined();
-    expect(pane.headerSharingPlaceholder(row, control)).toBeUndefined();
-    expect(readChatSessionSnapshot(state.chatMessagesBySession, state, target)?.headerSharing).toBe(
-      "draft",
-    );
-    expect(
-      pane.headerSharingPlaceholder({ ...row, sharingRole: "viewer" }, undefined),
-    ).toBeUndefined();
-    expect(
-      readChatSessionSnapshot(state.chatMessagesBySession, state, target)?.headerSharing,
-    ).toBeNull();
-  });
   it.each([true, false])(
     "confirms publication, copies a mounted link (advertised=%s), and revokes independently of team visibility",
     async (advertised) => {

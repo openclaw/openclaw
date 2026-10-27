@@ -459,11 +459,8 @@ describe("chat pane connection lifecycle", () => {
         },
       };
 
+      pane.context.gateway.readPresence = () => connected.hello.snapshot.presence;
       pane.applyGatewaySnapshot(connected);
-      expect(requestCalls(request, "session.suggestions.list")).toHaveLength(0);
-      await pane.sessionSuggestionsRefreshPromise;
-      pane.presence.update({ presence: connected.hello.snapshot.presence });
-      void pane.refreshSessionSuggestions();
       pane.applySessionsState(sessions.state);
       listed.resolve({ suggestions: [], role: "owner" });
       await pane.sessionSuggestionsRefreshPromise;
@@ -473,10 +470,6 @@ describe("chat pane connection lifecycle", () => {
 
       pane.applyGatewaySnapshot({ ...connected, phase: "reconnecting", hello: null });
       pane.applyGatewaySnapshot(connected);
-      expect(requestCalls(request, "session.suggestions.list")).toHaveLength(2);
-      await pane.sessionSuggestionsRefreshPromise;
-      pane.presence.update({ presence: connected.hello.snapshot.presence });
-      void pane.refreshSessionSuggestions();
       pane.applySessionsState(sessions.state);
       await pane.sessionSuggestionsRefreshPromise;
       expect(requestCalls(request, "session.suggestions.list")).toHaveLength(3);

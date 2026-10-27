@@ -82,44 +82,36 @@ it("requires the synthetic session and replaces browser-supplied authority on HT
   expect(error.message).toContain("401");
   expect(requests).toBe(0);
 
-  const cookie = `${admission.browserCookie.name}=${admission.browserCookie.value}; retained=native`;
-  const response = await fetch(`${admission.origin}/chat/main/fixture?draft=ready`, {
-    headers: { ...forged, cookie },
-  });
-  expect(response.headers.get("cache-control")).toBe("public, max-age=31536000, immutable");
-  const body: unknown = await response.json();
-  const trusted = {
-    "x-forwarded-user": "proof-operator@example.invalid",
-    "x-forwarded-for": "198.51.100.248",
-    "x-forwarded-proto": "http",
-    "x-forwarded-host": "127.0.0.1:19694",
-    cookie: "retained=native",
-  };
-  expect(body).toMatchObject({ path: "/chat/main/fixture?draft=ready", headers: trusted });
-  const serialized = JSON.stringify(body);
-  for (const forbidden of ["intruder", "synthetic-forgery", "x-openclaw-scopes", "x-real-ip"]) {
-    expect(serialized).not.toContain(forbidden);
-  }
-  const client = new WebSocket(`${admission.origin.replace("http:", "ws:")}/ws`, {
-    headers: { ...forged, cookie },
-  });
-  const [message] = await once(client, "message");
-  expect(JSON.parse(message.toString())).toMatchObject({ path: "/ws", headers: trusted });
-  const closed = once(client, "close");
-  client.close();
-  await closed;
-});
-
-it("binds each synthetic viewer identity to its own cookie", async () => {
-  for (const [index, peer] of admission.peerSessions.entries()) {
-    const response = await fetch(`${admission.origin}/`, {
-      headers: {
-        cookie: `${peer.cookie.name}=${peer.cookie.value}`,
-        "x-forwarded-user": admission.viewerEmail,
-      },
+  for (const [index, browserCookie] of [
+    admission.browserCookie,
+    ...admission.peerSessions.map((peer) => peer.cookie),
+  ].entries()) {
+    const cookie = `${browserCookie.name}=${browserCookie.value}; retained=native`;
+    const response = await fetch(`${admission.origin}/chat/main/fixture?draft=ready`, {
+      headers: { ...forged, cookie },
     });
-    expect(await response.json()).toMatchObject({
-      headers: { "x-forwarded-user": `proof-viewer-${index + 1}@example.invalid` },
+    expect(response.headers.get("cache-control")).toBe("public, max-age=31536000, immutable");
+    const body: unknown = await response.json();
+    const trusted = {
+      "x-forwarded-user":
+        index === 0 ? "proof-operator@example.invalid" : `proof-viewer-${index}@example.invalid`,
+      "x-forwarded-for": "198.51.100.248",
+      "x-forwarded-proto": "http",
+      "x-forwarded-host": "127.0.0.1:19694",
+      cookie: "retained=native",
+    };
+    expect(body).toMatchObject({ path: "/chat/main/fixture?draft=ready", headers: trusted });
+    const serialized = JSON.stringify(body);
+    for (const forbidden of ["intruder", "synthetic-forgery", "x-openclaw-scopes", "x-real-ip"]) {
+      expect(serialized).not.toContain(forbidden);
+    }
+    const client = new WebSocket(`${admission.origin.replace("http:", "ws:")}/ws`, {
+      headers: { ...forged, cookie },
     });
+    const [message] = await once(client, "message");
+    expect(JSON.parse(message.toString())).toMatchObject({ path: "/ws", headers: trusted });
+    const closed = once(client, "close");
+    client.close();
+    await closed;
   }
 });

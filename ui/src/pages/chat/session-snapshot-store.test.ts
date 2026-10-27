@@ -100,12 +100,8 @@ async function persist(store: SessionSnapshotStore, cacheKey: string, value: Cha
   writeSnapshotFixture(store, cacheKey, value);
   await store.flush();
 }
-const envelope = (
-  cacheKey: string,
-  value: ChatSessionSnapshot,
-  projectionVersion = CHAT_SNAPSHOT_PROJECTION_VERSION,
-) => ({
-  projectionVersion,
+const envelope = (cacheKey: string, value: ChatSessionSnapshot, projectionVersion?: number) => ({
+  projectionVersion: projectionVersion ?? CHAT_SNAPSHOT_PROJECTION_VERSION,
   sessionKey: cacheKey,
   savedAt: 1,
   sessionId: "session-1",
@@ -652,7 +648,7 @@ describe("persistent chat session snapshots", () => {
         ...snapshot("important transcript"),
         headerSharing: "public",
         headerViewers: {
-          users: [{ id: "peer", name: "Peer", avatarUrl: "/peer.png" }],
+          users: [{ id: "peer", avatarUrl: "/peer.png" }],
           totalCount: 5,
           ownerViewing: true,
         },
