@@ -342,10 +342,8 @@ suite.define(() => {
           link: box(".sidebar-recent-session__link")!,
           gap: Number.parseFloat(getComputedStyle(link).columnGap),
           top: element.getBoundingClientRect().top,
-          right: element.getBoundingClientRect().right,
           text: box(".sidebar-recent-session__text"),
           indicator: box(".sidebar-session-indicator:not(:empty)"),
-          actions: box(".session-row-actions"),
           toggle: box("[data-child-session-toggle]"),
         };
       });
@@ -416,22 +414,6 @@ suite.define(() => {
     await row("child").locator(".session-glyph__ring").waitFor();
     await row("child").hover({ position: { x: 2, y: 10 } });
     const child = await rowGeometry("child");
-    if (grouping === "None") {
-      const tree = group.locator('[data-session-tree="agent:main:parent"]');
-      const frame = await takeControlUiScreenshotFrame(page, page.locator("body"), [row("child")], {
-        animations: "disabled",
-        elements: [tree],
-      });
-      await writeFile(
-        path.join(suite.artifactDir, `child-title-${width}.png`),
-        frame.elements[0]!.png,
-      );
-      await writeFile(path.join(suite.artifactDir, `child-title-${width}-context.png`), frame.png);
-      await writeFile(
-        path.join(suite.artifactDir, `child-title-${width}-geometry.json`),
-        JSON.stringify(child, null, 2),
-      );
-    }
     // Child actions already take their width in flow. The title should fill
     // the link to within its normal inter-item gap, not lose an action reserve again.
     expect(child.text?.width).toBeGreaterThanOrEqual(
