@@ -690,6 +690,8 @@ const repositoryScriptEntries = [
   "scripts/perf/heap-headroom.ts!",
   // Maintainers invoke this isolated Doctor metadata-retention benchmark by path.
   "scripts/perf/doctor-metadata-retention.ts!",
+  // Maintainers invoke the factory settlement benchmark by path; usage is in its header.
+  "scripts/perf/context-engine-factory-retention.ts!",
   // The connected-idle benchmark runs by path and loads its instrumentation with --import.
   "scripts/perf/idle-gateway-measure.ts!",
   "scripts/perf/idle-gateway-measure-preload.mjs!",
