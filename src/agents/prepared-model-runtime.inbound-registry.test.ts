@@ -328,6 +328,8 @@ describe("prepared reply dispatch runtime", () => {
         acquire(runtime, published.pluginGeneration, "static"),
       ),
     );
+    const loadsBeforeExecutionWorkspaces =
+      mocks.loadAgentRuntimePluginRegistryHandle.mock.calls.length;
     for (const [index, runtime] of [...registries.keys()].entries()) {
       const lease = leases[index]!;
       expect(lease.snapshot.pluginRegistry === registries.get(runtime)).toBe(true);
@@ -347,6 +349,17 @@ describe("prepared reply dispatch runtime", () => {
           const nested = await acquire(runtime, lease.pluginGeneration);
           expect(nested.snapshot === lease.snapshot).toBe(true);
           await nested[Symbol.asyncDispose]();
+          const executionWorkspaceDir = fixture.state.path(`execution-${runtime}`);
+          const executionWorkspace = await acquireAgentRunPreparedModelRuntime(
+            {
+              ...input(runtime),
+              workspaceDir: executionWorkspaceDir,
+            },
+            { catalogMode: "static", pluginGeneration: lease.pluginGeneration },
+          );
+          expect(executionWorkspace.pluginGeneration).toBe(lease.pluginGeneration);
+          expect(executionWorkspace.snapshot.workspaceDir).toBe(executionWorkspaceDir);
+          await executionWorkspace[Symbol.asyncDispose]();
           const otherRuntime = [...registries.keys()].find((candidate) => candidate !== runtime)!;
           await expect(acquire(otherRuntime, lease.pluginGeneration)).rejects.toThrow(
             "plugin generation was superseded",
@@ -364,7 +377,9 @@ describe("prepared reply dispatch runtime", () => {
       (await loadPublishedGatewayReplyDispatchRuntime({ agentId: "default" })) === published,
     ).toBe(true);
     expect(published.pluginGeneration.pluginRegistry?.agentHarnesses).toEqual([]);
-    expect(mocks.loadAgentRuntimePluginRegistryHandle).toHaveBeenCalledTimes(4);
+    expect(mocks.loadAgentRuntimePluginRegistryHandle).toHaveBeenCalledTimes(
+      loadsBeforeExecutionWorkspaces + registries.size,
+    );
   });
 
   it.each(["disabled", "error", "not-imported"] as const)(

@@ -282,13 +282,23 @@ async function acquirePreparedModelRuntimeLeaseAttempt(
   try {
     let owner = context.owners.get(key);
     const configuredOwner = resolveConfiguredOwner(context.owners, input);
+    const configuredGeneration = configuredOwner?.pluginGeneration;
+    const requestedGeneration = options.pluginGeneration;
+    // A selected run view may change execution workspaces only while its exact lease remains open
+    // and the configured generation it was derived from still owns publication authority.
+    const requestedGenerationIsCurrent =
+      configuredGeneration === requestedGeneration ||
+      (requestedGeneration !== undefined &&
+        configuredGeneration !== undefined &&
+        getPreparedModelRuntimeBorrowedSnapshot(requestedGeneration) !== undefined &&
+        preparedPluginGenerationReusesBase(requestedGeneration, configuredGeneration) &&
+        preparedPluginGenerationSupportsSelections(requestedGeneration, input));
     if (
       provenance === "run" &&
       context.getGatewayLifecycleActive() &&
-      options.pluginGeneration &&
+      requestedGeneration &&
       configuredOwner &&
-      (configuredOwner.needsRefresh ||
-        configuredOwner.pluginGeneration !== options.pluginGeneration)
+      (configuredOwner.needsRefresh || !requestedGenerationIsCurrent)
     ) {
       throw new PreparedModelRuntimePublicationSupersededError(
         `prepared model runtime plugin generation was superseded for ${input.agentDir}`,
