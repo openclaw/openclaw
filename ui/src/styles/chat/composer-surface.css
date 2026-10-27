@@ -446,7 +446,7 @@
     scrollbar-color: auto;
   }
 
-  .agent-chat__composer-combobox > textarea[data-composer-scrollable] {
+  .agent-chat__composer-combobox > textarea:where([data-composer-scrollable]) {
     /* Exchange the same inset for a real gutter without changing the text width. */
     padding-inline-end: calc(var(--chat-composer-editor-inset-inline) - var(--scrollbar-size));
     scrollbar-gutter: stable;
