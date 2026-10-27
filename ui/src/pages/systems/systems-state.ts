@@ -98,7 +98,15 @@ export function createSystems(context: ApplicationContext) {
 
   const connected = () => current() && context.gateway.snapshot.phase === "connected";
 
-  const needsInventoryRefresh = () => state.inventory === null || refreshQueued !== undefined;
+  // Provider teardown and boot finish without a session event; the page tick follows them.
+  const needsInventoryRefresh = () =>
+    state.inventory === null ||
+    refreshQueued !== undefined ||
+    state.inventory.environments.some(
+      (environment) =>
+        environment.type === "worker" &&
+        (environment.status === "starting" || environment.status === "stopping"),
+    );
 
   const sampledAtMs = () => state.inventory?.gatewaySampledAtMs ?? null;
 

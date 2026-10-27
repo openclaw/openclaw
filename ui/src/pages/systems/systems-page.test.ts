@@ -765,7 +765,7 @@ describe("Systems workspace", () => {
   });
 
   it("re-reads worker lifecycle when a session placement changes", async () => {
-    const cloud = (state: "attached" | "destroyed") =>
+    const cloud = (state: "attached" | "destroying" | "destroyed") =>
       environment("worker:cloud", "worker", "Cloud worker", {
         worker: {
           providerId: "crabbox",
@@ -800,7 +800,7 @@ describe("Systems workspace", () => {
     await waitForSolid(() => expect(controller.loading()).toBe(false));
     expect(reads()).toBe(initialReads + 1);
 
-    environments = [host, cloud("destroyed")];
+    environments = [host, { ...cloud("destroying"), status: "stopping" }];
     place(
       {
         state: "reclaimed",
@@ -812,8 +812,14 @@ describe("Systems workspace", () => {
       },
       "reclaim",
     );
-    await waitForSolid(() => expect(sidebar.textContent).not.toContain("Cloud worker"));
+    await waitForSolid(() => expect(sidebar.textContent).toContain("Stopping"));
     expect(reads()).toBe(initialReads + 2);
+    // Teardown completes without another session event; the page tick re-reads it.
+    expect(controller.needsInventoryRefresh()).toBe(true);
+    environments = [host, cloud("destroyed")];
+    await controller.refresh();
+    await waitForSolid(() => expect(sidebar.textContent).not.toContain("Cloud worker"));
+    expect(controller.needsInventoryRefresh()).toBe(false);
     unmount();
   });
 
