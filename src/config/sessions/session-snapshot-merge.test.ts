@@ -394,7 +394,7 @@ describe("session snapshot merge", () => {
         mainRestartRecovery: undefined,
         ...(acquiredGuard ? { restartRecoveryForceSafeTools: undefined } : {}),
       };
-      const current = {
+      const current: SessionEntry = {
         ...structuredClone(initialRecovery),
         updatedAt: 3,
         abortedLastRun: false,
