@@ -11,7 +11,7 @@ import {
 } from "./subagent-child-owner-match.js";
 import { resolveAnnounceDeliveryDeadline } from "./subagent-registry-cleanup.js";
 import { ANNOUNCE_COMPLETION_HARD_EXPIRY_MS } from "./subagent-registry-helpers.js";
-import type { SubagentLifecycleController } from "./subagent-registry-lifecycle.js";
+import type { CleanupBookkeepingParams } from "./subagent-registry-lifecycle-context.js";
 import { getCurrentSubagentRunOwner, subagentRuns } from "./subagent-registry-memory.js";
 import { isRetiredSubagentSessionOwner } from "./subagent-registry-restart-recovery-helpers.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
@@ -148,11 +148,11 @@ export function retainRestoredCompletionReservation(
 export async function settleSubagentCompletionReservation(
   entry: SubagentRunRecord,
   now: number,
-  lifecycle: Pick<
-    SubagentLifecycleController,
-    "completeCleanupBookkeeping" | "isCleanupOwnerCurrent" | "isTerminalTailActive"
-  > & {
-    discardTerminalDelivery: typeof SubagentLifecycleController.discardTerminalDelivery;
+  lifecycle: {
+    completeCleanupBookkeeping: (params: CleanupBookkeepingParams) => Promise<void>;
+    isCleanupOwnerCurrent: (entry: SubagentRunRecord) => boolean;
+    isTerminalTailActive: (entry: SubagentRunRecord) => boolean;
+    discardTerminalDelivery: (entry: SubagentRunRecord, completedAt: number) => void;
     resumedRuns: Set<object>;
     clearPendingLifecycleError: (runId: string) => void;
     clearPendingLifecycleTimeout: (runId: string) => void;
