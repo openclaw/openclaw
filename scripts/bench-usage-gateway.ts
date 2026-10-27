@@ -58,6 +58,7 @@ const { values } = parseArgs({
     out: { type: "string" },
     pairs: { type: "string", default: "20" },
     "warm-cpu": { type: "string" },
+    "warm-sequence": { type: "boolean", default: false },
     sessions: { type: "string", default: "12000" },
     smoke: { type: "boolean", default: false },
     cold: { type: "boolean", default: false },
@@ -72,7 +73,7 @@ const { values } = parseArgs({
 });
 if (values.help) {
   console.log(
-    "Usage: node --import ./scripts/tsx.mjs scripts/bench-usage-gateway.ts --base <checkout> --head <checkout> --ui <frozen-build> --out <new-directory> [--sessions 12000] [--pairs 20] [--warm-cpu 1|4] [--smoke | --cold | --cold-backend [--cold-pairs 20] | --diagnostic | --structure [--structure-rtt 0|100] [--trace-adverse]]",
+    "Usage: node --import ./scripts/tsx.mjs scripts/bench-usage-gateway.ts --base <checkout> --head <checkout> --ui <frozen-build> --out <new-directory> [--sessions 12000] [--pairs 20] [--warm-cpu 1|4] [--warm-sequence] [--smoke | --cold | --cold-backend [--cold-pairs 20] | --diagnostic | --structure [--structure-rtt 0|100] [--trace-adverse]]",
   );
   process.exit(0);
 }
@@ -118,6 +119,15 @@ if (warmCpu !== undefined) {
       Boolean,
     ),
     "--warm-cpu only selects ordinary warm filter runs",
+  );
+}
+if (values["warm-sequence"]) {
+  assert(warmCpu === undefined || warmCpu === 1, "--warm-sequence uses native CPU only");
+  assert(
+    ![values.smoke, values.cold, values["cold-backend"], values.diagnostic, values.structure].some(
+      Boolean,
+    ),
+    "--warm-sequence requires untraced ordinary warm filters",
   );
 }
 const coldPairs = values["cold-pairs"] === undefined ? undefined : Number(values["cold-pairs"]);
@@ -172,6 +182,7 @@ const fixtureTokens: string[] = [];
 const samples: Array<
   Record<string, unknown> & { browserResources?: ReturnType<typeof browserResources> }
 > = [];
+const sequences: Array<Record<string, unknown>> = [];
 const browsers = new Set<Browser>();
 const failures: string[] = [];
 const errorText = (error: unknown) =>
@@ -1185,14 +1196,20 @@ try {
   }
   for (const cpu of values["cold-backend"]
     ? []
-    : values.cold || values.diagnostic || values.structure
+    : values.cold || values.diagnostic || values.structure || values["warm-sequence"]
       ? [1]
       : values.smoke
         ? [4]
         : warmCpu === undefined
           ? [1, 4]
           : [warmCpu]) {
-    for (const rtt of values.cold ? [0] : values.structure ? [structureRtt] : [0, 100]) {
+    for (const rtt of values.cold
+      ? [0]
+      : values.structure
+        ? [structureRtt]
+        : values["warm-sequence"]
+          ? [100]
+          : [0, 100]) {
       const pages: PageEntry[] = [];
       try {
         for (const owner of owners) {
@@ -1382,6 +1399,34 @@ try {
             load: os.loadavg(),
           });
         }
+        // Keep background GC between repeated filters inside the sequence interval.
+        // Single-action samples stay unchanged; this does not force GC or wait for it.
+        const sequenceBefore = new Map<
+          PageEntry,
+          {
+            renderer: Awaited<ReturnType<typeof rendererProbe>>;
+            document: Awaited<ReturnType<typeof metrics>>;
+            load: number[];
+          }
+        >();
+        if (values["warm-sequence"]) {
+          const rendererOwners = new Map<number, string>();
+          for (const entry of pages) {
+            const renderer = await rendererProbe(entry.processSession);
+            for (const { id } of renderer.processes) {
+              assert(
+                !rendererOwners.has(id),
+                `Renderer ${id} is shared with ${rendererOwners.get(id)}`,
+              );
+              rendererOwners.set(id, entry.owner.role);
+            }
+            sequenceBefore.set(entry, {
+              renderer,
+              document: await metrics(entry.cdp),
+              load: os.loadavg(),
+            });
+          }
+        }
         const iterations = values.cold
           ? 0
           : values.structure
@@ -1488,6 +1533,39 @@ try {
               load: os.loadavg(),
             });
             await writeFile(path.join(out, "samples.json"), JSON.stringify(samples, null, 2));
+          }
+        }
+        if (values["warm-sequence"]) {
+          for (const entry of pages) {
+            const before = sequenceBefore.get(entry)!;
+            const documentAfter = await metrics(entry.cdp);
+            const rendererAfter = await rendererProbe(entry.processSession);
+            const actions = samples.filter(
+              (sample) =>
+                sample.phase === "filter" &&
+                sample.role === entry.owner.role &&
+                sample.cpu === cpu &&
+                sample.rtt === rtt,
+            );
+            assert.equal(actions.length, iterations);
+            sequences.push({
+              role: entry.owner.role,
+              cpu,
+              rtt,
+              pairs,
+              actions: actions.length,
+              rendererPids: before.renderer.processes.map(({ id }) => id),
+              browserResources: browserResources(
+                before.renderer,
+                rendererAfter,
+                before.document,
+                documentAfter,
+              ),
+              browserCpuMs: measureBrowserCpu(before.document, documentAfter),
+              loadBefore: before.load,
+              loadAfter: os.loadavg(),
+            });
+            await writeFile(path.join(out, "sequences.json"), JSON.stringify(sequences, null, 2));
           }
         }
         for (const { owner } of pages) {
@@ -1626,8 +1704,11 @@ try {
               ? "fresh-cold-triple"
               : values.diagnostic
                 ? "attribution-only"
-                : "warm",
+                : values["warm-sequence"]
+                  ? "warm-sequence"
+                  : "warm",
         coldPairs: coldPairs ?? null,
+        ...(values["warm-sequence"] ? { sequenceObservations: sequences.length } : {}),
         ...(warmCpu === undefined ? {} : { warmCpu }),
         pairsPerQuery:
           values.cold || values["cold-backend"]
@@ -1651,6 +1732,9 @@ try {
                 : "Gateway reused across CPU/RTT cells; default/readiness and population-range phases are not independent cold-process samples.") +
               (values.diagnostic
                 ? " Traced actions are attribution only, never timing acceptance."
+                : "") +
+              (values["warm-sequence"]
+                ? " One additional renderer/document interval spans all repeated filters and their intervening ordinary idle time for each role at 1x/100ms, preserving every action sample. It includes measurement overhead and background work; it ends at the ordinary settled outcome without forcing or waiting for GC. Heap deltas are net endpoints, not total allocations or retained memory."
                 : ""),
       },
       null,
