@@ -127,10 +127,15 @@ export function createSessionRowRefresh(
       void readExactBatch(batch);
     }
   }
-  function pendingExactRows(queries: readonly records.Lookup[], fromSelection: boolean) {
+  function pendingExactRows(
+    queries: readonly records.Lookup[],
+    fromSelection: boolean,
+    selectedRows?: readonly (records.Row | undefined)[],
+  ) {
     const { cfg } = owner.state();
     const selected = new Set<string>();
-    for (const query of queries) {
+    for (let index = 0; index < queries.length; index++) {
+      const query = queries[index]!;
       if (
         !fromSelection &&
         isIncognitoSessionKey(
@@ -143,7 +148,7 @@ export function createSessionRowRefresh(
       ) {
         continue;
       }
-      const row = owner.lookup(query);
+      const row = selectedRows ? selectedRows[index] : owner.lookup(query);
       if (row && (owner.dirty.has(records.identity(row)) || !records.ready(row))) {
         selected.add(records.identity(row));
       }
@@ -153,11 +158,12 @@ export function createSessionRowRefresh(
   function prepareExactRows(
     queries: readonly records.Lookup[],
     fromSelection = false,
+    selectedRows?: readonly (records.Row | undefined)[],
   ): Promise<void> | undefined {
     if (owner.state().disposed) {
       return undefined;
     }
-    const selected = pendingExactRows(queries, fromSelection);
+    const selected = pendingExactRows(queries, fromSelection, selectedRows);
     if (selected.size === 0) {
       return undefined;
     }

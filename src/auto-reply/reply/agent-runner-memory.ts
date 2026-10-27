@@ -8,6 +8,7 @@ import { resolveEffectiveCompactionReserveTokens } from "../../agents/agent-comp
 import { resolveDefaultAgentId } from "../../agents/agent-scope-config.js";
 import { MemoryFlushToolsUnavailableError } from "../../agents/agent-tools.memory-flush.js";
 import { resolveBootstrapWarningSignaturesSeen } from "../../agents/bootstrap-budget.js";
+import { readCompactionTranscriptBytes } from "../../agents/compaction-transcript-bytes.js";
 import { isBenignCompactionSkipResult } from "../../agents/embedded-agent-runner/compact-reasons.js";
 import type { AcceptedCompactionSuccessor } from "../../agents/embedded-agent-runner/compaction-successor.js";
 import { runEmbeddedAgentEntry } from "../../agents/embedded-agent-runner/run-entry.js";
@@ -176,13 +177,14 @@ export async function runSessionCompactionIfNeeded(params: {
     sessionKey: compactionSessionKey,
     storePath: compactionStorePath,
   };
-  const readTranscriptSize = (sessionId: string) =>
-    readSessionLogSnapshot({
-      ...compactionTarget,
-      sessionId,
-      includeByteSize: true,
-      includeUsage: false,
-      abortSignal: params.abortSignal,
+  const readTranscriptSize = async (sessionId: string, rawBytes?: number) =>
+    readCompactionTranscriptBytes({
+      target: { ...compactionTarget, sessionId },
+      rawBytes,
+      runtime: params.followupRun.run,
+      maxBytes: maxActiveTranscriptBytes,
+      contextTokenBudget: contextWindowTokens,
+      signal: params.abortSignal,
     });
 
   const contextWindowTokens = resolveFollowupContextTokens(runtimeParams, runtimeId);
@@ -227,13 +229,10 @@ export async function runSessionCompactionIfNeeded(params: {
           sessionId: entry.sessionId,
           contextWindowTokens,
         });
-  const transcriptSizeSnapshot =
-    shouldCheckActiveTranscriptBytes && transcriptUsageTokens?.transcriptByteSize === undefined
-      ? await readTranscriptSize(entry.sessionId)
-      : undefined;
+  const activeTranscriptBytes = shouldCheckActiveTranscriptBytes
+    ? await readTranscriptSize(entry.sessionId, transcriptUsageTokens?.transcriptByteSize)
+    : undefined;
   assertActive();
-  const activeTranscriptBytes =
-    transcriptUsageTokens?.transcriptByteSize ?? transcriptSizeSnapshot?.byteSize;
   const exceedsTranscriptByteThreshold =
     activeTranscriptBytes !== undefined &&
     maxActiveTranscriptBytes !== undefined &&
@@ -326,7 +325,7 @@ export async function runSessionCompactionIfNeeded(params: {
     amount = 1,
   ) => {
     const postCompactionBytes = exceedsTranscriptByteThreshold
-      ? (await readTranscriptSize(acceptedEntry.sessionId)).byteSize
+      ? await readTranscriptSize(acceptedEntry.sessionId)
       : undefined;
     assertActive();
     const transcriptByteCompactionLatch =

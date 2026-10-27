@@ -254,6 +254,12 @@ It shows a notice even with compaction notifications disabled; resend any
 essential details from omitted history. The bound applies to selected history,
 not the fixed instructions, tool definitions, or current request.
 
+For direct Anthropic API-key routes, cleared turn-scoped runtime-context contents
+do not contribute to compaction pressure or the fallback window. Saved replay
+remains append-only. Event envelopes and history outside the bounded accounting
+read still count conservatively. The separate history hydration limit continues
+to count raw serialized bytes.
+
 Manual compaction also reports `transcript_bytes` pressure to the context engine
 when the configured positive threshold is reached and automatic compaction is
 enabled. This lets an owning engine apply the same byte-pressure policy during

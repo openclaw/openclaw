@@ -124,34 +124,44 @@ describe("followup queue authority", () => {
     },
   );
 
-  it("keeps different original requesters in separate collected turns on the same route", async () => {
-    const q = createQueueCase({ mode: "collect", debounceMs: 0 }, 2);
-    for (const [index, senderId] of ["alice", "bob", "bob"].entries()) {
-      q.enqueue(
-        {
-          prompt: `${senderId} request ${index}`,
-          originatingChannel: "telegram",
-          originatingTo: "shared-chat",
-        },
-        {
-          senderId: "shared-receiver",
-          requesterOrigin: {
-            sessionKey: "agent:research:telegram:group:requesters",
-            messageProvider: "telegram",
-            senderId,
+  it.each([false, true])(
+    "keeps different requesters separate when requests are identical=%s",
+    async (identical) => {
+      const q = createQueueCase({ mode: "collect", debounceMs: 0 }, 2);
+      for (const [index, senderId] of ["alice", "bob", "bob"].entries()) {
+        q.enqueue(
+          {
+            prompt: identical ? "Summarize report.txt" : `${senderId} request ${index}`,
+            originatingChannel: "telegram",
+            originatingTo: "shared-chat",
           },
-        },
-      );
-    }
-    await q.drain();
-    expect(q.calls.map(({ prompt }) => prompt.match(/(?:alice|bob) request \d/g))).toEqual([
-      ["alice request 0"],
-      ["bob request 1", "bob request 2"],
-    ]);
-    expect(q.calls[0]?.prompt).not.toContain("bob request");
-    expect(q.calls[1]?.prompt).not.toContain("alice request");
-    expect(q.calls[1]?.run.requesterOrigin?.senderId).toBe("bob");
-  });
+          {
+            senderId: "shared-receiver",
+            requesterOrigin: {
+              sessionKey: "agent:research:telegram:group:requesters",
+              messageProvider: "telegram",
+              senderId,
+            },
+          },
+        );
+      }
+      await q.drain();
+      if (identical) {
+        expect(q.calls.map(({ prompt }) => prompt.match(/Summarize report\.txt/g)?.length)).toEqual(
+          [1, 2],
+        );
+      } else {
+        expect(q.calls.map(({ prompt }) => prompt.match(/(?:alice|bob) request \d/g))).toEqual([
+          ["alice request 0"],
+          ["bob request 1", "bob request 2"],
+        ]);
+        expect(q.calls[0]?.prompt).not.toContain("bob request");
+        expect(q.calls[1]?.prompt).not.toContain("alice request");
+      }
+      expect(q.calls[0]?.run.requesterOrigin?.senderId).toBe("alice");
+      expect(q.calls[1]?.run.requesterOrigin?.senderId).toBe("bob");
+    },
+  );
 
   it("keeps a restricted sender's tool policy and task root through a collect drain", async () => {
     const q = createQueueCase({ mode: "collect" }, 2);

@@ -51,6 +51,7 @@ export async function probeGatewayReachability(url: string, signal: AbortSignal)
     const response = await fetch(probe, {
       cache: "no-store",
       credentials: "same-origin",
+      headers: { "X-OpenClaw-Reachability-Probe": "1" },
       redirect: "error",
       signal,
     });
