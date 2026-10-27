@@ -78,14 +78,17 @@ export function ChatSubagentWaitLine(props: {
   const only = createMemo(() =>
     props.wait.sessions.length === 1 ? props.wait.sessions[0] : undefined,
   );
-  const attention = createMemo(
-    () => props.wait.sessions.filter((session) => session.status === "attention").length,
-  );
+  const count = (status: ChatHandoffSession["status"]) =>
+    props.wait.sessions.filter((session) => session.status === status).length;
+  const attention = createMemo(() => count("attention"));
+  const paused = createMemo(() => count("paused"));
+  // Nothing is working while every remaining child is paused, so no clock runs.
+  const timed = createMemo(() => paused() === 0 || count("running") > 0);
   const elapsed = () => (
-    <>
+    <Show when={timed()}>
       <span aria-hidden="true">·</span>{" "}
       <ElapsedTime class="chat-working-indicator__elapsed" startMs={props.startMs} />
-    </>
+    </Show>
   );
   return (
     <div class="chat-subagent-wait">
@@ -109,6 +112,10 @@ export function ChatSubagentWaitLine(props: {
                   {needsInputLabel(attention())}
                 </span>{" "}
               </Show>
+              <Show when={paused() > 0}>
+                <span aria-hidden="true">·</span>{" "}
+                <span>{t("chat.sessionsPaused", { count: String(paused()) })}</span>{" "}
+              </Show>
               {elapsed()}
               <Chevron open={open()} />
             </button>
@@ -129,10 +136,13 @@ export function ChatSubagentWaitLine(props: {
                 <HandoffSessionName session={session()} links={props.links} />
                 {after}
               </span>{" "}
-              <Show when={session().status === "attention"}>
+              <Show when={session().status === "attention" || session().status === "paused"}>
                 <span aria-hidden="true">·</span>{" "}
-                <span class="chat-subagent-wait__attention" title={session().note}>
-                  {t("chat.handoffSessionStatus.attention")}
+                <span
+                  class={{ "chat-subagent-wait__attention": session().status === "attention" }}
+                  title={session().note}
+                >
+                  {t(`chat.handoffSessionStatus.${session().status}`)}
                 </span>{" "}
               </Show>
               {elapsed()}

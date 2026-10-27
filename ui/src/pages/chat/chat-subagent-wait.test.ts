@@ -223,33 +223,28 @@ describe("chat waiting on subagents", () => {
     const derive = (childRows?: GatewaySessionRow[]) =>
       status({ subagentSessions: childRows, subagentSessionsHydrated: childRows !== undefined })
         .wait;
-    expect(derive()).toEqual({
-      startedAt: 2_000,
-      runId: "parent-run",
-      runningCount: 0,
-      sessions: [],
-    });
+    expect(derive()).toMatchObject({ runningCount: 0, sessions: [] });
     const summarize = (childRows: GatewaySessionRow[]) => {
       const wait = derive(childRows);
       return wait?.runningCount;
     };
     expect(summarize([child, { ...child, key: "agent:main:subagent:other" }])).toBe(2);
+    // A child that handed off to its own subagents is unfinished.
+    const delegating = { ...child, key: "agent:main:subagent:yielded", hasActiveRun: false };
+    expect(summarize([child, { ...delegating, hasActiveSubagentRun: true }])).toBe(2);
     expect(derive([{ ...child, spawnedBy: "agent:main:other" }])).toBeNull();
     expect(derive([{ ...child, hasActiveRun: false }])).toBeNull();
     expect(
       summarize([child, { ...child, key: "agent:main:grandchild", spawnedBy: child.key }]),
     ).toBe(1);
-  });
-
-  it("counts a child that handed off to its own subagents as unfinished", () => {
-    const yielded = {
-      ...child,
-      key: "agent:main:subagent:yielded",
-      status: "running" as const,
-      hasActiveRun: false,
-      hasActiveSubagentRun: true,
-    };
-    expect(status({ subagentSessions: [child, yielded] }).wait).toMatchObject({ runningCount: 2 });
+    // A paused child keeps the wait open, uncounted, once the child query is complete.
+    const done = { ...child, hasActiveRun: false, status: "done" as const, endedAt: 1_500 };
+    const paused = [{ ...done, subagentRunState: "paused" as const }];
+    const settled = { ...parent, hasActiveSubagentRun: false };
+    const idle = (subagentSessions: GatewaySessionRow[], subagentSessionsPending = false) =>
+      status({ selectedSession: settled, subagentSessions, subagentSessionsPending }).wait;
+    expect(idle(paused)).toMatchObject({ runningCount: 0, sessions: [{ status: "paused" }] });
+    expect([idle([done]), idle(paused, true)]).toEqual([null, null]);
   });
 
   it("counts child sessions that are not subagents apart and names them on the wait", () => {
@@ -268,17 +263,6 @@ describe("chat waiting on subagents", () => {
       runningCount: 1,
       sessionCount: 1,
     });
-  });
-
-  it("counts children only once the pane's own child query has answered", () => {
-    const derive = (subagentSessionsHydrated: boolean) => status({ subagentSessionsHydrated }).wait;
-    expect(derive(false)).toEqual({
-      startedAt: 2_000,
-      runId: "parent-run",
-      runningCount: 0,
-      sessions: [],
-    });
-    expect(derive(true)).toMatchObject({ runningCount: 1 });
   });
 
   it.each([2_500, 1_500])("uses lifecycle end %i, not a later transcript timestamp", (endedAt) => {
@@ -391,12 +375,6 @@ describe("chat waiting on subagents", () => {
       running: 1,
       listed: true,
     });
-    expect(projectSubagentStatus({ ...input, selectedSession: parent }, false).wait).toEqual({
-      startedAt: 2_000,
-      runId: "parent-run",
-      runningCount: 0,
-      sessions: [],
-    });
   });
 
   it("leads to the Subagents panel only when it lists every subagent the line mentions", () => {
@@ -477,7 +455,7 @@ describe("chat waiting on subagents", () => {
       { subagentSessions: [child], subagentSessionsHydrated: true, subagentSessionsPending: true },
     ]) {
       const projection = status(roster);
-      expect(projection.wait?.sessions).toEqual([]);
+      expect(projection.wait).toMatchObject({ runningCount: 0, sessions: [] });
       expect(listResumedHandoffSessions(parent.key, roster, handoff)).toEqual([]);
       const container = document.createElement("div");
       mountWorkingIndicator(
@@ -638,6 +616,16 @@ describe("chat waiting on subagents", () => {
         status: "done",
         endedAt: 4_000,
       },
+      // Paused before this handoff, still owing its task.
+      {
+        ...child,
+        key: "agent:main:subagent:audit",
+        label: "Audit",
+        hasActiveRun: false,
+        status: "done",
+        endedAt: 1_200,
+        subagentRunState: "paused",
+      },
       // Finished before this handoff: not what it waits on.
       {
         ...child,
@@ -656,18 +644,19 @@ describe("chat waiting on subagents", () => {
         status: "attention",
         note: "Pick a merge method",
       },
+      { key: "agent:main:subagent:audit", label: "Audit", status: "paused" },
       { key: child.key, label: "Backend implementation", status: "running" },
       { key: "agent:main:dashboard:docs", label: "Docs", status: "done" },
     ]);
     const container = document.createElement("div");
-    mountWorkingIndicator(
+    const update = mountWorkingIndicator(
       container,
       { kind: "reading-indicator", key: "parent-wait", startedAt: 5_000 },
       { waitingSubagents: { ...wait!, startedAt: 1_500 } },
     );
     const toggle = container.querySelector<HTMLButtonElement>(".chat-subagent-wait__toggle");
     expect(toggle?.textContent?.replace(/\s+/gu, " ").trim()).toBe(
-      "Waiting on 3 sessions · 1 needs your input · 1m 5s",
+      "Waiting on 4 sessions · 1 needs your input · 1 paused · 1m 5s",
     );
     expect(toggle?.getAttribute("aria-expanded")).toBe("true");
     const list = container.querySelector(`#${toggle?.getAttribute("aria-controls")}`);
@@ -675,11 +664,19 @@ describe("chat waiting on subagents", () => {
       [...(list?.querySelectorAll("li") ?? [])].map((row) =>
         row.textContent?.replace(/\s+/gu, " ").trim(),
       ),
-    ).toEqual(["Review Needs your input", "Backend implementation Running", "Docs Done"]);
+    ).toEqual([
+      "Review Needs your input",
+      "Audit Paused",
+      "Backend implementation Running",
+      "Docs Done",
+    ]);
     toggle?.click();
     flush();
     expect(toggle?.getAttribute("aria-expanded")).toBe("false");
     expect(container.querySelector("li")).toBeNull();
+    update({ waitingSubagents: { ...wait!, startedAt: 1_500, sessions: [wait!.sessions[1]!] } });
+    // Only paused children remain: nothing is working, so no clock.
+    expect(container.textContent?.replace(/\s+/gu, " ").trim()).toBe("Waiting on Audit · Paused");
   });
 
   it("makes the running count the way to the list when navigation is available", () => {

@@ -1575,11 +1575,13 @@ const startupEnglish = {
     waitingOnSessions: "Waiting on {count} sessions",
     sessionsNeedInputOne: "1 needs your input",
     sessionsNeedInput: "{count} need your input",
+    sessionsPaused: "{count} paused",
     handoffResumed: "Resumed · {duration} later",
     handoffSessionsOne: "1 session",
     handoffSessions: "{count} sessions",
     handoffSessionStatus: {
       attention: "Needs your input",
+      paused: "Paused",
       running: "Running",
       failed: "Failed",
       stopped: "Stopped",

@@ -40,26 +40,32 @@ export type ChatSubagentWait = {
 export type ChatHandoffSession = {
   key: string;
   label: string;
-  status: "attention" | "running" | "failed" | "stopped" | "done";
+  status: "attention" | "paused" | "running" | "failed" | "stopped" | "done";
   /** The child's own attention note, when it asked for the user. */
   note?: string;
 };
 
 const HANDOFF_STATUS_ORDER: readonly ChatHandoffSession["status"][] = [
   "attention",
+  "paused",
   "failed",
   "running",
   "stopped",
   "done",
 ];
 
+/** Yielded on sessions_yield and awaiting a continuation; a newer run in it is running. */
+function isPausedChild(row: GatewaySessionRow) {
+  return row.subagentRunState === "paused" && row.status !== "queued" && !isUnfinishedSubagent(row);
+}
+
 /**
  * The direct children (subagents and sessions alike) whose current run overlapped
  * a handoff from `from` until `to` (still open without one). Attention first.
  * Rows carry only a child's latest run, so a child that started again after a
  * resumed handoff is left out rather than credited with that later run.
- * "Needs your input" is the child's own declared attention; the Gateway row
- * does not distinguish a child paused for a continuation from a finished one.
+ * "Needs your input" is the child's own declared attention. A paused child
+ * still owes its task, so it stays listed however long ago it yielded.
  */
 function listHandoffSessions(
   children: readonly GatewaySessionRow[],
@@ -71,7 +77,10 @@ function listHandoffSessions(
       const started = row.startedAt ?? row.createdAt ?? 0;
       return (
         (window.to === undefined || started <= window.to) &&
-        (row.status === "queued" || isUnfinishedSubagent(row) || (row.endedAt ?? 0) >= window.from)
+        (row.status === "queued" ||
+          isUnfinishedSubagent(row) ||
+          isPausedChild(row) ||
+          (row.endedAt ?? 0) >= window.from)
       );
     })
     .toSorted(byLaunch)
@@ -83,7 +92,9 @@ function listHandoffSessions(
         status:
           row.status === "queued" || isUnfinishedSubagent(row)
             ? "running"
-            : (endedWithoutFinishing(row) ?? "done"),
+            : isPausedChild(row)
+              ? "paused"
+              : (endedWithoutFinishing(row) ?? "done"),
       };
       if (attention.kind === "agent") {
         session.status = "attention";
@@ -291,7 +302,15 @@ export function projectSubagentStatus(
   searchFiltering: boolean,
 ) {
   const session = input.selectedSession;
-  const eligible = session && !session.archived && session.hasActiveSubagentRun === true;
+  const hydrated = input.subagentSessionsHydrated && !input.subagentSessionsPending;
+  // A child paused on sessions_yield keeps the wait open without counting as
+  // running. Only the pane's complete child query can say one remains.
+  const paused =
+    hydrated && session && !session.archived
+      ? directChildren(session, input).filter(isPausedChild)
+      : [];
+  const eligible =
+    session && !session.archived && (session.hasActiveSubagentRun === true || paused.length > 0);
   // Descendant activity alone is not a parent wait: plugin-owned children can
   // belong to a session that has never executed. Every settled parent turn has
   // a lifecycle end; a partial row must not invent that boundary from transcript text.
@@ -321,10 +340,12 @@ export function projectSubagentStatus(
   // line names every child the handoff waits on.
   const children = unfinished.filter((row) => !isDashboardSessionKey(row.key));
   const running = children.length;
-  const hydrated = input.subagentSessionsHydrated && !input.subagentSessionsPending;
-  // A hydrated roster with no unfinished children ends the wait.
+  // Whether paused children alone hold the waiting line open, including below
+  // a resumed reply. Narrow this rule to change where a paused-only wait shows.
+  const pausedHoldWait = paused.length > 0;
+  // A hydrated roster with no unfinished children, and none held paused, ends the wait.
   const wait: ChatSubagentWait | null =
-    waitStartedAt !== null && (!hydrated || unfinished.length > 0)
+    waitStartedAt !== null && (!hydrated || unfinished.length > 0 || pausedHoldWait)
       ? {
           startedAt: waitStartedAt,
           ...(handoffRunId ? { runId: handoffRunId } : {}),
