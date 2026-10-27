@@ -1,12 +1,12 @@
-export type Rgb = readonly [number, number, number];
+type Rgb = readonly [number, number, number];
 export type Oklch = { l: number; c: number; h: number };
-export type ParticipantPalette = {
+type ParticipantPalette = {
   mode: "light" | "dark";
   background: Oklch;
   accent: Oklch;
 };
 
-export const PARTICIPANT_TONES = {
+const PARTICIPANT_TONES = {
   light: { peerOffset: -0.035, viewerOffset: -0.05, nameL: 0.46, nameC: 0.07 },
   dark: { peerOffset: 0.07, viewerOffset: 0.1, nameL: 0.79, nameC: 0.055 },
   bubbleC: 0.024,
@@ -15,7 +15,7 @@ export const PARTICIPANT_TONES = {
 const linear = (channel: number) =>
   channel <= 0.04045 ? channel / 12.92 : ((channel + 0.055) / 1.055) ** 2.4;
 
-export function rgbToOklch(rgb: Rgb): Oklch {
+function rgbToOklch(rgb: Rgb): Oklch {
   const [r, g, b] = rgb.map(linear);
   const l = Math.cbrt(0.4122214708 * r! + 0.5363325363 * g! + 0.0514459929 * b!);
   const m = Math.cbrt(0.2119034982 * r! + 0.6806995451 * g! + 0.1073969566 * b!);
@@ -38,7 +38,7 @@ export function hexToOklch(hex: string): Oklch {
   ]);
 }
 
-export function oklchToLinearRgb({ l, c, h }: Oklch): Rgb {
+function oklchToLinearRgb({ l, c, h }: Oklch): Rgb {
   const a = c * Math.cos((h * Math.PI) / 180);
   const b = c * Math.sin((h * Math.PI) / 180);
   const ll = (l + 0.3963377774 * a + 0.2158037573 * b) ** 3;
@@ -51,12 +51,12 @@ export function oklchToLinearRgb({ l, c, h }: Oklch): Rgb {
   ];
 }
 
-export function isSrgb(color: Oklch): boolean {
+function isSrgb(color: Oklch): boolean {
   return oklchToLinearRgb(color).every((channel) => channel >= 0 && channel <= 1);
 }
 
 /** The browser receives an in-gamut OKLCH color; it never has to clip its channels. */
-export function fitSrgb(color: Oklch): Oklch {
+function fitSrgb(color: Oklch): Oklch {
   if (isSrgb(color)) {
     return color;
   }
@@ -74,7 +74,7 @@ export function fitSrgb(color: Oklch): Oklch {
 }
 
 /** Avatar identity is HSL(h, 48%, 42%); HSL and OKLCH hue angles differ. */
-export function identityOklchHue(hue: number): number {
+function identityOklchHue(hue: number): number {
   const lightness = 0.42;
   const amplitude = 0.48 * Math.min(lightness, 1 - lightness);
   const channel = (offset: number) => {
@@ -84,7 +84,7 @@ export function identityOklchHue(hue: number): number {
   return rgbToOklch([channel(0), channel(8), channel(4)]).h;
 }
 
-export function participantColors(palette: ParticipantPalette, identityHue: number | null) {
+function participantColors(palette: ParticipantPalette, identityHue: number | null) {
   const tones = PARTICIPANT_TONES[palette.mode];
   const viewer = identityHue === null;
   const h = viewer ? palette.accent.h : identityOklchHue(identityHue);
@@ -112,7 +112,7 @@ function linkContrast(foreground: Oklch, background: Oklch): number {
 }
 
 /** Keep readable ink intact; otherwise move L only, fitting C at the gamut boundary. */
-export function readableLinkColor(foreground: Oklch, background: Oklch): Oklch {
+function readableLinkColor(foreground: Oklch, background: Oklch): Oklch {
   if (linkContrast(foreground, background) >= 7) {
     return foreground;
   }

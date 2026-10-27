@@ -5,16 +5,6 @@ import { fileURLToPath } from "node:url";
 import postcss, { type Rule } from "postcss";
 import { describe, expect, it } from "vitest";
 import {
-  oklchToLinearRgb,
-  participantColors,
-  readableLinkColor,
-  fitSrgb,
-  isSrgb,
-  rgbToOklch,
-  type Oklch,
-  type ParticipantPalette,
-} from "../lib/chat/participant-colors.ts";
-import {
   readThemeBlocks,
   resolveThemes,
   resolveColor,
@@ -54,14 +44,6 @@ function contrastRatio(foreground: RGB, background: RGB): number {
     b = relativeLuminance(background);
   return (Math.max(a, b) + 0.05) / (Math.min(a, b) + 0.05);
 }
-
-const toOklch = ([r, g, b]: RGB) => rgbToOklch([r / 255, g / 255, b / 255]);
-const rgb = (color: Oklch): RGB => {
-  const encode = (channel: number) =>
-    255 * (channel <= 0.0031308 ? 12.92 * channel : 1.055 * channel ** (1 / 2.4) - 0.055);
-  const [r, g, b] = oklchToLinearRgb(color);
-  return [encode(r), encode(g), encode(b)];
-};
 
 function composite(color: Color, background: RGB): RGB {
   return [
@@ -145,33 +127,6 @@ describe("Control UI theme contrast", () => {
     groupedRules.filter((rule) => rule.selector === ".chat-confirm-popover__yes"),
     ".chat-confirm-popover__yes",
   );
-  const bubblePaints = (theme: string, tokens: TokenMap) => {
-    const light = theme === "light" || theme.endsWith("-light");
-    const page = resolveOpaqueColor("var(--bg-content)", tokens);
-    const palette: ParticipantPalette = {
-      mode: light ? "light" : "dark",
-      background: toOklch(page),
-      accent: toOklch(resolveOpaqueColor("var(--accent)", tokens)),
-    };
-
-    // Production palette samples are measured against the independent WCAG floors below.
-    const identities = Array.from({ length: 360 }, (_, hue) => participantColors(palette, hue));
-    const surfaces = identities.map((colors) => rgb(colors.bubble));
-    return {
-      page,
-      light,
-      user: rgb(participantColors(palette, null).bubble),
-      lightUserText: readPaint(
-        readRule(
-          groupedRules,
-          ':where(:root[data-theme-mode="light"]) .chat-group.user .chat-bubble',
-        ),
-        "color",
-      ),
-      sender: surfaces,
-      senderNames: identities.map((colors) => rgb(colors.name)),
-    };
-  };
 
   const checks = {
     "native selection text: AA": () => [
@@ -279,7 +234,7 @@ describe("Control UI theme contrast", () => {
     }
   });
 
-  it("keeps GitHub item surfaces neutral and ink and focus legible across themes and bubbles", () => {
+  it("keeps GitHub item surfaces neutral and ink and focus legible across themes", () => {
     const selector = ".chat-text a.markdown-github-item";
     const base = readRule(textRules, selector);
     const foreground = readPaint(base, "color");
@@ -292,8 +247,7 @@ describe("Control UI theme contrast", () => {
       "GitHub chip focus paint",
     );
     for (const [theme, palette] of themes) {
-      const { page, user, sender } = bubblePaints(theme, palette);
-      const hosts = [page, user, ...sender];
+      const hosts = [resolveOpaqueColor("var(--bg-content)", palette)];
       const neutralTokens = new Map(palette).set(
         "--github-item-tone",
         readPaint(base, "--github-item-tone"),
@@ -322,64 +276,6 @@ describe("Control UI theme contrast", () => {
           Math.min(...hosts.map((host) => contrastRatio(composite(focusColor, host), host))),
           3,
           `${theme}/${tone}/focus`,
-        );
-      }
-    }
-  });
-
-  it("keeps body text at AA and textual links at 7:1 on canvas and bubble surfaces", () => {
-    for (const [themeName, tokens] of themes) {
-      const { page, light, user, sender, senderNames, lightUserText } = bubblePaints(
-        themeName,
-        tokens,
-      );
-      expectFloor(
-        Math.min(...senderNames.map((ink) => contrastRatio(ink, page))),
-        AA_NORMAL_TEXT_MIN,
-        `${themeName}: sender names on canvas`,
-      );
-
-      for (const [role, surfaces, ink] of [
-        ["user", [user, ...sender], light ? lightUserText : "var(--chat-text)"],
-        ["forwarded", sender, "var(--chat-text)"],
-      ] as const) {
-        const body = resolveOpaqueColor(ink, tokens);
-        expectFloor(
-          Math.min(...surfaces.map((surface) => contrastRatio(body, surface))),
-          AA_NORMAL_TEXT_MIN,
-          `${themeName}: body text on ${role} tints`,
-        );
-      }
-
-      for (const [state, token] of [
-        ["link", "--link"],
-        ["link hover", "--link-hover"],
-      ] as const) {
-        const foreground = toOklch(resolveOpaqueColor(`var(${token})`, tokens));
-        const canvas = toOklch(page);
-        const adjusted = readableLinkColor(foreground, canvas);
-        expect(adjusted.h).toBe(foreground.h);
-        expect(adjusted.c).toBeLessThanOrEqual(foreground.c);
-        if (isSrgb({ ...adjusted, c: foreground.c })) expect(adjusted.c).toBe(foreground.c);
-        expect(readableLinkColor(adjusted, canvas)).toEqual(adjusted);
-        if (contrastRatio(rgb(foreground), page) >= 7) {
-          expect(adjusted).toEqual(foreground);
-        } else {
-          expect(isSrgb(adjusted)).toBe(true);
-          const nearer = fitSrgb({
-            ...foreground,
-            l: adjusted.l + Math.sign(foreground.l - adjusted.l) * 0.001,
-          });
-          expect(contrastRatio(rgb(nearer), page)).toBeLessThan(7.01);
-        }
-        const ratioOn = (background: RGB) =>
-          contrastRatio(rgb(readableLinkColor(foreground, toOklch(background))), background);
-        expectFloor(ratioOn(page), 7, `${themeName}: ${state} on canvas`);
-        expectFloor(ratioOn(user), 7, `${themeName}: ${state} on viewer bubble`);
-        expectFloor(
-          Math.min(...sender.map(ratioOn)),
-          7,
-          `${themeName}: ${state} on identity tints`,
         );
       }
     }

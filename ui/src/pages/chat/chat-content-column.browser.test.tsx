@@ -291,9 +291,14 @@ it.each(["light", "dark"])(
       syncControlUiSystemChrome(true);
     });
     const groups = ["alice", "bob"].map((id) =>
-      group(id, "user", "A message. [Guide](https://example.com/guide)", {
-        sender: { id, name: id, identity: { type: "profile", id } },
-      }),
+      group(
+        id,
+        "user",
+        "A message. [Guide](https://example.com/guide) [#1](https://github.com/openclaw/openclaw/issues/1)",
+        {
+          sender: { id, name: id, identity: { type: "profile", id } },
+        },
+      ),
     );
     mountSolid(
       () => (
@@ -335,11 +340,23 @@ it.each(["light", "dark"])(
         .map(Number);
       return 0.2126 * r! + 0.7152 * g! + 0.0722 * b!;
     };
-    const linkContrast = () => {
-      const ink = luminance(getComputedStyle(link).color);
-      const fill = luminance(getComputedStyle(link.closest(".chat-bubble")!).backgroundColor);
-      return (Math.max(ink, fill) + 0.05) / (Math.min(ink, fill) + 0.05);
+    const contrast = (ink: string, fill: string) => {
+      const [first, second] = [ink, fill].map(luminance);
+      return (Math.max(first!, second!) + 0.05) / (Math.min(first!, second!) + 0.05);
     };
+    for (const bubble of root.querySelectorAll<HTMLElement>(".chat-bubble")) {
+      const fill = getComputedStyle(bubble).backgroundColor;
+      expect(
+        contrast(getComputedStyle(bubble.querySelector(".chat-text")!).color, fill),
+      ).toBeGreaterThanOrEqual(4.5);
+      const chip = bubble.querySelector<HTMLElement>(".markdown-github-item")!;
+      chip.focus();
+      expect(chip.matches(":focus-visible")).toBe(true);
+      expect(contrast(getComputedStyle(chip).outlineColor, fill)).toBeGreaterThanOrEqual(3);
+    }
+    expect(
+      contrast(colors("bob").name, getComputedStyle(document.body).backgroundColor),
+    ).toBeGreaterThanOrEqual(4.5);
     const unchanged = colors("alice");
     for (const hover of [false, true]) {
       if (hover) await page.elementLocator(link).hover();
@@ -352,7 +369,12 @@ it.each(["light", "dark"])(
       syncControlUiSystemChrome(true);
       await waitForSolid(() => expect(getComputedStyle(link).color).not.toBe(previousInk));
       await Promise.all(link.getAnimations().map((animation) => animation.finished));
-      expect(linkContrast()).toBeGreaterThanOrEqual(7);
+      expect(
+        contrast(
+          getComputedStyle(link).color,
+          getComputedStyle(link.closest(".chat-bubble")!).backgroundColor,
+        ),
+      ).toBeGreaterThanOrEqual(7);
       expect(colors("alice")).toEqual(unchanged);
     }
     await page.elementLocator(document.body).hover({ position: { x: 0, y: 0 } });
