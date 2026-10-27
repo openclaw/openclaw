@@ -154,7 +154,7 @@ describe("resident profile display and reference catalog", () => {
     expect(current.readCurrentIdentity(profile.id)?.role).toBe("reader");
   });
 
-  it("never opens native storage from an unprepared runtime read", () => {
+  it("never opens native storage from an unprepared runtime read", async () => {
     const options = fixture();
     const profile = ensureProfileForEmail("cold@example.test", options);
     const native = vi.spyOn(stateReads, "withExistingOpenClawStateDatabaseReadOnly");
@@ -165,6 +165,15 @@ describe("resident profile display and reference catalog", () => {
     expect(() => options.display(profile.id)).toThrow("user profile not found");
     expect(native).not.toHaveBeenCalled();
     expect(queries).not.toHaveBeenCalled();
+
+    await prepareCatalog(options);
+    expect(options.display(profile.id).displayName).toBe("cold");
+    queries.mockClear();
+    setDisplayName(profile.id, "Current", options);
+    queries.mockClear();
+    expect(options.display(profile.id).displayName).toBe("Current");
+    expect(queries).not.toHaveBeenCalled();
+    expect(native).not.toHaveBeenCalled();
   });
 
   it("prepares first physical admission after a retained absent catalog without native hydration", async () => {
@@ -644,6 +653,36 @@ describe("resident profile display and reference catalog", () => {
     expect(native).not.toHaveBeenCalled();
   });
 
+  it("tracks committed changes in every database already open before catalog admission", async () => {
+    const firstOptions = fixture();
+    const secondOptions = fixture();
+    const first = ensureProfileForEmail("first-open@example.test", firstOptions);
+    const second = ensureProfileForEmail("second-open@example.test", secondOptions);
+    const target = ensureProfileForEmail("merge-target@example.test", secondOptions);
+    await prepareCatalog(firstOptions);
+    await prepareCatalog(secondOptions);
+    const seen = vi.fn(() => secondOptions.display(second.id));
+    releases.push(onUserProfilesChanged(seen));
+    setDisplayName(first.id, "First current", firstOptions);
+    linkEmail("second-open@example.test", target.id, secondOptions);
+    setDisplayName(second.id, "Second current", secondOptions);
+    expect(seen.mock.results.at(-1)?.value).toMatchObject({
+      id: target.id,
+      displayName: "Second current",
+    });
+
+    const nativeReads = [firstOptions, secondOptions].map(spyOnQueries);
+    expect(firstOptions.display(first.id).displayName).toBe("First current");
+    expect(secondOptions.display(second.id)).toMatchObject({
+      id: target.id,
+      displayName: "Second current",
+    });
+    expect(secondOptions.aliases(second.id)).toEqual(new Set([second.id, target.id]));
+    for (const native of nativeReads) {
+      expect(native).not.toHaveBeenCalled();
+    }
+  });
+
   it("shares one hydration per database across concurrent symlink and canonical readers", async () => {
     const canonical = fixture();
     const [source, target] = createProfiles(canonical, "alias-source", "alias-target");
@@ -652,7 +691,7 @@ describe("resident profile display and reference catalog", () => {
     const alias = fixture("alias.sqlite");
     fs.symlinkSync(canonical.path, alias.path);
     const other = fixture();
-    const [privateProfile, privateTarget] = createProfiles(other, "private", "private-target");
+    const privateProfile = ensureProfileForEmail("private@example.test", other);
     const reads = vi.spyOn(stateReads, "executeExistingOpenClawStateRead");
     const readers = await Promise.all(
       Array.from({ length: 50 }, (_, index) => [
@@ -676,21 +715,6 @@ describe("resident profile display and reference catalog", () => {
       "userProfiles.catalog",
       "userProfiles.catalog",
     ]);
-    const seen = vi.fn(() => other.display(privateProfile.id));
-    releases.push(onUserProfilesChanged(seen));
-    linkEmail("private@example.test", privateTarget.id, other);
-    setDisplayName(privateProfile.id, "Private current", other);
-    expect(seen.mock.results.at(-1)?.value).toMatchObject({
-      id: privateTarget.id,
-      displayName: "Private current",
-    });
-    const otherQueries = spyOnQueries(other);
-    expect(other.display(privateProfile.id).displayName).toBe("Private current");
-    expect(other.aliases(privateProfile.id)).toEqual(
-      new Set([privateProfile.id, privateTarget.id]),
-    );
-    expect(otherQueries).not.toHaveBeenCalled();
-    otherQueries.mockRestore();
     reads.mockClear();
     const { db } = openOpenClawStateDatabase(canonical);
     expect(reads).not.toHaveBeenCalled();

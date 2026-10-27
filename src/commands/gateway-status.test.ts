@@ -9,12 +9,17 @@ import type { inspectGatewayTlsCertificate as InspectGatewayTlsCertificate } fro
 import type { RuntimeEnv } from "../runtime.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import { gatewayStatusCommand } from "./gateway-status.js";
-import { createUnreachableGatewayProbe } from "./gateway-status/test-support.js";
+import {
+  createUnreachableGatewayProbe,
+  createSecretRefGatewayConfig,
+} from "./gateway-status/test-support.js";
 
 const mocks = vi.hoisted(() => {
   const sshStop = vi.fn(async () => {});
   const successfulProbe = (url: string): GatewayProbeResult => {
     const local = url.includes("127.0.0.1");
+    const host = local ? "local" : "remote";
+    const ip = local ? "127.0.0.1" : "100.64.0.2";
     return {
       ok: true,
       url,
@@ -26,18 +31,24 @@ const mocks = vi.hoisted(() => {
         scopes: [local ? "operator.read" : "operator.admin"],
         capability: local ? "read_only" : "admin_capable",
       },
-      server: { version: "2026.4.24" },
+      server: { version: "2026.4.24", connId: host },
       health: { ok: true },
       status: {},
-      presence: null,
+      presence: [
+        {
+          mode: "gateway",
+          reason: "self",
+          host,
+          ip,
+          text: `Gateway: ${host} (${ip}) · app test · mode gateway · reason self`,
+          ts: Date.now(),
+        },
+      ],
       configSnapshot: {
         path: local ? "/tmp/cfg.json" : "/tmp/remote.json",
         exists: true,
         valid: true,
-        config: {
-          gateway: { mode: local ? "local" : "remote" },
-          discovery: { wideArea: { domain: "openclaw.internal" } },
-        },
+        config: { gateway: { mode: local ? "local" : "remote" } },
         issues: [],
         legacyIssues: [],
       },
@@ -260,24 +271,24 @@ describe("gateway-status command", () => {
       primaryTargetId: "localLoopback",
       targets: [
         { id: "explicit", connect: { ok: false, error: "timeout" } },
-        {
-          id: "localLoopback",
-          connect: { ok: true },
-          config: { discovery: { wideAreaEnabled: true } },
-        },
+        { id: "localLoopback", connect: { ok: true } },
       ],
     });
   });
 
   it("prints human output by default", async () => {
     await gatewayStatusCommand({ timeout: "1000" }, capture.runtime);
+
     expect(capture.runtimeErrors).toHaveLength(0);
-    const text = stripAnsi(capture.runtimeLogs.join("\n"));
-    for (const section of ["Gateway Status", "Discovery (this machine)", "Targets"]) {
-      expect(text).toContain(section);
-    }
-    expect(text).toContain("Remote (configured) wss://remote.example:18789");
-    expect(text).toContain("Remote over SSH ws://127.0.0.1:18789");
+    expect(capture.runtimeLogs.join("\n")).toContain("Gateway Status");
+    expect(capture.runtimeLogs.join("\n")).toContain("Discovery (this machine)");
+    expect(capture.runtimeLogs.join("\n")).toContain("Targets");
+    expect(stripAnsi(capture.runtimeLogs.join("\n"))).toContain(
+      "Remote (configured) wss://remote.example:18789",
+    );
+    expect(stripAnsi(capture.runtimeLogs.join("\n"))).toContain(
+      "Remote over SSH ws://127.0.0.1:18789",
+    );
   });
 
   it.each([
@@ -400,9 +411,8 @@ describe("gateway-status command", () => {
     );
 
     expect(capture.runtimeErrors).toHaveLength(0);
+    expect(output()).toMatchObject({ ok: false, primaryTargetId: null });
     expect(output()).toMatchObject({
-      ok: false,
-      primaryTargetId: null,
       warnings: expect.arrayContaining([
         {
           code: "auth_secretref_unresolved",
@@ -436,6 +446,63 @@ describe("gateway-status command", () => {
     expect(capture.runtimeErrors).toHaveLength(0);
     const localProbeCall = requireProbeCall("ws://127.0.0.1:18789");
     expect(localProbeCall.auth?.token).toBeUndefined();
+  });
+
+  it("emits stable SecretRef auth configuration booleans in --json output", async () => {
+    probeGateway.mockImplementation(async (opts: { url: string }) => ({
+      ...mocks.successfulProbe(opts.url),
+      server: undefined,
+      connectLatencyMs: 20,
+      auth: {
+        role: "operator",
+        scopes: ["operator.read"],
+        capability: "read_only",
+      },
+      presence: mocks.successfulProbe("wss://remote.example:18789").presence,
+      configSnapshot: {
+        path: "/tmp/secretref-config.json",
+        exists: true,
+        valid: true,
+        config: {
+          ...createSecretRefGatewayConfig({ gatewayMode: "remote" }),
+          discovery: {
+            wideArea: { domain: "openclaw.internal" },
+          },
+        },
+        issues: [],
+        legacyIssues: [],
+      },
+    }));
+
+    await run();
+
+    expect(capture.runtimeErrors).toHaveLength(0);
+    const parsed = output() as {
+      targets?: Array<Record<string, unknown>>;
+    };
+    const configRemoteTarget = parsed.targets?.find((target) => target.kind === "configRemote");
+    expect(configRemoteTarget?.config).toEqual({
+      discovery: { wideAreaEnabled: true },
+      exists: true,
+      gateway: {
+        authMode: "token",
+        authPasswordConfigured: true,
+        authTokenConfigured: true,
+        bind: null,
+        controlUiBasePath: null,
+        controlUiEnabled: null,
+        mode: "remote",
+        port: null,
+        remotePasswordConfigured: true,
+        remoteTokenConfigured: true,
+        remoteUrl: "wss://remote.example:18789",
+        tailscaleMode: null,
+      },
+      issues: [],
+      legacyIssues: [],
+      path: "/tmp/secretref-config.json",
+      valid: true,
+    });
   });
 
   it("supports SSH tunnel targets", async () => {
@@ -494,35 +561,52 @@ describe("gateway-status command", () => {
     expect(sshStop).toHaveBeenCalledOnce();
   });
 
-  it.each([true, false])("uses local TLS with certificate available=%s", async (available) => {
-    if (!available) {
-      inspectGatewayTlsCertificate.mockResolvedValueOnce({
-        ok: false,
-        error: "gateway tls: failed to load cert (missing certificate)",
-      });
-    }
+  it("uses local TLS target strategy and fingerprint for local loopback probes", async () => {
     readBestEffortConfig.mockResolvedValueOnce(localGatewayConfig("ltok", true) as never);
+
     await run({ timeout: "15000", json: true });
+
     const localProbeCall = requireProbeCall("wss://127.0.0.1:18789");
     expect(localProbeCall.originScopedDeviceAuth).toBeUndefined();
-    expect(localProbeCall.tlsFingerprint).toBe(available ? "sha256:local-fingerprint" : undefined);
+    expect(localProbeCall.tlsFingerprint).toBe("sha256:local-fingerprint");
     expect(localProbeCall.timeoutMs).toBeGreaterThan(0);
     expect(localProbeCall.timeoutMs).toBeLessThanOrEqual(15_000);
     expect(output()).toMatchObject({ network: { localLoopbackUrl: "wss://127.0.0.1:18789" } });
-    if (!available) {
-      expect(output()).toMatchObject({
-        warnings: expect.arrayContaining([
-          expect.objectContaining({
-            code: "local_tls_runtime_unavailable",
-            targetIds: ["localLoopback"],
-            message: expect.stringContaining("gateway tls: failed to load cert"),
-          }),
-        ]),
-      });
-    }
+  });
+
+  it("warns when local TLS is enabled but the certificate fingerprint cannot be loaded", async () => {
+    inspectGatewayTlsCertificate.mockResolvedValueOnce({
+      ok: false,
+      error: "gateway tls: failed to load cert (missing certificate)",
+    });
+    readBestEffortConfig.mockResolvedValueOnce(localGatewayConfig("ltok", true) as never);
+
+    await run({ timeout: "15000", json: true });
+
+    const localProbeCall = requireProbeCall("wss://127.0.0.1:18789");
+    expect(localProbeCall.tlsFingerprint).toBeUndefined();
+
+    expect(output()).toMatchObject({
+      warnings: expect.arrayContaining([
+        expect.objectContaining({
+          code: "local_tls_runtime_unavailable",
+          targetIds: ["localLoopback"],
+          message: expect.stringContaining("gateway tls: failed to load cert"),
+        }),
+      ]),
+    });
   });
 
   it("lets --port select the local probe despite gateway env and configured remote targets", async () => {
+    readBestEffortConfig.mockResolvedValueOnce({
+      gateway: {
+        mode: "remote",
+        port: 18789,
+        remote: { url: "wss://remote.example:18789", token: "rtok" },
+        auth: { mode: "token", token: "ltok" },
+      },
+    } as never);
+
     await withEnvAsync(
       {
         OPENCLAW_GATEWAY_PORT: "19001",
@@ -538,7 +622,13 @@ describe("gateway-status command", () => {
     expect(output()).toMatchObject({
       network: { localLoopbackUrl: "ws://127.0.0.1:19080" },
       primaryTargetId: "localLoopback",
-      targets: [expect.objectContaining({ id: "localLoopback", url: "ws://127.0.0.1:19080" })],
+      targets: [
+        expect.objectContaining({
+          id: "localLoopback",
+          kind: "localLoopback",
+          url: "ws://127.0.0.1:19080",
+        }),
+      ],
     });
   });
 
@@ -652,6 +742,7 @@ describe("gateway-status command", () => {
         ok: true,
         degraded: true,
         capability,
+        timeoutMs: 1000,
         primaryTargetId: "localLoopback",
         warnings: [
           {
@@ -668,6 +759,11 @@ describe("gateway-status command", () => {
             connect: { ok: true, rpcOk: false, scopeLimited, latencyMs: 40, error, close: null },
             auth: { role: "operator", scopes: [scope], capability },
             server: { version: "2026.4.24", buildId: "build-test", connId: "conn-test" },
+            self: null,
+            config: null,
+            health: null,
+            summary: null,
+            presence: null,
           },
         ],
       });

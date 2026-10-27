@@ -416,7 +416,17 @@ describe("sandbox exec preparation failures", () => {
     expect(onSettledBeforeNotify).toHaveBeenCalledExactlyOnceWith(
       expect.objectContaining({ status: "failed", failureKind: "runtime-error" }),
     );
-    expect(events).toMatchObject([{ outcome: "failed", failureKind: "runtime-error" }]);
+    expect(events).toEqual([
+      expect.objectContaining({
+        type: "exec.process.completed",
+        target: "sandbox",
+        mode: "child",
+        outcome: "failed",
+        failureKind: "runtime-error",
+        timedOut: false,
+        sessionKey: "agent:main:sandbox-preparation",
+      }),
+    ]);
   });
 });
 
@@ -560,7 +570,14 @@ describe("runExecProcess PTY fallback", () => {
     );
     const { events, metadata } = captureCompletions();
     const command = "printf super-secret-value";
-    const handle = await runTestExecProcess({ command, workdir: process.cwd() });
+    const handle = await runTestExecProcess({
+      command,
+      workdir: process.cwd(),
+      maxOutput: 20_000,
+      pendingMaxOutput: 20_000,
+      sessionKey: "session-1",
+      timeoutSec: 5,
+    });
 
     await handle.promise;
     await nextImmediate();
@@ -674,7 +691,11 @@ it.each([
   expect(message).toContain("Verify the resulting state before retrying");
   expect(message).toContain("Do not automatically rerun commands unless repeating them is safe");
   expect(enqueueSessionEventMock).toHaveBeenCalledTimes(1);
-  expect(options).toMatchObject({ expectedTarget: { sessionKey: "agent:main:main" } });
+  expect(options).toMatchObject({
+    sessionKey: "agent:main:main",
+    source: "exec",
+    expectedTarget: expect.objectContaining({ sessionKey: "agent:main:main" }),
+  });
   if (head) {
     const loneSurrogate = /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/u;
     expect(message).not.toMatch(loneSurrogate);

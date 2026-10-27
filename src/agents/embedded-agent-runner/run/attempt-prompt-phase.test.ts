@@ -82,6 +82,21 @@ afterEach(() => {
 });
 
 describe("runEmbeddedAttemptPromptPhase", () => {
+  it("submits an unchanged turn without a registered policy gate", async () => {
+    const fixture = createFixture();
+    const manager = guardSessionManager(SessionManager.inMemory());
+    fixture.input.prepared.sessionRuntime.sessionManager = manager;
+    fixture.input.prepared.sessionRuntime.agentSession.hookRunner = null;
+    const write = vi.spyOn(fixture.input.sessionLock, "withOwnedTranscriptWrite");
+
+    await runEmbeddedAttemptPromptPhase(fixture.input, fixture.promptState);
+
+    expect(fixture.readState().promptError).toBeNull();
+    expect(mocks.submitPrompt).toHaveBeenCalledTimes(1);
+    expect(write).not.toHaveBeenCalled();
+    expect(manager.buildSessionContext().messages).toEqual([]);
+  });
+
   it("passes cloned prompt context to a policy without mutating a passing turn", async () => {
     const fixture = createFixture();
     const { activeSession } = fixture.input.prepared.sessionRuntime.agentSession;
@@ -595,45 +610,56 @@ describe("runEmbeddedAttemptPromptPhase", () => {
     expect(mocks.submitPrompt).not.toHaveBeenCalled();
   });
 
+  it("reads yield state after submission fails and publishes abort state before recovery", async () => {
+    const fixture = createFixture();
+    const submissionError = new Error("submission failed");
+    const yieldAbortSettled = Promise.resolve();
+    mocks.submitPrompt.mockImplementation(async () => {
+      fixture.order.push("submit");
+      fixture.yieldState.yieldDetected = true;
+      fixture.yieldState.yieldAbortSettled = yieldAbortSettled;
+      fixture.yieldState.yieldMessage = "yield context";
+      throw submissionError;
+    });
+    mocks.handlePromptError.mockImplementation(async (input: PromptErrorCall) => {
+      fixture.order.push("prompt-error");
+      expect(input.yieldDetected).toBe(true);
+      expect(input.yieldAbortSettled).toBe(yieldAbortSettled);
+      expect(input.yieldMessage).toBe("yield context");
+      input.markYieldAborted();
+      expect(fixture.readState()).toMatchObject({ aborted: false, cleanupYieldAborted: true });
+      return {};
+    });
+
+    await expect(
+      runEmbeddedAttemptPromptPhase(fixture.input, fixture.promptState),
+    ).resolves.toEqual({
+      promptStartedAt: expect.any(Number),
+      transcriptLeafId: "leaf-1",
+    });
+
+    expect(fixture.order.slice(-3)).toEqual(["submit", "prompt-error", "stop-steering"]);
+    expect(fixture.promptState.yieldAborted).toBe(true);
+  });
+
   it.each([
-    { kind: "ok" },
     { kind: "timeout", phase: "prompt", source: "external" },
     { kind: "aborted", source: "external" },
   ] satisfies AgentRunAttemptTerminal[])(
-    "publishes fresh yield state before recovery without replacing $kind authority",
+    "preserves an external $kind when yield cleanup observes the same unwind",
     async (terminal) => {
       const fixture = createFixture();
       fixture.input.state.terminal = terminal;
-      const yieldAbortSettled = Promise.resolve();
-      mocks.submitPrompt.mockImplementationOnce(async () => {
-        fixture.order.push("submit");
-        Object.assign(fixture.yieldState, {
-          yieldDetected: true,
-          yieldAbortSettled,
-          yieldMessage: "yield context",
-        });
-        throw new Error("submission failed");
-      });
+      mocks.submitPrompt.mockRejectedValueOnce(new Error("yield unwind"));
       mocks.handlePromptError.mockImplementationOnce(async (input: PromptErrorCall) => {
-        fixture.order.push("prompt-error");
-        expect(input.yieldDetected).toBe(true);
-        expect(input.yieldAbortSettled).toBe(yieldAbortSettled);
-        expect(input.yieldMessage).toBe("yield context");
         input.markYieldAborted();
-        if (terminal.kind === "ok") {
-          expect(fixture.readState()).toMatchObject({ aborted: false, cleanupYieldAborted: true });
-        } else {
-          expect(fixture.input.state.terminal).toEqual(terminal);
-        }
+        expect(fixture.input.state.terminal).toEqual(terminal);
         return {};
       });
-      await expect(
-        runEmbeddedAttemptPromptPhase(fixture.input, fixture.promptState),
-      ).resolves.toEqual({ promptStartedAt: expect.any(Number), transcriptLeafId: "leaf-1" });
-      if (terminal.kind !== "ok") {
-        expect(fixture.input.state.terminal).toEqual(terminal);
-      }
-      expect(fixture.order.slice(-3)).toEqual(["submit", "prompt-error", "stop-steering"]);
+
+      await runEmbeddedAttemptPromptPhase(fixture.input, fixture.promptState);
+
+      expect(fixture.input.state.terminal).toEqual(terminal);
       expect(fixture.promptState.yieldAborted).toBe(true);
     },
   );
