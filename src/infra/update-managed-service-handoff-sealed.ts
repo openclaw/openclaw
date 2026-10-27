@@ -48,3 +48,5 @@ export {
   resolveUpdateRestartNoticeMeta,
   shouldPublishUpdateRestartNotice,
 } from "./update-restart-notice.js";
+
+export { decodeUtf8Input, Utf8InputError } from "./utf8-input.js";
