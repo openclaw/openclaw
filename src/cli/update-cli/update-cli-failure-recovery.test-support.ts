@@ -99,6 +99,9 @@ export function registerForegroundFailureRecoveryTests(deps: {
             ],
           }),
           expect.objectContaining({ name: "gateway recovery observation", exitCode: 0 }),
+          ...(handoff === undefined
+            ? [expect.objectContaining({ name: "recovery-artifact-cleanup", exitCode: 0 })]
+            : []),
         ],
       });
       expect(deps.updateNpmInstalledPlugins).not.toHaveBeenCalled();
