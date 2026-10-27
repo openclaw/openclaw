@@ -82,6 +82,11 @@ export const DESKTOP: WorkerDesktopEndpoint = {
   ],
 };
 export const BUNDLE_HASH = "a".repeat(64);
+export const BOOTSTRAP_RECEIPT = {
+  bundleHash: BUNDLE_HASH,
+  openclawVersion: "2026.7.2",
+  protocolFeatures: [],
+};
 export const NODE_BOOTSTRAP: WorkerNodeEnrollment["nodeBootstrap"] = {
   url: `https://gateway.example.test/__openclaw__/worker-bootstrap/artifacts/${"b".repeat(64)}`,
   token: "t".repeat(43),
@@ -91,26 +96,19 @@ export const NODE_BOOTSTRAP: WorkerNodeEnrollment["nodeBootstrap"] = {
   enabledPluginIds: ["runtime-plugin"],
 };
 export const BUNDLE_ARTIFACT: Extract<WorkerInstallationArtifact, { install: "bundle" }> = {
-  install: "bundle",
-  bundleHash: BUNDLE_HASH,
-  openclawVersion: "2026.7.2",
+  ...BOOTSTRAP_RECEIPT,
   protocolFeatures: [],
+  install: "bundle",
   tarballBytes: 1,
   tarballSha256: "b".repeat(64),
   tarballPath: "/gateway/cache/worker-bundle.tgz",
 };
 export const NPM_ARTIFACT: WorkerInstallationArtifact = {
+  ...BOOTSTRAP_RECEIPT,
+  protocolFeatures: [],
   install: "npm",
-  bundleHash: BUNDLE_HASH,
-  openclawVersion: "2026.7.2",
   packageIntegrity: `sha512-${Buffer.alloc(64).toString("base64")}`,
-  protocolFeatures: [],
   packageSpec: "openclaw@2026.7.2",
-};
-export const BOOTSTRAP_RECEIPT = {
-  bundleHash: BUNDLE_HASH,
-  openclawVersion: "2026.7.2",
-  protocolFeatures: [],
 };
 export const CREDENTIAL = ["worker", "credential", "fixture"].join("-");
 const LIVE_EVENT_ACK = { ok: true as const, result: { ackedSeq: 1 } };
@@ -141,6 +139,16 @@ export const testState = {} as {
   bootstrapWorker: WorkerEnvironmentServiceOptions["bootstrapWorker"];
 };
 
+async function openWorkerEnvironmentStore() {
+  testState.stateDb = openOpenClawStateDatabase({
+    env: { OPENCLAW_STATE_DIR: testState.root },
+  });
+  testState.store = await createWorkerEnvironmentStore({
+    database: testState.stateDb,
+    now: () => testState.nowMs,
+  });
+}
+
 export function setupWorkerEnvironmentServiceSuite(
   configureConfig?: (config: OpenClawConfig, root: string) => void,
 ) {
@@ -149,24 +157,13 @@ export function setupWorkerEnvironmentServiceSuite(
     testState.root = await fs.mkdtemp(
       path.join(await fs.realpath(os.tmpdir()), "openclaw-worker-service-"),
     );
-    testState.stateDb = openOpenClawStateDatabase({
-      env: { OPENCLAW_STATE_DIR: testState.root },
-    });
     testState.nowMs = 1_000;
     testState.providersEnabled = true;
-    testState.store = await createWorkerEnvironmentStore({
-      database: testState.stateDb,
-      now: () => testState.nowMs,
-    });
+    await openWorkerEnvironmentStore();
     testState.config = {
       cloudWorkers: {
         desktop: true,
-        profiles: {
-          development: {
-            provider: "fake",
-            settings: { region: "test" },
-          },
-        },
+        profiles: { development: { provider: "fake", settings: { region: "test" } } },
       },
     };
     configureConfig?.(testState.config, testState.root);
@@ -220,13 +217,7 @@ export async function reopenWorkerEnvironmentStore() {
   await testState.service?.stop();
   testState.service = undefined;
   await closeWorkerEnvironmentDatabase();
-  testState.stateDb = openOpenClawStateDatabase({
-    env: { OPENCLAW_STATE_DIR: testState.root },
-  });
-  testState.store = await createWorkerEnvironmentStore({
-    database: testState.stateDb,
-    now: () => testState.nowMs,
-  });
+  await openWorkerEnvironmentStore();
 }
 
 export function createService(
@@ -455,13 +446,7 @@ export function transcriptRequest(
     runEpoch: identity.ownerEpoch,
     seq: 1,
     baseLeafId: null,
-    messages: [
-      {
-        role: "user",
-        content: [{ type: "text", text }],
-        timestamp: 1,
-      },
-    ],
+    messages: [{ role: "user", content: [{ type: "text", text }], timestamp: 1 }],
     ...overrides,
   };
 }

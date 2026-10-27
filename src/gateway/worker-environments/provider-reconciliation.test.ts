@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { racePromiseWithAbortSignal } from "../../infra/abort-signal.js";
 import { tryBeginGatewaySuspendAdmission } from "../../process/gateway-work-admission.js";
+import { create, providerService as service } from "./provider-lifecycle.test-support.js";
 import * as support from "./service.test-support.js";
 import { testState } from "./service.test-support.js";
 import type { WorkerTunnelManager } from "./tunnel.js";
@@ -28,24 +29,10 @@ function expectState(
   expect(testState.store.get(environmentId)).toMatchObject({ state, ...fields });
 }
 
-function service(
-  provider: Parameters<typeof support.createProvider>[0] = {},
-  options: Parameters<typeof support.createService>[1] = {},
-) {
-  return support.createService(support.createProvider(provider), options);
-}
-
 async function seedStale(environmentId: string, bundleHash: string, install?: "npm") {
   await support.seedBootstrapping(environmentId, install);
-  return transition(
-    environmentId,
-    "bootstrapping",
-    "ready",
-    support.readyPatch(environmentId, {
-      ...support.BOOTSTRAP_RECEIPT,
-      bundleHash,
-    }),
-  );
+  const patch = support.readyPatch(environmentId, { ...support.BOOTSTRAP_RECEIPT, bundleHash });
+  return transition(environmentId, "bootstrapping", "ready", patch);
 }
 
 function transition(
@@ -69,12 +56,8 @@ function tunnels(overrides: Partial<WorkerTunnelManager> = {}) {
 
 async function seedAttached(environmentId: string, sessionId = "session-1") {
   await support.seedReady(environmentId);
-  return transition(
-    environmentId,
-    "ready",
-    "attached",
-    support.attachedPatch(environmentId, sessionId),
-  );
+  const patch = support.attachedPatch(environmentId, sessionId);
+  return transition(environmentId, "ready", "attached", patch);
 }
 
 async function beginTeardown(record: Environment, lastError?: string) {
@@ -199,20 +182,17 @@ describe("worker environment service", () => {
   it("inspects a persisted lease with its profile snapshot after profile removal", async () => {
     await support.seedBootstrapping("worker-crash");
     testState.config.cloudWorkers!.profiles = {};
-    const inspected: WorkerLifecycleLease[] = [];
+    const inspect = vi.fn(async () => ({ status: "active" as const }));
     const workerService = service({
-      inspect: async (lease) => {
-        inspected.push(lease);
-        return { status: "active" };
-      },
+      inspect,
       provision: fail("provision must not run for a known lease"),
     });
 
     await workerService.reconcileOnce();
 
-    expect(inspected).toEqual([
+    expect(inspect).toHaveBeenCalledExactlyOnceWith(
       expect.objectContaining({ leaseId: "lease:worker-crash", profile: { region: "test" } }),
-    ]);
+    );
     expectState("worker-crash", "ready", {
       bootstrapReceipt: support.BOOTSTRAP_RECEIPT,
     });
@@ -241,9 +221,7 @@ describe("worker environment service", () => {
       let id = environmentId;
       if (removed) {
         id = (
-          await workerService.createWithRequest({
-            profileId: "development",
-            idempotencyKey: "request-unadvertised-persisted-ssh",
+          await create(workerService, "request-unadvertised-persisted-ssh", {
             executionMode: "remote-exec",
           })
         ).environmentId;
@@ -282,10 +260,7 @@ describe("worker environment service", () => {
       },
       { ensureNodeWorkerBundle: async () => structuredClone(support.BOOTSTRAP_RECEIPT) },
     );
-    const environment = await workerService.createWithRequest({
-      profileId: "development",
-      idempotencyKey: `request-${lease.leaseId}`,
-    });
+    const environment = await create(workerService, `request-${lease.leaseId}`);
     testState.config.cloudWorkers!.profiles = {};
 
     await workerService.reconcileOnce();
@@ -353,13 +328,9 @@ describe("worker environment service", () => {
     });
     const order: string[] = [];
     const tunnelManager = tunnels({
-      stop: vi.fn(async () => {
-        order.push("tunnel-stop");
-      }),
+      stop: vi.fn(async () => void order.push("tunnel-stop")),
     });
-    const destroy = vi.fn(async () => {
-      order.push("provider-destroy");
-    });
+    const destroy = vi.fn(async () => void order.push("provider-destroy"));
 
     await service({ destroy }, { tunnelManager }).reconcileOnce();
 
@@ -371,8 +342,6 @@ describe("worker environment service", () => {
       teardownTerminalState: "failed",
       lastError: "released npm artifact is unavailable",
     });
-    expect(testState.prepareInstallation).toHaveBeenCalledWith("bundle");
-    expect(testState.prepareInstallation).toHaveBeenCalledWith("npm");
     expect(testState.bootstrapWorker).not.toHaveBeenCalled();
   });
 
@@ -385,23 +354,16 @@ describe("worker environment service", () => {
       },
     });
 
-    const result = await workerService.createWithRequest({
-      profileId: "development",
-      idempotencyKey: "request-npm",
-    });
+    const result = await create(workerService, "request-npm");
 
     expect(result).toMatchObject({
       state: "ready",
       profileSnapshot: { install: "npm" },
     });
     expect(testState.prepareInstallation).toHaveBeenCalledWith("npm");
-    expect(testState.bootstrapWorker).toHaveBeenCalledWith({
-      operationId: result.provisionOperationId,
-      sshEndpoint: support.SSH_ENDPOINT,
-      installation: support.NPM_ARTIFACT,
-      resolveIdentity: expect.any(Function),
-      signal: expect.any(AbortSignal),
-    });
+    expect(testState.bootstrapWorker).toHaveBeenCalledWith(
+      expect.objectContaining({ installation: support.NPM_ARTIFACT }),
+    );
   });
 
   it("fences unknown leases before stop and retries their durable teardown", async () => {

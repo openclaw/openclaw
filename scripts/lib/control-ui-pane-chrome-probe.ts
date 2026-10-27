@@ -46,9 +46,10 @@ export function installPaneChromeProbe() {
       }
       nodes++;
       nodeRegions.set(element, region);
-      add(
-        `<${element.localName}:${[...element.classList].filter((name) => !name.endsWith("--disabled")).join(".")}>`,
-      );
+      add(`<${element.localName}:${element.classList.value}>`);
+      if (element.matches(".chat-controls__inline-select-trigger")) {
+        add(`${style.opacity}:${style.color}:${style.cursor}`);
+      }
       if (element instanceof HTMLImageElement) {
         add(element.getAttribute("src") ?? "");
       }

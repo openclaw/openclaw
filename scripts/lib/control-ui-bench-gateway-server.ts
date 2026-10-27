@@ -55,6 +55,7 @@ export async function startControlUiBenchGatewayServer(
 
   let currentRoot = await prepareRoot(outDir);
   let preloadHeadersEnabled = true;
+  let terminalEnabled = false;
   let closing: Promise<void> | undefined;
   const requests: Array<{ method: string; url: string; navigationPreload: boolean }> = [];
   const serve = (request: IncomingMessage, response: ServerResponse) => {
@@ -92,7 +93,7 @@ export async function startControlUiBenchGatewayServer(
     // Match the synthetic Gateway fixture; a document/bootstrap mismatch triggers a reload.
     void handleControlUiHttpRequest(request, response, {
       root: currentRoot,
-      terminalEnabled: false,
+      terminalEnabled,
     }).then(
       (handled) => {
         if (!handled) {
@@ -135,6 +136,9 @@ export async function startControlUiBenchGatewayServer(
     requests,
     setPreloadHeadersEnabled(enabled: boolean) {
       preloadHeadersEnabled = enabled;
+    },
+    setTerminalEnabled(enabled: boolean) {
+      terminalEnabled = enabled;
     },
     setFixtureReader(reader: typeof readFixture) {
       readFixture = reader;

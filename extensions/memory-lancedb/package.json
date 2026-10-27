@@ -12,8 +12,8 @@
   ],
   "dependencies": {
     "apache-arrow": "21.2.0",
-    "openai": "7.35.0",
-    "typebox": "1.4.1"
+    "openai": "7.39.0",
+    "typebox": "1.4.2"
   },
   "devDependencies": {
     "@lancedb/lancedb": "0.40.0",

@@ -426,11 +426,17 @@
     --scrollbar-size: 8px;
     --scrollbar-thumb-inset: 1px;
 
-    /* Count the native gutter inside the text inset, including before overflow. */
-    padding-inline-end: calc(var(--chat-composer-editor-inset-inline) - var(--scrollbar-size));
-    scrollbar-gutter: stable;
+    /* Short drafts use padding: reserving a native gutter makes every edit relayout slower. */
+    padding-inline-end: var(--chat-composer-editor-inset-inline);
+    scrollbar-gutter: auto;
     scrollbar-width: auto;
     scrollbar-color: auto;
+  }
+
+  .agent-chat__composer-combobox > textarea:where([data-composer-scrollable]) {
+    /* Exchange the same inset for a real gutter without changing the text width. */
+    padding-inline-end: calc(var(--chat-composer-editor-inset-inline) - var(--scrollbar-size));
+    scrollbar-gutter: stable;
   }
 
   .agent-chat__composer-combobox > textarea::-webkit-scrollbar-track {

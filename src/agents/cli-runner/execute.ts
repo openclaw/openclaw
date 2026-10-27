@@ -205,8 +205,8 @@ export async function executePreparedCliRun(
     ? baseArgs.map((entry) => entry.replaceAll("{sessionId}", resolvedSessionId ?? ""))
     : baseArgs;
   const baseArgsWithSkills =
-    !nodePlacement && context.claudeSkillsPluginArgs.length > 0
-      ? [...resolvedArgs, ...context.claudeSkillsPluginArgs]
+    !nodePlacement && context.claudeSkillsPlugin.args.length > 0
+      ? [...resolvedArgs, ...context.claudeSkillsPlugin.args]
       : resolvedArgs;
 
   const cliLiveOwnerKey = buildCliLiveOwnerKey(params);

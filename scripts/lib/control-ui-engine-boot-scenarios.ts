@@ -1,6 +1,8 @@
 import type { Page } from "playwright";
 import type { UiSettings } from "../../ui/src/app/settings-contract.ts";
+import type { ColdLoadRpcRecord } from "../../ui/src/test-helpers/control-ui-cold-load-probe-init.ts";
 import { createColdLoadProbeInitScript } from "../../ui/src/test-helpers/control-ui-cold-load-probes.ts";
+import type { MockGatewayControls } from "../../ui/src/test-helpers/control-ui-e2e.ts";
 import { controlUiSessionPath } from "../../ui/src/test-helpers/control-ui-e2e.ts";
 import { createStreamingReplyProbeInitScript } from "../../ui/src/test-helpers/control-ui-streaming-reply.ts";
 import { frames } from "./control-ui-interaction-navigation.ts";
@@ -13,12 +15,19 @@ const sessionKey = "agent:main:interaction-a";
 const activePane = ".chat-pane-cache__pane--active";
 const composerSelector = `${activePane} .agent-chat__composer-combobox textarea`;
 
-export type EngineScenario = InteractionScenario & {
+export type EngineScenario = Omit<InteractionScenario, "run"> & {
   /** A fresh context stays unnavigated until the measured action starts. */
   navigation?: "measured" | "reload";
   /** Append to the mock Gateway's init script, preserving WebSocket wrapper order. */
   initScript?: string;
   settings?: Partial<UiSettings>;
+  /** Opt-in post-GC checkpoints; excluded from latency comparisons. */
+  memory?: boolean;
+  run: (
+    page: Page,
+    gateway: MockGatewayControls,
+    checkpoint?: (label: string) => Promise<void>,
+  ) => Promise<void | InteractionEvidence>;
 };
 
 export function createEngineTranscript(messages: number) {
@@ -94,8 +103,80 @@ export async function waitForEngineTranscript(
       : undefined;
     const key = pane ? Reflect.get(pane, "sessionKey") : undefined;
     const snapshot = cache && [...cache].find(([stored]) => stored.endsWith(`\u0000${key}`));
+    const milestones: { transcriptMs: number; composerMs: number; readyMs: number } = Reflect.get(
+      window,
+      "__engineBootReadiness",
+    );
+    const phases: InteractionEvidence = {
+      paintTimingSupported: PerformanceObserver.supportedEntryTypes.includes("paint"),
+      fontsLoadingAtCapture: document.fonts.status === "loading",
+    };
+    // SAFETY: Navigation and resource entries expose their category-specific timing fields.
+    const navigation = performance.getEntriesByType("navigation")[0] as
+      | PerformanceNavigationTiming
+      | undefined;
+    // SAFETY: The resource entry category contains only PerformanceResourceTiming entries.
+    const resources = performance.getEntriesByType("resource") as PerformanceResourceTiming[];
+    if (navigation) {
+      for (const [name, value] of Object.entries({
+        documentResponseStartMs: navigation.responseStart,
+        documentResponseEndMs: navigation.responseEnd,
+        domInteractiveMs: navigation.domInteractive,
+        domContentLoadedMs: navigation.domContentLoadedEventEnd,
+        documentLoadMs: navigation.loadEventEnd,
+      })) {
+        if (value > 0) {
+          phases[name] = value;
+        }
+      }
+    }
+    for (const entry of performance.getEntriesByType("paint")) {
+      if (entry.name === "first-paint" || entry.name === "first-contentful-paint") {
+        phases[entry.name === "first-paint" ? "firstPaintMs" : "firstContentfulPaintMs"] =
+          entry.startTime;
+      }
+    }
+    for (const [kind, extension] of [
+      ["js", /\.m?js$/u],
+      ["css", /\.css$/u],
+      ["font", /\.(?:woff2?|ttf|otf)$/u],
+    ] as const) {
+      // ResourceTiming exposes completed requests, not in-flight preloads at readiness.
+      const completed = resources.filter(
+        (entry) =>
+          entry.responseEnd <= milestones.readyMs && extension.test(new URL(entry.name).pathname),
+      );
+      phases[`${kind}RequestsCompletedByReady`] = completed.length;
+      if (completed.length) {
+        phases[`${kind}LastResponseByReadyMs`] = Math.max(
+          ...completed.map((entry) => entry.responseEnd),
+        );
+        for (const field of ["encodedBodySize", "transferSize"] as const) {
+          if (completed.some((entry) => entry[field] > 0)) {
+            phases[`${kind}${field === "encodedBodySize" ? "Encoded" : "Transfer"}BytesByReady`] =
+              completed.reduce((sum, entry) => sum + entry[field], 0);
+          }
+        }
+      }
+    }
+    const { rpcs }: { rpcs: ColdLoadRpcRecord[] } = Reflect.get(window, "__coldLoad").read();
+    for (const [kind, method] of [
+      ["connect", "connect"],
+      ["history", "sessions.messages.subscribe"],
+    ] as const) {
+      const rpc = rpcs.find((entry) => entry.method === method && !entry.abandoned);
+      if (rpc) {
+        phases[`${kind}RequestMs`] = rpc.requestMs;
+        phases[`${kind}ResponseMs`] = rpc.responseMs;
+        phases[`${kind}RoundTripMs`] = rpc.ms;
+        if (rpc.dispatchMs !== undefined) {
+          phases[`${kind}DispatchMs`] = rpc.dispatchMs;
+        }
+      }
+    }
     return {
-      ...Reflect.get(window, "__engineBootReadiness"),
+      ...milestones,
+      ...phases,
       messages: snapshot?.[1].snapshot.messages.length ?? 0,
       mountedRows: pane?.querySelectorAll(".chat-virtual-row").length ?? 0,
       composerReady: input !== null && input !== undefined && !input.disabled,

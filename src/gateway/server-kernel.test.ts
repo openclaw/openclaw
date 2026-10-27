@@ -467,11 +467,8 @@ describe("createGatewayKernel", () => {
       expect(closeTransport).not.toHaveBeenCalled();
       expectCalls(0, lifetimeSidecar.stop, lateGeneralSidecar.stop, latePostReadySidecar.stop);
       lateConnectionSidecar.release();
-      await vi.waitFor(() => {
-        expect(lifetimeSidecar.stop).toHaveBeenCalledOnce();
-      });
-      expect(closeTransport).toHaveBeenCalledOnce();
-      expect(connectionSidecar.stop).toHaveBeenCalledOnce();
+      await vi.waitFor(() => expect(lifetimeSidecar.stop).toHaveBeenCalledOnce());
+      expectCalls(1, closeTransport, connectionSidecar.stop);
       expect(() => kernel?.registerConnectionDependentSidecars(lateConnectionSidecar)).toThrow(
         "cannot publish a Gateway sidecar after shutdown sealed its owner",
       );
@@ -482,17 +479,13 @@ describe("createGatewayKernel", () => {
 
       await expect(reentrantStop).resolves.toBeUndefined();
       await expect(lateStop).resolves.toBeUndefined();
-      await vi.waitFor(() => {
-        expect(postReadySidecar.stop).toHaveBeenCalledOnce();
-      });
+      await vi.waitFor(() => expect(postReadySidecar.stop).toHaveBeenCalledOnce());
       const lateLifetimeSidecar = blockedSidecar(false);
       kernel.registerGatewayLifetimeSidecars(lateLifetimeSidecar);
       const markClosed = vi.fn();
       void closing.then(markClosed, markClosed);
       postReadySidecar.release();
-      await vi.waitFor(() => {
-        expect(closePreludeReached).toHaveBeenCalledOnce();
-      });
+      await vi.waitFor(() => expect(closePreludeReached).toHaveBeenCalledOnce());
       expect(markClosed).not.toHaveBeenCalled();
       const duringSealSidecar = idleSidecar();
       kernel.registerGatewayLifetimeSidecars(duringSealSidecar);
@@ -536,8 +529,7 @@ describe("createGatewayKernel", () => {
           cause: persistentError,
         })),
       });
-      expect(persistentStop).toHaveBeenCalledOnce();
-      expect(successfulPeer.stop).toHaveBeenCalledOnce();
+      expectCalls(1, persistentStop, successfulPeer.stop);
       expect(kernel.runtimeState.gatewayLifetimeSidecars.snapshot()).toEqual([persistentSidecar]);
 
       await expect(kernel.closeOnStartupFailure()).resolves.toBeUndefined();

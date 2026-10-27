@@ -50,6 +50,10 @@ function streamScenario(options: {
     ...(reply.text.match(/^export (?:function|const) .+$/gmu) ?? []),
     ...(reply.text.match(/^## .+$/gmu) ?? []).map((heading) => heading.slice(3)),
   ];
+  const finalSuffix = reply.growingTool
+    ? "Streaming code complete."
+    : "The result is ready for the next checkpoint.";
+  const endingCount = reply.text.split(finalSuffix).length;
   const streams = [sessionKey, secondSessionKey].slice(0, options.panes ?? 1).map((key, i) => ({
     sessionKey: key,
     runId: `engine-streaming-run-${i}`,
@@ -185,9 +189,7 @@ function streamScenario(options: {
             ),
           {
             selector: panes,
-            ending: reply.growingTool
-              ? "Streaming code complete."
-              : "The result is ready for the next checkpoint.",
+            ending: finalSuffix,
           },
         );
         await frames(page);
@@ -213,7 +215,10 @@ function streamScenario(options: {
         throw new Error("Streaming lost native composer input");
       }
       for (const pane of result.panes) {
-        if (expectedParts.some((part) => !pane.finalText?.includes(part))) {
+        if (
+          expectedParts.some((part) => !pane.finalText?.includes(part)) ||
+          pane.finalText?.split(finalSuffix).length !== endingCount
+        ) {
           throw new Error("Streaming lost completed reply content");
         }
         if (

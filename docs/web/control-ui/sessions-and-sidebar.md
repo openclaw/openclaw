@@ -302,9 +302,11 @@ cancellation or a Gateway restart interrupts that wait,
 the message stays readable with its recorded disposition and is never resent
 automatically. Stopped messages stay at their original time in the conversation,
 before messages sent later; only inputs still waiting to run stay at the live edge.
-Copy a stopped message into the composer to start a new attempt. **Show earlier
-messages** pages through messages that are still waiting or were stopped before
-processing; **Show latest messages** returns to the newest page. Incoming activity
+Copy a stopped message into the composer to start a new attempt. When there are
+more of these messages than fit on one page, **Show earlier unsent messages**
+appears at the top of the conversation once all earlier history has loaded; it
+pages through messages that are still waiting or were stopped before processing,
+and **Show latest unsent messages** returns to the newest page. Incoming activity
 refreshes the page you are reading without changing your selection. A long message
 uses the normal full-message reader without becoming a transcript reply, fork,
 or rewind target.
@@ -786,6 +788,10 @@ The folder defaults to the agent workspace. Write-scoped connections can browse,
 Leave **From** empty to fetch `origin` when creating the worktree and use its default branch. The placeholder is a suggestion, not a saved branch selection. Explicitly selected or saved branches and commits are used as entered without fetching; selecting local `main` uses that local branch, which can lag behind `origin/main`. If fetching or resolving the remote default fails, the Gateway falls back to the source checkout's `HEAD`.
 
 ### Start a native coding CLI
+
+The actions beside **Codex** and **Claude Code** appear on hover or keyboard
+focus, and stay visible on touch screens. The main **Filter & sort** button
+stays visible independently of these catalog actions.
 
 The **+** beside **Codex** or **Claude Code** opens a native CLI draft, not an
 OpenClaw Chat. Choose the machine and folder, optionally enter a first prompt,
