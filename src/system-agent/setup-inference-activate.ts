@@ -595,6 +595,16 @@ async function verifyAndActivateCandidate(
       write: async (_candidate, { writeOptions, captureUndo }) => {
         const { transformConfigWithPendingPluginInstalls: transform } =
           await import("../plugins/install-record-commit.js");
+        const captureFileUndo = (base: ConfigFileSnapshot, written: OpenClawConfig) =>
+          captureUndo(
+            captureSetupInferenceFileUndo(
+              {
+                ...base,
+                sourceConfig: stripPendingPluginInstallRecords(base.sourceConfig),
+              },
+              stripPendingPluginInstallRecords(written),
+            ),
+          );
         const committed = await transform({
           base: "source",
           writeOptions,
@@ -604,18 +614,16 @@ async function verifyAndActivateCandidate(
             throwIfSetupInferenceCancelled(params);
             params.onCommitStarted?.(current);
             const nextConfig = buildCandidate(current);
-            captureUndo(
-              captureSetupInferenceFileUndo(
-                {
-                  ...context.snapshot,
-                  sourceConfig: stripPendingPluginInstallRecords(context.snapshot.sourceConfig),
-                },
-                stripPendingPluginInstallRecords(nextConfig),
-              ),
-            );
+            // Covers a write that fails after persisting; success replaces it below.
+            captureFileUndo(context.snapshot, nextConfig);
             return { nextConfig };
           },
         });
+        // Undo what reached disk: the write pipeline adds metadata the candidate lacks.
+        captureFileUndo(
+          committed.snapshot,
+          committed.persistedSourceConfig ?? committed.nextConfig,
+        );
         return committed.nextConfig;
       },
     };

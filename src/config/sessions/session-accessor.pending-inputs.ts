@@ -11,6 +11,7 @@ import {
   getAgentEventLifecycleGeneration,
   assertAgentRunLifecycleGenerationCurrent,
 } from "../../infra/agent-events.js";
+import { observeDiagnosticsTimelinePhases } from "../../infra/diagnostics-timeline.js";
 import { throwIfSettledRejected } from "../../infra/error-graph-internal.js";
 import { hasSqliteWorkerOutcomeUnknown } from "../../infra/sqlite-worker-contract.js";
 import type { PersistedUserTurnMessage } from "../../sessions/user-turn-transcript.types.js";
@@ -302,6 +303,7 @@ async function stagePreparedPendingInput(
   lifecycleGeneration: string,
   store: Awaited<ReturnType<typeof preparePendingInputStore>>,
 ): Promise<SessionPendingInputReceipt | undefined> {
+  using phase = observeDiagnosticsTimelinePhases("persist.stage.read");
   let retained = false;
   let finished = false;
   let owner: SessionPendingInputOwner | undefined;
@@ -311,6 +313,7 @@ async function stagePreparedPendingInput(
     guard: () => void,
     assertSourceCurrent = store.assertCurrent,
   ) => {
+    using _ = observeDiagnosticsTimelinePhases("persist.stage.commitAuthority");
     if (options.authority) {
       if (!facts?.authority) {
         throw new Error("Pending input grant omitted its current session authority");
@@ -337,6 +340,7 @@ async function stagePreparedPendingInput(
     if (snapshot.kind !== "stage") {
       throw new Error("Pending input read returned a different operation");
     }
+    phase.mark("persist.stage.authority");
     await assertCurrent();
     assertAgentRunLifecycleGenerationCurrent(lifecycleGeneration);
     if (!snapshot.current) {
@@ -557,9 +561,11 @@ async function stagePreparedPendingInput(
       // Replays have committed bytes but still need execution and completion custody.
       return Object.assign(ownerReceipt(owner, true), completionMethods, recovery);
     }
+    phase.mark("persist.stage.sourceAuthority");
     return await runWithSessionSourceScope(
       existing ? undefined : options.assertFreshInputCurrent,
       async () => {
+        phase.mark("persist.stage.message");
         const prepareMessage = () => {
           options.assertCurrent();
           options.assertFreshInputCurrent?.();
@@ -582,6 +588,7 @@ async function stagePreparedPendingInput(
         }
         const inputId = existing?.input_id ?? randomUUID();
         const assertAdmittedCurrent = options.assertAdmittedCurrent ?? options.assertCurrent;
+        phase.mark("persist.stage.commit");
         await store.mutate(
           {
             ...settlementIdentity(),
@@ -602,6 +609,7 @@ async function stagePreparedPendingInput(
             });
           },
           (facts, assertSourceCurrent) => {
+            using _ = observeDiagnosticsTimelinePhases("persist.stage.publication");
             const staged = facts?.receipt.stagedInput;
             if (!staged) {
               throw new SessionPendingInputCustodyError(

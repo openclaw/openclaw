@@ -1,5 +1,6 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import { toErrorObject } from "@openclaw/normalization-core/error-coercion";
+import { observeDiagnosticsTimelinePhases } from "../../infra/diagnostics-timeline.js";
 import { wrapSqliteWorkerError } from "../../infra/sqlite-worker-contract.js";
 import type { UserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.types.js";
 import type { AgentDatabaseRequestExecutionSource } from "../../state/openclaw-agent-execution-admission-contract.js";
@@ -195,7 +196,9 @@ export async function getSessionInputActor(
     }
     return undefined;
   }
+  using acquisitionPhase = observeDiagnosticsTimelinePhases("session.inputActor.acquire");
   const acquired = await binding.acquire();
+  acquisitionPhase[Symbol.dispose]();
   if (!acquired) {
     return undefined;
   }
