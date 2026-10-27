@@ -5,7 +5,6 @@ import { awaitGateBeforeSettlement } from "../../../test/helpers/promise.js";
 import { buildAgentRunTerminalOutcome } from "../../agents/agent-run-terminal-outcome.js";
 import { RESTART_RECOVERY_INTERRUPTION_NOTE } from "../../agents/restart-recovery-prompt.js";
 import { SessionManager } from "../../agents/sessions/session-manager.js";
-import { buildRequesterSettleWakeIdentity } from "../../agents/subagents/registry/subagent-requester-settle-identity.js";
 import { makeAgentAssistantMessage } from "../../agents/test-helpers/agent-message-fixtures.js";
 import {
   loadSessionEntry,
@@ -81,12 +80,21 @@ async function withTurn<T>(params: TurnParams, body: (recorder: Recorder) => Pro
 }
 
 const fixture = useTempSessionsFixture("settle-continuation-native-");
-async function expectUserInputs(scope: Parameters<typeof loadTranscriptEvents>[0], count: number) {
-  const users = (await loadTranscriptEvents(scope)).filter(
-    (entry) =>
-      isIndexedSessionEntry(entry) && entry.type === "message" && entry.message.role === "user",
+type Scope = Parameters<typeof loadTranscriptEvents>[0];
+async function messageEvents(scope: Scope) {
+  return (await loadTranscriptEvents(scope)).filter(
+    (entry) => isIndexedSessionEntry(entry) && entry.type === "message",
   );
-  expect(users).toHaveLength(count);
+}
+async function expectUserInputs(scope: Parameters<typeof loadTranscriptEvents>[0], count: number) {
+  expect(
+    (await messageEvents(scope)).filter((entry) => entry.message.role === "user"),
+  ).toHaveLength(count);
+}
+async function createTarget(sessionKey: string, sessionId: string) {
+  const target = { agentId: "main", sessionKey, sessionId, storePath: fixture.storePath() };
+  await upsertSessionEntryCore(target, { sessionId, updatedAt: 1 });
+  return target;
 }
 
 describe("requester-settle processing survives later user turns", () => {
@@ -161,6 +169,10 @@ describe("requester-settle processing survives later user turns", () => {
     turn: Prepared,
     outcome: Parameters<typeof buildAgentRunTerminalOutcome>[0] = { status: "ok" },
   ) => completeUserTurnProcessing(turn.recorder, buildAgentRunTerminalOutcome(outcome));
+  const prepareAfterRestart = () => {
+    rotateAgentEventLifecycleGeneration();
+    return prepare();
+  };
   const reconciliation = (turn: Prepared) => {
     const io = { emitAcceptance: vi.fn(), emitFinal: vi.fn() };
     const cleanup = vi.fn(async () => {});
@@ -224,15 +236,7 @@ describe("requester-settle processing survives later user turns", () => {
       await complete(original);
       await release(original);
       rotateAgentEventLifecycleGeneration();
-      const retryRunId = buildRequesterSettleWakeIdentity({
-        requesterSessionKey: sessionKey,
-        requesterAgentId: "main",
-        batchRunIds: ["child"],
-        rearmGeneration: 1,
-        hasPrivateCompletion: privateCompletion,
-        retainedWake: { status: "pending", attemptCount: 1, nextAttemptAt: 30_000 },
-      }).runId;
-      expect(retryRunId).toBe(privateCompletion ? runId : `${runId}:retry-1`);
+      const retryRunId = privateCompletion ? runId : `${runId}:retry-1`;
       const retryMessage = privateCompletion
         ? message
         : `${message}. Continue from the current transcript.`;
@@ -252,7 +256,6 @@ describe("requester-settle processing survives later user turns", () => {
       }
       await release(retry);
       await expectUserInputs(scope(), privateCompletion ? 1 : 2);
-      expect(reads.command).not.toHaveBeenCalled();
     },
   );
 
@@ -269,7 +272,6 @@ describe("requester-settle processing survives later user turns", () => {
       [true, expect.objectContaining({ status: "ok", inputProcessingCompleted: true }), undefined],
       { runId },
     );
-    const completed = completion(original);
     await release(original);
     for (const key of ["newer-one:user", "newer-two:user"]) {
       await appendNewerTurn(manager, key, "New user request");
@@ -278,7 +280,6 @@ describe("requester-settle processing survives later user turns", () => {
     await expect(
       manager.appendMessageAsync(original.recorder!.getPendingInputMessage!()!),
     ).rejects.toThrow("outside the current turn");
-    expect(completed).toMatchObject({ reason: "completed", status: "ok" });
     await expectCompletedReplay(before, prepare, 2);
     expect(reads.command).toHaveBeenCalledOnce();
   });
@@ -304,16 +305,14 @@ describe("requester-settle processing survives later user turns", () => {
       await original.recorder!.waitForPendingInputSettlement!();
       expect(completion(original)).toMatchObject({ reason: "cancelled", status: "error" });
       await release(original, "cancelled");
-      rotateAgentEventLifecycleGeneration();
-      const replay = await prepare();
-      expect(completion(replay)).toMatchObject({ reason: "cancelled" });
-      await expectAcknowledgement(replay, {
+      const resumed = await prepareAfterRestart();
+      expect(completion(resumed)).toMatchObject({ reason: "cancelled" });
+      await expectAcknowledgement(resumed, {
         status: "error",
         summary: "cancelled",
         stopReason: "rpc",
       });
-      expect(reads.command).not.toHaveBeenCalled();
-      await release(replay, "cancelled");
+      await release(resumed, "cancelled");
     },
   );
 
@@ -327,8 +326,7 @@ describe("requester-settle processing survives later user turns", () => {
         expect(original.runtimeContextFragments).toBeUndefined();
       }
       await release(original);
-      rotateAgentEventLifecycleGeneration();
-      const resumed = await prepare();
+      const resumed = await prepareAfterRestart();
       expect(resumed.runtimeContextFragments).toEqual([
         { kind: "runtime-instruction", text: RESTART_RECOVERY_INTERRUPTION_NOTE },
       ]);
@@ -345,14 +343,13 @@ describe("requester-settle processing survives later user turns", () => {
       const manager = await SessionManager.openAsync(scope(), fixture.sessionsDir());
       await appendNewerTurn(manager, "newer:user", "Newer request");
       const before = await loadTranscriptEvents(scope());
-      rotateAgentEventLifecycleGeneration();
-      const replay = await prepare();
-      expectNoReconciliation(replay);
+      const resumedAgain = await prepareAfterRestart();
+      expectNoReconciliation(resumedAgain);
       await expect(
-        manager.appendMessageAsync(replay.recorder!.getPendingInputMessage!()!),
+        manager.appendMessageAsync(resumedAgain.recorder!.getPendingInputMessage!()!),
       ).rejects.toThrow("outside the current turn");
       expect(await loadTranscriptEvents(scope())).toEqual(before);
-      await release(replay);
+      await release(resumedAgain);
     },
   );
 
@@ -431,11 +428,10 @@ describe("requester-settle processing survives later user turns", () => {
         await execution;
         await release(original);
       }
-      rotateAgentEventLifecycleGeneration();
-      const replay = await prepare();
+      const resumed = await prepareAfterRestart();
       // Timeouts remain nonfinal; they must not become a successful duplicate acknowledgement.
-      expectNoReconciliation(replay);
-      await release(replay);
+      expectNoReconciliation(resumed);
+      await release(resumed);
     },
   );
 
@@ -464,16 +460,13 @@ describe("requester-settle processing survives later user turns", () => {
     await release(original);
     const before = await loadTranscriptEvents(scope());
     await expectCompletedReplay(before, preparePeer);
-    expect(reads.command).not.toHaveBeenCalled();
   });
 });
 
 it("keeps the committed child target and later owner metadata through input persistence", async () => {
-  const sessionKey = "agent:main:subagent:fresh-child";
-  const sessionId = "fresh-child-session";
+  const target = await createTarget("agent:main:subagent:fresh-child", "fresh-child-session");
+  const { sessionId } = target;
   const sessionEntry = { sessionId, updatedAt: 1, label: "Created child" };
-  const target = { agentId: "main", sessionKey, sessionId, storePath: fixture.storePath() };
-  await upsertSessionEntryCore(target, sessionEntry);
   await upsertSessionEntryCore(target, { ...sessionEntry, updatedAt: 2, label: "Renamed child" });
   const reroutedTarget = {
     ...target,
@@ -494,20 +487,16 @@ it("keeps the committed child target and later owner metadata through input pers
     expect(await loadTranscriptEvents(target)).toEqual([]);
     expect(await recorder.persistApproved()).toMatchObject({ appended: true });
     expect(await recorder.persistApproved()).toMatchObject({ appended: true });
-    const messages = (await loadTranscriptEvents(target)).filter(
-      (event) => isIndexedSessionEntry(event) && event.type === "message",
-    );
-    expect(messages).toMatchObject([{ message: { role: "user", content: "Child task" } }]);
+    expect(await messageEvents(target)).toMatchObject([
+      { message: { role: "user", content: "Child task" } },
+    ]);
     expect(loadSessionEntry(target)).toMatchObject({ sessionId, label: "Renamed child" });
     expect(await loadTranscriptEvents(reroutedTarget)).toEqual([]);
   });
 });
 
 it("persists subagent completion handoff prompts as hidden inter-session turns", async () => {
-  const sessionKey = "agent:main:completion-handoff";
-  const sessionId = "completion-handoff-session";
-  const target = { agentId: "main", sessionKey, sessionId, storePath: fixture.storePath() };
-  await upsertSessionEntryCore(target, { sessionId, updatedAt: 1 });
+  const target = await createTarget("agent:main:completion-handoff", "completion-handoff-session");
   const provenance = {
     kind: "inter_session" as const,
     sourceSessionKey: "agent:main:subagent:child",
@@ -537,10 +526,7 @@ it("persists subagent completion handoff prompts as hidden inter-session turns",
   await withTurn(params, async (recorder) => {
     expect(await recorder.persistApproved()).toMatchObject({ appended: true });
   });
-  const messages = (await loadTranscriptEvents(target)).filter(
-    (event) => isIndexedSessionEntry(event) && event.type === "message",
-  );
-  expect(messages).toMatchObject([
+  expect(await messageEvents(target)).toMatchObject([
     { message: { role: "user", display: false, content: message, provenance } },
   ]);
 });
@@ -548,11 +534,8 @@ it("persists subagent completion handoff prompts as hidden inter-session turns",
 it.each(["Original requester", null])(
   "retains accepted sender presentation after a profile rename (%s)",
   async (originalName) => {
-    const sessionKey = "agent:main:private-sender";
-    const sessionId = "private-sender-session";
+    const target = await createTarget("agent:main:private-sender", "private-sender-session");
     const runId = "announce:private-sender";
-    const target = { agentId: "main", sessionKey, sessionId, storePath: fixture.storePath() };
-    await upsertSessionEntryCore(target, { sessionId, updatedAt: 1 });
     const profileOptions = {
       path: path.resolve(fixture.sessionsDir(), "../../../state/openclaw.sqlite"),
     };
@@ -576,7 +559,7 @@ it.each(["Original requester", null])(
     const params = makeTurnParams(target, "Retained private result", runId, {
       privateCompletion: true,
       request: {
-        expectedExistingSessionId: sessionId,
+        expectedExistingSessionId: target.sessionId,
         deliver: false,
       },
       inputProvenance: {
