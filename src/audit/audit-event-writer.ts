@@ -64,6 +64,7 @@ export function createAuditEventWriter(options: {
   const maxPending = Math.max(1, Math.floor(options.maxPending ?? MAX_PENDING_AUDIT_EVENTS));
   const queue: AuditWriterRequest[] = [];
   let pendingRows = 0;
+  let lastEnqueueAt = -Infinity;
   let stopped = false;
   let draining = false;
   let shutdownExpired = false;
@@ -313,8 +314,11 @@ export function createAuditEventWriter(options: {
       // Preserve the former Worker boundary's clone and prototype-stripping contract.
       queue.push(structuredClone(boundedMessage));
       pendingRows += rows;
-      // Only an idle queue needs a window; in-flight writes already collect their successors.
-      schedule(AUDIT_BATCH_DELAY_MS);
+      // Isolated events need no extra timer wakeup; neighboring arrivals can share a window.
+      const now = performance.now();
+      const delayMs = now - lastEnqueueAt < AUDIT_BATCH_DELAY_MS ? AUDIT_BATCH_DELAY_MS : 0;
+      lastEnqueueAt = now;
+      schedule(delayMs);
       return true;
     } catch (error) {
       if (message.type !== "record-event" && message.type !== "record-run") {

@@ -36,6 +36,7 @@ beforeEach(() => {
   execute.mockReset();
   vi.useFakeTimers({
     toFake: [
+      "performance",
       "setImmediate",
       "clearImmediate",
       "setTimeout",
@@ -113,13 +114,13 @@ describe("audit writer async settlement", () => {
         expect(writer.record(event(sourceId))).toBe(true);
         await vi.advanceTimersByTimeAsync(1);
       }
-      expect(requests).toEqual([]);
+      expect(requests).toEqual(["first"]);
       if (stopEarly) {
         void writer.stop();
       }
-      await vi.advanceTimersByTimeAsync(stopEarly ? 0 : 2);
+      await vi.advanceTimersByTimeAsync(stopEarly ? 0 : 3);
       expect(requests).toEqual(["first", "second", "third"]);
-      expect(execute).toHaveBeenCalledTimes(stopEarly ? 2 : 1);
+      expect(execute).toHaveBeenCalledTimes(stopEarly ? 3 : 2);
     } finally {
       await stopWriter(writer);
     }

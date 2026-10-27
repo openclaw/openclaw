@@ -492,9 +492,10 @@ what was recorded, not as proof of what happened:
   A rejected metadata record does not stop the queue from accepting later records.
 - Shutdown drops waiting metadata at its existing deadline but joins submitted
   worker operations before releasing the writer.
-  An idle writer collects neighboring events for a fixed 5 ms window before submitting
-  up to 32 queued items in one transaction, preserving FIFO order. Later events do
-  not extend that window. Already-queued work drains after an in-flight write
+  The first event after an idle gap dispatches immediately. An event arriving within
+  5 ms of the previous accepted event can start a fixed 5 ms batching window before
+  submitting up to 32 queued items in one transaction, preserving FIFO order. Later
+  events do not extend that window. Already-queued work drains after an in-flight write
   without another window; maintenance and shutdown flush an existing window immediately.
   Per-item savepoints isolate rejected records; successful items are
   acknowledged to the queue only after the shared commit. Queue acceptance itself
