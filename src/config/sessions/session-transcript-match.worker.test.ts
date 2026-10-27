@@ -25,10 +25,7 @@ import { replaceTranscriptEvents } from "./session-accessor.sqlite-transcript-wr
 import { memorySessionActorOwners } from "./session-actor-memory-owner.js";
 import { readSessionColdTranscript } from "./session-cold-storage-state.js";
 import { runSessionColdStorageMaintenance } from "./session-cold-storage.js";
-import {
-  createSessionColdStorageFixture,
-  maintenanceConfig,
-} from "./session-cold-storage.test-support.js";
+import { maintenanceConfig } from "./session-cold-storage.test-support.js";
 import type { SessionTranscriptEventMatch } from "./session-history-read.types.js";
 import { readLatestTranscriptAssistantTextAsync } from "./session-transcript-assistant-read.js";
 import { loadSessionTranscriptEvents } from "./session-transcript-events.js";
@@ -186,12 +183,8 @@ it("keeps match filters and active anchors authoritative across worker payload e
     for (const compressed of [false, true]) {
       const sessionId = compressed ? "compressed-matches" : "identity-matches";
       const scope = transcriptScope(state, sessionId);
-      const encodedAssistant = (
-        id: string,
-        runId: string,
-        message: Record<string, unknown> = {},
-      ) => ({
-        ...assistant(id, runId, message),
+      const encodedAssistant = (...args: Parameters<typeof assistant>) => ({
+        ...assistant(...args),
         parentId: null,
         padding: compressed ? "compressible payload ".repeat(256) : "",
       });
@@ -302,6 +295,7 @@ it("keeps match filters and active anchors authoritative across worker payload e
       } finally {
         hostSql.restore();
       }
+      const latest = await readLatestTranscriptAssistantTextAsync(scope);
       await replaceSessionEntry(scope, { sessionId, updatedAt: 1 });
       runOpenClawAgentWriteTransaction(
         ({ db }) => {
@@ -314,41 +308,20 @@ it("keeps match filters and active anchors authoritative across worker payload e
       await expect(
         runSessionColdStorageMaintenance({ config: maintenanceConfig(scope.storePath) }),
       ).resolves.toMatchObject({ archivedTranscripts: 1 });
-      for (const [match, event] of cases) {
-        await expectMatch(scope, match, event);
-        expect(readSessionColdTranscript(database.db, sessionId)).toBeDefined();
+      const archive = readSessionColdTranscript(database.db, sessionId);
+      expect(archive).toBeDefined();
+      for (let attempt = 0; attempt < 2; attempt++) {
+        for (const [match, event] of cases) {
+          await expectMatch(scope, match, event);
+        }
+        await expect(hasSessionTranscriptMessage(scope)).resolves.toBe(true);
+        await expect(readLatestTranscriptAssistantTextAsync(scope)).resolves.toEqual(latest);
+        expect(readSessionColdTranscript(database.db, sessionId)).toEqual(archive);
+        expect(
+          database.db
+            .prepare("SELECT count(*) AS count FROM transcript_events WHERE session_id = ?")
+            .get(sessionId),
+        ).toEqual({ count: 0 });
       }
-    }
-  }));
-
-it("reads archived matches and message metadata without restoring transcript rows", () =>
-  withOpenClawTestState({ label: "cold-transcript-observers" }, async (state) => {
-    await captureRuntimeConfigAsyncReader()();
-    const fixture = await createSessionColdStorageFixture(state.statePath("cold-observers.sqlite"));
-    const expected = await findTranscriptEvent(fixture.scope, { kind: "latest" });
-    const latest = await readLatestTranscriptAssistantTextAsync(fixture.scope);
-    await expect(
-      runSessionColdStorageMaintenance({ config: maintenanceConfig(fixture.scope.storePath) }),
-    ).resolves.toMatchObject({ archivedTranscripts: 1 });
-    const archive = readSessionColdTranscript(fixture.database(), fixture.scope.sessionId);
-    expect(archive).toBeDefined();
-    for (let attempt = 0; attempt < 2; attempt++) {
-      await expect(findTranscriptEvent(fixture.scope, { kind: "latest" })).resolves.toEqual(
-        expected,
-      );
-      await expect(
-        findTranscriptEvent(fixture.scope, { kind: "idempotency", key: "absent" }),
-      ).resolves.toBeUndefined();
-      await expect(hasSessionTranscriptMessage(fixture.scope)).resolves.toBe(true);
-      await expect(readLatestTranscriptAssistantTextAsync(fixture.scope)).resolves.toEqual(latest);
-      expect(readSessionColdTranscript(fixture.database(), fixture.scope.sessionId)).toEqual(
-        archive,
-      );
-      expect(
-        fixture
-          .database()
-          .prepare("SELECT count(*) AS count FROM transcript_events WHERE session_id = ?")
-          .get(fixture.scope.sessionId),
-      ).toEqual({ count: 0 });
     }
   }));

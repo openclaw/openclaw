@@ -102,17 +102,29 @@ it("keeps committed recap progress across stale requests and summarizes new acti
   changed.mockClear();
   const sourceReads = vi.spyOn(summarySource, "readActivitySummarySource");
   expect((await ensure(requestedEntry)).text).toBe(recap);
+  const notify = async (reasons: Array<"archive" | "unarchive">) => {
+    const work = new AsyncWorkScope();
+    work.run(() => {
+      for (const reason of reasons) {
+        service.handleLifecycle({ sessionKey: target.key, agentId: target.agentId, reason });
+      }
+    });
+    await work.drain();
+  };
+  await notify(["archive", "unarchive", "archive"]);
   expect(complete).toHaveBeenCalledTimes(1);
   expect(changed).not.toHaveBeenCalled();
   expect(sourceReads).not.toHaveBeenCalled();
 
   await messages(1, 1);
-  await ensure(requestedEntry);
+  await notify(["archive", "unarchive", "archive"]);
   expectPrompt(2, recap, ["assistant: Outcome 1"]);
-  expect(sourceReads).toHaveBeenCalledTimes(1);
-  await ensure(requestedEntry);
-  expect(complete).toHaveBeenCalledTimes(2);
+  expect(view()?.state).toBe("current");
   expect(read()?.activitySummary).toMatchObject({ coveredMessages: 2, totalMessages: 2 });
+  const completedSourceReads = sourceReads.mock.calls.length;
+  await ensure(requestedEntry);
+  expect(sourceReads).toHaveBeenCalledTimes(completedSourceReads);
+  expect(complete).toHaveBeenCalledTimes(2);
 });
 
 it("invalidates cached projection after an offline branch change without changing activity ordering", async () => {
@@ -150,31 +162,4 @@ it("invalidates cached projection after an offline branch change without changin
     text: recap,
     state: "current",
   });
-});
-
-it("skips current recap transcript reads during archive bursts and still refreshes new activity", async () => {
-  await messages(1);
-  await ensure();
-  complete.mockClear();
-  const sourceReads = vi.spyOn(summarySource, "readActivitySummarySource");
-  const notify = async () => {
-    const work = new AsyncWorkScope();
-    work.run(() => {
-      for (const reason of ["archive", "unarchive", "archive"] as const) {
-        service.handleLifecycle({ sessionKey: target.key, agentId: target.agentId, reason });
-      }
-    });
-    await work.drain();
-  };
-
-  await notify();
-  expect(sourceReads).not.toHaveBeenCalled();
-  expect(complete).not.toHaveBeenCalled();
-  expect(view()?.state).toBe("current");
-
-  await messages(1, 1);
-  await notify();
-  expectPrompt(1, recap, ["assistant: Outcome 1"]);
-  expect(view()?.state).toBe("current");
-  expect(read()?.activitySummary).toMatchObject({ coveredMessages: 2, totalMessages: 2 });
 });

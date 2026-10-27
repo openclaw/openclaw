@@ -184,7 +184,7 @@ const reviewedMembers = new Map<string, readonly string[]>([
 const nonRuntimeCandidates = new Map<string, readonly string[]>([
   [
     "src/config/sessions/session-cold-storage-chunks.ts",
-    ["readSessionColdChunks", "iterateSessionColdRecords"],
+    ["readSessionColdChunks", "readVerifiedSessionColdChunks", "iterateSessionColdRecords"],
   ],
   [
     "src/config/sessions/session-cold-storage-prepare.ts",

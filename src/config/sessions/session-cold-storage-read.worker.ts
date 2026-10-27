@@ -92,7 +92,7 @@ function findSessionColdTranscriptEvent(
         continue;
       }
       try {
-        const event = JSON.parse(row.event_json) as TranscriptEvent;
+        const event: unknown = JSON.parse(row.event_json);
         if (
           selection?.active &&
           (!active.has(row.seq) ||

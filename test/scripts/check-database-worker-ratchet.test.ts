@@ -14,6 +14,11 @@ it.each([
   ["session-cold-storage-chunks.ts", "readSessionColdChunks", "executeSqliteQuerySync"],
   [
     "session-cold-storage-chunks.ts",
+    "readVerifiedSessionColdChunks",
+    "executeSqliteQueryTakeFirstSync",
+  ],
+  [
+    "session-cold-storage-chunks.ts",
     "iterateSessionColdRecords",
     "executeSqliteQueryTakeFirstSync",
   ],
