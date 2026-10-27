@@ -46,7 +46,7 @@ import { isMainThread, parentPort, Worker, workerData } from "node:worker_thread
 import { zstdCompressSync } from "node:zlib";
 import type { SessionColdChunkMetadata } from "../../src/config/sessions/session-accessor.sqlite-archive-types.js";
 import type { SessionColdRecord } from "../../src/config/sessions/session-cold-storage-codec.js";
-import type { SqlConnection } from "../../src/infra/sql-connection.js";
+import { isPostgresSqlConnection, type SqlConnection } from "../../src/infra/sql-connection.js";
 import type { DB } from "../../src/state/openclaw-agent-db.generated.js";
 
 const MiB = 1024 * 1024;
@@ -328,8 +328,8 @@ function observeRestoreSql(database: SqlConnection, detailed: boolean) {
       const statement = originalPrepare(sql);
       stat.prepares++;
       stat.prepareMs += performance.now() - prepareStarted;
-      for (const key of ["get", "all", "run"] as const) {
-        statement[key] = new Proxy(statement[key], {
+      const observe = <Key extends "get" | "all" | "run">(key: Key): (typeof statement)[Key] =>
+        new Proxy(statement[key], {
           apply(target, receiver, args) {
             if (!observing) {
               return Reflect.apply(target, receiver, args);
@@ -343,7 +343,9 @@ function observeRestoreSql(database: SqlConnection, detailed: boolean) {
             }
           },
         });
-      }
+      statement.get = observe("get");
+      statement.all = observe("all");
+      statement.run = observe("run");
       const iterate = statement.iterate.bind(statement);
       statement.iterate = (...args) => {
         if (!observing) {
@@ -442,6 +444,7 @@ async function measureWorker() {
   const count = positive(values.requests, "requests");
   assert(count <= manifest.sessions.length, "requests exceeds prepared sessions");
   const database = agent.openOpenClawAgentDatabase(options);
+  assert(!isPostgresSqlConnection(database.db), "This benchmark requires SQLite");
   const unchanged = unchangedRows(database.db);
   const pragmas = Object.fromEntries(
     [
