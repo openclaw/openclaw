@@ -6,7 +6,10 @@ import type { CronConfig } from "../../config/types.cron.js";
 import type { GatewayScheduler, GatewaySchedulerScope } from "../../infra/gateway-scheduler.js";
 import { LEGACY_IMPLICIT_AGENT_ID } from "../../routing/session-key.js";
 import type { ReplyOperationObservation } from "../../sessions/reply-operation-state.js";
-import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.js";
+import {
+  captureOpenClawStateReadContext,
+  captureOpenClawStateWorkerContext,
+} from "../../state/openclaw-state-worker-context.js";
 import { runOpenClawStateWorkerOperation } from "../../state/openclaw-state-worker-store.js";
 import type { DeliveryContext } from "../../utils/delivery-context.types.js";
 import type { CronAgentAvailability } from "../agent-availability.js";
@@ -481,11 +484,12 @@ const preparedStoreSelections = new WeakMap<
 
 /** Resolve once per admission; warm callers enter their operation queue without yielding. */
 export function prepareCronServiceStore(state: CronServiceState): Promise<void> | undefined {
-  const context = captureOpenClawStateWorkerContext();
+  const { admission } = captureOpenClawStateReadContext();
   const previous = preparedStoreSelections.get(state);
-  if (previous?.admission === context.admission) {
+  if (previous?.admission === admission) {
     return previous.ready ? undefined : previous.promise;
   }
+  const context = captureOpenClawStateWorkerContext();
   if (previous) {
     state.store = null;
     state.readSnapshot = undefined;

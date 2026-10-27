@@ -349,7 +349,20 @@ Open group rename and **New session defaults** dialogs close when the Gateway
 reconnects or you switch connections. Reopen the group’s menu to make changes
 using the current connection.
 
-Dragging a session between sidebar groups updates its placement immediately. A successful
+**Personal groups** organize only your sidebar, including when you are a guest.
+Use **New personal group** to name a group and select available sessions, or drag
+an existing session into a personal group. **Edit group** renames it and changes
+its members. Drag group headers to reorder them, or use **Move up** and **Move down**
+in the group menu. **Remove personal group** removes only that personal collection;
+it never deletes sessions. Pins and shared groups are independent.
+
+Personal groups do not grant access. Unavailable saved sessions remain hidden,
+and members outside the loaded session list resolve through the normal access-checked
+session lookup. Groups are scoped to your profile and Gateway. Connections with
+general Gateway write access sync them through personal preferences. Session-only,
+read-only, and profileless connections keep their edits in that browser, like personal pins.
+
+Dragging a session between shared sidebar groups updates its placement immediately. A successful
 save keeps that placement even if the subsequent list refresh fails; the UI reports
 the refresh error separately. If a connection failure leaves the save unconfirmed,
 refresh and check the session's group before retrying. Other clients' newer group

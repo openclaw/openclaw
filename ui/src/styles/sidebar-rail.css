@@ -442,7 +442,6 @@
 }
 
 .sidebar-pages__entry:hover .sidebar-pages__pin,
-.sidebar-online__row:hover .sidebar-pages__pin,
 .sidebar-pages__pin:focus-visible,
 .sidebar-pages__pin--pinned {
   opacity: 1;

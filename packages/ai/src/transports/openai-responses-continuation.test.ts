@@ -36,15 +36,7 @@ const assistantOutput = {
     {
       type: "output_text",
       text: "answer",
-      annotations: [
-        {
-          type: "url_citation",
-          url: "https://example.test/source",
-          title: "source",
-          start_index: 0,
-          end_index: 6,
-        },
-      ],
+      annotations: [{ type: "file_citation", file_id: "file_1", filename: "a", index: 0 }],
       logprobs: [{ token: "answer", logprob: -0.1, bytes: [], top_logprobs: [] }],
     },
   ],

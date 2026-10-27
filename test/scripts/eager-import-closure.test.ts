@@ -497,6 +497,19 @@ it.each([
     ],
   },
   {
+    name: "canonical validation worker",
+    entrypoints: [
+      "src/config/sessions/session-accessor.sqlite-archive.worker.ts",
+      "src/config/sessions/session-accessor.sqlite-mutation-worker.runtime.ts",
+      "src/config/sessions/session-canonical-validation.ts",
+    ],
+    dynamic: false,
+    deferredOwners: [
+      "src/config/sessions/session-cold-storage-source-guard.worker.ts",
+      "src/config/sessions/session-source-predicate.worker.ts",
+    ],
+  },
+  {
     name: "cold archive preparation",
     entrypoints: [
       "src/config/sessions/session-cold-storage-selection.ts",

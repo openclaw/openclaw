@@ -637,7 +637,7 @@ describe("prepared model runtime snapshots", () => {
           inheritedAuthDir: fixture.state.agentDir("default"),
           workspaceDir,
         }),
-      ).rejects.toBe(refreshError);
+      ).rejects.toMatchObject({ message: refreshError.message, stack: refreshError.stack });
     }
   });
 

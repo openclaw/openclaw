@@ -235,12 +235,8 @@ export async function createDoctorMaintenanceState(options: {
         selectedEnv,
         {
           ...params,
-          assertCurrent: assertAdmission
-            ? () => {
-                options.assertCurrent?.();
-                assertAdmission();
-              }
-            : options.assertCurrent,
+          assertCurrent: options.assertCurrent,
+          assertAdmission,
           deadlineMs: options.deadline(),
           signal: options.signal,
         },

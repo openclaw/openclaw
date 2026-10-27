@@ -340,9 +340,21 @@ export const sessionsGitHubHandlers: GatewayRequestHandlers = {
           throw new Error(source.error.message);
         }
         if (loaded.entry.worktree) {
-          if (loaded.entry.worktree.canonicalWorkspaceDir !== source.value) {
-            throw new Error("This session already publishes a different checkout.");
+          using owner = await resolveLocalWorkspaceOwner({
+            ...session,
+            cfg: context.getRuntimeConfig(),
+            assertCurrent: () => {
+              selectedSession.readCurrent();
+              admitted.requester.assertCurrent();
+            },
+          });
+          // canonicalWorkspaceDir is the skills/source workspace, not the owned checkout.
+          if (!owner || owner.worktree.path !== source.value) {
+            throw new Error(
+              "This session already publishes a different checkout. Publish from its current managed worktree, or use a separate session for the other checkout; no files were moved or published.",
+            );
           }
+          owner.assertCurrent();
         } else {
           const placements = context.workerSessionPlacementService;
           if (!placements?.withLocalWorkspaceReservation) {

@@ -795,7 +795,7 @@ var External = [
     /(^slug$|^version$)/u,
     /(^agentId$)/u,
     /(^agentId$|^limit$|^beforeMs$)/u,
-    /(^agentId$|^name$|^filePath$|^versionId$)/u,
+    /(^agentId$|^name$|^filePath$|^versionId$|^draftId$)/u,
     /(^agentId$|^name$|^reason$)/u,
     /(^agentId$|^name$|^versionId$)/u,
     /(^agentId$|^runId$)/u,
@@ -5093,7 +5093,8 @@ var External = [
     (value.agentId === void 0 || !("agentId" in value) || check_63(value.agentId)) &&
     check_6(value.name) &&
     (value.filePath === void 0 || !("filePath" in value) || check_63(value.filePath)) &&
-    (value.versionId === void 0 || !("versionId" in value) || check_63(value.versionId)),
+    (value.versionId === void 0 || !("versionId" in value) || check_63(value.versionId)) &&
+    (value.draftId === void 0 || !("draftId" in value) || check_63(value.draftId)),
   check_643 = (value) => check_644(value),
   check_644 = (value) =>
     typeof value == "object" &&
