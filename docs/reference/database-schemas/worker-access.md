@@ -6322,6 +6322,12 @@ refusing unreadable stored rows. Hydration still precedes Gateway readiness;
 activation and recovery remain post-ready.
 Session-list facts are prepared with each immutable row and reused at publication.
 A replacement row owns new facts; the cache does not retain retired rows.
+Fully settled registry rows retain terminal-reply disposition, length, and route
+notices in memory. Selected readers and mutations hydrate reply text, delivery
+payloads, and operator recovery sources through the existing worker before use.
+Unfinished lifecycle, requester, recovery, and pending, in-progress, or suspended
+delivery work keeps its full resident record. Durable records and retention are
+unchanged; ordinary keep-mode rows still have no automatic archive deadline.
 Completion acknowledgments also carry decoded records and worker-computed physical
 versions; the host does not parse or hash the retained JSON again. The transfer
 owners hash the physical rows only when those versions are needed. Plain decoding,

@@ -29,12 +29,12 @@ import {
 import {
   freezeSubagentRunReadRecord,
   immutableSubagentRun,
-  isSubagentRunPayloadEvicted,
   restoreSubagentRunPayload,
 } from "./subagent-registry-memory.js";
 import type { SubagentRunReadRecord } from "./subagent-registry-read.types.js";
 import { readAllSubagentRunsInWorker } from "./subagent-registry.store.read.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
+import { isSubagentRunPayloadEvicted } from "./subagent-run-payload-facts.js";
 import { SubagentSessionReadLookup } from "./subagent-session-read-scope.js";
 
 type SubagentRunChange<T> = { entry: T | undefined };

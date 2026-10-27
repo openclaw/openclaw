@@ -15,13 +15,16 @@ import {
   getSubagentRunsForCollectorGroup,
   getSubagentSessionReadLookup,
   immutableSubagentRun,
-  isSubagentRunPayloadEvicted,
   restoreSubagentRunPayload,
   subagentRuns,
 } from "./subagent-registry-memory.js";
 import { getLatestLiveSubagentRunByChildSessionKey } from "./subagent-registry-read.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
 import { isSameSubagentRunOwner } from "./subagent-run-generation.js";
+import {
+  isSubagentRunPayloadEvicted,
+  getSubagentTerminalReplySummary,
+} from "./subagent-run-payload-facts.js";
 
 function createRun(runId: string, overrides: Partial<SubagentRunRecord> = {}): SubagentRunRecord {
   return {
@@ -68,8 +71,11 @@ describe("completed subagent payload residency", () => {
     expect(resident.task).toBe(original.task.slice(0, 160));
     expect(resident.completion?.resultText).toBeUndefined();
     expect(resident.completion?.fallbackResultText).toBeUndefined();
-    // Readers (announce, agents_wait preview, cron follow-up) use the resident reply.
-    expect(resident.completion?.terminalReply).toEqual(original.completion?.terminalReply);
+    expect(resident.completion?.terminalReply).toBeUndefined();
+    expect(getSubagentTerminalReplySummary(resident)).toEqual({
+      disposition: "visible",
+      textLength: "Final reply evidence".length,
+    });
     expect(isSubagentRunPayloadEvicted(resident)).toBe(true);
     expect(compactSubagentRunForMemory(resident)).toBe(resident);
 
