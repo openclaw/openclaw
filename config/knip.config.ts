@@ -500,6 +500,7 @@ const repositoryScriptEntries = [
   "scripts/perf/host-cpu-sample-measure.mjs!",
   "scripts/perf/identifier-renormalization-measure.ts!",
   "scripts/perf/ingress-ip-measure.ts!",
+  "scripts/perf/inter-session-steering-measure.ts!",
   "scripts/perf/memory-ranking-copies.ts!",
   "scripts/perf/memory-prompt-copy-measure.ts!",
   "scripts/perf/misc-fresh-array-copies-measure.mjs!",

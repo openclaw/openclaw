@@ -47,6 +47,10 @@ Actual compaction or reset starts a new prompt series. Permission changes still
 apply immediately through execution gates and in-history instruction updates;
 they do not require replacing the earlier system prompt.
 
+Restart and scheduled-turn orphan recovery use the same bounded model-history
+selection as session startup. Transcript-only metadata does not replace that
+history with a shorter navigation window or remove its earlier provider inputs.
+
 Client-capability tool listing uses the session's recorded operator declaration.
 Internal wake and restart-recovery turns retain the same tool definitions and
 Code Mode catalog, including `screen`, without borrowing execution authority.
@@ -75,6 +79,11 @@ action does not grant permission to execute it.
 Isolated settled-turn finalization uses a separate cache key scoped to the run.
 Its tool-free prompt and full transcript differ from the conversation request,
 so it does not replace the conversation's cache or history-diagnostic baseline.
+
+Inter-session messages steered into an active turn carry their source envelope
+on the first model request. Reopening the session replays the same envelope,
+including for subagent completion deliveries, instead of adding it to earlier
+message text on the next run.
 
 Live embedded turns carry watched-group membership and titles beside the current
 turn instead of rebuilding the system suffix. Routes that retain runtime context
