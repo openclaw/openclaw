@@ -86,14 +86,21 @@ describe("session message cache", () => {
       totalCount: 5,
       ownerViewing: false,
     };
-    cacheChatSessionSnapshot(cache, host, target, widgetSnapshot([], "one", { headerViewers }));
+    cacheChatSessionSnapshot(
+      cache,
+      host,
+      target,
+      widgetSnapshot([], "one", { headerViewers, headerSharing: "public" }),
+    );
     cacheChatSessionSnapshot(cache, host, target, widgetSnapshot(["live"], "one"));
     expect(readChatSessionSnapshot(cache, host, target)?.headerViewers).toEqual(headerViewers);
+    expect(readChatSessionSnapshot(cache, host, target)?.headerSharing).toBe("public");
     host.client.recoveryScope = "account-b";
     expect(readChatSessionSnapshot(cache, host, target)).toBeNull();
     host.client.recoveryScope = "account-a";
     cacheChatSessionSnapshot(cache, host, target, widgetSnapshot(["replacement"], "two"));
     expect(readChatSessionSnapshot(cache, host, target)?.headerViewers).toBeUndefined();
+    expect(readChatSessionSnapshot(cache, host, target)?.headerSharing).toBeUndefined();
   });
 
   it("publishes a footprint batch once and rejects a retired session's deferred batch", () => {

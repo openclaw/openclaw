@@ -230,13 +230,31 @@ async function readWarmCache(page: Page, sessionKey: string) {
         });
       const snapshots = await readKeys("snapshots");
       const sidebar = await readKeys("sidebarSnapshots");
-      return {
-        targetSnapshots: snapshots.filter(
+      const targetKeys = snapshots.filter(
+        (value) =>
+          typeof value === "string" &&
+          value.startsWith("scope:[") &&
+          value.endsWith(`\u0000${key}`),
+      );
+      const targetRecords = await Promise.all(
+        targetKeys.map(
           (value) =>
-            typeof value === "string" &&
-            value.startsWith("scope:[") &&
-            value.endsWith(`\u0000${key}`),
-        ).length,
+            new Promise<unknown>((resolve, reject) => {
+              const request = database
+                .transaction("snapshots", "readonly")
+                .objectStore("snapshots")
+                .get(value);
+              request.addEventListener("success", () => resolve(request.result), { once: true });
+              request.addEventListener("error", () => reject(request.error), { once: true });
+            }),
+        ),
+      );
+      return {
+        targetSnapshots: targetKeys.length,
+        targetSnapshotBytes: targetRecords.reduce<number>(
+          (bytes, value) => bytes + new TextEncoder().encode(JSON.stringify(value)).length,
+          0,
+        ),
         snapshots: snapshots.length,
         sidebarSnapshots: sidebar.length,
       };

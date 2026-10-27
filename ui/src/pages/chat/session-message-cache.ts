@@ -8,7 +8,10 @@ import { createSignal } from "solid-js";
 import type { GatewaySessionRow, ModelCatalogEntry } from "../../api/types.ts";
 import type { ChatFastModePresentation } from "../../lib/chat/model-select-state.ts";
 import { readPairingQrContent } from "../../lib/chat/pairing-qr.ts";
-import type { ChatHeaderViewersSnapshot } from "./chat-header-viewers-snapshot.ts";
+import type {
+  ChatHeaderSharingSnapshot,
+  ChatHeaderViewersSnapshot,
+} from "./chat-header-viewers-snapshot.ts";
 import type { ChatHistoryCursor, ChatHistoryPagination } from "./chat-history-pagination.ts";
 import type { ChatHistoryState, ChatTranscriptMetadata } from "./chat-transcript-metadata.ts";
 import { createTranscriptMemo } from "./components/chat-transcript-memo.ts";
@@ -69,6 +72,7 @@ export type ChatComposerSnapshot = Pick<
 
 export type ChatSessionSnapshot = {
   headerViewers?: ChatHeaderViewersSnapshot;
+  headerSharing?: ChatHeaderSharingSnapshot | null;
   composer?: ChatComposerSnapshot | null;
   // The board provider validates cached payloads before they can reach a view.
   board?: { snapshot: unknown; receivedAtMs: number } | null;
@@ -403,10 +407,14 @@ export function cacheChatSessionSnapshot(
     existing.snapshot.sessionId === incoming.sessionId
       ? { ...withBoard, composer: existing.snapshot.composer }
       : withBoard;
-  const snapshot =
+  const withViewers =
     withComposer.headerViewers === undefined && existing?.snapshot.sessionId === incoming.sessionId
       ? { ...withComposer, headerViewers: existing.snapshot.headerViewers }
       : withComposer;
+  const snapshot =
+    withViewers.headerSharing === undefined && existing?.snapshot.sessionId === incoming.sessionId
+      ? { ...withViewers, headerSharing: existing.snapshot.headerSharing }
+      : withViewers;
   if (
     existing?.snapshot.messages === snapshot.messages &&
     existing.snapshot.deltaCursor === snapshot.deltaCursor &&
@@ -420,6 +428,7 @@ export function cacheChatSessionSnapshot(
     existing.snapshot.board === snapshot.board &&
     existing.snapshot.composer === snapshot.composer &&
     existing.snapshot.headerViewers === snapshot.headerViewers &&
+    existing.snapshot.headerSharing === snapshot.headerSharing &&
     samePagination(existing.snapshot.pagination, snapshot.pagination)
   ) {
     return;

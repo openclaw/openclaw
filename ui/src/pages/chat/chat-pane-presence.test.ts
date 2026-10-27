@@ -4,6 +4,7 @@
 import { afterEach, beforeEach, expect, it, onTestFinished, vi } from "vitest";
 import type { PresenceEntry } from "../../api/types.ts";
 import type { ApplicationContext } from "../../app/context.ts";
+import { gatewayHelloForMethods } from "../../test-helpers/gateway-methods.ts";
 import { settleLitElement } from "../../test-helpers/lit-settle.ts";
 import {
   createGatewayBrowserClientFixture,
@@ -152,4 +153,22 @@ it("refreshes fallback identity, retains it through reconnect, and follows autho
 
   await publishGateway({ selfUser: null });
   expect(pane.chatProps?.userName).not.toBe("Blair");
+});
+
+it("keeps the roster unknown through self-only hello until full presence arrives", async () => {
+  const { pane, context, publishGateway } = await createPane(withSelf(person("Riley")));
+  const owner = pane as unknown as TestChatPane;
+  const hello = gatewayHelloForMethods([]);
+  await publishGateway({ phase: "reconnecting", hello: null });
+  owner.applyGatewaySnapshot(context.gateway.snapshot);
+  await publishGateway({
+    phase: "connected",
+    hello: { ...hello, snapshot: { presence: [self("self")] } },
+  });
+  owner.applyGatewaySnapshot(context.gateway.snapshot);
+  expect(pane.presence.snapshot).toBeUndefined();
+  const full = await publishPresence(pane, withSelf(person("Riley")));
+  expect(pane.presence.snapshot).toBe(full);
+  const empty = await publishPresence(pane, []);
+  expect(pane.presence.snapshot).toBe(empty);
 });

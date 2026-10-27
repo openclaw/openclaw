@@ -61,6 +61,8 @@ After the cold capture, the tool
 opens Details on chat and waits for image/font readiness and a two-second persistence
 window before starting warm reloads. A read-only cache inventory verifies that an
 owned transcript snapshot exists for the exact route; otherwise warm proof stops.
+Its inventory also records the serialized target-record bytes before warm captures
+so baseline/candidate storage growth can be compared outside measurement.
 Cold captures therefore show default Details
 visibility; warm chat captures show the last visit's Details state. Dashboard keeps
 its native closed Details state. The current router uses `/dashboard/...` for the
