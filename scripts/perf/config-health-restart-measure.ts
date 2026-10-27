@@ -12,7 +12,8 @@
  * CPU covers the process tree still alive at admission, RSS the Gateway process;
  * neither is main-thread allocation. Raw traces retain server phase/heap measurements.
  * State checks ignore health observation and plugin-index generation timestamps,
- * retaining all other health/plugin facts; they run outside measured startup.
+ * retaining all other health/plugin facts from the predecessor after its normal
+ * plugin-registry maintenance through successor restart, outside measured startup.
  */
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
@@ -291,7 +292,6 @@ async function ready(server: Gateway) {
 }
 
 async function runIteration(index: number) {
-  const stateBefore = await stateFingerprint();
   const hostLoadBefore = loadavg();
   const predecessor = launch(await freePort());
   let successor: Gateway | undefined;
@@ -301,6 +301,18 @@ async function runIteration(index: number) {
   let predecessorShutdownMs = 0;
   try {
     const predecessorReady = await ready(predecessor);
+    while (
+      predecessor.startupTrace["startup.maintenance.plugin-registry"] === undefined &&
+      performance.now() < predecessor.deadlineAt &&
+      !predecessor.isDone()
+    ) {
+      await delay(50);
+    }
+    assert(
+      predecessor.startupTrace["startup.maintenance.plugin-registry"] !== undefined,
+      `Predecessor plugin-registry maintenance did not finish:\n${predecessor.outputTail.join("\n")}`,
+    );
+    const stateBefore = await stateFingerprint();
     successor = launch(
       await freePort(),
       (line) => {
