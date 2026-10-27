@@ -69,6 +69,16 @@ checked after preparation and at the write boundary.
 
 GitHub publication options read independent account status and publication receipts concurrently. Cold receipt reads load the publication reader without initializing unrelated shared-state commands. The response still checks current session access and personal account authority after those reads settle. A publication that failed before capturing its workspace snapshot remains visible without waiting for pull-request discovery; there is no accepted snapshot to compare with published work.
 
+Automatic System GitHub publication recovery stops after three failed attempts
+in one Gateway process.
+A publication older than one hour gets one final recovery attempt, including
+after a Gateway restart. If the outcome remains unconfirmed, the Gateway records
+a failed status and an ordinary message in the owning conversation. Saved work
+and recorded GitHub effects are retained. Inspect the original target, branch,
+and pull request before requesting a new publication: the earlier request may
+already have succeeded. Pending requests continue to block overtaking recovery;
+a terminal result no longer blocks a new request.
+
 ## Session control
 
 - `sessions.catalog.list` lists external session catalogs. Pass `metadataOnly: true` when a client needs catalog IDs, labels, capabilities, and share-route metadata without enumerating hosts or sessions. This mode returns the normal catalog objects with `hosts: []`; it retains agent and catalog selection, skips row filtering/pagination, and emits no host progress events. Omit the flag for full listing, including the host availability needed for terminal selection. The Control UI uses metadata-only discovery for the new-session picker and hidden-source labels in Settings.

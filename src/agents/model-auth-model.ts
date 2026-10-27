@@ -397,7 +397,12 @@ export function applySecretRefHeaderSentinels<T extends Pick<Model, "provider" |
   ) {
     const token = normalizeOptionalSecretInput(runtimeAuth.token)?.trim();
     if (token) {
-      if (attachedRequest?.auth?.mode === "authorization-bearer") {
+      // Protect only the configured value. A later exchange may own a different
+      // credential in the same mode, including one that is already sentinelized.
+      if (
+        attachedRequest?.auth?.mode === "authorization-bearer" &&
+        attachedRequest.auth.token === token
+      ) {
         protectedRequest = {
           ...protectedRequest,
           auth: {
@@ -417,7 +422,7 @@ export function applySecretRefHeaderSentinels<T extends Pick<Model, "provider" |
     const headerName = runtimeAuth.headerName.trim();
     const prefix = runtimeAuth.prefix?.trim() ?? "";
     if (headerName && value) {
-      if (attachedRequest?.auth?.mode === "header") {
+      if (attachedRequest?.auth?.mode === "header" && attachedRequest.auth.value === value) {
         protectedRequest = {
           ...protectedRequest,
           auth: {
@@ -445,7 +450,7 @@ export function applySecretRefHeaderSentinels<T extends Pick<Model, "provider" |
 }
 
 /** Uses the configured standard bearer header for SDKs with vendor-specific auth defaults. */
-export function applyAuthHeaderOverride<T extends Model>(
+export function applyAuthHeaderOverride<T extends Pick<Model, "provider" | "headers">>(
   model: T,
   auth: ResolvedProviderAuth | null | undefined,
   cfg: OpenClawConfig | undefined,
@@ -456,6 +461,13 @@ export function applyAuthHeaderOverride<T extends Model>(
   }
   const providerConfig = resolveMergedModelProviderConfig(cfg, sentinelModel.provider);
   if (!providerConfig?.authHeader) {
+    return sentinelModel;
+  }
+  // Explicit request auth already owns the credential-bearing headers. The
+  // provider's generic bearer preference must not replace that prepared choice.
+  const request = getModelProviderRequestTransport(sentinelModel);
+  const requestAuth = request?.auth;
+  if (requestAuth && requestAuth.mode !== "provider-default") {
     return sentinelModel;
   }
 
@@ -471,8 +483,9 @@ export function applyAuthHeaderOverride<T extends Model>(
   }
   headers.Authorization = `Bearer ${auth.apiKey}`;
 
-  return {
-    ...sentinelModel,
-    headers,
-  };
+  // Transport readers must not restore a pre-exchange bearer from request.headers.
+  return attachModelProviderRequestTransport(
+    { ...sentinelModel, headers },
+    request ? { ...request, headers } : undefined,
+  );
 }

@@ -12,19 +12,6 @@ import {
   type ClaudeCliHistoryParams,
 } from "./cli-session-history.claude-snapshot.js";
 
-// Preserve saved transcript bytes independently of the retired exec prompt builder.
-export const LEGACY_EXEC_COMPLETION_PROMPT =
-  "An async command you ran earlier has completed. The command completion details are:\n\n" +
-  "Exec completed (example, code 0) :: done\n\n" +
-  "Treat this completion as an internal continuation, not a new user request. " +
-  "Reconcile it with the conversation and continue any outstanding authorized work. " +
-  "Notify the user only if this provides a requested result not yet delivered, a meaningful change to the outcome, " +
-  "or a new unresolved failure, blocker, or decision they need to know about. " +
-  "Stay silent for routine output, duplicate or superseded results, and failures already recovered from; " +
-  "do not recap them or announce that nothing changed. " +
-  "If no user-facing update is needed, reply with exactly NO_REPLY as the entire final answer. " +
-  "NO_REPLY discards anything written this turn that was not sent, so send confirmations before ending silently.";
-
 export async function readClaudeCliSessionMessagesAsync(
   params: ClaudeCliHistoryParams,
 ): Promise<Record<string, unknown>[]> {

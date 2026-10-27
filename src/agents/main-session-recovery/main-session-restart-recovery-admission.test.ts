@@ -1,3 +1,4 @@
+import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred, withinTest } from "../../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
@@ -8,10 +9,12 @@ import {
   setRuntimeConfigSnapshot,
 } from "../../config/io.js";
 import {
+  appendTranscriptMessage,
   patchSessionEntryCore,
   loadSessionEntry,
   replaceSessionEntry,
 } from "../../config/sessions/session-accessor.js";
+import { GatewayInputRecovery } from "../../gateway/agent-input-recovery.js";
 import { callGateway } from "../../gateway/call.js";
 import { createChannelAutostartRecovery } from "../../gateway/server-channel-autostart-recovery.js";
 import { createGatewayInstanceRuntime } from "../../gateway/server-instance-runtime.js";
@@ -41,8 +44,13 @@ import * as recoveryTargets from "./main-session-restart-recovery-exact-target.j
 import {
   createRestartRecoveryStoreFixture,
   makePendingFinalDelivery,
+  mainSessionEntry,
 } from "./main-session-restart-recovery-fixture.test-support.js";
 import { mainSessionRecoveryLog } from "./main-session-restart-recovery-shared.js";
+import {
+  makeUserMessage,
+  makeToolResultMessage,
+} from "./main-session-restart-recovery-transcript.test-support.js";
 import {
   retryRestartAbortedMainSessionRecovery as retryRecovery,
   scheduleRestartAbortedMainSessionRecovery,
@@ -193,6 +201,109 @@ describe("startup recovery admission", () => {
       clearRuntimeConfigSnapshot();
     }
   });
+
+  it.for([
+    { layout: "canonical", outcome: "resume", pendingAgent: "slow" },
+    { layout: "canonical", outcome: "stop", pendingAgent: "slow" },
+    { layout: "canonical", outcome: "fail", pendingAgent: "slow" },
+    { layout: "shared", outcome: "resume", pendingAgent: "slow" },
+    { layout: "shared", outcome: "resume", pendingAgent: "main" },
+  ] as const)(
+    "recovers ready sessions before pending input custody ($layout, $outcome, $pendingAgent)",
+    async ({ layout, outcome, pendingAgent }, { signal }) => {
+      await withEnvAsync({ OPENCLAW_STATE_DIR: tmpDir }, async () => {
+        const sharedStore = layout === "shared" ? path.join(tmpDir, "shared.sqlite") : undefined;
+        const cfg = {
+          agents: { entries: { main: {}, slow: {} } },
+          ...(sharedStore ? { session: { store: sharedStore } } : {}),
+        };
+        setRuntimeConfigSnapshot(cfg);
+        const targets = [pendingAgent === "slow" ? "main" : "slow", pendingAgent].map(
+          (agentId) => ({
+            agentId,
+            storePath:
+              sharedStore ?? path.join(tmpDir, "agents", agentId, "sessions", "sessions.json"),
+            sessionKey: `agent:${agentId}:main`,
+          }),
+        );
+        for (const target of targets.toSorted((left, right) =>
+          left.agentId.localeCompare(right.agentId),
+        )) {
+          await replaceSessionEntry(
+            {
+              ...target,
+              defaultAgentId: "main",
+            },
+            mainSessionEntry({
+              sessionId: `${target.agentId}-interrupted`,
+              ...(target.agentId === pendingAgent ? { mainRestartRecovery: undefined } : {}),
+              pendingFinalDelivery: makePendingFinalDelivery(),
+            }),
+          );
+          for (const message of [
+            makeUserMessage("resume interrupted tool work"),
+            makeToolResultMessage("saved result"),
+          ]) {
+            await appendTranscriptMessage(
+              { ...target, sessionId: `${target.agentId}-interrupted` },
+              { cwd: tmpDir, message },
+            );
+          }
+        }
+        const pendingBefore = structuredClone(loadSessionEntry(targets[1]!));
+        const pending = createDeferred();
+        const inputRecovery = new GatewayInputRecovery(true);
+        await inputRecovery.track(
+          Promise.resolve({
+            initial: Promise.resolve(),
+            pending: new Map([[pendingAgent, pending.promise]]),
+            settled: pending.promise,
+          }),
+        );
+        const first = createDeferred();
+        const second = createDeferred();
+        let completed = 0;
+        observeAdmission((origin) => {
+          if (origin === "main-session:startup-recovery") {
+            (++completed === 1 ? first : second).resolve();
+          }
+        });
+        const failed = createDeferred();
+        const decisions = vi.spyOn(mainSessionRecoveryLog, "info");
+        const warnings = vi.spyOn(mainSessionRecoveryLog, "warn").mockImplementation((message) => {
+          if (message.includes("main-session input recovery failed for slow")) {
+            failed.resolve();
+          }
+        });
+        dispatchSettlement.resolve();
+        const recovery = schedule(
+          { getConfig: () => cfg, inputRecovery, maxRetries: 1 },
+          pending.resolve,
+        );
+        await withinTest(first.promise, signal);
+        expect(
+          callGateway,
+          JSON.stringify({ warnings: warnings.mock.calls, decisions: decisions.mock.calls }),
+        ).toHaveBeenCalledOnce();
+        expect(loadSessionEntry(targets[0]!)?.abortedLastRun).toBe(false);
+        expect(loadSessionEntry(targets[1]!)).toEqual(pendingBefore);
+        if (outcome === "stop") {
+          await recovery.stop();
+          pending.resolve();
+        } else if (outcome === "fail") {
+          pending.reject(new Error("input custody restoration failed"));
+          await withinTest(failed.promise, signal);
+          await recovery.stop();
+        } else {
+          pending.resolve();
+          await withinTest(second.promise, signal);
+          await recovery.stop();
+        }
+        expect(callGateway).toHaveBeenCalledTimes(outcome === "resume" ? 2 : 1);
+        expect(loadSessionEntry(targets[1]!)?.abortedLastRun).toBe(outcome !== "resume");
+      });
+    },
+  );
 
   it.for(["resume", "crash", "stop", "replace", "healthy"] as const)(
     "preserves interrupted turns through crash-loop quarantine (%s)",
@@ -425,18 +536,9 @@ describe("startup recovery admission", () => {
         sessionId: "other-session",
         pendingFinalDelivery: makePendingFinalDelivery(),
       });
-      const executionWait = createDeferred();
-      const wait = gatewayRuntime.waitForAgent;
-      const waitSpy = vi
-        .spyOn(gatewayRuntime, "waitForAgent")
-        .mockImplementation(async <T>(request: Record<string, unknown>, timeoutMs?: number) => {
-          if (typeof request.timeoutMs === "number" && request.timeoutMs > 0) {
-            executionWait.resolve();
-            await dispatchSettlement.promise;
-            return { status: "ok", endedAt: Date.now() } as T;
-          }
-          return await wait<T>(request, timeoutMs);
-        });
+      const waitSpy = vi.spyOn(gatewayRuntime, "waitForAgent").mockImplementation(() => {
+        throw new Error("Startup preparation must not wait for execution");
+      });
       const prepared = createDeferred();
       const releasePreparation = createDeferred();
       const read = transcriptReaders.readSessionMessagesAsync;
@@ -469,7 +571,7 @@ describe("startup recovery admission", () => {
       }
       releasePreparation.resolve();
       // Execution remains held by dispatchSettlement until this test's cleanup.
-      await withinTest(Promise.race([passFinished.promise, executionWait.promise]), signal);
+      await withinTest(passFinished.promise, signal);
       await stopping;
       expect(preparation.peak).toBe(1);
       expect(callGateway).toHaveBeenCalledTimes(action === "stop" ? 0 : 2);

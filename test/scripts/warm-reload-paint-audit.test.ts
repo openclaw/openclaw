@@ -1,4 +1,4 @@
-import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { cp, mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { afterEach, expect, it } from "vitest";
 import { applyWarmReloadPaintAudit } from "../../scripts/perf/warm-reload-paint-audit.ts";
@@ -123,4 +123,35 @@ it("requires exactly one attested observation per captured reload and actual cap
   await expect(applyWarmReloadPaintAudit(input.reportPath, input.auditPath)).rejects.toThrow(
     "Invalid PNG",
   );
+});
+
+it("keeps matching route/run names in compared arms separate", async () => {
+  const input = await fixture();
+  const directory = path.dirname(input.reportPath);
+  const report = JSON.parse(input.original);
+  const originalResult = report.results[0];
+  report.results = [];
+  for (const arm of ["base", "candidate"]) {
+    await cp(path.join(directory, "dashboard"), path.join(directory, arm, "dashboard"), {
+      recursive: true,
+    });
+    report.results.push({ ...originalResult, arm });
+  }
+  await writeFile(input.reportPath, JSON.stringify(report));
+  await input.writeAudit([
+    { ...input.observation, arm: "base", mainFrame: "frame-00002.png" },
+    { ...input.observation, arm: "candidate" },
+  ]);
+  const output = JSON.parse(
+    await readFile(await applyWarmReloadPaintAudit(input.reportPath, input.auditPath), "utf8"),
+  );
+  expect(
+    output.results.map(
+      (result: { runs: Array<{ auditedPaint: { main: { frame: string; atMs: number } } }> }) =>
+        result.runs[0]!.auditedPaint.main,
+    ),
+  ).toEqual([
+    expect.objectContaining({ frame: "base/dashboard/cold/frame-00002.png", atMs: 15 }),
+    expect.objectContaining({ frame: "candidate/dashboard/cold/frame-00003.png", atMs: 45 }),
+  ]);
 });

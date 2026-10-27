@@ -326,7 +326,8 @@ function openAgentDatabaseBackend(
     if (!database || !database.db.isOpen || getOpenClawAgentDatabaseIfOpen(options) !== database) {
       throw new Error("Agent execution lost its retained native database");
     }
-    if (refreshSchema) {
+    // A fresh open already admitted the schema; publication below still checks its live receipt.
+    if (refreshSchema && !validation) {
       validation = refreshOpenClawAgentDatabaseSchema(database, admitOpen);
     }
     requestSqliteWorkerOperationAdmission({

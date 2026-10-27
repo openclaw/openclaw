@@ -316,6 +316,7 @@ async function scrollToTop(page: Page) {
       scrollFrames: frameTimes.length,
       blankFrames,
       mountedRows,
+      frameGapMedianMs: sorted[Math.floor(sorted.length / 2)]!,
       frameGapP95Ms: sorted[Math.ceil(sorted.length * 0.95) - 1]!,
       estimatedDroppedFrames: gaps.reduce(
         (sum, gap) => sum + Math.max(0, Math.round(gap / (1000 / 60)) - 1),

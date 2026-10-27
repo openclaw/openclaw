@@ -70,10 +70,7 @@ function formatChangedPromptSections(before?: PromptSectionDigests, after?: Prom
   const changed = [...new Set([...Object.keys(after ?? {}), ...Object.keys(before ?? {})])].filter(
     (key) => before?.[key] !== after?.[key],
   );
-  if (changed.length === 0) {
-    return "Other";
-  }
-  const named = changed.slice(0, MAX_NAMED_SECTION_CHANGES).join(", ");
+  const named = changed.slice(0, MAX_NAMED_SECTION_CHANGES).join(", ") || "Other";
   const hidden = changed.length - MAX_NAMED_SECTION_CHANGES;
   return hidden > 0 ? `${named}, +${hidden} more` : named;
 }
@@ -133,7 +130,7 @@ const toolSchemaFingerprints = new WeakMap<object, string>();
 const MAX_TRACKERS = 512;
 const historyRewriteWarnings = createDedupeCache({ ttlMs: 0, maxSize: MAX_TRACKERS });
 const MAX_HISTORY_DIFF_FIELDS = 8;
-// Only these static names may enter diagnostics; extension keys can contain user data.
+// Known fields retain stable markers; other diagnostics name bounded keys, never values.
 const HISTORY_ENVELOPE_FIELDS = new Set([
   "role",
   "timestamp",
@@ -168,6 +165,10 @@ const HISTORY_BLOCK_FIELDS = new Set([
   "mimeType",
   "index",
 ]);
+
+function describeHistoryField(key: string, known: ReadonlySet<string>) {
+  return known.has(key) ? key : `other[${JSON.stringify(sanitizeForLog(key).slice(0, 80))}]`;
+}
 
 function unpackHistoryFingerprint(fingerprint: PromptHistoryFingerprint) {
   // One kind byte and a 32-byte envelope digest precede the ordered content hashes.
@@ -232,7 +233,7 @@ function describeHistoryChange(
             ...(changed.length
               ? new Set(
                   changed.map(
-                    (key) => `content[${index}].${HISTORY_BLOCK_FIELDS.has(key) ? key : "other"}`,
+                    (key) => `content[${index}].${describeHistoryField(key, HISTORY_BLOCK_FIELDS)}`,
                   ),
                 )
               : [`content[${index}]`]),
@@ -252,7 +253,7 @@ function describeHistoryChange(
   }
   for (const key of new Set([...previous.envelopeFields.keys(), ...next.envelopeFields.keys()])) {
     if (previous.envelopeFields.get(key) !== next.envelopeFields.get(key)) {
-      const field = `envelope.${HISTORY_ENVELOPE_FIELDS.has(key) ? key : "other"}`;
+      const field = `envelope.${describeHistoryField(key, HISTORY_ENVELOPE_FIELDS)}`;
       if (!fields.includes(field)) {
         fields.push(field);
       }
@@ -506,7 +507,6 @@ export function collectPromptCacheTools(
 
 // The session tool pin holds the tool block on every route; system prompts are
 // pinned only on routes with in-history prompt updates, so they are reported, not asserted.
-const PROMPT_PREFIX_CHANGE_CODES = new Set<PromptCacheChange["code"]>(["tools"]);
 
 export function beginPromptCacheObservation(
   params: PromptCacheIdentity & {
@@ -562,17 +562,28 @@ export function beginPromptCacheObservation(
     toolCount: tools.length,
     tools,
   };
-  const history = params.messages.map((message, index) =>
-    fingerprintMessage(message, previous?.history[index]),
-  );
-  // Worker transfer copies layout strings; share them only within this history.
-  const layouts = new Map<string, string>();
-  for (const fingerprint of history) {
-    const shared = layouts.get(fingerprint.layout);
-    if (shared !== undefined) {
-      fingerprint.layout = shared;
-    } else {
-      layouts.set(fingerprint.layout, fingerprint.layout);
+  let history = previous?.history ?? [];
+  for (let index = 0; index < params.messages.length; index++) {
+    const fingerprint = fingerprintMessage(params.messages[index]!, previous?.history[index]);
+    if (fingerprint !== history[index]) {
+      // Copy before changing the baseline used by divergence diagnostics.
+      history = history === previous?.history ? history.slice() : history;
+      history[index] = fingerprint;
+    }
+  }
+  if (history.length > params.messages.length) {
+    history = history.slice(0, params.messages.length);
+  }
+  if (history !== previous?.history) {
+    // Worker transfer copies layout strings; unchanged histories already share them.
+    const layouts = new Map<string, string>();
+    for (const fingerprint of history) {
+      const shared = layouts.get(fingerprint.layout);
+      if (shared !== undefined) {
+        fingerprint.layout = shared;
+      } else {
+        layouts.set(fingerprint.layout, fingerprint.layout);
+      }
     }
   }
   const changes = previous
@@ -621,9 +632,7 @@ export function beginPromptCacheObservation(
   // Within one session the tool definitions depend only on session and config facts;
   // a model, transport or retention change starts over.
   const prefixChanges =
-    restarted || previous?.toolPinChanged
-      ? []
-      : changes.filter(({ code }) => PROMPT_PREFIX_CHANGE_CODES.has(code));
+    restarted || previous?.toolPinChanged ? [] : changes.filter(({ code }) => code === "tools");
   if (process.env.OPENCLAW_PROMPT_CACHE_ASSERT === "1" && (violation || prefixChanges.length)) {
     const detail = [violation, ...prefixChanges]
       .filter((change) => change !== undefined)

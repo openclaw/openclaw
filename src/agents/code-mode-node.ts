@@ -75,7 +75,7 @@ function prepareInput(input: NodeInput) {
   };
 }
 const retiringPools = new Set<NodePool>();
-const idlePools = new Map<NodePool, GatewayScheduledJob[]>();
+const idlePools = new Map<NodePool, { job: GatewayScheduledJob; expired: boolean }>();
 const poolLifetimes = new WeakMap<LegacyPluginSdkResourceHost, NodePoolLifetime>();
 let nextPoolId = 0;
 const MAX_IDLE_POOLS = 8;
@@ -84,13 +84,30 @@ const gcStorm = channel("openclaw.code-mode.gc-storm");
 let nextGcStormRetirementAt = 0;
 
 function removeIdlePool(owner: NodePool): void {
-  for (const job of idlePools.get(owner) ?? []) {
-    job.cancel();
-  }
+  idlePools.get(owner)?.job.cancel();
   idlePools.delete(owner);
   if (!idlePools.size) {
     memoryPressure.unsubscribe(retireIdlePools);
   }
+}
+
+function newestIdlePool(
+  lifetime: NodePoolLifetime | undefined,
+  url: string,
+  memoryLimitBytes: number,
+): NodePool | undefined {
+  let warm: NodePool | undefined;
+  for (const owner of idlePools.keys()) {
+    if (
+      owner.memoryLimitBytes === memoryLimitBytes &&
+      owner.lifetime === lifetime &&
+      owner.url === url &&
+      !owner.tasks.isClosed
+    ) {
+      warm = owner;
+    }
+  }
+  return warm;
 }
 
 function retireIdlePool(owner: NodePool): void {
@@ -176,17 +193,7 @@ async function takePool(memoryLimitBytes: number, signal: AbortSignal): Promise<
     }
     await Promise.all([...retiring].map((owner) => closePool(owner, "rotation")));
   }
-  let warm: NodePool | undefined;
-  for (const owner of idlePools.keys()) {
-    if (
-      owner.memoryLimitBytes === memoryLimitBytes &&
-      owner.lifetime === lifetime &&
-      owner.url === workerUrl.href &&
-      !owner.tasks.isClosed
-    ) {
-      warm = owner;
-    }
-  }
+  const warm = newestIdlePool(lifetime, workerUrl.href, memoryLimitBytes);
   // Reuse the newest matching pool so serial work lets an earlier burst expire.
   if (warm) {
     removeIdlePool(warm);
@@ -249,25 +256,32 @@ async function releasePool(owner: NodePool): Promise<void> {
     await closePool(owner, "eviction");
     return;
   }
-  idlePools.set(
-    owner,
+  const previous = newestIdlePool(lifetime, owner.url, owner.memoryLimitBytes);
+  idlePools.set(owner, {
+    expired: false,
     // Warm-worker retirement belongs to the host, never the completed turn's transcript context.
-    runInDetachedAsyncContext(() => [
-      lifetime.scheduler.schedule({
-        id: `code-mode-worker-idle:${++nextPoolId}`,
-        delayMs: 5 * 60_000,
-        run: () => closePool(owner, "idle-expiry"),
-      }),
+    job: runInDetachedAsyncContext(() =>
       lifetime.scheduler.schedule({
         id: `code-mode-worker-surplus:${++nextPoolId}`,
         delayMs: 30_000,
-        // Keep one warm isolate through gaps without retaining the completed burst.
-        run: () => (idlePools.size === 1 ? undefined : closePool(owner, "idle-expiry")),
+        run: () => {
+          const idle = idlePools.get(owner);
+          if (idle) {
+            idle.expired = true;
+          }
+          return newestIdlePool(lifetime, owner.url, owner.memoryLimitBytes) === owner
+            ? undefined
+            : closePool(owner, "idle-expiry");
+        },
       }),
-    ]),
-  );
+    ),
+  });
   if (idlePools.size === 1) {
     memoryPressure.subscribe(retireIdlePools);
+  }
+  // A completed later cell supersedes a warm floor without renewing its old deadline.
+  if (previous && idlePools.get(previous)?.expired) {
+    await closePool(previous, "idle-expiry");
   }
 }
 

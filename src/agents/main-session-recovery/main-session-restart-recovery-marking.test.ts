@@ -263,7 +263,7 @@ it("leaves a completed replacement child and its copied old recovery claim untou
   expect(child.read()).toEqual(before);
 });
 
-it("skips missing or inactive shutdown sessions while marking an active one", async () => {
+it("skips missing shutdown sessions while marking an active one", async () => {
   using store = createStore();
   const main = await store.session("main", { lifecycleRunId: "main-run" });
   const missing = {
@@ -272,15 +272,8 @@ it("skips missing or inactive shutdown sessions while marking an active one", as
     sessionId: "missing-session",
     runId: "missing-run",
   };
-  const other = await store.session("other", { lifecycleRunId: "other-run" });
-  expect(
-    await store.mark({
-      activeRuns: [main.run, missing, other.run],
-      isActiveRun: (activeRun) => activeRun.runId !== "main-run",
-    }),
-  ).toEqual({ marked: 1, skipped: 0 });
-  expect(main.read()?.mainRestartRecovery).toBeUndefined();
-  expect(other.read()?.abortedLastRun).toBe(true);
+  expect(await store.mark({ activeRuns: [main.run, missing] })).toEqual({ marked: 1, skipped: 0 });
+  expect(main.read()?.abortedLastRun).toBe(true);
 });
 
 it.each(["store", "agent"] as const)(

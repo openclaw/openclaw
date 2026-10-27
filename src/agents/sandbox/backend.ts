@@ -169,6 +169,13 @@ export async function createSandboxBackend(
   ) {
     throw new Error("Sandbox GitHub identity requires the built-in Docker or Podman backend.");
   }
+  // Built-in containers publish their complete allocation under the lifecycle lock.
+  if (factory === createDockerSandboxBackend) {
+    return await createDockerSandboxBackend(params, operatorAuthority, githubIdentity);
+  }
+  if (factory === createPodmanSandboxBackend) {
+    return await createPodmanSandboxBackend(params, operatorAuthority, githubIdentity);
+  }
   const reserveRuntimeId = resolveSandboxBackendRegistration(params.cfg.backend)?.reserveRuntimeId;
   const toEntry = (backend: SandboxBackendHandle): SandboxRegistryEntry => ({
     containerName: backend.runtimeId,
@@ -181,14 +188,7 @@ export async function createSandboxBackend(
     configLabelKind: backend.configLabelKind ?? "Image",
   });
   if (!reserveRuntimeId) {
-    // Only the built-in container owner can establish custody of its allocation.
-    // A plugin overriding the same backend ID retains its own lifecycle contract.
-    const backend =
-      factory === createDockerSandboxBackend
-        ? await createDockerSandboxBackend(params, operatorAuthority, githubIdentity)
-        : factory === createPodmanSandboxBackend
-          ? await createPodmanSandboxBackend(params, operatorAuthority, githubIdentity)
-          : await factory(params);
+    const backend = await factory(params);
     await updateRegistry(toEntry(backend), {
       ...guard,
       beforeLegacyApply: params.assertRuntimeCurrent,

@@ -191,6 +191,7 @@ type PluginNpmRuntimeBuildParams = {
   packageDir: string;
   logLevel?: "silent" | "error" | "warn" | "info";
   profile?: "qa-gateway-fixture";
+  controlUiAssetsPrepared?: boolean;
 };
 
 function readJsonFile(filePath: string) {
@@ -739,7 +740,16 @@ export async function buildPluginNpmRuntime(params: PluginNpmRuntimeBuildParams)
   });
   const { build } = await import("tsdown");
   assertRealOutputRoot(plan.outDir);
-  fs.rmSync(plan.outDir, { recursive: true, force: true });
+  if (params.controlUiAssetsPrepared && fs.existsSync(plan.outDir)) {
+    // The composed root build already published these source-owned browser assets.
+    for (const entry of fs.readdirSync(plan.outDir)) {
+      if (entry !== "control-ui" && entry !== "openclaw.plugin.json") {
+        fs.rmSync(path.join(plan.outDir, entry), { recursive: true, force: true });
+      }
+    }
+  } else {
+    fs.rmSync(plan.outDir, { recursive: true, force: true });
+  }
   await build(options);
   const missingHostExports = listMissingPluginNpmRuntimeHostExports(plan);
   if (missingHostExports.length > 0) {
@@ -751,7 +761,9 @@ export async function buildPluginNpmRuntime(params: PluginNpmRuntimeBuildParams)
   return {
     ...plan,
     inputFiles: [...inputFiles].toSorted(),
-    ...(await preparePackageRuntimeAssets(plan)),
+    ...(await preparePackageRuntimeAssets(plan, {
+      controlUiAssetsPrepared: params.controlUiAssetsPrepared,
+    })),
   };
 }
 

@@ -132,9 +132,6 @@ export function createSettingsStatus<T>(
     }
     readStatus(key);
   }
-  function refresh() {
-    readStatus(requestKey());
-  }
   function readStatus(key: ReturnType<typeof requestKey>) {
     if (disposed) {
       return;
@@ -185,7 +182,9 @@ export function createSettingsStatus<T>(
     read,
     scopeKey,
     requestKey: issued,
-    refresh,
+    refresh: () => {
+      readStatus(requestKey());
+    },
     capture,
     gatewayProjection,
     configProjection,

@@ -150,6 +150,28 @@ it("lists native gateways and dispatches switching, window, primary, and setting
   expect(query(manyRows[9]!, "kbd")).toBeNull();
 });
 
+it("keeps an open gateway submenu in place while the identity menu rebuilds", async () => {
+  document.documentElement.classList.add("openclaw-native-macos");
+  setNativeGatewayTestState("remote");
+  const { sidebar, open } = await mountNative();
+  const menu = await open(true);
+  const switcher = item(menu, "command:gateways")!;
+  expect(switcher.getAttribute("aria-expanded")).toBe("true");
+  // Re-inserting a node silently closes its native popover, so the open branch must never move.
+  const branch = switcher.parentElement!;
+  const detached: Node[] = [];
+  const observer = new MutationObserver((records) =>
+    detached.push(...records.flatMap((record) => [...record.removedNodes])),
+  );
+  observer.observe(menu, { childList: true });
+  sidebar.canPairDevice = !sidebar.canPairDevice;
+  await sidebar.updateComplete;
+  observer.disconnect();
+  expect(item(menu, "command:pair-mobile")?.hasAttribute("disabled")).toBe(!sidebar.canPairDevice);
+  expect(detached).not.toContain(branch);
+  expect(switcher.getAttribute("aria-expanded")).toBe("true");
+});
+
 it.each(["missing snapshot", "empty list", "unknown current"] as const)(
   "keeps settings and known gateways available with %s",
   async (state) => {

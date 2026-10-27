@@ -841,6 +841,11 @@ agent's full integrity scan. Worker limits and existing command ordering are unc
 Genuine migration warnings remain recorded for the boot. This changes no stored state or update
 migration behavior.
 
+The initial startup pass reports fleet-wide legacy-session migration guidance.
+Deferred preparation of one agent does not repeat that advisory scan across other
+agents and retired stores. Its own schema, canonical-session, and ACP checks still
+finish before the agent becomes available; Doctor remains the repair owner.
+
 Every 60 seconds while recovery is pending, `agent database startup preparation
 still running` reports `agentId`, `phase`, `elapsedMs`, and `phaseElapsedMs`;
 `publication-wait` also names `publishingAgentId`. Success (`agent database
@@ -1129,6 +1134,10 @@ the process without SQLite cleanup, including when shutdown is waiting on the
 check. Native close and replacement refuse while inspection is pending; idle eviction
 retains its handle and lease until a later retry. Otherwise, a stopped owner
 dispatches no further maintenance.
+
+Reclamation workers await maintenance shutdown before settling native close.
+A healthy inspection overlap therefore preserves shared runtime validation,
+instead of forcing unrelated session reads through integrity re-admission.
 
 If the warning persists, capture `openclaw status --deep` output and restart the
 Gateway with `openclaw gateway restart`. Report the captured output
