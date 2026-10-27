@@ -37,7 +37,10 @@ import {
   RUNTIME_EVENT_USER_PROMPT,
   projectRuntimeContextFragments,
 } from "../../internal-runtime-context.js";
-import { resolveCommandReplyExpectation } from "../../reply-completion.js";
+import {
+  resolveCommandReplyExpectation,
+  resolveCompletionInputReplyExpectation,
+} from "../../reply-completion.js";
 import {
   deliverCompletionDirect,
   isDirectMessageDeliveryTarget,
@@ -420,8 +423,7 @@ async function sendSubagentAnnounceDirectlyBound(
       : sessionOnlyOriginChannel
         ? sessionOnlyOrigin
         : undefined;
-    const inputReplyExpectation =
-      params.expectsCompletionMessage || params.requireVisibleReply ? "required" : "optional";
+    const inputReplyExpectation = resolveCompletionInputReplyExpectation(sourceToolId, params);
     // Settle execution and receipt classification share the owner's reply obligation.
     const replyExpectation =
       sourceToolId === "subagent_settle"
