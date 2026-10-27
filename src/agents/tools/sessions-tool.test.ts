@@ -508,17 +508,21 @@ describe("sessions tool", () => {
     await runGuard.fail(failure);
     expect(loadSessionEntry(sessionScope)).toMatchObject(initialModel);
     expect(loadSessionEntry(sessionScope)).not.toHaveProperty("modelFallback");
-    const messages = (await loadTranscriptEvents(transcriptScope)).map(({ message }) => message);
-    expect(messages).toContainEqual(
+    const events = await loadTranscriptEvents(transcriptScope);
+    expect(events).toContainEqual(
       expect.objectContaining({
-        customType: "openclaw.system-note",
-        content: "System note: model broken/bad failed; reverted to openai/good.",
+        message: expect.objectContaining({
+          customType: "openclaw.system-note",
+          content: "System note: model broken/bad failed; reverted to openai/good.",
+        }),
       }),
     );
-    expect(messages).not.toContainEqual(
+    expect(events).not.toContainEqual(
       expect.objectContaining({
-        customType: "openclaw.system-note",
-        excludeFromContext: expect.anything(),
+        message: expect.objectContaining({
+          customType: "openclaw.system-note",
+          excludeFromContext: expect.anything(),
+        }),
       }),
     );
   });
