@@ -71,6 +71,10 @@ const topologyRuns = new Map<string, SubagentRunRecord>();
 let topology: ReturnType<typeof buildSubagentRunReadTopology<SubagentRunRecord>> | undefined;
 const viewRuns = new Map<string, SubagentRunReadRecord>();
 let view: ReturnType<typeof createSubagentSessionListReadIndex> | undefined;
+function disposeView() {
+  view?.dispose();
+  view = undefined;
+}
 function createRun(index: number): SubagentRunRecord {
   const text =
     lookupOnly || topologyOnly || viewOnly
@@ -123,7 +127,7 @@ function append(start: number, end: number) {
     return;
   }
   if (viewOnly) {
-    view?.dispose();
+    disposeView();
     view = createSubagentSessionListReadIndex(
       {
         snapshotIdentity: () => viewRuns,
@@ -172,8 +176,7 @@ subagentRuns.clear();
 persisted = new SubagentSessionReadLookup();
 topologyRuns.clear();
 topology = undefined;
-view?.dispose();
-view = undefined;
+disposeView();
 viewRuns.clear();
 previews.length = 0;
 const baselineHeap = await heap();
@@ -209,8 +212,7 @@ if (allocation) {
   allocatedBytes = sum(profile.head);
   inspector.disconnect();
 }
-view?.dispose();
-view = undefined;
+disposeView();
 const releasedViewRetainedBytes = viewOnly ? (await heap()) - baselineHeap : undefined;
 console.log(
   JSON.stringify({
