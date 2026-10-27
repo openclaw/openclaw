@@ -270,17 +270,6 @@ describe("chat waiting on subagents", () => {
     });
   });
 
-  it("counts children only once the pane's own child query has answered", () => {
-    const derive = (subagentSessionsHydrated: boolean) => status({ subagentSessionsHydrated }).wait;
-    expect(derive(false)).toEqual({
-      startedAt: 2_000,
-      runId: "parent-run",
-      runningCount: 0,
-      sessions: [],
-    });
-    expect(derive(true)).toMatchObject({ runningCount: 1 });
-  });
-
   it.each([2_500, 1_500])("uses lifecycle end %i, not a later transcript timestamp", (endedAt) => {
     expect(status({ selectedSession: { ...parent, endedAt } }).wait?.startedAt).toBe(endedAt);
   });
@@ -477,7 +466,13 @@ describe("chat waiting on subagents", () => {
       { subagentSessions: [child], subagentSessionsHydrated: true, subagentSessionsPending: true },
     ]) {
       const projection = status(roster);
-      expect(projection.wait?.sessions).toEqual([]);
+      // Neither counted nor named until the child query answers.
+      expect(projection.wait).toEqual({
+        startedAt: 2_000,
+        runId: "parent-run",
+        runningCount: 0,
+        sessions: [],
+      });
       expect(listResumedHandoffSessions(parent.key, roster, handoff)).toEqual([]);
       const container = document.createElement("div");
       mountWorkingIndicator(
