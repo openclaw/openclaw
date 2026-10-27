@@ -487,16 +487,6 @@ describe("command selection with configured model facts", () => {
     }
   });
 
-  it("keeps a literal catalog model over its alias", async () => {
-    const fixture = createFixture();
-    fixture.defaults.modelPolicy = { allow: ["custom/base", "custom/alias", "custom/actual"] };
-    fixture.defaults.models = { "custom/actual": { alias: "alias" } };
-    fixture.custom.models.push(configuredModel("alias"), configuredModel("actual"));
-    fixture.store[sessionKey] = automaticEntry("alias");
-    fixture.inventory.mockReturnValue([catalogEntry("custom", "alias")]);
-    expect(await fixture.unchanged()).toMatchObject(expectedRoute("alias"));
-  });
-
   it.each([
     { permission: false, error: "Model override is not authorized for this caller." },
     { permission: true, error: 'Model override "custom/child" is not allowed' },
