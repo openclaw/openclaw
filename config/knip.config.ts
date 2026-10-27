@@ -723,6 +723,7 @@ const repositoryScriptEntries = [
   // The transcript broadcast benchmark loads the stall recorder through --gateway-preload.
   "scripts/bench-filesystem-preconditions.mts!",
   "scripts/perf/github-tool-selection-measure.ts!",
+  "scripts/perf/github-preview-authority-measure.ts!",
   "scripts/perf/github-conditional-json-measure.ts!",
   "scripts/perf/session-transcript-code-measure.mjs!",
   "scripts/perf/stall-recorder-cost-preload.mjs!",

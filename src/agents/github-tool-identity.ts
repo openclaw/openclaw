@@ -93,9 +93,7 @@ export function resolveConfiguredGitHubToolIdentity(params: {
     : params.config.tools?.github;
 }
 
-function resolveSystemGitHubToolIdentity(
-  params: Pick<GitHubIdentityPreparation, "config" | "env">,
-) {
+function resolveSystemGitHubToolIdentity(params: Pick<GitHubIdentityPreparation, "config">) {
   return (
     resolveScopedGitHubToolIdentity({ ...params, agentId: "", scope: "system" }) ?? {
       source: "system-detected" as const,
@@ -103,7 +101,7 @@ function resolveSystemGitHubToolIdentity(
   );
 }
 
-function resolveGitHubToolIdentity(params: GitHubIdentityPreparation) {
+function resolveGitHubToolIdentity(params: Pick<GitHubIdentityPreparation, "config" | "agentId">) {
   return (
     resolveScopedGitHubToolIdentity({ ...params, scope: "agent" }) ??
     resolveSystemGitHubToolIdentity(params)
@@ -114,7 +112,6 @@ function resolveScopedGitHubToolIdentity(params: {
   config: OpenClawConfig;
   agentId: string;
   scope: "system" | "agent";
-  env?: NodeJS.ProcessEnv;
 }) {
   const config = resolveConfiguredGitHubToolIdentity(params);
   return config
@@ -122,17 +119,24 @@ function resolveScopedGitHubToolIdentity(params: {
         source:
           params.scope === "agent" ? ("agent-override" as const) : ("system-configured" as const),
         config,
-        profileDir: resolveManagedGitHubProfileDir({
-          agentId: params.agentId,
-          env: params.env,
-          scope: params.scope,
-          profileId: config.profileId,
-        }),
       }
     : undefined;
 }
 
 type ResolvedGitHubToolIdentity = ReturnType<typeof resolveGitHubToolIdentity>;
+
+// Selection checks only need configuration facts; credential consumers own paths.
+function resolveSelectedGitHubProfileDir(
+  params: Pick<GitHubIdentityPreparation, "agentId" | "env">,
+  identity: Exclude<ResolvedGitHubToolIdentity, { source: "system-detected" }>,
+): string {
+  return resolveManagedGitHubProfileDir({
+    agentId: params.agentId,
+    env: params.env,
+    scope: identity.source === "agent-override" ? "agent" : "system",
+    profileId: identity.config.profileId,
+  });
+}
 
 /** Prepares the non-secret child overlay and store exclusions once per agent run. */
 export function prepareGitHubToolEnvironment(
@@ -146,7 +150,7 @@ export function prepareGitHubToolEnvironment(
 }
 
 function prepareGitHubToolEnvironmentForIdentity(
-  params: Pick<GitHubIdentityPreparation, "config" | "sourceConfig" | "agentId">,
+  params: Pick<GitHubIdentityPreparation, "config" | "sourceConfig" | "agentId" | "env">,
   identity: ResolvedGitHubToolIdentity,
 ): PreparedGitHubToolEnvironment {
   const managedLocalIdentity = identity.source !== "system-detected";
@@ -159,7 +163,7 @@ function prepareGitHubToolEnvironmentForIdentity(
     localIdentityEnv: Object.freeze(
       managedLocalIdentity
         ? managedGitHubIdentityEnvironment({
-            profileDir: identity.profileDir,
+            profileDir: resolveSelectedGitHubProfileDir(params, identity),
             gitAuthor: identity.config.gitAuthor,
           })
         : {},
@@ -320,7 +324,7 @@ async function resolveGitHubIdentityFacts(
   const host = resolveGitHubHost();
   const apiBaseUrl = resolveGitHubApiBaseUrl();
   const token = managed
-    ? await readManagedGitHubToken(identity.profileDir)
+    ? await readManagedGitHubToken(resolveSelectedGitHubProfileDir(params, identity))
     : await readNativeGitHubToken(probeEnv, false, host);
   const [probe, author] = await Promise.all([
     token
@@ -478,9 +482,10 @@ async function prepareSharedGitHubIdentity(
       "Use a credential issued by the repository's GitHub host; managed profiles are issued by github.com.";
     throw error;
   }
+  const profileDir = managed ? resolveSelectedGitHubProfileDir(params, identity) : undefined;
   const readToken = () =>
-    managed
-      ? readManagedGitHubToken(identity.profileDir)
+    profileDir !== undefined
+      ? readManagedGitHubToken(profileDir)
       : params.readNativeCredential
         ? params.readNativeCredential(currentEnvironment())
         : readNativeToken(currentEnvironment(), params.allowAnonymous === true, host);
@@ -582,7 +587,10 @@ export async function prepareGitHubReadIdentity(
   const assertSelected = composeSessionSourceAssertion([
     captureExternalSessionCommitGuard(params.assertActive),
     () => {
-      const current = resolveGitHubToolIdentity({ ...params, config: params.getCurrentConfig() });
+      const current = resolveGitHubToolIdentity({
+        config: params.getCurrentConfig(),
+        agentId: params.agentId,
+      });
       if (
         current.source !== selected.source ||
         (current.source !== "system-detected" &&
