@@ -99,7 +99,7 @@ describe("security preset configuration", () => {
         cfg,
         agentId: "main",
         sandboxAvailable: true,
-        sessionEntry: { sessionId: "required", updatedAt: 1, sandbox: "required" },
+        sessionEntry: { sandbox: "required" },
       }),
     ).toMatchObject({ effectiveHost: "sandbox", canRequestNode: false });
   });
