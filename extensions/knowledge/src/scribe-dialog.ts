@@ -285,7 +285,7 @@ function effectText(input: StartDialogInput, mode: ScribeMode) {
   lead.append(
     "Knowledge will start a conversation called ",
     el("strong", scribeLabel(scribe)),
-    ` as you, with ${storeName}’s private access, and send it the prompt below. `,
+    ` as you, with ${storeName}’s private access, and send it the prompt above. `,
     mode === "once"
       ? `It works through ${scribe.id === "memory" ? "Memory" : "them"} once and reports back here. Nothing is scheduled.`
       : scribe.id === "unlinked-review"

@@ -33,7 +33,6 @@ type ScribeSession = {
 /** The cron job fields the Scribes view reads and patches. */
 export type ScribeJob = {
   id: string;
-  name?: string;
   declarationKey?: string;
   enabled: boolean;
   configRevision?: string;
