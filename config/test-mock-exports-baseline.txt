@@ -6370,7 +6370,6 @@
 ["src/utils/provider-utils.test.ts","../plugins/provider-runtime.js","281bf4466dd15fe3e09f49df3a85d1af081dcb4ce79c4e39923f1688b2896a84",1]
 ["src/web-fetch/content-extractors.runtime.test.ts","../plugins/web-content-extractors.runtime.js","1daaaf95ef2040a5b156f0578081b868334767bb42a83796a79a649eb9759576",1]
 ["src/wizard/clack-prompter.test.ts","../../packages/terminal-core/src/note.js","3153d338132173ed1f91decfc0f8e34e0eb73e165f2b61c1844cdd82e771bbde",1]
-["src/wizard/clack-prompter.test.ts","./clack-navigation-prompts.js","cf6c9d1b922006c5dd34acac16b2911db8bea97ca905b5177236bd0afdbb7cc3",1]
 ["src/wizard/setup.default-agent.test.ts","../commands/onboard-helpers.js","3efaa7e832c79e9e6644ec3d8c2b1d93c68c75c12cc597ee6243412e372dd677",1]
 ["src/wizard/setup.default-agent.test.ts","../commands/onboard-skills.js","d4e061003de2fc6fbac68c078e8b1c34c01a1f536ad3f3235f5a11de32bcdd81",1]
 ["src/wizard/setup.default-agent.test.ts","../config/logging.js","f2924fba9edcef13005e167c0986ca7daae87c68fe7d239883816e5800851a9c",1]
