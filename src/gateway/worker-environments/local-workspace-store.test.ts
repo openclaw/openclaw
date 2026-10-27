@@ -690,7 +690,7 @@ it("recovers an oversized committed row after reply loss without replaying or tr
     store.create(localWorkspaceProjectionFixture(worktreeId, root)),
   );
   const baseline = JSON.stringify({ synthetic: "x".repeat(SQLITE_WORKER_MAX_MESSAGE_BYTES / 4) });
-  const journalPack = new Uint8Array(1024).fill(7);
+  const journalPack = Buffer.alloc(1024, 7);
   let writes = 0;
   let retainedGuard: (() => void) | undefined;
   const lostReply = probe.command(stateWorker, async (command, executeOptions, scope) => {
@@ -729,7 +729,11 @@ it("recovers an oversized committed row after reply loss without replaying or tr
     paused_runtimes_json: null,
   });
   expect(acknowledged.baseline_json).toBe(baseline);
-  expect(acknowledged.journal_pack).toEqual(journalPack);
+  // Keep the worker's plain byte-view shape without another main-thread copy.
+  expect(acknowledged.journal_pack?.constructor).toBe(Uint8Array);
+  expect(acknowledged.journal_pack?.buffer).toBe(journalPack.buffer);
+  expect(acknowledged.journal_pack?.byteOffset).toBe(journalPack.byteOffset);
+  expect(acknowledged.journal_pack?.byteLength).toBe(journalPack.byteLength);
   expect(committed).toEqual(acknowledged);
   expect(committed?.baseline_json).toBe(baseline);
 });

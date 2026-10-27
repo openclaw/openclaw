@@ -1430,6 +1430,11 @@ html.openclaw-native-desktop .shell:not(.shell--mobile-nav) {
   min-width: 0;
 }
 
+.sidebar-session-window {
+  /* The virtual window owns anchoring while its rows mount and unmount. */
+  overflow-anchor: none;
+}
+
 .sidebar-recent-sessions__list {
   min-height: 12px;
 }

@@ -1327,7 +1327,13 @@ async function settleSidebarCapture(page: Page) {
   await page.evaluate(
     () =>
       new Promise<void>((resolve) => {
-        setTimeout(() => requestIdleCallback(() => resolve(), { timeout: 1000 }), 500);
+        setTimeout(() => {
+          if (typeof requestIdleCallback === "function") {
+            requestIdleCallback(() => resolve(), { timeout: 1000 });
+          } else {
+            setTimeout(resolve, 0);
+          }
+        }, 500);
       }),
   );
 }
@@ -2548,8 +2554,14 @@ export const interactionScenarios: readonly InteractionScenario[] = [
     prepare: prepareChat,
     run: async (page) => {
       const thread = page.locator(`${activePane} .chat-thread`);
-      await thread.hover();
-      await page.mouse.wheel(0, -(await thread.evaluate((element) => element.scrollHeight)));
+      if (page.viewportSize()!.width < 768) {
+        // Playwright's mobile WebKit driver has no wheel input. Use the same
+        // native scrollport jump in both mobile engines (not a wheel-latency sample).
+        await thread.evaluate((element) => element.scrollTo({ top: 0, behavior: "instant" }));
+      } else {
+        await thread.hover();
+        await page.mouse.wheel(0, -(await thread.evaluate((element) => element.scrollHeight)));
+      }
       await thread.getByText("Transcript 0 message 0.", { exact: false }).waitFor();
       await page.waitForFunction(
         (selector) => document.querySelector(selector)?.scrollTop === 0,
