@@ -3,7 +3,7 @@ import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { createSolidPngBuffer } from "../../test/helpers/image-fixtures.js";
+import { createNoisyPngBuffer, createSolidPngBuffer } from "../../test/helpers/image-fixtures.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { detectAndLoadPromptImages } from "../agents/embedded-agent-runner/run/images.js";
 import { SessionMutationAuthorizationChangedError } from "./session-mutation-authorization-error.js";
@@ -216,12 +216,24 @@ describe("composer attachment origin", () => {
 });
 
 describe("persistInboundImagesForTranscript", () => {
-  it.each(["inline", "offloaded", "rotated", "unreadable"] as const)(
+  it.each([
+    ["inline", 32, 16],
+    ["worker", 32, 16],
+    ["offloaded", 32, 16],
+    ["rotated", 16, 32],
+    ["unreadable", undefined, undefined],
+    ["mime-hint", 40, 30],
+  ] as const)(
     "persists byte-authoritative dimensions for %s images",
-    async (kind) => {
-      let bytes = createSolidPngBuffer(32, 16, { r: 12, g: 34, b: 56 });
-      if (kind === "offloaded") {
-        bytes = Buffer.concat([bytes, Buffer.alloc(2_000_000)]);
+    async (kind, width, height) => {
+      let bytes = createNoisyPngBuffer(32, 16);
+      if (kind === "offloaded" || kind === "worker") {
+        bytes = Buffer.concat([bytes, Buffer.alloc(kind === "worker" ? 1_900_000 : 2_000_000)]);
+      } else if (kind === "mime-hint") {
+        // MIME sniffing misses this permissive JPEG header reader's late SOF.
+        bytes = Buffer.alloc(70);
+        bytes.set(Buffer.from("ffd8e00032", "hex"));
+        bytes.set(Buffer.from("ffc0000b08001e0028", "hex"), 53);
       } else if (kind === "unreadable") {
         bytes = Buffer.from("89504e470d0a1a0a0000000000000000", "hex");
       } else if (kind === "rotated") {
@@ -240,13 +252,15 @@ describe("persistInboundImagesForTranscript", () => {
       const mimeType = kind === "rotated" ? "image/jpeg" : "image/png";
       const fileName = kind === "rotated" ? "portrait.jpg" : "upload.png";
       const supplied = kind === "rotated" ? { width: 32, height: 16 } : { width: 999, height: 777 };
+      const base64 = bytes.toString("base64");
+      const from = vi.spyOn(Buffer, "from");
       const parsed = await parseMessageWithAttachments(
         "Inspect",
         normalizeRpcAttachmentsToChatAttachments([
           pngAttachment({
             fileName,
             mimeType,
-            content: bytes.toString("base64"),
+            content: `data:${mimeType};base64,${base64}`,
             ...(kind === "inline" ? {} : supplied),
           }),
         ]),
@@ -254,8 +268,11 @@ describe("persistInboundImagesForTranscript", () => {
       );
       const storage = kind === "offloaded" || kind === "unreadable" ? "offloaded" : "inline";
       expect(parsed.imageOrder).toEqual([storage]);
-      const dimensions =
-        kind === "unreadable" ? [undefined, undefined] : kind === "rotated" ? [16, 32] : [32, 16];
+      if (kind === "inline" || kind === "worker" || kind === "offloaded") {
+        expect(
+          from.mock.calls.filter(([value, encoding]) => value === base64 && encoding === "base64"),
+        ).toHaveLength(0);
+      }
       const persisted = await persist(parsed);
       const message = buildPersistedUserTurnMessage({
         text: "Inspect",
@@ -263,10 +280,8 @@ describe("persistInboundImagesForTranscript", () => {
       });
       const recovered = readPersistedMediaFacts(message)?.[0];
       expect(recovered).toMatchObject({ kind: "image", fileName, contentType: mimeType });
-      expect([recovered?.width, recovered?.height]).toEqual(dimensions);
-      if (kind === "rotated") {
-        expect(saveMediaBufferMock.mock.calls[0]?.[0]).toEqual(bytes);
-      }
+      expect([recovered?.width, recovered?.height]).toEqual([width, height]);
+      expect(saveMediaBufferMock.mock.calls[0]?.[0]).toEqual(bytes);
     },
   );
 
@@ -358,24 +373,6 @@ describe("parseMessageWithAttachments", () => {
       { type: "image", data: bytes.toString("base64"), mimeType: "image/png" },
     ]);
     expect(JSON.stringify(warm.images)).toBe(JSON.stringify(cold.images));
-  });
-
-  it("parses large clipboard data URL images without full base64 decoding on the caller thread", async () => {
-    const png = Buffer.concat([Buffer.from(PNG_1x1, "base64"), Buffer.alloc(1_900_000)]);
-    const base64 = png.toString("base64");
-    const fromSpy = vi.spyOn(Buffer, "from");
-    const parsed = await parseMessageWithAttachments(
-      "see screenshot",
-      [pngAttachment({ content: `data:image/png;base64,${base64}`, fileName: "screenshot.png" })],
-      { log: { warn: () => {} } },
-    );
-
-    expect(parsed.images).toMatchObject([{ mimeType: "image/png", data: base64 }]);
-    expect(fromSpy.mock.calls.map((call) => call.slice(0, 2))).not.toContainEqual([
-      base64,
-      "base64",
-    ]);
-    expect(saveMediaBufferMock).not.toHaveBeenCalled();
   });
 
   it("keeps mixed image/PDF markers in normal and image-stripped routing order", async () => {
