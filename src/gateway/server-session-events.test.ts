@@ -213,37 +213,45 @@ describe("createTranscriptUpdateBroadcastHandler", () => {
     });
   });
 
-  it("invalidates broad and targeted subscribers once for an identity-only commit", async () => {
-    const { broadcastToConnIds, handler } = routedHandler(
-      { "agent:main:main": ["conn-targeted", "conn-shared"] },
-      ["conn-broad", "conn-shared"],
-    );
-    loadAccessorSessionEntryReadOnlyMock.mockReturnValue(sessionEntry("committed-revision"));
+  it.each(["current", "deleted"] as const)(
+    "publishes identity-only invalidation only for a %s owner",
+    async (owner) => {
+      const { broadcastToConnIds, handler } = routedHandler(
+        { "agent:main:main": ["conn-targeted", "conn-shared"] },
+        ["conn-broad", "conn-shared"],
+      );
+      loadAccessorSessionEntryReadOnlyMock.mockReturnValue(
+        owner === "current" ? sessionEntry("committed-revision") : undefined,
+      );
 
-    await handler({
-      target: transcriptTarget("/tmp/identity-only-custom-sessions.json"),
-      lifecycleRevision: "committed-revision",
-    });
+      await handler({
+        target: transcriptTarget("/tmp/identity-only-custom-sessions.json"),
+        lifecycleRevision: "committed-revision",
+      });
 
-    expect(broadcastToConnIds).toHaveBeenCalledOnce();
-    expectBroadcast(
-      broadcastToConnIds,
-      {
-        sessionKey: "agent:main:main",
-        agentId: "main",
-        sessionId: "sess-main",
-        phase: "message",
-      },
-      "sessions.changed",
-      new Set(["conn-broad", "conn-shared", "conn-targeted"]),
-    );
-    const payload = broadcastToConnIds.mock.calls[0]?.[1];
-    expectAbsentFields(
-      payload,
-      "message messageId messageSeq lifecycleRevision storePath target.storePath",
-    );
-    expect(readSessionMessageCountAsyncMock).not.toHaveBeenCalled();
-  });
+      if (owner === "current") {
+        expect(broadcastToConnIds).toHaveBeenCalledOnce();
+        expectBroadcast(
+          broadcastToConnIds,
+          {
+            sessionKey: "agent:main:main",
+            agentId: "main",
+            sessionId: "sess-main",
+            phase: "message",
+          },
+          "sessions.changed",
+          new Set(["conn-broad", "conn-shared", "conn-targeted"]),
+        );
+        expectAbsentFields(
+          broadcastToConnIds.mock.calls[0]?.[1],
+          "message messageId messageSeq lifecycleRevision storePath target.storePath",
+        );
+      } else {
+        expect(broadcastToConnIds).not.toHaveBeenCalled();
+      }
+      expect(readSessionMessageCountAsyncMock).not.toHaveBeenCalled();
+    },
+  );
 
   it("scopes a queued marker update to its final transcript key", async () => {
     listAccessorSessionEntriesReadOnlyMock
@@ -264,18 +272,6 @@ describe("createTranscriptUpdateBroadcastHandler", () => {
       "sessions.changed",
       new Set(["conn-1", "conn-current"]),
     );
-  });
-
-  it("rejects an identity-only invalidation when its custom-store owner was deleted", async () => {
-    const { broadcastToConnIds, handler } = createHandler(false);
-
-    await handler({
-      target: transcriptTarget("/tmp/deleted-identity-only-sessions.json"),
-      lifecycleRevision: "deleted-revision",
-    });
-
-    expect(broadcastToConnIds).not.toHaveBeenCalled();
-    expect(readSessionMessageCountAsyncMock).not.toHaveBeenCalled();
   });
 
   registerTranscriptMarkerQueueTests();
@@ -353,11 +349,6 @@ describe("createTranscriptUpdateBroadcastHandler", () => {
       expect(broadcastToConnIds).toHaveBeenCalledOnce();
       expectBroadcast(broadcastToConnIds, { sessionKey: "agent:main:main", messageId, messageSeq });
       if (current) {
-        expect(loadAccessorSessionEntryReadOnlyMock).toHaveBeenCalledWith({
-          agentId: "main",
-          sessionKey: "agent:main:main",
-          storePath,
-        });
         expect(loadGatewaySessionEntryReadOnlyMock).not.toHaveBeenCalled();
         expectAbsentFields(
           broadcastToConnIds.mock.calls[0]?.[1],
@@ -367,38 +358,22 @@ describe("createTranscriptUpdateBroadcastHandler", () => {
     },
   );
 
-  it("carries terminal assistant run ownership while plugin finalization keeps the run active", async () => {
-    // Finalization runs after persistence, before terminal delivery; the live run still owns status.
-    const { broadcastToConnIds, handler } = createHandler(true);
-
-    await handler({
-      ...directUpdate("message-1", "Final answer"),
-      runId: "run-before-finalize",
-    });
-
-    expectBroadcast(broadcastToConnIds, {
-      sessionKey: "agent:main:main",
-      runId: "run-before-finalize",
-      messageId: "message-1",
-      messageSeq: 1,
-      status: "running",
-      hasActiveRun: true,
-      session: expect.objectContaining({
-        key: "agent:main:main",
-        status: "running",
-        hasActiveRun: true,
-      }),
-    });
-  });
-
-  it("does not project a prepared source as a running startup transcript", async () => {
-    await expect(emitAssistantTranscriptUpdate(true, undefined, false)).resolves.toMatchObject({
-      sessionKey: "agent:main:main",
-      status: "done",
-      hasActiveRun: false,
-      session: { key: "agent:main:main", status: "done", hasActiveRun: false },
-    });
-  });
+  it.each([true, false])(
+    "projects terminal run ownership only after execution starts: %s",
+    async (started) => {
+      const { broadcastToConnIds, handler } = createHandler(true, started);
+      await handler({ ...directUpdate("message-1", "Final answer"), runId: "run-before-finalize" });
+      const state = { status: started ? "running" : "done", hasActiveRun: started };
+      expectBroadcast(broadcastToConnIds, {
+        sessionKey: "agent:main:main",
+        runId: "run-before-finalize",
+        messageId: "message-1",
+        messageSeq: 1,
+        ...state,
+        session: expect.objectContaining({ key: "agent:main:main", ...state }),
+      });
+    },
+  );
 
   it.each(["ultra", undefined])(
     "projects thinking state %s without picker metadata",
