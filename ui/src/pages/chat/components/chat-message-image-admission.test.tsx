@@ -9,7 +9,7 @@ import { mountSolid } from "../../../test-helpers/mount-solid.ts";
 import { flush } from "../../../test-helpers/solid-settle.ts";
 import { resolveAssistantAttachmentAvailability } from "./chat-message-attachment-availability.ts";
 import { AssistantAttachments } from "./chat-message-attachments-solid.tsx";
-import { MessageImages, type MessageImagesProps } from "./chat-message-images-solid.tsx";
+import { MessageImages, type MessageImagesProps } from "./chat-message-images-view.tsx";
 import {
   imageResponse,
   managedSource,

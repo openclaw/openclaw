@@ -1,7 +1,7 @@
 import { ARTIFACT_DOWNLOAD_PATH } from "../../../../packages/gateway-protocol/src/artifact-download.ts";
 import type { ControlUiLinkReaderPreview } from "../../../../src/shared/control-ui-link-reader.js";
 
-export type ChatImageDisplayFact = {
+type ChatImageDisplayFact = {
   width: number;
   height: number;
   rendition: 480 | 960;
