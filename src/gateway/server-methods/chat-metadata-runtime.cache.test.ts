@@ -52,7 +52,7 @@ test("reads shared auth once per fleet check and observes the next mutation", as
       },
     ]),
   );
-  harness.getPreparedOwner.mockImplementation(({ agentId } = {}) => owners.get(agentId ?? "main"));
+  harness.getPreparedOwner.mockImplementation((params) => owners.get(params?.agentId ?? "main"));
   const revisions = new Map<string | undefined, number>();
   harness.getAuthStoreRevision.mockImplementation((dir) => revisions.get(dir) ?? 0);
   await harness.refresh();
