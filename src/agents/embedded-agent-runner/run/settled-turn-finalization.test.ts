@@ -28,21 +28,7 @@ import type { EmbeddedRunAttemptParams } from "./types.js";
 
 const backendMocks = vi.hoisted(() => ({
   finalize: vi.fn(),
-  resolveRuntimeModelAttempt: vi.fn(
-    (runtimePlan?: {
-      resolvedRef?: { provider?: string; modelId?: string };
-      auth?: { credentialSource?: unknown };
-    }) =>
-      runtimePlan?.resolvedRef?.provider &&
-      runtimePlan.resolvedRef.modelId &&
-      runtimePlan.auth?.credentialSource
-        ? {
-            provider: runtimePlan.resolvedRef.provider,
-            model: runtimePlan.resolvedRef.modelId,
-            credentialSource: runtimePlan.auth.credentialSource,
-          }
-        : undefined,
-  ),
+  resolveRuntimeModelAttempt: vi.fn<typeof import("./backend.js").resolveRuntimeModelAttempt>(),
 }));
 const transcriptMocks = vi.hoisted(() => ({
   append: vi.fn(),
@@ -177,35 +163,29 @@ describe("prepareTerminalWithSettledTurnFinalization", () => {
     });
   }
 
-  it.each(["length", "stop"] as const)(
-    "labels a recovered summary only when the settled turn was cut off (%s)",
-    async (stopReason) => {
+  it.each([
+    ["length", "missing", [ANSWER, CUT_OFF_SUMMARY_NOTICE_TEXT]],
+    ["stop", "missing", [ANSWER]],
+    ["length", "delivered", []],
+  ] as const)(
+    "delivers the %s recovery summary and notice only while custody remains %s",
+    async (stopReason, delivery, texts) => {
       // #178300: a tool-free summary of a cut-off turn must not read as a clean finish.
+      const input = finalizationInput(cutOffAttempt(stopReason));
+      if (delivery === "delivered") {
+        input.terminalBase.runParams.resolveReplyDelivery = vi
+          .fn()
+          .mockResolvedValueOnce("missing")
+          .mockResolvedValue(delivery);
+      }
       answer();
-
-      const result = await finalize(finalizationInput(cutOffAttempt(stopReason)));
-
+      const result = await finalize(input);
       expect(result.finalizationOutcome).toBe("answered");
-      expect(result.prepared.payloadsWithToolMedia?.map((payload) => payload.text)).toEqual(
-        stopReason === "length" ? [ANSWER, CUT_OFF_SUMMARY_NOTICE_TEXT] : [ANSWER],
+      expect((result.prepared.payloadsWithToolMedia ?? []).map((payload) => payload.text)).toEqual(
+        texts,
       );
     },
   );
-
-  it("holds the cut-off notice back with a summary whose source reply was already delivered", async () => {
-    const input = finalizationInput(cutOffAttempt("length"));
-    // The source reply lands while the finalizer runs, so its summary must not be sent.
-    input.terminalBase.runParams.resolveReplyDelivery = vi
-      .fn()
-      .mockResolvedValueOnce("missing")
-      .mockResolvedValue("delivered");
-    answer();
-
-    const result = await finalize(input);
-
-    expect(result.finalizationOutcome).toBe("answered");
-    expect(result.prepared.payloadsWithToolMedia ?? []).toEqual([]);
-  });
 
   it.each(["answered", "empty"] as const)(
     "carries only a real finalizer answer across message-tool-only suppression (%s)",
@@ -349,6 +329,11 @@ describe("prepareTerminalWithSettledTurnFinalization", () => {
       resolvedRef: { provider: "openai", modelId: "gpt-5.6-luna" },
       auth: { credentialSource: { kind: "profile" } },
     } as never;
+    backendMocks.resolveRuntimeModelAttempt.mockReturnValueOnce({
+      provider: "openai",
+      model: "gpt-5.6-luna",
+      credentialSource: { kind: "profile" },
+    });
     const finalAssistant = textAssistant("The exec tool failed: post-processing error.", {
       provider: "host-finalizer",
       model: "summary-model",
@@ -360,6 +345,9 @@ describe("prepareTerminalWithSettledTurnFinalization", () => {
 
     const result = await finalize(input);
 
+    expect(backendMocks.resolveRuntimeModelAttempt).toHaveBeenCalledWith(
+      input.finalization.preparedAttempt.runtimePlan,
+    );
     expect(result.attempt).toMatchObject({
       ...runtimeContext,
       modelAttempt: {

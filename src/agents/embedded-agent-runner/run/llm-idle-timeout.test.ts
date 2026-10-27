@@ -45,6 +45,25 @@ function openStream(
   )({} as Parameters<StreamFn>[0], {} as Parameters<StreamFn>[1], options);
 }
 
+function sourceFixture(
+  source: ReturnType<StreamFn> | StreamFn,
+  watchdogOptions?: Parameters<typeof streamWithIdleTimeout>[3],
+  options?: Parameters<StreamFn>[2],
+  decorate: (stream: StreamFn) => StreamFn = (stream) => stream,
+) {
+  let signal: AbortSignal | undefined;
+  const onTimeout = vi.fn();
+  const producer: StreamFn = (model, context, request) => {
+    signal = request?.signal;
+    return typeof source === "function" ? source(model, context, request) : source;
+  };
+  return {
+    stream: openStream(decorate(producer), onTimeout, watchdogOptions, options),
+    onTimeout,
+    signal: () => signal,
+  };
+}
+
 function textDelta(delta: string) {
   return { type: "text_delta" as const, contentIndex: 0, delta };
 }
@@ -72,31 +91,25 @@ describe("streamWithIdleTimeout", () => {
     const caller = new AbortController();
     const listeners = vi.spyOn(caller.signal, "addEventListener");
     const source = createAssistantMessageEventStream();
-    let signal: AbortSignal | undefined;
-    const baseFn: StreamFn = (_model, _context, options) => {
-      signal = options?.signal;
-      return source;
-    };
-    const onTimeout = vi.fn();
-    const stream = await openStream(baseFn, onTimeout, undefined, { signal: caller.signal });
-    const iterator = stream[Symbol.asyncIterator]();
+    const watched = sourceFixture(source, undefined, { signal: caller.signal });
+    const iterator = (await watched.stream)[Symbol.asyncIterator]();
     try {
       for (let index = 0; index < 16; index += 1) {
         const next = iterator.next();
         await vi.advanceTimersByTimeAsync(10);
-        notifyLlmRequestActivity(signal);
+        notifyLlmRequestActivity(watched.signal());
         const event = textDelta(String(index));
         source.push(event);
         expect((await next).value).toBe(event);
       }
-      expect(onTimeout).not.toHaveBeenCalled();
+      expect(watched.onTimeout).not.toHaveBeenCalled();
       expect(timers.mock.calls.length).toBeLessThanOrEqual(4);
       expect(listeners.mock.calls.length).toBeLessThanOrEqual(2);
       const pending = iterator.next().catch((error: unknown) => error);
       caller.abort(new Error("cancel after deltas"));
       expect(await pending).toMatchObject({ name: "AbortError", message: "cancel after deltas" });
       await vi.advanceTimersByTimeAsync(100);
-      expect(onTimeout).not.toHaveBeenCalled();
+      expect(watched.onTimeout).not.toHaveBeenCalled();
     } finally {
       source.end(makeAgentAssistantMessage({ content: [], stopReason: "aborted" }));
       await iterator.return?.();
@@ -104,24 +117,20 @@ describe("streamWithIdleTimeout", () => {
   });
 
   it("throws when a promise stream never resolves", async () => {
-    let streamSignal: AbortSignal | undefined;
-    const baseFn = vi.fn((_model, _context, options) => {
-      streamSignal = options?.signal;
-      // Simulate providers that hang during stream creation but honor abort
-      // once the idle watchdog fires.
-      return new Promise<AssistantMessageEventStream>((_resolve, reject) => {
-        streamSignal?.addEventListener("abort", () => {
-          reject(toLintErrorObject(streamSignal?.reason, "Non-Error rejection"));
-        });
-      });
-    });
-    const onIdleTimeout = vi.fn();
-    const stream = expect(openStream(baseFn, onIdleTimeout)).rejects.toThrow(/LLM idle timeout/);
+    const watched = sourceFixture(
+      (_model, _context, options) =>
+        new Promise<AssistantMessageEventStream>((_resolve, reject) => {
+          options?.signal?.addEventListener("abort", () => {
+            reject(toLintErrorObject(options?.signal?.reason, "Non-Error rejection"));
+          });
+        }),
+    );
+    const stream = expect(watched.stream).rejects.toThrow(/LLM idle timeout/);
     await vi.advanceTimersByTimeAsync(50);
     await stream;
 
-    expect(onIdleTimeout).toHaveBeenCalledTimes(1);
-    expect(streamSignal?.aborted).toBe(true);
+    expect(watched.onTimeout).toHaveBeenCalledOnce();
+    expect(watched.signal()?.aborted).toBe(true);
   });
 
   it("clears setup state when baseFn throws synchronously", async () => {
@@ -263,20 +272,15 @@ describe("streamWithIdleTimeout", () => {
     setDiagnosticsEnabledForProcess(true);
     const ref = { sessionId: TEST_RUN, runId: TEST_RUN };
     markDiagnosticEmbeddedRunStarted(ref);
-    let requestSignal: AbortSignal | undefined;
-    const baseFn: StreamFn = (_model, _context, options) => {
-      requestSignal = options?.signal;
-      return createAssistantMessageEventStream();
-    };
-    const stream = await openStream(baseFn, undefined, { runId: TEST_RUN });
-    const iterator = stream[Symbol.asyncIterator]();
+    const watched = sourceFixture(createAssistantMessageEventStream(), { runId: TEST_RUN });
+    const iterator = (await watched.stream)[Symbol.asyncIterator]();
     try {
       await vi.advanceTimersByTimeAsync(40);
-      notifyLlmRequestActivity(requestSignal, false);
+      notifyLlmRequestActivity(watched.signal(), false);
       expect(getDiagnosticSessionActivitySnapshot(ref).lastProgressReason).toBe(
         "embedded_run:started",
       );
-      notifyLlmRequestActivity(requestSignal, true);
+      notifyLlmRequestActivity(watched.signal(), true);
       expect(getDiagnosticSessionActivitySnapshot(ref)).toMatchObject({
         lastProgressAgeMs: 0,
         lastProgressReason: "model_call:stream_progress",
@@ -375,14 +379,13 @@ describe("streamWithIdleTimeout caller cancellation", () => {
     async ({ honorsAbort, returning }) => {
       const callerAbortController = new AbortController();
       const callerReason = new Error("caller cancelled");
-      const baseFn = vi.fn<StreamFn>((_model, _context, options) =>
-        createNeverYieldingStream(honorsAbort ? options?.signal : undefined),
+      const watched = sourceFixture(
+        (_model, _context, options) =>
+          createNeverYieldingStream(honorsAbort ? options?.signal : undefined),
+        undefined,
+        { signal: callerAbortController.signal },
       );
-      const onIdleTimeout = vi.fn();
-      const stream = await openStream(baseFn, onIdleTimeout, undefined, {
-        signal: callerAbortController.signal,
-      });
-      const iterator = stream[Symbol.asyncIterator]();
+      const iterator = (await watched.stream)[Symbol.asyncIterator]();
       const outcome = iterator.next().catch((error: unknown) => error);
       const overlapping = iterator.next().catch((error: unknown) => error);
 
@@ -400,10 +403,8 @@ describe("streamWithIdleTimeout caller cancellation", () => {
       await expect(outcome).resolves.toMatchObject(cancelled);
       await expect(overlapping).resolves.toMatchObject(cancelled);
       await vi.advanceTimersByTimeAsync(50);
-      const providerSignal = (baseFn.mock.calls.at(0)?.[2] as { signal?: AbortSignal } | undefined)
-        ?.signal;
-      expect(providerSignal?.reason).toBe(returning ? undefined : callerReason);
-      expect(onIdleTimeout).not.toHaveBeenCalled();
+      expect(watched.signal()?.reason).toBe(returning ? undefined : callerReason);
+      expect(watched.onTimeout).not.toHaveBeenCalled();
     },
   );
 
@@ -419,8 +420,8 @@ describe("streamWithIdleTimeout caller cancellation", () => {
         iterator.next = () => Promise.reject(failure);
         return iterator;
       };
-      const baseFn: StreamFn = () => source;
-      const stream = await openStream(baseFn, undefined, undefined, { signal: caller.signal });
+      const watched = sourceFixture(source, undefined, { signal: caller.signal });
+      const stream = await watched.stream;
       const error = await stream[Symbol.asyncIterator]()
         .next()
         .catch((value: unknown) => value);
@@ -448,34 +449,31 @@ describe("streamWithIdleTimeout caller cancellation", () => {
       if (alreadyAborted) {
         callerAbortController.abort(callerReason);
       }
-      const baseFnMock = vi.fn(
-        (_model: unknown, _context: unknown, options?: { signal?: AbortSignal }) =>
+      const watched = sourceFixture(
+        (_model, _context, options) =>
           options?.signal?.aborted
             ? Promise.reject(new Error("provider rejected cancelled setup"))
             : new Promise<AssistantMessageEventStream>(() => {}),
+        undefined,
+        { signal: callerAbortController.signal },
       );
-      const baseFn = baseFnMock as unknown as Parameters<typeof streamWithIdleTimeout>[0];
-      const onIdleTimeout = vi.fn();
-      const pending = openStream(baseFn, onIdleTimeout, undefined, {
-        signal: callerAbortController.signal,
-      });
-      const providerSignal = (
-        baseFnMock.mock.calls.at(0)?.[2] as { signal?: AbortSignal } | undefined
-      )?.signal;
       if (accepted) {
         await vi.advanceTimersByTimeAsync(20);
-        notifyLlmRequestActivity(providerSignal);
+        notifyLlmRequestActivity(watched.signal());
       }
 
       callerAbortController.abort(callerReason);
 
-      await expect(pending).rejects.toMatchObject({
+      await expect(watched.stream).rejects.toMatchObject({
         name: "AbortError",
         message: callerReason.message,
         cause: callerReason,
       });
       await vi.advanceTimersByTimeAsync(50);
-      expect([providerSignal?.reason, onIdleTimeout.mock.calls.length]).toEqual([callerReason, 0]);
+      expect([watched.signal()?.reason, watched.onTimeout.mock.calls.length]).toEqual([
+        callerReason,
+        0,
+      ]);
     },
   );
 });
@@ -491,17 +489,14 @@ describe("streamWithIdleTimeout parked consumer", () => {
       stopReason: "toolUse",
       timestamp: 1,
     });
-    let requestSignal: AbortSignal | undefined;
-    const baseFn: StreamFn = (_model, _context, options) => {
-      requestSignal = options?.signal;
-      return source;
-    };
-    const onIdleTimeout = vi.fn();
     // Match attempt-stream's production order: repair inside the watchdog.
-    const stream = await openStream(
-      wrapStreamFnRepairMalformedToolCallArguments(baseFn),
-      onIdleTimeout,
+    const watched = sourceFixture(
+      source,
+      undefined,
+      undefined,
+      wrapStreamFnRepairMalformedToolCallArguments,
     );
+    const stream = await watched.stream;
     const iterator = stream[Symbol.asyncIterator]();
     source.push({
       type: "toolcall_delta",
@@ -522,8 +517,8 @@ describe("streamWithIdleTimeout parked consumer", () => {
     source.push({ type: "done", reason: "toolUse", message });
     source.end();
     await vi.advanceTimersByTimeAsync(500);
-    expect(onIdleTimeout).not.toHaveBeenCalled();
-    expect(requestSignal?.aborted).toBe(false);
+    expect(watched.onTimeout).not.toHaveBeenCalled();
+    expect(watched.signal()?.aborted).toBe(false);
 
     await expect(iterator.next()).resolves.toMatchObject({ value: { type: "toolcall_delta" } });
     await expect(iterator.next()).resolves.toMatchObject({
@@ -537,9 +532,7 @@ describe("streamWithIdleTimeout parked consumer", () => {
   });
 
   it("does not abort a completed structural stream while the consumer is parked", async () => {
-    let requestSignal: AbortSignal | undefined;
-    const baseFn: StreamFn = vi.fn((_model, _context, options) => {
-      requestSignal = options?.signal;
+    const watched = sourceFixture(() => {
       const stream = createAssistantMessageEventStream();
       stream.push(textDelta("first"));
       setTimeout(() => {
@@ -560,15 +553,13 @@ describe("streamWithIdleTimeout parked consumer", () => {
         [Symbol.asyncIterator]: () => stream[Symbol.asyncIterator](),
       };
     });
-    const onIdleTimeout = vi.fn();
-    const stream = await openStream(baseFn, onIdleTimeout);
-    const iterator = stream[Symbol.asyncIterator]();
+    const iterator = (await watched.stream)[Symbol.asyncIterator]();
     await expect(iterator.next()).resolves.toMatchObject({ done: false });
 
     // Producer finishes while the consumer has not drained the terminal event.
     await vi.advanceTimersByTimeAsync(500);
-    expect(onIdleTimeout).not.toHaveBeenCalled();
-    expect(requestSignal?.aborted).toBe(false);
+    expect(watched.onTimeout).not.toHaveBeenCalled();
+    expect(watched.signal()?.aborted).toBe(false);
     await expect(iterator.next()).resolves.toMatchObject({
       done: false,
       value: { type: "done" },
