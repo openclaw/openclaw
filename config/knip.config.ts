@@ -144,6 +144,7 @@ const repositoryScriptEntries = [
   "scripts/perf/plugin-blob-registration-measure.ts!",
   "scripts/perf/session-reaction-quota-measure.ts!",
   // Maintained guides, source headers, and paired drivers invoke these roots by path.
+  "scripts/perf/audit-batch-write-measure.ts!",
   "scripts/perf/audit-context-write-measure.ts!",
   "scripts/perf/node-worker-journal-measure.ts!",
   "scripts/perf/orphan-recovery-observer.mjs!",
@@ -500,6 +501,7 @@ const repositoryScriptEntries = [
   "scripts/perf/host-cpu-sample-measure.mjs!",
   "scripts/perf/identifier-renormalization-measure.ts!",
   "scripts/perf/ingress-ip-measure.ts!",
+  "scripts/perf/inter-session-steering-measure.ts!",
   "scripts/perf/memory-ranking-copies.ts!",
   "scripts/perf/memory-prompt-copy-measure.ts!",
   "scripts/perf/misc-fresh-array-copies-measure.mjs!",

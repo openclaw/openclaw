@@ -43,6 +43,7 @@ import {
 import {
   getAcceptedChatHistorySession,
   getChatHistoryLoadState,
+  isChatHistoryLoading,
   isChatHistoryRetrying,
 } from "./chat-history-state.ts";
 import { createMobileSheetScrollFades } from "./chat-mobile-scroll-fades.ts";
@@ -281,8 +282,7 @@ export abstract class ChatPaneStateOwner {
   protected presentedChanged(_presented: boolean): void {}
   /** True while the authoritative transcript for this pane is still being fetched. */
   get transcriptLoading(): boolean {
-    const phase = this.state ? getChatHistoryLoadState(this.state).phase : "idle";
-    return phase === "pending-connection" || phase === "in-flight";
+    return Boolean(this.state && isChatHistoryLoading(getChatHistoryLoadState(this.state)));
   }
   /** Scoped transient recovery is presented once in the shell connection indicator. */
   get historyRecovering(): boolean {
