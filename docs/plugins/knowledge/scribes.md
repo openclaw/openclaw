@@ -22,13 +22,17 @@ which can be started again.
 
 | Scribe                   | Runs            | Options                                                                       | Skill                       |
 | ------------------------ | --------------- | ----------------------------------------------------------------------------- | --------------------------- |
-| Review unlinked claims   | Ongoing         | None                                                                          | `knowledge-unlinked-claims` |
+| Review unlinked claims   | Ongoing         | Weekly or nightly                                                             | `knowledge-unlinked-claims` |
 | Learn from conversations | Once or ongoing | Active only, or active and archived; starting 30 days, 90 days, all, or today | `knowledge-ingest`          |
 | Learn from Memory        | Once            | `MEMORY.md`, daily notes, and the Dreaming diary (`DREAMS.md`)                | `knowledge-ingest`          |
 
 - **Review unlinked claims** files claims that
   [maintenance](/plugins/knowledge/maintenance) left unlinked, creates pages for
-  subjects that deserve one, and records outcomes in page State.
+  subjects that deserve one, and records outcomes in page State. It runs on its
+  own schedule: weekly on Sundays at 3:45 AM in your time zone by default, or
+  nightly at 3:45 AM, after maintenance links what it can. Each run is an agent
+  turn over every unlinked claim, so nightly uses more tokens. Maintenance
+  itself never starts it.
 - **Learn from conversations** saves the decisions, preferences, commitments,
   and lessons in your conversations. Ongoing runs check for newly finished
   conversations daily at 4:00 AM in your time zone. Conversations already

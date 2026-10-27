@@ -6,10 +6,11 @@ export type ScribeMode = "once" | "ongoing";
 export type ConversationScope = "active" | "all";
 export type ConversationSince = "30d" | "90d" | "all" | "today";
 export type MemorySource = "memory-md" | "daily-notes" | "dreams";
+export type ReviewSchedule = typeof REVIEW_WEEKLY_SCHEDULE | typeof REVIEW_NIGHTLY_SCHEDULE;
 
 /** Dialog choices for each scribe; serialized as the setup message's `options`. */
 export type ScribeOptions = {
-  "unlinked-review": Record<string, never>;
+  "unlinked-review": { schedule: ReviewSchedule };
   conversations: { scope: ConversationScope; since: ConversationSince; schedule?: string };
   memory: { sources: MemorySource[] };
 };
@@ -42,13 +43,17 @@ export type ScribeDefinition = {
 
 /** Schedule an ongoing conversations scribe uses: daily at 4:00 AM in the operator's timezone. */
 export const CONVERSATIONS_SCHEDULE = "0 4 * * *";
+/** Default review schedule: Sundays at 3:45 AM in the operator's timezone. */
+export const REVIEW_WEEKLY_SCHEDULE = "45 3 * * 0";
+/** Nightly review schedule: 3:45 AM, after the default 3:30 AM maintenance relink. */
+export const REVIEW_NIGHTLY_SCHEDULE = "45 3 * * *";
 
 export const SCRIBES: readonly ScribeDefinition[] = [
   {
     id: "unlinked-review",
     title: "Review unlinked claims",
     blurb:
-      "After each nightly tidy-up, files claims that name no page, creates pages for subjects that deserve one, and folds outcomes into page State.",
+      "Weekly or nightly, files claims that name no page, creates pages for subjects that deserve one, and folds outcomes into page State.",
     skill: "knowledge-unlinked-claims",
     icon: "link",
     tone: "blue",
@@ -102,10 +107,10 @@ export const scribeDeclarationKey = (id: ScribeId) => `knowledge:scribe:${id}`;
 export const setupIdempotencyKey = (id: ScribeId, sessionKey: string, attempt: string) =>
   `knowledge:scribe:${id}:${sessionKey}:${attempt}`;
 
-/** Default dialog choices: conservative (active conversations, last 30 days). */
+/** Default dialog choices: conservative (weekly review; active conversations, last 30 days). */
 export function defaultOptions<Id extends ScribeId>(id: Id): ScribeOptions[Id] {
   const defaults: ScribeOptions = {
-    "unlinked-review": {},
+    "unlinked-review": { schedule: REVIEW_WEEKLY_SCHEDULE },
     conversations: { scope: "active", since: "30d", schedule: CONVERSATIONS_SCHEDULE },
     memory: { sources: ["memory-md", "daily-notes"] },
   };
