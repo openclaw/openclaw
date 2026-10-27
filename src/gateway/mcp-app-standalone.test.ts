@@ -147,31 +147,24 @@ describe("MCP App standalone host", () => {
   );
 
   it("bounds the built browser fetch when runtime function source is unavailable", async () => {
-    Object.defineProperty(runStandaloneMcpAppHost, "toString", {
-      configurable: true,
-      value() {
-        throw new Error("Runtime function source is unavailable");
-      },
+    vi.spyOn(runStandaloneMcpAppHost, "toString").mockImplementation(() => {
+      throw new Error("Runtime function source is unavailable");
     });
-    try {
-      const timeoutError = Object.assign(new Error("timed out"), { name: "TimeoutError" });
-      const initialSignal = AbortSignal.abort(timeoutError);
-      const initialBody = createDeferred<unknown>();
-      const host = await createSerializedHost({ initialBody, initialSignal });
-      initialBody.reject(timeoutError);
-      await vi.waitFor(() =>
-        expect(host.replaceChildren).toHaveBeenCalledWith(
-          expect.objectContaining({ textContent: "MCP App view timed out; reload to try again" }),
-        ),
-      );
-      expect(host.timeout).toHaveBeenCalledWith(30_000);
-      expect(host.fetch).toHaveBeenCalledWith(
-        "/__openclaw__/mcp-app/view",
-        expect.objectContaining({ signal: initialSignal }),
-      );
-    } finally {
-      Reflect.deleteProperty(runStandaloneMcpAppHost, "toString");
-    }
+    const timeoutError = Object.assign(new Error("timed out"), { name: "TimeoutError" });
+    const initialSignal = AbortSignal.abort(timeoutError);
+    const initialBody = createDeferred<unknown>();
+    const host = await createSerializedHost({ initialBody, initialSignal });
+    initialBody.reject(timeoutError);
+    await vi.waitFor(() =>
+      expect(host.replaceChildren).toHaveBeenCalledWith(
+        expect.objectContaining({ textContent: "MCP App view timed out; reload to try again" }),
+      ),
+    );
+    expect(host.timeout).toHaveBeenCalledWith(30_000);
+    expect(host.fetch).toHaveBeenCalledWith(
+      "/__openclaw__/mcp-app/view",
+      expect.objectContaining({ signal: initialSignal }),
+    );
   });
 
   it("returns capabilities only for handlers installed on the live view", async () => {
@@ -357,44 +350,26 @@ describe("MCP App standalone host", () => {
 
   it("finishes an existing call and async teardown save before unmount", async () => {
     const host = await createSerializedHost();
-    const existingReply = createDeferred();
-    const savedReply = createDeferred();
-    let cleanup: Promise<void> | undefined;
-    host.postMessage.mockImplementation((message) => {
-      if (message.method === "ui/resource-teardown") {
-        cleanup = Promise.resolve().then(async () => {
-          await existingReply.promise;
-          call(host, "save");
-          await savedReply.promise;
-          host.emit({ jsonrpc: "2.0", id: message.id, result: {} });
-        });
-      } else if (message.id === "existing" && "result" in message) {
-        existingReply.resolve();
-      } else if (message.id === "save" && "result" in message) {
-        savedReply.resolve();
-      }
-    });
     try {
       call(host, "existing");
       host.emit({ jsonrpc: "2.0", method: "ui/notifications/request-teardown" });
-      expect(cleanup).toBeDefined();
+      expectMessage(host, { jsonrpc: "2.0", id: 1, method: "ui/resource-teardown", params: {} });
       expect(host.frame.remove).not.toHaveBeenCalled();
       expect(host.operations[0]!.signal?.aborted).toBe(false);
       host.operations[0]!.result.resolve("existing saved");
-      await vi.waitFor(() => expect(host.operations).toHaveLength(2));
+      await vi.waitFor(() => expectReply(host, "existing", "existing saved"));
+      call(host, "save");
+      expect(host.operations).toHaveLength(2);
       const save = host.operations.at(-1)!;
       expect(save.signal?.aborted).toBe(false);
       expect(host.frame.remove).not.toHaveBeenCalled();
       save.result.resolve("cleanup saved");
-      await cleanup;
-      expectReply(host, "save", "cleanup saved");
+      await vi.waitFor(() => expectReply(host, "save", "cleanup saved"));
+      host.emit({ jsonrpc: "2.0", id: 1, result: {} });
       expect(host.frame.remove).toHaveBeenCalledOnce();
       host.timers[0]!.run();
       expect(host.frame.remove).toHaveBeenCalledOnce();
     } finally {
-      existingReply.resolve();
-      savedReply.resolve();
-      await cleanup;
       for (const operation of host.operations) {
         operation.result.resolve("cleanup");
       }
