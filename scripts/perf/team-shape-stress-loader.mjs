@@ -76,6 +76,7 @@ if (isMainThread) {
       }
     });
   }
+  process.channel?.unref();
   const instrumentationSource = new URL("../../src/", import.meta.url).href;
   const packages = new Set(["@openclaw/normalization-core", "@openclaw/worker-runtime"]);
   registerHooks({
