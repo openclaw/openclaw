@@ -185,6 +185,7 @@ const { values } = parseArgs({
     "sandbox-image": { type: "string" },
     "cold-session-rounds": { type: "string", default: "0" },
     "turn-start-phases": { type: "boolean", default: false },
+    "turn-start-rich-context": { type: "boolean", default: false },
     "turn-start-advance-origin": { type: "boolean", default: false },
     "git-trace": { type: "boolean", default: false },
     "provider-delay-ms": { type: "string", default: "0" },
@@ -339,7 +340,13 @@ if (values["team-stress"] && (pluginCount < 4 || pluginCount > TEAM_STRESS_PLUGI
 }
 const teamPluginCatalog = values["team-stress"] || values["turn-start-phases"];
 const syntheticPluginCount = teamPluginCatalog ? 0 : pluginCount;
-const teamStressPlugins = TEAM_STRESS_PLUGIN_IDS.slice(0, pluginCount);
+const teamStressPlugins: string[] = TEAM_STRESS_PLUGIN_IDS.slice(0, pluginCount);
+if (values["turn-start-rich-context"]) {
+  if (!values["turn-start-phases"] || pluginCount < 5) {
+    throw new Error("--turn-start-rich-context requires --turn-start-phases and --plugins >= 5");
+  }
+  teamStressPlugins[teamStressPlugins.length - 1] = "memory-core";
+}
 if (values["plugin-update"] && scenario !== "plugins.reload") {
   throw new Error("--plugin-update requires --scenario plugins.reload");
 }
@@ -416,9 +423,14 @@ const historyLastTurns = integer(values["history-last-turns"], "--history-last-t
 const historyPayloadBytes =
   integer(values["history-payload-kib"], "--history-payload-kib", 0) * 1024;
 const verifyHistoryReplay = values["verify-history-replay"];
-if ((historyTurns || values["seed-history"]) && !idleScenario && !soakScenario) {
+if (
+  (historyTurns || values["seed-history"]) &&
+  !idleScenario &&
+  !soakScenario &&
+  !values["turn-start-phases"]
+) {
   throw new Error(
-    "--history-turns and --seed-history require session-idle-retention or memory-soak",
+    "--history-turns and --seed-history require session-idle-retention, memory-soak, or warm --turn-start-phases",
   );
 }
 if (values["seed-history"] && !historyTurns) {
@@ -1435,6 +1447,21 @@ if (values["knowledge-worker-heap"]) {
   cfg.plugins.slots = { ...cfg.plugins.slots, memory: "knowledge" };
   cfg.plugins.entries.knowledge = { enabled: true, config: { writesEnabled: false } };
 }
+if (values["turn-start-rich-context"]) {
+  cfg.plugins.slots = { ...cfg.plugins.slots, memory: "memory-core" };
+  cfg.mcp = {
+    servers: Object.fromEntries(
+      ["context_a", "context_b"].map((name) => [
+        name,
+        {
+          transport: "streamable-http",
+          url: `http://127.0.0.1:${mockPort}/mcp/${name}`,
+          enabled: true,
+        },
+      ]),
+    ),
+  };
+}
 const dashboardBoardId = "synthetic-soak-board";
 const dashboardPreviewUrl = "https://github.com/openclaw-fixture/soak/issues/1";
 const dashboardPreviewTitle = "Synthetic dashboard issue";
@@ -2325,6 +2352,9 @@ const expectedHistoricalReasoning =
       )
     : [];
 const attemptSetupCatalog = new Set<string>();
+const richContextMcpLists: Record<string, number> = {};
+const richContextSessionKeys = new Set<string>();
+const turnStartHistoryReplayCounts: number[] = [];
 const authAvailabilityMock = { requests: 0, rateLimits: 0, successes: 0 };
 const authAvailabilityStartedAt = Date.now();
 const authAvailabilityMinutes = new Map<number, typeof authAvailabilityMock>();
@@ -2339,6 +2369,38 @@ const mock = createServer((req, res) => {
     return;
   }
   void (async () => {
+    const richContextServer = values["turn-start-rich-context"]
+      ? /^\/mcp\/(context_[ab])$/.exec(req.url ?? "")?.[1]
+      : undefined;
+    if (richContextServer) {
+      const server = new McpServer({ name: richContextServer, version: "1.0.0" });
+      for (let index = 0; index < 40; index++) {
+        server.registerTool(
+          `fixture_${index}`,
+          {
+            description: `Read synthetic context fact ${index}.`,
+            inputSchema: z.object({ key: z.string().optional() }),
+          },
+          async () => ({ content: [{ type: "text", text: "synthetic-context-ready" }] }),
+        );
+      }
+      const transport = new NodeStreamableHTTPServerTransport({
+        sessionIdGenerator: undefined,
+        enableJsonResponse: true,
+      });
+      await server.connect(transport);
+      try {
+        const body: unknown = req.method === "POST" ? JSON.parse(await readBody(req)) : undefined;
+        if (isRecord(body) && body.method === "tools/list") {
+          richContextMcpLists[richContextServer] =
+            (richContextMcpLists[richContextServer] ?? 0) + 1;
+        }
+        await transport.handleRequest(req, res, body);
+      } finally {
+        await server.close();
+      }
+      return;
+    }
     if (values["attempt-setup-image"] && req.url === "/mcp") {
       const server = new McpServer({ name: "attempt-setup-fixture", version: "1.0.0" });
       server.registerTool(
@@ -2517,6 +2579,19 @@ const mock = createServer((req, res) => {
         : undefined;
     const firstRequestPhase =
       requestPhase !== undefined && !cohort?.requestPhases.has(requestPhase);
+    if (values["turn-start-phases"] && historyTurns && primary && firstRequestPhase) {
+      const replayed = new Set(
+        (Array.isArray(input) ? input : []).flatMap((item) => {
+          const text = stripInboundMetadata(readMockUserText(item) ?? "").trim();
+          return /^Inspect synthetic file \d+\.$/.test(text) ? [text] : [];
+        }),
+      ).size;
+      const expected = historyLastTurns && index === sessionCount ? historyLastTurns : historyTurns;
+      if (replayed !== expected) {
+        throw new Error(`Turn-start history replay mismatch: ${replayed}/${expected}`);
+      }
+      turnStartHistoryReplayCounts.push(replayed);
+    }
     if (continuation) {
       if (reasoningScenario) {
         const expectedSignatures = cohort?.reasoningSignatures.get(toolOutput.call_id);
@@ -2854,6 +2929,7 @@ const mock = createServer((req, res) => {
     }
   })().catch((error: unknown) => {
     subscriberFailure ??= error instanceof Error ? error : new Error(String(error));
+    console.error("Synthetic mock request failed:", subscriberFailure.message);
     res.destroy();
   });
 });
@@ -3532,6 +3608,7 @@ if (values["seed-history"]) {
         historyLastTurns,
         historyPayloadBytes,
         verifyHistoryReplay,
+        ...(values["turn-start-phases"] ? { turnStartPort: port } : {}),
         ...(verifyHistoryReplay ? { modelBaseUrl: cfg.models.providers.openai.baseUrl } : {}),
       }),
     );
@@ -3548,7 +3625,8 @@ if (historyTurns) {
     seeded.sessionCount !== sessionCount ||
     seeded.historyTurns !== historyTurns ||
     (seeded.historyLastTurns ?? 0) !== historyLastTurns ||
-    (seeded.historyPayloadBytes ?? 0) !== historyPayloadBytes
+    (seeded.historyPayloadBytes ?? 0) !== historyPayloadBytes ||
+    (values["turn-start-phases"] && seeded.turnStartPort !== port)
   ) {
     throw new Error("Run --seed-history with matching session count and history options first");
   }
@@ -4182,6 +4260,11 @@ async function runRound(
   measuredRound?: number,
   roundKeys = keys,
 ) {
+  if (values["turn-start-rich-context"]) {
+    for (const key of roundKeys) {
+      richContextSessionKeys.add(key);
+    }
+  }
   teamStressFanout?.trackForeground(roundKeys);
   const cronOperatorJob = values["cron-operator-turn"] ? cronOperatorJobs[0] : undefined;
   if (values["cron-operator-turn"] && !cronOperatorJob?.id) {
@@ -4694,6 +4777,19 @@ async function runRound(
       providerRequestMs: summarizeLatencies(
         [...current.turns.values()].flatMap((turn) => turn.providerRequestMs ?? []),
       ),
+      ...(values["turn-start-phases"]
+        ? {
+            // Both timestamps use the controller clock. Preserve negative values
+            // when the provider request arrives before the client receives its ACK.
+            clientAckToProviderRequestMs: summarizeLatencies(
+              [...current.turns.values()].flatMap((turn) =>
+                turn.acknowledgedMs !== undefined && turn.providerRequestMs !== undefined
+                  ? [turn.providerRequestMs - turn.acknowledgedMs]
+                  : [],
+              ),
+            ),
+          }
+        : {}),
       providerBarrierMs: summarizeLatencies(
         [...current.turns.values()].flatMap((turn) => turn.providerBarrierMs ?? []),
       ),
@@ -5601,7 +5697,13 @@ try {
       const plugins =
         isRecord(inventory) && Array.isArray(inventory.plugins) ? inventory.plugins : [];
       // Provider catalog entries deliberately stay lazy; workload capabilities must be live.
-      const requiredActive = new Set(["acpx", "codex", "diagnostics-prometheus", "openai"]);
+      const requiredActive = new Set([
+        "acpx",
+        "codex",
+        "diagnostics-prometheus",
+        "openai",
+        ...(values["turn-start-rich-context"] ? ["memory-core"] : []),
+      ]);
       const invalid = [...new Set([...teamStressPlugins, ...requiredActive])].filter(
         (id) =>
           !plugins.some(
@@ -7641,6 +7743,49 @@ try {
       responseSha256: createHash("sha256").update(response).digest("hex"),
     };
   }
+  const consumedMcpCatalogs = [];
+  if (values["turn-start-rich-context"]) {
+    for (const key of richContextSessionKeys) {
+      const usage = await rpc(sender, "sessions.usage", {
+        range: "all",
+        key,
+        includeContextWeight: true,
+      });
+      const session =
+        isRecord(usage) && Array.isArray(usage.sessions)
+          ? usage.sessions.find((row: unknown) => isRecord(row) && row.key === key)
+          : undefined;
+      const report = isRecord(session) ? session.contextWeight : undefined;
+      const tools = isRecord(report) && isRecord(report.tools) ? report.tools : undefined;
+      const deferred = tools && isRecord(tools.deferred) ? tools.deferred : undefined;
+      const entries: unknown[] = [
+        ...(Array.isArray(tools?.entries) ? tools.entries : []),
+        ...(Array.isArray(deferred?.entries) ? deferred.entries : []),
+      ];
+      const servers = Object.fromEntries(
+        ["context_a", "context_b"].map((serverName) => {
+          const names = entries.flatMap((entry) =>
+            isRecord(entry) &&
+            entry.source === "mcp" &&
+            entry.serverName === serverName &&
+            typeof entry.name === "string"
+              ? [entry.name]
+              : [],
+          );
+          if (names.length !== 40 || new Set(names).size !== 40) {
+            throw new Error(
+              `Consumed MCP catalog for ${key}/${serverName} has ${names.length} entries and ${new Set(names).size} unique names; expected 40`,
+            );
+          }
+          return [serverName, { count: names.length, names: names.toSorted() }];
+        }),
+      );
+      consumedMcpCatalogs.push({ sessionKey: key, servers });
+    }
+    if (!consumedMcpCatalogs.length) {
+      throw new Error("No rich-context sessions were verified through their prompt reports");
+    }
+  }
   // Process exit plus drained log streams makes promotion accounting independent of pipe buffering.
   await cleanup();
   const wholeChatGc =
@@ -7667,6 +7812,23 @@ try {
         ((wholeWorkloadDiagnostics.gc.majorDurationMs?.total ?? 0) * 60) / wallMs,
     };
   }
+  const expectedTurnStartHistoryReplays = (warmupRoundCount + samples.length) * sessionCount;
+  if (
+    values["turn-start-phases"] &&
+    historyTurns &&
+    turnStartHistoryReplayCounts.length !== expectedTurnStartHistoryReplays
+  ) {
+    throw new Error(
+      `Turn-start history verification missed provider requests: ${turnStartHistoryReplayCounts.length}/${expectedTurnStartHistoryReplays}`,
+    );
+  }
+  if (
+    values["turn-start-rich-context"] &&
+    ["context_a", "context_b"].some((name) => !richContextMcpLists[name])
+  ) {
+    throw new Error("Rich turn-start context did not list both synthetic MCP servers");
+  }
+
   const result = {
     output,
     ...(coldIdle ? { coldIdle } : {}),
@@ -7920,6 +8082,29 @@ try {
             : {}),
           attemptSetupImage: values["attempt-setup-image"],
           attemptSetupCatalog: [...attemptSetupCatalog].toSorted(),
+          ...(values["turn-start-phases"]
+            ? {
+                seededHistory: {
+                  turnsPerSession: historyTurns,
+                  sessions: sessionCount,
+                  providerReplayCounts: turnStartHistoryReplayCounts,
+                  expectedProviderRequests: expectedTurnStartHistoryReplays,
+                },
+                ...(values["turn-start-rich-context"]
+                  ? {
+                      richContext: {
+                        plugins: teamStressPlugins,
+                        mcpServers: 2,
+                        mcpToolsPerServer: 40,
+                        mcpListRequests: richContextMcpLists,
+                        consumedMcpCatalogs,
+                        memoryPlugin: "memory-core",
+                        memorySearchEnabled: false,
+                      },
+                    }
+                  : {}),
+              }
+            : {}),
           coldSessionRounds,
           firstModelRequest: {
             "cold-session": latencySummary(
@@ -7933,6 +8118,21 @@ try {
                 .flatMap((sample) => sample.streamStart?.providerRequestMs.latencies ?? []),
             ),
           },
+          ...(values["turn-start-phases"]
+            ? {
+                clientAckToFirstModelRequest: {
+                  scope: "client ACK received to mock provider request received; paired per turn",
+                  "warm-session": latencySummary(
+                    samples
+                      .filter((sample) => sample.round >= coldSessionRounds)
+                      .flatMap(
+                        (sample) =>
+                          sample.streamStart?.clientAckToProviderRequestMs?.latencies ?? [],
+                      ),
+                  ),
+                },
+              }
+            : {}),
           ...(values["attempt-setup-image"]
             ? { wholeAttemptSetupDiagnostics: wholeWorkloadDiagnostics }
             : {}),
