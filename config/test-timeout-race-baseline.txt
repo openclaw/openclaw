@@ -78,14 +78,12 @@ src/infra/session-cost-usage-cache.worker.test.ts	5
 src/infra/state-migrations.workspace-setup-sandbox.test.ts	1
 src/meeting-bot/realtime-node-audio-transport.test.ts	1
 src/plugins/openai-compatible-embedding-provider.test.ts	2
-src/plugins/plugin-metadata-lifecycle.test.ts	1
 src/plugins/provider-self-hosted-discovery.test.ts	11
 src/plugins/runtime/runtime-agent.ingress.integration.test.ts	1
 src/process/command-queue.capacity-groups.test.ts	1
 src/process/command-queue.publish-transaction.test.ts	3
 src/process/spawn-broker/command-startup.test.ts	1
 src/process/spawn-broker/startup.test.ts	1
-src/process/supervisor/service-child-relay-host.awaited-output.test.ts	1
 src/state/openclaw-database-preflight.lifecycle.test.ts	3
 src/state/openclaw-state-lease-existing.test.ts	1
 src/system-agent/setup-lifetime.test.ts	1
