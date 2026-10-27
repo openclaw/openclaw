@@ -318,15 +318,30 @@ describe("agents add command", () => {
   const addUsage = formatCliCommand("openclaw agents add <id> --workspace <path>");
   const invalidName =
     'Agent name "агент✨" has no valid id characters. Use at least one letter a-z or digit.';
-  it.each<{ options: AddOptions; automated: boolean; message: string }>`
-    options                                             | automated | message
-    ${{ name: "Work" }}                                 | ${true}   | ${`Non-interactive agent creation requires --workspace. Re-run ${addUsage} or omit flags to use the wizard.`}
-    ${{ workspace: "/tmp/work" }}                       | ${true}   | ${`Agent name is required in non-interactive mode. Run ${addUsage}.`}
-    ${{ name: "агент✨", workspace: "/tmp/work" }}      | ${true}   | ${invalidName}
-    ${{ name: "openclaw", workspace: "/tmp/reserved" }} | ${true}   | ${`"openclaw" is reserved. Choose another name, or run ${formatCliCommand("openclaw agents list")} to inspect configured agents.`}
-    ${{ name: "агент✨" }}                              | ${false}  | ${invalidName}
-    ${{ name: "openclaw" }}                             | ${false}  | ${'"openclaw" is reserved. Choose another name.'}
-  `(
+  it.each<{ options: AddOptions; automated: boolean; message: string }>([
+    {
+      options: { name: "Work" },
+      automated: true,
+      message: `Non-interactive agent creation requires --workspace. Re-run ${addUsage} or omit flags to use the wizard.`,
+    },
+    {
+      options: { workspace: "/tmp/work" },
+      automated: true,
+      message: `Agent name is required in non-interactive mode. Run ${addUsage}.`,
+    },
+    { options: { name: "агент✨", workspace: "/tmp/work" }, automated: true, message: invalidName },
+    {
+      options: { name: "openclaw", workspace: "/tmp/reserved" },
+      automated: true,
+      message: `"openclaw" is reserved. Choose another name, or run ${formatCliCommand("openclaw agents list")} to inspect configured agents.`,
+    },
+    { options: { name: "агент✨" }, automated: false, message: invalidName },
+    {
+      options: { name: "openclaw" },
+      automated: false,
+      message: '"openclaw" is reserved. Choose another name.',
+    },
+  ])(
     "rejects invalid creation before mutation: $options (automated=$automated)",
     async ({ options, automated, message }) => {
       if (automated) {

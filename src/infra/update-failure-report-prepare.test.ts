@@ -368,83 +368,99 @@ it.each([
   expect(prepared.title).toMatch(/^Update failure: package-install \(/u);
 });
 
-it.each([attemptId, "another-run"])("binds finalization history to run %s", async (runId) => {
-  const message =
-    "Doctor could not enter maintenance. Error: The update parent owns Gateway activation.";
-  const prepared = await report(
-    { mode: "unknown" },
-    {
-      recordedRun: makeRecordedRun(
+it.each(["matching", "foreign", "compact", "measured", "earlier", "alias"] as const)(
+  "projects durable failure history without losing authority or order: %s",
+  async (kind) => {
+    const finalization = kind === "matching" || kind === "foreign";
+    const message =
+      "Doctor could not enter maintenance. Error: The update parent owns Gateway activation.";
+    const earlier = kind === "earlier" || kind === "alias" ? ["activating"] : [];
+    const name = kind === "alias" ? "git-fetch" : "verifying";
+    const recordedName = kind === "alias" ? "git fetch" : name;
+    const recordedRun: NonNullable<UpdateFailureReportInput["recordedRun"]> = {
+      runId: kind === "foreign" ? "another-run" : attemptId,
+      ...(finalization ? { reason: "doctor-failed", target: { kind: "package" } } : {}),
+      steps: finalization
+        ? [
+            {
+              step: "finalize:doctor",
+              status: "failed",
+              detail: `${message} private-customer-text\nprivate second line`,
+            },
+            {
+              step: "warning:post-plugin-doctor",
+              status: "completed",
+              detail: "EACCES: permission denied at /private/customer/plugin",
+            },
+            { step: "finalize:package-rollback-not-needed", status: "skipped" },
+          ]
+        : kind === "compact"
+          ? [
+              { step: "custom-tool private-customer-text", status: "failed" },
+              { step: "activating", status: "failed" },
+              {
+                step: "package rollback",
+                status: "failed",
+                detail: "Gateway service ownership or manager identity changed",
+              },
+            ]
+          : [...earlier, recordedName].map((value) => ({ step: value, status: "failed" })),
+    };
+    const prepared = await report(
+      {
+        mode: finalization ? "unknown" : "git",
+        reason: finalization
+          ? undefined
+          : kind === "compact"
+            ? "state-migrated-no-rollback"
+            : "verification-failed",
+        steps:
+          finalization || kind === "compact"
+            ? []
+            : [step(name, { command: "not copied", cwd: "/private", exitCode: 7 })],
+      },
+      { recordedRun },
+    );
+    if (finalization) {
+      const matches = kind === "matching";
+      expectText(
+        prepared.body,
         [
-          {
-            step: "finalize:doctor",
-            status: "failed",
-            detail: message + " private-customer-text\nprivate second line",
-          },
-          {
-            step: "warning:post-plugin-doctor",
-            status: "completed",
-            detail: "EACCES: permission denied at /private/customer/plugin",
-          },
-          { step: "finalize:package-rollback-not-needed", status: "skipped" },
+          `Reason code: ${matches ? "doctor-failed" : "unknown"}`,
+          `Update mode: ${matches ? "package" : "unknown"}`,
         ],
-        { runId, reason: "doctor-failed", target: { kind: "package" } },
-      ),
-    },
-  );
-  const matches = runId === attemptId;
-  expectText(
-    prepared.body,
-    [
-      `Reason code: ${matches ? "doctor-failed" : "unknown"}`,
-      `Update mode: ${matches ? "package" : "unknown"}`,
-    ],
-    /private-customer-text|private second line|\/private\/customer/u,
-  );
-  for (const text of [
-    message,
-    "package rollback not needed: no package mutation",
-    "## Warnings\n\n- EACCES; Permission denied",
-  ]) {
-    expect(prepared.body.includes(text)).toBe(matches);
-  }
-});
-
-it("projects recorded failures in ledger order and enriches measured aliases once", async () => {
-  const prepared = await report(
-    {
-      mode: "git",
-      reason: "state-migrated-no-rollback",
-      steps: [step("git-fetch", { command: "not copied", cwd: "/private", exitCode: 7 })],
-    },
-    {
-      recordedRun: makeRecordedRun([
-        { step: "custom-tool private-customer-text", status: "failed" },
-        { step: "activating", status: "failed" },
-        { step: "git fetch", status: "failed" },
-        {
-          step: "package rollback",
-          status: "failed",
-          detail: "Gateway service ownership or manager identity changed",
-        },
-      ]),
-    },
-  );
-  const failures = [
-    "Failed phase [redacted-command]: exit unknown",
-    "Failed phase activating: exit unknown",
-    "Failed phase git-fetch: exit 7",
-    "Failed phase package-rollback: exit unknown",
-  ];
-  expectText(
-    prepared.body,
-    ["- Failed phase: package-rollback\n", ...failures],
-    /private-customer-text|Gateway service ownership|not copied|\/private/u,
-  );
-  expect(prepared.body.split("Failed phase git-fetch:")).toHaveLength(2);
-  const positions = failures.map((text) => prepared.body.indexOf(text));
-  expect(positions).toEqual(positions.toSorted((a, b) => a - b));
-});
+        /private-customer-text|private second line|\/private\/customer/u,
+      );
+      for (const text of [
+        message,
+        "package rollback not needed: no package mutation",
+        "## Warnings\n\n- EACCES; Permission denied",
+      ]) {
+        expect(prepared.body.includes(text)).toBe(matches);
+      }
+    } else if (kind === "compact") {
+      expectText(
+        prepared.body,
+        [
+          "- Failed phase: package-rollback\n",
+          "Failed phase activating: exit unknown",
+          "Failed phase package-rollback: exit unknown",
+          "Failed phase [redacted-command]: exit unknown",
+        ],
+        /private-customer-text|Gateway service ownership/u,
+      );
+    } else {
+      expectText(prepared.body, [`- Failed phase: ${name}\n`, `Failed phase ${name}: exit 7`]);
+      expect(prepared.body.split(`Failed phase ${name}:`)).toHaveLength(2);
+      for (const phase of earlier) {
+        expect(prepared.body.indexOf(`Failed phase ${phase}: exit unknown`)).toBeGreaterThan(-1);
+        expect(prepared.body.indexOf(`Failed phase ${phase}: exit unknown`)).toBeLessThan(
+          prepared.body.indexOf(`Failed phase ${name}: exit 7`),
+        );
+      }
+    }
+  },
+);
 
 it.each(["step", "plugin-summary"])(
   "reports private-safe warnings from %s without changing the failed phase",

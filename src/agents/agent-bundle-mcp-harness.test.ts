@@ -211,7 +211,7 @@ it("joins captured cleanup and reports its failure to repeated static harness di
 
 it("joins captured cleanup and reports its failure to repeated requester harness disposals", async () => {
   const fixture = repeatedDisposalFixture("repeat-dispose-requester");
-  mocks.setResolveImpl(async () => fixture.runtime);
+  mocks.resolveRuntime.mockResolvedValue(fixture.runtime);
   const tools = (await requesterTools("repeat-dispose-requester", { requesterSenderId: "alice" }))!;
   await expectRepeatedDisposal(fixture, tools, 0);
 });

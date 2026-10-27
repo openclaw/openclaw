@@ -150,7 +150,11 @@ it("classifies browser identity network failures without hiding caller aborts", 
   mocks.fetch.mockImplementationOnce(
     async ({ signal }: { signal: AbortSignal }) =>
       await new Promise<never>((_resolve, reject) => {
-        signal.addEventListener("abort", () => reject(signal.reason), { once: true });
+        const onAbort = () => {
+          const reason: unknown = signal.reason;
+          reject(reason instanceof Error ? reason : new Error("ownership lookup aborted"));
+        };
+        signal.addEventListener("abort", onAbort, { once: true });
       }),
   );
   const pending = ownership({ signal: controller.signal });
