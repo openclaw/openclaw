@@ -4,10 +4,7 @@ import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { telegramOutbound, telegramPlugin } from "../extensions/telegram/api.js";
 import { getOrCreateAccountThrottler } from "../extensions/telegram/test-api.js";
-import {
-  announceRestartRecoveryResumption,
-  isRestartRecoveryDeliveryCurrent,
-} from "../src/agents/main-session-recovery/main-session-restart-recovery-delivery.js";
+import { isRestartRecoveryDeliveryCurrent } from "../src/agents/main-session-recovery/main-session-restart-recovery-delivery.js";
 import type { ChannelHeartbeatAdapter } from "../src/channels/plugins/types.adapters.js";
 import { replaceSessionEntry } from "../src/config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../src/config/types.openclaw.js";
@@ -62,9 +59,7 @@ describe("recovery notice final transport fence", () => {
         mode === "runtime policy revoked" ||
         mode === "automatic delivery revoked" ||
         mode === "owner retired";
-      const noticeText = productionPredicate
-        ? "I'm continuing your interrupted request now (the gateway has just restarted).  Don't be concerned with the lack of typing; I am working behind the scenes and I'll send a message when I'm done!"
-        : "Recovery resumed";
+      const noticeText = "Recovery result";
       const accept = (response: ServerResponse, text: string) => {
         visible.push(text);
         response.setHeader("content-type", "application/json");
@@ -173,21 +168,15 @@ describe("recovery notice final transport fence", () => {
               return payload.isCurrent?.(...args) ?? true;
             },
           });
-        const operation = productionPredicate
-          ? announceRestartRecoveryResumption({
-              ...scope,
-              cfg,
-              gatewayRuntime: { ...runtime.recovery, sendRecoveryNotice: observedSend },
-            })
-          : observedSend({
-              channel: "telegram",
-              to: "123",
-              accountId: "default",
-              text: noticeText,
-              idempotencyKey: "notice-" + mode,
-              liveOnly: true,
-              isCurrent: () => policyCurrent,
-            });
+        const operation = observedSend({
+          ...scope.deliveryContext,
+          text: noticeText,
+          idempotencyKey: "notice-" + mode,
+          liveOnly: true,
+          isCurrent: productionPredicate
+            ? (runtimeCfg) => isRestartRecoveryDeliveryCurrent({ ...scope, cfg: runtimeCfg ?? cfg })
+            : () => policyCurrent,
+        });
         notice = operation.then(
           (result) => ({ result: result ?? undefined }),
           (error: unknown) => ({ error }),
@@ -231,15 +220,11 @@ describe("recovery notice final transport fence", () => {
         await blocker;
         const outcome = await notice;
         if (mode === "allowed" || mode === "production allowed") {
-          if (mode === "allowed") {
-            expect(outcome).toEqual({ result: { suppressed: false } });
-          }
+          expect(outcome).toEqual({ result: { suppressed: false } });
           expect(visible).toEqual([blockerText, noticeText]);
           expect(requests).toEqual([blockerText, noticeText]);
         } else {
-          if (!productionPredicate) {
-            expect(outcome.error).toBeDefined();
-          }
+          expect(outcome.error).toBeDefined();
           expect(visible).toEqual([blockerText]);
           expect(requests).toEqual([blockerText]);
         }
