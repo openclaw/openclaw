@@ -1485,7 +1485,6 @@
 ["src/agents/embedded-agent-runner/run.overflow-compaction.harness.ts","../../plugins/provider-runtime.js","15020b40c173ee8f572a64c1782d399d740ca78a83adaa4b089938d19d75a5f4",1]
 ["src/agents/embedded-agent-runner/run.overflow-compaction.harness.ts","../auth-profiles.js","5d22fe6be31a6317fc2544b5dd6d35c242128ddb718d73d652fad62c919de3a7",1]
 ["src/agents/embedded-agent-runner/run.overflow-compaction.harness.ts","../context-window-guard.js","2a19ca658e8d9a4e36be26683050ad4f13855c6f2a9a309771964f8141a9c0d7",1]
-["src/agents/embedded-agent-runner/run.overflow-compaction.harness.ts","../defaults.js","80b2e2f4a1f41bae6b4e39fdd92f34f8325c600ee2316612d8ab2b1a9f340aec",1]
 ["src/agents/embedded-agent-runner/run.overflow-compaction.harness.ts","../harness/runtime-plugin.js","f63cbc8c4730e09e88312f2aefe9210b6f1628a6093055bbe3dc8a8675bf6dea",1]
 ["src/agents/embedded-agent-runner/run.overflow-compaction.harness.ts","../model-auth-env-vars.js","c54aab2ea161371249f75490336619550d1d3da77d47c132059eb97dcc79c2f7",1]
 ["src/agents/embedded-agent-runner/run.overflow-compaction.harness.ts","../model-runtime-aliases.js","a81e56acd546f25930a6a8133036c0d5c4a0472a7ff9737c9571993d48cce023",1]
