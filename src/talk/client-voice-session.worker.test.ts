@@ -104,18 +104,12 @@ describe("client voice session worker contract", () => {
     return { blocked, release };
   }
   function mutateForeignVoice(voiceSessionId: string, change: string, ...values: string[]) {
-    const database = new DatabaseSync(resolveOpenClawAgentSqlitePath(target));
-    try {
-      database
-        .prepare(
-          "UPDATE cache_entries SET value_json = json_set(value_json, " +
-            change +
-            ") WHERE scope = ? AND key = ?",
-        )
-        .run(...values, "talk-client-voice-sessions", voiceSessionId);
-    } finally {
-      database.close();
-    }
+    using database = new DatabaseSync(resolveOpenClawAgentSqlitePath(target));
+    database
+      .prepare(
+        `UPDATE cache_entries SET value_json = json_set(value_json, ${change}) WHERE scope = ? AND key = ?`,
+      )
+      .run(...values, "talk-client-voice-sessions", voiceSessionId);
   }
 
   it.each(["metadata", "entry"] as const)(
@@ -221,7 +215,7 @@ describe("client voice session worker contract", () => {
         },
       }));
       const capture = agentExecution.captureOpenClawAgentDatabasePreparationExecution;
-      const captureSpy = vi
+      using _ = vi
         .spyOn(agentExecution, "captureOpenClawAgentDatabasePreparationExecution")
         .mockImplementation((...args): ReturnType<typeof capture> => {
           const execution = capture(...args);
@@ -230,7 +224,7 @@ describe("client voice session worker contract", () => {
           });
           return execution;
         });
-      const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+      using warn = vi.spyOn(console, "warn").mockImplementation(() => {});
       const runId = "acknowledged-cleanup-consult";
       let releaseRun: (() => void) | undefined;
       let settled = false;
@@ -289,8 +283,6 @@ describe("client voice session worker contract", () => {
         releaseSource.resolve();
         await outcome;
         releaseRun?.();
-        warn.mockRestore();
-        captureSpy.mockRestore();
       }
     },
   );
@@ -300,14 +292,14 @@ describe("client voice session worker contract", () => {
     const voiceSessionId = await createVoice();
     const cleanupError = new Error("synthetic accepted voice writer cleanup failure");
     const capture = voiceWriters.captureClientVoiceSessionWriter;
-    const captureSpy = vi
+    using _ = vi
       .spyOn(voiceWriters, "captureClientVoiceSessionWriter")
       .mockImplementation((params) => {
         const writer = capture(params);
         failCleanup(writer, cleanupError);
         return writer;
       });
-    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    using warn = vi.spyOn(console, "warn").mockImplementation(() => {});
     const close = prepareClientVoiceSessionClose();
     try {
       await expect(
@@ -332,8 +324,6 @@ describe("client voice session worker contract", () => {
       expect(warn).toHaveBeenCalledWith(expect.stringContaining("cleanup failed"), cleanupError);
     } finally {
       await close.drain();
-      warn.mockRestore();
-      captureSpy.mockRestore();
     }
   });
 
@@ -388,7 +378,7 @@ describe("client voice session worker contract", () => {
     const closeQueued = createDeferred();
     // oxlint-disable-next-line typescript/unbound-method -- Called with the original registry receiver.
     const close = VoiceTranscriptOperationRegistry.prototype.close;
-    const observer = vi
+    using _ = vi
       .spyOn(VoiceTranscriptOperationRegistry.prototype, "close")
       .mockImplementationOnce(function (this: VoiceTranscriptOperationRegistry, key, operation) {
         return close.call(this, key, () => {
@@ -439,7 +429,6 @@ describe("client voice session worker contract", () => {
     } finally {
       release.resolve();
       await Promise.allSettled([resumeResult, recovery]);
-      observer.mockRestore();
     }
   });
 
@@ -496,16 +485,12 @@ describe("client voice session worker contract", () => {
             clientVoiceSessionTesting.readRecord(sdkTarget.agentId, "cold-sdk-voice"),
           ).toMatchObject({ status: "closed" });
         }
-        const database = new DatabaseSync(resolveOpenClawStateSqlitePath(), { readOnly: true });
-        try {
-          expect(
-            database
-              .prepare("SELECT agent_id FROM agent_databases WHERE agent_id = ?")
-              .all(sdkTarget.agentId),
-          ).toHaveLength(revoked ? 0 : 1);
-        } finally {
-          database.close();
-        }
+        using database = new DatabaseSync(resolveOpenClawStateSqlitePath(), { readOnly: true });
+        expect(
+          database
+            .prepare("SELECT agent_id FROM agent_databases WHERE agent_id = ?")
+            .all(sdkTarget.agentId),
+        ).toHaveLength(revoked ? 0 : 1);
       } finally {
         release();
         await Promise.allSettled([blocked, creating, completed]);
@@ -559,7 +544,7 @@ describe("client voice session worker contract", () => {
     await createVoice({ ...source, voiceSessionId: "source-authority" });
     const sourcePath = resolveOpenClawAgentSqlitePath(source);
     const originalPath = `${sourcePath}.original`;
-    const sourceDatabase = new DatabaseSync(sourcePath);
+    using sourceDatabase = new DatabaseSync(sourcePath);
     sourceDatabase.exec("PRAGMA wal_checkpoint(TRUNCATE)");
     const readAuthority = sourceDatabase.prepare(
       "SELECT json_extract(value_json, '$.status') AS status FROM cache_entries WHERE scope = ? AND key = ?",
@@ -605,7 +590,6 @@ describe("client voice session worker contract", () => {
         unlinkSync(sourcePath);
         renameSync(originalPath, sourcePath);
       }
-      sourceDatabase.close();
     }
   });
 
@@ -618,7 +602,7 @@ describe("client voice session worker contract", () => {
       runOpenClawAgentWorkerWrite({ agentId: target.agentId, env: originalEnv }, async () => {});
     const persistence = prepareClientVoiceSessionClose();
     let gate: Awaited<ReturnType<typeof holdWorker>> | undefined;
-    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    using warn = vi.spyOn(console, "warn").mockImplementation(() => {});
     await createVoice({ voiceSessionId });
     const release = await registerClientVoiceConsultRun({ ...target, voiceSessionId, runId });
     try {
@@ -659,7 +643,6 @@ describe("client voice session worker contract", () => {
       setTestEnvValue("OPENCLAW_STATE_DIR", originalStateDir);
       release();
       await persistence.drain();
-      warn.mockRestore();
     }
   });
 
@@ -695,51 +678,6 @@ describe("client voice session worker contract", () => {
       closedAt: 42,
       transcriptFailureKeys: [],
     });
-  });
-
-  it("publishes transcripts only after their voice bookkeeping commits", async () => {
-    await seedSession(target.sessionKey);
-    const voiceSessionId = await createVoice();
-    const observed: Array<{
-      transcript: ReturnType<typeof readSessionTranscriptMessageEvents>;
-      voice: ReturnType<typeof clientVoiceSessionTesting.readRecord>;
-    }> = [];
-    const unsubscribe = onSessionTranscriptUpdate((update) => {
-      if (update.sessionKey === target.sessionKey) {
-        observed.push({
-          transcript: readSessionTranscriptMessageEvents(update.target),
-          voice: readRecord(voiceSessionId),
-        });
-      }
-    });
-    try {
-      await appendTranscript(
-        voiceSessionId,
-        "committed-together",
-        "Confirm both records before notifying observers",
-      );
-      expect(observed).toEqual([
-        {
-          transcript: [
-            expect.objectContaining({
-              event: expect.objectContaining({
-                message: expect.objectContaining({
-                  content: [
-                    { type: "text", text: "Confirm both records before notifying observers" },
-                  ],
-                }),
-              }),
-            }),
-          ],
-          voice: expect.objectContaining({
-            hasUserTranscript: true,
-            transcriptFailureKeys: [],
-          }),
-        },
-      ]);
-    } finally {
-      unsubscribe();
-    }
   });
 
   it.each(["unrelated", "same-source", "default-unrelated"] as const)(
@@ -788,10 +726,16 @@ describe("client voice session worker contract", () => {
         ),
       });
       const voiceSessionId = "selector-voice";
-      const published: Array<ReturnType<typeof readVoiceSessionRecord>> = [];
+      const published: Array<{
+        voice: ReturnType<typeof readVoiceSessionRecord>;
+        transcript: ReturnType<typeof readSessionTranscriptMessageEvents>;
+      }> = [];
       const unsubscribe = onSessionTranscriptUpdate((update) => {
         if (update.sessionKey === selectedTarget.sessionKey) {
-          published.push(readVoiceSessionRecord(options.agentId, voiceSessionId, options));
+          published.push({
+            voice: readVoiceSessionRecord(options.agentId, voiceSessionId, options),
+            transcript: readSessionTranscriptMessageEvents(update.target),
+          });
         }
       });
       try {
@@ -818,8 +762,14 @@ describe("client voice session worker contract", () => {
           }),
         ).toHaveLength(1);
         if (selection === "same-source") {
-          expect(published).toEqual([
-            expect.objectContaining({ hasUserTranscript: true, transcriptFailureKeys: [] }),
+          expect(published).toHaveLength(1);
+          expect(published[0]?.voice).toMatchObject({
+            hasUserTranscript: true,
+            transcriptFailureKeys: [],
+          });
+          expect(published[0]?.transcript).toHaveLength(1);
+          expect(published[0]?.transcript[0]).toHaveProperty("event.message.content", [
+            { type: "text", text: "Keep the selected conversation" },
           ]);
         } else {
           expect(

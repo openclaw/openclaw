@@ -134,15 +134,7 @@ const forkConsult = (runtime: TestRuntime, params: Partial<ConsultParams> = {}) 
 function requireEmbeddedAgentCall(
   runEmbeddedAgent: ReturnType<typeof createAgentRuntime>["runEmbeddedAgent"],
 ): RunEmbeddedAgentParams {
-  const params = runEmbeddedAgent.mock.calls[0]?.[0];
-  if (!params) {
-    throw new Error("Expected embedded OpenClaw agent call");
-  }
-  return params;
-}
-
-function expectNonEmptyString(value: unknown) {
-  expect(value).toEqual(expect.stringMatching(/\S/u));
+  return expectDefined(runEmbeddedAgent.mock.calls[0]?.[0], "embedded OpenClaw agent call");
 }
 
 function expectForkTarget(call: RunEmbeddedAgentParams, sessionId = call.sessionId) {
@@ -308,7 +300,7 @@ describe("realtime voice agent consult runtime", () => {
       updatedAt: expect.any(Number),
     });
     expect(voiceSession.createdAt).toBeGreaterThan(0);
-    expectNonEmptyString(voiceSession.sessionId);
+    expect(voiceSession.sessionId).toMatch(/\S/u);
     expect(voiceSession.updatedAt).toBeGreaterThan(0);
     const call = requireEmbeddedAgentCall(runEmbeddedAgent);
     expect(call).toMatchObject({
@@ -527,7 +519,6 @@ describe("realtime voice agent consult runtime", () => {
       sessionStore["agent:main:subagent:google-meet:meet-1"],
       "forked voice session",
     );
-    expect(forkedEntry).toBeDefined();
     expect(forkedEntry).toStrictEqual({
       sessionId: "forked-session",
       spawnedBy: "agent:main:main",
@@ -577,7 +568,7 @@ describe("realtime voice agent consult runtime", () => {
     );
     expect(runtime.session.prepareSessionEntryPatch).toHaveBeenCalled();
     const call = requireEmbeddedAgentCall(runEmbeddedAgent);
-    expectNonEmptyString(call.sessionId);
+    expect(call.sessionId).toMatch(/\S/u);
     expectForkTarget(call);
   });
 
