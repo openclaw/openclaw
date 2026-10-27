@@ -22,12 +22,24 @@ export async function startWarmReloadAdmission(options: { gatewayPort: number; p
   }
   const origin = `http://127.0.0.1:${options.port}`;
   const session = randomUUID();
+  const peerSessions = [1, 2, 3].map((index) => ({
+    email: `proof-viewer-${index}@example.invalid`,
+    session: randomUUID(),
+  }));
+  const identities = new Map([
+    [session, viewerEmail],
+    ...peerSessions.map((peer) => [peer.session, peer.email] as const),
+  ]);
   const password = randomUUID();
   const agent = new Agent({ keepAlive: true });
   const sockets = new Set<Duplex>();
-  const admitted = (req: IncomingMessage) =>
-    req.headers.cookie?.split(";").some((part) => part.trim() === `${cookieName}=${session}`) ===
-    true;
+  const admitted = (req: IncomingMessage) => {
+    const cookie = req.headers.cookie
+      ?.split(";")
+      .map((part) => part.trim())
+      .find((part) => part.startsWith(`${cookieName}=`));
+    return cookie ? identities.get(cookie.slice(cookieName.length + 1)) : undefined;
+  };
   const forward = (req: IncomingMessage) => {
     const headers = { ...req.headers };
     for (const name of Object.keys(headers)) {
@@ -59,7 +71,7 @@ export async function startWarmReloadAdmission(options: { gatewayPort: number; p
       agent,
       headers: {
         ...headers,
-        "x-forwarded-user": viewerEmail,
+        "x-forwarded-user": admitted(req),
         "x-forwarded-for": "198.51.100.248",
         "x-forwarded-proto": "http",
         "x-forwarded-host": new URL(origin).host,
@@ -132,14 +144,29 @@ export async function startWarmReloadAdmission(options: { gatewayPort: number; p
   return {
     origin,
     viewerEmail,
+    peerSessions: peerSessions.map((peer) => ({
+      email: peer.email,
+      cookie: {
+        name: cookieName,
+        value: peer.session,
+        url: origin,
+        httpOnly: true,
+        sameSite: "Lax" as const,
+      },
+    })),
     gatewayAuth: {
       mode: "trusted-proxy",
       password,
-      identityScopes: { [viewerEmail]: ["operator.admin"] },
+      identityScopes: Object.fromEntries(
+        [viewerEmail, ...peerSessions.map((peer) => peer.email)].map((email) => [
+          email,
+          ["operator.admin" as const],
+        ]),
+      ),
       trustedProxy: {
         userHeader: "x-forwarded-user",
         requiredHeaders: ["x-forwarded-proto", "x-forwarded-host"],
-        allowUsers: [viewerEmail],
+        allowUsers: [viewerEmail, ...peerSessions.map((peer) => peer.email)],
         allowLoopback: true,
         deviceAutoApprove: {
           enabled: true,

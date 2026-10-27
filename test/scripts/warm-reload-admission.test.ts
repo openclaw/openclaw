@@ -109,3 +109,17 @@ it("requires the synthetic session and replaces browser-supplied authority on HT
   client.close();
   await closed;
 });
+
+it("binds each synthetic viewer identity to its own cookie", async () => {
+  for (const [index, peer] of admission.peerSessions.entries()) {
+    const response = await fetch(`${admission.origin}/`, {
+      headers: {
+        cookie: `${peer.cookie.name}=${peer.cookie.value}`,
+        "x-forwarded-user": admission.viewerEmail,
+      },
+    });
+    expect(await response.json()).toMatchObject({
+      headers: { "x-forwarded-user": `proof-viewer-${index + 1}@example.invalid` },
+    });
+  }
+});
