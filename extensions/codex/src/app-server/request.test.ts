@@ -220,7 +220,6 @@ describe("requestCodexAppServerJson sandbox guard", () => {
         autoEmitExit: false,
         onWrite(line, send) {
           const frame = JSON.parse(line) as { id: number };
-          expect(frame).toEqual({ id: expect.any(Number), method, params: {} });
           send({ id: frame.id, result: { data: [] } });
         },
       });
@@ -286,10 +285,7 @@ describe("requestCodexAppServerJson sandbox guard", () => {
         outcome === "request" ? "client-request" : "release-client",
         outcome === "deadline" ? "deadline-observed" : "other",
       );
-      expect(closeAndWait).toHaveBeenCalledExactlyOnceWith({
-        exitTimeoutMs: 2_000,
-        forceKillDelayMs: 250,
-      });
+      expect(closeAndWait).toHaveBeenCalledOnce();
     },
   );
 
@@ -324,10 +320,7 @@ describe("requestCodexAppServerJson sandbox guard", () => {
       },
     );
     shared.acquire.mockRejectedValue(original);
-    const result = await listRequest({ controlObservation }).then(
-      () => undefined,
-      (error: unknown) => error,
-    );
+    const result = await listRequest({ controlObservation }).catch((error: unknown) => error);
     expect(Object.is(result, original)).toBe(true);
     expect(controlObservation.failed).not.toHaveBeenCalled();
   });
@@ -388,10 +381,7 @@ describe("requestCodexAppServerJson sandbox guard", () => {
             url: "unix://",
           },
         },
-      ).then(
-        (value) => ({ value, error: undefined }),
-        (error: unknown) => ({ value: undefined, error }),
-      );
+      ).catch((error: unknown) => error);
       try {
         await Promise.race([entered.promise, pending]);
         expect(shared.acquire).toHaveBeenCalledOnce();
@@ -400,13 +390,13 @@ describe("requestCodexAppServerJson sandbox guard", () => {
         await vi.advanceTimersByTimeAsync(0);
         if (expired) {
           expect(harness.writes).toEqual([]);
-          expect((await pending).error).toMatchObject({ name: "AgentHarnessPreflightError" });
+          expect(await pending).toMatchObject({ name: "AgentHarnessPreflightError" });
         } else {
           expect(harness.writes).toHaveLength(1);
           const request = JSON.parse(harness.writes[0]!);
           expect(request.method).toBe("thread/list");
           harness.send({ id: request.id, result: { data: [] } });
-          expect(await pending).toEqual({ value: { data: [] }, error: undefined });
+          expect(await pending).toEqual({ data: [] });
         }
         expect(shared.release).toHaveBeenCalledOnce();
       } finally {

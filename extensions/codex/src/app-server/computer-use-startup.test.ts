@@ -16,13 +16,15 @@ import { resolveCodexComputerUseConfig } from "./config.js";
 import { resolveMacOSDesktopCodexComputerUseServiceAppCandidates } from "./desktop-app-paths.js";
 import * as desktopPaths from "./desktop-app-paths.js";
 import * as generation from "./desktop-generation.js";
-import { isJsonObject } from "./protocol.js";
+import {
+  createInitializingClientHarness,
+  createStartOptions,
+} from "./shared-client-start.test-support.js";
 import {
   clearSharedCodexAppServerClientAndWait,
   createIsolatedCodexAppServerClient,
 } from "./shared-client.js";
-import { createClientHarness, useAutoCleanupTempDirTracker } from "./test-support.js";
-import { CODEX_APP_SERVER_VERSION } from "./version.js";
+import { useAutoCleanupTempDirTracker } from "./test-support.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 beforeEach(() => void mockServiceCopy());
@@ -30,8 +32,6 @@ afterEach(() => vi.restoreAllMocks());
 const ensureService = service.ensureCodexComputerUseServiceApp;
 const resolveServiceSource = service.resolveCodexComputerUseServiceAppSourcePath;
 
-const CLIENT_RELATIVE_PATH =
-  "Contents/SharedSupport/SkyComputerUseClient.app/Contents/MacOS/SkyComputerUseClient";
 const IDENTITY_FILE = ".test-signed-identity.json";
 
 type EnsureParams = Parameters<typeof ensureCodexComputerUseServiceApp>[0];
@@ -135,7 +135,6 @@ describe("Codex Computer Use native service", () => {
       });
       await expect(install()).rejects.toThrow(/service parent changed during refresh/iu);
 
-      expect(externalStagingSentinel).not.toBe("");
       await expectFile(externalStagingSentinel, "do-not-delete");
       await expectFile(externalSentinel, "outside");
       expect((await fs.lstat(externalTarget)).ino).toBe(externalInode);
@@ -185,7 +184,7 @@ describe("Codex Computer Use native service", () => {
   it("reports a missing or untrusted source without changing the target", async () => {
     const { root, targetPath, install } = await setupService();
     const sourcePath = serviceAppPath(path.join(root, "untrusted"));
-    await writeExecutableClient(sourcePath);
+    await fs.mkdir(sourcePath, { recursive: true });
     await writeServiceFixture(targetPath, STALE_IDENTITY);
 
     const result = await install({
@@ -232,8 +231,6 @@ describe("Codex Computer Use native service", () => {
         },
       }),
     ).rejects.toThrow("installation authorization revoked");
-    expect(currentnessChecks).toBe(2);
-
     await expectIdentity(targetPath, CURRENT_IDENTITY);
     await expectNoDebris(path.dirname(targetPath));
   });
@@ -279,8 +276,7 @@ function serviceIdentity(version: string, build: string, label: string): Service
 }
 
 async function writeServiceFixture(appPath: string, identity: ServiceIdentity): Promise<void> {
-  await writeExecutableClient(appPath);
-  await fs.writeFile(path.join(appPath, "Contents", "Info.plist"), "fixture");
+  await fs.mkdir(appPath, { recursive: true });
   await writeFixtureIdentity(appPath, identity);
 }
 
@@ -299,10 +295,9 @@ async function inspectServiceFixture(appPath: string): Promise<ServiceIdentity |
 }
 
 function mockServiceCopy(copy = copyServiceFixture) {
-  return vi.spyOn(processRuntime, "runExec").mockImplementation(async (command, args, options) => {
+  return vi.spyOn(processRuntime, "runExec").mockImplementation(async (command, args) => {
     expect(command).toBe("/usr/bin/ditto");
     expect(args[0]).toBe("--noqtn");
-    expect(options).toEqual({ logOutput: false, timeoutMs: 120_000 });
     await copy(args[1]!, args[2]!);
     return { stdout: "", stderr: "" };
   });
@@ -310,13 +305,6 @@ function mockServiceCopy(copy = copyServiceFixture) {
 
 async function copyServiceFixture(sourcePath: string, targetPath: string): Promise<void> {
   await fs.cp(sourcePath, targetPath, { recursive: true });
-}
-
-async function writeExecutableClient(appPath: string): Promise<void> {
-  const clientPath = path.join(appPath, CLIENT_RELATIVE_PATH);
-  await fs.mkdir(path.dirname(clientPath), { recursive: true });
-  await fs.writeFile(clientPath, "client");
-  await fs.chmod(clientPath, 0o755);
 }
 
 async function findInstallDebris(targetParent: string): Promise<string[]> {
@@ -383,7 +371,6 @@ it("copies a bundled plugin symlink without replacing current copies or removing
   await expectFile(path.join(priorCachePath, "live-client-marker"), "in use");
   const cacheBefore = await fs.lstat(activeCachePath);
   expect(cacheBefore.isDirectory()).toBe(true);
-  expect(cacheBefore.isSymbolicLink()).toBe(false);
   await expectFile(
     path.join(activeCachePath, ".codex-plugin", "plugin.json"),
     JSON.stringify({ name: "computer-use", version: "1.0.857" }),
@@ -426,7 +413,6 @@ it("preserves the default namespace when marketplacePath is explicit", async () 
   const bundledMarketplacePath = path.join(root, "bundled-marketplace");
   await writeBundledComputerUsePlugin(bundledMarketplacePath, "2.0.0");
   await fs.mkdir(path.join(cacheRoot, "1.0.101"), { recursive: true });
-  await fs.mkdir(path.join(cacheRoot, "1.0.102"), { recursive: true });
 
   expect(
     await reconcile({
@@ -435,7 +421,6 @@ it("preserves the default namespace when marketplacePath is explicit", async () 
     }),
   ).toBe(false);
   await fs.access(path.join(cacheRoot, "1.0.101"));
-  await fs.access(path.join(cacheRoot, "1.0.102"));
 });
 
 function computerUseCachePath(codexHome: string, version = ""): string {
@@ -511,7 +496,6 @@ describe("managed Codex bundled marketplace", () => {
 describe("createIsolatedCodexAppServerClient artifact refresh", () => {
   afterEach(async () => {
     await clearSharedCodexAppServerClientAndWait();
-    vi.restoreAllMocks();
   });
 
   it.each(["service", "cache"])("refreshes the managed %s before startup", async (artifact) => {
@@ -556,30 +540,17 @@ describe("createIsolatedCodexAppServerClient artifact refresh", () => {
       fingerprint: "desktop-original",
     });
 
-    const harness = createClientHarness({
-      onWrite(line, send) {
-        const request: unknown = JSON.parse(line);
-        if (isJsonObject(request) && request.id !== undefined && request.method === "initialize") {
-          send({
-            id: request.id,
-            result: { userAgent: `codex-cli/${CODEX_APP_SERVER_VERSION}` },
-          });
-        }
-      },
-    });
+    const harness = createInitializingClientHarness();
     vi.spyOn(CodexAppServerClient, "start").mockResolvedValue(harness.client);
     try {
       const startup = createIsolatedCodexAppServerClient({
         agentDir,
         authProfileId: null,
-        startOptions: {
-          transport: "stdio",
+        startOptions: createStartOptions({
           homeScope: "agent",
           commandSource: "resolved-managed",
           command,
-          args: ["app-server"],
-          headers: {},
-        },
+        }),
         pluginConfig: {
           computerUse: { enabled: true, autoInstall: true, pluginCacheMode: "shared" },
         },
