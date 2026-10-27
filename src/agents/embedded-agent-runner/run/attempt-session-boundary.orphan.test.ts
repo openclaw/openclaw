@@ -1,5 +1,7 @@
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
+import { buildOpenAIResponsesReasoningReplayMetadata } from "../../../../packages/ai/src/transports/openai-responses-compaction-replay.js";
+import { buildOpenAIResponsesParams } from "../../../../packages/ai/src/transports/openai-responses-params-internal.js";
 import { awaitGateBeforeSettlement, createDeferred } from "../../../../test/helpers/promise.js";
 import { setRuntimeConfigSnapshot } from "../../../config/runtime-snapshot.js";
 import {
@@ -29,12 +31,16 @@ import { withOpenClawTestState } from "../../../test-utils/openclaw-test-state.j
 import { createEnteredGate } from "../../entered-gate.test-support.js";
 import type { AgentMessage } from "../../runtime/index.js";
 import { guardSessionManager } from "../../session-tool-result-guard-wrapper.js";
+import { convertToLlm } from "../../sessions/messages.js";
+import { sessionManagerReadInitialContext } from "../../sessions/session-manager-current-turn.js";
 import {
   appendSessionTranscriptNote,
   withSessionManagerWrite,
 } from "../../sessions/session-manager-write-admission.js";
 import { SessionManager } from "../../sessions/session-manager.js";
 import { makeAssistantMessageFixture } from "../../test-helpers/assistant-message-fixtures.js";
+import { makeProviderModelFixture } from "../../test-helpers/provider-model-fixture.js";
+import { normalizeMessagesForLlmBoundary } from "./attempt-llm-boundary.js";
 import {
   createActiveSession,
   createSessionManager,
@@ -62,6 +68,8 @@ async function withPersistedOrphanBoundary(
     excludeFromContext?: boolean;
     selectedOwner?: boolean;
     recoveryNotice?: "tail" | "before-metadata";
+    history?: AgentMessage[];
+    metadataBytes?: number;
   },
   run: (fixture: {
     input: Parameters<typeof prepareEmbeddedAttemptSessionBoundary>[0];
@@ -83,6 +91,9 @@ async function withPersistedOrphanBoundary(
     const seed = SessionManager.open(target, state.workspaceDir);
     if (options.parent) {
       await seed.appendModelChange("openai", "gpt-5.5");
+    }
+    for (const message of options.history ?? []) {
+      await seed.appendMessageAsync(message);
     }
     const orphanId = seed.appendMessage({
       role: "user",
@@ -114,6 +125,11 @@ async function withPersistedOrphanBoundary(
       await seed.appendThinkingLevelChange("low");
       await seed.appendModelChange("openai", "gpt-5.5");
     }
+    if (options.metadataBytes) {
+      await seed.appendCustomEntryAsync("openclaw.cache-ttl", {
+        fixture: "x".repeat(options.metadataBytes),
+      });
+    }
     if (options.recoveryNotice === "tail") {
       await appendRecoveryNotice();
     }
@@ -128,7 +144,9 @@ async function withPersistedOrphanBoundary(
         suppressNextUserMessagePersistence: options.suppressNextUserMessagePersistence,
       },
     );
-    const { activeSession } = createActiveSession(manager.buildSessionContext().messages);
+    const { activeSession } = createActiveSession(
+      (await manager[sessionManagerReadInitialContext]()).messages,
+    );
     let active = true;
     const execute = () =>
       run({
@@ -189,6 +207,87 @@ async function withPersistedOrphanBoundary(
 }
 
 describe("prepareEmbeddedAttemptSessionBoundary orphan recovery", () => {
+  it.each(["main_session_restart_recovery", "cron_execution"])(
+    "keeps the Responses model prefix through bounded %s orphan recovery",
+    async (sourceTool) => {
+      const model = makeProviderModelFixture<"openai-responses">({
+        api: "openai-responses",
+        provider: "openai",
+        id: "test-model",
+        baseUrl: "https://api.openai.com/v1",
+        reasoning: true,
+      });
+      const history: AgentMessage[] = Array.from({ length: 6 }, (_, index) => [
+        {
+          role: "user" as const,
+          content: `question ${index} ` + "q".repeat(400),
+          timestamp: index,
+        },
+        makeAssistantMessageFixture({
+          stopReason: "stop",
+          errorMessage: undefined,
+          content: [
+            Object.assign(
+              {
+                type: "thinking" as const,
+                thinking: "",
+                thinkingSignature: JSON.stringify({
+                  type: "reasoning",
+                  id: `rs_fixture_${index}`,
+                  summary: [],
+                  encrypted_content: "Q".repeat(64),
+                }),
+              },
+              {
+                openclawReasoningReplay: buildOpenAIResponsesReasoningReplayMetadata(model, {
+                  sessionId: "orphan-projection",
+                }),
+              },
+            ),
+            { type: "text", text: `answer ${index} ` + "a".repeat(400) },
+          ],
+        }),
+      ]).flat();
+      await withPersistedOrphanBoundary(
+        {
+          parent: true,
+          metadata: true,
+          history,
+          metadataBytes: 1400,
+          orphanProvenance: { kind: "internal_system", sourceTool: "cron_execution" },
+        },
+        async ({ input, manager }) => {
+          input.attempt.inputProvenance = { kind: "internal_system", sourceTool };
+          input.attempt.config = { agents: { defaults: { userTimezone: "UTC" } } };
+          const request = () =>
+            buildOpenAIResponsesParams(
+              model,
+              {
+                systemPrompt: "Stable instructions",
+                messages: convertToLlm(
+                  normalizeMessagesForLlmBoundary(input.activeSession.agent.state.messages, {
+                    sessionVersion: manager.getHeader()?.version,
+                    timezone: "UTC",
+                  }),
+                ),
+              },
+              { sessionId: input.attempt.sessionId },
+            );
+          const before = request();
+          expect(before.input!.length).toBeGreaterThan(2);
+          expect(before.input?.some((item) => item.type === "reasoning")).toBe(true);
+          const boundary = await prepareEmbeddedAttemptSessionBoundary(input);
+          expect(boundary.orphanRepair).toBeDefined();
+          const after = request();
+          // Orphan assembly owns the final user input; all earlier provider bytes stay intact.
+          expect(JSON.stringify(after.input)).toBe(JSON.stringify(before.input!.slice(0, -1)));
+          expect(after.instructions).toBe(before.instructions);
+          expect(manager.getBranch().some((entry) => entry.type === "custom")).toBe(true);
+        },
+      );
+    },
+  );
+
   it.each(["tail", "before-metadata", "before-later-orphan"] as const)(
     "keeps an excluded recovery notice visible through later turns: %s",
     async (recoveryNotice) => {
@@ -633,7 +732,7 @@ describe("prepareEmbeddedAttemptSessionBoundary orphan recovery", () => {
         }),
         branchAsync,
         setNextUserMessagePersistence,
-        buildSessionContext: () => ({ messages: repairedMessages }),
+        [sessionManagerReadInitialContext]: async () => ({ messages: repairedMessages }),
       });
       const recorder = {
         getPersistedMessage: () => currentUser,

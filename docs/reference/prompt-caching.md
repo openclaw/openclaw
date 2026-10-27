@@ -47,6 +47,10 @@ Actual compaction or reset starts a new prompt series. Permission changes still
 apply immediately through execution gates and in-history instruction updates;
 they do not require replacing the earlier system prompt.
 
+Restart and scheduled-turn orphan recovery use the same bounded model-history
+selection as session startup. Transcript-only metadata does not replace that
+history with a shorter navigation window or remove its earlier provider inputs.
+
 Client-capability tool listing uses the session's recorded operator declaration.
 Internal wake and restart-recovery turns retain the same tool definitions and
 Code Mode catalog, including `screen`, without borrowing execution authority.
