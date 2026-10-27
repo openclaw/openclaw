@@ -102,7 +102,7 @@ describe("scribes catalog", () => {
 describe("scribes state", () => {
   // One conversations scribe loaded through fake Gateway reads.
   async function conversationsScribe(world: {
-    session?: { key: string; displayName: string; archived?: boolean };
+    session?: { key: string; displayName: string; archived?: boolean; status?: string };
     job?: ScribeJob;
     messages?: unknown[];
   }) {
@@ -187,7 +187,12 @@ describe("scribes state", () => {
     );
     const cases: [Parameters<typeof conversationsScribe>[0], string][] = [
       [{}, "available"],
-      [{ session }, "starting"],
+      [{ session }, "available"],
+      [{ session, messages: [user(setupMessage(setup))] }, "starting"],
+      [
+        { session: { ...session, status: "interrupted" }, messages: [user(setupMessage(setup))] },
+        "failing",
+      ],
       [{ session, job: job() }, "on"],
       [{ session, job: job({ enabled: false }) }, "paused"],
       [{ session, job: job({ state: { consecutiveErrors: 2 } }) }, "failing"],

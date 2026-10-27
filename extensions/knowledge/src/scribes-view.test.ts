@@ -20,7 +20,7 @@ const reviewJob = {
 function fixture(world: {
   sessions?: Record<
     string,
-    { key: string; sessionId?: string; displayName: string; archived?: boolean }
+    { key: string; sessionId?: string; displayName: string; archived?: boolean; status?: string }
   >;
   jobs?: unknown[];
   history?: Record<string, unknown[]>;
@@ -402,6 +402,41 @@ it("forces an ongoing scribe's first run once after its setup turn reports on", 
   expect(forced()).toHaveLength(1);
 });
 
+it("tries the first run again on the next load when forcing it failed", async () => {
+  const label = "Scribe · Review unlinked claims";
+  const setup = scribeSetup("unlinked-review", "ongoing", {}, "main", "America/Los_Angeles");
+  const { render, ui, calls, request } = fixture({
+    sessions: { [label]: { key: "s-review", displayName: label } },
+    jobs: [{ ...reviewJob, id: "job-retry-first", state: {} }],
+    history: {
+      "s-review": [
+        userText(setupMessage(setup)),
+        resultLine("unlinked-review", "on", "job-retry-first", "On"),
+      ],
+    },
+    runs: [],
+  });
+  ui.s.scribe = "unlinked-review";
+  // Only the first cron.run is rejected; every other read answers normally.
+  const answer = request.getMockImplementation()!;
+  let rejected = false;
+  request.mockImplementation(async (method: string, params?: Record<string, unknown>) => {
+    if (method === "cron.run" && !rejected) {
+      rejected = true;
+      calls.push([method, params]);
+      throw new Error("Gateway restarting");
+    }
+    return answer(method, params);
+  });
+  const view = await render();
+  expect(view.textContent).not.toContain("First run");
+  expect(ui.announce).toHaveBeenCalledWith(expect.stringContaining("the first run did not start"));
+  const later = await render();
+  const force = ["cron.run", { id: "job-retry-first", mode: "force" }];
+  expect(calls.filter(([method]) => method === "cron.run")).toEqual([force, force]);
+  expect(later.querySelector(".scribe-run")?.textContent).toContain("First runRunning now");
+});
+
 it("does not force a run after a repair, or for a job that already ran", async () => {
   const label = "Scribe · Review unlinked claims";
   const setup = scribeSetup("unlinked-review", "ongoing", {}, "main", "America/Los_Angeles");
@@ -463,4 +498,31 @@ it("retries a failed one-time scribe by sending its setup again with a new attem
     message: setupMessage(setup),
     idempotencyKey: expect.stringMatching(/^knowledge:scribe:memory:s-mem:[0-9a-f-]{36}$/),
   });
+});
+
+it("recovers a conversation whose setup never arrived or whose setup turn stopped", async () => {
+  const memoryLabel = "Scribe · Learn from Memory";
+  const reviewLabel = "Scribe · Review unlinked claims";
+  const setup = scribeSetup("memory", "once", { sources: ["memory-md"] }, "main", "UTC");
+  const { render, ui, calls, create, page } = fixture({
+    sessions: {
+      [reviewLabel]: { key: "s-review-empty", displayName: reviewLabel },
+      [memoryLabel]: { key: "s-mem-stopped", displayName: memoryLabel, status: "interrupted" },
+    },
+    history: { "s-mem-stopped": [userText(setupMessage(setup))] },
+  });
+  const view = await render();
+  // The review conversation never got its setup: it is startable again, in the same conversation.
+  buttonNamed(view, "Turn on…").click();
+  buttonNamed(page.querySelector("dialog")!, "Turn on").click();
+  await vi.waitFor(() => expect(calls.at(-1)?.[0]).toBe("chat.send"));
+  expect(create).not.toHaveBeenCalled();
+  expect(calls.at(-1)![1]!.sessionKey).toBe("s-review-empty");
+  // The memory setup turn stopped without an answer: it shows Failing with Retry.
+  ui.s.scribe = "memory";
+  const detail = await render();
+  expect(detail.querySelector(".scribe-chip-warn")?.textContent).toBe("Failing");
+  buttonNamed(detail, "Retry").click();
+  await vi.waitFor(() => expect(calls.at(-1)![1]!.sessionKey).toBe("s-mem-stopped"));
+  expect(calls.at(-1)![1]!.message).toBe(setupMessage(setup));
 });

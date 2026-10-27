@@ -57,15 +57,15 @@ scribes also appear on the Automations page.
 
 ## States
 
-| State                 | Meaning                                                                                              |
-| --------------------- | ---------------------------------------------------------------------------------------------------- |
-| Available             | No scribe conversation, or an ongoing scribe that was turned off.                                    |
-| Starting              | The conversation exists but has not reported its first result yet.                                   |
-| On                    | Its automation is enabled and the last run did not fail.                                             |
-| Paused                | Its automation is disabled.                                                                          |
-| Failing               | The last run failed, the scheduler disabled it after repeated failures, or setup reported a failure. |
-| Done                  | A once scribe finished.                                                                              |
-| Needs reauthorization | The automation exists but its conversation was archived or deleted.                                  |
+| State                 | Meaning                                                                                                                                       |
+| --------------------- | --------------------------------------------------------------------------------------------------------------------------------------------- |
+| Available             | No scribe conversation, a conversation that never received its setup, or an ongoing scribe that was turned off.                               |
+| Starting              | The conversation received its setup but has not reported its result yet.                                                                      |
+| On                    | Its automation is enabled and the last run did not fail.                                                                                      |
+| Paused                | Its automation is disabled.                                                                                                                   |
+| Failing               | The last run failed, the scheduler disabled it after repeated failures, setup reported a failure, or the setup turn stopped without a result. |
+| Done                  | A once scribe finished.                                                                                                                       |
+| Needs reauthorization | The automation exists but its conversation was archived or deleted.                                                                           |
 
 Each scribe turn ends its reply with one `SCRIBE_RESULT` line. The Scribes tab
 reads the latest one for the result summary.

@@ -219,6 +219,8 @@ async function startFirstRun(ui: Page, snapshot: ScribeSnapshot) {
     await runScribeNow(ui.s.context.host, job);
     ui.announce(`${snapshot.scribe.title}: first run started.`);
   } catch (error) {
+    // Not started: forget it so the next load tries again and nothing shows it as running.
+    firstRuns.delete(job.id);
     ui.announce(`${snapshot.scribe.title}: the first run did not start. ${ui.errorText(error)}`);
   }
 }

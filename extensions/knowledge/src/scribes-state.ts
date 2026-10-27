@@ -213,20 +213,26 @@ function isFirstRunDue(job: ScribeJob, result: ScribeResult, setup: ScribeSetup,
   );
 }
 
+/** Session run states that mean its last turn stopped before it could answer. */
+const ENDED_WITHOUT_RESULT = new Set(["failed", "interrupted", "killed", "timeout"]);
+
 /**
  * Derive one scribe's state.
  * - No live conversation: Available, or Needs reauthorization when its automation still exists.
  * - With an automation: Paused, Failing or On from the scheduler state.
  * - Without one: Done / Failing from the last result line, Available when an ongoing scribe was
- *   turned off, and Starting until the conversation reports its first result.
+ *   turned off or the setup never reached the conversation, Starting until the conversation
+ *   answers its setup, and Failing when that turn stopped without an answer.
  */
 function deriveStatus(input: {
   scribe: ScribeDefinition;
   session?: ScribeSession;
   job?: ScribeJob;
   result?: ScribeResult;
+  /** The conversation holds a setup or repair message from the page. */
+  setupSent: boolean;
 }): ScribeStatus {
-  const { session, job, result } = input;
+  const { session, job, result, setupSent } = input;
   if (!session || session.archived) {
     return job ? "reauth" : "available";
   }
@@ -242,7 +248,12 @@ function deriveStatus(input: {
       : "on";
   }
   if (!result) {
-    return "starting";
+    // No setup message: the start never reached the conversation (its send failed), so it can
+    // be started again there. A setup turn that ended without a result line needs Retry/Repair.
+    if (!setupSent) {
+      return "available";
+    }
+    return session.status && ENDED_WITHOUT_RESULT.has(session.status) ? "failing" : "starting";
   }
   return result.state === "done" ? "done" : result.state === "failed" ? "failing" : "available";
 }
@@ -332,7 +343,7 @@ export async function loadScribes(host: ScribeReader, agentId: string): Promise<
       const current = resultIndex > setupIndex ? result : undefined;
       const snapshot: ScribeSnapshot = {
         scribe,
-        status: deriveStatus({ scribe, session, job, result: current }),
+        status: deriveStatus({ scribe, session, job, result: current, setupSent: setupIndex >= 0 }),
       };
       Object.assign(snapshot, session && { session }, job && { job }, result && { result });
       if (job && current && setup && kind && snapshot.status === "on") {
