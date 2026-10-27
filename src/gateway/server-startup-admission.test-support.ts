@@ -63,6 +63,39 @@ export function registerGatewayStartupAdmissionTests(params: {
     }
   });
 
+  it("opens external input after failed restart discovery", async () => {
+    const tracked: Promise<unknown>[] = [];
+    const lifetime = new AbortController();
+    const owner = await import("./session-restart-resume.js");
+    const resumeSpy = vi
+      .spyOn(owner, "resumeMarkedSessions")
+      .mockRejectedValueOnce(new Error("fixture store unavailable"));
+    const unlockStartupMethods = vi.fn();
+    const startup = params.createParams({
+      sidecarStartup: "defer",
+      trackStartupWork: (run) => {
+        const work = run(lifetime.signal);
+        tracked.push(work);
+        return work;
+      },
+      isClosing: () => lifetime.signal.aborted,
+      unlockStartupMethods,
+    });
+    try {
+      const runtime = await params.start(startup, params.createRuntimeDeps());
+      await runtime.startupSettled;
+      await Promise.allSettled(tracked);
+      expect(unlockStartupMethods).toHaveBeenCalledOnce();
+      expect(startup.log.warn).toHaveBeenCalledWith(
+        expect.stringContaining("Restart resume discovery failed"),
+      );
+    } finally {
+      lifetime.abort();
+      await Promise.allSettled(tracked);
+      resumeSpy.mockRestore();
+    }
+  });
+
   it.each(["loading", "hydrating"] as const)(
     "keeps input closed while registry %s is pending and the Gateway closes",
     async (stage) => {

@@ -63,7 +63,12 @@ export async function runGatewayStartupObservers(params: {
         return;
       }
       const { resumeMarkedSessions } = await import("./session-restart-resume.js");
-      await resumeMarkedSessions({ context, signal: params.signal, log: params.log });
+      try {
+        await resumeMarkedSessions({ context, signal: params.signal, log: params.log });
+      } catch (error) {
+        params.signal.throwIfAborted();
+        params.log.warn(`Restart resume discovery failed: ${String(error)}`);
+      }
       if (!params.signal.aborted && !params.isClosing?.()) {
         // Retained FIFO inputs must own their ordinary queue slots before reconnecting sends.
         params.unlockStartupMethods?.();

@@ -261,7 +261,14 @@ export async function resumeMarkedSessions(params: {
     }
     visited.add(targetKey);
     signal.throwIfAborted();
-    const entries = await readSessionEntrySummariesInWorker(target);
+    let entries: Awaited<ReturnType<typeof readSessionEntrySummariesInWorker>>;
+    try {
+      entries = await readSessionEntrySummariesInWorker(target);
+    } catch (error) {
+      signal.throwIfAborted();
+      log.warn(`Skipped restart resume for agent ${target.agentId}: ${String(error)}`);
+      continue;
+    }
     for (const { sessionKey, entry: marked } of entries) {
       if (!marked.resumeAfterRestart) {
         continue;
