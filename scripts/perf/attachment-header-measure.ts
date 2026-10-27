@@ -96,10 +96,10 @@ for (let index = 0; index < 10; index++) {
 }
 let decodedBytes = 0;
 let decodeCalls = 0;
-// oxlint-disable-next-line typescript/unbound-method -- Preserve the exact function; the proxy forwards its receiver.
-const originalFrom = Buffer.from;
+const originalFrom = Object.getOwnPropertyDescriptor(Buffer, "from");
+assert.ok(originalFrom);
 try {
-  Buffer.from = new Proxy(originalFrom, {
+  Buffer.from = new Proxy(Buffer.from.bind(Buffer), {
     apply(target, receiver, args: unknown[]) {
       const result: unknown = Reflect.apply(target, receiver, args);
       if (typeof args[0] === "string" && args[1] === "base64" && Buffer.isBuffer(result)) {
@@ -111,7 +111,7 @@ try {
   });
   await run();
 } finally {
-  Buffer.from = originalFrom;
+  Object.defineProperty(Buffer, "from", originalFrom);
 }
 const inspector = values.allocations ? new Session() : undefined;
 inspector?.connect();

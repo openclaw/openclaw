@@ -269,9 +269,10 @@ describe("persistInboundImagesForTranscript", () => {
       const storage = kind === "offloaded" || kind === "unreadable" ? "offloaded" : "inline";
       expect(parsed.imageOrder).toEqual([storage]);
       if (kind === "inline" || kind === "worker" || kind === "offloaded") {
-        expect(
-          from.mock.calls.filter(([value, encoding]) => value === base64 && encoding === "base64"),
-        ).toHaveLength(0);
+        expect(from.mock.calls.map((call) => call.slice(0, 2))).not.toContainEqual([
+          base64,
+          "base64",
+        ]);
       }
       const persisted = await persist(parsed);
       const message = buildPersistedUserTurnMessage({
