@@ -9,7 +9,7 @@ it("reuses a history page when budgeting does not replace or omit messages", () 
   Object.freeze(messages);
   const page = prepareChatHistoryResponsePage(
     { messages, pagination: { offset: 0, totalMessages: 2, rawPageMessages: 2 } },
-    { entry: undefined, maxHistoryBytes: 512 * 1024 },
+    { entry: undefined, maxHistoryBytes: 512 * 1024, messageId: undefined },
   );
   expect(page.messages).toBe(messages);
   expect(page.messagesBytes).toBe(Buffer.byteLength(JSON.stringify(messages)));
