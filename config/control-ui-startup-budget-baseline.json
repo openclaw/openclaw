@@ -1,5 +1,5 @@
 {
-  "startupJsGzipBytes": 271790,
-  "reason": "Same-host main 599e2559 and production head 5def8b7, with all 37 packaged plugin inputs identical, measure startup 271844 to 271790 B gzip (54 B variance), with five JS requests and one CSS request unchanged. New Session falls from 757683 to 754977 B gzip and from 17 to 15 JS requests. Set the baseline to the actual measured head; preserve the prior mismatched three-plugin builds as invalid comparisons.",
-  "updatedAt": "2026-10-26"
+  "startupJsGzipBytes": 270659,
+  "reason": "Same-host main 7a8f6d72 and production head 5cbc2cee, with 37 identical packaged-plugin inputs, measure startup 270486 to 270659 B gzip (+173 B), with five JS requests and one CSS request unchanged. Accept the small startup cost for the retained New Session CPU win and repeated Claws warm-task reductions: local20 median -7.53%, remote30 median -10.88%. Remote cold readiness improves 12.25%; the original cold-script p95 tail remains disclosed and does not repeat in ten additional triplets. New Session decreases 759640 to 757220 B gzip and 17 to 15 JS requests. Ratchet to the actual measured head; synthetic renderer proof is separate from live Gateway latency.",
+  "updatedAt": "2026-10-27"
 }

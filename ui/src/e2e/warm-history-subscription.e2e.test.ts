@@ -139,6 +139,10 @@ suite.define(() => {
       await page.waitForFunction(() =>
         Object.keys(localStorage).some((key) => key.startsWith("openclaw.control.bootRecord.v1:")),
       );
+      // The sidebar snapshot has its own deferred IndexedDB writer.
+      await page
+        .locator('aside.sidebar[data-snapshot-state="live"][data-snapshot-saved="true"]')
+        .waitFor();
       const warmInput: Parameters<typeof persistColdLoadWarmState>[0] = {
         sessionKey,
         sidebarView: "sessions",
