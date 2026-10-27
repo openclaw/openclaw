@@ -402,6 +402,31 @@ describe("sessions.files RPC handlers", () => {
     },
   );
 
+  it.each(["München", "Mu\u0308nchen"])(
+    "finds a canonically equivalent workspace filename without rewriting it (%s)",
+    async (query) => {
+      writeWorkspace("Mu\u0308nchen.md", "# Decomposed filename\n");
+      writeWorkspace("plain.md", "# ASCII control\n");
+
+      const { browser } = await files.ok("list", { search: query });
+
+      expect(browser.entries).toEqual(
+        expect.arrayContaining([expect.objectContaining({ path: "Mu\u0308nchen.md" })]),
+      );
+    },
+  );
+
+  it("keeps plain workspace filename search working", async () => {
+    writeWorkspace("Mu\u0308nchen.md", "# Decomposed filename\n");
+    writeWorkspace("plain.md", "# ASCII control\n");
+
+    const { browser } = await files.ok("list", { search: "plain" });
+
+    expect(browser.entries).toEqual(
+      expect.arrayContaining([expect.objectContaining({ path: "plain.md" })]),
+    );
+  });
+
   it.runIf(process.platform === "linux")(
     "reports non-UTF-8 filenames during workspace browse",
     async () => {
