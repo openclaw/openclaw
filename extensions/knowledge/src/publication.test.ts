@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import { writeFileSync } from "node:fs";
 import { writeFile, readFile, rm, rename } from "node:fs/promises";
 import path from "node:path";
+import type { DatabaseSync } from "node:sqlite";
 import { Check } from "typebox/value";
 import { expect, it } from "vitest";
 import type { VaultAccess } from "./access.js";
@@ -281,6 +282,51 @@ it("cross-process publishers fence competing edits and never lose the winner", a
   const current = (await f.service.record({ id: created.id }, f.owner)).record;
   expect(current!.hash).toBe(winner.hash);
   expect(current!.revision).toBe(2);
+});
+
+it("returns a resume receipt without loading the retained publication plan twice", async () => {
+  const f = await fixture();
+  const input = { ...draft(), body: "Synthetic publication body.\n".repeat(1024) };
+  const original = await new KnowledgeStorage(f.config, f.store).save(input, f.access(), "agent");
+  const planBytes = f.store.withDatabase((db) =>
+    Buffer.byteLength(
+      String(db.prepare("SELECT plan FROM mutations WHERE request=?").get(input.requestId)!.plan),
+    ),
+  );
+  let returnedBytes = 0;
+  class MeasuredStore extends SqliteIdentityStore {
+    override withDatabase<T>(run: (db: DatabaseSync) => T): T {
+      return super.withDatabase((db) => {
+        const prepare = db.prepare.bind(db);
+        db.prepare = (sql) => {
+          const statement = prepare(sql);
+          return new Proxy(statement, {
+            get(target, property) {
+              if (property === "get") {
+                return (...args: Parameters<typeof statement.get>) => {
+                  const row = target.get(...args);
+                  for (const value of Object.values(row ?? {})) {
+                    if (typeof value === "string") {
+                      returnedBytes += Buffer.byteLength(value);
+                    }
+                  }
+                  return row;
+                };
+              }
+              const value: unknown = Reflect.get(target, property, target);
+              return typeof value === "function" ? value.bind(target) : value;
+            },
+          });
+        };
+        return run(db);
+      });
+    }
+  }
+  const storage = new KnowledgeStorage(f.config, new MeasuredStore(f.config.statePath));
+  expect(storage.resume(f.access(), input.requestId)).toStrictEqual(original);
+  // Identity validation needs the plan once. Receipt readback must stay small
+  // even when a publication retains large record bodies and before/after bytes.
+  expect(returnedBytes).toBeLessThan(planBytes + 16_384);
 });
 
 it("revision snapshots and publication details never cross conversation boundaries", async () => {

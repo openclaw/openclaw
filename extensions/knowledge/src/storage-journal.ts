@@ -143,7 +143,12 @@ export class StorageJournal extends StorageBase {
     access.assertCurrent();
     return this.store.withDatabase(
       // SAFETY: receipts are serialized Receipt values written by this storage layer.
-      (db) => JSON.parse(this.row(db, scopeKey(access.scope), requestId)!.receipt) as Receipt,
+      (db) => {
+        const row = db
+          .prepare("SELECT receipt FROM mutations WHERE scope=? AND request=?")
+          .get(scopeKey(access.scope), requestId)!;
+        return JSON.parse(String(row.receipt)) as Receipt;
+      },
     );
   }
   history(access: VaultAccess, input: { offset?: number; limit?: number; id?: string }) {
