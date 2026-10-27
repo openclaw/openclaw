@@ -14,8 +14,8 @@
  * Wide-parent single-revision arm (run base/candidate in separate processes):
  * node --expose-gc --import ./scripts/tsx.mjs scripts/perf/session-event-ancestors-measure.ts \
  *   --arm candidate --shape wide --sessions 151 --clients 20 --pairs 1 --events 3000
- * Use 51/151/501 sessions for 50/150/500 children. --churn state changes one child's
- * persisted status before each publication. Compare timing and allocation separately,
+ * Use 51/151/501 sessions for 50/150/500 children. --churn state alternates one child's
+ * persisted terminal status (failed/done) before each publication. Compare timing and allocation separately,
  * counterbalance process order, and require matching normalizedPayloadDigest values.
  * Wide-parent acceptance: child-count-independent membership reads and lower CPU/event;
  * wire bytes must match after only the generated ancestor revision normalization above.
@@ -322,7 +322,7 @@ try {
                 writeSessionEntry(database, sessionKey, {
                   sessionId: `ancestor-measure-${leafIndex}`,
                   updatedAt: anchor + index + 1,
-                  status: index % 2 ? "running" : "done",
+                  status: index % 2 ? "failed" : "done",
                   visibility: "shared",
                   label: `Synthetic ancestor row ${leafIndex}`,
                   spawnedBy: key(0),
