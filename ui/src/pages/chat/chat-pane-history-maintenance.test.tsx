@@ -155,13 +155,17 @@ it.each(["idle measurement", "end-command measurement", "native end clamp"] as c
     container.scrollTop = 720;
     container.dispatchEvent(new Event("scroll"));
     await vi.advanceTimersByTimeAsync(0);
-    expect(request).toHaveBeenCalledExactlyOnceWith("chat.history", {
-      sessionKey: state.sessionKey,
-      limit: 1000,
-      maxBytes: 3 * 1024 * 1024,
-      toolResultMaxChars: 2_000,
-      offset: 2,
-    });
+    expect(request).toHaveBeenCalledExactlyOnceWith(
+      "chat.history",
+      {
+        sessionKey: state.sessionKey,
+        limit: 1000,
+        maxBytes: 3 * 1024 * 1024,
+        toolResultMaxChars: 2_000,
+        offset: 2,
+      },
+      { signal: expect.any(AbortSignal) },
+    );
     expect(state.chatFollowLocked).toBe(true);
     expect(state.chatReadingHistory).toBe(true);
   },
