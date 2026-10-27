@@ -6,7 +6,6 @@ import { closeOpenClawStateDatabaseAsync } from "../../state/openclaw-state-db.j
 import { requireNativeSqliteDatabase } from "../../test-utils/native-sqlite.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { prepareSessionColdBatchInWorker } from "./session-cold-storage-prepare.js";
-import { selectSessionColdBatch } from "./session-cold-storage-selection.js";
 import { readSessionColdTranscript } from "./session-cold-storage-state.js";
 import { mutateSessionColdTranscriptInWorker } from "./session-cold-storage-worker.js";
 import {
@@ -56,15 +55,40 @@ function largestEventBytes(events: Fixture["original"]["events"]) {
     .reduce((bytes, event) => Math.max(bytes, Buffer.byteLength(event.event_json)), 0);
 }
 
-it("rejects oversized raw event bytes without preparing a transcript snapshot", () =>
+it("defers event size reads until preparation and rejects oversized bytes before snapshotting", () =>
   withFixture(async (fixture) => {
     // Exercise legacy identity accounting alongside the fixture's compressed event payload.
     fixture
       .database()
       .prepare("UPDATE transcript_events SET event_utf8_bytes = NULL WHERE seq = 0")
       .run();
-    const snapshot = vi.spyOn(snapshots, "runSqliteReadSnapshotSync");
+    const payloadReads: string[] = [];
+    const read = snapshots.runSqliteReadSnapshotSync;
+    const snapshot = vi
+      .spyOn(snapshots, "runSqliteReadSnapshotSync")
+      .mockImplementation((database, run, options) => {
+        if (options?.operationLabel !== "cold transcript selection") {
+          return read(database, run, options);
+        }
+        const native = requireNativeSqliteDatabase(database);
+        native.setAuthorizer((action, table, column) => {
+          if (
+            action === constants.SQLITE_READ &&
+            table === "transcript_events" &&
+            (column === "event_json" || column === "event_utf8_bytes")
+          ) {
+            payloadReads.push(column);
+          }
+          return constants.SQLITE_OK;
+        });
+        try {
+          return read(database, run, options);
+        } finally {
+          native.setAuthorizer(null);
+        }
+      });
     const batch = await prepare(fixture.options);
+    expect(payloadReads).toEqual([]);
     expect(
       snapshot.mock.calls.filter((call) => call[2]?.operationLabel === "cold transcript snapshot"),
     ).toHaveLength(0);
@@ -112,44 +136,4 @@ it("archives the next eligible window in the same pass after an oversized window
     expect(result.archivedTranscripts).toBe(1);
     expect(readSessionColdTranscript(fixture.database(), currentId)?.event_count).toBe(1);
     expect(readSessionColdTranscript(fixture.database(), historicalId)).toBeUndefined();
-  }));
-
-it("selects cold windows without reading event payload sizes in the batch snapshot", () =>
-  withFixture(async (fixture) => {
-    const payloadReads: string[] = [];
-    const read = snapshots.runSqliteReadSnapshotSync;
-    vi.spyOn(snapshots, "runSqliteReadSnapshotSync").mockImplementation(
-      (database, run, options) => {
-        if (options?.operationLabel !== "cold transcript selection") {
-          return read(database, run, options);
-        }
-        const native = requireNativeSqliteDatabase(database);
-        native.setAuthorizer((action, table, column) => {
-          if (
-            action === constants.SQLITE_READ &&
-            table === "transcript_events" &&
-            (column === "event_json" || column === "event_utf8_bytes")
-          ) {
-            payloadReads.push(column);
-          }
-          return constants.SQLITE_OK;
-        });
-        try {
-          return read(database, run, options);
-        } finally {
-          native.setAuthorizer(null);
-        }
-      },
-    );
-    const selection = selectSessionColdBatch({
-      databaseOptions: fixture.options,
-      admissionIdentities: [],
-      liveSessionKeys: [],
-      cooledSessionIds: [],
-      beforeMs: 100,
-      maxTranscripts: 128,
-      maxBytes: 4096,
-    });
-    expect(selection.found).toBe(true);
-    expect(payloadReads).toEqual([]);
   }));

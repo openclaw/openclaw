@@ -23,7 +23,10 @@ beforeEach(() => {
   }
 });
 
-afterEach(() => database.close());
+afterEach(() => {
+  vi.restoreAllMocks();
+  database.close();
+});
 
 function addNode(id: string, metadata: Record<string, unknown> = {}, raw?: string) {
   const key = `agent:main:${id}`;
@@ -175,38 +178,15 @@ it("checks selected windows against their owners and all cross-generation refere
   addWindow(idle.key, "referenced-history");
   addWindow(idle.key, "idle-history");
   addWindow(idle.key, "recent-history", cutoff);
-  const selected = [
-    "busy-history",
-    "invalid-history",
-    "referenced-history",
-    "idle-history",
-    "recent-history",
-  ];
+  const expected = ["busy-history", "invalid-history", "referenced-history", "recent-history"];
+  const selected = [...expected, "idle-history"];
   for (let i = 0; i < 100; i++) {
     addNode(`unrelated-${i}`);
   }
-  const full = protect();
   const parse = vi.spyOn(entryCodec, "parseCanonicalSqliteSessionEntry");
-  try {
-    const narrowed = readSessionColdStorageProtection(
-      { db: database },
-      cutoff,
-      new Set(),
-      selected,
-    );
-    expect(selected.filter((id) => narrowed.has(id))).toEqual(
-      selected.filter((id) => full.has(id)),
-    );
-    expect(selected.filter((id) => narrowed.has(id))).toEqual([
-      "busy-history",
-      "invalid-history",
-      "referenced-history",
-      "recent-history",
-    ]);
-    expect(parse).toHaveBeenCalledTimes(4);
-  } finally {
-    parse.mockRestore();
-  }
+  const narrowed = readSessionColdStorageProtection({ db: database }, cutoff, new Set(), selected);
+  expect(selected.filter((id) => narrowed.has(id))).toEqual(expected);
+  expect(parse).toHaveBeenCalledTimes(4);
 });
 
 it("uses admitted reference facts while retaining invalid and trimmed current IDs", () => {
@@ -219,24 +199,20 @@ it("uses admitted reference facts while retaining invalid and trimmed current ID
   addNode("reference-owner", { previousSessionId: "historical" });
   addNode("invalid", {}, "not-json");
   const parse = vi.spyOn(entryStatus, "parseSessionEntryJson");
-  try {
-    expect(
-      readSessionAdmissionProtectionKeys({ db: database }, [
-        "current",
-        "padded",
-        "historical",
-        "invalid",
-      ]),
-    ).toEqual(
-      new Set([
-        "agent:main:current",
-        "agent:main: padded",
-        "agent:main:reference-owner",
-        "agent:main:invalid",
-      ]),
-    );
-    expect(parse).toHaveBeenCalledTimes(2);
-  } finally {
-    parse.mockRestore();
-  }
+  expect(
+    readSessionAdmissionProtectionKeys({ db: database }, [
+      "current",
+      "padded",
+      "historical",
+      "invalid",
+    ]),
+  ).toEqual(
+    new Set([
+      "agent:main:current",
+      "agent:main: padded",
+      "agent:main:reference-owner",
+      "agent:main:invalid",
+    ]),
+  );
+  expect(parse).toHaveBeenCalledTimes(2);
 });
