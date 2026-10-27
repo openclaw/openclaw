@@ -1,4 +1,4 @@
-/** Scribe dialogs: the start dialog with each scribe's options, and the turn-off confirmation. */
+/** Scribe dialogs: the start dialog with each scribe's options and prompt, and the turn-off confirmation. */
 import { button, choice, el } from "./page-dom.js";
 import {
   CONVERSATIONS_SCHEDULE,
@@ -7,13 +7,15 @@ import {
   REVIEW_WEEKLY_SCHEDULE,
   scribeLabel,
   scribeSetup,
+  setupPrompt,
   type ConversationScope,
   type ConversationSince,
   type MemorySource,
   type ReviewSchedule,
   type ScribeDefinition,
+  type ScribeId,
   type ScribeMode,
-  type ScribeSetup,
+  type ScribeOptions,
 } from "./scribes-catalog.js";
 import type { ScribeDetection } from "./scribes-state.js";
 import { icon } from "./ui-icons.js";
@@ -21,13 +23,12 @@ import { icon } from "./ui-icons.js";
 /** What the start dialog needs from the page. */
 export type StartDialogInput = {
   scribe: ScribeDefinition;
-  agentId: string;
   agentName: string;
   storeName: string;
   detection: ScribeDetection;
   canWrite: boolean;
-  /** Starts the scribe; a rejection keeps the dialog open with the error. */
-  start: (setup: ScribeSetup) => Promise<void>;
+  /** Starts the scribe with the prompt shown; a rejection keeps the dialog open with the error. */
+  start: (prompt: string) => Promise<void>;
 };
 
 /** Scribe tile: the catalog icon on its tone's wash. */
@@ -284,7 +285,7 @@ function effectText(input: StartDialogInput, mode: ScribeMode) {
   lead.append(
     "Knowledge will start a conversation called ",
     el("strong", scribeLabel(scribe)),
-    ` as you, with ${storeName}’s private access, and send it the ${scribe.skill} skill’s instructions. `,
+    ` as you, with ${storeName}’s private access, and send it the prompt below. `,
     mode === "once"
       ? `It works through ${scribe.id === "memory" ? "Memory" : "them"} once and reports back here. Nothing is scheduled.`
       : scribe.id === "unlinked-review"
@@ -302,43 +303,95 @@ function effectText(input: StartDialogInput, mode: ScribeMode) {
   return effect;
 }
 
+/**
+ * The editable "Prompt" area: the full message Start sends. It follows the choices until the
+ * operator types in it; then it keeps their text until they ask for the generated one again.
+ */
+function promptField(generate: () => string, changed: () => void) {
+  const details = el("details", undefined, "scribe-prompt");
+  const text = el("textarea", undefined, "scribe-prompt-text");
+  text.rows = 14;
+  text.spellcheck = false;
+  text.setAttribute("aria-label", "Prompt");
+  const note = el("small");
+  let edited = false;
+  const sync = () => {
+    if (!edited) {
+      text.value = generate();
+    }
+    note.textContent = edited
+      ? "Edited by hand. Changing a choice above no longer updates it."
+      : "Generated from your choices. Edit it to change what the scribe is told.";
+    reset.hidden = !edited;
+  };
+  const reset = button(
+    "Use generated prompt",
+    () => {
+      edited = false;
+      sync();
+      changed();
+    },
+    "knowledge-quiet knowledge-small",
+  );
+  text.addEventListener("input", () => {
+    if (!edited) {
+      edited = true;
+      sync();
+    }
+    changed();
+  });
+  const foot = el("span", undefined, "scribe-prompt-foot");
+  foot.append(note, reset);
+  details.append(el("summary", "Prompt"), text, foot);
+  return { node: details, sync, value: () => text.value, edited: () => edited };
+}
+
 /** Open the start dialog for one scribe. Starting is disabled without write access. */
 export function openStartDialog(input: StartDialogInput) {
   const { scribe } = input;
   const frame = dialogFrame(scribe.dialogTitle, scribeTile(scribe));
   const effectSlot = el("div");
   let mode: () => ScribeMode = () => scribe.modes[0]!;
-  let options: () => ScribeSetup["options"] = () => defaultOptions(scribe.id);
+  let options: () => ScribeOptions[ScribeId] = () => defaultOptions(scribe.id);
   let valid = () => true;
   let starting = false;
   const submit = button(scribe.submitLabel, () => void run(), "knowledge-button knowledge-primary");
+  // A hand-edited prompt only needs text; a generated one needs valid choices.
+  const ready = () => (prompt.edited() ? Boolean(prompt.value().trim()) : valid());
   const refresh = () => {
-    submit.disabled = starting || !input.canWrite || !valid();
+    submit.disabled = starting || !input.canWrite || !ready();
     submit.textContent = starting ? "Starting…" : scribe.submitLabel;
     effectSlot.replaceChildren(effectText(input, mode()));
   };
+  const prompt = promptField(() => setupPrompt(scribeSetup(scribe.id, mode(), options())), refresh);
+  // A changed choice regenerates the prompt unless it was edited by hand.
+  const changed = () => {
+    prompt.sync();
+    refresh();
+  };
   frame.body.append(el("p", scribe.blurb, "scribe-dialog-blurb"));
   if (scribe.id === "conversations") {
-    const fields = conversationFields(input.detection, refresh);
+    const fields = conversationFields(input.detection, changed);
     frame.body.append(...fields.nodes);
     mode = fields.mode;
     options = fields.options;
   } else if (scribe.id === "unlinked-review") {
-    const fields = reviewFields(refresh);
+    const fields = reviewFields(changed);
     frame.body.append(...fields.nodes);
     options = fields.options;
   } else if (scribe.id === "memory") {
-    const fields = memoryFields(input.detection, input.agentName, refresh);
+    const fields = memoryFields(input.detection, input.agentName, changed);
     frame.body.append(...fields.nodes);
     valid = fields.valid;
     options = fields.options;
   }
-  frame.body.append(effectSlot);
+  prompt.sync();
+  frame.body.append(prompt.node, effectSlot);
   if (!input.canWrite) {
     frame.feedback.textContent = "Starting a scribe needs write access to this Gateway.";
     frame.feedback.classList.add("knowledge-muted");
   }
-  // Start once; keep the dialog and choices when the Gateway rejects the start.
+  // Start once with the prompt shown; keep the dialog and its text when the Gateway rejects it.
   async function run() {
     if (starting || submit.disabled) {
       return;
@@ -348,7 +401,7 @@ export function openStartDialog(input: StartDialogInput) {
     frame.feedback.textContent = "";
     frame.feedback.className = "knowledge-dialog-feedback";
     try {
-      await input.start(scribeSetup(scribe.id, mode(), options(), input.agentId));
+      await input.start(prompt.value());
       frame.close();
     } catch (error) {
       frame.feedback.textContent = `The scribe was not started. ${error instanceof Error ? error.message : String(error)}`;

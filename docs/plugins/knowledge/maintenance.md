@@ -120,23 +120,17 @@ The review edits private knowledge, so its automation must run in a session
 with the owner's private access. Turn on **Review unlinked claims** from the
 [Scribes](/plugins/knowledge/scribes) tab of the Knowledge page. To start it
 without the Control UI, open a new conversation in the owner's direct chat and
-send its setup message, with your agent ID, IANA time zone, and schedule
-(`45 3 * * 0` weekly or `45 3 * * *` nightly):
-
-````text
-Knowledge scribe setup: unlinked-review
-Follow the "Scribe setup" section of the knowledge-unlinked-claims skill with these options.
-```json
-{"scribe":"unlinked-review","mode":"ongoing","options":{"schedule":"45 3 * * 0"},"timezone":"America/Los_Angeles","agentId":"main"}
-```
-````
+send the prompt the Scribes tab would send; the
+[example prompt](/plugins/knowledge/scribes#example-prompt) shows it. Its
+settings are plain bullets, so set your schedule (`45 3 * * 0` weekly or
+`45 3 * * *` nightly) and IANA time zone there.
 
 The conversation creates the automation, targets itself, and ends with a
-`SCRIBE_RESULT` line that names the job. To fix a broken setup, send the same
-message in that conversation with `setup` replaced by `repair`. If the scribe's
-conversation is reset or removed, it loses access: send the setup message
-again from a new conversation. The skill's "Scribe setup" section gives the
-steps. Conversation partitions are not reviewed.
+`Scribe status: on — …` line. Each scheduled run receives the automation's run
+message, which you can edit on the Automations page. To fix a broken setup,
+use **Repair** on the Scribes tab. If the scribe's conversation is reset or
+removed, it loses access: start the scribe again from a new conversation.
+Conversation partitions are not reviewed.
 
 The `knowledge-unlinked-claims` skill is the agent workflow for the claims relink
 leaves unlinked. It chooses subject pages with judgment, creates pages for
