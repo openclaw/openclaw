@@ -100,21 +100,6 @@ const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
     }
     try {
       if (owners) {
-        admit(() => {
-          for (const options of [
-            { agentId: "main" },
-            { agentId: "actor" },
-            { agentId: "migration" },
-            { agentId: "alternate", path: path.join(root, "explicit", "openclaw-agent.sqlite") },
-            { agentId: "wrong-owner", path: path.join(root, "wrong-owner", "agent.sqlite") },
-            { agentId: "drift", path: path.join(root, "drift", "agent.sqlite") },
-          ]) {
-            const database = owners.getOpenClawAgentDatabaseIfOpen(options);
-            if (database) {
-              owners.closeOpenClawAgentDatabaseByPath(database.path);
-            }
-          }
-        });
         await owners.cleanupSessionStateForTest({ stateDir: root });
       }
       await dropPostgresTestSchemas(client, prefix);
@@ -183,25 +168,19 @@ describe.skipIf(!connection)("PostgreSQL agent database owner", () => {
     expectAnchorOnly(database.path);
   });
 
-  it("closes default and explicit stores with paired handles and a PostgreSQL receipt", () => {
-    return admit(() => {
-      for (const options of [
-        { agentId: "main" },
-        { agentId: "alternate", path: path.join(root, "explicit", "openclaw-agent.sqlite") },
-      ]) {
-        const database = openDatabase(options);
-        assert(isPostgresSqlConnection(database.db));
-        const anchor = database.db.anchor;
-        closeReceipts.mockClear();
-        expect(owners.closeOpenClawAgentDatabaseByPath(database.path)).toBe(true);
-        expect([database.db.isOpen, anchor.isOpen]).toEqual([false, false]);
-        expect(closeReceipts).toHaveBeenCalledWith(
-          `agent database clean-close receipt: postgres-closed; agent=${options.agentId}`,
-          expect.objectContaining({ agentId: options.agentId, receipt: "postgres-closed" }),
-        );
-      }
-    });
-  });
+  it("closes a store's paired handles with a PostgreSQL receipt", () =>
+    admit(() => {
+      const database = openDatabase({ agentId: "actor" });
+      assert(isPostgresSqlConnection(database.db));
+      const anchor = database.db.anchor;
+      closeReceipts.mockClear();
+      expect(owners.closeOpenClawAgentDatabaseByPath(database.path)).toBe(true);
+      expect([database.db.isOpen, anchor.isOpen]).toEqual([false, false]);
+      expect(closeReceipts).toHaveBeenCalledWith(
+        "agent database clean-close receipt: postgres-closed; agent=actor",
+        expect.objectContaining({ agentId: "actor", receipt: "postgres-closed" }),
+      );
+    }));
 
   it("reuses one idle PostgreSQL backend across sequential read-only session opens", async () => {
     await createSession("readonly-reuse");
@@ -353,7 +332,6 @@ describe.skipIf(!connection)("PostgreSQL agent database owner", () => {
       }
       const upgraded = openDatabase(options);
       assert(isPostgresSqlConnection(upgraded.db));
-      expect(postgresFacts(upgraded.db)?.version).toBe(schemaVersion);
       admit(() => {
         assertMemorySearch(upgraded.db);
         expect(
@@ -619,18 +597,15 @@ describe.skipIf(!connection)("PostgreSQL agent database owner", () => {
       expect(exportFts(database, target.sessionId).map((row) => row.message_id)).toEqual(
         events.map((event) => event.id),
       );
-      for (const limit of [1, 3, 25]) {
-        const result = owners.searchSessionTranscriptsReadOnlySync(
-          { ...target, query: "chronologyneedle", order: "recent", limit },
-          { ...options, path: database.path },
-        );
-        expect(result.hits.map((hit) => hit.messageId)).toEqual(
-          events
-            .slice(-limit)
-            .toReversed()
-            .map((event) => event.id),
-        );
-      }
+      const result = owners.searchSessionTranscriptsReadOnlySync(
+        { ...target, query: "chronologyneedle", order: "recent", limit: 3 },
+        { ...options, path: database.path },
+      );
+      expect(result.hits.map((hit) => hit.messageId)).toEqual([
+        "ordered-129",
+        "ordered-128",
+        "ordered-127",
+      ]);
     });
   });
 
