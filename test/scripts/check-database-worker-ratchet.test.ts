@@ -44,6 +44,11 @@ it.each([
     const tiers = () => inventory(process.cwd(), "", false, sources).map(({ tier }) => tier);
     expect(tiers()).toEqual(["W"]);
     sources.set(
+      "scripts/perf/session-cold-selection.ts",
+      `(await import('../../src/config/sessions/${file.replace(/\.ts$/, ".js")}')).${operation}();`,
+    );
+    expect(tiers()).toEqual(["T3"]);
+    sources.set(
       "src/plugin-sdk/runtime.ts",
       `import { ${operation} } from '../config/sessions/${file.replace(/\.ts$/, ".js")}';
      export function runtime() { return ${operation}(); }`,
