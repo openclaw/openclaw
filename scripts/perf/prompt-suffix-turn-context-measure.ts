@@ -9,6 +9,7 @@
  * Forty tools, 32 KiB stable workspace instructions, alternating conversation
  * metadata and stable child policy model warm runs of two sessions.
  * The child case compares launch-only versus every-run delivery of the same policy.
+ * Session depth/mode are prepared fixture facts; registry lookup costs are not measured.
  * Counts cover rendered-prefix changes and prompt updates, not cache hits or billing.
  */
 import assert from "node:assert/strict";
@@ -24,7 +25,10 @@ import {
   projectRuntimeContextFragments,
   splitExtraSystemPrompt,
 } from "../../src/agents/internal-runtime-context.js";
-import { buildSubagentSpawnEnvelope } from "../../src/agents/subagents/spawn/subagent-system-prompt.js";
+import {
+  buildSubagentSpawnEnvelope,
+  buildSubagentStandingInstructions,
+} from "../../src/agents/subagents/spawn/subagent-system-prompt.js";
 import { buildAgentSystemPrompt } from "../../src/agents/system-prompt.js";
 
 const [selection, mode, count = "2000"] = process.argv.slice(2);
@@ -43,7 +47,7 @@ const conversation = ["operator", "completion"].map((source) => {
 });
 const child = buildSubagentSpawnEnvelope({
   completionMode: "collector",
-  spawnMode: "session",
+  spawnMode: "run",
   task: "Inspect synthetic inputs.",
   childSessionKey: "agent:main:subagent:measure",
   childDepth: 1,
@@ -78,7 +82,14 @@ async function measure(arm: "base" | "candidate", pair: number) {
       arm === "base"
         ? { persistent: extra.extraSystemPrompt, turn: undefined }
         : childRun
-          ? { persistent: child, turn: undefined }
+          ? {
+              persistent: buildSubagentStandingInstructions({
+                spawnMode: "run",
+                childDepth: 1,
+                maxSpawnDepth: 5,
+              }),
+              turn: undefined,
+            }
           : splitExtraSystemPrompt(extra);
     const rendered = buildAgentSystemPrompt({
       ...stable,

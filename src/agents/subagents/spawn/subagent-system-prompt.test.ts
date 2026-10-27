@@ -26,7 +26,7 @@ it("gives child and requester the same collector contract", () => {
   expect(systemPrompt.length).toBeLessThan(4_000);
   expect(stripInternalRuntimeContext(message)).toBe(task);
   expect(`${systemPrompt}\n${message}`.match(/UNIQUE_TASK/g)).toHaveLength(1);
-  expect(systemPrompt).toContain("Complete the current assigned task");
+  expect(systemPrompt).toMatch(/\[Subagent Task\].*current child session/);
   expect(systemPrompt).toMatch(/inherited task envelopes.*background reference/);
   expect(buildEnvelope({ completionMode: "collector", soleCollectorChild: true })).toEqual({
     systemPrompt,
@@ -36,10 +36,10 @@ it("gives child and requester the same collector contract", () => {
 });
 
 it("preserves leaf worker ownership at depth 2/2", () => {
-  const { systemPrompt, message } = buildEnvelope({ childDepth: 2, maxSpawnDepth: 2 });
-  expect(message).toContain("spawned by parent orchestrator");
+  const { systemPrompt } = buildEnvelope({ childDepth: 2, maxSpawnDepth: 2 });
+  expect(systemPrompt).toContain("spawned by parent orchestrator");
   expect(systemPrompt).not.toContain("May delegate descendants");
-  expect(message).toContain("Leaf worker: cannot spawn");
+  expect(systemPrompt).toContain("Leaf worker: cannot spawn");
   expect(systemPrompt).toContain("Truncation notice");
   expect(systemPrompt).toContain("offset/limit");
   expect(systemPrompt).toContain("no full cat");

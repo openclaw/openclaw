@@ -30,7 +30,7 @@ import { buildModelToolsUnavailablePrompt } from "../../model-tool-support.js";
 import { prepareProjectMemoryBootstrap } from "../../project-memory-bootstrap.js";
 import { resolveAgentPromptSurfaceForSessionKey } from "../../prompt-surface.js";
 import { resolveAgentRuntimePrompt } from "../../runtime-prompt.js";
-import { SUBAGENT_STANDING_INSTRUCTIONS } from "../../subagents/spawn/subagent-system-prompt.js";
+import { buildSubagentStandingInstructions } from "../../subagents/spawn/subagent-system-prompt.js";
 import type { buildConfiguredAgentSystemPrompt } from "../../system-prompt-config.js";
 import { buildSystemPromptReport } from "../../system-prompt-report.js";
 import { toolPolicyRestrictsTools } from "../../tool-policy.js";
@@ -344,13 +344,39 @@ export async function prepareEmbeddedAttemptSystemPrompt(params: {
   phases?.mark("attempt.system-prompt.render");
   const extraPrompt = splitExtraSystemPrompt(attempt);
   const subagent = isSubagentSessionKey(attempt.sessionKey);
+  let subagentInstructions: string | undefined;
+  if (subagent && attempt.sessionKey) {
+    const [
+      { getSubagentDepthFromSessionStoreInWorker },
+      { getLatestSubagentRunByChildSessionKey },
+    ] = await Promise.all([
+      import("../../subagents/spawn/subagent-depth.js"),
+      import("../../subagents/registry/subagent-registry-read.js"),
+    ]);
+    const [childDepth, recordedRun] = await Promise.all([
+      preparedSessionEntry?.spawnDepth ??
+        getSubagentDepthFromSessionStoreInWorker(attempt.sessionKey, {
+          cfg: attempt.config,
+          agentId: params.setup.sessionAgentId,
+        }),
+      getLatestSubagentRunByChildSessionKey(attempt.sessionKey, params.setup.sessionAgentId),
+    ]);
+    // Ordinary launches precede registry registration; their cleanup flag carries
+    // the producer's mode until the retained child record is available.
+    subagentInstructions = buildSubagentStandingInstructions({
+      childDepth,
+      maxSpawnDepth: attempt.config?.agents?.defaults?.subagents?.maxSpawnDepth,
+      spawnMode:
+        recordedRun?.spawnMode ?? (attempt.cleanupBundleMcpOnRunEnd === false ? "session" : "run"),
+    });
+  }
   // The spawn envelope also serves harnesses that do not render embedded prompts.
   // Embedded sessions supply the same standing policy on launch and follow-up.
   const persistent =
-    subagent &&
-    (extraPrompt.persistent === SUBAGENT_STANDING_INSTRUCTIONS ||
-      extraPrompt.persistent?.startsWith(`${SUBAGENT_STANDING_INSTRUCTIONS}\n\n`))
-      ? extraPrompt.persistent.slice(SUBAGENT_STANDING_INSTRUCTIONS.length).trimStart()
+    subagentInstructions &&
+    (extraPrompt.persistent === subagentInstructions ||
+      extraPrompt.persistent?.startsWith(`${subagentInstructions}\n\n`))
+      ? extraPrompt.persistent.slice(subagentInstructions.length).trimStart()
       : extraPrompt.persistent;
   const turnInstructions: RuntimeContextFragment[] =
     !params.isRawModelRun && extraPrompt.turn
@@ -362,7 +388,7 @@ export async function prepareEmbeddedAttemptSystemPrompt(params: {
         ]
       : [];
   const extraSystemPrompt = joinPresentTextSegments([
-    subagent ? SUBAGENT_STANDING_INSTRUCTIONS : undefined,
+    subagentInstructions,
     persistent,
     buildModelToolsUnavailablePrompt(params.modelToolsEnabled),
   ]);
