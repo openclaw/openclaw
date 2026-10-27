@@ -883,7 +883,6 @@
 ["extensions/telegram/src/bot-native-commands.menu-test-support.ts","./bot/delivery.js","7c97fd8ca7752a9760a4125516cddee52dbfb97c63a1072c2e961d195e5c6205",1]
 ["extensions/telegram/src/bot-native-commands.menu-test-support.ts","./bot/delivery.replies.js","22389079adf30cc502de09d04c8ebdb7369665e7192baccbde59d8becd72a455",1]
 ["extensions/telegram/src/bot.create-telegram-bot.join-intro.test.ts","openclaw/plugin-sdk/channel-join-intro-runtime","852f226f8327b5017cde30d1ac79d647aab878de37b8687185ae8a604d396059",1]
-["extensions/telegram/src/bot.create-telegram-bot.native-pipeline.test.ts","./bot-native-command-login.js","03b6a50da117ce09bb46b4eb2bc7f79c0066a28f5c6435dccc2887577ab3b57b",1]
 ["extensions/telegram/src/bot.create-telegram-bot.test-harness.ts","../../../src/auto-reply/reply/provider-dispatcher.js","647f989c437faf534318bb9e1936d90793d376a0003ac69bdbdae8973a9f8d94",1]
 ["extensions/telegram/src/bot.create-telegram-bot.test-harness.ts","./bot.runtime.js","0edb6df92d46f89be45b326141bf0b06821969058ec79d83eabf5e979549ae8a",1]
 ["extensions/telegram/src/bot.create-telegram-bot.test-harness.ts","./sent-message-cache.js","eddde12f9153f438f0d07fd8e72a68d4454c0409a66bdb5db3bae4bebf1f790e",1]
