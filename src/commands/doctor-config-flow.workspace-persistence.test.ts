@@ -125,7 +125,7 @@ it.each([
   { included: true, otherRepair: false, value: false },
   { included: true, otherRepair: false, value: true },
 ])(
-  "persists collaborative steering without overriding authored config (included=$included, other repair=$otherRepair, value=$value)",
+  "keeps steering defaults runtime-only and preserves authored config (included=$included, other repair=$otherRepair, value=$value)",
   async ({ included, otherRepair, value }) => {
     await withQueueDefaultHome(async (home) => {
       await withEnvAsync({ OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1" }, async () => {
@@ -160,7 +160,7 @@ it.each([
         if (included) {
           expect(await fs.readFile(includePath, "utf8")).toBe(includeRaw);
         }
-        // A later root-owned health repair must coexist with an included queue default.
+        // A later root-owned repair must leave included steering policy untouched.
         if (!otherRepair) {
           ctx.cfg = { ...ctx.cfg, gateway: { ...ctx.cfg.gateway, port: 18880 } };
         }
@@ -168,17 +168,14 @@ it.each([
         expect(ctx.configWriteRefusal).toBeUndefined();
         const saved = await readConfigFileSnapshot();
         expect(saved.valid).toBe(true);
-        expect(saved.sourceConfig.messages?.queue?.allowCollaborativeSteering).toBe(value ?? false);
+        expect(saved.sourceConfig.messages?.queue?.allowCollaborativeSteering).toBe(value);
+        expect(saved.runtimeConfig.messages?.queue?.allowCollaborativeSteering).toBe(value ?? true);
         expect(saved.sourceConfig.gateway?.port).toBe(otherRepair ? undefined : 18880);
         expect(await fs.readFile(`${configPath}.bak`, "utf8")).toBe(before);
         if (included) {
           expect(saved.parsed).toHaveProperty("messages", { $include: "./messages.json" });
           expect(saved.sourceConfig.messages?.responsePrefix).toBe("keep-prefix");
-          if (value === undefined) {
-            expect(await fs.readFile(`${includePath}.bak`, "utf8")).toBe(includeRaw);
-          } else {
-            expect(await fs.readFile(includePath, "utf8")).toBe(includeRaw);
-          }
+          expect(await fs.readFile(includePath, "utf8")).toBe(includeRaw);
         }
         if (otherRepair) {
           expect(saved.parsed).toHaveProperty("agents.entries.main", {
@@ -324,7 +321,7 @@ it(
       expect(await readText(`${configPath}.bak`)).toBe(original);
 
       const saved = await readJson(configPath);
-      expect(saved.messages?.queue?.allowCollaborativeSteering).toBe(false);
+      expect(saved.messages?.queue?.allowCollaborativeSteering).toBeUndefined();
       expect(saved.agents).toMatchObject({ ownership: "explicit", defaults });
       expect(saved.agents.entries.ops).toEqual({
         memory: { search: entries.ops.memorySearch },
