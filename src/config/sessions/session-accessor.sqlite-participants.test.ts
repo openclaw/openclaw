@@ -78,8 +78,9 @@ const contribute = (
   identity: SessionParticipantIdentity,
   promptedAt: number,
 ) => recordSessionParticipant(scope, { identity, promptedAt });
-const readParticipants = (scope: Parameters<typeof listSessionParticipantsReadOnly>[0]) =>
-  listSessionParticipantsReadOnly(scope).get(scope.sessionKey);
+const readParticipants = (
+  scope: Parameters<typeof listSessionParticipantsReadOnly>[0] & { sessionKey: string },
+) => listSessionParticipantsReadOnly(scope).get(scope.sessionKey);
 const aggregate = (
   identity: SessionParticipantIdentity,
   contributionCount: number,

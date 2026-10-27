@@ -39,12 +39,12 @@ export function createSystemdExecFixture(
   ) => Promise<ExecResult | undefined>,
   version: { useScenarioResponse: boolean },
 ): typeof import("./exec-file.js").execFileUtf8 {
-  return async (command, args, options = {}) => {
+  return async (command, args, options) => {
     if (args.includes("Version")) {
       expect(command).toBe("busctl");
       expect(args).toEqual([
         ...(args[0] === "--machine"
-          ? ["--machine", `${options.env?.USER}@`, "--user"]
+          ? ["--machine", `${options?.env?.USER}@`, "--user"]
           : ["--user"]),
         "--auto-start=no",
         "get-property",
