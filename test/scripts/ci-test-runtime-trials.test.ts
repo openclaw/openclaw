@@ -17,9 +17,7 @@ const bunFile = "src/process/spawn-broker/context.test.ts";
 // Gateway-core files precede database-worker files for the focused owner assertion.
 const sessionWeakRefFiles = [
   "src/gateway/session-list-history-retention.test.ts",
-  "src/gateway/session-row-projection.retention.test.ts",
-  "src/gateway/session-row-projection.accepted-facts.test.ts",
-  "src/gateway/session-sharing-preparation.test.ts",
+  "src/gateway/session-retention.test.ts",
 ];
 
 function group(name: string, config: string, includePatterns?: string[]) {
@@ -160,7 +158,8 @@ it("retains exact Node exceptions and selects broad target remainders on Bun", a
   for (const [target, runtime] of [
     ["src/config/sessions/session-accessor.pending-input-retention.test.ts", "node"],
     ["src/config/sessions/session-accessor.pending-inputs.test.ts", "bun"],
-    ["src/gateway/session-row-projection.test.ts", "bun"],
+    ["src/gateway/session-row-projection.accepted-facts.test.ts", "bun"],
+    ["src/gateway/session-sharing-preparation.test.ts", "bun"],
   ] as const) {
     expect(selections({ targets: [target] }, "bun-all")).toEqual([{ runtime }]);
   }

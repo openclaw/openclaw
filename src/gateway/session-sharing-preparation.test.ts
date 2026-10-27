@@ -1,8 +1,5 @@
-import { AsyncLocalStorage } from "node:async_hooks";
 import fs from "node:fs";
 import { syncBuiltinESMExports } from "node:module";
-import { setImmediate } from "node:timers/promises";
-import { queryObjects } from "node:v8";
 import { afterEach, expect, it as baseIt, vi } from "vitest";
 import { observeHostDataSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
 import { setRuntimeConfigSnapshot } from "../config/config.js";
@@ -524,31 +521,4 @@ it("does not transfer prepared sharing facts through a same-path replacement", a
   fs.renameSync(replacement, original);
   registerOpenClawAgentDatabase({ agentId: "main", path: original, env: state.env });
   expect(() => prepared.readCurrent(cfg)).toThrow(unavailableMessage);
-});
-
-it("does not retain discovery context in active session authority", async ({ state: _state }) => {
-  const cfg: OpenClawConfig = { agents: { entries: { main: {} } } };
-  const sessionKey = "agent:main:retention";
-  const harness = sharingHarness(cfg, sessionKey);
-  harness.write({ sessionId: "retention", updatedAt: 1 });
-  (await harness.prepare()).release();
-  const scope = new AsyncLocalStorage<object>();
-  async function capture() {
-    const payload = { sessions: [{ sessionId: "completed-unrelated-session" }] };
-    const facts = await scope.run(payload, () => harness.prepare());
-    return { facts, payload: new WeakRef(payload), control: new WeakRef({}) };
-  }
-  const retained = await capture();
-  try {
-    await setImmediate();
-    queryObjects(WeakRef);
-    expect(retained.control.deref()).toBeUndefined();
-    expect(retained.payload.deref()).toBeUndefined();
-    expect(retained.facts.readCurrent(cfg).target.entry.sessionId).toBe("retention");
-    retained.facts.release();
-    expect(() => retained.facts.readCurrent(cfg)).toThrow(unavailableMessage);
-  } finally {
-    retained.facts.release();
-    scope.disable();
-  }
 });
