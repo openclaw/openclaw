@@ -679,7 +679,7 @@ html.openclaw-native-macos:not(.openclaw-native-web-chrome)
   height: 28px;
 }
 
-.sidebar--rail .sidebar-session-sort {
+.sidebar--rail .sidebar-session-toolbar__button.sidebar-session-sort {
   width: auto;
   max-width: 50%;
   gap: 2px;
