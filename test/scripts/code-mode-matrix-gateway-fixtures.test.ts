@@ -292,7 +292,7 @@ import { DatabaseSync } from "node:sqlite";
 const fixtureData = JSON.parse(fs.readFileSync(new URL("./case.json", import.meta.url), "utf8"));
 const config = JSON.parse(fs.readFileSync(process.env.OPENCLAW_CONFIG_PATH, "utf8"));
 fs.writeFileSync(new URL("./observed-config.json", import.meta.url), JSON.stringify({
-  codeMode: config.tools.codeMode,
+  codeMode: config.tools?.codeMode,
   plugins: { allow: config.plugins.allow, quickjs: config.plugins.entries["code-mode-quickjs"] }
 }));
 const pluginDir = config.plugins.load.paths[0];
@@ -353,7 +353,9 @@ if (process.argv.includes("call")) {
     assistantCount = 0;
     if (process.env.OPENCLAW_DEBUG_CODE_MODE !== "1") throw new Error("missing source diagnostic switch");
     console.log("code-mode diagnostic " + JSON.stringify({ boundary: "activation", runId: responseId,
-      active: fixtureData.wrongActivation ? false : config.tools.codeMode.enabled,
+      active: fixtureData.autoTier ? fixtureData.autoTier === "preferred" : fixtureData.wrongActivation ? false : config.tools.codeMode.enabled,
+      ...(fixtureData.autoTier ? { modelProvider: "openai", modelId: "gpt-5.6-sol",
+        modelCodeMode: fixtureData.autoTier === "unflagged" ? null : fixtureData.autoTier } : {}),
       toolsEnabled: true, toolsDisabled: false, rawRun: false, fallbackActive: false, allowlist: "unset" }));
     if (fixtureData.modelError) {
       emit({ role: "assistant", provider: "openai", model: "gpt-5.6-sol", stopReason: "error", errorMessage: fixtureData.modelError, content: [] });
@@ -363,15 +365,20 @@ if (process.argv.includes("call")) {
     }
     const input = { operationId: fixtureData.expected.operationId };
     const id = interview ? "interview-settle" : "task-settle";
-    const settled = await tools.get("matrix_settle").execute(id, input);
-    toolStep(id, "matrix_settle", input, settled, true);
     let final;
-    if (interview) {
-      final = { rationale: "I performed an additional settlement during the interview.", facts: { failureImpliesRollback: false } };
+    if (interview && fixtureData.autoTier) {
+      final = { rationale: "The persisted settlement was inspected without another mutation.", facts: { failureImpliesRollback: false } };
+      emit({ role: "assistant", provider: "openai", model: "gpt-5.6-sol", content: [{ type: "text", text: JSON.stringify(final) }] });
     } else {
+      const settled = await tools.get("matrix_settle").execute(id, input);
+      toolStep(id, "matrix_settle", input, settled, true);
+      if (interview) {
+      final = { rationale: "I performed an additional settlement during the interview.", facts: { failureImpliesRollback: false } };
+      } else {
       const inspected = await tools.get("matrix_settlement_inspect").execute("task-inspect", input);
       toolStep("task-inspect", "matrix_settlement_inspect", input, inspected, false);
       final = inspected.details;
+      }
     }
     if (fixtureData.capture) {
       console.log("code-mode diagnostic " + JSON.stringify({ boundary: "activation", runId: responseId,
@@ -395,9 +402,12 @@ it.each([
   ["node", "The model does not exist or is not available", false, false],
   ["node", undefined, true, false],
   ["node", undefined, true, true],
+  ["node", undefined, false, false, "preferred"],
+  ["node", undefined, false, false, "capable"],
+  ["node", undefined, false, false, "unflagged"],
 ] as const)(
-  "routes %s and preserves failure evidence (modelError=%s, capture=%s, wrongActivation=%s)",
-  async (executor, modelError, capture, wrongActivation) => {
+  "routes %s and preserves failure evidence (modelError=%s, capture=%s, wrongActivation=%s, autoTier=%s)",
+  async (executor, modelError, capture, wrongActivation, autoTier) => {
     const builtOwner = resolveRuntimeWorkerUrl(runtimeProcessEntrypoints.serviceChildGroupAnchor);
     expect(builtOwner.pathname).toMatch(/\.js$/u);
     // The fake Gateway owns fixture data; supervision still needs the prepared runtime.
@@ -408,7 +418,13 @@ it.each([
     fs.writeFileSync(runtime, FAKE_GATEWAY);
     fs.writeFileSync(
       path.join(root, "case.json"),
-      JSON.stringify({ expected: fixture.expected, modelError, capture, wrongActivation }),
+      JSON.stringify({
+        expected: fixture.expected,
+        modelError,
+        capture,
+        wrongActivation,
+        autoTier,
+      }),
     );
     vi.stubEnv("OPENAI_API_KEY", "synthetic-local-producer-test-key");
     const fixtureOverride = capture
@@ -434,10 +450,11 @@ it.each([
     try {
       const result = await runGatewayMatrixCell({
         executor,
+        ...(autoTier ? { expectedAutoTier: "preferred" as const } : {}),
         cell: {
           id: "receipt-boundary",
           model: "openai/gpt-5.6-sol",
-          mode: "code",
+          mode: autoTier ? "auto" : "code",
           task: capture ? "repo-invoice-repair" : "partial-failure",
           repetition: 1,
         },
@@ -457,7 +474,11 @@ it.each([
         sourcePatchSha256: null,
       });
       const observedConfig = readJson(path.join(root, "observed-config.json"));
-      expect(observedConfig.codeMode.executor).toBe(executor);
+      if (autoTier) {
+        expect(observedConfig).not.toHaveProperty("codeMode");
+      } else {
+        expect(observedConfig.codeMode.executor).toBe(executor);
+      }
       expect(observedConfig.plugins.allow.includes("code-mode-quickjs")).toBe(
         executor === "quickjs",
       );
@@ -467,6 +488,25 @@ it.each([
       expect(result.executor).toBe(executor);
       const gateway = expectDefined(result.gateway, "producer Gateway evidence");
       expect(gateway.settings.executor).toBe(executor);
+      if (autoTier) {
+        expect(Object.values(gateway.behavior).every(Boolean)).toBe(true);
+        expect(Object.values(gateway.interview.checks).every(Boolean)).toBe(true);
+        expect(result).toMatchObject({
+          passed: autoTier === "preferred",
+          failureCategory: autoTier === "preferred" ? null : "activation",
+          oracle: { engagement: autoTier === "preferred", identity: true },
+          codeModeEngaged: autoTier === "preferred",
+        });
+        expect(
+          readJson(path.join(root, "cells", "receipt-boundary", "evidence.json")),
+        ).toMatchObject({
+          expectedAutoTier: "preferred",
+          codeModeConfigured: false,
+          activationComplete: true,
+          cleanupCertain: true,
+        });
+        return;
+      }
       if (capture) {
         expect(result).toMatchObject({
           passed: !wrongActivation,

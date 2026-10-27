@@ -38,6 +38,35 @@ function scheduledResult(
 }
 
 describe("Code Mode matrix paired admission", () => {
+  it("records an independent tier expectation and passes it only to the auto arm", async () => {
+    const root = tempDirs.make("openclaw-matrix-auto-expectation-");
+    const observed: unknown[] = [];
+    const result = await runCodeModeModelMatrix(
+      matrixOptions(root, {
+        models: ["anthropic/fixture"],
+        tasks: ["invoice-reconciliation"],
+        modes: ["direct", "auto"],
+        expectedAutoTier: "preferred",
+        outputDir: "artifacts/expectation",
+        concurrency: 1,
+      }),
+      matrixDependencies({
+        runCell: async ({ cell, expectedAutoTier }) => {
+          observed.push({ mode: cell.mode, expectedAutoTier });
+          return scheduledResult(cell);
+        },
+      }),
+    );
+    expect(result.exitCode).toBe(0);
+    expect(observed).toEqual([
+      { mode: "direct", expectedAutoTier: undefined },
+      { mode: "auto", expectedAutoTier: "preferred" },
+    ]);
+    expect(
+      JSON.parse(await fs.readFile(path.join(root, "artifacts/expectation/manifest.json"), "utf8")),
+    ).toMatchObject({ expectedAutoTier: "preferred" });
+  });
+
   it.each(["code", "auto"] as const)(
     "counterbalances the complete direct/%s schedule",
     async (mode) => {

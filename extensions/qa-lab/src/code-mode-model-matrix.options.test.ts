@@ -9,6 +9,7 @@ const parse = (args: string, cwd?: string) =>
 const rejects = (args: string, error?: string) => expect(() => parse(args)).toThrow(error);
 const model = "--model openai/fixture";
 const gateway = `${model} --mode code --task javascript-contracts`;
+const autoPair = `${model} --task repo-invoice-repair --mode direct --mode auto`;
 
 describe("Code Mode model matrix options", () => {
   it("defaults to the complete bounded matrix", () => {
@@ -51,6 +52,14 @@ describe("Code Mode model matrix options", () => {
     [`${gateway} --executor node --executor quickjs`, "provided more than once"],
     [`${gateway} --executor quickjs --task read`, "only Gateway-backed tasks"],
     [`${model} --executor node`, "only Gateway-backed tasks"],
+    [`${autoPair} --expect-auto-tier invalid`, "must be preferred, capable, or unflagged"],
+    [
+      `${autoPair} --expect-auto-tier preferred --expect-auto-tier capable`,
+      "provided more than once",
+    ],
+    [`${gateway} --expect-auto-tier preferred`, "requires a Gateway auto arm"],
+    [`${model} --expect-auto-tier preferred`, "requires a Gateway auto arm"],
+    [`${autoPair} --task read --expect-auto-tier preferred`, "only Gateway tasks"],
     [`${model} --mode code --mode code`, "Duplicate --mode"],
     ...["--concurrency 4", "--max-tokens 0", "--max-known-cost-usd NaN"].map(
       (arg): [string, undefined] => [`${model} ${arg}`, undefined],
@@ -89,6 +98,17 @@ describe("Code Mode model matrix options", () => {
       parse(`${model} --task repo-invoice-repair --mode direct --mode auto --max-cells 2`),
     ).toMatchObject({ modes: ["direct", "auto"], maxCells: 2, gatewayExecutor: "node" });
   });
+
+  it.each(["preferred", "capable", "unflagged"])(
+    "accepts an independent %s catalog expectation for Gateway auto cells",
+    (tier) => {
+      expect(parse(`${autoPair} --expect-auto-tier ${tier}`)).toMatchObject({
+        expectedAutoTier: tier,
+        modes: ["direct", "auto"],
+      });
+      expect(parse(autoPair).expectedAutoTier).toBeUndefined();
+    },
+  );
 
   it("rejects output paths outside the repository", () => {
     for (const [output, error] of [

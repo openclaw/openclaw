@@ -196,7 +196,11 @@ Auto evidence records the resolved provider, model, catalog tier, and actual
 engagement. Missing identity or tier evidence fails validation; an explicitly
 unflagged or capable model correctly remains direct. To prove a preferred
 model's default activation, independently verify its expected catalog tier and
-require the recorded tier to be `preferred` with engagement enabled. A passing
+pass `--expect-auto-tier preferred`. This assertion applies to every auto cell
+and requires the recorded tier to match, with engagement enabled for preferred
+models. `capable` and `unflagged` expectations require direct behavior. The
+expectation is recorded separately from the observed tier; omitting the flag
+keeps generic auto validation. The flag requires Gateway tasks and an auto arm. A passing
 auto row for an unflagged or capable model is not Code Mode activation proof.
 
 Performance selections require both treatment arms and cannot be mixed with

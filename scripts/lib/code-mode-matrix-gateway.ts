@@ -16,7 +16,11 @@ import { normalizeUsage } from "../../src/agents/usage.js";
 import type { OpenClawConfig } from "../../src/config/types.openclaw.js";
 import { readResponseWithLimit } from "../../src/infra/http-response-body.js";
 import type { ManagedRun } from "../../src/process/supervisor/types.js";
-import type { CodeModeMatrixCellResult, RunCellParams } from "../code-mode-model-matrix.ts";
+import type {
+  CodeModeMatrixAutoTier,
+  CodeModeMatrixCellResult,
+  RunCellParams,
+} from "../code-mode-model-matrix.ts";
 import { createBuildSmokeEnv } from "./build-smoke-env.mts";
 import { createGatewayMatrixConfig } from "./code-mode-matrix-config.ts";
 import {
@@ -127,6 +131,7 @@ export function evaluateGatewayMatrixActivation(params: {
   childRunIds: readonly string[];
   expectedEnabled: boolean | "auto";
   expectedModel?: string;
+  expectedAutoTier?: CodeModeMatrixAutoTier;
 }) {
   const requiredActivationRuns = [
     ...new Set([...(params.rootRunId ? [params.rootRunId] : []), ...params.childRunIds]),
@@ -162,10 +167,13 @@ export function evaluateGatewayMatrixActivation(params: {
       activationComplete &&
       qualifyingActivation.every(
         (entry) =>
+          (params.expectedEnabled !== "auto" ||
+            params.expectedAutoTier === undefined ||
+            (entry.modelCodeMode ?? "unflagged") === params.expectedAutoTier) &&
           entry.active ===
-          (params.expectedEnabled === "auto"
-            ? entry.modelCodeMode === "preferred"
-            : params.expectedEnabled),
+            (params.expectedEnabled === "auto"
+              ? entry.modelCodeMode === "preferred"
+              : params.expectedEnabled),
       ),
   };
 }
@@ -1751,6 +1759,7 @@ export async function runGatewayMatrixCell(
         .map((run) => run.runId) ?? [],
     expectedEnabled: params.cell.mode === "auto" ? "auto" : params.cell.mode === "code",
     expectedModel: params.cell.model,
+    expectedAutoTier: params.expectedAutoTier,
   });
   let behavior: Record<string, boolean>;
   if (performance) {
@@ -1819,6 +1828,7 @@ export async function runGatewayMatrixCell(
     cleanupCertain &&
     task.status === "completed" &&
     identity &&
+    engagement &&
     behaviorPassed &&
     (performance !== undefined ||
       (interview.status === "completed" && Object.values(interviewChecks).every(Boolean)));
@@ -1895,6 +1905,7 @@ export async function runGatewayMatrixCell(
   };
   await write("evidence.json", {
     codeModeConfigured: Object.hasOwn(cfg.tools ?? {}, "codeMode"),
+    expectedAutoTier: params.expectedAutoTier ?? null,
     gateway,
     task,
     interview,

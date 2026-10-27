@@ -67,6 +67,7 @@ const DEFAULT_ADMISSION = {
 };
 
 export type CodeModeMatrixMode = "direct" | "auto" | "code";
+export type CodeModeMatrixAutoTier = "preferred" | "capable" | "unflagged";
 const MATRIX_TASKS = [
   "read",
   "dependent-read-write",
@@ -82,6 +83,7 @@ export type CodeModeMatrixOptions = {
   allowFailures: boolean;
   dryRun: boolean;
   gatewayExecutor?: CodeModeExecutorId;
+  expectedAutoTier?: CodeModeMatrixAutoTier;
   keepState: boolean;
   models: string[];
   modes: CodeModeMatrixMode[];
@@ -168,6 +170,7 @@ export type RunCellParams = SourceIdentity & {
   buildSha256: string;
   cell: MatrixCell;
   executor?: CodeModeExecutorId;
+  expectedAutoTier?: CodeModeMatrixAutoTier;
   keepState: boolean;
   outputDir: string;
   repoRoot: string;
@@ -195,6 +198,7 @@ Options:
   --model <provider/model>  Model reference; repeat for multiple models
   --mode <mode>             direct | auto | code; Gateway auto omits tools.codeMode
   --executor <executor>     node | quickjs for Gateway tasks only (default: node)
+  --expect-auto-tier <tier> Assert preferred | capable | unflagged for every Gateway auto cell
   --task <task>             ${MATRIX_TASKS.join(" | ")}; repeat to select tasks
                             (default: read, dependent-read-write)
   --repetitions <n>         Runs per model/mode/task cell (default: ${DEFAULT_REPETITIONS}, max: ${MAX_REPETITIONS})
@@ -346,6 +350,15 @@ export function parseCodeModeMatrixOptions(
         options.gatewayExecutor = value;
         break;
       }
+      case "--expect-auto-tier": {
+        recordOnce(arg);
+        const value = requireOptionArgument(argv, index, arg);
+        if (value !== "preferred" && value !== "capable" && value !== "unflagged") {
+          throw new Error("--expect-auto-tier must be preferred, capable, or unflagged.");
+        }
+        options.expectedAutoTier = value;
+        break;
+      }
       case "--task":
         collectUnique(tasks, parseTask(requireOptionArgument(argv, index, arg)), arg);
         break;
@@ -447,6 +460,12 @@ export function parseCodeModeMatrixOptions(
         ? ["direct", "code"]
         : ["direct", "auto", "code"];
   options.tasks = tasks.length > 0 ? tasks : ["read", "dependent-read-write"];
+  if (
+    options.expectedAutoTier !== undefined &&
+    (!options.modes.includes("auto") || options.tasks.some((task) => !isGatewayTask(task)))
+  ) {
+    throw new Error("--expect-auto-tier requires a Gateway auto arm and only Gateway tasks.");
+  }
   if (
     seen.has("--executor") &&
     options.tasks.some(isGatewayTask) &&
@@ -1592,6 +1611,7 @@ export async function runCodeModeModelMatrix(
       ...matrixProviderAuthSelection(model),
     })),
     modes: options.modes,
+    expectedAutoTier: options.expectedAutoTier ?? null,
     ...(options.tasks.some(isGatewayTask)
       ? { gatewayExecutor: options.gatewayExecutor ?? "node" }
       : {}),
@@ -1680,6 +1700,7 @@ export async function runCodeModeModelMatrix(
           abortSignal: abortController.signal,
           buildSha256: buildSha256 ?? "dry-run",
           cell,
+          ...(cell.mode === "auto" ? { expectedAutoTier: options.expectedAutoTier } : {}),
           ...(workload ? { executor: workload.settings.executor } : {}),
           gitSha: sourceIdentity.gitSha,
           keepState: options.keepState,

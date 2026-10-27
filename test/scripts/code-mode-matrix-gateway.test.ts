@@ -57,6 +57,29 @@ it.each([
 );
 
 it.each([
+  ["preferred", "preferred", true, true],
+  ["preferred", null, false, false],
+  ["preferred", "capable", false, false],
+  ["preferred", "preferred", false, false],
+  ["capable", "capable", false, true],
+  ["unflagged", null, false, true],
+] as const)(
+  "binds independent auto expectation %s to observed tier %s, active=%s",
+  (expectedAutoTier, tier, active, engagement) => {
+    expect(
+      evaluateGatewayMatrixActivation({
+        diagnostics: [activationDiagnostic({ modelCodeMode: tier, active })],
+        rootRunId: "root-run",
+        childRunIds: [],
+        expectedEnabled: "auto",
+        expectedModel: "anthropic/fixture-model",
+        expectedAutoTier,
+      }),
+    ).toMatchObject({ activationComplete: true, engagement, actualCodeMode: active });
+  },
+);
+
+it.each([
   { modelCodeMode: undefined },
   { modelCodeMode: "unknown" },
   { modelProvider: undefined },
