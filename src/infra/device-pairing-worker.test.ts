@@ -306,7 +306,7 @@ test("publishes a device metadata update without loading unrelated paired rows",
   });
 });
 
-test("persists token use and node connection facts without reading unrelated devices", async () => {
+test("persists token use, issuance, and node connection facts without reading unrelated devices", async () => {
   await listDevicePairing(baseDir);
   const generation = await nodeGeneration();
   const node = { nodeId: "paired-rich", expectedPairingGeneration: generation, baseDir };
@@ -350,6 +350,22 @@ test("persists token use and node connection facts without reading unrelated dev
       lastHostStats: hostStats,
     });
     expect(getPublishedPairedDeviceBinding("paired-rich", baseDir)).toEqual(originalBinding);
+    const issuer = {
+      kind: "shared-gateway-auth" as const,
+      generation: "synthetic-reconnected-generation",
+    };
+    const issued = await ensureDeviceToken({ ...operator, issuer });
+    expect(issued).toMatchObject({ role: "operator", scopes: ["operator.read"], issuer });
+    expect(issued?.token).not.toBe("synthetic-operator-token");
+    expect((await paired())?.tokens?.operator).toEqual(issued);
+    await expect(
+      verifyDeviceToken({
+        ...operator,
+        token: issued!.token,
+        requiredSharedGatewaySessionGeneration: issuer.generation,
+        baseDir,
+      }),
+    ).resolves.toEqual({ ok: true, issuer });
   });
 });
 

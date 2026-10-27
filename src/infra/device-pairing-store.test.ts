@@ -5,6 +5,7 @@ import { closeOpenClawStateDatabaseByPathAsync } from "../state/openclaw-state-d
 import * as stateDb from "../state/openclaw-state-db.js";
 import { requireNativeSqliteDatabase } from "../test-utils/native-sqlite.js";
 import { executeDevicePairingRead as read } from "./device-pairing-read.kernel.js";
+import * as rowMapping from "./device-pairing-row-mapping.js";
 import {
   loadDevicePairingStoreState as loadState,
   loadPairedDevicePairingStoreRecordFromDatabase as loadPaired,
@@ -232,4 +233,21 @@ test.each([false, true])("isolates reused snapshots (rollback=%s)", (rollback) =
   ).toEqual([]);
   const committed = readState(database.db).pairedByDeviceId;
   expect(committed).toEqual(rollback ? initial.pairedByDeviceId : expected);
+});
+
+test("does not serialize a paired row when an update is rejected", () => {
+  const before = readSnapshot(database.db);
+  const encode = vi.spyOn(rowMapping, "toPairedRow");
+  const result = runWithSqliteWorkerStateContext({ environment: env }, () =>
+    write(() =>
+      withDatabase(
+        database,
+        () => updatePaired("node", () => ({ value: false })),
+        initial.pairedByDeviceId,
+      ),
+    ),
+  );
+  expect(result).toBe(false);
+  expect(readSnapshot(database.db)).toEqual(before);
+  expect(encode).not.toHaveBeenCalled();
 });
