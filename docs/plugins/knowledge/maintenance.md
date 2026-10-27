@@ -125,10 +125,24 @@ Maintenance picks the automation in this order:
 With neither, the pass reports no review.
 
 The review edits private knowledge, so its automation must run in a session
-with the owner's private access. Start the **Review unlinked claims** scribe
-from the Knowledge page's Scribes tab, or send its setup message from a new
-conversation in the owner's direct chat. The skill's "Scribe setup" section
-gives the steps. Conversation partitions are not reviewed.
+with the owner's private access. To start the **Review unlinked claims**
+scribe, open a new conversation in the owner's direct chat and send its setup
+message, with your agent ID and IANA time zone:
+
+````text
+Knowledge scribe setup: unlinked-review
+Follow the "Scribe setup" section of the knowledge-unlinked-claims skill with these options.
+```json
+{"scribe":"unlinked-review","mode":"ongoing","options":{},"timezone":"America/Los_Angeles","agentId":"main"}
+```
+````
+
+The conversation creates the automation, targets itself, and ends with a
+`SCRIBE_RESULT` line that names the job. To fix a broken setup, send the same
+message in that conversation with `setup` replaced by `repair`. If the scribe's
+conversation is reset or removed, it loses access: send the setup message
+again from a new conversation. The skill's "Scribe setup" section gives the
+steps. Conversation partitions are not reviewed.
 
 The `knowledge-unlinked-claims` skill is the agent workflow for the claims relink
 leaves unlinked. It chooses subject pages with judgment, creates pages for

@@ -2,18 +2,19 @@
 
 # Scribe setup
 
-A scribe is an owner conversation that the Knowledge page's **Scribes** tab
-starts. It follows one Knowledge skill. Three kinds of message reach it:
+A scribe is an owner conversation that follows one Knowledge skill unattended.
+The owner starts it by sending its setup message in a new conversation in their
+direct chat. Three kinds of message reach it:
 
 - **Setup**, the first message: `Knowledge scribe setup: <id>` and a JSON block.
-- **Repair**, sent from the Scribes tab: `Knowledge scribe repair: <id>` and
-  the same JSON block.
+- **Repair**, sent by the owner: `Knowledge scribe repair: <id>` and the same
+  JSON block.
 - **Scheduled run**, sent by the scribe's own automation:
   `Knowledge scribe run: <id>` and the same JSON block.
 
 The JSON block is `{"scribe", "mode", "options", "timezone", "agentId"}`. It
 is the only input. Do not ask questions: the run is unattended, and the owner
-reads the result from the Scribes tab.
+reads the result line afterwards.
 
 | id                | Title                    | Skill                       | Modes         |
 | ----------------- | ------------------------ | --------------------------- | ------------- |
@@ -23,10 +24,13 @@ reads the result from the Scribes tab.
 
 ## 1. Check access
 
-Call `knowledge_status`. Continue only when the scope is `private` and writes
-are enabled. Otherwise end with `state: "failed"` and say that this
-conversation lacks the owner's private Knowledge access; a new scribe started
-from the Knowledge page fixes it.
+Call `knowledge_status`. Continue when the scope is `private` and either
+writes are enabled or the store is `unprovisioned`: a vault that was never
+written reports writes off until its first write creates it. Otherwise end
+with `state: "failed"` and say that this conversation lacks the owner's
+private Knowledge access; sending the setup message from a new conversation in
+the owner's direct chat fixes it. If a later write is refused, end the same
+way.
 
 ## 2. Declare the automation (ongoing only)
 
@@ -53,13 +57,24 @@ owns exactly one automation, found by its declaration key. Call the
 - `<run message>` is `Knowledge scribe run: <id>`, then
   `Follow the "Scribe setup" section of the <skill> skill as a scheduled run.`,
   then the received JSON block unchanged in a `json` fence.
-- Do not pass `enabled`. Adding with an existing declaration key updates that
-  job in place, so a job the owner paused stays paused.
+- Adding with an existing declaration key updates this conversation's job in
+  place and keeps its enabled state, but not its session target.
 
-Before adding, `automations` `list` with `includeDisabled: true`. Declaration
-keys are unique per owning conversation, so a scribe set up again from a new
-conversation would leave the old job behind: `remove` every job with this key
-that targets another session, so exactly one remains.
+Before adding, `automations` `list` with `includeDisabled: true` and take the
+jobs with this declaration key. Keys are unique per owning conversation
+(`owner.sessionKey`), so exactly one must remain:
+
+- `remove` each job owned by another conversation, noting whether it was
+  paused.
+- For this conversation's own job, `get` it. If its `sessionTarget` is not this
+  conversation, `update` it with
+  `{"sessionTarget": "session:<this conversation's session key>"}`.
+- Pass `enabled: false` in the add only when a removed job was paused and this
+  conversation had no job, so the owner's pause carries over. Otherwise do not
+  pass `enabled`; never enable a paused job.
+
+After adding, `get` the job and check that its `sessionTarget` is this
+conversation.
 
 Do not start a run yourself: a run started from this turn is skipped once the
 turn ends. The first scheduled run is the test; for the review scribe, the next

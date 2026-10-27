@@ -142,7 +142,6 @@ messages follow [scribe setup](references/scribe-setup.md) with id
   backlog. With nothing to do, say so in one sentence. Otherwise give the
   step 6 report. `summary` counts claims examined, linked, withdrawn and left.
 
-To set the scribe up without the Knowledge page, send the setup message from a
-new conversation in the owner's direct chat. Disable the automation to pause
-the review. Resetting or removing the scribe's conversation revokes its access;
+The owner sets the scribe up by sending the setup message from a new
+conversation in their direct chat. Disable the automation to pause the review. Resetting or removing the scribe's conversation revokes its access;
 start the scribe again.
