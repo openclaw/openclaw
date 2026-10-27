@@ -11,7 +11,7 @@ import {
 
 export type ModelCatalogReadScope = Pick<
   ModelsListParams,
-  "agentId" | "sessionKey" | "authProfileId"
+  "agentId" | "sessionKey" | "authProfileId" | "includeDetails"
 >;
 type ModelCatalogInvalidationScope = ModelCatalogReadScope & {
   sessionsOnly?: boolean;

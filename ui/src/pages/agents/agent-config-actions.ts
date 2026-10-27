@@ -57,6 +57,18 @@ export function createAgentConfigActions(params: {
         edit(agentId, modelId !== null, (config, target) =>
           stage(config, [...target.path, "decisionModel"], modelId ?? undefined),
         ),
+      onInteractionModelChange: (
+        agentId: string,
+        kind: "computer" | "browser",
+        modelId: string | null,
+      ) =>
+        edit(agentId, modelId !== null, (config, target) =>
+          stage(
+            config,
+            [...target.path, kind === "computer" ? "computerModel" : "browserModel"],
+            modelId ?? undefined,
+          ),
+        ),
       onModelFallbacksChange: (agentId: string, fallbacks: string[]) =>
         edit(agentId, true, (config, target) => {
           stage(

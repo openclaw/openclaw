@@ -76,6 +76,38 @@ function createCatalogHarness(lastAcceptedCatalog?: ModelCatalogResult) {
 }
 
 describe("Models page catalog publication", () => {
+  it("requests capability details so image-capable specialists can actually be selected", async () => {
+    const h = createHarness("main");
+    const original = h.request.getMockImplementation()!;
+    h.request.mockImplementation(async (method: string, params?: { includeDetails?: boolean }) =>
+      method === "models.list"
+        ? {
+            models: [
+              {
+                provider: "fixture",
+                id: "vision",
+                name: "Vision fixture",
+                available: true,
+                ...(params?.includeDetails ? { input: ["text", "image"] } : {}),
+              },
+            ],
+          }
+        : original(method),
+    );
+    const page = appendPage(h.context);
+    await waitForProviders(page);
+    await openModelPicker(page, "computer");
+    const option = modelPicker(page, "computer").querySelector<HTMLElement>(
+      '[role="option"][data-value="fixture/vision"]',
+    );
+    expect(option).not.toBeNull();
+    expect(option!.getAttribute("aria-disabled")).not.toBe("true");
+    expect(h.request).toHaveBeenCalledWith(
+      "models.list",
+      expect.objectContaining({ includeDetails: true }),
+    );
+  });
+
   it("adopts a ready catalog published while the initial auth read is pending", async () => {
     const { context, request, readPublished, publishEvent, catalogRequest } =
       createCatalogHarness();

@@ -9,6 +9,7 @@ import {
   type DecisionModelEntry,
 } from "../../components/solid/decision-model-picker.tsx";
 import { Icon } from "../../components/solid/icon.tsx";
+import { InteractionModelPicker } from "../../components/solid/interaction-model-picker.tsx";
 import { ModelPicker, type ModelPickerOption } from "../../components/solid/model-picker.tsx";
 import {
   SettingsRow,
@@ -58,6 +59,7 @@ export type DefaultModelsViewProps = {
   onUtilityChange: (model: string | null) => void;
   onUtilityFallbackChange: (model: string | null) => void;
   onDecisionChange: (model: string | null) => void;
+  onInteractionModelChange: (kind: "computer" | "browser", model: string | null) => void;
   onThinkingChange: (level: string) => void;
   onThinkingReset: () => void;
   onFastModeChange: (mode: FastMode) => void;
@@ -522,6 +524,29 @@ export function DefaultModels(props: DefaultModelsViewProps) {
             />
           }
         />
+        <For each={["computer", "browser"] as const}>
+          {(kind) => (
+            <SettingsRow
+              title={t(
+                kind === "computer"
+                  ? "chat.modelControls.computerLabel"
+                  : "chat.modelControls.browserLabel",
+              )}
+              description={t("chat.modelControls.interactionHelp")}
+              control={
+                <InteractionModelPicker
+                  id={"model-providers-" + kind + "-model"}
+                  kind={kind}
+                  models={models()}
+                  value={props.selection[kind === "computer" ? "computerModel" : "browserModel"]}
+                  disabled={modelControlsDisabled() || saving()}
+                  title={title()}
+                  onChange={(value) => props.onInteractionModelChange(kind, value)}
+                />
+              }
+            />
+          )}
+        </For>
         <FallbackModel
           label={t("modelProviders.defaults.fallback")}
           fallbacks={props.selection.fallbacks}

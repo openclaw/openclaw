@@ -26,6 +26,7 @@ function catalogProvider(
   model: {
     id?: string;
     input?: unknown;
+    nativeCapabilities?: unknown;
     supportedReasoningEfforts?: string[];
     pricing?: typeof PRICING;
   } = {},
@@ -223,6 +224,130 @@ describe("ClawRouter provider catalog", () => {
       "object-modality": ["text"],
       "null-modality": ["text"],
     });
+  });
+
+  it.each([
+    {
+      provider: "openai",
+      capability: "llm.responses",
+      endpoint: "responses",
+      other: "chat_completions",
+      api: "openai-responses",
+      routes: [],
+    },
+    {
+      provider: "openai",
+      capability: "llm.chat",
+      endpoint: "chat_completions",
+      other: "responses",
+      api: "openai-completions",
+      routes: [],
+    },
+    {
+      provider: "anthropic",
+      capability: "llm.messages",
+      endpoint: "messages",
+      other: "responses",
+      api: "anthropic-messages",
+      routes: [["/v1/messages", "anthropic.messages"]],
+    },
+    {
+      provider: "google-gemini",
+      capability: "llm.stream",
+      endpoint: "generate_content",
+      other: "responses",
+      api: "google-generative-ai",
+      routes: [["/v1beta/models/${model}:streamGenerateContent", "google.generate_content"]],
+    },
+  ] satisfies Array<{
+    provider: string;
+    capability: string;
+    endpoint: string;
+    other: string;
+    api: string;
+    routes: Array<[string, string]>;
+  }>)(
+    "uses native input for the selected $api endpoint without name inference",
+    async ({ provider, capability, endpoint, other, api, routes }) => {
+      vi.spyOn(ssrfRuntime, "fetchWithSsrFGuard").mockImplementation(async () => ({
+        response: Response.json({
+          providers: [
+            catalogProvider(provider, "Fixture", "catalog-native", [capability], routes, {
+              nativeCapabilities: {
+                version: "clawrouter.native-capabilities.v1",
+                endpoints: {
+                  [endpoint]: {
+                    sources: ["https://provider.example/model"],
+                    checkedAt: "2026-10-27",
+                    input: ["text", "image", "audio"],
+                  },
+                  [other]: {
+                    sources: ["https://provider.example/model"],
+                    checkedAt: "2026-10-27",
+                    input: ["text"],
+                  },
+                },
+              },
+            }),
+          ],
+        }),
+        finalUrl: "https://clawrouter.example/v1/catalog",
+        release: async () => undefined,
+      }));
+      const result = await buildClawRouterProviderConfig({ apiKey: "fixture-key" });
+      expect(result.models).toHaveLength(1);
+      expect(result.models[0]).toMatchObject({ api, input: ["text", "image"] });
+    },
+  );
+
+  it("preserves flat overrides and rejects unrelated, unsupported or unqualified native input", async () => {
+    const endpoint = {
+      sources: ["https://provider.example/model"],
+      checkedAt: "2026-10-27",
+      input: ["text", "image"],
+    };
+    const native = (endpoints: unknown, version = "clawrouter.native-capabilities.v1") => ({
+      version,
+      endpoints,
+    });
+    const rows = [
+      { id: "flat-text", nativeCapabilities: native({ responses: endpoint }), input: ["text"] },
+      { id: "other-endpoint", nativeCapabilities: native({ chat_completions: endpoint }) },
+      { id: "unknown-version", nativeCapabilities: native({ responses: endpoint }, "future.v2") },
+      {
+        id: "missing-provenance",
+        nativeCapabilities: native({ responses: { input: ["text", "image"] } }),
+      },
+      {
+        id: "malformed-input",
+        nativeCapabilities: native({ responses: { ...endpoint, input: ["image", {}] } }),
+      },
+      {
+        id: "native-text",
+        upstream: "gpt-6.1-sol",
+        nativeCapabilities: native({ responses: { ...endpoint, input: ["text"] } }),
+      },
+    ];
+    vi.spyOn(ssrfRuntime, "fetchWithSsrFGuard").mockImplementation(async () => ({
+      response: Response.json({
+        providers: rows.map((row) =>
+          catalogProvider(
+            "openai",
+            "Fixture",
+            row.upstream ?? "catalog-native",
+            ["llm.responses"],
+            [],
+            row,
+          ),
+        ),
+      }),
+      finalUrl: "https://clawrouter.example/v1/catalog",
+      release: async () => undefined,
+    }));
+    const result = await buildClawRouterProviderConfig({ apiKey: "fixture-key" });
+    expect(Object.fromEntries(result.models.map((model) => [model.id, model.input]))).toEqual(
+      Object.fromEntries(rows.map((row) => [row.id, ["text"]])),
+    );
   });
 
   it("rewrites only native protocol model ids at the request boundary", async () => {

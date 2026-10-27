@@ -17,6 +17,8 @@ export type ConfiguredModelRef = {
 export const AGENT_MODEL_CONFIG_KEYS = [
   "model",
   "utilityModel",
+  "computerModel",
+  "browserModel",
   "imageModel",
   "voiceModel",
   "pdfModel",

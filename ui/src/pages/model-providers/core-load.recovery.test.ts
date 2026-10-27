@@ -48,7 +48,9 @@ it.each(["providers", "discovery"] as const)(
     auth.resolve();
     await Promise.all([loading, published]);
     await vi.waitFor(() => {
-      expect(readAgentModelCatalog(client, "main").pendingProviders ?? []).toEqual([]);
+      expect(
+        readAgentModelCatalog(client, "main", { includeDetails: true }).pendingProviders ?? [],
+      ).toEqual([]);
       expect(loader.loading).toBe(false);
     });
     expect(request.mock.calls.filter(([method]) => method === "models.list")).toHaveLength(2);

@@ -31,7 +31,8 @@ function harness(
     request,
     load: (refresh = false, signal?: AbortSignal) =>
       loadModelProvidersData(client, { agentId: "main", refresh, signal }),
-    cached: (allowStale = false) => peekModelCatalog(client, { agentId: "main" }, { allowStale }),
+    cached: (allowStale = false) =>
+      peekModelCatalog(client, { agentId: "main", includeDetails: true }, { allowStale }),
   };
 }
 
@@ -120,8 +121,11 @@ it.each([false, true])(
     if (refresh) {
       expect(h.cached()?.models).toEqual([model]);
       expect(h.request.mock.calls.filter(([method]) => method === "models.list")).toEqual([
-        ["models.list", { view: "configured", agentId: "main", refresh: true }],
-        ["models.list", { view: "configured", agentId: "main" }],
+        [
+          "models.list",
+          { view: "configured", includeDetails: true, agentId: "main", refresh: true },
+        ],
+        ["models.list", { view: "configured", includeDetails: true, agentId: "main" }],
       ]);
     } else {
       expect(h.cached()).toBeUndefined();

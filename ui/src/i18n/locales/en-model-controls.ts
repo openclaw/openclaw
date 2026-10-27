@@ -41,6 +41,13 @@ const enModelControls = {
         },
       },
       decisionLabel: "Decision Model",
+      computerLabel: "Computer Model",
+      browserLabel: "Browser Model",
+      interactionUseChatModel: "Use chat model",
+      interactionInherit: "Inherit default ({model})",
+      interactionVisionRequired: "Requires image input and tool calling",
+      interactionHelp:
+        "Delegates complete interaction tasks without changing the chat model. Task content and screenshots go to the selected provider. Existing permissions and connections are preserved; failures do not replay tasks on another model.",
       decisionDisabled: "Disabled",
       decisionInherit: "Use global default · {model}",
       decisionUnavailable:

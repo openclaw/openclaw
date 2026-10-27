@@ -298,7 +298,11 @@ describe("AgentsPage gateway lifecycle", () => {
 
     await waitForFast(() => expect(page.read().overview.modelCatalog).toEqual(models));
     expect(request).toHaveBeenCalledOnce();
-    expect(request).toHaveBeenCalledWith("models.list", { view: "configured", agentId: "main" });
+    expect(request).toHaveBeenCalledWith("models.list", {
+      view: "configured",
+      includeDetails: true,
+      agentId: "main",
+    });
   });
 
   it("reads separate configured model catalogs when switching default and worker agents", async () => {
@@ -326,10 +330,12 @@ describe("AgentsPage gateway lifecycle", () => {
     expect(request).toHaveBeenCalledTimes(2);
     expect(request).toHaveBeenNthCalledWith(1, "models.list", {
       view: "configured",
+      includeDetails: true,
       agentId: "main",
     });
     expect(request).toHaveBeenNthCalledWith(2, "models.list", {
       view: "configured",
+      includeDetails: true,
       agentId: "worker",
     });
   });
@@ -367,7 +373,7 @@ describe("AgentsPage gateway lifecycle", () => {
       expect(request.mock.calls.map(([method, params]) => ({ method, params }))).toEqual(
         Array.from({ length: 3 }, () => ({
           method: "models.list",
-          params: { agentId: "main", view: "configured" },
+          params: { agentId: "main", view: "configured", includeDetails: true },
         })),
       );
     },
@@ -401,6 +407,7 @@ describe("AgentsPage gateway lifecycle", () => {
     expect(request).toHaveBeenCalledTimes(2);
     expect(request).toHaveBeenNthCalledWith(2, "models.list", {
       view: "configured",
+      includeDetails: true,
       agentId: "worker",
     });
   });
@@ -549,6 +556,7 @@ describe("AgentsPage gateway lifecycle", () => {
     expect(request).toHaveBeenCalledTimes(2);
     expect(request).toHaveBeenNthCalledWith(2, "models.list", {
       view: "configured",
+      includeDetails: true,
       agentId: "main",
     });
   });
@@ -576,6 +584,7 @@ describe("AgentsPage gateway lifecycle", () => {
     expect(request).toHaveBeenCalledTimes(2);
     expect(request).toHaveBeenNthCalledWith(2, "models.list", {
       view: "configured",
+      includeDetails: true,
       agentId: "main",
     });
   });

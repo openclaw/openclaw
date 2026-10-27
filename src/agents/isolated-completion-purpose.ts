@@ -7,4 +7,6 @@ export type IsolatedCompletionPurpose =
   | "composer-prediction"
   | "progress-narration"
   | "transcript-summary"
-  | "plugin-completion";
+  | "plugin-completion"
+  | "computer-task"
+  | "browser-task";

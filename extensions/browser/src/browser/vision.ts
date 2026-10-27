@@ -4,6 +4,7 @@
  */
 
 import { readFile } from "node:fs/promises";
+import { getAgentToolExecutionModel } from "openclaw/plugin-sdk/agent-harness-runtime";
 import type { RunMediaUnderstandingFileParams } from "openclaw/plugin-sdk/media-understanding-runtime";
 
 const DEFAULT_BROWSER_SCREENSHOT_DESCRIPTION_PROMPT =
@@ -74,7 +75,7 @@ export async function describeBrowserScreenshot(ctx: BrowserScreenshotDescriptio
     ...(agentId ? { agentId } : {}),
     agentDir: ctx.agentDir,
     workspaceDir: ctx.workspaceDir,
-    activeModel: normalizeActiveModel(ctx.activeModel),
+    activeModel: normalizeActiveModel(getAgentToolExecutionModel() ?? ctx.activeModel),
     scopeContext: ctx.mediaScope,
   });
   const text = described.text?.trim();

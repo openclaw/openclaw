@@ -108,7 +108,27 @@ function parseCatalogRoute(value: unknown): CatalogRoute | undefined {
   };
 }
 
-function parseCatalogInput(value: unknown): Array<"text" | "image"> | undefined {
+function parseCatalogInput(
+  flatInput: unknown,
+  nativeEndpoint?: Record<string, unknown>,
+): Array<"text" | "image"> | undefined {
+  let value = flatInput;
+  if (value === undefined) {
+    const input = nativeEndpoint?.input;
+    const sources = nativeEndpoint?.sources;
+    if (
+      Array.isArray(sources) &&
+      sources.length > 0 &&
+      sources.every((source) => typeof source === "string" && source.trim().length > 0) &&
+      normalizeOptionalString(nativeEndpoint?.checkedAt) &&
+      Array.isArray(input) &&
+      input.length > 0 &&
+      input.every((modality) => ["text", "image", "audio", "video", "json"].includes(modality))
+    ) {
+      // Native endpoint facts include modalities outside the agent transport contract.
+      value = input.filter((modality) => modality === "text" || modality === "image");
+    }
+  }
   if (value === undefined) {
     return undefined;
   }
@@ -200,7 +220,8 @@ function buildRoutedModel(
   );
   const pricing = asOptionalRecord(row?.pricing);
   const native = asOptionalRecord(row?.nativeCapabilities);
-  const responses = asOptionalRecord(asOptionalRecord(native?.endpoints)?.responses);
+  const nativeEndpoints = asOptionalRecord(native?.endpoints);
+  const responses = asOptionalRecord(nativeEndpoints?.responses);
   const supportsHostedWebSearch =
     native?.version === "clawrouter.native-capabilities.v1" &&
     Array.isArray(responses?.hostedTools) &&
@@ -208,13 +229,16 @@ function buildRoutedModel(
     responses.hostedTools.includes("web_search");
   let api: NonNullable<ModelDefinitionConfig["api"]>;
   let baseUrl: string;
+  let nativeEndpoint: string;
   let upstreamModel: string | undefined;
 
   if (provider.openaiCompatible && capabilities.includes("llm.responses")) {
     api = "openai-responses";
+    nativeEndpoint = "responses";
     baseUrl = `${rootUrl}/v1`;
   } else if (provider.openaiCompatible && capabilities.includes("llm.chat")) {
     api = "openai-completions";
+    nativeEndpoint = "chat_completions";
     baseUrl = `${rootUrl}/v1`;
   } else if (
     capabilities.includes("llm.messages") &&
@@ -223,6 +247,7 @@ function buildRoutedModel(
     )
   ) {
     api = "anthropic-messages";
+    nativeEndpoint = "messages";
     baseUrl = `${rootUrl}${provider.nativeBaseUrl}`;
     upstreamModel = upstream;
   } else {
@@ -239,6 +264,7 @@ function buildRoutedModel(
       return undefined;
     }
     api = "google-generative-ai";
+    nativeEndpoint = "generate_content";
     baseUrl = `${rootUrl}${provider.nativeBaseUrl}${googleRoute.path.slice(0, modelPathIndex)}`;
     upstreamModel = upstream;
   }
@@ -296,7 +322,12 @@ function buildRoutedModel(
     // A family comes from the bundled catalog's declaration, never from this row's id.
     ...(identityFacts?.family ? { family: identityFacts.family } : {}),
     input:
-      parseCatalogInput(row?.input) ??
+      parseCatalogInput(
+        row?.input,
+        native?.version === "clawrouter.native-capabilities.v1"
+          ? asOptionalRecord(nativeEndpoints?.[nativeEndpoint])
+          : undefined,
+      ) ??
       ((provider.id === "openai" && OPENAI_NATIVE_IMAGE_MODEL_IDS.has(upstream)) ||
       /(?:claude-|gemini-|gpt-4o|gpt-5)/u.test(qualifiedId)
         ? ["text", "image"]

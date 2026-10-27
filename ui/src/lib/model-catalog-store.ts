@@ -68,8 +68,9 @@ export function readModelCatalog(
 export function readAgentModelCatalog(
   client: ModelCatalogClient | null | undefined,
   agentId: string | null | undefined,
+  projection?: Pick<ModelsListParams, "includeDetails">,
 ): ModelCatalogPresentation {
-  return readModelCatalog(client, agentId ? { agentId } : null);
+  return readModelCatalog(client, agentId ? { agentId, ...projection } : null);
 }
 
 export function subscribeModelCatalogCache(

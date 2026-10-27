@@ -72,6 +72,7 @@ import { applyDelegationCapability } from "./delegation-capability.js";
 import { pinExecToolTarget } from "./exec-tool-target-pinning.js";
 import { applyGatewayToolPolicy } from "./gateway-tool-policy.js";
 import { buildHarnessHostRequester } from "./harness/host-requester.js";
+import { resolveInteractionModel } from "./interaction-model.js";
 import { resolveExecToolConfig } from "./lazy-exec-tool.js";
 import { resolveLocalModelLeanPreserveToolNames } from "./local-model-lean.js";
 import { createMemoryWriteProvenanceObserver } from "./memory-write-provenance.js";
@@ -492,6 +493,9 @@ function* assembleOpenClawCodingTools(
                 ? null
                 : (options?.computerTransport ??
                   resolveSessionPlacementComputer(options?.operationalRunInstance)),
+            computerTaskModelConfigured: Boolean(
+              resolveInteractionModel(options?.config, executionAgentId, "computer"),
+            ),
             sourceReplyOnly,
             disablePluginTools: !includePluginTools,
             wrapBeforeToolCallHook: false,
@@ -612,8 +616,6 @@ function* assembleOpenClawCodingTools(
     messageProvider: options?.toolPolicyMessageProvider ?? options?.messageProvider,
   });
   options?.recordToolPrepStage?.("authorization-policy");
-  const turnSourceChannel = options?.messageChannel ?? options?.messageProvider;
-  const turnSourceTo = options?.currentMessagingTarget ?? options?.currentChannelId;
   const requester = buildHarnessHostRequester(options ?? {});
   const hookContext = {
     awaitSessionDiffBaseline: options?.awaitSessionDiffBaseline,
@@ -633,8 +635,8 @@ function* assembleOpenClawCodingTools(
     approvalReviewerDeviceId: options?.approvalReviewerDeviceId,
     channelId: options?.hookChannelId ?? options?.currentChannelId,
     ...(Object.keys(requester).length > 0 ? { requester } : {}),
-    ...(turnSourceChannel ? { turnSourceChannel } : {}),
-    ...(turnSourceTo ? { turnSourceTo } : {}),
+    turnSourceChannel: options?.messageChannel ?? options?.messageProvider,
+    turnSourceTo: options?.currentMessagingTarget ?? options?.currentChannelId,
     ...(options?.agentAccountId ? { turnSourceAccountId: options.agentAccountId } : {}),
     ...(options?.currentThreadTs ? { turnSourceThreadId: options.currentThreadTs } : {}),
     ...(options?.trace ? { trace: options.trace } : {}),
@@ -651,6 +653,7 @@ function* assembleOpenClawCodingTools(
           !preparedTools.some((prepared) => prepared.name === tool.name)
       : options?.wrapBeforeToolCallHook,
     hookContext,
+    interactionModelContext: { policyAgentId: agentId },
     ...(options?.swarmCollector ? { approvalMode: "deny" as const } : {}),
   });
   return finalizedTools.map(

@@ -74,6 +74,8 @@ const modelPickerLabels = {
   utility: "Utility Model",
   fallback: "Fallback Model",
   decision: "Decision Model",
+  computer: "Computer Model",
+  browser: "Browser Model",
 };
 
 export function modelPicker(
@@ -109,7 +111,7 @@ export async function drainPageUpdates(page: ModelProvidersPageTestElement): Pro
 export function displayedCatalog(page: ModelProvidersPageTestElement) {
   return peekModelCatalog(
     page.context.gateway.snapshot.client!,
-    { agentId: page.context.settingsAgentSelection.state.selectedId ?? "" },
+    { agentId: page.context.settingsAgentSelection.state.selectedId ?? "", includeDetails: true },
     { allowStale: true },
   );
 }
@@ -120,7 +122,7 @@ export function publishCatalog(
   result: ModelCatalogResult,
 ) {
   const client = context.gateway.snapshot.client!;
-  const scope = { agentId };
+  const scope = { agentId, includeDetails: true };
   expect(publishModelCatalogResult(beginModelCatalogRead(client, scope), scope, result)).toBe(true);
 }
 

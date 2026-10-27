@@ -59,6 +59,8 @@ import {
 } from "../sessions/session-controller.queries.js";
 import { steerSessionControllerOperation } from "../sessions/session-controller.steer.js";
 
+export { getAgentToolExecutionModel } from "../agents/tool-execution-model.js";
+
 export type {
   AgentExecutorBinding,
   AgentExecutorContext,

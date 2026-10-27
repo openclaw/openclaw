@@ -88,7 +88,10 @@ function createModelsRouter(selectedId: string | null = "main") {
     navigate: (route: RouteId = "model-providers") => router.navigate(route, context),
     data: () => router.getState().matches[0]?.data,
     catalog: () =>
-      peekModelCatalog(store.gateway.snapshot.client!, { agentId: selection.state.selectedId! }),
+      peekModelCatalog(store.gateway.snapshot.client!, {
+        agentId: selection.state.selectedId!,
+        includeDetails: true,
+      }),
     hello: () => store.current().testOptions.onHello?.({ ...modelsHello }),
     disconnect: () =>
       store.current().testOptions.onClose?.({ code: 1012, reason: "restart", willRetry: true }),

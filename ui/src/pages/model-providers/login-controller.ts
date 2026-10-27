@@ -475,7 +475,9 @@ export function createModelProviderLogin(options: {
       return;
     }
     const { context, agentId } = options.getScope();
-    const catalog = readAgentModelCatalog(context.gateway.snapshot.client, agentId);
+    const catalog = readAgentModelCatalog(context.gateway.snapshot.client, agentId, {
+      includeDetails: true,
+    });
     const slash = modelRef.indexOf("/");
     const provider = modelRef.slice(0, slash);
     const id = modelRef.slice(slash + 1);
@@ -549,7 +551,7 @@ export function createModelProviderLogin(options: {
       return;
     }
     if (client && agentId && providerId) {
-      completionCatalog.bind(context.gateway, { agentId });
+      completionCatalog.bind(context.gateway, { agentId, includeDetails: true });
       void completionCatalog.read();
     }
   }

@@ -132,6 +132,7 @@ export function createModelProviders(
         stopCatalog = change.snapshot.client
           ? modelCatalog.subscribeModelCatalogCache(change.snapshot.client, notify, () => ({
               agentId: state.selectedAgentId || undefined,
+              includeDetails: true,
             }))
           : undefined;
       }
@@ -287,7 +288,7 @@ export function createModelProviders(
       routeDataObserved = true;
       setSelectedAgent(context.settingsAgentSelection.state.selectedId ?? "");
       // The catalog can change after preload completes but before this page subscribes.
-      const catalogScope = { agentId: state.selectedAgentId };
+      const catalogScope = { agentId: state.selectedAgentId, includeDetails: true };
       const catalogCurrent =
         !data.client ||
         !modelCatalog.peekModelCatalog(data.client, catalogScope, { allowStale: true }) ||
@@ -561,6 +562,7 @@ export function createModelProviders(
     const catalog = modelCatalog.readAgentModelCatalog(
       readAccess ? gatewaySnapshot.client : null,
       state.selectedAgentId,
+      { includeDetails: true },
     );
     const { configuredDefaults, cards, noSelectableAgents, rosterError, agentLabel, values } =
       buildModelProviderPresentation({

@@ -14,6 +14,7 @@ import "../../components/tooltip.ts";
 import { DecisionModelPicker } from "../../components/solid/decision-model-picker.tsx";
 import { useAvatarGatewayContext } from "../../components/solid/identity-avatar-view.ts";
 import { AgentIdentityAvatar } from "../../components/solid/identity-avatar.tsx";
+import { InteractionModelPicker } from "../../components/solid/interaction-model-picker.tsx";
 import { ModelPicker } from "../../components/solid/model-picker.tsx";
 import { PanelRefreshStatus as PanelRefreshNotice } from "../../components/solid/panel-refresh-status.tsx";
 import { SettingsRow, SettingsSection } from "../../components/solid/settings-ui.tsx";
@@ -139,6 +140,10 @@ export function AgentOverview(
     const value = config().defaults?.decisionModel;
     return typeof value === "string" ? value : undefined;
   });
+  const interactionModel = (kind: "computer" | "browser", scope: "entry" | "defaults") => {
+    const value = config()[scope]?.[kind === "computer" ? "computerModel" : "browserModel"];
+    return typeof value === "string" ? value : undefined;
+  };
   const modelFallbacks = createMemo(
     () =>
       resolveEffectiveModelFallbacks(config().entry?.model, config().defaults?.model) ??
@@ -465,6 +470,32 @@ export function AgentOverview(
             />
           }
         />
+        <For each={["computer", "browser"] as const}>
+          {(kind) => (
+            <SettingsRow
+              title={t(
+                kind === "computer"
+                  ? "chat.modelControls.computerLabel"
+                  : "chat.modelControls.browserLabel",
+              )}
+              description={t("chat.modelControls.interactionHelp")}
+              control={
+                <InteractionModelPicker
+                  id={"agent-" + kind + "-model"}
+                  kind={kind}
+                  models={params.modelCatalog}
+                  value={interactionModel(kind, "entry")}
+                  inherit={{ model: interactionModel(kind, "defaults") }}
+                  disabled={disabled()}
+                  onChange={(value) =>
+                    params.onInteractionModelChange(params.agent.id, kind, value)
+                  }
+                  onOpen={() => params.onModelCatalogOpen()}
+                />
+              }
+            />
+          )}
+        </For>
         <SettingsRow
           title={t("agents.overview.fallbacks")}
           stacked={true}

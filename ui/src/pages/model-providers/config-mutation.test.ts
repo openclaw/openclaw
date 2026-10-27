@@ -35,6 +35,38 @@ async function submitDefaults(defaults: DefaultsDraft) {
 }
 
 describe("model provider config patches", () => {
+  it("persists independent interaction selections without changing the chat or utility chain", async () => {
+    const config = {
+      agents: {
+        defaults: {
+          model: { primary: "fixture/chat", fallbacks: ["fixture/chat-backup"] },
+          utilityModel: "fixture/utility",
+          computerModel: "fixture/desktop",
+          browserModel: "fixture/web",
+        },
+      },
+    };
+    let defaults = readModelProviderConfig(config).defaults;
+    const actions = modelDefaultsActions(
+      () => defaults,
+      (patch) => {
+        defaults = { ...defaults, ...patch };
+      },
+    );
+    actions.onInteractionModelChange("computer", "fixture/new-desktop");
+    actions.onInteractionModelChange("browser", null);
+    const patch = await submitDefaults({ ...defaults, ...readModelBehaviorConfig({}) });
+    expect(applyMergePatch(config, patch)).toEqual({
+      agents: {
+        defaults: {
+          model: { primary: "fixture/chat", fallbacks: ["fixture/chat-backup"] },
+          utilityModel: "fixture/utility",
+          computerModel: "fixture/new-desktop",
+        },
+      },
+    });
+  });
+
   it.each([
     "fixture/utility",
     { primary: "fixture/utility", fallbacks: ["fixture/backup", "fixture/last"] },

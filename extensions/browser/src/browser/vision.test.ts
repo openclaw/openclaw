@@ -7,10 +7,15 @@ import { describeBrowserScreenshot, neutralizeMediaDirectives } from "./vision.j
 
 const prompt =
   "Describe what is visible in this browser screenshot. Capture page layout, headings, primary content blocks, visible text, and notable interactive elements so a text-only assistant can reason about the page.";
-const { describeImage, normalize, save } = vi.hoisted(() => ({
+const { describeImage, normalize, save, executionModel } = vi.hoisted(() => ({
   describeImage: vi.fn(),
+  executionModel: vi.fn<() => { provider: string; model: string } | undefined>(),
   normalize: vi.fn(),
   save: vi.fn(),
+}));
+vi.mock("openclaw/plugin-sdk/agent-harness-runtime", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("openclaw/plugin-sdk/agent-harness-runtime")>()),
+  getAgentToolExecutionModel: executionModel,
 }));
 vi.mock("openclaw/plugin-sdk/media-understanding-runtime", async (importOriginal) => ({
   ...(await importOriginal<typeof import("openclaw/plugin-sdk/media-understanding-runtime")>()),
@@ -27,6 +32,7 @@ vi.mock("./screenshot.js", async (importOriginal) => ({
 
 beforeEach(() => {
   describeImage.mockReset().mockResolvedValue({ text: "A dashboard." });
+  executionModel.mockReset().mockReturnValue(undefined);
   normalize.mockReset().mockImplementation(async (buffer: Buffer) => ({ buffer }));
   save.mockReset().mockResolvedValue({ path: "/tmp/resized.jpg" });
 });
@@ -59,6 +65,14 @@ describe("describeBrowserScreenshot", () => {
       prompt,
       scopeContext: mediaScope,
     });
+  });
+
+  it("uses the consuming specialist model instead of the captured text-only parent", async () => {
+    executionModel.mockReturnValue({ provider: "fixture", model: "vision" });
+    await screenshot({ activeModel: { provider: "fixture", model: "text-only-parent" } });
+    expect(describeImage).toHaveBeenCalledWith(
+      expect.objectContaining({ activeModel: { provider: "fixture", model: "vision" } }),
+    );
   });
 
   it.each([

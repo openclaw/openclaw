@@ -61,6 +61,7 @@ export async function loadModelProvidersData(
     settleRequest(
       loadModelCatalog(client, {
         agentId: opts.agentId,
+        includeDetails: true,
         ...(refresh ? { refresh: true } : {}),
         ...(opts.signal ? { signal: opts.signal } : {}),
       }),

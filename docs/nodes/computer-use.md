@@ -28,8 +28,34 @@ Provider selection never falls back per action. Switching providers closes the a
 - **macOS fulfiller:** **Accessibility** and **Screen Recording** granted to OpenClaw. The native Peekaboo path also requires Event Posting access for its CoreGraphics input primitives.
 - **Windows/Linux fulfiller:** bundled `cua-computer` plugin enabled on Windows x64/ARM64 or glibc-based Linux x64/ARM64. Its package includes the pinned CUA Driver SDK runtime; no `cua-driver` executable, daemon, or MCP server is configured.
 - For a node, the pairing update that includes `computer.act` approved on the Gateway. The Gateway's own computer does not require a paired node.
-- A vision-capable agent model.
+- A vision-capable agent model, or a configured [Computer model](#computer-and-browser-models).
 - Tool policy that exposes `computer`. Local onboarding selects Full when no profile is configured, but preserves an explicit `coding` profile, which excludes it. For Coding, add `computer` to `tools.alsoAllow`; ordinary sandboxed agents also need it in `tools.sandbox.tools.alsoAllow`. A cloud session's bound desktop is included in its default sandbox policy, while explicit allowlists and denies still apply. Full tool selection does not grant computer-control permissions. See [Tool profiles](/gateway/config-tools/tool-policy#tool-profiles).
+
+## Computer and browser models
+
+By default, the active chat model drives the computer and browser tools. Configure separate models in **Models → Defaults**, or override them in an agent’s model settings:
+
+```json5
+{
+  agents: {
+    defaults: {
+      computerModel: "openai/gpt-4.1",
+      browserModel: "openai/gpt-4.1",
+    },
+    entries: {
+      research: { browserModel: "" },
+    },
+  },
+}
+```
+
+Both fields accept a provider/model reference or a configured alias. They require an image-capable model route that supports tool calling. A missing agent value inherits the global setting; an empty string keeps that agent’s chat model in control. Neither setting changes the primary, utility, or subagent model.
+
+When configured, the corresponding tool accepts a complete `task` instead of atomic actions. The selected model runs a private interaction loop through the original tool instance, preserving the authorized desktop or browser connection, hooks, approvals, and cancellation. Screenshots and intermediate page state stay in the helper’s context; the parent receives its result and must assess the outcome. Task content and observations may be sent to the selected model provider.
+
+Interaction tasks use the source run’s normal deadline, cancellation, and tool-call budget; they do not impose a separate specialist timeout, model-response limit, or tool-call cap. Cancellation and errors do not restart a task on another model. Actions may already have happened: inspect the current state before continuing a failed or interrupted task.
+
+These settings route the OpenClaw `computer` and `browser` tools, not every possible way to automate a UI. Browser actions reached through `computer` use the Computer model. Web search/fetch, shell-driven automation, and a native harness’s own computer/browser tools are unchanged. Model selection grants no tools or OS permissions and does not bypass model policies.
 
 ## Gateway desktop
 

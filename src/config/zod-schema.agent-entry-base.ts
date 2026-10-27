@@ -87,6 +87,8 @@ export const AgentEntryBaseSchema = z.strictObject({
   agentDir: z.string().optional(),
   model: AgentModelSchema.optional(),
   utilityModel: AgentModelSchema.optional(),
+  computerModel: z.string().trim().max(512).optional(),
+  browserModel: z.string().trim().max(512).optional(),
   decisionModel: DecisionModelSchema.optional(),
   models: AgentModelMapSchema.optional(),
   modelPolicy: AgentModelPolicySchema.optional(),

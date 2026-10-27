@@ -40,6 +40,51 @@ function modelActionsFor(runtimeConfig: ReturnType<typeof createRuntimeConfig>) 
 }
 
 describe("agent model config", () => {
+  it.each(["computer", "browser"] as const)(
+    "keeps %s inheritance, explicit chat control and overrides distinct",
+    async (kind) => {
+      const defaults = {
+        model: "fixture/chat",
+        computerModel: "fixture/desktop",
+        browserModel: "fixture/web",
+      };
+      const runtime = createRuntimeConfig({
+        agents: {
+          defaults,
+          entries: { main: { name: "Main" }, other: { model: "fixture/other" } },
+        },
+      });
+      await runtime.ensureLoaded();
+      const field = kind === "computer" ? "computerModel" : "browserModel";
+      const actions = modelActionsFor(runtime);
+      actions.onInteractionModelChange("main", kind, "");
+      expect(runtime.state.configForm).toEqual({
+        agents: {
+          defaults,
+          entries: { main: { name: "Main", [field]: "" }, other: { model: "fixture/other" } },
+        },
+      });
+      actions.onInteractionModelChange("main", kind, "fixture/override");
+      expect(runtime.state.configForm).toEqual({
+        agents: {
+          defaults,
+          entries: {
+            main: { name: "Main", [field]: "fixture/override" },
+            other: { model: "fixture/other" },
+          },
+        },
+      });
+      actions.onInteractionModelChange("main", kind, null);
+      expect(runtime.state.configForm).toEqual({
+        agents: {
+          defaults,
+          entries: { main: { name: "Main" }, other: { model: "fixture/other" } },
+        },
+      });
+      runtime.dispose();
+    },
+  );
+
   it("rechecks the current agent and permissions before editing the current config", async () => {
     const original = createRuntimeConfig({ agents: { entries: { main: {} } } });
     const replacement = createRuntimeConfig({ agents: { entries: { scout: {} } } });

@@ -53,6 +53,8 @@ export function modelDefaultsActions(
       });
     },
     onDecisionChange: (model: string | null) => stageDefaults({ decisionModel: model }),
+    onInteractionModelChange: (kind: "computer" | "browser", model: string | null) =>
+      stageDefaults(kind === "computer" ? { computerModel: model } : { browserModel: model }),
     onThinkingChange: (level: string) =>
       stageDefaults({ thinkingLevel: level, thinkingOverridden: true }, "thinking"),
     onThinkingReset: () =>
@@ -196,6 +198,8 @@ export function runModelProviderDefaultsMutation(
               : {}),
             utilityModel: modelSettingPatch(params.utilityModel),
             ...(params.decisionModel !== undefined ? { decisionModel: params.decisionModel } : {}),
+            ...(params.computerModel !== undefined ? { computerModel: params.computerModel } : {}),
+            ...(params.browserModel !== undefined ? { browserModel: params.browserModel } : {}),
             thinkingDefault:
               params.thinkingOverridden && params.thinkingLevel ? params.thinkingLevel : null,
             fastModeDefault:

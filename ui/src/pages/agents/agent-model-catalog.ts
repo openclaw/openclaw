@@ -55,7 +55,7 @@ export function createAgentModelCatalog(
     if (!state.client || !state.connected || !agentId) {
       return;
     }
-    if (reader.bind(context.gateway, { agentId })) {
+    if (reader.bind(context.gateway, { agentId, includeDetails: true })) {
       needsRecovery = false;
       state.chatModelCatalogRead = null;
     }
@@ -69,7 +69,9 @@ export function createAgentModelCatalog(
   return {
     ensure,
     read: () =>
-      readAgentModelCatalog(state.connected ? state.client : null, state.agentsSelectedId),
+      readAgentModelCatalog(state.connected ? state.client : null, state.agentsSelectedId, {
+        includeDetails: true,
+      }),
     onAvailable() {
       if (reader.pending) {
         recoveryPending = true;

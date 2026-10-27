@@ -396,6 +396,8 @@ export type DefaultModelSelection = {
   utilityModel: AgentModelConfig | null;
   /** Unset or null disables decisions globally. */
   decisionModel?: string | null;
+  computerModel?: string | null;
+  browserModel?: string | null;
 };
 
 export type ModelPickerEntry = ModelCatalogEntry & { selectionRef?: string };
@@ -421,6 +423,8 @@ export function resolveDefaultModelPresentation(
         fallbacks: [],
         utilityModel: null,
         decisionModel: null,
+        ...(configured.computerModel !== undefined ? { computerModel: null } : {}),
+        ...(configured.browserModel !== undefined ? { browserModel: null } : {}),
       },
       configuredModels: catalog.models.filter((model) => model.manualSelectionAllowed !== false),
     };
@@ -433,6 +437,8 @@ export function resolveDefaultModelPresentation(
       ...defaults.fallbacks,
       modelSettingPrimary(defaults.utilityModel),
       ...modelSettingFallbacks(defaults.utilityModel),
+      defaults.computerModel,
+      defaults.browserModel,
     ].filter((value): value is string => typeof value === "string" && value.length > 0),
   );
   const source = models ?? [];
@@ -536,6 +542,12 @@ export function readModelProviderConfig(config: Record<string, unknown> | null):
       primary: modelSettingPrimary(model) ?? "",
       fallbacks: modelSettingFallbacks(model),
       utilityModel: readModelSetting(defaults?.utilityModel),
+      ...(typeof defaults?.computerModel === "string"
+        ? { computerModel: defaults.computerModel }
+        : {}),
+      ...(typeof defaults?.browserModel === "string"
+        ? { browserModel: defaults.browserModel }
+        : {}),
       ...(typeof defaults?.decisionModel === "string"
         ? { decisionModel: defaults.decisionModel }
         : {}),

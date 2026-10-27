@@ -59,6 +59,8 @@ export type OpenClawSharedToolsOptions = {
   oneShotCliRun?: boolean;
   runId?: string;
   computerTransport?: import("./tools/computer-tool.js").ComputerToolTransport | null;
+  /** Host promises to expose Computer only as a specialist task after final tool policy. */
+  computerTaskModelConfigured?: boolean;
   /** Current runtime directory used as the default project for follow-up suggestions. */
   cwd?: string;
   /**

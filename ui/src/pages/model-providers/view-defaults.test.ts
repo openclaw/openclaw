@@ -48,7 +48,13 @@ it("retains a saved unavailable model without offering it for another default se
   const container = mount(
     props({
       configuredModels: [
-        { provider: "fixture", id: "ready", name: "Ready", available: true },
+        {
+          provider: "fixture",
+          id: "ready",
+          name: "Ready",
+          available: true,
+          input: ["text", "image"],
+        },
         { provider: "fixture", id: "blocked", name: "Blocked", available: false },
         { provider: "fixture", id: "last", name: "Last", available: true },
       ],
@@ -69,7 +75,7 @@ it("retains a saved unavailable model without offering it for another default se
     blocked.push(...picker.querySelectorAll(optionSelector("blocked")));
     ready.push(...picker.querySelectorAll(optionSelector("ready")));
   }
-  expect(blocked).toHaveLength(3);
+  expect(blocked).toHaveLength(5);
   expect(blocked.every((option) => option.getAttribute("aria-disabled") === "true")).toBe(true);
   expect(ready.every((option) => option.getAttribute("aria-disabled") === "false")).toBe(true);
   const utility = trigger(container, "utility");

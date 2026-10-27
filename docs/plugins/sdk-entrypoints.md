@@ -295,6 +295,19 @@ personal-overlay refresh, turn-scoped project or memory guidance, native forks,
 or Gateway-to-hosted-workspace path projection. Those remain MVP integration gaps;
 shared preparation does not enable those operations.
 
+## Tool output model context
+
+Tool implementations can read `getAgentToolExecutionModel()` from
+`openclaw/plugin-sdk/agent-harness-runtime` when deriving model-dependent output.
+It returns optional read-only `{ provider, model }` facts for the model consuming
+this invocation’s result. A delegated Browser task can therefore preserve native
+screenshot vision even when the retained tool was created for a text-only parent.
+When no scoped model is present, keep the tool’s existing captured-model behavior.
+
+These facts do not grant tool access, select a connection, or replace caller,
+approval, or source-lifetime checks. The host binds the scope around the existing
+executor; plugins cannot bind it through this SDK reader.
+
 ## Tool failure diagnostics
 
 Agent harnesses can import `readToolOperatorHint(error)` from

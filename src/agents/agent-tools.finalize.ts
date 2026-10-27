@@ -21,6 +21,7 @@ import type { HookContext } from "./agent-tools.before-tool-call.types.js";
 import { rewrapToolWithBeforeToolCallHook } from "./agent-tools.before-tool-call.wrapper.js";
 import { applyToolAvailabilityDescriptions } from "./agent-tools.deferred-followup.js";
 import type { AnyAgentTool } from "./agent-tools.types.js";
+import { applyInteractionModelTools } from "./interaction-model-tools.js";
 
 type ToolDescriptor = Pick<AnyAgentTool, "name" | "description" | "parameters" | "outputSchema">;
 type PreparedDescriptor = {
@@ -132,6 +133,7 @@ type FinalizeAgentToolsOptions = {
   modelApi?: string;
   modelCompat?: ModelCompatConfig;
   hookContext: HookContext;
+  interactionModelContext?: { policyAgentId?: string };
   wrapBeforeToolCallHook?: boolean | ((tool: AnyAgentTool) => boolean);
   emitBeforeToolCallDiagnostics?: boolean;
   approvalMode?: "request" | "report" | "deny";
@@ -208,9 +210,21 @@ export function finalizeAgentTools(options: FinalizeAgentToolsOptions): AnyAgent
     return copyAgentToolMetadata(tool, { ...tool, ...entry.descriptor });
   });
   options.recordToolPrepStage?.("deferred-followup-descriptions");
+  // Cache original action descriptors; only the outer model-facing contract becomes a task.
+  const finish = () =>
+    options.interactionModelContext
+      ? applyInteractionModelTools({
+          tools: finalized,
+          config: options.config,
+          agentId: hookContext.agentId,
+          policyAgentId: options.interactionModelContext.policyAgentId,
+          hookContext,
+          wrapBeforeToolCallHook: options.wrapBeforeToolCallHook !== false,
+        })
+      : finalized;
   const registerCleanup = options.registerRunCleanup;
   if (!sessionId) {
-    return finalized;
+    return finish();
   }
   // Capture only descriptor data before returning to the attempt.
   const pending = finalized.map((tool, index): PreparedDescriptor => {
@@ -244,7 +258,7 @@ export function finalizeAgentTools(options: FinalizeAgentToolsOptions): AnyAgent
     entries?.length === pending.length &&
     pending.every((entry, index) => entry === entries[index])
   ) {
-    return finalized;
+    return finish();
   }
   const publish = () => {
     // Concurrent cold sessions settle after one another; reuse what they already published.
@@ -311,5 +325,5 @@ export function finalizeAgentTools(options: FinalizeAgentToolsOptions): AnyAgent
   } else {
     publish();
   }
-  return finalized;
+  return finish();
 }

@@ -81,6 +81,14 @@ export const AGENT_FIELD_HELP: Record<string, string> = {
   "agents.defaults.utilityModel":
     "Optional lower-cost model (provider/model, alias, or { primary, fallbacks }) for short internal tasks such as generated titles and progress narration. Utility fallbacks use the same retry, alias resolution, and model-selection policy as configured model fallbacks, independently of model.fallbacks. Unset derives the primary provider's declared small model when available (otherwise the primary model); set to an empty string to disable utility routing.",
   "agents.defaults.utilityModel.primary": "Primary utility model (provider/model or alias).",
+  "agents.defaults.computerModel":
+    "Optional model (provider/model or alias) for delegated computer tasks. The computer tool accepts a task instead of individual actions, and this model runs a bounded interaction loop using the same authorized desktop. Task content and screenshots may be sent to this provider. Requires image input and tool calling. Unset or empty keeps the chat model in control; failures do not replay the task on another model.",
+  "agents.defaults.browserModel":
+    "Optional model (provider/model or alias) for delegated browser tasks. The browser tool accepts a task, and this model uses the same authorized browser connection. Page content and screenshots may be sent to this provider. Unset or empty keeps the chat model in control; failures do not replay the task on another model.",
+  "agents.entries.*.computerModel":
+    "Per-agent computer model. Unset inherits the default; an empty string keeps this agent's chat model in control.",
+  "agents.entries.*.browserModel":
+    "Per-agent browser model. Unset inherits the default; an empty string keeps this agent's chat model in control.",
   "agents.defaults.utilityModel.fallbacks":
     "Ordered utility fallback models (provider/model or alias), independent of the main model fallback list.",
   "agents.entries.*.utilityModel":

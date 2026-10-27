@@ -100,6 +100,7 @@ export class ModelProviderCoreLoader {
     try {
       const result = await loadModelCatalog(client, {
         agentId,
+        includeDetails: true,
         refresh: true,
         signal: request.signal,
       });
