@@ -101,12 +101,8 @@ it.each([
   const admitted = await operation.bindToolAuthorityRouteAsync(attempt);
   const compatAssertCurrent = vi.fn(() => {
     if (change === "legacy-allowed") {
-      expect(
-        loadSessionEntryReadOnly({
-          ...nativeRead,
-          readConsistency: "latest",
-        })?.sessionId,
-      ).toBe("native");
+      const entry = loadSessionEntryReadOnly({ ...nativeRead, readConsistency: "latest" });
+      expect(entry?.sessionId).toBe("native");
       return;
     }
     if (change === "compat-refusal" && operation.sessionId === attempt.sessionId) {
