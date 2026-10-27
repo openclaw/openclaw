@@ -22,26 +22,7 @@ function supportsScriptPositionalCommandForTests(): boolean {
   return process.platform === "darwin" || process.platform === "freebsd";
 }
 
-function expectTransparentDispatchWrapperCase(params: {
-  argv: string[];
-  wrapper: string;
-  effectiveArgv: string[];
-  dispatchChainComplete: boolean;
-}) {
-  expect(isDispatchWrapperExecutable(params.wrapper)).toBe(true);
-  expect(unwrapKnownDispatchWrapperInvocation(params.argv)).toEqual({
-    kind: "unwrapped",
-    wrapper: params.wrapper,
-    argv: params.effectiveArgv,
-  });
-  expect(resolveDispatchWrapperTrustPlan(params.argv)).toEqual({
-    argv: params.effectiveArgv,
-    wrappers: [params.wrapper],
-    wrapperInvocations: [{ wrapper: params.wrapper, sourceArgv: params.argv }],
-    policyBlocked: false,
-    dispatchChainComplete: params.dispatchChainComplete,
-  });
-}
+const shellCommand = ["bash", "-lc", "echo hi"];
 
 describe("normalizeExecutableToken", () => {
   test.each([
@@ -153,75 +134,33 @@ describe("unwrapEnvInvocation", () => {
 });
 
 describe("unwrapKnownDispatchWrapperInvocation", () => {
-  test.each([
-    [
-      ["caffeinate", "-d", "-w", "42", "bash", "-lc", "echo hi"],
-      { kind: "unwrapped", wrapper: "caffeinate", argv: ["bash", "-lc", "echo hi"] },
-    ],
-    [
-      ["script", "-q", "/dev/null", "bash", "-lc", "echo hi"],
-      supportsScriptPositionalCommandForTests()
-        ? { kind: "unwrapped", wrapper: "script", argv: ["bash", "-lc", "echo hi"] }
-        : { kind: "blocked", wrapper: "script" },
-    ],
-    [
-      ["script", "-E", "always", "/dev/null", "bash", "-lc", "echo hi"],
-      { kind: "blocked", wrapper: "script" },
-    ],
-    [
-      ["flock", "-n", "/tmp/openclaw.lock", "bash", "-lc", "echo hi"],
-      { kind: "unwrapped", wrapper: "flock", argv: ["bash", "-lc", "echo hi"] },
-    ],
-    [
-      ["flock", "-en", "/tmp/openclaw.lock", "bash", "-lc", "echo hi"],
-      { kind: "unwrapped", wrapper: "flock", argv: ["bash", "-lc", "echo hi"] },
-    ],
-    [
-      ["flock", "-E", "1", "/tmp/openclaw.lock", "bash", "-lc", "echo hi"],
-      { kind: "unwrapped", wrapper: "flock", argv: ["bash", "-lc", "echo hi"] },
-    ],
-    [
-      ["flock", "-F", "/tmp/openclaw.lock", "bash", "-lc", "echo hi"],
-      { kind: "unwrapped", wrapper: "flock", argv: ["bash", "-lc", "echo hi"] },
-    ],
-    [
-      ["flock", "-o", "/tmp/openclaw.lock", "bash", "-lc", "echo hi"],
-      { kind: "unwrapped", wrapper: "flock", argv: ["bash", "-lc", "echo hi"] },
-    ],
-    [
-      ["flock", "--nb", "/tmp/openclaw.lock", "bash", "-lc", "echo hi"],
-      { kind: "unwrapped", wrapper: "flock", argv: ["bash", "-lc", "echo hi"] },
-    ],
-    [
-      ["flock", "--wait", "1", "/tmp/openclaw.lock", "bash", "-lc", "echo hi"],
-      { kind: "unwrapped", wrapper: "flock", argv: ["bash", "-lc", "echo hi"] },
-    ],
-    [
-      ["xcrun", "bash", "-lc", "echo hi"],
-      process.platform === "darwin"
-        ? { kind: "unwrapped", wrapper: "xcrun", argv: ["bash", "-lc", "echo hi"] }
-        : { kind: "blocked", wrapper: "xcrun" },
-    ],
-    [["script", "-q", "/dev/null"], { kind: "blocked", wrapper: "script" }],
-    [
-      ["timeout", "--bogus", "5s", "bash", "-lc", "echo hi"],
-      { kind: "blocked", wrapper: "timeout" },
-    ],
-    [["flock", "/tmp/openclaw.lock", "-c", "echo hi"], { kind: "blocked", wrapper: "flock" }],
-    [
-      ["flock", "/tmp/openclaw.lock", "--", "bash", "-lc", "echo hi"],
-      { kind: "blocked", wrapper: "flock" },
-    ],
-    [
-      ["flock", "-un", "/tmp/openclaw.lock", "bash", "-lc", "echo hi"],
-      { kind: "blocked", wrapper: "flock" },
-    ],
-    [["flock", "-u", "9"], { kind: "blocked", wrapper: "flock" }],
-    [["arch", "-e", "FOO=bar", "bash", "-lc", "echo hi"], { kind: "blocked", wrapper: "arch" }],
-    [["arch", "-arch", "bogus", "bash", "-lc", "echo hi"], { kind: "blocked", wrapper: "arch" }],
-    [["xcrun", "--sdk", "macosx", "bash", "-lc", "echo hi"], { kind: "blocked", wrapper: "xcrun" }],
-  ])("unwraps known dispatch wrappers for %j", (argv, expected) => {
-    expect(unwrapKnownDispatchWrapperInvocation(argv)).toEqual(expected);
+  test.each<[[string, ...string[]], boolean]>([
+    [["caffeinate", "-d", "-w", "42", ...shellCommand], true],
+    [["script", "-q", "/dev/null", ...shellCommand], supportsScriptPositionalCommandForTests()],
+    [["script", "-E", "always", "/dev/null", ...shellCommand], false],
+    [["flock", "-n", "/tmp/openclaw.lock", ...shellCommand], true],
+    [["flock", "-en", "/tmp/openclaw.lock", ...shellCommand], true],
+    [["flock", "-E", "1", "/tmp/openclaw.lock", ...shellCommand], true],
+    [["flock", "-F", "/tmp/openclaw.lock", ...shellCommand], true],
+    [["flock", "-o", "/tmp/openclaw.lock", ...shellCommand], true],
+    [["flock", "--nb", "/tmp/openclaw.lock", ...shellCommand], true],
+    [["flock", "--wait", "1", "/tmp/openclaw.lock", ...shellCommand], true],
+    [["xcrun", ...shellCommand], process.platform === "darwin"],
+    [["script", "-q", "/dev/null"], false],
+    [["timeout", "--bogus", "5s", ...shellCommand], false],
+    [["flock", "/tmp/openclaw.lock", "-c", "echo hi"], false],
+    [["flock", "/tmp/openclaw.lock", "--", ...shellCommand], false],
+    [["flock", "-un", "/tmp/openclaw.lock", ...shellCommand], false],
+    [["flock", "-u", "9"], false],
+    [["arch", "-e", "FOO=bar", ...shellCommand], false],
+    [["arch", "-arch", "bogus", ...shellCommand], false],
+    [["xcrun", "--sdk", "macosx", ...shellCommand], false],
+  ])("unwraps known dispatch wrappers for %j", (argv, unwrapped) => {
+    expect(unwrapKnownDispatchWrapperInvocation(argv)).toEqual({
+      kind: unwrapped ? "unwrapped" : "blocked",
+      wrapper: argv[0],
+      ...(unwrapped ? { argv: shellCommand } : {}),
+    });
   });
 
   test("keeps the transcript operand after the script option separator", () => {
@@ -287,97 +226,41 @@ describe("resolveDispatchWrapperTrustPlan", () => {
     },
   );
 
-  test.each([
-    {
-      argv: ["caffeinate", "-d", "-t", "60", "bash", "-lc", "echo hi"],
-      wrapper: "caffeinate",
-      effectiveArgv: ["bash", "-lc", "echo hi"],
-      dispatchChainComplete: true,
-    },
-    {
-      argv: ["nice", "-n", "5", "bash", "-lc", "echo hi"],
-      wrapper: "nice",
-      effectiveArgv: ["bash", "-lc", "echo hi"],
-      dispatchChainComplete: true,
-    },
-    {
-      argv: ["nohup", "--", "bash", "-lc", "echo hi"],
-      wrapper: "nohup",
-      effectiveArgv: ["bash", "-lc", "echo hi"],
-      dispatchChainComplete: true,
-    },
-    {
-      argv: ["sandbox-exec", "-p", "(allow default)", "bash", "-lc", "echo hi"],
-      wrapper: "sandbox-exec",
-      effectiveArgv: ["bash", "-lc", "echo hi"],
-      dispatchChainComplete: true,
-    },
-    {
-      argv: ["sandbox-exec", "-D", "PROFILE", "bash", "-lc", "echo hi"],
-      wrapper: "sandbox-exec",
-      effectiveArgv: ["bash", "-lc", "echo hi"],
-      dispatchChainComplete: true,
-    },
-    {
-      argv: ["stdbuf", "-o", "L", "bash", "-lc", "echo hi"],
-      wrapper: "stdbuf",
-      effectiveArgv: ["bash", "-lc", "echo hi"],
-      dispatchChainComplete: true,
-    },
-    {
-      argv: ["time", "-p", "bash", "-lc", "echo hi"],
-      wrapper: "time",
-      effectiveArgv: ["bash", "-lc", "echo hi"],
-      dispatchChainComplete: true,
-    },
-    {
-      argv: ["flock", "--timeout=2", "/tmp/openclaw.lock", "bash", "-lc", "echo hi"],
-      wrapper: "flock",
-      effectiveArgv: ["bash", "-lc", "echo hi"],
-      dispatchChainComplete: true,
-    },
-    {
-      argv: ["flock", "--close", "/tmp/openclaw.lock", "bash", "-lc", "echo hi"],
-      wrapper: "flock",
-      effectiveArgv: ["bash", "-lc", "echo hi"],
-      dispatchChainComplete: true,
-    },
-    {
-      argv: ["flock", "--no-fork", "/tmp/openclaw.lock", "bash", "-lc", "echo hi"],
-      wrapper: "flock",
-      effectiveArgv: ["bash", "-lc", "echo hi"],
-      dispatchChainComplete: true,
-    },
-    {
-      argv: ["flock", "--", "/tmp/openclaw.lock", "bash", "-lc", "echo hi"],
-      wrapper: "flock",
-      effectiveArgv: ["bash", "-lc", "echo hi"],
-      dispatchChainComplete: true,
-    },
-    {
-      argv: ["timeout", "--signal=TERM", "5s", "bash", "-lc", "echo hi"],
-      wrapper: "timeout",
-      effectiveArgv: ["bash", "-lc", "echo hi"],
-      dispatchChainComplete: true,
-    },
+  test.each<[[string, ...string[]], boolean]>([
+    [["caffeinate", "-d", "-t", "60"], true],
+    [["nice", "-n", "5"], true],
+    [["nohup", "--"], true],
+    [["sandbox-exec", "-p", "(allow default)"], true],
+    [["sandbox-exec", "-D", "PROFILE"], true],
+    [["stdbuf", "-o", "L"], true],
+    [["time", "-p"], true],
+    [["flock", "--timeout=2", "/tmp/openclaw.lock"], true],
+    [["flock", "--close", "/tmp/openclaw.lock"], true],
+    [["flock", "--no-fork", "/tmp/openclaw.lock"], true],
+    [["flock", "--", "/tmp/openclaw.lock"], true],
+    [["timeout", "--signal=TERM", "5s"], true],
     ...(process.platform === "darwin"
-      ? [
-          {
-            argv: ["arch", "-arm64", "bash", "-lc", "echo hi"],
-            wrapper: "arch",
-            effectiveArgv: ["bash", "-lc", "echo hi"],
-            dispatchChainComplete: true,
-          },
-          {
-            argv: ["xcrun", "bash", "-lc", "echo hi"],
-            wrapper: "xcrun",
-            effectiveArgv: ["bash", "-lc", "echo hi"],
-            dispatchChainComplete: false,
-          },
-        ]
+      ? ([
+          [["arch", "-arm64"], true],
+          [["xcrun"], false],
+        ] satisfies Array<[[string, ...string[]], boolean]>)
       : []),
-  ])("keeps transparent wrapper handling in sync for %s", (fixture) => {
-    expectTransparentDispatchWrapperCase(fixture);
+  ])("keeps transparent wrapper handling in sync for %j", (prefix, dispatchChainComplete) => {
+    const argv = [...prefix, ...shellCommand];
+    const wrapper = prefix[0];
+    expect(isDispatchWrapperExecutable(wrapper)).toBe(true);
+    expect(unwrapKnownDispatchWrapperInvocation(argv)).toEqual({
+      kind: "unwrapped",
+      wrapper,
+      argv: shellCommand,
+    });
+    expect(resolveDispatchWrapperTrustPlan(argv)).toEqual({
+      argv: shellCommand,
+      wrappers: [wrapper],
+      wrapperInvocations: [{ wrapper, sourceArgv: argv }],
+      policyBlocked: false,
+      dispatchChainComplete,
+    });
   });
 
   test("unwraps transparent wrapper chains", () => {
@@ -412,54 +295,25 @@ describe("resolveDispatchWrapperTrustPlan", () => {
     });
   });
 
-  test("blocks semantic env usage even when it reaches a shell wrapper", () => {
-    expect(resolveDispatchWrapperTrustPlan(["env", "FOO=bar", "bash", "-lc", "echo hi"])).toEqual({
-      argv: ["env", "FOO=bar", "bash", "-lc", "echo hi"],
-      wrappers: ["env"],
-      wrapperInvocations: [
-        { wrapper: "env", sourceArgv: ["env", "FOO=bar", "bash", "-lc", "echo hi"] },
-      ],
-      policyBlocked: true,
-      dispatchChainComplete: false,
-      blockedWrapper: "env",
-    });
-  });
-
-  test("blocks script transcript wrappers even when the inner command is parseable", () => {
-    expect(
-      resolveDispatchWrapperTrustPlan(
-        ["script", "-q", "/tmp/session.log", "bash", "-lc", "echo hi"],
-        undefined,
-        "darwin",
-      ),
-    ).toEqual({
-      argv: ["script", "-q", "/tmp/session.log", "bash", "-lc", "echo hi"],
-      wrappers: ["script"],
-      wrapperInvocations: [
-        {
-          wrapper: "script",
-          sourceArgv: ["script", "-q", "/tmp/session.log", "bash", "-lc", "echo hi"],
-        },
-      ],
-      policyBlocked: true,
-      dispatchChainComplete: false,
-      blockedWrapper: "script",
-    });
-  });
-
-  test.each([
-    ["short output option", ["time", "-o", "/tmp/time.log", "bash", "-lc", "echo hi"]],
-    ["long output option", ["time", "--output=/tmp/time.log", "bash", "-lc", "echo hi"]],
-  ])("blocks GNU time file-output wrappers for %s", (_name, argv) => {
-    expect(resolveDispatchWrapperTrustPlan(argv)).toEqual({
-      argv,
-      wrappers: ["time"],
-      wrapperInvocations: [{ wrapper: "time", sourceArgv: argv }],
-      policyBlocked: true,
-      dispatchChainComplete: false,
-      blockedWrapper: "time",
-    });
-  });
+  test.each<[[string, ...string[]], NodeJS.Platform | undefined]>([
+    [["env", "FOO=bar", ...shellCommand], undefined],
+    [["script", "-q", "/tmp/session.log", ...shellCommand], "darwin"],
+    [["time", "-o", "/tmp/time.log", ...shellCommand], undefined],
+    [["time", "--output=/tmp/time.log", ...shellCommand], undefined],
+  ])(
+    "blocks semantic or file-output wrapper %j despite a parseable inner shell",
+    (argv, platform) => {
+      const wrapper = argv[0];
+      expect(resolveDispatchWrapperTrustPlan(argv, undefined, platform)).toEqual({
+        argv,
+        wrappers: [wrapper],
+        wrapperInvocations: [{ wrapper, sourceArgv: argv }],
+        policyBlocked: true,
+        dispatchChainComplete: false,
+        blockedWrapper: wrapper,
+      });
+    },
+  );
 
   test("blocks wrapper overflow beyond the configured depth", () => {
     expect(
@@ -530,116 +384,74 @@ describe("extractEnvAssignmentKeysFromDispatchWrappers", () => {
 });
 
 describe("extractShellWrapperCommand", () => {
-  test.each([
-    [["bash", "-lc", "echo hi"], "echo hi", { isWrapper: true, command: null }],
-    [["busybox", "sh", "-lc", "echo hi"], "echo hi", { isWrapper: true, command: null }],
-    [
-      ["env", "--", "pwsh", "-Command", "Get-Date"],
-      "Get-Date",
-      { isWrapper: true, command: "Get-Date" },
-    ],
+  test.each<[string[], string | null, boolean, string | null]>([
+    [["bash", "-lc", "echo hi"], "echo hi", true, null],
+    [["busybox", "sh", "-lc", "echo hi"], "echo hi", true, null],
+    [["env", "--", "pwsh", "-Command", "Get-Date"], "Get-Date", true, "Get-Date"],
     [
       ["pwsh", "-Command", "allowed.exe", ";", "unlisted.exe"],
       "allowed.exe ; unlisted.exe",
-      { isWrapper: true, command: "allowed.exe ; unlisted.exe" },
+      true,
+      "allowed.exe ; unlisted.exe",
     ],
-    [["cmd.exe", "-c", "echo", "hi"], "echo hi", { isWrapper: true, command: "echo hi" }],
-    [["cmd", "-k", "echo", "hi"], "echo hi", { isWrapper: true, command: "echo hi" }],
-    [["tcsh", "-c", "echo hi"], null, { isWrapper: false, command: null }],
-    [["nu", "--commands", "echo hi"], "echo hi", { isWrapper: true, command: "echo hi" }],
-    [["nu", "--execute", "echo hi"], "echo hi", { isWrapper: true, command: "echo hi" }],
-    [["nu", "--execute=echo Hi"], "echo Hi", { isWrapper: true, command: "echo Hi" }],
-    [["nu", "--commands=echo hi"], "echo hi", { isWrapper: true, command: "echo hi" }],
-    [["nu", "-e", "echo hi"], "echo hi", { isWrapper: true, command: "echo hi" }],
-    [["nu", "--interactive", "-e", "echo hi"], "echo hi", { isWrapper: true, command: null }],
-    [["nu", "--interactive", "--execute=echo hi"], "echo hi", { isWrapper: true, command: null }],
-    [["elvish", "-c", "echo hi"], "echo hi", { isWrapper: true, command: "echo hi" }],
-    [["pwsh", "-ec", "ZQBjAGgAbwA="], "ZQBjAGgAbwA=", { isWrapper: true, command: "ZQBjAGgAbwA=" }],
-    [
-      ["pwsh", "/NoProfile", "/ec", "ZQBjAGgAbwA="],
-      "ZQBjAGgAbwA=",
-      { isWrapper: true, command: "ZQBjAGgAbwA=" },
-    ],
+    [["cmd.exe", "-c", "echo", "hi"], "echo hi", true, "echo hi"],
+    [["cmd", "-k", "echo", "hi"], "echo hi", true, "echo hi"],
+    [["tcsh", "-c", "echo hi"], null, false, null],
+    [["nu", "--commands", "echo hi"], "echo hi", true, "echo hi"],
+    [["nu", "--execute", "echo hi"], "echo hi", true, "echo hi"],
+    [["nu", "--execute=echo Hi"], "echo Hi", true, "echo Hi"],
+    [["nu", "--commands=echo hi"], "echo hi", true, "echo hi"],
+    [["nu", "-e", "echo hi"], "echo hi", true, "echo hi"],
+    [["nu", "--interactive", "-e", "echo hi"], "echo hi", true, null],
+    [["nu", "--interactive", "--execute=echo hi"], "echo hi", true, null],
+    [["elvish", "-c", "echo hi"], "echo hi", true, "echo hi"],
+    [["pwsh", "-ec", "ZQBjAGgAbwA="], "ZQBjAGgAbwA=", true, "ZQBjAGgAbwA="],
+    [["pwsh", "/NoProfile", "/ec", "ZQBjAGgAbwA="], "ZQBjAGgAbwA=", true, "ZQBjAGgAbwA="],
     [
       ["pwsh", "-WorkingDir", "/tmp/project", "/ec", "ZQBjAGgAbwA="],
       "ZQBjAGgAbwA=",
-      { isWrapper: true, command: "ZQBjAGgAbwA=" },
+      true,
+      "ZQBjAGgAbwA=",
     ],
     [
       ["pwsh", "-if", "XML", "-EncodedCommand", "ZQBjAGgAbwA="],
       "ZQBjAGgAbwA=",
-      { isWrapper: true, command: "ZQBjAGgAbwA=" },
+      true,
+      "ZQBjAGgAbwA=",
     ],
     [
       ["pwsh", "-config", "SomeConfig", "-ec", "ZQBjAGgAbwA="],
       "ZQBjAGgAbwA=",
-      { isWrapper: true, command: "ZQBjAGgAbwA=" },
-    ],
-    [
-      ["pwsh", "-win", "hidden", "/ec", "ZQBjAGgAbwA="],
+      true,
       "ZQBjAGgAbwA=",
-      { isWrapper: true, command: "ZQBjAGgAbwA=" },
     ],
-    [
-      ["pwsh", "-ea", "stop", "-Command", "Get-Date"],
-      "Get-Date",
-      { isWrapper: true, command: "Get-Date" },
-    ],
-    [
-      ["pwsh", "-ep", "Bypass", "-Command", "Get-Date"],
-      "Get-Date",
-      { isWrapper: true, command: "Get-Date" },
-    ],
-    [
-      ["pwsh", "-cus", "pipe-name", "-ec", "ZQBjAGgAbwA="],
-      "ZQBjAGgAbwA=",
-      { isWrapper: true, command: "ZQBjAGgAbwA=" },
-    ],
-    [
-      ["pwsh", "-to", "token-value", "-Command", "Get-Date"],
-      "Get-Date",
-      { isWrapper: true, command: "Get-Date" },
-    ],
-    [
-      ["pwsh", "-utc", "1234", "-Command", "Get-Date"],
-      "Get-Date",
-      { isWrapper: true, command: "Get-Date" },
-    ],
-    [
-      ["pwsh", "-encodeda", "YQByAGcA", "-Command", "Get-Date"],
-      "Get-Date",
-      { isWrapper: true, command: "Get-Date" },
-    ],
-    [["pwsh", "-en", "ZQBjAGgAbwA="], "ZQBjAGgAbwA=", { isWrapper: true, command: "ZQBjAGgAbwA=" }],
-    [
-      ["pwsh", "-File", "script.ps1", "-ExtraArg"],
-      "script.ps1",
-      { isWrapper: true, command: "script.ps1" },
-    ],
+    [["pwsh", "-win", "hidden", "/ec", "ZQBjAGgAbwA="], "ZQBjAGgAbwA=", true, "ZQBjAGgAbwA="],
+    [["pwsh", "-ea", "stop", "-Command", "Get-Date"], "Get-Date", true, "Get-Date"],
+    [["pwsh", "-ep", "Bypass", "-Command", "Get-Date"], "Get-Date", true, "Get-Date"],
+    [["pwsh", "-cus", "pipe-name", "-ec", "ZQBjAGgAbwA="], "ZQBjAGgAbwA=", true, "ZQBjAGgAbwA="],
+    [["pwsh", "-to", "token-value", "-Command", "Get-Date"], "Get-Date", true, "Get-Date"],
+    [["pwsh", "-utc", "1234", "-Command", "Get-Date"], "Get-Date", true, "Get-Date"],
+    [["pwsh", "-encodeda", "YQByAGcA", "-Command", "Get-Date"], "Get-Date", true, "Get-Date"],
+    [["pwsh", "-en", "ZQBjAGgAbwA="], "ZQBjAGgAbwA=", true, "ZQBjAGgAbwA="],
+    [["pwsh", "-File", "script.ps1", "-ExtraArg"], "script.ps1", true, "script.ps1"],
     [
       ["pwsh", "--commandwithargs", "allowed.exe", ";", "unlisted.exe"],
       "allowed.exe ; unlisted.exe",
-      { isWrapper: true, command: "allowed.exe ; unlisted.exe" },
+      true,
+      "allowed.exe ; unlisted.exe",
     ],
     [
       ["pwsh", "-CommandWithArgs", "allowed.exe", ";", "unlisted.exe"],
       "allowed.exe ; unlisted.exe",
-      { isWrapper: true, command: "allowed.exe ; unlisted.exe" },
+      true,
+      "allowed.exe ; unlisted.exe",
     ],
-    [
-      ["pwsh", "-cwa", "Write-Output", "hi"],
-      "Write-Output hi",
-      { isWrapper: true, command: "Write-Output hi" },
-    ],
-    [
-      ["pwsh", "script.ps1", "-en", "VwByAGkAdABlAC0ATwB1AHQAcAB1AHQAIABoAGkA"],
-      null,
-      { isWrapper: false, command: null },
-    ],
-    [["bash", "script.sh"], null, { isWrapper: false, command: null }],
-  ])("extracts inline commands for %j", (argv, expectedInline, expectedCommand) => {
+    [["pwsh", "-cwa", "Write-Output", "hi"], "Write-Output hi", true, "Write-Output hi"],
+    [["pwsh", "script.ps1", "-en", "VwByAGkAdABlAC0ATwB1AHQAcAB1AHQAIABoAGkA"], null, false, null],
+    [["bash", "script.sh"], null, false, null],
+  ])("extracts inline commands for %j", (argv, expectedInline, isWrapper, command) => {
     expect(extractShellWrapperInlineCommand(argv)).toBe(expectedInline);
-    expect(extractShellWrapperCommand(argv)).toEqual(expectedCommand);
+    expect(extractShellWrapperCommand(argv)).toEqual({ isWrapper, command });
   });
 
   test("prefers an explicit raw command override when provided", () => {
