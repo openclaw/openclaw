@@ -4,6 +4,8 @@
  *   [--iterations 1000] [--files 100000] [--batch 100] [--allocation]
  *   [--snapshot <file>] [--scope single|per-write]
  *   [--source-dir <baseline-root>]
+ * The optional source root supplies both local-workspace-store.ts and
+ * local-workspace-publication.ts at their original repository-relative paths.
  * Add --reconcile --iterations 10 for real Git projection checkpoints; --files
  * creates that many files and --edits (default 1000) changes files each cycle.
  *
@@ -53,22 +55,26 @@ assert(
 );
 const gc = global.gc;
 assert(gc, "Run with --expose-gc");
-const storeFile = "src/gateway/worker-environments/local-workspace-store.ts";
+const ownerFiles = [
+  "src/gateway/worker-environments/local-workspace-store.ts",
+  "src/gateway/worker-environments/local-workspace-publication.ts",
+];
 const sourceRoot = fileURLToPath(new URL("../../", import.meta.url));
-const ownerSource = fs.readFileSync(
-  path.join(values["source-dir"] ?? sourceRoot, storeFile),
-  "utf8",
-);
-const ownerHash = createHash("sha256").update(ownerSource).digest("hex");
-const preparedSource = transformSync(ownerSource, {
-  loader: "ts",
-  format: "esm",
-  target: "esnext",
-}).code;
+const preparedSources = new Map<string, string>();
+const sources = ownerFiles.map((file) => {
+  const source = fs.readFileSync(path.join(values["source-dir"] ?? sourceRoot, file), "utf8");
+  preparedSources.set(
+    path.join(sourceRoot, file),
+    transformSync(source, { loader: "ts", format: "esm", target: "esnext" }).code,
+  );
+  return { file, hash: createHash("sha256").update(source).digest("hex") };
+});
+const ownerHash = createHash("sha256").update(JSON.stringify(sources)).digest("hex");
 const hooks = registerHooks({
   load(url, context, next) {
-    return url.startsWith("file:") && fileURLToPath(url) === path.join(sourceRoot, storeFile)
-      ? { format: "module", source: preparedSource, shortCircuit: true }
+    const source = url.startsWith("file:") ? preparedSources.get(fileURLToPath(url)) : undefined;
+    return source !== undefined
+      ? { format: "module", source, shortCircuit: true }
       : next(url, context);
   },
 });
@@ -234,6 +240,7 @@ try {
     console.log(
       JSON.stringify({
         ownerHash,
+        sources,
         iterations,
         files,
         edits,
@@ -327,6 +334,7 @@ try {
       JSON.stringify({
         iterations,
         ownerHash,
+        sources,
         files,
         scope: values.scope,
         cpuUs,
