@@ -711,23 +711,41 @@ The `Stale` workflow runs at 03:17, 09:17, 15:17 and 21:17 UTC.
 It replaces the old issue action, separate bug marker, inline backfill and global
 48-hour closed-issue locker.
 
-| Item                                      | Qualifying human inactivity | Full notice grace |
-| ----------------------------------------- | --------------------------- | ----------------- |
-| Unassigned ordinary issue or PR           | 7 days                      | 7 days            |
-| Contributor-assigned ordinary issue or PR | 14 days                     | 7 days            |
-| Bug issue, assigned or unassigned         | 30 days                     | 14 days to retest |
+| Item                                      | Eligibility                                                   | Full notice grace         |
+| ----------------------------------------- | ------------------------------------------------------------- | ------------------------- |
+| Unassigned ordinary issue or PR           | 7 days                                                        | 7 days                    |
+| Contributor-assigned ordinary issue or PR | 14 days                                                       | 7 days                    |
+| Bug issue, assigned or unassigned         | 30 days                                                       | 14 days to retest         |
+| Creation-age cap: issue / PR              | Older than 90 / 60 days from creation, regardless of activity | 7 days; 14 for bug issues |
 
-Creation age does not override recent human activity. Human comments, reviews,
-content edits, assignment changes and PR head changes restart the clock. Bot
-comments, review ratings and automation-only edits do not. Unknown history,
+Creation age overrides recent human activity once an issue is older than 90 days
+or a PR is older than 60 days. The age-cap lane uses its own authenticated notice
+and full grace; human comments neither cancel nor restart that grace. If an
+inactivity or age-cap notice is already pending, that lane keeps its own grace;
+Barnacle never posts both notices in one run.
+
+Only `pinned`, `no-stale`, `hold`, `in-progress`, `bad-barnacle`, the exact `security`
+label, `clawsweeper:source-repro`, `clawsweeper:queueable-fix`,
+`clawsweeper:fix-shape-clear`, locked items, and PR heads active within 14 days
+hold the age-cap lane. Confirmed bugs stay in the repair queue. A hold added during
+grace cancels that notice; after removal a fresh notice starts full grace. PR
+contributors can push new work; anyone can ask a maintainer to add `no-stale` or
+`hold`. Other labels (including `enhancement`, `bug`, P0/P1, `impact:security`,
+security-review and merge-risk labels), maintainer authors/assignees, executed CI
+and active ClawSweeper reviews do not exempt an item from the age cap. Unknown or
+changing observations still prevent unverified effects.
+
+For the inactivity lane, human comments, reviews, content edits, assignment changes
+and PR head changes restart the clock. Bot comments, review ratings and
+automation-only edits do not. Unknown history,
 ownership or head timing preserves the item. PR exact-head executed CI protection
 remains: a successful named CI gate, or a product check with a successful aggregate.
 
-Security/P0/P1, current maintainer authors/assignees, `no-stale`, `bad-barnacle`,
-pinned/hold/in-progress labels and active ClawSweeper work are protected. Issues
+Inactivity protections remain: security/P0/P1, current maintainer authors/assignees,
+`no-stale`, `bad-barnacle`, pinned/hold/in-progress labels and active ClawSweeper work. Issues
 with `enhancement` retain their existing exemption.
 Maintainers use `no-stale` for a durable hold, then explicitly remove it when work
-can resume. Known freeform maintainer holds must be normalized or adjudicated
+can resume. For inactivity migration, known freeform maintainer holds must be normalized or adjudicated
 before migration can close their items; silence is not release of a hold.
 
 Warnings name the full 7- or 14-day grace after the message and reopening/hold
@@ -740,8 +758,13 @@ An unanswered bug retest notice can end in `not_planned` administrative closure.
 It does not assert that the bug is fixed. Actual verification stays evidence-based;
 ClawSweeper receives the stale-bug label event, but its reviews cannot shorten
 Barnacle's grace. Closed issues stay unlocked so later retest replies remain possible.
+Age-cap closures also use `not_planned`, thank the contributor, and explain that
+closing keeps the queue current rather than claiming a fix. If it still matters,
+open a fresh issue against the current release or PR against current `main`, linking
+the closed item.
 The workflow audits recent Barnacle bug closures for authenticated current-policy
-notice/close receipts, human inactivity, the full grace and administrative reason.
+notice/close receipts, the full 14-day grace and administrative reason. It requires
+human inactivity for inactivity closures and creation age for age-cap closures.
 That audit does not reconstruct historical label or ownership changes; live
 admission checks remain responsible for those protections before closure.
 Separately authorized reason-driven responses, such as invalid or spam, are

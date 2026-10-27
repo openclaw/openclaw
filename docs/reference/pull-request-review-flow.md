@@ -114,11 +114,7 @@ to review production-path, provider-request, and failure/reconstruction evidence
 Redacting sensitive data is the contributor's responsibility. Remove secrets,
 tokens, private URLs, user data, and unrelated logs before posting proof.
 
-OpenClaw also uses separate stale automation. Unassigned issues and PRs can be
-marked stale after 14 days of inactivity, then closed after 7 more idle days.
-Assigned PRs are marked stale 27 days after opening, regardless of later
-updates, then closed after 7 stale days without activity. If an assigned PR is
-still active, coordinate with the maintainer working on it.
+Barnacle also owns [issue/PR inactivity and creation-age caps](/ci/scheduled-workflows#barnacle-inactivity-lifecycle), including the 90-day issue and 60-day PR age limits, notice grace and explicit holds.
 
 ## Maintainer review artifacts
 

@@ -23,8 +23,9 @@ import {
 
 const NOW = Date.parse("2026-10-14T12:00:00Z");
 const HEAD = "a".repeat(40);
-const OLD = "2026-07-01T00:00:00Z";
-const WARNING = "2026-08-01T00:00:00Z";
+// Keep inactivity fixtures below both creation-age caps.
+const OLD = "2026-08-20T00:00:00Z";
+const WARNING = "2026-09-20T00:00:00Z";
 const RECENT = "2026-10-14T10:00:00Z";
 const bot = { id: 257215752, type: "Bot", login: "openclaw-barnacle[bot]" };
 const human = { id: 123, type: "User", login: "contributor" };
@@ -72,7 +73,7 @@ function snapshot(number = 10) {
         head_branch: "feature",
         head_repository: { id: 55 },
         event: "pull_request_target",
-        created_at: "2026-07-02T00:00:00Z",
+        created_at: "2026-08-21T00:00:00Z",
       },
     ],
     edits: [],
@@ -137,7 +138,7 @@ function harness(seed = snapshot(), onComment) {
           writes.push("close");
           state.pr.state = value;
           state.pr.state_reason = state_reason;
-          state.pr.closed_at = new Date(NOW).toISOString();
+          state.pr.closed_at = new Date(options.now()).toISOString();
           return data(state.pr);
         },
         lock: async () => {
@@ -149,11 +150,11 @@ function harness(seed = snapshot(), onComment) {
         listEventsForTimeline: list("timeline", () => state.timeline),
         createComment: async ({ body }) => {
           writes.push(
-            body === closeMessage || body.startsWith("Closing as not planned after")
+            body === closeMessage || body.includes("<!-- barnacle-close:v2 ")
               ? "close-comment"
               : "warning",
           );
-          const created = comment(nextId++, body, new Date(NOW).toISOString());
+          const created = comment(nextId++, body, new Date(options.now()).toISOString());
           state.comments.push(created);
           onComment?.(state);
           return data(created);
@@ -265,6 +266,9 @@ function batchHarness(...members) {
         if (group === "pulls" && method === "get") {
           active = members.find((member) => member.state.pr.number === params.pull_number);
         }
+        if (group === "issues" && method === "get") {
+          active = members.find((member) => member.state.pr.number === params.issue_number);
+        }
         return active.options.github.rest[group][method](params);
       };
     }
@@ -291,6 +295,230 @@ function issueSnapshot({ assigned = false, bug = false } = {}) {
   value.comments = [];
   return value;
 }
+
+describe("Barnacle creation-age cap", () => {
+  it("uses strict creation-age limits and the 14-day head activity boundary", () => {
+    for (const pr of [false, true]) {
+      const seed = pr ? snapshot() : issueSnapshot();
+      seed.comments = [comment(1, "Active discussion", RECENT, human)];
+      seed.pr.created_at = new Date(NOW - (pr ? 60 : 90) * 86_400_000).toISOString();
+      assert.notEqual(evaluateItem(seed, NOW).action, "warn");
+      assert.equal(evaluateItem(seed, NOW + 1).lane, "age-cap");
+      assert.equal(evaluateItem(seed, NOW + 1).action, "warn");
+    }
+    const seed = snapshot();
+    seed.pr.created_at = "2026-01-01T00:00:00Z";
+    seed.comments = [];
+    seed.workflowRuns[0].created_at = new Date(NOW - 14 * 86_400_000).toISOString();
+    assert.equal(evaluateItem(seed, NOW - 1).reason, "active-head");
+    assert.equal(evaluateItem(seed, NOW).action, "warn");
+  });
+
+  it("overrides inactivity exemptions while retaining observation safeguards", () => {
+    const seed = snapshot();
+    seed.pr.created_at = "2026-01-01T00:00:00Z";
+    seed.pr.author_association = "MEMBER";
+    seed.ownershipProtection = "maintainer-ownership";
+    seed.pr.labels = [
+      "enhancement",
+      "bug",
+      "P0",
+      "P1",
+      "impact:security",
+      "clawsweeper:needs-security-review",
+      "maintainer",
+      "status: 👀 ready for maintainer look",
+      "merge-risk: 🚨 security-boundary",
+    ].map((name) => ({ name }));
+    seed.statuses = [{ context: "openclaw/ci-gate", state: "success" }];
+    seed.comments = [
+      comment(1, "Human reply", RECENT, human),
+      {
+        ...comment(2, `<!-- clawsweeper-security:security-sensitive item=10 sha=${HEAD} -->`),
+        user: { id: 274271284, type: "Bot" },
+        performed_via_github_app: { id: 3306130 },
+      },
+    ];
+    assert.equal(evaluateItem(seed, NOW).action, "warn");
+    seed.activityProtection = "unknown-edit-history";
+    assert.equal(evaluateItem(seed, NOW).reason, "unknown-edit-history");
+    seed.activityProtection = null;
+    seed.workflowRuns = [];
+    assert.equal(evaluateItem(seed, NOW).reason, "unknown-head-timing");
+  });
+
+  for (const kind of ["enhancement", "pull-request", "bug"]) {
+    it(`notices and closes an active over-age ${kind} after its full grace`, async () => {
+      const pr = kind === "pull-request";
+      const days = pr ? 60 : 90;
+      const grace = kind === "bug" ? 14 : 7;
+      const seed = pr ? snapshot() : issueSnapshot({ bug: kind === "bug" });
+      seed.pr.created_at = new Date(NOW - (days + 1) * 86_400_000).toISOString();
+      seed.comments = [comment(1, "Still relevant", RECENT, human)];
+      if (kind === "enhancement") {
+        seed.pr.labels = [{ name: "enhancement" }];
+      }
+      if (pr) {
+        seed.pr.author_association = "MEMBER";
+        seed.pr.labels = [{ name: "P1" }];
+      }
+      const h = harness(seed);
+      h.options.github.rest.repos.getCollaboratorPermissionLevel = async () => ({
+        data: { permission: "write", role_name: "write" },
+      });
+      h.options.github.rest.issues.listForRepo = async () => ({ data: [h.state.pr] });
+      const first = await runStaleLifecycle({ ...h.options, targets: [], dryRun: false });
+      assert.equal(first.decisions[0].lane, "age-cap");
+      assert.deepEqual(h.writes, ["warning", "label"]);
+      assert.match(h.state.comments.at(-1).body, new RegExp(`older than ${days} days`));
+      assert.match(h.state.comments.at(-1).body, /lane=age-cap/);
+      h.state.comments.push(
+        comment(999, "Still working", new Date(NOW + 1000).toISOString(), human),
+      );
+      h.options.now = () => NOW + grace * 86_400_000 - 1;
+      await runStaleLifecycle({ ...h.options, dryRun: false });
+      assert.deepEqual(h.writes, ["warning", "label"]);
+      h.options.now = () => NOW + grace * 86_400_000;
+      const closed = await runStaleLifecycle({ ...h.options, dryRun: false });
+      assert.equal(closed.closed, 1);
+      assert.deepEqual(h.writes, ["warning", "label", "close-comment", "close"]);
+      assert.match(h.state.comments.at(-1).body, /not a claim that the problem is fixed/);
+      assert.match(h.state.comments.at(-1).body, /lane=age-cap/);
+      if (!pr) {
+        assert.equal(h.state.pr.state_reason, "not_planned");
+      }
+      if (kind === "bug") {
+        h.state.timeline.push({ event: "closed", actor: bot, created_at: h.state.pr.closed_at });
+        assert.deepEqual((await auditRecentBugClosures(h.options)).violations, []);
+        h.state.comments[1].created_at = h.state.comments[1].updated_at = new Date(
+          NOW + 1,
+        ).toISOString();
+        await assert.rejects(auditRecentBugClosures(h.options), /premature/);
+      }
+    });
+  }
+
+  for (const hold of [
+    "pinned",
+    "no-stale",
+    "hold",
+    "in-progress",
+    "bad-barnacle",
+    "security",
+    "clawsweeper:source-repro",
+    "clawsweeper:queueable-fix",
+    "clawsweeper:fix-shape-clear",
+    "locked",
+  ]) {
+    it(`leaves over-age issues alone with ${hold}`, async () => {
+      const seed = issueSnapshot();
+      seed.pr.created_at = "2026-01-01T00:00:00Z";
+      if (hold === "locked") {
+        seed.pr.locked = true;
+      } else {
+        seed.pr.labels = [{ name: hold }];
+      }
+      const h = harness(seed);
+      await runStaleLifecycle({ ...h.options, dryRun: false });
+      assert.deepEqual(h.writes, []);
+    });
+  }
+
+  it("cancels age-cap grace on hold and starts a full grace after removal", async () => {
+    const seed = issueSnapshot();
+    seed.pr.created_at = "2026-01-01T00:00:00Z";
+    const h = harness(seed);
+    await runStaleLifecycle({ ...h.options, dryRun: false });
+    h.state.pr.labels.push({ name: "hold" });
+    h.state.timeline.push({
+      event: "labeled",
+      label: { name: "hold" },
+      actor: human,
+      created_at: new Date(NOW + 86_400_000).toISOString(),
+    });
+    h.options.now = () => NOW + 7 * 86_400_000;
+    await runStaleLifecycle({ ...h.options, dryRun: false });
+    assert.deepEqual(h.writes, ["warning", "label"]);
+    h.state.pr.labels = [];
+    await runStaleLifecycle({ ...h.options, dryRun: false });
+    assert.deepEqual(h.writes, ["warning", "label", "warning", "label"]);
+    assert.equal(h.state.pr.state, "open");
+  });
+
+  it("holds a PR with a head push three days ago, including after notice", async () => {
+    const seed = snapshot();
+    seed.pr.created_at = "2026-01-01T00:00:00Z";
+    seed.pr.author_association = "MEMBER";
+    seed.comments = [];
+    const h = harness(seed);
+    await runStaleLifecycle({ ...h.options, dryRun: false });
+    h.options.now = () => NOW + 7 * 86_400_000;
+    h.state.timeline.push({
+      event: "head_ref_force_pushed",
+      actor: human,
+      created_at: new Date(h.options.now() - 3 * 86_400_000).toISOString(),
+    });
+    await runStaleLifecycle({ ...h.options, dryRun: false });
+    assert.deepEqual(h.writes, ["warning", "label"]);
+    seed.timeline = h.state.timeline;
+    const active = harness(seed);
+    active.options.now = h.options.now;
+    await runStaleLifecycle({ ...active.options, dryRun: false });
+    assert.deepEqual(active.writes, []);
+  });
+
+  it("keeps pending inactivity grace when the creation-age cap is crossed", async () => {
+    const seed = issueSnapshot({ bug: true });
+    seed.pr.created_at = new Date(NOW - 91 * 86_400_000).toISOString();
+    seed.comments = [comment(1, noticeBody(seed.pr), new Date(NOW - 2 * 86_400_000).toISOString())];
+    const h = harness(seed);
+    await runStaleLifecycle({ ...h.options, dryRun: false });
+    assert.deepEqual(h.writes, []);
+    h.options.now = () => NOW + 12 * 86_400_000;
+    assert.equal((await runStaleLifecycle({ ...h.options, dryRun: false })).closed, 1);
+    assert.doesNotMatch(h.state.comments.at(-1).body, /lane=age-cap/);
+  });
+
+  it("shares the close cap across age-cap issues, PRs and inactivity, with no dry-run writes", async () => {
+    const issue = issueSnapshot();
+    issue.pr.number = 9;
+    issue.pr.created_at = "2026-01-01T00:00:00Z";
+    const pr = snapshot(10);
+    pr.pr.created_at = "2026-01-01T00:00:00Z";
+    pr.comments = [];
+    const members = [harness(issue), harness(pr), harness(snapshot(11))];
+    for (const h of members.slice(0, 2)) {
+      await runStaleLifecycle({ ...h.options, dryRun: false });
+      h.writes.length = 0;
+    }
+    const options = {
+      ...batchHarness(...members),
+      includeIssues: true,
+      includePrs: true,
+      targets: [9, 10, 11],
+      targetKind: "auto",
+      maxClosures: 2,
+      now: () => NOW + 7 * 86_400_000,
+    };
+    const dry = await runStaleLifecycle({ ...options, dryRun: true });
+    assert.deepEqual(
+      dry.decisions.map((d) => d.action),
+      ["close", "close", "close"],
+    );
+    assert.deepEqual(
+      dry.decisions.map((d) => d.lane),
+      ["age-cap", "age-cap", "unassigned"],
+    );
+    assert.ok(members.every((h) => h.writes.length === 0));
+    const live = await runStaleLifecycle(options);
+    assert.equal(live.closed, 2);
+    assert.equal(live.remainingClosures, 0);
+    assert.deepEqual(
+      members.map((h) => h.writes),
+      [["close-comment", "close"], ["close-comment", "close"], []],
+    );
+  });
+});
 
 describe("Barnacle unified lifecycle", () => {
   it("executes the pre-token tests with exactly the workflow sparse paths", async () => {
@@ -1740,11 +1968,14 @@ describe("Barnacle PR inactivity", () => {
     });
   }
 
-  for (const kind of ["pull-request", "issue", "bug"]) {
+  for (const kind of ["pull-request", "issue", "bug", "age-cap"]) {
     for (const mutation of ["remove", "body-edit", "history-edit", "replace"]) {
-      it(`revalidates the selected ${kind} inactivity receipt after final observation ${mutation}`, async () => {
+      it(`revalidates the selected ${kind} receipt after final observation ${mutation}`, async () => {
         const seed = kind === "pull-request" ? snapshot() : issueSnapshot({ bug: kind === "bug" });
-        seed.comments = [comment(1, noticeBody(seed.pr))];
+        if (kind === "age-cap") {
+          seed.pr.created_at = "2026-01-01T00:00:00Z";
+        }
+        seed.comments = [comment(1, noticeBody(seed.pr, kind === "age-cap" ? kind : undefined))];
         const h = harness(seed);
         let armed = false;
         const getComment = h.options.github.rest.issues.getComment;

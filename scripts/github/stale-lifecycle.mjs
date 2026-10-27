@@ -1,4 +1,4 @@
-// Barnacle owns PR inactivity. GitHub updated_at also changes when review bots work.
+// Barnacle owns issue/PR inactivity and creation-age caps; updated_at includes bot work.
 import { readFile, writeFile, mkdir } from "node:fs/promises";
 import { dirname } from "node:path";
 import { hasVerifiedResponseClosure } from "./barnacle-auto-response.mjs";
@@ -15,6 +15,17 @@ import {
 } from "./barnacle-state.mjs";
 
 const DAY = 86_400_000;
+const AGE_CAP_HOLDS = new Set([
+  "pinned",
+  "no-stale",
+  "hold",
+  "in-progress",
+  "bad-barnacle",
+  "security",
+  "clawsweeper:source-repro",
+  "clawsweeper:queueable-fix",
+  "clawsweeper:fix-shape-clear",
+]);
 const CI_GATES = new Set(["openclaw/ci-gate", "CI gate", "ci-gate"]);
 const PRODUCT_CHECKS = new Set(["checks-node-core", "check", "build-smoke", "build-artifacts"]);
 const WARN =
@@ -23,8 +34,11 @@ const ASSIGNED_WARN =
   "This assigned pull request has been automatically marked as stale after being open for 27 days.\nPlease add updates or it will be closed.";
 export const closeMessage =
   "Closing due to inactivity.\nIf you believe this PR should be revived, post in #clawtributors on Discord to talk to a maintainer.\nThat channel is the escape hatch for high-quality PRs that get auto-closed.\n";
-export function policyFor(item) {
+export function policyFor(item, lane) {
   const bug = !item.head && labelsOf(item).includes("bug");
+  if (lane === "age-cap") {
+    return { lane, ageDays: item.head ? 60 : 90, graceDays: bug ? 14 : 7 };
+  }
   return {
     lane: bug ? "bug" : item.assignees?.length ? "assigned" : "unassigned",
     inactiveDays: bug ? 30 : item.assignees?.length ? 14 : 7,
@@ -32,9 +46,17 @@ export function policyFor(item) {
   };
 }
 
-export function noticeBody(item) {
-  const policy = policyFor(item);
+export function noticeBody(item, lane) {
+  const policy = policyFor(item, lane);
   const kind = item.head ? "pull-request" : "issue";
+  if (policy.lane === "age-cap") {
+    return [
+      `This ${item.head ? "pull request" : "issue"} is older than ${policy.ageDays} days. OpenClaw moves fast, so Barnacle will close it as not planned ${policy.graceDays} days after this message was posted to keep the queue current.`,
+      `This is not a claim that the problem is fixed. ${item.head ? "Push new work to keep this PR active, or ask" : "Ask"} a maintainer to add no-stale or hold to keep it open. Human comments do not restart this grace.`,
+      `<!-- barnacle-stale:v2 item=${item.number} kind=${kind} lane=age-cap head=${item.head?.sha ?? "none"} -->`,
+      "",
+    ].join("\n");
+  }
   return [
     policy.lane === "bug"
       ? "This bug report has had no qualifying human activity for 30 days. Please retest on the current release and share the result."
@@ -46,7 +68,10 @@ export function noticeBody(item) {
   ].join("\n");
 }
 
-export function closeBody(item, warning, activity) {
+export function closeBody(item, warning, activity, lane) {
+  if (lane === "age-cap") {
+    return `Thanks for contributing to OpenClaw. OpenClaw moves fast, and ${item.head ? "pull requests" : "issues"} older than ${policyFor(item, lane).ageDays} days are closed as not planned after notice and grace to keep the queue current. This is not a claim that the problem is fixed. Please open a fresh ${item.head ? "PR against current main" : "issue against the current release"}, linking this one, if it still matters.\n\n<!-- barnacle-close:v2 item=${item.number} lane=age-cap warning=${warning} -->\n`;
+  }
   return item.head
     ? closeMessage
     : `Closing as not planned after the inactivity notice and full retest/update grace. This is an administrative close; the reported problem has not been confirmed fixed. Please reopen with current reproduction details if it still occurs.\n\n<!-- barnacle-close:v2 item=${item.number} warning=${warning} activity=${new Date(activity).toISOString()} -->\n`;
@@ -57,19 +82,35 @@ const isWarning = (comment) =>
     comment.body.split("\n\n<!-- barnacle-stale-pr:v1")[0].trimEnd(),
   ) || comment.body.includes("<!-- barnacle-stale:v2 ");
 const warningHead = (comment) =>
-  /<!-- barnacle-stale(?:-pr:v1|:v2 item=\d+ kind=pull-request lane=[a-z]+) head=([0-9a-f]{40}) -->/.exec(
+  /<!-- barnacle-stale(?:-pr:v1|:v2 item=\d+ kind=pull-request lane=[a-z-]+) head=([0-9a-f]{40}) -->/.exec(
     comment.body,
   )?.[1];
 
-function latestWarning(snapshot) {
+function latestWarning(snapshot, lane) {
   return snapshot.comments
-    .filter((comment) => trustedBarnacle(comment) && comment.body === noticeBody(snapshot.pr))
+    .filter((comment) => trustedBarnacle(comment) && comment.body === noticeBody(snapshot.pr, lane))
     .toSorted((a, b) => time(b.created_at) - time(a.created_at) || b.id - a.id)[0];
 }
 
 const warningWasEdited = (snapshot, comment) =>
   comment.created_at !== comment.updated_at ||
   snapshot.edits?.some((edit) => edit.commentId === comment.id);
+
+const overAgeCap = (item, now) =>
+  now > time(item.created_at) + policyFor(item, "age-cap").ageDays * DAY;
+const ageCapProtection = (item) =>
+  item.state !== "open" || item.merged || item.locked
+    ? "closed-or-merged"
+    : labelsOf(item).some((label) => AGE_CAP_HOLDS.has(label))
+      ? "protected-label"
+      : null;
+const ageCapHoldAfter = (snapshot, warning) =>
+  snapshot.timeline.some(
+    (event) =>
+      time(event.created_at) >= time(warning.created_at) &&
+      (event.event === "locked" ||
+        (event.event === "labeled" && AGE_CAP_HOLDS.has(event.label?.name?.toLowerCase()))),
+  );
 
 function headWitnesses(snapshot) {
   const { pr } = snapshot;
@@ -122,11 +163,12 @@ export function evaluateItem(snapshot, now = Date.now(), ignoredComment = null) 
   const { pr, comments, runs } = snapshot;
   const head = pr.head?.sha ?? null;
   const kind = head ? "pull-request" : "issue";
+  let policy = policyFor(pr);
   const result = (action, reason, extra = {}) => ({
     number: pr.number,
     kind,
     head,
-    lane: policyFor(pr).lane,
+    lane: policy.lane,
     action,
     reason,
     ...extra,
@@ -135,55 +177,85 @@ export function evaluateItem(snapshot, now = Date.now(), ignoredComment = null) 
     return result("preserve", "changed-during-observation");
   }
   const protectedReason =
-    cheapProtection(pr) ||
-    snapshot.ownershipProtection ||
-    securityProtection(comments, pr) ||
-    snapshot.historyProtection ||
-    snapshot.activityProtection;
-  if (protectedReason) {
-    return result("preserve", protectedReason);
-  }
+    cheapProtection(pr) || snapshot.ownershipProtection || securityProtection(comments, pr);
   const latestStatuses = new Map();
   for (const status of snapshot.statuses ?? []) {
     if (!latestStatuses.has(status.context)) {
       latestStatuses.set(status.context, status);
     }
   }
-  if (
-    [...latestStatuses.values()].some(
-      (status) => CI_GATES.has(status.context) && status.state === "success",
-    )
-  ) {
-    return result("preserve", "executed-ci-proof");
-  }
+  const ciProof = [...latestStatuses.values()].some(
+    (status) => CI_GATES.has(status.context) && status.state === "success",
+  );
   // A named exact-head gate can be green while old, unrelated checks leave the rollup red.
-  if (
-    (runs ?? []).some(
-      (run) =>
-        run.head_sha === head &&
-        run.status === "completed" &&
-        run.conclusion === "success" &&
-        (CI_GATES.has(run.name) ||
-          (snapshot.checkRollup === "SUCCESS" && PRODUCT_CHECKS.has(run.name))),
-    )
-  ) {
-    return result("preserve", "executed-ci-proof");
-  }
-  const warning = latestWarning(snapshot);
+  const checkProof = (runs ?? []).some(
+    (run) =>
+      run.head_sha === head &&
+      run.status === "completed" &&
+      run.conclusion === "success" &&
+      (CI_GATES.has(run.name) ||
+        (snapshot.checkRollup === "SUCCESS" && PRODUCT_CHECKS.has(run.name))),
+  );
+  let warning = latestWarning(snapshot);
   const witnesses = head ? headWitnesses(snapshot) : [];
   const activity = activityAt(snapshot, ignoredComment);
+  const ageWarning = latestWarning(snapshot, "age-cap");
+  const pendingAge =
+    ageWarning && !warningWasEdited(snapshot, ageWarning) && !ageCapHoldAfter(snapshot, ageWarning);
+  const pendingInactivity =
+    warning && !warningWasEdited(snapshot, warning) && activity < time(warning.created_at);
+  // Keep the first pending lane's grace; a cancelled inactivity notice cannot
+  // shelter an over-age item from the creation-age policy.
+  if (
+    overAgeCap(pr, now) &&
+    (protectedReason ||
+      ciProof ||
+      checkProof ||
+      !pendingInactivity ||
+      (pendingAge && time(ageWarning.created_at) < time(warning.created_at)))
+  ) {
+    policy = policyFor(pr, "age-cap");
+    warning = ageWarning && !ageCapHoldAfter(snapshot, ageWarning) ? ageWarning : undefined;
+  }
+  const ageCap = policy.lane === "age-cap";
+  const protection =
+    (ageCap ? ageCapProtection(pr) : protectedReason) ||
+    snapshot.historyProtection ||
+    snapshot.activityProtection;
+  if (protection) {
+    return result("preserve", protection);
+  }
+  if (!ageCap && (ciProof || checkProof)) {
+    return result("preserve", "executed-ci-proof");
+  }
+  if (ageCap && head) {
+    const earliest = witnesses.toSorted((a, b) => a.at - b.at)[0];
+    if (!earliest) {
+      return result("preserve", "unknown-head-timing");
+    }
+    const pushedAt = Math.max(
+      earliest.at,
+      ...snapshot.timeline
+        .filter((event) => event.event === "head_ref_force_pushed")
+        .map((event) => time(event.created_at)),
+    );
+    if (now < pushedAt + 14 * DAY) {
+      return result("preserve", "active-head");
+    }
+  }
   const ownClose =
     warning &&
     comments.findLast(
       (comment) =>
         trustedBarnacle(comment) &&
-        comment.body === closeBody(pr, warning.id, activity) &&
+        comment.body === closeBody(pr, warning.id, activity, policy.lane) &&
         time(comment.created_at) >= time(warning.created_at) &&
         !warningWasEdited(snapshot, comment),
     );
-  const policy = policyFor(pr);
-  const eligibleAt = activity + policy.inactiveDays * DAY;
-  if (now < eligibleAt) {
+  const eligibleAt = ageCap
+    ? time(pr.created_at) + policy.ageDays * DAY
+    : activity + policy.inactiveDays * DAY;
+  if (!ageCap && now < eligibleAt) {
     return result(
       labelsOf(pr).includes("stale") ? "unmark" : "preserve",
       "human-or-head-activity",
@@ -197,7 +269,7 @@ export function evaluateItem(snapshot, now = Date.now(), ignoredComment = null) 
     return result("warn", warning ? "edited-warning" : "initial-warning");
   }
   const warningAt = time(warning.created_at);
-  if (activity >= warningAt) {
+  if (!ageCap && activity >= warningAt) {
     return result("warn", "activity-after-warning");
   }
   const closeAt = warningAt + policy.graceDays * DAY;
@@ -259,14 +331,19 @@ export async function auditRecentBugClosures({ github, context, now = Date.now, 
     if (hasVerifiedResponseClosure(snapshot, event)) {
       continue;
     }
-    const warning = latestWarning(past);
+    const inactivityWarning = latestWarning(past);
+    const ageWarning = latestWarning(past, "age-cap");
+    const warning = [inactivityWarning, ageWarning]
+      .filter(Boolean)
+      .toSorted((a, b) => time(b.created_at) - time(a.created_at) || b.id - a.id)[0];
+    const ageCap = warning && warning === ageWarning;
     const activity = humanActivityAt(past);
     const receipt =
       warning &&
       past.comments.findLast(
         (comment) =>
           trustedBarnacle(comment) &&
-          comment.body === closeBody(item, warning.id, activity) &&
+          comment.body === closeBody(item, warning.id, activity, ageCap ? "age-cap" : undefined) &&
           time(comment.created_at) >= time(warning.created_at) &&
           !warningWasEdited(snapshot, comment),
       );
@@ -277,7 +354,9 @@ export async function auditRecentBugClosures({ github, context, now = Date.now, 
       !warning ||
       warningWasEdited(snapshot, warning) ||
       !receipt ||
-      time(warning.created_at) < activity + 30 * DAY ||
+      (ageCap
+        ? time(warning.created_at) <= time(item.created_at) + 90 * DAY
+        : time(warning.created_at) < activity + 30 * DAY) ||
       at < time(warning.created_at) + 14 * DAY ||
       policyFor(item).lane !== "bug"
     ) {
@@ -339,7 +418,7 @@ async function mutate(github, checksGithub, mutationGithub, expectedAppId, io, d
     if (decision.action === "unmark") {
       await write(mutationGithub.rest.issues.removeLabel, { ...base, name: "stale" });
     } else if (decision.action === "warn") {
-      const body = noticeBody(fresh.pr);
+      const body = noticeBody(fresh.pr, checked.lane);
       const { data: comment } = await write(mutationGithub.rest.issues.createComment, {
         ...base,
         body,
@@ -380,7 +459,7 @@ async function mutate(github, checksGithub, mutationGithub, expectedAppId, io, d
       if (!commentId) {
         const { data: comment } = await write(mutationGithub.rest.issues.createComment, {
           ...base,
-          body: closeBody(fresh.pr, checked.warning, checked.activityAt),
+          body: closeBody(fresh.pr, checked.warning, checked.activityAt, checked.lane),
         });
         commentId = comment.id;
       }
@@ -391,7 +470,7 @@ async function mutate(github, checksGithub, mutationGithub, expectedAppId, io, d
       if (
         !validComment(
           stored,
-          closeBody(fresh.pr, checked.warning, checked.activityAt),
+          closeBody(fresh.pr, checked.warning, checked.activityAt, checked.lane),
           Boolean(checked.closeComment),
         )
       ) {
@@ -552,7 +631,8 @@ export async function runStaleLifecycle({
     ? items
     : items.filter(
         (pr) =>
-          !cheapProtection(pr) && now() >= time(pr.created_at) + policyFor(pr).inactiveDays * DAY,
+          (!ageCapProtection(pr) && overAgeCap(pr, now())) ||
+          (!cheapProtection(pr) && now() >= time(pr.created_at) + policyFor(pr).inactiveDays * DAY),
       );
   const slice = selectScanSlice(candidates, checkpoint, exact ? targets.length : detailLimit);
   const decisions = [];
