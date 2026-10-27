@@ -7,6 +7,7 @@
  */
 import { Session } from "node:inspector/promises";
 import { cpus, loadavg } from "node:os";
+import type { PreparedPairedComputerUse } from "../../src/agents/computer-use-node-capabilities.js";
 import { createComputerTool } from "../../src/agents/tools/computer-tool.js";
 import { COMPUTER_USE_V2_ACTION_NAMES } from "../../src/plugins/computer-use-contract.js";
 
@@ -14,19 +15,19 @@ const iterations = Number(process.argv[2] ?? 5000);
 if (!Number.isSafeInteger(iterations) || iterations < 1) {
   throw new Error("iterations must be a positive integer");
 }
-const fixtures = Array.from({ length: 40 }, (_, index) => {
+const fixtures = Array.from({ length: 40 }, (_, index): PreparedPairedComputerUse => {
   const actions = COMPUTER_USE_V2_ACTION_NAMES.filter(
     (_action, action) => (action + index) % 3 !== 0,
   );
   return {
     actions,
     guidanceCapabilities: {
-      contractVersion: 2 as const,
+      contractVersion: 2,
       provider: { id: "fixture", label: "Fixture", generation: `generation-${index}` },
       actions,
-      targets: ["screen", "window", "element", "browser"] as const,
-      deliveryModes: ["background", "foreground"] as const,
-      observations: ["image", "accessibility", "browser"] as const,
+      targets: ["screen", "window", "element", "browser"],
+      deliveryModes: ["background", "foreground"],
+      observations: ["image", "accessibility", "browser"],
       features: { recording: true, agentCursor: true, multiDisplay: true },
     },
   };

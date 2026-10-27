@@ -7,6 +7,7 @@ import { deriveSessionMetaPatch } from "../config/sessions/metadata.js";
 import { patchSessionEntryCore, replaceSessionEntry } from "../config/sessions/session-accessor.js";
 import { resolveChatSendCallerContext } from "../gateway/server-methods/gateway-client-identity.js";
 import { createSessionMutationTestClient } from "../gateway/server-methods/sessions-mutations.owner.test-support.js";
+import type { ComputerUseCapabilityDescriptor } from "../plugins/computer-use-contract.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
 import { inspectOpenDictionaryToolSchemas } from "../plugins/tool-schema-diagnostics.js";
 import { createSessionConversationTestRegistry } from "../test-utils/session-conversation-registry.js";
@@ -68,13 +69,13 @@ it("keeps the computer definition across connected desktop capabilities and avai
     surface(createOpenClawCodingTools({ ...userTurn, pairedNodeComputerUse }));
   const expected = render();
   for (const actions of [["screenshot"], ["list_windows", "screenshot"]] as const) {
-    const computerUse = {
-      contractVersion: 2 as const,
+    const computerUse: ComputerUseCapabilityDescriptor = {
+      contractVersion: 2,
       provider: { id: "fixture", label: "Fixture", generation: "generation-2" },
       actions: [...actions],
-      targets: ["screen"] as const,
-      deliveryModes: ["foreground"] as const,
-      observations: ["image"] as const,
+      targets: ["screen"],
+      deliveryModes: ["foreground"],
+      observations: ["image"],
       features: { recording: false, agentCursor: false, multiDisplay: true },
     };
     for (const available of [false, true]) {
