@@ -10,6 +10,7 @@ import { createOperationalRunInstanceRef } from "../../agents/admitted-run-conte
 import { runWithAgentCommandRecoveryOwner } from "../../agents/agent-command-recovery-owner.js";
 import * as runs from "../../agents/embedded-agent-runner/runs.js";
 import { createEmbeddedRunHandle } from "../../agents/embedded-agent-runner/runs.test-support.js";
+import { createEnteredGate } from "../../agents/entered-gate.test-support.js";
 import {
   captureRequesterOrigin,
   hasSameRequesterOrigin,
@@ -182,14 +183,12 @@ it("refuses cross-requester steering by default and admits only an explicit fres
       total: 1,
       items: [{ runId: fixture.params.idempotencyKey, state: "cancelled" }],
     });
-    const duplicate = await fixture.send();
-    expect(duplicate.mock.calls[0]).toMatchObject({
+    expect((await fixture.send()).mock.calls[0]).toMatchObject({
       0: false,
       1: { status: "error", summary: refusal },
     });
     fixture.context.dedupe.clear();
-    const durableRetry = await fixture.send();
-    expect(durableRetry.mock.calls[0]).toMatchObject({
+    expect((await fixture.send()).mock.calls[0]).toMatchObject({
       0: true,
       1: { status: "ok", runId: fixture.params.idempotencyKey },
       3: { cached: true },
@@ -268,8 +267,7 @@ it("refuses cross-requester steering by default and admits only an explicit fres
     fixture.params.message = "Raw follow-up awaiting approval.";
     fixture.context.dedupe.clear();
     rotateAgentEventLifecycleGeneration();
-    const afterRestart = await fixture.send();
-    expect(afterRestart.mock.calls[0]).toMatchObject({
+    expect((await fixture.send()).mock.calls[0]).toMatchObject({
       0: true,
       1: { status: "ok", runId: fixture.params.idempotencyKey },
       3: { cached: true },
@@ -324,8 +322,7 @@ it.for([false, true])(
     const queued = createDeferred();
     const dispatched = createDeferred();
     const settled = createDeferred();
-    const mediaCaptured = createDeferred();
-    const releaseMedia = createDeferred();
+    const mediaGate = createEnteredGate();
     const stopped = createDeferred();
     let dispatchReturned = false;
     let mediaHeld = false;
@@ -337,8 +334,7 @@ it.for([false, true])(
             const media = await captureMedia(params);
             if (dispatchReturned && !mediaHeld && params.sessionKey === scope.sessionKey) {
               mediaHeld = true;
-              mediaCaptured.resolve();
-              await releaseMedia.promise;
+              await mediaGate.wait();
             }
             return media;
           })
@@ -356,10 +352,8 @@ it.for([false, true])(
     let broadcastsAtStop = 0;
     const consumed: string[] = [];
     let recorder: UserTurnTranscriptRecorder | undefined;
-    const directReady = createDeferred();
-    const releaseDirect = createDeferred();
-    const cleanupReady = createDeferred();
-    const releaseCleanup = createDeferred();
+    const directGate = createEnteredGate();
+    const cleanupGate = createEnteredGate();
     const lifecycleGeneration = getAgentEventLifecycleGeneration();
     const dispatchActual = await loadRealChatDispatch();
     dispatchInboundMessageMock.mockImplementation((raw: unknown) => {
@@ -417,11 +411,9 @@ it.for([false, true])(
                   expectDefined(operation, "direct turn owner"),
                 ),
             );
-            directReady.resolve();
-            await wait(releaseDirect.promise);
+            await wait(directGate.wait());
             runs.detachActiveEmbeddedRun(scope.sessionId, handle);
-            cleanupReady.resolve();
-            await wait(releaseCleanup.promise);
+            await wait(cleanupGate.wait());
             await sessions.patchSessionEntryCore(scope, () => ({
               restartRecoveryRuns: undefined,
               status: "done",
@@ -430,7 +422,7 @@ it.for([false, true])(
         }),
       );
       void command.catch(() => {});
-      await wait(directReady.promise);
+      await wait(directGate.entered);
       const directOwner = expectDefined(
         getSessionControllerOperation(scope.sessionKey),
         "direct command controller owner",
@@ -451,7 +443,7 @@ it.for([false, true])(
       expect(consumed).toEqual([]);
       expect(injected).not.toHaveBeenCalled();
       if (cancel) {
-        await wait(mediaCaptured.promise);
+        await wait(mediaGate.entered);
         const abortParams = { sessionKey: scope.sessionKey, runId: sendParams.idempotencyKey };
         const respond = vi.fn<RespondFn>();
         stop = handleChatAbortRequest({
@@ -465,7 +457,7 @@ it.for([false, true])(
         void stop.catch(() => {});
         await waitForGate(stopped.promise, stop, "Stop completed without clearing its chat buffer");
         broadcastsAtStop = vi.mocked(context.broadcast).mock.calls.length;
-        releaseMedia.resolve();
+        mediaGate.release();
         await wait(stop);
         expect(respond).toHaveBeenCalledWith(true, {
           ok: true,
@@ -476,28 +468,22 @@ it.for([false, true])(
         await expectDefined(recorder, "queued input recorder").waitForPendingInputSettlement?.();
         expect(await pendingStates()).toEqual(["cancelled"]);
       }
-      releaseDirect.resolve();
-      await wait(cleanupReady.promise);
+      directGate.release();
+      await wait(cleanupGate.entered);
       expect(getSessionControllerOperation(scope.sessionKey)).toBe(directOwner);
       expect(await pendingStates()).toEqual([cancel ? "cancelled" : "queued"]);
       expect(consumed).toEqual([]);
-      releaseCleanup.resolve();
+      cleanupGate.release();
       await command;
       if (cancel) {
         expect(consumed).toEqual([]);
         await fixture.finishDispatch();
-        expect(
-          vi
-            .mocked(context.broadcast)
-            .mock.calls.slice(broadcastsAtStop)
-            .filter(
-              ([event, payload]) =>
-                event === "chat" &&
-                isRecord(payload) &&
-                payload.runId === sendParams.idempotencyKey &&
-                payload.state === "delta",
-            ),
-        ).toEqual([]);
+        expect(vi.mocked(context.broadcast).mock.calls.slice(broadcastsAtStop)).not.toContainEqual(
+          expect.objectContaining({
+            0: "chat",
+            1: expect.objectContaining({ runId: sendParams.idempotencyKey, state: "delta" }),
+          }),
+        );
         expect(
           context.chatRunState.runs.get(sendParams.idempotencyKey)?.releaseBufferAuthority,
         ).toBeUndefined();
@@ -507,9 +493,9 @@ it.for([false, true])(
       expect(consumed).toEqual([expect.stringContaining(sendParams.message)]);
       expect((await listSessionPendingInputs(scope)).total).toBe(0);
     } finally {
-      releaseMedia.resolve();
-      releaseDirect.resolve();
-      releaseCleanup.resolve();
+      mediaGate.release();
+      directGate.release();
+      cleanupGate.release();
       try {
         runs.detachActiveEmbeddedRun(scope.sessionId, handle);
         runAuthority.releaseAgentRunDelegatedAuthority(authority);
@@ -576,9 +562,10 @@ it("preserves direct pre-adoption rejection guidance instead of publishing queue
       expect.objectContaining({ runId, state: "aborted" }),
       expect.anything(),
     );
-    const replay = await fixture.send();
-    expect(replay.mock.calls[0]?.[0]).toBe(false);
-    expect(replay.mock.calls[0]?.[1]).toMatchObject({ runId, status: "error", summary: guidance });
+    expect((await fixture.send()).mock.calls[0]).toMatchObject({
+      0: false,
+      1: { runId, status: "error", summary: guidance },
+    });
   } finally {
     rejectAdmission.mockRestore();
     await fixture.cleanup();

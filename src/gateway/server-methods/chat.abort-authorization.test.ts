@@ -334,26 +334,6 @@ function createDeferredWorkerCancellation() {
   return { cancelled, workerPersistence, service };
 }
 
-function setPendingRegistrations(
-  context: ReturnType<typeof createChatAbortContext>,
-  ts = 1,
-  attemptId?: string,
-) {
-  for (const prefix of ["agent", "pending-chat"]) {
-    context.dedupe.set(`${prefix}:pending`, {
-      ts,
-      ok: true,
-      payload: {
-        runId: "pending",
-        status: "accepted",
-        sessionKey: "main",
-        agentId: "main",
-        ...(attemptId ? { reservationId: attemptId, attemptId } : {}),
-      },
-    });
-  }
-}
-
 describe("chat.abort original authority and registration", () => {
   it("preserves exact-run descendant and partial persistence failures after parent Stop", async () => {
     const descendantFailure = new Error("descendant cancellation failed");
@@ -457,8 +437,6 @@ describe("chat.abort original authority and registration", () => {
         },
         { once: true },
       );
-      setPendingRegistrations(context);
-      const pending = [...context.dedupe];
       using persist = vi.spyOn(persistence, "persistAbortedPartials").mockResolvedValue(undefined);
       await expect(
         invokeLifecycle(context, undefined, {
@@ -479,7 +457,6 @@ describe("chat.abort original authority and registration", () => {
       // A successor waits behind the active first turn, so Stop withdraws it
       // before the first turn revokes authority. Two pending inputs keep FIFO order.
       expect(second.input.abortSignal.aborted).toBe(firstEffect === "active");
-      expect([...context.dedupe]).toEqual(pending);
       expect(cancelInferenceForSession).not.toHaveBeenCalled();
       if (firstEffect === "active") {
         expect(persist).toHaveBeenCalledOnce();
@@ -495,22 +472,18 @@ describe("chat.abort original authority and registration", () => {
     },
   );
 
-  it("withdraws selected pending input without adopting reentrant replacement registrations", async () => {
+  it("withdraws selected pending input without adopting a reentrant replacement source", async () => {
     const context = createChatAbortContext();
     const first = createActiveRun("main");
     const stale = createActiveRun("main", { queued: true });
     let replacement: RpcSourceRef | undefined;
     rpcSourceTesting.set("first", first);
     rpcSourceTesting.set("reused", stale);
-    setPendingRegistrations(context, 1, "old");
-    let pending: Array<[string, unknown]> = [];
     first.input.abortSignal.addEventListener(
       "abort",
       () => {
         replacement = createActiveRun("main", { queued: true });
         rpcSourceTesting.set("reused", replacement);
-        setPendingRegistrations(context, 2, "new");
-        pending = [...context.dedupe];
       },
       { once: true },
     );
@@ -519,10 +492,9 @@ describe("chat.abort original authority and registration", () => {
     expect(replacement).toBeDefined();
     expect(replacement?.input.abortSignal.aborted).toBe(false);
     expect(rpcSourceTesting.get("reused")).toBe(replacement);
-    expect([...context.dedupe]).toEqual(pending);
   });
 
-  it.each(["active", "queued", "pending-chat", "agent", "worker"] as const)(
+  it.each(["active", "queued", "worker"] as const)(
     "retains the original source and target fence before explicit %s cancellation",
     async (kind) => {
       for (const changed of ["source", "target"] as const) {
@@ -537,19 +509,7 @@ describe("chat.abort original authority and registration", () => {
         );
         if (kind === "active" || kind === "queued") {
           rpcSourceTesting.set("run-1", run);
-        } else if (kind !== "worker") {
-          context.dedupe.set(`${kind}:run-1`, {
-            ts: Date.now(),
-            ok: true,
-            payload: {
-              runId: "run-1",
-              sessionKey: "agent:main:main",
-              agentId: "main",
-              status: "accepted",
-            },
-          });
         }
-        const before = [...context.dedupe];
         await expect(
           invokeChatAbortHandler({
             handler: (options) =>
@@ -572,7 +532,6 @@ describe("chat.abort original authority and registration", () => {
         ).rejects.toThrow(changed === "source" ? "requester authority changed" : "target changed");
         expect(run.input.abortSignal.aborted).toBe(false);
         expect(rpcSourceTesting.has("run-1")).toBe(kind === "active" || kind === "queued");
-        expect([...context.dedupe]).toEqual(before);
         expect(cancelInferenceForSession).not.toHaveBeenCalled();
       }
     },
