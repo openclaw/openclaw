@@ -139,11 +139,17 @@ after the experiment. It does not build, install, contact a provider, or use an
 operator's Gateway state.
 
 The source helper only seeds durable synthetic state and exits after draining
-its writers. Unlike the earlier source-run cohort, this built-path cohort does
-not prime the usage cache or summary before opening the browser: initial work is
-included in default-readiness and full-range observations. The measured Gateway runs that checkout's normal `dist/entry.js`,
-with production worker entrypoints. Seeding and startup are separate from browser
-default readiness, full-range loading, and warm filters. Numeric dispatch counters
+its writers. Ordinary warm runs (including smoke and complete-sequence runs)
+then prepare each compiled Gateway through full-range Usage requests, retrying
+only after successful Usage publications until the response is complete and its
+counts match the fixture. Run with `TZ=UTC` so preparation uses the same
+specific-UTC request shape as the browser's Local mode. `warm-preparations.json` records this setup separately
+from measured observations. Its deadline is the Gateway's existing managed
+lifetime; the measured response deadline remains 60 seconds. Cold modes leave
+this preparation disabled, preserving their initial-load measurements.
+The measured Gateway runs that checkout's normal `dist/entry.js`, with production
+worker entrypoints. Seeding and startup are separate from browser default
+readiness, full-range loading, and warm filters. Numeric dispatch counters
 observe native worker messages, including the first synchronous task, without
 retaining or rewriting their payloads.
 All roles use the invoking driver's seed, RTT, and dispatch-observer helpers,
@@ -156,7 +162,7 @@ Start with the three-session smoke, which includes mixed-model usage and saved
 context, before increasing volume:
 
 ```sh
-NODE_DISABLE_COMPILE_CACHE=1 node --import ./scripts/tsx.mjs scripts/bench-usage-gateway.ts \
+TZ=UTC NODE_DISABLE_COMPILE_CACHE=1 node --import ./scripts/tsx.mjs scripts/bench-usage-gateway.ts \
   --base <baseline-checkout> --head <candidate-checkout> --ui <frozen-ui-build> \
   --out <new-output-directory> --sessions 3 --smoke
 ```

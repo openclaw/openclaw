@@ -104,6 +104,9 @@ const helperHashes = async () =>
   );
 const pairs = Number(values.pairs);
 const population = Number(values.sessions);
+const warmSetup =
+  !values.cold && !values["cold-backend"] && !values.diagnostic && !values.structure;
+const MANAGED_CHILD_TIMEOUT_MS = 30 * 60_000;
 const structureRtt = values["structure-rtt"] === undefined ? 0 : Number(values["structure-rtt"]);
 if (values["structure-rtt"] !== undefined) {
   assert(values.structure, "--structure-rtt requires --structure");
@@ -153,6 +156,7 @@ type Snapshot = { channel: "usage-volume-fixture"; action: "snapshot"; dispatche
 type Owner = {
   role: keyof typeof roleUiBuilds;
   child: ChildProcess;
+  deadlineAtMs: number;
   ready: Ready;
   snapshot: () => Promise<Dispatch[]>;
   close: () => Promise<void>;
@@ -165,7 +169,7 @@ type PageEntry = {
   page: Page;
   cdp: CDPSession;
   proxy: Awaited<ReturnType<typeof startUsageRttProxy>> | undefined;
-  responses: ReturnType<typeof observeUsage>;
+  usage: ReturnType<typeof observeUsage>;
   wire?: ReturnType<typeof observeWire>;
   finishDiagnostic?: () => Promise<void>;
   finishStructure?: () => Promise<unknown>;
@@ -185,6 +189,8 @@ const samples: Array<
   Record<string, unknown> & { browserResources?: ReturnType<typeof browserResources> }
 > = [];
 const sequences: Array<Record<string, unknown>> = [];
+const preparations: Array<Record<string, unknown>> = [];
+let activeStep: Record<string, string | number> = { phase: "startup" };
 const browsers = new Set<Browser>();
 const failures: string[] = [];
 const errorText = (error: unknown) =>
@@ -358,7 +364,7 @@ async function start(root: string, role: Owner["role"], coldPair?: number): Prom
           OPENCLAW_USAGE_BENCH_TOKEN: token,
         },
         stdio: ["ignore", "pipe", "pipe", "ipc"],
-        timeoutMs: 30 * 60_000,
+        timeoutMs: MANAGED_CHILD_TIMEOUT_MS,
         signal: abort.signal,
         requireProcessTreeExit: true,
         onReady(child) {
@@ -461,7 +467,7 @@ async function start(root: string, role: Owner["role"], coldPair?: number): Prom
         },
       }),
       stdio: ["ignore", "pipe", "pipe", "ipc"],
-      timeoutMs: 30 * 60_000,
+      timeoutMs: MANAGED_CHILD_TIMEOUT_MS,
       signal: abort.signal,
       requireProcessTreeExit: true,
       onReady(child) {
@@ -526,6 +532,7 @@ async function start(root: string, role: Owner["role"], coldPair?: number): Prom
     return {
       role,
       child,
+      deadlineAtMs: startAt + MANAGED_CHILD_TIMEOUT_MS,
       ready: { ...fixture, port: claim.port, token },
       snapshot,
       async close() {
@@ -574,6 +581,8 @@ function observeUsage(page: Page) {
     }
   >();
   const responses: Array<{
+    requestId: string;
+    receivedAtMs: number;
     query: string;
     startDate: string;
     endDate: string;
@@ -585,7 +594,18 @@ function observeUsage(page: Page) {
     partial: boolean;
     payload?: unknown;
   }> = [];
+  const errors: Array<{ kind: string; message: string }> = [];
+  page.on("pageerror", (error) => errors.push({ kind: "pageerror", message: errorText(error) }));
+  page.on("requestfailed", (request) =>
+    errors.push({
+      kind: "requestfailed",
+      message: `${request.method()} ${new URL(request.url()).pathname}: ${errorText(request.failure()?.errorText)}`,
+    }),
+  );
   page.on("websocket", (socket) => {
+    socket.on("socketerror", (error) =>
+      errors.push({ kind: "socketerror", message: errorText(error) }),
+    );
     socket.on("framesent", ({ payload }) => {
       const frame = JSON.parse(String(payload));
       if (frame.type === "req" && frame.method === "sessions.usage") {
@@ -605,6 +625,8 @@ function observeUsage(page: Page) {
       }
       pending.delete(frame.id);
       responses.push({
+        requestId: frame.id,
+        receivedAtMs: performance.now(),
         query: request.query,
         startDate: request.startDate,
         endDate: request.endDate,
@@ -620,7 +642,7 @@ function observeUsage(page: Page) {
       });
     });
   });
-  return responses;
+  return { responses, pending, errors };
 }
 
 /** Protocol metadata only: never retain frame bodies, labels, or user content. */
@@ -760,7 +782,7 @@ async function browserRetention(cdp: CDPSession) {
 }
 
 async function waitForResponse(
-  responses: ReturnType<typeof observeUsage>,
+  responses: ReturnType<typeof observeUsage>["responses"],
   after: number,
   query: string,
   expectedSessions?: number,
@@ -953,27 +975,28 @@ async function startUsageDiagnostic(entry: PageEntry, prefix: string) {
   };
   await page.evaluate(() => performance.mark("usage:probe-start"));
 }
-const coldBackendImports = values["cold-backend"]
-  ? await Promise.all([
-      import("../src/gateway/client.ts"),
-      import("../src/infra/device-identity-material.ts"),
-      import("../ui/src/lib/sessions/usage.ts"),
-      import("../ui/src/pages/usage/helpers.ts"),
-    ])
-  : undefined;
+const usageBackendImports =
+  values["cold-backend"] || warmSetup
+    ? await Promise.all([
+        import("../src/gateway/client.ts"),
+        import("../src/infra/device-identity-material.ts"),
+        import("../ui/src/lib/sessions/usage.ts"),
+        import("../ui/src/pages/usage/helpers.ts"),
+      ])
+    : undefined;
 
-async function measureColdBackend(owner: Owner, coldPair?: number) {
-  assert(coldBackendImports);
+async function prepareUsageBackend(owner: Owner, mode: "cold" | "warm", coldPair?: number) {
+  assert(usageBackendImports);
   const [
     { GatewayClient },
     { generateStoredDeviceIdentity },
     { requestSessionUsage },
     { DEFAULT_USAGE_SESSION_SORT },
-  ] = coldBackendImports;
+  ] = usageBackendImports;
   const url = `ws://127.0.0.1:${owner.ready.port}`;
   const connected = Promise.withResolvers<void>();
   const connectionTimer = setTimeout(
-    () => connected.reject(new Error(`${owner.role} cold client connection timed out`)),
+    () => connected.reject(new Error(`${owner.role} ${mode} client connection timed out`)),
     30_000,
   );
   const publications: Array<{
@@ -1035,12 +1058,12 @@ async function measureColdBackend(owner: Owner, coldPair?: number) {
     },
   });
   const suffix = `${owner.role}${coldPair === undefined ? "" : `-${coldPair}`}`;
-  const responseFile = `${suffix}-cold-backend-responses.json`;
+  const responseFile = `${suffix}-${mode}-backend-responses.json`;
   const requests: Array<{ method: string; params: unknown }> = [];
   const responses: Array<Record<string, unknown>> = [];
   const sample: Record<string, unknown> = {
     role: owner.role,
-    phase: "cold-complete-ready",
+    phase: mode === "cold" ? "cold-complete-ready" : "warm-preparation",
     ...(coldPair === undefined ? {} : { coldPair }),
     cpu: 1,
     rtt: 0,
@@ -1048,7 +1071,12 @@ async function measureColdBackend(owner: Owner, coldPair?: number) {
     responses,
     publications,
     responseFile,
+    ...(mode === "warm" ? { deadlineAtMs: owner.deadlineAtMs } : {}),
   };
+  activeStep = { role: owner.role, phase: String(sample.phase) };
+  if (mode === "warm") {
+    preparations.push(sample);
+  }
   try {
     peer.start();
     await connected.promise;
@@ -1064,8 +1092,14 @@ async function measureColdBackend(owner: Owner, coldPair?: number) {
     sample.query = query;
     const before = await readGatewayCpuUsage(owner.child, { includeWorkers: true });
     const started = performance.now();
-    const signal = AbortSignal.timeout(60_000);
-    samples.push(sample);
+    // Cold proof keeps its original budget. Warm preparation ends within the
+    // compiled Gateway's existing managed lifetime, outside measured actions.
+    const signal = AbortSignal.timeout(
+      mode === "cold" ? 60_000 : Math.max(0, Math.floor(owner.deadlineAtMs - performance.now())),
+    );
+    if (mode === "cold") {
+      samples.push(sample);
+    }
     let usedCommit = committedAt;
     let requestBefore = before;
     let dispatchStart = 0;
@@ -1130,17 +1164,22 @@ async function measureColdBackend(owner: Owner, coldPair?: number) {
         assert.equal(response.overview?.total, population);
         assert.equal(response.totals.totalTokens, owner.ready.allTokens);
         assert.equal(response.sessions.length, Math.min(population, 50));
-        assert(dispatches.length > 0, "Cold request aggregated the snapshot");
-        const resourcesFile = `${suffix}-cold-backend-resources.json`;
-        sample.resourcesFile = resourcesFile;
-        await writeFile(
-          path.join(out, resourcesFile),
-          JSON.stringify(
-            await readGatewayResources(owner.child, { includeWorkers: true, collectGarbage: true }),
-            null,
-            2,
-          ),
-        );
+        assert(dispatches.length > 0, "Usage request aggregated the snapshot");
+        if (mode === "cold") {
+          const resourcesFile = `${suffix}-cold-backend-resources.json`;
+          sample.resourcesFile = resourcesFile;
+          await writeFile(
+            path.join(out, resourcesFile),
+            JSON.stringify(
+              await readGatewayResources(owner.child, {
+                includeWorkers: true,
+                collectGarbage: true,
+              }),
+              null,
+              2,
+            ),
+          );
+        }
         return;
       }
       // A successful publication during the read stays pending; no timed session polling.
@@ -1172,14 +1211,23 @@ async function measureColdBackend(owner: Owner, coldPair?: number) {
         JSON.stringify({ requests, responses, publications }, null, 2),
       );
     } finally {
-      await peer.stopAndWait();
+      try {
+        await peer.stopAndWait();
+      } finally {
+        if (mode === "warm") {
+          await writeFile(
+            path.join(out, "warm-preparations.json"),
+            JSON.stringify(preparations, null, 2),
+          );
+        }
+      }
     }
   }
 }
 
 try {
-  if (values["cold-backend"]) {
-    assert.equal(process.env.TZ, "UTC", "Run the cold backend client with TZ=UTC");
+  if (values["cold-backend"] || warmSetup) {
+    assert.equal(process.env.TZ, "UTC", "Run backend readiness and warm filters with TZ=UTC");
     assert.equal(Intl.DateTimeFormat().resolvedOptions().timeZone, "UTC");
     assert.equal(new Date().getTimezoneOffset(), 0);
   }
@@ -1189,16 +1237,23 @@ try {
       ["head", head],
       ["base-b", base],
     ] as const) {
+      activeStep = { role, phase: "startup" };
       const owner = await start(root, role, coldPairs === undefined ? undefined : coldPair);
       owners.push(owner);
       if (values["cold-backend"]) {
         try {
-          await measureColdBackend(owner, coldPairs === undefined ? undefined : coldPair + 1);
+          await prepareUsageBackend(
+            owner,
+            "cold",
+            coldPairs === undefined ? undefined : coldPair + 1,
+          );
         } finally {
           // Startup backfill must not overlap the next role's cold observation.
           await owner.close();
           owners.pop();
         }
+      } else if (warmSetup) {
+        await prepareUsageBackend(owner, "warm");
       }
     }
   }
@@ -1221,6 +1276,7 @@ try {
       const pages: PageEntry[] = [];
       try {
         for (const owner of owners) {
+          activeStep = { role: owner.role, phase: "browser-setup", cpu, rtt };
           // Process metrics include every renderer in this browser, so each role owns one.
           const browser = await chromium.launch({
             headless: true,
@@ -1244,7 +1300,7 @@ try {
             page,
             cdp: await context.newCDPSession(page),
             proxy: undefined,
-            responses: observeUsage(page),
+            usage: observeUsage(page),
             wire: values.structure ? observeWire(page) : undefined,
           };
           pages.push(entry);
@@ -1315,7 +1371,9 @@ try {
             token: owner.ready.token,
           });
         }
-        for (const { owner, page, context, cdp, processSession, proxy, responses } of pages) {
+        for (const { owner, page, context, cdp, processSession, proxy, usage } of pages) {
+          const { responses } = usage;
+          activeStep = { role: owner.role, phase: "default-readiness", cpu, rtt, query: "" };
           const url = new URL(`http://127.0.0.1:${proxy?.port ?? owner.ready.port}/usage`);
           const defaultRendererBefore = await rendererProbe(processSession);
           const defaultCpuBefore = await readGatewayCpuUsage(owner.child);
@@ -1374,6 +1432,7 @@ try {
           const coldCpuBefore = await readGatewayCpuUsage(owner.child);
           const coldBrowserBefore = await metrics(cdp);
           const coldStarted = performance.now();
+          activeStep = { role: owner.role, phase: "population-range", cpu, rtt, query: "" };
           const coldRequestsBefore = responses.length;
           const dates = page.locator(".usage-date-range input");
           await dates.last().fill(owner.ready.endDate);
@@ -1495,9 +1554,11 @@ try {
           const pair = Math.floor(iteration / 2);
           const order = pair % 2 ? pages.toReversed() : pages;
           for (const entry of order) {
-            const { owner, page, cdp, processSession, responses } = entry;
+            const { owner, page, cdp, processSession, usage } = entry;
+            const { responses } = usage;
             const model = `fixture-model-${iteration % 2 ? "01" : "00"}-end`;
             const query = `model:${model}`;
+            activeStep = { role: owner.role, phase: "filter", cpu, rtt, query, pair };
             const truth = owner.ready.models[model]!;
             const requestsBefore = responses.length;
             const dispatchBefore = (await owner.snapshot()).length;
@@ -1638,6 +1699,23 @@ try {
         }
       } finally {
         for (const entry of pages.toReversed()) {
+          try {
+            await writeFile(
+              path.join(out, `${entry.owner.role}-${cpu}x-${rtt}ms-responses.json`),
+              JSON.stringify(
+                {
+                  lastStep: activeStep,
+                  pending: Object.fromEntries(entry.usage.pending),
+                  responses: entry.usage.responses,
+                  errors: entry.usage.errors,
+                },
+                null,
+                2,
+              ),
+            );
+          } catch (error) {
+            failures.push(`${entry.owner.role} response diagnostics: ${errorText(error)}`);
+          }
           if (entry.wire) {
             try {
               await writeFile(
@@ -1686,7 +1764,7 @@ try {
     }
   }
 } catch (error) {
-  failures.push(errorText(error));
+  failures.push(`${JSON.stringify(activeStep)}: ${errorText(error)}`);
 } finally {
   for (const browser of browsers) {
     try {
@@ -1748,6 +1826,8 @@ try {
     JSON.stringify(
       {
         failures,
+        lastStep: activeStep,
+        preparationSamples: preparations.length,
         samples: samples.length,
         browserResourceSamples: samples.filter((sample) => sample.browserResources?.complete)
           .length,
@@ -1787,7 +1867,10 @@ try {
               (headUi === ui
                 ? "Same frozen UI for all roles. "
                 : "The head uses --head-ui; both controls use --ui. Per-role build hashes are recorded in helper-sources.json. ") +
-              "Population has one/two actual turns per session spread over180days. Durable source seeding and compiled startup recorded separately; no source server or report prewarming. Setup logs retained. No provider calls. " +
+              "Population has one/two actual turns per session spread over180days. Durable source seeding and compiled startup recorded separately; no source server. Setup logs retained. No provider calls. " +
+              (warmSetup
+                ? " Before browsers start, each compiled Gateway completes a publication-driven full-range Usage preparation; every preparation reply/publication is separate from measured samples in warm-preparations.json. Preparation uses UTC dates and is bounded by the Gateway's existing managed lifetime. "
+                : "No report prewarming. ") +
               (values.cold
                 ? "One fresh, independently seeded Gateway/browser per role, measuring default then first full-range request at native CPU and localhost. One invocation is one triple, not repeated cold qualification."
                 : "Gateway reused across CPU/RTT cells; default/readiness and population-range phases are not independent cold-process samples.") +
