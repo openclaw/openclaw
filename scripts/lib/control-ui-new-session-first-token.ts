@@ -50,13 +50,13 @@ export async function measureNewSession(
           const token = [...document.querySelectorAll(".chat-group.assistant")].find((el) =>
             el.textContent?.includes("L247 first token"),
           );
-          const pendingRow = document.querySelector(".sidebar-recent-session--creating");
+          const createRow = document.querySelector(".sidebar-recent-session--creating");
           const row =
             (state.key &&
               [...document.querySelectorAll("[data-session-key]")].find(
                 (el) => el.getAttribute("data-session-key") === state.key,
               )) ||
-            document.querySelector('.sidebar-recent-session--creating [aria-busy="false"]');
+            createRow?.querySelector('.sidebar-recent-session__link:not([aria-busy="true"])');
           const status =
             document.querySelector(".chat-working-indicator")?.textContent ??
             document.querySelector(".chat-group--working")?.textContent;
@@ -65,7 +65,7 @@ export async function measureNewSession(
             interactive: Boolean(draft?.checkVisibility() && !draft.disabled),
             user: Boolean(user?.checkVisibility()),
             token: Boolean(token?.checkVisibility()),
-            pendingRow: Boolean(pendingRow),
+            createRow: Boolean(createRow),
             row: Boolean(row),
             status,
           };

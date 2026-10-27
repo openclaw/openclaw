@@ -178,7 +178,6 @@ export class StartedSessionNavigation {
         context.chatSubmissions.acceptCreate({
           creation: { sessionKey: started.key, admitted: true },
           displayName: resolveSessionDisplayName(started.key, {
-            key: started.key,
             displayName: normalizeOptionalString(started.entry?.displayName),
             label: normalizeOptionalString(started.entry?.label),
           }),

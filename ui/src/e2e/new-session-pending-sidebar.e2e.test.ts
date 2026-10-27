@@ -86,6 +86,7 @@ suite.define(() => {
             const [pendingBox, oldBox] = [await bounds(provisional), await bounds(oldRow)];
             expect(Math.round(oldBox.top - pendingBox.bottom)).toBe(2);
             expect(await provisional.locator('[aria-current="page"]').count()).toBe(1);
+            expect(await provisional.locator('[aria-busy="true"]').count()).toBe(1);
             expect(await oldRow.locator('[aria-current="page"]').count()).toBe(0);
             expect(await provisional.locator("button, a[href]").count()).toBe(0);
             expect(await provisional.locator(".session-title-placeholder").count()).toBe(1);
@@ -211,13 +212,13 @@ suite.define(() => {
         expect(await claws.locator(`[data-session-key="${params.key}"]`).count()).toBe(0);
         await gateway.setSessionsListResponse({ sessions: [accepted, ...sessions] });
         await page.evaluate(
-          (sessions) => {
+          (listedSessions) => {
             const replies = Reflect.get(window, "heldCreateLists") as Array<
               (payload: unknown) => void
             >;
             const payload = {
-              sessions,
-              count: sessions.length,
+              sessions: listedSessions,
+              count: listedSessions.length,
               ts: Date.now(),
               path: "",
               defaults: {},

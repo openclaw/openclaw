@@ -432,7 +432,7 @@ export function renderPendingSessionCreateRow(
             <div
               class="sidebar-recent-session__link"
               aria-current="page"
-              aria-busy={!value().creation.admitted}
+              aria-busy={value().creation.admitted ? undefined : "true"}
             >
               <span class="sidebar-session-indicator" aria-hidden="true" />
               <span class="sidebar-recent-session__text">
