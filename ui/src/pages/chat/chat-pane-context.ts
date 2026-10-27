@@ -19,6 +19,7 @@ import {
 import { loadSettings } from "../../app/settings.ts";
 import { readPresenceEntries } from "../../app/user-profile.ts";
 import type { SessionPlacementPresentation } from "../../components/session-placement-move-dialog.tsx";
+import { hasSameOriginGatewayTransport } from "../../dev-gateway.ts";
 import { isGatewayAvailable } from "../../lib/gateway-availability.ts";
 import { createGatewayConnectionLifecycle } from "../../lib/gateway-connection-lifecycle.ts";
 import { readSessionMethodAccess } from "../../lib/session-method-access.ts";
@@ -31,7 +32,7 @@ import {
   uiConversationMatches,
 } from "../../lib/sessions/session-key.ts";
 import { isTerminalAvailable } from "../../lib/terminal-availability.ts";
-import { invalidateChatAvatarCache } from "./chat-avatar.ts";
+import { cachedChatAssistantIdentity, invalidateChatAvatarCache } from "./chat-avatar.ts";
 import {
   getChatHistoryLoadState,
   isChatHistoryLoading,
@@ -519,12 +520,25 @@ export abstract class ChatPaneContext extends ChatPaneLifecycle {
         return;
       }
     }
-    // Keep the session-specific identity loaded by agent.identity.get across
-    // ordinary gateway snapshots. Reset to the configured fallback only when
-    // the logical connection changes; the startup path refreshes the identity
-    // for the active session afterward.
-    if (sourceChanged) {
-      state.assistantName = this.context.config.current.assistantIdentity.name;
+    // Transport edges retain the displayed identity; only a new owner replaces it.
+    if (draftOwnerChanged || reactionOwnerChanged) {
+      const identity = cachedChatAssistantIdentity(
+        {
+          sessionKey: state.sessionKey,
+          assistantAgentId: state.assistantAgentId,
+          hello: state.hello,
+          agentsList: reactionOwnerChanged ? null : this.context.agents.state.agentsList,
+        },
+        reactionOwnerChanged ? undefined : this.context.agentIdentity.get,
+        !reactionOwnerChanged &&
+          hasSameOriginGatewayTransport(this.context.gateway.connection.gatewayUrl)
+          ? this.context.config.current.assistantIdentity
+          : null,
+      );
+      state.assistantName = identity.name;
+      state.assistantAvatar = identity.avatar;
+      state.assistantAvatarStatus = identity.avatarStatus ?? null;
+      state.assistantAvatarReason = identity.avatarReason ?? null;
     }
     if (snapshot.phase !== "connected") {
       if (wasConnected) {

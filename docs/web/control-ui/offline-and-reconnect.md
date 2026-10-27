@@ -97,6 +97,10 @@ identity. A one-time bootstrap credential is never retained for offline admissio
 a successful pairing can use the reusable device grant already issued and stored
 by the browser client.
 
+The cached agent roster supplies the conversation's agent name and text avatar
+on the first render, including when the offline shell cannot fetch bootstrap
+config. Reconnecting keeps the displayed identity until a live refresh replaces it.
+
 The retained identity is for local display and storage, not permission to call
 the Gateway. Reading, drafting, and queuing input remain available offline;
 sending and synchronization wait for the Gateway to revalidate the account.

@@ -1,7 +1,11 @@
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import type { GatewayBrowserClient, GatewayHelloOk } from "../../api/gateway.ts";
-import type { AgentsListResult } from "../../api/types.ts";
+import type { AgentIdentityResult, AgentsListResult } from "../../api/types.ts";
 import { fetchAssistantIdentity } from "../../app/assistant-identity.ts";
+import {
+  normalizeAssistantIdentity,
+  type AssistantIdentity,
+} from "../../lib/assistant-identity.ts";
 import { isRenderableControlUiAvatarUrl } from "../../lib/avatar.ts";
 import { readMessageSenderSession, resolveMessageRole } from "../../lib/chat/message-normalizer.ts";
 import { resolveAvatarImageUrl, retainAvatarImageUrl } from "../../lib/identity-avatar-loader.ts";
@@ -53,6 +57,22 @@ export function resolveAgentIdForSession(
     return resolveUiSelectedGlobalAgentId(host) || DEFAULT_AGENT_ID;
   }
   return readSessionDefaults(host)?.defaultAgentId?.trim() || DEFAULT_AGENT_ID;
+}
+
+export function cachedChatAssistantIdentity(
+  state: Pick<ChatAvatarHost, "sessionKey" | "assistantAgentId" | "agentsList" | "hello">,
+  readIdentity: ((agentId: string) => AgentIdentityResult | null) | undefined,
+  bootstrap?: AssistantIdentity | null,
+): AssistantIdentity {
+  const agentId = resolveAgentIdForSession(state);
+  if (bootstrap?.agentId === agentId) {
+    return bootstrap;
+  }
+  const cached = readIdentity?.(agentId);
+  if (cached) {
+    return normalizeAssistantIdentity({ ...cached, avatar: cached.avatar || cached.emoji });
+  }
+  return { name: bootstrap && !bootstrap.agentId ? bootstrap.name : "", avatar: null };
 }
 
 function beginChatAvatarRequest(host: ChatAvatarHost): number {

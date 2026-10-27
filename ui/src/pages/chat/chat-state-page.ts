@@ -23,7 +23,7 @@ import { canonicalUiSessionKeyForPersistence } from "../../lib/sessions/session-
 import { resolveSpeechTextLimit } from "../../lib/speech-playback.ts";
 import { DraftPreferenceState } from "../new-session/draft-preference-state.ts";
 import { loadPageAssistantIdentity } from "./chat-assistant-identity.ts";
-import { resolveAgentIdForSession } from "./chat-avatar.ts";
+import { cachedChatAssistantIdentity } from "./chat-avatar.ts";
 import { createChatErrorState } from "./chat-error-state.ts";
 import { projectChatFields } from "./chat-field-projection.ts";
 import { cancelPendingQueuedChatInput } from "./chat-history-actions.ts";
@@ -121,28 +121,26 @@ export function createPageState(
   );
   const identity = loadLocalUserIdentity();
   const appConfig = context.config.current;
-  const bootstrapIdentity =
-    hasSameOriginGatewayTransport(context.gateway.connection.gatewayUrl) &&
-    appConfig.assistantIdentity.agentId ===
-      resolveAgentIdForSession({
-        sessionKey: initialSessionKey,
-        assistantAgentId: context.agentSelection.state.selectedId,
-        agentsList: context.agents.state.agentsList,
-        hello: context.gateway.snapshot.hello,
-      })
+  const assistantIdentity = cachedChatAssistantIdentity(
+    {
+      sessionKey: initialSessionKey,
+      assistantAgentId: context.agentSelection.state.selectedId,
+      agentsList: context.agents.state.agentsList,
+      hello: context.gateway.snapshot.hello,
+    },
+    context.agentIdentity.get,
+    hasSameOriginGatewayTransport(context.gateway.connection.gatewayUrl)
       ? appConfig.assistantIdentity
-      : null;
+      : null,
+  );
   const errors = createChatErrorState();
   const presentedFields = {
     settings,
     accessPreferenceRevision: 0,
-    // Unscoped names retain the gateway-wide fallback.
-    assistantName:
-      bootstrapIdentity?.name ??
-      (appConfig.assistantIdentity.agentId ? "" : appConfig.assistantIdentity.name),
-    assistantAvatar: bootstrapIdentity?.avatar ?? null,
-    assistantAvatarStatus: bootstrapIdentity?.avatarStatus ?? null,
-    assistantAvatarReason: bootstrapIdentity?.avatarReason ?? null,
+    assistantName: assistantIdentity.name,
+    assistantAvatar: assistantIdentity.avatar,
+    assistantAvatarStatus: assistantIdentity.avatarStatus ?? null,
+    assistantAvatarReason: assistantIdentity.avatarReason ?? null,
     embedSandboxMode: appConfig.embedSandboxMode,
     allowExternalEmbedUrls: appConfig.allowExternalEmbedUrls,
     automaticallyFetchFavicons: appConfig.automaticallyFetchFavicons,
@@ -333,7 +331,16 @@ export function createPageState(
   state.accessPreferences = DraftPreferenceState.forChat(context, () => {
     state.accessPreferenceRevision = (state.accessPreferenceRevision ?? 0) + 1;
   });
-  state.loadAssistantIdentity = () => loadPageAssistantIdentity(state);
+  state.loadAssistantIdentity = () => {
+    if (!state.connected) {
+      const cachedIdentity = cachedChatAssistantIdentity(state, context.agentIdentity.get);
+      state.assistantName = cachedIdentity.name;
+      state.assistantAvatar = cachedIdentity.avatar;
+      state.assistantAvatarStatus = cachedIdentity.avatarStatus ?? null;
+      state.assistantAvatarReason = cachedIdentity.avatarReason ?? null;
+    }
+    return loadPageAssistantIdentity(state);
+  };
   state.handleSendChat = (messageOverride, options, submissionAction) => {
     const message = messageOverride ?? state.chatMessage;
     const isCommand =

@@ -254,11 +254,27 @@ describe("chat pane assistant identity snapshots", () => {
         client: replace ? createGatewayBrowserClientFixture() : client,
         phase: replace ? "reconnecting" : pane.context.gateway.snapshot.phase,
       });
-      expect(state.assistantName).toBe(
-        replace ? pane.context.config.current.assistantIdentity.name : "Session Agent",
-      );
+      // A different Gateway cannot borrow this document's bootstrap identity.
+      expect(state.assistantName).toBe(replace ? "" : "Session Agent");
     },
   );
+
+  it("keeps the live identity across a same-client transport reconnect", () => {
+    const client = createGatewayBrowserClientFixture();
+    const { pane, state } = createTestChatPane({
+      client,
+      sessions: createSessionCapabilityFixture(),
+    });
+    state.client = client;
+    state.connected = true;
+    state.assistantName = "Harbor";
+    state.assistantAvatar = "⚓";
+    pane.applyGatewaySnapshot({ ...pane.context.gateway.snapshot, client, phase: "reconnecting" });
+    expect(state.assistantName).toBe("Harbor");
+    expect(state.assistantAvatar).toBe("⚓");
+    pane.applyGatewaySnapshot({ ...pane.context.gateway.snapshot, client, phase: "connected" });
+    expect(state.assistantName).toBe("Harbor");
+  });
 });
 
 describe("chat pane approval requester identity", () => {
