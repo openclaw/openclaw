@@ -402,7 +402,10 @@ describe("sessions.files RPC handlers", () => {
     },
   );
 
-  it.each([["München", "Mu\u0308nchen.md"], ["Mu\u0308nchen", "München.md"]])(
+  it.each([
+    ["München", "Mu\u0308nchen.md"],
+    ["Mu\u0308nchen", "München.md"],
+  ])(
     "finds a canonically equivalent workspace filename without rewriting it (%s)",
     async (query, filename) => {
       writeWorkspace(filename, "# Canonically equivalent filename\n");
@@ -414,7 +417,6 @@ describe("sessions.files RPC handlers", () => {
       );
     },
   );
-
 
   it.runIf(process.platform === "linux")(
     "reports non-UTF-8 filenames during workspace browse",
