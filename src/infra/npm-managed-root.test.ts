@@ -32,13 +32,17 @@ function requireCommandOptions(
   return options;
 }
 
-function peerPlan(run: (cwd: string) => Promise<typeof successfulSpawn>) {
+type PlanManifest = { dependencies?: Record<string, string>; overrides?: Record<string, unknown> };
+function peerPlan(packages: Record<string, unknown>, inspect?: (manifest: PlanManifest) => void) {
   return vi.fn(async (_args: string[], rawOptions: number | CommandOptions) => {
     const { cwd } = requireCommandOptions(rawOptions, "npm peer plan");
     if (!cwd) {
       throw new Error("expected npm peer plan cwd");
     }
-    return run(cwd);
+    const manifest = (await readManifest(cwd)) as PlanManifest;
+    inspect?.(manifest);
+    await writeLock(cwd, { "": { dependencies: manifest.dependencies }, ...packages });
+    return successfulSpawn;
   });
 }
 
@@ -283,11 +287,8 @@ describe("managed npm root", () => {
       openclaw: { managedPeerDependencies: ["old-peer"] },
     });
 
-    const runCommand = peerPlan(async (cwd) => {
-      const tempManifest = (await readManifest(cwd)) as { dependencies?: Record<string, string> };
-      expect(tempManifest.dependencies).toEqual({ "existing-root": "1.0.0", plugin: "1.0.0" });
-      await writeLock(cwd, {
-        "": { dependencies: tempManifest.dependencies },
+    const runCommand = peerPlan(
+      {
         "node_modules/existing-root": { version: "1.0.0" },
         "node_modules/dev-peer": { dev: true, version: "3.0.0" },
         "node_modules/dev-plugin": {
@@ -311,9 +312,11 @@ describe("managed npm root", () => {
           peerDependencies: { "unsupported-peer": "^9.0.0" },
           version: "1.0.0",
         },
-      });
-      return successfulSpawn;
-    });
+      },
+      (manifest) => {
+        expect(manifest.dependencies).toEqual({ "existing-root": "1.0.0", plugin: "1.0.0" });
+      },
+    );
 
     await expect(
       syncManagedNpmRootPeerDependencies({
@@ -361,23 +364,19 @@ describe("managed npm root", () => {
       openclaw: { managedOverrides: ["runtime-peer"], managedPeerDependencies: ["runtime-peer"] },
     });
 
-    const runCommand = peerPlan(async (cwd) => {
-      const tempManifest = (await readManifest(cwd)) as {
-        dependencies?: Record<string, string>;
-        overrides?: Record<string, string>;
-      };
-      expect(tempManifest.dependencies).toEqual({ plugin: "1.0.0" });
-      expect(tempManifest.overrides).toEqual({ "runtime-peer": "4.12.18" });
-      await writeLock(cwd, {
-        "": { dependencies: tempManifest.dependencies },
+    const runCommand = peerPlan(
+      {
         "node_modules/plugin": {
           peerDependencies: { "runtime-peer": "^4.0.0" },
           version: "1.0.0",
         },
         "node_modules/runtime-peer": { peer: true, version: "4.12.18" },
-      });
-      return successfulSpawn;
-    });
+      },
+      (manifest) => {
+        expect(manifest.dependencies).toEqual({ plugin: "1.0.0" });
+        expect(manifest.overrides).toEqual({ "runtime-peer": "4.12.18" });
+      },
+    );
 
     await expect(
       syncManagedNpmRootPeerDependencies({
@@ -437,24 +436,15 @@ describe("managed npm root", () => {
       dependencies: { plugin: "1.0.0" },
     });
 
-    const runCommand = peerPlan(async (cwd) => {
-      if (runCommand.mock.calls.length === 1) {
-        return {
-          ...successfulSpawn,
-          code: 1,
-          stderr: "npm ERR! notarget No matching version found for openclaw@2026.5.99-beta.1",
-        };
-      }
-      await writeLock(cwd, {
-        "": {
-          dependencies: { plugin: "1.0.0" },
-        },
-        "node_modules/plugin": {
-          peerDependencies: { openclaw: "2026.5.99-beta.1", "runtime-peer": "^2.0.0" },
-          version: "1.0.0",
-        },
-      });
-      return successfulSpawn;
+    const runCommand = peerPlan({
+      "node_modules/plugin": {
+        peerDependencies: { openclaw: "2026.5.99-beta.1", "runtime-peer": "^2.0.0" },
+        version: "1.0.0",
+      },
+    }).mockResolvedValueOnce({
+      ...successfulSpawn,
+      code: 1,
+      stderr: "npm ERR! notarget No matching version found for openclaw@2026.5.99-beta.1",
     });
 
     await expect(
@@ -483,19 +473,13 @@ describe("managed npm root", () => {
       dependencies: { plugin: "file:./plugin.tgz" },
     });
 
-    const runCommand = peerPlan(async (cwd) => {
-      await writeLock(cwd, {
-        "": {
-          dependencies: { plugin: "file:./plugin.tgz" },
-        },
-        "node_modules/plugin": { version: "1.0.0" },
-        "node_modules/plugin/node_modules/runtime-lib": {
-          peerDependencies: { zod: "^4.0.0" },
-          version: "1.0.0",
-        },
-        "node_modules/plugin/node_modules/zod": { version: "4.4.3" },
-      });
-      return successfulSpawn;
+    const runCommand = peerPlan({
+      "node_modules/plugin": { version: "1.0.0" },
+      "node_modules/plugin/node_modules/runtime-lib": {
+        peerDependencies: { zod: "^4.0.0" },
+        version: "1.0.0",
+      },
+      "node_modules/plugin/node_modules/zod": { version: "4.4.3" },
     });
 
     await expect(syncManagedNpmRootPeerDependencies({ npmRoot, runCommand })).resolves.toBe(false);
