@@ -246,7 +246,7 @@ const runMessageBlock = (message: string) => ["Run message:", "", "```text", mes
  * The message an ongoing scribe's automation sends each run: the work settings, the work step
  * and the closing line. Editing it on the automation changes what later runs do.
  */
-export function runPrompt(setup: ScribeSetup) {
+function runPrompt(setup: ScribeSetup) {
   const scribe = scribeById(setup.scribe)!;
   const settings = workSettings(setup);
   return [

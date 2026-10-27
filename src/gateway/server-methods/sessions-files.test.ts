@@ -402,6 +402,22 @@ describe("sessions.files RPC handlers", () => {
     },
   );
 
+  it.each([
+    ["München", "Mu\u0308nchen.md"],
+    ["Mu\u0308nchen", "München.md"],
+  ])(
+    "finds a canonically equivalent workspace filename without rewriting it (%s)",
+    async (query, filename) => {
+      writeWorkspace(filename, "# Canonically equivalent filename\n");
+
+      const { browser } = await files.ok("list", { search: query });
+
+      expect(browser.entries).toEqual(
+        expect.arrayContaining([expect.objectContaining({ path: filename })]),
+      );
+    },
+  );
+
   it.runIf(process.platform === "linux")(
     "reports non-UTF-8 filenames during workspace browse",
     async () => {

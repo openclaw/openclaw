@@ -170,6 +170,7 @@ describe("steering input custody", () => {
           ...initialConfig.messages,
           queue: {
             ...initialQueue,
+            collaborativeSteeringFallback: "reject",
             ...(allowCollaborativeSteering !== undefined ? { allowCollaborativeSteering } : {}),
           },
         },

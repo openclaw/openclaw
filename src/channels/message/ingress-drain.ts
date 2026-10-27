@@ -21,6 +21,10 @@ import {
   registerLiveIngressDrainInstance,
 } from "./ingress-claim-owner.js";
 import { createIngressWriter } from "./ingress-claim-writes.js";
+import {
+  createIngressDeadLetterNotifier,
+  type IngressDeadLetterNotice,
+} from "./ingress-dead-letter-notice.js";
 import type { ChannelIngressDispatchLifecycle } from "./ingress-drain-lifecycle.js";
 import {
   activeClaimKey,
@@ -70,6 +74,8 @@ export type CreateChannelIngressDrainOptions<
     lifecycle: ChannelIngressDispatchLifecycle,
   ) => Promise<ChannelIngressDrainDispatchResult | void> | ChannelIngressDrainDispatchResult | void;
   resolveNonRetryableFailure?: (err: unknown) => IngressNonRetryableFailure | null;
+  /** Best-effort transport notice, only after this claim's dead-letter write commits. */
+  onDeadLetter?: IngressDeadLetterNotice<TPayload, TMetadata>;
   /** A returned guard is checked synchronously before cancelling pre-adoption work. */
   shouldSupersedePending?: (
     newEvent:
@@ -174,6 +180,7 @@ export function createChannelIngressDrainOwner<
   let disposed = false;
 
   const log = (message: string) => options.onLog?.(message);
+  const notifyDeadLetter = createIngressDeadLetterNotifier(options.onDeadLetter, log, formatError);
 
   const clearStallTimer = (state: ActiveHandlerState<TPayload, TMetadata>) => {
     clearTimeout(state.stallTimer);
@@ -301,13 +308,9 @@ export function createChannelIngressDrainOwner<
     }
     if (disposition.kind === "fail") {
       log(
-        `spooled update ${displayId} failed with non-retryable ${disposition.reason}: ${disposition.message}; dead-lettered`,
+        `spooled update ${displayId} on lane ${claim.laneKey ?? displayId} failed after ${disposition.attempt} attempts (${disposition.reason}): ${disposition.message}; dead-lettered`,
       );
-      if (disposition.reason === "retry-limit-exceeded") {
-        log(
-          `spooled update ${displayId} on lane ${claim.laneKey ?? displayId} reached retry limit after ${disposition.attempt} attempts; dead-lettered`,
-        );
-      }
+      await notifyDeadLetter(claim, disposition);
       return;
     }
     log(`spooled update ${displayId} failed; keeping for retry: ${disposition.message}`);

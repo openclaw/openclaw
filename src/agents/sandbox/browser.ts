@@ -412,12 +412,12 @@ async function ensureSandboxBrowserContainer(
     await withContainerEnvFile(env, async (envFile) => {
       args.push("--env-file", envFile, browserImage);
       params.assertCurrent?.();
-      await execDocker(args);
+      await execDocker(args, { assertCurrent: params.assertCurrent });
     });
   }
   if (!hasContainer || !running) {
     params.assertCurrent?.();
-    await execDocker(["start", containerName]);
+    await execDocker(["start", containerName], { assertCurrent: params.assertCurrent });
   }
 
   const mappedCdp = await readDockerPort(containerName, params.cfg.browser.cdpPort);
@@ -480,7 +480,7 @@ async function ensureSandboxBrowserContainer(
         params.assertCurrent?.();
         if (currentState.exists && !currentState.running) {
           params.assertCurrent?.();
-          await execDocker(["start", containerName]);
+          await execDocker(["start", containerName], { assertCurrent: params.assertCurrent });
         }
         const ok = await waitForSandboxCdp({
           cdpPort: mappedCdp,

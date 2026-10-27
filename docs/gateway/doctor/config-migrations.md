@@ -70,32 +70,22 @@ The migration also leaves lists absent when the effective account, channel, or
 global-default `groupPolicy` disables groups. Explicit policy overrides still
 apply. Update-time Doctor repair follows the same rules.
 
-## Collaborative steering default
+## Collaborative steering defaults
 
-Doctor writes `messages.queue.allowCollaborativeSteering: false` when the setting is
-absent, creating missing parent objects. New configuration files contain the same
-explicit default. Existing `true` and `false` values, including values supplied
-through config includes, stay unchanged.
+[Security presets](/gateway/security/presets) own runtime steering defaults. Doctor
+and configuration creation no longer persist a separate steering default: doing
+so would pin an override and prevent a later preset switch from taking effect.
+Ordinary reads and startup also leave the authored configuration unchanged.
 
-The repair uses Doctor's existing backed-up, include-aware config writer. A
-supported, singly owned nested include receives the repair in
-that file. Ambiguous, shared, external, or root-level include layouts retain the
-writer's existing refusal behavior; Doctor reports the affected boundary so the
-operator can edit its owning file explicitly. Repeated repair is idempotent.
+Existing explicit `messages.queue.allowCollaborativeSteering` values, including
+booleans persisted by earlier versions or supplied through includes, stay
+unchanged. Doctor does not infer whether an older explicit value was a user
+choice. Unset that override to use the selected preset. The same rule applies
+during updates, without an additional default-only config or bookkeeping write.
 
-Persisting this default can also update database-backed config bookkeeping.
-The existing [update rollback checks](/cli/update/how-updates-run) still apply:
-unattributed database writes prevent automatic restoration, including writes
-made during Doctor. The updater retains recovery artifacts for manual recovery.
-
-Managed package updates and source updates invoke candidate Doctor and use this
-repair. Older update drivers that request a read-only Doctor phase cannot persist
-it in that phase. Direct package-manager upgrades, manual package replacement, and
-container-image replacement can bypass Doctor entirely. These installations use
-the runtime default immediately; run `openclaw doctor --fix` to persist it.
-Ordinary configuration reads and Gateway startup do not write this setting.
-
-See [Queue steering](/concepts/queue-steering) for the opt-in authority tradeoff.
+With collaboration disabled and quiet fallback selected, messages queue as
+requester-owned turns without a resend instruction. Explicit strict fallback
+remains available. See [Queue steering](/concepts/queue-steering).
 
 ## Cloud setup secret migration
 
@@ -188,10 +178,12 @@ Candidate update admission validates the projected configuration without changin
 the live config, databases, or backups. The installed updater can then run
 Doctor's backed-up data migration before the legacy settings are removed.
 Package updates using candidate admission also inspect the original heartbeat
-files. Unsafe or unreadable sources refuse the update before the running Gateway
-stops, including when an older updater omits workspace files from its private
-rehearsal. Differing scratch or a file retained after completed conversion does
+files. Unsafe or unreadable sources that still need conversion refuse the update
+before the running Gateway stops, including when an older updater omits workspace
+files from its private rehearsal. Differing scratch or a file retained after completed conversion does
 not block admission: Doctor preserves the originals and reports them for review.
+After completed conversion, Doctor only checks whether the path exists; it does
+not read the recreated file or follow its symlink.
 Unrelated invalid fields, unsupported legacy shapes, and heartbeat repairs in
 read-only, future-written, or included configuration still require operator
 repair before admission.
@@ -1215,7 +1207,7 @@ against the current SQLite owners before the import can rename profiles.
 
     A tool policy scope with nonempty `allow` and `alsoAllow` lists fails validation. `doctor --fix` merges the lists only when the effective profile grants remain unchanged for every agent and provider that inherits the extras. It retains `alsoAllow: []` as an explicit override so inherited extras cannot reappear. If the extras may extend a profile or grant Gateway configuration-read access, Doctor leaves the conflicting scope untouched and reports the exact keys and values to review manually. This applies at the root `tools` policy, per-agent and per-provider policies, and channel or gateway tool policies. Sandbox lists remain untouched because `allow` and `alsoAllow` inherit independently; conflicting sandbox lists still require manual repair. Plugin-owned `plugins.entries.*.config` is left to the owning plugin's doctor contract. Gateway startup leaves these conflicts unchanged and directs the operator to Doctor; unresolved conflicts still require operator guidance before the config can validate.
 
-    `doctor --fix` removes `workspace: null` from `agents.entries.<id>` so normal workspace resolution can apply, including after migrating a legacy `agents.list` roster. Supported legacy heartbeat settings pass through the durable automation cutover. Invalid active-hour values remain unchanged with a repair diagnostic; Doctor does not silently replace quiet hours with unrestricted execution.
+    `doctor --fix` removes `workspace: null` from `agents.entries.<id>` so normal workspace resolution can apply, including after migrating a legacy `agents.list` roster. Supported legacy heartbeat settings pass through the durable automation cutover. Invalid active-hour values remain unchanged with a repair diagnostic naming the field and value; Doctor defers the heartbeat cutover instead of replacing quiet hours with unrestricted execution or an inherited window. Times still require `HH:MM`: correct `6:00` to `06:00`, for example, then rerun `openclaw doctor --fix` to migrate the intended window.
 
   </Accordion>
   <Accordion title="2. Legacy config key migrations">

@@ -1,44 +1,17 @@
 import { expect, it } from "vitest";
 import {
+  createAssistantVisibleStreamText,
+  sanitizeAssistantVisibleStreamText,
+} from "../../embedded-agent-utils.js";
+import {
   assistantMessage,
   collectPromotionEvents,
   messageContent,
   record,
   commandText,
   createPromotionStream,
+  wrapPromotionStream,
 } from "./attempt-tool-call-text-promotion.test-support.js";
-
-it("preserves a fenced allowed-tool example in live and terminal output", async () => {
-  const parts = ["`", "``json\n", "[re", 'ad]\n{"path":"example.txt"}\n[/read]\n', "```"];
-  const rawText = parts.join("");
-  const createMessage = () => assistantMessage([{ type: "text", text: rawText }]);
-  const stream = await createPromotionStream(
-    {
-      events: [
-        ...parts.map((delta) => ({ type: "text_delta", contentIndex: 0, delta })),
-        { type: "text_end", contentIndex: 0, content: rawText },
-        { type: "done", reason: "stop", message: createMessage() },
-      ],
-      resultMessage: createMessage(),
-    },
-    "read",
-  );
-
-  const events = await collectPromotionEvents(stream);
-  const result = record(await stream.result(), "result message");
-
-  expect(
-    events
-      .filter((event) => event.type === "text_delta")
-      .map((event) => event.delta)
-      .join(""),
-  ).toBe(rawText);
-  expect(events.some((event) => String(event.type).startsWith("toolcall_"))).toBe(false);
-  expect(record(events.at(-1)?.message, "done message").content).toEqual([
-    { type: "text", text: rawText },
-  ]);
-  expect(result.content).toEqual([{ type: "text", text: rawText }]);
-});
 
 it("reuses promoted ids across cloned result and done messages", async () => {
   const rawToolText = "<function=exec></function>";
@@ -111,3 +84,81 @@ it("preserves intervening thinking when promoting multiple text blocks", async (
     expect.objectContaining({ type: "toolCall", name: "exec", arguments: { command: "whoami" } }),
   ]);
 });
+
+const deferredCall =
+  "<tool_call>\n<function=skills_read>\n<parameter=name>\nbriefing\n</parameter>\n</function>\n</tool_call>";
+
+it.each([
+  ["deferred envelope", deferredCall],
+  ["offered fenced example", '```json\n[read]\n{"path":"example.txt"}\n[/read]\n```'],
+  ["missing closer", deferredCall.replace("\n</tool_call>", "")],
+  ["invalid closer", deferredCall.replace("</tool_call>", "</wrong>\nAnswer")],
+  ["partial opener", "<tool_"],
+  ["ordinary prefix prose", "Use <tool_ as a prefix in prose."],
+  ["ordinary tag prose", "The <tool_call> example remains visible."],
+  ["fenced example", `\`\`\`xml\n${deferredCall}\n\`\`\``],
+  ["tilde-fenced example", `~~~xml\n${deferredCall}\n~~~`],
+  ["inline example", `Example \`${deferredCall}\` remains visible.`],
+  ["indented example", `    ${deferredCall}`],
+  ["indented partial marker", "    <tool_"],
+  ["surrounding prose", `Before\n\n${deferredCall}\n\nAfter`],
+  ["CRLF envelope", deferredCall.replaceAll("\n", "\r\n")],
+] as const)(
+  "preserves the full streaming chain without executing a deferred name: %s",
+  async (_name, source) => {
+    const expected = Array.from({ length: source.length + 1 }, (_, end) =>
+      sanitizeAssistantVisibleStreamText(source.slice(0, end), "final_answer"),
+    );
+    const schedules = [
+      ...Array.from({ length: source.length + 1 }, (_, split) => [
+        source.slice(0, split),
+        source.slice(split),
+      ]),
+      source.split(""),
+      Array.from({ length: Math.ceil(source.length / 4) }, (_, index) =>
+        source.slice(index * 4, index * 4 + 4),
+      ),
+    ];
+    for (const chunks of schedules) {
+      const projection = createAssistantVisibleStreamText("final_answer");
+      const message = (text: string) => assistantMessage([{ type: "text", text }]);
+      const stream = await wrapPromotionStream(
+        () => ({
+          result: async () => message(source),
+          async *[Symbol.asyncIterator]() {
+            let prefix = "";
+            yield { type: "start", partial: message("") };
+            for (const delta of chunks) {
+              prefix += delta;
+              yield { type: "text_delta", contentIndex: 0, delta, partial: message(prefix) };
+              // The consumer has processed every event produced for this source prefix.
+              expect(projection.text).toBe(expected[prefix.length]);
+            }
+            yield { type: "text_end", contentIndex: 0, content: source, partial: message(source) };
+            yield { type: "done", reason: "stop", message: message(source) };
+          },
+        }),
+        "read",
+      );
+      let emitted = "";
+      for await (const value of stream) {
+        const event = record(value, "event");
+        if (event.type === "text_delta" && typeof event.delta === "string") {
+          emitted += event.delta;
+          projection.append(event.delta);
+        } else if (event.type === "text_end" && typeof event.content === "string") {
+          projection.replace(event.content);
+        }
+        expect(String(event.type).startsWith("toolcall_")).toBe(false);
+        if (event.type === "done") {
+          expect(record(event.message, "done message").content).toEqual(message(source).content);
+        }
+      }
+      expect(emitted).toBe(source);
+      expect(projection.text).toBe(expected.at(-1));
+      expect(record(await stream.result(), "result message").content).toEqual(
+        message(source).content,
+      );
+    }
+  },
+);

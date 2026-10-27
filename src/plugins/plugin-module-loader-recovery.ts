@@ -30,6 +30,11 @@ export type PluginInstanceModuleLoaderParams = {
    */
   inspectionSourceIdentity?: string;
   inspectionRetention?: InspectionNativeEsmRetention;
+  /**
+   * False when no caller can run plugin state operations through this instance, so bundled
+   * operation modules are never captured for it.
+   */
+  stateOperations?: false;
   preparedArtifact?: {
     artifact: PluginGenerationArtifact;
     attachModuleSource: (resolve: (filename: string) => string) => void;
