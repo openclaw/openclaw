@@ -13,6 +13,7 @@ import {
 } from "./crabbox-worker-warm-image-recipe.js";
 import {
   crabboxWarmImageCaptureStatus,
+  isCrabboxWarmImageHeld,
   legacyLeaseSelector,
   LEGACY_WARM_LEASE_MAX_ENTRIES,
   projectCrabboxLegacyWarmLeases,
@@ -234,16 +235,6 @@ export function withCrabboxWarmImageGeneration(
   const next = update(image);
   return next ? { ...record, [field]: next } : undefined;
 }
-
-export const isCrabboxWarmImageHeld = (
-  record: Pick<WarmProfileRecord, "allocations">,
-  checkpointId: string,
-) =>
-  Object.values(record.allocations).some(
-    ({ choice, imageGeneration }) =>
-      (choice.kind === "checkpoint" && choice.checkpointId === checkpointId) ||
-      imageGeneration?.checkpointId === checkpointId,
-  );
 
 export function assertCrabboxWarmImagePreparation(
   preparation:
@@ -660,15 +651,19 @@ export function projectCrabboxWarmImage(key: string, value: WarmProfileRecord) {
   };
 }
 
-/** Recovery closes only the capture generation; allocation decisions remain authoritative. */
+/** Normal capture completion retains allocations; confirmed source cleanup may release its hold. */
 export async function clearCrabboxWarmImageCapture(
   store: ReturnType<typeof openCrabboxWarmImageStore>,
   key: string,
   selector: string,
-  assertCurrent?: () => void,
+  options: { assertCurrent?: () => void; releaseSourceAllocation?: boolean } = {},
 ): Promise<boolean> {
+  const sourceLeaseId = (current: WarmProfileRecord) =>
+    options.releaseSourceAllocation && current.operation?.type === "capture"
+      ? current.operation.leaseId
+      : undefined;
   const matches = (current: WarmProfileRecord) => {
-    assertCurrent?.();
+    options.assertCurrent?.();
     return current.operation?.type === "capture" && current.operation.id === selector;
   };
   if (
@@ -677,15 +672,24 @@ export async function clearCrabboxWarmImageCapture(
       (current) =>
         !current.image &&
         !current.previous &&
-        Object.keys(current.allocations).length === 0 &&
+        Object.keys(current.allocations).every((id) => id === sourceLeaseId(current)) &&
         matches(current),
     )
   ) {
     return true;
   }
-  return store.update(key, (current) =>
-    current && matches(current) ? withoutCrabboxWarmImageOperation(current) : undefined,
-  );
+  return store.update(key, (current) => {
+    if (!current || !matches(current)) {
+      return undefined;
+    }
+    const next = withoutCrabboxWarmImageOperation(current);
+    const leaseId = sourceLeaseId(current);
+    if (leaseId && next.allocations[leaseId]) {
+      next.allocations = { ...next.allocations };
+      delete next.allocations[leaseId];
+    }
+    return next;
+  });
 }
 
 export async function recoverCrabboxWarmImageCapture(
@@ -723,7 +727,12 @@ export async function recoverCrabboxWarmImageCapture(
   const entry = (await store.entries()).find(
     ({ value }) => crabboxWarmImageCaptureStatus(value)?.selector === selector,
   );
-  if (!entry || !(await clearCrabboxWarmImageCapture(store, entry.key, selector))) {
+  if (
+    !entry ||
+    !(await clearCrabboxWarmImageCapture(store, entry.key, selector, {
+      releaseSourceAllocation: true,
+    }))
+  ) {
     throw new Error(
       "Capture selector is absent or changed; rerun openclaw crabbox warm-images --json. No state was changed.",
     );

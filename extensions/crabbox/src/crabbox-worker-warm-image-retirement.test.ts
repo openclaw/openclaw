@@ -331,6 +331,8 @@ it.each([false, true])("fences old retirement completion (fails=%s)", async (fai
     clock.mockReturnValue(now + 2 * DAY_MS);
     await s.capture("newer-refresh");
     expect(catalog.captures).toBe(3);
+    // Newer captures report their holders; the stale completion must stay silent.
+    s.warn.mockClear();
   } finally {
     gate.release();
   }

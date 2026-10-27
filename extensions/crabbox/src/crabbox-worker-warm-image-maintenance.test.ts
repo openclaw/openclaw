@@ -11,7 +11,7 @@ import {
   expectText,
 } from "./crabbox-warm-scenarios.test-support.js";
 import { destroyAndWait, commandResult } from "./crabbox-worker-provider.test-support.js";
-import { managedBinary, PROFILE } from "./crabbox-worker-warm-image.test-support.js";
+import { jsonResult, managedBinary, PROFILE } from "./crabbox-worker-warm-image.test-support.js";
 
 const RETENTION_MS = 14 * 24 * 60 * 60 * 1_000;
 const REFRESH_MS = 24 * 60 * 60 * 1_000;
@@ -472,4 +472,98 @@ it("matches absence receipts to the exact checkpoint", async () => {
   expect(s.calls.map(({ argv }) => argv)).toEqual(deletionArgs("/opt/a/crabbox"));
   expect(s.store.lookup("expired")).toBeUndefined();
   expect(s.warn).not.toHaveBeenCalled();
+});
+
+it.each(["expired", "stopped", "running", "unclaimed", "inspection failure"])(
+  "reconciles a retirement allocation on a %s lease",
+  async (state) => {
+    const leaseId = "cbx_retirement_holder";
+    const gone = state === "expired" || state === "stopped";
+    const s = scenario(({ argv }) => {
+      if (argv[1] !== "inspect") {
+        return undefined;
+      }
+      expect(argv).toContain(leaseId);
+      return state === "unclaimed"
+        ? commandResult({ code: 4, stderr: `${leaseId} is not claimed by Crabbox` })
+        : state === "inspection failure"
+          ? commandResult({ code: 7, stderr: "fixture inspection failed" })
+          : jsonResult({ id: leaseId, state });
+    });
+    const retained = warmRecord({
+      backend: "aws",
+      image: warmImage("chk_current", { lastDemandAtMs: Date.now() }),
+      previous: warmImage("chk_previous", { pinned: { atMs: 1 } }),
+    });
+    const record = {
+      ...retained,
+      operation: retirement,
+      allocations: {
+        [leaseId]: warmAllocation(
+          state === "stopped"
+            ? { kind: "cold" }
+            : { kind: "checkpoint", checkpointId: "chk_expired" },
+          { phase: "enrolled", imageGeneration: { checkpointId: "chk_expired", createdAtMs: 1 } },
+        ),
+      },
+    };
+    s.store.register("retiring", record);
+
+    await s.provider.maintain!(context());
+    await s.provider.maintain!(context());
+
+    expect(s.store.lookup("retiring")).toEqual(gone ? retained : record);
+    expect(s.checkpoints("delete").map((argv) => argv.slice(1))).toEqual(gone ? [deletion] : []);
+    const heldWarnings = s.warn.mock.calls.filter(([message]) =>
+      message.includes("retirement held"),
+    );
+    expect(heldWarnings).toHaveLength(gone ? 0 : 1);
+    if (!gone) {
+      expect(heldWarnings[0]?.[0]).toContain(leaseId);
+    }
+  },
+);
+
+it("keeps a dispatch allocation while its fixed lease has not been created", async () => {
+  const entered = createDeferred<string>();
+  const resume = createDeferred<void>();
+  let holdFork = false;
+  const s = scenario(async ({ argv }) => {
+    if (holdFork && argv[1] === "checkpoint" && argv[2] === "fork") {
+      entered.resolve(argv[argv.indexOf("--lease-id") + 1]!);
+      await resume.promise;
+    }
+    if (holdFork && argv[1] === "inspect") {
+      return commandResult({
+        code: 4,
+        stderr: `aws instance not found: ${argv[argv.indexOf("--id") + 1]}`,
+      });
+    }
+    return undefined;
+  });
+  await s.capture();
+  holdFork = true;
+  const provisioning = s.provision("dispatch-before-lease");
+  try {
+    const leaseId = await entered.promise;
+    const entry = s.entry();
+    const checkpointId = entry.value.image!.checkpointId;
+    const record = {
+      ...entry.value,
+      image: warmImage("chk_replacement", { lastDemandAtMs: Date.now() }),
+      operation: { type: "retire" as const, checkpointId },
+    };
+    s.store.register(entry.key, record);
+    s.calls.length = 0;
+
+    await s.provider.maintain!(context());
+
+    expect(s.store.lookup(entry.key)).toEqual(record);
+    expect(s.calls).toEqual([]);
+    expect(s.warn).toHaveBeenCalledWith(expect.stringContaining(leaseId));
+  } finally {
+    holdFork = false;
+    resume.resolve();
+    await provisioning;
+  }
 });

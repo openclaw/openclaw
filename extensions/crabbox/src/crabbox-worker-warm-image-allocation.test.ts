@@ -69,7 +69,13 @@ function fixture(
     return commandResult();
   });
   const manager = () =>
-    createCrabboxWarmImageManager({ state: crabboxState, warn, policy, prepareCapture });
+    createCrabboxWarmImageManager({
+      state: crabboxState,
+      warn,
+      policy,
+      prepareCapture,
+      isLeaseActive: () => false,
+    });
   const context = (id: string, projectKey?: string) => ({
     binary: "crabbox",
     id,

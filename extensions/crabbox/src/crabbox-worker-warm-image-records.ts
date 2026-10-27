@@ -1,6 +1,27 @@
 // Doctor and runtime share record policy without loading a state-store implementation.
 import { createHash } from "node:crypto";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
+import type { WarmAllocationRecord, WarmProfileRecord } from "./crabbox-worker-warm-image-store.js";
+
+const allocationHoldsCheckpoint = (allocation: WarmAllocationRecord, checkpointId: string) =>
+  (allocation.choice.kind === "checkpoint" && allocation.choice.checkpointId === checkpointId) ||
+  allocation.imageGeneration?.checkpointId === checkpointId;
+
+export const isCrabboxWarmImageHeld = (
+  record: Pick<WarmProfileRecord, "allocations">,
+  checkpointId: string,
+) =>
+  Object.values(record.allocations).some((allocation) =>
+    allocationHoldsCheckpoint(allocation, checkpointId),
+  );
+
+export const crabboxWarmImageHoldingLeaseIds = (
+  record: Pick<WarmProfileRecord, "allocations">,
+  checkpointId: string,
+) =>
+  Object.entries(record.allocations)
+    .filter(([, allocation]) => allocationHoldsCheckpoint(allocation, checkpointId))
+    .map(([id]) => id);
 
 export type WarmImageOperation =
   | {

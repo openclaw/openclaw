@@ -14,6 +14,7 @@ import {
   crabboxWarmImageRecoveryHint,
   CRABBOX_WARM_IMAGE_WAIT_HINT,
   WARM_IMAGE_MAX_ENTRIES,
+  crabboxWarmImageHoldingLeaseIds,
 } from "./crabbox-worker-warm-image-records.js";
 import {
   admitCrabboxWarmImageProfile,
@@ -336,11 +337,16 @@ export function registerCrabboxWorkerProviderDoctorChecks(
             });
           }
           if (image.retirement) {
+            const holders = crabboxWarmImageHoldingLeaseIds(image, image.retirement.checkpointId);
+            const held =
+              holders.length > 0
+                ? ` Held by allocation leases: ${holders.join(", ").slice(0, 1024)}.`
+                : "";
             findings.push({
               ...details,
-              message: `Warm-image checkpoint ${image.retirement.checkpointId}${display} is still awaiting deletion.`,
+              message: `Warm-image checkpoint ${image.retirement.checkpointId}${display} is still awaiting deletion.${held}`,
               fixHint:
-                "Cleanup retries during periodic maintenance or the next warm-image capture or worker teardown. Inspect `openclaw crabbox warm-images --json` and the Gateway log for provider deletion errors if it remains pending.",
+                "Cleanup retries during periodic maintenance or the next warm-image capture or worker teardown. Confirmed-gone allocation leases are released automatically; live or unconfirmed leases keep their holds. Inspect `openclaw crabbox warm-images --json` and the Gateway log for holding leases or provider deletion errors if it remains pending.",
             });
           }
         }

@@ -58,7 +58,7 @@ export function registerCrabboxWarmImageCommands(program: CliProgram, state: Cra
         }
         const lines = options.recover
           ? [
-              "Selected recovery record cleared; retained images and other allocation choices are preserved. No provider commands were run.",
+              "Selected recovery record and capture-source allocation cleared; retained images and other allocation choices are preserved. No provider commands were run.",
               nextSteps,
             ]
           : [];
