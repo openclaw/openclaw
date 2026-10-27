@@ -75,6 +75,8 @@ const repositoryScriptEntries = [
   // Its header documents the full transcript-pairing repair benchmark.
   "scripts/perf/tool-result-pairing-measure.ts!",
   "scripts/perf/assistant-thinking-measure.ts!",
+  // Its header documents leaf SELF-byte attribution of sampled survivor profiles.
+  "scripts/perf/survivor-leaf-rank.mjs!",
   // db:postgres:gen/check invoke this generator through the source loader.
   "scripts/generate-postgres-schema.mts!",
   // CI preflight executes the manifest from its trusted harness checkout.

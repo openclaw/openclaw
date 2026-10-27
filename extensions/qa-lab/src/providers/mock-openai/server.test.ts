@@ -683,7 +683,7 @@ describe("qa mock openai server", () => {
         "Subagent terminal reply QA check: empty.",
         "[Internal task completion event]\nTask: qa-terminal-empty\nChild task: Subagent terminal reply QA worker: empty.\nResult: (no output)",
       ),
-      "",
+      "The child run ended. Report its outcome to the requester.",
     ],
     [
       "lets child subagent prompts finish with an exact token",
@@ -1524,7 +1524,7 @@ describe("qa mock openai server", () => {
       const payload = await respond(server, input, { tools });
       if (terminalCase === "visible") {
         expectNoTool(payload);
-        expect(outputText(payload)).toBe("");
+        expect(outputText(payload)).not.toBe("");
         return;
       }
       const messageCall = findToolCall(payload, "message");
