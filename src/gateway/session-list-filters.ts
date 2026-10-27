@@ -265,8 +265,11 @@ export function filterSessionEntries(
   // Excluded rows must not participate in search or ownership resolution.
   const titleSearch = search && normalizeSessionSearchText(search);
   const matchesSearch = search
-    ? (key: string, entry: SessionEntry): boolean => {
-        const target = expectDefined(params.getTarget(key), "search row owner");
+    ? (
+        key: string,
+        entry: SessionEntry,
+        target: NonNullable<ReturnType<SessionListTargetLookup>>,
+      ): boolean => {
         const storeKey = target.storeKey ?? key;
         let fields = staticSearchFields.get(entry);
         if (!fields || fields.key !== storeKey) {
@@ -334,7 +337,7 @@ export function filterSessionEntries(
         if (matchesSessionListSearch([params.identityNames?.get(agentId)], search)) {
           return true;
         }
-        const source = expectDefined(params.getModelFacts, "prepared search row model facts")(key);
+        let models: Array<string | undefined> | undefined;
         // Derived model aliases are not agent-key matches.
         if (!search.startsWith("agent:")) {
           const subagentRun = getRowContext().subagentRuns.getDisplaySubagentRun(storeKey);
@@ -349,10 +352,17 @@ export function filterSessionEntries(
               configuredDefaultModelByAgent: getRowContext().configuredDefaultModelByAgent,
             },
           );
-          const models: Array<string | undefined> = [];
-          for (const identity of [resolvedModel, source.selectedModel, source.rowModelIdentity]) {
-            addSessionListSearchModelFields(models, identity);
+          models = [];
+          addSessionListSearchModelFields(models, resolvedModel);
+          if (matchesSessionListSearch(models, search)) {
+            return true;
           }
+          models.length = 0;
+        }
+        const source = expectDefined(params.getModelFacts, "prepared search row model facts")(key);
+        if (models) {
+          addSessionListSearchModelFields(models, source.selectedModel);
+          addSessionListSearchModelFields(models, source.rowModelIdentity);
           if (matchesSessionListSearch(models, search)) {
             return true;
           }
@@ -440,7 +450,7 @@ export function filterSessionEntries(
     ) {
       continue;
     }
-    if (matchesSearch && !matchesSearch(key, entry)) {
+    if (matchesSearch && !matchesSearch(key, entry, target)) {
       continue;
     }
     if (activeMinutes !== undefined) {

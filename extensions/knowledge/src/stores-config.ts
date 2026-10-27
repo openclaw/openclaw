@@ -19,7 +19,7 @@ export const StoresSection = Type.Record(Type.String({ pattern: STORE_KEY }), Na
 export type StoresSection = Static<typeof StoresSection>;
 
 const REVIEW_JOB_DESCRIPTION =
-  "Automation run after each maintenance pass that leaves private claims reachable from no page. Its agent turn follows the knowledge-unlinked-claims skill. Disable the automation to pause the review.";
+  "Automation run after each maintenance pass that leaves private claims reachable from no page. Its agent turn follows the knowledge-unlinked-claims skill. When unset, maintenance runs the automation with declaration key knowledge:scribe:unlinked-review. Disable the automation to pause the review.";
 /** Authored plugin configuration. Membership is the only per-agent setting;
  * everything else is a plugin-wide gate. */
 export const PluginConfig = Type.Object(

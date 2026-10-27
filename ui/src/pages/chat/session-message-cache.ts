@@ -84,6 +84,7 @@ export type ChatSessionSnapshot = {
 
 export type ChatWidgetLayout = {
   read: (key: string) => number | undefined;
+  readRows: () => Readonly<Record<string, number>> | undefined;
   write: (key: string, size: number | null, row?: string, settled?: boolean) => number | undefined;
   writeRows: (heights: Record<string, number>) => void;
   invalidateRow: (rowKey: string | undefined) => void;
@@ -149,6 +150,10 @@ export function createChatWidgetLayout() {
           const snapshot = current();
           const heights = (key.startsWith("row:v1:") ? admitted : snapshot)?.widgetHeights;
           return snapshot && (heights?.[key] ?? admitted?.widgetHeights?.[key]);
+        },
+        readRows: () => {
+          rowRevision();
+          return current() ? admitted?.widgetHeights : undefined;
         },
         write: (key, measuredHeight, rowKey, settled = false) => {
           const snapshot = current();

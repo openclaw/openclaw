@@ -14,6 +14,9 @@ type Logger = { info(message: string): void; warn(message: string): void };
 type State = { nextRunAt?: number; lastRun?: MaintenanceRun };
 /** The part of the host's service automation scheduler maintenance uses. */
 type ReviewScheduler = {
+  list?: (opts?: {
+    includeDisabled?: boolean;
+  }) => Promise<Array<{ id: string; declarationKey?: string; enabled?: boolean }>>;
   enqueueRun?: (
     id: string,
     mode?: "if-enabled",
@@ -24,6 +27,8 @@ type ReviewScheduler = {
 /** Jobs in one pass, in order. Each is zero-LLM and bounded per call. */
 const JOBS = ["relink"];
 const RELINK_PAGE = 500;
+/** Declaration key of the automation the review scribe creates for itself. */
+export const REVIEW_SCRIBE_DECLARATION_KEY = "knowledge:scribe:unlinked-review";
 /** A missed run is caught up shortly after start, once the Gateway settles. */
 const CATCH_UP_DELAY_MS = 60_000;
 
@@ -129,7 +134,8 @@ export class Maintenance {
   private async execute(trigger: MaintenanceRun["trigger"], slot: number) {
     const startedAt = new Date().toISOString(),
       vaults: MaintenanceVault[] = [],
-      epoch = this.stores.incarnation;
+      epoch = this.stores.incarnation,
+      reviewJobId = await this.reviewJobId();
     let pending = 0;
     for (const target of await this.stores.maintenanceTargets()) {
       const result: MaintenanceVault = {
@@ -177,7 +183,7 @@ export class Maintenance {
           } while (cursor);
           // The review handles every private claim no page reaches, not only remembered ones;
           // only the private partition is reachable from the owner's review session.
-          if (scope.visibility === "private" && this.stores.policy.maintenance.reviewJobId) {
+          if (scope.visibility === "private" && reviewJobId) {
             pending += await this.unlinked(runtime, access);
           }
           // A pass that linked nothing changed nothing; do not make open views refresh.
@@ -197,7 +203,7 @@ export class Maintenance {
       }
     }
     await this.stores.releaseIdle();
-    const review = await this.review(pending);
+    const review = reviewJobId ? await this.review(reviewJobId, pending) : undefined;
     const run: MaintenanceRun = {
       trigger,
       slot: new Date(slot).toISOString(),
@@ -238,15 +244,32 @@ export class Maintenance {
   }
 
   /**
-   * Hand the private claims relink left unlinked to the operator's review
-   * automation, an owner-delegated agent turn that follows the
-   * knowledge-unlinked-claims skill. A disabled automation is not run.
+   * The review automation for this pass: the configured `reviewJobId`, else the
+   * job the review scribe declared. A disabled scribe job is still returned so
+   * the pass reports it as skipped. No scheduler or no job means no review.
    */
-  private async review(pending: number): Promise<MaintenanceReview | undefined> {
-    const jobId = this.stores.policy.maintenance.reviewJobId;
-    if (!jobId) {
+  private async reviewJobId(): Promise<string | undefined> {
+    const configured = this.stores.policy.maintenance.reviewJobId;
+    if (configured) {
+      return configured;
+    }
+    try {
+      const jobs = (await this.getCron?.()?.list?.({ includeDisabled: true })) ?? [];
+      const declared = jobs.filter((job) => job.declarationKey === REVIEW_SCRIBE_DECLARATION_KEY);
+      return (declared.find((job) => job.enabled !== false) ?? declared[0])?.id;
+    } catch (e) {
+      const reason = e instanceof Error ? e.message : String(e);
+      this.log.warn(`Knowledge maintenance could not look up the review scribe: ${reason}`);
       return undefined;
     }
+  }
+
+  /**
+   * Hand the private claims relink left unlinked to the review automation, an
+   * owner-delegated agent turn that follows the knowledge-unlinked-claims
+   * skill. A disabled automation is not run.
+   */
+  private async review(jobId: string, pending: number): Promise<MaintenanceReview> {
     if (!pending) {
       return { jobId, pending, outcome: "not_needed" };
     }

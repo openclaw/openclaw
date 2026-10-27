@@ -178,7 +178,7 @@ export async function prepareEmbeddedAttemptSessionRuntime(input: {
       state: sessionPromptState,
       routeKey: promptRouteKey,
       enabled: transcriptPolicy.inHistorySystemUpdates === true,
-      entries: sessionManager.getBranch(),
+      getEntries: () => sessionManager.getBranch(),
     })
   ) {
     await retireSystemPromptUpdates();

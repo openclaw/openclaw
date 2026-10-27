@@ -97,7 +97,8 @@ it.each(["runtime", "doctor"] as const)(
          github_personal_publication_requests github_repository_publication_requests
          acp_replay_events skill_usage state_leases device_identities device_auth_tokens
          gateway_origin_device_tokens exec_approvals_config local_workspace_projections
-         local_workspace_manifest_nodes sqlite_stat1 sqlite_stat4`.split(/\s+/),
+         local_workspace_manifest_nodes local_workspace_source_path_sets local_workspace_tree_packs
+         sqlite_stat1 sqlite_stat4`.split(/\s+/),
         () => {
           if (owner === "doctor") {
             expect(repairState(options).warnings).toEqual([]);

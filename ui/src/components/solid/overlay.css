@@ -276,10 +276,20 @@ a.oc-menu-item[href] {
   cursor: pointer;
 }
 
-.oc-menu-item:is(:hover, :focus-visible, [aria-expanded="true"]):not(:disabled):not(
+.oc-menu-item:is(:hover, :focus-visible):not(:disabled):not([aria-disabled="true"]) {
+  background: var(--surface-hover);
+}
+
+.oc-menu-item:is([aria-expanded="true"], [aria-checked="true"]):not(:disabled):not(
     [aria-disabled="true"]
   ) {
-  background: var(--bg-hover);
+  background: var(--surface-selected);
+}
+
+.oc-menu-item:is([aria-expanded="true"], [aria-checked="true"]):is(:hover, :focus-visible):not(
+    :disabled
+  ):not([aria-disabled="true"]) {
+  background: var(--surface-selected-hover);
 }
 
 .oc-menu-item:focus-visible {

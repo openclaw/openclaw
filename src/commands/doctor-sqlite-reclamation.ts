@@ -5,11 +5,12 @@ import type { DatabaseSync } from "node:sqlite";
 import { setImmediate } from "node:timers/promises";
 import { formatDiskSpaceBytes, tryReadDiskSpace } from "../infra/disk-space.js";
 import { formatErrorMessage } from "../infra/errors.js";
-import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
 import { resolveSqliteDatabaseFilePaths } from "../infra/sqlite-files.js";
 import { readFiniteSqliteNumber } from "../infra/sqlite-number.js";
+import { openSqliteReadOnlyDatabase } from "../infra/sqlite-snapshot-source.js";
 import type { AgentDatabaseMigrationTarget } from "../infra/state-migrations.media-persistence-targets.js";
 import { DoctorMaintenanceRefusalError } from "../infra/update-doctor-result.js";
+import { withArtifactPreservingStateReads } from "../state/artifact-preserving-state-reads.js";
 import { invalidateOpenClawAgentDatabaseIntegrityBeforeMutation } from "../state/openclaw-agent-db-lease.js";
 import { assertOpenClawAgentDatabaseForMaintenance } from "../state/openclaw-agent-db-maintenance.js";
 import { assertOpenClawStateDatabaseForMaintenance } from "../state/openclaw-state-db.js";
@@ -143,23 +144,27 @@ export async function enableDoctorSqliteReclamation(params: {
     let verified = false;
     try {
       assertIdentity();
-      // A real read-only SQLite connection sees the current mode through WAL;
-      // reading only the main-file header can mistake an already-converted store.
-      const database = openNodeSqliteDatabase(sqlitePath, { readOnly: true });
-      let requiresConversion = false;
-      try {
-        requiresConversion = pragmaNumber(database, "auto_vacuum") === 0;
-        if (requiresConversion) {
-          validate(database);
-          const bytes = Math.max(
-            Number(identity.size),
-            pragmaNumber(database, "page_count") * pragmaNumber(database, "page_size"),
-          );
-          assertVacuumSpace(sqlitePath, bytes, params.env);
-        }
-      } finally {
-        database.close();
-      }
+      // Inspect committed WAL content without creating a new source WAL index after drainage.
+      const requiresConversion = withArtifactPreservingStateReads(
+        () => {
+          const database = openSqliteReadOnlyDatabase(sqlitePath);
+          try {
+            const required = pragmaNumber(database, "auto_vacuum") === 0;
+            if (required) {
+              validate(database);
+              const bytes = Math.max(
+                Number(identity.size),
+                pragmaNumber(database, "page_count") * pragmaNumber(database, "page_size"),
+              );
+              assertVacuumSpace(sqlitePath, bytes, params.env);
+            }
+            return required;
+          } finally {
+            database.close();
+          }
+        },
+        { agentDatabases: true },
+      );
       assertAdmission();
       assertIdentity();
       if (!requiresConversion) {

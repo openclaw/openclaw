@@ -16,6 +16,7 @@ import {
 const suite = createChatFlowE2eSuite();
 const largePngBytes = 2_404_765;
 const smallPngBytes = 25_536;
+
 async function expectImages(images: Locator, count: number) {
   await expect.poll(() => images.count()).toBe(count);
   await expect
@@ -191,15 +192,29 @@ suite.define(() => {
               sessionKey: "agent:main:main",
               idempotencyKey: sends[0]?.runId,
             });
-            expect(requests[0]?.params).toHaveProperty(
-              "attachments",
+            const params = requests[0]?.params;
+            assert(params && typeof params === "object" && "attachments" in params);
+            const attachments = params.attachments;
+            expect(attachments).toMatchObject(
               files.map((file) => ({
                 type: "image",
                 origin: "file",
                 mimeType: file.mimeType,
                 fileName: file.name,
-                content: file.buffer.toString("base64"),
               })),
+            );
+            assert(Array.isArray(attachments));
+            expectExactImageBytes(
+              attachments.map((attachment: unknown) => {
+                assert(
+                  attachment &&
+                    typeof attachment === "object" &&
+                    "content" in attachment &&
+                    typeof attachment.content === "string",
+                );
+                return attachment.content;
+              }),
+              expectedBytes,
             );
             expect(sends).toEqual([
               {

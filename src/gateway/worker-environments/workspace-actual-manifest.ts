@@ -13,7 +13,11 @@ import {
 import { hasNodeErrorCode } from "../../infra/path-guards.js";
 import { createStagedInputPathMatcher } from "../../media/staged-inputs.js";
 import { runTasksWithConcurrency } from "../../utils/run-with-concurrency.js";
-import { activeWorkspaceHashContext, workspaceStatIdentity } from "./workspace-hash-memo.js";
+import {
+  activeWorkspaceHashContext,
+  workspaceCtimeIsReusable,
+  workspaceStatIdentity,
+} from "./workspace-hash-memo.js";
 import {
   MAX_WORKSPACE_INVENTORY_ENTRIES,
   MAX_WORKSPACE_INVENTORY_PATH_BYTES,
@@ -94,6 +98,7 @@ async function readWorkspaceFile(
   params: WorkspaceFileRead & { contents: boolean },
 ): Promise<WorkspaceFileSnapshot | WorkspaceFileContents> {
   const { expectedPath, maxBytes, root, signal } = params;
+  const startedAtMs = Date.now();
   signal?.throwIfAborted();
   const handle = await fs.open(
     expectedPath,
@@ -115,7 +120,8 @@ async function readWorkspaceFile(
       return { type: "unsupported" };
     }
     const identity = workspaceStatIdentity(owner, before);
-    let sha256 = params.contents ? undefined : hashMemo?.get(identity);
+    const reusable = workspaceCtimeIsReusable(before.ctimeNs, startedAtMs);
+    let sha256 = params.contents || !reusable ? undefined : hashMemo?.get(identity);
     let size = Number(before.size);
     if (sha256) {
       if (metrics) {
@@ -157,7 +163,9 @@ async function readWorkspaceFile(
     if (after.size !== BigInt(size) || workspaceStatIdentity(owner, after) !== identity) {
       throw new Error("Gateway workspace file changed while it was being read");
     }
-    hashMemo?.set(identity, sha256);
+    if (reusable) {
+      hashMemo?.set(identity, sha256);
+    }
     params.onIdentity?.(identity);
     const snapshot = {
       type: "file" as const,
@@ -190,9 +198,11 @@ export async function scanActualWorkspaceManifest(
     reuseFile?: (
       entryPath: string,
       identity: string,
+      stats: Pick<BigIntStats, "dev" | "ino" | "size" | "ctimeNs">,
     ) => Extract<WorkerWorkspaceManifestEntry, { type: "file" }> | undefined;
   },
 ): Promise<void> {
+  const startedAtMs = Date.now();
   params.signal?.throwIfAborted();
   let root: string;
   let isStagedInput: ReturnType<typeof createStagedInputPathMatcher>;
@@ -310,8 +320,12 @@ export async function scanActualWorkspaceManifest(
       addEntry({ path: relative, type: "symlink", mode: 0o777, target }, Buffer.byteLength(target));
     } else if (stats.isFile()) {
       const identity = workspaceStatIdentity(hashContext?.owner ?? "gateway", stats);
-      const reusable = params.reuseFile?.(relative, identity);
-      const sha256 = reusable?.sha256 ?? hashContext?.memo.get(identity);
+      const reusable = params.reuseFile?.(relative, identity, stats);
+      const sha256 =
+        reusable?.sha256 ??
+        (workspaceCtimeIsReusable(stats.ctimeNs, startedAtMs)
+          ? hashContext?.memo.get(identity)
+          : undefined);
       if (sha256) {
         // Included paths can cross a replaced parent directory even when the
         // leaf inode still matches a prior content hash.

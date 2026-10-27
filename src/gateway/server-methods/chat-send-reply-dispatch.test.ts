@@ -27,7 +27,7 @@ import {
 } from "../../config/sessions/session-accessor.js";
 import { loadSessionEntryForAdmission } from "../../config/sessions/session-accessor.sqlite-entry-admission.js";
 import { memorySessionActorOwners } from "../../config/sessions/session-actor-memory-owner.js";
-import { withSessionActorStorage } from "../../config/sessions/session-actor-storage-binding.js";
+import { withSessionActorStorage } from "../../config/sessions/session-actor-storage-acquisition.js";
 import * as historyReaders from "../../config/sessions/session-transcript-worker-readers.js";
 import { withOwnedSessionTranscriptWrites } from "../../config/sessions/transcript-write-context.js";
 import { createStructuredOutboundPayloadPlan } from "../../infra/outbound/payloads.js";
@@ -238,6 +238,34 @@ describe("chat delivery watermark preparation", () => {
 });
 
 describe("buildAssistantReplyContentFromInputs", () => {
+  it.each([false, true])("preserves typed fallback status (with answer=%s)", async (withAnswer) => {
+    const notice = "Model Fallback: backup/model";
+    const fallbackNotice = setReplyPayloadMetadata(
+      { text: notice, isFallbackNotice: true },
+      { modelFallbackNotice: true },
+    );
+    const inputs: ReplyDispatchOperation[] = createStructuredOutboundPayloadPlan([
+      fallbackNotice,
+      ...(withAnswer ? [{ text: "Done." }] : []),
+    ]).map((plan) => ({ kind: "prepared", plan }));
+    const content = [
+      { type: "text", text: notice, openclawStatusNotice: true, openclawFallback: true },
+      ...(withAnswer ? [textBlock("Done.")] : []),
+    ];
+    expect(
+      await buildAssistantReplyContentFromInputs({
+        sessionKey: "agent:main:main",
+        agentId: "main",
+        transcriptMediaMessage: {
+          content: [],
+          transcriptText: "",
+          payloadTexts: [notice, "Done."],
+        },
+        inputs,
+      }),
+    ).toEqual({ assistantContent: content, persistedAssistantContent: content });
+  });
+
   it.each([false, true])("projects visible content (reasoning only=%s)", async (reasoningOnly) => {
     const notice = "Model Fallback: backup/model";
     const payloads = [

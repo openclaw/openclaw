@@ -312,33 +312,54 @@ describe.skipIf(!hasBrowserLayout)("openclaw-board-view browser layout", () => {
     expect(getComputedStyle(bar).visibility, revealState).toBe("hidden");
   }
 
-  it("reveals widget chrome while the widget has focus", async () => {
-    const view = await mount();
-    view.style.width = "1200px";
-    const sink = focusSink();
-    const widget = view.querySelector<HTMLElement>('[data-test-id="board-widget"]');
-    const bar = widget!.querySelector<HTMLElement>(".board-widget__bar");
+  it.each([240, 320, 594])(
+    "reveals responsive chrome on a %ipx widget without covering its content",
+    async (width) => {
+      const view = await mount();
+      view.style.width = `${width * 4 + BOARD_GRID_GAP * 3}px`;
+      view.snapshot = {
+        ...structuredClone(source),
+        widgets: source.widgets.map((widget) => ({ ...widget, sizeW: 3 })),
+      };
+      await settle(view);
+      const sink = focusSink();
+      const widget = view.querySelector<HTMLElement>('[data-test-id="board-widget"]');
+      const bar = widget!.querySelector<HTMLElement>(".board-widget__bar");
 
-    expect(getComputedStyle(bar!).visibility).toBe("hidden");
-    expect(
-      getComputedStyle(widget!.querySelector(".board-widget__resize-handle")!).visibility,
-    ).toBe("hidden");
-    widget!.focus();
-    expect(getComputedStyle(bar!).visibility).toBe("visible");
-    // Chrome is a compact centered pill, not a full-width strip: it must not
-    // stretch across the card, so widget-owned corner actions stay clear.
-    const barBounds = bar!.getBoundingClientRect();
-    const widgetBounds = widget!.getBoundingClientRect();
-    expect(barBounds.width).toBeLessThan(widgetBounds.width * 0.75);
-    expect(barBounds.left + barBounds.width / 2).toBeCloseTo(
-      widgetBounds.left + widgetBounds.width / 2,
-      0,
-    );
+      expect(getComputedStyle(bar!).visibility).toBe("hidden");
+      expect(
+        getComputedStyle(widget!.querySelector(".board-widget__resize-handle")!).visibility,
+      ).toBe("hidden");
+      widget!.focus();
+      expect(getComputedStyle(bar!).visibility).toBe("visible");
+      // Chrome is a compact centered pill, not a full-width strip: it must not
+      // stretch across the card, so widget-owned corner actions stay clear.
+      const barBounds = bar!.getBoundingClientRect();
+      const widgetBounds = widget!.getBoundingClientRect();
+      expect(barBounds.width).toBeLessThan(widgetBounds.width * 0.75);
+      if (width < 266) {
+        expect(barBounds.left).toBeCloseTo(widgetBounds.left + 8, 0);
+      } else {
+        expect(barBounds.left + barBounds.width / 2).toBeCloseTo(
+          widgetBounds.left + widgetBounds.width / 2,
+          0,
+        );
+      }
+      expect(getComputedStyle(widget!.querySelector(".board-widget__title")!).display).toBe(
+        width < 378 ? "none" : "block",
+      );
+      expect(
+        document.elementFromPoint(
+          widgetBounds.left + widgetBounds.width / 2,
+          widgetBounds.bottom - 25,
+        ),
+      ).toBe(widget!.querySelector("iframe"));
 
-    sink.focus();
-    expect(widget!.matches(":focus-within")).toBe(false);
-    await vi.waitFor(() => expectChromeHidden(widget!, bar!));
-  });
+      sink.focus();
+      expect(widget!.matches(":focus-within")).toBe(false);
+      await vi.waitFor(() => expectChromeHidden(widget!, bar!));
+    },
+  );
 
   it("scrolls a dense widget menu to Remove with End and activates it", async () => {
     const { userEvent } = await import("vitest/browser");

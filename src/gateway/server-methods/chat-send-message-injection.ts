@@ -52,6 +52,7 @@ import type { UserTurnTranscriptPersistResult } from "../../sessions/user-turn-t
 import { captureAgentJobSession, setGatewayDedupeEntry } from "../agent-turn/agent-job.js";
 import type { ChatImageContent } from "../chat-attachments.js";
 import { broadcastChatError, broadcastChatFinal } from "./chat-broadcast.js";
+import type { ChatSendDiagnostics } from "./chat-send-diagnostics.js";
 import { buildChatSendReplyInjectionText } from "./chat-send-reply-context.js";
 import type { NormalizedChatSendRequest } from "./chat-send-request.js";
 import type { PreparedChatSendSession } from "./chat-send-session.js";
@@ -87,6 +88,7 @@ export function createChatSendMessageInjectionStarter(params: {
   logGateway: GatewayRequestContext["logGateway"];
   assertCurrent?: () => void;
   operatorAuthority?: AdmittedRunOperatorAuthority;
+  diagnostics?: ChatSendDiagnostics;
 }) {
   const { p, rawMessage, supportsTaskSuggestions } = params.request;
   const { agentId, cfg, entry, sessionKey, storePath, clientRunId, resolvedSessionModel } =
@@ -102,6 +104,7 @@ export function createChatSendMessageInjectionStarter(params: {
     if (!target || isInternalTextSlashCommandTurn) {
       return undefined;
     }
+    using phase = params.diagnostics?.scope("detail.run_admission.steer_authority");
     assertCurrent();
     const delivery = prepareSteeringDelivery({
       agentId,
@@ -160,14 +163,11 @@ export function createChatSendMessageInjectionStarter(params: {
         documentImages.length > 0
           ? [
               ...(replyOptionImages ?? []),
-              // Extracted page images follow the prepared inbound images, the
-              // same inline-then-extracted ordering reply dispatch produces; each
-              // keeps its attachment index as ordering provenance.
+              // Keep the same inline-then-extracted ordering reply dispatch produces.
               ...documentImages.map((image): ChatImageContent => ({
                 type: "image",
                 data: image.data,
                 mimeType: image.mimeType,
-                sourceIndex: image.attachmentIndex,
               })),
             ]
           : replyOptionImages;
@@ -192,6 +192,7 @@ export function createChatSendMessageInjectionStarter(params: {
         allowCollaborativeSteering: _collaboration,
         ...caller
       } = overlay;
+      phase?.mark("detail.run_admission.steer_continuation");
       join = await prepareReplyMessageContinuation({
         target,
         assertCurrent,
@@ -232,6 +233,7 @@ export function createChatSendMessageInjectionStarter(params: {
         return undefined;
       }
       const preparedJoin = join.kind === "prepared" ? join : undefined;
+      phase?.mark("detail.run_admission.steer_delivery");
       try {
         await delivery.prepareCurrent();
       } catch (error) {
@@ -246,6 +248,7 @@ export function createChatSendMessageInjectionStarter(params: {
         return undefined;
       }
       let admissionRefused = false;
+      phase?.mark("detail.run_admission.steer_admit");
       const attempt = await beginSessionControllerSteer({
         input: params.sourceRef.input,
         target,

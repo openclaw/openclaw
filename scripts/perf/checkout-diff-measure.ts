@@ -88,7 +88,7 @@ warmup runs; the first response and first materialized content are timed separat
 and response contents are verified after measurement. Cold mode prohibits mutation.
 Use --scope uncommitted for working-tree-only diffs (default: all). --poll opts RPC
 requests into nonblocking poll responses on revisions that support that contract.
-Use --read-cache-owner <adjacent baseline.ts> with --boundary rpc to compare a
+Use --read-cache-owner <adjacent baseline.ts> with --boundary read or rpc to compare a
 previous Git read-cache owner against the candidate in one source checkout.`);
   process.exit(0);
 }
@@ -144,7 +144,10 @@ const readCacheOwner = values["read-cache-owner"]
   : undefined;
 let readCacheOwnerLoads = 0;
 if (readCacheOwner) {
-  assert(values.boundary === "rpc" && !values.seed, "--read-cache-owner requires RPC measurement");
+  assert(
+    values.boundary !== "worker" && !values.seed,
+    "--read-cache-owner requires read or RPC measurement",
+  );
   const canonical = new URL("../../src/infra/git-read-cache.ts", import.meta.url);
   assert.equal(
     path.dirname(readCacheOwner),
@@ -453,6 +456,9 @@ async function measure() {
       warmup,
       samples: results,
     };
+    if (readCacheOwner) {
+      assert(readCacheOwnerLoads > 0, "the selected Git read-cache owner was not loaded");
+    }
     await fs.writeFile(
       path.resolve(values.output ?? path.join(root, "result.json")),
       `${JSON.stringify(report, null, 2)}\n`,

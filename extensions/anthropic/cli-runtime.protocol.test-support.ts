@@ -34,6 +34,7 @@ let hooks;
 let initialize;
 let turn = 0;
 let user;
+let synthetic;
 let privateContext;
 let lateDecision;
 let pendingInputUuid;
@@ -87,7 +88,7 @@ const stoppedFinalPreToolUse = (id, name, input) => preTool(id, name, input, id 
   cwd: process.cwd(), tool_use_id: id + "-tool",
 });
 const result = (detail = {}) => nativeResult(
-  JSON.stringify({ pid: process.pid, turn, user, privateContext, injectedRerunContext, initialize, argv: process.argv.slice(2), ...detail }), {
+  JSON.stringify({ pid: process.pid, turn, user, synthetic, privateContext, injectedRerunContext, initialize, argv: process.argv.slice(2), ...detail }), {
   ...(detail.injectedContext ? { user_message_uuid: pendingInputUuid } : {}),
   ...((!replayReceipts || scenario === "background-bash-overlap") && detail.finalBackgroundAnswer ? {
     origin: { kind: "task-notification", producer: "session-task" }, num_turns: 1, stop_reason: "end_turn",
@@ -111,6 +112,7 @@ for await (const line of createInterface({ input: process.stdin })) {
     assert.ok(hooks);
     turn++;
     user = message.message.content;
+    synthetic = message.isSynthetic === true;
     writeFileSync("user.received", user);
     if ((capturedStopped || backgroundAgent) && turn > 1) {
       result();

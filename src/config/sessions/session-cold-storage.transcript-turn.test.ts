@@ -201,14 +201,18 @@ describe("selected transcript turn cold restoration", () => {
       if (timing === "at worker admission") {
         interceptRestoration((params) => ({
           ...params,
-          withWriteAdmission: (run, diagnostics) =>
-            params.withWriteAdmission((refusal) => {
-              if (!refusal) {
-                admitted = true;
-                fixture.replaceRevision();
-              }
-              return run(refusal);
-            }, diagnostics),
+          withWriteAdmission: (run, diagnostics, operation) =>
+            params.withWriteAdmission(
+              (refusal) => {
+                if (!refusal) {
+                  admitted = true;
+                  fixture.replaceRevision();
+                }
+                return run(refusal);
+              },
+              diagnostics,
+              operation,
+            ),
           onCommitRequest: () => {
             commitRequested = true;
             params.onCommitRequest();
@@ -295,10 +299,10 @@ describe("selected transcript turn cold restoration", () => {
       const resume = createDeferred();
       interceptRestoration((params) => ({
         ...params,
-        withWriteAdmission: async (run, diagnostics) => {
+        withWriteAdmission: async (run, diagnostics, operation) => {
           requested.resolve();
           await resume.promise;
-          return params.withWriteAdmission(run, diagnostics);
+          return params.withWriteAdmission(run, diagnostics, operation);
         },
       }));
       const callback = vi.fn(async (locked: { readEvents: () => Promise<unknown[]> }) =>

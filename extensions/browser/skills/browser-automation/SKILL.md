@@ -52,6 +52,12 @@ Use this skill when you need the `browser` tool for anything beyond a single pag
 
 ## Code Mode Loop
 
+For explicit page-blocker triage with a configured Decision model, read
+[Page triage](references/page-triage.md). Browser `action="judge"` classifies a
+bounded observation through the selected Decision provider and returns answers,
+not page text, to the primary model. It works on text-capable Chromium and
+Lightpanda profiles; it is not Lightpanda native `judge()`.
+
 When `tools.codeMode` is enabled, the Browser tool has no normal turn — it is cataloged behind `exec`/`wait`. Call it from exec cells as an async global, using the callable name the exec quick index advertises for the Browser tool (normally `browser`; colliding names get suffixed, and a client tool can win an identical name). An exact `catalog.search("browser")` returns a handle already bound to the effective callable name, so resolve the handle in each cell and call it instead of hard-coding the literal global; an empty result means the Browser tool is not cataloged in this run.
 
 Keep the same labeled tab through the loop, and alternate reads with actions. Each `exec` cell starts a fresh VM — bindings from a completed cell are gone in the next, and only runs left `waiting` keep their state until `wait` resumes them — so carry comparison state across cells by returning it and re-embedding the returned values in the next cell:

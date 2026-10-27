@@ -485,9 +485,7 @@ describe("prepareChatSendUserTurn", () => {
             imageOrder: [inline ? "inline" : "offloaded"],
             ...(inline
               ? {
-                  parsedImages: [
-                    { type: "image", data: "aGVsbG8=", mimeType: "image/png", sourceIndex: 0 },
-                  ],
+                  parsedImages: [{ type: "image", data: "aGVsbG8=", mimeType: "image/png" }],
                 }
               : { offloadedRefs: [imageRef(id, persistedPath, { label: fileName, sizeBytes })] }),
             ...(prestaged ? { mediaPathOffloads: [staged] } : {}),

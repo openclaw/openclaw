@@ -26,6 +26,7 @@ const definitions = {
   requests: { tabBoundOrder: 3, capability: "supportsRequests" },
   errors: { tabBoundOrder: 4, capability: "supportsErrors" },
   text: { tabBoundOrder: 5, capability: "supportsPageText" },
+  judge: { tabBoundOrder: 17, capability: "supportsPageText" },
   emulate: { tabBoundOrder: 6, capability: "supportsEmulation" },
   pdf: { tabBoundOrder: 11, capability: "supportsPdf", path: true },
   download: { tabBoundOrder: 8, capability: "supportsDownloads", path: true },

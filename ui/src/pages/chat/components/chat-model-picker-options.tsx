@@ -129,7 +129,7 @@ function ModelOptionButton(
   // Query changes should reach only rows whose displayed search facts changed.
   const rank = createMemo(() => search?.row(key())?.rank);
   const hidden = createMemo(() => search?.row(key())?.hidden ?? false);
-  const highlighted = createMemo(() => search?.highlighted() === key());
+  const highlighted = createMemo(() => search?.isHighlighted(key()));
   return (
     <button
       ref={search?.rowRef(key)}
@@ -246,7 +246,7 @@ export function ChatModelPickerTargetOption(props: ChatModelPickerTargetOptionPr
   const key = createMemo(() => `target:${props.groupId}:${props.entry.value}`);
   const rank = createMemo(() => search?.row(key())?.rank);
   const hidden = createMemo(() => search?.row(key())?.hidden ?? false);
-  const highlighted = createMemo(() => search?.highlighted() === key());
+  const highlighted = createMemo(() => search?.isHighlighted(key()));
   return (
     <button
       ref={search?.rowRef(key)}

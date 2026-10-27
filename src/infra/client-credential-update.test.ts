@@ -714,6 +714,8 @@ describe("client credential public update custody", () => {
         "config_machine_state",
         "local_workspace_projections",
         "local_workspace_manifest_nodes",
+        "local_workspace_source_path_sets",
+        "local_workspace_tree_packs",
         "schema_meta",
         "sqlite_stat1",
         "sqlite_stat4",
@@ -721,11 +723,9 @@ describe("client credential public update custody", () => {
     );
     const retirementBackup = archives.find((archive) => archive !== versionBackup)!;
     expect(retirementBackup.inspection).toMatchObject({ sourcePath: f.pathname, userVersion: 28 });
-    expect(retirementBackup.inspection.tables.map((table) => table.name)).toEqual([
-      ...sourceTables,
-      "sqlite_stat1",
-      "sqlite_stat4",
-    ]);
+    expect(retirementBackup.inspection.tables.map((table) => table.name)).toEqual(
+      sourceTables.concat("sqlite_stat1", "sqlite_stat4"),
+    );
     {
       using shared = openNodeSqliteDatabase(f.pathname);
       shared.exec(

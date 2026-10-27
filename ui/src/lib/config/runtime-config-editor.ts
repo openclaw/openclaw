@@ -14,6 +14,7 @@ import {
   type ConfigWriteCoordinator,
   type ConfigMethod,
 } from "./config-gateway-operations.ts";
+import { canEnsureConfigRead } from "./config-gateway-read.ts";
 import {
   agentConfigEntry,
   clearConfigRequestVersions,
@@ -165,7 +166,8 @@ export function createRuntimeConfigEditor(
   });
 
   const ensureLoaded = async () => {
-    if (!state.configSnapshot) {
+    // A held load joins; a read that cannot start or just failed must not publish again.
+    if (!state.configSnapshot && (loads.has("config") || canEnsureConfigRead(state))) {
       await loadConfigOnce(() => loadConfig(state, { draftWrites: writes }));
     }
     appliedRefresh.reconcile();

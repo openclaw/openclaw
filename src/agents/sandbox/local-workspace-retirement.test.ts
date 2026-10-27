@@ -3,6 +3,7 @@ import path from "node:path";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import * as bridgeApi from "../../plugin-sdk/browser-bridge.js";
+import * as stateReads from "../../state/openclaw-state-db-readonly.js";
 import { closeOpenClawStateDatabaseAsync } from "../../state/openclaw-state-db.js";
 import { BROWSER_BRIDGES, type CachedBrowserBridge } from "./browser-bridges.js";
 import * as engine from "./container-engine.js";
@@ -121,6 +122,22 @@ async function setup(
 }
 
 const kinds = ["container", "browser"] as const;
+it.each(kinds)("reuses published %s generation facts through pause and resume", async (kind) => {
+  const reads = vi.spyOn(stateReads, "executeExistingOpenClawStateRead");
+  const h = await setup(kind);
+  h.command.mockImplementation(async (_engine, args) =>
+    success(args.includes("{{.State.Paused}}") ? "true" : ""),
+  );
+  await h.custody.resume();
+  expect(h.command.mock.calls.filter(([, args]) => args[0] === "pause")).toHaveLength(1);
+  expect(h.command.mock.calls.filter(([, args]) => args[0] === "unpause")).toHaveLength(1);
+  expect(
+    reads.mock.calls
+      .map(([, command]) => command.type)
+      .filter((type) => type.startsWith("sandboxRegistry.")),
+  ).toEqual(["sandboxRegistry.list", "sandboxRegistry.browsers"]);
+});
+
 it.each(
   kinds.flatMap((kind) => ["running", "stopped", "absent"].map((state) => [kind, state] as const)),
 )("retires %s %s allocations without name fallback", async (kind, state) => {

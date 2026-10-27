@@ -1,5 +1,15 @@
 import { spawnSync } from "node:child_process";
-import { chmodSync, mkdirSync, readdirSync, readFileSync, symlinkSync, utimesSync } from "node:fs";
+import { createHash } from "node:crypto";
+import {
+  chmodSync,
+  mkdirSync,
+  readdirSync,
+  readFileSync,
+  rmSync,
+  symlinkSync,
+  utimesSync,
+  writeFileSync,
+} from "node:fs";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { requireNodeTool } from "../helpers/node-toolchain.js";
@@ -8,10 +18,15 @@ import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const describePosix = process.platform === "win32" ? describe.skip : describe;
 
+function bootstrapSource() {
+  return readFileSync("scripts/pr", "utf8")
+    .split("<<'EOF_TOOLING'\n")[1]!
+    .split("\nEOF_TOOLING")[0]!;
+}
+
 // Exercise the embedded bootstrap without installing packages or adding a test-only entrypoint.
 function sweep(cache: string, current = "") {
-  const wrapper = readFileSync("scripts/pr", "utf8");
-  const source = wrapper.split("<<'EOF_TOOLING'\n")[1]?.split("\nEOF_TOOLING")[0];
+  const source = bootstrapSource();
   if (!source?.includes("materializeDependencies(...process.argv.slice(2));")) {
     throw new Error("Missing dependency bootstrap entrypoint");
   }
@@ -35,6 +50,105 @@ function entry(cache: string, name: string, ageHours: number, complete = true) {
   utimesSync(path, modified, modified);
   return path;
 }
+
+describePosix("frozen PR dependency identity", () => {
+  it("reuses installs across source heads, invalidates inputs, and isolates unaudited hooks", () => {
+    const root = tempDirs.make("pr-dependency-inputs-");
+    const git = (...args: string[]) => {
+      const result = spawnSync("git", ["-C", root, ...args], { encoding: "utf8" });
+      expect(result.status, result.stderr).toBe(0);
+      return result.stdout.trimEnd();
+    };
+    const write = (name: string, value: string) => {
+      mkdirSync(join(root, name, ".."), { recursive: true });
+      writeFileSync(join(root, name), value);
+    };
+    git("init", "--quiet");
+    const fixture = {
+      "package.json": '{"scripts":{"prepare":"node scripts/prepare.mjs"}}',
+      "ui/package.json": "{}",
+      "pnpm-lock.yaml": "lockfileVersion: '9.0'",
+      "pnpm-workspace.yaml": "packages: [ui]",
+      ".npmrc": "node-linker=isolated",
+      "patches/example.patch": "patch",
+      "scripts/prepare.mjs": "readFileSync('schema.sql')",
+      "schema.sql": "CREATE TABLE example (id INTEGER);",
+      "packages/example/tsconfig.json": "{}",
+      "packages/example/src/native.ts": "export const native = 1;",
+      "src/page.ts": "export const page = 1;",
+    };
+    for (const [name, value] of Object.entries(fixture)) {
+      write(name, value);
+    }
+    git("add", ".");
+    const rows = () =>
+      git("ls-files", "--stage", "-z")
+        .split("\0")
+        .filter(Boolean)
+        .map((row) => row.replace(/ 0\t/, "\t").replace(" ", " blob "));
+    const auditedRows = rows().filter((row) => !row.endsWith("\tsrc/page.ts"));
+    // The bootstrap runs in Node even when Vitest runs in Bun.
+    const node = requireNodeTool("node");
+    const childRuntime = spawnSync(
+      node,
+      ["-p", "[process.platform, process.arch, process.versions.modules].join(' ')"],
+      { encoding: "utf8" },
+    );
+    expect(childRuntime.status, childRuntime.stderr).toBe(0);
+    const [platform, arch, modules] = childRuntime.stdout.trim().split(" ");
+    const audit = {
+      files: ["scripts/prepare.mjs", "schema.sql"],
+      directories: ["packages/example/src"],
+      presence: ["src"],
+      runtime: { platform, arch, modules },
+      auditSha256: createHash("sha256").update(auditedRows.join("\0")).digest("hex"),
+    };
+    const key = (policy: typeof audit | null = audit) => {
+      git("add", ".");
+      const payload = join(tempDirs.make("pr-key-payload-"), "input.json");
+      writeFileSync(payload, JSON.stringify([rows(), git("write-tree"), policy]));
+      const result = spawnSync(node, ["--input-type=module", "-", payload], {
+        input: bootstrapSource().replace(
+          "materializeDependencies(...process.argv.slice(2));",
+          "process.stdout.write(dependencyKey(...JSON.parse(readFileSync(process.argv[2], 'utf8'))));",
+        ),
+        encoding: "utf8",
+      });
+      expect(result.status, result.stderr).toBe(0);
+      return result.stdout;
+    };
+    const first = key();
+    write("src/page.ts", "export const page = 2;");
+    expect(key()).toBe(first);
+    for (const [name, value] of Object.entries(fixture)) {
+      if (name === "src/page.ts") {
+        continue;
+      }
+      write(name, `${value}\n`);
+      expect(key(), name).not.toBe(first);
+      write(name, value);
+    }
+    write("schema.sql", "CREATE TABLE example (id TEXT);");
+    const changedData = key();
+    write("src/page.ts", "export const page = 3;");
+    expect(key()).not.toBe(changedData);
+    rmSync(join(root, "schema.sql"));
+    symlinkSync("src/page.ts", join(root, "schema.sql"));
+    const indirectData = key();
+    write("src/page.ts", "export const page = 4;");
+    expect(key()).not.toBe(indirectData);
+    rmSync(join(root, "schema.sql"));
+    write("schema.sql", fixture["schema.sql"]);
+    write("src/page.ts", "export const page = 3;");
+    write("scripts/prepare.mjs", "readFileSync('src/page.ts')");
+    const unaudited = key();
+    write("src/page.ts", "export const page = 4;");
+    expect(key()).not.toBe(unaudited);
+    const historical = key(null);
+    write("src/page.ts", "export const page = 5;");
+    expect(key(null)).not.toBe(historical);
+  });
+});
 
 describePosix("frozen PR dependency cache sweep", () => {
   it("keeps the four newest unused installations, live consumers, and the current entry", () => {
