@@ -7,7 +7,7 @@ import { formatUiError } from "../format-error.ts";
 import { canCallGatewayMethod } from "../gateway-methods.ts";
 import { createAppliedConfigRefreshOwner } from "./applied-refresh.ts";
 import type { ConfigMethod } from "./config-gateway-operations.ts";
-import { loadConfigSnapshot } from "./config-gateway-read.ts";
+import { canEnsureConfigRead, loadConfigSnapshot } from "./config-gateway-read.ts";
 import {
   agentConfigEntry,
   clearConfigRequestVersions,
@@ -108,7 +108,7 @@ export function createRuntimeConfigCapability(
     if (editor) {
       return editor.ensureLoaded();
     }
-    if (!state.configSnapshot) {
+    if (!state.configSnapshot && (displayRead || canEnsureConfigRead(state))) {
       await (displayRead ?? runDisplayRead());
     }
     displayRefresh.reconcile();
