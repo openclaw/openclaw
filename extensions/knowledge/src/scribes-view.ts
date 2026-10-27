@@ -5,6 +5,7 @@ import { openConfirmDialog, openStartDialog, scribeTile } from "./scribe-dialog.
 import {
   repairScribe,
   retryScribe,
+  runRefusal,
   runScribeNow,
   setScribePaused,
   startScribe,
@@ -215,14 +216,19 @@ async function startFirstRun(ui: Page, snapshot: ScribeSnapshot) {
     return;
   }
   firstRuns.add(job.id);
+  let refusal: string | undefined;
   try {
-    await runScribeNow(ui.s.context.host, job);
-    ui.announce(`${snapshot.scribe.title}: first run started.`);
+    refusal = runRefusal(await runScribeNow(ui.s.context.host, job));
   } catch (error) {
-    // Not started: forget it so the next load tries again and nothing shows it as running.
-    firstRuns.delete(job.id);
-    ui.announce(`${snapshot.scribe.title}: the first run did not start. ${ui.errorText(error)}`);
+    refusal = ui.errorText(error);
   }
+  if (refusal === undefined) {
+    ui.announce(`${snapshot.scribe.title}: first run started.`);
+    return;
+  }
+  // Not started: forget it so the next load tries again and nothing shows it as running.
+  firstRuns.delete(job.id);
+  ui.announce(`${snapshot.scribe.title}: the first run did not start. ${refusal}`);
 }
 
 /** The first run is forced or running and nothing has finished yet. */

@@ -70,6 +70,8 @@ function fixture(world: {
         };
       case "agents.files.list":
         return { files: [{ name: "MEMORY.md", missing: false, size: 8192 }] };
+      case "cron.run":
+        return { ok: true, enqueued: true, runId: "run-1" };
       default:
         return { ok: true };
     }
@@ -417,23 +419,28 @@ it("tries the first run again on the next load when forcing it failed", async ()
     runs: [],
   });
   ui.s.scribe = "unlinked-review";
-  // Only the first cron.run is rejected; every other read answers normally.
+  // The first cron.run answers without admitting a run, the second is rejected, the third runs.
   const answer = request.getMockImplementation()!;
-  let rejected = false;
+  let attempts = 0;
   request.mockImplementation(async (method: string, params?: Record<string, unknown>) => {
-    if (method === "cron.run" && !rejected) {
-      rejected = true;
+    if (method === "cron.run" && attempts < 2) {
       calls.push([method, params]);
+      if (attempts++ === 0) {
+        return { ok: true, ran: false, reason: "stopped" };
+      }
       throw new Error("Gateway restarting");
     }
     return answer(method, params);
   });
   const view = await render();
   expect(view.textContent).not.toContain("First run");
-  expect(ui.announce).toHaveBeenCalledWith(expect.stringContaining("the first run did not start"));
+  expect(ui.announce).toHaveBeenCalledWith(
+    "Review unlinked claims: the first run did not start. stopped",
+  );
+  expect((await render()).textContent).not.toContain("First run");
   const later = await render();
   const force = ["cron.run", { id: "job-retry-first", mode: "force" }];
-  expect(calls.filter(([method]) => method === "cron.run")).toEqual([force, force]);
+  expect(calls.filter(([method]) => method === "cron.run")).toEqual([force, force, force]);
   expect(later.querySelector(".scribe-run")?.textContent).toContain("First runRunning now");
 });
 

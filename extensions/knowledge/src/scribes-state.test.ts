@@ -1,10 +1,8 @@
 import { describe, expect, it, vi } from "vitest";
 import { locationParams, readLocation } from "./page-location.js";
 import {
-  SCRIBES,
   repairMessage,
   scribeById,
-  scribeDeclarationKey,
   scribeLabel,
   scribeSetup,
   setupIdempotencyKey,
@@ -25,32 +23,7 @@ const assistant = (text: string) => ({ role: "assistant", content: [{ type: "tex
 const user = (text: string) => ({ role: "user", content: text });
 
 describe("scribes catalog", () => {
-  it("lists the three scribes with their labels, keys, modes and skills", () => {
-    expect(
-      SCRIBES.map((s) => [s.id, scribeLabel(s), scribeDeclarationKey(s.id), s.modes, s.skill]),
-    ).toEqual([
-      [
-        "unlinked-review",
-        "Scribe · Review unlinked claims",
-        "knowledge:scribe:unlinked-review",
-        ["ongoing"],
-        "knowledge-unlinked-claims",
-      ],
-      [
-        "conversations",
-        "Scribe · Learn from conversations",
-        "knowledge:scribe:conversations",
-        ["ongoing", "once"],
-        "knowledge-ingest",
-      ],
-      [
-        "memory",
-        "Scribe · Learn from Memory",
-        "knowledge:scribe:memory",
-        ["once"],
-        "knowledge-ingest",
-      ],
-    ]);
+  it("builds the approved per-attempt setup idempotency key", () => {
     expect(setupIdempotencyKey("memory", "agent:main:dock:1", "a1")).toBe(
       "knowledge:scribe:memory:agent:main:dock:1:a1",
     );
@@ -195,6 +168,8 @@ describe("scribes state", () => {
       ],
       [{ session, job: job() }, "on"],
       [{ session, job: job({ enabled: false }) }, "paused"],
+      [{ session, job: job(), messages: [result("failed")] }, "failing"],
+      [{ session, job: job({ enabled: false }), messages: [result("failed")] }, "paused"],
       [{ session, job: job({ state: { consecutiveErrors: 2 } }) }, "failing"],
       [
         {

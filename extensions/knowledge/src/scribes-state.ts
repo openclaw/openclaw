@@ -243,6 +243,10 @@ function deriveStatus(input: {
     if (!job.enabled) {
       return "paused";
     }
+    // A current failed answer (setup, repair or a run) outranks a healthy-looking job.
+    if (result?.state === "failed") {
+      return "failing";
+    }
     return (job.state.consecutiveErrors ?? 0) > 0 || job.state.lastRunStatus === "error"
       ? "failing"
       : "on";

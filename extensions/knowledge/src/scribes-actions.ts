@@ -1,5 +1,6 @@
 /** Gateway writes behind the Scribes controls: start, run now, pause, turn off and repair. */
 import type { ControlUiHost } from "openclaw/plugin-sdk/control-ui";
+import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   defaultOptions,
   repairMessage,
@@ -92,6 +93,20 @@ export function retryScribe(host: ScribeHost, snapshot: ScribeSnapshot, agentId:
   const setup =
     snapshot.setup ?? scribeSetup(scribe.id, "once", defaultOptions(scribe.id), agentId);
   return startScribe(host, snapshot, setup, crypto.randomUUID());
+}
+
+/**
+ * Why a `cron.run` answer did not admit a run, or undefined when it did: queued, ran, or one is
+ * already running. The scheduler can answer `ok` without running (stopped, disabled, ownerless).
+ */
+export function runRefusal(answer: unknown): string | undefined {
+  if (
+    isRecord(answer) &&
+    (answer.enqueued === true || answer.ran === true || answer.reason === "already-running")
+  ) {
+    return undefined;
+  }
+  return isRecord(answer) && typeof answer.reason === "string" ? answer.reason : "not admitted";
 }
 
 /** Run the scribe's automation now, even when it is not due. */
