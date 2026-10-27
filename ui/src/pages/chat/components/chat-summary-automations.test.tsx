@@ -1,7 +1,7 @@
 /* @vitest-environment jsdom */
 import { GatewayProtocolRequestError } from "@openclaw/gateway-client/browser";
 import { createSignal } from "solid-js";
-import { afterEach, expect, it, vi } from "vitest";
+import { afterEach, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../../../../test/helpers/promise.js";
 import type { CronCompactJob, CronJobsListResult } from "../../../api/types.ts";
 import { createApplicationGateway } from "../../../test-helpers/application-context.ts";
@@ -10,6 +10,7 @@ import {
   createTestGatewayClient,
 } from "../../../test-helpers/gateway-client.ts";
 import { mountSolid } from "../../../test-helpers/mount-solid.ts";
+import { restorePropertyDescriptor } from "../../../test-helpers/property-descriptor.ts";
 import { flush, waitForSolid } from "../../../test-helpers/solid-settle.ts";
 import { createMobileRootContentFixture as rootContent } from "../chat-mobile-host.test-support.ts";
 import { SessionAutomationMobileList } from "./chat-automation-mobile.tsx";
@@ -740,21 +741,25 @@ it("shares pending reads, retained results, and failed refresh recovery between 
 });
 
 it("expands 25 retained jobs in tens independently of RPC pagination and resets on reentry", async () => {
-  const pending = createDeferred<Page>();
+  const animate = Object.getOwnPropertyDescriptor(Element.prototype, "animate");
+  Object.defineProperty(Element.prototype, "animate", {
+    configurable: true,
+    value: () => ({ cancel() {} }),
+  });
+  onTestFinished(() => restorePropertyDescriptor(Element.prototype, "animate", animate));
   const jobs = Array.from({ length: 25 }, (_, index) =>
     job({ id: `job-${index}`, name: `Automation ${index + 1}` }),
   );
-  const current = component(
-    createGatewayRequestMock()
-      .mockResolvedValueOnce(page(jobs))
-      .mockImplementationOnce(() => pending.promise),
-  );
+  const current = component(sequence(page(jobs), page(jobs), page()));
   const remember =
     vi.fn<NonNullable<Parameters<typeof ChatSummaryAutomations>[0]["onDetailsSnapshot"]>>();
   const desktop = { expanded: true, onExpandedChange: vi.fn() };
-  current.update({ desktop, onDetailsSnapshot: remember });
   const { element } = current;
   await current.ready("Automation 1");
+  current.update({ desktop, onDetailsSnapshot: remember });
+  await waitForSolid(() =>
+    expect(element.querySelector("summary")?.getAttribute("aria-expanded")).toBe("true"),
+  );
   const rows = () => element.querySelectorAll<HTMLAnchorElement>(".chat-summary__automation");
   expect(rows()).toHaveLength(10);
   const more = element.querySelector<HTMLButtonElement>(".chat-summary__automation-more")!;
@@ -771,15 +776,11 @@ it("expands 25 retained jobs in tens independently of RPC pagination and resets 
   expect(rows()).toHaveLength(25);
   current.update({ presented: false });
   current.update({ presented: true });
+  await current.ready("Automation 1");
   expect(rows()).toHaveLength(10);
   expect(current.request).toHaveBeenCalledTimes(2);
+  remember.mockClear();
   current.update({ desktop: { ...desktop, expanded: false } });
-  expect(rows()).toHaveLength(0);
-  pending.reject(new Error("refresh failed"));
-  await waitForSolid(() => {
-    expect(element.textContent).not.toContain("Couldn't update automations.");
-    expect(element.querySelector('[aria-busy="false"]')).not.toBeNull();
-  });
   await waitForSolid(() => expect(remember.mock.lastCall?.[0].automations?.rows).toHaveLength(10));
   expect(remember.mock.lastCall?.[0].automations?.rows[0]).toMatchObject({
     id: "job-0",
@@ -787,8 +788,14 @@ it("expands 25 retained jobs in tens independently of RPC pagination and resets 
   });
   expect(rows()).toHaveLength(0);
   current.update({ desktop });
-  expect(rows()).toHaveLength(10);
+  await waitForSolid(() => expect(rows()).toHaveLength(10));
   expect(element.querySelector("summary")?.textContent?.trim()).toBe("Automations");
+  current.cron();
+  await waitForSolid(() =>
+    expect(remember.mock.lastCall?.[0].automations).toMatchObject({ rows: [], more: false }),
+  );
+  expect(rows()).toHaveLength(0);
+  expect(current.request).toHaveBeenCalledTimes(3);
 });
 
 it("retains reconnect facts and distinguishes auto-disabled from paused and stale running", async () => {

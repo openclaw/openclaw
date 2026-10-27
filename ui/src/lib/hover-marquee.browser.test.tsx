@@ -21,7 +21,7 @@ function mount(className = "sidebar-recent-session__name") {
         ref={(element) => (host = element)}
         class="session-row-host"
         href="#session"
-        style="display:flex;width:180px"
+        style={{ display: "flex", width: "180px" }}
       >
         <HoverMarquee content={title()} class={className} options={{ host: () => host }} />
       </a>

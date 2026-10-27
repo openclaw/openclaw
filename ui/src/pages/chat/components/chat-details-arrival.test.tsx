@@ -166,6 +166,8 @@ function automationPage(name: string, count = 1): CronJobsListResult<CronCompact
     Array.from({ length: count }, (_, index) =>
       createCronJob(`scheduled-${index}`, count === 1 ? name : `${name} ${index}`, {
         agentId: "main",
+        updatedAtMs: 1,
+        schedule: { kind: "every", everyMs: 600_000 },
       }),
     ),
   );

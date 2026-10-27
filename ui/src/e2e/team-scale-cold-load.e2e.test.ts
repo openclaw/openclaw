@@ -155,7 +155,7 @@ suite.define(() => {
       });
       await page.addInitScript(
         ({ key, entries }) => {
-          if (window !== window.top) {
+          if (window !== window.top || localStorage.getItem(key)) {
             return;
           }
           localStorage.setItem(
@@ -192,7 +192,9 @@ suite.define(() => {
               return {
                 ...result,
                 jobs: result.jobs.map((job) =>
-                  job.id === fixture.cronJobs[0]!.id ? { ...job, name: liveJobName } : job,
+                  job.id === fixture.cronJobs[0]!.id
+                    ? Object.assign({}, job, { name: liveJobName })
+                    : job,
                 ),
               };
             }),
@@ -416,7 +418,9 @@ suite.define(() => {
           ".chat-details :is(.chat-details-desktop-section__body, button, a)",
         );
         await control.click({ force: true });
-        for (const key of ["Enter", "Space"]) await control.press(key);
+        for (const key of ["Enter", "Space"]) {
+          await control.press(key);
+        }
         expect(page.url()).toBe(chatUrl);
         expect(await gateway.getRequests(method)).toHaveLength(0);
       }

@@ -67,8 +67,12 @@ describe("progress card refresh control", () => {
         expect(statusText(container)).toContain(status);
         expect(container.textContent).not.toContain("Use refresh to retry");
         expect(details.open).toBe(!collapsed);
-        if (state === "failed") expect(button.textContent).toContain("Retry progress refresh");
-        if (state === "updated") expect(statusText(container)).toBe(status);
+        if (state === "failed") {
+          expect(button.textContent).toContain("Retry progress refresh");
+        }
+        if (state === "updated") {
+          expect(statusText(container)).toBe(status);
+        }
         button.click();
         expect(onRefresh).toHaveBeenCalledTimes(calls);
       }
