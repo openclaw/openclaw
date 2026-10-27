@@ -163,7 +163,7 @@ if (process.argv[1]?.endsWith('/worktree-provision.mts')) {
       if (fault === "exit") {
         expect(root.message).toContain("synthetic lock-check refusal");
         expect(report).not.toContain(credential);
-        expect(root.message).toContain("***");
+        expect(root.message).toContain("Authorization:");
       } else if (fault === "spawn") {
         expect(out.error.nodes[root.cause.ref]).toMatchObject({ code: "ENOENT" });
       }
