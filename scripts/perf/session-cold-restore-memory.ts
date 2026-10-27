@@ -21,6 +21,7 @@
  * resourceUsage maxRSS includes module load; sampled RSS is bounded to the restore burst.
  * JSON output includes exact restored event-byte digest verification, counts, CPU,
  * natural GC time/count/max, heap/external, host load and allocation sampling separately.
+ * CPU reports both the restore thread and the whole process (including GC helper threads).
  */
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
@@ -120,6 +121,9 @@ async function prepare() {
         const lines = [
           JSON.stringify({ kind: "header", version: 1, sessionId, generation }) + "\n",
         ];
+        const identityLines: string[] = [];
+        const activeLines: string[] = [];
+        const ftsLines: string[] = [];
         let envelopeBytes = Buffer.byteLength(lines[0]!);
         let rawBytes = 0;
         const firstSeq = seq;
@@ -157,17 +161,23 @@ async function prepare() {
           if (seq > firstSeq && envelopeBytes + size > targetBytes) {
             break;
           }
-          lines.push(...encoded);
+          lines.push(encoded[0]!);
+          identityLines.push(encoded[1]!);
+          activeLines.push(encoded[2]!);
+          ftsLines.push(encoded[3]!);
           envelopeBytes += size;
           rawBytes += Buffer.byteLength(event);
           expected.update(`${JSON.stringify([seq, event, seq + 1])}\n`);
           seq++;
         } while (envelopeBytes < targetBytes);
+        // Match the cold archive producer: records are grouped by kind, not interleaved.
+        lines.push(...identityLines, ...activeLines);
         if (chunk === chunkCount - 1) {
           const index = `${JSON.stringify({ kind: "index", row: { indexed_seq: seq - 1, leaf_event_id: `event-${seq - 1}`, needs_rebuild: 0, active_event_count: seq, active_message_count: seq, updated_at: 1 } })}\n`;
           lines.push(index);
           envelopeBytes += Buffer.byteLength(index);
         }
+        lines.push(...ftsLines);
         const payload = zstdCompressSync(Buffer.from(lines.join("")));
         const sha256 = createHash("sha256").update(payload).digest("hex");
         const archiveName = `${sha256}.jsonl.zst`;
@@ -409,6 +419,8 @@ async function measure() {
   let peakRss = 0;
   let baselineRss = 0;
   let processMaxRssBytes = 0;
+  let processCpuBefore: NodeJS.CpuUsage | undefined;
+  let processCpuMs = 0;
   let sampling: NodeJS.Timeout | undefined;
   const worker = new Worker(fileURLToPath(import.meta.url), {
     argv: process.argv.slice(2),
@@ -425,8 +437,11 @@ async function measure() {
         sampling = setInterval(() => {
           peakRss = Math.max(peakRss, process.memoryUsage.rss());
         }, 5);
+        processCpuBefore = process.cpuUsage();
         worker.postMessage("start", []);
       } else if (message.type === "measured") {
+        const used = process.cpuUsage(processCpuBefore);
+        processCpuMs = (used.user + used.system) / 1000;
         processMaxRssBytes = process.resourceUsage().maxRSS * 1024;
         peakRss = Math.max(peakRss, process.memoryUsage.rss());
         clearInterval(sampling);
@@ -443,6 +458,7 @@ async function measure() {
             peakRss,
             peakRssDelta: peakRss - baselineRss,
             processMaxRssBytes,
+            processCpuMs,
             hostLoadBefore,
             hostLoadAfter: loadavg(),
           }),
