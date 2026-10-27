@@ -442,7 +442,7 @@ export function runControlUiE2eWorkflow(options: { cwd: string; env: NodeJS.Proc
   let stdout = "";
   let stderr = "";
   for (const step of steps.slice(first, last + 1)) {
-    if (!evaluateWorkflowCondition(step.if, context)) {
+    if (step.if && !evaluateWorkflowCondition(step.if, context)) {
       continue;
     }
     writeFileSync(outputFile, "");
