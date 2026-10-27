@@ -5,6 +5,7 @@ import { beforeEach, expect, it, vi } from "vitest";
 import {
   applyExclusiveSlotSelectionMock as selectSlot,
   buildPluginSnapshotReportMock as snapshotReport,
+  createEmptyUninstallActions,
   clearPluginRegistryLoadCacheMock as clearCache,
   enablePluginInConfigMock as enablePlugin,
   loadPluginManifestRegistryMock as loadManifests,
@@ -111,6 +112,9 @@ function mockReplacedInstall(
   setInstalledPluginIndexInstallRecords({ [pluginId]: previous });
   planUninstall.mockReturnValueOnce({
     ok: true,
+    config: {},
+    pluginId,
+    actions: createEmptyUninstallActions(),
     directoryRemoval: { target: previous.installPath, ...(cleanup ? { cleanup } : {}) },
   });
 }

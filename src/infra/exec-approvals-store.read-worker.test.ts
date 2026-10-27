@@ -327,7 +327,9 @@ it("shares immutable current policy while refusing pending writes and replacing 
     }
   });
   try {
-    await replaceSecurity("deny");
+    await updateExecApprovals({
+      update: { kind: "replace", file: { version: 1, defaults: { security: "deny" } } },
+    });
   } finally {
     release();
   }

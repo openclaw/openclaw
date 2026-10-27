@@ -88,7 +88,10 @@ vi.mock("../../packages/terminal-core/src/note.js", () => ({
   noteToStream: terminalNoteMocks.note,
 }));
 
-vi.mock("./clack-navigation-prompts.js", () => navigationPromptMocks);
+vi.mock("./clack-navigation-prompts.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./clack-navigation-prompts.js")>()),
+  ...navigationPromptMocks,
+}));
 
 import {
   stylePromptHint,
