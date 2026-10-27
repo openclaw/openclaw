@@ -38,6 +38,12 @@ decoded rows even when a caller retains the inactive handle. Predicate compariso
 baselines last only until release; a late acknowledgement cannot restore them.
 Active authorities retain their existing publication and final-effect checks.
 
+Finished worker admissions release publication observers and request callbacks.
+Committed facts remain available for lost-reply recovery, which runs
+after transport cleanup. Workspace mutations release their payload and previous
+row captures after acknowledgement or recovery finishes, including failed writes;
+retaining an admission must not retain those completed workspace payloads.
+
 Idle session reclamation workers retain their admitted connection, not completed
 deletion plans or the caller's async context. Retirement callbacks capture only
 the worker's registry key. Transport startup and idle timers run outside request
@@ -574,8 +580,8 @@ and only while the entry object remains unchanged. Cold or mismatched revisions
 and replaced entries carry the complete entry. Main resolves references within
 that command; live policy and revocation checks still run at every admission.
 
-Plain transcript append receipts use the same command-local reference when the
-entry is unchanged and initialization does not also expose it. Main restores the
+Plain transcript append and bookkeeping patch receipts use the same command-local
+reference when the entry is unchanged and initialization does not also expose it. Main restores the
 entry by reference to its deeply frozen replica preimage, without cloning it.
 Settlement, publication, and commit observers only read that entry; changed or
 unavailable preimages still transfer the complete entry. A missing or mismatched
@@ -616,6 +622,16 @@ version retries. Transcript input and restart recovery still
 commit atomically under the existing writer FIFO, source checks, final host
 COMMIT authorization, and receipt settlement. Schemas, durability, and update
 behavior are unchanged.
+
+Pending-input staging selects its lifecycle expectation inside the same writer
+FIFO. A current published entry supplies those fields without a preliminary full
+actor read; missing facts or an actor awaiting reconciliation still use the canonical
+actor reader. The command hydrates its own state and checks the captured lifecycle
+and live commit authority
+before storing custody. This removes a read round trip, not the command's hydration
+or per-session ordering.
+Entry receipts follow physical database generations and scoped revisions; they do
+not require the publishing SQLite connection to match the actor worker's connection.
 
 Session memory indexing is background work. It batches transcript changes after
 30 seconds without transcript changes or running turns. Pending work keeps its
@@ -5908,6 +5924,8 @@ sweeps. Each preparation closes its scoped read-only handles before replying;
 selection, configuration checks, and commit authority remain per request.
 Preparation loads its read-only selection and archive encoding helpers without
 initializing the writable database lifecycle or transcript restoration machinery.
+Canonical validation and reclamation load cold-restoration source guards only
+when executing a cold mutation; restoration retains its existing source checks.
 
 Single-message lookups and display-message counts use that same history worker.
 Session-message broadcasts await the stored content and sequence in their existing

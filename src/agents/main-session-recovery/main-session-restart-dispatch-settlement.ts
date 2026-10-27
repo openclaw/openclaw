@@ -53,13 +53,12 @@ export async function reconcileAcceptedRestartRecoveryCancellation(params: {
     !params.preStartAbortConfirmed &&
     current();
   if (
-    params.dispatchAccepted &&
     !params.executionStarted &&
     params.controllerInput?.custody.rpcAdopted === true &&
     params.controllerInput.abortSignal.aborted &&
     current()
   ) {
-    // Stop owns this exact terminal publication; raw source work retains its own fence.
+    // Source adoption can precede dispatch acceptance; Stop owns this terminal publication.
     await captureSessionControllerSourceStopAcknowledgment(params.controllerInput);
   }
   if (

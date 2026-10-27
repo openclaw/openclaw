@@ -317,9 +317,7 @@ export async function prepareSessionMutationFacts(
       }),
     );
     followRegistration = inventoryRead.followRegistration;
-    assertRegistryPublication = () => {
-      inventoryRead.assertRegistryCurrent();
-    };
+    assertRegistryPublication = inventoryRead.assertRegistryCurrent;
     const members = new Map<string, PreparedSessionSharingSource>();
     const retainedReads = new Map<string, ReturnType<typeof retainPreparedSessionSharingFacts>>();
     const selected = await inventoryRead.withRead(async (sources, assertDiscoveryCurrent) => {
@@ -554,9 +552,7 @@ export async function prepareSessionMutationFacts(
         };
       };
     }
-    assertSource = () => {
-      inventoryRead.assertRegistryCurrent();
-    };
+    assertSource = inventoryRead.assertRegistryCurrent;
     const readCurrent = (cfg: OpenClawConfig) => {
       try {
         assertActive();

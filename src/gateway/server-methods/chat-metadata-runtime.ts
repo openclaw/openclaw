@@ -107,8 +107,9 @@ export function createGatewayChatMetadataRuntime(params: {
   const notifyChanged = (facts?: PreparedGenerationFacts, catalogStatusChanged = false) => {
     const previous = lastNotifiedFacts;
     lastNotifiedFacts = facts;
+    // Cooldown views still refresh, but they do not announce a changed model inventory.
     const modelCatalogChanged =
-      !previous || !facts || !generationFactsMatch(previous, facts, "catalog");
+      !previous || !facts || !generationFactsMatch(previous, facts, "catalog-notification");
     params.onChanged?.({
       modelCatalogChanged,
       ...(!modelCatalogChanged && catalogStatusChanged

@@ -38,6 +38,43 @@ test("projects each session's account provenance when metadata reuses its catalo
   expect(harness.buildProjection).toHaveBeenCalledOnce();
 });
 
+test("reads shared auth once per fleet check and observes the next mutation", async () => {
+  const agentIds = ["main", "second", "third", "custom"];
+  const config = { agents: { entries: Object.fromEntries(agentIds.map((id) => [id, {}])) } };
+  const harness = createChatMetadataHarness(config);
+  onTestFinished(() => harness.runtime.stop());
+  const owners = new Map(
+    agentIds.map((id) => [
+      id,
+      {
+        ...createChatMetadataOwner(config, id),
+        ...(id === "custom" ? { inheritedAuthDir: "/tmp/custom-inherited" } : {}),
+      },
+    ]),
+  );
+  harness.getPreparedOwner.mockImplementation((params) => owners.get(params?.agentId ?? "main"));
+  const revisions = new Map<string | undefined, number>();
+  harness.getAuthStoreRevision.mockImplementation((dir) => revisions.get(dir) ?? 0);
+  await harness.refresh();
+  const initial = JSON.stringify(await harness.read());
+  const readWarm = async () => {
+    harness.getAuthStoreRevision.mockClear();
+    expect(JSON.stringify(await harness.read())).toBe(initial);
+    expect(
+      harness.getAuthStoreRevision.mock.calls.filter(([dir]) => dir === undefined),
+    ).toHaveLength(1);
+    expect(harness.getAuthStoreRevision).toHaveBeenCalledWith("/tmp/custom-inherited");
+  };
+  await readWarm();
+  for (const dir of [undefined, "/tmp/custom-inherited", owners.get("second")!.agentDir]) {
+    const preparations = harness.buildProjection.mock.calls.length;
+    revisions.set(dir, 1);
+    expect(JSON.stringify(await harness.read())).toBe(initial);
+    expect(harness.buildProjection).toHaveBeenCalledTimes(preparations + 1);
+    await readWarm();
+  }
+});
+
 test.each(["neutral", "profile"] as const)(
   "releases session entries after caching a %s catalog",
   async (variant) => {

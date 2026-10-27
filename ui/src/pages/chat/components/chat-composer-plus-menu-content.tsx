@@ -1,4 +1,5 @@
-import { createMemo, createSignal, onSettled, Show } from "solid-js";
+import { createMemo, createSignal, Errored, For, Loading, onSettled, Show } from "solid-js";
+import { pathForRoute } from "../../../app-route-paths.ts";
 import { Icon } from "../../../components/solid/icon.tsx";
 import type { MenuEntry, MenuHandle, MenuItem } from "../../../components/solid/menu.tsx";
 import { registerMcpEnglish } from "../../../i18n/locales/en-mcp.ts";
@@ -14,6 +15,7 @@ import {
   resolveWebSearchToolOverrideState,
 } from "../../../lib/sessions/tool-overrides.ts";
 import { uploadsEnabled } from "../../../lib/uploads.ts";
+import { resolveComposerSkills } from "../composer-capability-catalog.ts";
 import "./chat-camera-capture.tsx";
 import { useNativeAttachmentSourceMenu } from "./chat-attachment-picker-policy.ts";
 import {
@@ -27,16 +29,87 @@ import {
   renderCapabilityMenuState,
   renderCapabilityToggleRow,
   menuDivider,
+  menuSection,
 } from "./chat-composer-menu-rows.tsx";
 import { connectorItems } from "./chat-composer-plugins-menu.tsx";
 import type {
+  ChatComposerMenuSkill,
   ChatComposerPlusMenuBodyProps,
   ChatComposerPlusMenuContentProps,
   ChatComposerPlusMenuView,
 } from "./chat-composer-plus-menu.types.ts";
-import { createComposerSkillsMenuItems } from "./chat-composer-skills-menu.tsx";
 
 registerEnglishCatalog(registerMcpEnglish);
+
+function libraryRows(menu: ChatComposerPlusMenuContentProps, query: string): MenuEntry[] {
+  const items = composerLibraryMenuItems(menu.library).filter(
+    (entry) => entry.kind === "content" || entry.label.toLocaleLowerCase().includes(query),
+  );
+  return items.length
+    ? [
+        {
+          kind: "group",
+          id: "library-skills",
+          items: [menuSection("library-heading", t("chat.composer.menu.fromLibraries")), ...items],
+        },
+      ]
+    : [];
+}
+
+function skillRows(
+  rows: readonly ChatComposerMenuSkill[] | null,
+  menu: ChatComposerPlusMenuContentProps,
+  query: string,
+  hasLibrary: boolean,
+): MenuEntry[] {
+  const matches = (text: string) => text.toLocaleLowerCase().includes(query);
+  const entries: MenuEntry[] = [];
+  const filtered = rows?.filter((skill) => matches(skill.name)) ?? [];
+  for (const unavailable of [false, true]) {
+    const group = filtered.filter(
+      (skill) => Boolean(skill.missingDeps || skill.blocked) === unavailable,
+    );
+    if (!group.length) {
+      continue;
+    }
+    const id = unavailable ? "unavailable" : "agent";
+    const groupRows: MenuEntry[] = [
+      ...(entries.length || hasLibrary ? [menuDivider(`${id}-divider`)] : []),
+      menuSection(
+        `${id}-heading`,
+        t(unavailable ? "chat.composer.menu.unavailable" : "chat.composer.menu.agentWorkspace"),
+      ),
+    ];
+    for (const skill of group) {
+      groupRows.push({
+        ...renderCapabilityToggleRow({
+          value: `skill:${skill.key}`,
+          label: skill.name,
+          emoji: skill.emoji,
+          skill: true,
+          checked: skill.enabled,
+          disabled: unavailable || menu.mutationBlockedReason !== null,
+          title: skill.missingDeps
+            ? t("chat.composer.menu.depsMissing")
+            : skill.blocked
+              ? t("chat.composer.menu.skillBlocked")
+              : menu.mutationBlockedReason,
+        }),
+        ...(unavailable ? { type: undefined, checked: undefined, details: undefined } : {}),
+      });
+    }
+    entries.push({ kind: "group", id: `${id}-skills`, items: groupRows });
+  }
+
+  return entries.length || hasLibrary
+    ? entries
+    : [
+        renderCapabilityMenuState(
+          "skills-empty",
+          t(query ? "chat.composer.menu.noMatches" : "chat.composer.menu.noSkills"),
+        ),
+      ];
+}
 
 function rootItems(menu: ChatComposerPlusMenuContentProps): MenuEntry[] {
   const entries: MenuEntry[] = [];
@@ -339,10 +412,11 @@ export function ChatComposerPlusMenuContent(props: ChatComposerPlusMenuBodyProps
         previous.values.every((value, index) => Object.is(value, next.values[index])),
     },
   );
-  const skillsMenuItems = createComposerSkillsMenuItems(
-    () => inputs().menu,
-    () => query().trim().toLocaleLowerCase(),
-  );
+  const skillsQuery = () => query().trim().toLocaleLowerCase();
+  const libraryItems = createMemo(() => libraryRows(inputs().menu, skillsQuery()));
+  const skillsOwner = createMemo(() => ({ read: inputs().menu.skillsRead }), {
+    equals: (a, b) => a.read === b.read,
+  });
   const openSearch = (event: MouseEvent) => {
     event.stopPropagation();
     setSearchHeight(body.offsetHeight);
@@ -459,7 +533,92 @@ export function ChatComposerPlusMenuContent(props: ChatComposerPlusMenuBodyProps
     (): MenuEntry[] => {
       const { view, menu } = inputs();
       if (view === "skills") {
-        return skillsMenuItems(header);
+        return [
+          header,
+          menuDivider("skills-header-divider"),
+          {
+            kind: "group",
+            id: "skills-list",
+            class: "agent-chat__capability-menu-scroll",
+            items: [
+              ...libraryItems(),
+              ...skillRows(menu.skills, menu, skillsQuery(), libraryItems().length > 0),
+            ],
+            render: (renderItems) => (
+              <div class="agent-chat__capability-menu-scroll">
+                {renderItems(libraryItems)}
+                <For each={[skillsOwner()]}>
+                  {() => {
+                    const skills = createMemo(
+                      () => inputs().menu.skillsRead ?? inputs().menu.skills,
+                    );
+                    return (
+                      <Errored
+                        fallback={() => (
+                          <>
+                            {renderItems(() =>
+                              libraryItems().length > 0 ? [menuDivider("agent-divider")] : [],
+                            )}
+                            <div class="agent-chat__capability-menu-state" role="alert">
+                              {t("chat.composer.menu.skillsLoadFailed")}
+                            </div>
+                          </>
+                        )}
+                      >
+                        <Loading
+                          fallback={
+                            <>
+                              {renderItems(() =>
+                                libraryItems().length > 0 ? [menuDivider("agent-divider")] : [],
+                              )}
+                              <div class="agent-chat__capability-menu-section">
+                                {t("chat.composer.menu.agentWorkspace")}
+                              </div>
+                              <div
+                                class="agent-chat__capability-menu-skeleton"
+                                role="status"
+                                aria-label={t("chat.composer.menu.loadingSkills")}
+                              >
+                                <span />
+                                <span />
+                                <span />
+                              </div>
+                            </>
+                          }
+                        >
+                          {renderItems(() =>
+                            skillRows(
+                              inputs().menu.skillsRead
+                                ? resolveComposerSkills(skills(), inputs().menu.toolOverrides)
+                                : inputs().menu.skills,
+                              inputs().menu,
+                              skillsQuery(),
+                              libraryItems().length > 0,
+                            ),
+                          )}
+                        </Loading>
+                      </Errored>
+                    );
+                  }}
+                </For>
+              </div>
+            ),
+          },
+          {
+            kind: "group",
+            id: "skills-footer",
+            items: [
+              menuDivider("skills-manage-divider"),
+              {
+                id: "manage-skills",
+                label: t("chat.composer.menu.manageSkills"),
+                href: pathForRoute("skills", menu.basePath),
+                class: "agent-chat__capability-menu-item",
+                icon: <Icon name="settings" />,
+              },
+            ],
+          },
+        ];
       }
       if (view === "connectors") {
         return withHeader(

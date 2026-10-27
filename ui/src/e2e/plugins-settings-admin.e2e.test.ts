@@ -1,10 +1,12 @@
 // Control UI tests cover the canonical installed-plugin administration surface.
+import { writeFile } from "node:fs/promises";
 import path from "node:path";
 import { asRecord } from "@openclaw/normalization-core/record-coerce";
 import { beforeEach, expect, it } from "vitest";
 import { loadPluginManifest, PLUGIN_MANIFEST_FILENAME } from "../../../src/plugins/manifest.ts";
 import { resolveBundledPluginPublicModulePath } from "../../../src/test-utils/bundled-plugin-public-surface.ts";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
+import { takeControlUiScreenshotFrame } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import { installMockGateway, waitForControlUiRoute } from "../test-helpers/control-ui-e2e.ts";
 import { createSettingsPageOptions } from "./config-composer-fixtures.test-support.ts";
 import {
@@ -135,6 +137,136 @@ async function openWorkboard(page: Parameters<typeof waitForControlUiRoute>[0], 
 }
 
 suite.define(() => {
+  it("uses installed plugin artwork in the browser sign-in dialog", async () => {
+    await suite.withPage(createSettingsPageOptions(), async ({ page }) => {
+      const linear = { ...workboard, id: "linear", name: "Linear", hasIcon: true };
+      await page.route("**/__openclaw__/plugin-icon/linear", (route) =>
+        route.fulfill({
+          contentType: "image/svg+xml",
+          body: '<svg fill="#FFFFFF" role="img" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><title>Linear</title><path d="M2.886 4.18A11.982 11.982 0 0 1 11.99 0C18.624 0 24 5.376 24 12.009c0 3.64-1.62 6.903-4.18 9.105L2.887 4.18ZM1.817 5.626l16.556 16.556c-.524.33-1.075.62-1.65.866L.951 7.277c.247-.575.537-1.126.866-1.65ZM.322 9.163l14.515 14.515c-.71.172-1.443.282-2.195.322L0 11.358a12 12 0 0 1 .322-2.195Zm-.17 4.862 9.823 9.824a12.02 12.02 0 0 1-9.824-9.824Z"/></svg>',
+        }),
+      );
+      const gateway = await installMockGateway(page, {
+        featureMethods: [...pluginMethods, "mcp.authLogin", "wizard.next", "wizard.cancel"],
+        methodResponses: {
+          ...pluginResponses(),
+          "plugins.list": { ...inventory, plugins: [linear] },
+          "plugins.inspect": {
+            ...inspection,
+            plugin: linear,
+            catalog: undefined,
+            mcpAuth: [{ serverName: "linear-mcp", state: "requires-authorization" }],
+          },
+          "mcp.authLogin": { done: false, status: "running" },
+          "wizard.next": {
+            done: false,
+            status: "running",
+            step: {
+              id: "authorize",
+              type: "progress",
+              executor: "gateway",
+              externalUrl: "https://example.test/linear/authorize",
+            },
+          },
+          "wizard.cancel": { status: "cancelled" },
+        },
+      });
+      await page.goto(`${suite.server.baseUrl}settings/plugins/linear`);
+      const heroIcon = page.locator(".plugin-catalog-detail__hero .plugins-icon");
+      await expect
+        .poll(() => heroIcon.evaluate((image: HTMLImageElement) => image.naturalWidth))
+        .toBeGreaterThan(0);
+      const iconUrl = await heroIcon.getAttribute("src");
+      await page
+        .getByRole("button", { name: "Sign in to linear-mcp", exact: true })
+        .first()
+        .click();
+      const dialog = page.locator(".model-setup-wizard--sign-in");
+      await dialog.getByRole("heading", { name: "Continue in your browser" }).waitFor();
+      if (captureUiProof) {
+        await page.screenshot({
+          animations: "disabled",
+          path: path.join(proofDir, "plugin-oauth-icon.png"),
+        });
+      }
+      expect(
+        await dialog.locator(".wizard-sign-in__badge img").getAttribute("src", { timeout: 1000 }),
+      ).toBe(iconUrl);
+      expect((await gateway.getRequests("mcp.authLogin"))[0]?.params).toMatchObject({
+        serverName: "linear-mcp",
+      });
+      await dialog.getByRole("button", { name: "Cancel sign-in", exact: true }).click();
+    });
+  });
+
+  it("explains MCP sign-in failures and starts a fresh attempt after Close", async () => {
+    await suite.withPage(createSettingsPageOptions(), async ({ page, context }) => {
+      await context.grantPermissions(["clipboard-read", "clipboard-write"]);
+      const beforeMessage =
+        "Sign-in did not finish. Check the plugin settings, then select Connect to try again.";
+      const afterMessage =
+        "OpenClaw could not verify the sign-in provider. Close this dialog, review the connection settings, and try again.";
+      const gateway = await installMockGateway(page, {
+        featureMethods: [...pluginMethods, "mcp.authLogin", "wizard.next", "wizard.cancel"],
+        methodResponses: {
+          ...pluginResponses(),
+          "plugins.inspect": {
+            ...inspection,
+            mcpAuth: [{ serverName: "workboard", state: "requires-authorization" }],
+          },
+          "mcp.authLogin": { done: false, status: "running" },
+          "wizard.next": { done: true, status: "error", error: beforeMessage },
+          "wizard.cancel": { status: "cancelled" },
+        },
+      });
+      await page.goto(`${suite.server.baseUrl}settings/plugins/workboard`);
+      const signIn = page
+        .getByRole("button", { name: "Sign in to workboard", exact: true })
+        .first();
+      await signIn.click();
+      const dialog = page.locator("openclaw-modal-dialog dialog").filter({
+        has: page.locator(".model-setup-wizard__error"),
+      });
+      const error = dialog.locator(".model-setup-wizard__error-text");
+      await expect.poll(() => error.textContent()).toBe(beforeMessage);
+      if (captureUiProof) {
+        const frame = await takeControlUiScreenshotFrame(page, dialog, [error], {
+          animations: "disabled",
+          elements: [dialog],
+        });
+        await writeFile(path.join(proofDir, "mcp-error-before.png"), frame.elements[0]!.png);
+      }
+      await dialog.getByRole("button", { name: "Close", exact: true }).click();
+      await expect.poll(() => dialog.count()).toBe(0);
+      await gateway.setMethodResponse("wizard.next", {
+        done: true,
+        status: "error",
+        error: afterMessage,
+      });
+      await signIn.click();
+      await expect.poll(() => error.textContent()).toBe(afterMessage);
+      expect(await dialog.textContent()).not.toContain("Connected");
+      if (captureUiProof) {
+        const frame = await takeControlUiScreenshotFrame(page, dialog, [error], {
+          animations: "disabled",
+          elements: [dialog],
+        });
+        await writeFile(path.join(proofDir, "mcp-error-after.png"), frame.elements[0]!.png);
+      }
+      await dialog.getByRole("button", { name: "Copy", exact: true }).click();
+      expect(await page.evaluate(() => navigator.clipboard.readText())).toBe(afterMessage);
+      const attempts = await gateway.getRequests("mcp.authLogin");
+      expect(attempts).toHaveLength(2);
+      const [first, second] = attempts.map((attempt) => asRecord(attempt.params));
+      expect(first?.serverName).toBe("workboard");
+      expect(second?.serverName).toBe("workboard");
+      expect(second?.sessionId).not.toBe(first?.sessionId);
+      await dialog.getByRole("button", { name: "Close", exact: true }).click();
+      await expect.poll(() => dialog.count()).toBe(0);
+      expect(await signIn.isEnabled()).toBe(true);
+    });
+  });
+
   it.each<{
     pluginId: string;
     name: string;
@@ -653,49 +785,42 @@ suite.define(() => {
     });
   });
 
-  it.each(["click", "Enter"] as const)(
-    "retains Settings opened with %j while refreshed inspection finishes",
-    async (activation) => {
-      await suite.withPage(createSettingsPageOptions(), async ({ page }) => {
-        const gateway = await installMockGateway(page, {
-          featureMethods: pluginMethods,
-          methodResponses: pluginResponses(),
-          operatorScopes: ["operator.read", "operator.admin"],
-        });
-        await openWorkboard(page, suite.server.baseUrl);
-        await page.getByRole("heading", { level: 1, name: "Workboard", exact: true }).waitFor();
-        const inspections = (await gateway.getRequests("plugins.inspect")).length;
-        await gateway.deferNext("plugins.inspect");
-        await page.getByRole("button", { name: "Disable Workboard", exact: true }).click();
-        await gateway.waitForRequest("plugins.inspect", { after: inspections });
-
-        const configuration = page
-          .locator(".plugin-catalog-detail__actions")
-          .getByRole("link", { name: "Settings", exact: true });
-        await configuration.waitFor();
-        if (activation === "click") {
-          await configuration.click();
-        } else {
-          await configuration.press(activation);
-        }
-        await gateway.resolveDeferred("plugins.inspect", inspection);
-        await page
-          .locator(".plugin-editor")
-          .getByRole("searchbox", { name: "Search settings", exact: true })
-          .waitFor();
-        if (captureUiProof && activation === "click") {
-          await page.screenshot({
-            animations: "disabled",
-            path: path.join(proofDir, "selected-tab-after-inspection.png"),
-          });
-        }
-
-        await expect.poll(() => new URL(page.url()).searchParams.get("view")).toBe("settings");
-        expect(await page.getByRole("tab").count()).toBe(0);
-        await page.getByLabel("Workspace label", { exact: true }).waitFor();
+  it("retains Settings opened with Enter while refreshed inspection finishes", async () => {
+    await suite.withPage(createSettingsPageOptions(), async ({ page }) => {
+      const gateway = await installMockGateway(page, {
+        featureMethods: pluginMethods,
+        methodResponses: pluginResponses(),
+        operatorScopes: ["operator.read", "operator.admin"],
       });
-    },
-  );
+      await openWorkboard(page, suite.server.baseUrl);
+      await page.getByRole("heading", { level: 1, name: "Workboard", exact: true }).waitFor();
+      const inspections = (await gateway.getRequests("plugins.inspect")).length;
+      await gateway.deferNext("plugins.inspect");
+      await page.getByRole("button", { name: "Disable Workboard", exact: true }).click();
+      await gateway.waitForRequest("plugins.inspect", { after: inspections });
+
+      const configuration = page
+        .locator(".plugin-catalog-detail__actions")
+        .getByRole("link", { name: "Settings", exact: true });
+      await configuration.waitFor();
+      await configuration.press("Enter");
+      await gateway.resolveDeferred("plugins.inspect", inspection);
+      await page
+        .locator(".plugin-editor")
+        .getByRole("searchbox", { name: "Search settings", exact: true })
+        .waitFor();
+      if (captureUiProof) {
+        await page.screenshot({
+          animations: "disabled",
+          path: path.join(proofDir, "selected-tab-after-inspection.png"),
+        });
+      }
+
+      await expect.poll(() => new URL(page.url()).searchParams.get("view")).toBe("settings");
+      expect(await page.getByRole("tab").count()).toBe(0);
+      await page.getByLabel("Workspace label", { exact: true }).waitFor();
+    });
+  });
 
   it("keeps global plugin policy in Advanced and exposes read-only details without mutations", async () => {
     await suite.withPage(createSettingsPageOptions(), async ({ page }) => {

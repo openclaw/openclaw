@@ -456,6 +456,7 @@ const enChatSession = {
       askLabel: "Ask in side chat",
       askPlaceholder: "Ask a question",
       askImageQuestion: "What does this image show?",
+      askSelectionQuestion: "Respond to the selected text and comments.",
       selectionTooLong:
         "These comments are too long for Side chat. Use a shorter selection or comment.",
       askSubmit: "Ask",
@@ -655,8 +656,8 @@ const enChatSession = {
         "Cancelled before the agent started it. It will not run automatically; copy it and send again.",
       interrupted:
         "Interrupted before the agent started it. If it does not resume, copy it and send again.",
-      earlier: "Show earlier messages",
-      latest: "Show latest messages",
+      earlier: "Show earlier unsent messages",
+      latest: "Show latest unsent messages",
       dismiss: "Dismiss",
       dismissInterrupted: "Dismiss interrupted message: {preview}",
       dismissCancelled: "Dismiss cancelled message: {preview}",

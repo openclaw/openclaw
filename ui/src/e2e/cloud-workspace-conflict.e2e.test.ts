@@ -173,31 +173,39 @@ suite.define(() => {
     });
   });
 
-  it.each([
-    {
-      customType: "cloud-workspace-recovery-failed",
-      content:
-        "Cloud workspace recovery attempt failed: snapshot verification failed. OpenClaw preserved the result and will retry.",
-    },
-    {
-      customType: "run-failed-before-reply",
-      content: "This turn did not run: Cloud worker is unavailable. Choose another runner.",
-    },
-  ])(
-    "renders durable $customType notices from transcript history",
-    async ({ customType, content }) => {
-      await suite.withPage(pageOptions, async ({ page }) => {
-        await openSession(page, [historyEvent(customType, content)]);
+  it("renders durable failure notices from transcript history", async () => {
+    const notices = [
+      {
+        customType: "cloud-workspace-recovery-failed",
+        content:
+          "Cloud workspace recovery attempt failed: snapshot verification failed. OpenClaw preserved the result and will retry.",
+      },
+      {
+        customType: "run-failed-before-reply",
+        content: "This turn did not run: Cloud worker is unavailable. Choose another runner.",
+      },
+    ];
+    await suite.withPage(pageOptions, async ({ page }) => {
+      await openSession(
+        page,
+        notices.map(({ customType, content }) => historyEvent(customType, content)),
+      );
+      for (const { content } of notices) {
+        await page
+          .locator(".chat-group.other")
+          .filter({ hasText: content })
+          .waitFor({ timeout: 10_000 });
+      }
+      expect(await page.locator(".chat-group.assistant").count()).toBe(0);
+      await page.reload();
+      for (const { content } of notices) {
         const notice = page.locator(".chat-group.other").filter({ hasText: content });
-        await notice.waitFor({ timeout: 10_000 });
-        expect(await page.locator(".chat-group.assistant").count()).toBe(0);
-        await page.reload();
         await notice.waitFor({ timeout: 10_000 });
         expect(await notice.count()).toBe(1);
         expect(await notice.locator(".chat-sender-name").textContent()).toBe("Error");
-      });
-    },
-  );
+      }
+    });
+  });
 
   it.each(["failed", "reclaimed", "request"])(
     "exposes the full %s diagnostic with keyboard and clipboard access",

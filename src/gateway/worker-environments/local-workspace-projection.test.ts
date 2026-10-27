@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync } from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -21,15 +21,17 @@ import {
 } from "../../config/runtime-snapshot.js";
 import { closeOpenClawAgentDatabasesAsync } from "../../state/openclaw-agent-db.js";
 import {
-  closeOpenClawStateDatabase,
   closeOpenClawStateDatabaseAsync,
   closeOpenClawStateDatabaseByPathAsync,
   openOpenClawStateDatabase,
 } from "../../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
 import { requireNativeSqliteDatabase } from "../../test-utils/native-sqlite.js";
+import { readLocalWorkspaceTree } from "./local-workspace-cas.kernel.js";
 import {
   observeAcknowledgedUpdate,
+  prepareLocalWorkspaceArchiveFixture,
+  proveInterruptedWorkspaceCheckpoint,
   proveIncrementalWorkspaceEdits,
   proveSandboxMutationCheckpoints,
   proveStagedInputCheckpointOwnership,
@@ -67,16 +69,8 @@ async function expectMissing(directory: string, ...parts: string[]) {
   await expect(fs.stat(path.join(directory, ...parts))).rejects.toMatchObject({ code: "ENOENT" });
 }
 
-async function archiveFixture(provisionedPaths: string[] = []) {
-  const [registry, { ManagedWorktreeService, SNAPSHOT_RETENTION_MS }] = await Promise.all([
-    import("../../agents/worktrees/registry.js"),
-    import("../../agents/worktrees/service.js"),
-  ]);
-  const service = new ManagedWorktreeService();
-  owner.worktree.repoFingerprint = (await service.resolveRepositoryIdentity(canonical)).fingerprint;
-  await registry.insertRegistryWorktree(process.env, owner.worktree, { provisionedPaths });
-  return { service, registry, retentionMs: SNAPSHOT_RETENTION_MS };
-}
+const archiveFixture = (provisionedPaths: string[] = []) =>
+  prepareLocalWorkspaceArchiveFixture(owner, provisionedPaths);
 const treePaths = (tree: string) => git(repo, "ls-tree", "-r", "--name-only", tree);
 
 const suiteDirs = useAutoCleanupTempDirTracker((cleanup) =>
@@ -517,81 +511,49 @@ it("retains both sides and a durable pending result when edits conflict", async 
   expect((await readProjection())?.pending_ref).toBeNull();
 });
 
-it.each(["reservation", "acceptance", "accepted-result cleanup"] as const)(
-  "recovers durable state when authority closes during %s",
-  async (phase) => {
-    const projection = await prepare();
-    let edit = "interrupted guest edit\n";
-    const accepted = phase === "accepted-result cleanup";
-    const reserved = phase === "reservation";
-    await writeText(projection, "source.txt", edit);
-    const acknowledgement =
-      accepted || reserved
-        ? observeAcknowledgedUpdate((row) => {
-            if (row.pending_ref && (reserved || row.pending_target === null)) {
-              revoked = true;
-            }
-          })
-        : undefined;
-    const interrupted = {
-      ...owner,
-      assertCurrent: () => {
-        if (
-          !accepted &&
-          !reserved &&
-          readFileSync(path.join(canonical, "source.txt"), "utf8") === edit
-        ) {
-          revoked = true;
-        }
-        owner.assertCurrent();
-      },
-    };
-    await expect(
-      withLocalWorkspaceProjection(interrupted, (state) => state.synchronize("canonical")),
-    ).rejects.toThrow(accepted ? "revoked" : undefined);
-    acknowledgement?.mockRestore();
-    if (accepted) {
-      expect(await readProjection()).toMatchObject({
-        pending_ref: expect.any(String),
-        pending_target: null,
-        journal_json: null,
-      });
-      await writeText(canonical, "source.txt", "later human edit\n");
-    } else {
-      const pending = await readProjection();
-      expect(pending?.pending_ref).toBeTruthy();
-      expect(pending?.checkpoint_json).toBeTruthy();
-      if (reserved) {
-        expect(pending?.journal_json).toBeNull();
-        edit = "guest edit after interrupted reservation\n";
-        await writeText(projection, "source.txt", edit);
-      } else {
-        expect(pending?.journal_json).toBeTruthy();
-      }
-    }
-    revoked = false;
-    if (accepted) {
-      const pendingRef = (await readProjection())?.pending_ref;
-      const preservedProjection = projection + "-preserved";
-      await fs.rename(projection, preservedProjection);
-      try {
-        await expect(prepare()).rejects.toThrow();
-        expect((await readProjection())?.pending_ref).toBe(pendingRef);
-      } finally {
-        await fs.rename(preservedProjection, projection);
-      }
-    }
-    closeOpenClawStateDatabase();
-    await settleProjection();
-    await expectText(canonical, "source.txt", accepted ? "later human edit\n" : edit);
-    expect(await readProjection()).toMatchObject({
-      journal_json: null,
-      pending_ref: null,
-      checkpoint_json: null,
-      baseline_json: null,
-    });
-  },
-);
+it("replaces rejected v31 storage when a full rescan matches the unchanged accepted root", async () => {
+  const projection = await prepare();
+  const accepted = (await readProjection())!;
+  const { db } = openOpenClawStateDatabase();
+  const records = readLocalWorkspaceTree(db, accepted.tree_root_digest!);
+  for (const record of records.values()) {
+    db.prepare(
+      "INSERT INTO local_workspace_manifest_nodes (worktree_id, path, node_json) VALUES (?, ?, ?)",
+    ).run(owner.worktree.id, record.node.path, JSON.stringify(record));
+  }
+  db.prepare(
+    "UPDATE local_workspace_projections SET tree_root_digest = NULL WHERE worktree_id = ?",
+  ).run(owner.worktree.id);
+  db.prepare(`UPDATE local_workspace_manifest_nodes
+    SET node_json = json_set(node_json, '$.node.sha256', ?)
+    WHERE worktree_id = ? AND path = 'source.txt'`).run("f".repeat(64), owner.worktree.id);
+  await synchronize();
+  const replaced = (await readProjection())!;
+  expect(replaced.baseline_ref).toBe(accepted.baseline_ref);
+  expect(replaced.tree_root_digest).toEqual(accepted.tree_root_digest);
+  expect(replaced.pending_ref).toBeNull();
+  expect(
+    db
+      .prepare("SELECT count(*) AS n FROM local_workspace_manifest_nodes WHERE worktree_id = ?")
+      .get(owner.worktree.id)!.n,
+  ).toBe(0);
+  await expectText(canonical, "source.txt", "original\n");
+  await expectText(projection, "source.txt", "original\n");
+});
+
+it.each([
+  "reservation",
+  "v31 reservation",
+  "v31 rejected conversion",
+  "v31 rejected staged conversion",
+  "acceptance",
+  "accepted-result cleanup",
+  "legacy accepted-result cleanup",
+] as const)("recovers durable state when authority closes during %s", async (phase) => {
+  await proveInterruptedWorkspaceCheckpoint(owner, phase, (value) => {
+    revoked = value;
+  });
+});
 
 it.for([false, true])(
   "waits for checkpoint resume before guest command preparation and cleanup (stopped: %s)",

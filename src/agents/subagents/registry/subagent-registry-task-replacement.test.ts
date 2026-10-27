@@ -4,6 +4,7 @@ import { runSubagentStateWorkerOperation, useSubagentControlFixture } from "./su
 import { expect, it, onTestFinished, vi } from "vitest";
 import type { WorkerLiveEventParams } from "../../../../packages/gateway-protocol/src/schema/worker-admission.js";
 import { awaitGateBeforeSettlement, createDeferred } from "../../../../test/helpers/promise.js";
+import { getRuntimeConfig } from "../../../config/config.js";
 import { loadSessionEntry } from "../../../config/sessions/session-accessor.js";
 import { captureSessionTranscriptTargetBinding } from "../../../config/sessions/transcript-target-binding.js";
 import { reactivateCompletedSubagentSession } from "../../../gateway/session-subagent-reactivation.js";
@@ -33,6 +34,7 @@ import { openOpenClawStateDatabase } from "../../../state/openclaw-state-db.js";
 import * as stateWorker from "../../../state/openclaw-state-worker-store.js";
 import { createEnteredGate } from "../../entered-gate.test-support.js";
 import type { AgentWaitResult } from "../../run-wait.js";
+import { prepareSubagentKillSession } from "./subagent-control-session.js";
 import { createSubagentRegistryContextCleanup } from "./subagent-registry-context-cleanup.js";
 import { subagentRegistryLog } from "./subagent-registry-lifecycle-log.js";
 import { subagentRuns } from "./subagent-registry-memory.js";
@@ -149,6 +151,48 @@ it("does not recreate a source released before replacement admission", async () 
   } finally {
     release.resolve();
     await Promise.allSettled([retiring, replacing]);
+  }
+});
+
+it("does not transfer completed child control to a different session at the same key", async () => {
+  const childSessionKey = "agent:main:subagent:replaced-child";
+  const original = { sessionId: "original-child", lifecycleRevision: "original-revision" };
+  await writeSession(childSessionKey, original.sessionId, original);
+  await register("completed-original", childSessionKey, original.sessionId, {
+    sessionEntry: original,
+    expectsCompletionMessage: false,
+  });
+  await updateRun("completed-original", (row) => {
+    row.execution = { status: "terminal", startedAt: 1, endedAt: 2, outcome: { status: "ok" } };
+  });
+  await writeSession(childSessionKey, "replacement-child", {
+    sessionId: "replacement-child",
+    lifecycleRevision: "replacement-revision",
+  });
+  const current = loadSessionEntry({ agentId: "main", sessionKey: childSessionKey })!;
+  await reactivateCompletedSubagentSession({
+    sessionKey: childSessionKey,
+    runId: "replacement-followup",
+    session: { cfg: getRuntimeConfig(), activeSessionAgentId: "main", sessionEntry: current },
+  });
+  const followup = subagentRuns.get("replacement-followup")!;
+  let prepared: Awaited<ReturnType<typeof prepareSubagentKillSession>> | undefined;
+  try {
+    await expect(
+      (async () => {
+        prepared = await prepareSubagentKillSession(
+          getRuntimeConfig(),
+          childSessionKey,
+          () => {},
+          undefined,
+          "main",
+          followup.childSessionIdentity,
+          followup,
+        );
+      })(),
+    ).rejects.toThrow("original session incarnation is unresolved or changed");
+  } finally {
+    await prepared?.release();
   }
 });
 

@@ -1,5 +1,5 @@
 import type { StreamFn } from "openclaw/plugin-sdk/agent-core";
-import { createAssistantMessageEventStream } from "openclaw/plugin-sdk/llm";
+import { createAssistantMessageEventStream, streamSimple } from "openclaw/plugin-sdk/llm";
 import { registerSingleProviderPlugin } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { clearLiveCatalogCacheForTests } from "openclaw/plugin-sdk/provider-catalog-live-runtime";
 import type { ProviderCatalogContext } from "openclaw/plugin-sdk/provider-catalog-shared";
@@ -179,6 +179,91 @@ describe("ClawRouter plugin", () => {
         "X-ClawRouter-Client": "openclaw",
         Authorization: "Bearer runtime-proxy-key",
       });
+    },
+  );
+
+  it.each(["wrapStreamFn", "wrapSimpleCompletionStreamFn"] as const)(
+    "%s preserves the catalog model identity through an Anthropic response",
+    async (hook) => {
+      const selected = "anthropic/claude-sonnet-4-6";
+      const upstream = "claude-sonnet-4-6";
+      const fetch = vi.fn<typeof globalThis.fetch>(async (input, init) => {
+        expect(await new Request(input, init).json()).toMatchObject({ model: upstream });
+        const events = [
+          {
+            type: "message_start",
+            message: {
+              id: "msg_fixture",
+              type: "message",
+              role: "assistant",
+              model: upstream,
+              content: [],
+              usage: { input_tokens: 1, output_tokens: 0 },
+            },
+          },
+          { type: "content_block_start", index: 0, content_block: { type: "text", text: "" } },
+          { type: "content_block_delta", index: 0, delta: { type: "text_delta", text: "Hello" } },
+          { type: "content_block_stop", index: 0 },
+          {
+            type: "message_delta",
+            delta: { stop_reason: "end_turn" },
+            usage: { output_tokens: 1 },
+          },
+          { type: "message_stop" },
+        ];
+        return new Response(
+          events
+            .map((event) => `event: ${event.type}\ndata: ${JSON.stringify(event)}\n\n`)
+            .join(""),
+          { headers: { "content-type": "text/event-stream" } },
+        );
+      });
+      vi.stubGlobal("fetch", fetch);
+      const model = streamModel({
+        api: "anthropic-messages",
+        id: selected,
+        params: {
+          clawrouterRoute: {
+            api: "anthropic-messages",
+            baseUrl: "https://clawrouter.example/v1/native/anthropic",
+            upstreamModel: upstream,
+          },
+        },
+      });
+      const wrapped = provider[hook]?.({
+        provider: "clawrouter",
+        modelId: selected,
+        streamFn: streamSimple,
+      });
+      if (!wrapped) {
+        throw new Error(`missing ClawRouter ${hook}`);
+      }
+      const stream = await wrapped(
+        model,
+        { messages: [{ role: "user", content: "Say hello.", timestamp: 0 }] },
+        { apiKey: "fixture-router-key", maxTokens: 64 },
+      );
+      if (hook === "wrapStreamFn") {
+        for await (const event of stream) {
+          const message =
+            event.type === "done"
+              ? event.message
+              : event.type === "error"
+                ? event.error
+                : event.partial;
+          if (message) {
+            expect(message.model).toBe(selected);
+          }
+        }
+      }
+      expect(await stream.result()).toMatchObject({
+        provider: "clawrouter",
+        model: selected,
+        responseModel: upstream,
+        content: [{ type: "text", text: "Hello" }],
+        stopReason: "stop",
+      });
+      expect(fetch).toHaveBeenCalledOnce();
     },
   );
 

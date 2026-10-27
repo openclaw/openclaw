@@ -9,10 +9,8 @@ import {
 } from "../config/runtime-snapshot.js";
 import { replaceSessionEntrySync } from "../config/sessions/session-accessor.sqlite-entry.js";
 import { memorySessionActorOwners } from "../config/sessions/session-actor-memory-owner.js";
-import {
-  acquireSessionActorStorage,
-  runWithSessionActorStorage,
-} from "../config/sessions/session-actor-storage-binding.js";
+import { acquireSessionActorStorage } from "../config/sessions/session-actor-storage-acquisition.js";
+import { runWithSessionActorStorage } from "../config/sessions/session-actor-storage-binding.js";
 import type { InternalSessionEntry } from "../config/sessions/types.js";
 import type { PluginRuntime } from "../plugins/runtime/types.js";
 import {

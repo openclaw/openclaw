@@ -1,5 +1,4 @@
 import { randomUUID } from "node:crypto";
-import { realpathSync } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import type { SandboxConfig } from "../../agents/sandbox/types.js";
@@ -7,10 +6,11 @@ import type { WorktreeAllocationGuard } from "../../agents/worktrees/allocation.
 import { requireGit, requireGitBuffer, runGit } from "../../agents/worktrees/git.js";
 import { timeWorktreePreparationPhase } from "../../agents/worktrees/preparation-timing.js";
 import type { WorktreeWorkerAuthority } from "../../agents/worktrees/types.js";
-import { resolveStateDir } from "../../config/state-dir.js";
+import { createSubsystemLogger } from "../../logging/subsystem.js";
 import {
   assertLocalWorkspaceDirectory,
   initializeLocalWorkspaceProjection,
+  localWorkspaceProjectionPath,
 } from "./local-workspace-checkout.js";
 import {
   admitLocalWorkspaceSourcePaths,
@@ -19,7 +19,10 @@ import {
   parseLocalWorkspaceSourcePaths,
   selectLocalWorkspaceCanonicalPaths,
 } from "./local-workspace-inventory.js";
-import type { LocalWorkspaceManifestCheckpoint } from "./local-workspace-manifest-scan.js";
+import type {
+  LocalWorkspaceManifestAction,
+  LocalWorkspaceManifestCheckpoint,
+} from "./local-workspace-manifest-scan.js";
 import type { LocalWorkspaceStore, LocalWorkspaceProjection } from "./local-workspace-store.js";
 import type { LocalWorkspaceOwner } from "./local-workspace-types.js";
 import { AcceptedWorkspacePublicationIndeterminateError } from "./workspace-accepted-publication.js";
@@ -49,20 +52,9 @@ import {
 } from "./workspace-result-staging.js";
 
 type Direction = "canonical" | "projection";
+const log = createSubsystemLogger("agents/worktrees");
 function pendingDirection(value: string | null): Direction | undefined {
   return value === "canonical" || value === "projection" ? value : undefined;
-}
-
-function projectionPath(owner: LocalWorkspaceOwner) {
-  if (!/^[a-f0-9-]{36}$/u.test(owner.worktree.id)) {
-    throw new Error("Invalid managed worktree identity");
-  }
-  return path.join(
-    realpathSync(resolveStateDir(owner.env)),
-    "worktree-projections",
-    owner.worktree.id,
-    "workspace",
-  );
 }
 
 export function projectionOperations(
@@ -88,7 +80,10 @@ export function projectionOperations(
         "Local sandbox workspace belongs to a different session incarnation; pending edits were preserved",
       );
     }
-    if (row.projection_path !== projectionPath(owner) || store.get()?.revision !== row.revision) {
+    if (
+      row.projection_path !== localWorkspaceProjectionPath(owner) ||
+      store.get()?.revision !== row.revision
+    ) {
       throw new Error("Local workspace binding changed");
     }
     return row;
@@ -109,8 +104,34 @@ export function projectionOperations(
   ) => {
     row = await store.update(current(), patch, owner.workerAuthority, manifest);
   };
+  const repairBaseline = async () => {
+    const repair = await store.manifest(current(), {
+      kind: "repair",
+      canonicalRoot: owner.worktree.path,
+    });
+    if (repair.kind !== "replace") {
+      throw new Error("Local workspace baseline repair is missing");
+    }
+    row = await store.accept(repair.update, owner.workerAuthority);
+  };
+  const readManifest = async (action: LocalWorkspaceManifestAction) => {
+    try {
+      return await store.manifest(current(), action);
+    } catch (error) {
+      if (
+        !(error instanceof Error) ||
+        !error.message.includes("Local workspace baseline nodes are missing")
+      ) {
+        throw error;
+      }
+      // A preparation stalled across GC epochs can lose unaccepted content. Restore
+      // only an exact digest match; divergent files must never replace the merge base.
+      await repairBaseline();
+      return await store.manifest(current(), action);
+    }
+  };
   const baselineDocument = async () => {
-    const document = await store.manifest(current(), { kind: "materialize" });
+    const document = await readManifest({ kind: "materialize" });
     current();
     if (document.kind !== "materialize") {
       throw new Error("Local workspace baseline materialization is missing");
@@ -129,13 +150,6 @@ export function projectionOperations(
       manifestRef: ref,
       buildCacheInputs: await buildCacheInputs(),
     });
-  };
-  const migrateBaseline = async () => {
-    const selected = current();
-    // A legacy pending receipt owns its full-document identity until settlement.
-    if (selected.baseline_json && selected.baseline_ref && !selected.pending_ref) {
-      await replaceBaseline(selected.baseline_json, selected.baseline_ref);
-    }
   };
   const sourcePath = (target: Direction) =>
     target === "canonical" ? current().projection_path : owner.worktree.path;
@@ -219,7 +233,7 @@ export function projectionOperations(
       await buildCacheInputs();
     }
     await assertLocalWorkspaceDirectory(sourcePath(target));
-    const snapshot = await store.manifest(current(), {
+    const snapshot = await readManifest({
       kind: "scan",
       target,
       canonicalRoot: owner.worktree.path,
@@ -267,13 +281,33 @@ export function projectionOperations(
       stagedResultRef: selected.pending_ref,
       assertCurrent,
     });
-    await update({ pending_ref: null, checkpoint_json: null });
+    await update({
+      pending_ref: null,
+      checkpoint_json: null,
+      ...(selected.tree_root_digest ? { baseline_json: null } : {}),
+    });
   };
   const settle = async (
     retainAccepted = false,
     preparedSnapshot?: LocalWorkspaceManifestCheckpoint,
   ) => {
     await recover();
+    const conversionSource = current();
+    if (conversionSource.baseline_ref && !conversionSource.tree_root_digest) {
+      const prepared = await readManifest({ kind: "convert" });
+      if (prepared.kind === "rescan") {
+        log.warn(
+          "Local workspace baseline conversion changed its reference; preserved source data and requesting full-scan baseline repair",
+        );
+        // The existing full-scan repair accepts only the exact saved baseline;
+        // source data stays intact until that replacement is accepted.
+        await repairBaseline();
+      } else if (prepared.kind === "replace") {
+        row = await store.accept(prepared.update, owner.workerAuthority);
+      } else {
+        throw new Error("Local workspace conversion preparation is missing");
+      }
+    }
     if (!retainAccepted) {
       await cleanupAccepted();
     }
@@ -432,20 +466,15 @@ export function projectionOperations(
   };
   const synchronize = async (target: Direction) => {
     await settle();
-    await migrateBaseline();
     const snapshot = await scan(target);
-    if (snapshot.resultingRoot === snapshot.previousRoot) {
-      if (snapshot.records.length || snapshot.removed.length) {
-        await update({}, snapshot);
-      }
-      return;
+    if (snapshot.resultingRoot !== snapshot.previousRoot) {
+      await update({
+        pending_ref: workerWorkspaceResultRef(randomUUID()),
+        pending_target: target,
+        checkpoint_json: JSON.stringify(snapshot),
+      });
+      await settle(false, snapshot);
     }
-    await update({
-      pending_ref: workerWorkspaceResultRef(randomUUID()),
-      pending_target: target,
-      checkpoint_json: JSON.stringify(snapshot),
-    });
-    await settle(false, snapshot);
   };
   const prepare = async (dependencies?: {
     sandbox: SandboxConfig;
@@ -470,11 +499,15 @@ export function projectionOperations(
           session_key: owner.sessionKey,
           session_id: owner.sessionId,
           lifecycle_revision: owner.lifecycleRevision,
-          projection_path: projectionPath(owner),
+          projection_path: localWorkspaceProjectionPath(owner),
           base_commit: baseCommit,
           source_paths_json: sourcePaths,
           baseline_json: null,
           baseline_ref: null,
+          tree_root_digest: null,
+          source_paths_digest: null,
+          canonical_fingerprints: null,
+          projection_fingerprints: null,
           checkpoint_json: null,
           pending_ref: null,
           pending_target: null,

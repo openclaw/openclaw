@@ -34,6 +34,7 @@ export function projectCanonicalSessionEntryShape(
       | "sessionFile"
       | "transcriptPath"
       | "conversationLink"
+      | "titleRefinement"
       | "owner"
       | "participants"
       | "participantCount",
@@ -51,6 +52,7 @@ export function projectCanonicalSessionEntryShape(
     sessionFile: _retiredSessionFile,
     transcriptPath: _retiredTranscriptPath,
     conversationLink: _retiredConversationLink,
+    titleRefinement: _retiredTitleRefinement,
     owner: _projectedOwner,
     participants: _projectedParticipants,
     participantCount: _projectedParticipantCount,

@@ -6,6 +6,7 @@ import { observeSqliteReadSql } from "../../../test/helpers/sqlite-statement-exe
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { openNodeSqliteDatabase, requireNodeSqlite } from "../../infra/node-sqlite.js";
 import { admitSqliteSchema } from "../../infra/sqlite-schema-facts.js";
+import { runSqliteImmediateTransactionSync as inTransaction } from "../../infra/sqlite-transaction.js";
 import {
   closeOpenClawAgentDatabasesAsync,
   closeOpenClawAgentDatabasesForTest,
@@ -81,17 +82,6 @@ const toolEvent = (id: string, parentId: string | null, content: string) => ({
   parentId,
   message: { role: "toolResult", content },
 });
-
-function inTransaction(db: { exec(sql: string): void }, run: () => void) {
-  db.exec("BEGIN IMMEDIATE;");
-  try {
-    run();
-    db.exec("COMMIT;");
-  } catch (error) {
-    db.exec("ROLLBACK;");
-    throw error;
-  }
-}
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const countMessages = (scope: Parameters<typeof readPage>[0]): number =>
@@ -261,12 +251,7 @@ describe("SQLite active transcript event projection", () => {
     expect(accept()).toBe(true);
     await admissionReset("before-admission-reset", "source", "source");
     await persistMessages([userMessage("admitted", "before-admission-reset")]);
-    expect(
-      readSessionTranscriptMessageEvents(scope).some(
-        ({ event }) =>
-          typeof event === "object" && event !== null && "id" in event && event.id === "source",
-      ),
-    ).toBe(true);
+    expect(eventIds(readSessionTranscriptMessageEvents(scope))).toContain("source");
     expect(accept()).toBe(false);
     expect(withReadFence(admission("recovery"), accept)).toBe(false);
   });
@@ -298,9 +283,7 @@ describe("SQLite active transcript event projection", () => {
       ]);
       const anchor = admission();
       await admissionReset("later-reset", "admitted");
-      await persistMessages([
-        transcriptMessage("after-reset", "later-reset", { role: "user", content: "fresh" }),
-      ]);
+      await persistMessages([makeMessage("after-reset", "later-reset", "user", "fresh")]);
       expect(activeStats(scope)).toMatchObject({ eventCount: 1 });
       expect(activeStats(scope).sizeBytes).toBeLessThan(1_000);
       expect(readLatest(scope)?.event).toMatchObject({ id: "after-reset" });
@@ -364,10 +347,7 @@ describe("SQLite active transcript event projection", () => {
         __openclaw: { runId: "source" },
         provenance,
       }),
-      transcriptMessage("tool-output", "source", {
-        role: "assistant",
-        content: "y".repeat(100_000),
-      }),
+      makeMessage("tool-output", "source", "assistant", "y".repeat(100_000)),
       transcriptMessage("later-human", "tool-output", {
         role: "user",
         content: "new request",

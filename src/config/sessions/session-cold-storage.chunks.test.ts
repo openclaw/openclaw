@@ -11,7 +11,7 @@ import {
 import { resetSessionStore } from "./session-accessor.sqlite-reset.js";
 import { replaceTranscriptEvents } from "./session-accessor.sqlite-transcript-write.test-support.js";
 import { embedSessionColdArchivesInSnapshot } from "./session-cold-storage-backup.js";
-import { readSessionColdChunks } from "./session-cold-storage-chunks.js";
+import { hashSessionColdChunks, readSessionColdChunks } from "./session-cold-storage-chunks.js";
 import { resolveSessionColdArchivePath } from "./session-cold-storage-codec.js";
 import { prepareSessionColdBatchInWorker } from "./session-cold-storage-prepare.js";
 import { readSessionColdTranscript } from "./session-cold-storage-state.js";
@@ -124,9 +124,52 @@ it("archives a window larger than the per-file bound and restores all bytes and 
     sessionId: historicalId,
     archive: descriptor,
   };
-  const records = await prepareSessionColdRestoreInWorker(plan);
-  expect(mutateSessionColdTranscriptInWorker(plan, records, () => {}).restored).toBe(true);
+  const decompress = vi.spyOn(zlib, "zstdDecompressSync");
+  try {
+    const records = await prepareSessionColdRestoreInWorker(plan);
+    expect(decompress.mock.calls.length).toBe(0);
+    expect(mutateSessionColdTranscriptInWorker(plan, records, () => {}).restored).toBe(true);
+    expect(decompress).toHaveBeenCalledTimes(chunks.length);
+  } finally {
+    decompress.mockRestore();
+  }
   expect(fixture.snapshot()).toEqual(original);
+});
+
+it("rolls back streamed rows when a checksummed chunk fails its final metadata check", async () => {
+  expect((await archive()).archivedTranscripts).toBe(1);
+  const descriptor = readSessionColdTranscript(fixture.database(), historicalId)!;
+  const chunks = readSessionColdChunks(fixture.database(), descriptor);
+  // Keep the manifest internally consistent but disagree with the decoded final chunk.
+  const last = chunks.at(-1)!;
+  last.raw_bytes++;
+  const hash = hashSessionColdChunks(chunks);
+  fixture
+    .database()
+    .prepare(
+      "UPDATE session_transcript_cold_archive_chunks SET raw_bytes = raw_bytes + 1 WHERE session_id = ? AND chunk_index = ?",
+    )
+    .run(historicalId, last.chunk_index);
+  fixture
+    .database()
+    .prepare(
+      "UPDATE session_transcript_cold_archives SET raw_bytes = raw_bytes + 1, archive_sha256 = ?, archive_name = ? WHERE session_id = ?",
+    )
+    .run(hash, `${hash}.jsonl.zst`, historicalId);
+  const changedArchive = readSessionColdTranscript(fixture.database(), historicalId)!;
+  const plan = {
+    kind: "cold-restore" as const,
+    databaseOptions: fixture.options,
+    sessionId: historicalId,
+    archive: changedArchive,
+  };
+  const before = fixture.snapshot();
+  const records = await prepareSessionColdRestoreInWorker(plan);
+  expect(() => mutateSessionColdTranscriptInWorker(plan, records, () => {})).toThrow(
+    "Cold transcript archive metadata does not match its contents",
+  );
+  expect(fixture.snapshot()).toEqual(before);
+  expect(readSessionColdTranscript(fixture.database(), historicalId)).toEqual(changedArchive);
 });
 
 it.each(["missing", "corrupt"])(

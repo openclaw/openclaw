@@ -2,7 +2,7 @@ import "../styles/sidebar-attention-floating.css";
 import "../styles/session-title-placeholder.css";
 import { getObserver } from "@solidjs/signals";
 import type { JSX } from "@solidjs/web";
-import { createEffect, createMemo, onCleanup, onSettled } from "solid-js";
+import { createEffect, createMemo, createProjection, onCleanup, onSettled } from "solid-js";
 import { rosterActivityStore } from "../lib/agents/roster-activity-store.ts";
 import { useApplication, useOptionalApplication } from "../lib/reactive/context.ts";
 import { i18nRevision } from "../lib/reactive/i18n.ts";
@@ -29,6 +29,15 @@ import { createSidebarPeople } from "./sidebar-people.ts";
 export { AppSidebarOwner } from "./app-sidebar-owner.tsx";
 
 const sidebarOwners = new WeakMap<HTMLElement, AppSidebarOwner>();
+// Testing a projection's own keys would subscribe every reader to property presence.
+const sidebarPreferenceKeys = new Set<PropertyKey>([
+  "sidebarAgentsMode",
+  "sessionsGrouping",
+  "sessionsShowPreview",
+  "sidebarLiveActivity",
+  "sessionInvolvingMeFilterActive",
+  "sessionOwnerFilterId",
+]);
 
 export function getAppSidebarOwner(host: HTMLElement): AppSidebarOwner | undefined {
   return sidebarOwners.get(host);
@@ -198,6 +207,18 @@ function AppSidebarContent(
     ],
   );
   const observed = new WeakMap<object, object>();
+  // Stable primitive preferences need one comparison, not one rerun per visible row.
+  const preferences = createProjection(() => {
+    presentationRevision();
+    return {
+      sidebarAgentsMode: owner.sidebarAgentsMode,
+      sessionsGrouping: owner.sessionsGrouping,
+      sessionsShowPreview: owner.sessionsShowPreview,
+      sidebarLiveActivity: owner.sidebarLiveActivity,
+      sessionInvolvingMeFilterActive: owner.sessionInvolvingMeFilterActive,
+      sessionOwnerFilterId: owner.sessionOwnerFilterId,
+    };
+  });
   const mutationInputs = createMemo(
     () => {
       presentationRevision();
@@ -228,6 +249,9 @@ function AppSidebarContent(
           return readSessionMutationAccess;
         }
         if (getObserver()) {
+          if (current === owner && sidebarPreferenceKeys.has(key)) {
+            return Reflect.get(preferences, key);
+          }
           presentationRevision();
         }
         const value = Reflect.get(current, key, receiver);
@@ -244,7 +268,7 @@ function AppSidebarContent(
   [owner.sessionData, owner.sessionOrganizer, owner.people].forEach(observe);
   owner.sessionPullRequests = createSessionPullRequestIndicators({
     getConnected: () => prepared().isConnected && props.connected,
-    getPresented: () => props.navigationVisible,
+    getPresented: () => props.navigationVisible && !prepared().sidebarSnapshot,
     getRows: () => prepared().readSessionPullRequestRows(),
     getSelectedAgentId: () => prepared().selectedAgentIdForSessions(),
     getGateway: () => prepared().sessionDataContext?.gateway,

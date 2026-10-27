@@ -233,6 +233,7 @@ export function renderChatPaneComposerControls(params: {
       : (readChatSessionSnapshot(state.chatMessagesBySession, state, { sessionKey })?.composer ??
         undefined);
   const permissionSnapshot = sessionReady ? undefined : snapshot;
+  const snapshotReason = snapshot ? t("chat.modelControls.refreshingSettings") : undefined;
   return {
     composerControls: {
       component: ChatPaneModelControl,
@@ -287,8 +288,10 @@ export function renderChatPaneComposerControls(params: {
         modelSelectionTarget: state.sessionsResult?.defaults.modelSelectionTarget,
         modelPickerOpen: state.chatModelPickerOpenSessionKey === state.sessionKey,
         modelSwitching: Boolean(state.chatModelSwitchPromises[state.sessionKey]),
-        modelMutationDisabledReason: modelAccess.allowed ? undefined : modelAccess.reason,
-        effortMutationDisabledReason: effortAccess.allowed ? undefined : effortAccess.reason,
+        modelMutationDisabledReason:
+          snapshotReason ?? (modelAccess.allowed ? undefined : modelAccess.reason),
+        effortMutationDisabledReason:
+          snapshotReason ?? (effortAccess.allowed ? undefined : effortAccess.reason),
         contextWindowMutationDisabledReason: contextWindowAccess.allowed
           ? undefined
           : contextWindowAccess.reason,
@@ -361,7 +364,11 @@ export function renderChatPaneComposerControls(params: {
         ? permissionSnapshot.defaultPermissionMode
         : agentDefaultPermissionMode,
       disabled: Boolean(permissionSnapshot) || !permissionAccess.allowed,
-      disabledReason: permissionAccess.allowed ? undefined : permissionAccess.reason,
+      disabledReason: permissionSnapshot
+        ? snapshotReason
+        : permissionAccess.allowed
+          ? undefined
+          : permissionAccess.reason,
       mode: currentChange
         ? currentChange.nextMode
         : permissionSnapshot

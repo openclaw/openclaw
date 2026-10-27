@@ -46,6 +46,7 @@ import {
 import { createInstalledPluginOwnershipResolver } from "./installed-plugin-package-ownership.js";
 import {
   type ManagedPluginIconSource,
+  type ManagedPluginClawHubIconSource,
   resolveInstalledPluginClawHubIconSource,
   resolvePluginIconSource,
   resolvePluginIconSources,
@@ -56,6 +57,7 @@ import {
   prepareCatalogEntries,
   loadOfficialCatalog,
   loadInstalledPluginCategories,
+  loadInstalledPluginPublisherHandle,
   pluginVersionKey,
   normalizeKinds,
   normalizeFeaturedAt,
@@ -251,6 +253,7 @@ export const listManagedPlugins = withManagedPluginCache(
       listOfficialExternalPluginCatalogEntries(),
     );
     const installedIconsById = new Map<string, boolean>();
+    const installedToolBrandSources = new Map<string, ManagedPluginClawHubIconSource>();
     const installedClawHubPackages = new Set<string>();
     const discoveryRegistry = resolveClawHubBaseUrl();
     const categoryTargetsByRegistry = new Map<
@@ -372,6 +375,9 @@ export const listManagedPlugins = withManagedPluginCache(
           normalizedPluginId,
           Boolean(resolvePluginIconSource({ metadata, pluginId: record.pluginId }) || remoteIcon),
         );
+        if (record.origin !== "bundled" && remoteIcon) {
+          installedToolBrandSources.set(normalizedPluginId, remoteIcon);
+        }
       }
       if (installedIconsById.get(normalizedPluginId)) {
         plugin.hasIcon = true;
@@ -415,6 +421,26 @@ export const listManagedPlugins = withManagedPluginCache(
       }
       return plugin;
     });
+    const toolBrandPluginIds = new Set<string>();
+    await Promise.all(
+      [...installedToolBrandSources].map(async ([pluginId, source]) => {
+        const publisher = await loadInstalledPluginPublisherHandle(
+          source,
+          params.cachedCatalogOnly,
+        );
+        if (publisher && publisher !== "openclaw") {
+          toolBrandPluginIds.add(pluginId);
+        }
+      }),
+    );
+    for (const plugin of plugins) {
+      if (
+        plugin.origin !== "bundled" &&
+        toolBrandPluginIds.has(metadata.normalizePluginId(plugin.id))
+      ) {
+        plugin.hasToolBrandIcon = true;
+      }
+    }
     for (const [baseUrl, categoryTargets] of categoryTargetsByRegistry) {
       const resolved = await loadInstalledPluginCategories({
         baseUrl,

@@ -56,6 +56,33 @@ describe("routed transcript prewarm", () => {
     await cleanup;
   });
 
+  it("starts the shared database read before independent preparation settles", async () => {
+    await seed();
+    const prepareSnapshot = snapshots.readPrewarmedChatSnapshot;
+    const preparationStarted = createDeferred();
+    const releasePreparation = createDeferred();
+    vi.spyOn(snapshots, "readPrewarmedChatSnapshot").mockImplementationOnce(async (cacheKey) => {
+      preparationStarted.resolve();
+      await releasePreparation.promise;
+      return prepareSnapshot(cacheKey);
+    });
+    const read = vi.spyOn(database, "readStoredChatSnapshotRecord");
+    const open = vi.spyOn(indexedDB, "open");
+    const warming = prewarmChatSnapshot(key);
+    try {
+      expect(open).toHaveBeenCalledOnce();
+      await preparationStarted.promise;
+      const reader = new snapshots.SessionSnapshotStore();
+      expect(await reader.read(key)).toEqual(stored);
+      expect(read).toHaveBeenCalledOnce();
+      expect(read).toHaveBeenCalledWith(key);
+      expect(open).toHaveBeenCalledOnce();
+    } finally {
+      releasePreparation.resolve();
+      await warming;
+    }
+  });
+
   it("starts before consumption and reuses the matching read only once", async () => {
     const { open, reader } = await prewarm();
     await vi.dynamicImportSettled();

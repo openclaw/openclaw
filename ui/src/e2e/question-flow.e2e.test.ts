@@ -398,7 +398,7 @@ suite.define(() => {
     questionSessionKey,
   });
 
-  it("restores the composer and its draft from an authoritative answer without a resolution event", async () => {
+  it("restores the composer without a resolution event and retains later pending-question drafts", async () => {
     const { gateway, page } = await openQuestionPage();
     const composer = page.locator(composerSelector);
     await composer.fill("Keep this release note draft");
@@ -469,6 +469,37 @@ suite.define(() => {
     expect(
       await summary.getByText(request.questions[0]!.question, { exact: true }).isVisible(),
     ).toBe(true);
+
+    const first = questionRecord("question-a-format", {
+      questionId: "format",
+      header: "Format",
+      question: "Which format should I use?",
+      options: [{ label: "Compact" }, { label: "Detailed" }],
+      isOther: true,
+    });
+
+    const second = questionRecord("question-b-audience", {
+      questionId: "audience",
+      header: "Audience",
+      question: "Who should read it?",
+      options: [{ label: "Engineers" }, { label: "Everyone" }],
+      isOther: true,
+    });
+
+    await gateway.emitGatewayEvent("question.requested", first);
+    await gateway.emitGatewayEvent("question.requested", second);
+    const pendingPanel = page.locator("openclaw-chat-question-panel");
+    await pendingPanel.getByRole("textbox", { name: "Your own answer for Format" }).fill("Compact");
+    await button(pendingPanel, "Next").click();
+    await pendingPanel.getByText("Who should read it?", { exact: true }).waitFor();
+    await button(pendingPanel, "Previous").click();
+    await pendingPanel.getByText("Which format should I use?", { exact: true }).waitFor();
+    expect(
+      await pendingPanel.getByRole("textbox", { name: "Your own answer for Format" }).inputValue(),
+    ).toBe("Compact");
+    expect(
+      await pendingPanel.getByRole("radio", { name: /Compact/ }).getAttribute("aria-checked"),
+    ).toBe("false");
   });
 
   it("preserves secret keyboard custody and retries rejected hosts without echoing the value", async () => {
@@ -590,40 +621,6 @@ suite.define(() => {
     expect(await document.textContent()).not.toContain(fakeSecret);
     expect(await document.textContent()).not.toContain("stored");
     expect(new URL(page.url()).pathname).toBe(`/operator/ask/${request.id}`);
-  });
-
-  it("retains a typed answer when navigating between pending questions", async () => {
-    const { gateway, page } = await openQuestionPage();
-    const first = questionRecord("question-a-format", {
-      questionId: "format",
-      header: "Format",
-      question: "Which format should I use?",
-      options: [{ label: "Compact" }, { label: "Detailed" }],
-      isOther: true,
-    });
-
-    const second = questionRecord("question-b-audience", {
-      questionId: "audience",
-      header: "Audience",
-      question: "Who should read it?",
-      options: [{ label: "Engineers" }, { label: "Everyone" }],
-      isOther: true,
-    });
-
-    await gateway.emitGatewayEvent("question.requested", first);
-    await gateway.emitGatewayEvent("question.requested", second);
-    const panel = page.locator("openclaw-chat-question-panel");
-    await panel.getByRole("textbox", { name: "Your own answer for Format" }).fill("Compact");
-    await button(panel, "Next").click();
-    await panel.getByText("Who should read it?", { exact: true }).waitFor();
-    await button(panel, "Previous").click();
-    await panel.getByText("Which format should I use?", { exact: true }).waitFor();
-    expect(
-      await panel.getByRole("textbox", { name: "Your own answer for Format" }).inputValue(),
-    ).toBe("Compact");
-    expect(await panel.getByRole("radio", { name: /Compact/ }).getAttribute("aria-checked")).toBe(
-      "false",
-    );
   });
 
   it.each([

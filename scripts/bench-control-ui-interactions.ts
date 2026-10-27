@@ -75,6 +75,7 @@ const { values } = parseArgs({
     theme: { type: "string", default: "light" },
     "thread-cpu-time": { type: "boolean", default: false },
     "function-counts": { type: "boolean", default: false },
+    "graph-counts": { type: "boolean", default: false },
     "first-pair-screenshots": { type: "boolean", default: false },
     "invalidation-tracking": { type: "boolean", default: false },
     "resource-counts": { type: "boolean", default: false },
@@ -89,6 +90,9 @@ const { values } = parseArgs({
   },
 });
 const trace = values.trace || values["selector-stats"];
+if (values["graph-counts"] && (trace || values["function-counts"] || values["projection-counts"])) {
+  throw new Error("Run reactive graph counts separately from CPU/coverage instrumentation");
+}
 if (values["projection-counts"] && !values["projection-fixtures"]) {
   throw new Error("--projection-counts requires --projection-fixtures");
 }
@@ -374,6 +378,7 @@ type Result = {
   projectionCoverageArtifact?: string;
   functionCoverageArtifact?: string;
   functionCoveragePreparationArtifact?: string;
+  reactiveGraphArtifact?: string;
   projectionScreenshotArtifact?: string;
   measurementClass?:
     | "production-interaction"
@@ -612,6 +617,9 @@ try {
         metricTimeDomain: values["thread-cpu-time"] ? "threadTicks" : "timeTicks",
         functionCounts: values["function-counts"]
           ? "Precise coverage starts before navigation and resets after preparation; diagnostic overhead, not timing evidence."
+          : false,
+        reactiveGraphCounts: values["graph-counts"]
+          ? "Observe-only Solid build; diagnostic counts, not production timing evidence."
           : false,
         cpuThrottle,
         retainedHeap: values["retained-heap"]
@@ -907,7 +915,7 @@ try {
               await cdp.send("Network.disable");
             }
             result.measurementClass =
-              scenario.diagnostic || values["function-counts"]
+              scenario.diagnostic || values["function-counts"] || values["graph-counts"]
                 ? "diagnostic"
                 : scenario.projectionFamily
                   ? values["projection-counts"]
@@ -1116,6 +1124,15 @@ try {
               preciseCoverage = true;
             }
             await page.evaluate(() => performance.mark("interaction:start"));
+            if (values["graph-counts"]) {
+              await page.evaluate((label) => {
+                const graph = Reflect.get(window, "__openclawReactiveGraph");
+                if (!graph) {
+                  throw new Error("--graph-counts requires the explicit reactive graph build");
+                }
+                graph.start(label);
+              }, scenario.id);
+            }
             const start = performance.now();
             result.scenarioEvidence = (await scenario.run(page, gateway)) ?? undefined;
             if (scenario.visibility !== "hidden") {
@@ -1123,6 +1140,14 @@ try {
             }
             result.wallMs = performance.now() - start;
             await page.evaluate(() => performance.mark("interaction:end"));
+            if (values["graph-counts"]) {
+              const graph = await page.evaluate(() =>
+                Reflect.get(window, "__openclawReactiveGraph").stop(),
+              );
+              const artifact = `${artifactPrefix}.reactive-graph.json`;
+              await writeFile(path.join(artifactDir, artifact), JSON.stringify(graph, null, 2));
+              result.reactiveGraphArtifact = artifact;
+            }
             if (preciseCoverage) {
               const coverage = await cdp.send("Profiler.takePreciseCoverage");
               await cdp.send("Profiler.stopPreciseCoverage");

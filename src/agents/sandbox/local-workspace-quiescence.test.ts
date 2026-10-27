@@ -141,7 +141,21 @@ it("persists exact container and browser custody before pausing and resumes only
   expect(mocks.browserCurrent).toHaveBeenCalledTimes(3);
   await resume();
   expect(commands("unpause")).toEqual([browserId, id].map((runtimeId) => ["unpause", runtimeId]));
+  expect(persist).toHaveBeenCalledTimes(4);
+  expect(retained).toEqual([]);
 });
+
+it.each([false, true])(
+  "clears orphaned custody only when present (retained=%s)",
+  async (orphaned) => {
+    mocks.read.mockResolvedValue({ entries: [] });
+    retained = orphaned ? [{ name: "gone", id }] : [];
+    await (await quiesce()).resume();
+    expect(retained).toEqual([]);
+    expect(persist.mock.calls).toEqual(orphaned ? [[[]]] : []);
+    expect(mocks.command).not.toHaveBeenCalled();
+  },
+);
 
 it("records each released generation before a later resume failure and re-fences running recovery", async () => {
   const otherId = "b".repeat(64);

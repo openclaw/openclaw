@@ -347,6 +347,7 @@ async function runMcpOAuthAuthorizationAttempt(
     config: McpOAuthConfig;
     fetchFn: FetchLike;
     authorizationCode?: string;
+    iss?: string;
     resourceMetadataUrl?: URL;
     scope?: string;
     suppressStoredTokens?: boolean;
@@ -378,6 +379,7 @@ async function runMcpOAuthAuthorizationAttempt(
     result = await auth(provider, {
       serverUrl: params.identity.serverUrl,
       authorizationCode: normalizeOptionalString(params.authorizationCode),
+      iss: params.iss,
       resourceMetadataUrl: params.resourceMetadataUrl,
       scope: normalizeOptionalString(params.scope) ?? normalizeOptionalString(params.config?.scope),
       fetchFn: boundary.wrap(
@@ -484,7 +486,7 @@ export async function startMcpOAuthAuthorization(
 export async function completeMcpOAuthAuthorization(
   identity: McpOAuthIdentity,
   config: ResolvedHttpMcpTransportConfig,
-  input: { code: string },
+  input: { code: string; iss?: string },
 ): Promise<"authorized"> {
   const storeKey = identity.storeKey;
   return await withMcpOAuthLease<"authorized">(storeKey, async (lease, context) => {
@@ -506,7 +508,7 @@ function readMcpOAuthAuthorizationState(authorizationUrl: string | undefined): s
 async function completeMcpOAuthAuthorizationUnderLease(
   identity: McpOAuthIdentity,
   config: ResolvedHttpMcpTransportConfig,
-  input: { code: string },
+  input: { code: string; iss?: string },
   lease: OpenClawStateAsyncLeaseContext,
   context: OpenClawStateWorkerContext,
   login?: McpOAuthLoginLifecycle,
@@ -531,6 +533,7 @@ async function completeMcpOAuthAuthorizationUnderLease(
       config: { ...config.oauth, redirectUrl: store.redirectUrl },
       fetchFn: buildMcpOAuthAuthorizationFetch(config, login?.assertCurrent),
       authorizationCode,
+      iss: input.iss,
       resourceMetadataUrl: pendingChallenge?.resourceMetadataUrl
         ? new URL(pendingChallenge.resourceMetadataUrl)
         : undefined,
@@ -558,7 +561,7 @@ async function completeMcpOAuthAuthorizationUnderLease(
 export async function completeOAuthCallback(
   identity: McpOAuthIdentity,
   config: ResolvedHttpMcpTransportConfig,
-  input: { code: string; state: string },
+  input: { code: string; state: string; iss?: string },
   login?: McpOAuthLoginLifecycle,
   context: OpenClawStateWorkerContext = captureOpenClawStateWorkerContext(),
 ): Promise<"authorized" | "expired"> {

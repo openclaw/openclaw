@@ -82,13 +82,8 @@ function joinContinuations() {
   );
 }
 
-function interceptReadOwner(
-  intercept: (
-    owner: sessionEntryRead.SessionEntryReadWorkerOwner,
-  ) =>
-    | sessionEntryRead.SessionEntryReadWorkerOwner
-    | Promise<sessionEntryRead.SessionEntryReadWorkerOwner>,
-) {
+type ReadOwner = sessionEntryRead.SessionEntryReadWorkerOwner;
+function interceptReadOwner(intercept: (owner: ReadOwner) => ReadOwner | Promise<ReadOwner>) {
   const original = sessionEntryRead.withSessionEntryReadOnlyInWorker;
   return vi
     .spyOn(sessionEntryRead, "withSessionEntryReadOnlyInWorker")
@@ -512,6 +507,23 @@ describe("session event target custody", () => {
       await expect(fs.stat(databasePath)).rejects.toMatchObject({ code: "ENOENT" });
     },
   );
+  it.for(["plugin", "tool_handoff"] as const)(
+    "refuses a keyed %s retry while its occurrence is pending",
+    async (source, { state: { env } }) => {
+      const target = await captureTarget("main", sessionKey, { env });
+      const contextKey = "tool-handoff:retry";
+      const pending = enqueueRequiredSystemEventEntry("Tool result", {
+        sessionKey,
+        contextKey,
+        deliveryContext: target.deliveryContext,
+      });
+      expect(() =>
+        enqueueEvent("Tool result", { ...eventScope, source, contextKey, expectedTarget: target }),
+      ).toThrow("an identical occurrence is already pending");
+      expect(peekSystemEventEntries(sessionKey)).toEqual([pending]);
+    },
+  );
+
   it("retains store, route and producer limits across lookup", async ({
     state: { env, path: fixturePath, storePath },
   }) => {
@@ -641,7 +653,6 @@ describe("session event target custody", () => {
     async (boundary, { state: { env } }) => {
       const target = await captureTarget("main", sessionKey, { env });
       const occurrence = enqueueRequiredSystemEventEntry("Deferred hook", { sessionKey });
-      expect(occurrence).not.toBeNull();
       if (!occurrence) {
         throw new Error("Expected deferred hook occurrence");
       }
@@ -661,10 +672,7 @@ describe("session event target custody", () => {
         resetSystemEventsForTest();
       }
       await expect(receipt.accepted).resolves.toMatchObject({ ok: false });
-      await expect(receipt.settled).resolves.toMatchObject({
-        status: boundary === "reject" ? "failed" : "cancelled",
-        executionStarted: false,
-      });
+      await expectStopped(receipt, boundary === "reject" ? "failed" : "cancelled");
       expect(isSystemEventTurnOwned(sessionKey, occurrence)).toBe(false);
       expect(peekSystemEventEntries(sessionKey)).toEqual(
         boundary === "removed" ? [] : [occurrence],
@@ -698,11 +706,7 @@ it("retains one requester until pre-admission cancellation", async ({ signal, st
   expect(() => combineSessionEventTargetsForHost([target, other])).toThrow(
     "different captured destinations",
   );
-  const receipt = enqueueEvent("Command completed", {
-    ...eventScope,
-    source: "exec",
-    expectedTarget: target,
-  });
+  const receipt = enqueueCompletion(target);
   expect(receipt.cancel()).toBe(true);
   await expect(withinTest(receipt.settled, signal)).resolves.toMatchObject({
     status: "cancelled",

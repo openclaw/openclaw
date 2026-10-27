@@ -24,6 +24,7 @@ function freshSpawnState() {
     readOnlyRoot: true,
     inspectError: "",
     createError: "",
+    imageError: "",
     labelHash: "",
     mounts: "[]",
     tmpfs: null as Record<string, string> | null,
@@ -144,6 +145,9 @@ async function spawnDockerProcess(commandAndArgs: string[]) {
     if (output !== undefined) {
       return result(0, output);
     }
+  }
+  if (args[0] === "image" && args[1] === "inspect" && spawnState.imageError) {
+    return result(1, "", spawnState.imageError);
   }
   if (args[0] === "rm" && args[1] === "-f") {
     spawnState.containerExists = spawnState.inspectRunning = false;

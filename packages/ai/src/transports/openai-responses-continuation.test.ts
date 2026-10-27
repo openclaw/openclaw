@@ -36,15 +36,7 @@ const assistantOutput = {
     {
       type: "output_text",
       text: "answer",
-      annotations: [
-        {
-          type: "url_citation",
-          url: "https://example.test/source",
-          title: "source",
-          start_index: 0,
-          end_index: 6,
-        },
-      ],
+      annotations: [{ type: "file_citation", file_id: "file_1", filename: "a", index: 0 }],
       logprobs: [{ token: "answer", logprob: -0.1, bytes: [], top_logprobs: [] }],
     },
   ],
@@ -240,6 +232,36 @@ describe("OpenAI Responses continuation", () => {
       expect(responsesContinuationPrefixFingerprint(input)).not.toBe(expected);
     } finally {
       stringify.mockRestore();
+    }
+  });
+
+  it("compares mutable continuation history without materializing property-entry arrays", () => {
+    const previousMessage = userInput("message 0");
+    const currentMessage = structuredClone(previousMessage);
+    const input = [
+      previousMessage,
+      ...Array.from({ length: 63 }, (_, index) => userInput(`message ${index + 1}`)),
+    ];
+    const state: ResponsesContinuationState = {
+      lastRequest: { input },
+      lastResponseId: "resp_previous",
+      lastResponseItems: [],
+    };
+    const current = [currentMessage, ...structuredClone(input.slice(1))];
+    const request = { input: [...current, secondUser] };
+    const fromEntries = vi.spyOn(Object, "fromEntries");
+    try {
+      expect(resolve(state, request)).toMatchObject({
+        continuationStatus: "continued",
+        request: { previous_response_id: "resp_previous", input: [secondUser] },
+      });
+      expect(fromEntries).not.toHaveBeenCalled();
+      currentMessage.content[0] = { type: "input_text", text: "edited in place" };
+      expectHistoryChanged(state, request);
+      previousMessage.content[0] = { type: "input_text", text: "edited in place" };
+      expect(resolve(state, request).continuationStatus).toBe("continued");
+    } finally {
+      fromEntries.mockRestore();
     }
   });
 

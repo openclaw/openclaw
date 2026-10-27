@@ -299,6 +299,7 @@ export function createEmbeddedRunFailoverRetryController(input: {
         reason: TransientRetryReason;
       }) => void | Promise<void>;
     }): Promise<boolean> => {
+      params.abortSignal?.throwIfAborted();
       rateLimitRetriesExhausted = undefined;
       const recordDecision = (
         decision: "accepted" | "rejected",
@@ -388,6 +389,13 @@ export function createEmbeddedRunFailoverRetryController(input: {
           rateLimitRetriesExhausted = retryBudget === 0 ? 0 : retryCount;
         }
         recordDecision("rejected", "retry_budget_exhausted");
+        log.error("same-model retries exhausted", {
+          provider,
+          model: modelId,
+          reason: retry.reason,
+          retries: retryCount,
+          runId: params.runId,
+        });
         return false;
       }
       const nowMs = Date.now();
@@ -424,14 +432,17 @@ export function createEmbeddedRunFailoverRetryController(input: {
           log.warn(`profile failure mark failed: ${String(error)}`);
         }
       }
+      params.abortSignal?.throwIfAborted();
       const outputLimit = retry.reason === "output_limit";
       const attempt = (outputLimit ? outputLimitRetryCount : retryCount) + 1;
       const maxRetries = outputLimit
         ? Math.min(retryBudget, MAX_OUTPUT_LIMIT_RETRIES)
         : retryBudget;
-      log.warn(
-        `${outputLimit ? "output-limit continuation" : "transient same-model retry"} ${attempt}/${maxRetries} for ${sanitizeForLog(provider)}/${sanitizeForLog(modelId)} reason=${retry.reason}: delayMs=${delayMs} runId=${JSON.stringify(params.runId)} sessionId=${JSON.stringify(input.getSessionId())}`,
-      );
+      if (outputLimit || log.isEnabled("debug")) {
+        log[outputLimit ? "warn" : "debug"](
+          `${outputLimit ? "output-limit continuation" : "transient same-model retry"} ${attempt}/${maxRetries} for ${sanitizeForLog(provider)}/${sanitizeForLog(modelId)} reason=${retry.reason}: delayMs=${delayMs} runId=${JSON.stringify(params.runId)} sessionId=${JSON.stringify(input.getSessionId())}`,
+        );
+      }
       try {
         await retry.onRetry?.({
           attempt,
@@ -442,6 +453,7 @@ export function createEmbeddedRunFailoverRetryController(input: {
       } catch {
         log.warn("transient retry status callback failed; continuing retry");
       }
+      params.abortSignal?.throwIfAborted();
       const closeRetryWait = params.onRetryWait?.(
         Date.now() + delayMs,
         params.abortSignal,

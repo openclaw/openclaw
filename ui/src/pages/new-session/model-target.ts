@@ -211,12 +211,9 @@ export function resolveDraftModelTarget(
   };
 }
 
-function resolveDraftModelUnavailableReason(params: {
-  model: string;
-  agentRuntime?: string;
-  metadata: NewSessionModelMetadata;
-  agent?: GatewayAgentRow;
-}): ModelRuntimeEntry["unavailableReason"] {
+function resolveDraftModelUnavailableReason(
+  params: Parameters<typeof resolveDraftModelSelectionBlockedReason>[0],
+): ModelRuntimeEntry["unavailableReason"] {
   const { metadata, agent } = params;
   if (!metadata.hasSnapshot || metadata.status === "offline") {
     return undefined;

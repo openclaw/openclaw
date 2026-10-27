@@ -19,13 +19,8 @@ import { useGatewayPage } from "../../lib/reactive/gateway-page.ts";
 import { t } from "../../lib/reactive/i18n.ts";
 import { useStreamAutoFollow } from "../../lib/reactive/stream-auto-follow.ts";
 import { useVisiblePoll } from "../../lib/reactive/visible-poll.ts";
-import {
-  DEFAULT_LOG_LEVEL_FILTERS,
-  parseLogLine,
-  type LogEntry,
-  type LogLevel,
-} from "./log-lines.ts";
-import { LogsView, type LogsReadCompletion } from "./view.tsx";
+import { DEFAULT_LOG_LEVEL_FILTERS, parseLogLine, type LogLevel } from "./log-lines.ts";
+import { LogsView, type LogRow, type LogsReadCompletion } from "./view.tsx";
 
 declare module "@solidjs/web" {
   namespace JSX {
@@ -50,7 +45,7 @@ function LogsPage() {
   const context = useApplication();
   const [status, setStatus] = createSignal(createPanelRefreshStatus(), { ownedWrite: true });
   const [file, setFile] = createSignal<string | null>(null, { ownedWrite: true });
-  const [entries, setEntries] = createStore<LogEntry[]>([], { shallow: true });
+  const [entries, setEntries] = createStore<LogRow[]>([], { shallow: true });
   const [filterText, setFilterText] = createSignal("");
   const [levelFilters, setLevelFilters] = createStore<Record<LogLevel, boolean>>({
     ...DEFAULT_LOG_LEVEL_FILTERS,
@@ -70,6 +65,8 @@ function LogsPage() {
     | null = null;
   let disposed = false;
   let stream: HTMLElement | undefined;
+  let scrollToEnd: (() => void) | undefined;
+  let nextRowId = 0;
 
   const cancelRequest = () => {
     request?.controller.abort();
@@ -147,7 +144,7 @@ function LogsPage() {
           return false;
         }
       }
-      const nextEntries = payload.lines.map(parseLogLine);
+      const nextEntries = payload.lines.map((line) => ({ ...parseLogLine(line), id: nextRowId++ }));
       const reset = resetCursor || sourceChanged || payload.reset || previousCursor === null;
       // Truncation belongs to the displayed history until a complete tail replaces it.
       setTruncated(
@@ -197,6 +194,7 @@ function LogsPage() {
     container: () => stream,
     enabled: autoFollow,
     identity: () => gateway.epoch,
+    scrollToEnd: () => scrollToEnd?.(),
   });
   onSettled(() => {
     const resetContentScroll = () => {
@@ -236,7 +234,10 @@ function LogsPage() {
             levelFilters={levelFilters}
             autoFollow={autoFollow()}
             truncated={truncated()}
-            onStreamRef={(element) => (stream = element)}
+            onStreamRef={(element, scroll) => {
+              stream = element;
+              scrollToEnd = scroll;
+            }}
             onFilterTextChange={setFilterText}
             onLevelToggle={(level, enabled) =>
               setLevelFilters((draft) => {

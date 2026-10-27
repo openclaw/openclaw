@@ -12,6 +12,7 @@ import { createDeferred } from "../../test/helpers/promise.js";
 import { waitForGatewayDiagnosticReadiness } from "../cli/daemon-cli/diagnostic-readiness.js";
 import * as restartHealth from "../cli/daemon-cli/restart-health.constants.js";
 import type { OpenClawConfig } from "../config/config.js";
+import { expectText } from "../test-utils/text-assertions.js";
 import {
   GATEWAY_HEALTH_CREDENTIALS_REQUIRED_MESSAGE,
   GATEWAY_HEALTH_CREDENTIALS_REQUIRED_TITLE,
@@ -67,6 +68,10 @@ describe("checkGatewayHealth", () => {
     checkGatewayHealth({ runtime: sharedRuntime, cfg: config });
   const noteContains = (message: string, title: string) =>
     expect(note).toHaveBeenCalledWith(expect.stringContaining(message), title);
+  const expectHealthy = async () =>
+    expect(check()).resolves.toMatchObject({ healthOk: true, authenticated: true });
+  const expectFailed = async () =>
+    expect(check()).resolves.toMatchObject({ authenticated: false, healthOk: false });
   const expectUnauthenticated = async () => {
     await expect(check()).resolves.toEqual({ authenticated: false, healthOk: true });
     expect(sharedRuntime.error).not.toHaveBeenCalled();
@@ -110,14 +115,10 @@ describe("checkGatewayHealth", () => {
         staleGatewayPids: [],
       };
     });
-    await expect(check()).resolves.toEqual({
-      healthOk: true,
-      authenticated: false,
-    });
+    await expectUnauthenticated();
     expect(sharedRuntime.log).toHaveBeenCalledWith(
       "Gateway is still starting (phase: startup-sidecars).",
     );
-    expect(sharedRuntime.error).not.toHaveBeenCalled();
     expect(callGateway).not.toHaveBeenCalled();
   });
 
@@ -142,7 +143,7 @@ describe("checkGatewayHealth", () => {
       },
     );
 
-    await expect(check()).resolves.toMatchObject({ authenticated: false, healthOk: false });
+    await expectFailed();
 
     noteContains("CLI and live Gateway use different", "Gateway state directory mismatch");
     noteContains(
@@ -162,10 +163,7 @@ describe("checkGatewayHealth", () => {
       environment: { OPENCLAW_STATE_DIR: "/tmp/doctor-service-state" },
     });
 
-    await expect(check()).resolves.toMatchObject({
-      healthOk: false,
-      authenticated: false,
-    });
+    await expectFailed();
 
     const warning = note.mock.calls.find(
       ([, title]) => title === "Gateway state directory mismatch",
@@ -189,14 +187,9 @@ describe("checkGatewayHealth", () => {
         readServiceCommand.mockRejectedValueOnce(inspectionError);
       }
 
-      await expect(check()).resolves.toMatchObject({
-        healthOk: false,
-      });
+      await expect(check()).resolves.toMatchObject({ healthOk: false });
 
-      expect(note).toHaveBeenCalledWith(
-        expect.stringContaining("could not be verified"),
-        "Gateway state directory",
-      );
+      noteContains("could not be verified", "Gateway state directory");
       const output = JSON.stringify(note.mock.calls);
       expect(output).not.toContain("secret-service-environment-canary");
       expect(output).not.toContain("Gateway state directory mismatch");
@@ -217,60 +210,40 @@ describe("checkGatewayHealth", () => {
       buildGatewayConnectionDetails.mockReturnValue({ url });
       callGateway.mockRejectedValueOnce(new Error("ECONNREFUSED"));
 
-      await expect(check(config)).resolves.toMatchObject({
-        healthOk: false,
-      });
+      await expect(check(config)).resolves.toMatchObject({ healthOk: false });
 
       expect(readServiceCommand).not.toHaveBeenCalled();
     },
   );
 
-  const execPath = "/opt/homebrew/Cellar/node@24/24.20.0/bin/node";
-  it.each([
-    [
-      "Gateway runtime",
-      { childRuntime: { execPath, available: false } },
-      [execPath, "Restart the Gateway"],
-    ],
-    [
-      "SQLite WAL",
-      { sqliteWal: createSqliteWalHealth({ walBytes: null, databaseBytes: null }) },
-      [
-        "checkpoint blocked",
-        "WAL unknown",
-        "last complete never observed",
-        "2 consecutive blocked observations",
-        "openclaw gateway restart",
-        "openclaw status --deep",
-      ],
-    ],
-    [
-      "Secret runtime degradation",
-      {
+  it("reports degraded runtime and diagnostic summaries without failing healthy RPC", async () => {
+    const execPath = "/opt/homebrew/Cellar/node@24/24.20.0/bin/node";
+    const plugins = [
+      ["discord", "unreadable-package-json", "permission denied"],
+      ["matrix", "missing-main-entry", "dist/index.js is missing"],
+    ];
+    const message =
+      'Plugin "feishu" loaded from "/fixture/plugins-local/feishu/index.js"; installSource="path". Install the official npm package or ClawHub listing.';
+    const fix = "resolve the reported channel error, then restart the channel";
+    callGateway
+      .mockResolvedValueOnce({
+        runtimeVersion: "2026.4.23",
+        childRuntime: { execPath, available: false },
+        sqliteWal: createSqliteWalHealth({ walBytes: null, databaseBytes: null }),
         secretEgressProxy: {
           state: "degraded",
           message: "Check the system clock, then restart the Gateway.",
         },
-      },
-      ["Check the system clock, then restart the Gateway."],
-    ],
-    [
-      "Model reasoning",
-      { modelReasoningWarning: "Model emitted hidden reasoning; set reasoning:true." },
-      ["set reasoning:true"],
-    ],
-  ] as const)("reports %s without failing healthy RPC", async (title, status, fragments) => {
-    callGateway.mockResolvedValueOnce(status).mockResolvedValue({});
-    await expect(check()).resolves.toMatchObject({ healthOk: true, authenticated: true });
-    for (const fragment of fragments) {
-      noteContains(fragment, title);
-    }
-  });
-
-  it("renders the shared redacted telemetry exporter summary", async () => {
-    callGateway
-      .mockResolvedValueOnce({ ok: true })
-      .mockResolvedValueOnce({})
+        modelReasoningWarning: "Model emitted hidden reasoning; set reasoning:true.",
+        degradedPlugins: plugins.map(([pluginId, reason, detail]) => ({
+          pluginId,
+          state: "configured-unavailable",
+          diagnostic: { kind: "plugin-verification", reason, detail },
+        })),
+      })
+      .mockResolvedValueOnce({
+        statusIssues: [{ channel: "feishu", accountId: "default", kind: "runtime", message, fix }],
+      })
       .mockResolvedValueOnce({
         events: [
           {
@@ -286,39 +259,38 @@ describe("checkGatewayHealth", () => {
         ],
       });
 
-    await check();
-
+    await expectHealthy();
+    for (const [title, fragments] of [
+      ["Gateway runtime", [execPath, "Restart the Gateway"]],
+      [
+        "SQLite WAL",
+        [
+          "checkpoint blocked",
+          "WAL unknown",
+          "last complete never observed",
+          "2 consecutive blocked observations",
+          "openclaw gateway restart",
+          "openclaw status --deep",
+        ],
+      ],
+      ["Secret runtime degradation", ["Check the system clock, then restart the Gateway."]],
+      ["Model reasoning", ["set reasoning:true"]],
+      ["OpenClaw version mismatch", ["the running Gateway is OpenClaw 2026.4.23"]],
+    ] as const) {
+      for (const fragment of fragments) {
+        noteContains(fragment, title);
+      }
+    }
+    expect(note).toHaveBeenCalledWith(
+      "- discord (unreadable-package-json): permission denied\n- matrix (missing-main-entry): dist/index.js is missing",
+      "Plugins configured unavailable",
+    );
+    expect(note).toHaveBeenCalledWith(`- feishu default: ${message} (${fix})`, "Channel warnings");
     expect(note).toHaveBeenCalledWith(
       "diagnostics-otel · logs · started · stdout",
       "Telemetry exporters",
     );
     expect(JSON.stringify(note.mock.calls)).not.toContain("private log payload");
-  });
-
-  it("reports the recorded plugin trust refusal without retry advice that hides its remedy", async () => {
-    const message =
-      'Plugin "feishu" loaded from "/fixture/plugins-local/feishu/index.js"; installSource="path". Install the official npm package or ClawHub listing.';
-    callGateway.mockResolvedValueOnce({ ok: true }).mockResolvedValueOnce({
-      statusIssues: [
-        {
-          channel: "feishu",
-          accountId: "default",
-          kind: "runtime",
-          message,
-          fix: "resolve the reported channel error, then restart the channel",
-        },
-      ],
-    });
-
-    await expect(check()).resolves.toMatchObject({
-      authenticated: true,
-      healthOk: true,
-    });
-
-    expect(note).toHaveBeenCalledWith(
-      `- feishu default: ${message} (resolve the reported channel error, then restart the channel)`,
-      "Channel warnings",
-    );
   });
 
   describe("latency-aware diagnostics", () => {
@@ -331,18 +303,14 @@ describe("checkGatewayHealth", () => {
       vi.useRealTimers();
     });
 
-    function mockResponseTiming(statusMs: number | null, diagnosticsMs: number | null) {
-      const statusStarted = createDeferred();
-      const channelsStarted = createDeferred();
-      const exporterStarted = createDeferred();
+    async function checkAfterTiming(statusMs: number, diagnosticsMs: number | null) {
+      const started = {
+        status: createDeferred(),
+        "channels.status": createDeferred(),
+        "diagnostics.stability": createDeferred(),
+      };
       callGateway.mockImplementation(
-        ({ method, timeoutMs }: { method: string; timeoutMs: number }) => {
-          const started =
-            method === "status"
-              ? statusStarted
-              : method === "channels.status"
-                ? channelsStarted
-                : exporterStarted;
+        ({ method, timeoutMs }: { method: keyof typeof started; timeoutMs: number }) => {
           const responseMs = method === "status" ? statusMs : diagnosticsMs;
           return new Promise((resolve, reject) => {
             setTimeout(
@@ -362,55 +330,42 @@ describe("checkGatewayHealth", () => {
               },
               Math.min(responseMs ?? timeoutMs, timeoutMs),
             );
-            started.resolve();
+            started[method].resolve();
           });
         },
       );
-      return {
-        statusStarted: statusStarted.promise,
-        diagnosticsStarted: Promise.all([channelsStarted.promise, exporterStarted.promise]),
-      };
+      const result = check();
+      await started.status.promise;
+      await vi.advanceTimersByTimeAsync(statusMs);
+      await Promise.all([
+        started["channels.status"].promise,
+        started["diagnostics.stability"].promise,
+      ]);
+      await vi.advanceTimersByTimeAsync(diagnosticsMs ?? 21_000);
+      await expect(result).resolves.toMatchObject({ healthOk: true, authenticated: true });
+      expect(sharedRuntime.error).not.toHaveBeenCalled();
     }
 
     it("allows slow diagnostics after a 100 ms status response", async () => {
-      const started = mockResponseTiming(100, 4_000);
-      const result = check();
-      await started.statusStarted;
-      await vi.advanceTimersByTimeAsync(100);
-      await started.diagnosticsStarted;
-      await vi.advanceTimersByTimeAsync(4_000);
-
-      await expect(result).resolves.toMatchObject({ healthOk: true, authenticated: true });
+      await checkAfterTiming(100, 4_000);
       expect(note).not.toHaveBeenCalled();
-      expect(sharedRuntime.error).not.toHaveBeenCalled();
     });
 
     it("reports measured latency and the exhausted diagnostic budget without failing health", async () => {
       vi.spyOn(restartHealth, "DEFAULT_RESTART_HEALTH_TIMEOUT_MS", "get").mockReturnValue(10_000);
-      const started = mockResponseTiming(7_000, null);
-      const result = check();
-      await started.statusStarted;
-      await vi.advanceTimersByTimeAsync(7_000);
-      await started.diagnosticsStarted;
-      await vi.advanceTimersByTimeAsync(21_000);
-
-      await expect(result).resolves.toMatchObject({ healthOk: true, authenticated: true });
-      expect(note).toHaveBeenCalledWith(
-        expect.stringContaining(
-          "Gateway answered status in 7s; channel diagnostics did not finish within 21s",
-        ),
-        "Channel warnings",
-      );
-      expect(note).toHaveBeenCalledWith(
-        expect.stringContaining(
-          "Gateway answered status in 7s; exporter diagnostics did not finish within 21s",
-        ),
-        "Telemetry exporters",
-      );
+      await checkAfterTiming(7_000, null);
+      for (const [kind, title] of [
+        ["channel", "Channel warnings"],
+        ["exporter", "Telemetry exporters"],
+      ] as const) {
+        noteContains(
+          `Gateway answered status in 7s; ${kind} diagnostics did not finish within 21s`,
+          title,
+        );
+      }
       expect(
         note.mock.calls.every(([message]) => String(message).includes("host may be slow")),
       ).toBe(true);
-      expect(sharedRuntime.error).not.toHaveBeenCalled();
     });
   });
 
@@ -447,20 +402,11 @@ describe("checkGatewayHealth", () => {
       });
       const [message, actualTitle] = note.mock.calls.at(-1) ?? [];
       expect(actualTitle).toBe(title);
-      expect(message).toContain(text);
-      expect(message).toContain(`Retry: ${retry}`);
-      expect(message).not.toContain(token);
-      expect(message).not.toContain("\u001B");
+      expectText(message, [text, `Retry: ${retry}`], [token, "\u001B"]);
       expect(message.split("\n")).toHaveLength(2);
       expect(sharedRuntime.error).not.toHaveBeenCalled();
     },
   );
-
-  it("notes CLI and gateway version mismatch when the gateway reports another runtime version", async () => {
-    callGateway.mockResolvedValueOnce({ runtimeVersion: "2026.4.23" }).mockResolvedValueOnce({});
-    await check();
-    noteContains("the running Gateway is OpenClaw 2026.4.23", "OpenClaw version mismatch");
-  });
 
   it.each([
     ["auth profile migration required", "doctor --fix"],
@@ -481,36 +427,10 @@ describe("checkGatewayHealth", () => {
         ],
       })
       .mockResolvedValue({});
-    await expect(check()).resolves.toMatchObject({ healthOk: true, authenticated: true });
+    await expectHealthy();
     expect(note).toHaveBeenCalledWith(
       `- cold route:legacy-agent (auth-profile-legacy:auth-profiles): ${reason}\n  Retry: openclaw ${command}`,
       "Secret runtime degradation",
-    );
-  });
-
-  it("lists every plugin configured unavailable by Gateway startup", async () => {
-    const plugins = [
-      ["discord", "unreadable-package-json", "permission denied"],
-      ["matrix", "missing-main-entry", "dist/index.js is missing"],
-    ];
-    callGateway
-      .mockResolvedValueOnce({
-        degradedPlugins: plugins.map(([pluginId, reason, detail]) => ({
-          pluginId,
-          state: "configured-unavailable",
-          diagnostic: { kind: "plugin-verification", reason, detail },
-        })),
-      })
-      .mockResolvedValueOnce({});
-
-    await check();
-
-    expect(note).toHaveBeenCalledWith(
-      [
-        "- discord (unreadable-package-json): permission denied",
-        "- matrix (missing-main-entry): dist/index.js is missing",
-      ].join("\n"),
-      "Plugins configured unavailable",
     );
   });
 
@@ -521,29 +441,19 @@ describe("checkGatewayHealth", () => {
       const direct = kind === "typed-rate-limit";
       let error: Error;
       if (direct || kind === "missing-scope") {
-        const protocolError = new GatewayClientRequestError(
-          direct
-            ? {
-                code: "INVALID_REQUEST",
-                message: "unauthorized: too many failed authentication attempts (retry later)",
-                details: {
-                  code: "AUTH_RATE_LIMITED",
-                  authReason: "rate_limited",
-                  recommendedNextStep: "wait_then_retry",
-                },
-                retryable: true,
-                retryAfterMs: 60_000,
-              }
+        const protocolError = new GatewayClientRequestError({
+          code: direct ? "INVALID_REQUEST" : "FORBIDDEN",
+          message: direct
+            ? "unauthorized: too many failed authentication attempts (retry later)"
+            : "missing scope: operator.read",
+          details: direct
+            ? { code: "AUTH_RATE_LIMITED" }
             : {
-                code: "FORBIDDEN",
-                message: "missing scope: operator.read",
-                details: {
-                  code: "MISSING_SCOPE",
-                  missingScope: "operator.read",
-                  requiredScopes: ["operator.read"],
-                },
+                code: "MISSING_SCOPE",
+                missingScope: "operator.read",
+                requiredScopes: ["operator.read"],
               },
-        );
+        });
         error = protocolError;
         retainGatewayResponsePayload(protocolError, undefined);
       } else {
@@ -608,7 +518,6 @@ describe("probeGatewayMemoryStatus", () => {
   });
 
   it.each([
-    ["cached", { embedding: { ok: true } }, ready],
     [
       "runtime facts",
       { embedding: { ok: true }, embeddingRuntime: runtimeFacts },

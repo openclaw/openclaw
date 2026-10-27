@@ -140,6 +140,49 @@ function createBrowser(
 }
 
 describe("DraftPlaceBrowser", () => {
+  it("deduplicates Gateway locations, caps newest-first, and ignores historical node folders", () => {
+    const { browser } = createBrowser(async () => ({ projects: [] }));
+    expect(
+      browser.resolveProjectRecents({
+        sessions: [
+          { execCwd: "/workspace" },
+          { execCwd: "/node/repo", execNode: "macbook" },
+          { execCwd: "/node/repo", execNode: "macbook" },
+          { execCwd: "/gateway/repo" },
+          { execCwd: "/gone/repo", execNode: "retired" },
+          { execCwd: "/preferred/selected", worktree: { repoRoot: "/ignored/worktree" } },
+          { worktree: { repoRoot: "/worktree/one" } },
+          { execCwd: "  /cwd/two  " },
+          { worktree: { repoRoot: "/capped/out" } },
+        ],
+        workspace: "/workspace",
+        workspaceRoots: [],
+        isAdmin: true,
+      }),
+    ).toEqual([
+      { kind: "folder", folder: "/gateway/repo", displayName: "repo" },
+      { kind: "folder", folder: "/preferred/selected", displayName: "selected" },
+      { kind: "folder", folder: "/worktree/one", displayName: "one" },
+      { kind: "folder", folder: "/cwd/two", displayName: "two" },
+    ]);
+  });
+
+  it("filters Gateway recents through the viewer's folder boundary", () => {
+    const { browser } = createBrowser(async () => ({ projects: [] }));
+    expect(
+      browser.resolveProjectRecents({
+        sessions: [
+          { execCwd: "/workspace/packages/app" },
+          { execCwd: "/workspace-other/private" },
+          { execCwd: "/node/repo", execNode: "macbook" },
+        ],
+        workspace: "/workspace",
+        workspaceRoots: ["/workspace"],
+        isAdmin: false,
+      }),
+    ).toEqual([{ kind: "folder", folder: "/workspace/packages/app", displayName: "app" }]);
+  });
+
   it.each(["current", "closed", "disconnected", "focus moved", "returned"] as const)(
     "focuses only the current project view after rendering (%s)",
     async (change) => {

@@ -140,6 +140,11 @@ Agent clean-close receipt messages name the agent. An intermediate `active-lease
 receipt can precede that same agent's final `written` receipt: idle retained database
 handles still hold leases even when no agent work is running. The final handle must
 release its lease after checkpoint and native close before certifying the seal.
+An `active-leases` receipt means this handle closed; peers prevent seal publication,
+not the close itself.
+Each worker coalesces unchanged outcomes for its 128 most recently observed database
+paths. Changed outcomes still log after commit; rollback cannot suppress the next
+committed receipt. This diagnostic history does not change handle retention or seal checks.
 At the next full integrity gate, `no-proof` means no seal was found. Rejected seals
 report `malformed-proof`, `expired-proof`, `file-mismatch`, or `journal-present`;
 incompatible identities report `feature-mismatch`, `schema-mismatch`, or

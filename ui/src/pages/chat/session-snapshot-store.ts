@@ -114,7 +114,7 @@ const snapshotSchema = json.object(
     ),
     widgetHeights: json.optional(
       json.refine(
-        json.record(json.refine(json.number, (height) => height >= 48 && height <= 8000)),
+        json.record(json.refine(json.number, (height) => height >= 1 && height <= 8000)),
         (heights) => Object.keys(heights).length <= 100,
       ),
     ),
@@ -500,7 +500,7 @@ export class SessionSnapshotStore implements ChatCacheObserver {
       const record: SidebarRecord = {
         sessionKey: key,
         savedAt: Date.now(),
-        projectionVersion: 1,
+        projectionVersion: 3,
         model: structuredClone(model),
       };
       if (sidebarRecordBytes(record) > 512 * 1024) {
