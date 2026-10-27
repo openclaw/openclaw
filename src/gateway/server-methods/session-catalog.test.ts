@@ -1,3 +1,5 @@
+import childProcess, { ChildProcess } from "node:child_process";
+import { PassThrough } from "node:stream";
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
 import {
   createTestPluginApi,
@@ -8,6 +10,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { ErrorCodes } from "../../../packages/gateway-protocol/src/index.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { loadBundledPluginFacade } from "../../test-utils/bundled-plugin-public-surface.js";
+import { withMockedPlatform } from "../../test-utils/vitest-spies.js";
 import { gatewayConnect } from "../server/client-fixtures.test-support.js";
 import { bindSessionRowProjection } from "../session-row-projection-access.js";
 import {
@@ -59,10 +62,6 @@ function hostEvent(sessions: unknown[]) {
 }
 const noActions = { continueSession: false, archive: false };
 const createTarget = { model: "anthropic/claude-opus-4-8", agentRuntime: "claude-cli" };
-const creationCapabilities = () => ({
-  ...noActions,
-  createSession: { model: createTarget.model },
-});
 function useCreationTarget(
   resolveCreateSession: ReturnType<typeof provider>["resolveCreateSession"],
 ) {
@@ -74,27 +73,60 @@ function useCreationTarget(
 describe("session catalog Gateway methods", () => {
   beforeEach(resetSessionCatalogTestState);
 
-  it("prepares the login-shell PATH before synchronous catalog availability checks", async () => {
-    const prepared = createDeferredCore<string | null>();
-    const entered = createDeferredCore();
-    hoisted.prepareShellPathFromLoginShell.mockImplementation(() => {
-      entered.resolve();
-      return prepared.promise;
-    });
-    const list = vi.fn(async () => []);
-    useCatalogs(provider("local", { list }));
-    const pending = listCatalogs();
-    try {
-      await Promise.race([entered.promise, pending]);
-      expect(list).not.toHaveBeenCalled();
-      prepared.resolve("/catalog/bin");
-      expectCatalog(await pending, { id: "local", hosts: [] });
-      expect(list).toHaveBeenCalledOnce();
-    } finally {
-      prepared.resolve("/catalog/bin");
-      await pending;
-    }
-  });
+  it("prepares the login-shell PATH before synchronous catalog availability checks", () =>
+    withMockedPlatform("linux", async () => {
+      let finishProbe: (() => void) | undefined;
+      type ShellProcess = childProcess.ChildProcessByStdio<null, PassThrough, PassThrough>;
+      type ShellSpawnOptions = childProcess.SpawnOptionsWithStdioTuple<"ignore", "pipe", "pipe">;
+      const asyncExec = vi.fn<
+        (command: string, args: readonly string[], options: ShellSpawnOptions) => ShellProcess
+      >(() => {
+        const stdout = new PassThrough();
+        const stderr = new PassThrough();
+        const stdio: ShellProcess["stdio"] = [null, stdout, stderr, null, null];
+        const child = Object.assign(new ChildProcess(), { stdin: null, stdout, stderr, stdio });
+        finishProbe = () => {
+          child.stdout?.emit("data", Buffer.from("\0PATH=/catalog/bin\0"));
+          child.emit("close", 0, null);
+        };
+        return child;
+      });
+      const syncExec = vi.fn<typeof childProcess.execFileSync>(() => {
+        throw new Error("catalog request blocked on synchronous shell probe");
+      });
+      vi.doMock("node:child_process", () => ({
+        ...childProcess,
+        spawn: asyncExec,
+        execFileSync: syncExec,
+      }));
+      vi.resetModules();
+      const shell = await vi.importActual<typeof import("../../infra/shell-env.js")>(
+        "../../infra/shell-env.js",
+      );
+      const options = { env: process.env };
+      hoisted.prepareShellPathFromLoginShell.mockImplementation(() =>
+        shell.prepareShellPathFromLoginShell(options),
+      );
+      const list = vi.fn(async () => {
+        expect(shell.getShellPathFromLoginShell(options)).toBe("/catalog/bin");
+        return [];
+      });
+      useCatalogs(provider("local", { list }));
+      const pending = listCatalogs();
+      try {
+        expect(list).not.toHaveBeenCalled();
+        expect(asyncExec).toHaveBeenCalledOnce();
+        finishProbe?.();
+        const respond = await pending;
+        expectCatalog(respond, { id: "local", hosts: [] });
+        expect(list).toHaveBeenCalledOnce();
+        expect(syncExec).not.toHaveBeenCalled();
+      } finally {
+        finishProbe?.();
+        await pending;
+        vi.doUnmock("node:child_process");
+      }
+    }));
 
   it.each(["history unavailable", undefined])(
     "isolates provider error %s and returns metadata without listing or projection",
@@ -118,20 +150,22 @@ describe("session catalog Gateway methods", () => {
         ),
       );
       const config = {};
-      const catalogs = [
-        { id: "alpha", label: "ALPHA", capabilities: noActions, hosts: [] },
-        {
-          id: "zeta",
-          label: "ZETA",
-          hosts: [],
-          capabilities: {
-            ...noActions,
-            openTerminal: true,
-            startTerminal: true,
-            createSession: { model: "openai/gpt-5.6-sol", startTerminal: true },
+      const expected = {
+        catalogs: [
+          { id: "alpha", label: "ALPHA", capabilities: noActions, hosts: [] },
+          {
+            id: "zeta",
+            label: "ZETA",
+            capabilities: {
+              ...noActions,
+              openTerminal: true,
+              startTerminal: true,
+              createSession: { model: "openai/gpt-5.6-sol", startTerminal: true },
+            },
+            hosts: [],
           },
-        },
-      ];
+        ],
+      };
 
       const readProjection = vi.fn(() => {
         throw new Error("metadata must not acquire the session projection");
@@ -142,34 +176,36 @@ describe("session catalog Gateway methods", () => {
         readProjection,
       );
       const metadata = vi.fn();
-      const readMetadata = async () => {
-        metadata.mockClear();
-        await sessionCatalogHandlers["sessions.catalog.list"]!({
+      const readMetadata = () =>
+        sessionCatalogHandlers["sessions.catalog.list"]!({
           params: { metadataOnly: true, progressId: "metadata-progress" },
           context,
           respond: metadata,
           client: { connId: "metadata-client", connect: gatewayConnect([]) },
         } as never);
-        expectCatalogs(metadata, catalogs);
-        expect(readProjection).not.toHaveBeenCalled();
-        expect(broadcastToConnIds).not.toHaveBeenCalled();
-      };
       await readMetadata();
       expect(list).not.toHaveBeenCalled();
       expect(createListOperation).not.toHaveBeenCalled();
+      expect(readProjection).not.toHaveBeenCalled();
+      expect(broadcastToConnIds).not.toHaveBeenCalled();
+      expect(metadata).toHaveBeenCalledWith(true, expected);
 
       const full = await listCatalogs({}, config);
       expect(list).toHaveBeenCalledOnce();
       expect(createListOperation).toHaveBeenCalledOnce();
       expectCatalogs(full, [
         {
-          ...catalogs[0],
+          ...expected.catalogs[0],
           error: { code: "catalog_error", message: failure ?? "session catalog provider failed" },
         },
-        catalogs[1],
+        expected.catalogs[1],
       ]);
 
+      metadata.mockClear();
       await readMetadata();
+      expect(metadata).toHaveBeenCalledWith(true, expected);
+      expect(readProjection).not.toHaveBeenCalled();
+      expect(broadcastToConnIds).not.toHaveBeenCalled();
       expect(list).toHaveBeenCalledOnce();
       expect(createListOperation).toHaveBeenCalledOnce();
     },
@@ -202,7 +238,7 @@ describe("session catalog Gateway methods", () => {
       sessions: [catalogSession("thread-beta", { canArchive: true })],
     });
     const list = vi.fn(async (_request: { agentId?: string }) => [host]);
-    const read = provider("codex").read;
+    const read = vi.fn(async ({ hostId, threadId }) => ({ hostId, threadId, items: [] }));
     const continueSession = vi.fn(async () => ({ sessionKey: "agent:beta:continued" }));
     const archive = vi.fn(async () => ({ ok: true as const }));
     useCatalogs(provider("codex", { list, read, continueSession, archive }));
@@ -306,8 +342,9 @@ describe("session catalog Gateway methods", () => {
   });
 
   it("shares one lazy Gateway node snapshot across catalog providers", async () => {
-    const snapshot = { nodes: [{ nodeId: "shared-node", connected: true }] };
-    const dispatchNodeList = vi.fn(async () => snapshot);
+    const dispatchNodeList = vi.fn(async () => ({
+      nodes: [{ nodeId: "shared-node", connected: true }],
+    }));
     bindPluginRegistryRuntime(
       hoisted.activeRegistry as PluginRegistry,
       createPluginRuntime({
@@ -335,28 +372,41 @@ describe("session catalog Gateway methods", () => {
   });
 
   it("rejects host cursors without a catalog selector", async () => {
-    expectInvalidRequest(
-      await listCatalogs({ cursors: { "gateway:local": "next" } }),
-      "catalogId is required when cursors are provided",
+    const respond = await listCatalogs({
+      cursors: { "gateway:local": "next" },
+    });
+
+    expect(respond).toHaveBeenCalledWith(
+      false,
+      undefined,
+      expect.objectContaining({
+        code: ErrorCodes.INVALID_REQUEST,
+        message: "catalogId is required when cursors are provided",
+      }),
     );
   });
 
-  it("memoizes the requested agent's create target across metadata and lists until config changes", async () => {
+  it("memoizes create targets until config changes", async () => {
     let createSession: typeof createTarget | undefined = createTarget;
     const resolveCreateSession = vi.fn(() => createSession);
     useCreationTarget(resolveCreateSession);
-    const config = { agents: { entries: { main: {}, research: {} } } };
-    const params = { agentId: "research", catalogId: "claude" };
-    const respond = await listCatalogs({ ...params, metadataOnly: true }, config);
+    const config = {};
 
-    expectCatalog(respond, { id: "claude", capabilities: creationCapabilities() });
-    expect(resolveCreateSession).toHaveBeenCalledWith({ agentId: "research" });
+    const respond = await listCatalogs({}, config);
+
+    expectCatalog(respond, {
+      id: "claude",
+      capabilities: {
+        ...noActions,
+        createSession: { model: createTarget.model },
+      },
+    });
 
     createSession = undefined;
-    expectCreateCapability(await listCatalogs(params, config));
+    expectCreateCapability(await listCatalogs({}, config));
     expect(resolveCreateSession).toHaveBeenCalledOnce();
 
-    const refreshed = await listCatalogs(params, { ...config });
+    const refreshed = await listCatalogs();
     expectCatalog(refreshed, {
       id: "claude",
       capabilities: noActions,
@@ -386,6 +436,25 @@ describe("session catalog Gateway methods", () => {
     }
   });
 
+  it("resolves creation capability for the requested agent", async () => {
+    const resolveCreateSession = vi.fn(({ agentId }: { agentId?: string }) =>
+      agentId === "research" ? createTarget : undefined,
+    );
+    useCreationTarget(resolveCreateSession);
+
+    const available = await listCatalogs(
+      { agentId: "research", catalogId: "claude", metadataOnly: true },
+      { agents: { entries: { main: {}, research: {} } } },
+    );
+    expect(resolveCreateSession).toHaveBeenCalledWith({ agentId: "research" });
+    expectCatalog(available, {
+      capabilities: {
+        ...noActions,
+        createSession: { model: createTarget.model },
+      },
+    });
+  });
+
   it("resolves the private runtime target separately from the public capability", () => {
     useCreationTarget(() => createTarget);
 
@@ -402,9 +471,8 @@ describe("session catalog Gateway methods", () => {
 
   it("installs a provider-requested binding on the adopted Control UI session", async () => {
     const afterConversationBound = vi.fn(async () => undefined);
-    const sessionKey = "agent:main:adopted";
     const continueSession = vi.fn(async () => ({
-      sessionKey,
+      sessionKey: "agent:main:adopted",
       conversationBinding: {
         summary: "Continue remotely",
         data: { kind: "remote-runtime", version: 1 },
@@ -439,14 +507,18 @@ describe("session catalog Gateway methods", () => {
       pluginId: "remote",
       pluginName: "Remote Runtime",
       pluginRoot: "/plugins/remote",
-      sessionKey,
+      sessionKey: "agent:main:adopted",
       binding: {
         summary: "Continue remotely",
         data: { kind: "remote-runtime", version: 1 },
       },
       afterBind: afterConversationBound,
     });
-    expect(respond).toHaveBeenCalledWith(true, { sessionKey });
+    expect(afterConversationBound).toHaveBeenCalledOnce();
+    expect(
+      conversationBindingMocks.bindPluginSessionConversation.mock.invocationCallOrder[0],
+    ).toBeLessThan(afterConversationBound.mock.invocationCallOrder[0] ?? 0);
+    expect(respond).toHaveBeenCalledWith(true, { sessionKey: "agent:main:adopted" });
   });
 });
 
