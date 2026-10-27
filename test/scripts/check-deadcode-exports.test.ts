@@ -10,6 +10,7 @@ import knipConfig from "../../config/knip.config.ts";
 import scriptExportsKnipConfig from "../../config/knip.scripts-exports.config.ts";
 import {
   checkExportScan,
+  checkKnipReport,
   parseKnipCompactUnusedExportsResult,
 } from "../../scripts/check-deadcode-exports.mts";
 import { readUpdateCompatibilityInventory } from "../../scripts/lib/update-compat-chunks.mts";
@@ -856,6 +857,82 @@ const unrelatedArgs = [
 ${errors}
 Install workspace dependencies in-tree (pnpm install) — on delegated boxes the crabbox wrapper links the hydrated modules dir into the workdir — and rerun.`,
     });
+  });
+
+  it.each([
+    { status: 0, stdout: '{"issues":[]}', ok: true },
+    { status: 1, stdout: '{"issues":[]}', ok: false },
+    {
+      status: 0,
+      stdout: '{"issues":[{"file":"package.json","dependencies":[{"name":"warning-only"}]}]}',
+      ok: true,
+    },
+    {
+      status: 0,
+      stdout: '{"issues":[{"file":"src/unused.ts","files":[{"name":"src/unused.ts"}]}]}',
+      ok: false,
+    },
+    ...[
+      "",
+      'warning\n{"issues":[]}',
+      '{"issues":[]} trailing',
+      '{"issues":',
+      "{}",
+      '{"issues":[{"file":42}]}',
+      '{"issues":[{"file":"a","exports":[{}]}]}',
+    ].map((stdout) => ({ status: 0, stdout, ok: false })),
+  ])("validates complete JSON stdout and existing severity: $stdout", ({ status, stdout, ok }) => {
+    expect(
+      checkKnipReport({
+        output: stdout,
+        stdout,
+        stderr: "cold dlx warning\n",
+        status,
+        signal: null,
+      }).ok,
+    ).toBe(ok);
+  });
+
+  it("retains every finding category and namespace without trusting failed scans", () => {
+    const categories = [
+      "dependencies",
+      "unlisted",
+      "binaries",
+      "unresolved",
+      "files",
+      "exports",
+      "nsExports",
+      "types",
+      "nsTypes",
+      "enumMembers",
+      "namespaceMembers",
+    ];
+    const stdout = JSON.stringify({
+      issues: [
+        {
+          file: "src/fixture.ts",
+          owners: [{ name: "@maintainer" }],
+          ...Object.fromEntries(
+            categories.map((kind) => [kind, [{ name: kind, namespace: "v2" }]]),
+          ),
+        },
+      ],
+    });
+    const result = { stdout, output: stdout, stderr: "", status: 1, signal: null };
+    expect(checkKnipReport(result)).toMatchObject({
+      ok: false,
+      entries: categories
+        .map((kind) => `${kind}: src/fixture.ts: ${kind} (v2)`)
+        .toSorted((a, b) => a.localeCompare(b)),
+    });
+    for (const failure of [
+      { status: 2 },
+      { signal: "SIGTERM" },
+      { errorCode: "ENOBUFS" },
+      { errorCode: "ETIMEDOUT" },
+    ]) {
+      expect(checkKnipReport({ ...result, ...failure })).toMatchObject({ ok: false, entries: [] });
+    }
   });
 
   it("accepts clean export scan output unchanged", () => {

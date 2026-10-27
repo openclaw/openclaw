@@ -39,6 +39,8 @@ function knipResult(overrides: Partial<Awaited<ReturnType<typeof runKnip>>>) {
     errorCode: undefined,
     errorMessage: undefined,
     output: "",
+    stdout: overrides.output ?? "",
+    stderr: "",
     signal: null,
     status: 0,
     ...overrides,
@@ -130,6 +132,26 @@ left-pad: package.json
   src/b.ts
 Delete the files or model their real entrypoints in Knip.`,
   });
+});
+
+it("keeps unused-file findings inside their own adjacent compact section", () => {
+  expect(
+    checkUnusedFiles(
+      [
+        "Unused dependencies (1)",
+        "not-a-file: src/dependency.ts",
+        "Unused files (1)",
+        "src/unused.ts: src/unused.ts",
+        "Unused exports (1)",
+        "src/export.ts: src/not-a-file.ts",
+        "Unlisted dependencies (1)",
+        "missing: src/unlisted.ts",
+        "Unused files (0)",
+        "",
+        "trailing diagnostic: src/diagnostic.ts",
+      ].join("\n"),
+    ).files,
+  ).toEqual(["src/unused.ts"]);
 });
 
 it.each([
@@ -307,7 +329,14 @@ it.each([
   const status = errorCode ? null : 0;
   const signal = errorCode ? "SIGTERM" : null;
   finishFakeProcess(child, status, signal);
-  await expect(resultPromise).resolves.toMatchObject({ errorCode, output, signal, status });
+  await expect(resultPromise).resolves.toMatchObject({
+    errorCode,
+    output,
+    signal,
+    status,
+    stdout: errorCode ? "ab" : out,
+    stderr: errorCode ? "" : err,
+  });
 });
 
 it("reports spawn errors", async () => {

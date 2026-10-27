@@ -4228,7 +4228,14 @@ jobs:
                   ));
                 '
               fi
-              if has_package_script "deadcode:dependencies" &&
+              # The older deadcode:report command omitted unused files. Admit only
+              # the target's combined-report capability, never its script name alone.
+              if node -e '
+                const command = require("./package.json").scripts?.["deadcode:report"];
+                process.exit(command === "node --import ./scripts/tsx.mjs scripts/check-deadcode-exports.mts --all" ? 0 : 1);
+              '; then
+                pnpm deadcode:report
+              elif has_package_script "deadcode:dependencies" &&
                 has_package_script "deadcode:unused-files"; then
                 # Independent Knip scans overlap only when the runner has capacity.
                 dc_scripts=(deadcode:dependencies deadcode:unused-files)

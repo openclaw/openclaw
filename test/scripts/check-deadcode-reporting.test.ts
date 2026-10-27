@@ -17,11 +17,15 @@ const scans = [
 ] as const;
 const entries = {
   exports: toolingMtsEntrypoints.deadcodeExports,
+  report: toolingMtsEntrypoints.deadcodeExports,
   "unused-files": toolingMtsEntrypoints.deadcodeUnusedFiles,
 };
 
 it.for([
   { wrapper: "exports", outcomes: ["failure", "finding", "success"] },
+  { wrapper: "report", outcomes: ["failure", "finding", "success"] },
+  { wrapper: "report", outcomes: ["success", "success", "success"] },
+  { wrapper: "report", outcomes: ["malformed", "empty-failure", "warning"] },
   { wrapper: "unused-files", outcomes: ["failure", "finding"] },
   { wrapper: "unused-files", outcomes: ["success", "finding"] },
   { wrapper: "exports", outcomes: ["success", "success", "success"] },
@@ -30,7 +34,7 @@ it.for([
   const root = tempDirs.make("openclaw-deadcode-reporting-");
   const pnpm = path.join(root, "pnpm.mjs");
   const configs = scans.slice(0, outcomes.length).map(([, config]) => config);
-  const kind = wrapper === "exports" ? "unused-export" : "unused-file";
+  const kind = wrapper === "unused-files" ? "unused-file" : "unused-export";
   const receipts = await receipt.openFixtureReceiptChannel();
   let child: ChildProcess | undefined;
   let completion: ReturnType<typeof runNodeScript> | undefined;
@@ -57,6 +61,10 @@ const outcome = outcomes[index];
 if (outcome === "failure") {
   console.error("SYNTHETIC_SCAN_FAILURE_" + index);
   process.exitCode = 2;
+} else if (args[args.indexOf("--reporter") + 1] === "json") {
+  console.error("COLD_DLX_WARNING_" + index);
+  console.log(outcome === "malformed" ? '{"issues":' : JSON.stringify({ issues: outcome === "finding" ? [{ file: "src/diagnostic-fixture.ts", files: [{ name: "src/diagnostic-fixture.ts" }], exports: [{ name: "syntheticFinding" }] }] : [] }));
+  if (outcome === "finding" || outcome === "empty-failure") process.exitCode = 1;
 } else if (outcome === "finding") {
   console.log(args.includes("--files")
     ? "Unused files (1)\\nsrc/diagnostic-fixture.ts: src/diagnostic-fixture.ts"
@@ -68,7 +76,10 @@ sendReceipt(String(index), "completed");
 `,
     );
     completion = runNodeScript(
-      worker.resolveRuntimeWorkerArgv(worker.resolveRuntimeWorkerUrl(entries[wrapper])),
+      [
+        ...worker.resolveRuntimeWorkerArgv(worker.resolveRuntimeWorkerUrl(entries[wrapper])),
+        ...(wrapper === "report" ? ["--all"] : []),
+      ],
       { ...process.env, npm_execpath: pnpm },
       undefined,
       {
@@ -112,10 +123,40 @@ sendReceipt(String(index), "completed");
       const [scope] = scans[index]!;
       const args = JSON.parse(readFileSync(path.join(root, `${index}.started`), "utf8"));
       expect(args.slice(0, 3)).toEqual(["dlx", "--package", "knip@6.40.0"]);
-      const scanName = `${scope} ${kind} scan`;
-      const reported = output.split("\n").filter((line) => line.includes(scanName));
+      const scanName = wrapper === "report" ? `${scope} report` : `${scope} ${kind} scan`;
+      const reported = output
+        .split("\n")
+        .filter(
+          (line) =>
+            line.includes(scanName) &&
+            (wrapper !== "report" || line.includes(" failed:") || line.includes(" passed with ")),
+        );
       expect(reported, output).toHaveLength(1);
-      if (outcome === "success") {
+      if (wrapper === "report") {
+        expect(args).toContain("json");
+        expect(args[args.indexOf("--include") + 1]).toBe(
+          index === 0
+            ? "nsExports,nsTypes"
+            : `${index === 1 ? "files," : ""}exports,nsExports,types,nsTypes,enumMembers,namespaceMembers`,
+        );
+        if (index === 0) {
+          expect(args).toContain("--exclude");
+        }
+        if (index === 2) {
+          expect(args).toContain("--include-entry-exports");
+        }
+        if (outcome === "success" || outcome === "warning") {
+          expect(result.stdout).toContain(`[deadcode] Knip ${scanName} passed with 0 entries.`);
+        } else {
+          expect(result.stderr).toContain(`deadcode ${scanName} failed:`);
+        }
+        if (outcome !== "failure") {
+          expect(result.stderr).toContain(`COLD_DLX_WARNING_${index}`);
+        }
+        if (outcome === "finding") {
+          expect(result.stdout).toContain("exports: src/diagnostic-fixture.ts: syntheticFinding");
+        }
+      } else if (outcome === "success") {
         expect(result.stdout).toContain(`[deadcode] Knip ${scanName} passed with 0 entries.`);
       } else {
         expect(result.stdout).not.toContain(scanName);

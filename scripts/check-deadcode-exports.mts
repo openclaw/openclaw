@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 // Enforces a hard-zero policy for Knip's unused exports.
 import { fileURLToPath } from "node:url";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import {
   isLikelyRepoFilePath,
   runKnipScans,
@@ -164,6 +165,117 @@ function reportUnusedExportScan(scan: (typeof KNIP_SCANS)[number], result: KnipR
   return true;
 }
 
+// Namespace-only inclusion extends Knip's production defaults; listing the export
+// categories here instead would silently remove dependency analysis.
+const KNIP_REPORT_SCANS = [
+  {
+    name: "production report",
+    args: [
+      "--config",
+      "config/knip.config.ts",
+      "--production",
+      "--include",
+      "nsExports,nsTypes",
+      "--exclude",
+      "duplicates",
+    ],
+  },
+  {
+    name: "full-tree report",
+    args: ["--config", "config/knip.all-exports.config.ts", "--include", `files,${KNIP_ISSUES}`],
+  },
+  {
+    name: "script report",
+    args: [
+      "--config",
+      "config/knip.scripts-exports.config.ts",
+      "--include-entry-exports",
+      "--include",
+      KNIP_ISSUES,
+    ],
+  },
+];
+
+/** Reads one complete built-in Knip JSON report, never stderr or partial output. */
+export function checkKnipReport(result: KnipRunResult) {
+  const invalid = (reason: string) => ({ ok: false, entries: [] as string[], message: reason });
+  if (result.errorCode || result.signal || (result.status !== 0 && result.status !== 1)) {
+    return invalid(result.errorCode ?? result.signal ?? `exit status ${String(result.status)}`);
+  }
+  try {
+    const report: unknown = JSON.parse(result.stdout);
+    if (!isRecord(report) || !Array.isArray(report.issues)) {
+      throw new Error("expected issues array");
+    }
+    const entries: string[] = [];
+    let hardZeroFinding = false;
+    for (const row of report.issues) {
+      if (!isRecord(row) || typeof row.file !== "string") {
+        throw new Error("expected issue file");
+      }
+      for (const [kind, values] of Object.entries(row)) {
+        if (kind === "file" || kind === "owners") {
+          continue;
+        }
+        if (!Array.isArray(values)) {
+          throw new Error(`expected ${kind} array`);
+        }
+        for (const value of values.flat()) {
+          if (
+            !isRecord(value) ||
+            typeof value.name !== "string" ||
+            (value.namespace !== undefined && typeof value.namespace !== "string")
+          ) {
+            throw new Error(`invalid ${kind} finding`);
+          }
+          entries.push(
+            `${kind}: ${row.file}: ${value.name}${value.namespace ? ` (${value.namespace})` : ""}`,
+          );
+          hardZeroFinding ||= kind === "files" || KNIP_ISSUES.split(",").includes(kind);
+        }
+      }
+    }
+    // Files and exports keep their hard-zero policy; Knip owns dependency
+    // severity, including configured warnings that legitimately exit zero.
+    return {
+      ok: result.status === 0 && !hardZeroFinding,
+      entries: uniqueSorted(entries),
+      message: "",
+    };
+  } catch (error) {
+    return invalid(
+      `invalid Knip JSON report: ${error instanceof Error ? error.message : String(error)}`,
+    );
+  }
+}
+
+function reportKnipScan(scan: (typeof KNIP_REPORT_SCANS)[number], result: KnipRunResult) {
+  const check = checkKnipReport(result);
+  if (result.stderr) {
+    process.stderr.write(result.stderr);
+  }
+  if (!check.ok) {
+    console.error(
+      `deadcode ${scan.name} failed: ${check.message || `exit status ${result.status}; files and exports require zero findings`}`,
+    );
+  }
+  for (const entry of check.entries) {
+    console.log(`[deadcode] ${scan.name}: ${entry}`);
+  }
+  if (check.ok) {
+    console.log(`[deadcode] Knip ${scan.name} passed with ${check.entries.length} entries.`);
+  }
+  return check.ok;
+}
+
 if (process.argv[1] === fileURLToPath(import.meta.url)) {
-  await runKnipScans(KNIP_SCANS, KNIP_COMMON_ARGS, reportUnusedExportScan);
+  if (process.argv.includes("--all")) {
+    await runKnipScans(
+      KNIP_REPORT_SCANS,
+      ["--no-progress", "--reporter", "json", "--no-config-hints"],
+      reportKnipScan,
+    );
+  } else {
+    await runKnipScans(KNIP_SCANS, KNIP_COMMON_ARGS, reportUnusedExportScan);
+  }
 }

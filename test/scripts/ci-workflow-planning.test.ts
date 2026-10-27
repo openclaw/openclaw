@@ -970,6 +970,7 @@ function runDependencyCheckFixture(options: {
   historicalTarget: boolean;
   releaseToolingEntry?: boolean;
   scripts: string[];
+  reportCommand?: string;
 }): {
   calls: string[];
   output: string;
@@ -984,7 +985,10 @@ function runDependencyCheckFixture(options: {
     writeFileSync(
       path.join(root, "package.json"),
       `${JSON.stringify({
-        scripts: Object.fromEntries(options.scripts.map((name) => [name, "true"])),
+        scripts: {
+          ...Object.fromEntries(options.scripts.map((name) => [name, "true"])),
+          ...(options.reportCommand ? { "deadcode:report": options.reportCommand } : {}),
+        },
       })}\n`,
     );
     if (options.releaseToolingEntry) {
@@ -7801,6 +7805,27 @@ describe("ci workflow guards", () => {
     expect(concreteBase.outputs.sha).toBe(concreteBase.eventBaseSha);
     expect(concreteBase.emittedBaseIsCommit).toBe(true);
   });
+
+  it.each([false, true])(
+    "uses combined finding coverage only with the exact target capability (frozen=%s)",
+    (historicalTarget) => {
+      const scripts = ["deadcode:dependencies", "deadcode:unused-files", "deadcode:exports"];
+      const combined = runDependencyCheckFixture({
+        historicalTarget,
+        scripts,
+        reportCommand: "node --import ./scripts/tsx.mjs scripts/check-deadcode-exports.mts --all",
+      });
+      expect(combined.status, combined.output).toBe(0);
+      expect(combined.calls).toEqual(["deadcode:report"]);
+      const oldReport = runDependencyCheckFixture({
+        historicalTarget,
+        scripts,
+        reportCommand: "pnpm deadcode:full && pnpm deadcode:exports",
+      });
+      expect(oldReport.status, oldReport.output).toBe(0);
+      expect(oldReport.calls.toSorted()).toEqual(scripts.toSorted());
+    },
+  );
 
   it("uses stable deadcode checks for current and frozen checkouts", () => {
     const modern = runDependencyCheckFixture({
