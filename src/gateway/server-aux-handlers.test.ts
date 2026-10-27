@@ -129,8 +129,11 @@ async function invokeRpc(
 }
 
 function expectReloadFailure(respond: ReturnType<typeof vi.fn>) {
-  const [ok, payload, error] = firstRespondCall(respond);
-  expect([ok, payload, error?.message ?? ""]).toEqual([false, undefined, "secrets.reload failed"]);
+  expect(respond).toHaveBeenCalledExactlyOnceWith(
+    false,
+    undefined,
+    expect.objectContaining({ message: "secrets.reload failed" }),
+  );
 }
 
 function generationState(generation = "gen-old") {
@@ -138,30 +141,15 @@ function generationState(generation = "gen-old") {
 }
 
 function expectGeneration(state: SharedGatewaySessionGenerationState, generation: string) {
-  expect({ current: state.current, required: state.required }).toEqual({
-    current: generation,
-    required: generation,
-  });
+  expect([state.current, state.required]).toEqual([generation, generation]);
 }
 
-type RespondCall = [boolean, unknown, { message?: string } | undefined];
 type GatewayAuxHandlerParams = Parameters<typeof createGatewayAuxHandlers>[0];
 type GatewayChannelManager = GatewayAuxHandlerParams["channelManager"];
 type ChannelName = Parameters<GatewayChannelManager["startChannel"]>[0];
 
-function firstRespondCall(respond: ReturnType<typeof vi.fn>): RespondCall {
-  const call = respond.mock.calls[0];
-  if (!call) {
-    throw new Error("expected respond call");
-  }
-  return call as RespondCall;
-}
-
 function buildRestartChannelsPlan(...channels: ChannelName[]) {
-  return () =>
-    createReloadPlan({
-      restartChannels: new Set(channels),
-    });
+  return () => createReloadPlan({ restartChannels: new Set(channels) });
 }
 
 type SecretsReloadHarnessParams = {
@@ -453,7 +441,7 @@ describe("gateway aux handlers", () => {
       canonicalConfig,
     ]);
     expect(getActiveSecretsRuntimeSnapshot()?.sourceConfig).toEqual(canonicalConfig);
-    expect(firstRespondCall(respond)[0]).toBe(true);
+    expect(respond).toHaveBeenCalledWith(true, { ok: true, warningCount: 0 });
   });
 
   it("rolls back only exact stopped accounts when a later account restart fails", async () => {
@@ -465,11 +453,6 @@ describe("gateway aux handlers", () => {
           ["zalo", new Set(["alerts"])],
         ]),
       });
-    activateSnapshot(slackZaloConfig("old-slack-secret", "old-zalo-secret"));
-    const prepareRuntimeSecretsSnapshot = mockResolvedSecrets(
-      slackZaloConfig("new-slack-secret", "new-zalo-secret"),
-    );
-    const stopChannel = vi.fn().mockResolvedValue(undefined);
     const startChannel = vi
       .fn()
       .mockResolvedValueOnce(undefined)
@@ -494,14 +477,16 @@ describe("gateway aux handlers", () => {
       .mockResolvedValue(undefined);
     const sharedGatewaySessionGenerationState = generationState();
 
-    const { reload, respond } = createSecretsReloadHarness({
-      prepareRuntimeSecretsSnapshot,
-      buildReloadPlan,
-      sharedGatewaySessionGenerationState,
-      resolveSharedGatewaySessionGenerationForConfig: () => "gen-new",
-      startChannel,
-      stopChannel,
-    });
+    const { reload, respond, stopChannel } = createRotationHarness(
+      slackZaloConfig("old-slack-secret", "old-zalo-secret"),
+      slackZaloConfig("new-slack-secret", "new-zalo-secret"),
+      {
+        buildReloadPlan,
+        sharedGatewaySessionGenerationState,
+        resolveSharedGatewaySessionGenerationForConfig: () => "gen-new",
+        startChannel,
+      },
+    );
 
     await reload();
 
@@ -516,7 +501,6 @@ describe("gateway aux handlers", () => {
       ["slack", "ops", { reason: "secrets-reload", preserveManualStop: true }],
       ["zalo", "alerts", { reason: "secrets-reload", preserveManualStop: true }],
     ]);
-    expect(respond.mock.calls).toHaveLength(1);
     expectReloadFailure(respond);
     expect(getActiveSecretsRuntimeSnapshot()?.config).toEqual(
       slackZaloConfig("old-slack-secret", "old-zalo-secret"),
@@ -559,7 +543,7 @@ describe("gateway aux handlers", () => {
 
       await reload();
 
-      expect(firstRespondCall(respond)[0]).toBe(false);
+      expectReloadFailure(respond);
       expect(startChannel).toHaveBeenCalledTimes(2);
       if (snapshotChanged) {
         expect(stopChannel.mock.calls).toEqual([["slack", "ops", { manual: false }]]);
@@ -578,26 +562,22 @@ describe("gateway aux handlers", () => {
   it("attempts restart on rollback even when stopChannel itself throws mid-reload", async () => {
     // A rejecting stop hook may already have closed the socket.
     const buildReloadPlan = buildRestartChannelsPlan("slack", "zalo");
-    activateSnapshot(slackZaloConfig("old-slack-secret", "old-zalo-secret"));
-    const prepareRuntimeSecretsSnapshot = mockResolvedSecrets(
-      slackZaloConfig("new-slack-secret", "new-zalo-secret"),
-    );
     const stopChannel = vi
       .fn()
       .mockResolvedValueOnce(undefined)
       .mockRejectedValueOnce(new Error("zalo stop hook failed after socket close"));
-    const startChannel = vi.fn().mockResolvedValue(new Map());
-    const { reload, respond } = createSecretsReloadHarness({
-      prepareRuntimeSecretsSnapshot,
-      buildReloadPlan,
-      startChannel,
-      stopChannel,
-    });
+    const { reload, respond, startChannel } = createRotationHarness(
+      slackZaloConfig("old-slack-secret", "old-zalo-secret"),
+      slackZaloConfig("new-slack-secret", "new-zalo-secret"),
+      {
+        buildReloadPlan,
+        stopChannel,
+      },
+    );
 
     await reload();
 
     expect(startChannel.mock.calls.map(([ch]) => ch)).toEqual(["slack", "slack", "zalo"]);
-    expect(respond.mock.calls).toHaveLength(1);
-    expect(firstRespondCall(respond)[0]).toBe(false);
+    expectReloadFailure(respond);
   });
 });
