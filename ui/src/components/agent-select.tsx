@@ -33,7 +33,7 @@ defineSolidBridge<AgentSelectProps>(
     const id = `agent-select-${generateUUID()}`;
     let menu: MenuHandle | undefined;
     const selected = createMemo(() => props.options.find((option) => option.value === props.value));
-    const fallbackOption = createMemo(() =>
+    const fallbackOption = createMemo<AgentSelectOption | undefined>(() =>
       selected() || !props.value
         ? undefined
         : { value: props.value, label: props.value, agent: { id: props.value } },
