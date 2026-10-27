@@ -837,10 +837,6 @@
   max-width: 100%;
 }
 
-.chat-notice--model-change {
-  margin-block-end: 14px;
-}
-
 .chat-notice--model-change .chat-divider__label {
   letter-spacing: normal;
   text-transform: none;
