@@ -150,7 +150,9 @@ export function createSidebarSessionWindow(
         return undefined;
       }
       const style = getComputedStyle(scroller);
-      const nextRowFloor = Number.parseFloat(style.getPropertyValue("--sidebar-session-row-floor"));
+      // Unstyled hosts retain the estimate until CSS supplies the row minimum.
+      const nextRowFloor =
+        Number.parseFloat(style.getPropertyValue("--sidebar-session-row-floor")) || 30;
       const nextLayout = [
         scroller.clientWidth,
         style.getPropertyValue("--control-ui-text-scale"),
