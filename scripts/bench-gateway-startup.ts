@@ -1525,6 +1525,7 @@ const { setTimeout } = require("node:timers/promises");
 `,
     { mode: 0o755 },
   );
+  return undefined;
 }
 
 function writePublicationApiFixture(
