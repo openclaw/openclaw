@@ -62,12 +62,13 @@ const { values } = parseArgs({
     cold: { type: "boolean", default: false },
     "cold-backend": { type: "boolean", default: false },
     diagnostic: { type: "boolean", default: false },
+    structure: { type: "boolean", default: false },
     help: { type: "boolean", default: false },
   },
 });
 if (values.help) {
   console.log(
-    "Usage: node --import ./scripts/tsx.mjs scripts/bench-usage-gateway.ts --base <checkout> --head <checkout> --ui <frozen-build> --out <new-directory> [--sessions 12000] [--pairs 20] [--smoke | --cold | --cold-backend | --diagnostic]",
+    "Usage: node --import ./scripts/tsx.mjs scripts/bench-usage-gateway.ts --base <checkout> --head <checkout> --ui <frozen-build> --out <new-directory> [--sessions 12000] [--pairs 20] [--smoke | --cold | --cold-backend | --diagnostic | --structure]",
   );
   process.exit(0);
 }
@@ -99,9 +100,10 @@ const population = Number(values.sessions);
 assert(Number.isInteger(pairs) && pairs > 0);
 assert(Number.isInteger(population) && population > 0);
 assert(
-  [values.smoke, values.cold, values["cold-backend"], values.diagnostic].filter(Boolean).length <=
-    1,
-  "Choose at most one of --smoke, --cold, --cold-backend and --diagnostic",
+  [values.smoke, values.cold, values["cold-backend"], values.diagnostic, values.structure].filter(
+    Boolean,
+  ).length <= 1,
+  "Choose at most one of --smoke, --cold, --cold-backend, --diagnostic and --structure",
 );
 await mkdir(out, { recursive: false });
 
@@ -124,7 +126,9 @@ type PageEntry = {
   cdp: CDPSession;
   proxy: Awaited<ReturnType<typeof startUsageRttProxy>> | undefined;
   responses: ReturnType<typeof observeUsage>;
+  wire?: ReturnType<typeof observeWire>;
   finishDiagnostic?: () => Promise<void>;
+  finishStructure?: () => Promise<unknown>;
 };
 const owners: Owner[] = [];
 const fixtureTokens: string[] = [];
@@ -493,6 +497,143 @@ function observeUsage(page: Page) {
   });
   return responses;
 }
+
+/** Protocol metadata only: never retain frame bodies, labels, or user content. */
+function observeWire(page: Page) {
+  const frames: Array<{
+    socket: number;
+    direction: "sent" | "received";
+    atMs: number;
+    bytes: number;
+    type?: string;
+    id?: string;
+    method?: string;
+    event?: string;
+    seq?: number;
+    ok?: boolean;
+  }> = [];
+  let sockets = 0;
+  page.on("websocket", (socket) => {
+    const index = sockets++;
+    const record = (direction: "sent" | "received", payload: string | Buffer) => {
+      const frame = JSON.parse(String(payload));
+      frames.push({
+        socket: index,
+        direction,
+        atMs: performance.now(),
+        bytes: Buffer.byteLength(payload),
+        type: frame.type,
+        id: frame.id,
+        method: frame.method,
+        event: frame.event,
+        seq: frame.seq,
+        ok: frame.ok,
+      });
+    };
+    socket.on("framesent", ({ payload }) => record("sent", payload));
+    socket.on("framereceived", ({ payload }) => record("received", payload));
+  });
+  return frames;
+}
+
+/** Counts mutation records and node identity; it does not copy DOM content. */
+async function startUsageStructure(entry: PageEntry) {
+  const handle = await entry.page.evaluateHandle(() => {
+    const root = document.querySelector("openclaw-usage-page");
+    if (!root) {
+      throw new Error("Usage host missing before structural trace");
+    }
+    const ids = new WeakMap<Node, number>();
+    let nextId = 0;
+    const identity = (node: Node) => {
+      let id = ids.get(node);
+      if (id === undefined) {
+        id = nextId++;
+        ids.set(node, id);
+      }
+      return id;
+    };
+    const snapshot = () => ({
+      host: identity(root),
+      page: Array.from(root.querySelectorAll(".usage-page"), identity),
+      charts: Array.from(
+        root.querySelectorAll(".daily-chart-bars, .usage-heatmap__svg, .timeseries-svg"),
+        identity,
+      ),
+      rows: Array.from(root.querySelectorAll(".session-bar-row"), identity),
+    });
+    const mutations = {
+      batches: 0,
+      childList: 0,
+      addedRoots: 0,
+      removedRoots: 0,
+      attributes: 0,
+      characterData: 0,
+    };
+    const consume = (records: MutationRecord[]) => {
+      if (records.length) {
+        mutations.batches++;
+      }
+      for (const record of records) {
+        if (record.type === "childList") {
+          mutations.childList++;
+          mutations.addedRoots += record.addedNodes.length;
+          mutations.removedRoots += record.removedNodes.length;
+        } else if (record.type === "attributes") {
+          mutations.attributes++;
+        } else {
+          mutations.characterData++;
+        }
+      }
+    };
+    const before = snapshot();
+    const observer = new MutationObserver(consume);
+    observer.observe(root, {
+      subtree: true,
+      childList: true,
+      attributes: true,
+      characterData: true,
+    });
+    const startedMs = performance.now();
+    return {
+      finish() {
+        consume(observer.takeRecords());
+        observer.disconnect();
+        return {
+          startedMs,
+          finishedMs: performance.now(),
+          before,
+          after: snapshot(),
+          sameHost: root === document.querySelector("openclaw-usage-page"),
+          hostConnected: root.isConnected,
+          mutations,
+        };
+      },
+    };
+  });
+  entry.finishStructure = async () => {
+    entry.finishStructure = undefined;
+    try {
+      return await handle.evaluate((probe) => probe.finish());
+    } finally {
+      await handle.dispose();
+    }
+  };
+}
+
+/** Attribution-only retained counters; forced GC never belongs to a timed action. */
+async function browserRetention(cdp: CDPSession) {
+  await cdp.send("HeapProfiler.collectGarbage");
+  const snapshot = await metrics(cdp);
+  const dom = await cdp.send("Memory.getDOMCounters");
+  return {
+    atMs: performance.now(),
+    heapUsedBytes: snapshot.JSHeapUsedSize,
+    heapTotalBytes: snapshot.JSHeapTotalSize,
+    dom,
+  };
+}
+
 async function waitForResponse(
   responses: ReturnType<typeof observeUsage>,
   after: number,
@@ -819,12 +960,12 @@ try {
   }
   for (const cpu of values["cold-backend"]
     ? []
-    : values.cold || values.diagnostic
+    : values.cold || values.diagnostic || values.structure
       ? [1]
       : values.smoke
         ? [4]
         : [1, 4]) {
-    for (const rtt of values.cold ? [0] : [0, 100]) {
+    for (const rtt of values.cold || values.structure ? [0] : [0, 100]) {
       const pages: PageEntry[] = [];
       try {
         for (const owner of owners) {
@@ -852,6 +993,7 @@ try {
             cdp: await context.newCDPSession(page),
             proxy: undefined,
             responses: observeUsage(page),
+            wire: values.structure ? observeWire(page) : undefined,
           };
           pages.push(entry);
           entry.proxy = rtt ? await startUsageRttProxy(owner.ready.port, 50) : undefined;
@@ -865,7 +1007,7 @@ try {
               JSON.stringify({ dismissedAtMs: 1770000000000 }),
             ),
           );
-          if (values.diagnostic) {
+          if (values.diagnostic || values.structure) {
             await page.addInitScript(() => {
               // oxlint-disable-next-line typescript/unbound-method -- Forward the original socket receiver with call.
               const send = WebSocket.prototype.send;
@@ -1006,7 +1148,15 @@ try {
             load: os.loadavg(),
           });
         }
-        const iterations = values.cold ? 0 : values.diagnostic ? 3 : values.smoke ? 2 : pairs * 2;
+        const iterations = values.cold
+          ? 0
+          : values.structure
+            ? 5
+            : values.diagnostic
+              ? 3
+              : values.smoke
+                ? 2
+                : pairs * 2;
         for (let iteration = 0; iteration < iterations; iteration++) {
           const pair = Math.floor(iteration / 2);
           const order = pair % 2 ? pages.toReversed() : pages;
@@ -1017,10 +1167,25 @@ try {
             const truth = owner.ready.models[model]!;
             const requestsBefore = responses.length;
             const dispatchBefore = (await owner.snapshot()).length;
-            const diagnostic = values.diagnostic && iteration === 2;
+            const condition =
+              values.structure && iteration >= 2 && iteration % 2 === 0
+                ? iteration === 2
+                  ? "natural"
+                  : "gc-conditioned"
+                : undefined;
+            const retainedBefore =
+              condition === "gc-conditioned" ? await browserRetention(cdp) : undefined;
+            const diagnostic = (values.diagnostic && iteration === 2) || condition !== undefined;
             if (diagnostic) {
-              await startUsageDiagnostic(entry, `${owner.role}-${cpu}x-${rtt}ms-model00`);
+              await startUsageDiagnostic(
+                entry,
+                `${owner.role}-${cpu}x-${rtt}ms-model00${condition ? `-${condition}` : ""}`,
+              );
             }
+            if (condition) {
+              await startUsageStructure(entry);
+            }
+            const wireStart = entry.wire?.length;
             const rendererBefore = await rendererProbe(processSession);
             const cpuBefore = await readGatewayCpuUsage(owner.child);
             const browserBefore = await metrics(cdp);
@@ -1041,10 +1206,14 @@ try {
             const browserAfter = await metrics(cdp);
             const cpuAfter = await readGatewayCpuUsage(owner.child);
             const rendererAfter = await rendererProbe(processSession);
+            const structure = await entry.finishStructure?.();
+            const wireEnd = entry.wire?.length;
             if (diagnostic) {
               await page.evaluate(() => performance.mark("usage:probe-end"));
               await entry.finishDiagnostic?.();
             }
+            const retainedAfter =
+              condition === "gc-conditioned" ? await browserRetention(cdp) : undefined;
             const dispatches = (await owner.snapshot()).slice(dispatchBefore);
             if (owner.role === "head") {
               assert.deepEqual(
@@ -1060,6 +1229,8 @@ try {
               role: owner.role,
               phase: "filter",
               diagnostic,
+              ...(condition ? { condition, structure, retainedBefore, retainedAfter } : {}),
+              ...(entry.wire ? { wireStart, wireEnd } : {}),
               pair,
               cpu,
               rtt,
@@ -1096,6 +1267,21 @@ try {
         }
       } finally {
         for (const entry of pages.toReversed()) {
+          if (entry.wire) {
+            try {
+              await writeFile(
+                path.join(out, `${entry.owner.role}-wire.json`),
+                JSON.stringify(entry.wire, null, 2),
+              );
+            } catch (error) {
+              failures.push(`${entry.owner.role} wire capture: ${errorText(error)}`);
+            }
+          }
+          try {
+            await entry.finishStructure?.();
+          } catch (error) {
+            failures.push(`${entry.owner.role} structural cleanup: ${errorText(error)}`);
+          }
           try {
             await entry.finishDiagnostic?.();
           } catch (error) {
@@ -1181,15 +1367,17 @@ try {
           .length,
         mode: values["cold-backend"]
           ? "fresh-backend-cold-triple"
-          : values.cold
-            ? "fresh-cold-triple"
-            : values.diagnostic
-              ? "attribution-only"
-              : "warm",
+          : values.structure
+            ? "structural-attribution-only"
+            : values.cold
+              ? "fresh-cold-triple"
+              : values.diagnostic
+                ? "attribution-only"
+                : "warm",
         pairsPerQuery:
           values.cold || values["cold-backend"]
             ? 0
-            : values.diagnostic
+            : values.diagnostic || values.structure
               ? null
               : values.smoke
                 ? 1
@@ -1200,13 +1388,15 @@ try {
             : ["model:fixture-model-00-end", "model:fixture-model-01-end"],
         limitations: values["cold-backend"]
           ? "Backend-only at native CPU and localhost: the first sessions.usage RPC requests the full 180 days with the browser's specific-UTC date mode and ordinary overview/sort options; no preceding browser/default-range request. One fresh triple, fixed A/H/C order, not repeated qualification. Worker CPU snapshots include newly observed or retired workers without claiming complete interval coverage. Resources follow the response with main-only forced GC and asynchronously cached worker heaps. No browser measurements."
-          : "Backend runs at native CPU; 1x/4x applies only to Chromium. Non-navigation browser metrics use threadTicks; default-readiness document CPU is unavailable because navigation resets those counters. Each role owns an isolated browser. Whole-renderer CPU and RSS probes bracket each action; their recorded bounds include collection overhead outside wall/main-thread intervals. Heap and RSS are sampled endpoints, not retained heap, peaks, or GPU memory. Same frozen UI for all roles. Population has one/two actual turns per session spread over180days. Durable source seeding and compiled startup recorded separately; no source server or report prewarming. Setup logs retained. No provider calls. " +
-            (values.cold
-              ? "One fresh, independently seeded Gateway/browser per role, measuring default then first full-range request at native CPU and localhost. One invocation is one triple, not repeated cold qualification."
-              : "Gateway reused across CPU/RTT cells; default/readiness and population-range phases are not independent cold-process samples.") +
-            (values.diagnostic
-              ? " Traced actions are attribution only, never timing acceptance."
-              : ""),
+          : values.structure
+            ? "Structural attribution only, native CPU and localhost. Each role warms model00/model01, traces a natural model00 return, resets model01 outside the traced action, then traces a model00 return after forced browser GC. The second trace has forced-GC heap/DOM counters before and after, outside timing. Passive mutation counts and local node IDs contain no DOM text or attributes; metadata-only wire records contain no payloads. Instrumented timing is not acceptance evidence. Preserve earlier warm and cold regressions."
+            : "Backend runs at native CPU; 1x/4x applies only to Chromium. Non-navigation browser metrics use threadTicks; default-readiness document CPU is unavailable because navigation resets those counters. Each role owns an isolated browser. Whole-renderer CPU and RSS probes bracket each action; their recorded bounds include collection overhead outside wall/main-thread intervals. Heap and RSS are sampled endpoints, not retained heap, peaks, or GPU memory. Same frozen UI for all roles. Population has one/two actual turns per session spread over180days. Durable source seeding and compiled startup recorded separately; no source server or report prewarming. Setup logs retained. No provider calls. " +
+              (values.cold
+                ? "One fresh, independently seeded Gateway/browser per role, measuring default then first full-range request at native CPU and localhost. One invocation is one triple, not repeated cold qualification."
+                : "Gateway reused across CPU/RTT cells; default/readiness and population-range phases are not independent cold-process samples.") +
+              (values.diagnostic
+                ? " Traced actions are attribution only, never timing acceptance."
+                : ""),
       },
       null,
       2,

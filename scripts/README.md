@@ -191,6 +191,17 @@ must not be summed as CPU. These traced actions are diagnostic evidence, never
 samples for the untraced timing acceptance table. The narrow modes are mutually
 exclusive with `--smoke` and each other.
 
+For warm renderer attribution, `--structure` runs only 1×/localhost. Each role
+warms model00/model01, traces a natural return to model00, resets to model01,
+then traces a separate model00 return after browser GC. Only that second return
+has forced-GC heap and DOM counters before and after; GC stays outside timing.
+The six traces retain passive mutation-record counts and local chart/row node
+identities, plus all WebSocket frame IDs, methods/events, byte counts, and times.
+They retain no frame payloads or DOM text/attribute values. Added/removed counts
+refer to mutation-record roots, not every descendant. The observer and profiler
+add work, so these runs diagnose extra rendering or garbage collection; they
+never replace the earlier untraced timing results or establish a performance win.
+
 ### Synthetic Gateway interactions
 
 Build with `pnpm ui:build`, then collect the production renderer's desktop and
