@@ -21,6 +21,7 @@ import { resolveCommandSecretRefsViaGateway } from "./command-secret-gateway.js"
 
 const callGateway = vi.hoisted(() => vi.fn());
 const tempRoots = useAutoCleanupTempDirTracker(afterEach);
+// mock-isolation: exercise command-secret resolution without opening a Gateway connection.
 vi.mock("../gateway/call.js", () => ({ callGateway }));
 
 vi.mock("../secrets/runtime-config-collectors.js", { spy: true });

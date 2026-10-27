@@ -503,7 +503,7 @@ describe("assistant panel", () => {
       expect(reserveRight()).toBe("440px");
       expect(home(panel)).toBeNull();
 
-      const render = createDeferred<void>();
+      const render = createDeferred();
       const pane = Object.assign(document.createElement("openclaw-chat-pane"), {
         sessionKey: "agent:main:task",
         presented: true,
