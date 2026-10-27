@@ -231,74 +231,59 @@ it.each([
   expect(sent).toHaveLength(secondStatus === "fulfilled" ? 4 : 2);
 });
 
-it("releases a topic action canceled during authorization backoff", async () => {
-  vi.useFakeTimers();
-  const { api, sent } = actionApi("canceled-backoff", (count) =>
-    response(count === 1 ? unauthorized : success),
-  );
-  const first = typing(api, 1);
-  const failed = expect(first).rejects.toThrow("Unauthorized");
-  await tick(0);
-  await failed;
-  const controller = new TelegramAbortController();
-  const canceled = typing(api, 2, controller.signal);
-  const settled = vi.fn();
-  const outcome = canceled.then(settled, settled);
-  finishClock(10_000, () => outcome);
-  await tick(1_500);
-  controller.abort();
-  await tick(0);
-  expect(settled).toHaveBeenCalledOnce();
-  expect(sent).toHaveLength(1);
-  const recovered = typing(api, 3);
-  await tick(3_000);
-  await recovered;
-  expect(sent).toHaveLength(2);
-});
-
-it.each(["group queue", "authorization queue"])(
-  "settles cancellation in the %s without releasing an active predecessor",
+it.each(["authorization backoff", "group queue", "authorization queue"])(
+  "settles cancellation in the %s and preserves the next action",
   async (queue) => {
     vi.useFakeTimers();
-    const authorization = queue === "authorization queue";
+    const backoff = queue === "authorization backoff";
+    const authorization = queue !== "group queue";
+    const dispatched = authorization && !backoff ? 2 : 1;
     const held = deferred<Response>();
     const { api, sent } = actionApi("queued-wait", (count) => {
       if (authorization && count === 1) {
         return response(unauthorized);
       }
-      if (count === (authorization ? 2 : 1)) {
+      if (!backoff && count === dispatched) {
         return held.promise;
       }
       return response(success);
     });
     if (authorization) {
-      const failed = expect(api.sendChatAction(-100123, "typing")).rejects.toThrow("Unauthorized");
+      const failed = expect(
+        backoff ? typing(api, 1) : api.sendChatAction(-100123, "typing"),
+      ).rejects.toThrow("Unauthorized");
       await tick(0);
       await failed;
     }
-    const predecessor = typing(api, 1);
-    await tick(authorization ? 2_200 : 0);
+    const predecessor = backoff ? undefined : typing(api, 1);
+    await tick(authorization && !backoff ? 2_200 : 0);
     const controller = new TelegramAbortController();
-    const canceled = typing(api, 2, controller.signal, authorization ? -100456 : -100123);
+    const canceled = typing(
+      api,
+      2,
+      controller.signal,
+      queue === "authorization queue" ? -100456 : -100123,
+    );
     const settled = vi.fn();
     const outcome = canceled.then(settled, settled);
-    const successor = typing(api, 3, undefined, authorization ? -100789 : -100123);
+    const successor = backoff
+      ? undefined
+      : typing(api, 3, undefined, authorization ? -100789 : -100123);
     finishClock(
       10_000,
       () => Promise.all([predecessor, outcome, successor]),
-      () => {
-        held.resolve(response(success));
-      },
+      () => held.resolve(response(success)),
     );
-    await tick(0);
+    await tick(backoff ? 1_500 : 0);
     controller.abort();
     await tick(0);
     expect(settled).toHaveBeenCalledOnce();
-    expect(sent).toHaveLength(authorization ? 2 : 1);
+    expect(sent).toHaveLength(dispatched);
     held.resolve(response(success));
-    await tick(2_000);
-    await Promise.all([predecessor, successor]);
-    expect(sent).toHaveLength(authorization ? 3 : 2);
+    const recovered = backoff ? typing(api, 3) : successor;
+    await tick(backoff ? 3_000 : 2_000);
+    await Promise.all([predecessor, recovered]);
+    expect(sent).toHaveLength(dispatched + 1);
   },
 );
 
