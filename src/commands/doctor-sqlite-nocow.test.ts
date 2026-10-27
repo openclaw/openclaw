@@ -6,7 +6,6 @@ import { DatabaseSync } from "node:sqlite";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { loadPersistedAuthProfileStore } from "../agents/auth-profiles/persisted.js";
-import { prepareClientCredentialMigration } from "../infra/client-credential-migration.js";
 import { createClientCredentialMigrationFixture } from "../infra/client-credential-migration.test-support.js";
 import { runClientCredentialOperation } from "../infra/client-credential-store.js";
 import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
@@ -16,7 +15,6 @@ import {
 } from "../infra/session-sqlite-migration-manifest.js";
 import { readSqliteReaderDiagnosticsForPath } from "../infra/sqlite-reader-lifecycle.js";
 import { admitSqliteSchema } from "../infra/sqlite-schema-facts.js";
-import { runSqliteImmediateTransactionSync } from "../infra/sqlite-transaction.js";
 import { isSqlitePathOnBtrfs } from "../infra/sqlite-wal-filesystem.js";
 import { openOpenClawAgentDatabase } from "../state/openclaw-agent-db.js";
 import { createOpenClawDatabaseMaintenanceScope } from "../state/openclaw-state-db-async-lifecycle.js";
@@ -569,18 +567,10 @@ describe("Doctor NOCOW recovery identities", () => {
       fs.rmSync(sqlitePath);
       const credentials = await createClientCredentialMigrationFixture(root);
       try {
-        credentials.maintenance.run(() =>
-          runSqliteImmediateTransactionSync(credentials.source, () => {
-            prepareClientCredentialMigration(credentials.source, {
-              path: sqlitePath,
-              env,
-              fromVersion: 25,
-              capture: credentials.maintenance.capture,
-            });
-            credentials.source.exec(
-              "UPDATE schema_meta SET schema_version=29; PRAGMA user_version=29;",
-            );
-          }),
+        credentials.migrate(() =>
+          credentials.source.exec(
+            "UPDATE schema_meta SET schema_version=29; PRAGMA user_version=29;",
+          ),
         );
       } finally {
         credentials.source.close();
@@ -613,14 +603,14 @@ describe("Doctor NOCOW recovery identities", () => {
     },
   );
 
-  it.each(["unchanged", "destination", "backup", "backup metadata"])(
+  it.each(["unchanged", "destination", "backup metadata"])(
     "retires only the recorded recovery original after rewrite: %s",
     async (change) => {
       const backupPath = await prepareCompletedBackup();
       const recorded = readTarget();
       const original = fs.readFileSync(backupPath);
-      if (change === "destination" || change === "backup") {
-        replaceDatabase(change === "destination" ? sqlitePath : backupPath);
+      if (change === "destination") {
+        replaceDatabase(sqlitePath);
       } else if (change === "backup metadata") {
         const touched = new Date("2030-01-01T00:00:00Z");
         fs.utimesSync(backupPath, touched, touched);

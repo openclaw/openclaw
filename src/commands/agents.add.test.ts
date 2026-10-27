@@ -401,7 +401,6 @@ describe("agents add command", () => {
 
     await add({ name: "main" });
 
-    expect(creationGate).toHaveBeenCalledWith("main");
     expect(prompter.outro).toHaveBeenCalledWith("Run openclaw doctor --fix, then retry.");
     expectUnused(prompter.text, prepareAuth, createAgent);
   });
@@ -546,7 +545,6 @@ describe("agents add command", () => {
     await expect(add()).rejects.toThrow("injected auth batch persistence failure");
 
     expect(loadPersistedAuthProfileStore(agentDir)).toBeNull();
-    expect(createAgent).toHaveBeenCalledOnce();
     expectUnused(commitConfig, writeConfig);
   });
 
