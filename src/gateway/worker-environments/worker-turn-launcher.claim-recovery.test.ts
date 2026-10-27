@@ -515,7 +515,10 @@ describe("worker pre-launch claim recovery", () => {
       );
       const oldClaim = currentClaim();
       expect(oldClaim?.runId).toBe("blocked-second");
-      expect(await pendingResults()).toHaveLength(stage === "pending result" ? 1 : 0);
+      // Pre-turn input refresh fences its workspace result before entering the workspace queue.
+      const fenced =
+        stage === "workspace queue" || stage === "workspace mutation" || stage === "pending result";
+      expect(await pendingResults()).toHaveLength(fenced ? 1 : 0);
       const dispatched =
         stage === "dispatch boundary" ||
         stage === "dispatch" ||
@@ -586,7 +589,8 @@ describe("worker pre-launch claim recovery", () => {
         expect(launch).toHaveBeenCalledTimes(3);
         return;
       }
-      if (stage === "pending result") {
+      if (fenced) {
+        // The fenced result keeps exact turn custody until its recovery owner settles it.
         expect(currentClaim()).toEqual(oldClaim);
         const pending = (await pendingResults())[0]!;
         expect(pending.claimId).toBe(oldClaim?.claimId);

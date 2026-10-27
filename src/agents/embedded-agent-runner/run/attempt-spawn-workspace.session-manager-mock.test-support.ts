@@ -2,6 +2,7 @@ import { asOptionalObjectRecord } from "@openclaw/normalization-core/record-coer
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 import type { Mock } from "vitest";
 import type { AgentMessage } from "../../runtime/index.js";
+import { sessionManagerReadInitialContext } from "../../sessions/session-manager-current-turn.js";
 
 type UnknownMock = Mock<(...args: unknown[]) => unknown>;
 
@@ -94,4 +95,9 @@ export function resetSessionManagerMocks(
   sessionManager.appendLabelChangeAsync.mockReset();
   sessionManager.flushPendingPersistence.mockReset();
   sessionManager.reloadPersistedTranscriptAsync.mockReset();
+  // The fake has no persistence target, so like the real manager its initial model
+  // context falls back to buildSessionContext(), keeping repair fixtures authoritative.
+  Object.assign(sessionManager, {
+    [sessionManagerReadInitialContext]: async () => sessionManager.buildSessionContext(),
+  });
 }

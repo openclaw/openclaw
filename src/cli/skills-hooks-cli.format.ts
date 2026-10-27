@@ -1,5 +1,5 @@
 import { stripAnsi } from "../../packages/terminal-core/src/ansi.js";
-import { sanitizeTerminalText } from "../../packages/terminal-core/src/safe-text.js";
+import { terminalText } from "../../packages/terminal-core/src/safe-text.js";
 import {
   getTerminalTableWidth,
   renderTable,
@@ -42,7 +42,7 @@ export function formatCliStatusTable(params: {
     columns.push({ key: "Missing", header: "Missing", minWidth: 18, flex: true });
   }
   return [
-    `${theme.heading(params.title)} ${theme.muted(`(${params.ready}/${params.rows.length} ready)`)}`,
+    `${theme.heading(terminalText`${params.title}`)} ${theme.muted(`(${params.ready}/${params.rows.length} ready)`)}`,
     renderTable({ width: getTerminalTableWidth(), columns, rows: params.rows }).trimEnd(),
   ].join("\n");
 }
@@ -57,9 +57,7 @@ export function formatCliRequirements(
     return [];
   }
   const formatStatus = (value: string, satisfied: boolean) =>
-    satisfied
-      ? theme.success(`✓ ${sanitizeTerminalText(value)}`)
-      : theme.error(`✗ ${sanitizeTerminalText(value)}`);
+    satisfied ? theme.success(terminalText`✓ ${value}`) : theme.error(terminalText`✗ ${value}`);
   return [
     "",
     theme.heading("Requirements:"),
@@ -76,7 +74,7 @@ export function formatCliRequirements(
       } else {
         value = required.map((entry) => formatStatus(entry, !missing.includes(entry))).join(", ");
       }
-      return `${theme.muted(`  ${label}:`)} ${value}`;
+      return `${theme.muted(terminalText`  ${label}:`)} ${value}`;
     }),
   ];
 }

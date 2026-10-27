@@ -5930,6 +5930,7 @@ jobs:
             -only-testing:OpenClawTests/CloudflareAccessSessionStoreTests
             -only-testing:OpenClawTests/ChatTypingFocusTests
             -only-testing:OpenClawTests/ChatSendHydrationTests
+            -only-testing:OpenClawTests/ChatComposerTextViewIOSTests
             -only-testing:OpenClawTests/GatewayIngressControllerTests
             -only-testing:OpenClawTests/GatewayIngressLoginPreparationTests
             -only-testing:OpenClawTests/GatewayConnectionControllerTests
