@@ -127,6 +127,7 @@ export function prepareSessionSharing(
     );
   const entryFilter = createSessionListEntryFilter(params, isCreator, { sessionCap });
   return {
+    identity,
     isCreator,
     sessionCap,
     entryFilter,
@@ -342,6 +343,7 @@ const projectedSharingKeys = new WeakMap<
   object,
   WeakMap<object, { facts: readonly unknown[]; key: string }>
 >();
+const emptyProfileAliases: ReadonlySet<string> = new Set();
 
 export function prepareProjectedSessionSharing(params: {
   cfg: OpenClawConfig;
@@ -375,7 +377,7 @@ export function prepareProjectedSessionSharing(params: {
   let cacheKey: string | undefined;
   return {
     ...prepareSessionSharing(params, {
-      aliases: profile?.aliases ?? new Set(),
+      aliases: profile?.aliases ?? emptyProfileAliases,
       sessionCap: policy?.sessions.others,
       isMember,
     }),
@@ -424,12 +426,13 @@ export function prepareProjectedSessionSharing(params: {
         Boolean(client?.authenticatedGitHubIdentitySync),
         scopes?.toSorted(),
         profile?.profileId,
-        profile && [...profile.aliases].toSorted(),
+        // oxlint-disable-next-line unicorn/no-array-sort -- The Set spread is a private array.
+        profile && [...profile.aliases].sort(),
         policy,
         Boolean(cfg.gateway?.roles),
       ]);
       if (revision) {
-        const currentFacts: unknown[] = [
+        const next: unknown[] = [
           cfg,
           getRuntimeConfigSnapshotMetadata(),
           readGatewayAccessRevision(),
@@ -444,14 +447,12 @@ export function prepareProjectedSessionSharing(params: {
           Boolean(cfg.gateway?.roles),
           scopes !== undefined,
         ];
-        if (scopes) {
-          currentFacts.push(...scopes);
-        }
         if (!keys) {
           keys = new WeakMap();
           projectedSharingKeys.set(revision, keys);
         }
-        keys.set(viewer, { facts: currentFacts, key: cacheKey });
+        // Concatenation retains an exact-sized snapshot instead of push's spare capacity.
+        keys.set(viewer, { facts: scopes?.length ? next.concat(scopes) : next, key: cacheKey });
       }
       return cacheKey;
     },

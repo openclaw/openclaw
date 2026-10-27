@@ -5,6 +5,7 @@ import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
 import { captureDeletedAgentDatabaseFences } from "./agent-database-readers.js";
 import { getDatabaseEngineSelection } from "./database-engine/context.js";
+import { resolveNodeCompileCacheEnv } from "./node-compile-cache-env.js";
 import { createPostgresPoolEndpoints, postgresPoolTransferList } from "./postgres-sync/pool.js";
 import { resolveRuntimeWorkerThreadExecArgv } from "./runtime-worker-url.js";
 import { trackSqliteDatabaseAdmissionWorker } from "./sqlite-database-admission.js";
@@ -83,6 +84,9 @@ export function createWorkerTaskHost(
     requiresReady: owner.retainedTransport,
     createWorker(url, options) {
       const workerOptions = { execArgv: resolveRuntimeWorkerThreadExecArgv(url), ...options };
+      if (workerOptions.env === undefined) {
+        workerOptions.env = resolveNodeCompileCacheEnv();
+      }
       if (boundedHeap) {
         const limits = workerOptions.resourceLimits;
         workerOptions.resourceLimits = {

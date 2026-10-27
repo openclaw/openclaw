@@ -1,4 +1,5 @@
 import { expect, it } from "vitest";
+import type { MockGatewayWindow } from "../test-helpers/control-ui-e2e.ts";
 import {
   createNewSessionPageE2eSuite,
   installMockGateway,
@@ -9,6 +10,48 @@ const suite = createNewSessionPageE2eSuite();
 const titleMethod = "sessions.title.prepare";
 
 suite.define(() => {
+  it("updates a newly created session URL when its generated title arrives without reloading", async () => {
+    await suite.withPage({ viewport: { width: 1280, height: 900 } }, async ({ page }) => {
+      const key = "agent:main:dashboard:12345678-1234-4234-8234-123456789abc";
+      const gateway = await installMockGateway(page, {
+        featureMethods: ["chat.metadata", "chat.startup", "sessions.create"],
+        methodResponses: { "sessions.create": { key, runStarted: true } },
+      });
+      await page.goto(`${suite.server.baseUrl}new`);
+      await page.locator(".new-session-page__message").fill("Explain node version requirements");
+      await page.getByRole("button", { name: "Start session" }).click();
+      await page.waitForURL(
+        (url) => url.pathname === "/chat/main/12345678123442348234123456789abc",
+      );
+      const composer = page.locator(".agent-chat__composer-combobox textarea");
+      await composer.fill("Keep this unsent draft");
+      const timeOrigin = await page.evaluate(() => performance.timeOrigin);
+      const historyLength = await page.evaluate(() => window.history.length);
+      const reads = (await gateway.getRequests("chat.history")).length;
+      await page.evaluate((sessionKey) => {
+        (window as MockGatewayWindow).openclawControlUiE2eGateway!.emit("sessions.changed", {
+          sessionKey,
+          reason: "title",
+          session: {
+            key: sessionKey,
+            sessionId: `session:${sessionKey}`,
+            kind: "direct",
+            updatedAt: Date.now(),
+            displayName: "Node version requirements",
+            derivedTitle: "Node version requirements",
+          },
+        });
+      }, key);
+      await expect.poll(() => page.title()).toContain("Node version requirements");
+      await expect
+        .poll(() => new URL(page.url()).pathname)
+        .toBe("/chat/main/node-version-requirements-12345678123442348234123456789abc");
+      expect(await page.evaluate(() => performance.timeOrigin)).toBe(timeOrigin);
+      expect(await composer.inputValue()).toBe("Keep this unsent draft");
+      expect(await page.evaluate(() => window.history.length)).toBe(historyLength);
+      expect((await gateway.getRequests("chat.history")).length).toBe(reads);
+    });
+  });
   it.each(["idle", "composition blur", "pending"] as const)(
     "hands off creation title preparation: %s",
     async (mode) => {

@@ -20,7 +20,7 @@ import { resolveTranscriptMessageAppendParent as resolveParent } from "./session
 import {
   appendTranscriptEventSnapshotSync as appendEvent,
   appendTranscriptMessageSnapshotSync as appendMessage,
-} from "./session-accessor.sqlite-transcript-write.js";
+} from "./session-accessor.sqlite-transcript-write.kernel.js";
 import { replaceTranscriptEventsSync as replaceEvents } from "./session-accessor.sqlite-transcript-write.test-support.js";
 
 const sessionDirs = useSessionStoreTempDirs(afterAll, "openclaw-ancestry-");

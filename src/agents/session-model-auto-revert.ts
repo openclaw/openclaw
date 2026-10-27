@@ -4,8 +4,8 @@ import {
   appendTranscriptMessage,
   patchSessionEntryCore,
 } from "../config/sessions/session-accessor.js";
+import { acquireSessionActorStorage } from "../config/sessions/session-actor-storage-acquisition.js";
 import {
-  acquireSessionActorStorage,
   captureSessionActorStorageOwner,
   readCapturedSessionActorEntry,
   runWithSessionActorStorage,

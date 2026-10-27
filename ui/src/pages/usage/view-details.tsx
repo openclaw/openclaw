@@ -4,12 +4,12 @@ import { createMemo, For, Show } from "solid-js";
 import { Icon } from "../../components/solid/icon.tsx";
 import "../../components/tooltip.ts";
 import { t } from "../../lib/reactive/i18n.ts";
-import { parseSessionLog, prepareUsageDateRange, type ParsedSessionLog } from "./helpers.ts";
+import { parseSessionLog, prepareUsageDateRange } from "./helpers.ts";
 import { charsToTokens, formatUsageCost, formatUsageTokens } from "./metrics.ts";
 import { renderUsageRefreshStatus } from "./page-shell.tsx";
 import { createUsageRead, UsagePending, UsageReadStatus } from "./read-status.tsx";
 import type { SessionLogRole, UsageContextDetail, UsageProps, UsageSessionEntry } from "./types.ts";
-import { SessionLogList } from "./view-session-logs.tsx";
+import { SessionLogList, type SessionLogRow } from "./view-session-log-list.tsx";
 import { renderSessionSummary } from "./view-session-summary.tsx";
 import { deriveTimeSeries, TimeSeriesCompact } from "./view-timeseries.tsx";
 
@@ -26,7 +26,9 @@ export function SessionDetailPanel(props: {
   onClose: () => void;
 }) {
   const logsSource = createMemo(() => props.detail.sessionLogs);
-  const entries = createMemo(() => (logsSource() ?? []).map(parseSessionLog));
+  const entries = createMemo(() =>
+    (logsSource() ?? []).map((log, id) => Object.assign(parseSessionLog(log), { id })),
+  );
   const rangeInputs = createMemo(
     () => ({
       startDate: props.range.startDate,
@@ -438,8 +440,8 @@ function selectedLogFilterValues(select: HTMLSelectElement): string[] {
 function SessionLogs(props: {
   detail: UsageProps["detail"];
   callbacks: UsageProps["callbacks"]["details"];
-  entries: ParsedSessionLog[];
-  intervalEntries: ParsedSessionLog[];
+  entries: SessionLogRow[];
+  intervalEntries: SessionLogRow[];
 }) {
   const read = createUsageRead(
     () => props.detail.sessionLogsRead,
@@ -601,8 +603,8 @@ function SessionLogs(props: {
               </button>
             </div>
             <SessionLogList
-              entries={props.entries}
-              rows={state().filteredEntries}
+              entries={state().filteredEntries}
+              source={props.entries}
               expanded={props.detail.sessionLogsExpanded}
             />
           </div>

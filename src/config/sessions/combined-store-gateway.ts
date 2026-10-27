@@ -54,7 +54,7 @@ import { canonicalizeMainSessionAlias } from "./main-session.js";
 import { resolveSessionStorePathCore } from "./paths.js";
 import { captureMemoryExactSessionReader } from "./session-accessor.memory-exact-read.js";
 import type { SessionEntrySummary } from "./session-accessor.types.js";
-import { memorySessionActorOwners } from "./session-actor-memory-owner.js";
+import { memorySessionActorRegistry } from "./session-actor-memory-registry.js";
 import { captureSessionActorStorageOwner } from "./session-actor-storage-binding.js";
 import { canonicalSessionKeyMigrationRequiredError } from "./session-canonical-key.js";
 import { listKnownSessionStoreAgentIds } from "./targets-discovery.native.js";
@@ -307,7 +307,7 @@ function resolvePreparedConfiguredSessionStoreTargets(
 export function listMemorySessionStoreTargets(env?: NodeJS.ProcessEnv): SessionStoreTarget[] {
   const selected = captureSessionActorStorageOwner({ env });
   const stateDir = selected ? nodePath.resolve(selected.path, "../../../..") : resolveStateDir(env);
-  const targets = memorySessionActorOwners
+  const targets = memorySessionActorRegistry
     .list()
     .filter((owner) => nodePath.resolve(owner.path, "../../../..") === stateDir)
     .map((owner) => ({ agentId: owner.agentId, storePath: owner.path }));

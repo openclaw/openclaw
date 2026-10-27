@@ -621,7 +621,14 @@ export async function executePreparedCliRun(
       );
     }
     if (forkResumeClaimed && !forkSuccessorObserved) {
-      await params.restoreCliSessionFork?.();
+      try {
+        await params.restoreCliSessionFork?.();
+      } catch (restoreError) {
+        // A stale restoration must not erase the turn's terminal or persistence failure.
+        failure = new AggregateError([failure, restoreError], formatErrorMessage(failure), {
+          cause: failure,
+        });
+      }
     }
     throw failure;
   } finally {

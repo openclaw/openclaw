@@ -8,6 +8,7 @@ import {
 } from "../../plugins/runtime.js";
 import {
   createAdmittedRunOperatorAuthority,
+  bindOperatorModelExecution,
   prepareSystemAgentRunAdmission,
 } from "../admitted-run-context.js";
 import type { PreparedNativeSessionRuntime } from "../embedded-agent-runner/run/model-setup.js";
@@ -20,6 +21,7 @@ import { createHarnessAttemptParams } from "./selection.test-support.js";
 import type { AgentHarness } from "./types.js";
 type ModelPolicy = ReturnType<typeof prepareOperatorModelPolicy>;
 type HarnessMode = "fresh" | "host" | "native";
+type AccessGrants = Array<"daybreak_blue" | "daybreak_red">;
 
 const cfg = { agents: { defaults: { model: "fixture/a" } } };
 const permittedModel = { provider: "fixture", model: "a" };
@@ -31,11 +33,23 @@ const result = makeEmbeddedRunnerAttempt({
   assistantTexts: ["done"],
 });
 
-function createAuthority(modelPolicy: ModelPolicy | undefined, signal?: AbortSignal) {
+function createAuthority(
+  modelPolicy: ModelPolicy | undefined,
+  signal?: AbortSignal,
+  grants?: AccessGrants,
+) {
   const state = { modelPolicy, holds: 0, listeners: new Set<() => void>() };
   const source = createAdmittedRunOperatorAuthority({
     profileId: "model-policy-fixture",
     scopes: ["operator.write"],
+    rolePolicy: grants
+      ? {
+          sessionAccessCap: "none",
+          sandboxRequired: false,
+          agents: "*",
+          accessPrograms: { cyber: grants },
+        }
+      : undefined,
     signal,
     assertCurrent() {},
     get modelPolicy() {
@@ -66,8 +80,13 @@ function createAuthority(modelPolicy: ModelPolicy | undefined, signal?: AbortSig
   };
 }
 
-async function createHarness(mode: HarnessMode, restricted: boolean, exact: boolean) {
-  const authority = createAuthority(restricted ? policy : undefined);
+async function createHarness(
+  mode: HarnessMode,
+  restricted: boolean,
+  exact: boolean,
+  grants?: AccessGrants,
+) {
+  const authority = createAuthority(restricted ? policy : undefined, undefined, grants);
   const { source, state } = authority;
   const admission = prepareSystemAgentRunAdmission(
     cfg,
@@ -129,6 +148,115 @@ async function createHarness(mode: HarnessMode, restricted: boolean, exact: bool
     state,
   };
 }
+
+it("rejects saved forbidden Access before invoking a native harness", async () => {
+  const { execute, attempt, runAttempt } = await createHarness("native", false, true, []);
+  attempt.cyberAccessProgram = "daybreak_blue";
+  await expect(execute()).rejects.toThrow("operator role cannot use this Access level");
+  expect(runAttempt).not.toHaveBeenCalled();
+});
+
+it.each([false, true])(
+  "requires native enforcement for Access-only roles (exact=%s)",
+  async (exact) => {
+    const { execute, finalize, runAttempt, finalizeSettledTurn } = await createHarness(
+      "native",
+      false,
+      exact,
+      [],
+    );
+    if (exact) {
+      expect((await execute()).assistantTexts).toEqual(["done"]);
+      expect(runAttempt).toHaveBeenCalledOnce();
+    } else {
+      await expect(execute()).rejects.toThrow("cannot enforce");
+      await expect(finalize()).rejects.toThrow("cannot enforce");
+      expect(runAttempt).not.toHaveBeenCalled();
+      expect(finalizeSettledTurn).not.toHaveBeenCalled();
+    }
+  },
+);
+
+it.each<{ grants: AccessGrants; required: boolean }>([
+  { grants: [], required: true },
+  { grants: ["daybreak_blue"], required: true },
+  { grants: ["daybreak_red"], required: true },
+  { grants: ["daybreak_blue", "daybreak_red"], required: false },
+])("retains Access-only dispatch enforcement for $grants", async ({ grants, required }) => {
+  const { source, update, state } = createAuthority(undefined, undefined, grants);
+  const admission = prepareSystemAgentRunAdmission(
+    cfg,
+    "access-only",
+    "main",
+    "test",
+    undefined,
+    source,
+  );
+  const host = createAgentHarnessHostCapabilities({
+    attempt: {
+      admittedRunContext: await admission.admit("plugin-harness", "fixture"),
+      runId: "access-only",
+      agentId: "main",
+    },
+    pluginId: "fixture",
+    nativeModelPolicySupport: "exact",
+  });
+  const retained = expectDefined(host.capabilities.retainSourceAuthority?.(), "retained source");
+  onTestFinished(() => {
+    retained.release();
+    host.close();
+    admission.close();
+    expect([state.holds, state.listeners.size]).toEqual([0, 0]);
+  });
+  host.close();
+  admission.close();
+  expect(retained.modelPolicyRequired).toBe(required);
+  update(policy);
+  expect(retained.modelPolicyRequired).toBe(true);
+  update(undefined);
+  expect(retained.modelPolicyRequired).toBe(required);
+  const bind = expectDefined(retained.bindModelExecution, "native dispatch binder");
+  for (const cyberAccessProgram of ["standard", "daybreak_blue", "daybreak_red"] as const) {
+    const execute = () => bind({ ...permittedModel, cyberAccessProgram });
+    if (cyberAccessProgram === "standard" || grants.includes(cyberAccessProgram)) {
+      const binding = expectDefined(execute(), "allowed execution");
+      expect(binding.assertCurrent).not.toThrow();
+      binding.release();
+    } else {
+      expect(execute).toThrow("operator role cannot use this Access level");
+    }
+  }
+});
+
+it("keeps explicit Access independent of alias changes and revokes it with the source", () => {
+  const initial = prepareOperatorModelPolicy({
+    cfg,
+    policy: { allow: ["fixture/a", "openai/gpt-daybreak-blue-latest"] },
+  });
+  const controller = new AbortController();
+  const authority = createAuthority(initial, controller.signal, ["daybreak_blue"]);
+  const blue = bindOperatorModelExecution(authority.source, {
+    ...permittedModel,
+    cyberAccessProgram: "daybreak_blue",
+  })!;
+  const standard = bindOperatorModelExecution(authority.source, {
+    ...permittedModel,
+    cyberAccessProgram: "standard",
+  })!;
+  try {
+    authority.update(policy);
+    expect(blue.signal.aborted).toBe(false);
+    expect(blue.assertCurrent).not.toThrow();
+    expect(standard.signal.aborted).toBe(false);
+    expect(standard.assertCurrent).not.toThrow();
+    controller.abort(new Error("Access role changed"));
+    expect(blue.signal.aborted).toBe(true);
+    expect(blue.assertCurrent).toThrow("Access role changed");
+  } finally {
+    blue.release();
+    standard.release();
+  }
+});
 
 type HarnessOperation = "execution" | "finalization";
 it.each([true, false])("prepares web search for a known native model (%s)", async (known) => {

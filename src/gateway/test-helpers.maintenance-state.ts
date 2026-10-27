@@ -8,6 +8,7 @@ import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-cloc
 import type { HealthSummary } from "./health/types.js";
 import { createChatRunState } from "./server-chat-state.js";
 import type { GatewayClient } from "./server-methods/client-types.js";
+import * as localWorkspaceGc from "./worker-environments/local-workspace-gc.js";
 
 /** Create a Gateway maintenance-state stub with configurable health/presence versions. */
 export function createGatewayMaintenanceStateForTest(params?: {
@@ -19,6 +20,8 @@ export function createGatewayMaintenanceStateForTest(params?: {
   const chatRunState = createChatRunState();
   const worktreeGcResult = new WorktreeGcProgress().result;
   const worktreeGc = vi.spyOn(managedWorktrees, "gc").mockResolvedValue(worktreeGcResult);
+  // Timer fixtures keep both phases of worktree cleanup out of shared-state workers.
+  vi.spyOn(localWorkspaceGc, "sweepLocalWorkspaceManifests").mockResolvedValue(undefined);
   return {
     worktreeGc,
     worktreeGcResult,

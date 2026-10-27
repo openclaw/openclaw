@@ -355,14 +355,16 @@ export function readOpenClawAgentDatabaseWorkerLeaseReceipt(
  * turning an already committed worker result into an operation failure.
  * Callers own a bounded retry policy and must surface an unsettled result.
  */
-export function settleOpenClawAgentDatabaseWorkerClose(
+export async function settleOpenClawAgentDatabaseWorkerClose(
   pathname: string,
-): OpenClawAgentDatabaseWorkerCloseResult {
+): Promise<OpenClawAgentDatabaseWorkerCloseResult> {
   const resolvedPath = path.resolve(pathname);
   const errors: Error[] = [];
   const database = cache.databases.get(resolvedPath);
   if (database) {
     try {
+      // Join sidecar inspection before native close; a guarded close is not a failed owner.
+      await database.walMaintenance.stop();
       closeCachedOpenClawAgentDatabase(database);
     } catch (error) {
       errors.push(error instanceof Error ? error : new Error(String(error)));

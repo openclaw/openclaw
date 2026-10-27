@@ -122,7 +122,11 @@ it("retains absent ACP metadata across async reads and follows in-process set an
     const input = { sessionKey, agentId: "main", entry, env: state.env };
     const expectRead = async (expected: typeof meta | undefined, calls = 0) => {
       expect(await metadataReads.readAcpSessionMetaForEntryAsync(input)).toEqual(expected);
-      expect(requests).toHaveBeenCalledTimes(calls);
+      expect(
+        requests.mock.calls.filter(
+          ([, options]) => options?.diagnosticOperation === "acpSessions.metadata",
+        ),
+      ).toHaveLength(calls);
       requests.mockClear();
     };
     const sql = observeMainThreadSql();

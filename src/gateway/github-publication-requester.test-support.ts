@@ -253,6 +253,7 @@ export async function createRequesterPublicationFixture(
   repositoryOptions: {
     requestedRef?: Parameters<typeof createRepositoryPublicationFixture>[1];
     baseFiles?: Record<string, string>;
+    initialCheckpoint?: boolean;
   } = {},
 ) {
   const repository =
@@ -262,6 +263,7 @@ export async function createRequesterPublicationFixture(
           repositoryOptions.requestedRef,
           session,
           repositoryOptions.baseFiles,
+          repositoryOptions.initialCheckpoint,
         )
       : undefined;
   await persistPublicationTestSession(session.sessionKey);

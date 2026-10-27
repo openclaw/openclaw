@@ -6,10 +6,53 @@ import {
   type UpdateDoctorHistoricalScans,
 } from "../../infra/update-doctor-scan-receipts.js";
 import type { UpdateStepResult } from "../../infra/update-step-result.js";
+import { isStatePostgres } from "../../state/openclaw-state-db-engine.js";
+import { closeOpenClawStateDatabaseByPathAsync } from "../../state/openclaw-state-db.js";
+import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
 
 // The installed driver records the first Doctor receipt here. Its existing backup
 // object is the operation identity shared with post-plugin convergence. No durable cache.
 const historicalScans = new WeakMap<UpdateDatabaseBackup, UpdateDoctorHistoricalScans>();
+
+export async function observeUpdateParentDatabaseWrites(
+  backup: UpdateDatabaseBackup,
+  options: {
+    env: NodeJS.ProcessEnv;
+    root?: string;
+    signal?: AbortSignal;
+    assertCurrent?: () => void;
+  },
+): Promise<void> {
+  const pathname = resolveOpenClawStateSqlitePath(options.env);
+  if (isStatePostgres() || !Object.hasOwn(backup.sourceGenerations, pathname)) {
+    return;
+  }
+  options.assertCurrent?.();
+  try {
+    // Close first so Doctor receives the post-close fingerprint and can take native exclusion.
+    await closeOpenClawStateDatabaseByPathAsync(pathname);
+    const { readUpdateDatabaseGenerationsIsolated } =
+      await import("../../infra/update-candidate-state.js");
+    const generations = await readUpdateDatabaseGenerationsIsolated([pathname], options);
+    options.assertCurrent?.();
+    if (typeof generations[pathname] !== "string") {
+      throw new Error("Update ledger database is unavailable before Doctor admission.");
+    }
+    // Like native Doctor close (#177831), this can absorb raw outside writes during
+    // the update window to the state database the parent itself writes.
+    if (!backup.restoreRefusal) {
+      backup.migration = {
+        name: backup.migration?.name ?? "update ledger writes",
+        backup: backup.directory,
+        from: backup.migration?.from ?? backup.sourceGenerations,
+        to: { ...(backup.migration?.to ?? backup.sourceGenerations), ...generations },
+      };
+    }
+  } catch (error) {
+    backup.restoreRefusal ??= "update ledger database generation could not be observed";
+    throw error;
+  }
+}
 
 export function consumeUpdateDoctorHistoricalScans(
   backup: UpdateDatabaseBackup,

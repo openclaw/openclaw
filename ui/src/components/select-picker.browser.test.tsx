@@ -57,7 +57,7 @@ function labelsFit(picker: SelectPicker) {
 
 type ModelExtras = Partial<
   Pick<ModelPickerParams, "placement" | "custom" | "label" | "value" | "id">
->;
+> & { windowed?: boolean };
 async function mountModel(options: ModelPickerOption[], style: string, extra: ModelExtras = {}) {
   const onChange = vi.fn();
   const params = { label: "Model", value: options[0]!.value, options, ...extra };
@@ -79,46 +79,77 @@ async function mountPickers(content: () => JSX.Element, style = "", direction = 
 }
 
 describe.runIf("__vitest_browser__" in globalThis)("searchable model menu layout", () => {
-  it("keeps the scroll position when the pointer highlights a clipped edge row", async () => {
-    const { userEvent, role } = await browser(1280);
-    const { picker } = await mountModel(numberedModels(60), "width:240px;margin:24px");
+  it("retains virtual rows when a search edit leaves the choices unchanged", async () => {
+    const { page, role } = await browser(390);
+    const { picker } = await mountModel(numberedModels(1000), "width:320px;margin:24px", {
+      windowed: true,
+    });
     await role("button", "Model: Model 0").click();
-    const list = picker.querySelector<HTMLElement>(".picker-select__options")!;
-    const rows = [...picker.querySelectorAll<HTMLElement>('[role="option"]')];
-    await expect.poll(() => list.scrollHeight).toBeGreaterThan(list.clientHeight);
-    const rowHeight = rows[1]!.offsetTop - rows[0]!.offsetTop;
-    const settle = () =>
-      new Promise<void>((resolve) => {
-        requestAnimationFrame(() => requestAnimationFrame(() => resolve()));
-      });
-    for (const edge of ["bottom", "top"] as const) {
-      // Leave half a row clipped at each edge, as a wheel or trackpad scroll does.
-      list.scrollTop = rowHeight * 10 + Math.round(rowHeight / 2);
-      list.dispatchEvent(new Event("scroll"));
-      await settle();
-      const top = list.scrollTop;
-      const bounds = list.getBoundingClientRect();
-      const clipped = rows.find((row) => {
-        const rect = row.getBoundingClientRect();
-        return edge === "bottom"
-          ? rect.top < bounds.bottom - 2 && rect.bottom > bounds.bottom + 2
-          : rect.top < bounds.top - 2 && rect.bottom > bounds.top + 2;
-      })!;
-      expect(clipped, edge).toBeDefined();
-      const rect = clipped.getBoundingClientRect();
-      // Hover the list at the clipped row's visible sliver; hovering the row
-      // itself would let Playwright scroll it into view before moving.
-      const sliver = (Math.max(rect.top, bounds.top) + Math.min(rect.bottom, bounds.bottom)) / 2;
-      await userEvent.hover(list, { position: { x: 24, y: Math.round(sliver - bounds.top) } });
-      await expect.poll(() => clipped.hasAttribute("data-active")).toBe(true);
-      await settle();
-      expect(list.scrollTop, edge).toBe(top);
-    }
-    // Keyboard navigation after a pointer highlight still reveals the next row.
-    const top = list.scrollTop;
-    await userEvent.keyboard("{ArrowUp}");
-    await expect.poll(() => list.scrollTop).toBeLessThan(top);
+    const first = () => picker.querySelector('[role="option"][data-value="fixture/model-0"]');
+    await expect.poll(first).not.toBeNull();
+    const original = first();
+    const search = picker.querySelector<HTMLInputElement>(".picker-select__search")!;
+    await page.elementLocator(search).fill("Model");
+    await new Promise<void>((resolve) => {
+      requestAnimationFrame(() => requestAnimationFrame(() => resolve()));
+    });
+    expect(first()).toBe(original);
+    await page.elementLocator(search).fill("Model 999");
+    await expect.poll(() => picker.querySelectorAll('[role="option"]').length).toBe(1);
+    expect(picker.querySelector('[role="option"]')?.getAttribute("data-value")).toBe(
+      "fixture/model-999",
+    );
   });
+
+  it.each([false, true])(
+    "keeps the scroll position on clipped edge hover (windowed=%s)",
+    async (windowed) => {
+      const { userEvent, role } = await browser(1280);
+      const { picker } = await mountModel(
+        numberedModels(windowed ? 1000 : 60),
+        "width:240px;margin:24px",
+        { windowed },
+      );
+      await role("button", "Model: Model 0").click();
+      const list = picker.querySelector<HTMLElement>(".picker-select__options")!;
+      const rows = () => [...picker.querySelectorAll<HTMLElement>('[role="option"]')];
+      await expect.poll(() => list.scrollHeight).toBeGreaterThan(list.clientHeight);
+      await expect.poll(() => rows()[0]?.getBoundingClientRect().height ?? 0).toBeGreaterThan(0);
+      const rowHeight = rows()[0]!.getBoundingClientRect().height;
+      const settle = () =>
+        new Promise<void>((resolve) => {
+          requestAnimationFrame(() => requestAnimationFrame(() => resolve()));
+        });
+      for (const edge of ["bottom", "top"] as const) {
+        // Leave half a row clipped at each edge, as a wheel or trackpad scroll does.
+        const middle = rowHeight * 10 + Math.round(rowHeight / 2);
+        list.scrollTop = edge === "bottom" ? middle - list.clientHeight : middle;
+        list.dispatchEvent(new Event("scroll"));
+        await settle();
+        const top = list.scrollTop;
+        const bounds = list.getBoundingClientRect();
+        const clipped = rows().find((row) => {
+          const rect = row.getBoundingClientRect();
+          return edge === "bottom"
+            ? rect.top < bounds.bottom - 2 && rect.bottom > bounds.bottom + 2
+            : rect.top < bounds.top - 2 && rect.bottom > bounds.top + 2;
+        })!;
+        expect(clipped, edge).toBeDefined();
+        const rect = clipped.getBoundingClientRect();
+        // Hover the list at the clipped row's visible sliver; hovering the row
+        // itself would let Playwright scroll it into view before moving.
+        const sliver = (Math.max(rect.top, bounds.top) + Math.min(rect.bottom, bounds.bottom)) / 2;
+        await userEvent.hover(list, { position: { x: 24, y: Math.round(sliver - bounds.top) } });
+        await expect.poll(() => clipped.hasAttribute("data-active")).toBe(true);
+        await settle();
+        expect(list.scrollTop, edge).toBe(top);
+      }
+      // Keyboard navigation after a pointer highlight still reveals the next row.
+      const top = list.scrollTop;
+      await userEvent.keyboard("{ArrowUp}");
+      await expect.poll(() => list.scrollTop).toBeLessThan(top);
+    },
+  );
 
   it("reveals keyboard highlights without untracked reactive reads", async () => {
     const warning = vi.spyOn(console, "warn");

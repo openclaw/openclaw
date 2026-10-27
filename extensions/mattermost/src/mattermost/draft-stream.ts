@@ -6,6 +6,7 @@ import { truncateWithMarker } from "openclaw/plugin-sdk/string-normalization-run
 import {
   createMattermostPost,
   deleteMattermostPost,
+  fetchMattermostChannelPosts,
   updateMattermostPost,
   type MattermostClient,
 } from "./client.js";
@@ -121,6 +122,7 @@ export function createMattermostDraftStream(params: {
     seal: sealLifecycle,
   } = createFinalizableDraftLifecycle({
     throttleMs: THROTTLE_MS,
+    coalesceInFlight: true,
     state: streamState,
     sendOrEditStreamMessage,
     readMessageId: () => currentGeneration.postId,
@@ -325,6 +327,22 @@ export function createMattermostDraftStream(params: {
       : { kind: "already-delivered" as const, publishedParts };
   };
 
+  // Generations publish in order, so the current preview is this draft's newest post: anything
+  // after it came from someone else (message tool, a person, another bot). Without collapsed
+  // threads every reply renders in the channel stream, so root-level previews check the whole
+  // channel. Accepted gap: 200+ newer channel posts outside a threaded preview's thread.
+  const findPostAfter = async (postId: string): Promise<string | undefined> => {
+    const { messages } = await fetchMattermostChannelPosts(params.client, params.channelId, {
+      after: postId,
+      limit: 200,
+      skipFetchThreads: true,
+    });
+    return messages.find(
+      (post) =>
+        !post.type?.startsWith("system_") && (!params.rootId || post.root_id === params.rootId),
+    )?.id;
+  };
+
   params.log?.(
     `mattermost stream preview ready (maxChars=${MATTERMOST_STREAM_MAX_CHARS}, throttleMs=${THROTTLE_MS})`,
   );
@@ -342,5 +360,6 @@ export function createMattermostDraftStream(params: {
     forceNewMessage,
     settleBoundaries,
     resolveFinalText,
+    findPostAfter,
   };
 }

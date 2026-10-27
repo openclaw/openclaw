@@ -77,6 +77,19 @@ async function startInjection(
     },
     detachBackend: vi.fn(),
   } as unknown as NonNullable<PreparedCliRunContext["params"]["replyOperation"]>;
+  const running = runInjectablePlugin(context, onMessage);
+  await vi.waitFor(() => expect(handle?.messageInjectionV2?.isAvailable()).toBe(true));
+  const injection = handle!.messageInjectionV2!;
+  const queue = (
+    text: string,
+    options?: Parameters<typeof injection.queueMessage>[1],
+    assertCurrent = () => {},
+  ) => injection.queueMessage(text, options, assertCurrent, "run");
+  return { injection, queue, ...running, signal: running.signal() };
+}
+
+function runInjectablePlugin(context: PreparedCliRunContext, onMessage: (text: string) => void) {
+  const ready = createDeferred();
   const finish = createDeferred();
   let signal: AbortSignal | undefined;
   const run = runPlugin(context, async function* (execution) {
@@ -87,32 +100,38 @@ async function startInjection(
         await withCurrent(() => onMessage(text));
       },
     });
+    ready.resolve();
     await finish.promise;
     yield SUCCESS_RESULT;
   });
-  await vi.waitFor(() => expect(handle?.messageInjectionV2?.isAvailable()).toBe(true));
-  const injection = handle!.messageInjectionV2!;
-  const queue = (
-    text: string,
-    options?: Parameters<typeof injection.queueMessage>[1],
-    assertCurrent = () => {},
-  ) => injection.queueMessage(text, options, assertCurrent, "run");
-  return { injection, queue, finish, run, signal };
+  return { ready, finish, run, signal: () => signal };
+}
+
+function attachReplyOperation(context: PreparedCliRunContext) {
+  const operation = createReplyOperation({
+    sessionKey: context.params.sessionKey!,
+    sessionId: context.params.sessionId,
+    resetTriggered: false,
+  });
+  context.params.replyOperation = operation;
+  return operation;
 }
 
 function installBeforeToolCallHook(
   handler: PluginHookHandlerMap["before_tool_call"],
   matcher?: [string, ...string[]],
+  pluginId?: string,
 ) {
-  initializeGlobalHookRunner(
-    createMockPluginRegistry([
-      {
-        hookName: "before_tool_call",
-        handler: (...args) => Reflect.apply(handler, undefined, args),
-        ...(matcher ? { matcher } : {}),
-      },
-    ]),
-  );
+  const registry = createMockPluginRegistry([
+    {
+      hookName: "before_tool_call",
+      handler: (...args) => Reflect.apply(handler, undefined, args),
+      ...(matcher ? { matcher } : {}),
+      ...(pluginId ? { pluginId } : {}),
+    },
+  ]);
+  initializeGlobalHookRunner(registry);
+  return registry;
 }
 
 afterEach(() => {
@@ -144,10 +163,7 @@ describe("plugin-owned CLI native tool policy", () => {
     initializeGlobalHookRunner(previous);
     const { context: first } = await createExecution({ nativeTools: ["Bash"] });
     await transportScope(() =>
-      runPlugin(first, async function* (execution) {
-        await expect(requestNativeTool(execution)).resolves.toMatchObject({ behavior: "allow" });
-        yield SUCCESS_RESULT;
-      }),
+      expect(decideNativeTool(first)).resolves.toMatchObject({ behavior: "allow" }),
     );
     expect(oldHook).toHaveBeenCalledOnce();
 
@@ -156,15 +172,7 @@ describe("plugin-owned CLI native tool policy", () => {
       event.params.command === "echo blocked"
         ? { block: true, blockReason: "current policy blocked" }
         : undefined;
-    const current = createMockPluginRegistry([
-      {
-        hookName: "before_tool_call",
-        pluginId: "guard",
-        matcher: ["exec"],
-        handler: (...args) => Reflect.apply(currentHook, undefined, args),
-      },
-    ]);
-    initializeGlobalHookRunner(current);
+    const current = installBeforeToolCallHook(currentHook, ["exec"], "guard");
     const { context: next } = await createExecution({ nativeTools: ["Bash"] });
     await withPluginRuntimeGenerationRegistryScope(current, () =>
       runPlugin(next, async function* (execution) {
@@ -301,7 +309,7 @@ describe("plugin-owned CLI native tool policy", () => {
   });
 
   it("projects rewritten canonical file arguments back into the native Edit schema", async () => {
-    const hook = vi.fn(async () => ({
+    const hook = vi.fn(async (_event: unknown) => ({
       params: {
         path: "/tmp/approved.txt",
         edits: [{ oldText: "safe-before", newText: "safe-after" }],
@@ -316,16 +324,13 @@ describe("plugin-owned CLI native tool policy", () => {
       replace_all: false,
     });
 
-    expect(hook).toHaveBeenCalledWith(
-      expect.objectContaining({
-        toolName: "edit",
-        params: expect.objectContaining({
-          path: "/tmp/original.txt",
-          edits: [{ oldText: "before", newText: "after" }],
-        }),
-      }),
-      expect.anything(),
-    );
+    expect(hook.mock.calls[0]?.[0]).toMatchObject({
+      toolName: "edit",
+      params: {
+        path: "/tmp/original.txt",
+        edits: [{ oldText: "before", newText: "after" }],
+      },
+    });
     expect(decision).toEqual({
       behavior: "allow",
       updatedInput: {
@@ -428,12 +433,7 @@ describe("CLI MCP capture authority", () => {
     vi.useFakeTimers();
     const source = new AbortController();
     const { context } = await createExecution({ abortSignal: source.signal, timeoutMs: 100 });
-    const operation = createReplyOperation({
-      sessionKey: context.params.sessionKey!,
-      sessionId: context.params.sessionId,
-      resetTriggered: false,
-    });
-    context.params.replyOperation = operation;
+    const operation = attachReplyOperation(context);
     const runtimeOwnerToken = `runtime-${context.params.runId}`;
     const grant = mintMcpLoopbackClientGrant({
       context: { sessionKey: context.params.sessionKey!, senderIsOwner: false },
@@ -450,9 +450,7 @@ describe("CLI MCP capture authority", () => {
           targetToken,
           runtimeOwnerToken,
         }),
-      revokeProcessToken: () => {
-        revokeMcpLoopbackClientGrant(grant.token);
-      },
+      revokeProcessToken: () => void revokeMcpLoopbackClientGrant(grant.token),
       activate: (captureKey, assertCurrent) =>
         void activateMcpLoopbackClientGrantCapture({ ...owner, captureKey, assertCurrent }),
       deactivate: (captureKey) =>
@@ -529,9 +527,9 @@ describe("plugin-owned CLI same-turn input", () => {
   it("exposes plugin same-turn input to the reply run only while its turn is active", async () => {
     const { context } = await createExecution();
     const queued: string[] = [];
-    const { injection, queue, finish, run } = await startInjection(context, (text) => {
-      queued.push(text);
-    });
+    const { injection, queue, finish, run } = await startInjection(context, (text) =>
+      queued.push(text),
+    );
 
     await expect(
       queue("revoked", undefined, () => {
@@ -640,29 +638,10 @@ describe("plugin-owned CLI same-turn input", () => {
     const { context } = await createExecution();
     context.params.sourceReplyDeliveryMode = "message_tool_only";
     context.params.taskSuggestionDeliveryMode = "gateway";
-    const operation = createReplyOperation({
-      sessionKey: context.params.sessionKey!,
-      sessionId: context.params.sessionId,
-      resetTriggered: false,
-    });
-    context.params.replyOperation = operation;
+    const operation = attachReplyOperation(context);
     operation.setPhase("running");
-    const ready = createDeferred();
-    const finish = createDeferred();
     const queued: string[] = [];
-    const run = runPlugin(context, async function* (execution) {
-      execution.registerMessageInjection?.({
-        isAvailable: () => true,
-        queueMessage: async (text, withCurrent) => {
-          await withCurrent(() => {
-            queued.push(text);
-          });
-        },
-      });
-      ready.resolve();
-      await finish.promise;
-      yield SUCCESS_RESULT;
-    });
+    const { ready, finish, run } = runInjectablePlugin(context, (text) => queued.push(text));
     try {
       await awaitGateBeforeSettlement(
         ready.promise,

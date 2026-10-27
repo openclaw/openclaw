@@ -102,11 +102,12 @@
 }
 
 :root[data-theme-mode="light"]
-  .session-progress-card--composer:not(.session-progress-card--details) {
+  .session-progress-card--composer:not(.session-progress-card--details),
+:root[data-theme-mode="light"] .chat-queue {
   border-color: var(--chat-composer-light-outline);
 }
 
-:root[data-theme-mode="light"] :is(.chat-queue, .agent-chat__goal--active) {
+:root[data-theme-mode="light"] .agent-chat__goal--active {
   border-color: transparent;
   box-shadow: inset 0 0 0 1px var(--chat-composer-light-outline);
 }
@@ -789,6 +790,14 @@
 .agent-chat__input .agent-chat__input-btn--attach {
   position: relative;
   color: color-mix(in srgb, var(--icon-interactive, var(--chat-composer-secondary)) 90%, white);
+}
+
+:where(:root[data-theme-mode="light"]) .agent-chat__input .agent-chat__input-btn--attach {
+  color: color-mix(
+    in srgb,
+    var(--icon-interactive, var(--chat-composer-secondary)) 90%,
+    var(--text-strong)
+  );
 }
 
 .agent-chat__input .agent-chat__attach-menu .agent-chat__input-btn.agent-chat__input-btn--attach {

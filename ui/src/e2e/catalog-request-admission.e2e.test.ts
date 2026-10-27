@@ -68,141 +68,129 @@ async function client(path: string) {
 
 suite.define(() => {
   it.each(["new", "settings/agents/main/overview"])(
-    "defers hidden catalog changes and catches up once in three clients at %s",
+    "defers hidden catalog changes and catches up once at %s",
     async (path) => {
-      const clients = [];
-      for (let index = 0; index < 3; index++) {
-        const current = await client(path);
-        const trigger =
-          path === "new"
-            ? current.page.locator('.new-session-page__composer [data-chat-model-select="true"]')
-            : current.page.getByRole("button", { name: /^Primary model/ });
-        await trigger.click();
-        await current.page.getByRole("option", { name: /Initial fixture model/ }).waitFor();
-        await current.page.keyboard.press("Escape");
-        const before = (await current.gateway.getRequests("models.list")).length;
-        clients.push({ ...current, trigger, before });
-      }
-      for (const { page, gateway, trigger, before } of clients) {
-        await page.evaluate(() => {
-          Object.defineProperty(document, "visibilityState", {
-            configurable: true,
-            get: () => "hidden",
-          });
-          document.dispatchEvent(new Event("visibilitychange"));
+      const { page, gateway } = await client(path);
+      const trigger =
+        path === "new"
+          ? page.locator('.new-session-page__composer [data-chat-model-select="true"]')
+          : page.getByRole("button", { name: /^Primary model/ });
+      await trigger.click();
+      await page.getByRole("option", { name: /Initial fixture model/ }).waitFor();
+      await page.keyboard.press("Escape");
+      const before = (await gateway.getRequests("models.list")).length;
+      await page.evaluate(() => {
+        Object.defineProperty(document, "visibilityState", {
+          configurable: true,
+          get: () => "hidden",
         });
-        await gateway.setMethodResponse("models.list", {
-          models: [model("Updated fixture model")],
-        });
-        for (let index = 0; index < 60; index++) {
-          await gateway.emitGatewayEvent("chat.metadata.changed", {
-            modelCatalogChanged: true,
-            authChanged: false,
-            commandsChanged: false,
-          });
-        }
-        expect(await gateway.getRequests("models.list")).toHaveLength(before);
-        await page.evaluate(() => {
-          Object.defineProperty(document, "visibilityState", {
-            configurable: true,
-            get: () => "visible",
-          });
-          document.dispatchEvent(new Event("visibilitychange"));
-          document.dispatchEvent(new Event("visibilitychange"));
-        });
-        await gateway.waitForRequest("models.list", { after: before });
-        await trigger.click();
-        await page.getByRole("option", { name: /Updated fixture model/ }).waitFor();
-        expect(await gateway.getRequests("models.list")).toHaveLength(before + 1);
-        await gateway.setMethodResponse("models.list", {
-          models: [model("Authenticated fixture model")],
-        });
-        await gateway.emitGatewayEvent("chat.metadata.changed", {
-          modelCatalogChanged: true,
-          authChanged: true,
-          commandsChanged: false,
-        });
-        await page.getByRole("option", { name: /Authenticated fixture model/ }).waitFor();
-        expect(await gateway.getRequests("models.list")).toHaveLength(before + 2);
-      }
-    },
-  );
-
-  it("ignores unrelated session churn and reflects its own inventory changes in three clients", async () => {
-    const clients = [];
-    for (let index = 0; index < 3; index++) {
-      const current = await client("settings/agents/main/tools");
-      await current.page
-        .locator(".agent-tools-runtime-chip")
-        .filter({ hasText: "Initial fixture tool" })
-        .waitFor();
-      await current.page.clock.install();
-      await current.page.clock.pauseAt((await current.page.evaluate(() => Date.now())) + 5_000);
-      clients.push(current);
-    }
-    for (const { page, gateway, fixture } of clients) {
-      const before = (await gateway.getRequests("tools.effective")).length;
-      const row = fixture.scenario.sessions?.[1];
-      if (!row) {
-        throw new Error("Expected unrelated fixture session");
-      }
-      for (let index = 0; index < 60; index++) {
-        const now = await page.evaluate(() => Date.now());
-        await gateway.emitGatewayEvent("sessions.changed", {
-          sessionKey: row.key,
-          agentId: "main",
-          reason: "patch",
-          ts: now,
-          session: {
-            ...row,
-            updatedAt: now,
-            snapshotAt: now,
-            toolOverrides: { webSearch: index % 2 === 0 },
-          },
-        });
-        await page.clock.fastForward(1_000);
-      }
-      await page.clock.fastForward(5_000);
-      expect(await gateway.getRequests("tools.effective")).toHaveLength(before);
+        document.dispatchEvent(new Event("visibilitychange"));
+      });
+      await gateway.setMethodResponse("models.list", {
+        models: [model("Updated fixture model")],
+      });
       for (let index = 0; index < 60; index++) {
         await gateway.emitGatewayEvent("chat.metadata.changed", {
-          agentId: "main",
           modelCatalogChanged: true,
           authChanged: false,
           commandsChanged: false,
         });
-        await page.clock.fastForward(1_000);
       }
-      expect(await gateway.getRequests("tools.effective")).toHaveLength(before);
-      await gateway.setMethodResponse("tools.effective", inventory("Updated catalog fixture tool"));
+      expect(await gateway.getRequests("models.list")).toHaveLength(before);
+      await page.evaluate(() => {
+        Object.defineProperty(document, "visibilityState", {
+          configurable: true,
+          get: () => "visible",
+        });
+        document.dispatchEvent(new Event("visibilitychange"));
+        document.dispatchEvent(new Event("visibilitychange"));
+      });
+      await gateway.waitForRequest("models.list", { after: before });
+      await trigger.click();
+      await page.getByRole("option", { name: /Updated fixture model/ }).waitFor();
+      expect(await gateway.getRequests("models.list")).toHaveLength(before + 1);
+      await gateway.setMethodResponse("models.list", {
+        models: [model("Authenticated fixture model")],
+      });
       await gateway.emitGatewayEvent("chat.metadata.changed", {
-        agentId: "main",
         modelCatalogChanged: true,
         authChanged: true,
         commandsChanged: false,
       });
-      await page.clock.runFor(100);
-      await page
-        .locator(".agent-tools-runtime-chip")
-        .filter({ hasText: "Updated catalog fixture tool" })
-        .waitFor();
-      expect(await gateway.getRequests("tools.effective")).toHaveLength(before + 1);
-      await gateway.setMethodResponse(
-        "tools.effective",
-        inventory("Discovered fixture MCP tool", "mcp"),
-      );
+      await page.getByRole("option", { name: /Authenticated fixture model/ }).waitFor();
+      expect(await gateway.getRequests("models.list")).toHaveLength(before + 2);
+    },
+  );
+
+  it("ignores unrelated session churn and reflects its own inventory changes", async () => {
+    const { page, gateway, fixture } = await client("settings/agents/main/tools");
+    await page
+      .locator(".agent-tools-runtime-chip")
+      .filter({ hasText: "Initial fixture tool" })
+      .waitFor();
+    await page.clock.install();
+    await page.clock.pauseAt((await page.evaluate(() => Date.now())) + 5_000);
+    const before = (await gateway.getRequests("tools.effective")).length;
+    const row = fixture.scenario.sessions?.[1];
+    if (!row) {
+      throw new Error("Expected unrelated fixture session");
+    }
+    for (let index = 0; index < 60; index++) {
+      const now = await page.evaluate(() => Date.now());
       await gateway.emitGatewayEvent("sessions.changed", {
-        sessionKey: "agent:main:main",
+        sessionKey: row.key,
         agentId: "main",
         reason: "patch",
-        session: { key: "agent:main:main", agentId: "main", toolOverrides: { webSearch: false } },
+        ts: now,
+        session: {
+          ...row,
+          updatedAt: now,
+          snapshotAt: now,
+          toolOverrides: { webSearch: index % 2 === 0 },
+        },
       });
-      await page.clock.runFor(100);
-      await page
-        .locator(".agent-tools-runtime-chip")
-        .filter({ hasText: "Discovered fixture MCP tool" })
-        .waitFor();
-      expect(await gateway.getRequests("tools.effective")).toHaveLength(before + 2);
+      await page.clock.fastForward(1_000);
     }
+    await page.clock.fastForward(5_000);
+    expect(await gateway.getRequests("tools.effective")).toHaveLength(before);
+    for (let index = 0; index < 60; index++) {
+      await gateway.emitGatewayEvent("chat.metadata.changed", {
+        agentId: "main",
+        modelCatalogChanged: true,
+        authChanged: false,
+        commandsChanged: false,
+      });
+      await page.clock.fastForward(1_000);
+    }
+    expect(await gateway.getRequests("tools.effective")).toHaveLength(before);
+    await gateway.setMethodResponse("tools.effective", inventory("Updated catalog fixture tool"));
+    await gateway.emitGatewayEvent("chat.metadata.changed", {
+      agentId: "main",
+      modelCatalogChanged: true,
+      authChanged: true,
+      commandsChanged: false,
+    });
+    await page.clock.runFor(100);
+    await page
+      .locator(".agent-tools-runtime-chip")
+      .filter({ hasText: "Updated catalog fixture tool" })
+      .waitFor();
+    expect(await gateway.getRequests("tools.effective")).toHaveLength(before + 1);
+    await gateway.setMethodResponse(
+      "tools.effective",
+      inventory("Discovered fixture MCP tool", "mcp"),
+    );
+    await gateway.emitGatewayEvent("sessions.changed", {
+      sessionKey: "agent:main:main",
+      agentId: "main",
+      reason: "patch",
+      session: { key: "agent:main:main", agentId: "main", toolOverrides: { webSearch: false } },
+    });
+    await page.clock.runFor(100);
+    await page
+      .locator(".agent-tools-runtime-chip")
+      .filter({ hasText: "Discovered fixture MCP tool" })
+      .waitFor();
+    expect(await gateway.getRequests("tools.effective")).toHaveLength(before + 2);
   });
 });

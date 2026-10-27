@@ -2567,6 +2567,7 @@ a:is(
 .settings-sidebar__item--active:hover,
 .nav-item--active:hover,
 .nav-item.active:hover {
+  color: var(--text-strong);
   background: var(--surface-selected-hover);
 }
 

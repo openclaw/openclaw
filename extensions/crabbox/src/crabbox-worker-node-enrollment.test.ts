@@ -454,12 +454,12 @@ describe.skipIf(process.platform === "win32")("source node bootstrap", () => {
       }
       return commandResult();
     });
+    const warn = vi.fn();
     const manager = createCrabboxWarmImageManager({
       state: crabboxState,
+      isLeaseActive: () => false,
       prepareCapture: async () => {},
-      warn: (message) => {
-        throw new Error(message);
-      },
+      warn,
     });
     for (const [index, artifact] of [oldArtifact, currentArtifact, currentArtifact].entries()) {
       const current = context(`cbx_child_${index}`, artifact.nodeBootstrap.sha256);
@@ -487,6 +487,9 @@ describe.skipIf(process.platform === "win32")("source node bootstrap", () => {
         (await openCrabboxWarmImageStore(crabboxState).entries())[0]!.value.image?.checkpointId,
       ).toBe(`chk_fixture_${Math.min(index + 1, 2)}`);
     }
+    expect(warn).toHaveBeenCalledExactlyOnceWith(
+      expect.stringMatching(/checkpoint chk_fixture_1 retirement held:.*cbx_child_1/u),
+    );
     expect(forkChoices).toEqual(["chk_fixture_1", "chk_fixture_2"]);
     const entries = await openCrabboxWarmImageStore(crabboxState).entries();
     expect(entries).toHaveLength(1);

@@ -44,6 +44,51 @@ it("reuses row redactions before copying while evaluating current model visibili
   expect(variants).toEqual([first]);
 });
 
+it.each([true, false])(
+  "filters explicit Access grants on every runtime choice (model ceiling=%s)",
+  (restricted) => {
+    const allows = ({ model }: { model: string }) => model === "fixture";
+    const projection = prepareOperatorModelPolicyPresentation({
+      cfg: {},
+      policy: restricted ? { models: [], allows } : undefined,
+      rolePolicy: { accessPrograms: { cyber: ["daybreak_blue"] } },
+    })!;
+    const programs = { cyber: ["standard", "daybreak_blue", "daybreak_red"] as const };
+    const input = {
+      models: [
+        {
+          provider: "openai",
+          id: "fixture",
+          name: "Fixture",
+          availableAccessPrograms: { cyber: [...programs.cyber] },
+          runtimeChoices: [
+            {
+              agentRuntime: { id: "codex", label: "Codex", source: "model" as const },
+              availableAccessPrograms: { cyber: [...programs.cyber] },
+            },
+          ],
+        },
+      ],
+    };
+    const result = projection.forAgent("main").catalog(input);
+    expect(result.models[0]?.availableAccessPrograms?.cyber).toEqual(["standard", "daybreak_blue"]);
+    expect(result.models[0]?.runtimeChoices?.[0]?.availableAccessPrograms?.cyber).toEqual([
+      "standard",
+      "daybreak_blue",
+    ]);
+    expect(input.models[0]?.availableAccessPrograms.cyber).toEqual(programs.cyber);
+    if (!restricted) {
+      expect(result.modelSelectionPolicy).toBeUndefined();
+      const defaults = { model: "fixture", modelProvider: "openai", contextTokens: 1000 };
+      expect(projection.forAgent("main").defaults(defaults)).toBe(defaults);
+    }
+    const ungranted = prepareOperatorModelPolicyPresentation({ cfg: {}, rolePolicy: {} })!;
+    expect(
+      ungranted.forAgent("main").catalog(input).models[0]?.availableAccessPrograms?.cyber,
+    ).toEqual(["standard"]);
+  },
+);
+
 const loadManifestMetadataSnapshot = vi.hoisted(() => vi.fn());
 vi.mock("../plugins/manifest-contract-eligibility.js", async (importOriginal) => {
   const actual =

@@ -381,6 +381,58 @@ describe("sidebar projection memo", () => {
     }
   });
 
+  it("keeps accepted create display outside roster membership until canonical takeover", async () => {
+    const old = session("old");
+    const created = session("created");
+    const { sidebar, context, gateway, publish, row } = await mount([old]);
+    await update(sidebar, { activeRouteId: "chat", sessionKey: created.key });
+    gateway.publish({ sessionKey: created.key });
+    let sameIdentity = true;
+    const accept = () =>
+      context.chatSubmissions.acceptCreate({
+        creation: { sessionKey: created.key, admitted: true },
+        displayName: "Accepted title",
+        canDisplay: () => sameIdentity,
+      });
+    accept();
+    await settleLitElement(sidebar);
+    const display = () => sidebar.querySelector(".sidebar-recent-session--creating");
+    expect(display()?.textContent).toContain("Accepted title");
+    expect(display()?.querySelector('[aria-busy="true"]')).toBeNull();
+    expect(context.chatSubmissions.creation).toBeUndefined();
+    expect(sidebar.sessionData.sessionsResult?.sessions).toEqual([old]);
+    sameIdentity = false;
+    sidebar.invalidate();
+    await settleLitElement(sidebar);
+    expect(display()).toBeNull();
+    sameIdentity = true;
+    accept();
+    await update(sidebar, { sessionsStatusFilter: "archived" });
+    expect(display()).toBeNull();
+    await update(sidebar, { sessionsStatusFilter: "active" });
+    expect(display()).not.toBeNull();
+    sidebar.setSessionOwnerFilter("bob");
+    await settleLitElement(sidebar);
+    expect(display()).not.toBeNull();
+    expect(row(created.key)).toBeNull();
+    sidebar.setSessionOwnerFilter(null);
+    publish([old, created]);
+    await settleLitElement(sidebar);
+    expect(display()).toBeNull();
+    expect(row(created.key)).not.toBeNull();
+    expect(context.chatSubmissions.readAcceptedCreate()).toBeUndefined();
+    publish([old]);
+    await settleLitElement(sidebar);
+    expect(display()).toBeNull();
+    accept();
+    gateway.publish({ sessionKey: old.key });
+    await settleLitElement(sidebar);
+    expect(context.chatSubmissions.readAcceptedCreate()).toBeUndefined();
+    gateway.publish({ sessionKey: created.key });
+    await settleLitElement(sidebar);
+    expect(display()).toBeNull();
+  });
+
   it("refreshes Home and route selection after accepted row changes", async () => {
     const home = session("main", { lastMessagePreview: "Home before" });
     const first = session("first");

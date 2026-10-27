@@ -8,12 +8,7 @@ import {
 import { createSlackReadClient } from "./client.js";
 import { formatSlackError } from "./errors.js";
 
-export type SlackScopesResult = {
-  ok: boolean;
-  scopes?: string[];
-  source?: string;
-  error?: string;
-};
+export type SlackScopesResult = Awaited<ReturnType<typeof fetchSlackScopes>>;
 
 type SlackScopesSource = "auth.scopes" | "apps.permissions.info";
 type SlackScopesMethod = "auth.test" | SlackScopesSource;
@@ -71,10 +66,7 @@ async function callSlack(
   }
 }
 
-export async function fetchSlackScopes(
-  token: string,
-  timeoutMs: number,
-): Promise<SlackScopesResult> {
+export async function fetchSlackScopes(token: string, timeoutMs: number) {
   const client = createSlackReadClient(token, { timeout: timeoutMs });
   const attempts: SlackScopesMethod[] = ["auth.test", "auth.scopes", "apps.permissions.info"];
   const errors: string[] = [];

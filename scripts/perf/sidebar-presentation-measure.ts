@@ -308,6 +308,8 @@ try {
   );
   const backfillDeadline = Date.now() + 120_000;
   while (pendingBackfill.size) {
+    // Keep admitting the live page while optional transcript facts settle.
+    await list(0);
     for (const key of pendingBackfill) {
       if (
         projection.capture({ agentId: "main", key })?.retainedDatabaseFacts

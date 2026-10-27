@@ -9,7 +9,7 @@ import {
   type AssistantMessageEvent,
   type AssistantMessageEventStream,
 } from "openclaw/plugin-sdk/llm";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { notifyProviderStreamOpened } from "../../../../packages/ai/src/transports/transport-stream-shared.js";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import {
@@ -31,50 +31,85 @@ import { createZeroUsageFixture } from "../../test-helpers/usage-fixtures.js";
 import { wrapStreamFnRepairMalformedToolCallArguments } from "./attempt.tool-call-argument-repair.js";
 import { streamWithIdleTimeout } from "./llm-idle-timeout.js";
 
+function openStream(
+  baseFn: StreamFn,
+  onTimeout?: Parameters<typeof streamWithIdleTimeout>[2],
+  watchdogOptions?: Parameters<typeof streamWithIdleTimeout>[3],
+  options: Parameters<StreamFn>[2] = {},
+) {
+  return streamWithIdleTimeout(
+    baseFn,
+    50,
+    onTimeout,
+    watchdogOptions,
+  )({} as Parameters<StreamFn>[0], {} as Parameters<StreamFn>[1], options);
+}
+
+function sourceFixture(
+  source: ReturnType<StreamFn> | StreamFn,
+  watchdogOptions?: Parameters<typeof streamWithIdleTimeout>[3],
+  options?: Parameters<StreamFn>[2],
+  decorate: (stream: StreamFn) => StreamFn = (stream) => stream,
+) {
+  let signal: AbortSignal | undefined;
+  const onTimeout = vi.fn();
+  const producer: StreamFn = (model, context, request) => {
+    signal = request?.signal;
+    return typeof source === "function" ? source(model, context, request) : source;
+  };
+  return {
+    stream: openStream(decorate(producer), onTimeout, watchdogOptions, options),
+    onTimeout,
+    signal: () => signal,
+  };
+}
+
+function textDelta(delta: string) {
+  return { type: "text_delta" as const, contentIndex: 0, delta };
+}
+
+async function expectDelta(
+  next: Promise<IteratorResult<AssistantMessageEvent>>,
+  delay: number,
+  delta: string,
+) {
+  await vi.advanceTimersByTimeAsync(delay);
+  await expect(next).resolves.toEqual({ done: false, value: textDelta(delta) });
+}
+
+const TEST_RUN = "test-run";
+beforeEach(() => vi.useFakeTimers());
+afterEach(() => {
+  clearToolActivityRun(TEST_RUN);
+  vi.restoreAllMocks();
+  vi.useRealTimers();
+});
+
 describe("streamWithIdleTimeout", () => {
-  const TEST_RUN = "test-run";
-
-  afterEach(() => {
-    clearToolActivityRun(TEST_RUN);
-    vi.restoreAllMocks();
-    vi.useRealTimers();
-  });
-
   it("keeps watchdog allocations and abort subscriptions bounded across streamed deltas", async () => {
-    vi.useFakeTimers();
     const timers = vi.spyOn(globalThis, "setTimeout");
     const caller = new AbortController();
     const listeners = vi.spyOn(caller.signal, "addEventListener");
     const source = createAssistantMessageEventStream();
-    let signal: AbortSignal | undefined;
-    const baseFn: StreamFn = (_model, _context, options) => {
-      signal = options?.signal;
-      return source;
-    };
-    const onTimeout = vi.fn();
-    const stream = await streamWithIdleTimeout(baseFn, 50, onTimeout)(
-      {} as Parameters<StreamFn>[0],
-      { messages: [] },
-      { signal: caller.signal },
-    );
-    const iterator = stream[Symbol.asyncIterator]();
+    const watched = sourceFixture(source, undefined, { signal: caller.signal });
+    const iterator = (await watched.stream)[Symbol.asyncIterator]();
     try {
       for (let index = 0; index < 16; index += 1) {
         const next = iterator.next();
         await vi.advanceTimersByTimeAsync(10);
-        notifyLlmRequestActivity(signal);
-        const event = { type: "text_delta" as const, contentIndex: 0, delta: String(index) };
+        notifyLlmRequestActivity(watched.signal());
+        const event = textDelta(String(index));
         source.push(event);
         expect((await next).value).toBe(event);
       }
-      expect(onTimeout).not.toHaveBeenCalled();
+      expect(watched.onTimeout).not.toHaveBeenCalled();
       expect(timers.mock.calls.length).toBeLessThanOrEqual(4);
       expect(listeners.mock.calls.length).toBeLessThanOrEqual(2);
       const pending = iterator.next().catch((error: unknown) => error);
       caller.abort(new Error("cancel after deltas"));
       expect(await pending).toMatchObject({ name: "AbortError", message: "cancel after deltas" });
       await vi.advanceTimersByTimeAsync(100);
-      expect(onTimeout).not.toHaveBeenCalled();
+      expect(watched.onTimeout).not.toHaveBeenCalled();
     } finally {
       source.end(makeAgentAssistantMessage({ content: [], stopReason: "aborted" }));
       await iterator.return?.();
@@ -82,47 +117,29 @@ describe("streamWithIdleTimeout", () => {
   });
 
   it("throws when a promise stream never resolves", async () => {
-    vi.useFakeTimers();
-    let streamSignal: AbortSignal | undefined;
-    const baseFn = vi.fn((_model, _context, options) => {
-      streamSignal = options?.signal;
-      // Simulate providers that hang during stream creation but honor abort
-      // once the idle watchdog fires.
-      return new Promise<AssistantMessageEventStream>((_resolve, reject) => {
-        streamSignal?.addEventListener("abort", () => {
-          reject(toLintErrorObject(streamSignal?.reason, "Non-Error rejection"));
-        });
-      });
-    });
-    const onIdleTimeout = vi.fn();
-    const wrapped = streamWithIdleTimeout(baseFn, 50, onIdleTimeout);
-
-    const model = {} as Parameters<typeof baseFn>[0];
-    const context = {} as Parameters<typeof baseFn>[1];
-    const options = {} as Parameters<typeof baseFn>[2];
-
-    const stream = expect(wrapped(model, context, options)).rejects.toThrow(/LLM idle timeout/);
+    const watched = sourceFixture(
+      (_model, _context, options) =>
+        new Promise<AssistantMessageEventStream>((_resolve, reject) => {
+          options?.signal?.addEventListener("abort", () => {
+            reject(toLintErrorObject(options?.signal?.reason, "Non-Error rejection"));
+          });
+        }),
+    );
+    const stream = expect(watched.stream).rejects.toThrow(/LLM idle timeout/);
     await vi.advanceTimersByTimeAsync(50);
     await stream;
 
-    expect(onIdleTimeout).toHaveBeenCalledTimes(1);
-    expect(streamSignal?.aborted).toBe(true);
+    expect(watched.onTimeout).toHaveBeenCalledOnce();
+    expect(watched.signal()?.aborted).toBe(true);
   });
 
   it("clears setup state when baseFn throws synchronously", async () => {
-    vi.useFakeTimers();
     const setupError = new Error("sync provider setup failed");
     const baseFn = vi.fn(() => {
       throw setupError;
     }) as unknown as Parameters<typeof streamWithIdleTimeout>[0];
     const onIdleTimeout = vi.fn();
-    const wrapped = streamWithIdleTimeout(baseFn, 50, onIdleTimeout);
-
-    const model = {} as Parameters<typeof baseFn>[0];
-    const context = {} as Parameters<typeof baseFn>[1];
-    const options = {} as Parameters<typeof baseFn>[2];
-
-    expect(() => wrapped(model, context, options)).toThrow("sync provider setup failed");
+    expect(() => openStream(baseFn, onIdleTimeout)).toThrow("sync provider setup failed");
     await vi.advanceTimersByTimeAsync(500);
 
     expect(onIdleTimeout).not.toHaveBeenCalled();
@@ -136,7 +153,6 @@ describe("streamWithIdleTimeout", () => {
   ] as const)(
     "guards a pending factory after $event with a $firstEventTimeoutMs ms creation budget",
     async ({ event, firstEventTimeoutMs }) => {
-      vi.useFakeTimers();
       const timers = vi.spyOn(globalThis, "setTimeout");
       for (const scope of ["creation-and-gaps", "creation-only"] as const) {
         timers.mockClear();
@@ -159,11 +175,7 @@ describe("streamWithIdleTimeout", () => {
           firstEventTimeoutMs,
         };
         const opening = Promise.resolve(
-          streamWithIdleTimeout(baseFn, 50, onIdleTimeout, { scope })(
-            {} as Parameters<StreamFn>[0],
-            { messages: [] },
-            options,
-          ),
+          openStream(baseFn, onIdleTimeout, { scope }, options),
         ).catch((error: unknown) => error);
         try {
           await vi.advanceTimersByTimeAsync(20);
@@ -198,7 +210,6 @@ describe("streamWithIdleTimeout", () => {
   it.each([false, true])(
     "keeps the accepted deadline until the iterator watchdog takes over (consume: %s)",
     async (consume) => {
-      vi.useFakeTimers();
       const created = createDeferred<AssistantMessageEventStream>();
       const source = createAssistantMessageEventStream();
       const onIdleTimeout = vi.fn();
@@ -206,11 +217,7 @@ describe("streamWithIdleTimeout", () => {
         notifyLlmRequestActivity(options?.signal);
         return created.promise;
       };
-      const opening = streamWithIdleTimeout(
-        baseFn,
-        50,
-        onIdleTimeout,
-      )({} as Parameters<StreamFn>[0], { messages: [] });
+      const opening = openStream(baseFn, onIdleTimeout);
       await vi.advanceTimersByTimeAsync(20);
       created.resolve(source);
       const stream = await opening;
@@ -237,15 +244,11 @@ describe("streamWithIdleTimeout", () => {
   );
 
   it("keeps one local creation deadline when an async producer returns before headers", async () => {
-    vi.useFakeTimers();
     const created = createDeferred<AssistantMessageEventStream>();
     const source = createAssistantMessageEventStream();
     const onIdleTimeout = vi.fn();
     const baseFn: StreamFn = () => created.promise;
-    const opening = streamWithIdleTimeout(baseFn, 50, onIdleTimeout, { scope: "creation-only" })(
-      {} as Parameters<StreamFn>[0],
-      { messages: [] },
-    );
+    const opening = openStream(baseFn, onIdleTimeout, { scope: "creation-only" });
     await vi.advanceTimersByTimeAsync(40);
     created.resolve(source);
     const stream = await opening;
@@ -265,28 +268,19 @@ describe("streamWithIdleTimeout", () => {
   });
 
   it("records model progress only for content-bearing activity", async () => {
-    vi.useFakeTimers();
     const diagnosticsEnabled = areDiagnosticsEnabledForProcess();
     setDiagnosticsEnabledForProcess(true);
     const ref = { sessionId: TEST_RUN, runId: TEST_RUN };
     markDiagnosticEmbeddedRunStarted(ref);
-    let requestSignal: AbortSignal | undefined;
-    const baseFn: StreamFn = (_model, _context, options) => {
-      requestSignal = options?.signal;
-      return createAssistantMessageEventStream();
-    };
-    const stream = await streamWithIdleTimeout(baseFn, 50, undefined, { runId: TEST_RUN })(
-      {} as Parameters<StreamFn>[0],
-      { messages: [] },
-    );
-    const iterator = stream[Symbol.asyncIterator]();
+    const watched = sourceFixture(createAssistantMessageEventStream(), { runId: TEST_RUN });
+    const iterator = (await watched.stream)[Symbol.asyncIterator]();
     try {
       await vi.advanceTimersByTimeAsync(40);
-      notifyLlmRequestActivity(requestSignal, false);
+      notifyLlmRequestActivity(watched.signal(), false);
       expect(getDiagnosticSessionActivitySnapshot(ref).lastProgressReason).toBe(
         "embedded_run:started",
       );
-      notifyLlmRequestActivity(requestSignal, true);
+      notifyLlmRequestActivity(watched.signal(), true);
       expect(getDiagnosticSessionActivitySnapshot(ref)).toMatchObject({
         lastProgressAgeMs: 0,
         lastProgressReason: "model_call:stream_progress",
@@ -299,141 +293,63 @@ describe("streamWithIdleTimeout", () => {
   });
 
   it("resets idle timer on tool activity", async () => {
-    vi.useFakeTimers();
     const baseFn: StreamFn = vi.fn((_model, _context, options) => {
       const stream = createAssistantMessageEventStream();
       notifyLlmRequestActivity(options?.signal, false);
-      setTimeout(() => {
-        stream.push({ type: "text_delta", contentIndex: 0, delta: "done" });
-      }, 120);
+      setTimeout(() => stream.push(textDelta("done")), 120);
       return stream;
     });
-    const wrapped = streamWithIdleTimeout(baseFn, 50, undefined, { runId: TEST_RUN });
-    const stream = wrapped(
-      {} as Parameters<typeof baseFn>[0],
-      {} as Parameters<typeof baseFn>[1],
-      {} as Parameters<typeof baseFn>[2],
-    ) as AssistantMessageEventStream;
+    const stream = await openStream(baseFn, undefined, { runId: TEST_RUN });
     const iterator = stream[Symbol.asyncIterator]();
     const next = iterator.next();
 
     setTimeout(() => notifyToolActivity(TEST_RUN), 40);
     setTimeout(() => notifyToolActivity(TEST_RUN), 80);
-    await vi.advanceTimersByTimeAsync(120);
-
-    await expect(next).resolves.toEqual({
-      done: false,
-      value: { type: "text_delta", contentIndex: 0, delta: "done" },
-    });
+    await expectDelta(next, 120, "done");
     await iterator.return?.();
   });
 
-  it("preserves structural stream progress beyond two idle windows after pre-stream tool activity", async () => {
-    // A stale pre-stream timestamp must not shorten later chunk budgets.
-    vi.useFakeTimers();
-    const timeoutMs = 50;
-    const baseFn: StreamFn = vi.fn((_model, _context, _options) => {
-      const stream = createAssistantMessageEventStream();
-      // Chunk 1 at T=30 (10ms after stream creation at T=20).
-      setTimeout(() => {
-        stream.push({ type: "text_delta", contentIndex: 0, delta: "first" });
-      }, 10);
-      // The second chunk arrives after the stale timestamp would expire.
-      setTimeout(() => {
-        stream.push({ type: "text_delta", contentIndex: 0, delta: "second" });
-      }, 55);
-      for (const [delay, delta] of [
-        [100, "third"],
-        [145, "fourth"],
-      ] as const) {
-        setTimeout(() => stream.push({ type: "text_delta", contentIndex: 0, delta }), delay);
+  it.each(["structural", "notified"] as const)(
+    "restores the full idle budget after pre-stream tool activity (%s progress)",
+    async (progress) => {
+      let signal: AbortSignal | undefined;
+      const chunks =
+        progress === "structural"
+          ? ([
+              [10, "first"],
+              [55, "second"],
+              [100, "third"],
+              [145, "fourth"],
+            ] as const)
+          : ([[80, "late"]] as const);
+      const baseFn: StreamFn = (_model, _context, options) => {
+        signal = options?.signal;
+        const source = createAssistantMessageEventStream();
+        for (const [delay, delta] of chunks) {
+          setTimeout(() => source.push(textDelta(delta)), delay);
+        }
+        return source;
+      };
+      // The stale timestamp must be consumed once, not shorten later budgets.
+      notifyToolActivity(TEST_RUN);
+      vi.advanceTimersByTime(20);
+      const stream = await openStream(baseFn, undefined, { runId: TEST_RUN });
+      const iterator = stream[Symbol.asyncIterator]();
+      if (progress === "notified") {
+        const next = iterator.next();
+        setTimeout(() => notifyLlmRequestActivity(signal), 20);
+        setTimeout(() => notifyLlmRequestActivity(signal), 40);
+        await expectDelta(next, 80, "late");
+      } else {
+        await expectDelta(iterator.next(), 10, "first");
+        // Structural yields remain progress beyond the original two idle windows.
+        for (const delta of ["second", "third", "fourth"]) {
+          await expectDelta(iterator.next(), 45, delta);
+        }
       }
-      return stream;
-    });
-    const wrapped = streamWithIdleTimeout(baseFn, timeoutMs, undefined, { runId: TEST_RUN });
-
-    // Pre-stream tool activity at T=0, then 20ms elapses before stream creation.
-    notifyToolActivity(TEST_RUN);
-    vi.advanceTimersByTime(20);
-
-    const stream = wrapped(
-      {} as Parameters<typeof baseFn>[0],
-      {} as Parameters<typeof baseFn>[1],
-      {} as Parameters<typeof baseFn>[2],
-    ) as AssistantMessageEventStream;
-    const iterator = stream[Symbol.asyncIterator]();
-
-    // First chunk: bridged wait benefits from pre-stream tool timestamp.
-    const first = iterator.next();
-    await vi.advanceTimersByTimeAsync(10);
-    await expect(first).resolves.toEqual({
-      done: false,
-      value: { type: "text_delta", contentIndex: 0, delta: "first" },
-    });
-
-    // Second chunk: 45ms after the first. Must get a full 50ms idle budget
-    // (not the ~20ms that the carry-over bug would compute).
-    const second = iterator.next();
-    await vi.advanceTimersByTimeAsync(45);
-    await expect(second).resolves.toEqual({
-      done: false,
-      value: { type: "text_delta", contentIndex: 0, delta: "second" },
-    });
-
-    // Structural producers have no physical-activity notifier. Consuming real
-    // output remains their progress owner, even beyond the original 100ms limit.
-    for (const delta of ["third", "fourth"]) {
-      const next = iterator.next();
-      await vi.advanceTimersByTimeAsync(45);
-      await expect(next).resolves.toEqual({
-        done: false,
-        value: { type: "text_delta", contentIndex: 0, delta },
-      });
-    }
-    await iterator.return?.();
-  });
-
-  it("preserves full idle budget for mid-stream LLM activity resets after pre-stream tool consumption", async () => {
-    // After the pre-stream tool timestamp is consumed, mid-stream
-    // onLlmRequestActivity resets should still arm a full-idle timer.
-    vi.useFakeTimers();
-    const timeoutMs = 50;
-    let requestSignal: AbortSignal | undefined;
-    const baseFn: StreamFn = vi.fn((_model, _context, options) => {
-      requestSignal = options?.signal;
-      const stream = createAssistantMessageEventStream();
-      // Chunk arrives at T=100 (80ms after stream creation at T=20).
-      setTimeout(() => {
-        stream.push({ type: "text_delta", contentIndex: 0, delta: "late" });
-      }, 80);
-      return stream;
-    });
-    const wrapped = streamWithIdleTimeout(baseFn, timeoutMs, undefined, { runId: TEST_RUN });
-
-    // Pre-stream tool activity at T=0, then 20ms elapses before stream creation.
-    notifyToolActivity(TEST_RUN);
-    vi.advanceTimersByTime(20);
-
-    const stream = wrapped(
-      {} as Parameters<typeof baseFn>[0],
-      {} as Parameters<typeof baseFn>[1],
-      {} as Parameters<typeof baseFn>[2],
-    ) as AssistantMessageEventStream;
-    const iterator = stream[Symbol.asyncIterator]();
-
-    const next = iterator.next();
-
-    // Each activity notification must restore a full 50ms budget.
-    setTimeout(() => notifyLlmRequestActivity(requestSignal), 20);
-    setTimeout(() => notifyLlmRequestActivity(requestSignal), 40);
-    await vi.advanceTimersByTimeAsync(80);
-
-    await expect(next).resolves.toEqual({
-      done: false,
-      value: { type: "text_delta", contentIndex: 0, delta: "late" },
-    });
-    await iterator.return?.();
-  });
+      await iterator.return?.();
+    },
+  );
 });
 
 function createNeverYieldingStream(signal?: AbortSignal): Awaited<ReturnType<StreamFn>> {
@@ -454,10 +370,6 @@ function createNeverYieldingStream(signal?: AbortSignal): Awaited<ReturnType<Str
 }
 
 describe("streamWithIdleTimeout caller cancellation", () => {
-  afterEach(() => {
-    vi.useRealTimers();
-  });
-
   it.each([
     { honorsAbort: false, returning: false },
     { honorsAbort: true, returning: false },
@@ -465,20 +377,15 @@ describe("streamWithIdleTimeout caller cancellation", () => {
   ])(
     "preempts pending iterators ($honorsAbort, returning: $returning)",
     async ({ honorsAbort, returning }) => {
-      vi.useFakeTimers();
       const callerAbortController = new AbortController();
       const callerReason = new Error("caller cancelled");
-      const baseFn = vi.fn<StreamFn>((_model, _context, options) =>
-        createNeverYieldingStream(honorsAbort ? options?.signal : undefined),
+      const watched = sourceFixture(
+        (_model, _context, options) =>
+          createNeverYieldingStream(honorsAbort ? options?.signal : undefined),
+        undefined,
+        { signal: callerAbortController.signal },
       );
-      const onIdleTimeout = vi.fn();
-      const iterator = (
-        streamWithIdleTimeout(baseFn, 50, onIdleTimeout)(
-          {} as Parameters<typeof baseFn>[0],
-          {} as Parameters<typeof baseFn>[1],
-          { signal: callerAbortController.signal },
-        ) as AsyncIterable<unknown>
-      )[Symbol.asyncIterator]();
+      const iterator = (await watched.stream)[Symbol.asyncIterator]();
       const outcome = iterator.next().catch((error: unknown) => error);
       const overlapping = iterator.next().catch((error: unknown) => error);
 
@@ -488,21 +395,16 @@ describe("streamWithIdleTimeout caller cancellation", () => {
 
       callerAbortController.abort(callerReason);
 
-      await expect(outcome).resolves.toMatchObject({
+      const cancelled = {
         name: "AbortError",
         message: callerReason.message,
         cause: callerReason,
-      });
-      await expect(overlapping).resolves.toMatchObject({
-        name: "AbortError",
-        message: callerReason.message,
-        cause: callerReason,
-      });
+      };
+      await expect(outcome).resolves.toMatchObject(cancelled);
+      await expect(overlapping).resolves.toMatchObject(cancelled);
       await vi.advanceTimersByTimeAsync(50);
-      const providerSignal = (baseFn.mock.calls.at(0)?.[2] as { signal?: AbortSignal } | undefined)
-        ?.signal;
-      expect(providerSignal?.reason).toBe(returning ? undefined : callerReason);
-      expect(onIdleTimeout).not.toHaveBeenCalled();
+      expect(watched.signal()?.reason).toBe(returning ? undefined : callerReason);
+      expect(watched.onTimeout).not.toHaveBeenCalled();
     },
   );
 
@@ -518,12 +420,8 @@ describe("streamWithIdleTimeout caller cancellation", () => {
         iterator.next = () => Promise.reject(failure);
         return iterator;
       };
-      const baseFn: StreamFn = () => source;
-      const stream = await streamWithIdleTimeout(baseFn, 50)(
-        {} as Parameters<StreamFn>[0],
-        { messages: [] },
-        { signal: caller.signal },
-      );
+      const watched = sourceFixture(source, undefined, { signal: caller.signal });
+      const stream = await watched.stream;
       const error = await stream[Symbol.asyncIterator]()
         .next()
         .catch((value: unknown) => value);
@@ -546,53 +444,42 @@ describe("streamWithIdleTimeout caller cancellation", () => {
   ])(
     "preempts provider stream creation (already aborted: $alreadyAborted, accepted: $accepted)",
     async ({ alreadyAborted, accepted }) => {
-      vi.useFakeTimers();
       const callerAbortController = new AbortController();
       const callerReason = new Error("caller cancelled");
       if (alreadyAborted) {
         callerAbortController.abort(callerReason);
       }
-      const baseFnMock = vi.fn(
-        (_model: unknown, _context: unknown, options?: { signal?: AbortSignal }) =>
+      const watched = sourceFixture(
+        (_model, _context, options) =>
           options?.signal?.aborted
             ? Promise.reject(new Error("provider rejected cancelled setup"))
             : new Promise<AssistantMessageEventStream>(() => {}),
-      );
-      const baseFn = baseFnMock as unknown as Parameters<typeof streamWithIdleTimeout>[0];
-      const onIdleTimeout = vi.fn();
-      const pending = streamWithIdleTimeout(baseFn, 50, onIdleTimeout)(
-        {} as Parameters<typeof baseFn>[0],
-        {} as Parameters<typeof baseFn>[1],
+        undefined,
         { signal: callerAbortController.signal },
       );
-      const providerSignal = (
-        baseFnMock.mock.calls.at(0)?.[2] as { signal?: AbortSignal } | undefined
-      )?.signal;
       if (accepted) {
         await vi.advanceTimersByTimeAsync(20);
-        notifyLlmRequestActivity(providerSignal);
+        notifyLlmRequestActivity(watched.signal());
       }
 
       callerAbortController.abort(callerReason);
 
-      await expect(pending).rejects.toMatchObject({
+      await expect(watched.stream).rejects.toMatchObject({
         name: "AbortError",
         message: callerReason.message,
         cause: callerReason,
       });
       await vi.advanceTimersByTimeAsync(50);
-      expect([providerSignal?.reason, onIdleTimeout.mock.calls.length]).toEqual([callerReason, 0]);
+      expect([watched.signal()?.reason, watched.onTimeout.mock.calls.length]).toEqual([
+        callerReason,
+        0,
+      ]);
     },
   );
 });
 
 describe("streamWithIdleTimeout parked consumer", () => {
-  afterEach(() => {
-    vi.useRealTimers();
-  });
-
   it("preserves argument fragments when the producer completes while the consumer is parked", async () => {
-    vi.useFakeTimers();
     const source = createAssistantMessageEventStream();
     const message: AssistantMessage = makeAgentAssistantMessage({
       content: [{ type: "toolCall", id: "call_read", name: "read", arguments: {} }],
@@ -602,19 +489,14 @@ describe("streamWithIdleTimeout parked consumer", () => {
       stopReason: "toolUse",
       timestamp: 1,
     });
-    let requestSignal: AbortSignal | undefined;
-    const baseFn: StreamFn = (_model, _context, options) => {
-      requestSignal = options?.signal;
-      return source;
-    };
-    const onIdleTimeout = vi.fn();
     // Match attempt-stream's production order: repair inside the watchdog.
-    const wrapped = streamWithIdleTimeout(
-      wrapStreamFnRepairMalformedToolCallArguments(baseFn),
-      50,
-      onIdleTimeout,
+    const watched = sourceFixture(
+      source,
+      undefined,
+      undefined,
+      wrapStreamFnRepairMalformedToolCallArguments,
     );
-    const stream = await wrapped({} as Parameters<StreamFn>[0], {} as Parameters<StreamFn>[1], {});
+    const stream = await watched.stream;
     const iterator = stream[Symbol.asyncIterator]();
     source.push({
       type: "toolcall_delta",
@@ -635,8 +517,8 @@ describe("streamWithIdleTimeout parked consumer", () => {
     source.push({ type: "done", reason: "toolUse", message });
     source.end();
     await vi.advanceTimersByTimeAsync(500);
-    expect(onIdleTimeout).not.toHaveBeenCalled();
-    expect(requestSignal?.aborted).toBe(false);
+    expect(watched.onTimeout).not.toHaveBeenCalled();
+    expect(watched.signal()?.aborted).toBe(false);
 
     await expect(iterator.next()).resolves.toMatchObject({ value: { type: "toolcall_delta" } });
     await expect(iterator.next()).resolves.toMatchObject({
@@ -650,12 +532,9 @@ describe("streamWithIdleTimeout parked consumer", () => {
   });
 
   it("does not abort a completed structural stream while the consumer is parked", async () => {
-    vi.useFakeTimers();
-    let requestSignal: AbortSignal | undefined;
-    const baseFn: StreamFn = vi.fn((_model, _context, options) => {
-      requestSignal = options?.signal;
+    const watched = sourceFixture(() => {
       const stream = createAssistantMessageEventStream();
-      stream.push({ type: "text_delta", contentIndex: 0, delta: "first" });
+      stream.push(textDelta("first"));
       setTimeout(() => {
         stream.push({
           type: "done",
@@ -674,20 +553,13 @@ describe("streamWithIdleTimeout parked consumer", () => {
         [Symbol.asyncIterator]: () => stream[Symbol.asyncIterator](),
       };
     });
-    const onIdleTimeout = vi.fn();
-    const wrapped = streamWithIdleTimeout(baseFn, 50, onIdleTimeout);
-    const stream = wrapped(
-      {} as Parameters<typeof baseFn>[0],
-      {} as Parameters<typeof baseFn>[1],
-      {} as Parameters<typeof baseFn>[2],
-    ) as AssistantMessageEventStream;
-    const iterator = stream[Symbol.asyncIterator]();
+    const iterator = (await watched.stream)[Symbol.asyncIterator]();
     await expect(iterator.next()).resolves.toMatchObject({ done: false });
 
     // Producer finishes while the consumer has not drained the terminal event.
     await vi.advanceTimersByTimeAsync(500);
-    expect(onIdleTimeout).not.toHaveBeenCalled();
-    expect(requestSignal?.aborted).toBe(false);
+    expect(watched.onTimeout).not.toHaveBeenCalled();
+    expect(watched.signal()?.aborted).toBe(false);
     await expect(iterator.next()).resolves.toMatchObject({
       done: false,
       value: { type: "done" },

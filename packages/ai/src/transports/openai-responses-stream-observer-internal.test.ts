@@ -1,13 +1,18 @@
 import { createHook } from "node:async_hooks";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { configureAiTransportHost, getAiTransportHost } from "../host.js";
 import { makeProviderModel } from "../providers/provider-model.test-support.js";
 import { observeResponsesStream } from "./openai-responses-stream-observer-internal.js";
-import { log } from "./openai-transport-shared.js";
 
+const initialHost = getAiTransportHost();
 const model = makeProviderModel("openai-responses", "openai", "test-model");
 const event = { type: "response.output_text.delta", delta: "hello" };
 
-afterEach(() => vi.restoreAllMocks());
+afterEach(() => {
+  configureAiTransportHost(initialHost);
+  vi.restoreAllMocks();
+  vi.unstubAllEnvs();
+});
 
 describe("Responses stream observation", () => {
   it.runIf(!process.versions.bun)("adds only one promise per delivered event", async () => {
@@ -44,7 +49,20 @@ describe("Responses stream observation", () => {
   });
 
   it("starts lazily and reports every event and completion exactly once", async () => {
-    const debug = vi.spyOn(log, "debug").mockImplementation(() => {});
+    const debug = vi.fn<(message: string) => void>();
+    for (const suffix of ["MODEL_TRANSPORT", "MODEL_PAYLOAD", "SSE", "CODE_MODE"]) {
+      vi.stubEnv(`OPENCLAW_DEBUG_${suffix}`, undefined);
+    }
+    configureAiTransportHost({
+      ...initialHost,
+      isLogEnabled: () => true,
+      logDebug: (_subsystem, build) => {
+        const entry = build();
+        if (entry) {
+          debug(entry.message);
+        }
+      },
+    });
     const events = [
       { type: "response.created", response: { id: "synthetic-response" } },
       event,
@@ -64,7 +82,11 @@ describe("Responses stream observation", () => {
       received.push(value);
     }
     expect(received).toEqual(events);
-    expect(debug).toHaveBeenCalledTimes(3);
+    expect(debug.mock.calls.map(([message]) => message)).toEqual([
+      expect.stringContaining("[responses] stream_start "),
+      expect.stringContaining("[responses] first_event "),
+      expect.stringContaining("[responses] stream_done "),
+    ]);
     expect(debug.mock.calls[2]?.[0]).toContain("terminal=response.completed");
     expect(debug.mock.calls[2]?.[0]).toContain("events=3");
     await observed.next();

@@ -21,7 +21,6 @@ import {
 } from "./github-publication-source.worker.js";
 import type {
   GitHubPublicationInsert,
-  PublicationMutationReceipt,
   PublicationMutationResult,
 } from "./github-publication-worker.types.js";
 import type { PublicationWorkerOperations } from "./github-publication.worker-contract.js";
@@ -131,7 +130,7 @@ export const publicationRequestOperations = {
   "githubPublications.insert": (
     input: PublicationWorkerOperations["githubPublications.insert"]["input"],
     { open },
-  ): PublicationMutationReceipt => {
+  ): void => {
     const database = open();
     if (input.kind === "shared") {
       ensureGitHubPublicationSchema(database.db);
@@ -212,7 +211,6 @@ export const publicationRequestOperations = {
       );
       assertCurrent();
       deferSqliteWorkerCommitReceipt(sqlPublicationAnchor(database.db), receipt);
-      return receipt;
     });
   },
 } satisfies WorkerOperationHandlers;

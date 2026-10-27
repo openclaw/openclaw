@@ -111,6 +111,7 @@ async function workload(phased: boolean, count: number, measure: boolean) {
       },
       createExecutor: (guards) => ({
         snapshot: () => hot,
+        snapshotEntry: () => hot,
         read: async () => hot,
         release: async () => {},
         async command(phase, input, current) {

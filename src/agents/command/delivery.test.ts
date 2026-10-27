@@ -3,10 +3,15 @@ import type { ReplyPayload } from "../../auto-reply/reply-payload.js";
 import type { createReplyMediaPathNormalizer } from "../../auto-reply/reply/reply-media-paths.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { deliverOutboundPayloads } from "../../infra/outbound/deliver.js";
+import { getToolResult, runMessageAction } from "../../infra/outbound/message-action-runner.js";
 import { setActivePluginRegistry } from "../../plugins/runtime.js";
 import { createOutboundTestPlugin, createTestRegistry } from "../../test-utils/channel-plugins.js";
 import { normalizeSessionDeliveryState } from "../../utils/delivery-context.shared.js";
 import { buildRestartRecoveryTerminalDeliveryEvidence } from "../agent-command-restart-recovery.js";
+import {
+  extractMessagingToolSend,
+  extractMessagingToolSendResult,
+} from "../embedded-agent-messaging-extraction.js";
 import { createAgentRunRestartAbortError } from "../run-termination.js";
 import type { AgentCommandDeliveryResult } from "./delivery-result.js";
 import { deliverAgentCommandResult } from "./delivery.js";
@@ -629,6 +634,73 @@ describe("deliverAgentCommandResult payload normalization", () => {
     expect(outboundMock).toHaveBeenCalledTimes(1);
     expect(outboundArgs().accountId).toBe(account);
   });
+
+  it.each([
+    { sentAccountId: "default", boundAccountId: undefined, expectedMedia: [] },
+    {
+      sentAccountId: "work",
+      boundAccountId: "work",
+      expectedMedia: ["https://example.com/generated-image.png"],
+    },
+  ])(
+    "dedupes final media against the actual message-send account: $sentAccountId",
+    async (testCase) => {
+      const mediaUrl = "https://example.com/generated-image.png";
+      const cfg: OpenClawConfig = {
+        channels: { slack: { enabled: true } },
+        ...(testCase.boundAccountId
+          ? {
+              bindings: [
+                {
+                  agentId: "main",
+                  match: { channel: "slack", accountId: testCase.boundAccountId },
+                },
+              ],
+            }
+          : {}),
+      };
+      setSlackPlugin({
+        config: {
+          listAccountIds: () => ["default", "work"],
+          defaultAccountId: () => "default",
+          resolveAccount: () => ({ enabled: true }),
+          isConfigured: () => true,
+        },
+      });
+      outboundMock.mockResolvedValue(sentMessage);
+      const messageArgs = {
+        action: "send",
+        channel: "slack",
+        target: "channel:C123",
+        media: mediaUrl,
+      };
+      const pending = extractMessagingToolSend("message", messageArgs);
+      expect(pending).toBeDefined();
+      const actionResult = await runMessageAction({
+        cfg,
+        action: "send",
+        params: { ...messageArgs },
+        agentId: "main",
+        dryRun: false,
+      });
+      const confirmed = extractMessagingToolSendResult(pending!, getToolResult(actionResult));
+      expect(outboundMock).toHaveBeenCalledOnce();
+      expect(outboundArgs().accountId).toBe(testCase.sentAccountId);
+
+      await deliverForTest({
+        cfg,
+        opts: { replyAccountId: "default" },
+        payloads: [{ text: "Complete", mediaUrls: [mediaUrl] }],
+        sentTarget: { ...confirmed, mediaUrls: [mediaUrl] },
+      });
+
+      expect(outboundMock).toHaveBeenCalledTimes(2);
+      expect(outboundArgs().accountId).toBe("default");
+      expect(outboundArgs().payloads.flatMap((payload) => payload.mediaUrls ?? [])).toEqual(
+        testCase.expectedMedia,
+      );
+    },
+  );
 
   it("surfaces hook cancellation as a suppressed terminal deliveryStatus", async () => {
     const outcome = {
