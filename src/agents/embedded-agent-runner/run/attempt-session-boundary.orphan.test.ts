@@ -217,6 +217,11 @@ describe("prepareEmbeddedAttemptSessionBoundary orphan recovery", () => {
         baseUrl: "https://api.openai.com/v1",
         reasoning: true,
       });
+      const reasoningReplay = {
+        openclawReasoningReplay: buildOpenAIResponsesReasoningReplayMetadata(model, {
+          sessionId: "orphan-projection",
+        }),
+      };
       const history = Array.from({ length: 6 }, (_, index) => [
         {
           role: "user" as const,
@@ -236,11 +241,7 @@ describe("prepareEmbeddedAttemptSessionBoundary orphan recovery", () => {
                 summary: [],
                 encrypted_content: "Q".repeat(64),
               }),
-              ...{
-                openclawReasoningReplay: buildOpenAIResponsesReasoningReplayMetadata(model, {
-                  sessionId: "orphan-projection",
-                }),
-              },
+              ...reasoningReplay,
             },
             { type: "text", text: `answer ${index} ` + "a".repeat(400) },
           ],
