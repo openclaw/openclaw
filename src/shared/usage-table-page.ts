@@ -34,6 +34,7 @@ function compareUsageOverviewSessions(
   }
   const days = new Set(options.selectedDays);
   const rowTotals = new Map<SessionUsageEntry, ReturnType<typeof sessionRowTotals>>();
+  const sortValues = sortValue ? new Map<SessionUsageEntry, number | undefined>() : undefined;
   const totals = (entry: SessionUsageEntry) => {
     let result = rowTotals.get(entry);
     if (!result) {
@@ -43,8 +44,15 @@ function compareUsageOverviewSessions(
     return result;
   };
   const value = (entry: SessionUsageEntry) => {
-    const prepared = sortValue?.(entry);
-    if (prepared !== undefined) return prepared;
+    if (sortValue && sortValues) {
+      if (!sortValues.has(entry)) {
+        sortValues.set(entry, sortValue(entry));
+      }
+      const prepared = sortValues.get(entry);
+      if (prepared !== undefined) {
+        return prepared;
+      }
+    }
     switch (options.sort) {
       case "tokens":
         return totals(entry).totalTokens;
@@ -72,7 +80,9 @@ export function usageOverviewPage(
   options: UsageOverviewOptions,
   sortValue?: (entry: SessionUsageEntry) => number | undefined,
 ) {
-  if (options.limit === 0) return [];
+  if (options.limit === 0) {
+    return [];
+  }
   return roster
     .toSorted(compareUsageOverviewSessions(options, sortValue))
     .slice(
