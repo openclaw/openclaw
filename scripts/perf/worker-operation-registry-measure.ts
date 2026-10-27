@@ -80,12 +80,12 @@ const observer = new PerformanceObserver((list) => {
 });
 observer.observe({ entryTypes: ["gc"] });
 const drain = () => setImmediate().then(() => setImmediate());
-async function forceGc() {
+const forceGc = async () => {
   for (let index = 0; index < 2; index++) {
     collect();
     await drain();
   }
-}
+};
 const perUnit = (value: number) => ({
   perUnit: value / iterations,
   perPrepareCall: value / iterations / keys.length,
