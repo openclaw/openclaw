@@ -617,7 +617,9 @@ it("retains focused pasted-text actions when a peer read completes and uses curr
 
 it("keeps admission order when preview props lag completed attachment reads", async () => {
   vi.stubGlobal("FileReader", StubFileReader);
-  onTestFinished(() => vi.unstubAllGlobals());
+  onTestFinished(() => {
+    vi.unstubAllGlobals();
+  });
   StubFileReader.failNames = new Set();
   StubFileReader.heldReads = [];
   const h = readFixture([], () =>
