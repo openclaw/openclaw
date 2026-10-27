@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { trackSqliteStatementExecutions } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import { cleanupTempDirs, makeTempDir } from "../../../test/helpers/temp-dir.js";
 import {
@@ -109,14 +109,13 @@ describe("session entry replacement compare-and-swap", () => {
   });
 
   it.each(["ordinary", "self-alias"] as const)(
-    "does not revisit unrelated validated entries during %s replacements",
+    "reads one validation cohort without revisiting unrelated rows during %s replacements",
     (mode) => {
       const options = { agentId: "main", path: storePath };
       const unrelatedKeys = Array.from(
         { length: 4 },
         (_, index) => `agent:main:unrelated-${index}`,
       );
-      let unrelatedReads = 0;
       runOpenClawAgentWriteTransaction((database) => {
         for (const [index, sessionKey] of unrelatedKeys.entries()) {
           writeSessionEntry(database, sessionKey, {
@@ -124,27 +123,16 @@ describe("session entry replacement compare-and-swap", () => {
             updatedAt: 10,
           });
         }
-        const validationKeys = [scope.sessionKey, ...unrelatedKeys];
+        const validationKeys = [scope.sessionKey, ...unrelatedKeys, "agent:main:absent"];
         const expectedRows = new Map(
           validationKeys.map((key) => [key, entryStore.readExactSessionEntryRow(database, key)!]),
         );
         const previous = expectedRows.get(scope.sessionKey)!.entry;
-        const read = entryStore.readExactSessionEntryRow;
-        const observe = vi
-          .spyOn(entryStore, "readExactSessionEntryRow")
-          .mockImplementation((...args) => {
-            const selected = read(...args);
-            if (selected && unrelatedKeys.includes(args[1])) {
-              const entry = selected.entry;
-              Object.defineProperty(selected, "entry", {
-                get() {
-                  unrelatedReads++;
-                  return entry;
-                },
-              });
-            }
-            return selected;
-          });
+        const reads = trackSqliteStatementExecutions(
+          requireNativeSqliteDatabase(database.db),
+          ["entries"],
+          (sql) => (/\bfrom\s+"session_nodes"/iu.test(sql) ? "entries" : null),
+        );
         try {
           commitSessionEntryReplacementsInDatabase(
             database,
@@ -159,11 +147,13 @@ describe("session entry replacement compare-and-swap", () => {
               })),
             },
             () => {
-              unrelatedReads = 0;
+              expect(reads.counts.entries).toBe(1);
+              expect(reads.rowCounts.entries).toBe(5);
             },
           );
+          expect(reads.counts.entries).toBe(1);
         } finally {
-          observe.mockRestore();
+          reads.restore();
         }
       }, options);
       expect(loadSessionEntry({ ...scope, readConsistency: "latest" })).toMatchObject({
@@ -176,7 +166,6 @@ describe("session entry replacement compare-and-swap", () => {
           updatedAt: 10,
         });
       }
-      expect(unrelatedReads).toBe(0);
     },
   );
 
