@@ -229,11 +229,6 @@ it("persists private source and workspace facts but excludes runtime-only resolv
     updatedAt: 42,
     pendingProjectGitUrl: "https://github.com/openclaw/openclaw.git",
     pendingWorktree: { name: "session-startup", titleSource: "Start work" },
-    titleRefinement: {
-      sessionId: "runtime-skills-session",
-      generatedName: "Start work",
-      remainingMessages: 6,
-    },
     restartRecoveryRequesterSource: {
       agentId: "main",
       sessionKey: scope.sessionKey,
@@ -249,7 +244,6 @@ it("persists private source and workspace facts but excludes runtime-only resolv
   for (const key of [
     "pendingProjectGitUrl",
     "pendingWorktree",
-    "titleRefinement",
     "restartRecoveryRequesterSource",
   ] as const) {
     expect(persisted[key]).toEqual(entry[key]);

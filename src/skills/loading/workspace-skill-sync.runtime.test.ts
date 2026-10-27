@@ -9,7 +9,10 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { hasErrnoCode } from "../../infra/errno.js";
 import { withEnvAsync } from "../../test-utils/env.js";
 import { nodeFilePath } from "../../test-utils/node-file-path.js";
-import { getSkillsSnapshotVersion } from "../runtime/refresh-state.js";
+import {
+  getSkillsSnapshotVersion,
+  markSkillsSupportingFilesChanged,
+} from "../runtime/refresh-state.js";
 import { refreshSkillsDiscovery } from "../runtime/refresh.js";
 import { resolveReusableWorkspaceSkillSnapshot } from "../runtime/session-snapshot.js";
 import { writePluginWithSkill } from "../test-support/skill-plugin-fixtures.test-support.js";
@@ -388,6 +391,40 @@ describe("syncWorkspaceSkills", () => {
     expect(await readText(preservedMarker)).toBe("preserved");
     expect(await exists(skillPath(target, "beta"))).toBe(false);
     expect(await exists(skillPath(target, "gamma", "SKILL.md"))).toBe(true);
+  });
+
+  it("refreshes changed support files without replacing unchanged copies", async () => {
+    const { source, target } = await setupSkills(["alpha"]);
+    const sourceSkill = skillPath(source, "alpha");
+    const targetSkill = skillPath(target, "alpha");
+    await writeFiles(sourceSkill, {
+      "references/changed.txt": "before",
+      "references/removed.txt": "remove",
+      "scripts/unchanged.txt": "keep",
+      "scripts/edited.txt": "original",
+    });
+    const skillsSnapshot = await buildSnapshot(source);
+    await sync(source, target, { skillsSnapshot });
+    const unchanged = path.join(targetSkill, "scripts/unchanged.txt");
+    const before = await fs.stat(unchanged);
+    await fs.writeFile(path.join(sourceSkill, "references/changed.txt"), "after");
+    await fs.rm(path.join(sourceSkill, "references/removed.txt"));
+    await fs.writeFile(path.join(targetSkill, "unexpected.txt"), "stale");
+    await fs.writeFile(path.join(targetSkill, "scripts/edited.txt"), "modified");
+    markSkillsSupportingFilesChanged({ workspaceDir: source });
+
+    await sync(source, target, { skillsSnapshot });
+
+    expect(await readText(targetSkill, "references/changed.txt")).toBe("after");
+    expect(await exists(path.join(targetSkill, "references/removed.txt"))).toBe(false);
+    expect(await exists(path.join(targetSkill, "unexpected.txt"))).toBe(false);
+    expect(await readText(unchanged)).toBe("keep");
+    expect(await readText(targetSkill, "scripts/edited.txt")).toBe("original");
+    const after = await fs.stat(unchanged);
+    expect({ ino: after.ino, mtime: after.mtimeMs }).toEqual({
+      ino: before.ino,
+      mtime: before.mtimeMs,
+    });
   });
 
   it.runIf(process.platform !== "win32" && process.getuid?.() !== 0)(

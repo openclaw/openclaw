@@ -120,18 +120,19 @@ suite.define(() => {
     const transcriptTrigger = page.getByRole("button", { name: "Open image OpenClaw banner" });
     await transcriptTrigger.waitFor({ state: "visible", timeout: 10_000 });
     const transcriptImage = transcriptTrigger.getByRole("img");
-    const contextMenuPrevented = transcriptImage.evaluate(
-      (image) =>
-        new Promise<boolean>((resolve) => {
-          image.addEventListener(
-            "contextmenu",
-            (event) => setTimeout(() => resolve(event.defaultPrevented), 0),
-            { once: true },
-          );
-        }),
-    );
-    await transcriptImage.click({ button: "right" });
-    expect(await contextMenuPrevented).toBe(false);
+    const contextMenu = await transcriptImage.evaluateHandle((image) => {
+      const observed: { event: Event | null } = { event: null };
+      image.addEventListener("contextmenu", (event) => (observed.event = event), { once: true });
+      return observed;
+    });
+    try {
+      await transcriptImage.click({ button: "right" });
+      await expect
+        .poll(() => contextMenu.evaluate(({ event }) => event?.defaultPrevented))
+        .toBe(false);
+    } finally {
+      await contextMenu.dispose();
+    }
     expect(await page.locator(".chat-reply-context-menu").count()).toBe(0);
     await page.keyboard.press("Escape");
     await transcriptTrigger.click();

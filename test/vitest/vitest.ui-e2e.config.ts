@@ -1,4 +1,5 @@
 // Vitest ui e2e config wires the ui e2e test shard.
+import { fileURLToPath } from "node:url";
 import { defineConfig, type TestUserConfig } from "vitest/config";
 import { intersectIncludePatterns } from "./vitest.include-patterns.ts";
 import {
@@ -7,6 +8,7 @@ import {
   narrowIncludePatternsForCli,
   vitestE2eTestGlob,
 } from "./vitest.pattern-file.ts";
+import { createVitestProjectCachePlugin } from "./vitest.performance-config.ts";
 import { sharedVitestConfig } from "./vitest.shared.config.ts";
 import { UiE2eSequencer } from "./vitest.ui-e2e.sequencer.ts";
 import {
@@ -121,7 +123,14 @@ export function createUiE2eVitestConfig(
   env: Record<string, string | undefined> = process.env,
   argv: string[] = process.argv,
 ) {
-  const base = sharedVitestConfig as Record<string, unknown>;
+  const base = {
+    ...sharedVitestConfig,
+    plugins: sharedVitestConfig.plugins.map((plugin) =>
+      plugin.name === "openclaw:vitest-project-cache"
+        ? createVitestProjectCachePlugin(fileURLToPath(import.meta.url))
+        : plugin,
+    ),
+  } as Record<string, unknown>;
   const baseTest = sharedVitestConfig.test ?? {};
   const maxWorkers = Math.min(2, baseTest.maxWorkers);
   const baseSequence = (baseTest as { sequence?: object }).sequence;

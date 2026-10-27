@@ -669,8 +669,6 @@ export type SessionProfileInvolvement = {
 };
 
 export type InternalSessionEntryCore = SessionEntryCore & {
-  /** One refinement attempt for a generated Dashboard name, scoped to this session. */
-  titleRefinement?: { sessionId: string; generatedName: string; remainingMessages: number };
   /** Original unbound files, private to this conversation's adopted workspace. */
   priorWorkspace?: {
     worktreeId: string;

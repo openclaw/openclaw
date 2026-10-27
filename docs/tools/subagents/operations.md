@@ -40,6 +40,11 @@ Suspended completion deliveries do not block new work. Native subagents, ACP
 sessions, and visible sessions retain their normal active-run limits and
 authorization checks independently of the delivery backlog.
 
+If a completed child's ownership changes while a reply reactivates it, that
+continuation ends with a normal error before the model starts. Your message stays
+in the child session's history, and the current child owner remains unchanged.
+Inspect the session before sending another instruction.
+
 OpenClaw warns when the delivery backlog reaches 25. Within a Gateway process,
 unchanged backlog counts do not repeat the warning every sweep. A count change
 at or above 25, or a return to that threshold after recovery, produces a new

@@ -13,6 +13,8 @@
  * fixture under .local; never points at a running Gateway or real Docker.
  * Timing/GC values from the sampled pass are diagnostic only. Both revisions
  * use the same current-source sandbox config factory, whose hash is reported.
+ * --cold-create makes the synthetic engine report each container absent, measuring
+ * image admission/create/start work without real daemon latency or image pulls.
  */
 import assert from "node:assert/strict";
 import { hash } from "node:crypto";
@@ -31,6 +33,7 @@ const { values } = parseArgs({
     owner: { type: "string" },
     iterations: { type: "string", default: "2000" },
     allocations: { type: "boolean", default: false },
+    "cold-create": { type: "boolean", default: false },
   },
 });
 assert(values.owner, "--owner must select an already-built Docker owner");
@@ -57,6 +60,7 @@ Object.assign(process.env, {
   SANDBOX_MEASURE_CALLS: callsFile,
   SANDBOX_MEASURE_CONTAINER: path.join(root, "container"),
   SANDBOX_MEASURE_ID: containerId,
+  SANDBOX_MEASURE_COLD: values["cold-create"] ? "1" : "0",
 });
 await fs.writeFile(
   path.join(bin, "docker"),
@@ -64,7 +68,7 @@ await fs.writeFile(
 printf '%s\n' "$1" >> "$SANDBOX_MEASURE_CALLS"
 case "$1" in
   inspect)
-    if [ ! -f "$SANDBOX_MEASURE_CONTAINER" ]; then
+    if [ "$SANDBOX_MEASURE_COLD" = 1 ] || [ ! -f "$SANDBOX_MEASURE_CONTAINER" ]; then
       printf 'No such container\n' >&2
       exit 1
     fi
@@ -194,10 +198,21 @@ try {
     }
   }
   const calls = (await fs.readFile(callsFile, "utf8")).trim().split("\n");
-  assert(
-    calls.every((call) => call === "inspect"),
-    "Warm reuse must not mutate the container",
+  const callsByOperation = Object.fromEntries(
+    ["inspect", "image", "create", "start"].map((operation) => [
+      operation,
+      calls.filter((call) => call === operation).length / iterations,
+    ]),
   );
+  if (values["cold-create"]) {
+    assert.equal(callsByOperation.create, 1);
+    assert.equal(callsByOperation.start, 1);
+  } else {
+    assert(
+      calls.every((call) => call === "inspect"),
+      "Warm reuse must not mutate the container",
+    );
+  }
   durations.sort((a, b) => a - b);
   console.log(
     JSON.stringify({
@@ -211,12 +226,15 @@ try {
       iterations,
       resourceMounts: readOnlyResourceMounts.length,
       allocations: values.allocations,
+      coldCreate: values["cold-create"],
+      callsByOperation,
       timingAndGcDiagnosticOnly: values.allocations,
       postWarmBarrierMs: 100,
       postWarmBarrierElapsedMs,
       measurementStartedAt,
       processAgeAtMeasurementStartMs: measuredStart,
-      inspectCallsPerTurn: calls.length / iterations,
+      inspectCallsPerTurn: callsByOperation.inspect,
+      engineCallsPerTurn: calls.length / iterations,
       elapsedMs,
       cpuUsPerTurn: (used.user + used.system) / iterations,
       sampledBytesPerTurn: sampledBytes === undefined ? undefined : sampledBytes / iterations,

@@ -192,7 +192,8 @@ describe.skipIf(!hasBrowserLayout)("session owner stack layout", () => {
     BUILTIN_THEME_IDS.flatMap((theme) =>
       modes.flatMap((mode) =>
         (theme === "claw" ? [2, 3, 5, 12, 13] : [12]).flatMap((ownerCount) =>
-          (theme === "claw"
+          // Run/unread share fixed geometry; retain the avatar pair and widest overflow.
+          (theme === "claw" && (ownerCount === 2 || ownerCount === 13)
             ? ["present", "running", "away", "unread"]
             : ["present", "away"]
           ).flatMap((presence) =>

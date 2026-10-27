@@ -263,14 +263,14 @@ export function createSessionRowProjectionFixture(params: {
       typeof query.parentSessionKey === "string"
         ? query.parentSessionKey
         : query.parentSessionKey?.key;
+    const identities =
+      query.candidateSessionIdsOrKeys ??
+      (query.sessionIdOrKey ? new Set([query.sessionIdOrKey]) : undefined);
     const matchingKeys =
-      query.sessionIdOrKey &&
+      identities &&
       new Set(
         [...rows.values()]
-          .filter(
-            (row) =>
-              row.key === query.sessionIdOrKey || row.entry.sessionId === query.sessionIdOrKey,
-          )
+          .filter((row) => identities.has(row.key) || identities.has(row.entry.sessionId))
           .map((row) => row.key),
       );
     const selected = matching(query).filter(

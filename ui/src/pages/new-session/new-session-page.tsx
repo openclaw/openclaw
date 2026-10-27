@@ -18,6 +18,10 @@ import {
   retryStaleChunkReloadWhenReachable,
 } from "../../app/stale-chunk-reload.ts";
 import { ImageLightbox } from "../../components/image-lightbox.tsx";
+import {
+  resolveLobsterPetMode,
+  resolveLobsterRunOutcome,
+} from "../../components/lobster-pet-contract.ts";
 import { SessionBackgroundLayoutScope } from "../../components/session-background-layout-context.tsx";
 import { SessionBackgroundView } from "../../components/session-background-view.tsx";
 import { Icon } from "../../components/solid/icon.tsx";
@@ -332,6 +336,32 @@ function renderPageContent(host: PageHost) {
   const pageState = projectOwner(owner, (value) => value);
   const page = pageState.read;
   const initialConnectionReady = () => page().isConnected;
+  const context = owner.context;
+  const sessionFacts = context
+    ? projectOwner(
+        context.sessions,
+        (sessions) => ({
+          defaults: Object.entries(sessions.state.result?.defaults ?? {}),
+          groupStatus: sessions.groupsStatus(),
+          petMode: resolveLobsterPetMode(
+            !context.gateway.snapshot.offlineStable,
+            sessions.state.result?.sessions,
+          ),
+          runOutcome: resolveLobsterRunOutcome(sessions.state.result?.sessions),
+        }),
+        (previous, next) =>
+          previous.groupStatus === next.groupStatus &&
+          previous.petMode === next.petMode &&
+          previous.runOutcome === next.runOutcome &&
+          previous.defaults.length === next.defaults.length &&
+          previous.defaults.every(
+            ([key, value], index) =>
+              key === next.defaults[index]?.[0] && value === next.defaults[index]?.[1],
+          ),
+      )
+    : undefined;
+  // Recents own their row subscription; only draft-wide session facts reconcile the page.
+  onSettled(() => sessionFacts?.subscribe(owner.changed));
   onSettled(() => {
     owner.connect();
     return () => owner.disconnect();

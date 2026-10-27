@@ -6,6 +6,7 @@
 // use C/A/A/C runs for warm comparisons. Source startup heap includes loader overhead.
 // Natural heap is sampled before forced-GC retention diagnostics; neither is per-worker RSS.
 // Startup and warm CPU/allocation are per isolate. This wrapper does not prove host labels.
+// --scan-pages 256 measures synthetic ~14 KiB catalog scans, editing one document every 10 calls.
 import assert from "node:assert/strict";
 import fs from "node:fs/promises";
 import os from "node:os";
@@ -24,14 +25,17 @@ const { values } = parseArgs({
     "baseline-dir": { type: "string" },
     iterations: { type: "string", default: "2000" },
     stores: { type: "string", default: "40" },
+    "scan-pages": { type: "string", default: "0" },
   },
 });
 assert(values["state-dir"] && values.output, "--state-dir and --output are required");
 assert(!values.built || !values["baseline-dir"], "--baseline-dir is source-only");
 const iterations = Number(values.iterations);
 const storeCount = Number(values.stores);
+const scanPages = Number(values["scan-pages"]);
 assert(Number.isSafeInteger(iterations) && iterations > 0);
 assert(Number.isSafeInteger(storeCount) && storeCount > 0 && storeCount <= 100);
+assert(Number.isSafeInteger(scanPages) && scanPages >= 0 && scanPages <= 1000);
 const root = path.resolve(values.root);
 assert(
   !values["baseline-dir"] ||
@@ -61,6 +65,7 @@ const report = {
   baseline: Boolean(values["baseline-dir"]),
   iterations,
   stores: storeCount,
+  scanPages,
   load: os.loadavg(),
   scope: "Synthetic Knowledge workers; startup/import and warm owner work, not Gateway throughput",
   results: [],
@@ -91,7 +96,10 @@ async function launch(name, config) {
         ),
       ).href,
       sdk,
-      files: { root: path.join(root, "extensions/knowledge"), extension },
+      files: {
+        root: path.join(root, values.built ? "dist/extensions/knowledge" : "extensions/knowledge"),
+        extension,
+      },
       stateRoot: path.join(state, "knowledge"),
       config,
       signal: signal.buffer,
@@ -113,7 +121,7 @@ async function launch(name, config) {
   worker.on("exit", (code) => fail(new Error(`Knowledge ${name} worker exited (${code})`)));
   const timeout = setTimeout(
     () => fail(new Error(`Knowledge ${name} measurement timed out`)),
-    180_000,
+    600_000,
   );
   const receive = (message) => {
     if (message.ready) {
@@ -174,8 +182,11 @@ async function measure(client, name, operation) {
   }
   await client.diagnostic("begin");
   const started = performance.now();
+  const latencies = [];
   for (let i = 0; i < iterations; i++) {
+    const operationStarted = performance.now();
     await operation(i);
+    latencies.push(performance.now() - operationStarted);
   }
   const elapsedMs = performance.now() - started;
   const warm = await client.diagnostic("end");
@@ -189,7 +200,15 @@ async function measure(client, name, operation) {
     naturalHeap,
     forcedGcHeap: retained.heap,
     scriptCount: retained.scriptCount,
-    warm: { ...warm, elapsedMs, iterations },
+    warm: {
+      ...warm,
+      elapsedMs,
+      iterations,
+      operationLatency: {
+        count: latencies.length,
+        p95Ms: latencies.toSorted((a, b) => a - b)[Math.ceil(latencies.length * 0.95) - 1],
+      },
+    },
     load: os.loadavg(),
   });
 }
@@ -220,9 +239,34 @@ try {
     assert.equal(Object.keys(result.stores).length, storeCount);
   });
   const config = { ...snapshot.stores[snapshot.bindings["benchmark-0"]], writesEnabled: false };
+  if (scanPages) {
+    const directory = path.join(config.root, "private", "people");
+    await fs.mkdir(directory, { recursive: true });
+    for (let index = 0; index < scanPages; index++) {
+      const title = `Synthetic person ${index}`;
+      const body =
+        `# ${title}\n\n[[Synthetic person ${(index + 1) % scanPages}]]\n\n` +
+        `Synthetic knowledge paragraph ${index} revision 0.\n\n`.repeat(300);
+      await fs.writeFile(
+        path.join(directory, `${index}.md`),
+        `---\nformat: knowledge-record-v1\nid: synthetic_person_${index}\nrevision: 1\nkind: page\ntitle: ${title}\nscope:\n  visibility: private\nrecorded_at: 2026-10-01T00:00:00Z\nupdated_at: 2026-10-01T00:00:00Z\nlifecycle: active\ntype: person\n---\n${body}`,
+      );
+    }
+  }
   storage = await launch("storage", config);
   await storage.ready;
   await measure(storage, "storage", async (index) => {
+    if (scanPages) {
+      if (index % 10 === 0) {
+        await fs.appendFile(
+          path.join(config.root, "private", "people", `${(index / 10) % scanPages}.md`),
+          `\n<!-- synthetic edit ${index} -->\n`,
+        );
+      }
+      const result = await storage.call("catalog");
+      assert.equal(result.records, scanPages);
+      return;
+    }
     const result = await storage.call("sourceCheck", {
       provider: "benchmark",
       key: `synthetic-source-${index % 1000}`,

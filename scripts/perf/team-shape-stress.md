@@ -37,7 +37,12 @@ The seeded mix is 4,300 finished unarchived subagents, 4,400 archived dashboards
 small channel/cron cohorts. Four agents are configured; retained rows initially
 belong to `main`. Transcripts contain 128 MiB of deterministic, incompressible
 message content with a skewed size distribution. This reproduces session shape,
-not a byte-for-byte copy of a production database. Four projects, disabled cron
+not a byte-for-byte copy of a production database. Retained runs are settled collectors
+spread over the first 64 parent sessions, matching the timestamp-churn targets. Their
+completions span the last 30 minutes. The existing collector retention setting is 24 hours
+in this synthetic fixture so timing/allocation AB/BA passes keep the same cohort.
+Their bounded child summaries exercise exact-row event preparation and recipient visibility;
+plain subagents do not enter that path. Four projects, disabled cron
 entries, user profiles, participants, approvals, and delivered run records use
 the existing offline fixture writers.
 
@@ -170,6 +175,17 @@ This forwards the workload's existing retained-worker instrumentation and captur
 the largest SQLite-store, model-catalog, and Git-operation worker after the measured window.
 The worker profiler and explicit collections make this diagnostic evidence;
 use an ordinary timing pass for latency and GC acceptance.
+
+Add `--knowledge-worker-heap --worker-heap-snapshot` to include the Knowledge
+storage worker. This selects Knowledge as the memory plugin, provisions one
+synthetic private store with 256 linked person pages of about 14 KiB each, and
+edits 25 pages before each round's status RPC. The post-window snapshot includes
+the storage worker; `knowledge-latencies.json` records status round trips.
+These documents are a controlled retention workload, not a production corpus.
+The existing 40-plugin catalog remains enabled, with Knowledge added to it.
+RSS remains process-wide; a worker's heap snapshot does not establish its share
+of native RSS. Use `knowledge-worker-heap-measure.mjs --scan-pages 256` for a
+larger operation-latency sample and worker CPU/allocation counters.
 
 Add `--worktree-tool-churn` to create managed worktrees for foreground sessions
 and exercise provisioning workers before measuring the same concurrent turn workload.

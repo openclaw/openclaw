@@ -42,6 +42,13 @@ Agent auth-store admission and configured model-owner changes explicitly select
 the Gateway agent-config readiness suite. Its lazy startup path is not fully
 visible to the bounded import graph; the owner watch preserves overlap coverage.
 
+PR Node plans also select the QA scenario catalog's reference check when a
+changed path is absent from the checkout, including the removed side of a rename.
+This catches stale YAML code references without selecting the full QA smoke lane.
+Removed UI test paths also select the UI runtime inventory check so its literal
+Node-driven browser list cannot silently retain deleted tests. Both checks use
+the existing bounded Node planner and leave native and real-Gateway tiers unchanged.
+
 Gateway close and run-shutdown owner changes likewise select the Gateway
 detached-execution shutdown and late-admission suites. `server.close()` reaches
 those owners through the kernel's lazy shutdown runtime, beyond the bounded
@@ -153,6 +160,17 @@ The exact Doctor plugin-index and SQLite sessions/transcripts built-CLI proofs
 use the runtime-only compiled-worker registry. The local TUI file does the same
 when its existing built-CLI mode is enabled; source TUI and broad, mixed, or
 custom selections retain the full registry.
+
+When the artifact producer selects both channels and core support checks with
+matching compiler heap options, they share one full compiled-worker generation.
+Both test commands still run concurrently with their original configurations,
+worker limits, and separate transform caches. The generation remains owned until
+both commands finish; either failure fails the producer without canceling its
+sibling. Single selections, differing compiler heap options, and older targets
+without the shared runner retain their independent commands. Changes to the shared
+runner select both checks in the artifact producer on current targets, while the
+changed Node plan defers its boundary coverage to that producer. This opt-in does
+not enable unrelated proof-tier checks.
 
 Real-Gateway UI shards have a 30-minute whole-job budget on the normal Blacksmith
 path. Successful 16-class jobs reached 19:04, leaving too little margin under the
@@ -357,7 +375,7 @@ prepares its required declarations. Only a successful preparation step
 enables prebuilt consumption, so the children reuse its JavaScript, assets, and
 freshness stamps instead of starting another full build.
 
-Vitest transform-cache fingerprints include direct Vitest configs at every depth and the shared `test/vitest/` inputs, except the two database-worker membership inventories that only select tests. They exclude the generated `.ci-harness` checkout so CI consumers and the protected warmer hash the same source inputs. Node bytecode caching remains enabled for ordinary Vitest runs; Vitest owns the worker-level coverage safeguard described in [local testing](/reference/test/local#core-commands).
+Vitest transform-cache generations include direct Vitest configs at every depth and the shared `test/vitest/` inputs, except the two database-worker membership inventories and the E2E config factory. Each project fingerprints its declaring config and imported config dependencies; the E2E factory also supplies its canonical file when loaded through a wrapper. E2E-only config edits therefore invalidate E2E transforms while preserving unrelated unit transforms. Shared compiler, helper, dependency, and schema inputs retain their invalidation. Generations exclude the generated `.ci-harness` checkout so CI consumers and the protected warmer hash the same source inputs. Node bytecode caching remains enabled for ordinary Vitest runs; Vitest owns the worker-level coverage safeguard described in [local testing](/reference/test/local#core-commands).
 
 Transform keys also include each project's dependency optimizer directory. This
 prevents cached UI imports from mixing separate projects' Lit instances when a
