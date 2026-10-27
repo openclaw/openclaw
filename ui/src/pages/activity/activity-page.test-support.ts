@@ -102,6 +102,10 @@ export function createActivityPage(context: ApplicationContext, initial?: RouteL
 }
 
 export async function settleActivity() {
+  // Live events publish at a task boundary; a frame may arrive before that task.
+  await new Promise<void>((resolve) => {
+    setTimeout(resolve, 0);
+  });
   await new Promise(requestAnimationFrame);
   flush();
 }
