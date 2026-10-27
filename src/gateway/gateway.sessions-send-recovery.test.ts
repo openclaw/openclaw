@@ -76,6 +76,9 @@ it.for(["SIGTERM", "SIGKILL"] as const)(
       let omittedProviderObservations = 0;
       let restartObservedAt: number | undefined;
       let restartLogOffset = 0;
+      let failureLogOffset = 0;
+      let restartEpoch: 0 | 1 | 2 = 0;
+      let failureRestartStartedAtMs: number | undefined;
       let startupAwaitCompleted = false;
       const recoveryMarker = (value: string | undefined): RecoveryDiagnosticMarker =>
         normalizeRecoveryDiagnosticMarker(value);
@@ -396,26 +399,30 @@ it.for(["SIGTERM", "SIGKILL"] as const)(
         });
       const archivedSource = "agent:main:dashboard:archived-source";
       let restarting: Promise<void> | undefined;
-      const printProviderDiagnostics = () => {
+      const captureProviderDiagnostics = () => {
         const restartedLogs = gateway.logs().slice(restartLogOffset);
-        console.error(
-          `[session-recovery-provider] ${JSON.stringify({
-            shutdownSignal,
-            restartStarted: restartObservedAt !== undefined,
-            entries: providerObservations,
-            omittedEntries: omittedProviderObservations,
-            settlement: {
-              sessionLifecycleQueueWaits: Math.max(
-                0,
-                restartedLogs.split("session lifecycle queue waiting").length - 1,
-              ),
-              deliveryNotices: restartedLogs.includes("startup trace: sidecars.delivery-notices"),
-              deliveryRecovery: restartedLogs.includes("startup trace: sidecars.delivery-recovery"),
-              startupAwaitCompleted,
-            },
-          })}`,
-        );
+        return {
+          shutdownSignal,
+          restartEpoch,
+          restartStarted: restartObservedAt !== undefined,
+          entries: providerObservations,
+          omittedEntries: omittedProviderObservations,
+          settlement: {
+            sessionLifecycleQueueWaits: Math.max(
+              0,
+              restartedLogs.split("session lifecycle queue waiting").length - 1,
+            ),
+            deliveryNotices: restartedLogs.includes("startup trace: sidecars.delivery-notices"),
+            deliveryRecovery: restartedLogs.includes("startup trace: sidecars.delivery-recovery"),
+            startupAwaitCompleted,
+          },
+        };
       };
+      let providerDiagnostics: ReturnType<typeof captureProviderDiagnostics> | undefined;
+      const printProviderDiagnostics = () =>
+        console.error(
+          `[session-recovery-provider] ${JSON.stringify(providerDiagnostics ?? captureProviderDiagnostics())}`,
+        );
       const recoveryDiagnosticMarkers = () => {
         const markers: Record<string, RecoveryDiagnosticMarker> = {
           [cancelledChatId]: "CANCELLED_CHAT",
@@ -597,6 +604,9 @@ it.for(["SIGTERM", "SIGKILL"] as const)(
         }
         hold = false;
         restartLogOffset = gateway.logs().length;
+        failureLogOffset = restartLogOffset;
+        restartEpoch = 1;
+        failureRestartStartedAtMs = Date.now();
         restartObservedAt = performance.now();
         const startup = (restarting = gateway.startGateway());
         const awaitRecovery = <T>(gate: PromiseLike<T>) =>
@@ -624,6 +634,8 @@ it.for(["SIGTERM", "SIGKILL"] as const)(
         releaseHeldResponse(recoveredResponse);
         await startup;
         startupAwaitCompleted = true;
+        providerDiagnostics = captureProviderDiagnostics();
+        restartObservedAt = undefined;
         expect(gateway.child?.pid).not.toBe(firstPid);
         client = await connect();
         await expectPersistedSteer();
@@ -685,6 +697,9 @@ it.for(["SIGTERM", "SIGKILL"] as const)(
         const previousReplacementWarnings = gateway
           .logs()
           .split("Session delivery endpoint was replaced").length;
+        failureLogOffset = gateway.logs().length;
+        restartEpoch = 2;
+        failureRestartStartedAtMs = Date.now();
         await gateway.startGateway();
         client = await connect();
         await waitFor(() =>
@@ -713,10 +728,12 @@ it.for(["SIGTERM", "SIGKILL"] as const)(
           sessionKey: target,
           runId: chatRequests.at(-1)?.idempotencyKey,
           frames: [],
-          restartedLogs: gateway.logs(),
+          restartedLogs: gateway.logs().slice(failureLogOffset),
           startupSnapshot: undefined,
           logPath: gateway.state.path("gateway.log"),
           markers: recoveryDiagnosticMarkers(),
+          restartEpoch,
+          restartStartedAtMs: failureRestartStartedAtMs,
         }).catch(() => console.error("[session-recovery-failure] diagnostics unavailable"));
         throw error;
       } finally {

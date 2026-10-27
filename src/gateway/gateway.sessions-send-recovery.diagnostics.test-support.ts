@@ -211,10 +211,16 @@ async function readLogTail(logPath: string): Promise<string> {
   }
 }
 
-function recoveryLogMessages(logs: string): string[] {
+function recoveryLogMessages(logs: string, sinceMs?: number): string[] {
   return logs.split("\n").flatMap((line) => {
     try {
       const record = asOptionalRecord(JSON.parse(line));
+      if (sinceMs !== undefined) {
+        const timestamp = typeof record?.time === "string" ? Date.parse(record.time) : Number.NaN;
+        if (!Number.isFinite(timestamp) || timestamp < sinceMs) {
+          return [];
+        }
+      }
       // The file logger's display message includes structured metadata. Prefer
       // it over duplicate argument fields, retaining run IDs on abort records.
       return typeof record?.message === "string"
@@ -256,10 +262,10 @@ function projectChatInputRecoveryBlocked(line: string) {
   };
 }
 
-function recoveryLogTail(logs: string): string[] {
+function recoveryLogTail(logs: string, sinceMs?: number): string[] {
   // Do not emit raw log lines: even a recovery error may contain request text,
   // paths, or credentials. Preserve only fixed event labels and numeric timings.
-  return recoveryLogMessages(logs)
+  return recoveryLogMessages(logs, sinceMs)
     .flatMap((line) => {
       const event = line.match(
         /Pending input replay:|Chat input recovery blocked:|Session delivery recovery (?:retry|blocked|failed)|main-session restart recovery (?:candidate|startup complete:)|chat pending input aborted:|session lifecycle queue waiting|\[admission\] closed:|slow chat send|^gateway ready$|startup (?:phase|trace): (?:sessions\.admission|sidecars\.(?:[a-z.-]*recovery|delivery-notices)|ready)|mailbox/iu,
@@ -296,6 +302,8 @@ export async function printRecoveryFailureDiagnostics(params: {
   startupSnapshot: unknown;
   logPath: string;
   markers: Readonly<Record<string, RecoveryDiagnosticMarker>>;
+  restartEpoch?: 0 | 1 | 2;
+  restartStartedAtMs?: number;
 }): Promise<void> {
   const { client, databasePath, sessionKey, runId, frames } = params;
   const reads = runId
@@ -321,6 +329,7 @@ export async function printRecoveryFailureDiagnostics(params: {
   const { rows: startupRows, ...startupSummary } = startup;
   const diagnostic = JSON.stringify({
     replayLogAtLimit: Buffer.byteLength(fileLog) >= RECOVERY_LOG_BYTES,
+    restartEpoch: params.restartEpoch ?? null,
     runId,
     frames,
     durable: summary,
@@ -337,6 +346,6 @@ export async function printRecoveryFailureDiagnostics(params: {
     console.error(`[session-recovery-row] ${JSON.stringify({ phase: "before-startup", row })}`);
   }
   console.error(
-    `[session-recovery-child-log] ${JSON.stringify({ console: recoveryLogTail(params.restartedLogs), file: recoveryLogTail(fileLog) })}`,
+    `[session-recovery-child-log] ${JSON.stringify({ console: recoveryLogTail(params.restartedLogs), file: recoveryLogTail(fileLog, params.restartStartedAtMs) })}`,
   );
 }
