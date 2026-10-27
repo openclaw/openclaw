@@ -140,6 +140,7 @@ const repositoryScriptEntries = [
   "scripts/perf/session-actor-residency-snapshot.mjs!",
   "scripts/perf/session-actor-retention-seed.ts!",
   "scripts/perf/session-row-materialization-measure.ts!",
+  "scripts/perf/session-row-refresh-measure.ts!",
   "scripts/perf/session-row-lineage-measure.ts!",
   "scripts/perf/tool-result-hash-measure.ts!",
   "scripts/perf/tool-result-size-measure.ts!",
@@ -246,6 +247,8 @@ const repositoryScriptEntries = [
   "scripts/perf/worker-task-metrics-measure.ts!",
   // scripts/perf/README.md invokes this worker protocol benchmark by path.
   "scripts/perf/worker-module-graphs-measure.mjs!",
+  // Its header documents the built-worker nursery and natural-idle comparison.
+  "scripts/perf/worker-young-generation-measure.mjs!",
   // scripts/perf/README.md invokes this cold usage-cache measurement CLI by path.
   "scripts/perf/chat-metadata-burst-measure.ts!",
   // scripts/perf/README.md invokes this model-prompt statistics measurement CLI by path.
@@ -492,6 +495,8 @@ const repositoryScriptEntries = [
   "scripts/perf/placement-recovery-reads-bench.ts!",
   "scripts/perf/plain-tool-brace-measure.ts!",
   "scripts/perf/plugin-cache-stat-facts.ts!",
+  // Its header documents the paired metadata-root allocation benchmark.
+  "scripts/perf/plugin-cache-root-measure.ts!",
   "scripts/perf/plugin-preparation-boot.mjs!",
   "scripts/perf/plugin-preparation-boot-preload.mjs!",
   "scripts/perf/plugin-relative-path-measure.ts!",
@@ -682,6 +687,7 @@ const repositoryScriptEntries = [
   "scripts/bench-team-reports-snapshots.mts!",
   "scripts/perf/async-work-scope-measure.ts!",
   "scripts/perf/local-workspace-callers-measure.ts!",
+  "scripts/perf/local-workspace-retention.ts!",
   "scripts/perf/plugin-iterator-membrane-measure.ts!",
   "scripts/perf/plugin-generation-retention.ts!",
   "scripts/perf/placement-startup-wake-measure.ts!",

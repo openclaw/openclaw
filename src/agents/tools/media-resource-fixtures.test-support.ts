@@ -32,6 +32,7 @@ export function snapshot(
   });
   return createPreparedModelRuntimeSnapshot(undefined, facts, prepared.pluginGeneration, catalog, {
     initialAuth: { authStore: facts.authStore, authModes: {}, providerAuthLabels: new Map() },
+    readUsage: (store) => store,
     isCurrent: () => true,
     withRefreshStatus: (value) => value,
     readFullModelCatalog: () => catalog.modelCatalog,

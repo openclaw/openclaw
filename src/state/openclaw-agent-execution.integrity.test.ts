@@ -171,10 +171,10 @@ function holdIntegrity(pathname: string) {
 function nativeGeneration(
   database: Pick<OpenClawAgentDatabase, "agentId" | "path">,
   context: ReturnType<typeof workerContext>,
-  assertCurrent: () => void,
+  assertCurrent = () => context.admission.assertCurrent(),
   assertCleanup = assertCurrent,
 ) {
-  return createAgentDatabaseNativeGeneration(
+  const generation = createAgentDatabaseNativeGeneration(
     database.agentId,
     database.path,
     context,
@@ -185,6 +185,7 @@ function nativeGeneration(
     () => {},
     () => {},
   );
+  return Object.assign(generation, { source: sourceFor(assertCurrent) });
 }
 
 function sourceFor(
@@ -355,10 +356,9 @@ it.for(["warm", "cold"] as const)(
     const ready = openAgent({ agentId: "ready", env });
     const preparing = openAgent({ agentId: "preparing", env });
     const context = workerContext({ env });
-    const assertCurrent = () => context.admission.assertCurrent();
-    const source = sourceFor(assertCurrent);
-    const readyGeneration = nativeGeneration(ready, context, assertCurrent);
-    const preparingGeneration = nativeGeneration(preparing, context, assertCurrent);
+    const readyGeneration = nativeGeneration(ready, context);
+    const preparingGeneration = nativeGeneration(preparing, context);
+    const { source } = readyGeneration;
     const queue = createChannelIngressQueue<{ text: string }>({
       channelId: "synthetic",
       stateDir: env.OPENCLAW_STATE_DIR,
@@ -441,10 +441,8 @@ it.each(["confirmed close", "native exit"] as const)(
         .all(database.path);
     const hostLeases = leases();
     expect(hostLeases).toHaveLength(1);
-    const context = workerContext({ env });
-    const assertCurrent = () => context.admission.assertCurrent();
-    const source = sourceFor(assertCurrent);
-    const generation = nativeGeneration(database, context, assertCurrent);
+    const generation = nativeGeneration(database, workerContext({ env }));
+    const { source } = generation;
     const workers: Worker[] = [];
     const observeWorker = (worker: Worker) => workers.push(worker);
     const cleanup = vi.spyOn(stateWorkerStore, "openOpenClawStateWorkerCleanupStore");
@@ -607,10 +605,8 @@ it("opens an unconfigured external store without reconstructing unknown deletion
   retained.db.exec("INSERT INTO auth_profile_state VALUES ('preserved', '{\"ok\":true}', 1)");
   closeAgent(pathname);
   const bytes = fs.readFileSync(pathname);
-  const context = workerContext({ env });
-  const assertCurrent = () => context.admission.assertCurrent();
-  const source = sourceFor(assertCurrent);
-  const generation = nativeGeneration(retained, context, assertCurrent);
+  const generation = nativeGeneration(retained, workerContext({ env }));
+  const { source } = generation;
   const opening = await Promise.allSettled([generation.run(source, async () => "opened")]);
   const closing = await Promise.allSettled([generation.close()]);
   expect(opening).toEqual([{ status: "fulfilled", value: "opened" }]);
