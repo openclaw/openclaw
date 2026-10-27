@@ -1,6 +1,8 @@
 import type { Page } from "playwright";
 import { expect, it } from "vitest";
+import type { GatewaySessionRow } from "../api/types.ts";
 import { controlUiSessionUrl, installMockGateway } from "../test-helpers/control-ui-e2e.ts";
+import { chatSessionListResponse } from "./chat-flow.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
 const suite = createControlUiE2eSuite({
@@ -43,20 +45,18 @@ async function openChat(options: Parameters<typeof installMockGateway>[1] = {}) 
 
 suite.define(() => {
   it("keeps approvals passive through detail review and queued decisions", async () => {
-    const { page, gateway, request } = await openChat({
-      sessionKey: activeSessionKey,
-      sessions: [
-        { key: activeSessionKey, label: "Main", kind: "direct", updatedAt: 1_000 },
-        {
-          key: "agent:main:other",
-          label: "Review navigation",
-          kind: "direct",
-          updatedAt: 2_000,
-          worktree: { id: "review", branch: "review/navigation", repoRoot: "/projects/atlas" },
-          spawnedCwd: "/projects/atlas-review",
-        },
-      ],
-    });
+    const sessions: GatewaySessionRow[] = [
+      { key: activeSessionKey, label: "Main", kind: "direct", updatedAt: 1_000 },
+      {
+        key: "agent:main:other",
+        label: "Review navigation",
+        kind: "direct",
+        updatedAt: 2_000,
+        worktree: { id: "review", branch: "review/navigation", repoRoot: "/projects/atlas" },
+        spawnedCwd: "/projects/atlas-review",
+      },
+    ];
+    const { page, gateway, request } = await openChat({ sessionKey: activeSessionKey, sessions });
     const initial = approval("approval-inline", "echo inline", 1_000);
     await gateway.emitGatewayEvent("exec.approval.requested", {
       ...initial,
@@ -101,6 +101,21 @@ suite.define(() => {
     expect(await modal.locator(".exec-approval-title").textContent()).toContain(
       "Review navigation",
     );
+    const renamed = { ...sessions[1], label: "Review navigation updated", updatedAt: Date.now() };
+    await gateway.setSessionsListResponse(chatSessionListResponse([sessions[0], renamed]));
+    await gateway.emitGatewayEvent("sessions.changed", { agentId: "main", reason: "update" });
+    await expect
+      .poll(() => modal.locator(".exec-approval-title").textContent(), { timeout: 15_000 })
+      .toContain("Review navigation updated");
+    await page.keyboard.press("Escape");
+    await page.locator("openclaw-modal-dialog").waitFor({ state: "hidden" });
+    await inlineApproval(page, "approval-inline")
+      .getByRole("button", { name: "1 more pending" })
+      .click();
+    await expect
+      .poll(() => modal.locator(".exec-approval-title").textContent())
+      .toContain("Review navigation updated");
+    expect(await gateway.getRequests("exec.approval.resolve")).toHaveLength(0);
     await gateway.deferNext("exec.approval.resolve", { id: "approval-other" });
     const allow = modal.getByRole("button", { name: "Allow once", exact: true });
     await allow.click();
