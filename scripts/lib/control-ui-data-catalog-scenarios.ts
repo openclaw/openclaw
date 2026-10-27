@@ -326,7 +326,10 @@ function agentSelectionScenario(roundTripMs: 0 | 100): InteractionScenario {
         await trigger.locator('.identity-avatar__text[data-avatar="🧪"]').waitFor();
         await frames(page);
         const avatars = await agentAvatarCounts(originalAvatars);
-        if (avatars.agentAvatarsInitial !== agentCount || avatars.agentAvatarsFinal !== agentCount) {
+        if (
+          avatars.agentAvatarsInitial !== agentCount ||
+          avatars.agentAvatarsFinal !== agentCount
+        ) {
           throw new Error("Expected all 300 agent row avatars before and after warm selection");
         }
         const identityRequests =
@@ -353,7 +356,8 @@ const agentReopenRetentionScenario: InteractionScenario = {
   id: "data-agent-reopen-retention",
   route: pathForAgentPanel("main", "overview"),
   explicitOnly: true,
-  diagnostic: "Ten hydrated same-selection reopen cycles; forced-GC snapshots are memory proof only.",
+  diagnostic:
+    "Ten hydrated same-selection reopen cycles; forced-GC snapshots are memory proof only.",
   expected:
     "Reopening the hydrated selector ten times preserves all 300 avatars without identity reads.",
   prepare: prepareAgentSelector,

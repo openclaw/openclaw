@@ -1444,9 +1444,14 @@ try {
               if (values["retained-heap"] && cdp && retainedHeap && result.status === "passed") {
                 await capture(async () => {
                   const artifact = `${artifactPrefix}.after.heapsnapshot`;
-                  const final = await captureRetention(page, cdp!, path.join(artifactDir, artifact), {
-                    preserveFixtureRequests: true,
-                  });
+                  const final = await captureRetention(
+                    page,
+                    cdp!,
+                    path.join(artifactDir, artifact),
+                    {
+                      preserveFixtureRequests: true,
+                    },
+                  );
                   retainedHeap.after = { ...final, artifact };
                   retainedHeap.afterBytes = final.heapUsedBytes;
                   retainedHeap.deltaBytes = final.heapUsedBytes - retainedHeap.beforeBytes;
