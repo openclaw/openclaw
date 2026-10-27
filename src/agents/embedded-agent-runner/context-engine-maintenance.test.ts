@@ -254,7 +254,7 @@ describe("runContextEngineMaintenance", () => {
     }),
   );
 
-  it.each([
+  it.for([
     { name: "SIGTERM", trigger: () => process.emit("SIGTERM", "SIGTERM") },
     { name: "accepted restart drain", trigger: () => markGatewayDraining() },
   ])(
