@@ -57,7 +57,7 @@ import * as reclamationWorker from "./session-accessor.sqlite-reclamation-worker
 import * as sessionWorker from "./session-accessor.sqlite-replacement-worker.js";
 import { replaceTranscriptEvents } from "./session-accessor.sqlite-transcript-write.test-support.js";
 import * as archivePublication from "./session-archive-publication.js";
-import { runSessionColdStorageMaintenance } from "./session-cold-storage.js";
+import * as coldStorage from "./session-cold-storage.js";
 import {
   createSessionColdStorageFixture,
   maintenanceConfig,
@@ -298,7 +298,6 @@ describe("SQLite transcript archive sessions", () => {
       const fixture = await createSessionColdStorageFixture(
         openLifecycleTestDatabase(storePath).path,
       );
-      const original = fixture.snapshot();
       const carriers: Worker[] = [];
       const createWorker = expectDefined(
         vi.mocked(workerCpu.createCpuTrackedWorker).getMockImplementation(),
@@ -319,7 +318,7 @@ describe("SQLite transcript archive sessions", () => {
       const exercise = async () => {
         vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
         try {
-          await runSessionColdStorageMaintenance({
+          await coldStorage.runSessionColdStorageMaintenance({
             config: maintenanceConfig(fixture.scope.storePath),
           });
           expect(carriers).toHaveLength(1);
@@ -354,17 +353,18 @@ describe("SQLite transcript archive sessions", () => {
               return result;
             },
           );
-          const restored = loadTranscriptEvents(fixture.scope);
+          const restored = coldStorage.restoreSessionColdTranscript(fixture.scope);
           await entered.promise;
           expect(carriers).toHaveLength(1);
           const exited = once(carrier, "exit");
           finishClose?.();
           finishClose = undefined;
           await exited;
-          expect(await restored).toHaveLength(3);
+          await restored;
+          expect(await loadTranscriptEvents(fixture.scope)).toHaveLength(3);
           expect(carriers).toHaveLength(2);
           expect(leases()).toEqual(baselineLeases);
-          expect(fixture.snapshot()).toEqual(original);
+          expect(fixture.snapshot()).toEqual(fixture.original);
           const replacement = expectDefined(carriers[1], "replacement archive carrier");
           const replacementExited = once(replacement, "exit");
           await vi.advanceTimersByTimeAsync(5 * 60_000);
