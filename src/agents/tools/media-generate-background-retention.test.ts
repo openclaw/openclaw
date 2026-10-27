@@ -18,7 +18,6 @@ import { artifactsHandlers } from "../../gateway/server-methods/artifacts.js";
 import { chatHistoryHandlers } from "../../gateway/server-methods/chat-history-handler.js";
 import { createHistoryReadContext } from "../../gateway/server-methods/chat-history.test-helpers.js";
 import type { GatewayClient } from "../../gateway/server-methods/types.js";
-import { sharingPolicyClient } from "../../gateway/session-sharing.test-utils.js";
 import { rotateAgentEventLifecycleGeneration } from "../../infra/agent-events.js";
 import * as sessionDelivery from "../../infra/session-delivery-queue-storage.js";
 import * as admission from "../../infra/sqlite-worker-operation-admission.js";
