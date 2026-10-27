@@ -24,9 +24,9 @@ async function inspectSurfaces(page: Page) {
     const host = conversation.closest<HTMLElement>(".sidebar-region")!;
     const probe = document.createElement("div");
     root.append(probe);
-    const resolve = (value: string) => {
-      probe.style.backgroundColor = value;
-      return getComputedStyle(probe).backgroundColor;
+    const resolve = (value: string, property: "backgroundColor" | "backgroundImage") => {
+      probe.style[property] = value;
+      return getComputedStyle(probe)[property];
     };
     const composerStyle = getComputedStyle(composer);
     const bubbleStyle = getComputedStyle(bubble);
@@ -37,15 +37,16 @@ async function inspectSurfaces(page: Page) {
       return { width: rect.width, height: rect.height };
     };
     const expectedComposer = resolve(
-      "color-mix(in srgb, var(--chat-composer-surface) 78%, transparent)",
+      "linear-gradient(var(--chat-composer-surface), var(--chat-composer-surface)), none",
+      "backgroundImage",
     );
-    const expectedBubble = resolve("var(--chat-user-surface)");
+    const expectedBubble = resolve("var(--chat-user-surface)", "backgroundColor");
     probe.remove();
     return {
       themeSheets: [...document.querySelectorAll<HTMLLinkElement>('link[rel="stylesheet"]')]
         .filter((link) => link.href.includes("/themes/"))
         .map((link) => ({ href: new URL(link.href).pathname, loaded: Boolean(link.sheet) })),
-      composer: composerStyle.backgroundColor,
+      composer: composerStyle.backgroundImage,
       bubble: bubbleStyle.backgroundColor,
       expectedComposer,
       expectedBubble,
@@ -217,17 +218,9 @@ suite.define(() => {
             content: `:root[data-theme] { --chat-composer-surface: ${surface}; --chat-user-surface: ${surface}; }`,
           });
           const inherited = await inspectSurfaces(page);
-          const expectedComposer = await page.evaluate((color) => {
-            const probe = document.createElement("div");
-            probe.style.backgroundColor = `color-mix(in srgb, ${color} 78%, transparent)`;
-            document.body.append(probe);
-            const result = getComputedStyle(probe).backgroundColor;
-            probe.remove();
-            return result;
-          }, surface);
           expect
             .soft(inherited.composer, "composer inherits the theme surface")
-            .toBe(expectedComposer);
+            .toBe(`linear-gradient(${surface}, ${surface}), none`);
           expect.soft(inherited.bubble, "user bubble inherits the theme surface").toBe(surface);
           expect(inherited.dimensions).toEqual(original.dimensions);
           const media = page.locator(".chat-group.user .chat-bubble--with-images");
