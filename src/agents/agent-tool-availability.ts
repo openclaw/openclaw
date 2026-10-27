@@ -27,6 +27,12 @@ const availabilityBindings = new WeakMap<
   }
 >();
 
+/**
+ * Provider-normalization fallback, deliberately outside the owner binding: native readers
+ * are recognized by binding identity, so attaching a canonical schema must not replace it.
+ */
+const fallbackExecutionSchemas = new WeakMap<object, () => unknown>();
+
 export function bindAgentToolAvailability<T extends object>(
   tool: T,
   binding: AgentToolAvailabilityBinding,
@@ -50,6 +56,10 @@ export function copyAgentToolAvailability<T extends object>(source: object, targ
   const metadata = availabilityBindings.get(source);
   if (metadata) {
     availabilityBindings.set(target, metadata);
+  }
+  const fallback = fallbackExecutionSchemas.get(source);
+  if (fallback) {
+    fallbackExecutionSchemas.set(target, fallback);
   }
   return target;
 }
@@ -119,7 +129,11 @@ export function finalizeAgentToolAvailability<T extends ToolDefinition>(
 }
 
 export function resolveAgentToolExecutionSchema(tool: object, schema: unknown): unknown {
-  return availabilityBindings.get(tool)?.binding.executionSchema?.(schema) ?? schema;
+  return (
+    availabilityBindings.get(tool)?.binding.executionSchema?.(schema) ??
+    fallbackExecutionSchemas.get(tool)?.() ??
+    schema
+  );
 }
 
 /**
@@ -128,16 +142,12 @@ export function resolveAgentToolExecutionSchema(tool: object, schema: unknown): 
  * this only fills the gap left by provider normalization.
  */
 export function bindAgentToolExecutionSchema<T extends object>(tool: T, schema: unknown): T {
-  const metadata = availabilityBindings.get(tool);
-  if (metadata?.binding.executionSchema) {
+  if (
+    availabilityBindings.get(tool)?.binding.executionSchema ||
+    fallbackExecutionSchemas.has(tool)
+  ) {
     return tool;
   }
-  const executionSchema = () => schema;
-  availabilityBindings.set(
-    tool,
-    metadata
-      ? { ...metadata, binding: { ...metadata.binding, executionSchema } }
-      : { binding: { prepare: () => undefined, executionSchema } },
-  );
+  fallbackExecutionSchemas.set(tool, () => schema);
   return tool;
 }

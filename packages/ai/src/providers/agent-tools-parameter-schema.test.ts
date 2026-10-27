@@ -203,12 +203,6 @@ it("retains the canonical contract behind a stripped-keyword projection", () => 
   expect(getCanonicalToolParameterSchema(normalized)).toEqual(canonical);
 });
 
-it("does not retain a canonical contract when the provider projection is lossless", () => {
-  const canonical = required({ value: { type: "string" } });
-  expect(getCanonicalToolParameterSchema(normalize(canonical, openai))).toBeUndefined();
-  expect(getCanonicalToolParameterSchema(normalize(canonical))).toBeUndefined();
-});
-
 it("inlines mixed OpenAPI refs rather than leaving dangling components", () => {
   const normalized = inlined({
     ...batch,

@@ -32,6 +32,11 @@ type PreparedDescriptor = {
   readonly normalized: AnyAgentTool["parameters"];
   readonly finalSource: AnyAgentTool["parameters"];
   readonly outputSource: AnyAgentTool["outputSchema"];
+  /**
+   * Provider-neutral contract for local validation. Kept beside the published descriptor:
+   * publication detaches the normalized schema, which would otherwise lose the binding.
+   */
+  readonly executionSchema?: unknown;
   readonly descriptor: Readonly<ToolDescriptor>;
 };
 type DescriptorSnapshot = {
@@ -95,6 +100,7 @@ function normalizeToolParameters(
 function bindToolParameterSchema(
   tool: AnyAgentTool,
   parameters: AnyAgentTool["parameters"],
+  executionSchema?: unknown,
 ): AnyAgentTool {
   const normalized = { ...tool, parameters };
   if (isObjectSchemaWithNoRequiredParams(parameters)) {
@@ -105,7 +111,7 @@ function bindToolParameterSchema(
   }
   const bound = copyAgentToolMetadata(tool, normalized);
   // The provider projection is model-facing only; local validation keeps the contract.
-  const canonical = getCanonicalToolParameterSchema(parameters);
+  const canonical = executionSchema ?? getCanonicalToolParameterSchema(parameters);
   return canonical === undefined ? bound : bindAgentToolExecutionSchema(bound, canonical);
 }
 
@@ -168,9 +174,9 @@ export function finalizeAgentTools(options: FinalizeAgentToolsOptions): AnyAgent
   const sources = options.tools.map((tool) => tool.parameters);
   const normalized = options.tools.map((tool, index) => {
     const entry = entries?.[index];
-    const prepared = entry && entry.source === tool.parameters ? entry.normalized : undefined;
-    return prepared
-      ? bindToolParameterSchema(tool, prepared)
+    const reusable = entry && entry.source === tool.parameters ? entry : undefined;
+    return reusable
+      ? bindToolParameterSchema(tool, reusable.normalized, reusable.executionSchema)
       : normalizeToolParameters(tool, {
           modelProvider: options.modelProvider,
           modelId: options.modelId,
@@ -239,6 +245,7 @@ export function finalizeAgentTools(options: FinalizeAgentToolsOptions): AnyAgent
       normalized: normalizedSchemas[index]!,
       finalSource: tool.parameters,
       outputSource: tool.outputSchema,
+      executionSchema: getCanonicalToolParameterSchema(normalizedSchemas[index]!),
       descriptor: {
         name: tool.name,
         description: tool.description,
@@ -297,6 +304,7 @@ export function finalizeAgentTools(options: FinalizeAgentToolsOptions): AnyAgent
         outputSource: entry.outputSource,
         normalized: normalizedSchema,
         finalSource: entry.finalSource === entry.normalized ? normalizedSchema : entry.finalSource,
+        executionSchema: entry.executionSchema ?? getCanonicalToolParameterSchema(entry.normalized),
         descriptor,
       };
     });

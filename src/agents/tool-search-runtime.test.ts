@@ -21,6 +21,7 @@ import { assertCompleteToolResult, resolveToolResultBudget } from "./tool-result
 import {
   addClientToolsToToolCatalog,
   compactToolSearchCatalogEntry,
+  describeToolSearchCatalogEntry,
 } from "./tool-search-catalog.js";
 import {
   singleToolCallStreamFn as createSingleToolCallStreamFn,
@@ -289,6 +290,50 @@ describe("Tool Search input schemas", () => {
       path: "nonexistent.txt",
       optional: true,
     });
+  });
+
+  it("keeps the canonical contract after descriptor publication and reuse", async () => {
+    const cleanups: Array<(reason: string) => Promise<void>> = [];
+    const attempt = () =>
+      finalizeAgentTools({
+        tools: [fakeTool("read", readToolInputSchema)],
+        hookContext: { sessionId: "gemini-read-reuse" },
+        modelProvider: "google",
+        modelId: "gemini-4-argon",
+        wrapBeforeToolCallHook: false,
+        registerRunCleanup: (cleanup) => cleanups.push(cleanup),
+      });
+    const cold = attempt();
+    expect(cold[0]?.parameters).toHaveProperty("properties.optional.enum", ["true"]);
+    await Promise.all(cleanups.map((cleanup) => cleanup("finished")));
+
+    const { catalogRef, runtime } = createRuntime(attempt());
+    expect(catalogRef.current?.entries[0]?.parameters).toHaveProperty("properties.optional.enum", [
+      "true",
+    ]);
+    await expect(
+      runtime.call("read", { path: "nonexistent.txt", optional: true }),
+    ).resolves.toBeDefined();
+  });
+
+  it("advertises the canonical contract in catalog discovery", async () => {
+    const finalized = finalizeAgentTools({
+      tools: [fakeTool("read", readToolInputSchema)],
+      hookContext: { sessionId: "gemini-read-discovery" },
+      modelProvider: "google",
+      modelId: "gemini-4-argon",
+      wrapBeforeToolCallHook: false,
+    });
+    const { catalogRef } = createRuntime(finalized);
+    const entry = catalogRef.current?.entries[0];
+    expect(entry).toBeDefined();
+    const compact = compactToolSearchCatalogEntry(entry!);
+    expect(compact.input).toContain("optional?: true");
+    expect(compact.input).not.toContain('optional?: "true"');
+    expect(describeToolSearchCatalogEntry(entry!).parameters).toHaveProperty(
+      "properties.optional.const",
+      true,
+    );
   });
 
   it.each([

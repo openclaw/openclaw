@@ -4,7 +4,10 @@ import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { getRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import { generateSecureHex } from "../infra/secure-random.js";
 import { classifyAgentToolSource } from "../plugins/tool-metadata.js";
-import { finalizeAgentToolAvailability } from "./agent-tool-availability.js";
+import {
+  finalizeAgentToolAvailability,
+  resolveAgentToolExecutionSchema,
+} from "./agent-tool-availability.js";
 import type { HookContext } from "./agent-tools.before-tool-call.js";
 import {
   isToolWrappedWithBeforeToolCallHook,
@@ -68,13 +71,21 @@ function compactMcpInstructions(instructions: string | undefined): string | unde
   return `${truncateUtf16Safe(instructions, MAX_SEARCH_MCP_INSTRUCTIONS_CHARS - 3)}...`;
 }
 
+/**
+ * Discovery (describe, compact hints, Code Mode declarations) advertises the contract that
+ * dispatch enforces, not the lossy provider projection used for the wire request.
+ */
+function catalogEntryInputSchema(entry: ToolSearchCatalogEntry): unknown {
+  return resolveAgentToolExecutionSchema(entry.tool, entry.parameters) ?? entry.parameters;
+}
+
 export function describeToolSearchCatalogEntry(entry: ToolSearchCatalogEntry) {
   const { mcp, ...descriptor } = compactToolSearchCatalogEntry(entry, {
     fullInstructions: true,
   });
   return {
     ...descriptor,
-    parameters: entry.parameters ?? {},
+    parameters: catalogEntryInputSchema(entry) ?? {},
     ...(entry.outputSchema ? { outputSchema: entry.outputSchema } : {}),
     ...(mcp ? { mcp } : {}),
   };
@@ -523,7 +534,10 @@ export function compactToolSearchCatalogEntry(
     name: entry.name,
     label: entry.label,
     description: entry.description,
-    input: entry.source === "openclaw" ? compactToolInputHint(entry.parameters) : "unknown",
+    input:
+      entry.source === "openclaw"
+        ? compactToolInputHint(catalogEntryInputSchema(entry))
+        : "unknown",
     ...(instructionsHint ? { instructionsHint } : {}),
     ...(output ? { output } : {}),
   };
