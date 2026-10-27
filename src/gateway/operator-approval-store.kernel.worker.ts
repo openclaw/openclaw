@@ -17,6 +17,7 @@ import { tableExists } from "../state/openclaw-state-db-schema-helpers.js";
 import { runOpenClawStateWriteTransaction } from "../state/openclaw-state-db.js";
 import { matchesOperatorApprovalReviewerBinding } from "./operator-approval-reviewer-binding.js";
 import { operatorApprovalPublication } from "./operator-approval-store.publication.js";
+import { deleteTerminalOperatorApprovalsPastRetention } from "./operator-approval-store.retention.worker.js";
 import {
   OPERATOR_APPROVAL_TERMINAL_RETENTION_MS,
   OPERATOR_APPROVAL_MAX_AUDIENCE_SESSION_KEYS,
@@ -98,19 +99,12 @@ export function insertOperatorApprovalInDatabase(params: {
 
   return runOpenClawStateWriteTransaction((database) => {
     const stateDb = getNodeSqliteKysely<OperatorApprovalDatabase>(database.db);
-    const pruned = executeSqliteQuerySync(
-      database.db,
-      stateDb
-        .deleteFrom("operator_approvals")
-        .where("status", "!=", "pending")
-        .where("resolved_at_ms", "is not", null)
-        .where("resolved_at_ms", "<=", input.createdAtMs - OPERATOR_APPROVAL_TERMINAL_RETENTION_MS)
-        .returning("approval_id"),
-    );
-    operatorApprovalPublication.stageDeletions(
-      database.db,
-      pruned.rows.map((row) => row.approval_id),
-    );
+    const prunedIds = deleteTerminalOperatorApprovalsPastRetention({
+      db: database.db,
+      cutoffMs: input.createdAtMs - OPERATOR_APPROVAL_TERMINAL_RETENTION_MS,
+      nowMs: input.createdAtMs,
+    });
+    operatorApprovalPublication.stageDeletions(database.db, prunedIds);
     if (hasApprovalLocatorNamespaceConflict({ database, id, resolutionRef })) {
       return { outcome: "conflict" };
     }

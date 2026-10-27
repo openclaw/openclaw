@@ -155,6 +155,7 @@ export const gatewayDatabaseWorkerTestFiles = [
   "src/gateway/operator-approval-receipts.test.ts",
   "src/gateway/operator-approval-runtime-token.test.ts",
   "src/gateway/operator-approval-session-events.test.ts",
+  "src/gateway/operator-approval-standing-grants.retention.test.ts",
   "src/gateway/operator-approval-standing-grants.test.ts",
   "src/gateway/operator-approval-store.execution-identity.test.ts",
   "src/gateway/operator-approval-store.test.ts",

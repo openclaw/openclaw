@@ -651,6 +651,11 @@ change retroactively:
   `exec.approval.resolve`, or `openclaw approvals resolve <id> allow-always
   --expires-in-days <n>`. The override wins over the config default.
 - Expired grants fall back to prompting and are pruned opportunistically.
+- Resolved approval rows are deleted 30 days after they resolve. That cleanup
+  keeps the row while an unrevoked standing grant names it and the grant has
+  no expiry, or an expiry still in the future. Revoking the grant, or reaching
+  its expiry, lets the next cleanup delete the approval. A missing approval
+  still stops the grant.
 
 ### Listing and revoking
 
