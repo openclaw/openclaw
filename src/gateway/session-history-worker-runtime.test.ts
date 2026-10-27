@@ -569,7 +569,10 @@ it.each([false, true])(
 );
 
 it("does not recover partial delta facts when worker retirement fails", async () => {
-  const pending = readSessionHistoryPageInWorker(deltaRequest());
+  const pending = readSessionHistoryPageInWorker({
+    kind: "delta",
+    params: { target: { ...historyTarget(), sessionEntry: request().params.entry }, limits: {} },
+  });
   const failure = sessionHistoryCleanupError(
     new SessionHistoryDeltaPreparationError({
       delta: { kind: "missing" },

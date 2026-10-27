@@ -84,6 +84,7 @@ import {
 } from "./run-attempt-lifecycle.test-support.js";
 import { registerCodexMemoryInstructionTests } from "./run-attempt-memory.test-support.js";
 import * as runAttemptResources from "./run-attempt-resources.js";
+import { buildSandboxExecutionToolsForTest } from "./run-attempt-sandbox-tools.test-helper.js";
 import {
   assistantMessage,
   createAppServerHarness,
@@ -147,6 +148,7 @@ import {
   createLeasedCodexLifecycleHarness,
 } from "./thread-lifecycle.test-fixtures.js";
 import { buildDeveloperInstructions } from "./thread-prompt.js";
+import { buildTurnStartParams } from "./turn-params.js";
 import { readMirrorIdentity } from "./upstream-prompt-provenance.js";
 import * as userInputBridge from "./user-input-bridge.js";
 
@@ -834,25 +836,12 @@ describe("runCodexAppServerAttempt", () => {
           } as never;
           setRuntimeConfigSnapshot(params.config);
         }
-        const nativeToolSurfaceEnabled = shouldEnableCodexAppServerNativeToolSurface(
+        const { nativeToolSurfaceEnabled, dynamicTools } = await buildSandboxExecutionToolsForTest(
           params,
+          workspaceDir,
           sandbox as never,
-          {
-            ...(execServer ? { sandboxExecServerEnabled: true } : {}),
-            nativeExecutionPolicy: await prepareTestNativeExecutionPolicy(params, {
-              sandbox: sandbox as never,
-            }),
-          },
+          execServer,
         );
-        const dynamicTools = await buildDynamicToolsForTest(params, workspaceDir, {
-          effectiveWorkspace: execServer ? "/workspace" : workspaceDir,
-          sandbox: sandbox as never,
-          nativeToolSurfaceEnabled,
-          pluginConfig: execServer
-            ? { appServer: { mode: "yolo", experimental: { sandboxExecServer: true } } }
-            : {},
-          effectiveCwd: undefined,
-        });
         const environment = execServer
           ? await ensureCodexSandboxExecServerEnvironment({
               client: client as never,
