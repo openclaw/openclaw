@@ -270,7 +270,7 @@ it.each([
             return;
           }
           const prepared = await prepare();
-          if (["lower-scopes", "other-profile", "revoked-cohort"].includes(scenario)) {
+          if (["other-profile", "revoked-cohort"].includes(scenario)) {
             expect(prepared.kind).not.toBe("prepared");
             expect(sink).not.toHaveBeenCalled();
             return;
@@ -308,7 +308,12 @@ it.each([
               expect(await injection.acceptance).toBe(true);
             }
             expect(sink).toHaveBeenCalledTimes(
-              ["plain-owner", "trusted-completion", "accepted-cohort-revocation"].includes(scenario)
+              [
+                "plain-owner",
+                "trusted-completion",
+                "lower-scopes",
+                "accepted-cohort-revocation",
+              ].includes(scenario)
                 ? 1
                 : 0,
             );

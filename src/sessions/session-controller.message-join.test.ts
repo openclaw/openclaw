@@ -77,6 +77,9 @@ it("copies private turn participants and freezes only their shared command targe
 });
 
 type JoinCase = {
+  collaborative?: true;
+  protocolDrop?: true;
+  differentConversation?: true;
   predecessor?: boolean | "pending";
   claim?: "before" | "after" | "added";
   source?: false;
@@ -94,7 +97,7 @@ type JoinCase = {
     | "workspace"
     | "cwd"
     | "scopes";
-  after?: "settings" | "activity" | "revoke" | "backend" | "delivery";
+  after?: "settings" | "activity" | "revoke" | "caller-revoke" | "backend" | "delivery";
   sessionOnly?: true;
 };
 type Outcome = "accepted" | "deferred" | "rejected" | "revoked";
@@ -130,22 +133,34 @@ it.each<[string, Outcome, JoinCase?]>([
   ["caps-only", "accepted", { headless: true, caps: "expand" }],
   ["headless-to-web", "accepted", { headless: true, caps: "expand", target: "new" }],
   ["protocol-only", "accepted", { caps: "protocol" }],
-  ["narrower caps", "deferred", { caps: "narrow" }],
+  ["narrower caps", "accepted", { caps: "narrow" }],
+  ["protocol capability removed", "accepted", { protocolDrop: true }],
+  [
+    "protocol capability removed with collaboration",
+    "accepted",
+    { protocolDrop: true, collaborative: true },
+  ],
+  [
+    "another conversation with changed policy",
+    "deferred",
+    { mismatch: "tools", differentConversation: true },
+  ],
   ["new target", "accepted", { headless: true, target: "new" }],
-  ["removed target", "deferred", { target: "removed" }],
-  ["changed non-owner target", "deferred", { target: "foreign" }],
-  ["changed binding", "deferred", { mismatch: "binding" }],
+  ["removed target", "accepted", { target: "removed" }],
+  ["changed non-owner target", "accepted", { target: "foreign" }],
+  ["changed binding", "accepted", { mismatch: "binding" }],
   ["cross-profile caps", "deferred", { headless: true, caps: "expand", mismatch: "profile" }],
   ["missing selection compatible", "accepted", { legacy: true }],
   ["missing selection expanded caps", "deferred", { legacy: true, caps: "expand" }],
   ["session-only", "accepted", { sessionOnly: true }],
-  ["current tool policy", "deferred", { mismatch: "tools" }],
+  ["current tool policy", "accepted", { mismatch: "tools" }],
   ["saved elevation", "deferred", { mismatch: "elevation" }],
   ["exec configuration", "deferred", { mismatch: "exec" }],
   ["workspace", "deferred", { mismatch: "workspace" }],
   ["saved working directory", "deferred", { mismatch: "cwd" }],
-  ["narrowed scopes", "deferred", { mismatch: "scopes" }],
+  ["narrowed scopes", "accepted", { mismatch: "scopes" }],
   ["revoked after preparation", "revoked", { after: "revoke" }],
+  ["incoming authority revoked independently", "rejected", { after: "caller-revoke" }],
   ["replaced backend", "rejected", { after: "backend" }],
   ["saved settings after preparation", "rejected", { after: "settings" }],
   ["activity after preparation", "accepted", { after: "activity" }],
@@ -155,7 +170,10 @@ it.each<[string, Outcome, JoinCase?]>([
   async (name, outcome, c = {}) => {
     await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
       const key = `agent:main:join-${name.replaceAll(" ", "-")}`;
-      const cfg: OpenClawConfig = { agents: { entries: { main: {} } } };
+      const cfg: OpenClawConfig = {
+        agents: { entries: { main: {} } },
+        ...(c.collaborative ? { messages: { queue: { allowCollaborativeSteering: true } } } : {}),
+      };
       setRuntimeConfigSnapshot(cfg);
       const entry: SessionEntry = {
         sessionId: "join-session",
@@ -182,7 +200,11 @@ it.each<[string, Outcome, JoinCase?]>([
         permissionMode: "full",
         config: cfg,
         traceAuthorized: false,
-        clientCaps: c.headless ? [] : ["ui-commands"],
+        clientCaps: c.protocolDrop
+          ? ["ui-commands", "usage-refreshing"]
+          : c.headless
+            ? []
+            : ["ui-commands"],
         gatewayUiCommandTarget:
           c.headless || c.caps === "protocol"
             ? undefined
@@ -265,6 +287,20 @@ it.each<[string, Outcome, JoinCase?]>([
                 }),
           },
         };
+        let incomingCurrent = true;
+        if (c.after === "caller-revoke") {
+          incoming.operatorAuthority = createAdmittedRunOperatorAuthority({
+            profileId: "join-owner",
+            scopes: ["operator.admin"],
+            gatewayAccessGrant: null,
+            modelPolicy: prepareOperatorModelPolicy({ cfg, policy: {} }),
+            assertCurrent() {
+              if (!incomingCurrent) {
+                throw new Error("Incoming caller revoked");
+              }
+            },
+          });
+        }
         if (c.caps) {
           incoming.run.clientCaps =
             c.caps === "narrow"
@@ -274,6 +310,12 @@ it.each<[string, Outcome, JoinCase?]>([
                   "ui-commands",
                   "usage-refreshing",
                 ];
+        }
+        if (c.protocolDrop) {
+          incoming.run.clientCaps = ["ui-commands"];
+        }
+        if (c.differentConversation) {
+          incoming.run.conversationId = "different-conversation";
         }
         if (c.target) {
           incoming.run.gatewayUiCommandTarget =
@@ -405,6 +447,15 @@ it.each<[string, Outcome, JoinCase?]>([
           operation.attachBackend({ ...backend, queueMessage: replacement });
         }
         try {
+          if (c.after === "caller-revoke") {
+            incomingCurrent = false;
+            assertSource();
+            operatorAuthority.assertCurrent();
+            await expect(joined.prepareCurrent()).rejects.toThrow("Incoming caller revoked");
+            expect(delivered).not.toHaveBeenCalled();
+            assertFrozen();
+            return;
+          }
           if (outcome === "revoked") {
             const refused = await beginReplyMessageInjectionTarget(target, incoming.prompt, {
               assertCurrent: assertSource,
