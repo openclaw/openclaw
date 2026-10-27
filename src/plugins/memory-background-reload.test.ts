@@ -89,6 +89,12 @@ const { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } = loadNativeHost(
 type RegistryHost = ReturnType<typeof createPluginRegistry>;
 type SyncReason = "watch" | "session-delta" | "session-startup-catchup";
 type MemorySearchSettings = NonNullable<NonNullable<OpenClawConfig["memory"]>["search"]>;
+type MemoryManagerInternals = RegisteredMemorySearchManager & {
+  syncBackground(params: MemorySyncParams): Promise<void>;
+  listSessionCorpusEntries(): Promise<unknown[]>;
+  awaitManagerIdle(): Promise<void>;
+  runSessionStartupCatchup(): Promise<string[]>;
+};
 
 function memoryConfig(
   workspace: string,
@@ -123,7 +129,7 @@ async function openManager(
   assert(opened.manager, opened.error ?? "Expected memory manager");
   const manager = opened.manager;
   const raw = getPluginOriginalValue(manager, memory.instance) ?? manager;
-  return { manager, raw, prototype: Object.getPrototypeOf(raw) as RegisteredMemorySearchManager };
+  return { manager, raw, prototype: Object.getPrototypeOf(raw) as MemoryManagerInternals };
 }
 
 function registryHost() {
@@ -156,19 +162,16 @@ function loadMemory(host: RegistryHost, config: OpenClawConfig) {
 // Watch notifications, startup catch-up and session deltas enter Memory Core's
 // background sync owner, not the public sync() used by search and CLI.
 function observeBackgroundSync(
-  prototype: RegisteredMemorySearchManager,
+  prototype: MemoryManagerInternals,
   onSync: (
     manager: RegisteredMemorySearchManager,
     params: MemorySyncParams,
     work: Promise<void>,
   ) => void,
 ) {
-  const owner = prototype as RegisteredMemorySearchManager & {
-    syncBackground(params: MemorySyncParams): Promise<void>;
-  };
   // oxlint-disable-next-line typescript/unbound-method -- The spy forwards the manager receiver with call().
-  const syncBackground = owner.syncBackground;
-  return vi.spyOn(owner, "syncBackground").mockImplementation(function (
+  const syncBackground = prototype.syncBackground;
+  return vi.spyOn(prototype, "syncBackground").mockImplementation(function (
     this: RegisteredMemorySearchManager,
     params,
   ) {
@@ -362,10 +365,7 @@ it("retires Memory Core while session startup discovery is in flight", async ({ 
   try {
     // A transient manager exposes the shared prototype without scheduling startup work.
     const probe = await openManager(memory, config, "main", "cli");
-    const discovery = probe.prototype as RegisteredMemorySearchManager & {
-      listSessionCorpusEntries(): Promise<unknown[]>;
-      awaitManagerIdle(): Promise<void>;
-    };
+    const discovery = probe.prototype;
     await probe.manager.close?.();
     const listed = createDeferredCore();
     const closing = createDeferredCore();
@@ -499,14 +499,9 @@ it.for([false, true])(
         }
       });
       const startupCompletions = new WeakMap<object, Promise<string[]>>();
-      const startupOwner = prototype as RegisteredMemorySearchManager & {
-        runSessionStartupCatchup(): Promise<string[]>;
-      };
       // oxlint-disable-next-line typescript/unbound-method -- The observer forwards the actual manager receiver with call().
-      const startup = startupOwner.runSessionStartupCatchup;
-      vi.spyOn(startupOwner, "runSessionStartupCatchup").mockImplementation(function (
-        this: object,
-      ) {
+      const startup = prototype.runSessionStartupCatchup;
+      vi.spyOn(prototype, "runSessionStartupCatchup").mockImplementation(function (this: object) {
         const work = startup.call(this);
         startupCompletions.set(this, work);
         return work;

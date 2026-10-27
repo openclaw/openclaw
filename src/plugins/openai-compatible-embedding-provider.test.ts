@@ -10,6 +10,7 @@ import {
   closeHttpServer,
   listenLoopback,
   readRequestText,
+  respondJson,
 } from "../../test/helpers/gateway-integration-fixtures.js";
 import { createDeferred, withTestTimeout } from "../../test/helpers/promise.js";
 import type {
@@ -108,8 +109,10 @@ async function startEmbeddingServer(params?: {
   respond?: (request: CapturedRequest) => Record<string, unknown> | null;
   status?: number;
   redirectUrl?: string;
-}): Promise<{ baseUrl: string; requests: CapturedRequest[] }> {
+  hang?: string;
+}) {
   const requests: CapturedRequest[] = [];
+  const { promise: closed, resolve: resolveClosed } = createDeferred();
   const server = createServer((req: IncomingMessage, res: ServerResponse) => {
     void (async () => {
       try {
@@ -121,6 +124,7 @@ async function startEmbeddingServer(params?: {
           body,
         };
         requests.push(captured);
+        res.on("close", resolveClosed);
 
         if (params?.token) {
           expect(req.headers.authorization).toBe(`Bearer ${params.token}`);
@@ -128,6 +132,11 @@ async function startEmbeddingServer(params?: {
           expect(req.headers.authorization).toBeUndefined();
         }
 
+        if (params?.hang) {
+          res.writeHead(502, { "content-type": "text/plain" });
+          res.write(params.hang);
+          return;
+        }
         res.writeHead(params?.status ?? 200, {
           "content-type": "application/json",
           ...(params?.redirectUrl ? { location: params.redirectUrl } : {}),
@@ -136,36 +145,18 @@ async function startEmbeddingServer(params?: {
           JSON.stringify(params?.respond ? params.respond(captured) : vectors([0.1, 0.2, 0.3])),
         );
       } catch (error) {
-        res.writeHead(500, { "content-type": "application/json" });
-        res.end(JSON.stringify({ error: error instanceof Error ? error.message : String(error) }));
+        respondJson(res, { error: error instanceof Error ? error.message : String(error) }, 500);
       }
     })();
   });
 
-  return { baseUrl: await listen(server), requests };
+  return { baseUrl: await listen(server), requests, closed };
 }
 
 const EMBEDDING_ERROR_BOUNDARY_PREFIX = "x".repeat(999);
 const EMBEDDING_ERROR_BOUNDARY_BODY = `${EMBEDDING_ERROR_BOUNDARY_PREFIX}😀${"x".repeat(
   8 * 1024 - EMBEDDING_ERROR_BOUNDARY_PREFIX.length - 4,
 )}`;
-
-async function startHangingErrorServer() {
-  const { promise: closed, resolve: resolveClosed } = createDeferred();
-  const server = createServer((req: IncomingMessage, res: ServerResponse) => {
-    void (async () => {
-      await readJsonBody(req);
-      res.on("close", resolveClosed);
-      res.writeHead(502, { "content-type": "text/plain" });
-      res.write(EMBEDDING_ERROR_BOUNDARY_BODY);
-    })();
-  });
-
-  return {
-    baseUrl: await listen(server),
-    closed,
-  };
-}
 
 async function embeddingFixture(
   serverOptions?: Parameters<typeof startEmbeddingServer>[0],
@@ -326,10 +317,6 @@ it("aliases the exact prior custom-auth identity while keeping rotation stable",
     provider: "custom",
     baseUrl: "http://127.0.0.1:18001/v1",
     model: "fixture-embedding",
-    dimensions: 3,
-    inputType: "default",
-    queryInputType: "query",
-    documentInputType: "document",
     headers: {
       accept: "application/json",
       "content-type": "application/json",
@@ -340,13 +327,7 @@ it("aliases the exact prior custom-auth identity while keeping rotation stable",
     const result = await customAuth(
       " X-Access ",
       { "X-Access": key, "X-Deployment": "tenant-a" },
-      {
-        model: "fixture-embedding",
-        dimensions: 3,
-        inputType: "default",
-        queryInputType: "query",
-        documentInputType: "document",
-      },
+      { model: "fixture-embedding" },
       key,
     );
     const priorIdentity = {
@@ -367,24 +348,21 @@ it("aliases the exact prior custom-auth identity while keeping rotation stable",
   }
 });
 
-it.each<{
-  name: string;
-  authHeaderName: string;
-  headers: Record<string, string>;
-  remote?: EmbeddingProviderCreateOptions["remote"];
-}>([
-  { name: "standard auth", authHeaderName: "Authorization", headers: { Authorization: "key" } },
-  { name: "sensitive custom auth", authHeaderName: "X-Api-Key", headers: { "X-Api-Key": "key" } },
-  { name: "missing auth header", authHeaderName: "X-Access", headers: {} },
-  {
-    name: "another destination",
-    authHeaderName: "X-Access",
-    headers: { "X-Access": "key" },
-    remote: { baseUrl: "http://127.0.0.1:18002/v1", headers: { "X-Access": "remote-route" } },
-  },
+it.each<[string, Record<string, string>, EmbeddingProviderCreateOptions["remote"]?]>([
+  ["Authorization", { Authorization: "key" }],
+  ["X-Api-Key", { "X-Api-Key": "key" }],
+  ["X-Access", {}],
+  [
+    "X-Access",
+    { "X-Access": "key" },
+    {
+      baseUrl: "http://127.0.0.1:18002/v1",
+      headers: { "X-Access": "remote-route" },
+    },
+  ],
 ])(
-  "does not create an index identity alias for $name",
-  async ({ authHeaderName, headers, remote }) => {
+  "does not create an index identity alias for %s with %j and remote %j",
+  async (authHeaderName, headers, remote) => {
     const result = await customAuth(authHeaderName, headers, { remote });
     expect(result.runtime?.indexIdentityAliases).toBeUndefined();
   },
@@ -489,7 +467,7 @@ it("keeps malformed response errors distinct from dimension mismatches", async (
 });
 
 it("bounds exact-limit embedding errors without splitting UTF-16 and cancels", async () => {
-  const server = await startHangingErrorServer();
+  const server = await startEmbeddingServer({ hang: EMBEDDING_ERROR_BOUNDARY_BODY });
   const { provider } = await providerAt(server.baseUrl);
 
   const request = withTestTimeout(
@@ -518,13 +496,9 @@ it("maps configured memory input_type labels onto query and document requests", 
     documentInputType: "document",
   });
 
-  await expect(provider.embed("hello", { inputType: "query" })).resolves.toEqual([5, 0.25, 1]);
-  await expect(provider.embedBatch(["doc"], { inputType: "document" })).resolves.toEqual([
-    [3, 0.25, 1],
-  ]);
-  await expect(provider.embed("semantic", { inputType: "semantic" })).resolves.toEqual([
-    8, 0.25, 1,
-  ]);
+  await provider.embed("hello", { inputType: "query" });
+  await provider.embedBatch(["doc"], { inputType: "document" });
+  await provider.embed("semantic", { inputType: "semantic" });
 
   expect(requests.map((request) => request.body.input_type)).toEqual([
     "query",

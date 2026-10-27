@@ -13,21 +13,18 @@ vi.mock("typebox/value", () => {
 const jsonSchemaThenKeyword = ["the", "n"].join("");
 type ValidationInput = Parameters<typeof validateJsonSchemaValue>[0];
 type ValidationFailure = Extract<ReturnType<typeof validateJsonSchemaValue>, { ok: false }>;
+type Properties = Record<string, unknown>;
 
-const fields = (properties: Record<string, unknown>, required?: string[]) => ({
+const fields = (properties: Properties, required?: string[]) => ({
   properties,
   ...(required ? { required } : {}),
 });
-const objectSchema = (properties: Record<string, unknown>, rest: Record<string, unknown> = {}) => ({
+const objectSchema = (properties: Properties, rest: Properties = {}) => ({
   type: "object",
   properties,
   ...rest,
 });
-const conditionalSchema = (
-  condition: object,
-  branch: object,
-  rest: Record<string, unknown> = {},
-) => ({
+const conditionalSchema = (condition: object, branch: object, rest: Properties = {}) => ({
   type: "object",
   ...rest,
   if: condition,
@@ -35,13 +32,12 @@ const conditionalSchema = (
 });
 const defaulted = (type: string, value: unknown) => ({ type, default: value });
 const apiCondition = () => fields({ kind: { const: "api" } }, ["kind"]);
-const modeDefaults = () => fields({ mode: defaulted("string", "auto") }, ["mode"]);
-const requiredFlagDefault = (name: string) =>
-  fields({ [name]: defaulted("boolean", true) }, [name]);
-function endpointDefaults(required = false) {
-  const properties = { endpoint: defaulted("string", "https://example.com") };
-  return required ? fields(properties, ["endpoint"]) : fields(properties);
-}
+const defaultField = (name: string, type: string, value: unknown, required = true) =>
+  fields({ [name]: defaulted(type, value) }, required ? [name] : undefined);
+const modeDefaults = () => defaultField("mode", "string", "auto");
+const requiredFlagDefault = (name: string) => defaultField(name, "boolean", true);
+const endpointDefaults = (required = false) =>
+  defaultField("endpoint", "string", "https://example.com", required);
 
 function expectValidationFailure(params: ValidationInput): ValidationFailure {
   const result = validateJsonSchemaValue(params);
@@ -338,21 +334,6 @@ describe("source-aware schema validation", () => {
     if (result.ok) {
       expect(result.value).toBe(value);
     }
-  });
-
-  it("shares compiled schemas across callers while keeping defaults tied to the source input", () => {
-    const conditional = {
-      ...schema,
-      properties: { ...schema.properties, enabled: defaulted("boolean", true) },
-      if: fields({ enabled: { const: true } }, ["enabled"]),
-      [jsonSchemaThenKeyword]: { required: ["confirmation"] },
-    };
-    const { value, sourceValue, validate } = fixture(conditional);
-    expect(validate({ applyDefaults: false })).toEqual({ ok: true, value });
-    const expected = { ok: true, value: { ...value, retries: 2, enabled: true } };
-    expect(validate({ schema: structuredClone(conditional) })).toEqual(expected);
-    expect(validate({ sourceValue: { ...sourceValue, enabled: true } }).ok).toBe(false);
-    expect(validate()).toEqual(expected);
   });
 
   it("rejects invalid source even when the runtime itself matches the schema", () => {

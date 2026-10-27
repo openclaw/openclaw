@@ -5,7 +5,6 @@ import { beforeEach, expect, it, vi } from "vitest";
 import {
   applyExclusiveSlotSelectionMock as selectSlot,
   buildPluginSnapshotReportMock as snapshotReport,
-  createEmptyUninstallActions,
   clearPluginRegistryLoadCacheMock as clearCache,
   enablePluginInConfigMock as enablePlugin,
   loadPluginManifestRegistryMock as loadManifests,
@@ -107,15 +106,11 @@ const requiredTokenSchema = {
 function mockReplacedInstall(
   pluginId: string,
   previous: PluginInstallRecord & { installPath: string },
-  install = false,
   cleanup?: PluginUninstallDirectoryRemoval["cleanup"],
 ) {
   setInstalledPluginIndexInstallRecords({ [pluginId]: previous });
   planUninstall.mockReturnValueOnce({
     ok: true,
-    config: {},
-    pluginId,
-    actions: { ...createEmptyUninstallActions(), ...(install ? { install: true } : {}) },
     directoryRemoval: { target: previous.installPath, ...(cleanup ? { cleanup } : {}) },
   });
 }
@@ -129,23 +124,18 @@ function expectRuntimeLogIncludes(fragment: string) {
   expect(pluginsCliRuntimeLogs.join("\n")).toContain(fragment);
 }
 
-function setManifests(...plugins: PluginManifestRecord[]) {
-  loadManifests.mockReturnValue({ plugins, diagnostics: [] });
-}
-
-function createManifestRecord(
-  id: string,
-  overrides: Partial<PluginManifestRecord> = {},
-  owner = id,
-): PluginManifestRecord {
-  return recordPluginManifestInstallOwner(
-    createPluginManifestRecordFixture({
-      id,
-      origin: "config",
-      ...overrides,
-    }),
-    owner,
-  );
+function setManifests(
+  ...plugins: Array<Partial<PluginManifestRecord> & { id: string; owner?: string }>
+) {
+  loadManifests.mockReturnValue({
+    plugins: plugins.map(({ id, owner = id, ...manifest }) =>
+      recordPluginManifestInstallOwner(
+        createPluginManifestRecordFixture({ id, origin: "config", ...manifest }),
+        owner,
+      ),
+    ),
+    diagnostics: [],
+  });
 }
 
 const installWriteOptions = {
@@ -324,7 +314,7 @@ it("removes a replaced managed install directory before refreshing the registry"
     spec: "clawhub:@openclaw/codex",
     installPath: "/tmp/openclaw/extensions/codex",
   };
-  mockReplacedInstall("codex", previousInstall, true);
+  mockReplacedInstall("codex", previousInstall);
   removeDirectory.mockResolvedValueOnce({
     directoryRemoved: true,
     warnings: [],
@@ -352,7 +342,7 @@ it("preserves replaced npm install directories across generation updates", async
   const nextInstallPath = path.join(tempRoot, "npm/projects/codex-v2/node_modules/@openclaw/codex");
   fs.mkdirSync(previousInstallPath, { recursive: true });
   const previousInstall = npmInstall("@openclaw/codex@1.0.0", previousInstallPath);
-  mockReplacedInstall("codex", previousInstall, true, {
+  mockReplacedInstall("codex", previousInstall, {
     kind: "npm",
     npmRoot: previousProjectRoot,
     packageName: "@openclaw/codex",
@@ -388,7 +378,7 @@ it("restores runtime child policy when reinstalling its package owner", async ()
   setInstalledPluginIndexInstallRecords({
     "demo-package": { source: "npm", spec: "@openclaw/demo-package@0.0.1" },
   });
-  setManifests(createManifestRecord("demo-plugin-npm", {}, "demo-package"));
+  setManifests({ id: "demo-plugin-npm", owner: "demo-package" });
 
   const next = await persistNpm("demo-package", {
     config: baseConfig,
@@ -416,7 +406,7 @@ it.each(["needs-config", "MyPlug"])(
         entries: { [policyId]: { hooks } },
       },
     };
-    setManifests(createManifestRecord(pluginId, { configSchema: requiredTokenSchema }));
+    setManifests({ id: pluginId, configSchema: requiredTokenSchema });
     const next = await persistNpm(pluginId, { config: baseConfig, persistenceLogger: { warn } });
     expect(next).toEqual({
       plugins: {
@@ -448,8 +438,8 @@ it("reads mixed-case manifest policy from canonical lowercase entries on reinsta
     },
   };
   setManifests(
-    createManifestRecord("MyPlug", { configSchema: requiredTokenSchema }, "my-package"),
-    createManifestRecord("OtherPlug", { configSchema: requiredTokenSchema }, "my-package"),
+    { id: "MyPlug", configSchema: requiredTokenSchema, owner: "my-package" },
+    { id: "OtherPlug", configSchema: requiredTokenSchema, owner: "my-package" },
   );
   setInstalledPluginIndexInstallRecords({
     "my-package": { source: "npm", spec: "my-package@1.0.0" },
@@ -475,7 +465,7 @@ it.each(["schema", "disabled config"] as const)("rejects invalid %s", async (kin
     ? { type: "object", properties: { mode: { $ref: "#/$defs/Mode" } } }
     : requiredTokenSchema;
   const enable = malformedSchema ? undefined : false;
-  setManifests(createManifestRecord(pluginId, { configSchema }));
+  setManifests({ id: pluginId, configSchema });
   await expect(persistNpm(pluginId, { config, enable })).rejects.toThrow(
     "has invalid configured settings",
   );
