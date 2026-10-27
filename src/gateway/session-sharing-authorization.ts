@@ -407,7 +407,7 @@ export function resolvePreparedTalkAuthorizationTarget(
 }
 
 export function findPreparedSharingTarget(
-  params: SessionMutationAuthorizationParams,
+  params: Pick<SessionMutationAuthorizationParams, "preparedTargets">,
   targetRef: { sessionKey?: string; key?: string; agentId?: string },
 ) {
   const sessionKey = normalizeOptionalString(targetRef.sessionKey ?? targetRef.key);

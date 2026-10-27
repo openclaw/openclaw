@@ -487,6 +487,7 @@ export async function beginSessionEffect(
       const wasAcquired = effect.phase === "acquired";
       effect.phase = "released";
       effect.handoffs.clear();
+      effect.admissionTransitions?.clear();
       state.effects.delete(effect);
       releaseTarget(entry, target);
       effect.validated.resolve();

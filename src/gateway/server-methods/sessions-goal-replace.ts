@@ -40,7 +40,7 @@ import { handleSessionGoalResumeChat } from "./chat-send-handler.js";
 import { gatewayClientSessionCreator } from "./gateway-client-identity.js";
 import { publishCommittedSessionGoalChange } from "./session-goal-change.js";
 import { bindGatewayRequestHandlerMutationAuthority } from "./session-mutation-guards.js";
-import type { GatewayRequestHandlerOptions } from "./types.js";
+import type { GatewayRequestHandlerOptions, SessionMutationAuthorization } from "./types.js";
 
 type Replacement = Extract<SessionsGoalUpdateParams, { action: "replace" }>;
 type Target = NonNullable<Awaited<ReturnType<typeof resolveSessionSharingTargetAsync>>>;
@@ -51,6 +51,7 @@ export async function replaceExecutingSessionGoal(params: {
   request: Replacement;
   target: Target;
   source: SessionSourceAssertion;
+  resumeAuthorization: SessionMutationAuthorization;
   requestFingerprint: string;
 }): Promise<void> {
   const { options, request, target, source, requestFingerprint } = params;
@@ -136,7 +137,7 @@ export async function replaceExecutingSessionGoal(params: {
     return await handleSessionGoalResumeChat(
       {
         ...options,
-        sessionMutationAuthorization: { assertCurrent: source, assertTargetCurrent: source },
+        sessionMutationAuthorization: params.resumeAuthorization,
         params: {
           sessionKey: target.canonicalKey,
           agentId: target.agentId,

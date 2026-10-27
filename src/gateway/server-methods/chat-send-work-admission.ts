@@ -20,8 +20,10 @@ import { getAgentEventLifecycleGeneration } from "../../infra/agent-events.js";
 import { isProgressCardRefreshInputProvenance } from "../../sessions/input-provenance.js";
 import {
   isCompetingSessionControllerWorkActive,
+  captureSessionTarget,
   type SessionEffectRef,
 } from "../../sessions/session-controller.lifecycle.js";
+import { bindSessionEffectTransition } from "../../sessions/session-controller.owner-context.js";
 import {
   getRpcSourceIdentity,
   isRpcSourceRegistered,
@@ -308,6 +310,8 @@ export function createChatSendWorkAdmission(params: {
   let admittedSource = terminal?.target.readSource;
   let lifecycleRevision = terminal?.lifecycleRevision;
   let isCommittedDestinationCurrent: (() => boolean) | undefined;
+  let committedDestination: Pick<SessionEntry, "sessionId" | "lifecycleRevision"> | undefined;
+  let releaseCommittedDestination: (() => void) | undefined;
   let finishPendingInput: (() => void | Promise<void>) | undefined;
   let inputActor: ReturnType<typeof acquireSessionInputActor> | undefined;
   let actorLifetimeActive = true;
@@ -518,34 +522,57 @@ export function createChatSendWorkAdmission(params: {
             }
             admittedSource ??= source;
             if (!isCommittedDestinationCurrent) {
-              const { sessionId, lifecycleRevision: committedRevision } = committedEntry;
-              const matches = (current: SessionEntry | undefined) =>
-                current !== undefined &&
-                current.archivedAt === undefined &&
-                current.lifecycleRevision === committedRevision &&
-                (committedRevision !== undefined || current.sessionId === sessionId);
-              // Compaction can rotate a revision-bound transcript; legacy rows still bind its id.
-              if (storage) {
-                isCommittedDestinationCurrent = () =>
-                  matches(
-                    storage.actor.storage.readCurrent(
-                      {
-                        type: "session.entry.read",
-                        input: { sessionKey: terminal.target.storeKey },
-                      },
-                      storage.authority,
-                    ),
-                  );
-              } else {
-                const retained = retainPreparedSessionEntryPredicate({
-                  databaseIdentity: `file:${source.databaseIdentity}`,
-                  sessionKey: terminal.target.storeKey,
-                  entry: committedEntry,
-                  matches: (_before, current) => matches(current),
-                });
-                cleanup.push(retained.release);
-                isCommittedDestinationCurrent = retained.isCurrent;
-              }
+              const bindDestination = (entry: SessionEntry) => {
+                releaseCommittedDestination?.();
+                committedDestination = entry;
+                const { sessionId, lifecycleRevision: committedRevision } = entry;
+                const matches = (current: SessionEntry | undefined) =>
+                  current !== undefined &&
+                  current.archivedAt === undefined &&
+                  current.lifecycleRevision === committedRevision &&
+                  (committedRevision !== undefined || current.sessionId === sessionId);
+                // Compaction can rotate a revision-bound transcript; legacy rows still bind its id.
+                if (storage) {
+                  isCommittedDestinationCurrent = () =>
+                    matches(
+                      storage.actor.storage.readCurrent(
+                        {
+                          type: "session.entry.read",
+                          input: { sessionKey: terminal.target.storeKey },
+                        },
+                        storage.authority,
+                      ),
+                    );
+                } else {
+                  const retained = retainPreparedSessionEntryPredicate({
+                    databaseIdentity: `file:${source.databaseIdentity}`,
+                    sessionKey: terminal.target.storeKey,
+                    entry,
+                    matches: (_before, current) => matches(current),
+                  });
+                  releaseCommittedDestination = retained.release;
+                  isCommittedDestinationCurrent = retained.isCurrent;
+                }
+              };
+              bindDestination(committedEntry);
+              cleanup.push(() => releaseCommittedDestination?.());
+              bindSessionEffectTransition(
+                captureSessionTarget({
+                  storeScope: terminal.storePath,
+                  sessionKey: terminal.target.canonicalKey,
+                  agentId: terminal.target.agentId,
+                }),
+                terminal,
+                ({ previous, current }) => {
+                  if (
+                    previous?.sessionId === committedDestination?.sessionId &&
+                    previous?.lifecycleRevision === committedDestination?.lifecycleRevision
+                  ) {
+                    bindDestination({ ...committedEntry, ...current });
+                    lifecycleRevision = current.lifecycleRevision;
+                  }
+                },
+              );
             }
             lifecycleRevision = committedEntry.lifecycleRevision;
             onCommitted?.(source, committedEntry);

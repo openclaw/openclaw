@@ -24,7 +24,6 @@ import type { SessionRowProjection } from "./session-row-projection.js";
 import {
   expectedSessionMutationTargetError,
   createSessionCreationAuthorizationRecorder,
-  withCurrentSessionSharingSource,
   assertSessionMutationProjectionCurrent,
   findPreparedSharingTarget,
   resolvePreparedTalkAuthorizationTarget,
@@ -57,6 +56,7 @@ import {
 } from "./session-sharing-read.js";
 import {
   captureSessionSharingTalkAuthority,
+  createAdmittedSessionSharingAuthority,
   isSameSessionSharingSource,
   resolveSessionSharingMembership,
   withPreparedSessionSharingSource,
@@ -504,40 +504,25 @@ export function resolveSessionMutationAuthorization(request: SessionMutationAuth
     if (error) {
       throw new SessionMutationAuthorizationChangedError(error);
     }
+    if (bindSessionIdentity) {
+      admittedInput.bindCurrentEffect();
+    }
   };
   const chatTarget =
     params.method === "chat.send" && authorizedTargets.length === 1 && !talkSessionTarget
       ? authorizedTargets[0]
       : undefined;
-  // Compaction can rotate a revision-bound transcript; legacy rows still bind their session id.
-  const assertAdmittedTargetCurrent = (
-    target: AuthorizedSessionMutationTarget,
-    cfg: OpenClawConfig,
-  ) => assertTargetCurrent(target, target, cfg, undefined, undefined, undefined, undefined, false);
-  const assertAdmittedInputCurrent =
-    chatTarget && !isIncognitoSessionKey(chatTarget.sessionKey)
-      ? () =>
-          withSelectedStorage(() =>
-            assertAdmittedTargetCurrent(chatTarget, params.context.getRuntimeConfig()),
-          )
-      : undefined;
-  const withCurrentSessionSource = chatTarget
-    ? <T>(
-        consume: () => T,
-        assertCurrent = () =>
-          assertTargetCurrent(chatTarget, chatTarget, params.context.getRuntimeConfig()),
-      ): Promise<T> =>
-        withSelectedStorage(() =>
-          withCurrentSessionSharingSource({
-            request: params,
-            target: chatTarget,
-            changed: () => targetChanged(chatTarget.sessionKey),
-            consumeSharing,
-            assertCurrent,
-            consume,
-          }),
-        )
-    : undefined;
+  const admittedInput = createAdmittedSessionSharingAuthority({
+    target: chatTarget,
+    request: params,
+    consumeSharing,
+    assertTargetCurrent,
+    changed: targetChanged,
+    getConfig: () => params.context.getRuntimeConfig(),
+    withStorage: withSelectedStorage,
+  });
+  const { assertAdmittedTargetCurrent, assertAdmittedInputCurrent, withCurrentSessionSource } =
+    admittedInput;
   const withPreparedCurrent = <T>(
     facts: SessionPendingInputAuthorityFacts,
     consume: () => T,

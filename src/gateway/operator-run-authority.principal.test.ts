@@ -1,4 +1,11 @@
 import { expect, it } from "vitest";
+import { resolveCommandAuthorization } from "../auto-reply/command-auth.js";
+import {
+  buildSessionEventContext,
+  prepareSessionEventInput,
+} from "../auto-reply/reply/session-event-context.js";
+import type { SessionEventOptions } from "../auto-reply/reply/session-event-contract.js";
+import { captureSessionEventTargetForHost } from "../auto-reply/reply/session-event-target.js";
 import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
 import {
@@ -8,6 +15,8 @@ import {
 import { replaceSessionEntrySync } from "../config/sessions/session-accessor.sqlite-entry.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import * as workerAdmission from "../infra/sqlite-worker-operation-admission.js";
+import { sqliteWorkerOwnerProbe } from "../infra/sqlite-worker-owner-probe.test-support.js";
 import { resolveOpenClawAgentSqlitePath } from "../state/openclaw-agent-db.paths.js";
 import { linkEmail, setUserProfileRole } from "../state/user-profile-writes.worker.js";
 import { ensureGatewayOwnerProfile, ensureProfileForEmail } from "../state/user-profiles.js";
@@ -36,8 +45,8 @@ const config: OpenClawConfig = {
   },
 };
 
-function fixture() {
-  setRuntimeConfigSnapshot(config);
+function fixture(cfg: OpenClawConfig = config) {
+  setRuntimeConfigSnapshot(cfg);
   const profile = ensureProfileForEmail("resume-principal@example.test");
   const entry: SessionEntry = {
     sessionId,
@@ -56,7 +65,7 @@ function fixture() {
         profileId: profile.id,
         sessionId,
         storePath,
-        context: { getRuntimeConfig: () => config },
+        context: { getRuntimeConfig: () => cfg },
       }),
   };
 }
@@ -106,6 +115,60 @@ it("admits a recorded person's current role and refuses revoked, demoted, archiv
     await expect(admit()).rejects.toThrow();
   }));
 
+it.each([
+  { scopes: ["operator.admin"], owner: true },
+  { scopes: ["operator.read", "operator.write"], owner: false },
+  { scopes: ["operator.sessions.write"], owner: false },
+] as const)(
+  "keeps resumed principal scopes $scopes separate from owner authority",
+  ({ scopes, owner }) =>
+    withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+      const cfg: OpenClawConfig = {
+        gateway: {
+          roles: {
+            default: "writer",
+            definitions: {
+              writer: { scopes: [...scopes], agents: "*", sessions: { others: "none" } },
+              reader: { scopes: ["operator.read"], agents: "*", sessions: { others: "none" } },
+            },
+          },
+        },
+      };
+      const { profile, admit } = fixture(cfg);
+      const accepted = await admit();
+      try {
+        const target = await captureSessionEventTargetForHost(scope.agentId, scope.sessionKey, {
+          env: state.env,
+          operatorAuthority: accepted.authority,
+        });
+        const options: SessionEventOptions = {
+          ...scope,
+          source: "restart",
+          expectedTarget: target,
+        };
+        const input = prepareSessionEventInput("Resume current work.", options);
+        expect(input.operatorAuthority).toBe(accepted.authority);
+        expect(input.operatorAuthority?.assertCurrent).not.toThrow();
+        const ctx = buildSessionEventContext({
+          ...input,
+          text: "Resume current work.",
+          options,
+          occurrenceId: "principal-resume",
+          target,
+          assertCurrent: () => accepted.authority.assertCurrent(),
+        });
+        expect(ctx.CommandAuthorized).toBe(false);
+        expect(
+          resolveCommandAuthorization({ ctx, cfg, commandAuthorized: false }).senderIsOwner,
+        ).toBe(owner);
+        setUserProfileRole(profile.id, "reader");
+        expect(input.operatorAuthority?.assertCurrent).toThrow();
+      } finally {
+        accepted.release();
+      }
+    }),
+);
+
 it("retains current session access through run custody and revokes it before later effects", () =>
   withOpenClawTestState({ scenario: "minimal" }, async () => {
     const { profile, entry, admit } = fixture();
@@ -150,6 +213,33 @@ it("retains current session access through run custody and revokes it before lat
       } finally {
         next.release();
       }
+    }
+  }));
+
+it("admits a principal's same-store writer while its own sharing publication is pending", () =>
+  withOpenClawTestState({ scenario: "minimal" }, async () => {
+    const { admit } = fixture();
+    const accepted = await admit();
+    let commitChecks = 0;
+    const probe = sqliteWorkerOwnerProbe.admission(workerAdmission, (request, grant, check) => {
+      if (request.stage === "commit") {
+        commitChecks += 1;
+      }
+      check(request, grant);
+    });
+    try {
+      await expect(
+        patchSessionEntryCore(scope, () => ({ visibility: "shared" }), {
+          skipMaintenance: true,
+          workerGuard: { source: accepted.authority.assertCurrent },
+        }),
+      ).resolves.toMatchObject({ visibility: "shared" });
+      expect(commitChecks).toBeGreaterThan(0);
+      expect(accepted.authority.assertCurrent).not.toThrow();
+      expect(accepted.authority.signal?.aborted).toBe(false);
+    } finally {
+      probe.mockRestore();
+      accepted.release();
     }
   }));
 

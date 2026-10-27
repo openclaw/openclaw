@@ -125,15 +125,23 @@ export function inspectGoalChatSendRetry({
     if (receipt) {
       return { kind: "replay", receipt } as const;
     }
-    if (prepared?.comparison?.submitted) {
-      respond(false, undefined, chatSendRequestConflictError());
-      return { kind: "settled" } as const;
-    }
     const pending = readPreRegisteredRun({
       key: pendingChatSendKey,
       entry: context.dedupe.get(pendingChatSendKey),
     });
     const retainedIdentity = context.dedupe.get(`chat:${clientRunId}`)?.requestIdentity;
+    const submitted = prepared?.comparison?.submitted;
+    const submittedIdentity = submitted?.["__openclaw"]?.chatRequestIdentity;
+    // Goal custody retains its operation fingerprint; ordinary input retains the
+    // transcript's message fingerprint after the pending reservation is cleared.
+    const retainedGoalIdentity =
+      retainedIdentity !== undefined &&
+      typeof submittedIdentity === "string" &&
+      retainedIdentity !== submittedIdentity;
+    if (submitted && !pending?.payload.goalFingerprint && !retainedGoalIdentity) {
+      respond(false, undefined, chatSendRequestConflictError());
+      return { kind: "settled" } as const;
+    }
     const identityConflict =
       retainedIdentity !== undefined &&
       retainedIdentity !== request.goalOperation.requestFingerprint;

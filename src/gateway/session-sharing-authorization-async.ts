@@ -7,7 +7,10 @@ import {
   projectSessionSharingEntry,
 } from "../config/sessions/session-accessor.sqlite-entry-cache.js";
 import { SessionCanonicalKeyMigrationRequiredError } from "../config/sessions/session-canonical-key-error.js";
-import { releaseSessionSourceAuthorities } from "../config/sessions/session-source-authority.js";
+import {
+  composeSessionSourceAssertion,
+  releaseSessionSourceAuthorities,
+} from "../config/sessions/session-source-authority.js";
 import { sameSessionTranscriptStorePath } from "../config/sessions/transcript-store-identity.js";
 import { readDatabasePathIdentitySync } from "../infra/sqlite-worker-identity.js";
 import { resolveMissingOperatorScope } from "../shared/operator-scope-compat.js";
@@ -31,12 +34,16 @@ import {
   sessionMutationTargetChanged,
   type SessionMutationAuthorizationParams,
 } from "./session-sharing-authorization.js";
-import { authorizePreparedSessionMutation } from "./session-sharing-policy.js";
+import {
+  authorizePreparedSessionMutation,
+  type PreparedSessionMutationFacts,
+} from "./session-sharing-policy.js";
 import {
   prepareSessionMutationFacts,
   SessionMutationFactsUnavailableError,
 } from "./session-sharing-preparation.js";
 import { prepareSessionSharingProfiles } from "./session-sharing-read.js";
+import { withPreparedSessionSharingSource } from "./session-sharing-source.js";
 import {
   resolveDirectSessionTargets,
   resolveSessionMutationTargets,
@@ -126,7 +133,8 @@ async function prepareSessionPrincipalRunAccess(params: {
       followTranscript: true,
     });
     sharing = preparedSharing;
-    const initialTarget = preparedSharing.readCurrent(getConfig()).target;
+    const initialFacts = preparedSharing.readCurrent(getConfig());
+    const initialTarget = initialFacts.target;
     if (initialTarget.entry.sessionId !== params.sessionId) {
       throw new Error("Session is unavailable for this principal.");
     }
@@ -144,16 +152,17 @@ async function prepareSessionPrincipalRunAccess(params: {
         operatorRoleActor: { kind: "operator", profileId: params.profileId },
       },
     };
-    const assertCurrent = () => {
+    const assertPrincipalCurrent = () => {
       params.assertCurrent?.();
       access?.signal.throwIfAborted();
       access?.assertCurrent();
-      const current = identity.readCurrentFacts();
-      const currentRole = readRole();
+      identity.readCurrentFacts();
       if (resolveMissingOperatorScope(client.connect.scopes ?? [], readScopes()) !== null) {
         throw new Error("Session principal has no current run authority.");
       }
-      const facts = preparedSharing.readCurrent(getConfig());
+    };
+    const assertFactsCurrent = (facts: PreparedSessionMutationFacts) => {
+      assertPrincipalCurrent();
       const target = facts.target;
       if (
         !target ||
@@ -162,19 +171,48 @@ async function prepareSessionPrincipalRunAccess(params: {
         target.entry.archivedAt !== undefined ||
         (params.storePath !== undefined &&
           target.storePath !== params.storePath &&
-          !sameSessionTranscriptStorePath(params.storePath, facts.readSource?.path))
+          !sameSessionTranscriptStorePath(params.storePath, target.readSource?.path))
       ) {
         throw new Error("Session is unavailable for this principal.");
       }
       const error = authorizePreparedSessionMutation(
         { cfg: getConfig(), client, agentId: params.agentId, sessionKey: params.sessionKey },
         facts,
-        { policy: currentRole, aliases: current.aliases },
+        { policy: readRole(), aliases: identity.readCurrentFacts().aliases },
       );
       if (error) {
         throw new Error(error.message);
       }
     };
+    const sharingSource = withPreparedSessionSharingSource({
+      targets: [
+        {
+          agentId: params.agentId,
+          sessionKey: params.sessionKey,
+          resolved: initialTarget,
+          sessionId: params.sessionId,
+          lifecycleRevision: initialTarget.entry.lifecycleRevision,
+        },
+      ],
+      sourceConfig: getConfig(),
+      request: { client, method: "chat.send", context: { getRuntimeConfig: getConfig } },
+      talk: undefined,
+      assertTalkTargetCurrent: () => undefined,
+      assertTargetCurrent: (_target, _expected, _cfg, _caches, _ensured, prepared) =>
+        assertFactsCurrent(
+          prepared
+            ? {
+                ...initialFacts,
+                target: prepared.target,
+                membership: new Set(prepared.members),
+              }
+            : preparedSharing.readCurrent(getConfig()),
+        ),
+    });
+    const assertCurrent = composeSessionSourceAssertion([sharingSource], (assertSource) => {
+      assertPrincipalCurrent();
+      assertSource();
+    });
     assertCurrent();
     return {
       client,

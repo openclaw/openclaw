@@ -825,16 +825,11 @@ async function initSessionStateAttemptLocked(
     // The outer retry owns conflicts; never retry while holding the writer lane.
     throw new ReplySessionInitConflictError(sessionKey);
   }
-  if (
-    params.replyOperation?.key === sessionKey &&
-    (entry?.sessionId !== committed.sessionEntry.sessionId ||
-      entry?.lifecycleRevision !== committed.sessionEntry.lifecycleRevision)
-  ) {
-    await acknowledgeReplySessionTransition(params.replyOperation, {
-      previous: entry,
-      current: committed.sessionEntry,
-    });
-  }
+  await acknowledgeReplySessionTransition(
+    params.replyOperation,
+    { previous: entry, current: committed.sessionEntry },
+    captureSessionTarget({ storeScope: storePath, sessionKey, agentId }),
+  );
   clearCommittedSessionResetRuntimeState({
     previousSessionEntry,
     storePath,

@@ -663,7 +663,7 @@ describe("Goal chat admission and continuation", () => {
     });
   });
 
-  it("keeps a receipt miss retryable when an identical request completes during lookup", async () => {
+  it("replays an identical Goal request committed during its first receipt lookup", async () => {
     const request = goalStart("Replay the Goal committed while this lookup was pending");
     const { entered, release, spy } = holdGoalReceipt();
     const pending = rpc("chat.send", request);
@@ -684,11 +684,12 @@ describe("Goal chat admission and continuation", () => {
       });
       release.resolve();
       const stale = await pending;
-      expect(stale).toHaveBeenCalledWith(
-        false,
-        undefined,
-        expect.objectContaining({ code: "UNAVAILABLE", retryable: true }),
-      );
+      expect(stale.mock.calls[0]?.[0]).toBe(true);
+      expect(stale.mock.calls[0]?.[1]).toMatchObject({
+        replayed: true,
+        runId: request.idempotencyKey,
+        goalId: loadSessionEntry(scope())?.goal?.id,
+      });
       const replay = await rpc("chat.send", request);
       expect(replay.mock.calls[0]?.[1]).toMatchObject({
         replayed: true,

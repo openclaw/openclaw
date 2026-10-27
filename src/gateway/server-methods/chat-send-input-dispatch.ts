@@ -165,7 +165,7 @@ export async function handleChatSendWithStorage(
 
   const admissionStartedAt = Date.now();
   const commitInitialInput = req.method === "sessions.create";
-  const commitLocalInput = admission.localInputAdmission || commitInitialInput;
+  let commitFreshInput = admission.localInputAdmission || commitInitialInput;
   let inputAdmissionAttempted = false;
   let committedInput: { sessionId: string; lifecycleRevision?: string } | undefined;
   let releaseBeforeDispatch: void | (() => void) = undefined;
@@ -191,7 +191,7 @@ export async function handleChatSendWithStorage(
       (assertSource) => {
         admission.assertClientUploadAllowed?.();
         assertCustodyLifetimeCurrent();
-        if (commitLocalInput) {
+        if (commitFreshInput) {
           sessionMutationAuthorization?.assertCurrent();
         }
         assertSource();
@@ -283,7 +283,7 @@ export async function handleChatSendWithStorage(
       userTurn,
     });
     const { ctx, isInternalTextSlashCommandTurn } = preparedUserTurn;
-    const commitFreshInput =
+    commitFreshInput =
       (commitInitialInput && !requiresRuntimeApprovedChatInput(client)) ||
       (admission.localInputAdmission &&
         request.p.queueMode !== "steer" &&
