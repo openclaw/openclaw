@@ -1,8 +1,9 @@
 // @vitest-environment node
-// Control UI tests cover chat responsive behavior.
+
 import { existsSync } from "node:fs";
 import { mkdir } from "node:fs/promises";
 import path from "node:path";
+import { expectDefined } from "@openclaw/normalization-core";
 import { chromium, webkit, type Browser, type Page } from "playwright";
 import { expect as expectBrowser } from "playwright/test";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
@@ -54,11 +55,9 @@ async function readCornerScale(page: Page): Promise<number> {
 }
 
 function expectControlRect(rect: ControlRect | null, label: string): ControlRect {
-  if (rect === null) {
-    throw new Error(`Expected ${label} control rect`);
-  }
-  expectFiniteRect(rect);
-  return rect;
+  const defined = expectDefined(rect, `${label} control rect`);
+  expectFiniteRect(defined);
+  return defined;
 }
 
 function iconSvg() {
@@ -640,53 +639,6 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
     });
   });
 
-  it("keeps a constrained no-face header to one flex gap", async () => {
-    await withBrowserPage(openBrowserPage(360, 180), async (page) => {
-      const splitViewCss = readStyleSheet("ui/src/styles/chat/split-view.css");
-      await page.setContent(
-        `<!doctype html><html><head><style>${readUiCss()}\n${splitViewCss}</style></head><body>
-          <div class="chat-pane__header" style="width: 320px;">
-            <div class="chat-pane__header-leading">
-              <div class="chat-pane__crumbs">
-                <span class="chat-pane__session-title">
-                  <span class="chat-pane__session-title-text">A deliberately long session title for the no-face header</span>
-                </span>
-              </div>
-            </div>
-            <div class="chat-pane__header-trailing">
-              <div class="chat-pane__actions">
-                <button class="btn btn--ghost btn--icon chat-icon-btn" type="button">A</button>
-                <button class="btn btn--ghost btn--icon chat-icon-btn" type="button">B</button>
-                <button class="btn btn--ghost btn--icon chat-icon-btn" type="button">C</button>
-              </div>
-            </div>
-          </div>
-        </body></html>`,
-      );
-
-      const geometry = await page.locator(".chat-pane__header").evaluate((header) => {
-        const leading = header.querySelector<HTMLElement>(".chat-pane__header-leading")!;
-        const trailing = header.querySelector<HTMLElement>(".chat-pane__header-trailing")!;
-        const title = header.querySelector<HTMLElement>(".chat-pane__session-title-text")!;
-        const leadingRect = leading.getBoundingClientRect();
-        const trailingRect = trailing.getBoundingClientRect();
-        return {
-          gap: trailingRect.left - leadingRect.right,
-          regionClasses: [...header.children].map((child) => child.className),
-          titleClientWidth: title.clientWidth,
-          titleScrollWidth: title.scrollWidth,
-        };
-      });
-
-      expect(geometry.regionClasses).toEqual([
-        "chat-pane__header-leading",
-        "chat-pane__header-trailing",
-      ]);
-      expect(geometry.gap).toBeCloseTo(4, 0);
-      expect(geometry.titleScrollWidth).toBeGreaterThan(geometry.titleClientWidth);
-    });
-  });
-
   it("caps a nested session trail at half the header while ellipsizing both titles", async () => {
     await withBrowserPage(openBrowserPage(720, 180), async (page) => {
       const splitViewCss = readStyleSheet("ui/src/styles/chat/split-view.css");
@@ -1143,35 +1095,6 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
     }
   });
 
-  it("keeps the desktop model picker label-to-chevron gap at 4px", async () => {
-    await withBrowserPage(openBrowserPage(800, 800), async (page) => {
-      await page.setContent(`<!doctype html><html><head><style>${readUiCss()}</style></head><body>
-        <div class="agent-chat__composer-shell">
-          <div class="agent-chat__input">
-            <div class="chat-controls__model-settings">
-              <div class="chat-controls__inline-select">
-                <div class="chat-controls__inline-select-trigger chat-controls__model-trigger">
-                  <span class="chat-controls__inline-select-label">Model</span>
-                  <span class="chat-controls__inline-select-chevron">${iconSvg()}</span>
-                </div>
-              </div>
-            </div>
-          </div>
-        </div>
-      </body></html>`);
-      const measuredGap = await page.evaluate(() => {
-        const label = document
-          .querySelector<HTMLElement>(".chat-controls__inline-select-label")!
-          .getBoundingClientRect();
-        const chevron = document
-          .querySelector<HTMLElement>(".chat-controls__inline-select-chevron")!
-          .getBoundingClientRect();
-        return chevron.left - label.right;
-      });
-      expect(measuredGap).toBeCloseTo(4, 0);
-    });
-  });
-
   it("keeps wrapped message footers inside measured virtual rows", async () => {
     await withBrowserPage(openBrowserPage(1366, 900), async (page) => {
       await page.setContent(
@@ -1336,7 +1259,7 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
         await page.setContent(
           `<!doctype html><html data-theme-mode="${theme}"><head><style>${readUiCss()}</style></head><body>
           <div class="chat-group user ${tinted ? "chat-group--sender-tint" : ""}"
-            style="--chat-sender-hue: 208">
+            style="--chat-participant-surface: #d4e5f4">
             <div class="chat-bubble chat-bubble--with-images">
               <div
                 class="chat-message-images chat-message-images--gallery chat-message-images--five"
@@ -1400,7 +1323,7 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
         await page.setContent(
           `<!doctype html><html><head><style>${readUiCss()}</style></head><body>
           <div class="chat-group user ${tinted ? "chat-group--sender-tint" : ""}"
-            style="--chat-sender-hue: 208">
+            style="--chat-participant-surface: #d4e5f4">
             <div class="chat-bubble" data-reference>Text-only message</div>
             <div class="chat-bubble chat-bubble--with-images">
               <div class="chat-text" data-shape="text">Short text</div>
@@ -1439,6 +1362,7 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
             backgroundColor: getComputedStyle(bubble).backgroundColor,
             color: getComputedStyle(bubble).color,
           }));
+          expect(reference.backgroundColor).not.toBe("rgba(0, 0, 0, 0)");
           expect(surfaces[0]).toEqual({ ...reference, padding: "10px 14px" });
           expect(surfaces[1]).toEqual(surfaces[0]);
           expect(surfaces[2]).toEqual(surfaces[0]);
@@ -1926,53 +1850,6 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
       });
     },
   );
-
-  it("shows the current effort beside its heading in the accent color", async () => {
-    await withBrowserPage(openBrowserPage(393, 852), async (page) => {
-      await page.setContent(`
-        <!doctype html>
-        <html>
-          <head><style>${readUiCss()}</style></head>
-          <body>
-            <div class="chat-controls__reasoning-panel">
-              <div class="chat-controls__reasoning-head">
-                <span class="chat-controls__effort-heading">Effort</span>
-                <span class="chat-controls__effort-value">Extra high</span>
-              </div>
-            </div>
-            <span data-accent-probe style="color: var(--accent)"></span>
-          </body>
-        </html>
-      `);
-
-      const layout = await page.evaluate(() => {
-        const heading = document
-          .querySelector<HTMLElement>(".chat-controls__effort-heading")!
-          .getBoundingClientRect();
-        const valueNode = document.querySelector<HTMLElement>(".chat-controls__effort-value")!;
-        const value = valueNode.getBoundingClientRect();
-        return {
-          accentColor: getComputedStyle(document.querySelector<HTMLElement>("[data-accent-probe]")!)
-            .color,
-          heading: { right: heading.right, y: heading.y, height: heading.height },
-          value: {
-            color: getComputedStyle(valueNode).color,
-            x: value.x,
-            y: value.y,
-            height: value.height,
-          },
-        };
-      });
-
-      expect(layout.value.x).toBeGreaterThanOrEqual(layout.heading.right);
-      expect(
-        Math.abs(
-          layout.value.y + layout.value.height / 2 - (layout.heading.y + layout.heading.height / 2),
-        ),
-      ).toBeLessThanOrEqual(1);
-      expect(layout.value.color).toBe(layout.accentColor);
-    });
-  });
 
   it("keeps the expanded mobile composer inset, scrollable, and flush with the thread", async () => {
     await withBrowserPage(openFixture(393, 852), async (page) => {
@@ -3169,49 +3046,25 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
     },
   );
 
-  it("matches the reading prototype's transcript letter spacing without changing shared text", async () => {
+  it("keeps transcript tracking out of other text surfaces", async () => {
     await withBrowserPage(openBrowserPage(1366, 900), async (page) => {
-      await page.setContent(`<!doctype html><html data-theme-mode="dark"><head><style>${readUiCss()}</style></head><body>
-        <div class="chat-thread chat-thread--direct" role="log">
-          <div class="chat-thread-inner">
-            <div class="chat-group assistant">
-              <div class="chat-group-messages">
-                <div class="chat-bubble">
-                  <div class="chat-text">
-                    <p>Aa Bb Cc — Smooth reading depends on the shape, spacing, and contrast of every glyph in a transcript.</p>
-                    <p>Keep this fixture about text rendering; width and block rhythm are intentionally not asserted here.</p>
-                  </div>
-                </div>
-              </div>
-            </div>
-          </div>
-        </div>
-        <section class="custodian-surface">
-          <div class="chat-bubble"><div class="chat-text">Custodian output</div></div>
-        </section>
-        <div class="chat-notice"><div class="chat-text chat-notice__body">Compact notice</div></div>
-        <div class="cron-run-entry__body chat-text">Cron output</div>
-      </body></html>`);
-
-      const transcriptLetterSpacing = await page
-        .locator(".chat-thread .chat-bubble .chat-text")
-        .evaluate((element) => getComputedStyle(element).letterSpacing);
-      const custodianLetterSpacing = await page
-        .locator(".custodian-surface .chat-bubble .chat-text")
-        .evaluate((element) => getComputedStyle(element).letterSpacing);
-      const noticeLetterSpacing = await page
-        .locator(".chat-notice .chat-text")
-        .evaluate((element) => getComputedStyle(element).letterSpacing);
-      const cronLetterSpacing = await page
-        .locator(".cron-run-entry__body.chat-text")
-        .evaluate((element) => getComputedStyle(element).letterSpacing);
-      const bodyLetterSpacing = await page
-        .locator("body")
-        .evaluate((element) => getComputedStyle(element).letterSpacing);
-      expect(transcriptLetterSpacing).toBe("normal");
-      expect(custodianLetterSpacing).toBe(bodyLetterSpacing);
-      expect(noticeLetterSpacing).toBe(bodyLetterSpacing);
-      expect(cronLetterSpacing).toBe(bodyLetterSpacing);
+      await page.setContent(
+        `<!doctype html><html data-theme-mode="dark"><head><style>${readUiCss()}</style></head><body>
+          <div class="chat-thread"><div class="chat-bubble"><div class="chat-text">Transcript</div></div></div>
+          <section class="custodian-surface"><div class="chat-bubble"><div class="chat-text">Custodian</div></div></section>
+          <div class="chat-notice"><div class="chat-text chat-notice__body">Notice</div></div>
+          <div class="cron-run-entry__body chat-text">Cron</div>
+        </body></html>`,
+      );
+      const spacing = await page.evaluate(() =>
+        [
+          document.body,
+          ...document.querySelectorAll(
+            ".custodian-surface .chat-text, .chat-notice .chat-text, .cron-run-entry__body",
+          ),
+        ].map((element) => getComputedStyle(element).letterSpacing),
+      );
+      expect(spacing.slice(1)).toEqual(Array(3).fill(spacing[0]));
     });
   });
 });

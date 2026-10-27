@@ -730,12 +730,13 @@ suite.define(() => {
         "Keep my identity stable when delivery fails.",
       );
       const firstRunId = String((request.params as { idempotencyKey?: unknown }).idempotencyKey);
-      await expect(group).toHaveClass(/\bchat-group--sender-tint\b/u);
+      await expect(group).toHaveCSS("flex-direction", "row-reverse");
       const background = () =>
         group
           .locator(".chat-bubble")
           .evaluate((element) => getComputedStyle(element).backgroundColor);
       const sendingBackground = await background();
+      expect(sendingBackground).not.toBe("rgba(0, 0, 0, 0)");
 
       await rejectDelivery(gateway);
       await expect
@@ -779,6 +780,7 @@ suite.define(() => {
       expect(retryRunId).not.toBe(firstRunId);
       await gateway.resolveDeferred("chat.send", { runId: retryRunId, status: "started" });
       await expect(group.locator(".chat-send-status")).toHaveCount(0);
+      expect(await background()).toBe(sendingBackground);
     });
   });
 
