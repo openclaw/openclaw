@@ -34,6 +34,22 @@ function HandoffSessionName(props: { session: ChatHandoffSession; links?: Handof
   );
 }
 
+/** A sentence with one child's name in it, linked like the list rows. */
+function NamedSentence(props: {
+  text: string;
+  session: ChatHandoffSession;
+  links?: HandoffSessionLinks;
+}) {
+  const parts = createMemo(() => props.text.split("\u0000"));
+  return (
+    <span>
+      {parts()[0]}
+      <HandoffSessionName session={props.session} links={props.links} />
+      {parts()[1] ?? ""}
+    </span>
+  );
+}
+
 /** Each child with its status in words. */
 function HandoffSessionList(props: {
   id: string;
@@ -68,7 +84,7 @@ function Chevron(props: { open: boolean }) {
  * The working line while a handoff waits on its children: one child is named
  * in place; several get a list, open until the reader closes it.
  */
-export function ChatSubagentWaitLine(props: {
+function HandoffWaitLine(props: {
   wait: ChatSubagentWait;
   startMs: number;
   links?: HandoffSessionLinks;
@@ -125,32 +141,62 @@ export function ChatSubagentWaitLine(props: {
           </>
         }
       >
-        {(session) => {
-          const [before, after = ""] = t("chat.waitingOnSubagent", { name: "\u0000" }).split(
-            "\u0000",
-          );
-          return (
-            <span class="chat-working-indicator__status">
-              <span>
-                {before}
-                <HandoffSessionName session={session()} links={props.links} />
-                {after}
+        {(session) => (
+          <span class="chat-working-indicator__status">
+            <NamedSentence
+              text={t("chat.waitingOnSubagent", { name: "\u0000" })}
+              session={session()}
+              links={props.links}
+            />{" "}
+            <Show when={session().status === "attention" || session().status === "paused"}>
+              <span aria-hidden="true">·</span>{" "}
+              <span
+                class={{ "chat-subagent-wait__attention": session().status === "attention" }}
+                title={session().note}
+              >
+                {t(`chat.handoffSessionStatus.${session().status}`)}
               </span>{" "}
-              <Show when={session().status === "attention" || session().status === "paused"}>
-                <span aria-hidden="true">·</span>{" "}
-                <span
-                  class={{ "chat-subagent-wait__attention": session().status === "attention" }}
-                  title={session().note}
-                >
-                  {t(`chat.handoffSessionStatus.${session().status}`)}
-                </span>{" "}
-              </Show>
-              {elapsed()}
-            </span>
-          );
-        }}
+            </Show>
+            {elapsed()}
+          </span>
+        )}
       </Show>
     </div>
+  );
+}
+
+/**
+ * The handoff's line under the transcript. After the parent resumes with only
+ * paused children left, nothing is working: a quiet note names them instead.
+ */
+export function ChatSubagentWaitLine(props: {
+  wait: ChatSubagentWait;
+  startMs: number;
+  links?: HandoffSessionLinks;
+}) {
+  const only = () => (props.wait.sessions.length === 1 ? props.wait.sessions[0] : undefined);
+  return (
+    <Show
+      when={props.wait.pausedNote}
+      fallback={<HandoffWaitLine wait={props.wait} startMs={props.startMs} links={props.links} />}
+    >
+      <div class="chat-subagent-wait">
+        <span class="chat-working-indicator__status">
+          <Show
+            when={only()}
+            fallback={t("chat.sessionsPausedNote", { count: String(props.wait.sessions.length) })}
+          >
+            {(session) => (
+              <NamedSentence
+                text={t("chat.sessionPausedNote", { name: "\u0000" })}
+                session={session()}
+                links={props.links}
+              />
+            )}
+          </Show>
+        </span>
+      </div>
+    </Show>
   );
 }
 

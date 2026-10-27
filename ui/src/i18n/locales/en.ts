@@ -1576,6 +1576,8 @@ const startupEnglish = {
     sessionsNeedInputOne: "1 needs your input",
     sessionsNeedInput: "{count} need your input",
     sessionsPaused: "{count} paused",
+    sessionPausedNote: "{name} is paused",
+    sessionsPausedNote: "{count} sessions are paused",
     handoffResumed: "Resumed · {duration} later",
     handoffSessionsOne: "1 session",
     handoffSessions: "{count} sessions",

@@ -34,6 +34,8 @@ export type ChatSubagentWait = {
   sessionCount?: number;
   /** Every child session the handoff waits on, named on the waiting line. */
   sessions: readonly ChatHandoffSession[];
+  /** The parent resumed with only paused children left: a quiet note naming them. */
+  pausedNote?: true;
 };
 
 /** A child session of a handoff, as its waiting line and resume rule list it. */
@@ -340,12 +342,12 @@ export function projectSubagentStatus(
   // line names every child the handoff waits on.
   const children = unfinished.filter((row) => !isDashboardSessionKey(row.key));
   const running = children.length;
-  // Whether paused children alone hold the waiting line open, including below
-  // a resumed reply. Narrow this rule to change where a paused-only wait shows.
-  const pausedHoldWait = paused.length > 0;
-  // A hydrated roster with no unfinished children, and none held paused, ends the wait.
+  // Paused children alone keep the wait. Once the parent has resumed (its latest
+  // turn is not the loaded handoff), nothing is running: they read as a note.
+  const pausedNote = hydrated && unfinished.length === 0 && paused.length > 0 && !handoffRunId;
+  // A hydrated roster with no unfinished or paused children ends the wait.
   const wait: ChatSubagentWait | null =
-    waitStartedAt !== null && (!hydrated || unfinished.length > 0 || pausedHoldWait)
+    waitStartedAt !== null && (!hydrated || unfinished.length + paused.length > 0)
       ? {
           startedAt: waitStartedAt,
           ...(handoffRunId ? { runId: handoffRunId } : {}),
@@ -353,11 +355,14 @@ export function projectSubagentStatus(
           ...(hydrated && unfinished.length > running
             ? { sessionCount: unfinished.length - running }
             : {}),
+          ...(pausedNote ? { pausedNote } : {}),
           sessions:
             hydrated && session
-              ? listHandoffSessions(directChildren(session, input), {
-                  from: yieldedAt ?? waitStartedAt,
-                })
+              ? pausedNote
+                ? listHandoffSessions(paused, { from: 0 })
+                : listHandoffSessions(directChildren(session, input), {
+                    from: yieldedAt ?? waitStartedAt,
+                  })
               : [],
         }
       : null;
@@ -379,7 +384,15 @@ export function projectSubagentStatus(
     // Key only the working line's facts so unrelated roster patches stay memoized.
     statusKey: JSON.stringify(
       wait
-        ? [wait.startedAt, wait.runId, wait.runningCount, wait.sessionCount, wait.sessions, listed]
+        ? [
+            wait.startedAt,
+            wait.runId,
+            wait.runningCount,
+            wait.sessionCount,
+            wait.sessions,
+            listed,
+            wait.pausedNote,
+          ]
         : [running, listed],
     ),
     // Seeded rows can already match; rows that list children wait for the pane's own query.

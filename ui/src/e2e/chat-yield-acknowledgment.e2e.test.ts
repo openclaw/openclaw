@@ -304,10 +304,13 @@ suite.define(() => {
         `${FIRST} Done`,
         `${SECOND} Done`,
       ]);
-      // The answer continues the block; the paused child keeps a waiting line below it.
-      const waitLine = thread.locator(".chat-group.assistant .chat-subagent-wait");
-      expect(squash(await waitLine.textContent())).toBe(`Waiting on ${THIRD} · Paused`);
-      expect(await thread.locator(".chat-group.assistant").count()).toBe(2);
+      // Only a paused child is left: a quiet note below the answer, not a waiting line.
+      const note = thread.locator(".chat-group.assistant .chat-subagent-wait");
+      expect(squash(await note.textContent())).toBe(`${THIRD} is paused`);
+      expect(await note.locator("a").getAttribute("href")).toBe(
+        "/chat/main/subagent/dependency-update-3",
+      );
+      expect(await thread.textContent()).not.toContain("Waiting on");
       expect(await thread.locator(".chat-notice").count()).toBe(0);
       expect(await thread.textContent()).not.toContain(PRIVATE);
       // A listed child opens its own session in place.

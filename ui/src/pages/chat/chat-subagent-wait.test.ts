@@ -224,10 +224,7 @@ describe("chat waiting on subagents", () => {
       status({ subagentSessions: childRows, subagentSessionsHydrated: childRows !== undefined })
         .wait;
     expect(derive()).toMatchObject({ runningCount: 0, sessions: [] });
-    const summarize = (childRows: GatewaySessionRow[]) => {
-      const wait = derive(childRows);
-      return wait?.runningCount;
-    };
+    const summarize = (childRows: GatewaySessionRow[]) => derive(childRows)?.runningCount;
     expect(summarize([child, { ...child, key: "agent:main:subagent:other" }])).toBe(2);
     // A child that handed off to its own subagents is unfinished.
     const delegating = { ...child, key: "agent:main:subagent:yielded", hasActiveRun: false };
@@ -244,6 +241,13 @@ describe("chat waiting on subagents", () => {
     const idle = (subagentSessions: GatewaySessionRow[], subagentSessionsPending = false) =>
       status({ selectedSession: settled, subagentSessions, subagentSessionsPending }).wait;
     expect(idle(paused)).toMatchObject({ runningCount: 0, sessions: [{ status: "paused" }] });
+    expect(idle(paused)?.pausedNote).toBeUndefined();
+    // After the parent resumes, paused children alone read as a note.
+    const resumed = { ...settled, startedAt: 3_000, endedAt: 4_000 };
+    expect(status({ selectedSession: resumed, subagentSessions: paused }).wait).toMatchObject({
+      pausedNote: true,
+      sessions: [{ key: child.key, status: "paused" }],
+    });
     expect([idle([done]), idle(paused, true)]).toEqual([null, null]);
   });
 
@@ -585,46 +589,26 @@ describe("chat waiting on subagents", () => {
     onTestFinished(() => {
       vi.restoreAllMocks();
     });
+    const ended = (key: string, label: string, endedAt: number, row = {}): GatewaySessionRow => ({
+      ...child,
+      key: `agent:main:${key}`,
+      label,
+      hasActiveRun: false,
+      status: "done",
+      endedAt,
+      ...row,
+    });
     const rows: GatewaySessionRow[] = [
       { ...child, createdAt: 10 },
-      {
-        ...child,
-        key: "agent:main:subagent:review",
-        label: "Review",
+      ended("subagent:review", "Review", 3_000, {
         createdAt: 20,
-        hasActiveRun: false,
-        status: "done",
-        endedAt: 3_000,
         agentStatus: { note: "Pick a merge method", attention: "hand", expiresAt: now + 60_000 },
-      },
-      {
-        ...child,
-        key: "agent:main:dashboard:docs",
-        label: "Docs",
-        createdAt: 30,
-        hasActiveRun: false,
-        status: "done",
-        endedAt: 4_000,
-      },
+      }),
+      ended("dashboard:docs", "Docs", 4_000, { createdAt: 30 }),
       // Paused before this handoff, still owing its task.
-      {
-        ...child,
-        key: "agent:main:subagent:audit",
-        label: "Audit",
-        hasActiveRun: false,
-        status: "done",
-        endedAt: 1_200,
-        subagentRunState: "paused",
-      },
+      ended("subagent:audit", "Audit", 1_200, { subagentRunState: "paused" }),
       // Finished before this handoff: not what it waits on.
-      {
-        ...child,
-        key: "agent:main:subagent:earlier",
-        label: "Earlier",
-        hasActiveRun: false,
-        status: "done",
-        endedAt: 1_500,
-      },
+      ended("subagent:earlier", "Earlier", 1_500),
     ];
     const wait = status({ subagentSessions: rows }).wait;
     expect(wait?.sessions).toEqual([
@@ -664,9 +648,15 @@ describe("chat waiting on subagents", () => {
     flush();
     expect(toggle?.getAttribute("aria-expanded")).toBe("false");
     expect(container.querySelector("li")).toBeNull();
-    update({ waitingSubagents: { ...wait!, startedAt: 1_500, sessions: [wait!.sessions[1]!] } });
     // Only paused children remain: nothing is working, so no clock.
-    expect(container.textContent?.replace(/\s+/gu, " ").trim()).toBe("Waiting on Audit · Paused");
+    const audit = wait!.sessions[1]!;
+    const text = () => container.textContent?.replace(/\s+/gu, " ").trim();
+    update({ waitingSubagents: { ...wait!, startedAt: 1_500, sessions: [audit] } });
+    expect(text()).toBe("Waiting on Audit · Paused");
+    update({ waitingSubagents: { ...wait!, pausedNote: true, sessions: [audit] } });
+    expect(text()).toBe("Audit is paused");
+    update({ waitingSubagents: { ...wait!, pausedNote: true, sessions: [audit, audit] } });
+    expect(text()).toBe("2 sessions are paused");
   });
 
   it("makes the running count the way to the list when navigation is available", () => {

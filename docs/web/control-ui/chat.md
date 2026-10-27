@@ -106,8 +106,11 @@ sessions · 1 paused · 9m**; with one child it reads **Waiting on** its name an
 **Paused**. A paused child keeps the waiting line open even when no other child
 is running, without showing the parent as working, until it continues, finishes,
 or is stopped; once it runs again it reads **Running**. While every remaining
-child is paused, the line shows no time. The time stays on the
-same clock across handoffs and resumes.
+child is paused, the line shows no time. After the agent resumes, if the only
+children left are paused, the reply ends with a quiet note instead of a waiting
+line: **CI action pins is paused**, with the name linked, or **2 sessions are
+paused**. A child with its own work still running reads **Running** and keeps the
+waiting line. The time stays on the same clock across handoffs and resumes.
 Until the subagent list is available, the existing working indicator remains as
 a fallback. Its wait clock measures the
 current idle interval from the parent’s latest recorded run end, even if the
