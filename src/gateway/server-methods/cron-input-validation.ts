@@ -482,6 +482,19 @@ export async function captureCronUpdatedInferenceBinding(
     }
     throw new Error("The selected automation account is unavailable.");
   }
+  // An account edit on the same provider never moves the job off the runtime it records;
+  // when that runtime is no longer available, the edit fails and the binding stays as it was.
+  const capturedRuntime = inference.inferenceBinding.runtime;
+  if (
+    recordedRuntime &&
+    capturedRuntime !== recordedRuntime &&
+    inference.inferenceBinding.provider === nextJob.inferenceBinding?.provider
+  ) {
+    inference.disposeInferenceAuthorization();
+    throw new Error(
+      `The automation runs on runtime ${recordedRuntime}, which is unavailable for this account; the edit would move it to runtime ${capturedRuntime ?? "unknown"}.`,
+    );
+  }
   return inference;
 }
 

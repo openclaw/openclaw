@@ -627,6 +627,38 @@ describe("runCronIsolatedAgentTurn auth profile propagation (#20624, #90991)", (
       edited?.disposeInferenceAuthorization?.();
     }
   });
+
+  it("rejects an account edit that would move the job off its unavailable recorded runtime", async () => {
+    const cfg = await embeddedAnthropicConfig({
+      type: "api_key",
+      provider: "anthropic",
+      key: "synthetic-anthropic-key",
+    });
+    const recorded = await captureFromCreator(cfg, claudeCliCreator());
+    expect(recorded?.runtime).toBe("claude-cli");
+    // claude-cli stops being a CLI backend for this config after capture.
+    h.isCliProviderMock.mockImplementation(() => false);
+    cliBackendsTesting.setDepsForTest({
+      resolveRuntimeCliBackends: () => [],
+      resolvePluginSetupCliBackend: () => undefined,
+    });
+    const payload = {
+      kind: "agentTurn" as const,
+      message: "check status",
+      model: `${claudeRef}@${claudeProfile}`,
+    };
+    const job = makeAuthJob({ payload, inferenceBinding: recorded });
+
+    await expect(
+      captureCronUpdatedInferenceBinding(
+        job,
+        { payload },
+        cfg,
+        {} as Parameters<typeof captureCronUpdatedInferenceBinding>[3],
+      ),
+    ).rejects.toThrow(/runs on runtime claude-cli, which is unavailable/);
+    expect(job.inferenceBinding).toBe(recorded);
+  });
   // The Oct 20 shape: a `current` job created from a conversation that runs Claude through
   // claude-cli, on an Anthropic model the config alone would run embedded, with a stored
   // Anthropic key. The run copies the conversation's runtime, so capture must resolve it too.
