@@ -431,6 +431,17 @@ const reviewed = new Map([
 // Match lexical operation paths, not moving line numbers or whole mixed modules.
 const reviewedOperations = new Map([
   [
+    "src/config/sessions/session-model-context-projected-navigation.ts",
+    [
+      {
+        tier: "W",
+        operations: ["readProjectedModelContextNavigation"],
+        evidence:
+          "The operation returns undefined on isMainThread before reading projection facts or executing SQL. session-accessor.sqlite-model-context.ts then retains canonical navigation for deprecated synchronous SessionManager.openModelContext callers; bounded projected reads execute through session-history-read-operation.worker.ts. No main-thread query or completion contract is added.",
+      },
+    ],
+  ],
+  [
     "src/config/sessions/session-accessor.sqlite-read.ts",
     [
       {

@@ -33,6 +33,7 @@ import type {
   SessionTranscriptModelContext,
 } from "./session-history-read.types.js";
 import { readModelContextNavigationPages } from "./session-model-context-pages.js";
+import { readProjectedModelContextNavigation } from "./session-model-context-projected-navigation.js";
 import {
   projectModelContextEventSql,
   projectPostgresModelContextRowsSql,
@@ -332,6 +333,19 @@ function withTranscriptContextSnapshot<T>(
             anchorFound,
             prepared,
           } = readModelContextNavigationPages({
+            readInitial:
+              limits &&
+              (version.rawSeq ?? -1) >= limits.maxEvents &&
+              !through &&
+              !isPostgresSqlConnection(database.db)
+                ? () =>
+                    readProjectedModelContextNavigation(
+                      database,
+                      resolved,
+                      limits.maxEvents,
+                      fence?.beforeRawSeq,
+                    )
+                : undefined,
             database: database.db,
             sessionId: resolved.sessionId,
             generation: version.generation,

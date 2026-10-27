@@ -184,6 +184,9 @@ export function readModelContextNavigationPages(params: {
   through: number;
   anchorId?: string;
   maxEvents?: number;
+  readInitial?: () =>
+    | { rows: Map<number, ModelContextNavigationRow>; entries: ContextEntry[] }
+    | undefined;
   readRows: (after: number, through: number) => Iterable<ModelContextNavigationRow>;
 }) {
   const { database, sessionId, generation, through, anchorId, maxEvents, readRows } = params;
@@ -282,8 +285,12 @@ export function readModelContextNavigationPages(params: {
   }
   // Old anchors, branch/reset/compaction or prompt-series restarts and displaced results need
   // canonical ancestry once. The resulting compact state serves subsequent ordinary reads.
-  const rows = new Map(Array.from(readRows(-1, through), (row) => [row.entry.seq, row]));
-  const tree = scanSessionTranscriptTree(Array.from(rows.values(), (row) => row.entry));
+  const initial = params.readInitial?.();
+  const rows =
+    initial?.rows ?? new Map(Array.from(readRows(-1, through), (row) => [row.entry.seq, row]));
+  const tree = scanSessionTranscriptTree(
+    initial?.entries ?? Array.from(rows.values(), (row) => row.entry),
+  );
   const branch = selectSessionTranscriptTreePathNodes(tree, anchorId ?? tree.leafId).map(
     ({ entry, parentId }) => {
       entry.parentId = parentId;
