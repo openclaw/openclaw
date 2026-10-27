@@ -236,7 +236,6 @@ describe("media store", () => {
       "fake.png",
     );
     expect(saved.contentType).toBe("application/zip");
-    expect(saved.path.endsWith(".zip")).toBe(true);
     expect(path.basename(saved.path)).toMatch(/^fake---[a-f0-9-]{36}\.zip$/);
   });
 
@@ -306,34 +305,21 @@ describe("media store", () => {
   );
 
   it.each([
-    {
-      name: "falls back to UUID-only when the original basename has only invalid characters",
-      originalFilename: "<>:\u0001.txt",
-      expectedIdPattern: /^[a-f0-9-]{36}\.txt$/,
-      expectUuidOnly: true,
-    },
-    {
-      name: "strips controls and neutralizes bidi/zero-width formatting",
-      originalFilename: "report\rC\nL\tT\fF\x1bE\x00N\x7fD\u202efd\u200bp\ufeffsafe.exe",
-      expectedIdPattern: /^reportCLTFEND_fd_p_safe---[a-f0-9-]{36}\.txt$/,
-      expectUuidOnly: false,
-    },
-  ] as const)(
-    "saveMediaBuffer: $name",
-    async ({ originalFilename, expectedIdPattern, expectUuidOnly }) => {
-      const saved = await store.saveMediaBuffer(
-        Buffer.from("test content"),
-        "text/plain",
-        "inbound",
-        5 * 1024 * 1024,
-        originalFilename,
-      );
-      expect(saved.id).toMatch(expectedIdPattern);
-      if (expectUuidOnly) {
-        expect(saved.id).not.toContain("---");
-      }
-    },
-  );
+    ["<>:\u0001.txt", /^[a-f0-9-]{36}\.txt$/],
+    [
+      "report\rC\nL\tT\fF\x1bE\x00N\x7fD\u202efd\u200bp\ufeffsafe.exe",
+      /^reportCLTFEND_fd_p_safe---[a-f0-9-]{36}\.txt$/,
+    ],
+  ] as const)("sanitizes original filename %j", async (originalFilename, expectedIdPattern) => {
+    const saved = await store.saveMediaBuffer(
+      Buffer.from("test content"),
+      "text/plain",
+      "inbound",
+      undefined,
+      originalFilename,
+    );
+    expect(saved.id).toMatch(expectedIdPattern);
+  });
   describe("playback cache", () => {
     const clearMedia = async () => {
       await fs.rm(store.getMediaDir(), { recursive: true, force: true });
